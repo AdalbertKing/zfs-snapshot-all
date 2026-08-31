@@ -288,32 +288,18 @@ restore_name_timestamp() {   # <snapshot name> -> epoch, or nothing
 # with its failure propagated, AND the restored snapshot's guid must equal the
 # source's. A matching guid after a failed pipeline is not a restore, and a clean
 # exit code with a different guid is not the data that was asked for.
-cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
-    local want_ds="$1" snap="$2" config="$3" yes="$4"
-    [ -n "$want_ds" ] || die "restore: --snapshot needs --dataset=<source or copy> so there is no doubt which relationship is being restored"
-
-    read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || die "restore: no cron config known -- pass --config=FILE or run setup-server"
-    [ -r "$config" ] || die "restore: cannot read $config"
-
-    # Same derivation as the planner, deliberately: one idea of where copies live.
-    local ds d s src="" copy=""
-    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
-        d="$(installed_dataset_field "$config" "$ds" dst)"
-        s="$(installed_dataset_field "$config" "$ds" src)"
-        if [ -n "$d" ]; then
-            if [ "$ds" = "$want_ds" ] || [ "${d}/${ds}" = "$want_ds" ]; then src="$ds"; copy="${d}/${ds}"; break; fi
-        elif [ -n "$s" ]; then
-            if [ "$ds" = "$want_ds" ] || [ "$s" = "$want_ds" ]; then src="${s#*:}"; copy="$ds"; break; fi
-        fi
-    done
-    [ -n "$copy" ] || die "restore: '$want_ds' is not a source or a copy in $config -- run 'restore --plan' to see what is restorable"
-
-    zfs list -H -o name -t snapshot -d 1 "$copy" 2>/dev/null | grep -qFx -- "${copy}@${snap}" \
-        || die "restore: '${copy}@${snap}' does not exist. Run 'restore --plan --dataset=$want_ds' for the recovery points that actually exist."
-
-    local landing; landing="$(restore_landing_path "$copy" "$src")"
+# THE LANDING HALF OF A SAFE RESTORE, taken as arguments instead of derived.
+#
+# Split out on 2026-08-31 so that a second ADDRESS can reach the same engine.
+# `--from-copy` names a copy location and a landing path directly, for the case
+# the relationship records are gone -- the point of a backup is that it
+# survives the loss of the thing that describes it. What must NOT be duplicated
+# for that is any of the below: the collision refusal, the guid verification,
+# the unique staging, the promotion by rename. A second copy of a proven
+# destructive-adjacent path is how the two come to differ in the one respect
+# that matters.
+restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes>
+    local copy="$1" snap="$2" landing="$3" src="$4" yes="$5"
 
     # (1) COLLISION FIRST. Nothing has been created at this point, so a refusal
     # here leaves the system exactly as it was found.
@@ -418,6 +404,195 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
     echo "  Snapshot:   ${landing}@${snap}"
     echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
     echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu to osobny czasownik, ktorego jeszcze nie ma."
+}
+
+cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
+    local want_ds="$1" snap="$2" config="$3" yes="$4"
+    [ -n "$want_ds" ] || die "restore: --snapshot needs --dataset=<source or copy> so there is no doubt which relationship is being restored"
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || die "restore: no cron config known -- pass --config=FILE or run setup-server"
+    [ -r "$config" ] || die "restore: cannot read $config"
+
+    # Same derivation as the planner, deliberately: one idea of where copies live.
+    local ds d s src="" copy=""
+    for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
+        d="$(installed_dataset_field "$config" "$ds" dst)"
+        s="$(installed_dataset_field "$config" "$ds" src)"
+        if [ -n "$d" ]; then
+            if [ "$ds" = "$want_ds" ] || [ "${d}/${ds}" = "$want_ds" ]; then src="$ds"; copy="${d}/${ds}"; break; fi
+        elif [ -n "$s" ]; then
+            if [ "$ds" = "$want_ds" ] || [ "$s" = "$want_ds" ]; then src="${s#*:}"; copy="$ds"; break; fi
+        fi
+    done
+    [ -n "$copy" ] || die "restore: '$want_ds' is not a source or a copy in $config -- run 'restore --plan' to see what is restorable"
+
+    zfs list -H -o name -t snapshot -d 1 "$copy" 2>/dev/null | grep -qFx -- "${copy}@${snap}" \
+        || die "restore: '${copy}@${snap}' does not exist. Run 'restore --plan --dataset=$want_ds' for the recovery points that actually exist."
+
+    local landing; landing="$(restore_landing_path "$copy" "$src")"
+
+    restore_safe_land "$copy" "$snap" "$landing" "$src" "$yes"
+}
+
+# ---------------------------------------------------------------------------
+# `--from-copy`: recovering when the relationship records are GONE
+#
+# Every other address in this verb goes through a relationship name, and
+# relationship names live in files on the collector. Lose those files and you
+# have copies you cannot name -- which defeats the point of a backup, since a
+# backup exists precisely to survive the loss of the thing that describes it.
+# The second case is copies left behind by a machine that has been
+# decommissioned: the relationship is gone on purpose, the data is not.
+#
+# A FLAG, NOT A SHAPE. It is tempting to accept a path in the first positional
+# and infer that it is not a label. `hdd` is an equally good pool name and
+# relationship name, and this project has already paid once for disambiguating
+# by shape: `label:dataset` split a legal ZFS dataset name and is being retired
+# for it. The flag says which is meant and cannot be misread.
+#
+# THIS FORM NEVER DESTROYS, and that is the whole safety argument in one line:
+# destruction requires a grant, a grant requires a relationship, and a raw copy
+# location has none -- there is nobody to publish consent, and no schedule to
+# stand down either. The only remaining justification for destroying here would
+# be "the operator is at the keyboard", which is exactly the argument that
+# dismantles a consent model. Overwriting something means naming a relationship
+# and going the ordinary way.
+#
+# So it lands in free space through restore_safe_land -- the same collision
+# refusal, unique staging, guid verification and promotion-by-rename that the
+# relationship-addressed safe restore has used since it was proven live on
+# 2026-08-15. A new ADDRESS for a proven engine, not a second engine.
+cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes>
+    local copies="$1" ontos="$2" snapshot="$3" at_epoch="$4" yes="$5"
+
+    # --onto is MANDATORY here, unlike the relationship form. There, omitting the
+    # destination means "back where it came from" and the record knows where that
+    # was. A raw copy location carries no such record, so there is nothing to
+    # fall back to and a default would be invented rather than recalled.
+    [ -n "$ontos" ] || die "restore --from-copy: --onto is required. With a relationship, leaving the destination out means 'back where it came from' because the record says where that was; a copy location on its own carries no such record, so there is nothing to default to. Say: restore --from-copy <copy>[,<copy>...] --onto <dataset>[,<dataset>...]"
+
+    local -a from=() to=()
+    local item
+    while IFS= read -r item; do
+        [ -n "$item" ] || die "restore --from-copy: the copy list has an empty entry -- a stray comma. Position is what pairs it with a destination, so a hole would shift every pair after it."
+        case "$item" in
+            *@*|*:*) die "restore --from-copy: '$item' looks like a transport address (account@host:dataset). That is not part of the public restore surface (R-025): --from-copy names a copy on THIS pool. Nothing was read." ;;
+        esac
+        from+=("$item")
+    done < <(printf '%s\n' "$copies" | tr ',' '\n')
+    while IFS= read -r item; do
+        [ -n "$item" ] || die "restore --from-copy: --onto has an empty entry -- a stray comma."
+        case "$item" in
+            *@*|*:*) die "restore --from-copy: destination '$item' looks like a transport address. A recovery onto ANOTHER machine goes through a relationship, which is what holds the key and can ask for a grant. Nothing was read." ;;
+        esac
+        to+=("$item")
+    done < <(printf '%s\n' "$ontos" | tr ',' '\n')
+
+    [ "${#from[@]}" -eq "${#to[@]}" ] \
+        || die "restore --from-copy: ${#from[@]} copy location(s) and ${#to[@]} destination(s). They are read as PAIRS, in order, so the two lists have to be the same length."
+
+    local i j
+    for (( i=0; i<${#to[@]}; i++ )); do
+        for (( j=0; j<i; j++ )); do
+            [ "${to[$i]}" != "${to[$j]}" ] \
+                || die "restore --from-copy: --onto names '${to[$i]}' twice (positions $((j + 1)) and $((i + 1))). Two recoveries cannot land on one dataset."
+            [ "${from[$i]}" != "${from[$j]}" ] \
+                || die "restore --from-copy: '${from[$i]}' is given twice as a source (positions $((j + 1)) and $((i + 1)))."
+        done
+    done
+
+    [ -z "$snapshot" ] || [ "${#from[@]}" -eq 1 ] \
+        || die "restore --from-copy: --snapshot names ONE recovery point and this list has ${#from[@]} copies. Equal snapshot NAMES across datasets are not one atomic event, so a shared name would claim something untrue. Use --at, which resolves per dataset and says so, or restore them one at a time."
+
+    # ---- EVERYTHING RESOLVES BEFORE ANYTHING LANDS -------------------------
+    # Same discipline as the relation-level pre-flight: a run that is right about
+    # three of a VM's disks and refuses on the fourth halfway through has left the
+    # operator worse off than one that refused at the start.
+    local -a snaps=() bad=()
+    local c t rows row pick
+    for (( i=0; i<${#from[@]}; i++ )); do
+        c="${from[$i]}"; t="${to[$i]}"
+        if ! zfs list -H -o name "$c" >/dev/null 2>&1; then
+            bad+=("$c: there is no such dataset on this host"); snaps+=(""); continue
+        fi
+        if zfs list -H -o name "$t" >/dev/null 2>&1; then
+            bad+=("$t: the destination already exists, and this form never overwrites -- inspect it, then remove or rename it, or choose another --onto"); snaps+=(""); continue
+        fi
+        rows="$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$c" 2>/dev/null)"
+        if [ -z "$rows" ]; then
+            bad+=("$c: has no snapshot to restore from"); snaps+=(""); continue
+        fi
+        if [ -n "$snapshot" ]; then
+            if printf '%s\n' "$rows" | cut -f1 | grep -qFx -- "${c}@${snapshot}"; then
+                snaps+=("$snapshot")
+            else
+                bad+=("${c}@${snapshot}: no such snapshot on that copy"); snaps+=("")
+            fi
+        elif [ -n "$at_epoch" ]; then
+            # By ZFS `creation`, never by the name -- the name is a story the
+            # dataset tells about itself, and the two are measured to disagree.
+            if row="$(restore_at_pick "$at_epoch" "$rows")"; then
+                pick="$(printf '%s' "$row" | cut -f1)"
+                snaps+=("${pick#*@}")
+            else
+                case "$?" in
+                    2) bad+=("$c: two snapshots share the newest creation time at or before --at, so the recovery point is a tie and the NAME is not a tie-breaker") ;;
+                    *) bad+=("$c: nothing on it was captured at or before --at") ;;
+                esac
+                snaps+=("")
+            fi
+        else
+            # THE SAME PICKER AS --at, with the ceiling raised, and NOT `tail -1`.
+            # Taking the last row resolves by LIST ORDER, which is precisely the
+            # hole REV-20260814-121 closed on the other default: `creation` is
+            # the axis, and a shared maximum must REFUSE and name the tied
+            # candidates rather than let whichever row `zfs list` printed last
+            # decide what gets created. Reintroducing it here was caught by a
+            # stub that returns its rows unsorted -- which is why it returns them
+            # unsorted.
+            if row="$(restore_at_pick 99999999999 "$rows")"; then
+                pick="$(printf '%s' "$row" | cut -f1)"
+                snaps+=("${pick#*@}")
+            else
+                case "$?" in
+                    2) bad+=("$c: two snapshots share the newest creation time, so the newest recovery point is a tie -- the NAME is not a tie-breaker. Name one with --snapshot.") ;;
+                    *) bad+=("$c: no usable snapshot -- none of its rows carried a readable creation time") ;;
+                esac
+                snaps+=("")
+            fi
+        fi
+    done
+
+    if [ "${#bad[@]}" -gt 0 ]; then
+        log 0 "restore --from-copy: REFUSED before anything was created -- ${#bad[@]} of ${#from[@]} pair(s) cannot be restored:"
+        for (( i=0; i<${#bad[@]}; i++ )); do log 0 "restore:   UNFIT    ${bad[$i]}"; done
+        log 0 "restore: nothing was created. This list is complete, not the first entry."
+        return 2
+    fi
+
+    echo
+    echo "Odtworzenie z KOPII (bez rekordu relacji) -- nic nie zostalo jeszcze utworzone."
+    echo "  Ta forma NIGDY nie nadpisuje: kazdy cel musi byc wolny, inaczej odmowa."
+    for (( i=0; i<${#from[@]}; i++ )); do
+        printf '  %s@%s  ->  %s\n' "${from[$i]}" "${snaps[$i]}" "${to[$i]}"
+    done
+    echo
+    if [ "$yes" -ne 1 ]; then
+        local ans
+        read -rp "Odtworzyc? [t/N] " ans
+        case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing was created" ;; esac
+    fi
+
+    # The landing half is the SAME engine the relationship-addressed safe restore
+    # uses. The confirmation is passed as already taken: the one question above
+    # covers the whole list, which is the point of taking a list at all.
+    local rc=0
+    for (( i=0; i<${#from[@]}; i++ )); do
+        restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
+    done
+    return "$rc"
 }
 
 restore_landing_path() {   # <copy dataset> <original source> -> landing path
@@ -3572,7 +3747,7 @@ cmd_restore() {
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list=""
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy=""
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -3605,6 +3780,11 @@ cmd_restore() {
             # WHERE IT LANDS on the destination machine -- a different axis from
             # --source/--target, which say in which namespace the operator is
             # NAMING the datasets. Owner decision 2026-08-30.
+            # A copy location on THIS pool, for when the relationship records
+            # are gone -- see cmd_restore_from_copy's header for why it is a flag
+            # and not an inferred shape.
+            --from-copy=*) from_copy="${a#*=}" ;;
+            --from-copy)   need_val --from-copy "${2:-}"; from_copy="$2"; shift ;;
             --onto=*)     onto_list="${a#*=}" ;;
             --onto)       need_val --onto "${2:-}"; onto_list="$2"; shift ;;
             --snapshot=*) snapshot="${a#*=}" ;;
@@ -3654,7 +3834,7 @@ cmd_restore() {
     # --onto says WHERE on the destination machine, so without a destination
     # there is nothing for it to mean. Refusing beats silently keeping the source
     # paths: the operator who typed it wanted the data somewhere else.
-    if [ -n "$onto_list" ] && [ -z "$dest_addr" ]; then
+    if [ -n "$onto_list" ] && [ -z "$dest_addr" ] && [ -z "$from_copy" ]; then
         die "restore: --onto names where the recovery lands on ANOTHER machine, and no destination relationship was given. Say: restore <from> <onto-relation> --onto <dataset>[,<dataset>...]"
     fi
 
@@ -3692,6 +3872,18 @@ cmd_restore() {
         die "restore: --at and --snapshot both name a recovery point. --snapshot is one exact name for one dataset; --at is a time, resolved per dataset. Give one."
     fi
     [ -n "$at_raw" ] && at_epoch="$(restore_at_epoch "$at_raw")"
+
+    # ---- THE COPY-LOCATION ADDRESS ----------------------------------------
+    # Handled before the relationship paths and returning from here, because it
+    # shares none of their machinery: no config, no relationship record, no
+    # grant, no pause. It cannot: the whole point is that the records are gone.
+    if [ -n "$from_copy" ]; then
+        [ -z "$addr" ] && [ -z "$dest_addr" ]             || die "restore: --from-copy names a copy location directly, and '$addr${dest_addr:+ $dest_addr}' names a relationship. Give one. If the relationship still resolves, use it -- it knows where the data came from and can ask the far side for a grant; --from-copy is for when it does not."
+        { [ -z "$scope_src" ] && [ -z "$scope_tgt" ]; }             || die "restore: --source/--target select datasets WITHIN a relationship, and --from-copy is the form that has no relationship. The copy locations are the list: restore --from-copy <copy>[,<copy>...] --onto <dataset>[,<dataset>...]"
+        [ "$plan" -eq 0 ]             || die "restore: --plan reads a relationship's records, and --from-copy is the form for when those are gone. This form previews every pair and asks before it creates anything, so run it without --yes to see the same thing and answer no."
+        cmd_restore_from_copy "$from_copy" "$onto_list" "$snapshot" "$at_epoch" "$yes"
+        return $?
+    fi
 
     local scope_any=0
     if   [ -n "$scope_src" ] && [ -n "$scope_tgt" ]; then scope_any=1
