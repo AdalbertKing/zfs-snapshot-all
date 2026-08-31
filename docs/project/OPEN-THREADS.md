@@ -7,6 +7,7 @@ Do not edit. Owner decisions that are not reviews live in
 | REV | State | Whose move | Next action |
 |---|---|---|---|
 | REV-20260831-128 | OPEN | Claude | implement and respond |
+| REV-20260831-129 | OPEN | Claude | implement and respond |
 | cf668df5 reviewctl transactional approve/close: two separate operations, every commit-bearing value validated at construction (full lowercase 40-char, existing, reachable), approval must name the response CURRENT implementation, closure must name a commit that provably carried the approval, --expected-parent is a compare-and-swap against the publication tip, first approval writes a permanent reviewed-by, and every write is a transaction that restores every byte on failure and never touches the index; twelve targeted controls, reviewctl 71/71 and impact 58/58 locally and on pve0; authorised by the 2026-08-14 transactional-publication consensus with no REV | DELIVERED | Reviewer | review it, or open a REV for it |
 
 Closed reviews are in `docs/internal/reviews/REVIEW_LEDGER.md`.
