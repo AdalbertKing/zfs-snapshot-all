@@ -508,6 +508,39 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
     [ "${#from[@]}" -eq "${#to[@]}" ] \
         || die "restore --from-copy: ${#from[@]} copy location(s) and ${#to[@]} destination(s). They are read as PAIRS, in order, so the two lists have to be the same length."
 
+    # ---- CHILDREN COME ALONG ------------------------------------------------
+    #
+    # Measured on the lab, 2026-08-31, on this function the hour it shipped:
+    # `--from-copy <parent> --onto hdd/x` created ONE dataset and printed
+    # "Odtworzenie OK" while the two disks under it were silently absent. A
+    # success reported over an incomplete recovery is the worst thing this verb
+    # can do, and it is the failure the relationship form already learned to
+    # avoid on 2026-08-27 -- this address was written beside that lesson instead
+    # of on top of it.
+    #
+    # ONE ENTRY PER DATASET, not one recursive stream. Same choice the
+    # relationship form made, for the same measured reason: a recursive send
+    # resolves the parent and can leave a child sitting behind the recovery point
+    # untouched, with the engine exiting 0 over it. One entry per dataset makes
+    # each its own question -- its own recovery point, its own collision check,
+    # its own line in the preview.
+    local -a xf=() xt=() kids=()
+    local k rel
+    for (( i=0; i<${#from[@]}; i++ )); do
+        xf+=("${from[$i]}"); xt+=("${to[$i]}")
+        kids=()
+        while IFS= read -r k; do
+            [ -n "$k" ] || continue
+            [ "$k" = "${from[$i]}" ] && continue
+            kids+=("$k")
+        done < <(zfs list -H -o name -r "${from[$i]}" 2>/dev/null)
+        for k in ${kids[@]+"${kids[@]}"}; do
+            rel="${k#"${from[$i]}"}"
+            xf+=("$k"); xt+=("${to[$i]}${rel}")
+        done
+    done
+    from=("${xf[@]}"); to=("${xt[@]}")
+
     local i j
     for (( i=0; i<${#to[@]}; i++ )); do
         for (( j=0; j<i; j++ )); do
