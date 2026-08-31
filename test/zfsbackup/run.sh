@@ -3730,14 +3730,17 @@ else
     bad "field survival: the complete candidate is accepted by the REAL gen-cron.sh" "rc=$gen_rc $(printf '%s' "$gen_out" | tail -3)"
 fi
 
-# And the extra field must have MEANT something, not merely parsed. recursive =
-# flat is the -R spelling in the generated transfer line; without it the line
-# carries no recursion flag at all.
+# And the extra field must have MEANT something, not merely parsed. `media =
+# removable` brackets the generated line with the media gate -- import the pool
+# before the write, export it after -- so its absence is visible in the rendered
+# output rather than only in the config text.
 if printf '%s
-' "$gen_out" | grep -qE 'snap(send|get)\.sh.* -R '; then
-    ok "field survival: the profile's recursive=flat reaches the rendered cron line"
+' "$gen_out" | grep -q 'zfs-media-gate.sh attach' \
+   && printf '%s
+' "$gen_out" | grep -q 'zfs-media-gate.sh detach'; then
+    ok "field survival: the profile's media=removable reaches the rendered cron line"
 else
-    bad "field survival: the profile's recursive=flat reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
+    bad "field survival: the profile's media=removable reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
 fi
 
 
@@ -4267,8 +4270,11 @@ fi
 # relationship must be independent of it: this is the one-way handoff itself.
 # The drift is expressed in VALID profile fields on purpose: an invalid one
 # would be refused at the profile boundary and would prove nothing about the
-# handoff.
-mkprof_add "$P9/prof" '[dataset]' '\trecursive = yes'
+# handoff. `recursive` was that field until 2026-08-31, when it became one of
+# the invalid ones -- recursion is the relationship's topology and a profile
+# setting it made the emitted section carry the field twice. `media` is what a
+# [dataset] fragment may still carry besides use_template.
+mkprof_add "$P9/prof" '[dataset]' '\tmedia = removable'
 sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_PROFILEDRIFT_/' "$P9/prof.conf"
 out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
