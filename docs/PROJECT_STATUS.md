@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7bc40bd38f4904ac -->
+<!-- status-covers-digest: be009941b4af3961 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1509,6 +1509,28 @@
   po kolejności listy zabija 3 przypadki, usunięta kontrola zajętego celu zabija
   5 (w tym asercję nośną „silnik lądowania NIE zostaje uruchomiony"), a
   lądowanie dobrych par mimo złej zabija 10, usunięte tworzenie przestrzeni stagingu zabija 2, a nierozwijanie dzieci zabija 3.
+
+- **Ostrzeżenie „co to kosztuje backup" pytało ŹRÓDŁO, a twierdziło o KOPII —
+  LAB, 2026-08-31.** Komunikat mówi: „kopia na tym kolektorze trzyma teraz
+  snapshoty, których źródło już nie ma", i zapowiada odmowę następnego pulla.
+  Predykat pod spodem pytał o co innego: co **źródło** miało za chwilę stracić.
+  To się pokrywa tylko wtedy, gdy kopia stoi równo z głową źródła.
+  Zmierzone: źródło niosło snapshot, którego kopia **nigdy nie dostała** (nie
+  pasował do prefiksu pulla). Cofnięcie go nie kosztowało backupu nic — a bieg
+  ogłosił zator, nazwał snapshot nieistniejący na żadnym kolektorze i
+  zaproponował `zfs rollback -r` **na kopii** jako jedno z dwóch wyjść.
+  Następny pull powiedział `All datasets processed successfully`.
+  Fałszywy alarm nie jest tu niegroźny, bo **rada przy nim jest niszcząca**:
+  operator, który uwierzy, cofnie własną historię backupu — a komunikat trzy
+  linijki dalej ostrzega, że to samo cofnięcie kasuje **bookmarki**, czyli
+  kotwicę, do której wraca replika na nośniku wymiennym.
+  **To było już raz zmierzone i zapisane** — strażnik, który tu stał, niósł tę
+  lekcję w komentarzu („a rollback that discards live writes destroys nothing
+  the copy has… the very next pull said All datasets processed successfully")
+  i mimo to pytał źródło. Wpisanie rozróżnienia w komentarz to nie to samo, co
+  wpisanie go w predykat.
+  Teraz czyta **własną listę kopii**, lokalnie i bez dodatkowego ssh, szukając
+  snapshotów za punktem odzysku. Gdy kopia nie ma żadnego — blok milczy.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
