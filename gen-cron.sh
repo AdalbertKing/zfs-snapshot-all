@@ -677,9 +677,24 @@ maybe_add_quiesce() {
 # something as an argument can only ever make this MISS a letter, so the
 # recursion check that depends on it is written to fail closed separately.
 #
-#   arg-taking (union): m l v j p k q Q T o x c b X K O L
-#   boolean    (union): e z Z g N r R n i H u U f w V A F S
-FLAGS_ARG_LETTERS='mlvjpkqQToxcbXKOL'
+# THE LIST DRIFTED ONCE, WHICH IS WHY IT IS TRANSCRIBED IN FULL HERE. -E (the
+# excluded snapshot family) takes an argument in both engines' `while getopts`
+# lines and was missing from this union until 2026-08-31. The consequence was
+# not a missed letter but INVENTED ones: `-Erepl_` is the bundled spelling both
+# engines accept for `-E repl_`, and walking it with E as a boolean read the
+# family name itself as options -- E, r, e, p and an argument `l_`. The phantom
+# `r` then hit lint_flags, so a config excluding a family whose name begins
+# with `r` was refused for declaring recursion it never declared. Measured
+# both ways: `flags = "-Erepl_"` was refused, `flags = "-E repl_"` -- the same
+# invocation, spaced -- rendered.
+#
+# Transcribe from the `while getopts` line, NOT from the OPTSTRING variable
+# above it: those two have themselves drifted apart in both engines (the
+# variable is missing E: and t), and the getopts line is the one that parses.
+#
+#   arg-taking (union): m l v j p k q Q T o x c b X K O L E
+#   boolean    (union): e z Z g N r R t n i H u U f w V A F S
+FLAGS_ARG_LETTERS='mlvjpkqQToxcbXKOLE'
 # One grammar, two views. flags_opt_pairs does the getopts-equivalent walk and
 # yields "<letter><TAB><argument>"; flags_opt_letters is the letters-only view of
 # the SAME walk, so there is no second implementation to keep in step.
