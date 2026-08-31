@@ -2552,6 +2552,10 @@ esac
 # says which.
 . "$DIR/records.sh"
 
+# `--onto`: the rebase arithmetic behind a cross-host recovery. Its own file for
+# the same reason as the two above.
+. "$DIR/onto.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"

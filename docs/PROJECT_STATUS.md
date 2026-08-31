@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9cbe4fe7442e48d4 -->
+<!-- status-covers-digest: 614a6cbf4df09fa7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1419,6 +1419,42 @@
   wprost; wykonują się na runnerze CI.
   **Znalezione przez lab, nie przez suitę** — obie wady istniały, gdy cała
   bateria była zielona.
+
+- **Jedna pisownia zakresu, i `--onto` na cel — GRAMATYKA MIĘDZYHOSTOWA
+  ZAMKNIĘTA (decyzja właściciela 2026-08-30, `docs/project/OWNER-RESTORE-CROSS-HOST-GRAMMAR-2026-08-30.md`).**
+  Decyzja z 26.08 zastąpiła `label:dataset` flagami `--source`/`--target`, ale
+  dosięgła tylko przypadku jednej maszyny. Zmierzone na drzewie z 30.08: **obie
+  pisownie żyły**, a przy podanym celu flagi były **odmawiane**, z odmową
+  odsyłającą do dwukropka — czyli jedyna droga do „jeden dysk VM-a na inną
+  maszynę" prowadziła przez pisownię, którą właściciel już zastąpił. Powód
+  zastąpienia nie był teoretyczny: `:` jest legalny w nazwie datasetu ZFS i
+  rozjechał już legalną lokalizację kopii `.../pool/data:archive` (#132).
+  Teraz: nazwa relacji stoi sama, datasety idą flagami, a **`--onto` mówi, gdzie
+  to ląduje** na maszynie docelowej — inna oś niż `--source`/`--target`, które
+  mówią, w której przestrzeni nazw operator nazywa datasety. Pary są
+  **pozycyjne**, listy muszą mieć równą długość, dwa datasety nie mogą wylądować
+  na jednym, a dzieci zachowują pozycję względną. Dwukropek jest jeszcze
+  czytany, ale **głośno ostrzega** i wskazuje nową pisownię.
+  **`--onto` z jedną ścieżką i bez listy wyboru = cała relacja przesadzona
+  tam.** Baza to najdłuższy wspólny przedrostek zapisanych korzeni, liczony **na
+  granicach nazw** — `rpool/data/vm-101` i `rpool/data/vm-1010` dają
+  `rpool/data`, nie `rpool/data/vm-101`. Pierwsza wersja tej reguły mówiła
+  „korzeń jest odczytany, nigdy zgadywany"; napisałem ją, patrząc na gramatykę,
+  a nie na config, i odmówiłaby dokładnie tej awarii, dla której ta forma
+  istnieje — VM z czterema dyskami to **cztery** zapisane sekcje, czyli cztery
+  korzenie. Ponieważ baza jest wywnioskowana, **jest drukowana** nad planem
+  (`restore_report_rebase`): wnioskowanie, które operator potwierdza, nie jest
+  zgadywaniem; jest nim takie, którego nikt nie widzi.
+  Dowód: `test/restore/onto.sh` 14/14 i **trzy kontrole negatywne**, dwie
+  punktowe: przedrostek liczony po znakach zabija dokładnie jedną asercję
+  (granice nazw), pierwsze-dopasowanie zamiast najdłuższego zabija dokładnie
+  jedną (dziecko nazwane wprost ma zachować swój cel), a przywrócenie zgubionego
+  ostatniego pola listy zabija 7.
+  **Znalezione przez własny test, nie przez przegląd diffu:** `printf '%s' | read`
+  gubi ostatnie pole, bo bez końcowej nowej linii `read` zwraca niezero i ciało
+  pętli nie wykonuje się dla niego. Jednoelementowa lista `--onto` rozwiązywała
+  się do ZERA elementów, a odmowa skarżyła się wtedy na różne długości list —
+  komunikat o objawie dwa kroki za przyczyną.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

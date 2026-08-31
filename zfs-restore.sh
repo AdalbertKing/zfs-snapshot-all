@@ -68,6 +68,12 @@ RESTORE_SCOPE_EXPANDED=0
 # Where each dataset in scope is WRITTEN. Equals the recorded source unless a
 # destination relation was named -- see restore_scope_dest.
 RESTORE_SCOPE_DEST=()
+# The rebase pairs behind `--onto`: element i says that everything at or under
+# RESTORE_ONTO_FROM[i] lands at the same relative position under
+# RESTORE_ONTO_TO[i]. Empty means the recovery keeps the source paths, which is
+# every form that does not say --onto.
+RESTORE_ONTO_FROM=()
+RESTORE_ONTO_TO=()
 # The relationship whose COPY is being read. Equal to RESTORE_RELATION_LABEL
 # unless the recovery is aimed at another machine, in which case that one is the
 # destination and this one is where the data came from.
@@ -2253,6 +2259,92 @@ restore_dest_peer() {   # <config> <destination label> -> account@host
 # `A:ds` that covers children expands to all of them (see the expansion in
 # cmd_restore), and each child has to land under ds2 at the same relative
 # position. Arithmetic on two named paths -- no probing, no inference.
+# THE LONGEST PREFIX COMMON TO A SET OF DATASET PATHS, AT NAME BOUNDARIES.
+#
+# `rpool/data/vm-101` and `rpool/data/vm-1010` share `rpool/data`, NOT
+# `rpool/data/vm-101`. A character-wise prefix would rebase the second one under
+# a path built out of half of the first one's name -- which is a legal ZFS name,
+# so nothing downstream would object.
+#
+# Returns 1 with no output when the paths share nothing: that is a relationship
+# for which "rebased here" has no single meaning, and the caller refuses.
+restore_common_root() {   # <path>...
+    local base="$1"; shift
+    local p
+    for p in "$@"; do
+        while [ -n "$base" ] && [ "$p" != "$base" ] && [ "${p#"$base"/}" = "$p" ]; do
+            case "$base" in
+                */*) base="${base%/*}" ;;
+                *)   base="" ;;
+            esac
+        done
+        [ -n "$base" ] || return 1
+    done
+    printf '%s' "$base"
+}
+
+# BUILD THE `--onto` REBASE PAIRS.
+#
+# Two shapes, and both end as the same list of (from, to) pairs so that
+# restore_scope_dest has one rule rather than two:
+#
+#   selection given   pairs positionally with the selection, same length
+#   no selection      ONE destination, and the whole relationship is rebased
+#                     there from the common root of its recorded sources
+#
+# Positional rather than set-wise, per the owner's decision of 2026-08-26 applied
+# unchanged: writing the disks in a different order on the two sides says
+# something the operator did not mean, and sorting it out for them hides exactly
+# the mistake this form exists to let them state precisely.
+restore_onto_plan() {   # <onto list> <from root>...
+    local list="$1"; shift
+    RESTORE_ONTO_FROM=(); RESTORE_ONTO_TO=()
+    local -a to=()
+    local item
+    # `printf '%s'` and not '%s\n': without a trailing newline the LAST field has
+    # no line terminator, `read` returns non-zero on it, and the loop body never
+    # runs for it. Measured: a single-item --onto list resolved to ZERO items,
+    # and the refusal then complained the two lists were different lengths --
+    # a message describing a symptom two steps downstream of the cause.
+    while IFS= read -r item; do
+        [ -n "$item" ] || die "restore: --onto has an empty entry -- a stray comma. Every position has to name a dataset, because position is what pairs it with the one it replaces."
+        to+=("$item")
+    done < <(printf '%s\n' "$list" | tr ',' '\n')
+
+    local n_to="${#to[@]}" n_from="$#"
+    if [ "$n_from" -eq 0 ]; then
+        die "restore: --onto needs something to rebase, and nothing resolved."
+    fi
+
+    local -a from=()
+    if [ "$n_to" -eq 1 ] && [ "$n_from" -gt 1 ]; then
+        # THE WHOLE RELATIONSHIP, REBASED. A VM with four disks is four recorded
+        # sections, so "read the root, never infer it" would have refused the
+        # exact disaster this form exists for. The base is derived -- and
+        # therefore printed, see restore_report_rebase: an inference the operator
+        # confirms is not a guess, an inference nobody sees is.
+        local base
+        base="$(restore_common_root "$@")" || \
+            die "restore: --onto with one path means 'rebase the whole relationship here', and this relationship's recorded sources share no common root -- $*. There is no single position to rebase them from, so name each side explicitly with --target and a matching --onto list."
+        from=("$base")
+    else
+        [ "$n_to" -eq "$n_from" ] || \
+            die "restore: --onto names $n_to dataset(s) and the selection names $n_from. They are read as PAIRS, in order, so the two lists have to be the same length. Refusing rather than recovering fewer datasets than were named."
+        from=("$@")
+    fi
+
+    local i j
+    for (( i=0; i<${#to[@]}; i++ )); do
+        for (( j=0; j<i; j++ )); do
+            [ "${to[$i]}" != "${to[$j]}" ] || \
+                die "restore: --onto names '${to[$i]}' twice (positions $((j + 1)) and $((i + 1))). Two datasets cannot land on one, and deciding which of them wins is not this command's call."
+        done
+        RESTORE_ONTO_FROM+=("${from[$i]}")
+        RESTORE_ONTO_TO+=("${to[$i]}")
+    done
+    return 0
+}
+
 restore_scope_dest() {   # <config> <source address> <destination address or "">
     local config="$1" from="$2" onto="$3"
     RESTORE_SCOPE_DEST=()
@@ -2284,26 +2376,44 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
             die "restore: the destination relationship '${onto%%:*}' is not one this host records, so there is no machine to recover onto. Pair it first -- a destination is a relationship this collector already holds a key for, not a hostname, and it is NOT read as one: guessing is how a recovery lands on the wrong machine."
     fi
 
-    # The two roots. Empty when the form is bare, in which case the source path
-    # is kept verbatim.
-    local from_root="" onto_root=""
-    case "$from" in *:*) from_root="${from#*:}" ;; esac
-    case "$onto" in *:*) onto_root="${onto#*:}" ;; esac
+    # THE REBASE PAIRS. `--onto` fills them (restore_onto_plan); the retired
+    # `A:ds B:ds2` spelling produces the single-pair case, which is why that
+    # form needs no separate arithmetic here and can be deleted without touching
+    # this loop.
+    local -a of=() ot=()
+    if [ "${#RESTORE_ONTO_FROM[@]}" -gt 0 ]; then
+        of=("${RESTORE_ONTO_FROM[@]}"); ot=("${RESTORE_ONTO_TO[@]}")
+    else
+        local from_root="" onto_root=""
+        case "$from" in *:*) from_root="${from#*:}" ;; esac
+        case "$onto" in *:*) onto_root="${onto#*:}" ;; esac
+        if [ -n "$onto_root" ]; then of=("$from_root"); ot=("$onto_root"); fi
+    fi
 
-    local srcpath rel
+    local srcpath rel j hit best best_i
     for (( i=0; i<n; i++ )); do
         srcpath="${RESTORE_SCOPE_SRC[$i]}"
         srcpath="${srcpath#*@}"; srcpath="${srcpath#*:}"
-        if [ -n "$onto_root" ]; then
-            rel=""
-            if [ "$srcpath" != "$from_root" ]; then
-                rel="${srcpath#"$from_root"}"
-                [ "$rel" != "$srcpath" ] || die "restore: '${RESTORE_SCOPE_SRC[$i]}' is not under '$from_root', so there is no position to give it under '$onto_root'. Refusing rather than inventing one."
-            fi
-            RESTORE_SCOPE_DEST+=("${peer}:${onto_root}${rel}")
-        else
+        if [ "${#of[@]}" -eq 0 ]; then
             RESTORE_SCOPE_DEST+=("${peer}:${srcpath}")
+            continue
         fi
+        # LONGEST MATCH, not first match. A selection may legally name both a
+        # dataset and one of its children -- each with its own destination --
+        # and first-match would send the child to the parent's new home while
+        # the entry that named it explicitly sat unused.
+        hit=0; best=""; best_i=-1
+        for (( j=0; j<${#of[@]}; j++ )); do
+            if [ "$srcpath" = "${of[$j]}" ] || [ "${srcpath#"${of[$j]}"/}" != "$srcpath" ]; then
+                if [ "${#of[$j]}" -gt "${#best}" ] || [ "$best_i" -lt 0 ]; then
+                    best="${of[$j]}"; best_i="$j"; hit=1
+                fi
+            fi
+        done
+        [ "$hit" -eq 1 ] || die "restore: '${RESTORE_SCOPE_SRC[$i]}' is not under any of the paths --onto rebases (${of[*]}), so there is no position to give it. Refusing rather than inventing one."
+        rel=""
+        [ "$srcpath" = "$best" ] || rel="${srcpath#"$best"}"
+        RESTORE_SCOPE_DEST+=("${peer}:${ot[$best_i]}${rel}")
     done
     return 0
 }
@@ -2397,6 +2507,26 @@ restore_report_handover() {
 #               operator is told a machine needs a person tonight.
 #   rolled   -- restore_one appends to RESTORE_ROLLED_BACK, and a subshell's
 #               appends die with it.
+# THE BASE IS DERIVED, SO IT IS SHOWN.
+#
+# `--onto <one path>` over a whole relationship rebases from the longest prefix
+# common to the relationship's recorded roots. That is an inference: a VM with
+# four disks is four recorded sections, so "read the root, never infer it" would
+# have refused the exact disaster the form exists for -- a replacement machine
+# whose pool is not called rpool.
+#
+# An inference the operator confirms is not a guess; an inference nobody sees is.
+# So it prints once, above the per-dataset lines, naming both sides.
+restore_report_rebase() {
+    [ "${#RESTORE_ONTO_FROM[@]}" -gt 0 ] || return 0
+    local i
+    log 0 "restore: ---- rebasing onto different paths ----"
+    for (( i=0; i<${#RESTORE_ONTO_FROM[@]}; i++ )); do
+        log 0 "restore:   ${RESTORE_ONTO_FROM[$i]}  ->  ${RESTORE_ONTO_TO[$i]}"
+    done
+    log 0 "restore: every dataset below lands at its position relative to the left-hand path."
+}
+
 restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2 changed
     local state
     state="$(mktemp)" || {
@@ -2509,6 +2639,11 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         return 2
     fi
 
+
+    # Printed after the pre-flight passed and before the first dataset runs: a
+    # refused run rebases nothing, and saying so would describe work that is not
+    # going to happen.
+    restore_report_rebase
 
     for (( i=0; i<n; i++ )); do
         RESTORE_ONE_VERDICT=""
@@ -3437,7 +3572,7 @@ cmd_restore() {
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch=""
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list=""
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -3467,6 +3602,11 @@ cmd_restore() {
             --source)     need_val --source "${2:-}"; scope_src="$2"; shift ;;
             --target=*)   scope_tgt="${a#*=}" ;;
             --target)     need_val --target "${2:-}"; scope_tgt="$2"; shift ;;
+            # WHERE IT LANDS on the destination machine -- a different axis from
+            # --source/--target, which say in which namespace the operator is
+            # NAMING the datasets. Owner decision 2026-08-30.
+            --onto=*)     onto_list="${a#*=}" ;;
+            --onto)       need_val --onto "${2:-}"; onto_list="$2"; shift ;;
             --snapshot=*) snapshot="${a#*=}" ;;
             --snapshot)   need_val --snapshot "${2:-}"; snapshot="$2"; shift ;;
             --config=*)   config="${a#*=}" ;;
@@ -3511,13 +3651,29 @@ cmd_restore() {
     #
     # Each of these would otherwise produce a recovery aimed somewhere nobody
     # wrote down, which on this verb is the whole failure mode.
+    # --onto says WHERE on the destination machine, so without a destination
+    # there is nothing for it to mean. Refusing beats silently keeping the source
+    # paths: the operator who typed it wanted the data somewhere else.
+    if [ -n "$onto_list" ] && [ -z "$dest_addr" ]; then
+        die "restore: --onto names where the recovery lands on ANOTHER machine, and no destination relationship was given. Say: restore <from> <onto-relation> --onto <dataset>[,<dataset>...]"
+    fi
+
     if [ -n "$dest_addr" ]; then
         case "$dest_addr" in
             *@*) die "restore: '$dest_addr' looks like user@host -- a destination is a RELATION this collector is already paired with, not a transport address (R-025). Pair the new machine first, then name it by its label." ;;
         esac
         [ "$plan" -eq 0 ] || die "restore: --plan and a destination. The planner reads; it has nothing to say about a machine it would not write to. Drop one."
-        { [ -z "$scope_src" ] && [ -z "$scope_tgt" ]; } || die "restore: --source/--target select datasets WITHIN one relationship, and a second address names a different one. Say it the way the grammar does: restore <from>[:<dataset>] <onto>[:<dataset>]."
         [ -z "$snapshot" ] || die "restore: --snapshot names one exact snapshot on one copy; with a destination the recovery point is still resolved on the SOURCE relation's copy, so say --at instead, or drop the destination."
+        # THE COLON IS RETIRED (owner decision 2026-08-30). It is still read for
+        # one release, because it is a public spelling that appears in this
+        # project's own documents and in the 2026-08-28 two-host transcript --
+        # but it warns, because ':' is legal inside a ZFS dataset name and the
+        # ambiguity that made the owner replace it was not theoretical: it split
+        # a legal copy location `.../pool/data:archive` at the first colon and
+        # refused it while it sat in CONFIG (#132).
+        case "$addr$dest_addr" in
+            *:*) warn "restore: 'label:dataset' is the retired spelling and will be removed. Say the datasets with flags instead: restore ${addr%%:*} ${dest_addr%%:*} --target <dataset>[,<dataset>...] [--onto <dataset>[,<dataset>...]]" ;;
+        esac
         case "$addr" in
             *:*) case "$dest_addr" in
                      *:*) ;;
@@ -3526,6 +3682,9 @@ cmd_restore() {
             *)  case "$dest_addr" in
                     *:*) die "restore: '$dest_addr' names a dataset and '$addr' does not. Either name both sides, or give two bare relations -- which recovers every dataset of '$addr' onto '${dest_addr}' at the SAME paths." ;;
                 esac ;;
+        esac
+        [ -z "$onto_list" ] || case "$addr$dest_addr" in
+            *:*) die "restore: --onto and the retired 'label:dataset' spelling both say where the recovery lands. Give one -- and --onto is the one that stays." ;;
         esac
     fi
 
@@ -3591,6 +3750,10 @@ cmd_restore() {
             # already published a grant saying this collector may write to it.
             # Asking again here would be the fourth time the same question is
             # put, and the first three were asked when nothing was on fire.
+            # The selection IS the list of roots here: this path resolves exact
+            # paths and expands nothing, so position i of --onto pairs with
+            # position i of what the operator named.
+            [ -z "$onto_list" ] || restore_onto_plan "$onto_list" "${RESTORE_SCOPE_SRC[@]}"
             restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
@@ -3682,6 +3845,17 @@ cmd_restore() {
                         done < <(zfs list -H -o name -r "$_wr_c" 2>/dev/null) ;;
                 esac
             done <<< "$_rc_sel"
+            # THE RECORDED ROOTS, not the expanded scope. A child that exists on
+            # the pool but under no section of its own must not be able to drag
+            # the rebase base deeper than the relationship itself declares.
+            if [ -n "$onto_list" ]; then
+                local -a _wr_roots=()
+                while IFS="$(printf '	')" read -r _wr_s _wr_c; do
+                    [ -n "$_wr_s" ] || continue
+                    _wr_roots+=("$_wr_s")
+                done <<< "$_rc_sel"
+                restore_onto_plan "$onto_list" "${_wr_roots[@]}"
+            fi
             restore_scope_dest "${_rc_cfg:-$config}" "$addr" "$dest_addr"
             RESTORE_AT_EPOCH="$at_epoch"
             restore_run_scope
