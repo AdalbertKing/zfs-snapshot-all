@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9d25155385c32470 -->
+<!-- status-covers-digest: 98398ad189231474 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1486,10 +1486,19 @@
   odmawia"). Odtworzyłem ją w nowej ścieżce. Wyszło, bo atrapa zwraca wiersze
   **nieposortowane** — i dlatego je tak zwraca. Domyślny wybór idzie teraz przez
   ten sam wybierak co `--at`, z podniesionym sufitem.
-  Dowód: `test/restore/fromcopy.sh` 15/15 i **trzy kontrole negatywne**: wybór
+  **Lab złapał drugą wadę, tym razem UKRYTE SPRZĘŻENIE (2026-08-31):** silnik
+  lądowania tworzył rodzica **lądowania**, a nie przestrzeni **stagingu**
+  (`<pula>/restore`). Przy adresie przez relację lądowanie leży *wewnątrz* tej
+  przestrzeni, więc powstawała ona jako przodek — przypadkiem, i nikt nie
+  zauważył, że nigdy o nią nie poproszono. Lądowanie gdziekolwiek indziej takiego
+  szczęścia nie ma, a awaria wychodzi **po podglądzie i po potwierdzeniu**, przy
+  odbiorze: `cannot open 'hdd/restore'`. Suity tego nie widziały, bo atrapują
+  połowę lądującą — właściwa granica dla tego, co testują, i niewłaściwa dla
+  sprzężenia między dwiema ścieżkami, które tylko wyglądały na jedną.
+  Dowód: `test/restore/fromcopy.sh` 17/17 i **cztery kontrole negatywne**: wybór
   po kolejności listy zabija 3 przypadki, usunięta kontrola zajętego celu zabija
   5 (w tym asercję nośną „silnik lądowania NIE zostaje uruchomiony"), a
-  lądowanie dobrych par mimo złej zabija 10.
+  lądowanie dobrych par mimo złej zabija 10, a usunięte tworzenie przestrzeni stagingu zabija 2.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

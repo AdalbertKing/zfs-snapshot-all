@@ -184,6 +184,65 @@ out="$(fc_run 'hdd/copyA,hdd/copyB' 'hdd/w1,hdd/w1' '' '')" && \
         *) bad "fromcopy: two copies may not land on one destination" "$out" ;;
     esac
 
+# ---- THE STAGING NAMESPACE, for a landing OUTSIDE <pool>/restore ------------
+# Found on the lab, not here (2026-08-31): the landing half creates the LANDING's
+# parent, and a relationship-addressed restore lands INSIDE <pool>/restore/... --
+# so the staging namespace came along as an ancestor and nobody noticed it was
+# never asked for. `--from-copy --onto hdd/odzysk0` lands elsewhere and the
+# receive failed with `cannot open 'hdd/restore'`, after the preview and after
+# the confirmation.
+#
+# This drives the REAL restore_safe_land, unstubbed, because the whole point is a
+# coupling BETWEEN the two halves -- stubbing either one hides it.
+fc_land() {   # <landing> -> the zfs calls, in order
+    local landing="$1"
+    local t; t=$(mktemp)
+    {
+        echo 'set -u'
+        printf 'FC=%q
+' "$FC"
+        echo 'die() { printf "FATAL: %s
+" "$*" >&2; exit 1; }'
+        echo 'warn() { printf "!!! %s
+" "$*" >&2; }'
+        cat <<'LSTUB'
+zfs() {
+    printf 'ZFS %s
+' "$*" >> "$FC/calls"
+    case "$1 $2" in
+        "list -H")
+            local d="${!#}"
+            grep -qFx -- "$d" "$FC/exists" 2>/dev/null || return 1
+            printf '%s
+' "$d"; return 0 ;;
+        "get -H") printf '%s
+' 77; return 0 ;;
+        "send "*) return 0 ;;
+    esac
+    return 0
+}
+LSTUB
+        awk -v want="restore_safe_land() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
+        printf 'restore_safe_land %q %q %q %q 1
+' "hdd/copyA" "s1" "$landing" "hdd/copyA"
+    } > "$t"
+    : > "$FC/calls"
+    bash "$t" >/dev/null 2>&1
+    rm -f "$t"
+    cat "$FC/calls"
+}
+
+calls="$(fc_land hdd/odzysk0)"
+case "$calls" in
+    *"ZFS create -p hdd/restore"*) ok "staging: the staging namespace is created for a landing OUTSIDE <pool>/restore" ;;
+    *) bad "staging: the staging namespace is created for a landing OUTSIDE <pool>/restore" "$calls" ;;
+esac
+# ...and before the receive, or the receive is the thing that discovers it.
+case "$calls" in
+    *"create -p hdd/restore"*"recv"*) ok "staging: ...before the receive, not discovered by it" ;;
+    *) bad "staging: ...before the receive, not discovered by it" "$calls" ;;
+esac
+
 if [ "${_fc_standalone:-0}" = 1 ]; then
     echo "--------------------------------------------"
     echo "PASS=$PASS FAIL=$FAIL"
