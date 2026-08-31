@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e340de6ae2b03089 -->
+<!-- status-covers-digest: 270b025d4ccc51ed -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1661,6 +1661,20 @@
   dopisywała w OBU przebiegach, więc pokazywała sześć wpisów także po poprawce.
   Prawdziwy `restore_one` wraca na granicy pre-flightu i nie ma czego zapisać.
   Atrapa, która nie odwzorowuje tego, mierzy samą siebie.
+- **`--onto` odmawiał WSZYSTKIEGO na żywo — prefiks transportowy, LAB
+  2026-08-31.** Korzenie przebudowy zachowywały `konto@host:`, a ścieżki, z
+  którymi je porównywano, miały ten prefiks obcięty. Nic nigdy nie pasowało.
+  Odmowa **drukowała ten sam napis po obu stronach własnego zdania** —
+  „`…:hdd/labsrc` is not under any of the paths (`…:hdd/labsrc`)" — co jest
+  najczytelniejszym możliwym objawem i i tak wymagało uruchomienia, żeby je
+  zobaczyć.
+  **Piętnaście przypadków jednostkowych i trzy kontrole tego nie złapały**, bo
+  wszystkie używały **gołych ścieżek** — tego, po co sięga fixture, a nie tego,
+  co niesie relacja. Dołożony przypadek z prefiksem; kontrolą jest realny kod z
+  `main` i wywala dokładnie jego.
+  Normalizacja siedzi teraz tam, gdzie odbywa się porównanie, a nie u
+  wywołującego: dwie wielkości, które się zestawia, muszą być obcinane tą samą
+  ręką.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

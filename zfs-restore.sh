@@ -2888,7 +2888,23 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
     # this loop.
     local -a of=() ot=()
     if [ "${#RESTORE_ONTO_FROM[@]}" -gt 0 ]; then
-        of=("${RESTORE_ONTO_FROM[@]}"); ot=("${RESTORE_ONTO_TO[@]}")
+        # NORMALISED THE SAME WAY AS srcpath BELOW, and that is the whole point
+        # of doing it here rather than at the call site: the two are compared, so
+        # they have to be stripped by the same hand.
+        #
+        # A relationship's datasets carry a transport prefix -- `account@host:ds`
+        # -- while the loop below compares the bare path. Measured on the lab,
+        # 2026-08-31: `--onto` refused every dataset with "is not under any of
+        # the paths --onto rebases", printing the SAME string on both sides of
+        # the sentence, because one had been stripped and the other had not.
+        # The unit cases never saw it: they use bare paths, which is what a
+        # fixture reaches for and not what a relationship holds.
+        local _f
+        for _f in "${RESTORE_ONTO_FROM[@]}"; do
+            _f="${_f#*@}"; _f="${_f#*:}"
+            of+=("$_f")
+        done
+        ot=("${RESTORE_ONTO_TO[@]}")
     else
         local from_root="" onto_root=""
         case "$from" in *:*) from_root="${from#*:}" ;; esac
