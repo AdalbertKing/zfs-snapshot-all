@@ -206,6 +206,19 @@ acct@peer:rpool/data/vm-900-disk-0"
 if [ "$plain" = "$want" ]; then ok "dest: with no --onto the source paths are kept, unchanged from the campaign form"
 else bad "dest: with no --onto the source paths are kept, unchanged from the campaign form" "$plain"; fi
 
+# ---- THE FIXTURE THAT WAS MISSING: a relationship's datasets carry a prefix ---
+# `account@host:dataset`, not a bare path. Every case above used bare paths --
+# which is what a fixture reaches for and not what a relationship holds -- and
+# the whole feature refused every dataset on the lab because the roots kept the
+# prefix while the paths compared against them had it stripped. The refusal even
+# printed the same string on both sides of its own sentence.
+SRCS="zfsbackup-pve9@192.168.28.9:hdd/labsrc zfsbackup-pve9@192.168.28.9:hdd/labsrc/vm-900-disk-0"
+out="$(onto_dest 'hdd/odzysk' 'zfsbackup-pve9@192.168.28.9:hdd/labsrc')"
+want="acct@peer:hdd/odzysk
+acct@peer:hdd/odzysk/vm-900-disk-0"
+if [ "$out" = "$want" ]; then ok "dest: A TRANSPORT-PREFIXED SOURCE STILL FINDS ITS REBASE ROOT"
+else bad "dest: A TRANSPORT-PREFIXED SOURCE STILL FINDS ITS REBASE ROOT" "$out"; fi
+
 if [ "${_onto_standalone:-0}" = 1 ]; then
     echo "--------------------------------------------"
     echo "PASS=$PASS FAIL=$FAIL"
