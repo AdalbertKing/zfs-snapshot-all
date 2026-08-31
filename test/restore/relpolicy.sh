@@ -91,9 +91,22 @@ restore_one() {
         [ "$k" = "$ds" ] && rc="$v"
     done < "$tbl"
     RESTORE_ONE_VERDICT="stub verdict for $ds (rc=$rc)"
+    # TWO CONTROL-FLOW SHAPES, because the real one has two. `die` in this tree
+    # is `exit 1`, and a stub that can only RETURN cannot express the refusal
+    # that ends the process -- which is exactly how REV-20260831-127 F1 survived
+    # a green suite. `die` and `die2` are the exiting shapes; `die2` exits after
+    # the dataset has already been touched.
+    case "$rc" in
+        die)  RESTORE_ONE_VERDICT="late pre-mutation refusal for $ds"
+              die "FATAL: late pre-mutation refusal for $ds" ;;
+        die2) RESTORE_ONE_CHANGED=1
+              RESTORE_ONE_VERDICT="broke after destruction began on $ds"
+              die "FATAL: broke after destruction began on $ds" ;;
+    esac
     return "$rc"
 }
 STUB
+        awk -v want="restore_one_isolated() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="restore_run_scope() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         echo 'RESTORE_SCOPE_SRC=(); RESTORE_SCOPE_COPY=(); RESTORE_SCOPE_DEST=()'
         local d
@@ -216,6 +229,64 @@ esac
 case "$out" in
     *"exec: c"*) ok "B3: ...while the rest of the scope still ran" ;;
     *) bad "B3: ...while the rest of the scope still ran" "$out" ;;
+esac
+
+# E -- THE EXITING PRIMITIVE (REV-20260831-127 F1). The relation controller can
+# only classify a status it is GIVEN, and `die` in this tree is `exit 1`. Before
+# the isolation boundary a single late refusal took the whole run with it: the
+# datasets after it were never attempted and no summary was printed at all.
+#
+# 'c' is the sentinel. Its presence is the entire finding.
+printf 'a=0
+b=0
+c=0
+' > "$RP/pf"
+printf 'a=0
+b=die
+c=0
+' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"; rc=$?
+case "$out" in
+    *"exec: c"*) ok "E1: A DATASET THAT EXITS DOES NOT TAKE THE RELATION WITH IT" ;;
+    *) bad "E1: A DATASET THAT EXITS DOES NOT TAKE THE RELATION WITH IT" "rc=$rc" "$out" ;;
+esac
+case "$out" in
+    *"per-dataset result"*) ok "E1: ...and the summary is still printed" ;;
+    *) bad "E1: ...and the summary is still printed" "$out" ;;
+esac
+case "$out" in
+    *"NOT DONE b"*) ok "E1: ...naming the one that exited as untouched" ;;
+    *) bad "E1: ...naming the one that exited as untouched" "$out" ;;
+esac
+# The reason has to survive the process that died with it, or the operator gets
+# "no reason recorded" while the real one scrolled past on stderr.
+case "$out" in
+    *"late pre-mutation refusal for b"*) ok "E1: ...and its reason survives the process that carried it" ;;
+    *) bad "E1: ...and its reason survives the process that carried it" "$out" ;;
+esac
+case "$rc" in
+    1) ok "E1: ...and the relation reports an ordinary failure" ;;
+    *) bad "E1: ...and the relation reports an ordinary failure" "rc=$rc" "$out" ;;
+esac
+
+# E2 -- an exit AFTER the destruction began must NOT be demoted to untouched.
+# `die` carries exit 1 and no idea of what it had already done; the flag does.
+printf 'a=0
+b=die2
+c=0
+' > "$RP/ex"
+out="$(run_policy "$RP/pf" "$RP/ex" a b c)"; rc=$?
+case "$out" in
+    *"CHANGED  b"*) ok "E2: an exit after the first mutation is still CHANGED, not untouched" ;;
+    *) bad "E2: an exit after the first mutation is still CHANGED, not untouched" "$out" ;;
+esac
+case "$rc" in
+    2) ok "E2: ...and it still outranks an ordinary failure" ;;
+    *) bad "E2: ...and it still outranks an ordinary failure" "rc=$rc" "$out" ;;
+esac
+case "$out" in
+    *"exec: c"*) ok "E2: ...while the rest of the scope still ran" ;;
+    *) bad "E2: ...while the rest of the scope still ran" "$out" ;;
 esac
 
 if [ "${_rp_standalone:-0}" = 1 ]; then
