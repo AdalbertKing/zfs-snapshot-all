@@ -520,8 +520,23 @@ rs() {   # <rc list, space separated> -> "<rc>|<report>"
       k=0; for r in $1; do k=$((k+1))
           RESTORE_SCOPE_SRC+=("rpool/ds$k"); RESTORE_SCOPE_COPY+=("hdd/copy$k"); done
       RCS=($1); IDX=0
-      restore_one() { local r="${RCS[$IDX]}"; IDX=$((IDX+1))
-                      RESTORE_ONE_VERDICT="reason-for-$2"; return "$r"; }
+      # TWO PASSES GO THROUGH HERE NOW: the pre-flight (D, owner 2026-08-30) and
+      # then the run (B). A single shared cursor was exhausted by the first pass
+      # and the second read off the end of the fixture, which is a broken
+      # harness, not a broken runner.
+      #
+      # The pre-flight always PASSES here, and that is the honest model rather
+      # than a convenience: these fixtures describe what the TRANSFER does, and
+      # a broken transfer is exactly the thing a pre-flight cannot predict. What
+      # it predicts is unrestorability -- no snapshot, an ambiguous recovery
+      # point, a missing grant, a mounted target -- and that half is asserted in
+      # test/restore/relpolicy.sh with its own controls.
+      restore_one() {
+          if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
+              RESTORE_ONE_VERDICT="preflight-ok-for-$2"; return 0
+          fi
+          local r="${RCS[$IDX]}"; IDX=$((IDX+1))
+          RESTORE_ONE_VERDICT="reason-for-$2"; return "$r"; }
       out="$(restore_run_scope)"; rc=$?
       printf '%s|%s' "$rc" "$out" )
 }

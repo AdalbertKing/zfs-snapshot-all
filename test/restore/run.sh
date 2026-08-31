@@ -2013,7 +2013,13 @@ else bad "scope: a trailing comma refuses BEFORE any plan is shown" "$n plan lin
 mkdir -p "$SC/rel/pve2" && : > "$SC/rel/pve2/paused"
 out="$(PATH="$WORK/bin:$PATH" RELATIONSHIPS_DIR="$SC/rel" bash "$ZB" pve2 --target rpool/data/vm-101-disk-0,rpool/data/vm-101-disk-1 --config="$SC/cfg" 2>&1)"
 case "$out" in
-    *"per-dataset result"*) ok "scope: without --plan the scope RUNS, it does not plan" ;;
+    # EITHER of the runner's two reports proves the point, and the point is that
+    # the planner was not what answered. Since the relation-level pre-flight (D,
+    # owner 2026-08-30) this snapshot-less fixture refuses in the pre-flight
+    # instead of reaching the per-dataset loop -- still the runner speaking, and
+    # the planner produces neither string.
+    *"per-dataset result"*|*"REFUSED before anything was touched"*)
+        ok "scope: without --plan the scope RUNS, it does not plan" ;;
     *) bad "scope: without --plan the scope RUNS, it does not plan" \
            "expected the per-dataset runner's report" "got: $(printf '%s' "$out" | head -2)" ;;
 esac
@@ -2123,14 +2129,45 @@ esac
 # relationship keeps running and looks healthy. Owner decision 2026-08-28: the
 # run says so and names the next step; it does not compose the hand-over into
 # itself.
-case "$out" in
+# DRIVEN DIRECTLY, and the reason is a contract change rather than convenience.
+# These two used to read the fixture run above, which reached the report because
+# a copy with no snapshots still got as far as the per-dataset loop. Since the
+# relation-level pre-flight (D, owner 2026-08-30) that fixture refuses before the
+# loop -- correctly, because a run that touched nothing has no hand-over to
+# announce. Rather than make the refusal print a sentence that would be false,
+# the report is exercised on its own state, which is what these two ever tested.
+ho="$(
+    log() { shift; printf '%s
+' "$*"; }
+    RESTORE_SOURCE_LABEL=pve2
+    RESTORE_RELATION_LABEL=pve1
+    RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
+    RESTORE_SCOPE_DEST=("root@pve1:rpool/elsewhere")
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+case "$ho" in
     *"went to a DIFFERENT machine"*) ok "xhost: the run says the recovery went elsewhere" ;;
-    *) bad "xhost: the run says the recovery went elsewhere" "got: $(printf '%s' "$out" | tail -3)" ;;
+    *) bad "xhost: the run says the recovery went elsewhere" "got: $ho" ;;
 esac
-case "$out" in
+case "$ho" in
     *"move-to-client pve2 pve1"*) ok "xhost: ...and names the step that switches the backup over" ;;
-    *) bad "xhost: ...and names the step that switches the backup over" "got: $(printf '%s' "$out" | tail -3)" ;;
+    *) bad "xhost: ...and names the step that switches the backup over" "got: $ho" ;;
 esac
+# The control that keeps those two honest: same report, destination on the SAME
+# machine, must say nothing at all.
+ho_same="$(
+    log() { shift; printf '%s
+' "$*"; }
+    RESTORE_SOURCE_LABEL=pve2
+    RESTORE_RELATION_LABEL=pve2
+    RESTORE_SCOPE_SRC=("rpool/data/vm-101-disk-0")
+    RESTORE_SCOPE_DEST=("rpool/data/vm-101-disk-0")
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+if [ -z "$ho_same" ]; then ok "xhost: ...and says nothing when the destination is the same machine"
+else bad "xhost: ...and says nothing when the destination is the same machine" "$ho_same"; fi
 # NEGATIVE CONTROL, and it is the one that makes the two above mean something: a
 # recovery back onto the relation's own machine has no hand-over to do and must
 # not say it does.
@@ -2505,6 +2542,12 @@ case "$bb_ppoint" in
     *toonew*guid=G3*) ok "base: without --at the newest is the target, as before" ;;
     *) bad "base: without --at the newest is the target, as before" "got: $bb_ppoint" ;;
 esac
+
+
+# The relation-level failure policy (D + B) lives in its own file so a negative
+# control can run those cases alone against a mutated tree, in seconds. See its
+# header. Sourced, so its cases count in this suite's totals exactly as before.
+. "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

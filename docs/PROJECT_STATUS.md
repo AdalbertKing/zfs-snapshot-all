@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 330a8e8f073868e2 -->
+<!-- status-covers-digest: dbe63e94b9f01514 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1334,6 +1334,43 @@
   przez `exec` do `zfs-restore.sh`, oba wejścia dowiedzione bajt w bajt
   identyczne. `test/restore` źródłuje odtąd `zfs-restore.sh`; macierz CI
   wyprowadza się z `deps.conf`, więc suita zostaje w CI bez zmian workflow.
+
+- **Restore destruktywny: polityka relacji nad wieloma datasetami — D+B
+  (decyzja właściciela, 2026-08-30).** Krok per dataset (`restore_one`) bierze
+  JEDEN dataset, a relacja obejmuje ich kilka; nigdzie nie było powiedziane, co
+  robi bieg po pięciu, gdy trzeci odpada. Teraz jest to jedno zachowanie
+  **biegacza, przez którego przechodzi każda pisząca postać czasownika**
+  (`restore_run_scope`):
+  **D** — przed pauzą i przed pierwszą mutacją leci pre-flight CAŁEGO zakresu.
+  `RESTORE_PREFLIGHT_ONLY=1` przepuszcza `restore_one` przez jego własny
+  prefiks — punkt odzysku, strategia, zgoda, odmowy scope-root i
+  zamontowanego celu — i zatrzymuje go dokładnie na linii, gdzie kończy się
+  czytanie. To **ten sam kod**, nie druga lista odmów. Jeżeli którykolwiek
+  dataset odpada, bieg odmawia (kod 2) i wymienia **wszystkie** złe pod
+  `UNFIT`, nie pierwszy z brzegu. Przed pauzą świadomie: postawienie żywego
+  harmonogramu i zdjęcie go sekundę później dla biegu, który i tak miał
+  odmówić, to churn, którego operator potem nie umie wytłumaczyć.
+  **B** — wykonanie nie zatrzymuje się na awarii (to było już wcześniej), ale
+  ma teraz **trzy kubełki zamiast dwóch**: `OK`, `NOT DONE` (odmowa lub awaria
+  PRZED zniszczeniem — maszyna jest, jak była) i `CHANGED` — dataset, którego
+  niszczenie ruszyło, a transfer się urwał. Pętla rollbacku produkuje ten stan
+  wprost: cofa każdy dataset poddrzewa po kolei, więc odmowa na trzecim
+  zostawia dwa pierwsze już cofnięte, a stary kod raportował je razem z
+  nietkniętymi. `restore_one` niesie to rozróżnienie w kodzie wyjścia (2 od
+  pierwszej mutacji, 1 dopóki jej nie było), a `CHANGED` **wygrywa** w kodzie
+  wyjścia całego biegu.
+  Dowód: `test/restore/relpolicy.sh` 15/15 plus `restoregrant` 108/108, i
+  **trzy kontrole negatywne**, każda zabijająca dokładnie swoją część: drzewo
+  bez pre-flightu wywala 6 przypadków D, drzewo zatrzymujące się na pierwszej
+  awarii wywala 8 przypadków B, drzewo z dwoma kubełkami wywala 3 przypadki B3.
+  **Pierwsza wersja tej polityki, z 2026-08-30, owinęła nie ten silnik.** Trafiła
+  na `restore_replace_internal` — starszy silnik jednodatasetowy, który we
+  własnym nagłówku ma „NO public door" — podczas gdy publiczny czasownik idzie
+  przez `restore_run_scope`/`restore_one`. Testy przechodziły, kontrole
+  dyskryminowały, i nic z tego nie było osiągalne z `restore`. Kontrola
+  negatywna dowodzi, że przypadek mierzy funkcję, którą nazywa; nie umie
+  zauważyć, że nikt tej funkcji nie woła. Zdublowane opakowanie usunięte, żeby
+  nie było dwóch polityk.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

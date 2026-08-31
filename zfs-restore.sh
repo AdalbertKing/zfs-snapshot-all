@@ -1487,6 +1487,14 @@ restore_remote_off_point() {   # <account@host> <target root> <recovery point na
 restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
     local copy="$1" src="$2"
     RESTORE_ONE_VERDICT=""
+    # HAS THIS RUN ALREADY TOUCHED THE TARGET? Everything above section 6a
+    # reads; everything from there down can destroy. A failure after the first
+    # mutation is NOT the same event as a refusal before it -- the dataset is no
+    # longer as it was found, and it is the only outcome that needs a human.
+    # Carried in the exit status (2, against 1 for "nothing was changed") rather
+    # than in a message, because the status is what the runner and a cron job
+    # read.
+    local _changed=0
 
     # ---- 1. the recovery point --------------------------------------------
     # Rows, not names: restore_plan_strategy needs creation and guid, and --at
@@ -1780,6 +1788,22 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         return 1
     fi
 
+    # ---- THE LINE WHERE READING ENDS ---------------------------------------
+    #
+    # Everything above is measurement and refusal: the recovery point, the
+    # strategy, the grant, the scope-root and mounted-target checks, the engine
+    # command. Nothing above has changed anything. Everything below can.
+    #
+    # So this is where a pre-flight stops. It is the SAME function, not a second
+    # copy of those decisions -- a copy would be a separate list of refusals,
+    # and two lists of refusals is how a pre-flight comes to pass a dataset the
+    # real run then refuses. See restore_run_scope for why the whole scope is
+    # asked before any of it is touched.
+    if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
+        RESTORE_ONE_VERDICT="restorable by '$mode' from $point"
+        return 0
+    fi
+
     # ---- 6a. going backwards, if that is what was asked --------------------
     # A recovery point OLDER than what the target holds cannot be reached by
     # sending: the snapshots in between have to go. This is the destructive half
@@ -1816,7 +1840,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         if [ -z "$_list" ]; then
             RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
-            return 1
+            return $((_changed + 1))
         fi
         # Every dataset of the subtree, by name, one command. `zfs rollback` is
         # not recursive over children -- -r there means "destroy the snapshots
@@ -1837,12 +1861,13 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 fi
             else
                 log 1 "restore:   $_ds rolled back to $RESTORE_ROLLBACK_TO"
+                _changed=1
             fi
         done <<< "$_list"
         if [ "$_failed" -eq 1 ]; then
             RESTORE_ONE_VERDICT="the target could not be rolled back to $point (the datasets are named above)"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
-            return 1
+            return $((_changed + 1))
         fi
         # ONLY WHEN SNAPSHOTS ACTUALLY GO. A rollback that discards live
         # writes destroys nothing the copy has, so the relationship stays in
@@ -1874,8 +1899,11 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     log 1 "restore:   ${RESTORE_ENGINE:-snapsend.sh} ${RESTORE_ENGINE_ARGV[*]}"
     if [ "${RESTORE_DRY_RUN:-0}" -eq 1 ]; then
         RESTORE_ONE_VERDICT="dry run -- the command above was NOT executed"
-        return 1
+        return $((_changed + 1))
     fi
+    # From here the engine may destroy: whatever happens next, this dataset
+    # can no longer be reported as untouched.
+    _changed=1
     if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
         # "THE ENGINE EXITED 0" AND "THE MACHINE HOLDS THE DATA AGAIN" ARE NOT
         # THE SAME SENTENCE, and the lab has produced a run where the first was
@@ -1911,7 +1939,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # "it is fine", and this is the last chance to say so.
                     RESTORE_ONE_VERDICT="the engine reported success and the result could NOT be verified -- '$src' did not answer"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Reporting it as not done: the transfer may well have worked, and nobody here has seen that it did."
-                    return 1
+                    return $((_changed + 1))
                 fi
                 if [ -n "$_off" ]; then
                     RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
@@ -1920,7 +1948,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                         [ -n "$_l" ] && log 0 "restore:   $_l"
                     done
                     log 0 "restore: reporting this as NOT recovered. A run that changed nothing must not be indistinguishable from one that worked."
-                    return 1
+                    return $((_changed + 1))
                 fi ;;
         esac
         RESTORE_ONE_VERDICT="$mode from $point"
@@ -1930,7 +1958,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # it. What is added here is WHICH dataset it belonged to, because the caller
     # is looping and the operator is reading one report at the end.
     RESTORE_ONE_VERDICT="the engine failed on '$mode' from $point (its own message is above)"
-    return 1
+    return $((_changed + 1))
 }
 
 # ------------------------------------------------------------------------------
@@ -2311,7 +2339,7 @@ restore_report_handover() {
 # An EMPTY scope is a refusal, not a clean run. "Nothing matched" exiting 0 is
 # how a mistyped scope becomes a recovery someone believes happened.
 restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
-    local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0
+    local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0 changed_n=0
     local -a verdict=()
     # NOT local: restore_one appends to it. Reset here so a second call in one
     # process cannot inherit the first call's list.
@@ -2348,6 +2376,49 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         return 1
     fi
 
+    # ---- D: THE WHOLE SCOPE, BEFORE ANYTHING IS TOUCHED --------------------
+    #
+    # Owner decision, 2026-08-30. The primitive takes ONE dataset; a relationship
+    # routinely covers several, and a loop that starts destroying and discovers
+    # on the third that the fifth was never restorable has already made the
+    # machine worse for a run that could not have finished.
+    #
+    # RESTORE_PREFLIGHT_ONLY runs restore_one down to the line where reading
+    # ends and returns there -- the SAME classification, grant read and refusals
+    # the real pass will use, not a second copy of them.
+    #
+    # AFTER the pause, and that ordering was argued the other way first. The
+    # pre-flight writes nothing, so standing a live schedule down for a run that
+    # will refuse anyway looked like pure churn. But the owner's decision of
+    # 2026-08-27 is that a restore does not start unless the relationship's
+    # schedule is standing down, and a pre-flight IS the restore starting -- it
+    # asks the target host for its state and reads its grant. An implementer's
+    # convenience argument does not outrank that, so the churn is accepted and
+    # named rather than traded away quietly.
+    #
+    # And EVERY bad dataset is named, not the first. An operator who has to fix
+    # them one round trip at a time stops trusting the tool.
+    local -a unfit=()
+    local _pf_rc _pf_i
+    for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
+        RESTORE_ONE_VERDICT=""
+        RESTORE_PREFLIGHT_ONLY=1 restore_one "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
+        [ "$_pf_rc" -eq 0 ] || unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+    done
+    if [ "${#unfit[@]}" -gt 0 ]; then
+        log 0 "restore: REFUSED before anything was touched -- ${#unfit[@]} of $n dataset(s) in scope cannot be restored:"
+        for (( _pf_i=0; _pf_i<${#unfit[@]}; _pf_i++ )); do
+            log 0 "restore:   UNFIT    ${unfit[$_pf_i]}"
+        done
+        log 0 "restore: nothing was changed. This list is complete, not the first entry -- fix all of it and run again."
+        # THE SCHEDULE GOES BACK ON. The pause is taken above now, so every exit
+        # from here owes a release -- a relationship left paused is a backup that
+        # silently stops, which is the failure this project has spent the most
+        # effort making impossible.
+        restore_pause_release
+        return 2
+    fi
+
 
     for (( i=0; i<n; i++ )); do
         RESTORE_ONE_VERDICT=""
@@ -2355,14 +2426,23 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         # decision 7. `|| :` is deliberate and is the only place in this
         # function where a non-zero status is not propagated immediately.
         restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}"; rc=$?
-        if [ "$rc" -eq 0 ]; then
-            ok_n=$((ok_n + 1))
-            RESTORE_LANDED+=("${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}")
-            verdict+=("OK       ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-recovered}")
-        else
-            bad_n=$((bad_n + 1))
-            verdict+=("NOT DONE ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
-        fi
+        case "$rc" in
+            0)  ok_n=$((ok_n + 1))
+                RESTORE_LANDED+=("${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}")
+                verdict+=("OK       ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-recovered}") ;;
+            # THREE OUTCOMES, NOT TWO. `NOT DONE` used to cover both a dataset
+            # the run refused before touching it and one whose rollback had
+            # already destroyed snapshots when the transfer broke. Those are not
+            # degrees of one thing: the first machine is as it was found, the
+            # second is not, and only the second needs a human tonight. The
+            # rollback loop produces exactly that state -- it rolls each dataset
+            # of the subtree in turn, so a refusal on the third leaves the first
+            # two already rolled back.
+            2)  changed_n=$((changed_n + 1))
+                verdict+=("CHANGED  ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}") ;;
+            *)  bad_n=$((bad_n + 1))
+                verdict+=("NOT DONE ${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}") ;;
+        esac
     done
 
     # Printed on EVERY path, including the one where nothing worked. A run that
@@ -2378,15 +2458,22 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
 
     restore_pause_release
 
+    # THE ONE THAT NEEDS A HUMAN WINS. A dataset left half-destroyed outranks an
+    # ordinary failure in the exit status, because burying it in a count is the
+    # only summary of this run worth nothing.
+    if [ "$changed_n" -gt 0 ]; then
+        log 0 "restore: $changed_n dataset(s) are CHANGED AND UNFINISHED -- they are NOT as they were found and NOT recovered. They are named above and they need a person. ($ok_n recovered, $bad_n untouched.)"
+        return 2
+    fi
     if [ "$bad_n" -eq 0 ]; then
         log 0 "restore: all $ok_n dataset(s) in scope recovered."
         return 0
     fi
     if [ "$ok_n" -eq 0 ]; then
-        log 0 "restore: NOTHING was recovered -- all $bad_n dataset(s) are named above with the reason."
+        log 0 "restore: NOTHING was recovered -- all $bad_n dataset(s) are named above with the reason. None of them was changed."
         return 1
     fi
-    log 0 "restore: PARTIAL -- $ok_n recovered, $bad_n did not. The machine is in a mixed state and the datasets that did NOT recover are named above. Exit status is non-zero for exactly that reason: nine of ten is not ten."
+    log 0 "restore: PARTIAL -- $ok_n recovered, $bad_n did not and were left untouched. The machine is in a mixed state and the datasets that did NOT recover are named above. Exit status is non-zero for exactly that reason: nine of ten is not ten."
     return 1
 }
 
@@ -2951,6 +3038,43 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 # by name, as part of the approved set), so a refusal still leaves the source
 # byte-identical to how it was found and a success leaves nothing of this run
 # behind.
+# ------------------------------------------------------------------------------
+# RELATION-LEVEL DESTRUCTIVE RESTORE -- the failure policy, D + B.
+#
+# A relationship can span several datasets. The execution primitive below takes
+# ONE, and until now nothing said what a run over five of them does when the
+# third fails. That question has exactly one wrong answer -- decide it at the
+# moment it happens -- so it is decided here, and the owner chose the shape
+# (2026-08-30):
+#
+#   D  PRE-FLIGHT THE WHOLE SCOPE FIRST. Every dataset is resolved, planned and
+#      put through every refusal the single-dataset verb has, WITHOUT touching
+#      anything. If any one of them cannot be restored, the run refuses before
+#      the first mutation and names EVERY dataset that failed the check, not
+#      just the first -- an operator fixing them one round-trip at a time is an
+#      operator who stops trusting the tool.
+#
+#   B  THEN EXECUTE, AND CONTINUE PAST A FAILURE. Whatever can be recovered is
+#      recovered, and the run reports what each dataset ended as.
+#
+# Why B and not "stop at the first failure": with D in front, the predictable
+# reasons to fail -- no common base, an ambiguous recovery point, an atomic
+# relation, a remote source -- are all gone before anything is touched. What is
+# left is transport: a broken link, a full pool. Those hit one dataset, not the
+# plan, and giving back four of five beats giving back two.
+#
+# THE THREE PER-DATASET OUTCOMES ARE KEPT DISTINCT, because they are not
+# degrees of the same thing: `untouched` is a dataset the run never began,
+# `restored` is one verified by GUID, and `changed` is one whose destruction
+# started and whose transfer then broke. The last is the only state that needs
+# a human, and burying it in a count would be the one summary worth nothing.
+#
+# NO PUBLIC GRAMMAR HERE. The CLI is still the owner's open decision
+# (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md); this is the internal policy the
+# grammar will eventually call, exactly as the execution primitive below was
+# built ahead of it.
+
+
 restore_replace_internal() {   # <dataset> <config> <yes>
     local dataset="$1" config="$2" yes="$3"
     [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
@@ -3012,21 +3136,6 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     [ "$RESTORE_SET_STATE" = ok ] \
         || die "restore (odtworzenie niszczace): nie udalo sie ustalic pelnego zbioru snapshotow i bookmarkow '$src' nowszych niz wspolna baza. 'zfs rollback -r' kasuje jedne i drugie, wiec bez tej listy pytanie o zgode dotyczyloby zbioru, ktorego nikt nie zna. Nic nie zmieniono."
 
-    # ---- REV-119 F1: the confirmation has to be INFORMED -------------------
-    #
-    # The read-only preview above cannot state the live loss exactly, and REV-118
-    # is the proof: `written` on a live dataset reflects the last committed txg,
-    # so a write made seconds ago is invisible to it. Asking for approval on that
-    # basis asks the operator to approve a set nobody has measured.
-    #
-    # A snapshot is a committed point, so taking one BEFORE the loss set is shown
-    # turns the estimate into a fact. That is a mutation, and it reverses this
-    # path's earlier "not even a snapshot" rule -- deliberately: the mutation is
-    # what buys the property, and there is no read-only way to buy it.
-    #
-    # It is NOT preservation and must never be described as such: it is part of
-    # the set the execution step destroys by name. It is a measurement, and the
-    # operator text says measurement.
     local stamp="$$-$(date +%s)-${RANDOM}"
     local preview_snap="restore-preview-$stamp" commit_snap="restore-commit-$stamp"
 
