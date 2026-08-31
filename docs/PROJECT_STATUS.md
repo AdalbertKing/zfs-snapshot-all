@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ce68cd505a7d3e99 -->
+<!-- status-covers-digest: e340de6ae2b03089 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1644,6 +1644,23 @@
   dopiero gdy pokaże zero.
   Dowód: `test/restore/ahead.sh` 5/5, a kontrolą negatywną jest **realny
   poprzedni kod z `main`** — wywala dokładnie tę jedną asercję i nic poza nią.
+
+- **Granica izolacji wynosiła też to, co odziedziczyła — LAB, 2026-08-31.**
+  `restore_one` dopisuje do listy cofniętych snapshotów, granica wynosi tę
+  tablicę z podpowłoki, a rodzic dokleja to, co dostał. Podpowłoka **dziedziczy
+  kopię rodzica**, więc bez wyzerowania każdy dataset oddawał wszystko, co
+  dołożyły poprzednie: trzy datasety dają sześć wpisów, nie trzy.
+  Zmierzone w raporcie „co to kosztuje backup" po biegu `--at`: pierwszy dataset
+  wypisany **trzykrotnie**, wzór `labsrc, labsrc, disk-0` — dokładnie sygnatura
+  narastania. To raport, na podstawie którego operator działa, a snapshoty w nim
+  są nazwane więcej niż raz.
+  Moja wada z tego samego dnia, wprowadzona razem z izolacją procesową.
+  Dowód: `relpolicy` 25/25 z nowym przypadkiem E3, kontrola negatywna to
+  **realny kod z `main`** — wywala dokładnie E3.
+  **Przy okazji test złapał moją drugą pomyłkę:** pierwsza wersja atrapy
+  dopisywała w OBU przebiegach, więc pokazywała sześć wpisów także po poprawce.
+  Prawdziwy `restore_one` wraca na granicy pre-flightu i nie ma czego zapisać.
+  Atrapa, która nie odwzorowuje tego, mierzy samą siebie.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
