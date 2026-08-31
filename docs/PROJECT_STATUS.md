@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6b8eb5854eb430db -->
+<!-- status-covers-digest: 9d25155385c32470 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1455,6 +1455,41 @@
   pętli nie wykonuje się dla niego. Jednoelementowa lista `--onto` rozwiązywała
   się do ZERA elementów, a odmowa skarżyła się wtedy na różne długości list —
   komunikat o objawie dwa kroki za przyczyną.
+
+- **`--from-copy`: odzysk, gdy REKORDY RELACJI ZNIKNĘŁY — ostatni kawałek
+  gramatyki z 13.08 ZAMKNIĘTY (2026-08-31).** Każdy inny adres tego czasownika
+  idzie przez nazwę relacji, a nazwy relacji mieszkają w plikach na kolektorze.
+  Strata tych plików = kopie, których nie da się nazwać, czyli zaprzeczenie
+  sensu backupu, który ma przetrwać utratę tego, co go opisuje. Drugi przypadek:
+  kopie po maszynie wycofanej z użycia — relacja skasowana celowo, dane nie.
+
+      zfs-restore.sh --from-copy hdd/backups/pve1/hdd/labsrc --onto hdd/odzysk
+
+  **Flaga, nie zgadywanie po kształcie**: `hdd` jest równie dobrą nazwą puli co
+  relacji, a ten projekt raz już zapłacił za rozróżnianie po kształcie
+  (dwukropek, #132). **`--onto` jest tu obowiązkowe** — przy relacji brak celu
+  znaczy „z powrotem tam, skąd przyszło", bo rekord to wie; goła ścieżka nie ma
+  rekordu, więc domyślny cel byłby wymyślony, nie odtworzony.
+  **Ta forma NIGDY nie niszczy**, i to jest cały argument w jednym zdaniu:
+  zniszczenie wymaga zgody, zgoda wymaga relacji, a goła ścieżka relacji nie ma
+  — nie ma kto wydać zgody ani czego zapauzować. Jedynym pozostałym
+  uzasadnieniem byłoby „operator stoi przy klawiaturze", czyli dokładnie ten
+  argument, którym rozmontowuje się model zgody. Ląduje w wolne miejsce przez
+  **ten sam silnik**, którego bezpieczne odtwarzanie używa od 15.08 (unikalny
+  staging, weryfikacja GUID, przeniesienie przez `rename`) — nowy ADRES do
+  dowiedzionego silnika, nie drugi silnik.
+  Wszystko rozwiązuje się przed utworzeniem czegokolwiek: jedna zła para
+  odrzuca całą listę i wymienia wszystkie złe.
+  **Test złapał wadę, której przegląd diffu nie złapał:** domyślny punkt odzysku
+  brałem przez `tail -1`, czyli **po kolejności listy** — dokładnie tę dziurę
+  REV-121 zamknęła na innym domyślnym punkcie („`creation` jest osią, a remis
+  odmawia"). Odtworzyłem ją w nowej ścieżce. Wyszło, bo atrapa zwraca wiersze
+  **nieposortowane** — i dlatego je tak zwraca. Domyślny wybór idzie teraz przez
+  ten sam wybierak co `--at`, z podniesionym sufitem.
+  Dowód: `test/restore/fromcopy.sh` 15/15 i **trzy kontrole negatywne**: wybór
+  po kolejności listy zabija 3 przypadki, usunięta kontrola zajętego celu zabija
+  5 (w tym asercję nośną „silnik lądowania NIE zostaje uruchomiony"), a
+  lądowanie dobrych par mimo złej zabija 10.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

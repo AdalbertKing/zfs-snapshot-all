@@ -145,11 +145,40 @@ at the top of this file, while doing the opposite.
   without stopping at a failure, and report a per-dataset verdict whose exit
   status distinguishes "everything" from "some".
 
+## The copy-location address — CLOSED 2026-08-31
+
+The 2026-08-13 file required that an operator naming a copy location and an
+absolute destination can run the same recovery without going through a
+relationship name. This is that, and the shape of it fell out of one constraint.
+
+```bash
+zfs-restore.sh --from-copy hdd/backups/pve1/hdd/labsrc --onto hdd/recovered
+```
+
+**A flag, not an inferred shape.** Accepting a path in the first positional and
+inferring it is not a label would mean deciding what `hdd` is -- an equally good
+pool name and relationship name. This project has already paid once for
+disambiguating by shape; `--from-copy` cannot be misread.
+
+**`--onto` is mandatory here**, unlike the relationship form. There, omitting the
+destination means "back where it came from" because the record says where that
+was. A copy location carries no such record, so a default would be invented
+rather than recalled.
+
+**It never destroys.** Destruction requires a grant, a grant requires a
+relationship, and a raw copy location has none: nobody to publish consent, and no
+schedule to stand down either. The only remaining justification would be "the
+operator is at the keyboard", which is the argument that dismantles a consent
+model. Overwriting means naming a relationship and going the ordinary way. So it
+lands in free space through the same engine the relationship-addressed safe
+restore has used since it was proven live on 2026-08-15 -- a new ADDRESS for a
+proven engine, not a second engine.
+
+Everything resolves before anything is created: one unusable pair refuses the
+whole list and names every bad one, the same discipline as the relation-level
+pre-flight.
+
 ## Still open
 
-**Absolute paths without a relationship name.** The 2026-08-13 file requires that
-an operator naming a copy location (`hdd/backups/pve1`) and an absolute
-destination can run the same recovery without going through a relationship.
-That is not built and is not opened here — it is the one remaining item of the
-2026-08-13 grammar, and it needs its own answer for how a destination with no
-relationship gets a grant, which is the whole safety model under push.
+Nothing from the 2026-08-13 grammar. Its two halves -- the addressing form and
+absolute paths without a relationship name -- are both answered above.

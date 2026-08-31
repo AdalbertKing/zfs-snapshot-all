@@ -2579,6 +2579,10 @@ esac
 # the same reason as the two above.
 . "$DIR/onto.sh"
 
+# `--from-copy`: the address that needs no relationship record, for when those
+# records are the thing that was lost.
+. "$DIR/fromcopy.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
