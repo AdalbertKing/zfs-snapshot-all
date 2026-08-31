@@ -2595,6 +2595,10 @@ esac
 # and "snapshots newer", after a lab --at run found the second half missing.
 . "$DIR/ahead.sh"
 
+# A failed `create` destroyed nothing if nothing is there -- demoted on proof
+# only, after a lab run reported an untouched machine as needing a person.
+. "$DIR/createfail.sh"
+
 . "$DIR/relpolicy.sh"
 
 echo "--------------------------------------------"
