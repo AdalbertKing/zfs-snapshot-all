@@ -2211,7 +2211,28 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # A recovery that silently leaves the machine's protection jammed is
         # half an operation; the operator finds out at the next backup, or at
         # the next monitor alarm, or not at all.
-        [ -n "$_newer" ] && RESTORE_ROLLED_BACK+=("$src -- ${_newer_n} snapshot(s): $(printf '%s' "$_newer" | tr '\n' ' ')")
+        # ASK THE COPY, NOT THE SOURCE. The claim this feeds is about what the
+        # COLLECTOR holds -- "the copy now holds snapshots the source no longer
+        # has" -- and `$_newer` answers a different question: what the SOURCE was
+        # about to lose. Those coincide only when the copy is level with the
+        # source's head.
+        #
+        # Measured on the lab, 2026-08-31: the source carried a snapshot the copy
+        # had never received (it did not match the pull's prefix). Rolling it
+        # away cost the backup nothing, but the run announced a jam, named a
+        # snapshot that exists on no collector, and offered `zfs rollback -r` ON
+        # THE COPY as a way out. The very next pull then said "All datasets
+        # processed successfully". An operator who believed the message would
+        # have destroyed backup history to fix a problem they did not have.
+        #
+        # The guard this replaces already carried that exact lesson in words --
+        # it had been measured once before -- and still asked the source.
+        # Writing the distinction into a comment is not writing it into the
+        # predicate.
+        local _cnewer _cnewer_n
+        _cnewer="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" 'seen{print $1} $1==p{seen=1}')"
+        _cnewer_n="$(printf '%s' "$_cnewer" | grep -c .)"
+        [ -n "$_cnewer" ] && RESTORE_ROLLED_BACK+=("$copy -- ${_cnewer_n} snapshot(s) the source will no longer have: $(printf '%s' "$_cnewer" | tr '\n' ' ')")
     fi
 
     # ---- 6. the engine -----------------------------------------------------
