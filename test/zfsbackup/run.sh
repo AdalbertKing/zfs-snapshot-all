@@ -3636,10 +3636,25 @@ fi
 
 FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
 mkprof_copy "$FS/p/prof"
-# A second VALID dataset field the built-in profile does not carry. `recursive`
-# is explicitly profile-owned (REV-073) and is not in the forbidden list, so a
-# profile is entitled to set it and the runtime must carry it through.
-mkprof_add "$FS/p/prof" '[dataset]' '\trecursive = flat'
+# A second VALID dataset field the built-in profile does not carry.
+#
+# THIS USED TO BE `recursive`, on the grounds that REV-20260808-076 said
+# "recursion remains profile-owned" and the forbidden list did not carry it. It
+# is `media` since 2026-08-31, and the swap is the point rather than a
+# workaround: that sentence was written when the design had NO relation-level
+# recursion, and the owner revision it describes had just removed one. Today
+# `--recursive=flat|atomic` is back on the relationship, recorded in the client
+# record, and written into the section by emit_client_sections -- so a profile
+# setting it made the section carry the field TWICE and gen-cron refused the
+# whole config. The reason THIS fixture never saw that is worth keeping: it
+# enrols a NON-recursive relationship, so the caller writes no recursive line
+# and the collision has nothing to collide with.
+#
+# `media` is now the only other field a [dataset] fragment may carry: everything
+# else is identity, link, scope, topology, or has a [template:] layer and
+# belongs there. That is a narrow surface, and it is the honest one -- the
+# fragment's job is to point at templates, not to carry policy.
+mkprof_add "$FS/p/prof" '[dataset]' '\tmedia = removable'
 
 EC_FS="$FS/out.conf"; : > "$EC_FS"
 out=$( ( PROFILE_ROOT="$FS/p" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
@@ -3656,7 +3671,7 @@ else
 fi
 
 # The field the old extractor dropped.
-if grep -q '^	recursive = flat$' "$EC_FS"; then
+if grep -q '^	media = removable$' "$EC_FS"; then
     ok "field survival: a valid profile-owned field the extractor did not know survives"
 else
     bad "field survival: a valid profile-owned field the extractor did not know survives" "$(cat "$EC_FS")"
