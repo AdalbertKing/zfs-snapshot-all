@@ -33,7 +33,7 @@ FC="$WORK/fromcopy"; mkdir -p "$FC"
 #   $FC/exists          one dataset name per line
 #   $FC/rows.<mangled>  the snapshot listing for that copy, name<TAB>creation<TAB>guid
 fc_run() {   # <copy list> <onto list> <snapshot> <at epoch> -> output; LANDED holds the calls
-    local copies="$1" ontos="$2" snap="$3" at="$4"
+    local copies="$1" ontos="$2" snap="$3" at="$4" ow="${5:-0}"
     local t; t=$(mktemp)
     {
         echo 'set -u'
@@ -67,10 +67,20 @@ zfs() {
 # refusal that still enters it has created something, which is the one thing
 # this form promises never to do without a free destination.
 restore_safe_land() { printf 'LAND %s@%s -> %s\n' "$1" "$2" "$3"; return 0; }
+# The destructive half, recorded the same way. Its first argument is what gets
+# OVERWRITTEN and its second is what the data comes FROM -- the opposite way
+# round from --from-copy's own reading, which is exactly why it is asserted.
+restore_replace_pair() { printf 'PAIR overwrite=%s from=%s
+' "$1" "$2"; return 0; }
+restore_pause_take() { printf 'pause: take %s
+' "${1:-}" >&2; return 0; }
+restore_pause_release() { :; }
+restore_relations() { :; }
 STUB
         awk -v want="restore_at_pick() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="cmd_restore_from_copy() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
-        printf 'cmd_restore_from_copy %q %q %q %q 1\n' "$copies" "$ontos" "$snap" "$at"
+        printf 'cmd_restore_from_copy %q %q %q %q 1 %q ""
+' "$copies" "$ontos" "$snap" "$at" "$ow"
     } > "$t"
     bash "$t" 2>&1
     local rc=$?
@@ -301,6 +311,51 @@ esac
 case "$calls" in
     *"create -p hdd/restore"*"recv"*) ok "staging: ...before the receive, not discovered by it" ;;
     *) bad "staging: ...before the receive, not discovered by it" "$calls" ;;
+esac
+
+# ---- --overwrite: onto a destination that EXISTS ---------------------------
+# The reason this mode exists at all: recovering a 10 TB collector copy by
+# landing a second one beside it needs 10 TB of free space and moves every byte.
+# The copy is already there and shares history with the replica, so the honest
+# operation is an increment or a rollback ONTO it.
+printf 'hdd/copyA
+hdd/copyB
+hdd/taken
+hdd/pusty
+hdd/remis
+' > "$FC/exists"
+out="$(fc_run 'hdd/copyA' 'hdd/taken' '' '' 1)"; rc=$?
+# THE CARRYING ASSERTION. The engine takes the overwritten dataset FIRST and the
+# source of the data SECOND -- the opposite way round from this command's own
+# reading. Backwards here does not fail: it destroys the replica and restores it
+# from the copy, quietly, which is the one outcome nobody could undo.
+case "$out" in
+    *"PAIR overwrite=hdd/taken from=hdd/copyA"*)
+        ok "overwrite: THE ENGINE IS CALLED WITH THE DESTINATION FIRST, SOURCE SECOND" ;;
+    *) bad "overwrite: THE ENGINE IS CALLED WITH THE DESTINATION FIRST, SOURCE SECOND" "$out" ;;
+esac
+case "$out" in
+    *"LAND "*) bad "overwrite: ...and the free-space lander is NOT used" "$out" ;;
+    *) ok "overwrite: ...and the free-space lander is NOT used" ;;
+esac
+
+# A destination that is NOT there means the operator meant the other mode.
+out="$(fc_run 'hdd/copyA' 'hdd/wolne' '' '' 1)"; rc=$?
+case "$rc$out" in
+    2*"Drop --overwrite"*) ok "overwrite: a destination that does not exist refuses and names the other mode" ;;
+    *) bad "overwrite: a destination that does not exist refuses and names the other mode" "rc=$rc" "$out" ;;
+esac
+case "$out" in
+    *"PAIR "*) bad "overwrite: ...without entering the destructive engine" "$out" ;;
+    *) ok "overwrite: ...without entering the destructive engine" ;;
+esac
+
+# And the safe mode still says what to do about an occupied destination.
+out="$(fc_run 'hdd/copyA' 'hdd/taken' '' '' 0)"; rc=$?
+case "$out" in
+    *"say --overwrite if you mean to write onto it"*)
+        ok "overwrite: the safe mode's refusal names the mode that would do it" ;;
+    *) bad "overwrite: the safe mode's refusal names the mode that would do it" "$out" ;;
 esac
 
 if [ "${_fc_standalone:-0}" = 1 ]; then

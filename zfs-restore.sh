@@ -479,8 +479,15 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
 # refusal, unique staging, guid verification and promotion-by-rename that the
 # relationship-addressed safe restore has used since it was proven live on
 # 2026-08-15. A new ADDRESS for a proven engine, not a second engine.
-cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes>
+cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes> <overwrite 0|1> <config>
     local copies="$1" ontos="$2" snapshot="$3" at_epoch="$4" yes="$5"
+    # TWO ACTIONS, ONE ROUTE. Everything between here and the last loop --
+    # splitting the lists, expanding children, resolving every pair before any of
+    # them is touched -- is the same question whether the destination is free or
+    # occupied. Only the collision rule and the final call differ, so this is a
+    # mode rather than a second verb. A second verb would be a second copy of the
+    # resolution, and the two would drift on the day one of them is fixed.
+    local overwrite="${6:-0}" config="${7:-}"
 
     # --onto is MANDATORY here, unlike the relationship form. There, omitting the
     # destination means "back where it came from" and the record knows where that
@@ -565,8 +572,18 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
         if ! zfs list -H -o name "$c" >/dev/null 2>&1; then
             bad+=("$c: there is no such dataset on this host"); snaps+=(""); continue
         fi
-        if zfs list -H -o name "$t" >/dev/null 2>&1; then
-            bad+=("$t: the destination already exists, and this form never overwrites -- inspect it, then remove or rename it, or choose another --onto"); snaps+=(""); continue
+        if [ "$overwrite" -eq 1 ]; then
+            # The destination MUST be there. Recovering a 10 TB collector copy by
+            # landing a second one beside it needs 10 TB of free space and moves
+            # every byte; the copy is already there and shares history with the
+            # replica, so the honest operation is an increment or a rollback onto
+            # it. That is the whole reason this mode exists, and a free
+            # destination means the operator meant the other one.
+            if ! zfs list -H -o name "$t" >/dev/null 2>&1; then
+                bad+=("$t: --overwrite is for a destination that EXISTS and is to be written onto; this one is not there. Drop --overwrite and it will be created."); snaps+=(""); continue
+            fi
+        elif zfs list -H -o name "$t" >/dev/null 2>&1; then
+            bad+=("$t: the destination already exists, and this form never overwrites -- inspect it, then remove or rename it, choose another --onto, or say --overwrite if you mean to write onto it"); snaps+=(""); continue
         fi
         rows="$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$c" 2>/dev/null)"
         if [ -z "$rows" ]; then
@@ -620,9 +637,62 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
         return 2
     fi
 
+    # ---- WHO OWNS THE DESTINATION -----------------------------------------
+    #
+    # The SOURCE has no relationship -- that is the whole point of this address,
+    # and a replica on a disk in a drawer is not in anybody's records. The
+    # DESTINATION usually does: it is a collector copy, and the pull writes to
+    # it. Two things follow and neither is optional.
+    #
+    # THE SCHEDULE HAS TO STAND DOWN. Restoring a copy while the pull is writing
+    # to the same dataset is two writers on one target, and the pull would then
+    # extend a lineage this run is in the middle of rewinding. The pause is
+    # keyed by relationship label, and the label is discoverable from the
+    # destination even though the source has none.
+    #
+    # AND AN ATOMIC RELATIONSHIP IS STILL ATOMIC. Recovering one dataset of a
+    # subtree that was captured as one point in time silently turns a
+    # point-in-time recovery into a per-dataset one. The relationship-addressed
+    # engine refuses that from the config; handing it two paths must not be a way
+    # around the refusal, so it is asked here, from the side that knows.
+    if [ "$overwrite" -eq 1 ]; then
+        local _cfg="$config"
+        [ -n "$_cfg" ] || _cfg="${CRON_CONFIG:-}"
+        local -a _labels=()
+        local _sec _cp _knd _cns _lbl _t _seen _l
+        for (( i=0; i<${#to[@]}; i++ )); do
+            _t="${to[$i]}"
+            [ -n "$_cfg" ] && [ -r "$_cfg" ] || continue
+            while IFS="$(printf '\t')" read -r _sec _cp _knd _cns; do
+                [ "$_cp" = "$_t" ] || continue
+                [ "$_cns" != atomic ] || die "restore --overwrite: '$_t' belongs to an ATOMIC relationship in $_cfg -- a subtree captured as ONE point in time. Recovering one dataset of it turns that into a per-dataset recovery, which is the confusion the whole atomic setting exists to prevent. Handing two paths in is not a way around that refusal. Nothing was changed."
+                _lbl="$(installed_dataset_field "$_cfg" "$_sec" pair_label 2>/dev/null)"
+                [ -n "$_lbl" ] || continue
+                _seen=0
+                for _l in ${_labels[@]+"${_labels[@]}"}; do [ "$_l" = "$_lbl" ] && _seen=1; done
+                [ "$_seen" -eq 1 ] || _labels+=("$_lbl")
+            done <<< "$(restore_relations "$_cfg")"
+        done
+        if [ "${#_labels[@]}" -gt 1 ]; then
+            die "restore --overwrite: the destinations belong to ${#_labels[@]} different relationships (${_labels[*]}). Each has its own schedule to stand down, and standing down the wrong one leaves a pull writing into a dataset this run is rewinding. Name them one relationship at a time. Nothing was changed."
+        fi
+        if [ "${#_labels[@]}" -eq 1 ]; then
+            RESTORE_RELATION_LABEL="${_labels[0]}"
+            restore_pause_take "$RESTORE_RELATION_LABEL" \
+                || die "restore --overwrite: '${_labels[0]}' owns these datasets and its schedule could not be stood down (above). NOTHING was attempted."
+        else
+            log 0 "restore --overwrite: no installed relationship claims these destinations, so there is no schedule to stand down. If something else writes to them, stop it first -- this run cannot know about it."
+        fi
+    fi
+
     echo
-    echo "Odtworzenie z KOPII (bez rekordu relacji) -- nic nie zostalo jeszcze utworzone."
-    echo "  Ta forma NIGDY nie nadpisuje: kazdy cel musi byc wolny, inaczej odmowa."
+    echo "Odtworzenie z KOPII (bez rekordu relacji) -- nic nie zostalo jeszcze zmienione."
+    if [ "$overwrite" -eq 1 ]; then
+        echo "  --overwrite: cele PONIZEJ JUZ ISTNIEJA i zostana nadpisane. Kazdy z nich"
+        echo "  dostanie osobny podglad zbioru strat i osobne pytanie, zanim cokolwiek zginie."
+    else
+        echo "  Ta forma NIGDY nie nadpisuje: kazdy cel musi byc wolny, inaczej odmowa."
+    fi
     for (( i=0; i<${#from[@]}; i++ )); do
         printf '  %s@%s  ->  %s\n' "${from[$i]}" "${snaps[$i]}" "${to[$i]}"
     done
@@ -638,7 +708,17 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
     # covers the whole list, which is the point of taking a list at all.
     local rc=0
     for (( i=0; i<${#from[@]}; i++ )); do
-        restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
+        if [ "$overwrite" -eq 1 ]; then
+            # NOTE THE ORDER. The engine's first argument is what gets
+            # OVERWRITTEN and its second is what the data comes FROM -- the
+            # opposite way round from this command's own reading, where
+            # --from-copy is the source. Named rather than trusted to memory,
+            # because getting it backwards here destroys the replica instead of
+            # restoring from it.
+            restore_replace_pair "${to[$i]}" "${from[$i]}" "$yes"                 "replika -> kopia (dwa datasety podane wprost)" || rc=1
+        else
+            restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
+        fi
     done
     return "$rc"
 }
@@ -3618,35 +3698,28 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 # built ahead of it.
 
 
-restore_replace_internal() {   # <dataset> <config> <yes>
-    local dataset="$1" config="$2" yes="$3"
-    [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
-
-    read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || die "restore (odtworzenie niszczace): no cron config known -- pass --config=FILE or run setup-server"
-    [ -r "$config" ] || die "restore (odtworzenie niszczace): cannot read $config"
-
-    local a b c d src="" copy="" kind="" cons="" hits=0
-    while IFS=$'\t' read -r a b c d; do
-        [ -n "$a" ] || continue
-        if [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ]; then
-            src="$a"; copy="$b"; kind="$c"; cons="$d"; hits=$((hits+1))
-        fi
-    done <<< "$(restore_relations "$config")"
-    [ "$hits" -ne 0 ] || die "restore (odtworzenie niszczace): '$dataset' nie wystepuje w zadnej relacji backupu w $config -- 'restore --plan' pokaze te, ktore istnieja"
-    # More than one match is not something to resolve by picking the first. Two
-    # relationships naming the same path mean the CONFIG disagrees with itself
-    # about where that data lives, and guessing which one to restore FROM is the
-    # last guess anybody wants made on their behalf.
-    [ "$hits" -eq 1 ] || die "restore (odtworzenie niszczace): '$dataset' pasuje do $hits relacji w $config -- nie zgaduje ktora; nazwij dokladny dataset zrodla albo kopii"
-
-    # An atomic relationship is a SUBTREE recovered as one point in time. This
-    # verb recovers one dataset, so running it against an atomic relationship
-    # would silently turn a point-in-time recovery into a per-dataset one -- the
-    # exact confusion R-013 made the planner spell out.
-    [ "$cons" != atomic ] || die "restore (odtworzenie niszczace): '$src' jest w relacji ATOMIC (spojne poddrzewo w jednym punkcie czasu), a ten czasownik odtwarza pojedynczy dataset. Odtworzenie tylko jego zlamaloby wlasnosc, dla ktorej ta relacja jest atomowa. Odtwarzanie poddrzew nie istnieje."
-
+# THE DESTRUCTIVE ENGINE, taking the two datasets instead of resolving them.
+#
+# Split out on 2026-08-31 so a SECOND address can reach it -- the same seam as
+# cmd_restore_safe/restore_safe_land earlier the same day, and the fact that it
+# lands in the same place twice is the argument that it is the right seam.
+#
+# Everything below here already worked on two plain paths: only the fifteen
+# lines above turned one name into a pair by walking the config. Recovering a
+# collector copy FROM a replica has no relation to walk -- there are two
+# datasets and nothing else -- and it must not get a second engine for that.
+# A second copy of a path that destroys data is how the two come to differ in
+# the one respect that matters.
+#
+# `cons` is passed rather than looked up: the atomic refusal belongs to whoever
+# knows which relation these datasets belong to, and for the replica address
+# that is the DESTINATION side. See cmd_restore_overwrite.
+restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [what to call the pairing]
+    local src="$1" copy="$2" yes="$3" kind="${4:-}"
+    # The preview prints this. With a relation it is the relation's kind; with
+    # two paths handed in there is no relation, and saying so is better than an
+    # empty field where an operator expects one.
+    [ -n "$kind" ] || kind="dwa datasety podane wprost (bez rekordu relacji)"
     local snaps
     snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null) || snaps=""
     [ -n "$snaps" ] || die "restore (odtworzenie niszczace): kopia '$copy' nie ma ani jednego snapshota, wiec nie ma z czego odtwarzac"
@@ -3884,13 +3957,47 @@ restore_replace_internal() {   # <dataset> <config> <yes>
     return 3
 }
 
+restore_replace_internal() {   # <dataset> <config> <yes>
+    local dataset="$1" config="$2" yes="$3"
+    [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
+
+    read_server_conf
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || die "restore (odtworzenie niszczace): no cron config known -- pass --config=FILE or run setup-server"
+    [ -r "$config" ] || die "restore (odtworzenie niszczace): cannot read $config"
+
+    local a b c d src="" copy="" kind="" cons="" hits=0
+    while IFS=$'\t' read -r a b c d; do
+        [ -n "$a" ] || continue
+        if [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ]; then
+            src="$a"; copy="$b"; kind="$c"; cons="$d"; hits=$((hits+1))
+        fi
+    done <<< "$(restore_relations "$config")"
+    [ "$hits" -ne 0 ] || die "restore (odtworzenie niszczace): '$dataset' nie wystepuje w zadnej relacji backupu w $config -- 'restore --plan' pokaze te, ktore istnieja"
+    # More than one match is not something to resolve by picking the first. Two
+    # relationships naming the same path mean the CONFIG disagrees with itself
+    # about where that data lives, and guessing which one to restore FROM is the
+    # last guess anybody wants made on their behalf.
+    [ "$hits" -eq 1 ] || die "restore (odtworzenie niszczace): '$dataset' pasuje do $hits relacji w $config -- nie zgaduje ktora; nazwij dokladny dataset zrodla albo kopii"
+
+    # An atomic relationship is a SUBTREE recovered as one point in time. This
+    # verb recovers one dataset, so running it against an atomic relationship
+    # would silently turn a point-in-time recovery into a per-dataset one -- the
+    # exact confusion R-013 made the planner spell out.
+    [ "$cons" != atomic ] || die "restore (odtworzenie niszczace): '$src' jest w relacji ATOMIC (spojne poddrzewo w jednym punkcie czasu), a ten czasownik odtwarza pojedynczy dataset. Odtworzenie tylko jego zlamaloby wlasnosc, dla ktorej ta relacja jest atomowa. Odtwarzanie poddrzew nie istnieje."
+
+
+    restore_replace_pair "$src" "$copy" "$yes" "$kind"
+}
+
+
 cmd_restore() {
     # Before the options are even read: a host whose relationship records do not
     # identify one relationship each cannot answer "which relationship is X",
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy=""
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy="" overwrite=0
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -3926,6 +4033,10 @@ cmd_restore() {
             # A copy location on THIS pool, for when the relationship records
             # are gone -- see cmd_restore_from_copy's header for why it is a flag
             # and not an inferred shape.
+            # The destination EXISTS and is to be written onto. A separate word,
+            # not a suffix on --onto: two flags differing by an ending are one
+            # typo away from a destroyed dataset, and this one destroys.
+            --overwrite)   overwrite=1 ;;
             --from-copy=*) from_copy="${a#*=}" ;;
             --from-copy)   need_val --from-copy "${2:-}"; from_copy="$2"; shift ;;
             --onto=*)     onto_list="${a#*=}" ;;
@@ -3977,6 +4088,7 @@ cmd_restore() {
     # --onto says WHERE on the destination machine, so without a destination
     # there is nothing for it to mean. Refusing beats silently keeping the source
     # paths: the operator who typed it wanted the data somewhere else.
+    [ "$overwrite" -eq 0 ] || [ -n "$from_copy" ]         || die "restore: --overwrite says a destination that already exists may be written onto, and only --from-copy takes such a destination. A relationship-addressed recovery decides that from the target's grant instead."
     if [ -n "$onto_list" ] && [ -z "$dest_addr" ] && [ -z "$from_copy" ]; then
         die "restore: --onto names where the recovery lands on ANOTHER machine, and no destination relationship was given. Say: restore <from> <onto-relation> --onto <dataset>[,<dataset>...]"
     fi
@@ -4024,7 +4136,7 @@ cmd_restore() {
         [ -z "$addr" ] && [ -z "$dest_addr" ]             || die "restore: --from-copy names a copy location directly, and '$addr${dest_addr:+ $dest_addr}' names a relationship. Give one. If the relationship still resolves, use it -- it knows where the data came from and can ask the far side for a grant; --from-copy is for when it does not."
         { [ -z "$scope_src" ] && [ -z "$scope_tgt" ]; }             || die "restore: --source/--target select datasets WITHIN a relationship, and --from-copy is the form that has no relationship. The copy locations are the list: restore --from-copy <copy>[,<copy>...] --onto <dataset>[,<dataset>...]"
         [ "$plan" -eq 0 ]             || die "restore: --plan reads a relationship's records, and --from-copy is the form for when those are gone. This form previews every pair and asks before it creates anything, so run it without --yes to see the same thing and answer no."
-        cmd_restore_from_copy "$from_copy" "$onto_list" "$snapshot" "$at_epoch" "$yes"
+        cmd_restore_from_copy "$from_copy" "$onto_list" "$snapshot" "$at_epoch" "$yes" "$overwrite" "$config"
         return $?
     fi
 

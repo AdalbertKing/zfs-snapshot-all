@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 36177469ecb379d1 -->
+<!-- status-covers-digest: e882e6455a4b2f0a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1559,6 +1559,37 @@
   wpisanie go w predykat.
   Teraz czyta **własną listę kopii**, lokalnie i bez dodatkowego ssh, szukając
   snapshotów za punktem odzysku. Gdy kopia nie ma żadnego — blok milczy.
+
+- **Odzysk Z REPLIKI DO KOPII — `--overwrite`, ten sam silnik (decyzja
+  właściciela 2026-08-31).** Lądowanie w wolne miejsce nie jest odzyskiem dla
+  10 TB: potrzebuje drugiego tyle miejsca i przenosi każdy bajt, podczas gdy
+  **dataset kopii już stoi i dzieli historię z repliką**. Właściwa operacja to
+  przyrost albo cofnięcie NA NIEGO.
+  **Nie dopisano silnika.** `restore_replace_internal` zamieniał jedną nazwę na
+  parę `(źródło, kopia)`, przeglądając relacje w configu — a **wszystko poniżej
+  pracowało już na dwóch zwykłych ścieżkach**. Ten sam szew co przy
+  `cmd_restore_safe`/`restore_safe_land` tego samego dnia: rozwiązywanie adresu
+  na górze, maszyna na dole, dwa adresy do jednej maszyny. `restore_replace_pair`
+  to ta maszyna, przejrzana w REV-119/120/121 i dowiedziona na prawdziwym ZFS.
+  `--overwrite` jest **trybem** `--from-copy`, nie drugim czasownikiem: podział
+  list, rozwijanie dzieci i rozwiązanie całości przed dotknięciem czegokolwiek
+  to to samo pytanie, niezależnie od tego, czy cel jest wolny. Różni się reguła
+  kolizji (cel MUSI istnieć) i wywołanie na końcu. Osobne słowo, nie końcówka
+  przy `--onto`: **dwie flagi różniące się końcówką to jedna literówka od
+  zniszczonych 10 TB**.
+  **Grantu tu nie ma i nie jest potrzebny** — grant istnieje, bo push pisze po
+  cudzej maszynie i tamta strona musi się zgodzić. Tu obie strony są lokalne.
+  Bezpieczeństwo daje to, co silnik już robi: mierzy zbiór strat z technicznego
+  snapshota i pyta, zanim cokolwiek zginie.
+  **Właściciela ma jednak CEL.** Źródło relacji nie ma — replika leży w szufladzie
+  — ale kopia kolektora tak, i pisze do niej pull. Więc: relacja celu jest
+  **pauzowana** na czas biegu, a jej `atomic` nadal odmawia; podanie dwóch
+  ścieżek nie może być obejściem tej odmowy. Cele z **dwóch różnych relacji**
+  odmawiają — każda ma własny harmonogram do postawienia.
+  Dowód: `test/restore/fromcopy.sh` 26/26 i kontrole, w tym ta nośna:
+  **odwrócenie kolejności argumentów silnika** zabija dokładnie jedną asercję.
+  Odwrotnie nie zawodzi — niszczy replikę i odtwarza ją z kopii, po cichu, a
+  tego nikt nie cofnie.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
