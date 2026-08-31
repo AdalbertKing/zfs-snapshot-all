@@ -2986,10 +2986,37 @@ restore_report_handover() {
     done
     [ "$moved" -eq 1 ] || return 0
     log 0 "restore: ---- this recovery went to a DIFFERENT machine ----"
-    log 0 "restore: the data is there. The copy it came from is still recorded against '${RESTORE_SOURCE_LABEL:-the source relationship}', so the schedule still backs up the OLD machine and the one you just recovered onto is backed up by nobody."
-    log 0 "restore: nothing here changed that, on purpose -- switching the backup over is its own step, with its own proof that this machine really holds the copy:"
+
+    # WHAT ACTUALLY LANDED DECIDES THE FIRST SENTENCE.
+    #
+    # This block is deliberately printed on every cross-host run, failed ones
+    # included: a partial recovery leaves the same split, and the operator needs
+    # to know which machine holds what before deciding anything. That is right.
+    #
+    # What was wrong is that it OPENED with "the data is there" regardless.
+    # Measured on the lab, 2026-08-31: a run that recovered nothing -- the engine
+    # refused a `create` outside the destination's grant -- announced that the
+    # data was on the other machine and named the command to hand the backup
+    # over to it. Following that would have pointed the schedule at a machine
+    # holding nothing.
+    #
+    # RESTORE_LANDED is the fact: the runner appends to it only for a dataset it
+    # verified. So the sentence follows the fact instead of the intention.
+    if [ "${#RESTORE_LANDED[@]}" -eq 0 ]; then
+        log 0 "restore: NOTHING landed on that machine -- see the per-dataset result above. There is nothing to hand the backup over to, and '${RESTORE_SOURCE_LABEL:-the source relationship}' still holds and still backs up what it always did."
+        log 0 "restore: fix what the report names and run the recovery again. Only then does the hand-over below become the next step."
+    else
+        log 0 "restore: the data is there. The copy it came from is still recorded against '${RESTORE_SOURCE_LABEL:-the source relationship}', so the schedule still backs up the OLD machine and the one you just recovered onto is backed up by nobody."
+        log 0 "restore: nothing here changed that, on purpose -- switching the backup over is its own step, with its own proof that this machine really holds the copy:"
+    fi
     log 0 "restore:     zfs-backup.sh move-to-client ${RESTORE_SOURCE_LABEL:-<from>} ${RESTORE_RELATION_LABEL:-<onto>}"
-    log 0 "restore: until then both relationships are as they were, and '${RESTORE_RELATION_LABEL:-the destination}' stays paused."
+
+    # AND NOT "stays paused". The pause is released by the caller on the next
+    # line but one, so this claim was falsified by the run's own output every
+    # time it was printed -- measured on the same lab run, where "stays paused"
+    # sat directly above "resumed 'src8'". A report that contradicts the line
+    # under it teaches the operator to skim the whole block.
+    log 0 "restore: until then both relationships are as they were. '${RESTORE_RELATION_LABEL:-the destination}' was paused for this run only and its schedule is running again."
 }
 
 # ------------------------------------------------------------------------------

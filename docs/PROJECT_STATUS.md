@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aebf8facdf8ecb1a -->
+<!-- status-covers-digest: 0b0cabb47dfb4516 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1696,6 +1696,25 @@
   **Test złapał po drodze moją trzecią dziś pomyłkę z podpowłoką:** atrapa
   sekwencjonowała odpowiedzi zmienną, a każdy wywołujący sięga przez `$( )`.
   Licznik mieszka teraz w pliku.
+
+- **Raport o przekazaniu twierdził dwie nieprawdy — LAB, 2026-08-31.** Blok o
+  biegu międzyhostowym drukuje się **także po awarii** i to jest celowe: częściowy
+  odzysk zostawia ten sam rozjazd, a operator musi wiedzieć, która maszyna co
+  trzyma. Ale otwierał się zdaniem **„the data is there"** niezależnie od wyniku.
+  Zmierzone: bieg, który **nie odtworzył nic** (silnik odmówił `create` poza
+  nadaniem), ogłaszał, że dane są na drugiej maszynie, i podawał komendę
+  przekazania jej backupu. Pójście za tym kieruje harmonogram na maszynę, która
+  nic nie trzyma.
+  Druga fraza: **„'X' stays paused"** — a wywołujący zwalnia pauzę linijkę dalej,
+  więc raport był obalany przez własne wyjście za każdym razem, gdy się
+  wydrukował (`stays paused` stało bezpośrednio nad `resumed 'src8'`). Raport,
+  który przeczy linii pod sobą, uczy operatora przewijać cały blok.
+  Pierwsze zdanie idzie teraz za **faktem** — `RESTORE_LANDED`, do której biegacz
+  dopisuje tylko zweryfikowane datasety — a nie za zamiarem. Drugie mówi, co
+  naprawdę się stało z pauzą.
+  **Przy okazji:** `${#TABLICA[@]}` na nieustawionej tablicy **wywala `set -u`**
+  (sprawdzone), więc fixture'y sterujące tą funkcją muszą ją podawać. Produkcja
+  jest bezpieczna, bo tablica jest deklarowana na poziomie pliku.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,
