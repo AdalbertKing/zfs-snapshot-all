@@ -1861,10 +1861,28 @@ restore_remote_newer_snaps() {   # <account@host> <target root> <point> [depth]
 # since that snapshot, with anything non-zero meaning "not at the point".
 #
 # That is the right question BEFORE a restore -- restore_remote_ahead still asks
-# it -- and the wrong one AFTER, because the restore itself writes: the quantity
-# being measured is one the immediately preceding step is guaranteed to disturb.
-# Measured on the lab 2026-08-31, two datasets that landed exactly on the point
-# were reported CHANGED AND UNFINISHED because written@point read 8192.
+# it -- and the wrong one AFTER, because `zfs rollback` ITSELF writes. Not a
+# race and not a leftover from the run: a rewind rewrites the dataset's metadata
+# into blocks born after the snapshot's txg, and `written@` counts exactly
+# those. After a SUCCESSFUL rewind the number can never be zero.
+#
+# MEASURED 2026-08-31 on two lab pools, step by step. The residue is a
+# CONSTANT -- one metadata block, one write per copy, rounded to the pool's
+# sector size:
+#
+#     pool                    sector   redundant_metadata=all   =none
+#     pve9 hdd (512B disks)      512                     1024     512
+#     pve1 hdd (ashift=12)      4096                     8192    4096
+#
+# It does not move with the shape of the recovery: one file or five hundred,
+# 4 MB or 64 MB, `rollback` or `rollback -r` -- and it appears even on a
+# rollback where nothing had changed since the snapshot, where `referenced`
+# comes back to the snapshot's value exactly. A fresh `recv` leaves zero, which
+# is why only the rewind path ever tripped it.
+#
+# So that is how two datasets that landed exactly on the point were reported
+# CHANGED AND UNFINISHED over a successful recovery: pve1's pool has 4 KB
+# sectors and keeps two copies of metadata, and written@point read 8192.
 #
 # ONE GUID PER DATASET, NOT ONE FOR THE SUBTREE. REV-20260831-129: the first
 # version took a single expected guid and applied it to every dataset the

@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24.*
+*Evidence: E3, E9, E15, E24, E25.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -700,3 +700,40 @@ are results, and a result is evidence only against a control that would have
 produced the opposite. Before reporting a mechanism absent: build the case that
 should exercise it, and only then say what you saw.
 
+
+### E25 — I recorded a falsification I had not controlled, and it pointed away from the cause
+
+**2026-08-31, restore verification.**
+
+**Genesis.** A successful recovery was reported `CHANGED AND UNFINISHED` because
+`written@point` read 8192. The predicate was wrong for a separate and sufficient
+reason — it asked an accounting question after the step that disturbs the
+accounting — so I fixed it to ask identity, and that fix stands.
+
+But I also went looking for the 8192, took three readings, and wrote into
+`PROJECT_STATUS.md`: not a txg lag, not the mount, **not the rollback itself
+(0 in isolation)** — and then **"which step writes them: unestablished"**.
+
+The third clause was false, and it was the answer. Measured later, step by step
+on two lab pools: **every** `zfs rollback` leaves a constant residue — one
+metadata block, one write per copy, rounded to the pool's sector. 1024 on a
+512-byte pool, **8192** on `ashift=12` with two copies of metadata. It appears
+even on a rollback where nothing had changed since the snapshot; a fresh `recv`
+leaves zero. Two commands would have shown it.
+
+**Cause.** R6 again, and the same shape as E24: I read a zero and promoted it to
+a fact about the system without building the case that would have produced the
+opposite. Worse than E24 in one respect — I did not merely report the zero, I
+wrote **"unestablished"** next to it, which retires a question. A wrong
+falsification is not neutral: it removes the one hypothesis that was true, and
+anybody reading that paragraph afterwards inherits the exclusion.
+
+That it did not cost anything is luck of my own making, not judgement: the fix
+was deliberately built not to depend on the answer.
+
+**Rule.** R6, second recurrence after E24 — which is the point, per this file's
+own instruction. Concretely: **a falsification is a claim and needs the control a
+claim needs.** Before writing "it is not X", produce the run where it IS X and
+show the reading move. And never write "unestablished" while a two-command
+experiment remains untried — write "not yet measured", which says whose move it
+is.

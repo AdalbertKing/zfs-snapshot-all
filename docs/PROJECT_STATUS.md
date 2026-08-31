@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6004d9b67715f635 -->
+<!-- status-covers-digest: c53d5ac67f2621c0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1669,11 +1669,26 @@
   wyjścia 2, bo `written@punkt` pokazało 8192. Najgłośniejszy alarm tego
   narzędzia podniesiony nad **udanym** odzyskiem; w prawdziwej awarii wysyła
   admina o trzeciej w nocy naprawiać to, co działa.
-  **Trzy hipotezy o tych 8192 bajtach sprawdzone, DWIE FAŁSZYWE:** to nie
-  opóźnienie txg (stabilne po 5 s), nie skutek zamontowania (cichy zamontowany
-  dataset pokazuje 0), nie samo cofnięcie (w izolacji 0). **Który krok je
-  zapisuje — nieustalone**, i poprawka celowo od tego nie zależy: predykat
-  odpowiadał na złe pytanie niezależnie od tego, jaka była odpowiedź.
+  **PRZYCZYNA USTALONA — POMIAR NA DWÓCH PULACH LABU, 2026-08-31.** Pisze
+  **samo `zfs rollback`**. Cofnięcie przepisuje metadane datasetu do bloków
+  urodzonych po txg snapshotu, a `written@` liczy dokładnie takie bloki — więc
+  po **udanym** cofnięciu ta liczba nie może być zerem. Reszta jest **stała**:
+  jeden blok metadanych, jeden zapis na kopię, zaokrąglony do sektora puli.
+
+  | pula | sektor | `redundant_metadata=all` | `=none` |
+  |---|---|---|---|
+  | pve9 `hdd` (dyski 512 B) | 512 | **1024** | 512 |
+  | pve1 `hdd` (`ashift=12`) | 4096 | **8192** | 4096 |
+
+  Nie zależy od kształtu odzysku: jeden plik czy pięćset, 4 MB czy 64 MB,
+  `rollback` czy `rollback -r`. Pojawia się nawet po cofnięciu, przed którym
+  **nic się nie zmieniło**, a `referenced` wraca do wartości ze snapshotu co do
+  bajta. Świeży `recv` zostawia 0 — dlatego potykała się o to wyłącznie ścieżka
+  `rewind`. 8192 na pve1 to 4 KB sektora × dwie kopie metadanych.
+  **Wcześniejszy zapis w tym dokumencie mówił, że „to nie samo cofnięcie
+  (w izolacji 0)" — to było fałszywe obalenie i zostało tu zastąpione, nie
+  dopisane.** Poprawka i tak od tego nie zależała: predykat odpowiadał na złe
+  pytanie niezależnie od odpowiedzi.
   Teraz pyta o tożsamość: snapshot **jest** i jest **tym** (po GUID, nie po
   nazwie), a nad nim nic nie stoi. Oba to fakty, których udany odzysk nie może
   zaburzyć.

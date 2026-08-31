@@ -16,6 +16,14 @@
 # deleted files back -- and the run reported `CHANGED AND UNFINISHED ... they
 # need a person`, exit 2, because `written@point` read 8192. The loudest alarm
 # this tool has, raised over a successful recovery.
+#
+# THE 8192 IS NOT NOISE AND NOT A RACE. Measured 2026-08-31 on two lab pools:
+# `zfs rollback` leaves a CONSTANT residue -- one metadata block, one write per
+# copy, rounded to the pool's sector -- 1024 on a 512-byte pool, 8192 on
+# ashift=12 with two copies of metadata. It appears even on a rollback where
+# nothing had changed, and a fresh `recv` leaves zero. So the old predicate did
+# not merely read a disturbed number: after a successful REWIND it could not
+# read zero at all, which is why the 8192 fixture below is the carrying case.
 
 if ! declare -F ok >/dev/null 2>&1; then
     set -u
