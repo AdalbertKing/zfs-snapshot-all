@@ -1399,6 +1399,37 @@
   Po biegu: pliki na miejscu, blokady zdjęte, grant cofnięty, **zero pauz**,
   następny pull `All datasets processed successfully`.
 
+- **PEŁNY LAB RESTORE PRZESZEDŁ BEZ ZACIĘCIA (2026-08-31, `main` @ bb5b6af).**
+  Dziesięć kroków od czystego stanu, **żadnej poprawki kodu po drodze**, każde
+  przewidywanie spisane przed uruchomieniem i trafione. To pierwszy przebieg
+  tego dnia, który nie zaciął się ani razu — wcześniejsze zacięło się
+  czternaście razy i z tego wzięło się czternaście wad.
+
+  | krok | wynik |
+  |---|---|
+  | `--plan` | 25 punktów odzysku, nagłówek o spójności, **zero** utworzonych datasetów |
+  | `--from-copy` w wolne miejsce | 3 datasety z dziećmi, GUID **3/3**, RC=0 |
+  | z repliki w wolne miejsce | 3 datasety, GUID **3/3** zgodne z nośnikiem |
+  | replika → **dataset kopii** (`--overwrite`) | `SAM ROLLBACK`, 24→12 snapshotów, pauza wzięta i zwolniona |
+  | relacja, niszcząco | **3× `OK`**, pliki wróciły, snapshot uszkodzenia zniszczony |
+  | `--at 16:10` | wybrał **15:57**, nie 16:57 — najnowszy *nie później niż* |
+  | połowa B, awaria na **pierwszym** | `NOT DONE`, `OK`, `OK` → `PARTIAL 2/1`, RC=1 |
+  | cross-host poza nadaniem | remap wypisany, `NOT DONE` nie `CHANGED`, „NOTHING landed", **zero** „stays paused" |
+  | odmowy gramatyczne | **5/5** |
+  | sprzątanie | granty cofnięte, zero blokad, zero pauz, `rpool/proba` nie istnieje, pull czysty |
+
+  **Trzy rzeczy, które dzień wcześniej były zacięciami, przeszły same:** `--at`
+  faktycznie cofnął bezczynne datasety, weryfikacja nie krzyknęła nad udanym
+  odzyskiem, a nieudany `create` dostał `NOT DONE` zamiast wołania o człowieka.
+  **Dwa bloki komunikatów sprawdzone w OBIE strony:** ostrzeżenie o koszcie
+  backupu **odezwało się** przy `--at`, gdzie kopia naprawdę zostaje z historią,
+  której źródło nie ma — i **zamilkło** wszędzie indziej. To jest ta połowa,
+  którą przy naprawianiu fałszywego alarmu najłatwiej zepsuć.
+  **Blokada w kroku B stała na PIERWSZYM datasecie, nie na ostatnim** — na
+  ostatnim wynik byłby identyczny i nie dowodziłby niczego o kontynuacji.
+  Stan po biegu: źródło dokładnie jak przed (`znacznik.txt`, `dane.bin`,
+  `duzy.bin`, `nowe.bin`), kolektor tylko z `hdd/backups`, nośnik odłączony.
+
 - **Krok per dataset jest IZOLOWANY procesowo (REV-20260831-127 F1,
   2026-08-31).** Kontroler relacji klasyfikuje kod wyjścia `restore_one` — a
   może to zrobić tylko wtedy, gdy `restore_one` **wraca**. `die` w tym drzewie
