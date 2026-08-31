@@ -6157,12 +6157,20 @@ fi
 # paper over.
 writers=$(grep -c '^\s*atomic_replace_and_install ' "$ZFSBACKUP")
 resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
-# 8 writers / 11 resolvers since 2026-08-29. The writers did not move; the gap
-# is READERS, and it keeps widening for the right reason: list-replicas,
-# run-replicas and install-media-trigger all have to resolve the same config an
-# install would write, so that what they show or run is what cron would.
-# Equality was never the property -- the per-function check above is.
-if [ "$writers" -eq 8 ] && [ "$resolvers" -eq 11 ]; then
+# 9 writers / 12 resolvers, MEASURED on the merged tree rather than carried over
+# from either side. main had reached 8/11 and this branch adds set-bandwidth,
+# which rewrites every active relationship of one pair in a single transaction:
+# 9. The resolver count moves with it because a writer that does not resolve is
+# a writer aimed at a guessed config.
+#
+# The numbers are pinned rather than merely compared so that ADDING a config
+# writer forces this line to be edited -- which is the moment to prove the new
+# writer is aimed at a config instead of guessing one. Bumping it is the
+# acknowledgement, not a formality. Equality between the two was never the
+# property: the gap is READERS (list-replicas, run-replicas,
+# install-media-trigger) which resolve the same config an install would write,
+# so that what they show or run is what cron would.
+if [ "$writers" -eq 9 ] && [ "$resolvers" -eq 12 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -7680,6 +7688,148 @@ else
     bad "settings: precedence is environment, then the host file, then the built-in" \
         "env='$si_a' file='$si_b' builtin='$si_c'"
 fi
+
+# NOTE ON WHERE THIS LIVES: test/linkfields lifts code fragments out of the
+# files under test and runs them in a temp script -- it never sources
+# zfs-backup.sh. Written there, every assertion below "passed" because
+# cmd_set_bandwidth did not exist: rc was 127, the config was untouched, and the
+# control read that as correct refusal. A test that cannot call the thing it
+# names is not a weak test, it is a false one.
+# --- 15. ONE TRANSACTION FOR THE WHOLE PAIR ---------------------------------
+#
+# REV F4b, owner's choice between the two shapes: the cap change becomes a
+# single previewed transaction over every relationship of the pair, rather than
+# the runtime learning to read the manifest (which would have meant CONFIG is no
+# longer the runtime truth).
+#
+# The defect being closed: the cap belongs to the PAIR and lives in the pairing
+# manifest, but an ACTIVE relationship carries it MATERIALISED in its [dataset:]
+# section and in the installed cron line. Rewriting the manifest alone left the
+# two disagreeing until somebody re-activated each relationship by hand,
+# remembering to, one at a time.
+SB="$WORK/setbw"; rm -rf "$SB"; mkdir -p "$SB/clients" "$SB/peerstate" "$SB/dir" "$SB/bin"
+printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$SB/bin/crontab"
+chmod +x "$SB/bin/crontab"
+printf 'PEER_SAVED_LOCAL_USER=root\nPEER_SAVED_BANDWIDTH=2M\n' > "$SB/peerstate/10.5.5.5.conf"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$SB" > "$SB/server.conf"
+
+# TWO relationships across ONE link -- the shape the whole finding is about.
+{ printf '[defaults]\n\thost_label = sbtest\n\n'
+  printf '[template:hourly]\n\tsend_schedule  = 7 * * * *\n\tprefix         = automated_hourly_\n'
+  printf '\tnotify_word    = snapshot\n\tprune_schedule = 27 * * * *\n\tpattern        = automated_hourly\n\tkeep           = 24\n\n'
+  for n in one two; do
+    printf '[dataset:tank/backups/%s/tank/src]\n' "$n"
+    printf '\t# managed-by: zfs-backup.sh client=%s\n' "$n"
+    printf '\tuse_template = hourly\n\tsrc          = acct@10.5.5.5:tank/src\n'
+    printf '\tbandwidth    = 2M\n\trecursive    = flat\n\tpair_label   = %s\n\tnotify       = %s-at\n\n' "$n" "$n"
+  done
+} > "$SB/dir/jobs.conf"
+for n in one two; do
+  { printf 'CLIENT_NAME=%s\nPEER_HOST=10.5.5.5\nSTATE=active\n' "$n"
+    printf 'MANAGED_DATASETS=tank/backups/%s/tank/src\n' "$n"
+    printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$SB"
+  } > "$SB/clients/$n.conf"
+done
+
+sb_run() {   # <rate or -> -> rc
+    local arg="--bandwidth=$1"; [ "$1" = "-" ] && arg="--bandwidth="
+    ( PATH="$SB/bin:$PATH"
+      atomic_replace_and_install() { mv -f "$2" "$1"; }
+      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+      show_activation_proposal() { :; }
+      CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+      cmd_set_bandwidth --peer=10.5.5.5 "$arg" --config="$SB/dir/jobs.conf" --yes ) >/dev/null 2>&1
+}
+# Either spelling: the fixture writes an ALIGNED `bandwidth    = 2M`, while a
+# field this tool INSERTS is single-spaced (`bandwidth = 8M`). Pinning one of
+# them made two assertions fail for a reason unrelated to what they test.
+sb_capn()     { grep -cE "^	bandwidth[ 	]*= $1\$" "$SB/dir/jobs.conf"; }
+sb_caps()     { sb_capn 8M; }
+sb_manifest() { grep -m1 '^PEER_SAVED_BANDWIDTH=' "$SB/peerstate/10.5.5.5.conf" | cut -d= -f2-; }
+
+sb_run 8M
+{ [ "$(sb_caps)" -eq 2 ] && [ "$(sb_manifest)" = "8M" ]; } \
+    && ok "pair-tx: one command moves BOTH relationships and the manifest together" \
+    || bad "pair-tx: one command moves both relationships and the manifest" \
+           "sections at 8M=$(sb_caps) manifest='$(sb_manifest)'"
+
+# Removing a cap must take the LINE with it, not leave a stale one throttling
+# the link -- set_or_remove, not update.
+sb_run -
+{ [ "$(grep -c '^	bandwidth' "$SB/dir/jobs.conf")" -eq 0 ] && [ -z "$(sb_manifest)" ]; } \
+    && ok "pair-tx: an empty rate removes the field from every section and empties the manifest" \
+    || bad "pair-tx: an empty rate removes the field everywhere" \
+           "bandwidth lines left=$(grep -c '^	bandwidth' "$SB/dir/jobs.conf") manifest='$(sb_manifest)'"
+
+# (a) A MANIFEST THAT DOES NOT CARRY THE KEY YET.
+#
+# The first cut only REWROTE an existing PEER_SAVED_BANDWIDTH= line. A manifest
+# predating the field -- or written by an older deploy.sh -- kept no cap at all
+# while the CONFIG got one, and `mv` reported success either way. My own test
+# could not see it, because its fixture always started with the key present.
+# That is the more useful half of this assertion: a fixture that always contains
+# the thing under test cannot fail.
+printf 'PEER_SAVED_LOCAL_USER=root\n' > "$SB/peerstate/10.5.5.5.conf"
+sb_run 8M
+{ [ "$(sb_caps)" -eq 2 ] && [ "$(sb_manifest)" = "8M" ]; } \
+    && ok "pair-tx: the cap is APPENDED to a manifest that had no such key" \
+    || bad "pair-tx: the cap is appended to a manifest that had no such key" \
+           "sections at 8M=$(sb_caps) manifest='$(sb_manifest)'"
+
+# (b) A FORCED FAILURE OF THE MANIFEST PUBLISH.
+#
+# The first cut warned and exited zero, leaving the jobs on the new cap and the
+# manifest on the old -- the exact divergence this command exists to end, moved
+# later in the sequence. "One transaction" has to mean the failure case too.
+printf 'PEER_SAVED_LOCAL_USER=root\nPEER_SAVED_BANDWIDTH=2M\n' > "$SB/peerstate/10.5.5.5.conf"
+rm -f "$SB/reinstalled-from"
+sb_run 2M
+sb_out="$( ( PATH="$SB/bin:$PATH"
+             # Fail ONLY the manifest rename, by its destination. Matching the
+             # last argument, because atomic_replace_and_install's own mv is
+             # stubbed below and must keep working.
+             mv() { local last="${!#}"; case "$last" in *peerstate*) return 1 ;; esac; command mv "$@"; }
+             atomic_replace_and_install() { command mv -f "$2" "$1"; }
+             assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+             assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
+             show_activation_proposal() { :; }
+             # The CRONTAB is the third element of the declared transaction and
+             # the first version of this control did not look at it -- it checked
+             # config and manifest and stubbed this to a bare `return 0`, so
+             # "everything agrees" was asserted about two thirds of the claim.
+             # Record what the reinstall would have rendered FROM: the rollback
+             # restores the config first and reinstalls from it, so this file
+             # ends up holding the OLD cap if, and only if, both steps ran.
+             gencron_as_target() {
+                 case " $* " in
+                     *" --install "*) grep -m1 "^	bandwidth" "$SB/dir/jobs.conf" > "$SB/reinstalled-from" 2>/dev/null || : ;;
+                 esac
+                 return 0
+             }
+             CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+             cmd_set_bandwidth --peer=10.5.5.5 --bandwidth=8M --config="$SB/dir/jobs.conf" --yes ) 2>&1 )"
+sb_rc=$?
+{ [ "$sb_rc" -ne 0 ] \
+  && [ "$(sb_capn 2M)" -eq 2 ] \
+  && [ "$(sb_manifest)" = "2M" ] \
+  && grep -q '2M' "$SB/reinstalled-from" 2>/dev/null; } \
+    && ok "pair-tx: a manifest publish failure ROLLS BACK -- config, crontab and manifest all stay on the old cap, rc is non-zero" \
+    || bad "pair-tx: a manifest publish failure rolls back" \
+           "rc=$sb_rc sections at 2M=$(sb_capn 2M) manifest='$(sb_manifest)' crontab-from='$(cat "$SB/reinstalled-from" 2>/dev/null | tr -d "\t")'" \
+           "$(printf '%s' "$sb_out" | tail -1)"
+
+# CONTROL: a peer with no pairing manifest is refused, and nothing moves --
+# without it the assertions above would pass against a build that rewrites
+# sections for any string at all.
+cp "$SB/dir/jobs.conf" "$SB/before.conf"
+( PATH="$SB/bin:$PATH"
+  CLIENTS_DIR="$SB/clients" PEER_STATE_DIR="$SB/peerstate" SERVER_CONF="$SB/server.conf" \
+  cmd_set_bandwidth --peer=10.9.9.9 --bandwidth=4M --config="$SB/dir/jobs.conf" --yes ) >/dev/null 2>&1
+sb_rc=$?
+{ [ "$sb_rc" -ne 0 ] && cmp -s "$SB/before.conf" "$SB/dir/jobs.conf"; } \
+    && ok "pair-tx control: an unpaired peer is refused and the config is untouched" \
+    || bad "pair-tx control: an unpaired peer is refused and the config is untouched" "rc=$sb_rc"
 
 
 # ============================================================================

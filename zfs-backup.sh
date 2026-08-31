@@ -348,6 +348,10 @@ front end never edits the config file:
 
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
+                                    --bandwidth caps the LINK, not this one relationship: it is
+                                    written into the pairing with that host and applies to every
+                                    relationship over it. A different value on a peer that is
+                                    already capped is refused, not applied.
                                     Default: backup mode; source datasets are discovered
                                     and accepted by deploy.sh --join on the source host.
                                     --lan, --mode and --datasets remain expert options.
@@ -403,6 +407,11 @@ Client state control:
 
 Config maintenance:
   zfs-backup.sh migrate-profile [--profile=NAZWA] [--yes]
+  zfs-backup.sh set-bandwidth --peer=HOST --bandwidth=RATE [--yes]
+                                    Change the PAIR's link cap and apply it to every
+                                    ACTIVE relationship across that link, as ONE
+                                    previewed transaction. --bandwidth= with no value
+                                    REMOVES the cap.
   zfs-backup.sh audit-source-retention [--apply] [--yes]
 
 Inspection / teardown:
@@ -3389,7 +3398,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # from the record must take the field with it: a refresh that left a
         # stale 'bandwidth' behind would keep throttling a relationship the
         # operator had just uncapped, silently and for good.
-        set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${BANDWIDTH:-}" \
+        set_or_remove_section_field "$workfile" "[dataset:$localpath]" bandwidth "${LOAD_BANDWIDTH:-}" \
             || die "[dataset:$localpath] in $workfile could not be updated with the relationship's bandwidth setting -- refusing to leave the link cap out of step with the client record. Fix or remove that section by hand and re-run."
     done
 
@@ -3502,7 +3511,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # named field is the only form a layer above a hand edit can
             # speak about (it is profile-FORBIDDEN, which is a statement about
             # ownership -- the link belongs to this pair of hosts).
-            [ -n "${BANDWIDTH:-}" ] && echo "	bandwidth    = $BANDWIDTH"
+            [ -n "${LOAD_BANDWIDTH:-}" ] && echo "	bandwidth    = $LOAD_BANDWIDTH"
             # A solid scope root rides ENGINE recursion: snapget -R re-expands
             # the subtree on the source at every run, so a child created there
             # tomorrow joins at the next cron tick -- which is what the signed
@@ -4834,6 +4843,43 @@ local_backup_section_marker() {   # <file> <exact header> -> "<kind>=<value>" or
 # comma-separated ([prune:a,b,c] -- metropolis pve2 has such sections), so each
 # member is evaluated independently. Treating the comma-joined string as one
 # path would miss an overlap with every member but the accidental prefix.
+# WHERE THE LINK CAP COMES FROM, in one place that can be read on its own.
+#
+# A cap describes the WIRE, and the wire belongs to the PAIR OF HOSTS. Kept on
+# the relationship record it had to be given twice for two relationships to the
+# same peer, by hand, with nothing keeping them in step and nothing noticing
+# when they drifted. It now lives in the pairing manifest, where one answer
+# serves every relationship that flies over that link.
+#
+# A record written before the move is still honoured -- when the manifest is
+# silent. No deployed relationship changes speed because of the move, and the
+# operator is told once, with the exact command, where the value now belongs.
+# The note goes to stderr because this function is read through a command
+# substitution: on stdout it would BE the rate.
+# One validator, because two copies of a grammar drift and this tree has paid
+# for that before. Deliberately no stricter than the engines: a validator
+# stricter than what snapsend accepts trades one visible error now for an
+# invisible one every night.
+assert_bandwidth_rate() {   # <value> <verb, for the message>
+    local v="$1" verb="$2" core="$1"
+    case "$core" in *[bkKmMgG]) core="${core%?}" ;; esac
+    case "$core" in
+        "" | *[!0-9]*)
+            die "$verb: --bandwidth='$v' is not a byte rate the engines accept (digits, then at most one of b/k/M/G at the end -- e.g. 20M). It is BYTES per second, not bits." ;;
+    esac
+}
+
+resolve_link_bandwidth() {   # <manifest value> <record value> <client> <peer> -> rate
+    local from_pair="$1" from_record="$2" client="$3" peer="$4"
+    if [ -n "$from_pair" ]; then printf '%s' "$from_pair"; return 0; fi
+    if [ -n "$from_record" ]; then
+        log "limit pasma '$from_record' pochodzi z rekordu relacji '$client' (zapis sprzed przeniesienia). Lacze nalezy do PARY hostow, wiec docelowe miejsce to manifest parowania -- ustaw je raz przez 'deploy.sh --pair --peer=$peer --bandwidth=$from_record', a bedzie obowiazywac kazda relacje z tym peerem." >&2
+        printf '%s' "$from_record"
+        return 0
+    fi
+    printf ''
+}
+
 config_section_overlap() {   # <file> <recursive-request or ""> <requested path>...
     local file="$1" rec_req="${2:-}"; shift 2
     [ -f "$file" ] || return 0
@@ -6232,12 +6278,7 @@ cmd_add_client() {
         # written into the client record, rebuilt into the cron line, and the
         # engine refused it EVERY NIGHT -- a validator stricter than its
         # engine trades one visible error now for an invisible one forever.
-        local _bw_core="$bandwidth"
-        case "$_bw_core" in *[bkKmMgG]) _bw_core="${_bw_core%?}" ;; esac
-        case "$_bw_core" in
-            "" | *[!0-9]*)
-                die "add-client: --bandwidth='$bandwidth' is not a byte rate the engines accept (digits, then at most one of b/k/M/G at the end -- e.g. 20M). It is BYTES per second, not bits." ;;
-        esac
+        assert_bandwidth_rate "$bandwidth" add-client
     fi
 
     # A declared-passive relationship defaults to the PASSIVE profile: its
@@ -6485,6 +6526,10 @@ cmd_add_client() {
     fi
     [ -n "$target" ] && pair_args+=(--target="$target")
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
+    # The cap travels to the PAIRING, because the link does. Passed through
+    # rather than stored here, so there is one home for it and not two that can
+    # disagree.
+    [ -n "$bandwidth" ] && pair_args+=(--bandwidth="$bandwidth")
     # Without this the pairing key and the pinned host key are readable only by
     # root, and the target root is delegated to nobody -- so the cron jobs this
     # client will run as $LOCAL_USER could not open their own key.
@@ -6507,6 +6552,16 @@ cmd_add_client() {
         [ -z "$_mf_user" ] && _mf_user=root
         if [ "$_want_user" != "$_mf_user" ]; then
             die "add-client: this host's pairing with '$lan_host' is delegated to account '$_mf_user', and this relationship asked for '--local-user=$_want_user'. The pairing identity (key, pinned host key, manifest) is per source host, so a second account cannot ride it -- the previous behavior silently ran the new relationship as '$_mf_user' instead. Either use --local-user=$_mf_user, or unpair the host first if the delegation itself should change. Nothing was changed."
+        fi
+        # The cap is now per PAIR, which cuts both ways: a second relationship
+        # asking for a different one is not asking about itself, it is asking to
+        # re-cap every relationship that already flies over this link. That is a
+        # deliberate act, not a side effect of enrolling something new -- so it
+        # is refused here and named, rather than applied quietly in either
+        # direction.
+        local _mf_bw; _mf_bw=$( . "$_mf_user_path" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_BANDWIDTH:-}" )
+        if [ -n "$bandwidth" ] && [ "$bandwidth" != "$_mf_bw" ]; then
+            die "add-client: this host's link to '$lan_host' is already capped at '${_mf_bw:-<bez limitu>}' by the pairing, and this relationship asked for '--bandwidth=$bandwidth'. The cap belongs to the PAIR of hosts -- changing it here would silently re-cap every relationship that already uses this link. Either drop --bandwidth to accept the pairing's limit, or change it deliberately for the whole link with 'deploy.sh --pair --peer=$lan_host --bandwidth=$bandwidth'. Nothing was changed."
         fi
     fi
     [ -n "$local_user" ] && [ "$local_user" != root ] && pair_args+=(--local-user="$local_user")
@@ -6553,7 +6608,10 @@ cmd_add_client() {
         # REV-20260802-033 U9: the literal address IS the endpoint now, no
         # named-slot indirection -- see active_endpoint_host_port.
         write_client_field ACTIVE_ENDPOINT   "$lan_host:$lan_port"
-        write_client_field BANDWIDTH         "$bandwidth"
+        # BANDWIDTH is deliberately NOT written here any more: the cap lives in
+        # the pairing manifest (see load_client_and_connection). Writing a copy
+        # would recreate the two-homes problem this move exists to end -- and
+        # the stale copy would be the one an operator edits.
         write_client_field PROFILE           "$profile"
         # What THIS relationship asked for. The committed scope on the source
         # is per-COLLECTOR and grows with every relationship this host
@@ -7194,7 +7252,10 @@ load_client_and_connection() {
     # quietly slowed, in the direction nobody notices, because a transfer that
     # is slower than it should be still succeeds.
     CLIENT_TARGET=""
+    # The cap now has a SECOND source -- the pairing manifest -- and it is
+    # cleared for the identical reason spelled out above, not a new one.
     BANDWIDTH=""
+    PEER_SAVED_BANDWIDTH=""
     # shellcheck disable=SC1090
     . "$cpath"
     local label; label=$(peer_label "$PEER_HOST")
@@ -7253,8 +7314,22 @@ load_client_and_connection() {
     # Direct engine invocations (seed, the dry-run probes) build a COMMAND LINE
     # rather than a config and therefore still append the flag; they say so at
     # each call site by using $LOAD_BW_FLAG.
+    #
+    # WHERE THE CAP LIVES: the PAIRING MANIFEST, not the relationship record.
+    #
+    # A cap describes the WIRE, and the wire belongs to the pair of hosts. Two
+    # relationships to the same peer over the same link had to be given the same
+    # limit twice, by hand, with nothing keeping them in step -- and nothing
+    # noticing when they drifted. The manifest is per-host, so one answer serves
+    # every relationship that flies over it, which is what "same link" means.
+    #
+    # A record written before the move still wins nothing and loses nothing: it
+    # is honoured when the manifest is silent, so no deployed relationship
+    # changes speed because of this commit, and the operator is told once where
+    # the value now belongs.
+    LOAD_BANDWIDTH="$(resolve_link_bandwidth "${PEER_SAVED_BANDWIDTH:-}" "${BANDWIDTH:-}" "$CLIENT_NAME" "$PEER_HOST")"
     LOAD_BW_FLAG=""
-    [ -n "${BANDWIDTH:-}" ] && LOAD_BW_FLAG=" -b $BANDWIDTH"
+    [ -n "$LOAD_BANDWIDTH" ] && LOAD_BW_FLAG=" -b $LOAD_BANDWIDTH"
 
     # Slice 6: a no-op for a legacy (--peer-datasets) client -- PEER_SAVED_DATASETS
     # is already non-empty from the manifest sourced above. Only a mode-based
@@ -7800,7 +7875,7 @@ probe_snapget_endpoint() {   # <host> <port>
     }
     local pflags="-K $LOAD_KEYFILE -k $pkh -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
     [ "$pport" != "22" ] && pflags="$pflags -p $pport"
-    [ -n "${BANDWIDTH:-}" ] && pflags="$pflags -b $BANDWIDTH"
+    [ -n "${LOAD_BANDWIDTH:-}" ] && pflags="$pflags -b $LOAD_BANDWIDTH"
 
     local base; base=$(snapget_local_base)
     local ds out plan errtmp failed=0 unknown=0 needs_full=0
@@ -8475,6 +8550,188 @@ cmd_activate() {
 # It rebuilds every ACTIVE client through emit_client_sections(), the same
 # function activate-client uses, so a migrated host lands on byte-identical
 # sections rather than on a second implementation of the same shape.
+# ------------------------------------------------------------------------------
+# set-bandwidth: change a PAIR's link cap as ONE transaction over every
+# relationship that flies across that link.
+#
+# REV F4b, and the owner chose this shape over "make the runtime read the
+# manifest": it is how the rest of this tool already works, and it keeps CONFIG
+# as the runtime truth.
+#
+# The problem it closes: the cap belongs to the PAIR and lives in the pairing
+# manifest, but an ACTIVE relationship carries it MATERIALISED in its
+# [dataset:] section and in the installed cron line. `deploy.sh --pair
+# --bandwidth=NEW` rewrites the manifest and nothing else, so the manifest said
+# one thing while every running job used another -- until somebody re-activated
+# each relationship by hand, one at a time, remembering to. Two sources of
+# truth, drifting, with no moment at which anyone was told.
+#
+# One preview, one confirmation, one crontab. If a pair carries six
+# relationships, six sections move together or none does.
+#
+# ORDER: the CONFIG swap happens first and the manifest second. The swap is the
+# guarded, previewed, rollback-capable half (atomic_replace_and_install backs up
+# both the file and the crontab); the manifest is a single line. If the swap
+# fails, the manifest still describes what is actually running. If the manifest
+# write fails afterwards, the jobs are already correct and the operator is told
+# exactly which one line to fix -- the smaller of the two gaps, chosen
+# deliberately rather than by accident.
+cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-user=NAME] [--yes]
+    local yes=0 a peer="" rate="" rate_given=0 config_arg="" local_user_arg=""
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)       yes=1 ;;
+            --peer=*)       peer="${a#*=}" ;;
+            --bandwidth=*)  rate="${a#*=}"; rate_given=1 ;;
+            --config=*)     config_arg="${a#*=}" ;;
+            --local-user=*) local_user_arg="${a#*=}"
+                local_user_name_valid "$local_user_arg" \
+                    || die "set-bandwidth: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)" ;;
+            *) die "set-bandwidth: unknown option $a" ;;
+        esac
+    done
+    [ -n "$peer" ] || die "set-bandwidth: --peer=HOST is required -- the cap belongs to a PAIR, so the peer is the thing being capped, not a relationship"
+    # An EMPTY rate is a real request (remove the cap) and must be distinguished
+    # from an omitted flag, same discriminator as deploy.sh's own
+    # PEER_BANDWIDTH_GIVEN and for the same reason.
+    [ "$rate_given" -eq 1 ] || die "set-bandwidth: --bandwidth=RATE is required (use --bandwidth= with no value to REMOVE the cap)"
+    [ -z "$rate" ] || assert_bandwidth_rate "$rate" set-bandwidth
+
+    read_server_conf
+    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to re-cap"
+
+    local label; label=$(peer_label "$peer")
+    local mpath;  mpath=$(peer_manifest_path "$label")
+    [ -r "$mpath" ] || die "no pairing manifest for '$peer' at $mpath -- the cap belongs to a pairing, so pair the host first (deploy.sh --pair)"
+    local old_rate; old_rate="$(grep -m1 '^PEER_SAVED_BANDWIDTH=' "$mpath" | cut -d= -f2-)"
+
+    # Which relationships fly across this link. Fields are cleared before each
+    # record because a record is a `.`-sourced file and this loop reads several
+    # in one shell -- the same defect the tree fixed for BANDWIDTH itself.
+    # TWO PARALLEL ARRAYS, no packed string. The first cut joined name and
+    # dataset list with ${SEP} -- which gen-cron defines and this file does not,
+    # so under `set -u` it would have died on an unbound variable the moment a
+    # pair had a relationship. Caught before it shipped, but the lesson is the
+    # cheaper one: do not invent a separator when two arrays say it plainly.
+    local f seen="" _n=0
+    local -a tgt_name=() tgt_ds=()
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        case "$f" in *removed*) continue ;; esac
+        for _n in $seen; do unset "$_n"; done
+        seen="$seen $(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/{print $1}' "$f" 2>/dev/null | sort -u | tr '\n' ' ')"
+        # shellcheck disable=SC1090
+        . "$f"
+        [ "${STATE:-}" = active ] || continue
+        [ "$(peer_label "${PEER_HOST:-}")" = "$label" ] || continue
+        tgt_name+=("${CLIENT_NAME:-$(basename "$f" .conf)}")
+        tgt_ds+=("${MANAGED_DATASETS:-}")
+    done
+
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "mktemp failed next to $cronfile"
+    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+
+    local _i cname dslist ds moved=0
+    for _i in ${tgt_name[@]+"${!tgt_name[@]}"}; do
+        cname="${tgt_name[$_i]}"; dslist="${tgt_ds[$_i]}"
+        for ds in $dslist; do
+            # set_or_remove, not update: a relationship with no cap carries no
+            # `bandwidth` line at all, and removing a cap must take the line
+            # with it rather than leave a stale one throttling the link.
+            set_or_remove_section_field "$workfile" "[dataset:$ds]" bandwidth "$rate" \
+                || { rm -f "$workfile"; die "set-bandwidth: [dataset:$ds] is not in $cronfile -- relationship '$cname' records a dataset its config does not describe. Refusing to re-cap a config that does not match its records. Nothing was changed."; }
+            moved=$((moved + 1))
+        done
+    done
+
+    # gencron_as_target, NOT a bare gen-cron. The rule exists because a render by
+    # the wrong copy, as the wrong account, previews a block that will never be
+    # installed -- gen-cron bakes the running copy's paths and the target
+    # account's environment into every line. activate-client validates its
+    # candidate this way; so does this. Asking for an allow-list exemption would
+    # have been the easier fix and the wrong one.
+    log "validating the re-capped config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the re-capped config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || {
+        rm -f "$workfile"
+        die "could not render the preview -- nothing was touched"
+    }
+
+    echo "Limit lacza pary '$peer': '${old_rate:-<brak>}'  ->  '${rate:-<brak>}'"
+    echo "Relacji do przepisania: ${#tgt_name[@]} (sekcji: $moved)"
+    echo
+    if [ "$yes" -ne 1 ]; then
+        read -rp "Zastosowac ten limit do WSZYSTKICH relacji tej pary? [t/N] " ans
+        case "$ans" in
+            t|T|tak|TAK|y|Y|yes|YES) ;;
+            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, the manifest was NOT changed, nothing installed" ;;
+        esac
+    fi
+
+    # PREPARE the manifest before touching anything, so the only step left after
+    # the swap is a rename on the same filesystem. Writing it afterwards meant a
+    # failure there left the jobs re-capped and the manifest stale -- the same
+    # two-sources-of-truth split this command exists to end, just moved later in
+    # the sequence.
+    #
+    # And APPEND when the key is absent. The first version only rewrote a line
+    # that was already there: a manifest predating the field (or written by an
+    # older deploy.sh) silently kept no cap at all while the CONFIG got one, and
+    # `mv` reported success. My own test could not see it, because its fixture
+    # always started with PEER_SAVED_BANDWIDTH=2M.
+    local mtmp; mtmp=$(mktemp "$(dirname "$mpath")/.manifest.XXXXXX") \
+        || die "cannot write next to the pairing manifest $mpath -- nothing was changed"
+    if ! { awk -v v="$rate" '
+               /^PEER_SAVED_BANDWIDTH=/ { print "PEER_SAVED_BANDWIDTH=" v; seen=1; next }
+               { print }
+               END { if (!seen) print "PEER_SAVED_BANDWIDTH=" v }
+           ' "$mpath" > "$mtmp"; }; then
+        rm -f "$mtmp"
+        die "could not prepare the updated pairing manifest -- nothing was changed"
+    fi
+    # Our own rollback copy. atomic_replace_and_install keeps one only for its
+    # OWN failure paths and removes it on success, so a failure AFTER it returns
+    # has nothing to fall back on unless we kept a copy ourselves.
+    local rollback; rollback=$(mktemp "$(dirname "$cronfile")/.zfsbackup-rollback.XXXXXX") \
+        || { rm -f "$mtmp"; die "mktemp failed for the rollback copy -- nothing was changed"; }
+    cp -p "$cronfile" "$rollback" || { rm -f "$mtmp" "$rollback"; die "could not take a rollback copy of $cronfile -- nothing was changed"; }
+
+    assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
+    assert_config_readable_by_target "$cronfile"
+    atomic_replace_and_install "$cronfile" "$workfile"
+
+    # ALL TOGETHER OR NOTHING, which is what this command claims to be. A warn
+    # and a zero exit left the jobs on the new cap and the manifest on the old --
+    # exactly the divergence being fixed, and the next relationship written
+    # against this peer would have restored the old value from the manifest.
+    #
+    # The remaining step is a rename within one directory. If even that fails,
+    # put the CONFIG back and say so with a non-zero status, so config, crontab
+    # and manifest are left agreeing with each other.
+    if ! mv -f "$mtmp" "$mpath"; then
+        rm -f "$mtmp"
+        local restored="restored"
+        cp -p "$rollback" "$cronfile" 2>/dev/null || restored="NOT restored"
+        gencron_as_target -c "$cronfile" --install >/dev/null 2>&1 || restored="config restored, CRONTAB NOT reinstalled"
+        rm -f "$rollback"
+        die "the pairing manifest $mpath could not be published, so the cap change was rolled back ($restored). Config, crontab and manifest are left on the OLD value '${old_rate:-<none>}'. Fix whatever prevents writing next to the manifest and re-run."
+    fi
+    chmod 0600 "$mpath" 2>/dev/null || :
+    rm -f "$rollback"
+
+    log "link cap for '$peer' is now '${rate:-<none>}' -- ${#tgt_name[@]} relationship(s) rewritten and installed in one transaction."
+}
+
 #
 # THE DESTINATION WAS HARDCODED until 2026-08-25: legacy flat-per-tier -> the
 # standard GFS ladder, because that was the only migration in existence. With
@@ -11221,6 +11478,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
+        set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         move-to-client)   shift; cmd_move_to_client "$@" ;;
