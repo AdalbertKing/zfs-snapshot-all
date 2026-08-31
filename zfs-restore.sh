@@ -677,7 +677,22 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
                     *) continue ;;
                 esac
                 [ "$_cns" != atomic ] || die "restore --overwrite: '$_t' belongs to an ATOMIC relationship in $_cfg -- a subtree captured as ONE point in time. Recovering one dataset of it turns that into a per-dataset recovery, which is the confusion the whole atomic setting exists to prevent. Handing two paths in is not a way around that refusal. Nothing was changed."
-                _lbl="$(installed_dataset_field "$_cfg" "$_sec" pair_label 2>/dev/null)"
+                # WHICH COLUMN IS THE CONFIG SECTION depends on the direction,
+                # and that asymmetry is restore_relations' own: for a remote PULL
+                # it prints the source first and the copy second, for a local
+                # push the other way round. The `[dataset:...]` section is the
+                # copy for a pull and the source for a push -- so ask for both
+                # rather than picking one and being right half the time.
+                #
+                # Measured on the lab, 2026-08-31: taking the first column always
+                # meant looking up a section named `zfsbackup-pve9@host:ds`,
+                # which no config has. The lookup came back empty, no label was
+                # collected, and the run announced that no relationship claimed
+                # the destination -- with the pull writing to it. The subtree fix
+                # one commit earlier was correct and made no difference, because
+                # this line threw the answer away afterwards.
+                _lbl="$(installed_dataset_field "$_cfg" "$_cp" pair_label 2>/dev/null)"
+                [ -n "$_lbl" ] || _lbl="$(installed_dataset_field "$_cfg" "$_sec" pair_label 2>/dev/null)"
                 [ -n "$_lbl" ] || continue
                 _seen=0
                 for _l in ${_labels[@]+"${_labels[@]}"}; do [ "$_l" = "$_lbl" ] && _seen=1; done
