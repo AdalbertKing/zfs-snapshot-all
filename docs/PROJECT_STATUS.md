@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dbe63e94b9f01514 -->
+<!-- status-covers-digest: bb4a955daef919e3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -1371,6 +1371,34 @@
   negatywna dowodzi, że przypadek mierzy funkcję, którą nazywa; nie umie
   zauważyć, że nikt tej funkcji nie woła. Zdublowane opakowanie usunięte, żeby
   nie było dwóch polityk.
+
+- **Krok per dataset jest IZOLOWANY procesowo (REV-20260831-127 F1,
+  2026-08-31).** Kontroler relacji klasyfikuje kod wyjścia `restore_one` — a
+  może to zrobić tylko wtedy, gdy `restore_one` **wraca**. `die` w tym drzewie
+  to `exit 1`, a krok pojedynczego datasetu sięga do dużej ilości wspólnego
+  kodu (odczyt configu, rozwiązanie relacji, strategia, snapshot techniczny),
+  gdzie odmowa kończąca proces może dopisać się w każdej chwili. Jedno takie
+  wyjście i polityka B po cichu przestaje być „idź dalej i oddaj, co się da",
+  a staje się „stój tutaj" — bez podsumowania, z datasetami po nim nigdy
+  nietkniętymi.
+  Zmierzone na drzewie z 2026-08-31: `restore_one` i **wszystkie** jego funkcje
+  pomocnicze są oparte na `return`, więc to nie był żywy incydent. To jest
+  jednak fakt o dzisiejszym kodzie, nie gwarancja — dlatego granica jest
+  **strukturalna**, nie opisowa. `restore_one_isolated` uruchamia krok w
+  podpowłoce; cokolwiek z niej wychodzi (return, exit, `die` w głębi
+  pomocniczej) wychodzi przez pułapkę EXIT, która przenosi na zewnątrz werdykt,
+  flagę `RESTORE_ONE_CHANGED` i dopisy do `RESTORE_ROLLED_BACK`. Bez flagi
+  `die` po pierwszej mutacji zostałby zdegradowany do „nietknięty", a to
+  właśnie ten stan decyduje, czy operator dowie się, że maszyna wymaga
+  człowieka.
+  **Skutek uboczny, który jest własnością, nie kosztem:** stan nie przecieka
+  między datasetami. Atrapa w `test/restoregrant` trzymała kursor w zmiennej
+  rodzica i przestała się przesuwać — czyta teraz po nazwie datasetu.
+  Dowód: `relpolicy` 24/24 (przypadki E1/E2 z atrapą, która **kończy proces**,
+  a nie tylko zwraca — bo atrapa o innym kontrakcie sterowania niż funkcja,
+  którą udaje, jest dokładnie tym, jak ta wada przeżyła zieloną suitę),
+  `restoregrant` 108/108, i **czwarta kontrola negatywna**: drzewo bez granicy
+  izolacji wywala 6 przypadków E.
 
 - **Wersje silników** (bez zmian tą konsolidacją): `gen-cron.sh` v4.30,
   `snapsend.sh` v2.72, `snapget.sh` v2.69, `delsnaps.sh` v1.29,

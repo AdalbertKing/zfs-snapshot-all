@@ -499,6 +499,11 @@ check "argv: -f appears for replace and for nothing else" "0" "$n_f"
 rs() {   # <rc list, space separated> -> "<rc>|<report>"
     ( set -u
       log(){ shift; printf '%s\n' "$*"; }
+      # The isolation boundary is part of the loop under test since
+      # REV-20260831-127: restore_run_scope calls restore_one THROUGH it, so
+      # extracting only the loop leaves the call unresolved -- which shows up as
+      # every dataset "unfit" with no reason, not as a missing-function error.
+      eval "$(sed -n '/^restore_one_isolated() {/,/^}/p' "$RESTORE")"
       eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
       # The four collaborators this loop calls, stubbed for the same reason
       # restore_one is: the subject here is the LOOP and the verdict.
@@ -535,7 +540,13 @@ rs() {   # <rc list, space separated> -> "<rc>|<report>"
           if [ "${RESTORE_PREFLIGHT_ONLY:-0}" = 1 ]; then
               RESTORE_ONE_VERDICT="preflight-ok-for-$2"; return 0
           fi
-          local r="${RCS[$IDX]}"; IDX=$((IDX+1))
+          # KEYED BY DATASET, not by a cursor. Since REV-20260831-127 the
+          # per-dataset step runs inside an isolation subshell, so an IDX kept
+          # in this shell never advances -- and that is the property, not a
+          # nuisance: one dataset's step can no longer leak state into the next.
+          # The fixture names them rpool/ds1..N, so the position is IN the name.
+          local k="${2##*/ds}"
+          local r="${RCS[$((k - 1))]}"
           RESTORE_ONE_VERDICT="reason-for-$2"; return "$r"; }
       out="$(restore_run_scope)"; rc=$?
       printf '%s|%s' "$rc" "$out" )

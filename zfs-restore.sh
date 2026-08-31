@@ -1494,7 +1494,11 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # Carried in the exit status (2, against 1 for "nothing was changed") rather
     # than in a message, because the status is what the runner and a cron job
     # read.
-    local _changed=0
+    # NOT `local`, and that is the whole point: restore_one is run inside an
+    # isolation subshell (restore_one_isolated) whose EXIT trap has to be able to
+    # read this AFTER the function has left -- including when it left through a
+    # `die` deep in a helper, where the function's locals no longer exist.
+    RESTORE_ONE_CHANGED=0
 
     # ---- 1. the recovery point --------------------------------------------
     # Rows, not names: restore_plan_strategy needs creation and guid, and --at
@@ -1840,7 +1844,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         if [ -z "$_list" ]; then
             RESTORE_ONE_VERDICT="could not list '$_tgt' on '$_peer' to roll it back"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
-            return $((_changed + 1))
+            return $((RESTORE_ONE_CHANGED + 1))
         fi
         # Every dataset of the subtree, by name, one command. `zfs rollback` is
         # not recursive over children -- -r there means "destroy the snapshots
@@ -1861,13 +1865,13 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 fi
             else
                 log 1 "restore:   $_ds rolled back to $RESTORE_ROLLBACK_TO"
-                _changed=1
+                RESTORE_ONE_CHANGED=1
             fi
         done <<< "$_list"
         if [ "$_failed" -eq 1 ]; then
             RESTORE_ONE_VERDICT="the target could not be rolled back to $point (the datasets are named above)"
             log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing further was attempted."
-            return $((_changed + 1))
+            return $((RESTORE_ONE_CHANGED + 1))
         fi
         # ONLY WHEN SNAPSHOTS ACTUALLY GO. A rollback that discards live
         # writes destroys nothing the copy has, so the relationship stays in
@@ -1899,11 +1903,11 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     log 1 "restore:   ${RESTORE_ENGINE:-snapsend.sh} ${RESTORE_ENGINE_ARGV[*]}"
     if [ "${RESTORE_DRY_RUN:-0}" -eq 1 ]; then
         RESTORE_ONE_VERDICT="dry run -- the command above was NOT executed"
-        return $((_changed + 1))
+        return $((RESTORE_ONE_CHANGED + 1))
     fi
     # From here the engine may destroy: whatever happens next, this dataset
     # can no longer be reported as untouched.
-    _changed=1
+    RESTORE_ONE_CHANGED=1
     if bash "${RESTORE_ENGINE:?the engine path is not set}" "${RESTORE_ENGINE_ARGV[@]}"; then
         # "THE ENGINE EXITED 0" AND "THE MACHINE HOLDS THE DATA AGAIN" ARE NOT
         # THE SAME SENTENCE, and the lab has produced a run where the first was
@@ -1939,7 +1943,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     # "it is fine", and this is the last chance to say so.
                     RESTORE_ONE_VERDICT="the engine reported success and the result could NOT be verified -- '$src' did not answer"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Reporting it as not done: the transfer may well have worked, and nobody here has seen that it did."
-                    return $((_changed + 1))
+                    return $((RESTORE_ONE_CHANGED + 1))
                 fi
                 if [ -n "$_off" ]; then
                     RESTORE_ONE_VERDICT="the engine reported success but the target is NOT at $point"
@@ -1948,7 +1952,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                         [ -n "$_l" ] && log 0 "restore:   $_l"
                     done
                     log 0 "restore: reporting this as NOT recovered. A run that changed nothing must not be indistinguishable from one that worked."
-                    return $((_changed + 1))
+                    return $((RESTORE_ONE_CHANGED + 1))
                 fi ;;
         esac
         RESTORE_ONE_VERDICT="$mode from $point"
@@ -1958,7 +1962,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # it. What is added here is WHICH dataset it belonged to, because the caller
     # is looping and the operator is reading one report at the end.
     RESTORE_ONE_VERDICT="the engine failed on '$mode' from $point (its own message is above)"
-    return $((_changed + 1))
+    return $((RESTORE_ONE_CHANGED + 1))
 }
 
 # ------------------------------------------------------------------------------
@@ -2338,6 +2342,71 @@ restore_report_handover() {
 #
 # An EMPTY scope is a refusal, not a clean run. "Nothing matched" exiting 0 is
 # how a mistyped scope becomes a recovery someone believes happened.
+# ONE DATASET, IN A PROCESS OF ITS OWN.
+#
+# REV-20260831-127 F1. The relation controller classifies restore_one's exit
+# status, which it can only do if restore_one RETURNS. `die` in this tree is
+# `exit 1`, and the single-dataset step reaches a lot of shared code -- config
+# reads, relationship resolution, strategy, the technical snapshot -- any of
+# which may grow a refusal that exits. One `exit` there and policy B silently
+# stops being "continue and give back what can be given back" and becomes "stop
+# here", with no summary at all: the datasets after it are never attempted and
+# the operator is left with a half-restored machine and no map of the rest.
+#
+# Measured on the tree of 2026-08-31, restore_one and every helper it calls are
+# return-based, so this is not a live incident. That is a fact about today's
+# code, not a guarantee: the next `die` added anywhere under this call graph
+# would reintroduce the defect silently, and the suite could not see it -- the
+# stub returns, and a stub with a different control-flow contract than the
+# function it stands for is exactly how this class of defect survives a green
+# suite.
+#
+# So the boundary is STRUCTURAL. restore_one runs in a subshell; whatever leaves
+# it -- return, exit, or a die deep in a helper -- leaves through the EXIT trap,
+# which hands the verdict and the mutation flag back through a file. The parent
+# always gets a status.
+#
+# What the trap carries out, and why each one:
+#   verdict  -- the runner prints it per dataset; without it a died dataset
+#               would be reported with "no reason recorded" while the reason
+#               went to stderr and scrolled past.
+#   changed  -- RESTORE_ONE_CHANGED, so a die AFTER the first mutation is still
+#               classified 2 (changed and unfinished) rather than demoted to an
+#               untouched failure. This is the one that decides whether an
+#               operator is told a machine needs a person tonight.
+#   rolled   -- restore_one appends to RESTORE_ROLLED_BACK, and a subshell's
+#               appends die with it.
+restore_one_isolated() {   # <copy dataset> <destination> -> 0 | 1 untouched | 2 changed
+    local state
+    state="$(mktemp)" || {
+        RESTORE_ONE_VERDICT="could not create the temporary file this run needs to isolate the dataset step"
+        return 1
+    }
+    (
+        RESTORE_ONE_VERDICT=""
+        RESTORE_ONE_CHANGED=0
+        trap 'printf "%s\n%s\n" "${RESTORE_ONE_CHANGED:-0}" "${RESTORE_ONE_VERDICT:-the dataset step ended without saying why}" > "$state"; printf "%s\n" ${RESTORE_ROLLED_BACK[@]+"${RESTORE_ROLLED_BACK[@]}"} >> "$state"' EXIT
+        restore_one "$1" "$2"
+    )
+    local rc=$?
+    local changed="" verdict="" line n=0
+    while IFS= read -r line; do
+        n=$((n + 1))
+        case "$n" in
+            1) changed="$line" ;;
+            2) verdict="$line" ;;
+            *) [ -z "$line" ] || RESTORE_ROLLED_BACK+=("$line") ;;
+        esac
+    done < "$state"
+    rm -f "$state"
+    RESTORE_ONE_VERDICT="$verdict"
+    # A die is exit 1 and carries no idea of what it had already done. The flag
+    # does, so the promotion happens here rather than being lost with the
+    # process.
+    if [ "$rc" -ne 0 ] && [ "${changed:-0}" = 1 ]; then return 2; fi
+    return "$rc"
+}
+
 restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     local n="${#RESTORE_SCOPE_SRC[@]}" i rc ok_n=0 bad_n=0 changed_n=0
     local -a verdict=()
@@ -2402,7 +2471,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     local _pf_rc _pf_i
     for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
         RESTORE_ONE_VERDICT=""
-        RESTORE_PREFLIGHT_ONLY=1 restore_one "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
+        RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
         [ "$_pf_rc" -eq 0 ] || unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
     done
     if [ "${#unfit[@]}" -gt 0 ]; then
@@ -2425,7 +2494,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         # The failure of one dataset must not end the run: that is the whole of
         # decision 7. `|| :` is deliberate and is the only place in this
         # function where a non-zero status is not propagated immediately.
-        restore_one "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}"; rc=$?
+        restore_one_isolated "${RESTORE_SCOPE_COPY[$i]}" "${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}"; rc=$?
         case "$rc" in
             0)  ok_n=$((ok_n + 1))
                 RESTORE_LANDED+=("${RESTORE_SCOPE_DEST[$i]:-${RESTORE_SCOPE_SRC[$i]}}")
