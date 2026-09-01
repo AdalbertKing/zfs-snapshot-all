@@ -137,6 +137,22 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
+  **Katalog domknięty na trzech mechanizmach (2026-09-01).** `d30h24` i `d7h24`
+  dostały warianty `-gfs` i `-age`, wyprowadzone z wysyłanych profili ze zmianą
+  **wyłącznie** sposobu liczenia retencji. Gołe nazwy zostają płaskim
+  licznikiem, więc każda retencja jest nazywalna we wszystkich trzech trybach i
+  żaden nie jest domyślany po cichu.
+
+  **Złapane renderowaniem, nie walidacją.** Pierwsza wersja tej derywacji nie
+  zmieniła **niczego**: drzewo robocze jest CRLF, moje wzorce kończyły się na
+  `
+`, więc każde podstawienie po cichu nie trafiło — a cztery pliki, będąc
+  dokładnymi kopiami profili, które i tak się walidują, przeszły
+  `profile_validate_file` i przeszłyby suitę katalogu. Pokazało to dopiero
+  wyrenderowanie sześciu obok siebie i zobaczenie **identycznych** linii
+  `delsnaps`. Profil, który się waliduje, to nie profil, który mówi to, co
+  napisałeś.
+
   **Katalog: cztery profile czterorodzinne (2026-09-01).** Do długiej formy
   `y5m12d31h24-{gfs,age}` doszła chuda: **`m12w4d7h24-{gfs,age}`** — 12
   miesięcznych, 4 tygodniowe, 7 dobowych, 24 godzinowe, czyli miesiąc pokrycia
