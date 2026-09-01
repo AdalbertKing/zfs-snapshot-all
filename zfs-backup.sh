@@ -7458,6 +7458,27 @@ load_client_and_connection() {
     # Relationship-owned facts override their per-host manifest defaults --
     # see the CLIENT_TARGET note at the record writer.
     [ -n "${CLIENT_TARGET:-}" ] && PEER_SAVED_TARGET="$CLIENT_TARGET"
+    # ...AND THE DATASET LIST IS ONE OF THEM. The manifest is per PEER HOST and
+    # is rewritten by every --pair against that host, including one that then
+    # fails: measured on pve9 2026-09-01, an aborted create left
+    # PEER_SAVED_DATASETS moved from 'hdd/labsrc' to 'hdd/labsrc2' while the
+    # relationship record still said 'hdd/labsrc' and the relationship was
+    # still ACTIVE. client_section_plan renders from PEER_SAVED_DATASETS, so
+    # the next migrate-profile re-aimed a live relationship at a dataset it had
+    # never backed up -- silently, because both files are individually valid.
+    # Proven by restoring the manifest: the render followed it back.
+    #
+    # REQUESTED_DATASETS is what THIS relationship asked for, so it is the
+    # authority for what this relationship covers, exactly as CLIENT_TARGET is
+    # for where it lands. The `-n` guard keeps the two cases that legitimately
+    # have no request: sync mode (empty -- the source's scope IS the request)
+    # and pre-2026-08 records (absent -- whole-scope legacy behaviour). The
+    # seed/activate resolver still narrows the committed scope afterwards; it
+    # already filters by these same roots in scope_root_is_ours.
+    if [ -n "${REQUESTED_DATASETS:-}" ]; then
+        local _rq; _rq="$(dataset_list_split "$REQUESTED_DATASETS" | tr '\n' ' ')"
+        PEER_SAVED_DATASETS="${_rq% }"
+    fi
 
     LOAD_ACCOUNT="${PEER_SAVED_ACCOUNT:-root}"
     LOAD_KEYFILE=$(local_keyfile_path "$label" "${PEER_SAVED_LOCAL_USER:-}")

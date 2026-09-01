@@ -853,6 +853,75 @@ else
         "preflight=$_pf account=$_acct add_client=$_add"
 fi
 
+# ------------------------------------------------------------------------------
+# 29. THE RELATIONSHIP RECORD OUTRANKS THE PER-HOST MANIFEST for what this
+#     relationship covers.
+#
+# The manifest is keyed by PEER ADDRESS, so every --pair against that host
+# rewrites it -- including one that then FAILS. Measured on pve9 2026-09-01: an
+# aborted create left PEER_SAVED_DATASETS moved from 'hdd/labsrc' to
+# 'hdd/labsrc2' while the relationship record still said 'hdd/labsrc' and the
+# relationship was still ACTIVE. client_section_plan renders from
+# PEER_SAVED_DATASETS, so the next migrate-profile re-aimed a live relationship
+# at a dataset it had never backed up -- silently, because both files are
+# individually valid. Proven by restoring the manifest: the render followed it
+# back.
+#
+# The REAL load_client_and_connection is called here, not a copy of its
+# override: the two downstream stubs (endpoint resolution, known-hosts pinning)
+# are unrelated functions that need a live host, and both run AFTER the line
+# under test.
+mkdir -p "$WORK/29/clients" "$WORK/29/peers"
+cat > "$WORK/29/clients/camp.conf" <<EOF
+CLIENT_NAME=camp
+PEER_HOST=10.0.0.29
+REQUESTED_DATASETS=rpool/data
+EOF
+_l29=$(peer_label 10.0.0.29)
+cat > "$WORK/29/peers/$_l29.conf" <<EOF
+PEER_SAVED_DATASETS="rpool/somethingelse"
+PEER_SAVED_MODE=backup
+PEER_SAVED_ACCOUNT=zfsbackup
+EOF
+_got29="$( (
+    PEER_STATE_DIR="$WORK/29/peers"
+    active_endpoint_host_port() { echo "10.0.0.29 22"; }
+    ensure_alias_known_hosts()  { echo "$WORK/29/kh"; }
+    local_keyfile_path()        { echo "$WORK/29/key"; }
+    load_client_and_connection "$WORK/29/clients/camp.conf" >/dev/null 2>&1
+    printf '%s' "$PEER_SAVED_DATASETS"
+) )"
+if [ "$_got29" = "rpool/data" ]; then
+    ok "29. the relationship's REQUESTED_DATASETS beats a manifest a later --pair rewrote"
+else
+    bad "29. the relationship's REQUESTED_DATASETS beats a manifest a later --pair rewrote" \
+        "expected 'rpool/data', got '$_got29'"
+fi
+
+# The discriminating control, and the reason the override is guarded by -n
+# rather than applied always: a SYNC relationship records no request (the
+# source's scope IS the request), and a pre-2026-08 record has no field at all.
+# An override without the guard would blank the list for both and they would
+# render nothing.
+cat > "$WORK/29/clients/legacy.conf" <<EOF
+CLIENT_NAME=legacy
+PEER_HOST=10.0.0.29
+EOF
+_got29b="$( (
+    PEER_STATE_DIR="$WORK/29/peers"
+    active_endpoint_host_port() { echo "10.0.0.29 22"; }
+    ensure_alias_known_hosts()  { echo "$WORK/29/kh"; }
+    local_keyfile_path()        { echo "$WORK/29/key"; }
+    load_client_and_connection "$WORK/29/clients/legacy.conf" >/dev/null 2>&1
+    printf '%s' "$PEER_SAVED_DATASETS"
+) )"
+if [ "$_got29b" = "rpool/somethingelse" ]; then
+    ok "29b. a record with no request (sync, or legacy) still takes the manifest's list"
+else
+    bad "29b. a record with no request (sync, or legacy) still takes the manifest's list" \
+        "expected 'rpool/somethingelse', got '$_got29b'"
+fi
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

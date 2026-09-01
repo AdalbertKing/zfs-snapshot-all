@@ -503,6 +503,74 @@ esac
 rm -f "$SCOPE" "$HASH" "$SCOPE.request"
 zfs_reset
 
+# ---- re-pairing must not produce a package --join refuses ------------------
+#
+# parse_peer_conf refuses a peer.conf carrying BOTH PEER_CONF_MODE and
+# PEER_CONF_DATASETS -- they are alternative ways of saying what to back up.
+# Until 2026-09-01 do_pair's RE-PAIR branch could produce exactly that: it
+# inherited PEER_SAVED_MODE unconditionally, so re-pairing a peer that ONCE had
+# a mode while naming an explicit dataset list wrote both fields. Measured on
+# pve9 the same day -- the collector could not enrol a second dataset from a
+# peer it had already paired with, and the refusal came from the JOINING side,
+# about a package this side had just written:
+#
+#     peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS
+#
+# The caller was never at fault: zfs-backup.sh passes --mode OR
+# --peer-datasets. The fresh-pairing branch enforces the alternative too; only
+# the re-pair branch forgot.
+#
+# Extracted from the real deploy.sh, like the lock helpers in test/join: the
+# call site is deep inside do_pair, whose scp/ssh orchestration needs a real
+# second host and root.
+PM_SRC="$TMPD/pairmode.sh"
+sed -n '/^pair_mode_after_inheritance() {/,/^}/p' "$DEPLOY_SRC" > "$PM_SRC"
+if [ ! -s "$PM_SRC" ]; then
+    bad "pairmode/0: the helper can be extracted from deploy.sh" "nothing matched in $DEPLOY_SRC"
+else
+    ok "pairmode/0: the helper can be extracted from deploy.sh"
+    # shellcheck disable=SC1090
+    . "$PM_SRC"
+
+    # THE DEFECT: a saved mode, and this run names datasets. Datasets win, so
+    # the package carries a list and no mode -- one alternative, not both.
+    _got="$(pair_mode_after_inheritance "" "hdd/labsrc2" "backup")"
+    if [ -z "$_got" ]; then
+        ok "pairmode/1: naming datasets on a re-pair drops the inherited mode"
+    else
+        bad "pairmode/1: naming datasets on a re-pair drops the inherited mode" "got '$_got'"
+    fi
+
+    # CONTROL, and the reason this is not just "always clear the mode": a
+    # re-pair that names NEITHER must keep what the relationship was paired
+    # with. Clearing it there would let --role/--as style CLI defaults silently
+    # redefine an existing relationship -- the drift the inheritance exists to
+    # prevent.
+    _got="$(pair_mode_after_inheritance "" "" "backup")"
+    if [ "$_got" = "backup" ]; then
+        ok "pairmode/2: a re-pair naming neither still inherits the saved mode"
+    else
+        bad "pairmode/2: a re-pair naming neither still inherits the saved mode" "got '$_got'"
+    fi
+
+    # ...and a mode named on THIS command line wins over the saved one, which is
+    # the other half of "the invocation decides".
+    _got="$(pair_mode_after_inheritance "sync" "" "backup")"
+    if [ "$_got" = "sync" ]; then
+        ok "pairmode/3: a mode named on this command line wins over the saved one"
+    else
+        bad "pairmode/3: a mode named on this command line wins over the saved one" "got '$_got'"
+    fi
+
+    # A peer that never had a mode keeps not having one -- no field is invented.
+    _got="$(pair_mode_after_inheritance "" "hdd/labsrc" "")"
+    if [ -z "$_got" ]; then
+        ok "pairmode/4: a dataset-driven peer stays dataset-driven"
+    else
+        bad "pairmode/4: a dataset-driven peer stays dataset-driven" "got '$_got'"
+    fi
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

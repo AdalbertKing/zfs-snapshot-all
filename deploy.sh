@@ -5580,6 +5580,25 @@ local_knownhosts_path() {
 # do_pair -- runs on the host that will connect (collector for pull, source
 # for push). Generates/reuses a key dedicated to THIS relationship, pins the
 # peer's host key, and produces the wsad for manual transfer.
+# Which peer-mode a RE-PAIR should carry, given what this invocation named and
+# what the manifest saved. Its own function so the rule can be exercised: the
+# call site lives deep inside do_pair, whose scp/ssh orchestration needs a real
+# second host and root, so nothing there is testable without one.
+#
+# THE RULE: mode and an explicit dataset list are ALTERNATIVES -- peer.conf may
+# carry one, never both, and do_join refuses a package that carries both by
+# name. Naming datasets on THIS command line is therefore choosing the
+# dataset-driven form, and a mode inherited from an earlier pairing must give
+# way to it. With neither named, inheritance stands: that is the case the
+# inheritance was written for, where "didn't type it" must not drift back to a
+# CLI default.
+pair_mode_after_inheritance() {   # <requested mode> <requested datasets> <saved mode>
+    local requested_mode="$1" requested_datasets="$2" saved_mode="$3"
+    [ -n "$requested_mode" ] && { printf '%s' "$requested_mode"; return 0; }
+    [ -n "$requested_datasets" ] && return 0
+    printf '%s' "$saved_mode"
+}
+
 do_pair() {
     local label; label=$(peer_label)
     local mpath; mpath=$(peer_manifest_path "$label")
@@ -5628,6 +5647,7 @@ do_pair() {
             # it at all". The saved manifest always wins for these four; only
             # the dataset list is allowed to change here (additively, below).
             local requested_datasets="$PEER_DATASETS" requested_named="$PEER_REQUESTED"
+            local requested_mode="$PEER_MODE"
             # shellcheck disable=SC1090
             . "$mpath"
             PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
@@ -5635,6 +5655,31 @@ do_pair() {
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
             PEER_MODE="${PEER_SAVED_MODE:-$PEER_MODE}"
             [ -n "$requested_datasets" ] && PEER_DATASETS="$requested_datasets" || PEER_DATASETS="${PEER_SAVED_DATASETS:-}"
+            # MODE AND DATASETS ARE ALTERNATIVES, and this branch is the only
+            # place that forgot it. The fresh-pairing branch below enforces
+            # "one or the other"; here the mode was inherited unconditionally,
+            # so re-pairing a peer that ONCE had a mode while naming an
+            # explicit dataset list produced a package carrying both -- which
+            # this file's own --join then refuses, by name:
+            #
+            #   peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS
+            #
+            # Measured on pve9 2026-09-01: the collector could not enrol a
+            # second dataset from a peer it had already paired with, and the
+            # refusal came from the joining side, about a package this side
+            # had just written. The caller is not at fault -- zfs-backup.sh
+            # passes --mode OR --peer-datasets, never both.
+            #
+            # So the invocation decides, exactly as it does for the list one
+            # line up: naming datasets IS choosing the dataset-driven form.
+            # Inheritance survives for the case it was written for, a re-pair
+            # that names neither.
+            local _newmode
+            _newmode="$(pair_mode_after_inheritance "$requested_mode" "$requested_datasets" "${PEER_SAVED_MODE:-}")"
+            if [ -n "$PEER_MODE" ] && [ -z "$_newmode" ]; then
+                log "peer '$PEER_HOST' was paired with mode '$PEER_MODE'; this run names datasets explicitly, so the relationship is dataset-driven and the mode is dropped"
+            fi
+            PEER_MODE="$_newmode"
             # Same rule as the dataset list one line up: a value given on THIS
             # command line wins, otherwise the manifest's survives. A re-run of
             # the same one-command enrolment (the documented way to resume it)

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c202151c6c25f394 -->
+<!-- status-covers-digest: bd55412722533907 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -200,16 +200,34 @@
   była tam przez cały czas i żaden test jej nie widział, bo konfiguracja nie
   dochodziła do renderu.
 
-  **Kształt dwuhostowy: dwa znaleziska ZGŁOSZONE, nie naprawione.** Przy peerze
-  z zapamiętanym trybem generator wypuszcza pakiet, który jego własny `--join`
-  odrzuca (`peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS`) —
-  re-parowanie dziedziczy `PEER_SAVED_MODE`, a heredoc pisze `PEER_CONF_MODE`
-  bezwarunkowo obok listy datasetów. Drugie: **przerwany create nadpisuje
-  manifest peera** (`PEER_SAVED_DATASETS`), choć rekord relacji się nie rusza, a
-  późniejszy `migrate-profile` renderuje z manifestu — czyli po cichu
-  przecelowuje żywą relację. Łańcuch udowodniony przywróceniem manifestu.
-  Obie siedzą w warstwie parowania, nie profili, i czekają na decyzję
-  właściciela.
+  **Kształt dwuhostowy: dwa znaleziska, NAPRAWIONE — i okazały się jedną
+  wadą złożoną z dwóch (decyzja właściciela „bierz wady", 2026-09-01).**
+
+  Pierwsze: przy peerze z zapamiętanym trybem generator wypuszczał pakiet,
+  który jego własny `--join` odrzuca — `peer.conf carries both PEER_CONF_MODE
+  and PEER_CONF_DATASETS`. Gałąź re-parowania dziedziczyła `PEER_SAVED_MODE`
+  bezwarunkowo, choć gałąź świeżego parowania obok wymusza „albo tryb, albo
+  lista". Wywołujący był poprawny przez cały czas: `zfs-backup.sh` podaje
+  `--mode` ALBO `--peer-datasets`. Decyzję wydzielono do
+  `pair_mode_after_inheritance` — nazwanie datasetów W TYM wywołaniu jest
+  wyborem formy datasetowej, a dziedziczenie zostaje dla przypadku, dla
+  którego powstało: re-parowania, które nie nazywa niczego.
+
+  Drugie: **przerwany create nadpisywał manifest peera** (`PEER_SAVED_DATASETS`),
+  choć rekord relacji się nie ruszał — a `client_section_plan` renderuje
+  z manifestu, więc kolejny `migrate-profile` po cichu przecelowywał żywą
+  relację na dataset, którego nigdy nie backupowała. Naprawione tym samym
+  wzorcem, który cel relacji miał już wcześniej: rekord bije manifest per-host
+  (`REQUESTED_DATASETS` → `PEER_SAVED_DATASETS`, pod strażnikiem `-n`, bo tryb
+  sync i stare rekordy żadnej prośby nie niosą).
+
+  **Wiązanie, które widać dopiero razem.** `resolve_mode_datasets` — normalnie
+  rozwiązujący listę z podpisanego zakresu źródła — na manifeście niosącym
+  ORAZ tryb, ORAZ listę robi `return 0` od razu. Czyli pierwsza wada wyłącza
+  resolver, a dopiero to pozwala drugiej ugryźć: bez trybu w manifeście lista
+  zostałaby przeliczona z zakresu i rozjazd by się nie utrwalił. Zmierzone na
+  pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
+  w manifeście testowym oba pola naraz.
 
   **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
   W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,
