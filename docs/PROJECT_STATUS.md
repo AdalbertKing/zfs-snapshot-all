@@ -51,6 +51,17 @@
   66 przechodzi, padają dokładnie cztery asercje dyskryminujące.
   `./test/impact.sh --refreeze` wykonany, wpis w `ENGINE-FREEZE.md`.
 
+  **Suity wymagające roota/ZFS/drugiego hosta przeszły na pve9 (2026-09-01),
+  przeciwko `3eefe61`, z jednorazowego klonu — trzy produkcyjne klony pve9
+  nietknięte na `main`:** `test/snapsend` **202/0** (własna pula na pliku
+  rzadkim), `test/scenarios` **36/0** (`--parent hdd`), `test/remote`
+  **145/0** (pve9 → pve2 po ssh; pve1 nie wpuszcza roota z pve9).
+  **`nonroot-account` spełniony** tego samego dnia: ta sama kampania jako
+  konto delegowane, `zfsbackup@pve9 → zfsbackup-pve9@pve2`, **145/0**.
+  Wymagała jednorazowego, wąskiego nadania na pve2 (`zfs allow` na jednym
+  datasecie scratch) — nadanie cofnięte i dataset skasowany po biegu,
+  listy datasetów obu hostów zdiffowane przed/po: identyczne.
+
 - **ETAP PROFILI, krok 1: worek `flags` rozbity do końca (2026-08-31).**
   `flags` w sekcji `[dataset:]` niósł trzy różne własności naraz. Oś **łącza**
   (`bandwidth`, `compression`, `cipher`) wyszła 2026-08-24 w `6d71a3b`; teraz
