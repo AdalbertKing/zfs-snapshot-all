@@ -229,6 +229,44 @@
   pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
   w manifeście testowym oba pola naraz.
 
+  **KATALOG: `Y5M12D31H24` — pierwszy profil WIELKOLITEROWY (2026-09-01).**
+  Pięć lat pokrycia, JEDNA rodzina, drabina `-G -H24 -D31 -M12 -Y5`, i nic
+  nigdy nie zamrażane.
+
+  Luka była węższa, niż brzmiała na początku: `default` **już** nie zamraża
+  niczego, więc administrator bez agentów nie stał z pustymi rękami. Brakowało
+  DŁUGIEJ retencji bez zamrażania — `default` kończy się na miesiącu, a `m12`
+  i `y5` istniały wyłącznie w profilach małoliterowych, które mrożą każdy tier
+  powyżej godzinowego. „Pięć lat, i niczego nie mogę zamrozić" (goście bez
+  agenta, czyste systemy plików, przyszła adaptacja LVM/ext4) nie miało
+  odpowiedzi i oznaczało ręczną edycję profilu.
+
+  **Żadnego nowego przyrostka nie wymyślono.** Konwencja już istniała: reguła
+  właściciela z 2026-08-27 mówi, że mała litera to jedna rodzina na tier, a
+  WIELKA to jedna rodzina pod kilkoma licznikami — czyli dokładnie ten kształt.
+  Reguła nie miała dotąd żadnego mieszkańca (`default` jest tym kształtem, ale
+  pod nazwą-stałą), więc to jej pierwszy.
+
+  Niezamrażany **z konstrukcji, nie z wyboru**: na jednej rodzinie snapshot
+  dobowy JEST jednym z dwudziestu czterech godzinowych, które drabina zachowała,
+  więc quiesce nie może być per tier — to dwadzieścia cztery zamrożenia dziennie
+  albo żadne. Dlatego plik nie ustawia `quiesce` wcale, zamiast ustawiać go na
+  wyłączony.
+
+  **Suita pominęłaby ten plik W MILCZENIU.** Filtr nazw w `test/profiles` brzmiał
+  `^([dhwmDHWM][0-9]+)+$` — bez kadencji rocznej — więc `Y5M12D31H24` nie
+  pasował do niczego i kontrola nazw/kształtu nigdy go nie widziała: przechodziła,
+  nie sprawdzając go w ogóle. Klasa rozszerzona o `yY` w trzech miejscach, które
+  ją zapisują. Dowiedzione kontrolą pozytywną — po podmianie `keep` rocznego na 9
+  suita zgłasza `Y5M12D31H24(missing -Y5); Y5M12D31H24(unpromised-Y9)`, a przed
+  poprawką filtra milczała.
+
+  Profil daje też wielkoliterowej gałęzi `shape_verdict` pierwszy prawdziwy
+  przedmiot z katalogu. Mógł powstać, bo **nie ma małoliterowego bliźniaka**: na
+  systemie plików nierozróżniającym wielkości `D30H24.conf` i `d30h24.conf` to
+  jeden plik i zapis jednego KASUJE drugi (zmierzone 2026-08-27). To drugi powód,
+  żeby gołe `y5m12d31h24` zostało zarezerwowane i niewysyłane.
+
   **LAB SYNC/PASSIVE ZAMKNIĘTY — ostatnia luka kampanii (2026-09-01).** Nie dało
   się go zrobić na pve9: `src8`/`src9` zajmują całą przestrzeń
   `hdd/backups/<host>`, więc strażnik pokrycia odmawiał drugiej relacji.
