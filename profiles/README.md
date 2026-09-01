@@ -91,7 +91,11 @@ data where a crash-consistent copy is genuinely worthless. See
 | `default` | one family, hourly | GFS ladder 24/7/4/12 | none — a ladder cannot |
 | `prod` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 6 | daily, weekly, monthly |
 | `d30h24` | two families: hourly, daily | 24 / 30 | daily |
+| `d30h24-gfs` | the same two families | 24 / 30, each a `-G` ladder over its own prefix | daily |
+| `d30h24-age` | the same two families | the same numbers BY AGE (`-h24 -d30`) | daily |
 | `d7h24` | two families: hourly, daily | 24 / 7 | daily |
+| `d7h24-gfs` | the same two families | 24 / 7, each a `-G` ladder over its own prefix | daily |
+| `d7h24-age` | the same two families | the same numbers BY AGE (`-h24 -d7`) | daily |
 | `d30` | one family, daily | 30 | daily |
 | `y5m12d31h24-gfs` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder over its own prefix | daily, monthly, yearly |
 | `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
