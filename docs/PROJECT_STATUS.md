@@ -137,6 +137,28 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
+  **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
+  W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,
+  więc objął też blok `[dataset]` — a `resolve_field` czyta sekcję przed
+  szablonem, czyli jedno `gfs = yes` po cichu przestawiało **wszystkie** tiery
+  z licznika na kubełki czasowe. Nic nie padało; profil małymi literami po
+  prostu zaczynał renderować drabiny. Wyjątek zawężony do `[prune]`.
+
+  Groźniejszy drugi: wyłączyłem blok retencji źródłowej przy `--target=''`, bo
+  przy `y5m12d31h24-gfs` **dublował** cięcie (osiem linii zamiast czterech,
+  płaska znosiła drabinę). Uogólniłem z jednego profilu. Dla `default` tiery nie
+  mają `prune_schedule` — retencja siedzi wyłącznie w bloku `[prune]` — więc
+  wychodziła **jedna linia tworząca snapshoty i zero tnących**: poprawny config,
+  chodzące zadania, pula rosnąca bez końca. Rozstrzygnięte pytaniem, które
+  narzędzie już zadaje (`schedule_tier_exprs`): profil z własnym fragmentem
+  `[prune]` dostaje sekcję źródłową, profil bez niego tnie tierami. Zmierzone na
+  labie dla trzech profili: `default` 0 → 1 ograniczona drabina, pozostałe bez
+  zmian po cztery.
+
+  Katalog dostał **sufiks mechanizmu**, bo nazwa mówiła liczby i kształt rodzin,
+  ale nie sposób liczenia: `-gfs` (kubełki), `-age` (wiek), goła nazwa
+  zarezerwowana dla domyślnego licznika.
+
   **WDROŻENIE JEDNOSERWEROWE BEZ KOPIOWANIA (2026-09-01).** Forma
   bezczasownikowa — `zfs-backup.sh --source=... --target='' --profile=...
   --install` — instaluje zadania, które robią snapshoty i **nic nie wysyłają**.
@@ -179,7 +201,7 @@
   z drabiną nie skleja się z płaskim, bo linia niesie `-G` albo nie, dla
   każdego datasetu, który wymienia.
 
-  Nowy profil **`y5m12d31h24`** (5 rocznych, 12 miesięcznych, 31 dobowych,
+  Nowy profil **`y5m12d31h24-gfs`** (5 rocznych, 12 miesięcznych, 31 dobowych,
   24 godzinowe; cztery przedrostki, cztery jednoszczeblowe drabiny; wszystko
   poza godzinowym `quiesce = auto,degrade`; nic nigdzie nie kopiowane).
   Zweryfikowany na labie liniami crona uruchomionymi DOSŁOWNIE: hourly exit 0,
