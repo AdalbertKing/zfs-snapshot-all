@@ -278,3 +278,32 @@ Po przejściu:
 
 Nie zmienia to zakresu produktu ani Restore CLI. Rdzeń protokołu i finalny pass
 Restore mogą postępować równolegle.
+
+## ROZSTRZYGNIĘTE 2026-09-01 — emisja `-X/-e/-E` zostaje w `flags`; część wsadowa zamknięta
+
+Pytanie implementera: po rozbiciu worka `flags` na nazwane pola
+(`passive`, `exclude_family`, `exclude_child_<n>`) — czy przełączyć
+`zfs-backup.sh`, żeby EMITOWAŁ te pola zamiast pakować `-X/-e/-E` do `flags`?
+
+**Decyzja: NIE.** Rekomendacja implementera przyjęta bez zmian.
+
+Powód, spisany, żeby nie wracał jako „luka do domknięcia":
+
+- funkcjonalnie nie daje **nic** — gramatyka CONFIG v4 przyjmuje oba zapisy,
+  a `gen-cron.sh` renderuje z nich tę samą linię silnika, co do bajta
+  i w tej samej kolejności (asercja w `test/scopefields`);
+- kosztuje **różnicę w crontabie na całej estacie**: przepisałby sekcję
+  każdej istniejącej relacji przy jej najbliższej reaktywacji;
+- wartość nazwanych pól jest w tym, że **wyższa warstwa może o nich mówić**
+  (profil przez `[template:]`), a to działa już teraz, bez ruszania niczego,
+  co jest zainstalowane.
+
+Stare configi z `-X/-e/-E` wpisanymi ręcznie w `flags` są i zostają poprawne.
+Odmowa „jedna opcja, jeden dom" pilnuje tylko tego, żeby ta sama opcja nie
+przyszła z obu miejsc naraz.
+
+**Konsekwencja dla planu: część wsadowa projektu jest zamknięta.** Etap profili
+nie ma dalszych kroków — pasmo siedzi w manifeście parowania, rodziny
+zarezerwowane przychodzą z profilu, `default` jest jawnym parametrem, a oś
+zakresu ma nazwane pola z warstwą polityki. Kolejny etap jest po stronie GUI,
+nie wsadu.

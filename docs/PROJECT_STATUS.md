@@ -127,7 +127,15 @@
   tltest …` — czyli `-e` i obie rodziny przyszły z profilu. Relacja usunięta,
   rekordy i crontab konta zdiffowane przed/po: identyczne.
 
-  **Czego to jeszcze NIE robi:** pola zakresu są profile-forbidden (węziej, niż
+  **CZĘŚĆ WSADOWA ZAMKNIĘTA — decyzja właściciela 2026-09-01.** Emisja
+  `-X/-e/-E` zostaje w `flags`: funkcjonalnie nie dawała nic (oba zapisy
+  renderują tę samą linię silnika), a kosztowałaby różnicę w crontabie na
+  całej estacie przy najbliższej reaktywacji każdej relacji. Wartość nazwanych
+  pól leży w tym, że mówi o nich warstwa wyższa, i to działa już teraz.
+  Pełny zapis w `docs/project/OWNER-DECISIONS.md`. Etap profili nie ma
+  dalszych kroków; kolejny etap jest po stronie GUI.
+
+  **Czego ten etap świadomie NIE robi:** pola zakresu są profile-forbidden (węziej, niż
   chce `PROFILE-VARIABLE-INVENTORY.md` §5) — brakuje warstwy `[template:]` i CLI
   odróżniającego „nie" od „nic nie powiedziano"; `zfs-backup.sh` **nadal pakuje**
   `-X`/`-e`/`-E` do `flags`, bo przełączenie go przepisuje sekcje całej estaty
