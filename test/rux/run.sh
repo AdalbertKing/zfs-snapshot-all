@@ -922,6 +922,47 @@ else
         "expected 'rpool/somethingelse', got '$_got29b'"
 fi
 
+# ------------------------------------------------------------------------------
+# 30. A PREFIXLESS LADDER IS STATED IN THE PLAN, and only when it is prefixless.
+#
+# Measured on pve10 2026-09-01 (`passive` + sync): the ladder keeps the newest
+# snapshot per bucket and the replication base is just a snapshot, so ONE
+# snapshot an admin takes on the landing dataset can be newer, win the bucket
+# and evict the base. Seven went to three; the parent kept only the manual one;
+# the next pull refused, correctly and loudly, and the relationship stopped
+# until a human chose.
+#
+# A WARNING and not a guard, deliberately. Owner direction 2026-08-09: "broad
+# prefixless pruning is potentially destructive by design, but it is not
+# inherently invalid... preview/warnings may state the fact, but the tool should
+# not invent a prohibition merely because it is broad."
+out="$( ( CLIENTS_DIR="$WORK/30/clients"
+    rux_entry --source=pve2:rpool/data --mode=sync --profile=passive --name=p30
+) 2>&1 )"
+if printf '%s' "$out" | grep -q 'BEZPREFIKSOWO' \
+   && printf '%s' "$out" | grep -q 'baze replikacji' \
+   && printf '%s' "$out" | grep -q 'to fakt, nie zakaz'; then
+    ok "30. a prefixless profile's plan states that the ladder covers the replication base"
+else
+    bad "30. a prefixless profile's plan states that the ladder covers the replication base" "$out"
+fi
+
+# THE CONTROL, and it is the half that matters: every OTHER shipped profile
+# prunes a named family, so the sentence must not appear for them. A warning
+# printed for everything is noise, and noise is how the one that mattered gets
+# skipped -- the same reason the overdue-mail flood was a defect and not a
+# feature.
+for _p30 in default prod d7h24-gfs; do
+    out="$( ( CLIENTS_DIR="$WORK/30/clients"
+        rux_entry --source=pve2:rpool/data --mode=sync --profile="$_p30" --name=p30b
+    ) 2>&1 )"
+    if printf '%s' "$out" | grep -q 'BEZPREFIKSOWO'; then
+        bad "30b. '$_p30' prunes a named family, so the prefixless warning must NOT appear" "$out"
+    else
+        ok "30b. '$_p30' prunes a named family, so the prefixless warning must NOT appear"
+    fi
+done
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
