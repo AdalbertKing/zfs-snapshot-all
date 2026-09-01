@@ -6002,19 +6002,28 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         local LB_RETFRAG=""
         profile_reload_if_stale
         LB_RETFRAG="$(profile_retention_fragment)" || LB_RETFRAG=""
-        # NOT WHEN NOTHING IS COPIED. Source retention exists to bound the
-        # source when the data ALSO lives somewhere else -- it is the answer to
-        # "the copy is safe, so how long must the original keep its own
-        # snapshots". With no destination the source IS the store and the
-        # tiers' own prune lines already are the retention.
+        # WITH NO DESTINATION, RETENTION MUST BE EMITTED EXACTLY ONCE -- and
+        # where it lives depends on the profile, which is why neither "always"
+        # nor "never" is right. REV-20260901-132, and both halves were measured:
         #
-        # Emitting it anyway is not merely redundant, measured on pve9: the
-        # same family got two lines at the same minute, the tier's ladder
-        # (`-G ... automated_hourly -H24`) and the source block's flat count
-        # (`... automated_hourly -H24`) -- and the flat one would undo the
-        # ladder's work. The staleness monitor listed the dataset twice for the
-        # same reason ("hdd/labdata,hdd/labdata").
-        if [ "$no_copy" -eq 0 ] && [ -n "$LB_RETFRAG" ]; then
+        #   a profile with its OWN [prune] fragment (`default`) keeps its
+        #   retention there and nowhere else. Its send tiers carry no
+        #   prune_schedule, so suppressing this block left `--target=''`
+        #   rendering ONE snapsend line and ZERO delsnaps lines: a job that
+        #   creates snapshots hourly and never removes one.
+        #
+        #   a profile WITHOUT one (y5m12d31h24-*) has retention in the send
+        #   tiers themselves, and profile_retention_fragment then falls back to
+        #   those same tiers -- so this block would re-state what the tiers
+        #   already schedule. Measured on pve9: eight delsnaps lines instead of
+        #   four, each family cut twice, once by its ladder and once flat, with
+        #   the flat one undoing the ladder. The monitor listed the dataset
+        #   twice for the same reason.
+        #
+        # The predicate is not new. `[ -s "$PROFILE_PRUNE_FILE" ]` is the same
+        # question schedule_tier_exprs already asks ("a flat profile prunes from
+        # the tiers its [dataset] references, so its prune fragment is empty").
+        if [ -n "$LB_RETFRAG" ]            && { [ "$no_copy" -eq 0 ] || [ -s "${PROFILE_PRUNE_FILE:-}" ]; }; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
             # ensure_cron_config already put the target's prune templates in the

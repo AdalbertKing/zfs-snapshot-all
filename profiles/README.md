@@ -19,6 +19,27 @@ mislead somebody reading `ls`.
 | lowercase `d30h24` | one family **per tier**, each with its own prefix and its own counter | one `delsnaps` line per tier |
 | uppercase `D30H24` | **one family**, several counters over it — the GFS ladder | one `delsnaps -G` line |
 
+**A suffix names the retention MECHANISM when it is not the catalogue default.**
+The numbers say how much is kept and the case says how many families; neither
+says HOW the counting is done, and there are three ways:
+
+| mechanism | flag | what survives | suffix |
+|---|---|---|---|
+| flat count | `-H24` | the 24 newest | none — the catalogue default |
+| GFS ladder | `-G -H24` | one per hourly bucket, for 24 hours | `-gfs` |
+| age | `-h24` | everything younger than 24 hours | `-age` |
+
+Measured on identical data (three snapshots taken inside one hour, which is
+what a catch-up burst looks like): flat kept two, the ladder kept one, age kept
+all three. They agree while the cadence is regular and part company at both
+edges — after a burst age bounds nothing, and after downtime age keeps less
+than a count would, because the survivors aged out while the job was not
+running.
+
+A bare name therefore always means the catalogue default. `y5m12d31h24` is
+deliberately not shipped: we ship its `-gfs` and `-age` forms, and the bare
+name stays reserved so it cannot mean two things.
+
 A per-tier profile may additionally put `gfs = yes` on a tier, which makes that
 tier's own line carry `-G`: its family is then pruned by **time buckets** ("one
 an hour for the last 24 hours") instead of by a **flat count** ("the 24
@@ -72,7 +93,8 @@ data where a crash-consistent copy is genuinely worthless. See
 | `d30h24` | two families: hourly, daily | 24 / 30 | daily |
 | `d7h24` | two families: hourly, daily | 24 / 7 | daily |
 | `d30` | one family, daily | 30 | daily |
-| `y5m12d31h24` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder | daily, monthly, yearly |
+| `y5m12d31h24-gfs` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder over its own prefix | daily, monthly, yearly |
+| `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
 
 `passive` has no `prefix` at all: it consumes snapshots another tool made, so
