@@ -6023,7 +6023,17 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         # The predicate is not new. `[ -s "$PROFILE_PRUNE_FILE" ]` is the same
         # question schedule_tier_exprs already asks ("a flat profile prunes from
         # the tiers its [dataset] references, so its prune fragment is empty").
-        if [ -n "$LB_RETFRAG" ]            && { [ "$no_copy" -eq 0 ] || [ -s "${PROFILE_PRUNE_FILE:-}" ]; }; then
+        # The predicate above was written as "no_copy OR own-fragment" and that
+        # OR was wrong in the half nobody could reach. With a TARGET it is true
+        # for every profile, so a fragment-less one emitted its source family on
+        # top of tiers that already prune -- the SAME doubling REV-132 measured
+        # in the other mode (each family cut twice, once by its ladder and once
+        # flat, the flat one undoing the ladder). It stayed invisible because
+        # the block below refused the config first, so nothing ever rendered.
+        # The question is not the mode; it is only ever "do this profile's tiers
+        # already prune the source?", and `-s "$PROFILE_PRUNE_FILE"` is it.
+        if [ -n "$LB_RETFRAG" ]; then
+          if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
             # ensure_cron_config already put the target's prune templates in the
@@ -6052,6 +6062,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 [ -n "${LB_PRUNE[$r]}" ] && echo "	prune_schedule = ${LB_PRUNE[$r]}"
                 echo "	notify       = local-src-$(basename "$r")"
             done
+          fi
             # Once per target, not once per run: a second source landing in the
             # same store is covered by the retention that is already there, and
             # emitting it again would be a duplicate section gen-cron refuses --
@@ -6060,7 +6071,23 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 echo
                 echo "[prune:$target]"
                 echo "	# managed-by: zfs-backup.sh local-backup target=$target"
-                profile_emit "$PROFILE_PRUNE_FILE"
+                # $LB_RETFRAG, never $PROFILE_PRUNE_FILE. A profile that carries
+                # its own [prune] fragment resolves to exactly that file, so this
+                # is byte-identical for `default` and `passive`. A profile
+                # WITHOUT one resolved to an empty body here, and an empty body
+                # is not a policy -- it is a section with no use_template, which
+                # gen-cron refuses:
+                #
+                #   error: [prune:hdd/labtarget] has no use_template
+                #
+                # Measured on pve9 2026-09-01 across the whole catalogue: 12 of
+                # 14 profiles could not create a local relationship WITH a
+                # target, `prod` and `d30` among them, so this predates the
+                # profiles added that day. It is the same class as the `prod`
+                # incident profile_declares_ladder was written for -- fail
+                # closed on an empty ladder -- which was fixed on the remote
+                # path and never asked here.
+                profile_emit "$LB_RETFRAG"
                 echo "	recursive    = yes"
                 echo "	notify       = local-$(basename "$target")"
             fi

@@ -1367,6 +1367,47 @@ for _p in default y5m12d31h24-gfs; do
     fi
 done
 
+# ---- the same two profiles, WITH a target -----------------------------------
+#
+# The mirror of the block above, and the half that was never asked. Measured on
+# pve9 2026-09-01 across the whole catalogue: 12 of 14 profiles could not create
+# a local relationship with a target at all, `prod` and `d30` among them.
+# [prune:<target>] pasted PROFILE_PRUNE_FILE verbatim, which is EMPTY for every
+# profile whose tiers prune themselves, so the section carried no use_template
+# and gen-cron refused the finished config:
+#
+#     error: [prune:hdd/backups] has no use_template
+#
+# Behind that refusal sat the doubling the refusal hid, which is why the second
+# assertion is here and not left to the shape check: the source retention block
+# ran whenever a target was given, so a fragment-less profile stated its source
+# policy twice -- once through the tiers' own prune_schedule, once flat through
+# the source family, the flat one undoing the ladder.
+#
+# ONE PRUNE PER SEND, ON THE SOURCE. That invariant holds for both profiles for
+# different reasons (`default` prunes from its [prune] fragment, a ladder
+# profile from its tiers), and it is the number the defect moved: 2 sends
+# against 4 source prunes.
+for _p in default y5m12d31h24-gfs; do
+    out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+            bash "$ZB" --source=rpool/data --target=hdd/backups --profile="$_p" --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
+    _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data" "hdd/backups"')"
+    _src="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
+    _tgt="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"hdd/backups"')"
+    if [ "$rc" -eq 0 ] && [ "$_tgt" -ge 1 ]; then
+        ok "target/$_p: a local relationship with a target renders, and bounds the store"
+    else
+        bad "target/$_p: a local relationship with a target renders, and bounds the store" \
+            "rc=$rc target-prunes=$_tgt -- $(printf '%s\n' "$out" | grep -oE 'error:.*' | head -1)"
+    fi
+    if [ "$_snap" -ge 1 ] && [ "$_src" -eq "$_snap" ]; then
+        ok "target/$_p: the source is pruned once per send tier, not twice"
+    else
+        bad "target/$_p: the source is pruned once per send tier, not twice" \
+            "snapsend=$_snap source-prunes=$_src"
+    fi
+done
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
