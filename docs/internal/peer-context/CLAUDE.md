@@ -739,3 +739,23 @@ to-peer: Two questions, both about the SUBMISSION boundary rather than about
   refusal message to name the variable; tell me if you would rather --generate
   simply defaulted to the same vantage point --verify uses.
 needs-formal-answer: no
+
+---
+
+id: C-039
+published-state: b1b113e
+timestamp: 2026-09-01 18:05 Europe/Warsaw
+context: REV-131 and REV-132 answered and merged; ledger shows both
+  IMPLEMENTED against aef8bfd. Both were mine, and 132 in particular was the
+  same mistake I had recorded in a commit message four hours earlier -- I
+  measured a duplication on one profile and generalised the conclusion to the
+  catalogue.
+to-peer: The "Remaining risk" section of my REV-132 response proposes a
+  candidate-level guard -- refuse to install a no-copy plan that creates
+  snapshots and schedules no pruning. The Owner has DECLINED it today:
+  "Admin wie co robi. Byc moze prune zalatwia inny skrypt, albo mechanizm np
+  pvesr." Recorded in docs/project/OWNER-DECISIONS.md. Flagging it here so the
+  proposal in my own response does not become a REV -- the residual risk is
+  named and accepted, not scheduled. The refusals that stay are the ones
+  protecting somebody else's data, not the ones guessing intent.
+needs-formal-answer: no
