@@ -6195,22 +6195,48 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # form uses for a sync landing parent, made explicit rather than assumed.
     if [ -n "$LOCAL_USER" ]; then
         local _ds
-        if ! zfs list -H -o name -- "$target" >/dev/null 2>&1; then
-            zfs create -p -- "$target" \
-                || { rm -f "$cand"; die "local-backup: could not create the target '$target' to delegate it to '$LOCAL_USER' -- NOTHING was installed and $config is untouched"; }
-            log "local-backup: created the landing target '$target' (it did not exist; the grant needs something to land on)"
+        # WITH NO DESTINATION there is nothing to create and nothing to grant on
+        # the far side -- the account snapshots and prunes the SOURCES in place,
+        # so those are the only datasets the jobs ever touch. Measured before
+        # this guard existed: `zfs create -p -- ''` answered "empty component or
+        # misplaced '@'", and the run refused with NOTHING installed -- the right
+        # failure, to the wrong question.
+        if [ "$no_copy" -eq 0 ]; then
+            if ! zfs list -H -o name -- "$target" >/dev/null 2>&1; then
+                zfs create -p -- "$target" \
+                    || { rm -f "$cand"; die "local-backup: could not create the target '$target' to delegate it to '$LOCAL_USER' -- NOTHING was installed and $config is untouched"; }
+                log "local-backup: created the landing target '$target' (it did not exist; the grant needs something to land on)"
+            fi
         fi
-        for _ds in "${roots[@]}" "$target"; do
+        for _ds in "${roots[@]}"; do
             zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$_ds" \
                 || { rm -f "$cand"; die "local-backup: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on '$_ds' for '$LOCAL_USER' failed -- NOTHING was installed and $config is untouched. Without it the installed jobs would fail every run."; }
         done
-        log "local-backup: delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on ${#roots[@]} source(s) and on '$target'"
+        if [ "$no_copy" -eq 0 ]; then
+            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$target" \
+                || { rm -f "$cand"; die "local-backup: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on '$target' for '$LOCAL_USER' failed -- NOTHING was installed and $config is untouched. Without it the installed jobs would fail every run."; }
+            log "local-backup: delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on ${#roots[@]} source(s) and on '$target'"
+        else
+            log "local-backup: delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on ${#roots[@]} source(s); no target -- nothing is copied"
+        fi
     fi
 
     log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
     local seed_failed=0 sr
     for sr in "${roots[@]}"; do
-        if bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$sr" "$target"; then
+        # ONE ARGUMENT when nothing is copied, which is the same shape the
+        # installed cron line has: snapsend with a single dataset creates the
+        # snapshot and transfers nothing. Passing an empty second argument
+        # happened to work, but it made the seed and the job it is seeding
+        # differ in the one place they must not.
+        if [ "$no_copy" -eq 1 ]; then
+            if bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$sr"; then
+                log "  OK: $sr (snapshot only -- nothing is copied)"
+            else
+                warn "  FAILED: $sr (snapshot only)"
+                seed_failed=$((seed_failed + 1))
+            fi
+        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
             warn "  FAILED: $sr -> $target"
