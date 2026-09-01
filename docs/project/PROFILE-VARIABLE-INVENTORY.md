@@ -45,8 +45,8 @@ Legenda kolumny **klasa**:
 | tryb (backup/sync) | `--mode` | `RUX_MODE` | `PEER_SAVED_MODE` | — | kształt sekcji | — | **T** |
 | rekursja | `--recursive` | `RECURSION` | — | — | `recursive` | `-R` / `-r` | **D** |
 | pasywność | `--passive` | `PASSIVE` | — | wybór profilu | `flags -e` | `-e` | **D** |
-| wykluczone rodziny snapshotów | `--exclude-snapshots` | `EXCLUDE_SNAP_n` | — | — | `flags -E`, `monitor_exclude` | `-E`, `-x` | **D** |
-| wykluczone dzieci | `--exclude` | `EXCLUDE_n` | — | — | `flags -X` | `-X` | **D** |
+| wykluczone rodziny snapshotów | `--exclude-family` | `EXCLUDE_FAMILY_n` | — | — | `flags -E`, `monitor_exclude` | `-E`, `-x` | **D** |
+| wykluczone dzieci | `--exclude-child` | `EXCLUDE_CHILD_n` | — | — | `flags -X` | `-X` | **D** |
 | limit pasma | `--bandwidth` | `BANDWIDTH` | — | — | `flags -b` | `-b` | **D** |
 | wybór profilu | `--profile` | `PROFILE` | — | — | `use_template` | pośrednio | **D** |
 | prefiks snapshotu | — | — | — | `prefix` | `prefix` | `-m` | **P** |
@@ -239,7 +239,7 @@ Rozbicie poszło w dwóch krokach i jest skończone.
 | oś | pola | commit |
 |---|---|---|
 | **łącze** | `bandwidth`, `compression`, `cipher` | `6d71a3b`, 2026-08-24 |
-| **zakres** | `passive`, `exclude_snapshots`, `exclude_<n>` | etap profili, 2026-08-31 |
+| **zakres** | `passive`, `exclude_family`, `exclude_child_<n>` | etap profili, 2026-08-31 |
 | **tożsamość** | zostaje w `flags`: `-K -k -O -p` | — |
 
 Uwaga do §5.3 wyżej: napisała, że własne nazwy mają „tylko `quiesce`,

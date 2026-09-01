@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fda21872fb2c95c6 -->
+<!-- status-covers-digest: a020c60f249ae7e2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -65,8 +65,8 @@
 - **ETAP PROFILI, krok 1: worek `flags` rozbity do końca (2026-08-31).**
   `flags` w sekcji `[dataset:]` niósł trzy różne własności naraz. Oś **łącza**
   (`bandwidth`, `compression`, `cipher`) wyszła 2026-08-24 w `6d71a3b`; teraz
-  wyszła oś **zakresu** — `passive` (`-e`), `exclude_snapshots` (`-E`, lista po
-  przecinku) i `exclude_<n>` (`-X`, numerowane, bo wartość to REGEX i może
+  wyszła oś **zakresu** — `passive` (`-e`), `exclude_family` (`-E`, lista po
+  przecinku) i `exclude_child_<n>` (`-X`, numerowane, bo wartość to REGEX i może
   zawierać każdy separator, który wybrałaby lista). W `flags` zostaje sama
   **tożsamość**: `-K -k -O -p` — i to jest odtąd powód, dla którego pole jest
   profile-forbidden.
@@ -89,6 +89,16 @@
   to twarda odmowa `gen-cron`, więc taki profil unieruchamiał każdą relację
   z niego zbudowaną, a błąd nazywał duplikat, nigdy profil. Odmawiane teraz przy
   walidacji profilu. Do bloku `[dataset]` zostają `use_template` i `media`.
+
+  **Nazwy ujednolicone 2026-09-01** (polecenie właściciela: „pilnujemy
+  spójności pakietu na każdym etapie, to ma wejść pod GUI"): `exclude_family`
+  (lista po przecinku, rodziny snapshotów) i `exclude_child_<n>` (numerowane,
+  regexy dzieci), a w CLI `--exclude-family` / `--exclude-child`, w rekordzie
+  `EXCLUDE_FAMILY_n` / `EXCLUDE_CHILD_n`. Nazwa niesie teraz **rodzaj listy**,
+  której dotyczy — reguła spisana w `docs/project/FOUNDATIONS.md`. Stare
+  pisownie **usunięte, nie aliasowane**; kosztowało jeden commit, bo pola miały
+  jeden dzień i nie było ich w żadnym configu na estacie (sprawdzone na trzech
+  hostach: zero rekordów `EXCLUDE_*`, zero pól w configach).
 
   **Czego to jeszcze NIE robi:** pola zakresu są profile-forbidden (węziej, niż
   chce `PROFILE-VARIABLE-INVENTORY.md` §5) — brakuje warstwy `[template:]` i CLI
@@ -188,7 +198,7 @@
   nagrobki STATE=removed niewidzialne dla rux (dwuznacznosc i kontrola istnienia);
   PLAN=base=null juz NIE potwierdza incremental-only; add-client --local-user prowizjonuje
   swieze konto kolektora (repo, notify-skrypty, grupa zfsalert, run) - trzy odmowy
-  aktywacji z LAB-E znikaja u zrodla; --exclude-snapshots=CSV plynie w flags (-E), do
+  aktywacji z LAB-E znikaja u zrodla; --exclude-family=CSV plynie w flags (-E), do
   monitora (monitor_exclude -> -x) i jest czescia klucza grupowania monitorow (dwa
   monitory rozniace sie slepymi polami nie moga dzielic linii). Wiek monitora w minutach
   ponizej 2h. Kampania zamykajaca etap: na zywo po CI.
@@ -5399,7 +5409,7 @@ Wielorelacyjnosc do jednego zrodla wymaga rozdzielenia tozsamosci parowania.
 ## Kampania zamykajaca trybu pasywnego (2026-08-23, galaz fix/grant-preflight-order)
 
 Jednokomendowa rejestracja pasywna od zera (`--source=... --passive
---exclude-snapshots=smiec_ --grant-remotely --install --yes`, pve9<-pve2 po
+--exclude-family=smiec_ --grant-remotely --install --yes`, pve9<-pve2 po
 tunelu WireGuard) przechodzi za pierwszym podejsciem: EXIT=0, zrodlo
 nietkniete (md5 listy snapshotow przed/po identyczne), zaadoptowany najnowszy
 niewykluczony obcy snapshot (`bez-prefiksu-103`; `smiec_102` pominiety).
@@ -5411,7 +5421,7 @@ Cztery wady znalezione i usuniete po drodze (kazda najpierw zmierzona):
 1. preflight grant-remotely odrzucal czysty host — test manifestu bramkowany
    na will_join_now;
 2. `${2:-automated_}` zjadal pusty prefiks („dowolna rodzina") — `${2-...}`;
-3. rux nie przekazywal `--exclude-snapshots` i `--passive` do add-client;
+3. rux nie przekazywal `--exclude-family` i `--passive` do add-client;
 4. watcher postepu dziedziczyl flock silnika (fd 200) i przezywal bieg —
    kazda PIERWSZA rejestracja padala na verify („Another instance"), a kazda
    reczna proba przechodzila; `exec 200>&-` w watcherze. Wykryte dopiero po
@@ -5891,7 +5901,7 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `rerun` | **16/16** | idempotentne ponowienie czterokomendowego przeplywu (kontrakt #9: „rerun resumes from durable state"). `add-client` i `seed` padaly na istniejacej relacji, wiec powtorzenie udokumentowanej sekwencji dawalo `rc=1` dwa razy, a operator musial wiedziec, ktore kroki pominac — to nie jest wznowienie. Przypiete obie polowy: IDENTYCZNE ponowienie to no-op, ponowienie z innym hostem, **portem**, targetem lub **jawnie podanym kontem** nadal odmawia (recenzja wykazala, ze pierwsza wersja przepuszczala rozny port i jawne `--local-user=root` — oba przypadki maja teraz dyskryminatory), a `seed` nadal odmawia w stanach, ktore nie sa ukonczonym seedem. Kontrola negatywna wobec builda sprzed poprawki: **4 asercje padaja**; wobec builda po pierwszej poprawce padaja **2** (port i jawne konto). Osobno przypieta sciezka zapasowa: rekord sprzed `CREATED_ENDPOINT` bierze port z manifestu parowania, a endpoint, ktorego nie da sie potwierdzic, **nie** jest no-opem |
 | `stagger` | **13/13** | rozrzut relacji po tarczy zegara: ktora minute dostaje nowa relacja i ktore minuty sa juz zajete. Dwa znaleziska recenzji przypiete dyskryminatorami: kolektor zajetych minut przepuszczal tylko `^[0-9]+$`, wiec poprawny job `*/15` byl NIEWIDZIALNY i relacja ladowala na nim; a gole `*` w pierwszej wersji ekspandera bylo rozwijane przez GLOB do nazw plikow, wiec najczestszy wildcard po cichu dawal pusto. Kontrola negatywna wobec builda sprzed poprawki: **8 asercji pada**, 5 przechodzi |
 | `linkfields` | **36/36** | pola LACZA — `bandwidth`, `compression`, `cipher` — wyjete z worka `flags`. Pinuje, ze kazde renderuje DOKLADNIE ten token, ktory operator wpisalby recznie (asercja renderuje oba zapisy i porownuje wywolanie silnika), ze ta sama opcja przychodzaca i z `flags`, i z pola jest ODRZUCANA zamiast scalana, oraz ze kontrola dubla czyta `flags` tak jak getopts w obie strony: zbundlowane `-eb 2M` jest lapane, a argument `-m b-daily_` nie. Przypieta tez pulapka kolejnosci: jawny kompresor musi zatrzymac `-A`, wiec pola renderuja sie PRZED autotune, z kontrola, ze bez kompresora `-A` nadal sie pojawia. Kontrola negatywna wbudowana w kazdy przebieg: poprzedni `gen-cron.sh` musi odrzucic wszystkie trzy pola jako nieznane |
-| `scopefields` | **35/35** | pola ZAKRESU — `passive`, `exclude_snapshots`, `exclude_<n>` — druga polowa rozbicia, ktore zaczely pola LACZA. W `flags` zostawala TOZSAMOSC (`-K/-k/-O/-p`) plus trzy DECYZJE o tym, co relacja bierze ze zrodla: czy sama stempluje snapshoty, czy adoptuje cudza rodzine (`-e`), ktorych rodzin nie adoptuje (`-E`), ktorych dzieci nie bierze (`-X`). Pinuje, ze nazwane pola renderuja te same tokeny w tej samej KOLEJNOSCI co zapis reczny (kolejnosc, bo przestawiony `flags` to szum w kazdym `crontab diff`), ze ta sama opcja z `flags` i z pola jest ODRZUCANA, oraz ze `passive = no` obok recznego `-e` tez jest odrzucane: `no` nie renderuje nic, wiec nie ma dubla, jest tylko config czytajacy odwrotnie, niz dziala. `exclude_<n>` jest NUMEROWANE, bo wartosc to REGEX i moze zawierac kazdy separator, ktory wybralaby lista; dziura w numeracji jest odrzucana zamiast po cichu ucinac liste. Kontrola negatywna wbudowana: poprzedni `gen-cron.sh` musi odrzucic kazdy config, ktory sie tu renderuje |
+| `scopefields` | **35/35** | pola ZAKRESU — `passive`, `exclude_family`, `exclude_child_<n>` — druga polowa rozbicia, ktore zaczely pola LACZA. W `flags` zostawala TOZSAMOSC (`-K/-k/-O/-p`) plus trzy DECYZJE o tym, co relacja bierze ze zrodla: czy sama stempluje snapshoty, czy adoptuje cudza rodzine (`-e`), ktorych rodzin nie adoptuje (`-E`), ktorych dzieci nie bierze (`-X`). Pinuje, ze nazwane pola renderuja te same tokeny w tej samej KOLEJNOSCI co zapis reczny (kolejnosc, bo przestawiony `flags` to szum w kazdym `crontab diff`), ze ta sama opcja z `flags` i z pola jest ODRZUCANA, oraz ze `passive = no` obok recznego `-e` tez jest odrzucane: `no` nie renderuje nic, wiec nie ma dubla, jest tylko config czytajacy odwrotnie, niz dziala. `exclude_child_<n>` jest NUMEROWANE, bo wartosc to REGEX i moze zawierac kazdy separator, ktory wybralaby lista; dziura w numeracji jest odrzucana zamiast po cichu ucinac liste. Kontrola negatywna wbudowana: poprzedni `gen-cron.sh` musi odrzucic kazdy config, ktory sie tu renderuje |
 | `subtree` | **10/10** | `validate_subtree` w OBU silnikach — dowod, ze rekurencyjny transfer wyladowal na KAZDYM potomku, nie tylko na korzeniu. Kampania na zywo zmierzyla, ze `zfs recv` strumienia `-R` POMIJA potomka, ktorego stan lokalny nie przyjmuje przyrostu, ladauje reszte i konczy sie zerem — bieg raportowal sukces, a jedno dziecko przestalo byc kopiowane. Pierwsza wersja samej kontroli byla fail-open dwukrotnie (blad inwentarza zwracal „wszystko dobrze"; test przynaleznosci byl PODCIAGIEM, wiec `@s3-extra` spelnial `@s3`) — oba przypadki przypiete tu dyskryminatorami wobec zaslepionych `zfs`/`ssh`. Kontrola negatywna wobec silnikow sprzed poprawki: **4 asercje padaja**, 6 przechodzi |
 | `twins` | **26/26** (+2 sekcja D, 2026-08-19) | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |

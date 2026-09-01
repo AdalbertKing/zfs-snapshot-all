@@ -370,13 +370,19 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     that ages out the last common snapshot ends the
                                     relationship until a destructive re-seed. Recorded
                                     on the client, so re-activation keeps the shape.
-                                    --exclude=REGEX (repeatable) drops matching datasets
+                                    --exclude-child=REGEX (repeatable) drops matching datasets
                                     from a flat expansion -- snapget/snapsend -X, an
                                     unanchored grep -E over the SOURCE-side name, so
                                     anchor it yourself when you mean the whole name.
                                     Recorded like --recursive, and refused together with
                                     --recursive=atomic, where one stream has nowhere to
                                     filter.
+                                    --exclude-family=A,B names snapshot FAMILIES a passive
+                                    pickup refuses to adopt -- snapget/snapsend -E. Two
+                                    different things, so two names: -child drops DATASETS
+                                    and takes a regex, hence one flag per pattern; -family
+                                    drops SNAPSHOT NAMES and takes a comma list, because a
+                                    snapshot name cannot contain a comma and a regex can.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -6198,7 +6204,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_snaps=""
+    local recursion="" passive=0 exclude_family=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -6220,8 +6226,8 @@ cmd_add_client() {
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
-            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
-            --exclude=*)   excludes+=("${a#*=}") ;;
+            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -6288,7 +6294,7 @@ cmd_add_client() {
     # The engines refuse -X without -R rather than ignoring it, so refusing the
     # same combination here means the operator hears it at the command line
     # instead of at 01:00 every night.
-    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude to keep one atomic stream."
+    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude-child needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude-child to keep one atomic stream."
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -6675,17 +6681,17 @@ cmd_add_client() {
         # sniffed from snapshot names -- the sync-chain probe taught us where
         # name-sniffing ends.
         write_client_field PASSIVE           "$passive"
-        if [ -n "$exclude_snaps" ]; then
+        if [ -n "$exclude_family" ]; then
             local _esi=1 _esp
-            for _esp in ${exclude_snaps//,/ }; do
-                write_client_field "EXCLUDE_SNAP_${_esi}" "$_esp"
+            for _esp in ${exclude_family//,/ }; do
+                write_client_field "EXCLUDE_FAMILY_${_esi}" "$_esp"
                 _esi=$((_esi + 1))
             done
         fi
         local _xi=0 _x
         for _x in ${excludes[@]+"${excludes[@]}"}; do
             _xi=$((_xi + 1))
-            write_client_field "EXCLUDE_$_xi" "$_x"
+            write_client_field "EXCLUDE_CHILD_$_xi" "$_x"
         done
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
@@ -6853,7 +6859,7 @@ client_passive_flags() {
     [ "${PASSIVE:-0}" = "1" ] || { printf ''; return 0; }
     out=" -e"
     while :; do
-        eval "v=\${EXCLUDE_SNAP_$i:-}"
+        eval "v=\${EXCLUDE_FAMILY_$i:-}"
         [ -n "$v" ] || break
         out="$out -E $v"
         i=$((i + 1))
@@ -6864,7 +6870,7 @@ client_passive_flags() {
 client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
     local i=1 v out=""
     while :; do
-        eval "v=\${EXCLUDE_$i:-}"
+        eval "v=\${EXCLUDE_CHILD_$i:-}"
         [ -n "$v" ] || break
         out="$out -X $v"
         i=$((i + 1))
@@ -11203,8 +11209,8 @@ rux_remote_install() {
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
-        [ -n "$exclude_snaps" ] && add_args+=(--exclude-snapshots="$exclude_snaps")
-        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
+        [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
+        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude-child="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
         # SSH from this host by default (Owner doc, "Join behavior"); --manual-join
@@ -11302,7 +11308,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion="" passive=0 exclude_snaps=""
+    local recursion="" passive=0 exclude_family=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
@@ -11311,8 +11317,8 @@ rux_entry() {
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
-            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
-            --exclude=*) excludes+=("${a#*=}") ;;
+            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;

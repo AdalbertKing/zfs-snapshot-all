@@ -149,19 +149,19 @@ profile_name_ok() {   # <profile>
 # and the SCOPE fields split out of 'flags' on 2026-08-31 (gen-cron.sh,
 # add_scope_flags):
 #
-#   passive           what this relationship TAKES from its source: whether it
-#   exclude_snapshots authors snapshots or adopts a family somebody else
-#   exclude_<n>       stamps, which families it refuses, which children it
-#                     leaves behind. Naming them is what empties the identity
-#                     sack; it must not, in the same change, hand them to a
-#                     layer that has no way to be overridden per relationship.
-#                     PROFILE-VARIABLE-INVENTORY.md argues these are the
-#                     natural home for a profile DEFAULT, and that is a later
-#                     change with its own prerequisites -- a template layer to
-#                     inherit from, and a CLI that can distinguish "the
-#                     operator said no" from "the operator said nothing".
-#                     Forbidding is the reversible direction.
-PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher passive exclude_snapshots'
+#   passive            what this relationship TAKES from its source: whether it
+#   exclude_family     authors snapshots or adopts a family somebody else
+#   exclude_child_<n>  stamps, which families it refuses, which children it
+#                      leaves behind. Naming them is what empties the identity
+#                      sack; it must not, in the same change, hand them to a
+#                      layer that has no way to be overridden per relationship.
+#                      PROFILE-VARIABLE-INVENTORY.md argues these are the
+#                      natural home for a profile DEFAULT, and that is a later
+#                      change with its own prerequisites -- a template layer to
+#                      inherit from, and a CLI that can distinguish "the
+#                      operator said no" from "the operator said nothing".
+#                      Forbidding is the reversible direction.
+PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher passive exclude_family'
 
 profile_schema_dump() {   # <gen-cron.sh path> <outfile> -> 0 ok
     PROFILE_ERR=""
@@ -179,13 +179,13 @@ profile_field_forbidden() {   # <field> -> 0 forbidden
     local f n
     f="$1"
     for n in $PROFILE_FORBIDDEN_FIELDS; do [ "$f" = "$n" ] && return 0; done
-    # exclude_<n> is numbered, so it cannot be a word in the list above. Without
+    # exclude_child_<n> is numbered, so it cannot be a word in the list above. Without
     # this arm it would still be refused -- gen-cron's --dump-fields enumerates
     # static names only, so the schema check upstream reports it as "not a
     # dataset field in CONFIG v4" -- but that message sends the reader looking
     # for a typo in a field they spelled correctly.
     case "$f" in
-        exclude_*) case "${f#exclude_}" in ""|*[!0-9]*) ;; *) return 0 ;; esac ;;
+        exclude_child_*) case "${f#exclude_child_}" in ""|*[!0-9]*) ;; *) return 0 ;; esac ;;
     esac
     return 1
 }
@@ -196,7 +196,7 @@ profile_check_field() {   # <kind> <field> <schema dump> <where>
     # OWNERSHIP BEFORE SPELLING. Both checks can fire on one field, and when
     # they do the ownership answer is the useful one: it tells the operator the
     # field is not theirs to write here, instead of sending them to look for a
-    # typo in a name they spelled correctly. exclude_<n> is the case that made
+    # typo in a name they spelled correctly. exclude_child_<n> is the case that made
     # the order matter -- it is numbered, so --dump-fields (which enumerates
     # static names) does not list it, and the schema check reported a correctly
     # spelled field as unknown.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The SCOPE fields: passive, exclude_snapshots, exclude_<n>.
+# The SCOPE fields: passive, exclude_family, exclude_child_<n>.
 #
 #   test/scopefields/run.sh
 #
@@ -28,8 +28,8 @@
 #      carries -e and must be caught; an ARGUMENT that merely looks like a
 #      letter (`-m e-daily_`, `-m E-daily_`) carries none and must not be.
 #      Both directions, because a substring rule passes one and fails the other;
-#   4. exclude_<n> is NUMBERED rather than comma-separated, because the value is
-#      a regular expression and a regex may contain any separator a list would
+#   4. exclude_child_<n> is NUMBERED rather than comma-separated: the value
+#      is a regular expression and a regex may contain any separator a list would
 #      have picked. So the suite asserts that a pattern containing a comma
 #      survives, and that a GAP in the numbering is refused rather than
 #      silently truncating the list;
@@ -102,8 +102,8 @@ fi
 
 # --- 1. each field renders its own token ------------------------------------
 for spec in "passive      = yes|-e" \
-            "exclude_snapshots = __replicate_|-E __replicate_" \
-            "exclude_1    = drop\$|-X drop\$"; do
+            "exclude_family = __replicate_|-E __replicate_" \
+            "exclude_child_1 = drop\$|-X drop\$"; do
     field="${spec%%|*}"; want="${spec##*|}"
     mkconf "$TMPD/r.conf" "$field"
     render "$GEN" "$TMPD/r.conf"; line=$(sendline "$OUT")
@@ -126,7 +126,7 @@ esac
 
 # Several families, several children -- one option per entry, not one option
 # carrying a list.
-mkconf "$TMPD/multi.conf" "exclude_snapshots = __replicate_,vzdump" "exclude_1    = a" "exclude_2    = b"
+mkconf "$TMPD/multi.conf" "exclude_family = __replicate_,vzdump" "exclude_child_1 = a" "exclude_child_2 = b"
 render "$GEN" "$TMPD/multi.conf"; line=$(sendline "$OUT")
 if [ "$RC" -eq 0 ] \
    && case "$line" in *"-E __replicate_ -E vzdump"*) true ;; *) false ;; esac \
@@ -140,8 +140,8 @@ fi
 # string, token for token and in the same order.
 mkconf "$TMPD/named.conf" "flags        = -K /key -p 2222" \
                           "passive      = yes" \
-                          "exclude_snapshots = __replicate_,vzdump" \
-                          "exclude_1    = -swap\$" "exclude_2    = /tmp"
+                          "exclude_family = __replicate_,vzdump" \
+                          "exclude_child_1 = -swap\$" "exclude_child_2 = /tmp"
 mkconf "$TMPD/hand.conf"  "flags        = -K /key -p 2222 -X -swap\$ -X /tmp -e -E __replicate_ -E vzdump"
 render "$GEN" "$TMPD/named.conf"; a=$(sendline "$OUT"); rca=$RC
 render "$GEN" "$TMPD/hand.conf";  b=$(sendline "$OUT"); rcb=$RC
@@ -154,8 +154,8 @@ fi
 
 # A pattern beginning with a dash is a LEGAL regex and must survive. The link
 # fields refuse a leading dash (a rate or a cipher never starts with one); doing
-# the same here would make the field unable to express what --exclude accepts.
-mkconf "$TMPD/dashpat.conf" "exclude_1    = -swap\$"
+# the same here would make the field unable to express what --exclude-child accepts.
+mkconf "$TMPD/dashpat.conf" "exclude_child_1 = -swap\$"
 render "$GEN" "$TMPD/dashpat.conf"; line=$(sendline "$OUT")
 if [ "$RC" -eq 0 ] && case "$line" in *"-X -swap\$"*) true ;; *) false ;; esac; then
     ok "a pattern that legitimately begins with a dash is rendered, not refused"
@@ -166,12 +166,12 @@ fi
 # And the reason the child excludes are numbered rather than comma-separated:
 # the value is a regex, and a regex may contain the separator a list would have
 # used. `x{2,3}` must arrive at the engine whole.
-mkconf "$TMPD/commapat.conf" "exclude_1    = x{2,3}"
+mkconf "$TMPD/commapat.conf" "exclude_child_1 = x{2,3}"
 render "$GEN" "$TMPD/commapat.conf"; line=$(sendline "$OUT")
 if [ "$RC" -eq 0 ] && case "$line" in *"-X x{2,3}"*) true ;; *) false ;; esac; then
-    ok "a pattern containing a comma survives whole (why exclude_<n> is numbered)"
+    ok "a pattern containing a comma survives whole (why exclude_child_<n> is numbered)"
 else
-    bad "a pattern containing a comma survives whole (why exclude_<n> is numbered)" "exit $RC line: $line"
+    bad "a pattern containing a comma survives whole (why exclude_child_<n> is numbered)" "exit $RC line: $line"
 fi
 
 # --- 2. one option, one home ------------------------------------------------
@@ -190,10 +190,10 @@ refuses() {   # <label> <want-substring> <extra lines...>
 
 refuses "collision: passive vs -e in flags" "one option, one home" \
         "flags        = -K /key -e" "passive      = yes"
-refuses "collision: exclude_snapshots vs -E in flags" "one option, one home" \
-        "flags        = -K /key -E fam" "exclude_snapshots = other"
-refuses "collision: exclude_1 vs -X in flags" "one option, one home" \
-        "flags        = -K /key -X drop" "exclude_1    = other"
+refuses "collision: exclude_family vs -E in flags" "one option, one home" \
+        "flags        = -K /key -E fam" "exclude_family = other"
+refuses "collision: exclude_child_1 vs -X in flags" "one option, one home" \
+        "flags        = -K /key -X drop" "exclude_child_1 = other"
 
 # The sharper half of the rule. `passive = no` renders NOTHING, so there is no
 # duplicate token -- and that is exactly why it has to be refused: the section
@@ -209,8 +209,8 @@ refuses "getopts read: bundled -eS carries -e" "one option, one home" \
 # ...and an option ARGUMENT is not an option. Both letters are checked, because
 # a substring rule would trip on either.
 for spec in "e|-m e-daily_|passive      = yes" \
-            "E|-m E-daily_|exclude_snapshots = fam" \
-            "X|-m X-daily_|exclude_1    = drop"; do
+            "E|-m E-daily_|exclude_family = fam" \
+            "X|-m X-daily_|exclude_child_1 = drop"; do
     letter="${spec%%|*}"; rest="${spec#*|}"; fl="${rest%%|*}"; fld="${rest#*|}"
     mkconf "$TMPD/arg.conf" "flags        = $fl" "$fld"
     render "$GEN" "$TMPD/arg.conf"
@@ -223,26 +223,26 @@ done
 
 # --- 4. the numbering is a contract, not a convention -----------------------
 refuses "numbering: a gap is refused, not silently truncated" "number the exclusions from 1" \
-        "exclude_1    = a" "exclude_3    = c"
+        "exclude_child_1 = a" "exclude_child_3    = c"
 
 # --- 5. grammar -------------------------------------------------------------
 refuses "grammar: blank passive"            "present but blank" "passive      ="
 refuses "grammar: passive = maybe"          "expected yes or no" "passive      = maybe"
-refuses "grammar: blank exclude_snapshots"  "present but blank" "exclude_snapshots ="
-refuses "grammar: stray comma"              "empty entry"       "exclude_snapshots = a,,b"
-refuses "grammar: blank exclude_1"          "present but blank" "exclude_1    ="
-refuses "grammar: the -X is what the field renders" "give the pattern only" "exclude_1    = -X foo"
-refuses "grammar: exclude_snapshots takes a NAME" "give the family NAME only" "exclude_snapshots = -E fam"
+refuses "grammar: blank exclude_family"  "present but blank" "exclude_family ="
+refuses "grammar: stray comma"              "empty entry"       "exclude_family = a,,b"
+refuses "grammar: blank exclude_child_1"          "present but blank" "exclude_child_1 ="
+refuses "grammar: the -X is what the field renders" "give the pattern only" "exclude_child_1 = -X foo"
+refuses "grammar: exclude_family takes a NAME" "give the family NAME only" "exclude_family = -E fam"
 
-# exclude_<n> accepts DIGITS only. `exclude_snapshots` is a field in its own
+# exclude_child_<n> accepts DIGITS only. `exclude_family` is a field in its own
 # right and must not be swallowed by the numbered arm; anything else under that
 # prefix is a typo and must be rejected rather than stored and ignored.
-refuses "grammar: exclude_x is not a field" "not a field gen-cron.sh reads" "exclude_x    = a"
+refuses "grammar: exclude_child_x is not a field" "not a field gen-cron.sh reads" "exclude_child_x    = a"
 
 # --- 6. ownership -----------------------------------------------------------
 # [dataset:] only: there is no layer above the section that knows what a
 # relationship takes from its source.
-for fld in "passive      = yes" "exclude_snapshots = fam" "exclude_1    = drop"; do
+for fld in "passive      = yes" "exclude_family = fam" "exclude_child_1 = drop"; do
     {
         printf '[defaults]\n\thost_label = lab\n\n'
         printf '[template:hourly]\n'
@@ -266,7 +266,7 @@ done
 if [ -r "$PROFILE_LIB" ]; then
     DUMP="$TMPD/schema"
     if bash "$GEN" --dump-fields > "$DUMP" 2>/dev/null && [ -s "$DUMP" ]; then
-        for f in passive exclude_snapshots exclude_1; do
+        for f in passive exclude_family exclude_child_1; do
             if ( set -u; source "$PROFILE_LIB"; profile_field_forbidden "$f" ); then
                 ok "ownership: '$f' is profile-forbidden"
             else

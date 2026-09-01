@@ -114,12 +114,12 @@ set -o pipefail
 #                                          # renders -e -- adopt the newest
 #                                          # existing snapshot instead of
 #                                          # stamping one of our own.
-#       exclude_snapshots = <fam>[,<fam>]  # -E per entry: families this pickup
+#       exclude_family = <fam>[,<fam>]  # -E per entry: families this pickup
 #                                          # refuses to adopt. Comma-separated,
 #                                          # like monitor_exclude, and safe
 #                                          # because a snapshot name cannot
 #                                          # contain a comma.
-#       exclude_<n>  = <regex>             # -X per field: children left behind.
+#       exclude_child_<n>  = <regex>             # -X per field: children left behind.
 #                                          # NUMBERED from 1 with no gaps, not
 #                                          # comma-separated -- the value is a
 #                                          # regex and may contain any separator
@@ -884,7 +884,7 @@ add_link_flags() {   # <flags> <bandwidth> <compression> <cipher> -> flags
 }
 
 # ------------------------------------------------------------------------------
-# SCOPE FIELDS -- passive, exclude_snapshots, exclude_<n>.
+# SCOPE FIELDS -- passive, exclude_family, exclude_child_<n>.
 # ------------------------------------------------------------------------------
 # The second half of the split the link fields started. What was left in 'flags'
 # after 2026-08-24 was two unrelated things wearing one name:
@@ -941,27 +941,27 @@ lint_scope_passive() {   # <value> <flags> <ctx>
 # comma, so the separator can never appear inside an entry. (The child excludes
 # below are REGULAR EXPRESSIONS and get no such guarantee, which is why they are
 # numbered rather than listed.)
-lint_scope_exclude_snapshots() {   # <value> <flags> <ctx>
+lint_scope_exclude_family() {   # <value> <flags> <ctx>
     local val="$1" flags="$2" ctx="$3"
-    [ -z "$val" ] && die "$ctx: 'exclude_snapshots' is present but blank -- name at least one snapshot family, or remove the line"
+    [ -z "$val" ] && die "$ctx: 'exclude_family' is present but blank -- name at least one snapshot family, or remove the line"
     # IFS is restored before the collision check below, and that is not tidiness.
     # link_flag_letter_present splits flags_opt_letters' NEWLINE-separated output
     # with `for`, so leaving IFS=, in place made the whole letter list one word
     # and the check silently found nothing -- measured: `flags = "-K /k -E fam"`
-    # plus `exclude_snapshots = other` rendered a line carrying both -E options
+    # plus `exclude_family = other` rendered a line carrying both -E options
     # instead of being refused.
     local one oldifs="$IFS"
     IFS=,
     for one in $val; do
-        [ -n "$one" ] || { IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' has an empty entry -- a stray comma, most likely"; }
+        [ -n "$one" ] || { IFS="$oldifs"; die "$ctx: exclude_family='$val' has an empty entry -- a stray comma, most likely"; }
         case "$one" in
-            -*) IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' -- give the family NAME only; the '-E' is what this field renders for you" ;;
-            *[[:space:]]*) IFS="$oldifs"; die "$ctx: exclude_snapshots='$val' -- one family per comma-separated entry, no spaces" ;;
+            -*) IFS="$oldifs"; die "$ctx: exclude_family='$val' -- give the family NAME only; the '-E' is what this field renders for you" ;;
+            *[[:space:]]*) IFS="$oldifs"; die "$ctx: exclude_family='$val' -- one family per comma-separated entry, no spaces" ;;
         esac
     done
     IFS="$oldifs"
     link_flag_letter_present "$flags" E \
-        && die "$ctx: 'exclude_snapshots' is set and 'flags' already carries -E -- one option, one home. Drop the -E from 'flags' and keep the field."
+        && die "$ctx: 'exclude_family' is set and 'flags' already carries -E -- one option, one home. Drop the -E from 'flags' and keep the field."
     return 0
 }
 
@@ -972,20 +972,20 @@ lint_scope_exclude_snapshots() {   # <value> <flags> <ctx>
 # spells it the same way.
 lint_scope_exclude() {   # <value> <n> <flags> <ctx>
     local val="$1" n="$2" flags="$3" ctx="$4"
-    [ -z "$val" ] && die "$ctx: 'exclude_$n' is present but blank -- give it a pattern, or remove the line"
+    [ -z "$val" ] && die "$ctx: 'exclude_child_$n' is present but blank -- give it a pattern, or remove the line"
     # Only `-X` is refused, NOT every leading dash: unlike a rate or a cipher, a
     # regular expression may legitimately start with one (`-swap$` matches a
     # child whose name ends in -swap). Refusing those would make the field
     # unable to express the exclusions the CLI already accepts.
     case "$val" in
-        -X*) die "$ctx: exclude_$n='$val' -- give the pattern only; the '-X' is what this field renders for you" ;;
+        -X*) die "$ctx: exclude_child_$n='$val' -- give the pattern only; the '-X' is what this field renders for you" ;;
     esac
     # Only the first one checks 'flags': the message is about the string as a
     # whole and saying it once per numbered field would be three copies of one
     # complaint.
     [ "$n" = 1 ] || return 0
     link_flag_letter_present "$flags" X \
-        && die "$ctx: 'exclude_1' is set and 'flags' already carries -X -- one option, one home. Drop the -X from 'flags' and keep the fields."
+        && die "$ctx: 'exclude_child_1' is set and 'flags' already carries -X -- one option, one home. Drop the -X from 'flags' and keep the fields."
     return 0
 }
 
@@ -994,9 +994,9 @@ lint_scope_exclude() {   # <value> <n> <flags> <ctx>
 # here. The first cut did both in one function that the renderer called inside
 # `$( )`. Its `die` killed the SUBSHELL, printed the refusal to stderr, and left
 # the run going with whatever had been collected before it: measured, a config
-# with exclude_1 and exclude_3 printed
+# with exclude_child_1 and exclude_child_3 printed
 #
-#   error: 'exclude_2' is missing but 'exclude_3' is present
+#   error: 'exclude_child_2' is missing but 'exclude_child_3' is present
 #
 # and then emitted a cron line carrying `-X a`, exit 0. A refusal that renders
 # the job anyway is worse than no refusal -- the operator's third exclusion was
@@ -1006,14 +1006,14 @@ lint_scope_exclude() {   # <value> <n> <flags> <ctx>
 # is dumb and safe inside one.
 #
 # The GAP is what makes the numbering a contract rather than a convention.
-# exclude_1 + exclude_3 with no exclude_2 would otherwise stop at the gap and
+# exclude_child_1 + exclude_child_3 with no exclude_child_2 would otherwise stop at the gap and
 # drop the third silently, which is the failure mode a numbered grammar exists
 # to avoid: the operator wrote an exclusion and the job does not carry it.
 lint_scope_excludes() {   # <section header> <flags> <ctx>
     local sec="$1" flags="$2" ctx="$3" n=1 highest=0 key
     for key in "${!INI[@]}"; do
-        case "$key" in "${sec}${SEP}exclude_"[0-9]*)
-            key="${key##*"$SEP"exclude_}"
+        case "$key" in "${sec}${SEP}exclude_child_"[0-9]*)
+            key="${key##*"$SEP"exclude_child_}"
             case "$key" in *[!0-9]*) continue ;; esac
             [ "$key" -gt "$highest" ] && highest="$key" ;;
         esac
@@ -1022,16 +1022,16 @@ lint_scope_excludes() {   # <section header> <flags> <ctx>
     # The key is built into a VARIABLE before the lookup, and that is for the
     # allow-list test in test/run.sh rather than for readability: it scrapes
     # `ini_has "$sec" <word>` out of this file and checks the word against
-    # --dump-fields. A literal "exclude_$n" is scraped as the field `exclude_`,
+    # --dump-fields. A literal "exclude_child_$n" is scraped as the field `exclude_child_`,
     # which is not a field and never can be -- the numbered family cannot appear
     # in --dump-fields, which enumerates static names. Coverage for these fields
     # comes from test/scopefields instead, which asserts the allow-list arm
-    # directly (`exclude_x` is refused, `exclude_2` is not).
+    # directly (`exclude_child_x` is refused, `exclude_child_2` is not).
     local fld
     while [ "$n" -le "$highest" ]; do
-        fld="exclude_$n"
+        fld="exclude_child_$n"
         ini_has "$sec" "$fld" \
-            || die "$ctx: 'exclude_$n' is missing but 'exclude_$highest' is present -- number the exclusions from 1 with no gaps, or the ones above the gap are silently dropped"
+            || die "$ctx: 'exclude_child_$n' is missing but 'exclude_child_$highest' is present -- number the exclusions from 1 with no gaps, or the ones above the gap are silently dropped"
         lint_scope_exclude "$(ini_get "$sec" "$fld")" "$n" "$flags" "$ctx"
         n=$((n + 1))
     done
@@ -1045,7 +1045,7 @@ lint_scope_excludes() {   # <section header> <flags> <ctx>
 # ran together and arrived at the engine as one pattern.
 scope_exclude_values() {   # <section header> -> one pattern per line
     local sec="$1" n=1 fld
-    while fld="exclude_$n"; ini_has "$sec" "$fld"; do
+    while fld="exclude_child_$n"; ini_has "$sec" "$fld"; do
         printf '%s\n' "$(ini_get "$sec" "$fld")"
         n=$((n + 1))
     done
@@ -1060,7 +1060,7 @@ scope_exclude_values() {   # <section header> -> one pattern per line
 # zfs-backup.sh's string always had -- child excludes, then passivity, then the
 # families it excludes -- and a section that names the fields produces the same
 # line as one that hand-wrote them.
-add_scope_flags() {   # <flags> <passive> <exclude_snapshots> <excludes, NL-separated> -> flags
+add_scope_flags() {   # <flags> <passive> <exclude_family> <excludes, NL-separated> -> flags
     local flags="$1" passive="$2" exsnap="$3" excl="$4" one
     if [ -n "$excl" ]; then
         while IFS= read -r one; do
@@ -1415,15 +1415,15 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # [dataset:] only, never POLICY_FIELDS -- a policy carrier is shared by datasets
 # that do not share a destination, so there is no layer above the section where
 # a link value would be true for everything that inherited it.
-# passive/exclude_snapshots/exclude_<n> are the SCOPE fields (see
+# passive/exclude_family/exclude_child_<n> are the SCOPE fields (see
 # add_scope_flags): [dataset:] only for the same reason, and out of POLICY_FIELDS
 # for a different one -- they say what this relationship takes from its source,
-# which no layer above the section knows. exclude_<n> is numbered and therefore
+# which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive media \
                         bandwidth compression cipher \
-                        passive exclude_snapshots $DATASET_POLICY_FIELDS
+                        passive exclude_family $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
@@ -1528,17 +1528,17 @@ validate_field_names() {
         # can be spread across the clock without one section-level value
         # flattening every tier it names.
         #
-        # exclude_<n> is the other suffix family, and a different one: the
+        # exclude_child_<n> is the other suffix family, and a different one: the
         # suffix is an INDEX, not a tier, so only digits are accepted here.
-        # `exclude_snapshots` must not fall through this arm -- it is a field in
+        # `exclude_family` must not fall through this arm -- it is a field in
         # its own right, in the allow-list above, and reaching this case at all
         # would mean it had been misspelled.
         case "$field" in
             flags_*|send_schedule_*|prune_schedule_*)
                 [ "$kind" = "dataset" ] && continue ;;
-            exclude_*)
+            exclude_child_*)
                 if [ "$kind" = "dataset" ]; then
-                    case "${field#exclude_}" in
+                    case "${field#exclude_child_}" in
                         ""|*[!0-9]*) ;;
                         *) continue ;;
                     esac
@@ -2270,7 +2270,7 @@ build_dataset() {
             prefix="$(resolve_field_or_omit prefix "$ds" "$tmpl" defaults)" || die "[dataset:$ds_path] tier=$tier: 'prefix' resolved to a blank value -- omit the field entirely for no-prefix, do not set it to nothing"
             tier_created_prefix="$prefix"; tier_creates=1
             flags="$(resolve_field_tiered flags "$tier" "$ds" "$tmpl" "")" || flags=""
-            # SCOPE FIELDS -- passive, exclude_snapshots, exclude_<n>. Section
+            # SCOPE FIELDS -- passive, exclude_family, exclude_child_<n>. Section
             # only, and rendered FIRST so that the flags string keeps the order
             # zfs-backup.sh's hand-packed one always had (identity, then -X, then
             # -e, then -E, then the link options, then -A). Order is nothing to
@@ -2283,8 +2283,8 @@ build_dataset() {
             if scope_passive="$(resolve_field passive "$ds" "" "")"; then
                 lint_scope_passive "$scope_passive" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             else scope_passive=""; fi
-            if scope_exsnap="$(resolve_field exclude_snapshots "$ds" "" "")"; then
-                lint_scope_exclude_snapshots "$scope_exsnap" "$scope_raw" "[dataset:$ds_path] tier=$tier"
+            if scope_exsnap="$(resolve_field exclude_family "$ds" "" "")"; then
+                lint_scope_exclude_family "$scope_exsnap" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             else scope_exsnap=""; fi
             lint_scope_excludes "$ds" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             scope_excl="$(scope_exclude_values "$ds")"

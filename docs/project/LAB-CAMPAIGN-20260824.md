@@ -156,7 +156,7 @@ z modelem pasywnym (najnowszy istniejący, obojętne jak nazwany).
 ```bash
 ./zfs-backup.sh --source=192.168.28.9:hdd/lab1b/at --target=hdd/k1b-tgt \
     --name=k1b --local-user=root --recursive=flat --passive \
-    --exclude-snapshots=tmpjob_ --exclude=skip --install --yes
+    --exclude-family=tmpjob_ --exclude-child=skip --install --yes
 ```
 
 Pierwsze podejście zatrzymuje się zgodnie z projektem (`EXIT=1`) i podaje
