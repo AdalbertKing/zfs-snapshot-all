@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bd55412722533907 -->
+<!-- status-covers-digest: ee770559e6bbac92 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -228,6 +228,42 @@
   zostałaby przeliczona z zakresu i rozjazd by się nie utrwalił. Zmierzone na
   pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
   w manifeście testowym oba pola naraz.
+
+  **LAB SYNC/PASSIVE ZAMKNIĘTY — ostatnia luka kampanii (2026-09-01).** Nie dało
+  się go zrobić na pve9: `src8`/`src9` zajmują całą przestrzeń
+  `hdd/backups/<host>`, więc strażnik pokrycia odmawiał drugiej relacji.
+  Postawiony **pve10** (VM 111 na pve2, `192.168.28.97`) — kolektor bez żadnej
+  relacji. Relacja `lab1`: pve10 ← pve1 `hdd/labsrc`, tryb sync, profil
+  `passive`.
+
+  Kontrakt pasywny dowiedziony **kontrolą rozróżniającą**, nie samym „źródło bez
+  zmian" (to by znaczyło tylko tyle, że zadanie było bezczynne): źródło 78 → cudza
+  ręka tworzy snapshot → 81 → po biegu zadania **nadal 81**, a kolektor 3 → 6.
+  Zadanie przeniosło dane i mimo to nie stworzyło na źródle niczego. Linie
+  uruchamiane dosłownie z zainstalowanego crontaba, jako konto delegowane.
+
+  **ZNALEZISKO I JEGO NAPRAWA — ostrzeżenie, nie strażnik.** Drabina zostawia
+  najnowszy snapshot w kubełku, a baza replikacji jest zwykłym snapshotem —
+  więc JEDEN snapshot zrobiony ręcznie na landingu może być nowszy, wygrać
+  kubełek i **wypchnąć bazę**. Zmierzone: 7 → 3, dataset nadrzędny zachował
+  wyłącznie snapshot ręczny, następne pobranie odmówiło (`shares no common
+  snapshot (by GUID)`, `rc=1`, alert) i relacja stanęła do decyzji człowieka.
+
+  Naprawy przez zakaz **nie ma i nie będzie** — kierunek właściciela z
+  2026-08-09 (`PREFIXLESS-PASSIVE-GFS`) mówi wprost, że szerokie czyszczenie
+  bezprefiksowe jest destrukcyjne z projektu, ale nie jest nieprawidłowe, a
+  narzędzie „nie ma wymyślać zakazu tylko dlatego, że coś jest szerokie".
+  Ten sam zapis pozwala jednak **stwierdzić fakt w podglądzie** — i tego
+  brakowało. Plan relacji mówi teraz, że drabina obejmuje każdy snapshot na
+  landingu wraz z bazą, w idiomie, który ten plik już miał: `(to fakt, nie
+  zakaz)`. Pojawia się wyłącznie dla profilu bezprefiksowego; `default`, `prod`
+  i `d7h24-gfs` milczą, bo ostrzeżenie drukowane wszędzie to szum, a przez szum
+  przeoczy się to jedno, które miało znaczenie.
+
+  Uboczna obserwacja, odnotowana i nieścigana: `check-snap-age` przy wzorcu bez
+  dopasowania porównuje wiek ZAKRESU, więc świeży landing wygląda zdrowo do
+  progu ostrzegawczego, a potem alarmuje. Profilu `passive` to nie dotyczy —
+  jego `pattern = -` dociera do monitora jako wartownik `(any)` i dopasowuje.
 
   **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
   W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,

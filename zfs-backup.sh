@@ -1337,6 +1337,33 @@ profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
 # the package (root's, the delegated account's, two in /tmp). A profiles.local/
 # beside the checkout would exist once per copy, and "where are this host's
 # profiles" would depend on which account ran the command.
+# Does this profile's ladder run WITHOUT a prefix, i.e. over every snapshot in
+# the scope rather than over one named family?
+#
+# The question is asked of the profile FILE, before anything is loaded or
+# rendered, because the only caller is the read-only plan. It reads the same
+# fact gen-cron does: a `[prune]` fragment that turns the ladder on and names no
+# `gfs_pattern`. gen-cron spells out why that is the prefixless case rather than
+# an omission -- "an omitted gfs_pattern (Phase 3.5 prefixless ladder) is the
+# empty string, which is a prefix of everything".
+#
+# NOT decided from the tiers' own `pattern`: `passive` sets that to `-`, which
+# reaches check-snap-age as the "(any)" sentinel and never reaches the ladder at
+# all. Reading it here would answer a different question and would go on being
+# right by accident until a profile set the two differently.
+profile_prunes_prefixlessly() {   # <profile name or path> -> 0 when the ladder has no prefix
+    local f; f="$(profile_file "$1")" || return 1
+    [ -r "$f" ] || return 1
+    awk '
+        /^[[:space:]]*\[/ { in_prune = ($0 ~ /^[[:space:]]*\[prune\][[:space:]]*$/); next }
+        !in_prune { next }
+        { sub(/#.*/, "") }
+        /^[[:space:]]*gfs[[:space:]]*=[[:space:]]*(yes|true|1)[[:space:]]*$/ { gfs = 1 }
+        /^[[:space:]]*gfs_pattern[[:space:]]*=/ { pat = 1 }
+        END { exit !(gfs && !pat) }
+    ' "$f"
+}
+
 profile_file() {   # <file name or path> -> the profile file to use
     local n="$1" d
     case "$n" in */*) printf '%s' "$n"; return 0 ;; esac
@@ -10999,6 +11026,31 @@ rux_remote_plan() {
         echo "  local target:                  ${target:-<proposed at pick time>}"
     fi
     echo "  preset (CREATE-time only):     $profile"
+    # A PREFIXLESS LADDER PUTS THE REPLICATION BASE IN ITS OWN SCOPE, and the
+    # operator is the only one who can weigh that -- so this STATES it and
+    # forbids nothing. Owner direction 2026-08-09 (PREFIXLESS-PASSIVE-GFS):
+    # "broad prefixless pruning is potentially destructive by design, but it is
+    # not inherently invalid... preview/warnings may state the fact, but the
+    # tool should not invent a prohibition merely because it is broad."
+    #
+    # Measured on pve10 2026-09-01, `passive` + sync, and it is not a corner
+    # case. The ladder keeps the newest snapshot per bucket; the base is just a
+    # snapshot; so ONE snapshot an admin takes on the landing dataset -- before
+    # a restore, before an experiment -- can be newer, win the bucket, and evict
+    # the base. Seven snapshots went to three and the parent kept only the
+    # manual one. The next pull then refused, correctly and loudly:
+    #
+    #   Refusing: 'hdd/labsrc' already exists and shares no common snapshot
+    #   (by GUID) -- a full resend needs '-f'
+    #
+    # Nothing is destroyed silently, but the relationship STOPS until a human
+    # either deletes that snapshot or accepts a destructive full resend. Worth
+    # one line at CREATE, because the profile's own description ("adopt someone
+    # else's snapshot family, prefixlessly") does not imply it.
+    if profile_prunes_prefixlessly "$profile"; then
+        local _lp; if [ "$mode" = sync ]; then _lp="$dataset"; else _lp="${target:-<cel>}"; fi
+        echo "  Uwaga:                         profil '$profile' tnie BEZPREFIKSOWO -- drabina obejmuje KAZDY snapshot na '$_lp', wliczajac baze replikacji. Snapshot zrobiony tam recznie moze wygrac kubelek, wypchnac baze i zatrzymac relacje az do decyzji czlowieka (to fakt, nie zakaz)"
+    fi
     echo "  current lifecycle position:    $state"
     case "$state" in
         "(none -- fresh relationship)")
