@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 646b1ca2612d93bd -->
+<!-- status-covers-digest: c202151c6c25f394 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -175,6 +175,41 @@
   cudze dane, nie tam, gdzie zgadują intencję. Zapis w `OWNER-DECISIONS.md`;
   zapowiedź tej zmiany w „Remaining risk" odpowiedzi na REV-132 jest tym samym
   nieaktualna.
+
+  **12 z 14 profili nie dawało się wdrożyć Z CELEM — naprawione, PR #256
+  (2026-09-01).** Kampania labowa właściciela (trzy kształty wdrożenia × cały
+  katalog) trafiła w twardą odmowę: sekcja `[prune:<cel>]` wklejała fragment
+  `[prune]`, którego profil tnący się z tierów po prostu nie ma, więc powstawała
+  sekcja bez `use_template`, a `gen-cron` odrzucał kandydata
+  (`error: [prune:hdd/labtarget] has no use_template`). **`prod` i `d30` padały
+  też, więc dziura jest starsza niż profile z tego dnia** — to ta sama klasa,
+  dla której powstał `profile_declares_ladder` po incydencie z `prod`: zamknięta
+  na ścieżce zdalnej i nigdy niezadana na lokalnej.
+
+  Za odmową siedziała druga wada, którą odmowa **zasłaniała**: z celem blok
+  retencji źródła leciał dla każdego profilu, więc profil bez fragmentu tnie
+  źródło dwa razy — raz drabiną z tierów, raz płasko z rodziny źródłowej, i
+  płaskie cofa drabinę. To ta sama duplikacja, którą REV-132 zmierzył w trybie
+  bez kopii; warunek napisano jako „bez kopii LUB własny fragment", gdy jedyne
+  pytanie brzmi „czy tiery już tną źródło". Po poprawce 14/14, a `default` i
+  `passive` renderują się bit w bit tak samo, bo rozwiązują się do tego samego
+  pliku.
+
+  Lekcja tej rundy jest ta sama co przy CRLF dzień wcześniej, tylko z drugiej
+  strony: **odmowa na ścieżce potrafi ukryć wadę za sobą.** Duplikacja retencji
+  była tam przez cały czas i żaden test jej nie widział, bo konfiguracja nie
+  dochodziła do renderu.
+
+  **Kształt dwuhostowy: dwa znaleziska ZGŁOSZONE, nie naprawione.** Przy peerze
+  z zapamiętanym trybem generator wypuszcza pakiet, który jego własny `--join`
+  odrzuca (`peer.conf carries both PEER_CONF_MODE and PEER_CONF_DATASETS`) —
+  re-parowanie dziedziczy `PEER_SAVED_MODE`, a heredoc pisze `PEER_CONF_MODE`
+  bezwarunkowo obok listy datasetów. Drugie: **przerwany create nadpisuje
+  manifest peera** (`PEER_SAVED_DATASETS`), choć rekord relacji się nie rusza, a
+  późniejszy `migrate-profile` renderuje z manifestu — czyli po cichu
+  przecelowuje żywą relację. Łańcuch udowodniony przywróceniem manifestu.
+  Obie siedzą w warstwie parowania, nie profili, i czekają na decyzję
+  właściciela.
 
   **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
   W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,
