@@ -283,14 +283,34 @@ profile_check_field() {   # <kind> <field> <schema dump> <where>
     # send_schedule. It does not FLATTEN: a [prune:] section's gfs is a property
     # of the section -- one combined -G line over every tier it names -- so
     # stating it there is the only place it means anything at all.
-    case "$field" in gfs|gfs_pattern) ;; *)
     if [ "$kind" = dataset ] || [ "$kind" = prune ]; then
+        # THE EXEMPTION IS FOR [prune] ONLY, and the first version of it was
+        # not -- it matched on the field alone, before the kind was looked at,
+        # so it let `gfs` into a [dataset] block too. REV-20260901-131, P1.
+        #
+        # There the damage is exactly what this rule exists to prevent: the
+        # fragment is pasted into every [dataset:] section the profile creates,
+        # resolve_field reads the SECTION before the template, and one
+        # `gfs = yes` therefore silently converts every referenced tier from
+        # flat-count retention to time buckets. The config stays valid and the
+        # jobs keep running, so nothing fails -- a lowercase profile simply
+        # starts rendering ladders. The reviewer reproduced it on merged main:
+        # d30h24 with `gfs = yes` in [dataset] validated, and the catalogue
+        # suite then failed with "lowercase but rendered a -G ladder".
+        #
+        # In a [prune] block it is legitimate and is how every shipped ladder
+        # profile declares itself: there `gfs` is a property of the SECTION --
+        # one combined -G line over every tier it names -- so that is the only
+        # place it can be said at all. Neither reason for the rule applies:
+        # nothing in zfs-backup.sh writes gfs into a section, and it overrides
+        # no per-tier value because there are no per-tier values to override.
+        case "${kind}:${field}" in prune:gfs|prune:gfs_pattern) ;; *)
         if grep -qxF "template $field" "$dump"; then
             PROFILE_ERR="$where: '$field' is policy and belongs in one of this profile's [template:] sections, not in its [$kind] block -- a value here is pasted into every section the profile creates, where it overrides every tier that section names and collides with the line the relationship writes for itself"
             return 1
         fi
+        ;; esac
     fi
-    ;; esac
     return 0
 }
 

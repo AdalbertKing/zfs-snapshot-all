@@ -1336,6 +1336,37 @@ else
     ok "default: a profile that declares no reserved family gets no floor (the values really come from the profile)"
 fi
 
+# ---- REV-20260901-132: --target='' plans snapshots AND their retention ------
+#
+# The no-copy shape refuses to be half a job. It must render the one-argument
+# snapsend AND a bounded prune for the same family, and it must render neither
+# a dst nor any target-side job -- a plan that creates snapshots and schedules
+# nothing to remove them is an unbounded pool, quietly.
+#
+# Both profiles are checked because the retention lives in different places and
+# suppressing the wrong one produced exactly that unbounded shape: `default`
+# carries a [prune] fragment and its send tiers have no prune_schedule, while
+# y5m12d31h24-gfs has no [prune] fragment and its tiers prune themselves.
+for _p in default y5m12d31h24-gfs; do
+    out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+            bash "$ZB" --source=rpool/data --target='' --profile="$_p" --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
+    _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data"$')"
+    _prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
+    if [ "$rc" -eq 0 ] && [ "$_snap" -ge 1 ] && [ "$_prune" -ge 1 ]; then
+        ok "132/$_p: --target='' plans a one-argument snapshot AND its retention"
+    else
+        bad "132/$_p: --target='' plans a one-argument snapshot AND its retention" \
+            "rc=$rc snapsend=$_snap delsnaps=$_prune"
+    fi
+    # ...and nothing that copies: no dst on the section this run writes, and no
+    # target-side prune section, because there is no target to bound.
+    if printf '%s\n' "$out" | sed -n '/^\[dataset:rpool\/data\]/,/^\[/p' | grep -q 'dst'; then
+        bad "132/$_p: the no-copy section carries no dst" "$(printf '%s\n' "$out" | sed -n '/^\[dataset:rpool\/data\]/,/^\[/p')"
+    else
+        ok "132/$_p: the no-copy section carries no dst"
+    fi
+done
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

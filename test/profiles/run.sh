@@ -212,6 +212,29 @@ done
 # whole config. It escaped the "has a [template:] layer, so it is policy" rule
 # by having no template layer at all; measured validating on 2026-09-01, while
 # listing what a profile may carry.
+# REV-20260901-131. `gfs` is exempt from the "policy belongs in a [template:]"
+# rule ONLY in a [prune] fragment, where it is a property of the section -- one
+# combined -G line over every tier it names. The first cut of that exemption
+# matched on the field before the kind, so it also let `gfs` into a [dataset]
+# fragment: pasted into every created section, read by resolve_field BEFORE the
+# template, it silently turned every referenced tier from flat-count retention
+# into time buckets. Nothing failed -- a lowercase profile just started
+# rendering ladders.
+cp "$DS_DEFAULT" "$TMP/bad-ds-gfs.inc"
+echo 'gfs = yes' >> "$TMP/bad-ds-gfs.inc"
+if validate_fragment dataset "$TMP/bad-ds-gfs.inc"; then bad "negative: [dataset] gfs was accepted"; else ok "negative: [dataset] gfs refused"; fi
+
+# The two positives that make that negative mean something rather than being a
+# guard against everything: the legitimate [prune] spelling every shipped ladder
+# profile uses, and the per-tier spelling y5m12d31h24-gfs uses.
+cp "$PR_DEFAULT" "$TMP/ok-prune-gfs.inc"
+echo 'gfs = yes' >> "$TMP/ok-prune-gfs.inc"
+if validate_fragment prune "$TMP/ok-prune-gfs.inc"; then ok "positive: [prune] gfs still accepted"; else bad "positive: [prune] gfs still accepted" "$PROFILE_ERR"; fi
+
+TPLGFS="$TMP/ok-tpl-gfs.conf"
+awk '{print} /^\[template:hourly\]$/{print "	gfs            = yes"}' "$ROOT/profiles/d30h24.conf" > "$TPLGFS"
+if profile_validate_file "$TPLGFS" "$GEN" >/dev/null 2>&1; then ok "positive: [template:] gfs still accepted"; else bad "positive: [template:] gfs still accepted" "$PROFILE_ERR"; fi
+
 cp "$PR_DEFAULT" "$TMP/bad-sshflags.inc"
 echo 'ssh_flags = -p 2222' >> "$TMP/bad-sshflags.inc"
 if validate_fragment prune "$TMP/bad-sshflags.inc"; then bad "negative: relation-owned ssh_flags was accepted"; else ok "negative: relation-owned ssh_flags refused"; fi
