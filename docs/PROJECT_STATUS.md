@@ -137,6 +137,16 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
+  **Ryzyko resztkowe nazwane i ZAAKCEPTOWANE, nie zamknięte (decyzja
+  właściciela 2026-09-01).** Profil bez własnego `[prune]`, którego tiery też
+  nie mają `prune_schedule`, wyrenderuje snapshoty bez retencji. Bramki na to
+  **nie budujemy**: retencję może prowadzić coś spoza pakietu (`pvesr` robi
+  dokładnie to na własnych rodzinach), więc bramka odmawiałaby poprawnych
+  wdrożeń. To narzędzie administratora — odmowy zostają tam, gdzie chronią
+  cudze dane, nie tam, gdzie zgadują intencję. Zapis w `OWNER-DECISIONS.md`;
+  zapowiedź tej zmiany w „Remaining risk" odpowiedzi na REV-132 jest tym samym
+  nieaktualna.
+
   **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
   W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,
   więc objął też blok `[dataset]` — a `resolve_field` czyta sekcję przed

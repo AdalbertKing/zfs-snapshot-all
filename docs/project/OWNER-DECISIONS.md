@@ -307,3 +307,28 @@ nie ma dalszych kroków — pasmo siedzi w manifeście parowania, rodziny
 zarezerwowane przychodzą z profilu, `default` jest jawnym parametrem, a oś
 zakresu ma nazwane pola z warstwą polityki. Kolejny etap jest po stronie GUI,
 nie wsadu.
+
+## ROZSTRZYGNIĘTE 2026-09-01 — żadnej bramki na „snapshoty bez retencji"
+
+W odpowiedzi na REV-20260901-132 implementer nazwał resztkowe ryzyko: profil bez
+własnego fragmentu `[prune]`, którego tiery też nie mają `prune_schedule`,
+wyrenderuje zadania tworzące snapshoty i **nie** planujące żadnego cięcia.
+Zaproponował bramkę na kandydacie — odmowę instalacji planu, który tworzy
+snapshoty i nie tnie nic.
+
+**Decyzja: NIE budujemy tego.**
+
+Powód właściciela: *„Admin wie co robi. Być może prune załatwia inny skrypt,
+albo mechanizm np. pvesr."* Konfiguracja, w której retencję prowadzi coś spoza
+tego pakietu, jest legalna i spotykana — `pvesr` na Proxmoksie robi dokładnie
+to na własnych rodzinach. Bramka odmawiałaby wtedy poprawnego wdrożenia,
+a jedyną odpowiedzią operatora byłoby jej obejście.
+
+To jest ta sama linia, co reszta narzędzia: **to jest narzędzie administratora,
+nie ma barierek.** Odmowy zostają tam, gdzie chronią przed cichym zniszczeniem
+CUDZYCH danych (rodziny zarezerwowane, strażnik antykasacyjny crona, odmowa
+nakładania się pokrycia) — nie tam, gdzie odgadują intencję.
+
+Konsekwencja dla `docs/internal/reviews/responses/REV-20260901-132.md`: sekcja
+„Remaining risk" zapowiada tę zmianę jako osobną. Zapowiedź jest nieaktualna —
+ryzyko zostaje nazwane i zaakceptowane, nie zamknięte.
