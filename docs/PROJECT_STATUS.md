@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d36e14e077765bcb -->
+<!-- status-covers-digest: 0311f0f2fec02476 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -136,6 +136,29 @@
   co `recursive` i `send_schedule`; wymknęło się regule „ma warstwę
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
+
+  **DRABINA NA TIERZE (2026-09-01, polecenie właściciela „to jest
+  konieczne").** `gfs = yes` można teraz postawić na tierze `[dataset:]`/
+  `[template:]`, przez co linia prune TEGO tieru niesie `-G`: rodzina jest
+  cięta **kubełkami czasu**, nie płaskim licznikiem. Wcześniej niewyrażalne —
+  `gfs` żył tylko w `[prune:]`, a jego projekt to JEDNA linia `-G` nad JEDNĄ
+  rodziną; cztery drabiny na jednym datasecie wymagałyby czterech sekcji
+  `[prune:<ścieżka>]`, a nagłówek jest kluczem (zmierzone: `duplicate
+  section`).
+
+  Różnica nie jest kosmetyczna, zmierzona na pve9 na trzech snapshotach
+  w jednej godzinie (tak wygląda nadrabianie po przerwie): płaskie `-H2`
+  zostawiło dwa najnowsze — dwie sekundy historii — a `-G -H2` jeden na
+  kubełek godzinowy. **`gfs` wszedł do klucza scalania** linii prune: tier
+  z drabiną nie skleja się z płaskim, bo linia niesie `-G` albo nie, dla
+  każdego datasetu, który wymienia.
+
+  Nowy profil **`y5m12d31h24`** (5 rocznych, 12 miesięcznych, 31 dobowych,
+  24 godzinowe; cztery przedrostki, cztery jednoszczeblowe drabiny; wszystko
+  poza godzinowym `quiesce = auto,degrade`; nic nigdzie nie kopiowane).
+  Zweryfikowany na labie liniami crona uruchomionymi DOSŁOWNIE: hourly exit 0,
+  daily **exit 8** ze snapshotem `automated_daily_crash_...`, a prune godzinowy
+  zostawił jeden snapshot z trzech i **nie tknął rodziny dobowej**.
 
   **CZĘŚĆ WSADOWA ZAMKNIĘTA — decyzja właściciela 2026-09-01.** Emisja
   `-X/-e/-E` zostaje w `flags`: funkcjonalnie nie dawała nic (oba zapisy
