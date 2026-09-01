@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 646b1ca2612d93bd -->
+<!-- status-covers-digest: bd55412722533907 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -175,6 +175,59 @@
   cudze dane, nie tam, gdzie zgadują intencję. Zapis w `OWNER-DECISIONS.md`;
   zapowiedź tej zmiany w „Remaining risk" odpowiedzi na REV-132 jest tym samym
   nieaktualna.
+
+  **12 z 14 profili nie dawało się wdrożyć Z CELEM — naprawione, PR #256
+  (2026-09-01).** Kampania labowa właściciela (trzy kształty wdrożenia × cały
+  katalog) trafiła w twardą odmowę: sekcja `[prune:<cel>]` wklejała fragment
+  `[prune]`, którego profil tnący się z tierów po prostu nie ma, więc powstawała
+  sekcja bez `use_template`, a `gen-cron` odrzucał kandydata
+  (`error: [prune:hdd/labtarget] has no use_template`). **`prod` i `d30` padały
+  też, więc dziura jest starsza niż profile z tego dnia** — to ta sama klasa,
+  dla której powstał `profile_declares_ladder` po incydencie z `prod`: zamknięta
+  na ścieżce zdalnej i nigdy niezadana na lokalnej.
+
+  Za odmową siedziała druga wada, którą odmowa **zasłaniała**: z celem blok
+  retencji źródła leciał dla każdego profilu, więc profil bez fragmentu tnie
+  źródło dwa razy — raz drabiną z tierów, raz płasko z rodziny źródłowej, i
+  płaskie cofa drabinę. To ta sama duplikacja, którą REV-132 zmierzył w trybie
+  bez kopii; warunek napisano jako „bez kopii LUB własny fragment", gdy jedyne
+  pytanie brzmi „czy tiery już tną źródło". Po poprawce 14/14, a `default` i
+  `passive` renderują się bit w bit tak samo, bo rozwiązują się do tego samego
+  pliku.
+
+  Lekcja tej rundy jest ta sama co przy CRLF dzień wcześniej, tylko z drugiej
+  strony: **odmowa na ścieżce potrafi ukryć wadę za sobą.** Duplikacja retencji
+  była tam przez cały czas i żaden test jej nie widział, bo konfiguracja nie
+  dochodziła do renderu.
+
+  **Kształt dwuhostowy: dwa znaleziska, NAPRAWIONE — i okazały się jedną
+  wadą złożoną z dwóch (decyzja właściciela „bierz wady", 2026-09-01).**
+
+  Pierwsze: przy peerze z zapamiętanym trybem generator wypuszczał pakiet,
+  który jego własny `--join` odrzuca — `peer.conf carries both PEER_CONF_MODE
+  and PEER_CONF_DATASETS`. Gałąź re-parowania dziedziczyła `PEER_SAVED_MODE`
+  bezwarunkowo, choć gałąź świeżego parowania obok wymusza „albo tryb, albo
+  lista". Wywołujący był poprawny przez cały czas: `zfs-backup.sh` podaje
+  `--mode` ALBO `--peer-datasets`. Decyzję wydzielono do
+  `pair_mode_after_inheritance` — nazwanie datasetów W TYM wywołaniu jest
+  wyborem formy datasetowej, a dziedziczenie zostaje dla przypadku, dla
+  którego powstało: re-parowania, które nie nazywa niczego.
+
+  Drugie: **przerwany create nadpisywał manifest peera** (`PEER_SAVED_DATASETS`),
+  choć rekord relacji się nie ruszał — a `client_section_plan` renderuje
+  z manifestu, więc kolejny `migrate-profile` po cichu przecelowywał żywą
+  relację na dataset, którego nigdy nie backupowała. Naprawione tym samym
+  wzorcem, który cel relacji miał już wcześniej: rekord bije manifest per-host
+  (`REQUESTED_DATASETS` → `PEER_SAVED_DATASETS`, pod strażnikiem `-n`, bo tryb
+  sync i stare rekordy żadnej prośby nie niosą).
+
+  **Wiązanie, które widać dopiero razem.** `resolve_mode_datasets` — normalnie
+  rozwiązujący listę z podpisanego zakresu źródła — na manifeście niosącym
+  ORAZ tryb, ORAZ listę robi `return 0` od razu. Czyli pierwsza wada wyłącza
+  resolver, a dopiero to pozwala drugiej ugryźć: bez trybu w manifeście lista
+  zostałaby przeliczona z zakresu i rozjazd by się nie utrwalił. Zmierzone na
+  pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
+  w manifeście testowym oba pola naraz.
 
   **DWA P1 OD RECENZENTA, oba moje, oba naprawione (REV-131, REV-132).**
   W wyjątku dla `gfs` dopasowałem pole **przed** sprawdzeniem rodzaju sekcji,
