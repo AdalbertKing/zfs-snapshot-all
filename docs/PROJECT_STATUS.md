@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a020c60f249ae7e2 -->
+<!-- status-covers-digest: 24f06eeb0cf3a29f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,8 +97,19 @@
   `EXCLUDE_FAMILY_n` / `EXCLUDE_CHILD_n`. Nazwa niesie teraz **rodzaj listy**,
   której dotyczy — reguła spisana w `docs/project/FOUNDATIONS.md`. Stare
   pisownie **usunięte, nie aliasowane**; kosztowało jeden commit, bo pola miały
-  jeden dzień i nie było ich w żadnym configu na estacie (sprawdzone na trzech
-  hostach: zero rekordów `EXCLUDE_*`, zero pól w configach).
+  jeden dzień i nie było ich w żadnym configu na estacie (sprawdzone na
+  **pięciu** hostach — pve9, metropolis pve1/pve2, pve0, 11.11: zero rekordów
+  `EXCLUDE_*`, zero pól w configach).
+
+  Zgodność wstecz: **pominięcie pola = dzisiejsze zachowanie, co do bajta** —
+  z 26 istniejących golden fixture'ów nie zmienił się ani jeden. Stare
+  pisownie w CLI i w configu kończą się **głośnym** błędem. Trzecia,
+  **rekord klienta**, zawiodłaby po cichu (czytelniki szukają nowych nazw, więc
+  stary rekord wróciłby jako „brak wykluczeń", a reaktywacja zgubiłaby każde
+  `-X` i `-E` bez słowa) — dlatego `load_client_and_connection` **odmawia**
+  na `EXCLUDE_SNAP_n` / `EXCLUDE_n`, nazywając zamiennik. Ta odmowa nie
+  powinna nigdy wystrzelić i właśnie dlatego istnieje: „nigdy" jest tu
+  twierdzeniem o pomiarze, nie o kodzie.
 
   **Czego to jeszcze NIE robi:** pola zakresu są profile-forbidden (węziej, niż
   chce `PROFILE-VARIABLE-INVENTORY.md` §5) — brakuje warstwy `[template:]` i CLI

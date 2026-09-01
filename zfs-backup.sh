@@ -7285,8 +7285,37 @@ load_client_and_connection() {
     # cleared for the identical reason spelled out above, not a new one.
     BANDWIDTH=""
     PEER_SAVED_BANDWIDTH=""
+    # The numbered exclusion fields, cleared for the same reason and BEFORE the
+    # source below: they are read back by name, so a value left over from a
+    # previously loaded record would be attributed to this one. No two-client
+    # path was found in a single process, so this is consistency with the two
+    # fields above rather than a defect being fixed -- said plainly because the
+    # difference matters if someone later looks for the measurement.
+    unset ${!EXCLUDE_@}
     # shellcheck disable=SC1090
     . "$cpath"
+    # LEGACY EXCLUSION FIELDS -- refuse, never ignore.
+    #
+    # The fields were renamed on 2026-09-01 (EXCLUDE_SNAP_n -> EXCLUDE_FAMILY_n,
+    # EXCLUDE_n -> EXCLUDE_CHILD_n). The CLI and the CONFIG halves of that rename
+    # both fail LOUDLY on the old spelling -- an unknown option, an unknown
+    # field. This half would not have: the readers look the new names up by
+    # name, so an old record would simply come back with no exclusions, and the
+    # next re-activation would drop every -X and -E it was enrolled with without
+    # a word. Silence is the one failure mode this package does not accept.
+    #
+    # Measured before the rename on all five hosts: zero records carry these.
+    # So this refusal should never fire -- which is exactly why it has to exist
+    # rather than be argued away, because "should never" is a claim about a
+    # measurement, not about the code.
+    local _leg
+    for _leg in ${!EXCLUDE_@}; do
+        case "$_leg" in
+            EXCLUDE_SNAP_[0-9]*) die "$cpath carries the legacy field '$_leg'. It was renamed to EXCLUDE_FAMILY_${_leg#EXCLUDE_SNAP_} on 2026-09-01 and is no longer read -- continuing would silently drop this relationship's snapshot-family exclusions. Rename the field in that file and re-run." ;;
+            EXCLUDE_FAMILY_*|EXCLUDE_CHILD_*) ;;
+            EXCLUDE_[0-9]*) die "$cpath carries the legacy field '$_leg'. It was renamed to EXCLUDE_CHILD_${_leg#EXCLUDE_} on 2026-09-01 and is no longer read -- continuing would silently drop this relationship's child exclusions. Rename the field in that file and re-run." ;;
+        esac
+    done
     local label; label=$(peer_label "$PEER_HOST")
     LOAD_LABEL="$label"
     local mpath; mpath=$(peer_manifest_path "$label")

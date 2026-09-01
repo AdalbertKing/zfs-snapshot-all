@@ -8007,6 +8007,56 @@ case "$(awk '/^warn_if_block_has_other_source\(\)/,/^}/' "$ZFSBACKUP")" in
     *) bad "block-source guard: shares the path normaliser" ;;
 esac
 
+
+# --- LEGACY EXCLUSION FIELDS IN A CLIENT RECORD ------------------------------
+#
+# The exclusion fields were renamed on 2026-09-01. The CLI and CONFIG halves of
+# that rename fail LOUDLY on the old spelling -- unknown option, unknown field.
+# The RECORD half would not have: the readers look the new names up by name, so
+# an old record comes back with no exclusions at all and the next re-activation
+# drops every -X and -E the relationship was enrolled with, silently.
+#
+# Zero such records existed on any of the five hosts when the rename landed, so
+# this refusal should never fire in practice. That is precisely why it is
+# asserted rather than argued: "should never" is a claim about a measurement
+# somebody took once, not a property of the code.
+LEG="$WORK/legacy"; mkdir -p "$LEG"
+leg_load() {   # <record lines...> -> the loader's output
+    local f="$LEG/rec.conf"; : > "$f"
+    printf 'PEER_HOST=10.0.0.1\n' > "$f"
+    local l; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done
+    ( peer_label() { echo lab; }; peer_manifest_path() { echo /nonexistent; }
+      load_client_and_connection "$f" ) 2>&1
+}
+for spec in 'EXCLUDE_SNAP_1=vzdump|EXCLUDE_FAMILY_1' 'EXCLUDE_1=-swap$|EXCLUDE_CHILD_1'; do
+    fld="${spec%%|*}"; want="${spec##*|}"
+    out="$(leg_load "$fld")"
+    if case "$out" in *"legacy field '${fld%%=*}'"*) true ;; *) false ;; esac \
+       && case "$out" in *"$want"*) true ;; *) false ;; esac; then
+        ok "legacy record field ${fld%%=*} is refused, naming its replacement"
+    else
+        bad "legacy record field ${fld%%=*} is refused, naming its replacement" "$out"
+    fi
+done
+
+# The control the two negatives above cannot give: a guard that refused every
+# EXCLUDE_* would pass both and break every record written since the rename.
+# These must reach the manifest check, i.e. get PAST the guard.
+for fld in 'EXCLUDE_FAMILY_1=vzdump' 'EXCLUDE_CHILD_1=-swap$'; do
+    out="$(leg_load "$fld")"
+    case "$out" in
+        *"legacy field"*) bad "control: ${fld%%=*} is NOT refused" "the guard is too wide: $out" ;;
+        *) ok "control: ${fld%%=*} passes the guard" ;;
+    esac
+done
+
+# ...and a record with no exclusions at all, the commonest shape on the estate.
+out="$(leg_load)"
+case "$out" in
+    *"legacy field"*) bad "control: a record with no exclusions passes the guard" "$out" ;;
+    *) ok "control: a record with no exclusions passes the guard" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
