@@ -134,6 +134,14 @@ profile_name_ok() {   # <profile>
 #
 #   src, dst   topology -- the relationship's, not the policy's
 #   flags      raw engine flags: an escape hatch around every native field
+#   ssh_flags  the SAME thing for a remote source prune: -p/-k/-c/-K/-O, i.e.
+#              the connection's identity. Added 2026-09-01, after a profile
+#              carrying `ssh_flags` in its [prune] block was measured
+#              VALIDATING -- and append_source_prune_create writes that field
+#              itself, so the section would have carried it twice and gen-cron
+#              refuses a duplicate. Same family as `recursive` and
+#              `send_schedule`; it escaped the "has a [template:] layer, so it
+#              is policy" rule because it has no template layer at all.
 #   pair_label relationship identity
 #   notify     relationship-owned notification routing
 #
@@ -165,7 +173,7 @@ profile_name_ok() {   # <profile>
 # still wins, because resolve_field reads the section first -- which is the
 # "default from profile, overridable per relationship" the inventory asked
 # for, using the layering that already existed rather than new machinery.
-PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher'
+PROFILE_FORBIDDEN_FIELDS='src dst flags ssh_flags pair_label notify bandwidth compression cipher'
 
 profile_schema_dump() {   # <gen-cron.sh path> <outfile> -> 0 ok
     PROFILE_ERR=""
