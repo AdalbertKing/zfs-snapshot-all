@@ -514,13 +514,23 @@ render_profile() {   # <file> <name>   -> 0 and the cron block, or 1 and PROFILE
 # header comment, because a convention nothing checks is decoration -- and this
 # one decides whether the daily tier can be frozen on its own.
 #
-# A FUNCTION rather than eight lines inside the loop, because the loop can only
-# ever reach the LOWERCASE half: no uppercase profile is shipped, and on a
+# A FUNCTION rather than eight lines inside the loop, and until 2026-09-01 the
+# loop could only ever reach the LOWERCASE half. `Y5M12D31H24` changed that: it
+# is the first shipped uppercase profile, so the UPPERCASE branch is now
+# exercised against a real catalogue file as well as against the fixtures below.
+#
+# What has NOT changed is why no uppercase profile existed before it. On a
 # case-insensitive filesystem (this workstation, and any macOS checkout) one
-# cannot even be added next to its lowercase twin -- `D30H24.conf` and
-# `d30h24.conf` are the same file, and writing one DELETES the other. Measured
-# here on 2026-08-27, by deleting d30h24.conf exactly that way. So the uppercase
-# half is exercised below against fixtures that never touch profiles/.
+# cannot be added next to its lowercase TWIN -- `D30H24.conf` and `d30h24.conf`
+# are the same file, and writing one DELETES the other. Measured here on
+# 2026-08-27, by deleting d30h24.conf exactly that way. `Y5M12D31H24` is
+# shippable precisely because it has no lowercase twin: the bare `y5m12d31h24`
+# is reserved and unshipped (profiles/README.md), and this is the second reason
+# to keep it that way.
+#
+# The loop's name filter carries the yearly cadence (`yY`) for the same reason:
+# without it this profile matched nothing and would have been SKIPPED IN
+# SILENCE -- shipped, validating, and checked by nothing.
 shape_verdict() {   # <name> <promised flags> <delsnaps lines> -> sets SHAPE_ERR
     local n="$1" want="$2" lines="$3" n_del n_want
     SHAPE_ERR=""
@@ -539,7 +549,7 @@ name_bad=""
 for f in "$ROOT"/profiles/*.conf; do
     n="$(basename "$f" .conf)"
     # the retention-named ones: letter+digits pairs, nothing else
-    printf '%s' "$n" | grep -qE '^([dhwmDHWM][0-9]+)+$' || continue
+    printf '%s' "$n" | grep -qE '^([dhwmyDHWMY][0-9]+)+$' || continue
 
     block="$(render_profile "$f" "$n")" || { name_bad="$name_bad $n(render:$PROFILE_ERR);"; continue; }
     lines="$(printf '%s\n' "$block" | grep -F 'delsnaps.sh')"
@@ -550,7 +560,7 @@ for f in "$ROOT"/profiles/*.conf; do
     # would pass a two-family profile on the strength of half its retention --
     # which is exactly what this assertion started doing on 2026-08-27, and it
     # reported the failure as "missing -D30" rather than as its own blind spot.
-    want="$(printf '%s' "$n" | sed -E 's/([dhwmDHWM])([0-9]+)/ -\U\1\E\2/g')"
+    want="$(printf '%s' "$n" | sed -E 's/([dhwmyDHWMY])([0-9]+)/ -\U\1\E\2/g')"
     for flag in $want; do
         case " $(printf '%s' "$lines" | tr '\n' ' ') " in
             *" $flag "*) : ;;
@@ -558,7 +568,7 @@ for f in "$ROOT"/profiles/*.conf; do
         esac
     done
     # ...and NOTHING it does not promise, across all of them.
-    for got in $(printf '%s' "$lines" | grep -oE ' -[HDWM][0-9]+' | sort -u); do
+    for got in $(printf '%s' "$lines" | grep -oE ' -[HDWMY][0-9]+' | sort -u); do
         case " $want " in *" $got "*) : ;; *) name_bad="$name_bad $n(unpromised$got);" ;; esac
     done
 

@@ -40,6 +40,24 @@ A bare name therefore always means the catalogue default. `y5m12d31h24` is
 deliberately not shipped: we ship its `-gfs` and `-age` forms, and the bare
 name stays reserved so it cannot mean two things.
 
+`Y5M12D31H24` is the first UPPERCASE profile, and it needed no new suffix: the
+case rule above already said "one family, several counters over it". It was
+added 2026-09-01 to close a real hole rather than a missing combination -- the
+only unquiesced profile was `default`, which stops at about a month, so "five
+years, and I cannot freeze anything" (guests with no agent, plain filesystems,
+the LVM/ext4 adaptation) had no answer and meant hand-editing. On one family
+quiesce cannot be per-tier at all: the daily snapshot IS one of the hourly ones
+the ladder kept, so it is all twenty-four freezes a day or none. That is why
+its "quiesced" column reads "none -- a ladder cannot" rather than "off".
+
+**One practical constraint, stated because it is invisible until it bites.**
+The case rule cannot ship BOTH cases of the same retention while the repository
+is developed on a case-insensitive filesystem: this working copy has
+`core.ignorecase = true`, so `Y5M12D31H24.conf` and a future bare
+`y5m12d31h24.conf` could not coexist in it. That is not a problem today
+precisely because the bare lowercase name is reserved and unshipped -- but it is
+a second reason to keep it reserved, on top of the ambiguity reason above.
+
 A per-tier profile may additionally put `gfs = yes` on a tier, which makes that
 tier's own line carry `-G`: its family is then pruned by **time buckets** ("one
 an hour for the last 24 hours") instead of by a **flat count** ("the 24
@@ -101,6 +119,7 @@ data where a crash-consistent copy is genuinely worthless. See
 | `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
 | `m12w4d7h24-gfs` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 12, each a `-G` ladder over its own prefix | daily, weekly, monthly |
 | `m12w4d7h24-age` | the same four families | the same numbers BY AGE (`-h24 -d7 -w4 -m12`) | daily, weekly, monthly |
+| `Y5M12D31H24` | one family, hourly | GFS ladder 24/31/12/5 | none — a ladder cannot |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
 
 `passive` has no `prefix` at all: it consumes snapshots another tool made, so
