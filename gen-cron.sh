@@ -1329,7 +1329,7 @@ _allow_fields() {
 POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                tier_label notify notify_raw notify_raw_prune notify_word
                monitor_warn monitor_crit monitor_schedule monitor_exclude
-               dst src autotune quiesce flags passive exclude_family"
+               dst src autotune quiesce flags passive exclude_family gfs"
 # The subset whose lookup actually reaches [defaults] as its last layer.
 # Deliberately absent: keep/retain and monitor_warn/monitor_crit (per-tier by
 # nature -- resolve_keep_retain and resolve_monitor stop at the template), the
@@ -1402,7 +1402,7 @@ _allow_fields template  $POLICY_FIELDS
 DATASET_POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                        tier_label notify notify_raw
                        monitor_warn monitor_crit monitor_schedule monitor_exclude
-                       dst src autotune quiesce flags"
+                       dst src autotune quiesce flags gfs"
 # A [prune:] section does not send. send_schedule, prefix, dst, src, autotune,
 # quiesce and flags are transfer-side fields build_prune_section never looks at,
 # so accepting them here only ever meant a line that does nothing. notify_raw is
@@ -2408,7 +2408,31 @@ build_dataset() {
             plabel="$(resolve_field notify "$ds" "$tmpl" "")" || plabel=""
             praw="$(resolve_field notify_raw_prune "" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}")
+            # PER-TIER LADDER. `gfs = yes` on a tier makes THIS tier's own
+            # delsnaps line carry -G, so its family is pruned by time buckets
+            # ("one per hour for 24 hours") instead of by a flat count ("the 24
+            # newest"). One rung per tier, four tiers, four ladders -- which is
+            # the shape a [prune:] section cannot express, because its gfs is
+            # ONE combined -G line over ONE family and a [prune:<path>] header
+            # can only exist once per dataset.
+            #
+            # The difference is not cosmetic, measured on pve9 2026-09-01 with
+            # three snapshots taken inside one hour (what a catch-up burst
+            # looks like): flat -H2 kept the two newest, i.e. two seconds of
+            # history; -G -H2 kept one per hourly bucket. A flat count silently
+            # collapses the retention window after a burst; the ladder does not.
+            #
+            # Read from the tier, so a profile can state it once per [template:].
+            resolve_bool_field gfs "$ds" "$tmpl" "[dataset:$ds_path] tier=$tier" 0
+            local tier_gfs="$BOOL_FIELD"
+            # Same rule the [prune:] ladder enforces, and for the same reason:
+            # -G builds a rung per count letter and rejects age flags outright,
+            # so a malformed retain is caught here rather than as a cryptic
+            # delsnaps error in a cron mail at 01:31.
+            if [ "$tier_gfs" -eq 1 ] && ! [[ "$retain_flag" =~ ^-[HDWMY][0-9]+$ ]]; then
+                die "[dataset:$ds_path] tier=$tier: gfs=yes needs a single count-based retain flag (-H/-D/-W/-M/-Y followed by a number), got '$retain_flag'"
+            fi
+            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
             # ---- monitor (rides this same pattern and the same scope) ----
@@ -2940,9 +2964,9 @@ group_send() {
 group_inline_prune() {
     declare -gA INLINE_PRUNE_GROUPS=()
     declare -ga INLINE_PRUNE_GROUP_ORDER=()
-    local e ds tier pattern retain schedule notify recursive pairlbl key
+    local e ds tier pattern retain schedule notify recursive pairlbl gfs key
     for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "$e"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs <<< "$e"
         # 'recursive' is IN the key. A delsnaps.sh line carries -R or it does
         # not, for every dataset it names -- so merging a recursive dataset
         # with a non-recursive one would silently give one of them the wrong
@@ -2971,7 +2995,15 @@ group_inline_prune() {
         # under a label that says it is stopped. In practice 'notify' already
         # separates them; this makes the property structural rather than
         # incidental to how the notify text happens to be built.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}"
+        #
+        # 'gfs' is in the key for the same reason 'recursive' is, one field
+        # later: the line carries -G or it does not, for every dataset it
+        # names. Merging a ladder tier with a flat one would give one of them
+        # the other's retention MEANING -- either a flat count where time
+        # buckets were asked for, or the reverse -- while the config still read
+        # correctly. That is the exact shape of the merge defects this key has
+        # already been widened for twice.
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}${SEP}${gfs}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -3432,26 +3464,27 @@ job_cron_line() {
 # share a parent is still a list, not a subtree, and collapsing it to a sweep
 # would prune snapshots nobody named.
 emit_inline_prune() {
-    local key list ds tier pattern retain schedule notify recursive pairlbl
+    local key list ds tier pattern retain schedule notify recursive pairlbl gfs
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
         list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs <<< "${members[0]}"
 
         local -a targets=()
-        local m mds mtier mpat mret msch mnot mrec mlbl
+        local m mds mtier mpat mret msch mnot mrec mlbl mgfs
         for m in "${members[@]}"; do
-            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec mlbl <<< "$m"
+            IFS="$SEP" read -r mds mtier mpat mret msch mnot mrec mlbl mgfs <<< "$m"
             targets+=("$mds")
         done
         local joined
         joined="$(IFS=,; printf '%s' "${targets[*]}")"
 
-        local rflag="" lflag=""
+        local rflag="" lflag="" gflag=""
         [ "$recursive" = "1" ] && rflag="-R "
+        [ "$gfs" = "1" ] && gflag="-G "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh ${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }

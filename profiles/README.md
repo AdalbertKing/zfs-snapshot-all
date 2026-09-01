@@ -19,6 +19,15 @@ mislead somebody reading `ls`.
 | lowercase `d30h24` | one family **per tier**, each with its own prefix and its own counter | one `delsnaps` line per tier |
 | uppercase `D30H24` | **one family**, several counters over it — the GFS ladder | one `delsnaps -G` line |
 
+A per-tier profile may additionally put `gfs = yes` on a tier, which makes that
+tier's own line carry `-G`: its family is then pruned by **time buckets** ("one
+an hour for the last 24 hours") instead of by a **flat count** ("the 24
+newest"). The two coincide while the cadence is regular and diverge sharply
+after a catch-up burst — measured on pve9, 2026-09-01, with three snapshots
+taken inside one hour: flat `-H2` kept the two newest, `-G -H2` kept one per
+bucket. `y5m12d31h24` is the shipped example: four prefixes, four one-rung
+ladders, and each tier's prune leaves the other three families alone.
+
 No uppercase profile is shipped yet. The distinction exists so that when one is,
 the two shapes are told apart from `ls` without opening either file.
 
@@ -63,6 +72,7 @@ data where a crash-consistent copy is genuinely worthless. See
 | `d30h24` | two families: hourly, daily | 24 / 30 | daily |
 | `d7h24` | two families: hourly, daily | 24 / 7 | daily |
 | `d30` | one family, daily | 30 | daily |
+| `y5m12d31h24` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder | daily, monthly, yearly |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
 
 `passive` has no `prefix` at all: it consumes snapshots another tool made, so
