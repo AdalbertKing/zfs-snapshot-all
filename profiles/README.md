@@ -95,6 +95,8 @@ data where a crash-consistent copy is genuinely worthless. See
 | `d30` | one family, daily | 30 | daily |
 | `y5m12d31h24-gfs` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder over its own prefix | daily, monthly, yearly |
 | `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
+| `m12w4d7h24-gfs` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 12, each a `-G` ladder over its own prefix | daily, weekly, monthly |
+| `m12w4d7h24-age` | the same four families | the same numbers BY AGE (`-h24 -d7 -w4 -m12`) | daily, weekly, monthly |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
 
 `passive` has no `prefix` at all: it consumes snapshots another tool made, so
