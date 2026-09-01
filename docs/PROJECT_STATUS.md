@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 34e6c7dc085b4219 -->
+<!-- status-covers-digest: d36e14e077765bcb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -126,6 +126,16 @@
   `snapget.sh -m "automated_hourly_" -K … -e -E __replicate_ -E vzdump -A -L
   tltest …` — czyli `-e` i obie rodziny przyszły z profilu. Relacja usunięta,
   rekordy i crontab konta zdiffowane przed/po: identyczne.
+
+  **`ssh_flags` też zakazane w profilu (2026-09-01).** Znalezione przy
+  wypisywaniu właścicielowi, co profil MOŻE nieść, zanim zacznie pisać profile
+  fabryczne: `ssh_flags` to tożsamość połączenia dla zdalnego prune
+  (`-p/-k/-c/-K/-O`, ten sam zestaw co `flags`), a `append_source_prune_create`
+  sam wpisuje to pole do sekcji — więc profil z `ssh_flags` powodował, że
+  sekcja niosła je dwa razy i `gen-cron` odrzucał cały config. Ta sama rodzina
+  co `recursive` i `send_schedule`; wymknęło się regule „ma warstwę
+  `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
+  Zmierzone: przed poprawką profil przechodził walidację.
 
   **CZĘŚĆ WSADOWA ZAMKNIĘTA — decyzja właściciela 2026-09-01.** Emisja
   `-X/-e/-E` zostaje w `flags`: funkcjonalnie nie dawała nic (oba zapisy
