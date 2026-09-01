@@ -1329,7 +1329,7 @@ _allow_fields() {
 POLICY_FIELDS="send_schedule prune_schedule prefix pattern keep retain
                tier_label notify notify_raw notify_raw_prune notify_word
                monitor_warn monitor_crit monitor_schedule monitor_exclude
-               dst src autotune quiesce flags"
+               dst src autotune quiesce flags passive exclude_family"
 # The subset whose lookup actually reaches [defaults] as its last layer.
 # Deliberately absent: keep/retain and monitor_warn/monitor_crit (per-tier by
 # nature -- resolve_keep_retain and resolve_monitor stop at the template), the
@@ -2280,10 +2280,10 @@ build_dataset() {
             # before this function has added anything to it -- otherwise the
             # second field would collide with the first field's own rendering.
             local scope_passive="" scope_exsnap="" scope_excl="" scope_raw="$flags"
-            if scope_passive="$(resolve_field passive "$ds" "" "")"; then
+            if scope_passive="$(resolve_field passive "$ds" "$tmpl" "")"; then
                 lint_scope_passive "$scope_passive" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             else scope_passive=""; fi
-            if scope_exsnap="$(resolve_field exclude_family "$ds" "" "")"; then
+            if scope_exsnap="$(resolve_field exclude_family "$ds" "$tmpl" "")"; then
                 lint_scope_exclude_family "$scope_exsnap" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             else scope_exsnap=""; fi
             lint_scope_excludes "$ds" "$scope_raw" "[dataset:$ds_path] tier=$tier"

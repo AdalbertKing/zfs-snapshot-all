@@ -240,25 +240,66 @@ refuses "grammar: exclude_family takes a NAME" "give the family NAME only" "excl
 refuses "grammar: exclude_child_x is not a field" "not a field gen-cron.sh reads" "exclude_child_x    = a"
 
 # --- 6. ownership -----------------------------------------------------------
-# [dataset:] only: there is no layer above the section that knows what a
-# relationship takes from its source.
-for fld in "passive      = yes" "exclude_family = fam" "exclude_child_1 = drop"; do
+# TWO KINDS OF SCOPE FIELD, and the line between them is what this block pins.
+#
+# passive and exclude_family are POLICY: "this class of relationship adopts a
+# family somebody else stamps", "__replicate_/vzdump are never ours". True of a
+# whole class, so they have a [template:] layer and a profile states them there.
+#
+# exclude_child_<n> is TOPOLOGY: which children of THIS source to leave behind.
+# A profile applied to ten sources cannot know that, so it stays section-only,
+# for the same reason `recursive` does.
+tmplconf() {   # <file> <template lines...> ; then extra [dataset:] lines on stdin
+    local f="$1"; shift
     {
         printf '[defaults]\n\thost_label = lab\n\n'
         printf '[template:hourly]\n'
         printf '\tsend_schedule  = 5 * * * *\n'
         printf '\tprefix         = automated_hourly_\n'
-        printf '\t%s\n\n' "$fld"
-        printf '[dataset:tank/a]\n\tuse_template = hourly\n\tnotify       = a\n'
+        local l; for l in "$@"; do printf '\t%s\n' "$l"; done
+        printf '\n[dataset:tank/a]\n\tuse_template = hourly\n\tnotify       = a\n'
         printf '\tdst          =\n\tsrc          = %s\n' "$REMOTE_SRC"
-    } > "$TMPD/tmpl.conf"
-    render "$GEN" "$TMPD/tmpl.conf"
-    if [ "$RC" -ne 0 ]; then
-        ok "ownership: ${fld%% *} is refused in a [template:]"
-    else
-        bad "ownership: ${fld%% *} is refused in a [template:]" "accepted: $(sendline "$OUT")"
-    fi
-done
+    } > "$f"
+}
+
+# The default reaches a section that says nothing.
+tmplconf "$TMPD/inh.conf" "passive        = yes" "exclude_family = __replicate_,vzdump"
+render "$GEN" "$TMPD/inh.conf"; line=$(sendline "$OUT")
+if [ "$RC" -eq 0 ] && case "$line" in *" -e "*) true ;; *) false ;; esac \
+   && case "$line" in *"-E __replicate_ -E vzdump"*) true ;; *) false ;; esac; then
+    ok "ownership: a [template:] default reaches a section that declares nothing"
+else
+    bad "ownership: a [template:] default reaches a section that declares nothing" "exit $RC line: $line"
+fi
+
+# ...and the RELATIONSHIP still wins, which is what makes it a default rather
+# than a policy imposed on a source the profile has never seen. Asserted in both
+# directions: the section turns passivity OFF and narrows the family list.
+{
+    printf '[defaults]\n\thost_label = lab\n\n'
+    printf '[template:hourly]\n\tsend_schedule  = 5 * * * *\n\tprefix         = automated_hourly_\n'
+    printf '\tpassive        = yes\n\texclude_family = __replicate_,vzdump\n\n'
+    printf '[dataset:tank/a]\n\tuse_template = hourly\n\tnotify       = a\n'
+    printf '\tdst          =\n\tsrc          = %s\n' "$REMOTE_SRC"
+    printf '\tpassive        = no\n\texclude_family = only_this\n'
+} > "$TMPD/ovr.conf"
+render "$GEN" "$TMPD/ovr.conf"; line=$(sendline "$OUT")
+if [ "$RC" -eq 0 ] && case "$line" in *" -e "*) false ;; *) true ;; esac \
+   && case "$line" in *"-E only_this"*) true ;; *) false ;; esac \
+   && case "$line" in *"__replicate_"*) false ;; *) true ;; esac; then
+    ok "ownership: the section overrides the [template:] default, in both directions"
+else
+    bad "ownership: the section overrides the [template:] default, in both directions" "exit $RC line: $line"
+fi
+
+# The topology half: no template layer, so a value there is an unknown field.
+tmplconf "$TMPD/tchild.conf" "exclude_child_1 = drop"
+render "$GEN" "$TMPD/tchild.conf"
+if [ "$RC" -ne 0 ]; then
+    ok "ownership: exclude_child_1 is refused in a [template:]"
+else
+    bad "ownership: exclude_child_1 is refused in a [template:]" "accepted: $(sendline "$OUT")"
+fi
 
 # Profile-forbidden, which is a statement about ownership and not about the
 # grammar: naming these fields must not, in the same change, hand them to a
@@ -266,7 +307,7 @@ done
 if [ -r "$PROFILE_LIB" ]; then
     DUMP="$TMPD/schema"
     if bash "$GEN" --dump-fields > "$DUMP" 2>/dev/null && [ -s "$DUMP" ]; then
-        for f in passive exclude_family exclude_child_1; do
+        for f in exclude_child_1 exclude_child_2; do
             if ( set -u; source "$PROFILE_LIB"; profile_field_forbidden "$f" ); then
                 ok "ownership: '$f' is profile-forbidden"
             else
@@ -276,7 +317,7 @@ if [ -r "$PROFILE_LIB" ]; then
         # The control the negatives above cannot give: a rule that refused
         # everything would pass all three. The fields the shipped profiles
         # actually carry must be untouched.
-        for f in use_template gfs gfs_pattern; do
+        for f in use_template gfs gfs_pattern passive exclude_family; do
             if ( set -u; source "$PROFILE_LIB"; profile_field_forbidden "$f" ); then
                 bad "ownership control: '$f' is NOT forbidden" "the forbidden rule is too wide"
             else
