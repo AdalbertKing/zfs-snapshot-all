@@ -5579,7 +5579,19 @@ cmd_remove_replica() {
 }
 
 cmd_local_backup() {
-    local target="" profile="$PROFILE_DEFAULT_NAME" config=""
+    # target_given separates "the operator did not say" from "the operator said
+    # NOTHING GOES ANYWHERE". Both leave $target empty and they mean opposite
+    # things: omitted asks this tool to PROPOSE a destination, `--target=''` declares
+    # there is none and the snapshots stay in the source. Without the flag the
+    # two are indistinguishable, which is why absence could not simply be given
+    # the second meaning -- every command an operator runs today would have
+    # silently changed shape.
+    #
+    # The spelling mirrors CONFIG v4, which this command writes: `dst =` blank
+    # is already the one field where empty means "no destination at all"
+    # (lint_flags says exactly that), while every other field refuses a blank as
+    # a mistake. CLI and generated config say the same thing the same way.
+    local target="" target_given=0 profile="$PROFILE_DEFAULT_NAME" config=""
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
     local do_install=0 assume_yes=0
@@ -5588,7 +5600,7 @@ cmd_local_backup() {
     for a in "$@"; do
         case "$a" in
             --source=*)  source_flags+=("${a#*=}") ;;
-            --target=*)  target="${a#*=}" ;;
+            --target=*)  target="${a#*=}"; target_given=1 ;;
             --profile=*) profile="${a#*=}" ;;
             --config=*)  config="${a#*=}" ;;
             --plan)      do_install=0 ;;   # explicit form of the default
@@ -5678,7 +5690,27 @@ cmd_local_backup() {
     # the target or confirms it interactively. That keeps "do not silently choose a
     # destructive destination" a property of the code and not of the wording.
     local target_from=""
-    if [ -z "$target" ]; then
+    # NO DESTINATION AT ALL -- the single-host shape. `--target=''` says the
+    # snapshots stay where they are made: each tier creates its family and
+    # prunes it in place, and nothing is ever transferred. gen-cron already
+    # renders exactly that from a [dataset:] with no `dst` (measured: one
+    # snapsend argument, no target), so this is the composer learning a shape
+    # the generator has always had.
+    #
+    # Checked BEFORE the proposal below, because that is the whole distinction:
+    # an omitted --target still asks for a destination to be proposed, and every
+    # command written before today keeps meaning what it meant.
+    local no_copy=0
+    if [ "$target_given" -eq 1 ] && [ -z "$target" ]; then
+        no_copy=1
+        # Same guard the proposed values carry, extended to a third case rather
+        # than invented for it: a value nobody typed twice must not install
+        # unattended. `--target="$VAR"` with VAR unset produces this exact
+        # argv, and the difference between "I meant no copy" and "my variable
+        # was empty" is not visible from here -- so the preview is where it has
+        # to be seen.
+        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ]             && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
+    elif [ -z "$target" ]; then
         read_server_conf
         local proposal
         # `|| die`, never a pipe: the helper's own die() for ambiguous pools runs
@@ -5748,8 +5780,12 @@ cmd_local_backup() {
     done
     [ "${#roots[@]}" -gt 0 ] || die "local-backup: --source resolved to no dataset name"
 
-    case "$target" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --target='$target' is not a plain dataset name" ;; esac
-    case "$target" in *:*) die "local-backup is LOCAL only -- --target='$target' names a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
+    # Skipped when there is no target: both checks ask "is this destination
+    # well formed", and no-copy has no destination to ask about.
+    if [ "$no_copy" -eq 0 ]; then
+        case "$target" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --target='$target' is not a plain dataset name" ;; esac
+        case "$target" in *:*) die "local-backup is LOCAL only -- --target='$target' names a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
+    fi
     case "$profile" in ""|*[!A-Za-z0-9_-]*) die "local-backup: --profile='$profile' is not a valid profile name" ;; esac
 
     # Every root: plain name, LOCAL, and it must EXIST (REV-097 F1). One missing
@@ -5765,10 +5801,15 @@ cmd_local_backup() {
     # Overlap refusals before any composition: no root may land inside the target
     # (self-reference), and no root may contain or equal another (parent/child in
     # the explicit set) -- refuse rather than invent precedence.
-    for r in "${roots[@]}"; do
-        local_backup_overlap "$r" "$target" \
-            && die "local-backup: --target='$target' overlaps source '$r' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up."
-    done
+    # Vacuous without a destination: nothing lands anywhere, so nothing can
+    # land inside its own source. The root-versus-root checks below still
+    # run -- two sources that contain one another are still a mistake.
+    if [ "$no_copy" -eq 0 ]; then
+        for r in "${roots[@]}"; do
+            local_backup_overlap "$r" "$target" \
+                && die "local-backup: --target='$target' overlaps source '$r' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up."
+        done
+    fi
     local i j
     for ((i=0; i<${#roots[@]}; i++)); do
         for ((j=i+1; j<${#roots[@]}; j++)); do
@@ -5843,7 +5884,14 @@ cmd_local_backup() {
     # The TARGET is the one requested path this run covers RECURSIVELY (its
     # retention is emitted `recursive = yes`), so it is named as such; the
     # sources are written flat and must not pretend to reach their children.
-    local conflict; conflict="$(config_section_overlap "$cand" "$target" ${scan[@]+"${scan[@]}"} "$target")"
+    # With no destination there is no recursively-claimed target path -- the
+    # only coverage this run asserts is over its SOURCES, written flat.
+    local conflict
+    if [ "$no_copy" -eq 1 ]; then
+        conflict="$(config_section_overlap "$cand" "" ${scan[@]+"${scan[@]}"})"
+    else
+        conflict="$(config_section_overlap "$cand" "$target" ${scan[@]+"${scan[@]}"} "$target")"
+    fi
     # ...except this tool's own target retention for this very target. It is the
     # same store, written by this same command, and treating it as foreign is
     # exactly what made a second source impossible to add.
@@ -5935,7 +5983,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
             profile_emit "$PROFILE_DS_FILE"
             [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
-            echo "	dst          = $target"
+            # No `dst` line at all when nothing is copied. gen-cron reads an
+            # absent dst as "create a snapshot and transfer nothing" -- the
+            # same shape a hand-written single-host config has always used.
+            [ "$no_copy" -eq 0 ] && echo "	dst          = $target"
             echo "	notify       = local-$(basename "$r")"
         done
         # Retention, not shape -- the same F1 correction as the remote path. A
@@ -5977,7 +6028,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # same store is covered by the retention that is already there, and
             # emitting it again would be a duplicate section gen-cron refuses --
             # while also discarding whatever the operator had edited into it.
-            if ! grep -qxF "[prune:$target]" "$cand"; then
+            if [ "$no_copy" -eq 0 ] && ! grep -qxF "[prune:$target]" "$cand"; then
                 echo
                 echo "[prune:$target]"
                 echo "	# managed-by: zfs-backup.sh local-backup target=$target"
