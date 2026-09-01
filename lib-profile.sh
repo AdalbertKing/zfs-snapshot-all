@@ -149,19 +149,23 @@ profile_name_ok() {   # <profile>
 # and the SCOPE fields split out of 'flags' on 2026-08-31 (gen-cron.sh,
 # add_scope_flags):
 #
-#   passive            what this relationship TAKES from its source: whether it
-#   exclude_family     authors snapshots or adopts a family somebody else
-#   exclude_child_<n>  stamps, which families it refuses, which children it
-#                      leaves behind. Naming them is what empties the identity
-#                      sack; it must not, in the same change, hand them to a
-#                      layer that has no way to be overridden per relationship.
-#                      PROFILE-VARIABLE-INVENTORY.md argues these are the
-#                      natural home for a profile DEFAULT, and that is a later
-#                      change with its own prerequisites -- a template layer to
-#                      inherit from, and a CLI that can distinguish "the
-#                      operator said no" from "the operator said nothing".
-#                      Forbidding is the reversible direction.
-PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher passive exclude_family'
+#   exclude_child_<n>  WHICH CHILDREN of this source to leave behind. Refused
+#                      for the same reason as `recursive`, and it is the same
+#                      kind of fact: a statement about the shape of one
+#                      source's tree, which a profile applied to ten sources
+#                      cannot know. The numbering makes that concrete -- there
+#                      is no sensible merge of a template's exclude_child_1
+#                      with a section's.
+#
+# `passive` and `exclude_family` came OFF this list on 2026-09-01, when they
+# gained a [template:] layer. They are policy: "this class of relationship
+# adopts a family somebody else stamps" and "__replicate_/vzdump are never
+# ours" are true of a whole class, not of one source's tree. A profile now
+# states them in its [template:] sections and the relationship's own section
+# still wins, because resolve_field reads the section first -- which is the
+# "default from profile, overridable per relationship" the inventory asked
+# for, using the layering that already existed rather than new machinery.
+PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher'
 
 profile_schema_dump() {   # <gen-cron.sh path> <outfile> -> 0 ok
     PROFILE_ERR=""
