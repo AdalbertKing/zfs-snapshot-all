@@ -5995,7 +5995,19 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         local LB_RETFRAG=""
         profile_reload_if_stale
         LB_RETFRAG="$(profile_retention_fragment)" || LB_RETFRAG=""
-        if [ -n "$LB_RETFRAG" ]; then
+        # NOT WHEN NOTHING IS COPIED. Source retention exists to bound the
+        # source when the data ALSO lives somewhere else -- it is the answer to
+        # "the copy is safe, so how long must the original keep its own
+        # snapshots". With no destination the source IS the store and the
+        # tiers' own prune lines already are the retention.
+        #
+        # Emitting it anyway is not merely redundant, measured on pve9: the
+        # same family got two lines at the same minute, the tier's ladder
+        # (`-G ... automated_hourly -H24`) and the source block's flat count
+        # (`... automated_hourly -H24`) -- and the flat one would undo the
+        # ladder's work. The staleness monitor listed the dataset twice for the
+        # same reason ("hdd/labdata,hdd/labdata").
+        if [ "$no_copy" -eq 0 ] && [ -n "$LB_RETFRAG" ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
             # ensure_cron_config already put the target's prune templates in the
