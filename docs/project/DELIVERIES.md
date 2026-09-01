@@ -50,6 +50,18 @@ is that sha, or records `<!-- no-review-required: <sha> -->` here.
 <!-- delivered: 8c870aca5b961cdaeead53f8c36ab47d660adcae Restore PR #206: cross-host --onto grammar, positional destination mapping and whole-relation rebasing -->
 <!-- reviewed-by: 8c870aca5b961cdaeead53f8c36ab47d660adcae REV-20260831-128 -->
 <!-- delivered: 0a9eff4263b5cf1c50c0e64aa03586c45e9476ce profile stage step 1: the scope options split out of the 'flags' sack into named fields (passive/exclude_family/exclude_child_<n>), leaving 'flags' carrying identity only; gen-cron's option walker taught that -E takes an argument; a profile refused when it sets a field the relationship writes into the same section; the exclusion names unified across CLI/record/CONFIG with a refusal on the legacy record fields. The engine half of the -E grammar drift is NOT part of this delivery -- it is REV-20260831-130. test/scopefields 35/0, run.sh 97/0, profiles 83/0, recursion 74/0; live on pve9: snapsend 202/0, scenarios 36/0, remote 145/0 root and 145/0 as the delegated account -->
+<!-- reviewed-by: 0a9eff4263b5cf1c50c0e64aa03586c45e9476ce REV-20260901-131 -->
 <!-- delivered: b8c5ea94b552ed477572ddfd4cbd7b12be27fb03 Profiles follow-up PR #242: refuse relationship-owned ssh_flags in a profile prune fragment; focused profiles suite 84/0, negative control on 959b45eb3933d9862cb5fa5675353c42e5722ba4 83/1 -->
 <!-- reviewed-by: b8c5ea94b552ed477572ddfd4cbd7b12be27fb03 reviewer-clean-no-finding -->
 <!-- delivered: 2443d74caf1235e60a28bcd82f909e8b7131d7d7 Profiles PR #244: per-tier gfs ladders and shipped y5m12d31h24 profile; implementation CI 33503425193 -->
+<!-- reviewed-by: 2443d74caf1235e60a28bcd82f909e8b7131d7d7 REV-20260901-131 -->
+<!-- delivered: ec6872f24304f93e4bc33bb621cff05dda8dd78a Profiles PR #252: m12w4d7h24 age and per-family GFS variants; CI 33533746858; profiles 87/0 and independent rendered-shape control -->
+<!-- reviewed-by: ec6872f24304f93e4bc33bb621cff05dda8dd78a reviewer-clean-no-finding -->
+<!-- delivered: 1e8c396e9da181218a2d3de650c4c4acb6751397 Profiles PR #255: d30h24 and d7h24 age and per-family GFS variants; CI 33535653894; profiles 87/0 and independent rendered-shape control -->
+<!-- reviewed-by: 1e8c396e9da181218a2d3de650c4c4acb6751397 reviewer-clean-no-finding -->
+<!-- delivered: 282cb67410b550fc026f6c70df7be784f7794a6c PR #256: resolve local target retention, avoid duplicate source pruning, and keep relationship datasets authoritative; CI 33541539127; localbackup 129/0, joinmanifest 32/0, rux 43/0 -->
+<!-- reviewed-by: 282cb67410b550fc026f6c70df7be784f7794a6c reviewer-clean-no-finding -->
+<!-- delivered: dc9c40bd39a3b3bdb1a012d06462e3951ea8f6ec PR #257: state prefixless-ladder replication-base risk in the plan; CI 33552344049; rux 43/0 -->
+<!-- reviewed-by: dc9c40bd39a3b3bdb1a012d06462e3951ea8f6ec reviewer-clean-no-finding -->
+<!-- delivered: 9711e31738736e95bed66b6a1be7420f99b2f9c6 Profiles PR #258: Y5M12D31H24 single-family unquiesced GFS ladder and yearly naming coverage; CI 33556292328; profiles 87/0 -->
+<!-- reviewed-by: 9711e31738736e95bed66b6a1be7420f99b2f9c6 reviewer-clean-no-finding -->
