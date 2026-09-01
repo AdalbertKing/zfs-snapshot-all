@@ -229,6 +229,13 @@ Usage:
                                                        source set will not install under --yes
                                     --target omitted:  proposed (server.conf default, else the pool layout)
                                                        and shown; a GUESSED target will not install under --yes
+                                    --target='':      NOTHING IS COPIED. Each tier creates its
+                                                       family on the source and prunes it in place;
+                                                       no dst is written and no target retention is
+                                                       emitted. Omitted still means "propose one",
+                                                       so this has to be said out loud -- and it is
+                                                       refused under --yes, because an empty target
+                                                       is also what an unset shell variable expands to.
                                     --local-user:      account these jobs run as; omitted means root.
                                                        Same flag and same default as the remote form --
                                                        the account is a per-deployment decision, never a
@@ -5918,7 +5925,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         echo
         echo "Backup lokalny JUZ AKTYWNY (bez zmian)."
         echo "  Zrodla:  ${roots[*]}"
-        echo "  Cel:     $target"
+        echo "  Cel:     ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
         echo "  Config:  $config"
         return 0
     fi
@@ -6067,7 +6074,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     echo
     echo "Plan lokalnego backupu (PODGLAD -- nic nie zostalo zainstalowane):"
     echo "  Zrodla (WHAT):    ${roots[*]}"
-    echo "  Cel:              $target"
+    echo "  Cel:              ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
     for r in "${roots[@]}"; do
         local_backup_same_pool "$r" "$target" \
             && echo "  Uwaga:            zrodlo '$r' i cel dziela pule '${target%%/*}' -- awaria puli dotknie oba (to fakt, nie zakaz)"
@@ -6274,7 +6281,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # seeded nor re-rendered them, and reporting them as though it had would be
     # the report claiming work it did not do.
     [ "${#have_roots[@]}" -gt 0 ] && echo "  Juz bylo: ${have_roots[*]} (bez zmian -- ani seeda, ani nowej sekcji)"
-    echo "  Cel:     $target"
+    echo "  Cel:     ${target:-(brak -- snapshoty zostaja w zrodle, nic nie jest kopiowane)}"
     echo "  Config:  $config"
     echo "  Seed:    OK (${#roots[@]} zrodlo/zrodel wyslane)"
     echo "  Cron:    zainstalowany i odczytany zwrotnie"
