@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 24f06eeb0cf3a29f -->
+<!-- status-covers-digest: 34e6c7dc085b4219 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -110,6 +110,22 @@
   na `EXCLUDE_SNAP_n` / `EXCLUDE_n`, nazywając zamiennik. Ta odmowa nie
   powinna nigdy wystrzelić i właśnie dlatego istnieje: „nigdy" jest tu
   twierdzeniem o pomiarze, nie o kodzie.
+
+  **Domknięte 2026-09-01:** `passive` i `exclude_family` dostały warstwę
+  `[template:]`, więc profil wreszcie MOŻE o nich mówić — a sekcja relacji
+  nadal wygrywa, bo `resolve_field` czyta ją pierwszą. Żadnego silnika
+  precedencji, użyta warstwa, która już była. `exclude_child_<n>` zostaje
+  sekcyjne i zakazane w profilu z tego samego powodu co `recursive`: które
+  DZIECI tego źródła zostawić to zdanie o kształcie jednego drzewa, którego
+  profil użyty do dziesięciu źródeł nie zna.
+
+  Zweryfikowane **na labie**, nie w atrapie: relacja `tltest` na pve9 z
+  profilem deklarującym te pola, prawdziwy rekord, prawdziwy `emit_client_
+  sections`, prawdziwy `gen-cron`. Wyemitowana sekcja `[dataset:]` nie niesie
+  ANI JEDNEGO pola zakresu, a linia crona wychodzi jako
+  `snapget.sh -m "automated_hourly_" -K … -e -E __replicate_ -E vzdump -A -L
+  tltest …` — czyli `-e` i obie rodziny przyszły z profilu. Relacja usunięta,
+  rekordy i crontab konta zdiffowane przed/po: identyczne.
 
   **Czego to jeszcze NIE robi:** pola zakresu są profile-forbidden (węziej, niż
   chce `PROFILE-VARIABLE-INVENTORY.md` §5) — brakuje warstwy `[template:]` i CLI
