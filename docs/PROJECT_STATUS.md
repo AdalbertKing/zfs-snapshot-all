@@ -137,6 +137,32 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
+  **WDROŻENIE JEDNOSERWEROWE BEZ KOPIOWANIA (2026-09-01).** Forma
+  bezczasownikowa — `zfs-backup.sh --source=... --target='' --profile=...
+  --install` — instaluje zadania, które robią snapshoty i **nic nie wysyłają**.
+  Pusty `--target=''` jest intencją; **pominięty** nadal proponuje cel, więc
+  żadna dzisiejsza komenda nie zmienia znaczenia. Zapis lustruje CONFIG v4,
+  który to narzędzie generuje: `dst =` puste to jedyne pole, gdzie pustka
+  znaczy „brak celu", a nie błąd. Pusty cel **nie instaluje się pod `--yes`** —
+  bo to samo daje niezdefiniowana zmienna powłoki.
+
+  Bieg na labie odsłonił trzy rzeczy, których czytaniem kodu nie znalazłem:
+  retencja źródłowa dublowała cięcie (dwie linie na tę samą rodzinę w tej samej
+  minucie, jedna z drabiną, druga płaska — płaska zniweczyłaby drabinę);
+  delegacja próbowała **utworzyć** cel (`zfs create -p -- ''`); seed wysyłał
+  pusty drugi argument zamiast wołać silnik w tym samym kształcie, co
+  instalowane zadanie. Wszystkie trzy zamknięte.
+
+  **Dowód end-to-end na koncie delegowanym** (pve9, konto `zfsbackup`):
+  zainstalowane i odczytane zwrotnie, crontab konta urósł z 16 linii do 28 i
+  **żadna ze starych nie zniknęła**; linia dobowa uruchomiona jako konto dała
+  `ZFS-JOB END rc=8` oraz wpis `ALERT` w kolejce powiadomień, ze snapshotem
+  `automated_daily_crash_...`. Degradacja quiesce jest więc zgłaszana, a nie
+  księgowana jako czysty przebieg — `zfs-job.sh` z założenia zawsze kończy się
+  zerem i kieruje niezerowy wynik silnika do skryptu powiadomień. Po teście
+  crontab i config konta przywrócone i zdiffowane — identyczne; testowy wpis
+  usunięty z kolejki alertów, żeby nie poszedł w digeście.
+
   **DRABINA NA TIERZE (2026-09-01, polecenie właściciela „to jest
   konieczne").** `gfs = yes` można teraz postawić na tierze `[dataset:]`/
   `[template:]`, przez co linia prune TEGO tieru niesie `-G`: rodzina jest
