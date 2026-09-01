@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 d8c8c4743f0374c829e7661493b99f95faaa7c1c -->
-<!-- frozen: snapget.sh 100755 2b61ddb2d40f9ca7b454d877591447bc097a4c28 -->
+<!-- frozen: snapsend.sh 100755 da4e0dc01ce58238fa94a6eaa2434a03ef50d09f -->
+<!-- frozen: snapget.sh 100755 26eba87719845a1dc609022ea161f12dff1deba9 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
@@ -67,6 +67,52 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-08-31 (snapsend.sh, snapget.sh): **the long-option pre-pass had a second
+  copy of the option string, and the copies disagreed.** Owner direction:
+  "napraw silniki, masz zgode" -- to the implementer's report from the profile
+  stage.
+
+  ONE LINE OF BEHAVIOUR, and it is a deletion rather than an addition. The
+  pre-pass that handles `--recursive=...` needs to know which letters take an
+  argument, and it reads them from `OPTSTRING`. That variable was maintained by
+  hand, next to a comment saying in as many words that a hand-kept list drifts
+  and that the drift would be silent. The list `getopts` actually parses with
+  was a separate literal a hundred lines below it, and when `-E` (the excluded
+  snapshot family) was added there, it was not added here.
+
+  So the pre-pass believed `-E` was a boolean. It then met the family NAME,
+  applied getopts' own rule -- the first non-option argument ends option
+  processing -- and stopped. Everything after it became data:
+
+      $ snapsend.sh -E foo --recursive=flat tank/a tank/b
+      snapsend.sh: illegal option -- -
+
+      $ snapsend.sh -X foo --recursive=flat tank/a tank/b
+      (parses; -X was in both copies)
+
+  Same shape, opposite answer, and the only difference is which letters the
+  second copy happened to carry. Measured on both engines, with the `-X`
+  spelling as the control. `-t` had drifted the same way and was harmless only
+  because it is a boolean, where the two answers agree.
+
+  THE FIX IS NOT "ADD `E:` TO THE VARIABLE". That leaves two literals for the
+  next letter to be added to only one of. `getopts` now consumes `$OPTSTRING`,
+  so there is one string and the disagreement is no longer expressible. The
+  string's own value is unchanged from what getopts was already parsing with.
+
+  Nothing this package generates was affected: `gen-cron.sh` renders short
+  options only, so no cron line on the estate can carry the shape that breaks.
+  It breaks for an operator typing the two spellings together, which is how it
+  was found -- and for anything outside this package that drives the engines.
+
+  Regression: `test/recursion` gains three cases per engine -- the long form
+  after `-E` is recognised, it is really PARSED (asserted by making it collide
+  with a second declaration, because "no unknown-option error" alone would also
+  pass if it were silently ignored), and the mirror, that an `-E` argument which
+  merely LOOKS like a long option stays data. Negative control against the
+  previous engines: 66 pass, and exactly the four discriminating assertions
+  fail.
 
 - 2026-08-29 (snapsend.sh, snapget.sh): **the log announced a creation that did
   not happen.** Owner direction: "Tak" -- to the implementer's report from the

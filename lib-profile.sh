@@ -145,7 +145,23 @@ profile_name_ok() {   # <profile>
 #   cipher      20 Mbit VPN -- so these belong to the pair of hosts, and are
 #               written per relationship. Naming them made them expressible
 #               in CONFIG v4; it must not make them inheritable from policy.
-PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher'
+#
+# and the SCOPE fields split out of 'flags' on 2026-08-31 (gen-cron.sh,
+# add_scope_flags):
+#
+#   passive            what this relationship TAKES from its source: whether it
+#   exclude_family     authors snapshots or adopts a family somebody else
+#   exclude_child_<n>  stamps, which families it refuses, which children it
+#                      leaves behind. Naming them is what empties the identity
+#                      sack; it must not, in the same change, hand them to a
+#                      layer that has no way to be overridden per relationship.
+#                      PROFILE-VARIABLE-INVENTORY.md argues these are the
+#                      natural home for a profile DEFAULT, and that is a later
+#                      change with its own prerequisites -- a template layer to
+#                      inherit from, and a CLI that can distinguish "the
+#                      operator said no" from "the operator said nothing".
+#                      Forbidding is the reversible direction.
+PROFILE_FORBIDDEN_FIELDS='src dst flags pair_label notify bandwidth compression cipher passive exclude_family'
 
 profile_schema_dump() {   # <gen-cron.sh path> <outfile> -> 0 ok
     PROFILE_ERR=""
@@ -163,25 +179,91 @@ profile_field_forbidden() {   # <field> -> 0 forbidden
     local f n
     f="$1"
     for n in $PROFILE_FORBIDDEN_FIELDS; do [ "$f" = "$n" ] && return 0; done
+    # exclude_child_<n> is numbered, so it cannot be a word in the list above. Without
+    # this arm it would still be refused -- gen-cron's --dump-fields enumerates
+    # static names only, so the schema check upstream reports it as "not a
+    # dataset field in CONFIG v4" -- but that message sends the reader looking
+    # for a typo in a field they spelled correctly.
+    case "$f" in
+        exclude_child_*) case "${f#exclude_child_}" in ""|*[!0-9]*) ;; *) return 0 ;; esac ;;
+    esac
     return 1
 }
 
 # One line of a profile-owned stanza, in a known section kind.
 profile_check_field() {   # <kind> <field> <schema dump> <where>
     local kind="$1" field="$2" dump="$3" where="$4"
-    if ! grep -qxF "$kind $field" "$dump"; then
-        PROFILE_ERR="$where: '$field' is not a $kind field in CONFIG v4"
-        return 1
-    fi
+    # OWNERSHIP BEFORE SPELLING. Both checks can fire on one field, and when
+    # they do the ownership answer is the useful one: it tells the operator the
+    # field is not theirs to write here, instead of sending them to look for a
+    # typo in a name they spelled correctly. exclude_child_<n> is the case that made
+    # the order matter -- it is numbered, so --dump-fields (which enumerates
+    # static names) does not list it, and the schema check reported a correctly
+    # spelled field as unknown.
     if profile_field_forbidden "$field"; then
         PROFILE_ERR="$where: '$field' is relationship-owned and must not appear in a profile (REV-20260808-073)"
         return 1
     fi
-    # A profile that overrode recursion on a prune scope would decide topology
-    # of the prune, which is the deployment's.
-    if [ "$kind" = prune ] && [ "$field" = recursive ]; then
-        PROFILE_ERR="$where: a profile may not override 'recursive' on a prune section"
+    if ! grep -qxF "$kind $field" "$dump"; then
+        PROFILE_ERR="$where: '$field' is not a $kind field in CONFIG v4"
         return 1
+    fi
+    # Recursion is TOPOLOGY -- which datasets a relationship covers and whether
+    # its subtree is re-expanded at every run. That is the deployment's answer,
+    # recorded at enrolment (RECURSION, PEER_SAVED_RECURSIVE_ROOTS); a profile
+    # cannot know whether the source it is about to be applied to is a subtree
+    # root at all.
+    #
+    # The [prune:] half of this rule has been here since REV-20260808-073. The
+    # [dataset:] half was missing, and its absence was read (in
+    # docs/project/PROFILE-VARIABLE-INVENTORY.md, 2026-08-24) as a ready place
+    # for a profile default -- "the archival profile is flat". Measured
+    # 2026-08-31, it was a landmine instead:
+    #
+    #   1. a profile carrying `recursive` in its [dataset] block VALIDATES;
+    #   2. emit_client_sections pastes the profile fragment into the section and
+    #      then writes its own `recursive` line for a recursive root, so the
+    #      section carries the field TWICE;
+    #   3. gen-cron refuses a duplicate field outright, naming the duplicate and
+    #      not the profile that caused it.
+    #
+    # So the profile was not defaulting anything: it was bricking every
+    # recursive relationship created from it. Refusing it at validation is the
+    # answer the [prune:] half already gives, and it names the real cause.
+    if [ "$field" = recursive ]; then
+        PROFILE_ERR="$where: a profile may not set 'recursive' on a $kind section -- recursion is the relationship's topology, chosen at enrolment, and a profile does not know whether its source is a subtree root"
+        return 1
+    fi
+    # POLICY GOES IN A [template:], NOT IN A FRAGMENT -- the general form of the
+    # rule above, and the reason `recursive` needs its own line (it has no
+    # template layer, so it falls outside this one).
+    #
+    # A profile's [dataset]/[prune] block is pasted verbatim into every section
+    # the profile creates. Any field with a template layer put there is wrong
+    # twice over, and both were measured on 2026-08-31 with the real
+    # emit_client_sections:
+    #
+    #   * it COLLIDES. `send_schedule = 7 * * * *` in a [dataset] fragment
+    #     produced a section carrying both it and the staggered minute the
+    #     relationship writes -- `send_schedule = 7 * * * *` and
+    #     `send_schedule = 2 * * * *`, one after the other -- and gen-cron
+    #     refuses a duplicate field. Unlike the `recursive` case this hits EVERY
+    #     relationship, because the stagger always writes a minute;
+    #
+    #   * and it FLATTENS. A section-level value overrides every tier the
+    #     section names, so a profile with four cadences would collapse to one.
+    #     That is the same boundary the schedule stagger hit
+    #     (PROFILE-VARIABLE-INVENTORY.md section 4).
+    #
+    # The check is derived from gen-cron's own allow-lists rather than from a
+    # list kept here: if the field exists at the template layer, that is where
+    # it belongs. Nothing to keep in step, and a new policy field is covered the
+    # day gen-cron declares it.
+    if [ "$kind" = dataset ] || [ "$kind" = prune ]; then
+        if grep -qxF "template $field" "$dump"; then
+            PROFILE_ERR="$where: '$field' is policy and belongs in one of this profile's [template:] sections, not in its [$kind] block -- a value here is pasted into every section the profile creates, where it overrides every tier that section names and collides with the line the relationship writes for itself"
+            return 1
+        fi
     fi
     return 0
 }

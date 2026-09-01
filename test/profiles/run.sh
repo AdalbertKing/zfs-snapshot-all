@@ -167,6 +167,45 @@ cp "$PR_DEFAULT" "$TMP/bad-topology.inc"
 echo 'recursive = yes' >> "$TMP/bad-topology.inc"
 if validate_fragment prune "$TMP/bad-topology.inc"; then bad "negative: prune topology override was accepted"; else ok "negative: prune topology override refused"; fi
 
+# The [dataset:] half of the same rule, missing until 2026-08-31 and read as a
+# ready place for a profile default ("the archival profile is flat") rather than
+# as the hole it was. Measured: such a profile validated, emit_client_sections
+# pasted the fragment in and then wrote its OWN recursive line for a recursive
+# root, and gen-cron refused the finished config for a duplicate field -- naming
+# the duplicate, never the profile. A profile default that bricks every
+# recursive relationship built from it is not a default.
+cp "$DS_DEFAULT" "$TMP/bad-ds-topology.inc"
+echo 'recursive = flat' >> "$TMP/bad-ds-topology.inc"
+if validate_fragment dataset "$TMP/bad-ds-topology.inc"; then bad "negative: dataset topology override was accepted"; else ok "negative: dataset topology override refused"; fi
+
+# The general form: a field that HAS a template layer is policy, and policy goes
+# in a [template:]. In a fragment it is pasted into every section the profile
+# creates, where it overrides every tier that section names and collides with
+# the line the relationship writes for itself.
+#
+# send_schedule is the case that hits everything rather than only recursive
+# roots -- measured 2026-08-31 through the real emit_client_sections, which
+# produced a section carrying the fragment's `7 * * * *` and the stagger's
+# `2 * * * *` one after the other, and gen-cron then refused the duplicate.
+# prune_schedule is the [prune:] half of the same mistake.
+cp "$DS_DEFAULT" "$TMP/bad-ds-policy.inc"
+echo 'send_schedule = 7 * * * *' >> "$TMP/bad-ds-policy.inc"
+if validate_fragment dataset "$TMP/bad-ds-policy.inc"; then bad "negative: policy field in a [dataset] fragment was accepted"; else ok "negative: policy field in a [dataset] fragment refused"; fi
+
+cp "$PR_DEFAULT" "$TMP/bad-pr-policy.inc"
+echo 'prune_schedule = 47 * * * *' >> "$TMP/bad-pr-policy.inc"
+if validate_fragment prune "$TMP/bad-pr-policy.inc"; then bad "negative: policy field in a [prune] fragment was accepted"; else ok "negative: policy field in a [prune] fragment refused"; fi
+
+# Positive control for the rule, not just for the fixture: the fields the
+# shipped fragments actually carry (use_template, gfs, gfs_pattern) have NO
+# template layer, so the rule must leave them alone. Without this a rule that
+# refused everything would pass all three negatives above.
+for _f in "$DS_DEFAULT" "$PR_DEFAULT"; do
+    _k=dataset; [ "$_f" = "$PR_DEFAULT" ] && _k=prune
+    if validate_fragment "$_k" "$_f"; then ok "positive: shipped [$_k] fragment still validates under the policy rule"
+    else bad "positive: shipped [$_k] fragment still validates under the policy rule" "$PROFILE_ERR"; fi
+done
+
 cp "$PR_DEFAULT" "$TMP/bad-unknown.inc"
 echo 'not_a_real_gencron_field = yes' >> "$TMP/bad-unknown.inc"
 if validate_fragment prune "$TMP/bad-unknown.inc"; then bad "negative: unknown field was accepted"; else ok "negative: unknown field refused via --dump-fields"; fi

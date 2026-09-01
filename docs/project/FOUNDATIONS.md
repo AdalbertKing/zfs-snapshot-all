@@ -74,3 +74,48 @@ This foundation is deliberately small: **ownership + bounded growth + cleanup +
 failure behavior + exact scope**. Do not create a new lifecycle framework merely
 to satisfy it; use the existing CONFIG/control-plane primitives wherever they
 already express the property.
+
+## Foundation — one grammar for lists, and the name says which kind
+
+Owner direction, 2026-09-01: *"pilnujemy spójności pakietu na każdym etapie.
+To ma wejść pod GUI. Nie ma miejsca na chaos."*
+
+**A list of flat values is comma-separated.** Datasets, tiers, snapshot
+families — `use_template = hourly,daily`, `exclude_family = __replicate_,vzdump`,
+`monitor_exclude = __replicate_,vzdump`, `--source=a,b`. This is measured rather
+than chosen: both engines, `delsnaps.sh`, `check-snap-age.sh`, `gen-cron.sh`,
+`lib-profile.sh` and `cron2conf.sh` all already split on `,`. `lib-scope.sh`'s
+`dataset_list_split` is the shared splitter — permissive on INPUT (it also
+accepts the space-separated form every manifest on disk was written with) and
+canonical on OUTPUT.
+
+**A list of PATTERNS is never comma-separated.** It is one flag per value on the
+CLI (`--exclude-child=A --exclude-child=B`) and numbered fields in CONFIG v4
+(`exclude_child_1`, `exclude_child_2`), numbered from 1 with no gaps — a gap is
+refused rather than silently truncating the list.
+
+The reason is a property of the data, not a preference. A regular expression may
+legally contain any separator a list would have picked, and splitting it does not
+fail loudly:
+
+    IFS=, on "-swap$,x{2,3}"   ->   [-swap$]  [x{2]  [3}]
+
+    x{2,3}  vs 'vm-xxx'  ->  matches
+    x{2     vs 'vm-xxx'  ->  does not
+    3}      vs 'vm-xxx'  ->  does not
+
+GNU grep takes `x{2` as a literal, so the child that should have been excluded is
+quietly backed up instead. No error, no warning.
+
+**THE NAME CARRIES THE KIND.** `-family` takes a comma list of snapshot names;
+`-child` takes one regex per flag or per numbered field. That pairing was
+introduced on 2026-09-01, when the fields were one day old and used in no config
+on the estate — renaming cost one commit instead of a migration. The older
+spellings (`--exclude-snapshots`, `--exclude`, `exclude_snapshots`,
+`exclude_<n>`, `EXCLUDE_SNAP_n`, `EXCLUDE_n`) are gone, not aliased: two
+spellings for one concept is the chaos this foundation exists to prevent.
+
+Deliberately outside this rule, and each for a stated reason: `PEER_SAVED_*` on
+disk is space-separated (a storage form, normalised at every user-facing entry
+point, never typed by an operator), and `-P "<prefix>:<keep>"` uses a colon
+because it is a key-value pair rather than a list.

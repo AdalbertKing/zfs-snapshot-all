@@ -15,6 +15,20 @@
 #   --peer          user@host of the OTHER machine (required)
 #   --local-parent  where to build scratch here      (default rpool)
 #   --peer-parent   where to build scratch there     (default hdd/backuptest_targets)
+#   --peer-key          the key to reach the peer with (default: the account's own)
+#   --peer-known-hosts  the known_hosts to verify it against
+#
+# The last two are what makes the nonroot-account obligation runnable on a
+# properly deployed account. `deploy.sh --join` gives it a dedicated key and a
+# dedicated known_hosts PER PEER and leaves the default ~/.ssh/known_hosts
+# empty, so a bare `ssh peer` from that account fails by design. Point these at
+# the pairing files and the same credentials reach both this suite's own ssh
+# and the engines it is testing:
+#
+#   ./test/remote/run.sh --peer zfsbackup-pve9@192.168.28.8 \
+#       --local-parent hdd/backuptest --peer-parent hdd/backuptest_targets \
+#       --peer-key ~/.ssh/pairing-192.168.28.8_ed25519 \
+#       --peer-known-hosts ~/.ssh/pairing-192.168.28.8_known_hosts
 #
 # SAFETY: every dataset this creates lives under <parent>/xcamp<PID>, refuses to
 # start if that already exists, and is destroyed by an EXIT trap on both hosts
@@ -38,12 +52,30 @@ DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
 PEER=""
 LPARENT="rpool"
 RPARENT="hdd/backuptest_targets"
+# CREDENTIALS, because on this estate the delegated account HAS NONE by default
+# and that is the design rather than a gap. `deploy.sh --join` gives an account a
+# dedicated key and a dedicated known_hosts PER PEER, and leaves the default
+# ~/.ssh/known_hosts empty -- so a bare `ssh peer` from that account fails, on
+# purpose, while the relationship it was paired for works.
+#
+# Measured on pve9, 2026-09-01: `ssh zfsbackup@192.168.28.8` -> host key
+# verification failed, while the same account with its pairing key and pairing
+# known_hosts reached `zfsbackup-pve9@192.168.28.8` and answered `pve2`.
+#
+# Without these two options the nonroot-account obligation is only satisfiable
+# on a host whose account has LOOSER trust than the deployment gives it, which
+# is the wrong way round: the account this suite most needs to test is the one
+# it could not reach.
+PKEY=""
+PKH=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --peer)         shift; PEER="${1:-}" ;;
         --local-parent) shift; LPARENT="${1:-}" ;;
         --peer-parent)  shift; RPARENT="${1:-}" ;;
+        --peer-key)     shift; PKEY="${1:-}" ;;
+        --peer-known-hosts) shift; PKH="${1:-}" ;;
         -h|--help)      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -58,6 +90,21 @@ command -v zfs     >/dev/null || { echo "zfs not found" >&2; exit 1; }
 command -v mbuffer >/dev/null || { echo "mbuffer not found -- snapsend refuses to run without it" >&2; exit 1; }
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10"
+# ONE SET OF CREDENTIALS, TWO SPELLINGS. This suite opens ssh sessions of its
+# own to check the far side, and the engines under test open theirs -- so the
+# same key has to be handed to `ssh` as -i/-o and to snapsend/snapget/delsnaps
+# as their own -K/-k/-O. Rendering both from one pair of options is the point:
+# giving the checker credentials the engines do not have would produce a run
+# where every assertion reads a far side the transfer could not reach.
+PAIRFLAGS=()
+if [ -n "$PKEY" ]; then
+    SSH="$SSH -i $PKEY"
+    PAIRFLAGS+=(-K "$PKEY")
+fi
+if [ -n "$PKH" ]; then
+    SSH="$SSH -o UserKnownHostsFile=$PKH -o GlobalKnownHostsFile=/dev/null"
+    PAIRFLAGS+=(-k "$PKH" -O GlobalKnownHostsFile=/dev/null)
+fi
 $SSH "$PEER" true 2>/dev/null || { echo "cannot ssh to $PEER non-interactively" >&2; exit 1; }
 
 TAG="xcamp$$"
@@ -69,6 +116,36 @@ $SSH "$PEER" "zfs list -H '$RROOT'" >/dev/null 2>&1 && { echo "refusing to run: 
 # Sync mode (section G) lands at the IDENTICAL path on the peer, not under
 # $RROOT, so that name has to be free there too.
 $SSH "$PEER" "zfs list -H '$LROOT'" >/dev/null 2>&1 && { echo "refusing to run: $LROOT exists on $PEER (sync mode needs it free)" >&2; exit 1; }
+
+# WHICH PARENTS EXISTED BEFORE US -- recorded here because cleanup cannot ask
+# afterwards, and because "leave the host as you found it" is a property of the
+# whole run, not of the $TAG level.
+#
+# Sync mode is what makes this necessary. It lands each side's tree at the
+# IDENTICAL path on the other, so the initiator invents the PEER's parent path
+# locally and the peer invents the initiator's. mk_noauto creates every missing
+# level, and cleanup destroyed only the $TAG level under them -- so an invented
+# parent stayed behind, empty, for good.
+#
+# Never showed on metropolis, where both hosts already had both parents. It
+# showed the first time this ran from a host that did not: pve9, 2026-09-01,
+# left `hdd/backuptest_targets` behind after a 145/0 run. That is the same
+# family as the six trees the comment in cleanup() records being left on
+# metropolis pve1 -- the $TAG level was given an owner then, the parent it
+# hangs from was not.
+#
+# Only ever removed when we invented it AND it comes back empty, so a parent
+# the operator keeps for their own scratch is never touched.
+#
+# TWO FLAGS, NOT FOUR, and the two that are missing are missing because they
+# cannot happen. $LPARENT must exist HERE and $RPARENT must exist ON THE PEER --
+# both are pre-flight refusals further down, added when a wrong --peer-parent
+# made thirty ssh cases fail like a broken remote path. So neither can ever be
+# invented on that side, and a cleanup branch for it would be a branch that
+# never runs. The first cut of this block had one anyway; the verification run
+# is what showed it, by refusing before it could fire.
+RPARENT_EXISTED_LOCAL=1;  zfs list -H "$RPARENT" >/dev/null 2>&1 || RPARENT_EXISTED_LOCAL=0
+LPARENT_EXISTED_PEER=1;   $SSH "$PEER" "zfs list -H '$LPARENT'" >/dev/null 2>&1 || LPARENT_EXISTED_PEER=0
 
 # Keep this run's bookkeeping out of the host's real logs and lock dir.
 TMPD="$(mktemp -d)"
@@ -118,6 +195,24 @@ cleanup() {
     # its peer-side footprint lives under $LROOT instead, so that needs its
     # own release+destroy on the peer too.
     $SSH "$PEER" "for s in \$(zfs list -H -o name -t snapshot -r '$LROOT' 2>/dev/null); do zfs release zfssnapall_inflight \$s 2>/dev/null; done; zfs destroy -R '$LROOT' 2>/dev/null" 2>/dev/null
+    # ...and the PARENTS those roots hang from, when this run is what created
+    # them. See the pre-flight block for why sync mode makes each side invent
+    # the other's parent path, and what it left on pve9.
+    #
+    # Two conditions, both required. "We invented it" comes from the recorded
+    # pre-flight answer -- a parent the operator keeps for their own scratch
+    # must survive. "It is empty now" is checked rather than assumed, because a
+    # concurrent second campaign under the same parent would otherwise have its
+    # tree pulled out from under it: with `zfs destroy` (no -r, no -R) the worst
+    # case is a refusal, not a loss.
+    #
+    # ONE LEVEL ONLY, stated rather than implied: if a parent needed several
+    # levels invented (`hdd/a/b` where neither existed), this removes `b` and
+    # leaves `a`. Walking further up would mean deciding how far is ours, and a
+    # test harness guessing that on a production pool is a worse trade than an
+    # empty dataset an operator can see and delete.
+    [ "$RPARENT_EXISTED_LOCAL" = 0 ] && zfs destroy "$RPARENT" 2>/dev/null
+    [ "$LPARENT_EXISTED_PEER" = 0 ] && $SSH "$PEER" "zfs destroy '$LPARENT'" 2>/dev/null
     rm -rf "$TMPD"
 }
 trap cleanup EXIT
@@ -203,8 +298,12 @@ seed_peer() {
 }
 
 RC=0
-send() { "$SNAPSEND" "$@" >"$TMPD/out" 2>&1; RC=$?; }
-get()  { "$SNAPGET"  "$@" >"$TMPD/out" 2>&1; RC=$?; }
+# The pairing flags go FIRST, so a case's own flags still win where they
+# overlap, and the empty-array expansion is the ${a[@]+"${a[@]}"} idiom this
+# repo uses everywhere: `"${PAIRFLAGS[@]}"` on an empty array is an unbound
+# variable under `set -u`.
+send() { "$SNAPSEND" ${PAIRFLAGS[@]+"${PAIRFLAGS[@]}"} "$@" >"$TMPD/out" 2>&1; RC=$?; }
+get()  { "$SNAPGET"  ${PAIRFLAGS[@]+"${PAIRFLAGS[@]}"} "$@" >"$TMPD/out" 2>&1; RC=$?; }
 # Case-insensitive by default. It used to take flags, and `outgrep -i pattern`
 # quietly searched for the string "-i" instead -- so the two cases expecting
 # ZERO matches passed for the wrong reason, which is worse than failing.
@@ -494,13 +593,28 @@ check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")
 # ============================================================================
 echo "--- F. ssh option passthrough (-c/-K/-O)"
 
-# Auto-detected rather than hardcoded, so the positive -K case works run as
-# root (id_rsa) or as the delegated account (its own id_ed25519) without
-# assuming which.
-DEFAULT_KEY=""
-for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
-    [ -r "$k" ] && { DEFAULT_KEY="$k"; break; }
-done
+# THE KEY THAT ACTUALLY REACHES THIS PEER, which is not always $HOME/.ssh/id_*.
+#
+# Auto-detection was written so the positive -K case works run as root (id_rsa)
+# or as the delegated account (its own id_ed25519) without assuming which. That
+# assumption holds only where the account's DEFAULT identity is the one the peer
+# authorises. On a properly paired account it is not: `deploy.sh --join` issues a
+# dedicated key per peer and the default id_ed25519 is authorised nowhere.
+#
+# Measured on pve9, 2026-09-01, running as the delegated account: both F1
+# assertions failed -- exit non-zero and no GUID -- while every other remote
+# section passed. F1 was handing the engine an identity the far side had never
+# been told about, and then reporting that -K does not work.
+#
+# So when the caller named the credentials, they ARE the real identity: that is
+# what --peer-key means. Auto-detection stays as the fallback for a run whose
+# account has ambient trust.
+DEFAULT_KEY="$PKEY"
+if [ -z "$DEFAULT_KEY" ]; then
+    for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
+        [ -r "$k" ] && { DEFAULT_KEY="$k"; break; }
+    done
+fi
 
 if [ -z "$DEFAULT_KEY" ]; then
     echo "F. skipped -- no readable default identity under \$HOME/.ssh to test -K against"
@@ -553,14 +667,14 @@ else
     $SSH "$PEER" "zfs snapshot '$PROOT@keep_1'" >/dev/null 2>&1
     tick
     $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_1'" >/dev/null 2>&1
-    "$DELSNAPS" -c aes128-ctr "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds.out" 2>&1
+    "$DELSNAPS" ${PAIRFLAGS[@]+"${PAIRFLAGS[@]}"} -c aes128-ctr "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds.out" 2>&1
     check "F5 delsnaps.sh -c with a real cipher: exit 0" "0" "$?"
     check "F5 delsnaps.sh -c: only the targeted snapshot is gone, 'keep_1' survives" "1" \
           "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null" | wc -l)"
 
     tick
     $SSH "$PEER" "zfs snapshot '$PROOT@prune_target_2'" >/dev/null 2>&1
-    "$DELSNAPS" -c not-a-real-cipher "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds2.out" 2>&1
+    "$DELSNAPS" ${PAIRFLAGS[@]+"${PAIRFLAGS[@]}"} -c not-a-real-cipher "$PEER:$PROOT" "prune_target_" -H0 >"$TMPD/ds2.out" 2>&1
     check "F6 delsnaps.sh -c with a bogus cipher: ssh refuses, delsnaps fails" "1" "$?"
     check "F6 bogus cipher: the snapshot it would have pruned still exists" "1" \
           "$($SSH "$PEER" "zfs list -H -o name -t snapshot -d1 '$PROOT' 2>/dev/null | grep -c prune_target_2")"

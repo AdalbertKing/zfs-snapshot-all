@@ -370,13 +370,19 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     that ages out the last common snapshot ends the
                                     relationship until a destructive re-seed. Recorded
                                     on the client, so re-activation keeps the shape.
-                                    --exclude=REGEX (repeatable) drops matching datasets
+                                    --exclude-child=REGEX (repeatable) drops matching datasets
                                     from a flat expansion -- snapget/snapsend -X, an
                                     unanchored grep -E over the SOURCE-side name, so
                                     anchor it yourself when you mean the whole name.
                                     Recorded like --recursive, and refused together with
                                     --recursive=atomic, where one stream has nowhere to
                                     filter.
+                                    --exclude-family=A,B names snapshot FAMILIES a passive
+                                    pickup refuses to adopt -- snapget/snapsend -E. Two
+                                    different things, so two names: -child drops DATASETS
+                                    and takes a regex, hence one flag per pattern; -family
+                                    drops SNAPSHOT NAMES and takes a comma list, because a
+                                    snapshot name cannot contain a comma and a regex can.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
   zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
@@ -1387,9 +1393,17 @@ apply_client_profile_choice() {   # <is_new_relationship 0|1> <chosen profile na
 # another edit here although gen-cron.sh already owns its semantics. The owner's
 # reduction direction and this finding point the same way.
 #
-# What the RELATIONSHIP owns -- recursive on a prune scope, pair_label, notify,
-# src -- is still written by the caller and cannot collide, because
-# lib-profile.sh refuses those fields inside a profile.
+# What the RELATIONSHIP owns -- recursive, pair_label, notify, src -- is still
+# written by the caller and cannot collide, because lib-profile.sh refuses those
+# fields inside a profile.
+#
+# "Cannot collide" is a claim about the refusal list, and until 2026-08-31 the
+# list did not carry the case that mattered: `recursive` was refused on a
+# [prune:] and allowed on a [dataset:]. A profile using it validated, this
+# function pasted it in, the caller wrote its own line below, and gen-cron
+# refused the finished config for a duplicate field. Both kinds are refused now.
+# The lesson is the shape of the sentence above, not the field: a collision is
+# impossible only for the exact fields the validator names.
 profile_emit() {   # <rendered fragment>
     local raw
     while IFS= read -r raw || [ -n "$raw" ]; do
@@ -1981,8 +1995,20 @@ installed_dataset_src() {   # <cronfile> <local dataset path>
 # read this off the installed transfer `flags` (runtime truth) and never propose taking
 # destructive source-retention ownership of it -- no new state token, just the flag
 # that is already there.
+#
+# TWO SPELLINGS since 2026-08-31, and both have to be read. `-e` inside 'flags'
+# is what every installed section carries and what this tool still writes; the
+# named `passive` field is what CONFIG v4 gained when the scope options were
+# split out of the flags sack, and a hand-written config may already use it.
+# Reading only one of them would answer "not passive" for a job that is, and the
+# caller uses that answer to decide whether to propose taking DESTRUCTIVE
+# source-retention ownership of somebody else's snapshots.
 installed_dataset_is_passive() {   # <cronfile> <local dataset path>
-    local flags; flags="$(installed_dataset_field "$1" "$2" flags)"
+    local flags passive
+    passive="$(installed_dataset_field "$1" "$2" passive)"
+    [ "$passive" = yes ] && return 0
+    [ "$passive" = no ]  && return 1
+    flags="$(installed_dataset_field "$1" "$2" flags)"
     case " $flags " in *" -e "*) return 0 ;; *) return 1 ;; esac
 }
 
@@ -3516,8 +3542,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # the subtree on the source at every run, so a child created there
             # tomorrow joins at the next cron tick -- which is what the signed
             # include_children=yes means over time. Dataset-level field, so it
-            # wins over any template default (and the profile fragment
-            # deliberately carries no 'recursive' of its own).
+            # wins over any template default. The profile fragment carries no
+            # 'recursive' of its own -- since 2026-08-31 because lib-profile.sh
+            # refuses one, rather than because the shipped profiles happen not
+            # to write it; a custom profile that did made this section carry the
+            # field twice and gen-cron refused the whole config.
             # RECURSION comes off the client record (sourced by
             # load_client_and_connection), so re-activation reproduces the shape
             # the operator chose at enrolment instead of resetting it to the
@@ -6175,7 +6204,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_snaps=""
+    local recursion="" passive=0 exclude_family=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -6197,8 +6226,8 @@ cmd_add_client() {
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
-            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
-            --exclude=*)   excludes+=("${a#*=}") ;;
+            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
@@ -6265,7 +6294,7 @@ cmd_add_client() {
     # The engines refuse -X without -R rather than ignoring it, so refusing the
     # same combination here means the operator hears it at the command line
     # instead of at 01:00 every night.
-    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude to keep one atomic stream."
+    [ "${#excludes[@]}" -eq 0 ] || [ "$recursion" != atomic ]         || die "add-client: --exclude-child needs per-dataset recursion. Under --recursive=atomic the subtree is ONE zfs send -r stream and there is nowhere in it to filter -- the engine refuses -X under -r rather than ignoring it. Drop --recursive=atomic to exclude, or drop --exclude-child to keep one atomic stream."
     # BYTES per second, with the usual k/M/G suffixes -- snapsend/snapget hand
     # this to mbuffer -r, which is a byte rate. Validated here rather than at
     # the far end of a generated cron line, where a typo becomes a nightly
@@ -6652,17 +6681,17 @@ cmd_add_client() {
         # sniffed from snapshot names -- the sync-chain probe taught us where
         # name-sniffing ends.
         write_client_field PASSIVE           "$passive"
-        if [ -n "$exclude_snaps" ]; then
+        if [ -n "$exclude_family" ]; then
             local _esi=1 _esp
-            for _esp in ${exclude_snaps//,/ }; do
-                write_client_field "EXCLUDE_SNAP_${_esi}" "$_esp"
+            for _esp in ${exclude_family//,/ }; do
+                write_client_field "EXCLUDE_FAMILY_${_esi}" "$_esp"
                 _esi=$((_esi + 1))
             done
         fi
         local _xi=0 _x
         for _x in ${excludes[@]+"${excludes[@]}"}; do
             _xi=$((_xi + 1))
-            write_client_field "EXCLUDE_$_xi" "$_x"
+            write_client_field "EXCLUDE_CHILD_$_xi" "$_x"
         done
         write_client_field CREATED_AT        "$(date '+%Y-%m-%d %H:%M:%S')"
     } > "$cpath" || die "could not write $cpath"
@@ -6830,7 +6859,7 @@ client_passive_flags() {
     [ "${PASSIVE:-0}" = "1" ] || { printf ''; return 0; }
     out=" -e"
     while :; do
-        eval "v=\${EXCLUDE_SNAP_$i:-}"
+        eval "v=\${EXCLUDE_FAMILY_$i:-}"
         [ -n "$v" ] || break
         out="$out -E $v"
         i=$((i + 1))
@@ -6841,7 +6870,7 @@ client_passive_flags() {
 client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
     local i=1 v out=""
     while :; do
-        eval "v=\${EXCLUDE_$i:-}"
+        eval "v=\${EXCLUDE_CHILD_$i:-}"
         [ -n "$v" ] || break
         out="$out -X $v"
         i=$((i + 1))
@@ -7256,8 +7285,37 @@ load_client_and_connection() {
     # cleared for the identical reason spelled out above, not a new one.
     BANDWIDTH=""
     PEER_SAVED_BANDWIDTH=""
+    # The numbered exclusion fields, cleared for the same reason and BEFORE the
+    # source below: they are read back by name, so a value left over from a
+    # previously loaded record would be attributed to this one. No two-client
+    # path was found in a single process, so this is consistency with the two
+    # fields above rather than a defect being fixed -- said plainly because the
+    # difference matters if someone later looks for the measurement.
+    unset ${!EXCLUDE_@}
     # shellcheck disable=SC1090
     . "$cpath"
+    # LEGACY EXCLUSION FIELDS -- refuse, never ignore.
+    #
+    # The fields were renamed on 2026-09-01 (EXCLUDE_SNAP_n -> EXCLUDE_FAMILY_n,
+    # EXCLUDE_n -> EXCLUDE_CHILD_n). The CLI and the CONFIG halves of that rename
+    # both fail LOUDLY on the old spelling -- an unknown option, an unknown
+    # field. This half would not have: the readers look the new names up by
+    # name, so an old record would simply come back with no exclusions, and the
+    # next re-activation would drop every -X and -E it was enrolled with without
+    # a word. Silence is the one failure mode this package does not accept.
+    #
+    # Measured before the rename on all five hosts: zero records carry these.
+    # So this refusal should never fire -- which is exactly why it has to exist
+    # rather than be argued away, because "should never" is a claim about a
+    # measurement, not about the code.
+    local _leg
+    for _leg in ${!EXCLUDE_@}; do
+        case "$_leg" in
+            EXCLUDE_SNAP_[0-9]*) die "$cpath carries the legacy field '$_leg'. It was renamed to EXCLUDE_FAMILY_${_leg#EXCLUDE_SNAP_} on 2026-09-01 and is no longer read -- continuing would silently drop this relationship's snapshot-family exclusions. Rename the field in that file and re-run." ;;
+            EXCLUDE_FAMILY_*|EXCLUDE_CHILD_*) ;;
+            EXCLUDE_[0-9]*) die "$cpath carries the legacy field '$_leg'. It was renamed to EXCLUDE_CHILD_${_leg#EXCLUDE_} on 2026-09-01 and is no longer read -- continuing would silently drop this relationship's child exclusions. Rename the field in that file and re-run." ;;
+        esac
+    done
     local label; label=$(peer_label "$PEER_HOST")
     LOAD_LABEL="$label"
     local mpath; mpath=$(peer_manifest_path "$label")
@@ -11180,8 +11238,8 @@ rux_remote_install() {
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
-        [ -n "$exclude_snaps" ] && add_args+=(--exclude-snapshots="$exclude_snaps")
-        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude="$_x"); done
+        [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
+        for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude-child="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
         # The one-command promise applies here too: attempt the remote join over
         # SSH from this host by default (Owner doc, "Join behavior"); --manual-join
@@ -11279,7 +11337,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion="" passive=0 exclude_snaps=""
+    local recursion="" passive=0 exclude_family=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
@@ -11288,8 +11346,8 @@ rux_entry() {
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
-            --exclude-snapshots=*) exclude_snaps="${a#*=}" ;;
-            --exclude=*) excludes+=("${a#*=}") ;;
+            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;

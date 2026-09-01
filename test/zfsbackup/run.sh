@@ -3636,10 +3636,25 @@ fi
 
 FS="$WORK/fieldsurvival"; mkdir -p "$FS/p/prof"
 mkprof_copy "$FS/p/prof"
-# A second VALID dataset field the built-in profile does not carry. `recursive`
-# is explicitly profile-owned (REV-073) and is not in the forbidden list, so a
-# profile is entitled to set it and the runtime must carry it through.
-mkprof_add "$FS/p/prof" '[dataset]' '\trecursive = flat'
+# A second VALID dataset field the built-in profile does not carry.
+#
+# THIS USED TO BE `recursive`, on the grounds that REV-20260808-076 said
+# "recursion remains profile-owned" and the forbidden list did not carry it. It
+# is `media` since 2026-08-31, and the swap is the point rather than a
+# workaround: that sentence was written when the design had NO relation-level
+# recursion, and the owner revision it describes had just removed one. Today
+# `--recursive=flat|atomic` is back on the relationship, recorded in the client
+# record, and written into the section by emit_client_sections -- so a profile
+# setting it made the section carry the field TWICE and gen-cron refused the
+# whole config. The reason THIS fixture never saw that is worth keeping: it
+# enrols a NON-recursive relationship, so the caller writes no recursive line
+# and the collision has nothing to collide with.
+#
+# `media` is now the only other field a [dataset] fragment may carry: everything
+# else is identity, link, scope, topology, or has a [template:] layer and
+# belongs there. That is a narrow surface, and it is the honest one -- the
+# fragment's job is to point at templates, not to carry policy.
+mkprof_add "$FS/p/prof" '[dataset]' '\tmedia = removable'
 
 EC_FS="$FS/out.conf"; : > "$EC_FS"
 out=$( ( PROFILE_ROOT="$FS/p" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
@@ -3656,7 +3671,7 @@ else
 fi
 
 # The field the old extractor dropped.
-if grep -q '^	recursive = flat$' "$EC_FS"; then
+if grep -q '^	media = removable$' "$EC_FS"; then
     ok "field survival: a valid profile-owned field the extractor did not know survives"
 else
     bad "field survival: a valid profile-owned field the extractor did not know survives" "$(cat "$EC_FS")"
@@ -3715,14 +3730,17 @@ else
     bad "field survival: the complete candidate is accepted by the REAL gen-cron.sh" "rc=$gen_rc $(printf '%s' "$gen_out" | tail -3)"
 fi
 
-# And the extra field must have MEANT something, not merely parsed. recursive =
-# flat is the -R spelling in the generated transfer line; without it the line
-# carries no recursion flag at all.
+# And the extra field must have MEANT something, not merely parsed. `media =
+# removable` brackets the generated line with the media gate -- import the pool
+# before the write, export it after -- so its absence is visible in the rendered
+# output rather than only in the config text.
 if printf '%s
-' "$gen_out" | grep -qE 'snap(send|get)\.sh.* -R '; then
-    ok "field survival: the profile's recursive=flat reaches the rendered cron line"
+' "$gen_out" | grep -q 'zfs-media-gate.sh attach' \
+   && printf '%s
+' "$gen_out" | grep -q 'zfs-media-gate.sh detach'; then
+    ok "field survival: the profile's media=removable reaches the rendered cron line"
 else
-    bad "field survival: the profile's recursive=flat reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
+    bad "field survival: the profile's media=removable reaches the rendered cron line" "$(printf '%s' "$gen_out" | grep -E 'snap(send|get)' | head -2)"
 fi
 
 
@@ -4252,8 +4270,11 @@ fi
 # relationship must be independent of it: this is the one-way handoff itself.
 # The drift is expressed in VALID profile fields on purpose: an invalid one
 # would be refused at the profile boundary and would prove nothing about the
-# handoff.
-mkprof_add "$P9/prof" '[dataset]' '\trecursive = yes'
+# handoff. `recursive` was that field until 2026-08-31, when it became one of
+# the invalid ones -- recursion is the relationship's topology and a profile
+# setting it made the emitted section carry the field twice. `media` is what a
+# [dataset] fragment may still carry besides use_template.
+mkprof_add "$P9/prof" '[dataset]' '\tmedia = removable'
 sed -i 's/^\tgfs_pattern *=.*/\tgfs_pattern  = automated_PROFILEDRIFT_/' "$P9/prof.conf"
 out=$(emit9 "$C9" c9 10.9.9.3 0); rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q "PROFILEDRIFT" "$C9" \
@@ -7984,6 +8005,56 @@ esac
 case "$(awk '/^warn_if_block_has_other_source\(\)/,/^}/' "$ZFSBACKUP")" in
     *normalize_cron_source*) ok "block-source guard: shares the path normaliser" ;;
     *) bad "block-source guard: shares the path normaliser" ;;
+esac
+
+
+# --- LEGACY EXCLUSION FIELDS IN A CLIENT RECORD ------------------------------
+#
+# The exclusion fields were renamed on 2026-09-01. The CLI and CONFIG halves of
+# that rename fail LOUDLY on the old spelling -- unknown option, unknown field.
+# The RECORD half would not have: the readers look the new names up by name, so
+# an old record comes back with no exclusions at all and the next re-activation
+# drops every -X and -E the relationship was enrolled with, silently.
+#
+# Zero such records existed on any of the five hosts when the rename landed, so
+# this refusal should never fire in practice. That is precisely why it is
+# asserted rather than argued: "should never" is a claim about a measurement
+# somebody took once, not a property of the code.
+LEG="$WORK/legacy"; mkdir -p "$LEG"
+leg_load() {   # <record lines...> -> the loader's output
+    local f="$LEG/rec.conf"; : > "$f"
+    printf 'PEER_HOST=10.0.0.1\n' > "$f"
+    local l; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done
+    ( peer_label() { echo lab; }; peer_manifest_path() { echo /nonexistent; }
+      load_client_and_connection "$f" ) 2>&1
+}
+for spec in 'EXCLUDE_SNAP_1=vzdump|EXCLUDE_FAMILY_1' 'EXCLUDE_1=-swap$|EXCLUDE_CHILD_1'; do
+    fld="${spec%%|*}"; want="${spec##*|}"
+    out="$(leg_load "$fld")"
+    if case "$out" in *"legacy field '${fld%%=*}'"*) true ;; *) false ;; esac \
+       && case "$out" in *"$want"*) true ;; *) false ;; esac; then
+        ok "legacy record field ${fld%%=*} is refused, naming its replacement"
+    else
+        bad "legacy record field ${fld%%=*} is refused, naming its replacement" "$out"
+    fi
+done
+
+# The control the two negatives above cannot give: a guard that refused every
+# EXCLUDE_* would pass both and break every record written since the rename.
+# These must reach the manifest check, i.e. get PAST the guard.
+for fld in 'EXCLUDE_FAMILY_1=vzdump' 'EXCLUDE_CHILD_1=-swap$'; do
+    out="$(leg_load "$fld")"
+    case "$out" in
+        *"legacy field"*) bad "control: ${fld%%=*} is NOT refused" "the guard is too wide: $out" ;;
+        *) ok "control: ${fld%%=*} passes the guard" ;;
+    esac
+done
+
+# ...and a record with no exclusions at all, the commonest shape on the estate.
+out="$(leg_load)"
+case "$out" in
+    *"legacy field"*) bad "control: a record with no exclusions passes the guard" "$out" ;;
+    *) ok "control: a record with no exclusions passes the guard" ;;
 esac
 
 echo "--------------------------------------------"

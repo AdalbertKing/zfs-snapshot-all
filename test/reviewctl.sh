@@ -147,7 +147,17 @@ require_commit() {   # <rev> <field> <value>
         return 1
     fi
     if ! git -C "$g" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null; then
-        err "$rev: $field names $sha, which is a commit but is not reachable from $ref -- unpushed, or rewritten and orphaned; point at the published commit that carries the whole delivery"
+        # The hint is not decoration. This refusal has TWO causes and they need
+        # opposite fixes: the sha really is orphaned, or the caller is on a
+        # branch and validating against the wrong vantage point. Without the
+        # second half named here, the message reads as "your delivery is not
+        # published yet" and the obvious response is to remove the artifact --
+        # which is what happened on 2026-09-01: a correct DELIVERIES entry was
+        # reverted because the refusal, read alone, argued for reverting it.
+        # impact.sh --verify runs this with REVIEWCTL_PUBREF=HEAD precisely so
+        # one PR can carry a response with its derived views; a caller running
+        # --generate by hand does not get that unless it says so.
+        err "$rev: $field names $sha, which is a commit but is not reachable from $ref -- unpushed, or rewritten and orphaned; point at the published commit that carries the whole delivery. If you are on a branch whose commits are not on main yet, that is expected: validate against the prospective publication ref instead, REVIEWCTL_PUBREF=HEAD (which is what ./test/impact.sh --verify uses)."
         return 1
     fi
     return 0
