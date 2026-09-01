@@ -160,8 +160,23 @@ for engine in snapsend.sh snapget.sh; do
     # PARSED: with -R alongside, it must count as the second declaration.
     understands "$engine" "an -E argument does not end option processing" \
                 -E fam --recursive=flat
+    # BUNDLED too, because that is the other legal spelling of the same
+    # invocation and the pre-pass has its own rule for it (cluster_needs_next:
+    # a value attached inside the token, so the NEXT argv stays an option).
+    understands "$engine" "an attached -E value does not end option processing either" \
+                -Efam --recursive=flat
     refuses "$engine" "a long form after -E is still a declaration" \
             "declared more than once" -E fam --recursive=flat -R
+
+    # THE VISIBILITY PROBE (REV-20260831-130 acceptance 3), and it is a sharper
+    # instrument than the one above. "No unknown-option error" says the parser
+    # did not choke; it does not say the long option was SEEN. This makes the
+    # long option deliberately invalid and requires the refusal to quote the
+    # value: only the long-option parser knows the string 'ture', so naming it
+    # proves the token was translated rather than passed through as data --
+    # which in turn proves -E consumed its own argument and stopped there.
+    refuses "$engine" "a long form after -E is really PARSED, not merely tolerated" \
+            "got 'ture'" -E fam --recursive=ture
 
     # ...and the mirror, so the fix is not "treat everything after -E as
     # options": the argument itself is DATA even when it looks like a long
