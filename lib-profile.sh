@@ -271,12 +271,26 @@ profile_check_field() {   # <kind> <field> <schema dump> <where>
     # list kept here: if the field exists at the template layer, that is where
     # it belongs. Nothing to keep in step, and a new policy field is covered the
     # day gen-cron declares it.
+    # gfs/gfs_pattern are exempt, and the exemption is narrow on purpose.
+    #
+    # They gained a template layer on 2026-09-01 so a tier can declare its OWN
+    # ladder (`gfs = yes` in a [template:], one -G line per family). That made
+    # the rule below start refusing `[prune] gfs = yes` -- which is how every
+    # shipped ladder profile declares itself, and it broke all of them at once.
+    #
+    # Neither reason the rule exists applies here. It does not COLLIDE: nothing
+    # in zfs-backup.sh writes gfs into a section, unlike recursive or
+    # send_schedule. It does not FLATTEN: a [prune:] section's gfs is a property
+    # of the section -- one combined -G line over every tier it names -- so
+    # stating it there is the only place it means anything at all.
+    case "$field" in gfs|gfs_pattern) ;; *)
     if [ "$kind" = dataset ] || [ "$kind" = prune ]; then
         if grep -qxF "template $field" "$dump"; then
             PROFILE_ERR="$where: '$field' is policy and belongs in one of this profile's [template:] sections, not in its [$kind] block -- a value here is pasted into every section the profile creates, where it overrides every tier that section names and collides with the line the relationship writes for itself"
             return 1
         fi
     fi
+    ;; esac
     return 0
 }
 
