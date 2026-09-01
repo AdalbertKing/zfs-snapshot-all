@@ -206,6 +206,16 @@ for _f in "$DS_DEFAULT" "$PR_DEFAULT"; do
     else bad "positive: shipped [$_k] fragment still validates under the policy rule" "$PROFILE_ERR"; fi
 done
 
+# ssh_flags is the connection's identity (-p/-k/-c/-K/-O) for a remote source
+# prune, and append_source_prune_create writes it itself -- so a profile
+# carrying one made the section hold the field twice and gen-cron refused the
+# whole config. It escaped the "has a [template:] layer, so it is policy" rule
+# by having no template layer at all; measured validating on 2026-09-01, while
+# listing what a profile may carry.
+cp "$PR_DEFAULT" "$TMP/bad-sshflags.inc"
+echo 'ssh_flags = -p 2222' >> "$TMP/bad-sshflags.inc"
+if validate_fragment prune "$TMP/bad-sshflags.inc"; then bad "negative: relation-owned ssh_flags was accepted"; else ok "negative: relation-owned ssh_flags refused"; fi
+
 cp "$PR_DEFAULT" "$TMP/bad-unknown.inc"
 echo 'not_a_real_gencron_field = yes' >> "$TMP/bad-unknown.inc"
 if validate_fragment prune "$TMP/bad-unknown.inc"; then bad "negative: unknown field was accepted"; else ok "negative: unknown field refused via --dump-fields"; fi
