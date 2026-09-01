@@ -593,13 +593,28 @@ check "D7 -R -S remote pull: the child was pulled" "1" "$(l_snaps "$DTGT7/keep")
 # ============================================================================
 echo "--- F. ssh option passthrough (-c/-K/-O)"
 
-# Auto-detected rather than hardcoded, so the positive -K case works run as
-# root (id_rsa) or as the delegated account (its own id_ed25519) without
-# assuming which.
-DEFAULT_KEY=""
-for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
-    [ -r "$k" ] && { DEFAULT_KEY="$k"; break; }
-done
+# THE KEY THAT ACTUALLY REACHES THIS PEER, which is not always $HOME/.ssh/id_*.
+#
+# Auto-detection was written so the positive -K case works run as root (id_rsa)
+# or as the delegated account (its own id_ed25519) without assuming which. That
+# assumption holds only where the account's DEFAULT identity is the one the peer
+# authorises. On a properly paired account it is not: `deploy.sh --join` issues a
+# dedicated key per peer and the default id_ed25519 is authorised nowhere.
+#
+# Measured on pve9, 2026-09-01, running as the delegated account: both F1
+# assertions failed -- exit non-zero and no GUID -- while every other remote
+# section passed. F1 was handing the engine an identity the far side had never
+# been told about, and then reporting that -K does not work.
+#
+# So when the caller named the credentials, they ARE the real identity: that is
+# what --peer-key means. Auto-detection stays as the fallback for a run whose
+# account has ambient trust.
+DEFAULT_KEY="$PKEY"
+if [ -z "$DEFAULT_KEY" ]; then
+    for k in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa"; do
+        [ -r "$k" ] && { DEFAULT_KEY="$k"; break; }
+    done
+fi
 
 if [ -z "$DEFAULT_KEY" ]; then
     echo "F. skipped -- no readable default identity under \$HOME/.ssh to test -K against"
