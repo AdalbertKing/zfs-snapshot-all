@@ -137,6 +137,19 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
+  **Katalog: cztery profile czterorodzinne (2026-09-01).** Do długiej formy
+  `y5m12d31h24-{gfs,age}` doszła chuda: **`m12w4d7h24-{gfs,age}`** — 12
+  miesięcznych, 4 tygodniowe, 7 dobowych, 24 godzinowe, czyli miesiąc pokrycia
+  zamiast pięciu lat, z tierem tygodniowym w miejsce rocznego. Reszta reguł bez
+  zmian: cztery przedrostki (żeby grube tiery dało się quiesce'ować bez
+  zamrażania każdego gościa 24× na dobę), godzinowy nigdy nie quiesce'owany,
+  `,degrade`, trzy rodziny proxmoksowe ogrodzone, brak `dst`.
+
+  Zweryfikowane na labie prawdziwą ścieżką `--target=''`; nowy tier tygodniowy
+  uruchomiony dosłownie: `exit=8` i `automated_weekly_crash_...`. Oba mechanizmy
+  na tej samej rodzinie podają **różne powody**, nie tylko różne flagi —
+  `(newer than threshold)` kontra `(GFS W#1)`.
+
   **Ryzyko resztkowe nazwane i ZAAKCEPTOWANE, nie zamknięte (decyzja
   właściciela 2026-09-01).** Profil bez własnego `[prune]`, którego tiery też
   nie mają `prune_schedule`, wyrenderuje snapshoty bez retencji. Bramki na to
