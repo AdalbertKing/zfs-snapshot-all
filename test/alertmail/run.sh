@@ -347,13 +347,14 @@ else
         eval "cat > '$hb_dir/digest.sh' <<EOF
 $hb_body
 EOF"
-    # Pin the heartbeat day to today so the branch always runs. Without this the
+    # The quiet branch used to be reachable only on Mondays, and this suite
+    # neutralised that with a sed over the day comparison -- a pin that broke
+    # the moment the comparison was rewritten. ZFS_DIGEST_QUIET=daily is now
+    # the supported way in, so the test uses the product's own knob instead of
+    # rewriting the product. Every quiet-path run below sets it; without it the
     # case silently no-ops on six days out of seven and reports a pass.
-    sed -i "s/\"\$(date +%u)\" = \"[0-9]\"/\"\$(date +%u)\" = \"$(date +%u)\"/" "$hb_dir/digest.sh"
-    if ! grep -q "= \"$(date +%u)\"" "$hb_dir/digest.sh"; then
-        bad "the heartbeat day check can be pinned for the test" \
-            "the day comparison in the generated script no longer matches the sed"
-    elif ! bash -n "$hb_dir/digest.sh" 2>/dev/null; then
+    QUIET_ON="ZFS_DIGEST_QUIET=daily"
+    if ! bash -n "$hb_dir/digest.sh" 2>/dev/null; then
         bad "the extracted digest is valid bash" "$(bash -n "$hb_dir/digest.sh" 2>&1 | head -3)"
     else
         mkdir -p "$hb_dir/bin"
@@ -362,7 +363,7 @@ EOF"
 
         rm -f "$hb_dir/q" "$hb_dir/q.processing"
         hb_out=$(PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
-                 bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
+                 env $QUIET_ON bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
         if [ "$hb_rc" -eq 0 ]; then
             ok "heartbeat: a delivered send exits 0"
         else
@@ -373,7 +374,7 @@ EOF"
         printf '#!/bin/sh\ncat >/dev/null\nexit 3\n' > "$hb_dir/bin/mail"
         rm -f "$hb_dir/q" "$hb_dir/q.processing"
         hb_out=$(PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
-                 bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
+                 env $QUIET_ON bash "$hb_dir/digest.sh" 2>&1); hb_rc=$?
         if [ "$hb_rc" -ne 0 ]; then
             ok "heartbeat: a send that failed does NOT report success"
         else
@@ -387,6 +388,74 @@ EOF"
             bad "heartbeat: a failed send names the channel as unproven" \
                 "nothing on stderr told cron what broke" "out: $hb_out"
         fi
+
+        # -------------------------------------------------------------------
+        # THE QUIET REPORT CARRIES THE REPORT, AND ITS CADENCE IS SETTABLE.
+        #
+        # Owner, 2026-09-02: "Co, gdy nie ma warningow, ani alertow, czy raz w
+        # tygodniu tez dostane taka statystyke? czy mozemy sparametryzowac
+        # czestotliwosc maila informacyjnego?" He did not get it. The quiet mail
+        # was one line and the state table plus the run figures were built after
+        # the branch had already exited -- so the periodic report disappeared in
+        # exactly the weeks worth reading, the ones where nothing is wrong.
+        #
+        # Three cases, and the two negatives are the point: "no mail arrived" is
+        # not evidence of a working switch unless some other setting DOES mail.
+        # -------------------------------------------------------------------
+        printf '#!/bin/sh\nshift\ncat > "$HB_SENT"\nexit 0\n' > "$hb_dir/bin/mail"
+        chmod +x "$hb_dir/bin/mail"
+        # A log with one real run, so the table has a row to print. Written
+        # here rather than reusing $_fakelog: that variable is created 140
+        # lines further down, and reading it here would have silently passed
+        # an empty ZFS_CRON_LOGS.
+        printf '%sT08:00:00+00:00 ZFS-JOB BEGIN h daily backup (x)\n' "$(date +%Y-%m-%d)" >  "$hb_dir/qlog"
+        printf '%sT08:00:06+00:00 ZFS-JOB END h daily backup (x) rc=0\n' "$(date +%Y-%m-%d)" >> "$hb_dir/qlog"
+        _q_run() {  # <cadence> -> body in $hb_dir/sent, or no file at all
+            rm -f "$hb_dir/q" "$hb_dir/q.processing" "$hb_dir/sent"
+            HB_SENT="$hb_dir/sent" PATH="$hb_dir/bin:$PATH" \
+            ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$hb_dir/qlog" \
+                env ZFS_DIGEST_QUIET="$1" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+        }
+        _today=$(printf 'mon tue wed thu fri sat sun' | cut -d' ' -f"$(date +%u)")
+        _other=$(printf 'mon tue wed thu fri sat sun' | cut -d' ' -f"$(( $(date +%u) % 7 + 1 ))")
+
+        _q_run "$_today"
+        if [ -s "$hb_dir/sent" ] && grep -q 'czas lacz\.' "$hb_dir/sent"; then
+            ok "quiet report: on its cadence day it carries the run table, not one line"
+        else
+            bad "quiet report: on its cadence day it carries the run table, not one line" \
+                "$(head -20 "$hb_dir/sent" 2>/dev/null || echo '<zaden mail nie wyszedl>')"
+        fi
+
+        _q_run "$_other"
+        if [ ! -f "$hb_dir/sent" ]; then
+            ok "quiet report: a day that is not the cadence day sends nothing"
+        else
+            bad "quiet report: a day that is not the cadence day sends nothing" \
+                "cadence=$_other, dzis=$_today" "$(head -5 "$hb_dir/sent")"
+        fi
+
+        _q_run off
+        if [ ! -f "$hb_dir/sent" ]; then
+            ok "quiet report: 'off' silences it entirely"
+        else
+            bad "quiet report: 'off' silences it entirely" "$(head -5 "$hb_dir/sent")"
+        fi
+
+        # A day WITH findings mails whatever the cadence says. Suppressing an
+        # alert on a schedule is not a cadence, it is a lost alert.
+        rm -f "$hb_dir/q.processing" "$hb_dir/sent"
+        printf '%s\tALERT\tvm-100\tzadanie padlo rc=8\n' "$(date +%s)" > "$hb_dir/q"
+        HB_SENT="$hb_dir/sent" PATH="$hb_dir/bin:$PATH" \
+        ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$hb_dir/qlog" \
+            env ZFS_DIGEST_QUIET=off bash "$hb_dir/digest.sh" >/dev/null 2>&1
+        if [ -s "$hb_dir/sent" ] && grep -q 'vm-100' "$hb_dir/sent"; then
+            ok "quiet cadence governs ONLY the empty mail -- a finding still goes out under 'off'"
+        else
+            bad "quiet cadence governs ONLY the empty mail -- a finding still goes out under 'off'" \
+                "$(head -20 "$hb_dir/sent" 2>/dev/null || echo '<alert przepadl>')"
+        fi
+
 
         # -------------------------------------------------------------------
         # AN EVENT NOT FROM TODAY MUST CARRY ITS DATE.
@@ -596,10 +665,29 @@ CTPLUS
             if printf '%s' "$_plus" | grep -qE 'Liczby przebiegow z okresu [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
                && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN' \
                && [ "$(printf '%s' "$_plus" | grep -n 'Liczby przebiegow' | cut -d: -f1)" \
-                  -lt "$(printf '%s' "$_plus" | grep -n 'czas (ostatni)' | cut -d: -f1)" ]; then
+                  -lt "$(printf '%s' "$_plus" | grep -n 'ostatni przebieg' | cut -d: -f1)" ]; then
                 ok "digest: the measured window is stated ABOVE the columns it describes"
             else
                 bad "digest: the measured window is stated ABOVE the columns it describes" "$_plus"
+            fi
+
+            # THE RATE MUST BE CHECKABLE ON ITS OWN ROW.
+            #
+            # v20 printed przyrost and transfer but not the seconds the second
+            # was divided by, so the admin had to take the rate on trust. The
+            # divisor is now a column, and it sits BETWEEN transfer and the
+            # per-run averages -- next to the number it explains, not filed
+            # away with the timings it is not. Owner, 2026-09-02: "po transfer
+            # powinien byc czas trwania, potem sredni i maksymalny". Pinning
+            # the order matters more than pinning the widths: the three czas
+            # columns mean three different things (sum, mean, worst) and only
+            # their order tells them apart once the values are read.
+            _hdr=$(printf '%s' "$_plus" | grep -m1 'czas max')
+            if printf '%s' "$_hdr" | grep -qE 'przyrost +transfer +czas lacz\. +czas sr\. +czas max' \
+               && printf '%s' "$_plus" | grep -q 'Transfer = przyrost / czas lacz\.'; then
+                ok "digest: the rate's divisor is a column, between transfer and the averages"
+            else
+                bad "digest: the rate's divisor is a column, between transfer and the averages" "$_hdr"
             fi
 
             # THE WINDOW IS SEVEN DAYS BY DEFAULT AND SETTABLE.

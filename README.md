@@ -950,6 +950,8 @@ One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to ch
 | `ZFS_ALERT_COOLDOWN` | `14400` (4h) | `immediate` only: seconds before the *same* message may mail again. Ignored in `daily` (the digest de-duplicates by counting). |
 | `ZFS_ALERT_STATE_DIR` | `/var/lib/zfs-snapshot-all/notify-state` | `immediate` only: where those cooldown timestamps live. |
 | `ZFS_ALERT_QUEUE` | `/var/lib/zfs-snapshot-all/alert-queue.log` | `daily` only: the queue the digest consumes. |
+| `ZFS_DIGEST_DAYS` | `7` | `daily` only: how many days the run table in the digest covers. |
+| `ZFS_DIGEST_QUIET` | `mon` | `daily` only: when a host with NOTHING to report still mails the full periodic report — a weekday (`mon`..`sun`), `daily`, or `off`. Governs only that mail; a day with findings always sends. `off` costs the guarantee that silence means a dead channel. |
 
 The config lives at **`/etc/zfs-alert.conf`** and the queue under
 **`/var/lib/zfs-snapshot-all/`** (`2775 root:zfsalert`, setgid) rather than in `/root/scripts`,
