@@ -1156,7 +1156,11 @@ validate_peer_conf() {
 # line; requiring the record to START with a key type is what refuses it.
 validate_pubkey_file() {
     local f="$1" lines first
-    lines=$(grep -c '[^[:space:]]' "$f" 2>/dev/null || echo 0)
+    # Not `grep -c ... || echo 0`: grep -c PRINTS 0 and exits 1 when it matches
+    # nothing, so the fallback appends a SECOND zero and $lines arrives as two
+    # lines instead of one -- the arithmetic below then errors out before the
+    # die can explain anything. Same defect bit the digest on three hosts.
+    lines=$(awk '/[^[:space:]]/ { n++ } END { print n + 0 }' "$f" 2>/dev/null)
     [ "$lines" -eq 1 ] || die "pubkey.pub must hold exactly one public key, found $lines non-blank lines"
     first=$(grep -m1 '[^[:space:]]' "$f")
     case "$first" in
@@ -4894,7 +4898,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v30"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v31"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5567,7 +5571,20 @@ if [ -n "\$RUN_ROWS" ]; then
         # them -- counting it as a component would double every total against
         # the row above.
         if [ -n "\$_tg" ]; then _srcs="\${_dsl%,*}"; else _srcs="\$_dsl"; fi
-        _nsrc=\$(printf '%s' "\$_srcs" | tr ',' '\n' | grep -c . 2>/dev/null || echo 0)
+        # COUNTED IN ONE PLACE, so the value cannot arrive as two lines.
+        #
+        # It used to be 'grep -c . || echo 0', and grep -c PRINTS 0 and exits 1
+        # when it matches nothing -- so the fallback appended a second zero and
+        # _nsrc arrived as TWO LINES instead of one. Every comparison against
+        # it then failed with "integer expression expected" on stderr, on
+        # EVERY run of a job whose cron line quotes no dataset. Seen on
+        # pve9/pve9b/pve10, twenty lines a run, straight into cron.log. The
+        # arithmetic still fell the right way by accident, which is why
+        # nothing else caught it. The backtick guard in test/alertmail does
+        # not cover this: a comment that BREAKS ACROSS LINES turns its second
+        # half into a command, and that is what it did here -- three times in
+        # one day, from the same escaping mistake.
+        _nsrc=\$(printf '%s' "\$_srcs" | tr ',' '\n' | grep -c .); _nsrc="\${_nsrc:-0}"
         # ONE DATASET STAYS ON THE ROW; SEVERAL GO UNDERNEATH.
         #
         # Owner, 2026-09-02: "jesli zadanie ma wiele datasets, to pod nazwa
