@@ -904,11 +904,16 @@ CTIDLE
             #
             # (2) a PRUNE job adds nothing, so summing what grew under its
             # scope credits it with another job's data.
+            # The received dataset is <target>/<source>, which is what
+            # snapsend.sh actually writes (snapsend.sh:2570 -- only -t makes
+            # the base the target). The stub used to put the snapshot on the
+            # target ROOT, which passed only while the digest summed the whole
+            # root and would have hidden the pve2 defect.
             cat > "$hb_dir/bin/zfs" <<'ZFSSTUB'
 #!/bin/sh
 case "$*" in
   *"-t snapshot"*)
-    printf 'tank/dst@a	3221225472	9999999999
+    printf 'tank/dst/tank/src@a	3221225472	9999999999
 '
     printf 'tank/src@a	111	9999999999
 '
@@ -1194,6 +1199,58 @@ CTFAM
                 bad "digest: each snapshot tier counts only its OWN family, not the whole scope" \
                     "$(printf '%s' "$_fam" | grep -E 'snap [(]d[)]')"
             fi
+
+            # AND TWO JOBS SHARING A TARGET DO NOT SHARE THEIR BYTES.
+            #
+            # The family filter separates TIERS. It does not separate two jobs
+            # that write the same family into the same target root -- and that
+            # is the ordinary shape of a collector. Measured on pve2, where four
+            # jobs land in hdd/backups/pve2: "daily backup (BIM server)" and
+            # "daily backup (root)" both reported 732.77M, each credited with the
+            # other's bytes, and "hourly backup (nextcloud)" -- whose prefix is
+            # the broad "automated_" -- was credited with 259.32G, the entire
+            # backup pool for a week.
+            #
+            # A job owns <target>/<source> for each of its sources, and nothing
+            # else. 2M and 1M must stay 2M and 1M; 3M anywhere is the bug.
+            cat > "$hb_dir/bin/zfs" <<'ZFSSHARE'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tgt/pool/hdd/d/a@automated_daily_1	2097152	9999999999
+'
+    printf 'tgt/pool/hdd/d/b@automated_daily_1	1048576	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSSHARE
+            chmod +x "$hb_dir/bin/zfs"
+            cat > "$hb_dir/bin/crontab" <<'CTSHARE'
+#!/bin/sh
+echo '0 1 * * * echo "$(date -Is) ZFS-JOB BEGIN h aa job (a)" >>/var/log/x; /opt/snapsend.sh -m "automated_daily_" "hdd/d/a" "tgt/pool"'
+echo '0 2 * * * echo "$(date -Is) ZFS-JOB BEGIN h bb job (b)" >>/var/log/x; /opt/snapsend.sh -m "automated_daily_" "hdd/d/b" "tgt/pool"'
+CTSHARE
+            chmod +x "$hb_dir/bin/crontab"
+            {   printf '%sT01:00:00+00:00 ZFS-JOB BEGIN h aa job (a)\n' "$_yd"
+                printf '%sT01:00:02+00:00 ZFS-JOB END h aa job (a) rc=0\n' "$_yd"
+                printf '%sT02:00:00+00:00 ZFS-JOB BEGIN h bb job (b)\n' "$_yd"
+                printf '%sT02:00:02+00:00 ZFS-JOB END h bb job (b) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _shr=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_shr" | grep -qE 'aa job [(]a[)].* 2\.00M ' \
+               && printf '%s' "$_shr" | grep -qE 'bb job [(]b[)].* 1\.00M ' \
+               && ! printf '%s' "$_shr" | grep -q ' 3\.00M '; then
+                ok "digest: two jobs sharing a target are not credited with each other's bytes"
+            else
+                bad "digest: two jobs sharing a target are not credited with each other's bytes" \
+                    "$(printf '%s' "$_shr" | grep -E '(aa|bb) job')"
+            fi
+
 
             # AND A RATE NEEDS SOMETHING TO HAVE MOVED. A local snapshot job
             # carries nothing across a link and its duration is the second the
