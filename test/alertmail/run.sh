@@ -899,7 +899,7 @@ CTVOL
             PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _vol=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
-            if printf '%s' "$_vol" | grep -qE 'vol backup [(]v[)].* 3G'; then
+            if printf '%s' "$_vol" | grep -qE 'vol backup [(]v[)].* 3\.0G'; then
                 ok "digest: a 3 GiB volume reports as 3G (mawk INT_MAX clamp)"
             else
                 bad "digest: a 3 GiB volume reports as 3G (mawk INT_MAX clamp)" "$_vol"
@@ -925,11 +925,14 @@ CTVOL
             # across its datasets would look measured and be invented.
             cat > "$hb_dir/bin/zfs" <<'ZFSDS'
 #!/bin/sh
+# 1.06 M each, chosen so the roundings DISAGREE: 1.1 + 1.1 = 2.2 while the
+# exact sum (2.12 M) prints as 2.1. Round numbers close either way and would
+# make the control below prove nothing.
 case "$*" in
   *"-t snapshot"*)
-    printf 'tgt/pool/hdd/d/a@s	2097152	9999999999
+    printf 'tgt/pool/hdd/d/a@s	1111491	9999999999
 '
-    printf 'tgt/pool/hdd/d/b@s	1048576	9999999999
+    printf 'tgt/pool/hdd/d/b@s	1111491	9999999999
 '
     ;;
 esac
@@ -954,18 +957,46 @@ CTDS
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _dsr=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
             # 8 s of transfer for a, and it must NOT be the job's 20 s.
-            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/a .* 2M .* 8s +8s +8s *$'; then
+            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/a .* 1\.1M .* 8s +8s +8s *$'; then
                 ok "digest: a dataset with a transfer block carries its OWN time, not the job's"
             else
                 bad "digest: a dataset with a transfer block carries its OWN time, not the job's" \
                     "$(printf '%s' "$_dsr" | grep -E 'hdd/d/[ab]')"
             fi
-            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/b .* 1M .* - +- +- *$'; then
+            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/b .* 1\.1M .* - +- +- *$'; then
                 ok "digest: a dataset the engine never transferred gets a volume and NO invented time"
             else
                 bad "digest: a dataset the engine never transferred gets a volume and NO invented time" \
                     "$(printf '%s' "$_dsr" | grep -E 'hdd/d/[ab]')"
             fi
+
+            # THE PRZYROST COLUMN ADDS UP, and that is the whole reason the
+            # values carry a decimal and share one unit per job.
+            #
+            # The bytes always summed exactly -- measured on pve0, the job total
+            # and the sum of its datasets were the same 260980736 -- but each
+            # value was rounded to its OWN unit before printing, so 211M + 37M
+            # read as 248 under a total of 249, and a big job mixed units (42G
+            # beside 467M) which no precision makes addable at all.
+            #
+            # Owner chose one unit per job plus a decimal, knowing the cost: a
+            # small component of a large job loses detail (467M shows as 0.5G).
+            # Rounding each value independently still cannot close -- 42.6 + 0.5
+            # + 0.6 is 43.7 while the exact total rounds to 43.6 -- so the job
+            # figure is the sum of the DISPLAYED rows. It differs from the
+            # measured total by under a tenth of a unit, and the measured total
+            # is not lost: it is what every row was computed from.
+            _sum=$(printf '%s\n' "$_dsr" | awk '
+                /^      [a-z]/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9.]+[BKMGT]$/) { v = $i; sub(/[BKMGT]$/, "", v); s += v; break } }
+                END { printf "%.1f", s }')
+            _job=$(printf '%s\n' "$_dsr" | awk '/^  ds backup / { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9.]+[BKMGT]$/) { v = $i; sub(/[BKMGT]$/, "", v); printf "%.1f", v; exit } }')
+            if [ -n "$_job" ] && [ "$_sum" = "$_job" ]; then
+                ok "digest: the job's przyrost equals the sum of its dataset rows as PRINTED"
+            else
+                bad "digest: the job's przyrost equals the sum of its dataset rows as PRINTED" \
+                    "zadanie=$_job suma wierszy=$_sum" "$(printf '%s' "$_dsr" | grep -E 'ds backup|hdd/d/[ab]')"
+            fi
+
 
             # TWO JOBS IN ONE LOG, OVERLAPPING. THE DISCRIMINATING CASE.
             #
@@ -1016,7 +1047,7 @@ ZFSLAP
             _lap=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
             # 5 s of transfer, on the job that owns tgt/pool -- not on the one
             # whose BEGIN happens to be the most recent.
-            if printf '%s' "$_lap" | grep -qE '^ {6}hdd/d/a .* 4M .* 5s +5s +5s *$'; then
+            if printf '%s' "$_lap" | grep -qE '^ {6}hdd/d/a .* 4\.0M .* 5s +5s +5s *$'; then
                 ok "digest: an overlapping job's BEGIN does not steal another job's transfer"
             else
                 bad "digest: an overlapping job's BEGIN does not steal another job's transfer" \
@@ -1072,9 +1103,9 @@ CTFAM
             PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _fam=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
-            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1M ' \
-               && printf '%s' "$_fam" | grep -qE 'dd snap [(]d[)].* 2M ' \
-               && ! printf '%s' "$_fam" | grep -q ' 3M '; then
+            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1\.0M ' \
+               && printf '%s' "$_fam" | grep -qE 'dd snap [(]d[)].* 2\.0M ' \
+               && ! printf '%s' "$_fam" | grep -q ' 3\.0M '; then
                 ok "digest: each snapshot tier counts only its OWN family, not the whole scope"
             else
                 bad "digest: each snapshot tier counts only its OWN family, not the whole scope" \
@@ -1086,7 +1117,7 @@ CTFAM
             # snapshot took, not the hour the data was written over. Dividing
             # one by the other produced "494G/s" on pve1 -- not so much wrong as
             # meaningless.
-            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1M +- ' ; then
+            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1\.0M +- ' ; then
                 ok "digest: a job with no target gets no transfer rate"
             else
                 bad "digest: a job with no target gets no transfer rate" \

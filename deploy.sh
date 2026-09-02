@@ -4894,7 +4894,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v28"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v29"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5402,6 +5402,44 @@ human_bytes() {   # <bytes> -> e.g. 69M
     fi
 }
 
+# THE WHOLE JOB IS RENDERED IN ONE UNIT, so its rows can be added on the page.
+#
+# Owner, 2026-09-02, choosing between three renderings. The bytes always summed
+# exactly -- measured on pve0, the job total and the sum of its datasets were
+# the same 260980736 -- but each value was rounded to its OWN unit before
+# printing, so 211M + 37M read as 248 under a total of 249. Worse, a big job
+# mixed units (42G beside 467M) and then no amount of precision makes the
+# column addable at all.
+#
+# The unit comes from the JOB, and every dataset under it is printed in that
+# unit with one decimal. The cost is real and was accepted knowingly: a small
+# component of a large job loses detail (467M shows as 0.5G). What is bought is
+# that the column can be checked without a calculator, which is the property
+# the owner has asked for three times in this table.
+unit_of() {   # <bytes> -> T|G|M|K|B
+    _uo=\${1:-0}
+    case "\$_uo" in ""|*[!0-9]*) printf "B"; return 0 ;; esac
+    if   [ "\$_uo" -ge 1099511627776 ]; then printf "T"
+    elif [ "\$_uo" -ge 1073741824 ];    then printf "G"
+    elif [ "\$_uo" -ge 1048576 ];       then printf "M"
+    elif [ "\$_uo" -ge 1024 ];          then printf "K"
+    else printf "B"
+    fi
+}
+
+human_bytes_in() {   # <bytes> <unit> -> e.g. 41.9G
+    case "\${1:-}" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
+    # awk, not shell arithmetic: the division needs a fraction, and the sums
+    # here run past what a shell integer would hold anyway.
+    awk -v b="\$1" -v u="\$2" 'BEGIN {
+        if      (u == "T") printf "%.1fT", b / 1099511627776
+        else if (u == "G") printf "%.1fG", b / 1073741824
+        else if (u == "M") printf "%.1fM", b / 1048576
+        else if (u == "K") printf "%.1fK", b / 1024
+        else               printf "%dB", b
+    }'
+}
+
 # The seconds the rate was DIVIDED BY, made readable. It is printed next to the
 # rate on purpose: przyrost / czas lacz. = transfer is then arithmetic the admin
 # can check on the row, instead of a number they have to trust. Sums over the
@@ -5565,6 +5603,7 @@ if [ -n "\$RUN_ROWS" ]; then
         fi
         _pf=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$4; exit}')
         _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg" "\$_pf")
+        _u=\$(unit_of "\$_vb")
         # A RATE NEEDS SOMETHING TO HAVE MOVED.
         #
         # A local snapshot job carries nothing across a link, and its duration
@@ -5573,14 +5612,12 @@ if [ -n "\$RUN_ROWS" ]; then
         # pve1, a number that is not wrong so much as meaningless. Only a job
         # with a target gets a rate.
         if [ -n "\$_tg" ]; then _rt=\$(human_rate "\$_vb" "\$_tot"); else _rt="-"; fi
-        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$(human_bytes "\$_vb")" "\$_rt" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
-"
         # The components, each measured on ITS OWN target dataset. Indented to
         # 6 so the numeric columns land under the same headings as the summary
         # above them, and the two agree by construction: the volumes sum to the
         # job's.
         if [ "\${_nsrc:-0}" -ge 2 ]; then
-            _dsum=0
+            _dsum=0; _DSBLOCK=""; _dispvals=""
             HAS_DS_ROWS=1
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
@@ -5593,7 +5630,7 @@ if [ -n "\$RUN_ROWS" ]; then
                     *"\$nl\$_k\$nl"*)
                         case "\$_tg" in
                             *:*) _dv="?" ;;
-                            *)   _dv=\$(human_bytes "\$(ds_volume "\$_child" "\$_pf")") ;;
+                            *)   _dv=\$(human_bytes_in "\$(ds_volume "\$_child" "\$_pf")" "\$_u") ;;
                         esac ;;
                 esac
                 # Times exist only where the engine logged a transfer for this
@@ -5618,11 +5655,15 @@ if [ -n "\$RUN_ROWS" ]; then
                 # still have to appear, because dropping the parenthetical took
                 # away the only other place this job states its scope.
                 if [ "\$_dv" = "-" ] && [ -z "\$_dt" ]; then
-                    STATE_BODY="\$STATE_BODY\$(printf '      %s' "\$_s")
+                    _DSBLOCK="\$_DSBLOCK\$(printf '      %s' "\$_s")
 "
                 else
-                    STATE_BODY="\$STATE_BODY\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' "\$_s" "\$_dn" "" "\$_dv" "\$_dr" "\$_dd" "\$_da" "\$_dm")
+                    _DSBLOCK="\$_DSBLOCK\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' "\$_s" "\$_dn" "" "\$_dv" "\$_dr" "\$_dd" "\$_da" "\$_dm")
 "
+                    # Only rows that CARRY a figure contribute to the job total;
+                    # a bare-name row has none, and treating its dash as zero is
+                    # what turned a prune job into "0.0B".
+                    _dispvals="\$_dispvals \${_dv%[BKMGT]}"
                 fi
             done
             IFS="\$_oldifs"
@@ -5642,10 +5683,27 @@ if [ -n "\$RUN_ROWS" ]; then
             # and a negative remainder would be a window artefact printed as a
             # fact.
             if [ "\${_dsum:-0}" -gt 0 ] && [ "\${_tot:-0}" -gt "\$_dsum" ]; then
-                STATE_BODY="\$STATE_BODY\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' 'pozostale (snapshot, prune, polaczenie)' '' '' '' '' "\$(human_secs \$(( _tot - _dsum )))" "" "")
+                _DSBLOCK="\$_DSBLOCK\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' 'pozostale (snapshot, prune, polaczenie)' '' '' '' '' "\$(human_secs \$(( _tot - _dsum )))" "" "")
 "
-            fi
         fi
+        fi
+        # THE JOB ROW IS THE SUM OF THE ROWS UNDER IT, when there are rows.
+        #
+        # Rounding each value independently cannot close: 42.6 + 0.5 + 0.6 is
+        # 43.7 while the exact total rounds to 43.6, and no amount of precision
+        # removes that -- the error is in rounding three times and comparing
+        # against one rounding. Adding the DISPLAYED values makes the column
+        # check out by construction. The figure differs from the measured total
+        # by less than a tenth of the unit, and the measured total is not lost:
+        # it is what every row was computed from.
+        if [ "\${_nsrc:-0}" -ge 2 ] && [ -n "\$_dispvals" ]; then
+            _vol=\$(printf '%s' "\$_dispvals" | awk -v u="\$_u" '{ for (i = 1; i <= NF; i++) s += \$i } END { printf "%.1f%s", s, u }')
+        else
+            _vol=\$(human_bytes_in "\$_vb" "\$_u")
+        fi
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rt" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
+"
+        STATE_BODY="\$STATE_BODY\$_DSBLOCK"
     done <<< "\$RUN_ROWS"
 fi
 
@@ -5704,7 +5762,9 @@ if {
     if [ -n "\$STATE_BODY" ]; then
         if [ -n "\$RUN_WINDOW" ]; then
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
-            printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n'
+            printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu), caly wiersz w jednostce zadania.
+'
+            printf '  Transfer = przyrost / czas lacz.\n'
             # ONLY WHEN THERE IS SOMETHING TO EXPLAIN.
             #
             # Rendered on pve1: every job there has a single dataset, so the
