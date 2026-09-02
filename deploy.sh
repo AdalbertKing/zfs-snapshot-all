@@ -4894,7 +4894,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v29"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v30"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5432,10 +5432,10 @@ human_bytes_in() {   # <bytes> <unit> -> e.g. 41.9G
     # awk, not shell arithmetic: the division needs a fraction, and the sums
     # here run past what a shell integer would hold anyway.
     awk -v b="\$1" -v u="\$2" 'BEGIN {
-        if      (u == "T") printf "%.1fT", b / 1099511627776
-        else if (u == "G") printf "%.1fG", b / 1073741824
-        else if (u == "M") printf "%.1fM", b / 1048576
-        else if (u == "K") printf "%.1fK", b / 1024
+        if      (u == "T") printf "%.2fT", b / 1099511627776
+        else if (u == "G") printf "%.2fG", b / 1073741824
+        else if (u == "M") printf "%.2fM", b / 1048576
+        else if (u == "K") printf "%.2fK", b / 1024
         else               printf "%dB", b
     }'
 }
@@ -5617,7 +5617,7 @@ if [ -n "\$RUN_ROWS" ]; then
         # above them, and the two agree by construction: the volumes sum to the
         # job's.
         if [ "\${_nsrc:-0}" -ge 2 ]; then
-            _dsum=0; _DSBLOCK=""; _dispvals=""
+            _dsum=0; _DSBLOCK=""
             HAS_DS_ROWS=1
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
@@ -5663,7 +5663,6 @@ if [ -n "\$RUN_ROWS" ]; then
                     # Only rows that CARRY a figure contribute to the job total;
                     # a bare-name row has none, and treating its dash as zero is
                     # what turned a prune job into "0.0B".
-                    _dispvals="\$_dispvals \${_dv%[BKMGT]}"
                 fi
             done
             IFS="\$_oldifs"
@@ -5687,20 +5686,15 @@ if [ -n "\$RUN_ROWS" ]; then
 "
         fi
         fi
-        # THE JOB ROW IS THE SUM OF THE ROWS UNDER IT, when there are rows.
+        # TWO DECIMALS, AND THE TOTAL IS THE MEASUREMENT.
         #
-        # Rounding each value independently cannot close: 42.6 + 0.5 + 0.6 is
-        # 43.7 while the exact total rounds to 43.6, and no amount of precision
-        # removes that -- the error is in rounding three times and comparing
-        # against one rounding. Adding the DISPLAYED values makes the column
-        # check out by construction. The figure differs from the measured total
-        # by less than a tenth of the unit, and the measured total is not lost:
-        # it is what every row was computed from.
-        if [ "\${_nsrc:-0}" -ge 2 ] && [ -n "\$_dispvals" ]; then
-            _vol=\$(printf '%s' "\$_dispvals" | awk -v u="\$_u" '{ for (i = 1; i <= NF; i++) s += \$i } END { printf "%.1f%s", s, u }')
-        else
-            _vol=\$(human_bytes_in "\$_vb" "\$_u")
-        fi
+        # Owner, 2026-09-02: "Zrob dwie cyfry po przecinku i zaokraglaj sume i
+        # zostaw to. To nie apteka tylko raport." An earlier round derived the
+        # job figure from the sum of the PRINTED rows so the column closed to
+        # the last digit; at two decimals the residue is under 0.01 of a unit
+        # and buying exactness with a number that is not the measurement is a
+        # bad trade in a report.
+        _vol=\$(human_bytes_in "\$_vb" "\$_u")
         STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rt" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
 "
         STATE_BODY="\$STATE_BODY\$_DSBLOCK"
