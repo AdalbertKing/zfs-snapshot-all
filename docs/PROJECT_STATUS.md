@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3b953a8156f261ea -->
+<!-- status-covers-digest: b9393ca8c46ef173 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -229,37 +229,54 @@
   pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
   w manifeście testowym oba pola naraz.
 
-  **DIGEST STEMPLOWAŁ DATĄ WYSYŁKI, NIE DATĄ ZDARZEŃ — naprawione, `alert-digest.sh`
-  v9→v10 (2026-09-02).** Zgłoszone przez właściciela: rano przyszedł mail
-  `pve1.kancelaria.net -- 2 alert / 1 warn` z pulą DEGRADED, choć dysk wymieniono
-  poprzedniego dnia. **Pula była zdrowa.** `zpool replace` 2026-09-01 17:45:12,
-  scrub 17:58→18:10:40 bez błędów, mirror pełny, oba ESP zarejestrowane w
-  `proxmox-boot-tool` (czyli system wystartuje z każdego dysku — `zpool replace`
-  sam tego nie załatwia).
+  **DIGEST PRZEBUDOWANY: NAJPIERW STAN, POTEM HISTORIA (`alert-digest.sh` v9->v11,
+  2026-09-02).** Zgloszenie wlasciciela: rano przyszedl mail
+  `pve1.kancelaria.net -- 2 alert / 1 warn` z pula DEGRADED, choc dysk wymieniono
+  dzien wczesniej. **Pula byla zdrowa** — `zpool replace` 2026-09-01 17:45:12,
+  scrub bez bledow, mirror pelny, oba ESP zarejestrowane w `proxmox-boot-tool`
+  (czyli system startuje z kazdego dysku; `zpool replace` sam tego nie robi).
 
-  Mail opisywał stan sprzed naprawy. Digest chodzi o 07:00 nad kolejką zapełnioną
-  **poprzedniego dnia**, a nagłówek brał `TODAY=$(date '+%Y-%m-%d')` — datę
-  WYSYŁKI. Wiersze pokazywały same godziny. Powstawało `Doba: 2026-09-02` nad
-  `(07:01 - 16:01)`, czyli zdarzeniami sprzed półtorej godziny przed naprawą.
-  Czytelnik nie miał jak odróżnić żywego problemu od naprawionego.
+  **v10 — etykieta.** Digest chodzi o 07:00 nad kolejka zapelniona poprzedniego
+  dnia, a naglowek bral date WYSYLKI (`TODAY`). Powstawalo `Doba: 2026-09-02` nad
+  `(07:01 - 16:01)` — zdarzeniami sprzed poltorej godziny przed naprawa. Teraz
+  naglowek nazywa okres wyliczony ZE ZDARZEN, a wiersz spoza dnia wysylki niesie
+  date; dzisiejszy zostaje zwiezly, bo data w kazdym wierszu to szum.
 
-  Teraz nagłówek nazywa **okres wyliczony ze zdarzeń** (`Zdarzenia z okresu:`),
-  a wiersz spoza dnia wysyłki niesie swoją datę; dzisiejszy zostaje zwięzły, bo
-  data w każdym wierszu to szum, a przez szum przeoczy się ten jeden, który miał
-  znaczenie. Doszło jedno zdanie mówiące wprost, że to raport o zdarzeniach
-  ZAKOLEJKOWANYCH, nie sonda stanu bieżącego.
+  **v11 — struktura, na polecenie wlasciciela ("to jest nieczytelne i mylace dla
+  admina").** Sama uczciwa etykieta nie wystarczyla: czytelnik nadal wnioskowal
+  terazniejszosc z listy zdarzen przeszlych. Mail ma teraz trzy bloki w tej
+  kolejnosci:
 
-  **Automatycznego wykrywania nieaktualności NIE zbudowano, świadomie.** Zadanie,
-  które padło, naprawdę padło — to historia, nie nieaktualność; dezaktualizować
-  mogą się tylko alerty o STANIE, a kolejka nie niesie tej różnicy i digest nie
-  powinien jej zgadywać po treści. Wymagałoby to typu wpisu i sposobu ponownego
-  sprawdzenia — osobna zmiana, gdyby właściciel jej chciał.
+  1. **STAN BIEZACY, mierzony w chwili wysylki** — zdrowie i zapelnienie pul oraz
+     ostatni przebieg kazdego zadania. Werdykt (`STAN: OK` / `UWAGA`) idzie takze
+     w temacie. To jest wlasciwa naprawa: **fakt naprawiony nie ma jak udawac
+     biezacego, bo ten blok jest SONDA, nie odtworzeniem**.
+  2. **ZDARZENIA Z OKRESU** — jak dotad, wyraznie jako historia.
+  3. **PRZEBIEGI ZADAN** — per zadanie: liczba, bledy, czas sredni i najdluzszy.
 
-  Dowiedzione na WYGENEROWANYM skrypcie (heredoc wyciągnięty i rozwinięty), nie
-  na `deploy.sh`, przeciw rekonstrukcji zgłoszonego maila. Kontrola negatywna z
-  kodem sprzed poprawki odtworzyła `Doba:` nad gołymi godzinami. `test/alertmail`
-  37/0; dwa nowe przypadki padają na starym kodzie, trzeci (dzisiejsze zdarzenie
-  zostaje bez daty) przechodzi na obu — bo pilnuje poprawki zbyt szerokiej.
+  Zasada jednego maila dziennie bez zmian: bloki jada tylko wtedy, gdy mail i tak
+  wychodzi. Cichy host dalej milczy.
+
+  **Wada mojego wlasnego projektu, zlapana dopiero uruchomieniem na pve9.**
+  Pierwsza wersja pokazala `STAN: UWAGA` przez zadanie, ktore padlo dzien
+  wczesniej i **zostalo usuniete z crona** po kampanii labowej. Jego ostatni
+  przebieg zostaje w logu na zawsze, wiec werdykt zawiesilby sie bezterminowo bez
+  niczego do naprawienia. Stan sadzi teraz tylko zadania nadal obecne w crontabie;
+  usuniete sa oznaczone i zostaja w tabeli przebiegow, gdzie sa faktem
+  historycznym. Regresja pilnuje OBU stron.
+
+  **Wolumen swiadomie pominiety (decyzja wlasciciela: "na razie same przebiegi").**
+  `announce_transfer_size()` istnieje, a mbuffer liczy bajty od zawsze — ale oba
+  sa zagluszone, gdy stderr nie jest terminalem, zeby cron nie zamienil
+  `cron.log` w miernik predkosci. Odsloniecie tego to zmiana sciezki danych w
+  ZAMROZONYCH silnikach; tanszy wariant to przekierowanie podsumowania mbuffera
+  do pliku stanu, drozszy to `zfs send -nP` z dodatkowa runda SSH na przebieg.
+
+  Czasy liczone z SEKUND DOBY, nie `mktime` — cala estata ma **mawk** (zmierzone
+  na pve1.kancelaria, pve9 i pve2), a `mktime` to rozszerzenie gawk; gawkizm
+  padlby po cichu wszedzie. Dowiedzione na WYGENEROWANYM skrypcie i na prawdziwym
+  `cron.log` pve9. `test/alertmail` 41/0.
+
 
   **KATALOG: `Y5M12D31H24` — pierwszy profil WIELKOLITEROWY (2026-09-01).**
   Pięć lat pokrycia, JEDNA rodzina, drabina `-G -H24 -D31 -M12 -Y5`, i nic

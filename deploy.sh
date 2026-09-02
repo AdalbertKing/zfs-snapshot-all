@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v10"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v11"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -4978,6 +4978,125 @@ done <<< "\$SUMMARY"
 
 TOTAL=\$(wc -l < "\$PROCESSING")
 
+# ---------------------------------------------------------------------------
+# THE CURRENT STATE, PROBED NOW -- and it comes FIRST.
+#
+# Owner direction 2026-09-02, after a morning mail reported a DEGRADED pool a
+# day after the disk had been replaced: state first, period report second.
+# Dating the events (v10) made the report honest but still left the reader
+# deducing the present from a list of past events. This block answers the only
+# question worth asking over breakfast -- is it broken RIGHT NOW -- and a
+# repaired fault cannot survive it, because it is measured at send time.
+#
+# It does NOT make a quiet host start mailing: this runs only when a mail is
+# already going out. One mail per host per day stays the rule.
+STATE_BODY=""
+STATE_BAD=""
+_ZP=\$(zpool list -H -o name,health,capacity 2>/dev/null)
+if [ -n "\$_ZP" ]; then
+    while read -r _sn _sh _sc; do
+        [ -n "\$_sn" ] || continue
+        STATE_BODY="\$STATE_BODY\$(printf '  pula %-12s %-9s zajete %s' "\$_sn" "\$_sh" "\$_sc")
+"
+        [ "\$_sh" = "ONLINE" ] || STATE_BAD="\$STATE_BAD pula:\$_sn=\$_sh"
+    done <<< "\$_ZP"
+fi
+
+# WHICH cron.log. Jobs run as root on some hosts and as a delegated account on
+# others, and each writes its own. Reading only root's -- which is what the
+# footer used to name -- reports nothing at all on a delegated host.
+# ZFS_CRON_LOGS overrides the search, for the same reason ZFS_ALERT_QUEUE
+# already does: without a seam the only way to check this block is to grep the
+# script, which tests the text and not the behaviour.
+CRON_LOGS="\${ZFS_CRON_LOGS:-}"
+if [ -z "\$CRON_LOGS" ]; then
+    for _cl in /root/scripts/cron.log /home/*/cron.log; do
+        [ -r "\$_cl" ] && CRON_LOGS="\$CRON_LOGS \$_cl"
+    done
+fi
+
+# ONE pass over the logs feeds both blocks: the per-job verdict above and the
+# run table below.
+#
+# Durations come from SECONDS-OF-DAY arithmetic, not mktime: every host here
+# runs mawk (measured 2026-09-02 on pve1.kancelaria, pve9 and pve2) and mawk
+# has no mktime. A gawk-ism would have failed silently across the estate. The
+# timezone offset in the stamp cancels between the two ends of a pair, so a
+# duration is right regardless of it; only a job spanning midnight needs the
+# wrap, which is what the +86400 is for.
+RUN_ROWS=""
+_D1=\$(date -d yesterday '+%Y-%m-%d' 2>/dev/null)
+_D2=\$(date '+%Y-%m-%d')
+if [ -n "\$CRON_LOGS" ]; then
+    RUN_ROWS=\$(awk -v d1="\$_D1" -v d2="\$_D2" '
+    function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
+    /ZFS-JOB BEGIN/ || /ZFS-JOB END/ {
+        day = substr(\$1,1,10)
+        if (day != d1 && day != d2) next
+        lbl = ""
+        for (i = 5; i <= NF; i++) { if (\$i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") \$i }
+        if (lbl == "") next
+        if (\$3 == "BEGIN") { bt[lbl] = secs(\$1); next }
+        rc = (\$NF ~ /^rc=/) ? substr(\$NF,4) + 0 : 0
+        n[lbl]++
+        if (rc != 0) f[lbl]++
+        if (lbl in bt) {
+            d = secs(\$1) - bt[lbl]; if (d < 0) d += 86400
+            tot[lbl] += d; c[lbl]++
+            if (d > mx[lbl]) mx[lbl] = d
+            delete bt[lbl]
+        }
+        lastwhen[lbl] = day " " substr(\$1,12,5)
+        lastrc[lbl] = rc
+    }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k] }
+    ' \$CRON_LOGS 2>/dev/null | sort)
+fi
+
+# The per-job half of the state block: what each job did on its LAST run. A job
+# whose newest run failed is the present tense; one that failed earlier and has
+# succeeded since is history, and belongs in the events below.
+# WHICH JOBS ARE STILL SCHEDULED. A job deleted from cron keeps its last run in
+# the log for ever, so its final failure would pin the verdict to UWAGA with
+# nothing left to fix. Found by running this build against pve9: a lab job from
+# the previous day had failed with rc=8 and then been removed, and the state
+# block called the host broken because of it.
+#
+# The cron label carries the hostname as its first word and the log label does
+# not, so the first word is dropped before comparing.
+LIVE_LABELS=""
+for _u in root \$(ls /home 2>/dev/null); do
+    _ct=\$(crontab -u "\$_u" -l 2>/dev/null | grep -oE 'zfs-job\.sh "[^"]+"' | sed 's/^zfs-job\.sh "//; s/"\$//; s/^[^ ]* //')
+    [ -n "\$_ct" ] && LIVE_LABELS="\$LIVE_LABELS
+\$_ct"
+done
+
+nl='
+'
+RUNS_BODY=""
+if [ -n "\$RUN_ROWS" ]; then
+    while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc; do
+        [ -n "\$_k" ] || continue
+        _disp="\${_k#profile__*__}"
+        case "\$nl\$LIVE_LABELS\$nl" in *"\$nl\$_k\$nl"*) _live=1 ;; *) _live=0 ;; esac
+        if [ "\$_live" -eq 0 ]; then
+            STATE_BODY="\$STATE_BODY\$(printf '  %-46s (juz nie w cronie, ostatni %s)' "\$_disp" "\$_lw")
+"
+        elif [ "\$_lrc" = "0" ]; then
+            STATE_BODY="\$STATE_BODY\$(printf '  %-46s ostatni OK   %s' "\$_disp" "\$_lw")
+"
+        else
+            STATE_BODY="\$STATE_BODY\$(printf '  %-46s OSTATNI PADL rc=%s  %s' "\$_disp" "\$_lrc" "\$_lw")
+"
+            STATE_BAD="\$STATE_BAD zadanie:\$_disp"
+        fi
+        RUNS_BODY="\$RUNS_BODY\$(printf '  %-46s %5s %6s %6ss %7ss' "\$_disp" "\$_n" "\$_f" "\$_avg" "\$_mx")
+"
+    done <<< "\$RUN_ROWS"
+fi
+
+if [ -n "\$STATE_BAD" ]; then VERDICT="UWAGA"; else VERDICT="OK"; fi
+
 if {
     # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. `Doba:
     # $TODAY` was the send date, and since this runs at 07:00 over a queue
@@ -4988,11 +5107,32 @@ if {
     if [ -n "\$MIN_EP" ]; then
         p1=\$(date -d "@\$MIN_EP" '+%Y-%m-%d %H:%M')
         p2=\$(date -d "@\$MAX_EP" '+%Y-%m-%d %H:%M')
-        if [ "\${p1%% *}" = "\${p2%% *}" ]; then PERIOD="\$p1 - \${p2##* }"; else PERIOD="\$p1 - \$p2"; fi
+        if [ "\$p1" = "\$p2" ]; then PERIOD="\$p1"
+        elif [ "\${p1%% *}" = "\${p2%% *}" ]; then PERIOD="\$p1 - \${p2##* }"
+        else PERIOD="\$p1 - \$p2"; fi
     else
         PERIOD="\$TODAY"
     fi
-    printf 'Host: %s   Zdarzenia z okresu: %s   Zdarzen: %s\n' "\$HOST" "\$PERIOD" "\$TOTAL"
+    printf '%s   %s   STAN: %s\n' "\$HOST" "\$(date '+%Y-%m-%d %H:%M')" "\$VERDICT"
+    printf '=====================================================================\n'
+
+    # BLOCK 1 -- NOW. Measured at send time, so a fault repaired since the
+    # events below cannot present itself as current.
+    printf '\nSTAN BIEZACY -- sprawdzony w tej chwili\n\n'
+    if [ -n "\$STATE_BODY" ]; then
+        printf '%s' "\$STATE_BODY"
+    else
+        printf '  (brak puli ZFS i zadnego cron.log -- nie ma czego zmierzyc)\n'
+    fi
+    if [ -n "\$STATE_BAD" ]; then
+        printf '\n  >>> UWAGA:%s\n' "\$STATE_BAD"
+    else
+        printf '\n  >>> WSZYSTKO SPRAWNE W TEJ CHWILI\n'
+    fi
+
+    # BLOCK 2 -- what HAPPENED. History, and labelled as such.
+    printf '\n---------------------------------------------------------------------\n'
+    printf 'ZDARZENIA Z OKRESU %s   (%s)\n' "\$PERIOD" "\$TOTAL"
     # Said once, plainly: a report of what HAPPENED, not a probe of what is
     # true now. A condition may have been resolved between the event and this
     # mail -- the digest cannot know that, and does not guess.
@@ -5003,8 +5143,19 @@ if {
     if [ "\$N_WARN" -gt 0 ]; then
         printf '\nWARNING -- starzeje sie, jeszcze nie critical:\n\n%s' "\$WARN_BODY"
     fi
-    printf '\nSzczegoly: /root/scripts/cron.log na %s\n' "\$HOST"
-} | mail -s "[ZFS] \$HOST \$TODAY -- \$N_ALERT alert / \$N_WARN warn" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
+    # BLOCK 3 -- HOW THE JOBS RAN. Durations and outcomes only: the volume
+    # moved is deliberately absent, because mbuffer counts bytes but is muted
+    # from cron by design (announce_transfer_size and MBUFFER_QUIET both gate
+    # on a tty) so that cron.log does not become a rate meter. Surfacing it is
+    # a separate change to the data path, and the engines are frozen.
+    if [ -n "\$RUNS_BODY" ]; then
+        printf '\n---------------------------------------------------------------------\n'
+        printf 'PRZEBIEGI ZADAN (%s, %s)\n\n' "\$_D1" "\$_D2"
+        printf '  %-46s %5s %6s %7s %8s\n' 'zadanie' 'razem' 'bledy' 'sredni' 'najdluzszy'
+        printf '%s' "\$RUNS_BODY"
+    fi
+    printf '\nPelne logi: %s na %s\n' "\${CRON_LOGS# }" "\$HOST"
+} | mail -s "[ZFS] \$HOST \$TODAY STAN: \$VERDICT -- \$N_ALERT alert / \$N_WARN warn" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
     rm -f "\$PROCESSING"
 else
     # Mail failed (no MTA, relay refused, mailutils missing). Put the findings
