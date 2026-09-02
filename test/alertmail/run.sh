@@ -388,7 +388,7 @@ EOF"
             fi
             # The header must name the period the events cover, never the send
             # date -- that substitution is the whole defect.
-            if printf '%s' "$_body" | grep -q "Zdarzenia z okresu: $_yd 07:01" \
+            if printf '%s' "$_body" | grep -q "ZDARZENIA Z OKRESU $_yd 07:01" \
                && ! printf '%s' "$_body" | grep -q "Doba:"; then
                 ok "digest: the header names the covered period, not the send date"
             else
@@ -401,6 +401,75 @@ EOF"
                 ok "digest: an event from TODAY stays time-only"
             else
                 bad "digest: an event from TODAY stays time-only" "$_body"
+            fi
+
+            # ---------------------------------------------------------------
+            # THE STATE BLOCK COMES FIRST, AND IS A PROBE, NOT A REPLAY.
+            #
+            # Owner direction 2026-09-02: state first, period report second.
+            # The point is not layout -- it is that a fault repaired since the
+            # events cannot present itself as current.
+            _st=$(printf '%s' "$_body" | grep -n 'STAN BIEZACY' | cut -d: -f1)
+            _ev=$(printf '%s' "$_body" | grep -n 'ZDARZENIA Z OKRESU' | cut -d: -f1)
+            if [ -n "$_st" ] && [ -n "$_ev" ] && [ "$_st" -lt "$_ev" ]; then
+                ok "digest: the current-state block precedes the event list"
+            else
+                bad "digest: the current-state block precedes the event list" "$_body"
+            fi
+
+            # THE FALSE-ALARM CASE, as an assertion. The queue above holds only
+            # stale ALERTs and nothing is actually wrong, so the verdict must
+            # read OK. This is the whole reason the block exists.
+            if printf '%s' "$_body" | grep -q 'STAN: OK'; then
+                ok "digest: stale ALERTs alone do not make the current state bad"
+            else
+                bad "digest: stale ALERTs alone do not make the current state bad" "$_body"
+            fi
+
+            # A JOB DELETED FROM CRON MUST NOT PIN THE VERDICT.
+            #
+            # Found by running the first build of this against pve9: a lab job
+            # had failed with rc=8 the previous day and then been removed, and
+            # its last run -- frozen in the log for ever -- called the host
+            # broken with nothing left to fix.
+            #
+            # Driven for real: a log carrying only that dead job, and a crontab
+            # stub that does not list it.
+            _fakelog="$hb_dir/cron.log"
+            {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h zombie job (gone)\n' "$_yd"
+                printf '%sT10:00:05+00:00 ZFS-JOB END h zombie job (gone) rc=8\n' "$_yd"
+            } > "$_fakelog"
+            printf '#!/bin/sh\nexit 0\n' > "$hb_dir/bin/crontab"
+            chmod +x "$hb_dir/bin/crontab"
+            rm -f "$hb_dir/q" "$hb_dir/q.processing" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _dead=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_dead" | grep -q 'juz nie w cronie' \
+               && printf '%s' "$_dead" | grep -q 'STAN: OK'; then
+                ok "digest: a job that left cron is marked, and does not make the state bad"
+            else
+                bad "digest: a job that left cron is marked, and does not make the state bad" "$_dead"
+            fi
+
+            # THE CONTROL: the same dead job, but still listed in cron. Now its
+            # failure IS the present tense and must show.
+            cat > "$hb_dir/bin/crontab" <<'CTSTUB'
+#!/bin/sh
+echo '0 * * * * /x/zfs-job.sh "h zombie job (gone)" -- /x/y' 
+CTSTUB
+            chmod +x "$hb_dir/bin/crontab"
+            rm -f "$hb_dir/q" "$hb_dir/q.processing" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _live=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_live" | grep -q 'OSTATNI PADL rc=8' \
+               && printf '%s' "$_live" | grep -q 'STAN: UWAGA'; then
+                ok "digest: a scheduled job whose last run failed DOES make the state bad"
+            else
+                bad "digest: a scheduled job whose last run failed DOES make the state bad" "$_live"
             fi
         fi
     fi
