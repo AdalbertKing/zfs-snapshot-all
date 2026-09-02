@@ -4857,7 +4857,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v22"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v23"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5182,6 +5182,55 @@ if [ -n "\$CRON_LOGS" ]; then
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0 }
     ' | sort)
 
+    # PER-DATASET FIGURES, FROM THE SAME LOGS.
+    #
+    # Owner, 2026-09-02: a job over several datasets should summarise on its
+    # own row and then list each dataset underneath with that dataset's own
+    # numbers. The obvious objection is that the job markers carry one
+    # BEGIN/END for the whole job, so a per-dataset duration looks like it
+    # cannot exist -- but the engines log each transfer separately:
+    #
+    #   03:00:45 - SEND CMD: zfs send -c -I rpool/data/vm-106-disk-1@...
+    #   03:00:45 - RECV CMD: zfs recv -F -s -u hdd/backups/pve1/rpool/data/vm-106-disk-1
+    #   03:00:54 - Transfer completed successfully
+    #
+    # Nine seconds for that disk, and RECV CMD names the TARGET dataset --
+    # which is the side 'written' measures, so the two halves key on the same
+    # name without translating anything.
+    #
+    # Only send jobs have these blocks: measured on pve0, 139 job runs and 18
+    # transfers, because snapshot and prune jobs transfer nothing. Their
+    # dataset rows therefore carry a volume and no time, which is the honest
+    # shape -- splitting a job duration evenly across its datasets would look
+    # like a measurement and be an invention.
+    #
+    # secs() reads its whole line, not one field: the job markers are one ISO field
+    # (2026-09-01T03:00:01+02:00 ...) while the engine lines put the clock in
+    # a second field (2026-09-01 03:00:45 - ...). Both put the same digits at
+    # the same offsets of the LINE, so one accessor serves both.
+    DS_ROWS=\$(zcat -f \$CRON_LOGS 2>/dev/null | awk -v dstart="\$_DSTART" '
+    function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
+    substr(\$0,1,10) < dstart { next }
+    /ZFS-JOB BEGIN/ {
+        lbl = ""
+        for (i = 5; i <= NF; i++) { if (\$i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") \$i }
+        cur = lbl; t0 = 0; ds = ""; next
+    }
+    /ZFS-JOB END/ { cur = ""; t0 = 0; ds = ""; next }
+    cur == "" { next }
+    /EXECUTING TRANSFER:/ { t0 = secs(\$0); ds = ""; next }
+    /RECV CMD:/ { ds = \$NF; next }
+    /Transfer completed successfully/ {
+        if (t0 > 0 && ds != "") {
+            d = secs(\$0) - t0; if (d < 0) d += 86400
+            k = cur "\t" ds
+            n[k]++; tot[k] += d; if (d > mx[k]) mx[k] = d
+        }
+        t0 = 0; ds = ""
+    }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k] }
+    ')
+
     # THE WINDOW THE NUMBERS ACTUALLY COVER, measured rather than named.
     #
     # The header used to read "PRZEBIEGI ZADAN (2026-09-01, 2026-09-02)" -- two
@@ -5347,8 +5396,27 @@ job_volume() {   # <datasets> <label> <target|""> -> written over the window
     '
 }
 
+# What ONE dataset received over the window. Same measurement as job_volume,
+# narrowed to a single name -- the job total is the sum of these, which is what
+# lets the indented rows be checked against the row above them.
+ds_volume() {   # <dataset> -> bytes written over the window
+    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v t="\$1" -v since="\$_SINCE_EP" '
+        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1) }
+        \$3 + 0 >= since + 0 {
+            if (ds == t || index(ds, t "/") == 1) s += \$2
+        }
+        END { printf "%.0f", s + 0 }
+    '
+}
+
+# The per-dataset time figures for one (job, target dataset) pair, or nothing
+# at all when the job never transferred that dataset -- the normal case for
+# snapshot and prune jobs.
+ds_times() {   # <label> <target-dataset> -> "n<TAB>total<TAB>max" or ""
+    printf '%s\n' "\$DS_ROWS" | awk -F'\t' -v k="\$1" -v d="\$2" '\$1 == k && \$2 == d { printf "%s\t%s\t%s", \$3, \$4, \$5; exit }'
+}
+
 SEEN_LABELS=""
-SCOPE_BODY=""
 if [ -n "\$RUN_ROWS" ]; then
     while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot; do
         [ -n "\$_k" ] || continue
@@ -5360,15 +5428,34 @@ if [ -n "\$RUN_ROWS" ]; then
         # changed there, because changing the join rewrites the label in every
         # generated cron line and every host's crontab differs at the next
         # regeneration.
-        _disp=\$(printf '%s' "\${_k#profile__*__}" | tr '+' ',')
-        # Cut to the column, with an ellipsis. A label wider than its field
-        # pushed every later column out of line and the table stopped being a
-        # table -- which is what the owner was looking at. Nothing is lost: the
-        # full dataset list is in the scope section below.
-        [ \${#_disp} -gt 42 ] && _disp="\${_disp:0:39}..."
+        _full=\$(printf '%s' "\${_k#profile__*__}" | tr '+' ',')
         _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$2; exit}')
-        _dsb=""
-        [ -n "\$_dsl" ] && _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
+        _tg=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$3; exit}')
+        # The sources are the datasets the job acts ON. When a target exists it
+        # is the LAST entry and is where the data lands, so it is not one of
+        # them -- counting it as a component would double every total against
+        # the row above.
+        if [ -n "\$_tg" ]; then _srcs="\${_dsl%,*}"; else _srcs="\$_dsl"; fi
+        _nsrc=\$(printf '%s' "\$_srcs" | tr ',' '\n' | grep -c . 2>/dev/null || echo 0)
+        # ONE DATASET STAYS ON THE ROW; SEVERAL GO UNDERNEATH.
+        #
+        # Owner, 2026-09-02: "jesli zadanie ma wiele datasets, to pod nazwa
+        # zadania robimy wciecie i listujemy kazdy dataset osobno wraz z danymi
+        # dot. transferu dla tego dataset. A na gorze nad wcieciem w linii dot.
+        # zadania bedzie to sumarycznie."
+        #
+        # The parenthetical is dropped only in that case: it is what pushed the
+        # columns out of line (a five-dataset job rendered as
+        # "daily backup (vm-103-disk-0,vm-104-disk..." and every later column on
+        # that row sat four characters right of its heading). A single-dataset
+        # job keeps it, because it is short, it is the job's identity in the
+        # crontab, and moving it to a line of its own would double the table for
+        # no gain.
+        if [ "\${_nsrc:-0}" -ge 2 ]; then _disp="\${_full%% (*}"; else _disp="\$_full"; fi
+        # Cut to the column the row actually has. This used to cut at 42 while
+        # the field was 38 -- four characters of overhang, and the misalignment
+        # the owner photographed.
+        [ \${#_disp} -gt 38 ] && _disp="\${_disp:0:35}..."
         case "\$nl\$LIVE_LABELS\$nl" in *"\$nl\$_k\$nl"*) _live=1 ;; *) _live=0 ;; esac
         # ONE FACT PER COLUMN. The time column used to carry the outcome too --
         # "OK  2026-09-02 09:00" under a heading that says "czas" -- so the
@@ -5381,21 +5468,60 @@ if [ -n "\$RUN_ROWS" ]; then
             _st="\$_lw"
         else
             _st="\$_lw  (PADL rc=\$_lrc)"
-            STATE_BAD="\$STATE_BAD zadanie:\$_disp"
+            STATE_BAD="\$STATE_BAD zadanie:\$_full"
         fi
-        _tg=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$3; exit}')
         _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg")
-        _vol=\$(human_bytes "\$_vb")
-        _rate=\$(human_rate "\$_vb" "\$_tot")
-        _dur=\$(human_secs "\$_tot")
-        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rate" "\$_dur" "\$_avg"s "\$_mx"s)
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$(human_bytes "\$_vb")" "\$(human_rate "\$_vb" "\$_tot")" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
 "
-        # NOT between the rows. Interleaving them there tore the table apart --
-        # the owner's word was "nieczytelne", pasting exactly that. They keep
-        # their own section below, where a list can be a list.
-        [ -n "\$_dsb" ] && SCOPE_BODY="\$SCOPE_BODY\$(printf '  %s:' "\$_disp")
-\$_dsb
+        # The components, each measured on ITS OWN target dataset. Indented to
+        # 6 so the numeric columns land under the same headings as the summary
+        # above them, and the two agree by construction: the volumes sum to the
+        # job's.
+        if [ "\${_nsrc:-0}" -ge 2 ]; then
+            _oldifs="\$IFS"; IFS=','
+            for _s in \$_srcs; do
+                IFS="\$_oldifs"
+                [ -n "\$_s" ] || continue
+                # Where this dataset's data LANDS -- the side 'written' counts.
+                if [ -n "\$_tg" ]; then _child="\$_tg/\$_s"; else _child="\$_s"; fi
+                _dv="-"; _dr="-"; _dd="-"; _da="-"; _dm="-"; _dn=""
+                case "\$nl\$SEND_LABELS\$nl" in
+                    *"\$nl\$_k\$nl"*)
+                        case "\$_tg" in
+                            *:*) _dv="?" ;;
+                            *)   _dv=\$(human_bytes "\$(ds_volume "\$_child")") ;;
+                        esac ;;
+                esac
+                # Times exist only where the engine logged a transfer for this
+                # dataset. A snapshot or prune job has none, and dividing the
+                # job's duration between its datasets would look measured and
+                # be invented.
+                _dt=\$(ds_times "\$_k" "\$_child")
+                if [ -n "\$_dt" ]; then
+                    _dn=\$(printf '%s' "\$_dt" | cut -f1)
+                    _dtot=\$(printf '%s' "\$_dt" | cut -f2)
+                    _dmx=\$(printf '%s' "\$_dt" | cut -f3)
+                    case "\$_tg" in *:*) ;; *) _dr=\$(human_rate "\$(ds_volume "\$_child")" "\$_dtot") ;; esac
+                    _dd=\$(human_secs "\$_dtot")
+                    _da="\$(( _dn > 0 ? _dtot / _dn : 0 ))s"
+                    _dm="\${_dmx}s"
+                fi
+                # A PRUNE JOB HAS NOTHING PER DATASET, so its components print
+                # as bare names rather than as a column of dashes. Six lines of
+                # "-  -  -  -  -" carry no information and are exactly the
+                # noise the indentation was introduced to remove; the names
+                # still have to appear, because dropping the parenthetical took
+                # away the only other place this job states its scope.
+                if [ "\$_dv" = "-" ] && [ -z "\$_dt" ]; then
+                    STATE_BODY="\$STATE_BODY\$(printf '      %s' "\$_s")
 "
+                else
+                    STATE_BODY="\$STATE_BODY\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' "\$_s" "\$_dn" "" "\$_dv" "\$_dr" "\$_dd" "\$_da" "\$_dm")
+"
+                fi
+            done
+            IFS="\$_oldifs"
+        fi
     done <<< "\$RUN_ROWS"
 fi
 
@@ -5406,12 +5532,8 @@ if [ -n "\$LIVE_LABELS" ]; then
         [ -n "\$_lk" ] || continue
         case "\$nl\$SEEN_LABELS\$nl" in *"\$nl\$_lk\$nl"*) continue ;; esac
         _disp=\$(printf '%s' "\${_lk#profile__*__}" | tr '+' ',')
-        [ \${#_disp} -gt 42 ] && _disp="\${_disp:0:39}..."
-        _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_lk" '\$1==k {print \$2; exit}')
+        [ \${#_disp} -gt 38 ] && _disp="\${_disp:0:35}..."
         STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s' "\$_disp" "brak przebiegu w oknie")
-"
-        [ -n "\$_dsl" ] && SCOPE_BODY="\$SCOPE_BODY\$(printf '  %s:' "\$_disp")
-\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
 "
     done <<< "\$LIVE_LABELS"
 fi
@@ -5458,7 +5580,9 @@ if {
     if [ -n "\$STATE_BODY" ]; then
         if [ -n "\$RUN_WINDOW" ]; then
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
-            printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n\n'
+            printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n'
+            printf '  Wiersze wciete = datasety zadania; ich czasy obejmuja SAM TRANSFER, wiec nie sumuja sie\n'
+            printf '  do czasu zadania -- snapshot, prune i polaczenie zostaja w wierszu zbiorczym.\n\n'
         fi
         printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
     fi
@@ -5466,9 +5590,6 @@ if {
         printf '%s' "\$STATE_BODY"
     else
         printf '  (brak puli ZFS i zadnego cron.log -- nie ma czego zmierzyc)\n'
-    fi
-    if [ -n "\$SCOPE_BODY" ]; then
-        printf '\n  Co obejmuja (datasety z linii crona):\n%s' "\$SCOPE_BODY"
     fi
     if [ -n "\$STATE_BAD" ]; then
         printf '\n  >>> UWAGA:%s\n' "\$STATE_BAD"

@@ -597,3 +597,59 @@ klonach (root + konto delegowane, pve0 + pve1). **Objaw jest mylacy podwojnie**:
 `do_self_update` wraca wczesniej przy nieudanym fetchu, wiec w godzinnym logu
 nie ma sladu awarii w wierszu podsumowania — hosty stoja na starej rewizji, a log
 wyglada spokojnie.
+
+**12. Datasety schodza POD zadanie, kazdy z wlasnymi liczbami; sekcja zakresu znika.**
+
+Wlasciciel, 2026-09-02: *"Nie wypisywalbym w nawiasie skladowych datasets
+wchodzacych do zadania (zobacz jak rozjechalo wiersz...). Zamiast tego jesli
+zadanie ma wiele datasets, to pod nazwa zadania robimy wciecie i listujemy kazdy
+dataset osobno wraz z danymi dot. transferu dla tego dataset. A na gorze nad
+wcieciem w linii dot. zadania bedzie to sumarycznie. Wtedy dyskusyjna staje sie
+sekcja: Co obejmuja."*
+
+**Nawias byl tym, co rozwalalo kolumny.** Zadanie o pieciu datasetach renderowalo
+sie jako `daily backup (vm-103-disk-0,vm-104-disk...` i kazda dalsza kolumna tego
+wiersza siadala cztery znaki na prawo od swojego naglowka. Przy okazji wyszla moja
+wlasna wada: przycinalem etykiete do 42 znakow przy polu szerokosci 38 — te cztery
+znaki to byl czysty overhang, nie kwestia projektu.
+
+**Pojedynczy dataset zostaje w wierszu**, bo jest krotki, jest tozsamoscia zadania
+w crontabie, a przeniesienie go do osobnej linii podwoiloby tabele bez zysku.
+Nawias odchodzi tylko przy dwoch i wiecej.
+
+**Czasy per dataset ISTNIEJA, wbrew pierwszemu wrazeniu.** Znaczniki zadania nios,
+jeden `BEGIN`/`END` na caly przebieg, wiec wygladalo to na niemozliwe — ale silniki
+loguja kazdy transfer osobno:
+
+```
+03:00:45 - SEND CMD: zfs send -c -I rpool/data/vm-106-disk-1@...
+03:00:45 - RECV CMD: zfs recv -F -s -u hdd/backups/pve1/rpool/data/vm-106-disk-1
+03:00:54 - Transfer completed successfully
+```
+
+Dziewiec sekund dla tego dysku, a `RECV CMD` nazywa dataset DOCELOWY — czyli te
+strone, na ktorej mierzony jest `written`. Obie polowy trafiaja wiec w te sama
+nazwe bez tlumaczenia czegokolwiek. Zero zmian w silnikach.
+
+**Czego nie ma, tego nie zmyslamy.** Bloki transferu maja tylko zadania
+wysylkowe: zmierzone na pve0 — 139 przebiegow zadan, 18 transferow, bo snapshot
+i prune nie wysylaja niczego. Ich wiersze datasetow nios wiec wolumen i MYSLNIK
+w miejscu czasu. Rozdzielenie czasu zadania po rowno miedzy jego datasety
+wygladaloby na pomiar i byloby wymyslem.
+
+**Zadanie bez zadnych liczb per dataset drukuje gole nazwy**, nie kolumne
+myslnikow. Szesc wierszy `-  -  -  -  -` nie niesie informacji i jest dokladnie
+tym szumem, dla usuniecia ktorego wciecie powstalo; nazwy musza zostac, bo
+usuniecie nawiasu zabralo jedyne inne miejsce, w ktorym takie zadanie podaje swoj
+zakres.
+
+**Sekcja „Co obejmuja" usunieta** — jej datasety sa teraz wierszami tabeli.
+Zmierzone na pve0: mail skrocil sie ze **149 do 103 linii**.
+
+**Czasy datasetow nie sumuja sie do czasu zadania** (na pve0: 12 m przy 26 m) i
+podpis mowi to wprost, zeby nikt nie szukal bledu w arytmetyce — obejmuja sam
+transfer, a snapshot, prune i nawiazanie polaczenia zostaja w wierszu zbiorczym.
+
+Kontrola dyskryminujaca w suicie: dataset z blokiem transferu ma pokazac WLASNY
+czas (8 s), a nie czas zadania (20 s); dataset bez bloku — wolumen i zaden czas.
+Wyciecie wyszukiwania czasow czerwieni pierwszy z nich.
