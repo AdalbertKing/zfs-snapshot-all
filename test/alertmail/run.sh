@@ -578,11 +578,13 @@ CTPLUS
             # is a PARTIAL day and an hourly job's count is yesterday's 24
             # plus this morning's few. Printing the first and last run
             # actually counted makes that arithmetic self-evident.
-            if printf '%s' "$_plus" | grep -qE 'przebiegi liczone [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
-               && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN'; then
-                ok "digest: the measured window is stated once, under the verdict"
+            if printf '%s' "$_plus" | grep -qE 'Liczby przebiegow z okresu [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
+               && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN' \
+               && [ "$(printf '%s' "$_plus" | grep -n 'Liczby przebiegow' | cut -d: -f1)" \
+                  -lt "$(printf '%s' "$_plus" | grep -n 'ostatni przebieg' | cut -d: -f1)" ]; then
+                ok "digest: the measured window is stated ABOVE the columns it describes"
             else
-                bad "digest: the measured window is stated once, under the verdict" "$_plus"
+                bad "digest: the measured window is stated ABOVE the columns it describes" "$_plus"
             fi
 
             # THE WINDOW IS SEVEN DAYS BY DEFAULT AND SETTABLE.
