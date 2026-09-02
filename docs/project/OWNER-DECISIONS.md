@@ -435,3 +435,33 @@ stalo wylacznie dlatego, ze byly to slowa nieistniejace jako polecenia.
 Zabezpieczone; `test/alertmail` ma teraz straznika. Straznik jest ZAWEZONY do
 komentarzy, bo w kodzie te podstawienia sa CELOWE (`\$DIGEST_SCRIPT_MARKER`,
 `\$ALERT_ENV_PREAMBLE`, `\${NOTIFY_EMAIL}` maja sie rozwinac przy instalacji).
+
+**7. Wolumen: `written` NA CELU, bez ruszania silnikow.**
+
+Wlasciciel: *"A gdybysmy teraz pokusili sie o wyjecie z logow volumenow... co
+myslisz?"*, potem: *"Na celu, bierz written"*.
+
+**Z logow sie nie da -- tego tam nie ma.** Zmierzone na calej historii pve0
+(zywa + rotowane, oba konta): ZERO liczb rozmiaru czy tempa. `announce_transfer_size()`
+i licznik mbuffera istnieja, ale oba gate'uja na `[ -t 2 ]`, zeby cron nie
+zamienil `cron.log` w miernik predkosci -- to decyzja, nie przeoczenie.
+
+Zrodlem jest wiec ZFS: `written` snapshotu, zsumowane po oknie, liczone na
+CELU (ostatni dataset w linii crona). Jedno hurtowe `zfs list` na hosta kosztuje
+0.57 s; caly digest chodzi 1.05 s. Zero zmian w zamrozonych silnikach, zero ssh.
+
+**W naglowku stoi wprost, CZYM ta liczba jest:** „Przyrost = dane DOPISANE na
+celu w tym okresie (nie bajty na laczu)". Przy kompresji strumien jest mniejszy
+niz to, co zapisuje; bajty na laczu to inny pomiar i wymagalyby silnikow.
+
+**Dwie wady, ktore ten pomiar odslonil:**
+- **mawk klamruje `printf "%d"` na INT_MAX** -- kazda suma powyzej ~2,1 GB
+  wychodzila jako dokladnie 2147483647, wiec trzy rozne zadania pokazywaly
+  identyczne „1G". Prawdziwe wartosci: 46 GB i 525 GB. Poprawka: `%.0f`;
+  sumy i tak sa wewnetrznie double, stratna byla sama konwersja.
+- **zadanie czyszczace niczego nie dopisuje** -- `bookmarks prune` dostawal
+  525 GB, czyli tygodniowy przyrost calej puli, cudza prace. Wolumen maja
+  wylacznie zadania wolajace `snapsend`/`snapget`.
+
+Cel zdalny (`user@host:pool/ds`) jest raportowany jako `?`, nie mierzony po
+zlej stronie.

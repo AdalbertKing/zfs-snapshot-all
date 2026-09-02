@@ -672,6 +672,61 @@ CTIDLE
             else
                 bad "digest: a scheduled job with no run in the window is listed, and not judged" "$_idle"
             fi
+
+            # VOLUME PER JOB, and the two ways it went wrong.
+            #
+            # Owner asked for transfer figures 2026-09-02 and chose the target
+            # side. They are not in the logs at all, so they come from ZFS:
+            # a snapshot's `written` summed over the window.
+            #
+            # (1) mawk clamps an integer conversion at INT_MAX, so every sum
+            # above ~2.1 GB printed as exactly 2147483647 -- on pve0 three
+            # unrelated jobs all showed "1G" because all three were clamped.
+            # This fixture is 3 GiB in one snapshot: anything that says 1G or
+            # 2G is the clamp coming back.
+            #
+            # (2) a PRUNE job adds nothing, so summing what grew under its
+            # scope credits it with another job's data.
+            cat > "$hb_dir/bin/zfs" <<'ZFSSTUB'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tank/dst@a	3221225472	9999999999
+'
+    printf 'tank/src@a	111	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSSTUB
+            chmod +x "$hb_dir/bin/zfs"
+            cat > "$hb_dir/bin/crontab" <<'CTVOL'
+#!/bin/sh
+echo '0 * * * * echo "$(date -Is) ZFS-JOB BEGIN h vol backup (v)" >>/var/log/x; /opt/snapsend.sh "tank/src" "tank/dst"'
+echo '5 * * * * echo "$(date -Is) ZFS-JOB BEGIN h vol prune (v)" >>/var/log/x; /opt/delsnaps.sh "tank/dst" "a_"'
+CTVOL
+            chmod +x "$hb_dir/bin/crontab"
+            {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h vol backup (v)\n' "$_yd"
+                printf '%sT10:00:02+00:00 ZFS-JOB END h vol backup (v) rc=0\n' "$_yd"
+                printf '%sT10:05:00+00:00 ZFS-JOB BEGIN h vol prune (v)\n' "$_yd"
+                printf '%sT10:05:01+00:00 ZFS-JOB END h vol prune (v) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _vol=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_vol" | grep -qE 'vol backup [(]v[)].* 3G'; then
+                ok "digest: a 3 GiB volume reports as 3G (mawk INT_MAX clamp)"
+            else
+                bad "digest: a 3 GiB volume reports as 3G (mawk INT_MAX clamp)" "$_vol"
+            fi
+            if printf '%s' "$_vol" | grep -qE 'vol prune [(]v[)].*  -( |$)'; then
+                ok "digest: a prune job is credited with no volume"
+            else
+                bad "digest: a prune job is credited with no volume" "$_vol"
+            fi
+            rm -f "$hb_dir/bin/zfs"
         fi
     fi
     rm -rf "$hb_dir"
