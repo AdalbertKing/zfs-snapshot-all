@@ -4857,7 +4857,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v25"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v26"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5646,9 +5646,14 @@ if {
             # two lines explaining them. Explaining what is not on the page is
             # the same noise as a column of dashes.
             if [ "\${HAS_DS_ROWS:-0}" = "1" ]; then
-            printf '  Wiersze wciete = datasety zadania. Ich czasy to SAM TRANSFER; reszta przebiegu\n'
-            printf '  (snapshot, prune, polaczenie) ma wlasny wiersz, wiec kolumna czas lacz. sie sumuje.\n\n'
+                printf '  Wiersze wciete = datasety zadania. Ich czasy to SAM TRANSFER; reszta przebiegu\n'
+                printf '  (snapshot, prune, polaczenie) ma wlasny wiersz, wiec kolumna czas lacz. sie sumuje.\n'
             fi
+            # The blank line separates the caption block from the table and
+            # belongs to the table, not to the caption. Hung off the last
+            # caption line it vanished with it, and the header sat flush
+            # against the prose on every single-dataset host.
+            printf '\n'
         fi
         printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
     fi
