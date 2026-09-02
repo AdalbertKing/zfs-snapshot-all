@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v16"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v17"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5251,7 +5251,18 @@ if {
     # do not share its columns. The first cut let them fall under the header,
     # which read as though ONLINE were a job.
     [ -n "\$POOL_BODY" ] && printf '%s\n' "\$POOL_BODY"
-    [ -n "\$STATE_BODY" ] && printf '  %-44s %-22s %5s %5s %6s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.'
+    # THE PERIOD BELONGS TO THE COLUMNS, so it is stated immediately above
+    # them. It used to sit under the verdict, past the whole table: the reader
+    # met "razem / sredni / najdl." with no idea what they were counted over,
+    # and only learned it after the numbers had already been read. Owner,
+    # 2026-09-02 -- and the event block below had it right all along, naming
+    # its span in its own heading.
+    if [ -n "\$STATE_BODY" ]; then
+        if [ -n "\$RUN_WINDOW" ]; then
+            printf '  Liczby przebiegow z okresu %s (okno %s dni):\n\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
+        fi
+        printf '  %-44s %-22s %5s %5s %6s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.'
+    fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
     else
@@ -5261,12 +5272,6 @@ if {
         printf '\n  >>> UWAGA:%s\n' "\$STATE_BAD"
     else
         printf '\n  >>> WSZYSTKO SPRAWNE W TEJ CHWILI\n'
-    fi
-    # Said once, here, instead of heading a table of its own: the figures on
-    # each row are counted over this span, and the span is measured from the
-    # runs actually seen rather than named.
-    if [ -n "\$RUN_WINDOW" ]; then
-        printf '  (przebiegi liczone %s, okno %s dni)\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
     fi
 
     # BLOCK 2 -- what HAPPENED. History, and labelled as such.
