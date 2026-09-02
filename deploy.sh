@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v18"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v19"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5111,7 +5111,7 @@ if [ -n "\$CRON_LOGS" ]; then
         t = day " " substr(\$1,12,5)
         if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc }
     }
-    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k] }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0 }
     ' | sort)
 
     # THE WINDOW THE NUMBERS ACTUALLY COVER, measured rather than named.
@@ -5178,8 +5178,16 @@ for _u in root \$(ls /home 2>/dev/null); do
         # is split on the quote character; no nested-quote parsing needed.
         _ds=\$(printf '%s' "\$_line" | tr '"' '
 ' | awk 'NR%2==0' | grep -E '^[^/ ]+/[^ ]*\$' | grep -vE '[\$()]|\.(sh|log)' | paste -sd, -)
+        # HOW MANY dataset arguments the engine got. Two means the second is a
+        # TARGET (snapsend ... "src" "tgt"); one means snapshot-only, and
+        # then every dataset in that single comma-list is where data lands.
+        # Taking "the last one" for both reported a five-dataset snapshot job
+        # as 0B on pve0 -- it summed one disk that happened not to grow.
+        _dsn=\$(printf '%s' "\$_line" | tr '"' '\n' | awk 'NR%2==0' | grep -cE '^[^/ ]+/[^ ]*\$')
+        _tgt=""
+        [ "\${_dsn:-0}" -ge 2 ] && _tgt=\${_ds##*,}
         [ -n "\$_ds" ] && JOB_DATASETS="\$JOB_DATASETS
-\$_lab	\$_ds"
+\$_lab	\$_ds	\$_tgt"
         # Which jobs actually put data somewhere. delsnaps prunes and
         # check-snap-age only looks; neither adds a byte, so neither gets a
         # volume -- crediting a prune with what grew under its scope reported
@@ -5216,24 +5224,40 @@ human_bytes() {   # <bytes> -> e.g. 69M
     fi
 }
 
+# Throughput this job actually achieved: what it added, over the seconds it
+# spent doing it. DERIVED, and labelled that way -- the wire figure would need
+# the engines, and with compression the two differ. A job that added nothing,
+# or ran for no measurable time, gets a dash rather than a division.
+human_rate() {   # <bytes> <seconds> -> e.g. 27M/s
+    case "\${1:-}" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
+    case "\${2:-}" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
+    [ "\$1" -gt 0 ] && [ "\$2" -gt 0 ] || { printf -- "-"; return 0; }
+    printf "%s/s" "\$(human_bytes \$(( \$1 / \$2 )))"
+}
+
 # The TARGET of a job is the LAST dataset on its cron line -- sources come
 # first, the destination last (\`snapsend ... "src1,src2" "tgt"\`). A job with a
 # single dataset argument is snapshot-only: it lands nothing elsewhere, so the
 # dataset itself is where its data stays. A REMOTE target (user@host:pool/ds)
 # cannot be measured from here, and is reported as unknown rather than
 # silently measured on the wrong side.
-job_volume() {   # <dataset list> <label> -> written over the window, or "-"
+job_volume() {   # <datasets> <label> <target|""> -> written over the window
     # A PRUNE JOB ADDS NOTHING. Summing what grew under its scope credits it
     # with data another job wrote -- on pve0 \`bookmarks prune\` was reported as
     # 525 GB, which is the whole pool's week. Only a job that creates or
     # receives snapshots gets a figure.
     case "\$nl\$SEND_LABELS\$nl" in *"\$nl\$2\$nl"*) ;; *) printf -- "-"; return 0 ;; esac
-    _jt=\${1##*,}
+    _jt="\$3"
+    [ -n "\$_jt" ] || _jt="\$1"
     case "\$_jt" in *:*) printf -- "?"; return 0 ;; esac
     [ -n "\$_jt" ] || { printf -- "-"; return 0; }
-    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v t="\$_jt" -v since="\$_SINCE_EP" '
+    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v tl="\$_jt" -v since="\$_SINCE_EP" '
+        BEGIN { n = split(tl, t, ",") }
         { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1) }
-        (ds == t || index(ds, t "/") == 1) && \$3 + 0 >= since + 0 { s += \$2 }
+        \$3 + 0 >= since + 0 {
+            for (i = 1; i <= n; i++)
+                if (ds == t[i] || index(ds, t[i] "/") == 1) { s += \$2; break }
+        }
         # %.0f, never %d: mawk clamps an integer conversion at INT_MAX, so
         # every sum above ~2.1 GB printed as exactly 2147483647. Measured on
         # pve0 -- three unrelated jobs all reported "1G" because all three had
@@ -5244,8 +5268,9 @@ job_volume() {   # <dataset list> <label> -> written over the window, or "-"
 }
 
 SEEN_LABELS=""
+SCOPE_BODY=""
 if [ -n "\$RUN_ROWS" ]; then
-    while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc; do
+    while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot; do
         [ -n "\$_k" ] || continue
         SEEN_LABELS="\$SEEN_LABELS
 \$_k"
@@ -5256,6 +5281,11 @@ if [ -n "\$RUN_ROWS" ]; then
         # generated cron line and every host's crontab differs at the next
         # regeneration.
         _disp=\$(printf '%s' "\${_k#profile__*__}" | tr '+' ',')
+        # Cut to the column, with an ellipsis. A label wider than its field
+        # pushed every later column out of line and the table stopped being a
+        # table -- which is what the owner was looking at. Nothing is lost: the
+        # full dataset list is in the scope section below.
+        [ \${#_disp} -gt 42 ] && _disp="\${_disp:0:39}..."
         _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$2; exit}')
         _dsb=""
         [ -n "\$_dsl" ] && _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
@@ -5268,10 +5298,17 @@ if [ -n "\$RUN_ROWS" ]; then
             _st="PADL rc=\$_lrc  \$_lw"
             STATE_BAD="\$STATE_BAD zadanie:\$_disp"
         fi
-        _vol=\$(human_bytes "\$(job_volume "\$_dsl" "\$_k")")
-        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s %5s %5s %6ss %7ss %7s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_avg" "\$_mx" "\$_vol")
+        _tg=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$3; exit}')
+        _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg")
+        _vol=\$(human_bytes "\$_vb")
+        _rate=\$(human_rate "\$_vb" "\$_tot")
+        STATE_BODY="\$STATE_BODY\$(printf '  %-42s %-20s %5s %5s %8s %8s %7s %7s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rate" "\$_avg"s "\$_mx"s)
 "
-        [ -n "\$_dsb" ] && STATE_BODY="\$STATE_BODY\$_dsb
+        # NOT between the rows. Interleaving them there tore the table apart --
+        # the owner's word was "nieczytelne", pasting exactly that. They keep
+        # their own section below, where a list can be a list.
+        [ -n "\$_dsb" ] && SCOPE_BODY="\$SCOPE_BODY\$(printf '  %s:' "\$_disp")
+\$_dsb
 "
     done <<< "\$RUN_ROWS"
 fi
@@ -5283,10 +5320,12 @@ if [ -n "\$LIVE_LABELS" ]; then
         [ -n "\$_lk" ] || continue
         case "\$nl\$SEEN_LABELS\$nl" in *"\$nl\$_lk\$nl"*) continue ;; esac
         _disp=\$(printf '%s' "\${_lk#profile__*__}" | tr '+' ',')
+        [ \${#_disp} -gt 42 ] && _disp="\${_disp:0:39}..."
         _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_lk" '\$1==k {print \$2; exit}')
         STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s' "\$_disp" "brak przebiegu w oknie")
 "
-        [ -n "\$_dsl" ] && STATE_BODY="\$STATE_BODY\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
+        [ -n "\$_dsl" ] && SCOPE_BODY="\$SCOPE_BODY\$(printf '  %s:' "\$_disp")
+\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
 "
     done <<< "\$LIVE_LABELS"
 fi
@@ -5329,12 +5368,15 @@ if {
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
             printf '  Przyrost = dane DOPISANE na celu w tym okresie (nie bajty na laczu).\n\n'
         fi
-        printf '  %-44s %-22s %5s %5s %6s %7s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.' 'przyrost'
+        printf '  %-42s %-20s %5s %5s %8s %8s %7s %7s\n' 'zadanie' 'czas (ostatni)' 'razem' 'bledy' 'przyrost' 'transfer' 'sredni' 'najdl.'
     fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
     else
         printf '  (brak puli ZFS i zadnego cron.log -- nie ma czego zmierzyc)\n'
+    fi
+    if [ -n "\$SCOPE_BODY" ]; then
+        printf '\n  Co obejmuja (datasety z linii crona):\n%s' "\$SCOPE_BODY"
     fi
     if [ -n "\$STATE_BAD" ]; then
         printf '\n  >>> UWAGA:%s\n' "\$STATE_BAD"
