@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v17"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v18"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5016,6 +5016,26 @@ case "\$DIGEST_DAYS" in ""|*[!0-9]*) DIGEST_DAYS=7 ;; esac
 [ "\$DIGEST_DAYS" -lt 1 ] 2>/dev/null && DIGEST_DAYS=7
 _DSTART=\$(date -d "-\$((DIGEST_DAYS - 1)) days" '+%Y-%m-%d' 2>/dev/null)
 [ -n "\$_DSTART" ] || _DSTART=\$(date '+%Y-%m-%d')
+_SINCE_EP=\$(date -d "\$_DSTART 00:00:00" +%s 2>/dev/null || echo 0)
+
+# WHAT EACH JOB PUT ON DISK, over the same window as its run figures.
+#
+# Owner asked for volumes 2026-09-02 and chose the TARGET side. They are NOT in
+# the logs -- measured across the whole history, live and rotated, there is not
+# one size or rate figure anywhere. The engines can produce them (mbuffer counts
+# bytes in every pipeline) but are muted from cron on purpose, so that cron.log
+# does not become a rate meter. Un-muting means editing frozen files.
+#
+# ZFS already knows. A snapshot's written is the space it holds against the
+# previous one -- for a received stream, what landed. One bulk call for the host
+# costs 0.57s (measured on pve0), needs no engine change and no ssh, and is
+# meaningful for BOTH job kinds: a copy job lands data on its target, and a
+# snapshot-only job -- pve0 runs several -- pins data where it is.
+#
+# SAID PLAINLY WHERE IT IS REPORTED: this is data ADDED, not bytes on the wire.
+# With compression the stream is smaller than what it writes. Wire bytes are a
+# different measurement and would need the engines.
+SNAP_VOL=\$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null)
 
 # ZFS_CRON_LOGS overrides the search, for the same reason ZFS_ALERT_QUEUE
 # already does: without a seam the only way to check this block is to grep the
@@ -5160,6 +5180,12 @@ for _u in root \$(ls /home 2>/dev/null); do
 ' | awk 'NR%2==0' | grep -E '^[^/ ]+/[^ ]*\$' | grep -vE '[\$()]|\.(sh|log)' | paste -sd, -)
         [ -n "\$_ds" ] && JOB_DATASETS="\$JOB_DATASETS
 \$_lab	\$_ds"
+        # Which jobs actually put data somewhere. delsnaps prunes and
+        # check-snap-age only looks; neither adds a byte, so neither gets a
+        # volume -- crediting a prune with what grew under its scope reported
+        # pve0's \`bookmarks prune\` as 525 GB, the whole pool's week.
+        case "\$_line" in *snapsend.sh*|*snapget.sh*) SEND_LABELS="\$SEND_LABELS
+\$_lab" ;; esac
     done <<< "\$_cr"
 done
 nl='
@@ -5177,6 +5203,46 @@ nl='
 # An annual job cannot appear in a week, and silence is exactly what an operator
 # cannot notice. Such a job is listed and NOT judged: the digest does not know
 # each job's cadence, so it reports the fact and leaves the reading to a human.
+# Bytes an operator can read at a glance. Integer arithmetic only: this runs on
+# every host and none of them is guaranteed anything but POSIX shell tools.
+human_bytes() {   # <bytes> -> e.g. 69M
+    _hb=\${1:-0}
+    case "\$_hb" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
+    if   [ "\$_hb" -ge 1099511627776 ]; then printf "%sT" \$(( _hb / 1099511627776 ))
+    elif [ "\$_hb" -ge 1073741824 ];    then printf "%sG" \$(( _hb / 1073741824 ))
+    elif [ "\$_hb" -ge 1048576 ];       then printf "%sM" \$(( _hb / 1048576 ))
+    elif [ "\$_hb" -ge 1024 ];          then printf "%sK" \$(( _hb / 1024 ))
+    else printf "%sB" "\$_hb"
+    fi
+}
+
+# The TARGET of a job is the LAST dataset on its cron line -- sources come
+# first, the destination last (\`snapsend ... "src1,src2" "tgt"\`). A job with a
+# single dataset argument is snapshot-only: it lands nothing elsewhere, so the
+# dataset itself is where its data stays. A REMOTE target (user@host:pool/ds)
+# cannot be measured from here, and is reported as unknown rather than
+# silently measured on the wrong side.
+job_volume() {   # <dataset list> <label> -> written over the window, or "-"
+    # A PRUNE JOB ADDS NOTHING. Summing what grew under its scope credits it
+    # with data another job wrote -- on pve0 \`bookmarks prune\` was reported as
+    # 525 GB, which is the whole pool's week. Only a job that creates or
+    # receives snapshots gets a figure.
+    case "\$nl\$SEND_LABELS\$nl" in *"\$nl\$2\$nl"*) ;; *) printf -- "-"; return 0 ;; esac
+    _jt=\${1##*,}
+    case "\$_jt" in *:*) printf -- "?"; return 0 ;; esac
+    [ -n "\$_jt" ] || { printf -- "-"; return 0; }
+    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v t="\$_jt" -v since="\$_SINCE_EP" '
+        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1) }
+        (ds == t || index(ds, t "/") == 1) && \$3 + 0 >= since + 0 { s += \$2 }
+        # %.0f, never %d: mawk clamps an integer conversion at INT_MAX, so
+        # every sum above ~2.1 GB printed as exactly 2147483647. Measured on
+        # pve0 -- three unrelated jobs all reported "1G" because all three had
+        # been clamped to the same number. Sums are doubles internally; only
+        # the conversion was lossy.
+        END { printf "%.0f", s + 0 }
+    '
+}
+
 SEEN_LABELS=""
 if [ -n "\$RUN_ROWS" ]; then
     while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc; do
@@ -5202,7 +5268,8 @@ if [ -n "\$RUN_ROWS" ]; then
             _st="PADL rc=\$_lrc  \$_lw"
             STATE_BAD="\$STATE_BAD zadanie:\$_disp"
         fi
-        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s %5s %5s %6ss %7ss' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_avg" "\$_mx")
+        _vol=\$(human_bytes "\$(job_volume "\$_dsl" "\$_k")")
+        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s %5s %5s %6ss %7ss %7s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_avg" "\$_mx" "\$_vol")
 "
         [ -n "\$_dsb" ] && STATE_BODY="\$STATE_BODY\$_dsb
 "
@@ -5259,9 +5326,10 @@ if {
     # its span in its own heading.
     if [ -n "\$STATE_BODY" ]; then
         if [ -n "\$RUN_WINDOW" ]; then
-            printf '  Liczby przebiegow z okresu %s (okno %s dni):\n\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
+            printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
+            printf '  Przyrost = dane DOPISANE na celu w tym okresie (nie bajty na laczu).\n\n'
         fi
-        printf '  %-44s %-22s %5s %5s %6s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.'
+        printf '  %-44s %-22s %5s %5s %6s %7s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.' 'przyrost'
     fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
