@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ee770559e6bbac92 -->
+<!-- status-covers-digest: 3b953a8156f261ea -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -228,6 +228,38 @@
   zostałaby przeliczona z zakresu i rozjazd by się nie utrwalił. Zmierzone na
   pve9, nie wywnioskowane — i to jest powód, dla którego regresja B ustawia
   w manifeście testowym oba pola naraz.
+
+  **DIGEST STEMPLOWAŁ DATĄ WYSYŁKI, NIE DATĄ ZDARZEŃ — naprawione, `alert-digest.sh`
+  v9→v10 (2026-09-02).** Zgłoszone przez właściciela: rano przyszedł mail
+  `pve1.kancelaria.net -- 2 alert / 1 warn` z pulą DEGRADED, choć dysk wymieniono
+  poprzedniego dnia. **Pula była zdrowa.** `zpool replace` 2026-09-01 17:45:12,
+  scrub 17:58→18:10:40 bez błędów, mirror pełny, oba ESP zarejestrowane w
+  `proxmox-boot-tool` (czyli system wystartuje z każdego dysku — `zpool replace`
+  sam tego nie załatwia).
+
+  Mail opisywał stan sprzed naprawy. Digest chodzi o 07:00 nad kolejką zapełnioną
+  **poprzedniego dnia**, a nagłówek brał `TODAY=$(date '+%Y-%m-%d')` — datę
+  WYSYŁKI. Wiersze pokazywały same godziny. Powstawało `Doba: 2026-09-02` nad
+  `(07:01 - 16:01)`, czyli zdarzeniami sprzed półtorej godziny przed naprawą.
+  Czytelnik nie miał jak odróżnić żywego problemu od naprawionego.
+
+  Teraz nagłówek nazywa **okres wyliczony ze zdarzeń** (`Zdarzenia z okresu:`),
+  a wiersz spoza dnia wysyłki niesie swoją datę; dzisiejszy zostaje zwięzły, bo
+  data w każdym wierszu to szum, a przez szum przeoczy się ten jeden, który miał
+  znaczenie. Doszło jedno zdanie mówiące wprost, że to raport o zdarzeniach
+  ZAKOLEJKOWANYCH, nie sonda stanu bieżącego.
+
+  **Automatycznego wykrywania nieaktualności NIE zbudowano, świadomie.** Zadanie,
+  które padło, naprawdę padło — to historia, nie nieaktualność; dezaktualizować
+  mogą się tylko alerty o STANIE, a kolejka nie niesie tej różnicy i digest nie
+  powinien jej zgadywać po treści. Wymagałoby to typu wpisu i sposobu ponownego
+  sprawdzenia — osobna zmiana, gdyby właściciel jej chciał.
+
+  Dowiedzione na WYGENEROWANYM skrypcie (heredoc wyciągnięty i rozwinięty), nie
+  na `deploy.sh`, przeciw rekonstrukcji zgłoszonego maila. Kontrola negatywna z
+  kodem sprzed poprawki odtworzyła `Doba:` nad gołymi godzinami. `test/alertmail`
+  37/0; dwa nowe przypadki padają na starym kodzie, trzeci (dzisiejsze zdarzenie
+  zostaje bez daty) przechodzi na obu — bo pilnuje poprawki zbyt szerokiej.
 
   **KATALOG: `Y5M12D31H24` — pierwszy profil WIELKOLITEROWY (2026-09-01).**
   Pięć lat pokrycia, JEDNA rodzina, drabina `-G -H24 -D31 -M12 -Y5`, i nic
