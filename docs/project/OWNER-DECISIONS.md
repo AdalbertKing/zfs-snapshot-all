@@ -332,3 +332,73 @@ nakładania się pokrycia) — nie tam, gdzie odgadują intencję.
 Konsekwencja dla `docs/internal/reviews/responses/REV-20260901-132.md`: sekcja
 „Remaining risk" zapowiada tę zmianę jako osobną. Zapowiedź jest nieaktualna —
 ryzyko zostaje nazwane i zaakceptowane, nie zamknięte.
+
+## 2026-09-02 — `+` w etykietach crona zostaje; datasety wypisywane RAZ
+
+Przy przebudowie digestu (`alert-digest.sh` v10→v13) właściciel czytał kolejne
+wersje maila na prawdziwych hostach i podjął dwie decyzje.
+
+**1. Znaku `+` w `gen-cron.sh` NIE ruszamy.**
+
+`gen-cron` scala kilka datasetów w jedną linię crona, gdy mają identyczny
+(harmonogram, cel, przedrostek, flagi), i łączy ich słowa `notify` znakiem `+`
+(`IFS=+`, `gen-cron.sh:3263`). W mailu wyglądało to jak
+`vm-103-disk-0+vm-104-disk-1+vm-107-disk-0+…`.
+
+Właściciel chciał przecinków — ale **w wyświetlaniu, nie u źródła**:
+*„plusy w gen-cron nie ruszamy"*.
+
+Powód jest ten sam, co przy decyzji o emisji `-X/-e/-E` z 2026-09-01: zmiana
+łączenia przepisałaby etykietę w **każdej** wygenerowanej linii crona. Crontab
+każdego hosta różniłby się przy najbliższej regeneracji, a strażnik
+anty-kasujący zobaczyłby stare linie jako usunięte. Koszt na całej estacie,
+zysk czysto kosmetyczny.
+
+Digest zamienia `+` na `,` przy wypisywaniu. **Konsekwencja przyjęta:** `+`
+nadal widać w powiadomieniach o błędach (`notify-fail.sh`) i w `cron.log`,
+bo tam etykieta jest tą samą, którą niesie linia crona. To nie jest luka.
+
+**2. Datasety wypisywane w JEDNYM miejscu — w bloku stanu.**
+
+Pierwsza wersja pokazywała je i w bloku stanu, i w tabeli przebiegów. Zmierzone
+na pve0: mail 149 linii, z czego około 50 to duplikat. Po ograniczeniu do bloku
+stanu — 104 linie. Decyzja właściciela: *„Zostaw jak jest"*.
+
+Blok stanu odpowiada na pytanie „co to za host i co obejmuje", tabela przebiegów
+na „jak chodziło"; nazwa zadania wystarczy, żeby je złączyć.
+
+**3. Naglowek tabeli przebiegow podaje ZMIERZONE okno, nie nazwe okresu.**
+
+Wlasciciel: *"Co to znaczy PRZEBIEGI ZADAN (2026-09-01, 2026-09-02)? Od do?"*
+Dwie daty po przecinku nie mowia ani "od-do", ani nic innego — i **kryly realna
+asymetrie**: digest chodzi o 07:00, wiec "dzisiaj" jest niepelna doba, a liczba
+34 dla zadania godzinowego to 24 z wczoraj plus 10 z dzis.
+
+Naglowek podaje teraz pierwszy i ostatni FAKTYCZNIE policzony przebieg
+(`PRZEBIEGI ZADAN, 2026-09-01 00:01 - 2026-09-02 10:21`). Okno jest wtedy
+pomiarem, a nie deklaracja, i arytmetyka tlumaczy sie sama.
+
+**4. Okno tabeli przebiegow: 7 dni domyslnie, `ZFS_DIGEST_DAYS` do zmiany.**
+
+Wlasciciel: *"A ten okres od-do to jakie ma okno czasowe? Definiowalne? Czy
+zalozyles 1 tydzien/miesiac?"* — i odpowiedz brzmiala: **dwie doby, zahardkodowane,
+nigdzie niepowiedziane**. Decyzja: *"7 dni domyslnie, ale konfigurowalne
+parametrem"*. Codzienny mail pokazuje wiec tydzien trendu.
+
+To otwiera tez raport tygodniowy, o ktory pytal wczesniej: cotygodniowy puls
+(`cisza, kanal sprawny`) moze niesc statystyki z siedmiu dni bez nowej maszynerii.
+
+**Przy okazji naprawione czytanie logow rotowanych — to nie byla kosmetyka.**
+Logrotate chodzi MIESIECZNIE (`rotate 24`, `compress`, `delaycompress`), a digest
+czytal wylacznie zywy `cron.log`. Konsekwencja: **pierwszego dnia miesiaca
+wszystkie liczby bylyby zanizone bez slowa ostrzezenia**, bo okno trafialoby w
+log urwany poprzedniego dnia. Zmierzone na pve0 2026-09-02: `cron.log` zaczynal
+sie 09-01, a dwadziescia megabajtow sierpnia lezalo w `cron.log.1`.
+
+Pliki rotowane sa teraz dobierane po czasie modyfikacji (plik zapisany przed
+poczatkiem okna nie moze zawierac przebiegu z tego okna, i stwierdzenie tego nie
+kosztuje dekompresji) i czytane przez `zcat -f`, ktory bierze i zwykle, i `.gz`.
+
+Dowod liczbowy: 35 przebiegow przy oknie 2 dni, **155 przy 7**; najdluzszy czas
+7 s kontra 120 s — ta ostatnia wartosc to realny sierpniowy przypadek, ktorego
+wczesniejsze okno nie widzialo wcale.

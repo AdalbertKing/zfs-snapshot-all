@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v13"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v15"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5005,13 +5005,52 @@ fi
 # WHICH cron.log. Jobs run as root on some hosts and as a delegated account on
 # others, and each writes its own. Reading only root's -- which is what the
 # footer used to name -- reports nothing at all on a delegated host.
+# HOW FAR BACK THE RUN TABLE LOOKS. Seven days by default (owner, 2026-09-02),
+# configurable because the right answer differs per host: a daily mail showing
+# a week of trend was the ask, but nothing here should hardcode somebody else's
+# retention. The first cut silently assumed two calendar days and said so
+# nowhere -- the owner had to ask what the window even was.
+DIGEST_DAYS="\${ZFS_DIGEST_DAYS:-7}"
+case "\$DIGEST_DAYS" in ""|*[!0-9]*) DIGEST_DAYS=7 ;; esac
+[ "\$DIGEST_DAYS" -lt 1 ] 2>/dev/null && DIGEST_DAYS=7
+_DSTART=\$(date -d "-\$((DIGEST_DAYS - 1)) days" '+%Y-%m-%d' 2>/dev/null)
+[ -n "\$_DSTART" ] || _DSTART=\$(date '+%Y-%m-%d')
+
 # ZFS_CRON_LOGS overrides the search, for the same reason ZFS_ALERT_QUEUE
 # already does: without a seam the only way to check this block is to grep the
 # script, which tests the text and not the behaviour.
 CRON_LOGS="\${ZFS_CRON_LOGS:-}"
 if [ -z "\$CRON_LOGS" ]; then
     for _cl in /root/scripts/cron.log /home/*/cron.log; do
-        [ -r "\$_cl" ] && CRON_LOGS="\$CRON_LOGS \$_cl"
+        [ -r "\$_cl" ] || continue
+        CRON_LOGS="\$CRON_LOGS \$_cl"
+        # ROTATED FILES TOO, or a window longer than the live log silently
+        # under-reports. logrotate here is monthly with rotate 24, so on the
+        # 1st of a month the live log holds almost nothing and every number
+        # in this table would be wrong without saying so. Measured on pve0
+        # 2026-09-02: cron.log began 09-01 because rotation ran 08-31 23:21,
+        # with twenty megabytes of August sitting in cron.log.1.
+        #
+        # Selected by MTIME rather than by reading them: a rotated file last
+        # written before the window starts cannot hold a run inside it, and
+        # deciding that costs no decompression. `compress` + `delaycompress`
+        # means .1 is plain and .2+ are .gz, which is why the reader below is
+        # `zcat -f` -- it takes both.
+        _i=1
+        while [ "\$_i" -le 26 ]; do
+            _hit=0
+            for _rot in "\$_cl.\$_i" "\$_cl.\$_i.gz"; do
+                [ -r "\$_rot" ] || continue
+                _hit=1
+                if [ -n "\$(find "\$_rot" -newermt "\$_DSTART" 2>/dev/null)" ]; then
+                    CRON_LOGS="\$CRON_LOGS \$_rot"
+                else
+                    _hit=2
+                fi
+            done
+            [ "\$_hit" = "1" ] || break
+            _i=\$((_i + 1))
+        done
     done
 fi
 
@@ -5025,14 +5064,12 @@ fi
 # duration is right regardless of it; only a job spanning midnight needs the
 # wrap, which is what the +86400 is for.
 RUN_ROWS=""
-_D1=\$(date -d yesterday '+%Y-%m-%d' 2>/dev/null)
-_D2=\$(date '+%Y-%m-%d')
 if [ -n "\$CRON_LOGS" ]; then
-    RUN_ROWS=\$(awk -v d1="\$_D1" -v d2="\$_D2" '
+    RUN_ROWS=\$(zcat -f \$CRON_LOGS 2>/dev/null | awk -v dstart="\$_DSTART" '
     function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
     /ZFS-JOB BEGIN/ || /ZFS-JOB END/ {
         day = substr(\$1,1,10)
-        if (day != d1 && day != d2) next
+        if (day < dstart) next
         lbl = ""
         for (i = 5; i <= NF; i++) { if (\$i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") \$i }
         if (lbl == "") next
@@ -5050,7 +5087,28 @@ if [ -n "\$CRON_LOGS" ]; then
         lastrc[lbl] = rc
     }
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k] }
-    ' \$CRON_LOGS 2>/dev/null | sort)
+    ' | sort)
+
+    # THE WINDOW THE NUMBERS ACTUALLY COVER, measured rather than named.
+    #
+    # The header used to read "PRZEBIEGI ZADAN (2026-09-01, 2026-09-02)" -- two
+    # dates and a comma, which says neither from-to nor anything else. Worse, it
+    # hid a real asymmetry: this runs at 07:00, so "today" is a PARTIAL day and
+    # a count of 34 for an hourly job is 24 from yesterday plus 10 from today.
+    # Printing the first and last run actually counted states the span instead
+    # of claiming it, and makes that arithmetic self-evident.
+    #
+    # String comparison is enough: "YYYY-MM-DD HH:MM" sorts chronologically.
+    RUN_WINDOW=\$(zcat -f \$CRON_LOGS 2>/dev/null | awk -v dstart="\$_DSTART" '
+    /ZFS-JOB END/ {
+        day = substr(\$1,1,10)
+        if (day < dstart) next
+        t = day " " substr(\$1,12,5)
+        if (mn == "" || t < mn) mn = t
+        if (mx == "" || t > mx) mx = t
+    }
+    END { if (mn != "") { if (mn == mx) printf "%s\n", mn; else printf "%s - %s\n", mn, mx } }
+    ')
 fi
 
 # The per-job half of the state block: what each job did on its LAST run. A job
@@ -5206,7 +5264,7 @@ if {
     # a separate change to the data path, and the engines are frozen.
     if [ -n "\$RUNS_BODY" ]; then
         printf '\n---------------------------------------------------------------------\n'
-        printf 'PRZEBIEGI ZADAN (%s, %s)\n\n' "\$_D1" "\$_D2"
+        printf 'PRZEBIEGI ZADAN, %s\n\n' "\${RUN_WINDOW:-\$_D1 - \$_D2}"
         printf '  %-46s %5s %6s %7s %8s\n' 'zadanie' 'razem' 'bledy' 'sredni' 'najdluzszy'
         printf '%s' "\$RUNS_BODY"
     fi
