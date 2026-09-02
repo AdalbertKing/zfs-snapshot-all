@@ -4898,7 +4898,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v33"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v34"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5431,12 +5431,17 @@ for _u in root \$(ls /home 2>/dev/null); do
         #
         # The engines take it as -m, and gen-cron writes it quoted:
         #   snapsend.sh -m "automated_hourly_" -r -v 3 "rpool/data"
+        # -t means the base IS the target (the restore direction), so the job
+        # writes to <target> itself rather than <target>/<source>. snapsend.sh
+        # decides it at snapsend.sh:2570; getting it wrong here would scope the
+        # job's volume to a path that does not exist.
+        case " \$_line " in *" -t "*) _texact=1 ;; *) _texact=0 ;; esac
         _pfx=\$(printf '%s' "\$_line" | grep -oE '\-m +"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/')
         [ -n "\$_pfx" ] || _pfx=\$(printf '%s' "\$_line" | grep -oE '\-m +[A-Za-z0-9_.:-]+' | head -1 | sed 's/^-m *//')
         _tgt=""
         [ "\${_dsn:-0}" -ge 2 ] && _tgt=\${_ds##*,}
         [ -n "\$_ds" ] && JOB_DATASETS="\$JOB_DATASETS
-\$_lab	\$_ds	\$_tgt	\$_pfx"
+\$_lab	\$_ds	\$_tgt	\$_pfx	\$_texact"
         # Which jobs actually put data somewhere. delsnaps prunes and
         # check-snap-age only looks; neither adds a byte, so neither gets a
         # volume -- crediting a prune with what grew under its scope reported
@@ -5686,7 +5691,31 @@ if [ -n "\$RUN_ROWS" ]; then
             STATE_BAD="\$STATE_BAD zadanie:\$_full"
         fi
         _pf=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$4; exit}')
-        _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg" "\$_pf")
+        _tex=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$5; exit}')
+        # THE JOB OWNS ITS OWN CHILDREN, NOT THE WHOLE TARGET.
+        #
+        # job_volume used to sum over the target ROOT with only the family as a
+        # filter, which is right exactly when one job owns that root. Measured on
+        # pve2, where FOUR jobs land in hdd/backups/pve2: "daily backup (BIM
+        # server)" and "daily backup (root)" reported the SAME 732.77M -- each
+        # credited with the other's bytes -- and "hourly backup (nextcloud)",
+        # whose prefix is the broad "automated_", was credited with 259.32G, the
+        # entire backup pool for a week.
+        #
+        # A job writes to <target>/<source> for each of its sources, and that is
+        # the only scope it owns. Summing those is the same measurement the
+        # indented rows already make per dataset, so the row and its components
+        # now describe the same thing by construction.
+        _kids=""
+        if [ "\${_tex:-0}" = "1" ] && [ -n "\$_tg" ]; then
+            _kids="\$_tg"
+        elif [ -n "\$_tg" ]; then
+            _oi="\$IFS"; IFS=','
+            for _k2 in \$_srcs; do IFS="\$_oi"; [ -n "\$_k2" ] && _kids="\${_kids:+\$_kids,}\$_tg/\$_k2"; done
+            IFS="\$_oi"
+        fi
+        [ -n "\$_kids" ] || _kids="\$_dsl"
+        _vb=\$(job_volume "\$_kids" "\$_k" "" "\$_pf")
         _u=\$(unit_of "\$_vb")
         # A RATE NEEDS SOMETHING TO HAVE MOVED.
         #
