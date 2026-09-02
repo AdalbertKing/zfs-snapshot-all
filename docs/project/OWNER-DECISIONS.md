@@ -402,3 +402,36 @@ kosztuje dekompresji) i czytane przez `zcat -f`, ktory bierze i zwykle, i `.gz`.
 Dowod liczbowy: 35 przebiegow przy oknie 2 dni, **155 przy 7**; najdluzszy czas
 7 s kontra 120 s — ta ostatnia wartosc to realny sierpniowy przypadek, ktorego
 wczesniejsze okno nie widzialo wcale.
+
+**5. Jedna tabela zamiast dwoch, i UNIA z crontabem.**
+
+Wlasciciel: *"czy nie uwazasz, ze sekcja PRZEBIEGI ZADAN jest zbedna i mozna te
+dane wsadzic pod biezace przebiegi... Czy zgubimy te, ktorych juz nie robi?"*
+
+Scalone: blok stanu i tabela przebiegow listowaly TE SAME zadania, wiec kazde
+wystepowalo dwa razy, a mail niosl jego datasety dwukrotnie. Liczby (razem,
+bledy, sredni, najdluzszy) siedza teraz w wierszu stanu, a okres pomiaru jest
+powiedziany RAZ pod werdyktem.
+
+**Odpowiedz na druga czesc pytania okazala sie odwrotna.** Usuniete z crona nie
+byly zagrozone -- biora sie z logu i sa oznaczane. Zagrozone byly **zaplanowane,
+ktore w oknie nie wystapily**: oba bloki czytaly wylacznie log, wiec zadanie
+obecne w crontabie a bez przebiegu bylo niewidoczne. Zmierzone na pve0
+2026-09-02: 26 zadan w cronie, 24 z przebiegiem w oknie 7 dni; brakowalo dwoch
+rocznych, ktore w tygodniu wystapic nie moga.
+
+Stan powstaje teraz z SUMY: log plus crontab. Zadanie bez przebiegu jest
+wypisane i **nieocenione** -- roczne nieobecne w tygodniu jest poprawne, a digest
+nie zna kadencji poszczegolnych zadan i nie zgaduje jej.
+
+**6. Komentarz w heredocu nie ma prawa sie rozwijac (znalezione przy okazji).**
+
+Heredoc generujacy `alert-digest.sh` jest NIECYTOWANY, wiec backtick i `\$`
+dzialaja takze w komentarzu -- podstawienie dzieje sie zanim cokolwiek stanie
+sie komentarzem. Dwa backticki weszly juz z v10 na main: zdanie o `Doba:`
+powodowalo, ze kazda instalacja probowala wykonac `Doba:`. Nic zlego sie nie
+stalo wylacznie dlatego, ze byly to slowa nieistniejace jako polecenia.
+
+Zabezpieczone; `test/alertmail` ma teraz straznika. Straznik jest ZAWEZONY do
+komentarzy, bo w kodzie te podstawienia sa CELOWE (`\$DIGEST_SCRIPT_MARKER`,
+`\$ALERT_ENV_PREAMBLE`, `\${NOTIFY_EMAIL}` maja sie rozwinac przy instalacji).
