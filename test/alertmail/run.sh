@@ -501,9 +501,9 @@ CTINLINE
             # a job touched.
             if printf '%s' "$_inline" | grep -q 'hdd/data/vm-9-disk-0' \
                && printf '%s' "$_inline" | grep -q 'hdd/data/vm-9-disk-1'; then
-                ok "digest: the run table lists the datasets the job touches"
+                ok "digest: the state block lists the datasets the job touches"
             else
-                bad "digest: the run table lists the datasets the job touches" "$_inline"
+                bad "digest: the state block lists the datasets the job touches" "$_inline"
             fi
 
             # THE CONTROL for the dataset filter: the job's own echo text and
@@ -514,6 +514,43 @@ CTINLINE
                 ok "digest: echo text and script paths are not mistaken for datasets"
             else
                 bad "digest: echo text and script paths are not mistaken for datasets" "$_inline"
+            fi
+
+            # THE '+' JOIN IS RENDERED AS COMMAS. gen-cron joins several
+            # datasets' notify words with "+" when it merges them onto one
+            # cron line (IFS=+ at gen-cron.sh:3263). The owner asked for
+            # commas. Done in the digest and not in gen-cron on purpose:
+            # changing the join rewrites the label in every generated cron
+            # line, so every host's crontab differs at the next regeneration.
+            cat > "$hb_dir/bin/crontab" <<'CTPLUS'
+#!/bin/sh
+echo '1 * * * * echo "$(date -Is) ZFS-JOB BEGIN h hourly backup (a+b)" >>/var/log/x; /opt/s.sh "hdd/d/a,hdd/d/b"'
+CTPLUS
+            chmod +x "$hb_dir/bin/crontab"
+            {   printf '%sT11:00:00+00:00 ZFS-JOB BEGIN h hourly backup (a+b)\n' "$_yd"
+                printf '%sT11:00:04+00:00 ZFS-JOB END h hourly backup (a+b) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/q.processing" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _plus=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_plus" | grep -q 'hourly backup (a,b)' \
+               && ! printf '%s' "$_plus" | grep -q 'hourly backup (a+b)'; then
+                ok "digest: a merged label renders with commas, not plus signs"
+            else
+                bad "digest: a merged label renders with commas, not plus signs" "$_plus"
+            fi
+
+            # ...and the datasets are listed ONCE. Both blocks name the same
+            # jobs, so repeating them added ~50 duplicated lines to a 149-line
+            # mail on pve0 -- measured, and the reason they live in the state
+            # block alone.
+            _cnt=$(printf '%s\n' "$_plus" | grep -c 'hdd/d/a')
+            if [ "$_cnt" = "1" ]; then
+                ok "digest: a dataset is listed once, not in both blocks"
+            else
+                bad "digest: a dataset is listed once, not in both blocks" "count=$_cnt" "$_plus"
             fi
         fi
     fi

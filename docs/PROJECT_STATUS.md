@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aef7de0ca67c680b -->
+<!-- status-covers-digest: dc12e54118f6e896 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -306,6 +306,35 @@
 
   `test/alertmail` 44/0, dziesiec przypadkow digestu -- w tym crontab w starym
   formacie, ktory jest ta regresja, ktora by mnie uratowala.
+
+
+  **v13 (2026-09-02): przecinki zamiast plusow, dataset przy KAZDYM zadaniu,
+  mail krotszy o jedna trzecia.** Wlasciciel przeczytal maila z v12 i wskazal
+  dwie rzeczy: `daily backup (vm-101)` nie mowi, ze chodzi o
+  `hdd/data/vm-101-disk-0`, a `vm-103-disk-0+vm-104-disk-1+...` powinno miec
+  przecinki.
+
+  **Dataset w bloku STANU, nie tylko w tabeli.** Nawias w etykiecie to slowo z
+  `notify`, wiec czasem jest lista datasetow, a czasem nazwa ludzka („BIM
+  server"). Blok stanu wypisuje teraz pod kazdym zadaniem to, czego faktycznie
+  dotyczy -- wyciagniete z linii crona.
+
+  **`+` naprawione w WYSWIETLANIU, nie w generatorze, i to jest wybor.** Znak
+  powstaje w `gen-cron.sh:3263` (`IFS=+`) przy scalaniu kilku datasetow w jedna
+  linie crona. Zmiana u zrodla przepisalaby etykiete w KAZDEJ wygenerowanej linii
+  crona, wiec crontab kazdego hosta roznilby sie przy najblizszej regeneracji, a
+  straznik anty-kasujacy zobaczylby stare linie jako usuniete. To ten sam koszt,
+  ktory wlasciciel odrzucil przy `-X/-e/-E`. Digest zamienia `+` na `,` przy
+  wypisywaniu; jesli maja byc przecinki u zrodla, to osobna zmiana z regeneracja
+  crontabow na estacie.
+
+  **Datasety wypisywane RAZ.** Pierwsza wersja pokazywala je w obu blokach --
+  zmierzone na pve0: 149 linii, z czego okolo 50 to duplikat. Zostaja w bloku
+  stanu (ten odpowiada na „co to za host i co obejmuje"); tabela przebiegow
+  odpowiada na „jak chodzilo" i nazwa zadania wystarczy, zeby je zlaczyc.
+  Po zmianie 104 linie.
+
+  `test/alertmail` 46/0, dwanascie przypadkow digestu.
 
 
   **KATALOG: `Y5M12D31H24` — pierwszy profil WIELKOLITEROWY (2026-09-01).**
