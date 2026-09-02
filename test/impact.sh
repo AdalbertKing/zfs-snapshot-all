@@ -360,6 +360,7 @@ verify() {
         [ -n "${SEC_KIND[file:$name]:-}" ] || { echo "  $name is sourced by${SOURCED_BY[$name]} but is not declared"; rc=1; }
     done
 
+    heredoc_markers_bumped || rc=1
     no_conflict_markers || rc=1
     status_freshness || rc=1
     engine_freeze || rc=1
@@ -526,6 +527,67 @@ status_changed_hint() {   # <watched...>
 #
 # Cheap, total, and it applies to every tracked text file rather than just the
 # one that happened to break.
+# Did an edited heredoc body come with a bumped marker?
+#
+# deploy.sh generates alert-digest.sh, notify-fail.sh, notify-warn.sh and
+# check-pool-capacity.sh from heredocs and installs them into /root/scripts.
+# Each is upgraded ONLY when its version marker changes: deploy.sh compares the
+# marker against the installed copy and reports "already current" otherwise. So
+# a changed body with an unchanged marker is merged, reviewed, green in CI --
+# and never reaches a single host.
+#
+# That is not hypothetical. Measured 2026-09-02: three PRs in a row touched the
+# alert-digest body, the third did not bump the marker, and both live hosts
+# applied the new revision and kept the old script. It surfaced only because
+# somebody looked at a host afterwards.
+#
+# deps.conf carries this as the CONTRACT `notify-markers`, which impact.sh
+# LISTS as a manual obligation. Listing is not checking, and a manual obligation
+# is one a tired implementer skips. This makes it mechanical: compare the
+# heredoc bodies in the index against the same bodies at the merge base, and if
+# a body moved, its marker must have moved too.
+heredoc_markers_bumped() {
+    echo "== an edited heredoc body comes with a bumped marker"
+    git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
+
+    local base
+    # The same base the rest of --verify judges against: whatever this change is
+    # measured from. On a detached or rootless checkout there is nothing to
+    # compare with, and a check that cannot see a baseline must say so rather
+    # than pass quietly.
+    base=$(git -C "$REPO" rev-parse --verify -q HEAD 2>/dev/null) || {
+        echo "  (no HEAD to compare against -- skipped)"; return 0; }
+
+    local old new rc=0
+    old=$(git -C "$REPO" show "$base:deploy.sh" 2>/dev/null) || return 0
+    new=$(git -C "$REPO" show ":deploy.sh" 2>/dev/null) || new=$(cat "$REPO/deploy.sh")
+
+    local m
+    for m in DIGEST_SCRIPT_MARKER NOTIFY_SCRIPT_MARKER WARN_SCRIPT_MARKER CAPACITY_SCRIPT_MARKER; do
+        local ov nv ob nb
+        ov=$(printf '%s\n' "$old" | grep -m1 "^$m=" || true)
+        nv=$(printf '%s\n' "$new" | grep -m1 "^$m=" || true)
+        [ -n "$nv" ] || continue          # marker not present in this tree
+        [ "$ov" = "$nv" ] || continue      # marker moved -- nothing to prove
+        # The heredoc that belongs to this marker is opened by the variable the
+        # marker is named after: DIGEST_SCRIPT_MARKER -> cat > "$DIGEST_SCRIPT".
+        # Deriving it beats hardcoding a table that would rot, and beats my
+        # first cut, which searched for the MARKER name on the opening line --
+        # where it does not appear, so the guard passed in silence.
+        local var="${m%_MARKER}"
+        ob=$(printf '%s\n' "$old" | awk -v v="$var" '$0 ~ ("cat > \"[$]" v "\"") {f=1} f{print} f && /^EOF$/{exit}')
+        nb=$(printf '%s\n' "$new" | awk -v v="$var" '$0 ~ ("cat > \"[$]" v "\"") {f=1} f{print} f && /^EOF$/{exit}')
+        if [ -n "$nb" ] && [ "$ob" != "$nb" ]; then
+            echo "  $m is unchanged ($nv) but its heredoc body moved."
+            echo "  deploy.sh will report the installed copy as 'already current' and every"
+            echo "  host will keep the old script. Bump the marker."
+            rc=1
+        fi
+    done
+    return $rc
+}
+
+
 no_conflict_markers() {
     echo "== no merge conflict markers in tracked files"
     git rev-parse --git-dir >/dev/null 2>&1 || { echo "  (not a git checkout -- skipped)"; return 0; }
