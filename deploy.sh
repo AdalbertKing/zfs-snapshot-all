@@ -4562,6 +4562,36 @@ ZFS_ALERT_STATE_DIR=${ALERT_SHARED_DIR}/notify-state
 # delivery fails the findings are put back rather than dropped.
 ZFS_ALERT_QUEUE=${ALERT_SHARED_DIR}/alert-queue.log
 
+# ---------------------------------------------------------------------------
+#  THE PERIODIC REPORT -- the mail you get when NOTHING is wrong
+# ---------------------------------------------------------------------------
+# The digest is not only an alarm. On a host with no findings it still sends
+# the current state and the run figures, and those are what an admin actually
+# reads: last run, counts, przyrost, transfer, timings. Both knobs below are
+# read from THIS file -- they are ordinary shell variables like the ones above.
+
+# How many days of runs the table covers. Independent of how often the mail is
+# sent: a weekly mail with a 30-day window is a perfectly good monthly trend.
+#ZFS_DIGEST_DAYS=7
+
+# When a host with NOTHING to report still mails that report.
+#
+#   mon..sun   that weekday (default: mon)
+#   monthly    the 1st of the month
+#   1..28      that day of the month
+#   daily      every day
+#   off        never
+#
+# It governs ONLY the mail that has nothing to say. A day WITH findings sends
+# the digest whatever this says, because suppressing an alert on a schedule is
+# not a cadence, it is a lost alert.
+#
+# `off` is honoured and is the one value that costs a guarantee: with no quiet
+# mail there is no interval in which silence can be told apart from a dead MTA.
+# That failure is why this exists -- pve9 reported nothing for MONTHS in 2026
+# and from the inbox it looked exactly like a host with no findings.
+#ZFS_DIGEST_QUIET=mon
+
 # When the daily mail goes out. This is the cron SCHEDULE, so it lives in the
 # crontab, not here -- gen-cron.sh emits it (DIGEST_SCHEDULE, default 0 7 * * *).
 EOF
@@ -4647,6 +4677,11 @@ ALERT_ENV_PREAMBLE=$(cat <<EOF
 _E_MODE="\${ZFS_ALERT_MODE:-}"; _E_WMODE="\${ZFS_WARN_MODE:-}"
 _E_QUEUE="\${ZFS_ALERT_QUEUE:-}"; _E_EMAIL="\${ZFS_ALERT_EMAIL:-}"
 _E_STATE="\${ZFS_ALERT_STATE_DIR:-}"
+# The two digest knobs obey the same rule. They did not: the file won for them
+# while the environment won for the five above, so the SAME config had two
+# precedence rules depending on which key you touched -- which is the kind of
+# thing that costs an hour when a test run quietly reads production settings.
+_E_DAYS="\${ZFS_DIGEST_DAYS:-}"; _E_QUIET="\${ZFS_DIGEST_QUIET:-}"
 CONF="\${ZFS_ALERT_CONF:-}"
 if [ -z "\$CONF" ]; then
     # /etc first: /root is 0700, so a delegated service account (see
@@ -4664,6 +4699,8 @@ _restore_env() {
     [ -n "\$_E_QUEUE" ] && ZFS_ALERT_QUEUE="\$_E_QUEUE"
     [ -n "\$_E_EMAIL" ] && ZFS_ALERT_EMAIL="\$_E_EMAIL"
     [ -n "\$_E_STATE" ] && ZFS_ALERT_STATE_DIR="\$_E_STATE"
+    [ -n "\$_E_DAYS" ]  && ZFS_DIGEST_DAYS="\$_E_DAYS"
+    [ -n "\$_E_QUIET" ] && ZFS_DIGEST_QUIET="\$_E_QUIET"
     return 0
 }
 _restore_env
@@ -4857,7 +4894,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v27"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v28"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -4957,11 +4994,26 @@ if [ ! -s "\$PROCESSING" ]; then
             rm -f "\$PROCESSING"; exit 0 ;;
         daily)
             : ;;
+        monthly)
+            # The 1st. Spelled out rather than written as "1", because a bare
+            # number here reads as a weekday to at least half the people who
+            # will edit this file.
+            [ "\$(date +%d)" = "01" ] || { rm -f "\$PROCESSING"; exit 0; } ;;
+        [1-9]|[12][0-9]|3[01])
+            # A day of the month. Capped at 28 on purpose: 29, 30 and 31 do not
+            # exist in every month, and a report that silently skips February
+            # is worse than one that refuses to be configured that way.
+            if [ "\$QUIET_WHEN" -gt 28 ]; then
+                echo "alert-digest.sh: ZFS_DIGEST_QUIET=\$QUIET_WHEN -- days above 28 do not occur in every month; using 28" >&2
+                QUIET_WHEN=28
+            fi
+            _dom=\$(date +%d); _dom="\${_dom#0}"
+            [ "\$_dom" = "\$QUIET_WHEN" ] || { rm -f "\$PROCESSING"; exit 0; } ;;
         mon|tue|wed|thu|fri|sat|sun)
             _wd=\$(printf 'mon tue wed thu fri sat sun' | cut -d' ' -f"\$(date +%u)")
             if [ "\$_wd" != "\$QUIET_WHEN" ]; then rm -f "\$PROCESSING"; exit 0; fi ;;
         *)
-            echo "alert-digest.sh: ZFS_DIGEST_QUIET='\$QUIET_WHEN' is not a weekday, 'daily' or 'off' -- using mon" >&2
+            echo "alert-digest.sh: ZFS_DIGEST_QUIET='\$QUIET_WHEN' is not a weekday, a day of the month, 'monthly', 'daily' or 'off' -- using mon" >&2
             if [ "\$(date +%u)" != "1" ]; then rm -f "\$PROCESSING"; exit 0; fi ;;
     esac
     QUIET=1
@@ -5702,7 +5754,7 @@ if {
     # not the news.
     if [ "\$QUIET" = "1" ]; then
         printf '\nTen list jest dowodem, ze droga alertu na tym hoscie dziala.\n'
-        printf 'Jesli kolejny nie przyjdzie -- to jest alarm. Kadencja: ZFS_DIGEST_QUIET=%s\n' "\$QUIET_WHEN"
+        printf 'Jesli kolejny nie przyjdzie -- to jest alarm.\nKadencja: ZFS_DIGEST_QUIET=%s w /etc/zfs-alert.conf (tam tez ZFS_DIGEST_DAYS -- okno tabeli)\n' "\$QUIET_WHEN"
     fi
 } | mail -s "\$SUBJ" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
     rm -f "\$PROCESSING"

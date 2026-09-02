@@ -950,8 +950,16 @@ One file, sourced by all three scripts. **`ZFS_ALERT_MODE` is the variable to ch
 | `ZFS_ALERT_COOLDOWN` | `14400` (4h) | `immediate` only: seconds before the *same* message may mail again. Ignored in `daily` (the digest de-duplicates by counting). |
 | `ZFS_ALERT_STATE_DIR` | `/var/lib/zfs-snapshot-all/notify-state` | `immediate` only: where those cooldown timestamps live. |
 | `ZFS_ALERT_QUEUE` | `/var/lib/zfs-snapshot-all/alert-queue.log` | `daily` only: the queue the digest consumes. |
-| `ZFS_DIGEST_DAYS` | `7` | `daily` only: how many days the run table in the digest covers. |
-| `ZFS_DIGEST_QUIET` | `mon` | `daily` only: when a host with NOTHING to report still mails the full periodic report — a weekday (`mon`..`sun`), `daily`, or `off`. Governs only that mail; a day with findings always sends. `off` costs the guarantee that silence means a dead channel. |
+| `ZFS_DIGEST_DAYS` | `7` | `daily` only: how many days of runs the digest's table covers. Independent of how often the mail is sent — a weekly mail with a 30-day window is a monthly trend. |
+| `ZFS_DIGEST_QUIET` | `mon` | `daily` only: when a host with NOTHING to report still mails the full periodic report — `mon`..`sun`, `monthly` (the 1st), `1`..`28` (that day of the month), `daily`, or `off`. Governs only that mail; a day with findings always sends. `off` costs the guarantee that silence means a dead channel. |
+
+All of the above are read from **`/etc/zfs-alert.conf`**, which the three scripts
+source as plain shell. An environment variable of the same name wins over the
+file — the same rule for every key, including the two digest ones (they used to
+differ, so the same config had two precedence rules depending on which key you
+touched). `deploy.sh` writes the file once with every key documented and
+commented, and never overwrites it afterwards, so a host provisioned before a
+key existed still accepts it — the comment is simply not there to remind you.
 
 The config lives at **`/etc/zfs-alert.conf`** and the queue under
 **`/var/lib/zfs-snapshot-all/`** (`2775 root:zfsalert`, setgid) rather than in `/root/scripts`,
