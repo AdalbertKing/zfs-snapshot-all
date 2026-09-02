@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v12"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v13"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5105,7 +5105,23 @@ RUNS_BODY=""
 if [ -n "\$RUN_ROWS" ]; then
     while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc; do
         [ -n "\$_k" ] || continue
-        _disp="\${_k#profile__*__}"
+        # The label's parenthetical joins several datasets' notify words with
+        # '+', which gen-cron does when it merges them onto one cron line
+        # (IFS=+ at gen-cron.sh:3263). Owner asked for commas. Done HERE and
+        # not there on purpose: changing the join rewrites the label in every
+        # generated cron line, so every host's crontab differs at the next
+        # regeneration and the anti-deletion guard sees the old lines as gone.
+        # A display change costs nothing and reads the same.
+        _disp=\$(printf '%s' "\${_k#profile__*__}" | tr '+' ',')
+        # The datasets this job actually names, from its cron line. Needed in
+        # BOTH blocks: the parenthetical is a summary of notify words, and a
+        # notify word like 'vm-101' does not say hdd/data/vm-101-disk-0 -- the
+        # owner asked exactly that, reading a real mail.
+        _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$2; exit}')
+        _dsb=""
+        if [ -n "\$_dsl" ]; then
+            _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
+        fi
         case "\$nl\$LIVE_LABELS\$nl" in *"\$nl\$_k\$nl"*) _live=1 ;; *) _live=0 ;; esac
         if [ "\$_live" -eq 0 ]; then
             STATE_BODY="\$STATE_BODY\$(printf '  %-46s (juz nie w cronie, ostatni %s)' "\$_disp" "\$_lw")
@@ -5118,6 +5134,8 @@ if [ -n "\$RUN_ROWS" ]; then
 "
             STATE_BAD="\$STATE_BAD zadanie:\$_disp"
         fi
+        [ -n "\$_dsb" ] && STATE_BODY="\$STATE_BODY\$_dsb
+"
         RUNS_BODY="\$RUNS_BODY\$(printf '  %-46s %5s %6s %6ss %7ss' "\$_disp" "\$_n" "\$_f" "\$_avg" "\$_mx")
 "
         # WHAT it moved, under the row. The job label carries only the notify
@@ -5125,11 +5143,11 @@ if [ -n "\$RUN_ROWS" ]; then
         # so the row alone cannot answer "which dataset was that". The cron line
         # can, and does. Owner asked for it on 2026-09-02 after reading a real
         # table and being unable to tell.
-        _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$2; exit}')
-        if [ -n "\$_dsl" ]; then
-            RUNS_BODY="\$RUNS_BODY\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
-"
-        fi
+        # NOT repeated here. Both blocks list the same jobs, so printing the
+        # datasets twice added ~50 duplicated lines to a 149-line mail on pve0
+        # -- measured. They live in the state block above, which is the one
+        # that answers "what is this host and what does it cover"; this table
+        # answers "how did it run", and the job name is enough to join them.
     done <<< "\$RUN_ROWS"
 fi
 
