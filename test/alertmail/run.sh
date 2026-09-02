@@ -636,11 +636,32 @@ CTPLUS
             PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _plus=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
-            if printf '%s' "$_plus" | grep -q 'hourly backup (a,b)' \
-               && ! printf '%s' "$_plus" | grep -q 'hourly backup (a+b)'; then
-                ok "digest: a merged label renders with commas, not plus signs"
+            # A MULTI-DATASET JOB DROPS ITS PARENTHETICAL AND LISTS THE
+            # DATASETS UNDERNEATH, EACH WITH ITS OWN FIGURES.
+            #
+            # Owner, 2026-09-02. The parenthetical was what pushed the columns
+            # out of line: a five-dataset job rendered as "daily backup
+            # (vm-103-disk-0,vm-104-disk..." and every later column on that row
+            # sat four characters right of its heading. The separate
+            # "Co obejmuja" section went away with the move.
+            #
+            # The "+" gen-cron uses to merge notify words must not survive
+            # anywhere in the mail; it is still translated for the UWAGA line,
+            # which names the full label.
+            #
+            # The names print BARE here: this job is not a send job, so it has
+            # no per-dataset figures, and a column of dashes would be the noise
+            # the indentation exists to remove. The names still have to appear,
+            # because dropping the parenthetical took away the only other place
+            # the job states its scope.
+            if ! printf '%s' "$_plus" | grep -q 'hourly backup (a+b)' \
+               && ! printf '%s' "$_plus" | grep -q 'hourly backup (a,b)' \
+               && printf '%s' "$_plus" | grep -qE '^ +hourly backup +[0-9]' \
+               && printf '%s' "$_plus" | grep -qE '^ {6}hdd/d/a$' \
+               && printf '%s' "$_plus" | grep -qE '^ {6}hdd/d/b$'; then
+                ok "digest: a multi-dataset job summarises on its row and lists its datasets underneath"
             else
-                bad "digest: a merged label renders with commas, not plus signs" "$_plus"
+                bad "digest: a multi-dataset job summarises on its row and lists its datasets underneath" "$_plus"
             fi
 
             # ...and the datasets are listed ONCE. Both blocks name the same
@@ -829,6 +850,72 @@ CTVOL
             else
                 bad "digest: a prune job is credited with no volume" "$_vol"
             fi
+
+            # PER-DATASET TIMES COME FROM THE ENGINE LOG, OR NOT AT ALL.
+            #
+            # The job markers carry ONE BEGIN/END for the whole job, so a
+            # per-dataset duration looks impossible -- but the engines log each
+            # transfer separately, and RECV CMD names the TARGET dataset, which
+            # is the side "written" is measured on. Both halves therefore key on
+            # the same name.
+            #
+            # This is the discriminating pair. Only send jobs have those blocks:
+            # measured on pve0, 139 job runs and 18 transfers, because snapshot
+            # and prune jobs transfer nothing. Their dataset rows must show a
+            # volume and a DASH for time -- splitting the job's duration evenly
+            # across its datasets would look measured and be invented.
+            cat > "$hb_dir/bin/zfs" <<'ZFSDS'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tgt/pool/hdd/d/a@s	2097152	9999999999
+'
+    printf 'tgt/pool/hdd/d/b@s	1048576	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSDS
+            chmod +x "$hb_dir/bin/zfs"
+            cat > "$hb_dir/bin/crontab" <<'CTDS'
+#!/bin/sh
+echo '0 * * * * echo "$(date -Is) ZFS-JOB BEGIN h ds backup (a+b)" >>/var/log/x; /opt/snapsend.sh "hdd/d/a,hdd/d/b" "tgt/pool"'
+CTDS
+            chmod +x "$hb_dir/bin/crontab"
+            # Only dataset a has a transfer block; b was up to date that run.
+            {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h ds backup (a+b)\n' "$_yd"
+                printf '%s 10:00:01 - EXECUTING TRANSFER:\n' "$_yd"
+                printf '%s 10:00:01 - RECV CMD: zfs recv -F -s -u tgt/pool/hdd/d/a\n' "$_yd"
+                printf '%s 10:00:09 - Transfer completed successfully\n' "$_yd"
+                printf '%sT10:00:20+00:00 ZFS-JOB END h ds backup (a+b) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _dsr=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            # 8 s of transfer for a, and it must NOT be the job's 20 s.
+            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/a .* 2M .* 8s +8s +8s *$'; then
+                ok "digest: a dataset with a transfer block carries its OWN time, not the job's"
+            else
+                bad "digest: a dataset with a transfer block carries its OWN time, not the job's" \
+                    "$(printf '%s' "$_dsr" | grep -E 'hdd/d/[ab]')"
+            fi
+            if printf '%s' "$_dsr" | grep -qE '^ {6}hdd/d/b .* 1M .* - +- +- *$'; then
+                ok "digest: a dataset the engine never transferred gets a volume and NO invented time"
+            else
+                bad "digest: a dataset the engine never transferred gets a volume and NO invented time" \
+                    "$(printf '%s' "$_dsr" | grep -E 'hdd/d/[ab]')"
+            fi
+
+            # The separate scope section is gone: its datasets are now rows of
+            # the table itself, which is what made it redundant.
+            if ! printf '%s' "$_dsr" | grep -q 'Co obejmuja'; then
+                ok "digest: the separate scope section is gone -- the datasets are rows now"
+            else
+                bad "digest: the separate scope section is gone -- the datasets are rows now" "$_dsr"
+            fi
+
             rm -f "$hb_dir/bin/zfs"
         fi
     fi
