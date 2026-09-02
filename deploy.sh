@@ -4898,7 +4898,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v32"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v33"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5278,6 +5278,10 @@ if [ -n "\$CRON_LOGS" ]; then
         rc = (\$NF ~ /^rc=/) ? substr(\$NF,4) + 0 : 0
         n[lbl]++
         if (rc != 0) f[lbl]++
+        # awk variables are global, so d survives the previous END line. Without
+        # this reset a job whose BEGIN fell outside the window would inherit the
+        # duration of whatever ran before it -- a wrong number that looks right.
+        d = ""
         if (lbl in bt) {
             d = secs(\$1) - bt[lbl]; if (d < 0) d += 86400
             tot[lbl] += d; c[lbl]++
@@ -5288,10 +5292,14 @@ if [ -n "\$CRON_LOGS" ]; then
         # live-file-first and rotated-after, so "last seen" is the END OF THE
         # OLDER FILE. Rendered on pve0 that reported every job as last run on
         # 08-31 while they had all run this morning.
+        # The duration of THAT run travels with it. The table used to show the
+        # sum over the window, which is not a quantity anyone reads -- 27 runs
+        # of a job add up to a number that says nothing about how long the job
+        # takes. Owner, 2026-09-02: "Naglowek czas laczny jest bez sensu."
         t = day " " substr(\$1,12,5)
-        if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc }
+        if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc; lastdur[lbl] = (d == "" ? -1 : d) }
     }
-    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0 }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0, lastdur[k]+0 }
     ' | sort)
 
     # PER-DATASET FIGURES, KEYED ON THE DATASET AND NOTHING ELSE.
@@ -5334,10 +5342,13 @@ if [ -n "\$CRON_LOGS" ]; then
         if (t0 > 0 && ds != "") {
             d = secs(\$0) - t0; if (d < 0) d += 86400
             n[ds]++; tot[ds] += d; if (d > mx[ds]) mx[ds] = d
+            # The newest transfer of THIS dataset, by wall clock, so the row can
+            # show what the last run cost rather than a sum nobody reads.
+            if (\$0 > lastline[ds]) { lastline[ds] = \$0; lastdur[ds] = d }
         }
         t0 = 0; ds = ""
     }
-    END { for (k in n) printf "%s\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k] }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k], lastdur[k]+0 }
     ')
 
     # THE WINDOW THE NUMBERS ACTUALLY COVER, measured rather than named.
@@ -5590,9 +5601,9 @@ ds_volume() {   # <dataset> <family|""> -> bytes written over the window
 # than a blank, because it survives being looked at. The caller therefore
 # passes the number of jobs claiming this dataset, and anything above one gets
 # no figures.
-ds_times() {   # <target-dataset> <claimants> -> "n<TAB>total<TAB>max" or ""
+ds_times() {   # <target-dataset> <claimants> -> "n<TAB>total<TAB>max<TAB>last" or ""
     [ "\${2:-1}" = "1" ] || return 0
-    printf '%s\n' "\$DS_ROWS" | awk -F'\t' -v d="\$1" '\$1 == d { printf "%s\t%s\t%s", \$2, \$3, \$4; exit }'
+    printf '%s\n' "\$DS_ROWS" | awk -F'\t' -v d="\$1" '\$1 == d { printf "%s\t%s\t%s\t%s", \$2, \$3, \$4, \$5; exit }'
 }
 
 # How many scheduled jobs land data in this dataset. One is the ordinary case;
@@ -5609,7 +5620,7 @@ ds_claimants() {   # <target-dataset> -> count
 SEEN_LABELS=""
 HAS_DS_ROWS=0
 if [ -n "\$RUN_ROWS" ]; then
-    while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot; do
+    while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot _ldur; do
         [ -n "\$_k" ] || continue
         SEEN_LABELS="\$SEEN_LABELS
 \$_k"
@@ -5689,8 +5700,12 @@ if [ -n "\$RUN_ROWS" ]; then
         # 6 so the numeric columns land under the same headings as the summary
         # above them, and the two agree by construction: the volumes sum to the
         # job's.
+        # Cleared for EVERY job, not just the branch that fills it. Resetting it
+        # inside the multi-dataset branch left a single-dataset job appending the
+        # PREVIOUS job's rows -- bookmarks prune rendered with archive backup's
+        # datasets under it.
+        _DSBLOCK=""
         if [ "\${_nsrc:-0}" -ge 2 ]; then
-            _dsum=0; _DSBLOCK=""
             HAS_DS_ROWS=1
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
@@ -5715,9 +5730,9 @@ if [ -n "\$RUN_ROWS" ]; then
                     _dn=\$(printf '%s' "\$_dt" | cut -f1)
                     _dtot=\$(printf '%s' "\$_dt" | cut -f2)
                     _dmx=\$(printf '%s' "\$_dt" | cut -f3)
-                    _dsum=\$(( _dsum + _dtot ))
+                    _dlst=\$(printf '%s' "\$_dt" | cut -f4)
                     case "\$_tg" in *:*) ;; *) _dr=\$(human_rate "\$(ds_volume "\$_child" "\$_pf")" "\$_dtot") ;; esac
-                    _dd=\$(human_secs "\$_dtot")
+                    if [ "\${_dlst:-0}" -gt 0 ]; then _dd=\$(human_secs "\$_dlst"); else _dd="-"; fi
                     _da="\$(( _dn > 0 ? _dtot / _dn : 0 ))s"
                     _dm="\${_dmx}s"
                 fi
@@ -5739,25 +5754,9 @@ if [ -n "\$RUN_ROWS" ]; then
                 fi
             done
             IFS="\$_oldifs"
-            # THE COLUMN HAS TO ADD UP.
-            #
-            # Owner, 2026-09-02: "dane podawane w kolumnach sa bledne. Dla
-            # archive backup sie sumuja: 9m+1m+2m<>26". Both figures were
-            # right and they measured different things -- the dataset rows
-            # cover the TRANSFER, the job row covers the whole run -- but a
-            # column that does not close is a column an admin has to be talked
-            # out of distrusting, and a footnote is not an answer. The
-            # remainder is therefore a row of its own, so the arithmetic is
-            # visible instead of explained.
-            #
-            # Guarded rather than assumed non-negative: a job whose BEGIN fell
-            # before the window contributes transfers without its own duration,
-            # and a negative remainder would be a window artefact printed as a
-            # fact.
-            if [ "\${_dsum:-0}" -gt 0 ] && [ "\${_tot:-0}" -gt "\$_dsum" ]; then
-                _DSBLOCK="\$_DSBLOCK\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' 'pozostale (snapshot, prune, polaczenie)' '' '' '' '' "\$(human_secs \$(( _tot - _dsum )))" "" "")
-"
-        fi
+        # The "pozostale" row went with the total column it existed to
+        # reconcile. Last/average/worst are not additive -- nobody adds two
+        # averages -- so there is nothing left for a remainder to close.
         fi
         # TWO DECIMALS, AND THE TOTAL IS THE MEASUREMENT.
         #
@@ -5768,7 +5767,14 @@ if [ -n "\$RUN_ROWS" ]; then
         # and buying exactness with a number that is not the measurement is a
         # bad trade in a report.
         _vol=\$(human_bytes_in "\$_vb" "\$_u")
-        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rt" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
+        # THE LAST RUN, not the sum over the window. Owner, 2026-09-02:
+        # "Naglowek czas laczny jest bez sensu. Ma byc czas ostatni, sredni i
+        # maksymalny." Twenty-seven runs add up to a number that says nothing
+        # about how long the job takes; last/average/worst is the profile an
+        # operator actually reads. A run whose BEGIN fell outside the window
+        # has no duration to report and gets a dash rather than a zero.
+        if [ "\${_ldur:-0}" -ge 0 ]; then _dlast=\$(human_secs "\$_ldur"); else _dlast="-"; fi
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rt" "\$_dlast" "\$_avg"s "\$_mx"s)
 "
         STATE_BODY="\$STATE_BODY\$_DSBLOCK"
     done <<< "\$RUN_ROWS"
@@ -5831,7 +5837,7 @@ if {
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
             printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu), caly wiersz w jednostce zadania.
 '
-            printf '  Transfer = przyrost / czas lacz.\n'
+            printf '  Transfer = przyrost podzielony przez LACZNY czas przebiegow w oknie.\n'
             # ONLY WHEN THERE IS SOMETHING TO EXPLAIN.
             #
             # Rendered on pve1: every job there has a single dataset, so the
@@ -5839,8 +5845,8 @@ if {
             # two lines explaining them. Explaining what is not on the page is
             # the same noise as a column of dashes.
             if [ "\${HAS_DS_ROWS:-0}" = "1" ]; then
-                printf '  Wiersze wciete = datasety zadania. Ich czasy to SAM TRANSFER; reszta przebiegu\n'
-                printf '  (snapshot, prune, polaczenie) ma wlasny wiersz, wiec kolumna czas lacz. sie sumuje.\n'
+                printf '  Wiersze wciete = datasety zadania; ich czasy to SAM TRANSFER tego datasetu.\n'
+                printf '  Kolumny czasu opisuja POJEDYNCZY przebieg: ostatni, sredni i najdluzszy.\n'
             fi
             # The blank line separates the caption block from the table and
             # belongs to the table, not to the caption. Hung off the last
@@ -5848,7 +5854,7 @@ if {
             # against the prose on every single-dataset host.
             printf '\n'
         fi
-        printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
+        printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas ostatni' 'czas sr.' 'czas max'
     fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"

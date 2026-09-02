@@ -420,7 +420,7 @@ EOF"
         _other=$(printf 'mon tue wed thu fri sat sun' | cut -d' ' -f"$(( $(date +%u) % 7 + 1 ))")
 
         _q_run "$_today"
-        if [ -s "$hb_dir/sent" ] && grep -q 'czas lacz\.' "$hb_dir/sent"; then
+        if [ -s "$hb_dir/sent" ] && grep -q 'czas ostatni' "$hb_dir/sent"; then
             ok "quiet report: on its cadence day it carries the run table, not one line"
         else
             bad "quiet report: on its cadence day it carries the run table, not one line" \
@@ -751,24 +751,58 @@ CTPLUS
                 bad "digest: the measured window is stated ABOVE the columns it describes" "$_plus"
             fi
 
-            # THE RATE MUST BE CHECKABLE ON ITS OWN ROW.
+            # THE TIME COLUMNS DESCRIBE ONE RUN: last, average, worst.
             #
-            # v20 printed przyrost and transfer but not the seconds the second
-            # was divided by, so the admin had to take the rate on trust. The
-            # divisor is now a column, and it sits BETWEEN transfer and the
-            # per-run averages -- next to the number it explains, not filed
-            # away with the timings it is not. Owner, 2026-09-02: "po transfer
-            # powinien byc czas trwania, potem sredni i maksymalny". Pinning
-            # the order matters more than pinning the widths: the three czas
-            # columns mean three different things (sum, mean, worst) and only
-            # their order tells them apart once the values are read.
+            # An earlier round put the WINDOW TOTAL next to the rate so the
+            # division could be checked on the row. The owner replaced that:
+            # "Naglowek czas laczny jest bez sensu. Ma byc czas ostatni, sredni
+            # i maksymalny." Twenty-seven runs summed is not a quantity anyone
+            # reads, and last/average/worst is the profile an operator wants.
+            #
+            # The rate keeps its window basis -- przyrost is a window figure
+            # too, so anything else would divide one span by another. What the
+            # column no longer shows, the caption now says outright; pinning
+            # both is the point, because dropping the sentence would leave a
+            # rate with no stated basis, which is where this started.
             _hdr=$(printf '%s' "$_plus" | grep -m1 'czas max')
-            if printf '%s' "$_hdr" | grep -qE 'przyrost +transfer +czas lacz\. +czas sr\. +czas max' \
-               && printf '%s' "$_plus" | grep -q 'Transfer = przyrost / czas lacz\.'; then
-                ok "digest: the rate's divisor is a column, between transfer and the averages"
+            if printf '%s' "$_hdr" | grep -qE 'przyrost +transfer +czas ostatni +czas sr\. +czas max' \
+               && printf '%s' "$_plus" | grep -q 'Transfer = przyrost podzielony przez LACZNY czas'; then
+                ok "digest: the time columns are last/average/worst, and the rate says what it divided by"
             else
-                bad "digest: the rate's divisor is a column, between transfer and the averages" "$_hdr"
+                bad "digest: the time columns are last/average/worst, and the rate says what it divided by" "$_hdr"
             fi
+
+            # AND THE FIRST COLUMN IS THE LAST RUN, not the sum.
+            #
+            # Every other fixture here runs its job ONCE, where the sum and the
+            # last run are the same number -- so none of them can tell the two
+            # apart, and a control that reverted to the total passed. Two runs
+            # of different length is the smallest thing that discriminates:
+            # 2s then 9s gives last=9s, average=5s, worst=9s, and a total of
+            # 11s that must appear nowhere.
+            cat > "$hb_dir/bin/crontab" <<'CTLAST'
+#!/bin/sh
+echo '0 * * * * echo "$(date -Is) ZFS-JOB BEGIN h twice job (t)" >>/var/log/x; /opt/snapsend.sh "tank/t"'
+CTLAST
+            chmod +x "$hb_dir/bin/crontab"
+            {   printf '%sT08:00:00+00:00 ZFS-JOB BEGIN h twice job (t)\n' "$_yd"
+                printf '%sT08:00:02+00:00 ZFS-JOB END h twice job (t) rc=0\n' "$_yd"
+                printf '%sT09:00:00+00:00 ZFS-JOB BEGIN h twice job (t)\n' "$_yd"
+                printf '%sT09:00:09+00:00 ZFS-JOB END h twice job (t) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _lst=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_lst" | grep -qE 'twice job [(]t[)].* 9s +5s +9s *$' \
+               && ! printf '%s' "$_lst" | grep -qE 'twice job [(]t[)].* 11s'; then
+                ok "digest: the first time column is the LAST run, not the window sum"
+            else
+                bad "digest: the first time column is the LAST run, not the window sum" \
+                    "$(printf '%s' "$_lst" | grep -E 'twice job')"
+            fi
+
 
             # THE WINDOW IS SEVEN DAYS BY DEFAULT AND SETTABLE.
             #
