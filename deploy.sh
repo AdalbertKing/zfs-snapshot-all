@@ -5301,10 +5301,22 @@ for _u in root \$(ls /home 2>/dev/null); do
         # Taking "the last one" for both reported a five-dataset snapshot job
         # as 0B on pve0 -- it summed one disk that happened not to grow.
         _dsn=\$(printf '%s' "\$_line" | tr '"' '\n' | awk 'NR%2==0' | grep -cE '^[^/ ]+/[^ ]*\$')
+        # WHICH SNAPSHOT FAMILY THIS JOB OWNS.
+        #
+        # Without it every tier sharing a scope is credited with the whole
+        # scope. Rendered on pve1: five snapshot jobs over rpool/data, each
+        # reporting 494G, because the volume summed every snapshot under the
+        # scope regardless of which job made it. Same family of defect as the
+        # prune that was credited with 525 GB.
+        #
+        # The engines take it as -m, and gen-cron writes it quoted:
+        #   snapsend.sh -m "automated_hourly_" -r -v 3 "rpool/data"
+        _pfx=\$(printf '%s' "\$_line" | grep -oE '\-m +"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/')
+        [ -n "\$_pfx" ] || _pfx=\$(printf '%s' "\$_line" | grep -oE '\-m +[A-Za-z0-9_.:-]+' | head -1 | sed 's/^-m *//')
         _tgt=""
         [ "\${_dsn:-0}" -ge 2 ] && _tgt=\${_ds##*,}
         [ -n "\$_ds" ] && JOB_DATASETS="\$JOB_DATASETS
-\$_lab	\$_ds	\$_tgt"
+\$_lab	\$_ds	\$_tgt	\$_pfx"
         # Which jobs actually put data somewhere. delsnaps prunes and
         # check-snap-age only looks; neither adds a byte, so neither gets a
         # volume -- crediting a prune with what grew under its scope reported
@@ -5345,11 +5357,19 @@ human_bytes() {   # <bytes> -> e.g. 69M
 # rate on purpose: przyrost / czas lacz. = transfer is then arithmetic the admin
 # can check on the row, instead of a number they have to trust. Sums over the
 # window run to hours, so plain seconds stop being a quantity anyone reads.
-human_secs() {   # <seconds> -> 47s | 26m | 1h26m
+human_secs() {   # <seconds> -> 47s | 9m12s | 1h26m
+    # SECONDS ARE SHOWN, not rounded away, so the column CLOSES.
+    #
+    # Owner, 2026-09-02: "9m+1m+2m<>26". Truncating each value to whole
+    # minutes lost up to 59 s per row, so four rows that summed exactly in
+    # seconds displayed as 25 against 26 -- and a column that visibly does not
+    # add up is one the reader has to be talked out of distrusting, whatever a
+    # footnote says. m+s costs two characters and makes the addition checkable
+    # on the page.
     case "\${1:-}" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
     if [ "\$1" -lt 60 ]; then printf '%ss' "\$1"
-    elif [ "\$1" -lt 3600 ]; then printf '%sm' "\$(( \$1 / 60 ))"
-    else printf '%sh%02dm' "\$(( \$1 / 3600 ))" "\$(( (\$1 % 3600) / 60 ))"
+    elif [ "\$1" -lt 3600 ]; then printf '%dm%02ds' "\$(( \$1 / 60 ))" "\$(( \$1 % 60 ))"
+    else printf '%dh%02dm' "\$(( \$1 / 3600 ))" "\$(( (\$1 % 3600) / 60 ))"
     fi
 }
 
@@ -5370,19 +5390,24 @@ human_rate() {   # <bytes> <seconds> -> e.g. 27M/s
 # dataset itself is where its data stays. A REMOTE target (user@host:pool/ds)
 # cannot be measured from here, and is reported as unknown rather than
 # silently measured on the wrong side.
-job_volume() {   # <datasets> <label> <target|""> -> written over the window
+job_volume() {   # <datasets> <label> <target|""> <family|""> -> written over the window
     # A PRUNE JOB ADDS NOTHING. Summing what grew under its scope credits it
-    # with data another job wrote -- on pve0 \`bookmarks prune\` was reported as
-    # 525 GB, which is the whole pool's week. Only a job that creates or
+    # with data another job wrote -- on pve0 'bookmarks prune' was reported as
+    # 525 GB, which is the whole pool for a week. Only a job that creates or
     # receives snapshots gets a figure.
     case "\$nl\$SEND_LABELS\$nl" in *"\$nl\$2\$nl"*) ;; *) printf -- "-"; return 0 ;; esac
     _jt="\$3"
     [ -n "\$_jt" ] || _jt="\$1"
     case "\$_jt" in *:*) printf -- "?"; return 0 ;; esac
     [ -n "\$_jt" ] || { printf -- "-"; return 0; }
-    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v tl="\$_jt" -v since="\$_SINCE_EP" '
+    # AND A TIER IS NOT ITS WHOLE SCOPE. Five snapshot jobs over one dataset
+    # each claimed 494G on pve1, because the sum ignored which job made the
+    # snapshot. Restricted to this job's own family the tiers stop overlapping
+    # and the numbers become attributable.
+    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v tl="\$_jt" -v since="\$_SINCE_EP" -v fam="\$4" '
         BEGIN { n = split(tl, t, ",") }
-        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1) }
+        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1); sn = substr(\$1, p + 1) }
+        fam != "" && index(sn, fam) != 1 { next }
         \$3 + 0 >= since + 0 {
             for (i = 1; i <= n; i++)
                 if (ds == t[i] || index(ds, t[i] "/") == 1) { s += \$2; break }
@@ -5399,9 +5424,10 @@ job_volume() {   # <datasets> <label> <target|""> -> written over the window
 # What ONE dataset received over the window. Same measurement as job_volume,
 # narrowed to a single name -- the job total is the sum of these, which is what
 # lets the indented rows be checked against the row above them.
-ds_volume() {   # <dataset> -> bytes written over the window
-    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v t="\$1" -v since="\$_SINCE_EP" '
-        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1) }
+ds_volume() {   # <dataset> <family|""> -> bytes written over the window
+    printf '%s\n' "\$SNAP_VOL" | awk -F'\t' -v t="\$1" -v since="\$_SINCE_EP" -v fam="\$2" '
+        { p = index(\$1, "@"); if (p == 0) next; ds = substr(\$1, 1, p - 1); sn = substr(\$1, p + 1) }
+        fam != "" && index(sn, fam) != 1 { next }
         \$3 + 0 >= since + 0 {
             if (ds == t || index(ds, t "/") == 1) s += \$2
         }
@@ -5470,14 +5496,24 @@ if [ -n "\$RUN_ROWS" ]; then
             _st="\$_lw  (PADL rc=\$_lrc)"
             STATE_BAD="\$STATE_BAD zadanie:\$_full"
         fi
-        _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg")
-        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$(human_bytes "\$_vb")" "\$(human_rate "\$_vb" "\$_tot")" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
+        _pf=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$4; exit}')
+        _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg" "\$_pf")
+        # A RATE NEEDS SOMETHING TO HAVE MOVED.
+        #
+        # A local snapshot job carries nothing across a link, and its duration
+        # is the second it took to make the snapshot -- not the hour over which
+        # the data was written. Dividing one by the other produced "494G/s" on
+        # pve1, a number that is not wrong so much as meaningless. Only a job
+        # with a target gets a rate.
+        if [ -n "\$_tg" ]; then _rt=\$(human_rate "\$_vb" "\$_tot"); else _rt="-"; fi
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$(human_bytes "\$_vb")" "\$_rt" "\$(human_secs "\$_tot")" "\$_avg"s "\$_mx"s)
 "
         # The components, each measured on ITS OWN target dataset. Indented to
         # 6 so the numeric columns land under the same headings as the summary
         # above them, and the two agree by construction: the volumes sum to the
         # job's.
         if [ "\${_nsrc:-0}" -ge 2 ]; then
+            _dsum=0
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
                 IFS="\$_oldifs"
@@ -5489,7 +5525,7 @@ if [ -n "\$RUN_ROWS" ]; then
                     *"\$nl\$_k\$nl"*)
                         case "\$_tg" in
                             *:*) _dv="?" ;;
-                            *)   _dv=\$(human_bytes "\$(ds_volume "\$_child")") ;;
+                            *)   _dv=\$(human_bytes "\$(ds_volume "\$_child" "\$_pf")") ;;
                         esac ;;
                 esac
                 # Times exist only where the engine logged a transfer for this
@@ -5501,7 +5537,8 @@ if [ -n "\$RUN_ROWS" ]; then
                     _dn=\$(printf '%s' "\$_dt" | cut -f1)
                     _dtot=\$(printf '%s' "\$_dt" | cut -f2)
                     _dmx=\$(printf '%s' "\$_dt" | cut -f3)
-                    case "\$_tg" in *:*) ;; *) _dr=\$(human_rate "\$(ds_volume "\$_child")" "\$_dtot") ;; esac
+                    _dsum=\$(( _dsum + _dtot ))
+                    case "\$_tg" in *:*) ;; *) _dr=\$(human_rate "\$(ds_volume "\$_child" "\$_pf")" "\$_dtot") ;; esac
                     _dd=\$(human_secs "\$_dtot")
                     _da="\$(( _dn > 0 ? _dtot / _dn : 0 ))s"
                     _dm="\${_dmx}s"
@@ -5521,6 +5558,25 @@ if [ -n "\$RUN_ROWS" ]; then
                 fi
             done
             IFS="\$_oldifs"
+            # THE COLUMN HAS TO ADD UP.
+            #
+            # Owner, 2026-09-02: "dane podawane w kolumnach sa bledne. Dla
+            # archive backup sie sumuja: 9m+1m+2m<>26". Both figures were
+            # right and they measured different things -- the dataset rows
+            # cover the TRANSFER, the job row covers the whole run -- but a
+            # column that does not close is a column an admin has to be talked
+            # out of distrusting, and a footnote is not an answer. The
+            # remainder is therefore a row of its own, so the arithmetic is
+            # visible instead of explained.
+            #
+            # Guarded rather than assumed non-negative: a job whose BEGIN fell
+            # before the window contributes transfers without its own duration,
+            # and a negative remainder would be a window artefact printed as a
+            # fact.
+            if [ "\${_dsum:-0}" -gt 0 ] && [ "\${_tot:-0}" -gt "\$_dsum" ]; then
+                STATE_BODY="\$STATE_BODY\$(printf '      %-52s %10s %6s %8s %8s %10s %8s %8s' 'pozostale (snapshot, prune, polaczenie)' '' '' '' '' "\$(human_secs \$(( _tot - _dsum )))" "" "")
+"
+            fi
         fi
     done <<< "\$RUN_ROWS"
 fi
@@ -5581,8 +5637,8 @@ if {
         if [ -n "\$RUN_WINDOW" ]; then
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
             printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n'
-            printf '  Wiersze wciete = datasety zadania; ich czasy obejmuja SAM TRANSFER, wiec nie sumuja sie\n'
-            printf '  do czasu zadania -- snapshot, prune i polaczenie zostaja w wierszu zbiorczym.\n\n'
+            printf '  Wiersze wciete = datasety zadania. Ich czasy to SAM TRANSFER; reszta przebiegu\n'
+            printf '  (snapshot, prune, polaczenie) ma wlasny wiersz, wiec kolumna czas lacz. sie sumuje.\n\n'
         fi
         printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
     fi

@@ -653,3 +653,56 @@ transfer, a snapshot, prune i nawiazanie polaczenia zostaja w wierszu zbiorczym.
 Kontrola dyskryminujaca w suicie: dataset z blokiem transferu ma pokazac WLASNY
 czas (8 s), a nie czas zadania (20 s); dataset bez bloku — wolumen i zaden czas.
 Wyciecie wyszukiwania czasow czerwieni pierwszy z nich.
+
+**13. Kolumna czasu MUSI sie sumowac, a tier to nie caly jego zakres.**
+
+Dwie wady zglosone przez wlasciciela na renderach produkcyjnych tego samego dnia.
+
+**13a. "dane podawane w kolumnach sa bledne. Dla archive backup sie sumuja:
+9m+1m+2m<>26".**
+
+Obie liczby byly poprawne i mierzyly co innego — wiersze datasetow obejmuja
+TRANSFER, wiersz zadania caly przebieg — ale kolumna, ktora widocznie sie nie
+zgadza, to kolumna, z ktorej nieufnosci trzeba czytelnika wyprowadzac, a przypis
+nie jest odpowiedzia. Reszta ma wiec **wlasny wiersz**: `pozostale (snapshot,
+prune, polaczenie)`. Arytmetyka jest widoczna, nie tlumaczona.
+
+Przy okazji wyszlo, ze samo dodanie wiersza nie wystarcza: `9m + 1m + 2m + 13m`
+to 25, nie 26, bo `human_secs` obcinal kazda wartosc do pelnych minut i gubil do
+59 s na wierszu. Format to teraz `9m11s`, i wtedy `9m11s + 1m35s + 2m02s +
+13m32s = 26m20s` — dokladnie tyle, ile pokazuje wiersz zadania. Dwa znaki za
+sprawdzalnosc dodawania na kartce.
+
+Reszta jest **bramkowana znakiem**: zadanie, ktorego `BEGIN` wypadl przed oknem,
+wnosi transfery bez wlasnego czasu trwania, a ujemna reszta byla by artefaktem
+okna wydrukowanym jako fakt.
+
+**13b. Piec zadan, jeden zakres, kazde z calym przyrostem puli.**
+
+Render pve1: `daily/hourly/monthly/weekly snapshot (rpool-data)` — **kazde
+raportowalo 494G**, bo suma `written` leciala po wszystkich snapshotach w
+zakresie, niezaleznie od tego, ktore zadanie je zrobilo. Ta sama rodzina bledu co
+prune obciazony 525 GB.
+
+Rodzina snapshotow jest na linii crona (`snapsend.sh -m "automated_hourly_"`),
+wiec przypisanie jest mozliwe bez zgadywania. Po filtrze: `hourly snapshot` ma
+493G, pozostale tiery **0B** — i to jest prawda o tym hoscie, nie awaria digestu.
+
+**Przy okazji: `494G/s` jako transfer.** Zadanie snapshotowe niczego nie
+przenosi przez lacze, a jego czas trwania to sekunda, w ktorej powstal snapshot,
+nie godzina, przez ktora dane byly zapisywane. Dzielenie jednego przez drugie nie
+jest tyle bledne, co pozbawione znaczenia. **Kurs dostaje tylko zadanie z celem.**
+
+**Obserwacja do decyzji wlasciciela, NIE naprawiana tutaj:** te 0B mowia, ze na
+pve1 cztery tiery snapshotowe (daily, weekly, monthly, annual) nie zostawiaja po
+sobie nic trwalego — `zfs list` zna na `rpool/data` tylko rodzine
+`automated_hourly` i `__replicate`. Tworza snapshot, ktory drabina `flat prune`
+zaraz usuwa. Digest to teraz widac; co z tym zrobic, to sprawa konfiguracji, nie
+raportu.
+
+**Trzy wady wlasne w tej rundzie, wszystkie z jednej przyczyny:** kotwiczenie
+edycji na `}` o wcieciu zerowym. Ogranicznik trafial w `}` zamykajace blok
+WEWNATRZ programu awk, wiec przepisanie funkcji zostawialo jej stary ogon; przy
+sprzataniu tego ogona skasowalem cale `ds_volume`. `bash -n` nie widzi zadnego z
+tych bledow — duplikat jest skladniowo poprawny, a brakujaca funkcja to blad
+wykonania. Zlapala je dopiero suita.

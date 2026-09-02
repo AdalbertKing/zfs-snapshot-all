@@ -916,6 +916,68 @@ CTDS
                 bad "digest: the separate scope section is gone -- the datasets are rows now" "$_dsr"
             fi
 
+            # A TIER IS NOT ITS WHOLE SCOPE.
+            #
+            # Rendered on pve1, 2026-09-02: five snapshot jobs over rpool/data,
+            # and EVERY ONE of them reported 494G -- the volume summed every
+            # snapshot under the scope regardless of which job had made it. Same
+            # family of defect as the prune credited with 525 GB. The job's own
+            # snapshot family comes off its cron line (-m "automated_hourly_"),
+            # so the tiers stop overlapping.
+            #
+            # Two jobs, one dataset, one snapshot each: 1M and 2M. Either job
+            # reporting 3M is the bug.
+            cat > "$hb_dir/bin/zfs" <<'ZFSFAM'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tank/d@automated_hourly_1	1048576	9999999999
+'
+    printf 'tank/d@automated_daily_1	2097152	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSFAM
+            chmod +x "$hb_dir/bin/zfs"
+            cat > "$hb_dir/bin/crontab" <<'CTFAM'
+#!/bin/sh
+echo '0 * * * * echo "$(date -Is) ZFS-JOB BEGIN h hh snap (d)" >>/var/log/x; /opt/snapsend.sh -m "automated_hourly_" -r "tank/d"'
+echo '9 0 * * * echo "$(date -Is) ZFS-JOB BEGIN h dd snap (d)" >>/var/log/x; /opt/snapsend.sh -m "automated_daily_" -r "tank/d"'
+CTFAM
+            chmod +x "$hb_dir/bin/crontab"
+            {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h hh snap (d)\n' "$_yd"
+                printf '%sT10:00:02+00:00 ZFS-JOB END h hh snap (d) rc=0\n' "$_yd"
+                printf '%sT10:09:00+00:00 ZFS-JOB BEGIN h dd snap (d)\n' "$_yd"
+                printf '%sT10:09:02+00:00 ZFS-JOB END h dd snap (d) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _fam=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1M ' \
+               && printf '%s' "$_fam" | grep -qE 'dd snap [(]d[)].* 2M ' \
+               && ! printf '%s' "$_fam" | grep -q ' 3M '; then
+                ok "digest: each snapshot tier counts only its OWN family, not the whole scope"
+            else
+                bad "digest: each snapshot tier counts only its OWN family, not the whole scope" \
+                    "$(printf '%s' "$_fam" | grep -E 'snap [(]d[)]')"
+            fi
+
+            # AND A RATE NEEDS SOMETHING TO HAVE MOVED. A local snapshot job
+            # carries nothing across a link and its duration is the second the
+            # snapshot took, not the hour the data was written over. Dividing
+            # one by the other produced "494G/s" on pve1 -- not so much wrong as
+            # meaningless.
+            if printf '%s' "$_fam" | grep -qE 'hh snap [(]d[)].* 1M +- ' ; then
+                ok "digest: a job with no target gets no transfer rate"
+            else
+                bad "digest: a job with no target gets no transfer rate" \
+                    "$(printf '%s' "$_fam" | grep -E 'snap [(]d[)]')"
+            fi
+
+
             rm -f "$hb_dir/bin/zfs"
         fi
     fi
