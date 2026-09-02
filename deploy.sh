@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v9"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v10"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -4929,9 +4929,28 @@ N_ALERT=0
 N_WARN=0
 while IFS=\$'\t' read -r rank sev cnt msg first_ep last_ep detail; do
     [ -n "\$sev" ] || continue
-    t1=\$(date -d "@\$first_ep" '+%H:%M')
-    t2=\$(date -d "@\$last_ep" '+%H:%M')
-    range="\$t1"; [ "\$t1" != "\$t2" ] && range="\$t1 - \$t2"
+    # THE DATE, whenever the row is not from the day this digest is sent.
+    # This runs at 07:00 and reports what was queued SINCE THE LAST RUN, so a
+    # digest almost always carries yesterday's events -- and printing bare
+    # times made them read as today's. Measured 2026-09-02 on pve1.kancelaria:
+    # a DEGRADED pool repaired at 17:45 the previous day was reported as
+    # '(07:01 - 16:01)' under a header stamped with the SEND date, and the
+    # owner reasonably concluded the pool was still broken. It was not: the
+    # events predated the repair by an hour and a half.
+    dt1=\$(date -d "@\$first_ep" '+%Y-%m-%d %H:%M')
+    dt2=\$(date -d "@\$last_ep" '+%Y-%m-%d %H:%M')
+    day1="\${dt1%% *}"; day2="\${dt2%% *}"
+    t1="\${dt1##* }"; t2="\${dt2##* }"
+    if [ "\$day1" = "\$TODAY" ] && [ "\$day2" = "\$TODAY" ]; then
+        range="\$t1"; [ "\$t1" != "\$t2" ] && range="\$t1 - \$t2"
+    elif [ "\$day1" = "\$day2" ]; then
+        range="\$day1 \$t1"; [ "\$t1" != "\$t2" ] && range="\$day1 \$t1 - \$t2"
+    else
+        range="\$dt1 - \$dt2"
+    fi
+    # Widest span across every row, for the header below.
+    if [ -z "\$MIN_EP" ] || [ "\$first_ep" -lt "\$MIN_EP" ]; then MIN_EP=\$first_ep; fi
+    if [ -z "\$MAX_EP" ] || [ "\$last_ep" -gt "\$MAX_EP" ]; then MAX_EP=\$last_ep; fi
     line=\$(printf '  x%-4s %-55s (%s)' "\$cnt" "\$msg" "\$range")
     # Unflatten and indent under the heading it belongs to. \001 went in where
     # the newlines were; a multi-line failure comes back out as multiple lines.
@@ -4960,7 +4979,24 @@ done <<< "\$SUMMARY"
 TOTAL=\$(wc -l < "\$PROCESSING")
 
 if {
-    printf 'Host: %s   Doba: %s   Zdarzen: %s\n' "\$HOST" "\$TODAY" "\$TOTAL"
+    # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. `Doba:
+    # $TODAY` was the send date, and since this runs at 07:00 over a queue
+    # filled the day before, it stamped yesterday's events with today's date.
+    # A reader cannot tell a live problem from a repaired one that way.
+    # Measured 2026-09-02 on pve1.kancelaria.net: a pool repaired at 17:45
+    # the previous day was read as broken this morning, and it was not.
+    if [ -n "\$MIN_EP" ]; then
+        p1=\$(date -d "@\$MIN_EP" '+%Y-%m-%d %H:%M')
+        p2=\$(date -d "@\$MAX_EP" '+%Y-%m-%d %H:%M')
+        if [ "\${p1%% *}" = "\${p2%% *}" ]; then PERIOD="\$p1 - \${p2##* }"; else PERIOD="\$p1 - \$p2"; fi
+    else
+        PERIOD="\$TODAY"
+    fi
+    printf 'Host: %s   Zdarzenia z okresu: %s   Zdarzen: %s\n' "\$HOST" "\$PERIOD" "\$TOTAL"
+    # Said once, plainly: a report of what HAPPENED, not a probe of what is
+    # true now. A condition may have been resolved between the event and this
+    # mail -- the digest cannot know that, and does not guess.
+    printf 'Raport o zdarzeniach ZAKOLEJKOWANYCH w tym okresie -- stan biezacy moze byc juz inny.\n'
     if [ "\$N_ALERT" -gt 0 ]; then
         printf '\nALERT -- zadanie padlo, backup przeterminowany albo pula nie jest ONLINE:\n\n%s' "\$ALERT_BODY"
     fi

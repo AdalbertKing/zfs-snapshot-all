@@ -355,6 +355,54 @@ EOF"
             bad "heartbeat: a failed send names the channel as unproven" \
                 "nothing on stderr told cron what broke" "out: $hb_out"
         fi
+
+        # -------------------------------------------------------------------
+        # AN EVENT NOT FROM TODAY MUST CARRY ITS DATE.
+        #
+        # This digest runs at 07:00 over a queue filled the day before, so it
+        # almost always reports yesterday. v9 printed bare times under a header
+        # stamped `Doba: <send date>`, which reads as "this is happening now".
+        # Measured 2026-09-02 on pve1.kancelaria.net: a pool repaired at 17:45
+        # the previous day produced a morning mail saying `Doba: 2026-09-02`
+        # over `(07:01 - 16:01)`, and the owner reasonably concluded the pool
+        # was still degraded. It was not -- every event predated the repair.
+        printf '#!/bin/sh\ncat > "$0.out"\nexit 0\n' > "$hb_dir/bin/mail"
+        chmod +x "$hb_dir/bin/mail"
+        rm -f "$hb_dir/q" "$hb_dir/q.processing" "$hb_dir/bin/mail.out"
+        _yd=$(date -d yesterday '+%Y-%m-%d' 2>/dev/null)
+        if [ -z "$_yd" ]; then
+            bad "date: this platform can express yesterday" "date -d yesterday failed"
+        else
+            {   printf '%s\tALERT\tpool DEGRADED: rpool\tsprzed naprawy\n' "$(date -d "$_yd 07:01" +%s)"
+                printf '%s\tALERT\tpool DEGRADED: rpool\tsprzed naprawy\n' "$(date -d "$_yd 16:01" +%s)"
+                printf '%s\tWARN\tdzisiejsze\tdzis\n' "$(date +%s)"
+            } > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _body=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_body" | grep -qF "($_yd 07:01 - 16:01)"; then
+                ok "digest: an event from another day carries that day in its range"
+            else
+                bad "digest: an event from another day carries that day in its range" \
+                    "expected ($_yd 07:01 - 16:01)" "$_body"
+            fi
+            # The header must name the period the events cover, never the send
+            # date -- that substitution is the whole defect.
+            if printf '%s' "$_body" | grep -q "Zdarzenia z okresu: $_yd 07:01" \
+               && ! printf '%s' "$_body" | grep -q "Doba:"; then
+                ok "digest: the header names the covered period, not the send date"
+            else
+                bad "digest: the header names the covered period, not the send date" "$_body"
+            fi
+            # THE CONTROL, and it is why the date is conditional: today's own
+            # events must stay compact. A date on every row is noise, and noise
+            # is how the one row that mattered gets skipped.
+            if printf '%s' "$_body" | grep -qE 'x1 +dzisiejsze +\([0-9]{2}:[0-9]{2}\)'; then
+                ok "digest: an event from TODAY stays time-only"
+            else
+                bad "digest: an event from TODAY stays time-only" "$_body"
+            fi
+        fi
     fi
     rm -rf "$hb_dir"
 fi
