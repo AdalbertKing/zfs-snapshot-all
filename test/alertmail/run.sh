@@ -552,6 +552,76 @@ CTPLUS
             else
                 bad "digest: a dataset is listed once, not in both blocks" "count=$_cnt" "$_plus"
             fi
+
+            # THE RUN WINDOW IS A REAL FROM-TO, MEASURED.
+            #
+            # It used to read "PRZEBIEGI ZADAN (2026-09-01, 2026-09-02)" --
+            # two dates and a comma, which states neither a range nor a list.
+            # It also hid an asymmetry: the digest runs at 07:00, so "today"
+            # is a PARTIAL day and an hourly job's count is yesterday's 24
+            # plus this morning's few. Printing the first and last run
+            # actually counted makes that arithmetic self-evident.
+            if printf '%s' "$_plus" | grep -qE 'PRZEBIEGI ZADAN, [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
+               && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN ('; then
+                ok "digest: the run table names the window it measured, not two bare dates"
+            else
+                bad "digest: the run table names the window it measured, not two bare dates" "$_plus"
+            fi
+
+            # THE WINDOW IS SEVEN DAYS BY DEFAULT AND SETTABLE.
+            #
+            # The first cut hardcoded two calendar days and said so nowhere;
+            # the owner had to ask what the window was. Seven is his answer,
+            # ZFS_DIGEST_DAYS is the knob. A run five days old must be counted
+            # by default and must vanish when the window is narrowed to two --
+            # the pair is what proves the parameter is read, not merely present.
+            _old5=$(date -d '-5 days' '+%Y-%m-%d' 2>/dev/null)
+            {   printf '%sT08:00:00+00:00 ZFS-JOB BEGIN h weekly job (x)\n' "$_old5"
+                printf '%sT08:00:06+00:00 ZFS-JOB END h weekly job (x) rc=0\n' "$_old5"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _w7=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                ZFS_DIGEST_DAYS=2 bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _w2=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+
+            if printf '%s' "$_w7" | grep -q 'weekly job (x)' \
+               && ! printf '%s' "$_w2" | grep -q 'weekly job (x)'; then
+                ok "digest: the window is 7 days by default and ZFS_DIGEST_DAYS narrows it"
+            else
+                bad "digest: the window is 7 days by default and ZFS_DIGEST_DAYS narrows it" \
+                    "7d: $_w7" "2d: $_w2"
+            fi
+
+            # GZIPPED ROTATED LOGS ARE READABLE. logrotate here runs monthly
+            # with compress + delaycompress, so .1 is plain and .2+ are .gz.
+            # Reading only the live file under-reports silently -- measured on
+            # pve0: 35 runs over two days against 155 over seven, because the
+            # month had rotated the day before.
+            _gz="$hb_dir/rot.log"
+            {   printf '%sT09:00:00+00:00 ZFS-JOB BEGIN h gz job (y)\n' "$_old5"
+                printf '%sT09:00:03+00:00 ZFS-JOB END h gz job (y) rc=0\n' "$_old5"
+            } > "$_gz"
+            if gzip -f "$_gz" 2>/dev/null && [ -r "$_gz.gz" ]; then
+                rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+                printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+                PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_gz.gz" \
+                    bash "$hb_dir/digest.sh" >/dev/null 2>&1
+                _wgz=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+                if printf '%s' "$_wgz" | grep -q 'gz job (y)'; then
+                    ok "digest: a gzipped rotated log is read"
+                else
+                    bad "digest: a gzipped rotated log is read" "$_wgz"
+                fi
+            else
+                bad "digest: a gzipped rotated log is read" "gzip unavailable in this environment"
+            fi
         fi
     fi
     rm -rf "$hb_dir"
