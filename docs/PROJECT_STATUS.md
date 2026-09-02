@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b9393ca8c46ef173 -->
+<!-- status-covers-digest: aef7de0ca67c680b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -276,6 +276,36 @@
   na pve1.kancelaria, pve9 i pve2), a `mktime` to rozszerzenie gawk; gawkizm
   padlby po cichu wszedzie. Dowiedzione na WYGENEROWANYM skrypcie i na prawdziwym
   `cron.log` pve9. `test/alertmail` 41/0.
+
+
+  **v12 (2026-09-02, tego samego dnia co v11): DWA FORMATY CRONA i pelny dataset
+  w tabeli.** Wlasciciel przeczytal prawdziwy mail z pve0 i zglosil dwie rzeczy.
+
+  **Wada, ktora wypuscilem w v11.** Na pve0 KAZDE zadanie bylo opisane jako
+  „juz nie w cronie", co jest po prostu nieprawda. v11 szukalo etykiety jako
+  `zfs-job.sh "<label>"` -- tak wyglada crontab wygenerowany przez biezacy main.
+  Hosty produkcyjne nosza starszy format WBUDOWANY, gdzie etykieta siedzi
+  wewnatrz wlasnego `echo` zadania:
+
+      1 * * * * echo "$(date -Is) ZFS-JOB BEGIN pve0 hourly backup (...)" >>...
+
+  Na takim hoscie nie pasowalo nic. **Format odczytany z JEDNEGO hosta nie jest
+  formatem estaty** -- wzorzec wyprowadzilem z pve9, ktory chodzi na swiezym
+  main. Dopasowywane sa teraz oba zapisy; oba daja "<host> <etykieta>", z ktorej
+  pierwsze slowo odpada, zeby zgadzalo sie z logiem. Zmierzone na prawdziwym
+  crontabie pve0: 19 zadan, wszystkie `ostatni OK`.
+
+  **Pelny dataset pod wierszem tabeli.** Etykieta niesie tylko slowo z `notify`
+  -- `daily backup (BIM server)` nazywa maszyne, nie zbior danych -- wiec sam
+  wiersz nie odpowiada na pytanie „ktory dataset". Linia crona odpowiada, wiec
+  datasety sa z niej wyciagane i wypisywane pod wierszem.
+
+  Filtr datasetow: token w cudzyslowie, ktory zawiera ukosnik, NIE zaczyna sie
+  od ukosnika i NIE MA SPACJI. Bez ostatniego warunku wciagalo tekst z `echo`,
+  bo na pve0 etykieta brzmi doslownie `hdd/lxc` i sama zawiera ukosnik.
+
+  `test/alertmail` 44/0, dziesiec przypadkow digestu -- w tym crontab w starym
+  formacie, ktory jest ta regresja, ktora by mnie uratowala.
 
 
   **KATALOG: `Y5M12D31H24` — pierwszy profil WIELKOLITEROWY (2026-09-01).**
