@@ -991,6 +991,18 @@ CTFAM
                     "$(printf '%s' "$_fam" | grep -n 'Wiersze wciete')"
             fi
 
+            # ...and the table still stands off from the prose above it. The
+            # blank line used to hang off the LAST caption line, so on a host
+            # with nothing indented it vanished with the caption and the header
+            # sat flush against the sentence before it. It belongs to the table.
+            if printf '%s' "$_fam" | grep -B1 'zadanie  *ostatni przebieg' | head -1 | grep -qE '^[[:space:]]*$'; then
+                ok "digest: a blank line separates the caption from the table, caption or not"
+            else
+                bad "digest: a blank line separates the caption from the table, caption or not" \
+                    "$(printf '%s' "$_fam" | grep -B2 'zadanie  *ostatni przebieg')"
+            fi
+
+
             # ...and the negative control: the multi-dataset render DOES carry
             # it. Without this pair, deleting the caption outright would pass.
             if printf '%s' "$_dsr" | grep -q 'Wiersze wciete'; then
