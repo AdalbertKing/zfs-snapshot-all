@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v19"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v22"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -4859,44 +4859,59 @@ if [ -s "\$LEGACY_QUEUE" ]; then
     rm -f "\$LEGACY_QUEUE"
 fi
 
-# A WEEK WITH NOTHING TO SAY MUST STILL SAY IT.
+# A QUIET PERIOD MUST STILL REPORT, AND THE CADENCE IS THE ADMIN'S TO SET.
 #
-# Until now an empty queue meant no mail, and that made silence carry no
-# information at all. Measured on pve9, 2026-08-22: its MTA was local-delivery
-# only and its digest was not even scheduled, so it had reported NOTHING for
-# months -- and from the owner's inbox that looked exactly like a host with no
-# findings. Three real messages, one of them a genuine digest naming 2 alerts
-# and 1 warning, were sitting in /var/mail on the host itself.
+# WHY A QUIET HOST MAILS AT ALL. Measured on pve9, 2026-08-22: its MTA was
+# local-delivery only and its digest was not even scheduled, so it had reported
+# NOTHING for months -- and from the owner's inbox that looked exactly like a
+# host with no findings. Three real messages, one of them a genuine digest
+# naming 2 alerts and 1 warning, were sitting in /var/mail on the host itself.
+# So a quiet host says so on a schedule, and from then on NO mail is itself the
+# alarm -- an alarm the owner notices without checking anything.
 #
-# So once a week, on Monday, a host with nothing to report says so. One line,
-# one mail per host per week. The point is not the content: it is that from
-# Monday onward, NO mail is itself the alarm -- and it is an alarm the owner
-# notices without checking anything.
+# WHY IT NOW CARRIES THE WHOLE REPORT. Owner, 2026-09-02: "Co, gdy nie ma
+# warningow, ani alertow, czy raz w tygodniu tez dostane taka statystyke?" He
+# did not, and the arrangement was backwards. The quiet mail was ONE LINE, and
+# the state table plus the run figures -- last run, counts, przyrost, transfer,
+# timings -- were built further down, AFTER this block had already exited. So
+# the periodic report vanished in exactly the weeks it is most worth reading:
+# the ones with nothing wrong, where the only question an admin has is whether
+# the numbers still look like they did. Findings are not the report; they are
+# an interruption to it.
 #
-# Stateless on purpose. No "last heartbeat" file to go stale, drift, or be
-# restored from a backup: the weekday IS the schedule. A Monday that already
-# has findings sends the ordinary digest instead, which proves the same path
-# just as well.
+# The empty PROCESSING file is therefore kept rather than deleted, and the run
+# falls through to the ordinary body. Everything downstream already handles
+# zero findings: awk over an empty file yields nothing, TOTAL is 0, and the two
+# event blocks are gated on their counts.
+#
+# CADENCE. ZFS_DIGEST_QUIET takes a weekday (mon..sun, the default is mon),
+# 'daily', or 'off'. It governs ONLY the mail that has nothing to report: a day
+# with findings sends the digest whatever this says, because suppressing an
+# alert on a schedule is not a cadence, it is a lost alert.
+#
+# 'off' is honoured, and it is the one value that costs a guarantee: with no
+# quiet mail there is no week in which silence is distinguishable from a dead
+# MTA, which is the failure this block was written for. It stays available
+# because this is an administrator's tool, but it is not the default.
+#
+# Stateless on purpose. No "last report" file to go stale, drift, or come back
+# from a backup: the weekday IS the schedule.
+QUIET_WHEN="\${ZFS_DIGEST_QUIET:-mon}"
+QUIET=0
 if [ ! -s "\$PROCESSING" ]; then
-    rm -f "\$PROCESSING"
-    [ "\$(date +%u)" = "1" ] || exit 0
-    # The heartbeat's ONLY job is to prove the channel carries, so it must not
-    # report success when the send failed. The first cut piped into mail and
-    # then exited 0 unconditionally -- a broken MTA would have produced a
-    # cheerful "channel fine" exit while nothing left the host, which is the
-    # exact failure the heartbeat exists to expose, wearing the heartbeat's own
-    # clothes. Caught in review.
-    if printf 'Host: %s   %s
-
-Brak zdarzen w minionym tygodniu.
-
-Ten list jest dowodem, ze droga alertu na tym hoscie dziala.
-Jesli w kolejny poniedzialek nie przyjdzie -- to jest alarm.
-'         "\$HOST" "\$TODAY"         | mail -s "[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
-        exit 0
-    fi
-    echo "alert-digest.sh: weekly heartbeat could not be sent -- the alert channel on this host is NOT proven" >&2
-    exit 1
+    case "\$QUIET_WHEN" in
+        off|never)
+            rm -f "\$PROCESSING"; exit 0 ;;
+        daily)
+            : ;;
+        mon|tue|wed|thu|fri|sat|sun)
+            _wd=\$(printf 'mon tue wed thu fri sat sun' | cut -d' ' -f"\$(date +%u)")
+            if [ "\$_wd" != "\$QUIET_WHEN" ]; then rm -f "\$PROCESSING"; exit 0; fi ;;
+        *)
+            echo "alert-digest.sh: ZFS_DIGEST_QUIET='\$QUIET_WHEN' is not a weekday, 'daily' or 'off' -- using mon" >&2
+            if [ "\$(date +%u)" != "1" ]; then rm -f "\$PROCESSING"; exit 0; fi ;;
+    esac
+    QUIET=1
 fi
 
 # Collapse to one row per (severity, message): count, first-seen, last-seen.
@@ -5224,6 +5239,18 @@ human_bytes() {   # <bytes> -> e.g. 69M
     fi
 }
 
+# The seconds the rate was DIVIDED BY, made readable. It is printed next to the
+# rate on purpose: przyrost / czas lacz. = transfer is then arithmetic the admin
+# can check on the row, instead of a number they have to trust. Sums over the
+# window run to hours, so plain seconds stop being a quantity anyone reads.
+human_secs() {   # <seconds> -> 47s | 26m | 1h26m
+    case "\${1:-}" in ""|*[!0-9]*) printf -- "-"; return 0 ;; esac
+    if [ "\$1" -lt 60 ]; then printf '%ss' "\$1"
+    elif [ "\$1" -lt 3600 ]; then printf '%sm' "\$(( \$1 / 60 ))"
+    else printf '%sh%02dm' "\$(( \$1 / 3600 ))" "\$(( (\$1 % 3600) / 60 ))"
+    fi
+}
+
 # Throughput this job actually achieved: what it added, over the seconds it
 # spent doing it. DERIVED, and labelled that way -- the wire figure would need
 # the engines, and with compression the two differ. A job that added nothing,
@@ -5290,19 +5317,25 @@ if [ -n "\$RUN_ROWS" ]; then
         _dsb=""
         [ -n "\$_dsl" ] && _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
         case "\$nl\$LIVE_LABELS\$nl" in *"\$nl\$_k\$nl"*) _live=1 ;; *) _live=0 ;; esac
+        # ONE FACT PER COLUMN. The time column used to carry the outcome too --
+        # "OK  2026-09-02 09:00" under a heading that says "czas" -- so the
+        # owner reasonably asked what OK was doing there. The timestamp stands
+        # alone now, and a run that FAILED breaks the pattern on purpose: the
+        # normal case lines up, the exception sticks out.
         if [ "\$_live" -eq 0 ]; then
-            _st="juz nie w cronie"
+            _st="\$_lw  (juz nie w cronie)"
         elif [ "\$_lrc" = "0" ]; then
-            _st="OK  \$_lw"
+            _st="\$_lw"
         else
-            _st="PADL rc=\$_lrc  \$_lw"
+            _st="\$_lw  (PADL rc=\$_lrc)"
             STATE_BAD="\$STATE_BAD zadanie:\$_disp"
         fi
         _tg=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$3; exit}')
         _vb=\$(job_volume "\$_dsl" "\$_k" "\$_tg")
         _vol=\$(human_bytes "\$_vb")
         _rate=\$(human_rate "\$_vb" "\$_tot")
-        STATE_BODY="\$STATE_BODY\$(printf '  %-42s %-20s %5s %5s %8s %8s %7s %7s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rate" "\$_avg"s "\$_mx"s)
+        _dur=\$(human_secs "\$_tot")
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_vol" "\$_rate" "\$_dur" "\$_avg"s "\$_mx"s)
 "
         # NOT between the rows. Interleaving them there tore the table apart --
         # the owner's word was "nieczytelne", pasting exactly that. They keep
@@ -5322,7 +5355,7 @@ if [ -n "\$LIVE_LABELS" ]; then
         _disp=\$(printf '%s' "\${_lk#profile__*__}" | tr '+' ',')
         [ \${#_disp} -gt 42 ] && _disp="\${_disp:0:39}..."
         _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_lk" '\$1==k {print \$2; exit}')
-        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s' "\$_disp" "brak przebiegu w oknie")
+        STATE_BODY="\$STATE_BODY\$(printf '  %-38s %-17s' "\$_disp" "brak przebiegu w oknie")
 "
         [ -n "\$_dsl" ] && SCOPE_BODY="\$SCOPE_BODY\$(printf '  %s:' "\$_disp")
 \$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
@@ -5330,6 +5363,12 @@ if [ -n "\$LIVE_LABELS" ]; then
     done <<< "\$LIVE_LABELS"
 fi
 if [ -n "\$STATE_BAD" ]; then VERDICT="UWAGA"; else VERDICT="OK"; fi
+
+SUBJ="[ZFS] \$HOST \$TODAY STAN: \$VERDICT -- \$N_ALERT alert / \$N_WARN warn"
+# A quiet report is not a findings mail and must not look like one in a mailbox
+# sorted by subject: "0 alert / 0 warn" reads as a verdict that was reached by
+# measuring something, which is the one thing this mail did not do.
+[ "\$QUIET" = "1" ] && SUBJ="[ZFS] \$HOST \$TODAY -- cisza, kanal sprawny (raport okresowy)"
 
 if {
     # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. \`Doba:
@@ -5366,9 +5405,9 @@ if {
     if [ -n "\$STATE_BODY" ]; then
         if [ -n "\$RUN_WINDOW" ]; then
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
-            printf '  Przyrost = dane DOPISANE na celu w tym okresie (nie bajty na laczu).\n\n'
+            printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n\n'
         fi
-        printf '  %-42s %-20s %5s %5s %8s %8s %7s %7s\n' 'zadanie' 'czas (ostatni)' 'razem' 'bledy' 'przyrost' 'transfer' 'sredni' 'najdl.'
+        printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
     fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
@@ -5398,7 +5437,15 @@ if {
         printf '\nWARNING -- starzeje sie, jeszcze nie critical:\n\n%s' "\$WARN_BODY"
     fi
     printf '\nPelne logi: %s na %s\n' "\${CRON_LOGS# }" "\$HOST"
-} | mail -s "[ZFS] \$HOST \$TODAY STAN: \$VERDICT -- \$N_ALERT alert / \$N_WARN warn" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
+    # The sentence the old one-line heartbeat existed to carry. It is the whole
+    # reason a quiet host mails at all, so it travels with the quiet mail and
+    # not with the ordinary one -- on a day with findings the mail's arrival is
+    # not the news.
+    if [ "\$QUIET" = "1" ]; then
+        printf '\nTen list jest dowodem, ze droga alertu na tym hoscie dziala.\n'
+        printf 'Jesli kolejny nie przyjdzie -- to jest alarm. Kadencja: ZFS_DIGEST_QUIET=%s\n' "\$QUIET_WHEN"
+    fi
+} | mail -s "\$SUBJ" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
     rm -f "\$PROCESSING"
 else
     # Mail failed (no MTA, relay refused, mailutils missing). Put the findings
@@ -5407,7 +5454,14 @@ else
     # Deleting on failure is what the v1 digest did, and it silently discarded
     # everything queued whenever delivery broke.
     (umask 0002; cat "\$PROCESSING" >> "\$QUEUE") 2>/dev/null && rm -f "\$PROCESSING"
-    echo "alert-digest.sh: mail delivery failed -- \$TOTAL finding(s) requeued for the next run" >&2
+    # A quiet report that could not be sent is the failure the whole quiet-mail
+    # arrangement exists to expose, so it must not be reported as "0 findings
+    # requeued" -- which reads like nothing was lost.
+    if [ "\$QUIET" = "1" ]; then
+        echo "alert-digest.sh: quiet report could not be sent -- the alert channel on this host is NOT proven" >&2
+    else
+        echo "alert-digest.sh: mail delivery failed -- \$TOTAL finding(s) requeued for the next run" >&2
+    fi
     exit 1
 fi
 EOF

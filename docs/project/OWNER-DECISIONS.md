@@ -491,3 +491,45 @@ Wszystkie trzy z jednej przyczyny: `\'` wewnatrz heredoca. **Apostrof w heredocu
 NIE wymaga escapowania**, wiec backslash zostaje doslownie i psuje polecenie.
 Napisane trzy razy w jednej rundzie, wiec `test/alertmail` ma teraz na to
 straznika obok straznika komentarzy.
+
+**9. Cichy mail niesie CALY raport, a jego czestotliwosc jest pokretlem.**
+
+Wlasciciel: *"Co, gdy nie ma warningow, ani alertow, czy raz w tygodniu tez
+dostane taka statystyke? czy mozemy sparametryzowac czestotliwosc maila
+informacyjnego?"*
+
+Nie dostawal. Uklad byl **odwrotny do sensownego**: przy pustej kolejce host
+wysylal w poniedzialek JEDNA LINIJKE („cisza, kanal sprawny"), a tabela stanu
+i wszystkie liczby przebiegow powstawaly nizej -- **po** tym wyjsciu. Raport
+okresowy znikal wiec dokladnie w tygodniach, w ktorych jest najwiecej wart:
+tych bez awarii, gdzie jedyne pytanie admina brzmi „czy liczby nadal wygladaja
+jak wygladaly". Znaleziska nie sa raportem; sa przerwaniem raportu.
+
+Pusty plik kolejki nie jest juz kasowany, tylko przepuszczany dalej -- wszystko
+ponizej i tak obsluguje zero znalezisk (awk po pustym pliku nic nie zwraca,
+`TOTAL` to 0, oba bloki zdarzen sa bramkowane licznikiem). Zmiana kosztowala
+usuniecie jednego `exit 0`, nie nowej maszynerii; przewidzial to zreszta ostatni
+akapit decyzji 4.
+
+**Kadencja: `ZFS_DIGEST_QUIET`** — dzien tygodnia (`mon`..`sun`, domyslnie
+`mon`), `daily`, albo `off`. Rzadzi **wylacznie** mailem, ktory nie ma nic do
+zgloszenia: dzien ze znaleziskiem wysyla digest niezaleznie od tej wartosci, bo
+wyciszanie alertu wedlug kalendarza to nie kadencja, tylko zgubiony alert.
+Suita pinuje to osobnym przypadkiem.
+
+`off` jest honorowane i jako jedyna wartosc **kosztuje gwarancje**: bez cichego
+maila nie ma tygodnia, w ktorym cisze da sie odroznic od martwego MTA -- a to
+jest awaria, dla ktorej ten blok powstal (pve9, 2026-08-22: miesiace milczenia
+wygladajace z skrzynki jak host bez uwag). Zostaje dostepne, bo to narzedzie
+administratora, ale nie jest domyslne.
+
+Zdanie z dawnego pulsu („Jesli kolejny nie przyjdzie -- to jest alarm") jedzie
+teraz z cichym mailem i tylko z nim; w dniu ze znaleziskiem sam fakt nadejscia
+maila nie jest wiadomoscia. Temat rozroznia oba: *„-- cisza, kanal sprawny
+(raport okresowy)"* kontra *„STAN: ... -- N alert / N warn"*, bo „0 alert /
+0 warn" w skrzynce czyta sie jak werdykt, ktory ktos zmierzyl.
+
+**Przy okazji: pin dnia w suicie byl krucha atrapa.** `test/alertmail`
+przepisywal `sed`-em porownanie `date +%u` w wygenerowanym skrypcie, wiec
+pierwsza zmiana ksztaltu tego porownania rozbroila kontrole. Teraz test uzywa
+pokretla produktu (`ZFS_DIGEST_QUIET=daily`) zamiast przepisywac produkt.
