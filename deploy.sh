@@ -2327,6 +2327,51 @@ emergency_disable() {
 #   git -C <repo> reset --hard <sha>   and remove the cron line by hand.
 # Everything below is convenience on top of that, which is why rollback stays
 # two plain git commands rather than anything clever.
+# Bootstrap-fallback twin of update-control.sh:apply_repo_to_host. Kept in sync
+# deliberately -- see the UPDATE_STATE_DIR comment above for why the logic
+# exists twice. This copy runs only before update-control.sh has been deployed,
+# or if it has been removed.
+#
+# WHY IT EXISTS AT ALL: pulling the code is not deploying it. Measured on pve0
+# and pve1, 2026-09-02 -- both checkouts on current main, both hosts still
+# mailing alert-digest.sh v9. Four of the scripts a host RUNS are generated
+# from heredocs in this file and installed into /root/scripts; they are not
+# files in the repo, so a fast-forward cannot touch them.
+#
+# No recursion: a bare deploy.sh run does not self-update (do_self_update is
+# reached only from --self-update and --resume-updates), so this nests exactly
+# one level deep.
+apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not applied
+    local what="$1" rev="$2" rc cron_before cron_after stamp pre
+    if [ -e "$UPDATE_STATE_DIR/no-auto-apply" ]; then
+        log "$UPDATE_STATE_DIR/no-auto-apply present -- checkout is at $rev but the host was NOT re-deployed. Generated scripts (alert-digest.sh and friends) stay as they are."
+        return 0
+    fi
+    if [ ! -f "$REPO_DIR/deploy.sh" ]; then
+        warn "checkout is at $rev but $REPO_DIR/deploy.sh is missing -- the host is running whatever was installed before. Generated scripts are NOT updated."
+        return 1
+    fi
+    cron_before=$(crontab -l 2>/dev/null)
+    bash "$REPO_DIR/deploy.sh" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
+    rc=$?
+    cron_after=$(crontab -l 2>/dev/null)
+    if [ "$cron_before" != "$cron_after" ]; then
+        stamp=$(date '+%Y%m%d-%H%M%S')
+        pre="$UPDATE_STATE_DIR/crontab.pre-$stamp"
+        if printf '%s\n' "$cron_before" > "$pre" 2>/dev/null; then
+            warn "the root crontab CHANGED while applying $rev ($what). The pre-image is saved at $pre -- restore with: crontab $pre"
+        else
+            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup by hand before trusting this host's schedule"
+        fi
+    fi
+    if [ "$rc" -ne 0 ]; then
+        warn "deploy.sh exited $rc while applying $rev ($what) -- the checkout moved but the host may still be running the previous generated scripts. Full output: $UPDATE_STATE_DIR/last-apply.log"
+        return 1
+    fi
+    log "applied $rev to the host (deploy.sh rc=0, output in $UPDATE_STATE_DIR/last-apply.log)"
+    return 0
+}
+
 do_self_update() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
@@ -2400,6 +2445,9 @@ do_self_update() {
         return 1
     fi
     log "updated $(printf '%.8s' "$current") -> $(printf '%.8s' "$target") (rollback point recorded)"
+    # A checkout that advanced while the installed scripts did not is not an
+    # updated host, and returning 0 for it is fail-open.
+    apply_repo_to_host "update" "$(printf '%.8s' "$target")" || return 1
     return 0
 }
 
@@ -2428,6 +2476,11 @@ do_rollback() {
 
     write_state_file "$UPDATE_HOLD_FILE"         "rolled back from $(printf '%.8s' "$from") to $(printf '%.8s' "$target") on $(date '+%Y-%m-%d %H:%M:%S')"         || warn "rollback succeeded but could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
 
+    # Re-generate at the OLD revision -- a rollback that leaves the newer
+    # generated scripts installed is the same defect mirrored, and worse,
+    # because the operator has just been told the host is back on old code.
+    apply_repo_to_host "rollback" "$(printf '%.8s' "$target")" \
+        || warn "the rollback of the CHECKOUT succeeded, but re-generating the installed scripts at that revision did not -- this host is a mixture. Investigate before relying on it."
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
     log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
     log "When the fix is on main:  bash $REPO_DIR/deploy.sh --resume-updates"
@@ -5514,6 +5567,34 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# GIT 2.30.2 CANNOT FETCH FROM GITHUB OVER HTTP/2, AND SAYS THE WRONG THING.
+#
+# Measured on pve0 and pve1, 2026-09-02. `git fetch` ended in "could not read
+# Username for https://github.com" -- which reads as a credentials problem and
+# is not one: the repository is public and curl against the very same endpoint
+# returned 200 with a correct ref listing (the fresh merge was visible in it).
+# The honest error is the second line, "expected flush after ref listing".
+#
+# Negative control: `git -c http.version=HTTP/1.1 fetch` pulled 7243054..1dbddbf,
+# and a plain `git fetch` failed again on the very next call.
+#
+# The symptom misleads twice over: do_self_update returns early on a failed
+# fetch, so the hourly log carries no failure on its summary line -- the host
+# sits on a stale revision while the log looks calm. Both hosts had been stuck
+# for hours.
+#
+# Set only when the admin has not chosen a value, and scoped to the checkout
+# this script manages -- never --global. Debian 11 ships 2.30.2 and this fleet
+# is Proxmox on Debian, so the affected version is the common case here, not
+# the exception.
+if [ -d "$REPO_DIR/.git" ] && [ -z "$(git -C "$REPO_DIR" config --get http.version 2>/dev/null)" ]; then
+    if git -C "$REPO_DIR" config http.version HTTP/1.1 2>/dev/null; then
+        log "  pinned http.version=HTTP/1.1 on $REPO_DIR (git over HTTP/2 fails against GitHub on git 2.30.x, reporting it as a missing username)"
+    else
+        warn "  could not set http.version on $REPO_DIR -- if hourly updates report 'could not read Username', set it by hand: git -C $REPO_DIR config http.version HTTP/1.1"
+    fi
+fi
+
 log "Phase 7: auto-pull cron line (keeps this host's copy in sync with GitHub)"
 # ------------------------------------------------------------------------------
 # This host follows the moving `main` branch, hourly, and the backup jobs then

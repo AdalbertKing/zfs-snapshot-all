@@ -533,3 +533,67 @@ maila nie jest wiadomoscia. Temat rozroznia oba: *„-- cisza, kanal sprawny
 przepisywal `sed`-em porownanie `date +%u` w wygenerowanym skrypcie, wiec
 pierwsza zmiana ksztaltu tego porownania rozbroila kontrole. Teraz test uzywa
 pokretla produktu (`ZFS_DIGEST_QUIET=daily`) zamiast przepisywac produkt.
+
+**10. Pobranie kodu to nie jest wdrozenie kodu.**
+
+Znalezione 2026-09-02 przy obowiazkowym audycie `deploy.sh --check-only`, ktory
+jest w `impact.sh` jako obowiazek reczny — czyli mechanizm zadzialal, tylko nikt
+go wczesniej nie odpalil.
+
+**Zmierzone:** pve0 i pve1 mialy checkout na aktualnym `main` i obie maszyny
+wysylaly `alert-digest.sh` **v9** — trzynascie wersji wstecz. Cztery skrypty,
+ktore host faktycznie URUCHAMIA (`alert-digest.sh`, `notify-fail.sh`,
+`notify-warn.sh`, `check-pool-capacity.sh`), nie sa plikami w repozytorium:
+powstaja z heredocow `deploy.sh` i ladują w `/root/scripts`. Fast-forward nie
+moze ich tknac. Cala przebudowa digestu od v10 byla scalona, zrecenzowana,
+zielona w CI — i nie chodzila nigdzie.
+
+**Decyzja: udana zmiana rewizji sama sie wdraza.** `update-control.sh` po
+fast-forwardzie uruchamia `$REPO_DIR/deploy.sh`. Jest idempotentny na wdrozonym
+hoscie z zalozenia (jego wlasny audyt mowi „re-run without --check-only to
+upgrade"), zmierzony tam na **4,7 s** — do przyjecia co godzine.
+
+**Dziala tez przy `--rollback`**, i to nie jest symetria dla samej symetrii:
+cofniecie checkoutu przy pozostawionych NOWSZYCH skryptach to ta sama wada
+odbita, i grozniejsza, bo operatorowi wlasnie powiedziano, ze host wrocil na
+stary kod.
+
+**Kod wraca niezerowo, gdy instalacja padnie.** Rewizja sie przesunela, ale
+host — nie; raportowanie zera dla takiego stanu to dokladnie ten ksztalt
+fail-open, ktory ten projekt znajduje raz po raz. Konsekwencja:
+`--resume-updates` przy nieudanej instalacji **przywraca blokade**.
+
+**Dowody sa zapisywane, bo to `deploy.sh` chodzacy bezobslugowo jako root, a to
+narzedzie juz raz wyczyscilo crontab.** Crontab roota jest zdejmowany po obu
+stronach przebiegu; jesli sie zmienil, PRZED-obraz laduje w
+`$UPDATE_STATE_DIR/crontab.pre-<znacznik>` **zanim** poleci ostrzezenie — czyli
+material do odtworzenia istnieje, zanim ktokolwiek przeczyta log. Pelne wyjscie
+idzie do `last-apply.log`, nie do godzinnego logu, ktory rosl by o 133 linie na
+godzine.
+
+**Wyjscie awaryjne:** `$UPDATE_STATE_DIR/no-auto-apply`. Host sledzi wtedy
+repozytorium bez wdrazania — czyli dokladnie ten stan, ktory ta zmiana likwiduje,
+wiec nie jest domyslny.
+
+Logika jest zduplikowana (`update-control.sh` plus kopia awaryjna w `deploy.sh`,
+REV-20260730-001 F2), wiec zmiana weszla w oba miejsca. `test/selfupdate` ma na
+to piec przypadkow; wyciecie wywolania czerwieni cztery z nich, wyciecie samego
+wywolania w rollbacku — piaty.
+
+**11. Git 2.30.2 po HTTP/2 nie ciagnie z GitHuba, a komunikat klamie.**
+
+Znalezione tego samego dnia i grozniejsze od #10, bo zatrzymywalo doplyw kodu
+w ogole. `git fetch` na pve0 i pve1 konczyl sie `could not read Username for
+'https://github.com'` — co wyglada na brak poswiadczen i nim NIE jest.
+Repozytorium jest publiczne, `curl` na ten sam endpoint dostawal 200 i poprawna
+liste refow (widac w niej byl swiezy merge). Drugi komunikat, `expected flush
+after ref listing`, jest tym prawdziwym.
+
+Kontrola negatywna: `git -c http.version=HTTP/1.1 fetch` ciagnie
+(`7243054..1dbddbf`), a goly `git fetch` w nastepnym wywolaniu dalej pada.
+
+Obejscie: `git config http.version HTTP/1.1`, ustawione zakresowo na czterech
+klonach (root + konto delegowane, pve0 + pve1). **Objaw jest mylacy podwojnie**:
+`do_self_update` wraca wczesniej przy nieudanym fetchu, wiec w godzinnym logu
+nie ma sladu awarii w wierszu podsumowania — hosty stoja na starej rewizji, a log
+wyglada spokojnie.

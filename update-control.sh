@@ -132,6 +132,69 @@ emergency_disable() {
     return 1
 }
 
+# PULLING THE CODE IS NOT DEPLOYING IT.
+#
+# Measured on pve0 and pve1, 2026-09-02: both checkouts sat on the current main
+# and both hosts were still mailing alert-digest.sh v9 -- thirteen versions
+# behind. The hourly job fast-forwards $REPO_DIR and stops there, but four of
+# the scripts the host actually RUNS (alert-digest.sh, notify-fail.sh,
+# notify-warn.sh, check-pool-capacity.sh) are not files in the repo at all:
+# they are generated from heredocs by deploy.sh and installed into
+# /root/scripts. Nothing re-ran deploy.sh, so every change to them since v9 was
+# merged, reviewed, green in CI -- and running nowhere. deploy.sh --check-only
+# had been saying so on each host for weeks, to nobody.
+#
+# So a successful change of revision now applies itself. deploy.sh is
+# idempotent on an already-deployed host by design (its own audit mode tells
+# you to "re-run without --check-only to upgrade"), and measured at 4.7 s
+# there, which is affordable hourly.
+#
+# THIS RUNS ON ROLLBACK TOO, and that is not symmetry for its own sake: a
+# rollback that reset the checkout while leaving the NEWER generated scripts
+# installed is the same defect mirrored, and worse, because the operator
+# believes the host is back on the old code.
+#
+# EVIDENCE, because this is deploy.sh running unattended as root and this tool
+# has wiped a crontab before. The root crontab is captured either side of the
+# run; if it changed, the PRE-IMAGE is written to $UPDATE_STATE_DIR before the
+# warning is printed, so the recovery material exists before anyone reads the
+# log. The full output goes to $UPDATE_STATE_DIR/last-apply.log rather than
+# into the hourly log, which would otherwise grow by 133 lines an hour.
+#
+# OPT-OUT: create $UPDATE_STATE_DIR/no-auto-apply. The host then tracks the
+# repository without applying it -- which is exactly the state this function
+# exists to end, so the file's own content says so.
+apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not applied
+    local what="$1" rev="$2" rc cron_before cron_after stamp pre
+    if [ -e "$UPDATE_STATE_DIR/no-auto-apply" ]; then
+        log "$UPDATE_STATE_DIR/no-auto-apply present -- checkout is at $rev but the host was NOT re-deployed. Generated scripts (alert-digest.sh and friends) stay as they are."
+        return 0
+    fi
+    if [ ! -f "$REPO_DIR/deploy.sh" ]; then
+        warn "checkout is at $rev but $REPO_DIR/deploy.sh is missing -- the host is running whatever was installed before. Generated scripts are NOT updated."
+        return 1
+    fi
+    cron_before=$(crontab -l 2>/dev/null)
+    bash "$REPO_DIR/deploy.sh" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
+    rc=$?
+    cron_after=$(crontab -l 2>/dev/null)
+    if [ "$cron_before" != "$cron_after" ]; then
+        stamp=$(date '+%Y%m%d-%H%M%S')
+        pre="$UPDATE_STATE_DIR/crontab.pre-$stamp"
+        if printf '%s\n' "$cron_before" > "$pre" 2>/dev/null; then
+            warn "the root crontab CHANGED while applying $rev ($what). The pre-image is saved at $pre -- restore with: crontab $pre"
+        else
+            warn "the root crontab CHANGED while applying $rev ($what) AND the pre-image could not be saved to $pre -- compare against a backup by hand before trusting this host's schedule"
+        fi
+    fi
+    if [ "$rc" -ne 0 ]; then
+        warn "deploy.sh exited $rc while applying $rev ($what) -- the checkout moved but the host may still be running the previous generated scripts. Full output: $UPDATE_STATE_DIR/last-apply.log"
+        return 1
+    fi
+    log "applied $rev to the host (deploy.sh rc=0, output in $UPDATE_STATE_DIR/last-apply.log)"
+    return 0
+}
+
 do_self_update() {
     [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR"
     ensure_update_state_dir || { warn "refusing to update: $UPDATE_STATE_DIR is not safe to use as update-control state"; return 1; }
@@ -196,6 +259,11 @@ do_self_update() {
         return 1
     fi
     log "updated $(printf '%.8s' "$current") -> $(printf '%.8s' "$target") (rollback point recorded)"
+    # The revision moved; whether the HOST moved is a separate fact, and the
+    # return code now reports the second one. A checkout that advanced while
+    # the installed scripts did not is not an updated host, and reporting 0
+    # for it is the fail-open shape this project keeps finding.
+    apply_repo_to_host "update" "$(printf '%.8s' "$target")" || return 1
     return 0
 }
 
@@ -228,6 +296,12 @@ do_rollback() {
         "rolled back from $(printf '%.8s' "$from") to $(printf '%.8s' "$target") on $(date '+%Y-%m-%d %H:%M:%S')" \
         || warn "rollback succeeded but could not refresh the hold message at $UPDATE_HOLD_FILE (the hold from before the reset is still in place)"
 
+    # Re-generate at the OLD revision. Skipping this leaves the newer
+    # alert-digest.sh (and friends) installed under a rolled-back checkout --
+    # the same defect as an un-applied update, but more dangerous, because the
+    # operator has just been told the host is back on the old code.
+    apply_repo_to_host "rollback" "$(printf '%.8s' "$target")" \
+        || warn "the rollback of the CHECKOUT succeeded, but re-generating the installed scripts at that revision did not -- this host is a mixture. Investigate before relying on it."
     log "rolled back $(printf '%.8s' "$from") -> $(printf '%.8s' "$target")"
     log "AUTOMATIC UPDATES ARE NOW HELD -- without this the next hourly run would pull the same revision straight back."
     log "When the fix is on main:  $SELF --resume-updates"

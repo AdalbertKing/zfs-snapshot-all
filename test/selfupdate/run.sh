@@ -81,6 +81,36 @@ rm -rf "$_ip" 2>/dev/null
 [ "$CAN_CHMOD" -eq 1 ]     || echo "NOTE: this environment does not enforce real permission bits -- F1's group/world-writable case will SKIP" >&2
 [ "$CAN_IMMUTABLE" -eq 1 ] || echo "NOTE: this environment cannot make a directory immutable (chattr +i) -- F2's write-failure case will SKIP" >&2
 
+# EVERY SANDBOX REPO NOW SHIPS A STUB deploy.sh.
+#
+# Since 2026-09-02 a successful change of revision APPLIES itself: update-
+# control.sh runs $REPO_DIR/deploy.sh so the scripts generated from its
+# heredocs (alert-digest.sh and friends) follow the checkout. Without a
+# deploy.sh in the sandbox every scenario would exercise the "missing" branch
+# instead of the real one, and --resume-updates would restore its hold on an
+# apply that never had a chance to succeed.
+#
+# The delimiter is QUOTED. Unquoted, every $( ) below expands in THIS shell at
+# fixture-writing time, and the stub ships with the suite runner's own paths
+# baked in -- the same defect class test/alertmail guards for in deploy.sh.
+#
+# The marker path comes from the stub's OWN location rather than $REPO_DIR:
+# the deployed wrapper keeps REPO_DIR as a shell variable and never exports
+# it, so a stub keyed on the environment writes nowhere useful. It is written
+# OUTSIDE the checkout as well -- a file inside would leave the repo dirty and
+# the next self-update would refuse to fast-forward, which is a property of
+# the product worth not breaking by accident in a fixture.
+write_stub_deploy() {   # <dir>
+    cat > "$1/deploy.sh" <<'STUB'
+#!/bin/bash
+# stub deploy.sh -- records that the apply step ran
+_d=$(cd "$(dirname "$0")" && pwd)
+echo "applied $(git -C "$_d" rev-parse --short HEAD 2>/dev/null)" >> "${_d}-applied"
+exit ${STUB_DEPLOY_RC:-0}
+STUB
+    chmod +x "$1/deploy.sh"
+}
+
 # Builds a fresh throwaway bare origin + clone, isolated from the shared
 # CLONE/STATE narrative below, sitting at commit X with a real update (Y)
 # already pushed and waiting -- so a self-update is always available without
@@ -95,8 +125,8 @@ mk_scenario() {
     mkdir -p "$s"
     ( cd "$s" && git init -q && git config user.email t@t && git config user.name t \
         && git config core.autocrlf false \
-        && echo X > main_file && echo O > other_file \
-        && git add main_file other_file && git commit -qm X \
+        && echo X > main_file && echo O > other_file && write_stub_deploy "$s" \
+        && git add main_file other_file deploy.sh && git commit -qm X \
         && git branch -M main && git remote add origin "$o" && git push -q origin main ) >/dev/null 2>&1
     git -C "$o" symbolic-ref HEAD refs/heads/main
     git -c core.autocrlf=false clone -q -b main "$o" "$c" >/dev/null 2>&1
@@ -116,7 +146,7 @@ seed="$WORK/seed"; mkdir -p "$seed"
   cd "$seed"
   git init -q; git config user.email t@t; git config user.name t
   git config core.autocrlf false   # keeps a Windows dev box from printing CRLF warnings
-  echo A > file; git add file; git commit -qm A
+  echo A > file; write_stub_deploy "$seed"; git add file deploy.sh; git commit -qm A
   git branch -M main; git remote add origin "$ORIGIN"; git push -q origin main
 )
 # -b main, and the bare repo's HEAD moved to match: `git init --bare` defaults
@@ -488,9 +518,9 @@ else
 fi
 
 # --- 16. REV-20260730-001 F1: a deployed wrapper enforces an existing hold --
-# even though $CLONE has no deploy.sh at all in these fixtures (this suite
-# never creates one there) -- the exact independence the finding requires: the
-# enforcement point must not depend on what is checked out in $REPO_DIR.
+# even though the fixture's deploy.sh is only a stub -- the exact independence
+# the finding requires: the enforcement point must not depend on what is
+# checked out in $REPO_DIR.
 pair=$(mk_scenario f1wrap); F1WRAP_ORIGIN=${pair%%|*}; F1WRAP_CLONE=${pair#*|}
 S16="$WORK/state-f1wrap"
 deploy_wrapper "$F1WRAP_CLONE" "$S16"
@@ -602,6 +632,120 @@ else
     skip "F2 test debt: an atomic-rename-only failure is refused" \
         "this environment cannot make a file immutable (chattr +i not supported/available) -- verify on a Linux host with ext2/3/4"
 fi
+
+
+# --- 21. PULLING THE CODE IS NOT DEPLOYING IT ------------------------------
+#
+# Measured on pve0 and pve1, 2026-09-02: both checkouts sat on the current main
+# and both hosts were still mailing alert-digest.sh v9, thirteen versions back.
+# Four of the scripts a host RUNS are generated from deploy.sh heredocs and
+# installed into /root/scripts -- they are not files in the repo, so a
+# fast-forward cannot touch them, and nothing re-ran deploy.sh. deploy.sh
+# --check-only had been reporting it on each host for weeks, to nobody.
+#
+# A successful change of revision now applies itself. The fixture's stub
+# deploy.sh records each invocation next to the checkout.
+pair=$(mk_scenario apply); APPLY_ORIGIN=${pair%%|*}; APPLY_CLONE=${pair#*|}
+S21="$WORK/state-apply"; mkdir -p "$S21"; chmod 700 "$S21"
+rm -f "$APPLY_CLONE-applied"
+out="$(REPO_DIR="$APPLY_CLONE" UPDATE_STATE_DIR="$S21" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$APPLY_CLONE-applied" ]; then
+    ok "apply: a successful fast-forward re-runs deploy.sh so generated scripts follow the checkout"
+else
+    bad "apply: a successful fast-forward re-runs deploy.sh so generated scripts follow the checkout" \
+        "rc=$rc marker=$([ -s "$APPLY_CLONE-applied" ] && echo present || echo absent)" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+
+# --- 22. AN APPLY THAT FAILS IS NOT AN UPDATED HOST ------------------------
+#
+# The discriminating case. The checkout advances either way; the return code
+# has to report whether the HOST moved, because a host whose generated scripts
+# did not install is exactly the state this whole change exists to end.
+# Reporting 0 for it would be the fail-open shape this project keeps finding.
+pair=$(mk_scenario applyfail); AF_ORIGIN=${pair%%|*}; AF_CLONE=${pair#*|}
+S22="$WORK/state-applyfail"; mkdir -p "$S22"; chmod 700 "$S22"
+af_wanted="$(git -C "$AF_ORIGIN" rev-parse main)"
+out="$(REPO_DIR="$AF_CLONE" UPDATE_STATE_DIR="$S22" STUB_DEPLOY_RC=7 \
+       bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && [ "$(head_of "$AF_CLONE")" = "$af_wanted" ] \
+   && printf '%s' "$out" | grep -q 'may still be running the previous generated scripts'; then
+    ok "apply: deploy.sh failing makes --self-update fail, even though the checkout advanced"
+else
+    bad "apply: deploy.sh failing makes --self-update fail, even though the checkout advanced" \
+        "rc=$rc head=$(head_of "$AF_CLONE") wanted=$af_wanted" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+
+# --- 23. THE OPT-OUT IS HONOURED, AND SAYS WHAT IT COSTS -------------------
+#
+# A host may legitimately want to track the repository without applying it.
+# The negative control for case 21: without this file the same scenario runs
+# deploy.sh, so "no marker" here means the file was read, not that the apply
+# path is simply broken.
+pair=$(mk_scenario applyoff); AO_ORIGIN=${pair%%|*}; AO_CLONE=${pair#*|}
+S23="$WORK/state-applyoff"; mkdir -p "$S23"; chmod 700 "$S23"
+: > "$S23/no-auto-apply"
+rm -f "$AO_CLONE-applied"
+out="$(REPO_DIR="$AO_CLONE" UPDATE_STATE_DIR="$S23" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$AO_CLONE-applied" ] \
+   && printf '%s' "$out" | grep -q 'no-auto-apply'; then
+    ok "apply: no-auto-apply skips the deploy and still reports success"
+else
+    bad "apply: no-auto-apply skips the deploy and still reports success" \
+        "rc=$rc marker=$([ -e "$AO_CLONE-applied" ] && echo present || echo absent)" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+
+# --- 24. A ROLLBACK RE-GENERATES AT THE OLD REVISION -----------------------
+#
+# The mirrored half of the same defect, and the more dangerous one: a rollback
+# that reset the checkout while leaving the NEWER generated scripts installed
+# tells the operator the host is back on the old code when it is not.
+pair=$(mk_scenario applyback); AB_ORIGIN=${pair%%|*}; AB_CLONE=${pair#*|}
+S24="$WORK/state-applyback"; mkdir -p "$S24"; chmod 700 "$S24"
+REPO_DIR="$AB_CLONE" UPDATE_STATE_DIR="$S24" bash "$DEPLOY" --self-update >/dev/null 2>&1
+rm -f "$AB_CLONE-applied"
+out="$(REPO_DIR="$AB_CLONE" UPDATE_STATE_DIR="$S24" bash "$DEPLOY" --rollback 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$AB_CLONE-applied" ]; then
+    ok "apply: a rollback re-runs deploy.sh at the revision it rolled back TO"
+else
+    bad "apply: a rollback re-runs deploy.sh at the revision it rolled back TO" \
+        "rc=$rc marker=$([ -s "$AB_CLONE-applied" ] && echo present || echo absent)" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+
+# --- 25. A CRONTAB CHANGED BY THE APPLY LEAVES ITS PRE-IMAGE --------------
+#
+# This is deploy.sh running unattended as root, and this tool has wiped a
+# crontab before (2026-08, recorded in the deploy facade notes). The recovery
+# material has to exist BEFORE anyone reads the warning, so the pre-image is
+# written first and the warning names the restore command.
+pair=$(mk_scenario applycron); AC_ORIGIN=${pair%%|*}; AC_CLONE=${pair#*|}
+S25="$WORK/state-applycron"; mkdir -p "$S25"; chmod 700 "$S25"
+acbin="$WORK/bin-applycron"; mkdir -p "$acbin"
+# A crontab(1) whose output CHANGES between the two reads -- the situation the
+# pre-image exists for, without touching this machine's real crontab.
+cat > "$acbin/crontab" <<'CRONSTUB'
+#!/bin/sh
+n=$(cat /tmp/.zfsapplycron 2>/dev/null || echo 0)
+echo $((n + 1)) > /tmp/.zfsapplycron
+[ "$n" = "0" ] && { echo "0 5 * * * before-line"; exit 0; }
+echo "0 5 * * * after-line"
+CRONSTUB
+chmod +x "$acbin/crontab"; rm -f /tmp/.zfsapplycron
+out="$(PATH="$acbin:$PATH" REPO_DIR="$AC_CLONE" UPDATE_STATE_DIR="$S25" \
+       bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+_pre=$(ls "$S25"/crontab.pre-* 2>/dev/null | head -1)
+if [ -n "$_pre" ] && grep -q 'before-line' "$_pre" \
+   && printf '%s' "$out" | grep -q 'crontab CHANGED'; then
+    ok "apply: a crontab changed by the deploy leaves a restorable pre-image"
+else
+    bad "apply: a crontab changed by the deploy leaves a restorable pre-image" \
+        "pre=${_pre:-<brak>} out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+rm -f /tmp/.zfsapplycron
+
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"

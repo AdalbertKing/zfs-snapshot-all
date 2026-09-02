@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3dd7013d6c3f380d -->
+<!-- status-covers-digest: c5962ba5bed17a9d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -848,9 +848,14 @@
   **Okno bez digestu jest teraz głośne (2026-08-23).** Do tej pory był to cichy
   obowiązek ręczny: `gen-cron.sh --install` przepisuje blok, stara linia digestu
   z niego znika, a nowej nie ma nigdzie, dopóki ktoś nie odpali `deploy.sh`.
-  Wdrożenie to godzinny `git pull`, **nie** godzinny `deploy.sh`, więc to okno
-  jest realne i nieograniczone — host w nim kolejkuje znaleziska i nie wysyła nic,
+  **To okno zostało zamknięte 2026-09-02.** Przez cały czas opisany niżej
+  wdrożeniem był godzinny `git pull`, a **nie** godzinny `deploy.sh`, więc okno
+  było realne i nieograniczone — host kolejkował znaleziska i nie wysyłał nic,
   nie mówiąc o tym ani słowa. Dokładnie w tym stanie pve9 spędził miesiące.
+  Od 2026-09-02 udana zmiana rewizji **sama się wdraża**: `update-control.sh`
+  po fast-forwardzie uruchamia `deploy.sh`, więc skrypty generowane z jego
+  heredoców idą za checkoutem. Okno zamyka się w ciągu godziny, a nie „kiedy
+  ktoś sobie przypomni".
   `--install` **ostrzega** teraz wprost, gdy usuwa linię digestu ze starego bloku,
   i podaje lekarstwo (`./deploy.sh` na tym hoście). Ostrzeżenie, nie odmowa:
   linia odchodzi zgodnie z projektem, a blokowanie pierwszej instalacji na każdym
