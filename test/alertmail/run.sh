@@ -1066,6 +1066,52 @@ ZFSLAP
                 bad "digest: the separate scope section is gone -- the datasets are rows now" "$_dsr"
             fi
 
+            # A RUN THAT SKIPPED IS NOT A RUN THAT WORKED.
+            #
+            # snapsend.sh locks per DATASET, not per snapshot family, and the
+            # loser exits ZERO. For the same job overlapping itself that is
+            # right. For two DIFFERENT families it silently drops a snapshot
+            # while still reporting rc=0, so the run table counts it as a
+            # success.
+            #
+            # Measured on pve0, 2026-09-01 22:00: the daily and monthly jobs
+            # fire in the same minute on hdd/lxc, the daily one lost the lock on
+            # TWO datasets, and the only trace was a stats line nobody reads.
+            # It surfaced 33 hours later as 57 queued "getting stale" warnings.
+            #
+            # The pair matters: a block that never appears would pass the first
+            # assertion for the wrong reason.
+            _stats="$hb_dir/stats.log"
+            printf '{"time":"%sT20:00:02Z","script":"snapsend.sh","dataset":"hdd/lxc/subvol-105-disk-0","status":"skipped_lock","duration_s":0}\n' "$_yd" > "$_stats"
+            printf '{"time":"%sT20:00:03Z","script":"snapsend.sh","dataset":"hdd/lxc/other","status":"success","duration_s":2}\n' "$_yd" >> "$_stats"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+            ZFS_STATS_LOGS="$_stats" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _skp=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_skp" | grep -q 'POMINIETE PRZEZ BLOKADE' \
+               && printf '%s' "$_skp" | grep -q 'hdd/lxc/subvol-105-disk-0' \
+               && ! printf '%s' "$_skp" | grep -q 'hdd/lxc/other'; then
+                ok "digest: a run skipped on the lock is named, and only that run"
+            else
+                bad "digest: a run skipped on the lock is named, and only that run" \
+                    "$(printf '%s' "$_skp" | grep -A3 'POMINIETE' || echo '<bloku nie ma>')"
+            fi
+
+            # ...and it stays out of the way when nothing was skipped.
+            printf '{"time":"%sT20:00:03Z","script":"snapsend.sh","dataset":"hdd/lxc/other","status":"success","duration_s":2}\n' "$_yd" > "$_stats"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+            ZFS_STATS_LOGS="$_stats" bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            if ! grep -q 'POMINIETE PRZEZ BLOKADE' "$hb_dir/bin/mail.out" 2>/dev/null; then
+                ok "digest: no skipped run, no block about skipped runs"
+            else
+                bad "digest: no skipped run, no block about skipped runs" \
+                    "$(grep -A3 'POMINIETE' "$hb_dir/bin/mail.out")"
+            fi
+
+
             # A TIER IS NOT ITS WHOLE SCOPE.
             #
             # Rendered on pve1, 2026-09-02: five snapshot jobs over rpool/data,
