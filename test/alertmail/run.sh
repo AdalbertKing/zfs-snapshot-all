@@ -302,6 +302,23 @@ fi
 # past the heartbeat day and the branch never executed at all.
 # ---------------------------------------------------------------------------
 hb_body=$(sed -n '/^    cat > "\$DIGEST_SCRIPT" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC" | sed '1d;$d')
+
+# NO UNESCAPED BACKTICK MAY SURVIVE IN THAT BODY.
+#
+# The heredoc is UNQUOTED, so a backtick runs a command at install time --
+# inside a comment as readily as anywhere else, because substitution happens
+# before anything is a comment. Caught by this suite on 2026-09-02 when a
+# comment mentioning 'compress' made deploy.sh try to RUN compress; two more
+# had already shipped in v10, where a sentence about 'Doba:' had been quietly
+# executing 'Doba:' on every install since.
+#
+# Harmless words this time. The rule is not about the words.
+_bt=$(printf '%s\n' "$hb_body" | grep -nE '^[[:space:]]*#' | sed 's/[\\][`$]//g' | grep -nE '[`$]' | head -3)
+if [ -z "$_bt" ]; then
+    ok "digest heredoc: no COMMENT expands (an unquoted heredoc runs backticks and $ in them too)"
+else
+    bad "digest heredoc: no COMMENT expands (an unquoted heredoc runs backticks and $ in them too)" "$_bt"
+fi
 if [ -z "$hb_body" ]; then
     bad "the alert-digest heredoc can be extracted from deploy.sh" \
         "sed anchors no longer match -- update this suite"
@@ -465,7 +482,7 @@ CTSTUB
             PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
                 bash "$hb_dir/digest.sh" >/dev/null 2>&1
             _live=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
-            if printf '%s' "$_live" | grep -q 'OSTATNI PADL rc=8' \
+            if printf '%s' "$_live" | grep -q 'PADL rc=8' \
                && printf '%s' "$_live" | grep -q 'STAN: UWAGA'; then
                 ok "digest: a scheduled job whose last run failed DOES make the state bad"
             else
@@ -561,11 +578,11 @@ CTPLUS
             # is a PARTIAL day and an hourly job's count is yesterday's 24
             # plus this morning's few. Printing the first and last run
             # actually counted makes that arithmetic self-evident.
-            if printf '%s' "$_plus" | grep -qE 'PRZEBIEGI ZADAN, [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
-               && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN ('; then
-                ok "digest: the run table names the window it measured, not two bare dates"
+            if printf '%s' "$_plus" | grep -qE 'przebiegi liczone [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
+               && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN'; then
+                ok "digest: the measured window is stated once, under the verdict"
             else
-                bad "digest: the run table names the window it measured, not two bare dates" "$_plus"
+                bad "digest: the measured window is stated once, under the verdict" "$_plus"
             fi
 
             # THE WINDOW IS SEVEN DAYS BY DEFAULT AND SETTABLE.
@@ -621,6 +638,37 @@ CTPLUS
                 fi
             else
                 bad "digest: a gzipped rotated log is read" "gzip unavailable in this environment"
+            fi
+
+            # A SCHEDULED JOB WITH NO RUN IN THE WINDOW IS STILL LISTED.
+            #
+            # Both halves of the old mail were built from the LOG, so a job
+            # that is in cron but has not run inside the window appeared in
+            # neither -- absent from a report that claims to state the current
+            # state, and absence is the one thing an operator cannot notice.
+            # Measured on pve0 2026-09-02: 26 jobs in cron, 24 with a run in a
+            # 7-day window; the two missing were annual backups, which cannot
+            # appear in a week.
+            #
+            # It is listed and NOT judged: a yearly job absent from seven days
+            # is correct, and the digest does not know each job's cadence.
+            cat > "$hb_dir/bin/crontab" <<'CTIDLE'
+#!/bin/sh
+echo '0 4 1 1 * echo "$(date -Is) ZFS-JOB BEGIN h annual backup (z)" >>/var/log/x; /opt/s.sh "hdd/d/z"'
+CTIDLE
+            chmod +x "$hb_dir/bin/crontab"
+            : > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _idle=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_idle" | grep -q 'annual backup (z)' \
+               && printf '%s' "$_idle" | grep -q 'brak przebiegu w oknie' \
+               && printf '%s' "$_idle" | grep -q 'STAN: OK'; then
+                ok "digest: a scheduled job with no run in the window is listed, and not judged"
+            else
+                bad "digest: a scheduled job with no run in the window is listed, and not judged" "$_idle"
             fi
         fi
     fi

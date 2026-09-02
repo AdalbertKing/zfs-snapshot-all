@@ -4804,7 +4804,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v15"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v16"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -4991,12 +4991,13 @@ TOTAL=\$(wc -l < "\$PROCESSING")
 # It does NOT make a quiet host start mailing: this runs only when a mail is
 # already going out. One mail per host per day stays the rule.
 STATE_BODY=""
+POOL_BODY=""
 STATE_BAD=""
 _ZP=\$(zpool list -H -o name,health,capacity 2>/dev/null)
 if [ -n "\$_ZP" ]; then
     while read -r _sn _sh _sc; do
         [ -n "\$_sn" ] || continue
-        STATE_BODY="\$STATE_BODY\$(printf '  pula %-12s %-9s zajete %s' "\$_sn" "\$_sh" "\$_sc")
+        POOL_BODY="\$POOL_BODY\$(printf '  pula %-12s %-9s zajete %s' "\$_sn" "\$_sh" "\$_sc")
 "
         [ "\$_sh" = "ONLINE" ] || STATE_BAD="\$STATE_BAD pula:\$_sn=\$_sh"
     done <<< "\$_ZP"
@@ -5033,9 +5034,9 @@ if [ -z "\$CRON_LOGS" ]; then
         #
         # Selected by MTIME rather than by reading them: a rotated file last
         # written before the window starts cannot hold a run inside it, and
-        # deciding that costs no decompression. `compress` + `delaycompress`
+        # deciding that costs no decompression. \`compress\` + \`delaycompress\`
         # means .1 is plain and .2+ are .gz, which is why the reader below is
-        # `zcat -f` -- it takes both.
+        # \`zcat -f\` -- it takes both.
         _i=1
         while [ "\$_i" -le 26 ]; do
             _hit=0
@@ -5083,8 +5084,12 @@ if [ -n "\$CRON_LOGS" ]; then
             if (d > mx[lbl]) mx[lbl] = d
             delete bt[lbl]
         }
-        lastwhen[lbl] = day " " substr(\$1,12,5)
-        lastrc[lbl] = rc
+        # THE NEWEST run, compared -- not the last line read. The logs are fed
+        # live-file-first and rotated-after, so "last seen" is the END OF THE
+        # OLDER FILE. Rendered on pve0 that reported every job as last run on
+        # 08-31 while they had all run this morning.
+        t = day " " substr(\$1,12,5)
+        if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc }
     }
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k] }
     ' | sort)
@@ -5147,7 +5152,7 @@ for _u in root \$(ls /home 2>/dev/null); do
         # (/home/..., /root/...) and from patterns like automated_hourly_, which
         # carry no slash at all. A DATASET PATH ALSO HAS NO SPACES, which is what
         # keeps the inline format's own echo text out: on pve0 the notify label is
-        # literally 'hdd/lxc', so `... ZFS-JOB BEGIN pve0 daily backup (hdd/lxc)`
+        # literally 'hdd/lxc', so \`... ZFS-JOB BEGIN pve0 daily backup (hdd/lxc)\`
         # passed every other filter and was listed as a dataset.
         # Quoted tokens are the even fields once the line
         # is split on the quote character; no nested-quote parsing needed.
@@ -5159,61 +5164,70 @@ for _u in root \$(ls /home 2>/dev/null); do
 done
 nl='
 '
-RUNS_BODY=""
+# ONE TABLE, not two. The state block and the run table listed the SAME jobs --
+# two views of one set -- so a job appeared twice and the mail carried its
+# datasets twice with it. Owner, 2026-09-02: put the run figures on the state
+# row and say once, underneath, over what period they were measured.
+#
+# AND THE UNION, not just what ran. Both blocks were built from the LOG, so a
+# job that is scheduled but has not run inside the window was in neither --
+# invisible in a mail that claims to report the current state. Measured on pve0
+# the same day: 26 jobs in cron, 24 with a run in a 7-day window, and the two
+# missing were \`annual backup (hdd/lxc)\` and \`annual backup (subvol-105-disk-0)\`.
+# An annual job cannot appear in a week, and silence is exactly what an operator
+# cannot notice. Such a job is listed and NOT judged: the digest does not know
+# each job's cadence, so it reports the fact and leaves the reading to a human.
+SEEN_LABELS=""
 if [ -n "\$RUN_ROWS" ]; then
     while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc; do
         [ -n "\$_k" ] || continue
-        # The label's parenthetical joins several datasets' notify words with
-        # '+', which gen-cron does when it merges them onto one cron line
-        # (IFS=+ at gen-cron.sh:3263). Owner asked for commas. Done HERE and
-        # not there on purpose: changing the join rewrites the label in every
-        # generated cron line, so every host's crontab differs at the next
-        # regeneration and the anti-deletion guard sees the old lines as gone.
-        # A display change costs nothing and reads the same.
+        SEEN_LABELS="\$SEEN_LABELS
+\$_k"
+        # The parenthetical joins several datasets' notify words with '+',
+        # which gen-cron does when it merges them onto one cron line (IFS=+ at
+        # gen-cron.sh:3263). Owner asked for commas -- rendered here and not
+        # changed there, because changing the join rewrites the label in every
+        # generated cron line and every host's crontab differs at the next
+        # regeneration.
         _disp=\$(printf '%s' "\${_k#profile__*__}" | tr '+' ',')
-        # The datasets this job actually names, from its cron line. Needed in
-        # BOTH blocks: the parenthetical is a summary of notify words, and a
-        # notify word like 'vm-101' does not say hdd/data/vm-101-disk-0 -- the
-        # owner asked exactly that, reading a real mail.
         _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$2; exit}')
         _dsb=""
-        if [ -n "\$_dsl" ]; then
-            _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
-        fi
+        [ -n "\$_dsl" ] && _dsb=\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
         case "\$nl\$LIVE_LABELS\$nl" in *"\$nl\$_k\$nl"*) _live=1 ;; *) _live=0 ;; esac
         if [ "\$_live" -eq 0 ]; then
-            STATE_BODY="\$STATE_BODY\$(printf '  %-46s (juz nie w cronie, ostatni %s)' "\$_disp" "\$_lw")
-"
+            _st="juz nie w cronie"
         elif [ "\$_lrc" = "0" ]; then
-            STATE_BODY="\$STATE_BODY\$(printf '  %-46s ostatni OK   %s' "\$_disp" "\$_lw")
-"
+            _st="OK  \$_lw"
         else
-            STATE_BODY="\$STATE_BODY\$(printf '  %-46s OSTATNI PADL rc=%s  %s' "\$_disp" "\$_lrc" "\$_lw")
-"
+            _st="PADL rc=\$_lrc  \$_lw"
             STATE_BAD="\$STATE_BAD zadanie:\$_disp"
         fi
+        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s %5s %5s %6ss %7ss' "\$_disp" "\$_st" "\$_n" "\$_f" "\$_avg" "\$_mx")
+"
         [ -n "\$_dsb" ] && STATE_BODY="\$STATE_BODY\$_dsb
 "
-        RUNS_BODY="\$RUNS_BODY\$(printf '  %-46s %5s %6s %6ss %7ss' "\$_disp" "\$_n" "\$_f" "\$_avg" "\$_mx")
-"
-        # WHAT it moved, under the row. The job label carries only the notify
-        # word -- 'daily backup (BIM server)' names a machine, not a dataset --
-        # so the row alone cannot answer "which dataset was that". The cron line
-        # can, and does. Owner asked for it on 2026-09-02 after reading a real
-        # table and being unable to tell.
-        # NOT repeated here. Both blocks list the same jobs, so printing the
-        # datasets twice added ~50 duplicated lines to a 149-line mail on pve0
-        # -- measured. They live in the state block above, which is the one
-        # that answers "what is this host and what does it cover"; this table
-        # answers "how did it run", and the job name is enough to join them.
     done <<< "\$RUN_ROWS"
 fi
 
+# Scheduled, but nothing in the window. Listed so it cannot go unnoticed; no
+# verdict attached, because a yearly job absent from a week is correct.
+if [ -n "\$LIVE_LABELS" ]; then
+    while IFS= read -r _lk; do
+        [ -n "\$_lk" ] || continue
+        case "\$nl\$SEEN_LABELS\$nl" in *"\$nl\$_lk\$nl"*) continue ;; esac
+        _disp=\$(printf '%s' "\${_lk#profile__*__}" | tr '+' ',')
+        _dsl=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_lk" '\$1==k {print \$2; exit}')
+        STATE_BODY="\$STATE_BODY\$(printf '  %-44s %-22s' "\$_disp" "brak przebiegu w oknie")
+"
+        [ -n "\$_dsl" ] && STATE_BODY="\$STATE_BODY\$(printf '%s' "\$_dsl" | tr ',' '\n' | sed 's/^/        /')
+"
+    done <<< "\$LIVE_LABELS"
+fi
 if [ -n "\$STATE_BAD" ]; then VERDICT="UWAGA"; else VERDICT="OK"; fi
 
 if {
-    # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. `Doba:
-    # $TODAY` was the send date, and since this runs at 07:00 over a queue
+    # THE PERIOD THE EVENTS COVER, not the moment this mail is sent. \`Doba:
+    # \$TODAY\` was the send date, and since this runs at 07:00 over a queue
     # filled the day before, it stamped yesterday's events with today's date.
     # A reader cannot tell a live problem from a repaired one that way.
     # Measured 2026-09-02 on pve1.kancelaria.net: a pool repaired at 17:45
@@ -5233,6 +5247,11 @@ if {
     # BLOCK 1 -- NOW. Measured at send time, so a fault repaired since the
     # events below cannot present itself as current.
     printf '\nSTAN BIEZACY -- sprawdzony w tej chwili\n\n'
+    # Pools first and outside the table: they are a different kind of fact and
+    # do not share its columns. The first cut let them fall under the header,
+    # which read as though ONLINE were a job.
+    [ -n "\$POOL_BODY" ] && printf '%s\n' "\$POOL_BODY"
+    [ -n "\$STATE_BODY" ] && printf '  %-44s %-22s %5s %5s %6s %7s\n' 'zadanie' 'ostatni przebieg' 'razem' 'bledy' 'sredni' 'najdl.'
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
     else
@@ -5242,6 +5261,12 @@ if {
         printf '\n  >>> UWAGA:%s\n' "\$STATE_BAD"
     else
         printf '\n  >>> WSZYSTKO SPRAWNE W TEJ CHWILI\n'
+    fi
+    # Said once, here, instead of heading a table of its own: the figures on
+    # each row are counted over this span, and the span is measured from the
+    # runs actually seen rather than named.
+    if [ -n "\$RUN_WINDOW" ]; then
+        printf '  (przebiegi liczone %s, okno %s dni)\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
     fi
 
     # BLOCK 2 -- what HAPPENED. History, and labelled as such.
@@ -5256,17 +5281,6 @@ if {
     fi
     if [ "\$N_WARN" -gt 0 ]; then
         printf '\nWARNING -- starzeje sie, jeszcze nie critical:\n\n%s' "\$WARN_BODY"
-    fi
-    # BLOCK 3 -- HOW THE JOBS RAN. Durations and outcomes only: the volume
-    # moved is deliberately absent, because mbuffer counts bytes but is muted
-    # from cron by design (announce_transfer_size and MBUFFER_QUIET both gate
-    # on a tty) so that cron.log does not become a rate meter. Surfacing it is
-    # a separate change to the data path, and the engines are frozen.
-    if [ -n "\$RUNS_BODY" ]; then
-        printf '\n---------------------------------------------------------------------\n'
-        printf 'PRZEBIEGI ZADAN, %s\n\n' "\${RUN_WINDOW:-\$_D1 - \$_D2}"
-        printf '  %-46s %5s %6s %7s %8s\n' 'zadanie' 'razem' 'bledy' 'sredni' 'najdluzszy'
-        printf '%s' "\$RUNS_BODY"
     fi
     printf '\nPelne logi: %s na %s\n' "\${CRON_LOGS# }" "\$HOST"
 } | mail -s "[ZFS] \$HOST \$TODAY STAN: \$VERDICT -- \$N_ALERT alert / \$N_WARN warn" "\${ZFS_ALERT_EMAIL:-${NOTIFY_EMAIL}}"; then
