@@ -4857,7 +4857,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v24"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v25"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5443,6 +5443,7 @@ ds_times() {   # <label> <target-dataset> -> "n<TAB>total<TAB>max" or ""
 }
 
 SEEN_LABELS=""
+HAS_DS_ROWS=0
 if [ -n "\$RUN_ROWS" ]; then
     while IFS=\$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot; do
         [ -n "\$_k" ] || continue
@@ -5514,6 +5515,7 @@ if [ -n "\$RUN_ROWS" ]; then
         # job's.
         if [ "\${_nsrc:-0}" -ge 2 ]; then
             _dsum=0
+            HAS_DS_ROWS=1
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
                 IFS="\$_oldifs"
@@ -5637,8 +5639,16 @@ if {
         if [ -n "\$RUN_WINDOW" ]; then
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
             printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu).  Transfer = przyrost / czas lacz.\n'
+            # ONLY WHEN THERE IS SOMETHING TO EXPLAIN.
+            #
+            # Rendered on pve1: every job there has a single dataset, so the
+            # table has no indented rows at all -- and the mail still carried
+            # two lines explaining them. Explaining what is not on the page is
+            # the same noise as a column of dashes.
+            if [ "\${HAS_DS_ROWS:-0}" = "1" ]; then
             printf '  Wiersze wciete = datasety zadania. Ich czasy to SAM TRANSFER; reszta przebiegu\n'
             printf '  (snapshot, prune, polaczenie) ma wlasny wiersz, wiec kolumna czas lacz. sie sumuje.\n\n'
+            fi
         fi
         printf '  %-38s %-17s %10s %6s %8s %8s %10s %8s %8s\n' 'zadanie' 'ostatni przebieg' 'przebiegow' 'bledow' 'przyrost' 'transfer' 'czas lacz.' 'czas sr.' 'czas max'
     fi

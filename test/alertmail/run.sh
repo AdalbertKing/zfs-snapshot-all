@@ -977,6 +977,29 @@ CTFAM
                     "$(printf '%s' "$_fam" | grep -E 'snap [(]d[)]')"
             fi
 
+            # THE CAPTION APPEARS ONLY WHEN IT HAS SOMETHING TO EXPLAIN.
+            #
+            # The fixture above is a host whose every job has ONE dataset, so
+            # the table has no indented rows -- exactly pve1, where the mail
+            # still carried two lines explaining rows that were not on the page.
+            # Explaining what is not there is the same noise as a column of
+            # dashes.
+            if ! printf '%s' "$_fam" | grep -q 'Wiersze wciete'; then
+                ok "digest: the indented-rows caption is absent when nothing is indented"
+            else
+                bad "digest: the indented-rows caption is absent when nothing is indented" \
+                    "$(printf '%s' "$_fam" | grep -n 'Wiersze wciete')"
+            fi
+
+            # ...and the negative control: the multi-dataset render DOES carry
+            # it. Without this pair, deleting the caption outright would pass.
+            if printf '%s' "$_dsr" | grep -q 'Wiersze wciete'; then
+                ok "digest: the caption IS present when the table has indented rows"
+            else
+                bad "digest: the caption IS present when the table has indented rows" "$_dsr"
+            fi
+
+
 
             rm -f "$hb_dir/bin/zfs"
         fi
