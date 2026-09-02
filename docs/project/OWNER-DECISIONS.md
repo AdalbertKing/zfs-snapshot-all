@@ -465,3 +465,29 @@ niz to, co zapisuje; bajty na laczu to inny pomiar i wymagalyby silnikow.
 
 Cel zdalny (`user@host:pool/ds`) jest raportowany jako `?`, nie mierzony po
 zlej stronie.
+
+**8. Uklad tabeli wg wlasciciela: czas, przyrost, transfer, sredni, najdluzszy.**
+
+Wlasciciel: *"To jest nieczytelne... Powinno byc w naglowkach: czas; przyrost;
+transfer (policzony) czas sredni; czas najdluzszy"*.
+
+**Transfer jest POLICZONY**, nie zmierzony: przyrost podzielony przez laczny
+czas przebiegow w oknie. Bajtow na laczu nadal nie znamy (patrz decyzja 7), ale
+to daje realna przepustowosc zadania -- np. `archive backup` 42G przy 27M/s.
+
+**Datasety wyprowadzone POZA tabele**, do sekcji „Co obejmuja". Wplatane miedzy
+wiersze rozrywaly tabele -- to bylo glowne zrodlo nieczytelnosci, nie same
+naglowki. Etykieta dluzsza niz kolumna jest przycinana z wielokropkiem; pelna
+lista i tak jest w sekcji ponizej.
+
+**Trzy wady liczenia, wszystkie znalezione renderowaniem na pve0:**
+- zadanie snapshot-only o PIECIU datasetach pokazywalo `0B`, bo sumowalem tylko
+  ostatni traktujac go jak cel. Bez celu wszystkie sa miejscem ladowania -- 122M;
+- `archive backup` pokazal przez chwile 531G, bo wykrywanie celu sie zepsulo i
+  sumowal zrodla razem z celem; poprawnie 42G;
+- sekcja „Co obejmuja" drukowala gole apostrofy zamiast nazw zadan.
+
+Wszystkie trzy z jednej przyczyny: `\'` wewnatrz heredoca. **Apostrof w heredocu
+NIE wymaga escapowania**, wiec backslash zostaje doslownie i psuje polecenie.
+Napisane trzy razy w jednej rundzie, wiec `test/alertmail` ma teraz na to
+straznika obok straznika komentarzy.

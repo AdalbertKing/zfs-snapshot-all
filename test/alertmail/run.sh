@@ -319,6 +319,21 @@ if [ -z "$_bt" ]; then
 else
     bad "digest heredoc: no COMMENT expands (an unquoted heredoc runs backticks and $ in them too)" "$_bt"
 fi
+
+# NOR MAY A SINGLE QUOTE BE BACKSLASH-ESCAPED IN THAT BODY.
+#
+# An unquoted heredoc does not process it, so the backslash survives into the
+# generated script and breaks whatever command it lands in. Written three times
+# in one sitting on 2026-09-02: the scope section printed bare quotes instead of
+# job names, and a target lookup silently returned nothing, so every volume was
+# summed over the wrong datasets. Inside a heredoc a single quote needs no
+# escaping at all, so any occurrence of one is a mistake.
+_sq=$(printf '%s\n' "$hb_body" | grep -n -F "\\'" | head -3)
+if [ -z "$_sq" ]; then
+    ok "digest heredoc: no single quote is backslash-escaped"
+else
+    bad "digest heredoc: no single quote is backslash-escaped" "$_sq"
+fi
 if [ -z "$hb_body" ]; then
     bad "the alert-digest heredoc can be extracted from deploy.sh" \
         "sed anchors no longer match -- update this suite"
@@ -581,7 +596,7 @@ CTPLUS
             if printf '%s' "$_plus" | grep -qE 'Liczby przebiegow z okresu [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' \
                && ! printf '%s' "$_plus" | grep -q 'PRZEBIEGI ZADAN' \
                && [ "$(printf '%s' "$_plus" | grep -n 'Liczby przebiegow' | cut -d: -f1)" \
-                  -lt "$(printf '%s' "$_plus" | grep -n 'ostatni przebieg' | cut -d: -f1)" ]; then
+                  -lt "$(printf '%s' "$_plus" | grep -n 'czas (ostatni)' | cut -d: -f1)" ]; then
                 ok "digest: the measured window is stated ABOVE the columns it describes"
             else
                 bad "digest: the measured window is stated ABOVE the columns it describes" "$_plus"
