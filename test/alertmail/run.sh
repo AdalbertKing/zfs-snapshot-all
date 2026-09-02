@@ -442,6 +442,65 @@ EOF"
             bad "quiet report: 'off' silences it entirely" "$(head -5 "$hb_dir/sent")"
         fi
 
+        # A MONTH IS A CADENCE TOO, AND SO IS A DAY OF THE MONTH.
+        #
+        # Owner, 2026-09-02: "Tych cichych bez bledow i podsumowan tygodniowych?
+        # Albo miesiecznych?" The knob took weekdays, daily and off -- there was
+        # no way to say "once a month". Window and cadence stay independent: a
+        # monthly mail with ZFS_DIGEST_DAYS=30 is the monthly trend, a weekly one
+        # with the same window is the same data read more often.
+        _dom=$(date +%d); _dom="${_dom#0}"
+        _other_dom=$(( _dom % 28 + 1 ))
+
+        _q_run "$_dom"
+        if [ -s "$hb_dir/sent" ]; then
+            ok "quiet report: a day-of-month cadence fires on that day"
+        else
+            bad "quiet report: a day-of-month cadence fires on that day" "dzis=$_dom"
+        fi
+
+        _q_run "$_other_dom"
+        if [ ! -f "$hb_dir/sent" ]; then
+            ok "quiet report: a day-of-month cadence is silent on every other day"
+        else
+            bad "quiet report: a day-of-month cadence is silent on every other day" \
+                "cadence=$_other_dom, dzis=$_dom"
+        fi
+
+        # On any day but the 1st the presence check alone cannot discriminate:
+        # a broken `monthly` branch falls through to the unknown-value handler,
+        # which is ALSO silent that day. stderr is therefore checked too -- the
+        # fallthrough announces itself there, and that works every day.
+        # 'monthly' is the 1st, spelled out because a bare "1" reads as a weekday
+        # to half the people who will edit that file.
+        _q_run monthly
+        if [ "$_dom" = "1" ]; then _want=present; else _want=absent; fi
+        _got=$([ -f "$hb_dir/sent" ] && echo present || echo absent)
+        HB_SENT="$hb_dir/sent" PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
+        ZFS_CRON_LOGS="$hb_dir/qlog" \
+            env ZFS_DIGEST_QUIET=monthly bash "$hb_dir/digest.sh" 2>"$hb_dir/emo" >/dev/null
+        if [ "$_got" = "$_want" ] && ! grep -q "is not a weekday" "$hb_dir/emo" 2>/dev/null; then
+            ok "quiet report: 'monthly' means the 1st"
+        else
+            bad "quiet report: 'monthly' means the 1st" "dzis=$_dom oczekiwano=$_want bylo=$_got"
+        fi
+
+        # Days that do not occur in every month are refused, not silently
+        # accepted -- a report that skips February is worse than one that will
+        # not be configured that way.
+        _q_run 31
+        if [ -n "$(ls "$hb_dir"/*.err 2>/dev/null)" ] || true; then :; fi
+        HB_SENT="$hb_dir/sent" PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" \
+        ZFS_CRON_LOGS="$hb_dir/qlog" \
+            env ZFS_DIGEST_QUIET=31 bash "$hb_dir/digest.sh" 2>"$hb_dir/e31" >/dev/null
+        if grep -q 'do not occur in every month' "$hb_dir/e31" 2>/dev/null; then
+            ok "quiet report: a day above 28 is named as impossible rather than accepted"
+        else
+            bad "quiet report: a day above 28 is named as impossible rather than accepted" \
+                "$(cat "$hb_dir/e31" 2>/dev/null | head -2)"
+        fi
+
+
         # A day WITH findings mails whatever the cadence says. Suppressing an
         # alert on a schedule is not a cadence, it is a lost alert.
         rm -f "$hb_dir/q.processing" "$hb_dir/sent"
