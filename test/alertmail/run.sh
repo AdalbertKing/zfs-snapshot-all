@@ -1251,6 +1251,49 @@ CTSHARE
                     "$(printf '%s' "$_shr" | grep -E '(aa|bb) job')"
             fi
 
+            # A PRUNE IS NOT A CLAIMANT.
+            #
+            # The ambiguity guard refuses per-dataset times when two jobs could
+            # have written the same dataset. It counted PRUNE jobs too, and a
+            # prune over the receive root claims every dataset under it: on pve2
+            # "gfs prune (backups)" covers hdd/backups, so every dataset row on
+            # that host lost its times to a guard with nothing to guard against.
+            # A prune lands no bytes and cannot be the author of a transfer.
+            cat > "$hb_dir/bin/crontab" <<'CTPRUNE'
+#!/bin/sh
+echo '0 1 * * * echo "$(date -Is) ZFS-JOB BEGIN h pp send (a)" >>/var/log/x; /opt/snapsend.sh -m "automated_daily_" "hdd/d/a" "tgt/pool"'
+echo '0 5 * * * /opt/zfs-job.sh "h pp prune (all)" -- /opt/delsnaps.sh "tgt/pool" "automated_daily" -D7'
+CTPRUNE
+            chmod +x "$hb_dir/bin/crontab"
+            cat > "$hb_dir/bin/zfs" <<'ZFSPRUNE'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tgt/pool/hdd/d/a@automated_daily_1	2097152	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSPRUNE
+            chmod +x "$hb_dir/bin/zfs"
+            {   printf '%sT01:00:00+00:00 ZFS-JOB BEGIN h pp send (a)\n' "$_yd"
+                printf '%s 01:00:01 - EXECUTING TRANSFER:\n' "$_yd"
+                printf '%s 01:00:01 - RECV CMD: zfs recv -F -s -u tgt/pool/hdd/d/a\n' "$_yd"
+                printf '%s 01:00:07 - Transfer completed successfully\n' "$_yd"
+                printf '%sT01:00:20+00:00 ZFS-JOB END h pp send (a) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _prn=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            if printf '%s' "$_prn" | grep -qE '^ {6}hdd/d/a .* 6s +6s +6s *$'; then
+                ok "digest: a prune over the receive root does not suppress a dataset's times"
+            else
+                bad "digest: a prune over the receive root does not suppress a dataset's times" \
+                    "$(printf '%s' "$_prn" | grep -E 'pp send|hdd/d/a')"
+            fi
+
 
             # AND A RATE NEEDS SOMETHING TO HAVE MOVED. A local snapshot job
             # carries nothing across a link and its duration is the second the
@@ -1264,18 +1307,21 @@ CTSHARE
                     "$(printf '%s' "$_fam" | grep -E 'snap [(]d[)]')"
             fi
 
-            # THE CAPTION APPEARS ONLY WHEN IT HAS SOMETHING TO EXPLAIN.
+            # THE CAPTION TRACKS THE ROWS, whichever way that falls.
             #
-            # The fixture above is a host whose every job has ONE dataset, so
-            # the table has no indented rows -- exactly pve1, where the mail
-            # still carried two lines explaining rows that were not on the page.
-            # Explaining what is not there is the same noise as a column of
-            # dashes.
-            if ! printf '%s' "$_fam" | grep -q 'Wiersze wciete'; then
-                ok "digest: the indented-rows caption is absent when nothing is indented"
+            # It used to be pinned as a pair -- present here, absent there --
+            # and the "absent" half stopped being reachable when the owner chose
+            # to expand EVERY job rather than only multi-dataset ones. A test
+            # that pins an unreachable state is a test that fails for being
+            # right, so what is pinned now is the invariant surviving both
+            # rules: the caption is there exactly when an indented row is.
+            _ind=$(printf '%s\n' "$_fam" | grep -c '^      ' || true)
+            _cap=$(printf '%s\n' "$_fam" | grep -c 'Wiersze wciete' || true)
+            if { [ "$_ind" -gt 0 ] && [ "$_cap" -gt 0 ]; } || { [ "$_ind" -eq 0 ] && [ "$_cap" -eq 0 ]; }; then
+                ok "digest: the indented-rows caption is present exactly when rows are indented"
             else
-                bad "digest: the indented-rows caption is absent when nothing is indented" \
-                    "$(printf '%s' "$_fam" | grep -n 'Wiersze wciete')"
+                bad "digest: the indented-rows caption is present exactly when rows are indented" \
+                    "wierszy wcietych=$_ind podpisow=$_cap"
             fi
 
             # ...and the table still stands off from the prose above it. The

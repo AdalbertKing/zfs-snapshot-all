@@ -4898,7 +4898,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v34"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v35"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5440,8 +5440,23 @@ for _u in root \$(ls /home 2>/dev/null); do
         [ -n "\$_pfx" ] || _pfx=\$(printf '%s' "\$_line" | grep -oE '\-m +[A-Za-z0-9_.:-]+' | head -1 | sed 's/^-m *//')
         _tgt=""
         [ "\${_dsn:-0}" -ge 2 ] && _tgt=\${_ds##*,}
+        # WHERE THIS JOB ACTUALLY LANDS ITS DATA, computed once here so that the
+        # volume and the ambiguity guard below agree by construction instead of
+        # each deriving it their own way. snapsend.sh writes <target>/<source>
+        # per source (snapsend.sh:2570); -t makes the base itself the target.
+        _kid=""
+        if [ -n "\$_tgt" ] && [ "\$_texact" = "1" ]; then
+            _kid="\$_tgt"
+        elif [ -n "\$_tgt" ]; then
+            _srcs2="\${_ds%,*}"
+            _oi2="\$IFS"; IFS=','
+            for _s2 in \$_srcs2; do IFS="\$_oi2"; [ -n "\$_s2" ] && _kid="\${_kid:+\$_kid,}\$_tgt/\$_s2"; done
+            IFS="\$_oi2"
+        else
+            _kid="\$_ds"
+        fi
         [ -n "\$_ds" ] && JOB_DATASETS="\$JOB_DATASETS
-\$_lab	\$_ds	\$_tgt	\$_pfx	\$_texact"
+\$_lab	\$_ds	\$_tgt	\$_pfx	\$_texact	\$_kid"
         # Which jobs actually put data somewhere. delsnaps prunes and
         # check-snap-age only looks; neither adds a byte, so neither gets a
         # volume -- crediting a prune with what grew under its scope reported
@@ -5614,10 +5629,20 @@ ds_times() {   # <target-dataset> <claimants> -> "n<TAB>total<TAB>max<TAB>last" 
 # How many scheduled jobs land data in this dataset. One is the ordinary case;
 # more means the transfer lines cannot be attributed and the row says so by
 # staying blank.
+#
+# Counted against each job's OWN CHILDREN, not its target root. Four jobs
+# Counted against each job's OWN CHILDREN, not its target root, and only among
+# jobs that actually WRITE. Counting by root called four jobs sharing
+# hdd/backups/pve2 mutually ambiguous; counting prunes as claimants was worse --
 ds_claimants() {   # <target-dataset> -> count
-    printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v c="\$1" '
-        \$3 == "" { next }
-        c == \$3 || index(c, \$3 "/") == 1 { seen[\$1] = 1 }
+    printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v c="\$1" -v send="\$SEND_LABELS" '
+        BEGIN { n = split(send, s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") issend[s[i]] = 1 }
+        \$6 == "" || !(\$1 in issend) { next }
+        {
+            m = split(\$6, kid, ",")
+            for (i = 1; i <= m; i++)
+                if (kid[i] != "" && (c == kid[i] || index(c, kid[i] "/") == 1)) { seen[\$1] = 1; break }
+        }
         END { k = 0; for (x in seen) k++; print k }
     '
 }
@@ -5691,7 +5716,6 @@ if [ -n "\$RUN_ROWS" ]; then
             STATE_BAD="\$STATE_BAD zadanie:\$_full"
         fi
         _pf=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$4; exit}')
-        _tex=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$5; exit}')
         # THE JOB OWNS ITS OWN CHILDREN, NOT THE WHOLE TARGET.
         #
         # job_volume used to sum over the target ROOT with only the family as a
@@ -5706,14 +5730,7 @@ if [ -n "\$RUN_ROWS" ]; then
         # the only scope it owns. Summing those is the same measurement the
         # indented rows already make per dataset, so the row and its components
         # now describe the same thing by construction.
-        _kids=""
-        if [ "\${_tex:-0}" = "1" ] && [ -n "\$_tg" ]; then
-            _kids="\$_tg"
-        elif [ -n "\$_tg" ]; then
-            _oi="\$IFS"; IFS=','
-            for _k2 in \$_srcs; do IFS="\$_oi"; [ -n "\$_k2" ] && _kids="\${_kids:+\$_kids,}\$_tg/\$_k2"; done
-            IFS="\$_oi"
-        fi
+        _kids=\$(printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v k="\$_k" '\$1==k {print \$6; exit}')
         [ -n "\$_kids" ] || _kids="\$_dsl"
         _vb=\$(job_volume "\$_kids" "\$_k" "" "\$_pf")
         _u=\$(unit_of "\$_vb")
@@ -5734,7 +5751,20 @@ if [ -n "\$RUN_ROWS" ]; then
         # PREVIOUS job's rows -- bookmarks prune rendered with archive backup's
         # datasets under it.
         _DSBLOCK=""
-        if [ "\${_nsrc:-0}" -ge 2 ]; then
+        # EVERY job lists its datasets, not only the multi-dataset ones.
+        #
+        # The old threshold was two, on the premise that a one-dataset job is
+        # identified by its parenthetical. That premise holds on pve0, where the
+        # parentheticals ARE dataset names, and fails on pve2, where they are
+        # human labels: "daily backup (BIM server)" never named
+        # rpool/data/vm-106-disk-0 anywhere in the mail. Measured -- pve2 has
+        # four such jobs and none of their labels name the dataset; pve0 has six
+        # and all of them do.
+        #
+        # Owner chose the predictable rule over the clever one: always expand,
+        # no substring guessing about whether a label already says it. The cost
+        # is about 33 mostly-redundant lines on pve0 and was accepted knowingly.
+        if [ "\${_nsrc:-0}" -ge 1 ]; then
             HAS_DS_ROWS=1
             _oldifs="\$IFS"; IFS=','
             for _s in \$_srcs; do
