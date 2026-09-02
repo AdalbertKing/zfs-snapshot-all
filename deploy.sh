@@ -4898,7 +4898,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v31"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v32"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5208,6 +5208,62 @@ fi
 # timezone offset in the stamp cancels between the two ends of a pair, so a
 # duration is right regardless of it; only a job spanning midnight needs the
 # wrap, which is what the +86400 is for.
+# A RUN THAT SKIPPED IS NOT A RUN THAT WORKED.
+#
+# snapsend.sh locks per DATASET, not per snapshot family, and the loser exits
+# ZERO after logging "Another instance targeting the same datasets is already
+# running -- skipping this run". For the same job overlapping itself that is
+# right: skipping beats two concurrent sends. For two DIFFERENT families it
+# silently drops a snapshot, and the job still reports rc=0, so the table above
+# counts it as a successful run.
+#
+# Measured on pve0, 2026-09-01 22:00: the daily and monthly jobs fire in the
+# same minute on hdd/lxc, the daily one lost the lock on TWO datasets, and the
+# only trace was a stats line nobody reads. It surfaced 33 hours later as 57
+# queued "getting stale" warnings, which is a bad way to learn about it.
+#
+# The window filter compares the DATE PART of an ISO-8601 UTC stamp against a
+# local date. Up to a couple of hours of skew at the boundary, accepted: this
+# block exists to say THAT a run was skipped, not to be the authority on which
+# second it happened.
+# ZFS_STATS_LOGS overrides the search, exactly as ZFS_CRON_LOGS does for the
+# run logs -- a test that cannot point this at a fixture can only assert that
+# nothing was found, which proves nothing about the code that finds it.
+STATS_LOGS="\${ZFS_STATS_LOGS:-}"
+if [ -z "\$STATS_LOGS" ]; then
+    for _sl in /root/scripts/zfs-snapshot-stats.log /home/*/zfs-snapshot-stats.log; do
+        [ -r "\$_sl" ] || continue
+        STATS_LOGS="\$STATS_LOGS \$_sl"
+        _i=1
+        while [ "\$_i" -le 26 ]; do
+            _hit=0
+            for _rot in "\$_sl.\$_i" "\$_sl.\$_i.gz"; do
+                [ -r "\$_rot" ] || continue
+                _hit=1
+                if [ -n "\$(find "\$_rot" -newermt "\$_DSTART" 2>/dev/null)" ]; then
+                    STATS_LOGS="\$STATS_LOGS \$_rot"
+                else
+                    _hit=2
+                fi
+            done
+            [ "\$_hit" = "1" ] || break
+            _i=\$((_i + 1))
+        done
+    done
+fi
+
+SKIP_ROWS=""
+if [ -n "\$STATS_LOGS" ]; then
+    SKIP_ROWS=\$(zcat -f \$STATS_LOGS 2>/dev/null | grep -F '"status":"skipped_lock"' | awk -v since="\$_DSTART" '
+        {
+            t = ""; d = ""
+            if (match(\$0, /"time":"[^"]+"/))     t = substr(\$0, RSTART + 8,  RLENGTH - 9)
+            if (match(\$0, /"dataset":"[^"]*"/))  d = substr(\$0, RSTART + 11, RLENGTH - 12)
+            if (t == "" || substr(t, 1, 10) < since) next
+            print t "\t" d
+        }' | sort -u)
+fi
+
 RUN_ROWS=""
 if [ -n "\$CRON_LOGS" ]; then
     RUN_ROWS=\$(zcat -f \$CRON_LOGS 2>/dev/null | awk -v dstart="\$_DSTART" '
@@ -5796,6 +5852,21 @@ if {
     fi
     if [ -n "\$STATE_BODY" ]; then
         printf '%s' "\$STATE_BODY"
+        # NAMED WHERE IT HAPPENED, and only when it happened. A skipped run
+        # reads as a successful one in the table above -- rc=0, no error -- so
+        # the block says outright what the row cannot.
+        if [ -n "\$SKIP_ROWS" ]; then
+            printf '\n  POMINIETE PRZEZ BLOKADE -- inne zadanie trzymalo ten sam dataset:\n'
+            printf '%s\n' "\$SKIP_ROWS" | while IFS=\$'\t' read -r _st _sd; do
+                [ -n "\$_st" ] || continue
+                # The stats file stamps UTC; everything else in this mail is
+                # local, and two clocks in one report is how an operator ends
+                # up comparing the wrong things.
+                _sloc=\$(date -d "\$_st" '+%Y-%m-%d %H:%M' 2>/dev/null || printf '%s' "\$_st")
+                printf '      %-17s %s\n' "\$_sloc" "\$_sd"
+            done
+            printf '  Taki przebieg konczy sie rc=0 i w tabeli wyzej wyglada jak udany.\n'
+        fi
     else
         printf '  (brak puli ZFS i zadnego cron.log -- nie ma czego zmierzyc)\n'
     fi
