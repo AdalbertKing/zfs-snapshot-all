@@ -4857,7 +4857,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v26"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v27"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5182,49 +5182,46 @@ if [ -n "\$CRON_LOGS" ]; then
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0 }
     ' | sort)
 
-    # PER-DATASET FIGURES, FROM THE SAME LOGS.
+    # PER-DATASET FIGURES, KEYED ON THE DATASET AND NOTHING ELSE.
     #
-    # Owner, 2026-09-02: a job over several datasets should summarise on its
-    # own row and then list each dataset underneath with that dataset's own
-    # numbers. The obvious objection is that the job markers carry one
-    # BEGIN/END for the whole job, so a per-dataset duration looks like it
-    # cannot exist -- but the engines log each transfer separately:
+    # The engines log each transfer separately, and RECV CMD names the TARGET
+    # dataset -- the side "written" is measured on, so both halves key on the
+    # same name:
     #
     #   03:00:45 - SEND CMD: zfs send -c -I rpool/data/vm-106-disk-1@...
     #   03:00:45 - RECV CMD: zfs recv -F -s -u hdd/backups/pve1/rpool/data/vm-106-disk-1
     #   03:00:54 - Transfer completed successfully
     #
-    # Nine seconds for that disk, and RECV CMD names the TARGET dataset --
-    # which is the side 'written' measures, so the two halves key on the same
-    # name without translating anything.
+    # THE FIRST CUT BRACKETED THESE BETWEEN ZFS-JOB BEGIN AND END, AND THAT WAS
+    # WRONG. Two jobs owned by the same account write to the SAME cron.log, and
+    # they overlap: measured on pve0, 2026-09-02, the account log contains two
+    # consecutive BEGIN lines with no END between them (daily backup (vm-101)
+    # opening while daily backup (vm-103...) is still running). The engine lines
+    # carry no job identity at all, so whichever BEGIN was seen last claimed
+    # them. Consequence in a delivered mail: archive backup reported 17
+    # transfers per dataset instead of 27, three of the missing ones were
+    # credited to hourly backup -- a job that never writes to that target -- and
+    # the "pozostale" remainder was inflated from 48s to 14m42s to make the
+    # column still close. A resettable per-file guard changed nothing, because
+    # the interleaving is INSIDE one file.
     #
-    # Only send jobs have these blocks: measured on pve0, 139 job runs and 18
-    # transfers, because snapshot and prune jobs transfer nothing. Their
-    # dataset rows therefore carry a volume and no time, which is the honest
-    # shape -- splitting a job duration evenly across its datasets would look
-    # like a measurement and be an invention.
+    # The dataset name is the only identity these lines actually carry, so it is
+    # the only thing attribution may rest on. Ordering stops mattering, and so
+    # does which log the job wrote to. Where two jobs share a target the caller
+    # refuses the figures rather than guessing -- see the ambiguity guard below.
     #
-    # secs() reads its whole line, not one field: the job markers are one ISO field
-    # (2026-09-01T03:00:01+02:00 ...) while the engine lines put the clock in
-    # a second field (2026-09-01 03:00:45 - ...). Both put the same digits at
-    # the same offsets of the LINE, so one accessor serves both.
+    # secs() reads the whole line, not a field: the job markers are one ISO
+    # field while the engine lines put the clock in a second field, and both put
+    # the same digits at the same offsets of the LINE.
     DS_ROWS=\$(zcat -f \$CRON_LOGS 2>/dev/null | awk -v dstart="\$_DSTART" '
     function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
     substr(\$0,1,10) < dstart { next }
-    /ZFS-JOB BEGIN/ {
-        lbl = ""
-        for (i = 5; i <= NF; i++) { if (\$i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") \$i }
-        cur = lbl; t0 = 0; ds = ""; next
-    }
-    /ZFS-JOB END/ { cur = ""; t0 = 0; ds = ""; next }
-    cur == "" { next }
     /EXECUTING TRANSFER:/ { t0 = secs(\$0); ds = ""; next }
     /RECV CMD:/ { ds = \$NF; next }
     /Transfer completed successfully/ {
         if (t0 > 0 && ds != "") {
             d = secs(\$0) - t0; if (d < 0) d += 86400
-            k = cur "\t" ds
-            n[k]++; tot[k] += d; if (d > mx[k]) mx[k] = d
+            n[ds]++; tot[ds] += d; if (d > mx[ds]) mx[ds] = d
         }
         t0 = 0; ds = ""
     }
@@ -5435,11 +5432,28 @@ ds_volume() {   # <dataset> <family|""> -> bytes written over the window
     '
 }
 
-# The per-dataset time figures for one (job, target dataset) pair, or nothing
-# at all when the job never transferred that dataset -- the normal case for
-# snapshot and prune jobs.
-ds_times() {   # <label> <target-dataset> -> "n<TAB>total<TAB>max" or ""
-    printf '%s\n' "\$DS_ROWS" | awk -F'\t' -v k="\$1" -v d="\$2" '\$1 == k && \$2 == d { printf "%s\t%s\t%s", \$3, \$4, \$5; exit }'
+# The per-dataset time figures for one target dataset, or nothing.
+#
+# AMBIGUITY IS REFUSED, NOT GUESSED. The transfer lines name a dataset and no
+# job, so if two jobs write to the same target there is no honest way to say
+# which one moved those bytes -- and a plausible wrong attribution is worse
+# than a blank, because it survives being looked at. The caller therefore
+# passes the number of jobs claiming this dataset, and anything above one gets
+# no figures.
+ds_times() {   # <target-dataset> <claimants> -> "n<TAB>total<TAB>max" or ""
+    [ "\${2:-1}" = "1" ] || return 0
+    printf '%s\n' "\$DS_ROWS" | awk -F'\t' -v d="\$1" '\$1 == d { printf "%s\t%s\t%s", \$2, \$3, \$4; exit }'
+}
+
+# How many scheduled jobs land data in this dataset. One is the ordinary case;
+# more means the transfer lines cannot be attributed and the row says so by
+# staying blank.
+ds_claimants() {   # <target-dataset> -> count
+    printf '%s\n' "\$JOB_DATASETS" | awk -F'\t' -v c="\$1" '
+        \$3 == "" { next }
+        c == \$3 || index(c, \$3 "/") == 1 { seen[\$1] = 1 }
+        END { k = 0; for (x in seen) k++; print k }
+    '
 }
 
 SEEN_LABELS=""
@@ -5534,7 +5548,7 @@ if [ -n "\$RUN_ROWS" ]; then
                 # dataset. A snapshot or prune job has none, and dividing the
                 # job's duration between its datasets would look measured and
                 # be invented.
-                _dt=\$(ds_times "\$_k" "\$_child")
+                _dt=\$(ds_times "\$_child" "\$(ds_claimants "\$_child")")
                 if [ -n "\$_dt" ]; then
                     _dn=\$(printf '%s' "\$_dt" | cut -f1)
                     _dtot=\$(printf '%s' "\$_dt" | cut -f2)

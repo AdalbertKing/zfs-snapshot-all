@@ -908,6 +908,63 @@ CTDS
                     "$(printf '%s' "$_dsr" | grep -E 'hdd/d/[ab]')"
             fi
 
+            # TWO JOBS IN ONE LOG, OVERLAPPING. THE DISCRIMINATING CASE.
+            #
+            # Measured on pve0, 2026-09-02: jobs owned by the same account write
+            # to the SAME cron.log and overlap, so that log holds two consecutive
+            # ZFS-JOB BEGIN lines with no END between them. The engine's transfer
+            # lines carry no job identity, so the first cut -- which bracketed
+            # them between BEGIN and END -- credited them to whichever BEGIN it
+            # had seen last. In a delivered mail that read as 17 transfers per
+            # dataset instead of 27, three of the missing ones attributed to a
+            # job that never writes to that target, and a "pozostale" remainder
+            # inflated from 48s to 14m42s so the column would still close.
+            #
+            # Here the interloper's BEGIN sits BETWEEN the real job's BEGIN and
+            # its transfer. Bracketing gives the transfer to the interloper;
+            # keying on the dataset gives it to the job that owns the target.
+            cat > "$hb_dir/bin/crontab" <<'CTLAP'
+#!/bin/sh
+echo '0 * * * * echo "$(date -Is) ZFS-JOB BEGIN h lap send (a)" >>/var/log/x; /opt/snapsend.sh "hdd/d/a,hdd/d/b" "tgt/pool"'
+echo '1 * * * * echo "$(date -Is) ZFS-JOB BEGIN h lap other (z)" >>/var/log/x; /opt/snapsend.sh "hdd/d/z" "other/pool"'
+CTLAP
+            chmod +x "$hb_dir/bin/crontab"
+            cat > "$hb_dir/bin/zfs" <<'ZFSLAP'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*)
+    printf 'tgt/pool/hdd/d/a@s	4194304	9999999999
+'
+    printf 'tgt/pool/hdd/d/b@s	1048576	9999999999
+'
+    ;;
+esac
+exit 0
+ZFSLAP
+            chmod +x "$hb_dir/bin/zfs"
+            {   printf '%sT10:00:00+00:00 ZFS-JOB BEGIN h lap send (a)\n' "$_yd"
+                printf '%sT10:00:01+00:00 ZFS-JOB BEGIN h lap other (z)\n' "$_yd"
+                printf '%s 10:00:02 - EXECUTING TRANSFER:\n' "$_yd"
+                printf '%s 10:00:02 - RECV CMD: zfs recv -F -s -u tgt/pool/hdd/d/a\n' "$_yd"
+                printf '%s 10:00:07 - Transfer completed successfully\n' "$_yd"
+                printf '%sT10:00:08+00:00 ZFS-JOB END h lap other (z) rc=0\n' "$_yd"
+                printf '%sT10:00:30+00:00 ZFS-JOB END h lap send (a) rc=0\n' "$_yd"
+            } > "$_fakelog"
+            rm -f "$hb_dir/q" "$hb_dir/bin/mail.out"
+            printf '%s\tWARN\tcos\tszczegol\n' "$(date +%s)" > "$hb_dir/q"
+            PATH="$hb_dir/bin:$PATH" ZFS_ALERT_QUEUE="$hb_dir/q" ZFS_CRON_LOGS="$_fakelog" \
+                bash "$hb_dir/digest.sh" >/dev/null 2>&1
+            _lap=$(cat "$hb_dir/bin/mail.out" 2>/dev/null)
+            # 5 s of transfer, on the job that owns tgt/pool -- not on the one
+            # whose BEGIN happens to be the most recent.
+            if printf '%s' "$_lap" | grep -qE '^ {6}hdd/d/a .* 4M .* 5s +5s +5s *$'; then
+                ok "digest: an overlapping job's BEGIN does not steal another job's transfer"
+            else
+                bad "digest: an overlapping job's BEGIN does not steal another job's transfer" \
+                    "$(printf '%s' "$_lap" | grep -E 'lap (send|other)')"
+            fi
+
+
             # The separate scope section is gone: its datasets are now rows of
             # the table itself, which is what made it redundant.
             if ! printf '%s' "$_dsr" | grep -q 'Co obejmuja'; then
