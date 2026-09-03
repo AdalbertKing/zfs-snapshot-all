@@ -40,10 +40,11 @@ REC
 addclient_decision() {   # <host> <target> <user> -> rc + first log line
     local t; t=$(mktemp)
     { echo 'set -u'
-      # The block reads the record through record_get (lib-backup-common.sh,
-      # since 2026-09-03), so the harness sources the lib the program sources;
-      # its own log/die below still override the lib's.
-      printf '. %q\n' "$REPO/lib-backup-common.sh"
+      # The block reads the record through record_get, so the harness loads
+      # the libraries lifted product code may call -- from the tree under test
+      # ($REPO), through test/harness.sh, which is the one place that list
+      # lives. Its own log/die below still override anything a lib defines.
+      printf '. %q; product_libs %q\n' "$DIR/../harness.sh" "$REPO"
       echo 'log() { echo "LOG: $*"; }'
       echo 'die() { echo "DIE: $*"; exit 1; }'
       printf 'cpath=%q\n' "$WORK/clients/rel.conf"
