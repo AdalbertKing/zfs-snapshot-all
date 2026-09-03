@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f1e2d129310076a8 -->
+<!-- status-covers-digest: 32db728469d4b69d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -59,10 +59,15 @@
      osobnej podpowłoce i przechodziła przy żywej wadzie — podpowłoka na
      wywołanie testuje powłokę, nie kod. Teraz oba wołania dzielą proces.
 
-  `test/zfsbackup` 378 -> 386 asercji, w tym kontrola ujemna do każdego
+  `test/zfsbackup` 378 -> 388 asercji, w tym kontrola ujemna do każdego
   twierdzenia. Profile w testach to **pliki wysyłkowe**, nie atrapy: `d7h24` i
   `d30h24` niosą te same rodziny na różną długość (asymetria dozwolona),
   `d30` niesie samo `automated_daily` (asymetria odmawiana).
+
+  Literówka i niezgodna rodzina padają w `add-client`, **przed parowaniem i
+  wymianą kluczy** — ta sama granica co `--profile`, i odmowa nazywa flagę.
+  Bez tego operator, który pomylił jedną z dwóch nazw profili w jednej linii,
+  dowiadywałby się o tym przy pierwszym `activate-client` na żywym hoście.
 
   Nie dowiedzione na żywo: `zfsbackup-live-pair` i `rux-live-chain` wymagają
   dwóch hostów z rootem i ZFS-em. Obowiązki zostają otwarte.

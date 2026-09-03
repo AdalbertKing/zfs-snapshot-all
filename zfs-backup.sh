@@ -1621,6 +1621,11 @@ source_profile_prepare() {   # <target-profile-name>
     # PROFILE_ACTIVE plus load_active_profile, which validates before it
     # renders. A second renderer would be a second definition of what a valid
     # profile is.
+    # Validated by NAME first, only so the refusal can say which flag was wrong.
+    # load_active_profile below dies with a bare "profile 'x': ..." -- true, and
+    # useless to an operator who just passed two profile names on one line.
+    profile_validate_file "$(profile_file "$SRC_PROFILE_NAME")" "$GENCRON" \
+        || die "--source-profile='$SRC_PROFILE_NAME': $PROFILE_ERR"
     local keep_active="$PROFILE_ACTIVE"
     PROFILE_ACTIVE="$SRC_PROFILE_NAME"; PROFILE_LOADED=""
     load_active_profile
@@ -6744,6 +6749,23 @@ cmd_add_client() {
     [ -n "$profile" ] || profile="$PROFILE_DEFAULT_NAME"
     profile_validate_file "$(profile_file "$profile")" "$GENCRON" \
         || die "add-client: --profile='$profile': $PROFILE_ERR"
+    # The SOURCE preset earns the SAME treatment, and for the reason written
+    # directly above: a typo must fail here, not at the first activate-client on
+    # a live host, and least of all after a pairing and a key exchange it did not
+    # need to survive. Running the real source_profile_prepare rather than a file
+    # check also settles the FAMILY question now -- a source preset pruning a
+    # family this relationship never creates is the mistake most likely to follow
+    # a typo, and the one that fails open later if it gets through.
+    if [ -n "$SRC_PROFILE_NAME" ]; then
+        local _keep_pa="$PROFILE_ACTIVE"
+        PROFILE_ACTIVE="$profile"; PROFILE_LOADED=""
+        load_active_profile
+        source_profile_prepare "$profile"
+        # Nothing is RENDERED here -- add-client only records the name -- so the
+        # staged copies go back immediately. activate-client stages its own.
+        source_profile_release_tmp
+        PROFILE_ACTIVE="$_keep_pa"; PROFILE_LOADED=""
+    fi
     [ -n "$lan" ] || die "add-client requires --host=HOST[:PORT] (the address used for the initial seed)"
     # The ordinary product path is backup. Dataset discovery belongs to the
     # source-side guided --join, so the collector no longer has to spell out

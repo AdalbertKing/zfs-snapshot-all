@@ -8336,6 +8336,35 @@ else
     bad "add-client without --source-profile writes no SOURCE_PROFILE line at all" "$(cat "$SP/clients/spc2.conf" 2>&1)"
 fi
 
+# 9. A TYPO DIES AT ENROLMENT, before any pairing or key exchange -- the same
+#    boundary --profile rides, and for the reason written above it: an
+#    operator who mistypes one of two profile names on one line should not
+#    find out at the first activate-client on a live host.
+#    The refusal must NAME THE FLAG. load_active_profile's own message says
+#    "profile 'x': ..." which is true and useless when two were passed.
+out=$( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
+       PROFILE_ROOT="$SP/root" \
+       cmd_add_client "sptypo" --lan=10.0.0.3 --datasets="tank/x" --profile=d30h24 --source-profile=nosuchprofile 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "source-profile='nosuchprofile'" \
+   && [ ! -f "$SP/clients/sptypo.conf" ]; then
+    ok "add-client: a typo'd --source-profile is refused by name and leaves no record"
+else
+    bad "add-client: a typo'd --source-profile is refused by name and leaves no record" "rc=$rc" "$out"
+fi
+
+# 10. ...and so does a FAMILY mismatch. This is the mistake most likely to
+#     follow a typo -- a real profile, wrong ladder -- and the one that fails
+#     OPEN if it survives to the source's nightly prune.
+out=$( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
+       PROFILE_ROOT="$SP/root" \
+       cmd_add_client "spfam" --lan=10.0.0.4 --datasets="tank/x" --profile=d30h24 --source-profile=d30 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
+   && [ ! -f "$SP/clients/spfam.conf" ]; then
+    ok "add-client: a source profile of a different FAMILY is refused at enrolment"
+else
+    bad "add-client: a source profile of a different FAMILY is refused at enrolment" "rc=$rc" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
