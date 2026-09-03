@@ -4055,6 +4055,36 @@ local_user_name_valid() {   # <name> -> 0 valid (incl. 'root'), 1 not
 }
 LOCAL_USER_GRAMMAR="lowercase letters, digits, _ and -, not starting with a digit"
 
+# ONE PARSE-TIME CHECK PER SHARED FLAG, 2026-09-03. The grammar above was one
+# function, but the REFUSAL around it was still six copies -- setup-server,
+# local-backup, add-client, set-bandwidth, migrate-profile,
+# audit-source-retention -- identical but for the command name and a trailing
+# "Nothing was created." two of them carried, three at parse time and three a
+# hundred lines later; rux had none at all, so a typo'd account reached
+# deploy.sh --backup-user before anything named the flag. --profile had the
+# same shape, worse: local-backup refused anything but a plain identifier --
+# so `--profile=firma.conf` and a path, both accepted by profile_file and
+# documented there ("a profile is a file and you may name it"), were refused
+# by that one command -- while the other three let profile_validate_file
+# explain an empty or blank name its own way. One grammar now, and it is the
+# resolver's: a file name or a path, non-empty, no blanks or control
+# characters, not shaped like a flag. Whether it exists and validates is still
+# decided where the profile is loaded.
+#
+# Each helper is called INLINE in the case arm, right after the assignment,
+# and dies in the caller's shell -- deliberately not `x=$(flag_...)`: a suite
+# that sources this file has no fatal-die armed, and a refusal inside a `$( )`
+# there would become an empty value and a command that carries on. <cmd> is
+# the command's name, so every refusal keeps naming the command that was
+# typed, exactly as the copies did. At parse time nothing has been created
+# yet, so the sentence is true for every caller.
+flag_local_user() {   # <cmd> <value> -- refuses a value outside LOCAL_USER_GRAMMAR (empty included; 'root' is legal)
+    local_user_name_valid "$2" || die "$1: --local-user='$2' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
+}
+flag_profile() {   # <cmd> <value> -- refuses an empty, blank-carrying or flag-shaped name; existence is checked where the profile is loaded
+    case "$2" in ""|*[[:space:][:cntrl:]]*|-*) die "$1: --profile='$2' is not a valid profile name (a profile file name or path, without blanks). Nothing was created." ;; esac
+}
+
 # The receive-side delegation set. Mirrors deploy.sh's ZFS_PERMS (what --pair
 # grants on a backup-mode target root) -- kept in step by test/zfsbackup's
 # parity pin, not by sourcing deploy.sh (no source edge, see deps.conf).
@@ -5028,7 +5058,7 @@ cmd_setup_server() {
         case "$a" in
             --target=*)     target="${a#*=}" ;;
             --config=*)     config="${a#*=}" ;;
-            --local-user=*) local_user="${a#*=}" ;;
+            --local-user=*) local_user="${a#*=}"; flag_local_user setup-server "$local_user" ;;
             *) die "setup-server: unknown option $a" ;;
         esac
     done
@@ -5039,9 +5069,6 @@ cmd_setup_server() {
     # it writes nothing to server.conf. root names no account to create.
     local delegate="$local_user"
     [ "$delegate" = root ] && delegate=""
-    if [ -n "$delegate" ]; then
-        local_user_name_valid "$delegate"             || die "setup-server: --local-user='$delegate' is not a valid account name ($LOCAL_USER_GRAMMAR)"
-    fi
 
     if [ -n "$delegate" ]; then
         bash "$DEPLOY" --backup-user="$delegate" || die "deploy.sh bootstrap failed -- fix that before continuing"
@@ -6063,7 +6090,7 @@ cmd_local_backup() {
         case "$a" in
             --source=*)  source_flags+=("${a#*=}") ;;
             --target=*)  target="${a#*=}"; target_given=1 ;;
-            --profile=*) profile="${a#*=}" ;;
+            --profile=*) profile="${a#*=}"; flag_profile local-backup "$profile" ;;
             --source-profile=*) SRC_PROFILE_NAME="${a#*=}" ;;
             --config=*)  config="${a#*=}" ;;
             --plan)      do_install=0 ;;   # explicit form of the default
@@ -6080,7 +6107,7 @@ cmd_local_backup() {
             # pve9 2026-08-20: `setup-server --local-user=zfsbackup` created the
             # account and the block still landed in root's crontab, because
             # nothing here ever set LOCAL_USER.
-            --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
+            --local-user=*) local_user="${a#*=}"; flag_local_user local-backup "$local_user"; local_user_given=1 ;;
             *) die "local-backup: unknown option $a" ;;
         esac
     done
@@ -6102,7 +6129,6 @@ cmd_local_backup() {
     # account-aware helper below reads cron_target_user. Setting it here is what
     # makes the whole existing path point at the account instead of at root.
     if [ "$local_user_given" -eq 1 ]; then
-        local_user_name_valid "$local_user"             || die "local-backup: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
         # Two variables on purpose. $local_user is blanked for root because the
         # account-creation and zfs-allow logic below keys on "is there an
         # account to delegate to", and root is not one. The RESOLVER needs the
@@ -6249,8 +6275,6 @@ cmd_local_backup() {
         case "$target" in *[!A-Za-z0-9_./:-]*|/*|*/) die "local-backup: --target='$target' is not a plain dataset name" ;; esac
         case "$target" in *:*) die "local-backup is LOCAL only -- --target='$target' names a remote host (contains ':'). Use add-client/activate-client for a remote pull." ;; esac
     fi
-    case "$profile" in ""|*[!A-Za-z0-9_-]*) die "local-backup: --profile='$profile' is not a valid profile name" ;; esac
-
     # Every root: plain name, LOCAL, and it must EXIST (REV-097 F1). One missing
     # or invalid root refuses the WHOLE request -- no partial candidate for the
     # valid members.
@@ -6824,10 +6848,10 @@ cmd_add_client() {
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
-            --profile=*)   profile="${a#*=}" ;;
+            --profile=*)   profile="${a#*=}"; flag_profile add-client "$profile" ;;
             --source-profile=*) SRC_PROFILE_NAME="${a#*=}" ;;
             --join-remotely) join_remotely=1 ;;
-            --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
+            --local-user=*) local_user="${a#*=}"; flag_local_user add-client "$local_user"; local_user_given=1 ;;
             *) die "add-client: unknown option $a" ;;
         esac
     done
@@ -7068,7 +7092,6 @@ cmd_add_client() {
     # untestable, which is how an earlier attempt at this guard broke six unrelated
     # assertions without proving anything.
     if [ "$local_user_given" -eq 1 ]; then
-        local_user_name_valid "$local_user"             || die "add-client: --local-user='$local_user' is not a valid account name ($LOCAL_USER_GRAMMAR). Nothing was created."
         # PROVISION THE COLLECTOR-SIDE ACCOUNT, here, at the one moment the
         # choice is made. LAB-E measured what its absence costs: activation
         # refused three separate times, each naming the next missing piece
@@ -9297,9 +9320,7 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
             --peer=*)       peer="${a#*=}" ;;
             --bandwidth=*)  rate="${a#*=}"; rate_given=1 ;;
             --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"
-                local_user_name_valid "$local_user_arg" \
-                    || die "set-bandwidth: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)" ;;
+            --local-user=*) local_user_arg="${a#*=}"; flag_local_user set-bandwidth "$local_user_arg" ;;
             *) die "set-bandwidth: unknown option $a" ;;
         esac
     done
@@ -9498,11 +9519,9 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
             # `passive` and `prod` as real profiles, "move this host onto
             # profile X" is an ordinary operation and had no command at all --
             # an operator's only route was editing the config by hand.
-            --profile=*)    target_profile="${a#*=}" ;;
+            --profile=*)    target_profile="${a#*=}"; flag_profile migrate-profile "$target_profile" ;;
             --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"
-                local_user_name_valid "$local_user_arg" \
-                    || die "migrate-profile: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
+            --local-user=*) local_user_arg="${a#*=}"; flag_local_user migrate-profile "$local_user_arg"
                 # NOT blanked to "" here. The resolver has to tell an explicit
                 # "root" from "nothing said", and blanking made them identical
                 # -- so --local-user=root, the remedy the refusal itself
@@ -9805,9 +9824,7 @@ cmd_audit_source_retention() {   # [--config=PATH] [--local-user=NAME] [--apply]
             --apply) apply=1 ;;
             --yes)   yes=1 ;;
             --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"
-                local_user_name_valid "$local_user_arg" \
-                    || die "audit-source-retention: --local-user='$local_user_arg' is not a valid account name ($LOCAL_USER_GRAMMAR)"
+            --local-user=*) local_user_arg="${a#*=}"; flag_local_user audit-source-retention "$local_user_arg"
                 # NOT blanked to "" here. The resolver has to tell an explicit
                 # "root" from "nothing said", and blanking made them identical
                 # -- so --local-user=root, the remedy the refusal itself
@@ -12017,11 +12034,11 @@ rux_entry() {
             --passive)     passive=1 ;;
             --exclude-family=*) exclude_family="${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
-            --profile=*) profile="${a#*=}" ;;
+            --profile=*) profile="${a#*=}"; flag_profile rux "$profile" ;;
             --source-profile=*) source_profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
-            --local-user=*) local_user="${a#*=}" ;;
+            --local-user=*) local_user="${a#*=}"; flag_local_user rux "$local_user" ;;
             --grant-remotely) grant_remotely=1 ;;
             --manual-join) manual_join=1 ;;
             --install)   do_install=1 ;;

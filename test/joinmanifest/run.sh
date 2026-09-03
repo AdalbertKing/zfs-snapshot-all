@@ -28,12 +28,15 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
-# The extracted function reads the manifest through record_load (lib-record.sh)
-# since 2026-09-03, exactly as deploy.sh does; the harness sources the same
-# file the program sources. die() is the lib's one dependency on its includer.
+# The extracted function reads the manifest through record_load, exactly as
+# deploy.sh does; test/harness.sh loads the libraries lifted product code may
+# call, from the tree DEPLOY_SRC comes from (so a negative control against an
+# older deploy.sh gets that tree's libraries, or none). die() is the lib's one
+# dependency on its includer.
 die() { echo "FATAL: $*" >&2; exit 1; }
 # shellcheck disable=SC1091
-. "$REPO/lib-record.sh"
+. "$SCRIPT_DIR/../harness.sh"
+product_libs "$(dirname "$DEPLOY_SRC")"
 eval "$(sed -n '/^verify_join_manifest() {/,/^}/p' "$DEPLOY_SRC")"
 if ! declare -F verify_join_manifest >/dev/null; then
     echo "FATAL: could not extract verify_join_manifest from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
