@@ -197,6 +197,69 @@ case "$out" in
     *) bad "a seed in an unexpected state is still refused" "$(printf '%s' "$out" | head -2)" ;;
 esac
 
+# --- add-client's mode-vs-datasets default, against an EXISTING peer -------
+#
+# 2026-09-03: add-client's "neither --mode nor --datasets given -> mode=backup"
+# convenience default was unconditional, so it fired for an ALREADY-paired
+# peer too and forwarded a --mode=backup deploy.sh --pair never asked for,
+# alongside the dataset list inherited from that peer's manifest -- a wsad
+# --join then correctly refused as self-contradictory ("peer.conf carries
+# both PEER_CONF_MODE and PEER_CONF_DATASETS"). Reproduced live on the
+# pve9<->pve10 lab: PEER_SAVED_MODE=backup permanently overwrote a blank
+# value in the manifest, poisoning every future --pair for that peer.
+#
+# Lifted the same way addclient_decision above lifts its block: verbatim from
+# the real file, wrapped in a function, with peer_manifest_path/peer_label
+# stubbed so the test states its own inputs instead of touching a real host.
+mode_decision() {   # <lan> <mode> <datasets> <manifest-readable:0|1> -> MODE=x DATASETS=y or DIE
+    local mf="$WORK/absent.conf"
+    [ "$4" = 1 ] && mf="$WORK/exists.conf"
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      echo 'log() { echo "LOG: $*"; }'
+      echo 'die() { echo "DIE: $*"; exit 1; }'
+      printf 'lan=%q\nmode=%q\ndatasets=%q\ntarget=pool/tgt\n' "$1" "$2" "$3"
+      printf 'peer_manifest_path() { echo %q; }\n' "$mf"
+      echo 'peer_label() { echo lbl; }'
+      echo 'decide() {'
+      awk '/^    \[ -n "\$lan" \] \|\| die/{f=1} f{print} f&&/add-client requires --datasets/{c=1} f&&c&&/^    fi$/{exit}' "$REPO/zfs-backup.sh"
+      echo '}'
+      echo 'decide'
+      echo 'echo "MODE=$mode DATASETS=$datasets"'; } > "$t"
+    bash "$t" 2>&1; rm -f "$t"
+}
+: > "$WORK/exists.conf"; rm -f "$WORK/absent.conf"
+
+out="$(mode_decision 10.0.0.5 '' '' 0)"
+case "$out" in
+    *"MODE=backup DATASETS="*) ok "a FRESH peer with neither flag still defaults to mode=backup" ;;
+    *) bad "a FRESH peer with neither flag still defaults to mode=backup" "$out" ;;
+esac
+
+out="$(mode_decision 10.0.0.5 '' '' 1)"
+case "$out" in
+    *"MODE= DATASETS="*) ok "an EXISTING peer with neither flag leaves both empty (inherits from the manifest, invents nothing)" ;;
+    *) bad "an EXISTING peer with neither flag leaves both empty (inherits from the manifest, invents nothing)" "$out" ;;
+esac
+
+out="$(mode_decision 10.0.0.5 '' hdd/labdata 1)"
+case "$out" in
+    *"MODE= DATASETS=hdd/labdata"*) ok "an EXISTING peer with --datasets explicit still uses it" ;;
+    *) bad "an EXISTING peer with --datasets explicit still uses it" "$out" ;;
+esac
+
+out="$(mode_decision 10.0.0.5 backup '' 1)"
+case "$out" in
+    *"MODE=backup DATASETS="*) ok "an EXISTING peer with --mode explicit still uses it" ;;
+    *) bad "an EXISTING peer with --mode explicit still uses it" "$out" ;;
+esac
+
+out="$(mode_decision 10.0.0.5 '' hdd/x 0)"
+case "$out" in
+    *"MODE= DATASETS=hdd/x"*) ok "a FRESH peer with --datasets explicit is unaffected by the fix" ;;
+    *) bad "a FRESH peer with --datasets explicit is unaffected by the fix" "$out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "rerun: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
