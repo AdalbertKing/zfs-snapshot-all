@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 04e15bee2c4d71f2 -->
+<!-- status-covers-digest: 7252576099706fc2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`--source-profile` nie działał na formie JEDNOKOMENDOWEJ — jedynej, którą
+  operator realnie wpisuje (2026-09-03).** Flaga została wpięta w `cmd_add_client`
+  i `cmd_local_backup`, gdy powstawała (#288), a trzecie wejście —
+  `zfs-backup.sh --source=HOST:DATASET ...`, czyli to, które SKŁADA
+  add-client→seed→activate w jedno — nigdy jej nie poznało i odpowiadało
+  `rux: unknown option --source-profile=...`.
+
+  **Skutek zmierzony na labie:** żeby wdrożyć relację z asymetryczną retencją,
+  trzeba było rozłożyć ją na `deploy.sh --pair` → ręczny przenos wsadu →
+  `--join` → `--commit-scope` → `add-client` → `seed` → `activate`, na dwóch
+  hostach — dokładnie tę sekwencję, którą komenda jednoliniowa istnieje po to,
+  żeby zdjąć z operatora. Właściciel wskazał to wprost: *"dlaczego nie dało się
+  stworzyć relacji podając i source i target w jednej komendzie"*.
+
+  **Naprawa:** czysty passthrough, tego samego kształtu co `--profile` obok —
+  deklaracja zmiennej, gałąź w parserze, jedna linia do `add_args`. Walidacja,
+  strażnik rodziny i zapis rekordu należą do `cmd_add_client` i nie są tu
+  powtarzane. `test/rux` 43 -> 45: przypadek dyskryminujący (pada na starym
+  kodzie, przechodzi po poprawce, sprawdzone `git stash`) plus kontrola
+  negatywna — pominięcie flagi nie przekazuje PUSTEGO `--source-profile=`.
 
 - **`add-client` wstrzykiwał wymyślony `--mode=backup` do parowania z peerem,
   który już był dataset-driven, trwale zatruwając jego manifest (2026-09-03).**

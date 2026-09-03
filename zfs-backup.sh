@@ -264,6 +264,7 @@ Usage:
                                     --install:         seed first, then install the cron transactionally
                                     --yes | -y:        skip the interactive confirmation of that install
   zfs-backup.sh --source=HOST:DATASET --target=DATASET [--port=N] [--profile=NAME]
+                [--source-profile=NAME]
                 [--name=NAME] [--local-user=NAME] [--install] [--yes|-y] [--verbose]
                                     REMOTE backup: pull DATASET from HOST into the local
                                     target. Composes the existing add-client -> seed ->
@@ -11917,6 +11918,7 @@ rux_remote_install() {
             [ -n "$target" ] && add_args+=(--target="$target")
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
+        [ -n "$source_profile" ] && add_args+=(--source-profile="$source_profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
         [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
@@ -12019,6 +12021,18 @@ rux_entry() {
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
     local recursion="" passive=0 exclude_family=""
+    # THE SOURCE PRESET REACHES THIS ENTRY POINT TOO, and it is a pure
+    # passthrough: cmd_add_client already parses, validates and records it
+    # (--profile's own treatment here is the same shape). Its absence was not a
+    # decision -- the flag was wired into cmd_add_client and cmd_local_backup
+    # when it shipped, and this third door simply never learned it, so
+    # `--source-profile` on the one-command form died as "unknown option".
+    # Measured 2026-09-03 on the pve9<->pve10 lab: the only way to enrol a
+    # relationship with asymmetric retention was the explicit
+    # pair/join/commit-scope/add-client/seed/activate sequence by hand -- the
+    # one command that exists to spare an operator exactly that could not
+    # express it.
+    local source_profile=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
@@ -12030,6 +12044,7 @@ rux_entry() {
             --exclude-family=*) exclude_family="${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}" ;;
+            --source-profile=*) source_profile="${a#*=}" ;;
             --port=*)    port="${a#*=}" ;;
             --name=*)    name="${a#*=}" ;;
             --local-user=*) local_user="${a#*=}" ;;
