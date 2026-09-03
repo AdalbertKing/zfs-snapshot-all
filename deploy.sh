@@ -2231,6 +2231,7 @@ fi
 UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-/root/.zfs-snapshot-all-update-state}"
 PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
 UPDATE_HOLD_FILE="$UPDATE_STATE_DIR/update-hold"
+GRANT_DATASETS_FILE="$UPDATE_STATE_DIR/grant-datasets"
 
 # Fails closed: a symlinked or group/world-writable state directory is treated
 # as untrustworthy and stops the caller rather than being used anyway. Every
@@ -2355,8 +2356,22 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
         warn "checkout is at $rev but $REPO_DIR/deploy.sh is missing -- the host is running whatever was installed before. Generated scripts are NOT updated."
         return 1
     fi
+    # THE SAME DATASET LIST deploy.sh RECORDED LAST TIME IT GRANTED SOMETHING,
+    # not deploy.sh's own hardcoded Proxmox default. Without this, a bare run
+    # here always used "rpool/data rpool/ROOT/pve-1", which does not exist on a
+    # host whose only pool is named something else -- measured on pve9, pve9b
+    # and pve10 (pool 'hdd'), where Phase 8g ended FATAL on every hourly
+    # self-update since the delegated-account migration, because nothing
+    # remembered the --grant-datasets an operator had typed once by hand.
+    # Absent file = old behaviour, unchanged.
+    local -a extra_args=()
+    if [ -e "$GRANT_DATASETS_FILE" ]; then
+        local recorded
+        recorded=$(read_state_file "$GRANT_DATASETS_FILE")
+        [ -n "$recorded" ] && extra_args+=(--grant-datasets="$recorded")
+    fi
     cron_before=$(crontab -l 2>/dev/null)
-    bash "$REPO_DIR/deploy.sh" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
+    bash "$REPO_DIR/deploy.sh" "${extra_args[@]}" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
     rc=$?
     cron_after=$(crontab -l 2>/dev/null)
     if [ "$cron_before" != "$cron_after" ]; then
@@ -8449,6 +8464,17 @@ EOF
     # missing is not a partial success, it is the request not happening.
     if [ "${#DATASETS[@]}" -gt 0 ] && [ "$GRANTED_COUNT" -eq 0 ]; then
         die "none of the ${#DATASETS[@]} requested dataset(s) exist on this host, so '$USERNAME' was granted NOTHING. The account exists but cannot touch a single dataset -- that is this run failing, not succeeding. Check the names (zfs list -H -o name) and re-run."
+    fi
+
+    # RECORDED, so the next automatic self-update can pass this SAME list back
+    # with --grant-datasets= instead of falling through to the hardcoded
+    # Proxmox default above. This is what --self-update's apply_repo_to_host
+    # reads (deploy.sh's own copy and update-control.sh's both) -- see the
+    # comment there. A run that granted nothing (die'd above) never reaches
+    # this, so the file only ever holds a list that has actually worked.
+    if [ "$GRANTED_COUNT" -gt 0 ] && ensure_update_state_dir; then
+        write_state_file "$GRANT_DATASETS_FILE" "$BACKUP_USER_DATASETS" \
+            || warn "could not record the granted dataset list at $GRANT_DATASETS_FILE -- the next automatic self-update will fall back to the built-in default, which may not match this host"
     fi
 
     # ------------------------------------------------------------------------------
