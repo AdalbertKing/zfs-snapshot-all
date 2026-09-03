@@ -231,10 +231,15 @@ Usage:
                                     For a source short of disk under a collector that has
                                     plenty: keep the full ladder on the target and a
                                     shorter one where the space is tight.
-                                    The two presets may differ in how MUCH they keep and
-                                    not in WHAT: a source prune aimed at a family this
-                                    relationship never creates matches nothing, and a
-                                    delsnaps that matches nothing exits 0. Refused.
+                                    The two presets may differ in how MUCH they keep,
+                                    never in WHAT nor in HOW it is counted: a source
+                                    prune aimed at a family this relationship never
+                                    creates matches nothing, and a delsnaps that matches
+                                    nothing exits 0. Refused -- flat pairs with flat, a
+                                    -gfs ladder with a -gfs ladder, at any pair of counts.
+                                    The cleanest source preset creates NOTHING: drop
+                                    [dataset], keep [prune]. See profiles/README.md,
+                                    "A profile that only prunes".
                 [--local-user=NAME] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
                                     --source omitted:  proposed from this host's ZFS inventory and shown,
@@ -1676,11 +1681,32 @@ assert_source_profile_families() {
 # same way append_source_templates_if_missing does, so a profile naming its
 # templates ret_hourly instead of keep_hourly is handled without a convention.
 profile_fragment_patterns() {   # <rendered prune fragment> <templates file>
-    local id sec
+    # THE FAMILY IS THE PATTERN **AND HOW IT IS COUNTED**.
+    #
+    # `pattern` alone was not enough. d30h24 and d30h24-gfs carry the same two
+    # families and differ by one line, `gfs = yes`: the first keeps the 30
+    # newest daily snapshots, the second keeps one per daily bucket. Compared
+    # on pattern only, a flat target under a ladder source passed -- both sides
+    # "keep 30", and a different 30. Owner, 2026-09-03, asking what happens when
+    # the two sides carry different shapes: that is the case, and it was quiet.
+    #
+    # gfs is declared in TWO places and both have to be read: on the [prune]
+    # fragment as a whole (profiles/default.conf) and per tier
+    # (profiles/d30h24-gfs.conf). A tier that says nothing inherits the
+    # fragment; a fragment that says nothing is flat.
+    #
+    # Keyed BY FAMILY, not emitted as two independent sets. Two profiles whose
+    # tiers carry the same gfs values in the opposite order have identical sets
+    # and mismatched families, which is the failure this pairing is for.
+    local id sec frag_gfs tgfs
+    frag_gfs=$(sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' "$1" | tail -1)
     while IFS= read -r id; do
         [ -n "$id" ] || continue
         sec="$(profile_template_section "$id" "$2")"
-        printf '%s\n' "$sec" | sed -n 's/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*//p'
+        tgfs=$(printf %s "$sec" | sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' | tail -1)
+        [ -n "$tgfs" ] || tgfs="$frag_gfs"
+        case "$tgfs" in yes|true|1) tgfs=ladder ;; *) tgfs=flat ;; esac
+        printf %s "$sec" | sed -n -E "s/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*(.*)$/\1($tgfs)/p"
     done < <(profile_prune_ref_ids "$1") | sort -u
 }
 
