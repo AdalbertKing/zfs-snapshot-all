@@ -68,7 +68,9 @@ die_confine_to_subshell() {   # call INSIDE a $( ): a die there ends the subshel
 
 # ------------------------------------------------------------------------------
 # The server-side config written by `zfs-backup.sh setup-server` and read by
-# every later command. KEY=VALUE, sourced -- setup-server is the only writer.
+# every later command. KEY=VALUE, read as DATA through record_load below (it was
+# `.`-sourced until 2026-09-03, the last reader in these two programs that
+# still executed its file) -- setup-server is the only writer.
 SERVER_CONF="${SERVER_CONF:-/etc/zfs-snapshot-all/zfs-backup.conf}"
 
 # Resets ONLY the fields this file actually carries, so a stale value from an
@@ -90,12 +92,20 @@ SERVER_CONF="${SERVER_CONF:-/etc/zfs-snapshot-all/zfs-backup.conf}"
 # past a green CI, and it took probes either side of the gap to see why.
 #
 # A loader must not clear state it does not own.
+#
+# record_load honours that by construction: its own clearing covers only the
+# fields a PREVIOUS load into the `server` set assigned, i.e. fields this very
+# file carried -- never a field the caller set and the file does not mention.
+# A legacy server.conf that still carries LOCAL_USER= (setup-server wrote it
+# once; two suite fixtures keep that shape) is read exactly as sourcing read it:
+# the file's value lands in the variable, on the first read and on every later
+# one. The two explicit resets stay for the host with NO server.conf at all,
+# where nothing is loaded and a stale value from an earlier read would survive.
 read_server_conf() {
     DEFAULT_TARGET=""
     CRON_CONFIG=""
     [ -r "$SERVER_CONF" ] || return 0
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
+    record_load server "$SERVER_CONF"
 }
 
 # ------------------------------------------------------------------------------

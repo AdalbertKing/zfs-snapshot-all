@@ -90,10 +90,18 @@
   błędów względem `main` w tym samym środowisku. Pełną baterię rozstrzyga
   CI.
 
-  **Świadomie NIE ruszone:** `read_server_conf` (nadal `.`-sourcuje
-  `SERVER_CONF`; ma udokumentowany powód, żeby nie zerować cudzych pól, więc
-  nie pasuje do `record_load` bez osobnej decyzji), `deploy.sh`
-  (`. "$mpath"`, `. peer.conf`), `cron2conf.sh`. Ryzyko resztkowe: `die`
+  **`read_server_conf` domknięte osobno na polecenie Ownera (2026-09-03, po
+  scaleniu PR #295):** ostatni czytnik w obu programach, który wykonywał swój
+  plik, czyta teraz `SERVER_CONF` przez `record_load server`. Reguła „loader
+  nie zeruje cudzych pól" (a76e766) jest spełniona z konstrukcji: `record_load`
+  zeruje wyłącznie pola, które POPRZEDNI odczyt tego samego zbioru przypisał,
+  czyli te, które sam plik niósł; dwa jawne resety zostają dla hosta bez
+  `server.conf`. Legacy `LOCAL_USER=` w `server.conf` (dwa fixture'y suity)
+  czytane tak samo jak przez sourcing. Asercja w sekcji `records`:
+  `DEFAULT_TARGET=$(touch …)` w `server.conf` dociera do `add-client` jako
+  tekst i niczego nie uruchamia (na `main` plik powstaje).
+  **Świadomie NIE ruszone:** `deploy.sh` (`. "$mpath"`, `. peer.conf`),
+  `cron2conf.sh`. Ryzyko resztkowe: `die`
   w podpowłoce zagnieżdżonej w podpowłoce zabija główną powłokę, ale pośrednia
   podpowłoka dokańcza swoje linie — ten sam kształt, który `zfs-restore.sh`
   przyjął 2026-08-27.
