@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 32db728469d4b69d -->
+<!-- status-covers-digest: 5133ab01e89af861 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,44 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Profil „prunowy" jako właściwy kształt dla retencji źródła (2026-09-03).**
+  Właściciel, po przejrzeniu `--source-profile`: *„profil niesie w sobie dużo
+  więcej parametrów... takie użycie wydaje mi się karkołomne i nie eleganckie"*.
+  Zmierzone: flaga importowała **sześć** rzeczy, gdy chodziło o jedną —
+  `retain` (zamierzone), `pattern` (przypięte przez strażnika),
+  `prune_schedule`, `notify_word`, `quiesce` (**martwe** — `delsnaps` nie ma
+  takiej flagi) i `gfs` (**zmieniające znaczenie cięcia**).
+
+  Rozwiązaniem okazał się pomysł właściciela, nie zmiana w filtrze: **profil,
+  który niczego nie tworzy** — bez `[dataset]`, z samym `[prune]`. Waliduje się
+  dziś, bez linii kodu, i renderuje po stronie źródła cztery pola:
+  `prune_schedule`, `pattern`, `retain`, `notify_word`. Nie ma połowy
+  tworzącej, więc nie ma czym przeciec — niezależnie od tego, co akurat jest na
+  liście pól usuwanych. To nie nowy mechanizm: `default.conf` już rozdziela
+  `[template:standard_hourly]` (tworzy) od `[template:keep_*]` (tylko tnie).
+  Opisane w `profiles/README.md` jako **sposób**; przypięte testem, bo obietnica
+  w dokumentacji bez testu jest tylko obietnicą.
+
+  Zaniechane świadomie: planowane zawężenie filtru w kodzie. Kształt pliku robi
+  to samo lepiej — zakazem z konstrukcji zamiast zakazem w czytniku — i ubywa
+  kodu zamiast przybywać.
+
+  **Domknięta przy okazji jedna cicha dziura.** Strażnik rodziny porównywał sam
+  `pattern`, więc **drabina GFS w źródle pod płaskim celem przechodziła**:
+  `d30h24` i `d30h24-gfs` różnią się jedną linią, obie strony trzymają „30", a
+  co innego przez to rozumieją i co innego przeżywa. Rodzina to teraz wzorzec
+  **i sposób liczenia**, kluczowany po rodzinie (nie dwa niezależne zbiory, bo
+  tiery zamienione miejscami dałyby te same zbiory). `gfs` czytane z obu miejsc,
+  w których wolno je zadeklarować: z fragmentu `[prune]` i z tiera. Odmowa
+  nazywa kształt: `automated_daily(flat)` vs `automated_daily(ladder)`.
+  Kontrola dodatnia: dwie drabiny o różnych liczbach dalej się parują.
+
+  **Nazewnictwo świadomie nietknięte.** Trzy osie z README (cyfry = retencja,
+  wielkość liter = kształt, przyrostek = mechanizm liczenia) opisują to, co
+  profil TRZYMA. „Nie tworzy" to czwarta oś; nie wymyślam dla niej przyrostka i
+  nie wysyłam profilu prunowego w pakiecie — to decyzja właściciela.
+
 
 - **Retencja asymetryczna: `--source-profile=NAZWA` (2026-09-03).** Źródło z
   ciasnym dyskiem pod kolektorem, który ma miejsca pod dostatkiem, może teraz

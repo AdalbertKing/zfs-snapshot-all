@@ -130,3 +130,66 @@ there is no freeze of ours to take.
 The `[excluded:]` floors — `__replicate_` (pvesr), `vzdump`, `__migration__` —
 are config-wide, identical in every file and identical on purpose. They are not
 any profile's opinion, and none of those families is ours to delete.
+
+## A profile that only prunes — how to say "the source keeps less"
+
+`--source-profile=NAME` gives the SOURCE side of a relationship its own
+retention: a source short of disk under a collector with plenty. The flag names
+a profile, and that is the trap — a profile carries a dozen fields and only the
+retention was ever meant to differ. Owner, 2026-09-03: *"profil niesie w sobie
+dużo więcej parametrów... takie użycie wydaje mi się karkołomne"*.
+
+**Write a profile that creates nothing.** Drop `[dataset]`, keep `[prune]`:
+
+```
+[profile]
+	description = tylko retencja -- 7 dobowych, 24 godzinowe
+	version     = 1
+
+[template:keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+	notify_word    = prune
+
+[template:keep_daily]
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	keep           = 7
+	notify_word    = prune
+
+[prune]
+	use_template = keep_hourly,keep_daily
+```
+
+This is not a new mechanism. `default.conf` already separates the two halves —
+`[template:standard_hourly]` creates, `[template:keep_*]` only prunes — and a
+prune-only profile is that separation with the creating half absent.
+
+**Why it is the better shape, and not merely tidier.** A source template is
+built by copying the tier it comes from and deleting the fields that make no
+sense on a remote prune scope (`send_schedule`, `prefix`, `monitor_warn`,
+`monitor_crit`). That deletion is a list, and a list is something to keep in
+step: `quiesce` is a creating-half field too and is *not* on it, so naming a
+flat profile as the source drags `quiesce` into a prune template where
+`delsnaps` has no such flag. Dead weight that validates cleanly. A profile with
+no creating half has nothing to leak, whatever the list says.
+
+**The two sides must still count the same way.** They may differ in how MUCH
+they keep and never in WHAT, nor in how it is counted: a source prune aimed at
+a family the relationship never creates matches nothing, and `delsnaps` that
+matches nothing exits 0 — the source would keep everything while its nightly
+job reported success. `--source-profile` refuses on both, naming the shapes:
+
+```
+target patterns: [automated_daily(flat)]  source patterns: [automated_daily(ladder)]
+```
+
+So a `-gfs` profile pairs with a `-gfs` profile and a flat one with a flat one,
+at any pair of counts.
+
+**Naming.** The three axes above — digits for retention, case for shape, suffix
+for mechanism — all describe what a profile KEEPS. "Creates nothing" is a
+fourth axis and has no suffix reserved for it, so none is invented here and no
+prune-only profile is shipped. Name your own as you like; if one ever joins the
+catalogue it needs an owner decision on that axis first.
