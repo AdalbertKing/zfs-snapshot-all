@@ -98,20 +98,20 @@ done
 # translate_long_options is the one to feel embarrassed about: its own comment
 # argues that "a hand-kept list is a list that drifts, and a drift here is
 # silent" -- while being a hand-kept second copy that nothing watched.
-TWINS="
-get_sorted_snapshots
-find_conflicting_snapshots
-find_recursive_name_collisions
-validate_snapshot
-find_common_snapshot
-create_snapshot
-transfer_data
-process_dataset
-translate_long_options
-opt_takes_arg
-cluster_needs_next
-declare_recursion
-"
+#
+# And then THIS list was the hand-kept one (2026-09-03). It said "exhaustive"
+# and held twelve names while the scripts shared fifteen: announce_transfer_size,
+# human_bytes and validate_subtree had been added to both engines after
+# 2026-08-20 and nothing here noticed -- the first of them was edited in both
+# engines by hand that very day, unwatched. So the set is no longer written
+# down: it is DERIVED, every function defined under the same name at column 0
+# in both scripts, and section C turns a new shared name red until it is
+# reviewed and blessed. The count is asserted below so that a derivation that
+# finds nothing cannot pass as "nothing to watch".
+twin_names() {   # <script> -> its function names, one per line
+    grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\) \{' "$1" | sed 's/() {$//' | sort -u
+}
+TWINS="$(comm -12 <(twin_names "$SNAPSEND") <(twin_names "$SNAPGET"))"
 
 # Space-separated form of the same list, for membership tests. $TWINS is
 # newline-separated for readability and `case " $TWINS " in *" $fn "*` does not
@@ -167,6 +167,14 @@ fi
     echo "no baseline at $BASELINE -- create it with: ./test/twins/run.sh --bless" >&2
     exit 1
 }
+
+# ---- A0. the derived set is real -------------------------------------------
+_n_twins=$(printf '%s\n' "$TWINS" | grep -c .)
+if [ "$_n_twins" -ge 12 ]; then
+    ok "A0 the twinned set is derived from both scripts ($_n_twins names, the 12 of 2026-08-20 included)"
+else
+    bad "A0 the twinned set is derived from both scripts" "only $_n_twins names found -- the derivation, not the engines, is what changed"
+fi
 
 # ---- A. every twin still exists in both scripts ----------------------------
 for fn in $TWINS; do
