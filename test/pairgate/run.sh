@@ -419,11 +419,10 @@ DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
 if [ ! -r "$DEPLOY_SRC" ]; then
     echo "SKIP install cases (no deploy.sh at $DEPLOY_SRC)"
 else
-eval "$(sed -n '/^pair_label_valid() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^write_gated_key_line() {/,/^}/p' "$DEPLOY_SRC")"
-if ! declare -F write_gated_key_line >/dev/null; then
-    bad "extract write_gated_key_line from deploy.sh" "the sed anchors no longer match -- update this suite"
-else
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
+eval "$(product_fn "$DEPLOY_SRC" pair_label_valid)"
+eval "$(product_fn "$DEPLOY_SRC" write_gated_key_line)"
 log()  { :; }
 warn() { :; }
 PAIR_GATE_PATH="/usr/local/sbin/zfs-pair-gate"
@@ -659,10 +658,8 @@ done
 #     declared a directory writable that the account could not touch --
 #     accepting, for the wrong reason, the exact degraded state the check
 #     exists to catch. Driven by value: no filesystem, no stubs.
-eval "$(sed -n '/^gate_state_dir_ok() {/,/^}/p' "$DEPLOY_SRC")"
-if ! declare -F gate_state_dir_ok >/dev/null; then
-    bad "extract gate_state_dir_ok from deploy.sh" "sed anchors no longer match"
-else
+eval "$(product_fn "$DEPLOY_SRC" gate_state_dir_ok)"
+{
     # "<stat output>|<account>|<expected: ok|warn>"
     for c in "775 acct|acct|ok"      "2775 acct|acct|ok"    "770 acct|acct|ok" \
              "3775 acct|acct|ok"     "755 acct|acct|warn"   "2755 acct|acct|warn" \
@@ -676,7 +673,7 @@ else
             bad "state-dir check: '$st' for '$acct' -> $want" "got $got"
         fi
     done
-fi
+}
 
 # 9d. REV-051 F1, installer side: the same two labels must never be rendered
 #     into a key line or given a state directory. Both sides validate, because
@@ -713,8 +710,8 @@ for l in "." ".."; do
 done
 
 # install_pair_gate must refuse the same, before creating any directory.
-eval "$(sed -n '/^install_pair_gate() {/,/^}/p' "$DEPLOY_SRC")"
-if declare -F install_pair_gate >/dev/null; then
+eval "$(product_fn "$DEPLOY_SRC" install_pair_gate)"
+{
     IPG_STATE="$WORK/ipg-state"; IPG_BIN="$WORK/ipg-bin/zfs-pair-gate"
     mkdir -p "$WORK/ipg-bin"
     for l in "." ".."; do
@@ -737,7 +734,7 @@ if declare -F install_pair_gate >/dev/null; then
     else
         ok "install_pair_gate does not refuse a real label ('site.a')"
     fi
-fi
+}
 
 # 10. Structural pin: do_join must install the gate BEFORE writing the key
 #    line, or a working key would briefly point at a gate that is not there.
@@ -747,7 +744,6 @@ if [ "${1:-0}" -lt "${2:-0}" ]; then
     ok "install: do_join installs the gate before it writes the key line"
 else
     bad "install: do_join installs the gate before it writes the key line" "line order: $jorder"
-fi
 fi
 fi
 

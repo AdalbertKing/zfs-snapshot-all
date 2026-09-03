@@ -34,11 +34,11 @@ check() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1" "want [$2] got [$3]"; 
 
 # The three transforms, lifted out of the file and run directly. Extracted by
 # name rather than by sourcing the whole script, which would run its dispatch.
-eval "$(sed -n '/^move_reflag() {/,/^}/p'           "$ZB")"
-eval "$(sed -n '/^section_retag_client() {/,/^}/p'  "$ZB")"
-eval "$(sed -n '/^section_rename_header() {/,/^}/p' "$ZB")"
-eval "$(sed -n '/^local_newest_snapshot() {/,/^}/p' "$ZB")"
-eval "$(sed -n '/^move_guid_proof() {/,/^}/p'       "$ZB")"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
+for fn in move_reflag section_retag_client section_rename_header local_newest_snapshot move_guid_proof; do
+    eval "$(product_fn "$ZB" "$fn")"
+done
 
 # ---------------------------------------------------------------------------
 # 1. THE FLAGS: swap the transport, keep everything else byte for byte

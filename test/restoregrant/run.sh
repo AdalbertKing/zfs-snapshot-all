@@ -308,16 +308,19 @@ fi
 # point is what the shipped code does with a hostile answer.
 # ---------------------------------------------------------------------------
 RESTORE="${RESTORE:-$REPO/zfs-restore.sh}"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
 parse() {   # <label> <answer> -> the modes, or "NO"
     ( set -u
       log(){ :; }
-      eval "$(sed -n '/^restore_grant_parse() {/,/^}/p' "$RESTORE")"
+      eval "$(product_fn "$RESTORE" restore_grant_parse)"
       restore_grant_parse "$1" "$2" 2>/dev/null || printf 'NO' )
 }
 require() {   # <label> <answer> <mode> -> "OK" or the refusal text
     ( set -u
       log(){ shift; printf '%s\n' "$*"; }
-      eval "$(sed -n '/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p' "$RESTORE")"
+      eval "$(product_fn "$RESTORE" restore_grant_parse)"
+      eval "$(product_fn "$RESTORE" restore_grant_require)"
       if restore_grant_require "$1" "$2" "$3" pve1; then printf 'OK'; fi )
 }
 GOOD="PAIR_STATE=ACTIVE
@@ -400,7 +403,7 @@ else bad "peer: an undefined mode is refused" "$out"; fi
 # what makes a chosen recovery point expressible WITHOUT changing a frozen
 # engine, so this suite pins the contract it depends on.
 # ---------------------------------------------------------------------------
-lift_r() { sed -n "/^$1() {/,/^}/p" "$RESTORE"; }
+lift_r() { product_fn "$RESTORE" "$1"; }
 pt() {   # <wanted name> <candidates> -> "OK" or the refusal text
     ( set -u
       log(){ shift; printf '%s\n' "$*"; }
@@ -503,8 +506,8 @@ rs() {   # <rc list, space separated> -> "<rc>|<report>"
       # REV-20260831-127: restore_run_scope calls restore_one THROUGH it, so
       # extracting only the loop leaves the call unresolved -- which shows up as
       # every dataset "unfit" with no reason, not as a missing-function error.
-      eval "$(sed -n '/^restore_one_isolated() {/,/^}/p' "$RESTORE")"
-      eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
+      eval "$(product_fn "$RESTORE" restore_one_isolated)"
+      eval "$(product_fn "$RESTORE" restore_run_scope)"
       # The four collaborators this loop calls, stubbed for the same reason
       # restore_one is: the subject here is the LOOP and the verdict.
       #
@@ -611,7 +614,7 @@ check "run control: the all-recovered path really can exit 0" "0" "$(rs_rc "$(rs
 # is what proves the guard is about restore_one and not about refusing always.
 nostep="$( set -u
   log(){ shift; printf '%s\n' "$*"; }
-  eval "$(sed -n '/^restore_run_scope() {/,/^}/p' "$RESTORE")"
+  eval "$(product_fn "$RESTORE" restore_run_scope)"
   RESTORE_SCOPE_SRC=(rpool/a); RESTORE_SCOPE_COPY=(hdd/a)
   restore_run_scope; printf '|%s' $? )"
 if has "not built yet" "$nostep"; then ok "run: with no per-dataset step it refuses instead of calling an undefined function"
@@ -641,7 +644,7 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
     : > "$RONE/ran"
     ( set -u
       log(){ shift; printf '%s\n' "$*" >&2; }
-      eval "$(sed -n '/^restore_point_unique() {/,/^}/p;/^restore_engine_argv() {/,/^}/p;/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p;/^restore_one() {/,/^}/p' "$RESTORE")"
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
       zfs(){ case "$*" in
                *"-t snapshot"*) [ "${NOSNAP:-0}" -eq 1 ] && return 0
                                 printf 'hdd/copy@automated_daily_2026-08-20_18-00-04\n'
@@ -713,7 +716,7 @@ case "$(argv_of "$r")" in *hdd/local/target*) ok "one: ...and still reaches the 
 r="$( : > "$RONE/ran"
       ( set -u
         log(){ shift; printf '%s\n' "$*" >&2; }
-        eval "$(sed -n '/^restore_point_unique() {/,/^}/p;/^restore_engine_argv() {/,/^}/p;/^restore_grant_parse() {/,/^}/p;/^restore_grant_require() {/,/^}/p;/^restore_one() {/,/^}/p' "$RESTORE")"
+        for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
         zfs(){ :; }
         restore_grant_ask(){ printf '%s' "$GOODG"; }
         RESTORE_ENGINE="$RONE/eng" RESTORE_STRATEGY=increment \

@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEPLOY="${DEPLOY:-$REPO/deploy.sh}"
 [ -r "$DEPLOY" ] || { echo "cannot find deploy.sh at $DEPLOY" >&2; exit 1; }
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -717,11 +719,10 @@ fi
 # Same shape deploy.sh already fixes for alert-queue.log; the lock files were
 # simply not included.
 L_SRC="$WORK/lockfns.sh"
-sed -n '/^cron_lock_files_repair() {/,/^}/p;/^cron_lock_files_audit() {/,/^}/p' "$DEPLOY" > "$L_SRC"
-if [ ! -s "$L_SRC" ]; then
-    bad "L0 the lock-file helpers can be extracted from deploy.sh" "nothing matched in $DEPLOY"
-else
-    ok "L0 the lock-file helpers can be extracted from deploy.sh"
+# The extraction is product_fn's (a missing anchor is its FATAL), so the old
+# L0 "can be extracted" assertion went with it -- it could no longer fail.
+{ product_fn "$DEPLOY" cron_lock_files_repair; product_fn "$DEPLOY" cron_lock_files_audit; } > "$L_SRC"
+{
 
     L_DIR="$WORK/locks"; mkdir -p "$L_DIR"
     : > "$L_DIR/lib-cron.root.lock";      chmod 0644 "$L_DIR/lib-cron.root.lock"
@@ -799,7 +800,7 @@ else
         out=$(warn() { echo "$*"; }; . "$L_SRC"; cron_lock_files_audit "$WORK/nosuchdir" "$(id -gn)" 2>&1); rc=$?
         [ "$rc" = 0 ] && ok "L5 a missing lock directory is not this check's business" \n                      || bad "L5 a missing lock directory is not this check's business" "rc=$rc out=$out"
     fi
-fi
+}
 
 # --- basket A1/A2: the delegation whitelist takes the package list grammar ---
 # Source-greps, deliberately: the delegation loop itself runs useradd and

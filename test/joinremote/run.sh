@@ -32,11 +32,9 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
-eval "$(sed -n '/^remote_scope_stage() {/,/^}/p' "$DEPLOY_SRC")"
-if ! declare -F remote_scope_stage >/dev/null; then
-    echo "FATAL: could not extract remote_scope_stage from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
-    exit 1
-fi
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
+eval "$(product_fn "$DEPLOY_SRC" remote_scope_stage)"
 
 # P6 put a terminal gate in front of the editor: with no tty the scope is
 # drafted but not opened, and the stage exits 5. CI never has a tty, so every
@@ -46,7 +44,7 @@ fi
 # be answered here; the default is "yes, there is one" and case 10 overrides it
 # to prove the gate itself, with 10b as its positive control.
 have_terminal() { [ "${FAKE_TTY:-1}" -eq 1 ]; }
-if ! sed -n '/^have_terminal() {/,/^}/p' "$DEPLOY_SRC" | grep -q '\-t 0'; then
+if ! product_fn "$DEPLOY_SRC" have_terminal | grep -q '\-t 0'; then
     echo "FATAL: deploy.sh's have_terminal no longer tests -t 0 -- this suite's override is now lying about what it replaces" >&2
     exit 1
 fi

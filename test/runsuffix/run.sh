@@ -15,6 +15,8 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
+# shellcheck disable=SC1091
+. "$DIR/../harness.sh"
 
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
@@ -48,10 +50,10 @@ names() {   # <engine-file> [crash] -> two snapshot names from two create_snapsh
         # family it MATCHES -- lifted the same way, for the same reason.
         eval "$(sed -n 's/^SNAP_MESSAGE=.*/&/p' "$src" | head -1)"
         if [ -n "$want_crash" ]; then
-            eval "$(sed -n '/^quiesce_crash_message() {/,/^}/p' "$REPO/lib-zfs-snap.sh")"
+            eval "$(product_fn "$REPO/lib-zfs-snap.sh" quiesce_crash_message)"
             SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
         fi
-        eval "$(sed -n '/^create_snapshot() {/,/^}/p' "$src")"
+        eval "$(product_fn "$src" create_snapshot)"
         create_snapshot "tank/a" "" ""
         create_snapshot "tank/b" "" ""
     )" || return 1

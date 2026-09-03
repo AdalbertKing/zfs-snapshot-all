@@ -58,6 +58,17 @@ product_libs() {   # [<tree>]
 product_fn() {   # <file> <name> -> the function's source
     local body
     body=$(sed -n "/^$2() {/,/^}/p" "$1")
-    [ -n "$body" ] || { echo "FATAL: could not extract $2 from $1 -- the sed anchors no longer match, update this suite" >&2; exit 1; }
+    if [ -z "$body" ]; then
+        echo "FATAL: could not extract $2 from $1 -- the sed anchors no longer match, update this suite" >&2
+        # Every caller writes `eval "$(product_fn ...)"`, so this runs inside a
+        # command substitution: an `exit` here ends the substitution alone and
+        # the eval sees an empty string -- the function is simply not defined,
+        # and the suite goes on to measure a stub or a `command not found`,
+        # which is the silent shape this helper exists to replace. $$ is the
+        # suite's own shell from any depth of subshell; ending it is the only
+        # way a FATAL from in here is a FATAL for the suite.
+        [ "$BASHPID" = "$$" ] || kill -TERM "$$"
+        exit 1
+    fi
     printf '%s\n' "$body"
 }

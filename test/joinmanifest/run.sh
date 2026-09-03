@@ -37,7 +37,7 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/../harness.sh"
 product_libs "$(dirname "$DEPLOY_SRC")"
-eval "$(sed -n '/^verify_join_manifest() {/,/^}/p' "$DEPLOY_SRC")"
+eval "$(product_fn "$DEPLOY_SRC" verify_join_manifest)"
 if ! declare -F verify_join_manifest >/dev/null; then
     echo "FATAL: could not extract verify_join_manifest from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
     exit 1
@@ -187,12 +187,12 @@ fi
 # Extract only the two orchestration helpers; account/key/ZFS mutations remain
 # outside this root-free suite and are represented by the existing stubs.
 # ---------------------------------------------------------------------------
-eval "$(sed -n '/^join_scope_is_committed() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^guided_join_scope() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^deploy_exit_cleanup() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^join_scope_enumerate() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^join_scope_summary() {/,/^}/p' "$DEPLOY_SRC")"
-eval "$(sed -n '/^join_human_bytes() {/,/^}/p' "$DEPLOY_SRC")"
+eval "$(product_fn "$DEPLOY_SRC" join_scope_is_committed)"
+eval "$(product_fn "$DEPLOY_SRC" guided_join_scope)"
+eval "$(product_fn "$DEPLOY_SRC" deploy_exit_cleanup)"
+eval "$(product_fn "$DEPLOY_SRC" join_scope_enumerate)"
+eval "$(product_fn "$DEPLOY_SRC" join_scope_summary)"
+eval "$(product_fn "$DEPLOY_SRC" join_human_bytes)"
 # join_scope_enumerate is absent from any deploy.sh older than REV #117 F2, and
 # running THIS suite against such a copy is the documented way to show the F2
 # cases failing on the reviewed base:
@@ -358,7 +358,7 @@ fi
 # how many times `zfs allow` ran. A refusal that still delegated is not a
 # refusal, and no amount of correct log wording substitutes for that count.
 # ---------------------------------------------------------------------------
-eval "$(sed -n '/^do_commit_scope() {/,/^}/p' "$DEPLOY_SRC")"
+eval "$(product_fn "$DEPLOY_SRC" do_commit_scope)"
 if ! declare -F do_commit_scope >/dev/null; then
     echo "FATAL: could not extract do_commit_scope from $DEPLOY_SRC" >&2
     exit 1
@@ -546,11 +546,10 @@ zfs_reset
 # call site is deep inside do_pair, whose scp/ssh orchestration needs a real
 # second host and root.
 PM_SRC="$TMPD/pairmode.sh"
-sed -n '/^pair_mode_after_inheritance() {/,/^}/p' "$DEPLOY_SRC" > "$PM_SRC"
-if [ ! -s "$PM_SRC" ]; then
-    bad "pairmode/0: the helper can be extracted from deploy.sh" "nothing matched in $DEPLOY_SRC"
-else
-    ok "pairmode/0: the helper can be extracted from deploy.sh"
+# product_fn's FATAL replaces the old pairmode/0 "can be extracted" assertion,
+# which could no longer fail.
+product_fn "$DEPLOY_SRC" pair_mode_after_inheritance > "$PM_SRC"
+{
     # shellcheck disable=SC1090
     . "$PM_SRC"
 
@@ -591,7 +590,7 @@ else
     else
         bad "pairmode/4: a dataset-driven peer stays dataset-driven" "got '$_got'"
     fi
-fi
+}
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
