@@ -246,7 +246,7 @@ cron_lock_acquire() {   # <user>  -> 0 held, 1 refused (CRON_ERR set)
     chmod 664 "$path" 2>/dev/null || :
     exec {fd}>"$path"
     if ! flock -w "$CRON_LOCK_TIMEOUT" "$fd"; then
-        eval "exec $fd>&-"
+        exec {fd}>&-
         CRON_ERR="could not acquire the crontab lock for '$user' within ${CRON_LOCK_TIMEOUT}s -- another writer is holding it. Refusing to write rather than racing it"
         return 1
     fi
@@ -268,8 +268,10 @@ cron_lock_release() {   # <user>
     # See cron_lock_acquire: a bare `exec ... 2>/dev/null` would permanently
     # redirect this process's real stderr to /dev/null, not just silence a
     # close error. $fd is a valid, currently-open descriptor here, so the
-    # close does not need a redirect to guard.
-    eval "exec $fd>&-"
+    # close does not need a redirect to guard. `{fd}>&-` closes the descriptor
+    # whose NUMBER the variable holds -- the same bash 4.1 form that opened it
+    # -- so no command is composed from text and handed to eval.
+    exec {fd}>&-
     unset "CRON_LOCK_FD[$user]"
 }
 

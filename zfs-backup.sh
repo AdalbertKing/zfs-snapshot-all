@@ -7507,10 +7507,12 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # returns the newest match, and the rehearsal calls it instead of asking the
 # same question its own way.
 # The exclusions this relationship was enrolled with, rendered as engine flags.
-# Read off the CLIENT RECORD (sourced by load_client_and_connection), never off
-# the config -- a config edit is exactly what this replaces. Numbered fields
-# rather than one packed string: a regex may contain anything, including the
-# separator someone would have picked.
+# Read off the CLIENT RECORD (loaded as data by load_client_and_connection),
+# never off the config -- a config edit is exactly what this replaces. Numbered
+# fields rather than one packed string: a regex may contain anything, including
+# the separator someone would have picked. The field for step i is reached by
+# indirect expansion (`${!n}`), not by composing an assignment for eval: the
+# number is the only thing that varies, and a name is not a command.
 # The PASSIVE half of the flags a preserved/generated section must carry:
 # ' -e' when the relationship declared passivity, plus one ' -E <prefix>' per
 # recorded snapshot-family exclusion. Same shape and same reason as
@@ -7518,11 +7520,11 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # everything the DECLARATION implies, or a re-activation quietly turns a
 # passive relationship active and it starts stamping the source.
 client_passive_flags() {
-    local out="" i=1 v
+    local out="" i=1 n v
     [ "${PASSIVE:-0}" = "1" ] || { printf ''; return 0; }
     out=" -e"
     while :; do
-        eval "v=\${EXCLUDE_FAMILY_$i:-}"
+        n="EXCLUDE_FAMILY_$i"; v="${!n:-}"
         [ -n "$v" ] || break
         out="$out -E $v"
         i=$((i + 1))
@@ -7531,9 +7533,9 @@ client_passive_flags() {
 }
 
 client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
-    local i=1 v out=""
+    local i=1 n v out=""
     while :; do
-        eval "v=\${EXCLUDE_CHILD_$i:-}"
+        n="EXCLUDE_CHILD_$i"; v="${!n:-}"
         [ -n "$v" ] || break
         out="$out -X $v"
         i=$((i + 1))

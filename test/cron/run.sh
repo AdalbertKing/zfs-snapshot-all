@@ -554,6 +554,48 @@ ms=$(( (t1 - t0) / 1000000 ))
 if [ "$ms" -lt 2000 ]; then ok "R2 ...and immediately, not after waiting for the other user's lock"
 else bad "R2 ...and immediately, not after waiting for the other user's lock" "${ms}ms"; fi
 
+# ---- S. the lock descriptor is closed without composing a command -----------
+#
+# Both closes were `eval "exec $fd>&-"` until 2026-09-03: a command assembled
+# from text and handed to eval, for a descriptor bash closes directly with
+# `exec {fd}>&-` -- the same form that opened it. S1 is the discriminator (red
+# on the eval form: 2). S2-S4 pin what the form change must keep: the
+# descriptor is open while the lock is held, gone after release, and so is the
+# bookkeeping entry. S5 covers the other close, on the refused acquire: a
+# writer that lost the contention must not keep a descriptor on the lock file.
+n_eval=$(grep -c '^[[:space:]]*eval[[:space:]]' "$LIB")
+check "S1 lib-cron.sh composes no command from text (eval sites)" "0" "$n_eval"
+# The probe is a CHILD process writing to the inherited descriptor. Not
+# `{ : >&"$fd"; } 2>/dev/null` in this shell: bash parks the group's saved
+# stderr on the lowest free descriptor >= 10 for the duration of the group,
+# which is exactly the number the lock just gave back -- the first version of
+# this probe reported "still open" against a descriptor /proc showed closed.
+fd_open() { bash -c ': >&"$1"' _ "$1" 2>/dev/null; }
+cron_lock_acquire closeuser || bad "S2 acquire for the close probe" "$CRON_ERR"
+s_fd="${CRON_LOCK_FD[closeuser]:-}"
+if [ -n "$s_fd" ] && fd_open "$s_fd"; then ok "S2 the lock descriptor is open while the lock is held"
+else bad "S2 the lock descriptor is open while the lock is held" "fd=[$s_fd]"; fi
+cron_lock_release closeuser
+if [ -n "$s_fd" ] && fd_open "$s_fd"; then bad "S3 release closes the descriptor" "fd $s_fd is still open"
+else ok "S3 release closes the descriptor"; fi
+check "S4 ...and drops the bookkeeping entry" "" "${CRON_LOCK_FD[closeuser]:-}"
+if [ -d /proc/$$/fd ]; then
+    rm -f "$BARRIER_HELD" "$BARRIER_GO"
+    bash "$TMPD/holder.sh" &
+    hpid=$!
+    while [ ! -e "$BARRIER_HELD" ]; do sleep 0.05; done
+    s_before=$(ls /proc/$$/fd | wc -l)
+    CRON_LOCK_TIMEOUT=1 cron_lock_acquire heldsvc
+    rc=$?
+    s_after=$(ls /proc/$$/fd | wc -l)
+    : > "$BARRIER_GO"
+    wait "$hpid" 2>/dev/null
+    check "S5 a refused acquire leaves no descriptor behind (refused)" "1" "$rc"
+    check "S5 ...open descriptors before and after" "$s_before" "$s_after"
+else
+    echo "SKIP S5 no /proc/\$\$/fd on this machine"
+fi
+
 # ---- T. cron_replace_all_impl: the whole-crontab primitive ------------------
 #
 # Some intermediate states are not one named block -- e.g. "a whole crontab
