@@ -798,6 +798,34 @@ case "$out" in
     *) bad "verbs: --leave reaches its function" "$out" ;;
 esac
 
+# --leave TAKES ALL THREE SCOPE FILES, not two of them.
+#
+# The draft scope is a trio: .scope, .scope.sha256 and the .scope.request
+# holding what the collector asked for. deploy.sh's own refusal path tells an
+# operator to "rm $sfile $sfile.request", so the pairing is known there -- and
+# this cleanup removed only the first two. Measured on pve9, 2026-09-03: after
+# a full --leave, pve10.scope.request was still on disk, naming a dataset that
+# had been destroyed, for a relationship that no longer existed.
+#
+# A complete manifest is needed to reach the removal at all: --leave refuses a
+# missing role, and refuses a gone account with no recorded uid rather than
+# guessing which principal to unallow.
+printf 'PEER_JOIN_ACCOUNT="zfsbackup-lbl"\nPEER_JOIN_ROLE=pull\nPEER_JOIN_ACCOUNT_UID=4242\nPEER_JOIN_GRANTED_DATASETS=""\n' > "$LV/peers/lbl.conf"
+touch "$LV/peers/lbl.scope" "$LV/peers/lbl.scope.sha256" "$LV/peers/lbl.scope.request"
+run_verb --leave=lbl >/dev/null 2>&1
+# The REQUEST is the discriminator -- the other two came out before this fix
+# too, so an assertion that only watched them would pass either way.
+left=""
+for f in lbl.scope.request lbl.scope lbl.scope.sha256 lbl.conf; do
+    [ -e "$LV/peers/$f" ] && left="$left $f"
+done
+if [ -z "${left# }" ]; then
+    ok "verbs: --leave removes the scope REQUEST alongside the scope and its hash"
+else
+    bad "verbs: --leave removes the scope REQUEST alongside the scope and its hash" "left=[$left]"
+fi
+
+
 # ...and NEITHER runs the provisioning phases on the way. A teardown that pulls
 # the repo on the host being torn down cannot complete when that checkout has
 # diverged -- measured on pve9 -- and on an ordinary host it rewrites scripts

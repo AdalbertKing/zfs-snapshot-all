@@ -185,6 +185,19 @@ discover() {
     # Source: gate state and the delegated per-peer account. Both are keyed by
     # label, and either can exist without the other -- which is the whole
     # point of looking at both.
+    # ...and from the SCOPE files on their own. Discovery above keys on
+    # peers/<id>.conf, so once that file is gone the .scope/.scope.sha256/
+    # .scope.request beside it become undiscoverable -- not merely unlisted.
+    # Measured on pve9, 2026-09-03: a full --leave left pve10.scope.request
+    # behind and this audit answered "nothing orphaned", which is the one
+    # answer it exists to get right. A leftover whose .conf is gone is the
+    # MOST orphaned a trace can be, so it has to seed an id of its own.
+    for f in "$PEER_STATE_DIR"/*.scope "$PEER_STATE_DIR"/*.scope.sha256 "$PEER_STATE_DIR"/*.scope.request; do
+        [ -e "$f" ] || continue
+        b=$(basename "$f"); b="${b%.request}"; b="${b%.sha256}"; b="${b%.scope}"
+        SEEN_LABEL["$b"]=1
+    done
+
     for f in "$REL_STATE_DIR"/*/; do
         [ -d "$f" ] || continue
         SEEN_LABEL["$(basename "$f")"]=1
@@ -350,6 +363,7 @@ _artefacts_raw() {
     [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
+    [ -e "$PEER_STATE_DIR/$id.scope.request" ] && echo "scope	$PEER_STATE_DIR/$id.scope.request"
     [ -d "$REL_STATE_DIR/$id" ]          && echo "gate	$REL_STATE_DIR/$id"
     id "zfsbackup-$id" >/dev/null 2>&1   && echo "account	zfsbackup-$id"
     # The home directory is listed SEPARATELY from the account on purpose. UID

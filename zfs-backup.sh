@@ -2898,6 +2898,46 @@ crontab_of_or_die() {   # <user> <outfile>
 # undesirable schedule is excused here. It always was -- a hand-edited config
 # could do it, and gen-cron lints the expression it renders. What the guard
 # still catches, unchanged, is a job that DISAPPEARS.
+# A cron line's retention flags are HOW MUCH, not WHETHER.
+#
+# Fourth normalizer, same shape as the two above, and the one the estate asked
+# for. Measured on a live pair pve9 -> pve10, 2026-09-03: an operator edits
+# `retain` in the installed config and re-activates, and the guard refuses --
+# advising them to "move the other workload out of this account first" when the
+# only job it names is the one they just edited.
+#
+# That blocks a workflow REV-20260811-107 APPROVED in these very words:
+# "Administrator edits only remote SOURCE retention in canonical CONFIG to
+# 6H/2D because the production source is space-constrained", followed by an
+# ordinary reactivation. REV-107 made the COMPOSITION preserve that edit; its
+# evidence was a unit suite, so nothing ever put THIS guard on that path. The
+# policy was preserved and then refused at the door.
+#
+# It is also what the tree says its architecture is: audit-source-retention
+# calls the installed config "runtime truth", and exists precisely so that
+# reactivation does not invent retention. A guard that refuses to install what
+# the config says stops the truth from taking effect.
+#
+# WHY THIS IS NOT A HOLE. The guard asks one question -- does a job STOP
+# RUNNING. A line whose command still appears, for the same account, source,
+# target, pattern, label and reservations, under the same job name (which
+# carries host, template and client), is still running. Only the counts move.
+#
+# Narrow on purpose: the flag must be a whole argument preceded by whitespace,
+# so a dataset that merely CONTAINS the text -- "tank/rack-D7" -- is untouched
+# and two such datasets stay distinguishable. And unlike the three exemptions
+# above, this one SPEAKS: retention is how much history exists, so an excused
+# change is named, both values, rather than passing in silence.
+retention_normalized_identity() {
+    sed -E 's/([[:space:]])-([YMWDHymwdh])[0-9]+/\1-\2<N>/g'
+}
+
+# The retention flags of one line, in order, for saying what changed.
+retention_flags_of() {   # <line>
+    printf '%s\n' "$1" | grep -oE '[[:space:]]-[YMWDHymwdh][0-9]+' | tr -d ' ' | tr '\n' ' '
+}
+
+
 schedule_normalized_identity() {
     sed -E 's/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ /<SCHEDULE> /'
 }
@@ -3108,6 +3148,25 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             if printf '%s\n' "$proposed_norm" \
                  | schedule_normalized_identity | grep -qxF -- \
                      "$(printf '%s\n' "$norm" | schedule_normalized_identity)"; then
+                continue
+            fi
+            # Fourth exemption: the same job, with its RETENTION edited in the
+            # config. Normalized on the endpoint and the schedule FIRST, so a run
+            # that moves the endpoint and re-cuts the retention together is still
+            # recognised as one job changed twice. See retention_normalized_identity
+            # for why this is not a hole -- and why, unlike the three above, it
+            # says out loud what it excused.
+            local rnorm twin=""
+            rnorm=$(printf %s "$norm" | schedule_normalized_identity | retention_normalized_identity)
+            while IFS= read -r pline; do
+                [ -n "$pline" ] || continue
+                [ "$(printf %s "$pline" | schedule_normalized_identity | retention_normalized_identity)" = "$rnorm" ] || continue
+                twin="$pline"; break
+            done <<< "$proposed_norm"
+            if [ -n "$twin" ]; then
+                local _rold _rnew; _rold=$(retention_flags_of "$line"); _rnew=$(retention_flags_of "$twin")
+                warn "  retention changed, the job itself stays: ${_rold% } -> ${_rnew% }"
+                warn "    $line"
                 continue
             fi
             still_lost="$still_lost$line
