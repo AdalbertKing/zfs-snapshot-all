@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a85df40b41813b5f -->
+<!-- status-covers-digest: 77c7402a2830be98 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,87 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Retencja asymetryczna: `--source-profile=NAZWA` (2026-09-03).** Źródło z
+  ciasnym dyskiem pod kolektorem, który ma miejsca pod dostatkiem, może teraz
+  trzymać krótszą drabinę niż cel. Podział źródło/cel **istniał już
+  strukturalnie** — `emit_source_prune_fragment` przemianowuje `keep_daily` na
+  `src_keep_daily`, REV-20260811-106 odmawia sięgania po autorytet szablonów
+  celu, a REV-20260811-107 celowo zachowuje ręcznie edytowaną retencję źródła
+  przez reaktywację. Nie dało się tego tylko **powiedzieć przy tworzeniu**,
+  więc trzeba było wiedzieć o `src_` i edytować config ręcznie.
+
+  **Pominięcie flagi znaczy dokładnie to, co dziś** — `--profile` na obie
+  strony. Warunek właściciela i jedyny bezpieczny odczyt: sięgnięcie po profil
+  `default` w źródle po cichu zmieniłoby retencję każdej istniejącej relacji.
+
+  Ścieżka zdalna: `add-client` **zapisuje** `SOURCE_PROFILE=` w rekordzie
+  klienta, `activate-client` czyta go przy PIERWSZYM renderze sekcji — ta sama
+  granica create-time co `--profile` (REV-088/089). Reaktywacja go nie
+  odczytuje ponownie, bo inaczej rendrowałaby po tym, co chroni REV-107.
+
+  **Strażnik rodziny.** Oba profile mogą różnić się tym, ILE trzymają, nigdy
+  tym, CO: prune wycelowany w rodzinę, której relacja nie tworzy, nie trafia w
+  nic — a `delsnaps` bez trafienia kończy **zerem**. Źródło trzymałoby więc
+  wszystko, a raport co noc pokazywał czyste zadanie. Odmowa jest twarda.
+
+  **Dwie wady złapane przez własne testy, obie fail-open:**
+
+  1. strażnik czytał dla celu wprost `PROFILE_PRUNE_FILE`, choć retencja
+     profilu bywa w `PROFILE_DS_FILE` (tiery prunujące się same). Cel
+     rozwiązywał się do ZERA wzorców, więc funkcja **odmawiała 100% swoich
+     poprawnych zastosowań**, z przypadkiem właściciela (`d7h24` pod `d30h24`)
+     włącznie — a odmowa czytała się jak rozważny werdykt bezpieczeństwa.
+     Teraz obie strony idą przez `profile_retention_fragment`, resolver
+     istniejący dokładnie po to, że fragment bywa w jednym albo w drugim pliku;
+  2. `SRC_PROFILE_NAME` to zmienna globalna, nigdy nie zerowana na wejściu do
+     polecenia: **drugie `add-client` w tym samym procesie dziedziczyło
+     `--source-profile` pierwszego**. Pierwsza wersja testu wołała każde w
+     osobnej podpowłoce i przechodziła przy żywej wadzie — podpowłoka na
+     wywołanie testuje powłokę, nie kod. Teraz oba wołania dzielą proces.
+
+  `test/zfsbackup` 378 -> 388 asercji, w tym kontrola ujemna do każdego
+  twierdzenia. Profile w testach to **pliki wysyłkowe**, nie atrapy: `d7h24` i
+  `d30h24` niosą te same rodziny na różną długość (asymetria dozwolona),
+  `d30` niesie samo `automated_daily` (asymetria odmawiana).
+
+  Literówka i niezgodna rodzina padają w `add-client`, **przed parowaniem i
+  wymianą kluczy** — ta sama granica co `--profile`, i odmowa nazywa flagę.
+  Bez tego operator, który pomylił jedną z dwóch nazw profili w jednej linii,
+  dowiadywałby się o tym przy pierwszym `activate-client` na żywym hoście.
+
+  **DOWIEDZIONE NA ŻYWO 2026-09-03, pve9 (192.168.28.99) -> pve10
+  (192.168.28.97).** Oba hosty na gałęzi `7ba4699`, self-update wstrzymany
+  mechanizmem samego pakietu (`update-hold`), predykcje spisane PRZED biegiem.
+  Profile: cel `d30h24`, źródło `d7h24` — różnią się jedną linią (`keep`), i
+  **żaden nie ma bloku `[prune]`**, więc retencja idzie ścieżką
+  `PROFILE_DS_FILE`: dokładnie tą, na której strażnik się wykładał.
+
+  | co | wynik |
+  |---|---|
+  | rekord klienta | `SOURCE_PROFILE=d7h24` obok `PROFILE=d30h24` |
+  | render | cel `-D30`, źródło `-D7`, godzinowe `-H24` po obu stronach |
+  | zainstalowany crontab | te same liczby, w linii prune każdej ze stron |
+  | **prune naprawdę tnie inaczej** | z 39 snapshotów: źródło **7**, cel **30** |
+  | literówka | odmowa w `add-client`, nazywa flagę, brak rekordu |
+  | niezgodna rodzina | odmowa; `target patterns` **niepuste** |
+  | kontrola ujemna: bez flagi | `-D30` po OBU stronach |
+
+  Wiersz `target patterns: [automated_daily automated_hourly]` jest osobnym
+  dowodem poprawki: przed nią ta lista była pusta i odmowa trafiała każdego.
+
+  Punkt czwarty — reaktywacja nie nadpisuje ręcznej edycji (REV-107) — wyszedł
+  przez odmowę, która sama jest dowodem: po ręcznej zmianie źródłowego `-D7` na
+  `-D3` nowo wyrenderowany blok niósł `-D3`, a instalacja stanęła dlatego, że
+  zainstalowany crontab wciąż miał `-D7`. Gdyby reaktywacja przeładowała
+  zapisany preset, render dałby `-D7` i odmowy by nie było.
+
+  Lab rozebrany do zera: `remove-client` + `--leave`, datasety skasowane,
+  crontaby wrócone do stanu sprzed labu, oba klony z powrotem na `main`
+  @ `2eb209a`, aktualizacje wznowione, `clean-relationships.sh` czysty na obu.
+
+  Obowiązek `zfsbackup-live-pair` jest tym pokryty **poza `setup-server`** —
+  oba hosty były już postawione, więc ten krok nie był wykonywany.
+  `rux-live-chain` (topologia łańcuchowa RUX) **zostaje otwarty**.
 - **Dwie wady znalezione przez lab `--source-profile`, obie niezwiązane z tą
   funkcją (2026-09-03).** Wyszły przy rozbiórce labu pve9 -> pve10, każda z
   kontrolą, która oddziela je od zmienianego kodu.
