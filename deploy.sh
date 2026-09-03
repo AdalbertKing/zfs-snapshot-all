@@ -4237,11 +4237,45 @@ else
 mkdir -p "$(dirname "$REPO_DIR")"
 
 if [ -d "$REPO_DIR/.git" ]; then
-    log "$REPO_DIR is already a git repo, pulling..."
-    git -C "$REPO_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_URL" \
-        || warn "existing repo's origin does not match $REPO_URL -- check manually"
-    git -C "$REPO_DIR" pull --ff-only origin main \
-        || die "git pull --ff-only failed -- local repo has diverged, resolve manually before continuing"
+    # A HOLD STOPS THIS PULL, and until 2026-09-04 it did not -- which made
+    # --rollback silently not roll back.
+    #
+    # update-control.sh honours the hold at its own front door: --self-update
+    # reads it BEFORE touching git and returns. This phase never asked. So any
+    # direct `deploy.sh` run pulled main into the checkout regardless, and the
+    # hold was only NOTICED ~800 lines later, in phase 7, where it merely warns
+    # -- long after the revision had moved.
+    #
+    # The expensive case is do_rollback, which is built out of exactly these
+    # pieces: it resets the checkout to the recorded revision, writes the hold,
+    # and then runs THIS script to regenerate the host's scripts at that
+    # revision. Phase 2 pulled main straight back over the reset, inside the
+    # same command. Measured on pve10, 2026-09-04:
+    #
+    #   >>> rolled back 8ee40ef7 -> bd23bcc8          (update-control says so)
+    #   >>> Phase 2 ... already a git repo, pulling...
+    #   Updating bd23bcc8..8e8cbe68                    (main had moved on)
+    #
+    # -- the host finished on a revision NEWER than the one it rolled back
+    # from, while the hold file claimed it was parked at bd23bcc8. Both the
+    # rollback and its own safety net reported success about a state that did
+    # not exist.
+    #
+    # Held therefore means: deploy the checkout EXACTLY as it stands. That is
+    # what an operator sets a hold for -- during a lab, a staged rollback, a
+    # bisect. Deploying is still allowed (--rollback needs it); moving the
+    # revision under the operator is not.
+    if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+        warn "automatic updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE" 2>/dev/null || echo 'reason unreadable')) -- NOT pulling"
+        log "  deploying $REPO_DIR exactly as it stands ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null))"
+        log "  lift the hold to follow main again: bash $0 --resume-updates"
+    else
+        log "$REPO_DIR is already a git repo, pulling..."
+        git -C "$REPO_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_URL" \
+            || warn "existing repo's origin does not match $REPO_URL -- check manually"
+        git -C "$REPO_DIR" pull --ff-only origin main \
+            || die "git pull --ff-only failed -- local repo has diverged, resolve manually before continuing"
+    fi
 
 elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
     log "$REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
@@ -6886,11 +6920,21 @@ else
     log "Phase 8d: repo checkout at $ACCOUNT_REPO_DIR (readable+executable by $USERNAME)"
     # ------------------------------------------------------------------------------
     if [ -d "$ACCOUNT_REPO_DIR/.git" ]; then
+        # SAME RULE AS PHASE 2, and for the same reason: this copy is what the
+        # account's cron actually runs. Pulling it while updates are held would
+        # leave the account on main while root sits at the rolled-back revision
+        # -- the two halves of one host running different code, which is worse
+        # than either alone.
+        if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+            warn "automatic updates are HELD -- NOT pulling $ACCOUNT_REPO_DIR either"
+            log "  leaving it at $(su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' rev-parse --short HEAD" 2>/dev/null)"
+        else
         log "$ACCOUNT_REPO_DIR is already a git repo, pulling..."
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' remote get-url origin 2>/dev/null" | grep -qF "$REPO_URL" \
             || warn "existing repo's origin does not match $REPO_URL -- check manually"
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' pull --ff-only origin main" \
             || die "git pull --ff-only failed -- local repo has diverged, resolve manually"
+        fi
 
     elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then
         log "$ACCOUNT_REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"

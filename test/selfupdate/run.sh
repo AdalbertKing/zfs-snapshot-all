@@ -912,5 +912,93 @@ else
     bad "29d an EMPTY recorded file is not a list: the default stands" "$(printf '%s' "$out" | grep -F 'grant-datasets:')"
 fi
 
+# --- A HELD HOST DOES NOT PULL, SO --rollback ACTUALLY ROLLS BACK -----------
+#
+# update-control.sh honours the hold at its own front door. deploy.sh's phase 2
+# did not: it pulled main into the checkout on every direct run and only
+# NOTICED the hold ~800 lines later, where it merely warns.
+#
+# do_rollback is built out of exactly those pieces -- reset the checkout, write
+# the hold, then run deploy.sh to regenerate the host's scripts at that
+# revision -- so phase 2 pulled main straight back over the reset, inside the
+# same command. Measured on pve10 2026-09-04:
+#
+#   >>> rolled back 8ee40ef7 -> bd23bcc8
+#   >>> Phase 2 ... already a git repo, pulling...
+#   Updating bd23bcc8..8e8cbe68
+#
+# The host finished NEWER than it started while the hold file claimed it was
+# parked at bd23bcc8: the rollback and its own safety net both reported success
+# about a state that did not exist.
+#
+# The gate is lifted verbatim from deploy.sh and run with a `git` that records
+# what it was asked to do, so this asserts the DECISION, not the wording.
+mkdir -p "$WORK/hg"
+hold_gate() {   # <hold present: 0|1> -> stdout of the gate; git calls in $WORK/hg/calls
+    : > "$WORK/hg/calls"
+    if [ "$1" = 1 ]; then printf 'lab, 2026-09-04\n' > "$WORK/hg/hold"; else rm -f "$WORK/hg/hold"; fi
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      echo 'log()  { echo "LOG: $*"; }'
+      echo 'warn() { echo "WARN: $*"; }'
+      echo 'die()  { echo "DIE: $*"; exit 1; }'
+      echo 'read_state_file() { cat "$1" 2>/dev/null; }'
+      printf 'REPO_DIR=%q\nREPO_URL=%q\nUPDATE_HOLD_FILE=%q\nCALLS=%q\n' \
+             "$WORK/hg/repo" "https://example.invalid/r.git" "$WORK/hg/hold" "$WORK/hg/calls"
+      # Records every invocation; answers the two reads the block makes.
+      cat <<'STUB'
+git() {
+    printf '%s\n' "$*" >> "$CALLS"
+    case "$*" in
+        *"remote get-url"*) echo "https://example.invalid/r.git" ;;
+        *"rev-parse"*)      echo "deadbee" ;;
+    esac
+    return 0
+}
+STUB
+      echo 'gate() {'
+      awk '/# A HOLD STOPS THIS PULL/{f=1} f{print} f&&/^    fi$/{exit}' "$DEPLOY"
+      echo '}'
+      echo 'gate'; } > "$t"
+    bash "$t" 2>&1; rm -f "$t"
+}
+
+out="$(hold_gate 1)"
+if ! grep -q -- 'pull --ff-only' "$WORK/hg/calls" \
+   && printf '%s' "$out" | grep -q 'NOT pulling'; then
+    ok "hold: phase 2 does NOT pull while updates are held"
+else
+    bad "hold: phase 2 does NOT pull while updates are held" \
+        "out=$out calls=$(cat "$WORK/hg/calls")"
+fi
+
+# THE POSITIVE CONTROL, and the reason the assertion above means anything: a
+# gate that never pulls would pass it just as well.
+out="$(hold_gate 0)"
+if grep -q -- 'pull --ff-only origin main' "$WORK/hg/calls"; then
+    ok "no hold: phase 2 pulls exactly as before"
+else
+    bad "no hold: phase 2 pulls exactly as before" \
+        "out=$out calls=$(cat "$WORK/hg/calls")"
+fi
+
+# PLACEMENT IS THE WHOLE FINDING, in both checkouts -- root's and the delegated
+# account's. The account copy is what its cron runs; pulling it under a hold
+# would leave one host running two revisions.
+_g1=$(grep -n 'A HOLD STOPS THIS PULL' "$DEPLOY" | head -1 | cut -d: -f1)
+_p1=$(grep -n 'is already a git repo, pulling' "$DEPLOY" | sed -n 1p | cut -d: -f1)
+_g2=$(grep -n 'NOT pulling \$ACCOUNT_REPO_DIR either' "$DEPLOY" | head -1 | cut -d: -f1)
+_p2=$(grep -n 'is already a git repo, pulling' "$DEPLOY" | sed -n 2p | cut -d: -f1)
+if [ -n "$_g1" ] && [ -n "$_p1" ] && [ "$_g1" -lt "$_p1" ]; then
+    ok "hold: the gate precedes root's pull in the file"
+else
+    bad "hold: the gate precedes root's pull in the file" "gate=$_g1 pull=$_p1"
+fi
+if [ -n "$_g2" ] && [ -n "$_p2" ] && [ "$_g2" -lt "$_p2" ]; then
+    ok "hold: the account checkout is gated too"
+else
+    bad "hold: the account checkout is gated too" "gate=$_g2 pull=$_p2"
+fi
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

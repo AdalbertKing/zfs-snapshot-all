@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ae19ad511783879d -->
+<!-- status-covers-digest: 4710a23ebf62c87f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,45 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`--rollback` nie cofał: własny krok `apply` pociągał `main` z powrotem
+  (2026-09-04).** Znalezione przy wyjaśnianiu, dlaczego `update-hold` nie
+  ochronił labu.
+
+  **Przyczyna.** `update-control.sh` honoruje hold u siebie na wejściu —
+  `--self-update` czyta go **przed** dotknięciem gita i wraca. Faza 2
+  `deploy.sh` nie pytała o nic: każde bezpośrednie uruchomienie ciągnęło `main`
+  do checkoutu, a hold był **zauważany ~800 linii później**, w Fazie 7, gdzie
+  tylko ostrzega. `do_rollback` jest zbudowany dokładnie z tych klocków —
+  resetuje checkout, zapisuje hold, po czym uruchamia `deploy.sh`, żeby
+  przegenerować skrypty hosta na tej rewizji. Faza 2 pobierała `main` prosto
+  na reset, w tej samej komendzie.
+
+  **Zmierzone na pve10**, nie wywnioskowane z kodu:
+
+  ```
+  >>> rolled back 8ee40ef7 -> bd23bcc8        (update-control tak twierdzi)
+  >>> Phase 2 ... already a git repo, pulling...
+  Updating bd23bcc8..8e8cbe68                  (main zdążył ruszyć)
+  ```
+
+  Host skończył na rewizji **nowszej niż ta, z której się cofał**, a plik hold
+  twierdził, że stoi na `bd23bcc8`. Rollback i jego własna siatka
+  bezpieczeństwa raportowały sukces o stanie, który nie istniał.
+
+  **Naprawa.** Hold bramkuje pull w obu checkoutach — roota (Faza 2) i konta
+  delegowanego (Faza 8d; inaczej jeden host biegałby dwiema rewizjami naraz).
+  Wdrażanie przy holdzie **zostaje dozwolone** — `--rollback` go potrzebuje —
+  zmienia się tylko to, że rewizja nie rusza się pod operatorem. `test/selfupdate`
+  +4 asercje: bramka wyjęta dosłownie z `deploy.sh` i uruchomiona z podstawionym
+  `git`, który zapisuje, o co go poproszono (plus kontrola pozytywna, że bez
+  holdu pull nadal następuje, i dwie asercje umiejscowienia). Dyskryminujące —
+  wszystkie cztery padają na kodzie sprzed poprawki.
+
+  **Ograniczenie, wprost:** `do_rollback` uruchamia `deploy.sh` **z rewizji
+  docelowej**, więc chroni to rollbacki do rewizji, które tę poprawkę już
+  zawierają. Cofnięcie się do czegoś starszego nadal użyje tamtego
+  `deploy.sh` — ten sam kształt, co REV-20260730-001 F1.
 
 - **`--draft-config`, `--rotate` i `--revoke-old` bez `--pair` wdrażały host
   zamiast odmówić (2026-09-04).** Znalezione w labie `--draft-config`
