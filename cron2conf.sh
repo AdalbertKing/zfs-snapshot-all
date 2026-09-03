@@ -27,6 +27,12 @@ set -o pipefail
 #   -o <FILE>   Write the reconstructed config to FILE. Default: stdout.
 #   -V          Print version and exit
 #
+# Reads every job shape gen-cron.sh emits: snapsend.sh (push, or local
+# snapshot-only), snapget.sh (pull -- since 2026-09-03; until then a pull line
+# was "unrecognized" and the round trip for a collector's crontab was simply
+# impossible), delsnaps.sh (prune, gfs, bookmark cleanup), the monitor line,
+# the digest line and removable-media brackets around snapsend.sh.
+#
 # Exit status: 0 = reconstructed cleanly. 1 = fatal (no input, no managed
 # block, or a line this tool does not recognize -- it refuses to guess).
 # 2 = reconstructed, but one or more entities could not be represented (see
@@ -368,6 +374,34 @@ parse_send_cmd() {
     return 0
 }
 
+# parse_get_cmd CMD -- the pull engine, called by gen-cron.sh as
+#   snapget.sh -m "PREFIX" [flags] "REMOTE_SPEC" ["LOCAL_BASE"]
+# where REMOTE_SPEC is user@host:dataset (the section's 'src') and LOCAL_BASE
+# is the part of the local dataset ABOVE the remote dataset's name: gen-cron.sh
+# derives it from [dataset:<local>] by stripping that name (pull_check), and
+# omits it when the local dataset IS the remote name. So the section name is
+# rebuilt as LOCAL_BASE/<remote name>, or <remote name> alone. The quoted
+# fields split exactly like a snapsend.sh line, so the shape check is the same.
+parse_get_cmd() {
+    local cmd="$1"
+    [[ "$cmd" == */snapget.sh\ -m\ \"* ]] || return 1
+    C_REPO="${cmd%%/snapget.sh -m \"*}"
+    local -a p; qsplit p "$cmd"
+    local n=${#p[@]}
+    { [ "$n" -eq 4 ] || [ "$n" -eq 6 ]; } || return 1
+    C_PREFIX="${p[1]}"
+    C_FLAGS="$(trim "${p[2]}")"
+    C_SRC="${p[3]}"
+    C_DST=""
+    [ "$n" -eq 6 ] && C_DST="${p[5]}"
+    # A remote spec without ':' is snapget's sync mode (bare user@host);
+    # gen-cron.sh never emits that for a pull, and the section name below
+    # needs the dataset after the colon, so it is refused here rather than
+    # turned into a section named after a host.
+    [[ "$C_SRC" == *:* ]] || return 1
+    return 0
+}
+
 parse_delsnaps_cmd() {
     local cmd="$1"
     [[ "$cmd" == */delsnaps.sh\ * ]] || return 1
@@ -556,6 +590,7 @@ unwrap_media_bracket() {   # <command> -> sets C_MEDIA_*; 0 if it was bracketed
 #BEGIN 4 [CLASSIFY EVERY LINE INTO ENTITIES]
 ###############################################################################
 declare -a SEND_E=()      # sched<SEP>flags<SEP>src<SEP>dst<SEP>prefix<SEP>notify
+declare -a PULL_E=()      # sched<SEP>flags<SEP>remote<SEP>local_base<SEP>prefix<SEP>notify
 declare -a PRUNE_E=()     # sched<SEP>scope<SEP>pattern<SEP>retain<SEP>recursive<SEP>clearcut<SEP>protect<SEP>notify
 declare -a GFS_E=()       # sched<SEP>scope<SEP>pattern<SEP>retain_parts<SEP>recursive<SEP>clearcut<SEP>protect<SEP>notify
 declare -a BOOK_E=()      # sched<SEP>scope<SEP>pattern<SEP>age<SEP>recursive<SEP>notify
@@ -621,6 +656,11 @@ classify_lines() {
                 SEND_E+=("${SCHED}${SEP}${C_FLAGS}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}${NOTIFY}")
                 continue
             fi
+            if parse_get_cmd "$CMD"; then
+                REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
+                PULL_E+=("${SCHED}${SEP}${C_FLAGS}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}${NOTIFY}")
+                continue
+            fi
             if parse_delsnaps_cmd "$CMD"; then
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
                 case "$C_MODE" in
@@ -632,7 +672,7 @@ classify_lines() {
                 esac
                 continue
             fi
-            die "unrecognized job line (not snapsend.sh or delsnaps.sh): $line"
+            die "unrecognized job line (not snapsend.sh, snapget.sh or delsnaps.sh): $line"
         fi
         if parse_monitor_envelope "$line"; then
             parse_checkage_cmd "$CMD" || die "monitor line does not call check-snap-age.sh: $line"
@@ -821,6 +861,52 @@ build_send_sections() {
             section_set_field "$SECTION_KEY" "recursive" "$C_REC"
         fi
         new_template send_schedule "$sched" prefix "$prefix" flags "$C_FLAGS_REST" dst "$dst" notify_raw "$notify"
+        section_add_template "$SECTION_KEY" "$NEW_TEMPLATE_NAME"
+    done
+}
+
+# ---- pulls: one [dataset:] section per local dataset, src = the remote spec ----
+#
+# The flags travel back verbatim, -A / -q / -L included: gen-cron.sh leaves a
+# flags string alone when it already carries the token it would add
+# (maybe_add_autotune, maybe_add_quiesce), and appends -L only for a
+# pair_label field this tool does not write. What does need saying is the
+# ABSENCE of -A on a remote transfer: gen-cron.sh adds it by default, so a
+# line without it (and without -z/-Z/-g, which also stand it down) came from
+# 'autotune = no', and the section must say so or the round trip grows a flag.
+autotune_field_for() {   # <flags> -> "no" when gen-cron.sh would add -A to these flags, else ""
+    local tok
+    for tok in $1; do
+        case "$tok" in -A|-z|-Z|-g) return 0 ;; esac
+    done
+    printf 'no'
+}
+
+build_pull_sections() {
+    local e sched flags remote base prefix notify local_ds remote_name prev
+    for e in "${PULL_E[@]}"; do
+        IFS="$SEP" read -r sched flags remote base prefix notify <<< "$e"
+        remote_name="${remote#*:}"
+        local_ds="${base:+$base/}$remote_name"
+        split_recursion "$flags"
+        get_section dataset "$local_ds"
+        case "${SECTION_FIELDS[$SECTION_KEY]:-}" in
+            *"src = "*) ;;
+            *) section_set_field "$SECTION_KEY" "src" "$remote"
+               section_set_field "$SECTION_KEY" "autotune" "$(autotune_field_for "$C_FLAGS_REST")" ;;
+        esac
+        if [ -n "$C_REC" ]; then
+            prev=""
+            case "${SECTION_FIELDS[$SECTION_KEY]:-}" in
+                *"recursive = flat"*)   prev=flat ;;
+                *"recursive = atomic"*) prev=atomic ;;
+            esac
+            if [ -n "$prev" ] && [ "$prev" != "$C_REC" ]; then
+                die "dataset '$local_ds' has tiers with DIFFERENT recursion ('$prev' and '$C_REC'). A [dataset:] section declares recursion once for all its tiers, so this crontab cannot be represented as one section -- split it into separate configs, or make the tiers agree"
+            fi
+            section_set_field "$SECTION_KEY" "recursive" "$C_REC"
+        fi
+        new_template send_schedule "$sched" prefix "$prefix" flags "$C_FLAGS_REST" notify_raw "$notify"
         section_add_template "$SECTION_KEY" "$NEW_TEMPLATE_NAME"
     done
 }
@@ -1045,6 +1131,7 @@ extract_block
 classify_lines
 build_excluded_sections
 build_send_sections
+build_pull_sections
 build_prune_buckets
 emit_prune_and_monitor_sections
 build_gfs_sections
