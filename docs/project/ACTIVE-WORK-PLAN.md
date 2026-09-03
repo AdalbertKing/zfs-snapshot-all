@@ -512,53 +512,93 @@ Order:
 4. Real ZFS end-to-end evidence.
 5. Destructive replacement as a **separate verb**, with explicit confirmation and mandatory pre-restore snapshot.
 
-### Status — planner, safe restore, strategy, gates, and now EXECUTION (internal)
+### Status — DELIVERED through the public CLI; Gate 7 awaits the Owner's declaration (refreshed 2026-09-03)
 
-Steps 1–4 landed across REV-113/114/116/118. The destructive path was then built
-gate-first (REV-119, five rounds): resolution, refusals, a loss set measured from
-a technical snapshot before the confirmation, the write fence, and the commit
-boundary — all internal, no execution, no public grammar.
+The previous version of this section stopped at "delivered direct-main pending
+the REV-120/121 verdicts" and "the public cross-host CLI follows under R-025".
+Both have happened since; this is the state of the tree at `main` `95d0244`.
 
-**The execution step itself is now implemented** (R-026, the internal slice after
-REV-119 closure), still below the CLI grammar the owner is settling
-(`OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md`). `restore_execute()` performs one
-GUID-anchored rollback for every reachable strategy (rollback / discard-live /
-unproven land the recovery point directly; increment rebuilds the delta with one
-incremental receive), accepts by GUID rather than by exit code, and separates
-"nothing destroyed" (atomic rollback failed before touching anything) from
-"partially changed" (a broken transfer after the rollback) so the truthful
-cleanup/failure semantics from REV-119 carry through. Proven end-to-end on real
-ZFS (pve0/zfs-2.1.9): increment, rollback and discard-live each verified by GUID
-out of band, the fence up through execution and down after, no run-owned snapshot
-left behind.
+**Steps 1–4** landed across REV-113/114/116/118 (planner, safe restore into a
+derived namespace with GUID verification, collision refusals, live evidence):
+safe path LIVE-PROVEN on deployed code 2026-08-15 (md5 of the recovered data
+equals the source, GUID matches).
 
-REV-120 then found two P1 defects in that primitive, both now fixed. The approved
-destructive set is computed by `createtxg` — the order `zfs rollback` itself uses —
-and it covers **bookmarks**, which `rollback -r` was measured to destroy while the
-planner never enumerated them; an unreadable listing leaves the set unproven rather
-than empty, and the set is re-measured for exact equality immediately before the
-destructive command. The acceptance test resolves the recovery point by identity
-and then requires nothing newer than it, instead of asking whether the last row of
-a `creation`-sorted listing carried the target GUID.
+**Step 5 was delivered in a different shape than this list wrote, by Owner
+decision, not by drift.** The list said "a separate verb, with explicit
+confirmation and mandatory pre-restore snapshot". What exists:
 
-Round 2 closed the residual F1 race the reviewer refused to accept: measuring the
-set immediately before `zfs rollback -r` narrows the window but cannot close it,
-because `-r` decides for itself what is newer than the base. Destruction is now
-carried by the shape of the commands -- `zfs destroy` naming the approved objects
-explicitly, then a NON-recursive rollback whose own semantics refuse when anything
-newer exists. Execution cannot widen the approved set by construction; the price,
-stated rather than hidden, is that a late arrival is now a partial failure instead
-of a clean refusal.
+- the destructive path is the same verb, gated by a **grant on the endangered
+  machine** (`deploy.sh --allow-restore=<label>`, and `--replace` when the
+  recovery would destroy what that machine holds now — `OWNER-RESTORE-GRANT-AND-MODES-2026-08-26.md`,
+  "the collector starts"); without the grant the verb refuses before touching
+  anything. The grant is the whole safety, not an addition to it;
+- the "pre-restore snapshot" is the **technical snapshot** the gates take
+  before the confirmation, from which the **loss set** is measured, shown,
+  confirmed, and re-measured for exact equality immediately before the
+  destructive command (REV-119, five rounds; REV-120 two P1s: the set is
+  computed by `createtxg` and covers bookmarks; destruction is carried by the
+  shape of the commands — explicit `zfs destroy` of the approved objects, then
+  a NON-recursive rollback — so execution cannot widen the approved set);
+- the default recovery point fails closed on a tie (REV-121).
 
-REV-121, opened from a residual this response flagged, made the default recovery
-point fail closed: `creation` remains the axis, but a shared maximum refuses and
-names the tied candidates instead of resolving by list order.
+**Public grammar, settled by the Owner in four documents and implemented:**
+`OWNER-RESTORE-CLI-GRAMMAR-2026-08-13.md` (the shape), `OWNER-RESTORE-SCOPE-2026-08-26.md`
+(one relationship per command, datasets by comma; `--at` by ZFS `creation`,
+never by name), `OWNER-RESTORE-GRANT-AND-MODES-2026-08-26.md`,
+`OWNER-RESTORE-CROSS-HOST-GRAMMAR-2026-08-30.md` (one spelling for scope, the
+colon retired after live defect #132, `--onto` for where a recovery lands,
+whole-relationship rebase from the recorded roots' common prefix, shown in the
+preview). `--from-copy` (2026-08-31) covers the case where the relationship
+records themselves are gone. The verb lives in `zfs-restore.sh` (split out
+2026-08-17 by Owner decision: the one program whose active side writes onto
+production data; `zfs-backup.sh` is feature-stable and forwards `restore`).
 
-`test/restore` 108/108; delivered direct-main pending the REV-120/121 verdicts.
+**Relation-level failure policy (R-025's other half):** Owner decision D+B,
+2026-08-30 — pre-flight of the whole scope before the pause and before the
+first mutation, then continue after a failure and report a **verdict per
+dataset** (`OK` / `NOT DONE` / `CHANGED` / `PARTIAL`), never a count; a late
+pre-mutation refusal stops the run (REV-127). Transport is `snapsend.sh` run
+in the other direction; the frozen engines are untouched.
 
-Out of this slice, per R-026: relation-level multi-dataset failure policy and the
-public cross-host CLI. Those follow under R-025 once the execution primitive is
-reviewed. Gate 7 is not yet reached.
+**Live evidence, on the lab pair and on the fleet:** three-host proof of
+recovery onto a different machine plus `move-to-client` (2026-08-28); a second
+lab pass that ran a backup AFTER the restore and found fourteen defects the
+first pass could not (2026-08-27; the E13 entry in the implementer error log);
+the full ten-step lab 2026-08-31 at `main` `bb5b6af` with **no code fix on the
+way** — `--plan`, `--from-copy` into free space, from a replica into free
+space, replica onto the copy dataset with `--overwrite` (self-rollback), the
+relation destructively (3× `OK`), `--at` choosing the newest not-later-than,
+half-B failure on the first dataset (`NOT DONE`, `OK`, `OK` → `PARTIAL`,
+RC=1), cross-host beyond the grant (`NOT DONE`, "NOTHING landed"), 5/5
+grammar refusals, teardown clean.
+
+**Reviews:** every Phase 7 review is CLOSED (113, 114, 118, 119, 120, 121,
+122 for the Restore list, 127, 128 for the selection-vs-rebase ambiguity,
+129 for recursive landing verification). **Suites:** `restore` 300/300,
+`restoregrant` 108/108 (three cases need a non-root account and run in CI).
+
+**Deployment:** `zfs-restore.sh` ships in every host's checkout; no standing
+grants — each recovery grants on the endangered machine for that relationship
+and revokes afterwards.
+
+### Gate 7 — what the facts say, for the Owner's declaration
+
+Gate 7 reads "the product can both create a backup and restore it through a
+deliberately safe workflow". Against the tree:
+
+- create/install: Gates 1–5 reached, presets and expert docs delivered (Phase 6);
+- restore, safe: delivered and live-proven on deployed code;
+- restore, destructive: delivered behind a grant, confirmation, measured loss
+  set, write fence; live-proven on the lab pair through every documented form;
+- open, and deliberately NOT part of the gate as written: recovery onto a
+  machine that is not enrolled (refused clearly, per the 2026-08-13 question 3);
+  the six `eval` sites inside the frozen engines (an unfreeze decision);
+  real mail delivery in the restore digest lines is covered by the alert
+  channel's own evidence, not by a restore lab.
+
+Whether that is the gate is the Owner's declaration, not the implementer's.
+Nothing in the tree is known to stand between the sentence above and the
+facts.
 
 ### Gate 7
 
