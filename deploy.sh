@@ -909,14 +909,27 @@ if [ $(( PEER_ROTATE + PEER_REVOKE_OLD + PEER_DRAFT_CONFIG )) -gt 1 ]; then
     echo "--rotate, --revoke-old and --draft-config are mutually exclusive -- pick one" >&2
     exit 2
 fi
-# The three are SUB-MODES of --pair: do_pair dispatches them, and nothing else
-# reads the flags. Without --pair they used to fall straight through to the
-# default path -- a FULL host deployment (git pull, scripts reinstalled, the
-# crontab rewritten) from a command that was meant to draw a file of comments.
-# Measured on pve9, 2026-09-03: `deploy.sh --peer=X --draft-config` went
-# through Phases 1-8 and moved the checkout under an update hold.
+# THESE THREE ARE OPTIONS *OF* --pair, AND WITHOUT IT THEY WERE SILENTLY DROPPED.
+#
+# Each sets only its own variable; only --pair (and --unpair) sets PAIR_MODE, and
+# do_pair -- which dispatches all three -- runs only in that mode. So a command
+# line naming one of them WITHOUT --pair did not refuse and did not draft: it
+# fell through to the ordinary deployment path and ran a FULL DEPLOY of this
+# host, git pull included.
+#
+# Measured 2026-09-03 on pve9, from this project's own lab runbook, which spelled
+# the documented-looking `deploy.sh --peer=X --draft-config`: it pulled the repo
+# (moving HEAD under a lab that had deliberately held updates), reinstalled the
+# generated scripts, touched the crontab, and died in phase 8g -- never once
+# mentioning that --draft-config had been ignored. A flag that reads as
+# "describe, change nothing" must never be able to mean "deploy this host".
 if [ "$PAIR_MODE" -eq 0 ] && [ $(( PEER_ROTATE + PEER_REVOKE_OLD + PEER_DRAFT_CONFIG )) -gt 0 ]; then
-    echo "--rotate, --revoke-old and --draft-config are sub-modes of --pair: add --pair --peer=HOST. Without it this would have been a full host deployment, not a pairing step" >&2
+    _pf=""
+    [ "$PEER_ROTATE" -eq 1 ]       && _pf="--rotate"
+    [ "$PEER_REVOKE_OLD" -eq 1 ]   && _pf="--revoke-old"
+    [ "$PEER_DRAFT_CONFIG" -eq 1 ] && _pf="--draft-config"
+    echo "$_pf is an option of --pair and does nothing on its own -- run: bash $0 --pair --peer=HOST $_pf" >&2
+    echo "  (refused rather than ignored: without --pair this command line would have deployed this host instead)" >&2
     exit 2
 fi
 

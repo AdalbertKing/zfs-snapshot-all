@@ -565,7 +565,7 @@ a run that happened; the "found" column is what it changed.
 | `zfsbackup` (third run), `linkfields`, `rerun` | re-run after E33 | 2.5 min / <1 / <1 | **one real difference**: the logrotate stanza site relied on sed printing EVERY range (root's stanza, then the account's) while `product_range` lifts the FIRST; re-anchored on the account's own path line, fourth run green |
 | `draftscope`, `pause`, `moveclient`, `pairgate`, `quiescehelper`, `restore`, `subtree` | **edited them** (helper adoption) | <1 min each | nothing |
 | `quiesce` (as `nobody`), `localbackup` (as `nobody`) | **edited them**; both refuse or fail as root | ~1 min each | nothing — the root failures (14 in `localbackup`) reproduce identically on `main` at `caf8f27`, environment not change |
-| `join`, `selfupdate` | **edited them** (pair sub-mode refusal, recorded grant list on a direct run) | <1 min each | **a wrong control in my own test**: it expected "run as root" and this box IS root, so the correct form ran on to the ZFS preflight; the control now accepts either real gate |
+| `join`, `selfupdate` | **edited them** (pair sub-mode refusal, recorded grant list on a direct run) | <1 min each | **a wrong control in my own test**: it expected "run as root" and this box IS root, so the correct form ran on to the ZFS preflight. The join section was then dropped at merge time: the fleet thread had landed the same guard with a program-level draftscope test (PR #318) |
 | `join`, `selfupdate` vs `caf8f27` | negative control | <1 min each | exactly the four new join assertions and 29a red |
 
 **Same pattern as 2026-08-27, stronger.** Every finding came from a suite I had

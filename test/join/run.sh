@@ -837,34 +837,6 @@ else
     bad "grant-datasets: usage names the concept (whitelist), not just the shape"         "$(grep -n -- 'grant-datasets' "$DEPLOY" | head -3)"
 fi
 
-# --- --draft-config / --rotate / --revoke-old WITHOUT --pair -----------------
-# They are sub-modes of --pair and used to fall through to the default path: a
-# full host deployment from a command meant to draw a file of comments
-# (LAB-DRAFT-CONFIG-WYNIK-2026-09-03: Phases 1-8 on pve9, checkout moved under
-# an update hold). Refused at argument time now, rc=2, before the root gate --
-# which is what makes it measurable here without root. The control is the
-# correct form, which must NOT trip this refusal and instead reach the root
-# gate ("run as root") like every other real run does under this suite.
-for _sub in --draft-config --rotate --revoke-old; do
-    out="$(bash "$DEPLOY" --peer=somepeer $_sub 2>&1)"; rc=$?
-    if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "sub-modes of --pair" && ! printf '%s' "$out" | grep -qi 'Phase 1'; then
-        ok "pair-submode/$_sub without --pair is refused at argument time, not run as a deployment"
-    else
-        bad "pair-submode/$_sub without --pair is refused at argument time, not run as a deployment" "rc=$rc" "$(printf '%s' "$out" | tail -3)"
-    fi
-done
-# The control passes the argument gate and stops at the first REAL gate
-# behind it: "run as root" on a non-root runner (CI), or the dependency
-# preflight ("Part 1") on a root box without ZFS -- either proves the refusal
-# above is the argument gate and nothing wider.
-out="$(bash "$DEPLOY" --pair --peer=somepeer --draft-config 2>&1)"; rc=$?
-if [ "$rc" -ne 2 ] && ! printf '%s' "$out" | grep -qF "sub-modes of --pair" \
-   && { printf '%s' "$out" | grep -qF "run as root" || printf '%s' "$out" | grep -qF "Part 1"; }; then
-    ok "pair-submode/control: --pair --peer=X --draft-config passes the argument gate and reaches the next real gate"
-else
-    bad "pair-submode/control: --pair --peer=X --draft-config passes the argument gate and reaches the next real gate" "rc=$rc" "$(printf '%s' "$out" | tail -3)"
-fi
-
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
