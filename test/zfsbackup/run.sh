@@ -6208,12 +6208,18 @@ fi
 #      which file it writes.
 while read -r fn want; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
-    if printf '%s\n' "$body" | grep -q "cron_context_resolve $want "; then
-        ok "63h: $fn uses policy '$want'"
-    else
-        bad "63h: $fn uses policy '$want'" \
-            "$(printf '%s\n' "$body" | grep -n 'cron_context_resolve' || echo 'no call at all')"
-    fi
+    # Matched on the VARIABLE, not through a pipe. `printf | grep -q` over a
+    # 45 KB body races: grep -q exits on the first match and printf takes EPIPE
+    # on the rest -- "write error: Broken pipe" on the runner, never here. The
+    # body was byte-identical to the commit where this last passed, so what
+    # failed was the harness, not its subject. A case match has no pipe.
+    case "$body" in
+        *"cron_context_resolve $want "*)
+            ok "63h: $fn uses policy '$want'" ;;
+        *)
+            bad "63h: $fn uses policy '$want'" \
+                "$(printf '%s\n' "$body" | grep -n 'cron_context_resolve' || echo 'no call at all')" ;;
+    esac
 done <<'POLICIES'
 cmd_local_backup adopt
 cmd_activate_client adopt
