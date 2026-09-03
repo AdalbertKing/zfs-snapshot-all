@@ -329,6 +329,47 @@ check "the stamped draft succeeds" "0" "$rc"
 check "THE DRAFT RECORDS THE REQUEST BESIDE IT" "0" "$([ -f "$TMPD/peers/stamp.scope.request" ]; echo $?)"
 check "...and it holds what the collector asked for" "hdd/LXC" "$(cat "$TMPD/peers/stamp.scope.request" 2>/dev/null)"
 
+# --- --draft-config/--rotate/--revoke-old WITHOUT --pair: refuse, never deploy ---
+#
+# These three set only their own variable; PAIR_MODE is set by --pair (and
+# --unpair) alone, and do_pair -- which dispatches all three -- runs only in that
+# mode. So until 2026-09-03 a command line naming one of them without --pair was
+# not refused and did not draft: it fell through to the ordinary deployment path
+# and ran a FULL DEPLOY, git pull included.
+#
+# Measured on pve9, from this project's own lab runbook, which spelled the
+# documented-looking `deploy.sh --peer=X --draft-config`: it pulled the repo
+# (moving HEAD under a lab that had deliberately held updates), reinstalled the
+# generated scripts, touched the crontab and died in phase 8g -- never once
+# saying that --draft-config had been ignored.
+#
+# Asserted on the PROGRAM, not on a lifted function, because the whole defect is
+# where the argument check sits relative to the dispatch. Runs as a normal user:
+# the old code reaches the root check (rc=1, "run as root"), the new one refuses
+# at argument validation (rc=2), so the two are told apart without root.
+for _pf in --draft-config --rotate --revoke-old; do
+    _out=$(bash "$DEPLOY_SRC" --peer=10.0.0.1 "$_pf" 2>&1 >/dev/null); _rc=$?
+    check "$_pf without --pair is REFUSED (rc=2)" "2" "$_rc"
+    case "$_out" in
+        *"is an option of --pair"*) check "$_pf names itself in the refusal" "0" "0" ;;
+        *)                          check "$_pf names itself in the refusal" "0" "1: $_out" ;;
+    esac
+    case "$_out" in
+        *"run as root"*) check "$_pf did NOT fall through to the deployment path" "0" "1: reached the root check" ;;
+        *)               check "$_pf did NOT fall through to the deployment path" "0" "0" ;;
+    esac
+done
+
+# POSITIVE CONTROL. The guard must catch the MISSING --pair, not the flag: with
+# --pair the same flag passes argument validation and the program carries on
+# (as a normal user it then stops at the root check, which is proof it got past).
+_out=$(bash "$DEPLOY_SRC" --pair --peer=10.0.0.1 --draft-config 2>&1 >/dev/null); _rc=$?
+check "WITH --pair the flag is accepted (not rc=2)" "0" "$([ "$_rc" != 2 ]; echo $?)"
+case "$_out" in
+    *"run as root"*) check "...and execution reaches past argument validation" "0" "0" ;;
+    *)               check "...and execution reaches past argument validation" "0" "1: $_out" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
