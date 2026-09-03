@@ -102,10 +102,14 @@ die()  { echo "FATAL: $*" >&2; exit 1; }
 product_libs "$(dirname "$DEPLOY_SRC")"
 
 # Extracted by pattern, not line number -- survives the file growing around
-# it. Range: PEER_STATE_DIR's own default declaration through the end of
-# do_draft_scope, which covers peer_label/peer_manifest_path/peer_scope_path,
-# the system-name census, do_draft_scope_check and do_draft_scope itself.
-eval "$(sed -n '/^PEER_STATE_DIR="\${PEER_STATE_DIR/,/^# do_join_check/p' "$DEPLOY_SRC" | sed '$d')"
+# it. Range: through the end of do_draft_scope, covering remote_scope_stage,
+# the system-name census, do_draft_scope_check and do_draft_scope itself. It
+# starts at whichever of two anchors the tree has: on a tree from before
+# 2026-09-03 the PEER_STATE_DIR declaration, so the range also carries the
+# peer_label/peer_manifest_path/peer_scope_path copies that tree keeps inside
+# deploy.sh; on a current tree the remote_scope_stage header, because those
+# helpers moved to lib-pairing.sh and product_libs above has sourced them.
+eval "$(sed -n '/^PEER_STATE_DIR="\${PEER_STATE_DIR\|^# remote_scope_stage <label>/,/^# do_join_check/p' "$DEPLOY_SRC" | sed '$d')"
 if ! declare -F do_draft_scope >/dev/null; then
     echo "FATAL: could not extract do_draft_scope from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
     exit 1

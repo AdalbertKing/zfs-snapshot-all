@@ -367,21 +367,52 @@ else
     bad "local_knownhosts_path (root) matches deploy.sh's PEER_KEY_DIR layout" "got=$kh"
 fi
 
-# --- 3b. peer_manifest_path parity with deploy.sh (audit C1, 2026-08-21) -----
-# The trust-mirror family is deliberately duplicated deploy.sh <-> zfs-backup.sh
-# with no source edge -- and peer_manifest_path had slipped out of BOTH the
-# deps.conf enumeration and this parity suite. The comparison is BEHAVIORAL,
-# not textual: the first version of this pin diffed the source text and
-# promptly failed on formatting (one-liner here, wrapped there) -- pinning
-# whitespace is not the contract, where the manifest LIVES is.
-dp_pmp_out=$(env PEER_STATE_DIR=/PIN bash -c '
-    eval "$(sed -n "/^peer_manifest_path() {/,/^}/p" "$1")"
-    peer_manifest_path some-label' _ "$(dirname "$ZFSBACKUP")/deploy.sh")
-zb_pmp_out=$(PEER_STATE_DIR=/PIN peer_manifest_path some-label)
-if [ -n "$zb_pmp_out" ] && [ "$zb_pmp_out" = "$dp_pmp_out" ]; then
-    ok "peer_manifest_path: both programs resolve the same manifest path"
+# --- 3b. the pairing-state layout has ONE definition (2026-09-03) ------------
+# Until 2026-09-03 the trust-mirror family (peer_label, peer_manifest_path,
+# peer_scope_path, peer_scope_granted_hash_path, local_keyfile_path,
+# local_knownhosts_path) was duplicated deploy.sh <-> zfs-backup.sh by hand,
+# with no source edge, and this section pinned BEHAVIOURAL parity for the one
+# formula that had slipped out of both the deps.conf enumeration and the pin
+# (audit C1, 2026-08-21). The family lives in lib-pairing.sh now, sourced by
+# both programs, so parity is no longer a property to keep true -- it is the
+# absence of a second copy. Discriminating control: on main each program
+# defines all six (12 copies); here neither defines any and the library
+# defines each exactly once. The behavioural pins above (section 3) and
+# below keep the LAYOUT itself honest, now against the one definition.
+pl_names="peer_label peer_manifest_path peer_scope_path peer_scope_granted_hash_path local_keyfile_path local_knownhosts_path"
+pl_lib="$(dirname "$ZFSBACKUP")/lib-pairing.sh"
+pl_copies=0; pl_lib_defs=0
+for pl_n in $pl_names; do
+    pl_copies=$((pl_copies + $(grep -c "^$pl_n() {" "$ZFSBACKUP" "$(dirname "$ZFSBACKUP")/deploy.sh" | awk -F: '{s+=$2} END {print s+0}')))
+    [ -r "$pl_lib" ] && pl_lib_defs=$((pl_lib_defs + $(grep -c "^$pl_n() {" "$pl_lib")))
+done
+if [ "$pl_copies" -eq 0 ]; then
+    ok "pairing layout: neither zfs-backup.sh nor deploy.sh carries its own copy of the six path helpers"
 else
-    bad "peer_manifest_path: both programs resolve the same manifest path"         "zb=[$zb_pmp_out] dp=[$dp_pmp_out]"
+    bad "pairing layout: neither zfs-backup.sh nor deploy.sh carries its own copy of the six path helpers" "$pl_copies copies still defined in the programs"
+fi
+if [ "$pl_lib_defs" -eq 6 ]; then
+    ok "pairing layout: lib-pairing.sh defines each of the six exactly once"
+else
+    bad "pairing layout: lib-pairing.sh defines each of the six exactly once" "$pl_lib_defs definitions in ${pl_lib} (readable: $([ -r "$pl_lib" ] && echo yes || echo no))"
+fi
+# The layout, as the programs see it after sourcing: every path is built from
+# the label deploy.sh derived from the peer address, under the state dir a
+# suite may redirect. The address carries characters a filename may not.
+pl_label=$(peer_label 'pve2.lab:2222/x')
+pl_got="$pl_label|$(PEER_STATE_DIR=/PIN peer_manifest_path "$pl_label")|$(PEER_STATE_DIR=/PIN peer_scope_path "$pl_label")|$(PEER_STATE_DIR=/PIN peer_scope_granted_hash_path "$pl_label")"
+pl_want="pve2.lab-2222-x|/PIN/pve2.lab-2222-x.conf|/PIN/pve2.lab-2222-x.scope|/PIN/pve2.lab-2222-x.scope.sha256"
+if [ "$pl_got" = "$pl_want" ]; then
+    ok "pairing layout: label, manifest, scope and granted-hash paths are the documented shapes"
+else
+    bad "pairing layout: label, manifest, scope and granted-hash paths are the documented shapes" "want $pl_want" "got  $pl_got"
+fi
+# deploy.sh's do_pair is the one --peer-driven caller; it must hand the
+# address in, not rely on a global the shared definition cannot see.
+if grep -q 'label=$(peer_label "$PEER_HOST")' "$(dirname "$ZFSBACKUP")/deploy.sh"; then
+    ok "pairing layout: deploy.sh do_pair derives its label from \$PEER_HOST through the shared peer_label"
+else
+    bad "pairing layout: deploy.sh do_pair derives its label from \$PEER_HOST through the shared peer_label" "$(grep -n 'peer_label' "$(dirname "$ZFSBACKUP")/deploy.sh" | head -3)"
 fi
 
 # --- 4. ensure_cron_config: creates, templates, and is idempotent -----------

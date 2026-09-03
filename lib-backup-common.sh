@@ -146,3 +146,9 @@ _LIBCOMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -r "$_LIBCOMMON_DIR/lib-record.sh" ] || { echo "cannot read $_LIBCOMMON_DIR/lib-record.sh -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 . "$_LIBCOMMON_DIR/lib-record.sh"
+# Where a peer's pairing state lives -- the layout deploy.sh writes and
+# zfs-backup.sh reads: lib-pairing.sh, shared with deploy.sh for the same
+# reason as the record reader above.
+[ -r "$_LIBCOMMON_DIR/lib-pairing.sh" ] || { echo "cannot read $_LIBCOMMON_DIR/lib-pairing.sh -- the checkout is incomplete" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$_LIBCOMMON_DIR/lib-pairing.sh"

@@ -34,6 +34,14 @@
 
 product_libs() {   # [<tree>]
     local tree="${1:-${REPO:?product_libs: set REPO or pass the product tree}}"
+    # lib-pairing.sh (2026-09-03): PEER_STATE_DIR/PEER_KEY_DIR and the six
+    # pairing-state path helpers both programs used to carry a copy of. A
+    # tree older than that has them inside the program, where a lifted range
+    # that needs them already includes them.
+    if [ -r "$tree/lib-pairing.sh" ]; then
+        # shellcheck disable=SC1090
+        . "$tree/lib-pairing.sh"
+    fi
     if [ -r "$tree/lib-record.sh" ]; then
         # shellcheck disable=SC1090
         . "$tree/lib-record.sh"

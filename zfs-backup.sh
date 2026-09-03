@@ -154,11 +154,10 @@ source "$LIBSCOPE"
 # shellcheck disable=SC1090
 source "$LIBPROFILE"
 
-# Mirrors deploy.sh's own peer-pairing state locations exactly (see
-# PAIRING-DESIGN.md) -- this file reads what --pair/--join already write, it
-# never invents a parallel record of the same facts.
-PEER_STATE_DIR="/etc/zfs-snapshot-all/peers"
-PEER_KEY_DIR="/root/.ssh/pairing"
+# PEER_STATE_DIR/PEER_KEY_DIR and the pairing-state path helpers come from
+# lib-pairing.sh (through lib-backup-common.sh), the same definition deploy.sh
+# writes with -- this file reads what --pair/--join already write, it never
+# invents a parallel record of the same facts (see PAIRING-DESIGN.md).
 
 # Every ssh below reaches a peer that may be down. With no bound the connect
 # blocks on the kernel's SYN timeout (~130s to a black-holed address) before it
@@ -504,12 +503,9 @@ docs/internal/reviews/responses/REV-20260730-004.md for the model this follows.
 EOF
 }
 
-# Identical to deploy.sh's own peer_label(): the key file name, manifest name
-# and account name are all built from this, and it must produce the SAME
-# string deploy.sh already used, or this script would look for the wrong
-# files. Used ONLY to locate deploy.sh's own state -- never for anything this
-# script displays or builds itself (see the file header on stable identity).
-peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
+# peer_label / peer_manifest_path: lib-pairing.sh, shared with deploy.sh. Used
+# ONLY to locate deploy.sh's own state -- never for anything this script
+# displays or builds itself (see the file header on stable identity).
 
 client_name_valid() {
     case "$1" in
@@ -518,7 +514,6 @@ client_name_valid() {
     esac
 }
 client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
-peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
 
 # ------------------------------------------------------------------------------
 # Relationship-scoped OPERATIONAL state (REV-20260804-045, logical pause).
@@ -540,33 +535,12 @@ peer_manifest_path() { echo "$PEER_STATE_DIR/$1.conf"; }
 RELATIONSHIPS_DIR="${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}"
 pause_marker_path() { echo "$RELATIONSHIPS_DIR/$1/paused"; }
 client_paused() { [ -f "$(pause_marker_path "$1")" ]; }
-# Mirrors deploy.sh's own peer_scope_path/peer_scope_granted_hash_path
-# exactly (REV-20260802-033 slices 4/T3) -- same reason as peer_manifest_path
-# above: this reads what --draft-scope/--commit-scope already wrote on the
-# PEER, it never invents a parallel path convention.
-peer_scope_path() { echo "$PEER_STATE_DIR/$1.scope"; }
-peer_scope_granted_hash_path() { echo "$PEER_STATE_DIR/$1.scope.sha256"; }
-
-# Same question deploy.sh's local_keyfile_path/local_knownhosts_path answer:
-# where the GENERATED job should look for the key/pinned host key. Kept in
-# sync deliberately, same reasoning as update-control.sh's duplicated
-# functions -- there is no source edge between these two files to declare.
-local_keyfile_path() {
-    local label="$1" user="$2"
-    if [ -n "$user" ]; then
-        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
-        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_ed25519"; return 0; }
-    fi
-    printf '%s' "$PEER_KEY_DIR/${label}_ed25519"
-}
-local_knownhosts_path() {
-    local label="$1" user="$2"
-    if [ -n "$user" ]; then
-        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
-        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_known_hosts"; return 0; }
-    fi
-    printf '%s' "$PEER_KEY_DIR/${label}_known_hosts"
-}
+# peer_scope_path / peer_scope_granted_hash_path (REV-20260802-033 slices
+# 4/T3) and local_keyfile_path / local_knownhosts_path: lib-pairing.sh. This
+# reads what --draft-scope/--commit-scope already wrote on the PEER and where
+# --pair put the key; until 2026-09-03 each formula was a hand-kept copy of
+# deploy.sh's, "in sync deliberately" because there was no source edge to
+# declare -- now there is one.
 
 # REV-20260730-004 F1: the alias is now built from CLIENT_NAME (the stable,
 # address-independent identity), not from `label` (deploy.sh's peer_label,
