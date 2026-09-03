@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20.*
+*Evidence: E11, E20, E33.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -454,6 +454,32 @@ removing it; the probe step targets the remote side and writes data first;
 the comparison strips the progress line and repeats both sides on one data
 state.
 
+### E33 — A suite edited while its first run was still reading it, and two runs writing one log
+**2026-09-03, product_range round, caught by the run itself (a bash parse
+error 8,400 lines in, then a "binary file" log).**
+
+*Genesis.* Twelve edited suites were launched in the background to one log
+file each. Three of them failed with `product_fn: command not found`
+because they source the harness late or only in child scripts; I inserted
+a `. harness.sh` line at the top of `test/zfsbackup/run.sh` while its first
+run was still executing, then launched a second run into the SAME log
+file. Bash reads a script incrementally, so the first run met the file
+shifted by one line under it and died with a syntax error at line 8483;
+both runs interleaved their output into one log, which grep then called a
+binary file. Neither result was usable. Cleaning up, a `pkill -f` whose
+pattern matched the shell issuing it killed that shell too.
+
+*Cause.* R5, verbatim: "Editing a suite mid-run corrupts it from that
+offset." The rule names this exact mechanism and I had read it that
+morning. The second half, one log per RUN rather than per suite, is the
+same rule seen from the file side: two writers on state a third process
+was reading.
+
+*Rule.* R5. Before editing a suite: `pgrep -af <suite>`; kill or wait,
+never edit under it. One log file per launch, named by launch, not by
+suite. A `pkill -f` pattern is anchored to the process's own argv shape
+(`^bash ./test/...`) so it cannot match the shell issuing it.
+
 ## 2b. Suite runs — was it worth it, and at what scale
 
 Owner instruction, 2026-08-27: *"Mierz też zasadność puszczania suit i w jakiej
@@ -501,6 +527,12 @@ a run that happened; the "found" column is what it changed.
 | `cron2conf` (×2 + `C2C=<main>` control) | **edited it** (fixture `pull.crontab`) | <1 min | nothing beyond the intended discriminator (main 28/1) |
 | `impact` (×3) | `deps.conf` changed | <1 min | nothing |
 | `pause`, `restore`, `quiescehelper`, `selfupdate`, `join`, `linkfields`, `rerun`, `joinmanifest`, `rux` | implicated only (`deploy.sh` / `lib-backup-common.sh` / `zfs-backup.sh` changed underneath) | ~3 min total | **nothing** — every one green first time; `restore`'s `get: command not found` noise is identical on main (a stub in the suite itself) |
+| `harness` (×3) | **edited it** (`product_range`, H12–H17) | <1 min | **a wrong expectation in my own control** (H16 counted 9 lines to EOF, the file has 8 from the anchor) |
+| `zfsbackup`, `linkfields`, `rerun` (first run) | **edited them** (`product_fn`/`product_range` sites) | 2.5 min / <1 / <1 | **`command not found` ×3** — the helpers were called before the harness was sourced (late, or only in child scripts); fixed by sourcing at the top |
+| `zfsbackup` (second run, killed) | re-run after the fix | wasted | **E33**: edited under a running first run, two runs on one log |
+| `zfsbackup` (third run), `linkfields`, `rerun` | re-run after E33 | 2.5 min / <1 / <1 | **one real difference**: the logrotate stanza site relied on sed printing EVERY range (root's stanza, then the account's) while `product_range` lifts the FIRST; re-anchored on the account's own path line, fourth run green |
+| `draftscope`, `pause`, `moveclient`, `pairgate`, `quiescehelper`, `restore`, `subtree` | **edited them** (helper adoption) | <1 min each | nothing |
+| `quiesce` (as `nobody`), `localbackup` (as `nobody`) | **edited them**; both refuse or fail as root | ~1 min each | nothing — the root failures (14 in `localbackup`) reproduce identically on `main` at `caf8f27`, environment not change |
 
 **Same pattern as 2026-08-27, stronger.** Every finding came from a suite I had
 edited or written; the nine implicated-only runs found nothing across ten PRs.

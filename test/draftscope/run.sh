@@ -109,7 +109,7 @@ product_libs "$(dirname "$DEPLOY_SRC")"
 # peer_label/peer_manifest_path/peer_scope_path copies that tree keeps inside
 # deploy.sh; on a current tree the remote_scope_stage header, because those
 # helpers moved to lib-pairing.sh and product_libs above has sourced them.
-eval "$(sed -n '/^PEER_STATE_DIR="\${PEER_STATE_DIR\|^# remote_scope_stage <label>/,/^# do_join_check/p' "$DEPLOY_SRC" | sed '$d')"
+eval "$(product_range "$DEPLOY_SRC" '^PEER_STATE_DIR="[$][{]PEER_STATE_DIR|^# remote_scope_stage <label>' '^# do_join_check' | sed '$d')"
 if ! declare -F do_draft_scope >/dev/null; then
     echo "FATAL: could not extract do_draft_scope from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
     exit 1

@@ -15,6 +15,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$SCRIPT_DIR/../harness.sh"   # product_fn / product_range, from THIS checkout (section 96 repoints SCRIPT_DIR later; this runs first)
 ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
@@ -836,7 +837,7 @@ fi
 # PR #14 F1. The expert fallback is conditional because every client shares one
 # managed cron block. An unconditional "then remove the block" stops the jobs of
 # every client whose rules remain in the config.
-unpair_body=$(awk '/^unpair_assert_no_cron_users\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$REPO/deploy.sh")
+unpair_body=$(product_fn "$REPO/deploy.sh" unpair_assert_no_cron_users)
 if printf '%s\n' "$unpair_body" | grep -qF "On the collector, use 'zfs-backup.sh remove-client <name>'" \
    && printf '%s\n' "$unpair_body" | grep -qF "If any dataset/prune/monitor rules remain" \
    && printf '%s\n' "$unpair_body" | grep -qF "Only if zero rules remain" \
@@ -860,7 +861,7 @@ fi
 # account's under the pairing- prefix -- for a peer no client record named any
 # more. Asserted on the removal list itself because reaching this branch needs
 # a live pairing, an account and a peer; the list is the thing that was wrong.
-unpair_rm=$(awk '/^do_unpair\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$REPO/deploy.sh")
+unpair_rm=$(product_fn "$REPO/deploy.sh" do_unpair)
 if printf '%s\n' "$unpair_rm" | grep -qF '"$PEER_KEY_DIR/${label}_alias_known_hosts"' \
    && printf '%s\n' "$unpair_rm" | grep -qF '"$home_dir/.ssh/pairing-${label}_alias_known_hosts"'; then
     ok "unpair removes the alias pinned host key for root AND for the delegated account"
@@ -2073,7 +2074,13 @@ mode_after=$(stat -c %a "$MODE/cfg.conf")
 # NOT named DEPLOY: zfs-backup.sh sets that itself, and this suite sources it,
 # so an env override would be silently clobbered by the code under test.
 DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
-acct_stanza=$(sed -n '/^\$LOGROTATE_MARKER -- managed by deploy.sh/,/^}/p' "$DEPLOY_SRC" \
+# deploy.sh writes TWO logrotate stanzas behind the same marker line, root's
+# first and the account's second. The old sed range printed both (sed keeps
+# matching after a range closes) and the grep picked the account's; a
+# product_range lift is the FIRST run only, so it starts on the account's own
+# first path line instead -- which is why the assertion below is not vacuous:
+# the anchor is any $HOMEDIR path, the claim is that cron.log is among them.
+acct_stanza=$(product_range "$DEPLOY_SRC" '^[$]HOMEDIR/' '^}' \
               | grep -A6 'HOMEDIR/')
 if printf '%s' "$acct_stanza" | grep -q 'HOMEDIR/cron\.log'; then
     ok "logrotate: the account stanza rotates \$HOME/cron.log"
@@ -2173,7 +2180,7 @@ fi
 # CRON_CONFIG before sourcing the server file -- so calling it there would
 # discard what the client record said. That is precisely the edit 9af0003 made
 # by accident.
-fc_body=$(awk '/^cmd_final_catchup\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+fc_body=$(product_fn "$ZFSBACKUP" cmd_final_catchup)
 if [ -n "$fc_body" ] && ! printf '%s\n' "$fc_body" | grep -q 'read_server_conf'; then
     ok "final-catchup: still resolves the client itself, with no read_server_conf"
 else
@@ -2197,7 +2204,7 @@ fi
 # The reasoning above is unchanged: CRON_CONFIG is still cleared, so calling
 # this in final-catchup would still discard what the client record said. What
 # changed is that it no longer clears state it does not own.
-rsc=$(awk '/^read_server_conf\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$(dirname "$ZFSBACKUP")/lib-backup-common.sh")
+rsc=$(product_fn "$(dirname "$ZFSBACKUP")/lib-backup-common.sh" read_server_conf)
 if printf '%s\n' "$rsc" | grep -q 'CRON_CONFIG=""' \
    && printf '%s\n' "$rsc" | grep -q 'DEFAULT_TARGET=""' \
    && ! printf '%s\n' "$rsc" | grep -q 'LOCAL_USER=""'; then
@@ -6155,7 +6162,7 @@ fi
 #      placement: cmd_seed's own `Zrodla:` line sits inside `if [ "$yes" -ne 1 ]`,
 #      so before this the list was invisible on exactly the runs that had no
 #      human to see it.
-rmd=$(awk '/^resolve_mode_datasets\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+rmd=$(product_fn "$ZFSBACKUP" resolve_mode_datasets)
 if printf '%s\n' "$rmd" | grep -q 'log "scope on \$LOAD_HOST resolves to'; then
     ok "62g: resolve_mode_datasets logs the resolved dataset list unconditionally"
 else
@@ -7016,10 +7023,10 @@ else
 fi
 # The carrier itself must exist and must NOT have -n -- a future sweep that
 # "fixes" it recreates the empty-scope breakage, so its shape is pinned.
-if grep -q 'rux_root_ssh_in()' "$ZFSBACKUP"    && ! sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep -qE 'ssh -n '; then
+if grep -q 'rux_root_ssh_in()' "$ZFSBACKUP"    && ! product_fn "$ZFSBACKUP" rux_root_ssh_in | grep -qE 'ssh -n '; then
     ok "ssh: the stdin-carrier variant exists and does NOT pass -n"
 else
-    bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(sed -n '/^rux_root_ssh_in()/,/^}/p' "$ZFSBACKUP" | grep 'ssh ' | head -1)"
+    bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(product_fn "$ZFSBACKUP" rux_root_ssh_in | grep 'ssh ' | head -1)"
 fi
 
 # ===========================================================================
@@ -8123,7 +8130,7 @@ if grep -q '^warn_if_block_has_other_source()' "$ZFSBACKUP"; then
 else
     bad "block-source guard: the check exists"
 fi
-_air="$(awk '/^atomic_replace_and_install\(\)/,/^}/' "$ZFSBACKUP")"
+_air="$(product_fn "$ZFSBACKUP" atomic_replace_and_install)"
 case "$_air" in
     *warn_if_block_has_other_source*)
         ok "BLOCK-SOURCE GUARD: CALLED FROM THE ONE DOOR EVERY WRITER USES" ;;
@@ -8132,7 +8139,7 @@ case "$_air" in
 esac
 # It must compare with the SAME normaliser the missing-config guard uses, or the
 # two would disagree about what "a different file" means.
-case "$(awk '/^warn_if_block_has_other_source\(\)/,/^}/' "$ZFSBACKUP")" in
+case "$(product_fn "$ZFSBACKUP" warn_if_block_has_other_source)" in
     *normalize_cron_source*) ok "block-source guard: shares the path normaliser" ;;
     *) bad "block-source guard: shares the path normaliser" ;;
 esac

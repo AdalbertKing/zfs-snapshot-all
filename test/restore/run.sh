@@ -18,6 +18,7 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
+. "$DIR/../harness.sh"   # product_fn
 # Since the 2026-08-17 split the restore code lives in zfs-restore.sh; the ZB
 # override is kept (same spelling) so negative controls against an older tree
 # still work. zfs-backup.sh forwards `restore` here, so this suite exercising
@@ -1705,7 +1706,7 @@ out="$(runrepl "$stcfg" rpool/data)"; rc=$?
 # RP5. The rule is gone from the source, not just from the behaviour: no `tail -1`
 #      may remain in recovery-target selection. Asserted on the code, because the
 #      next person to add a listing there will reach for it again.
-sel="$(sed -n '/^restore_plan_strategy()/,/^}/p' "$ZB" | grep -v '^[[:space:]]*#' | grep -n 'tail -1' || true)"
+sel="$(product_fn "$ZB" restore_plan_strategy | grep -v '^[[:space:]]*#' | grep -n 'tail -1' || true)"
 [ -z "$sel" ] \
     && ok "REV-121: no tail -1 over a creation-ordered listing remains in the planner" \
     || bad "REV-121: no tail -1 over a creation-ordered listing remains in the planner" "$sel"

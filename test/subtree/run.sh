@@ -19,6 +19,7 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${SUBTREE_REPO:-$(cd "$DIR/../.." && pwd)}"
+. "$DIR/../harness.sh"   # product_fn -- from THIS checkout, whichever tree SUBTREE_REPO names
 
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
@@ -57,7 +58,7 @@ zfs() { _answer "$@"; }
 ssh() { _answer "$@" || return 255; }
 STUB
         # The function itself, lifted verbatim from the engine under test.
-        awk '/^validate_subtree\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$REPO/$engine"
+        product_fn "$REPO/$engine" validate_subtree
         echo 'validate_subtree pool/src pool/tgt s3 acct host; echo "rc=$?"'
     } > "$tmp"
     local out; out=$(bash "$tmp" 2>&1); rm -f "$tmp"

@@ -16,6 +16,7 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 REPO="$PWD"
+. "$(dirname "${BASH_SOURCE[0]}")/../harness.sh"   # product_fn
 HELPER="$REPO/zfs-quiesce-helper.sh"
 
 PASS=0; FAIL=0
@@ -424,7 +425,7 @@ TX="$WORK/tx"; mkdir -p "$TX/bin"
 # The helper set is DERIVED from the naming convention rather than listed here,
 # because a hand-kept list of dependencies is the same defect one level up.
 {
-    sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh"
+    product_fn "$REPO/deploy.sh" install_quiesce_grant
     sed -n '/^quiesce_[a-z_]*() {/,/^}$/p'       "$REPO/deploy.sh"
 } > "$TX/fn.sh"
 [ -s "$TX/fn.sh" ] || bad "tx: could not extract install_quiesce_grant" "empty"
@@ -1061,7 +1062,7 @@ done
 # cannot reactivate a parked grant. Asserted structurally rather than by running
 # deploy.sh, which would provision a host.
 callers=$(grep -c '_grant_sweep' "$REPO/deploy.sh")
-inside=$(sed -n '/^install_quiesce_grant() {/,/^}$/p' "$REPO/deploy.sh" | grep -c '_grant_sweep')
+inside=$(product_fn "$REPO/deploy.sh" install_quiesce_grant | grep -c '_grant_sweep')
 [ "$callers" = "$inside" ] && ok "tx-recover: nothing outside install_quiesce_grant can sweep" \
                            || bad "tx-recover: nothing outside install_quiesce_grant can sweep" \
                                   "$callers wystąpień w pliku, $inside wewnątrz funkcji"
