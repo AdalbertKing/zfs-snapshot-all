@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -287,6 +287,29 @@ text. Measured afterwards and worth carrying: `-m` is used as a **regex**
 restore layer by requiring exactly one match, without touching the engine.
 
 ---
+
+### E26 — A runbook asserted a fleet fact that a code comment remembered
+**2026-09-03, lab runbook for PR #295.**
+
+*Genesis.* The runbook I wrote for the host-side lab stated that "the fleet has
+~20 relationship records per collector, some predating fields added later", and
+built a whole test dimension on it (old records with missing fields read through
+the new loader). The executor measured all seven hosts: **zero** records
+everywhere -- `clients/` exists and is empty, production runs from
+`jobs.<host>.conf`. The dimension was untestable; the executor had to reorder
+the steps to create a record at all, and said so in the report.
+
+*Cause.* The number came from a comment in `migrate_read_record` ("the record
+dir on a real collector holds twenty files"), written for the estate as it was
+in August, and I carried it across the boundary between "what the tree says
+about the fleet" and "what the fleet is" without naming a measurement. A
+runbook written from a session that cannot reach the hosts is exactly where R2
+bites hardest: every fleet fact in it is on the far side of a boundary.
+
+*Rule.* R2. In a runbook, a fact about the estate is either a step-0
+measurement command with its expected output left blank, or it is not stated.
+The corrected runbook now opens with `ls clients/ peers/ relationships/` and
+says what to do when they are empty.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 

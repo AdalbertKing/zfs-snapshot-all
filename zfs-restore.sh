@@ -112,48 +112,18 @@ log() {   # <level> <message...>
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
 
-# `die` FROM INSIDE A COMMAND SUBSTITUTION HAD TO END THE PROGRAM, AND DID NOT.
+# `die` FROM INSIDE A COMMAND SUBSTITUTION HAS TO END THE PROGRAM.
 #
-# lib-backup-common.sh's die is `echo >&2; exit 1`, which is correct in the main
-# shell and a no-op everywhere this file actually uses it: `config="$(pick ...)"`
-# runs pick in a SUBSHELL, so the exit kills the subshell, the assignment gets
-# the empty string, and the caller carries on.
-#
-# Measured on the lab, 2026-08-27, running `restore lab1 --plan` on a real
-# collector. It printed THREE consecutive FATALs -- no config, then "'lab1' is
-# not a relation label in ''" (note the empty config it had already refused
-# over), then "no cron config known" -- and exited 0. A recovery verb that
-# prints FATAL and returns success is worse than one that crashes.
-#
-# Fixed here rather than in the shared lib: this is the program where continuing
-# past a refusal writes onto production data, and the same change to
-# zfs-backup.sh's ~9000 lines is not something a lab evening can prove safe.
-# The general case is worth a review; this file cannot wait for it.
-#
-# $$ is the MAIN shell's pid even inside $( ); $BASHPID is the current shell's.
-# They differ exactly when we are in a subshell, which is the case that used to
-# fail open. Proven both ways before shipping: with the kill the caller's next
-# line does not run and the status is 1; without it the line runs and the status
-# is 0.
-# ARMED ONLY WHEN THIS FILE IS THE PROGRAM. `$$` is the shell that sourced it,
-# and a harness that sources this file to call its functions directly is that
-# shell -- so the signal would kill the harness instead of a run of this verb.
-# Measured immediately: test/restore/run.sh sources this file, and the first
-# `die` inside a `$( )` took the whole suite down with it, silently, before its
-# first assertion.
-#
-# When sourced, `die` therefore stays the shared lib's -- which is the fail-open
-# behaviour this fixes. That is stated here rather than papered over: a suite
-# that sources this file CANNOT observe the fatal-die property, and must not
-# claim to. It is proven where it was found, by running the program.
+# Found here, 2026-08-27: `restore lab1 --plan` on a real collector printed
+# THREE consecutive FATALs -- no config, then "'lab1' is not a relation label in
+# ''", then "no cron config known" -- and exited 0, because every one of them
+# was raised inside a `$( )`. This file carried its own pid-aware `die` for a
+# week ("the same change to zfs-backup.sh's ~9000 lines is not something a lab
+# evening can prove safe"); since 2026-09-03 the mechanism is
+# lib-backup-common.sh's, shared by both programs, and this call arms it. The
+# reasoning, the measurement and the sourced-harness caveat are written there.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    RESTORE_MAIN_PID=$$
-    trap 'exit 1' TERM
-    die() {
-        echo "FATAL: $*" >&2
-        [ "$BASHPID" = "$RESTORE_MAIN_PID" ] || kill -TERM "$RESTORE_MAIN_PID" 2>/dev/null
-        exit 1
-    }
+    die_arm_fatal
 fi
 
 # ------------------------------------------------------------------------------
@@ -1176,13 +1146,13 @@ restore_config_candidates() {
 ' "/etc/zfs-snapshot-all/jobs.${h}.conf"
         for f in /etc/zfs-snapshot-all/peers/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            u=$(record_get "$f" PEER_SAVED_LOCAL_USER)
             [ -n "$u" ] && [ "$u" != root ] && printf '%s
 ' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
         done
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            u=$(record_get "$f" LOCAL_USER)
             [ -n "$u" ] && [ "$u" != root ] && printf '%s
 ' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
         done

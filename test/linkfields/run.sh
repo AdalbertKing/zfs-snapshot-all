@@ -376,6 +376,10 @@ seq_load() {   # -> "<flag after A>|<flag after B>"
     printf 'PEER_SAVED_ACCOUNT=root\nPEER_SAVED_DATASETS=p/x\nPEER_SAVED_TARGET=t\n' > "$d/peer.conf"
     local t; t=$(mktemp)
     {   echo 'set -u'
+        # load_client_and_connection reads the record and the manifest through
+        # record_load (lib-backup-common.sh, since 2026-09-03): the harness
+        # sources the lib the program sources, and overrides log/warn/die below.
+        printf '. %q\n' "$(dirname "$ZB")/lib-backup-common.sh"
         echo 'log() { :; }'
         echo 'warn() { :; }'
         echo 'die() { echo "DIE: $*"; exit 1; }'
@@ -482,6 +486,7 @@ pair_cap_decision() {   # <manifest bandwidth or -> <requested bandwidth> -> out
     else printf 'PEER_SAVED_LOCAL_USER=bckp\nPEER_SAVED_BANDWIDTH=%s\n' "$1" > "$mf"
     fi
     { echo 'set -u'
+      printf '. %q\n' "$(dirname "$ZB")/lib-backup-common.sh"   # the guard reads the manifest through record_get
       echo 'die() { echo "DIE: $*"; exit 1; }'
       printf 'lan_host=peerhost\nlocal_user=bckp\nbandwidth=%q\n' "$2"
       printf 'peer_manifest_path() { echo %q; }\n' "$mf"

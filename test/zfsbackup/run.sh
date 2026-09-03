@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8564,6 +8564,165 @@ if ! printf '%s' "$out" | grep -qE 'quiesce|send_schedule|prefix|monitor_'; then
 else
     bad "--source-profile: a prune-only profile carries no creation-half field at all" "$out"
 fi
+
+
+# ============================================================================
+# RECORDS ARE DATA (2026-09-03). Self-contained; always eligible, also under
+# `--section records`. Until this change every reader of a client record, a
+# pairing manifest or the pause marker `.`-sourced the file -- executed it --
+# and a field the file did not carry kept the previous record's value. The
+# readers are now record_get/record_load in lib-backup-common.sh. Discriminating
+# control against main: the first two assertions FAIL there (the substitution
+# runs; nothing refuses the field name), the last two pin the mechanism that
+# replaced four hand-rolled copies of the clearing.
+# ============================================================================
+RD="$WORK/records"; rm -rf "$RD"; mkdir -p "$RD/clients" "$RD/rel"
+cat > "$RD/clients/pve2.conf" <<EOF
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=active
+NOTE=\$(touch "$RD/EXECUTED")
+EOF
+out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$RD/EXECUTED" ] && printf '%s' "$out" | grep -q '^pve2 .*state=active'; then
+    ok "records: a command substitution inside a record field is data -- status lists the record and runs nothing"
+else
+    bad "records: a command substitution inside a record field is data -- status lists the record and runs nothing" \
+        "rc=$rc executed=$([ -e "$RD/EXECUTED" ] && echo YES || echo no)" "$out"
+fi
+
+cat > "$RD/clients/evil.conf" <<'EOF'
+CLIENT_NAME=evil
+PATH=/nonexistent
+STATE=active
+EOF
+# The refusal is a die, and since the fatal-die change below it ends the
+# program even from the list view's per-record subshell: an inventory that
+# silently skipped the file it could not trust would be the fail-open shape.
+out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "evil.conf: 'PATH' is not a field name"; then
+    ok "records: a record naming a shell variable as a field is refused by name, and status stops there"
+else
+    bad "records: a record naming a shell variable as a field is refused by name, and status stops there" "rc=$rc" "$out"
+fi
+rm -f "$RD/clients/evil.conf"
+
+# The unquoter must read back exactly what write_client_field (printf %q) and
+# deploy.sh's manifest heredoc write, under both locales a host runs in: cron's
+# C locale turns every non-ASCII byte of a dataset name into $'\NNN'.
+rt_out=$(bash -c '
+    set -u; . "$1"; fail=0
+    vals=("" "hdd/a b" "it'"'"'s" "\$HOME" "a=b" "~x" "2026-09-03 12:00:00" "ssh-ed25519 AAAAC3Nz root@pve9" "q\"q" "\`id\`" "\$(id)" "back\\slash" "#hash" "!bang" "{brace}" "$(printf "\305\202\303\263d\305\272")" "$(printf "tab\there")" "$(printf "nl\nhere")")
+    for loc in C.UTF-8 C; do for v in "${vals[@]}"; do
+        w=$(LC_ALL=$loc printf "%q" "$v"); record_unquote "$w"
+        [ "$REPLY" = "$v" ] || { echo "MISMATCH [$loc] $w -> $(printf %q "$REPLY")"; fail=1; }
+    done; done
+    for w in "hdd/backups" "\"hdd/a hdd/b\"" "'"'"'ssh-ed25519 AAAA root@x'"'"'" "\"\"" "'"'"''"'"'"; do
+        eval "want=$w"; record_unquote "$w"
+        [ "$REPLY" = "$want" ] || { echo "MISMATCH heredoc $w -> $(printf %q "$REPLY")"; fail=1; }
+    done
+    record_unquote "\"\$HOME\"";  [ "$REPLY" = "\$HOME" ] || { echo "EXPANDED \$HOME inside double quotes"; fail=1; }
+    record_unquote "a b";        [ "$REPLY" = "a" ]      || { echo "bare value did not stop at the blank"; fail=1; }
+    [ "$fail" -eq 0 ] && echo ROUNDTRIP-OK
+' _ "$REPO/lib-backup-common.sh" 2>&1)
+if [ "$rt_out" = "ROUNDTRIP-OK" ]; then
+    ok "records: record_unquote reads back every shape printf %q and the manifest heredoc write, in C and UTF-8 locales"
+else
+    bad "records: record_unquote reads back every shape printf %q and the manifest heredoc write, in C and UTF-8 locales" "$rt_out"
+fi
+
+# Two records in one shell: the second carries no BANDWIDTH and no EXCLUDE_CHILD_1,
+# so after loading it both must read as absent -- and a manifest loaded into
+# its own set must not clear the client's fields.
+printf 'CLIENT_NAME=a\nSTATE=active\nBANDWIDTH=2M\nEXCLUDE_CHILD_1=hdd/a\\ b\n' > "$RD/a.conf"
+printf 'CLIENT_NAME=b\nSTATE=active\n' > "$RD/b.conf"
+printf 'PEER_SAVED_TARGET=hdd/x\nPEER_SAVED_DATASETS="hdd/a hdd/b"\n' > "$RD/m.conf"
+lk_out=$(bash -c '
+    set -u; . "$1"
+    record_load client "$2"; a="[$BANDWIDTH][$EXCLUDE_CHILD_1]"
+    record_load client "$3"; b="[${BANDWIDTH:-}][${EXCLUDE_CHILD_1:-}][$CLIENT_NAME]"
+    record_load manifest "$4"; m="[$CLIENT_NAME][$PEER_SAVED_DATASETS]"
+    printf "%s %s %s" "$a" "$b" "$m"
+' _ "$REPO/lib-backup-common.sh" "$RD/a.conf" "$RD/b.conf" "$RD/m.conf" 2>&1)
+if [ "$lk_out" = "[2M][hdd/a b] [][][b] [b][hdd/a hdd/b]" ]; then
+    ok "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone"
+else
+    bad "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone" "$lk_out"
+fi
+
+
+# ============================================================================
+# `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
+# eligible, also under `--section fataldie`. set-endpoint parses --host through
+# `read ... <<< "$(parse_endpoint_arg "$host")"`: an invalid host makes the
+# parser die INSIDE the substitution. On main that FATAL ended the subshell
+# only, `read` got an empty host:port, and the command carried on to refuse
+# the switch a second time for an unrelated reason ("no final catch-up has
+# been run") -- two FATALs for one mistake, the first of which changed nothing.
+# Discriminating control: on main the second FATAL is printed and this fails.
+# Proven by RUNNING the program, not by sourcing it: a sourced harness cannot
+# observe the property (lib-backup-common.sh says why).
+# ============================================================================
+FD="$WORK/fataldie"; rm -rf "$FD"; mkdir -p "$FD/clients" "$FD/rel"
+cat > "$FD/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=seed_complete
+EOF
+before=$(cat "$FD/clients/pve2.conf")
+out=$(CLIENTS_DIR="$FD/clients" RELATIONSHIPS_DIR="$FD/rel" bash "$ZFSBACKUP" set-endpoint pve2 --host='bad host' 2>&1); rc=$?
+nfatal=$(printf '%s\n' "$out" | grep -c '^FATAL:')
+if [ "$rc" -eq 1 ] && [ "$nfatal" -eq 1 ] && printf '%s' "$out" | grep -q 'invalid endpoint host' \
+        && ! printf '%s' "$out" | grep -q 'refusing to switch' \
+        && [ "$(cat "$FD/clients/pve2.conf")" = "$before" ]; then
+    ok "fatal die: a die inside a \$( ) ends set-endpoint at that FATAL -- one message, status 1, nothing after it ran"
+else
+    bad "fatal die: a die inside a \$( ) ends set-endpoint at that FATAL -- one message, status 1, nothing after it ran" \
+        "rc=$rc fatals=$nfatal" "$out"
+fi
+
+# The opt-out is a name at the site, and it has to keep working: `status NAME`
+# on a record with no pairing manifest reports the peer as unknown instead of
+# aborting the view (the loader dies inside the probe's substitution).
+out=$(CLIENTS_DIR="$FD/clients" RELATIONSHIPS_DIR="$FD/rel" bash "$ZFSBACKUP" status pve2 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^Klient: *pve2' && ! printf '%s' "$out" | grep -q '^FATAL:'; then
+    ok "fatal die: the status view's confined probe still reports a manifest-less record instead of dying"
+else
+    bad "fatal die: the status view's confined probe still reports a manifest-less record instead of dying" "rc=$rc" "$out"
+fi
+
+
+# ============================================================================
+# PER-INVOCATION STATE IS RESET AT ENTRY (2026-09-03). Self-contained; always
+# eligible, also under `--section invocation`. SRC_PROFILE_NAME is a global
+# read by the source-profile resolver; a stale value from an earlier command
+# in the same process must be gone by the time any consumer of it runs. The
+# harness sources the program, plants a stale value, and reads it back at the
+# moment the command dies on its bad arguments -- which is after the entry
+# reset and before anything else. Discriminating control: activate-client had
+# no reset on main and reports the stale value there; add-client and
+# local-backup carried their own copies and pin the consolidated helper.
+# ============================================================================
+inv_probe() {   # <command function> <args...> -> what SRC_PROFILE_NAME held when the command died
+    CLIENTS_DIR="$WORK/nonexistent-clients" bash -c '
+        . "$1"; shift
+        die() { printf "[%s]" "$SRC_PROFILE_NAME"; exit 1; }
+        SRC_PROFILE_NAME=stale
+        "$@"
+        printf "[%s]" "$SRC_PROFILE_NAME"
+    ' _ "$ZFSBACKUP" "$@" 2>/dev/null
+}
+for probe in "cmd_activate_client no-such-client" "cmd_add_client bad/name" "cmd_local_backup --no-such-flag"; do
+    # shellcheck disable=SC2086
+    got=$(inv_probe $probe)
+    if [ "$got" = "[]" ]; then
+        ok "invocation: ${probe%% *} clears SRC_PROFILE_NAME before it does anything else"
+    else
+        bad "invocation: ${probe%% *} clears SRC_PROFILE_NAME before it does anything else" "read back: ${got:-<nothing>}"
+    fi
+done
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

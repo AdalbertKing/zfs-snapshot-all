@@ -40,6 +40,10 @@ REC
 addclient_decision() {   # <host> <target> <user> -> rc + first log line
     local t; t=$(mktemp)
     { echo 'set -u'
+      # The block reads the record through record_get (lib-backup-common.sh,
+      # since 2026-09-03), so the harness sources the lib the program sources;
+      # its own log/die below still override the lib's.
+      printf '. %q\n' "$REPO/lib-backup-common.sh"
       echo 'log() { echo "LOG: $*"; }'
       echo 'die() { echo "DIE: $*"; exit 1; }'
       printf 'cpath=%q\n' "$WORK/clients/rel.conf"
