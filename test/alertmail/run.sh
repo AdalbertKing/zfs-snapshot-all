@@ -292,83 +292,44 @@ fi
 # ran an unconditional exit 0, which meant a broken MTA produced a cheerful
 # "channel fine" while nothing was delivered.
 #
-# This runs the REAL generated script, not a grep of deploy.sh. The heredoc body
-# is extracted and expanded exactly as deploy.sh expands it, then executed with
+# This runs the REAL shipped script, not a grep of deploy.sh: the file deploy.sh
+# installs (hostscripts/alert-digest.sh) is copied beside its alert-env.sh and
 # the queue redirected into a temp dir and mail(1) stubbed. The day check is
 # neutralised by pinning it to whatever today is -- an earlier hand-run of this
 # control returned 0 and looked like a pass purely because the date had rolled
 # past the heartbeat day and the branch never executed at all.
 # ---------------------------------------------------------------------------
-hb_body=$(sed -n '/^    cat > "\$DIGEST_SCRIPT" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC" | sed '1d;$d')
-
-# NO UNESCAPED BACKTICK MAY SURVIVE IN THAT BODY.
-#
-# The heredoc is UNQUOTED, so a backtick runs a command at install time --
-# inside a comment as readily as anywhere else, because substitution happens
-# before anything is a comment. Caught by this suite on 2026-09-02 when a
-# comment mentioning 'compress' made deploy.sh try to RUN compress; two more
-# had already shipped in v10, where a sentence about 'Doba:' had been quietly
-# executing 'Doba:' on every install since.
-#
-# Harmless words this time. The rule is not about the words.
-_bt=$(printf '%s\n' "$hb_body" | grep -nE '^[[:space:]]*#' | sed 's/[\\][`$]//g' | grep -nE '[`$]' | head -3)
-if [ -z "$_bt" ]; then
-    ok "digest heredoc: no COMMENT expands (an unquoted heredoc runs backticks and $ in them too)"
+# THE SCRIPT IS A FILE, AND THE FILE IS WHAT RUNS (2026-09-03). Until this
+# date the digest was an unquoted heredoc in deploy.sh, and this section began
+# with three guards that only made sense for a heredoc: no comment may carry a
+# backtick or a '$' (it would run at install time -- REV-20260902-133 found
+# `Doba:` executing as root), no single quote may be backslash-escaped, and a
+# rendering under a sentinel executable named `Doba:` must call nothing and
+# print nothing. hostscripts/alert-digest.sh is copied, never expanded, so
+# those properties hold by construction; what is pinned instead is that the
+# generation is GONE from deploy.sh and that deploy.sh installs the file it
+# ships (section host-scripts, below).
+HS="$(dirname "$DEPLOY_SRC")/hostscripts"
+_gen=$(grep -cE '^ *cat > "\$(NOTIFY|WARN|DIGEST|CAPACITY)_SCRIPT" <<' "$DEPLOY_SRC")
+if [ "$_gen" -eq 0 ]; then
+    ok "no host script is generated from a deploy.sh heredoc any more (REV-133's whole class)"
 else
-    bad "digest heredoc: no COMMENT expands (an unquoted heredoc runs backticks and $ in them too)" "$_bt"
+    bad "no host script is generated from a deploy.sh heredoc any more (REV-133's whole class)" "$_gen heredoc opener(s) still in $DEPLOY_SRC"
 fi
-
-# NOR MAY A SINGLE QUOTE BE BACKSLASH-ESCAPED IN THAT BODY.
-#
-# An unquoted heredoc does not process it, so the backslash survives into the
-# generated script and breaks whatever command it lands in. Written three times
-# in one sitting on 2026-09-02: the scope section printed bare quotes instead of
-# job names, and a target lookup silently returned nothing, so every volume was
-# summed over the wrong datasets. Inside a heredoc a single quote needs no
-# escaping at all, so any occurrence of one is a mistake.
-_sq=$(printf '%s\n' "$hb_body" | grep -n -F "\\'" | head -3)
-if [ -z "$_sq" ]; then
-    ok "digest heredoc: no single quote is backslash-escaped"
-else
-    bad "digest heredoc: no single quote is backslash-escaped" "$_sq"
-fi
-if [ -z "$hb_body" ]; then
-    bad "the alert-digest heredoc can be extracted from deploy.sh" \
-        "sed anchors no longer match -- update this suite"
-elif ! printf '%s\n' "$hb_body" | grep -q 'cisza, kanal sprawny'; then
-    bad "the extracted digest carries the weekly heartbeat" \
-        "no heartbeat send found in the extracted body"
+# The digest under test is the shipped file beside its alert-env.sh; the conf
+# lookup is pointed at nothing so a developer's /etc/zfs-alert.conf cannot leak
+# into the run (the environment wins over the file either way).
+export ZFS_ALERT_CONF=/dev/null
+if [ ! -r "$HS/alert-digest.sh" ] || [ ! -r "$HS/alert-env.sh" ]; then
+    bad "the alert-digest script and alert-env.sh ship as files in hostscripts/" \
+        "missing under $HS"
+elif ! grep -q 'cisza, kanal sprawny' "$HS/alert-digest.sh"; then
+    bad "the shipped digest carries the weekly heartbeat" \
+        "no heartbeat send found in $HS/alert-digest.sh"
 else
     hb_dir=$(mktemp -d)
-    # REV-20260902-133 F1. GENERATION MUST EXECUTE NO PROSE AND SAY NOTHING.
-    #
-    # The static grep above reads the body; this one RUNS the expansion the way
-    # deploy.sh runs it and measures two things the grep cannot: what bash
-    # printed while expanding, and whether anything named in a comment was
-    # actually executed. An unquoted heredoc substitutes before it comments, so
-    # a backtick span in prose is a command -- `Doba:` ran as root on every v10
-    # install (d3cd8d3), a second span with parentheses became a syntax error
-    # (9aae4f3), and the suite reported 37 PASS / 0 FAIL both times because the
-    # render's stderr went to the terminal and nobody asserted on it.
-    #
-    # The sentinel is the reviewer's own construction: an executable literally
-    # called `Doba:` first on PATH, which records the fact that it was called.
-    # A generation that runs prose calls it; an inert one cannot know it exists.
-    mkdir -p "$hb_dir/sentinel"
-    printf '#!/bin/sh\ntouch "%s/PROSE-WAS-EXECUTED"\nexit 0\n' "$hb_dir" > "$hb_dir/sentinel/Doba:"
-    chmod +x "$hb_dir/sentinel/Doba:"
-    hb_gen_err=$(PATH="$hb_dir/sentinel:$PATH" \
-    DIGEST_SCRIPT_MARKER="# alert-digest.sh test" \
-    ALERT_ENV_PREAMBLE="" NOTIFY_EMAIL="root" \
-        eval "cat > '$hb_dir/digest.sh' <<EOF
-$hb_body
-EOF" 2>&1 >/dev/null)
-    if [ -z "$hb_gen_err" ] && [ ! -e "$hb_dir/PROSE-WAS-EXECUTED" ]; then
-        ok "digest heredoc: generation prints nothing on stderr and executes no comment text (REV-133 sentinel 'Doba:' never called)"
-    else
-        bad "digest heredoc: generation prints nothing on stderr and executes no comment text (REV-133 sentinel 'Doba:' never called)" \
-            "sentinel called: $([ -e "$hb_dir/PROSE-WAS-EXECUTED" ] && echo YES || echo no)" "stderr: $hb_gen_err"
-    fi
+    cp "$HS/alert-digest.sh" "$hb_dir/digest.sh"
+    cp "$HS/alert-env.sh"    "$hb_dir/alert-env.sh"
     # The quiet branch used to be reachable only on Mondays, and this suite
     # neutralised that with a sed over the day comparison -- a pin that broke
     # the moment the comparison was rewritten. ZFS_DIGEST_QUIET=daily is now
@@ -377,7 +338,7 @@ EOF" 2>&1 >/dev/null)
     # case silently no-ops on six days out of seven and reports a pass.
     QUIET_ON="ZFS_DIGEST_QUIET=daily"
     if ! bash -n "$hb_dir/digest.sh" 2>/dev/null; then
-        bad "the extracted digest is valid bash" "$(bash -n "$hb_dir/digest.sh" 2>&1 | head -3)"
+        bad "the shipped digest is valid bash" "$(bash -n "$hb_dir/digest.sh" 2>&1 | head -3)"
     else
         mkdir -p "$hb_dir/bin"
         printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$hb_dir/bin/mail"
@@ -1393,20 +1354,17 @@ fi
 #     non-zero EXIT) is structurally silent about it. The progress data layer
 #     exists precisely so something can notice; this is the something.
 #
-# Runs the REAL generated script (heredoc extracted and expanded, zpool/zfs
+# Runs the REAL shipped script (hostscripts/check-pool-capacity.sh, zpool/zfs
 # stubbed, notify captured). The negative controls matter as much as the
 # positives: an ONLINE pool, a live transfer and a FINISHED old record must
 # stay silent -- an alert that fires either way teaches people to filter it.
 # ---------------------------------------------------------------------------
-cap_body=$(sed -n '/^    cat > "\$CAPACITY_SCRIPT" <<EOF$/,/^EOF$/p' "$DEPLOY_SRC" | sed '1d;$d')
-if [ -z "$cap_body" ]; then
-    bad "the capacity-script heredoc can be extracted from deploy.sh" "sed anchors no longer match"
+if [ ! -r "$HS/check-pool-capacity.sh" ]; then
+    bad "the capacity script ships as a file in hostscripts/" "missing under $HS"
 else
     hv_dir=$(mktemp -d)
-    CAPACITY_SCRIPT_MARKER="# check-pool-capacity.sh v6" NOTIFY_EMAIL=root \
-        eval "cat > '$hv_dir/check.sh' <<EOF
-$cap_body
-EOF"
+    cp "$HS/check-pool-capacity.sh" "$hv_dir/check.sh"
+    cp "$HS/alert-env.sh"           "$hv_dir/alert-env.sh"
     mkdir -p "$hv_dir/bin" "$hv_dir/prog"
     cat > "$hv_dir/bin/zpool" <<'ST'
 #!/bin/bash
@@ -1548,6 +1506,108 @@ esac')"
 
     rm -rf "$hv_dir"
 fi
+
+# ---------------------------------------------------------------------------
+# host-scripts: deploy.sh INSTALLS the files it ships, and "current" is the
+# file (2026-09-03). host_script_ensure replaced four heredoc installers whose
+# "already current" was a version marker somebody had to remember to bump --
+# and on 2026-09-02 did not, so both live hosts kept alert-digest.sh v9 through
+# thirteen merged revisions. Now current means byte-identical to the checkout
+# and executable when it should be; anything else is upgraded on a plain run
+# and only REPORTED under --check-only. Lifted from the real deploy.sh, run
+# against a throwaway target; the discriminating control is main, where the
+# function does not exist (product_fn ends the suite) and four heredoc
+# openers remain (the count above).
+# ---------------------------------------------------------------------------
+. "$SCRIPT_DIR/../harness.sh"
+hs_run() {   # <CHECK_ONLY> <target> [args of host_script_ensure after the target...]
+    ( set -u
+      _DEPLOY_DIR="$(dirname "$DEPLOY_SRC")"; CHECK_ONLY="$1"; PROBLEMS=0
+      die() { echo "FATAL: $*" >&2; exit 1; }
+      log() { echo ">>> $*"; }; warn() { echo "!!! $*" >&2; PROBLEMS=$((PROBLEMS+1)); }
+      HOST_SCRIPTS_DIR="$_DEPLOY_DIR/hostscripts"
+      eval "$(product_fn "$DEPLOY_SRC" host_script_ensure)"
+      host_script_ensure notify-warn.sh "$2" 0755 "lost" "wrong" ) 2>&1
+}
+hs_dir=$(mktemp -d); hs_t="$hs_dir/notify-warn.sh"
+out=$(hs_run 0 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && cmp -s "$HS/notify-warn.sh" "$hs_t" && [ -x "$hs_t" ] \
+   && printf '%s' "$out" | grep -q "installed $hs_t from hostscripts/notify-warn.sh"; then
+    ok "host-scripts: a missing target is installed byte-identical to hostscripts/ and executable"
+else
+    bad "host-scripts: a missing target is installed byte-identical to hostscripts/ and executable" "rc=$rc" "$out"
+fi
+out=$(hs_run 0 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "already current, leaving it alone" \
+   && ! printf '%s' "$out" | grep -q "installed"; then
+    ok "host-scripts: an identical, executable target is left alone"
+else
+    bad "host-scripts: an identical, executable target is left alone" "rc=$rc" "$out"
+fi
+printf '#!/bin/bash\n# notify-warn.sh v7 -- the marker an old install carried\necho old\n' > "$hs_t"; chmod 755 "$hs_t"
+out=$(hs_run 1 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "present but not the checkout's copy (wrong)" \
+   && grep -q '^echo old$' "$hs_t"; then
+    ok "host-scripts: --check-only reports an old copy and writes nothing"
+else
+    bad "host-scripts: --check-only reports an old copy and writes nothing" "rc=$rc" "$out" "$(head -3 "$hs_t")"
+fi
+out=$(hs_run 0 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && cmp -s "$HS/notify-warn.sh" "$hs_t" \
+   && printf '%s' "$out" | grep -q "is not the checkout's copy -- upgrading (wrong)"; then
+    ok "host-scripts: a plain run upgrades an old copy to the shipped file (no marker to bump)"
+else
+    bad "host-scripts: a plain run upgrades an old copy to the shipped file (no marker to bump)" "rc=$rc" "$out"
+fi
+chmod 644 "$hs_t"
+out=$(hs_run 1 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "present but not the checkout's copy"; then
+    ok "host-scripts: identical content that is not executable is not current (the file must RUN)"
+else
+    bad "host-scripts: identical content that is not executable is not current (the file must RUN)" "rc=$rc" "$out"
+fi
+out=$(hs_run 0 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$hs_t" ] && printf '%s' "$out" | grep -q "installed $hs_t"; then
+    ok "host-scripts: ...and a plain run reinstalls it executable"
+else
+    bad "host-scripts: ...and a plain run reinstalls it executable" "rc=$rc" "$out"
+fi
+rm -f "$hs_t"
+out=$(hs_run 1 "$hs_t"); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "$hs_t missing -- lost" && [ ! -e "$hs_t" ]; then
+    ok "host-scripts: --check-only names a missing script and what is lost without it"
+else
+    bad "host-scripts: --check-only names a missing script and what is lost without it" "rc=$rc" "$out"
+fi
+out=$( ( set -u
+      _DEPLOY_DIR="$hs_dir/nowhere"; CHECK_ONLY=0
+      die() { echo "FATAL: $*" >&2; exit 1; }
+      log() { echo ">>> $*"; }; warn() { echo "!!! $*" >&2; }
+      HOST_SCRIPTS_DIR="$_DEPLOY_DIR/hostscripts"
+      eval "$(product_fn "$DEPLOY_SRC" host_script_ensure)"
+      host_script_ensure notify-warn.sh "$hs_t" 0755 "lost" "wrong"; echo REACHED ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "this checkout is incomplete" && ! printf '%s' "$out" | grep -q REACHED && [ ! -e "$hs_t" ]; then
+    ok "host-scripts: a checkout without hostscripts/ is refused before anything is written"
+else
+    bad "host-scripts: a checkout without hostscripts/ is refused before anything is written" "rc=$rc" "$out"
+fi
+# The shipped scripts source alert-env.sh from beside themselves, loudly.
+mkdir -p "$hs_dir/alone"; cp "$HS/notify-fail.sh" "$hs_dir/alone/notify-fail.sh"
+out=$(ZFS_ALERT_QUEUE="$hs_dir/q" bash "$hs_dir/alone/notify-fail.sh" job detail 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "cannot source alert-env.sh next to this script" && [ ! -e "$hs_dir/q" ]; then
+    ok "host-scripts: notify-fail.sh without its alert-env.sh refuses by name instead of guessing its config"
+else
+    bad "host-scripts: notify-fail.sh without its alert-env.sh refuses by name instead of guessing its config" "rc=$rc" "$out"
+fi
+cp "$HS/alert-env.sh" "$hs_dir/alone/alert-env.sh"
+out=$(ZFS_ALERT_CONF=/dev/null ZFS_ALERT_MODE=daily ZFS_ALERT_QUEUE="$hs_dir/q" ZFS_ALERT_STATE_DIR="$hs_dir/st" \
+      bash "$hs_dir/alone/notify-fail.sh" job detail 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$hs_dir/q" ] && grep -q 'job' "$hs_dir/q"; then
+    ok "host-scripts: ...and with it beside, the same file queues the finding (env wins over the conf)"
+else
+    bad "host-scripts: ...and with it beside, the same file queues the finding (env wins over the conf)" "rc=$rc" "$out" "$(cat "$hs_dir/q" 2>/dev/null)"
+fi
+rm -rf "$hs_dir"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
