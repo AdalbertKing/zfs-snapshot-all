@@ -59,7 +59,41 @@ biblioteka ZFS — zamrożone, dowiedzione na żywo, kandydat do „zostaje w ba
 
 Warstwa 1: **57 dni** · warstwa 2: **101 dni** · warstwa 3: **107 dni**.
 
-## Trzy scenariusze
+## Korekta 2026-09-04: model był niekalibrowany, liczby wyżej są zawyżone
+
+Właściciel: „Ponad pół roku prac? Ten pakiet powstał w miesiąc." Słusznie.
+Tempa 200/150/110 linii i 40 asercji dziennie to tempa PODRĘCZNIKOWE jednej
+osoby, wzięte z zewnątrz, a nie zmierzone na tym repozytorium — mimo że
+pomiar leżał w `git log`. Zmierzone (R2: mierzyć po swojej stronie granicy):
+
+| miara | wartość |
+|---|---:|
+| pierwszy commit | 2026-07-06 |
+| dni z commitami / rozpiętość kalendarzowa | 53 / 60 |
+| commitów | 2510 |
+| linie produktu + testów dziś | 46 758 + 41 097 |
+| **tempo obserwowane** | **~1 657 linii/dzień, ~59 asercji/dzień** |
+| dziś sam (2026-09-03) | 94 commity, +8 306 / −2 426 linii, 27 scaleń |
+
+Wycena skalibrowana tym tempem: udział warstwy w kodzie i w asercjach
+(średnia obu) razy 53 dni, czyli „ile tego samego procesu zajęłoby zbudowanie
+tej warstwy od zera"; tłumaczenie ze spisaną specyfikacją i gotowymi
+dowodami jest tańsze niż wymyślanie, przyjęty współczynnik 0,5 — jawny,
+do zakwestionowania jak poprzedni.
+
+| warstwa | wg tempa tego repo (dni) | ×0,5 tłumaczenie (dni) | poprzedni model |
+|---|---:|---:|---:|
+| 1 | 14,5 | **7** | 57 |
+| 2 | 18,8 | **9** | 101 |
+| 3 | 19,8 | **10** | 107 |
+| razem | 53 | **26** | 266 |
+
+Warunek tej kalibracji: ten sam proces co dotąd (właściciel kieruje,
+implementer wykonuje, laby na flocie, CI). Inny wykonawca to inna
+kalibracja — i wtedy poprzednia tabela jest górną granicą, nie wyceną.
+Pierwszy tydzień na warstwie 1 rozstrzyga, która tabela jest prawdziwa.
+
+## Trzy scenariusze (liczby z niekalibrowanego modelu — patrz korekta wyżej)
 
 | scenariusz | zakres | dni wg modelu | co zostaje w bashu |
 |---|---|---:|---|
