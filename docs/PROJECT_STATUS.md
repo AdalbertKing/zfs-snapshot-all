@@ -96,9 +96,12 @@
   `--revoke-old` bez `--pair` spadały na domyślną ścieżkę i robiły PEŁNE
   WDROŻENIE hosta; odmowa przy argumentach, rc=2, `test/draftscope` +12 —
   moja równoległa, równoważna poprawka z tej gałęzi odrzucona przy scaleniu
-  na rzecz tamtej; kontrola pozytywna tamtej suity przyjmuje teraz też bramkę
-  ZFS-owego preflightu, bo na boxie ROOTOWYM przebieg mija bramkę roota i
-  staje jedną dalej (mierzone: 46/1 tu, CI bez roota zielone). **Defekt 2 (naprawiony tu):** `deploy.sh` wołany wprost
+  na rzecz tamtej; kontrola pozytywna tamtej suity NIGDY nie biegnie jako root: za bramką
+  argumentów prawdziwy `--pair` robi Fazę 1 i 2 wdrożenia (w tym `git fetch`)
+  ZANIM sparuje, więc jako root na checkoucie dewelopera ruszał repozytorium,
+  które suita właśnie czyta (zmierzone 2026-09-03: `FETCH_HEAD` pod biegnącą
+  suitą); jako root kontrola idzie przez `su nobody`, a bez takiego konta
+  zgłasza SKIP z powodem (47/47 tu, CI bez roota bez zmian). **Defekt 2 (naprawiony tu):** `deploy.sh` wołany wprost
   nie czytał `grant-datasets` (PR #292 nauczył tego tylko `update-control.sh`),
   więc ręczny przebieg na hoście z pulą `hdd` padał w Fazie 8g na domyślnym
   `rpool/…`; teraz `apply_recorded_grant_datasets` nad bramką roota bierze

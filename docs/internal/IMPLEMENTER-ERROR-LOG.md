@@ -512,6 +512,13 @@ then follow it through every gate on the way. The product now refuses
 the bare form at argument time (rc=2) instead of deploying, and the
 runbook's hold line says what the hold does and does not cover.
 
+*Postscript, same day.* The positive control for that refusal, run as
+root on this container, went past the root gate into a real `--pair`
+preflight -- Phase 1 and a Phase 2 `git fetch` -- before dying on ZFS.
+A test that reaches the product's deployment path as root is R5 in test
+form (mutating the checkout the suite reads); the control now runs as an
+unprivileged user or skips with its reason.
+
 ## 2b. Suite runs — was it worth it, and at what scale
 
 Owner instruction, 2026-08-27: *"Mierz też zasadność puszczania suit i w jakiej
