@@ -444,6 +444,39 @@ paying for.
 | `zfsbackup` | `zfs-backup.sh` changed | **~35 min across four attempts** | section 122 result — but see below |
 | `localbackup` | `zfs-backup.sh`/`profiles/` changed | **not run** | documented liar on this workstation (56/1 locally against fully green CI on the same SHA) — sent to CI |
 
+### 2026-09-03 — ten Pull Requests in one day, on a Linux container
+
+The workstation rule ("this Windows box is not on the list for full suites")
+did not apply: this session ran on a Linux container with native bash, where
+the full `zfsbackup` suite costs ~2.5 minutes, not 13-25. Every row below is
+a run that happened; the "found" column is what it changed.
+
+| suite | why run locally | cost | found |
+|---|---|---|---|
+| `zfsbackup` (full, ×3 on the branch; ×2 as `ZFSBACKUP=<main>` controls) | **edited it** (sections `records`/`fataldie`/`invocation`/`flags`/`noeval`/`3b`) | ~2.5 min each | **E29** — `. "$SCRIPT_DIR/../harness.sh"` resolved to `<repo>/../harness.sh` because section 96 repoints `SCRIPT_DIR`; the marker assertion downstream passed for no reason. The foreign-tree controls carry **four constant reds** (96A, 96B ×2, `assert_cron_config_matches_installed`) that compare a profile path against the suite's own tree and say nothing about the change — named here so nobody diagnoses them a third time |
+| `cron` (×2 + `LIB=<main>` control) | **edited it** (section S) | <1 min | **E28** — the fd probe measured bash's own saved stderr, red on both sides of the change; `/proc` was the second instrument |
+| `harness` (new, ×2) | **new suite** | <1 min | **E30** — while writing H3: `product_fn`'s FATAL was `exit 1` inside `$( )` and could never end a suite. The suite's own H7 control (the old shape continues with rc=0) is what shaped the fix (`kill -TERM $$`) |
+| `moveclient` (×2 + `ZB=/dev/null` on branch and on main) | **edited it** (product_fn adoption) | <1 min | the adoption discriminator: FATAL rc=143 here, 41 lines of `command not found` and 8/33 on main |
+| `alertmail` (×3 + `DEPLOY_SRC=<main>` control) | **edited it** (host-scripts section; digest and capacity from files) | <1 min | nothing beyond design; the control proved the section ends the suite on the absent installer |
+| `draftscope` (×2, `DEPLOY_SRC=<main>` control) | **edited it** (anchor alternation) | <1 min | nothing; the alternation proven from both trees |
+| `pairgate`, `join`, `joinmanifest`, `joinremote`, `runsuffix`, `restoregrant` | **edited them** (product_fn adoption) | ~2 min total | one mistake caught BEFORE the run by `bash -n`: my own `if false; then : else` placeholder left an orphaned `fi`. `restoregrant`'s three non-root cases red as always here, green in CI |
+| `cron2conf` (×2 + `C2C=<main>` control) | **edited it** (fixture `pull.crontab`) | <1 min | nothing beyond the intended discriminator (main 28/1) |
+| `impact` (×3) | `deps.conf` changed | <1 min | nothing |
+| `pause`, `restore`, `quiescehelper`, `selfupdate`, `join`, `linkfields`, `rerun`, `joinmanifest`, `rux` | implicated only (`deploy.sh` / `lib-backup-common.sh` / `zfs-backup.sh` changed underneath) | ~3 min total | **nothing** — every one green first time; `restore`'s `get: command not found` noise is identical on main (a stub in the suite itself) |
+
+**Same pattern as 2026-08-27, stronger.** Every finding came from a suite I had
+edited or written; the nine implicated-only runs found nothing across ten PRs.
+Two of the four findings (E28, E30) were about the INSTRUMENT, not the product
+— a red that did not move with the product, and a green that could not have
+gone red — which is R6 and R1 again, and the reason a new assertion's negative
+control is not optional.
+
+**One new class of run.** A negative control on a foreign tree
+(`ZFSBACKUP=<main>`, `DEPLOY_SRC=<main>`, `C2C=<main>`) is cheap and decisive
+for the assertion under test, and it also produces a fixed set of unrelated
+reds wherever a suite compares a path against ITS OWN tree. Read the
+discriminator's line, count the rest against the list above, and stop.
+
 ### What the numbers say
 
 **Every local run that found something was a suite I had edited.** Every suite run

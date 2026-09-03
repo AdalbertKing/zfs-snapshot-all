@@ -7023,14 +7023,17 @@ czterech hostach w obu formach hosta.
 
 ## 6. Otwarte — i u kogo leży
 
-### LEDGER PUSTY — zero recenzji w toku (2026-08-31, `main` @ `bd6797f`)
+### LEDGER: JEDNA RECENZJA W TOKU, U RECENZENTA (2026-09-03, `main` @ `3a2d565`)
 
-`docs/internal/reviews/REVIEW_LEDGER.md` nie ma **ani jednego** wiersza poza
-`CLOSED`: wszystkie **65** recenzji zamknięte, zero `OPEN | Claude`, zero
-`IMPLEMENTED | Reviewer`, zero otwartych Pull Requestów. Ostatnie dwie —
-REV-20260831-128 (proweniencja wyboru dla `--onto`) i REV-20260831-129
-(tożsamość per dataset w sprawdzeniu rekurencyjnym) — recenzent zatwierdził i
-zamknął tego dnia, PR #231 i #232.
+`docs/internal/reviews/REVIEW_LEDGER.md` ma **jeden** wiersz poza `CLOSED`:
+REV-20260902-133 (heredoc digestu wykonywał prozę jako polecenie roota) —
+`IMPLEMENTED | Reviewer`, zgłoszony SHA `6534cb1` (PR #295, kontrola
+dynamiczna z sentinelem `Doba:`). Po tym zgłoszeniu PR #302 usunął cały
+mechanizm, którego ta kontrola pilnowała (skrypty hostów są plikami w
+`hostscripts/`, nic się nie rozwija), więc granica akceptacji zmieniła
+kształt — dopisek w odpowiedzi, **zamknięcie należy do recenzenta**. Zero
+`OPEN | Claude`, zero otwartych Pull Requestów; 68 pozostałych recenzji
+zamkniętych.
 
 **Autorytetem jest wygenerowany ledger na świeżo opublikowanym `main`, nie ten
 akapit.** Jeśli oba się rozjadą, rację ma ledger, a to zdanie jest po prostu
@@ -7039,8 +7042,9 @@ dokument opisuje stan produktu i nigdy nie rozstrzyga, czyj jest ruch.
 
 Podsekcje niżej to **zapis historyczny** — kto na co czekał w sierpniu. Żadna z
 opisanych tam recenzji nie jest już otwarta; zostają, bo tłumaczą, skąd wzięły
-się dzisiejsze mechanizmy. Jedyne, co przeżyło jako **bieżące**, to nazwane
-luki produktowe pod „Znane luki" — i one nie są stanem recenzji.
+się dzisiejsze mechanizmy. Jedyne, co przeżyło jako **bieżące**, to „Znane
+luki" niżej — zmierzone 2026-09-03, została jedna, labowa — i one nie są
+stanem recenzji.
 
 ### Zamknięte przez recenzenta
 
