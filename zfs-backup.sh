@@ -6852,12 +6852,30 @@ cmd_add_client() {
         PROFILE_ACTIVE="$_keep_pa"; PROFILE_LOADED=""
     fi
     [ -n "$lan" ] || die "add-client requires --host=HOST[:PORT] (the address used for the initial seed)"
+    # ONLY FOR A NEW PEER. An existing pairing already recorded its own
+    # choice -- a --peer-datasets scope already committed, or a --mode
+    # already in play -- and inventing "backup" below, then forwarding it to
+    # deploy.sh --pair as though the operator had typed it, collides with
+    # that choice: do_pair's own inheritance (pair_mode_after_inheritance)
+    # cannot tell "the operator asked for --mode=backup" from "add-client
+    # made it up", so it built a wsad naming BOTH a dataset list (correctly
+    # inherited from the manifest) and a mode (this invented one) -- which
+    # --join then refused, correctly, as self-contradictory. Reproduced live
+    # 2026-09-03: a peer paired via --peer-datasets, then add-client run
+    # against it with neither --mode nor --datasets, permanently wrote
+    # PEER_SAVED_MODE=backup over what had been blank in the manifest,
+    # poisoning every future --pair for that peer.
+    #
+    # Host derived the same way the idempotent-rerun gate above does: lan_host
+    # is not parsed until ~120 lines further down.
+    local _peer_already_paired=0
+    [ -r "$(peer_manifest_path "$(peer_label "${lan%%:*}")")" ] && _peer_already_paired=1
     # The ordinary product path is backup. Dataset discovery belongs to the
     # source-side guided --join, so the collector no longer has to spell out
     # either an internal mode name or datasets it cannot be expected to know.
     # Explicit --datasets remains the expert/legacy path and explicit sync
     # remains available for the deliberately different same-path semantics.
-    if [ -z "$mode" ] && [ -z "$datasets" ]; then
+    if [ -z "$mode" ] && [ -z "$datasets" ] && [ "$_peer_already_paired" -eq 0 ]; then
         mode=backup
     fi
     # REV-20260802-033 slice 6: --mode is the alternative to --datasets --
@@ -6876,7 +6894,13 @@ cmd_add_client() {
         [ "$mode" = sync ] && [ -n "$target" ] \
             && die "add-client: --mode=sync reproduces source paths at the same paths on the collector -- do not also pass --target"
     else
-        [ -n "$datasets" ] || die "add-client requires --datasets=\"A B\" (or --mode=backup|sync, to let the source choose)"
+        # Neither given, and an already-paired peer: leaving both empty is
+        # deliberate, not an omission -- deploy.sh --pair inherits whatever
+        # that peer's manifest already carries (mode or dataset list) when
+        # neither is named on the command line, which is exactly what an
+        # add-client call naming no preference should defer to.
+        [ -n "$datasets" ] || [ "$_peer_already_paired" -eq 1 ] \
+            || die "add-client requires --datasets=\"A B\" (or --mode=backup|sync, to let the source choose)"
     fi
     # Refused rather than ignored. Without a mode the list is --datasets and a
     # separate "what was asked for" would be a second answer to a question

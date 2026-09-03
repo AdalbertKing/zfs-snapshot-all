@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 56b9e40faef599b9 -->
+<!-- status-covers-digest: 04e15bee2c4d71f2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,43 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`add-client` wstrzykiwał wymyślony `--mode=backup` do parowania z peerem,
+  który już był dataset-driven, trwale zatruwając jego manifest (2026-09-03).**
+  Znalezione na żywo w LABIE `--source-profile` (pve9<->pve10, na polecenie
+  właściciela: "przetestuj na lab, zrób wdrożenie z niesymetryczną retencją").
+
+  **Przebieg.** `deploy.sh --pair --peer-datasets=hdd/labdata` sparował czysto,
+  scope skomitowany. Kolejny `add-client lab10 --source-profile=lab-lean` (bez
+  powtórzenia `--peer-datasets`) odświeżył parowanie i wysłał wsad, który
+  `--join` na pve10 słusznie odrzucił: *"peer.conf carries both PEER_CONF_MODE
+  and PEER_CONF_DATASETS"*.
+
+  **Przyczyna, ustalona `bash -x`.** `cmd_add_client` ma wygodny domyślny wybór
+  -- gdy nie dostanie ani `--mode`, ani `--datasets`, sam dopowiada
+  `mode=backup`, słuszny dla NOWEGO peera. Zastosowany bezwarunkowo, poleciał
+  też dla JUŻ sparowanego, dataset-driven peera -- `do_pair`'s własna logika
+  dziedziczenia (`pair_mode_after_inheritance`) nie ma jak odróżnić "operator
+  napisał --mode=backup" od "add-client to sobie dopowiedział", więc zbudowała
+  wsad niosący OBA pola: dataset lista odziedziczona poprawnie z manifestu,
+  i tryb wymyślony przez to wywołanie. Manifest na dysku
+  (`peers/<peer>.conf`) został przy tym trwale zatruty --
+  `PEER_SAVED_MODE=backup` zapisane tam, gdzie wcześniej było puste, więc
+  KAŻDE kolejne parowanie tego peera odziedziczałoby ten sam konflikt.
+
+  **Naprawa.** Domyślne `mode=backup` w `cmd_add_client` jest teraz warunkowe:
+  stosowane tylko gdy peer NIE jest jeszcze sparowany (sprawdzone przez
+  `peer_manifest_path`/`peer_label`, tym samym idiomem co bramka rerun tuż
+  obok). Dla istniejącego peera, gdy operator nie poda ani `--mode`, ani
+  `--datasets`, obie zmienne zostają puste -- `deploy.sh --pair` odziedziczy
+  wtedy dokładnie to, co manifest już niesie, zamiast dostać zmyślony rozkaz.
+  `test/rerun` +6 przypadków, dyskryminujących na starym kodzie (jeden case
+  `FAIL MODE=backup DATASETS=` na main, `PASS` po poprawce -- potwierdzone
+  `git stash`).
+
+  **Stan po znalezisku:** manifest `peers/192.168.28.97.conf` na pve9 (lab)
+  zostaje zatruty aż do wdrożenia tej poprawki i ręcznego re-parowania -- lab
+  `--source-profile` NIE jest jeszcze zaliczony, do powtórzenia po deploy.
 
 - **Self-update na koncie bez `rpool` kończył się FATAL na Fazie 8g, cicho, od
   ~5 tygodni (2026-09-03).** Znalezione przy wdrożeniu #291: `deploy.sh
