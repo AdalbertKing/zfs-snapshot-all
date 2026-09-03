@@ -136,11 +136,6 @@ if [ "$PURGING" -eq 1 ] && [ "$ON_REAL_HOST" -eq 1 ] && [ "$(id -u)" != 0 ]; the
     die "purging touches /etc, /var/lib, /root and accounts -- run as root"
 fi
 
-# peer_label -- the same transform deploy.sh and zfs-backup.sh apply, mirrored
-# rather than sourced: this script must run on a host whose package state is
-# inconsistent, which is exactly when sourcing 6000 lines is a bad idea.
-peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
-
 # ------------------------------------------------------------------------------
 # DISCOVERY -- one pass per artefact family, keyed by whichever identity that
 # family actually uses on disk. Nothing is inferred from a list; every entry
