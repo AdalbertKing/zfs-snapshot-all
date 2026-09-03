@@ -65,6 +65,7 @@ BACKUP_USER=""
 # (verified across three differently-named nodes). Override with --datasets="A B"
 # on any host that departs from it -- a non-Proxmox host almost certainly does.
 BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"
+BACKUP_USER_DATASETS_GIVEN=0   # set by --grant-datasets; a bare run may take the recorded list instead (see apply_recorded_grant_datasets)
 
 # Where this host pulls its updates from -- and, for a delegated account, where
 # ITS own checkout is cloned from.
@@ -448,8 +449,8 @@ while [ "$#" -gt 0 ]; do
         # Normalised AT THE DOOR like --peer-datasets: the package list grammar
         # is the comma (dataset_list_split), the space form was storage leaking
         # outward. Both parse; internally the space form flows on unchanged.
-        --grant-datasets=*|--datasets=*) BACKUP_USER_DATASETS="$(dataset_list_split "${1#*=}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; shift ;;
-        --grant-datasets|--datasets)     BACKUP_USER_DATASETS="$(dataset_list_split "${2:-}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; shift 2 ;;
+        --grant-datasets=*|--datasets=*) BACKUP_USER_DATASETS="$(dataset_list_split "${1#*=}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; BACKUP_USER_DATASETS_GIVEN=1; shift ;;
+        --grant-datasets|--datasets)     BACKUP_USER_DATASETS="$(dataset_list_split "${2:-}" | tr '\n' ' ')"; BACKUP_USER_DATASETS="${BACKUP_USER_DATASETS% }"; BACKUP_USER_DATASETS_GIVEN=1; shift 2 ;;
         --email=*)      NOTIFY_EMAIL="${1#*=}"; shift ;;
         --email)        NOTIFY_EMAIL="${2:-}"; shift 2 ;;
         --pair)         PAIR_MODE=1; shift ;;
@@ -2821,6 +2822,25 @@ if [ "$SHOW_RESTORE_GIVEN" -eq 1 ]; then
     do_show_restore
     exit $?
 fi
+
+# The recorded grant list applies to a DIRECT run too, not only to the hourly
+# self-update. PR #292 taught update-control.sh to read grant-datasets and pass
+# it back as --grant-datasets=; a bare `bash deploy.sh` typed at the console --
+# every lab and every fix from a shell -- still fell through to the hardcoded
+# Proxmox default and died in Phase 8g on a host whose pool is not rpool
+# (measured on pve9, 2026-09-03, with a correct grant-datasets = hdd on disk).
+# An explicit --grant-datasets still wins; an absent or empty file changes
+# nothing. Placed above the root gate so the choice is visible without root.
+apply_recorded_grant_datasets() {
+    [ "$BACKUP_USER_DATASETS_GIVEN" -eq 0 ] || return 0
+    [ -s "$GRANT_DATASETS_FILE" ] || return 0
+    local recorded
+    recorded=$(read_state_file "$GRANT_DATASETS_FILE") || return 0
+    [ -n "$recorded" ] || return 0
+    BACKUP_USER_DATASETS="$recorded"
+    log "grant-datasets: using the list recorded at $GRANT_DATASETS_FILE (${recorded}) -- pass --grant-datasets= to override"
+}
+apply_recorded_grant_datasets
 
 # Placed ABOVE the global root gate on purpose. --show-restore only READS,
 # and "is anything allowed to overwrite this machine?" is a question an

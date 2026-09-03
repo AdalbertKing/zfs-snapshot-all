@@ -363,12 +363,29 @@ done
 # POSITIVE CONTROL. The guard must catch the MISSING --pair, not the flag: with
 # --pair the same flag passes argument validation and the program carries on
 # (as a normal user it then stops at the root check, which is proof it got past).
-_out=$(bash "$DEPLOY_SRC" --pair --peer=10.0.0.1 --draft-config 2>&1 >/dev/null); _rc=$?
-check "WITH --pair the flag is accepted (not rc=2)" "0" "$([ "$_rc" != 2 ]; echo $?)"
-case "$_out" in
-    *"run as root"*) check "...and execution reaches past argument validation" "0" "0" ;;
-    *)               check "...and execution reaches past argument validation" "0" "1: $_out" ;;
-esac
+# NEVER AS ROOT. Past the argument gate a real --pair run does Phase 1 and
+# Phase 2 of a deployment BEFORE it pairs -- as root on a developer's checkout
+# that is a `git fetch` into the very repository this suite is reading
+# (measured 2026-09-03: FETCH_HEAD moved under a running suite). The control
+# only needs the root gate to answer, so it runs as an unprivileged user when
+# the suite itself is root, and is skipped with its reason when none exists.
+_run_ctrl() { bash "$DEPLOY_SRC" --pair --peer=10.0.0.1 --draft-config 2>&1 >/dev/null; }
+if [ "$(id -u)" -ne 0 ]; then
+    _out=$(_run_ctrl); _rc=$?
+elif id nobody >/dev/null 2>&1; then
+    _out=$(su -s /bin/bash nobody -c "bash '$DEPLOY_SRC' --pair --peer=10.0.0.1 --draft-config 2>&1 >/dev/null"); _rc=$?
+else
+    _out=""; _rc=99
+fi
+if [ "$_rc" -eq 99 ]; then
+    echo "SKIP WITH --pair control: suite runs as root and no unprivileged user exists to run it as"
+else
+    check "WITH --pair the flag is accepted (not rc=2)" "0" "$([ "$_rc" != 2 ]; echo $?)"
+    case "$_out" in
+        *"run as root"*) check "...and execution reaches past argument validation" "0" "0" ;;
+        *)               check "...and execution reaches past argument validation" "0" "1: $_out" ;;
+    esac
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

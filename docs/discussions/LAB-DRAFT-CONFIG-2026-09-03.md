@@ -1,6 +1,14 @@
 # Lab — `deploy.sh --draft-config` na prawdziwym parowaniu
 
-Status: **DO WYKONANIA** w wątku z dostępem do floty. Ostatnia z czterech
+Status: **WYKONANY 2026-09-03/04** na pve9 ↔ pve10 — wynik w
+`LAB-DRAFT-CONFIG-WYNIK-2026-09-03.md` (PR #317): sześć własności
+potwierdzonych, komenda nigdy nieużyta na siedmiu hostach, rekomendacja
+wykonawcy: zostawić i dopisać test. Poniżej wersja poprawiona o **trzy błędy
+runbooka** nazwane przez wykonawcę (E34): `--draft-config` jest pod-trybem
+`--pair` i bez niego uruchamiał PEŁNE WDROŻENIE hosta (naprawione w produkcie,
+odmowa przy argumentach); `update-hold` NIE zatrzymuje `git pull` samego
+`deploy.sh`, tylko `update-control.sh --self-update`; dataset-duch blokuje
+`--join` na peerze, więc (B) buduje się inaczej. Ostatnia z czterech
 „znanych luk" z sierpnia (PROJECT_STATUS sekcja 6, punkt (2)): `--draft-config`
 nie ma testu behawioralnego, bo wymaga prawdziwego parowania (klucz relacji,
 konto na peerze, `zfs list` przez ssh). `test/draftscope` D1/D2 to statyczny
@@ -71,6 +79,8 @@ pula `hdd`. Datasety wyrzucalne.
 
 ```
 printf 'lab draft-config %s\n' "$(date +%F)" > /root/.zfs-snapshot-all-update-state/update-hold   # na A i B
+# UWAGA (blad 2 pierwszego przebiegu): hold zatrzymuje TYLKO update-control.sh --self-update.
+# Kazde reczne `bash deploy.sh` bez pod-trybu robi wlasny `git pull` w Fazie 2 mimo holdu.
 cd /root/scripts/zfs-snapshot-all && git rev-parse --short HEAD
 grep -l 'draft-config' /root/scripts/cron.log /root/scripts/pairing/*.suggested 2>/dev/null   # czy ktokolwiek to kiedyś uruchomił
 ls -l /root/scripts/pairing/ 2>/dev/null
@@ -82,7 +92,7 @@ Na B (źródło):
 ```
 zfs create -p hdd/lab-draft/root1/child a; zfs create hdd/lab-draft/root1/child2   # root1 ma 2 potomków
 zfs create hdd/lab-draft/root2                                                       # bez potomków
-zfs create -p hdd/lab-draft/outside/deep/deeper                                      # poza parowaniem, głęboki
+zfs create -p hdd/lab-draft-outside/deep/deeper                                      # poza parowaniem: plytki korzen wypisany, glebsze policzone
 zfs list -r hdd/lab-draft
 ```
 
@@ -92,27 +102,32 @@ Na A:
 
 ```
 bash deploy.sh --pair --peer=<B> --role=pull --target=hdd/lab-draft-copy \
-  --peer-datasets="hdd/lab-draft/root1,hdd/lab-draft/root2,hdd/lab-draft/ghost" --local-user=zfsbackup 2>&1 | tee /tmp/lab-pair.log
-# `ghost` celowo nie istnieje na B -> (B) w kroku 2.
+  --peer-datasets="hdd/lab-draft/root1,hdd/lab-draft/root2" --local-user=zfsbackup 2>&1 | tee /tmp/lab-pair.log
+# (B) NIE przez datasety-duchy przy --pair: peer ODMAWIA --join na zadaniu, ktorego nie umie
+# spelnic ("refusing to draft a scope around a request that cannot be satisfied", blad 3).
+# Zamiast tego: po --join skasowac root2 na B (krok 2), wtedy jest "zadeklarowany, nieistniejacy".
 # --pair DRUKUJE wsad i komendy dla peera. NIE wykonywać ich jeszcze.
-bash deploy.sh --peer=<B> --draft-config; echo rc=$?          # oczekiwane: rc!=0, "has --join run there yet?"
+# FORMA: --draft-config jest POD-TRYBEM --pair (blad 1). Bez --pair deploy.sh do 2026-09-03 robil
+# pelne wdrozenie hosta; teraz odmawia przy argumentach (rc=2, "sub-modes of --pair").
+bash deploy.sh --pair --peer=<B> --draft-config; echo rc=$?   # oczekiwane: rc!=0, "has --join run there yet?"
 ls /root/scripts/pairing/*.suggested 2>&1                       # brak pliku dla tej etykiety
 ```
 
 ### 2. (A)(B)(C) Draft na prawdziwym parowaniu
 
 Na B wykonać DOKŁADNIE komendy wydrukowane przez `--pair` (dostarczenie wsadu,
-`bash deploy.sh --join=<wsad>`). Potem na A:
+`bash deploy.sh --join=<wsad>`). Potem na B `zfs destroy hdd/lab-draft/root2`
+(zadeklarowany, a już nieistniejący → (B)). Potem na A:
 
 ```
-bash deploy.sh --peer=<B> --draft-config 2>/tmp/lab-draft.err; echo rc=$?
+bash deploy.sh --pair --peer=<B> --draft-config 2>/tmp/lab-draft.err; echo rc=$?
 cat /tmp/lab-draft.err                                          # oczekiwane: BEZ "predates host-key pinning", BEZ "unfiltered"
 L=/root/scripts/pairing/<label>.conf.suggested                  # label = etykieta z --pair (peer_label adresu)
-grep -n '^# \[dataset:' $L                                      # DOKLADNIE root1 i root2
+grep -n '^# \[dataset:' $L                                      # DOKLADNIE root1 (root2 skasowany -> UWAGA)
 grep -n 'root1 ma 2 datasetow potomnych' $L                     # (A) liczba potomkow
 grep -n 'recursive    = flat' $L | wc -l                        # 1 (tylko root1)
 grep -n 'flags        =' $L                                     # -K /home/zfsbackup/... , -k obecne, BEZ -p
-grep -n -A2 'NIE ISTNIEJA' $L                                   # (B) ghost
+grep -n -A2 'NIE ISTNIEJA' $L                                   # (B) root2
 grep -n 'outside' $L                                            # (C) nieobjety, plytki; deep/deeper policzone nie wypisane
 grep -n 'peer-datasets=' $L                                     # podpowiedz z lista starych + <nowy>
 ```
@@ -123,7 +138,7 @@ grep -n 'peer-datasets=' $L                                     # podpowiedz z l
 sha256sum $L > /tmp/lab-sug1; stat -c %Y $L
 find /etc/zfs-snapshot-all -newer /tmp/lab-pair.log -type f     # oczekiwane: tylko to, co zapisal --pair/--join, NIC z --draft-config
 crontab -l | md5sum; su zfsbackup -s /bin/bash -c 'crontab -l' | md5sum
-bash deploy.sh --peer=<B> --draft-config 2>/dev/null; sha256sum -c /tmp/lab-sug1   # OK (nadpisany identyczna trescia)
+bash deploy.sh --pair --peer=<B> --draft-config 2>/dev/null; sha256sum -c /tmp/lab-sug1   # OK (nadpisany identyczna trescia)
 crontab -l | md5sum; su zfsbackup -s /bin/bash -c 'crontab -l' | md5sum             # bez zmian
 ```
 
@@ -134,7 +149,7 @@ drugą stronę, po tym samym schemacie (`--role=push --target=<dataset na A>`),
 `--join` na A, potem na B:
 
 ```
-bash deploy.sh --peer=<A> --draft-config; echo rc=$?
+bash deploy.sh --pair --peer=<A> --draft-config; echo rc=$?
 grep -n 'Kandydaci LOKALNE\|^# \[dataset:\|flags' /root/scripts/pairing/<labelA>.conf.suggested
 ```
 

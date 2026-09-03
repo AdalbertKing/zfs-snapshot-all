@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32.*
+*Evidence: E7, E3, E12, E29, E32, E34.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -480,6 +480,45 @@ never edit under it. One log file per launch, named by launch, not by
 suite. A `pkill -f` pattern is anchored to the process's own argv shape
 (`^bash ./test/...`) so it cannot match the shell issuing it.
 
+### E34 — A runbook command that was not the verb it named, and a hold that did not hold
+**2026-09-03, LAB-DRAFT-CONFIG runbook, caught by the executing thread on
+pve9. The second runbook in a row with an invented command form (E32).**
+
+*Genesis.* (1) The runbook said `deploy.sh --peer=X --draft-config`. The
+flag is a SUB-MODE of `--pair`: only `do_pair` dispatches it, and without
+`--pair` the run fell through to the default path -- a full host
+deployment (git pull, scripts reinstalled, crontab rewritten) from a
+command meant to draw a file of comments. It went through Phases 1-8 on
+pve9 and moved the checkout. (2) Step 0 placed an `update-hold` "so the
+host does not move". The hold gates `update-control.sh --self-update`
+only; `deploy.sh`'s own Phase 2 pull ignores it, and printed in the same
+run that updates were held. (3) A dataset declared at `--pair` that does
+not exist on the peer makes `--join` refuse, so property (B) could not be
+built the way the runbook said.
+
+*Cause.* (1) is R8 for the second time in two documents: I had grepped
+that `--draft-config` EXISTS (E32's rule) and stopped there, without
+reading where it is dispatched from. Existence is not reachability (R1):
+the flag was real, the command line was not. (2) is R2: "the hold stops
+the host" was true for the updater and carried, unmeasured, to a program
+that has its own pull. (3) is R1 again: the input meant to trigger the
+UWAGA branch triggered a refusal one step earlier, which I would have
+seen by constructing it.
+
+*Rule.* R8, sharpened: for every command line in a runbook, find the
+DISPATCH -- the `case`/`if` that reaches the function -- not just the
+flag in the parser; and R1: build the input that reaches the branch,
+then follow it through every gate on the way. The product now refuses
+the bare form at argument time (rc=2) instead of deploying, and the
+runbook's hold line says what the hold does and does not cover.
+
+*Postscript, same day.* The positive control for that refusal, run as
+root on this container, went past the root gate into a real `--pair`
+preflight -- Phase 1 and a Phase 2 `git fetch` -- before dying on ZFS.
+A test that reaches the product's deployment path as root is R5 in test
+form (mutating the checkout the suite reads); the control now runs as an
+unprivileged user or skips with its reason.
+
 ## 2b. Suite runs — was it worth it, and at what scale
 
 Owner instruction, 2026-08-27: *"Mierz też zasadność puszczania suit i w jakiej
@@ -533,6 +572,8 @@ a run that happened; the "found" column is what it changed.
 | `zfsbackup` (third run), `linkfields`, `rerun` | re-run after E33 | 2.5 min / <1 / <1 | **one real difference**: the logrotate stanza site relied on sed printing EVERY range (root's stanza, then the account's) while `product_range` lifts the FIRST; re-anchored on the account's own path line, fourth run green |
 | `draftscope`, `pause`, `moveclient`, `pairgate`, `quiescehelper`, `restore`, `subtree` | **edited them** (helper adoption) | <1 min each | nothing |
 | `quiesce` (as `nobody`), `localbackup` (as `nobody`) | **edited them**; both refuse or fail as root | ~1 min each | nothing — the root failures (14 in `localbackup`) reproduce identically on `main` at `caf8f27`, environment not change |
+| `join`, `selfupdate` | **edited them** (pair sub-mode refusal, recorded grant list on a direct run) | <1 min each | **a wrong control in my own test**: it expected "run as root" and this box IS root, so the correct form ran on to the ZFS preflight. The join section was then dropped at merge time: the fleet thread had landed the same guard with a program-level draftscope test (PR #318) |
+| `join`, `selfupdate` vs `caf8f27` | negative control | <1 min each | exactly the four new join assertions and 29a red |
 
 **Same pattern as 2026-08-27, stronger.** Every finding came from a suite I had
 edited or written; the nine implicated-only runs found nothing across ten PRs.
