@@ -815,6 +815,38 @@ else
         "$(printf '%s\n' "$unpair_body" | tail -12)"
 fi
 
+# --unpair TAKES THE ALIAS PINNED HOST KEY TOO, on both sides.
+#
+# Four key files per peer on the collector: the keypair, its .pub, the pinned
+# host key, and the ALIAS pinned host key -- the copy under
+# HostKeyAlias=zfs-client-<name>, which is the one the generated cron lines
+# actually hand to -k. Only three came out, and clean-relationships.sh recorded
+# that in a comment as a standing fact rather than a defect.
+#
+# Found live on pve0, 2026-09-03: a relationship torn down on 2026-08-16 had
+# left both alias copies behind -- root's under pairing/, and the delegated
+# account's under the pairing- prefix -- for a peer no client record named any
+# more. Asserted on the removal list itself because reaching this branch needs
+# a live pairing, an account and a peer; the list is the thing that was wrong.
+unpair_rm=$(awk '/^do_unpair\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$REPO/deploy.sh")
+if printf '%s\n' "$unpair_rm" | grep -qF '"$PEER_KEY_DIR/${label}_alias_known_hosts"' \
+   && printf '%s\n' "$unpair_rm" | grep -qF '"$home_dir/.ssh/pairing-${label}_alias_known_hosts"'; then
+    ok "unpair removes the alias pinned host key for root AND for the delegated account"
+else
+    bad "unpair removes the alias pinned host key for root AND for the delegated account" \
+        "$(printf '%s\n' "$unpair_rm" | grep -n 'rm -f' -A2)"
+fi
+
+# ...and the non-alias ones are still removed. A normalizer that dropped the
+# whole rm -f would satisfy the two greps above and leave four files instead of
+# one, which is the opposite of the fix.
+if printf '%s\n' "$unpair_rm" | grep -qF '"$PEER_KEY_DIR/${label}_known_hosts"' \
+   && printf '%s\n' "$unpair_rm" | grep -qF '"$home_dir/.ssh/pairing-${label}_ed25519"'; then
+    ok "unpair still removes the keypair and the plain pinned host key"
+else
+    bad "unpair still removes the keypair and the plain pinned host key" "$unpair_rm"
+fi
+
 # --- 6. assert_cron_config_matches_installed --------------------------------
 # REAL incident, live on pve0, 2026-07-30: activate-client installed from a
 # NEW config file while the host's crontab was already managed by a

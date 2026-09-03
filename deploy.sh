@@ -4906,7 +4906,7 @@ EOF
 fi
 
 DIGEST_SCRIPT="/root/scripts/alert-digest.sh"
-DIGEST_SCRIPT_MARKER="# alert-digest.sh v35"
+DIGEST_SCRIPT_MARKER="# alert-digest.sh v36"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if [ ! -x "$DIGEST_SCRIPT" ]; then
         warn "  $DIGEST_SCRIPT missing -- findings would queue forever and never be seen"
@@ -5904,7 +5904,18 @@ if {
             printf '  Liczby przebiegow z okresu %s (okno %s dni).\n' "\$RUN_WINDOW" "\$DIGEST_DAYS"
             printf '  Przyrost = dane DOPISANE na celu (nie bajty na laczu), caly wiersz w jednostce zadania.
 '
-            printf '  Transfer = przyrost podzielony przez LACZNY czas przebiegow w oknie.\n'
+            # THE DIVISOR HAS TO BE ON THE ROW, or the figure is one the reader must
+            # trust. It used to be: a "czas lacz." column sat beside the rate exactly so
+            # that przyrost / czas = transfer could be checked by eye. The owner replaced
+            # that column with last/avg/max (2026-09-02, and rightly -- a total told
+            # nobody whether a run was slow), and this line was left naming a quantity
+            # the table no longer prints. Owner, 2026-09-03: "mail w nieaktualnym
+            # formacie".
+            #
+            # Checkability is recovered rather than dropped: avg x count IS the total,
+            # and both are on the row.
+            printf '  Transfer = przyrost / (czas sr. x przebiegow), czyli przez sumaryczny czas w oknie.
+'
             # ONLY WHEN THERE IS SOMETHING TO EXPLAIN.
             #
             # Rendered on pve1: every job there has a single dataset, so the
@@ -7784,15 +7795,30 @@ do_unpair() {
     # be stuck.
     [ "$rotating" = "yes" ] && warn "peer '$PEER_HOST' was mid-rotation -- the peer has TWO authorized keys and both are listed below"
 
+    # FOUR files per peer on this side, not three. The fourth is the ALIAS
+    # pinned host key -- the copy under HostKeyAlias=zfs-client-<name>, which
+    # is the one the generated cron lines actually hand to -k. It was the only
+    # one not removed here, and clean-relationships.sh documented that as a
+    # standing fact rather than a defect: "only three of them are removed".
+    #
+    # Found on pve0 2026-09-03, live: a relationship torn down 2026-08-16 left
+    # both alias files behind, root's and the delegated account's, for a peer
+    # no client record names any more. A sweeper existed for them; nothing
+    # stopped them being made.
     rm -f "$keyfile" "${keyfile}.pub" "${keyfile}.new" "${keyfile}.new.pub" \
-          "$PEER_KEY_DIR/${label}_known_hosts"
+          "$PEER_KEY_DIR/${label}_known_hosts" \
+          "$PEER_KEY_DIR/${label}_alias_known_hosts"
     log "removed the pairing keys and pinned host key for '$PEER_HOST'"
 
     if [ -n "$local_user" ]; then
         local home_dir; home_dir=$(getent passwd "$local_user" | cut -d: -f6)
         if [ -n "$home_dir" ]; then
+            # The account keeps its OWN copies, named the other way round
+            # (pairing-<label>_... beside .ssh, not a pairing/ directory), and
+            # it keeps an alias copy too. Same omission, same consequence.
             rm -f "$home_dir/.ssh/pairing-${label}_ed25519" \
-                  "$home_dir/.ssh/pairing-${label}_known_hosts"
+                  "$home_dir/.ssh/pairing-${label}_known_hosts" \
+                  "$home_dir/.ssh/pairing-${label}_alias_known_hosts"
             log "removed $local_user's copies"
         else
             warn "account '$local_user' from the manifest no longer exists -- its copies (if any) were left alone"

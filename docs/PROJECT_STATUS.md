@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 49b113e85fab6c39 -->
+<!-- status-covers-digest: f7b7613d087800c1 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,45 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`--unpair` zostawiał ALIASOWY przypięty klucz hosta; digest miał legendę
+  sprzed zmiany kolumn (2026-09-03).** Znalezione przy wdrożeniu na flotę:
+  `clean-relationships.sh` zgłosił sieroty na pve2 (`pve9`) i pve0
+  (`ruxproofB`), oba posprzątane (`--purge`).
+
+  **Przyczyna sierot na pve0.** Cztery pliki klucza na peer, nie trzy:
+  keypara, `.pub`, przypięty klucz hosta i jego kopia ALIASOWA (pod
+  `HostKeyAlias=zfs-client-<nazwa>`) — **ta, którą wygenerowane linie crona
+  faktycznie podają do `-k`**. `do_unpair` kasował tylko trzy; audyt to
+  dokumentował komentarzem jako stan trwały zamiast defekt. Poprawione po obu
+  stronach (root i konto delegowane), komentarz w audycie skorygowany.
+  `test/zfsbackup` 397 -> 399, asercja na treści `do_unpair`, dyskryminująca
+  main (2 wzmianki `alias_known_hosts` po poprawce, 0 przed).
+
+  **Przyczyna sieroty na pve2** — sam `.scope.request` z relacji `pve2↔pve9`
+  — jest już zamknięta poprzednią zmianą (`--leave` bierze trójkę plików,
+  audyt widzi osierocone `.scope*`).
+
+  **Legenda digestu.** Kolumna „czas łączny" zniknęła 2026-09-02 na rzecz
+  ostatni/śr./max, ale zdanie *„Transfer = przyrost podzielony przez ŁĄCZNY
+  czas przebiegów"* zostało — właściciel zgłosił mail z pve9 jako *„w
+  nieaktualnym formacie"*. Sprawdzalność na wierszu odzyskana inaczej: `czas
+  śr. × przebiegów` = ten łączny czas, oba czynniki są w tabeli. Marker
+  `alert-digest.sh` v35 -> v36. `test/alertmail` asercja treści zaktualizowana
+  (pinowała starą legendę, sama by jej zmiany nie złapała).
+
+  **Otwarte, zgłoszone przez właściciela, NIE naprawione tutaj:** digest z
+  pve9 (2026-09-03 07:00) wciąż wymienia zadania relacji rozebranych tygodnie
+  temu jako „(już nie w cronie)" — `replica copy (usbrep1/2/3/weekly)`,
+  `daily snapshot (local-labdata)`, kilka `gfs prune`/`standard_hourly backup`
+  z etykietami labowymi. Źródłem jest `cron.log`, do którego `clean-
+  relationships.sh` nigdy nie sięga — usuwa rekordy/klucze/konta, nie
+  historię w logu hosta. Nagrobek (`removed/<nazwa>.*`) niesie tylko nazwę
+  relacji, nie etykiety zadań, więc nie da się nim samym wygasić wierszy
+  tabeli. Wymaga decyzji: obcinać `cron.log` przy purge (ryzyko: kasowanie
+  historii audytowej), czy dawać digestowi własne okno wygaszania „już nie w
+  cronie" po N dni.
+
 
 - **Profil „prunowy" jako właściwy kształt dla retencji źródła (2026-09-03).**
   Właściciel, po przejrzeniu `--source-profile`: *„profil niesie w sobie dużo
