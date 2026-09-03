@@ -7285,7 +7285,10 @@ stanem recenzji.
   emituje `gen-cron.sh`, przechodzi round-trip na gałęzi i pada na drzewie
   sprzed zmiany). (2) `--draft-config` nadal **bez testu behawioralnego**:
   D1/D2 w `draftscope` to statyczny odczyt `deploy.sh`; wymaga prawdziwego
-  parowania, czyli labu — OTWARTA. (3) silniki **odrzucają `-r -R` naraz**:
+  parowania, czyli labu — OTWARTA, nigdy nie wykonana na żywo; runbook
+  `docs/discussions/LAB-DRAFT-CONFIG-2026-09-03.md` (sześć własności A–F,
+  plus pomiar w kroku 0, czy flota tej niskopoziomowej ścieżki w ogóle
+  używa — wysokopoziomowa `add-client`/`activate` jej nie woła). (3) silniki **odrzucają `-r -R` naraz**:
   oba odpowiadają „Error: -r and -R are mutually exclusive" (zmierzone
   `snapsend.sh -n -r -R` i `snapget.sh -n -r -R`) — ZAMKNIĘTA, wpis był
   przeterminowany. (4) nazwa snapshotu pod `flat` bez `-q`: `RUN_SUFFIX`
