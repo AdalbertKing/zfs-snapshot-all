@@ -235,7 +235,6 @@ Usage:
                                     not in WHAT: a source prune aimed at a family this
                                     relationship never creates matches nothing, and a
                                     delsnaps that matches nothing exits 0. Refused.
-                                    Remote (add-client) does not take it yet.
                 [--local-user=NAME] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
                                     --source omitted:  proposed from this host's ZFS inventory and shown,
@@ -382,6 +381,13 @@ front end never edits the config file:
 
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
+                [--source-profile=NAME]
+                                    --source-profile is RECORDED here and applied when
+                                    activate-client first renders the sections, like
+                                    --profile. Both are create-time: a later
+                                    re-activation never re-reads them, so a source
+                                    retention edited by hand afterwards is not written
+                                    away. Omitted, --profile applies to both sides.
                                     --bandwidth caps the LINK, not this one relationship: it is
                                     written into the pairing with that host and applies to every
                                     relationship over it. A different value on a peer that is
@@ -1438,6 +1444,22 @@ apply_client_profile_choice() {   # <is_new_relationship 0|1> <chosen profile na
     if [ "$is_new" -eq 1 ] && [ -n "$chosen" ]; then
         PROFILE_ACTIVE="$chosen"
     fi
+    # The SOURCE half rides the SAME boundary, and it must.
+    #
+    # REV-20260811-107 deliberately PRESERVES an admin's edited source retention
+    # across a re-activation. Staging the recorded source profile on every
+    # activation would render over exactly what that finding protects: the
+    # operator edits src_keep_daily by hand, re-activates for an unrelated
+    # reason, and the preset writes their edit away. So this is create-time
+    # provenance too, gated on is_new like the field above it.
+    #
+    # An ABSENT SOURCE_PROFILE leaves SRC_PROFILE_NAME empty, which is the
+    # no-asymmetry path -- the shape every record predating this field has, and
+    # the one they keep. Nothing here reaches for a default profile.
+    if [ "$is_new" -eq 1 ] && [ -n "${SOURCE_PROFILE:-}" ]; then
+        SRC_PROFILE_NAME="$SOURCE_PROFILE"
+        source_profile_prepare "$PROFILE_ACTIVE"
+    fi
 }
 # COMPOSE the rendered fragment. Do not translate it.
 #
@@ -1626,7 +1648,19 @@ source_profile_prepare() {   # <target-profile-name>
 assert_source_profile_families() {
     [ -n "$SRC_PROFILE_PRUNE_FILE" ] || return 0
     local tgt src
-    tgt=$(profile_fragment_patterns "$PROFILE_PRUNE_FILE" "$PROFILE_TPL_FILE")
+    # THE TARGET SIDE IS ASKED THROUGH THE RESOLVER, not read off
+    # PROFILE_PRUNE_FILE. A profile's retention lives in the prune fragment OR,
+    # when its tiers prune themselves inline, in the dataset fragment --
+    # profile_retention_fragment exists precisely because it can be either, and
+    # the source side already went through it.
+    #
+    # Reading the prune file directly made the target resolve to NO patterns at
+    # all, so the guard refused every legitimate pairing, the owner's own
+    # d7h24-under-d30h24 included: a feature that declined 100% of its use
+    # cases while its refusal read like a considered safety verdict.
+    local tgt_frag
+    tgt_frag=$(profile_retention_fragment) || die "profile '$PROFILE_ACTIVE' renders no retention to compare the source profile against"
+    tgt=$(profile_fragment_patterns "$tgt_frag" "$PROFILE_TPL_FILE")
     src=$(profile_fragment_patterns "$SRC_PROFILE_PRUNE_FILE" "$SRC_PROFILE_TPL_FILE")
     [ "$tgt" = "$src" ] && return 0
     die "--source-profile='$SRC_PROFILE_NAME' prunes a different snapshot FAMILY than the target profile '$PROFILE_ACTIVE'. target patterns: [${tgt//$'\n'/ }] source patterns: [${src//$'\n'/ }]. The two profiles may differ in how MUCH they keep and not in WHAT they keep: a source prune aimed at a family this relationship never creates matches nothing, and delsnaps that matches nothing exits 0 -- the source would keep everything while its prune job reported success every night. Nothing was changed."
@@ -5911,6 +5945,13 @@ cmd_local_backup() {
     # is already the one field where empty means "no destination at all"
     # (lint_flags says exactly that), while every other field refuses a blank as
     # a mistake. CLI and generated config say the same thing the same way.
+    # SRC_PROFILE_NAME is a GLOBAL, because source_profile_prepare and the
+    # fragment resolver both read it. So it has to be cleared per invocation:
+    # measured 2026-09-03, two add-clients in one process gave the SECOND one
+    # the FIRST one's --source-profile, silently. Omitting the flag must mean
+    # the same preset on both sides every time it is omitted, not merely the
+    # first time.
+    SRC_PROFILE_NAME=""; source_profile_release_tmp
     local target="" target_given=0 profile="$PROFILE_DEFAULT_NAME" config=""
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
@@ -6643,6 +6684,13 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 
 # ------------------------------------------------------------------------------
 cmd_add_client() {
+    # SRC_PROFILE_NAME is a GLOBAL, because source_profile_prepare and the
+    # fragment resolver both read it. So it has to be cleared per invocation:
+    # measured 2026-09-03, two add-clients in one process gave the SECOND one
+    # the FIRST one's --source-profile, silently. Omitting the flag must mean
+    # the same preset on both sides every time it is omitted, not merely the
+    # first time.
+    SRC_PROFILE_NAME=""; source_profile_release_tmp
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
@@ -6682,7 +6730,7 @@ cmd_add_client() {
             --target=*)    target="${a#*=}" ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
             --profile=*)   profile="${a#*=}" ;;
-            --source-profile=*) die "--source-profile is not supported on the remote path yet. add-client only RECORDS the relationship; activate-client installs it, and the source profile has nowhere to live in between -- accepting the flag here would take it and silently drop it at activation. Two ways round it today: use the local form (zfs-backup.sh --source=... --target=... --source-profile=...), or create the relationship normally and then edit retain in the [template:...__src_keep_*] sections on the collector and re-run activate-client --install. A re-activation preserves that edit (REV-20260811-107)." ;;
+            --source-profile=*) SRC_PROFILE_NAME="${a#*=}" ;;
             --join-remotely) join_remotely=1 ;;
             --local-user=*) local_user="${a#*=}"; local_user_given=1 ;;
             *) die "add-client: unknown option $a" ;;
@@ -7093,6 +7141,11 @@ cmd_add_client() {
         # would recreate the two-homes problem this move exists to end -- and
         # the stale copy would be the one an operator edits.
         write_client_field PROFILE           "$profile"
+        # The SOURCE side's own preset, and only when one was asked for. Written
+        # conditionally so a record created WITHOUT the flag is byte-identical to
+        # what it has always been: absent means "the same preset on both sides",
+        # which is what every existing record already means and must keep meaning.
+        [ -n "$SRC_PROFILE_NAME" ] && write_client_field SOURCE_PROFILE "$SRC_PROFILE_NAME"
         # What THIS relationship asked for. The committed scope on the source
         # is per-COLLECTOR and grows with every relationship this host
         # enrols against that source; resolution filters it back down to

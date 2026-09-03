@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: daaefb5bf4433b16 -->
+<!-- status-covers-digest: f1e2d129310076a8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,53 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Retencja asymetryczna: `--source-profile=NAZWA` (2026-09-03).** Źródło z
+  ciasnym dyskiem pod kolektorem, który ma miejsca pod dostatkiem, może teraz
+  trzymać krótszą drabinę niż cel. Podział źródło/cel **istniał już
+  strukturalnie** — `emit_source_prune_fragment` przemianowuje `keep_daily` na
+  `src_keep_daily`, REV-20260811-106 odmawia sięgania po autorytet szablonów
+  celu, a REV-20260811-107 celowo zachowuje ręcznie edytowaną retencję źródła
+  przez reaktywację. Nie dało się tego tylko **powiedzieć przy tworzeniu**,
+  więc trzeba było wiedzieć o `src_` i edytować config ręcznie.
+
+  **Pominięcie flagi znaczy dokładnie to, co dziś** — `--profile` na obie
+  strony. Warunek właściciela i jedyny bezpieczny odczyt: sięgnięcie po profil
+  `default` w źródle po cichu zmieniłoby retencję każdej istniejącej relacji.
+
+  Ścieżka zdalna: `add-client` **zapisuje** `SOURCE_PROFILE=` w rekordzie
+  klienta, `activate-client` czyta go przy PIERWSZYM renderze sekcji — ta sama
+  granica create-time co `--profile` (REV-088/089). Reaktywacja go nie
+  odczytuje ponownie, bo inaczej rendrowałaby po tym, co chroni REV-107.
+
+  **Strażnik rodziny.** Oba profile mogą różnić się tym, ILE trzymają, nigdy
+  tym, CO: prune wycelowany w rodzinę, której relacja nie tworzy, nie trafia w
+  nic — a `delsnaps` bez trafienia kończy **zerem**. Źródło trzymałoby więc
+  wszystko, a raport co noc pokazywał czyste zadanie. Odmowa jest twarda.
+
+  **Dwie wady złapane przez własne testy, obie fail-open:**
+
+  1. strażnik czytał dla celu wprost `PROFILE_PRUNE_FILE`, choć retencja
+     profilu bywa w `PROFILE_DS_FILE` (tiery prunujące się same). Cel
+     rozwiązywał się do ZERA wzorców, więc funkcja **odmawiała 100% swoich
+     poprawnych zastosowań**, z przypadkiem właściciela (`d7h24` pod `d30h24`)
+     włącznie — a odmowa czytała się jak rozważny werdykt bezpieczeństwa.
+     Teraz obie strony idą przez `profile_retention_fragment`, resolver
+     istniejący dokładnie po to, że fragment bywa w jednym albo w drugim pliku;
+  2. `SRC_PROFILE_NAME` to zmienna globalna, nigdy nie zerowana na wejściu do
+     polecenia: **drugie `add-client` w tym samym procesie dziedziczyło
+     `--source-profile` pierwszego**. Pierwsza wersja testu wołała każde w
+     osobnej podpowłoce i przechodziła przy żywej wadzie — podpowłoka na
+     wywołanie testuje powłokę, nie kod. Teraz oba wołania dzielą proces.
+
+  `test/zfsbackup` 378 -> 386 asercji, w tym kontrola ujemna do każdego
+  twierdzenia. Profile w testach to **pliki wysyłkowe**, nie atrapy: `d7h24` i
+  `d30h24` niosą te same rodziny na różną długość (asymetria dozwolona),
+  `d30` niesie samo `automated_daily` (asymetria odmawiana).
+
+  Nie dowiedzione na żywo: `zfsbackup-live-pair` i `rux-live-chain` wymagają
+  dwóch hostów z rootem i ZFS-em. Obowiązki zostają otwarte.
+
 
 - **Silniki: pre-pass długich opcji miał DRUGĄ kopię option-stringa i kopie się
   rozjechały (2026-08-31, zmiana w plikach ZAMROŻONYCH za zgodą właściciela).**

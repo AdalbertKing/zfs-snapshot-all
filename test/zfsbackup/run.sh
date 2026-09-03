@@ -8206,6 +8206,136 @@ else
     bad "purge-replica-copy: --dst alone works when the section is already gone" "rc=$rc" "$(cat "$PRC/calls.log")"
 fi
 
+
+# --- --source-profile: asymmetric retention ---------------------------------
+#
+# Owner, 2026-09-03: a source short of disk under a collector with plenty --
+# "jestem zmuszony przycinac retencje w zrodle szybciej, ale na celu chce
+# utrzymac pelny profil, bo to backup w koncu".
+#
+# Two SHIPPED profiles, not fixtures, and they are the owner's own case:
+# d7h24 and d30h24 keep the SAME families (automated_hourly, automated_daily)
+# for different lengths, while d30 keeps daily ONLY. So the legitimate
+# asymmetry and the refused one are both real files a person could name.
+SP="$WORK/sourceprofile"
+rm -rf "$SP"; mkdir -p "$SP/root"
+cp "$REPO"/profiles/d7h24.conf "$REPO"/profiles/d30h24.conf "$REPO"/profiles/d30.conf "$SP/root/"
+
+sp_run() {   # <target-profile> <source-profile or ""> <extra shell>
+    PROFILE_ROOT="$SP/root" bash -c "
+        source '$ZFSBACKUP'
+        PROFILE_ROOT='$SP/root'
+        PROFILE_ACTIVE='$1'; load_active_profile
+        SRC_PROFILE_NAME='$2'
+        source_profile_prepare '$1'
+        $3
+    " 2>&1
+}
+
+# 1. THE OWNER'S CASE RENDERS, and renders something DIFFERENT from the target.
+#    A run that merely exits 0 proves nothing here: the whole feature is that
+#    the two sides stop being copies of each other, so the discriminator is
+#    that the two fragments differ.
+out=$(sp_run d30h24 d7h24 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT'); rc=$?
+if [ "$rc" -eq 0 ] && [ "$out" = "DIFFERENT" ]; then
+    ok "--source-profile: a shorter source ladder under a longer target renders a DIFFERENT source fragment"
+else
+    bad "--source-profile: a shorter source ladder under a longer target renders a DIFFERENT source fragment" "rc=$rc" "$out"
+fi
+
+# 2. POSITIVE CONTROL FOR 1. Without the flag the two are the SAME file --
+#    the owner's stated condition, and the behaviour every existing
+#    relationship depends on. If this said DIFFERENT, test 1 would be
+#    measuring nothing but its own noise.
+out=$(sp_run d30h24 '' 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT')
+if [ "$out" = "SAME" ]; then
+    ok "--source-profile omitted: the source fragment IS the target fragment, unchanged"
+else
+    bad "--source-profile omitted: the source fragment IS the target fragment, unchanged" "$out"
+fi
+
+# 3. NAMING THE SAME PROFILE ON BOTH SIDES collapses to that same path rather
+#    than staging a needless second copy of it.
+out=$(sp_run d30h24 d30h24 'printf "[%s]" "$SRC_PROFILE_NAME"')
+if [ "$out" = "[]" ]; then
+    ok "--source-profile equal to --profile collapses to the no-asymmetry path"
+else
+    bad "--source-profile equal to --profile collapses to the no-asymmetry path" "$out"
+fi
+
+# 4. A DIFFERENT FAMILY IS REFUSED. d30 prunes automated_daily only; against a
+#    target that also carries hourly, the source's hourly snapshots would never
+#    be pruned -- and because delsnaps matching nothing exits 0, the nightly
+#    job would report success while the disk filled. Fail-open, silently. This
+#    refusal is the reason the feature is safe to ship at all.
+out=$(sp_run d30h24 d30 'echo REACHED'); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
+   && ! printf '%s' "$out" | grep -q 'REACHED'; then
+    ok "--source-profile: a profile pruning a different FAMILY is refused before anything renders"
+else
+    bad "--source-profile: a profile pruning a different FAMILY is refused before anything renders" "rc=$rc" "$out"
+fi
+
+# 5. THE REMOTE HALF IS CREATE-TIME, like --profile beside it.
+#    REV-20260811-107 preserves a source retention the admin edited by hand.
+#    If a re-activation restaged the recorded preset, it would render straight
+#    over that edit -- the operator would lose their change to a re-activation
+#    performed for some unrelated reason. is_new=0 must stage nothing.
+out=$(PROFILE_ROOT="$SP/root" bash -c "
+    source '$ZFSBACKUP'
+    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=d30h24; load_active_profile
+    SOURCE_PROFILE=d7h24
+    apply_client_profile_choice 0 d30h24
+    printf '[%s]' \"\$SRC_PROFILE_NAME\"" 2>&1)
+if [ "$out" = "[]" ]; then
+    ok "activate-client: a RE-activation does not restage the recorded source profile"
+else
+    bad "activate-client: a RE-activation does not restage the recorded source profile" "$out"
+fi
+
+# 6. POSITIVE CONTROL FOR 5: the FIRST activation does stage it. Otherwise 5
+#    would pass just as well against a feature that never works at all.
+out=$(PROFILE_ROOT="$SP/root" bash -c "
+    source '$ZFSBACKUP'
+    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=d30h24; load_active_profile
+    SOURCE_PROFILE=d7h24
+    apply_client_profile_choice 1 d30h24
+    printf '[%s]' \"\$SRC_PROFILE_NAME\"" 2>&1)
+if [ "$out" = "[d7h24]" ]; then
+    ok "activate-client: the FIRST activation stages the recorded source profile"
+else
+    bad "activate-client: the FIRST activation stages the recorded source profile" "$out"
+fi
+
+# 7. add-client RECORDS the field...
+mkdir -p "$SP/clients"
+printf '#!/bin/bash\nexit 0\n' > "$SP/deploy_marker.sh"; chmod +x "$SP/deploy_marker.sh"
+printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\n' "$SP" > "$SP/server.conf"
+( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
+  PROFILE_ROOT="$SP/root"
+  cmd_add_client "spc"  --lan=10.0.0.1 --datasets="tank/x" --profile=d30h24 --source-profile=d7h24
+  cmd_add_client "spc2" --lan=10.0.0.2 --datasets="tank/x" --profile=d30h24 ) >/dev/null 2>&1
+if grep -q '^SOURCE_PROFILE=d7h24$' "$SP/clients/spc.conf"; then
+    ok "add-client: --source-profile is recorded in the client record"
+else
+    bad "add-client: --source-profile is recorded in the client record" "$(cat "$SP/clients/spc.conf" 2>&1)"
+fi
+
+# 8. ...and writes NO field at all without it. An empty SOURCE_PROFILE= would
+#    read the same to the code, but a record that grew a line it never had is
+#    a record whose meaning has to be re-derived by whoever reads it next. The
+#    absent field IS the contract: same preset on both sides.
+#
+#    RUN IN THE SAME PROCESS AS 7, deliberately. SRC_PROFILE_NAME is a global,
+#    and the first cut of this test used a fresh subshell -- which passed while
+#    a second add-client in one process was in fact inheriting the first one's
+#    --source-profile. A subshell per call tests the shell, not the code.
+if [ -f "$SP/clients/spc2.conf" ] && ! grep -q 'SOURCE_PROFILE' "$SP/clients/spc2.conf"; then
+    ok "add-client without --source-profile writes no SOURCE_PROFILE line at all"
+else
+    bad "add-client without --source-profile writes no SOURCE_PROFILE line at all" "$(cat "$SP/clients/spc2.conf" 2>&1)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
