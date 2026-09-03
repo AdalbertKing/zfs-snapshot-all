@@ -8219,7 +8219,8 @@ fi
 # asymmetry and the refused one are both real files a person could name.
 SP="$WORK/sourceprofile"
 rm -rf "$SP"; mkdir -p "$SP/root"
-cp "$REPO"/profiles/d7h24.conf "$REPO"/profiles/d30h24.conf "$REPO"/profiles/d30.conf "$SP/root/"
+cp "$REPO"/profiles/d7h24.conf "$REPO"/profiles/d30h24.conf "$REPO"/profiles/d30.conf \
+   "$REPO"/profiles/d30h24-gfs.conf "$REPO"/profiles/d7h24-gfs.conf "$SP/root/"
 
 sp_run() {   # <target-profile> <source-profile or ""> <extra shell>
     PROFILE_ROOT="$SP/root" bash -c "
@@ -8363,6 +8364,82 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
     ok "add-client: a source profile of a different FAMILY is refused at enrolment"
 else
     bad "add-client: a source profile of a different FAMILY is refused at enrolment" "rc=$rc" "$out"
+fi
+
+# 11. A FAMILY IS THE PATTERN **AND HOW IT IS COUNTED**.
+#
+#     d30h24 and d30h24-gfs carry the same two families and differ by one line,
+#     `gfs = yes`. The first keeps the 30 newest daily snapshots; the second
+#     keeps one per daily bucket. Compared on pattern alone this passed -- both
+#     sides "keep 30", and a different 30, so the two copies diverge in WHICH
+#     snapshots survive and nobody reasoned about which.
+out=$(sp_run d30h24 d30h24-gfs 'echo REACHED'); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
+   && ! printf '%s' "$out" | grep -q 'REACHED'; then
+    ok "--source-profile: a LADDER source under a FLAT target is refused"
+else
+    bad "--source-profile: a LADDER source under a FLAT target is refused" "rc=$rc" "$out"
+fi
+
+# 12. ...and the refusal says which shape each side has, because "different
+#     family" printed over two identical pattern lists would read like a bug.
+if printf '%s' "$out" | grep -q 'automated_daily(flat)' \
+   && printf '%s' "$out" | grep -q 'automated_daily(ladder)'; then
+    ok "--source-profile: the refusal names the counting shape, not just the pattern"
+else
+    bad "--source-profile: the refusal names the counting shape, not just the pattern" "$out"
+fi
+
+# 13. POSITIVE CONTROL FOR 11, and the one that stops this becoming "refuse
+#     every GFS profile": two LADDERS differing only in how much they keep are
+#     the legitimate asymmetry, exactly as two flat profiles are.
+out=$(sp_run d30h24-gfs d7h24-gfs 'echo REACHED'); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'REACHED'; then
+    ok "--source-profile: two LADDERS differing only in counts still pair"
+else
+    bad "--source-profile: two LADDERS differing only in counts still pair" "rc=$rc" "$out"
+fi
+
+# 14. A PRUNE-ONLY PROFILE IS A SUPPORTED SHAPE. Owner, 2026-09-03: a profile
+#     carries far more than retention, and naming a whole one to move a single
+#     number is what made this feature awkward. A profile with no [dataset] --
+#     it creates nothing, it only says how much to keep -- is the answer, and
+#     it needs no code: with no creation half there is nothing to leak.
+#
+#     profiles/README.md documents this as THE way to say "the source keeps
+#     less", so it is a promise and it gets a test.
+cat > "$SP/root/pruneonly.conf" <<'PRUNEONLYEOF'
+[profile]
+	description = tylko retencja -- 7 dobowych, 24 godzinowe
+	version     = 1
+[template:keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+	notify_word    = prune
+[template:keep_daily]
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	keep           = 7
+	notify_word    = prune
+[prune]
+	use_template = keep_hourly,keep_daily
+PRUNEONLYEOF
+out=$(sp_run d30h24 pruneonly 'for id in $(profile_prune_ref_ids "$(source_retention_fragment)"); do profile_template_section "$id" "$SRC_PROFILE_TPL_FILE"; done'); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE 'retain[[:space:]]*=[[:space:]]*-D7'; then
+    ok "--source-profile: a profile with no [dataset] section pairs and renders its retention"
+else
+    bad "--source-profile: a profile with no [dataset] section pairs and renders its retention" "rc=$rc" "$out"
+fi
+
+# 15. ...and the whole point of that shape: no creation half, nothing to leak.
+#     A FLAT profile's tiers are self-contained, so naming one as the source
+#     drags quiesce into a prune template where delsnaps has no such flag --
+#     dead weight that validates cleanly. A prune-only profile cannot do that.
+if ! printf '%s' "$out" | grep -qE 'quiesce|send_schedule|prefix|monitor_'; then
+    ok "--source-profile: a prune-only profile carries no creation-half field at all"
+else
+    bad "--source-profile: a prune-only profile carries no creation-half field at all" "$out"
 fi
 
 echo "--------------------------------------------"
