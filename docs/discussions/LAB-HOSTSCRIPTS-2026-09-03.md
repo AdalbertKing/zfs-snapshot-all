@@ -64,7 +64,7 @@ głowie, więc trafienie w tę minutę to kolizja. Pierwszy przebieg tego nie
 przewidział — wykonawca założył hold sam.
 
 ```
-/root/.zfs-snapshot-all-update-state/update-control.sh --hold "lab hostscripts"   # albo: touch update-hold, jak robi to update-control.sh
+printf 'lab hostscripts %s\n' "$(date +%F)" > /root/.zfs-snapshot-all-update-state/update-hold   # hold to PLIK; --hold nie istnieje (E32)
 git fetch origin claude/package-translation-estimate-jisaqu
 git checkout --detach origin/claude/package-translation-estimate-jisaqu
 ls hostscripts/                                 # 5 plikow
@@ -124,7 +124,7 @@ ZFS_ALERT_MODE=daily ZFS_ALERT_QUEUE=/tmp/lab-q3 ZFS_ALERT_STATE_DIR=/tmp/lab-st
 PATH=/tmp/lab-bin:$PATH ZFS_ALERT_QUEUE=/tmp/lab-queue ZFS_DIGEST_QUIET=daily /root/scripts/alert-digest.sh; echo rc=$?
 git checkout main && git pull --ff-only          # albo zostac na galezi do scalenia
 rm -f /root/scripts/alert-env.sh /home/*/alert-env.sh   # po rollbacku nieuzywane
-/root/.zfs-snapshot-all-update-state/update-control.sh --resume-updates   # zdjac hold
+rm -f /root/.zfs-snapshot-all-update-state/update-hold   # zdjac hold (albo: bash deploy.sh --resume-updates)
 ```
 
 Po scaleniu PR godzinny `update-control.sh` wdroży to samo na resztę floty

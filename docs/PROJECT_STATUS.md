@@ -21,6 +21,30 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **LAB silników bez `eval` — WYKONANY, zero regresji (pve9 → pve10,
+  2026-09-03).** Wątek z dostępem do floty przebiegł
+  `LAB-ENGINE-EVAL-2026-09-03.md` na `5d81fbf` (nowe silniki) wobec `abfda49`
+  (stare), wynik w `LAB-ENGINE-EVAL-WYNIK-2026-09-03.md` (`409fd4b`, PR #308
+  wchłonięty tą gałęzią). Cztery własności: (A) zapowiedź z tty jest, dataset
+  `child one` ZE SPACJĄ w nazwie — przypadek, w którym `eval` i argv się
+  rozjeżdżają — przyjechał; (B) `canmount=noauto` na każdym filesystemie
+  poddrzewa lokalnie i zdalnie, volume pominięty bez błędu, tekst dla ssh
+  bajt w bajt stary (148 = 148); (C) sondy autotune zwracają cztery liczby po
+  obu stronach (`snapsend` z hosta na cel zdalny, `snapget` przez ssh na
+  źródle), na danych losowych werdykt „bez kompresji"; (D) rollback na stare
+  silniki: `canmount` identyczny, diff logów pusty. Niezmierzone (kod
+  nietknięty tą zmianą): konto delegowane bez `canmount`, `-U`, `-R`.
+  **Cztery błędy w moim runbooku**, nazwane przez wykonawcę i poprawione w
+  obu runbookach z tego dnia: `update-control.sh --hold` nie istnieje (hold
+  to plik `update-hold`; ten sam nieistniejący flag siedział w poprawce E31
+  runbooka hostscripts), sonda `-A` nie biegnie na cel lokalny (oba silniki
+  bramkują autotune obecnością hosta zdalnego), pusty przyrost nie ma próbki,
+  diff logów musi wyciąć linię postępu mbuffera i porównywać ten sam stan
+  danych. Zapisane jako **E32 pod R8** w `IMPLEMENTER-ERROR-LOG.md` — z
+  powtórzeniem błędu (1) wewnątrz poprawki E31 jako sygnałem, że reguła była
+  spisana i nie zastosowana do następnego dokumentu. Wpis w `ENGINE-FREEZE.md`
+  i lista faktów Gate 7 w planie uzupełnione o dowód na żywo.
+
 - **`clean-relationships.sh` nosiło martwą kopię `peer_label` od pierwszego
   commita (2026-09-03, usunięta).** Funkcja była zdefiniowana 2026-08-20 z
   akapitem uzasadnienia („lustro zamiast sourcowania, bo host może mieć
@@ -91,10 +115,7 @@
   `process_dataset` w `snapsend.sh`, tylko blok canmount): 59/59. `tune`
   56/56, `recursion` 74/74, `subtree` 10/10, `runsuffix` 15/15, `pairpause`
   18/18. Refreeze wpisany na górze listy w `ENGINE-FREEZE.md`. **Dowód na
-  żywym ZFS czeka na wątek z dostępem do floty**: runbook
-  `docs/discussions/LAB-ENGINE-EVAL-2026-09-03.md` (transfer z tty pod
-  zapowiedź, odbiór `-r` na cel lokalny i zdalny pod canmount, przebieg z
-  `-A` pod sondę, rollback).
+  żywym ZFS WYKONANY** tego samego dnia (wpis wyżej).
 
 - **`cron2conf.sh` czyta linie `snapget.sh` — crontab kolektora jest wreszcie
   odtwarzalny (2026-09-03, znana luka (1) z sierpnia).** Odwrotność
