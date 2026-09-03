@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f7b7613d087800c1 -->
+<!-- status-covers-digest: 56b9e40faef599b9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,34 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Self-update na koncie bez `rpool` kończył się FATAL na Fazie 8g, cicho, od
+  ~5 tygodni (2026-09-03).** Znalezione przy wdrożeniu #291: `deploy.sh
+  --self-update` na pve9/pve9b/pve10 (pula `hdd`, nie `rpool`) kończyło się
+  `rc=1` na „ZFS delegation" — `apply_repo_to_host` woła `deploy.sh` bez
+  żadnych flag, więc zawsze spadało na sztywny domyślny
+  `BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"` (Proxmox). Ten default
+  istnieje od 2026-07-25; konto delegowane migrowało 2026-08-01 — czyli
+  ~840 cogodzinnych przebiegów na hosta kończonych FATAL, nigdy niezauważonych
+  (trafiało tylko do `last-apply.log`, nie do maila). Niegroźne praktycznie —
+  „skip" nie cofa istniejących uprawnień, wcześniejsze fazy (digest, crontab)
+  kończyły się poprawnie — ale exit code był fałszywie czerwony co godzinę.
+
+  **Naprawa, ten sam kształt co `SOURCE_PROFILE`:** zapisz wybór raz, przy
+  udanym użyciu, nie zgaduj przy każdym powtórzeniu. `deploy.sh` Fazy 8g, po
+  udanym grancie (`GRANTED_COUNT > 0`), zapisuje użytą listę datasetów do
+  `$UPDATE_STATE_DIR/grant-datasets` (`write_state_file`, ten sam prymityw co
+  `previous-revision`). `apply_repo_to_host` — w obu miejscach, gdzie ta
+  funkcja żyje (`update-control.sh` i jej bootstrapowy bliźniak wewnątrz
+  `deploy.sh`, oznaczone „kept in sync") — odczytuje ten plik i przekazuje
+  `--grant-datasets=<zapisana lista>` do `deploy.sh`; brak pliku = stare
+  zachowanie, bez zmian. `test/selfupdate` 25 -> 27, oba nowe przypadki
+  dyskryminujące (26 pada na starym kodzie, przechodzi na nowym; 27 to
+  kontrola negatywna — bez pliku żadna flaga nie jest wymyślana).
+
+  **Trzy hosty wymagały jednorazowego ręcznego zasiania** (`deploy.sh
+  --grant-datasets=hdd`) — wcześniejszy realny grant istniał tylko w `zfs
+  allow`, nigdy w nowym pliku stanu.
 
 - **`--unpair` zostawiał ALIASOWY przypięty klucz hosta; digest miał legendę
   sprzed zmiany kolumn (2026-09-03).** Znalezione przy wdrożeniu na flotę:
@@ -47,17 +75,16 @@
   `alert-digest.sh` v35 -> v36. `test/alertmail` asercja treści zaktualizowana
   (pinowała starą legendę, sama by jej zmiany nie złapała).
 
-  **Otwarte, zgłoszone przez właściciela, NIE naprawione tutaj:** digest z
-  pve9 (2026-09-03 07:00) wciąż wymienia zadania relacji rozebranych tygodnie
-  temu jako „(już nie w cronie)" — `replica copy (usbrep1/2/3/weekly)`,
-  `daily snapshot (local-labdata)`, kilka `gfs prune`/`standard_hourly backup`
-  z etykietami labowymi. Źródłem jest `cron.log`, do którego `clean-
-  relationships.sh` nigdy nie sięga — usuwa rekordy/klucze/konta, nie
-  historię w logu hosta. Nagrobek (`removed/<nazwa>.*`) niesie tylko nazwę
-  relacji, nie etykiety zadań, więc nie da się nim samym wygasić wierszy
-  tabeli. Wymaga decyzji: obcinać `cron.log` przy purge (ryzyko: kasowanie
-  historii audytowej), czy dawać digestowi własne okno wygaszania „już nie w
-  cronie" po N dni.
+  **Duchy w digeście — zbadane, ZAMKNIĘTE bez zmiany kodu (2026-09-03).**
+  Digest z pve9 wymieniał zadania relacji rozebranych jako „(już nie w
+  cronie)" — `replica copy (usbrep1/2/3/weekly)`, `daily snapshot
+  (local-labdata)`, kilka labowych. Sprawdzone na żywo na pve9: ostatni wpis
+  `local-labdata` w `cron.log` to 2026-09-01 — to ślad tegotygodniowych labów
+  z tej sesji, nie coś sprzed miesięcy. Digest ma już własne okno wygaszania,
+  `DIGEST_DAYS=7` (2026-09-02) — te wiersze wypadną z tabeli same, najpóźniej
+  2026-09-08. Rozwiązanie, o które proszono („własne okno wygaszania"), już
+  istniało; robiło dokładnie to, o co proszono. Nie trzeba obcinać `cron.log`
+  ani dokładać drugiego mechanizmu.
 
 
 - **Profil „prunowy" jako właściwy kształt dla retencji źródła (2026-09-03).**

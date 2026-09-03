@@ -42,6 +42,7 @@ REPO_DIR="${REPO_DIR:-__REPO_DIR__}"
 UPDATE_STATE_DIR="${UPDATE_STATE_DIR:-__UPDATE_STATE_DIR__}"
 PREV_REV_FILE="$UPDATE_STATE_DIR/previous-revision"
 UPDATE_HOLD_FILE="$UPDATE_STATE_DIR/update-hold"
+GRANT_DATASETS_FILE="$UPDATE_STATE_DIR/grant-datasets"
 
 log()  { echo ">>> $*"; }
 warn() { echo "!!! $*" >&2; }
@@ -174,8 +175,22 @@ apply_repo_to_host() {   # <what> <revision-8> -> 0 applied/skipped, 1 not appli
         warn "checkout is at $rev but $REPO_DIR/deploy.sh is missing -- the host is running whatever was installed before. Generated scripts are NOT updated."
         return 1
     fi
+    # THE SAME DATASET LIST deploy.sh RECORDED LAST TIME IT GRANTED SOMETHING,
+    # not deploy.sh's own hardcoded Proxmox default. Without this, a bare run
+    # here always used "rpool/data rpool/ROOT/pve-1", which does not exist on a
+    # host whose only pool is named something else -- measured on pve9, pve9b
+    # and pve10 (pool 'hdd'), where Phase 8g ended FATAL on every hourly
+    # self-update since the delegated-account migration, because nothing
+    # remembered the --grant-datasets an operator had typed once by hand.
+    # Absent file = old behaviour, unchanged.
+    local -a extra_args=()
+    if [ -e "$GRANT_DATASETS_FILE" ]; then
+        local recorded
+        recorded=$(read_state_file "$GRANT_DATASETS_FILE")
+        [ -n "$recorded" ] && extra_args+=(--grant-datasets="$recorded")
+    fi
     cron_before=$(crontab -l 2>/dev/null)
-    bash "$REPO_DIR/deploy.sh" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
+    bash "$REPO_DIR/deploy.sh" "${extra_args[@]}" </dev/null > "$UPDATE_STATE_DIR/last-apply.log" 2>&1
     rc=$?
     cron_after=$(crontab -l 2>/dev/null)
     if [ "$cron_before" != "$cron_after" ]; then
