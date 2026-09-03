@@ -1,0 +1,3 @@
+# emergency_disable, pinned per side after review: <deploy.sh sha256> <update-control.sh sha256>
+# The two bodies differ ON PURPOSE (see test/selfupdate/run.sh section 28). Regenerate: ./test/selfupdate/run.sh --bless-twins
+emergency_disable c64d9017a1b42a3c5f5f256198181b49b549ca0c810893a26bbb197489570d65 cfb39b3b2779c602718f2feee31329e696480abf159f9435a0af03af5d333cc3
