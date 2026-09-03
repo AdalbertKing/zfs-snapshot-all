@@ -21,6 +21,7 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
+. "$DIR/../harness.sh"   # product_fn
 ZB="${ZB:-$REPO/zfs-backup.sh}"
 [ -r "$ZB" ] || { echo "cannot find zfs-backup.sh at $ZB" >&2; exit 1; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
@@ -892,10 +893,10 @@ else
 ' ' ')"
 fi
 # And the previewing path itself, named rather than located.
-if ! awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -q 'bash "\$GENCRON"'; then
+if ! product_fn "$ZB" show_activation_proposal | grep -q 'bash "\$GENCRON"'; then
     ok "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"
 else
-    bad "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"         "$(awk '/^show_activation_proposal\(\) \{/,/^\}/' "$ZB" | grep -n 'bash "\$GENCRON"')"
+    bad "local-user: show_activation_proposal renders through gencron_as_target, not gen-cron directly"         "$(product_fn "$ZB" show_activation_proposal | grep -n 'bash "\$GENCRON"')"
 fi
 
 # ==============================================================================

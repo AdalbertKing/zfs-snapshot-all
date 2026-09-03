@@ -535,7 +535,7 @@ else
     ok "install: no bare recursive chgrp over the shared alert dir"
 fi
 
-eval "$(sed -n '/^alert_dir_chgrp() {/,/^}$/p' "$DEPLOY_SRC")"
+eval "$(product_fn "$DEPLOY_SRC" alert_dir_chgrp)"
 if ! declare -F alert_dir_chgrp >/dev/null; then
     bad "extract alert_dir_chgrp from deploy.sh" "the sed anchors no longer match -- update this suite"
 else

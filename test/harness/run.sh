@@ -152,6 +152,65 @@ else
     bad "H11 ...and with neither, refuses by name rather than sourcing from nowhere" "rc=$rc out=[$out]"
 fi
 
+# ---- 5. product_range: the first start..end run, or a FATAL ------------------
+#
+# For the lifts that are not whole functions (a variable block, a guard inside a
+# function). The shape it replaces, `sed -n '/start/,/end/p'`, prints to EOF
+# when the end anchor is gone and nothing when the start is -- both silently.
+cat > "$TMPD/range.sh" <<'PRODUCT'
+one
+# BEGIN block
+inside 1
+inside 2
+# END block
+after
+# BEGIN block
+second run, never lifted
+# END block
+PRODUCT
+out=$(bash -c '. "$1"; product_range "$2" "^# BEGIN block" "^# END block"' _ "$HARNESS" "$TMPD/range.sh" 2>&1 | tr '\n' '|')
+if [ "$out" = "# BEGIN block|inside 1|inside 2|# END block|" ]; then ok "H12 product_range lifts start..end inclusive, the FIRST run only"
+else bad "H12 product_range lifts start..end inclusive, the FIRST run only" "$out"; fi
+
+out=$(bash -c '. "$1"; product_range "$2" "^inside [0-9]" "^inside [0-9]"' _ "$HARNESS" "$TMPD/range.sh" 2>&1 | tr '\n' '|')
+if [ "$out" = "inside 1|" ]; then ok "H13 ...a line matching both anchors is a one-line range"
+else bad "H13 ...a line matching both anchors is a one-line range" "$out"; fi
+
+cat > "$TMPD/suite-range.sh" <<'SUITE'
+. "$HARNESS"
+eval "$(product_range "$PRODUCT" "^# BEGIN nowhere" "^# END block")"
+echo REACHED
+SUITE
+out=$(HARNESS="$HARNESS" PRODUCT="$TMPD/range.sh" bash "$TMPD/suite-range.sh" 2>"$TMPD/err"); rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ] && grep -q "start anchor '^# BEGIN nowhere' no longer matches" "$TMPD/err"; then
+    ok "H14 a start anchor that never matches ends the suite from inside eval \"\$(product_range ...)\" (rc=$rc), naming the anchor"
+else
+    bad "H14 a start anchor that never matches ends the suite from inside eval, naming the anchor" "rc=$rc out=[$out] err=[$(cat "$TMPD/err")]"
+fi
+
+cat > "$TMPD/suite-range2.sh" <<'SUITE'
+. "$HARNESS"
+eval "$(product_range "$PRODUCT" "^# BEGIN block" "^# END nowhere")"
+echo REACHED
+SUITE
+out=$(HARNESS="$HARNESS" PRODUCT="$TMPD/range.sh" bash "$TMPD/suite-range2.sh" 2>"$TMPD/err"); rc=$?
+if [ "$rc" -ne 0 ] && [ -z "$out" ] && grep -q "end anchor '^# END nowhere' never matches" "$TMPD/err"; then
+    ok "H15 an end anchor that never matches after the start is the same FATAL, not a lift to EOF (rc=$rc)"
+else
+    bad "H15 an end anchor that never matches after the start is the same FATAL, not a lift to EOF" "rc=$rc out=[$out] err=[$(cat "$TMPD/err")]"
+fi
+
+out=$(bash -c 'sed -n "/^# BEGIN block/,/^# END nowhere/p" "$1" | wc -l; echo "rc=$?"' _ "$TMPD/range.sh" 2>&1 | tr '\n' ' ')
+if [ "$out" = "8 rc=0 " ]; then ok "H16 control: the bare sed range lifts every line to EOF with rc=0 when the end anchor is gone (why product_range ends the suite)"
+else bad "H16 control: the bare sed range lifts every line to EOF with rc=0 when the end anchor is gone" "$out"; fi
+
+# A literal dollar and brace in a pattern survive the trip: the shape the
+# real callers need (`VAR="${VAR:-...}` lines as anchors).
+printf 'x=1\nVAR="${VAR:-d}"\ny=2\n# stop\n' > "$TMPD/dollar.sh"
+out=$(bash -c '. "$1"; product_range "$2" "^VAR=\"[$][{]VAR:-" "^# stop"' _ "$HARNESS" "$TMPD/dollar.sh" 2>&1 | tr '\n' '|')
+if [ "$out" = 'VAR="${VAR:-d}"|y=2|# stop|' ]; then ok "H17 ...a pattern with a literal dollar and brace anchors on that line, not on end-of-line"
+else bad "H17 ...a pattern with a literal dollar and brace anchors on that line, not on end-of-line" "$out"; fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

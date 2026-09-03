@@ -22,6 +22,14 @@
 #                           does not have is skipped: a negative control
 #                           pointed at an older SHA predates it and its lifted
 #                           code cannot call it either.
+#   product_range <file> <start-ERE> <end-ERE>
+#                           the FIRST run of lines from a line matching start
+#                           through the next line matching end, inclusive, for
+#                           the code that is not a whole function: a variable
+#                           block, a guard inside a function, a case arm. A
+#                           start that never matches, or an end that never
+#                           matches after it (the sed range that silently runs
+#                           to EOF), is the same FATAL as product_fn's.
 #   product_fn <file> <name>
 #                           the source of shell function <name> in <file>, on
 #                           stdout, or a FATAL naming the anchor -- the check
@@ -67,6 +75,28 @@ product_fn() {   # <file> <name> -> the function's source
         # which is the silent shape this helper exists to replace. $$ is the
         # suite's own shell from any depth of subshell; ending it is the only
         # way a FATAL from in here is a FATAL for the suite.
+        [ "$BASHPID" = "$$" ] || kill -TERM "$$"
+        exit 1
+    fi
+    printf '%s\n' "$body"
+}
+
+product_range() {   # <file> <start-ERE> <end-ERE> -> the first start..end run, inclusive
+    local body rc
+    # Patterns travel through ENVIRON, not -v: awk -v processes escape
+    # sequences, so a `\$` meant as a literal dollar would come out anchored.
+    body=$(S="$2" E="$3" awk '
+        BEGIN { s = ENVIRON["S"]; e = ENVIRON["E"]; f = 0; done = 0 }
+        !f && $0 ~ s { f = 1 }
+        f { print }
+        f && $0 ~ e { done = 1; exit }
+        END { if (!f) exit 2; if (!done) exit 3 }' "$1"); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        case "$rc" in
+            2) echo "FATAL: could not extract from $1 -- the start anchor '$2' no longer matches, update this suite" >&2 ;;
+            3) echo "FATAL: could not extract from $1 -- the end anchor '$3' never matches after '$2' (the range would run to EOF), update this suite" >&2 ;;
+            *) echo "FATAL: product_range failed on $1 (rc=$rc)" >&2 ;;
+        esac
         [ "$BASHPID" = "$$" ] || kill -TERM "$$"
         exit 1
     fi

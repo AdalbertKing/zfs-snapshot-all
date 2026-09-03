@@ -40,6 +40,7 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${LINKFIELDS_REPO:-$(cd "$DIR/../.." && pwd)}"
+. "$DIR/../harness.sh"   # product_fn / product_range in THIS shell; the child scripts source it again for product_libs
 GEN="${GEN:-$REPO/gen-cron.sh}"
 ZB="${ZB:-$REPO/zfs-backup.sh}"
 # Overridable for the same reason as ZB/GEN: a control that cannot be pointed at
@@ -395,8 +396,8 @@ seq_load() {   # -> "<flag after A>|<flag after B>"
         # test now CALLS it -- since the cap moved to the pairing manifest it
         # is no longer a bare variable read. Stubbing it would make the
         # assertion measure the stub; lifting it keeps both halves real.
-        awk '/^resolve_link_bandwidth\(\) \{/,/^\}/' "$ZB"
-        awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB"
+        product_fn "$ZB" resolve_link_bandwidth
+        product_fn "$ZB" load_client_and_connection
         printf 'load_client_and_connection %q; A="$LOAD_BW_FLAG"\n' "$d/a.conf"
         printf 'load_client_and_connection %q; B="$LOAD_BW_FLAG"\n' "$d/b.conf"
         echo 'printf "%s|%s" "$A" "$B"'
@@ -457,10 +458,10 @@ r="$(bwr "" "")"
 # over from the previous record would cap a relationship that never asked for
 # one -- in the direction nobody notices, because a transfer that is slower
 # than it should be still succeeds.
-if awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -qE '^\s*BANDWIDTH=""'    && awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -qE '^\s*PEER_SAVED_BANDWIDTH=""'; then
+if product_fn "$ZB" load_client_and_connection | grep -qE '^\s*BANDWIDTH=""'    && product_fn "$ZB" load_client_and_connection | grep -qE '^\s*PEER_SAVED_BANDWIDTH=""'; then
     ok "cap: both sources are cleared before either file is sourced (no leak between records)"
 else
-    bad "cap: both sources are cleared before either file is sourced"         "$(awk '/^load_client_and_connection\(\) \{/,/^\}/' "$ZB" | grep -n 'BANDWIDTH' | head -4)"
+    bad "cap: both sources are cleared before either file is sourced"         "$(product_fn "$ZB" load_client_and_connection | grep -n 'BANDWIDTH' | head -4)"
 fi
 
 # --- 13. the record is no longer a second home -------------------------------
@@ -493,7 +494,7 @@ pair_cap_decision() {   # <manifest bandwidth or -> <requested bandwidth> -> out
       printf 'peer_manifest_path() { echo %q; }\n' "$mf"
       echo 'peer_label() { echo lbl; }'
       echo 'guard() {'
-      awk '/^    local _mf_user_path; _mf_user_path=/{f=1} f{print} f&&/^    fi$/{exit}' "$ZB"
+      product_range "$ZB" '^    local _mf_user_path; _mf_user_path=' '^    fi$'
       echo '}'
       echo 'guard'
       echo 'echo OK'; } > "$t"

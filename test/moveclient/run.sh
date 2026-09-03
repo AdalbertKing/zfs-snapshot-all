@@ -270,7 +270,7 @@ chmod 0755 "$RO" 2>/dev/null || :
 # record contents are written before atomic_replace_and_install is called at
 # all. Asserted on the source, because no stub can prove an ordering that only
 # shows itself when a disk fills up mid-command.
-_seq="$(awk '/^cmd_move_to_client\(\)/,/^}/' "$ZB")"
+_seq="$(product_fn "$ZB" cmd_move_to_client)"
 _prep=$(printf '%s
 ' "$_seq" | grep -n 'to_tmp="$(mktemp' | head -1 | cut -d: -f1)
 _inst=$(printf '%s

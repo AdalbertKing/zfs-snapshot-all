@@ -18,6 +18,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$SCRIPT_DIR/../harness.sh"   # product_fn / product_range
 LIB="${LIB:-$REPO/lib-cron.sh}"
 DEPLOY_SRC="${DEPLOY_SRC:-$REPO/deploy.sh}"
 [ -r "$LIB" ] || { echo "cannot read lib-cron.sh at $LIB" >&2; exit 1; }
@@ -148,7 +149,7 @@ BACKUP_USER=""
 # When the family moved above the phases (2026-08-20) that adjacency vanished
 # and the extraction quietly swallowed the rest of the file, dispatch
 # included, surfacing as `PAUSE_MODE: unbound variable` far from its cause.
-_pause_src=$(sed -n '/^PAUSE_STATE_DIR="\${PAUSE_STATE_DIR/,/^# END --pause\/--resume family/p' "$DEPLOY_SRC" | sed '$d')
+_pause_src=$(product_range "$DEPLOY_SRC" '^PAUSE_STATE_DIR="[$][{]PAUSE_STATE_DIR' '^# END --pause/--resume family' | sed '$d')
 # Over-extraction is exactly what this file could not see before, so name it
 # directly instead of inferring it from whatever breaks downstream: the family
 # is constants and function definitions, and must carry no dispatch of its own.
@@ -594,7 +595,7 @@ fi
 # purpose, to record what it used to say and why it moved -- and an assertion
 # that cannot tell a comment from output would force that history out of the
 # file to stay green. What the operator reads is what is logged.
-_pc="$(awk '/^cmd_pause_client\(\)/,/^}/' "$REPO/zfs-backup.sh" | grep -E '^[[:space:]]*log ')"
+_pc="$(product_fn "$REPO/zfs-backup.sh" cmd_pause_client | grep -E '^[[:space:]]*log ')"
 case "$_pc" in
     *"carry no '-L'"*|*"NOT covered: retention"*)
         bad "pause text: the stale 'retention is NOT covered' claim is gone" "still present" ;;

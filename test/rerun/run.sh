@@ -16,6 +16,7 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${RERUN_REPO:-$(cd "$DIR/../.." && pwd)}"
+. "$DIR/../harness.sh"   # product_range in THIS shell; the child scripts source it again for product_libs
 
 PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
@@ -62,7 +63,7 @@ addclient_decision() {   # <host> <target> <user> -> rc + first log line
       # rejected `local` would make every case "fail" for a reason that has
       # nothing to do with the decision being tested.
       echo 'decide() {'
-      awk '/^        local _prev_state$/{f=1} f{print} f&&/^        fi$/{exit}' "$REPO/zfs-backup.sh"
+      product_range "$REPO/zfs-backup.sh" '^        local _prev_state$' '^        fi$'
       echo '}'
       echo 'decide'
       echo 'echo "RC=0"'; } > "$t"
@@ -175,7 +176,7 @@ seed_gate() {   # <state> -> rc + message
       echo 'log() { echo "LOG: $*"; }'
       echo 'die() { echo "DIE: $*"; exit 1; }'
       printf 'name=rel\nSTATE=%q\n' "$1"
-      awk '/^    case "\$\{STATE:-\}" in$/{f=1} f{print} f&&/^    esac$/{exit}' "$REPO/zfs-backup.sh"
+      product_range "$REPO/zfs-backup.sh" '^    case "[$][{]STATE:-[}]" in$' '^    esac$'
       echo 'echo "RC=0"'; } > "$t"
     bash "$t" 2>&1; rm -f "$t"
 }

@@ -34,6 +34,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
+. "$SCRIPT_DIR/../harness.sh"   # product_fn
 LIB="${LIB:-$REPO/lib-zfs-snap.sh}"
 [ -r "$LIB" ] || { echo "cannot read lib-zfs-snap.sh at $LIB" >&2; exit 1; }
 
@@ -1149,7 +1150,7 @@ case "$loop" in
     *quiesce_abandon_set*) check "twopool-local: its refusal path goes through the abandon exit" "0" "0" ;;
     *) check "twopool-local: its refusal path goes through the abandon exit" "0" "1" ;;
 esac
-ab=$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")
+ab=$(product_fn "$REPO/lib-zfs-snap.sh" quiesce_abandon_set)
 case "$ab" in
     *quiesce_thaw_all*) check "twopool-local: ...and that exit still thaws" "0" "0" ;;
     *) check "twopool-local: ...and that exit still thaws" "0" "1" ;;
@@ -1243,7 +1244,7 @@ case "$out" in *"had created no snapshot yet"*)
   *) check "cleanup: a failure before the first pool says nothing was created" "y" "n ($out)" ;; esac
 
 # LOCAL path: same contract, pinned where it lives.
-ab=$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")
+ab=$(product_fn "$REPO/lib-zfs-snap.sh" quiesce_abandon_set)
 case "$ab" in
     *quiesce_destroy_created*) check "cleanup-local: the abandon exit destroys what the run created" "0" "0" ;;
     *) check "cleanup-local: the abandon exit destroys what the run created" "0" "1" ;;
@@ -1441,7 +1442,7 @@ fi
 # The local path has no such mode -- QUIESCE_CREATED is a bash array and an
 # append cannot fail -- which is why this section is remote-only. Pinned so the
 # asymmetry stays a decision rather than becoming an oversight.
-case "$(sed -n '/^quiesce_abandon_set() {/,/^}$/p' "$REPO/lib-zfs-snap.sh")" in
+case "$(product_fn "$REPO/lib-zfs-snap.sh" quiesce_abandon_set)" in
     *mktemp*) check "failopen: the local abandon path allocates nothing either" "0" "1" ;;
     *)        check "failopen: the local abandon path allocates nothing either" "0" "0" ;;
 esac
