@@ -94,6 +94,10 @@ export PEER_STATE_DIR="$TMPD/peers"
 log()  { echo ">>> $*"; }
 warn() { echo "!!! $*" >&2; }
 die()  { echo "FATAL: $*" >&2; exit 1; }
+# The extracted block reads the manifest through record_load (lib-record.sh)
+# since 2026-09-03, as deploy.sh does; the harness sources the same file.
+# shellcheck disable=SC1091
+. "$REPO/lib-record.sh"
 
 # Extracted by pattern, not line number -- survives the file growing around
 # it. Range: PEER_STATE_DIR's own default declaration through the end of
