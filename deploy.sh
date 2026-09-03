@@ -127,6 +127,18 @@ else
     echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-record.sh -- this checkout is incomplete; it carries the manifest reader, and sourcing a manifest instead would execute it" >&2
     exit 1
 fi
+# Where a peer's pairing state lives (PEER_STATE_DIR/PEER_KEY_DIR, peer_label,
+# peer_manifest_path, peer_scope_path, peer_scope_granted_hash_path,
+# local_keyfile_path, local_knownhosts_path): lib-pairing.sh, shared with
+# zfs-backup.sh, which reads what --pair/--join write here. One layout, one
+# definition -- see that file's header.
+if [ -r "$_DEPLOY_DIR/lib-pairing.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_DEPLOY_DIR/lib-pairing.sh"
+else
+    echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-pairing.sh -- this checkout is incomplete; it carries the pairing-state layout every --pair/--join path is built from" >&2
+    exit 1
+fi
 
 # Every cron line deploy.sh owns lives in ONE named block. Two of them used to
 # sit loose in root's crontab, indistinguishable from a human's -- see the
@@ -1187,39 +1199,13 @@ validate_pubkey_file() {
         || die "pubkey.pub is not a public key OpenSSH can read"
 }
 
-# PEER_STATE_DIR/PEER_KEY_DIR and their path helpers. Hoisted here (rather than
-# down with the rest of --pair/--join, PAIRING-DESIGN.md's section) because
-# do_commit_scope_check needs peer_manifest_path/peer_scope_path and its
-# --commit-scope-check dispatch runs before the root check, same reasoning as
-# do_join_check just below.
-#
-# Overridable so a root-free suite can point commit-scope's preflight (manifest
-# lookup, scope file read) at a throwaway directory instead of the real,
-# root-owned one -- same technique as ZFS_QUIESCE_ALLOW_DIR elsewhere in this
-# file. The default is unchanged for every real invocation.
-PEER_STATE_DIR="${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}"
-PEER_KEY_DIR="/root/.ssh/pairing"
-
-# A filesystem/account-name-safe label derived from --peer. A hostname can
-# contain characters that are fine in DNS but not in a Unix username or a bare
-# filename, so this is the ONE place that gets sanitised -- the manifest path,
-# the key file name and the proposed account name are all built from it.
-peer_label() {
-    printf '%s' "$PEER_HOST" | tr -c 'A-Za-z0-9._-' '-'
-}
-
-peer_manifest_path() {
-    echo "$PEER_STATE_DIR/$1.conf"
-}
-
-# REV-20260802-033 (U1/U2): the scope file lives beside the manifest, keyed by
-# the same label, on the SAME host as the manifest -- this host is the source
-# in a pull relationship, so it is the one that both edits the file and grants
-# from it. Not part of the wsad package: it is authored here, by hand, after
-# --join, never shipped.
-peer_scope_path() {
-    echo "$PEER_STATE_DIR/$1.scope"
-}
+# PEER_STATE_DIR/PEER_KEY_DIR and the path helpers built on them (peer_label,
+# peer_manifest_path, peer_scope_path, peer_scope_granted_hash_path,
+# local_keyfile_path, local_knownhosts_path) were defined here until
+# 2026-09-03; they live in lib-pairing.sh now, sourced at the top of this
+# file, so do_commit_scope_check's pre-root-check dispatch still finds them.
+# peer_label takes the address as an argument: the one --peer-driven caller
+# is do_pair, which passes $PEER_HOST.
 
 # remote_scope_stage <label> <host> <port> <scope-path> -- REV-20260804-037
 # F1: the draft/edit/check substage of --join-remotely's scope editor,
@@ -1309,16 +1295,8 @@ EOF2
     fi
 }
 
-# ENROLMENT-AGREED-2026-08-02 T3: the sha256 of the scope file --commit-scope
-# most recently granted from, as a sidecar next to it -- not a second
-# manifest (there is nothing here a parser could disagree about, just a
-# hash), and not embedded in the scope file itself (which would change the
-# file's own hash the moment it recorded one). The collector fetches this
-# alongside the scope file and refuses to generate/activate a job config
-# when the two disagree.
-peer_scope_granted_hash_path() {
-    echo "$PEER_STATE_DIR/$1.scope.sha256"
-}
+# peer_scope_granted_hash_path (ENROLMENT-AGREED-2026-08-02 T3, the sha256
+# sidecar --commit-scope grants from) lives in lib-pairing.sh.
 
 # REV-20260802-033 slice 4: names Proxmox's own installer-created system
 # datasets, checked against a depth-1 dataset's LAST path component only --
@@ -6623,29 +6601,9 @@ install_local_pairing_files() {
     # local_keyfile_path / local_knownhosts_path instead.
 }
 
-# Where the GENERATED job should look for the key: the local-user copy when
-# there is one, otherwise root's original.
-local_keyfile_path() {
-    local label="$1" user="$2"
-    if [ -n "$user" ]; then
-        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
-        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_ed25519"; return 0; }
-    fi
-    printf '%s' "$PEER_KEY_DIR/${label}_ed25519"
-}
-
-# Same question for the pinned host key. Root's job gets the per-peer file too,
-# not /root/.ssh/known_hosts: that file accumulates whatever accept-new has
-# recorded over the years, and pinning "one key, verified once at pair time" is
-# the whole point of the -k the draft emits.
-local_knownhosts_path() {
-    local label="$1" user="$2"
-    if [ -n "$user" ]; then
-        local home_dir; home_dir=$(getent passwd "$user" | cut -d: -f6)
-        [ -n "$home_dir" ] && { printf '%s' "$home_dir/.ssh/pairing-${label}_known_hosts"; return 0; }
-    fi
-    printf '%s' "$PEER_KEY_DIR/${label}_known_hosts"
-}
+# local_keyfile_path / local_knownhosts_path -- where the GENERATED job should
+# look for the key and the pinned host key (the local-user copy when there is
+# one, otherwise root's original) -- live in lib-pairing.sh.
 
 # do_pair -- runs on the host that will connect (collector for pull, source
 # for push). Generates/reuses a key dedicated to THIS relationship, pins the
@@ -6670,7 +6628,7 @@ pair_mode_after_inheritance() {   # <requested mode> <requested datasets> <saved
 }
 
 do_pair() {
-    local label; label=$(peer_label)
+    local label; label=$(peer_label "$PEER_HOST")
     local mpath; mpath=$(peer_manifest_path "$label")
     mkdir -p "$PEER_STATE_DIR" "$PEER_KEY_DIR"
     chmod 700 "$PEER_KEY_DIR"

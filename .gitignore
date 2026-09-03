@@ -16,6 +16,7 @@
 !lib-profile.sh
 !lib-backup-common.sh
 !lib-record.sh
+!lib-pairing.sh
 !zfs-restore.sh
 !snapsend.sh
 !snapget.sh
