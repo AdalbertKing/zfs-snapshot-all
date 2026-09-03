@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 538aa712353ef246 -->
+<!-- status-covers-digest: b2fa118426485482 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,33 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Jedna gramatyka wspólnych flag CLI w `zfs-backup.sh` (2026-09-03, punkt 1
+  z listy redukcji, na polecenie Ownera).** `local_user_name_valid` było jedną
+  funkcją, ale ODMOWA wokół niej istniała w sześciu kopiach (`setup-server`,
+  `local-backup`, `add-client`, `set-bandwidth`, `migrate-profile`,
+  `audit-source-retention`), różniących się prefiksem polecenia i doklejonym
+  w dwóch „Nothing was created."; trzy sprawdzały przy parsowaniu, trzy sto
+  linii dalej; `rux` nie sprawdzało wcale (literówka w koncie docierała do
+  `deploy.sh --backup-user`). `--profile` gorzej: `local-backup` odmawiało
+  wszystkiego poza identyfikatorem (czyli także `firma.conf` i ścieżki, które
+  `profile_file` przyjmuje i dokumentuje), pozostałe trzy zostawiały puste
+  lub flagopodobne nazwy `profile_validate_file`. Teraz `flag_local_user
+  <cmd> <wartość>` i `flag_profile <cmd> <wartość>`, wołane INLINE w ramieniu
+  `case` (celowo nie `x=$(...)`: w harnessie sourcującym program `die` w
+  `$( )` nie jest fatalne), 7 + 4 miejsca, odmowa nazywa polecenie tak jak
+  kopie. **Zmiany kontraktu, nazwane wprost:** (1) `rux` odmawia złego konta
+  i złej nazwy profilu przy parsowaniu, z prefiksem `rux:`; (2) `local-backup`
+  przyjmuje `--profile=NAZWA.conf` i ścieżkę jak pozostałe polecenia
+  (wcześniej odmawiało — reguła, której żadne inne polecenie nie miało);
+  (3) `--local-user=` PUSTE jest odmawiane wszędzie (wcześniej `setup-server`
+  i `rux` czytały je po cichu jako root), `--profile=` PUSTE odmawiane
+  wszędzie (wcześniej `add-client` brało domyślny). Sekcja `flags` suity
+  `zfsbackup` (`--section flags`): 13 asercji przez prawdziwe CLI; na `main`
+  padają: `rux` (oba), `add-client`/`migrate-profile`/`rux` dla `--profile=-x`,
+  `local-backup` dla `default.conf`. Sekcja REV-122 (profil po ścieżce) była
+  pierwszym, co wykryło zbyt ciasną pierwszą wersję gramatyki `--profile`.
+  `--target` i `--source-profile` nietknięte: pierwszy nie ma wspólnej
+  gramatyki do ujednolicenia, drugi ma ją już w `source_profile_prepare`.
 - **Rekord to dane, `die` kończy program, stan wywołania zerowany na wejściu
   (2026-09-03, PR z gałęzi `claude/package-translation-estimate-jisaqu`).**
   Właściciel po oszacowaniu kosztu tłumaczenia pakietu na Pythona wybrał

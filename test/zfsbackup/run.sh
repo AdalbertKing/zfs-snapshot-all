@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8740,6 +8740,76 @@ for probe in "cmd_activate_client no-such-client" "cmd_add_client bad/name" "cmd
         bad "invocation: ${probe%% *} clears SRC_PROFILE_NAME before it does anything else" "read back: ${got:-<nothing>}"
     fi
 done
+
+
+# ============================================================================
+# ONE GRAMMAR PER SHARED FLAG (2026-09-03). Self-contained; always eligible,
+# also under `--section flags`. Every command that takes --local-user refuses
+# a value outside LOCAL_USER_GRAMMAR at parse time, with the SAME sentence,
+# prefixed by the command that was typed; every command that takes --profile
+# refuses a name that is not a plain identifier the same way. Run through the
+# real CLI so the dispatcher, the parse loop and the refusal are all the
+# program's. Discriminating control on main: rux refused neither at parse (a
+# typo'd account reached deploy.sh --backup-user; a bad profile name reached
+# add-client), and add-client / migrate-profile explained a path separator
+# through profile_validate_file's own wording.
+# ============================================================================
+FL="$WORK/flags"; rm -rf "$FL"; mkdir -p "$FL/clients" "$FL/rel"
+flag_run() {   # <args...> -> stderr+stdout; rc in $?
+    SERVER_CONF="$FL/server.conf" CLIENTS_DIR="$FL/clients" RELATIONSHIPS_DIR="$FL/rel" \
+    PROFILE_ROOT="$REPO/profiles" bash "$ZFSBACKUP" "$@" 2>&1
+}
+while IFS='|' read -r cmd args; do
+    # shellcheck disable=SC2086
+    out=$(flag_run $args); rc=$?
+    want="$cmd: --local-user='BadName' is not a valid account name ("
+    if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "$want"; then
+        ok "flags: $cmd refuses --local-user='BadName' (uppercase) at parse time, naming the command and the grammar"
+    else
+        bad "flags: $cmd refuses --local-user='BadName' (uppercase) at parse time, naming the command and the grammar" "rc=$rc" "$out"
+    fi
+done <<'EOF'
+setup-server|setup-server --local-user=BadName --target=tank/b
+local-backup|local-backup --local-user=BadName --source=tank/x --target=tank/b
+add-client|add-client flagtest --local-user=BadName --host=10.0.0.1 --datasets=tank/x
+set-bandwidth|set-bandwidth --local-user=BadName --peer=10.0.0.1 --bandwidth=2M
+migrate-profile|migrate-profile --local-user=BadName
+audit-source-retention|audit-source-retention --local-user=BadName
+rux|--source=10.0.0.1:tank/x --local-user=BadName --target=tank/b
+EOF
+while IFS='|' read -r cmd args; do
+    # shellcheck disable=SC2086
+    out=$(flag_run $args); rc=$?
+    want="$cmd: --profile='-x' is not a valid profile name"
+    if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "$want"; then
+        ok "flags: $cmd refuses a flag-shaped --profile='-x' at parse time, naming the command"
+    else
+        bad "flags: $cmd refuses a flag-shaped --profile='-x' at parse time, naming the command" "rc=$rc" "$out"
+    fi
+done <<'EOF'
+local-backup|local-backup --profile=-x --source=tank/x --target=tank/b
+add-client|add-client flagtest --profile=-x --host=10.0.0.1 --datasets=tank/x
+migrate-profile|migrate-profile --profile=-x
+rux|--source=10.0.0.1:tank/x --profile=-x --target=tank/b
+EOF
+# The grammar is the resolver's, not local-backup's old one: a profile FILE
+# NAME (`default.conf`, exactly what profile_file documents) passes the parse
+# in local-backup too. On main that command alone refused it as "not a valid
+# profile name" -- a rule the other three commands never had.
+out=$(flag_run local-backup --profile=default.conf --source=tank/x --target=tank/b); rc=$?
+if ! printf '%s' "$out" | grep -q 'is not a valid profile name'; then
+    ok "flags: local-backup accepts --profile=default.conf at parse time, like every other command"
+else
+    bad "flags: local-backup accepts --profile=default.conf at parse time, like every other command" "rc=$rc" "$out"
+fi
+# The grammar's one legal non-account answer survives the move: 'root' is not
+# refused by any of the seven (setup-server treats it as "nothing to create").
+out=$(flag_run setup-server --local-user=root --target=tank/b); rc=$?
+if ! printf '%s' "$out" | grep -q 'is not a valid account name'; then
+    ok "flags: --local-user=root is still a legal answer at parse time"
+else
+    bad "flags: --local-user=root is still a legal answer at parse time" "rc=$rc" "$out"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
