@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e2bb3d94253981cf -->
+<!-- status-covers-digest: bd83861259147578 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,56 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Skrypty hostów są plikami w checkoucie, nie heredokami (2026-09-03,
+  decyzja Ownera z listy redukcji; lab do wykonania).** `notify-fail.sh`,
+  `notify-warn.sh`, `alert-digest.sh` i `check-pool-capacity.sh` powstawały z
+  czterech niecytowanych heredoków w `deploy.sh`: ~1350 linii, w których każdy
+  runtime'owy `$` musiał być `\$`, backtick w KOMENTARZU wykonywał polecenie
+  jako root przy instalacji (REV-20260902-133, dwa razy), a „aktualny"
+  znaczyło „marker wersji się zgadza" — który człowiek musiał pamiętać
+  bumpnąć, i 2026-09-02 nie pamiętał, więc oba żywe hosty przez trzynaście
+  scalonych rewizji wysyłały `alert-digest.sh` v9. Teraz: **`hostscripts/`**
+  z pięcioma plikami — cztery skrypty, kompletne i uruchamialne jak leżą,
+  plus `alert-env.sh` (wspólna preambuła config/env, dotąd zmienna
+  `ALERT_ENV_PREAMBLE` wklejana w trzy heredoki), sourcowany z katalogu, w
+  którym skrypt jest zainstalowany (`/root/scripts` roota, `$HOME` konta;
+  brak = głośna odmowa, nie cichy default). `deploy.sh` instaluje je jedną
+  funkcją `host_script_ensure`: aktualny = bajt w bajt jak w checkoucie
+  (`cmp`) i wykonywalny; inaczej `install`; pod `--check-only` tylko raport.
+  Nie ma czego rozwijać i nie ma czego bumpować — markery `*_SCRIPT_MARKER`,
+  kontrakt `notify-markers` i bramka `impact.sh` „edited heredoc body comes
+  with a bumped marker" usunięte, bo pilnowały mechanizmu, którego nie ma.
+  Pliki wyprowadzone MECHANICZNIE: render heredoków tak, jak robił to
+  `deploy.sh`, a `diff` render ↔ plik pokazuje wyłącznie trzy zamierzone
+  różnice — wersja w komentarzu (v10/v8/v37/v7), blok preambuły → jedna linia
+  sourcowania, `${ZFS_ALERT_EMAIL:-<adres wpisany przy instalacji>}` →
+  `${ZFS_ALERT_EMAIL:-root}` (adres jest w `/etc/zfs-alert.conf` od narodzin
+  tego pliku, 2026-07-25; `root` to fallback dla hosta, któremu conf zniknął).
+  `check-pool-capacity.sh` na ścieżce awaryjnej (brak `notify-fail.sh`)
+  sourcuje `alert-env.sh` `|| :`, żeby znać adres. Konta delegowane dostają
+  `alert-env.sh` obok swoich kopii `notify-*`. **Suity:** `alertmail` +8
+  (sekcja host-scripts przez `product_fn`: instalacja bajt w bajt i
+  wykonywalna, identyczny zostawiony, stara kopia pod `--check-only` tylko
+  zgłoszona, w zwykłym przebiegu podmieniona, identyczna-ale-niewykonywalna
+  nie jest aktualna, brakujący nazwany z tym, co bez niego przepada, checkout
+  bez `hostscripts/` odmawia zanim cokolwiek zapisze, skrypt bez
+  `alert-env.sh` obok odmawia po nazwie, z nim kolejkuje) plus licznik
+  heredoków generujących skrypty = 0 (na `main` 4); digest i capacity w tej
+  suicie biegną z plików, a trzy strażniki REV-133 (backtick w komentarzu,
+  `\'`, sentinel `Doba:`) zniknęły razem z mechanizmem, który pilnowały —
+  granica REV-133 zmieniła kształt, zamknięcie należy do recenzenta. Kontrola
+  ujemna `DEPLOY_SRC=<main>`: licznik czerwony, „ships as files" czerwone,
+  `product_fn` kończy suitę na nieistniejącym `host_script_ensure`. Lokalnie:
+  `alertmail` 87/0, `impact` 63/0, `draftscope` 36/0, `pause` 83/0,
+  `joinmanifest` 32/0, `pairgate` 84/0, `joinremote` 12/0, `quiescehelper`
+  119/0, `selfupdate` 42/0, `join` 93/0, `restoregrant` 105/3 (trzy asercje
+  wymagające konta bez roota). **Obowiązek ręczny `deploy-check-only` NIE
+  wykonany** — runbook `docs/discussions/LAB-HOSTSCRIPTS-2026-09-03.md`
+  (audyt z gałęzi, wdrożenie, `cmp` pięciu plików, notify/digest na kopii
+  kolejki z roota i z konta, odmowa bez `alert-env.sh`, rollback na `main`,
+  który przez stary marker nadpisuje pliki z powrotem). Do czasu labu ta
+  zmiana jest IMPLEMENTED, nie wdrożona.
 
 - **Każde wycięcie funkcji produktu po kotwicy idzie przez `product_fn`, a
   brakująca kotwica kończy SUITĘ (2026-09-03, ostatni punkt listy redukcji
@@ -1395,8 +1445,8 @@
   było realne i nieograniczone — host kolejkował znaleziska i nie wysyłał nic,
   nie mówiąc o tym ani słowa. Dokładnie w tym stanie pve9 spędził miesiące.
   Od 2026-09-02 udana zmiana rewizji **sama się wdraża**: `update-control.sh`
-  po fast-forwardzie uruchamia `deploy.sh`, więc skrypty generowane z jego
-  heredoców idą za checkoutem. Okno zamyka się w ciągu godziny, a nie „kiedy
+  po fast-forwardzie uruchamia `deploy.sh`, więc skrypty instalowane z
+  `hostscripts/` idą za checkoutem. Okno zamyka się w ciągu godziny, a nie „kiedy
   ktoś sobie przypomni".
   `--install` **ostrzega** teraz wprost, gdy usuwa linię digestu ze starego bloku,
   i podaje lekarstwo (`./deploy.sh` na tym hoście). Ostrzeżenie, nie odmowa:
@@ -1867,30 +1917,15 @@
   implementacje, pilnowana jedna. Właściwa naprawa — żeby planer ją WOŁAŁ zamiast
   powtarzać — jest zmianą w planerze, więc należy do laba. Oznaczone w kodzie,
   żeby następny przemiał martwego kodu jej nie usunął.
-- **Preambuła skryptów alertowych pisana RAZ zamiast trzy razy (2026-08-20).**
-  `deploy.sh` generuje trzy samodzielne skrypty na hoście — `notify-fail.sh`,
-  `notify-warn.sh`, `alert-digest.sh` — i wklejał do nich **tę samą 28-liniową
-  preambułę** (snapshot zmiennych środowiskowych, wyszukanie configu, `_restore_env`)
-  trzema osobnymi kopiami w jednym pliku. Zmierzone: kopie były bajt w bajt
-  identyczne. Te skrypty faktycznie nie mogą sourcować wspólnej biblioteki, więc
-  tekst MUSI wystąpić w każdym z trzech — ale `deploy.sh` nie musi go nieść
-  trzykrotnie. Koszt starego kształtu jest konkretny: poprawka reguły „środowisko
-  bije config" (a to jest reguła, przez którą test kiedyś zjadł PRODUKCYJNĄ
-  kolejkę alertów) musiała trafić w trzy miejsca albo trzy skrypty zaczynały się
-  różnić tym, który pokrętek wygrywa.
-  Teraz jedna zmienna `ALERT_ENV_PREAMBLE`, interpolowana w trzy miejsca.
-  **−84 / +55 linii.** Zdefiniowana **niecytowanym** heredokiem świadomie: każdy
-  `$` w ciele jest zapisany jako `\$`, bo jest przeznaczony dla generowanego
-  skryptu, a niecytowany heredoc rozwiązuje to escapowanie w momencie definicji —
-  zmienna trzyma dosłowny `$`, a rozwinięcie parametru nie jest rekurencyjne,
-  więc przy wstawianiu nic nie rozwija się drugi raz. Heredoc CYTOWANY nie byłby
-  równoważny: zostawiłby backslashe i wypuścił `\${ZFS_ALERT_MODE:-}` do skryptu.
-  Dowód, nie założenie: wyrenderowane **wszystkie trzy** skrypty przed i po —
-  108/60/151 linii, **zero różnic** w każdym. Kontrola pozytywna: preambuła jest
-  obecna w każdym renderze. Kontrola negatywna: z pustą zmienną render ma 81 linii
-  zamiast 108 i 29 różnic, więc tożsamość nie jest pusta. Pierwsza wersja tego
-  pomiaru dawała „0 linii vs 0 linii, 0 różnic" — pusty pass przez złe
-  dopasowanie w awk; poprawiony, bo taki wynik to nie dowód. Suita `alertmail` 20/20.
+- **Preambuła skryptów alertowych pisana RAZ (2026-08-20; kształt ZASTĄPIONY
+  2026-09-03).** Wtedy: trzy heredoki w `deploy.sh` wklejały tę samą
+  28-liniową preambułę (snapshot zmiennych środowiskowych, wyszukanie configu,
+  `_restore_env`) z jednej zmiennej `ALERT_ENV_PREAMBLE`, zdefiniowanej
+  niecytowanym heredokiem z każdym `$` jako `\$`. Dziś skrypty hostów są
+  plikami w `hostscripts/`, a preambuła to `hostscripts/alert-env.sh`,
+  instalowany obok nich i sourcowany w czasie działania — patrz wpis
+  „Skrypty hostów są plikami w checkoucie" na górze tego dokumentu. Zmienna,
+  heredoki i cała mechanika `\$` nie istnieją.
 - **Alarm dryfu bliźniaków domknięty: 8 → 12 pilnowanych funkcji (2026-08-20).**
   `test/twins/run.sh` deklaruje o sobie regułę: *„Keep this list exhaustive
   rather than curated: a name that exists in both and is NOT watched here is the
@@ -6897,7 +6932,7 @@ hdd/rs-src/c@oldcorr_2026-08-08_04-24-11
 - `--recursive=no -r` odrzucone jako dwie deklaracje, `snapget.sh` zachowuje się identycznie.
 
 Sonda z NIEPOPRAWNYM trybem jest tu jedyną obserwacją rozróżniającą: poprawny tryb milczy niezależnie od tego, czy token jest daną, czy opcją. `git log` jako root na hostach 11.x odmawia przez `safe.directory` (repo należy do `zfsbackup`) — to kontrola własności po stronie roota, nie problem wdrożenia; commit odczytany jako konto delegowane.
-| `alertmail` | **79/79** | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
+| `alertmail` | **87/87** (+8 sekcja host-scripts 2026-09-03; digest i capacity biegną z `hostscripts/`) | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
 | `joinmanifest` | **32/32** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. +3 (REV-20260804-040): pole `PEER_JOIN_ACCOUNT_UID` — manifest z zapisanym UID weryfikuje się dokładnie przy zgodności, odmawia przy niezgodności, manifest legacy bez tego pola nadal weryfikuje się gdy UID nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze | **Zbuforowany szkic zakresu (2026-08-29)**: szkic jest ponownie uzywany przy kolejnym `--join`, i slusznie — to dokument zgody, ktory admin mogl recznie edytowac, a ciche przebudowanie skasowaloby te edycje. Ale prosba kolektora moze sie miedzy probami ZMIENIC, i wtedy ekran akceptacji pokazywal biezaca prosbe tuz nad liczba i nadaniem policzonymi ze STAREGO szkicu. Zmierzone na pve9 przy budowie labu move-to-client: pierwszy join bez `--datasets` narysowal caly majatek, `add-client` powtorzono z `--datasets=hdd/movelab/src`, a nastepny join wypisal „Kolektor prosil o: hdd/movelab/src" i cztery linie nizej „Przyjecie nada ... na 9 dataset(ach)". Prosba o jeden dataset i nadanie na dziewieciu, jednoczesnie na ekranie. Szkic niesie teraz metryczke z prosba, ktora go zrodzila; DOWIEDZIONA rozbieznosc odmawia, brak metryczki (kazdy host w trakcie joinu w chwili aktualizacji) jest glosno mowiony, nie zamieniany w odmowe na dowodzie, ktorego nikt nie ma.
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-04 na metropolis

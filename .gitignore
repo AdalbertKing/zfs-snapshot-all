@@ -58,3 +58,9 @@
 # forget the flag would ship a profile that is not in the repository.
 !profiles/
 !profiles/**
+# hostscripts/ holds the scripts a host RUNS from /root/scripts and an
+# account's $HOME (notify-fail.sh, notify-warn.sh, alert-digest.sh,
+# check-pool-capacity.sh, alert-env.sh). Until 2026-09-03 they were heredocs
+# inside deploy.sh; now deploy.sh installs them from here by copying.
+!hostscripts/
+!hostscripts/**

@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9.*
+*Evidence: E1, E2, E3, E9, E30.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -370,6 +370,29 @@ checking what it held at that line.
 (`$REPO`); and an assertion whose evidence is an ABSENCE (no marker file, no
 output) must first prove the producing step ran (R6) -- the section now marks
 the marker check "not measured" when the render did not run.
+
+### E30 — A FATAL that could never fire, shipped as the fix for silent failure
+**2026-09-03, test/harness.sh product_fn (PR #298), found in PR #301.**
+
+*Genesis.* product_fn was written to replace the bare `eval "$(sed -n ...)"`
+lift with one that FATALs on a missing anchor. Its FATAL was `exit 1`. Every
+caller -- all twenty-four of them, by design -- wraps it in `$( )`, so the exit
+ended the command substitution, the eval received an empty string, and the
+suite carried on exactly as before. The helper was adopted in five suites,
+merged, and described in two PR bodies and PROJECT_STATUS as "the FATAL",
+without once having been made to fire from the position it is called from.
+
+*Cause.* R1, verbatim: I proved the guard existed and never constructed the
+input that should trigger it. The special shape here is worth naming: a guard
+inside a command substitution cannot end the caller with `exit`, so any
+"stop the suite" helper used as `$(helper)` needs a different mechanism
+(`kill -TERM $$`), and the proof needs a child shell whose termination can be
+observed. test/harness/run.sh H3-H7 now do that, with the old shape as the
+negative control.
+
+*Rule.* R1. And its corollary for helpers: run the guard from the exact
+calling position it will have in production -- inside the substitution, the
+subshell, the function -- not from a top-level shell where every exit works.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 
