@@ -9986,35 +9986,6 @@ $gcerr"
 # root -- the whole class of defect this migration kept hitting is root proving
 # something about itself and the account failing at it later.
 
-# Datasets a config actually manages, from its own section headers.
-#
-# NO PRODUCTION CALLER since migrate-to-account was retired on 2026-08-19, and
-# deliberately kept anyway. It is the TESTED definition of how a section scope
-# is split and trimmed, and assert_no_overlapping_policy re-implements that
-# same convention inline -- its comment says so by name ("the same comma split
-# and whitespace trim config_datasets() applies"). Deleting this would leave
-# the convention with an inline implementation and no test.
-#
-# That makes it the same shape as the snapsend/snapget twins: one rule, two
-# implementations, only one watched. The right repair is for the planner to
-# CALL this rather than restate it -- which is a change to the planner, so it
-# belongs with lab testing rather than with a cleanup sweep. Flagged
-# 2026-08-20 so the next dead-code pass does not simply remove it.
-config_datasets() {   # <config file>
-    # SPLIT ON COMMAS. `[prune:a,b,c]` is one section naming three datasets, and
-    # gen-cron.sh has always allowed it -- metropolis pve2 has two such sections.
-    # Without the split the whole string was handed to `zfs allow` as a single
-    # dataset name, which fails, so every one of those datasets was reported
-    # missing and the message printed the comma-joined blob as if it were a
-    # dataset. A false alarm that also destroys the operator's ability to read
-    # the true ones next to it.
-    sed -n -E 's/^\[(dataset|prune):(.+)\]$/\2/p' "$1" | tr ',' '\n' \
-        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u
-}
-
-
-
-
 
 # Remove one [template:<name>] section, whole. Used only by migrate-profile:
 # ensure_cron_config deliberately never rewrites a template that is present, so

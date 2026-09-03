@@ -2850,50 +2850,15 @@ out=$( PATH="$CL/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
     && ok "clobber: a source dataset change alongside the endpoint is not disguised as endpoint-only" \
     || bad "clobber: a source dataset change alongside the endpoint is not disguised as endpoint-only" "rc=$rc out=$out"
 
-# --- 29. a comma-separated section names SEVERAL datasets -------------------
-#
-# `[prune:a,b,c]` is one section naming three datasets and gen-cron.sh has
-# always accepted it. The capability probe treated the whole string as ONE
-# dataset name, handed it to `zfs allow`, got a failure, and reported every one
-# of those datasets missing -- printing the comma-joined blob where a dataset
-# name belongs.
-#
-# Found on metropolis pve2, 2026-08-01, whose config has two such sections. The
-# damage is not only the false alarm: a garbled entry sitting next to the real
-# ones destroys the operator's ability to read the true list at all.
-CD="$WORK/commadata"; mkdir -p "$CD"
-cat > "$CD/jobs.conf" <<'EOF'
-[dataset:tank/one]
-	use_template = t
-[prune:tank/two,tank/three]
-	use_template = t
-[prune:tank/four, tank/five]
-	use_template = t
-[prune-bookmarks:tank/six]
-	schedule = 0 4 * * *
-EOF
-got=$( config_datasets "$CD/jobs.conf" | tr '\n' ' ' )
-check_eq() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "want[$3] got[$2]"; }
-# sort -u, so the order is lexicographic: five before four.
-check_eq "commas: every dataset in a comma list is its own entry" \
-         "$got" "tank/five tank/four tank/one tank/three tank/two "
-
-# Whitespace after a comma is a human writing a list, not a dataset whose name
-# starts with a space -- and a leading space would make `zfs allow` treat the
-# name as an option. Asserted by counting entries that still contain a space,
-# which is the thing that would actually break, rather than by matching a
-# position in the joined string.
-dirty=$( config_datasets "$CD/jobs.conf" | grep -c '[[:space:]]' )
-check_eq "commas: no entry carries leftover whitespace" "$dirty" "0"
-
-# prune-bookmarks is deliberately NOT a source of delegation checks today (it
-# needs different verbs); pinning that so a future change is a decision rather
-# than an accident.
-case "$got" in
-    *tank/six*) bad "commas: prune-bookmarks is not silently folded in" "$got" ;;
-    *)          ok "commas: prune-bookmarks is not silently folded in" ;;
-esac
-
+# --- 29. (retired 2026-09-03) ----------------------------------------------
+# Pinned config_datasets(), the comma split of section headers for the
+# delegation probe of migrate-to-account. That verb was retired 2026-08-19 and
+# the function had no production caller since; it was kept as "the tested
+# definition of the convention" a planner supposedly restated inline, but the
+# planner named in that comment never existed in this repository, and the
+# one list grammar lives in lib-scope.sh (dataset_list_split, pinned by
+# test/scope section D, whitespace and empty items included). test/deadcode
+# now refuses a product function nobody calls, so the copy is gone.
 # --- 36. resolve_mode_datasets (REV-20260802-033 slice 6) -------------------
 #
 # Fetches a MODE-based client's committed scope file + T3 hash sidecar over

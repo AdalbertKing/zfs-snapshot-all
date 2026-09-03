@@ -7,17 +7,19 @@ set -uo pipefail
 # verb in this tree -- so it lives in its own program. zfs-backup.sh never
 # destroys client data; when it grows again, it grows HERE.
 #
-# The code below is the Phase 7 work moved verbatim, not rewritten: the
-# read-only planner (`--plan`), the safe side-restore into <pool>/restore/,
-# and the internal destructive engine (restore_replace_internal /
-# restore_execute) which still has NO public door -- the CLI grammar and the
-# client-side grant are owner decisions still pending, see
-# docs/design/client-granted-restore.md.
+# What is here: the read-only planner (`--plan`), the safe side-restore into
+# <pool>/restore/, and the destructive engine, restore_replace_pair, reached
+# through the public verb (`restore_run_scope` -> `restore_one`) since the
+# Owner settled the grammar on 2026-08-30 -- relationship name, `--target`,
+# `--at`, a second address for another machine, `--onto`, `--from-copy` when
+# the relationship records are gone -- behind a grant on the endangered
+# machine (`deploy.sh --allow-restore=<label> [--replace]`). The four grammar
+# decisions: docs/discussions/OWNER-RESTORE-*.md. Until 2026-09-03 an older
+# single-dataset wrapper, restore_replace_internal, sat here with no caller
+# and this header still called the engine "NO public door"; test/deadcode
+# refuses the first and this paragraph replaces the second.
 #
-# Public surface (unchanged by the split; zfs-backup.sh forwards `restore`
-# here, so both spellings work):
-#   zfs-restore.sh --plan [--dataset=DATASET] [--config=FILE]
-#   zfs-restore.sh --dataset=DATASET --snapshot=NAME [--config=FILE] [--yes]
+# zfs-backup.sh forwards `restore` here, so both spellings work.
 # ------------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -4150,40 +4152,6 @@ restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [wha
     [ "$snaps_left" = dirty ] && echo "UWAGA: odtworzenie sie POWIODLO, ale techniczny snapshot tego przebiegu pozostal (wypisany wyzej) -- usun go recznie." >&2
     return 3
 }
-
-restore_replace_internal() {   # <dataset> <config> <yes>
-    local dataset="$1" config="$2" yes="$3"
-    [ -n "$dataset" ] || die "restore (odtworzenie niszczace): nazwij co odtwarzac (dataset zrodla albo kopii). Bez tego nie ma pytania."
-
-    read_server_conf
-    [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || die "restore (odtworzenie niszczace): no cron config known -- pass --config=FILE or run setup-server"
-    [ -r "$config" ] || die "restore (odtworzenie niszczace): cannot read $config"
-
-    local a b c d src="" copy="" kind="" cons="" hits=0
-    while IFS=$'\t' read -r a b c d; do
-        [ -n "$a" ] || continue
-        if [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ]; then
-            src="$a"; copy="$b"; kind="$c"; cons="$d"; hits=$((hits+1))
-        fi
-    done <<< "$(restore_relations "$config")"
-    [ "$hits" -ne 0 ] || die "restore (odtworzenie niszczace): '$dataset' nie wystepuje w zadnej relacji backupu w $config -- 'restore --plan' pokaze te, ktore istnieja"
-    # More than one match is not something to resolve by picking the first. Two
-    # relationships naming the same path mean the CONFIG disagrees with itself
-    # about where that data lives, and guessing which one to restore FROM is the
-    # last guess anybody wants made on their behalf.
-    [ "$hits" -eq 1 ] || die "restore (odtworzenie niszczace): '$dataset' pasuje do $hits relacji w $config -- nie zgaduje ktora; nazwij dokladny dataset zrodla albo kopii"
-
-    # An atomic relationship is a SUBTREE recovered as one point in time. This
-    # verb recovers one dataset, so running it against an atomic relationship
-    # would silently turn a point-in-time recovery into a per-dataset one -- the
-    # exact confusion R-013 made the planner spell out.
-    [ "$cons" != atomic ] || die "restore (odtworzenie niszczace): '$src' jest w relacji ATOMIC (spojne poddrzewo w jednym punkcie czasu), a ten czasownik odtwarza pojedynczy dataset. Odtworzenie tylko jego zlamaloby wlasnosc, dla ktorej ta relacja jest atomowa. Odtwarzanie poddrzew nie istnieje."
-
-
-    restore_replace_pair "$src" "$copy" "$yes" "$kind"
-}
-
 
 cmd_restore() {
     # Before the options are even read: a host whose relationship records do not
