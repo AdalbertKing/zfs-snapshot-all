@@ -57,7 +57,7 @@ Audited 2026-08-09 against the existing `add-client`/`activate-client` create-on
 
 No merge engine, no precedence/carve-out machinery, no profile update semantics were added.
 
-Registered as an unreviewed direct-main delivery in `docs/project/DELIVERIES.md` pending a REV.
+Registered as a direct-main delivery in `docs/project/DELIVERIES.md`; reviewed by REV-20260809-088 (the corrected form of property 6).
 
 ### Gate 2
 
@@ -315,8 +315,8 @@ cascade (`test/impact.sh`): `test/migrate/run.sh` 52/52, `test/profiles/
 run.sh` 55/55, `test/reconcile/run.sh` 47/47, `test/zfsbackup/run.sh`, plus
 `test/cron2conf/run.sh` 11/11 for the cron-line-shape contract. Full details
 and exact commands: `docs/discussions/PHASE35-IMPLEMENTATION-CLAUDE-2026-08-10.md`.
-Registered as an unreviewed direct-main delivery in `docs/project/DELIVERIES.md`
-pending a REV, same as Phase 2's property 6.
+Registered as a direct-main delivery in `docs/project/DELIVERIES.md`; reviewed by
+REV-20260810-093, as Phase 2's property 6 was by REV-20260809-088.
 
 The bare-passive (`-e`, no `-m`) direct engine test the scope note above
 asked for turned out to already exist — `test/snapsend/run.sh` "-e with no
@@ -442,8 +442,8 @@ Reuses `lib-profile.sh` rendering and `gen-cron.sh` as the config truth; adds no
 second renderer. Overlap refuses in both directions (target⊆source, source⊆target,
 equal); same-pool proceeds with one factual note, not a refusal; remote (`:`)
 refused (LOCAL only). `test/localbackup` 13/13, pure/text (no ZFS/network/crontab;
-a `crontab` stub proves nothing is installed). Registered as an unreviewed
-direct-main delivery in `docs/project/DELIVERIES.md`.
+a `crontab` stub proves nothing is installed). Registered as a direct-main
+delivery in `docs/project/DELIVERIES.md`; reviewed by REV-20260810-097.
 
 Deferred to slice 2 (named in the design note): the transactional install
 (workfile → `gen-cron.sh -c` validate → preview → confirm →
@@ -484,8 +484,8 @@ document all six required expert examples:
 Each of the four `.conf` files was rendered through `./gen-cron.sh -c` and
 produces the intended send/prune/monitor lines; the doc gives the reader the
 exact command to re-validate. Gate-safe under operating rule 1 (documentation,
-crosses no earlier gate). Linked from `README.md`. Registered as an unreviewed
-direct-main delivery in `docs/project/DELIVERIES.md`.
+crosses no earlier gate). Linked from `README.md`. Registered as a direct-main
+delivery in `docs/project/DELIVERIES.md`; reviewed by REV-20260810-094.
 
 **Test-hygiene gap CLOSED** (`58f67f6`, REV-20260810-094). `test/configexamples/`
 pins the four example configs in two layers: every `docs/examples/*.conf` must

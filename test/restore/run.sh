@@ -868,14 +868,27 @@ printf '%s' "$out" | grep -qi 'ZDALNE' \
 # outside `list`/`get` would fail the run loudly -- that is how "it mutated
 # nothing" is asserted rather than described.
 # ==============================================================================
-# Calls the internal function DIRECTLY. There is no CLI flag to go through, and
-# that is the point: the owner is still deciding the public restore grammar, so
-# the gates are built and tested underneath it rather than behind a flag that
-# would have to be withdrawn later (R-018/R-019).
+# Drives the ENGINE, restore_replace_pair -- the function every public form of
+# the verb ends in (restore_run_scope -> restore_one -> the pair). Until
+# 2026-09-03 these cases went through restore_replace_internal, an older
+# single-dataset wrapper that resolved a name to its (source, copy) pair and
+# had no caller in the product; relpolicy.sh records the day that shape was
+# found wrapping the wrong engine. The wrapper is gone, so the resolution is
+# done here, through restore_relations -- the same authority `--plan` uses --
+# and the engine is called exactly as the verb calls it.
+resolve_pair() {   # <config> <dataset: source or copy path> -> sets R_SRC R_COPY R_KIND
+    local a b k cons
+    R_SRC=""; R_COPY=""; R_KIND=""
+    while IFS=$'\t' read -r a b k cons; do
+        [ -n "$a" ] || continue
+        if [ "$a" = "$2" ] || [ "$b" = "$2" ]; then R_SRC="$a"; R_COPY="$b"; R_KIND="$k"; fi
+    done <<< "$(restore_relations "$1")"
+}
 runrepl() {   # <config> [dataset] [yes]
     local c="$1" d="${2-}" y="${3-1}"
-    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
-      restore_replace_internal "$d" "$c" "$y" ) 2>&1
+    ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf"
+      resolve_pair "$c" "$d"
+      restore_replace_pair "$R_SRC" "$R_COPY" "$y" "$R_KIND" ) 2>&1
 }
 
 # How many snapshots the source has right now. The whole REV-119 slice is judged
@@ -902,26 +915,15 @@ reset_src() {
 }
 reset_src
 
-# The gates that must fire before anything is computed.
-out="$(runrepl "$stcfg")"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nazwij co odtwarzac'; } \
-    && ok "replace: refuses without a dataset instead of guessing the relationship" \
-    || bad "replace: refuses without a dataset instead of guessing the relationship" "$out"
-
-out="$(runrepl "$stcfg" rpool/nowhere)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'nie wystepuje w zadnej relacji'; } \
-    && ok "replace: a dataset outside every relationship is refused, not invented" \
-    || bad "replace: a dataset outside every relationship is refused, not invented" "$out"
-
-# Two assertions were dropped here rather than rewritten: they pinned CLI-level
-# refusals (--snapshot rejected because the recovery point is policy; --plan and
-# --replace refusing to combine). Both belong to a public grammar the owner has
-# not settled, so pinning them now would freeze a decision that is not mine. They
-# come back with the flag, against whatever shape it turns out to have.
+# Three wrapper-only gates left with the wrapper (no dataset named, a dataset
+# outside every relationship, an ATOMIC relationship refused one dataset at a
+# time): the public verb resolves and refuses in restore_run_scope, which
+# relpolicy.sh drives, and an atomic relationship is recovered there as the
+# subtree it is. The engine's own refusals stay below.
 
 # The relationship resolves BOTH ways, source path or copy path, because an
 # operator reaching for recovery may know either one. With a clean boundary and
-# --yes it now runs to completion: previews INKREMENT, executes, and reports done.
+# --yes it runs to completion: previews INKREMENT, executes, and reports done.
 for name in rpool/data hdd/store/rpool/data; do
     reset_src
     out="$(runrepl "$stcfg" "$name")"; rc=$?
@@ -941,8 +943,9 @@ done
 # was written to catch.
 reset_src
 ( trap 'printf "%s|%s|%s" "$RESTORE_STRATEGY" "$RESTORE_BASE_GUID" "$RESTORE_TARGET_SNAP" > "$WORK/facts"' EXIT
-  PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" \
-  restore_replace_internal rpool/data "$stcfg" 1 >/dev/null 2>&1 ) || true
+  PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf"
+  resolve_pair "$stcfg" rpool/data
+  restore_replace_pair "$R_SRC" "$R_COPY" 1 "$R_KIND" >/dev/null 2>&1 ) || true
 [ "$(cat "$WORK/facts" 2>/dev/null)" = 'increment|11|s2' ] \
     && ok "replace: branches on the same computed facts the preview printed" \
     || bad "replace: branches on the same computed facts the preview printed" "$(cat "$WORK/facts" 2>/dev/null)"
@@ -965,15 +968,6 @@ out="$(runrepl "$rcfg" hdd/mirror)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'jest ZDALNE'; } \
     && ok "replace: a remote source is refused by the destructive path" \
     || bad "replace: a remote source is refused by the destructive path" "$out"
-
-# An ATOMIC relationship is a subtree recovered as one point in time; recovering
-# one dataset out of it would silently downgrade that property.
-atcfg="$WORK/atomic.conf"
-mkcfg "$atcfg" '\n[dataset:rpool/data]\n\tdst          = hdd/store\n\trecursive    = atomic\n'
-out="$(runrepl "$atcfg" rpool/data)"; rc=$?
-{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ATOMIC'; } \
-    && ok "replace: an atomic relationship is refused rather than recovered one dataset at a time" \
-    || bad "replace: an atomic relationship is refused rather than recovered one dataset at a time" "$out"
 
 # A copy with no snapshots at all: refuse, and name which side is empty.
 reset_src
