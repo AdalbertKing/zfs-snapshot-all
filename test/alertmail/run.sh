@@ -342,11 +342,35 @@ elif ! printf '%s\n' "$hb_body" | grep -q 'cisza, kanal sprawny'; then
         "no heartbeat send found in the extracted body"
 else
     hb_dir=$(mktemp -d)
+    # REV-20260902-133 F1. GENERATION MUST EXECUTE NO PROSE AND SAY NOTHING.
+    #
+    # The static grep above reads the body; this one RUNS the expansion the way
+    # deploy.sh runs it and measures two things the grep cannot: what bash
+    # printed while expanding, and whether anything named in a comment was
+    # actually executed. An unquoted heredoc substitutes before it comments, so
+    # a backtick span in prose is a command -- `Doba:` ran as root on every v10
+    # install (d3cd8d3), a second span with parentheses became a syntax error
+    # (9aae4f3), and the suite reported 37 PASS / 0 FAIL both times because the
+    # render's stderr went to the terminal and nobody asserted on it.
+    #
+    # The sentinel is the reviewer's own construction: an executable literally
+    # called `Doba:` first on PATH, which records the fact that it was called.
+    # A generation that runs prose calls it; an inert one cannot know it exists.
+    mkdir -p "$hb_dir/sentinel"
+    printf '#!/bin/sh\ntouch "%s/PROSE-WAS-EXECUTED"\nexit 0\n' "$hb_dir" > "$hb_dir/sentinel/Doba:"
+    chmod +x "$hb_dir/sentinel/Doba:"
+    hb_gen_err=$(PATH="$hb_dir/sentinel:$PATH" \
     DIGEST_SCRIPT_MARKER="# alert-digest.sh test" \
     ALERT_ENV_PREAMBLE="" NOTIFY_EMAIL="root" \
         eval "cat > '$hb_dir/digest.sh' <<EOF
 $hb_body
-EOF"
+EOF" 2>&1 >/dev/null)
+    if [ -z "$hb_gen_err" ] && [ ! -e "$hb_dir/PROSE-WAS-EXECUTED" ]; then
+        ok "digest heredoc: generation prints nothing on stderr and executes no comment text (REV-133 sentinel 'Doba:' never called)"
+    else
+        bad "digest heredoc: generation prints nothing on stderr and executes no comment text (REV-133 sentinel 'Doba:' never called)" \
+            "sentinel called: $([ -e "$hb_dir/PROSE-WAS-EXECUTED" ] && echo YES || echo no)" "stderr: $hb_gen_err"
+    fi
     # The quiet branch used to be reachable only on Mondays, and this suite
     # neutralised that with a sed over the day comparison -- a pin that broke
     # the moment the comparison was rewritten. ZFS_DIGEST_QUIET=daily is now
