@@ -1609,6 +1609,23 @@ source_profile_release_tmp() {
     SRC_PROFILE_TPL_FILE=""; SRC_PROFILE_PRUNE_FILE=""
 }
 
+# PER-INVOCATION STATE IS RESET AT THE ENTRY OF EVERY COMMAND THAT CONSUMES IT.
+#
+# SRC_PROFILE_NAME is a GLOBAL, because source_profile_prepare and the fragment
+# resolver both read it. Measured 2026-09-03: two add-clients in one process
+# gave the SECOND one the FIRST one's --source-profile, silently -- omitting the
+# flag must mean the same preset on both sides every time it is omitted, not
+# merely the first time. The fix was one reset line, then a second copy of it
+# in local-backup; activate-client, which takes the name from the RECORD and
+# only when the relationship is new (apply_client_profile_choice), had none, so
+# a record without the field read whatever the previous command in the same
+# process had left. One function, called first thing by each of the three, so
+# the next global of this kind is added HERE and not to the command someone
+# happened to be editing.
+cmd_reset_invocation_state() {
+    SRC_PROFILE_NAME=""; source_profile_release_tmp
+}
+
 # Render the source profile and keep its two artefacts aside.
 #
 # Rendered SECOND, then the target is rendered again, because load_active_profile
@@ -6034,13 +6051,7 @@ cmd_local_backup() {
     # is already the one field where empty means "no destination at all"
     # (lint_flags says exactly that), while every other field refuses a blank as
     # a mistake. CLI and generated config say the same thing the same way.
-    # SRC_PROFILE_NAME is a GLOBAL, because source_profile_prepare and the
-    # fragment resolver both read it. So it has to be cleared per invocation:
-    # measured 2026-09-03, two add-clients in one process gave the SECOND one
-    # the FIRST one's --source-profile, silently. Omitting the flag must mean
-    # the same preset on both sides every time it is omitted, not merely the
-    # first time.
-    SRC_PROFILE_NAME=""; source_profile_release_tmp
+    cmd_reset_invocation_state
     local target="" target_given=0 profile="$PROFILE_DEFAULT_NAME" config=""
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
@@ -6773,13 +6784,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 
 # ------------------------------------------------------------------------------
 cmd_add_client() {
-    # SRC_PROFILE_NAME is a GLOBAL, because source_profile_prepare and the
-    # fragment resolver both read it. So it has to be cleared per invocation:
-    # measured 2026-09-03, two add-clients in one process gave the SECOND one
-    # the FIRST one's --source-profile, silently. Omitting the flag must mean
-    # the same preset on both sides every time it is omitted, not merely the
-    # first time.
-    SRC_PROFILE_NAME=""; source_profile_release_tmp
+    cmd_reset_invocation_state
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
@@ -8711,6 +8716,7 @@ activation_is_new_relationship() {   # <state> <installed-endpoint>
 }
 
 cmd_activate_client() {
+    cmd_reset_invocation_state
     local name="${1:-}"; shift || true
     local yes=0 verbose=0
     for a in "$@"; do

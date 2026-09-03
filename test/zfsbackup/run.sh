@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8692,6 +8692,37 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^Klient: *pve2' && ! printf 
 else
     bad "fatal die: the status view's confined probe still reports a manifest-less record instead of dying" "rc=$rc" "$out"
 fi
+
+
+# ============================================================================
+# PER-INVOCATION STATE IS RESET AT ENTRY (2026-09-03). Self-contained; always
+# eligible, also under `--section invocation`. SRC_PROFILE_NAME is a global
+# read by the source-profile resolver; a stale value from an earlier command
+# in the same process must be gone by the time any consumer of it runs. The
+# harness sources the program, plants a stale value, and reads it back at the
+# moment the command dies on its bad arguments -- which is after the entry
+# reset and before anything else. Discriminating control: activate-client had
+# no reset on main and reports the stale value there; add-client and
+# local-backup carried their own copies and pin the consolidated helper.
+# ============================================================================
+inv_probe() {   # <command function> <args...> -> what SRC_PROFILE_NAME held when the command died
+    CLIENTS_DIR="$WORK/nonexistent-clients" bash -c '
+        . "$1"; shift
+        die() { printf "[%s]" "$SRC_PROFILE_NAME"; exit 1; }
+        SRC_PROFILE_NAME=stale
+        "$@"
+        printf "[%s]" "$SRC_PROFILE_NAME"
+    ' _ "$ZFSBACKUP" "$@" 2>/dev/null
+}
+for probe in "cmd_activate_client no-such-client" "cmd_add_client bad/name" "cmd_local_backup --no-such-flag"; do
+    # shellcheck disable=SC2086
+    got=$(inv_probe $probe)
+    if [ "$got" = "[]" ]; then
+        ok "invocation: ${probe%% *} clears SRC_PROFILE_NAME before it does anything else"
+    else
+        bad "invocation: ${probe%% *} clears SRC_PROFILE_NAME before it does anything else" "read back: ${got:-<nothing>}"
+    fi
+done
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
