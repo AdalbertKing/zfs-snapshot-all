@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3.*
+*Evidence: E8, E3, E27.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -310,6 +310,28 @@ bites hardest: every fleet fact in it is on the far side of a boundary.
 measurement command with its expected output left blank, or it is not stated.
 The corrected runbook now opens with `ls clients/ peers/ relationships/` and
 says what to do when they are empty.
+
+### E27 — A gated commit chain verified one state and recorded another
+**2026-09-03, read_server_conf delivery (`6fd0802`).**
+
+*Genesis.* I ran the delivery as one background chain: wait for suites, then
+`impact.sh --verify`, `--refresh-status`, `git add`, commit, push. It pushed a
+commit whose status digest was STALE: `--verify` on the pushed tree said so
+immediately, and CI's graph job would have gone red.
+
+*Cause.* Two errors in one chain. The order was wrong -- the digest is computed
+over the STAGED files, and I refreshed it before staging the lib and the suite,
+although the tool prints the correct order (`git add <intended>;
+--refresh-status; git add PROJECT_STATUS.md`) every time it runs. And the chain
+piped every gate through `tail -1`, so `--verify` passing on an empty stage and
+`--refresh-status` warning about the not-yet-staged digest both read as one
+reassuring line each. The mutation (commit, push) ran behind checks that had
+measured a different state than the one it recorded.
+
+*Rule.* R4. A verify that gates a commit runs on the exact staged state the
+commit will record, after the last `git add`, and its full output is read --
+not its last line. Fixed with a follow-up commit (`a2bc1b7`) carrying the
+digest over the same content; the pushed history was not rewritten.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 

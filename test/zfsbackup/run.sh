@@ -8652,6 +8652,23 @@ else
 fi
 
 
+# server.conf goes through the same reader. read_server_conf kept `.`-sourcing
+# the file after the 2026-09-03 change (its own comment explains why it must
+# not clear fields it does not own; record_load meets that by construction),
+# so a DEFAULT_TARGET carrying a command substitution ran on every add-client
+# that consulted the default. Now it reaches add-client as text and nothing
+# runs. Discriminating control: on main the touch fires and this fails.
+SV="$RD/server"; mkdir -p "$SV/clients"
+printf 'DEFAULT_TARGET=$(touch "%s/SRV-EXECUTED")\nCRON_CONFIG=%s/jobs.conf\n' "$RD" "$SV" > "$SV/server.conf"
+printf '#!/bin/bash\nexit 0\n' > "$SV/deploy_marker.sh"; chmod +x "$SV/deploy_marker.sh"
+out=$(SERVER_CONF="$SV/server.conf" CLIENTS_DIR="$SV/clients" RELATIONSHIPS_DIR="$RD/rel" DEPLOY="$SV/deploy_marker.sh" \
+      bash "$ZFSBACKUP" add-client srvtest --host=10.0.0.1 --datasets=tank/x 2>&1); rc=$?
+if [ ! -e "$RD/SRV-EXECUTED" ]; then
+    ok "records: a command substitution in server.conf's DEFAULT_TARGET is data -- add-client runs nothing"
+else
+    bad "records: a command substitution in server.conf's DEFAULT_TARGET is data -- add-client runs nothing" "rc=$rc" "$out"
+fi
+
 # ============================================================================
 # `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
 # eligible, also under `--section fataldie`. set-endpoint parses --host through
