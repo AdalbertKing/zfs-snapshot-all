@@ -338,10 +338,11 @@ else
 fi
 
 # --- 2. peer_label matches deploy.sh's own -----------------------------------
-# deploy.sh's peer_label() is `tr -c 'A-Za-z0-9._-' '-'` on $PEER_HOST -- this
-# is the exact string this repo grep-checked in deploy.sh; kept identical here
-# on purpose (no source edge, see the comment above peer_label() in
-# zfs-backup.sh) so a future edit to one that misses the other is caught here.
+# Since 2026-09-03 both programs take peer_label() from lib-pairing.sh, so
+# they cannot drift from each other any more. This literal is the transform
+# the estate's EXISTING labels (accounts, manifests, key files) were made
+# with; a change to the shared definition would rename them all, and this is
+# where that shows.
 deploy_peer_label() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-'; }
 for host in pve2 192.168.28.8 "metropolis.example.com" "host with spaces"; do
     want="$(deploy_peer_label "$host")"

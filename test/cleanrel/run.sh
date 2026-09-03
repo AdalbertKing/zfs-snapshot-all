@@ -1162,6 +1162,34 @@ case "$out" in
     *) bad "unseen: a managed block whose config is gone is reported" "$out" ;;
 esac
 
+# --- dead code -------------------------------------------------------------
+# peer_label() was defined here on 2026-08-20 "mirrored rather than sourced",
+# with a paragraph of reasoning, and no line of this file ever called it -- in
+# any revision. A function nobody calls is not a mirror, it is a second copy
+# waiting to drift, and the comment above it argued for keeping it in sync
+# with a transform it never applied. Removed 2026-09-03. Two checks so the
+# shape does not come back: no copy of the transform in any spelling, and no
+# function defined in this file that no other line of it references. The one
+# permitted exception is release_orphaned_holds, which its own comment marks
+# "unreachable by design" as the plug-in point for a reviewer-permitted route;
+# anything else that is defined and never named fails here with its name.
+if ! grep -qE "tr -c 'A-Za-z0-9._-'" "$CR"; then
+    ok "no private copy of peer_label's transform in the tool"
+else
+    bad "no private copy of peer_label's transform in the tool" "$(grep -nE "tr -c 'A-Za-z0-9._-'" "$CR")"
+fi
+dead=""
+for fn in $(grep -oE '^[a-z_]+\(\)' "$CR" | tr -d '()'); do
+    [ "$fn" = release_orphaned_holds ] && continue
+    n=$(grep -vE '^[[:space:]]*#' "$CR" | grep -cE "(^|[^a-z_])$fn([^a-z_]|$)")
+    [ "$n" -ge 2 ] || dead="$dead $fn"
+done
+if [ -z "$dead" ]; then
+    ok "every function the tool defines is referenced by at least one other line of it"
+else
+    bad "every function the tool defines is referenced by at least one other line of it" "defined and never named:$dead"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
