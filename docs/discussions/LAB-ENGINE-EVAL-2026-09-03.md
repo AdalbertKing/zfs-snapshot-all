@@ -1,8 +1,14 @@
 # Lab — silniki bez `eval`: sześć miejsc, trzy mechanizmy, ten sam ZFS
 
-Status: **DO WYKONANIA** w wątku z dostępem do floty (`pve9` z kontem
-delegowanym, drugi host jako cel zdalny — `pve10` albo `pve9b`). Spisany w
-sesji, która hostów nie widzi.
+Status: **WYKONANY 2026-09-03** na `pve9` → `pve10` (root, pula `hdd`), nowy
+kod `5d81fbf` (PR #306 scalony przed labem), stary `abfda49` — wynik w
+`LAB-ENGINE-EVAL-WYNIK-2026-09-03.md` (commit `409fd4b`): cztery własności
+potwierdzone, zero regresji. Spisany w sesji, która hostów nie widzi; poniżej
+wersja poprawiona o **cztery błędy runbooka** nazwane przez wykonawcę
+(`--hold` nie istnieje; sonda `-A` nie biegnie na cel lokalny; pusty przyrost
+nie ma próbki; diff logów musi wyciąć linię postępu mbuffera i porównywać ten
+sam stan danych), żeby następny przebieg nie potykał się o to samo. Zapis
+E32 w `IMPLEMENTER-ERROR-LOG.md`.
 
 Gałąź: `claude/package-translation-estimate-jisaqu` (PR #306). Punkt
 odniesienia: `main` w chwili startu labu (`abfda49` w chwili pisania).
@@ -36,8 +42,11 @@ wymagają prawdziwego `zfs`, tty i drugiej maszyny:
   `canmount=noauto`, na celu lokalnym (nowy kod) i zdalnym (stary tekst,
   nowa funkcja go produkuje); volumeny pomijane bez błędu;
 - **(C)** `-A` liczy próbkę i zapisuje cache tak samo jak przed zmianą, po
-  stronie danych: lokalnie dla `snapsend.sh`, przez ssh na źródle dla
-  `snapget.sh` — cztery liczby wracają, decyzja o kompresji się nie zmienia;
+  stronie danych: lokalnie na hoście silnika dla `snapsend.sh` NA CEL ZDALNY,
+  przez ssh na źródle dla `snapget.sh` — cztery liczby wracają, decyzja o
+  kompresji się nie zmienia. Na cel lokalny sonda nie biegnie z definicji:
+  oba silniki bramkują autotune `[ -n "$REMOTE_HOST" ]` (`snapsend.sh:2405`,
+  `snapget.sh:2449`), bo lokalna wysyłka nigdy nie kompresuje;
 - **(D)** rollback na `main` daje to samo zachowanie na tych samych
   datasetach (diff logów pusty poza znacznikami czasu i liczbami z próbki).
 
@@ -48,7 +57,9 @@ Wszystko jako root na `pve9`. Datasety wyrzucalne; nic z produkcji.
 ### 0. Wstrzymać autoaktualizację, stan przed
 
 ```
-/root/.zfs-snapshot-all-update-state/update-control.sh --hold "lab engine eval"
+# Hold to PLIK, nie flaga: update-control.sh zna tylko --self-update/--rollback/
+# --resume-updates (blad 1 pierwszego przebiegu).
+printf 'lab engine eval %s\n' "$(date +%F)" > /root/.zfs-snapshot-all-update-state/update-hold
 cd /root/scripts/zfs-snapshot-all && git rev-parse --short HEAD     # main przed labem
 git fetch origin claude/package-translation-estimate-jisaqu
 git checkout --detach origin/claude/package-translation-estimate-jisaqu
@@ -111,13 +122,16 @@ git show <main-sprzed-labu>:snapsend.sh | grep -o 'canmount_cmd="[^"]*"' | head 
 ### 3. (C) Sonda autotune po stronie danych
 
 Czyste cache, żeby sonda naprawdę pobiegła (katalog zwraca `tune_cache_dir`
-w `lib-zfs-snap.sh`, TTL siedem dni):
+w `lib-zfs-snap.sh`, TTL siedem dni). Przyrost musi NIEŚĆ DANE — pusty
+przyrost nie ma próbki i log kończy się jednym zdaniem (błąd 3 pierwszego
+przebiegu). Cel ZDALNY — na lokalny sonda nie biegnie (błąd 2):
 
 ```
 rm -rf /var/lib/zfs-snap                               # katalog cache roota (tune_cache_dir); ZFS_SNAP_CACHE_DIR go nadpisuje
+dd if=/dev/urandom of=/$P/lab-eval/src/blob2 bs=1M count=64 status=none
 zfs snapshot -r $P/lab-eval/src@lab_b
-./snapsend.sh -m lab_ -A -r $P/lab-eval/src $P/lab-eval/dst-local 2>&1 | tee /tmp/lab-C1.log | grep -i 'tune\|sample\|compress'
-ls -l /var/lib/zfs-snap                                # wpis powstal, cztery liczby w srodku
+./snapsend.sh -m lab_ -A -r $P/lab-eval/src root@<pve10>:$P/lab-eval/dst-remote 2>&1 | tee /tmp/lab-C1.log | grep -i 'tune\|sample\|compress'
+ls -l /var/lib/zfs-snap                                # wpis powstal, cztery liczby w srodku (ratio, raw_mbps, comp_mbps, link_mbps)
 ```
 
 Pull, sonda przez ssh na źródle (`snapget.sh` mierzy tam, gdzie są dane):
@@ -133,19 +147,35 @@ dla tego samego blobu. Losowe dane → oczekiwany werdykt „bez kompresji".
 
 ### 4. (D) Rollback na `main` i porównanie
 
+Dwie rzeczy psują diff „stary vs nowy" (błąd 4 pierwszego przebiegu): linia
+postępu mbuffera (`in @ … MiB/s, out @ … buffer … % full`) bywa obecna albo
+nie, zależnie od przebiegu — trzeba ją wyciąć; a krok 3 dopisał dane do
+źródła, więc log z kroku 1 i log po rollbacku wysyłają INNE ilości. Porównuje
+się dwa przebiegi na TYM SAMYM stanie danych, jeden po drugim: najpierw nowy
+kod raz jeszcze, potem stary.
+
 ```
+norm() { grep -v 'buffer.*% full' "$1" | sed -E 's/[0-9]+(\.[0-9]+)?//g'; }
+# nowy kod, swiezy cel, ten sam stan zrodla:
+zfs destroy -r $P/lab-eval/dst-local; rm -rf /var/lib/zfs-snap
+script -qec "./snapsend.sh -m lab_ -r $P/lab-eval/src $P/lab-eval/dst-local" /tmp/lab-A1.log
+zfs get -r -H -o name,value canmount $P/lab-eval/dst-local | grep -v '@' > /tmp/lab-cm1
+ssh root@<pve10> "zfs destroy -r $P/lab-eval/dst-remote"
+./snapsend.sh -m lab_ -A -r $P/lab-eval/src root@<pve10>:$P/lab-eval/dst-remote > /tmp/lab-C1b.log 2>&1
+# stary kod, to samo:
 git checkout --detach <main-sprzed-labu>
-zfs destroy -r $P/lab-eval/dst-local; zfs destroy -r $P/lab-eval/pulled
-rm -rf /var/lib/zfs-snap
+zfs destroy -r $P/lab-eval/dst-local; rm -rf /var/lib/zfs-snap
 script -qec "./snapsend.sh -m lab_ -r $P/lab-eval/src $P/lab-eval/dst-local" /tmp/lab-A0.log
-./snapsend.sh -m lab_ -A -r $P/lab-eval/src $P/lab-eval/dst-local 2>&1 > /tmp/lab-C0.log
-zfs get -r -H -o name,value canmount $P/lab-eval/dst-local | grep -v '@'
-diff <(sed -E 's/[0-9]+(\.[0-9]+)?//g' /tmp/lab-A0.log) <(sed -E 's/[0-9]+(\.[0-9]+)?//g' /tmp/lab-A.log)
-diff <(sed -E 's/[0-9]+(\.[0-9]+)?//g' /tmp/lab-C0.log) <(sed -E 's/[0-9]+(\.[0-9]+)?//g' /tmp/lab-C1.log)
+zfs get -r -H -o name,value canmount $P/lab-eval/dst-local | grep -v '@' > /tmp/lab-cm0
+ssh root@<pve10> "zfs destroy -r $P/lab-eval/dst-remote"
+./snapsend.sh -m lab_ -A -r $P/lab-eval/src root@<pve10>:$P/lab-eval/dst-remote > /tmp/lab-C0.log 2>&1
+diff /tmp/lab-cm0 /tmp/lab-cm1
+diff <(norm /tmp/lab-A0.log) <(norm /tmp/lab-A1.log)
+diff <(norm /tmp/lab-C0.log) <(norm /tmp/lab-C1b.log)
 ```
 
-Oczekiwane: `canmount` identyczne, oba diffy puste (liczby i czas wycięte).
-Różnica w diffie = regresja, zgłosić z pełnym logiem obu stron.
+Oczekiwane: `canmount` identyczne, oba diffy puste (liczby, czas i postęp
+wycięte). Różnica w diffie = regresja, zgłosić z pełnym logiem obu stron.
 
 ### 5. Sprzątanie
 
@@ -153,8 +183,16 @@ Różnica w diffie = regresja, zgłosić z pełnym logiem obu stron.
 zfs destroy -r $P/lab-eval
 ssh zfsbackup@<pve10> "zfs destroy -r $P/lab-eval" 2>/dev/null || ssh root@<pve10> "zfs destroy -r $P/lab-eval"
 git checkout main && git pull --ff-only          # albo zostac na galezi do scalenia
-/root/.zfs-snapshot-all-update-state/update-control.sh --resume-updates
+rm -f /root/.zfs-snapshot-all-update-state/update-hold   # albo: bash deploy.sh --resume-updates
 ```
+
+## Co pozostaje niesprawdzone na żywo
+
+Wykonawca użył `root@pve10`, bo po labach `--source-profile` para nie jest
+sparowana. Ścieżka „konto delegowane BEZ `canmount` → dokładnie jedna linia
+`Could not set canmount=noauto across …`" nie była mierzona; tak samo `-U`
+i `-R`. Kod tych gałęzi się nie zmienił (tekst dla ssh jest bajt w bajt
+stary), więc to nie jest luka tej zmiany, tylko granica tego labu.
 
 ## Co zapisać w wyniku
 

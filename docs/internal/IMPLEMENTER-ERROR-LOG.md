@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29.*
+*Evidence: E7, E3, E12, E29, E32.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -415,6 +415,44 @@ in the document, and I did not apply it to the procedure.
 unattended (cron, the updater, the digest) and ask of each step whether that
 process can act on the same state in the meantime. The runbook now holds the
 updater first and resumes it last.
+
+### E32 — A runbook with a flag that does not exist, a probe that cannot run, and an increment with nothing in it
+**2026-09-03, LAB-ENGINE-EVAL runbook, caught by the executing thread. Four
+errors in one document; the first one repeated from the E31 correction.**
+
+*Genesis.* (1) Step 0 said `update-control.sh --hold "…"`. The controller
+knows `--self-update`, `--rollback` and `--resume-updates`; a hold is a
+FILE (`update-hold` in the state directory, `UPDATE_HOLD_FILE` in deploy.sh).
+The E31 correction of the hostscripts runbook, written the same day, carried
+the same non-existent flag with "or: touch update-hold" in a trailing
+comment, so the wrong form was the instruction and the right one the aside.
+(2) Step 3 told the executor to prove the autotune probe on a LOCAL target.
+Both engines gate autotune on `[ -n "$REMOTE_HOST" ]` (`snapsend.sh:2405`,
+`snapget.sh:2449`), because a local send never compresses; the run exits 0
+and proves nothing. (3) Step 3 snapshotted without writing data first: an
+empty increment has no sample. (4) Step 4 diffed logs that differed by
+mbuffer's optional progress line and by the data step 3 had added, so the
+"empty diff" expectation could not be met by the method as written. The
+executor resolved every one, measured both sides on the same data state,
+and reported zero regressions.
+
+*Cause.* R8, three times over: a flag written from memory of what the
+controller OUGHT to offer, without `grep -n -- '--hold' deploy.sh`; a probe
+placed on a path without reading the four-line gate that decides whether it
+runs; a comparison designed without asking what the log contains that is
+not behaviour. And R6 for (3): I did not know what the probe should print,
+so I could not see that the step gave it nothing to print about. The
+repetition of (1) inside the E31 fix is the R8 signal the header of this
+file warns about: the rule was written down and not applied to the very
+next document.
+
+*Rule.* R8. For a runbook the concrete form: every flag, path and file
+name in a command block is grepped in the tree before the block is
+written, and every "expected" line is one the code demonstrably produces
+on that path. The two runbooks now hold by writing the file and resume by
+removing it; the probe step targets the remote side and writes data first;
+the comparison strips the progress line and repeats both sides on one data
+state.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 

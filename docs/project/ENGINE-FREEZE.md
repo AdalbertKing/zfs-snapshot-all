@@ -111,9 +111,16 @@ Owner-authorized refreezes:
   -- exactly the discriminating ones. `test/twins` re-blessed after the diff
   was read: only `process_dataset` in `snapsend.sh` moved, and only the
   canmount block. `tune` 56/56, `twins` 59/59, `recursion` 74/74, `subtree`
-  10/10, `runsuffix` 15/15, `pairpause` 18/18 locally. The live-ZFS proof
-  (a real transfer with a tty, a `-r` receive on both target kinds, a run
-  with `-A`) is the lab in `docs/discussions/LAB-ENGINE-EVAL-2026-09-03.md`.
+  10/10, `runsuffix` 15/15, `pairpause` 18/18 locally. LIVE-PROVEN the same
+  day, pve9 -> pve10 at `5d81fbf` against `abfda49`
+  (`docs/discussions/LAB-ENGINE-EVAL-WYNIK-2026-09-03.md`): the tty
+  announcement appears; a dataset named `child one` -- the case where eval
+  and argv part ways -- arrives and gets `canmount=noauto`, as does every
+  filesystem of the subtree on both target kinds, volume skipped without an
+  error; the ssh text is byte-identical to the old one (148 = 148); both
+  probes return their four numbers; rollback to the old engines gives the
+  same canmount and an empty log diff. Not measured: the delegated account
+  without `canmount`, `-U`, `-R` -- code the change did not touch.
 
 - 2026-08-31 (snapsend.sh, snapget.sh): **the long-option pre-pass had a second
   copy of the option string, and the copies disagreed.** Owner direction:

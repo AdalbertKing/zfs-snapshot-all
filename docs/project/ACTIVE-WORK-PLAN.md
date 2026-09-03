@@ -594,8 +594,8 @@ deliberately safe workflow". Against the tree:
   machine that is not enrolled (refused clearly, per the 2026-08-13 question 3);
   the six `eval` sites inside the frozen engines — REMOVED the same day, under
   the Owner's unfreeze in the same message as the declaration (entry at the
-  top of `ENGINE-FREEZE.md`, `test/evalfree`), live proof pending in
-  `docs/discussions/LAB-ENGINE-EVAL-2026-09-03.md`;
+  top of `ENGINE-FREEZE.md`, `test/evalfree`), live-proven pve9 -> pve10 the
+  same day (`docs/discussions/LAB-ENGINE-EVAL-WYNIK-2026-09-03.md`);
   real mail delivery in the restore digest lines is covered by the alert
   channel's own evidence, not by a restore lab.
 
