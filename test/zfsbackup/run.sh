@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8809,6 +8809,64 @@ if ! printf '%s' "$out" | grep -q 'is not a valid account name'; then
     ok "flags: --local-user=root is still a legal answer at parse time"
 else
     bad "flags: --local-user=root is still a legal answer at parse time" "rc=$rc" "$out"
+fi
+
+
+# ============================================================================
+# NO COMMAND COMPOSED FROM TEXT (2026-09-03). Self-contained; always eligible,
+# also under `--section noeval`. The program's last two `eval` sites read the
+# numbered exclusion fields (`eval "v=\${EXCLUDE_CHILD_$i:-}"`): a command
+# assembled from a string for a job bash does directly with indirect expansion
+# (`n=EXCLUDE_CHILD_$i; v=${!n:-}`). Nothing observable changes -- the number
+# was the only thing that varied and the value was never re-parsed either way
+# -- so the discriminator is the mechanism itself: the eval count, red on
+# main (2). The rest pins the contract the form change must keep: every
+# numbered field is read in order, numbering stops at the first gap, and a
+# value that LOOKS like a command stays a string.
+# ============================================================================
+# $REPO, not $SCRIPT_DIR: an earlier section re-points SCRIPT_DIR at its own
+# fixture and never restores it.
+. "$REPO/test/harness.sh"
+n_eval=$(grep -c '^[[:space:]]*eval[[:space:]]' "$ZFSBACKUP")
+if [ "$n_eval" -eq 0 ]; then
+    ok "noeval: zfs-backup.sh composes no command from text (0 eval sites)"
+else
+    bad "noeval: zfs-backup.sh composes no command from text (0 eval sites)" "$n_eval site(s):" "$(grep -n '^[[:space:]]*eval[[:space:]]' "$ZFSBACKUP")"
+fi
+NE="$WORK/noeval"; rm -rf "$NE"; mkdir -p "$NE"
+cat > "$NE/probe.sh" <<'EOF'
+set -u
+eval "$FN_X"; eval "$FN_P"
+EXCLUDE_CHILD_1='-swap$'
+EXCLUDE_CHILD_2='a b$(touch "$NE_MARK")'
+EXCLUDE_CHILD_4='never reached: numbering stops at the first gap'
+PASSIVE=1
+EXCLUDE_FAMILY_1=vzdump
+EXCLUDE_FAMILY_2='$(touch "$NE_MARK")'
+printf '[%s][%s]' "$(client_exclude_flags)" "$(client_passive_flags)"
+EOF
+got=$(FN_X="$(product_fn "$ZFSBACKUP" client_exclude_flags)" FN_P="$(product_fn "$ZFSBACKUP" client_passive_flags)" \
+      NE_MARK="$NE/marker" bash "$NE/probe.sh" 2>&1)
+want='[ -X -swap$ -X a b$(touch "$NE_MARK")][ -e -E vzdump -E $(touch "$NE_MARK")]'
+if [ "$got" = "$want" ]; then
+    ok "noeval: numbered exclusion fields are read in order up to the first gap, as engine flags"
+    # Only meaningful once the render above ran: an absent marker after a
+    # probe that never called the functions would be a pass for no reason.
+    if [ ! -e "$NE/marker" ]; then
+        ok "noeval: a field value shaped like a command is rendered as text, never run"
+    else
+        bad "noeval: a field value shaped like a command is rendered as text, never run" "$NE/marker exists"
+    fi
+else
+    bad "noeval: numbered exclusion fields are read in order up to the first gap, as engine flags" "want: $want" "got:  $got"
+    bad "noeval: a field value shaped like a command is rendered as text, never run" "not measured: the render above did not run"
+fi
+got=$(FN_X="$(product_fn "$ZFSBACKUP" client_exclude_flags)" FN_P="$(product_fn "$ZFSBACKUP" client_passive_flags)" \
+      bash -c 'set -u; eval "$FN_X"; eval "$FN_P"; printf "[%s][%s]" "$(client_exclude_flags)" "$(client_passive_flags)"' 2>&1)
+if [ "$got" = "[][]" ]; then
+    ok "noeval: no fields and no PASSIVE render nothing, under set -u"
+else
+    bad "noeval: no fields and no PASSIVE render nothing, under set -u" "$got"
 fi
 
 echo "--------------------------------------------"

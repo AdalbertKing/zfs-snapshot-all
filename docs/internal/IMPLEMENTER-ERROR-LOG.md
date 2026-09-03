@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25.*
+*Evidence: E3, E9, E15, E24, E25, E28.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12.*
+*Evidence: E7, E3, E12, E29.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -332,6 +332,44 @@ measured a different state than the one it recorded.
 commit will record, after the last `git add`, and its full output is read --
 not its last line. Fixed with a follow-up commit (`a2bc1b7`) carrying the
 digest over the same content; the pushed history was not rewritten.
+
+### E28 — My probe opened the descriptor it was asking about
+**2026-09-03, cron suite section S (the eval removal).**
+
+*Genesis.* Assertion S3 -- "release closes the lock descriptor" -- was red on
+the branch AND on `main`, while `/proc/$$/fd` showed the descriptor gone. The
+probe was `{ : >&"$fd"; } 2>/dev/null`. For the group's `2>/dev/null` bash
+saves the real stderr on the lowest free descriptor >= 10, which was the
+number the lock had just given back. The probe was measuring its own
+scaffolding.
+
+*Cause.* I wrote an instrument without asking what ELSE it does to the thing
+it measures. The signal that it was the instrument, not the product, was there
+in the first run: red on both sides of the change is not a product result.
+
+*Rule.* R6. A red that does not move when the product changes is a reading of
+the probe. Cross-check with a second instrument (`/proc` here) before touching
+the product, and keep the probe out of the process whose state it reads --
+section S now asks a child process to write to the inherited descriptor.
+
+### E29 — I built a path from a variable an earlier section had repointed
+**2026-09-03, zfsbackup suite section noeval.**
+
+*Genesis.* `. "$SCRIPT_DIR/../harness.sh"` at the end of an 8800-line suite
+resolved to `<repo>/../harness.sh`: section 96 sets `SCRIPT_DIR` to its own
+fixture and never restores it. `product_fn` was "command not found", and the
+marker assertion downstream passed for no reason, because the probe that would
+have created the marker never ran.
+
+*Cause.* I copied the sourcing line from the four suites that use it near their
+top, where the variable still means what line 16 says. R8's "check it exists
+first" applies to a value as much as to a helper: I used the variable without
+checking what it held at that line.
+
+*Rule.* R8. In a long suite, take paths from the variable nobody reassigns
+(`$REPO`); and an assertion whose evidence is an ABSENCE (no marker file, no
+output) must first prove the producing step ran (R6) -- the section now marks
+the marker check "not measured" when the render did not run.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 
