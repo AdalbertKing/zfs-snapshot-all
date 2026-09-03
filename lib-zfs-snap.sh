@@ -1278,13 +1278,16 @@ tune_probe_stream() {
 
     # One self-contained snippet, run on whichever side owns the data, so the
     # sample never crosses the network -- only the four numbers come back.
+    # The sampled send is a shell FUNCTION inside the snippet, `h`, not a
+    # command string handed to eval three times (until 2026-09-03): the
+    # snapshot name is expanded once, by the snippet's own shell, as one word.
     script='
       snap=$(zfs list -t snapshot -H -o name -s creation '"'$dataset'"' 2>/dev/null | tail -1)
       [ -n "$snap" ] || exit 1
-      H="zfs send '"'"'$snap'"'"' 2>/dev/null | head -c '"$((TUNE_SAMPLE_MB * 1048576))"'"
-      eval "$H | cat > /dev/null" || exit 1
-      t0=$(date +%s.%N); rb=$(eval "$H | wc -c") || exit 1; t1=$(date +%s.%N)
-      t2=$(date +%s.%N); cb=$(eval "$H | '"$COMPRESS_PIPE"' | wc -c") || exit 1; t3=$(date +%s.%N)
+      h() { zfs send "$snap" 2>/dev/null | head -c '"$((TUNE_SAMPLE_MB * 1048576))"'; }
+      h | cat > /dev/null || exit 1
+      t0=$(date +%s.%N); rb=$(h | wc -c) || exit 1; t1=$(date +%s.%N)
+      t2=$(date +%s.%N); cb=$(h | '"$COMPRESS_PIPE"' | wc -c) || exit 1; t3=$(date +%s.%N)
       echo "$rb $t0 $t1 $cb $t2 $t3"
     '
     if [ -n "$remote" ]; then

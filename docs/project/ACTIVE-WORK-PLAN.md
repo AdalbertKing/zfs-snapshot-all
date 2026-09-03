@@ -512,7 +512,7 @@ Order:
 4. Real ZFS end-to-end evidence.
 5. Destructive replacement as a **separate verb**, with explicit confirmation and mandatory pre-restore snapshot.
 
-### Status — DELIVERED through the public CLI; Gate 7 awaits the Owner's declaration (refreshed 2026-09-03)
+### Status — DELIVERED through the public CLI, Gate 7 REACHED (declared 2026-09-03)
 
 The previous version of this section stopped at "delivered direct-main pending
 the REV-120/121 verdicts" and "the public cross-host CLI follows under R-025".
@@ -581,7 +581,7 @@ grammar refusals, teardown clean.
 grants — each recovery grants on the endangered machine for that relationship
 and revokes afterwards.
 
-### Gate 7 — what the facts say, for the Owner's declaration
+### Gate 7 — what the facts said, on which the Owner declared
 
 Gate 7 reads "the product can both create a backup and restore it through a
 deliberately safe workflow". Against the tree:
@@ -592,17 +592,27 @@ deliberately safe workflow". Against the tree:
   set, write fence; live-proven on the lab pair through every documented form;
 - open, and deliberately NOT part of the gate as written: recovery onto a
   machine that is not enrolled (refused clearly, per the 2026-08-13 question 3);
-  the six `eval` sites inside the frozen engines (an unfreeze decision);
+  the six `eval` sites inside the frozen engines — REMOVED the same day, under
+  the Owner's unfreeze in the same message as the declaration (entry at the
+  top of `ENGINE-FREEZE.md`, `test/evalfree`), live proof pending in
+  `docs/discussions/LAB-ENGINE-EVAL-2026-09-03.md`;
   real mail delivery in the restore digest lines is covered by the alert
   channel's own evidence, not by a restore lab.
 
-Whether that is the gate is the Owner's declaration, not the implementer's.
-Nothing in the tree is known to stand between the sentence above and the
-facts.
+Whether that was the gate was the Owner's declaration, not the implementer's,
+and the Owner made it on 2026-09-03 against exactly this list.
 
 ### Gate 7
 
-The product can both create a backup and restore it through a deliberately safe workflow.
+The product can both create a backup and restore it through a deliberately safe
+workflow. **REACHED 2026-09-03**, by Owner declaration ("deklaracja Gate 7") on
+the facts listed above at `main` `abfda49`: create/install through Gate 5 and
+Phase 6, safe restore live-proven 2026-08-15 on deployed code, destructive
+restore behind the grant and the measured loss set, live-proven through every
+documented form on the lab pair (full ten-step lab 2026-08-31 at `bb5b6af`), all
+Phase 7 reviews CLOSED. The active sequence below is complete; what follows is
+the last line of it — conveniences backed by a real need — and the Owner's
+open list, not a further gate.
 
 ---
 

@@ -465,7 +465,13 @@ announce_transfer_size() {   # <send_cmd> <remote_host> <remote_user>
     if [ -n "$rhost" ]; then
         out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
     else
-        out=$(eval "$dry" 2>/dev/null) || return 0
+        # Split into words exactly as transfer_data splits the real send
+        # (`IFS=' ' read -r -a`), never eval: the dry run then cannot run
+        # anything the send itself would not, and a name that carries shell
+        # syntax reaches zfs as a name (2026-09-03).
+        local dry_args
+        IFS=' ' read -r -a dry_args <<< "$dry"
+        out=$("${dry_args[@]}" 2>/dev/null) || return 0
     fi
     size=$(printf '%s\n' "$out" | awk '$1=="size"{print $2; exit}')
     [ -n "$size" ] || return 0
