@@ -4,8 +4,9 @@ Status: **DO WYKONANIA** przez wątek z dostępem do floty. Spisany w sesji,
 która hostów nie widzi. Wynik proszę spisać do `LAB-HOSTSCRIPTS-WYNIK-2026-09-03.md`
 tym samym układem co `LAB-PR295-WYNIK-2026-09-03.md`.
 
-Gałąź: `claude/package-translation-estimate-jisaqu` (PR z tego runbooka; głowa
-w opisie PR). Punkt odniesienia: `main` w chwili startu labu.
+Gałąź: `claude/package-translation-estimate-jisaqu`, głowa `2f78d1f` (PR #302;
+zmiana w `345ce58`). Punkt odniesienia: `main` w chwili startu labu (`da1e8d4`
+w chwili pisania).
 
 ## Co się zmieniło i co lab ma dowieść
 
