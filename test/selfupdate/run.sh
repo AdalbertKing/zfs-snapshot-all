@@ -874,5 +874,43 @@ else
     bad "28e emergency_disable changed in update-control.sh ONLY" "does the fallback in deploy.sh need the same change? if not, say why, then --bless-twins"
 fi
 
+# --- 29. A DIRECT deploy.sh RUN TAKES THE RECORDED GRANT LIST TOO --------------
+#
+# PR #292 taught the controller to pass grant-datasets back as
+# --grant-datasets= on the hourly apply. A bare `bash deploy.sh` typed at the
+# console still used the hardcoded Proxmox default and died in Phase 8g on a
+# host whose pool is `hdd` (LAB-DRAFT-CONFIG-WYNIK-2026-09-03, pve9, with a
+# correct grant-datasets on disk). The choice is made ABOVE the root gate and
+# logged, which is what makes it measurable here as a non-root run that then
+# stops at "run as root": the log line is the evidence, its absence the control.
+G="$WORK/grant-direct"; mkdir -p "$G/state"; chmod 700 "$G/state"
+printf 'hdd/lab hdd/other\n' > "$G/state/grant-datasets"
+out="$(UPDATE_STATE_DIR="$G/state" bash "$DEPLOY" 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -qF "grant-datasets: using the list recorded at $G/state/grant-datasets (hdd/lab hdd/other)"; then
+    ok "29a a bare run with a recorded list says it is using it, before the root gate"
+else
+    bad "29a a bare run with a recorded list says it is using it, before the root gate" "rc=$rc" "$(printf '%s' "$out" | tail -3)"
+fi
+out="$(UPDATE_STATE_DIR="$G/state" bash "$DEPLOY" --grant-datasets=tank/x 2>&1)"
+if ! printf '%s' "$out" | grep -qF "grant-datasets: using the list recorded"; then
+    ok "29b an explicit --grant-datasets wins over the recorded list"
+else
+    bad "29b an explicit --grant-datasets wins over the recorded list" "$(printf '%s' "$out" | grep -F 'grant-datasets:')"
+fi
+rm -f "$G/state/grant-datasets"
+out="$(UPDATE_STATE_DIR="$G/state" bash "$DEPLOY" 2>&1)"
+if ! printf '%s' "$out" | grep -qF "grant-datasets: using the list recorded"; then
+    ok "29c no recorded file: the built-in default stands, silently, as before"
+else
+    bad "29c no recorded file: the built-in default stands, silently, as before" "$(printf '%s' "$out" | grep -F 'grant-datasets:')"
+fi
+: > "$G/state/grant-datasets"
+out="$(UPDATE_STATE_DIR="$G/state" bash "$DEPLOY" 2>&1)"
+if ! printf '%s' "$out" | grep -qF "grant-datasets: using the list recorded"; then
+    ok "29d an EMPTY recorded file is not a list: the default stands"
+else
+    bad "29d an EMPTY recorded file is not a list: the default stands" "$(printf '%s' "$out" | grep -F 'grant-datasets:')"
+fi
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
