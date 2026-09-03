@@ -21,6 +21,15 @@ DEPLOY="${DEPLOY:-$REPO/deploy.sh}"
 [ -r "$DEPLOY" ] || { echo "cannot find deploy.sh at $DEPLOY" >&2; exit 1; }
 UPDATE_CONTROL="${UPDATE_CONTROL:-$REPO/update-control.sh}"
 [ -r "$UPDATE_CONTROL" ] || { echo "cannot find update-control.sh at $UPDATE_CONTROL" >&2; exit 1; }
+. "$SCRIPT_DIR/../harness.sh"   # product_fn, for section 28's twins
+TWINS_BASELINE="${TWINS_BASELINE:-$SCRIPT_DIR/controller-twins.sha256}"
+BLESS_TWINS=0
+for a in "$@"; do
+    case "$a" in
+        --bless-twins) BLESS_TWINS=1 ;;
+        *) echo "unknown option $a (expected --bless-twins)" >&2; exit 1 ;;
+    esac
+done
 
 # Simulates exactly what deploy.sh's Phase 7 does: sed-template the two
 # placeholders and drop the result into the (throwaway) state dir, outside the
@@ -791,5 +800,79 @@ fi
 
 
 echo "--------------------------------------------"
+# --- 28. THE BOOTSTRAP-FALLBACK TWINS ARE IN LOCKSTEP, MEASURED --------------
+#
+# deploy.sh carries a copy of nine update-control.sh functions: the fallback
+# that runs before the controller has been deployed, or after it was removed
+# (REV-20260730-001 F2). deps.conf said "kept in lockstep by hand -- there is
+# no source edge" and nothing measured that. Measured 2026-09-03: six were
+# identical, two differed only by line continuations and by which program the
+# resume hint names, and emergency_disable differs in BEHAVIOUR on purpose
+# (the controller can chmod 000 itself; deploy.sh must not, it is the whole
+# fleet's deployment tool). So:
+#
+#   * the twinned set is DERIVED from the two files, as test/twins does;
+#   * every twin but emergency_disable must be IDENTICAL after normalisation
+#     (comments and blank lines out, continuations joined, whitespace
+#     squeezed) and ONE documented substitution: the fallback says
+#     `bash $REPO_DIR/deploy.sh` where the controller says `$SELF`, because
+#     the fallback has no self to name;
+#   * emergency_disable is pinned per side, twins-style: a change on one side
+#     is red until reviewed and blessed (--bless-twins), and its two
+#     structural facts are asserted outright: the fallback has no chmod step,
+#     the controller's chmod step comes BEFORE its crontab step.
+norm_twin() {   # <file> <fn> -> normalised body on stdout
+    product_fn "$1" "$2" \
+        | sed -e ':a' -e '/\\$/{N; s/\\\n[[:space:]]*/ /; ba}' \
+        | grep -vE '^[[:space:]]*(#|$)' \
+        | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+twin_names_of() { grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\) \{' "$1" | sed 's/() {$//' | sort -u; }
+# log/warn/die are each program's own voice, not update logic: the controller
+# prefixes with its own name, deploy.sh with its. Out of the contract by name.
+CTWINS="$(comm -12 <(twin_names_of "$DEPLOY") <(twin_names_of "$UPDATE_CONTROL") | grep -vxE 'log|warn|die')"
+_nct=$(printf '%s\n' "$CTWINS" | grep -c .)
+if [ "$_nct" -ge 9 ]; then ok "28a the fallback twins are derived from both files ($_nct names, the nine of REV-001 included)"
+else bad "28a the fallback twins are derived from both files" "only $_nct names -- the derivation, not the files, changed"; fi
+
+for fn in $CTWINS; do
+    [ "$fn" = emergency_disable ] && continue
+    d_body=$(norm_twin "$DEPLOY" "$fn" | sed 's#bash \$REPO_DIR/deploy\.sh#$SELF#g')
+    c_body=$(norm_twin "$UPDATE_CONTROL" "$fn")
+    if [ "$d_body" = "$c_body" ]; then
+        ok "28b $fn: the fallback copy in deploy.sh is the controller's, modulo the program the hint names"
+    else
+        bad "28b $fn: the fallback copy in deploy.sh is the controller's, modulo the program the hint names" \
+            "$(diff <(printf '%s\n' "$d_body") <(printf '%s\n' "$c_body") | head -8)"
+    fi
+done
+
+ed_d=$(norm_twin "$DEPLOY" emergency_disable); ed_c=$(norm_twin "$UPDATE_CONTROL" emergency_disable)
+if ! printf '%s\n' "$ed_d" | grep -q 'chmod 000'; then ok "28c the fallback's emergency_disable never chmods deploy.sh (the fleet's deployment tool)"
+else bad "28c the fallback's emergency_disable never chmods deploy.sh (the fleet's deployment tool)" "$ed_d"; fi
+_chmod_at=$(printf '%s\n' "$ed_c" | grep -n 'chmod 000 "\$SELF"' | head -1 | cut -d: -f1)
+_cron_at=$(printf '%s\n' "$ed_c" | grep -n 'crontab -l' | head -1 | cut -d: -f1)
+if [ -n "$_chmod_at" ] && [ -n "$_cron_at" ] && [ "$_chmod_at" -lt "$_cron_at" ]; then
+    ok "28d the controller's emergency_disable disables ITSELF before it touches the crontab"
+else
+    bad "28d the controller's emergency_disable disables ITSELF before it touches the crontab" "chmod at line ${_chmod_at:-none}, crontab at ${_cron_at:-none}"
+fi
+h_d=$(printf '%s\n' "$ed_d" | sha256sum | cut -c1-64); h_c=$(printf '%s\n' "$ed_c" | sha256sum | cut -c1-64)
+if [ "$BLESS_TWINS" -eq 1 ]; then
+    { echo "# emergency_disable, pinned per side after review: <deploy.sh sha256> <update-control.sh sha256>"
+      echo "# The two bodies differ ON PURPOSE (see test/selfupdate/run.sh section 28). Regenerate: ./test/selfupdate/run.sh --bless-twins"
+      echo "emergency_disable $h_d $h_c"; } > "$TWINS_BASELINE" && echo "blessed $TWINS_BASELINE"
+fi
+read -r _ want_d want_c < <(grep '^emergency_disable ' "$TWINS_BASELINE" 2>/dev/null || echo "x - -")
+if [ "$h_d" = "$want_d" ] && [ "$h_c" = "$want_c" ]; then
+    ok "28e emergency_disable unchanged on both sides since the last review"
+elif [ "$h_d" != "$want_d" ] && [ "$h_c" != "$want_c" ]; then
+    bad "28e emergency_disable changed on BOTH sides" "confirm the two edits are the same decision, then: ./test/selfupdate/run.sh --bless-twins"
+elif [ "$h_d" != "$want_d" ]; then
+    bad "28e emergency_disable changed in deploy.sh ONLY" "does the controller need the same change? if not, say why, then --bless-twins"
+else
+    bad "28e emergency_disable changed in update-control.sh ONLY" "does the fallback in deploy.sh need the same change? if not, say why, then --bless-twins"
+fi
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
