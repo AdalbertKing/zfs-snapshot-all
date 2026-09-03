@@ -352,6 +352,19 @@ front end never edits the config file:
                                     job in the config removes the whole managed
                                     cron block: an empty schedule is a legal
                                     outcome of a removal, not a broken config.
+  zfs-backup.sh purge-replica-copy NAME [--dst=POOL/BASE] [--source=A,B] [--yes]
+                                    Destroys the COPY on the medium -- the other
+                                    half of remove-replica, which deliberately
+                                    leaves it. Asks the gate first and REFUSES a
+                                    wrong medium; imports one that is in the slot
+                                    but exported, and exports it again only if
+                                    this run imported it. Without --yes it prints
+                                    what would go and destroys nothing.
+                                    POOL/BASE itself is KEPT: it is the dataset
+                                    the gate identifies the right disk by.
+                                    --dst is for the usual case, where the job
+                                    was removed first and nothing records the
+                                    destination any more.
 
 Explicit two-host lifecycle (the one-command --source= forms above wrap this):
   zfs-backup.sh add-client NAME --host=HOST[:PORT] [--target=X] [--bandwidth=N] [--profile=NAME]
@@ -5611,6 +5624,158 @@ cmd_remove_replica() {
     fi
     log "replica '$name' removed from the schedule. The COPY on that medium was not touched -- it is still a copy; deleting it is a separate, deliberate act."
 }
+
+# purge-replica-copy NAME -- destroy the copy itself, on the medium.
+#
+# The gap this closes was named by remove-replica's own last line: "the COPY on
+# that medium was not touched -- deleting it is a separate, deliberate act."
+# Separate and deliberate it is; what was missing was any verb to perform it.
+# Owner, 2026-09-02, after a lab teardown left 645M of dead replica on a disk
+# with nothing in the package able to name it, let alone remove it.
+#
+# WHY IT DOES NOT DESTROY $dst ITSELF. That dataset is the medium's identity:
+# zfs-media-gate.sh is handed `--dataset $dst` and uses its presence to tell the
+# RIGHT disk from a different one that happens to carry a pool of the same name.
+# Destroying it would leave a medium the gate can no longer recognise, which is
+# a worse state than the one being cleaned up. Only the per-source children
+# under it come out.
+#
+# WHY IT READS THE CONFIG BUT DOES NOT REQUIRE IT. The tidy order is
+# purge-replica-copy then remove-replica, and then the section is there to say
+# where the copy lives. The order that actually happens is the reverse -- the
+# job is stopped first and the copy is noticed later -- and by then nothing
+# records the destination at all. --dst covers that case; without either, this
+# refuses rather than guessing which dataset on the disk was ours.
+#
+# THE GATE IS ASKED, NEVER ASSUMED. A wrong medium is refused outright: the one
+# failure mode that matters here is destroying somebody else's data because a
+# different disk was in the slot, and that is exactly the distinction the gate
+# exists to make. A medium that is present but exported is imported for the
+# duration and exported again afterwards -- and only if THIS run imported it,
+# the same rule the replica job follows.
+cmd_purge_replica_copy() {
+    local name="" config="" dst="" src="" assume_yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --config=*) config="${a#*=}" ;;
+            --dst=*)    dst="${a#*=}" ;;
+            --source=*) src="${a#*=}" ;;
+            --yes|-y)   assume_yes=1 ;;
+            -*)         die "purge-replica-copy: unknown option '$a'" ;;
+            *)          if [ -z "$name" ]; then name="$a"; else die "purge-replica-copy: takes exactly one name"; fi ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh purge-replica-copy NAZWA [--dst=POOL/BASE] [--source=A,B] [--yes]"
+
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+
+    # Read the section when it is still there. Same awk shape as list-replicas:
+    # a config is data, never a program.
+    local TAB; TAB="$(printf '\t')"
+    if [ -z "$dst" ] && [ -r "$config" ]; then
+        local row; row=$(awk -v want="$name" '
+            /^\[replica:/ { n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); inside=(n==want); next }
+            /^\[/ { inside=0; next }
+            inside {
+                line=$0; sub(/^[ \t]+/,"",line)
+                k=line; sub(/[ \t]*=.*$/,"",k)
+                v=line; sub(/^[^=]*=[ \t]*/,"",v)
+                if (k=="dst") d=v; else if (k=="source") s=v
+            }
+            END { if (d != "") print d "\t" s }
+        ' "$config")
+        if [ -n "$row" ]; then
+            dst="${row%%${TAB}*}"
+            [ -n "$src" ] || src="${row#*${TAB}}"
+        fi
+    fi
+    [ -n "$dst" ] || die "purge-replica-copy: no [replica:$name] in $config and no --dst= given. This command will not guess which dataset on that medium was ours -- pass --dst=POOL/BASE (and --source=A,B if the children are not all of them)."
+
+    local pool="${dst%%/*}"
+    local gate="$SCRIPT_DIR/zfs-media-gate.sh"
+    [ -x "$gate" ] || die "purge-replica-copy: $gate is missing or not executable"
+
+    # Ask the gate where the medium stands before touching anything.
+    local imported_here=0 st
+    "$gate" status "$pool" "$name" --dataset "$dst" --quiet >/dev/null 2>&1; st=$?
+    case "$st" in
+        0) : ;;
+        2) die "purge-replica-copy: the gate reports the WRONG medium in the slot for '$name' (pool '$pool' is imported but does not carry $dst). Refusing -- destroying datasets on somebody else's disk is the one mistake this cannot take back." ;;
+        *)
+            if zpool import 2>/dev/null | awk -v p="$pool" '$1=="pool:" && $2==p {found=1} END{exit !found}'; then
+                log "medium for '$name' is in the slot but not imported -- importing it for this run"
+                "$gate" attach "$pool" "$name" --dataset "$dst" >/dev/null 2>&1 \
+                    || die "purge-replica-copy: the gate refused to import '$pool' -- nothing was touched"
+                imported_here=1
+            else
+                die "purge-replica-copy: the medium for '$name' (pool '$pool') is not here. Nothing was touched; put the disk in and run this again."
+            fi ;;
+    esac
+
+    # What would come out. Enumerated from the sources when we know them, and
+    # from the children of $dst when we do not -- never by pattern.
+    local victims="" d used
+    if [ -n "$src" ]; then
+        local _oi="$IFS"; IFS=','
+        for d in $src; do
+            IFS="$_oi"; [ -n "$d" ] || continue
+            zfs list -H -o name "$dst/$d" >/dev/null 2>&1 && victims="${victims:+$victims }$dst/$d"
+        done
+        IFS="$_oi"
+    else
+        local _kids; _kids=$(zfs list -H -o name -d 1 "$dst" 2>/dev/null)
+        while IFS= read -r d; do
+            [ -n "$d" ] && [ "$d" != "$dst" ] && victims="${victims:+$victims }$d"
+        done <<PRCEOF
+$_kids
+PRCEOF
+    fi
+
+    if [ -z "$victims" ]; then
+        log "nothing to purge: $dst holds no copy for '$name'"
+        [ "$imported_here" -eq 1 ] && "$gate" detach "$pool" "$name" --engine-rc 0 >/dev/null 2>&1
+        return 0
+    fi
+
+    echo ">>> ===================================================================="
+    echo ">>> purge-replica-copy '$name' -- DESTROYS DATA on the medium"
+    echo ">>> ===================================================================="
+    for d in $victims; do
+        used=$(zfs list -H -o used "$d" 2>/dev/null || echo '?')
+        # SIZE ONLY, no snapshot count. Counting them would need a third
+        # snapshot-listing probe in this file, and test 67c pins that there
+        # are exactly two -- the local probe and the remote one -- so that a
+        # third, hand-rolled probe trips it. Raising that ceiling for a display
+        # counter would spend a real guard on a nicety; 'used' is the fact that
+        # matters before a destroy anyway.
+        printf '>>>   %-52s %s\n' "$d" "$used"
+    done
+    echo ">>>   $dst itself is KEPT -- it is what the gate matches the medium by."
+    if [ "$assume_yes" -ne 1 ]; then
+        echo ">>> plan only. Nothing was destroyed. Add --yes to carry it out."
+        [ "$imported_here" -eq 1 ] && "$gate" detach "$pool" "$name" --engine-rc 0 >/dev/null 2>&1
+        return 0
+    fi
+
+    local rc=0
+    for d in $victims; do
+        zfs destroy -r "$d" 2>&1 | sed 's/^/>>>   /'
+        if zfs list -H -o name "$d" >/dev/null 2>&1; then
+            warn "  $d survived the destroy"; rc=1
+        else
+            log "  destroyed $d"
+        fi
+    done
+    if [ "$imported_here" -eq 1 ]; then
+        "$gate" detach "$pool" "$name" --engine-rc "$rc" >/dev/null 2>&1 \
+            || warn "the medium was imported by this run and the gate could not export it again -- it is still imported"
+    fi
+    [ "$rc" -eq 0 ] && log "replica copy for '$name' purged from $dst. The SCHEDULE is untouched: if the job still exists it will re-seed on its next run."
+    return "$rc"
+}
+
 
 cmd_local_backup() {
     # target_given separates "the operator did not say" from "the operator said
@@ -11619,6 +11784,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;
         remove-replica)   shift; cmd_remove_replica "$@" ;;
+        purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
         install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
         remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;

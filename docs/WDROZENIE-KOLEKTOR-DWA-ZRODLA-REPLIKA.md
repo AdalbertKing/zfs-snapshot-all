@@ -301,6 +301,29 @@ Na każdym źródle, z jego własnej konsoli:
 zarządzany i mówi o tym wprost. Żaden z tych czasowników nie kasuje datasetów
 ani kopii na nośniku: „unpairing ends the relationship, not the backup".
 
+**Kopie na nosniku zdejmuje osobne polecenie** -- od 2026-09-02, bo wczesniej
+nie bylo zadnego i po rozbiorce labu 645 M martwej repliki lezalo na dysku bez
+czasownika, ktory potrafilby ja choćby nazwac:
+
+```bash
+./zfs-backup.sh purge-replica-copy weekly              # plan, nic nie kasuje
+./zfs-backup.sh purge-replica-copy weekly --yes        # wykonanie
+```
+
+Trzy rzeczy warte zapamietania:
+
+- **Kolejnosc ma znaczenie.** Po `remove-replica` sekcja `[replica:]` znika i
+  nic juz nie zapisuje, gdzie ta kopia lezy -- wtedy trzeba podac
+  `--dst=POOL/BASE` recznie. Wygodniej odwrotnie: najpierw
+  `purge-replica-copy`, potem `remove-replica`.
+- **Sam `POOL/BASE` zostaje.** To po nim brama rozpoznaje wlasciwy dysk
+  (`--dataset`); jego skasowanie zostawiloby nosnik, ktorego nic nie umie
+  zidentyfikowac.
+- **Zly nosnik = odmowa.** Polecenie pyta brame, zanim cokolwiek tknie, i przy
+  `wrong_medium` konczy bez kasowania. Nosnik obecny, ale wyeksportowany,
+  zostanie zaimportowany na czas operacji i wyeksportowany z powrotem --
+  wylacznie jesli to ten przebieg go zaimportowal.
+
 ## 9. Pułapki, które ten lab znalazł
 
 | pułapka | co robić |
