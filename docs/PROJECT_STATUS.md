@@ -69,8 +69,39 @@
   Bez tego operator, który pomylił jedną z dwóch nazw profili w jednej linii,
   dowiadywałby się o tym przy pierwszym `activate-client` na żywym hoście.
 
-  Nie dowiedzione na żywo: `zfsbackup-live-pair` i `rux-live-chain` wymagają
-  dwóch hostów z rootem i ZFS-em. Obowiązki zostają otwarte.
+  **DOWIEDZIONE NA ŻYWO 2026-09-03, pve9 (192.168.28.99) -> pve10
+  (192.168.28.97).** Oba hosty na gałęzi `7ba4699`, self-update wstrzymany
+  mechanizmem samego pakietu (`update-hold`), predykcje spisane PRZED biegiem.
+  Profile: cel `d30h24`, źródło `d7h24` — różnią się jedną linią (`keep`), i
+  **żaden nie ma bloku `[prune]`**, więc retencja idzie ścieżką
+  `PROFILE_DS_FILE`: dokładnie tą, na której strażnik się wykładał.
+
+  | co | wynik |
+  |---|---|
+  | rekord klienta | `SOURCE_PROFILE=d7h24` obok `PROFILE=d30h24` |
+  | render | cel `-D30`, źródło `-D7`, godzinowe `-H24` po obu stronach |
+  | zainstalowany crontab | te same liczby, w linii prune każdej ze stron |
+  | **prune naprawdę tnie inaczej** | z 39 snapshotów: źródło **7**, cel **30** |
+  | literówka | odmowa w `add-client`, nazywa flagę, brak rekordu |
+  | niezgodna rodzina | odmowa; `target patterns` **niepuste** |
+  | kontrola ujemna: bez flagi | `-D30` po OBU stronach |
+
+  Wiersz `target patterns: [automated_daily automated_hourly]` jest osobnym
+  dowodem poprawki: przed nią ta lista była pusta i odmowa trafiała każdego.
+
+  Punkt czwarty — reaktywacja nie nadpisuje ręcznej edycji (REV-107) — wyszedł
+  przez odmowę, która sama jest dowodem: po ręcznej zmianie źródłowego `-D7` na
+  `-D3` nowo wyrenderowany blok niósł `-D3`, a instalacja stanęła dlatego, że
+  zainstalowany crontab wciąż miał `-D7`. Gdyby reaktywacja przeładowała
+  zapisany preset, render dałby `-D7` i odmowy by nie było.
+
+  Lab rozebrany do zera: `remove-client` + `--leave`, datasety skasowane,
+  crontaby wrócone do stanu sprzed labu, oba klony z powrotem na `main`
+  @ `2eb209a`, aktualizacje wznowione, `clean-relationships.sh` czysty na obu.
+
+  Obowiązek `zfsbackup-live-pair` jest tym pokryty **poza `setup-server`** —
+  oba hosty były już postawione, więc ten krok nie był wykonywany.
+  `rux-live-chain` (topologia łańcuchowa RUX) **zostaje otwarty**.
 
 
 - **Silniki: pre-pass długich opcji miał DRUGĄ kopię option-stringa i kopie się
