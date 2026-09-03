@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8597,12 +8597,14 @@ CLIENT_NAME=evil
 PATH=/nonexistent
 STATE=active
 EOF
+# The refusal is a die, and since the fatal-die change below it ends the
+# program even from the list view's per-record subshell: an inventory that
+# silently skipped the file it could not trust would be the fail-open shape.
 out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
-if printf '%s' "$out" | grep -q "evil.conf: 'PATH' is not a field name" \
-        && printf '%s' "$out" | grep -q '^pve2 .*state=active'; then
-    ok "records: a record naming a shell variable as a field is refused, and the other records still list"
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "evil.conf: 'PATH' is not a field name"; then
+    ok "records: a record naming a shell variable as a field is refused by name, and status stops there"
 else
-    bad "records: a record naming a shell variable as a field is refused, and the other records still list" "rc=$rc" "$out"
+    bad "records: a record naming a shell variable as a field is refused by name, and status stops there" "rc=$rc" "$out"
 fi
 rm -f "$RD/clients/evil.conf"
 
@@ -8647,6 +8649,48 @@ if [ "$lk_out" = "[2M][hdd/a b] [][][b] [b][hdd/a hdd/b]" ]; then
     ok "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone"
 else
     bad "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone" "$lk_out"
+fi
+
+
+# ============================================================================
+# `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
+# eligible, also under `--section fataldie`. set-endpoint parses --host through
+# `read ... <<< "$(parse_endpoint_arg "$host")"`: an invalid host makes the
+# parser die INSIDE the substitution. On main that FATAL ended the subshell
+# only, `read` got an empty host:port, and the command carried on to refuse
+# the switch a second time for an unrelated reason ("no final catch-up has
+# been run") -- two FATALs for one mistake, the first of which changed nothing.
+# Discriminating control: on main the second FATAL is printed and this fails.
+# Proven by RUNNING the program, not by sourcing it: a sourced harness cannot
+# observe the property (lib-backup-common.sh says why).
+# ============================================================================
+FD="$WORK/fataldie"; rm -rf "$FD"; mkdir -p "$FD/clients" "$FD/rel"
+cat > "$FD/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=seed_complete
+EOF
+before=$(cat "$FD/clients/pve2.conf")
+out=$(CLIENTS_DIR="$FD/clients" RELATIONSHIPS_DIR="$FD/rel" bash "$ZFSBACKUP" set-endpoint pve2 --host='bad host' 2>&1); rc=$?
+nfatal=$(printf '%s\n' "$out" | grep -c '^FATAL:')
+if [ "$rc" -eq 1 ] && [ "$nfatal" -eq 1 ] && printf '%s' "$out" | grep -q 'invalid endpoint host' \
+        && ! printf '%s' "$out" | grep -q 'refusing to switch' \
+        && [ "$(cat "$FD/clients/pve2.conf")" = "$before" ]; then
+    ok "fatal die: a die inside a \$( ) ends set-endpoint at that FATAL -- one message, status 1, nothing after it ran"
+else
+    bad "fatal die: a die inside a \$( ) ends set-endpoint at that FATAL -- one message, status 1, nothing after it ran" \
+        "rc=$rc fatals=$nfatal" "$out"
+fi
+
+# The opt-out is a name at the site, and it has to keep working: `status NAME`
+# on a record with no pairing manifest reports the peer as unknown instead of
+# aborting the view (the loader dies inside the probe's substitution).
+out=$(CLIENTS_DIR="$FD/clients" RELATIONSHIPS_DIR="$FD/rel" bash "$ZFSBACKUP" status pve2 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q '^Klient: *pve2' && ! printf '%s' "$out" | grep -q '^FATAL:'; then
+    ok "fatal die: the status view's confined probe still reports a manifest-less record instead of dying"
+else
+    bad "fatal die: the status view's confined probe still reports a manifest-less record instead of dying" "rc=$rc" "$out"
 fi
 
 echo "--------------------------------------------"

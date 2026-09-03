@@ -10388,8 +10388,13 @@ cmd_status() {
     # Only the detail view asks. The no-argument list stays local and fast, and
     # its PAUSED_LOCAL flag is a sound hint: disable-client establishes the
     # local pause FIRST, so a disabled relationship is a paused one there too.
+    # die_confine_to_subshell: the loader dies on a record without a manifest,
+    # and here that is the UNKNOWN case the view reports, not a reason to
+    # abort the view. The only site in this program where a die is meant to
+    # end the substitution and nothing else.
     local peerstate
-    peerstate=$( load_client_and_connection "$cpath" >/dev/null 2>&1 \
+    peerstate=$( die_confine_to_subshell
+                 load_client_and_connection "$cpath" >/dev/null 2>&1 \
                  && peer_pair_state >/dev/null 2>&1 \
                  && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
 
@@ -12019,6 +12024,10 @@ rux_entry() {
 # `source` this file to reach the pure helper functions without also running
 # the dispatch below. A real invocation always has BASH_SOURCE[0]==$0.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    # A `die` inside a `$( )` ends the program, not just the substitution --
+    # see lib-backup-common.sh. Armed here, in the main shell of a real run,
+    # and deliberately NOT when a suite sources this file.
+    die_arm_fatal
     case "${1:-}" in
         setup-server)     shift; cmd_setup_server "$@" ;;
         # REV-20260810-097 F3: the canonical public entrypoint is the bare

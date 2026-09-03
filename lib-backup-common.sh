@@ -19,7 +19,52 @@
 # Fatal/diagnostic output. One implementation; both programs must fail the same
 # way so that operator muscle memory and log greps transfer between them.
 warn() { echo "!!! $*" >&2; }
-die()  { echo "FATAL: $*" >&2; exit 1; }
+
+# `die` FROM INSIDE A COMMAND SUBSTITUTION HAS TO END THE PROGRAM.
+#
+# `exit 1` alone is correct in the main shell and a no-op everywhere a value is
+# read through `$( )`: `config="$(pick ...)"` runs pick in a SUBSHELL, so the
+# exit kills the subshell, the assignment gets the empty string, and the caller
+# carries on. Measured on the lab, 2026-08-27, `restore lab1 --plan` on a real
+# collector printed THREE consecutive FATALs and exited 0. A verb that prints
+# FATAL and returns success is worse than one that crashes.
+#
+# zfs-restore.sh fixed it for itself first ("the same change to zfs-backup.sh's
+# ~9000 lines is not something a lab evening can prove safe"); since 2026-09-03
+# both programs share this one. $$ is the MAIN shell's pid even inside $( );
+# $BASHPID is the current shell's. They differ exactly when we are in a
+# subshell, which is the case that used to fail open: then the main shell is
+# sent TERM, whose trap (armed below) exits 1 -- bash runs it as soon as the
+# substitution it is waiting on completes, so the caller's next line does not
+# run. Proven both ways before shipping: with the kill the next line does not
+# run and the status is 1; without it the line runs and the status is 0.
+#
+# ARMED ONLY WHEN THE FILE IS THE PROGRAM: each program calls die_arm_fatal
+# under its `BASH_SOURCE[0] == $0` guard. `$$` is the shell that sourced it, and
+# a harness that sources the program to call its functions directly IS that
+# shell -- the signal would kill the harness (measured: test/restore/run.sh
+# went down silently before its first assertion). When sourced, `die` therefore
+# stays `exit 1`, the fail-open behaviour this fixes. Said plainly rather than
+# papered over: a suite that sources a program CANNOT observe the fatal-die
+# property and must not claim to. It is proven by running the program.
+#
+# The one legitimate "die means only this subshell" site -- cmd_status probing
+# the peer through load_client_and_connection to report UNKNOWN rather than
+# abort the view -- says so explicitly with die_confine_to_subshell inside its
+# `$( )`. That is the whole opt-out: a name at the site, never a global switch.
+DIE_MAIN_PID=""
+die() {
+    echo "FATAL: $*" >&2
+    [ -n "$DIE_MAIN_PID" ] && [ "$BASHPID" != "$DIE_MAIN_PID" ] && kill -TERM "$DIE_MAIN_PID" 2>/dev/null
+    exit 1
+}
+die_arm_fatal() {   # call once, from the program's main shell, under its BASH_SOURCE guard
+    DIE_MAIN_PID=$$
+    trap 'exit 1' TERM
+}
+die_confine_to_subshell() {   # call INSIDE a $( ): a die there ends the subshell only
+    DIE_MAIN_PID=""
+}
 
 # ------------------------------------------------------------------------------
 # The server-side config written by `zfs-backup.sh setup-server` and read by
