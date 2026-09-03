@@ -764,9 +764,16 @@ CTPLUS
             # column no longer shows, the caption now says outright; pinning
             # both is the point, because dropping the sentence would leave a
             # rate with no stated basis, which is where this started.
+            #
+            # And the caption must name a divisor the READER CAN SEE. It said
+            # "LACZNY czas przebiegow" for a day after the column carrying that
+            # total was removed -- a basis stated in terms of a number no longer
+            # on the page. Owner, 2026-09-03, reading a real digest off pve9:
+            # "mail w nieaktualnym formacie". avg x count IS that total, and
+            # both factors are on the row, so the arithmetic stays checkable.
             _hdr=$(printf '%s' "$_plus" | grep -m1 'czas max')
             if printf '%s' "$_hdr" | grep -qE 'przyrost +transfer +czas ostatni +czas sr\. +czas max' \
-               && printf '%s' "$_plus" | grep -q 'Transfer = przyrost podzielony przez LACZNY czas'; then
+               && printf '%s' "$_plus" | grep -qF 'Transfer = przyrost / (czas sr. x przebiegow)'; then
                 ok "digest: the time columns are last/average/worst, and the rate says what it divided by"
             else
                 bad "digest: the time columns are last/average/worst, and the rate says what it divided by" "$_hdr"

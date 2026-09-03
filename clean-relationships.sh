@@ -213,9 +213,14 @@ discover() {
         SEEN_LABEL["${b#zfsbackup-}"]=1
     done
 
-    # Collector: pairing keys, keyed by address. Four files per peer, and only
-    # three of them are removed by remove-client -- _alias_known_hosts survives,
-    # and it is the one the generated cron lines actually pass to -k.
+    # Collector: pairing keys, keyed by address. Four files per peer.
+    #
+    # Until 2026-09-03 only three of them were removed on teardown --
+    # _alias_known_hosts survived, and it is the one the generated cron lines
+    # actually pass to -k. This comment recorded that as a standing fact for
+    # months; deploy.sh --unpair now removes it, so a fresh teardown leaves
+    # none of the four. The scan stays: it is what finds the ones already made,
+    # and a key file is a trace whoever wrote it.
     for f in "$PEER_KEY_DIR"/*_ed25519 "$PEER_KEY_DIR"/*_alias_known_hosts; do
         [ -e "$f" ] || continue
         b=$(basename "$f"); b="${b%_ed25519}"; b="${b%_alias_known_hosts}"
