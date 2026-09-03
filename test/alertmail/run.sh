@@ -38,12 +38,10 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../harness.sh"
 for fn in mta_present mta_name mail_queue_depth alert_delivery_verdict alert_delivery_probe; do
-    eval "$(sed -n "/^$fn() {/,/^}/p" "$DEPLOY_SRC")"
-    if ! declare -F "$fn" >/dev/null; then
-        echo "FATAL: could not extract $fn from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
-        exit 1
-    fi
+    eval "$(product_fn "$DEPLOY_SRC" "$fn")"
 done
 
 # deploy.sh's own log/warn, verbatim: warn() must keep incrementing PROBLEMS,
