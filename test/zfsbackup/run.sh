@@ -2408,6 +2408,97 @@ else
     bad "clobber: disjoint jobs already running in the target are not silently replaced" "rc=$rc out=$out"
 fi
 
+# --- A RETENTION EDIT IS THE SAME JOB, NOT A DELETION ----------------------
+#
+# Measured on a live pair, pve9 -> pve10, 2026-09-03. An operator edits
+# `retain` in the installed config and re-activates; the guard refuses, and
+# tells them to "move the other workload out of this account first". There is
+# no other workload. The job it names is the very one being edited.
+#
+# That blocks a workflow REV-20260811-107 explicitly APPROVED. Its finding F1
+# is this operator, in these words: "Administrator edits only remote SOURCE
+# retention in canonical CONFIG to 6H/2D because the production source is
+# space-constrained", followed by an ordinary reactivation. REV-107 made the
+# COMPOSITION preserve that edit -- proven live, the re-render did carry it --
+# and its evidence was a unit suite, so nothing ever put the INSTALL guard on
+# that path. Preserved and then refused at the door.
+#
+# It is also the architecture the tree states elsewhere: audit-source-retention
+# calls the installed config "runtime truth". A guard that refuses to install
+# what the config says is refusing to let the truth take effect.
+#
+# The exemption is deliberately the narrowest one that helps: the SAME line,
+# byte for byte, except for the retention flags. Job name (which carries host,
+# template and client label), script, ssh flags, -P reservations, dataset and
+# pattern must all still match.
+CLR="$WORK/clobber-retention"; mkdir -p "$CLR/bin"; : > "$CLR/new.conf"
+cat > "$CLR/target-retention.cron" <<'EOF'
+# BEGIN zfs-backup-managed
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh -R -L c1 "acct@h:tank/b" "automated_daily" -D7 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CLR/proposal-retention.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh -R -L c1 "acct@h:tank/b" "automated_daily" -D3 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+cat > "$CLR/bin/crontab" <<EOF
+#!/bin/bash
+cat "$CLR/target-retention.cron"
+exit 0
+EOF
+chmod +x "$CLR/bin/crontab"
+
+out=$( PATH="$CLR/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLR/proposal-retention.txt'; }; assert_target_block_not_clobbered '$CLR/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ]; then
+    ok "clobber: a hand-edited RETENTION is the same job, and the install is not refused"
+else
+    bad "clobber: a hand-edited RETENTION is the same job, and the install is not refused" "rc=$rc out=$out"
+fi
+
+# ...and it does not pass QUIETLY. Retention is how much history exists; the
+# guard's whole promise is that nothing about a backup changes without being
+# said out loud. Excused, then named -- both values, so the operator reading
+# the confirmation sees 7 -> 3 and not just an absence of complaint.
+if case "$out" in *"-D7"*) true ;; *) false ;; esac \
+   && case "$out" in *"-D3"*) true ;; *) false ;; esac \
+   && case "$out" in *[Rr]"etention"*) true ;; *) false ;; esac; then
+    ok "clobber: the excused retention change is reported, naming the old and new value"
+else
+    bad "clobber: the excused retention change is reported, naming the old and new value" "out=$out"
+fi
+
+# NEGATIVE CONTROL, and the one that keeps the exemption honest: a line that
+# genuinely DISAPPEARS is still a deletion. Same crontab, but the proposal
+# drops the job instead of re-stating it with another retention. If this ever
+# passes, the normalizer above has stopped comparing anything that matters.
+cat > "$CLR/proposal-retention-gone.txt" <<'EOF'
+# BEGIN zfs-backup-managed
+9 * * * * /home/zfsbackup/zfs-snapshot-all/delsnaps.sh -R -L c1 "acct@h:tank/OTHER" "automated_daily" -D3 2>>/home/zfsbackup/cron.log
+# END zfs-backup-managed
+EOF
+out=$( PATH="$CLR/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+       "source '$ZFSBACKUP'; gencron_as_target() { cat '$CLR/proposal-retention-gone.txt'; }; assert_target_block_not_clobbered '$CLR/new.conf'" 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && case "$out" in *"would be DELETED"*) true ;; *) false ;; esac; then
+    ok "clobber: a job on a DIFFERENT dataset is still a deletion, retention normalizer or not"
+else
+    bad "clobber: a job on a DIFFERENT dataset is still a deletion, retention normalizer or not" "rc=$rc out=$out"
+fi
+
+# THE NORMALIZER IS NARROW, and this is the claim its comment makes: a flag is
+# only a retention flag when it is a whole argument. Two datasets whose NAMES
+# contain the text -- tank/rack-D7 and tank/rack-D3 -- are different datasets,
+# and a guard that confused them would excuse a real deletion.
+out=$( bash -c "source '$ZFSBACKUP'; printf %s 'a \"tank/rack-D7\" -D7 b' | retention_normalized_identity" 2>&1 )
+if [ "$out" = 'a "tank/rack-D7" -D<N> b' ]; then
+    ok "clobber: the retention normalizer leaves a dataset NAME containing -D7 alone"
+else
+    bad "clobber: the retention normalizer leaves a dataset NAME containing -D7 alone" "out=$out"
+fi
+
+
+
 # Re-installing the SAME jobs is an idempotent retry, not a deletion, and must
 # stay possible -- otherwise no config could ever be re-installed.
 cp "$CL/target.cron" "$CL/same.cron"

@@ -54,6 +54,12 @@ build_tree() {
     touch "$T/peers/oldpeer.scope" "$T/peers/oldpeer.scope.sha256"
     mkdir -p "$T/rel/oldpeer"
 
+    # A SCOPE that outlived everything else. Measured on pve9, 2026-09-03:
+    # a full deploy.sh --leave removed the manifest, the .scope and the hash
+    # and left .scope.request -- so the peer has no .conf, no gate dir and no
+    # account, and every id this audit discovers comes from one of those.
+    touch "$T/peers/strandedpeer.scope.request"
+
     # A bare gate directory with nothing else at all -- measured on the 11.x
     # pve1 host, left by a teardown that cleaned everything except this.
     mkdir -p "$T/rel/barepeer"
@@ -95,6 +101,19 @@ if grep -q "peers/oldpeer.conf" <<<"$out" && grep -q "rel/oldpeer" <<<"$out"; th
 else
     bad "audit sees the LABEL-keyed manifest and gate dir that remove-client leaves" "$out"
 fi
+
+# 2b. A SCOPE FILE WHOSE .conf IS GONE IS THE MOST ORPHANED A TRACE CAN BE,
+#     and until 2026-09-03 it was the one this audit could not see: ids are
+#     discovered from peers/*.conf, rel/*/ and the delegated accounts, so a
+#     leftover with none of the three was invisible -- and the audit answered
+#     "nothing orphaned", which is the single answer it exists to get right.
+if grep -q 'strandedpeer  \[ORPHAN\]' <<<"$out" \
+   && grep -q "peers/strandedpeer.scope.request" <<<"$out"; then
+    ok "audit finds a scope file left behind after --leave, with no .conf beside it"
+else
+    bad "audit finds a scope file left behind after --leave, with no .conf beside it" "$out"
+fi
+
 
 # 3. _alias_known_hosts is the single key file that survives remove-client, and
 #    it is the one the generated cron lines pass to -k.

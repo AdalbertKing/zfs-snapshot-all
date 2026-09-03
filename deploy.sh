@@ -3980,8 +3980,16 @@ do_leave() {
         fi
     fi
 
-    rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")"
-    log "leave: removed the join manifest and any scope file/hash for '$label'"
+    # The draft scope has THREE files, not two: .scope, .scope.sha256 and the
+    # .scope.request beside them holding what the collector asked for. The
+    # refusal path a few hundred lines up already knows they travel together --
+    # it tells the operator "rm $sfile $sfile.request" -- and this cleanup did
+    # not. Measured on pve9 after a full --leave, 2026-09-03: pve10.scope.request
+    # survived, naming a dataset that no longer existed, for a relationship that
+    # no longer existed.
+    rm -f "$mpath" "$(peer_scope_path "$label")" "$(peer_scope_granted_hash_path "$label")" \
+          "$(peer_scope_path "$label").request"
+    log "leave: removed the join manifest and any scope file/hash/request for '$label'"
 
     # THE PAIR GATE'S STATE DIRECTORY, which --leave used to leave behind while
     # saying "fully torn down". Found on pve1 and pve2 tearing the lab down,

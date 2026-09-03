@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0e71da0bedca46a7 -->
+<!-- status-covers-digest: a85df40b41813b5f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,47 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Dwie wady znalezione przez lab `--source-profile`, obie niezwiązane z tą
+  funkcją (2026-09-03).** Wyszły przy rozbiórce labu pve9 -> pve10, każda z
+  kontrolą, która oddziela je od zmienianego kodu.
+
+  **1. Ręczna edycja retencji blokowała instalację.** Operator zmienia `retain`
+  w zainstalowanym configu i reaktywuje; `assert_target_block_not_clobbered`
+  odmawia, radząc *„move the other workload out of this account first"* — a
+  jedyne zadanie, które wymienia, to właśnie to edytowane. Kontrola: edycja
+  retencji **celu** `-D30`→`-D25` daje identyczną odmowę, więc to nie ma nic
+  wspólnego z `--source-profile`.
+
+  To blokowało przepływ, który **REV-20260811-107 ZATWIERDZIŁ** tymi słowami:
+  *„Administrator edits only remote SOURCE retention... because the production
+  source is space-constrained"*, a potem zwykła reaktywacja. REV-107 sprawił,
+  że **kompozycja** zachowuje tę edycję — i zachowuje, dowiedzione na żywo —
+  ale jego dowodem była suita jednostkowa, więc strażnik instalacji nigdy nie
+  stanął na tej ścieżce. Polityka zachowana i odrzucona przy drzwiach.
+
+  Strażnik miał już trzy zwolnienia („to samo zadanie, zmienione w jednym
+  wymiarze": endpoint, wchłonięte pokrycie, minuta). Doszło czwarte, na
+  retencję, i **jako jedyne mówi na głos** — nazywa starą i nową wartość,
+  bo retencja to ilość historii. Dopasowanie jest wąskie: flaga musi być całym
+  argumentem poprzedzonym białym znakiem, więc dataset o nazwie
+  `tank/rack-D7` zostaje nietknięty. Kontrola ujemna: zadanie na **innym**
+  datasecie dalej jest kasowaniem i dalej jest odmawiane.
+
+  **2. `--leave` zostawiał trzeci plik scope, a audyt nie mógł go zobaczyć.**
+  Draft scope to trio: `.scope`, `.scope.sha256` i `.scope.request`.
+  `deploy.sh` sam zna tę parę w ścieżce odmowy (*„rm $sfile $sfile.request"*),
+  a sprzątanie kasowało dwa z trzech. Zmierzone na pve9: po pełnym `--leave`
+  został `pve10.scope.request`, wskazujący skasowany dataset dla nieistniejącej
+  relacji.
+
+  Druga połowa jest gorsza: `clean-relationships.sh` odkrywa identyfikatory z
+  `peers/*.conf`, `rel/*/` i kont delegowanych. Ślad, który nie ma żadnego z
+  tych trzech, był **nieodkrywalny**, nie tylko niewypisany — audyt odpowiadał
+  „nothing orphaned", czyli jedyną odpowiedź, którą ma obowiązek mieć dobrze.
+  Osierocone `.scope*` zasiewa teraz własny identyfikator. Dyskryminator:
+  kod sprzed poprawki 0 wzmianek, po poprawce 3.
+
 
 - **Silniki: pre-pass długich opcji miał DRUGĄ kopię option-stringa i kopie się
   rozjechały (2026-08-31, zmiana w plikach ZAMROŻONYCH za zgodą właściciela).**
