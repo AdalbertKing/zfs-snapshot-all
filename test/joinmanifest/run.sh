@@ -28,6 +28,12 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
+# The extracted function reads the manifest through record_load (lib-record.sh)
+# since 2026-09-03, exactly as deploy.sh does; the harness sources the same
+# file the program sources. die() is the lib's one dependency on its includer.
+die() { echo "FATAL: $*" >&2; exit 1; }
+# shellcheck disable=SC1091
+. "$REPO/lib-record.sh"
 eval "$(sed -n '/^verify_join_manifest() {/,/^}/p' "$DEPLOY_SRC")"
 if ! declare -F verify_join_manifest >/dev/null; then
     echo "FATAL: could not extract verify_join_manifest from $DEPLOY_SRC -- the sed anchors no longer match, update this suite" >&2
@@ -49,6 +55,19 @@ PEER_JOIN_TARGET="tank/backups"
 PEER_JOIN_ACCOUNT="zfsbackup-pve1"
 PEER_JOIN_FINGERPRINT="SHA256:abc123"
 EOF
+
+# THE MANIFEST IS DATA. A field carrying a command substitution must reach the
+# verifier as text and run nothing -- on main the read-back `.`-sourced the
+# file, so this touch fired as root during every --join. Discriminating
+# control: DEPLOY_SRC=<deploy.sh @ main> fails this assertion.
+EVIL="$TMPD/evil.conf"
+printf '# peer pairing manifest (join side)\nPEER_JOIN_ROLE=$(touch "%s/MANIFEST-EXECUTED")\nPEER_JOIN_AS="delegated"\n' "$TMPD" > "$EVIL"
+verify_join_manifest "$EVIL" pull delegated backup tank/backups zfsbackup-pve1 SHA256:abc123 "" >/dev/null 2>&1
+if [ ! -e "$TMPD/MANIFEST-EXECUTED" ]; then
+    ok "a command substitution inside a manifest field is data -- the read-back runs nothing"
+else
+    bad "a command substitution inside a manifest field is data -- the read-back runs nothing" "the substitution was executed"
+fi
 
 if verify_join_manifest "$GOOD" pull delegated backup tank/backups zfsbackup-pve1 SHA256:abc123 ""; then
     ok "a correctly rendered manifest verifies against the exact values it was rendered from"

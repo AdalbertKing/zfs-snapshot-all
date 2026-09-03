@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9eaa5c2f8eec1250 -->
+<!-- status-covers-digest: 538aa712353ef246 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -100,8 +100,19 @@
   czytane tak samo jak przez sourcing. Asercja w sekcji `records`:
   `DEFAULT_TARGET=$(touch …)` w `server.conf` dociera do `add-client` jako
   tekst i niczego nie uruchamia (na `main` plik powstaje).
-  **Świadomie NIE ruszone:** `deploy.sh` (`. "$mpath"`, `. peer.conf`),
-  `cron2conf.sh`. Ryzyko resztkowe: `die`
+  **`deploy.sh` domknięte na polecenie Ownera (2026-09-03, po PR #296):**
+  czytnik wyniesiony do własnego pliku `lib-record.sh` (sourcowany przez
+  `lib-backup-common.sh` i przez `deploy.sh`, który ma własne `die`/`warn` i
+  nie może wziąć wspólnej biblioteki); 14 miejsc `. "$mpath"`/`. "$_pm"`/
+  `. "$path"` w `deploy.sh` (manifesty parowania po obu stronach:
+  `PEER_SAVED_*` i `PEER_JOIN_*`, w tym read-back `verify_join_manifest`
+  wykonywany jako root przy każdym `--join`) czyta teraz `record_load
+  manifest`. `test/joinmanifest`: manifest z `$(touch …)` dociera do
+  weryfikatora jako tekst (na `main` PADA — sourcing wykonuje podstawienie);
+  harness sourcuje `lib-record.sh` jak program. Wpis `[file:lib-record.sh]`
+  w `test/deps.conf`, krawędzie source wykryte przez `impact.sh --verify`.
+  **Świadomie NIE ruszone:** `cron2conf.sh` — czyta crontab, nie pliki
+  KEY=VALUE, więc nie ma tu czego zamieniać na `record_load`. Ryzyko resztkowe: `die`
   w podpowłoce zagnieżdżonej w podpowłoce zabija główną powłokę, ale pośrednia
   podpowłoka dokańcza swoje linie — ten sam kształt, który `zfs-restore.sh`
   przyjął 2026-08-27.

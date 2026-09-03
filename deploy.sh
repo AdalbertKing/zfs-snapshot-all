@@ -115,6 +115,18 @@ else
     echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-scope.sh -- this checkout is incomplete; it carries the validators this script applies to every package it opens" >&2
     exit 1
 fi
+# Pairing manifests are KEY=VALUE files this script writes itself, and until
+# 2026-09-03 every reader below `.`-sourced them -- executed them as bash. They
+# are read as data now, through the same record_load that zfs-backup.sh uses
+# for its relationship records (lib-record.sh, shared; see its header for why
+# it is not lib-backup-common.sh).
+if [ -r "$_DEPLOY_DIR/lib-record.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_DEPLOY_DIR/lib-record.sh"
+else
+    echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-record.sh -- this checkout is incomplete; it carries the manifest reader, and sourcing a manifest instead would execute it" >&2
+    exit 1
+fi
 
 # Every cron line deploy.sh owns lives in ONE named block. Two of them used to
 # sit loose in root's crontab, indistinguishable from a human's -- see the
@@ -1372,8 +1384,7 @@ do_draft_scope_check() {
     [ -n "$label" ] || die "internal: do_draft_scope_check needs a label"
     mpath=$(peer_manifest_path "$label")
     [ -r "$mpath" ] || die "no pairing manifest for '$label' at $mpath -- run --join first"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     [ "${PEER_JOIN_AS:-}" != root ] \
         || die "'$label' joined with --as=root -- root already has full authority on this host, there is nothing to scope"
     [ "${PEER_JOIN_ROLE:-}" = pull ] \
@@ -1439,8 +1450,7 @@ do_draft_scope() {
     local mpath_draft PEER_JOIN_DATASETS="" PEER_JOIN_REQUESTED=""
     mpath_draft=$(peer_manifest_path "$label")
     if [ -r "$mpath_draft" ]; then
-        # shellcheck disable=SC1090
-        . "$mpath_draft"
+        record_load manifest "$mpath_draft"
     fi
     # The two are alternatives by construction (validate_peer_conf refuses a
     # package carrying both), so this is a choice between them, not a merge.
@@ -1621,8 +1631,7 @@ do_commit_scope_check() {
     [ -n "$label" ] || die "internal: do_commit_scope_check needs a label"
     mpath=$(peer_manifest_path "$label")
     [ -r "$mpath" ] || die "no pairing manifest for '$label' at $mpath -- run --join first"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     [ "${PEER_JOIN_AS:-}" != root ] \
         || die "'$label' joined with --as=root -- root already has full authority on this host, there is nothing to grant"
     [ "${PEER_JOIN_ROLE:-}" = pull ] \
@@ -2630,13 +2639,12 @@ do_allow_restore() {
     # so a restore can never be granted on a wider scope than the relationship
     # was ever given, and nothing has to be typed twice at three in the morning.
     #
-    # Read through peer_manifest_path and sourced, the way every other reader in
-    # this file does it. A hand-rolled parser here would be a second opinion
-    # about the manifest's format.
+    # Read through peer_manifest_path and record_load, the way every other
+    # reader in this file does it. A hand-rolled parser here would be a second
+    # opinion about the manifest's format.
     local _pm; _pm="$(peer_manifest_path "$label")"
     [ -r "$_pm" ] || die "--allow-restore=$label: no pairing manifest at $_pm -- this host has no record of that relationship, so there is nobody to delegate to and no scope to delegate over."
-    # shellcheck disable=SC1090
-    . "$_pm"
+    record_load manifest "$_pm"
     local account="${PEER_JOIN_ACCOUNT:-}"
     local RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
     [ -n "$account" ] || die "--allow-restore=$label: the manifest names no account, so a grant file would say yes to nobody."
@@ -2746,8 +2754,7 @@ do_deny_restore() {
     local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
     local _pm; _pm="$(peer_manifest_path "$label")"
     if [ -r "$_pm" ]; then
-        # shellcheck disable=SC1090
-        . "$_pm"
+        record_load manifest "$_pm"
         RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
         RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
     fi
@@ -3896,8 +3903,7 @@ do_leave() {
     [ -n "$label" ] || die "internal: do_leave needs a label"
     local mpath; mpath=$(peer_manifest_path "$label")
     [ -r "$mpath" ] || die "no join manifest for '$label' at $mpath -- nothing to leave (was --join even run here under this label?)"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     [ "${PEER_JOIN_ROLE:-}" = pull ] \
         || die "'$label' is role=${PEER_JOIN_ROLE:-?} -- --leave only tears down the PULL side (a scope-granted account on this host); a push peer's teardown is --unpair on the COLLECTOR, which owns that receive delegation"
     local account="${PEER_JOIN_ACCOUNT:-}"
@@ -6684,8 +6690,7 @@ do_pair() {
 
     if [ "$PEER_ROTATE" -eq 1 ]; then
         [ -r "$mpath" ] || die "--rotate needs an existing pairing for '$PEER_HOST' -- run --pair once first (without --rotate)"
-        # shellcheck disable=SC1090
-        . "$mpath"
+        record_load manifest "$mpath"
         [ "${PEER_ROTATING:-no}" = "yes" ] && die "peer '$PEER_HOST' already has a rotation in progress -- finish it with --revoke-old first, or remove ${PEER_KEY_DIR}/${label}_ed25519.new by hand to restart"
         PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
         PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
@@ -6712,8 +6717,7 @@ do_pair() {
             # the dataset list is allowed to change here (additively, below).
             local requested_datasets="$PEER_DATASETS" requested_named="$PEER_REQUESTED"
             local requested_mode="$PEER_MODE"
-            # shellcheck disable=SC1090
-            . "$mpath"
+            record_load manifest "$mpath"
             PEER_ROLE="${PEER_SAVED_ROLE:-$PEER_ROLE}"
             PEER_TARGET="${PEER_SAVED_TARGET:-$PEER_TARGET}"
             PEER_AS="${PEER_SAVED_AS:-$PEER_AS}"
@@ -7374,8 +7378,7 @@ verify_join_manifest() {
             PEER_JOIN_ROLE="" PEER_JOIN_AS="" PEER_JOIN_MODE="" PEER_JOIN_TARGET="" \
             PEER_JOIN_ACCOUNT="" PEER_JOIN_FINGERPRINT="" PEER_JOIN_REMOTE="" \
             PEER_JOIN_ACCOUNT_UID=""
-            # shellcheck disable=SC1090
-            . "$path" 2>/dev/null
+            record_load manifest "$path" 2>/dev/null
             printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
                 "$PEER_JOIN_ROLE" "$PEER_JOIN_AS" "$PEER_JOIN_MODE" "$PEER_JOIN_TARGET" \
                 "$PEER_JOIN_ACCOUNT" "$PEER_JOIN_FINGERPRINT" "$PEER_JOIN_REMOTE" \
@@ -7429,8 +7432,7 @@ do_join() {
     # driven by --rotate on the other side. ----
     local prior_granted_datasets=""
     if [ -r "$mpath" ]; then
-        # shellcheck disable=SC1090
-        . "$mpath"
+        record_load manifest "$mpath"
         # A guided --join rerun may arrive after scope commit. Preserve the
         # relationship-owned grant inventory when republishing the manifest;
         # otherwise the byte-identical scope/hash would correctly skip a
@@ -7683,8 +7685,7 @@ EOF
 do_revoke_old() {
     local label="$1" mpath="$2"
     [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' -- nothing to revoke"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     [ "${PEER_ROTATING:-no}" = "yes" ] || die "peer '$PEER_HOST' is not mid-rotation (manifest says rotating=no) -- nothing to revoke"
 
     local keyfile="$PEER_KEY_DIR/${label}_ed25519"
@@ -7795,8 +7796,7 @@ unpair_report_residual_access() {
 do_unpair() {
     local label="$1" mpath="$2"
     [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' on this host -- nothing to unpair (looked for $mpath)"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
 
     local local_user="${PEER_SAVED_LOCAL_USER:-}"
     unpair_assert_no_cron_users "$label" "$local_user"
@@ -8034,8 +8034,7 @@ draft_emit_uncovered() {
 do_draft_config() {
     local label="$1" mpath="$2"
     [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' yet -- run --pair (and --join on the peer) first"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     local keyfile="$PEER_KEY_DIR/${label}_ed25519"
     [ -f "$keyfile" ] || die "expected keyfile $keyfile not found"
     local remote_user="${PEER_SAVED_ACCOUNT:-root}"

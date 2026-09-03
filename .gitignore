@@ -15,6 +15,7 @@
 !lib-zfs-snap.sh
 !lib-profile.sh
 !lib-backup-common.sh
+!lib-record.sh
 !zfs-restore.sh
 !snapsend.sh
 !snapget.sh
