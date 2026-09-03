@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bbe12218cfe11a54 -->
+<!-- status-covers-digest: 6f67bf7d6bbb3f74 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -99,6 +99,91 @@
   przyjął 2026-08-27. Obowiązki ręczne `zfsbackup-live-pair` i
   `rux-live-chain` z `impact.sh` NIE wykonane w tej dostawie (zmiana nie
   dotyka parowania, ssh ani ZFS; formaty na dysku bez zmian).
+- **`--source-profile` nie działał na formie JEDNOKOMENDOWEJ — jedynej, którą
+  operator realnie wpisuje (2026-09-03).** Flaga została wpięta w `cmd_add_client`
+  i `cmd_local_backup`, gdy powstawała (#288), a trzecie wejście —
+  `zfs-backup.sh --source=HOST:DATASET ...`, czyli to, które SKŁADA
+  add-client→seed→activate w jedno — nigdy jej nie poznało i odpowiadało
+  `rux: unknown option --source-profile=...`.
+
+  **Skutek zmierzony na labie:** żeby wdrożyć relację z asymetryczną retencją,
+  trzeba było rozłożyć ją na `deploy.sh --pair` → ręczny przenos wsadu →
+  `--join` → `--commit-scope` → `add-client` → `seed` → `activate`, na dwóch
+  hostach — dokładnie tę sekwencję, którą komenda jednoliniowa istnieje po to,
+  żeby zdjąć z operatora. Właściciel wskazał to wprost: *"dlaczego nie dało się
+  stworzyć relacji podając i source i target w jednej komendzie"*.
+
+  **Naprawa:** czysty passthrough, tego samego kształtu co `--profile` obok —
+  deklaracja zmiennej, gałąź w parserze, jedna linia do `add_args`. Walidacja,
+  strażnik rodziny i zapis rekordu należą do `cmd_add_client` i nie są tu
+  powtarzane. `test/rux` 43 -> 45: przypadek dyskryminujący (pada na starym
+  kodzie, przechodzi po poprawce, sprawdzone `git stash`) plus kontrola
+  negatywna — pominięcie flagi nie przekazuje PUSTEGO `--source-profile=`.
+
+- **`add-client` wstrzykiwał wymyślony `--mode=backup` do parowania z peerem,
+  który już był dataset-driven, trwale zatruwając jego manifest (2026-09-03).**
+  Znalezione na żywo w LABIE `--source-profile` (pve9<->pve10, na polecenie
+  właściciela: "przetestuj na lab, zrób wdrożenie z niesymetryczną retencją").
+
+  **Przebieg.** `deploy.sh --pair --peer-datasets=hdd/labdata` sparował czysto,
+  scope skomitowany. Kolejny `add-client lab10 --source-profile=lab-lean` (bez
+  powtórzenia `--peer-datasets`) odświeżył parowanie i wysłał wsad, który
+  `--join` na pve10 słusznie odrzucił: *"peer.conf carries both PEER_CONF_MODE
+  and PEER_CONF_DATASETS"*.
+
+  **Przyczyna, ustalona `bash -x`.** `cmd_add_client` ma wygodny domyślny wybór
+  -- gdy nie dostanie ani `--mode`, ani `--datasets`, sam dopowiada
+  `mode=backup`, słuszny dla NOWEGO peera. Zastosowany bezwarunkowo, poleciał
+  też dla JUŻ sparowanego, dataset-driven peera -- `do_pair`'s własna logika
+  dziedziczenia (`pair_mode_after_inheritance`) nie ma jak odróżnić "operator
+  napisał --mode=backup" od "add-client to sobie dopowiedział", więc zbudowała
+  wsad niosący OBA pola: dataset lista odziedziczona poprawnie z manifestu,
+  i tryb wymyślony przez to wywołanie. Manifest na dysku
+  (`peers/<peer>.conf`) został przy tym trwale zatruty --
+  `PEER_SAVED_MODE=backup` zapisane tam, gdzie wcześniej było puste, więc
+  KAŻDE kolejne parowanie tego peera odziedziczałoby ten sam konflikt.
+
+  **Naprawa.** Domyślne `mode=backup` w `cmd_add_client` jest teraz warunkowe:
+  stosowane tylko gdy peer NIE jest jeszcze sparowany (sprawdzone przez
+  `peer_manifest_path`/`peer_label`, tym samym idiomem co bramka rerun tuż
+  obok). Dla istniejącego peera, gdy operator nie poda ani `--mode`, ani
+  `--datasets`, obie zmienne zostają puste -- `deploy.sh --pair` odziedziczy
+  wtedy dokładnie to, co manifest już niesie, zamiast dostać zmyślony rozkaz.
+  `test/rerun` +6 przypadków, dyskryminujących na starym kodzie (jeden case
+  `FAIL MODE=backup DATASETS=` na main, `PASS` po poprawce -- potwierdzone
+  `git stash`).
+
+  **Stan po znalezisku:** manifest `peers/192.168.28.97.conf` na pve9 (lab)
+  zostaje zatruty aż do wdrożenia tej poprawki i ręcznego re-parowania -- lab
+  `--source-profile` NIE jest jeszcze zaliczony, do powtórzenia po deploy.
+
+- **Self-update na koncie bez `rpool` kończył się FATAL na Fazie 8g, cicho, od
+  ~5 tygodni (2026-09-03).** Znalezione przy wdrożeniu #291: `deploy.sh
+  --self-update` na pve9/pve9b/pve10 (pula `hdd`, nie `rpool`) kończyło się
+  `rc=1` na „ZFS delegation" — `apply_repo_to_host` woła `deploy.sh` bez
+  żadnych flag, więc zawsze spadało na sztywny domyślny
+  `BACKUP_USER_DATASETS="rpool/data rpool/ROOT/pve-1"` (Proxmox). Ten default
+  istnieje od 2026-07-25; konto delegowane migrowało 2026-08-01 — czyli
+  ~840 cogodzinnych przebiegów na hosta kończonych FATAL, nigdy niezauważonych
+  (trafiało tylko do `last-apply.log`, nie do maila). Niegroźne praktycznie —
+  „skip" nie cofa istniejących uprawnień, wcześniejsze fazy (digest, crontab)
+  kończyły się poprawnie — ale exit code był fałszywie czerwony co godzinę.
+
+  **Naprawa, ten sam kształt co `SOURCE_PROFILE`:** zapisz wybór raz, przy
+  udanym użyciu, nie zgaduj przy każdym powtórzeniu. `deploy.sh` Fazy 8g, po
+  udanym grancie (`GRANTED_COUNT > 0`), zapisuje użytą listę datasetów do
+  `$UPDATE_STATE_DIR/grant-datasets` (`write_state_file`, ten sam prymityw co
+  `previous-revision`). `apply_repo_to_host` — w obu miejscach, gdzie ta
+  funkcja żyje (`update-control.sh` i jej bootstrapowy bliźniak wewnątrz
+  `deploy.sh`, oznaczone „kept in sync") — odczytuje ten plik i przekazuje
+  `--grant-datasets=<zapisana lista>` do `deploy.sh`; brak pliku = stare
+  zachowanie, bez zmian. `test/selfupdate` 25 -> 27, oba nowe przypadki
+  dyskryminujące (26 pada na starym kodzie, przechodzi na nowym; 27 to
+  kontrola negatywna — bez pliku żadna flaga nie jest wymyślana).
+
+  **Trzy hosty wymagały jednorazowego ręcznego zasiania** (`deploy.sh
+  --grant-datasets=hdd`) — wcześniejszy realny grant istniał tylko w `zfs
+  allow`, nigdy w nowym pliku stanu.
 
 - **`--unpair` zostawiał ALIASOWY przypięty klucz hosta; digest miał legendę
   sprzed zmiany kolumn (2026-09-03).** Znalezione przy wdrożeniu na flotę:
@@ -126,17 +211,16 @@
   `alert-digest.sh` v35 -> v36. `test/alertmail` asercja treści zaktualizowana
   (pinowała starą legendę, sama by jej zmiany nie złapała).
 
-  **Otwarte, zgłoszone przez właściciela, NIE naprawione tutaj:** digest z
-  pve9 (2026-09-03 07:00) wciąż wymienia zadania relacji rozebranych tygodnie
-  temu jako „(już nie w cronie)" — `replica copy (usbrep1/2/3/weekly)`,
-  `daily snapshot (local-labdata)`, kilka `gfs prune`/`standard_hourly backup`
-  z etykietami labowymi. Źródłem jest `cron.log`, do którego `clean-
-  relationships.sh` nigdy nie sięga — usuwa rekordy/klucze/konta, nie
-  historię w logu hosta. Nagrobek (`removed/<nazwa>.*`) niesie tylko nazwę
-  relacji, nie etykiety zadań, więc nie da się nim samym wygasić wierszy
-  tabeli. Wymaga decyzji: obcinać `cron.log` przy purge (ryzyko: kasowanie
-  historii audytowej), czy dawać digestowi własne okno wygaszania „już nie w
-  cronie" po N dni.
+  **Duchy w digeście — zbadane, ZAMKNIĘTE bez zmiany kodu (2026-09-03).**
+  Digest z pve9 wymieniał zadania relacji rozebranych jako „(już nie w
+  cronie)" — `replica copy (usbrep1/2/3/weekly)`, `daily snapshot
+  (local-labdata)`, kilka labowych. Sprawdzone na żywo na pve9: ostatni wpis
+  `local-labdata` w `cron.log` to 2026-09-01 — to ślad tegotygodniowych labów
+  z tej sesji, nie coś sprzed miesięcy. Digest ma już własne okno wygaszania,
+  `DIGEST_DAYS=7` (2026-09-02) — te wiersze wypadną z tabeli same, najpóźniej
+  2026-09-08. Rozwiązanie, o które proszono („własne okno wygaszania"), już
+  istniało; robiło dokładnie to, o co proszono. Nie trzeba obcinać `cron.log`
+  ani dokładać drugiego mechanizmu.
 
 
 - **Profil „prunowy" jako właściwy kształt dla retencji źródła (2026-09-03).**

@@ -963,6 +963,74 @@ for _p30 in default prod d7h24-gfs; do
     fi
 done
 
+# ------------------------------------------------------------------------------
+# 31. --source-profile REACHES add-client THROUGH THIS ENTRY POINT TOO.
+#
+# The flag was wired into cmd_add_client and cmd_local_backup when it shipped
+# and this third door never learned it, so the one-command form answered
+# `rux: unknown option --source-profile=...`. Measured 2026-09-03 on the
+# pve9<->pve10 lab: enrolling a relationship with asymmetric retention meant
+# doing pair/join/commit-scope/add-client/seed/activate by hand -- the exact
+# sequence this command exists to replace.
+#
+# Asserted on what cmd_add_client RECEIVES, because that is the whole contract
+# here: parsing plus passthrough. The validation and the recording behind it
+# are cmd_add_client's, already covered by test/zfsbackup.
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_file() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/31/clients"; mkdir -p "$WORK/31/clients"
+    RELATIONSHIPS_DIR="$WORK/31/relationships"
+    DEPLOY="$INST_DEPLOY"
+    # Records what it was handed, and leaves behind the same shape the real
+    # one does -- rux reads the record back before seeding, so a stub that
+    # writes nothing stops the flow for a reason unrelated to this assertion.
+    cmd_add_client() {
+        printf '%s\n' "$*" > "$WORK/31/addargs"
+        printf 'CLIENT_NAME=pve2\nPEER_HOST=pve2\nSTATE=pending_enroll\n' > "$CLIENTS_DIR/pve2.conf"
+    }
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup \
+              --profile=d7h24 --source-profile=lab-lean --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] \
+   && grep -q -- '--source-profile=lab-lean' "$WORK/31/addargs" 2>/dev/null \
+   && grep -q -- '--profile=d7h24' "$WORK/31/addargs" 2>/dev/null; then
+    ok "31. --source-profile is accepted here and threaded through to add-client"
+else
+    bad "31. --source-profile is accepted here and threaded through to add-client" \
+        "rc=$rc out=$out addargs=$(cat "$WORK/31/addargs" 2>/dev/null)"
+fi
+
+# 31b. The discriminating control. Omitting the flag must pass NOTHING -- an
+#      empty --source-profile= would reach cmd_add_client as a named preset
+#      called "", and the relationship would carry a source preset nobody asked
+#      for. Omitted means the target profile on both sides, unchanged.
+: > "$INST_PAIR_LOG"
+out="$( (
+    profile_validate_file() { return 0; }
+    read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+    CLIENTS_DIR="$WORK/31b/clients"; mkdir -p "$WORK/31b/clients"
+    RELATIONSHIPS_DIR="$WORK/31b/relationships"
+    DEPLOY="$INST_DEPLOY"
+    cmd_add_client() {
+        printf '%s\n' "$*" > "$WORK/31b/addargs"
+        printf 'CLIENT_NAME=pve2\nPEER_HOST=pve2\nSTATE=pending_enroll\n' > "$CLIENTS_DIR/pve2.conf"
+    }
+    cmd_seed()     { :; }
+    cmd_activate() { :; }
+    rux_entry --source=pve2:rpool/data --target=hdd/backup \
+              --profile=d7h24 --install --yes
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q -- '--source-profile' "$WORK/31b/addargs" 2>/dev/null; then
+    ok "31b. omitting it passes no --source-profile at all (not an empty one)"
+else
+    bad "31b. omitting it passes no --source-profile at all (not an empty one)" \
+        "rc=$rc out=$out addargs=$(cat "$WORK/31b/addargs" 2>/dev/null)"
+fi
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

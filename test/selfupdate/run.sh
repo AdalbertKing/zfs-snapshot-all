@@ -103,9 +103,9 @@ rm -rf "$_ip" 2>/dev/null
 write_stub_deploy() {   # <dir>
     cat > "$1/deploy.sh" <<'STUB'
 #!/bin/bash
-# stub deploy.sh -- records that the apply step ran
+# stub deploy.sh -- records that the apply step ran, and with what arguments
 _d=$(cd "$(dirname "$0")" && pwd)
-echo "applied $(git -C "$_d" rev-parse --short HEAD 2>/dev/null)" >> "${_d}-applied"
+echo "applied $(git -C "$_d" rev-parse --short HEAD 2>/dev/null) args:$*" >> "${_d}-applied"
 exit ${STUB_DEPLOY_RC:-0}
 STUB
     chmod +x "$1/deploy.sh"
@@ -745,6 +745,49 @@ else
         "pre=${_pre:-<brak>} out_tail=$(printf '%s' "$out" | tail -2)"
 fi
 rm -f /tmp/.zfsapplycron
+
+# --- 26. A RECORDED GRANT LIST IS PASSED BACK ON THE NEXT APPLY ------------
+#
+# Measured live on pve9/pve9b/pve10 (owner's fleet, 2026-09-03): every hourly
+# --self-update calls deploy.sh bare, so Phase 8g always fell through to the
+# hardcoded Proxmox default ("rpool/data rpool/ROOT/pve-1") -- which does not
+# exist on a host whose only pool is "hdd", FATAL every single run since the
+# delegated-account migration (2026-08-01). Whatever an operator once typed by
+# hand ("--grant-datasets=hdd") was never remembered for the next apply.
+#
+# $GRANT_DATASETS_FILE is deploy.sh's own record of the last list it actually
+# granted something with; apply_repo_to_host now reads it back and passes it
+# on, so the SAME list survives every future bare self-update.
+pair=$(mk_scenario applygrant); AG_ORIGIN=${pair%%|*}; AG_CLONE=${pair#*|}
+S26="$WORK/state-applygrant"; mkdir -p "$S26"; chmod 700 "$S26"
+printf 'hdd\n' > "$S26/grant-datasets"
+rm -f "$AG_CLONE-applied"
+out="$(REPO_DIR="$AG_CLONE" UPDATE_STATE_DIR="$S26" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$AG_CLONE-applied" ] && grep -qF 'args:--grant-datasets=hdd' "$AG_CLONE-applied"; then
+    ok "apply: a recorded grant-datasets file is passed back to deploy.sh as --grant-datasets="
+else
+    bad "apply: a recorded grant-datasets file is passed back to deploy.sh as --grant-datasets=" \
+        "rc=$rc applied=$(cat "$AG_CLONE-applied" 2>/dev/null)" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
+
+# --- 27. ...AND WITHOUT ONE, NOTHING IS INVENTED ---------------------------
+#
+# Negative control for 26: no grant-datasets file at all -- the ordinary case
+# on every host until it first records one -- must call deploy.sh with no
+# --grant-datasets, exactly as before this change. A stub that always passed
+# something (even blank) would not discriminate the mechanism above.
+pair=$(mk_scenario applygrantoff); AH_ORIGIN=${pair%%|*}; AH_CLONE=${pair#*|}
+S27="$WORK/state-applygrantoff"; mkdir -p "$S27"; chmod 700 "$S27"
+rm -f "$AH_CLONE-applied"
+out="$(REPO_DIR="$AH_CLONE" UPDATE_STATE_DIR="$S27" bash "$DEPLOY" --self-update 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -s "$AH_CLONE-applied" ] && ! grep -q -- '--grant-datasets' "$AH_CLONE-applied"; then
+    ok "apply: with no recorded grant-datasets file, deploy.sh is called exactly as before (no invented flag)"
+else
+    bad "apply: with no recorded grant-datasets file, deploy.sh is called exactly as before (no invented flag)" \
+        "rc=$rc applied=$(cat "$AH_CLONE-applied" 2>/dev/null)" \
+        "out_tail=$(printf '%s' "$out" | tail -2)"
+fi
 
 
 echo "--------------------------------------------"
