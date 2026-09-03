@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 30af1b5deb2ce58e -->
+<!-- status-covers-digest: 7fa05a2dd5cd4fba -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,28 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`--draft-config`, `--rotate` i `--revoke-old` bez `--pair` wdrażały host
+  zamiast odmówić (2026-09-04).** Znalezione w labie `--draft-config`
+  (`docs/discussions/LAB-DRAFT-CONFIG-WYNIK-2026-09-03.md`, własność (F)).
+
+  **Przyczyna.** Każda z tych trzech flag ustawia wyłącznie własną zmienną;
+  `PAIR_MODE` ustawia jedynie `--pair` (i `--unpair`), a `do_pair` — który je
+  wszystkie rozdziela — biegnie tylko w tym trybie. Linia poleceń nazywająca
+  którąkolwiek z nich **bez** `--pair` nie odmawiała i nie rysowała draftu:
+  spadała do zwykłej ścieżki i uruchamiała **pełne wdrożenie hosta**, razem z
+  `git pull` w Fazie 2. Zmierzone na pve9 z runbooka labu, który podawał
+  wyglądającą na udokumentowaną formę `deploy.sh --peer=X --draft-config`:
+  pobrało repo (przesuwając HEAD pod labem, który celowo wstrzymał
+  aktualizacje), przeinstalowało skrypty, ruszyło crontab i padło na Fazie 8g
+  — ani razu nie mówiąc, że `--draft-config` zostało zignorowane.
+
+  **Naprawa.** Jeden strażnik przy istniejącym teście wzajemnego wykluczenia:
+  którakolwiek z trzech flag przy `PAIR_MODE=0` kończy `rc=2`, nazywa siebie i
+  podaje poprawną formę. `test/draftscope` +12 asercji (3 flagi × 3 własności
+  + kontrola pozytywna, że z `--pair` ta sama flaga przechodzi walidację);
+  dyskryminujące — na kodzie sprzed poprawki pada 9 z nich, w tym „did NOT
+  fall through to the deployment path".
 
 - **Rodzina `delsnaps.sh`/`lib-zfs-snap.sh` zmierzona: jedna kopia, dwa
   homonimy, nic do odmrażania (2026-09-03, „3").** Trzy wspólne nazwy.
