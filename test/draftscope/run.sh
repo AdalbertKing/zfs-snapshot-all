@@ -365,9 +365,14 @@ done
 # (as a normal user it then stops at the root check, which is proof it got past).
 _out=$(bash "$DEPLOY_SRC" --pair --peer=10.0.0.1 --draft-config 2>&1 >/dev/null); _rc=$?
 check "WITH --pair the flag is accepted (not rc=2)" "0" "$([ "$_rc" != 2 ]; echo $?)"
+# On a ROOT box (the Linux container this project's implementer works in)
+# the run passes the root check too and stops one gate later, at the ZFS
+# preflight ("'zfs list' fails") -- equally proof it got past validation.
+# Measured 2026-09-03: the "run as root"-only form failed there while CI,
+# which is not root, was green (the same shape as E-log R2: one side).
 case "$_out" in
-    *"run as root"*) check "...and execution reaches past argument validation" "0" "0" ;;
-    *)               check "...and execution reaches past argument validation" "0" "1: $_out" ;;
+    *"run as root"*|*"'zfs list' fails"*|*"Part 1"*) check "...and execution reaches past argument validation" "0" "0" ;;
+    *) check "...and execution reaches past argument validation" "0" "1: $_out" ;;
 esac
 
 echo "--------------------------------------------"
