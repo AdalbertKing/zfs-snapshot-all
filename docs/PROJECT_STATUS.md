@@ -22,7 +22,7 @@
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
 - **Skrypty hostów są plikami w checkoucie, nie heredokami (2026-09-03,
-  decyzja Ownera z listy redukcji; lab do wykonania).** `notify-fail.sh`,
+  decyzja Ownera z listy redukcji; LAB WYKONANY na pve9).** `notify-fail.sh`,
   `notify-warn.sh`, `alert-digest.sh` i `check-pool-capacity.sh` powstawały z
   czterech niecytowanych heredoków w `deploy.sh`: ~1350 linii, w których każdy
   runtime'owy `$` musiał być `\$`, backtick w KOMENTARZU wykonywał polecenie
@@ -64,12 +64,29 @@
   `alertmail` 87/0, `impact` 63/0, `draftscope` 36/0, `pause` 83/0,
   `joinmanifest` 32/0, `pairgate` 84/0, `joinremote` 12/0, `quiescehelper`
   119/0, `selfupdate` 42/0, `join` 93/0, `restoregrant` 105/3 (trzy asercje
-  wymagające konta bez roota). **Obowiązek ręczny `deploy-check-only` NIE
-  wykonany** — runbook `docs/discussions/LAB-HOSTSCRIPTS-2026-09-03.md`
-  (audyt z gałęzi, wdrożenie, `cmp` pięciu plików, notify/digest na kopii
-  kolejki z roota i z konta, odmowa bez `alert-env.sh`, rollback na `main`,
-  który przez stary marker nadpisuje pliki z powrotem). Do czasu labu ta
-  zmiana jest IMPLEMENTED, nie wdrożona.
+  wymagające konta bez roota). **Lab na hoście WYKONANY 2026-09-03** przez
+  wątek z dostępem do floty (`pve9`, konto `zfsbackup`, głowa `04492a4`;
+  runbook `docs/discussions/LAB-HOSTSCRIPTS-2026-09-03.md`, wynik
+  `LAB-HOSTSCRIPTS-WYNIK-2026-09-03.md`, commit `4735711`): `--check-only` z
+  gałęzi zgłasza cztery „not the checkout's copy" i dwa `alert-env.sh
+  missing` (root i konto) nie zapisując nic (`md5sum -c` ×4, mtime bez
+  zmian); wdrożenie: pięć `installed … from hostscripts/` plus trzy pliki
+  konta, `cmp` SAME ×5, potem pięć `present (current)` i pięć `already
+  current`; `notify-fail` kolejkuje jako root i z konta (rc=0); digest na
+  kopii prawdziwej kolejki daje nagłówek, blok stanu i tabelę przebiegów
+  (rc=0); bez `alert-env.sh` obok WSZYSTKIE trzy skrypty odmawiają po nazwie
+  (rc=1); rollback na `main` przywraca markery v9/v7/v36/v6 przez stary
+  grep markera i przywrócone skrypty DZIAŁAJĄ (rc=0, niosą własną
+  preambułę); produkcyjna kolejka nietknięta (7 wpisów przed i po). Jedna
+  przewidziana różnica NIE wystąpiła i słusznie: `diff` starego i nowego
+  digestu ma jedną klasę (preambuła), bo na tej flocie awaryjny adres był
+  już `root` w obu wersjach, a prawdziwy siedzi w `/etc/zfs-alert.conf`;
+  klasa druga pojawi się tylko na hoście z adresem wrenderowanym przez
+  `--email=` w heredok — takiego hosta flota nie ma. Dwa odstępstwa
+  wykonawcy wciągnięte do runbooka: `update-hold` na czas labu (godzinny
+  `update-control.sh` robiłby `ff-only` na odłączonej głowie) i kontrola
+  działania skryptów po rollbacku. Nie próbowano: hosta z wrenderowanym
+  adresem, ścieżki `--email=` z gałęzi, prawdziwego wysłania maila.
 
 - **Każde wycięcie funkcji produktu po kotwicy idzie przez `product_fn`, a
   brakująca kotwica kończy SUITĘ (2026-09-03, ostatni punkt listy redukcji

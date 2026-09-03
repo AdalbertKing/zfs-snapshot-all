@@ -1,8 +1,11 @@
 # Lab — skrypty hostów jako pliki w checkoucie (`hostscripts/`), nie heredoki
 
-Status: **DO WYKONANIA** przez wątek z dostępem do floty. Spisany w sesji,
-która hostów nie widzi. Wynik proszę spisać do `LAB-HOSTSCRIPTS-WYNIK-2026-09-03.md`
-tym samym układem co `LAB-PR295-WYNIK-2026-09-03.md`.
+Status: **WYKONANY 2026-09-03** na `pve9` (konto delegowane `zfsbackup`),
+głowa `04492a4` — wynik w `LAB-HOSTSCRIPTS-WYNIK-2026-09-03.md` (commit
+`4735711`): trzy własności potwierdzone. Spisany w sesji, która hostów nie
+widzi; poniżej wersja poprawiona o dwa odstępstwa nazwane przez wykonawcę
+(wstrzymanie autoaktualizacji w kroku 1, kontrola działania po rollbacku w
+kroku 4), żeby następny przebieg nie potykał się o to samo.
 
 Gałąź: `claude/package-translation-estimate-jisaqu`, głowa `2f78d1f` (PR #302;
 zmiana w `345ce58`). Punkt odniesienia: `main` w chwili startu labu (`da1e8d4`
@@ -55,7 +58,13 @@ cp -a /root/scripts/alert-digest.sh /root/alert-digest.sh.before-lab
 
 ### 1. Audyt z gałęzi, zanim cokolwiek się zmieni
 
+**Najpierw wstrzymać autoaktualizację.** `update-control.sh` chodzi co godzinę
+o :15 i robi `git merge --ff-only`; krok poniżej zostawia repo na odłączonej
+głowie, więc trafienie w tę minutę to kolizja. Pierwszy przebieg tego nie
+przewidział — wykonawca założył hold sam.
+
 ```
+/root/.zfs-snapshot-all-update-state/update-control.sh --hold "lab hostscripts"   # albo: touch update-hold, jak robi to update-control.sh
 git fetch origin claude/package-translation-estimate-jisaqu
 git checkout --detach origin/claude/package-translation-estimate-jisaqu
 ls hostscripts/                                 # 5 plikow
@@ -99,6 +108,10 @@ mkdir -p /tmp/lab-alone; cp /root/scripts/notify-fail.sh /tmp/lab-alone/
 Porównanie z „przed": `diff <(sed 1,2d /root/alert-digest.sh.before-lab) <(sed 1,2d /root/scripts/alert-digest.sh)`
 — oczekiwane różnice TYLKO: blok preambuły → jedna linia `. "$(dirname "$0")/alert-env.sh" …`,
 oraz `${ZFS_ALERT_EMAIL:-<adres>}` → `${ZFS_ALERT_EMAIL:-root}`. Nic więcej.
+Druga klasa występuje TYLKO na hoście, któremu `deploy.sh --email=` wrenderował
+adres w heredok; na pve9 (i na całej tej flocie) awaryjny adres w starym
+skrypcie też był `root`, a prawdziwy siedzi w `/etc/zfs-alert.conf` — wtedy diff
+ma jedną klasę i to jest poprawne, zmierzone 2026-09-03.
 
 ### 4. Rollback i powrót
 
@@ -106,7 +119,12 @@ oraz `${ZFS_ALERT_EMAIL:-<adres>}` → `${ZFS_ALERT_EMAIL:-root}`. Nic więcej.
 git checkout --detach <main-sprzed-labu>
 bash deploy.sh 2>&1 | grep -E 'notify-fail|notify-warn|alert-digest|check-pool-capacity'   # cztery "upgrading" ze starych heredokow
 sed -n 2p /root/scripts/alert-digest.sh          # v36 z powrotem
+# przywrocone skrypty maja DZIALAC, nie tylko miec wlasciwe markery (dodane po pierwszym przebiegu):
+ZFS_ALERT_MODE=daily ZFS_ALERT_QUEUE=/tmp/lab-q3 ZFS_ALERT_STATE_DIR=/tmp/lab-st3 /root/scripts/notify-fail.sh "lab job" "po rollbacku"; echo rc=$?
+PATH=/tmp/lab-bin:$PATH ZFS_ALERT_QUEUE=/tmp/lab-queue ZFS_DIGEST_QUIET=daily /root/scripts/alert-digest.sh; echo rc=$?
 git checkout main && git pull --ff-only          # albo zostac na galezi do scalenia
+rm -f /root/scripts/alert-env.sh /home/*/alert-env.sh   # po rollbacku nieuzywane
+/root/.zfs-snapshot-all-update-state/update-control.sh --resume-updates   # zdjac hold
 ```
 
 Po scaleniu PR godzinny `update-control.sh` wdroży to samo na resztę floty

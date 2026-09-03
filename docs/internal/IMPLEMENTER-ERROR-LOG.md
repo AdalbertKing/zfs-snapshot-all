@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -393,6 +393,28 @@ negative control.
 *Rule.* R1. And its corollary for helpers: run the guard from the exact
 calling position it will have in production -- inside the substitution, the
 subshell, the function -- not from a top-level shell where every exit works.
+
+### E31 — A runbook that parks a host on a detached HEAD, written by someone who forgot the host updates itself
+**2026-09-03, LAB-HOSTSCRIPTS runbook, caught by the executing thread.**
+
+*Genesis.* Step 1 of the runbook checks the host's repository out at the
+branch head (`git checkout --detach`). Every host runs `update-control.sh`
+hourly at :15, which does `git merge --ff-only` on that checkout -- a
+mechanism I had described myself, in the same runbook's closing paragraph, as
+the thing that would roll the change out after the merge. A lab that crossed
+:15 would have had its checkout moved under it. The executor placed an
+`update-hold` on their own initiative and named the omission.
+
+*Cause.* R2: the runbook was written from a session that cannot see the host,
+and the host's own background processes stayed on the other side of that
+boundary even while I was writing about them. The same shape as E26 (a fleet
+fact carried from a comment), one step worse: this fact was not stale, it was
+in the document, and I did not apply it to the procedure.
+
+*Rule.* R2. For a runbook, the concrete check: list what RUNS on the host
+unattended (cron, the updater, the digest) and ask of each step whether that
+process can act on the same state in the meantime. The runbook now holds the
+updater first and resumes it last.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 
