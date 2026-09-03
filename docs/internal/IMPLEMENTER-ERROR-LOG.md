@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -518,6 +518,29 @@ preflight -- Phase 1 and a Phase 2 `git fetch` -- before dying on ZFS.
 A test that reaches the product's deployment path as root is R5 in test
 form (mutating the checkout the suite reads); the control now runs as an
 unprivileged user or skips with its reason.
+
+### E35 — An estimate built from textbook rates, with the repository's own rate one `git log` away
+**2026-09-04, PYTHON-TRANSLATION-ESTIMATE, caught by the Owner ("this
+package was built in a month").**
+
+*Genesis.* The per-file estimate used 200/150/110 lines and 40 assertions
+per day -- generic single-developer figures -- and arrived at 266 days for
+a package whose history shows ~1,657 lines and ~59 assertions a day over
+53 working days. The model was explicit and arguable, as intended, but its
+constants came from outside the repository while the calibrating
+measurement sat in the same tree.
+
+*Cause.* R2. "How fast does work happen here" is a fact about THIS
+project and its process; I carried a fact from the general case across
+that boundary without measuring the specific one. Stating the assumption
+openly made the error visible, not correct.
+
+*Rule.* R2, applied to estimates: before quoting a rate, measure the rate
+the same repository has already demonstrated (`git log` dates, lines,
+assertions), state both, and let the measured one drive the number. The
+document now carries the calibration (26 days, ×0.5 for translation
+against a written spec, stated as the assumption) and keeps the old table
+as the upper bound it is.
 
 ## 2b. Suite runs — was it worth it, and at what scale
 
