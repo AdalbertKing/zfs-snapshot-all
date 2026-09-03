@@ -539,6 +539,35 @@ else
     echo "     rekord: $(cat "$pg_tmp/idrec" 2>/dev/null | cut -c1-200)"
 fi
 
+# ---- G. the one copy OUTSIDE the engines: json_escape in delsnaps.sh ---------
+# delsnaps.sh is standalone (no `source`, its header says so) and carries three
+# names lib-zfs-snap.sh also defines. Measured 2026-09-03: destroy_one and
+# emit_stats are HOMONYMS, not copies -- different signatures, different jobs
+# (delsnaps reports deleted/kept counts and destroys through run_zfs with a
+# remote; the lib reports a transfer's resumed flag and destroys locally) --
+# and delsnaps.sh's own comment above emit_stats says so. json_escape is the
+# one true copy, "kept as a separate copy here". Pinned identical, normalised
+# like the engine twins, so the day one side learns a new escape the other is
+# named. Both files are frozen; this measures, it does not merge.
+DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
+LIBZFS="${LIBZFS:-$REPO/lib-zfs-snap.sh}"
+_je_d="$(hash_of "$DELSNAPS" json_escape)"; _je_l="$(hash_of "$LIBZFS" json_escape)"
+if [ "$_je_d" = ABSENT ] || [ "$_je_l" = ABSENT ]; then
+    bad "G json_escape is defined in both delsnaps.sh and lib-zfs-snap.sh" "delsnaps=$_je_d lib=$_je_l"
+elif [ "$_je_d" = "$_je_l" ]; then
+    ok "G json_escape in delsnaps.sh is the lib's, byte for byte after normalisation"
+else
+    bad "G json_escape in delsnaps.sh is the lib's, byte for byte after normalisation" \
+        "the two copies differ -- a new escape landed on one side only (delsnaps.sh is standalone and cannot source the lib)"
+fi
+for _hn in destroy_one emit_stats; do
+    if [ "$(hash_of "$DELSNAPS" "$_hn")" != "$(hash_of "$LIBZFS" "$_hn")" ]; then
+        ok "G $_hn is a homonym, not a copy -- the two bodies differ, as their signatures say they must"
+    else
+        bad "G $_hn is a homonym, not a copy" "the two bodies became identical: either a copy crept in or one side lost its job -- read both"
+    fi
+done
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
