@@ -563,11 +563,32 @@ announce_transfer_size() {   # <send_cmd> <remote_host> <remote_user>
     if [ -n "$rhost" ]; then
         out=$(ssh -n "${SSH_OPTS[@]}" "$ruser@$rhost" "$dry" 2>/dev/null) || return 0
     else
-        out=$(eval "$dry" 2>/dev/null) || return 0
+        # Split into words exactly as transfer_data splits the real send
+        # (`IFS=' ' read -r -a`), never eval: the dry run then cannot run
+        # anything the send itself would not, and a name that carries shell
+        # syntax reaches zfs as a name (2026-09-03).
+        local dry_args
+        IFS=' ' read -r -a dry_args <<< "$dry"
+        out=$("${dry_args[@]}" 2>/dev/null) || return 0
     fi
     size=$(printf '%s\n' "$out" | awk '$1=="size"{print $2; exit}')
     [ -n "$size" ] || return 0
     log 0 "about to move $(human_bytes "$size") -- mbuffer reports progress below"
+}
+
+# The received subtree's canmount, in two spellings that must stay one
+# behaviour: CODE for the local side, and the same one-liner as TEXT for the
+# remote side, because a command that crosses ssh has to be text. Until
+# 2026-09-03 there was only the text, and the local branch ran it with eval --
+# a command composed from a string in the engine's own shell, for a job three
+# lines of shell do directly. test/evalfree pins that the two spellings act
+# the same on the same listing.
+canmount_noauto_subtree() {   # <dataset>  -- the local side
+    zfs list -H -o name -t filesystem -r "$1" 2>/dev/null \
+        | while IFS= read -r d; do zfs set canmount=noauto "$d" 2>/dev/null; done
+}
+canmount_noauto_subtree_cmd() {   # <dataset> -> the same, as text for ssh
+    printf '%s' "zfs list -H -o name -t filesystem -r '$1' 2>/dev/null | while IFS= read -r d; do zfs set canmount=noauto \"\$d\" 2>/dev/null; done"
 }
 
 # Bytes as a human reads them. Local to this file's reporting; nothing decides
@@ -1768,12 +1789,11 @@ process_dataset() {
     # Applied to the whole received subtree, filesystems only (a volume has no
     # canmount). Skipped under -U, where mounting is what was asked for.
     if [ $RECURSIVE -eq 1 ] && [ "$TARGET_CANMOUNT" = "noauto" ]; then
-        local canmount_cmd="zfs list -H -o name -t filesystem -r '$tgt_dataset' 2>/dev/null | while IFS= read -r d; do zfs set canmount=noauto \"\$d\" 2>/dev/null; done"
         if [ -n "$remote_host" ]; then
-            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$canmount_cmd" 2>/dev/null \
+            ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$(canmount_noauto_subtree_cmd "$tgt_dataset")" 2>/dev/null \
                 || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
         else
-            eval "$canmount_cmd" 2>/dev/null \
+            canmount_noauto_subtree "$tgt_dataset" 2>/dev/null \
                 || log 2 "Could not set canmount=noauto across $tgt_dataset (needs delegated 'canmount')"
         fi
     fi

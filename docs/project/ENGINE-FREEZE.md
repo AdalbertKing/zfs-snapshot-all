@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 da4e0dc01ce58238fa94a6eaa2434a03ef50d09f -->
-<!-- frozen: snapget.sh 100755 26eba87719845a1dc609022ea161f12dff1deba9 -->
+<!-- frozen: snapsend.sh 100755 77027b4598728d043e4a347d12e707b1ff34c4b3 -->
+<!-- frozen: snapget.sh 100755 eaa136115d1631b59386a993bb40d8ca24a0d91c -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 e668fa7ee19fba21ea50f6ad1208ffcb30daaa0c -->
+<!-- frozen: lib-zfs-snap.sh 100644 815091201f438853c75cd746e036e47d4f7358c3 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -67,6 +67,53 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-09-03 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **the six `eval` sites
+  inside the engines are gone.** Owner direction: "deklaracja Gate 7,
+  odmrożenie silników pod sześć eval" -- pre-authorised, in those words, before
+  the change was made; the refreeze below is that authorisation spent.
+
+  NO BEHAVIOUR CHANGES on the ZFS side: the same `zfs send -nP` dry run, the
+  same `zfs set canmount=noauto` over the same listing, the same three sampled
+  sends in the autotune probe. What changes is HOW the engine's own shell runs
+  them. Three mechanisms, one per site kind:
+
+  1. `announce_transfer_size`, local branch, both engines (2 sites). The
+     dry-run string was handed to `eval`. It is now split into words with
+     `IFS=' ' read -r -a` and executed as an argv -- the SAME split
+     `transfer_data` already applies to the real send three lines later, so
+     the dry run can no longer run anything the send itself would not. A
+     snapshot name carrying shell syntax reaches `zfs` as a name; under eval it
+     was a command. The remote branch is unchanged (a string crossing ssh is
+     text by necessity).
+  2. The received subtree's `canmount=noauto`, `snapsend.sh` (1 site). One
+     command string served both sides: text for ssh, `eval` for local. Now a
+     pair, `canmount_noauto_subtree` (code, local) and
+     `canmount_noauto_subtree_cmd` (the same one-liner as text, remote), with
+     the test pinning that both produce the identical `zfs set` calls on the
+     same listing and that the text is byte-identical to the old one.
+  3. `tune_probe_stream`, `lib-zfs-snap.sh` (3 sites). The snippet that runs
+     on the data side built the sampled send as a string `H` and eval'd it
+     three times (warm-up, raw count, compressed count). The snippet now
+     defines a shell function `h()` and calls it three times. The snapshot
+     name is expanded once, by the snippet's own shell, as one word.
+
+  Regression: `test/evalfree` (new, 16 assertions): the word count of `eval`
+  outside comments across the five frozen files is 0; `announce_transfer_size`
+  lifted from each engine and run under a pseudo-tty against a stub `zfs`
+  that records its argv -- the send string carries `$(touch MARKER)`, the
+  announcement appears, the stub saw the literal text as an argument, the
+  marker was never created (under the old code it was); the canmount pair
+  acts the same on a three-dataset listing, with a name containing a space
+  among them; the probe snippet defines `h()` and contains no `eval`.
+  Negative control against `main` (`b6e593a`): the count assertions, the
+  announce marker/argv assertions, and a FATAL on the absent canmount helper
+  -- exactly the discriminating ones. `test/twins` re-blessed after the diff
+  was read: only `process_dataset` in `snapsend.sh` moved, and only the
+  canmount block. `tune` 56/56, `twins` 59/59, `recursion` 74/74, `subtree`
+  10/10, `runsuffix` 15/15, `pairpause` 18/18 locally. The live-ZFS proof
+  (a real transfer with a tty, a `-r` receive on both target kinds, a run
+  with `-A`) is the lab in `docs/discussions/LAB-ENGINE-EVAL-2026-09-03.md`.
 
 - 2026-08-31 (snapsend.sh, snapget.sh): **the long-option pre-pass had a second
   copy of the option string, and the copies disagreed.** Owner direction:
