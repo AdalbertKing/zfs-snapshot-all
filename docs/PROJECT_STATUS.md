@@ -96,9 +96,25 @@
   (`. "$mpath"`, `. peer.conf`), `cron2conf.sh`. Ryzyko resztkowe: `die`
   w podpowłoce zagnieżdżonej w podpowłoce zabija główną powłokę, ale pośrednia
   podpowłoka dokańcza swoje linie — ten sam kształt, który `zfs-restore.sh`
-  przyjął 2026-08-27. Obowiązki ręczne `zfsbackup-live-pair` i
-  `rux-live-chain` z `impact.sh` NIE wykonane w tej dostawie (zmiana nie
-  dotyka parowania, ssh ani ZFS; formaty na dysku bez zmian).
+  przyjął 2026-08-27.
+
+  **Lab na hostach WYKONANY 2026-09-03** przez wątek z dostępem do floty
+  (runbook `docs/discussions/LAB-PR295-RECORDS-DIE-2026-09-03.md`, wynik
+  `docs/discussions/LAB-PR295-WYNIK-2026-09-03.md`, commit `8da98a8`), gałąź
+  `b0c7632` vs `main` `37ad17d`, żaden warunek stopu nie wystąpił. Krok 1
+  read-only na produkcyjnych configach pve0 (76/76 linii) i pve2 (37/37)
+  identyczny po normalizacji ścieżki drzewa; z prawdziwym rekordem i manifestem
+  na pve9 82/82, w stanie spauzowanym (`record_load pause`) 89/89.
+  **Kontrola ujemna z hosta:** `set-endpoint --host='bad host'` na gałęzi 1
+  FATAL, na `main` 2 FATAL z drugim `refusing to switch … to ':'` — pusty
+  endpoint po `die` w podpowłoce widoczny wprost. Reaktywacja no-op, crontab
+  bez zmian. Forma jednokomendowa `--install --yes --grant-remotely` do
+  `active`. Obowiązki `zfsbackup-live-pair` i `rux-live-chain` **pokryte**
+  (para pve9→pve10, throwaway, rozebrana do zera). Zmierzone przy okazji:
+  **zero rekordów relacji na wszystkich siedmiu hostach** (`clients/` puste,
+  produkcja chodzi z `jobs.<host>.conf`), więc wymiar „rekordy sprzed dodania
+  pól" jest na tej flocie nietestowalny i pozostaje bez dowodu na żywo; nie
+  próbowano też `PAUSED_REMOTE` ani `disable-client`.
 - **`--source-profile` nie działał na formie JEDNOKOMENDOWEJ — jedynej, którą
   operator realnie wpisuje (2026-09-03).** Flaga została wpięta w `cmd_add_client`
   i `cmd_local_backup`, gdy powstawała (#288), a trzecie wejście —

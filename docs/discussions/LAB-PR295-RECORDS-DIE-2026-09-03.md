@@ -1,9 +1,11 @@
 # Lab dla PR #295 — rekord to dane, `die` w `$( )`, reset stanu wywołania
 
-Status: **ZALECENIA DLA WĄTKU Z DOSTĘPEM DO HOSTÓW** (spisane 2026-09-03 w sesji,
-która hostów nie widzi: port 22 do `192.168.28.x` i `192.168.11.x` jest z niej
-nieosiągalny). Wykonawca labu ma swobodę w doborze hostów; poniższe nazwy to
-para z labu 2026-09-03 (`pve9` 192.168.28.99 → `pve10` 192.168.28.97).
+Status: **WYKONANY 2026-09-03** — wynik w `LAB-PR295-WYNIK-2026-09-03.md`.
+Spisany w sesji, która hostów nie widzi (port 22 do `192.168.28.x` i
+`192.168.11.x` jest z niej nieosiągalny); poniżej wersja poprawiona o dwa
+odstępstwa nazwane przez wykonawcę (ścieżka drzewa w kroku 1, brak rekordów
+na flocie), żeby następny przebieg nie potykał się o to samo. Para z labu:
+`pve9` 192.168.28.99 → `pve10` 192.168.28.97.
 
 Gałąź: `claude/package-translation-estimate-jisaqu`, głowa `b0c7632`
 (PR #295, CI 43/43 zielone). Punkt odniesienia: `main` `37ad17d`.
@@ -19,9 +21,13 @@ własności, których atrapy w suitach nie pokazują:
    (`/etc/zfs-snapshot-all/clients/*.conf`, wartości `printf %q`, także z
    locale C crona), manifestów parowania (heredoc `deploy.sh`, wartości gołe,
    `"..."` i `'...'`) i markera pauzy. Suity używają fixture'ów pisanych
-   ręcznie; flota ma ~20 rekordów na kolektor, część sprzed pól dodanych
-   później. Dowód: **każde polecenie tylko-do-odczytu daje bajt w bajt to samo
-   wyjście na `main` i na gałęzi.**
+   ręcznie. **Ile rekordów ma flota, mierzy krok 0, nie zakłada runbook:**
+   pierwszy przebieg zakładał „~20 na kolektor, część sprzed pól dodanych
+   później" (zdanie z komentarza w kodzie, pisane dla starszego stanu floty),
+   a pomiar dał ZERO na wszystkich siedmiu hostach — produkcja chodzi z
+   `jobs.<host>.conf`. Bez rekordów krok 1b nie ma czego czytać, stąd
+   kolejność: krok 3 (throwaway pair) PRZED 1b. Dowód: **każde polecenie
+   tylko-do-odczytu daje bajt w bajt to samo wyjście na `main` i na gałęzi.**
 2. **`die` w `$( )` kończy program.** Na żywych ścieżkach z ssh
    (`status NAZWA`, `verify-endpoint`, `activate-client`) pierwszy FATAL ma być
    ostatnią linią, a `status NAZWA` dla rekordu bez manifestu ma dalej
@@ -54,7 +60,14 @@ cd /root/scripts/zfs-snapshot-all
 git fetch origin claude/package-translation-estimate-jisaqu
 git worktree add /root/scripts/zfs-snapshot-all-pr295 b0c7632   # gałąź OBOK main, nie zamiast
 ls /root/scripts/zfs-snapshot-all-pr295/lib-backup-common.sh    # kontrola: to jest to drzewo
+# POMIAR, nie założenie: co jest na tym hoście do przeczytania
+ls /etc/zfs-snapshot-all/clients/ /etc/zfs-snapshot-all/peers/ /var/lib/zfs-snapshot-all/relationships/ 2>&1
+ls /etc/zfs-snapshot-all/jobs.*.conf
 ```
+
+Jeśli `clients/` jest puste (stan całej floty 2026-09-03), krok 1 na tym
+hoście dowodzi tylko ścieżki `jobs.*.conf`; rekord, manifest i marker pauzy
+powstają dopiero w kroku 3 — wtedy wrócić do 1b.
 
 Konto delegowane (`zfsbackup`) ma własny checkout w `$HOME/zfs-snapshot-all`
 i własny cron `git pull` o :15 — to `update-hold` go nie dotyczy. Na czas labu
@@ -96,11 +109,24 @@ run "$B" > /root/lab295-ro-branch.txt
 diff /root/lab295-ro-main.txt /root/lab295-ro-branch.txt && echo IDENTYCZNE
 ```
 
-**Predykcja:** `IDENTYCZNE`. Dopuszczalne różnice: TYLKO znaczniki czasu, jeśli
-któreś polecenie drukuje bieżący czas (wtedy powtórzyć obie strony i porównać z
-`grep -v` na tej jednej linii, nazwanej w raporcie). Jakakolwiek inna różnica —
-inna wartość pola, brakujący wiersz relacji, dodatkowy FATAL, inny `rc` —
-**kończy lab**. To jest dokładnie ten wynik, po który lab jest robiony.
+**Predykcja:** `IDENTYCZNE`. Dopuszczalne różnice, obie nazwane w raporcie:
+
+- **ścieżka drzewa**: `gen-cron.sh -c` wkleja w renderowane linie crona
+  absolutną ścieżkę drzewa, z którego został wywołany, więc gałąź z worktree
+  drukuje `…-pr295` (na pve0 96 linii, na pve2 22). Normalizować OBIE strony
+  tą samą podstawianką i sprawdzić, że liczba linii po obu stronach jest równa
+  — wtedy normalizacja nie może ukryć brakującego ani nadmiarowego wiersza:
+  ```bash
+  N='s#/root/scripts/zfs-snapshot-all-pr295#TREE#g; s#/root/scripts/zfs-snapshot-all#TREE#g'
+  diff <(sed "$N" /root/lab295-ro-main.txt) <(sed "$N" /root/lab295-ro-branch.txt) && echo IDENTYCZNE
+  wc -l /root/lab295-ro-main.txt /root/lab295-ro-branch.txt
+  ```
+- **znaczniki czasu**, jeśli któreś polecenie drukuje bieżący czas (powtórzyć
+  obie strony i porównać z `grep -v` na tej jednej linii).
+
+Jakakolwiek inna różnica — inna wartość pola, brakujący wiersz relacji,
+dodatkowy FATAL, inny `rc` — **kończy lab**. To jest dokładnie ten wynik, po
+który lab jest robiony.
 
 Jeśli na hoście jest relacja spauzowana (`pause-client`), tym lepiej: `status`
 czyta wtedy także marker pauzy przez `record_load pause`.
