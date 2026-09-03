@@ -63,8 +63,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -8563,6 +8563,90 @@ if ! printf '%s' "$out" | grep -qE 'quiesce|send_schedule|prefix|monitor_'; then
     ok "--source-profile: a prune-only profile carries no creation-half field at all"
 else
     bad "--source-profile: a prune-only profile carries no creation-half field at all" "$out"
+fi
+
+
+# ============================================================================
+# RECORDS ARE DATA (2026-09-03). Self-contained; always eligible, also under
+# `--section records`. Until this change every reader of a client record, a
+# pairing manifest or the pause marker `.`-sourced the file -- executed it --
+# and a field the file did not carry kept the previous record's value. The
+# readers are now record_get/record_load in lib-backup-common.sh. Discriminating
+# control against main: the first two assertions FAIL there (the substitution
+# runs; nothing refuses the field name), the last two pin the mechanism that
+# replaced four hand-rolled copies of the clearing.
+# ============================================================================
+RD="$WORK/records"; rm -rf "$RD"; mkdir -p "$RD/clients" "$RD/rel"
+cat > "$RD/clients/pve2.conf" <<EOF
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+STATE=active
+NOTE=\$(touch "$RD/EXECUTED")
+EOF
+out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$RD/EXECUTED" ] && printf '%s' "$out" | grep -q '^pve2 .*state=active'; then
+    ok "records: a command substitution inside a record field is data -- status lists the record and runs nothing"
+else
+    bad "records: a command substitution inside a record field is data -- status lists the record and runs nothing" \
+        "rc=$rc executed=$([ -e "$RD/EXECUTED" ] && echo YES || echo no)" "$out"
+fi
+
+cat > "$RD/clients/evil.conf" <<'EOF'
+CLIENT_NAME=evil
+PATH=/nonexistent
+STATE=active
+EOF
+out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
+if printf '%s' "$out" | grep -q "evil.conf: 'PATH' is not a field name" \
+        && printf '%s' "$out" | grep -q '^pve2 .*state=active'; then
+    ok "records: a record naming a shell variable as a field is refused, and the other records still list"
+else
+    bad "records: a record naming a shell variable as a field is refused, and the other records still list" "rc=$rc" "$out"
+fi
+rm -f "$RD/clients/evil.conf"
+
+# The unquoter must read back exactly what write_client_field (printf %q) and
+# deploy.sh's manifest heredoc write, under both locales a host runs in: cron's
+# C locale turns every non-ASCII byte of a dataset name into $'\NNN'.
+rt_out=$(bash -c '
+    set -u; . "$1"; fail=0
+    vals=("" "hdd/a b" "it'"'"'s" "\$HOME" "a=b" "~x" "2026-09-03 12:00:00" "ssh-ed25519 AAAAC3Nz root@pve9" "q\"q" "\`id\`" "\$(id)" "back\\slash" "#hash" "!bang" "{brace}" "$(printf "\305\202\303\263d\305\272")" "$(printf "tab\there")" "$(printf "nl\nhere")")
+    for loc in C.UTF-8 C; do for v in "${vals[@]}"; do
+        w=$(LC_ALL=$loc printf "%q" "$v"); record_unquote "$w"
+        [ "$REPLY" = "$v" ] || { echo "MISMATCH [$loc] $w -> $(printf %q "$REPLY")"; fail=1; }
+    done; done
+    for w in "hdd/backups" "\"hdd/a hdd/b\"" "'"'"'ssh-ed25519 AAAA root@x'"'"'" "\"\"" "'"'"''"'"'"; do
+        eval "want=$w"; record_unquote "$w"
+        [ "$REPLY" = "$want" ] || { echo "MISMATCH heredoc $w -> $(printf %q "$REPLY")"; fail=1; }
+    done
+    record_unquote "\"\$HOME\"";  [ "$REPLY" = "\$HOME" ] || { echo "EXPANDED \$HOME inside double quotes"; fail=1; }
+    record_unquote "a b";        [ "$REPLY" = "a" ]      || { echo "bare value did not stop at the blank"; fail=1; }
+    [ "$fail" -eq 0 ] && echo ROUNDTRIP-OK
+' _ "$REPO/lib-backup-common.sh" 2>&1)
+if [ "$rt_out" = "ROUNDTRIP-OK" ]; then
+    ok "records: record_unquote reads back every shape printf %q and the manifest heredoc write, in C and UTF-8 locales"
+else
+    bad "records: record_unquote reads back every shape printf %q and the manifest heredoc write, in C and UTF-8 locales" "$rt_out"
+fi
+
+# Two records in one shell: the second carries no BANDWIDTH and no EXCLUDE_CHILD_1,
+# so after loading it both must read as absent -- and a manifest loaded into
+# its own set must not clear the client's fields.
+printf 'CLIENT_NAME=a\nSTATE=active\nBANDWIDTH=2M\nEXCLUDE_CHILD_1=hdd/a\\ b\n' > "$RD/a.conf"
+printf 'CLIENT_NAME=b\nSTATE=active\n' > "$RD/b.conf"
+printf 'PEER_SAVED_TARGET=hdd/x\nPEER_SAVED_DATASETS="hdd/a hdd/b"\n' > "$RD/m.conf"
+lk_out=$(bash -c '
+    set -u; . "$1"
+    record_load client "$2"; a="[$BANDWIDTH][$EXCLUDE_CHILD_1]"
+    record_load client "$3"; b="[${BANDWIDTH:-}][${EXCLUDE_CHILD_1:-}][$CLIENT_NAME]"
+    record_load manifest "$4"; m="[$CLIENT_NAME][$PEER_SAVED_DATASETS]"
+    printf "%s %s %s" "$a" "$b" "$m"
+' _ "$REPO/lib-backup-common.sh" "$RD/a.conf" "$RD/b.conf" "$RD/m.conf" 2>&1)
+if [ "$lk_out" = "[2M][hdd/a b] [][][b] [b][hdd/a hdd/b]" ]; then
+    ok "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone"
+else
+    bad "records: the second record in one shell does not inherit the first one's fields; a manifest load leaves the client's fields alone" "$lk_out"
 fi
 
 echo "--------------------------------------------"

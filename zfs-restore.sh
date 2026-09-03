@@ -1176,13 +1176,13 @@ restore_config_candidates() {
 ' "/etc/zfs-snapshot-all/jobs.${h}.conf"
         for f in /etc/zfs-snapshot-all/peers/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            u=$(record_get "$f" PEER_SAVED_LOCAL_USER)
             [ -n "$u" ] && [ "$u" != root ] && printf '%s
 ' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
         done
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            u=$(record_get "$f" LOCAL_USER)
             [ -n "$u" ] && [ "$u" != root ] && printf '%s
 ' "/etc/zfs-snapshot-all/jobs.${h}.${u}.conf"
         done

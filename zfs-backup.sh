@@ -3302,7 +3302,7 @@ coverage_conflicts() {   # <this client> <requested path>...
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
         # A subshell per record: emit_client_sections runs with this client's
-        # LOAD_*/MANAGED_* already loaded, and sourcing another record here
+        # LOAD_*/MANAGED_* already loaded, and loading another record here
         # would overwrite them mid-emit.
         (
             CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""
@@ -3314,8 +3314,7 @@ coverage_conflicts() {   # <this client> <requested path>...
             # rather than guess. Exit 2 is distinct from "found nothing" so the
             # caller can tell the two apart.
             [ -r "$f" ] || exit 2
-            # shellcheck disable=SC1090
-            . "$f" 2>/dev/null || exit 2
+            record_load client "$f" 2>/dev/null || exit 2
             # A record that parses but names no relationship cannot be reasoned
             # about either: it may own anything.
             [ -n "${CLIENT_NAME:-}" ] || exit 2
@@ -4359,12 +4358,12 @@ cron_known_accounts() {   # -> one candidate per line, root first, deduplicated
         echo root
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            u=$(record_get "$f" LOCAL_USER)
             [ -n "$u" ] && echo "$u"
         done
         for f in "$PEER_STATE_DIR"/*.conf; do
             [ -r "$f" ] || continue
-            u=$( . "$f" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-}" )
+            u=$(record_get "$f" PEER_SAVED_LOCAL_USER)
             [ -n "$u" ] && echo "$u"
         done
         # Debian/Proxmox spool first, then the RHEL layout. A name here is a
@@ -6939,7 +6938,7 @@ cmd_add_client() {
         # "not a relationship" (see the coverage-overlap probe); this makes
         # add-client agree with them.
         local _prev_state
-        _prev_state=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${STATE:-unknown}" )
+        _prev_state=$(record_get "$cpath" STATE unknown)
         if [ "$_prev_state" = removed ]; then
             # Archived, not deleted, and deliberately NOT matching *.conf so no
             # scanner picks it up as a live record.
@@ -6956,9 +6955,9 @@ cmd_add_client() {
             # refusal, because that is an operator changing a live
             # relationship by rerunning a creation command.
             local _same=1 _prev_host _prev_target _prev_user
-            _prev_host=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${PEER_HOST:-}" )
-            _prev_target=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${CLIENT_TARGET:-}" )
-            _prev_user=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+            _prev_host=$(record_get "$cpath" PEER_HOST)
+            _prev_target=$(record_get "$cpath" CLIENT_TARGET)
+            _prev_user=$(record_get "$cpath" LOCAL_USER)
             # $lan is the RAW --host argument here; lan_host/lan_port are
             # parsed 120 lines further down, long after this gate. Compare
             # against the host half of the raw value instead of a variable
@@ -6981,12 +6980,12 @@ cmd_add_client() {
             # available the endpoint cannot be confirmed, so this is NOT a
             # no-op -- an unconfirmed identity fails closed.
             local _prev_endpoint _prev_port=""
-            _prev_endpoint=$( . "$cpath" >/dev/null 2>&1; printf '%s' "${CREATED_ENDPOINT:-}" )
+            _prev_endpoint=$(record_get "$cpath" CREATED_ENDPOINT)
             if [ -n "$_prev_endpoint" ]; then
                 case "$_prev_endpoint" in *:*) _prev_port="${_prev_endpoint##*:}" ;; *) _prev_port=22 ;; esac
             else
                 local _mf; _mf=$(peer_manifest_path "$(peer_label "$_prev_host")")
-                [ -r "$_mf" ] && _prev_port=$( . "$_mf" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_PORT:-}" )
+                [ -r "$_mf" ] && _prev_port=$(record_get "$_mf" PEER_SAVED_PORT)
             fi
             if [ -z "$_prev_port" ]; then
                 _same=0
@@ -7182,7 +7181,7 @@ cmd_add_client() {
     # a refusal that names the conflict.
     local _mf_user_path; _mf_user_path=$(peer_manifest_path "$(peer_label "$lan_host")")
     if [ -r "$_mf_user_path" ]; then
-        local _mf_user; _mf_user=$( . "$_mf_user_path" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_LOCAL_USER:-root}" )
+        local _mf_user; _mf_user=$(record_get "$_mf_user_path" PEER_SAVED_LOCAL_USER root)
         local _want_user="${local_user:-root}"
         [ -z "$_mf_user" ] && _mf_user=root
         if [ "$_want_user" != "$_mf_user" ]; then
@@ -7194,7 +7193,7 @@ cmd_add_client() {
         # deliberate act, not a side effect of enrolling something new -- so it
         # is refused here and named, rather than applied quietly in either
         # direction.
-        local _mf_bw; _mf_bw=$( . "$_mf_user_path" >/dev/null 2>&1; printf '%s' "${PEER_SAVED_BANDWIDTH:-}" )
+        local _mf_bw; _mf_bw=$(record_get "$_mf_user_path" PEER_SAVED_BANDWIDTH)
         if [ -n "$bandwidth" ] && [ "$bandwidth" != "$_mf_bw" ]; then
             die "add-client: this host's link to '$lan_host' is already capped at '${_mf_bw:-<bez limitu>}' by the pairing, and this relationship asked for '--bandwidth=$bandwidth'. The cap belongs to the PAIR of hosts -- changing it here would silently re-cap every relationship that already uses this link. Either drop --bandwidth to accept the pairing's limit, or change it deliberately for the whole link with 'deploy.sh --pair --peer=$lan_host --bandwidth=$bandwidth'. Nothing was changed."
         fi
@@ -7897,14 +7896,17 @@ load_client_and_connection() {
     BANDWIDTH=""
     PEER_SAVED_BANDWIDTH=""
     # The numbered exclusion fields, cleared for the same reason and BEFORE the
-    # source below: they are read back by name, so a value left over from a
+    # load below: they are read back by name, so a value left over from a
     # previously loaded record would be attributed to this one. No two-client
     # path was found in a single process, so this is consistency with the two
     # fields above rather than a defect being fixed -- said plainly because the
     # difference matters if someone later looks for the measurement.
     unset ${!EXCLUDE_@}
-    # shellcheck disable=SC1090
-    . "$cpath"
+    # Since 2026-09-03 record_load clears every field the previous client
+    # record assigned, which makes the three resets above redundant for the
+    # second record in a process. They stay: they also cover the FIRST load,
+    # where the value being cleared came from the caller, not from a record.
+    record_load client "$cpath"
     # LEGACY EXCLUSION FIELDS -- refuse, never ignore.
     #
     # The fields were renamed on 2026-09-01 (EXCLUDE_SNAP_n -> EXCLUDE_FAMILY_n,
@@ -7931,8 +7933,7 @@ load_client_and_connection() {
     LOAD_LABEL="$label"
     local mpath; mpath=$(peer_manifest_path "$label")
     [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- run add-client first"
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
 
     # Relationship-owned facts override their per-host manifest defaults --
     # see the CLIENT_TARGET note at the record writer.
@@ -8037,8 +8038,7 @@ cmd_seed() {
     for a in "$@"; do case "$a" in --yes|-y) yes=1 ;; *) die "seed: unknown option $a" ;; esac; done
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         pending_enroll|seeding) ;;
         # IDEMPOTENT RERUN, same contract as add-client above: a seed whose
@@ -8062,7 +8062,7 @@ cmd_seed() {
     local label; label=$(peer_label "$PEER_HOST")
     local mpath; mpath=$(peer_manifest_path "$label")
     [ -r "$mpath" ] || die "no pairing manifest for '$PEER_HOST' at $mpath -- has --join run there yet?"
-    local peer_mode; peer_mode=$( . "$mpath"; echo "${PEER_SAVED_MODE:-}" )
+    local peer_mode; peer_mode=$(record_get "$mpath" PEER_SAVED_MODE)
 
     if [ -n "$peer_mode" ]; then
         log "mode-based client ($peer_mode) -- dataset list comes from the peer's committed scope file, not --draft-config"
@@ -8262,8 +8262,7 @@ cmd_final_catchup() {
     [ -n "$name" ] || die "final-catchup requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         seed_complete|endpoint_verified|active|endpoint_change_pending) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- final-catchup needs a seeded client" ;;
@@ -8413,8 +8412,7 @@ cmd_set_endpoint() {
 
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         seed_complete|endpoint_verified|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- set-endpoint needs seed_complete or later (seed must finish first)" ;;
@@ -8635,8 +8633,7 @@ cmd_verify_endpoint() {
     [ -n "$name" ] || die "verify-endpoint requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         seed_complete|endpoint_verified|endpoint_change_pending) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete, endpoint_change_pending, or endpoint_verified (to re-check)" ;;
@@ -8725,8 +8722,7 @@ cmd_activate_client() {
     done
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     # A re-activation (endpoint switch, etc.) already has its own CRON_CONFIG
     # on record from the FIRST activation. read_server_conf below unconditionally
     # resets CRON_CONFIG="" and only refills it from $SERVER_CONF -- on a host
@@ -9138,8 +9134,7 @@ cmd_activate() {
 
     local STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
     local FINAL_CATCHUP_ENDPOINT="" FINAL_CATCHUP_EPOCH="" PEER_HOST=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         pending_enroll|seeding)
             die "client '$name' is not seeded yet. Run: ./zfs-backup.sh seed $name" ;;
@@ -9192,8 +9187,7 @@ cmd_activate() {
     # Reload after any catch-up/switch; the file is the state machine's source
     # of truth and makes an interrupted run resume at the next unfinished step.
     STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     read -r current_host current_port <<< "$(active_endpoint_host_port)"
     current_endpoint="$current_host:$current_port"
 
@@ -9211,8 +9205,7 @@ cmd_activate() {
     fi
 
     STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     if [ "${STATE:-}" != active ]; then
         local -a install=(activate-client "$name")
         [ "$yes" -eq 1 ] && install+=(--yes)
@@ -9221,8 +9214,7 @@ cmd_activate() {
     fi
 
     STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     [ "${STATE:-}" = active ] && [ "${INSTALLED_ENDPOINT:-}" = "${ACTIVE_ENDPOINT:-}" ] \
         || die "activation returned without a matching active/install record. Re-run exactly: $resume"
     log "client '$name' is active; endpoint and installed cron both use '${ACTIVE_ENDPOINT}'."
@@ -9297,23 +9289,20 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
     [ -r "$mpath" ] || die "no pairing manifest for '$peer' at $mpath -- the cap belongs to a pairing, so pair the host first (deploy.sh --pair)"
     local old_rate; old_rate="$(grep -m1 '^PEER_SAVED_BANDWIDTH=' "$mpath" | cut -d= -f2-)"
 
-    # Which relationships fly across this link. Fields are cleared before each
-    # record because a record is a `.`-sourced file and this loop reads several
-    # in one shell -- the same defect the tree fixed for BANDWIDTH itself.
+    # Which relationships fly across this link. record_load clears the previous
+    # record's fields before each read: this loop reads several in one shell --
+    # the same defect the tree fixed for BANDWIDTH itself.
     # TWO PARALLEL ARRAYS, no packed string. The first cut joined name and
     # dataset list with ${SEP} -- which gen-cron defines and this file does not,
     # so under `set -u` it would have died on an unbound variable the moment a
     # pair had a relationship. Caught before it shipped, but the lesson is the
     # cheaper one: do not invent a separator when two arrays say it plainly.
-    local f seen="" _n=0
+    local f
     local -a tgt_name=() tgt_ds=()
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
         case "$f" in *removed*) continue ;; esac
-        for _n in $seen; do unset "$_n"; done
-        seen="$seen $(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/{print $1}' "$f" 2>/dev/null | sort -u | tr '\n' ' ')"
-        # shellcheck disable=SC1090
-        . "$f"
+        record_load client "$f"
         [ "${STATE:-}" = active ] || continue
         [ "$(peer_label "${PEER_HOST:-}")" = "$label" ] || continue
         tgt_name+=("${CLIENT_NAME:-$(basename "$f" .conf)}")
@@ -9442,9 +9431,9 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
 #      never have run the removal either. GFS -> flat would have left the old
 #      ladder next to the new per-tier prune: two pruners, same snapshots.
 #   3. Orphaned templates are found by reference-counting, not by name.
-# Sourcing several client records in ONE shell is how this command works, and a
-# record is a `.`-sourced file: a field a record does NOT carry keeps whatever
-# the previous record left behind.
+# Reading several client records in ONE shell is how this command works, and
+# until 2026-09-03 a record was a `.`-sourced file: a field a record does NOT
+# carry kept whatever the previous record left behind.
 #
 # REV F3. Record A carries PROFILE=prod, record B is older and has no PROFILE
 # field at all -- after `. A` then `. B`, B still reads prod. In the precheck
@@ -9456,29 +9445,15 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
 #
 # The `( : )` line beside each source is a shellcheck no-op. It isolates
 # NOTHING; anyone reading it as a subshell (I did) will make this mistake again.
-MIGRATE_RECORD_FIELDS=""
-migrate_read_record() {   # <path> -- source it with no field left over from the last one
-    # NOT A HAND-PICKED LIST, and the first version of this was one. It reset
-    # STATE/PROFILE/CLIENT_NAME/PROFILE_DIGEST_RECORDED -- the fields I could
-    # see -- and the lab found what that misses within the hour: EXCLUDE_1 from
-    # an old, REMOVED record leaked into an active one, and the proposed cron
-    # line grew a `-X skip` the relationship had never asked for. The record
-    # dir on a real collector holds twenty files; a numbered field
-    # (EXCLUDE_<n>) cannot be enumerated ahead of time at all, which is exactly
-    # the shape a hand-written list is guaranteed to miss.
-    #
-    # So: remember every name any record has assigned, clear them all before
-    # the next source, and let the record itself decide what it defines. A
-    # record that carries a field gets its value; one that does not carries
-    # nothing -- which is what a fresh shell would have given it.
-    #
-    # The `. "$1"` is still subshell-free on purpose: the caller needs the
-    # values. That is why the clearing has to be explicit.
-    local f
-    for f in $MIGRATE_RECORD_FIELDS; do unset "$f"; done
-    MIGRATE_RECORD_FIELDS="$MIGRATE_RECORD_FIELDS $(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/{print $1}' "$1" 2>/dev/null | sort -u | tr '\n' ' ')"
-    # shellcheck disable=SC1090
-    . "$1"
+#
+# The reset used to live here, as a list of every field any record had assigned
+# -- NOT a hand-picked list, because the first version was one and the lab found
+# what that misses within the hour (EXCLUDE_1 from an old, REMOVED record leaked
+# into an active one). That mechanism is now record_load in lib-backup-common.sh,
+# shared by every reader in both programs; this name stays so the three loops
+# below still say what they are doing.
+migrate_read_record() {   # <path> -- read it with no field left over from the last one
+    record_load client "$1"
 }
 
 cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME] [--yes]
@@ -9841,11 +9816,8 @@ $gcerr"
     local -A MISS_SRC=()   # client file -> space-separated missing source SCOPES (account@host:ds)
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
-        # shellcheck disable=SC1090
-        ( . "$f"; [ "${STATE:-}" = active ] ) || continue
-        # shellcheck disable=SC1090
-        . "$f"
-        [ "${STATE:-}" = active ] || continue
+        [ "$(record_get "$f" STATE)" = active ] || continue
+        record_load client "$f"
         load_client_and_connection "$f"
         local ds localpath src
         for ds in ${PEER_SAVED_DATASETS:-}; do
@@ -9916,8 +9888,7 @@ $gcerr"
         [ -e "$f" ] || continue
         local miss="${MISS_SRC["$f"]:-}"
         [ -n "${miss// /}" ] || continue
-        # shellcheck disable=SC1090
-        . "$f"
+        record_load client "$f"
         [ "${STATE:-}" = active ] || continue
         name="$CLIENT_NAME"
         load_client_and_connection "$f"
@@ -10387,8 +10358,7 @@ cmd_status() {
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
             ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
-              # shellcheck disable=SC1090
-              . "$f"
+              record_load client "$f"
               pausemark=""
               client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
               printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
@@ -10397,11 +10367,9 @@ cmd_status() {
     fi
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
-    [ -r "$mpath" ] && { # shellcheck disable=SC1090
-        . "$mpath"; }
+    [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
     local LOAD_HOST="$host" LOAD_PORT="$port"
     # The peer's own view, asked out loud (2026-08-20, measured on metropolis).
@@ -10436,8 +10404,7 @@ cmd_status() {
     fi
     if client_paused "$name"; then
         local PAUSED_AT="" PAUSED_REASON=""
-        # shellcheck disable=SC1090
-        . "$(pause_marker_path "$name")"
+        record_load pause "$(pause_marker_path "$name")"
         echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
         echo "                   joby i reczne uruchomienia Z etykieta '-L $name' sa pomijane;"
         if [ "$peerstate" != "DISABLED" ]; then
@@ -10516,8 +10483,7 @@ cmd_test() {
     [ -n "$name" ] || die "test requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     case "${STATE:-}" in
         endpoint_verified|active) ;;
         *) die "client '$name' is not ready to test (state=${STATE:-unknown})" ;;
@@ -10869,8 +10835,8 @@ must ALREADY be on the new machine (zfs-backup.sh restore <from> <onto>)."
     # marker there is the authority -- see config_sections_of_client, and the
     # source-side prune the record's lists do not carry.
     local rec_cfg rec_user
-    rec_cfg=$(  . "$from_rec" >/dev/null 2>&1; printf '%s' "${CRON_CONFIG:-}" )
-    rec_user=$( . "$from_rec" >/dev/null 2>&1; printf '%s' "${LOCAL_USER:-}" )
+    rec_cfg=$(record_get "$from_rec" CRON_CONFIG)
+    rec_user=$(record_get "$from_rec" LOCAL_USER)
 
     read_server_conf
     cron_context_resolve adopt "" "" "$rec_cfg" "$rec_user"
@@ -11074,8 +11040,7 @@ cmd_remove_client() {
     [ -n "$name" ] || die "remove-client requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     # read_server_conf below unconditionally resets CRON_CONFIG="" and only
     # refills it from $SERVER_CONF -- on a host with no server.conf, that
     # reset is never undone, so the CRON_CONFIG this client actually recorded
@@ -11204,18 +11169,20 @@ cmd_remove_client() {
     # record. So ask whether anyone else is still using it, and if so leave it
     # and SAY that it was left, naming who holds it. The last relationship out
     # unpairs; the others just stop referring to it.
-    # this_peer is captured BEFORE the loop: sourcing another client's record
-    # sets PEER_HOST from that file, so comparing against the live variable
-    # inside the subshell would compare it with itself and match every time.
+    # this_peer is a copy of the loaded record's PEER_HOST. record_get assigns
+    # nothing, so the live variable would compare correctly today; the copy
+    # stays because the loop USED to source each record (which set PEER_HOST
+    # from that file and made the comparison match itself every time), and a
+    # named copy is cheaper than re-learning that.
     local this_peer="$PEER_HOST"
     local -a peer_shared_with=()
     local _f _other
     for _f in "$CLIENTS_DIR"/*.conf; do
         [ -r "$_f" ] || continue
-        _other=$( . "$_f" >/dev/null 2>&1
-                  [ "${CLIENT_NAME:-}" = "$name" ] && exit 0
-                  [ "${STATE:-}" = removed ] && exit 0
-                  [ "${PEER_HOST:-}" = "$this_peer" ] && printf '%s' "${CLIENT_NAME:-}" )
+        _other=$(record_get "$_f" CLIENT_NAME)
+        [ "$_other" = "$name" ] && continue
+        [ "$(record_get "$_f" STATE)" = removed ] && continue
+        [ "$(record_get "$_f" PEER_HOST)" = "$this_peer" ] || _other=""
         [ -n "$_other" ] && peer_shared_with+=("$_other")
     done
     if [ "${#peer_shared_with[@]}" -gt 0 ]; then
@@ -11263,7 +11230,7 @@ cmd_remove_client() {
 deploy_continue_lifecycle() {
     local name="$1" yes="$2" verbose="$3"
     local cpath; cpath=$(client_conf_path "$name")
-    local state; state=$( . "$cpath"; echo "${STATE:-}" )
+    local state; state=$(record_get "$cpath" STATE)
 
     case "$state" in
         pending_enroll|seeding)
@@ -11354,8 +11321,7 @@ rux_resolve_name() {
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
             local CLIENT_NAME="" PEER_HOST="" STATE=""
-            # shellcheck disable=SC1090
-            . "$f"
+            record_load client "$f"
             # A record whose last STATE is 'removed' is a tombstone, not a
             # relationship. Counting it here made rux demand --name on a host
             # with NOTHING live pointing at it -- LAB-E hit this with two
@@ -11386,8 +11352,7 @@ rux_resolve_name() {
 rux_check_conflict() {
     local cpath="$1" host="$2" dataset="$3" target="$4" mode="$5"
     local RUX_SOURCE="" RUX_TARGET="" RUX_MODE="" CLIENT_NAME=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     [ -n "$RUX_SOURCE" ] \
         || die "rux: a relationship for '$host' already exists ('$CLIENT_NAME') but was not created through this unified entry point -- use the expert lifecycle commands (status/seed/activate/remove-client) to inspect or resolve it. Nothing was changed."
     local want_source="$host:$dataset"
@@ -11407,14 +11372,12 @@ rux_check_conflict() {
 rux_verify_requested_scope() {
     local cpath="$1" requested="$2"
     local PEER_HOST=""
-    # shellcheck disable=SC1090
-    . "$cpath"
+    record_load client "$cpath"
     [ -n "$PEER_HOST" ] || return 0
     local mpath; mpath=$(peer_manifest_path "$(peer_label "$PEER_HOST")")
     [ -r "$mpath" ] || return 0
     local PEER_SAVED_MODE=""
-    # shellcheck disable=SC1090
-    . "$mpath"
+    record_load manifest "$mpath"
     # Sync relationships defer their dataset list to the source's scope file;
     # resolve_mode_datasets enforces T3 for them inside load_client_and_
     # connection, so a second fetch here would only duplicate the same check.
@@ -11459,7 +11422,7 @@ rux_remote_plan() {
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
     local cpath; cpath=$(client_conf_path "$name")
     local state="(none -- fresh relationship)"
-    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-unknown}" )
+    [ -e "$cpath" ] && state=$(record_get "$cpath" STATE unknown)
 
     echo "RUX plan (read-only -- nothing on either host is touched without --install)"
     echo "  relationship name:            $name"
@@ -11827,7 +11790,7 @@ rux_remote_install() {
 
     local cpath; cpath=$(client_conf_path "$name")
     local state=""
-    [ -e "$cpath" ] && state=$( . "$cpath"; echo "${STATE:-}" )
+    [ -e "$cpath" ] && state=$(record_get "$cpath" STATE)
     # Same tombstone rule: a removed record must not block the unified path
     # either -- add-client (called below) archives it and reuses the name.
     [ "$state" = removed ] && state=""
