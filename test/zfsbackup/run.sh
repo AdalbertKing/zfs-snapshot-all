@@ -8073,6 +8073,12 @@ esac
 # are for the gate's own suite. That ZFS destroys what it is told belongs on a
 # host with a real disk.
 PRC="$WORK/purgereplica"; mkdir -p "$PRC/bin"
+# Set HERE, not only in prc_run's env: prc_gate writes the gate stub with an
+# unquoted heredoc, so these expand at WRITE time. Left unset they tripped
+# set -u, the stub was never written, and the wrong-medium case silently
+# exercised the previous stub instead -- a test that passed the wrong thing.
+PRC_LOG="$PRC/calls.log"; PRC_GONE_A="$PRC/gone_a"; PRC_GONE_B="$PRC/gone_b"
+export PRC_LOG PRC_GONE_A PRC_GONE_B
 cat > "$PRC/bin/zpool" <<'EOF'
 #!/bin/bash
 [ "$1" = "import" ] && { printf '   pool: repl\n     id: 1\n  state: ONLINE\n'; exit 0; }
@@ -8107,7 +8113,6 @@ EOF
 }
 prc_run() {   # <config> <args...>
     local cfg="$1"; shift
-    PRC_LOG="$PRC/calls.log" PRC_GONE_A="$PRC/gone_a" PRC_GONE_B="$PRC/gone_b" \
     PATH="$PRC/bin:$PATH" bash -c "
         source '$ZFSBACKUP'
         SCRIPT_DIR='$PRC/bin'
