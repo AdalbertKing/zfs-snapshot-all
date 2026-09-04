@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1032,3 +1032,32 @@ claim needs.** Before writing "it is not X", produce the run where it IS X and
 show the reading move. And never write "unestablished" while a two-command
 experiment remains untried — write "not yet measured", which says whose move it
 is.
+
+### E36 — A gate whose comment said "what the package writes" and whose code said "anything but these"
+
+**2026-09-04, REV-20260904-134, caught by the Reviewer with `DIE_MAIN_PID=`
+in a client record.**
+
+*Genesis.* `record_load` was written to read records as data, and its field
+gate was documented as accepting "a field name a record may carry" -- the
+fields this package writes. The implementation accepted every
+`[A-Z][A-Z0-9_]*` name except a short deny-list of shell variables (PATH,
+IFS, HOME ...). A record carrying `DIE_MAIN_PID=` therefore assigned the
+reader's own control variable, disarmed the fatal `die` delivered one PR
+earlier, and `set-endpoint` ran on past a FATAL to a second refusal. The
+same hole was open for every uppercase global of both programs.
+
+*Cause.* R3. The invariant was stated in the comment and in
+`AI_PROJECT_RULES.md` ("records are data"), and the mechanism written under
+it was the invariant's negation: a list of exceptions to "anything goes" is
+not "only what we write". I checked the names I could think of instead of
+enumerating the names the package writes -- which were one grep away
+(`write_client_field`, the manifest heredocs, the stamps).
+
+*Rule.* R3, sharpened for gates: **when the rule says "only X", the code
+enumerates X.** A deny-list implements "not Y", a different rule, and the
+distance between the two is every name nobody thought of. Enumerate from the
+writers, derive the check from the program text in the suite so a new writer
+fails there, and keep the list a superset of what older releases wrote so the
+data already on hosts still loads.
+

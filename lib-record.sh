@@ -66,11 +66,20 @@
 # the record's fields the moment the manifest arrived. Each set remembers its
 # own field names, in RECORD_FIELDS_<set>.
 #
-# Field names are restricted to [A-Z][A-Z0-9_]* -- every field either program
-# writes is that shape -- and a handful of names that would change how the
-# READER behaves (PATH, IFS, HOME, ...) are refused outright. Sourcing let a
-# record set them; nothing this package writes ever has, so a record that does is
-# not a record.
+# Field names pass two gates. The SHAPE gate: [A-Z][A-Z0-9_]*, minus the names
+# that would change how the READER behaves (PATH, IFS, HOME, ...). The SET
+# gate: the name must be one this package WRITES into that kind of file
+# (record_field_allowed, one list per <set>). The second gate exists because
+# the first one is not a boundary: assigning by name into the reader's own
+# shell means ANY uppercase name a record carries lands on whatever variable
+# of the reader has that name. REV-20260904-134 measured it with DIE_MAIN_PID=
+# in a client record -- the field disarmed the fatal die, and the reader ran
+# on past a FATAL -- and the same holds for SRC_PROFILE_NAME, PEER_MODE and
+# every other uppercase global of either program. A deny-list can only name
+# the ones already thought of; a list of what the package writes is finite,
+# and test/zfsbackup's records section derives the writers from the program
+# text and asserts each is on it, so a new field is refused in the suite, not
+# on a host.
 
 record_unquote() {   # <word as it appears after KEY=>  -> REPLY, the value
     local s="$1" out="" i=0 c nx mode=bare
@@ -160,6 +169,57 @@ record_field_name_ok() {   # <name>
     return 0
 }
 
+# The SET gate: is <name> a field this package writes into a <set> record?
+#
+# Each list is a superset of TODAY'S writers on purpose. A record on a host may
+# carry a field an older release wrote -- ENDPOINT_LAN_HOST before the U9
+# endpoint shape, EXCLUDE_SNAP_1 / EXCLUDE_1 before the 2026-09-01 rename,
+# PEER_JOIN_REMOTELY before it became a flag -- and such a record must still
+# LOAD, so that the refusal downstream can say what to do with it (the legacy
+# EXCLUDE_ die names the new spelling). Every name any release ever wrote is
+# therefore kept: measured from `git log -p --all` on 2026-09-04 over
+# write_client_field, the manifest heredocs and the appended stamps.
+#
+# A numbered field (EXCLUDE_FAMILY_<n>, EXCLUDE_CHILD_<n>, and the two legacy
+# shapes) is accepted when what follows the last underscore is all digits.
+#
+# server.conf says "edit by hand if needed"; the hand may only set the three
+# fields the package reads from it. Anything else is not a server.conf.
+record_field_allowed() {   # <set> <name>
+    case "$1" in
+    client)
+        case "$2" in
+            CLIENT_NAME|PEER_HOST|STATE|ACTIVE_ENDPOINT|CREATED_ENDPOINT|INSTALLED_ENDPOINT|\
+            CLIENT_TARGET|LOCAL_USER|PROFILE|SOURCE_PROFILE|PROFILE_DIGEST_RECORDED|\
+            REQUESTED_DATASETS|MANAGED_DATASETS|MANAGED_PRUNE_SCOPE|RECURSION|PASSIVE|BANDWIDTH|CRON_CONFIG|\
+            CREATED_AT|ACTIVATED_AT|SEED_COMPLETED_AT|REMOVED_AT|\
+            ENDPOINT_KNOWN|ENDPOINT_VERIFIED_AT|ENDPOINT_VERIFIED_FOR|\
+            FINAL_CATCHUP_AT|FINAL_CATCHUP_EPOCH|FINAL_CATCHUP_ENDPOINT|FINAL_CATCHUP_HOST|FINAL_CATCHUP_PORT|\
+            MOVED_AT|MOVED_FROM|MOVED_TO|RUX_MODE|RUX_SOURCE|RUX_TARGET|\
+            ENDPOINT_LAN_HOST|ENDPOINT_LAN_PORT|ENDPOINT_VPN_HOST|ENDPOINT_VPN_PORT) return 0 ;;
+            EXCLUDE_FAMILY_*|EXCLUDE_CHILD_*|EXCLUDE_SNAP_*|EXCLUDE_*)
+                case "${2##*_}" in ''|*[!0-9]*) return 1 ;; esac
+                return 0 ;;
+        esac ;;
+    manifest)
+        case "$2" in
+            PEER_SAVED_ROLE|PEER_SAVED_DATASETS|PEER_SAVED_REQUESTED|PEER_SAVED_TARGET|PEER_SAVED_AS|PEER_SAVED_MODE|\
+            PEER_SAVED_ACCOUNT|PEER_SAVED_PORT|PEER_SAVED_BANDWIDTH|PEER_SAVED_LOCAL_USER|PEER_SAVED_RECURSIVE_ROOTS|\
+            PEER_ROTATING|PEER_CURRENT_PUBKEY|PEER_PREVIOUS_PUBKEY|\
+            PEER_JOIN_ROLE|PEER_JOIN_AS|PEER_JOIN_MODE|PEER_JOIN_DATASETS|PEER_JOIN_REQUESTED|PEER_JOIN_TARGET|\
+            PEER_JOIN_ACCOUNT|PEER_JOIN_ACCOUNT_UID|PEER_JOIN_FINGERPRINT|PEER_JOIN_GRANTED_DATASETS|\
+            PEER_JOIN_REMOTE|PEER_JOIN_REMOTE_AT|PEER_JOIN_REMOTE_FROM|PEER_JOIN_REMOTE_SESSION|PEER_JOIN_REMOTELY|\
+            GRANTED_REMOTELY_BY) return 0 ;;
+        esac ;;
+    pause)
+        case "$2" in PAUSED_AT|PAUSED_REASON) return 0 ;; esac ;;
+    server)
+        case "$2" in DEFAULT_TARGET|CRON_CONFIG|LOCAL_USER) return 0 ;; esac ;;
+    *)  die "record_load: '$1' is not a record set this package reads (client, manifest, pause, server)" ;;
+    esac
+    return 1
+}
+
 record_get() {   # <file> <FIELD> [default]  -> stdout. Last assignment wins; default when absent OR empty, like ${FIELD:-default}
     local _rg_file="$1" _rg_want="$2" _rg_line _rg_val=""
     [ -r "$_rg_file" ] || return 1
@@ -194,6 +254,8 @@ record_load() {   # <set> <file> -> assigns every field; clears what the last lo
         _rl_key="${_rl_line%%=*}"
         record_field_name_ok "$_rl_key" \
             || die "$_rl_file: '$_rl_key' is not a field name this package writes -- refusing to read the file as a record"
+        record_field_allowed "$_rl_set" "$_rl_key" \
+            || die "$_rl_file: '$_rl_key' is not a field name this package writes in a $_rl_set record -- refusing to read the file as a record"
         record_unquote "${_rl_line#*=}" || return 2
         printf -v "$_rl_key" '%s' "$REPLY"
         case " ${!_rl_seen-} " in

@@ -5370,9 +5370,6 @@ A5="$WORK/audit5"; mkdir -p "$A5/clients"
 cat > "$A5/clients/c1.conf" <<'EOF'
 CLIENT_NAME=c1
 STATE=active
-PEER_SAVED_DATASETS=rpool/data
-PEER_SAVED_MODE=backup
-PEER_SAVED_TARGET=tank/backups
 EOF
 # a config that pulls rpool/data but carries NO source prune for it. The audit keys the
 # source scope off the INSTALLED [dataset:] src, so the header path must match
@@ -5413,7 +5410,7 @@ A5_RENDER="$A5/render.crontab"
 audit5() {  # runs the read-only audit against the fixture, render controlled by $A5_RENDER
     GENCRON_RENDER="$A5_RENDER" bash -c "source '$ZFSBACKUP'
         read_server_conf() { CRON_CONFIG='$A5/jobs.conf'; }
-        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.5.5.5; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=c1; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.5.5.5; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=c1; PEER_SAVED_DATASETS=rpool/data; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET=tank/backups; }
         GENCRON='$GC5' CLIENTS_DIR='$A5/clients' SCRIPT_DIR='$A5' cmd_audit_source_retention" 2>&1
 }
 # render fixture WITHOUT a delsnaps for the source scope (unbounded / pre-step-3)
@@ -5514,9 +5511,6 @@ awk '
 cat > "$AP/clients/apc.conf" <<'EOF'
 CLIENT_NAME=apc
 STATE=active
-PEER_SAVED_DATASETS=rpool/data
-PEER_SAVED_MODE=backup
-PEER_SAVED_TARGET=tank/backups
 EOF
 inst_src_before="$(awk '/^\[dataset:/{f=1} /^\[prune:/{f=0} f&&/src /' "$AP/jobs.conf")"
 apply5() {  # <grantrc> <loaded-host> : runs --apply with a controllable endpoint + grant
@@ -5524,7 +5518,7 @@ apply5() {  # <grantrc> <loaded-host> : runs --apply with a controllable endpoin
     ( PROFILE_ROOT="$RP56" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
       bash -c "source '$ZFSBACKUP'
         read_server_conf() { CRON_CONFIG='$AP/jobs.conf'; }
-        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=$loadhost; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_FLAGS='-K /dev/null'; LOAD_LABEL=pve9; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET='tank/backups'; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=$loadhost; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_FLAGS='-K /dev/null'; LOAD_LABEL=pve9; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET='tank/backups'; PEER_SAVED_DATASETS=rpool/data; }
         assert_source_prune_grant() { return $grantrc; }
         show_activation_proposal() { return 0; }
         assert_cron_config_matches_installed() { return 0; }
@@ -5583,9 +5577,6 @@ A8="$WORK/audit8"; mkdir -p "$A8/clients"
 cat > "$A8/clients/p1.conf" <<'EOF'
 CLIENT_NAME=p1
 STATE=active
-PEER_SAVED_DATASETS=rpool/data
-PEER_SAVED_MODE=backup
-PEER_SAVED_TARGET=tank/backups
 EOF
 GC8="$A8/gencron-stub.sh"; cp "$GC5" "$GC8" 2>/dev/null || { printf '#!/usr/bin/env bash\ncat "$GENCRON_RENDER"\n' > "$GC8"; }
 chmod +x "$GC8"
@@ -5615,7 +5606,7 @@ EOF
 audit8() {  # <--apply?> : runs the audit against the passive fixture
     GENCRON_RENDER="$A8_RENDER" bash -c "source '$ZFSBACKUP'
         read_server_conf() { CRON_CONFIG='$A8/jobs.conf'; }
-        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.6.6.6; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=p1; }
+        load_client_and_connection() { LOAD_ACCOUNT=zfsbackup; LOAD_HOST=10.6.6.6; LOAD_PORT=22; LOAD_KEYFILE=/dev/null; LOAD_ALIAS=a; LOAD_ALIAS_KH=/dev/null; LOAD_LABEL=p1; PEER_SAVED_DATASETS=rpool/data; PEER_SAVED_MODE=backup; PEER_SAVED_TARGET=tank/backups; }
         assert_source_prune_grant() { echo GRANT-CALLED >&2; return 0; }
         GENCRON='$GC8' CLIENTS_DIR='$A8/clients' SCRIPT_DIR='$A8' cmd_audit_source_retention ${1:-}" 2>&1
 }
@@ -8586,7 +8577,7 @@ CLIENT_NAME=pve2
 PEER_HOST=192.168.28.8
 ACTIVE_ENDPOINT=192.168.28.8:22
 STATE=active
-NOTE=\$(touch "$RD/EXECUTED")
+CLIENT_TARGET=\$(touch "$RD/EXECUTED")
 EOF
 out=$(CLIENTS_DIR="$RD/clients" RELATIONSHIPS_DIR="$RD/rel" bash "$ZFSBACKUP" status 2>&1); rc=$?
 if [ "$rc" -eq 0 ] && [ ! -e "$RD/EXECUTED" ] && printf '%s' "$out" | grep -q '^pve2 .*state=active'; then
@@ -8672,6 +8663,146 @@ if [ ! -e "$RD/SRV-EXECUTED" ]; then
 else
     bad "records: a command substitution in server.conf's DEFAULT_TARGET is data -- add-client runs nothing" "rc=$rc" "$out"
 fi
+
+# ----------------------------------------------------------------------------
+# THE FIELD GATE IS A LIST OF WHAT THE PACKAGE WRITES (REV-20260904-134).
+# record_load assigns by NAME into the reader's own shell, so any uppercase
+# name a record carries lands on whatever variable of the reader has that
+# name. The reviewer's reproducer: DIE_MAIN_PID= in a client record cleared
+# the pid the fatal die kills, so `bad host` FATAL-ed inside the substitution
+# and set-endpoint carried on to a second refusal. A deny-list of shell
+# variables cannot close that; a per-set list of what the package WRITES can,
+# and record_field_allowed is that list. Four assertions: the reproducer
+# verbatim; the class (a reader global, a field of ANOTHER set, a malformed
+# numbered field -- refused in every set); every listed name round-trips; and
+# the writers, derived from the program text, are all listed. Discriminating
+# control on ac05727 (the reviewed head): the reproducer prints two FATALs,
+# every negative probe loads, and there is no per-set list to derive from.
+# ----------------------------------------------------------------------------
+RG="$RD/fieldgate"; rm -rf "$RG"; mkdir -p "$RG/clients" "$RG/rel"
+printf '%s\n' 'CLIENT_NAME=pve2' 'PEER_HOST=192.168.28.8' 'ACTIVE_ENDPOINT=192.168.28.8:22' \
+    'STATE=seed_complete' 'DIE_MAIN_PID=' > "$RG/clients/pve2.conf"
+before=$(cat "$RG/clients/pve2.conf")
+out=$(CLIENTS_DIR="$RG/clients" RELATIONSHIPS_DIR="$RG/rel" bash "$ZFSBACKUP" set-endpoint pve2 --host='bad host' 2>&1); rc=$?
+nfatal=$(printf '%s\n' "$out" | grep -c '^FATAL:')
+# The record is refused at the load, which in set-endpoint comes BEFORE the
+# host is parsed -- so the one FATAL names the field, not the host; the
+# property the review asked for (status 1, one message, nothing after it ran,
+# the record untouched) is what is asserted.
+if [ "$rc" -eq 1 ] && [ "$nfatal" -eq 1 ] \
+        && printf '%s' "$out" | grep -q "pve2.conf: 'DIE_MAIN_PID' is not a field name this package writes in a client record" \
+        && ! printf '%s' "$out" | grep -q 'refusing to switch' \
+        && ! printf '%s' "$out" | grep -q 'invalid endpoint host' \
+        && [ "$(cat "$RG/clients/pve2.conf")" = "$before" ]; then
+    ok "field gate: a client record carrying DIE_MAIN_PID= is refused before the name is assigned -- one FATAL, status 1, nothing after it ran, record untouched"
+else
+    bad "field gate: a client record carrying DIE_MAIN_PID= is refused before the name is assigned -- one FATAL, status 1, nothing after it ran, record untouched" \
+        "rc=$rc fatals=$nfatal" "$out"
+fi
+
+# The class. Each probe is one record with one field, loaded into the named
+# set through the real reader; the positives prove the probe can load at all.
+fg_probe() {   # <set> <KEY=value> -> loaded | refused
+    printf '%s\n' "$2" > "$RG/probe.conf"
+    ( . "$REPO/lib-backup-common.sh"; die() { exit 9; }; record_load "$1" "$RG/probe.conf" >/dev/null 2>&1 )
+    case $? in 9) echo refused ;; 0) echo loaded ;; *) echo "rc=$?" ;; esac
+}
+fg_got=""; fg_want=""
+while read -r set line want; do
+    [ -n "$set" ] || continue
+    fg_got="$fg_got $set:${line%%=*}=$(fg_probe "$set" "$line")"
+    fg_want="$fg_want $set:${line%%=*}=$want"
+done <<'EOF'
+client   CLIENT_NAME=x            loaded
+client   EXCLUDE_FAMILY_2=x       loaded
+client   EXCLUDE_SNAP_1=x         loaded
+manifest PEER_SAVED_TARGET=x      loaded
+pause    PAUSED_AT=x              loaded
+server   DEFAULT_TARGET=x         loaded
+client   DIE_MAIN_PID=            refused
+client   SRC_PROFILE_NAME=x       refused
+client   PEER_SAVED_TARGET=x      refused
+client   EXCLUDE_FAMILY_=x        refused
+client   EXCLUDE_FOO=x            refused
+manifest PEER_MODE=x              refused
+manifest CLIENT_NAME=x            refused
+manifest DIE_MAIN_PID=            refused
+pause    STATE=x                  refused
+server   DIE_MAIN_PID=            refused
+EOF
+if [ "$fg_got" = "$fg_want" ]; then
+    ok "field gate: every set refuses an uppercase name it does not write -- a reader global, another set's field, a malformed numbered field -- and loads its own"
+else
+    bad "field gate: every set refuses an uppercase name it does not write -- a reader global, another set's field, a malformed numbered field -- and loads its own" \
+        "got: $fg_got" "want:$fg_want"
+fi
+
+# Every listed name round-trips, and every writer is listed. The list is read
+# from the reader's own text (numbered patterns stand in with index 1); the
+# writers are read from the programs' text: write_client_field's first
+# argument, the manifest-family keys of deploy.sh's heredocs and printf
+# stamps, the stamps zfs-backup.sh appends, and setup-server's echo lines.
+RECLIB="$REPO/lib-record.sh"; [ -r "$RECLIB" ] || RECLIB="$REPO/lib-backup-common.sh"   # where the reader lived before the split
+if grep -q '^record_field_allowed()' "$RECLIB"; then
+    gate_body=$(product_range "$RECLIB" '^record_field_allowed\(\)' '^}')
+    fg_names() {   # <set> -> the names listed for that set, one per line
+        printf '%s\n' "$gate_body" | awk -v want="$1" '
+            /^[[:space:]]*(client|manifest|pause|server)\)/ { cur=$0; sub(/^[[:space:]]*/,"",cur); sub(/\).*/,"",cur); next }
+            cur==want { s=$0; sub(/#.*/,"",s)
+                while (match(s, /[A-Z][A-Z0-9_]*\*?/)) { t=substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH)
+                    if (t ~ /_\*$/) { sub(/\*$/,"",t); print t "1" } else if (t !~ /\*/) print t } }'
+    }
+    fg_rt_bad=""; fg_counts=""
+    for set in client manifest pause server; do
+        names=$(fg_names "$set"); n=$(printf '%s\n' "$names" | grep -c .)
+        fg_counts="$fg_counts $set=$n"
+        printf '%s\n' "$names" | awk '{ printf "%s=v-%s\n", $1, $1 }' > "$RG/all-$set.conf"
+        want=$(printf '%s\n' "$names" | awk '{ printf "%s=v-%s\n", $1, $1 }')
+        got=$( . "$REPO/lib-backup-common.sh"; die() { echo "DIE: $*"; exit 9; }
+               record_load "$set" "$RG/all-$set.conf" || echo "record_load rc=$?"
+               for k in $names; do printf '%s=%s\n' "$k" "${!k-<unset>}"; done )
+        [ "$got" = "$want" ] || fg_rt_bad="$fg_rt_bad $set"
+    done
+    # The floors are the 2026-09-04 measurement; a list may only grow.
+    fg_n() { printf '%s\n' "$fg_counts" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+    if [ -z "$fg_rt_bad" ] && [ "$(fg_n client)" -ge 43 ] && [ "$(fg_n manifest)" -ge 30 ] && [ "$(fg_n pause)" = 2 ] && [ "$(fg_n server)" = 3 ]; then
+        ok "field gate: every name each set lists round-trips through record_load ($fg_counts)"
+    else
+        bad "field gate: every name each set lists round-trips through record_load ($fg_counts)" "mismatched sets:${fg_rt_bad:-none}"
+    fi
+
+    fg_missing=$( . "$REPO/lib-backup-common.sh"; die() { exit 9; }
+        chk() { record_field_allowed "$1" "$2" || printf ' %s:%s' "$1" "$2"; }
+        for n in $(grep -ohE 'write_client_field +"?[A-Z][A-Z0-9_]*' "$ZFSBACKUP" "$REPO/zfs-restore.sh" "$REPO/deploy.sh" \
+                   | sed -E 's/write_client_field +"?//' | sort -u); do
+            case "$n" in *_) n="${n}1" ;; esac; chk client "$n"
+        done
+        for n in $( { awk '/<<-?["'"'"']?[A-Z_0-9]+["'"'"']?[[:space:]]*$/ { t=$0; sub(/.*<<-?["'"'"']?/,"",t); sub(/["'"'"']?[[:space:]]*$/,"",t); term=t; inh=1; next }
+                            inh && $0 ~ "^[[:space:]]*"term"[[:space:]]*$" { inh=0; next }
+                            inh && /^[A-Z][A-Z0-9_]*=/ { k=$0; sub(/=.*/,"",k); print k }' "$REPO/deploy.sh"
+                     grep -ohE "printf +['\"][A-Z][A-Z0-9_]*=" "$REPO/deploy.sh" "$ZFSBACKUP" | grep -oE '[A-Z][A-Z0-9_]*'
+                   } | grep -E '^(PEER_(SAVED|JOIN|ROTATING|CURRENT|PREVIOUS)|GRANTED_REMOTELY_BY)' | sort -u); do
+            chk manifest "$n"
+        done
+        for n in $(grep -oE "printf +'PAUSED_[A-Z_]*=" "$ZFSBACKUP" | grep -oE 'PAUSED_[A-Z_]*' | sort -u); do chk pause "$n"; done
+        for n in $(product_fn "$ZFSBACKUP" cmd_setup_server | grep -oE 'echo "[A-Z][A-Z0-9_]*=' | grep -oE '[A-Z][A-Z0-9_]*' | sort -u); do chk server "$n"; done
+        # the stamps zfs-backup.sh appends go to three different files; each must be a field of SOME set
+        for n in $(grep -oE "printf +'[A-Z][A-Z0-9_]*=" "$ZFSBACKUP" | grep -oE '[A-Z][A-Z0-9_]*' | sort -u); do
+            record_field_allowed client "$n" || record_field_allowed manifest "$n" || record_field_allowed pause "$n" \
+                || record_field_allowed server "$n" || printf ' stamp:%s' "$n"
+        done )
+    if [ -z "$fg_missing" ]; then
+        ok "field gate: every field the programs write today is on its set's list (derived from write_client_field, the manifest heredocs and stamps, setup-server)"
+    else
+        bad "field gate: every field the programs write today is on its set's list (derived from write_client_field, the manifest heredocs and stamps, setup-server)" \
+            "not listed:$fg_missing"
+    fi
+else
+    bad "field gate: every name each set lists round-trips through record_load" "$RECLIB has no record_field_allowed -- the reader has no per-set list"
+    bad "field gate: every field the programs write today is on its set's list (derived from write_client_field, the manifest heredocs and stamps, setup-server)" \
+        "$RECLIB has no record_field_allowed -- nothing to derive against"
+fi
+
 
 # ============================================================================
 # `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
