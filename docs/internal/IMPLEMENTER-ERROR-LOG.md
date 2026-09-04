@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27.*
+*Evidence: E8, E3, E27, E37.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1060,4 +1060,27 @@ distance between the two is every name nobody thought of. Enumerate from the
 writers, derive the check from the program text in the suite so a new writer
 fails there, and keep the list a superset of what older releases wrote so the
 data already on hosts still loads.
+
+### E37 — A commit and a push chained behind `impact.sh --verify | tail`
+
+**2026-09-04, REV-20260904-134 delivery, caught by reading the output after
+the push had already happened.**
+
+*Genesis.* One shell line did the whole submission: regenerate the ledger,
+stage, `./test/impact.sh --verify 2>&1 | tail -2 && git commit ... ; git
+push`. `reviewctl --generate` refused (the implementation SHA was not on
+`origin/main` yet -- it wants `REVIEWCTL_PUBREF=HEAD` on a branch), so the
+ledger still said `OPEN | Claude`; `--verify` then failed and printed the
+ledger diff -- and the commit ran anyway, because the status of a pipeline
+is the status of `tail`. The push published a response whose ledger row
+contradicted it. Fixed forward in the next commit, no history rewritten.
+
+*Cause.* R4, verbatim: a mutation chained behind a step that can fail
+silently. `| tail` turned a loud non-zero gate into a zero. The gate's own
+message even said what to do.
+
+*Rule.* R4, with the one mechanical shape that keeps producing it: **never
+put a gate on the left of a pipe when a mutation follows `&&`.** Run the gate
+bare (or `set -o pipefail`), read its exit status, then mutate in a separate
+command. And a `--generate` that refuses is a stop, not a warning.
 
