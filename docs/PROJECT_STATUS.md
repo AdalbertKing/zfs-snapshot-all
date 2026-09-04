@@ -168,10 +168,10 @@
   zapisaną listę, gdy operator nie podał `--grant-datasets` (jawna flaga
   wygrywa, brak/pusty plik = jak dotąd), z linią w logu; `test/selfupdate`
   sekcja 29 (+4). Kontrola ujemna wobec `caf8f27`: dokładnie te asercje.
-  **Decyzja właściciela 1:** `update-hold` zatrzymuje tylko
-  `update-control.sh --self-update`; ręczny `deploy.sh` robi własny `git pull`
-  w Fazie 2 i w tym samym przebiegu drukuje, że aktualizacje wstrzymane —
-  czy hold ma obejmować także `deploy.sh`? **Decyzja właściciela 2
+  **Decyzja właściciela 1 — PODJĘTA i wdrożona przez wątek floty (PR
+  #321):** `update-hold` zatrzymuje także `git pull` Fazy 2 samego `deploy.sh`
+  (bez tego `--rollback` nie cofał); wcześniej bramkował tylko
+  `update-control.sh --self-update` **Decyzja właściciela 2
   (bezpieczeństwo, poza pakietem):** pve9, pve9b i pve10 mają TEN SAM
   prywatny klucz roota (`SHA256:qyDsuCE9…`, komentarz `root@pve9`) po
   klonowaniu VM — lista sprzątania po klonie nie obejmowała klucza roota.
