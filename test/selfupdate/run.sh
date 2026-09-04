@@ -1000,5 +1000,67 @@ else
     bad "hold: the account checkout is gated too" "gate=$_g2 pull=$_p2"
 fi
 
+# --- A FAILED PULL NAMES WHAT IT SAW, NOT A GUESSED CAUSE -------------------
+#
+# Both pull sites died with "local repo has diverged, resolve manually" on ANY
+# non-zero exit from `git pull --ff-only`, without ever checking. Measured on
+# pve10 2026-09-04: a transient blip to GitHub produced that line on a checkout
+# sitting exactly at origin/main, clean, with nothing of its own -- and the same
+# pull succeeded a minute later. A confident wrong message costs more than a
+# vague one: it sends the operator to fix something that is not broken.
+#
+# Real repositories, three states, one assertion each -- the interesting one is
+# `clean`, where the old text was actively false.
+pf() {   # <repo dir> [account] -> the failure explanation
+    bash -c "
+        warn(){ echo \"WARN: \$*\"; }; die(){ echo \"DIE: \$*\"; exit 1; }
+        $(awk '/^explain_pull_failure\(\)/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY")
+        explain_pull_failure '$1' '${2:-}'" 2>&1
+}
+PFW="$WORK/pullfail"; mkdir -p "$PFW"
+for _st in clean dirty ahead; do
+    _r="$PFW/$_st"; git init -q "$_r"
+    ( cd "$_r" && git config user.email t@t && git config user.name t \
+      && echo a > f && git add f && git commit -qm base && git branch -f origin/main HEAD ) >/dev/null 2>&1
+done
+echo zmiana > "$PFW/dirty/f"
+( cd "$PFW/ahead" && echo b > g && git add g && git commit -qm mine ) >/dev/null 2>&1
+
+out="$(pf "$PFW/clean")"
+if printf '%s' "$out" | grep -q 'NOT a divergence' \
+   && printf '%s' "$out" | grep -q 'network, DNS or GitHub' \
+   && ! printf '%s' "$out" | grep -q 'really is diverged'; then
+    ok "pull failure: a clean checkout is NOT called diverged -- it points at the fetch"
+else
+    bad "pull failure: a clean checkout is NOT called diverged -- it points at the fetch" "$out"
+fi
+
+out="$(pf "$PFW/dirty")"
+if printf '%s' "$out" | grep -q 'LOCAL MODIFICATIONS' && printf '%s' "$out" | grep -q ' M f'; then
+    ok "pull failure: local modifications are named, and shown"
+else
+    bad "pull failure: local modifications are named, and shown" "$out"
+fi
+
+out="$(pf "$PFW/ahead")"
+if printf '%s' "$out" | grep -q 'really is diverged' && printf '%s' "$out" | grep -q 'mine'; then
+    ok "pull failure: a REAL divergence is still called one, with the commits"
+else
+    bad "pull failure: a REAL divergence is still called one, with the commits" "$out"
+fi
+
+# Both sites must ROUTE through the explanation, and no site may still die with
+# the guessed cause. Matched on the `die` that would execute it, not on the
+# words -- the function's own comment quotes the old text on purpose, and an
+# assertion that cannot tell a comment from code would fail on that quote.
+_old=$(grep -c '|| die "git pull --ff-only failed' "$DEPLOY")
+_new=$(grep -c '|| explain_pull_failure "' "$DEPLOY")
+if [ "$_old" -eq 0 ] && [ "$_new" -eq 2 ]; then
+    ok "pull failure: both pull sites route through the explanation, none still guesses"
+else
+    bad "pull failure: both pull sites route through the explanation, none still guesses" \
+        "stare wywolania=$_old nowe=$_new"
+fi
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]
