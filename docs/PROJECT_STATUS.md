@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0ea424872b444a54 -->
+<!-- status-covers-digest: 5790db9fad06c41a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,33 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Rekord nie może już nazwać zmiennej czytelnika (REV-20260904-134,
+  2026-09-04).** Recenzent zmierzył: `record_load` przyjmował każdą nazwę
+  `[A-Z][A-Z0-9_]*` poza krótką listą odmów, więc pole `DIE_MAIN_PID=` w
+  rekordzie klienta kasowało pid, który `die` zabija z podstawienia — i
+  `set-endpoint` z błędnym hostem drukował FATAL i szedł dalej do drugiej
+  odmowy. Domknięte klasą, nie pisownią: `record_field_allowed <zbiór> <nazwa>`
+  w `lib-record.sh`, osobna lista dla `client` (44 nazwy, z numerowanymi
+  `EXCLUDE_*` i polami starszych wydań), `manifest` (30), `pause` (2),
+  `server` (3); nazwa spoza listy zbioru to ta sama odmowa co `PATH`, przed
+  przypisaniem. Listy są nadzbiorem dzisiejszych pisarzy (zmierzone z
+  `git log -p --all`), żeby rekord z polem starszego wydania nadal się
+  wczytał i trafił na odmowę legacy z nową pisownią. `test/zfsbackup`
+  sekcja records +4: reproduktor recenzenta dosłownie (rc=1, jeden FATAL,
+  rekord nietknięty), klasa w każdym zbiorze (zmienna czytelnika, pole
+  innego zbioru, zepsute pole numerowane), round-trip każdej nazwy z listy
+  oraz pisarze wyprowadzeni z tekstu programów ⊆ listy. Kontrola ujemna na
+  `ac05727`: cztery nowe asercje padają (dwa FATAL-e, jak u recenzenta).
+  Trzy fixtury sekcji 57/58 wpisywały pola manifestu do rekordu klienta —
+  teraz niesie je stub `load_client_and_connection`, tak jak w produkcie
+  niesie je manifest. `server.conf` „do ręcznej edycji" może odtąd nieść
+  tylko trzy pola, które pakiet z niego czyta. E36 (R3). **Dogrywka tego
+  samego dnia (recenzent, PR #329):** reguła pól numerowanych sprawdzała
+  tylko człon po ostatnim podkreśleniu, więc `EXCLUDE_FOO_1` przechodziło;
+  teraz cztery rodziny (`EXCLUDE_FAMILY_`, `EXCLUDE_CHILD_`, `EXCLUDE_SNAP_`,
+  `EXCLUDE_`) dopasowane osobno, po prefiksie same cyfry; sondy ujemne
+  `EXCLUDE_FOO_1`, `EXCLUDE_FOO_BAR_1`, `EXCLUDE_FAMILY_1_2`, `EXCLUDE_SNAP_1A`
+  i dodatnie dla każdej rodziny (E36 postscriptum, R3 + R1).
 - **Nieudany `git pull` twierdził „local repo has diverged", nie sprawdzając
   tego (2026-09-04).** Oba miejsca pobierania w `deploy.sh` kończyły tym samym
   zdaniem przy **dowolnym** niezerowym wyjściu z `git pull --ff-only`.
@@ -7501,6 +7528,15 @@ stanem recenzji.
   (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
   na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
   niewłaściwej funkcji, i przechodzą dziś.
+- **Dwa dokumenty decyzji czekają na słowo właściciela (2026-09-04):**
+  `docs/discussions/OWNER-LVM-BACKEND-DECISION-2026-09-04.md` (backend LVM:
+  parowanie root-only i backend-neutralny `gen-cron` już rozstrzygnięte,
+  sześć pytań w §7) oraz `docs/discussions/OWNER-GUI-DECISION-2026-09-04.md`
+  (cienkie GUI: pięć pytań w §7 — rodzaj, miejsce i dostęp, język, zakres V1,
+  zasięg — każde z rekomendacją; etap A „dopełnienie JSON": `status --json`,
+  `relations --json`, `monitor --json` nie zależy od żadnej odpowiedzi).
+  Inwentarz z 2026-09-04: JSON mają tylko `progress` i `list-replicas`;
+  `status` jest tekstem, listy relacji z `--json` nie ma.
 
 ### Czeka na werdykt recenzenta
 
