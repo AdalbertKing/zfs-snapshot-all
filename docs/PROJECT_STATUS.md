@@ -7501,6 +7501,15 @@ stanem recenzji.
   (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
   na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
   niewłaściwej funkcji, i przechodzą dziś.
+- **Dwa dokumenty decyzji czekają na słowo właściciela (2026-09-04):**
+  `docs/discussions/OWNER-LVM-BACKEND-DECISION-2026-09-04.md` (backend LVM:
+  parowanie root-only i backend-neutralny `gen-cron` już rozstrzygnięte,
+  sześć pytań w §7) oraz `docs/discussions/OWNER-GUI-DECISION-2026-09-04.md`
+  (cienkie GUI: pięć pytań w §7 — rodzaj, miejsce i dostęp, język, zakres V1,
+  zasięg — każde z rekomendacją; etap A „dopełnienie JSON": `status --json`,
+  `relations --json`, `monitor --json` nie zależy od żadnej odpowiedzi).
+  Inwentarz z 2026-09-04: JSON mają tylko `progress` i `list-replicas`;
+  `status` jest tekstem, listy relacji z `--json` nie ma.
 
 ### Czeka na werdykt recenzenta
 
