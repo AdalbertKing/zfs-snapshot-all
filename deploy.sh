@@ -2277,6 +2277,43 @@ ensure_update_state_dir() {
 # the directory ENTRY instead, so writing into a private tmpfile first and
 # renaming it over $dst is safe even if $dst is currently a symlink: the
 # rename clobbers the link itself, never the link's target.
+# A FAILED PULL IS NOT A DIAGNOSIS, and this used to print one.
+#
+# Both pull sites died with "local repo has diverged, resolve manually" on ANY
+# non-zero exit from `git pull --ff-only`. Divergence is one cause among
+# several, and it was never checked: measured on pve10 2026-09-04, a transient
+# network blip to GitHub produced that line on a checkout that was exactly at
+# origin/main, clean, with nothing of its own -- and the same pull succeeded a
+# minute later. The operator is then sent hunting for a divergence that does
+# not exist, which is the expensive kind of wrong message: it is confident.
+#
+# So: look before naming a cause. The three cases are cheap to tell apart and
+# each needs a different move. Anything else stays honestly unnamed.
+#
+# $2 is the account for the delegated checkout, empty for root's -- the reads
+# have to happen as whoever owns the repo, or git refuses on dubious ownership.
+explain_pull_failure() {   # <repo dir> [account]
+    local dir="$1" as="${2:-}" g dirty ahead
+    if [ -n "$as" ]; then g="su $as -c"; else g="bash -c"; fi
+    dirty=$($g "git -C '$dir' status --porcelain" 2>/dev/null | head -3)
+    ahead=$($g "git -C '$dir' log --oneline origin/main..HEAD" 2>/dev/null | head -3)
+    warn "git pull --ff-only failed in $dir. What this run could actually see:"
+    if [ -n "$dirty" ]; then
+        warn "  LOCAL MODIFICATIONS -- --ff-only refuses to overwrite them:"
+        printf '%s\n' "$dirty" | while IFS= read -r l; do warn "    $l"; done
+        die "resolve those by hand (git -C $dir status), then re-run"
+    fi
+    if [ -n "$ahead" ]; then
+        warn "  the checkout HAS COMMITS origin/main does not -- this one really is diverged:"
+        printf '%s\n' "$ahead" | while IFS= read -r l; do warn "    $l"; done
+        die "resolve by hand (git -C $dir log origin/main..HEAD), then re-run"
+    fi
+    warn "  the checkout is clean and has nothing of its own, so this is NOT a divergence."
+    warn "  That leaves the fetch itself: network, DNS or GitHub. Check with:"
+    warn "    git -C $dir pull --ff-only origin main"
+    die "not retried automatically -- a deployment that pulls on a flaky link is worse than one that stops"
+}
+
 write_state_file() {
     local dst="$1" content="$2" tmp
     if [ -L "$dst" ]; then
@@ -4237,11 +4274,45 @@ else
 mkdir -p "$(dirname "$REPO_DIR")"
 
 if [ -d "$REPO_DIR/.git" ]; then
-    log "$REPO_DIR is already a git repo, pulling..."
-    git -C "$REPO_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_URL" \
-        || warn "existing repo's origin does not match $REPO_URL -- check manually"
-    git -C "$REPO_DIR" pull --ff-only origin main \
-        || die "git pull --ff-only failed -- local repo has diverged, resolve manually before continuing"
+    # A HOLD STOPS THIS PULL, and until 2026-09-04 it did not -- which made
+    # --rollback silently not roll back.
+    #
+    # update-control.sh honours the hold at its own front door: --self-update
+    # reads it BEFORE touching git and returns. This phase never asked. So any
+    # direct `deploy.sh` run pulled main into the checkout regardless, and the
+    # hold was only NOTICED ~800 lines later, in phase 7, where it merely warns
+    # -- long after the revision had moved.
+    #
+    # The expensive case is do_rollback, which is built out of exactly these
+    # pieces: it resets the checkout to the recorded revision, writes the hold,
+    # and then runs THIS script to regenerate the host's scripts at that
+    # revision. Phase 2 pulled main straight back over the reset, inside the
+    # same command. Measured on pve10, 2026-09-04:
+    #
+    #   >>> rolled back 8ee40ef7 -> bd23bcc8          (update-control says so)
+    #   >>> Phase 2 ... already a git repo, pulling...
+    #   Updating bd23bcc8..8e8cbe68                    (main had moved on)
+    #
+    # -- the host finished on a revision NEWER than the one it rolled back
+    # from, while the hold file claimed it was parked at bd23bcc8. Both the
+    # rollback and its own safety net reported success about a state that did
+    # not exist.
+    #
+    # Held therefore means: deploy the checkout EXACTLY as it stands. That is
+    # what an operator sets a hold for -- during a lab, a staged rollback, a
+    # bisect. Deploying is still allowed (--rollback needs it); moving the
+    # revision under the operator is not.
+    if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+        warn "automatic updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE" 2>/dev/null || echo 'reason unreadable')) -- NOT pulling"
+        log "  deploying $REPO_DIR exactly as it stands ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null))"
+        log "  lift the hold to follow main again: bash $0 --resume-updates"
+    else
+        log "$REPO_DIR is already a git repo, pulling..."
+        git -C "$REPO_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_URL" \
+            || warn "existing repo's origin does not match $REPO_URL -- check manually"
+        git -C "$REPO_DIR" pull --ff-only origin main \
+            || explain_pull_failure "$REPO_DIR"
+    fi
 
 elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
     log "$REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"
@@ -6886,11 +6957,21 @@ else
     log "Phase 8d: repo checkout at $ACCOUNT_REPO_DIR (readable+executable by $USERNAME)"
     # ------------------------------------------------------------------------------
     if [ -d "$ACCOUNT_REPO_DIR/.git" ]; then
+        # SAME RULE AS PHASE 2, and for the same reason: this copy is what the
+        # account's cron actually runs. Pulling it while updates are held would
+        # leave the account on main while root sits at the rolled-back revision
+        # -- the two halves of one host running different code, which is worse
+        # than either alone.
+        if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+            warn "automatic updates are HELD -- NOT pulling $ACCOUNT_REPO_DIR either"
+            log "  leaving it at $(su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' rev-parse --short HEAD" 2>/dev/null)"
+        else
         log "$ACCOUNT_REPO_DIR is already a git repo, pulling..."
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' remote get-url origin 2>/dev/null" | grep -qF "$REPO_URL" \
             || warn "existing repo's origin does not match $REPO_URL -- check manually"
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' pull --ff-only origin main" \
-            || die "git pull --ff-only failed -- local repo has diverged, resolve manually"
+            || explain_pull_failure "$ACCOUNT_REPO_DIR" "$USERNAME"
+        fi
 
     elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then
         log "$ACCOUNT_REPO_DIR exists with files but is not a git repo (plain scripts from an earlier manual copy?)"

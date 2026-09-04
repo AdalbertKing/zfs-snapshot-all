@@ -912,5 +912,155 @@ else
     bad "29d an EMPTY recorded file is not a list: the default stands" "$(printf '%s' "$out" | grep -F 'grant-datasets:')"
 fi
 
+# --- A HELD HOST DOES NOT PULL, SO --rollback ACTUALLY ROLLS BACK -----------
+#
+# update-control.sh honours the hold at its own front door. deploy.sh's phase 2
+# did not: it pulled main into the checkout on every direct run and only
+# NOTICED the hold ~800 lines later, where it merely warns.
+#
+# do_rollback is built out of exactly those pieces -- reset the checkout, write
+# the hold, then run deploy.sh to regenerate the host's scripts at that
+# revision -- so phase 2 pulled main straight back over the reset, inside the
+# same command. Measured on pve10 2026-09-04:
+#
+#   >>> rolled back 8ee40ef7 -> bd23bcc8
+#   >>> Phase 2 ... already a git repo, pulling...
+#   Updating bd23bcc8..8e8cbe68
+#
+# The host finished NEWER than it started while the hold file claimed it was
+# parked at bd23bcc8: the rollback and its own safety net both reported success
+# about a state that did not exist.
+#
+# The gate is lifted verbatim from deploy.sh and run with a `git` that records
+# what it was asked to do, so this asserts the DECISION, not the wording.
+mkdir -p "$WORK/hg"
+hold_gate() {   # <hold present: 0|1> -> stdout of the gate; git calls in $WORK/hg/calls
+    : > "$WORK/hg/calls"
+    if [ "$1" = 1 ]; then printf 'lab, 2026-09-04\n' > "$WORK/hg/hold"; else rm -f "$WORK/hg/hold"; fi
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      echo 'log()  { echo "LOG: $*"; }'
+      echo 'warn() { echo "WARN: $*"; }'
+      echo 'die()  { echo "DIE: $*"; exit 1; }'
+      echo 'read_state_file() { cat "$1" 2>/dev/null; }'
+      printf 'REPO_DIR=%q\nREPO_URL=%q\nUPDATE_HOLD_FILE=%q\nCALLS=%q\n' \
+             "$WORK/hg/repo" "https://example.invalid/r.git" "$WORK/hg/hold" "$WORK/hg/calls"
+      # Records every invocation; answers the two reads the block makes.
+      cat <<'STUB'
+git() {
+    printf '%s\n' "$*" >> "$CALLS"
+    case "$*" in
+        *"remote get-url"*) echo "https://example.invalid/r.git" ;;
+        *"rev-parse"*)      echo "deadbee" ;;
+    esac
+    return 0
+}
+STUB
+      echo 'gate() {'
+      awk '/# A HOLD STOPS THIS PULL/{f=1} f{print} f&&/^    fi$/{exit}' "$DEPLOY"
+      echo '}'
+      echo 'gate'; } > "$t"
+    bash "$t" 2>&1; rm -f "$t"
+}
+
+out="$(hold_gate 1)"
+if ! grep -q -- 'pull --ff-only' "$WORK/hg/calls" \
+   && printf '%s' "$out" | grep -q 'NOT pulling'; then
+    ok "hold: phase 2 does NOT pull while updates are held"
+else
+    bad "hold: phase 2 does NOT pull while updates are held" \
+        "out=$out calls=$(cat "$WORK/hg/calls")"
+fi
+
+# THE POSITIVE CONTROL, and the reason the assertion above means anything: a
+# gate that never pulls would pass it just as well.
+out="$(hold_gate 0)"
+if grep -q -- 'pull --ff-only origin main' "$WORK/hg/calls"; then
+    ok "no hold: phase 2 pulls exactly as before"
+else
+    bad "no hold: phase 2 pulls exactly as before" \
+        "out=$out calls=$(cat "$WORK/hg/calls")"
+fi
+
+# PLACEMENT IS THE WHOLE FINDING, in both checkouts -- root's and the delegated
+# account's. The account copy is what its cron runs; pulling it under a hold
+# would leave one host running two revisions.
+_g1=$(grep -n 'A HOLD STOPS THIS PULL' "$DEPLOY" | head -1 | cut -d: -f1)
+_p1=$(grep -n 'is already a git repo, pulling' "$DEPLOY" | sed -n 1p | cut -d: -f1)
+_g2=$(grep -n 'NOT pulling \$ACCOUNT_REPO_DIR either' "$DEPLOY" | head -1 | cut -d: -f1)
+_p2=$(grep -n 'is already a git repo, pulling' "$DEPLOY" | sed -n 2p | cut -d: -f1)
+if [ -n "$_g1" ] && [ -n "$_p1" ] && [ "$_g1" -lt "$_p1" ]; then
+    ok "hold: the gate precedes root's pull in the file"
+else
+    bad "hold: the gate precedes root's pull in the file" "gate=$_g1 pull=$_p1"
+fi
+if [ -n "$_g2" ] && [ -n "$_p2" ] && [ "$_g2" -lt "$_p2" ]; then
+    ok "hold: the account checkout is gated too"
+else
+    bad "hold: the account checkout is gated too" "gate=$_g2 pull=$_p2"
+fi
+
+# --- A FAILED PULL NAMES WHAT IT SAW, NOT A GUESSED CAUSE -------------------
+#
+# Both pull sites died with "local repo has diverged, resolve manually" on ANY
+# non-zero exit from `git pull --ff-only`, without ever checking. Measured on
+# pve10 2026-09-04: a transient blip to GitHub produced that line on a checkout
+# sitting exactly at origin/main, clean, with nothing of its own -- and the same
+# pull succeeded a minute later. A confident wrong message costs more than a
+# vague one: it sends the operator to fix something that is not broken.
+#
+# Real repositories, three states, one assertion each -- the interesting one is
+# `clean`, where the old text was actively false.
+pf() {   # <repo dir> [account] -> the failure explanation
+    bash -c "
+        warn(){ echo \"WARN: \$*\"; }; die(){ echo \"DIE: \$*\"; exit 1; }
+        $(awk '/^explain_pull_failure\(\)/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY")
+        explain_pull_failure '$1' '${2:-}'" 2>&1
+}
+PFW="$WORK/pullfail"; mkdir -p "$PFW"
+for _st in clean dirty ahead; do
+    _r="$PFW/$_st"; git init -q "$_r"
+    ( cd "$_r" && git config user.email t@t && git config user.name t \
+      && echo a > f && git add f && git commit -qm base && git branch -f origin/main HEAD ) >/dev/null 2>&1
+done
+echo zmiana > "$PFW/dirty/f"
+( cd "$PFW/ahead" && echo b > g && git add g && git commit -qm mine ) >/dev/null 2>&1
+
+out="$(pf "$PFW/clean")"
+if printf '%s' "$out" | grep -q 'NOT a divergence' \
+   && printf '%s' "$out" | grep -q 'network, DNS or GitHub' \
+   && ! printf '%s' "$out" | grep -q 'really is diverged'; then
+    ok "pull failure: a clean checkout is NOT called diverged -- it points at the fetch"
+else
+    bad "pull failure: a clean checkout is NOT called diverged -- it points at the fetch" "$out"
+fi
+
+out="$(pf "$PFW/dirty")"
+if printf '%s' "$out" | grep -q 'LOCAL MODIFICATIONS' && printf '%s' "$out" | grep -q ' M f'; then
+    ok "pull failure: local modifications are named, and shown"
+else
+    bad "pull failure: local modifications are named, and shown" "$out"
+fi
+
+out="$(pf "$PFW/ahead")"
+if printf '%s' "$out" | grep -q 'really is diverged' && printf '%s' "$out" | grep -q 'mine'; then
+    ok "pull failure: a REAL divergence is still called one, with the commits"
+else
+    bad "pull failure: a REAL divergence is still called one, with the commits" "$out"
+fi
+
+# Both sites must ROUTE through the explanation, and no site may still die with
+# the guessed cause. Matched on the `die` that would execute it, not on the
+# words -- the function's own comment quotes the old text on purpose, and an
+# assertion that cannot tell a comment from code would fail on that quote.
+_old=$(grep -c '|| die "git pull --ff-only failed' "$DEPLOY")
+_new=$(grep -c '|| explain_pull_failure "' "$DEPLOY")
+if [ "$_old" -eq 0 ] && [ "$_new" -eq 2 ]; then
+    ok "pull failure: both pull sites route through the explanation, none still guesses"
+else
+    bad "pull failure: both pull sites route through the explanation, none still guesses" \
+        "stare wywolania=$_old nowe=$_new"
+fi
+
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

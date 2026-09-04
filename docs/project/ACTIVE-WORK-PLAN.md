@@ -449,7 +449,20 @@ Deferred to slice 2 (named in the design note): the transactional install
 (workfile → `gen-cron.sh -c` validate → preview → confirm →
 `atomic_replace_and_install` with read-back), ownership markers so `local-backup`
 and `activate-client` never fight over one CONFIG, and live-host verification.
-Slice 3: target discovery/proposal when omitted.
+Slice 3: target discovery/proposal when omitted — **DELIVERED**, and this line
+said "deferred" long after it shipped. `propose_backup_target()` and
+`propose_backup_sources()` (`zfs-backup.sh`) do the discovery, both extracted
+verbatim from `cmd_setup_server` rather than reimplemented so the two callers
+cannot drift into two ideas of "where backups go". The proposal distinguishes
+its own provenance — `default` (an operator decision already recorded in
+`server.conf`) from `heuristic` (guessed from the pool layout) — and the usage
+text states the contract: *"--target omitted: proposed (server.conf default,
+else the pool layout) and shown; a GUESSED target will not install under
+--yes"*. A guess may be shown, never acted on unattended.
+
+Corrected 2026-09-04 during a work-pickup check: the plan is the canonical work
+sequence, so a slice left marked "deferred" after delivery misroutes the next
+session into rebuilding it.
 
 ### Gate 5
 
