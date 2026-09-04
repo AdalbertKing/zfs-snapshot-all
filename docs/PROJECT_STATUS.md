@@ -21,6 +21,51 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Nowy profil `m31w4d7h24` — płaski licznik dla maszyn, które stoją
+  wyłączone (2026-09-04).** Cztery rodziny (godzinowa, dobowa, tygodniowa,
+  miesięczna), po jednym **liczniku sztuk** na każdą: `-H24`, `-D7`, `-W4`,
+  `-M31`. Ani jednego `gfs = yes`.
+
+  **Powstał z pomiaru, nie z prośby o kolejną kombinację.** Właściciel chciał
+  najpierw przyciąć katalog do samych drabin, na przesłance „drabina trzyma
+  zadaną ILOŚĆ, nie kasuje za wiek”. Zmierzone na pve10 przeciw prawdziwemu
+  `delsnaps.sh` (`826ad286`), przestój symulowany przesunięciem `GFS_NOW`:
+  szczebel drabiny jest zakotwiczony na **zegarze ściennym** (`GFS_NOW` to
+  domyślnie `date +%s`), a nagłówek `delsnaps.sh` mówi wprost, co z tego
+  wynika — *anything older than the outermost requested rung is deleted*.
+
+  | tryb | zasięg | po 30 dniach przestoju |
+  |---|---|---|
+  | płaski `-H24 -D7` | brak, liczy sztuki | **6/6** |
+  | `-G -H24 -D7` | 8 dni | **0/6** |
+  | `-G -H24 -D30` | 31 dni | 1/6 |
+  | `-G -H24 -D31 -M12 -Y5` | ~6,4 roku | 1/6 |
+
+  Prawdziwy bieg bez `-n` i bez holdów: **`rc=0`, zero migawek, zero
+  ostrzeżeń** — rodzina znika po cichu przy pierwszym prune po powrocie
+  maszyny. To, co przeżyło w wariancie z `zfs hold`, przeżyło bo **ZFS
+  odmówił** (`dataset is busy`), nie bo `delsnaps` chronił; podpowiedź w
+  błędzie mówi przy tym o klonach, nie o holdzie. Cięcie katalogu zostało
+  **wycofane** (PR #332 zamknięty bez scalania, 15 plików zostaje), a ten
+  profil jest odpowiedzią na pierwotną potrzebę.
+
+  **Cztery liczniki, nie jedna suma.** W trybie płaskim `delsnaps` DODAJE
+  litery — `calculate_keep_count()` to `keep_years + keep_months + ... +
+  keep_hours` — więc jedna linia z `-M31 -W4 -D7 -H24` trzymałaby 66
+  najnowszych migawek JEDNEJ rodziny, czyli około trzech dni godzinówek i
+  zero historii. Stąd cztery osobne rodziny z czterema prefiksami.
+  Zweryfikowane renderem przez prawdziwy `gen-cron.sh`: cztery linie
+  `delsnaps.sh` (`-H24`, `-D7`, `-W4`, `-M31`), zero `-G`, `-q auto,degrade`
+  na trzech grubszych i brak na godzinowej. `test/profiles` **87/0** — pętla
+  „nazwa jest retencją” i asercja quiesce obejmują nowy plik bez zmian w
+  teście.
+
+  **Czego ten profil NIE daje**, spisane w jego nagłówku: płaski licznik
+  ogranicza LICZBĘ, więc nic nie mówi o ROZKŁADZIE. Po serii nadrabiającej
+  zaległości `-H24` zostawi 24 najnowsze, a te mogą się zmieścić w minutach
+  zamiast w dobie — drabina zostawiłaby jedną na kubełek. Kto boi się serii,
+  a nie przestojów, bierze `m12w4d7h24-gfs`.
+
 - **Rekord nie może już nazwać zmiennej czytelnika (REV-20260904-134,
   2026-09-04).** Recenzent zmierzył: `record_load` przyjmował każdą nazwę
   `[A-Z][A-Z0-9_]*` poza krótką listą odmów, więc pole `DIE_MAIN_PID=` w

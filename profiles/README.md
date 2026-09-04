@@ -40,6 +40,17 @@ A bare name therefore always means the catalogue default. `y5m12d31h24` is
 deliberately not shipped: we ship its `-gfs` and `-age` forms, and the bare
 name stays reserved so it cannot mean two things.
 
+**The flat count is the only mode that survives a long outage, and that is a
+measurement rather than an opinion** (pve10, the real `delsnaps.sh`,
+2026-09-04). A ladder rung is anchored on the WALL CLOCK -- `GFS_NOW` defaults
+to `date +%s` -- and `delsnaps.sh` deletes anything older than the outermost
+rung. Six snapshots, one prune run, a machine that had been off for thirty
+days: flat `-H24 -D7` kept 6 of 6, `-G -H24 -D7` kept **0 of 6** (`rc=0`, no
+warning, nothing in the mail), `-G -H24 -D30` kept 1. A family whose newest
+member has aged past its ladder's reach is deleted entirely on the first prune
+after the machine comes back. `m31w4d7h24` is the shipped answer to that:
+four families, four flat counters, no `gfs` anywhere.
+
 `Y5M12D31H24` is the first UPPERCASE profile, and it needed no new suffix: the
 case rule above already said "one family, several counters over it". It was
 added 2026-09-01 to close a real hole rather than a missing combination -- the
@@ -118,6 +129,7 @@ data where a crash-consistent copy is genuinely worthless. See
 | `y5m12d31h24-gfs` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder over its own prefix | daily, monthly, yearly |
 | `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
 | `m12w4d7h24-gfs` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 12, each a `-G` ladder over its own prefix | daily, weekly, monthly |
+| `m31w4d7h24` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 31, each a flat COUNT over its own prefix | daily, weekly, monthly |
 | `m12w4d7h24-age` | the same four families | the same numbers BY AGE (`-h24 -d7 -w4 -m12`) | daily, weekly, monthly |
 | `Y5M12D31H24` | one family, hourly | GFS ladder 24/31/12/5 | none — a ladder cannot |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
