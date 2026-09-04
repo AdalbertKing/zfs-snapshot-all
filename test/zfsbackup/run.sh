@@ -8702,6 +8702,8 @@ fi
 
 # The class. Each probe is one record with one field, loaded into the named
 # set through the real reader; the positives prove the probe can load at all.
+# The numbered families are probed one by one (REV-134 follow-up: a check on
+# the last underscore-separated component alone admitted EXCLUDE_FOO_1).
 fg_probe() {   # <set> <KEY=value> -> loaded | refused
     printf '%s\n' "$2" > "$RG/probe.conf"
     ( . "$REPO/lib-backup-common.sh"; die() { exit 9; }; record_load "$1" "$RG/probe.conf" >/dev/null 2>&1 )
@@ -8715,7 +8717,9 @@ while read -r set line want; do
 done <<'EOF'
 client   CLIENT_NAME=x            loaded
 client   EXCLUDE_FAMILY_2=x       loaded
+client   EXCLUDE_CHILD_1=x        loaded
 client   EXCLUDE_SNAP_1=x         loaded
+client   EXCLUDE_1=x              loaded
 manifest PEER_SAVED_TARGET=x      loaded
 pause    PAUSED_AT=x              loaded
 server   DEFAULT_TARGET=x         loaded
@@ -8724,6 +8728,10 @@ client   SRC_PROFILE_NAME=x       refused
 client   PEER_SAVED_TARGET=x      refused
 client   EXCLUDE_FAMILY_=x        refused
 client   EXCLUDE_FOO=x            refused
+client   EXCLUDE_FOO_1=x          refused
+client   EXCLUDE_FOO_BAR_1=x      refused
+client   EXCLUDE_FAMILY_1_2=x     refused
+client   EXCLUDE_SNAP_1A=x        refused
 manifest PEER_MODE=x              refused
 manifest CLIENT_NAME=x            refused
 manifest DIE_MAIN_PID=            refused
@@ -8750,7 +8758,7 @@ if grep -q '^record_field_allowed()' "$RECLIB"; then
             /^[[:space:]]*(client|manifest|pause|server)\)/ { cur=$0; sub(/^[[:space:]]*/,"",cur); sub(/\).*/,"",cur); next }
             cur==want { s=$0; sub(/#.*/,"",s)
                 while (match(s, /[A-Z][A-Z0-9_]*\*?/)) { t=substr(s,RSTART,RLENGTH); s=substr(s,RSTART+RLENGTH)
-                    if (t ~ /_\*$/) { sub(/\*$/,"",t); print t "1" } else if (t !~ /\*/) print t } }'
+                    if (t ~ /_\*$/) { sub(/\*$/,"",t); print t "1" } else if (t ~ /_$/) print t "1"; else if (t !~ /\*/) print t } }' | sort -u
     }
     fg_rt_bad=""; fg_counts=""
     for set in client manifest pause server; do

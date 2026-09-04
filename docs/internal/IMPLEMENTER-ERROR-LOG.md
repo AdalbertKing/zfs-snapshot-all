@@ -1061,6 +1061,14 @@ writers, derive the check from the program text in the suite so a new writer
 fails there, and keep the list a superset of what older releases wrote so the
 data already on hosts still loads.
 
+*Postscript, same day.* The first cut of the numbered-field rule tested only
+the component after the LAST underscore, so `EXCLUDE_FOO_1` passed -- the
+Reviewer's follow-up on PR #328. Same rule, same failure: "digits after the
+last underscore" is a property of many names; "one of these four prefixes
+followed by digits only" is the enumeration. The negative probe in the suite
+(`EXCLUDE_FOO`) had no digit and so never exercised the alternative I had
+written -- R1 as well: construct the input the broad branch would accept.
+
 ### E37 — A commit and a push chained behind `impact.sh --verify | tail`
 
 **2026-09-04, REV-20260904-134 delivery, caught by reading the output after

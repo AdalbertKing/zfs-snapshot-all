@@ -180,8 +180,9 @@ record_field_name_ok() {   # <name>
 # therefore kept: measured from `git log -p --all` on 2026-09-04 over
 # write_client_field, the manifest heredocs and the appended stamps.
 #
-# A numbered field (EXCLUDE_FAMILY_<n>, EXCLUDE_CHILD_<n>, and the two legacy
-# shapes) is accepted when what follows the last underscore is all digits.
+# A numbered field is one of exactly four families -- EXCLUDE_FAMILY_<n>,
+# EXCLUDE_CHILD_<n>, and the legacy EXCLUDE_SNAP_<n> and EXCLUDE_<n> -- with
+# nothing but digits after the family's prefix.
 #
 # server.conf says "edit by hand if needed"; the hand may only set the three
 # fields the package reads from it. Anything else is not a server.conf.
@@ -198,7 +199,18 @@ record_field_allowed() {   # <set> <name>
             MOVED_AT|MOVED_FROM|MOVED_TO|RUX_MODE|RUX_SOURCE|RUX_TARGET|\
             ENDPOINT_LAN_HOST|ENDPOINT_LAN_PORT|ENDPOINT_VPN_HOST|ENDPOINT_VPN_PORT) return 0 ;;
             EXCLUDE_FAMILY_*|EXCLUDE_CHILD_*|EXCLUDE_SNAP_*|EXCLUDE_*)
-                case "${2##*_}" in ''|*[!0-9]*) return 1 ;; esac
+                # Four families, each matched on its own: the prefix is the
+                # family and what follows it must be digits only. (The first
+                # cut tested only the last underscore-separated component and
+                # so admitted EXCLUDE_FOO_1 -- REV-134 follow-up.)
+                local _rfa_n
+                case "$2" in
+                    EXCLUDE_FAMILY_*) _rfa_n="${2#EXCLUDE_FAMILY_}" ;;
+                    EXCLUDE_CHILD_*)  _rfa_n="${2#EXCLUDE_CHILD_}" ;;
+                    EXCLUDE_SNAP_*)   _rfa_n="${2#EXCLUDE_SNAP_}" ;;
+                    *)                _rfa_n="${2#EXCLUDE_}" ;;
+                esac
+                case "$_rfa_n" in ''|*[!0-9]*) return 1 ;; esac
                 return 0 ;;
         esac ;;
     manifest)

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a48552b2c2e50fc0 -->
+<!-- status-covers-digest: 5790db9fad06c41a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -41,7 +41,13 @@
   Trzy fixtury sekcji 57/58 wpisywały pola manifestu do rekordu klienta —
   teraz niesie je stub `load_client_and_connection`, tak jak w produkcie
   niesie je manifest. `server.conf` „do ręcznej edycji" może odtąd nieść
-  tylko trzy pola, które pakiet z niego czyta. E36 (R3).
+  tylko trzy pola, które pakiet z niego czyta. E36 (R3). **Dogrywka tego
+  samego dnia (recenzent, PR #329):** reguła pól numerowanych sprawdzała
+  tylko człon po ostatnim podkreśleniu, więc `EXCLUDE_FOO_1` przechodziło;
+  teraz cztery rodziny (`EXCLUDE_FAMILY_`, `EXCLUDE_CHILD_`, `EXCLUDE_SNAP_`,
+  `EXCLUDE_`) dopasowane osobno, po prefiksie same cyfry; sondy ujemne
+  `EXCLUDE_FOO_1`, `EXCLUDE_FOO_BAR_1`, `EXCLUDE_FAMILY_1_2`, `EXCLUDE_SNAP_1A`
+  i dodatnie dla każdej rodziny (E36 postscriptum, R3 + R1).
 - **Nieudany `git pull` twierdził „local repo has diverged", nie sprawdzając
   tego (2026-09-04).** Oba miejsca pobierania w `deploy.sh` kończyły tym samym
   zdaniem przy **dowolnym** niezerowym wyjściu z `git pull --ff-only`.
