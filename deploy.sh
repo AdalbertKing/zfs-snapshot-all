@@ -2277,6 +2277,43 @@ ensure_update_state_dir() {
 # the directory ENTRY instead, so writing into a private tmpfile first and
 # renaming it over $dst is safe even if $dst is currently a symlink: the
 # rename clobbers the link itself, never the link's target.
+# A FAILED PULL IS NOT A DIAGNOSIS, and this used to print one.
+#
+# Both pull sites died with "local repo has diverged, resolve manually" on ANY
+# non-zero exit from `git pull --ff-only`. Divergence is one cause among
+# several, and it was never checked: measured on pve10 2026-09-04, a transient
+# network blip to GitHub produced that line on a checkout that was exactly at
+# origin/main, clean, with nothing of its own -- and the same pull succeeded a
+# minute later. The operator is then sent hunting for a divergence that does
+# not exist, which is the expensive kind of wrong message: it is confident.
+#
+# So: look before naming a cause. The three cases are cheap to tell apart and
+# each needs a different move. Anything else stays honestly unnamed.
+#
+# $2 is the account for the delegated checkout, empty for root's -- the reads
+# have to happen as whoever owns the repo, or git refuses on dubious ownership.
+explain_pull_failure() {   # <repo dir> [account]
+    local dir="$1" as="${2:-}" g dirty ahead
+    if [ -n "$as" ]; then g="su $as -c"; else g="bash -c"; fi
+    dirty=$($g "git -C '$dir' status --porcelain" 2>/dev/null | head -3)
+    ahead=$($g "git -C '$dir' log --oneline origin/main..HEAD" 2>/dev/null | head -3)
+    warn "git pull --ff-only failed in $dir. What this run could actually see:"
+    if [ -n "$dirty" ]; then
+        warn "  LOCAL MODIFICATIONS -- --ff-only refuses to overwrite them:"
+        printf '%s\n' "$dirty" | while IFS= read -r l; do warn "    $l"; done
+        die "resolve those by hand (git -C $dir status), then re-run"
+    fi
+    if [ -n "$ahead" ]; then
+        warn "  the checkout HAS COMMITS origin/main does not -- this one really is diverged:"
+        printf '%s\n' "$ahead" | while IFS= read -r l; do warn "    $l"; done
+        die "resolve by hand (git -C $dir log origin/main..HEAD), then re-run"
+    fi
+    warn "  the checkout is clean and has nothing of its own, so this is NOT a divergence."
+    warn "  That leaves the fetch itself: network, DNS or GitHub. Check with:"
+    warn "    git -C $dir pull --ff-only origin main"
+    die "not retried automatically -- a deployment that pulls on a flaky link is worse than one that stops"
+}
+
 write_state_file() {
     local dst="$1" content="$2" tmp
     if [ -L "$dst" ]; then
@@ -4274,7 +4311,7 @@ if [ -d "$REPO_DIR/.git" ]; then
         git -C "$REPO_DIR" remote get-url origin 2>/dev/null | grep -qF "$REPO_URL" \
             || warn "existing repo's origin does not match $REPO_URL -- check manually"
         git -C "$REPO_DIR" pull --ff-only origin main \
-            || die "git pull --ff-only failed -- local repo has diverged, resolve manually before continuing"
+            || explain_pull_failure "$REPO_DIR"
     fi
 
 elif [ -d "$REPO_DIR" ] && [ -n "$(ls -A "$REPO_DIR" 2>/dev/null)" ]; then
@@ -6933,7 +6970,7 @@ else
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' remote get-url origin 2>/dev/null" | grep -qF "$REPO_URL" \
             || warn "existing repo's origin does not match $REPO_URL -- check manually"
         su "$USERNAME" -c "git -C '$ACCOUNT_REPO_DIR' pull --ff-only origin main" \
-            || die "git pull --ff-only failed -- local repo has diverged, resolve manually"
+            || explain_pull_failure "$ACCOUNT_REPO_DIR" "$USERNAME"
         fi
 
     elif [ -d "$ACCOUNT_REPO_DIR" ] && [ -n "$(ls -A "$ACCOUNT_REPO_DIR" 2>/dev/null)" ]; then

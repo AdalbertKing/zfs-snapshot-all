@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4710a23ebf62c87f -->
+<!-- status-covers-digest: 0ea424872b444a54 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Nieudany `git pull` twierdził „local repo has diverged", nie sprawdzając
+  tego (2026-09-04).** Oba miejsca pobierania w `deploy.sh` kończyły tym samym
+  zdaniem przy **dowolnym** niezerowym wyjściu z `git pull --ff-only`.
+
+  **Zmierzone na pve10:** chwilowy błąd sieci do GitHuba wypisał to zdanie na
+  checkoucie, który stał dokładnie na `origin/main`, czysty, bez własnych
+  commitów — a ten sam `git pull` minutę później dał `Already up to date`.
+  Komunikat pewny siebie i nieprawdziwy kosztuje więcej niż niejasny: wysyła
+  operatora naprawiać coś, co nie jest zepsute (sam poszedłem tym tropem).
+
+  **Naprawa.** `explain_pull_failure()` patrzy, zanim nazwie przyczynę, i
+  rozróżnia trzy przypadki wymagające trzech różnych ruchów: lokalne zmiany
+  (pokazuje które), realny rozjazd (pokazuje commity, których nie ma
+  `origin/main`), albo — gdy checkout jest czysty i nic swojego nie ma —
+  mówi wprost, że **to nie jest rozjazd**, i kieruje na fetch: sieć, DNS,
+  GitHub. Czyta jako właściciel repo (`su` dla checkoutu konta), inaczej git
+  odmówiłby na „dubious ownership". `test/selfupdate` +4 asercje na prawdziwych
+  repozytoriach w trzech stanach; asercja o umiejscowieniu dopasowuje `die`,
+  które by się wykonało, a nie same słowa — komentarz funkcji cytuje stary tekst
+  celowo i test musi umieć odróżnić komentarz od kodu.
 
 - **`--rollback` nie cofał: własny krok `apply` pociągał `main` z powrotem
   (2026-09-04).** Znalezione przy wyjaśnianiu, dlaczego `update-hold` nie
