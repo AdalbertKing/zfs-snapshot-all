@@ -232,7 +232,7 @@ echo 'gfs = yes' >> "$TMP/ok-prune-gfs.inc"
 if validate_fragment prune "$TMP/ok-prune-gfs.inc"; then ok "positive: [prune] gfs still accepted"; else bad "positive: [prune] gfs still accepted" "$PROFILE_ERR"; fi
 
 TPLGFS="$TMP/ok-tpl-gfs.conf"
-awk '{print} /^\[template:hourly\]$/{print "	gfs            = yes"}' "$ROOT/profiles/d30h24.conf" > "$TPLGFS"
+awk '{print} /^\[template:hourly\]$/{print "	gfs            = yes"}' "$ROOT/profiles/prod.conf" > "$TPLGFS"
 if profile_validate_file "$TPLGFS" "$GEN" >/dev/null 2>&1; then ok "positive: [template:] gfs still accepted"; else bad "positive: [template:] gfs still accepted" "$PROFILE_ERR"; fi
 
 cp "$PR_DEFAULT" "$TMP/bad-sshflags.inc"
@@ -463,9 +463,9 @@ fi
 # THE NAME IS THE RETENTION, and this asserts it rather than trusting the
 # header comment that says so.
 #
-# A profile called d7h24 promises seven daily counters and twenty-four hourly
-# ones. That promise is only worth something if the delsnaps line the REAL
-# gen-cron renders carries exactly -D7 and -H24 and nothing else -- otherwise
+# A profile called d30 promises thirty daily counters and no hourly
+# ones at all. That promise is only worth something if the delsnaps line the REAL
+# gen-cron renders carries exactly -D30 and nothing else -- otherwise
 # the name is decoration and an administrator picking from `ls` is being misled
 # by a filename.
 #
@@ -545,11 +545,14 @@ shape_verdict() {   # <name> <promised flags> <delsnaps lines> -> sets SHAPE_ERR
     fi
 }
 
-name_bad=""
+name_bad=""; name_seen=0; name_lower=0; name_upper=0
 for f in "$ROOT"/profiles/*.conf; do
     n="$(basename "$f" .conf)"
     # the retention-named ones: letter+digits pairs, nothing else
     printf '%s' "$n" | grep -qE '^([dhwmyDHWMY][0-9]+)+$' || continue
+    name_seen=$(( name_seen + 1 ))
+    if printf '%s' "$n" | grep -q '[A-Z]'; then name_upper=$(( name_upper + 1 ))
+    else name_lower=$(( name_lower + 1 )); fi
 
     block="$(render_profile "$f" "$n")" || { name_bad="$name_bad $n(render:$PROFILE_ERR);"; continue; }
     lines="$(printf '%s\n' "$block" | grep -F 'delsnaps.sh')"
@@ -579,6 +582,20 @@ if [ -z "$name_bad" ]; then
     ok "naming: every retention-named profile renders exactly the counters its name promises, in the shape its case declares"
 else
     bad "naming: every retention-named profile renders exactly the counters its name promises, in the shape its case declares" "$name_bad"
+fi
+
+# CONTROL FOR THE LOOP ABOVE, and it is not decoration. The verdict is an
+# accumulated string, so a catalogue in which the name filter matched NOTHING
+# reports PASS while asserting nothing at all. That is not hypothetical here:
+# on 2026-09-04 the owner deleted every non-GFS multi-retention profile, which
+# took `d30h24` and `d7h24` out of this loop and halved its population. What
+# must survive any such trim is that BOTH halves of the case rule still have a
+# shipped citizen -- a lowercase per-tier one and an uppercase ladder one --
+# because the rule the loop enforces is about the difference between them.
+if [ "$name_lower" -ge 1 ] && [ "$name_upper" -ge 1 ]; then
+    ok "naming: ...and the catalogue still ships both cases for it to check ($name_lower lowercase, $name_upper UPPERCASE)"
+else
+    bad "naming: ...and the catalogue still ships both cases for it to check" \n        "seen=$name_seen lowercase=$name_lower UPPERCASE=$name_upper"
 fi
 
 # ---------------------------------------------------------------------------

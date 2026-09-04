@@ -21,6 +21,37 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Katalog profili przyciety do drabin (2026-09-04).** Polecenie wlasciciela:
+  skasowac kazdy niedrabinkowy profil z wieloma poziomami retencji. Poszlo
+  szesc plikow -- `d7h24`, `d30h24`, `d7h24-age`, `d30h24-age`,
+  `m12w4d7h24-age`, `y5m12d31h24-age`. Zostaje dziewiec: `default`, `prod`,
+  `passive`, `d30`, `Y5M12D31H24` i cztery `-gfs`.
+
+  **Uzasadnienie jest zmierzone, nie estetyczne** i stoi w `profiles/README.md`
+  od 2026-09-01: na tych samych danych (trzy migawki w ciagu jednej godziny --
+  tak wyglada nadrabianie zaleglosci) plaski licznik zostawil dwie, drabina
+  jedna, a wiek wszystkie trzy. Plaski licznik i wiek trzymaja po serii albo
+  po przestoju ilosc historii, ktorej nikt nie wybral; drabina trzyma jedna
+  migawke na kubelek niezaleznie od tego, co zrobila kadencja.
+
+  **Koszt w testach, bo katalog byl materialem dowodowym.** `d30h24` bylo
+  jedynym wysylanym profilem PLASKIM z dwoma rodzinami, a straznik
+  `--source-profile` rozstrzyga wlasnie plaski-kontra-drabina -- odmowa brzmi
+  "a LADDER source under a FLAT target". Sekcja w `test/zfsbackup` wyprowadza
+  wiec teraz plaska pare NA MIEJSCU: wysylany plik `-gfs` minus jedyna linia
+  `gfs = yes`, czyli dokladnie ta roznica, ktora przyrostek nazywa -- z
+  kontrola, ze derywacja naprawde cos usunela. Kontrola dopasowuje POLE, nie
+  slowo: oba pliki maja `gfs = yes` w komentarzu naglowka i grep po slowie
+  uznalby atrape za drabine.
+
+  **Petla nazw stracila polowe populacji i nic tego nie pilnowalo.** Petla
+  "nazwa jest retencja" w `test/profiles` filtruje po wzorcu litera+cyfry i
+  zbiera werdykt do lancucha, wiec katalog, w ktorym nie trafila w NIC,
+  raportowalby PASS nie sprawdzajac niczego. Po tym przycieciu zostaly jej
+  dwa profile zamiast czterech (`d30`, `Y5M12D31H24`). Dopisana kontrola
+  populacji: obie polowy reguly wielkosci liter musza miec wysylanego
+  obywatela.
+
 - **Nieudany `git pull` twierdził „local repo has diverged", nie sprawdzając
   tego (2026-09-04).** Oba miejsca pobierania w `deploy.sh` kończyły tym samym
   zdaniem przy **dowolnym** niezerowym wyjściu z `git pull --ff-only`.
@@ -913,9 +944,18 @@
      wywołanie testuje powłokę, nie kod. Teraz oba wołania dzielą proces.
 
   `test/zfsbackup` 378 -> 388 asercji, w tym kontrola ujemna do każdego
-  twierdzenia. Profile w testach to **pliki wysyłkowe**, nie atrapy: `d7h24` i
-  `d30h24` niosą te same rodziny na różną długość (asymetria dozwolona),
-  `d30` niesie samo `automated_daily` (asymetria odmawiana).
+  twierdzenia. Profile w testach były wtedy **plikami wysyłkowymi**, nie
+  atrapami: `d7h24` i `d30h24` niosły te same rodziny na różną długość
+  (asymetria dozwolona), `d30` niesie samo `automated_daily` (asymetria
+  odmawiana).
+
+  **Zmienione 2026-09-04, gdy właściciel skasował oba te pliki** (wpis na
+  górze dokumentu). Para PŁASKA jest teraz wyprowadzana w samej sekcji z
+  wysyłanego `-gfs` przez usunięcie jedynej linii `gfs = yes` -- czyli
+  dokładnie tej różnicy, którą przyrostek nazywa -- więc nadal nie jest to
+  profil wymyślony na potrzeby testu, ale też nie jest już plik wysyłkowy.
+  `d30` (odmawiana asymetria) i para drabinkowa pozostają plikami wysyłkowymi.
+
 
   Literówka i niezgodna rodzina padają w `add-client`, **przed parowaniem i
   wymianą kluczy** — ta sama granica co `--profile`, i odmowa nazywa flagę.
@@ -1112,11 +1152,17 @@
   `[template:]`, więc jest polityką", bo **nie ma żadnej warstwy template**.
   Zmierzone: przed poprawką profil przechodził walidację.
 
-  **Katalog domknięty na trzech mechanizmach (2026-09-01).** `d30h24` i `d7h24`
-  dostały warianty `-gfs` i `-age`, wyprowadzone z wysyłanych profili ze zmianą
-  **wyłącznie** sposobu liczenia retencji. Gołe nazwy zostają płaskim
-  licznikiem, więc każda retencja jest nazywalna we wszystkich trzech trybach i
-  żaden nie jest domyślany po cichu.
+  **Katalog przyciety do drabin (2026-09-04).** Historycznie `d30h24` i
+  `d7h24` dostaly warianty `-gfs` i `-age`, wyprowadzone z wysylanych profili
+  ze zmiana **wylacznie** sposobu liczenia retencji -- kazda retencja byla
+  nazywalna we wszystkich trzech trybach. Decyzja wlasciciela z 2026-09-04
+  **skasowala kazdy niedrabinkowy profil wielopoziomowy**: `d7h24`, `d30h24`
+  i wszystkie cztery warianty `-age`. Co zostaje: profil trzymajacy wiecej niz
+  jeden poziom robi to wylacznie jako drabina `-gfs`, a plaski licznik zyje
+  juz tylko w `d30`, ktory ma jeden poziom i dla ktorego oba tryby
+  wyrenderowalyby niemal te sama linie. Konwencja nazw sie nie zmienila:
+  gola nazwa i przyrostek `-age` **zostaja zarezerwowane** i niewysylane,
+  wiec profil, ktory kiedys je przywroci, bedzie znaczyl to samo co znaczyl.
 
   **Złapane renderowaniem, nie walidacją.** Pierwsza wersja tej derywacji nie
   zmieniła **niczego**: drzewo robocze jest CRLF, moje wzorce kończyły się na

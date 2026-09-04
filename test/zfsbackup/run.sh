@@ -8339,15 +8339,40 @@ fi
 # Owner, 2026-09-03: a source short of disk under a collector with plenty --
 # "jestem zmuszony przycinac retencje w zrodle szybciej, ale na celu chce
 # utrzymac pelny profil, bo to backup w koncu".
+# The ladder pair is SHIPPED and is the owner's own case: d7h24-gfs and
+# d30h24-gfs keep the SAME families (automated_hourly, automated_daily) for
+# different lengths, while d30 keeps daily ONLY. So the legitimate asymmetry
+# and the refused one are both real files a person could name.
 #
-# Two SHIPPED profiles, not fixtures, and they are the owner's own case:
-# d7h24 and d30h24 keep the SAME families (automated_hourly, automated_daily)
-# for different lengths, while d30 keeps daily ONLY. So the legitimate
-# asymmetry and the refused one are both real files a person could name.
+# THE FLAT PAIR IS BUILT HERE, and until 2026-09-04 it was shipped too. The
+# owner deleted every non-GFS multi-retention profile that day, which left the
+# catalogue with no flat two-family profile -- and the shape guard below is
+# precisely about flat-versus-ladder, so it cannot be written in ladders alone.
+# The fixtures are not invented: each is a shipped `-gfs` file with the single
+# line removed that makes it a ladder, which is exactly the one-line difference
+# the `-gfs` suffix names. If that difference ever stops being one line, this
+# derivation stops producing a flat profile and the shape assertions fail --
+# which is the right way for it to break.
 SP="$WORK/sourceprofile"
 rm -rf "$SP"; mkdir -p "$SP/root"
-cp "$REPO"/profiles/d7h24.conf "$REPO"/profiles/d30h24.conf "$REPO"/profiles/d30.conf \
+cp "$REPO"/profiles/d30.conf \
    "$REPO"/profiles/d30h24-gfs.conf "$REPO"/profiles/d7h24-gfs.conf "$SP/root/"
+sed '/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*yes[[:space:]]*$/d' \
+    "$REPO/profiles/d30h24-gfs.conf" > "$SP/root/flat-d30h24.conf"
+sed '/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*yes[[:space:]]*$/d' \
+    "$REPO/profiles/d7h24-gfs.conf"  > "$SP/root/flat-d7h24.conf"
+# The derivation must actually have removed something, or every "flat" profile
+# below is a ladder and tests 11-12 would pass by testing nothing. Matched as a
+# FIELD, not as the word: both files keep prose about `gfs = yes` in their
+# header comment, and a substring grep here would call the fixture a ladder.
+_sp_fld='^[[:space:]]*gfs[[:space:]]*='
+if ! grep -qE "$_sp_fld" "$SP/root/flat-d30h24.conf" \
+   && grep -qE "$_sp_fld" "$REPO/profiles/d30h24-gfs.conf"; then
+    ok "--source-profile: the flat fixtures are the shipped ladders minus their gfs field"
+else
+    bad "--source-profile: the flat fixtures are the shipped ladders minus their gfs field" \
+        "$(grep -nE "$_sp_fld" "$SP/root/flat-d30h24.conf")"
+fi
 
 sp_run() {   # <target-profile> <source-profile or ""> <extra shell>
     PROFILE_ROOT="$SP/root" bash -c "
@@ -8364,7 +8389,7 @@ sp_run() {   # <target-profile> <source-profile or ""> <extra shell>
 #    A run that merely exits 0 proves nothing here: the whole feature is that
 #    the two sides stop being copies of each other, so the discriminator is
 #    that the two fragments differ.
-out=$(sp_run d30h24 d7h24 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT'); rc=$?
+out=$(sp_run flat-d30h24 flat-d7h24 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT'); rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "DIFFERENT" ]; then
     ok "--source-profile: a shorter source ladder under a longer target renders a DIFFERENT source fragment"
 else
@@ -8375,7 +8400,7 @@ fi
 #    the owner's stated condition, and the behaviour every existing
 #    relationship depends on. If this said DIFFERENT, test 1 would be
 #    measuring nothing but its own noise.
-out=$(sp_run d30h24 '' 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT')
+out=$(sp_run flat-d30h24 '' 'diff -q "$(profile_retention_fragment)" "$(source_retention_fragment)" >/dev/null && echo SAME || echo DIFFERENT')
 if [ "$out" = "SAME" ]; then
     ok "--source-profile omitted: the source fragment IS the target fragment, unchanged"
 else
@@ -8384,7 +8409,7 @@ fi
 
 # 3. NAMING THE SAME PROFILE ON BOTH SIDES collapses to that same path rather
 #    than staging a needless second copy of it.
-out=$(sp_run d30h24 d30h24 'printf "[%s]" "$SRC_PROFILE_NAME"')
+out=$(sp_run flat-d30h24 flat-d30h24 'printf "[%s]" "$SRC_PROFILE_NAME"')
 if [ "$out" = "[]" ]; then
     ok "--source-profile equal to --profile collapses to the no-asymmetry path"
 else
@@ -8396,7 +8421,7 @@ fi
 #    be pruned -- and because delsnaps matching nothing exits 0, the nightly
 #    job would report success while the disk filled. Fail-open, silently. This
 #    refusal is the reason the feature is safe to ship at all.
-out=$(sp_run d30h24 d30 'echo REACHED'); rc=$?
+out=$(sp_run flat-d30h24 d30 'echo REACHED'); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
    && ! printf '%s' "$out" | grep -q 'REACHED'; then
     ok "--source-profile: a profile pruning a different FAMILY is refused before anything renders"
@@ -8411,9 +8436,9 @@ fi
 #    performed for some unrelated reason. is_new=0 must stage nothing.
 out=$(PROFILE_ROOT="$SP/root" bash -c "
     source '$ZFSBACKUP'
-    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=d30h24; load_active_profile
-    SOURCE_PROFILE=d7h24
-    apply_client_profile_choice 0 d30h24
+    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=flat-d30h24; load_active_profile
+    SOURCE_PROFILE=flat-d7h24
+    apply_client_profile_choice 0 flat-d30h24
     printf '[%s]' \"\$SRC_PROFILE_NAME\"" 2>&1)
 if [ "$out" = "[]" ]; then
     ok "activate-client: a RE-activation does not restage the recorded source profile"
@@ -8425,11 +8450,11 @@ fi
 #    would pass just as well against a feature that never works at all.
 out=$(PROFILE_ROOT="$SP/root" bash -c "
     source '$ZFSBACKUP'
-    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=d30h24; load_active_profile
-    SOURCE_PROFILE=d7h24
-    apply_client_profile_choice 1 d30h24
+    PROFILE_ROOT='$SP/root'; PROFILE_ACTIVE=flat-d30h24; load_active_profile
+    SOURCE_PROFILE=flat-d7h24
+    apply_client_profile_choice 1 flat-d30h24
     printf '[%s]' \"\$SRC_PROFILE_NAME\"" 2>&1)
-if [ "$out" = "[d7h24]" ]; then
+if [ "$out" = "[flat-d7h24]" ]; then
     ok "activate-client: the FIRST activation stages the recorded source profile"
 else
     bad "activate-client: the FIRST activation stages the recorded source profile" "$out"
@@ -8441,9 +8466,9 @@ printf '#!/bin/bash\nexit 0\n' > "$SP/deploy_marker.sh"; chmod +x "$SP/deploy_ma
 printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/jobs.conf\n' "$SP" > "$SP/server.conf"
 ( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
   PROFILE_ROOT="$SP/root"
-  cmd_add_client "spc"  --lan=10.0.0.1 --datasets="tank/x" --profile=d30h24 --source-profile=d7h24
-  cmd_add_client "spc2" --lan=10.0.0.2 --datasets="tank/x" --profile=d30h24 ) >/dev/null 2>&1
-if grep -q '^SOURCE_PROFILE=d7h24$' "$SP/clients/spc.conf"; then
+  cmd_add_client "spc"  --lan=10.0.0.1 --datasets="tank/x" --profile=flat-d30h24 --source-profile=flat-d7h24
+  cmd_add_client "spc2" --lan=10.0.0.2 --datasets="tank/x" --profile=flat-d30h24 ) >/dev/null 2>&1
+if grep -q '^SOURCE_PROFILE=flat-d7h24$' "$SP/clients/spc.conf"; then
     ok "add-client: --source-profile is recorded in the client record"
 else
     bad "add-client: --source-profile is recorded in the client record" "$(cat "$SP/clients/spc.conf" 2>&1)"
@@ -8472,7 +8497,7 @@ fi
 #    "profile 'x': ..." which is true and useless when two were passed.
 out=$( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
        PROFILE_ROOT="$SP/root" \
-       cmd_add_client "sptypo" --lan=10.0.0.3 --datasets="tank/x" --profile=d30h24 --source-profile=nosuchprofile 2>&1 ); rc=$?
+       cmd_add_client "sptypo" --lan=10.0.0.3 --datasets="tank/x" --profile=flat-d30h24 --source-profile=nosuchprofile 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "source-profile='nosuchprofile'" \
    && [ ! -f "$SP/clients/sptypo.conf" ]; then
     ok "add-client: a typo'd --source-profile is refused by name and leaves no record"
@@ -8485,7 +8510,7 @@ fi
 #     OPEN if it survives to the source's nightly prune.
 out=$( SERVER_CONF="$SP/server.conf" CLIENTS_DIR="$SP/clients" DEPLOY="$SP/deploy_marker.sh" \
        PROFILE_ROOT="$SP/root" \
-       cmd_add_client "spfam" --lan=10.0.0.4 --datasets="tank/x" --profile=d30h24 --source-profile=d30 2>&1 ); rc=$?
+       cmd_add_client "spfam" --lan=10.0.0.4 --datasets="tank/x" --profile=flat-d30h24 --source-profile=d30 2>&1 ); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
    && [ ! -f "$SP/clients/spfam.conf" ]; then
     ok "add-client: a source profile of a different FAMILY is refused at enrolment"
@@ -8495,12 +8520,12 @@ fi
 
 # 11. A FAMILY IS THE PATTERN **AND HOW IT IS COUNTED**.
 #
-#     d30h24 and d30h24-gfs carry the same two families and differ by one line,
+#     flat-d30h24 and d30h24-gfs carry the same two families and differ by one line,
 #     `gfs = yes`. The first keeps the 30 newest daily snapshots; the second
 #     keeps one per daily bucket. Compared on pattern alone this passed -- both
 #     sides "keep 30", and a different 30, so the two copies diverge in WHICH
 #     snapshots survive and nobody reasoned about which.
-out=$(sp_run d30h24 d30h24-gfs 'echo REACHED'); rc=$?
+out=$(sp_run flat-d30h24 d30h24-gfs 'echo REACHED'); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'different snapshot FAMILY' \
    && ! printf '%s' "$out" | grep -q 'REACHED'; then
     ok "--source-profile: a LADDER source under a FLAT target is refused"
@@ -8552,7 +8577,7 @@ cat > "$SP/root/pruneonly.conf" <<'PRUNEONLYEOF'
 [prune]
 	use_template = keep_hourly,keep_daily
 PRUNEONLYEOF
-out=$(sp_run d30h24 pruneonly 'for id in $(profile_prune_ref_ids "$(source_retention_fragment)"); do profile_template_section "$id" "$SRC_PROFILE_TPL_FILE"; done'); rc=$?
+out=$(sp_run flat-d30h24 pruneonly 'for id in $(profile_prune_ref_ids "$(source_retention_fragment)"); do profile_template_section "$id" "$SRC_PROFILE_TPL_FILE"; done'); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE 'retain[[:space:]]*=[[:space:]]*-D7'; then
     ok "--source-profile: a profile with no [dataset] section pairs and renders its retention"
 else

@@ -993,11 +993,11 @@ out="$( (
     cmd_seed()     { :; }
     cmd_activate() { :; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup \
-              --profile=d7h24 --source-profile=lab-lean --install --yes
+              --profile=d7h24-gfs --source-profile=lab-lean --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] \
    && grep -q -- '--source-profile=lab-lean' "$WORK/31/addargs" 2>/dev/null \
-   && grep -q -- '--profile=d7h24' "$WORK/31/addargs" 2>/dev/null; then
+   && grep -q -- '--profile=d7h24-gfs' "$WORK/31/addargs" 2>/dev/null; then
     ok "31. --source-profile is accepted here and threaded through to add-client"
 else
     bad "31. --source-profile is accepted here and threaded through to add-client" \
@@ -1022,7 +1022,7 @@ out="$( (
     cmd_seed()     { :; }
     cmd_activate() { :; }
     rux_entry --source=pve2:rpool/data --target=hdd/backup \
-              --profile=d7h24 --install --yes
+              --profile=d7h24-gfs --install --yes
 ) 2>&1 )"; rc=$?
 if [ "$rc" -eq 0 ] && ! grep -q -- '--source-profile' "$WORK/31b/addargs" 2>/dev/null; then
     ok "31b. omitting it passes no --source-profile at all (not an empty one)"

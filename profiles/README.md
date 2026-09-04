@@ -23,11 +23,11 @@ mislead somebody reading `ls`.
 The numbers say how much is kept and the case says how many families; neither
 says HOW the counting is done, and there are three ways:
 
-| mechanism | flag | what survives | suffix |
-|---|---|---|---|
-| flat count | `-H24` | the 24 newest | none — the catalogue default |
-| GFS ladder | `-G -H24` | one per hourly bucket, for 24 hours | `-gfs` |
-| age | `-h24` | everything younger than 24 hours | `-age` |
+| mechanism | flag | what survives | suffix | shipped |
+|---|---|---|---|---|
+| flat count | `-H24` | the 24 newest | none — the catalogue default | `d30` only |
+| GFS ladder | `-G -H24` | one per hourly bucket, for 24 hours | `-gfs` | every multi-tier profile |
+| age | `-h24` | everything younger than 24 hours | `-age` | **withdrawn 2026-09-04** |
 
 Measured on identical data (three snapshots taken inside one hour, which is
 what a catch-up burst looks like): flat kept two, the ladder kept one, age kept
@@ -36,9 +36,20 @@ edges — after a burst age bounds nothing, and after downtime age keeps less
 than a count would, because the survivors aged out while the job was not
 running.
 
-A bare name therefore always means the catalogue default. `y5m12d31h24` is
-deliberately not shipped: we ship its `-gfs` and `-age` forms, and the bare
-name stays reserved so it cannot mean two things.
+A bare name therefore always means the catalogue default, and the convention
+outlives the files: `-age` and the bare multi-tier names are **not shipped**
+and the spelling stays reserved, so a profile that ever brings either back
+means what it always meant.
+
+**Owner decision, 2026-09-04: every non-GFS multi-retention profile was
+deleted** — `d7h24`, `d30h24` and all four `-age` variants. What is left
+keeps more than one tier only as a `-gfs` ladder, and flat counting survives
+only in `d30`, which has a single tier and for which the two would render
+almost the same line anyway. The reason is the measurement two paragraphs
+up: over a catch-up burst or after downtime a flat count and an age bound
+keep an amount of history nobody chose, while a ladder keeps one snapshot
+per bucket whatever the cadence did. `y5m12d31h24` stays reserved and
+unshipped for the second reason below.
 
 `Y5M12D31H24` is the first UPPERCASE profile, and it needed no new suffix: the
 case rule above already said "one family, several counters over it". It was
@@ -108,17 +119,11 @@ data where a crash-consistent copy is genuinely worthless. See
 |---|---|---|---|
 | `default` | one family, hourly | GFS ladder 24/7/4/12 | none — a ladder cannot |
 | `prod` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 6 | daily, weekly, monthly |
-| `d30h24` | two families: hourly, daily | 24 / 30 | daily |
-| `d30h24-gfs` | the same two families | 24 / 30, each a `-G` ladder over its own prefix | daily |
-| `d30h24-age` | the same two families | the same numbers BY AGE (`-h24 -d30`) | daily |
-| `d7h24` | two families: hourly, daily | 24 / 7 | daily |
-| `d7h24-gfs` | the same two families | 24 / 7, each a `-G` ladder over its own prefix | daily |
-| `d7h24-age` | the same two families | the same numbers BY AGE (`-h24 -d7`) | daily |
+| `d30h24-gfs` | two families: hourly, daily | 24 / 30, each a `-G` ladder over its own prefix | daily |
+| `d7h24-gfs` | two families: hourly, daily | 24 / 7, each a `-G` ladder over its own prefix | daily |
 | `d30` | one family, daily | 30 | daily |
 | `y5m12d31h24-gfs` | four families: hourly, daily, monthly, yearly | 24 / 31 / 12 / 5, each a `-G` ladder over its own prefix | daily, monthly, yearly |
-| `y5m12d31h24-age` | the same four families | the same numbers BY AGE (`-h24 -d31 -m12 -y5`) | daily, monthly, yearly |
 | `m12w4d7h24-gfs` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 12, each a `-G` ladder over its own prefix | daily, weekly, monthly |
-| `m12w4d7h24-age` | the same four families | the same numbers BY AGE (`-h24 -d7 -w4 -m12`) | daily, weekly, monthly |
 | `Y5M12D31H24` | one family, hourly | GFS ladder 24/31/12/5 | none — a ladder cannot |
 | `passive` | nothing — adopts a family somebody else creates | four counters over it | not applicable |
 
