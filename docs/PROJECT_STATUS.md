@@ -7607,6 +7607,16 @@ stanem recenzji.
   Wycena 4–6 dni, kalibrowana `set-bandwidth` i `set-endpoint` (po jednym
   commicie, po jednym dniu). Poza zleceniem: `remove-source` i poszerzanie
   zakresu, które zostaje operacją dwumaszynową.
+  **Repliki dopisane 2026-09-06 („zapomnieliśmy o replice”):** to osobna klasa
+  obiektu, sekcje `[replica:NAZWA]` — szósty rodzaj sekcji, którego `usage`
+  w `gen-cron.sh` nie wymienia ani razu (zero wystąpień, choć
+  `_allow_fields replica` i `build_replica_section` istnieją; stąd wzięła się
+  luka). Repliki **mają już pełną drogę edycji**: `add-replica` jest upsertem,
+  więc to samo polecenie zakłada i zmienia, a `replica_section_upsert` pisze
+  sekcję. To narzuca kształt nowemu `set-policy` (ta sama gramatyka nazwanych
+  flag) i dokłada mu odmowę na nazwie, która jest repliką. Ekran Nośniki
+  w GUI dostaje `Ins`/`Enter`/`Del`/`F5`; `purge-replica-copy` zostaje poza V1
+  jako destrukcyjny. E38 postscriptum.
   **Makiety w repo:** `docs/discussions/gui-mockups/` — `tui/` w docelowym
   medium (80 kolumn), `web-odrzucony/` zachowane za architekturę informacji.
 - **Decyzja LVM nadal czeka na słowo właściciela:**

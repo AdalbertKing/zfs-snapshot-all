@@ -109,6 +109,14 @@ Trzy osie, każda ma inną drogę:
 | **polityka** | retencja i GFS, harmonogramy send i prune, quiesce, wykluczenia, rekursja, progi monitora | edycja configu → `gen-cron.sh -c FILE` (render na stdout, niezerowy kod przy błędzie) → `gen-cron.sh -c FILE --install` (idempotentna podmiana bloku) |
 | **zakres** | które datasety relacja replikuje | zwężenie: sama edycja configu. Poszerzenie: **dodatkowo** `--commit-scope` po stronie źródła, bo dowodem zakresu jest plik scope z sygnaturą sha256, której kolektor nie napisze (`rux_verify_requested_scope`) |
 | **tożsamość i łącze** | endpoint, pasmo, profil, pauza, blokada u peera | osobne czasowniki: `set-endpoint`, `set-bandwidth`, `migrate-profile`, `pause-client`/`resume-client`, `enable-client`/`disable-client` |
+| **replika** (osobna klasa obiektu, nie relacja) | źródło, cel, harmonogram, prefiks, nośnik, rekursja, historia | `add-replica NAME --flaga=…` jest **upsertem**: to samo polecenie zakłada i edytuje. Usuwa `remove-replica`; `purge-replica-copy` kasuje dane na nośniku |
+
+**Repliki są czwartą osią i mają własną, kompletną drogę zmiany**, czego ten
+dokument w pierwszej wersji nie zauważył. Mieszkają w sekcjach `[replica:NAZWA]`
+— szóstym rodzaju sekcji, którego `usage` samego `gen-cron.sh` nie wymienia
+(zmierzone 2026-09-06: zero wystąpień, choć `_allow_fields replica` i
+`build_replica_section` istnieją). Pola: `source`, `dst`, `schedule`, `prefix`,
+`notify`, `media`, `recursive`, `flags`, `history`.
 
 `gen-cron.sh --reconcile` porównuje w trybie tylko do odczytu, co config
 kopiuje, z tym, co naprawdę istnieje. **Usunięcie relacji i założenie jej od
@@ -179,7 +187,7 @@ pojawi się realna potrzeba (plan: „conveniences backed by a real need”).
 | **Nowa relacja** | kreator odwzorowujący formę jednokomendową `--source=/--target=`; `--grant-remotely` i `--join-remotely` jako pola wyboru; „Dokończ” dla relacji zatrzymanej w połowie cyklu | pokazuje pełną komendę przed wykonaniem |
 | **Transfery** | postęp na żywo, tryb i baza, bajty na łączu, zatrzymana aktualizacja | — |
 | **Monitor** | linie monitora z czterema werdyktami i powodem | — |
-| **Nośniki** | repliki i cztery stany nośnika | — |
+| **Nośniki** | repliki, cztery stany nośnika, stan wyzwalacza udev | `Ins` nowa replika, `Enter` edycja (oba mapują się na upsert `add-replica`), `Del` `remove-replica`, `F5` `run-replicas`. `purge-replica-copy` **poza V1**: kasuje dane na nośniku i należy do klasy destrukcyjnej razem z restore |
 
 Makiety w docelowym medium: `gui-mockups/tui/`. Wariant przeglądarkowy,
 odrzucony 2026-09-05, leży w `gui-mockups/web-odrzucony/` — zachowany za

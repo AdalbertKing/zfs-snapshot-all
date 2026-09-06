@@ -1127,3 +1127,16 @@ jednym wzorcem jest hipotezą o tym wzorcu, nie inwentarzem: sprawdź, co jeszcz
 łapie punkt wejścia. A gdy odpowiadasz właścicielowi na pytanie „czy da się”,
 odpowiedź „nie” wymaga cytatu, nie wnioskowania.
 
+*Postscriptum, ten sam dzień, trzeci raz.* Właściciel: „zapomnieliśmy o
+replice”. Oba dokumenty GUI napisałem wyłącznie o relacjach, bo listę rodzajów
+sekcji wziąłem z `usage` w `gen-cron.sh`, gdzie jest ich pięć. Szósty,
+`[replica:]`, w `usage` nie pada ani razu, choć `_allow_fields replica` i
+`build_replica_section` w tym samym pliku istnieją. Ta sama przyczyna:
+powierzchnia, którą przeszukałem, była pomocą narzędzia, a rozstrzygający był
+jego kod. Kosztowało to więcej niż samą lukę, bo ukryło precedens: `add-replica`
+jest **upsertem**, czyli dokładnie tym kształtem czasownika, który
+projektowałem dla relacji jako nowy. Wniosek do reguły: gdy dokument opisuje
+„wszystkie obiekty klasy X”, wylicz klasy z kodu, nie z `usage`, i napisz w
+dokumencie, skąd wzięta jest lista — czytelnik ma widzieć, co było
+przeszukane.
+
