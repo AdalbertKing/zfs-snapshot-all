@@ -181,6 +181,15 @@ pojawi się realna potrzeba (plan: „conveniences backed by a real need”).
 | **Monitor** | linie monitora z czterema werdyktami i powodem | — |
 | **Nośniki** | repliki i cztery stany nośnika | — |
 
+Makiety w docelowym medium: `gui-mockups/tui/`. Wariant przeglądarkowy,
+odrzucony 2026-09-05, leży w `gui-mockups/web-odrzucony/` — zachowany za
+architekturę informacji, nie jako propozycja.
+
+Ekran ustawień zakłada czasownik zmiany polityki, zlecony osobno:
+`OWNER-CONFIG-VERBS-2026-09-06.md`. Bez niego TUI musiałoby samo edytować INI,
+czyli nosić drugą kopię schematu pól, wbrew §2 pkt 2. Z czasownikiem etap D
+spada z 4–6 dni do 2–3.
+
 Nawigacja: `F2`–`F6` przełączają ekrany, `Enter` otwiera okno na wierzchu,
 `Esc` zamyka. Panel obok listy zamiast pod nią dopiero od ~120 kolumn.
 Zmierzone: ekran główny z panelem mieści się w 20 z 24 wierszy przy 80

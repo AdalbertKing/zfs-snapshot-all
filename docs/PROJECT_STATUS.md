@@ -7593,6 +7593,22 @@ stanem recenzji.
   `--install`; zakres dodatkowo wymaga `--commit-scope` na źródle; endpoint,
   pasmo, profil i pauza mają własne czasowniki. Usunięcie i założenie relacji
   od nowa NIE jest ścieżką zmiany konfiguracji.
+  **Czasownik zmiany polityki ZLECONY przez właściciela (2026-09-06),
+  do wykonania w osobnym wątku:**
+  `docs/discussions/OWNER-CONFIG-VERBS-2026-09-06.md`. Zmierzone: prymityw
+  zapisu już istnieje (`set_or_remove_section_field` w `zfs-backup.sh`, trzech
+  konsumentów, przepuszcza komentarze i ręczne sekcje, zachowuje uprawnienia),
+  bezpieczny wzorzec edycji też (`cmd_set_bandwidth`: kopia robocza, walidacja
+  przez `gencron_as_target`, odmowa z oryginałem nietkniętym), lista pól per
+  typ sekcji też (`FIELD_OK` i `POLICY_FIELDS` w `gen-cron.sh`, egzekwowane
+  przez `validate_field_names`, już asercjonowane w `test/run.sh`), a sekcje
+  niosą `pair_label` nazywający relację. Brakuje warstwy nad tym: `set-policy`,
+  `show-config --json`, listy pól wyprowadzonej z `FIELD_OK` i sześciu odmów.
+  Wycena 4–6 dni, kalibrowana `set-bandwidth` i `set-endpoint` (po jednym
+  commicie, po jednym dniu). Poza zleceniem: `remove-source` i poszerzanie
+  zakresu, które zostaje operacją dwumaszynową.
+  **Makiety w repo:** `docs/discussions/gui-mockups/` — `tui/` w docelowym
+  medium (80 kolumn), `web-odrzucony/` zachowane za architekturę informacji.
 - **Decyzja LVM nadal czeka na słowo właściciela:**
   `docs/discussions/OWNER-LVM-BACKEND-DECISION-2026-09-04.md` (parowanie
   root-only i backend-neutralny `gen-cron` już rozstrzygnięte, sześć pytań

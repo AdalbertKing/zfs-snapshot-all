@@ -1,0 +1,27 @@
+Ekran glowny: lista relacji + panel szczegolow (80 kolumn)
+==========================================================
+
+Znaki ramek wymagaja UTF-8; wariant ASCII (+-|) jest wymaganiem kontraktu.
+Markery ! !! ? stoja tu za kolor: w terminalu niesie go tlo i barwa znaku.
+Szerokosc 80 kolumn -- przypadek projektowy, nie awaryjny.
+
+ Plik  Relacja  Widok  Pomoc                            pve9 | zfsbackup  
+╔═ Relacje na kolektorze (5) ════════════════════════════════════════════════╗
+║ Relacja  Stan            Monitor     Ostatni wynik       Nastepny          ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ pve1     active          ! WARN      OK  04:00  312s     05:00             ║
+║ pve2     active            OK        OK  04:00 1240s     05:00             ║
+║ pve10    active          !! CRIT     OK  04:00   96s     05:00             ║
+║ pve0     seed_complete   ?  UNKN     brak zapisu         activate-client   ║
+║ pve9b    active PAUSED     OK        pominiete (pauza)   -- pauza --       ║
+╚═ Ins nowa  Del usun  F4 pauza ═════════════════════════════════════════════╝
+┌─ pve10 — szczegoly ────────────────────────────────────────────────────────┐
+│ Datasety (2)  rpool/data/vm-101,  hdd/vm-disks                             │
+│ Cel           hdd/backups/pve10          Spojnosc  crash-consistent        │
+│ Ostatni bieg  OK  2026-09-05 04:00  96 s  248 MiB  przyrostowy             │
+│ Nastepny      2026-09-05 05:00  (wg crontaba)                              │
+│ Monitor       !! CRITICAL  hdd/backups/pve10/vm-102 bez snapshotu 9h12m    │
+│ Alerty        1 dzisiaj, mail wyslany 04:02                                │
+│ Uwaga         cron nadal idzie przez 192.168.28.97:22  (NIEwdrozony)       │
+└────────────────────────────────────────────────────────────────────────────┘
+ F1 Pomoc  F3 Log  F4 Pauza  Ins Nowa  Del Usun  Enter Ustawienia  F10 Menu

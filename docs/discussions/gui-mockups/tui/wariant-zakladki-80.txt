@@ -1,0 +1,25 @@
+Wariant wczesniejszy: zakladki bez panelu (80 kolumn)
+=====================================================
+
+Znaki ramek wymagaja UTF-8; wariant ASCII (+-|) jest wymaganiem kontraktu.
+Markery ! !! ? stoja tu za kolor: w terminalu niesie go tlo i barwa znaku.
+Szerokosc 80 kolumn -- przypadek projektowy, nie awaryjny.
+
+ Plik  Widok  Relacja  Pomoc                            pve9 | tylko odczyt  
+╔═ Przeglad ═════════════════════════════════════════════════════════════════╗
+║ Relacja Stan           Cron idzie przez     Ostatni wynik    Monitor       ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ pve1    active         ten sam              OK 04:00  312s   ! WARNING     ║
+║ pve2    active         ten sam              OK 04:00 1240s     OK          ║
+║ pve10   active         ! 192.168.28.97:22   OK 04:00   96s   !! CRITICAL   ║
+║ pve0    seed_complete  nie aktywowany       brak zapisu      ?  UNKNOWN    ║
+║ pve9b   active PAUSED  ten sam              pominiete pauza    OK          ║
+╚════════════════════════════════════════════════════════════════════════════╝
+┌─ Wymaga uwagi (4) ─────────────────────────────────────────────────────────┐
+│ !! pve10   hdd/backups/pve10/vm-102 bez snapshotu od 9 h 12 min            │
+│ !! sejf-d  w slocie jest dysk, ale NIE TEN. Brama odmowi replikacji.       │
+│ !  pve10   cron nadal idzie przez 192.168.28.97:22                         │
+│            -> verify-endpoint pve10, potem activate-client pve10           │
+│ ?  pve0    brak zapisu w historii. To NIE znaczy 'bez awarii'.             │
+└────────────────────────────────────────────────────────────────────────────┘
+ F1 Pomoc  F2 Relacje  F3 Transfery  F4 Monitor  F5 Nosniki  F10 Menu  Q Wyj
