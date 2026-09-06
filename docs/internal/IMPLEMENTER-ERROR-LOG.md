@@ -1140,3 +1140,13 @@ projektowałem dla relacji jako nowy. Wniosek do reguły: gdy dokument opisuje
 dokumencie, skąd wzięta jest lista — czytelnik ma widzieć, co było
 przeszukane.
 
+*Postscriptum drugie, ten sam dzień.* Poprawiłem tamtą lukę czytając **kod**
+(`add-replica`, `_allow_fields replica`) i wciąż postawiłem replikę w złym
+miejscu: jako czwartą oś zmiany konfiguracji relacji. Właściciel poprawił drugi
+raz: replika jest konfiguracją kolektora, nie relacji. Zdanie rozstrzygające
+leżało w `PROJECT_STATUS.md` od labu replik — „replika to inny RODZAJ zadania
+(bez monitora, bez prune źródła, bez relacji)". Czyli nawet naprawiając błąd
+przeszukałem warstwę niższą, niż trzeba: kod mówi, **co** obiekt ma, a zapis
+projektowy mówi, **czym on jest**. Przy projektowaniu architektury informacji
+najpierw szuka się zdania definiującego obiekt, dopiero potem jego pól.
+

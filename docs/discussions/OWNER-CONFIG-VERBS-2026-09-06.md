@@ -63,10 +63,15 @@ trybie tylko do odczytu, co config kopiuje, z tym, co istnieje.
 Właściciel, 2026-09-06: „zapomnieliśmy o replice”. Słusznie, i ta luka chowała
 **precedens, który powinien narzucić kształt nowemu czasownikowi.**
 
-Repliki nie są relacjami. Mieszkają w `[replica:NAZWA]`, szóstym rodzaju sekcji,
-z własną listą pól: `_allow_fields replica source dst schedule prefix notify
-media recursive flags history`. Sekcje te **nie niosą `pair_label`**, więc
-selektor z §4 ich nie znajdzie i nie powinien.
+Replika jest **konfiguracją kolektora, nie relacji** (właściciel, 2026-09-06).
+Repozytorium mówi to samo od labu replik: *„replika to inny RODZAJ zadania (bez
+monitora, bez prune źródła, bez relacji), a nie drugi `dst`”* (R1,
+`docs/PROJECT_STATUS.md`). Nie ma peera, parowania, grantu ani endpointu: bierze
+dataset stąd i kopiuje go na inną pulę tutaj. Mieszka w `[replica:NAZWA]`,
+szóstym rodzaju sekcji, z własną listą pól: `_allow_fields replica source dst
+schedule prefix notify media recursive flags history`. Sekcje te **nie niosą
+`pair_label`**, więc selektor z §4 ich nie znajdzie i nie powinien. Jedno źródło
+może mieć kilka replik — lab postawił trzy sekcje na jednym źródle.
 
 Najważniejsze: **`add-replica` jest upsertem.** Usage mówi wprost: „Every field
 is a flag, and add-replica is an upsert”. Czyli zmiana harmonogramu czy prefiksu

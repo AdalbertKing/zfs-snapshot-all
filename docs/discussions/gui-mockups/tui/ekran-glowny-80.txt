@@ -1,11 +1,15 @@
 Ekran glowny: lista relacji + panel szczegolow (80 kolumn)
-==========================================================
+=========================================================
 
 Znaki ramek wymagaja UTF-8; wariant ASCII (+-|) jest wymaganiem kontraktu.
 Markery ! !! ? stoja tu za kolor: w terminalu niesie go tlo i barwa znaku.
 Szerokosc 80 kolumn -- przypadek projektowy, nie awaryjny.
 
- Plik  Relacja  Widok  Pomoc                            pve9 | zfsbackup  
+Menu 'Kolektor' prowadzi do konfiguracji TEJ maszyny: repliki, wyzwalacz
+udev, [defaults], server.conf, kopie lokalne. Replika nie jest relacja
+i nie stoi na liscie powyzej (dokument decyzji, sekcja 4a).
+
+ Plik  Relacja  Kolektor  Widok  Pomoc                  pve9 | zfsbackup  
 ╔═ Relacje na kolektorze (5) ════════════════════════════════════════════════╗
 ║ Relacja  Stan            Monitor     Ostatni wynik       Nastepny          ║
 ║ ────────────────────────────────────────────────────────────────────────── ║

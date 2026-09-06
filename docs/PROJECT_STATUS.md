@@ -7615,8 +7615,15 @@ stanem recenzji.
   więc to samo polecenie zakłada i zmienia, a `replica_section_upsert` pisze
   sekcję. To narzuca kształt nowemu `set-policy` (ta sama gramatyka nazwanych
   flag) i dokłada mu odmowę na nazwie, która jest repliką. Ekran Nośniki
-  w GUI dostaje `Ins`/`Enter`/`Del`/`F5`; `purge-replica-copy` zostaje poza V1
-  jako destrukcyjny. E38 postscriptum.
+  **Poprawione tego samego dnia po drugiej uwadze właściciela:** replika to
+  konfiguracja **kolektora**, nie relacji, więc nie jest osią zmiany
+  konfiguracji relacji i nie stoi na liście relacji. Repozytorium zapisało to
+  przy labie replik: „replika to inny RODZAJ zadania (bez monitora, bez prune
+  źródła, bez relacji), a nie drugi `dst`" (R1). GUI dostaje z menu głównego
+  ekran **Kolektor** z ustawieniami tej maszyny: repliki, wyzwalacz udev,
+  `[defaults]`, `server.conf`, kopie lokalne. Zakładka Nośniki zostaje widokiem
+  statusu i skacze `Enter`-em do konfiguracji repliki. `purge-replica-copy`
+  poza V1 jako destrukcyjny. E38 dwa postscripta.
   **Makiety w repo:** `docs/discussions/gui-mockups/` — `tui/` w docelowym
   medium (80 kolumn), `web-odrzucony/` zachowane za architekturę informacji.
 - **Decyzja LVM nadal czeka na słowo właściciela:**
