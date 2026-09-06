@@ -7573,15 +7573,30 @@ stanem recenzji.
   (sekcja 23 pakietu `zfsbackup`). Oba warunki z dodatkowej uwagi REV-019 padają
   na `9af0003`, czyli dokładnie tym commicie, w którym poprawka wylądowała w
   niewłaściwej funkcji, i przechodzą dziś.
-- **Dwa dokumenty decyzji czekają na słowo właściciela (2026-09-04):**
-  `docs/discussions/OWNER-LVM-BACKEND-DECISION-2026-09-04.md` (backend LVM:
-  parowanie root-only i backend-neutralny `gen-cron` już rozstrzygnięte,
-  sześć pytań w §7) oraz `docs/discussions/OWNER-GUI-DECISION-2026-09-04.md`
-  (cienkie GUI: pięć pytań w §7 — rodzaj, miejsce i dostęp, język, zakres V1,
-  zasięg — każde z rekomendacją; etap A „dopełnienie JSON": `status --json`,
-  `relations --json`, `monitor --json` nie zależy od żadnej odpowiedzi).
-  Inwentarz z 2026-09-04: JSON mają tylko `progress` i `list-replicas`;
-  `status` jest tekstem, listy relacji z `--json` nie ma.
+- **GUI: rodzaj i zakres ROZSTRZYGNIĘTE przez właściciela (2026-09-05/06),
+  dokument `docs/discussions/OWNER-GUI-DECISION-2026-09-04.md` przepisany.**
+  Nie przeglądarka, tylko **pełnoekranowy tryb tekstowy w sesji SSH**
+  (Python 3 + `curses`, idiom Turbo Vision): „to serwer backupu, admin łączy
+  się z domu przez VPN i putty, ma tylko tekst”. Znika pytanie o miejsce i
+  dostęp razem z gniazdem nasłuchującym, uwierzytelnia SSH, nie ma demona do
+  restartu przy self-update. Zakres zmieniony z „tylko odczyt” na
+  **zarządzanie**: lista relacji ze stanem, panel szczegółów pod wierszem z
+  focusem, Enter w ustawienia, dodawanie, usuwanie i pauza z ekranu głównego.
+  Doszły cztery wymagania kontraktu terminala (80 kolumn jako przypadek
+  projektowy, wariant ASCII ramek, cztery werdykty czytelne bez koloru,
+  odświeżanie malujące różnice ze względu na VPN). Otwarte: `python3
+  --version` na flocie, bo tylko to może obalić wybór języka.
+  **Ścieżka zmiany konfiguracji nazwana w §4 dokumentu**, po tym jak
+  implementer opisał ją właścicielowi błędnie (E38): warstwą sterowania jest
+  CONFIG, nie zbiór czasowników — polityka (retencja, harmonogramy, quiesce,
+  wykluczenia, progi) to edycja configu, `gen-cron.sh -c FILE` jako podgląd i
+  `--install`; zakres dodatkowo wymaga `--commit-scope` na źródle; endpoint,
+  pasmo, profil i pauza mają własne czasowniki. Usunięcie i założenie relacji
+  od nowa NIE jest ścieżką zmiany konfiguracji.
+- **Decyzja LVM nadal czeka na słowo właściciela:**
+  `docs/discussions/OWNER-LVM-BACKEND-DECISION-2026-09-04.md` (parowanie
+  root-only i backend-neutralny `gen-cron` już rozstrzygnięte, sześć pytań
+  w §7).
 
 ### Czeka na werdykt recenzenta
 
