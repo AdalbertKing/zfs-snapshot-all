@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg: oklch(0.20 0.010 255);
+      --panel: oklch(0.245 0.011 255);
+      --panel2: oklch(0.29 0.012 255);
+      --line: oklch(0.345 0.013 255);
+      --soft: oklch(0.30 0.011 255);
+      --fg: oklch(0.94 0.005 255);
+      --dim: oklch(0.73 0.012 255);
+      --faint: oklch(0.585 0.012 255);
+      --ok: oklch(0.76 0.13 155);
+      --warn: oklch(0.80 0.13 75);
+      --crit: oklch(0.69 0.16 25);
+      --unk: oklch(0.73 0.09 300);
+      --acc: oklch(0.74 0.11 230);
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans);
+          line-height:1.35; -webkit-font-smoothing:antialiased; }
+    a{ color:var(--acc); } a:hover{ color: oklch(0.83 0.11 230); }
+    .th{ font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+         color:var(--faint); padding:11px 14px 9px; text-align:left; }
+    .td{ padding:13px 14px; border-top:1px solid var(--soft); font-family:var(--mono);
+         font-size:13px; vertical-align:top; }
+    .sub{ font-family:var(--sans); font-size:11.5px; color:var(--faint); padding-top:5px; }
+    .badge{ display:inline-flex; align-items:center; gap:7px; padding:3px 9px; border-radius:3px;
+            font-family:var(--mono); font-size:11.5px; font-weight:500; }
+    .num{ font-family:var(--mono); font-size:10.5px; opacity:.75; }
+    .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:760px; width:1440px;">
+
+  <div style="display:flex; align-items:center; gap:16px; height:56px; padding:0 20px;
+              background:var(--panel); border-bottom:1px solid var(--line); flex:none;">
+    <div style="font-family:var(--mono); font-size:13.5px; font-weight:600;">zfs-snapshot-all</div>
+    <div style="width:1px; height:20px; background:var(--line);"></div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-family:var(--mono); font-size:13px;">pve9</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">192.168.28.99</span>
+    </div>
+    <div style="flex-grow:1;"></div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:var(--panel2); border:1px solid var(--line);">
+      <span style="font-size:11.5px; font-weight:500; color:var(--dim);">tylko odczyt</span>
+    </div>
+    <span style="font-size:11.5px; color:var(--faint);">odczytano 4 s temu · monitor biegnie co godzinę</span>
+  </div>
+
+  <div style="display:flex; align-items:stretch; height:44px; padding:0 20px; flex:none;
+              background:var(--panel); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; padding:0 14px; font-size:13px; color:var(--dim);">Przegląd</div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Transfery
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; font-weight:600;
+                color:var(--fg); box-shadow: inset 0 -2px 0 var(--acc);">
+      Monitor
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Nośniki
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">1</span>
+    </div>
+  </div>
+
+  <div style="flex-grow:1; padding:22px 20px 0; display:flex; flex-direction:column; gap:18px; min-height:0;">
+
+    <div style="display:flex; align-items:baseline; gap:10px; padding-left:2px;">
+      <span style="font-size:14px; font-weight:600;">Wiek snapshotów</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">5 linii monitora · 3 nie-OK</span>
+    </div>
+
+    <div style="border:1px solid var(--line); border-radius:5px; background:var(--panel); overflow:hidden;">
+      <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
+        <thead>
+          <tr style="background:var(--panel2);">
+            <th class="th" style="width:400px;">Dataset</th>
+            <th class="th" style="width:210px;">Wzorzec</th>
+            <th class="th" style="width:180px;">Próg ostrz. / kryt.</th>
+            <th class="th" style="width:190px;">Wiek najnowszego</th>
+            <th class="th">Werdykt</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td" style="border-top:none;">hdd/backups/pve1/vm-104-disk-0</td>
+            <td class="td" style="border-top:none; color:var(--dim);">automated_hourly_</td>
+            <td class="td" style="border-top:none; color:var(--dim);">90 min / 4 h</td>
+            <td class="td" style="border-top:none;">41 min</td>
+            <td class="td" style="border-top:none;">
+              <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">
+                OK <span class="num">0</span></span>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="td">hdd/backups/pve1/vm-103-disk-0</td>
+            <td class="td" style="color:var(--dim);">automated_daily_</td>
+            <td class="td" style="color:var(--dim);">26 h / 50 h</td>
+            <td class="td" style="color:var(--warn);">31 h 8 min</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.80 0.13 75 / 0.15); color:var(--warn);">
+                WARNING <span class="num">1</span></span>
+            </td>
+          </tr>
+
+          <tr style="background:oklch(0.69 0.16 25 / 0.06);">
+            <td class="td">
+              <div>hdd/backups/pve10/vm-102</div>
+              <div class="sub">źródło przestało tworzyć snapshoty z tym prefiksem</div>
+            </td>
+            <td class="td" style="color:var(--dim);">automated_hourly_</td>
+            <td class="td" style="color:var(--dim);">90 min / 4 h</td>
+            <td class="td" style="color:var(--crit);">9 h 12 min</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">
+                CRITICAL <span class="num">2</span></span>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="td">
+              <div>hdd/backups/pve9b/lab</div>
+              <div class="sub">relacja pve9b jest wstrzymana (pause-client) — starzenie się kopii jest tu oczekiwane</div>
+            </td>
+            <td class="td" style="color:var(--dim);">automated_hourly_</td>
+            <td class="td" style="color:var(--dim);">90 min / 4 h</td>
+            <td class="td" style="color:var(--dim);">6 h 12 min</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">
+                OK <span class="num">0</span></span>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="td">
+              <div>hdd/backups/pve0/vm-105</div>
+              <div class="sub">dataset nie istnieje — relacja pve0 nie została jeszcze aktywowana</div>
+            </td>
+            <td class="td" style="color:var(--faint);">(any)</td>
+            <td class="td" style="color:var(--dim);">90 min / 4 h</td>
+            <td class="td" style="color:var(--faint);">nie do odczytania</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.73 0.09 300 / 0.17); color:var(--unk);">
+                UNKNOWN <span class="num">3</span></span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- legenda: kontrakt monitora, nie ozdoba -->
+    <div style="display:flex; align-items:flex-start; gap:26px; padding:14px 16px; border-radius:5px;
+                background:var(--panel); border:1px solid var(--line);">
+      <div style="display:flex; flex-direction:column; gap:9px; flex:none;">
+        <span style="font-size:10.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase;
+                     color:var(--faint);">Kontrakt monitora</span>
+        <div style="display:flex; align-items:center; gap:9px;">
+          <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">OK <span class="num">0</span></span>
+          <span class="badge" style="background:oklch(0.80 0.13 75 / 0.15); color:var(--warn);">WARNING <span class="num">1</span></span>
+          <span class="badge" style="background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">CRITICAL <span class="num">2</span></span>
+          <span class="badge" style="background:oklch(0.73 0.09 300 / 0.17); color:var(--unk);">UNKNOWN <span class="num">3</span></span>
+        </div>
+      </div>
+      <div style="width:1px; align-self:stretch; background:var(--line);"></div>
+      <div style="flex-grow:1; display:flex; flex-direction:column; gap:6px; padding-top:2px;">
+        <div style="font-size:12.5px; color:var(--dim); text-wrap:pretty;">
+          <strong style="font-weight:600; color:var(--unk);">UNKNOWN to nie awaria</strong> — to brak odpowiedzi.
+          Nie ma koloru OK i nie ma koloru CRITICAL, bo nie jest ani jednym, ani drugim.
+        </div>
+        <div style="font-size:12.5px; color:var(--dim); text-wrap:pretty;">
+          Wstrzymana relacja daje <strong style="font-weight:600; color:var(--ok);">OK</strong> ze zdaniem nazywającym pauzę —
+          cisza nie jest tu dowodem pokrycia.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display:flex; align-items:center; gap:14px; height:36px; padding:0 20px; flex:none;
+              background:var(--panel); border-top:1px solid var(--line);">
+    <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">
+      źródło: check-snap-age.sh (silnik zamrożony) · kod wyjścia + linia tekstu
+    </span>
+    <div style="flex-grow:1;"></div>
+    <span style="font-size:11.5px; color:var(--faint);">wynik jest odpytywany, nie wyliczany przez tę stronę</span>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

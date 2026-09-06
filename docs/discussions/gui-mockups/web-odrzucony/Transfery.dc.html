@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg: oklch(0.20 0.010 255);
+      --panel: oklch(0.245 0.011 255);
+      --panel2: oklch(0.29 0.012 255);
+      --line: oklch(0.345 0.013 255);
+      --soft: oklch(0.30 0.011 255);
+      --fg: oklch(0.94 0.005 255);
+      --dim: oklch(0.73 0.012 255);
+      --faint: oklch(0.585 0.012 255);
+      --ok: oklch(0.76 0.13 155);
+      --warn: oklch(0.80 0.13 75);
+      --crit: oklch(0.69 0.16 25);
+      --unk: oklch(0.73 0.09 300);
+      --acc: oklch(0.74 0.11 230);
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans);
+          line-height:1.35; -webkit-font-smoothing:antialiased; }
+    a{ color:var(--acc); } a:hover{ color: oklch(0.83 0.11 230); }
+    .v{ font-family:var(--mono); font-size:13px; }
+    .bar{ height:5px; border-radius:3px; background:var(--panel2); overflow:hidden; }
+    .job{ display:flex; flex-direction:column; gap:10px; padding:14px 16px; border-radius:5px;
+          background:var(--panel); border:1px solid var(--line); }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:760px; width:1440px;">
+
+  <div style="display:flex; align-items:center; gap:16px; height:56px; padding:0 20px;
+              background:var(--panel); border-bottom:1px solid var(--line); flex:none;">
+    <div style="font-family:var(--mono); font-size:13.5px; font-weight:600;">zfs-snapshot-all</div>
+    <div style="width:1px; height:20px; background:var(--line);"></div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-family:var(--mono); font-size:13px;">pve9</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">192.168.28.99</span>
+    </div>
+    <div style="flex-grow:1;"></div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:var(--panel2); border:1px solid var(--line);">
+      <span style="font-size:11.5px; font-weight:500; color:var(--dim);">tylko odczyt</span>
+    </div>
+    <span style="font-size:11.5px; color:var(--faint);">odczytano 1 s temu</span>
+  </div>
+
+  <div style="display:flex; align-items:stretch; height:44px; padding:0 20px; flex:none;
+              background:var(--panel); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; padding:0 14px; font-size:13px; color:var(--dim);">Przegląd</div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; font-weight:600;
+                color:var(--fg); box-shadow: inset 0 -2px 0 var(--acc);">
+      Transfery
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Monitor
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Nośniki
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">1</span>
+    </div>
+  </div>
+
+  <div style="flex-grow:1; padding:22px 20px 0; display:flex; flex-direction:column; gap:20px; min-height:0;">
+
+    <div style="display:flex; align-items:baseline; gap:10px; padding-left:2px;">
+      <span style="font-size:14px; font-weight:600;">W toku</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">3</span>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:11px;">
+
+      <!-- przyrostowy, mierzalny -->
+      <div class="job">
+        <div style="display:flex; align-items:baseline; gap:11px;">
+          <span class="v" style="font-weight:600;">pve10</span>
+          <span class="v">rpool/data/vm-101</span>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">→ hdd/backups/pve10/vm-101</span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--dim);">
+            przyrostowy <span style="color:var(--faint);">od @automated_hourly_2026-09-05_0300</span>
+          </span>
+        </div>
+        <div class="bar"><div style="width:36%; height:100%; background:var(--acc);"></div></div>
+        <div style="display:flex; align-items:baseline; gap:11px; font-family:var(--mono); font-size:12px;">
+          <span>4,2 GiB / 11,8 GiB</span>
+          <span style="color:var(--faint);">36%</span>
+          <div style="flex-grow:1;"></div>
+          <span style="color:var(--faint);">na łączu 3,9 GiB</span>
+          <span style="color:var(--faint);">·</span>
+          <span style="color:var(--faint);">aktualizacja 2 s temu</span>
+        </div>
+      </div>
+
+      <!-- pełny, na łączu niemierzalne (push) -->
+      <div class="job">
+        <div style="display:flex; align-items:baseline; gap:11px;">
+          <span class="v" style="font-weight:600;">pve1</span>
+          <span class="v">hdd/vm-disks/vm-107-disk-0</span>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">→ hdd/backups/pve1/vm-107-disk-0</span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--dim);">
+            pełny <span style="color:var(--faint);">brak wspólnej bazy</span>
+          </span>
+        </div>
+        <div class="bar"><div style="width:12%; height:100%; background:var(--acc);"></div></div>
+        <div style="display:flex; align-items:baseline; gap:11px; font-family:var(--mono); font-size:12px;">
+          <span>812 MiB / 6,4 GiB</span>
+          <span style="color:var(--faint);">12%</span>
+          <div style="flex-grow:1;"></div>
+          <span style="color:var(--unk);">na łączu: niemierzalne (push)</span>
+          <span style="color:var(--faint);">·</span>
+          <span style="color:var(--faint);">aktualizacja 1 s temu</span>
+        </div>
+      </div>
+
+      <!-- wznowiony, zatrzymana aktualizacja -->
+      <div class="job" style="border-left:2px solid var(--warn);">
+        <div style="display:flex; align-items:baseline; gap:11px;">
+          <span class="v" style="font-weight:600;">pve2</span>
+          <span class="v">hdd/vm-disks/vm-900-disk-0</span>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">→ hdd/backups/pve2/vm-900-disk-0</span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:12px; color:var(--dim);">wznowiony</span>
+        </div>
+        <div class="bar"><div style="width:95%; height:100%; background:var(--warn);"></div></div>
+        <div style="display:flex; align-items:baseline; gap:11px; font-family:var(--mono); font-size:12px;">
+          <span>9,1 GiB / 9,6 GiB</span>
+          <span style="color:var(--faint);">95%</span>
+          <div style="flex-grow:1;"></div>
+          <span style="color:var(--faint);">na łączu 8,8 GiB</span>
+          <span style="color:var(--faint);">·</span>
+          <span style="color:var(--warn);">bez aktualizacji od 47 s</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display:flex; align-items:baseline; gap:10px; padding:6px 0 0 2px;">
+      <span style="font-size:14px; font-weight:600;">Dzisiaj</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">4</span>
+    </div>
+
+    <div style="border:1px solid var(--line); border-radius:5px; background:var(--panel); overflow:hidden;">
+      <div style="display:grid; grid-template-columns:110px 300px 130px 130px minmax(0,1fr);
+                  gap:16px; padding:12px 16px; font-family:var(--mono); font-size:12.5px;">
+        <span style="font-weight:500;">pve1</span>
+        <span>hdd/vm-disks/vm-103-disk-0</span>
+        <span style="color:var(--dim);">przyrostowy</span>
+        <span style="color:var(--dim);">1,4 GiB</span>
+        <span style="color:var(--faint);">04:00 · 312 s · OK</span>
+      </div>
+      <div style="display:grid; grid-template-columns:110px 300px 130px 130px minmax(0,1fr);
+                  gap:16px; padding:12px 16px; border-top:1px solid var(--soft);
+                  font-family:var(--mono); font-size:12.5px;">
+        <span style="font-weight:500;">pve2</span>
+        <span>hdd/vm-disks/vm-901-disk-0</span>
+        <span style="color:var(--dim);">przyrostowy</span>
+        <span style="color:var(--dim);">6,2 GiB</span>
+        <span style="color:var(--faint);">04:00 · 1 240 s · OK</span>
+      </div>
+      <div style="display:grid; grid-template-columns:110px 300px 130px 130px minmax(0,1fr);
+                  gap:16px; padding:12px 16px; border-top:1px solid var(--soft);
+                  font-family:var(--mono); font-size:12.5px;">
+        <span style="font-weight:500;">pve10</span>
+        <span>hdd/vm-disks</span>
+        <span style="color:var(--dim);">przyrostowy</span>
+        <span style="color:var(--dim);">248 MiB</span>
+        <span style="color:var(--faint);">04:00 · 96 s · OK</span>
+      </div>
+      <div style="display:grid; grid-template-columns:110px 300px 130px 130px minmax(0,1fr);
+                  gap:16px; padding:12px 16px; border-top:1px solid var(--soft);
+                  font-family:var(--mono); font-size:12.5px;">
+        <span style="font-weight:500;">pve9b</span>
+        <span style="color:var(--faint);">—</span>
+        <span style="color:var(--dim);">—</span>
+        <span style="color:var(--dim);">—</span>
+        <span style="color:var(--warn);">pominięte: relacja wstrzymana (pause-client)</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display:flex; align-items:center; gap:14px; height:36px; padding:0 20px; flex:none;
+              background:var(--panel); border-top:1px solid var(--line);">
+    <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">
+      źródło: progress --json · /var/lib/zfs-snapshot-all/progress/*.json
+    </span>
+    <div style="flex-grow:1;"></div>
+    <span style="font-size:11.5px; color:var(--faint);">„niemierzalne” to nie zero — mbuffer nie raportuje w push</span>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

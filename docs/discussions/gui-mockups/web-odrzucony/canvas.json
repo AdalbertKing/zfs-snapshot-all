@@ -1,0 +1,34 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",      "x": 0,    "y": 0,    "w": 1440, "h": 760, "title": "Przegląd" },
+    { "file": "Relacja.dc.html",   "x": 1560, "y": 0,    "w": 1440, "h": 760, "title": "Szczegóły relacji" },
+    { "file": "Transfery.dc.html", "x": 0,    "y": 900,  "w": 1440, "h": 760, "title": "Transfery" },
+    { "file": "Monitor.dc.html",   "x": 1560, "y": 900,  "w": 1440, "h": 760, "title": "Monitor wieku" },
+    { "file": "Nosniki.dc.html",   "x": 0,    "y": 1800, "w": 1440, "h": 760, "title": "Repliki i nośniki" },
+    { "file": "WariantB.dc.html",  "x": 1560, "y": 1800, "w": 1440, "h": 760, "title": "Wariant B — jeden ekran" }
+  ],
+  "annotations": [
+    {
+      "id": "teza",
+      "x": 0,
+      "y": -190,
+      "w": 900,
+      "text": "Teza tych okien: GUI nie spłaszcza żadnego stanu, który CLI już rozróżnia.\n\nDlatego „cron idzie przez inny endpoint”, „brak zapisu w historii” i „nie ten dysk” mają własny wygląd, a nie zieloną albo czerwoną kropkę. Cztery okna to cztery pytania operatora: co mam, co teraz leci, czy snapshoty są świeże, gdzie są nośniki."
+    },
+    {
+      "id": "unknown",
+      "x": 3120,
+      "y": 900,
+      "w": 320,
+      "text": "UNKNOWN nie dostaje ani zieleni, ani czerwieni — ma własny, jedyny w palecie fiolet.\n\n„Nie wiadomo” nie jest ani OK, ani awarią, a monitor ma na to osobny kod wyjścia (3). Cisza nie jest dowodem pokrycia."
+    },
+    {
+      "id": "wybor",
+      "x": 3120,
+      "y": 1800,
+      "w": 320,
+      "text": "Otwarte do Twojej decyzji: zakładki (wariant A, pięć okien obok) czy jeden ekran (wariant B)?\n\nA skaluje się na kilkanaście relacji. B nie wymaga żadnej nawigacji, ale przy dłuższej liście „co jest nie tak” ucieka pod krawędź."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

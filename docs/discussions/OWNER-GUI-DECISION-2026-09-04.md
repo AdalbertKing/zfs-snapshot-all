@@ -1,236 +1,234 @@
 # Decyzja: cienkie GUI nad zfs-snapshot-all
 
-Status: **PROJEKT DO ZATWIERDZENIA przez właściciela** (2026-09-04). Spisany
-przez implementera z dyskusji z właścicielem („czy jesteś w stanie w trybie
-ciągłym, z minimalną moją ingerencją, położyć na ten pakiet cienkie intuicyjne
-GUI?"). Odpowiedź implementera: tak, pod warunkiem, że pięć pytań z §4
-dostanie odpowiedź **raz**, przed pierwszą linią kodu. Po nich praca idzie
-etapami z §5 bez dalszych pytań: jeden PR na etap, właściciel mówi „Scal" i
-raz na etap z akcjami odpala runbook na labie. Żadna linia kodu GUI nie
-powstała; ten dokument ma wyprzedzić pierwszą.
+Status: **ROZSTRZYGNIĘTE co do rodzaju i zakresu** (właściciel, 2026-09-05
+i 2026-09-06). Dokument powstał 2026-09-04 jako pięć pytań z rekomendacją;
+właściciel odpowiedział na wszystkie, jedną rekomendację obalił i przy okazji
+wykazał błąd implementera w opisie tego, co pakiet umie zmieniać. Sekcje §5
+i §4 są przepisane, nie dopisane. Otwarte pozycje są w §9. Żadna linia kodu
+GUI nie powstała; ten dokument ma wyprzedzić pierwszą.
 
 ## 1. Co repozytorium już o GUI powiedziało
 
-Wątki o GUI w repozytorium dotyczą **kontraktu danych**, nie formy. Żaden nie
-rozstrzyga rodzaju ani wyglądu — to właśnie luka, którą wypełnia §4.
+Wątki o GUI w repozytorium dotyczyły **kontraktu danych**, nie formy.
 
 **[decyzja, 2026-08-23] Warstwa danych dla maszyn, nie tylko oczu.** Rekord
 postępu niesie relację (`label`), tryb i bazę wyprowadzone z prawdziwej komendy
 send (`full`/`incremental`/`resume`), tożsamość zadania i bajty na łączu
 (`wire_bytes`, `-1` = niemierzalne), „żeby przyszłe GUI albo monitor mogły to
-zbadać bez skrobania tekstu" (`docs/PROJECT_STATUS.md`).
+zbadać bez skrobania tekstu” (`docs/PROJECT_STATUS.md`).
 
 **[decyzja, w kodzie] `--json` jest produktem, nie wygodą.** `progress --json`
-i `list-replicas --json` mają ten sam kształt odpowiedzi — jeden obiekt, jedna
-tablica rekordów, pola nazwane po polach configu, z których pochodzą — „so a
-front end learns the convention once" (`zfs-backup.sh`, `cmd_list_replicas`).
-Stan nośnika (`here`/`available`/`away`/`wrong_medium`) jest **pytaniem do
-bramki**, nie wnioskiem z listy, bo tylko bramka odróżnia „pula
-niezaimportowana" od „w slocie jest ZŁY dysk".
+i `list-replicas --json` mają ten sam kształt odpowiedzi, „so a front end learns
+the convention once” (`zfs-backup.sh`, `cmd_list_replicas`). Stan nośnika jest
+**pytaniem do bramki**, nie wnioskiem z listy pul, bo tylko bramka odróżnia
+„pula niezaimportowana” od „w slocie jest ZŁY dysk”.
 
-**[decyzja, 2026-09-01] Spójność nazw pod GUI.** „Pilnujemy spójności pakietu
-na każdym etapie. To ma wejść pod GUI. Nie ma miejsca na chaos." Stąd reguła
-gramatyki list w `docs/project/FOUNDATIONS.md` (lista płaska po przecinku,
-lista wzorców po jednej fladze / polu numerowanym) i ujednolicone
-`exclude_family` / `exclude_child_<n>`.
+**[decyzja, 2026-09-01] Spójność nazw pod GUI.** „Pilnujemy spójności pakietu na
+każdym etapie. To ma wejść pod GUI. Nie ma miejsca na chaos.” Stąd reguła
+gramatyki list w `docs/project/FOUNDATIONS.md`.
 
-**[decyzja, 2026-09-01] Część wsadowa zamknięta; „kolejny etap jest po stronie
-GUI, nie wsadu"** (`docs/project/OWNER-DECISIONS.md`). Etap profili nie ma
-dalszych kroków.
+**[decyzja, 2026-09-01] Część wsadowa zamknięta**, „kolejny etap jest po stronie
+GUI, nie wsadu” (`docs/project/OWNER-DECISIONS.md`).
 
-**[dyskusja, 2026-08-17] „GUI dostaje jeden czasownik na relację."**
-`ZFSBACKUP-ONLY-DEPLOYMENT` §3: pod `--force-remote` orkiestrator domyka
-wszystkie zejścia i `deploy.sh` znika z rąk operatora. Ta sama dyskusja
-zauważa, że jednodotykowość **nie** zwiększa świadomości klikającego
-operatora — GUI nie może być argumentem za osłabieniem odmów.
+**[dyskusja, 2026-08-17] „GUI dostaje jeden czasownik na relację.”**
+`ZFSBACKUP-ONLY-DEPLOYMENT` §3 zauważa też, że jednodotykowość **nie** zwiększa
+świadomości klikającego operatora, więc GUI nie może być argumentem za
+osłabieniem odmów.
 
-## 2. Zasady niezależne od odpowiedzi
+## 2. Zasady
 
-Obowiązują przy każdym wariancie z §4; nie są do dyskusji, bo wynikają z
-zasad, które pakiet już ma.
+Pierwsze osiem obowiązuje przy każdym wariancie i nie są do dyskusji, bo
+wynikają z zasad, które pakiet już ma. Cztery ostatnie doszły z decyzji o
+terminalu (§5 P1) i są **wymaganiami kontraktu, nie uwagami**.
 
-1. **GUI nie skrobie tekstu.** Czyta wyłącznie `--json` i pliki stanu o
-   ustalonym kształcie. Jeśli czegoś nie ma w JSON, najpierw dochodzi
-   `--json` w CLI (etap A w §5), potem widok. Tekst dla ludzi zostaje dla
-   ludzi.
-2. **GUI nie omija odmów.** Każda akcja to wywołanie istniejącego czasownika
-   CLI z jego bramkami (`--yes`, grant, podgląd, kody wyjścia z
-   `docs/CONVENTIONS.md` §6). GUI nie ma własnej kopii żadnej reguły
-   bezpieczeństwa i nie ma trybu „force".
-3. **GUI nie dotyka silników.** Zamrożone silniki (`snapsend.sh`, `snapget.sh`,
-   `delsnaps.sh`, `check-snap-age.sh`, `lib-zfs-snap.sh`) nie zmieniają się
-   pod GUI. Wszystko, czego GUI potrzebuje, jest już w rekordach postępu i
-   w plikach stanu, albo dochodzi w warstwie orkiestracji.
-4. **Jeden czasownik na relację.** Widok relacji pokazuje jej stan i
-   dokładnie te akcje, które CLI dziś dopuszcza dla tego stanu. Żadnych
-   kreatorów składających kilka czasowników w jedno kliknięcie.
-5. **Restore poza pierwszym zakresem.** Odtwarzanie (Faza 7) ma własny
-   kontrakt z podglądem nazywającym każdy obiekt, grantem i potwierdzeniem.
-   Wchodzi pod GUI dopiero jako osobny etap po labie, i tylko w formie
-   bezpiecznej (do nowej przestrzeni nazw). Destrukcyjne zostaje w CLI do
-   odrębnej decyzji właściciela.
-6. **Bez nowej powierzchni ataku domyślnie.** Domyślna konfiguracja nie
-   otwiera portu na sieć i nie wprowadza nowego mechanizmu uwierzytelniania.
-   Dostęp idzie istniejącym kanałem (SSH), tak jak wszystko inne w pakiecie.
-7. **Bez nowych zależności na hoście.** To, czego GUI potrzebuje w runtime,
-   musi już być na Proxmoxie; `deploy.sh` nie dostaje nowej listy pakietów do
-   instalacji poza tym, co §4 P3 jawnie dopuści.
+1. **GUI nie skrobie tekstu.** Czyta `--json` i pliki stanu o ustalonym
+   kształcie. Czego nie ma w JSON, to najpierw dochodzi w CLI (§7 etap A).
+2. **GUI nie omija odmów.** Każda akcja to istniejąca, udokumentowana ścieżka
+   produktu z jej bramkami. GUI nie ma własnej kopii żadnej reguły
+   bezpieczeństwa i nie ma trybu „na siłę”.
+3. **GUI nie dotyka zamrożonych silników** (`snapsend.sh`, `snapget.sh`,
+   `delsnaps.sh`, `check-snap-age.sh`, `lib-zfs-snap.sh`).
+4. **Jeden czasownik na relację.** Widok relacji pokazuje dokładnie te akcje,
+   które CLI dopuszcza dla tego stanu. Żadnych kreatorów składających kilka
+   czasowników w jedno kliknięcie bez pokazania, co się wykona.
+5. **Restore poza pierwszym zakresem.** Wchodzi jako osobny etap po labie i
+   tylko w formie bezpiecznej; destrukcyjny zostaje w CLI do odrębnej decyzji.
+6. **Bez nowej powierzchni ataku.** Brak gniazda nasłuchującego, brak nowego
+   mechanizmu uwierzytelniania (§5 P2).
+7. **Bez nowych zależności na hoście** poza tym, co §5 P3 jawnie dopuszcza.
 8. **Ta sama dyscyplina testowa.** Kontrakty JSON dostają suitę z kontrolą
-   ujemną (`test/deps.conf` `[contract:]`), widoki dostają testy na stubach,
-   akcje dostają obowiązek runbooka na labie przed scaleniem.
+   ujemną, widoki testy na stubach, akcje obowiązek runbooka na labie.
+9. **Terminal jest celem, nie wariantem awaryjnym.** 80 kolumn to przypadek
+   projektowy: układ ma się w nich mieścić, a przy 120 i 200 wykorzystywać
+   miejsce. Nie wolno projektować na szerokość i „obcinać na wąskim”.
+10. **Ramki mają wariant ASCII**, gdy terminal nie jest w UTF-8, a werdykty
+    niosą **słowa** (`OK`, `WARNING`, `CRITICAL`, `UNKNOWN`), nie tylko kolor.
+    Cztery werdykty muszą być rozróżnialne przy 16 kolorach i przy zerze.
+11. **Odświeżanie maluje różnice, nie ekran.** Admin łączy się z domu przez
+    VPN; `curses` wysyła zmienione komórki, co przy sekundowym odświeżaniu
+    listy transferów daje setki bajtów, nie kilkanaście kilobajtów.
+12. **Zapis idzie udokumentowaną ścieżką produktu i pokazuje komendę** przed
+    wykonaniem (§4).
 
-## 3. Inwentarz warstwy danych — co jest, czego brakuje
+## 3. Inwentarz warstwy danych
 
 Zmierzone 2026-09-04 na `main` `6c5c01d`.
 
-| dana | źródło dziś | kształt | pod GUI |
-|---|---|---|---|
-| postęp transferów | `zfs-backup.sh progress --json` | JSON: `relations[]`, `jobs[]`, `dataset`, `target`, `label`, `state`, `done_bytes`, `total_bytes`, `updated_epoch`, `idle`/`running` | **gotowe** |
-| repliki i nośniki | `zfs-backup.sh list-replicas --json` | JSON, ten sam kształt; stan nośnika z bramki | **gotowe** |
-| rekordy postępu na dysku | `/var/lib/zfs-snapshot-all/progress/<klucz>.json` | JSON, jeden plik na zadanie | gotowe do odczytu bez CLI |
-| stan relacji (klient, endpoint, pauza) | `zfs-backup.sh status [NAZWA]` | **tylko tekst** (`printf` z `state=` `endpoint=`) | **brakuje `--json`** |
-| lista relacji z configu | `gen-cron.sh` (render), `clean-relationships.sh` | tekst / crontab | **brakuje czasownika listującego z `--json`** |
-| wiek snapshotów (monitor) | `check-snap-age.sh` | kontrakt Nagios 0/1/2/3, tekst; **zamrożony** | GUI czyta kod wyjścia i linię; JSON dochodzi w warstwie orkiestracji, nie w silniku |
-| pauza / hold aktualizacji | `deploy.sh --pause/--resume`, `update-hold` | pliki stanu w `/var/lib/zfs-snapshot-all/relationships`, `/root/.zfs-snapshot-all-*-state` | odczyt: pliki; akcja: przez CLI |
-| historia przebiegów | logi silników (`-l`), rekordy postępu | tekst | **brakuje** ustrukturyzowanej historii; pierwsza wersja czyta rekordy, nie logi |
-| digest alertów | `hostscripts/alert-digest.sh` | mail | poza GUI; GUI pokazuje to samo źródło (kody monitora), nie treść maila |
-
-Wniosek: **przed widokiem potrzebne są trzy rzeczy w CLI**: `status --json`,
-czasownik `relations --json` (lista relacji z ich stanem, jedna odpowiedź) i
-`monitor --json` w warstwie orkiestracji (wywołuje zamrożony
-`check-snap-age.sh` per linia i pakuje wynik). To jest etap A w §5 i nie
-wymaga żadnej z decyzji §4.
-
-## 4. Pięć pytań — z rekomendacją
-
-Każde pytanie ma rekomendację **[propozycja]** i koszt odstępstwa. Odpowiedź
-właściciela w jednym zdaniu na pytanie wystarczy.
-
-### P1. Rodzaj: przeglądarka, konsola czy wtyczka Proxmoxa?
-
-| wariant | za | przeciw |
+| dana | źródło dziś | pod GUI |
 |---|---|---|
-| **web (przeglądarka), jeden proces, jeden plik** | działa z każdego miejsca, w którym operator ma tunel SSH; odświeżanie na żywo; ta sama strona na telefonie | wymaga procesu nasłuchującego (choćby na localhost) |
-| TUI (`whiptail`/`dialog` w konsoli SSH) | zero procesu, zero portu, bash jak reszta pakietu | brak odświeżania na żywo bez pętli; nie skaluje się na widok floty; „intuicyjne" tylko dla kogoś, kto i tak jest w konsoli |
-| wtyczka do panelu Proxmoxa | operator już tam jest | wiąże pakiet z wewnętrznym API `pve-manager` (ExtJS), które nie jest kontraktem; łamie zasadę „bez zależności"; Proxmox to jeden z celów pakietu, nie jedyny |
+| postęp transferów | `progress --json` (`relations[]`, `jobs[]`, `dataset`, `target`, `label`, `state`, `done_bytes`, `total_bytes`, `updated_epoch`) | **gotowe** |
+| repliki i nośniki | `list-replicas --json`, stan nośnika z bramki | **gotowe** |
+| rekordy postępu | `/var/lib/zfs-snapshot-all/progress/<klucz>.json` | gotowe |
+| historia biegów | log statystyk, JSON-lines (`mode`, `base`, `duration_s`, `rate_bps`, `wire_bytes`, `status`) | gotowe |
+| stan relacji | `status [NAZWA]` — **tylko tekst** | **brakuje `--json`** |
+| lista relacji | brak czasownika listującego maszynowo | **brakuje** |
+| wiek snapshotów | `check-snap-age.sh`, kontrakt 0/1/2/3, tekst; **zamrożony** | JSON w warstwie orkiestracji, nie w silniku |
+| pauza / hold | pliki stanu w `/var/lib/zfs-snapshot-all/relationships`, `/root/.zfs-snapshot-all-*-state` | odczyt z plików |
 
-**[propozycja] Web.** Jeden proces, jeden plik, bez frameworka po stronie
-serwera i bez zewnętrznych bibliotek po stronie przeglądarki (jeden plik HTML
-z wbudowanym CSS/JS, odświeżanie przez `fetch` do `--json`). TUI zostaje jako
-opcja później, jeśli będzie realna potrzeba; wtyczka Proxmoxa — nie.
+Wniosek bez zmian: przed pierwszym widokiem potrzebne są `status --json`,
+`relations --json` i `monitor --json` w warstwie orkiestracji. To etap A (§7)
+i nie zależy od żadnej decyzji.
 
-### P2. Miejsce i dostęp: gdzie nasłuchuje i kto może wejść?
+## 4. Ścieżka zmiany konfiguracji — zmierzone 2026-09-06
 
-| wariant | za | przeciw |
+Sekcja powstała, bo implementer napisał właścicielowi, że retencji i
+harmonogramu „nie da się zmienić na istniejącej relacji”. To było fałszywe.
+Zapis błędu: E38 w `docs/internal/IMPLEMENTER-ERROR-LOG.md`.
+
+**Warstwą sterowania jest CONFIG, nie zbiór czasowników.**
+`docs/CONFIG-EXAMPLES.md` mówi wprost: *„after install the config is the
+execution truth, and hand-writing or hand-editing one is a supported,
+first-class path — the documentation, not the CLI, is the escape hatch for
+bespoke policy.”* `gen-cron.sh` czyta jeden config INI (v4) na host i generuje
+z niego zarządzany blok crontaba.
+
+Trzy osie, każda ma inną drogę:
+
+| oś | co obejmuje | droga zmiany |
 |---|---|---|
-| **tylko `127.0.0.1` na kolektorze, wejście przez tunel SSH** (`ssh -L 8xxx:127.0.0.1:8xxx root@kolektor`) | zero nowej powierzchni; uwierzytelnianie = klucz SSH, który operator już ma; nic do konfigurowania | jedna komenda więcej przed otwarciem przeglądarki |
-| port na LAN z własnym hasłem | wygodniej | nowy mechanizm haseł, TLS, wygasanie sesji — cały pakiet pracy poza dziedziną projektu, i nowa powierzchnia na roocie |
-| za reverse proxy Proxmoxa (`pveproxy`) | jeden adres | jak wtyczka: zależność od wewnętrznych ustaleń `pve-manager` |
+| **polityka** | retencja i GFS, harmonogramy send i prune, quiesce, wykluczenia, rekursja, progi monitora | edycja configu → `gen-cron.sh -c FILE` (render na stdout, niezerowy kod przy błędzie) → `gen-cron.sh -c FILE --install` (idempotentna podmiana bloku) |
+| **zakres** | które datasety relacja replikuje | zwężenie: sama edycja configu. Poszerzenie: **dodatkowo** `--commit-scope` po stronie źródła, bo dowodem zakresu jest plik scope z sygnaturą sha256, której kolektor nie napisze (`rux_verify_requested_scope`) |
+| **tożsamość i łącze** | endpoint, pasmo, profil, pauza, blokada u peera | osobne czasowniki: `set-endpoint`, `set-bandwidth`, `migrate-profile`, `pause-client`/`resume-client`, `enable-client`/`disable-client` |
 
-**[propozycja] Localhost + tunel SSH.** Proces uruchamiany na żądanie
-(`zfs-backup.sh ui` albo osobny `zfs-backup-ui`), nie jako demon na stałe;
-opcjonalnie jednostka systemd, jeśli właściciel chce mieć go zawsze. Bind
-poza localhost jest **odmową**, nie flagą — do czasu osobnej decyzji.
+`gen-cron.sh --reconcile` porównuje w trybie tylko do odczytu, co config
+kopiuje, z tym, co naprawdę istnieje. **Usunięcie relacji i założenie jej od
+nowa nie jest ścieżką zmiany konfiguracji** i nie wolno jej tak przedstawiać
+w GUI.
 
-Wiąże się z tym pytanie **jako kto biegnie proces**. Tryb odczytu (P4) może
-biec jako root z ograniczeniem do odczytu, bo woła tylko `--json`; akcje wołają
-`deploy.sh`/`zfs-backup.sh`, które i tak wymagają roota. Konto delegowane nie
-ma dostępu do stanu relacji, więc GUI jako `zfsbackup` widziałoby tylko
-postęp. **[propozycja]** root, z twardą listą dozwolonych czasowników w kodzie
-GUI (allow-lista, nie parsowanie dowolnej komendy z przeglądarki).
+**Tworzenie** ma własną, bogatą ścieżkę, której implementer początkowo nie
+wymienił: dispatcher kieruje `--source=` i `--target=` do `rux_entry`, formy
+jednokomendowej, która paruje, robi join, opcjonalnie zatwierdza zakres na
+źródle (`--grant-remotely`), seeduje i aktywuje. `--source` niesie listę
+datasetów, `--source=HOST:` bierze cały host, `--mode=sync` odtwarza ścieżki
+źródła. Ponowne uruchomienie z **tymi samymi** parametrami przechodzi przez
+`rux_check_conflict`, więc relację zatrzymaną w połowie cyklu można dokończyć;
+z **innym** zakresem, celem lub trybem ta sama kontrola odmawia.
 
-### P3. Język: w czym pisać front i proces?
+## 5. Pięć pytań — rozstrzygnięte
 
-| wariant | za | przeciw |
+### P1. Rodzaj — **TUI, tryb tekstowy pełnoekranowy**
+
+Decyzja właściciela 2026-09-05: *„To serwer backupu. Często dostępny dla admina
+po SSH… Admin łączy się z domu przez VPN i putty z kolektorem. Ma tylko tekst.”*
+Rekomendacja implementera brzmiała „przeglądarka” i była błędna: uzasadniała ją
+dostępność z dowolnego miejsca, a pomijała, że operator **jest już** w sesji SSH
+na kolektorze. Web kazałby mu uruchomić proces, zestawić tunel, przejść do
+przeglądarki i wrócić. Wtyczka Proxmoxa odpada jak poprzednio (wiązałaby pakiet
+z wewnętrznym API `pve-manager`).
+
+### P2. Miejsce i dostęp — **pytanie znika**
+
+Brak procesu nasłuchującego, brak portu, brak tunelu, brak własnych haseł.
+Uwierzytelnia SSH, które już istnieje, a proces widzi dokładnie to, co konto,
+które go uruchomiło — zgodnie z modelem delegacji pakietu. Znika też
+interakcja z `update-hold` i self-update, bo nie ma demona do restartu.
+
+### P3. Język — **Python 3 z biblioteki standardowej, `curses`**
+
+Zero nowych pakietów na hoście, ta sama warstwa JSON co przy odrzuconym
+wariancie web. Wygląd w idiomie **Turbo Vision** (pasek menu, okna z ramką i
+cieniem, listwa F-klawiszy), bo to znaki, nie framework.
+
+`magiblot/tvision` (żywy port, C++17, Unicode, 24-bit kolor, konsola Windows)
+daje autentyczny CUA z nakładającymi się oknami i myszą, ale wciąga do pakietu
+kompilowany artefakt i łańcuch budowania, a `deploy.sh` dziś kopiuje pliki z
+gita. **Odrzucone, chyba że właściciel zechce nakładających się okien i myszy
+na tyle, żeby przyjąć kompilowany komponent.**
+
+### P4. Zakres — **zarządzanie, nie tylko odczyt** (zmienione)
+
+Decyzja właściciela 2026-09-06. Ekran główny listuje relacje kolektora ze
+stanem; focus na wierszu pokazuje szczegóły w dolnej części okna; Enter wchodzi
+w ustawienia; z ekranu głównego da się dodać, usunąć, wstrzymać i modyfikować.
+Rekomendacja implementera brzmiała „tylko odczyt” i została zmieniona przez
+właściciela. Zasady §2 pkt 2, 4 i 12 obowiązują bez zmian: każda akcja to
+udokumentowana ścieżka produktu z pokazaną komendą.
+
+### P5. Zasięg — **jeden host**
+
+Bez zmian. TUI to wzmacnia: admin loguje się na ten kolektor, który go
+interesuje. Agregacja floty tylko po istniejącym kanale SSH i tylko wtedy, gdy
+pojawi się realna potrzeba (plan: „conveniences backed by a real need”).
+
+## 6. Ekrany
+
+| ekran | treść | akcje |
 |---|---|---|
-| **Python 3 z biblioteki standardowej** (`http.server`, `json`, `subprocess`) | jest w bazowym Debianie każdego hosta pakietu (do potwierdzenia jedną komendą: `python3 --version` na pve9); zero instalacji; naturalny **pierwszy moduł Pythona** w pakiecie, który nie tłumaczy niczego, tylko czyta JSON — wpisuje się w wątek `PYTHON-TRANSLATION-ESTIMATE-2026-09-03.md` | drugi język w repozytorium; harness testowy jest bashowy, więc testy GUI wołają proces z zewnątrz |
-| bash + `socat`/`nc` jako serwer HTTP | jeden język | serwer HTTP w bashu to własna implementacja protokołu; `socat` nie jest w bazie |
-| Node / Go / cokolwiek kompilowanego | wygoda bibliotek | zależność do instalacji na każdym hoście; łamie §2 pkt 7 |
+| **Główny** | lista relacji: nazwa, stan, werdykt monitora, ostatni wynik, następny bieg. Pod listą panel szczegółów dla wiersza z focusem: datasety, cel, spójność, ostatni bieg z logu statystyk, następny, monitor, alerty, ostrzeżenia | `Ins` nowa, `Del` usuń, `F4` pauza/wznów, `Enter` ustawienia, `F3` log |
+| **Ustawienia relacji** | strukturalny edytor sekcji configu należących do tej relacji (wskazują je `MANAGED_DATASETS` i `MANAGED_PRUNE_SCOPE` z rekordu), plus pola z własnymi czasownikami | Zapisz = render jako podgląd, diff wobec zainstalowanego bloku, `--install`. Edycja poszerzająca zakres odmawia i nazywa `--commit-scope` na źródle |
+| **Nowa relacja** | kreator odwzorowujący formę jednokomendową `--source=/--target=`; `--grant-remotely` i `--join-remotely` jako pola wyboru; „Dokończ” dla relacji zatrzymanej w połowie cyklu | pokazuje pełną komendę przed wykonaniem |
+| **Transfery** | postęp na żywo, tryb i baza, bajty na łączu, zatrzymana aktualizacja | — |
+| **Monitor** | linie monitora z czterema werdyktami i powodem | — |
+| **Nośniki** | repliki i cztery stany nośnika | — |
 
-**[propozycja] Python 3, tylko biblioteka standardowa**, jeden plik, bez
-`pip`. Strona w przeglądarce bez frameworka (czysty HTML/JS wbudowany w ten
-sam plik). Jeśli właściciel wybierze TUI w P1, odpowiedź zmienia się na bash +
-`whiptail` (jest w bazowym Debianie).
+Makiety w docelowym medium: `gui-mockups/tui/`. Wariant przeglądarkowy,
+odrzucony 2026-09-05, leży w `gui-mockups/web-odrzucony/` — zachowany za
+architekturę informacji, nie jako propozycja.
 
-### P4. Zakres pierwszej wersji: co widać i co można kliknąć?
+Ekran ustawień zakłada czasownik zmiany polityki, zlecony osobno:
+`OWNER-CONFIG-VERBS-2026-09-06.md`. Bez niego TUI musiałoby samo edytować INI,
+czyli nosić drugą kopię schematu pól, wbrew §2 pkt 2. Z czasownikiem etap D
+spada z 4–6 dni do 2–3.
 
-| wariant | za | przeciw |
-|---|---|---|
-| **tylko odczyt** | zero ryzyka; nie wymaga labu; od razu użyteczne (jeden ekran zamiast trzech komend i grepowania logów) | operator nadal idzie do konsoli po każdą akcję |
-| odczyt + akcje bezpieczne (pauza, wznowienie, uruchom teraz, podgląd planu) | „jeden czasownik na relację" staje się faktem | każda akcja to obowiązek runbooka na labie |
-| odczyt + akcje + restore bezpieczny | pełne pokrycie Fazy 7 | restore ma najgrubszy kontrakt w pakiecie; wchodzi jako osobny etap |
+Nawigacja: `F2`–`F6` przełączają ekrany, `Enter` otwiera okno na wierzchu,
+`Esc` zamyka. Panel obok listy zamiast pod nią dopiero od ~120 kolumn.
+Zmierzone: ekran główny z panelem mieści się w 20 z 24 wierszy przy 80
+kolumnach.
 
-**[propozycja] V1 = tylko odczyt**, w tym: relacje z ich stanem i endpointem,
-postęp bieżących transferów, ostatni zakończony transfer per relacja, monitor
-wieku per linia (kolory z kodów 0/1/2/3), repliki i stan nośnika, hold
-aktualizacji. **V2 = akcje bezpieczne** z listy: `--pause`, `--resume`,
-uruchom teraz (istniejący czasownik `run-replicas` / linia crona
-uruchomiona ręcznie), podgląd planu (`--plan`). **V3 = restore bezpieczny**,
-osobna decyzja. Język interfejsu: polski, jak `alert-digest.sh`, z możliwością
-przełączenia na angielski w jednym słowniku.
-
-### P5. Zasięg: jeden host czy widok floty?
-
-| wariant | za | przeciw |
-|---|---|---|
-| **jeden host (kolektor pokazuje swoje relacje i repliki)** | wszystko, co GUI czyta, jest lokalnie; brak nowych kanałów | operator z kilkoma kolektorami otwiera kilka tuneli |
-| widok floty przez istniejący kanał SSH (kolektor odpytuje peerów `zfs-backup.sh status --json` po ssh) | jeden ekran na całą estatę | wymaga zaufania kolektor→peer w kierunku, który dziś istnieje tylko dla części relacji; opóźnienia; peer niedostępny musi być stanem, nie błędem |
-| centralny agregator (nowy demon zbierający JSON z hostów) | najwygodniej | nowy komponent, nowy kanał, nowa powierzchnia — poza zakresem cienkiego GUI |
-
-**[propozycja] V1 = jeden host.** Agregacja floty jako V2b, wyłącznie przez
-`--json` po istniejącym kanale SSH, bez nowego demona i bez nowego zaufania:
-kolektor pokazuje peera tylko, jeśli już ma do niego kanał root-ssh z
-parowania; inaczej pokazuje go jako `nieosiągalny z tego hosta`, nie prosi o
-klucz.
-
-## 5. Etapy — co powstaje po odpowiedziach, i jaki dowód każdy niesie
+## 7. Etapy
 
 | etap | zawartość | dowód przed scaleniem | wymaga właściciela |
 |---|---|---|---|
-| **A. dopełnienie JSON** | `status --json`, `relations --json`, `monitor --json` (orkiestracja nad zamrożonym monitorem); ten sam kształt co `progress --json`; kontrakt `json-shape` w `test/deps.conf` | suita z kontrolą ujemną per pole; `./test/impact.sh --verify`; CI | tylko „Scal" |
-| **B. front do odczytu** | jeden plik, serwer na localhost, strona z odświeżaniem; testy: proces uruchomiony na stubach, odpowiedzi HTTP porównane z `--json` | suita `test/ui` na stubach; kontrola ujemna: zepsuty JSON → strona pokazuje błąd źródła, nie pustą tabelę | „Scal"; jeden przebieg na pve9 przez tunel (odczyt, bez runbooka) |
-| **C. akcje bezpieczne** | allow-lista czasowników, każdy = jedno wywołanie CLI, wynik i kod wyjścia pokazane dosłownie | suita: każda akcja woła dokładnie tę komendę (stub rejestruje argv); kontrola ujemna: czasownik spoza listy → 403 | „Scal" + runbook na labie (pauza/wznowienie/uruchom teraz na parze pve9→pve10) |
-| **D. widok floty** (jeśli P5 = tak) | odpyt peerów po ssh z limitem czasu; peer niedostępny = stan | suita na stubie ssh; kontrola ujemna: peer bez kanału → `nieosiągalny`, zero prób klucza | „Scal" + jeden przebieg na labie |
-| **E. restore bezpieczny** | osobny dokument decyzji, jak ten | — | osobna decyzja |
+| **A. dopełnienie JSON** | `status --json`, `relations --json`, `monitor --json`; ten sam kształt co `progress --json`; kontrakt w `test/deps.conf` | suita z kontrolą ujemną per pole; `--verify`; CI | tylko „Scal” |
+| **B. ekran główny + panel** | odczyt, lista i szczegóły, bez akcji | suita `test/ui` na stubach; kontrola ujemna: zepsuty JSON → strona mówi „błąd źródła”, nie pusta tabela; render przy 80, 120 i 200 kolumnach, w UTF-8 i ASCII | „Scal”; jeden przebieg na pve9 przez PuTTY |
+| **C. akcje bez zapisu configu** | pauza, wznowienie, dokończenie relacji, `F3` log | suita: każda akcja woła dokładnie tę komendę (stub rejestruje argv) | „Scal” + runbook na labie |
+| **D. ekran ustawień** | edytor configu z podglądem, diffem i `--install`; odmowa przy poszerzeniu zakresu | suita: edycja → render → diff; kontrola ujemna: config po edycji nie przechodzi walidacji `gen-cron` i `--install` się nie wykonuje | „Scal” + runbook na labie |
+| **E. kreator nowej relacji** | forma jednokomendowa | suita na stubach + pełny przebieg na parze labowej | „Scal” + lab |
+| **F. restore** | osobny dokument decyzji | — | osobna decyzja |
 
-Kolejność A→B→C jest wymuszona przez §2 pkt 1 (bez JSON nie ma widoku) i
-pkt 2 (bez widoku stanu nie ma sensownej akcji). D i E są niezależne od siebie.
-
-## 6. Wycena
+## 8. Wycena
 
 Skalibrowana tempem repozytorium z `PYTHON-TRANSLATION-ESTIMATE-2026-09-03.md`
 (~1657 linii i ~59 asercji dziennie w 53 dniach roboczych), nie stawkami z
-podręcznika (błąd E35). Dni = dni implementera przy protokole „Scal" bez
-dyskusji projektowych w środku etapu.
+podręcznika (błąd E35).
 
-| etap | dni | uwaga |
-|---|---|---|
-| A. JSON | 2–3 | głównie testy kontraktu; kod to pakowanie istniejących odczytów |
-| B. odczyt | 3–4 | najwięcej w stronie i w suicie na stubach |
-| C. akcje | 3–5 | górna granica to runbook i poprawki po labie |
-| D. flota | 2–3 | tylko jeśli P5 = tak |
-| **razem A–C** | **8–12** | |
+| etap | dni |
+|---|---|
+| A. JSON | 2–3 |
+| B. ekran główny + panel | 3–4 |
+| C. akcje bez zapisu | 2–3 |
+| D. ekran ustawień | 4–6 |
+| E. kreator | 3–5 |
+| **razem A–E** | **14–21** |
 
-Odstępstwa od rekomendacji: TUI zamiast web obniża B o ~1 dzień i podnosi
-C o ~1 (brak modelu żądań); port na LAN z hasłem dodaje 3–5 dni i nowy
-rozdział bezpieczeństwa; wtyczka Proxmoxa — nie wyceniam, bo nie rekomenduję.
+Etap D i E są droższe niż odczyt, bo obie ścieżki zapisu mają runbook na labie,
+a kreator odwzorowuje formę jednokomendową z jej wzajemnymi wykluczeniami.
 
-## 7. Otwarte — do słowa właściciela
+## 9. Otwarte
 
-Pięć odpowiedzi, po jednym zdaniu. Przy braku odpowiedzi implementer
-przyjmuje rekomendację z §4 i mówi o tym w PR etapu A.
-
-1. **P1 rodzaj:** web / TUI / wtyczka Proxmoxa. Rekomendacja: **web**.
-2. **P2 miejsce i dostęp:** localhost + tunel SSH / port na LAN z hasłem /
-   za `pveproxy`; proces jako root z allow-listą czasowników. Rekomendacja:
-   **localhost + tunel, root, allow-lista**.
-3. **P3 język:** Python 3 stdlib / bash+whiptail / inny. Rekomendacja:
-   **Python 3 stdlib, jeden plik, bez pip**. Do potwierdzenia na pve9:
-   `python3 --version`.
-4. **P4 zakres V1:** tylko odczyt / + akcje bezpieczne / + restore.
-   Rekomendacja: **tylko odczyt**, akcje jako V2, restore jako osobna decyzja.
-5. **P5 zasięg:** jeden host / flota po istniejącym ssh / agregator.
-   Rekomendacja: **jeden host**, flota jako V2b bez nowego zaufania.
-
-Etap A z §5 nie zależy od żadnej z pięciu odpowiedzi i może ruszyć na
-„Bierz A" bez czekania na resztę.
+1. **`python3 --version` na pve9** i pozostałych hostach floty. Jedyna rzecz,
+   która może obalić P3. Jeśli python3 nie ma, decyzja wraca do dyskusji.
+2. **Czy nakładające się okna i mysz są warte kompilowanego komponentu**
+   (`magiblot/tvision`) zamiast `curses`. Domyślnie nie.
+3. **Kiedy ruszamy** i od którego etapu. Etap A nie zależy od nic i może ruszyć
+   na słowo właściciela.

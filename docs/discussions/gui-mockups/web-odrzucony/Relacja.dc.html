@@ -1,0 +1,236 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg: oklch(0.20 0.010 255);
+      --panel: oklch(0.245 0.011 255);
+      --panel2: oklch(0.29 0.012 255);
+      --line: oklch(0.345 0.013 255);
+      --soft: oklch(0.30 0.011 255);
+      --fg: oklch(0.94 0.005 255);
+      --dim: oklch(0.73 0.012 255);
+      --faint: oklch(0.585 0.012 255);
+      --ok: oklch(0.76 0.13 155);
+      --warn: oklch(0.80 0.13 75);
+      --crit: oklch(0.69 0.16 25);
+      --unk: oklch(0.73 0.09 300);
+      --acc: oklch(0.74 0.11 230);
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans);
+          line-height:1.35; -webkit-font-smoothing:antialiased; }
+    a{ color:var(--acc); } a:hover{ color: oklch(0.83 0.11 230); }
+    .k{ font-size:10.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); }
+    .v{ font-family:var(--mono); font-size:13px; }
+    .row{ display:grid; grid-template-columns:150px minmax(0,1fr); gap:16px; align-items:baseline;
+          padding:9px 0; border-top:1px solid var(--soft); }
+    .rk{ font-size:12px; color:var(--faint); }
+    .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+    .badge{ display:inline-flex; align-items:center; gap:7px; padding:3px 9px; border-radius:3px;
+            font-family:var(--mono); font-size:11.5px; font-weight:500; }
+    .num{ font-family:var(--mono); font-size:10.5px; opacity:.75; }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:760px; width:1440px;">
+
+  <!-- ta sama powłoka, co w pozostałych oknach -->
+  <div style="display:flex; align-items:center; gap:16px; height:56px; padding:0 20px;
+              background:var(--panel); border-bottom:1px solid var(--line); flex:none;">
+    <div style="font-family:var(--mono); font-size:13.5px; font-weight:600;">zfs-snapshot-all</div>
+    <div style="width:1px; height:20px; background:var(--line);"></div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-family:var(--mono); font-size:13px;">pve9</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">192.168.28.99</span>
+    </div>
+    <div style="flex-grow:1;"></div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:var(--panel2); border:1px solid var(--line);">
+      <span style="font-size:11.5px; font-weight:500; color:var(--dim);">tylko odczyt</span>
+    </div>
+    <span style="font-size:11.5px; color:var(--faint);">odczytano 3 s temu</span>
+  </div>
+
+  <div style="display:flex; align-items:stretch; height:44px; padding:0 20px; flex:none;
+              background:var(--panel); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; padding:0 14px; font-size:13px; font-weight:600;
+                color:var(--fg); box-shadow: inset 0 -2px 0 var(--acc);">Przegląd</div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Transfery
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Monitor
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Nośniki
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">1</span>
+    </div>
+  </div>
+
+  <div style="flex-grow:1; display:flex; min-height:0;">
+
+    <!-- lista zwężona: wybór relacji otwiera panel obok -->
+    <div style="width:330px; flex:none; display:flex; flex-direction:column;
+                background:var(--panel); border-right:1px solid var(--line);">
+      <div style="padding:16px 18px 10px;"><span class="k">Relacje</span></div>
+      <div style="display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; gap:10px; padding:11px 18px;">
+          <div class="dot" style="background:var(--ok);"></div>
+          <span class="v">pve1</span>
+          <div style="flex-grow:1;"></div>
+          <span class="badge" style="background:oklch(0.80 0.13 75 / 0.15); color:var(--warn);">WARNING</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; padding:11px 18px;">
+          <div class="dot" style="background:var(--ok);"></div>
+          <span class="v">pve2</span>
+          <div style="flex-grow:1;"></div>
+          <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">OK</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; padding:11px 18px;
+                    background:var(--panel2); box-shadow: inset 2px 0 0 var(--acc);">
+          <div class="dot" style="background:var(--ok);"></div>
+          <span class="v" style="font-weight:600;">pve10</span>
+          <div style="flex-grow:1;"></div>
+          <span class="badge" style="background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">CRITICAL</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; padding:11px 18px;">
+          <div class="dot" style="background:var(--acc);"></div>
+          <span class="v">pve0</span>
+          <div style="flex-grow:1;"></div>
+          <span class="badge" style="background:oklch(0.73 0.09 300 / 0.17); color:var(--unk);">UNKNOWN</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; padding:11px 18px;">
+          <div class="dot" style="background:var(--warn);"></div>
+          <span class="v">pve9b</span>
+          <div style="flex-grow:1;"></div>
+          <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">OK</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- panel szczegółów -->
+    <div style="flex-grow:1; display:flex; flex-direction:column; min-width:0;">
+
+      <div style="display:flex; align-items:center; gap:12px; height:56px; padding:0 20px; flex:none;
+                  background:var(--panel); border-bottom:1px solid var(--line);">
+        <span style="font-family:var(--mono); font-size:15px; font-weight:600;">pve10</span>
+        <div style="display:flex; align-items:center; gap:7px; padding:3px 9px; border-radius:3px;
+                    background:oklch(0.76 0.13 155 / 0.14);">
+          <div class="dot" style="background:var(--ok);"></div>
+          <span style="font-family:var(--mono); font-size:11.5px; color:var(--ok);">active</span>
+        </div>
+        <div style="flex-grow:1;"></div>
+        <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">/etc/zfs-snapshot-all/clients/pve10.conf</span>
+      </div>
+
+      <div style="flex-grow:1; padding:20px; display:flex; flex-direction:column; gap:16px; min-height:0;">
+
+        <!-- dokładnie to, co mówi CLI -->
+        <div style="display:flex; gap:13px; padding:13px 16px; border-radius:5px;
+                    background:oklch(0.80 0.13 75 / 0.09); border:1px solid oklch(0.80 0.13 75 / 0.34);">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="oklch(0.80 0.13 75)"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none; margin-top:1px;">
+            <path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>
+          </svg>
+          <div style="display:flex; flex-direction:column; gap:5px;">
+            <div style="font-size:13px;">
+              Backup nadal chodzi przez <span style="font-family:var(--mono);">192.168.28.97:22</span>.
+              <span style="font-family:var(--mono);">10.99.0.2:22</span> jest zapisany, ale
+              <strong style="font-weight:600;">NIEzweryfikowany i NIEwdrożony</strong>.
+            </div>
+            <div style="font-family:var(--mono); font-size:12px; color:var(--warn);">
+              następny krok: verify-endpoint pve10 → activate-client pve10
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:0 40px;">
+
+          <div style="display:flex; flex-direction:column;">
+            <div style="padding:0 0 8px;"><span class="k">Endpoint</span></div>
+            <div class="row" style="border-top:none;">
+              <span class="rk">docelowy</span>
+              <span class="v">10.99.0.2:22 <span style="color:var(--faint);">(vpn)</span></span>
+            </div>
+            <div class="row"><span class="rk">lan</span>
+              <span class="v" style="color:var(--dim);">192.168.28.97:22</span></div>
+            <div class="row"><span class="rk">znane</span>
+              <span class="v" style="color:var(--dim);">lan vpn</span></div>
+            <div class="row"><span class="rk">cron idzie przez</span>
+              <span class="v" style="color:var(--warn);">192.168.28.97:22</span></div>
+          </div>
+
+          <div style="display:flex; flex-direction:column;">
+            <div style="padding:0 0 8px;"><span class="k">Zakres</span></div>
+            <div class="row" style="border-top:none;">
+              <span class="rk">źródła</span>
+              <span class="v" style="line-height:1.6;">zfsbackup@192.168.28.97:<br>rpool/data/vm-101<br>hdd/vm-disks</span>
+            </div>
+            <div class="row"><span class="rk">cel</span>
+              <span class="v">hdd/backups/pve10</span></div>
+            <div class="row"><span class="rk">spójność</span>
+              <span class="v" style="color:var(--dim);">crash-consistent (bez quiesce)</span></div>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column;">
+          <div style="padding:0 0 9px;"><span class="k">Teraz</span></div>
+          <div style="padding:13px 16px; border-radius:5px; background:var(--panel); border:1px solid var(--line);
+                      display:flex; flex-direction:column; gap:9px;">
+            <div style="display:flex; align-items:baseline; gap:10px;">
+              <span class="v">rpool/data/vm-101</span>
+              <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">→ hdd/backups/pve10/vm-101</span>
+              <div style="flex-grow:1;"></div>
+              <span style="font-family:var(--mono); font-size:12px; color:var(--dim);">przyrostowy</span>
+            </div>
+            <div style="height:5px; border-radius:3px; background:var(--panel2); overflow:hidden;">
+              <div style="width:36%; height:100%; background:var(--acc);"></div>
+            </div>
+            <div style="display:flex; align-items:baseline; gap:10px; font-family:var(--mono); font-size:12px;">
+              <span>4,2 GiB / 11,8 GiB</span>
+              <span style="color:var(--faint);">36%</span>
+              <div style="flex-grow:1;"></div>
+              <span style="color:var(--faint);">na łączu 3,9 GiB · aktualizacja 2 s temu</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:0 40px;">
+          <div style="display:flex; flex-direction:column;">
+            <div style="padding:0 0 8px;"><span class="k">Historia</span></div>
+            <div class="row" style="border-top:none;"><span class="rk">seed ukończony</span>
+              <span class="v" style="color:var(--dim);">2026-08-22 15:51</span></div>
+            <div class="row"><span class="rk">aktywowano</span>
+              <span class="v" style="color:var(--dim);">2026-08-23 09:12</span></div>
+          </div>
+          <div style="display:flex; flex-direction:column;">
+            <div style="padding:0 0 8px;"><span class="k">Ostatni wynik</span></div>
+            <div class="row" style="border-top:none;"><span class="rk">wynik</span>
+              <span class="v" style="color:var(--ok);">OK <span style="color:var(--faint);">· 2026-09-05 04:00 · 96 s</span></span></div>
+            <div class="row"><span class="rk">endpoint zweryf.</span>
+              <span class="v" style="color:var(--dim);">2026-08-23 08:58 (192.168.28.97:22)</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

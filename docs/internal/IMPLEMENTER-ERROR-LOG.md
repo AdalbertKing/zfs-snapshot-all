@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1091,4 +1091,39 @@ message even said what to do.
 put a gate on the left of a pipe when a mutation follows `&&`.** Run the gate
 bare (or `set -o pipefail`), read its exit status, then mutate in a separate
 command. And a `--generate` that refuses is a stop, not a warning.
+
+### E38 — "The product cannot do X", derived from one surface, while the product names a different one as authoritative
+
+**2026-09-06, dyskusja o GUI, wykryte przez właściciela dwa razy z rzędu:
+„Dlaczego piszesz, że tego nie robi” i „Usunięcie relacji i ustawienie jej od
+nowa?”.**
+
+*Genesis.* Projektując ekran ustawień TUI wyprowadziłem listę czasowników
+`zfs-backup.sh` jednym wzorcem (`shift; cmd_`) i uznałem ją za pełny obraz
+tego, co produkt umie. Z tego wyszły dwa fałszywe zdania do właściciela.
+Pierwsze: że tworzenie relacji sprowadza się do `add-client` — wzorzec nie
+łapie `rux_entry`, do którego dispatcher kieruje `--source=`/`--target=`,
+czyli głównej formy jednokomendowej używanej w labach. Drugie, gorsze: że
+retencji, harmonogramu i wykluczeń „nie da się zmienić na istniejącej
+relacji”, na czym zbudowałem całą rekomendację (wyszarzone pola, czekanie na
+Etap 4 planu). Tymczasem `docs/CONFIG-EXAMPLES.md` mówi w szóstej linii, że po
+instalacji config JEST prawdą wykonania, a jego ręczna edycja to ścieżka
+pierwszoklasowa; zmiana polityki to edycja pliku, `gen-cron.sh -c FILE` jako
+podgląd i `--install` jako zastosowanie.
+
+*Cause.* R2. Zmierzyłem jedną stronę granicy — powierzchnię czasowników CLI —
+i orzekłem o drugiej, o zdolnościach produktu. Granica była tym wyraźniejsza,
+że produkt sam nazywa swoją warstwę sterowania i nie jest nią CLI: „the
+documentation, not the CLI, is the escape hatch for bespoke policy”. Do tego
+doszła druga połowa: **napisałem zdanie o nieistnieniu, nie budując kontroli.**
+Zdanie „nie ma na to drogi” jest twierdzeniem dokładnie tak samo jak „jest” i
+potrzebuje tego samego dowodu; jedno `grep -rn 'hand-edit' docs/` by je obaliło
+przed wysłaniem.
+
+*Rule.* R2, wyostrzone dla twierdzeń o nieistnieniu: **zanim napiszesz, że
+produkt czegoś nie potrafi, nazwij powierzchnię, którą przeszukałeś, i
+przeszukaj tę, którą produkt sam nazywa rozstrzygającą.** Lista wyprowadzona
+jednym wzorcem jest hipotezą o tym wzorcu, nie inwentarzem: sprawdź, co jeszcze
+łapie punkt wejścia. A gdy odpowiadasz właścicielowi na pytanie „czy da się”,
+odpowiedź „nie” wymaga cytatu, nie wnioskowania.
 

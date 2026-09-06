@@ -1,0 +1,272 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg: oklch(0.20 0.010 255);
+      --panel: oklch(0.245 0.011 255);
+      --panel2: oklch(0.29 0.012 255);
+      --line: oklch(0.345 0.013 255);
+      --soft: oklch(0.30 0.011 255);
+      --fg: oklch(0.94 0.005 255);
+      --dim: oklch(0.73 0.012 255);
+      --faint: oklch(0.585 0.012 255);
+      --ok: oklch(0.76 0.13 155);
+      --warn: oklch(0.80 0.13 75);
+      --crit: oklch(0.69 0.16 25);
+      --unk: oklch(0.73 0.09 300);
+      --acc: oklch(0.74 0.11 230);
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    *{ box-sizing: border-box; }
+    body{ margin:0; background: var(--bg); color: var(--fg); font-family: var(--sans);
+          line-height:1.35; -webkit-font-smoothing: antialiased; }
+    a{ color: var(--acc); } a:hover{ color: oklch(0.83 0.11 230); }
+    .th{ font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+         color:var(--faint); padding:11px 14px 9px; text-align:left; }
+    .td{ padding:13px 14px; border-top:1px solid var(--soft); font-family:var(--mono);
+         font-size:13px; vertical-align:middle; }
+    .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+    .badge{ display:inline-flex; align-items:center; gap:7px; padding:3px 9px; border-radius:3px;
+            font-family:var(--mono); font-size:11.5px; font-weight:500; }
+    .num{ font-family:var(--mono); font-size:10.5px; opacity:.75; }
+    .att{ display:flex; align-items:center; gap:12px; padding:10px 15px; border-radius:5px;
+          background:var(--panel); border:1px solid var(--line); }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:760px; width:1440px;">
+
+  <!-- pasek górny -->
+  <div style="display:flex; align-items:center; gap:16px; height:56px; padding:0 20px;
+              background:var(--panel); border-bottom:1px solid var(--line); flex:none;">
+    <div style="font-family:var(--mono); font-size:13.5px; font-weight:600;">zfs-snapshot-all</div>
+    <div style="width:1px; height:20px; background:var(--line);"></div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-family:var(--mono); font-size:13px;">pve9</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">192.168.28.99</span>
+    </div>
+    <div style="flex-grow:1;"></div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:oklch(0.80 0.13 75 / 0.13); border:1px solid oklch(0.80 0.13 75 / 0.38);">
+      <div class="dot" style="background:var(--warn);"></div>
+      <span style="font-size:11.5px; font-weight:500; color:var(--warn);">aktualizacje wstrzymane</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:var(--panel2); border:1px solid var(--line);">
+      <span style="font-size:11.5px; font-weight:500; color:var(--dim);">tylko odczyt</span>
+    </div>
+    <span style="font-size:11.5px; color:var(--faint);">odczytano 3 s temu</span>
+  </div>
+
+  <!-- zakładki -->
+  <div style="display:flex; align-items:stretch; height:44px; padding:0 20px; flex:none;
+              background:var(--panel); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; padding:0 14px; font-size:13px; font-weight:600;
+                color:var(--fg); box-shadow: inset 0 -2px 0 var(--acc);">Przegląd</div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Transfery
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Monitor
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Nośniki
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">1</span>
+    </div>
+  </div>
+
+  <!-- treść -->
+  <div style="flex-grow:1; padding:22px 20px 0; display:flex; flex-direction:column; gap:22px; min-height:0;">
+
+    <div style="display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:10px; padding:0 0 12px 2px;">
+        <span style="font-size:14px; font-weight:600;">Relacje</span>
+        <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">5</span>
+      </div>
+
+      <div style="border:1px solid var(--line); border-radius:5px; background:var(--panel); overflow:hidden;">
+        <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
+          <thead>
+            <tr style="background:var(--panel2);">
+              <th class="th" style="width:150px;">Relacja</th>
+              <th class="th" style="width:230px;">Stan</th>
+              <th class="th" style="width:210px;">Endpoint docelowy</th>
+              <th class="th" style="width:255px;">Cron idzie przez</th>
+              <th class="th">Ostatni wynik</th>
+              <th class="th" style="width:150px;">Monitor</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="td" style="border-top:none; font-weight:500;">pve1</td>
+              <td class="td" style="border-top:none;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div class="dot" style="background:var(--ok);"></div><span>active</span>
+                </div>
+              </td>
+              <td class="td" style="border-top:none;">192.168.11.11:22</td>
+              <td class="td" style="border-top:none; color:var(--faint);">ten sam</td>
+              <td class="td" style="border-top:none;">OK <span style="color:var(--faint);">· 04:00 · 312 s</span></td>
+              <td class="td" style="border-top:none;">
+                <span class="badge" style="background:oklch(0.80 0.13 75 / 0.15); color:var(--warn);">
+                  WARNING <span class="num">1</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td class="td" style="font-weight:500;">pve2</td>
+              <td class="td">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div class="dot" style="background:var(--ok);"></div><span>active</span>
+                </div>
+              </td>
+              <td class="td">192.168.28.8:22</td>
+              <td class="td" style="color:var(--faint);">ten sam</td>
+              <td class="td">OK <span style="color:var(--faint);">· 04:00 · 1 240 s</span></td>
+              <td class="td">
+                <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">
+                  OK <span class="num">0</span></span>
+              </td>
+            </tr>
+            <tr style="background:oklch(0.80 0.13 75 / 0.055);">
+              <td class="td" style="font-weight:500;">pve10</td>
+              <td class="td">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div class="dot" style="background:var(--ok);"></div><span>active</span>
+                </div>
+              </td>
+              <td class="td">10.99.0.2:22</td>
+              <td class="td">
+                <div style="display:flex; align-items:center; gap:8px; color:var(--warn);">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;">
+                    <path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>
+                  </svg>
+                  <span>192.168.28.97:22</span>
+                </div>
+              </td>
+              <td class="td">OK <span style="color:var(--faint);">· 04:00 · 96 s</span></td>
+              <td class="td">
+                <span class="badge" style="background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">
+                  CRITICAL <span class="num">2</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td class="td" style="font-weight:500;">pve0</td>
+              <td class="td">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div class="dot" style="background:var(--acc);"></div><span>seed_complete</span>
+                </div>
+              </td>
+              <td class="td">192.168.11.10:22</td>
+              <td class="td" style="color:var(--faint);">nie aktywowany</td>
+              <td class="td">
+                <span style="color:var(--unk);">brak zapisu w historii</span>
+              </td>
+              <td class="td">
+                <span class="badge" style="background:oklch(0.73 0.09 300 / 0.17); color:var(--unk);">
+                  UNKNOWN <span class="num">3</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td class="td" style="font-weight:500;">pve9b</td>
+              <td class="td">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div class="dot" style="background:var(--warn);"></div>
+                  <span>active</span>
+                  <span style="font-size:10.5px; font-weight:600; letter-spacing:.05em; padding:2px 6px;
+                               border-radius:3px; background:oklch(0.80 0.13 75 / 0.16); color:var(--warn);">PAUSED_LOCAL</span>
+                </div>
+              </td>
+              <td class="td">192.168.28.98:22</td>
+              <td class="td" style="color:var(--faint);">ten sam</td>
+              <td class="td" style="color:var(--dim);">pominięte (pauza)</td>
+              <td class="td">
+                <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">
+                  OK <span class="num">0</span></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- wszystko, co gdziekolwiek świeci; „następny krok” wzięty z CLI -->
+    <div style="display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:baseline; gap:10px; padding:0 0 12px 2px;">
+        <span style="font-size:14px; font-weight:600;">Wymaga uwagi</span>
+        <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">4</span>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px;">
+
+        <div class="att" style="border-left:2px solid var(--crit);">
+          <span style="font-family:var(--mono); font-size:13px; font-weight:500; width:64px; flex:none;">pve10</span>
+          <span style="font-size:13px; color:var(--dim);">
+            <span style="font-family:var(--mono);">hdd/backups/pve10/vm-102</span> bez snapshotu od 9 h 12 min
+            <span style="color:var(--faint);">(próg krytyczny 4 h)</span>
+          </span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">zakładka Monitor</span>
+        </div>
+
+        <div class="att" style="border-left:2px solid var(--crit);">
+          <span style="font-family:var(--mono); font-size:13px; font-weight:500; width:64px; flex:none;">sejf-d</span>
+          <span style="font-size:13px; color:var(--dim);">
+            w slocie jest dysk, ale <span style="color:var(--fg);">nie ten</span>. Brama odmówi replikacji.
+          </span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">zakładka Nośniki</span>
+        </div>
+
+        <div class="att" style="border-left:2px solid var(--warn);">
+          <span style="font-family:var(--mono); font-size:13px; font-weight:500; width:64px; flex:none;">pve10</span>
+          <span style="font-size:13px; color:var(--dim);">
+            backup nadal chodzi przez <span style="font-family:var(--mono);">192.168.28.97:22</span>;
+            <span style="font-family:var(--mono);">10.99.0.2:22</span> jest zapisany, ale NIEwdrożony
+          </span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">verify-endpoint pve10</span>
+        </div>
+
+        <div class="att" style="border-left:2px solid var(--unk);">
+          <span style="font-family:var(--mono); font-size:13px; font-weight:500; width:64px; flex:none;">pve0</span>
+          <span style="font-size:13px; color:var(--dim);">
+            brak zapisu w historii. To NIE znaczy „bez awarii”, tylko „nie wiadomo”
+          </span>
+          <div style="flex-grow:1;"></div>
+          <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">test pve0</span>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- pasek dolny: skąd dane, i że nic nie wykonuje -->
+  <div style="display:flex; align-items:center; gap:14px; height:36px; padding:0 20px; flex:none;
+              background:var(--panel); border-top:1px solid var(--line);">
+    <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">
+      źródło: status --json · progress --json · list-replicas --json
+    </span>
+    <div style="flex-grow:1;"></div>
+    <span style="font-size:11.5px; color:var(--faint);">ta strona niczego nie uruchamia — odczyt co 5 s</span>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,203 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    :root{
+      --bg: oklch(0.20 0.010 255);
+      --panel: oklch(0.245 0.011 255);
+      --panel2: oklch(0.29 0.012 255);
+      --line: oklch(0.345 0.013 255);
+      --soft: oklch(0.30 0.011 255);
+      --fg: oklch(0.94 0.005 255);
+      --dim: oklch(0.73 0.012 255);
+      --faint: oklch(0.585 0.012 255);
+      --ok: oklch(0.76 0.13 155);
+      --warn: oklch(0.80 0.13 75);
+      --crit: oklch(0.69 0.16 25);
+      --unk: oklch(0.73 0.09 300);
+      --acc: oklch(0.74 0.11 230);
+      --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{ margin:0; background:var(--bg); color:var(--fg); font-family:var(--sans);
+          line-height:1.35; -webkit-font-smoothing:antialiased; }
+    a{ color:var(--acc); } a:hover{ color: oklch(0.83 0.11 230); }
+    .th{ font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+         color:var(--faint); padding:11px 14px 9px; text-align:left; }
+    .td{ padding:13px 14px; border-top:1px solid var(--soft); font-family:var(--mono);
+         font-size:13px; vertical-align:middle; }
+    .badge{ display:inline-flex; align-items:center; gap:7px; padding:3px 9px; border-radius:3px;
+            font-family:var(--mono); font-size:11.5px; font-weight:500; }
+    .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+  </style>
+</helmet>
+
+<div style="display:flex; flex-direction:column; height:760px; width:1440px;">
+
+  <div style="display:flex; align-items:center; gap:16px; height:56px; padding:0 20px;
+              background:var(--panel); border-bottom:1px solid var(--line); flex:none;">
+    <div style="font-family:var(--mono); font-size:13.5px; font-weight:600;">zfs-snapshot-all</div>
+    <div style="width:1px; height:20px; background:var(--line);"></div>
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="font-family:var(--mono); font-size:13px;">pve9</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">192.168.28.99</span>
+    </div>
+    <div style="flex-grow:1;"></div>
+    <div style="display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:3px;
+                background:var(--panel2); border:1px solid var(--line);">
+      <span style="font-size:11.5px; font-weight:500; color:var(--dim);">tylko odczyt</span>
+    </div>
+    <span style="font-size:11.5px; color:var(--faint);">odczytano 2 s temu</span>
+  </div>
+
+  <div style="display:flex; align-items:stretch; height:44px; padding:0 20px; flex:none;
+              background:var(--panel); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; padding:0 14px; font-size:13px; color:var(--dim);">Przegląd</div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Transfery
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; color:var(--dim);">
+      Monitor
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">3</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:7px; padding:0 14px; font-size:13px; font-weight:600;
+                color:var(--fg); box-shadow: inset 0 -2px 0 var(--acc);">
+      Nośniki
+      <span style="font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:9px;
+                   background:oklch(0.69 0.16 25 / 0.18); color:var(--crit);">1</span>
+    </div>
+  </div>
+
+  <div style="flex-grow:1; padding:22px 20px 0; display:flex; flex-direction:column; gap:18px; min-height:0;">
+
+    <div style="display:flex; align-items:baseline; gap:10px; padding-left:2px;">
+      <span style="font-size:14px; font-weight:600;">Repliki na nośnikach wymiennych</span>
+      <span style="font-family:var(--mono); font-size:12px; color:var(--faint);">4</span>
+    </div>
+
+    <div style="border:1px solid var(--line); border-radius:5px; background:var(--panel); overflow:hidden;">
+      <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
+        <thead>
+          <tr style="background:var(--panel2);">
+            <th class="th" style="width:130px;">Replika</th>
+            <th class="th" style="width:330px;">Źródło → Cel</th>
+            <th class="th" style="width:180px;">Harmonogram</th>
+            <th class="th" style="width:300px;">Nośnik</th>
+            <th class="th">Ostatnio widziany</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="td" style="border-top:none; font-weight:500;">sejf-a</td>
+            <td class="td" style="border-top:none;">hdd/vm-disks
+              <span style="color:var(--faint);">→</span> bkp/sejf-a</td>
+            <td class="td" style="border-top:none; color:var(--dim);">codziennie 02:30</td>
+            <td class="td" style="border-top:none;">
+              <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">
+                <span class="dot" style="background:var(--ok);"></span>TU · zaimportowana</span>
+            </td>
+            <td class="td" style="border-top:none; color:var(--dim);">teraz</td>
+          </tr>
+
+          <tr>
+            <td class="td" style="font-weight:500;">sejf-b</td>
+            <td class="td">hdd/vm-disks <span style="color:var(--faint);">→</span> bkp/sejf-b</td>
+            <td class="td" style="color:var(--dim);">codziennie 02:30</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">
+                <span class="dot" style="background:var(--acc);"></span>W SLOCIE · niezaimportowana</span>
+            </td>
+            <td class="td" style="color:var(--dim);">2026-09-04 21:40</td>
+          </tr>
+
+          <tr>
+            <td class="td" style="font-weight:500;">sejf-c</td>
+            <td class="td">hdd/vm-disks <span style="color:var(--faint);">→</span> bkp/sejf-c</td>
+            <td class="td" style="color:var(--dim);">po włożeniu</td>
+            <td class="td">
+              <span class="badge" style="background:var(--panel2); color:var(--dim);">
+                <span class="dot" style="background:var(--faint);"></span>W SEJFIE · poza maszyną</span>
+            </td>
+            <td class="td" style="color:var(--dim);">2026-08-29 07:12</td>
+          </tr>
+
+          <tr style="background:oklch(0.69 0.16 25 / 0.07);">
+            <td class="td" style="font-weight:500;">sejf-d</td>
+            <td class="td">hdd/vm-disks <span style="color:var(--faint);">→</span> bkp/sejf-d</td>
+            <td class="td" style="color:var(--dim);">po włożeniu</td>
+            <td class="td">
+              <span class="badge" style="background:oklch(0.69 0.16 25 / 0.20); color:var(--crit);">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>
+                </svg>NIE TEN DYSK</span>
+            </td>
+            <td class="td" style="color:var(--dim);">2026-08-15 18:03</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display:flex; gap:13px; padding:14px 16px; border-radius:5px;
+                background:oklch(0.69 0.16 25 / 0.08); border:1px solid oklch(0.69 0.16 25 / 0.32);">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="oklch(0.69 0.16 25)"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none; margin-top:1px;">
+        <path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>
+      </svg>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <div style="font-size:13px;">
+          <span style="font-family:var(--mono); font-weight:500;">sejf-d</span>
+          <span style="color:var(--dim);"> — w slocie jest dysk, ale <strong style="font-weight:600; color:var(--fg);">nie ten</strong>.
+          Brama odmówi replikacji; wyjęcie złego nośnika jest ruchem człowieka przy maszynie.</span>
+        </div>
+        <div style="font-family:var(--mono); font-size:12px; color:var(--faint);">
+          stan pochodzi z bramy nośnika (zfs-media-gate.sh), nie z faktu „pula niezaimportowana”
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; align-items:flex-start; gap:26px; padding:14px 16px; border-radius:5px;
+                background:var(--panel); border:1px solid var(--line);">
+      <div style="display:flex; flex-direction:column; gap:9px; flex:none;">
+        <span style="font-size:10.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase;
+                     color:var(--faint);">Cztery stany, nie flaga</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="badge" style="background:oklch(0.76 0.13 155 / 0.14); color:var(--ok);">TU</span>
+          <span class="badge" style="background:oklch(0.74 0.11 230 / 0.16); color:var(--acc);">W SLOCIE</span>
+          <span class="badge" style="background:var(--panel2); color:var(--dim);">W SEJFIE</span>
+          <span class="badge" style="background:oklch(0.69 0.16 25 / 0.20); color:var(--crit);">NIE TEN DYSK</span>
+        </div>
+      </div>
+      <div style="width:1px; align-self:stretch; background:var(--line);"></div>
+      <div style="flex-grow:1; font-size:12.5px; color:var(--dim); padding-top:3px; text-wrap:pretty;">
+        Flaga „obecny / nieobecny” spłaszczyłaby dwa środkowe stany w jeden i schowałby ten jedyny groźny.
+        Dlatego GUI pokazuje odpowiedź bramy, a nie własny wniosek z listy pul.
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display:flex; align-items:center; gap:14px; height:36px; padding:0 20px; flex:none;
+              background:var(--panel); border-top:1px solid var(--line);">
+    <span style="font-family:var(--mono); font-size:11.5px; color:var(--faint);">
+      źródło: list-replicas --json · pola: name, source, dst, schedule, prefix, media, present, last_seen
+    </span>
+    <div style="flex-grow:1;"></div>
+    <span style="font-size:11.5px; color:var(--faint);">stan nośnika odpytywany u bramy, nie zgadywany</span>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>
