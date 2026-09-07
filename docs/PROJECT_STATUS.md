@@ -21,6 +21,24 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Lista brakujących czasowników spisana jako zlecenie (2026-09-07).**
+  `docs/discussions/OWNER-MISSING-VERBS-2026-09-07.md`. Inwentarz wzięty z
+  **dyspozytora** (`zfs-backup.sh:12039-12191`, 30 czasowników), nie z bloku
+  `usage`, który w tej samej formie wymienia 11 — to jest dokładnie odruch,
+  z którego powstał E38. Brakuje jedenastu pozycji: cztery czytelniki
+  (`status --json`, `monitor --json`, `show-config KLIENT [--json]`,
+  `list-profiles [--json]`) i siedem pisarzy (`set-policy` — zlecone wcześniej,
+  `set-tiers` na `use_template`, `set-source-profile` dla istniejącej relacji,
+  `set-scope` na polach zakresu, `save-profile` jako klon fabrycznego,
+  `set-defaults`/`set-server-conf`, `set-excluded`). Jedna teza o braku nie
+  przeżyła własnej kontroli i została zdjęta: `list-replicas --json` **już**
+  rozróżnia cztery stany nośnika, więc ekran Nośniki nie potrzebuje niczego
+  nowego. Wycena 14–19 dni w pięciu paczkach; paczka A (czytelniki) nie zależy
+  od niczego. Reguły wspólne: czytelnik trzyma kontrakt `progress --json`,
+  pisarz idzie wzorcem `cmd_set_bandwidth` i waliduje renderem przez prawdziwy
+  `gen-cron`, a `monitor --json` jest CZYTELNIKIEM zamrożonego
+  `check-snap-age.sh`, nie drugą implementacją liczenia wieku migawek.
+
 - **Okno relacji rozpisane: trzy obiekty zamiast jednego formularza
   (2026-09-07).** Właściciel: *„to najtrudniejsze okno […] nie mam pomysłu"*.
   Rozstrzygnięcie wyprowadzone z pól, nie z wyobrażenia o formularzu: **każde**
