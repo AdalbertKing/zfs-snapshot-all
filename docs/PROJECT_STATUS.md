@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 752969fc2caff5d7 -->
+<!-- status-covers-digest: aa92c039711bcf19 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,36 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`save-profile`: trzecia bramka — PRAWDZIWY `gen-cron.sh` (2026-09-07, REV-137 P2).**
+  Recenzent zmierzył dziurę, której moje dwie bramki nie mogły zobaczyć:
+  `--send_schedule='not a cron'` przechodziło obie, plik był zapisywany, a katalog
+  ogłaszał go jako `"valid":true`. Z `--force` taki zapis **podmieniał dobry profil
+  operatora na niedziałający**.
+  - Powód jest strukturalny, nie „brak reguły na liście”: walidator pyta **kto może
+    mieć to pole**, render **tylko przepisuje wartość**. Żadne z nich nie pyta, co
+    wartość **znaczy**. Program, który ma o tym zdanie, to `gen-cron.sh` — i to jego
+    uruchamia następny `add-client`.
+  - Lekarstwo: `profile_downstream_gate` renderuje kandydata do **tego samego
+    kształtu CONFIG v4**, z jakiego powstaje relacja (`[defaults]` + wyrenderowane
+    `[template:]` + `[dataset:]`/`[prune:]` z własnych fragmentów profilu) i podaje
+    ten plik prawdziwemu generatorowi. Bez `--install`, bez crontaba, bez datasetu —
+    ścieżka jest nazwą, nie miejscem. Odmowa **cytuje generator dosłownie**;
+    przepisanie jego reguł tutaj byłoby drugą implementacją `gen-cron`.
+  - Czego bramka nie widzi, powiedziane wprost: `gen-cron` waliduje **per szczebel
+    REFERENCJONOWANY** przez `[dataset:]`/`[prune:]`. Szczebel, którego nie wskazuje
+    żaden fragment, nie jest sprawdzany — i nie jest też używany przez żadną relację
+    z tego profilu. To ta sama granica, nie luka pod nią.
+  - Dowody: repro recenzenta (`rc=1`, brak pliku), wartość **nie-harmonogramowa**
+    (`monitor_crit=1m` przy `warn=90m` — reguła międzypolowa, którą ma tylko
+    generator), `--force` nad dobrym profilem zostawia go **bajt w bajt**, kontrola
+    pozytywna (`send_schedule='7 * * * *'` zapisuje się), i **6/6 profili z pakietu**
+    przechodzi bramkę, w tym drabinowy `Y5M12D31H24` (ten emituje `[prune:]`).
+  - Koszt: jedno uruchomienie `gen-cron` na wywołanie `save-profile`. To czasownik
+    interaktywny, jeden na raz — nie `list-profiles`, gdzie ten sam koszt na wiersz
+    trzeba było uczynić opcjonalnym.
+  - **E45** w logu błędów: trzeci raz w tym pakiecie bramka postawiona obok
+    zmienianego kodu zamiast na granicy, która rozstrzyga (E39, E41, E45).
 
 - **`list-profiles`: 7,5 s → 0,73 s (2026-09-07).** Polecenie właściciela po labie.
   **Zgadłem dwa razy źle, zanim zmierzyłem**: najpierw obstawiłem uruchomienia

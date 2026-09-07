@@ -10460,6 +10460,73 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# THE DOWNSTREAM GATE (REV-20260907-137 F1). The two gates above answer two
+# questions -- who may own this field, and does the renderer survive it -- and
+# NEITHER asks what the value MEANS. The reviewer measured the hole: rc=0, the
+# file written, and the catalogue calling it "valid":true while carrying
+# `send_schedule = not a cron`, which the generator that BUILDS relationships
+# refuses outright. The controls below are the discriminator that separates
+# "the renderer copied it" from "the generator accepts it".
+# ---------------------------------------------------------------------------
+pf_before="$(pf_files)"
+if ! pf_run --from=d7h24 --as=badcron --tier=hourly --send_schedule='not a cron'; then
+    ok "saveprof: a value the RENDERER copies through and gen-cron.sh refuses is refused here"
+else
+    bad "saveprof: a value the RENDERER copies through and gen-cron.sh refuses is refused here" \
+        "$(cat "$WORK/pf.out")"
+fi
+if [ ! -e "$PF/user/badcron.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: ...and no destination profile is left behind"
+else
+    bad "saveprof: ...and no destination profile is left behind" "$(pf_files)"
+fi
+# The refusal must carry the GENERATOR'S OWN words. A message this file wrote
+# itself would mean a second copy of gen-cron's rules lives here, which is the
+# shape the whole gate exists to avoid.
+if grep -q 'gen-cron.sh: error:' "$WORK/pf.err" && grep -q 'send_schedule' "$WORK/pf.err"; then
+    ok "saveprof: the refusal quotes gen-cron.sh verbatim, rather than re-implementing its rules"
+else
+    bad "saveprof: the refusal quotes gen-cron.sh verbatim" "$(cat "$WORK/pf.err")"
+fi
+
+# THE POSITIVE CONTROL, without which the above proves only that something
+# refuses: a DIFFERENT schedule, valid, goes through the same gate and is saved.
+if pf_run --from=d7h24 --as=okcron --tier=hourly --send_schedule='7 * * * *' \
+   && [ -f "$PF/user/okcron.conf" ] \
+   && grep -q 'send_schedule *= *7 \* \* \* \*' "$PF/user/okcron.conf"; then
+    ok "saveprof: a VALID schedule edit passes the same gate and is saved with the new value"
+else
+    bad "saveprof: a VALID schedule edit passes the same gate and is saved with the new value" \
+        "$(cat "$WORK/pf.err")" "$(grep -n send_schedule "$PF/user/okcron.conf" 2>/dev/null)"
+fi
+
+# A NON-SCHEDULE value, so the remedy is the publication boundary and not a cron
+# parser: monitor_crit/monitor_warn is a CROSS-FIELD rule that only gen-cron
+# holds -- 1m is a perfectly well-formed duration, and wrong beside warn = 90m.
+if ! pf_run --from=d7h24 --as=badmon --tier=hourly --monitor_crit=1m \
+   && [ ! -e "$PF/user/badmon.conf" ] && grep -q 'monitor_crit' "$WORK/pf.err"; then
+    ok "saveprof: a well-formed value that breaks a CROSS-FIELD rule (crit < warn) is refused too"
+else
+    bad "saveprof: a well-formed value that breaks a CROSS-FIELD rule (crit < warn) is refused too" \
+        "$(pf_files)" "$(cat "$WORK/pf.err")"
+fi
+
+# THE CASE THAT MADE IT P2: --force over a KNOWN-GOOD profile. The refusal must
+# leave the operator's existing file byte-identical, not half-replaced.
+pf_sha_before=$(sha256sum "$PF/user/okcron.conf" | awk '{print $1}')
+if ! pf_run --from=d7h24 --as=okcron --tier=hourly --send_schedule='not a cron' --force; then
+    ok "saveprof: --force does not buy past the downstream gate"
+else
+    bad "saveprof: --force does not buy past the downstream gate" "$(cat "$WORK/pf.out")"
+fi
+if [ "$(sha256sum "$PF/user/okcron.conf" | awk '{print $1}')" = "$pf_sha_before" ]; then
+    ok "saveprof: ...and the existing profile it would have replaced is byte-identical"
+else
+    bad "saveprof: ...and the existing profile it would have replaced is byte-identical" \
+        "$(cat "$PF/user/okcron.conf")"
+fi
+
+# ---------------------------------------------------------------------------
 # WHERE IT MAY WRITE. The package directory is a git checkout the hourly
 # self-update pulls: a profile written there would evaporate on the hour,
 # silently.
@@ -10551,6 +10618,23 @@ case "$pf_cat" in
         ok "saveprof: and it renders the flag the saved value asks for (-H6)" ;;
     *) bad "saveprof: and it renders the flag the saved value asks for (-H6)" "$pf_cat" ;;
 esac
+
+# NEGATIVE CONTROL ON THE DOWNSTREAM GATE ITSELF: it must not refuse the OTHER
+# profile shape. A ladder profile emits a [prune:] section the flat shape does
+# not, and a gate that only ever built the flat candidate would reject every
+# uppercase profile in the catalogue while looking like it worked.
+#
+# LAST in the section on purpose: it is the only case that puts a second file
+# in the package directory, and "the package directory is untouched by every
+# case above" compares that directory's listing exactly.
+cp "$REPO/profiles/Y5M12D31H24.conf" "$PF/pkg/Y5M12D31H24.conf"
+if pf_run --from=Y5M12D31H24 --as=Y5M12D31H12 --tier=keep_monthly --keep=12 \
+   && [ -f "$PF/user/Y5M12D31H12.conf" ]; then
+    ok "saveprof: a LADDER profile (its own [prune] fragment) still passes the downstream gate"
+else
+    bad "saveprof: a LADDER profile (its own [prune] fragment) still passes the downstream gate" \
+        "$(cat "$WORK/pf.err")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

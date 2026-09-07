@@ -10657,7 +10657,7 @@ cmd_monitor() {
 # `default` as your own is a legitimate act with a defined meaning -- and
 # list-profiles already reports which copy won.
 #
-# TWO GATES BEFORE THE FILE EXISTS, in this order, on a temporary copy:
+# THREE GATES BEFORE THE FILE EXISTS, in this order, on a temporary copy:
 #
 #   1. profile_validate_file -- the same validator load_active_profile uses, so
 #      a profile carrying a relationship-owned field is refused here rather than
@@ -10668,6 +10668,11 @@ cmd_monitor() {
 #      it left half a JSON object behind). A profile that validates and cannot be
 #      rendered is a landmine with a date on it -- it would be accepted here and
 #      explode at the next relationship built from it.
+#   3. AND THEN THE REAL GENERATOR. Neither of the two above judges what a value
+#      MEANS: the validator asks who may own the field, the render copies the
+#      value through. REV-20260907-137 measured the gap -- `send_schedule = not
+#      a cron` passed both, was written, and was published as `"valid":true`.
+#      See profile_downstream_gate.
 #
 # Only after both does the file move into place. A refusal leaves the profile
 # directory exactly as it was.
@@ -10691,6 +10696,70 @@ save_profile_name_shape() {   # <name> -> normalised letter+count shape, or empt
         | grep -oE '[dhwmy][0-9]+' | sort | tr -d '\n'
 }
 
+
+# THE THIRD GATE -- THE BOUNDARY THAT ACTUALLY DECIDES (REV-20260907-137 F1).
+#
+# Gates 1 and 2 both PASS on `--send_schedule='not a cron'`, and the reviewer
+# measured what that costs: rc=0, the file written, and the catalogue calling
+# the row `"valid":true` while carrying the value the generator refuses. With
+# `--force` it replaced a known-good profile with an unusable one.
+#
+# The reason is structural, not an oversight in a list: profile_validate_file
+# asks WHO MAY OWN a field, and load_active_profile only COPIES the value into
+# a rendered fragment. Neither of them has an opinion about what the value
+# MEANS. The program that has one is gen-cron.sh, and a future add-client runs
+# it -- so this gate runs it too, on the same shape:
+#
+#     [defaults] + the profile's rendered templates
+#               + the [dataset:]/[prune:] sections its own fragments declare
+#
+# and hands that candidate to the real generator. Deliberately NOT a copied
+# cron/duration parser here: a second implementation of gen-cron's rules is
+# exactly the shape test/deps.conf's contracts exist to kill, and it would
+# drift the first time gen-cron learns a rule.
+#
+# WHAT IT DOES NOT COVER, said rather than papered over: gen-cron lints per
+# REFERENCED tier -- lint_cron_schedule is called from the [dataset:] and
+# [prune:] emitters, not from the [template:] parser. A tier no fragment names
+# is therefore judged by nobody here. That is not a hole in the gate; it is the
+# same boundary downstream, because a tier no fragment names is a tier no
+# relationship built from this profile would ever use.
+#
+# The dataset path is a name, not a place: nothing is created, nothing is
+# installed, and gen-cron is never asked to touch a crontab (no --install).
+SAVE_PROFILE_CHECK_DS="rpool/save-profile-downstream-check"
+
+profile_downstream_gate() {   # <profile file> <stderr file> -> 0 when the real generator accepts it
+    (
+    # A die from the render belongs to this check, not to the command.
+    die_confine_to_subshell
+    PROFILE_ACTIVE="$1"; PROFILE_LOADED=""
+    load_active_profile >/dev/null 2>&1 || exit 1
+    local cand; cand=$(mktemp) || exit 1
+    {
+        echo "[defaults]"
+        printf '\thost_label = save-profile-check\n'
+        echo
+        cat "$PROFILE_TPL_FILE"
+        echo
+        printf '[dataset:%s]\n' "$SAVE_PROFILE_CHECK_DS"
+        profile_emit "$PROFILE_DS_FILE"
+        # A ladder profile keeps its retention in [prune]; a flat one keeps it
+        # in the tiers [dataset] references. profile_declares_ladder is the
+        # existing answer to which of the two this is -- emitting an empty
+        # [prune:] for a flat profile is the defect measured on pve9 2026-08-25.
+        if profile_declares_ladder; then
+            echo
+            printf '[prune:%s]\n' "$SAVE_PROFILE_CHECK_DS"
+            profile_emit "$PROFILE_PRUNE_FILE"
+        fi
+    } > "$cand" 2>/dev/null || { rm -f "$cand"; exit 1; }
+    bash "$GENCRON" -c "$cand" >/dev/null 2>"$2"
+    local rc=$?
+    rm -f "$cand"
+    exit "$rc"
+    )
+}
 cmd_save_profile() {
     local from="" as="" tier="" desc="" force=0 a
     local -a fname=() fvalue=()
@@ -10777,6 +10846,21 @@ cmd_save_profile() {
         rm -rf "$workdir"
         die "save-profile: the modified profile passes validation but cannot be RENDERED -- it would be accepted here and fail at the next relationship built from it. Nothing was written. (A retention that is not a number does this: 'keep = xyz' validates and does not render.)"
     fi
+    # GATE 3: THE REAL GENERATOR (REV-20260907-137 F1). Validation asks who may
+    # own the field and the render only copies it; neither judges what the value
+    # MEANS. `--send_schedule='not a cron'` passed both and was published as
+    # valid. This renders the candidate into the CONFIG v4 shape a relationship
+    # is built from and lets gen-cron.sh -- the same program add-client runs --
+    # refuse it, in its own words.
+    local gcerrf; gcerrf=$(mktemp) || { rm -rf "$workdir"; die "save-profile: mktemp failed"; }
+    if ! profile_downstream_gate "$work" "$gcerrf"; then
+        local gcerr; gcerr=$(sed -n '1,20p' "$gcerrf")
+        rm -f "$gcerrf"; rm -rf "$workdir"
+        die "save-profile: the modified profile is refused by the generator that BUILDS relationships (gen-cron.sh), so saving it would publish a template nothing can be created from. Nothing was written.
+$gcerr"
+    fi
+    rm -f "$gcerrf"
+
 
     # The name is the retention -- said, not enforced. profiles/README.md's rule
     # is about the SHIPPED catalogue, which this directory is not.

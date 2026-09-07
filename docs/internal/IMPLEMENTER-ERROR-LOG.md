@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1327,3 +1327,42 @@ edits files ends the command; staging and committing start the next one,
 after the edit has been looked at. `python3 ... || exit 1` is the minimum
 when they must share a call.
 
+
+### E45 — Two gates that both pass, and neither asks the question
+
+**2026-09-07, `save-profile` as merged in PR #347, found by the Reviewer
+(REV-20260907-137), P2.**
+
+*Genesis.* `save-profile` was built with two gates before the file exists, and
+I described them in its header as if together they meant "this profile is
+usable": `profile_validate_file`, then a real render through
+`load_active_profile`. The second gate exists because I had measured
+`keep = xyz` — a value that validates and dies inside the renderer — so the
+gate felt earned rather than decorative.
+
+`--send_schedule='not a cron'` passes both. The validator asks **who may own
+this field**; the renderer only **copies the value through**. rc=0, the file
+written, and `list-profiles` published the row as `"valid":true` — while
+`gen-cron.sh`, the program the next `add-client` actually runs, refuses it. With
+`--force` the same call replaces a known-good operator profile with an unusable
+one.
+
+*Cause.* I proved the property I had a failure for, not the property the verb
+advertises. Both gates sit next to the code I was writing; the boundary that
+decides usability sits one program away, and I never crossed it. The whole
+purpose of `save-profile` is to publish something a FUTURE relationship is built
+from, so "usable" was always a statement about the generator, not about my
+renderer.
+
+The tell was in my own header comment: "it would be accepted here and fail at
+the next relationship built from it" — written about `keep = xyz`, and true of a
+whole class I did not go looking for.
+
+*Rule.* R2, evidence. A gate must be measured on the side that decides. When a
+verb's success message is a claim about what some OTHER program will accept,
+that program is the gate — not a local check that resembles it, and never a
+copied list of its rules. The remedy renders the candidate into the same CONFIG
+v4 shape a relationship is built from and hands it to the real `gen-cron.sh`.
+
+Third of a kind in one package (E39, E41, E45): a check written next to the
+change instead of at the boundary the value must survive.
