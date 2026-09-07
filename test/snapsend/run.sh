@@ -1283,6 +1283,100 @@ check "answered probe, missing local source: says not found" "yes" \
 check "answered probe, missing local source: says nothing about ssh" "no" \
       "$(said 'CONNECTION-level failure')"
 
+# --- P. PAIRED: in local mode the twins must be INDISTINGUISHABLE ------------
+# Every case above pins ONE engine. This section runs the SAME argv through
+# BOTH and asserts the same answer: exit code, what landed, what was refused.
+# Local mode is the one mode in which push and pull do identical work -- no
+# ssh on either side, the same `zfs send | zfs recv` -- so it is where a
+# behavioural difference between them is a defect by construction, not a
+# direction. Added 2026-09-07 (M-b of OWNER-ENGINE-MERGE-2026-09-07.md section
+# 8), after push was found seventeen days behind pull on `-R -e` under a
+# green drift alarm: 77 run_send and 28 run_get above, and not one assertion
+# that compared the two.
+#
+# Both engines relocate under the base the same way: <base>/<full source name>.
+PBK="$POOL/pbk"   # push writes here
+PLP="$POOL/plp"   # pull writes here
+pair_rc() {   # <label> <args...> -> RC_S / RC_G, OUT_S / OUT_G, and one check that they agree
+    local label="$1"; shift
+    run_send_out "$@" "$PBK"; RC_S=$RC; OUT_S="$OUT"
+    run_get_out  "$@" "$PLP"; RC_G=$RC; OUT_G="$OUT"
+    check "P $label: push and pull agree on the exit code" "$RC_G" "$RC_S"
+}
+
+# P1. -R -e over a subtree with scaffolding in it: the root and one path
+# container carry no family, two leaves do. Pull skips the scaffolding and
+# adopts the leaves (snapget v2.70, 2026-08-21); push did the same only from
+# v2.73 -- before that it failed the whole run on the first family-less member.
+zfs create -p "$POOL/pe/a" || exit 1
+zfs create -p "$POOL/pe/mid/leaf" || exit 1
+zfs snapshot "$POOL/pe/a@auto_1"
+zfs snapshot "$POOL/pe/mid/leaf@auto_1"
+pair_rc "-R -e over scaffolding" -R -e -m "auto_" "$POOL/pe"
+check "P -R -e over scaffolding: the agreed answer is success (leaves adopted, scaffolding skipped)" "0" "$RC_S"
+check "P -R -e over scaffolding: push adopted the deep leaf" "auto_1" "$(snaps_of "$PBK/$POOL/pe/mid/leaf")"
+check "P -R -e over scaffolding: pull adopted the same" "$(snaps_of "$PBK/$POOL/pe/mid/leaf")" "$(snaps_of "$PLP/$POOL/pe/mid/leaf")"
+check "P -R -e over scaffolding: push adopted the shallow leaf" "auto_1" "$(snaps_of "$PBK/$POOL/pe/a")"
+check "P -R -e over scaffolding: the path container got no snapshot on either side" "0 0" \
+      "$(count_snaps "$PBK/$POOL/pe/mid") $(count_snaps "$PLP/$POOL/pe/mid")"
+check "P -R -e over scaffolding: the root got no snapshot on either side" "0 0" \
+      "$(count_snaps "$PBK/$POOL/pe") $(count_snaps "$PLP/$POOL/pe")"
+
+# P2. -R -e over NOTHING BUT scaffolding: every member skipped is not success.
+zfs create -p "$POOL/pn/x" || exit 1
+pair_rc "-R -e over scaffolding only" -R -e -m "auto_" "$POOL/pn"
+check "P -R -e over scaffolding only: the agreed answer is failure -- nothing was adopted" "1" "$RC_S"
+check "P -R -e over scaffolding only: push says so in the same words as pull" "yes" \
+      "$(printf '%s\n' "$OUT_S" | grep -q 'nothing was adopted' && echo yes || echo no)"
+
+# P3. The dry-run verdict is the same line from both engines.
+zfs create -p "$POOL/pp" || exit 1
+zfs snapshot "$POOL/pp@auto_1"
+pair_rc "dry run" -n -e -m "auto_" "$POOL/pp"
+check "P dry run: push prints a PLAN= line" "1" "$(printf '%s\n' "$OUT_S" | grep -c '^PLAN=')"
+check "P dry run: the same verdict from both engines (target absent -> not incremental)" \
+      "$(printf '%s\n' "$OUT_G" | grep -m1 -o '^PLAN=[A-Z]* base=[^ ]*')" \
+      "$(printf '%s\n' "$OUT_S" | grep -m1 -o '^PLAN=[A-Z]* base=[^ ]*')"
+check "P dry run: nothing landed on either side" "no no" \
+      "$(zfs list -H -o name "$PBK/$POOL/pp" >/dev/null 2>&1 && echo yes || echo no) $(zfs list -H -o name "$PLP/$POOL/pp" >/dev/null 2>&1 && echo yes || echo no)"
+
+# P4. Full, then incremental, adopting the source's own family (-e): the two
+# targets end up holding the same snapshots as the source and as each other.
+zfs create -p "$POOL/pi" || exit 1
+zfs snapshot "$POOL/pi@auto_1"
+pair_rc "first transfer" -e -m "auto_" "$POOL/pi"
+check "P first transfer: the agreed answer is success" "0" "$RC_S"
+zfs snapshot "$POOL/pi@auto_2"
+pair_rc "incremental" -e -m "auto_" "$POOL/pi"
+check "P incremental: the agreed answer is success" "0" "$RC_S"
+check "P incremental: push holds what the source holds" "$(snaps_of "$POOL/pi")" "$(snaps_of "$PBK/$POOL/pi")"
+check "P incremental: pull holds the same" "$(snaps_of "$PBK/$POOL/pi")" "$(snaps_of "$PLP/$POOL/pi")"
+
+# P5. A DIVERGED target: it exists and holds a snapshot the source never had.
+# Pull refuses ("already exists and shares no common snapshot -- needs -f",
+# REV-20260804-037/038) and leaves the copy alone. Push carries `zfs recv -F`
+# unconditionally (snapsend.sh, recv_flags="-F -s"): a full stream onto that
+# target REPLACES it. This is P-0 in OWNER-ENGINE-MERGE-2026-09-07.md section
+# 8, the largest item of the parity plan, and it is a CONTRACT change for
+# push (a refusal where it used to proceed), so it waits for the owner's word.
+# Until it lands this case is RED for push -- by design, and said here rather
+# than hidden: a copy the operator wrote into must not be rolled back by a
+# nightly job that did not say it would.
+zfs create -p "$POOL/pd" || exit 1
+zfs snapshot "$POOL/pd@auto_1"
+zfs create -p "$PBK/$POOL/pd" || exit 1
+zfs snapshot "$PBK/$POOL/pd@other"
+zfs create -p "$PLP/$POOL/pd" || exit 1
+zfs snapshot "$PLP/$POOL/pd@other"
+pair_rc "diverged target" -e -m "auto_" "$POOL/pd"
+check "P diverged target: the agreed answer is refusal" "1" "$RC_S"
+check "P diverged target: pull left the copy's own snapshot in place" "other" "$(snaps_of "$PLP/$POOL/pd")"
+check "P diverged target: push left the copy's own snapshot in place" "other" "$(snaps_of "$PBK/$POOL/pd")"
+check "P diverged target: pull says why" "yes" \
+      "$(printf '%s\n' "$OUT_G" | grep -q 'shares no common snapshot' && echo yes || echo no)"
+check "P diverged target: push says why, in the same words" "yes" \
+      "$(printf '%s\n' "$OUT_S" | grep -q 'shares no common snapshot' && echo yes || echo no)"
+
 # --- summary ----------------------------------------------------------------
 
 echo "--------------------------------------------"

@@ -485,7 +485,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.72'
+VERSION='v2.73'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -614,6 +614,9 @@ QUIESCE=no
 # Set once the quiesce window has actually created the snapshots, so no later
 # code path creates a second, unquiesced copy.
 QUIESCE_SNAPPED=0
+# -R -e: how many expanded members were skipped as scaffolding (no family).
+# Read by the end-of-run aggregate guard; mirrored from snapget.sh 2026-09-07.
+ADOPT_SKIPPED=0
 RECURSIVE=0
 FLAT_RECURSE=0
 # Exactly ONE recursion declaration per invocation (Stage 2.2, REV-054 A4).
@@ -822,7 +825,8 @@ find_conflicting_snapshots() {
                 continue
             fi
 
-            local child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host")
+            local child_common
+            child_common=$(find_common_snapshot "$src_child" "$tgt_child" "$remote_user" "$remote_host")
             
             if [[ "$child_common" == "null" ]] || [[ -n "$parent_common" && "$child_common" != "$parent_common" ]]; then
                 local tgt_child_snaps=($(get_sorted_snapshots "$tgt_child" "$remote_user" "$remote_host"))
@@ -933,8 +937,10 @@ validate_snapshot() {
     # GUID, not creation timestamp: it's ZFS's own identity for a snapshot
     # (1-second creation resolution can't tell two distinct snapshots apart),
     # and it's what survives a rename on either side -- see find_common_snapshot.
-    local src_guid=$(get_snapshot_guid "$src_dataset" "$snapshot")
-    local tgt_guid=$(get_snapshot_guid "$tgt_dataset" "$snapshot" "$remote_user" "$remote_host")
+    local src_guid
+    src_guid=$(get_snapshot_guid "$src_dataset" "$snapshot")
+    local tgt_guid
+    tgt_guid=$(get_snapshot_guid "$tgt_dataset" "$snapshot" "$remote_user" "$remote_host")
 
     if [ -z "$src_guid" ] || [ -z "$tgt_guid" ]; then
         return 1
@@ -1238,8 +1244,22 @@ process_dataset() {
     log 3 "================================================"
 
     if [ $DRY_RUN -eq 1 ]; then
-        local common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
+        local common_snapshot
+        common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
         find_conflicting_snapshots "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host" "$common_snapshot"
+        # A machine-readable verdict for callers that must know whether the
+        # next real run would be incremental WITHOUT parsing prose -- the same
+        # line snapget.sh has printed since REV-20260730-005 F2, and which
+        # zfs-backup.sh reads (`PLAN=INCREMENTAL base=null` is its "full
+        # transfer on every run" tell). $common_snapshot is the very fact the
+        # transfer branches on, so the plan cannot drift from the run. Exactly
+        # one line per dataset, on stdout; logging goes to stderr. Push lacked
+        # it until 2026-09-07, so `seed` had nothing to read.
+        if [ -n "$common_snapshot" ]; then
+            printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"
+        else
+            printf 'PLAN=FULL base=- src=%s tgt=%s\n' "$src_dataset" "$tgt_dataset"
+        fi
         return 0
     fi
 
@@ -1372,6 +1392,21 @@ process_dataset() {
         local src_snaps
         src_snaps=($(get_sorted_snapshots "$src_dataset")) || return 1
         if [ ${#src_snaps[@]} -eq 0 ]; then
+            if [ $FLAT_RECURSE -eq 1 ]; then
+                # Under -R the request is a SUBTREE and -e's family defines
+                # membership in it: a member with no family -- the empty path
+                # containers `zfs create -p` leaves, and equally a bare root
+                # whose family lives only in its descendants -- is scaffolding,
+                # not a failure. The aggregate guard at the end of the run still
+                # fails the run when NOTHING in the whole expansion had a family.
+                # Pull has had this since 2026-08-21 (snapget.sh v2.70); push
+                # failed the whole run here on the same input until 2026-09-07,
+                # because the twins alarm was blessed with "-e exists only on
+                # pull" -- and -e is documented forty lines into this file.
+                log 1 "No family on '$src_dataset' -- scaffolding under -R -e, skipped"
+                ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
+                return 0
+            fi
             log 0 "No source snapshots found"
             return 1
         fi
@@ -1406,6 +1441,11 @@ process_dataset() {
         if [ -n "$MESSAGE" ]; then
             src_snaps=($(printf "%s\n" "${src_snaps[@]}" | grep "^$MESSAGE"))
             if [ ${#src_snaps[@]} -eq 0 ]; then
+                if [ $FLAT_RECURSE -eq 1 ]; then
+                    log 1 "No '$MESSAGE*' family on '$src_dataset' -- scaffolding under -R -e, skipped"
+                    ADOPT_SKIPPED=$((ADOPT_SKIPPED+1))
+                    return 0
+                fi
                 log 0 "No source snapshots matching message: $MESSAGE"
                 return 1
             fi
@@ -1608,7 +1648,8 @@ process_dataset() {
                 local common_snapshot="null"
             fi
         else
-            local common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
+            local common_snapshot
+            common_snapshot=$(find_common_snapshot "$src_dataset" "$tgt_dataset" "$remote_user" "$remote_host")
         fi
     fi
 
@@ -2623,6 +2664,15 @@ if [ $DRY_RUN -eq 1 ]; then
 else
     if [ ${#FAILED_DATASETS[@]} -gt 0 ]; then
         printf "%s\n" "${FAILED_DATASETS[@]}" >&2
+        exit 1
+    elif [ $USE_EXISTING_SNAPSHOT -eq 1 ] && [ $FLAT_RECURSE -eq 1 ] && [ "$ADOPT_SKIPPED" -ge ${#DATASETS[@]} ]; then
+        # -e over -R skipped EVERY member as scaffolding: the requested subtree
+        # carries no matching family anywhere, so "success" would report an
+        # adoption that never happened. The per-member skip is not an error;
+        # all of them together is the request not being satisfiable. Same
+        # guard as snapget.sh; until 2026-09-07 push counted the skips and
+        # never read the count, and said "All datasets processed successfully".
+        echo "No matching family anywhere under the requested root(s) -- nothing was adopted (-e -R found only scaffolding)" >&2
         exit 1
     else
         echo "All datasets processed successfully" >&2

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1f2b114364b6ce15 -->
+<!-- status-covers-digest: 42d17ea581496e83 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,36 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Parytet push↔pull, runda 1 — §8 z `OWNER-ENGINE-MERGE-2026-09-07.md` (2026-09-07, właściciel odmroził `snapsend.sh`).**
+  Dyrektywa: *„Zacznij §8 — plan naprawczy parytetu, odmrażam snapsend.sh"*.
+  **Audyt parowany** 15 wspólnych funkcji (normalizacja `twins`): 7 identyczne,
+  7 różnią się kierunkiem (która strona jest za ssh — powód z numerem linii w
+  `twins.sha256`), 1 (`process_dataset`) różni się kierunkiem **i** brakiem.
+  **Największy brak nie był w §3**: pull ma całą bramkę rozjazdu celu
+  (`recv_force_flag`, „shares no common snapshot — needs -f", `written@`,
+  nowsze snapshoty, `guest_disk_is_live`, podpowiedź MOUNTED; kampania
+  REV-20260804-037/038), push ma `recv_flags="-F -s"` **bezwarunkowo** — na
+  rozjechany cel przyrost cofa kopię po cichu, pełny strumień ją zastępuje.
+  To **P-0**, zmiana kontraktu push, **czeka na słowo właściciela**;
+  `process_dataset` niesie `port-by:2026-09-21`. Zportowane (snapsend v2.73):
+  **P-1** `-R -e` (dwie gałęzie rusztowania + bramka zbiorcza „nothing was
+  adopted" — push liczył `ADOPT_SKIPPED` i nigdy nie czytał), **P-2** 5 masek
+  `local x=$(...)` (higiena: obie `validate_snapshot` odmawiają przy pustym
+  GUID, więc pierwsza wersja §3 przesadziła — E45), **P-3** linia `PLAN=` na
+  `-n` (ta sama, którą `zfs-backup.sh` czyta z pull). Mechanizmy: **M-a**
+  4. kolumna w `twins.sha256` (`direction:<plik:linia>` albo `port-by:<data|REV>`),
+  sekcja B2 sprawdza (termin miniony / REV zamknięty → FAIL), `--bless`
+  odmawia bez powodu — kontrole negatywne przeszły; **M-b** sekcja P w
+  `test/snapsend`: ten sam argv obydwoma silnikami, 25 asercji (P1 `-R -e`
+  nad rusztowaniem, P2 samo rusztowanie, P3 `PLAN=`, P4 pełny+przyrost, P5
+  rozjechany cel — **czerwone dla push do czasu P-0, z założenia**); **M-c**
+  `impact.sh --verify`: wpis freeze nazywający jeden silnik bez linii `twin:`
+  → FAIL, cztery wpisy z 21–28.08 uzupełnione (trzy: „NIE zportowane — P-0").
+  Zmierzone tu: `twins` 81/0, `evalfree` 16/0, `--verify` rc=0 po
+  `--refreeze`. **NIE zmierzone: `test/snapsend`** — `zpool` w tym środowisku
+  odmówiony; sekcja P i porty czekają na lab (root+ZFS), do tego czasu
+  twierdzenia o zachowaniu push są lustrem pull, nie pomiarem.
 
 - **REV-20260907-137: `save-profile` pyta prawdziwy generator, zanim opublikuje (2026-09-07, IMPLEMENTED → recenzent, `4e6556e`).**
   Recenzent (P2): dwie bramki `save-profile` — walidator i render — to
@@ -7662,7 +7692,7 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `linkfields` | **49/49** | pola LACZA — `bandwidth`, `compression`, `cipher` — wyjete z worka `flags`. Pinuje, ze kazde renderuje DOKLADNIE ten token, ktory operator wpisalby recznie (asercja renderuje oba zapisy i porownuje wywolanie silnika), ze ta sama opcja przychodzaca i z `flags`, i z pola jest ODRZUCANA zamiast scalana, oraz ze kontrola dubla czyta `flags` tak jak getopts w obie strony: zbundlowane `-eb 2M` jest lapane, a argument `-m b-daily_` nie. Przypieta tez pulapka kolejnosci: jawny kompresor musi zatrzymac `-A`, wiec pola renderuja sie PRZED autotune, z kontrola, ze bez kompresora `-A` nadal sie pojawia. Kontrola negatywna wbudowana w kazdy przebieg: poprzedni `gen-cron.sh` musi odrzucic wszystkie trzy pola jako nieznane |
 | `scopefields` | **35/35** | pola ZAKRESU — `passive`, `exclude_family`, `exclude_child_<n>` — druga polowa rozbicia, ktore zaczely pola LACZA. W `flags` zostawala TOZSAMOSC (`-K/-k/-O/-p`) plus trzy DECYZJE o tym, co relacja bierze ze zrodla: czy sama stempluje snapshoty, czy adoptuje cudza rodzine (`-e`), ktorych rodzin nie adoptuje (`-E`), ktorych dzieci nie bierze (`-X`). Pinuje, ze nazwane pola renderuja te same tokeny w tej samej KOLEJNOSCI co zapis reczny (kolejnosc, bo przestawiony `flags` to szum w kazdym `crontab diff`), ze ta sama opcja z `flags` i z pola jest ODRZUCANA, oraz ze `passive = no` obok recznego `-e` tez jest odrzucane: `no` nie renderuje nic, wiec nie ma dubla, jest tylko config czytajacy odwrotnie, niz dziala. `exclude_child_<n>` jest NUMEROWANE, bo wartosc to REGEX i moze zawierac kazdy separator, ktory wybralaby lista; dziura w numeracji jest odrzucana zamiast po cichu ucinac liste. Kontrola negatywna wbudowana: poprzedni `gen-cron.sh` musi odrzucic kazdy config, ktory sie tu renderuje |
 | `subtree` | **10/10** | `validate_subtree` w OBU silnikach — dowod, ze rekurencyjny transfer wyladowal na KAZDYM potomku, nie tylko na korzeniu. Kampania na zywo zmierzyla, ze `zfs recv` strumienia `-R` POMIJA potomka, ktorego stan lokalny nie przyjmuje przyrostu, ladauje reszte i konczy sie zerem — bieg raportowal sukces, a jedno dziecko przestalo byc kopiowane. Pierwsza wersja samej kontroli byla fail-open dwukrotnie (blad inwentarza zwracal „wszystko dobrze"; test przynaleznosci byl PODCIAGIEM, wiec `@s3-extra` spelnial `@s3`) — oba przypadki przypiete tu dyskryminatorami wobec zaslepionych `zfs`/`ssh`. Kontrola negatywna wobec silnikow sprzed poprawki: **4 asercje padaja**, 6 przechodzi |
-| `twins` | **72/72** (2026-09-03: zbiór bliźniaków WYPROWADZANY z obu silników, nie spisany; 15 nazw, +A0 licznik, +3 przypięte; +G: `json_escape` w `delsnaps.sh` = biblioteka, `destroy_one`/`emit_stats` to homonimy) | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
+| `twins` | **81/81** (2026-09-07: +B2 powód dla różnej pary, 8 wierszy; 2026-09-03: zbiór bliźniaków WYPROWADZANY z obu silników, nie spisany; 15 nazw, +A0 licznik, +3 przypięte; +G: `json_escape` w `delsnaps.sh` = biblioteka, `destroy_one`/`emit_stats` to homonimy) | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | **58/58** (+14 sekcja 28, +4 sekcja 29, 2026-09-03; na tym boxie bez SKIP) | kontroler aktualizacji i rollbacku; sekcja 28: dziewięć funkcji, które `deploy.sh` nosi jako awaryjne kopie z `update-control.sh`, mierzone jako bliźniaki — zbiór wyprowadzany, osiem identycznych modulo program w podpowiedzi `--resume-updates`, `emergency_disable` przypięte per strona w `controller-twins.sha256` (różni się celowo: kontroler umie zdjąć sobie prawo wykonania, `deploy.sh` nie może) |
 | `zfsbackup` | **694/694** (Linux 2026-09-07, +7 sekcja `saveprof` bramka 3 REV-137; Linux 2026-09-03, sekcja 29 wycofana z `config_datasets`, −3; sekcja 3b przepisana na „jedna definicja układu parowania" +3; +4 sekcja `noeval`, +13 sekcja `flags`, +sekcje `records`/`fataldie`/`invocation` z PR #295; zmierzone na żywo pve0 2026-08-19: +1 niezmiennik „każdy BatchMode ssh w `zfs-backup.sh` niesie ConnectTimeout + ServerAlive"; wcześniejszy pełny punkt pomiarowy **391/391** 2026-08-11; Faza 4 sekcja 53 +6 commit `9074fe5`; REV-20260810-095 sekcja 54 +5; REV-102 kroki 3/106/107 sekcje 56/56-107 + krok 5 sekcja 57 F3/F4/F5 + F3-residual 8 asercji; REV-108 sekcja 58 +3 pasywne `-e`; REV-110 sekcja 59 +2 exact-prefix; REV-109 L0 `--section retention`) | Faza 4 (sekcja 53, +6, commit `9074fe5`): `add-client --profile=NAME` waliduje profil (`profile_validate_dir`) przed parowaniem, zapisuje wybór w rekordzie klienta; `apply_client_profile_choice()` konsultuje go WYŁĄCZNIE przy pierwszej aktywacji, nigdy przy re-aktywacji — ta sama jednokierunkowa granica co REV-089 dla profilu w ogóle. Testy: nieznana nazwa profilu odmawia przed jakimkolwiek `deploy.sh --pair`; pominięta flaga zapisuje `default` (ścieżka bez wyboru bez zmian); realny drugi profil jest walidowany i zapisywany poprawnie; `apply_client_profile_choice` przetestowane jednostkowo dla wszystkich trzech przypadków (przyjęcie przy pierwszej aktywacji, ignorowanie przy re-aktywacji, no-op na starym rekordzie klienta bez pola `PROFILE`). +5 (REV-20260810-095, sekcja 54): dowód przez REALNY `cmd_activate_client()`, nie tylko helper — z `PROFILE_ACTIVE=default` w env, `PROFILE=alt` z rekordu przebija przez `apply_client_profile_choice` i steruje renderowanym CONFIG-iem (marker: kadencja `send_schedule = 7 * * * *`), a ta kadencja dochodzi do wygenerowanego crona przez prawdziwy `gen-cron.sh`; ścieżka default (pominięty `--profile`) daje semantykę default; reaktywacja dalej ignoruje profil (jednokierunkowa granica REV-089). Kontrola negatywna: neutralizacja `apply_client_profile_choice` w subshellu → zapisany `PROFILE` bezczynny, kandydat wraca do default. Bezpieczne na hostach z crontabem — stub `$SNAPGET` łapie workfile i wychodzi ≠0, więc run umiera na „not installing" PRZED grant-checkiem i instalacją. Nie wykonane: `zfsbackup-live-pair` (prawdziwy `deploy.sh --pair`/`snapget.sh -n`/`gen-cron.sh --install` na dwóch żywych hostach z rootem), zgłoszone jako obowiązek ręczny.
@@ -7736,7 +7766,7 @@ dopasowania po GUID, gdzie migawka na celu ma inną nazwę niż na źródle
 
 | Pakiet | Wynik | Czego wymaga | Zakres |
 |---|---|---|---|
-| `snapsend` | **202/202** | root, zfs, mbuffer | silnik push/pull, semantyka flag |
+| `snapsend` | **202/202** ostatni pomiar; **+25 asercji sekcji P (2026-09-07) NIEURUCHOMIONE** — czekają na lab; P5 czerwone dla push do P-0 | root, zfs, mbuffer | silnik push/pull, semantyka flag; sekcja P: ten sam argv obydwoma silnikami |
 | `scenarios` | **34/34** | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
 | `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa, **oba klastry, root i konto**: metropolis pve1 → pve2; 192.168.11.x pve0 → pve1 (root `--peer-parent rpool`, konto `rpool/data` po obu stronach) |
 | `delsnaps` | — | root, zfs | retencja, prefiksy, GFS — poza grafem dla tej zmiany |

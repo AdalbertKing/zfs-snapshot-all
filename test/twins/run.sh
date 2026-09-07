@@ -51,6 +51,26 @@
 #            do NOT bless until the diff has been reviewed as an intentional
 #            change -- blessing is how you record "I looked at the other twin
 #            and decided", and it is worthless if it becomes reflex.
+#
+# A DIFFERENCE NEEDS A REASON, AND THE REASON IS CHECKED (2026-09-07, M-a of
+# docs/discussions/OWNER-ENGINE-MERGE-2026-09-07.md section 8). For seventeen
+# days the alarm accepted any sentence: fd26421 blessed a snapget-only change
+# to process_dataset with "-e exists only on pull", and snapsend.sh:37
+# documents -e. So a baseline row whose two hashes differ now carries a fourth
+# column, one of:
+#
+#   direction:<one sentence naming a LINE, e.g. snapget.sh:1186>
+#       the bodies differ because push and pull genuinely do different work
+#       there. The line is the evidence; a sentence without one is a claim.
+#   port-by:<YYYY-MM-DD>  or  port-by:<REV-YYYYMMDD-NNN>
+#       the bodies differ because one side is BEHIND, and this is the
+#       deadline for the port. Section B2 turns red the day after the date,
+#       or when the named review is CLOSED, so a deferred port cannot be
+#       deferred silently.
+#
+# --bless keeps the reason column of every row that still differs, drops it
+# from rows that became identical, and REFUSES to write a differing row that
+# has none: add the reason to twins.sha256 by hand first, then bless.
 
 set -u
 
@@ -148,17 +168,43 @@ hash_of() {   # <file> <function> -> sha256 or the literal ABSENT
     printf '%s\n' "$body" | sha256sum | cut -d' ' -f1
 }
 
+# The reasons already recorded, keyed by function. Read before --bless so a
+# bless keeps them, and before section B2 so it can judge them.
+declare -A REASON=()
+if [ -r "$BASELINE" ]; then
+    while read -r _fn _s _g _reason; do
+        case "$_fn" in ''|'#'*) continue ;; esac
+        [ -n "$_reason" ] && REASON[$_fn]="$_reason"
+    done < "$BASELINE"
+fi
+_bless_missing=0
+
 # ---- --bless: rewrite the baseline -----------------------------------------
 if [ "$BLESS" -eq 1 ]; then
     {
         echo "# Pinned hashes of the snapsend.sh/snapget.sh twinned functions."
         echo "# Regenerate with: ./test/twins/run.sh --bless"
         echo "# Blessing records a REVIEWED decision about both directions."
-        echo "# Format: <function> <snapsend-sha256> <snapget-sha256>"
+        echo "# Format: <function> <snapsend-sha256> <snapget-sha256> [direction:<why, with a file:line> | port-by:<date or REV>]"
+        echo "# A row whose two hashes differ MUST carry the fourth column; see the header of run.sh."
         for fn in $TWINS; do
-            printf '%s %s %s\n' "$fn" "$(hash_of "$SNAPSEND" "$fn")" "$(hash_of "$SNAPGET" "$fn")"
+            _hs="$(hash_of "$SNAPSEND" "$fn")"; _hg="$(hash_of "$SNAPGET" "$fn")"
+            if [ "$_hs" = "$_hg" ]; then
+                printf '%s %s %s\n' "$fn" "$_hs" "$_hg"
+            elif [ -n "${REASON[$fn]:-}" ]; then
+                printf '%s %s %s %s\n' "$fn" "$_hs" "$_hg" "${REASON[$fn]}"
+            else
+                echo "refusing to bless: $fn differs between the engines and carries no reason -- add 'direction:<why, file:line>' or 'port-by:<date|REV>' as the 4th column of its row in $BASELINE, then bless" >&2
+                _bless_missing=1
+            fi
         done
-    } > "$BASELINE" || { echo "could not write $BASELINE" >&2; exit 1; }
+    } > "$BASELINE.new" || { echo "could not write $BASELINE.new" >&2; exit 1; }
+    if [ "${_bless_missing:-0}" -eq 1 ]; then
+        rm -f "$BASELINE.new"
+        echo "not blessed: $BASELINE unchanged" >&2
+        exit 1
+    fi
+    mv "$BASELINE.new" "$BASELINE" || { echo "could not replace $BASELINE" >&2; exit 1; }
     echo "blessed $BASELINE"
     exit 0
 fi
@@ -198,7 +244,7 @@ done
 #   both pinned  -> nothing changed, nothing to ask
 #   one moved    -> THE drift case. Did the same fix belong in the twin?
 #   both moved   -> probably right, still needs the bless that says so.
-while read -r fn want_s want_g; do
+while read -r fn want_s want_g reason; do
     case "$fn" in ''|'#'*) continue ;; esac
     case " $TWINS_FLAT " in
         *" $fn "*) ;;
@@ -227,6 +273,49 @@ while read -r fn want_s want_g; do
             "snapsend.sh's copy is untouched. Does the push direction need the same fix?" \
             "If yes, fix it there too. If no -- say why in the commit -- then: ./test/twins/run.sh --bless"
     fi
+done < "$BASELINE"
+
+# ---- B2. a difference carries a checked reason ------------------------------
+# The pinned hashes say WHETHER the two copies differ; this says WHY, and the
+# why is verified as far as text allows: a direction reason must point at a
+# line, a port-by deadline must not have passed, a port-by review must not be
+# closed. What it cannot verify is that the sentence is true -- that is the
+# reviewer's, and the line reference is what makes it checkable.
+_today="$(date +%F)"
+while read -r fn want_s want_g reason; do
+    case "$fn" in ''|'#'*) continue ;; esac
+    [ "$want_s" = "$want_g" ] && continue
+    case "$reason" in
+        direction:*)
+            if printf '%s' "$reason" | grep -qE '(snapsend|snapget|lib-zfs-snap)\.sh:[0-9]+'; then
+                ok "B2 $fn differs by direction, and the reason names a line"
+            else
+                bad "B2 $fn differs by direction, and the reason names a line" \
+                    "reason: '$reason'" "a direction reason is a claim about the other engine; name the line that shows it (file.sh:NNN)"
+            fi ;;
+        port-by:*)
+            _due="${reason#port-by:}"; _due="${_due%% *}"
+            case "$_due" in
+                20[0-9][0-9]-[01][0-9]-[0-3][0-9])
+                    if [[ "$_due" > "$_today" ]]; then
+                        ok "B2 $fn is behind on one side, port due $_due"
+                    else
+                        bad "B2 $fn is behind on one side, port due $_due" \
+                            "the deadline has passed (today $_today). Port it, or record a new date with the reason it moved"
+                    fi ;;
+                REV-[0-9]*-[0-9]*)
+                    if [ -f "$REPO/docs/internal/reviews/closures/$_due.md" ]; then
+                        bad "B2 $fn is behind on one side, port owed to $_due" \
+                            "$_due is CLOSED and the copies still differ -- the port did not land under it"
+                    else
+                        ok "B2 $fn is behind on one side, port owed to $_due"
+                    fi ;;
+                *) bad "B2 $fn is behind on one side" "port-by needs a YYYY-MM-DD date or a REV id, got '$_due'" ;;
+            esac ;;
+        '') bad "B2 $fn differs between the engines WITHOUT a reason" \
+                "the two pinned hashes differ and the row has no 4th column. Say why: direction:<why, file:line> or port-by:<date|REV>" ;;
+        *)  bad "B2 $fn differs between the engines with an unreadable reason" "'$reason' -- expected direction:... or port-by:..." ;;
+    esac
 done < "$BASELINE"
 
 # ---- C. the baseline covers the whole watched set --------------------------

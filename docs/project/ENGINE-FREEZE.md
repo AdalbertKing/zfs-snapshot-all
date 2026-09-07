@@ -1,6 +1,6 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 77027b4598728d043e4a347d12e707b1ff34c4b3 -->
+<!-- frozen: snapsend.sh 100755 e64de0ccde3eb220cd7f6fb3a2566f2b80315261 -->
 <!-- frozen: snapget.sh 100755 eaa136115d1631b59386a993bb40d8ca24a0d91c -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
@@ -67,6 +67,59 @@ The freeze itself is unchanged, and its value (no frozen engine changes in
 passing) never depended on who the authority is.
 
 Owner-authorized refreezes:
+
+- 2026-09-07 (snapsend.sh): **push catches up with pull -- parity step 0 of
+  `docs/discussions/OWNER-ENGINE-MERGE-2026-09-07.md` section 8.** Owner
+  direction, verbatim: "Zacznij §8 — plan naprawczy parytetu, odmrażam
+  snapsend.sh", after "snapget.sh rozjechał się merytorycznie ze snapsend.sh —
+  to niedopuszczalne". snapsend v2.72 -> v2.73.
+
+  twin: snapget.sh is the SOURCE of every line ported here and nothing in it
+  moved -- its index entry is unchanged by this refreeze. The three ports and
+  the two things deliberately NOT ported are listed below; the not-ported ones
+  carry a `port-by:` deadline in `test/twins/twins.sha256`, which section B2 of
+  `test/twins` turns red when it passes.
+
+  Ported (each mirrored from snapget.sh, line for line where the direction
+  allows):
+
+  1. **P-1, `-R -e` scaffolding.** The two missing skip branches ("No family",
+     "No '<prefix>*' family") and the aggregate guard "nothing was adopted"
+     (`ADOPT_SKIPPED`, which push incremented and never read). Behaviour
+     change, and the reason for the unfreeze: on the same input push failed
+     the whole run where pull skipped one member, and reported "All datasets
+     processed successfully" where pull refused because nothing was adopted.
+     Pull has had both since 2026-08-21; the twins alarm was blessed that day
+     with "-e exists only on pull", which `snapsend.sh:37` contradicts (E43).
+  2. **P-2, five `local x=$(...)`** -> `local x; x=$(...)` (validate_snapshot,
+     find_conflicting_snapshots, the two dry-run/plan sites). Hygiene, not a
+     fail-open: both engines' validate_snapshot already refuse an empty GUID,
+     so the masks hid an exit status nothing read. Recorded as such.
+  3. **P-3, the `PLAN=` verdict on `-n`.** The line snapget.sh has printed since
+     REV-20260730-005 F2 and zfs-backup.sh reads; push printed nothing, so
+     `seed` (push, `zfs-backup.sh:6734/6740`) had no plan to show. Same
+     printf, same `base=null` tell.
+
+  NOT ported, and said out loud:
+
+  - **P-0, the divergence guard** (`recv_force_flag`, "already exists and
+    shares no common snapshot -- needs -f", `written@` and newer-snapshot
+    refusals, `guest_disk_is_live`, the MOUNTED hint). Push carries
+    `zfs recv -F` unconditionally (`recv_flags="-F -s"`): onto a diverged
+    target an incremental rolls the copy back silently and a full stream
+    replaces it, where pull refuses. This is a CONTRACT change for push -- a
+    refusal where it used to proceed -- and needs the owner's explicit word;
+    the remote target also needs `written@`/`mounted`/guest status read over
+    ssh. `test/snapsend` section P case P5 pins the expected behaviour and is
+    RED for push until it lands. `process_dataset` carries `port-by:` for it.
+  - `-Q` and `probe_dataset` on the source: direction, not drift (the deadman
+    protects a guest frozen on the REMOTE side; push's source is local).
+
+  Verification: `test/twins` (with the new B2 reasons), `evalfree`, and the
+  static checks ran here. `test/snapsend` -- the suite that runs the ported
+  branches on real ZFS, now with section P -- needs root+zfs and is pending on
+  the lab; until it has run, this entry's behaviour claims are the mirror's,
+  not a measurement (R12).
 
 - 2026-09-03 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **the six `eval` sites
   inside the engines are gone.** Owner direction: "deklaracja Gate 7,
@@ -210,6 +263,8 @@ Owner-authorized refreezes:
   did not say so.** Owner direction: "Tak" -- to the implementer's proposal after
   the measurement below.
 
+  twin: NOT ported -- the two branches naming `zfs rollback -r` live in pull's divergence guard, which push does not have at all (P-0 in OWNER-ENGINE-MERGE-2026-09-07.md section 8); owed with it. Recorded 2026-09-07, M-c.
+
   DIAGNOSIS ONLY. Same refusal, same status, same way out; one sentence added to
   each of the two branches that name `zfs rollback -r`.
 
@@ -277,6 +332,8 @@ Owner-authorized refreezes:
   and the remedy that fits said nothing when it failed.** Same owner direction
   as the entry below it ("az do braku zaciecia i koniecznych poprawek w kodzie").
 
+  twin: NOT ported -- the hint's condition is `recv_force_flag`, computed only by pull's divergence guard; push carries `-F` unconditionally (`snapsend.sh` recv_flags) and has no such branch. Owed with P-0 (section 8). Recorded 2026-09-07, M-c.
+
   DIAGNOSIS ONLY again. No input changes verdict, status or effect.
 
   Measured on the lab, immediately after the entry below was proven. The
@@ -333,6 +390,8 @@ Owner-authorized refreezes:
   something writing to it, and the refusal now says which one happened.**
   Owner direction, verbatim: "Testuj dalej. Rob nowy lab. [...] portem je
   odzyskuj az do braku zaciecia i koniecznych poprawek w kodzie."
+
+  twin: NOT ported -- push distinguishes neither event and refuses neither: `recv_flags="-F -s"` unconditionally, so a copy that is ahead is rolled back. Owed as P-0 (section 8). Recorded 2026-09-07, M-c.
 
   DIAGNOSIS ONLY. No behaviour changes: the same input is refused, at the same
   place, with the same exit status, and `-f` remains the same way out. What
@@ -702,6 +761,8 @@ Owner-authorized refreezes:
   also planted its membership flag in the quiesce loop instead of the
   transfer loop (same iterator spelling, two screens apart) -- caught by the
   live campaign, not by any suite, and worth recording for the next surgeon.
+
+  twin: ported 2026-09-07 (parity step 0, P-1, entry at the top of this list). The blessing recorded for this divergence on 2026-08-21 (`fd26421`, "-e exists only on pull") was false: `snapsend.sh:37` documents `-e` and the same `USE_EXISTING_SNAPSHOT` path runs in push. Error log E43.
 
 - **2026-08-17** -- `delsnaps.sh`: failure-cause-specific destroy hints
   (lab3 campaign, owner direction "napraw błędy"). The unconditional
