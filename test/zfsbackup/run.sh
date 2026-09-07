@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|setpolicy) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | setpolicy)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -9950,6 +9950,308 @@ mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hd
 automated_hourly
 300m
 420m' 'a single dataset and minute thresholds'
+
+
+# ============================================================================
+# set-policy: THE FIRST WRITER (2026-09-07). Self-contained; always eligible,
+# also under `--section setpolicy`.
+#
+# WHAT THIS SECTION CANNOT PROVE, said before the assertions rather than after:
+# the INSTALL. `gen-cron.sh --install` needs flock and a real crontab, so the
+# last step of the transaction is a lab obligation (order doc §7), not something
+# a fixture can claim. What it CAN prove is everything up to and including the
+# refusal paths -- and the refusals are the product here, because the edit
+# itself is three lines of set_or_remove_section_field.
+#
+# The fixture is two relationships created from ONE profile, which is the shape
+# the whole verb exists for: they point at the same [template:] sections, so a
+# change aimed at one moves both. Measured before this verb existed; the impact
+# line is the answer.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SP="$WORK/setpolicy"; rm -rf "$SP"; mkdir -p "$SP/clients" "$SP/bin"
+# A crontab that lives in a file. gen-cron/lib-cron shell out to crontab(1);
+# this stub is the same trick the cron suite uses, and it keeps the preview path
+# (which reads the installed block) reachable without touching a real one.
+cat > "$SP/bin/crontab" <<'SPEOF'
+#!/bin/sh
+[ "$1" = "-u" ] && shift 2
+case "$1" in
+    -l) cat "$SPX/crontab.txt" 2>/dev/null || : ;;
+    *)  cat > "$SPX/crontab.txt" ;;
+esac
+SPEOF
+chmod +x "$SP/bin/crontab"
+: > "$SP/crontab.txt"
+
+sp_fixture() {   # rebuild the config from scratch -- every case starts clean
+cat > "$SP/cron.conf" <<'SPEOF'
+[defaults]
+	host_label = pve2
+	repo_dir   = /root/scripts
+
+# recznie dopisany komentarz operatora -- MUSI przezyc kazda edycje
+[template:profile__d7h24__hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+	monitor_warn   = 90m
+	monitor_crit   = 150m
+
+[template:profile__d7h24__daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	retain         = -D7
+
+[dataset:hdd/backups/ksiegowosc/rpool/data/vm-101]
+	# managed-by: zfs-backup.sh client=ksiegowosc
+	src          = root@10.0.0.11:rpool/data/vm-101
+	use_template = profile__d7h24__hourly,profile__d7h24__daily
+	pair_label   = ksiegowosc
+
+[dataset:hdd/backups/magazyn/rpool/data/vm-205]
+	# managed-by: zfs-backup.sh client=magazyn
+	src          = root@10.0.0.12:rpool/data/vm-205
+	use_template = profile__d7h24__hourly,profile__d7h24__daily
+	pair_label   = magazyn
+
+[replica:sejf]
+	source = hdd/backups
+	dst    = usb/kopia
+	schedule = 0 3 * * *
+	prefix   = replica_
+SPEOF
+printf 'CLIENT_NAME=ksiegowosc\nSTATE=active\nMANAGED_DATASETS=hdd/backups/ksiegowosc/rpool/data/vm-101\nCRON_CONFIG=%s\n' "$SP/cron.conf" > "$SP/clients/ksiegowosc.conf"
+printf 'CLIENT_NAME=magazyn\nSTATE=active\nMANAGED_DATASETS=hdd/backups/magazyn/rpool/data/vm-205\nCRON_CONFIG=%s\n' "$SP/cron.conf" > "$SP/clients/magazyn.conf"
+cp "$SP/cron.conf" "$SP/orig.conf"
+}
+sp_fixture
+
+sp_run() {   # <args...> -> output in $WORK/sp.out, returns the rc
+    ( export PATH="$SP/bin:$PATH" SPX="$SP"
+      CLIENTS_DIR="$SP/clients"
+      SERVER_CONF="$SP/no-server-conf"
+      cmd_set_policy "$@" --config="$SP/cron.conf" ) >"$WORK/sp.out" 2>&1
+}
+sp_untouched() {   # <assertion name> -- the file must be byte-identical
+    if cmp -s "$SP/orig.conf" "$SP/cron.conf"; then ok "$1"
+    else bad "$1" "the config was modified:" "$(diff "$SP/orig.conf" "$SP/cron.conf")"; fi
+}
+
+# ---------------------------------------------------------------------------
+# THE ACCEPTED FIELD SET IS DERIVED FROM gen-cron, NOT TRANSCRIBED. Order doc
+# §7 asks for exactly this control, modelled on the one test/run.sh already has:
+# scrape the schema out of the tool and assert the verb's set is a subset of it.
+# A transcribed list drifts on the first new field in gen-cron; this fails the
+# day it does.
+# ---------------------------------------------------------------------------
+sp_schema=$(bash "$REPO/gen-cron.sh" --dump-fields 2>/dev/null | awk '$1=="template"{print $2}' | sort)
+sp_verb=$(set_policy_fields | sort)
+sp_extra=$(comm -23 <(printf '%s\n' "$sp_verb") <(printf '%s\n' "$sp_schema"))
+if [ -z "$sp_extra" ] && [ -n "$sp_verb" ]; then
+    ok "setpolicy: every field the verb accepts is a field gen-cron reads in a [template:] section"
+else
+    bad "setpolicy: every field the verb accepts is a field gen-cron reads in a [template:] section" \
+        "not in the schema: $(printf '%s' "$sp_extra" | tr '\n' ' ')"
+fi
+# ...and the four refusals are SUBTRACTIONS from that schema, not names that
+# were never in it. A refusal for a field gen-cron does not read would be
+# theatre: it could never have been accepted anyway.
+sp_missing=""
+for f in src dst passive exclude_family; do
+    printf '%s\n' "$sp_schema" | grep -qxF "$f" || sp_missing="$sp_missing $f"
+    printf '%s\n' "$sp_verb"   | grep -qxF "$f" && sp_missing="$sp_missing accepted:$f"
+done
+if [ -z "$sp_missing" ]; then
+    ok "setpolicy: the four refused fields are legal in the grammar and removed by this verb, not absent from it"
+else
+    bad "setpolicy: the four refused fields are legal in the grammar and removed by this verb, not absent from it" "$sp_missing"
+fi
+
+# ---------------------------------------------------------------------------
+# TARGET RESOLUTION: a relationship name and a profile name reach the same
+# sections. The operator should not have to know which of the two things called
+# a policy they are holding.
+# ---------------------------------------------------------------------------
+sp_by_rel=$( CLIENTS_DIR="$SP/clients"; set_policy_resolve_tiers "$SP/cron.conf" ksiegowosc | sort )
+sp_by_prof=$( CLIENTS_DIR="$SP/clients"; set_policy_resolve_tiers "$SP/cron.conf" d7h24 | sort )
+if [ "$sp_by_rel" = "$sp_by_prof" ] && [ "$(printf '%s\n' "$sp_by_rel" | grep -c .)" -eq 2 ]; then
+    ok "setpolicy: a relationship name and its profile name resolve to the same two tiers"
+else
+    bad "setpolicy: a relationship name and its profile name resolve to the same two tiers" \
+        "by relation: $sp_by_rel" "by profile: $sp_by_prof"
+fi
+
+# ---------------------------------------------------------------------------
+# THE IMPACT LINE -- the reason this verb has this shape. Two relationships
+# share the carrier; naming one of them must not hide the other.
+# ---------------------------------------------------------------------------
+sp_users=$( CLIENTS_DIR="$SP/clients"; set_policy_users_of "$SP/cron.conf" profile__d7h24__hourly | sort | tr '\n' ' ' )
+if [ "$sp_users" = "ksiegowosc magazyn " ]; then
+    ok "setpolicy: the shared tier reports BOTH relationships that feed off it"
+else
+    bad "setpolicy: the shared tier reports BOTH relationships that feed off it" "got: [$sp_users]"
+fi
+if ! ( CLIENTS_DIR="$SP/clients"; set_policy_users_of "$SP/cron.conf" profile__d7h24__weekly >/dev/null ); then
+    ok "setpolicy: a tier nobody references reports no users, rather than an empty success"
+else
+    bad "setpolicy: a tier nobody references reports no users, rather than an empty success"
+fi
+
+# ---------------------------------------------------------------------------
+# REFUSALS. Order doc §6, one at a time, each leaving the file byte-identical.
+# ---------------------------------------------------------------------------
+if ! sp_run ksiegowosc --retain=-H4 && grep -q 'has 2 tiers and --tier= was not given' "$WORK/sp.out"; then
+    ok "setpolicy: two tiers and no --tier is refused rather than guessed at"
+else
+    bad "setpolicy: two tiers and no --tier is refused rather than guessed at" "$(cat "$WORK/sp.out")"
+fi
+sp_untouched "setpolicy: ...and the ambiguous-tier refusal left the config byte-identical"
+
+if ! sp_run ksiegowosc --tier=weekly --retain=-W4 && grep -q "has no tier 'weekly'" "$WORK/sp.out" \
+   && grep -q 'hourly' "$WORK/sp.out"; then
+    ok "setpolicy: an unknown tier is refused and the refusal lists the tiers that exist"
+else
+    bad "setpolicy: an unknown tier is refused and the refusal lists the tiers that exist" "$(cat "$WORK/sp.out")"
+fi
+
+if ! sp_run ksiegowosc --tier=hourly --nosuchfield=1 && grep -q 'is not a field gen-cron.sh reads' "$WORK/sp.out"; then
+    ok "setpolicy: a field outside the schema is refused, and the refusal lists what is accepted"
+else
+    bad "setpolicy: a field outside the schema is refused, and the refusal lists what is accepted" "$(cat "$WORK/sp.out")"
+fi
+
+if ! sp_run ksiegowosc --tier=hourly --src=root@1.2.3.4:tank/x && grep -q 'topology' "$WORK/sp.out"; then
+    ok "setpolicy: src is refused as topology, naming where it belongs"
+else
+    bad "setpolicy: src is refused as topology, naming where it belongs" "$(cat "$WORK/sp.out")"
+fi
+if ! sp_run ksiegowosc --tier=hourly --passive=yes && grep -q 'scope' "$WORK/sp.out"; then
+    ok "setpolicy: passive is refused as scope, not silently written to a shared carrier"
+else
+    bad "setpolicy: passive is refused as scope, not silently written to a shared carrier" "$(cat "$WORK/sp.out")"
+fi
+
+# A REPLICA IS A COLLECTOR JOB, not a relationship, and it carries no policy of
+# this kind. Order doc §2b makes this its own refusal because the alternative --
+# an empty tier list -- would send the operator looking for a missing profile.
+if ! sp_run sejf --tier=hourly --retain=-H4 && grep -q 'is a REPLICA' "$WORK/sp.out" \
+   && grep -q 'add-replica' "$WORK/sp.out"; then
+    ok "setpolicy: a replica name is refused by name and points at add-replica"
+else
+    bad "setpolicy: a replica name is refused by name and points at add-replica" "$(cat "$WORK/sp.out")"
+fi
+
+if ! sp_run nosuchthing --tier=hourly --retain=-H4 && grep -q 'names no \[template:\] section' "$WORK/sp.out" \
+   && grep -q 'as a profile' "$WORK/sp.out"; then
+    ok "setpolicy: an unknown target is refused and the refusal names both shapes it tried"
+else
+    bad "setpolicy: an unknown target is refused and the refusal names both shapes it tried" "$(cat "$WORK/sp.out")"
+fi
+
+if ! sp_run ksiegowosc --tier=hourly --retain=-H4 --save-as=d7h4 && grep -q 'not this verb' "$WORK/sp.out"; then
+    ok "setpolicy: --save-as is refused with the reason, not silently ignored"
+else
+    bad "setpolicy: --save-as is refused with the reason, not silently ignored" "$(cat "$WORK/sp.out")"
+fi
+
+# A VALUE THE RENDER REJECTS. gen-cron's own message reaches the operator
+# (order doc §6.1: its wording, not ours) and the original is byte-identical
+# (§6.3). `keep` on a namespaced tier is the real case, not a contrived one:
+# gen-cron cannot derive a retain letter from profile__d7h24__hourly, and its
+# refusal says so.
+if ! sp_run ksiegowosc --tier=hourly --keep=4 && grep -q "no retain-flag letter known" "$WORK/sp.out"; then
+    ok "setpolicy: a value the render rejects is reported in gen-cron's own words"
+else
+    bad "setpolicy: a value the render rejects is reported in gen-cron's own words" "$(cat "$WORK/sp.out")"
+fi
+sp_untouched "setpolicy: ...and a rejected render left the config byte-identical"
+
+# ---------------------------------------------------------------------------
+# THE PREVIEW. It renders, shows both diffs, states the impact, and touches
+# nothing.
+# ---------------------------------------------------------------------------
+sp_run ksiegowosc --tier=hourly --retain=-H4 --preview; sp_rc=$?
+sp_out="$(cat "$WORK/sp.out")"
+if [ "$sp_rc" -eq 0 ]; then
+    ok "setpolicy: --preview succeeds"
+else
+    bad "setpolicy: --preview succeeds" "rc=$sp_rc" "$sp_out"
+fi
+sp_untouched "setpolicy: --preview left the config byte-identical"
+if [ ! -s "$SP/crontab.txt" ]; then
+    ok "setpolicy: --preview installed nothing"
+else
+    bad "setpolicy: --preview installed nothing" "$(cat "$SP/crontab.txt")"
+fi
+case "$sp_out" in
+    *"2 relacj"*ksiegowosc*|*"2 relacj"*magazyn*)
+        ok "setpolicy: the preview names how many relationships the change reaches" ;;
+    *) bad "setpolicy: the preview names how many relationships the change reaches" "$sp_out" ;;
+esac
+case "$sp_out" in
+    *"WSPOLNY NOSNIK"*) ok "setpolicy: a shared carrier is called one, in words, above the confirmation" ;;
+    *) bad "setpolicy: a shared carrier is called one, in words, above the confirmation" "$sp_out" ;;
+esac
+# The crontab half of the preview is where the collateral is actually visible:
+# BOTH relationships' delsnaps lines carry the new flag.
+sp_n=$(printf '%s' "$sp_out" | grep -c 'delsnaps.sh -L .* "automated_hourly" -H4')
+if [ "$sp_n" -eq 2 ]; then
+    ok "setpolicy: the previewed crontab shows the new flag on BOTH relationships' prune lines"
+else
+    bad "setpolicy: the previewed crontab shows the new flag on BOTH relationships' prune lines" "matched $sp_n" "$sp_out"
+fi
+
+# ---------------------------------------------------------------------------
+# keep and retain are two spellings of one decision, and gen-cron refuses a
+# section carrying both. Setting one takes the other out -- ANNOUNCED, because
+# a field removed without a word is what this tree does not do.
+# ---------------------------------------------------------------------------
+sp_run d7h24 --tier=daily --keep=9 --preview
+if grep -q "usuwam 'retain = -D7'" "$WORK/sp.out"; then
+    ok "setpolicy: setting keep on a tier that carries retain says which field it is removing"
+else
+    bad "setpolicy: setting keep on a tier that carries retain says which field it is removing" "$(cat "$WORK/sp.out")"
+fi
+sp_untouched "setpolicy: ...and that preview still left the config byte-identical"
+
+# ---------------------------------------------------------------------------
+# NO --yes AND NO --preview: the transaction stops at the confirmation. Fed a
+# refusal on stdin, because the default has to be no.
+# ---------------------------------------------------------------------------
+( export PATH="$SP/bin:$PATH" SPX="$SP"
+  CLIENTS_DIR="$SP/clients"; SERVER_CONF="$SP/no-server-conf"
+  echo n | cmd_set_policy ksiegowosc --tier=hourly --retain=-H4 --config="$SP/cron.conf" ) >"$WORK/sp.out" 2>&1
+if grep -q 'not confirmed' "$WORK/sp.out"; then
+    ok "setpolicy: without --yes the transaction stops at the confirmation"
+else
+    bad "setpolicy: without --yes the transaction stops at the confirmation" "$(cat "$WORK/sp.out")"
+fi
+sp_untouched "setpolicy: ...and a declined confirmation left the config byte-identical"
+
+# ---------------------------------------------------------------------------
+# THE HAND-WRITTEN COMMENT SURVIVES. Order doc §7 asks for this control by
+# name, and it is the property set_or_remove_section_field exists to keep: the
+# rest of the file goes through awk line by line, so what a person wrote in it
+# is still there afterwards. Asserted on the WORKING COPY, because the install
+# cannot run here -- the edit is what is under test, not the swap.
+# ---------------------------------------------------------------------------
+cp "$SP/cron.conf" "$SP/work.conf"
+set_or_remove_section_field "$SP/work.conf" "[template:profile__d7h24__hourly]" retain "-H4"
+if grep -q 'recznie dopisany komentarz operatora' "$SP/work.conf" \
+   && grep -q 'managed-by: zfs-backup.sh client=ksiegowosc' "$SP/work.conf" \
+   && grep -q '^	retain         = -H4$' "$SP/work.conf" \
+   && grep -q '^\[replica:sejf\]$' "$SP/work.conf"; then
+    ok "setpolicy: the edit keeps the operator's comment, the ownership markers and the unrelated sections"
+else
+    bad "setpolicy: the edit keeps the operator's comment, the ownership markers and the unrelated sections" \
+        "$(diff "$SP/cron.conf" "$SP/work.conf")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c99bbf30d4896995 -->
+<!-- status-covers-digest: c8757099b21a56aa -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,42 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`set-policy` — pierwszy PISARZ, wdrożony (2026-09-07).**
+  `zfs-backup.sh set-policy CEL [--tier=NAZWA] [--pole=wartość …] [--preview] [--yes]`.
+  Nie dodaje zdolności — edycja INI plus `gen-cron --install` działała zawsze —
+  tylko przenosi tę ścieżkę spod ręki pod program, żeby schemat pól został
+  w JEDNYM miejscu. Lista pól jest **czytana z `gen-cron.sh --dump-fields`
+  w czasie działania**, nigdy przepisana; suita asercjonuje, że zbiór czasownika
+  zawiera się w `FIELD_OK`.
+  - **CEL to nazwa RELACJI albo nazwa PROFILU** — jedno i drugie trafia w te same
+    sekcje `[template:]`. Operator nie musi wiedzieć, którą z dwóch rzeczy
+    zwanych polityką trzyma.
+  - **Polityka jest WSPÓŁDZIELONA i czasownik to mówi.** Zmierzone przed
+    napisaniem go: dwie relacje z tego samego profilu wskazują na tę samą sekcję
+    `[template:]`, więc zmiana `-H24` → `-H4` wycelowana w „księgowość" zmieniła
+    też „magazyn" — jedna linia w pliku, nikomu ani słowa. Każdy przebieg
+    wypisuje teraz, ile relacji karmi sekcja, którą zaraz ruszy, i pyta o TĘ
+    liczbę, a podgląd crontaba pokazuje obie linie `delsnaps` ze zmienioną flagą.
+  - **Cztery pola odmawiane**, każde z powodem: `src`/`dst` jako topologia
+    (mówią GDZIE, a gdzie należy do relacji), `passive`/`exclude_family` jako
+    zakres (mówią, co ta relacja BIERZE ze źródła — decyzja per relacja na
+    współdzielonym nośniku). Wszystkie cztery są legalne w gramatyce, więc to
+    świadome odjęcie, nie nieobecność.
+  - Transakcja to co do kroku wzorzec `cmd_set_bandwidth`: kopia robocza obok
+    configu, edycja na kopii, **walidacja renderem przez prawdziwy `gen-cron`
+    jako konto celu**, odmowa z oryginałem nietkniętym, dopiero potem podmiana
+    i `--install`. `keep` i `retain` to dwa zapisy jednej decyzji i gen-cron
+    odmawia sekcji z oboma — więc ustawienie jednego usuwa drugie, **z
+    ogłoszeniem**, nigdy po cichu.
+  - **NIE MA w tym czasowniku `--save-as`**, i mówi to wprost przy próbie:
+    rozwidlenie polityki wymaga drugiej odpowiedzi — dla KTÓREJ relacji — więc
+    to osobna transakcja, nie flaga.
+  - Suita: 27 asercji. **Czego nie dowodzi: samej INSTALACJI** — `--install`
+    potrzebuje `flock` i prawdziwego crontaba, więc ostatni krok transakcji jest
+    obowiązkiem labowym (zlecenie §7), nie czymś, co atrapa może orzec. Zmierzone
+    przy okazji: gdy `--install` padł na braku `flock`, rollback odtworzył config
+    i crontab co do bajtu, rc 1.
 
 - **Paczka A czasowników GUI — CZTERY CZYTELNIKI, wdrożone (2026-09-07).**
   `status --json`, `show-config KLIENT [--json]`, `list-profiles [--json]`,

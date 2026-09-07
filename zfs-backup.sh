@@ -467,6 +467,18 @@ Config maintenance:
                                     ACTIVE relationship across that link, as ONE
                                     previewed transaction. --bandwidth= with no value
                                     REMOVES the cap.
+  zfs-backup.sh set-policy CEL [--tier=NAZWA] [--pole=wartosc ...]
+                                    [--preview] [--yes]
+                                    Change a retention policy without opening the INI.
+                                    CEL is a RELATIONSHIP name or a PROFILE name -- both
+                                    resolve to the same [template:] sections. The
+                                    accepted fields are read from gen-cron.sh
+                                    (--dump-fields) at runtime, never transcribed;
+                                    src/dst are refused as topology and
+                                    passive/exclude_family as scope. A POLICY IS SHARED:
+                                    every run says how many relationships the section it
+                                    is about to change actually feeds, and asks about
+                                    that number. --preview stops after the diff.
   zfs-backup.sh audit-source-retention [--apply] [--yes]
 
 Inspection / teardown:
@@ -10387,6 +10399,300 @@ status_running_now() {   # <local target prefix> -> one line per live record
 }
 
 # ------------------------------------------------------------------------------
+# set-policy -- CHANGE A RETENTION POLICY WITHOUT OPENING THE INI
+# ------------------------------------------------------------------------------
+# Ordered in docs/discussions/OWNER-CONFIG-VERBS-2026-09-06.md. It adds no
+# capability: editing the config by hand, previewing with `gen-cron.sh -c FILE`
+# and applying with `--install` already works. What it adds is that the schema
+# stays in ONE place -- without it a front end would carry a second copy of the
+# field rules, which is the shape this tree kills with contracts in
+# test/deps.conf.
+#
+# THE ONE THING THIS VERB SAYS OUT LOUD, because the config does not: a policy
+# is SHARED. Two relationships created from the same profile point at the same
+# [template:profile__<name>__<tier>] section, and one edit moves both. Measured
+# on a two-relationship fixture: changing "ksiegowosc" from -H24 to -H4 changed
+# "magazyn" too, one line in the file, no word to anybody. So every run prints
+# which relationships the section it is about to touch actually feeds, and the
+# confirmation asks about that number rather than about the one you named.
+#
+# THE FIELD LIST IS DERIVED, NEVER WRITTEN DOWN. `gen-cron.sh --dump-fields` is
+# read at runtime and the answer for kind `template` IS the accepted set, minus
+# four names refused by hand below. A transcribed list drifts on the first new
+# field in gen-cron; a derived one cannot.
+#
+# FOUR REFUSED, each because it is not "how much / how often / how":
+#   src, dst              -- topology. They say WHERE, and where belongs to the
+#                            relationship (add-client, set-endpoint, the scope
+#                            file on the source).
+#   passive,
+#   exclude_family        -- SCOPE. They say what this relationship TAKES from
+#                            its source, which is a per-relationship decision
+#                            sitting on a shared carrier. They are legal in the
+#                            grammar, so this is a deliberate refusal and it
+#                            names itself as one.
+#
+# NOT IN THIS VERB, said plainly rather than left to be discovered: --save-as.
+# Forking a policy needs a second answer -- forked FOR WHICH relationship -- and
+# that is a different transaction, not a flag on this one.
+#
+# The transaction is cmd_set_bandwidth's, step for step: a working copy beside
+# the config, the edit on the copy, validation by rendering through the REAL
+# gen-cron as the target account, refusal with the original untouched, and only
+# then the swap and the install.
+
+# The template fields gen-cron actually reads, minus the four this verb refuses.
+# Read from the tool, at runtime.
+SET_POLICY_REFUSED="src dst passive exclude_family"
+set_policy_fields() {   # -> one accepted field name per line
+    local f
+    bash "$GENCRON" --dump-fields 2>/dev/null | awk '$1=="template"{print $2}' | while IFS= read -r f; do
+        case " $SET_POLICY_REFUSED " in *" $f "*) continue ;; esac
+        printf '%s\n' "$f"
+    done
+}
+
+set_policy_refusal_reason() {   # <field> -> why this one is refused
+    case "$1" in
+        src|dst) printf '%s' "topology: it says WHERE, and where belongs to the relationship (add-client / set-endpoint, and the scope file on the source)" ;;
+        passive|exclude_family) printf '%s' "scope: it says what this relationship TAKES from its source, which is a per-relationship decision and this section is shared. Until set-relation exists, edit it by hand and re-run gen-cron.sh --install" ;;
+        *) printf '%s' "not accepted here" ;;
+    esac
+}
+
+# Which [template:] sections a target names.
+#
+# TWO SHAPES, because two things are called a policy and the operator should not
+# have to know which one they have. A RELATIONSHIP name resolves through the
+# use_template of the sections it owns -- that is the honest chain, the same one
+# gen-cron walks. Anything else is taken as a PROFILE name, whose sections are
+# namespaced profile__<name>__<tier>; a hand-written config with a bare
+# [template:<name>] is tried last so a config nobody generated still works.
+set_policy_resolve_tiers() {   # <config> <target> -> "short<TAB>full" per line
+    local cfg="$1" target="$2" dump ids="" id
+    dump=$(config_section_dump "$cfg")
+    local cpath; cpath=$(client_conf_path "$target")
+    if [ -r "$cpath" ]; then
+        local idx kind name key val
+        while IFS=$'\001' read -r idx kind name key val; do
+            [ "$key" = use_template ] || continue
+            case "$kind" in dataset|prune) ;; *) continue ;; esac
+            section_owned_by "$cfg" "[$kind:$name]" "$target" "$name" || continue
+            for id in ${val//,/ }; do
+                [ -n "$id" ] || continue
+                case " $ids " in *" $id "*) continue ;; esac
+                ids="$ids $id"
+            done
+        done <<SPD
+$dump
+SPD
+    else
+        # A profile name. Its sections are the ones this config carries under
+        # that namespace; a bare [template:<target>] is the hand-written case.
+        local idx kind name key val
+        while IFS=$'\001' read -r idx kind name key val; do
+            [ "$kind" = template ] || continue
+            [ "$key" = @section ] || continue
+            case "$name" in
+                "profile__${target}__"*) ids="$ids $name" ;;
+                "$target")               ids="$ids $name" ;;
+            esac
+        done <<SPD2
+$dump
+SPD2
+    fi
+    ids="${ids# }"
+    [ -n "$ids" ] || return 1
+    for id in $ids; do
+        # The SHORT name is what an operator types: the tier as the profile
+        # spells it, with the namespace taken off.
+        local short="$id"
+        case "$id" in profile__*__*) short="${id##*__}" ;; esac
+        printf '%s\001%s\n' "$short" "$id"
+    done
+}
+
+# Which relationships feed off a template section. The impact line, and the
+# reason this verb exists in this shape: the answer is usually more than the
+# relationship the operator named.
+set_policy_users_of() {   # <config> <full tier id> -> one relationship label per line
+    local cfg="$1" want="$2" dump out=""
+    dump=$(config_section_dump "$cfg")
+    local idx kind name key val cur_idx="" cur_label="" cur_uses=0
+    local -A lbl=() uses=()
+    while IFS=$'\001' read -r idx kind name key val; do
+        case "$kind" in dataset|prune) ;; *) continue ;; esac
+        case "$key" in
+            pair_label)   lbl[$idx]="$val" ;;
+            use_template)
+                local id
+                for id in ${val//,/ }; do
+                    [ "$id" = "$want" ] && uses[$idx]=1
+                done ;;
+        esac
+    done <<SPU
+$dump
+SPU
+    # Guarded by the COUNT, not by ${!uses[@]+...}: adding that guard turns the
+    # expansion into INDIRECT expansion (${!VAR+word}) and bash rejects the
+    # result as a variable name. Second time in one round; see the error log.
+    [ "${#uses[@]}" -eq 0 ] && return 1
+    for idx in "${!uses[@]}"; do
+        local l="${lbl[$idx]:-(sekcja bez pair_label)}"
+        case " $out " in *" $l "*) continue ;; esac
+        out="$out $l"
+    done
+    out="${out# }"
+    [ -n "$out" ] || return 1
+    printf '%s\n' $out
+}
+
+cmd_set_policy() {
+    local target="" tier="" preview=0 yes=0 config_arg="" local_user_arg="" a
+    local -a fname=() fvalue=()
+    for a in "$@"; do
+        case "$a" in
+            --preview)      preview=1 ;;
+            --yes|-y)       yes=1 ;;
+            --tier=*)       tier="${a#*=}" ;;
+            --config=*)     config_arg="${a#*=}" ;;
+            --local-user=*) local_user_arg="${a#*=}"; flag_local_user set-policy "$local_user_arg" ;;
+            --save-as=*)    die "set-policy: --save-as is not this verb. Forking a policy needs a second answer -- forked FOR WHICH relationship -- so it is a separate transaction, not a flag here." ;;
+            --*=*)          fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
+                            fvalue+=("${a#*=}") ;;
+            -*)             die "set-policy: unknown option '$a'" ;;
+            *)              [ -z "$target" ] || die "set-policy: takes exactly one target (a relationship name or a profile name)"
+                            target="$a" ;;
+        esac
+    done
+    [ -n "$target" ] || die "set-policy requires a target: a relationship name or a profile name"
+    [ "${#fname[@]}" -gt 0 ] || die "set-policy: nothing to set. Give at least one --field=value (see 'zfs-backup.sh set-policy --help-fields' for what this config's gen-cron accepts)"
+
+    # THE ACCEPTED SET, from the tool rather than from memory.
+    local allowed; allowed=$(set_policy_fields)
+    [ -n "$allowed" ] || die "set-policy: could not read the field schema from $GENCRON (--dump-fields) -- refusing to edit a config against a schema this run cannot see"
+    local i n=${#fname[@]}
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        local fn="${fname[$i]}"
+        case " $SET_POLICY_REFUSED " in
+            *" $fn "*) die "set-policy: '$fn' is not a policy field -- $(set_policy_refusal_reason "$fn"). Nothing was changed." ;;
+        esac
+        printf '%s\n' "$allowed" | grep -qxF "$fn" \
+            || die "set-policy: '$fn' is not a field gen-cron.sh reads in a [template:] section. Accepted here: $(printf '%s' "$allowed" | tr '\n' ' '). Nothing was changed."
+        i=$((i + 1))
+    done
+
+    read_server_conf
+    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "set-policy: no cron config at $cronfile -- there is no installed policy to change"
+
+    # A replica is a COLLECTOR job, not a relationship, and it carries no policy
+    # of the kind this verb edits. Named here so the refusal points at the verb
+    # that does own it instead of at an empty tier list (order doc 2b).
+    if grep -qxF "[replica:$target]" "$cronfile"; then
+        die "set-policy: '$target' is a REPLICA, not a relationship or a profile. A replica is a collector job with no retention policy of its own -- change it with add-replica (it is an upsert). Nothing was changed."
+    fi
+
+    local tiers; tiers=$(set_policy_resolve_tiers "$cronfile" "$target") \
+        || die "set-policy: '$target' names no [template:] section in $cronfile. Tried it as a relationship (through the use_template of the sections it owns) and as a profile (sections named profile__${target}__*, and a bare [template:$target]). Nothing was changed."
+
+    local ntiers; ntiers=$(printf '%s\n' "$tiers" | grep -c .)
+    local full=""
+    if [ -n "$tier" ]; then
+        full=$(printf '%s\n' "$tiers" | awk -F'\001' -v t="$tier" '$1==t || $2==t {print $2; exit}')
+        [ -n "$full" ] || die "set-policy: '$target' has no tier '$tier'. It has: $(printf '%s\n' "$tiers" | cut -d$'\001' -f1 | tr '\n' ' '). Nothing was changed."
+    elif [ "$ntiers" -eq 1 ]; then
+        full=$(printf '%s\n' "$tiers" | cut -d$'\001' -f2)
+    else
+        die "set-policy: '$target' has $ntiers tiers and --tier= was not given: $(printf '%s\n' "$tiers" | cut -d$'\001' -f1 | tr '\n' ' '). A policy change aimed at the wrong tier is not visible in the result, so this is a refusal rather than a guess. Nothing was changed."
+    fi
+
+    local hdr="[template:$full]"
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") \
+        || die "mktemp failed next to $cronfile"
+    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+
+    # keep and retain are TWO SPELLINGS OF ONE DECISION, and gen-cron refuses a
+    # section carrying both as ambiguous. Setting one therefore takes the other
+    # out -- announced here and visible in the diff below, never silent: a field
+    # removed without a word is exactly what this tree does not do.
+    local sibling=""
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        case "${fname[$i]}" in keep) sibling=retain ;; retain) sibling=keep ;; esac
+        i=$((i + 1))
+    done
+    if [ -n "$sibling" ]; then
+        local had; had=$(cron_config_section "$cronfile" "$hdr" | sed -n -E "s/^[[:space:]]*$sibling[[:space:]]*=[[:space:]]*//p" | head -1)
+        if [ -n "$had" ]; then
+            echo "Uwaga: usuwam '$sibling = $had' z $hdr -- keep i retain to dwa zapisy tej samej decyzji, a gen-cron odmawia sekcji, ktora ma oba."
+            set_or_remove_section_field "$workfile" "$hdr" "$sibling" "" \
+                || { rm -f "$workfile"; die "set-policy: could not remove '$sibling' from $hdr -- nothing was changed"; }
+        fi
+    fi
+
+    i=0
+    while [ "$i" -lt "$n" ]; do
+        set_or_remove_section_field "$workfile" "$hdr" "${fname[$i]}" "${fvalue[$i]}" \
+            || { rm -f "$workfile"; die "set-policy: $hdr is not in $cronfile -- nothing was changed"; }
+        i=$((i + 1))
+    done
+
+    log "validating the edited config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the edited config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || {
+        rm -f "$workfile"
+        die "could not render the preview -- nothing was touched"
+    }
+
+    # THE IMPACT LINE. Printed after the diff, because it is the sentence the
+    # operator has to read before answering, and the diff alone does not carry
+    # it: a one-line change to a shared section looks exactly like a one-line
+    # change to a private one.
+    local users; users=$(set_policy_users_of "$cronfile" "$full") || users=""
+    local nusers; nusers=$(printf '%s\n' "$users" | grep -c . || true)
+    echo
+    echo "Polityka:          $hdr"
+    if [ -z "$users" ]; then
+        echo "Uzywana przez:     zadna sekcja w tym configu nie odwoluje sie do tego szczebla"
+        echo "                   -- zmiana nie zmieni ani jednej linii crona."
+    else
+        echo "Uzywana przez:     $nusers relacj(e/i): $(printf '%s' "$users" | tr '\n' ' ')"
+        [ "$nusers" -gt 1 ] && echo "                   TO JEST WSPOLNY NOSNIK. Zmiana dotyczy ich WSZYSTKICH,"
+        [ "$nusers" -gt 1 ] && echo "                   nie tylko tej, ktora podales."
+    fi
+    echo
+
+    if [ "$preview" -eq 1 ]; then
+        rm -f "$workfile"
+        log "--preview: nothing was changed and nothing was installed."
+        return 0
+    fi
+    if [ "$yes" -ne 1 ]; then
+        local ans
+        read -rp "Zastosowac te zmiane polityki? [t/N] " ans
+        case "$ans" in
+            t|T|tak|TAK|y|Y|yes|YES) ;;
+            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
+        esac
+    fi
+
+    assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
+    assert_config_readable_by_target "$cronfile"
+    atomic_replace_and_install "$cronfile" "$workfile"
+    log "policy $hdr updated and installed."
+}
+
+# ------------------------------------------------------------------------------
 # monitor -- THE VERDICT FOR EVERY RELATIONSHIP ON THIS HOST, RIGHT NOW
 # ------------------------------------------------------------------------------
 # V2 of the missing-verbs work order, and the one that did not exist in any form.
@@ -13183,6 +13489,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
+        set-policy)       shift; cmd_set_policy "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         move-to-client)   shift; cmd_move_to_client "$@" ;;
