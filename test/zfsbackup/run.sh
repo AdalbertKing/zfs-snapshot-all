@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -9950,6 +9950,130 @@ mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hd
 automated_hourly
 300m
 420m' 'a single dataset and minute thresholds'
+
+
+# ============================================================================
+# REV-20260907-136 F1: A REFUSED RECORD MUST NOT BECOME AN ANSWER
+# (2026-09-07). Self-contained; always eligible, also under `--section rev136`.
+#
+# RUN THROUGH THE REAL ENTRYPOINT, as a subprocess, and that is not a style
+# choice. This suite SOURCES zfs-backup.sh, so `die` is a bare `exit 1` here --
+# the fatal-die machinery is armed only when the file is the program. The
+# defect's worst form is a record that makes record_load DIE mid-publication,
+# and only the real entrypoint shows what that does to stdout. The reviewer's
+# reproduction used the entrypoint for the same reason.
+#
+# WHY THE ORIGINAL FIXTURES MISSED IT: they contained only valid records. They
+# proved the readers' output shape and never asked what the readers do with an
+# input the package itself refuses.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+RV="$WORK/rev136"; rm -rf "$RV"; mkdir -p "$RV/clients"
+rv_run() {   # <args...> -> stdout to $WORK/rv.out, stderr to $WORK/rv.err, returns rc
+    ( CLIENTS_DIR="$RV/clients"
+      SERVER_CONF="$RV/no-server-conf"
+      CRON_CONFIG="$RV/no-such-config"
+      export CLIENTS_DIR SERVER_CONF CRON_CONFIG
+      bash "$ZFSBACKUP" "$@" ) >"$WORK/rv.out" 2>"$WORK/rv.err"
+}
+rv_bytes() { wc -c < "$WORK/rv.out" | tr -d ' '; }
+
+# THE POSITIVE CONTROL FIRST. Without it every assertion below is satisfied by a
+# command that refuses everything, which would be a fix that broke the feature.
+printf 'CLIENT_NAME=good\nSTATE=active\n'        > "$RV/clients/good.conf"
+printf 'CLIENT_NAME=other\nSTATE=seed_complete\n' > "$RV/clients/other.conf"
+if rv_run status --json; then
+    rv_out="$(cat "$WORK/rv.out")"
+    rv_n=$(printf '%s' "$rv_out" | grep -o '"name":"' | wc -l)
+    case "$rv_out" in
+        '{"relations":['*']}')
+            if [ "$rv_n" -eq 2 ]; then
+                ok "rev136 control: two VALID records still publish one complete answer with both rows"
+            else
+                bad "rev136 control: two VALID records still publish one complete answer with both rows" "rows=$rv_n" "$rv_out"
+            fi ;;
+        *) bad "rev136 control: two VALID records still publish one complete answer with both rows" "$rv_out" ;;
+    esac
+else
+    bad "rev136 control: two VALID records still publish one complete answer with both rows" "rc=$?" "$(cat "$WORK/rv.err")"
+fi
+
+# FORM 1: a field OUTSIDE the per-record allowlist, in the SECOND record.
+# record_load dies on it. On the reviewed head this printed the array prefix and
+# the first complete object followed by a comma -- 448 bytes of unparseable
+# document from a command that had already decided to refuse.
+printf 'CLIENT_NAME=broken\nDIE_MAIN_PID=payload\n' > "$RV/clients/broken.conf"
+if ! rv_run status --json; then
+    ok "rev136: a disallowed field in the second record makes status --json fail"
+else
+    bad "rev136: a disallowed field in the second record makes status --json fail" "$(cat "$WORK/rv.out")"
+fi
+if [ "$(rv_bytes)" -eq 0 ]; then
+    ok "rev136: ...and NOTHING is left on stdout -- no prefix, no delimiter, no partial object"
+else
+    bad "rev136: ...and NOTHING is left on stdout -- no prefix, no delimiter, no partial object" \
+        "$(rv_bytes) bytes: $(cat "$WORK/rv.out")"
+fi
+if grep -q "is not a field name this package writes" "$WORK/rv.err"; then
+    ok "rev136: ...and the record parser's own refusal is on stderr"
+else
+    bad "rev136: ...and the record parser's own refusal is on stderr" "$(cat "$WORK/rv.err")"
+fi
+
+# FORM 2: an allowlisted field with a MALFORMED value. record_load returns
+# non-zero rather than dying, which is the half a `|| exit` catches and a bare
+# call does not. On the reviewed head this produced rc=0 and a plausible row.
+printf "CLIENT_NAME=broken\nSTATE='unterminated\n" > "$RV/clients/broken.conf"
+if ! rv_run status --json; then
+    ok "rev136: an unterminated quoted value makes status --json fail, not answer"
+else
+    bad "rev136: an unterminated quoted value makes status --json fail, not answer" "$(cat "$WORK/rv.out")"
+fi
+if [ "$(rv_bytes)" -eq 0 ]; then
+    ok "rev136: ...and that form leaves stdout empty too"
+else
+    bad "rev136: ...and that form leaves stdout empty too" "$(rv_bytes) bytes: $(cat "$WORK/rv.out")"
+fi
+
+# show-config, same input. The reviewed head answered rc=0 with a plausible
+# config_readable built from the assignments that happened to precede the bad
+# line.
+if ! rv_run show-config broken --json; then
+    ok "rev136: show-config refuses the same record instead of describing it"
+else
+    bad "rev136: show-config refuses the same record instead of describing it" "$(cat "$WORK/rv.out")"
+fi
+if [ "$(rv_bytes)" -eq 0 ]; then
+    ok "rev136: ...and prints no object at all"
+else
+    bad "rev136: ...and prints no object at all" "$(cat "$WORK/rv.out")"
+fi
+
+# THE ORDERING DISCRIMINATOR, taken straight from the review: moving a valid
+# field above or below the malformed line changed the answer, which is the
+# parser's PARTIAL state leaking into the contract. Both orderings must now
+# refuse identically -- if one of them still answers, the reader is still
+# reporting whatever the parser managed to assign before it gave up.
+printf "CLIENT_NAME=broken\nCRON_CONFIG=%s/x.conf\nSTATE='unterminated\n" "$RV" > "$RV/clients/broken.conf"
+rv_run show-config broken --json; rv_rc_a=$?; rv_b_a=$(rv_bytes)
+printf "CLIENT_NAME=broken\nSTATE='unterminated\nCRON_CONFIG=%s/x.conf\n" "$RV" > "$RV/clients/broken.conf"
+rv_run show-config broken --json; rv_rc_b=$?; rv_b_b=$(rv_bytes)
+if [ "$rv_rc_a" -ne 0 ] && [ "$rv_rc_b" -ne 0 ] && [ "$rv_b_a" -eq 0 ] && [ "$rv_b_b" -eq 0 ]; then
+    ok "rev136: the answer no longer depends on WHERE the malformed line sits in the record"
+else
+    bad "rev136: the answer no longer depends on WHERE the malformed line sits in the record" \
+        "before: rc=$rv_rc_a bytes=$rv_b_a   after: rc=$rv_rc_b bytes=$rv_b_b"
+fi
+
+# ...and the good relationship is still readable while a broken one sits beside
+# it. A named read must not be collateral damage of a neighbour's bad file.
+if rv_run show-config good --json && [ "$(rv_bytes)" -gt 0 ]; then
+    ok "rev136 control: a NAMED read of a valid relationship still works with a broken record present"
+else
+    bad "rev136 control: a NAMED read of a valid relationship still works with a broken record present" \
+        "rc=$? $(cat "$WORK/rv.out" "$WORK/rv.err")"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

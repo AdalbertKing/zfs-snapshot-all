@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c99bbf30d4896995 -->
+<!-- status-covers-digest: 647f6a1a38c2692f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-20260907-136: odmówiony rekord nie może stać się odpowiedzią (2026-09-07).**
+  Recenzent znalazł P2 w scalonej paczce A. `record_load` **umiera** dla pola
+  spoza allowlisty i **zwraca niezero** dla zepsutej wartości — żaden z dwóch
+  nowych czytaczy nie czytał tego statusu. Skutki, wszystkie odtworzone wobec
+  `59b54452`: pole spoza allowlisty w drugim rekordzie zostawiało **448 bajtów
+  uciętego JSON-a** (komenda słusznie odmawiała, ale już po opublikowaniu
+  prefiksu i przecinka); niezamknięty cudzysłów dawał **`rc=0` i wiarygodny
+  wiersz** złożony z pól sprzed zepsutej linii; `show-config` odpowiadał `rc=0`.
+  Najostrzejszy dowód recenzenta, odtworzony jako liczba: ta sama komenda na tym
+  samym rekordzie drukowała **155 bajtów, gdy `CRON_CONFIG` stał nad zepsutą
+  linią, i 163, gdy pod nią** — czytacz publikował stan cząstkowy parsera.
+  Naprawa: dwie bramki na `record_load` i **zbuforowana granica publikacji** —
+  stdout jest albo jedną kompletną odpowiedzią, albo pusty, trzeciego wyjścia
+  nie ma. Schematy JSON bez zmian.
+  **Lekcja nie dotyczy tego buga** (E41 w dzienniku błędów): to samo
+  buforowanie napisałem dzień wcześniej w `list-profiles`, po czym naprawiłem je
+  pod jednym adresem zamiast zapytać, gdzie jeszcze ten kształt występuje. Trzeci
+  raz w jednej sesji ten sam odruch.
 
 - **Paczka A czasowników GUI — CZTERY CZYTELNIKI, wdrożone (2026-09-07).**
   `status --json`, `show-config KLIENT [--json]`, `list-profiles [--json]`,

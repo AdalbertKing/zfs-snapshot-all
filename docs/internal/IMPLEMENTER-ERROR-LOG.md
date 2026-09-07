@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37.*
+*Evidence: E8, E3, E27, E37, E39.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34.*
+*Evidence: E7, E3, E12, E29, E32, E34, E40.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1149,4 +1149,89 @@ leżało w `PROJECT_STATUS.md` od labu replik — „replika to inny RODZAJ zada
 przeszukałem warstwę niższą, niż trzeba: kod mówi, **co** obiekt ma, a zapis
 projektowy mówi, **czym on jest**. Przy projektowaniu architektury informacji
 najpierw szuka się zdania definiującego obiekt, dopiero potem jego pól.
+
+
+
+### E39 — A commit that changed a status-covered file and skipped the status gate
+
+**2026-09-07, package A of the GUI verbs, caught by CI going red on exactly the
+check that exists for it.**
+
+*Genesis.* The lab on pve10 found that `monitor --json` emitted invalid JSON for
+any multi-dataset line. I fixed it, committed and pushed in one move to get the
+branch green again -- and did not re-run `git add … ; ./test/impact.sh
+--refresh-status ; git add docs/PROJECT_STATUS.md`. The fix touched
+`zfs-backup.sh`, which declares the `project-status` obligation, so the digest in
+`PROJECT_STATUS.md` no longer described what the commit recorded. Two CI jobs
+failed (`graph`, `impact`) with the marker's own message naming the file. Fixed
+forward in the next commit.
+
+*Cause.* Not ignorance of the gate -- I had run it correctly one commit earlier.
+It was HASTE: the previous commit was the "we are red, push the fix" one, and the
+gate felt like ceremony standing between me and green. That is the exact moment
+the gate is for. The marker is over the CONTENT of every file declaring the
+obligation, so "I only changed code, not docs" is not an exemption; it is the
+trigger.
+
+*Rule.* R4's family, one shape further out: **the gate belongs to the COMMIT, not
+to the session.** Every commit that touches a status-covered file runs the three
+commands in order, including -- especially -- a hurried fix commit. If the reason
+for skipping is "this one is urgent", that is the signal to run it.
+
+### E40 — `${!arr[@]}` with a `set -u` guard is INDIRECT expansion, twice in one round
+
+**2026-09-07, twice in the same work round: once in `list-profiles`, once in
+`set-policy`. Both caught by running the code, neither by reading it.**
+
+*Genesis.* This tree's idiom for iterating an array that may be empty under
+`set -u` is `${arr[@]+"${arr[@]}"}`. Applied to the INDEX form it becomes
+`${!files[@]+"${!files[@]}"}` -- and bash parses that as `${!VAR+word}`, i.e.
+indirect expansion of a variable named `files[@]`. It expands to the array's
+CONTENTS and then treats them as a variable name:
+
+    ./zfs-backup.sh: line 10590: /d/…/Y5M12D31H24.conf /d/…/d30.conf …: invalid variable name
+
+Written a second time an hour later, in a different function, for a different
+array, because the first fix was applied at the site rather than remembered as a
+shape.
+
+*Cause.* Two bash constructs that read identically and parse differently. The
+`+` guard is safe on `${arr[@]}` and changes the MEANING of `${!arr[@]}`.
+
+*Rule.* R8's neighbourhood -- prefer what the tree already does, and check it
+does what it looks like. Concretely: **never guard the index form.** Iterate with
+a counter (`local n=${#arr[@]} i=0; while [ "$i" -lt "$n" ]`), or guard on the
+count (`[ "${#arr[@]}" -eq 0 ] && return; for k in "${!arr[@]}"`). Both are
+unambiguous and neither can turn into indirect expansion. The same family as the
+`local a="$1" b=${#a}` trap already recorded in `lib-record.sh`: bash has several
+places where a second reading is legal, and the compiler will not tell you which
+one you wrote.
+
+
+### E41 — I found the shape, fixed it at one site, and shipped it at two others
+
+**2026-09-07, REV-20260907-136, caught by the Reviewer in code that was already
+merged.**
+
+*Genesis.* While writing `list-profiles` I found that a row emitted field by
+field leaves HALF AN OBJECT in the middle of a JSON array when the emitter dies
+part-way -- and made that row buffered. Two functions away, `status --json` and
+`show-config` published records they had not validated either: `record_load`
+dies for a disallowed field and returns non-zero for a malformed value, and
+neither reader read that status. The reviewer reproduced all three forms,
+including one where the answer changed depending on WHERE the bad line sat in
+the file (155 bytes vs 163) -- the parser's partial state published as the
+product's answer.
+
+*Cause.* Not the bug; the REACTION to the bug. Having understood a shape, I
+applied the remedy at the place I happened to be standing. The question that was
+never asked out loud: *which other code has this shape?* It takes one grep --
+`record_load` has two call sites in the new readers and both were wrong.
+
+*Rule.* R3, and this is its third piece of evidence in one session (see E40,
+where the same reflex wrote the same bash trap twice). **A defect found once is a
+QUESTION about the whole tree, not a repair at one address.** When a fix is
+written, grep for the shape -- the function, the field, the idiom -- and answer
+in the commit message how many sites were found and why the others are clean.
+"Fixed where I found it" is not a report.
 
