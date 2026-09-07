@@ -1,3 +1,8 @@
+ZASTAPIONY 2026-09-07 przez edytor-profilu-80.txt. Ten rysunek zaklada
+edycje polityki ISTNIEJACEJ relacji -- zakres odrzucony przez wlasciciela:
+GUI nie modyfikuje relacji, zmiana oznacza usun-i-zaloz. Zostawiony jako
+zapis tego, co rozwazano, nie jako plan.
+
 ┌─ Polityka: m12w4d7h24-gfs   (klon fabrycznego, edytowalny) ──────────────────┐
 │ Kształt:  ( ) jedna rodzina, drabina nad nią          (WIELKIE litery)       │
 │           (•) osobna rodzina na każdy szczebel        (małe litery)          │

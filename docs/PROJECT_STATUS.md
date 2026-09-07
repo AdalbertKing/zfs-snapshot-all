@@ -48,6 +48,14 @@
     `profiles/README.md` dotyczy katalogu pakietu, nie katalogu operatora,
     więc rozjazd jest ostrzeżeniem, nie odmową.
   - Suita: 22 asercje, w tym kontrola, że **zainstalowany config jest bajt
+  - **Makieta ekranu**: `docs/discussions/gui-mockups/tui/edytor-profilu-80.txt`,
+    zastępuje `edytor-polityki-80.txt` (tamten rysował odrzucony zakres).
+    Wejście z dwóch miejsc: lista profili i wybór polityki w kreatorze; profil
+    fabryczny **tylko do odczytu**, edytowalny dopiero po `F2 Zapisz jako`.
+    Decyzja właściciela 2026-09-07: **mechanizm per szczebel, nie globalnie** —
+    `gfs` jest polem sekcji `[template:<szczebel>]`, a globalny przełącznik
+    sugerowałby własność profilu, której ten obiekt nie ma. Kształt jest
+    **wyprowadzony** (`list-profiles` podaje `shape`), nie wybierany.
     w bajt ten sam** po zapisie profilu.
 
 - **`export-relation` — zapis relacji jako ODPOWIEDZI, nie jako stanu (2026-09-07).**
