@@ -43,9 +43,10 @@ Trzech konsumentów dzisiaj: pasmo przy aktywacji, `cmd_set_bandwidth` i
 `FIELD_OK`, budowaną helperem `_allow_fields <kind> <pola…>`, z nazwanymi
 zbiorami `POLICY_FIELDS` i `DEFAULTS_POLICY_FIELDS`. Egzekwuje ją
 `validate_field_names`, a `test/run.sh` **już** wyskrobuje tę listę z tekstu
-`gen-cron.sh` i na niej asercjonuje. Typy sekcji: `[defaults]`,
-`[template:<tier>]`, `[dataset:<ścieżka>]`, `[prune:<zakres>]`,
-`[prune-bookmarks:<zakres>]`.
+`gen-cron.sh` i na niej asercjonuje. Typów sekcji jest **sześć**:
+`[defaults]`, `[template:<tier>]`, `[dataset:<ścieżka>]`, `[prune:<zakres>]`,
+`[prune-bookmarks:<zakres>]` i `[replica:<nazwa>]` (§2b — `usage` wymienia
+tylko pięć, co wprowadziło w błąd pierwszą wersję tego dokumentu).
 
 **Które sekcje należą do relacji.** Sekcje niosą pole `pair_label` nazywające
 relację (REV-20260804-045); dociera ono do komendy transferu, do monitora
@@ -56,6 +57,43 @@ selektor nie jest do wymyślenia, tylko do ponownego użycia.
 stdout i kończy niezerowo przy każdym błędzie, czyli podgląd i walidacja w
 jednym. `--install` podmienia blok idempotentnie. `--reconcile` porównuje w
 trybie tylko do odczytu, co config kopiuje, z tym, co istnieje.
+
+## 2b. Repliki — wzorzec, który już istnieje
+
+Właściciel, 2026-09-06: „zapomnieliśmy o replice”. Słusznie, i ta luka chowała
+**precedens, który powinien narzucić kształt nowemu czasownikowi.**
+
+Replika jest **konfiguracją kolektora, nie relacji** (właściciel, 2026-09-06).
+Repozytorium mówi to samo od labu replik: *„replika to inny RODZAJ zadania (bez
+monitora, bez prune źródła, bez relacji), a nie drugi `dst`”* (R1,
+`docs/PROJECT_STATUS.md`). Nie ma peera, parowania, grantu ani endpointu: bierze
+dataset stąd i kopiuje go na inną pulę tutaj. Mieszka w `[replica:NAZWA]`,
+szóstym rodzaju sekcji, z własną listą pól: `_allow_fields replica source dst
+schedule prefix notify media recursive flags history`. Sekcje te **nie niosą
+`pair_label`**, więc selektor z §4 ich nie znajdzie i nie powinien. Jedno źródło
+może mieć kilka replik — lab postawił trzy sekcje na jednym źródle.
+
+Najważniejsze: **`add-replica` jest upsertem.** Usage mówi wprost: „Every field
+is a flag, and add-replica is an upsert”. Czyli zmiana harmonogramu czy prefiksu
+repliki to ponowne wywołanie tego samego czasownika z inną flagą, a
+`replica_section_upsert` robi to na sekcji przez `awk`. Repliki mają więc pełną
+drogę edycji, której relacjom brakuje.
+
+Konsekwencje dla tego zlecenia, wiążące:
+
+1. **`set-policy` ma naśladować gramatykę `add-replica`**, a nie wymyślać drugą.
+   Jedna forma w pakiecie: nazwane flagi, ta sama komenda zakłada i zmienia.
+2. **Pola `[replica:]` idą do grupy „ma własny czasownik”** z §5 i `set-policy`
+   ma na nie odmawiać, kierując do `add-replica`. Dwie drogi do jednego pola to
+   dwie prawdy.
+3. **Kontrola ujemna**: `set-policy` na nazwie, która jest repliką a nie
+   relacją, musi odmówić i nazwać `add-replica`.
+
+Znalezisko przy okazji, do osobnego rozstrzygnięcia: `usage` w `gen-cron.sh`
+wymienia pięć rodzajów sekcji i **pomija `[replica:]`** (zmierzone 2026-09-06:
+zero wystąpień słowa w całym `usage`). To właśnie stąd wzięła się luka w
+pierwszej wersji tego dokumentu. Uzupełnienie tej listy jest tanie i nie należy
+do tego zlecenia, ale ktoś powinien to zrobić.
 
 ## 3. Czego brakuje
 
@@ -94,7 +132,7 @@ własny komunikat odmowy:
 
 | grupa | przykłady | dlaczego nie przez `set-policy` |
 |---|---|---|
-| ma własny czasownik | `bandwidth` (`set-bandwidth`), `pair_label` (`move-to-client`) | dwie drogi do jednego pola to dwie prawdy; czasownik ma kierować do istniejącego |
+| ma własny czasownik | `bandwidth` (`set-bandwidth`), `pair_label` (`move-to-client`), **cała sekcja `[replica:]`** (`add-replica`, upsert) | dwie drogi do jednego pola to dwie prawdy; czasownik ma kierować do istniejącego |
 | własność profilu | pola, które profil pisze do `[dataset]`/`[prune]` | decyzja właściciela 2026-09-01: pole z dwóch miejsc naraz to twarda odmowa `gen-cron`; profil ma pozostać jedynym autorem |
 | poszerza zakres | lista datasetów, `src`/`dst` w sposób obejmujący nowe źródło | dowodem zakresu jest plik scope po stronie źródła z sygnaturą sha256, której kolektor nie napisze; odmowa ma nazywać `--commit-scope` |
 
@@ -115,11 +153,14 @@ kategorie, nie jaki jest wynik.
 4. relacja bez sekcji o tym `pair_label` → odmowa mówiąca, że config nie opisuje
    tej relacji;
 5. edycja poszerzająca zakres → odmowa nazywająca `--commit-scope` na źródle;
-6. brak `--yes` przy zastosowaniu → zatrzymanie po diffie.
+6. brak `--yes` przy zastosowaniu → zatrzymanie po diffie;
+7. nazwa, która jest repliką a nie relacją → odmowa nazywająca `add-replica`
+   (§2b).
 
 ## 7. Obowiązki dowodowe
 
-- sekcja w `test/zfsbackup` z kontrolami z §6, każda dyskryminująca;
+- sekcja w `test/zfsbackup` z kontrolami z §6, każda dyskryminująca, w tym
+  ta o replice;
 - asercja wyprowadzająca: pola czasownika ⊆ `FIELD_OK`, wyskrobane z
   `gen-cron.sh`, wzorem istniejącej asercji w `test/run.sh`;
 - kontrola, że **ręcznie dopisany komentarz przeżywa** edycję;

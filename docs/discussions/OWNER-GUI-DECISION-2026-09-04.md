@@ -110,6 +110,38 @@ Trzy osie, każda ma inną drogę:
 | **zakres** | które datasety relacja replikuje | zwężenie: sama edycja configu. Poszerzenie: **dodatkowo** `--commit-scope` po stronie źródła, bo dowodem zakresu jest plik scope z sygnaturą sha256, której kolektor nie napisze (`rux_verify_requested_scope`) |
 | **tożsamość i łącze** | endpoint, pasmo, profil, pauza, blokada u peera | osobne czasowniki: `set-endpoint`, `set-bandwidth`, `migrate-profile`, `pause-client`/`resume-client`, `enable-client`/`disable-client` |
 
+Powyższe trzy osie dotyczą **relacji**. Replika nie jest żadną z nich i nie
+jest relacją — patrz §4a.
+
+## 4a. Replika to konfiguracja KOLEKTORA
+
+Właściciel, 2026-09-06: *„Replika jest konfiguracją kolektora. Nie relacji.
+Kolektor może mieć kilka replik, ale to wciąż konfiguracja kolektora.”*
+Repozytorium zapisało to już przy labie replik, w tabeli wad: *„replika to inny
+RODZAJ zadania (bez monitora, bez prune źródła, **bez relacji**), a nie drugi
+`dst`”* (R1, `docs/PROJECT_STATUS.md`). Implementer zaprojektował dwie wersje
+tego dokumentu, zanim to znalazł.
+
+Konsekwencje dla architektury informacji:
+
+- Replika nie ma peera, parowania, grantu ani endpointu. Bierze dataset, który
+  **jest tutaj**, i kopiuje go na inną pulę **tutaj**, zwykle na nośnik
+  wymienny. Cała rzecz jest własnością tej jednej maszyny.
+- Mieszka w `[replica:NAZWA]`, szóstym rodzaju sekcji, którego `usage` samego
+  `gen-cron.sh` nie wymienia (zmierzone 2026-09-06: zero wystąpień, choć
+  `_allow_fields replica` i `build_replica_section` istnieją). Pola: `source`,
+  `dst`, `schedule`, `prefix`, `notify`, `media`, `recursive`, `flags`,
+  `history`.
+- Jedno źródło może mieć **kilka** replik; lab z 2026-08-29 postawił **trzy
+  sekcje `[replica:]` na jednym źródle**, każdy nośnik z własną kotwicą.
+- Edycja już istnieje: `add-replica` jest **upsertem** (to samo polecenie
+  zakłada i zmienia), `remove-replica` usuwa, `run-replicas` uruchamia,
+  `purge-replica-copy` kasuje dane na nośniku.
+
+**Wejście do tego jest z menu głównego, nie z listy relacji** (§6, ekran
+Kolektor). Replika stoi obok innych ustawień tej maszyny, a nie obok relacji
+z innymi maszynami.
+
 `gen-cron.sh --reconcile` porównuje w trybie tylko do odczytu, co config
 kopiuje, z tym, co naprawdę istnieje. **Usunięcie relacji i założenie jej od
 nowa nie jest ścieżką zmiany konfiguracji** i nie wolno jej tak przedstawiać
@@ -179,7 +211,8 @@ pojawi się realna potrzeba (plan: „conveniences backed by a real need”).
 | **Nowa relacja** | kreator odwzorowujący formę jednokomendową `--source=/--target=`; `--grant-remotely` i `--join-remotely` jako pola wyboru; „Dokończ” dla relacji zatrzymanej w połowie cyklu | pokazuje pełną komendę przed wykonaniem |
 | **Transfery** | postęp na żywo, tryb i baza, bajty na łączu, zatrzymana aktualizacja | — |
 | **Monitor** | linie monitora z czterema werdyktami i powodem | — |
-| **Nośniki** | repliki i cztery stany nośnika | — |
+| **Nośniki** (status) | repliki i cztery stany nośnika — widok monitorujący, nie konfiguracyjny | `Enter` skacze do konfiguracji tej repliki na ekranie Kolektor |
+| **Kolektor** (z menu, nie z F-klawisza) | konfiguracja **tej maszyny**: repliki (`[replica:]`), wyzwalacz udev, `[defaults]` (`host_label`, `repo_dir`, `notify_script`, `warn_script`, `digest_script`, `cron_log`), `server.conf` (`DEFAULT_TARGET`, `CRON_CONFIG`), kopie lokalne | replika: `Ins` nowa, `Enter` edycja (oba na upsert `add-replica`), `Del` `remove-replica`, `F5` `run-replicas`; wyzwalacz: `install-media-trigger`/`remove-media-trigger`. `purge-replica-copy` **poza V1**: kasuje dane na nośniku, klasa destrukcyjna razem z restore |
 
 Makiety w docelowym medium: `gui-mockups/tui/`. Wariant przeglądarkowy,
 odrzucony 2026-09-05, leży w `gui-mockups/web-odrzucony/` — zachowany za
@@ -189,6 +222,10 @@ Ekran ustawień zakłada czasownik zmiany polityki, zlecony osobno:
 `OWNER-CONFIG-VERBS-2026-09-06.md`. Bez niego TUI musiałoby samo edytować INI,
 czyli nosić drugą kopię schematu pól, wbrew §2 pkt 2. Z czasownikiem etap D
 spada z 4–6 dni do 2–3.
+
+Podział jest celowy: `F2`–`F6` to **relacje i ich stan**, czyli to, co ta
+maszyna robi z innymi maszynami; menu `Kolektor` to **ustawienia tej maszyny**.
+Replika należy do drugiej grupy.
 
 Nawigacja: `F2`–`F6` przełączają ekrany, `Enter` otwiera okno na wierzchu,
 `Esc` zamyka. Panel obok listy zamiast pod nią dopiero od ~120 kolumn.

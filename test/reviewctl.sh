@@ -651,6 +651,7 @@ tx_approve() {   # <rev> <impl-sha> <expected-parent>
     if [ "$(hdr "$rfile" verdict)" = "APPROVED" ] && [ "$(hdr "$rfile" reviewed-implementation)" = "$impl" ]; then
         tx_guard "$LEDGER" "$THREADS"
         tx_regenerate_and_verify
+        tx_reconfirm_parent "$parent"
         echo "reviewctl: $rev is already APPROVED at $impl -- no write needed; derived views verified"
         return 0
     fi
@@ -715,8 +716,18 @@ tx_close() {   # <rev> <approval-commit> <expected-parent>
         || tx_die "$rev: --approval-commit $acommit approved implementation '${approved_impl:-<none>}', but the response submits '$rimpl' -- closing here would record approval of something that is no longer on the table; approve the current implementation first"
 
     local cdir="$RDIR/closures" cfile="$RDIR/closures/$rev.md"
+    # Idempotent replay, on the same terms as approval (REV-135 F1). The write is
+    # skipped because the closure fact is already published; the CHECKS are not,
+    # because the derived views can have been damaged since -- by a partial manual
+    # edit, a merge conflict, or an interrupted publication -- while the canonical
+    # facts stayed valid. The early return that used to live here answered
+    # "nothing to do" with exit 0 over exactly that state, so a damaged ledger or
+    # routing view was blessed as a healthy publication.
     if [ -f "$cfile" ] && [ "$(hdr "$cfile" closed-by)" = "$acommit" ]; then
-        echo "reviewctl: $rev is already closed by $acommit -- nothing to do"
+        tx_guard "$LEDGER" "$THREADS"
+        tx_regenerate_and_verify
+        tx_reconfirm_parent "$parent"
+        echo "reviewctl: $rev is already closed by $acommit -- no write needed; derived views verified"
         return 0
     fi
     [ -f "$cfile" ] && tx_die "$rev: a closure already exists naming $(hdr "$cfile" closed-by) -- refusing to overwrite a published closure with a different one"

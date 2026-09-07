@@ -608,6 +608,59 @@ REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1 \
     && ok "...and the tampered view is no longer accepted afterwards" \
     || bad "...and the tampered view is no longer accepted afterwards" ""
 
+# ---- REV-20260907-135 F1 -----------------------------------------------------
+
+# T14b. The SAME property for CLOSURE. tx_close kept the early return that F4
+#       removed from tx_approve: it answered "nothing to do" with exit 0 without
+#       guarding, regenerating, verifying or reconfirming anything. The reviewer
+#       reproduced it on the real published closure of REV-20260904-134 -- valid
+#       canonical facts, a damaged ledger, rc=0, and `TAMPERED` still the last
+#       line afterwards.
+#
+#       Built as the mirror of T14 rather than as a new shape: a real approval
+#       commit from this repository's history closes cleanly, BOTH derived views
+#       are then damaged, and the same close is replayed.
+world t14b
+printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+    "$R120" "$APPROVED_IMPL" > "$W/docs/internal/reviews/$R120.md"
+respond "$R120" IMPLEMENTED "$APPROVED_IMPL"
+tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP" \
+    && ok "the closure replay control starts from a closure that really happened (control)" \
+    || bad "the closure replay control starts from a closure that really happened (control)" "$(cat "$TMPD/out")"
+printf 'TAMPERED\n' >> "$W/docs/internal/reviews/REVIEW_LEDGER.md"
+printf 'tampered\n'  >> "$W/docs/project/OPEN-THREADS.md"
+if tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP"; then
+    if grep -q 'derived views verified' "$TMPD/out" \
+       && ! grep -q 'TAMPERED' "$W/docs/internal/reviews/REVIEW_LEDGER.md" \
+       && ! grep -q 'tampered' "$W/docs/project/OPEN-THREADS.md"; then
+        ok "an idempotent CLOSURE replay repairs and verifies rather than returning early"
+    else
+        bad "an idempotent CLOSURE replay repairs and verifies rather than returning early" \
+            "rc=0 but the damage survived: $(tail -1 "$W/docs/internal/reviews/REVIEW_LEDGER.md")"
+    fi
+else
+    bad "an idempotent CLOSURE replay repairs and verifies rather than returning early" "$(cat "$TMPD/out")"
+fi
+REVIEWCTL_REPO="$W" "$CTL" --verify >/dev/null 2>&1 \
+    && ok "...and --verify accepts both views after the closure replay" \
+    || bad "...and --verify accepts both views after the closure replay" ""
+
+# T14c. The replay repairs, it does not bless: if the canonical facts cannot be
+#       derived at all, the replay must refuse rather than report success. Without
+#       this, "regenerate and verify" could be satisfied by a regeneration that
+#       silently produced nothing.
+world t14c
+printf '<!-- rev: %s -->\n<!-- verdict: APPROVED -->\n<!-- reviewed-implementation: %s -->\n\n# t\n' \
+    "$R120" "$APPROVED_IMPL" > "$W/docs/internal/reviews/$R120.md"
+respond "$R120" IMPLEMENTED "$APPROVED_IMPL"
+tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP" >/dev/null 2>&1
+respond REV-20260808-999 IMPLEMENTED "$sha1"        # orphan response: no review artifact
+if tx close "$R120" --approval-commit="$APPROVAL" --expected-parent="$TIP"; then
+    bad "a closure replay over underivable facts refuses instead of reporting success" "it succeeded"
+else
+    ok "a closure replay over underivable facts refuses instead of reporting success"
+fi
+
 # ==============================================================================
 # REV-20260829-125 F1 -- THE ROLLBACK SNAPSHOT MUST PROVE ITSELF
 #
