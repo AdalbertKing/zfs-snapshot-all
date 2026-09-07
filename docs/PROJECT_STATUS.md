@@ -43,7 +43,7 @@
   - Dowody: repro recenzenta (`rc=1`, brak pliku), wartość **nie-harmonogramowa**
     (`monitor_crit=1m` przy `warn=90m` — reguła międzypolowa, którą ma tylko
     generator), `--force` nad dobrym profilem zostawia go **bajt w bajt**, kontrola
-    pozytywna (`send_schedule='7 * * * *'` zapisuje się), i **6/6 profili z pakietu**
+    pozytywna (`send_schedule='7 * * * *'` zapisuje się), i **16/16 profili z pakietu**
     przechodzi bramkę, w tym drabinowy `Y5M12D31H24` (ten emituje `[prune:]`).
   - Koszt: jedno uruchomienie `gen-cron` na wywołanie `save-profile`. To czasownik
     interaktywny, jeden na raz — nie `list-profiles`, gdzie ten sam koszt na wiersz
