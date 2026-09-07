@@ -876,11 +876,21 @@ gencron_callers=$(awk '
 # `-H24` through that table, so the table is part of what a relationship was
 # generated FROM. A digest that ignored it would call an installed policy
 # unchanged after the thing that renders it had changed.
+#
+# cmd_save_profile joins on the FIRST ticket (2026-09-07, REV-20260907-137 F1):
+# it renders a config for VALIDATION under the identity it already is -- a
+# candidate built from the profile, judged by the real generator, thrown away.
+# Nothing is previewed for another account and nothing is installed, so the
+# wrapper's reason (the account's copy bakes the account's paths into the
+# block) does not apply; add-client re-validates the same profile through
+# gencron_as_target when a relationship is actually built from it, which is
+# where a version skew between the two copies would be caught.
 gencron_allowed="gencron_as_target
 cmd_activate_client
 cmd_audit_source_retention
 cmd_migrate_profile
 cmd_remove_client
+cmd_save_profile
 load_active_profile
 profile_digest"
 gencron_unexpected=$(comm -23 <(printf '%s
