@@ -9906,6 +9906,33 @@ else
     bad "monitorjson: a positional argument is refused" "$(cat "$WORK/mn.out")"
 fi
 
+# THREE LINES TAKEN VERBATIM OFF A PRODUCTION COLLECTOR (pve2, account
+# zfsbackup, 2026-09-07). Fixtures are written by the person writing the
+# parser and therefore agree with it by construction; these were not. They
+# carry the shapes the hand-made ones above do not: no -L, no -R, no -x, a
+# three-element dataset list, and a notify message full of quotes and
+# parentheses sitting AFTER the region this parser must stop at.
+mn_real() {   # <line> <expected argv, newline separated>
+    local got; got=$(monitor_split_args "$(monitor_arg_region "$1")")
+    if [ "$got" = "$2" ]; then ok "monitorjson: real production line parsed exactly -- $3"
+    else bad "monitorjson: real production line parsed exactly -- $3" "want:" "$2" "got:" "$got"; fi
+}
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "rpool/ROOT/pve-1,hdd/backups/pve2/rpool/data/vm-106-disk-0,hdd/backups/pve2/rpool/ROOT/pve-1" "automated_daily" 30h 48h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/home/zfsbackup/cron.log; [ $rc -eq 1 ] && /home/zfsbackup/notify-warn.sh "pve2 daily getting stale (root)" "$d" 2>>/home/zfsbackup/cron.log' \
+'rpool/ROOT/pve-1,hdd/backups/pve2/rpool/data/vm-106-disk-0,hdd/backups/pve2/rpool/ROOT/pve-1
+automated_daily
+30h
+48h' 'three datasets, no flags'
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hdd/vm-disks/subvol-103-disk-0,hdd/backups/pve2/hdd/vm-disks/subvol-103-disk-0" "automated_weekly" 9d 12d 2>&1); rc=$?; [ $rc -ge 3 ] && /home/zfsbackup/notify-fail.sh "pve2 weekly monitor BROKEN (urbackup)" "$d" 2>>/home/zfsbackup/cron.log' \
+'hdd/vm-disks/subvol-103-disk-0,hdd/backups/pve2/hdd/vm-disks/subvol-103-disk-0
+automated_weekly
+9d
+12d' 'a notify message with quotes and parens after the region'
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hdd/backups/pve2/hdd/vm-disks/subvol-107-disk-0" "automated_hourly" 300m 420m 2>&1); rc=$?' \
+'hdd/backups/pve2/hdd/vm-disks/subvol-107-disk-0
+automated_hourly
+300m
+420m' 'a single dataset and minute thresholds'
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
