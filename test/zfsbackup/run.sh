@@ -9744,7 +9744,7 @@ cat > "$MN/engine.sh" <<'MNEOF'
 printf '%s\n' "$*" >> "$MNX/engine.log"
 case "$*" in
     *automated_hourly*) echo "OK: tank ok"; exit 0 ;;
-    *automated_daily*)  echo "CRITICAL: tank stale"; exit 2 ;;
+    *automated_daily*)  echo "CRITICAL: tank/b1 stale"; echo "CRITICAL: tank/b2 stale"; exit 2 ;;
     *)                  echo "UNKNOWN"; exit 3 ;;
 esac
 MNEOF
@@ -9835,6 +9835,24 @@ esac
 
 # CRITICAL outranks UNKNOWN in the host-wide worst, which is the engine's own
 # rule for the same question.
+# THE ENGINE PRINTS ONE LINE PER DATASET, and a raw newline inside a JSON
+# string is invalid JSON. Every monitor line covering more than one dataset hit
+# that -- measured on pve10 AFTER 69 assertions of this suite passed, because
+# the stub above used to print a single line and therefore agreed with the bug.
+# The stub now prints two, which is what the real engine does, and these two
+# assertions are the ones that would have caught it.
+mn_nl=$(printf '%s' "$mn_got" | tr -cd '\n' | wc -c)
+if [ "$mn_nl" -eq 0 ]; then
+    ok "monitorjson: the answer carries no raw newline -- multi-line engine output stays JSON"
+else
+    bad "monitorjson: the answer carries no raw newline -- multi-line engine output stays JSON"         "found $mn_nl raw newline(s) inside the object" "$mn_got"
+fi
+case "$mn_got" in
+    *'CRITICAL: tank/b1 stale\nCRITICAL: tank/b2 stale'*)
+        ok "monitorjson: both engine lines survive, joined by an escaped newline" ;;
+    *) bad "monitorjson: both engine lines survive, joined by an escaped newline" "$mn_got" ;;
+esac
+
 mn_has '"worst":"CRITICAL"' "monitorjson: the host-wide worst ranks CRITICAL above UNKNOWN"
 if [ "$mn_rc" -eq 2 ]; then
     ok "monitorjson: the exit status is the engine's own vocabulary (2 = CRITICAL)"

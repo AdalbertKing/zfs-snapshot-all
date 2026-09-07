@@ -10574,7 +10574,7 @@ cmd_monitor() {
                     "$([ "$engine_named" = "$CHECKSNAPAGE" ] && echo false || echo true)"
                 printf ',"parsed":%s,"rc":%s' "$parsed" "$rc"
                 jsonw_field verdict "$verdict"
-                jsonw_field reason  "$reason"
+                jsonw_text  reason  "$reason"
                 printf '}'
             else
                 printf '%-10s %-9s %-16s %s\n' "$acct" "$verdict" "${label:-(bez etykiety)}" "$ds"
@@ -10747,7 +10747,7 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
     # be a second vocabulary for the same refusal.
     if ! profile_validate_file "$file" "$GENCRON"; then
         printf ',"valid":false'
-        jsonw_field error "$PROFILE_ERR"
+        jsonw_text  error "$PROFILE_ERR"
         printf ',"mechanism":"","shape":"","families":[],"tiers":[]}'
         return 0
     fi
@@ -11203,6 +11203,25 @@ jsonw_array() {   # <space-separated list> -> ["a","b"]
 
 jsonw_field() {   # <json name> <value> -> ,"name":"value"
     printf ',"%s":"%s"' "$1" "$(json_escape "$2")"
+}
+
+# THE ENGINE'S OUTPUT IS NOT A PATH. json_escape covers the two characters a
+# dataset path can carry, and it is pinned identical to two FROZEN copies whose
+# only job is exactly that -- so it is not the place to teach about newlines.
+# But `monitor --json` carries check-snap-age.sh's own text as the REASON, and
+# that engine prints ONE LINE PER DATASET: a raw newline inside a JSON string is
+# invalid JSON, and every monitor line covering more than one dataset produced
+# exactly that. Measured on pve10, 2026-09-07, after 69 suite assertions passed
+# -- because the suite's stub engine printed a single line and therefore agreed
+# with the bug. The three characters escaped here are the three that engine can
+# emit; anything wider would be inventing a requirement.
+jsonw_text() {   # <json name> <possibly multi-line value> -> ,"name":"value"
+    local v
+    v=$(json_escape "$2")
+    v="${v//$'\t'/\\t}"
+    v="${v//$'\r'/\\r}"
+    v="${v//$'\n'/\\n}"
+    printf ',"%s":"%s"' "$1" "$v"
 }
 
 # The pair_label the relationship's sections actually carry, which is what the
