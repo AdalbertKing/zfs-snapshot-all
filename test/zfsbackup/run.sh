@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -10073,6 +10073,233 @@ if rv_run show-config good --json && [ "$(rv_bytes)" -gt 0 ]; then
 else
     bad "rev136 control: a NAMED read of a valid relationship still works with a broken record present" \
         "rc=$? $(cat "$WORK/rv.out" "$WORK/rv.err")"
+fi
+
+
+# ============================================================================
+# export-relation: THE ANSWERS, NOT THE STATE (2026-09-07). Self-contained;
+# always eligible, also under `--section exportrel`.
+#
+# The assertion this whole verb rests on is the FIRST one below: every flag the
+# mapping names must be a flag cmd_add_client actually parses. The document's
+# only promise is "these arguments rebuild this relationship", and a mapping
+# that drifted from the parser would make that promise fiction while every other
+# assertion here still passed. Same discipline as the FIELD_OK scrape, one layer
+# out: the list is not transcribed into the test either -- it is read out of the
+# program.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+EX="$WORK/exportrel"; rm -rf "$EX"; mkdir -p "$EX/clients"
+
+# ---------------------------------------------------------------------------
+# THE DERIVATION CONTROL.
+# ---------------------------------------------------------------------------
+ex_parser=$(sed -n '/^cmd_add_client() {/,/^}/p' "$ZFSBACKUP" \
+            | grep -oE '^\s+--[a-z-]+[=|)]' | sed 's/^ *--//; s/[=|)]$//' | sort -u)
+ex_missing=""
+for ex_pair in $EXPORT_RELATION_MAP; do
+    ex_flag="${ex_pair#*:}"
+    printf '%s\n' "$ex_parser" | grep -qxF "$ex_flag" || ex_missing="$ex_missing $ex_flag"
+done
+for ex_flag in passive exclude-child exclude-family; do
+    printf '%s\n' "$ex_parser" | grep -qxF "$ex_flag" || ex_missing="$ex_missing $ex_flag"
+done
+if [ -z "$ex_missing" ]; then
+    ok "exportrel: every flag the mapping names is one cmd_add_client actually parses"
+else
+    bad "exportrel: every flag the mapping names is one cmd_add_client actually parses" \
+        "not in the parser:$ex_missing" "parser has: $(printf '%s' "$ex_parser" | tr '\n' ' ')"
+fi
+# ...and the control itself saw something. A scrape that matched nothing would
+# make the loop above vacuous -- the failure mode this tree keeps meeting.
+if [ "$(printf '%s\n' "$ex_parser" | grep -c .)" -ge 8 ]; then
+    ok "exportrel: the parser scrape found the create flags (population control)"
+else
+    bad "exportrel: the parser scrape found the create flags (population control)" \
+        "found: $(printf '%s' "$ex_parser" | tr '\n' ' ')"
+fi
+
+# ---------------------------------------------------------------------------
+cat > "$EX/cron.conf" <<'EXEOF'
+[defaults]
+	host_label = pve2
+	repo_dir   = /root/scripts
+
+[template:profile__d7h24__hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[dataset:hdd/backups/ksiegowosc/rpool/data/vm-101]
+	# managed-by: zfs-backup.sh client=ksiegowosc
+	src          = root@10.0.0.11:rpool/data/vm-101
+	use_template = profile__d7h24__hourly
+	pair_label   = ksiegowosc
+	bandwidth    = 20M
+
+[dataset:hdd/backups/obcy/rpool/data/vm-999]
+	src          = root@10.0.0.99:rpool/data/vm-999
+	use_template = profile__d7h24__hourly
+	pair_label   = obcy
+EXEOF
+# EXCLUDE_CHILD_1 and _3, with 2 MISSING on purpose: the program stops at the
+# first gap everywhere else, and an export that reached past one would promise
+# an exclusion no run would honour.
+{
+  echo "CLIENT_NAME=ksiegowosc"
+  echo "STATE=active"
+  echo "PEER_HOST=10.0.0.11"
+  echo "ACTIVE_ENDPOINT=10.0.0.11:22"
+  echo "INSTALLED_ENDPOINT=10.0.0.11:22"
+  echo "ENDPOINT_VPN_HOST=10.99.0.11"
+  echo "CLIENT_TARGET=hdd/backups/ksiegowosc"
+  echo "REQUESTED_DATASETS=rpool/data/vm-101"
+  echo "MANAGED_DATASETS=hdd/backups/ksiegowosc/rpool/data/vm-101"
+  echo "MANAGED_PRUNE_SCOPE=hdd/backups/ksiegowosc"
+  echo "PROFILE=d7h24"
+  echo "PROFILE_DIGEST_RECORDED=deadbeef"
+  echo "SOURCE_PROFILE=d7h24-lite"
+  echo "LOCAL_USER=zfsbackup"
+  echo "BANDWIDTH=20M"
+  echo "RECURSION=flat"
+  echo "EXCLUDE_CHILD_1=-swap"
+  echo "EXCLUDE_CHILD_3=-never-reached"
+  echo "CREATED_AT=2026-09-01T10:00:00Z"
+  echo "ACTIVATED_AT=2026-09-01T11:00:00Z"
+  echo "CRON_CONFIG=$EX/cron.conf"
+} > "$EX/clients/ksiegowosc.conf"
+
+ex_run() {   # <args...> -> stdout $WORK/ex.out, stderr $WORK/ex.err, returns rc
+    ( export CLIENTS_DIR="$EX/clients" SERVER_CONF="$EX/no-server-conf"
+      bash "$ZFSBACKUP" "$@" ) >"$WORK/ex.out" 2>"$WORK/ex.err"
+}
+
+ex_run export-relation ksiegowosc --json; ex_rc=$?
+ex_out="$(cat "$WORK/ex.out")"
+if [ "$ex_rc" -eq 0 ] && [ -n "$ex_out" ]; then
+    ok "exportrel: a valid relationship exports with rc 0"
+else
+    bad "exportrel: a valid relationship exports with rc 0" "rc=$ex_rc" "$(cat "$WORK/ex.err")"
+fi
+
+# ---------------------------------------------------------------------------
+# DERIVED, HISTORICAL AND HOST-LOCAL FACTS MUST NOT BE IN THE DECLARATIONS.
+# This is the property that makes the file safe to carry: everything in it is
+# still true after it moves. Asserted per field, by name, because a single
+# "looks right" check would not notice one of them creeping back.
+# ---------------------------------------------------------------------------
+ex_decl="${ex_out#*\"declarations\":\{}"; ex_decl="${ex_decl%%\}*}"
+ex_leaked=""
+for ex_f in $EXPORT_RELATION_DROPPED; do
+    case "$ex_decl" in *"\"$ex_f\""*) ex_leaked="$ex_leaked $ex_f" ;; esac
+done
+if [ -z "$ex_leaked" ]; then
+    ok "exportrel: no derived, historical or host-local field reaches the declarations"
+else
+    bad "exportrel: no derived, historical or host-local field reaches the declarations" \
+        "leaked:$ex_leaked" "$ex_decl"
+fi
+# ...and the declarations are not empty, so the check above is not vacuous.
+case "$ex_decl" in
+    *'"PEER_HOST":"10.0.0.11"'*'"PROFILE":"d7h24"'*)
+        ok "exportrel: the declarations carry the answers a person gave" ;;
+    *) bad "exportrel: the declarations carry the answers a person gave" "$ex_decl" ;;
+esac
+
+# THE REPLAY ARGV, exactly.
+ex_argv="${ex_out#*\"argv\":\[}"; ex_argv="${ex_argv%%\]*}"
+ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--requested=rpool/data/vm-101","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
+if [ "$ex_argv" = "$ex_want" ]; then
+    ok "exportrel: the replay argv is exactly the flags the declarations map to"
+else
+    bad "exportrel: the replay argv is exactly the flags the declarations map to" "want: $ex_want" "got:  $ex_argv"
+fi
+# THE GAP RULE, called out on its own: EXCLUDE_CHILD_3 exists in the record and
+# must NOT be exported, because numbering stops at the first gap everywhere else
+# in this program and an export that reached past one would promise an exclusion
+# no run would honour.
+case "$ex_argv" in
+    *never-reached*) bad "exportrel: numbered exclusions stop at the first gap, as everywhere else" "$ex_argv" ;;
+    *)               ok "exportrel: numbered exclusions stop at the first gap, as everywhere else" ;;
+esac
+
+# WHAT CANNOT BE REPLAYED IS NAMED, not dropped.
+case "$ex_out" in
+    *'"field":"ENDPOINT_VPN_HOST"'*'"field":"ACTIVE_ENDPOINT"'*)
+        ok "exportrel: declarations with no create flag are listed under not_replayable" ;;
+    *) bad "exportrel: declarations with no create flag are listed under not_replayable" "$ex_out" ;;
+esac
+
+# THE INSTALLED SECTIONS are this relationship's, and only this one's.
+case "$ex_out" in
+    *'"name":"hdd/backups/ksiegowosc/rpool/data/vm-101"'*)
+        ok "exportrel: the installed sections of this relationship ride along verbatim" ;;
+    *) bad "exportrel: the installed sections of this relationship ride along verbatim" "$ex_out" ;;
+esac
+case "$ex_out" in
+    *obcy*) bad "exportrel: a stranger's section is not exported" "$ex_out" ;;
+    *)      ok "exportrel: a stranger's section is not exported" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# THE REV-136 GATE, APPLIED HERE FROM THE START. E41's rule says a defect found
+# once is a question about the whole tree -- so this reader asks record_load's
+# status too, and the control ships with the verb rather than after a review.
+# ---------------------------------------------------------------------------
+printf "CLIENT_NAME=broken\nSTATE='unterminated\n" > "$EX/clients/broken.conf"
+if ! ex_run export-relation broken --json && [ "$(wc -c < "$WORK/ex.out" | tr -d ' ')" -eq 0 ]; then
+    ok "exportrel: a refused record produces no document at all, and a non-zero status"
+else
+    bad "exportrel: a refused record produces no document at all, and a non-zero status" \
+        "$(cat "$WORK/ex.out")"
+fi
+rm -f "$EX/clients/broken.conf"
+
+# A relationship with almost nothing declared must not emit empty flags: an
+# `--profile=` with no value is a different request from not passing it.
+printf 'CLIENT_NAME=chudy\nSTATE=created\nPEER_HOST=10.0.0.12\n' > "$EX/clients/chudy.conf"
+ex_run export-relation chudy --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.0.0.12"]'*)
+        ok "exportrel: an absent declaration produces no flag at all, never an empty one" ;;
+    *) bad "exportrel: an absent declaration produces no flag at all, never an empty one" "$(cat "$WORK/ex.out")" ;;
+esac
+# ...and with no config in reach, installed says so rather than inventing.
+case "$(cat "$WORK/ex.out")" in
+    *'"installed":{"config":"","config_readable":false,"sections":[]}'*)
+        ok "exportrel: no reachable config is reported as such, not as an empty relationship" ;;
+    *) bad "exportrel: no reachable config is reported as such, not as an empty relationship" "$(cat "$WORK/ex.out")" ;;
+esac
+
+# THE TEXT FORM carries the same command, ready to paste.
+ex_run export-relation ksiegowosc
+if grep -q 'add-client ksiegowosc' "$WORK/ex.out" \
+   && grep -q -- '--source-profile=d7h24-lite' "$WORK/ex.out" \
+   && grep -q 'activate ksiegowosc' "$WORK/ex.out" \
+   && grep -q 'NIE odtwarza sie' "$WORK/ex.out"; then
+    ok "exportrel: the text form prints the ready command and names what it cannot replay"
+else
+    bad "exportrel: the text form prints the ready command and names what it cannot replay" "$(cat "$WORK/ex.out")"
+fi
+
+# REFUSALS.
+if ! ex_run export-relation && grep -q "requires a relationship name" "$WORK/ex.err" "$WORK/ex.out"; then
+    ok "exportrel: no name is refused"
+else
+    bad "exportrel: no name is refused" "$(cat "$WORK/ex.out" "$WORK/ex.err")"
+fi
+if ! ex_run export-relation a b && grep -q "exactly one relationship name" "$WORK/ex.err" "$WORK/ex.out"; then
+    ok "exportrel: two names are refused"
+else
+    bad "exportrel: two names are refused" "$(cat "$WORK/ex.out" "$WORK/ex.err")"
+fi
+if ! ex_run export-relation nosuch && grep -q "no relationship 'nosuch'" "$WORK/ex.err" "$WORK/ex.out"; then
+    ok "exportrel: an unknown relationship is refused by name"
+else
+    bad "exportrel: an unknown relationship is refused by name" "$(cat "$WORK/ex.out" "$WORK/ex.err")"
 fi
 
 echo "--------------------------------------------"
