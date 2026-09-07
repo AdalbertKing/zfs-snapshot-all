@@ -1,0 +1,149 @@
+Edytor profilu: otworz szablon, zmien, zapisz jako swoj (80 kolumn)
+==================================================================
+
+ZASTEPUJE edytor-polityki-80.txt, ktory rysowal edycje polityki ISTNIEJACEJ
+relacji. Tamten zakres zostal odrzucony przez wlasciciela 2026-09-07: GUI nie
+modyfikuje relacji, a zmiana oznacza usun-i-zaloz. Ten ekran jest tym, co z
+tamtego rysunku przezylo -- i jest mniejszy.
+
+Za tym ekranem stoi JEDEN czasownik i nic wiecej:
+
+    zfs-backup.sh save-profile --from=NAZWA --as=NAZWA2 \
+          [--tier=SZCZEBEL --pole=wartosc ...] [--description=TEKST]
+
+Pisze PLIK w /etc/zfs-snapshot-all/profiles i nie dotyka niczego
+zainstalowanego: zadnej relacji, zadnej sekcji configu, zadnej linii crona.
+Profil jest szablonem dla PRZYSZLYCH relacji, wiec zapis -- nawet pod
+istniejaca nazwa -- nie siega niczego juz zbudowanego.
+
+WEJSCIE. Dwa, oba prowadza tutaj:
+
+    Ekran glowny -> [Profile]        -> lista (list-profiles --json)
+                                     -> Enter: podglad TYLKO DO ODCZYTU
+                                     -> F2 "Zapisz jako..." -> edytowalny
+    Kreator relacji -> wybor polityki -> [Nowy na podstawie...]
+
+Profil FABRYCZNY otwiera sie tylko do odczytu i tak wyglada. Edytowalny staje
+sie dopiero po F2 -- to jest moment, w ktorym powstaje kopia w katalogu
+operatora, i jedyna rzecz odrozniajaca "patrze na szablon" od "tworze wlasny".
+
+SZESC ROZSTRZYGNIEC
+
+1. KSZTALT JEST WYPROWADZONY, NIE WYBIERANY. Jedna rodzina vs rodzina na
+   szczebel wynika z tego, ile roznych `pattern` profil prunuje --
+   list-profiles juz to liczy i podaje jako `shape`. Zmiana ksztaltu
+   przepisalaby `pattern` we wszystkich szczeblach naraz; save-profile tego
+   nie robi. Wiec to jest FAKT na ekranie, nie kontrolka.
+
+2. MECHANIZM JEST PER SZCZEBEL (wlasciciel, 2026-09-07). Tam realnie zyje:
+   `gfs` jest polem sekcji [template:<szczebel>]. Globalny przelacznik nad
+   siatka sugerowalby wlasnosc profilu, ktorej ten obiekt nie ma.
+
+3. LISTY ROZWIJANE TYLKO TAM, GDZIE JEST SKAD WZIAC WARTOSCI. Lista wpisana
+   w GUI to druga kopia schematu -- ksztalt, ktory ten pakiet tepi kontraktami
+   w test/deps.conf. Stad: radio dla mechanizmu (trzy wartosci wynikajace
+   z pol gfs/keep/retain), checkbox dla quiesce (jest/nie ma), pole liczbowe
+   dla "ile", pole tekstowe dla harmonogramow i progow.
+
+4. PASEK POD SIATKA TLUMACZY SZCZEBEL Z FOKUSEM NA SKUTEK. To jedyne miejsce
+   w calym GUI, gdzie da sie uprzedzic awarie zmierzona na pve10 2026-09-04:
+   drabina GFS po postoju dluzszym niz jej zasieg kasuje CALA rodzine, cicho
+   i z rc=0 (-G -H24 -D7 zostawilo 0 z 6). Radiobutton z napisem "GFS" nie
+   mowi tego. Zdanie mowi.
+
+5. NAZWA NIE JEST WYPROWADZANA, ale rozjazd jest NAZWANY. profiles/README.md
+   mowi "nazwa to retencja" i test/profiles to egzekwuje -- przeciw katalogowi
+   PAKIETU. Katalog operatora nim nie jest, wiec nazwa niezgodna z retencja
+   dostaje ostrzezenie, nie odmowe. save-profile robi dokladnie to samo.
+
+6. F9 RENDERUJE PRAWDZIWYM gen-cron. Okno nie powtarza ani jednej reguly
+   walidacji: pokazuje odmowe doslownie. To samo robi save-profile po stronie
+   CLI -- waliduje, a POTEM renderuje, bo `keep = xyz` przechodzi walidacje
+   i umiera przy renderowaniu.
+
+
+PODGLAD PROFILU FABRYCZNEGO (tylko do odczytu)
+
+ Plik  Relacja  Kolektor  Widok  Pomoc                       pve9 | zfsbackup
+╔═ Profil: d7h24 ═══════════════════════ FABRYCZNY -- tylko do odczytu ══════╗
+║ Ksztalt:  osobna rodzina na kazdy szczebel        (wyprowadzony, nie wybor)║
+║ Plik:     <pakiet>/profiles/d7h24.conf                                     ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ szczebel   wysylka       prune         ile   mechanizm             quiesce ║
+║ hourly     1 * * * *     21 * * * *     24   (o)FLAT ( )GFS ( )AGE   [ ]   ║
+║ daily      11 1 * * *    31 1 * * *      7   (o)FLAT ( )GFS ( )AGE   [x]   ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ hourly:  "24" znaczy 24 NAJNOWSZE, niezaleznie od wieku (keep = 24).       ║
+║          GFS trzymalby po jednej na godzine przez 24 h -- i po postoju     ║
+║          dluzszym niz doba rodzina znika w calosci. Zmierzone na pve10:    ║
+║          -G -H24 -D7 zostawilo 0 z 6, cicho, rc=0.                         ║
+║          monitor: warn 90m   crit 150m                                     ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ Opis: 7 dobowych + 24 godzinowe, dwie rodziny, dobowe koherentne           ║
+║ F2 Zapisz jako...   Esc Zamknij                    (edycja dopiero po F2)  ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Pola sa wyszarzone, nie ukryte: operator ma widziec, co profil zawiera, zanim
+zdecyduje, czy chce wlasna kopie. Jedyny aktywny klawisz to F2.
+
+
+PO F2 -- WLASNA KOPIA, EDYTOWALNA
+
+╔═ Profil: d7h4 ═══════════════════════════ WLASNY -- edytowalny ════════════╗
+║ Ksztalt:  osobna rodzina na kazdy szczebel        (wyprowadzony, nie wybor)║
+║ Na podstawie: d7h24 (pakiet)      Plik: /etc/zfs-snapshot-all/profiles/    ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ szczebel   wysylka       prune         ile   mechanizm             quiesce ║
+║ hourly     1 * * * *     21 * * * *   ▓ 4▓   (o)FLAT ( )GFS ( )AGE   [ ]   ║
+║ daily      11 1 * * *    31 1 * * *      7   (o)FLAT ( )GFS ( )AGE   [x]   ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ hourly:  "4" znaczy 4 NAJNOWSZE, niezaleznie od wieku (keep = 4).          ║
+║          Renderuje sie do:  delsnaps.sh ... "automated_hourly" -H4         ║
+║          monitor: warn [90m ]   crit [150m]                                ║
+║ ────────────────────────────────────────────────────────────────────────── ║
+║ Nazwa: [d7h4______________]   (nazwa d7h4 zgadza sie z retencja: d7 h4)    ║
+║ Opis:  [7 dobowych + 4 godzinowe_______________________________________]   ║
+║ F9 Podglad (prawdziwy render)   F2 Zapisz   Esc Anuluj                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+"Renderuje sie do" jest wazniejsze niz wyglada: to jest tlumaczenie, ktorego
+front end nie umie zrobic sam -- `keep = 4` staje sie `-H4` przez tabele liter
+gen-crona, ktora ten program czyta przez --dump-tier-letters i ktorej kopii nie
+trzyma. list-profiles --json podaje to jako `retain_rendered`.
+
+
+ROZJAZD NAZWY -- OSTRZEZENIE, NIE ODMOWA
+
+║ Nazwa: [d30h24____________]                                                ║
+║  !  nazwa obiecuje retencje [d30 h24], a profil renderuje [d7 h4].         ║
+║     profiles/README.md mowi "nazwa to retencja" -- ta regula jest          ║
+║     egzekwowana wobec katalogu PAKIETU, nie wobec Twojego. Zapis przejdzie.║
+
+
+CO SIE MAPUJE NA CO
+
+    kontrolka                 pole [template:]      flaga save-profile
+    ------------------------  --------------------  ---------------------
+    "ile"                     keep / retain         --keep= / --retain=
+    radio mechanizm           gfs (+ keep vs retain) --gfs= / --keep=/--retain=
+    checkbox quiesce          quiesce               --quiesce=auto,degrade
+                                                    (odznaczony = pole usuwane)
+    wysylka / prune           send_schedule         --send_schedule=
+                              prune_schedule        --prune_schedule=
+    warn / crit               monitor_warn          --monitor_warn=
+                              monitor_crit          --monitor_crit=
+    Opis                      [profile] description --description=
+    Nazwa                     nazwa pliku           --as=
+
+Zadna z tych kontrolek nie ma wlasnej walidacji. F9 renderuje kandydata
+prawdziwym gen-cronem i pokazuje jego odmowe doslownie; F2 jest zablokowane do
+czasu czystego renderu -- tak samo jak save-profile nie tworzy pliku, dopoki
+nie przejdzie walidator I render.
+
+
+CZEGO TEN EKRAN NIE ROBI
+
+Nie dotyka zadnej relacji. Nie ma tu przycisku "zastosuj do relacji X" i nie
+bedzie: profil jest szablonem dla PRZYSZLYCH relacji, a relacje juz zbudowane
+zostaja przy tym, co maja. Zeby zmienic dzialajaca relacje, usuwa sie ja
+i zaklada od nowa -- export-relation podaje kreatorowi gotowe odpowiedzi.
