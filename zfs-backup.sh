@@ -499,6 +499,17 @@ Inspection / teardown:
                                     to. A profile that does not validate is a row
                                     saying so, never a fatal for the whole catalogue.
   zfs-backup.sh show-config NAME [--json] [--config=PATH]
+  zfs-backup.sh export-relation NAME [--json] [--config=PATH]
+                                    The relationship's DECLARATIONS -- the answers a
+                                    person gave -- as a document, plus the exact
+                                    add-client argv that replays them. Derived facts
+                                    (managed datasets, the installed endpoint, the
+                                    digest), history and host-local paths are
+                                    deliberately NOT exported: they stop being true
+                                    the moment the file moves. Declarations with no
+                                    create flag are listed under not_replayable rather
+                                    than dropped, and the installed sections ride
+                                    along verbatim as documentation.
                                     Every section of the installed config this
                                     relationship owns, plus the [template:] tiers they
                                     reference and the collector-wide [defaults]/
@@ -10612,6 +10623,224 @@ cmd_monitor() {
 }
 
 # ------------------------------------------------------------------------------
+# export-relation -- THE ANSWERS, NOT THE STATE
+# ------------------------------------------------------------------------------
+# Owner decision, 2026-09-07, after the writer verbs were abandoned: the GUI does
+# not modify an existing relationship. Changing one means deleting it and
+# creating it again -- and this verb is what makes that cheap, by handing the
+# wizard the answers it would otherwise ask for from scratch.
+#
+# THE DISTINCTION THE WHOLE DESIGN RESTS ON: a relationship's STATE lives in
+# several places, and almost none of it belongs in a file you carry around.
+#
+#   the record          declarations AND derived facts, mixed in one file
+#   the config sections what those declarations rendered into, on THIS host
+#   the pairing manifest, the keys, the signed scope on the SOURCE
+#                       NOT the relationship -- they belong to the PAIRING, and
+#                       they survive remove-client precisely because of that
+#
+# So this exports the DECLARATIONS: the answers a person gave. It deliberately
+# drops what the tool derived from them (MANAGED_DATASETS, INSTALLED_ENDPOINT,
+# the digest), what is history (CREATED_AT, ACTIVATED_AT, STATE) and what is
+# true only here (CRON_CONFIG). Carrying those would be carrying claims that
+# stop being true the moment the file moves.
+#
+# WHAT MAKES THE IMPORT SIDE FREE. The exported answers are ARGUMENTS to the
+# create path that already exists -- `add-client` and the seed/activate that
+# follow it. There is no new writer, no second grammar, and no second place
+# where a config is written. A file naming an unpaired host or a profile that
+# does not exist meets exactly the refusals a hand-typed command would.
+#
+# AND WHAT IT CANNOT REPLAY, said in the document rather than discovered later.
+# Some declarations have no flag on the create path -- an endpoint's dormant
+# LAN/VPN slot, for instance, which set-endpoint owns. Those are exported (they
+# are still true, and the file doubles as documentation) and listed under
+# `not_replayable`, so a front end can show them instead of silently dropping
+# them. The installed sections ride along verbatim for the same reason: they are
+# what the answers RENDERED into, which is worth reading when rebuilding, even
+# though the wizard reproduces them from the profile rather than from this file.
+#
+# The flag names below are a MAPPING, which cannot be derived -- it is semantic.
+# The suite asserts that every flag named here is one cmd_add_client actually
+# parses, which is where that control belongs: same discipline as the FIELD_OK
+# scrape, one layer out.
+
+# <record field>:<create flag>, in the order the wizard asks. A field with no
+# flag is listed in EXPORT_RELATION_UNREPLAYABLE instead, never silently.
+EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target REQUESTED_DATASETS:requested RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
+# Declarations that are true and have no create flag. PASSIVE is here for a
+# different reason than the endpoints: it HAS a flag (--passive) but it is a
+# bare switch, so it is emitted by the composer below rather than as key=value.
+EXPORT_RELATION_UNREPLAYABLE="ENDPOINT_LAN_HOST ENDPOINT_LAN_PORT ENDPOINT_VPN_HOST ENDPOINT_VPN_PORT ENDPOINT_KNOWN ACTIVE_ENDPOINT"
+# Derived, historical or host-local. Never exported: carrying them would carry
+# claims that stop being true the moment the file moves.
+EXPORT_RELATION_DROPPED="STATE MANAGED_DATASETS MANAGED_PRUNE_SCOPE INSTALLED_ENDPOINT PROFILE_DIGEST_RECORDED CREATED_AT ACTIVATED_AT SEED_COMPLETED_AT REMOVED_AT ENDPOINT_VERIFIED_AT ENDPOINT_VERIFIED_FOR FINAL_CATCHUP_AT FINAL_CATCHUP_EPOCH FINAL_CATCHUP_ENDPOINT FINAL_CATCHUP_HOST FINAL_CATCHUP_PORT MOVED_AT MOVED_FROM MOVED_TO CRON_CONFIG CLIENT_NAME RUX_SOURCE RUX_TARGET"
+
+# The numbered exclusion fields, read the way the program reads them everywhere
+# else: in order, stopping at the FIRST GAP. A gap is where the tool stops
+# looking, so an export that reached past one would promise something no run
+# would honour.
+export_relation_numbered() {   # <prefix, e.g. EXCLUDE_CHILD> -> one value per line
+    local i=1 n v
+    while :; do
+        n="${1}_$i"; v="${!n:-}"
+        [ -n "$v" ] || break
+        printf '%s\n' "$v"
+        i=$((i + 1))
+    done
+}
+
+cmd_export_relation() {
+    local name="" as_json=0 config_arg="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)     as_json=1 ;;
+            --config=*) config_arg="${a#*=}" ;;
+            -*)         die "export-relation: unknown option '$a' (only --json and --config=PATH)" ;;
+            *)          [ -z "$name" ] || die "export-relation: takes exactly one relationship name"
+                        name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "export-relation requires a relationship name"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no relationship '$name' (no record at $cpath)"
+    # The same gate REV-20260907-136 put on every reader: a record the parser
+    # refuses must not become a document somebody rebuilds a host from.
+    record_load client "$cpath" \
+        || die "export-relation: the record at $cpath was refused (see above) -- refusing to export declarations read out of a file this package does not accept."
+
+    [ -n "$config_arg" ] && CRON_CONFIG="$config_arg"
+    [ -n "${CRON_CONFIG:-}" ] || read_server_conf
+    local cfg="${CRON_CONFIG:-}"
+
+    # --- the declarations, and the flags they replay as ---------------------
+    local pair fld flag val
+    local decl_json="" first=1
+    local -a argv=()
+    for pair in $EXPORT_RELATION_MAP; do
+        fld="${pair%%:*}"; flag="${pair#*:}"
+        val="${!fld:-}"
+        [ -n "$val" ] || continue
+        [ "$first" -eq 1 ] || decl_json="$decl_json,"
+        first=0
+        decl_json="$decl_json\"$(json_escape "$fld")\":\"$(json_escape "$val")\""
+        argv+=("--$flag=$val")
+    done
+    # PASSIVE is a bare switch on the create path, so it cannot ride the
+    # key=value loop above.
+    if [ -n "${PASSIVE:-}" ] && [ "${PASSIVE:-}" != no ]; then
+        [ "$first" -eq 1 ] || decl_json="$decl_json,"
+        first=0
+        decl_json="$decl_json\"PASSIVE\":\"$(json_escape "$PASSIVE")\""
+        argv+=(--passive)
+    fi
+    local x
+    while IFS= read -r x; do
+        [ -n "$x" ] || continue
+        argv+=("--exclude-child=$x")
+    done <<EXC
+$(export_relation_numbered EXCLUDE_CHILD)
+EXC
+    while IFS= read -r x; do
+        [ -n "$x" ] || continue
+        argv+=("--exclude-family=$x")
+    done <<EXF
+$(export_relation_numbered EXCLUDE_FAMILY)
+EXF
+
+    # --- what is true and cannot be replayed --------------------------------
+    local unrep_json="" ufirst=1
+    for fld in $EXPORT_RELATION_UNREPLAYABLE; do
+        val="${!fld:-}"
+        [ -n "$val" ] || continue
+        [ "$ufirst" -eq 1 ] || unrep_json="$unrep_json,"
+        ufirst=0
+        unrep_json="$unrep_json{\"field\":\"$(json_escape "$fld")\",\"value\":\"$(json_escape "$val")\",\"why\":\"no flag on the create path; set-endpoint owns this after the relationship exists\"}"
+    done
+
+    if [ "$as_json" -eq 0 ]; then
+        echo "Relacja:           $name"
+        echo "Wyeksportowano z:  $(hostname 2>/dev/null || echo '?')  $(date -Is 2>/dev/null)"
+        echo
+        echo "Odtworzenie (te argumenty, ta kolejnosc):"
+        printf '  zfs-backup.sh add-client %s' "$name"
+        for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
+        printf '\n  zfs-backup.sh activate %s\n' "$name"
+        if [ -n "$unrep_json" ]; then
+            echo
+            echo "NIE odtwarza sie z tego pliku (kreator o to nie pyta):"
+            for fld in $EXPORT_RELATION_UNREPLAYABLE; do
+                val="${!fld:-}"
+                [ -n "$val" ] && printf '  %-22s = %s\n' "$fld" "$val"
+            done
+        fi
+        echo
+        echo "Pelny dokument (z zainstalowanymi sekcjami): --json"
+        return 0
+    fi
+
+    local argv_json="" afirst=1
+    for x in ${argv[@]+"${argv[@]}"}; do
+        [ "$afirst" -eq 1 ] || argv_json="$argv_json,"
+        afirst=0
+        argv_json="$argv_json\"$(json_escape "$x")\""
+    done
+
+    printf '{"schema":"zfs-backup/relation-export/1"'
+    jsonw_field name          "$name"
+    jsonw_field exported_from "$(hostname 2>/dev/null || printf '?')"
+    jsonw_field exported_at   "$(date -Is 2>/dev/null || printf '?')"
+    printf ',"declarations":{%s}' "$decl_json"
+    printf ',"replay":{"verb":"add-client","name":"%s","argv":[%s],"then":["activate"]}' \
+        "$(json_escape "$name")" "$argv_json"
+    printf ',"not_replayable":[%s]' "$unrep_json"
+    # The installed sections, verbatim, as documentation. NOT an import input:
+    # the wizard reproduces them from the profile plus the answers above. What
+    # is here and is not reproduced that way is a hand edit, and seeing it is
+    # the point.
+    printf ',"installed":'
+    if [ -n "$cfg" ] && [ -r "$cfg" ]; then
+        export_relation_installed_json "$cfg" "$name"
+    else
+        printf '{"config":"","config_readable":false,"sections":[]}'
+    fi
+    printf '}\n'
+}
+
+export_relation_installed_json() {   # <config> <client>
+    local cfg="$1" name="$2" dump
+    dump=$(config_section_dump "$cfg")
+    printf '{"config":"%s","config_readable":true,"sections":[' "$(json_escape "$cfg")"
+    local idx kind sname key val cur="" first=1 fields="" ffirst=1
+    local -A seen=()
+    local -a order=()
+    local -A K=() N=() F=()
+    while IFS=$'\001' read -r idx kind sname key val; do
+        [ -n "$idx" ] || continue
+        if [ -z "${seen[$idx]:-}" ]; then
+            seen[$idx]=1; order+=("$idx"); K[$idx]="$kind"; N[$idx]="$sname"; F[$idx]=""
+        fi
+        case "$key" in
+            @section|@managed_by) ;;
+            *) F[$idx]="${F[$idx]}$key"$'\001'"$val"$'\n' ;;
+        esac
+    done <<ERI
+$dump
+ERI
+    local i
+    for i in ${order[@]+"${order[@]}"}; do
+        case "${K[$i]}" in dataset|prune|prune-bookmarks) ;; *) continue ;; esac
+        section_owned_by "$cfg" "[${K[$i]}:${N[$i]}]" "$name" "${N[$i]}" || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"kind":"%s","name":"%s","fields":' "$(json_escape "${K[$i]}")" "$(json_escape "${N[$i]}")"
+        show_config_fields_json "${F[$i]}"
+        printf '}'
+    done
+    printf ']}'
+}
+
+# ------------------------------------------------------------------------------
 # list-profiles -- THE CATALOGUE, WITH THE ONE FACT A PICKER CANNOT GUESS
 # ------------------------------------------------------------------------------
 # V4 of the missing-verbs work order. Nothing in this package could enumerate
@@ -13225,6 +13454,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
         show-config)      shift; cmd_show_config "$@" ;;
+        export-relation)  shift; cmd_export_relation "$@" ;;
         list-profiles)    shift; cmd_list_profiles "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
         progress)         shift; cmd_progress "$@" ;;

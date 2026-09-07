@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 647f6a1a38c2692f -->
+<!-- status-covers-digest: ca1079b69f002dfb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,36 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`export-relation` — zapis relacji jako ODPOWIEDZI, nie jako stanu (2026-09-07).**
+  Decyzja właściciela: GUI **nie modyfikuje** istniejącej relacji. Zmiana =
+  usuń i załóż od nowa, a ten czasownik czyni to tanim, bo podaje kreatorowi
+  gotowe odpowiedzi. Paczka D (pisarze) **odwołana** — `set-policy` zamknięty
+  bez scalania (PR #343).
+  - **Eksportowane są DEKLARACJE**, czyli to, co człowiek podał. Świadomie
+    pomijane: fakty wyprowadzone (`MANAGED_DATASETS`, `INSTALLED_ENDPOINT`,
+    digest), historia (`CREATED_AT`, `STATE`) i to, co prawdziwe tylko tutaj
+    (`CRON_CONFIG`). Przeniesione gdzie indziej byłyby twierdzeniami, które
+    przestają być prawdziwe w chwili przeniesienia pliku.
+  - **Import jest darmowy, bo nie jest pisarzem.** Dokument niesie gotowe
+    `argv` do istniejącej ścieżki `add-client → activate`. Żadnej nowej
+    gramatyki, żadnego drugiego miejsca zapisu configu; plik wskazujący
+    niesparowany host odbija się od tych samych odmów, co ręczna komenda.
+  - **Czego nie odtworzy, mówi w dokumencie** (`not_replayable`) zamiast po
+    cichu pominąć — np. uśpiony slot LAN/VPN, którego kreator nie dotyka.
+    Zainstalowane sekcje jadą dosłownie jako dokumentacja.
+  - Kontrola, na której to stoi: **każda flaga z mapowania musi być flagą,
+    którą `cmd_add_client` naprawdę parsuje** — wyskrobane z programu, nie
+    przepisane. Kontrola ujemna: mapowanie wskazujące nieistniejącą flagę
+    wywala tę asercję i asercję argv. Plus kontrola populacji na samym
+    skrobaniu.
+  - Reguła luki numerowanej trzymana: `EXCLUDE_CHILD_1` i `_3` bez `_2` →
+    eksportowany jest tylko `_1`, bo wszędzie indziej numerowanie zatrzymuje
+    się na pierwszej dziurze.
+  - Bramka `record_load` z REV-136 jest tu **od początku**, nie po recenzji —
+    to zastosowanie reguły E41.
+  - Suita: 17 asercji. **Ukryty zysk:** zapisane relacje to plan odbudowy
+    kolektora — deklaracje w plikach, nie w głowie.
 
 - **REV-20260907-136: odmówiony rekord nie może stać się odpowiedzią (2026-09-07).**
   Recenzent znalazł P2 w scalonej paczce A. `record_load` **umiera** dla pola
