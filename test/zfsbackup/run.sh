@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -9231,6 +9231,208 @@ if grep -q '^Klient: *alpha' "$WORK/sj.out" && grep -q '^Stan: *active' "$WORK/s
     ok "statusjson: the text detail view is unchanged by the new option"
 else
     bad "statusjson: the text detail view is unchanged by the new option" "$(cat "$WORK/sj.out")"
+fi
+
+
+# ============================================================================
+# show-config: THE SECOND READER, AND THE FIRST TEST section_owned_by HAS EVER
+# HAD (V3, 2026-09-07). Self-contained; always eligible, also under
+# `--section showconfig`.
+#
+# The pinned line is the contract, for the reasons the statusjson section
+# gives. What is NOT in that line and matters more: this section is where the
+# claim in section_owned_by's own comment -- "the two tests are deliberately
+# identical" to the one remove_managed_sections applies -- is measured for the
+# first time. It was written in 2026-08 and nothing in the tree checked it, so
+# a screen built on it could have shown a different set of sections than
+# teardown removes, and neither side would have said so.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SC="$WORK/showconfig"; rm -rf "$SC"; mkdir -p "$SC/clients"
+cat > "$SC/cron.conf" <<'SCEOF'
+[defaults]
+	host_label   = pve2
+	repo_dir     = /root/scripts
+
+[dataset:tank/backup/alpha/vm-100]
+	# managed-by: zfs-backup.sh client=alpha
+	src          = root@10.0.0.1:rpool/data/vm-100
+	use_template = profile__default__standard_hourly
+	pair_label   = alpha
+	bandwidth    = 20M
+	exclude_child_1 = -swap$
+	prefix       =
+
+[dataset:tank/backup/alpha/vm-101]
+	use_template = profile__default__standard_hourly
+	pair_label   = alpha
+
+[prune:tank/backup/alpha]
+	# managed-by: zfs-backup.sh client=alpha
+	use_template = profile__default__keep_hourly,missing_tier
+	gfs          = yes
+
+[dataset:tank/other]
+	src          = root@10.0.0.5:rpool/x
+	use_template = profile__default__standard_hourly
+
+[template:profile__default__standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[excluded:__replicate_]
+	keep = 2
+SCEOF
+# vm-100 carries the MARKER. vm-101 carries none and is owned only through the
+# record -- the pre-marker shape every relationship enrolled before
+# REV-20260802-033 U11 still has on disk. tank/other is a stranger at a path
+# this relationship never recorded: neither test may claim it.
+{
+  echo "CLIENT_NAME=alpha"
+  echo "STATE=active"
+  echo "MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'"
+  echo "MANAGED_PRUNE_SCOPE=tank/backup/alpha"
+  echo "CRON_CONFIG=$SC/cron.conf"
+} > "$SC/clients/alpha.conf"
+printf 'CLIENT_NAME=beta\nSTATE=created\n' > "$SC/clients/beta.conf"
+
+sc_run() {   # <show-config args...> -- output to $WORK/sc.out, returns the rc
+    ( CLIENTS_DIR="$SC/clients"
+      SERVER_CONF="$SC/no-such-server-conf"
+      cmd_show_config "$@" ) >"$WORK/sc.out" 2>&1
+}
+
+sc_want='{"client":"alpha","config":"CONFIGPATH","config_readable":true,"sections":[{"kind":"dataset","name":"tank/backup/alpha/vm-100","managed_marker":true,"fields":{"src":"root@10.0.0.1:rpool/data/vm-100","use_template":"profile__default__standard_hourly","pair_label":"alpha","bandwidth":"20M","exclude_child_1":"-swap$","prefix":""}},{"kind":"dataset","name":"tank/backup/alpha/vm-101","managed_marker":false,"fields":{"use_template":"profile__default__standard_hourly","pair_label":"alpha"}},{"kind":"prune","name":"tank/backup/alpha","managed_marker":true,"fields":{"use_template":"profile__default__keep_hourly,missing_tier","gfs":"yes"}}],"templates":[{"name":"profile__default__standard_hourly","present":true,"fields":{"send_schedule":"1 * * * *","prefix":"automated_hourly_"}},{"name":"profile__default__keep_hourly","present":true,"fields":{"prune_schedule":"21 * * * *","pattern":"automated_hourly","keep":"24"}},{"name":"missing_tier","present":false,"fields":{}}],"host":{"defaults":{"host_label":"pve2","repo_dir":"/root/scripts"},"excluded":[{"prefix":"__replicate_","fields":{"keep":"2"}}]}}'
+
+sc_run alpha --json
+sc_got="$(sed "s|$SC/cron.conf|CONFIGPATH|" "$WORK/sc.out")"
+if [ "$sc_got" = "$sc_want" ]; then
+    ok "showconfig: the pinned contract, section for section and field for field"
+else
+    bad "showconfig: the pinned contract, section for section and field for field" \
+        "want: $sc_want" "got:  $sc_got"
+fi
+
+# THE EMPTY FIELD. `prefix =` with no value is a documented state in this
+# grammar, and it is exactly what a separator made of TAB destroys: tab is IFS
+# whitespace, so `IFS=$'\t' read` collapses a run of separators and the empty
+# value disappears together with the field. Measured while writing this, before
+# it shipped; SOH is not IFS whitespace, so the field survives. Asserted by
+# NAME rather than by the pinned line above, because in that line a missing
+# field looks like any other diff.
+case "$sc_got" in
+    *'"prefix":""'*) ok "showconfig: a field with an empty value survives the parse and is reported as empty" ;;
+    *) bad "showconfig: a field with an empty value survives the parse and is reported as empty" "$sc_got" ;;
+esac
+
+# OWNERSHIP, ONE CASE AT A TIME.
+case "$sc_got" in
+    *'"name":"tank/other"'*)
+        bad "showconfig: a stranger's section at an unrecorded path is not claimed" "$sc_got" ;;
+    *)  ok "showconfig: a stranger's section at an unrecorded path is not claimed" ;;
+esac
+case "$sc_got" in
+    *'"name":"tank/backup/alpha/vm-101","managed_marker":false'*)
+        ok "showconfig: a pre-marker section is owned through the record, and says it has no marker" ;;
+    *) bad "showconfig: a pre-marker section is owned through the record, and says it has no marker" "$sc_got" ;;
+esac
+case "$sc_got" in
+    *'"name":"missing_tier","present":false'*)
+        ok "showconfig: a tier named by a dataset and defined nowhere is reported present:false, not omitted" ;;
+    *) bad "showconfig: a tier named by a dataset and defined nowhere is reported present:false, not omitted" "$sc_got" ;;
+esac
+case "$sc_got" in
+    *'"host":{"defaults":{"host_label":"pve2"'*)
+        ok "showconfig: collector-wide [defaults]/[excluded:] are under host, not among the relationship's sections" ;;
+    *) bad "showconfig: collector-wide [defaults]/[excluded:] are under host, not among the relationship's sections" "$sc_got" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# THE PARITY THAT MATTERS: what this screen SHOWS is what teardown REMOVES.
+#
+# section_owned_by's comment says its test is "deliberately identical" to the
+# one remove_managed_sections applies. Nothing measured that until now. Here the
+# two are run over the SAME fixture with the SAME record, and the sections
+# remove_managed_sections actually deletes are compared with the sections
+# show-config reports. A drift in either direction is a defect: showing less
+# than teardown removes hides a deletion, showing more promises one that will
+# not happen.
+# ---------------------------------------------------------------------------
+sc_shown=$(printf '%s' "$sc_got" | grep -o '"kind":"[a-z-]*","name":"[^"]*"' \
+           | sed 's/"kind":"\([a-z-]*\)","name":"\([^"]*\)"/[\1:\2]/' | sort)
+cp "$SC/cron.conf" "$SC/teardown.conf"
+sc_before=$(grep -c '^\[' "$SC/teardown.conf")
+(
+  MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'
+  MANAGED_PRUNE_SCOPE='tank/backup/alpha'
+  remove_managed_sections "$SC/teardown.conf" alpha \
+      tank/backup/alpha/vm-100 tank/backup/alpha/vm-101 tank/backup/alpha
+) >"$WORK/sc.teardown" 2>&1
+sc_removed=$(comm -23 <(grep '^\[' "$SC/cron.conf" | sort) <(grep '^\[' "$SC/teardown.conf" | sort))
+if [ "$sc_shown" = "$sc_removed" ]; then
+    ok "showconfig: the sections shown are exactly the sections remove_managed_sections removes"
+else
+    bad "showconfig: the sections shown are exactly the sections remove_managed_sections removes" \
+        "shown:   $(printf '%s' "$sc_shown"   | tr '\n' ' ')" \
+        "removed: $(printf '%s' "$sc_removed" | tr '\n' ' ')" \
+        "$(cat "$WORK/sc.teardown")"
+fi
+# ...and the comparison above is only worth anything if teardown removed
+# SOMETHING. Population control: three sections in, three sections fewer out.
+sc_after=$(grep -c '^\[' "$SC/teardown.conf")
+if [ "$sc_before" -eq $((sc_after + 3)) ]; then
+    ok "showconfig: the parity control actually ran -- teardown removed three sections"
+else
+    bad "showconfig: the parity control actually ran -- teardown removed three sections" \
+        "before=$sc_before after=$sc_after" "$(cat "$WORK/sc.teardown")"
+fi
+
+# A RELATIONSHIP WITH NOTHING INSTALLED is a state, not a refusal: rc 0, a
+# parseable empty answer, config_readable false. A front end opening the policy
+# tab on a freshly created relationship must not get an error dialog.
+if sc_run beta --json && [ "$(cat "$WORK/sc.out")" = '{"client":"beta","config":"","config_readable":false,"sections":[],"templates":[],"host":{"defaults":{},"excluded":[]}}' ]; then
+    ok "showconfig: a relationship with no installed config answers empty with rc 0, not a refusal"
+else
+    bad "showconfig: a relationship with no installed config answers empty with rc 0, not a refusal" "$(cat "$WORK/sc.out")"
+fi
+
+# REFUSALS.
+if ! sc_run --json && grep -q "requires a client name" "$WORK/sc.out"; then
+    ok "showconfig: --json without a client name is refused"
+else
+    bad "showconfig: --json without a client name is refused" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run alpha --nope && grep -q "unknown option" "$WORK/sc.out"; then
+    ok "showconfig: an unknown option is refused by name"
+else
+    bad "showconfig: an unknown option is refused by name" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run alpha beta && grep -q "exactly one client name" "$WORK/sc.out"; then
+    ok "showconfig: two client names are refused"
+else
+    bad "showconfig: two client names are refused" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run nosuch --json && grep -q "no client 'nosuch'" "$WORK/sc.out"; then
+    ok "showconfig: an unknown relationship is refused by name"
+else
+    bad "showconfig: an unknown relationship is refused by name" "$(cat "$WORK/sc.out")"
+fi
+
+# THE TEXT FORM carries the same three sections and names the missing tier.
+sc_run alpha
+if grep -q '^\[dataset:tank/backup/alpha/vm-100\]' "$WORK/sc.out" \
+   && grep -q 'bez znacznika' "$WORK/sc.out" \
+   && grep -q 'template:missing_tier.*BRAK' "$WORK/sc.out" \
+   && ! grep -q 'tank/other' "$WORK/sc.out"; then
+    ok "showconfig: the text form shows the same set, marks the unmarked one and names the missing tier"
+else
+    bad "showconfig: the text form shows the same set, marks the unmarked one and names the missing tier" "$(cat "$WORK/sc.out")"
 fi
 
 echo "--------------------------------------------"

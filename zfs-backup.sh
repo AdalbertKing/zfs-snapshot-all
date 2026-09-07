@@ -473,6 +473,16 @@ Inspection / teardown:
                                     peer and reports peer_pair_state=NOT_ASKED; the
                                     NAMED form asks the peer (ENABLED/DISABLED/
                                     UNKNOWN) and adds last_result from the stats log.
+  zfs-backup.sh show-config NAME [--json] [--config=PATH]
+                                    Every section of the installed config this
+                                    relationship owns, plus the [template:] tiers they
+                                    reference and the collector-wide [defaults]/
+                                    [excluded:] under "host". Ownership is the same
+                                    two-part rule remove-client applies (marker, else
+                                    the record's own managed paths), so this shows
+                                    exactly what teardown would remove. The layering
+                                    is NOT flattened: gen-cron.sh owns that
+                                    resolution and a second one would disagree with it.
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
 
@@ -10352,6 +10362,283 @@ status_running_now() {   # <local target prefix> -> one line per live record
 }
 
 # ------------------------------------------------------------------------------
+# show-config -- WHAT THIS RELATIONSHIP ACTUALLY HAS IN THE INSTALLED CONFIG
+# ------------------------------------------------------------------------------
+# V3 of the missing-verbs work order, and the second half of the order already
+# placed in OWNER-CONFIG-VERBS-2026-09-06.md. Without it the GUI's Polityka tab
+# has nothing to display and the dataset x tier matrix does not know which
+# dataset takes which tiers -- today the only way to find out is to open the INI
+# on the host and read it.
+#
+# WHAT IT DOES NOT DO, and this is the design decision rather than a shortcut:
+# it does NOT flatten the [dataset:] -> [template:] -> [defaults] layering into
+# one effective value per field. gen-cron.sh owns that resolution (resolve_field
+# and the per-field helpers around it), the layers are not the same for every
+# field -- keep/retain and monitor_warn/monitor_crit stop at the template, and
+# only DEFAULTS_POLICY_FIELDS reach [defaults] at all -- and a second
+# implementation of that would be a second answer to "what is this relationship's
+# retention", with the wrong one on the screen. So the layers are returned AS
+# LAYERS, which is also what the policy editor edits: every policy field lives
+# on [template:], and the GUI's own preview renders the candidate through the
+# real gen-cron.sh rather than predicting it.
+#
+# OWNERSHIP IS THE SAME TWO-PART RULE remove_managed_sections applies, and it
+# has to be: a screen that shows a different set of sections than the teardown
+# would remove is worse than no screen. Marker first ("# managed-by:
+# zfs-backup.sh client=<name>", written as each generated section's first
+# content line since REV-20260802-033 U11), then the record's own
+# MANAGED_DATASETS/MANAGED_PRUNE_SCOPE, which is what keeps every relationship
+# activated BEFORE that marker existed visible here. The suite pins the two
+# functions against one another on the same fixture.
+#
+# [defaults] and [excluded:] are returned under "host" rather than beside the
+# relationship's sections. They are collector-wide -- one [excluded:__replicate_]
+# governs every relationship on the machine -- and putting them in the same array
+# would invite a front end to offer them as if editing one relationship's copy.
+
+# One pass over a config, as DATA: every section, in file order, with its fields.
+#
+# SEPARATED BY SOH (), NOT BY TAB, and the difference is not cosmetic: tab
+# is IFS WHITESPACE, so `IFS=$'	' read` collapses a run of them and an EMPTY
+# field silently disappears -- measured here before it shipped. Empty fields are
+# not hypothetical in this grammar: a blank value is a documented state (an empty
+# [prune:] section blocked twelve of fourteen profiles once), and [defaults] has
+# no name at all. SOH is not IFS whitespace, so empties survive, and no config
+# value in this tree can contain it.
+#
+# `@section` opens a section even when it has no fields (a real state: an empty
+# [prune:<scope>] blocked twelve of fourteen profiles once, and it was invisible
+# precisely because nothing enumerated empty sections). `@managed_by` carries the
+# ownership marker, which is a COMMENT and would otherwise be dropped with the
+# other comments.
+config_section_dump() {   # <config file> -> idx SOH kind SOH name SOH key SOH value
+    awk '
+        { line=$0; sub(/\r$/,"",line); t=line; sub(/^[ \t]+/,"",t); sub(/[ \t]+$/,"",t) }
+        t ~ /^\[/ {
+            h=t; sub(/^\[/,"",h); sub(/\][ \t]*$/,"",h)
+            p=index(h,":")
+            if (p>0) { kind=substr(h,1,p-1); name=substr(h,p+1) } else { kind=h; name="" }
+            idx++
+            print idx "\001" kind "\001" name "\001@section\001"
+            next
+        }
+        idx == 0 { next }
+        t ~ /^# managed-by: zfs-backup\.sh client=/ {
+            v=t; sub(/^# managed-by: zfs-backup\.sh client=/,"",v)
+            print idx "\001" kind "\001" name "\001@managed_by\001" v
+            next
+        }
+        t ~ /^#/ { next }
+        t == ""  { next }
+        t !~ /=/ { next }
+        {
+            k=t; sub(/[ \t]*=.*$/,"",k)
+            v=t; sub(/^[^=]*=[ \t]*/,"",v)
+            print idx "\001" kind "\001" name "\001" k "\001" v
+        }
+    ' "$1"
+}
+
+cmd_show_config() {
+    local name="" as_json=0 config="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)     as_json=1 ;;
+            --config=*) config="${a#*=}" ;;
+            -*)         die "show-config: unknown option '$a' (only --json and --config=PATH)" ;;
+            *)          [ -z "$name" ] || die "show-config: takes exactly one client name"
+                        name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "show-config requires a client name"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    record_load client "$cpath"
+    # The relationship's own config first: which file cron reads for THIS
+    # relationship is a per-relationship fact (read_server_conf used to clobber
+    # it, which is its own entry in this file's history). read_server_conf is
+    # asked only when the record names none, so it can take nothing away.
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || { read_server_conf; config="${CRON_CONFIG:-}"; }
+
+    # A relationship that is not activated yet HAS no sections, and that is a
+    # state rather than a failure. Reported as an empty answer with
+    # config_readable=false, never as a refusal: a front end opening the policy
+    # tab on a freshly created relationship must get a parseable "nothing here".
+    if [ ! -r "$config" ]; then
+        if [ "$as_json" -eq 1 ]; then
+            printf '{"client":"%s","config":"%s","config_readable":false' \
+                "$(json_escape "$name")" "$(json_escape "$config")"
+            printf ',"sections":[],"templates":[],"host":{"defaults":{},"excluded":[]}}\n'
+        else
+            echo "Klient:            $name"
+            echo "Config:            ${config:-(relacja nie wskazuje zadnego, host nie ma server.conf)}"
+            echo "                   NIECZYTELNY albo nieistniejacy -- ta relacja nie ma jeszcze"
+            echo "                   zainstalowanych sekcji. To stan, nie awaria."
+        fi
+        return 0
+    fi
+
+    local dump; dump=$(config_section_dump "$config")
+
+    # Pass 1: which sections this relationship owns, and which templates they
+    # reference. Order is FILE ORDER, kept in _sc_order, because a config is
+    # read by a person too and reordering it here would make the screen and the
+    # file disagree about what sits next to what.
+    local -A _sc_kind=() _sc_name=() _sc_marker=() _sc_fields=() _sc_seen=()
+    local -a _sc_order=()
+    local idx kind sname key val
+    while IFS=$'\001' read -r idx kind sname key val; do
+        [ -n "$idx" ] || continue
+        if [ -z "${_sc_seen[$idx]:-}" ]; then
+            _sc_seen[$idx]=1; _sc_order+=("$idx")
+            _sc_kind[$idx]="$kind"; _sc_name[$idx]="$sname"
+            _sc_marker[$idx]=""; _sc_fields[$idx]=""
+        fi
+        case "$key" in
+            @section)    ;;
+            @managed_by) _sc_marker[$idx]="$val" ;;
+            *)           _sc_fields[$idx]="${_sc_fields[$idx]}$key"$'\001'"$val"$'\n' ;;
+        esac
+    done <<SCDUMP
+$dump
+SCDUMP
+
+    local -a owned=() tpl_ids=()
+    local -A tpl_seen=()
+    local i f k v
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        # section_owned_by, not a predicate of this reader's own. It already
+        # exists (REV-20260809-089) and is documented as deliberately identical
+        # to the test remove_managed_sections applies -- so asking it is what
+        # makes this screen show exactly the set teardown would remove. A second
+        # copy written here would have been a second answer to "is this mine",
+        # and the one on the screen would be the unverified one.
+        case "${_sc_kind[$i]}" in dataset|prune|prune-bookmarks) ;; *) continue ;; esac
+        section_owned_by "$config" "[${_sc_kind[$i]}:${_sc_name[$i]}]" "$name" "${_sc_name[$i]}" || continue
+        owned+=("$i")
+        while IFS=$'\001' read -r k v; do
+            [ "$k" = use_template ] || continue
+            local id
+            for id in ${v//,/ }; do
+                [ -n "$id" ] || continue
+                [ -n "${tpl_seen[$id]:-}" ] && continue
+                tpl_seen[$id]=1; tpl_ids+=("$id")
+            done
+        done <<SCF
+${_sc_fields[$i]}
+SCF
+    done
+
+    if [ "$as_json" -eq 0 ]; then
+        show_config_text "$name" "$config"
+        return 0
+    fi
+
+    printf '{"client":"%s","config":"%s","config_readable":true' \
+        "$(json_escape "$name")" "$(json_escape "$config")"
+    printf ',"sections":['
+    local first=1
+    for i in ${owned[@]+"${owned[@]}"}; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"kind":"%s","name":"%s","managed_marker":%s,"fields":' \
+            "$(json_escape "${_sc_kind[$i]}")" "$(json_escape "${_sc_name[$i]}")" \
+            "$([ "${_sc_marker[$i]}" = "$name" ] && echo true || echo false)"
+        show_config_fields_json "${_sc_fields[$i]}"
+        printf '}'
+    done
+    printf '],"templates":['
+    first=1
+    local id
+    for id in ${tpl_ids[@]+"${tpl_ids[@]}"}; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        local tidx=""
+        for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+            [ "${_sc_kind[$i]}" = template ] && [ "${_sc_name[$i]}" = "$id" ] && { tidx="$i"; break; }
+        done
+        # present=false is a REAL state and gen-cron refuses the whole config on
+        # it, so it has to be visible rather than an absent array member: a tier
+        # named by a dataset and defined nowhere is exactly what the operator
+        # needs to see, and the alternative is a silently shorter list.
+        if [ -n "$tidx" ]; then
+            printf '{"name":"%s","present":true,"fields":' "$(json_escape "$id")"
+            show_config_fields_json "${_sc_fields[$tidx]}"
+            printf '}'
+        else
+            printf '{"name":"%s","present":false,"fields":{}}' "$(json_escape "$id")"
+        fi
+    done
+    printf '],"host":{"defaults":'
+    local didx=""
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        [ "${_sc_kind[$i]}" = defaults ] && { didx="$i"; break; }
+    done
+    if [ -n "$didx" ]; then show_config_fields_json "${_sc_fields[$didx]}"; else printf '{}'; fi
+    printf ',"excluded":['
+    first=1
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        [ "${_sc_kind[$i]}" = excluded ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"prefix":"%s","fields":' "$(json_escape "${_sc_name[$i]}")"
+        show_config_fields_json "${_sc_fields[$i]}"
+        printf '}'
+    done
+    printf ']}}\n'
+}
+
+show_config_fields_json() {   # <key SOH value newline ...> -> a JSON object
+    local k v first=1
+    printf '{'
+    while IFS=$'\001' read -r k v; do
+        [ -n "$k" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '"%s":"%s"' "$(json_escape "$k")" "$(json_escape "$v")"
+    done <<SCFJ
+$1
+SCFJ
+    printf '}'
+}
+
+# The text form. Same data, same ownership rule, for the operator who is on the
+# host with a terminal and not a front end.
+show_config_text() {   # <client> <config>
+    local name="$1" config="$2"
+    echo "Klient:            $name"
+    echo "Config:            $config"
+    echo
+    local i
+    for i in ${owned[@]+"${owned[@]}"}; do
+        printf '[%s:%s]%s\n' "${_sc_kind[$i]}" "${_sc_name[$i]}" \
+            "$([ "${_sc_marker[$i]}" = "$name" ] || echo '   (bez znacznika -- rozpoznana po rekordzie relacji)')"
+        printf '%s' "${_sc_fields[$i]}" | while IFS=$'\001' read -r k v; do
+            [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
+        done
+        echo
+    done
+    [ "${#owned[@]}" -gt 0 ] || echo "(ta relacja nie ma w tym configu ani jednej sekcji)"
+    local id
+    for id in ${tpl_ids[@]+"${tpl_ids[@]}"}; do
+        local tidx=""
+        for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+            [ "${_sc_kind[$i]}" = template ] && [ "${_sc_name[$i]}" = "$id" ] && { tidx="$i"; break; }
+        done
+        if [ -n "$tidx" ]; then
+            printf '[template:%s]\n' "$id"
+            printf '%s' "${_sc_fields[$tidx]}" | while IFS=$'\001' read -r k v; do
+                [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
+            done
+        else
+            printf '[template:%s]   BRAK -- sekcja nie istnieje w tym configu; gen-cron odmowi calego pliku\n' "$id"
+        fi
+        echo
+    done
+}
+
+# ------------------------------------------------------------------------------
 # status --json -- THE DATA LAYER BEHIND THE FACTS THE TEXT VIEW PRINTS
 # ------------------------------------------------------------------------------
 # V1 of the missing-verbs work order (docs/discussions/OWNER-MISSING-VERBS-
@@ -10382,12 +10669,17 @@ status_running_now() {   # <local target prefix> -> one line per live record
 # for a list), and the two booleans are real JSON booleans so a front end never
 # has to know which strings this project considers true.
 
+# The two JSON writers every `--json` reader in this file shares. Named jsonw_*
+# rather than status_* because status was merely the first: show-config,
+# list-profiles and monitor emit through these same two, so the escaping and the
+# empty-array shape have one implementation between them.
+#
 # A record's field is DATA: a space-separated list is split, but never globbed.
 # `set -f` in a subshell rather than around the loop, because a bare `set -f`
 # inside a function leaks into everything the caller does afterwards. Without it
 # a value carrying * would be expanded against the working directory and the
 # array would carry filenames -- a record deciding what its reader reports.
-status_json_array() {   # <space-separated list> -> ["a","b"]
+jsonw_array() {   # <space-separated list> -> ["a","b"]
     ( set -f
       local w first=1
       printf '['
@@ -10399,7 +10691,7 @@ status_json_array() {   # <space-separated list> -> ["a","b"]
       printf ']' )
 }
 
-status_json_field() {   # <json name> <value> -> ,"name":"value"
+jsonw_field() {   # <json name> <value> -> ,"name":"value"
     printf ',"%s":"%s"' "$1" "$(json_escape "$2")"
 }
 
@@ -10460,28 +10752,28 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
     fi
 
     printf '{"name":"%s"' "$(json_escape "${CLIENT_NAME:-}")"
-    status_json_field state              "${STATE:-}"
-    status_json_field pair_label         "$label"
-    status_json_field peer_host          "${PEER_HOST:-}"
-    status_json_field active_endpoint    "${ACTIVE_ENDPOINT:-}"
-    status_json_field installed_endpoint "${INSTALLED_ENDPOINT:-}"
+    jsonw_field state              "${STATE:-}"
+    jsonw_field pair_label         "$label"
+    jsonw_field peer_host          "${PEER_HOST:-}"
+    jsonw_field active_endpoint    "${ACTIVE_ENDPOINT:-}"
+    jsonw_field installed_endpoint "${INSTALLED_ENDPOINT:-}"
     printf ',"endpoint_diverged":%s' "$diverged"
     printf ',"paused_local":%s' "$paused"
-    status_json_field peer_pair_state    "$peerstate"
-    status_json_field profile            "${PROFILE:-}"
-    status_json_field source_profile     "${SOURCE_PROFILE:-}"
-    status_json_field client_target      "${CLIENT_TARGET:-}"
-    status_json_field local_user         "${LOCAL_USER:-}"
-    status_json_field bandwidth          "${BANDWIDTH:-}"
-    status_json_field recursion          "${RECURSION:-}"
-    status_json_field passive            "${PASSIVE:-}"
-    status_json_field created_at         "${CREATED_AT:-}"
-    status_json_field activated_at       "${ACTIVATED_AT:-}"
-    status_json_field seed_completed_at  "${SEED_COMPLETED_AT:-}"
-    status_json_field removed_at         "${REMOVED_AT:-}"
-    printf ',"sources":';             status_json_array "$srcs"
-    printf ',"managed_datasets":';    status_json_array "${MANAGED_DATASETS:-}"
-    printf ',"managed_prune_scope":'; status_json_array "${MANAGED_PRUNE_SCOPE:-}"
+    jsonw_field peer_pair_state    "$peerstate"
+    jsonw_field profile            "${PROFILE:-}"
+    jsonw_field source_profile     "${SOURCE_PROFILE:-}"
+    jsonw_field client_target      "${CLIENT_TARGET:-}"
+    jsonw_field local_user         "${LOCAL_USER:-}"
+    jsonw_field bandwidth          "${BANDWIDTH:-}"
+    jsonw_field recursion          "${RECURSION:-}"
+    jsonw_field passive            "${PASSIVE:-}"
+    jsonw_field created_at         "${CREATED_AT:-}"
+    jsonw_field activated_at       "${ACTIVATED_AT:-}"
+    jsonw_field seed_completed_at  "${SEED_COMPLETED_AT:-}"
+    jsonw_field removed_at         "${REMOVED_AT:-}"
+    printf ',"sources":';             jsonw_array "$srcs"
+    printf ',"managed_datasets":';    jsonw_array "${MANAGED_DATASETS:-}"
+    printf ',"managed_prune_scope":'; jsonw_array "${MANAGED_PRUNE_SCOPE:-}"
     if [ "$ask" -eq 1 ]; then
         local pfx="${MANAGED_PRUNE_SCOPE:-${MANAGED_DATASETS:-}}"; pfx="${pfx%% *}"
         local last=""
@@ -12369,6 +12661,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
+        show-config)      shift; cmd_show_config "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
