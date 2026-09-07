@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 26948e7fb3f61838 -->
+<!-- status-covers-digest: c99bbf30d4896995 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -66,6 +66,27 @@
   z kodem 3, nie OK** — host, któremu ktoś wyczyścił blok, nie może raportować
   zdrowia. Najgorszy werdykt hosta stawia `CRITICAL` nad `UNKNOWN`, co jest
   własną regułą silnika dla tego samego pytania.
+
+  **WADĘ ZNALAZŁ LAB, NIE SUITA (pve10, 2026-09-07).** `monitor --json`
+  emitował **nieprawidłowy JSON** dla każdej linii monitora obejmującej więcej
+  niż jeden dataset: `check-snap-age.sh` drukuje LINIĘ NA DATASET, a surowy znak
+  nowej linii w stringu JSON to błąd składni — żaden front end by tego nie
+  sparsował. Kształt nie jest egzotyczny: pierwsza linia monitora na pve2
+  obejmuje TRZY datasety. Suita tego nie złapała, bo jej atrapa silnika
+  drukowała jedną linię i przez to **zgadzała się z błędem z definicji**.
+  Poprawka objęła atrapę tak samo jak kod. Escapowanie poszło do `jsonw_text`,
+  nie do `json_escape`: ta druga jest przypięta identycznie do dwóch
+  ZAMROŻONYCH kopii, których zadaniem są ścieżki datasetów, a te nowej linii
+  zawierać nie mogą.
+
+  **Zmierzone na pve10:** `list-profiles --json` dla 16 profili — **8,8 s** na
+  Linuksie wobec 399 s na maszynie deweloperskiej. Koszt to dwa uruchomienia
+  `gen-cron` na profil (`--dump-fields` w walidatorze, `--dump-tier-letters`
+  w `load_active_profile`). Jak na otwarcie listy wyboru w GUI to nadal dużo —
+  do wycięcia tam, nie w warstwie JSON. Lab potwierdził też na żywo: skasowanie
+  datasetu spod zainstalowanej linii daje UNKNOWN, a linia zostaje CRITICAL, bo
+  drugi dataset był przeterminowany (CRITICAL bije UNKNOWN); pauza relacji daje
+  `paused_local:true` ORAZ własne zdanie silnika o pauzie.
 
   **Znalezione po drodze, wpisane bo kosztowało:** `profil, który przechodzi
   walidację i umiera przy renderowaniu` (`keep = xyz`) zostawiał POŁOWĘ obiektu
