@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ca1079b69f002dfb -->
+<!-- status-covers-digest: 25bd423a407a9a81 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,35 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`save-profile` — ekran konstruujący profil (2026-09-07).**
+  Właściciel: *„Nie mamy ekranu konstruującego i zapisującego profil. Może
+  otwierać istniejący szablon i po modyfikacji proponować zapis.”*
+  `save-profile --from=NAZWA --as=NAZWA2 [--tier=SZCZEBEL --pole=wartość …]`.
+  **To NIE jest odrzucony pisarz.** `set-policy` edytował sekcję WEWNĄTRZ
+  działającego configu i to ściągnęło rozwidlone szczeble, nowy przedrostek
+  i przypadek w zamiatarce. Ten czasownik zapisuje **plik w katalogu profili**
+  i nie dotyka niczego innego: żadnej relacji, żadnej sekcji configu, żadnej
+  linii crona. Profil jest szablonem dla PRZYSZŁYCH relacji, więc zapis — nawet
+  pod istniejącą nazwą — nie sięga niczego już zbudowanego.
+  - **Pisze wyłącznie do `/etc/zfs-snapshot-all/profiles`**, nigdy do katalogu
+    pakietu: tam `git pull` z cogodzinnego self-update cofnąłby plik po cichu.
+  - **Dwie bramki przed powstaniem pliku**: walidator runtime'u, a potem
+    **prawdziwy render**. Drugiej nie da się pominąć i to jest zmierzone:
+    `keep = xyz` **przechodzi walidację i umiera przy renderowaniu**. Profil,
+    który waliduje się i nie renderuje, zostałby przyjęty tutaj i wybuchł przy
+    pierwszej relacji z niego zbudowanej.
+  - **Wada znaleziona przez uruchomienie, nie przez czytanie:** nazwa pliku
+    roboczego staje się tożsamością profilu przy renderowaniu
+    (`profile_name_of` → namespace szablonów), więc kopia `.profile-work.XXXX`
+    renderowała się pod nazwą odrzucaną przez walidator komponentów i bramka
+    renderu **odrzucała poprawny profil z powodu pliku tymczasowego**. Kopia
+    powstaje teraz pod nazwą docelową.
+  - „Nazwa jest retencją” — **mówione, nie egzekwowane**: reguła z
+    `profiles/README.md` dotyczy katalogu pakietu, nie katalogu operatora,
+    więc rozjazd jest ostrzeżeniem, nie odmową.
+  - Suita: 22 asercje, w tym kontrola, że **zainstalowany config jest bajt
+    w bajt ten sam** po zapisie profilu.
 
 - **`export-relation` — zapis relacji jako ODPOWIEDZI, nie jako stanu (2026-09-07).**
   Decyzja właściciela: GUI **nie modyfikuje** istniejącej relacji. Zmiana =

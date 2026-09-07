@@ -487,6 +487,19 @@ Inspection / teardown:
                                     with the reason in words, never skipped and never
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
+  zfs-backup.sh save-profile --from=NAZWA --as=NAZWA2
+                                    [--tier=SZCZEBEL --pole=wartosc ...]
+                                    [--description=TEKST] [--force]
+                                    Open an existing template, change it, save it as
+                                    your own -- into /etc/zfs-snapshot-all/profiles,
+                                    never into the package directory (the next
+                                    self-update pull would revert it). Touches NOTHING
+                                    installed: a profile is what FUTURE relationships
+                                    are built from, so saving one -- even over a name
+                                    that exists -- does not reach anything already
+                                    built. Two gates before the file appears: the
+                                    runtime's own validator, and an actual RENDER,
+                                    because `keep = xyz` validates and does not render.
                                     The retention catalogue: package profiles plus
                                     anything in /etc/zfs-snapshot-all/profiles, which
                                     shadows a package name. --json adds what a picker
@@ -10623,6 +10636,175 @@ cmd_monitor() {
 }
 
 # ------------------------------------------------------------------------------
+# save-profile -- OPEN A TEMPLATE, CHANGE IT, SAVE IT AS YOUR OWN
+# ------------------------------------------------------------------------------
+# Owner, 2026-09-07: "Nie mamy ekranu konstruującego i zapisującego profil. Może
+# otwierać istniejący szablon i po modyfikacji proponować zapis."
+#
+# THIS IS NOT THE WRITER VERB THAT WAS ABANDONED, and the difference is the whole
+# reason it is allowed to exist. set-policy edited a section INSIDE a running
+# config, which is what dragged in forked tiers, a new prefix and a sweeper case.
+# This writes a FILE in the profile directory and touches nothing else: no
+# relationship, no config section, no cron line, no installed state of any kind.
+# A profile is a template for FUTURE relationships -- the tree already says so at
+# apply_client_profile_choice ("CREATE-time provenance") -- so saving one, even
+# under a name that already exists, must not reach anything already built.
+#
+# IT WRITES ONLY TO THE OPERATOR'S DIRECTORY. PROFILE_ROOT is the package's, kept
+# in git: a file written there would be reverted by the next self-update pull,
+# silently, and the operator would watch their profile evaporate on the hour.
+# PROFILE_USER_ROOT already shadows it by name in profile_file, so saving
+# `default` as your own is a legitimate act with a defined meaning -- and
+# list-profiles already reports which copy won.
+#
+# TWO GATES BEFORE THE FILE EXISTS, in this order, on a temporary copy:
+#
+#   1. profile_validate_file -- the same validator load_active_profile uses, so
+#      a profile carrying a relationship-owned field is refused here rather than
+#      at the next add-client.
+#   2. AND THEN AN ACTUAL RENDER. Validation is not enough and this is measured,
+#      not assumed: `keep = xyz` PASSES profile_validate_file and dies inside
+#      load_active_profile (2026-09-07, found while building list-profiles, where
+#      it left half a JSON object behind). A profile that validates and cannot be
+#      rendered is a landmine with a date on it -- it would be accepted here and
+#      explode at the next relationship built from it.
+#
+# Only after both does the file move into place. A refusal leaves the profile
+# directory exactly as it was.
+#
+# WHAT IT DOES NOT DO: derive the name from the retention. `profiles/README.md`
+# says "the name is the retention" and test/profiles enforces it against the
+# SHIPPED catalogue; an operator's own directory is not that catalogue, and
+# refusing a name here would be inventing a rule the tree does not apply to this
+# directory. The mismatch is reported as a warning instead, computed from the
+# same rendered flags the suite compares -- said, not enforced.
+
+save_profile_dest() {   # <name> -> the path this verb would write
+    printf '%s/%s.conf' "$PROFILE_USER_ROOT" "${1%.conf}"
+}
+
+# The retention a profile's name PROMISES, and the one it renders. Compared for
+# a warning, never for a refusal (see the header). Letters lowercase, sorted, so
+# `d7h24` and `h24d7` compare equal -- the name is a set of tiers, not an order.
+save_profile_name_shape() {   # <name> -> normalised letter+count shape, or empty
+    printf '%s' "${1%.conf}" | tr 'A-Z' 'a-z' \
+        | grep -oE '[dhwmy][0-9]+' | sort | tr -d '\n'
+}
+
+cmd_save_profile() {
+    local from="" as="" tier="" desc="" force=0 a
+    local -a fname=() fvalue=()
+    for a in "$@"; do
+        case "$a" in
+            --from=*)        from="${a#*=}" ;;
+            --as=*)          as="${a#*=}" ;;
+            --tier=*)        tier="${a#*=}" ;;
+            --description=*) desc="${a#*=}" ;;
+            --force)         force=1 ;;
+            --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
+                             fvalue+=("${a#*=}") ;;
+            -*)              die "save-profile: unknown option '$a'" ;;
+            *)               die "save-profile: takes no positional arguments (use --from= and --as=)" ;;
+        esac
+    done
+    [ -n "$from" ] || die "save-profile: --from=NAME is required -- this verb opens an existing template and saves a modified copy; it does not compose a profile from nothing"
+    [ -n "$as" ]   || die "save-profile: --as=NAME is required -- the copy needs its own name"
+    case "$as" in
+        */*) die "save-profile: --as must be a NAME, not a path: the copy always lands in $PROFILE_USER_ROOT" ;;
+    esac
+    profile_name_ok "${as%.conf}" || die "save-profile: '$as' is not a usable profile name: ${PROFILE_ERR:-refused}"
+
+    local src; src=$(profile_file "$from")
+    [ -f "$src" ] || die "save-profile: no profile '$from' (looked in $PROFILE_USER_ROOT and $PROFILE_ROOT). Nothing was written."
+
+    local dest; dest=$(save_profile_dest "$as")
+    # Refusing to write into the package directory is not a policy choice, it is
+    # arithmetic: that directory is a git checkout the hourly self-update pulls.
+    case "$dest" in
+        "$PROFILE_ROOT"/*) die "save-profile: refusing to write into the package directory $PROFILE_ROOT -- the next self-update pull would revert it. Copies belong in $PROFILE_USER_ROOT." ;;
+    esac
+    if [ -e "$dest" ] && [ "$force" -ne 1 ]; then
+        die "save-profile: '$dest' already exists. Re-run with --force to replace it. (Replacing a profile changes what FUTURE relationships are built from; relationships already built from it are untouched -- the profile is create-time provenance.)"
+    fi
+
+    local fields_given=${#fname[@]}
+    if [ "$fields_given" -gt 0 ] && [ -z "$tier" ]; then
+        die "save-profile: --tier=NAME is required when changing fields -- a profile has several tiers and a change aimed at the wrong one is not visible in the result"
+    fi
+
+    mkdir -p "$PROFILE_USER_ROOT" || die "save-profile: could not create $PROFILE_USER_ROOT"
+    # THE WORKING COPY IS BUILT UNDER ITS FINAL NAME, in a directory of its own.
+    # Not cosmetic: load_active_profile derives the profile identity from the FILE
+    # NAME (profile_name_of) and namespaces every rendered template with it, so a
+    # copy called `.profile-work.XXXXXX` renders under a name the component check
+    # refuses -- and the render gate below then rejected a perfectly good profile
+    # because of the temp file it happened to sit in. Measured on the first run.
+    # Building it as <as>.conf also means both gates judge it under exactly the
+    # identity it will have.
+    local workdir; workdir=$(mktemp -d) || die "save-profile: mktemp -d failed"
+    local work="$workdir/${as%.conf}.conf"
+    cp -p "$src" "$work" || { rm -rf "$workdir"; die "save-profile: could not copy $src"; }
+    chmod 0644 "$work" 2>/dev/null || :
+
+    if [ -n "$tier" ]; then
+        cron_config_section "$work" "[template:$tier]" | grep -q . \
+            || { rm -rf "$workdir"; die "save-profile: '$from' has no tier '$tier'. It has: $(sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$src" | tr '\n' ' '). Nothing was written."; }
+    fi
+    local i=0
+    while [ "$i" -lt "$fields_given" ]; do
+        set_or_remove_section_field "$work" "[template:$tier]" "${fname[$i]}" "${fvalue[$i]}" \
+            || { rm -rf "$workdir"; die "save-profile: could not write '${fname[$i]}' into [template:$tier] -- nothing was written"; }
+        i=$((i + 1))
+    done
+    if [ -n "$desc" ]; then
+        set_or_remove_section_field "$work" "[profile]" description "$desc" \
+            || { rm -rf "$workdir"; die "save-profile: could not write the description -- nothing was written"; }
+    fi
+
+    # GATE 1: the same validator the runtime uses.
+    if ! profile_validate_file "$work" "$GENCRON"; then
+        local err="$PROFILE_ERR"
+        rm -rf "$workdir"
+        die "save-profile: the modified profile is not valid: $err. Nothing was written."
+    fi
+    # GATE 2: it must actually RENDER. Measured, not assumed -- `keep = xyz`
+    # passes the validator and dies in load_active_profile. Run in a subshell so
+    # that death costs this command and not the shell, and so the rendered temp
+    # files are released by the trap load_active_profile arms there.
+    if ! ( die_confine_to_subshell
+           PROFILE_ACTIVE="$work"; PROFILE_LOADED=""
+           load_active_profile >/dev/null 2>&1 ); then
+        rm -rf "$workdir"
+        die "save-profile: the modified profile passes validation but cannot be RENDERED -- it would be accepted here and fail at the next relationship built from it. Nothing was written. (A retention that is not a number does this: 'keep = xyz' validates and does not render.)"
+    fi
+
+    # The name is the retention -- said, not enforced. profiles/README.md's rule
+    # is about the SHIPPED catalogue, which this directory is not.
+    local want got
+    want=$(save_profile_name_shape "$as")
+    got=$( die_confine_to_subshell
+           PROFILE_ACTIVE="$work"; PROFILE_LOADED=""
+           load_active_profile >/dev/null 2>&1
+           sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*-([A-Za-z])([0-9]+).*/\1\2/p' "$PROFILE_TPL_FILE" \
+             | tr 'A-Z' 'a-z' | sort | tr -d '\n' )
+    if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+        warn "the name '$as' promises retention [$want] and this profile renders [$got]. profiles/README.md's rule is that the name IS the retention; that rule is enforced against the shipped catalogue, not against $PROFILE_USER_ROOT, so this is a warning and the file is being written."
+    fi
+
+    # Staged beside the destination so the last step is a rename inside one
+    # directory, even though the working copy lives on another filesystem.
+    local stage; stage=$(mktemp "$PROFILE_USER_ROOT/.profile-stage.XXXXXX") \
+        || { rm -rf "$workdir"; die "save-profile: mktemp failed in $PROFILE_USER_ROOT -- nothing was written"; }
+    cp "$work" "$stage" || { rm -rf "$workdir"; rm -f "$stage"; die "save-profile: could not stage the new profile -- nothing was written"; }
+    rm -rf "$workdir"
+    mv_preserving_mode "$stage" "$dest" || { rm -f "$stage"; die "save-profile: could not put $dest in place -- nothing was written"; }
+    chmod 0644 "$dest" 2>/dev/null || :
+    log "saved $dest (from '$from')."
+    log "Nothing installed changed: a profile is what FUTURE relationships are built from."
+    log "Use it with:  zfs-backup.sh add-client NAZWA --profile=${as%.conf} ..."
+}
+
+# ------------------------------------------------------------------------------
 # export-relation -- THE ANSWERS, NOT THE STATE
 # ------------------------------------------------------------------------------
 # Owner decision, 2026-09-07, after the writer verbs were abandoned: the GUI does
@@ -13456,6 +13638,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         show-config)      shift; cmd_show_config "$@" ;;
         export-relation)  shift; cmd_export_relation "$@" ;;
         list-profiles)    shift; cmd_list_profiles "$@" ;;
+        save-profile)     shift; cmd_save_profile "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
