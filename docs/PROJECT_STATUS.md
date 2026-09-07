@@ -21,6 +21,51 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Scalenie silników w `snapsync.sh` — wycenione, zlecone do osobnego wątku (2026-09-07).**
+  `docs/discussions/OWNER-ENGINE-MERGE-2026-09-07.md`. Właściciel: *„wyceń
+  zasadność deduplikacji snapsend.sh/snapget.sh do jednego skryptu i zostawienie
+  ich dwóch jako cienkiej wersji"*; nazwa docelowa `snapsync.sh`. Werdykt:
+  zasadne jako **scalenie kierunków pod recenzją**, nie jako deduplikacja —
+  8–11 dni w dwóch krokach. Zmierzone na `c18436f`: 872 z ~1150 linii kodu
+  identyczne (~75 %), 7 z 15 wspólnych funkcji bajtowo identyczne, a w
+  `process_dataset` **obie strony wywołują ten sam zbiór funkcji** — różnica
+  to zamienione sloty `"$remote_user" "$remote_host"` vs `"" ""`, czyli
+  konwencja zamiast danych. Od decyzji 08-04 („alarm zamiast scalenia"):
+  1 commit tylko-snapsend vs **10 tylko-snapget**, `twins.sha256`
+  błogosławione 22 razy, push nie ma `-Q`, linii `PLAN=`, `probe_dataset`,
+  pomijania rusztowania `-R -e` i wciąż ma 5 × `local x=$(...)`. Ryzyko
+  fail-open z 08-04 pozostaje prawdziwe; mitigacje: dwie jawne krotki
+  `SRC_*`/`TGT_*` zamiast parametru kierunku, stub `ssh` rejestrujący KOGO
+  zapytano (szew `stubbin` w `test/snapsend`), `remote --peer` na labie.
+  Trzy pułapki wrapperów: `basename "$0"` jest kluczem stanu na flocie
+  (lockfile, wznowienia, in-flight — nazwa silnika musi być jawnym
+  parametrem), `-V`/argv per wrapper, trzy pliki zamrożone. **Decyzja z
+  08-04 formalnie stoi** do czasu recenzji wstępnej z `authorizes-frozen`;
+  krok 0 (parytet push↔pull) zwraca się niezależnie od reszty. Poprawka
+  właściciela tego samego dnia: relacja jednoserwerowa (oba końce lokalne)
+  to czwarty tryb, w którym oba silniki przyjmują **ten sam argv** i
+  wykonują tę samą gałąź — duplikacja stuprocentowa; pierwsza wersja
+  dokumentu twierdziła, że snapget nie kopiuje lokalnie, bez sprawdzenia w
+  kodzie (E38). Druga poprawka właściciela („błąd może być kosztowny"):
+  `snapsync.sh` **nie jest powierzchnią użytkownika** — nazwa skryptu jest
+  drugim, niezależnym zapisem strony pisanej, a symetryczna gramatyka
+  usuwałaby tę redundancję dokładnie tam, gdzie `-f` robi `zfs destroy -R`;
+  gołe `snapsync.sh` odmawia, wrappery niosą ograniczenie strony jako sumę
+  kontrolną (P0). Trzecia rzecz, którą właściciel nazwał niedopuszczalną:
+  **merytoryczny rozjazd push↔pull**. Zmierzony i zaklasyfikowany (§3):
+  `-R -e` ma w push jedną z trzech gałęzi rusztowania i **brak bramki
+  zbiorczej** (rc=1 „No source snapshots found" tam, gdzie pull pomija;
+  fałszywy „All datasets processed successfully", gdy wszystko było
+  rusztowaniem), 5 masek `local x=$(...)` na ścieżce GUID, brak `PLAN=`,
+  brak odmowy na dysk działającego gościa po stronie celu; `-Q` i
+  `probe_dataset` to różnice kierunkowe, nie dryf. Alarm `twins` uciszono
+  commitem `fd26421` zdaniem „-e exists only on pull", które jest fałszywe
+  (`snapsend.sh:37`). **Plan naprawczy w §8 dokumentu**: pięć portów z
+  kontrolą negatywną każdy, plus trzy mechanizmy (powód obowiązkowy w
+  `twins.sha256` z terminem, scenariusze parowane w `test/snapsend`,
+  `twin:` obowiązkowy we wpisie freeze jednego silnika), 4–6 dni, ma sens
+  bez scalenia. Nic w kodzie nie zmienione.
+
 - **`save-profile` — ekran konstruujący profil (2026-09-07).**
   Właściciel: *„Nie mamy ekranu konstruującego i zapisującego profil. Może
   otwierać istniejący szablon i po modyfikacji proponować zapis.”*
@@ -5579,6 +5624,9 @@
   wygasło: pokrętła (`BUFFER_SIZE`, `MEMORY`, `BWLIMIT_FLAG`, `COMPRESS_PIPE`)
   są już wspólnymi zmiennymi w obu plikach, różni się tylko kształt potoku
   (~6 linii), a rozmiar bufora zmierzono jako nieistotny.
+  **Ponownie wycenione 2026-09-07** (`OWNER-ENGINE-MERGE-2026-09-07.md`,
+  wpis u góry): decyzja stoi, ale dane, na których ją oparto, zmieniły się —
+  rekomendacja to uchylenie pod recenzją wstępną, nie obejście.
 - Ostatnia zmiana zachowania produkcyjnego: **REV-20260804-042/043 —
   Gate G i Gate I kampanii enrolmentu zamknięte na żywo, dwa realne błędy
   znalezione i naprawione, plus jedna P1 korekta recenzenta zanim

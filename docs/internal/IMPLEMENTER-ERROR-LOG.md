@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39.*
+*Evidence: E8, E3, E27, E37, E39, E44.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1234,4 +1234,88 @@ QUESTION about the whole tree, not a repair at one address.** When a fix is
 written, grep for the shape -- the function, the field, the idiom -- and answer
 in the commit message how many sites were found and why the others are clean.
 "Fixed where I found it" is not a report.
+
+### E42 — "snapget cannot copy locally", written from the usage line, corrected by the Owner
+
+**2026-09-07, `OWNER-ENGINE-MERGE-2026-09-07.md`, caught by the Owner from the
+fleet's own relationships.**
+
+*Genesis.* A syntax table for the three engines put "(brak — cel lokalny,
+źródło musi mieć hosta)" in snapget's local-to-local cell. The Owner: "snapget
+potrafi lokalnie kopiować, przecież mamy relacje jednoserwerowe". Measured
+afterwards: `snapget.sh:349-352` documents a bare dataset as a LOCAL source
+("no ssh, used for local-to-local relocation/testing"), the parser leaves
+`_item_host` empty for it, and `test/snapsend/run.sh` -- a suite I had cited
+in the SAME document as "LOCAL MODE ONLY" -- runs snapget that way 27 times.
+
+*Cause.* The claim was derived from the usage line (`REMOTE_DATASETS
+[LOCAL_BASE]`) and the name of the first argument, not from the parser. Worse
+than E38: the authoritative surface was not merely elsewhere, it was already in
+my hands -- I had read the header block that says it, twenty lines below the
+line I quoted, and had measured the suite's local mode the same hour. A fact
+about one side of a boundary (the usage line) was carried across to the other
+(what the parser accepts) without looking.
+
+*Rule.* R2, and E38's lesson stated one notch harder: **a "the product does
+not do X" belongs in a document only after the input that would exercise X has
+been constructed and run, or the refusal that blocks it has been found by line
+number.** A name in a usage string is a label, not a contract. The correction
+went into the document as a fourth mode -- local in production -- in which the
+two engines' duplication is total; the mistake made the argument stronger, which
+is exactly why it should have been measured first.
+
+### E43 — A drift alarm answered with a sentence, and the sentence was false
+
+**2026-09-07, found while pricing the engine merge; the blessing is `fd26421`
+of 2026-08-21, a different session.**
+
+*Genesis.* `test/twins` refused, as designed, when `process_dataset` changed in
+`snapget.sh` only. The bless commit recorded the decision: "-e (adopt the
+existing family) EXISTS only on pull; push creates its snapshots and has no
+adoption path, so there is no equivalent fix to mirror." `snapsend.sh:37`
+documents `-e`; `USE_EXISTING_SNAPSHOT` drives the same code path at
+`snapsend.sh:1371`; two days later one of the three scaffolding branches WAS
+mirrored into push (`Only excluded families`, 1397) -- so the path was known
+to exist. The other two branches and the aggregate guard never followed.
+Measured today: push under `-R -e` fails a run over an empty path container
+that pull skips, and reports success for a run in which every member was
+scaffolding, where pull reports failure. Same flag, two behaviours, for
+seventeen days, under a green alarm.
+
+*Cause.* The alarm asks a question and accepts any answer. A claim about the
+other twin ("has no adoption path") was written from memory of what push DOES,
+not from a grep of what push HAS -- and nothing in the suite, the freeze entry
+(which authorised `snapget.sh` alone and said nothing about the twin), or the
+review asked for a line number. The `twin-functions` contract comment says the
+alarm makes a fix in one direction "a QUESTION about the other"; it does not
+say who checks the answer.
+
+*Rule.* R3. A recorded exception is a claim about code and gets the same
+proof as code: **a "the other side does not have X" blessing names the line
+that would have X and shows it absent.** Structurally, in
+`OWNER-ENGINE-MERGE-2026-09-07.md` section 8.2: a differing twin pair carries
+a mandatory reason with a line number or a port-by deadline, and a freeze
+entry naming one engine carries the twin's disposition. An alarm whose
+answer is not checked is a comment (R3), and it has now been measured as one.
+
+### E44 — A commit whose message describes an edit the commit does not contain
+
+**2026-09-07, commit `5bd9cc5`, caught by me one command later.**
+
+*Genesis.* One heredoc script edited three files; its third edit asserted on
+an evidence line that had changed shape (E41 had already been appended to
+R3's list) and the script died there. The next lines of the same shell call
+were `git add`, `--refresh-status`, `--verify`, `commit`, `push` -- not gated
+on the script's exit status. `--verify` was green (the two edits that landed
+were consistent), so `5bd9cc5` went out with a message claiming "E43 under
+R3" that the tree did not carry.
+
+*Cause.* R4, verbatim: a mutation chained behind a step that can fail. The
+heredoc printed a traceback and the shell went on, because nothing read its
+exit status. The same shape as E37, one session later.
+
+*Rule.* R4, evidence only -- no new rule. The mechanical form: a script that
+edits files ends the command; staging and committing start the next one,
+after the edit has been looked at. `python3 ... || exit 1` is the minimum
+when they must share a call.
 
