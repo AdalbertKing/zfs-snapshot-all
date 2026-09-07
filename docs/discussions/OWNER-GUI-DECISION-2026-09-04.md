@@ -232,6 +232,169 @@ Nawigacja: `F2`–`F6` przełączają ekrany, `Enter` otwiera okno na wierzchu,
 Zmierzone: ekran główny z panelem mieści się w 20 z 24 wierszy przy 80
 kolumnach.
 
+## 6a. Okno relacji i edytor polityki — najtrudniejsze okno
+
+Właściciel, 2026-09-07: *„Skupmy się na tym, co się dzieje po wejściu w
+tworzenie / modyfikacje relacji. To najtrudniejsze okno. […] Przyznaję, że nie
+mam pomysłu."* Poniżej jest pomysł, wyprowadzony z pól, a nie z wyobrażenia o
+formularzu.
+
+### Trzy obiekty, nie jeden formularz
+
+Zmierzone w `gen-cron.sh`: **każde** pole polityki — `gfs`, `keep`, `retain`,
+`quiesce`, `send_schedule`, `prune_schedule`, `prefix`, `monitor_warn/crit` —
+należy do `[template:<szczebel>]` (`POLICY_FIELDS`, `gen-cron.sh:1329`). Do
+relacji należą pola zupełnie inne: `use_template`, `pair_label`, pola ŁĄCZA
+(`bandwidth`, `compression`, `cipher`) i pola ZAKRESU (`passive`,
+`exclude_family`, `exclude_child_<n>`) — świadomie poza `POLICY_FIELDS`, bo
+nośnik polityki jest współdzielony przez datasety, które nie dzielą celu.
+
+Stąd podział, który czyni to okno projektowalnym:
+
+| obiekt | co niesie | gdzie |
+|---|---|---|
+| **relacja** | zakres, łącze, pauza, **którą polityką** | okno relacji |
+| **polityka** (profil) | szczeble: kadencja, ile, mechanizm, quiesce, progi | osobny edytor, wołany z relacji |
+| **wiązanie** | który dataset bierze które szczeble | macierz w oknie relacji |
+
+W oknie relacji retencji **nie ma** — jest nazwa polityki i dwa przyciski.
+Powód nie jest estetyczny: profil jest współdzielony, a edycja go „od środka
+jednej relacji" sugerowałaby zasięg, którego ten obiekt nie ma. Profile
+fabryczne są przy tym plikami pakietu, więc się ich nie edytuje, tylko
+**klonuje** — a namespace `profile__<nazwa>__<szczebel>` (`lib-profile.sh`) już
+dokładnie to obsługuje.
+
+### Wiązanie: macierz dataset × szczebel
+
+`gui-mockups/tui/relacja-polityka-macierz-80.txt` — czternaście datasets,
+cztery szczeble. Jedna komórka to jeden człon listy `use_template`.
+
+Sześć decyzji, które sprawiają, że czternaście wierszy jest czytelne:
+
+1. **Ścieżka skrócona o wspólny przedrostek** — nagłówek niesie `rpool/data/…`,
+   wiersze tylko liść. Dwa rozłączne korzenie = dwa nagłówki-separatory.
+2. **`≠` przy wierszu różnym od domyślnej.** W liście identycznych krzyżyków
+   oko nie znajdzie dwóch wyjątków, a to one są tym, co trzeba zobaczyć po
+   tygodniu. Znacznik zastępuje kolor (§2 pkt 3); klawisz `=` przywraca wiersz.
+3. **`!` i „bez zadania" dla wiersza z samymi pustymi polami.** Realny cichy
+   stan: dataset jest w zakresie, ale bez `use_template` nie powstanie dla
+   niego ani jedna linia crona. Dziś widać to dopiero po nieobecności zadania.
+4. **Wiersz domyślnej wpisany w siatkę**, a jego zmiana omija wiersze z `≠` —
+   inaczej jedno naciśnięcie kasowałoby wyjątki, których ktoś bronił.
+5. **Rekurencja zwija dzieci** (`recursive = yes` → `(+ dzieci)`), bo dzieci nie
+   mają własnych sekcji; bez tego jedna relacja rozwinęłaby listę do stu
+   pozycji opisujących jedną decyzję.
+6. **Operacje masowe z nagłówka i z filtru**: `Spacja` pole, `^Spacja` kolumna,
+   `*` wiersz, `/` filtr — po filtrze operacje masowe działają na
+   przefiltrowanym zbiorze.
+
+Twardy przypadek to nie liczba datasets, tylko profil o pięciu szczeblach z
+nazwami, które nie skracają się do jednej litery — `Y5M12D31H24` ma
+`solo_hourly`, `keep_hourly`, `keep_daily`, `keep_monthly`, `keep_yearly`, a
+dwie zaczynają się tak samo. Wtedy kolumny są **numerowane**, legenda stoi nad
+siatką, a cyfra staje się klawiszem
+(`relacja-polityka-macierz-5szczebli-80.txt`). Granica formy to około ośmiu
+szczebli; najdłuższy profil w drzewie ma pięć, więc więcej jest hipotezą, nie
+przypadkiem projektowym.
+
+**Budżet wierszy, powiedziany wprost:** okno macierzy ma 24 wiersze razem z
+ramką, czyli przy terminalu 80×24 wypełnia ekran w całości i pokazuje 10 z 14
+datasets. Na wyższym terminalu rośnie lista, nie ramka.
+
+### Edytor polityki: siatka szczebli, nie formularz
+
+`gui-mockups/tui/edytor-polityki-80.txt`. Radiobutton mechanizmu i checkbox
+quiesce żyją **w wierszu szczebla**, nie w dialogu: `gfs` i `quiesce` to pola
+`[template:]`, więc jeden przełącznik nad całym oknem sugerowałby własność
+profilu, której nie ma. Cztery rozstrzygnięcia:
+
+1. **„Ile" zmienia jednostkę razem z mechanizmem.** FLAT i GFS piszą
+   `keep = 24`, AGE pisze `retain = -h24`. Pasek pod siatką tłumaczy komórkę z
+   focusem na konsekwencję — „24 najnowsze" / „po jednej na godzinę przez 24 h"
+   / „wszystko młodsze niż 24 h". To jedyne miejsce, gdzie GUI może uprzedzić
+   awarię zmierzoną na pve10: `-G -H24 -D7` zostawiło **0 z 6** migawek z
+   `rc=0` i bez ostrzeżenia.
+2. **Kształt (jedna rodzina vs rodzina na szczebel) stoi nad siatką**, bo
+   zmienia znaczenie wiersza. Przy jednej rodzinie quiesce nie może być per
+   szczebel — dzienna migawka JEST jedną z godzinnych — więc kolumna szarzeje.
+3. **Nazwa jest wyprowadzana z siatki, nie wpisywana.** `profiles/README.md`
+   mówi „nazwa to retencja", a `test/profiles` to egzekwuje przeciw
+   wyrenderowanej linii `delsnaps`. Pole tekstowe pozwoliłoby nazwać `d7h24`
+   coś, co trzyma 30 dni. Człowiek wpisuje tylko `description`.
+4. **Profil fabryczny otwiera się tylko do odczytu**, `F2` to „Zapisz jako…".
+
+### Retencja niesymetryczna: istnieje i ma twardą regułę
+
+`--source-profile=NAME` (`zfs-backup.sh:223`) daje stronie źródłowej własną
+retencję; namespace `src_` powstał po REV-20260811-104 F1 właśnie po to, żeby
+edycja jednej strony nie ruszała drugiej. Trzy fakty muszą trafić do okna
+(`relacja-polityka-retencja-80.txt`):
+
+1. **Pominięcie flagi znaczy „ten sam profil po obu stronach", nigdy
+   „domyślny na źródle"** — fallback do `default` po cichu zmieniłby retencję
+   każdej relacji założonej bez tej flagi.
+2. **Wolno różnić się ILOŚCIĄ, nie wolno RODZAJEM.**
+   `assert_source_profile_families` porównuje zbiór rodzin, gdzie rodzina to
+   `pattern` **plus sposób liczenia** (`gfs`). `d7h24-gfs` pod
+   `m12w4d7h24-gfs` przechodzi; `d7h24` (płaski) pod `d7h24-gfs` (drabina) jest
+   odmawiane, bo prune wycelowany w rodzinę, której relacja nie tworzy, nie
+   trafia w nic — a `delsnaps`, który nic nie dopasował, kończy się zerem.
+   Źródło trzymałoby wszystko, raportując sukces co noc.
+   **Konsekwencja dla GUI: listę filtrujemy, nie pokazujemy błędu po fakcie** —
+   z liczbą i powodem ukrycia, bo lista gubiąca 14 z 16 pozycji bez słowa
+   wygląda na zepsutą.
+3. **Ręcznie zredagowana retencja źródła to stan pierwszej klasy** —
+   re-aktywacja świadomie ją zachowuje (REV-20260811-107), więc okno mówi „nie
+   odpowiada żadnemu profilowi" zamiast po cichu podstawić katalogowy.
+
+### Wykluczenia: cztery mechanizmy, trzech właścicieli
+
+`relacja-zakres-wykluczenia-80.txt`. Zmierzone: `exclude`/`exclude_tree` w
+pliku zakresu (`lib-scope.sh:35`), `exclude_child_<n>` → `-X` i
+`exclude_family` → `-E` w `[dataset:]` (`gen-cron.sh:117-122`),
+`[excluded:<prefix>] keep` → `-P` (`gen-cron.sh:338`).
+
+| co wykluczasz | czym | kto decyduje |
+|---|---|---|
+| dataset, którego relacja nie ma prawa zabrać | `exclude` / `exclude_tree` w pliku zakresu | **źródło** — podpis sha256, poszerzenie tylko przez `--commit-scope` tam |
+| dataset, którego kolektor sam nie chce | `exclude_child_<n>` (regex, `-X`) | **ta relacja** |
+| rodzinę migawek, której nie adoptujesz | `exclude_family` (`-E`) | **ta relacja**, tylko w trybie pasywnym |
+| cudzą rodzinę, której prune nie kasuje | `[excluded:prefix] keep=N\|all` (`-P`) | **kolektor**, dla całego configu |
+
+Dwa ostatnie wiersze są maskami migawek i **idą w przeciwne strony**: `-E` mówi
+„nie bierz tego, co widzę na źródle", `-P` mówi „nie kasuj tego, co jest
+cudze". Jedno pole „wykluczenia snapshotów" byłoby spłaszczeniem wbrew §2
+pkt 2, a kosztem pomyłki jest skasowanie migawki `__replicate_` spod `pvesr`,
+czyli nieodwracalne zerwanie łańcucha replikacji.
+
+Cztery rozstrzygnięcia ekranu zakresu:
+
+1. **Sekcja źródła jest tylko do odczytu i tak wygląda** — to nie ograniczenie
+   GUI, tylko granica własności.
+2. **Wzorzec pokazuje SKUTEK, nie tylko siebie**: „pomija 3 z 14" plus nazwy.
+   Regex bez rozwinięcia to obietnica, nie fakt.
+3. **Numeracja `exclude_child_1..n` nie wychodzi na ekran.** Pole jest
+   numerowane od jedynki bez dziur, a `gen-cron` odmawia przy dziurze, bo wpisy
+   powyżej są po cichu gubione — to zadanie pisarza, nie operatora.
+4. **Sekcja `exclude_family` szarzeje poza trybem pasywnym**, a `[excluded:]`
+   jest tylko skrótem do ekranu Kolektor, bo obowiązuje całą maszynę.
+
+### Czego to okno nie robi
+
+Nie powtarza ani jednej reguły. `F9 Podgląd` renderuje kandydata przez
+**prawdziwy `gen-cron.sh -c PLIK`** i pokazuje odmowę dosłownie; `Zapisz` jest
+zablokowany do czasu czystego renderu. To wzorzec `cmd_set_bandwidth`: kopia
+robocza → edycja → walidacja renderem → odmowa z nietkniętym oryginałem. Za
+darmo dostajemy m.in. odmowę progu monitora nie dłuższego niż faktyczna
+kadencja (gen-cron chodzi po prawdziwym kalendarzu: tygodniowa to 7 dni,
+pon.–pt. to 72 godziny), odmowę monitora na zakresie zdalnym i kolizje
+prefiksów — bez linii logiki w TUI.
+
+**Tworzenie to kreator, modyfikacja to zakładki.** Tworzenie odwzorowuje
+kolejność `rux_entry` (źródło → cel → zakres → polityka → seed → aktywacja),
+bo ta kolejność coś znaczy: seed idzie przed cronem. Modyfikacja zmienia jedną
+oś, więc kreator byłby tam tylko przeszkodą.
+
 ## 7. Etapy
 
 | etap | zawartość | dowód przed scaleniem | wymaga właściciela |

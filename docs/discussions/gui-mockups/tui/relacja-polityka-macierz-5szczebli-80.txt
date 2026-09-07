@@ -1,0 +1,17 @@
+┌─ Relacja: pve2 → hdd/backups/pve2 ───────────────────────────────────────────┐
+│ Polityka: Y5M12D31H24  ·  jedna rodzina, drabina nad nią  ·  5 szczebli      │
+│ 1 solo_hourly   2 keep_hourly   3 keep_daily   4 keep_monthly   5 keep_yearly│
+│──────────────────────────────────────────────────────────────────────────────│
+│   hdd/vm-disks/…                                    1    2    3    4    5    │
+│   ── domyślnie dla wszystkich ────────────────────  x ── x ── x ── x ── x ── │
+│     vm-900-disk-0                                   x    x    x    x    x    │
+│     vm-901-disk-0                                   x    x    x    x    x    │
+│ ≠   vm-902-disk-0                                   x    x    x    ·    ·    │
+│     vm-903-disk-0                                   x    x   ▓x▓   x    x    │
+│     vm-904-disk-0                                   x    x    x    x    x    │
+│ ≠   scratch                                         x    ·    ·    ·    ·    │
+│──────────────────────────────────────────────────────────────────────────────│
+│ vm-903-disk-0 · keep_daily: 01:11 co dobę, -D31 nad wspólną rodziną          │
+│──────────────────────────────────────────────────────────────────────────────│
+│ wiersz 5/7 · cyfra 1-5 przełącza szczebel · Spacja pole · ^Spacja kolumna    │
+└──────────────────────────────────────────────────────────────────────────────┘

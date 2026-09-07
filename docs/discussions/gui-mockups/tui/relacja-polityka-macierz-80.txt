@@ -1,0 +1,24 @@
+┌─ Relacja: pve10 → hdd/backups/pve10 ─────────────────────────────────────────┐
+│ [ Zakres ]  [ Łącze ]  [·Polityka·]  [ Monitor ]                             │
+│──────────────────────────────────────────────────────────────────────────────│
+│ Polityka: m12w4d7h24-gfs        [ Zmień… ]  [ Klonuj i edytuj… ]             │
+│ Zakres:   rpool/data/**  ·  14 datasets  ·  filtr: (brak)      [ / szukaj ]  │
+│──────────────────────────────────────────────────────────────────────────────│
+│   rpool/data/…                                     godz  dzien   tyg  mies   │
+│   ── domyślnie dla wszystkich ───────────────────── [x] ─ [x] ─ [x] ─ [x] ── │
+│     vm-101-disk-0                                   [x]   [x]   [x]   [x]    │
+│     vm-102-disk-0                                   [x]   [x]   [x]   [x]    │
+│     vm-103-disk-0                                   [x]   [x]   [x]   [x]    │
+│ ≠   vm-107-disk-0                       (+ dzieci)  [x]   [x]   [ ]   [ ]    │
+│     vm-108-disk-0                                   [x]   [x]   [x]   [x]    │
+│     vm-110-disk-0                                   [x]  ▓[x]▓  [x]   [x]    │
+│     vm-111-disk-0                                   [x]   [x]   [x]   [x]    │
+│ ≠   vm-201-disk-0                                   [ ]   [x]   [x]   [x]    │
+│     vm-202-disk-0                                   [x]   [x]   [x]   [x]    │
+│ !   vm-900-disk-0                                   [ ]   [ ]   [ ]   [ ]  ↓ │
+│──────────────────────────────────────────────────────────────────────────────│
+│ vm-110-disk-0 · dzienny: 11:01 co dobę, drabina trzyma 7 dni, quiesce auto   │
+│──────────────────────────────────────────────────────────────────────────────│
+│ wiersz 8/14 · 2 odstępstwa (≠) · 1 dataset bez zadania (!)                   │
+│ Spacja pole · ^Spacja kolumna · * wiersz · = jak domyślna · F9 Podgląd       │
+└──────────────────────────────────────────────────────────────────────────────┘

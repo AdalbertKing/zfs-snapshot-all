@@ -1,0 +1,23 @@
+┌─ Relacja: pve10 → hdd/backups/pve10 ─────────────────────────────────────────┐
+│ [ Zakres ]  [ Łącze ]  [·Polityka·]  [ Monitor ]                             │
+│──────────────────────────────────────────────────────────────────────────────│
+│ NA KOLEKTORZE — co zostaje w magazynie                                       │
+│   m12w4d7h24-gfs · 12 mies + 4 tyg + 7 dni + 24 godz, cztery rodziny         │
+│   [ Zmień… ]   [ Klonuj i edytuj… ]                                          │
+│                                                                              │
+│ NA ŹRÓDLE pve10 — co zostaje na maszynie produkcyjnej                        │
+│   (•) to samo, co na kolektorze                                              │
+│   ( ) własna retencja:   d7h24-gfs   ▾                                       │
+│   ( ) edytowana ręcznie na hoście — nie odpowiada żadnemu profilowi          │
+│                                                                              │
+│   Lista zawiera tylko profile o TYCH SAMYCH rodzinach, co kolektor:          │
+│     d7h24-gfs         7 dni + 24 godz                          mniej         │
+│     m12w4d7h24-gfs    12 mies + 4 tyg + 7 dni + 24 godz        tyle samo     │
+│                                                                              │
+│   Ukryte (14) — inne rodziny albo inny mechanizm. Np. d7h24 (płaski          │
+│   licznik) pod drabiną: „7 najnowszych" to inne 7 niż „jedna na dobę",       │
+│   a prune, który nie trafia w żadną rodzinę, kończy się zerem co noc.        │
+│──────────────────────────────────────────────────────────────────────────────│
+│ Różnica dozwolona: ILE. Różnica zabroniona: CO.                              │
+│ F9 Podgląd crona   F2 Zapisz   Esc Anuluj                                    │
+└──────────────────────────────────────────────────────────────────────────────┘

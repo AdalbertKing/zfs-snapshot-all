@@ -21,6 +21,29 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Okno relacji rozpisane: trzy obiekty zamiast jednego formularza
+  (2026-09-07).** Właściciel: *„to najtrudniejsze okno […] nie mam pomysłu"*.
+  Rozstrzygnięcie wyprowadzone z pól, nie z wyobrażenia o formularzu: **każde**
+  pole polityki (`gfs`, `keep`, `retain`, `quiesce`, kadencje, prefiks, progi
+  monitora) należy do `[template:]`, a do relacji należą `use_template`,
+  `pair_label`, pola łącza i pola zakresu. Więc relacja niesie NAZWĘ polityki i
+  wiązanie, polityka mieszka we własnym edytorze, a fabrycznego się nie edytuje
+  tylko klonuje. Wiązanie to macierz dataset × szczebel ze znacznikiem `≠` dla
+  odstępstwa od domyślnej i `!` dla datasetu bez żadnego szczebla — stanu, który
+  dziś widać dopiero po nieobecności zadania w cronie. Przy pięciu szczeblach o
+  kolidujących nazwach (`Y5M12D31H24`) kolumny są numerowane, a cyfra jest
+  klawiszem. **Retencja niesymetryczna** (`--source-profile`) dostaje listę
+  zawężoną do profili o tych samych rodzinach, bo `assert_source_profile_families`
+  porównuje `pattern` PLUS sposób liczenia: płaski pod drabiną to prune, który
+  nie trafia w nic i kończy się zerem co noc. **Wykluczenia to cztery mechanizmy
+  o trzech właścicielach** — podpisany `exclude`/`exclude_tree` źródła,
+  `exclude_child_<n>` relacji, `exclude_family` przy trybie pasywnym i
+  `[excluded:]` kolektora; dwa ostatnie są maskami migawek i idą w przeciwne
+  strony, więc jedno pole „wykluczenia snapshotów" byłoby spłaszczeniem, którego
+  kosztem jest skasowanie migawki `__replicate_` spod pvesr. Rozdział 6a
+  dokumentu decyzji, pięć makiet 80-kolumnowych w `gui-mockups/tui/`, wszystkie
+  sprawdzone maszynowo na szerokość wyświetlania.
+
 - **Powtórzone domknięcie recenzji jest transakcją, nie wcześniejszym
   `return` (REV-20260907-135, 2026-09-07).** `tx_close` w `test/reviewctl.sh`
   zachował gałąź, którą REV-20260822-122 F4 usunęła z `tx_approve`: przy
