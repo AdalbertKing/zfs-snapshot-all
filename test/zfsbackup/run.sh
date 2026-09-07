@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -9010,6 +9010,227 @@ if [ "$got" = "[][]" ]; then
     ok "noeval: no fields and no PASSIVE render nothing, under set -u"
 else
     bad "noeval: no fields and no PASSIVE render nothing, under set -u" "$got"
+fi
+
+
+# ============================================================================
+# status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
+# Self-contained; always eligible, also under `--section statusjson`.
+#
+# Why an EXACT match rather than a handful of greps: the deliverable here is a
+# CONTRACT, and the things a front end breaks on -- a renamed field, a boolean
+# that became a string, a field that silently stopped being emitted, two
+# records that ran together without a comma -- are all invisible to a grep for
+# the field you happened to think of. The pin is the whole line. A future
+# additive field is then a deliberate edit here, which is the point.
+#
+# Two things this suite deliberately does NOT do: parse the JSON with a real
+# parser (this tree is bash + coreutils by decision, and test/join already pays
+# for the one python dependency it could not avoid), and assert anything about
+# the peer probe's SUCCESS path -- that needs a second host and is named as a
+# manual obligation, not faked here.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SJ="$WORK/statusjson"; rm -rf "$SJ"; mkdir -p "$SJ/clients" "$SJ/rel" "$SJ/cwd"
+# Decoys in the working directory. They exist for exactly one assertion: a
+# record field of `*` must stay the string `*`, and the only way to see the
+# difference is to have something for it to expand INTO.
+touch "$SJ/cwd/decoy-a" "$SJ/cwd/decoy-b"
+
+cat > "$SJ/clients/alpha.conf" <<'SJEOF'
+CLIENT_NAME=alpha
+STATE=active
+PEER_HOST=pve9.example
+ACTIVE_ENDPOINT=10.0.0.1:22
+INSTALLED_ENDPOINT=10.0.0.9:22
+PROFILE=default
+SOURCE_PROFILE=d7h24-gfs
+CLIENT_TARGET=tank/backup/alpha
+MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'
+MANAGED_PRUNE_SCOPE=tank/backup/alpha
+REQUESTED_DATASETS=rpool/data/vm-100
+LOCAL_USER=zfsbackup
+BANDWIDTH=20M
+RECURSION=atomic
+CREATED_AT=2026-09-01T10:00:00Z
+ACTIVATED_AT=2026-09-01T11:00:00Z
+SJEOF
+# beta carries the two values a reader gets wrong: a glob, and characters that
+# have to be escaped before they can be JSON.
+cat > "$SJ/clients/beta.conf" <<'SJEOF'
+CLIENT_NAME=beta
+STATE=seed_complete
+ACTIVE_ENDPOINT=10.0.0.2:22
+MANAGED_DATASETS='*'
+CLIENT_TARGET='tank/a"b\c'
+SJEOF
+# The config deliberately DISAGREES with the record on the label, and carries a
+# second section belonging to nobody this program manages. Both are
+# discriminators: the label must come from the config (it is what the cron line
+# passes as -L, so it is the join key against progress/stats), and a section
+# without an ownership marker must not have its fields attributed to whichever
+# relationship happened to be named just above it.
+cat > "$SJ/cron.conf" <<'SJEOF'
+[dataset:tank/backup/alpha/vm-100]
+	# managed-by: zfs-backup.sh client=alpha
+	src          = root@10.0.0.1:rpool/data/vm-100
+	pair_label   = alpha-renamed
+	use_template = hourly
+
+[dataset:tank/other]
+	pair_label   = somebody-else
+	src          = root@10.0.0.5:rpool/x
+SJEOF
+
+sj_run() {   # <status args...> -- output to $WORK/sj.out, returns cmd_status's rc
+    ( id() { echo 0; }
+      CLIENTS_DIR="$SJ/clients"
+      RELATIONSHIPS_DIR="$SJ/rel"
+      CRON_CONFIG="$SJ/cron.conf"
+      STATS_LOG="$SJ/stats.log"
+      cd "$SJ/cwd" || exit 9
+      cmd_status "$@" ) >"$WORK/sj.out" 2>&1
+}
+sj_show() { sed 's/},{/},\n  {/g' "$WORK/sj.out"; }
+
+sj_alpha='{"name":"alpha","state":"active","pair_label":"alpha-renamed","peer_host":"pve9.example","active_endpoint":"10.0.0.1:22","installed_endpoint":"10.0.0.9:22","endpoint_diverged":true,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"default","source_profile":"d7h24-gfs","client_target":"tank/backup/alpha","local_user":"zfsbackup","bandwidth":"20M","recursion":"atomic","passive":"","created_at":"2026-09-01T10:00:00Z","activated_at":"2026-09-01T11:00:00Z","seed_completed_at":"","removed_at":"","sources":["root@10.0.0.1:rpool/data/vm-100"],"managed_datasets":["tank/backup/alpha/vm-100","tank/backup/alpha/vm-101"],"managed_prune_scope":["tank/backup/alpha"]}'
+sj_beta='{"name":"beta","state":"seed_complete","pair_label":"beta","peer_host":"","active_endpoint":"10.0.0.2:22","installed_endpoint":"","endpoint_diverged":false,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"","source_profile":"","client_target":"tank/a\"b\\c","local_user":"","bandwidth":"","recursion":"","passive":"","created_at":"","activated_at":"","seed_completed_at":"","removed_at":"","sources":[],"managed_datasets":["*"],"managed_prune_scope":[]}'
+
+sj_run --json
+sj_got="$(cat "$WORK/sj.out")"
+if [ "$sj_got" = "{\"relations\":[$sj_alpha,$sj_beta]}" ]; then
+    ok "statusjson: the LIST form is the pinned contract, field for field"
+else
+    bad "statusjson: the LIST form is the pinned contract, field for field" \
+        "want:" "  {\"relations\":[" "  $sj_alpha," "  $sj_beta" "  ]}" "got:" "$(sj_show)"
+fi
+
+# POPULATION CONTROL. Every assertion above is about the CONTENT of the array;
+# none of them notices an array that lost a member, and an emitter that skipped
+# a record would still match a `want` built from the same emitter. Counted
+# against the directory, which is the fact the emitter is supposed to reflect.
+sj_files=$(ls "$SJ/clients"/*.conf | wc -l)
+sj_recs=$(grep -o '"name":"' "$WORK/sj.out" | wc -l)
+if [ "$sj_recs" -eq "$sj_files" ] && [ "$sj_recs" -eq 2 ]; then
+    ok "statusjson: one record per client record file (2 files, 2 records)"
+else
+    bad "statusjson: one record per client record file (2 files, 2 records)" \
+        "files=$sj_files records=$sj_recs" "$(sj_show)"
+fi
+
+# The three properties the pinned line proves, named one by one so a failure
+# says WHICH invariant went, not just that a long string differs.
+case "$sj_got" in
+    *'"pair_label":"alpha-renamed"'*)
+        ok "statusjson: pair_label is read from the CONFIG, not assumed equal to the client name" ;;
+    *) bad "statusjson: pair_label is read from the CONFIG, not assumed equal to the client name" "$(sj_show)" ;;
+esac
+case "$sj_got" in
+    *somebody-else*)
+        bad "statusjson: an unmarked section's fields are not attributed to the relationship above it" \
+            "the stranger's pair_label reached the output" "$(sj_show)" ;;
+    *)  ok "statusjson: an unmarked section's fields are not attributed to the relationship above it" ;;
+esac
+case "$sj_got" in
+    *decoy-a*|*decoy-b*)
+        bad "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" "$(sj_show)" ;;
+    *'"managed_datasets":["*"]'*)
+        ok "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" ;;
+    *)  bad "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" "$(sj_show)" ;;
+esac
+
+# PAUSE. The one live piece of state in the list form, and the reason the text
+# view has a PAUSED_LOCAL column at all.
+mkdir -p "$SJ/rel/alpha"
+printf 'PAUSED_AT="2026-09-07T08:00:00Z"\nPAUSED_REASON="disk swap"\n' > "$SJ/rel/alpha/paused"
+sj_run --json
+if grep -q '"name":"alpha".*"paused_local":true' "$WORK/sj.out" \
+   && grep -q '"name":"beta".*"paused_local":false' "$WORK/sj.out"; then
+    ok "statusjson: paused_local is true for the paused relationship and false for the other"
+else
+    bad "statusjson: paused_local is true for the paused relationship and false for the other" "$(sj_show)"
+fi
+rm -rf "$SJ/rel/alpha"
+
+# THE NAMED FORM. Two things only it does: it asks the peer, and it reports the
+# last run. The global ssh stub answers 255, so the peer cannot be asked -- and
+# the answer to "could not ask" must be UNKNOWN, never the NOT_ASKED the list
+# form reports and never a silent absence. This is the whole reason the two
+# tokens exist.
+cat > "$SJ/stats.log" <<'SJEOF'
+{"time":"2026-09-06T22:10:03Z","script":"snapget.sh","label":"alpha","dataset":"tank/backup/alpha/vm-100","target":"x","status":"success","duration_s":41,"resumed":false}
+SJEOF
+sj_run alpha --json
+sj_got="$(cat "$WORK/sj.out")"
+case "$sj_got" in
+    *'"peer_pair_state":"UNKNOWN"'*)
+        ok "statusjson: a peer that cannot be asked is UNKNOWN in the named form, not NOT_ASKED" ;;
+    *) bad "statusjson: a peer that cannot be asked is UNKNOWN in the named form, not NOT_ASKED" "$(sj_show)" ;;
+esac
+case "$sj_got" in
+    *'"last_result":{"time":"2026-09-06T22:10:03Z","status":"success","duration_s":41}'*)
+        ok "statusjson: the named form carries last_result from the stats log" ;;
+    *) bad "statusjson: the named form carries last_result from the stats log" "$(sj_show)" ;;
+esac
+# ...and NOTHING in the history is null, not an invented success. The text view
+# spends two lines saying "this is not 'no failures', it is 'nobody knows'";
+# null is the only token that carries that distinction to a reader.
+: > "$SJ/stats.log"
+sj_run alpha --json
+case "$(cat "$WORK/sj.out")" in
+    *'"last_result":null'*)
+        ok "statusjson: an empty history is last_result:null, never an invented success" ;;
+    *) bad "statusjson: an empty history is last_result:null, never an invented success" "$(sj_show)" ;;
+esac
+# The list form must NOT carry last_result at all: it does not read the stats
+# log per relationship, and emitting null there would say "no history" about a
+# question nobody asked.
+sj_run --json
+case "$(cat "$WORK/sj.out")" in
+    *last_result*) bad "statusjson: the LIST form carries no last_result -- it never asked" "$(sj_show)" ;;
+    *)             ok "statusjson: the LIST form carries no last_result -- it never asked" ;;
+esac
+
+# NO CLIENTS AT ALL is an empty array, not an empty file and not a refusal: a
+# front end starting on a fresh collector must get a parseable answer.
+SJE="$WORK/statusjson-empty"; rm -rf "$SJE"; mkdir -p "$SJE"
+if [ "$( ( CLIENTS_DIR="$SJE"; cmd_status --json ) 2>&1 )" = '{"relations":[]}' ]; then
+    ok "statusjson: a collector with no relationships answers {\"relations\":[]}"
+else
+    bad "statusjson: a collector with no relationships answers {\"relations\":[]}" \
+        "$( ( CLIENTS_DIR="$SJE"; cmd_status --json ) 2>&1 )"
+fi
+
+# REFUSALS. --json was accepted before this change only in the sense that
+# `status --json` died with "no client '--json'" -- the negative control for
+# this whole section against the prior SHA. Now the option is real, so the
+# grammar has to refuse what it does not know rather than treat it as a name.
+if ! sj_run --nope && grep -q "unknown option" "$WORK/sj.out"; then
+    ok "statusjson: an unknown option is refused by name, not taken for a client"
+else
+    bad "statusjson: an unknown option is refused by name, not taken for a client" "$(cat "$WORK/sj.out")"
+fi
+if ! sj_run alpha beta && grep -q "at most one client name" "$WORK/sj.out"; then
+    ok "statusjson: two client names are refused"
+else
+    bad "statusjson: two client names are refused" "$(cat "$WORK/sj.out")"
+fi
+
+# THE TEXT VIEW IS UNTOUCHED. --json is an addition; the operator's `status`
+# has to print exactly what it printed before, including for a name.
+sj_run
+if grep -q '^alpha .*state=active .*endpoint=10.0.0.1:22' "$WORK/sj.out" \
+   && grep -q '^beta .*state=seed_complete' "$WORK/sj.out"; then
+    ok "statusjson: the text list is unchanged by the new option"
+else
+    bad "statusjson: the text list is unchanged by the new option" "$(cat "$WORK/sj.out")"
+fi
+sj_run alpha
+if grep -q '^Klient: *alpha' "$WORK/sj.out" && grep -q '^Stan: *active' "$WORK/sj.out"; then
+    ok "statusjson: the text detail view is unchanged by the new option"
+else
+    bad "statusjson: the text detail view is unchanged by the new option" "$(cat "$WORK/sj.out")"
 fi
 
 echo "--------------------------------------------"

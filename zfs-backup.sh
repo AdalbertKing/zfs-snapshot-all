@@ -466,7 +466,13 @@ Config maintenance:
   zfs-backup.sh audit-source-retention [--apply] [--yes]
 
 Inspection / teardown:
-  zfs-backup.sh status [NAME]
+  zfs-backup.sh status [NAME] [--json]
+                                    --json is the GUI data layer, same contract as
+                                    `progress --json`: one object, one array of
+                                    records. The LIST form opens no connection to the
+                                    peer and reports peer_pair_state=NOT_ASKED; the
+                                    NAMED form asks the peer (ENABLED/DISABLED/
+                                    UNKNOWN) and adds last_result from the stats log.
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
 
@@ -10345,8 +10351,188 @@ status_running_now() {   # <local target prefix> -> one line per live record
     return $any
 }
 
+# ------------------------------------------------------------------------------
+# status --json -- THE DATA LAYER BEHIND THE FACTS THE TEXT VIEW PRINTS
+# ------------------------------------------------------------------------------
+# V1 of the missing-verbs work order (docs/discussions/OWNER-MISSING-VERBS-
+# 2026-09-07.md). The GUI's main screen and detail panel cannot be built on
+# cmd_status's output: the list is one printf of padded columns and the detail
+# view is Polish prose with the answer inside the sentence. Scraping either is
+# what the GUI decision forbids outright.
+#
+# The contract is not invented here. `progress --json` and
+# `list-replicas --json` already established it: ONE object, ONE array of
+# records, fields named after the record fields they come from. This is the
+# third implementation of that shape, not a third convention.
+#
+# TWO ASYMMETRIES, both inherited from the text view rather than chosen:
+#
+#  * the LIST form stays local and fast -- it opens no ssh, exactly as the text
+#    list does. So it reports peer_pair_state as NOT_ASKED, which is
+#    deliberately NOT the same token as UNKNOWN. UNKNOWN means "asked, and the
+#    peer could not answer"; NOT_ASKED means "nobody asked". A front end that
+#    painted the two the same colour would show an unreachable peer as an
+#    un-inspected one -- the confusion the text view needs a whole sentence for
+#    and a JSON reader has only a token for.
+#  * the NAMED form asks the peer, exactly as `status NAME` does, and carries
+#    last_result, because the stats log is the one fact the detail panel has no
+#    other verb to reach.
+#
+# Absent is EMPTY, never a guess: a field the record does not carry is "" (or []
+# for a list), and the two booleans are real JSON booleans so a front end never
+# has to know which strings this project considers true.
+
+# A record's field is DATA: a space-separated list is split, but never globbed.
+# `set -f` in a subshell rather than around the loop, because a bare `set -f`
+# inside a function leaks into everything the caller does afterwards. Without it
+# a value carrying * would be expanded against the working directory and the
+# array would carry filenames -- a record deciding what its reader reports.
+status_json_array() {   # <space-separated list> -> ["a","b"]
+    ( set -f
+      local w first=1
+      printf '['
+      for w in $1; do
+          [ "$first" -eq 1 ] || printf ','
+          first=0
+          printf '"%s"' "$(json_escape "$w")"
+      done
+      printf ']' )
+}
+
+status_json_field() {   # <json name> <value> -> ,"name":"value"
+    printf ',"%s":"%s"' "$1" "$(json_escape "$2")"
+}
+
+# The pair_label the relationship's sections actually carry, which is what the
+# cron lines pass as `-L` and therefore what every progress record and every
+# stats line is stamped with. THAT is the join key a front end needs to line
+# `status --json` up against `progress --json`, so it is read from the config
+# rather than assumed equal to the client name -- the writers do keep them equal
+# (add-client, activate-client and move-to-client all rewrite both), but "the
+# writers keep them equal" is a claim about six call sites, not a fact this
+# reader can see.
+#
+# Resets on ANY section header, not just [dataset:. A hand-written section
+# following a managed one carries no ownership marker, and inheriting the
+# previous section's ownership across it would attribute a stranger's field to
+# this relationship.
+status_pair_label_from_config() {   # <client name> -> the pair_label of the first section it owns
+    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out=""
+    [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            "["*) cur="" ;;
+            *"managed-by: zfs-backup.sh client=$name") cur="yes" ;;
+            *pair_label*=*)
+                [ "$cur" = yes ] || continue
+                [ -n "$out" ] && continue
+                out="${line#*= }" ;;
+        esac
+    done < "$cfg"
+    [ -n "$out" ] || return 1
+    printf '%s' "$out"
+}
+
+# In a subshell for the same reason the text list view is one: record_load
+# assigns by name into the caller's shell, and one relationship's fields must
+# not reach the next one's record.
+status_json_record() {   # <client record path> <ask the peer: 0|1>
+    (
+    local ask="$2"
+    record_load client "$1"
+    local paused=false
+    client_paused "${CLIENT_NAME:-}" && paused=true
+    local diverged=false
+    [ -n "${INSTALLED_ENDPOINT:-}" ] && [ "${INSTALLED_ENDPOINT:-}" != "${ACTIVE_ENDPOINT:-}" ] && diverged=true
+    local srcs; srcs=$(status_sources_from_config "${CLIENT_NAME:-}") || srcs="${REQUESTED_DATASETS:-}"
+    local label; label=$(status_pair_label_from_config "${CLIENT_NAME:-}") || label="${CLIENT_NAME:-}"
+
+    local peerstate="NOT_ASKED"
+    if [ "$ask" -eq 1 ]; then
+        # die_confine_to_subshell for the reason cmd_status names at its own
+        # copy of this probe: the loader dies on a record without a manifest,
+        # and here that is the UNKNOWN this view reports, not a reason to abort.
+        peerstate=$( die_confine_to_subshell
+                     load_client_and_connection "$1" >/dev/null 2>&1 \
+                     && peer_pair_state >/dev/null 2>&1 \
+                     && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
+        [ -n "$peerstate" ] || peerstate="UNKNOWN"
+    fi
+
+    printf '{"name":"%s"' "$(json_escape "${CLIENT_NAME:-}")"
+    status_json_field state              "${STATE:-}"
+    status_json_field pair_label         "$label"
+    status_json_field peer_host          "${PEER_HOST:-}"
+    status_json_field active_endpoint    "${ACTIVE_ENDPOINT:-}"
+    status_json_field installed_endpoint "${INSTALLED_ENDPOINT:-}"
+    printf ',"endpoint_diverged":%s' "$diverged"
+    printf ',"paused_local":%s' "$paused"
+    status_json_field peer_pair_state    "$peerstate"
+    status_json_field profile            "${PROFILE:-}"
+    status_json_field source_profile     "${SOURCE_PROFILE:-}"
+    status_json_field client_target      "${CLIENT_TARGET:-}"
+    status_json_field local_user         "${LOCAL_USER:-}"
+    status_json_field bandwidth          "${BANDWIDTH:-}"
+    status_json_field recursion          "${RECURSION:-}"
+    status_json_field passive            "${PASSIVE:-}"
+    status_json_field created_at         "${CREATED_AT:-}"
+    status_json_field activated_at       "${ACTIVATED_AT:-}"
+    status_json_field seed_completed_at  "${SEED_COMPLETED_AT:-}"
+    status_json_field removed_at         "${REMOVED_AT:-}"
+    printf ',"sources":';             status_json_array "$srcs"
+    printf ',"managed_datasets":';    status_json_array "${MANAGED_DATASETS:-}"
+    printf ',"managed_prune_scope":'; status_json_array "${MANAGED_PRUNE_SCOPE:-}"
+    if [ "$ask" -eq 1 ]; then
+        local pfx="${MANAGED_PRUNE_SCOPE:-${MANAGED_DATASETS:-}}"; pfx="${pfx%% *}"
+        local last=""
+        [ -n "$pfx" ] && last=$(status_last_result "$pfx")
+        if [ -n "$last" ]; then
+            local lt ls ld
+            read -r lt ls ld <<LASTRES
+$last
+LASTRES
+            printf ',"last_result":{"time":"%s","status":"%s","duration_s":%s}' \
+                "$(json_escape "$lt")" "$(json_escape "$ls")" "${ld:-0}"
+        else
+            # null, not an empty object and not "success": "no record in the
+            # history" is not "no failures", and the text view says exactly
+            # that in a sentence a JSON reader cannot carry.
+            printf ',"last_result":null'
+        fi
+    fi
+    printf '}'
+    )
+}
+
+cmd_status_json() {   # [client name]
+    local name="$1" f first=1
+    printf '{"relations":['
+    if [ -n "$name" ]; then
+        local cpath; cpath=$(client_conf_path "$name")
+        [ -r "$cpath" ] || die "no client '$name'"
+        status_json_record "$cpath" 1
+    elif [ -d "$CLIENTS_DIR" ]; then
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -e "$f" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            status_json_record "$f" 0
+        done
+    fi
+    printf ']}\n'
+}
+
 cmd_status() {
-    local name="${1:-}"
+    local name="" as_json=0 a
+    for a in "$@"; do
+        case "$a" in
+            --json) as_json=1 ;;
+            -*)     die "status: unknown option '$a' (only --json)" ;;
+            *)      [ -z "$name" ] || die "status: takes at most one client name"
+                    name="$a" ;;
+        esac
+    done
+    [ "$as_json" -eq 1 ] && { cmd_status_json "$name"; return 0; }
     if [ -z "$name" ]; then
         [ -d "$CLIENTS_DIR" ] || { log "no clients yet"; return 0; }
         local f

@@ -551,15 +551,27 @@ fi
 # named. Both files are frozen; this measures, it does not merge.
 DELSNAPS="${DELSNAPS:-$REPO/delsnaps.sh}"
 LIBZFS="${LIBZFS:-$REPO/lib-zfs-snap.sh}"
-_je_d="$(hash_of "$DELSNAPS" json_escape)"; _je_l="$(hash_of "$LIBZFS" json_escape)"
-if [ "$_je_d" = ABSENT ] || [ "$_je_l" = ABSENT ]; then
-    bad "G json_escape is defined in both delsnaps.sh and lib-zfs-snap.sh" "delsnaps=$_je_d lib=$_je_l"
-elif [ "$_je_d" = "$_je_l" ]; then
-    ok "G json_escape in delsnaps.sh is the lib's, byte for byte after normalisation"
-else
-    bad "G json_escape in delsnaps.sh is the lib's, byte for byte after normalisation" \
-        "the two copies differ -- a new escape landed on one side only (delsnaps.sh is standalone and cannot source the lib)"
-fi
+LIBCOMMON="${LIBCOMMON:-$REPO/lib-backup-common.sh}"
+# THREE copies since 2026-09-07, not two. lib-backup-common.sh gained one when
+# zfs-backup.sh grew its `--json` readers (status first, the rest of the GUI
+# data layer behind it): that program cannot source lib-zfs-snap.sh -- 3000
+# lines of transfer engine with its own state -- and the alternative was every
+# reader inlining its own escaping, which is how a front end ends up with a
+# dataset name that parses on one verb and breaks the parser on the next.
+# Compared pairwise against the lib, so a failure names WHICH copy drifted.
+_je_l="$(hash_of "$LIBZFS" json_escape)"
+for _je_pair in "delsnaps.sh:$DELSNAPS" "lib-backup-common.sh:$LIBCOMMON"; do
+    _je_name="${_je_pair%%:*}"; _je_file="${_je_pair#*:}"
+    _je_o="$(hash_of "$_je_file" json_escape)"
+    if [ "$_je_o" = ABSENT ] || [ "$_je_l" = ABSENT ]; then
+        bad "G json_escape is defined in both $_je_name and lib-zfs-snap.sh" "$_je_name=$_je_o lib=$_je_l"
+    elif [ "$_je_o" = "$_je_l" ]; then
+        ok "G json_escape in $_je_name is the lib's, byte for byte after normalisation"
+    else
+        bad "G json_escape in $_je_name is the lib's, byte for byte after normalisation" \
+            "the copies differ -- a new escape landed on one side only (lib-zfs-snap.sh is frozen, and neither of the others can source it)"
+    fi
+done
 for _hn in destroy_one emit_stats; do
     if [ "$(hash_of "$DELSNAPS" "$_hn")" != "$(hash_of "$LIBZFS" "$_hn")" ]; then
         ok "G $_hn is a homonym, not a copy -- the two bodies differ, as their signatures say they must"

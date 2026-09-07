@@ -67,6 +67,28 @@ die_confine_to_subshell() {   # call INSIDE a $( ): a die there ends the subshel
 }
 
 # ------------------------------------------------------------------------------
+# Minimal JSON string escaping for values that come from config, records and
+# dataset paths rather than from a fixed set of literals we control.
+#
+# THE THIRD COPY, AND SAID OUT LOUD. lib-zfs-snap.sh owns the original and
+# delsnaps.sh carries a copy because it is standalone; both of those files are
+# FROZEN engines. zfs-backup.sh cannot source lib-zfs-snap.sh -- that file is
+# 3000 lines of transfer engine with its own state -- so the `--json` readers
+# (`status`, `show-config`, `list-profiles`, `monitor`) would otherwise each
+# inline their own escaping, which is how a front end ends up with a dataset
+# name that parses on one verb and breaks the parser on the next.
+#
+# Pinned identical to the other two by the `json-escape` contract in
+# test/deps.conf, checked in test/twins section G: the day one side learns a
+# new escape, the suite names the ones that did not.
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+
+# ------------------------------------------------------------------------------
 # The server-side config written by `zfs-backup.sh setup-server` and read by
 # every later command. KEY=VALUE, read as DATA through record_load below (it was
 # `.`-sourced until 2026-09-03, the last reader in these two programs that
