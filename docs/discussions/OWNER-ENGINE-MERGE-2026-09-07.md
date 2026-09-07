@@ -8,7 +8,7 @@ właściciela w tym samym dniu: **`snapsync.sh`**.
 Dokument jest **zleceniem**, nie notatką. Każda liczba poniżej została
 zmierzona na drzewie `c18436f` komendą, którą da się powtórzyć (sekcja 2);
 każde ryzyko ma mitigację z miejscem w drzewie, gdzie już istnieje szew, na
-którym można ją oprzeć. Wątek programisty ma zacząć od sekcji 8.
+którym można ją oprzeć. Wątek programisty ma zacząć od sekcji 9.
 
 ## 1. Werdykt
 
@@ -141,13 +141,30 @@ których konto delegowane może użyć), `3a78b1d` (kotwica nośnika). Część 
 naprawdę tylko-pull (restore idzie przez pull). Część nie jest i push ich
 nie ma:
 
-| ma `snapget.sh` | brak w `snapsend.sh` | skutek dla warstwy czasowników |
-|---|---|---|
-| `-Q SEK` deadman zdalnego quiesce | brak flagi | gen-cron nie może jej emitować na linii push |
-| linia `PLAN=INCREMENTAL\|FULL base= src= tgt=` | brak | `seed` (push, `zfs-backup.sh:6734/6740`) nie może pokazać planu tak, jak `load`/`restore` |
-| `probe_dataset` z rozróżnieniem „nie ma" / „ssh padł" (`case $? in 1) 2)`) | gołe `zfs list -H` | w push „nie ma" i „nie odpowiada" to ten sam komunikat |
-| pomijanie rusztowania pod `-R -e` (`ADOPT_SKIPPED`) | brak | ta sama konfiguracja `-R -e` zachowuje się inaczej w każdym kierunku |
-| `local x; x=$(...)` wszędzie (0 masek) | **5** × `local x=$(...)` | kod wyjścia polecenia zamaskowany — dokładnie wada, którą kontrakt `twin-functions` cytuje jako dowód dryfu, wciąż w drzewie po miesiącu |
+| ma `snapget.sh` | stan w `snapsend.sh` | klasyfikacja | skutek |
+|---|---|---|---|
+| pomijanie rusztowania pod `-R -e`: trzy gałęzie skip (`No family` 1324, `Only excluded families` 1350, `No MESSAGE family` 1363) + bramka zbiorcza „wszystko było rusztowaniem → rc=1" (2595-2601) | **jedna** gałąź z trzech (`Only excluded families`, 1397) i **brak bramki zbiorczej** — `ADOPT_SKIPPED` jest inkrementowany i nigdy nie czytany | **DRYF** — ta sama flaga, ta sama ścieżka `USE_EXISTING_SNAPSHOT` | push `-R -e` nad pustym kontenerem ścieżki: **rc=1 „No source snapshots found"** tam, gdzie pull pomija; push, w którym każdy członek był rusztowaniem: **„All datasets processed successfully"** — fałszywy sukces |
+| `local x; x=$(...)` wszędzie (0 masek) | **5** × `local x=$(...)` (825, 936, 937, 1241, 1611) | **DRYF** | 936/937 maskują `get_snapshot_guid` — porównanie GUID z pustym łańcuchem na ścieżce, na której projekt miał już trzy błędy fail-open |
+| linia `PLAN=INCREMENTAL\|FULL base= src= tgt=` | brak | **DRYF** (kontrakt czytany przez warstwę czasowników) | `seed` (push, `zfs-backup.sh:6734/6740`) nie może pokazać planu tak, jak `load`/`restore` |
+| `guest_disk_is_live` na celu (1575): odmowa nadpisania dysku **działającego** gościa | brak | **DRYF z kosztem** — w push cel jest zdalny, predykat trzeba policzyć po drugiej stronie | restore przez push (`-t`) na dysk działającego gościa na peerze: nic nie odmawia |
+| podpowiedź „-F na ZAMONTOWANYM celu" (1761, diagnoza) | brak | dryf diagnostyczny | ten sam błąd delegowanego konta w push dostaje surowy komunikat `zfs` |
+| `-Q SEK` deadman zdalnego quiesce | brak flagi | **kierunkowe, nie portować** — deadman chroni zamrożonego gościa po ZDALNEJ stronie, gdy silnik padnie; w push gość jest lokalny i `on_exit` go odmraża | gen-cron słusznie nie emituje `-Q` na linii push |
+| `probe_dataset` na źródle („nie ma" vs „ssh padł") | gołe `zfs list -H` | **kierunkowe, nie portować** — źródło push jest lokalne, `zfs list` nie ma trybu „ssh padł"; strona zdalna push idzie przez `target_exists` z biblioteki | — |
+
+Pierwsza wersja tej tabeli liczyła `-Q` i `probe_dataset` jako braki push. Nie są nimi — obie różnice wynikają z tego, po której stronie jest ssh. Za to pierwszy wiersz jest gorszy, niż tabela mówiła: to nie „brak pomijania rusztowania", to **jedna flaga z dwoma zachowaniami**, w tym fałszywy sukces.
+
+**Jak alarm został uciszony — i dlaczego to jest wada mechanizmu, nie ludzi.**
+Commit `fd26421` (2026-08-21, „twins: record the deliberate snapget-only
+divergence") błogosławi rozjazd `process_dataset` z uzasadnieniem: *„-e (adopt
+the existing family) EXISTS only on pull; push creates its snapshots and has
+no adoption path, so there is no equivalent fix to mirror."* To jest
+nieprawda, sprawdzalna jednym grepem: `snapsend.sh:37` dokumentuje `-e`,
+`USE_EXISTING_SNAPSHOT` prowadzi tę samą ścieżkę (`snapsend.sh:1371`), a dwa
+dni później (2026-08-23) gałąź `Only excluded families` została do push
+**zmirrorowana** — czyli ktoś już wtedy wiedział, że ścieżka istnieje. Alarm
+zadał pytanie; odpowiedź była zdaniem bez numeru linii; suita przyjęła zdanie.
+Wpis w `ENGINE-FREEZE.md` z 2026-08-21 autoryzuje **tylko** `snapget.sh` i
+nie mówi ani słowa o bliźniaku. Trzy wpisy z 27-28.08 tak samo.
 
 Wniosek: push jest kierunkiem drugiej kategorii. A to push obsługuje `seed`
 i nośniki wymienne (`cron2conf.sh` parsuje nawiasy nośnika tylko wokół
@@ -188,8 +205,11 @@ hoście i asercjonuje:
 - `zfs snapshot` (create) poszło przez ssh tylko w pull;
 - `zfs hold` poszło na tę samą stronę, co `zfs snapshot`;
 - argv bez hosta po żadnej stronie (relacja jednoserwerowa): stub
-  zarejestrował **zero** wywołań `ssh` — w obu wrapperach i w gołym
-  `snapsync.sh`.
+  zarejestrował **zero** wywołań `ssh` — w obu wrapperach;
+- `snapsync.sh` wywołane bez wrappera (bez `--engine-name`/ograniczenia
+  strony): rc≠0, zero `ssh`, zero `zfs` (P0);
+- `snapsend.sh root@a:tank/x hdd/y` i `snapget.sh tank/x root@b:hdd/y`:
+  odmowa sumy kontrolnej przed jakimkolwiek `zfs`.
 
 To zamyka fail-open na czystym tekście, w sekundach, w CI. Test pisze się
 **przed** pierwszą zmianą w `process_dataset` (R7: kontrola negatywna —
@@ -234,7 +254,38 @@ lista datasetów, baza) — **nie** przepycha dwóch parserów do `snapsync.sh`.
 `OPTSTRING` w silniku, wrapper push odrzuca `-Q` do czasu, aż deadman ma sens
 w push (albo i nie odrzuca — to decyzja, nie przypadek; zapisać ją).
 
-Kształt wrapperów, który spełnia P1 i P2 naraz:
+**P0 — `snapsync.sh` NIE jest powierzchnią użytkownika.** Poprawka
+właściciela, 2026-09-07 („błąd może być kosztowny"), po tym jak pierwsza
+wersja tego dokumentu pokazała symetryczną składnię `snapsync.sh SRC DST`
+z kierunkiem wynikającym z tego, która strona niesie `host:`. Koszt pomyłki
+w tej gramatyce jest konkretny:
+
+```
+snapsync.sh -m auto_ root@pve9:tank/vm-101 hdd/backups/pve9   # pull: pisze lokalnie
+snapsync.sh -m auto_ tank/vm-101 root@pve9:hdd/backups/pve9   # push: pisze NA pve9
+```
+
+Dziś `snapget.sh` fizycznie nie potrafi zrobić drugiego — cel z hostem jest
+odmową gramatyki (v2.61+). **Nazwa skryptu jest drugim, niezależnym zapisem
+tego, która strona jest pisana**, i symetryczna gramatyka tę redundancję
+usuwa. Z `-f` (`snapget.sh:1461`: `zfs destroy -R` po całym poddrzewie celu)
+pomyłka strony to skasowanie poddrzewa na hoście, na którym nikt nie
+zamierzał nic pisać. Bariery, które dziś łapią pomyłkę — brak wspólnej bazy
+GUID (1639), nowsze snapshoty/`written` na celu (1681/1683),
+`validate_remote_host` — są tam, gdzie cel jest ZAJĘTY; nie ma ich tam,
+gdzie cel jest pusty albo użytkownik dał `-f`, a to jest dokładnie
+przestrzeń, w której symetryczna gramatyka dodaje nową pomyłkę.
+
+Dlatego: gołe `snapsync.sh` bez `--engine-name` i bez ograniczenia strony
+**odmawia** (rc≠0, zero `ssh`, zero `zfs`). Gramatyka użytkownika pozostaje
+a) `snapsend.sh DATASETS [REMOTE]` i b) `snapget.sh REMOTE_DATASETS
+[LOCAL_BASE]` co do znaku. `--src-side=local` / `--dst-side=local` z
+wrappera to nie wygoda, tylko **suma kontrolna**: host po stronie, która „nie
+może mieć hosta", jest odmową przed jakimkolwiek `zfs`. Jeśli kiedyś ma
+powstać jeden czasownik dla ludzi, to w warstwie `zfs-backup.sh`, która zna
+relację i kierunek z configu — nie w silniku.
+
+Kształt wrapperów, który spełnia P0, P1 i P2 naraz:
 
 ```bash
 # snapsend.sh -- cienki: nazwa silnika jawna, źródło nie może nieść hosta
@@ -251,8 +302,8 @@ są spełnione, więc `snapsend.sh pool/data backuppool/kopie` i
 jedyna różnica to `ENGINE_NAME`, czyli klucz stanu. Relacja jednoserwerowa
 prowadzona dziś przez `snapget.sh` ma stan pod `snapget.sh.*` w `$LOCKDIR`
 i po scaleniu ma go tam dalej mieć; to jest cały powód P1. Gołe
-`snapsync.sh` bez `--engine-name` bierze własną nazwę — nowa relacja, nowy
-klucz, poprawnie, bo nikt jej wcześniej nie prowadził.
+`snapsync.sh` bez `--engine-name` odmawia (P0) — nie „bierze własnej nazwy",
+jak mówiła pierwsza wersja tego akapitu.
 
 **P3 — pliki zamrożone.** `snapsend.sh`, `snapget.sh`, `lib-zfs-snap.sh` są
 w `docs/project/ENGINE-FREEZE.md`; `snapsync.sh` ma tam trafić w tym samym
@@ -266,12 +317,12 @@ podstawie sekcji 2–3, a nie żeby implementer ją obchodził.
 
 | krok | zakres | dni |
 |---|---|---|
-| **0. Parytet** — potrzebny niezależnie od scalenia | port do push tego, co w tabeli sekcji 3 jest neutralne kierunkowo: `probe_dataset`, rusztowanie pod `-R -e`, linia `PLAN=`, 5 × `local x=$(...)`; decyzja o `-Q` w push zapisana; `twins --bless` z odczytem obu stron | 2 |
+| **0. Parytet** — plan naprawczy z sekcji 8, potrzebny niezależnie od scalenia | audyt parowany, pięć portów z sekcji 8.1, trzy mechanizmy z 8.2 | 4–6 |
 | 1. Ciało główne | jeden parser argv w `snapsync.sh`, dwa wrappery, `ENGINE_NAME` zamiast `$0` (P1), test kluczy stanu | 1–2 |
 | 2. Osiem funkcji kierunkowych | krotki per strona (M1); `process_dataset`, `transfer_data`, `find_*`, `validate_*`, `create_snapshot` jako jedna wersja; `_pg_wire` w obu kierunkach albo świadomie w jednym | 2–3 |
 | 3. Testy | stub-dyskryminator (M2) napisany **przed** krokiem 2; `test/twins` przechodzi w test „wrapper = stary kontrakt" (argv, `-V`, klucze stanu, lockfile); `snapsend` (root+ZFS, lab), `remote --peer` (M3), `scenarios`, `evalfree`, `subtree`, `recursion`, `pairpause`, `runsuffix` z grafu `deps.conf` | 2–3 |
 | 4. Domknięcie | `deploy.sh` (cztery pętle + `check_dep`), `ENGINE-FREEZE.md` + `--refreeze`, `deps.conf` (kontrakt `twin-functions` → `engine-wrappers`), `PROJECT_STATUS.md`, dziennik błędów | 1 |
-| **razem** | | **8–11** |
+| **razem** | | **10–14** (z czego 4–6 to sekcja 8, która ma sens sama) |
 
 Plus dwa cykle recenzji: wstępna (P3) i końcowa. Krok 0 może iść jako własna
 REV i **zwraca się sam**, nawet gdyby kroki 1–3 nigdy nie nastąpiły.
@@ -306,11 +357,91 @@ dotknie, to jest sygnał, że wrapper nie dotrzymał P2.
   to informacja, nie przeszkoda.
 - **Nie zaczynać od `process_dataset`.** Zaczyna się od M2 (stub) i P1
   (nazwa silnika), bo to są asercje, pod którymi reszta ma się zmieniać.
+- **Nie wystawiać `snapsync.sh` ludziom ani cronowi.** Linia crona woła
+  wrapper; `cron2conf.sh` ma nie wiedzieć, że silnik istnieje (P0).
+- **Nie błogosławić `twins` zdaniem bez numeru linii.** `fd26421` jest
+  dowodem, że zdanie może być fałszywe, a suita tego nie sprawdzi.
 - **Nie robić tego w wątku GUI ani w wątku czasowników.** Zamrożone silniki
   wymagają własnej dyrektywy, własnej recenzji wstępnej i własnego okna na
   `remote --peer` na labie.
 
-## 8. Start dla wątku programisty
+## 8. Plan naprawczy: parytet push↔pull (krok 0, ma sens sam)
+
+Właściciel, 2026-09-07: *„snapget.sh rozjechał się merytorycznie ze
+snapsend.sh — to niedopuszczalne. Przedstaw plan naprawczy."* Plan ma dwie
+połowy: **porty** (co dziś jest rozjechane, z kontrolą negatywną per pozycja)
+i **mechanizm** (dlaczego alarm nie zadziałał i co ma go zastąpić). Sama
+lista portów bez mechanizmu jest tym, co projekt zrobił 2026-08-23
+(`3b18fae`, „mirror the subtree verification into the push engine") — i
+rozjazd wrócił w dwa dni.
+
+### 8.1 Porty — pięć pozycji, każda z kontrolą negatywną na `c18436f`
+
+Wszystkie w `snapsend.sh` (zamrożony → `authorizes-frozen: snapsend.sh`),
+jedna REV, snapsend v2.72 → v2.73, `twins --bless` na końcu z odczytem obu
+stron per funkcja.
+
+| # | port | kontrola negatywna (dziś) | po porcie | koszt |
+|---|---|---|---|---|
+| P-1 | `-R -e`: dwie brakujące gałęzie skip (`No family`, `No MESSAGE family`) + bramka zbiorcza `ADOPT_SKIPPED >= ${#DATASETS[@]} → rc=1` na końcu przebiegu (wzór `snapget.sh:2595-2601`) | push `-R -e` nad drzewem z pustym kontenerem ścieżki: rc=1 „No source snapshots found"; push, w którym każdy członek jest rusztowaniem: rc=0 „All datasets processed successfully" | pierwszy: skip + rc=0; drugi: rc=1 „nothing was adopted" | 0,5 d |
+| P-2 | 5 × `local x=$(...)` → `local x; x=$(...)` (825, 936, 937, 1241, 1611) | stub `zfs` zwracający rc=1 na `get guid`: dziś `process_dataset` idzie dalej z pustym GUID | `return 1` na tej linii | 0,5 d (kontrola jest trudniejsza niż fix — to jest cały koszt) |
+| P-3 | linia `PLAN=INCREMENTAL\|FULL base= src= tgt=` na stdout w tym samym miejscu, co `snapget.sh` | `snapsend.sh -n` nie drukuje `PLAN=`; `seed` w `zfs-backup.sh` nie ma czego czytać | drukuje; `seed` może pokazać plan | 0,5 d |
+| P-4 | `guest_disk_is_live` na celu **po zdalnej stronie**: ten sam predykat (`quiesce_guest_id` → `quiesce_guest_status`) uruchomiony przez `quiesce_remote_run` na hoście celu, gdy cel istnieje i nie ma `-f`; odmowa, gdy gość działa LUB gdy statusu nie da się ustalić (jak pull) | push `-t` na dataset, który jest dyskiem działającego gościa na peerze: dziś odbiór przyrostowy idzie | odmowa z tym samym komunikatem, co pull | 1 d (ssh po stronie celu, konto delegowane bez helpera → „nie wiem = odmowa", jak w pull) |
+| P-5 | podpowiedź „-F na ZAMONTOWANYM celu" na ścieżce odmowy odbioru zdalnego | surowy komunikat `zfs` | ta sama podpowiedź, z nazwą hosta celu | 0,25 d |
+
+Nie portowane, z powodem zapisanym w `twins.sha256` (8.2 M-a): `-Q`
+(deadman chroni zdalnie zamrożonego gościa; w push gość jest lokalny),
+`probe_dataset` na źródle (lokalne `zfs list` nie ma trybu „ssh padł").
+Odwrotny kierunek sprawdzony też: `canmount_noauto_subtree*` z push ma
+w pull odpowiednik inline (`snapget.sh:1836`) — równoważne, nie dryf.
+
+### 8.2 Mechanizm — trzy zmiany, żeby to nie wróciło
+
+**M-a — różnica bez powodu nie przechodzi.** `twins.sha256` dostaje dla pary
+o różnych hashach obowiązkową trzecią kolumnę: `direction:<jedno zdanie z
+numerem linii>` albo `port-by:<REV lub data>`. Suita: para różna bez powodu
+→ FAIL; `port-by` z datą w przeszłości → FAIL. `--bless` bez powodu dla
+różnej pary → odmowa. Alarm przestaje być pytaniem, na które można
+odpowiedzieć zdaniem; staje się terminem. `fd26421` w tym mechanizmie nie
+mógłby przejść: „-e exists only on pull" musiałoby wskazać linię, a
+`snapsend.sh:37` mówi co innego.
+
+**M-b — scenariusze parowane w `test/snapsend/run.sh`.** Dziś suita ma 77
+wywołań `run_send` i 28 `run_get`, asercje per silnik, nie per para. Nowa
+sekcja **P**: każdy scenariusz trybu lokalnego (ten sam argv w obu silnikach —
+sekcja 2) uruchamiany **obydwoma** silnikami na tym samym drzewie i
+asercjonowany na **identyczny** rc, identyczny zbiór powstałych datasetów i
+snapshotów, identyczne `PLAN=`. `-R -e` nad pustym kontenerem wchodzi jako
+pierwszy scenariusz P — jest kontrolą negatywną P-1. Kandydaci z dzisiejszej
+suity: wszystkie 28 `run_get`, bo dla nich `run_send` z tym samym argv jest
+poprawnym wywołaniem. Tryb lokalny jest jedynym, w którym oba silniki mają
+być **nieodróżnialne** — więc to jest miejsce na test nieodróżnialności.
+
+**M-c — autoryzacja jednego silnika nazywa bliźniaka.** Wpis w
+`ENGINE-FREEZE.md`, który nazywa dokładnie jeden z `snapsend.sh`/`snapget.sh`,
+musi zawierać linię `twin: ported in <commit>` albo `twin: n/a — <powód z
+numerem linii>`. `./test/impact.sh --verify` sprawdza to grepem (wpis
+z jedną nazwą silnika bez `twin:` → FAIL). Cztery istniejące wpisy z 21.08
+i 27-28.08 dostają tę linię wstecznie, z prawdziwą odpowiedzią — dla 21.08
+brzmi ona „NIE zportowane, P-1 w sekcji 8.1", nie „n/a".
+
+### 8.3 Kolejność i koszt
+
+| etap | dni |
+|---|---|
+| audyt parowany: 15 funkcji × (identyczna / kierunkowa z linią / dryf) + odwrotny kierunek; wynik jako kolumna powodu w `twins.sha256` (M-a) | 1 |
+| M-b sekcja P z pierwszym scenariuszem `-R -e` czerwonym (kontrola P-1) | 1 |
+| P-1 … P-5 pod `authorizes-frozen: snapsend.sh`, każdy z kontrolą; `snapsend` na labie (root+ZFS); v2.73 | 2–3 |
+| M-c w `impact.sh` + cztery wpisy wstecz; `--refreeze`; `PROJECT_STATUS`; dziennik błędów | 0,5–1 |
+| **razem** | **4–6** |
+
+Po tym etapie scalenie (kroki 1–3 z sekcji 6) zaczyna od dwóch silników,
+które w trybie lokalnym są nieodróżnialne z dowodem, a w trybach zdalnych
+różnią się tylko tam, gdzie `twins.sha256` mówi dlaczego. Bez tego etapu
+scalenie musiałoby wybierać, która wersja `process_dataset` jest prawdziwa —
+a P-1 pokazuje, że dziś **żadna** z nich nie jest kompletna.
+
+## 9. Start dla wątku programisty
 
 ```bash
 git fetch origin main && git log --oneline -1 origin/main
@@ -325,8 +456,9 @@ git log --since=2026-08-04 --format='%h %s' -- snapget.sh      # krok 0: co port
 ./test/impact.sh                                               # co trzeba uruchomić
 ```
 
-Pierwszy commit: **krok 0**, jako własna REV pod `authorizes-frozen`, w
-kolejności: 5 × `local x=$(...)` → `probe_dataset` → rusztowanie `-R -e` →
-`PLAN=` → decyzja o `-Q`. Każda pozycja z kontrolą negatywną na `c18436f`.
-Dopiero po zielonym `snapsend` na labie i zapisie w `PROJECT_STATUS.md` —
-zlecenie na kroki 1–4, z M2 jako pierwszym plikiem.
+Pierwszy commit: **sekcja 8** (krok 0), jako własna REV pod
+`authorizes-frozen: snapsend.sh`, w kolejności 8.3: audyt → sekcja P z
+czerwonym `-R -e` → P-1 … P-5 → M-c. Każda pozycja z kontrolą negatywną na
+`c18436f`. Dopiero po zielonym `snapsend` na labie i zapisie w
+`PROJECT_STATUS.md` — zlecenie na kroki 1–4 z sekcji 6, z M2 jako pierwszym
+plikiem.

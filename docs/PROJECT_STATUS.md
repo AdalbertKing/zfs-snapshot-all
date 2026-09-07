@@ -46,7 +46,25 @@
   to czwarty tryb, w którym oba silniki przyjmują **ten sam argv** i
   wykonują tę samą gałąź — duplikacja stuprocentowa; pierwsza wersja
   dokumentu twierdziła, że snapget nie kopiuje lokalnie, bez sprawdzenia w
-  kodzie (E38). Nic w kodzie nie zmienione.
+  kodzie (E38). Druga poprawka właściciela („błąd może być kosztowny"):
+  `snapsync.sh` **nie jest powierzchnią użytkownika** — nazwa skryptu jest
+  drugim, niezależnym zapisem strony pisanej, a symetryczna gramatyka
+  usuwałaby tę redundancję dokładnie tam, gdzie `-f` robi `zfs destroy -R`;
+  gołe `snapsync.sh` odmawia, wrappery niosą ograniczenie strony jako sumę
+  kontrolną (P0). Trzecia rzecz, którą właściciel nazwał niedopuszczalną:
+  **merytoryczny rozjazd push↔pull**. Zmierzony i zaklasyfikowany (§3):
+  `-R -e` ma w push jedną z trzech gałęzi rusztowania i **brak bramki
+  zbiorczej** (rc=1 „No source snapshots found" tam, gdzie pull pomija;
+  fałszywy „All datasets processed successfully", gdy wszystko było
+  rusztowaniem), 5 masek `local x=$(...)` na ścieżce GUID, brak `PLAN=`,
+  brak odmowy na dysk działającego gościa po stronie celu; `-Q` i
+  `probe_dataset` to różnice kierunkowe, nie dryf. Alarm `twins` uciszono
+  commitem `fd26421` zdaniem „-e exists only on pull", które jest fałszywe
+  (`snapsend.sh:37`). **Plan naprawczy w §8 dokumentu**: pięć portów z
+  kontrolą negatywną każdy, plus trzy mechanizmy (powód obowiązkowy w
+  `twins.sha256` z terminem, scenariusze parowane w `test/snapsend`,
+  `twin:` obowiązkowy we wpisie freeze jednego silnika), 4–6 dni, ma sens
+  bez scalenia. Nic w kodzie nie zmienione.
 
 - **`save-profile` — ekran konstruujący profil (2026-09-07).**
   Właściciel: *„Nie mamy ekranu konstruującego i zapisującego profil. Może
