@@ -85,6 +85,25 @@ współrzędne konwencją („`remote_*` to cel" w send, „`remote_*` to źród
 zamiast danymi. Helpery w `lib-zfs-snap.sh` już przyjmują `user host` per
 wywołanie — dlatego różnica jest mechaniczna.
 
+**Tryb lokalny — duplikacja stuprocentowa.** Oba silniki obsługują relację
+jednoserwerową (kopia do drugiego datasetu na tym samym hoście) z **tym samym
+argv**: `snapsend.sh -m auto_ pool/data backuppool/kopie` i
+`snapget.sh -m auto_ pool/data backuppool/kopie` piszą to samo miejsce.
+W snapget element bez `:` to źródło lokalne (`snapget.sh:349-352` — „no ssh,
+used for local-to-local relocation/testing"; parser `2316-2318` zostawia
+`_item_host` pusty), w snapsend `REMOTE` bez `:` i `@` to lokalna baza
+(`snapsend.sh:2329`). Suita `test/snapsend/run.sh` uruchamia snapget właśnie
+tak — 27 wywołań `run_get` — i to jest relacja jednoserwerowa, jakie flota
+prowadzi dziś przez snapget. W tym trybie nie ma strony zdalnej, więc nie ma
+nawet zamienionych slotów: obie kopie `process_dataset` i `transfer_data`
+wykonują tę samą gałąź (`COMPRESSION` wymuszone na 0, `snapget.sh:1184` ma
+własną odmowę `src == tgt` przy pustym hoście). Decyzja z 08-04 opisuje trzy
+tryby (push, pull, lokalny-tylko-w-suicie); czwarty — lokalny w produkcji —
+jest tym, w którym „rozbieżność" wynosi zero. Poprawka właściciela,
+2026-09-07: pierwsza wersja tego dokumentu twierdziła, że snapget nie kopiuje
+lokalnie. Nie sprawdziłem tego w kodzie przed napisaniem — E38 w dzienniku
+błędów, ten sam odruch.
+
 Komendy, którymi to zmierzono (do powtórzenia po każdej zmianie):
 
 ```bash
@@ -167,7 +186,10 @@ hoście i asercjonuje:
   dla `tgt` **nie poszło** przez ssh;
 - push: odwrotnie;
 - `zfs snapshot` (create) poszło przez ssh tylko w pull;
-- `zfs hold` poszło na tę samą stronę, co `zfs snapshot`.
+- `zfs hold` poszło na tę samą stronę, co `zfs snapshot`;
+- argv bez hosta po żadnej stronie (relacja jednoserwerowa): stub
+  zarejestrował **zero** wywołań `ssh` — w obu wrapperach i w gołym
+  `snapsync.sh`.
 
 To zamyka fail-open na czystym tekście, w sekundach, w CI. Test pisze się
 **przed** pierwszą zmianą w `process_dataset` (R7: kontrola negatywna —
@@ -211,6 +233,26 @@ lista datasetów, baza) — **nie** przepycha dwóch parserów do `snapsync.sh`.
 `OPTSTRING` też się różni (`-Q` tylko w get; kolejność `q:`) — jedno
 `OPTSTRING` w silniku, wrapper push odrzuca `-Q` do czasu, aż deadman ma sens
 w push (albo i nie odrzuca — to decyzja, nie przypadek; zapisać ją).
+
+Kształt wrapperów, który spełnia P1 i P2 naraz:
+
+```bash
+# snapsend.sh -- cienki: nazwa silnika jawna, źródło nie może nieść hosta
+exec bash "$DIR/snapsync.sh" --engine-name=snapsend.sh --src-side=local "$@"
+# snapget.sh  -- cienki: cel nie może nieść hosta
+exec bash "$DIR/snapsync.sh" --engine-name=snapget.sh --dst-side=local "$@"
+```
+
+`--src-side`/`--dst-side` to **ograniczenia**, nie kierunek: wrapper mówi
+„ta strona nie może mieć hosta", a `snapsync.sh` i tak wylicza krotki
+`SRC_*`/`TGT_*` z argumentów (M1). Dla wywołania bez hosta oba ograniczenia
+są spełnione, więc `snapsend.sh pool/data backuppool/kopie` i
+`snapget.sh pool/data backuppool/kopie` trafiają do tego samego kodu —
+jedyna różnica to `ENGINE_NAME`, czyli klucz stanu. Relacja jednoserwerowa
+prowadzona dziś przez `snapget.sh` ma stan pod `snapget.sh.*` w `$LOCKDIR`
+i po scaleniu ma go tam dalej mieć; to jest cały powód P1. Gołe
+`snapsync.sh` bez `--engine-name` bierze własną nazwę — nowa relacja, nowy
+klucz, poprawnie, bo nikt jej wcześniej nie prowadził.
 
 **P3 — pliki zamrożone.** `snapsend.sh`, `snapget.sh`, `lib-zfs-snap.sh` są
 w `docs/project/ENGINE-FREEZE.md`; `snapsync.sh` ma tam trafić w tym samym

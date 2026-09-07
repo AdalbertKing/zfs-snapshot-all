@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1234,4 +1234,33 @@ QUESTION about the whole tree, not a repair at one address.** When a fix is
 written, grep for the shape -- the function, the field, the idiom -- and answer
 in the commit message how many sites were found and why the others are clean.
 "Fixed where I found it" is not a report.
+
+### E42 — "snapget cannot copy locally", written from the usage line, corrected by the Owner
+
+**2026-09-07, `OWNER-ENGINE-MERGE-2026-09-07.md`, caught by the Owner from the
+fleet's own relationships.**
+
+*Genesis.* A syntax table for the three engines put "(brak — cel lokalny,
+źródło musi mieć hosta)" in snapget's local-to-local cell. The Owner: "snapget
+potrafi lokalnie kopiować, przecież mamy relacje jednoserwerowe". Measured
+afterwards: `snapget.sh:349-352` documents a bare dataset as a LOCAL source
+("no ssh, used for local-to-local relocation/testing"), the parser leaves
+`_item_host` empty for it, and `test/snapsend/run.sh` -- a suite I had cited
+in the SAME document as "LOCAL MODE ONLY" -- runs snapget that way 27 times.
+
+*Cause.* The claim was derived from the usage line (`REMOTE_DATASETS
+[LOCAL_BASE]`) and the name of the first argument, not from the parser. Worse
+than E38: the authoritative surface was not merely elsewhere, it was already in
+my hands -- I had read the header block that says it, twenty lines below the
+line I quoted, and had measured the suite's local mode the same hour. A fact
+about one side of a boundary (the usage line) was carried across to the other
+(what the parser accepts) without looking.
+
+*Rule.* R2, and E38's lesson stated one notch harder: **a "the product does
+not do X" belongs in a document only after the input that would exercise X has
+been constructed and run, or the refusal that blocks it has been found by line
+number.** A name in a usage string is a label, not a contract. The correction
+went into the document as a fourth mode -- local in production -- in which the
+two engines' duplication is total; the mistake made the argument stronger, which
+is exactly why it should have been measured first.
 

@@ -41,8 +41,12 @@
   (lockfile, wznowienia, in-flight — nazwa silnika musi być jawnym
   parametrem), `-V`/argv per wrapper, trzy pliki zamrożone. **Decyzja z
   08-04 formalnie stoi** do czasu recenzji wstępnej z `authorizes-frozen`;
-  krok 0 (parytet push↔pull) zwraca się niezależnie od reszty. Nic w kodzie
-  nie zmienione.
+  krok 0 (parytet push↔pull) zwraca się niezależnie od reszty. Poprawka
+  właściciela tego samego dnia: relacja jednoserwerowa (oba końce lokalne)
+  to czwarty tryb, w którym oba silniki przyjmują **ten sam argv** i
+  wykonują tę samą gałąź — duplikacja stuprocentowa; pierwsza wersja
+  dokumentu twierdziła, że snapget nie kopiuje lokalnie, bez sprawdzenia w
+  kodzie (E38). Nic w kodzie nie zmienione.
 
 - **`save-profile` — ekran konstruujący profil (2026-09-07).**
   Właściciel: *„Nie mamy ekranu konstruującego i zapisującego profil. Może
