@@ -9582,9 +9582,69 @@ fi
 
 # The answer is ONE object. A half-rendered row used to break exactly this.
 case "$lp_got" in
-    '{"profiles":['*']}') ok "listprofiles: the answer is one closed object, even with two broken profiles in the directory" ;;
+    '{"rendered":true,"profiles":['*']}') ok "listprofiles: the answer is one closed object, even with two broken profiles in the directory" ;;
     *) bad "listprofiles: the answer is one closed object, even with two broken profiles in the directory" "$lp_got" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# --no-render: THE PICKER'S FORM. Measured on pve10 -- validating and rendering
+# one profile is ~500 ms of the ~700 ms a row costs, and a list of seventeen
+# profiles is exactly the screen that cannot afford it. What the picker needs
+# (name, description, mechanism, shape, tiers) is all in the SOURCE file.
+#
+# The keys that need a render are ABSENT, not blanked. `retain_rendered` blank
+# would be indistinguishable from a tier that renders to no flag at all, and
+# `valid` blank would be indistinguishable from invalid. The document says which
+# form it is ONCE, at the top.
+# ---------------------------------------------------------------------------
+lp_run --json --no-render
+lp_fast="$(cat "$WORK/lp.out")"
+case "$lp_fast" in
+    '{"rendered":false,"profiles":['*']}')
+        ok "listprofiles: --no-render answers one closed object and declares itself at the top" ;;
+    *) bad "listprofiles: --no-render answers one closed object and declares itself at the top" "$lp_fast" ;;
+esac
+lp_bad=""
+for lp_k in '"valid":' '"families":' '"retain_rendered":'; do
+    case "$lp_fast" in *"$lp_k"*) lp_bad="$lp_bad $lp_k" ;; esac
+done
+if [ -z "$lp_bad" ]; then
+    ok "listprofiles: --no-render omits every key that would need a render, rather than blanking it"
+else
+    bad "listprofiles: --no-render omits every key that would need a render, rather than blanking it"         "still present:$lp_bad"
+fi
+# THE DISCRIMINATOR FOR THE OPTIMISATION ITSELF: the cheap form must reach the
+# SAME mechanism and shape as the rendered one. shape is now counted from the
+# source patterns instead of from the rendered family signature -- if that
+# rewrite changed the answer for any shipped shape, this fails.
+# Compared only over the profiles the RENDERED form calls VALID. For a profile
+# it calls invalid the two forms MUST differ, and that difference is the next
+# assertion rather than a hole in this one.
+lp_valid=$(printf '%s' "$lp_got" | grep -o '"name":"[^"]*"[^}]*"valid":true' | grep -o '^"name":"[^"]*"' | sort)
+lp_pick() {   # <document> -> "name mechanism shape" for the valid ones, sorted
+    printf '%s' "$1" | grep -o '"name":"[^"]*","file[^}]*"mechanism":"[a-z]*","shape":"[a-z-]*"' | sed 's/"file[^}]*"mechanism"/ /' | while IFS= read -r row; do
+        case "$lp_valid" in *"${row%%,*}"*) printf '%s\n' "$row" ;; esac
+    done | sort
+}
+lp_m1=$(lp_pick "$lp_got")
+lp_m0=$(lp_pick "$lp_fast")
+if [ -n "$lp_m1" ] && [ "$lp_m1" = "$lp_m0" ]; then
+    ok "listprofiles: --no-render reaches the SAME mechanism and shape for every VALID profile"
+else
+    bad "listprofiles: --no-render reaches the SAME mechanism and shape for every VALID profile" \
+        "rendered: $(printf '%s' "$lp_m1" | tr '\n' ' ')" "fast: $(printf '%s' "$lp_m0" | tr '\n' ' ')"
+fi
+# THE TRADE-OFF, NAMED. Without a render there is no way to know a profile is
+# broken, so --no-render reports what the SOURCE says and claims no validity at
+# all. A picker on this form will therefore offer a profile that add-client will
+# later refuse -- the refusal moves to creation, which is where it can be acted
+# on. It must never claim the profile is fine: no `valid` key at all.
+case "$lp_fast" in
+    *'"name":"t-badkeep"'*) ok "listprofiles: --no-render still LISTS a profile it could not check" ;;
+    *) bad "listprofiles: --no-render still LISTS a profile it could not check" "$lp_fast" ;;
+esac
+lp_run --json
+lp_got="$(cat "$WORK/lp.out")"
 
 lp_has() {   # <fragment> <assertion name>
     case "$lp_got" in
