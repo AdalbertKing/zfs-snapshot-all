@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -9011,6 +9011,945 @@ if [ "$got" = "[][]" ]; then
 else
     bad "noeval: no fields and no PASSIVE render nothing, under set -u" "$got"
 fi
+
+
+# ============================================================================
+# status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
+# Self-contained; always eligible, also under `--section statusjson`.
+#
+# Why an EXACT match rather than a handful of greps: the deliverable here is a
+# CONTRACT, and the things a front end breaks on -- a renamed field, a boolean
+# that became a string, a field that silently stopped being emitted, two
+# records that ran together without a comma -- are all invisible to a grep for
+# the field you happened to think of. The pin is the whole line. A future
+# additive field is then a deliberate edit here, which is the point.
+#
+# Two things this suite deliberately does NOT do: parse the JSON with a real
+# parser (this tree is bash + coreutils by decision, and test/join already pays
+# for the one python dependency it could not avoid), and assert anything about
+# the peer probe's SUCCESS path -- that needs a second host and is named as a
+# manual obligation, not faked here.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SJ="$WORK/statusjson"; rm -rf "$SJ"; mkdir -p "$SJ/clients" "$SJ/rel" "$SJ/cwd"
+# Decoys in the working directory. They exist for exactly one assertion: a
+# record field of `*` must stay the string `*`, and the only way to see the
+# difference is to have something for it to expand INTO.
+touch "$SJ/cwd/decoy-a" "$SJ/cwd/decoy-b"
+
+cat > "$SJ/clients/alpha.conf" <<'SJEOF'
+CLIENT_NAME=alpha
+STATE=active
+PEER_HOST=pve9.example
+ACTIVE_ENDPOINT=10.0.0.1:22
+INSTALLED_ENDPOINT=10.0.0.9:22
+PROFILE=default
+SOURCE_PROFILE=d7h24-gfs
+CLIENT_TARGET=tank/backup/alpha
+MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'
+MANAGED_PRUNE_SCOPE=tank/backup/alpha
+REQUESTED_DATASETS=rpool/data/vm-100
+LOCAL_USER=zfsbackup
+BANDWIDTH=20M
+RECURSION=atomic
+CREATED_AT=2026-09-01T10:00:00Z
+ACTIVATED_AT=2026-09-01T11:00:00Z
+SJEOF
+# beta carries the two values a reader gets wrong: a glob, and characters that
+# have to be escaped before they can be JSON.
+cat > "$SJ/clients/beta.conf" <<'SJEOF'
+CLIENT_NAME=beta
+STATE=seed_complete
+ACTIVE_ENDPOINT=10.0.0.2:22
+MANAGED_DATASETS='*'
+CLIENT_TARGET='tank/a"b\c'
+SJEOF
+# The config deliberately DISAGREES with the record on the label, and carries a
+# second section belonging to nobody this program manages. Both are
+# discriminators: the label must come from the config (it is what the cron line
+# passes as -L, so it is the join key against progress/stats), and a section
+# without an ownership marker must not have its fields attributed to whichever
+# relationship happened to be named just above it.
+cat > "$SJ/cron.conf" <<'SJEOF'
+[dataset:tank/backup/alpha/vm-100]
+	# managed-by: zfs-backup.sh client=alpha
+	src          = root@10.0.0.1:rpool/data/vm-100
+	pair_label   = alpha-renamed
+	use_template = hourly
+
+[dataset:tank/other]
+	pair_label   = somebody-else
+	src          = root@10.0.0.5:rpool/x
+SJEOF
+
+sj_run() {   # <status args...> -- output to $WORK/sj.out, returns cmd_status's rc
+    ( id() { echo 0; }
+      CLIENTS_DIR="$SJ/clients"
+      RELATIONSHIPS_DIR="$SJ/rel"
+      CRON_CONFIG="$SJ/cron.conf"
+      STATS_LOG="$SJ/stats.log"
+      cd "$SJ/cwd" || exit 9
+      cmd_status "$@" ) >"$WORK/sj.out" 2>&1
+}
+sj_show() { sed 's/},{/},\n  {/g' "$WORK/sj.out"; }
+
+sj_alpha='{"name":"alpha","state":"active","pair_label":"alpha-renamed","peer_host":"pve9.example","active_endpoint":"10.0.0.1:22","installed_endpoint":"10.0.0.9:22","endpoint_diverged":true,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"default","source_profile":"d7h24-gfs","client_target":"tank/backup/alpha","local_user":"zfsbackup","bandwidth":"20M","recursion":"atomic","passive":"","created_at":"2026-09-01T10:00:00Z","activated_at":"2026-09-01T11:00:00Z","seed_completed_at":"","removed_at":"","sources":["root@10.0.0.1:rpool/data/vm-100"],"managed_datasets":["tank/backup/alpha/vm-100","tank/backup/alpha/vm-101"],"managed_prune_scope":["tank/backup/alpha"]}'
+sj_beta='{"name":"beta","state":"seed_complete","pair_label":"beta","peer_host":"","active_endpoint":"10.0.0.2:22","installed_endpoint":"","endpoint_diverged":false,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"","source_profile":"","client_target":"tank/a\"b\\c","local_user":"","bandwidth":"","recursion":"","passive":"","created_at":"","activated_at":"","seed_completed_at":"","removed_at":"","sources":[],"managed_datasets":["*"],"managed_prune_scope":[]}'
+
+sj_run --json
+sj_got="$(cat "$WORK/sj.out")"
+if [ "$sj_got" = "{\"relations\":[$sj_alpha,$sj_beta]}" ]; then
+    ok "statusjson: the LIST form is the pinned contract, field for field"
+else
+    bad "statusjson: the LIST form is the pinned contract, field for field" \
+        "want:" "  {\"relations\":[" "  $sj_alpha," "  $sj_beta" "  ]}" "got:" "$(sj_show)"
+fi
+
+# POPULATION CONTROL. Every assertion above is about the CONTENT of the array;
+# none of them notices an array that lost a member, and an emitter that skipped
+# a record would still match a `want` built from the same emitter. Counted
+# against the directory, which is the fact the emitter is supposed to reflect.
+sj_files=$(ls "$SJ/clients"/*.conf | wc -l)
+sj_recs=$(grep -o '"name":"' "$WORK/sj.out" | wc -l)
+if [ "$sj_recs" -eq "$sj_files" ] && [ "$sj_recs" -eq 2 ]; then
+    ok "statusjson: one record per client record file (2 files, 2 records)"
+else
+    bad "statusjson: one record per client record file (2 files, 2 records)" \
+        "files=$sj_files records=$sj_recs" "$(sj_show)"
+fi
+
+# The three properties the pinned line proves, named one by one so a failure
+# says WHICH invariant went, not just that a long string differs.
+case "$sj_got" in
+    *'"pair_label":"alpha-renamed"'*)
+        ok "statusjson: pair_label is read from the CONFIG, not assumed equal to the client name" ;;
+    *) bad "statusjson: pair_label is read from the CONFIG, not assumed equal to the client name" "$(sj_show)" ;;
+esac
+case "$sj_got" in
+    *somebody-else*)
+        bad "statusjson: an unmarked section's fields are not attributed to the relationship above it" \
+            "the stranger's pair_label reached the output" "$(sj_show)" ;;
+    *)  ok "statusjson: an unmarked section's fields are not attributed to the relationship above it" ;;
+esac
+case "$sj_got" in
+    *decoy-a*|*decoy-b*)
+        bad "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" "$(sj_show)" ;;
+    *'"managed_datasets":["*"]'*)
+        ok "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" ;;
+    *)  bad "statusjson: a record field of '*' stays a string, it is not globbed against the cwd" "$(sj_show)" ;;
+esac
+
+# PAUSE. The one live piece of state in the list form, and the reason the text
+# view has a PAUSED_LOCAL column at all.
+mkdir -p "$SJ/rel/alpha"
+printf 'PAUSED_AT="2026-09-07T08:00:00Z"\nPAUSED_REASON="disk swap"\n' > "$SJ/rel/alpha/paused"
+sj_run --json
+if grep -q '"name":"alpha".*"paused_local":true' "$WORK/sj.out" \
+   && grep -q '"name":"beta".*"paused_local":false' "$WORK/sj.out"; then
+    ok "statusjson: paused_local is true for the paused relationship and false for the other"
+else
+    bad "statusjson: paused_local is true for the paused relationship and false for the other" "$(sj_show)"
+fi
+rm -rf "$SJ/rel/alpha"
+
+# THE NAMED FORM. Two things only it does: it asks the peer, and it reports the
+# last run. The global ssh stub answers 255, so the peer cannot be asked -- and
+# the answer to "could not ask" must be UNKNOWN, never the NOT_ASKED the list
+# form reports and never a silent absence. This is the whole reason the two
+# tokens exist.
+cat > "$SJ/stats.log" <<'SJEOF'
+{"time":"2026-09-06T22:10:03Z","script":"snapget.sh","label":"alpha","dataset":"tank/backup/alpha/vm-100","target":"x","status":"success","duration_s":41,"resumed":false}
+SJEOF
+sj_run alpha --json
+sj_got="$(cat "$WORK/sj.out")"
+case "$sj_got" in
+    *'"peer_pair_state":"UNKNOWN"'*)
+        ok "statusjson: a peer that cannot be asked is UNKNOWN in the named form, not NOT_ASKED" ;;
+    *) bad "statusjson: a peer that cannot be asked is UNKNOWN in the named form, not NOT_ASKED" "$(sj_show)" ;;
+esac
+case "$sj_got" in
+    *'"last_result":{"time":"2026-09-06T22:10:03Z","status":"success","duration_s":41}'*)
+        ok "statusjson: the named form carries last_result from the stats log" ;;
+    *) bad "statusjson: the named form carries last_result from the stats log" "$(sj_show)" ;;
+esac
+# ...and NOTHING in the history is null, not an invented success. The text view
+# spends two lines saying "this is not 'no failures', it is 'nobody knows'";
+# null is the only token that carries that distinction to a reader.
+: > "$SJ/stats.log"
+sj_run alpha --json
+case "$(cat "$WORK/sj.out")" in
+    *'"last_result":null'*)
+        ok "statusjson: an empty history is last_result:null, never an invented success" ;;
+    *) bad "statusjson: an empty history is last_result:null, never an invented success" "$(sj_show)" ;;
+esac
+# The list form must NOT carry last_result at all: it does not read the stats
+# log per relationship, and emitting null there would say "no history" about a
+# question nobody asked.
+sj_run --json
+case "$(cat "$WORK/sj.out")" in
+    *last_result*) bad "statusjson: the LIST form carries no last_result -- it never asked" "$(sj_show)" ;;
+    *)             ok "statusjson: the LIST form carries no last_result -- it never asked" ;;
+esac
+
+# NO CLIENTS AT ALL is an empty array, not an empty file and not a refusal: a
+# front end starting on a fresh collector must get a parseable answer.
+SJE="$WORK/statusjson-empty"; rm -rf "$SJE"; mkdir -p "$SJE"
+if [ "$( ( CLIENTS_DIR="$SJE"; cmd_status --json ) 2>&1 )" = '{"relations":[]}' ]; then
+    ok "statusjson: a collector with no relationships answers {\"relations\":[]}"
+else
+    bad "statusjson: a collector with no relationships answers {\"relations\":[]}" \
+        "$( ( CLIENTS_DIR="$SJE"; cmd_status --json ) 2>&1 )"
+fi
+
+# REFUSALS. --json was accepted before this change only in the sense that
+# `status --json` died with "no client '--json'" -- the negative control for
+# this whole section against the prior SHA. Now the option is real, so the
+# grammar has to refuse what it does not know rather than treat it as a name.
+if ! sj_run --nope && grep -q "unknown option" "$WORK/sj.out"; then
+    ok "statusjson: an unknown option is refused by name, not taken for a client"
+else
+    bad "statusjson: an unknown option is refused by name, not taken for a client" "$(cat "$WORK/sj.out")"
+fi
+if ! sj_run alpha beta && grep -q "at most one client name" "$WORK/sj.out"; then
+    ok "statusjson: two client names are refused"
+else
+    bad "statusjson: two client names are refused" "$(cat "$WORK/sj.out")"
+fi
+
+# THE TEXT VIEW IS UNTOUCHED. --json is an addition; the operator's `status`
+# has to print exactly what it printed before, including for a name.
+sj_run
+if grep -q '^alpha .*state=active .*endpoint=10.0.0.1:22' "$WORK/sj.out" \
+   && grep -q '^beta .*state=seed_complete' "$WORK/sj.out"; then
+    ok "statusjson: the text list is unchanged by the new option"
+else
+    bad "statusjson: the text list is unchanged by the new option" "$(cat "$WORK/sj.out")"
+fi
+sj_run alpha
+if grep -q '^Klient: *alpha' "$WORK/sj.out" && grep -q '^Stan: *active' "$WORK/sj.out"; then
+    ok "statusjson: the text detail view is unchanged by the new option"
+else
+    bad "statusjson: the text detail view is unchanged by the new option" "$(cat "$WORK/sj.out")"
+fi
+
+
+# ============================================================================
+# show-config: THE SECOND READER, AND THE FIRST TEST section_owned_by HAS EVER
+# HAD (V3, 2026-09-07). Self-contained; always eligible, also under
+# `--section showconfig`.
+#
+# The pinned line is the contract, for the reasons the statusjson section
+# gives. What is NOT in that line and matters more: this section is where the
+# claim in section_owned_by's own comment -- "the two tests are deliberately
+# identical" to the one remove_managed_sections applies -- is measured for the
+# first time. It was written in 2026-08 and nothing in the tree checked it, so
+# a screen built on it could have shown a different set of sections than
+# teardown removes, and neither side would have said so.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SC="$WORK/showconfig"; rm -rf "$SC"; mkdir -p "$SC/clients"
+cat > "$SC/cron.conf" <<'SCEOF'
+[defaults]
+	host_label   = pve2
+	repo_dir     = /root/scripts
+
+[dataset:tank/backup/alpha/vm-100]
+	# managed-by: zfs-backup.sh client=alpha
+	src          = root@10.0.0.1:rpool/data/vm-100
+	use_template = profile__default__standard_hourly
+	pair_label   = alpha
+	bandwidth    = 20M
+	exclude_child_1 = -swap$
+	prefix       =
+
+[dataset:tank/backup/alpha/vm-101]
+	use_template = profile__default__standard_hourly
+	pair_label   = alpha
+
+[prune:tank/backup/alpha]
+	# managed-by: zfs-backup.sh client=alpha
+	use_template = profile__default__keep_hourly,missing_tier
+	gfs          = yes
+
+[dataset:tank/other]
+	src          = root@10.0.0.5:rpool/x
+	use_template = profile__default__standard_hourly
+
+[template:profile__default__standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[excluded:__replicate_]
+	keep = 2
+SCEOF
+# vm-100 carries the MARKER. vm-101 carries none and is owned only through the
+# record -- the pre-marker shape every relationship enrolled before
+# REV-20260802-033 U11 still has on disk. tank/other is a stranger at a path
+# this relationship never recorded: neither test may claim it.
+{
+  echo "CLIENT_NAME=alpha"
+  echo "STATE=active"
+  echo "MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'"
+  echo "MANAGED_PRUNE_SCOPE=tank/backup/alpha"
+  echo "CRON_CONFIG=$SC/cron.conf"
+} > "$SC/clients/alpha.conf"
+printf 'CLIENT_NAME=beta\nSTATE=created\n' > "$SC/clients/beta.conf"
+
+sc_run() {   # <show-config args...> -- output to $WORK/sc.out, returns the rc
+    ( CLIENTS_DIR="$SC/clients"
+      SERVER_CONF="$SC/no-such-server-conf"
+      cmd_show_config "$@" ) >"$WORK/sc.out" 2>&1
+}
+
+sc_want='{"client":"alpha","config":"CONFIGPATH","config_readable":true,"sections":[{"kind":"dataset","name":"tank/backup/alpha/vm-100","managed_marker":true,"fields":{"src":"root@10.0.0.1:rpool/data/vm-100","use_template":"profile__default__standard_hourly","pair_label":"alpha","bandwidth":"20M","exclude_child_1":"-swap$","prefix":""}},{"kind":"dataset","name":"tank/backup/alpha/vm-101","managed_marker":false,"fields":{"use_template":"profile__default__standard_hourly","pair_label":"alpha"}},{"kind":"prune","name":"tank/backup/alpha","managed_marker":true,"fields":{"use_template":"profile__default__keep_hourly,missing_tier","gfs":"yes"}}],"templates":[{"name":"profile__default__standard_hourly","present":true,"fields":{"send_schedule":"1 * * * *","prefix":"automated_hourly_"}},{"name":"profile__default__keep_hourly","present":true,"fields":{"prune_schedule":"21 * * * *","pattern":"automated_hourly","keep":"24"}},{"name":"missing_tier","present":false,"fields":{}}],"host":{"defaults":{"host_label":"pve2","repo_dir":"/root/scripts"},"excluded":[{"prefix":"__replicate_","fields":{"keep":"2"}}]}}'
+
+sc_run alpha --json
+sc_got="$(sed "s|$SC/cron.conf|CONFIGPATH|" "$WORK/sc.out")"
+if [ "$sc_got" = "$sc_want" ]; then
+    ok "showconfig: the pinned contract, section for section and field for field"
+else
+    bad "showconfig: the pinned contract, section for section and field for field" \
+        "want: $sc_want" "got:  $sc_got"
+fi
+
+# THE EMPTY FIELD. `prefix =` with no value is a documented state in this
+# grammar, and it is exactly what a separator made of TAB destroys: tab is IFS
+# whitespace, so `IFS=$'\t' read` collapses a run of separators and the empty
+# value disappears together with the field. Measured while writing this, before
+# it shipped; SOH is not IFS whitespace, so the field survives. Asserted by
+# NAME rather than by the pinned line above, because in that line a missing
+# field looks like any other diff.
+case "$sc_got" in
+    *'"prefix":""'*) ok "showconfig: a field with an empty value survives the parse and is reported as empty" ;;
+    *) bad "showconfig: a field with an empty value survives the parse and is reported as empty" "$sc_got" ;;
+esac
+
+# OWNERSHIP, ONE CASE AT A TIME.
+case "$sc_got" in
+    *'"name":"tank/other"'*)
+        bad "showconfig: a stranger's section at an unrecorded path is not claimed" "$sc_got" ;;
+    *)  ok "showconfig: a stranger's section at an unrecorded path is not claimed" ;;
+esac
+case "$sc_got" in
+    *'"name":"tank/backup/alpha/vm-101","managed_marker":false'*)
+        ok "showconfig: a pre-marker section is owned through the record, and says it has no marker" ;;
+    *) bad "showconfig: a pre-marker section is owned through the record, and says it has no marker" "$sc_got" ;;
+esac
+case "$sc_got" in
+    *'"name":"missing_tier","present":false'*)
+        ok "showconfig: a tier named by a dataset and defined nowhere is reported present:false, not omitted" ;;
+    *) bad "showconfig: a tier named by a dataset and defined nowhere is reported present:false, not omitted" "$sc_got" ;;
+esac
+case "$sc_got" in
+    *'"host":{"defaults":{"host_label":"pve2"'*)
+        ok "showconfig: collector-wide [defaults]/[excluded:] are under host, not among the relationship's sections" ;;
+    *) bad "showconfig: collector-wide [defaults]/[excluded:] are under host, not among the relationship's sections" "$sc_got" ;;
+esac
+
+# ---------------------------------------------------------------------------
+# THE PARITY THAT MATTERS: what this screen SHOWS is what teardown REMOVES.
+#
+# section_owned_by's comment says its test is "deliberately identical" to the
+# one remove_managed_sections applies. Nothing measured that until now. Here the
+# two are run over the SAME fixture with the SAME record, and the sections
+# remove_managed_sections actually deletes are compared with the sections
+# show-config reports. A drift in either direction is a defect: showing less
+# than teardown removes hides a deletion, showing more promises one that will
+# not happen.
+# ---------------------------------------------------------------------------
+sc_shown=$(printf '%s' "$sc_got" | grep -o '"kind":"[a-z-]*","name":"[^"]*"' \
+           | sed 's/"kind":"\([a-z-]*\)","name":"\([^"]*\)"/[\1:\2]/' | sort)
+cp "$SC/cron.conf" "$SC/teardown.conf"
+sc_before=$(grep -c '^\[' "$SC/teardown.conf")
+(
+  MANAGED_DATASETS='tank/backup/alpha/vm-100 tank/backup/alpha/vm-101'
+  MANAGED_PRUNE_SCOPE='tank/backup/alpha'
+  remove_managed_sections "$SC/teardown.conf" alpha \
+      tank/backup/alpha/vm-100 tank/backup/alpha/vm-101 tank/backup/alpha
+) >"$WORK/sc.teardown" 2>&1
+sc_removed=$(comm -23 <(grep '^\[' "$SC/cron.conf" | sort) <(grep '^\[' "$SC/teardown.conf" | sort))
+if [ "$sc_shown" = "$sc_removed" ]; then
+    ok "showconfig: the sections shown are exactly the sections remove_managed_sections removes"
+else
+    bad "showconfig: the sections shown are exactly the sections remove_managed_sections removes" \
+        "shown:   $(printf '%s' "$sc_shown"   | tr '\n' ' ')" \
+        "removed: $(printf '%s' "$sc_removed" | tr '\n' ' ')" \
+        "$(cat "$WORK/sc.teardown")"
+fi
+# ...and the comparison above is only worth anything if teardown removed
+# SOMETHING. Population control: three sections in, three sections fewer out.
+sc_after=$(grep -c '^\[' "$SC/teardown.conf")
+if [ "$sc_before" -eq $((sc_after + 3)) ]; then
+    ok "showconfig: the parity control actually ran -- teardown removed three sections"
+else
+    bad "showconfig: the parity control actually ran -- teardown removed three sections" \
+        "before=$sc_before after=$sc_after" "$(cat "$WORK/sc.teardown")"
+fi
+
+# A RELATIONSHIP WITH NOTHING INSTALLED is a state, not a refusal: rc 0, a
+# parseable empty answer, config_readable false. A front end opening the policy
+# tab on a freshly created relationship must not get an error dialog.
+if sc_run beta --json && [ "$(cat "$WORK/sc.out")" = '{"client":"beta","config":"","config_readable":false,"sections":[],"templates":[],"host":{"defaults":{},"excluded":[]}}' ]; then
+    ok "showconfig: a relationship with no installed config answers empty with rc 0, not a refusal"
+else
+    bad "showconfig: a relationship with no installed config answers empty with rc 0, not a refusal" "$(cat "$WORK/sc.out")"
+fi
+
+# REFUSALS.
+if ! sc_run --json && grep -q "requires a client name" "$WORK/sc.out"; then
+    ok "showconfig: --json without a client name is refused"
+else
+    bad "showconfig: --json without a client name is refused" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run alpha --nope && grep -q "unknown option" "$WORK/sc.out"; then
+    ok "showconfig: an unknown option is refused by name"
+else
+    bad "showconfig: an unknown option is refused by name" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run alpha beta && grep -q "exactly one client name" "$WORK/sc.out"; then
+    ok "showconfig: two client names are refused"
+else
+    bad "showconfig: two client names are refused" "$(cat "$WORK/sc.out")"
+fi
+if ! sc_run nosuch --json && grep -q "no client 'nosuch'" "$WORK/sc.out"; then
+    ok "showconfig: an unknown relationship is refused by name"
+else
+    bad "showconfig: an unknown relationship is refused by name" "$(cat "$WORK/sc.out")"
+fi
+
+# THE TEXT FORM carries the same three sections and names the missing tier.
+sc_run alpha
+if grep -q '^\[dataset:tank/backup/alpha/vm-100\]' "$WORK/sc.out" \
+   && grep -q 'bez znacznika' "$WORK/sc.out" \
+   && grep -q 'template:missing_tier.*BRAK' "$WORK/sc.out" \
+   && ! grep -q 'tank/other' "$WORK/sc.out"; then
+    ok "showconfig: the text form shows the same set, marks the unmarked one and names the missing tier"
+else
+    bad "showconfig: the text form shows the same set, marks the unmarked one and names the missing tier" "$(cat "$WORK/sc.out")"
+fi
+
+
+# ============================================================================
+# list-profiles: THE CATALOGUE, AND THE TWO WAYS A PROFILE CAN BE BROKEN
+# (V4, 2026-09-07). Self-contained; always eligible, also under
+# `--section listprofiles`.
+#
+# Fixtures rather than the shipped catalogue, for cost: every row renders a
+# profile through the real pipeline (validate, split, render templates, read
+# gen-cron's tier-letter table), so sixteen rows is sixteen of those. Two
+# assertions do reach into profiles/ -- for `default` and `Y5M12D31H24` -- and
+# they are there because those two are the shapes a fixture is least likely to
+# reproduce by accident: the ladder declared ONCE on [prune] instead of per
+# tier. A per-tier read alone called Y5M12D31H24 "flat", measured, which is
+# what those two assertions exist to keep from coming back.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+LP="$WORK/listprofiles"; rm -rf "$LP"; mkdir -p "$LP/pkg" "$LP/user"
+
+lp_mk() {   # <path> <body...>  -- a profile file from stdin
+    cat > "$1"
+}
+
+# 1. FLAT: two families, counted in pieces.
+lp_mk "$LP/pkg/t-flat.conf" <<'LPEOF'
+[profile]
+	description = fixture: flat, two families
+	version     = 1
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+[template:daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	keep           = 7
+[dataset]
+	use_template = hourly,daily
+LPEOF
+
+# 2. LADDER DECLARED ONCE ON [prune], not per tier -- the shape that broke the
+# first cut of the mechanism read. One family, four counters over it.
+lp_mk "$LP/pkg/t-ladder.conf" <<'LPEOF'
+[profile]
+	description = fixture: one family, ladder declared on the fragment
+	version     = 1
+[template:standard_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+[template:keep_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+[template:keep_daily]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 7
+[dataset]
+	use_template = standard_hourly
+[prune]
+	use_template = keep_hourly,keep_daily
+	gfs          = yes
+	gfs_pattern  = automated_
+LPEOF
+
+# 3. AGE: a threshold, not a count.
+lp_mk "$LP/pkg/t-age.conf" <<'LPEOF'
+[profile]
+	description = fixture: age thresholds
+	version     = 1
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -h24
+[dataset]
+	use_template = hourly
+LPEOF
+
+# 4. BROKEN AT VALIDATION: a profile may not own pair_label (it belongs to the
+# relationship). profile_validate_file refuses it, and the row says so.
+lp_mk "$LP/pkg/t-forbidden.conf" <<'LPEOF'
+[profile]
+	description = fixture: carries a field a profile may not own
+	version     = 1
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+	pair_label     = mine
+[dataset]
+	use_template = hourly
+LPEOF
+
+# 5. BROKEN AT RENDER, WHICH IS A DIFFERENT THING. `keep = xyz` VALIDATES --
+# measured -- and dies inside load_active_profile. Before the row was buffered
+# that die left half an object in the middle of the array and the whole
+# catalogue stopped parsing. This fixture is the reason the buffer exists.
+lp_mk "$LP/pkg/t-badkeep.conf" <<'LPEOF'
+[profile]
+	description = fixture: validates, does not render
+	version     = 1
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = xyz
+[dataset]
+	use_template = hourly
+LPEOF
+
+# 6. THE USER COPY SHADOWS THE PACKAGE ONE, because profile_file resolves that
+# way: the catalogue must show the file that would actually be used.
+cp "$LP/pkg/t-flat.conf" "$LP/user/t-flat.conf"
+sed -i 's/fixture: flat, two families/fixture: the OPERATOR copy/' "$LP/user/t-flat.conf"
+
+lp_run() {   # <args...> -> output in $WORK/lp.out, returns the rc
+    ( PROFILE_ROOT="$LP/pkg"
+      PROFILE_USER_ROOT="$LP/user"
+      cmd_list_profiles "$@" ) >"$WORK/lp.out" 2>"$WORK/lp.err"
+}
+
+lp_run --json
+lp_got="$(cat "$WORK/lp.out")"
+
+# POPULATION CONTROL FIRST. Every assertion below is about the CONTENT of rows;
+# none of them notices a row that is missing, and a catalogue that quietly lost
+# the broken profiles would pass all of them.
+lp_files=$(ls "$LP/pkg"/*.conf | wc -l)
+lp_rows=$(printf '%s' "$lp_got" | grep -o '"valid":' | wc -l)
+if [ "$lp_rows" -eq "$lp_files" ] && [ "$lp_rows" -eq 5 ]; then
+    ok "listprofiles: one row per profile file, broken ones included (5 files, 5 rows)"
+else
+    bad "listprofiles: one row per profile file, broken ones included (5 files, 5 rows)" \
+        "files=$lp_files rows=$lp_rows" "$lp_got"
+fi
+
+# The answer is ONE object. A half-rendered row used to break exactly this.
+case "$lp_got" in
+    '{"profiles":['*']}') ok "listprofiles: the answer is one closed object, even with two broken profiles in the directory" ;;
+    *) bad "listprofiles: the answer is one closed object, even with two broken profiles in the directory" "$lp_got" ;;
+esac
+
+lp_has() {   # <fragment> <assertion name>
+    case "$lp_got" in
+        *"$1"*) ok "$2" ;;
+        *)      bad "$2" "missing: $1" "$lp_got" ;;
+    esac
+}
+lp_has '"name":"t-flat","file":"'"$LP/user"'/t-flat.conf","source":"user"' \
+       "listprofiles: the operator's copy shadows the package one, as profile_file resolves it"
+lp_has '"description":"fixture: the OPERATOR copy"' \
+       "listprofiles: and it is the operator's file that is read, not the package's"
+lp_has '"mechanism":"flat","shape":"family-per-tier"' \
+       "listprofiles: two families counted in pieces read as flat / family-per-tier"
+lp_has '"name":"t-age"' "listprofiles: the age fixture is listed"
+case "$lp_got" in
+    *'"name":"t-age"'*'"mechanism":"age"'*) ok "listprofiles: a retain threshold reads as age, not as flat" ;;
+    *) bad "listprofiles: a retain threshold reads as age, not as flat" "$lp_got" ;;
+esac
+
+# THE DISCRIMINATOR for the bug this section was written around: a ladder
+# declared once on [prune], with the tiers silent, must still read as gfs.
+case "$lp_got" in
+    *'"name":"t-ladder"'*'"mechanism":"gfs","shape":"one-family"'*)
+        ok "listprofiles: a ladder declared on [prune] with silent tiers reads as gfs / one-family" ;;
+    *) bad "listprofiles: a ladder declared on [prune] with silent tiers reads as gfs / one-family" "$lp_got" ;;
+esac
+
+# TWO KINDS OF BROKEN, TWO DIFFERENT PATHS, BOTH ISOLATED TO THEIR ROW.
+case "$lp_got" in
+    *'"name":"t-forbidden"'*'"valid":false'*)
+        ok "listprofiles: a profile carrying a relationship-owned field is a row saying so, not a fatal" ;;
+    *) bad "listprofiles: a profile carrying a relationship-owned field is a row saying so, not a fatal" "$lp_got" ;;
+esac
+case "$lp_got" in
+    *'"name":"t-badkeep"'*'cannot be rendered'*)
+        ok "listprofiles: a profile that validates but cannot be rendered is a row saying so, not half an object" ;;
+    *) bad "listprofiles: a profile that validates but cannot be rendered is a row saying so, not half an object" "$lp_got" ;;
+esac
+
+# THE FAMILY SIGNATURE IS THE REFUSAL'S OWN FUNCTION, not a copy. Compared
+# against a direct call to profile_fragment_patterns on the same profile: if
+# this reader ever grew its own derivation, a front end would offer choices the
+# product then refuses.
+lp_direct=$( PROFILE_ROOT="$LP/pkg"; PROFILE_USER_ROOT="$LP/user"
+             PROFILE_ACTIVE="$LP/pkg/t-ladder.conf"; PROFILE_LOADED=""
+             load_active_profile >/dev/null 2>&1
+             profile_fragment_patterns "$(profile_retention_fragment)" "$PROFILE_TPL_FILE" | tr '\n' ' ' )
+lp_direct_json=""
+for _f in $lp_direct; do lp_direct_json="$lp_direct_json${lp_direct_json:+,}\"$_f\""; done
+case "$lp_got" in
+    *"\"families\":[$lp_direct_json]"*)
+        ok "listprofiles: the family signature is profile_fragment_patterns' own output, verbatim" ;;
+    *) bad "listprofiles: the family signature is profile_fragment_patterns' own output, verbatim" \
+           "direct: [$lp_direct_json]" "$lp_got" ;;
+esac
+
+# retain_rendered is the tier-letter translation, which a front end cannot do
+# for itself: `keep = 24` on an hourly tier becomes -H24.
+case "$lp_got" in
+    *'"keep":"24","retain":"","retain_rendered":"-H24"'*)
+        ok "listprofiles: keep = 24 on an hourly tier reports the rendered flag -H24 beside it" ;;
+    *) bad "listprofiles: keep = 24 on an hourly tier reports the rendered flag -H24 beside it" "$lp_got" ;;
+esac
+
+# TWO SHIPPED PROFILES, because the fixture cannot prove the catalogue.
+# Y5M12D31H24 is the one that read as "flat" before the fragment-level gfs was
+# honoured, and default is the other ladder-over-one-family in the tree.
+for _p in default Y5M12D31H24; do
+    _real=$( PROFILE_ROOT="$REPO/profiles"; PROFILE_USER_ROOT="$LP/empty-user"
+             list_profiles_record "$REPO/profiles/$_p.conf" package 2>/dev/null )
+    case "$_real" in
+        *'"mechanism":"gfs","shape":"one-family"'*)
+            ok "listprofiles: the shipped $_p reads as gfs over one family, as its own header says" ;;
+        *)  bad "listprofiles: the shipped $_p reads as gfs over one family, as its own header says" \
+                "$(printf '%s' "$_real" | cut -c1-400)" ;;
+    esac
+done
+
+# REFUSALS.
+if ! lp_run --nope && grep -q "unknown option" "$WORK/lp.err" "$WORK/lp.out"; then
+    ok "listprofiles: an unknown option is refused by name"
+else
+    bad "listprofiles: an unknown option is refused by name" "$(cat "$WORK/lp.out" "$WORK/lp.err")"
+fi
+if ! lp_run somearg && grep -q "no positional arguments" "$WORK/lp.err" "$WORK/lp.out"; then
+    ok "listprofiles: a positional argument is refused"
+else
+    bad "listprofiles: a positional argument is refused" "$(cat "$WORK/lp.out" "$WORK/lp.err")"
+fi
+
+# The text form lists every profile with its source, and needs no rendering to
+# do it -- that is what makes it the cheap form.
+lp_run
+if [ "$(grep -c . "$WORK/lp.out")" -ge 5 ] \
+   && grep -q '^t-flat *user' "$WORK/lp.out" \
+   && grep -q '^t-badkeep *package' "$WORK/lp.out"; then
+    ok "listprofiles: the text form lists every profile with the source it resolves from"
+else
+    bad "listprofiles: the text form lists every profile with the source it resolves from" "$(cat "$WORK/lp.out")"
+fi
+
+
+# ============================================================================
+# monitor: THE VERDICT FOR THE WHOLE HOST, AND THE FOUR WAYS IT COULD LIE
+# (V2, 2026-09-07). Self-contained; always eligible, also under
+# `--section monitorjson`.
+#
+# The engine is stubbed, deliberately and completely. What is under test here is
+# NOT whether check-snap-age.sh dates a snapshot correctly -- it has its own
+# suite for that and it is frozen -- but everything between the installed
+# crontab and the verdict: which lines are monitor lines, what their arguments
+# actually are, which account they live in, which binary gets run, and what is
+# reported when the line cannot be read. Every one of those is a place where a
+# reader can quietly answer OK about a question it never asked.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+MN="$WORK/monitorjson"; rm -rf "$MN"; mkdir -p "$MN/bin" "$MN/clients" "$MN/rel" "$MN/peers" "$MN/spool"
+
+# A crontab per account. root carries three monitor lines and one send line;
+# the delegated account carries one. Production on this fleet runs its jobs from
+# a delegated account, so a root-only reader would report a clean nothing on
+# exactly the hosts that matter -- hence the second account.
+cat > "$MN/crontab.root" <<'MNEOF'
+# BEGIN zfs-backup-managed -- Source: /etc/zfs-snapshot-all/cron.conf
+1 * * * * /root/scripts/snapget.sh -m "root@10.0.0.1:rpool/data/vm-100" "tank/backup/alpha" >>/root/scripts/cron.log 2>&1
+21 * * * * d=$(/root/scripts/check-snap-age.sh -R -L alpha "tank/backup/alpha" "automated_hourly" 90m 150m 2>&1); rc=$?; [ $rc -eq 1 ] && /root/scripts/notify-warn.sh "alpha late" "$d" 2>>/root/scripts/cron.log
+31 1 * * * d=$(/root/scripts/check-snap-age.sh -x vzdump -L beta "tank/b1,tank/b2" "automated_daily" 30h 48h 2>&1); rc=$?
+41 2 * * * d=$(/root/scripts/check-snap-age.sh --nonsense "tank/c" "automated_daily" 30h 48h 2>&1); rc=$?
+# END zfs-backup-managed
+MNEOF
+cat > "$MN/crontab.zfsbackup" <<'MNEOF'
+# BEGIN zfs-backup-managed -- Source: /etc/zfs-snapshot-all/cron.conf
+51 3 * * * d=$(/home/zfsbackup/scripts/check-snap-age.sh -L gamma "tank/g" "automated_hourly" 90m 150m 2>&1); rc=$?
+# END zfs-backup-managed
+MNEOF
+# Outside any managed block: a monitor line this verb must NOT claim. It is
+# somebody else's cron entry and reporting on it would be this tool speaking
+# for a job it does not own.
+cat > "$MN/crontab.other" <<'MNEOF'
+9 9 * * * d=$(/opt/theirs/check-snap-age.sh "tank/theirs" "automated_hourly" 90m 150m 2>&1); rc=$?
+MNEOF
+
+cat > "$MN/bin/crontab" <<'MNEOF'
+#!/bin/sh
+# crontab -l | crontab -u USER -l
+who=root
+[ "$1" = "-u" ] && who="$2"
+if [ -f "$MNX/crontab.$who" ]; then cat "$MNX/crontab.$who"; else echo "no crontab for $who" >&2; exit 1; fi
+MNEOF
+chmod +x "$MN/bin/crontab"
+
+# The engine stub LOGS every invocation with its exact argv. That log is what
+# turns "the reader said OK" into "the reader asked this exact question".
+cat > "$MN/engine.sh" <<'MNEOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$MNX/engine.log"
+case "$*" in
+    *automated_hourly*) echo "OK: tank ok"; exit 0 ;;
+    *automated_daily*)  echo "CRITICAL: tank/b1 stale"; echo "CRITICAL: tank/b2 stale"; exit 2 ;;
+    *)                  echo "UNKNOWN"; exit 3 ;;
+esac
+MNEOF
+chmod +x "$MN/engine.sh"
+
+printf 'CLIENT_NAME=gammaclient\nSTATE=active\nLOCAL_USER=zfsbackup\n' > "$MN/clients/gammaclient.conf"
+
+mn_run() {   # <args...> -> output in $WORK/mn.out, returns the rc
+    : > "$MN/engine.log"
+    ( export PATH="$MN/bin:$PATH" MNX="$MN"
+      CLIENTS_DIR="$MN/clients"
+      RELATIONSHIPS_DIR="$MN/rel"
+      PEER_STATE_DIR="$MN/peers"
+      CRON_SPOOL_DIRS=("$MN/spool")
+      CHECKSNAPAGE="$MN/engine.sh"
+      cmd_monitor "$@" ) >"$WORK/mn.out" 2>&1
+}
+
+mn_run --json; mn_rc=$?
+mn_got="$(cat "$WORK/mn.out")"
+
+# POPULATION CONTROL, and it is the assertion most likely to catch a rewrite:
+# four monitor lines exist across two managed blocks, one of them unreadable.
+# A reader that silently dropped what it did not understand would still pass
+# every content assertion below.
+mn_count=$(printf '%s' "$mn_got" | grep -o '"verdict":' | wc -l)
+if [ "$mn_count" -eq 4 ]; then
+    ok "monitorjson: four monitor lines across two accounts, all four reported"
+else
+    bad "monitorjson: four monitor lines across two accounts, all four reported" "counted $mn_count" "$mn_got"
+fi
+
+# The send line in the same block is not a monitor line, and the monitor line
+# OUTSIDE a managed block belongs to somebody else.
+case "$mn_got" in
+    *snapget*) bad "monitorjson: a send line in the same block is not mistaken for a monitor" "$mn_got" ;;
+    *)         ok "monitorjson: a send line in the same block is not mistaken for a monitor" ;;
+esac
+case "$mn_got" in
+    *theirs*) bad "monitorjson: a monitor line outside any managed block is not claimed" "$mn_got" ;;
+    *)        ok "monitorjson: a monitor line outside any managed block is not claimed" ;;
+esac
+
+mn_has() {   # <fragment> <name>
+    case "$mn_got" in *"$1"*) ok "$2" ;; *) bad "$2" "missing: $1" "$mn_got" ;; esac
+}
+mn_has '"account":"zfsbackup"' \
+       "monitorjson: the delegated account's block is read too, not just root's"
+mn_has '"label":"alpha","paused_local":false,"datasets":["tank/backup/alpha"],"pattern":"automated_hourly","warn":"90m","crit":"150m","recursive":true' \
+       "monitorjson: flags and the four positionals are lifted out of the cron line exactly"
+mn_has '"datasets":["tank/b1","tank/b2"]' \
+       "monitorjson: a comma list of datasets becomes an array"
+mn_has '"exclude":["vzdump"]' \
+       "monitorjson: -x exclusions are carried"
+
+# THE ENGINE THAT RUNS IS THIS CHECKOUT'S, NOT THE PATH IN THE FILE. pve9 keeps
+# three clones of this repo, so "which copy does that line run" has a wrong
+# answer available -- and a reader that executed the path out of a crontab would
+# be running whatever that file names.
+mn_has '"engine_in_cron":"/root/scripts/check-snap-age.sh"' \
+       "monitorjson: the path the cron line names is reported"
+mn_has '"engine_path_differs":true' \
+       "monitorjson: a difference between the line's engine and the one that ran is stated, not hidden"
+if [ "$(grep -c . "$MN/engine.log")" -eq 3 ]; then
+    ok "monitorjson: the engine ran exactly three times -- the unreadable line was NOT run"
+else
+    bad "monitorjson: the engine ran exactly three times -- the unreadable line was NOT run" \
+        "$(cat "$MN/engine.log")"
+fi
+if grep -qx -- '-R -L alpha tank/backup/alpha automated_hourly 90m 150m' "$MN/engine.log"; then
+    ok "monitorjson: the engine receives the line's arguments as argv, in full"
+else
+    bad "monitorjson: the engine receives the line's arguments as argv, in full" "$(cat "$MN/engine.log")"
+fi
+
+# FAIL CLOSED. A line whose arguments cannot be read is UNKNOWN with the reason
+# in words -- never skipped, never OK. check-snap-age.sh's own header exists
+# around this distinction; a reader that lost it would put the defect back.
+mn_has '"parsed":false' "monitorjson: an unreadable line is marked unparsed"
+case "$mn_got" in
+    *"unknown flag '--nonsense'"*) ok "monitorjson: the refusal names the flag it would have had to guess at" ;;
+    *) bad "monitorjson: the refusal names the flag it would have had to guess at" "$mn_got" ;;
+esac
+case "$mn_got" in
+    *'"parsed":false,"rc":3,"verdict":"UNKNOWN"'*) ok "monitorjson: an unreadable line is UNKNOWN, not OK" ;;
+    *) bad "monitorjson: an unreadable line is UNKNOWN, not OK" "$mn_got" ;;
+esac
+
+# CRITICAL outranks UNKNOWN in the host-wide worst, which is the engine's own
+# rule for the same question.
+# THE ENGINE PRINTS ONE LINE PER DATASET, and a raw newline inside a JSON
+# string is invalid JSON. Every monitor line covering more than one dataset hit
+# that -- measured on pve10 AFTER 69 assertions of this suite passed, because
+# the stub above used to print a single line and therefore agreed with the bug.
+# The stub now prints two, which is what the real engine does, and these two
+# assertions are the ones that would have caught it.
+mn_nl=$(printf '%s' "$mn_got" | tr -cd '\n' | wc -c)
+if [ "$mn_nl" -eq 0 ]; then
+    ok "monitorjson: the answer carries no raw newline -- multi-line engine output stays JSON"
+else
+    bad "monitorjson: the answer carries no raw newline -- multi-line engine output stays JSON"         "found $mn_nl raw newline(s) inside the object" "$mn_got"
+fi
+case "$mn_got" in
+    *'CRITICAL: tank/b1 stale\nCRITICAL: tank/b2 stale'*)
+        ok "monitorjson: both engine lines survive, joined by an escaped newline" ;;
+    *) bad "monitorjson: both engine lines survive, joined by an escaped newline" "$mn_got" ;;
+esac
+
+mn_has '"worst":"CRITICAL"' "monitorjson: the host-wide worst ranks CRITICAL above UNKNOWN"
+if [ "$mn_rc" -eq 2 ]; then
+    ok "monitorjson: the exit status is the engine's own vocabulary (2 = CRITICAL)"
+else
+    bad "monitorjson: the exit status is the engine's own vocabulary (2 = CRITICAL)" "rc=$mn_rc"
+fi
+
+# A CRON LINE IS DATA. The dataset value below is shaped like a command
+# substitution; it must arrive at the engine as those literal characters and
+# must not run. The marker file is the whole assertion: if anything eval'd or
+# sourced this line, it exists.
+cat > "$MN/crontab.root" <<MNEOF
+# BEGIN zfs-backup-managed
+21 * * * * d=\$($MN/check-snap-age.sh -L alpha "tank/\$(touch $MN/PWNED)" "automated_hourly" 90m 150m 2>&1); rc=\$?
+# END zfs-backup-managed
+MNEOF
+rm -f "$MN/PWNED"
+mn_run --json
+if [ ! -e "$MN/PWNED" ]; then
+    ok "monitorjson: a cron line is DATA -- a value shaped like a command substitution does not run"
+else
+    bad "monitorjson: a cron line is DATA -- a value shaped like a command substitution does not run" \
+        "the marker exists: something evaluated the line"
+fi
+if grep -qF -- 'tank/$(touch' "$MN/engine.log"; then
+    ok "monitorjson: ...and it reaches the engine as those literal characters"
+else
+    bad "monitorjson: ...and it reaches the engine as those literal characters" "$(cat "$MN/engine.log")"
+fi
+
+# THE PAUSE. A paused relationship is reported as paused, from the marker the
+# pause verbs write -- not by asking the engine a second time.
+mkdir -p "$MN/rel/alpha"
+printf 'PAUSED_AT="2026-09-07T08:00:00Z"\n' > "$MN/rel/alpha/paused"
+mn_run --json
+case "$(cat "$WORK/mn.out")" in
+    *'"label":"alpha","paused_local":true'*) ok "monitorjson: a paused relationship is reported paused" ;;
+    *) bad "monitorjson: a paused relationship is reported paused" "$(cat "$WORK/mn.out")" ;;
+esac
+rm -rf "$MN/rel/alpha"
+
+# NOTHING WATCHING IS NOT HEALTH. This is the assertion that would have caught
+# the first cut, which returned OK for a host with no managed block at all.
+printf '# nothing managed here\n' > "$MN/crontab.root"
+rm -f "$MN/crontab.zfsbackup"
+mn_run --json; mn_rc=$?
+if [ "$(cat "$WORK/mn.out")" = '{"checked_epoch":'"$(printf '%s' "$(cat "$WORK/mn.out")" | sed -n 's/.*"checked_epoch":\([0-9]*\).*/\1/p')"',"monitors":[],"count":0,"worst":"UNKNOWN"}' ] \
+   && [ "$mn_rc" -eq 3 ]; then
+    ok "monitorjson: zero monitor lines is UNKNOWN with rc 3, never OK"
+else
+    bad "monitorjson: zero monitor lines is UNKNOWN with rc 3, never OK" "rc=$mn_rc" "$(cat "$WORK/mn.out")"
+fi
+mn_run
+if grep -q "nikt tego nie pilnuje" "$WORK/mn.out"; then
+    ok "monitorjson: the text form says nobody is watching, rather than printing nothing"
+else
+    bad "monitorjson: the text form says nobody is watching, rather than printing nothing" "$(cat "$WORK/mn.out")"
+fi
+
+# REFUSALS.
+if ! mn_run --nope && grep -q "unknown option" "$WORK/mn.out"; then
+    ok "monitorjson: an unknown option is refused by name"
+else
+    bad "monitorjson: an unknown option is refused by name" "$(cat "$WORK/mn.out")"
+fi
+if ! mn_run somearg && grep -q "no positional arguments" "$WORK/mn.out"; then
+    ok "monitorjson: a positional argument is refused"
+else
+    bad "monitorjson: a positional argument is refused" "$(cat "$WORK/mn.out")"
+fi
+
+# THREE LINES TAKEN VERBATIM OFF A PRODUCTION COLLECTOR (pve2, account
+# zfsbackup, 2026-09-07). Fixtures are written by the person writing the
+# parser and therefore agree with it by construction; these were not. They
+# carry the shapes the hand-made ones above do not: no -L, no -R, no -x, a
+# three-element dataset list, and a notify message full of quotes and
+# parentheses sitting AFTER the region this parser must stop at.
+mn_real() {   # <line> <expected argv, newline separated>
+    local got; got=$(monitor_split_args "$(monitor_arg_region "$1")")
+    if [ "$got" = "$2" ]; then ok "monitorjson: real production line parsed exactly -- $3"
+    else bad "monitorjson: real production line parsed exactly -- $3" "want:" "$2" "got:" "$got"; fi
+}
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "rpool/ROOT/pve-1,hdd/backups/pve2/rpool/data/vm-106-disk-0,hdd/backups/pve2/rpool/ROOT/pve-1" "automated_daily" 30h 48h 2>&1); rc=$?; [ -n "$d" ] && echo "$d" >>/home/zfsbackup/cron.log; [ $rc -eq 1 ] && /home/zfsbackup/notify-warn.sh "pve2 daily getting stale (root)" "$d" 2>>/home/zfsbackup/cron.log' \
+'rpool/ROOT/pve-1,hdd/backups/pve2/rpool/data/vm-106-disk-0,hdd/backups/pve2/rpool/ROOT/pve-1
+automated_daily
+30h
+48h' 'three datasets, no flags'
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hdd/vm-disks/subvol-103-disk-0,hdd/backups/pve2/hdd/vm-disks/subvol-103-disk-0" "automated_weekly" 9d 12d 2>&1); rc=$?; [ $rc -ge 3 ] && /home/zfsbackup/notify-fail.sh "pve2 weekly monitor BROKEN (urbackup)" "$d" 2>>/home/zfsbackup/cron.log' \
+'hdd/vm-disks/subvol-103-disk-0,hdd/backups/pve2/hdd/vm-disks/subvol-103-disk-0
+automated_weekly
+9d
+12d' 'a notify message with quotes and parens after the region'
+mn_real '*/15 * * * * d=$(/home/zfsbackup/zfs-snapshot-all/check-snap-age.sh "hdd/backups/pve2/hdd/vm-disks/subvol-107-disk-0" "automated_hourly" 300m 420m 2>&1); rc=$?' \
+'hdd/backups/pve2/hdd/vm-disks/subvol-107-disk-0
+automated_hourly
+300m
+420m' 'a single dataset and minute thresholds'
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

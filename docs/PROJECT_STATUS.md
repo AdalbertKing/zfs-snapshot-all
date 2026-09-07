@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5790db9fad06c41a -->
+<!-- status-covers-digest: c99bbf30d4896995 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,84 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Paczka A czasowników GUI — CZTERY CZYTELNIKI, wdrożone (2026-09-07).**
+  `status --json`, `show-config KLIENT [--json]`, `list-profiles [--json]`,
+  `monitor [--json]`. To jest V1–V4 ze zlecenia `OWNER-MISSING-VERBS-2026-09-07.md`;
+  paczka D (pisarze) nietknięta. Wszystkie cztery trzymają jeden kontrakt —
+  ten, który wcześniej ustawiły `progress --json` i `list-replicas --json`:
+  jeden obiekt, jedna tablica rekordów, pola nazwane jak pola źródłowe. Escaping
+  ma jedną implementację (`json_escape` w `lib-backup-common.sh`, trzecia kopia
+  przypięta kontraktem `json-escape`, `test/twins` sekcja G porównuje teraz
+  wszystkie trzy parami), a nie po jednej na czytelnik.
+  - **`status --json`** — lista NIE otwiera połączenia do peera i mówi
+    `peer_pair_state=NOT_ASKED`; forma z nazwą pyta i mówi `ENABLED`/`DISABLED`/
+    `UNKNOWN`. To dwa różne fakty i front end, który pomalowałby je tym samym
+    kolorem, pokazywałby peera nieosiągalnego jako niesprawdzonego.
+    `last_result` jest `null`, gdy w historii nic nie ma — „brak zapisu" to nie
+    „brak awarii". `pair_label` czytany z CONFIGU, bo to on ląduje w linii crona
+    jako `-L` i jest kluczem złączenia z `progress --json`.
+  - **`show-config`** — świadomie NIE spłaszcza warstw `[dataset:]` →
+    `[template:]` → `[defaults]`. Tę rozdzielczość ma `gen-cron.sh`, warstwy nie
+    są takie same dla każdego pola, a druga implementacja byłaby drugą
+    odpowiedzią na pytanie „jaka jest retencja tej relacji" — z tą złą na
+    ekranie. Własności sekcji NIE wyprowadza sam: pyta `section_owned_by`, więc
+    ekran pokazuje dokładnie ten zbiór, który usunąłby `remove-client`.
+  - **`list-profiles`** — sygnatura rodzin liczona przez
+    `profile_fragment_patterns`, czyli tę samą funkcję, której używa odmowa
+    `--source-profile`. Dzięki temu GUI **filtruje** listę zamiast pokazywać
+    błąd po wyborze. Każdy profil ładowany w osobnej podpowłoce z buforowanym
+    wierszem: jeden zepsuty plik w `/etc/zfs-snapshot-all/profiles` to jeden
+    wiersz mówiący, że jest zepsuty, a nie zabity katalog.
+  - **`monitor`** — pierwszy czasownik, który odpowiada na pytanie „jaki jest
+    werdykt dla KAŻDEJ relacji na tej maszynie TERAZ". Dotąd werdykt istniał
+    wyłącznie jako kod wyjścia pojedynczego wywołania z crona. Jest CZYTELNIKIEM
+    zamrożonego `check-snap-age.sh`, nigdy drugą implementacją liczenia wieku:
+    chodzi po liniach monitora ZAINSTALOWANEGO bloku `zfs-backup-managed`, w
+    KAŻDYM koncie (`cron_known_accounts`, bo produkcja chodzi z konta
+    delegowanego), i uruchamia silnik. Linia crona jest DANĄ — nigdy `eval`,
+    nigdy `source`, program z linii nigdy nie jest uruchamiany; argumenty
+    wyjmuje tokenizer rozumiejący wyłącznie cudzysłowy i trafiają jako ARGV do
+    silnika Z TEGO checkoutu, a ścieżka z linii jest raportowana obok
+    (`engine_path_differs` — pve9 trzyma trzy klony repo).
+  **Dwa zachowania fail-closed, oba zmierzone:** linia, której argumentów nie da
+  się odczytać, jest `UNKNOWN` z powodem SŁOWEM i silnik dla niej NIE jest
+  uruchamiany — nigdy pominięta i nigdy OK; a **zero linii monitora to `UNKNOWN`
+  z kodem 3, nie OK** — host, któremu ktoś wyczyścił blok, nie może raportować
+  zdrowia. Najgorszy werdykt hosta stawia `CRITICAL` nad `UNKNOWN`, co jest
+  własną regułą silnika dla tego samego pytania.
+
+  **WADĘ ZNALAZŁ LAB, NIE SUITA (pve10, 2026-09-07).** `monitor --json`
+  emitował **nieprawidłowy JSON** dla każdej linii monitora obejmującej więcej
+  niż jeden dataset: `check-snap-age.sh` drukuje LINIĘ NA DATASET, a surowy znak
+  nowej linii w stringu JSON to błąd składni — żaden front end by tego nie
+  sparsował. Kształt nie jest egzotyczny: pierwsza linia monitora na pve2
+  obejmuje TRZY datasety. Suita tego nie złapała, bo jej atrapa silnika
+  drukowała jedną linię i przez to **zgadzała się z błędem z definicji**.
+  Poprawka objęła atrapę tak samo jak kod. Escapowanie poszło do `jsonw_text`,
+  nie do `json_escape`: ta druga jest przypięta identycznie do dwóch
+  ZAMROŻONYCH kopii, których zadaniem są ścieżki datasetów, a te nowej linii
+  zawierać nie mogą.
+
+  **Zmierzone na pve10:** `list-profiles --json` dla 16 profili — **8,8 s** na
+  Linuksie wobec 399 s na maszynie deweloperskiej. Koszt to dwa uruchomienia
+  `gen-cron` na profil (`--dump-fields` w walidatorze, `--dump-tier-letters`
+  w `load_active_profile`). Jak na otwarcie listy wyboru w GUI to nadal dużo —
+  do wycięcia tam, nie w warstwie JSON. Lab potwierdził też na żywo: skasowanie
+  datasetu spod zainstalowanej linii daje UNKNOWN, a linia zostaje CRITICAL, bo
+  drugi dataset był przeterminowany (CRITICAL bije UNKNOWN); pauza relacji daje
+  `paused_local:true` ORAZ własne zdanie silnika o pauzie.
+
+  **Znalezione po drodze, wpisane bo kosztowało:** `profil, który przechodzi
+  walidację i umiera przy renderowaniu` (`keep = xyz`) zostawiał POŁOWĘ obiektu
+  w środku tablicy JSON i psuł cały katalog — stąd bufor na wiersz. `TAB` jako
+  separator gubi PUSTE pole (tab jest białym znakiem IFS, `read` sklaja ciąg
+  separatorów), a puste pole to udokumentowany stan tej gramatyki — stąd SOH.
+  `section_owned_by` nie miał **ani jednego testu** od sierpnia, mimo że jego
+  komentarz twierdzi „identyczny" z testem `remove_managed_sections`; suita
+  mierzy to teraz na jednej atrapie. `progress --json` i `list-replicas --json`
+  dalej nie mają ani jednej asercji w drzewie testów — **luka zgłoszona, nie
+  załatana** w cudzych czasownikach.
 
 - **Lista brakujących czasowników spisana jako zlecenie (2026-09-07).**
   `docs/discussions/OWNER-MISSING-VERBS-2026-09-07.md`. Inwentarz wzięty z

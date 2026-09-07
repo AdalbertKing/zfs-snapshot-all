@@ -89,6 +89,10 @@ DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
 SNAPSEND="$SCRIPT_DIR/snapsend.sh"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
+# The staleness monitor. Named here beside the other engines because the new
+# `monitor` verb RUNS it -- as this checkout's copy, never the path an installed
+# cron line happens to carry.
+CHECKSNAPAGE="$SCRIPT_DIR/check-snap-age.sh"
 LIBCRON="$SCRIPT_DIR/lib-cron.sh"
 LIBSCOPE="$SCRIPT_DIR/lib-scope.sh"
 LIBPROFILE="$SCRIPT_DIR/lib-profile.sh"
@@ -466,7 +470,44 @@ Config maintenance:
   zfs-backup.sh audit-source-retention [--apply] [--yes]
 
 Inspection / teardown:
-  zfs-backup.sh status [NAME]
+  zfs-backup.sh status [NAME] [--json]
+                                    --json is the GUI data layer, same contract as
+                                    `progress --json`: one object, one array of
+                                    records. The LIST form opens no connection to the
+                                    peer and reports peer_pair_state=NOT_ASKED; the
+                                    NAMED form asks the peer (ENABLED/DISABLED/
+                                    UNKNOWN) and adds last_result from the stats log.
+  zfs-backup.sh monitor [--json]
+                                    Runs every monitor line of the installed
+                                    zfs-backup-managed block, in EVERY account that
+                                    has one, and reports the verdict per line plus the
+                                    worst for the host. A reader of check-snap-age.sh,
+                                    never a second implementation of snapshot age; a
+                                    line whose arguments cannot be read is UNKNOWN
+                                    with the reason in words, never skipped and never
+                                    OK. Exit status follows the engine: 0/1/2/3.
+  zfs-backup.sh list-profiles [--json]
+                                    The retention catalogue: package profiles plus
+                                    anything in /etc/zfs-snapshot-all/profiles, which
+                                    shadows a package name. --json adds what a picker
+                                    cannot derive -- the FAMILY SIGNATURE computed by
+                                    the same function --source-profile's refusal uses,
+                                    so a front end can filter the list instead of
+                                    showing an error after the choice; the mechanism
+                                    (flat/age/gfs); the shape (one family vs a family
+                                    per tier); and the `retain` flag each tier renders
+                                    to. A profile that does not validate is a row
+                                    saying so, never a fatal for the whole catalogue.
+  zfs-backup.sh show-config NAME [--json] [--config=PATH]
+                                    Every section of the installed config this
+                                    relationship owns, plus the [template:] tiers they
+                                    reference and the collector-wide [defaults]/
+                                    [excluded:] under "host". Ownership is the same
+                                    two-part rule remove-client applies (marker, else
+                                    the record's own managed paths), so this shows
+                                    exactly what teardown would remove. The layering
+                                    is NOT flattened: gen-cron.sh owns that
+                                    resolution and a second one would disagree with it.
   zfs-backup.sh test NAME
   zfs-backup.sh remove-client NAME
 
@@ -10345,8 +10386,974 @@ status_running_now() {   # <local target prefix> -> one line per live record
     return $any
 }
 
+# ------------------------------------------------------------------------------
+# monitor -- THE VERDICT FOR EVERY RELATIONSHIP ON THIS HOST, RIGHT NOW
+# ------------------------------------------------------------------------------
+# V2 of the missing-verbs work order, and the one that did not exist in any form.
+# Until now the monitor's verdict existed ONLY as the exit code of a single
+# check-snap-age.sh invocation from cron: nothing in this package could answer
+# "what is the verdict for every relationship on this machine at this moment".
+# That question is a column on the GUI's main screen and the whole content of
+# its Monitor screen -- and, off the GUI entirely, it is the answer to "how does
+# the fleet look this morning" without opening seven terminals.
+#
+# A READER OF THE ENGINE, NEVER A SECOND ENGINE. check-snap-age.sh is frozen and
+# stays frozen. This verb walks the monitor lines of the INSTALLED crontab and
+# runs that engine; it does not compute a snapshot's age itself. A second
+# implementation would be a second answer to the same question, and the one on
+# the screen would be the unverified one.
+#
+# THE INSTALLED CRONTAB, NOT THE CONFIG. The question is what actually watches
+# this machine tonight, and the installed block can be older than the config --
+# the same class of divergence status --json reports as endpoint_diverged. Every
+# candidate ACCOUNT is walked (cron_known_accounts), not just root: production on
+# this fleet runs its jobs from a delegated account, and a root-only reader would
+# have reported a clean nothing on exactly the hosts that matter.
+#
+# A CRON LINE IS DATA. It is never eval'd, never sourced, and the program it
+# names is never executed: the arguments are lifted out with a tokenizer that
+# understands double quotes and nothing else, and they are then passed as ARGV to
+# THIS checkout's check-snap-age.sh. The path the line names is reported beside
+# it, and a difference is a fact worth seeing rather than a reason to run what
+# the file points at -- pve9 carries three clones of this repo, so "which copy is
+# the cron line running" is a real question with a wrong answer available.
+#
+# UNKNOWN IS FAIL-CLOSED. A line whose arguments could not be read is reported
+# UNKNOWN with the reason in words, never skipped and never OK: the engine's own
+# header spends a paragraph on why "the check could not answer" must not look
+# like "the answer is fine", and a reader that silently dropped a line it did not
+# understand would reintroduce exactly that. For the same reason the host-wide
+# worst verdict ranks CRITICAL above UNKNOWN, which is the engine's own rule.
+
+# The argv text of a monitor cron line: from the script name to its stderr
+# redirect. Same boundary line_coverage_absorbed isolates for the same reason --
+# a cron job line carries quoted values that are not arguments at all (the
+# notify message, the log redirect), and counting from the end of the line finds
+# those instead.
+monitor_arg_region() {   # <cron line> -> the argv text, rc 1 if not a monitor line
+    local line="$1" seg
+    case "$line" in *check-snap-age.sh\ *) ;; *) return 1 ;; esac
+    seg="${line#*check-snap-age.sh }"
+    case "$seg" in *" 2>"*) seg="${seg%% 2>*}" ;; esac
+    [ -n "$seg" ] || return 1
+    printf '%s' "$seg"
+}
+
+monitor_engine_path() {   # <cron line> -> the check-snap-age.sh path the line names
+    printf '%s' "$1" | grep -oE '[^ (]*check-snap-age\.sh' | head -1
+}
+
+# Splits an argv text into arguments. Understands DOUBLE QUOTES and nothing
+# else: no expansion, no substitution, no escapes, no execution. That is the
+# whole point -- this input comes out of a file, and the shell's own parser is
+# exactly what must not be handed it. gen-cron emits only bare flags and
+# double-quoted values, so this is the complete grammar of what it writes.
+monitor_split_args() {   # <argv text> -> one argument per line
+    local s="$1" i=0 c cur="" started=0 q=0
+    local n=${#s}   # a SECOND `local`: one statement expands every word before it assigns any,
+                    # so ${#s} on the line that creates s reads an unset s -- and dies under set -u.
+                    # Documented in lib-record.sh at the same trap; met again here.
+    while [ "$i" -lt "$n" ]; do
+        c="${s:$i:1}"
+        i=$((i + 1))
+        case "$c" in
+            '"') q=$((1 - q)); started=1 ;;
+            ' ') if [ "$q" -eq 1 ]; then cur="$cur "
+                 elif [ "$started" -eq 1 ]; then printf '%s\n' "$cur"; cur=""; started=0
+                 fi ;;
+            *)   cur="$cur$c"; started=1 ;;
+        esac
+    done
+    [ "$started" -eq 1 ] && printf '%s\n' "$cur"
+    return 0
+}
+
+monitor_verdict_word() {   # <rc> -> the Nagios word
+    case "$1" in 0) printf OK ;; 1) printf WARNING ;; 2) printf CRITICAL ;; *) printf UNKNOWN ;; esac
+}
+# CRITICAL outranks UNKNOWN, which is check-snap-age.sh's own rule for the same
+# question ("a genuinely stale snapshot is more actionable than an unresolvable
+# dataset name"). Copied deliberately rather than invented, so the host-wide
+# summary and a single line's exit code cannot disagree about which is worse.
+monitor_verdict_rank() {   # <verdict word> -> 0..3
+    case "$1" in OK) printf 0 ;; WARNING) printf 1 ;; UNKNOWN) printf 2 ;; *) printf 3 ;; esac
+}
+
+cmd_monitor() {
+    local as_json=0 a
+    for a in "$@"; do
+        case "$a" in
+            --json) as_json=1 ;;
+            -*)     die "monitor: unknown option '$a' (only --json)" ;;
+            *)      die "monitor: takes no positional arguments" ;;
+        esac
+    done
+
+    local worst_rank=0 worst=OK first=1 seen=0
+    [ "$as_json" -eq 1 ] && printf '{"checked_epoch":%s,"monitors":[' "$(date +%s)"
+
+    local acct blk line
+    while IFS= read -r acct; do
+        [ -n "$acct" ] || continue
+        blk=$(mktemp) || die "mktemp failed"
+        if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; continue; fi
+        while IFS= read -r line; do
+            case "$line" in *check-snap-age.sh*) ;; *) continue ;; esac
+            seen=$((seen + 1))
+            local region schedule engine_named
+            engine_named=$(monitor_engine_path "$line")
+            # The schedule is the first five fields of the crontab line, before
+            # anything this reader interprets.
+            schedule=$(printf '%s' "$line" | awk '{print $1, $2, $3, $4, $5}')
+
+            local rec=no label="" excl="" ds="" pat="" warn="" crit=""
+            local parsed=true reason=""
+            if ! region=$(monitor_arg_region "$line"); then
+                parsed=false; reason="the line names check-snap-age.sh but carries no readable argument region"
+            else
+                local -a argv=()
+                local tok
+                while IFS= read -r tok; do argv+=("$tok"); done < <(monitor_split_args "$region")
+                local -a pos=()
+                local j=0 nargs=${#argv[@]}
+                while [ "$j" -lt "$nargs" ]; do
+                    case "${argv[$j]}" in
+                        -R|--recursive) rec=yes ;;
+                        -v|--verbose)   : ;;
+                        -L) j=$((j + 1)); label="${argv[$j]:-}" ;;
+                        -x) j=$((j + 1)); excl="$excl${excl:+,}${argv[$j]:-}" ;;
+                        -*) parsed=false; reason="unknown flag '${argv[$j]}' in the installed line -- refusing to guess what it means" ;;
+                        *)  pos+=("${argv[$j]}") ;;
+                    esac
+                    j=$((j + 1))
+                done
+                ds="${pos[0]:-}"; pat="${pos[1]:-}"; warn="${pos[2]:-}"; crit="${pos[3]:-}"
+                if [ "$parsed" = true ] && { [ -z "$ds" ] || [ -z "$pat" ] || [ -z "$warn" ] || [ -z "$crit" ]; }; then
+                    parsed=false
+                    reason="the line does not carry the four positional arguments check-snap-age.sh takes (datasets, pattern, warn, crit)"
+                fi
+            fi
+
+            local rc=3 verdict=UNKNOWN outtxt=""
+            if [ "$parsed" = true ]; then
+                local -a runargs=()
+                [ "$rec" = yes ] && runargs+=(-R)
+                [ -n "$label" ] && runargs+=(-L "$label")
+                local _x
+                for _x in ${excl//,/ }; do [ -n "$_x" ] && runargs+=(-x "$_x"); done
+                runargs+=("$ds" "$pat" "$warn" "$crit")
+                outtxt=$(bash "$CHECKSNAPAGE" "${runargs[@]}" 2>&1); rc=$?
+                verdict=$(monitor_verdict_word "$rc")
+                reason="$outtxt"
+            else
+                outtxt="$reason"
+            fi
+
+            local paused=false
+            [ -n "$label" ] && client_paused "$label" && paused=true
+
+            local rank; rank=$(monitor_verdict_rank "$verdict")
+            [ "$rank" -gt "$worst_rank" ] && { worst_rank="$rank"; worst="$verdict"; }
+
+            if [ "$as_json" -eq 1 ]; then
+                [ "$first" -eq 1 ] || printf ','
+                first=0
+                printf '{"account":"%s"' "$(json_escape "$acct")"
+                jsonw_field schedule "$schedule"
+                jsonw_field label    "$label"
+                printf ',"paused_local":%s' "$paused"
+                printf ',"datasets":'; jsonw_array "${ds//,/ }"
+                jsonw_field pattern  "$pat"
+                jsonw_field warn     "$warn"
+                jsonw_field crit     "$crit"
+                printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
+                printf ',"exclude":'; jsonw_array "${excl//,/ }"
+                jsonw_field engine_in_cron "$engine_named"
+                jsonw_field engine_run     "$CHECKSNAPAGE"
+                printf ',"engine_path_differs":%s' \
+                    "$([ "$engine_named" = "$CHECKSNAPAGE" ] && echo false || echo true)"
+                printf ',"parsed":%s,"rc":%s' "$parsed" "$rc"
+                jsonw_field verdict "$verdict"
+                jsonw_text  reason  "$reason"
+                printf '}'
+            else
+                printf '%-10s %-9s %-16s %s\n' "$acct" "$verdict" "${label:-(bez etykiety)}" "$ds"
+                [ -n "$reason" ] && printf '%s\n' "$reason" | sed 's/^/    /'
+            fi
+        done < <(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk")
+        rm -f "$blk"
+    done < <(cron_known_accounts)
+
+    # NOTHING WATCHING IS NOT HEALTH. Zero monitor lines is reported UNKNOWN,
+    # not OK, and the exit status says so too. check-snap-age.sh's own header
+    # exists around the sentence "a monitor that never runs looks exactly like a
+    # monitor that says everything is fine"; a host whose managed block was wiped,
+    # or never installed one, is exactly that case, and OK here would be this
+    # reader reintroducing the defect the engine was hardened against.
+    [ "$seen" -eq 0 ] && worst=UNKNOWN
+    if [ "$as_json" -eq 1 ]; then
+        printf '],"count":%s' "$seen"
+        jsonw_field worst "$worst"
+        printf '}\n'
+    else
+        echo
+        if [ "$seen" -eq 0 ]; then
+            echo "Zero linii monitora w zainstalowanych blokach zfs-backup-managed."
+            echo "To NIE znaczy 'wszystko zdrowe' -- znaczy 'nikt tego nie pilnuje'."
+        else
+            echo "Najgorszy werdykt: $worst  (linii: $seen)"
+        fi
+    fi
+    # The exit status is the operator's, not the reader's: OK is 0 so this can
+    # sit in a cron line or a shell test, and the three bad verdicts keep the
+    # engine's own codes so a caller that already knows 0/1/2/3 needs no new
+    # vocabulary. A parse failure lands on 3, which is what it is.
+    case "$worst" in OK) return 0 ;; WARNING) return 1 ;; CRITICAL) return 2 ;; *) return 3 ;; esac
+}
+
+# ------------------------------------------------------------------------------
+# list-profiles -- THE CATALOGUE, WITH THE ONE FACT A PICKER CANNOT GUESS
+# ------------------------------------------------------------------------------
+# V4 of the missing-verbs work order. Nothing in this package could enumerate
+# profiles: `--profile=NAME` takes one, profile_file resolves one, and an
+# operator (or a front end) discovers the rest by listing a directory and
+# opening the files.
+#
+# THE FACT THAT MAKES THIS MORE THAN `ls`: the family signature. Asymmetric
+# retention (`--source-profile`) may differ in HOW MUCH is kept and not in WHAT
+# is kept, and assert_source_profile_families decides that on the rendered
+# fragments, where a family is the `pattern` AND how it is counted -- d7h24
+# (flat) under d7h24-gfs (ladder) is refused although both "keep 7 and 24".
+# The GUI has to FILTER the list rather than show an error after the choice, so
+# it needs that signature up front. Computed here by calling
+# profile_fragment_patterns, the very function the refusal calls: a second
+# implementation would give the front end a list that disagrees with the
+# product's own refusal, and the operator would meet the disagreement as a
+# rejection of something the screen had just offered.
+#
+# retain_rendered is the other thing a front end cannot derive. `keep = 24` in a
+# profile becomes `-H24` through gen-cron's tier-letter table, which this
+# program reads with --dump-tier-letters and does not keep a copy of. So the
+# rendered flag is reported next to the operator's own value: what was written,
+# and what will actually run.
+#
+# EVERY PROFILE IS LOADED IN ITS OWN SUBSHELL, and that is a requirement rather
+# than tidiness. load_active_profile validates and dies on a bad profile, and
+# /etc/zfs-snapshot-all/profiles is where an operator's own edits live -- one
+# typo there would otherwise take the whole catalogue down and the picker would
+# show nothing at all. Here a broken profile is a row that says it is broken,
+# with the validator's own reason, and the other fifteen still list. The
+# subshell also owns the rendered temp files: load_active_profile arms its
+# release trap in the shell that renders, so each row cleans up after itself.
+#
+# The user directory is listed FIRST because profile_file prefers it: a name
+# present in both resolves to the operator's copy, so that is the one the
+# catalogue must show, marked as shadowing the package's.
+
+profile_meta_field() {   # <profile file> <field> -> the [profile] section's value
+    cron_config_section "$1" '[profile]' \
+        | sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" | head -1
+}
+
+# The tier names an OPERATOR sees, in file order: the [template:] headers of the
+# profile source, before namespacing. The rendered artifacts carry
+# profile__<name>__<tier>, which is a compilation detail and not what the policy
+# editor edits.
+profile_source_tiers() {   # <profile file> -> one bare tier name per line
+    sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$1"
+}
+
+cmd_list_profiles() {
+    local as_json=0 a
+    for a in "$@"; do
+        case "$a" in
+            --json) as_json=1 ;;
+            -*)     die "list-profiles: unknown option '$a' (only --json)" ;;
+            *)      die "list-profiles: takes no positional arguments" ;;
+        esac
+    done
+
+    local -A seen=()
+    local -a files=() sources=()
+    local d f nm
+    for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.conf; do
+            [ -f "$f" ] || continue
+            nm=$(profile_name_of "$f")
+            [ -n "${seen[$nm]:-}" ] && continue
+            seen[$nm]=1
+            files+=("$f")
+            [ "$d" = "$PROFILE_USER_ROOT" ] && sources+=(user) || sources+=(package)
+        done
+    done
+
+    if [ "$as_json" -eq 0 ]; then
+        list_profiles_text
+        return 0
+    fi
+    printf '{"profiles":['
+    local n=${#files[@]} i=0 first=1
+    while [ "$i" -lt "$n" ]; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        list_profiles_record "${files[$i]}" "${sources[$i]}"
+        i=$((i + 1))
+    done
+    printf ']}\n'
+}
+
+# BUFFERED, and that is a guard rather than tidiness. A profile can VALIDATE and
+# still fail to RENDER -- `keep = xyz` passes profile_validate_file and then dies
+# inside load_active_profile (measured 2026-09-07) -- and emitting the row field
+# by field meant such a die left HALF AN OBJECT in the middle of the array: one
+# bad file in /etc/zfs-snapshot-all/profiles made the whole catalogue
+# unparseable, which is the opposite of the per-row isolation this verb exists
+# to give. So the row is rendered in a subshell and emitted only if that
+# subshell finished; otherwise the row says it could not be rendered and the
+# other fifteen are untouched.
+list_profiles_record() {   # <profile file> <package|user> -> one COMPLETE JSON object
+    local rec
+    if rec=$(list_profiles_render "$1" "$2") && [ -n "$rec" ]        && case "$rec" in *"}") true ;; *) false ;; esac; then
+        printf '%s' "$rec"
+        return 0
+    fi
+    printf '{"name":"%s","file":"%s","source":"%s","description":"","version":"","valid":false'         "$(json_escape "$(profile_name_of "$1")")" "$(json_escape "$1")" "$(json_escape "$2")"
+    jsonw_field error "this profile validates but cannot be rendered -- the failure is on stderr; the rest of the catalogue is unaffected"
+    printf ',"mechanism":"","shape":"","families":[],"tiers":[]}'
+    return 0
+}
+
+list_profiles_render() {   # <profile file> <package|user> -> one JSON object, or dies
+    (
+    # A profile is a file an operator may have edited by hand. A die from
+    # anywhere below must cost this ROW, never the catalogue.
+    die_confine_to_subshell
+    local file="$1" src="$2"
+    local nm; nm=$(profile_name_of "$file")
+    local desc ver
+    desc=$(profile_meta_field "$file" description)
+    ver=$(profile_meta_field "$file" version)
+
+    printf '{"name":"%s"' "$(json_escape "$nm")"
+    jsonw_field file        "$file"
+    jsonw_field source      "$src"
+    jsonw_field description "$desc"
+    jsonw_field version     "$ver"
+
+    # Validated BEFORE loading, and by the same validator load_active_profile
+    # uses -- called here directly so its refusal becomes a field instead of a
+    # fatal. PROFILE_ERR is the validator's own wording; rewriting it here would
+    # be a second vocabulary for the same refusal.
+    if ! profile_validate_file "$file" "$GENCRON"; then
+        printf ',"valid":false'
+        jsonw_text  error "$PROFILE_ERR"
+        printf ',"mechanism":"","shape":"","families":[],"tiers":[]}'
+        return 0
+    fi
+    printf ',"valid":true,"error":""'
+
+    PROFILE_ACTIVE="$file"; PROFILE_LOADED=""
+    load_active_profile
+
+    # THE SIGNATURE, from the function the refusal uses. Empty when the profile
+    # renders no retention at all -- a real shape (a create-only profile), and
+    # one the guard itself refuses to compare, so it is reported as an empty
+    # list rather than invented.
+    local frag fams=""
+    if frag=$(profile_retention_fragment); then
+        fams=$(profile_fragment_patterns "$frag" "$PROFILE_TPL_FILE")
+    fi
+
+    # shape: how many DISTINCT families the profile prunes. One means the tiers
+    # are counters over a single family (the ladder shape); more means a family
+    # per tier. This is the line above the policy grid, because it changes what
+    # a row MEANS -- with one family a per-tier quiesce is not expressible, since
+    # the daily snapshot IS one of the hourlies.
+    local npat
+    npat=$(printf '%s\n' "$fams" | sed -n -E 's/\(.*\)$//p' | sed '/^$/d' | sort -u | wc -l)
+    local shape=""
+    [ "$npat" -eq 1 ] && shape="one-family"
+    [ "$npat" -gt 1 ] && shape="family-per-tier"
+
+    # mechanism, per tier and then for the profile. Three, and they are not
+    # variations of one thing: FLAT counts pieces and never looks at age, AGE
+    # keeps everything younger than a threshold, GFS buckets a window and keeps
+    # one per bucket. Measured on pve10 2026-09-04: after a downtime longer than
+    # the ladder's reach the GFS shape deletes the family outright with rc=0,
+    # and the flat counter is the only one that leaves anything -- which is
+    # exactly why a picker must say which of the three it is offering.
+    # The fragment-level gfs, which a tier INHERITS when it says nothing. Two
+    # places declare it and both have to be read -- profile_fragment_patterns
+    # says so in its own comment and gets it right; a per-tier read alone called
+    # Y5M12D31H24 "flat" here, measured, because that profile declares the
+    # ladder once on [prune] instead of on each tier.
+    local frag_gfs
+    frag_gfs=$(cron_config_section "$file" "[prune]" \
+               | sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' | tail -1)
+    local tier tmech mech="" mixed=0 sec
+    local tiers_json="" tfirst=1
+    while IFS= read -r tier; do
+        [ -n "$tier" ] || continue
+        sec=$(cron_config_section "$file" "[template:$tier]")
+        local t_gfs t_keep t_retain t_pattern t_prefix t_quiesce t_send t_prune t_warn t_crit
+        t_gfs=$(printf '%s\n' "$sec"     | sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_keep=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*keep[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_retain=$(printf '%s\n' "$sec"  | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_pattern=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_prefix=$(printf '%s\n' "$sec"  | sed -n -E 's/^[[:space:]]*prefix[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_quiesce=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*quiesce[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_send=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_prune=$(printf '%s\n' "$sec"   | sed -n -E 's/^[[:space:]]*prune_schedule[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_warn=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*monitor_warn[[:space:]]*=[[:space:]]*//p' | head -1)
+        t_crit=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*monitor_crit[[:space:]]*=[[:space:]]*//p' | head -1)
+
+        tmech=""
+        case "${t_gfs:-$frag_gfs}" in yes|true|1) tmech=gfs ;; esac
+        [ -z "$tmech" ] && [ -n "$t_retain" ] && tmech=age
+        [ -z "$tmech" ] && [ -n "$t_keep" ]   && tmech=flat
+        if [ -n "$tmech" ]; then
+            if [ -z "$mech" ]; then mech="$tmech"
+            elif [ "$mech" != "$tmech" ]; then mixed=1
+            fi
+        fi
+
+        # What the tier-letter table turns `keep = N` into. Read off the
+        # RENDERED template under its namespaced identity, so it is the flag
+        # that will actually reach delsnaps rather than a prediction.
+        local rendered
+        rendered=$(cron_config_section "$PROFILE_TPL_FILE" "[template:$(profile_ns_name "$nm" "$tier")]" \
+                   | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*//p' | head -1)
+
+        [ "$tfirst" -eq 1 ] || tiers_json="$tiers_json,"
+        tfirst=0
+        tiers_json="$tiers_json{\"name\":\"$(json_escape "$tier")\""
+        tiers_json="$tiers_json,\"mechanism\":\"$(json_escape "$tmech")\""
+        tiers_json="$tiers_json,\"pattern\":\"$(json_escape "$t_pattern")\""
+        tiers_json="$tiers_json,\"prefix\":\"$(json_escape "$t_prefix")\""
+        tiers_json="$tiers_json,\"keep\":\"$(json_escape "$t_keep")\""
+        tiers_json="$tiers_json,\"retain\":\"$(json_escape "$t_retain")\""
+        tiers_json="$tiers_json,\"retain_rendered\":\"$(json_escape "$rendered")\""
+        tiers_json="$tiers_json,\"gfs\":\"$(json_escape "$t_gfs")\""
+        tiers_json="$tiers_json,\"quiesce\":\"$(json_escape "$t_quiesce")\""
+        tiers_json="$tiers_json,\"send_schedule\":\"$(json_escape "$t_send")\""
+        tiers_json="$tiers_json,\"prune_schedule\":\"$(json_escape "$t_prune")\""
+        tiers_json="$tiers_json,\"monitor_warn\":\"$(json_escape "$t_warn")\""
+        tiers_json="$tiers_json,\"monitor_crit\":\"$(json_escape "$t_crit")\"}"
+    done <<PTIERS
+$(profile_source_tiers "$file")
+PTIERS
+    [ "$mixed" -eq 1 ] && mech=mixed
+
+    jsonw_field mechanism "$mech"
+    jsonw_field shape     "$shape"
+    printf ',"families":'
+    jsonw_array "$(printf '%s' "$fams" | tr '\n' ' ')"
+    printf ',"tiers":[%s]}' "$tiers_json"
+    )
+}
+
+list_profiles_text() {
+    # Counted, not `for i in ${!files[@]}`: adding the set -u guard to that
+    # form turns it into INDIRECT expansion (${!VAR+word}) -- bash then reads
+    # the whole expanded file list AS a variable name and refuses it. Measured
+    # here, not reasoned about.
+    local n=${#files[@]} i=0 f nm
+    while [ "$i" -lt "$n" ]; do
+        f="${files[$i]}"
+        nm=$(profile_name_of "$f")
+        printf '%-16s %-8s %s
+' "$nm" "${sources[$i]}" "$(profile_meta_field "$f" description)"
+        i=$((i + 1))
+    done
+    [ "${#files[@]}" -gt 0 ] || echo "brak profili w $PROFILE_USER_ROOT ani w $PROFILE_ROOT"
+    echo
+    echo "Pelne dane (rodziny, mechanizm, szczeble, wyrenderowane retain): --json"
+}
+
+# ------------------------------------------------------------------------------
+# show-config -- WHAT THIS RELATIONSHIP ACTUALLY HAS IN THE INSTALLED CONFIG
+# ------------------------------------------------------------------------------
+# V3 of the missing-verbs work order, and the second half of the order already
+# placed in OWNER-CONFIG-VERBS-2026-09-06.md. Without it the GUI's Polityka tab
+# has nothing to display and the dataset x tier matrix does not know which
+# dataset takes which tiers -- today the only way to find out is to open the INI
+# on the host and read it.
+#
+# WHAT IT DOES NOT DO, and this is the design decision rather than a shortcut:
+# it does NOT flatten the [dataset:] -> [template:] -> [defaults] layering into
+# one effective value per field. gen-cron.sh owns that resolution (resolve_field
+# and the per-field helpers around it), the layers are not the same for every
+# field -- keep/retain and monitor_warn/monitor_crit stop at the template, and
+# only DEFAULTS_POLICY_FIELDS reach [defaults] at all -- and a second
+# implementation of that would be a second answer to "what is this relationship's
+# retention", with the wrong one on the screen. So the layers are returned AS
+# LAYERS, which is also what the policy editor edits: every policy field lives
+# on [template:], and the GUI's own preview renders the candidate through the
+# real gen-cron.sh rather than predicting it.
+#
+# OWNERSHIP IS THE SAME TWO-PART RULE remove_managed_sections applies, and it
+# has to be: a screen that shows a different set of sections than the teardown
+# would remove is worse than no screen. Marker first ("# managed-by:
+# zfs-backup.sh client=<name>", written as each generated section's first
+# content line since REV-20260802-033 U11), then the record's own
+# MANAGED_DATASETS/MANAGED_PRUNE_SCOPE, which is what keeps every relationship
+# activated BEFORE that marker existed visible here. The suite pins the two
+# functions against one another on the same fixture.
+#
+# [defaults] and [excluded:] are returned under "host" rather than beside the
+# relationship's sections. They are collector-wide -- one [excluded:__replicate_]
+# governs every relationship on the machine -- and putting them in the same array
+# would invite a front end to offer them as if editing one relationship's copy.
+
+# One pass over a config, as DATA: every section, in file order, with its fields.
+#
+# SEPARATED BY SOH (), NOT BY TAB, and the difference is not cosmetic: tab
+# is IFS WHITESPACE, so `IFS=$'	' read` collapses a run of them and an EMPTY
+# field silently disappears -- measured here before it shipped. Empty fields are
+# not hypothetical in this grammar: a blank value is a documented state (an empty
+# [prune:] section blocked twelve of fourteen profiles once), and [defaults] has
+# no name at all. SOH is not IFS whitespace, so empties survive, and no config
+# value in this tree can contain it.
+#
+# `@section` opens a section even when it has no fields (a real state: an empty
+# [prune:<scope>] blocked twelve of fourteen profiles once, and it was invisible
+# precisely because nothing enumerated empty sections). `@managed_by` carries the
+# ownership marker, which is a COMMENT and would otherwise be dropped with the
+# other comments.
+config_section_dump() {   # <config file> -> idx SOH kind SOH name SOH key SOH value
+    awk '
+        { line=$0; sub(/\r$/,"",line); t=line; sub(/^[ \t]+/,"",t); sub(/[ \t]+$/,"",t) }
+        t ~ /^\[/ {
+            h=t; sub(/^\[/,"",h); sub(/\][ \t]*$/,"",h)
+            p=index(h,":")
+            if (p>0) { kind=substr(h,1,p-1); name=substr(h,p+1) } else { kind=h; name="" }
+            idx++
+            print idx "\001" kind "\001" name "\001@section\001"
+            next
+        }
+        idx == 0 { next }
+        t ~ /^# managed-by: zfs-backup\.sh client=/ {
+            v=t; sub(/^# managed-by: zfs-backup\.sh client=/,"",v)
+            print idx "\001" kind "\001" name "\001@managed_by\001" v
+            next
+        }
+        t ~ /^#/ { next }
+        t == ""  { next }
+        t !~ /=/ { next }
+        {
+            k=t; sub(/[ \t]*=.*$/,"",k)
+            v=t; sub(/^[^=]*=[ \t]*/,"",v)
+            print idx "\001" kind "\001" name "\001" k "\001" v
+        }
+    ' "$1"
+}
+
+cmd_show_config() {
+    local name="" as_json=0 config="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)     as_json=1 ;;
+            --config=*) config="${a#*=}" ;;
+            -*)         die "show-config: unknown option '$a' (only --json and --config=PATH)" ;;
+            *)          [ -z "$name" ] || die "show-config: takes exactly one client name"
+                        name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "show-config requires a client name"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no client '$name'"
+    record_load client "$cpath"
+    # The relationship's own config first: which file cron reads for THIS
+    # relationship is a per-relationship fact (read_server_conf used to clobber
+    # it, which is its own entry in this file's history). read_server_conf is
+    # asked only when the record names none, so it can take nothing away.
+    [ -n "$config" ] || config="${CRON_CONFIG:-}"
+    [ -n "$config" ] || { read_server_conf; config="${CRON_CONFIG:-}"; }
+
+    # A relationship that is not activated yet HAS no sections, and that is a
+    # state rather than a failure. Reported as an empty answer with
+    # config_readable=false, never as a refusal: a front end opening the policy
+    # tab on a freshly created relationship must get a parseable "nothing here".
+    if [ ! -r "$config" ]; then
+        if [ "$as_json" -eq 1 ]; then
+            printf '{"client":"%s","config":"%s","config_readable":false' \
+                "$(json_escape "$name")" "$(json_escape "$config")"
+            printf ',"sections":[],"templates":[],"host":{"defaults":{},"excluded":[]}}\n'
+        else
+            echo "Klient:            $name"
+            echo "Config:            ${config:-(relacja nie wskazuje zadnego, host nie ma server.conf)}"
+            echo "                   NIECZYTELNY albo nieistniejacy -- ta relacja nie ma jeszcze"
+            echo "                   zainstalowanych sekcji. To stan, nie awaria."
+        fi
+        return 0
+    fi
+
+    local dump; dump=$(config_section_dump "$config")
+
+    # Pass 1: which sections this relationship owns, and which templates they
+    # reference. Order is FILE ORDER, kept in _sc_order, because a config is
+    # read by a person too and reordering it here would make the screen and the
+    # file disagree about what sits next to what.
+    local -A _sc_kind=() _sc_name=() _sc_marker=() _sc_fields=() _sc_seen=()
+    local -a _sc_order=()
+    local idx kind sname key val
+    while IFS=$'\001' read -r idx kind sname key val; do
+        [ -n "$idx" ] || continue
+        if [ -z "${_sc_seen[$idx]:-}" ]; then
+            _sc_seen[$idx]=1; _sc_order+=("$idx")
+            _sc_kind[$idx]="$kind"; _sc_name[$idx]="$sname"
+            _sc_marker[$idx]=""; _sc_fields[$idx]=""
+        fi
+        case "$key" in
+            @section)    ;;
+            @managed_by) _sc_marker[$idx]="$val" ;;
+            *)           _sc_fields[$idx]="${_sc_fields[$idx]}$key"$'\001'"$val"$'\n' ;;
+        esac
+    done <<SCDUMP
+$dump
+SCDUMP
+
+    local -a owned=() tpl_ids=()
+    local -A tpl_seen=()
+    local i f k v
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        # section_owned_by, not a predicate of this reader's own. It already
+        # exists (REV-20260809-089) and is documented as deliberately identical
+        # to the test remove_managed_sections applies -- so asking it is what
+        # makes this screen show exactly the set teardown would remove. A second
+        # copy written here would have been a second answer to "is this mine",
+        # and the one on the screen would be the unverified one.
+        case "${_sc_kind[$i]}" in dataset|prune|prune-bookmarks) ;; *) continue ;; esac
+        section_owned_by "$config" "[${_sc_kind[$i]}:${_sc_name[$i]}]" "$name" "${_sc_name[$i]}" || continue
+        owned+=("$i")
+        while IFS=$'\001' read -r k v; do
+            [ "$k" = use_template ] || continue
+            local id
+            for id in ${v//,/ }; do
+                [ -n "$id" ] || continue
+                [ -n "${tpl_seen[$id]:-}" ] && continue
+                tpl_seen[$id]=1; tpl_ids+=("$id")
+            done
+        done <<SCF
+${_sc_fields[$i]}
+SCF
+    done
+
+    if [ "$as_json" -eq 0 ]; then
+        show_config_text "$name" "$config"
+        return 0
+    fi
+
+    printf '{"client":"%s","config":"%s","config_readable":true' \
+        "$(json_escape "$name")" "$(json_escape "$config")"
+    printf ',"sections":['
+    local first=1
+    for i in ${owned[@]+"${owned[@]}"}; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"kind":"%s","name":"%s","managed_marker":%s,"fields":' \
+            "$(json_escape "${_sc_kind[$i]}")" "$(json_escape "${_sc_name[$i]}")" \
+            "$([ "${_sc_marker[$i]}" = "$name" ] && echo true || echo false)"
+        show_config_fields_json "${_sc_fields[$i]}"
+        printf '}'
+    done
+    printf '],"templates":['
+    first=1
+    local id
+    for id in ${tpl_ids[@]+"${tpl_ids[@]}"}; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        local tidx=""
+        for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+            [ "${_sc_kind[$i]}" = template ] && [ "${_sc_name[$i]}" = "$id" ] && { tidx="$i"; break; }
+        done
+        # present=false is a REAL state and gen-cron refuses the whole config on
+        # it, so it has to be visible rather than an absent array member: a tier
+        # named by a dataset and defined nowhere is exactly what the operator
+        # needs to see, and the alternative is a silently shorter list.
+        if [ -n "$tidx" ]; then
+            printf '{"name":"%s","present":true,"fields":' "$(json_escape "$id")"
+            show_config_fields_json "${_sc_fields[$tidx]}"
+            printf '}'
+        else
+            printf '{"name":"%s","present":false,"fields":{}}' "$(json_escape "$id")"
+        fi
+    done
+    printf '],"host":{"defaults":'
+    local didx=""
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        [ "${_sc_kind[$i]}" = defaults ] && { didx="$i"; break; }
+    done
+    if [ -n "$didx" ]; then show_config_fields_json "${_sc_fields[$didx]}"; else printf '{}'; fi
+    printf ',"excluded":['
+    first=1
+    for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+        [ "${_sc_kind[$i]}" = excluded ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"prefix":"%s","fields":' "$(json_escape "${_sc_name[$i]}")"
+        show_config_fields_json "${_sc_fields[$i]}"
+        printf '}'
+    done
+    printf ']}}\n'
+}
+
+show_config_fields_json() {   # <key SOH value newline ...> -> a JSON object
+    local k v first=1
+    printf '{'
+    while IFS=$'\001' read -r k v; do
+        [ -n "$k" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '"%s":"%s"' "$(json_escape "$k")" "$(json_escape "$v")"
+    done <<SCFJ
+$1
+SCFJ
+    printf '}'
+}
+
+# The text form. Same data, same ownership rule, for the operator who is on the
+# host with a terminal and not a front end.
+show_config_text() {   # <client> <config>
+    local name="$1" config="$2"
+    echo "Klient:            $name"
+    echo "Config:            $config"
+    echo
+    local i
+    for i in ${owned[@]+"${owned[@]}"}; do
+        printf '[%s:%s]%s\n' "${_sc_kind[$i]}" "${_sc_name[$i]}" \
+            "$([ "${_sc_marker[$i]}" = "$name" ] || echo '   (bez znacznika -- rozpoznana po rekordzie relacji)')"
+        printf '%s' "${_sc_fields[$i]}" | while IFS=$'\001' read -r k v; do
+            [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
+        done
+        echo
+    done
+    [ "${#owned[@]}" -gt 0 ] || echo "(ta relacja nie ma w tym configu ani jednej sekcji)"
+    local id
+    for id in ${tpl_ids[@]+"${tpl_ids[@]}"}; do
+        local tidx=""
+        for i in ${_sc_order[@]+"${_sc_order[@]}"}; do
+            [ "${_sc_kind[$i]}" = template ] && [ "${_sc_name[$i]}" = "$id" ] && { tidx="$i"; break; }
+        done
+        if [ -n "$tidx" ]; then
+            printf '[template:%s]\n' "$id"
+            printf '%s' "${_sc_fields[$tidx]}" | while IFS=$'\001' read -r k v; do
+                [ -n "$k" ] && printf '\t%-14s = %s\n' "$k" "$v"
+            done
+        else
+            printf '[template:%s]   BRAK -- sekcja nie istnieje w tym configu; gen-cron odmowi calego pliku\n' "$id"
+        fi
+        echo
+    done
+}
+
+# ------------------------------------------------------------------------------
+# status --json -- THE DATA LAYER BEHIND THE FACTS THE TEXT VIEW PRINTS
+# ------------------------------------------------------------------------------
+# V1 of the missing-verbs work order (docs/discussions/OWNER-MISSING-VERBS-
+# 2026-09-07.md). The GUI's main screen and detail panel cannot be built on
+# cmd_status's output: the list is one printf of padded columns and the detail
+# view is Polish prose with the answer inside the sentence. Scraping either is
+# what the GUI decision forbids outright.
+#
+# The contract is not invented here. `progress --json` and
+# `list-replicas --json` already established it: ONE object, ONE array of
+# records, fields named after the record fields they come from. This is the
+# third implementation of that shape, not a third convention.
+#
+# TWO ASYMMETRIES, both inherited from the text view rather than chosen:
+#
+#  * the LIST form stays local and fast -- it opens no ssh, exactly as the text
+#    list does. So it reports peer_pair_state as NOT_ASKED, which is
+#    deliberately NOT the same token as UNKNOWN. UNKNOWN means "asked, and the
+#    peer could not answer"; NOT_ASKED means "nobody asked". A front end that
+#    painted the two the same colour would show an unreachable peer as an
+#    un-inspected one -- the confusion the text view needs a whole sentence for
+#    and a JSON reader has only a token for.
+#  * the NAMED form asks the peer, exactly as `status NAME` does, and carries
+#    last_result, because the stats log is the one fact the detail panel has no
+#    other verb to reach.
+#
+# Absent is EMPTY, never a guess: a field the record does not carry is "" (or []
+# for a list), and the two booleans are real JSON booleans so a front end never
+# has to know which strings this project considers true.
+
+# The two JSON writers every `--json` reader in this file shares. Named jsonw_*
+# rather than status_* because status was merely the first: show-config,
+# list-profiles and monitor emit through these same two, so the escaping and the
+# empty-array shape have one implementation between them.
+#
+# A record's field is DATA: a space-separated list is split, but never globbed.
+# `set -f` in a subshell rather than around the loop, because a bare `set -f`
+# inside a function leaks into everything the caller does afterwards. Without it
+# a value carrying * would be expanded against the working directory and the
+# array would carry filenames -- a record deciding what its reader reports.
+jsonw_array() {   # <space-separated list> -> ["a","b"]
+    ( set -f
+      local w first=1
+      printf '['
+      for w in $1; do
+          [ "$first" -eq 1 ] || printf ','
+          first=0
+          printf '"%s"' "$(json_escape "$w")"
+      done
+      printf ']' )
+}
+
+jsonw_field() {   # <json name> <value> -> ,"name":"value"
+    printf ',"%s":"%s"' "$1" "$(json_escape "$2")"
+}
+
+# THE ENGINE'S OUTPUT IS NOT A PATH. json_escape covers the two characters a
+# dataset path can carry, and it is pinned identical to two FROZEN copies whose
+# only job is exactly that -- so it is not the place to teach about newlines.
+# But `monitor --json` carries check-snap-age.sh's own text as the REASON, and
+# that engine prints ONE LINE PER DATASET: a raw newline inside a JSON string is
+# invalid JSON, and every monitor line covering more than one dataset produced
+# exactly that. Measured on pve10, 2026-09-07, after 69 suite assertions passed
+# -- because the suite's stub engine printed a single line and therefore agreed
+# with the bug. The three characters escaped here are the three that engine can
+# emit; anything wider would be inventing a requirement.
+jsonw_text() {   # <json name> <possibly multi-line value> -> ,"name":"value"
+    local v
+    v=$(json_escape "$2")
+    v="${v//$'\t'/\\t}"
+    v="${v//$'\r'/\\r}"
+    v="${v//$'\n'/\\n}"
+    printf ',"%s":"%s"' "$1" "$v"
+}
+
+# The pair_label the relationship's sections actually carry, which is what the
+# cron lines pass as `-L` and therefore what every progress record and every
+# stats line is stamped with. THAT is the join key a front end needs to line
+# `status --json` up against `progress --json`, so it is read from the config
+# rather than assumed equal to the client name -- the writers do keep them equal
+# (add-client, activate-client and move-to-client all rewrite both), but "the
+# writers keep them equal" is a claim about six call sites, not a fact this
+# reader can see.
+#
+# Resets on ANY section header, not just [dataset:. A hand-written section
+# following a managed one carries no ownership marker, and inheriting the
+# previous section's ownership across it would attribute a stranger's field to
+# this relationship.
+status_pair_label_from_config() {   # <client name> -> the pair_label of the first section it owns
+    local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out=""
+    [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            "["*) cur="" ;;
+            *"managed-by: zfs-backup.sh client=$name") cur="yes" ;;
+            *pair_label*=*)
+                [ "$cur" = yes ] || continue
+                [ -n "$out" ] && continue
+                out="${line#*= }" ;;
+        esac
+    done < "$cfg"
+    [ -n "$out" ] || return 1
+    printf '%s' "$out"
+}
+
+# In a subshell for the same reason the text list view is one: record_load
+# assigns by name into the caller's shell, and one relationship's fields must
+# not reach the next one's record.
+status_json_record() {   # <client record path> <ask the peer: 0|1>
+    (
+    local ask="$2"
+    record_load client "$1"
+    local paused=false
+    client_paused "${CLIENT_NAME:-}" && paused=true
+    local diverged=false
+    [ -n "${INSTALLED_ENDPOINT:-}" ] && [ "${INSTALLED_ENDPOINT:-}" != "${ACTIVE_ENDPOINT:-}" ] && diverged=true
+    local srcs; srcs=$(status_sources_from_config "${CLIENT_NAME:-}") || srcs="${REQUESTED_DATASETS:-}"
+    local label; label=$(status_pair_label_from_config "${CLIENT_NAME:-}") || label="${CLIENT_NAME:-}"
+
+    local peerstate="NOT_ASKED"
+    if [ "$ask" -eq 1 ]; then
+        # die_confine_to_subshell for the reason cmd_status names at its own
+        # copy of this probe: the loader dies on a record without a manifest,
+        # and here that is the UNKNOWN this view reports, not a reason to abort.
+        peerstate=$( die_confine_to_subshell
+                     load_client_and_connection "$1" >/dev/null 2>&1 \
+                     && peer_pair_state >/dev/null 2>&1 \
+                     && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
+        [ -n "$peerstate" ] || peerstate="UNKNOWN"
+    fi
+
+    printf '{"name":"%s"' "$(json_escape "${CLIENT_NAME:-}")"
+    jsonw_field state              "${STATE:-}"
+    jsonw_field pair_label         "$label"
+    jsonw_field peer_host          "${PEER_HOST:-}"
+    jsonw_field active_endpoint    "${ACTIVE_ENDPOINT:-}"
+    jsonw_field installed_endpoint "${INSTALLED_ENDPOINT:-}"
+    printf ',"endpoint_diverged":%s' "$diverged"
+    printf ',"paused_local":%s' "$paused"
+    jsonw_field peer_pair_state    "$peerstate"
+    jsonw_field profile            "${PROFILE:-}"
+    jsonw_field source_profile     "${SOURCE_PROFILE:-}"
+    jsonw_field client_target      "${CLIENT_TARGET:-}"
+    jsonw_field local_user         "${LOCAL_USER:-}"
+    jsonw_field bandwidth          "${BANDWIDTH:-}"
+    jsonw_field recursion          "${RECURSION:-}"
+    jsonw_field passive            "${PASSIVE:-}"
+    jsonw_field created_at         "${CREATED_AT:-}"
+    jsonw_field activated_at       "${ACTIVATED_AT:-}"
+    jsonw_field seed_completed_at  "${SEED_COMPLETED_AT:-}"
+    jsonw_field removed_at         "${REMOVED_AT:-}"
+    printf ',"sources":';             jsonw_array "$srcs"
+    printf ',"managed_datasets":';    jsonw_array "${MANAGED_DATASETS:-}"
+    printf ',"managed_prune_scope":'; jsonw_array "${MANAGED_PRUNE_SCOPE:-}"
+    if [ "$ask" -eq 1 ]; then
+        local pfx="${MANAGED_PRUNE_SCOPE:-${MANAGED_DATASETS:-}}"; pfx="${pfx%% *}"
+        local last=""
+        [ -n "$pfx" ] && last=$(status_last_result "$pfx")
+        if [ -n "$last" ]; then
+            local lt ls ld
+            read -r lt ls ld <<LASTRES
+$last
+LASTRES
+            printf ',"last_result":{"time":"%s","status":"%s","duration_s":%s}' \
+                "$(json_escape "$lt")" "$(json_escape "$ls")" "${ld:-0}"
+        else
+            # null, not an empty object and not "success": "no record in the
+            # history" is not "no failures", and the text view says exactly
+            # that in a sentence a JSON reader cannot carry.
+            printf ',"last_result":null'
+        fi
+    fi
+    printf '}'
+    )
+}
+
+cmd_status_json() {   # [client name]
+    local name="$1" f first=1
+    printf '{"relations":['
+    if [ -n "$name" ]; then
+        local cpath; cpath=$(client_conf_path "$name")
+        [ -r "$cpath" ] || die "no client '$name'"
+        status_json_record "$cpath" 1
+    elif [ -d "$CLIENTS_DIR" ]; then
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -e "$f" ] || continue
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            status_json_record "$f" 0
+        done
+    fi
+    printf ']}\n'
+}
+
 cmd_status() {
-    local name="${1:-}"
+    local name="" as_json=0 a
+    for a in "$@"; do
+        case "$a" in
+            --json) as_json=1 ;;
+            -*)     die "status: unknown option '$a' (only --json)" ;;
+            *)      [ -z "$name" ] || die "status: takes at most one client name"
+                    name="$a" ;;
+        esac
+    done
+    [ "$as_json" -eq 1 ] && { cmd_status_json "$name"; return 0; }
     if [ -z "$name" ]; then
         [ -d "$CLIENTS_DIR" ] || { log "no clients yet"; return 0; }
         local f
@@ -12183,6 +13190,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
+        show-config)      shift; cmd_show_config "$@" ;;
+        list-profiles)    shift; cmd_list_profiles "$@" ;;
+        monitor)          shift; cmd_monitor "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
