@@ -1,0 +1,24 @@
+┌─ Relacja: pve10 → hdd/backups/pve10 ─────────────────────────────────────────┐
+│ [·Zakres·]  [ Łącze ]  [ Polityka ]  [ Monitor ]                             │
+│──────────────────────────────────────────────────────────────────────────────│
+│ 1. CO ŹRÓDŁO POZWOLIŁO ZABIERAĆ            podpisane na pve10 · tylko odczyt │
+│      rpool/data                                       + rodzic  + dzieci     │
+│      bez: rpool/data/vm-999                           (pojedynczy)           │
+│      bez: rpool/data/tmp  i wszystko pod nim          (poddrzewo)            │
+│      podpis sha256 5f3a…c1 · poszerzenie = --commit-scope NA pve10           │
+│                                                                              │
+│ 2. CZEGO KOLEKTOR SAM NIE BIERZE           decyzja tej maszyny · edytowalne  │
+│      wzorzec dziecka:  -swap$                                                │
+│      wzorzec dziecka:  ^rpool/data/scratch                                   │
+│      → pomija 3 z 14: vm-101-swap, vm-107-swap, scratch    [Ins] [Del] [F4]  │
+│                                                                              │
+│ 3. RODZINY MIGAWEK, KTÓRYCH NIE ADOPTUJE   tylko przy trybie „pasywny"       │
+│      tryb: [ ] pasywny (bierz istniejące, nie stempluj własnych)             │
+│      nie adoptuj: __replicate_, vzdump                     (nieaktywne)      │
+│                                                                              │
+│ 4. CUDZE RODZINY, KTÓRYCH PRUNE NIE KASUJE      to ustawienie KOLEKTORA →    │
+│      __replicate_ = all · vzdump = all · __migration__ = all                 │
+│──────────────────────────────────────────────────────────────────────────────│
+│ 2 i 3 to ta relacja. 1 należy do pve10, 4 do całego kolektora.               │
+│ F9 Podgląd crona   F2 Zapisz   Esc Anuluj                                    │
+└──────────────────────────────────────────────────────────────────────────────┘

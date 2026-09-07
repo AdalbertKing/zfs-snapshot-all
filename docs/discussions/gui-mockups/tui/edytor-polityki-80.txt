@@ -1,0 +1,20 @@
+┌─ Polityka: m12w4d7h24-gfs   (klon fabrycznego, edytowalny) ──────────────────┐
+│ Kształt:  ( ) jedna rodzina, drabina nad nią          (WIELKIE litery)       │
+│           (•) osobna rodzina na każdy szczebel        (małe litery)          │
+│ Mechanizm dla wszystkich:  ( ) FLAT   (•) GFS   ( ) AGE      [ Ustaw ]       │
+│──────────────────────────────────────────────────────────────────────────────│
+│ szczebel   wysyłka       prune         ile   mech.  quiesce  warn   crit     │
+│ godzinny   1 * * * *     21 * * * *     24   GFS    [ ]       90m   150m     │
+│ dzienny    11 1 * * *    31 1 * * *      7   GFS    [x]       30h    48h     │
+│ tygodniowy 21 2 * * 0    41 2 * * 0      4   GFS    [x]        8d    10d     │
+│ miesięczny 31 3 1 * *    51 3 1 * *   ▓ 12▓  GFS    [x]       35d    40d     │
+│──────────────────────────────────────────────────────────────────────────────│
+│ „12" znaczy: PO JEDNEJ NA MIESIĄC PRZEZ 12 MIESIĘCY (keep = 12, gfs = yes).  │
+│ Po dłuższym postoju rodzina znika w całości przy pierwszym prune — zmierzone │
+│ na pve10: -G -H24 -D7 zostawiło 0 z 6. FLAT trzymałby 12 NAJNOWSZYCH,        │
+│ niezależnie od wieku. AGE trzymałby wszystko młodsze niż 12 miesięcy.        │
+│──────────────────────────────────────────────────────────────────────────────│
+│ Nazwa wyprowadzona:  m12w4d7h24-gfs          (nie wpisujesz jej)             │
+│ Opis: 12 miesiecy + 4 tygodnie + 7 dni + 24 godziny, cztery rodziny          │
+│ F9 Podgląd   F2 Zapisz jako…   Esc Anuluj                                    │
+└──────────────────────────────────────────────────────────────────────────────┘
