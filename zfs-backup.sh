@@ -10963,7 +10963,13 @@ cmd_show_config() {
     [ -n "$name" ] || die "show-config requires a client name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    record_load client "$cpath"
+    # The same gate as status --json, for the same reason: a refused record must
+    # not become a plausible answer assembled from the assignments that happened
+    # to precede the bad line. The reviewer measured it -- moving CRON_CONFIG
+    # above or below the malformed line changed config_readable, which is the
+    # parser's partial state leaking into this contract.
+    record_load client "$cpath" \
+        || die "show-config: the record at $cpath was refused (see above) -- refusing to describe a relationship from a file this package does not accept."
     # The relationship's own config first: which file cron reads for THIS
     # relationship is a per-relationship fact (read_server_conf used to clobber
     # it, which is its own entry in this file's history). read_server_conf is
@@ -11260,7 +11266,13 @@ status_pair_label_from_config() {   # <client name> -> the pair_label of the fir
 status_json_record() {   # <client record path> <ask the peer: 0|1>
     (
     local ask="$2"
-    record_load client "$1"
+    # THE RECORD LOAD IS A GATE. record_load returns non-zero for a malformed
+    # value and dies for a field outside the per-record allowlist -- both are the
+    # parser REFUSING the file as data. Its status was not read here
+    # (REV-20260907-136 F1), so every field assigned before the bad line was
+    # published as valid state: a truncated or hand-edited record came back as a
+    # plausible relationship with an empty state. A refusal ends this record.
+    record_load client "$1" || exit 1
     local paused=false
     client_paused "${CLIENT_NAME:-}" && paused=true
     local diverged=false
@@ -11325,22 +11337,44 @@ LASTRES
     )
 }
 
+# THE PUBLICATION BOUNDARY IS BUFFERED, and that is the point of this function
+# rather than a detail of it (REV-20260907-136 F1, acceptance 3).
+#
+# The first version printed the array prefix, then each record, then the suffix.
+# A record the parser REFUSES therefore arrived after `{"relations":[` and a
+# comma were already on stdout: the command exited non-zero with the refusal on
+# stderr, and a front end reading stdout got a truncated document -- invalid
+# JSON, published by a command that had correctly decided not to answer.
+#
+# So nothing reaches stdout until every selected record has produced a complete
+# object. stdout is one parseable response or it is empty; there is no third
+# outcome.
+#
+# list_profiles_record already had exactly this rule, added earlier the same day
+# after a profile that validates and then dies while rendering left half an
+# object in the middle of an array. The lesson is not the buffering -- it is
+# that the shape was fixed at ONE site instead of being asked of every reader
+# that publishes a record it did not itself validate. Third time in one session
+# (see E40); recorded as its own entry.
 cmd_status_json() {   # [client name]
-    local name="$1" f first=1
-    printf '{"relations":['
+    local name="$1" f first=1 out="" rec
     if [ -n "$name" ]; then
         local cpath; cpath=$(client_conf_path "$name")
         [ -r "$cpath" ] || die "no client '$name'"
-        status_json_record "$cpath" 1
+        rec=$(status_json_record "$cpath" 1) \
+            || die "status --json: the record at $cpath was refused (see above) -- refusing to publish an answer built from a file this package does not accept. Nothing was written to stdout."
+        out="$rec"
     elif [ -d "$CLIENTS_DIR" ]; then
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            [ "$first" -eq 1 ] || printf ','
+            rec=$(status_json_record "$f" 0) \
+                || die "status --json: the record at $f was refused (see above) -- refusing to publish a partial list. Nothing was written to stdout."
+            [ "$first" -eq 1 ] || out="$out,"
             first=0
-            status_json_record "$f" 0
+            out="$out$rec"
         done
     fi
-    printf ']}\n'
+    printf '{"relations":[%s]}\n' "$out"
 }
 
 cmd_status() {
