@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -10301,6 +10301,196 @@ if ! ex_run export-relation nosuch && grep -q "no relationship 'nosuch'" "$WORK/
 else
     bad "exportrel: an unknown relationship is refused by name" "$(cat "$WORK/ex.out" "$WORK/ex.err")"
 fi
+
+
+# ============================================================================
+# save-profile: OPEN A TEMPLATE, CHANGE IT, SAVE IT AS YOUR OWN
+# (2026-09-07). Self-contained; always eligible, also under `--section saveprof`.
+#
+# The assertion that matters most is the plainest one -- a valid modification is
+# ACCEPTED. It is here because the first run of this verb refused one: the
+# working copy was a mktemp file, load_active_profile derives the profile
+# identity from the FILE NAME, and the render gate rejected a perfectly good
+# profile because of the temp file it was sitting in. A suite that only tested
+# refusals would have called that a pass.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+PF="$WORK/saveprof"; rm -rf "$PF"; mkdir -p "$PF/user" "$PF/pkg"
+cp "$REPO/profiles/d7h24.conf" "$PF/pkg/d7h24.conf"
+# A config that must be byte-identical afterwards: this verb touches files in
+# the profile directory and NOTHING installed.
+printf '[defaults]\n\thost_label = pve2\n' > "$PF/cron.conf"
+cp "$PF/cron.conf" "$PF/cron.orig"
+
+pf_run() {   # <args...> -> $WORK/pf.out / $WORK/pf.err, returns rc
+    ( export PROFILE_USER_ROOT="$PF/user" PROFILE_ROOT="$PF/pkg"
+      export CRON_CONFIG="$PF/cron.conf" SERVER_CONF="$PF/no-server-conf"
+      bash "$ZFSBACKUP" save-profile "$@" ) >"$WORK/pf.out" 2>"$WORK/pf.err"
+}
+pf_files() { ls "$PF/user" 2>/dev/null | tr '\n' ' '; }
+
+# ---------------------------------------------------------------------------
+# THE HAPPY PATH, first, because it is the one the first implementation broke.
+# ---------------------------------------------------------------------------
+if pf_run --from=d7h24 --as=d7h4 --tier=hourly --keep=4 --description="7 dobowych + 4 godzinowe"; then
+    ok "saveprof: a valid modification is ACCEPTED and saved"
+else
+    bad "saveprof: a valid modification is ACCEPTED and saved" "$(cat "$WORK/pf.err")"
+fi
+if [ -f "$PF/user/d7h4.conf" ]; then
+    ok "saveprof: ...into the operator's directory, under the name asked for"
+else
+    bad "saveprof: ...into the operator's directory, under the name asked for" "$(pf_files)"
+fi
+if [ "$(sed -n '/^\[template:hourly\]/,/^\[/p' "$PF/user/d7h4.conf" | grep -c 'keep *= *4$')" -eq 1 ] \
+   && [ "$(sed -n '/^\[template:daily\]/,/^\[/p' "$PF/user/d7h4.conf" | grep -c 'keep *= *7$')" -eq 1 ]; then
+    ok "saveprof: the named tier carries the new value and the other tier is untouched"
+else
+    bad "saveprof: the named tier carries the new value and the other tier is untouched" \
+        "$(grep -n 'keep' "$PF/user/d7h4.conf")"
+fi
+if grep -q 'description = 7 dobowych + 4 godzinowe' "$PF/user/d7h4.conf"; then
+    ok "saveprof: --description reaches the [profile] section"
+else
+    bad "saveprof: --description reaches the [profile] section" "$(grep -n description "$PF/user/d7h4.conf")"
+fi
+# NOTHING INSTALLED MOVED. The whole argument for allowing this verb at all,
+# after the in-place writers were abandoned, is that it touches only a file in
+# the profile directory.
+if cmp -s "$PF/cron.orig" "$PF/cron.conf"; then
+    ok "saveprof: the installed config is byte-identical -- this verb touches nothing installed"
+else
+    bad "saveprof: the installed config is byte-identical -- this verb touches nothing installed" \
+        "$(diff "$PF/cron.orig" "$PF/cron.conf")"
+fi
+
+# ---------------------------------------------------------------------------
+# THE RENDER GATE. `keep = xyz` PASSES profile_validate_file and dies inside
+# load_active_profile -- measured 2026-09-07 while building list-profiles, where
+# it left half a JSON object behind. A profile that validates and cannot render
+# is a landmine with a date on it: accepted here, exploding at the next
+# relationship built from it.
+# ---------------------------------------------------------------------------
+pf_before="$(pf_files)"
+if ! pf_run --from=d7h24 --as=zepsuty --tier=hourly --keep=xyz; then
+    ok "saveprof: a profile that validates but cannot RENDER is refused"
+else
+    bad "saveprof: a profile that validates but cannot RENDER is refused" "$(cat "$WORK/pf.out")"
+fi
+if [ ! -e "$PF/user/zepsuty.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: ...and no file is left behind, not even a partial one"
+else
+    bad "saveprof: ...and no file is left behind, not even a partial one" "$(pf_files)"
+fi
+# The two gates are DIFFERENT gates, and the messages say which one fired.
+if grep -q 'cannot be RENDERED' "$WORK/pf.err"; then
+    ok "saveprof: the refusal names the render gate, not the validator"
+else
+    bad "saveprof: the refusal names the render gate, not the validator" "$(cat "$WORK/pf.err")"
+fi
+
+# THE VALIDATOR GATE, the other half: a field a profile may not own.
+if ! pf_run --from=d7h24 --as=obcy --tier=hourly --pair_label=mine \
+   && [ ! -e "$PF/user/obcy.conf" ]; then
+    ok "saveprof: a relationship-owned field is refused by the validator, and nothing is written"
+else
+    bad "saveprof: a relationship-owned field is refused by the validator, and nothing is written" \
+        "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+
+# ---------------------------------------------------------------------------
+# WHERE IT MAY WRITE. The package directory is a git checkout the hourly
+# self-update pulls: a profile written there would evaporate on the hour,
+# silently.
+# ---------------------------------------------------------------------------
+if ! pf_run --from=d7h24 --as=../pkg/podstepny --tier=hourly --keep=4 \
+   && grep -q 'must be a NAME, not a path' "$WORK/pf.err"; then
+    ok "saveprof: a path instead of a name is refused -- the copy always lands in the operator's directory"
+else
+    bad "saveprof: a path instead of a name is refused" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if [ "$(ls "$PF/pkg" | tr '\n' ' ')" = "d7h24.conf " ]; then
+    ok "saveprof: the package directory is untouched by every case above"
+else
+    bad "saveprof: the package directory is untouched by every case above" "$(ls "$PF/pkg")"
+fi
+
+# OVERWRITING is a decision, not a default.
+if ! pf_run --from=d7h24 --as=d7h4 --tier=hourly --keep=6 && grep -q 'already exists' "$WORK/pf.err"; then
+    ok "saveprof: an existing profile is not replaced without --force"
+else
+    bad "saveprof: an existing profile is not replaced without --force" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if grep -q 'keep *= *4$' "$PF/user/d7h4.conf"; then
+    ok "saveprof: ...and the refused overwrite left the old file exactly as it was"
+else
+    bad "saveprof: ...and the refused overwrite left the old file exactly as it was" "$(grep -n keep "$PF/user/d7h4.conf")"
+fi
+if pf_run --from=d7h24 --as=d7h4 --tier=hourly --keep=6 --force \
+   && [ "$(sed -n '/^\[template:hourly\]/,/^\[/p' "$PF/user/d7h4.conf" | grep -c 'keep *= *6$')" -eq 1 ]; then
+    ok "saveprof: --force replaces it"
+else
+    bad "saveprof: --force replaces it" "$(cat "$WORK/pf.err")" "$(grep -n keep "$PF/user/d7h4.conf")"
+fi
+
+# ---------------------------------------------------------------------------
+# AIMING. A change aimed at the wrong tier is invisible in the result, so the
+# tier is required rather than guessed.
+# ---------------------------------------------------------------------------
+if ! pf_run --from=d7h24 --as=bezszczebla --keep=4 && grep -q 'tier=NAME is required' "$WORK/pf.err"; then
+    ok "saveprof: changing a field without --tier is refused rather than guessed at"
+else
+    bad "saveprof: changing a field without --tier is refused rather than guessed at" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if ! pf_run --from=d7h24 --as=zlyszczebel --tier=weekly --keep=4 \
+   && grep -q "has no tier 'weekly'" "$WORK/pf.err" && grep -q 'hourly' "$WORK/pf.err"; then
+    ok "saveprof: an unknown tier is refused and the refusal lists the tiers that exist"
+else
+    bad "saveprof: an unknown tier is refused and the refusal lists the tiers that exist" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+
+# THE NAME IS THE RETENTION -- said, not enforced. profiles/README.md's rule is
+# about the SHIPPED catalogue, and this directory is not that catalogue, so a
+# mismatch is a warning and the file is still written.
+if pf_run --from=d7h24 --as=d30h24 --tier=hourly --keep=4 \
+   && [ -f "$PF/user/d30h24.conf" ] && grep -q "promises retention" "$WORK/pf.err"; then
+    ok "saveprof: a name that contradicts the retention is WARNED about, and still saved"
+else
+    bad "saveprof: a name that contradicts the retention is WARNED about, and still saved" \
+        "$(pf_files)" "$(cat "$WORK/pf.err")"
+fi
+
+# REFUSALS on the arguments themselves.
+if ! pf_run --as=cos --tier=hourly --keep=4 && grep -q 'from=NAME is required' "$WORK/pf.err"; then
+    ok "saveprof: --from is required -- this verb opens a template, it does not compose one from nothing"
+else
+    bad "saveprof: --from is required" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if ! pf_run --from=d7h24 --tier=hourly --keep=4 && grep -q 'as=NAME is required' "$WORK/pf.err"; then
+    ok "saveprof: --as is required"
+else
+    bad "saveprof: --as is required" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if ! pf_run --from=nieistnieje --as=cos --tier=hourly --keep=4 \
+   && grep -q "no profile 'nieistnieje'" "$WORK/pf.err"; then
+    ok "saveprof: an unknown source profile is refused, naming both directories it looked in"
+else
+    bad "saveprof: an unknown source profile is refused" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+
+# AND THE LOOP CLOSES: what was saved is what list-profiles offers, rendered.
+pf_cat=$( export PROFILE_USER_ROOT="$PF/user" PROFILE_ROOT="$PF/pkg"
+          bash "$ZFSBACKUP" list-profiles --json 2>/dev/null )
+case "$pf_cat" in
+    *'"name":"d7h4"'*'"source":"user"'*) ok "saveprof: the catalogue offers the saved profile as the operator's" ;;
+    *) bad "saveprof: the catalogue offers the saved profile as the operator's" "$pf_cat" ;;
+esac
+case "$pf_cat" in
+    *'"keep":"6","retain":"","retain_rendered":"-H6"'*)
+        ok "saveprof: and it renders the flag the saved value asks for (-H6)" ;;
+    *) bad "saveprof: and it renders the flag the saved value asks for (-H6)" "$pf_cat" ;;
+esac
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
