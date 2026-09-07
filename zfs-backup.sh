@@ -11095,14 +11095,6 @@ profile_meta_field() {   # <profile file> <field> -> the [profile] section's val
         | sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" | head -1
 }
 
-# The tier names an OPERATOR sees, in file order: the [template:] headers of the
-# profile source, before namespacing. The rendered artifacts carry
-# profile__<name>__<tier>, which is a compilation detail and not what the policy
-# editor edits.
-profile_source_tiers() {   # <profile file> -> one bare tier name per line
-    sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$1"
-}
-
 cmd_list_profiles() {
     local as_json=0 render=1 a
     for a in "$@"; do
