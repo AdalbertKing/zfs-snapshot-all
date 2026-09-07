@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 25bd423a407a9a81 -->
+<!-- status-covers-digest: cea589bc4ef0ed96 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,31 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`list-profiles`: 7,5 s → 0,73 s (2026-09-07).** Polecenie właściciela po labie.
+  **Zgadłem dwa razy źle, zanim zmierzyłem**: najpierw obstawiłem uruchomienia
+  `gen-cron` (są po **13 ms**, czyli 0,4 s z 9,5), potem walidator. Rozbicie na
+  części na pve10 pokazało, że największy pojedynczy koszt był **mój**:
+  ~236 ms z 736 ms wiersza szło na ~48 podprocesów `sed` do wyciągnięcia pól.
+  - **Jeden przebieg `awk`** zamiast tego (przez `config_section_dump`, który
+    powstał rano do `show-config` — tym razem sprawdziłem, co już jest).
+    `shape` liczony z pól **źródłowych**, nie z wyrenderowanej sygnatury: ta sama
+    odpowiedź bez renderu. Zysk sam z siebie: ~15%.
+  - **`--no-render`** — właściwa odpowiedź na „picker jest wolny” to nie
+    „przyspiesz render”, tylko „picker nie potrzebuje renderu”. Render jest
+    potrzebny wyłącznie dla `families` (filtr zgodności źródła) i
+    `retain_rendered`. **Zmierzone na pve10: 7550 ms → 729 ms**, ~46 ms na profil.
+  - Kontrakt formy domyślnej bez zmian poza jednym kluczem u góry:
+    `"rendered": true|false`. W `--no-render` klucze wymagające renderu są
+    **nieobecne, nie puste** — pusty `retain_rendered` byłby nie do odróżnienia
+    od szczebla bez flagi, a pusty `valid` od profilu niepoprawnego.
+  - **Asercja, która zarobiła na siebie:** „`--no-render` daje ten sam mechanizm
+    i kształt” padła na pierwszym biegu — i miała rację. Dla profilu ZEPSUTEGO
+    obie formy różnią się z natury, bo bez renderu nie ma jak wiedzieć, że jest
+    zepsuty. Stąd dwie asercje zamiast jednej: równość po profilach, które forma
+    pełna uznaje za POPRAWNE, plus osobna kontrola nazywająca kompromis —
+    `--no-render` **wypisuje** profil, którego nie sprawdził, i nie twierdzi, że
+    jest dobry; odmowa przenosi się do `add-client`. Suita: 21/0.
 
 - **`save-profile` — ekran konstruujący profil (2026-09-07).**
   Właściciel: *„Nie mamy ekranu konstruującego i zapisującego profil. Może
