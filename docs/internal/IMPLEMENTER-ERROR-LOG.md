@@ -1173,6 +1173,14 @@ the gate is for. The marker is over the CONTENT of every file declaring the
 obligation, so "I only changed code, not docs" is not an exemption; it is the
 trigger.
 
+*Second occurrence, SAME DAY, 2026-09-07.* A one-line deletion (a function
+left dead by a refactor, caught by CI) went in without the gate, and CI went
+red on `graph` for exactly the same reason. The trigger was identical and so
+was the reasoning: the change felt too small to be worth three commands. It
+is not the size of the change that decides -- it is whether the file declares
+the obligation. `zfs-backup.sh` does, so every commit touching it runs the
+gate, including the one-line ones.
+
 *Rule.* R4's family, one shape further out: **the gate belongs to the COMMIT, not
 to the session.** Every commit that touches a status-covered file runs the three
 commands in order, including -- especially -- a hurried fix commit. If the reason

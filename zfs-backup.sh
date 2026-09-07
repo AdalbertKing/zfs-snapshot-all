@@ -11061,26 +11061,48 @@ ERI
 # present in both resolves to the operator's copy, so that is the one the
 # catalogue must show, marked as shadowing the package's.
 
+# ONE PASS OVER THE FILE, not eleven subprocesses per tier.
+#
+# The first cut read every field with its own `sed | head` -- eleven per tier,
+# plus a cron_config_section to get the section text. On a four-tier profile
+# that is ~48 subprocesses, and it was measured on pve10 as ~236 ms of the
+# 736 ms a single row cost. config_section_dump already parses a whole INI in
+# one awk pass; this reuses it and reads the fields out of an array.
+#
+# Sections are keyed "<kind>:<name>|<field>", so "[template:hourly] keep" is
+# PROF_F["template:hourly|keep"] and the pathless "[prune] gfs" -- the fragment
+# level a tier inherits from -- is PROF_F["prune:|gfs"].
+profile_fields_load() {   # <ini file> -> fills PROF_F and PROF_TIERS
+    unset PROF_F
+    declare -gA PROF_F=()
+    PROF_TIERS=""
+    local idx kind name key val
+    while IFS=$'\001' read -r idx kind name key val; do
+        [ -n "$idx" ] || continue
+        case "$key" in
+            @section)
+                [ "$kind" = template ] && PROF_TIERS="$PROF_TIERS $name"
+                continue ;;
+            @managed_by) continue ;;
+        esac
+        PROF_F["$kind:$name|$key"]="$val"
+    done < <(config_section_dump "$1")
+    PROF_TIERS="${PROF_TIERS# }"
+}
+
 profile_meta_field() {   # <profile file> <field> -> the [profile] section's value
     cron_config_section "$1" '[profile]' \
         | sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" | head -1
 }
 
-# The tier names an OPERATOR sees, in file order: the [template:] headers of the
-# profile source, before namespacing. The rendered artifacts carry
-# profile__<name>__<tier>, which is a compilation detail and not what the policy
-# editor edits.
-profile_source_tiers() {   # <profile file> -> one bare tier name per line
-    sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$1"
-}
-
 cmd_list_profiles() {
-    local as_json=0 a
+    local as_json=0 render=1 a
     for a in "$@"; do
         case "$a" in
-            --json) as_json=1 ;;
-            -*)     die "list-profiles: unknown option '$a' (only --json)" ;;
-            *)      die "list-profiles: takes no positional arguments" ;;
+            --json)      as_json=1 ;;
+            --no-render) render=0 ;;
+            -*)          die "list-profiles: unknown option '$a' (only --json and --no-render)" ;;
+            *)           die "list-profiles: takes no positional arguments" ;;
         esac
     done
 
@@ -11103,12 +11125,12 @@ cmd_list_profiles() {
         list_profiles_text
         return 0
     fi
-    printf '{"profiles":['
+    printf '{"rendered":%s,"profiles":[' "$([ "$render" -eq 1 ] && echo true || echo false)"
     local n=${#files[@]} i=0 first=1
     while [ "$i" -lt "$n" ]; do
         [ "$first" -eq 1 ] || printf ','
         first=0
-        list_profiles_record "${files[$i]}" "${sources[$i]}"
+        list_profiles_record "${files[$i]}" "${sources[$i]}" "$render"
         i=$((i + 1))
     done
     printf ']}\n'
@@ -11123,9 +11145,9 @@ cmd_list_profiles() {
 # to give. So the row is rendered in a subshell and emitted only if that
 # subshell finished; otherwise the row says it could not be rendered and the
 # other fifteen are untouched.
-list_profiles_record() {   # <profile file> <package|user> -> one COMPLETE JSON object
+list_profiles_record() {   # <profile file> <package|user> [render 0|1] -> one COMPLETE JSON object
     local rec
-    if rec=$(list_profiles_render "$1" "$2") && [ -n "$rec" ]        && case "$rec" in *"}") true ;; *) false ;; esac; then
+    if rec=$(list_profiles_render "$1" "$2" "${3:-1}") && [ -n "$rec" ]        && case "$rec" in *"}") true ;; *) false ;; esac; then
         printf '%s' "$rec"
         return 0
     fi
@@ -11135,16 +11157,17 @@ list_profiles_record() {   # <profile file> <package|user> -> one COMPLETE JSON 
     return 0
 }
 
-list_profiles_render() {   # <profile file> <package|user> -> one JSON object, or dies
+list_profiles_render() {   # <profile file> <package|user> [render 0|1] -> one JSON object, or dies
     (
     # A profile is a file an operator may have edited by hand. A die from
     # anywhere below must cost this ROW, never the catalogue.
     die_confine_to_subshell
-    local file="$1" src="$2"
+    local file="$1" src="$2" render="${3:-1}"
     local nm; nm=$(profile_name_of "$file")
-    local desc ver
-    desc=$(profile_meta_field "$file" description)
-    ver=$(profile_meta_field "$file" version)
+    # ONE awk pass over the profile; every field read below is an array lookup.
+    profile_fields_load "$file"
+    local desc="${PROF_F["profile:|description"]:-}"
+    local ver="${PROF_F["profile:|version"]:-}"
 
     printf '{"name":"%s"' "$(json_escape "$nm")"
     jsonw_field file        "$file"
@@ -11156,24 +11179,42 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
     # uses -- called here directly so its refusal becomes a field instead of a
     # fatal. PROFILE_ERR is the validator's own wording; rewriting it here would
     # be a second vocabulary for the same refusal.
-    if ! profile_validate_file "$file" "$GENCRON"; then
-        printf ',"valid":false'
-        jsonw_text  error "$PROFILE_ERR"
-        printf ',"mechanism":"","shape":"","families":[],"tiers":[]}'
-        return 0
-    fi
-    printf ',"valid":true,"error":""'
+    # THE RENDER IS OPTIONAL, and this is where the cost lives. Measured on
+    # pve10: validating and rendering one profile is ~500 ms of the ~700 ms a
+    # row costs, and a picker listing seventeen of them cannot afford it.
+    # Without a render `valid`, `families` and `retain_rendered` are ABSENT --
+    # not guessed -- and the document says so once, at the top.
+    local fams=""
+    local -A PROF_R=()
+    if [ "$render" -eq 1 ]; then
+        if ! profile_validate_file "$file" "$GENCRON"; then
+            printf ',"valid":false'
+            jsonw_text  error "$PROFILE_ERR"
+            printf ',"mechanism":"","shape":"","families":[],"tiers":[]}'
+            return 0
+        fi
+        printf ',"valid":true,"error":""'
 
-    PROFILE_ACTIVE="$file"; PROFILE_LOADED=""
-    load_active_profile
+        PROFILE_ACTIVE="$file"; PROFILE_LOADED=""
+        load_active_profile
 
-    # THE SIGNATURE, from the function the refusal uses. Empty when the profile
-    # renders no retention at all -- a real shape (a create-only profile), and
-    # one the guard itself refuses to compare, so it is reported as an empty
-    # list rather than invented.
-    local frag fams=""
-    if frag=$(profile_retention_fragment); then
-        fams=$(profile_fragment_patterns "$frag" "$PROFILE_TPL_FILE")
+        # THE SIGNATURE, from the function the refusal uses. Empty when the profile
+        # renders no retention at all -- a real shape (a create-only profile), and
+        # one the guard itself refuses to compare, so it is reported as an empty
+        # list rather than invented.
+        local frag
+        if frag=$(profile_retention_fragment); then
+            fams=$(profile_fragment_patterns "$frag" "$PROFILE_TPL_FILE")
+        fi
+        # The RENDERED templates, read the same way as the source: one awk pass,
+        # then lookups. retain_rendered used to cost a section extraction plus a sed
+        # per tier on top of the source-side storm.
+        profile_fields_load "$PROFILE_TPL_FILE"
+        # PROF_R is declared by the caller above; filled here.
+        local _k
+        for _k in "${!PROF_F[@]}"; do PROF_R["$_k"]="${PROF_F[$_k]}"; done
+        # ...and put the SOURCE fields back, because the tier loop below reads both.
+        profile_fields_load "$file"
     fi
 
     # shape: how many DISTINCT families the profile prunes. One means the tiers
@@ -11181,8 +11222,14 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
     # per tier. This is the line above the policy grid, because it changes what
     # a row MEANS -- with one family a per-tier quiesce is not expressible, since
     # the daily snapshot IS one of the hourlies.
-    local npat
-    npat=$(printf '%s\n' "$fams" | sed -n -E 's/\(.*\)$//p' | sed '/^$/d' | sort -u | wc -l)
+    # Counted from the SOURCE patterns, not from the rendered signature: it is
+    # the same answer -- how many distinct families the tiers prune -- and it
+    # is available without a render, which --no-render needs.
+    local npat _p _pats=""
+    for _p in $PROF_TIERS; do
+        _pats="$_pats${PROF_F["template:$_p|pattern"]:-} "
+    done
+    npat=$(printf '%s' "$_pats" | tr ' ' '\n' | sed '/^$/d' | sort -u | wc -l)
     local shape=""
     [ "$npat" -eq 1 ] && shape="one-family"
     [ "$npat" -gt 1 ] && shape="family-per-tier"
@@ -11199,25 +11246,22 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
     # says so in its own comment and gets it right; a per-tier read alone called
     # Y5M12D31H24 "flat" here, measured, because that profile declares the
     # ladder once on [prune] instead of on each tier.
-    local frag_gfs
-    frag_gfs=$(cron_config_section "$file" "[prune]" \
-               | sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' | tail -1)
+    local frag_gfs="${PROF_F["prune:|gfs"]:-}"
     local tier tmech mech="" mixed=0 sec
     local tiers_json="" tfirst=1
     while IFS= read -r tier; do
         [ -n "$tier" ] || continue
-        sec=$(cron_config_section "$file" "[template:$tier]")
-        local t_gfs t_keep t_retain t_pattern t_prefix t_quiesce t_send t_prune t_warn t_crit
-        t_gfs=$(printf '%s\n' "$sec"     | sed -n -E 's/^[[:space:]]*gfs[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_keep=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*keep[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_retain=$(printf '%s\n' "$sec"  | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_pattern=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_prefix=$(printf '%s\n' "$sec"  | sed -n -E 's/^[[:space:]]*prefix[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_quiesce=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*quiesce[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_send=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_prune=$(printf '%s\n' "$sec"   | sed -n -E 's/^[[:space:]]*prune_schedule[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_warn=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*monitor_warn[[:space:]]*=[[:space:]]*//p' | head -1)
-        t_crit=$(printf '%s\n' "$sec"    | sed -n -E 's/^[[:space:]]*monitor_crit[[:space:]]*=[[:space:]]*//p' | head -1)
+        # fields come from PROF_F, filled by one awk pass over the file
+        local t_gfs="${PROF_F["template:$tier|gfs"]:-}"
+        local t_keep="${PROF_F["template:$tier|keep"]:-}"
+        local t_retain="${PROF_F["template:$tier|retain"]:-}"
+        local t_pattern="${PROF_F["template:$tier|pattern"]:-}"
+        local t_prefix="${PROF_F["template:$tier|prefix"]:-}"
+        local t_quiesce="${PROF_F["template:$tier|quiesce"]:-}"
+        local t_send="${PROF_F["template:$tier|send_schedule"]:-}"
+        local t_prune="${PROF_F["template:$tier|prune_schedule"]:-}"
+        local t_warn="${PROF_F["template:$tier|monitor_warn"]:-}"
+        local t_crit="${PROF_F["template:$tier|monitor_crit"]:-}"
 
         tmech=""
         case "${t_gfs:-$frag_gfs}" in yes|true|1) tmech=gfs ;; esac
@@ -11232,9 +11276,7 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
         # What the tier-letter table turns `keep = N` into. Read off the
         # RENDERED template under its namespaced identity, so it is the flag
         # that will actually reach delsnaps rather than a prediction.
-        local rendered
-        rendered=$(cron_config_section "$PROFILE_TPL_FILE" "[template:$(profile_ns_name "$nm" "$tier")]" \
-                   | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*//p' | head -1)
+        local rendered="${PROF_R["template:$(profile_ns_name "$nm" "$tier")|retain"]:-}"
 
         [ "$tfirst" -eq 1 ] || tiers_json="$tiers_json,"
         tfirst=0
@@ -11244,7 +11286,9 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
         tiers_json="$tiers_json,\"prefix\":\"$(json_escape "$t_prefix")\""
         tiers_json="$tiers_json,\"keep\":\"$(json_escape "$t_keep")\""
         tiers_json="$tiers_json,\"retain\":\"$(json_escape "$t_retain")\""
-        tiers_json="$tiers_json,\"retain_rendered\":\"$(json_escape "$rendered")\""
+        # Omitted, not blanked, when nothing was rendered: an empty string here
+        # would be indistinguishable from a tier that renders to no flag at all.
+        [ "$render" -eq 1 ] && tiers_json="$tiers_json,\"retain_rendered\":\"$(json_escape "$rendered")\""
         tiers_json="$tiers_json,\"gfs\":\"$(json_escape "$t_gfs")\""
         tiers_json="$tiers_json,\"quiesce\":\"$(json_escape "$t_quiesce")\""
         tiers_json="$tiers_json,\"send_schedule\":\"$(json_escape "$t_send")\""
@@ -11252,14 +11296,17 @@ list_profiles_render() {   # <profile file> <package|user> -> one JSON object, o
         tiers_json="$tiers_json,\"monitor_warn\":\"$(json_escape "$t_warn")\""
         tiers_json="$tiers_json,\"monitor_crit\":\"$(json_escape "$t_crit")\"}"
     done <<PTIERS
-$(profile_source_tiers "$file")
+$(printf '%s
+' $PROF_TIERS)
 PTIERS
     [ "$mixed" -eq 1 ] && mech=mixed
 
     jsonw_field mechanism "$mech"
     jsonw_field shape     "$shape"
-    printf ',"families":'
-    jsonw_array "$(printf '%s' "$fams" | tr '\n' ' ')"
+    if [ "$render" -eq 1 ]; then
+        printf ',"families":'
+        jsonw_array "$(printf '%s' "$fams" | tr '\n' ' ')"
+    fi
     printf ',"tiers":[%s]}' "$tiers_json"
     )
 }
