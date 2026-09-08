@@ -10722,6 +10722,21 @@ cmd_monitor() {
 #              IT IS ON
 
 # ------------------------------------------------------------------------------
+# gui -- WEJSCIE DO EKRANU
+# ------------------------------------------------------------------------------
+# Jeden czasownik, jeden plik. TUI zyje w tui/zfs-tui.py, bo czytelniki wydaja
+# JSON, a parser JSON-a w bashu bylby recznie pisanym parserem -- ten sam ksztalt,
+# ktory ten pakiet tepi kontraktami. `python3` z `curses` stoi na kazdym hoscie
+# floty (pve2/pve1 3.9.2, pve10 3.11.2, sprawdzone 2026-09-08), wiec to nie jest
+# nowa zaleznosc, tylko ta, ktora juz tam jest.
+cmd_gui() {
+    local tui="$SCRIPT_DIR/tui/zfs-tui.py"
+    [ -f "$tui" ] || die "gui: brak $tui -- checkout jest niekompletny"
+    command -v python3 >/dev/null 2>&1         || die "gui: nie ma python3 na tym hoscie. Ekran go potrzebuje; same czasowniki (--json) dzialaja bez niego."
+    python3 "$tui" "$@"
+}
+
+# ------------------------------------------------------------------------------
 # show-scope -- WHAT IS ACTUALLY ON THE DISK, for the detail panel
 # ------------------------------------------------------------------------------
 # Screen 2 of the GUI. Screen 1 (`list-jobs`) says what this host is DECLARED to
@@ -14350,6 +14365,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
         show-scope)       shift; cmd_show_scope "$@" ;;
+        gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
