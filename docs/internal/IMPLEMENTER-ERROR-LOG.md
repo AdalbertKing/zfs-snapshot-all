@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -1493,3 +1493,36 @@ written. Four functions in this file and gen-cron.sh itself already read that
 line correctly; I had written a fifth reader rather than looking. See also
 [[feedback_convention_may_already_exist]]: the convention existed, in five
 places, and I checked none of them.
+
+### E49 - The same unchecked-producer defect, four lines below the one I was fixing
+
+**2026-09-08, `show-scope` as merged in PR #362, found by the Reviewer
+(REV-20260908-139), P2 -- one day after REV-138, in the same function.**
+
+*Genesis.* REV-138 was about a producer whose failure was invisible through
+process substitution. I fixed it, wrote a careful guard for the primary read of
+`show-scope`, and four lines later wrote two more producers with no status check
+at all:
+
+    ubs=$(zfs get ... usedbysnapshots ... 2>/dev/null)
+    case "$ubs" in ''|*[!0-9]*) ubs=0 ;; esac
+    nbook=$(zfs list -t bookmark ... 2>/dev/null | grep -c . )
+
+The `case` normalised a refusal to zero; the pipeline reported the counter's
+status rather than the producer's. Both fields publish `0` as a legitimate
+measurement, so the document asserted "no bookmarks" and "the snapshots occupy
+no space" -- on the screen introduced to explain storage pressure.
+
+*Cause.* R1 again, but the sharper form is about SCOPE OF A FIX. I treated the
+defect as belonging to one call site. It belonged to a function: the property
+"every producer's status is checked before its output is used" is a property of
+`cmd_show_scope`, and I proved it for one of three. The reviewer's discriminator
+is the one I did not write -- the primary read SUCCEEDING while a later one
+fails.
+
+*Rule.* R1, evidence. When a guard is added to one producer, every OTHER
+producer in that function is part of the same change. The question to ask at fix
+time is not "is this call checked now" but **"which calls in here are still
+not"** -- and the answer is a grep over the function, not a memory of what was
+just edited. Related: E41, where the same fix was applied at one site and
+shipped missing at two others, one day earlier.

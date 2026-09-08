@@ -11271,6 +11271,77 @@ else
     bad "showscope: a creation tie is broken by name (oldest)" "$sl_got"
 fi
 
+
+# --- THE AUXILIARY READS HAVE THEIR OWN STATUS (REV-20260908-139 F1) --------
+# `0` is a valid measurement for both bookmarks and usedbysnapshots, which is
+# what made the first version dangerous: a refusal was published as "no
+# bookmarks" and "the snapshots occupy no space" -- two facts nobody measured,
+# on the screen introduced to explain storage pressure.
+#
+# The discriminator is the reviewer's: the snapshot list SUCCEEDS while the two
+# later reads fail, so this cannot pass by accident on the primary-failure path
+# the suite already covered.
+cat > "$SS/bin/zfs" <<'SSEOF'
+#!/bin/sh
+case "$*" in
+  *"-t snapshot"*"hdd/aux"*)
+    printf 'hdd/aux@automated_daily_2026-09-08_01-00-00\t1788000000\t4096\n'; exit 0 ;;
+  *get*usedbysnapshots*)   [ -n "${SS_UBS_FAILS:-}" ] && { echo "permission denied" >&2; exit 1; }; echo 4096; exit 0 ;;
+  *"-t bookmark"*)         [ -n "${SS_BMK_FAILS:-}" ] && { echo "permission denied" >&2; exit 1; }; printf 'hdd/aux#b1\n'; exit 0 ;;
+esac
+exit 0
+SSEOF
+chmod +x "$SS/bin/zfs"
+
+( export PATH="$SS/bin:$PATH" SS_UBS_FAILS=1
+  cmd_show_scope hdd/aux --pattern=automated_daily --json ) >"$WORK/ss.out" 2>&1
+ss_ubs="$(cat "$WORK/ss.out")"
+if printf '%s' "$ss_ubs" | grep -q '"used_by_snapshots":null'; then
+    ok "showscope: a REFUSED usedbysnapshots read is null, never a measured zero"
+else
+    bad "showscope: a refused usedbysnapshots read is null" "$ss_ubs"
+fi
+if printf '%s' "$ss_ubs" | grep -q '"metric":"used_by_snapshots"'; then
+    ok "showscope: ...and it is named in 'unavailable', with the reason"
+else
+    bad "showscope: the refused metric is named in unavailable" "$ss_ubs"
+fi
+# THE HALF THAT MUST SURVIVE: the families WERE measured, so they are published.
+if printf '%s' "$ss_ubs" | grep -q '"pattern":"automated_daily","count":1' \
+   && printf '%s' "$ss_ubs" | grep -q '"bookmarks":1'; then
+    ok "showscope: ...while everything that WAS read is still reported (families, bookmarks)"
+else
+    bad "showscope: the measured half survives a partial read" "$ss_ubs"
+fi
+
+( export PATH="$SS/bin:$PATH" SS_BMK_FAILS=1
+  cmd_show_scope hdd/aux --pattern=automated_daily --json ) >"$WORK/ss.out" 2>&1
+ss_bmk="$(cat "$WORK/ss.out")"
+# THE PIPELINE MASK: the old code counted the producer's lines with `| grep -c .`,
+# so the PIPELINE's status was reported and a refusal became a count of zero.
+if printf '%s' "$ss_bmk" | grep -q '"bookmarks":null'; then
+    ok "showscope: a REFUSED bookmark list is null -- the producer's status, not the pipeline's"
+else
+    bad "showscope: a refused bookmark list is null" "$ss_bmk"
+fi
+if printf '%s' "$ss_bmk" | grep -q '"metric":"bookmarks"' \
+   && printf '%s' "$ss_bmk" | grep -q '"used_by_snapshots":4096'; then
+    ok "showscope: ...named in 'unavailable', while the metric that DID read is a number"
+else
+    bad "showscope: the failed metric is named and the read one is a number" "$ss_bmk"
+fi
+
+# AND THE POSITIVE CONTROL ON THE SAME FIXTURE, without which the two above
+# prove only that something is null: with both reads allowed, both are numbers
+# and `unavailable` is empty.
+( export PATH="$SS/bin:$PATH"
+  cmd_show_scope hdd/aux --pattern=automated_daily --json ) >"$WORK/ss.out" 2>&1
+ss_ok="$(cat "$WORK/ss.out")"
+if printf '%s' "$ss_ok" | grep -q '"bookmarks":1,"used_by_snapshots":4096,"unavailable":\[\]'; then
+    ok "showscope: with both reads allowed, both are numbers and nothing is unavailable"
+else
+    bad "showscope: the positive control on the same fixture" "$ss_ok"
+fi
 fi   # --- koniec sekcji showscope ---
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

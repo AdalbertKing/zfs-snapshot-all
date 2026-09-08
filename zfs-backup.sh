@@ -10751,6 +10751,18 @@ cmd_monitor() {
 # "there is nothing there", and on this screen that reads as "you have no
 # backups".
 
+
+# One entry of the partial-read report. A metric that could not be read is named
+# here with WHY; the value itself is published as null rather than as a number
+# nobody measured (REV-20260908-139).
+scope_unavail() {   # <accumulated json> <metric> <reason> -> json list body
+    local acc="$1" metric="$2" why="$3"
+    printf '%s' "$acc${acc:+,}"
+    printf '{"metric":"%s"' "$(json_escape "$metric")"
+    jsonw_text reason "$why"
+    printf '}'
+}
+
 # Age in whole seconds against now, kept as a number so the front end formats it.
 scope_age_seconds() {   # <creation epoch>
     local now; now=$(date +%s)
@@ -10759,6 +10771,7 @@ scope_age_seconds() {   # <creation epoch>
 
 cmd_show_scope() {
     local as_json=0 rec=0 ds="" a
+    SCOPE_UNAVAIL=""   # filled by scope_unavail; a global because it is set in $( )
     local -a pats=()
     for a in "$@"; do
         case "$a" in
@@ -10796,7 +10809,12 @@ cmd_show_scope() {
             printf '{"dataset":"%s","exists":false,"families":[]' "$(json_escape "$ds")"
             printf ',"other":{"pattern":"","count":0,"bytes":0,"newest":"","newest_epoch":0,"newest_age_seconds":0,"oldest":"","oldest_epoch":0}'
             jsonw_text error "zfs could not list snapshots for this scope -- it may not exist, or this account may not be allowed to read it. This is NOT an empty scope."
-            printf ',"total_snapshots":0,"bookmarks":0,"used_by_snapshots":0}\n'
+            # THE SAME PARTIAL-READ POLICY, one document over: nothing was
+            # measured here either, so nothing is published as a number.
+            printf ',"total_snapshots":0,"bookmarks":null,"used_by_snapshots":null'
+            printf ',"unavailable":[%s]}\n' "$(
+                u=$(scope_unavail "" used_by_snapshots "the snapshot list itself could not be read, so no metric on this scope was measured")
+                scope_unavail "$u" bookmarks "the snapshot list itself could not be read, so no metric on this scope was measured")"
         else
             echo "Zakres:  $ds"
             echo "NIE DA SIE ODCZYTAC -- dataset nie istnieje albo to konto nie ma do niego prawa."
@@ -10810,10 +10828,49 @@ cmd_show_scope() {
     # snapshot that would free them, which is a different (and usually smaller)
     # number. Both are reported: the sum per family is what a family costs to
     # keep, the property is what the scope's snapshots cost in total.
-    local ubs; ubs=$(zfs get -H -p -o value usedbysnapshots "$ds" 2>/dev/null)
-    case "$ubs" in ''|*[!0-9]*) ubs=0 ;; esac
-    local nbook; nbook=$(zfs list -H -t bookmark $depth -o name -- "$ds" 2>/dev/null | grep -c . )
-    case "$nbook" in ''|*[!0-9]*) nbook=0 ;; esac
+    # THE TWO AUXILIARY READS, EACH WITH ITS OWN STATUS (REV-20260908-139 F1).
+    #
+    # `0` is a valid measurement for both of these, which is exactly what made
+    # the first version dangerous: a refusal was published as "no bookmarks" and
+    # "the snapshots occupy no space" -- two facts nobody had measured, on the
+    # screen introduced to explain storage pressure. The reviewer's stub proved
+    # it with the snapshot list SUCCEEDING and only these two failing, so it is
+    # not the primary-read case the suite already covered.
+    #
+    # Two separate mistakes were in one line each:
+    #   * the exit status was discarded, so a permission error looked like output;
+    #   * `| grep -c .` reports on the PIPELINE, so the producer's failure was
+    #     masked by a downstream count of zero.
+    #
+    # THE PARTIAL-READ CONTRACT, chosen and stated once (criterion 3): the
+    # families ARE measured, so they are published; a metric that could not be
+    # read is `null` -- never 0 -- and is named in `unavailable` with the reason.
+    # A front end reading `.used_by_snapshots` gets null, not a healthy-looking
+    # zero, and can say "not measured" instead of "nothing there". This is the
+    # same distinction list-jobs draws with its `unreadable` array, and the same
+    # one list-profiles --no-render draws by omitting what it did not render.
+    local ubs ubs_rc ubs_json="null"
+    ubs=$(zfs get -H -p -o value usedbysnapshots "$ds" 2>/dev/null); ubs_rc=$?
+    if [ "$ubs_rc" -eq 0 ]; then
+        case "$ubs" in
+            ''|*[!0-9]*) SCOPE_UNAVAIL=$(scope_unavail "$SCOPE_UNAVAIL" used_by_snapshots \
+                             "zfs get usedbysnapshots succeeded but returned '$ubs', which is not a byte count -- not measured, and not zero") ;;
+            *) ubs_json="$ubs" ;;
+        esac
+    else
+        SCOPE_UNAVAIL=$(scope_unavail "$SCOPE_UNAVAIL" used_by_snapshots \
+            "zfs get usedbysnapshots failed (rc=$ubs_rc) -- this account may not be allowed to read it. NOT a measurement of zero")
+    fi
+    # The producer's status, taken BEFORE anything counts its lines.
+    local bmk bmk_rc nbook_json="null"
+    bmk=$(zfs list -H -t bookmark $depth -o name -- "$ds" 2>/dev/null); bmk_rc=$?
+    if [ "$bmk_rc" -eq 0 ]; then
+        nbook_json=$(printf '%s' "$bmk" | grep -c '[^[:space:]]' || true)
+        case "$nbook_json" in ''|*[!0-9]*) nbook_json=0 ;; esac
+    else
+        SCOPE_UNAVAIL=$(scope_unavail "$SCOPE_UNAVAIL" bookmarks \
+            "zfs list -t bookmark failed (rc=$bmk_rc) -- bookmarks outlive snapshots and delsnaps -B prunes them, so 'none' and 'could not ask' are different answers")
+    fi
 
     # One pass over the snapshot list, bucketed by the FIRST pattern that
     # matches -- first, not best, so the reported buckets are disjoint and the
@@ -10877,11 +10934,18 @@ SCOPEEOF
         # `other` is an object, never omitted: a front end must not have to
         # decide whether an absent key means "none" or "not asked".
         printf ',"other":'; scope_emit_family "" "@other"
-        printf ',"total_snapshots":%s,"bookmarks":%s,"used_by_snapshots":%s}\n' \
-            "$total" "$nbook" "$ubs"
+        printf ',"total_snapshots":%s,"bookmarks":%s,"used_by_snapshots":%s' \
+            "$total" "$nbook_json" "$ubs_json"
+        # WHAT COULD NOT BE READ, NAMED. Empty when everything was measured.
+        printf ',"unavailable":[%s]}\n' "$SCOPE_UNAVAIL"
     else
         echo "Zakres:  $ds$([ "$rec" -eq 1 ] && echo '  (rekursywnie)')"
-        printf 'Migawek: %s   zakladek: %s   miejsce zajete przez migawki: %s B\n' "$total" "$nbook" "$ubs"
+        # "?" rather than 0: the operator must be able to tell "none" from
+        # "this account could not ask".
+        local nb_txt="$nbook_json" ubs_txt="$ubs_json"
+        [ "$nb_txt"  = null ] && nb_txt="?"
+        [ "$ubs_txt" = null ] && ubs_txt="?"
+        printf 'Migawek: %s   zakladek: %s   miejsce zajete przez migawki: %s B\n' "$total" "$nb_txt" "$ubs_txt"
         echo
         printf '%-24s %6s %14s  %s\n' RODZINA ILE BAJTOW NAJNOWSZA
         for p in ${pats[@]+"${pats[@]}"}; do
