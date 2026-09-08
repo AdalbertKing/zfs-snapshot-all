@@ -44,7 +44,7 @@ S="$(screen)"
 # zarzadzanego, a konto delegowane mialo blok z JEDENASTOMA liniami. Operator
 # patrzacy na "swoj" swiat zobaczylby pustke na hoscie robiacym jedenascie
 # zadan -- dlatego konto jest w naglowku, nie w ustawieniach.
-if printf '%s' "$S" | grep -q 'konto: backupacct'; then
+if printf '%s' "$S" | grep -q 'konto backupacct'; then
     ok "tui: naglowek nazywa KONTO, ktorego crontab jest czytany"
 else
     bad "tui: naglowek nazywa konto" "$S"
@@ -54,10 +54,13 @@ if printf '%s' "$S" | grep -qE 'config: .*jobs\..*\.conf'; then
 else
     bad "tui: naglowek nazywa config" "$S"
 fi
-if printf '%s' "$S" | grep -q 'najgorszy werdykt: KRYTYCZNY'; then
-    ok "tui: ...i najgorszy werdykt hosta, u gory, bez szukania w wierszach"
+# PODSUMOWANIE LICZBAMI, nie etykieta kontraktu. Wlasciciel, 2026-09-08:
+# "Nie rozumiem co to znaczy najgorszy werdykt. Nieczytelne." Ekran ma
+# odpowiadac na pytanie "czy moje kopie sa aktualne", nie uczyc slownika.
+if printf '%s' "$S" | grep -q '4 zadania: 1 stare, 1 spóźnione, 1 bez monitora, 1 aktualne'; then
+    ok "tui: ...i stan calego hosta LICZBAMI, u gory, bez slownika werdyktow"
 else
-    bad "tui: naglowek niesie najgorszy werdykt" "$S"
+    bad "tui: naglowek podsumowuje host liczbami" "$S"
 fi
 
 # --- KIERUNEK RYSOWANY WOKOL "TEN HOST" ------------------------------------
@@ -78,7 +81,7 @@ if printf '%s' "$S" | grep -q -- '<- pve1'; then
 else
     bad "tui: pobranie" "$S"
 fi
-if printf '%s' "$S" | grep -q 'porzadki'; then
+if printf '%s' "$S" | grep -q 'porządki'; then
     ok "tui: sekcja prune to porzadki, nie transfer bez celu"
 else
     bad "tui: prune" "$S"
@@ -87,13 +90,13 @@ fi
 # --- WERDYKT PRZY WLASCIWYM WIERSZU ----------------------------------------
 # Trzy rozne werdykty w jednym zestawie, kazdy przy swoim zakresie: wiersz,
 # ktory pokazuje cudzy werdykt, jest gorszy niz brak werdyktu.
-if printf '%s' "$S" | grep -qE 'rpool/ROOT/os .*OK'; then
-    ok "tui: werdykt OK stoi przy zakresie, ktorego dotyczy"
+if printf '%s' "$S" | grep -qE 'rpool/ROOT/os .*aktualne'; then
+    ok "tui: stan 'aktualne' stoi przy zakresie, ktorego dotyczy"
 else
     bad "tui: OK przy swoim zakresie" "$S"
 fi
-if printf '%s' "$S" | grep -qE 'subvol-100-disk-0 .*UWAGA'; then
-    ok "tui: ...UWAGA przy swoim"
+if printf '%s' "$S" | grep -qE 'subvol-100-disk-0 .*spóźnione'; then
+    ok "tui: ...'spoznione' przy swoim"
 else
     bad "tui: WARNING przy swoim zakresie" "$S"
 fi
@@ -102,17 +105,17 @@ fi
 # sciezce nie ma jak ich polaczyc, i pierwsza wersja pokazywala tu "BEZ
 # MONITORA", chociaz monitor istnial i mowil KRYTYCZNY. Laczy je etykieta
 # relacji, ktora gen-cron stempluje w linii monitora (-L) wlasnie po to.
-if printf '%s' "$S" | grep -qE 'vm-100-disk-0 .*KRYTYCZNY'; then
+if printf '%s' "$S" | grep -qE 'vm-100-disk-0 .*stare'; then
     ok "tui: wiersz POBRANIA dostaje werdykt swojego monitora, dopasowany po ETYKIECIE"
 else
     bad "tui: pull dopasowany po etykiecie relacji" "$S"
 fi
 # NIC NIE PILNUJE != WSZYSTKO DOBRZE. Silnik ma na to wlasne zdanie i ekran nie
 # ma prawa zlac tego z OK ani z NIEZNANY ("pytalem, nie wiem").
-if printf '%s' "$S" | grep -q 'BEZ MON.'; then
-    ok "tui: zadanie, ktorego nikt nie monitoruje, mowi to wprost -- nie 'OK'"
+if printf '%s' "$S" | grep -q 'bez monitora'; then
+    ok "tui: zadanie, ktorego nikt nie pilnuje, mowi 'bez monitora' -- nie 'aktualne'"
 else
-    bad "tui: brak monitora nie udaje OK" "$S"
+    bad "tui: bez monitora nie udaje aktualnego" "$S"
 fi
 
 # --- JEDNA PISOWNIA RODZINY -------------------------------------------------
@@ -169,6 +172,32 @@ if printf '%s' "$E" | grep -q "NIE znaczy 'host nic nie robi'"; then
 else
     bad "tui: pusty wynik tlumaczy sie" "$E"
 fi
+
+# LICZEBNIK PO POLSKU: to jest ekran w jezyku wlasciciela, wiec "4 zadania",
+# nie "4 zadan". Tanie, i pierwsza wersja mowila zle.
+if printf '%s' "$S" | grep -q '4 zadania'; then
+    ok "tui: liczebnik odmieniony poprawnie (4 zadania, nie 4 zadan)"
+else
+    bad "tui: polski liczebnik" "$S"
+fi
+# I ZADNEGO SLOWNIKA KONTRAKTU NA EKRANIE.
+if ! printf '%s' "$S" | grep -qE 'KRYTYCZNY|NIEZNANY|BEZ MON\.|najgorszy werdykt'; then
+    ok "tui: na ekranie nie ma etykiet kontraktu monitora, tylko slowa"
+else
+    bad "tui: ekran nie mowi slownikiem kodow wyjscia" "$S"
+fi
+
+# SLOWNICTWO JEST WLASCICIELA, wiec jest przypiete: "aktualne / spóźnione /
+# stare / nie odpowiada", plus "bez monitora" jako piaty stan, ktorego jego
+# czteroelementowa lista nie obejmowala. Rozdzial dwoch ostatnich jest celowy:
+# "nie odpowiada" = pytalem i nie wiem, "bez monitora" = nikt nie pyta.
+for w in aktualne stare "bez monitora"; do
+    if printf '%s' "$S" | grep -q "$w"; then
+        ok "tui: slownik wlasciciela na ekranie: '$w'"
+    else
+        bad "tui: brakuje slowa '$w'" "$S"
+    fi
+done
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

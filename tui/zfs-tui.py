@@ -24,10 +24,21 @@ poza dwoma czytelnikami. Klawisze to ruch, odswiezenie i wyjscie.
 
 import argparse
 import json
+import locale
 import os
 import subprocess
 import sys
 import time
+
+# WYJSCIE ZAWSZE W UTF-8, NIEZALEZNIE OD PLATFORMY. Ekran mowi po polsku z
+# diakrytykami -- zmierzone 2026-09-08, oba hosty floty sa w UTF-8 (pve2
+# en_US.UTF-8, pve10 C.UTF-8, python raportuje utf-8 na stdout). Ale maszyna,
+# z ktorej te ekrany sa TESTOWANE, ma konsole cp1250 i bez tej linii "spoznione"
+# wychodzilo jako "sp?nione": test porownywalby pokaleczone bajty i albo
+# falszywie padal, albo -- gorzej -- przechodzil na czyms innym, niz widzi
+# operator.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 WIDTH = 80
 
@@ -35,12 +46,33 @@ WIDTH = 80
 # rozne: pierwszy znaczy "pytalem, nie wiem", drugi "nikt nie pyta". Silnik ma
 # na to wlasne zdanie ("a monitor that never runs looks exactly like a monitor
 # that says everything is fine") i ekran nie ma prawa ich zlac w jedno.
+# Werdykt -> (slowo na ekranie, para kolorow curses).
+#
+# SLOWA, NIE ETYKIETY KONTRAKTU. Pierwsza wersja pisala OK/UWAGA/KRYTYCZNY/
+# NIEZNANY -- czyli slownik kodow wyjscia monitora, przeniesiony na ekran
+# wprost. Wlasciciel, 2026-09-08: "Nie rozumiem co to znaczy najgorszy werdykt.
+# Nieczytelne." Ekran ma odpowiadac na pytanie "czy moje kopie sa aktualne", a
+# nie uczyc slownika, wiec kolumna mowi, CO SIE STALO z kopia.
+#
+# UNKNOWN i BEZ MONITORA nadal sa rozne i tak sa nazwane: "nie wiadomo" znaczy
+# pytalem i nie dostalem odpowiedzi, "brak monitora" -- ze nikt nie pyta. Silnik
+# ma na to wlasne zdanie ("a monitor that never runs looks exactly like a
+# monitor that says everything is fine") i ekran nie ma prawa zlac tego w jedno.
 VERDICTS = {
-    "OK":            ("OK",        2),
-    "WARNING":       ("UWAGA",     3),
-    "CRITICAL":      ("KRYTYCZNY", 1),
-    "UNKNOWN":       ("NIEZNANY",  4),
-    "BEZ MONITORA":  ("BEZ MON.",  4),
+    "OK":            ("aktualne",      2),
+    "WARNING":       (u"spóźnione",     3),
+    "CRITICAL":      ("stare",         1),
+    "UNKNOWN":       ("nie odpowiada", 4),
+    # "BEZ MONITORA", NIE "NIEAKTYWNE". Wlasciciel zaproponowal to drugie i to
+    # jedno slowo odradzam: zadanie JEST aktywne -- linia stoi w cronie i sie
+    # wykonuje -- brakuje monitora, ktory by ja sprawdzal. "Nieaktywne"
+    # powiedzialoby operatorowi, ze kopia sie nie robi, czyli odwrotnie niz jest.
+    #
+    # Para zostaje rozdzielona: "nie odpowiada" znaczy PYTALEM I NIE WIEM,
+    # "bez monitora" -- ze NIKT NIE PYTA. check-snap-age.sh pisze to w swoim
+    # naglowku: monitor, ktory nigdy nie chodzi, wyglada dokladnie jak monitor
+    # mowiacy, ze wszystko dobrze.
+    "BEZ MONITORA":  ("bez monitora",  4),
 }
 
 ARROWS = {
@@ -48,7 +80,7 @@ ARROWS = {
     "push":     "-> {peer}",
     "pull":     "<- {peer}",
     "snapshot": "(migawka)",
-    "prune":    "porzadki",
+    "prune":    "porządki",
 }
 
 
@@ -135,7 +167,7 @@ def build_rows(jobs_doc, mon_doc):
             "account": u.get("account", ""),
             "arrow": "!",
             "tier": "",
-            "scope": u.get("config") or "(blok bez naglowka Source)",
+            "scope": u.get("config") or "(blok bez nagłówka Source)",
             # LICZBA LINII IDZIE W KOLUMNE, nie tylko w stopke: to jedyna liczba,
             # ktora mowi ILE tu chodzi bez wyjasnienia, a stopka pokazuje sie
             # dopiero dla wiersza pod kursorem.
@@ -148,7 +180,35 @@ def build_rows(jobs_doc, mon_doc):
     return rows
 
 
-def header_lines(jobs_doc, mon_doc, err):
+def plural(n):
+    """"1 zadanie", "2 zadania", "5 zadań" -- ekran jest po polsku, wiec i
+    liczebnik. Pisany wprost: pierwsza wersja powstala przez podmiane tekstu i
+    zrobila "4 zadańia", bo "%d zadan" jest podciagiem "%d zadania".
+    """
+    if n == 1:
+        return "1 zadanie"
+    last, last2 = n % 10, n % 100
+    if 2 <= last <= 4 and not (12 <= last2 <= 14):
+        return "%d zadania" % n
+    return u"%d zadań" % n
+
+
+def summarize(rows):
+    """Jedno zdanie o calym hoscie: ile zadan i w jakim stanie."""
+    if not rows:
+        return "brak zadan"
+    counts = {}
+    for r in rows:
+        counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+    n = plural(len(rows))
+    if list(counts) == ["OK"]:
+        return "%s, wszystkie aktualne" % n
+    order = ["CRITICAL", "WARNING", "UNKNOWN", "BEZ MONITORA", "OK"]
+    parts = ["%d %s" % (counts[v], VERDICTS[v][0]) for v in order if counts.get(v)]
+    return "%s: %s" % (n, ", ".join(parts))
+
+
+def header_lines(jobs_doc, mon_doc, err, summary):
     """Trzy fakty, ktore musza byc widoczne zawsze: host, konto, config.
 
     Zmierzone na produkcji 2026-09-08: crontab roota nie mial ani jednego bloku
@@ -161,17 +221,26 @@ def header_lines(jobs_doc, mon_doc, err):
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (jobs_doc or {}).get("unreadable", [])})
     configs = sorted({j.get("config", "") for j in jobs if j.get("config")})
-    worst = (mon_doc or {}).get("worst", "UNKNOWN")
-    l1 = " %s | konto: %s | najgorszy werdykt: %s" % (
-        host, ", ".join(a for a in accounts if a) or "(brak)", VERDICTS.get(worst, (worst, 0))[0])
+    # PODSUMOWANIE LICZBAMI, nie jednym slowem. "najgorszy werdykt: NIEZNANY"
+    # wymagalo wiedzy, ze werdykty maja porzadek; "2 zadania: 1 swieze, 1 nie
+    # wiadomo" nie wymaga niczego. Kolejnosc od najgorszego, bo to jest to, po
+    # co sie na ten ekran patrzy.
+    # LINIA 1 ODPOWIADA NA PYTANIE, PO KTORE SIE TU PRZYSZLO -- czy kopie sa
+    # aktualne. Konto i config to "na ktory swiat patrze": wazne, ale drugie w
+    # kolejnosci, i razem mieszcza sie w jednej linii.
+    l1 = " %s | %s" % (host, summary)
     # Sciezka configu obcinana od POCZATKU: konczy sie nazwa pliku, ktora
     # odroznia jeden config od drugiego, a zaczyna katalogiem, ktory na kazdym
     # hoscie jest ten sam.
     cfg = configs[0] if len(configs) == 1 else (
-        "%d rozne configi" % len(configs) if configs else "(nieznany)")
+        "%d różne configi" % len(configs) if configs else "(nieznany)")
     if len(cfg) > WIDTH - 11:
         cfg = "..." + cfg[-(WIDTH - 14):]
-    l2 = " config: %s" % cfg
+    acct = ", ".join(a for a in accounts if a) or "(brak)"
+    l2 = " konto %s | config: %s" % (acct, cfg)
+    if len(l2) > WIDTH:
+        keep = WIDTH - len(" konto %s | config: ..." % acct)
+        l2 = " konto %s | config: ...%s" % (acct, cfg[-max(8, keep):])
     if err:
         l2 = " " + err[:WIDTH - 2]
     return [l1[:WIDTH], l2[:WIDTH]]
@@ -183,21 +252,21 @@ def render(rows, hdr, cursor, height=24, message=""):
     out.append("=" * WIDTH)
     out.extend(hdr)
     out.append("=" * WIDTH)
-    out.append(" %-9s %-9s %-26s %-16s %-9s" % ("KIERUNEK", "SZCZEBEL", "ZAKRES", "RODZINA", "STAN"))
+    out.append(" %-9s %-8s %-23s %-16s %-13s" % ("KIERUNEK", "SZCZEBEL", "ZAKRES", "RODZINA", "STAN"))
     out.append("-" * WIDTH)
     body = max(3, height - 9)
     first = 0
     if cursor >= body:
         first = cursor - body + 1
     if not rows:
-        out.append(" Zero zadan wyprowadzonych z zainstalowanych blokow.")
-        out.append(" To NIE znaczy 'host nic nie robi' -- znaczy, ze nie ma tu bloku")
+        out.append(" Zero zadań wyprowadzonych z zainstalowanych bloków.")
+        out.append(" To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu bloku")
         out.append(" zfs-backup-managed albo jego config jest nieczytelny.")
     for i, r in enumerate(rows[first:first + body], start=first):
         mark = ">" if i == cursor else " "
         label = VERDICTS.get(r["verdict"], (r["verdict"], 0))[0]
-        out.append("%s%-9s %-9s %-26s %-16s %-9s" % (
-            mark, r["arrow"][:9], r["tier"][:9], r["scope"][-26:], (r["family"] or "")[:16], label))
+        out.append("%s%-9s %-8s %-23s %-16s %-13s" % (
+            mark, r["arrow"][:9], r["tier"][:8], r["scope"][-23:], (r["family"] or "")[:16], label))
     out.append("-" * WIDTH)
     if message:
         out.append(" " + message[:WIDTH - 2])
@@ -207,7 +276,7 @@ def render(rows, hdr, cursor, height=24, message=""):
         out.append(" " + detail[:WIDTH - 2])
     else:
         out.append("")
-    out.append(" q wyjscie   r odswiez   strzalki ruch   Enter szczegoly wiersza")
+    out.append(" q wyjście   r odśwież   strzałki ruch   Enter szczegóły wiersza")
     return out
 
 
@@ -228,6 +297,10 @@ def collect(repo, jobs_file=None, mon_file=None):
 def curses_loop(repo, jobs_file, mon_file):
     import curses
 
+    # Bez tego ncurses rysuje wielobajtowe znaki jako smieci i rozjezdza
+    # kolumny, bo liczy bajty zamiast znakow.
+    locale.setlocale(locale.LC_ALL, "")
+
     def main(stdscr):
         curses.curs_set(0)
         curses.use_default_colors()
@@ -242,7 +315,7 @@ def curses_loop(repo, jobs_file, mon_file):
         rows = build_rows(jobs_doc, mon_doc)
         while True:
             h, w = stdscr.getmaxyx()
-            lines = render(rows, header_lines(jobs_doc, mon_doc, err), cursor, h, message)
+            lines = render(rows, header_lines(jobs_doc, mon_doc, err, summarize(rows)), cursor, h, message)
             stdscr.erase()
             for y, line in enumerate(lines[:h - 1]):
                 attr = 0
@@ -266,7 +339,7 @@ def curses_loop(repo, jobs_file, mon_file):
                 jobs_doc, mon_doc, err = collect(repo, jobs_file, mon_file)
                 rows = build_rows(jobs_doc, mon_doc)
                 cursor = min(cursor, max(0, len(rows) - 1))
-                message = "odswiezono %s" % time.strftime("%H:%M:%S")
+                message = "odświeżono %s" % time.strftime("%H:%M:%S")
             elif k in (10, 13, curses.KEY_ENTER) and rows:
                 r = rows[cursor]
                 # Ekran 2 jeszcze nie istnieje. Zamiast martwego klawisza --
@@ -288,7 +361,7 @@ def main(argv):
     if a.render_once:
         jobs_doc, mon_doc, err = collect(repo, a.jobs, a.monitors)
         rows = build_rows(jobs_doc, mon_doc)
-        print("\n".join(render(rows, header_lines(jobs_doc, mon_doc, err), 0, a.height)))
+        print("\n".join(render(rows, header_lines(jobs_doc, mon_doc, err, summarize(rows)), 0, a.height)))
         return 0
     if not sys.stdout.isatty():
         sys.stderr.write("gui: to nie jest terminal -- uzyj --render-once, zeby zobaczyc ekran\n")
