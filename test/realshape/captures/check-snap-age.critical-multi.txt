@@ -1,0 +1,3 @@
+CRITICAL dataset=rpool/ROOT/os pattern=automated_daily newest=automated_daily_2026-09-08_00-21-01 age=19h (warn=1m crit=2m)
+CRITICAL dataset=hdd/backups/hostA/rpool/ROOT/os pattern=automated_daily newest=automated_daily_2026-09-08_00-21-01 age=19h (warn=1m crit=2m)
+RC=2
