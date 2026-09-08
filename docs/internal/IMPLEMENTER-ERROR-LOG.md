@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -551,6 +551,29 @@ day, so it is measured here rather than argued about.
 Record for every LOCAL suite run: why it was run, roughly what it cost, and
 **what it found**. A class of run that never finds anything is a class to stop
 paying for.
+
+### 2026-09-08 — the selector that did not select, and what a section really costs
+
+The Owner asked why an army of suites was running again when the plan was to
+select. Measured by running it: a focused run executed **387 of 736**
+assertions -- the flag skipped the early half and then paid for every section
+added since, `saveprof` included (~25 min, four times that day). One `want()`
+helper and an `if` per self-contained section later, the same runs cost this:
+
+| `--section` | assertions | cost | note |
+|---|---|---|---|
+| `showscope` | 18 | **7 s** | |
+| `statusjson` | 15 | **9 s** | |
+| `records` | 9 | **16 s** | |
+| `listjobs` | 24 | **21 s** | |
+| `saveprof` | 29 | **860 s** | the outlier, and not the selector's fault |
+
+`saveprof` is expensive by construction: REV-20260907-137's gate runs the REAL
+`gen-cron.sh` for every case, and a gen-cron invocation costs milliseconds on a
+Linux host (13 ms measured on pve10) against seconds under Git Bash. So the
+rule this row produces is narrower than "run less": **`saveprof` is a CI
+section, not a local one** -- everything else in this file is now cheap enough
+to run on the spot.
 
 ### 2026-08-27 — the day this file was opened
 
@@ -1376,3 +1399,43 @@ work", the fixture must make X actually fail, and the assertion must prove the
 branch ran -- not merely that the command survived. Where the property is
 "a read succeeds", the read IS the test; and a producer whose status you cannot
 read must be buffered, then checked, before anything is published.
+
+### E47 - A selector that selected 0.4% of the file, used all day
+
+**2026-09-08, `test/zfsbackup/run.sh`, caught by the Owner: "Dlaczego znowu
+taka armie suit uruchamiasz? Miales robic selekcje".**
+
+*Genesis.* The suite has had a `--section` flag for weeks, and I passed it on
+every focused run: `--section saveprof`, `--section listjobs`,
+`--section showscope`. Each took about twenty-five minutes on this box, which I
+explained to myself as "the suite is slow here" and paid four times in one day.
+
+Measured when the Owner asked: a focused run executed **387 of the suite's 736
+assertions**. The flag was not decoration -- it did skip the early half -- but
+every section I had ADDED sat outside its guard, each carrying the phrase
+"Self-contained; always eligible, also under `--section X`". I wrote the words
+"also under" while making the section ignore the flag. So a focused run still
+paid for all of them, `saveprof` included, and `saveprof` alone costs **860 s**
+because REV-20260907-137's gate runs the real `gen-cron.sh` per case.
+
+*A SECOND MISTAKE, IN THE DIAGNOSIS ITSELF, and it is the reason this entry is
+under R1 twice over.* Asked why, I measured the guard by finding the first `fi`
+in column 1 and reported "41 lines of 11221, so a focused run executes 99.6% of
+the suite". I told the Owner that number. It was wrong: 41 lines is the guard's
+real span, but it cannot account for the 349 assertions a focused run actually
+skipped, and I published the ratio without checking that it explained the
+behaviour I had just seen. The honest number came from running the thing:
+736 bare, 387 focused.
+
+*Cause.* R1, twice. I never proved the guard could be reached -- the flag was
+accepted, the named section ran, the output looked right, because everything
+else ran too. Then I "measured" the guard with a script whose answer I did not
+sanity-check against the runtime evidence sitting in front of me.
+
+*Rule.* R1, evidence. When a flag claims to narrow work, measure the narrowing
+by RUNNING it -- count the assertions, time the run -- and never by reading the
+source for a span you then reason about. Here the fix is one `want()` helper and
+an `if` around each self-contained section: `--section showscope` went from ~25
+minutes to **7 seconds** (18 assertions), `--section listjobs` to 21 s (24).
+The control that makes the change safe is the bare run, and it is not optional:
+**736 before, 736 after, zero failures either way.**

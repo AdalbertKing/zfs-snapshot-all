@@ -64,9 +64,18 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope)" >&2; exit 2 ;;
 esac
+
+# THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
+# covered 41 lines of 11221, so `--section showscope` ran 99.6% of the suite --
+# every "focused" run today was the full battery, about 25 minutes each on the
+# Windows box. Each self-contained section is now gated on its own name.
+want() {   # <section name> -> 0 when this section should run
+    [ -z "$ONLY_SECTION" ] || [ "$ONLY_SECTION" = "$1" ]
+}
+
 
 # Everything from here to the retention group is full-suite-only: skipped under a
 # targeted --section run. The retention group (below the matching `fi`) is self-
@@ -5350,6 +5359,7 @@ esac
 
 fi   # === end of full-suite-only sections; the retention group below is L0-targetable ===
 
+if want retention; then
 # ============================================================================
 # RETENTION GROUP (REV-102 / REV-108 / REV-110 source-retention audit).
 # Self-contained: builds its own profile fixture here, so `--section retention`
@@ -8561,6 +8571,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji retention ---
+if want records; then
 # ============================================================================
 # RECORDS ARE DATA (2026-09-03). Self-contained; always eligible, also under
 # `--section records`. Until this change every reader of a client record, a
@@ -8812,6 +8824,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji records ---
+if want fataldie; then
 # ============================================================================
 # `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
 # eligible, also under `--section fataldie`. set-endpoint parses --host through
@@ -8854,6 +8868,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji fataldie ---
+if want invocation; then
 # ============================================================================
 # PER-INVOCATION STATE IS RESET AT ENTRY (2026-09-03). Self-contained; always
 # eligible, also under `--section invocation`. SRC_PROFILE_NAME is a global
@@ -8885,6 +8901,8 @@ for probe in "cmd_activate_client no-such-client" "cmd_add_client bad/name" "cmd
 done
 
 
+fi   # --- koniec sekcji invocation ---
+if want flags; then
 # ============================================================================
 # ONE GRAMMAR PER SHARED FLAG (2026-09-03). Self-contained; always eligible,
 # also under `--section flags`. Every command that takes --local-user refuses
@@ -8955,6 +8973,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji flags ---
+if want noeval; then
 # ============================================================================
 # NO COMMAND COMPOSED FROM TEXT (2026-09-03). Self-contained; always eligible,
 # also under `--section noeval`. The program's last two `eval` sites read the
@@ -9013,6 +9033,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji noeval ---
+if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
 # Self-contained; always eligible, also under `--section statusjson`.
@@ -9234,6 +9256,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji statusjson ---
+if want showconfig; then
 # ============================================================================
 # show-config: THE SECOND READER, AND THE FIRST TEST section_owned_by HAS EVER
 # HAD (V3, 2026-09-07). Self-contained; always eligible, also under
@@ -9436,6 +9460,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji showconfig ---
+if want listprofiles; then
 # ============================================================================
 # list-profiles: THE CATALOGUE, AND THE TWO WAYS A PROFILE CAN BE BROKEN
 # (V4, 2026-09-07). Self-contained; always eligible, also under
@@ -9747,6 +9773,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji listprofiles ---
+if want monitorjson; then
 # ============================================================================
 # monitor: THE VERDICT FOR THE WHOLE HOST, AND THE FOUR WAYS IT COULD LIE
 # (V2, 2026-09-07). Self-contained; always eligible, also under
@@ -10012,6 +10040,8 @@ automated_hourly
 420m' 'a single dataset and minute thresholds'
 
 
+fi   # --- koniec sekcji monitorjson ---
+if want rev136; then
 # ============================================================================
 # REV-20260907-136 F1: A REFUSED RECORD MUST NOT BECOME AN ANSWER
 # (2026-09-07). Self-contained; always eligible, also under `--section rev136`.
@@ -10136,6 +10166,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji rev136 ---
+if want exportrel; then
 # ============================================================================
 # export-relation: THE ANSWERS, NOT THE STATE (2026-09-07). Self-contained;
 # always eligible, also under `--section exportrel`.
@@ -10363,6 +10395,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji exportrel ---
+if want saveprof; then
 # ============================================================================
 # save-profile: OPEN A TEMPLATE, CHANGE IT, SAVE IT AS YOUR OWN
 # (2026-09-07). Self-contained; always eligible, also under `--section saveprof`.
@@ -10639,6 +10673,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji saveprof ---
+if want listjobs; then
 # ============================================================================
 # list-jobs: WHAT THIS HOST DOES, AND WHICH SIDE OF THE RELATIONSHIP IT IS ON
 # (2026-09-08). Self-contained; always eligible, also under `--section listjobs`.
@@ -10987,6 +11023,237 @@ case "$lj_stub" in
     *) bad "listjobs: the document is complete after a failed parse" "$lj_stub" ;;
 esac
 
+
+fi   # --- koniec sekcji listjobs ---
+if want showscope; then
+# ============================================================================
+# show-scope: WHAT IS ACTUALLY ON THE DISK (2026-09-08). Self-contained; always
+# eligible, also under `--section showscope`.
+#
+# Screen 2 of the GUI. The engine is stubbed -- what is under test is not
+# whether ZFS lists snapshots correctly, but everything between `zfs list` and
+# the panel: which snapshots belong to which family, what happens to the ones
+# that belong to none, and what a scope that cannot be read is reported as.
+#
+# The last one is the assertion that matters most. "I could not ask" rendered as
+# "there is nothing here" reads, on this screen, as "you have no backups".
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SS="$WORK/showscope"; rm -rf "$SS"; mkdir -p "$SS/bin"
+
+# A scope carrying THREE populations: two declared families and one nobody here
+# declared -- pvesr's. The foreign one is the reason `other` exists.
+cat > "$SS/bin/zfs" <<'SSEOF'
+#!/bin/sh
+now=$(date +%s)
+case "$*" in
+  *"-t snapshot"*"hdd/dane"*)
+    printf 'hdd/dane@automated_hourly_2026-09-08_06-00-01\t%s\t1048576\n' $((now-3600))
+    printf 'hdd/dane@automated_hourly_2026-09-08_07-00-01\t%s\t2097152\n' $((now-600))
+    printf 'hdd/dane@automated_daily_2026-09-07_01-00-01\t%s\t10485760\n' $((now-100000))
+    printf 'hdd/dane@__replicate_107-0_178719__\t%s\t524288\n' $((now-7200))
+    exit 0 ;;
+  *"-t snapshot"*"hdd/pusty"*) exit 0 ;;
+  *"-t snapshot"*"hdd/niema"*) echo "cannot open 'hdd/niema': dataset does not exist" >&2; exit 1 ;;
+  *get*usedbysnapshots*) echo 13631488; exit 0 ;;
+  *"-t bookmark"*"hdd/dane"*) printf 'hdd/dane#automated_hourly_2026-09-01\n'; exit 0 ;;
+esac
+exit 0
+SSEOF
+chmod +x "$SS/bin/zfs"
+
+ss_run() {   # <args...> -> $WORK/ss.out, returns rc
+    ( export PATH="$SS/bin:$PATH"
+      cmd_show_scope "$@" ) >"$WORK/ss.out" 2>&1
+}
+
+ss_run hdd/dane --pattern=automated_hourly --pattern=automated_daily --json; ss_rc=$?
+ss_got="$(cat "$WORK/ss.out")"
+
+if [ "$ss_rc" -eq 0 ]; then
+    ok "showscope: a readable scope exits 0"
+else
+    bad "showscope: a readable scope exits 0" "rc=$ss_rc: $ss_got"
+fi
+
+# THE FAMILY RULE IS THE ENGINE'S: a literal prefix. Two hourly snapshots, one
+# daily -- and the counts must ADD UP to the total, which is what proves the
+# buckets are disjoint rather than merely plausible.
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_hourly","count":2'; then
+    ok "showscope: a family is counted by literal prefix, as check-snap-age.sh matches it"
+else
+    bad "showscope: the hourly family is counted by prefix" "$ss_got"
+fi
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_daily","count":1'; then
+    ok "showscope: ...and a second family does not swallow the first"
+else
+    bad "showscope: the daily family is counted separately" "$ss_got"
+fi
+# POPULATION CONTROL: 2 + 1 + 1 (other) = 4. A reader that dropped what it did
+# not recognise would still satisfy both assertions above.
+if printf '%s' "$ss_got" | grep -q '"total_snapshots":4'; then
+    ok "showscope: every snapshot on the scope is accounted for (2 + 1 + 1 = 4)"
+else
+    bad "showscope: the buckets add up to the total" "$ss_got"
+fi
+
+# WHAT NOBODY DECLARED IS STILL REPORTED. pvesr's snapshot belongs to no
+# requested family; hiding it is how a full pool becomes a mystery.
+if printf '%s' "$ss_got" | grep -q '"other":{"pattern":"","count":1,"bytes":524288,"newest":"__replicate_107-0_178719__"'; then
+    ok "showscope: a snapshot matching no requested family lands in 'other', named"
+else
+    bad "showscope: the foreign family lands in 'other'" "$ss_got"
+fi
+
+# BYTES ARE TWO DIFFERENT QUESTIONS and both are answered: what a family costs
+# to keep (the sum of its snapshots' `used`) and what the scope's snapshots cost
+# in total (the dataset's usedbysnapshots property).
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_hourly","count":2,"bytes":3145728' \
+   && printf '%s' "$ss_got" | grep -q '"used_by_snapshots":13631488'; then
+    ok "showscope: per-family bytes and the scope's usedbysnapshots are both reported"
+else
+    bad "showscope: both byte answers are reported" "$ss_got"
+fi
+if printf '%s' "$ss_got" | grep -q '"bookmarks":1'; then
+    ok "showscope: bookmarks are counted -- delsnaps -B prunes them and they outlive snapshots"
+else
+    bad "showscope: bookmarks are counted" "$ss_got"
+fi
+
+# AGE IS A NUMBER, not a formatted string: the front end formats, the reader
+# reports. The newest hourly is 600s old in the stub; allow the seconds that
+# pass while the suite runs.
+ss_age=$(printf '%s' "$ss_got" | sed -n 's/.*"newest":"automated_hourly_2026-09-08_07-00-01","newest_epoch":[0-9]*,"newest_age_seconds":\([0-9]*\).*/\1/p')
+if [ -n "$ss_age" ] && [ "$ss_age" -ge 600 ] && [ "$ss_age" -lt 700 ]; then
+    ok "showscope: the newest snapshot's age is a number of seconds ($ss_age)"
+else
+    bad "showscope: the newest age is a plausible number of seconds" "got '$ss_age' from $ss_got"
+fi
+
+# THE ASSERTION THIS VERB EXISTS FOR. A scope that cannot be listed is NOT an
+# empty scope, and on a detail panel the difference reads as "you have no
+# backups".
+ss_run hdd/niema --pattern=automated_hourly --json; ss_rc=$?
+ss_gone="$(cat "$WORK/ss.out")"
+if [ "$ss_rc" -ne 0 ]; then
+    ok "showscope: a scope that cannot be listed exits NONZERO"
+else
+    bad "showscope: an unlistable scope exits nonzero" "rc=$ss_rc: $ss_gone"
+fi
+if printf '%s' "$ss_gone" | grep -q '"exists":false' \
+   && printf '%s' "$ss_gone" | grep -q 'NOT an empty scope'; then
+    ok "showscope: ...and says so in the document, not only in the exit status"
+else
+    bad "showscope: the unreadable document says what it is" "$ss_gone"
+fi
+# THE SHAPE SURVIVES THE ERROR. A front end reading other.count must not have to
+# test for null first -- that is how an error page becomes a crashed page.
+if printf '%s' "$ss_gone" | grep -q '"other":{"pattern":"","count":0'; then
+    ok "showscope: ...and 'other' keeps its shape on the error document"
+else
+    bad "showscope: 'other' keeps its shape on the error document" "$ss_gone"
+fi
+
+# AN EMPTY SCOPE IS A DIFFERENT ANSWER FROM AN UNREADABLE ONE, and it is the
+# discriminator for the assertion above: without it, "exists:false on failure"
+# could be produced by a reader that calls everything empty.
+ss_run hdd/pusty --pattern=automated_hourly --json; ss_rc=$?
+ss_empty="$(cat "$WORK/ss.out")"
+if [ "$ss_rc" -eq 0 ] && printf '%s' "$ss_empty" | grep -q '"exists":true' \
+   && printf '%s' "$ss_empty" | grep -q '"total_snapshots":0'; then
+    ok "showscope: a scope that IS readable and holds nothing is exists:true with zero -- the discriminator"
+else
+    bad "showscope: an empty readable scope is not an unreadable one" "rc=$ss_rc: $ss_empty"
+fi
+
+# AN EMPTY PATTERN IS REFUSED, for the reason check-snap-age.sh refuses one: it
+# matches every snapshot on the scope, including somebody else's, and then
+# reports a stranger's age as this family's.
+if ! ss_run hdd/dane --pattern= --json && grep -q 'EMPTY --pattern' "$WORK/ss.out"; then
+    ok "showscope: an empty --pattern is refused, naming why"
+else
+    bad "showscope: an empty --pattern is refused" "$(cat "$WORK/ss.out")"
+fi
+
+# THE TEXT FORM, for the operator with a terminal and no front end.
+ss_run hdd/dane --pattern=automated_hourly --pattern=automated_daily
+ss_txt="$(cat "$WORK/ss.out")"
+if printf '%s' "$ss_txt" | grep -qE '^automated_hourly +2 +3145728' \
+   && printf '%s' "$ss_txt" | grep -q '(pozostale)'; then
+    ok "showscope: the text form shows the same families, and names the leftovers"
+else
+    bad "showscope: the text form shows families and leftovers" "$ss_txt"
+fi
+
+
+# --- WHAT THE LAB CAUGHT AND THE STUB COULD NOT (pve10, 2026-09-08) ---------
+# Two defects, both invisible to a stub that answers the same way whatever it is
+# asked. They are pinned here by asserting the ARGUMENTS the reader passes and
+# by a fixture built the way the pool really behaved.
+
+SL="$SS/lab"; mkdir -p "$SL/bin"
+# This stub LOGS its argv and hands back four snapshots stamped in the SAME
+# SECOND -- which is what a real pool produced: `creation` has one-second
+# resolution, so a recursive snapshot or a tight loop ties them all.
+cat > "$SL/bin/zfs" <<'SLEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SLZFSLOG"
+case "$*" in
+  *"-t snapshot"*)
+    printf 'hdd/x@automated_hourly_2026-09-08_04-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_07-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_05-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_06-00-01\t1788000000\t0\n'
+    exit 0 ;;
+  *get*usedbysnapshots*) echo 0; exit 0 ;;
+esac
+exit 0
+SLEOF
+chmod +x "$SL/bin/zfs"
+
+sl_run() {   # <args...> -> $WORK/sl.out, and $SL/zfs.log holds the argv
+    : > "$SL/zfs.log"
+    ( export PATH="$SL/bin:$PATH" SLZFSLOG="$SL/zfs.log"
+      cmd_show_scope "$@" ) >"$WORK/sl.out" 2>&1
+}
+
+# 1. `zfs list` DOES NOT RECURSE BY DEFAULT. The first implementation used an
+# empty flag for --recursive and the option silently did nothing: measured on
+# pve10 against a real pool, a parent with one snapshot and a child with six
+# reported ONE either way. The flag is the assertion, because the answer alone
+# cannot tell the two apart on a stub.
+sl_run hdd/x --pattern=automated_hourly --json
+if grep -q -- '-t snapshot -d 1' "$SL/zfs.log"; then
+    ok "showscope: without --recursive the reader asks for THIS dataset only (-d 1)"
+else
+    bad "showscope: flat asks -d 1" "$(cat "$SL/zfs.log")"
+fi
+sl_run hdd/x --pattern=automated_hourly --recursive --json
+if grep -q -- '-t snapshot -r' "$SL/zfs.log"; then
+    ok "showscope: --recursive asks for descendants (-r) -- zfs list does not recurse on its own"
+else
+    bad "showscope: --recursive asks -r" "$(cat "$SL/zfs.log")"
+fi
+
+# 2. TIES ARE COMMON, AND THE FIRST ONE SEEN IS NOT THE NEWEST. All four
+# snapshots above carry the same creation second; the panel showed 04-00-01
+# while 07-00-01 existed. The NAME breaks the tie -- it carries the stamp the
+# operator reads, and it sorts.
+sl_run hdd/x --pattern=automated_hourly --json
+sl_got="$(cat "$WORK/sl.out")"
+if printf '%s' "$sl_got" | grep -q '"newest":"automated_hourly_2026-09-08_07-00-01"'; then
+    ok "showscope: when creation times tie, the later NAME is the newest"
+else
+    bad "showscope: a creation tie is broken by name (newest)" "$sl_got"
+fi
+if printf '%s' "$sl_got" | grep -q '"oldest":"automated_hourly_2026-09-08_04-00-01"'; then
+    ok "showscope: ...and the earlier name is the oldest, from the same tie"
+else
+    bad "showscope: a creation tie is broken by name (oldest)" "$sl_got"
+fi
+
+fi   # --- koniec sekcji showscope ---
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

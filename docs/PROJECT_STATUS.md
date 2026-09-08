@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3bf14c89281e767b -->
+<!-- status-covers-digest: 55129ef32e32f75c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -77,6 +77,34 @@
   (PR #352 właśnie zdjął z niego render z powodu kosztu); po tej zmianie plik
   odrzucany przez generator trafia do katalogu operatora już tylko ręcznie.
 
+- **`show-scope` -- ekran 2 GUI: co REALNIE lezy na dysku (2026-09-08).**
+  Polecenie wlasciciela: "rob ekran 2". Ekran 1 (`list-jobs`) mowi, co host ma
+  ZADEKLAROWANE, `monitor` -- czy najnowsza migawka jest swieza. Zadne z nich nie
+  odpowiada na pytanie, po ktore otwiera sie panel szczegolow: **ile jest kopii,
+  z kiedy i ile miejsca zjadaja**.
+  - **Regula rodziny jest SILNIKA, nie nowa.** `check-snap-age.sh` dopasowuje
+    `[[ "$snapname" == "${PATTERN}"* ]]` -- literalny prefiks, bez parsowania
+    znacznika czasu. Ten czytelnik robi dokladnie to samo, wiec rodzina policzona
+    tutaj to ten sam zbior, ktory monitor ocenia, a delsnaps przycina. Wlasna
+    regula "utnij koncowke z data" byla by druga definicja rodziny i rozjechalaby
+    sie przy pierwszej nazwie o innym ksztalcie (degradowany quiesce ma `crash_`
+    w srodku).
+  - **Czego nikt nie zadeklarowal, tez jest pokazane.** Migawki niepasujace do
+    zadnego z podanych wzorcow ida do kubelka `other` z tymi samymi polami: to
+    pvesr (`__replicate_`), vzdump, migracje i rodziny z innych relacji -- czyli
+    pierwsza rzecz do obejrzenia, gdy pula sie zapelnia.
+  - **Dwie liczby o bajtach, bo to dwa pytania.** Suma `used` migawek rodziny
+    (ile kosztuje TRZYMANIE tej rodziny) i `usedbysnapshots` datasetu (ile
+    kosztuja wszystkie migawki zakresu). Zmierzone na produkcji, pve2,
+    `rpool/ROOT/pve-1`: **475 156 480 B** vs **497 012 736 B** -- roznia sie, i
+    dlatego sa obie.
+  - **"Nie moglem zapytac" NIGDY nie renderuje sie jako "nic tu nie ma"** --
+    na tym ekranie to czyta sie jako "nie masz kopii". Zakres, ktorego nie da sie
+    wylistowac, konczy sie **niezerowo**, ma `exists:false` i zdanie w dokumencie;
+    kubelek `other` **zachowuje ksztalt** takze w dokumencie bledu, zeby front end
+    czytajacy `other.count` nie wywrocil sie na `null`.
+  - **Sprawdzone na prawdziwym wyjsciu ZFS z produkcji** (nie tylko na atrapie):
+    7 migawek dobowych na `rpool/ROOT/pve-1`, najnowsza z tego dnia, 1 zakladka.
 - **REV-138: `list-jobs` chowal zainstalowany blok, gdy configu nie dalo sie OTWORZYC (2026-09-08).**
   Recenzent zmierzyl to dzien po scaleniu, na `/proc/1/mem` -- zwyklym pliku,
   ktory przechodzi `test -f` i odmawia otwarcia.

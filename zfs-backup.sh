@@ -488,6 +488,21 @@ Inspection / teardown:
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
   zfs-backup.sh list-jobs [--json]
+  zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
+                                    What is actually ON THE DISK for one scope:
+                                    per family, how many snapshots, from when, and
+                                    how many bytes they hold; plus bookmarks and the
+                                    scope's usedbysnapshots. The family rule is the
+                                    ENGINE'S -- a literal prefix, exactly the
+                                    comparison check-snap-age.sh makes -- so a family
+                                    counted here is the set the monitor judges and
+                                    delsnaps prunes. Snapshots matching none of the
+                                    given patterns are reported as `other`, never
+                                    hidden: that bucket is pvesr, vzdump, migrations
+                                    and any foreign family sharing the dataset. A
+                                    scope that cannot be listed returns nonzero and
+                                    says so -- "I could not ask" is never rendered as
+                                    "there is nothing here".
                                     What THIS host actually does, one row per
                                     installed job, with the side of the relationship
                                     it is on: dst=push, src=pull, a local dst is a
@@ -10687,6 +10702,182 @@ cmd_monitor() {
 # ------------------------------------------------------------------------------
 # list-jobs -- WHAT THIS HOST ACTUALLY DOES, AND WHICH SIDE OF EACH RELATIONSHIP
 #              IT IS ON
+
+# ------------------------------------------------------------------------------
+# show-scope -- WHAT IS ACTUALLY ON THE DISK, for the detail panel
+# ------------------------------------------------------------------------------
+# Screen 2 of the GUI. Screen 1 (`list-jobs`) says what this host is DECLARED to
+# do and `monitor` says whether the newest snapshot is fresh enough. Neither
+# answers the question an operator opens a detail panel for: how many copies are
+# there, from when, and how much room are they taking.
+#
+# THE FAMILY RULE IS THE ENGINE'S, NOT A NEW ONE. check-snap-age.sh matches with
+# `[[ "$snapname" == "${PATTERN}"* ]]` -- a literal prefix, no timestamp
+# parsing, no globbing. This reader uses exactly that, so a family counted here
+# is the same set the monitor judges and delsnaps prunes. Inventing a
+# "strip the trailing timestamp" rule here would be a second definition of
+# family, and the two would disagree the first time a name changed shape (the
+# degraded-quiesce names carry `crash_` in the middle, which any timestamp rule
+# would have split into its own family).
+#
+# WHAT IS NOT MATCHED IS STILL REPORTED. Everything that matches none of the
+# requested patterns lands in `other`, with the same fields. A scope panel that
+# showed only the families it was asked about would hide pvesr's
+# `__replicate_`, vzdump's snapshots and any foreign family sharing the dataset
+# -- which is exactly the population the `[excluded:]` floors exist for, and the
+# first thing to look at when a pool is filling up.
+#
+# ONE `zfs list` CALL, and its exit status is checked before anything is
+# published -- REV-20260908-138's lesson applied at the point where it was
+# learned: a producer whose failure is invisible turns "I could not ask" into
+# "there is nothing there", and on this screen that reads as "you have no
+# backups".
+
+# Age in whole seconds against now, kept as a number so the front end formats it.
+scope_age_seconds() {   # <creation epoch>
+    local now; now=$(date +%s)
+    printf '%s' "$(( now - $1 ))"
+}
+
+cmd_show_scope() {
+    local as_json=0 rec=0 ds="" a
+    local -a pats=()
+    for a in "$@"; do
+        case "$a" in
+            --json)      as_json=1 ;;
+            --recursive) rec=1 ;;
+            --pattern=*) pats+=("${a#*=}") ;;
+            -*)          die "show-scope: unknown option '$a' (--json, --recursive, --pattern=PREFIX)" ;;
+            *)           [ -z "$ds" ] || die "show-scope: takes ONE dataset (got '$ds' and '$a')"
+                         ds="$a" ;;
+        esac
+    done
+    [ -n "$ds" ] || die "show-scope: which dataset? (zfs-backup.sh show-scope POOL/PATH [--pattern=automated_hourly] [--recursive] [--json])"
+    local p
+    for p in ${pats[@]+"${pats[@]}"}; do
+        [ -n "$p" ] || die "show-scope: an EMPTY --pattern matches every snapshot on the scope, including somebody else's -- check-snap-age.sh refuses one for the same reason. Name the family."
+    done
+
+    # -p for parseable creation and used: the sort and the arithmetic must not
+    # depend on the locale's date format or on human-readable byte suffixes.
+    # -d 1 lists this dataset's own snapshots; -r walks its descendants.
+    # `zfs list` DOES NOT recurse by default -- an empty flag here is not
+    # "recursive", it is "this dataset only", so --recursive silently did
+    # nothing. Measured on pve10 2026-09-08 against a real pool: a parent with
+    # one snapshot and a child with six reported one either way.
+    local depth="-d 1"; [ "$rec" -eq 1 ] && depth="-r"
+    local snaps rc
+    snaps=$(zfs list -H -p -t snapshot $depth -o name,creation,used -- "$ds" 2>/dev/null); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # NOT an empty scope. The difference is the whole point: "I could not
+        # ask" must never render as "there is nothing there".
+        if [ "$as_json" -eq 1 ]; then
+            # `other` keeps its SHAPE on the error document too. A front end
+            # that reads other.count must not have to test for null first --
+            # that is how an error page turns into a crashed page.
+            printf '{"dataset":"%s","exists":false,"families":[]' "$(json_escape "$ds")"
+            printf ',"other":{"pattern":"","count":0,"bytes":0,"newest":"","newest_epoch":0,"newest_age_seconds":0,"oldest":"","oldest_epoch":0}'
+            jsonw_text error "zfs could not list snapshots for this scope -- it may not exist, or this account may not be allowed to read it. This is NOT an empty scope."
+            printf ',"total_snapshots":0,"bookmarks":0,"used_by_snapshots":0}\n'
+        else
+            echo "Zakres:  $ds"
+            echo "NIE DA SIE ODCZYTAC -- dataset nie istnieje albo to konto nie ma do niego prawa."
+            echo "To NIE znaczy 'brak migawek'."
+        fi
+        return 1
+    fi
+
+    # usedbysnapshots is the honest answer to "how much room are the copies
+    # taking" -- summing each snapshot's `used` counts shared blocks once per
+    # snapshot that would free them, which is a different (and usually smaller)
+    # number. Both are reported: the sum per family is what a family costs to
+    # keep, the property is what the scope's snapshots cost in total.
+    local ubs; ubs=$(zfs get -H -p -o value usedbysnapshots "$ds" 2>/dev/null)
+    case "$ubs" in ''|*[!0-9]*) ubs=0 ;; esac
+    local nbook; nbook=$(zfs list -H -t bookmark $depth -o name -- "$ds" 2>/dev/null | grep -c . )
+    case "$nbook" in ''|*[!0-9]*) nbook=0 ;; esac
+
+    # One pass over the snapshot list, bucketed by the FIRST pattern that
+    # matches -- first, not best, so the reported buckets are disjoint and the
+    # counts add up to the total. `case` with the pattern quoted is a literal
+    # prefix test, the same comparison check-snap-age.sh makes.
+    local -A cnt=() bytes=() newest_name=() newest_at=() oldest_name=() oldest_at=()
+    local total=0 name at used key matched
+    while IFS=$'\t' read -r name at used; do
+        [ -n "$name" ] || continue
+        total=$((total + 1))
+        case "$at" in ''|*[!0-9]*) at=0 ;; esac
+        case "$used" in ''|*[!0-9]*) used=0 ;; esac
+        local snapname="${name#*@}"
+        matched=""
+        for p in ${pats[@]+"${pats[@]}"}; do
+            case "$snapname" in "$p"*) matched="$p"; break ;; esac
+        done
+        key="${matched:-@other}"
+        cnt["$key"]=$(( ${cnt["$key"]:-0} + 1 ))
+        bytes["$key"]=$(( ${bytes["$key"]:-0} + used ))
+        # TIES ARE REAL AND THEY ARE COMMON. `creation` has one-second
+        # resolution, so a recursive snapshot, a catch-up run or any tight loop
+        # produces several snapshots stamped the same second -- measured on
+        # pve10, where four hourly snapshots created in one second made
+        # "newest" whichever the listing happened to hand over first, and the
+        # panel showed 04-00-01 while 07-00-01 existed. So the NAME breaks the
+        # tie: it carries the stamp the operator reads, and it sorts.
+        if [ -z "${newest_at["$key"]:-}" ] || [ "$at" -gt "${newest_at["$key"]}" ]            || { [ "$at" -eq "${newest_at["$key"]}" ] && [[ "$snapname" > "${newest_name["$key"]}" ]]; }; then
+            newest_at["$key"]="$at"; newest_name["$key"]="$snapname"
+        fi
+        if [ -z "${oldest_at["$key"]:-}" ] || [ "$at" -lt "${oldest_at["$key"]}" ]            || { [ "$at" -eq "${oldest_at["$key"]}" ] && [[ "$snapname" < "${oldest_name["$key"]}" ]]; }; then
+            oldest_at["$key"]="$at"; oldest_name["$key"]="$snapname"
+        fi
+    done <<SCOPEEOF
+$snaps
+SCOPEEOF
+
+    scope_emit_family() {   # <json label> <key>  -- one family object
+        local label="$1" key="$2"
+        printf '{"pattern":"%s","count":%s,"bytes":%s' \
+            "$(json_escape "$label")" "${cnt["$key"]:-0}" "${bytes["$key"]:-0}"
+        jsonw_field newest    "${newest_name["$key"]:-}"
+        printf ',"newest_epoch":%s,"newest_age_seconds":%s' \
+            "${newest_at["$key"]:-0}" \
+            "$([ -n "${newest_at["$key"]:-}" ] && scope_age_seconds "${newest_at["$key"]}" || echo 0)"
+        jsonw_field oldest    "${oldest_name["$key"]:-}"
+        printf ',"oldest_epoch":%s}' "${oldest_at["$key"]:-0}"
+    }
+
+    if [ "$as_json" -eq 1 ]; then
+        printf '{"dataset":"%s","exists":true,"error":""' "$(json_escape "$ds")"
+        printf ',"recursive":%s' "$([ "$rec" -eq 1 ] && echo true || echo false)"
+        printf ',"families":['
+        local first=1
+        for p in ${pats[@]+"${pats[@]}"}; do
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            scope_emit_family "$p" "$p"
+        done
+        printf ']'
+        # `other` is an object, never omitted: a front end must not have to
+        # decide whether an absent key means "none" or "not asked".
+        printf ',"other":'; scope_emit_family "" "@other"
+        printf ',"total_snapshots":%s,"bookmarks":%s,"used_by_snapshots":%s}\n' \
+            "$total" "$nbook" "$ubs"
+    else
+        echo "Zakres:  $ds$([ "$rec" -eq 1 ] && echo '  (rekursywnie)')"
+        printf 'Migawek: %s   zakladek: %s   miejsce zajete przez migawki: %s B\n' "$total" "$nbook" "$ubs"
+        echo
+        printf '%-24s %6s %14s  %s\n' RODZINA ILE BAJTOW NAJNOWSZA
+        for p in ${pats[@]+"${pats[@]}"}; do
+            printf '%-24s %6s %14s  %s\n' "$p" "${cnt["$p"]:-0}" "${bytes["$p"]:-0}" "${newest_name["$p"]:-(brak)}"
+        done
+        printf '%-24s %6s %14s  %s\n' "(pozostale)" "${cnt[@other]:-0}" "${bytes[@other]:-0}" "${newest_name[@other]:-(brak)}"
+        [ "${cnt[@other]:-0}" -gt 0 ] && {
+            echo
+            echo "\"Pozostale\" to migawki, ktorych nie stworzyl zaden z podanych wzorcow --"
+            echo "pvesr (__replicate_), vzdump, migracje, albo rodzina z innej relacji."
+        }
+    fi
+    return 0
+}
 # ------------------------------------------------------------------------------
 # Owner, 2026-09-08, deciding screen 1 of the GUI: "czyta co jest".
 #
@@ -14073,6 +14264,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         save-profile)     shift; cmd_save_profile "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
+        show-scope)       shift; cmd_show_scope "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;
