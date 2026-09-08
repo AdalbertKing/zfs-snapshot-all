@@ -68,6 +68,15 @@ case "$ONLY_SECTION" in
     *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope)" >&2; exit 2 ;;
 esac
 
+# THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
+# covered 41 lines of 11221, so `--section showscope` ran 99.6% of the suite --
+# every "focused" run today was the full battery, about 25 minutes each on the
+# Windows box. Each self-contained section is now gated on its own name.
+want() {   # <section name> -> 0 when this section should run
+    [ -z "$ONLY_SECTION" ] || [ "$ONLY_SECTION" = "$1" ]
+}
+
+
 # Everything from here to the retention group is full-suite-only: skipped under a
 # targeted --section run. The retention group (below the matching `fi`) is self-
 # contained and always eligible.
@@ -5350,6 +5359,7 @@ esac
 
 fi   # === end of full-suite-only sections; the retention group below is L0-targetable ===
 
+if want retention; then
 # ============================================================================
 # RETENTION GROUP (REV-102 / REV-108 / REV-110 source-retention audit).
 # Self-contained: builds its own profile fixture here, so `--section retention`
@@ -8561,6 +8571,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji retention ---
+if want records; then
 # ============================================================================
 # RECORDS ARE DATA (2026-09-03). Self-contained; always eligible, also under
 # `--section records`. Until this change every reader of a client record, a
@@ -8812,6 +8824,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji records ---
+if want fataldie; then
 # ============================================================================
 # `die` INSIDE A `$( )` ENDS THE PROGRAM (2026-09-03). Self-contained; always
 # eligible, also under `--section fataldie`. set-endpoint parses --host through
@@ -8854,6 +8868,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji fataldie ---
+if want invocation; then
 # ============================================================================
 # PER-INVOCATION STATE IS RESET AT ENTRY (2026-09-03). Self-contained; always
 # eligible, also under `--section invocation`. SRC_PROFILE_NAME is a global
@@ -8885,6 +8901,8 @@ for probe in "cmd_activate_client no-such-client" "cmd_add_client bad/name" "cmd
 done
 
 
+fi   # --- koniec sekcji invocation ---
+if want flags; then
 # ============================================================================
 # ONE GRAMMAR PER SHARED FLAG (2026-09-03). Self-contained; always eligible,
 # also under `--section flags`. Every command that takes --local-user refuses
@@ -8955,6 +8973,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji flags ---
+if want noeval; then
 # ============================================================================
 # NO COMMAND COMPOSED FROM TEXT (2026-09-03). Self-contained; always eligible,
 # also under `--section noeval`. The program's last two `eval` sites read the
@@ -9013,6 +9033,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji noeval ---
+if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
 # Self-contained; always eligible, also under `--section statusjson`.
@@ -9234,6 +9256,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji statusjson ---
+if want showconfig; then
 # ============================================================================
 # show-config: THE SECOND READER, AND THE FIRST TEST section_owned_by HAS EVER
 # HAD (V3, 2026-09-07). Self-contained; always eligible, also under
@@ -9436,6 +9460,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji showconfig ---
+if want listprofiles; then
 # ============================================================================
 # list-profiles: THE CATALOGUE, AND THE TWO WAYS A PROFILE CAN BE BROKEN
 # (V4, 2026-09-07). Self-contained; always eligible, also under
@@ -9747,6 +9773,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji listprofiles ---
+if want monitorjson; then
 # ============================================================================
 # monitor: THE VERDICT FOR THE WHOLE HOST, AND THE FOUR WAYS IT COULD LIE
 # (V2, 2026-09-07). Self-contained; always eligible, also under
@@ -10012,6 +10040,8 @@ automated_hourly
 420m' 'a single dataset and minute thresholds'
 
 
+fi   # --- koniec sekcji monitorjson ---
+if want rev136; then
 # ============================================================================
 # REV-20260907-136 F1: A REFUSED RECORD MUST NOT BECOME AN ANSWER
 # (2026-09-07). Self-contained; always eligible, also under `--section rev136`.
@@ -10136,6 +10166,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji rev136 ---
+if want exportrel; then
 # ============================================================================
 # export-relation: THE ANSWERS, NOT THE STATE (2026-09-07). Self-contained;
 # always eligible, also under `--section exportrel`.
@@ -10363,6 +10395,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji exportrel ---
+if want saveprof; then
 # ============================================================================
 # save-profile: OPEN A TEMPLATE, CHANGE IT, SAVE IT AS YOUR OWN
 # (2026-09-07). Self-contained; always eligible, also under `--section saveprof`.
@@ -10639,6 +10673,8 @@ else
 fi
 
 
+fi   # --- koniec sekcji saveprof ---
+if want listjobs; then
 # ============================================================================
 # list-jobs: WHAT THIS HOST DOES, AND WHICH SIDE OF THE RELATIONSHIP IT IS ON
 # (2026-09-08). Self-contained; always eligible, also under `--section listjobs`.
@@ -10988,6 +11024,8 @@ case "$lj_stub" in
 esac
 
 
+fi   # --- koniec sekcji listjobs ---
+if want showscope; then
 # ============================================================================
 # show-scope: WHAT IS ACTUALLY ON THE DISK (2026-09-08). Self-contained; always
 # eligible, also under `--section showscope`.
@@ -11148,6 +11186,74 @@ else
     bad "showscope: the text form shows families and leftovers" "$ss_txt"
 fi
 
+
+# --- WHAT THE LAB CAUGHT AND THE STUB COULD NOT (pve10, 2026-09-08) ---------
+# Two defects, both invisible to a stub that answers the same way whatever it is
+# asked. They are pinned here by asserting the ARGUMENTS the reader passes and
+# by a fixture built the way the pool really behaved.
+
+SL="$SS/lab"; mkdir -p "$SL/bin"
+# This stub LOGS its argv and hands back four snapshots stamped in the SAME
+# SECOND -- which is what a real pool produced: `creation` has one-second
+# resolution, so a recursive snapshot or a tight loop ties them all.
+cat > "$SL/bin/zfs" <<'SLEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SLZFSLOG"
+case "$*" in
+  *"-t snapshot"*)
+    printf 'hdd/x@automated_hourly_2026-09-08_04-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_07-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_05-00-01\t1788000000\t0\n'
+    printf 'hdd/x@automated_hourly_2026-09-08_06-00-01\t1788000000\t0\n'
+    exit 0 ;;
+  *get*usedbysnapshots*) echo 0; exit 0 ;;
+esac
+exit 0
+SLEOF
+chmod +x "$SL/bin/zfs"
+
+sl_run() {   # <args...> -> $WORK/sl.out, and $SL/zfs.log holds the argv
+    : > "$SL/zfs.log"
+    ( export PATH="$SL/bin:$PATH" SLZFSLOG="$SL/zfs.log"
+      cmd_show_scope "$@" ) >"$WORK/sl.out" 2>&1
+}
+
+# 1. `zfs list` DOES NOT RECURSE BY DEFAULT. The first implementation used an
+# empty flag for --recursive and the option silently did nothing: measured on
+# pve10 against a real pool, a parent with one snapshot and a child with six
+# reported ONE either way. The flag is the assertion, because the answer alone
+# cannot tell the two apart on a stub.
+sl_run hdd/x --pattern=automated_hourly --json
+if grep -q -- '-t snapshot -d 1' "$SL/zfs.log"; then
+    ok "showscope: without --recursive the reader asks for THIS dataset only (-d 1)"
+else
+    bad "showscope: flat asks -d 1" "$(cat "$SL/zfs.log")"
+fi
+sl_run hdd/x --pattern=automated_hourly --recursive --json
+if grep -q -- '-t snapshot -r' "$SL/zfs.log"; then
+    ok "showscope: --recursive asks for descendants (-r) -- zfs list does not recurse on its own"
+else
+    bad "showscope: --recursive asks -r" "$(cat "$SL/zfs.log")"
+fi
+
+# 2. TIES ARE COMMON, AND THE FIRST ONE SEEN IS NOT THE NEWEST. All four
+# snapshots above carry the same creation second; the panel showed 04-00-01
+# while 07-00-01 existed. The NAME breaks the tie -- it carries the stamp the
+# operator reads, and it sorts.
+sl_run hdd/x --pattern=automated_hourly --json
+sl_got="$(cat "$WORK/sl.out")"
+if printf '%s' "$sl_got" | grep -q '"newest":"automated_hourly_2026-09-08_07-00-01"'; then
+    ok "showscope: when creation times tie, the later NAME is the newest"
+else
+    bad "showscope: a creation tie is broken by name (newest)" "$sl_got"
+fi
+if printf '%s' "$sl_got" | grep -q '"oldest":"automated_hourly_2026-09-08_04-00-01"'; then
+    ok "showscope: ...and the earlier name is the oldest, from the same tie"
+else
+    bad "showscope: a creation tie is broken by name (oldest)" "$sl_got"
+fi
+
+fi   # --- koniec sekcji showscope ---
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
