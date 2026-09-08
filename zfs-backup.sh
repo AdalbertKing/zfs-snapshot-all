@@ -1579,6 +1579,40 @@ profile_template_section() {   # <namespaced name> [templates-file]
     ' "${2:-$PROFILE_TPL_FILE}"
 }
 
+# The relationship the GENERATOR would see, built from the loaded profile the
+# way emit_client_sections builds a real one: the rendered [template:] sections
+# verbatim, the [excluded:] floors verbatim, one [dataset:] carrying the
+# profile's own use_template line, and a [prune:] only when the profile declares
+# a ladder. REV-20260907-137 F1: save-profile's two gates proved that a profile
+# VALIDATES and RENDERS; neither asked gen-cron.sh whether the rendered policy
+# is one it accepts, and `send_schedule = not a cron` passes both -- the renderer
+# copies it through -- to be refused at the next add-client. The generator is
+# the one authority on its own grammar (durations, cron fields, gfs ladders,
+# prefix/pattern agreement); a second copy of those rules here would be the
+# hand-maintained list the review rejects. So the gate asks it.
+#
+# ONE composer, so that the gate and any control of it judge the SAME shape.
+# host_label and the dataset path are placeholders: the generator does not
+# resolve them against ZFS, and a relationship built later carries its own.
+profile_downstream_candidate() {   # <outfile> -> 0; needs the profile loaded
+    [ -n "${PROFILE_LOADED:-}" ] || return 2
+    local ds="zfs-backup/save-profile-gate"
+    {
+        printf '[defaults]\n\thost_label = save-profile-gate\n'
+        if [ -s "${PROFILE_TPL_FILE:-}" ]; then echo; cat "$PROFILE_TPL_FILE"; fi
+        if [ -s "${PROFILE_EXCL_FILE:-}" ]; then echo; cat "$PROFILE_EXCL_FILE"; fi
+        echo
+        echo "[dataset:$ds]"
+        profile_emit "$PROFILE_DS_FILE"
+        if profile_declares_ladder; then
+            echo
+            echo "[prune:$ds]"
+            profile_emit "$PROFILE_PRUNE_FILE"
+            echo "	recursive    = no"
+        fi
+    } > "$1"
+}
+
 # --- SOURCE retention split (REV-20260811-104 F1 / REV-20260811-106 F1) ---------
 # SOURCE and TARGET retention must be independently editable after CREATE, so the
 # SOURCE cron line needs its OWN template identities, byte-copied from the profile's
@@ -10777,6 +10811,27 @@ cmd_save_profile() {
         rm -rf "$workdir"
         die "save-profile: the modified profile passes validation but cannot be RENDERED -- it would be accepted here and fail at the next relationship built from it. Nothing was written. (A retention that is not a number does this: 'keep = xyz' validates and does not render.)"
     fi
+    # GATE 3 (REV-20260907-137 F1): the REAL generator must accept a
+    # relationship built from it. Gates 1 and 2 are this program's own reading
+    # of the profile; this one is gen-cron.sh's, on the same candidate shape
+    # add-client will hand it. Measured before the gate existed:
+    # `--send_schedule='not a cron'` returned 0 and published the file, and the
+    # catalogue then listed it as valid. Refused here with the generator's own
+    # words, so the operator reads the rule from the program that enforces it.
+    local gate_err; gate_err=$(mktemp) || { rm -rf "$workdir"; die "save-profile: mktemp failed"; }
+    if ! ( die_confine_to_subshell
+           PROFILE_ACTIVE="$work"; PROFILE_LOADED=""
+           load_active_profile >/dev/null 2>&1 || exit 1
+           cand=$(mktemp) || exit 1
+           profile_downstream_candidate "$cand" || { rm -f "$cand"; exit 1; }
+           bash "$GENCRON" -c "$cand" >/dev/null 2>"$gate_err"; rc=$?
+           rm -f "$cand"; exit "$rc" ); then
+        local said; said=$(grep -m1 -E 'error' "$gate_err" || tail -n 1 "$gate_err")
+        rm -f "$gate_err"; rm -rf "$workdir"
+        die "save-profile: the modified profile validates and renders, but gen-cron.sh REFUSES a relationship built from it -- it would be accepted here and refused at the next add-client. gen-cron.sh said: ${said:-(no message)}. Nothing was written."
+    fi
+    rm -f "$gate_err"
+    log "gen-cron.sh accepted a relationship rendered from this profile (the same generator add-client runs)."
 
     # The name is the retention -- said, not enforced. profiles/README.md's rule
     # is about the SHIPPED catalogue, which this directory is not.

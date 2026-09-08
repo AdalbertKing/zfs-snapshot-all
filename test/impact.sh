@@ -363,6 +363,7 @@ verify() {
     no_conflict_markers || rc=1
     status_freshness || rc=1
     engine_freeze || rc=1
+    freeze_twin_disposition || rc=1
     protocol_verify || rc=1
 
     if [ $rc -eq 0 ]; then echo "graph is consistent with the tree"; else echo "GRAPH DRIFT -- fix deps.conf"; fi
@@ -741,6 +742,44 @@ engine_freeze() {
     fi
     echo "  authorised by $rev:$moved"
     return 0
+}
+
+# M-c of docs/discussions/OWNER-ENGINE-MERGE-2026-09-07.md section 8. Four
+# freeze entries (2026-08-21, 08-27 x2, 08-28) authorised snapget.sh ALONE and
+# said nothing about snapsend.sh; the twins alarm was then blessed with a
+# sentence that was false (E43), and push fell seventeen days behind on the
+# same flag. An entry that unfreezes ONE engine must now say what became of
+# the other, on a line of its own: `twin: ported in <commit>`,
+# `twin: NOT ported -- <what and by when>`, or `twin: n/a -- <why, with a
+# file:line>`. Structure only: the line's presence is checked, its truth is
+# the reviewer's. Entries naming both engines, or neither, are not asked.
+freeze_twin_disposition() {
+    echo "== a freeze entry that unfreezes ONE engine says what became of its twin"
+    [ -f "$REPO/$FREEZE_FILE" ] || { echo "  (no freeze in force)"; return 0; }
+    local out
+    out="$(awk '
+        function flush() {
+            one = ""
+            if (hdr ~ /\((snapsend|snapget)\.sh( v[0-9.]+( -> v[0-9.]+)?)?\)/) {
+                one = hdr; sub(/^.*\(/, "", one); sub(/[ )].*$/, "", one)
+            }
+            if (one != "" && body !~ /\n[[:space:]]*twin:/) {
+                h = hdr; sub(/^- /, "", h); if (length(h) > 88) h = substr(h, 1, 88) "..."
+                print "  " h
+                print "      names only " one " and carries no `twin:` line saying what became of the other engine"
+                bad++
+            }
+            hdr = ""; body = ""
+        }
+        /^Owner-authorized refreezes:/ { on = 1; next }
+        !on { next }
+        /^- / { if (hdr != "") flush(); hdr = $0; body = ""; next }
+        /^## / { if (hdr != "") flush(); on = 0; next }
+        { body = body "\n" $0 }
+        END { if (hdr != "") flush(); exit (bad > 0) }
+    ' "$REPO/$FREEZE_FILE")"; local rc=$?
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return $rc
 }
 
 # The reviewer-owned permission, read from the review artifact.

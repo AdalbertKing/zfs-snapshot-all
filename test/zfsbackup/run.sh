@@ -10552,6 +10552,92 @@ case "$pf_cat" in
     *) bad "saveprof: and it renders the flag the saved value asks for (-H6)" "$pf_cat" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# GATE 3 -- THE REAL GENERATOR (REV-20260907-137 F1). The two gates above prove
+# that a profile validates and renders. Neither asked gen-cron.sh whether it
+# ACCEPTS the rendered policy, and `send_schedule = not a cron` passes both:
+# the renderer copies it through, and the file was published, listed as valid,
+# and refused at the next add-client. Measured on 0fa5bcf by the reviewer, and
+# again here before the gate existed: rc=0, file written.
+#
+# The discriminator is the generator's OWN wording in the refusal -- text that
+# only gen-cron.sh emits -- so a hand-copied list of cron rules could not pass
+# these assertions by accident.
+# ---------------------------------------------------------------------------
+pf_before="$(pf_files)"
+if ! pf_run --from=d7h24 --as=badcron --tier=hourly --send_schedule='not a cron' \
+   && grep -q 'gen-cron.sh REFUSES' "$WORK/pf.err" \
+   && grep -q 'a crontab time specification is exactly 5 fields' "$WORK/pf.err"; then
+    ok "saveprof: a schedule the GENERATOR refuses is refused, in the generator's own words"
+else
+    bad "saveprof: a schedule the GENERATOR refuses is refused, in the generator's own words" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+if [ ! -e "$PF/user/badcron.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: ...and no destination profile was created"
+else
+    bad "saveprof: ...and no destination profile was created" "$(pf_files)"
+fi
+# --force over a KNOWN-GOOD profile with the same bad value: the reviewer's
+# second reproduction replaced the operator's file. Byte-identical afterwards.
+pf_hash_before="$(sha256sum "$PF/user/d7h4.conf" | cut -d' ' -f1)"
+if ! pf_run --from=d7h24 --as=d7h4 --tier=hourly --send_schedule='not a cron' --force \
+   && [ "$(sha256sum "$PF/user/d7h4.conf" | cut -d' ' -f1)" = "$pf_hash_before" ]; then
+    ok "saveprof: --force with a generator-refused value leaves the existing profile byte-identical"
+else
+    bad "saveprof: --force with a generator-refused value leaves the existing profile byte-identical" \
+        "$(cat "$WORK/pf.err")" "before=$pf_hash_before after=$(sha256sum "$PF/user/d7h4.conf" | cut -d' ' -f1)"
+fi
+# The positive form: a valid schedule edit is still saved, and the log says the
+# generator accepted it -- the line exists only on gen-cron.sh's rc=0.
+if pf_run --from=d7h24 --as=d7h24s --tier=hourly --send_schedule='7 * * * *' \
+   && [ "$(sed -n '/^\[template:hourly\]/,/^\[/p' "$PF/user/d7h24s.conf" | grep -c 'send_schedule *= *7 \* \* \* \*$')" -eq 1 ] \
+   && grep -q 'gen-cron.sh accepted' "$WORK/pf.out"; then
+    ok "saveprof: a valid schedule edit is saved, and was accepted through the same generator"
+else
+    bad "saveprof: a valid schedule edit is saved, and was accepted through the same generator" \
+        "$(cat "$WORK/pf.out" "$WORK/pf.err")" "$(grep -n send_schedule "$PF/user/d7h4s.conf" 2>/dev/null)"
+fi
+# A NON-schedule value, copied through by the renderer and judged only by the
+# generator's own reasoning: monitor_warn=30m is a well-formed duration that
+# gen-cron refuses because it is shorter than the hourly tier's own gap -- a
+# rule no copied list of syntax checks would carry. Proves the boundary is
+# general, not a cron-field parser.
+pf_before="$(pf_files)"
+if ! pf_run --from=d7h24 --as=badwarn --tier=hourly --monitor_warn=30m \
+   && grep -q 'gen-cron.sh REFUSES' "$WORK/pf.err" \
+   && grep -q "not longer than this tier's own longest gap" "$WORK/pf.err" \
+   && [ ! -e "$PF/user/badwarn.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: a well-formed value the generator refuses on its OWN reasoning (monitor_warn below the tier's cadence) is refused, nothing written"
+else
+    bad "saveprof: a well-formed value the generator refuses on its OWN reasoning is refused, nothing written" \
+        "$(cat "$WORK/pf.out" "$WORK/pf.err")" "$(pf_files)"
+fi
+# Breadth: every shipped profile, copied unchanged, passes gate 3. This is what
+# proves the candidate composer handles every shape in the catalogue -- flat,
+# ladder (-gfs), age, and the uppercase one-family form -- not just d7h24.
+PFALL="$WORK/saveprof-all"; rm -rf "$PFALL"; mkdir -p "$PFALL"
+pf_all_fail=""
+for pf_src in "$REPO"/profiles/*.conf; do
+    pf_n="$(basename "$pf_src" .conf)"
+    if ! ( export PROFILE_USER_ROOT="$PFALL" PROFILE_ROOT="$REPO/profiles"
+           export CRON_CONFIG="$PF/cron.conf" SERVER_CONF="$PF/no-server-conf"
+           bash "$ZFSBACKUP" save-profile --from="$pf_n" --as="${pf_n}_kopia" ) >/dev/null 2>"$WORK/pf-all.err"; then
+        pf_all_fail="$pf_all_fail $pf_n($(tail -n 1 "$WORK/pf-all.err" | cut -c1-120))"
+    fi
+done
+pf_n_src=$(ls "$REPO"/profiles/*.conf | wc -l); pf_n_out=$(ls "$PFALL"/*.conf 2>/dev/null | wc -l)
+if [ -z "$pf_all_fail" ] && [ "$pf_n_out" -eq "$pf_n_src" ] && [ "$pf_n_src" -ge 16 ]; then
+    ok "saveprof: every shipped profile ($pf_n_src) passes the generator gate unchanged"
+else
+    bad "saveprof: every shipped profile passes the generator gate unchanged" "shipped=$pf_n_src saved=$pf_n_out failed:$pf_all_fail"
+fi
+# The installed config is still untouched by all of the above.
+if cmp -s "$PF/cron.conf" "$PF/cron.orig"; then
+    ok "saveprof: the installed config is byte-identical after the gate-3 cases too"
+else
+    bad "saveprof: the installed config is byte-identical after the gate-3 cases too" "$(diff "$PF/cron.orig" "$PF/cron.conf")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

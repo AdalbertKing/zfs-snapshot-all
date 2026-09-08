@@ -143,11 +143,11 @@ nie ma:
 
 | ma `snapget.sh` | stan w `snapsend.sh` | klasyfikacja | skutek |
 |---|---|---|---|
+| **bramka rozjazdu celu** (`snapget.sh:1573-1700`): `recv_force_flag` liczony, odmowa „already exists and shares no common snapshot (by GUID) — needs -f", odmowa przy `written@baza ≠ 0`, odmowa przy snapshotach NOWSZYCH niż baza, `guest_disk_is_live`, podpowiedź o ZAMONTOWANYM celu przy `-F` | **nic z tego** — `recv_flags="-F -s"` bezwarunkowo (`snapsend.sh`, także ścieżka wznowienia) | **DRYF, P-0** — znaleziony w audycie 2026-09-07, nie było go w pierwszej wersji tej tabeli | push na rozjechany cel: przyrost z `-F` **cofa kopię po cichu**; brak wspólnej bazy → „standard full send" z `-F` **zastępuje istniejący cel**, tam gdzie pull odmawia i każe świadomie dać `-f`. Kampania REV-20260804-037/038 zbudowała tę bramkę tylko w pull |
 | pomijanie rusztowania pod `-R -e`: trzy gałęzie skip (`No family` 1324, `Only excluded families` 1350, `No MESSAGE family` 1363) + bramka zbiorcza „wszystko było rusztowaniem → rc=1" (2595-2601) | **jedna** gałąź z trzech (`Only excluded families`, 1397) i **brak bramki zbiorczej** — `ADOPT_SKIPPED` jest inkrementowany i nigdy nie czytany | **DRYF** — ta sama flaga, ta sama ścieżka `USE_EXISTING_SNAPSHOT` | push `-R -e` nad pustym kontenerem ścieżki: **rc=1 „No source snapshots found"** tam, gdzie pull pomija; push, w którym każdy członek był rusztowaniem: **„All datasets processed successfully"** — fałszywy sukces |
-| `local x; x=$(...)` wszędzie (0 masek) | **5** × `local x=$(...)` (825, 936, 937, 1241, 1611) | **DRYF** | 936/937 maskują `get_snapshot_guid` — porównanie GUID z pustym łańcuchem na ścieżce, na której projekt miał już trzy błędy fail-open |
+| `local x; x=$(...)` wszędzie (0 masek) | **5** × `local x=$(...)` (825, 936, 937, 1241, 1611) | DRYF, higiena | pierwsza wersja tej tabeli twierdziła „porównanie GUID z pustym łańcuchem"; **nieprawda** — `validate_snapshot` w OBU silnikach odmawia przy pustym GUID (`[ -z ] → return 1`), więc maska ukrywała kod wyjścia, którego nikt nie czytał. Poprawione po przeczytaniu funkcji (E45) |
 | linia `PLAN=INCREMENTAL\|FULL base= src= tgt=` | brak | **DRYF** (kontrakt czytany przez warstwę czasowników) | `seed` (push, `zfs-backup.sh:6734/6740`) nie może pokazać planu tak, jak `load`/`restore` |
-| `guest_disk_is_live` na celu (1575): odmowa nadpisania dysku **działającego** gościa | brak | **DRYF z kosztem** — w push cel jest zdalny, predykat trzeba policzyć po drugiej stronie | restore przez push (`-t`) na dysk działającego gościa na peerze: nic nie odmawia |
-| podpowiedź „-F na ZAMONTOWANYM celu" (1761, diagnoza) | brak | dryf diagnostyczny | ten sam błąd delegowanego konta w push dostaje surowy komunikat `zfs` |
+| `guest_disk_is_live` na celu (1575) i podpowiedź „-F na ZAMONTOWANYM celu" (1761) | brak | część P-0 — obie siedzą wewnątrz bramki rozjazdu (`recv_force_flag`), nie da się ich portować osobno | jak wyżej |
 | `-Q SEK` deadman zdalnego quiesce | brak flagi | **kierunkowe, nie portować** — deadman chroni zamrożonego gościa po ZDALNEJ stronie, gdy silnik padnie; w push gość jest lokalny i `on_exit` go odmraża | gen-cron słusznie nie emituje `-Q` na linii push |
 | `probe_dataset` na źródle („nie ma" vs „ssh padł") | gołe `zfs list -H` | **kierunkowe, nie portować** — źródło push jest lokalne, `zfs list` nie ma trybu „ssh padł"; strona zdalna push idzie przez `target_exists` z biblioteki | — |
 
@@ -383,11 +383,11 @@ stron per funkcja.
 
 | # | port | kontrola negatywna (dziś) | po porcie | koszt |
 |---|---|---|---|---|
+| **P-0** | **bramka rozjazdu celu**, cała: `recv_force_flag` (`-F` tylko na świeży cel), rozstrzyganie bazy po GUID, odmowa „shares no common snapshot — needs -f", odmowy `written@`/nowsze snapshoty, `guest_disk_is_live`, podpowiedź MOUNTED — wzór `snapget.sh:1573-1700`; dla zdalnego celu `written@`, `mounted` i status gościa czytane przez ssh (predykat gościa przez `quiesce_remote_run` po stronie celu, „nie wiem = odmowa" jak w pull) | **sekcja P, przypadek P5** w `test/snapsend` (tryb lokalny, bez ssh): cel z własnym `@other`, `-e` — pull odmawia i zostawia `@other`, push **zastępuje cel**, rc=0 | oba odmawiają tymi samymi słowami, `@other` przeżywa po obu stronach | 2–3 d + lab; **zmiana kontraktu push** (odmowa tam, gdzie dziś idzie) — wymaga słowa właściciela, nie jest objęta „Zacznij §8" |
 | P-1 | `-R -e`: dwie brakujące gałęzie skip (`No family`, `No MESSAGE family`) + bramka zbiorcza `ADOPT_SKIPPED >= ${#DATASETS[@]} → rc=1` na końcu przebiegu (wzór `snapget.sh:2595-2601`) | push `-R -e` nad drzewem z pustym kontenerem ścieżki: rc=1 „No source snapshots found"; push, w którym każdy członek jest rusztowaniem: rc=0 „All datasets processed successfully" | pierwszy: skip + rc=0; drugi: rc=1 „nothing was adopted" | 0,5 d |
 | P-2 | 5 × `local x=$(...)` → `local x; x=$(...)` (825, 936, 937, 1241, 1611) | stub `zfs` zwracający rc=1 na `get guid`: dziś `process_dataset` idzie dalej z pustym GUID | `return 1` na tej linii | 0,5 d (kontrola jest trudniejsza niż fix — to jest cały koszt) |
 | P-3 | linia `PLAN=INCREMENTAL\|FULL base= src= tgt=` na stdout w tym samym miejscu, co `snapget.sh` | `snapsend.sh -n` nie drukuje `PLAN=`; `seed` w `zfs-backup.sh` nie ma czego czytać | drukuje; `seed` może pokazać plan | 0,5 d |
-| P-4 | `guest_disk_is_live` na celu **po zdalnej stronie**: ten sam predykat (`quiesce_guest_id` → `quiesce_guest_status`) uruchomiony przez `quiesce_remote_run` na hoście celu, gdy cel istnieje i nie ma `-f`; odmowa, gdy gość działa LUB gdy statusu nie da się ustalić (jak pull) | push `-t` na dataset, który jest dyskiem działającego gościa na peerze: dziś odbiór przyrostowy idzie | odmowa z tym samym komunikatem, co pull | 1 d (ssh po stronie celu, konto delegowane bez helpera → „nie wiem = odmowa", jak w pull) |
-| P-5 | podpowiedź „-F na ZAMONTOWANYM celu" na ścieżce odmowy odbioru zdalnego | surowy komunikat `zfs` | ta sama podpowiedź, z nazwą hosta celu | 0,25 d |
+| P-4, P-5 | **złożone do P-0** — `guest_disk_is_live` i podpowiedź MOUNTED siedzą wewnątrz bramki `recv_force_flag`; osobno byłyby strażnikiem przed bezwarunkowym `-F` | — | — | w P-0 |
 
 Nie portowane, z powodem zapisanym w `twins.sha256` (8.2 M-a): `-Q`
 (deadman chroni zdalnie zamrożonego gościa; w push gość jest lokalny),
@@ -424,6 +424,26 @@ numerem linii>`. `./test/impact.sh --verify` sprawdza to grepem (wpis
 z jedną nazwą silnika bez `twin:` → FAIL). Cztery istniejące wpisy z 21.08
 i 27-28.08 dostają tę linię wstecznie, z prawdziwą odpowiedzią — dla 21.08
 brzmi ona „NIE zportowane, P-1 w sekcji 8.1", nie „n/a".
+
+### 8.2a Stan po pierwszej rundzie (2026-09-07, „Zacznij §8, odmrażam snapsend.sh")
+
+Zrobione na gałęzi, snapsend v2.73: **P-1, P-2, P-3**; **M-a** (kolumna
+powodu w `twins.sha256`, sekcja B2, `--bless` odmawia bez powodu — kontrole
+negatywne: wiersz bez powodu → FAIL, termin miniony → FAIL, bless bez powodu →
+rc=1 i plik nietknięty); **M-b** (sekcja P w `test/snapsend`: P1 `-R -e` nad
+rusztowaniem, P2 samo rusztowanie, P3 `PLAN=` na `-n`, P4 pełny+przyrost, P5
+rozjechany cel); **M-c** (`impact.sh --verify`: wpis freeze nazywający jeden
+silnik bez linii `twin:` → FAIL; cztery wpisy uzupełnione prawdziwą odpowiedzią,
+trzy z nich brzmią „NIE zportowane — P-0"). `twins` 81/0, `evalfree` 16/0
+tutaj. **`test/snapsend` NIE uruchomione** — w tym środowisku `zpool` jest
+odmówiony; sekcja P i porty P-1/P-3 czekają na lab (root+ZFS). Do czasu labu
+twierdzenia o zachowaniu są lustrem, nie pomiarem (R12). Na labie **P5 będzie
+czerwone dla push** — z założenia, dopóki P-0 nie wejdzie.
+
+Nie zrobione: **P-0**. To zmiana kontraktu push (odmowa tam, gdzie dziś cofa
+lub zastępuje) i wymaga jawnego słowa właściciela; `process_dataset` niesie
+`port-by:2026-09-21` w `twins.sha256`, więc B2 zapali się sam, gdy termin
+minie bez decyzji.
 
 ### 8.3 Kolejność i koszt
 

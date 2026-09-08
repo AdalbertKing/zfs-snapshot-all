@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1326,4 +1326,27 @@ exit status. The same shape as E37, one session later.
 edits files ends the command; staging and committing start the next one,
 after the edit has been looked at. `python3 ... || exit 1` is the minimum
 when they must share a call.
+
+### E45 — A severity written from the call shape, corrected by reading the function
+
+**2026-09-07, `OWNER-ENGINE-MERGE-2026-09-07.md` section 3, caught by my own
+audit two hours later.**
+
+*Genesis.* The gap table said the five `local x=$(...)` masks in snapsend.sh
+put "a GUID compared against an empty string on the exact path this project
+shipped three fail-open bugs on". The audit that then read `validate_snapshot`
+in both engines found `if [ -z "$src_guid" ] || [ -z "$tgt_guid" ]; then
+return 1` in both -- the empty answer is refused, the mask hid an exit status
+nothing read. Hygiene, not fail-open.
+
+*Cause.* The severity was inferred from the SHAPE of the call (`local x=$(...)`
+masks rc, rc masked on a GUID read, GUID reads have been fail-open before)
+without reading the eight lines below it. Same side-of-the-boundary error as
+E42 in the same document, one section apart: the call shape is one side, what
+the function does with the value is the other.
+
+*Rule.* R2. Evidence only. The audit's own procedure -- extract and diff each
+twinned function before classifying it -- is what caught it, and is now the
+one that produces the `direction:`/`port-by:` reasons in `twins.sha256`, so a
+severity claim about a twin has to survive a read of the twin.
 
