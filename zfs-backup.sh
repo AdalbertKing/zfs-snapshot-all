@@ -10787,6 +10787,23 @@ jobs_direction() {   # <dst> <src> -> "<direction>\001<peer>\001<other end>"
     printf '%s\001%s\001%s' "$dir" "$peer" "$other"
 }
 
+
+# One place that says "this block is running lines whose declaration I cannot
+# read". Extracted because there are now TWO ways to reach it -- no readable
+# `# Source:` header at all, and a header naming a file whose PARSE fails -- and
+# two copies of a diagnostic drift the moment one of them learns a field the
+# other does not have.
+jobs_note_unreadable() {   # <account> <config> <lines in block> <as_json>
+    local acct="$1" cfg="$2" nlines="$3" as_json="$4"
+    JOBS_UNREADABLE="$JOBS_UNREADABLE${JOBS_UNREADABLE:+,}$(
+        printf '{"account":"%s"' "$(json_escape "$acct")"
+        jsonw_field config "$cfg"
+        printf ',"lines_in_block":%s' "$nlines"
+        jsonw_text error "the installed block names a config this reader cannot open or parse -- the lines are running, their declaration is not readable from here"
+        printf '}')"
+    [ "$as_json" -eq 1 ] || printf '%-10s %s\n' "$acct" \
+        "BLOK BEZ CZYTELNEGO CONFIGU (${cfg:-brak naglowka Source}), linii w bloku: $nlines"
+}
 cmd_list_jobs() {
     local as_json=0 a
     for a in "$@"; do
@@ -10797,7 +10814,10 @@ cmd_list_jobs() {
         esac
     done
 
-    local first=1 seen=0 unreadable=""
+    # The helper appends here; a global because it is written from a function
+    # called in this loop, and unset first so a previous run cannot leak in.
+    JOBS_UNREADABLE=""
+    local first=1 seen=0
     [ "$as_json" -eq 1 ] && printf '{"host":"%s","jobs":[' "$(json_escape "$(hostname -s 2>/dev/null)")"
     [ "$as_json" -eq 1 ] || printf '%-10s %-8s %-9s %-28s %-16s %s\n' \
         KONTO KIERUNEK SZCZEBEL ZAKRES RODZINA HARMONOGRAM
@@ -10814,7 +10834,34 @@ cmd_list_jobs() {
         # Reporting those as "block without a readable config" would put a red
         # row on every ordinary host for accounts that were never scheduled.
         [ -z "$cfg" ] && [ "$nlines" -eq 0 ] && continue
-        [ -n "$cfg" ] && [ -f "$cfg" ] || {
+
+        # THE PARSE IS THE READABILITY TEST, AND IT IS BUFFERED BEFORE ANY ROW
+        # IS PUBLISHED (REV-20260908-138 F1).
+        #
+        # `-f` proves the path is a regular file; it does not prove the file can
+        # be OPENED. The reviewer's discriminator is exact: a source header
+        # naming /proc/1/mem passes `test -f` on Linux and refuses to open, and
+        # the first implementation consumed the parser through process
+        # substitution -- where the producer's exit status is unreachable. awk
+        # printed its refusal to stderr, the loop saw no lines, and the document
+        # went out as rc=0 with `"jobs":[],"count":0,"unreadable":[]`. That is
+        # this verb recreating, for a different reason, the exact failure it was
+        # written to prevent: a host running lines while the window says there
+        # is no work. The same shape reaches an ordinary root-owned config read
+        # by a delegated account -- existence is not readability.
+        #
+        # So the dump lands in a file, its status is checked, and only then is it
+        # iterated. Buffering before publication is the same discipline
+        # REV-20260907-136 imposed on the other readers: nothing is emitted for a
+        # source that was refused.
+        local dump=""
+        if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+            dump=$(mktemp) || die "list-jobs: mktemp failed"
+            if ! config_section_dump "$cfg" > "$dump" 2>/dev/null; then
+                rm -f "$dump"; dump=""
+            fi
+        fi
+        [ -n "$dump" ] || {
             # A block whose config cannot be read is REPORTED, not skipped: the
             # host is running lines this reader cannot explain, and a window
             # that showed nothing here would be describing a quiet host.
@@ -10824,14 +10871,7 @@ cmd_list_jobs() {
             # `count` is its length; mixing a diagnostic record in there makes the
             # reader test every element before using it, which is how a field ends
             # up read off the wrong kind of object.
-            unreadable="$unreadable${unreadable:+,}$(
-                printf '{"account":"%s"' "$(json_escape "$acct")"
-                jsonw_field config "$cfg"
-                printf ',"lines_in_block":%s' "$nlines"
-                jsonw_text error "the installed block names a config this reader cannot open -- the lines are running, their declaration is not readable from here"
-                printf '}')"
-            [ "$as_json" -eq 1 ] || printf '%-10s %s
-' "$acct"                 "BLOK BEZ CZYTELNEGO CONFIGU (${cfg:-brak naglowka Source}), linii w bloku: $nlines"
+            jobs_note_unreadable "$acct" "$cfg" "$nlines" "$as_json"
             continue
         }
 
@@ -10850,7 +10890,8 @@ cmd_list_jobs() {
                 @managed_by) continue ;;
             esac
             JOB_F["$kind:$name|$key"]="$val"
-        done < <(config_section_dump "$cfg")
+        done < "$dump"
+        rm -f "$dump"
 
         local i=0 nsec=${#secs[@]}
         while [ "$i" -lt "$nsec" ]; do
@@ -10945,8 +10986,7 @@ cmd_list_jobs() {
     done < <(cron_known_accounts)
 
     if [ "$as_json" -eq 1 ]; then
-        printf '],"count":%s,"unreadable":[%s]}
-' "$seen" "$unreadable"
+        printf '],"count":%s,"unreadable":[%s]}\n' "$seen" "$JOBS_UNREADABLE"
     else
         echo
         if [ "$seen" -eq 0 ]; then
