@@ -1,0 +1,7 @@
+rpool/ROOT/os@automated_daily_2026-09-02_00-21-01	1788301261	63569920
+rpool/ROOT/os@automated_daily_2026-09-03_00-21-01	1788387661	68239360
+rpool/ROOT/os@automated_daily_2026-09-04_00-21-01	1788474061	72040448
+rpool/ROOT/os@automated_daily_2026-09-05_00-21-01	1788560461	65503232
+rpool/ROOT/os@automated_daily_2026-09-06_00-21-01	1788646861	65839104
+rpool/ROOT/os@automated_daily_2026-09-07_00-21-01	1788733261	69541888
+rpool/ROOT/os@automated_daily_2026-09-08_00-21-01	1788819661	71270400

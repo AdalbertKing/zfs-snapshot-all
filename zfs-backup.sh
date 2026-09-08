@@ -2454,6 +2454,24 @@ config_has_relationship_policy() {   # <file> -> 0 when something is already ins
     grep -qE '^\[(dataset|prune):' "$1" 2>/dev/null
 }
 
+# THE BLOCK'S BINDING KEY, IN ONE PLACE (2026-09-08).
+#
+# gen-cron.sh writes `# Source: <path> -- DO NOT EDIT BY HAND, ...` as the
+# block's SECOND line, and this tree read it back with the same sed in four
+# different functions -- plus gen-cron.sh's own copy. `list-jobs` then arrived
+# with a FIFTH reader and a grammar I had INVENTED (`# BEGIN ... -- Source:`),
+# which no generator has ever written. It matched every fixture I wrote by hand
+# and nothing on the estate: replayed against a captured production block, the
+# verb found no config and reported eleven running lines as unexplainable --
+# the exact empty-window failure it exists to prevent.
+#
+# So the grammar lives here now, once, reading a STREAM so that a crontab, a
+# temp file and a block region can all be asked the same question.
+cron_block_source() {   # <stdin: crontab or block text> -> the config path, or empty
+    grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/'
+}
+
+
 # The pve2 fail-closed guard (found live 2026-08-01), extracted so both
 # ensure_cron_config and local-backup planning apply the SAME check rather than a
 # second, weaker one: never treat a MISSING config as a blank file to (re)create
@@ -2462,7 +2480,7 @@ config_has_relationship_policy() {   # <file> -> 0 when something is already ins
 assert_config_not_claimed_if_missing() {   # <file> ; dies if a live block claims a missing file
     [ -e "$1" ] && return 0
     local claimed
-    claimed=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    claimed=$(crontab_for_target 2>/dev/null | cron_block_source)
     [ -n "$claimed" ] || return 0
     [ "$(normalize_cron_source "$claimed")" = "$(normalize_cron_source "$1")" ] || return 0
     local jobs; jobs=$(crontab_for_target 2>/dev/null | grep -cE '^[0-9*]')
@@ -3359,7 +3377,7 @@ assert_config_readable_by_target() {   # <config file>
 
 assert_cron_config_matches_installed() {
     local file="$1" raw existing want
-    raw=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+    raw=$(crontab_for_target 2>/dev/null | cron_block_source)
     [ -n "$raw" ] || return 0
     existing=$(normalize_cron_source "$raw")
     want=$(normalize_cron_source "$file")
@@ -4470,7 +4488,7 @@ cron_source_for_user() {   # <account> -> its managed block's config path, or no
     local u="$1" tmp src
     tmp=$(mktemp) || return 1
     if ! cron_read "$u" "$tmp"; then rm -f "$tmp"; return 1; fi
-    src=$(grep -m1 '^# Source: ' "$tmp" | sed -E 's/^# Source: (.*) -- .*/\1/')
+    src=$(cron_block_source < "$tmp")
     rm -f "$tmp"
     [ -n "$src" ] || return 1
     normalize_cron_source "$src"
@@ -4894,7 +4912,7 @@ path follow whoever runs the block. Nothing has been changed."
 # costs one grep and turns a silent replacement into a sentence.
 warn_if_block_has_other_source() {   # <config about to be installed>
     local want="$1" have
-    have="$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')"
+    have="$(crontab_for_target 2>/dev/null | cron_block_source)"
     [ -n "$have" ] || return 0
     # Same normaliser the missing-config guard uses, so the two agree on what
     # "a different file" means rather than each having an opinion.
@@ -5198,7 +5216,7 @@ cmd_setup_server() {
             config="$CRON_CONFIG"
         else
             local existing
-            existing=$(crontab_for_target 2>/dev/null | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/')
+            existing=$(crontab_for_target 2>/dev/null | cron_block_source)
             if [ -n "$existing" ]; then
                 config=$(normalize_cron_source "$existing")
                 log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
@@ -10932,8 +10950,11 @@ jobs_block_config() {   # <account> -> the config path the installed block names
     local acct="$1" blk src
     blk=$(mktemp) || die "mktemp failed"
     if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 1; fi
-    src=$(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk" \
-          | sed -n 's/^# BEGIN zfs-backup-managed[^-]*-- Source: \(.*\)$/\1/p' | head -1)
+    # The block's own header, read through the ONE grammar the generator
+    # writes -- see cron_block_source. The reader that used to live here
+    # invented `# BEGIN ... -- Source:`, matched my hand-written fixtures
+    # and nothing on the estate.
+    src=$(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk" | cron_block_source)
     rm -f "$blk"
     printf '%s' "$src"
 }

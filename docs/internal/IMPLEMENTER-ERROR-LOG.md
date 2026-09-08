@@ -1439,3 +1439,57 @@ an `if` around each self-contained section: `--section showscope` went from ~25
 minutes to **7 seconds** (18 assertions), `--section listjobs` to 21 s (24).
 The control that makes the change safe is the bare run, and it is not optional:
 **736 before, 736 after, zero failures either way.**
+
+### E48 - Nine defects in two days, and only two of them were mine to find
+
+**2026-09-08, Owner: "Wyciagnij wnioski ze slabej skutecznosci suit w zderzeniu
+z recenzentem i z rzeczywistoscia."** Not a single defect -- a measurement of
+the whole apparatus.
+
+*Genesis.* Counting the last two days: nine defects, of which the Reviewer found
+three, the lab found three, a real production config found two, and the Owner
+found one. The suites found **none of them** and stayed green throughout.
+
+| defect | found by | why no suite could |
+|---|---|---|
+| readers published a REFUSED record (REV-136) | Reviewer | no fixture ever handed a refused record to a reader |
+| the save-profile gate proved the renderer, not the generator (REV-137) | Reviewer | the negative case died in the renderer; nothing tested a value the renderer COPIES through |
+| `-f` is not readability (REV-138) | Reviewer | the negative fixture named a nonexistent path -- it fails one check earlier, so the branch was unreachable |
+| `monitor --json` emitted invalid JSON | lab | the stub printed one line per SCOPE; the engine prints one per DATASET |
+| `show-scope --recursive` did nothing | lab | the stub answered identically whatever flags it was handed |
+| `show-scope` named the wrong newest | lab | the stub's creation times were distinct; a real pool ties them |
+| a red row for an account with no block | a real config | no fixture had a crontab without a managed block |
+| `prefix` printed under a `pattern` column | a real config | the fixture's template set both, so either read looked right |
+| `--section` did not select | Owner | nothing tests the test machinery |
+| `list-jobs` read an INVENTED block header | the new suite, first run | every fixture for it was written by the same hand as the reader |
+
+*Cause -- three classes, not nine problems.*
+
+**A. The stub is written from the same belief as the code, so it cannot
+contradict it.** Four of the ten. The suite agrees with itself while the estate
+does something else. This is not carelessness that more care would fix: the
+belief that produced the code produces the fixture in the same breath.
+
+**B. The fixture cannot reach the branch it claims to test.** Three of the ten,
+all found by the Reviewer. A refusal case that is refused EARLIER, or a negative
+input too well-formed to reach the check. Green, for the wrong reason.
+
+**C. Nobody tests the test machinery.** The selector, and the header grammar
+that only hand-written fixtures ever used.
+
+*Rule.* R1 for B and C -- prove the branch is reached, and measure a flag that
+claims to narrow work. For A, a new discipline, and it is the reason
+`test/realshape/` exists: **a stub is a claim about the world, and the claim
+needs evidence.** Where a suite stubs an engine, the shape it assumes is pinned
+against BYTES CAPTURED FROM A HOST, replayed verbatim. The captures are
+sanitised for names and exact in structure, and the capture commands are
+recorded beside them so they can be refreshed.
+
+It earned its place on the first run: replayed against a captured production
+block, `list-jobs` -- the verb written so the GUI would not show an empty window
+on a busy host -- reported eleven running lines as unexplainable, because it
+read the header with a grammar (`# BEGIN ... -- Source:`) no generator has ever
+written. Four functions in this file and gen-cron.sh itself already read that
+line correctly; I had written a fifth reader rather than looking. See also
+[[feedback_convention_may_already_exist]]: the convention existed, in five
+places, and I checked none of them.
