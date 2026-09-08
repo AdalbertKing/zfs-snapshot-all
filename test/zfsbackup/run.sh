@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -11399,6 +11399,141 @@ else
     bad "showscope: the positive control on the same fixture" "$ss_ok"
 fi
 fi   # --- koniec sekcji showscope ---
+if want gfsshape; then
+
+# ============================================================================
+# gfsshape: THE HOST'S SHAPE, AND THE RELATIONSHIP THAT WOULD HAVE NO RETENTION
+# (2026-09-08). Self-contained; always eligible, also under `--section gfsshape`.
+#
+# Measured on the real lab, pve10, and this is the whole reason the section
+# exists: four relationships created through the one-command path were reported
+# `active` while pruning NOTHING and being monitored by NOTHING. The chain, each
+# link verified on the host:
+#
+#   an ORPHAN [template:profile__d30h24__hourly] left by a removed relationship
+#     -> detect_profile_gfs scans every template in the file -> host reads FLAT
+#     -> the ladder branch is skipped -> MANAGED_PRUNE_SCOPE recorded EMPTY
+#     -> no local [prune:] section -> copies never pruned
+#     -> and a staleness check rides the (scope,pattern) pair prune needed,
+#        so no monitor either.
+#
+# Two changes, and each has its own controls here: the shape is decided only by
+# templates a live section USES (A), and a relationship that would end up with
+# no retention at all is refused instead of written (B).
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+GS="$WORK/gfsshape"; rm -rf "$GS"; mkdir -p "$GS"
+
+# The lab's shape, reduced: a flat orphan nobody references, beside a live ladder.
+cat > "$GS/orphan.conf" <<'GSEOF'
+[defaults]
+	host_label = pve10
+
+[template:profile__d30h24__hourly]
+	send_schedule  = 1 * * * *
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[template:profile__default__standard_hourly]
+	send_schedule = 1 * * * *
+	prefix        = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 25 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:hdd/backups/peer/x]
+	use_template = profile__default__standard_hourly
+
+[prune:hdd/backups/peer]
+	use_template = profile__default__keep_hourly
+	gfs          = yes
+GSEOF
+# Byte-identical except that the flat template is the one a live section USES.
+sed 's|use_template = profile__default__standard_hourly|use_template = profile__d30h24__hourly|' \
+    "$GS/orphan.conf" > "$GS/live-flat.conf"
+
+detect_profile_gfs "$GS/orphan.conf"
+if [ "$PROFILE_GFS" -eq 1 ] && [ -z "${PROFILE_GFS_WHY:-}" ]; then
+    ok "gfsshape: an ORPHAN flat template does not decide the host's shape"
+else
+    bad "gfsshape: an orphan flat template does not decide the shape" \
+        "PROFILE_GFS=$PROFILE_GFS why=${PROFILE_GFS_WHY:-}"
+fi
+# THE CONTROL THAT MAKES IT A DISCRIMINATOR. Same bytes, one reference moved:
+# a flat template a live section USES must still flip the host to flat, or the
+# fix would have silently disabled the guard it was narrowing.
+detect_profile_gfs "$GS/live-flat.conf"
+if [ "$PROFILE_GFS" -eq 0 ] && [ "${PROFILE_GFS_WHY:-}" = "profile__d30h24__hourly" ]; then
+    ok "gfsshape: ...but a REFERENCED one still does, and is named"
+else
+    bad "gfsshape: a referenced flat template flips the shape and is named" \
+        "PROFILE_GFS=$PROFILE_GFS why=${PROFILE_GFS_WHY:-}"
+fi
+detect_profile_gfs "$GS/nie-ma-takiego.conf"
+if [ "$PROFILE_GFS" -eq 1 ]; then
+    ok "gfsshape: an unreadable or fresh config still answers 'ladder' (unchanged)"
+else
+    bad "gfsshape: fresh config answers ladder" "PROFILE_GFS=$PROFILE_GFS"
+fi
+
+# --- B: THE REFUSAL --------------------------------------------------------
+# client_section_plan is driven directly: the caller's environment is what
+# decides, and this pins exactly the combination that produced four
+# retention-less relationships on the lab.
+gs_plan() {   # <is_new> <profile> <config> -> rc, message in $WORK/gs.out
+    ( PROFILE_GFS=0
+      PROFILE_GFS_WHY="profile__d30h24__hourly"
+      PROFILE_ACTIVE="$2"
+      PEER_SAVED_DATASETS=""
+      PEER_SAVED_TARGET="hdd/backups"
+      PEER_SAVED_MODE=""
+      LOAD_LABEL="peer"
+      client_section_plan "$3" proba "$1" ) >"$WORK/gs.out" 2>&1
+}
+
+if ! gs_plan 1 default "$GS/live-flat.conf" && grep -q 'NO RETENTION AT ALL' "$WORK/gs.out"; then
+    ok "gfsshape: a LADDER profile on a FLAT host is refused at CREATE -- not written with no retention"
+else
+    bad "gfsshape: a ladder profile on a flat host is refused" "$(cat "$WORK/gs.out")"
+fi
+if grep -q 'profile__d30h24__hourly' "$WORK/gs.out"; then
+    ok "gfsshape: ...and the refusal NAMES the template that made the host flat"
+else
+    bad "gfsshape: the refusal names the deciding template" "$(cat "$WORK/gs.out")"
+fi
+if grep -q 'migrate-profile' "$WORK/gs.out" && grep -q 'Nothing was changed' "$WORK/gs.out"; then
+    ok "gfsshape: ...names the ways out, and says nothing was changed"
+else
+    bad "gfsshape: the refusal names the ways out" "$(cat "$WORK/gs.out")"
+fi
+
+# CONTROL 1: a FLAT profile on a flat host is the legitimate case and must pass.
+# Without this the refusal could be "always refuse on a flat host".
+if gs_plan 1 d30h24 "$GS/live-flat.conf"; then
+    ok "gfsshape: a FLAT profile on the same flat host is NOT refused -- it prunes inside its tiers"
+else
+    bad "gfsshape: a flat profile on a flat host passes" "$(cat "$WORK/gs.out")"
+fi
+# CONTROL 2: re-activation of an EXISTING relationship must not start dying --
+# REV-20260810-090 requires an installed relationship to keep re-activating.
+if gs_plan 0 default "$GS/live-flat.conf"; then
+    ok "gfsshape: re-activation (is_new=0) is never refused -- an installed relationship keeps working"
+else
+    bad "gfsshape: re-activation is not refused" "$(cat "$WORK/gs.out")"
+fi
+# CONTROL 3: on a LADDER host the ladder profile is the ordinary case.
+if ( PROFILE_GFS=1; PROFILE_ACTIVE=default; PEER_SAVED_DATASETS=""; PEER_SAVED_TARGET="hdd/backups"
+     PEER_SAVED_MODE=""; LOAD_LABEL="peer"; client_section_plan "$GS/orphan.conf" proba 1 ) >"$WORK/gs.out" 2>&1; then
+    ok "gfsshape: on a LADDER host the ladder profile passes, and plans a prune scope"
+else
+    bad "gfsshape: ladder profile on a ladder host passes" "$(cat "$WORK/gs.out")"
+fi
+fi   # --- koniec sekcji gfsshape ---
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

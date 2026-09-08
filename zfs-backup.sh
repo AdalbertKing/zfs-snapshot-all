@@ -2427,16 +2427,58 @@ config_is_frozen_legacy() {   # <file> -> 0 when the frozen pre-GFS family is pr
     ' "$1" 2>/dev/null | grep -q frozen
 }
 
-detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
+# THE HOST'S SHAPE IS DECIDED BY TEMPLATES SOMEBODY USES (2026-09-08).
+#
+# This answers "does this host already run a flat shape whose tiers prune
+# themselves", so that a new relationship does not stack the standard ladder on
+# top of one and prune the same snapshots twice. The question is about LIVE
+# policy -- and the first version asked it of every [template:] in the file,
+# including orphans left behind by relationships that no longer exist.
+#
+# MEASURED ON pve10, 2026-09-08. The config carried
+# [template:profile__d30h24__hourly] from a removed relationship: send_schedule
+# and prune_schedule together, the flat shape. On that evidence the host was
+# declared flat, so for four NEW relationships created from the ladder profile
+# `default` the ladder branch was skipped, MANAGED_PRUNE_SCOPE was recorded
+# EMPTY, no local [prune:] section was written -- and because a staleness check
+# rides the (scope,pattern) pair prune already needed, no monitor either. Four
+# active relationships, copies growing without retention, nothing watching. The
+# fingerprint was in the file: keep_hourly/daily/weekly/monthly emitted and
+# referenced by nothing.
+#
+# So the scan is limited to templates a live [dataset:]/[prune:] section names
+# in its use_template. An orphan is not policy; it is litter.
+#
+# PROFILE_GFS_WHY records the template that decided it, so a refusal downstream
+# can name the reason instead of describing it.
+detect_profile_gfs() {   # <file> -> sets PROFILE_GFS, PROFILE_GFS_WHY
     PROFILE_GFS=1
+    PROFILE_GFS_WHY=""
     [ -r "$1" ] || return 0
-    awk '
-        /^\[template:/ { has_send=0; has_prune=0; intpl=1; next }
-        /^\[/          { intpl=0 }
-        intpl && /^[ 	]*send_schedule[ 	]*=/  { has_send=1 }
-        intpl && /^[ 	]*prune_schedule[ 	]*=/ { has_prune=1 }
-        intpl && has_send && has_prune { print "flat"; exit }
-    ' "$1" 2>/dev/null | grep -q flat && PROFILE_GFS=0
+    local hit
+    hit=$(awk '
+        # pass 1: which templates does a live section actually use
+        FNR == NR {
+            if ($0 ~ /^\[(dataset|prune):/) { insec = 1; next }
+            if ($0 ~ /^\[/)                  { insec = 0 }
+            if (insec && $0 ~ /^[ 	]*use_template[ 	]*=/) {
+                v = $0; sub(/^[^=]*=[ 	]*/, "", v); gsub(/[ 	]/, "", v)
+                n = split(v, a, ",")
+                for (i = 1; i <= n; i++) if (a[i] != "") ref[a[i]] = 1
+            }
+            next
+        }
+        # pass 2: only those templates get a vote
+        /^\[template:/ {
+            name = $0; sub(/^\[template:/, "", name); sub(/\]$/, "", name)
+            used = (name in ref); has_send = 0; has_prune = 0; intpl = 1; next
+        }
+        /^\[/ { intpl = 0 }
+        intpl && used && /^[ 	]*send_schedule[ 	]*=/  { has_send = 1 }
+        intpl && used && /^[ 	]*prune_schedule[ 	]*=/ { has_prune = 1 }
+        intpl && used && has_send && has_prune { print name; exit }
+    ' "$1" "$1" 2>/dev/null)
+    [ -n "$hit" ] && { PROFILE_GFS=0; PROFILE_GFS_WHY="$hit"; }
     return 0
 }
 
@@ -3729,6 +3771,46 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
             load_active_profile
             if ! profile_declares_ladder; then
                 PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0
+            fi
+        fi
+    fi
+
+    # B: A RELATIONSHIP WITH NO RETENTION AT ALL IS REFUSED, NOT WRITTEN.
+    #
+    # Two shapes exist and each carries its own retention: a LADDER profile
+    # prunes from one [prune:] section over the client's subtree, a FLAT profile
+    # prunes inside each tier it sends. The host's shape decides which branch
+    # runs -- and when the host reads FLAT while the relationship's profile
+    # declares a LADDER, neither happens: the ladder branch is skipped because
+    # of the host, and the profile's send tier does not self-prune because it is
+    # a ladder profile. The result is a relationship that copies data forever
+    # and prunes nothing, with no monitor either (a staleness check rides the
+    # pair prune needed).
+    #
+    # Measured on pve10, 2026-09-08: four active relationships in exactly that
+    # state, MANAGED_PRUNE_SCOPE recorded empty, reported `active` throughout.
+    # The cause there was an orphan template and is fixed above; this refusal is
+    # for every OTHER way of reaching the same state -- a host genuinely running
+    # a flat relationship, and a ladder profile asked for beside it.
+    #
+    # Only at CREATE time. An installed relationship must keep re-activating
+    # (REV-20260810-090), and the profile is consulted only when it is readable,
+    # for the same reason.
+    if [ "$is_new" -ne 0 ] && [ "${PROFILE_GFS:-1}" -ne 1 ] \
+       && [ "$PLAN_PRUNE_NEEDS_GEN" -eq 0 ] && [ -n "${PROFILE_ACTIVE:-}" ]; then
+        if profile_validate_file "$(profile_file "$PROFILE_ACTIVE")" "$GENCRON" >/dev/null 2>&1; then
+            load_active_profile
+            if profile_declares_ladder; then
+                die "refusing to create '$name' with NO RETENTION AT ALL.
+
+This host reads as FLAT$([ -n "${PROFILE_GFS_WHY:-}" ] && printf " -- [template:%s] carries both send_schedule and prune_schedule" "$PROFILE_GFS_WHY"), so the standard ladder is not installed on top of it (that would prune the same snapshots twice on the same schedule). But profile '$PROFILE_ACTIVE' is a LADDER profile: its send tier does not prune itself either. The relationship would copy data forever and delete nothing, and nothing would monitor it -- a staleness check is derived per tier wherever a pattern already resolves for pruning.
+
+Three ways out, and this command picks none of them for you:
+  * create this relationship with a FLAT profile, matching the host (--profile=NAME);
+  * migrate the host to the ladder shape first, in one previewed transaction: zfs-backup.sh migrate-profile;
+  * if the flat template is a leftover from a relationship that no longer exists, remove it from the config -- an orphan template no longer decides this, but a REFERENCED one does.
+
+Nothing was changed."
             fi
         fi
     fi
