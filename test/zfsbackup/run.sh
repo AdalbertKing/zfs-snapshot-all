@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -10986,6 +10986,167 @@ case "$lj_stub" in
     *'"host":'*'"jobs":['*'"count":'*'"unreadable":['*']}') ok "listjobs: ...and the document is complete, never half-written" ;;
     *) bad "listjobs: the document is complete after a failed parse" "$lj_stub" ;;
 esac
+
+
+# ============================================================================
+# show-scope: WHAT IS ACTUALLY ON THE DISK (2026-09-08). Self-contained; always
+# eligible, also under `--section showscope`.
+#
+# Screen 2 of the GUI. The engine is stubbed -- what is under test is not
+# whether ZFS lists snapshots correctly, but everything between `zfs list` and
+# the panel: which snapshots belong to which family, what happens to the ones
+# that belong to none, and what a scope that cannot be read is reported as.
+#
+# The last one is the assertion that matters most. "I could not ask" rendered as
+# "there is nothing here" reads, on this screen, as "you have no backups".
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+SS="$WORK/showscope"; rm -rf "$SS"; mkdir -p "$SS/bin"
+
+# A scope carrying THREE populations: two declared families and one nobody here
+# declared -- pvesr's. The foreign one is the reason `other` exists.
+cat > "$SS/bin/zfs" <<'SSEOF'
+#!/bin/sh
+now=$(date +%s)
+case "$*" in
+  *"-t snapshot"*"hdd/dane"*)
+    printf 'hdd/dane@automated_hourly_2026-09-08_06-00-01\t%s\t1048576\n' $((now-3600))
+    printf 'hdd/dane@automated_hourly_2026-09-08_07-00-01\t%s\t2097152\n' $((now-600))
+    printf 'hdd/dane@automated_daily_2026-09-07_01-00-01\t%s\t10485760\n' $((now-100000))
+    printf 'hdd/dane@__replicate_107-0_178719__\t%s\t524288\n' $((now-7200))
+    exit 0 ;;
+  *"-t snapshot"*"hdd/pusty"*) exit 0 ;;
+  *"-t snapshot"*"hdd/niema"*) echo "cannot open 'hdd/niema': dataset does not exist" >&2; exit 1 ;;
+  *get*usedbysnapshots*) echo 13631488; exit 0 ;;
+  *"-t bookmark"*"hdd/dane"*) printf 'hdd/dane#automated_hourly_2026-09-01\n'; exit 0 ;;
+esac
+exit 0
+SSEOF
+chmod +x "$SS/bin/zfs"
+
+ss_run() {   # <args...> -> $WORK/ss.out, returns rc
+    ( export PATH="$SS/bin:$PATH"
+      cmd_show_scope "$@" ) >"$WORK/ss.out" 2>&1
+}
+
+ss_run hdd/dane --pattern=automated_hourly --pattern=automated_daily --json; ss_rc=$?
+ss_got="$(cat "$WORK/ss.out")"
+
+if [ "$ss_rc" -eq 0 ]; then
+    ok "showscope: a readable scope exits 0"
+else
+    bad "showscope: a readable scope exits 0" "rc=$ss_rc: $ss_got"
+fi
+
+# THE FAMILY RULE IS THE ENGINE'S: a literal prefix. Two hourly snapshots, one
+# daily -- and the counts must ADD UP to the total, which is what proves the
+# buckets are disjoint rather than merely plausible.
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_hourly","count":2'; then
+    ok "showscope: a family is counted by literal prefix, as check-snap-age.sh matches it"
+else
+    bad "showscope: the hourly family is counted by prefix" "$ss_got"
+fi
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_daily","count":1'; then
+    ok "showscope: ...and a second family does not swallow the first"
+else
+    bad "showscope: the daily family is counted separately" "$ss_got"
+fi
+# POPULATION CONTROL: 2 + 1 + 1 (other) = 4. A reader that dropped what it did
+# not recognise would still satisfy both assertions above.
+if printf '%s' "$ss_got" | grep -q '"total_snapshots":4'; then
+    ok "showscope: every snapshot on the scope is accounted for (2 + 1 + 1 = 4)"
+else
+    bad "showscope: the buckets add up to the total" "$ss_got"
+fi
+
+# WHAT NOBODY DECLARED IS STILL REPORTED. pvesr's snapshot belongs to no
+# requested family; hiding it is how a full pool becomes a mystery.
+if printf '%s' "$ss_got" | grep -q '"other":{"pattern":"","count":1,"bytes":524288,"newest":"__replicate_107-0_178719__"'; then
+    ok "showscope: a snapshot matching no requested family lands in 'other', named"
+else
+    bad "showscope: the foreign family lands in 'other'" "$ss_got"
+fi
+
+# BYTES ARE TWO DIFFERENT QUESTIONS and both are answered: what a family costs
+# to keep (the sum of its snapshots' `used`) and what the scope's snapshots cost
+# in total (the dataset's usedbysnapshots property).
+if printf '%s' "$ss_got" | grep -q '"pattern":"automated_hourly","count":2,"bytes":3145728' \
+   && printf '%s' "$ss_got" | grep -q '"used_by_snapshots":13631488'; then
+    ok "showscope: per-family bytes and the scope's usedbysnapshots are both reported"
+else
+    bad "showscope: both byte answers are reported" "$ss_got"
+fi
+if printf '%s' "$ss_got" | grep -q '"bookmarks":1'; then
+    ok "showscope: bookmarks are counted -- delsnaps -B prunes them and they outlive snapshots"
+else
+    bad "showscope: bookmarks are counted" "$ss_got"
+fi
+
+# AGE IS A NUMBER, not a formatted string: the front end formats, the reader
+# reports. The newest hourly is 600s old in the stub; allow the seconds that
+# pass while the suite runs.
+ss_age=$(printf '%s' "$ss_got" | sed -n 's/.*"newest":"automated_hourly_2026-09-08_07-00-01","newest_epoch":[0-9]*,"newest_age_seconds":\([0-9]*\).*/\1/p')
+if [ -n "$ss_age" ] && [ "$ss_age" -ge 600 ] && [ "$ss_age" -lt 700 ]; then
+    ok "showscope: the newest snapshot's age is a number of seconds ($ss_age)"
+else
+    bad "showscope: the newest age is a plausible number of seconds" "got '$ss_age' from $ss_got"
+fi
+
+# THE ASSERTION THIS VERB EXISTS FOR. A scope that cannot be listed is NOT an
+# empty scope, and on a detail panel the difference reads as "you have no
+# backups".
+ss_run hdd/niema --pattern=automated_hourly --json; ss_rc=$?
+ss_gone="$(cat "$WORK/ss.out")"
+if [ "$ss_rc" -ne 0 ]; then
+    ok "showscope: a scope that cannot be listed exits NONZERO"
+else
+    bad "showscope: an unlistable scope exits nonzero" "rc=$ss_rc: $ss_gone"
+fi
+if printf '%s' "$ss_gone" | grep -q '"exists":false' \
+   && printf '%s' "$ss_gone" | grep -q 'NOT an empty scope'; then
+    ok "showscope: ...and says so in the document, not only in the exit status"
+else
+    bad "showscope: the unreadable document says what it is" "$ss_gone"
+fi
+# THE SHAPE SURVIVES THE ERROR. A front end reading other.count must not have to
+# test for null first -- that is how an error page becomes a crashed page.
+if printf '%s' "$ss_gone" | grep -q '"other":{"pattern":"","count":0'; then
+    ok "showscope: ...and 'other' keeps its shape on the error document"
+else
+    bad "showscope: 'other' keeps its shape on the error document" "$ss_gone"
+fi
+
+# AN EMPTY SCOPE IS A DIFFERENT ANSWER FROM AN UNREADABLE ONE, and it is the
+# discriminator for the assertion above: without it, "exists:false on failure"
+# could be produced by a reader that calls everything empty.
+ss_run hdd/pusty --pattern=automated_hourly --json; ss_rc=$?
+ss_empty="$(cat "$WORK/ss.out")"
+if [ "$ss_rc" -eq 0 ] && printf '%s' "$ss_empty" | grep -q '"exists":true' \
+   && printf '%s' "$ss_empty" | grep -q '"total_snapshots":0'; then
+    ok "showscope: a scope that IS readable and holds nothing is exists:true with zero -- the discriminator"
+else
+    bad "showscope: an empty readable scope is not an unreadable one" "rc=$ss_rc: $ss_empty"
+fi
+
+# AN EMPTY PATTERN IS REFUSED, for the reason check-snap-age.sh refuses one: it
+# matches every snapshot on the scope, including somebody else's, and then
+# reports a stranger's age as this family's.
+if ! ss_run hdd/dane --pattern= --json && grep -q 'EMPTY --pattern' "$WORK/ss.out"; then
+    ok "showscope: an empty --pattern is refused, naming why"
+else
+    bad "showscope: an empty --pattern is refused" "$(cat "$WORK/ss.out")"
+fi
+
+# THE TEXT FORM, for the operator with a terminal and no front end.
+ss_run hdd/dane --pattern=automated_hourly --pattern=automated_daily
+ss_txt="$(cat "$WORK/ss.out")"
+if printf '%s' "$ss_txt" | grep -qE '^automated_hourly +2 +3145728' \
+   && printf '%s' "$ss_txt" | grep -q '(pozostale)'; then
+    ok "showscope: the text form shows the same families, and names the leftovers"
+else
+    bad "showscope: the text form shows families and leftovers" "$ss_txt"
+fi
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
