@@ -78,7 +78,25 @@
   Na kolektorze z kilkoma relacjami do jednego źródła reaktywuj najpierw tę,
   która posiada `[prune:TARGET/<peer>]`.
 
-  Sekcja suity `gfsshape`: **16 asercji**. Kontrola negatywna wobec kodu sprzed
+
+  **Strażnik, który tę naprawę najpierw zablokował — i słusznie.**
+  `assert_target_block_not_clobbered` odmówił instalacji („2 job line(s) would
+  be DELETED"), bo zwężenie drabiny **naprawdę** zabiera pokrycie: rodzeństwo
+  ciągnące z tego samego źródła przestaje być przez tę linię prunowane. Cztery
+  istniejące wyjątki tego strażnika dowodzą „zadanie nadal tu jest" i żaden
+  nie potrafi tego dowieść, bo pokrycie faktycznie maleje. Dołożony **piąty**,
+  zabramkowany na trzech faktach naraz: ten przebieg sam zaplanował migrację
+  (`PRUNE_SCOPE_MIGRATED` ustawiane dopiero po realnym usunięciu sekcji i
+  zerowane przy każdym wywołaniu), argument datasetu utraconej linii to
+  **dokładnie** ten zakres, a wśród nowych linii jest ta sama maszyna dla tej
+  samej relacji (`-L`) na ścieżce **pod** nim. Tożsamością jest etykieta pary
+  plus silnik, nie cała linia — zakres i tytuł powiadomienia przesuwają się tu
+  razem, bo jedna drabina na lądowisko potrafi powiedzieć, **które** lądowisko
+  krzyknęło. Gdy wyjątek zadziała, mówi wprost, co przestało być pokryte i że
+  każde rodzeństwo trzeba reaktywować. Drabina, która po prostu zniknęła,
+  zwężona gdzie indziej albo należąca do innej relacji — dalej blokuje
+  instalację; wszystkie trzy mają kontrole.
+  Sekcja suity `gfsshape`: **20 asercji**. Kontrola negatywna wobec kodu sprzed
   poprawki zakresu: **4 FAIL**, przy trzech kontrolach, które przechodzą po obu
   stronach (stary zakres naprawdę nachodził; cudza drabina nie jest ruszana;
   `sync` nietknięty).
