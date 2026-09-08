@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 42d17ea581496e83 -->
+<!-- status-covers-digest: 03c749093fd58a6d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -76,6 +76,42 @@
   jako ryzyko**: `list-profiles --json` mówi `valid` z dwóch pierwszych bramek
   (PR #352 właśnie zdjął z niego render z powodu kosztu); po tej zmianie plik
   odrzucany przez generator trafia do katalogu operatora już tylko ręcznie.
+
+- **`list-jobs` — czym ekran główny GUI ma być karmiony (2026-09-08).** Decyzja
+  właściciela po pomiarze: *„czyta co jest"*.
+  - **Pomiar, który wymusił ten czasownik.** `status --json` wypisuje REKORDY
+    RELACJI, a 2026-09-08 flota nie miała ani jednego: `clients/` puste na pve1,
+    pve2 i pve10, podczas gdy konto delegowane na pve2 niosło blok z
+    **jedenastoma** liniami roboczymi z `jobs.pve2.v4.conf`. Ekran karmiony
+    rekordami byłby **pustym oknem na hoście robiącym jedenaście zadań**.
+    `monitor --json` widzi więcej, ale tylko zakresy MONITOROWANE — trzy z tych
+    jedenastu.
+  - **Skąd czyta.** Nie z linii crona: parsowanie linii znaczy przepisanie tutaj
+    gramatyki opcji każdego silnika, a pomyłka w tym nie pada głośno — przesuwa
+    argumenty pozycyjne i pokazuje pewny siebie, zły dataset. Zainstalowany blok
+    sam nazywa swoje źródło w nagłówku `# Source:`, a CONFIG v4 jest deklaracją,
+    którą gen-cron renderuje. Więc: blok mówi KTÓRY config, config mówi CO.
+  - **Kierunek jest wyprowadzony z kontraktu configu**, nie zgadnięty — gen-cron
+    pisze to we własnym nagłówku (`dst=push, src=pull`) i odmawia sekcji, która
+    rozstrzygnie oba: `dst` z hostem → **push**, `dst` bez hosta → **kopia na
+    ten sam host** (realny kształt pve2), `src` → **pull**, brak obu → **tylko
+    migawka**. Sekcja `[prune:]` to **porządki**, nie transfer bez celu.
+  - **Dowód na produkcji, bez dotykania hosta:** prawdziwy `jobs.pve2.v4.conf`
+    ściągnięty do kopii roboczej daje **11 zadań** — 4 wysyłki (wszystkie
+    lokalne) i 7 sekcji porządkowych.
+  - **Dwie rzeczy wychwycone przez uruchomienie, nie przez czytanie kodu:**
+    konto bez zainstalowanego bloku dawało wiersz „blok bez czytelnego configu"
+    (`cron_read` traktuje „no crontab" jako PUSTY crontab — poprawnie), czyli
+    czerwony wiersz na każdym normalnym hoście; oraz kolumna rodziny mieszała
+    `prefix` z `pattern`, a te różnią się końcowym podkreśleniem.
+  - **Kontrakt:** `count` == długość `jobs`, a blok, którego configu nie da się
+    otworzyć, ląduje w osobnej tablicy `unreadable` — front end iterujący `jobs`
+    ma prawo ufać, że każdy element JEST zadaniem. `lines_in_block` obok `count`
+    to **wskaźnik, nie równość**: gen-cron scala zakresy prune na jedną linię i
+    emituje linie monitora z progów szablonu.
+  - Rozstrzyganie pól jest **jednopoziomowe** (sekcja → szablon szczebla →
+    `[defaults]`) i tak jest napisane; `show-config` zostaje autorytetem
+    co do bajtu.
 
 - **`list-profiles`: 7,5 s → 0,73 s (2026-09-07).** Polecenie właściciela po labie.
   **Zgadłem dwa razy źle, zanim zmierzyłem**: najpierw obstawiłem uruchomienia

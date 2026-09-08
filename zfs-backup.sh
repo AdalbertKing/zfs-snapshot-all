@@ -487,6 +487,20 @@ Inspection / teardown:
                                     with the reason in words, never skipped and never
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
+  zfs-backup.sh list-jobs [--json]
+                                    What THIS host actually does, one row per
+                                    installed job, with the side of the relationship
+                                    it is on: dst=push, src=pull, a local dst is a
+                                    copy to itself, neither is snapshot-only. Reads
+                                    the config the installed block names in its own
+                                    `# Source:` header rather than parsing the cron
+                                    line, so no engine's option grammar is copied
+                                    here. `lines_in_block` is reported beside `count`
+                                    as an INDICATOR, not an equality: gen-cron merges
+                                    prune scopes onto one line and emits monitor lines
+                                    from template thresholds. Field resolution is
+                                    one level -- section, tier template, [defaults] --
+                                    and show-config remains the byte-exact authority.
   zfs-backup.sh save-profile --from=NAZWA --as=NAZWA2
                                     [--tier=SZCZEBEL --pole=wartosc ...]
                                     [--description=TEKST] [--force]
@@ -10669,6 +10683,282 @@ cmd_monitor() {
     case "$worst" in OK) return 0 ;; WARNING) return 1 ;; CRITICAL) return 2 ;; *) return 3 ;; esac
 }
 
+
+# ------------------------------------------------------------------------------
+# list-jobs -- WHAT THIS HOST ACTUALLY DOES, AND WHICH SIDE OF EACH RELATIONSHIP
+#              IT IS ON
+# ------------------------------------------------------------------------------
+# Owner, 2026-09-08, deciding screen 1 of the GUI: "czyta co jest".
+#
+# THE MEASUREMENT THAT FORCED THIS VERB. `status --json` lists RELATIONSHIP
+# RECORDS, and on 2026-09-08 the estate had none: /etc/zfs-snapshot-all/clients
+# was empty on pve1, pve2 and pve10, while pve2's delegated account carried a
+# managed block with ELEVEN working lines built from jobs.pve2.v4.conf. A main
+# screen fed by records would show an empty window on a host running eleven
+# jobs. `monitor --json` sees more -- but only the MONITORED scopes, three of
+# those eleven.
+#
+# So this reader answers the question the operator actually opens the window
+# with: what does THIS host do, with whom, and in which direction.
+#
+# WHERE IT READS FROM, AND WHY NOT THE CRON LINE ITSELF. The obvious source is
+# the installed line. Parsing it means re-implementing each engine's option
+# grammar here -- which flags take a value -- and getting that wrong does not
+# fail loudly: it shifts the positionals and reports a confident, wrong dataset.
+# A second copy of snapsend.sh's grammar is exactly the shape test/deps.conf's
+# contracts exist to kill.
+#
+# The installed block names its own source in its header (`# Source: <path>`),
+# and CONFIG v4 is the declarative truth that gen-cron renders. So this reads
+# the block to learn WHICH config is installed, and the config to learn WHAT it
+# says. The block is still counted, and `lines_in_block` is reported beside
+# `count` -- but they are two DIFFERENT measurements and equality is not the
+# claim. Measured on pve2 2026-09-08: an eleven-line block beside a config
+# declaring eleven jobs, whose composition does NOT correspond one to one --
+# gen-cron merges several prune scopes onto one delsnaps line, and emits the
+# monitor lines from template thresholds rather than from sections of their
+# own. The pair is an indicator for an operator (a config declaring nothing
+# beside a block running lines is worth opening), never an assertion this
+# reader makes on its own.
+#
+# DIRECTION IS DERIVED FROM THE CONFIG'S OWN CONTRACT, not guessed:
+# gen-cron.sh's header states it -- "dst=push, src=pull" -- and refuses a
+# section that resolves both. So:
+#
+#   dst with host:   -> push     (this host SENDS to a peer)
+#   dst without host -> local    (this host copies to itself; pve2's shape)
+#   src              -> pull     (this host RECEIVES from a peer)
+#   neither          -> snapshot (this host only stamps snapshots, sends nothing)
+#
+# RESOLUTION IS ONE LEVEL AND SAYS SO. A field is read from the section, then
+# from the tier template, then from [defaults] -- gen-cron's documented order.
+# This reader does NOT reproduce the generator's full precedence machinery; when
+# the answer matters to the byte, `show-config` and the generator itself are the
+# authorities. What this gives a front end is the shape of the row, correctly
+# attributed.
+
+jobs_block_config() {   # <account> -> the config path the installed block names, or empty
+    local acct="$1" blk src
+    blk=$(mktemp) || die "mktemp failed"
+    if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 1; fi
+    src=$(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk" \
+          | sed -n 's/^# BEGIN zfs-backup-managed[^-]*-- Source: \(.*\)$/\1/p' | head -1)
+    rm -f "$blk"
+    printf '%s' "$src"
+}
+
+jobs_block_worklines() {   # <account> -> how many ENGINE lines the installed block carries
+    local acct="$1" blk n
+    blk=$(mktemp) || die "mktemp failed"
+    if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; printf 0; return 0; fi
+    n=$(sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk" \
+        | grep -cE 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh')
+    rm -f "$blk"
+    printf '%s' "$n"
+}
+
+# The one-level lookup, in gen-cron's documented order: the section's own
+# tier-specific field, the section's plain field, the tier template, [defaults].
+jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
+    local k="$1" s="$2" t="$3" f="$4"
+    local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    v="${JOB_F["$k:$s|$f"]:-}";            [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    printf '%s' "${JOB_F["defaults:|$f"]:-}"
+}
+
+# push / pull / local / snapshot, plus the peer when there is one. `dst` and
+# `src` are mutually exclusive by the generator's own refusal, so this reports
+# what it finds and never has to break a tie.
+jobs_direction() {   # <dst> <src> -> "<direction>\001<peer>\001<other end>"
+    local dst="$1" src="$2" dir peer="" other=""
+    if [ -n "$src" ]; then
+        dir=pull; other="$src"
+        case "$src" in *:*) peer="${src%%:*}"; peer="${peer##*@}" ;; esac
+    elif [ -n "$dst" ]; then
+        other="$dst"
+        case "$dst" in
+            *:*) dir=push; peer="${dst%%:*}"; peer="${peer##*@}" ;;
+            *)   dir=local ;;
+        esac
+    else
+        dir=snapshot
+    fi
+    printf '%s\001%s\001%s' "$dir" "$peer" "$other"
+}
+
+cmd_list_jobs() {
+    local as_json=0 a
+    for a in "$@"; do
+        case "$a" in
+            --json) as_json=1 ;;
+            -*)     die "list-jobs: unknown option '$a' (only --json)" ;;
+            *)      die "list-jobs: takes no positional arguments" ;;
+        esac
+    done
+
+    local first=1 seen=0 unreadable=""
+    [ "$as_json" -eq 1 ] && printf '{"host":"%s","jobs":[' "$(json_escape "$(hostname -s 2>/dev/null)")"
+    [ "$as_json" -eq 1 ] || printf '%-10s %-8s %-9s %-28s %-16s %s\n' \
+        KONTO KIERUNEK SZCZEBEL ZAKRES RODZINA HARMONOGRAM
+
+    local acct cfg nlines
+    while IFS= read -r acct; do
+        [ -n "$acct" ] || continue
+        cfg=$(jobs_block_config "$acct") || continue
+        nlines=$(jobs_block_worklines "$acct")
+        # AN ACCOUNT WITH NOTHING INSTALLED IS NOT A BROKEN ONE. cron_read
+        # treats "no crontab for X" as an empty crontab (correctly -- an
+        # unreadable crontab is a different thing), so every candidate account
+        # that simply has no cron reaches here with no header and no lines.
+        # Reporting those as "block without a readable config" would put a red
+        # row on every ordinary host for accounts that were never scheduled.
+        [ -z "$cfg" ] && [ "$nlines" -eq 0 ] && continue
+        [ -n "$cfg" ] && [ -f "$cfg" ] || {
+            # A block whose config cannot be read is REPORTED, not skipped: the
+            # host is running lines this reader cannot explain, and a window
+            # that showed nothing here would be describing a quiet host.
+            #
+            # It goes in its OWN array, not among the jobs. A front end iterating
+            # `jobs` must be able to trust that every element IS a job and that
+            # `count` is its length; mixing a diagnostic record in there makes the
+            # reader test every element before using it, which is how a field ends
+            # up read off the wrong kind of object.
+            unreadable="$unreadable${unreadable:+,}$(
+                printf '{"account":"%s"' "$(json_escape "$acct")"
+                jsonw_field config "$cfg"
+                printf ',"lines_in_block":%s' "$nlines"
+                jsonw_text error "the installed block names a config this reader cannot open -- the lines are running, their declaration is not readable from here"
+                printf '}')"
+            [ "$as_json" -eq 1 ] || printf '%-10s %s
+' "$acct"                 "BLOK BEZ CZYTELNEGO CONFIGU (${cfg:-brak naglowka Source}), linii w bloku: $nlines"
+            continue
+        }
+
+        unset JOB_F
+        declare -gA JOB_F=()
+        local -a secs=() kinds=()
+        local idx kind name key val
+        while IFS=$'\001' read -r idx kind name key val; do
+            [ -n "$idx" ] || continue
+            case "$key" in
+                @section)
+                    case "$kind" in
+                        dataset|prune) secs+=("$name"); kinds+=("$kind") ;;
+                    esac
+                    continue ;;
+                @managed_by) continue ;;
+            esac
+            JOB_F["$kind:$name|$key"]="$val"
+        done < <(config_section_dump "$cfg")
+
+        local i=0 nsec=${#secs[@]}
+        while [ "$i" -lt "$nsec" ]; do
+            local sec="${secs[$i]}" sk="${kinds[$i]}"
+            i=$((i + 1))
+            local tiers="${JOB_F["$sk:$sec|use_template"]:-}"
+            # A section with no template renders nothing; saying so is the
+            # answer, not skipping it.
+            [ -n "$tiers" ] || tiers=""
+            local tier
+            for tier in ${tiers//,/ }; do
+                [ -n "$tier" ] || continue
+                seen=$((seen + 1))
+                local dst src dirinfo dir peer other
+                dst=$(jobs_field "$sk" "$sec" "$tier" dst)
+                src=$(jobs_field "$sk" "$sec" "$tier" src)
+                dirinfo=$(jobs_direction "$dst" "$src")
+                dir="${dirinfo%%$'\001'*}"
+                # A [prune:] section is HOUSEKEEPING, not a transfer: it carries
+                # neither dst nor src by construction, and reporting that as
+                # "snapshot-only" would describe a retention line as if it
+                # stamped snapshots.
+                [ "$sk" = prune ] && dir=prune
+                peer="${dirinfo#*$'\001'}"; peer="${peer%%$'\001'*}"
+                other="${dirinfo##*$'\001'}"
+                # A PULL section names the remote in its own header, so the
+                # scope path is not the whole story -- report both.
+                case "$sec" in *:*) [ "$dir" = pull ] || { peer="${sec%%:*}"; peer="${peer##*@}"; dir=pull; other="$sec"; } ;; esac
+                local sched
+                if [ "$sk" = prune ]; then
+                    sched=$(jobs_field "$sk" "$sec" "$tier" prune_schedule)
+                else
+                    sched=$(jobs_field "$sk" "$sec" "$tier" send_schedule)
+                fi
+                local pattern prefix label rec qui gfs warn crit keep retain
+                pattern=$(jobs_field "$sk" "$sec" "$tier" pattern)
+                prefix=$(jobs_field  "$sk" "$sec" "$tier" prefix)
+                label=$(jobs_field   "$sk" "$sec" "$tier" pair_label)
+                rec=$(jobs_field     "$sk" "$sec" "$tier" recursive)
+                qui=$(jobs_field     "$sk" "$sec" "$tier" quiesce)
+                gfs=$(jobs_field     "$sk" "$sec" "$tier" gfs)
+                warn=$(jobs_field    "$sk" "$sec" "$tier" monitor_warn)
+                crit=$(jobs_field    "$sk" "$sec" "$tier" monitor_crit)
+                keep=$(jobs_field    "$sk" "$sec" "$tier" keep)
+                retain=$(jobs_field  "$sk" "$sec" "$tier" retain)
+
+                if [ "$as_json" -eq 1 ]; then
+                    [ "$first" -eq 1 ] || printf ','
+                    first=0
+                    printf '{"account":"%s"' "$(json_escape "$acct")"
+                    jsonw_field config       "$cfg"
+                    jsonw_field section_kind "$sk"
+                    jsonw_field scope        "$sec"
+                    jsonw_field tier         "$tier"
+                    jsonw_field direction    "$dir"
+                    jsonw_field peer         "$peer"
+                    jsonw_field other_end    "$other"
+                    jsonw_field label        "$label"
+                    jsonw_field schedule     "$sched"
+                    jsonw_field pattern      "$pattern"
+                    jsonw_field prefix       "$prefix"
+                    jsonw_field keep         "$keep"
+                    jsonw_field retain       "$retain"
+                    jsonw_field gfs          "$gfs"
+                    jsonw_field quiesce      "$qui"
+                    jsonw_field monitor_warn "$warn"
+                    jsonw_field monitor_crit "$crit"
+                    printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
+                    printf ',"readable":true,"lines_in_block":%s' "$nlines"
+                    printf '}'
+                else
+                    # THE FAMILY IS NOT ONE FIELD. A transfer line stamps with
+                    # `prefix`; a prune line matches with `pattern`, and the two
+                    # differ by a trailing underscore. Showing whichever happened
+                    # to be set would print a prefix under a column the operator
+                    # reads as a pattern.
+                    local family
+                    if [ "$sk" = prune ]; then family="${pattern:-?}"; else family="${prefix:-?}"; fi
+                    local arrow
+                    case "$dir" in
+                        push)     arrow="-> $peer" ;;
+                        pull)     arrow="<- $peer" ;;
+                        local)    arrow="-> tutaj" ;;
+                        prune)    arrow="porzadki" ;;
+                        *)        arrow="(migawka)" ;;
+                    esac
+                    printf '%-10s %-8s %-9s %-28s %-16s %s\n' \
+                        "$acct" "$arrow" "$tier" "$sec" "$family" "${sched:-?}"
+                fi
+            done
+        done
+    done < <(cron_known_accounts)
+
+    if [ "$as_json" -eq 1 ]; then
+        printf '],"count":%s,"unreadable":[%s]}
+' "$seen" "$unreadable"
+    else
+        echo
+        if [ "$seen" -eq 0 ]; then
+            echo "Zero zadan wyprowadzonych z zainstalowanych blokow."
+            echo "To nie znaczy 'host nic nie robi' -- znaczy, ze ten host nie ma"
+            echo "zainstalowanego bloku zfs-backup-managed albo jego config jest nieczytelny."
+        else
+            echo "Zadan: $seen"
+        fi
+    fi
+    return 0
+}
 # ------------------------------------------------------------------------------
 # save-profile -- OPEN A TEMPLATE, CHANGE IT, SAVE IT AS YOUR OWN
 # ------------------------------------------------------------------------------
@@ -13742,6 +14032,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         list-profiles)    shift; cmd_list_profiles "$@" ;;
         save-profile)     shift; cmd_save_profile "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
+        list-jobs)        shift; cmd_list_jobs "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;

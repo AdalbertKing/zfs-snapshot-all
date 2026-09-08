@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs)" >&2; exit 2 ;;
 esac
 
 # Everything from here to the retention group is full-suite-only: skipped under a
@@ -10636,6 +10636,263 @@ if cmp -s "$PF/cron.conf" "$PF/cron.orig"; then
     ok "saveprof: the installed config is byte-identical after the gate-3 cases too"
 else
     bad "saveprof: the installed config is byte-identical after the gate-3 cases too" "$(diff "$PF/cron.orig" "$PF/cron.conf")"
+fi
+
+
+# ============================================================================
+# list-jobs: WHAT THIS HOST DOES, AND WHICH SIDE OF THE RELATIONSHIP IT IS ON
+# (2026-09-08). Self-contained; always eligible, also under `--section listjobs`.
+#
+# The verb exists because of a measurement, and the suite is built around the
+# same one: on 2026-09-08 the estate had ZERO relationship records while pve2's
+# delegated account ran an eleven-line managed block. So the fixture below has
+# no records at all -- the account is discovered from the cron spool, exactly as
+# it is on the fleet -- and every assertion is about deriving rows from the
+# CONFIG THE BLOCK NAMES, never from a record.
+#
+# The four directions are the point of the verb. `dst` with a host is a push,
+# `dst` without one is a copy to this same host (pve2's real shape), `src` is a
+# pull, and a section with neither only stamps snapshots. Getting any of those
+# backwards puts the operator on the wrong side of their own backup.
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+LJ="$WORK/listjobs"; rm -rf "$LJ"; mkdir -p "$LJ/bin" "$LJ/spool" "$LJ/clients" "$LJ/peers" "$LJ/rel"
+
+cat > "$LJ/jobs.conf" <<'LJEOF'
+[defaults]
+	host_label = pve2
+	repo_dir   = /home/zfsbackup/zfs-snapshot-all
+
+[template:hourly]
+	send_schedule  = 5 * * * *
+	prune_schedule = 25 * * * *
+	prefix         = automated_hourly_
+	pattern        = automated_hourly
+	keep           = 24
+	monitor_warn   = 90m
+	monitor_crit   = 150m
+
+[template:daily]
+	send_schedule  = 0 4 * * *
+	prune_schedule = 41 0 * * *
+	prefix         = automated_daily_
+	pattern        = automated_daily
+	keep           = 7
+	quiesce        = auto,degrade
+
+[dataset:rpool/ROOT/pve-1]
+	use_template = daily
+	dst          = hdd/backups/pve2
+
+[dataset:hdd/vm-disks/subvol-107]
+	use_template = hourly
+	dst          = pve9:hdd/backups
+	pair_label   = pve9
+
+[dataset:pve1:rpool/data/vm-101]
+	use_template = hourly
+	src          = pve1:rpool/data/vm-101
+	pair_label   = pve1
+
+[dataset:rpool/data/vm-999]
+	use_template = daily
+	send_schedule = 17 3 * * *
+
+[prune:hdd/backups/pve2]
+	use_template = hourly
+	recursive    = yes
+LJEOF
+
+# The delegated account carries the block. NO relationship record exists, on
+# purpose: this is the estate's real shape, and a reader that needed a record
+# would report an empty host here -- which is the defect this verb was written
+# for. The account is found through the cron spool alone.
+: > "$LJ/spool/zfsbackup"
+cat > "$LJ/crontab.zfsbackup" <<LJEOF
+# BEGIN zfs-backup-managed -- Source: $LJ/jobs.conf
+5 * * * * /r/zfs-job.sh "t" -- /r/snapsend.sh -m "automated_hourly_" "a" "b"
+0 4 * * * /r/zfs-job.sh "t" -- /r/snapsend.sh -m "automated_daily_" "c" "d"
+25 * * * * /r/zfs-job.sh "t" -- /r/delsnaps.sh -R "hdd/backups/pve2" "automated_hourly" -H24
+# END zfs-backup-managed
+LJEOF
+# A SECOND account whose block names a config that is not there. Its lines are
+# running; their declaration cannot be read from here. That is a different fact
+# from "this account has nothing", and the two must not look alike.
+: > "$LJ/spool/brokenacct"
+cat > "$LJ/crontab.brokenacct" <<LJEOF
+# BEGIN zfs-backup-managed -- Source: $LJ/nie-ma-takiego.conf
+9 9 * * * /r/zfs-job.sh "t" -- /r/snapsend.sh "e" "f"
+# END zfs-backup-managed
+LJEOF
+# A THIRD account with a crontab that has no managed block at all, plus a line
+# outside any block. Neither may be claimed.
+: > "$LJ/spool/obcy"
+cat > "$LJ/crontab.obcy" <<'LJEOF'
+7 7 * * * /opt/theirs/snapsend.sh "ich/dataset" "ich:cel"
+LJEOF
+
+cat > "$LJ/bin/crontab" <<'LJEOF'
+#!/bin/sh
+who=root
+[ "$1" = "-u" ] && who="$2"
+if [ -f "$LJX/crontab.$who" ]; then cat "$LJX/crontab.$who"; else echo "no crontab for $who" >&2; exit 1; fi
+LJEOF
+chmod +x "$LJ/bin/crontab"
+
+lj_run() {   # <args...> -> output in $WORK/lj.out, returns the rc
+    ( export PATH="$LJ/bin:$PATH" LJX="$LJ"
+      CLIENTS_DIR="$LJ/clients"
+      RELATIONSHIPS_DIR="$LJ/rel"
+      PEER_STATE_DIR="$LJ/peers"
+      CRON_SPOOL_DIRS=("$LJ/spool")
+      cmd_list_jobs "$@" ) >"$WORK/lj.out" 2>&1
+}
+
+lj_run --json; lj_rc=$?
+lj_got="$(cat "$WORK/lj.out")"
+
+if [ "$lj_rc" -eq 0 ]; then
+    ok "listjobs: --json exits 0 -- this verb reports, it does not judge the host"
+else
+    bad "listjobs: --json exits 0" "rc=$lj_rc: $lj_got"
+fi
+
+# THE READER IS FED BY NO RECORD AT ALL. If this ever starts depending on one,
+# every production host in this fleet goes blank and the window is a lie.
+if [ -z "$(ls "$LJ/clients" 2>/dev/null)" ]; then
+    ok "listjobs: the fixture has ZERO relationship records -- the estate's real shape"
+else
+    bad "listjobs: the fixture has ZERO relationship records" "$(ls "$LJ/clients")"
+fi
+
+# POPULATION CONTROL. Five sections, five jobs; a reader that dropped what it
+# did not understand would still satisfy every content assertion below.
+lj_n=$(printf '%s' "$lj_got" | grep -o '"scope":' | wc -l)
+if [ "$lj_n" -eq 5 ]; then
+    ok "listjobs: all five declared jobs are reported (population control)"
+else
+    bad "listjobs: all five declared jobs are reported" "policzono $lj_n: $lj_got"
+fi
+
+# THE CONTRACT A FRONT END LEANS ON: count is the length of jobs, and nothing
+# that is not a job is inside that array.
+case "$lj_got" in
+    *'"count":5'*) ok "listjobs: count matches the number of job rows" ;;
+    *) bad "listjobs: count matches the number of job rows" "$lj_got" ;;
+esac
+
+# --- THE FOUR DIRECTIONS ----------------------------------------------------
+# Each one asserted with its scope, so a row cannot pass by carrying the right
+# word about the wrong dataset.
+if printf '%s' "$lj_got" | grep -q '"scope":"rpool/ROOT/pve-1","tier":"daily","direction":"local"'; then
+    ok "listjobs: a dst WITHOUT a host is a copy to this same host (pve2's real shape)"
+else
+    bad "listjobs: a dst without a host is local" "$lj_got"
+fi
+if printf '%s' "$lj_got" | grep -q '"scope":"hdd/vm-disks/subvol-107","tier":"hourly","direction":"push","peer":"pve9"'; then
+    ok "listjobs: a dst WITH a host is a push, and the peer is named"
+else
+    bad "listjobs: a dst with a host is a push naming the peer" "$lj_got"
+fi
+if printf '%s' "$lj_got" | grep -q '"direction":"pull","peer":"pve1"'; then
+    ok "listjobs: a src is a pull, and the peer is named"
+else
+    bad "listjobs: a src is a pull naming the peer" "$lj_got"
+fi
+if printf '%s' "$lj_got" | grep -q '"scope":"rpool/data/vm-999","tier":"daily","direction":"snapshot"'; then
+    ok "listjobs: a section with neither dst nor src only stamps snapshots, and says so"
+else
+    bad "listjobs: a section with neither dst nor src is snapshot-only" "$lj_got"
+fi
+if printf '%s' "$lj_got" | grep -q '"scope":"hdd/backups/pve2","tier":"hourly","direction":"prune"'; then
+    ok "listjobs: a [prune:] section is HOUSEKEEPING, not a transfer with no destination"
+else
+    bad "listjobs: a [prune:] section reports as prune" "$lj_got"
+fi
+
+# --- RESOLUTION: THE SECTION BEATS THE TEMPLATE -----------------------------
+# vm-999 uses the daily template (0 4 * * *) and overrides the schedule itself.
+# Reading the template here would show a cadence the host does not run.
+if printf '%s' "$lj_got" | grep -q '"scope":"rpool/data/vm-999".*"schedule":"17 3 \* \* \*"'; then
+    ok "listjobs: a section's own field beats the tier template's"
+else
+    bad "listjobs: a section's own field beats the template's" "$lj_got"
+fi
+if printf '%s' "$lj_got" | grep -q '"scope":"rpool/ROOT/pve-1".*"schedule":"0 4 \* \* \*"'; then
+    ok "listjobs: ...and a section that overrides nothing inherits the template's"
+else
+    bad "listjobs: a section without an override inherits the template's" "$lj_got"
+fi
+
+# --- WHAT IS NOT CLAIMED ----------------------------------------------------
+# An account with a crontab but no managed block, and a line outside every
+# block, are somebody else's business.
+if ! printf '%s' "$lj_got" | grep -q 'ich/dataset'; then
+    ok "listjobs: a line outside every managed block is not claimed"
+else
+    bad "listjobs: a line outside every managed block is not claimed" "$lj_got"
+fi
+# AN ACCOUNT WITH NOTHING INSTALLED IS NOT A BROKEN ONE, and this is the
+# assertion that keeps the window usable: cron_read reports "no crontab" as an
+# EMPTY crontab, so every candidate account without cron reaches the reader with
+# no header and no lines. Reporting those would paint a red row on every
+# ordinary host. Measured while writing this verb -- root produced exactly such
+# a row until it was fixed.
+if ! printf '%s' "$lj_got" | grep -q '"account":"root"'; then
+    ok "listjobs: an account with no managed block produces no row at all"
+else
+    bad "listjobs: an account with no managed block produces no row" "$lj_got"
+fi
+if ! printf '%s' "$lj_got" | grep -q '"account":"obcy"'; then
+    ok "listjobs: ...and neither does an account whose crontab carries no block of ours"
+else
+    bad "listjobs: an account whose crontab carries no block of ours produces no row" "$lj_got"
+fi
+
+# --- A BLOCK RUNNING LINES NOBODY CAN EXPLAIN -------------------------------
+# Different from "nothing installed", and it must not be silent: those lines
+# ARE running.
+case "$lj_got" in
+    *'"unreadable":[{"account":"brokenacct"'*)
+        ok "listjobs: a block whose config cannot be read is reported, in its own array" ;;
+    *) bad "listjobs: a block whose config cannot be read is reported separately" "$lj_got" ;;
+esac
+if printf '%s' "$lj_got" | grep -q '"unreadable":\[{"account":"brokenacct".*"lines_in_block":1'; then
+    ok "listjobs: ...carrying how many lines it is running unexplained"
+else
+    bad "listjobs: the unreadable entry carries its line count" "$lj_got"
+fi
+# ...and it is NOT among the jobs. A front end iterating `jobs` must be able to
+# trust that every element is a job.
+if ! printf '%s' "$lj_got" | sed 's/"unreadable":.*//' | grep -q 'brokenacct'; then
+    ok "listjobs: ...and it is NOT mixed into the jobs array"
+else
+    bad "listjobs: the unreadable entry is not mixed into jobs" "$lj_got"
+fi
+
+# --- THE TEXT FORM ----------------------------------------------------------
+lj_run
+lj_txt="$(cat "$WORK/lj.out")"
+lj_rows=$(printf '%s' "$lj_txt" | grep -cE '^zfsbackup ')
+if [ "$lj_rows" -eq 5 ]; then
+    ok "listjobs: the text form lists the same five jobs"
+else
+    bad "listjobs: the text form lists the same five jobs" "$lj_rows: $lj_txt"
+fi
+if printf '%s' "$lj_txt" | grep -q -- '-> pve9' && printf '%s' "$lj_txt" | grep -q -- '<- pve1'; then
+    ok "listjobs: the text form draws the side we are on as an arrow around the peer"
+else
+    bad "listjobs: the text form draws the direction" "$lj_txt"
+fi
+# THE FAMILY IS NOT ONE FIELD: a transfer stamps with `prefix`, a prune matches
+# with `pattern`, and they differ by a trailing underscore. Printing whichever
+# was set would put a prefix under a column read as a pattern.
+if printf '%s' "$lj_txt" | grep -qE '^zfsbackup .*-> pve9 .*automated_hourly_ ' \
+   && printf '%s' "$lj_txt" | grep -qE '^zfsbackup .*porzadki .*automated_hourly '; then
+    ok "listjobs: a transfer row shows its prefix and a prune row shows its pattern"
+else
+    bad "listjobs: transfer shows prefix, prune shows pattern" "$lj_txt"
 fi
 
 echo "--------------------------------------------"
