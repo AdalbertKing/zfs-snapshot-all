@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c577fe996a6e973c -->
+<!-- status-covers-digest: 194cbfebf8567e2b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,68 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **LAB pve10: cztery relacje bez retencji i bez monitora — dwie wady, obie naprawione (2026-09-08).**
+  Znalezione na PRAWDZIWYM labie (pve9 źródło, pve10 kolektor, cztery relacje
+  założone jednokomendową ścieżką), nie w suicie. Suita nie mogła tego znaleźć,
+  bo była pisana z tego samego przekonania co kod.
+
+  **Wada 1 — sierota decydowała o kształcie hosta.** `detect_profile_gfs()`
+  skanował *każdy* `[template:]` w pliku. W configu pve10 został
+  `[template:profile__d30h24__hourly]` po **usuniętej** relacji: niesie
+  `send_schedule` i `prune_schedule` razem, czyli kształt płaski. Na tej
+  podstawie host czytał się jako płaski, gałąź drabiny była pomijana,
+  `MANAGED_PRUNE_SCOPE` zapisywany **pusty**, lokalna sekcja `[prune:]` nie
+  powstawała — a że czujka przeterminowania jedzie na parze `(zakres, wzorzec)`,
+  której potrzebują porządki, to nie powstawał też monitor. Cztery aktywne
+  relacje kopiowały dane, nie kasowały nic i nikt tego nie pilnował. Odcisk był
+  w pliku: szablony `keep_hourly/daily/weekly/monthly` wyemitowane i nieużywane
+  przez nic. Teraz skan jest **dwuprzebiegowy** — głos mają wyłącznie szablony,
+  które wymienia w `use_template` żywa sekcja `[dataset:]`/`[prune:]`; sierota
+  to nie polityka, to śmieć. `PROFILE_GFS_WHY` zapamiętuje szablon, który
+  zdecydował. Kontrola negatywna na żywym hoście i prawdziwym pliku: stary kod
+  `PROFILE_GFS=0`, nowy `=1`; po reaktywacji przybyła linia
+  `delsnaps -G … hdd/backups/192.168.28.99` i linia `check-snap-age … 90m 150m`,
+  obu wcześniej **nie było ani jednej**.
+
+  **Wada 2 — zakres drabiny należał do peera, nie do relacji.** Tryb kopii
+  zapasowej zamiatał **jedną** drabiną cały `TARGET/<peer>`. To jest poprawne
+  tylko dopóki peer ma dokładnie jedną relację, a produkt tego nie obiecuje —
+  `--name` istnieje właśnie po to, żeby było ich więcej. Zmierzone w minutę po
+  naprawie wady 1: pierwsza aktywowana relacja zajęła
+  `[prune:hdd/backups/192.168.28.99]`, po czym strażnik pokrycia **odmówił**
+  pozostałym trzem reaktywacji — słusznie, bo `…/hdd/lab/ct-201` nachodzi na
+  `…/192.168.28.99`. Trzy żywe relacje nie do reaktywowania z powodu drabiny
+  rodzeństwa. Tryb `sync` rozwiązał ten sam problem dawno (REV-20260802-033
+  slice 8 / U7): nie ma rodzica, którego by posiadał, więc pisze jedną sekcję
+  `[prune:]` na lądowisko. Kopia zapasowa robi teraz to samo i obie gałęzie się
+  zlewają (`client_local_path()` w trybie `sync` jest tożsamością). Relacja
+  założona przez stary kod jest **migrowana**: drabina przy korzeniu peera
+  znika w tej samej transakcji, która pisze zamienniki, i tylko wtedy — z
+  kontrolą własności, bo cudza drabina nie jest nasza do skasowania.
+
+  **Czego NIE oddajemy.** REV-20260809-089 wymaga, żeby reaktywacja
+  niezmienionej relacji zostawiła jej drabinę w spokoju, a nie wyprowadzała
+  retencji z dzisiejszego profilu. To zostaje i ma własną asercję. Odpada
+  wyłącznie wygoda, że nowy dataset lądował **pod** istniejącą drabiną bez
+  zmiany sekcji — i tak potrzebuje własnej sekcji `[dataset:]` w tej samej
+  transakcji.
+
+  **Odmowa (B).** Przy TWORZENIU relacji, gdy host czyta się jako płaski, a
+  profil deklaruje drabinę, nie prunuje **żadna** ze stron. Ten układ jest
+  teraz odmawiany, z nazwą szablonu, który zdecydował, i trzema wyjściami
+  (profil płaski / `migrate-profile` / usunięcie sieroty). Wyłącznie przy
+  tworzeniu — zainstalowana relacja musi dać się reaktywować (REV-20260810-090).
+
+  **Kolejność migracji, do zapamiętania przy flocie.** Relacja trzymająca
+  drabinę przy korzeniu peera blokuje rodzeństwo aż do **swojej** reaktywacji.
+  Na kolektorze z kilkoma relacjami do jednego źródła reaktywuj najpierw tę,
+  która posiada `[prune:TARGET/<peer>]`.
+
+  Sekcja suity `gfsshape`: **16 asercji**. Kontrola negatywna wobec kodu sprzed
+  poprawki zakresu: **4 FAIL**, przy trzech kontrolach, które przechodzą po obu
+  stronach (stary zakres naprawdę nachodził; cudza drabina nie jest ruszana;
+  `sync` nietknięty).
 
 - **Parytet push↔pull, runda 1 — §8 z `OWNER-ENGINE-MERGE-2026-09-07.md` (2026-09-07, właściciel odmroził `snapsend.sh`).**
   Dyrektywa: *„Zacznij §8 — plan naprawczy parytetu, odmrażam snapsend.sh"*.

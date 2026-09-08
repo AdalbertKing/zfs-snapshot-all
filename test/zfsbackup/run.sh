@@ -11532,6 +11532,139 @@ if ( PROFILE_GFS=1; PROFILE_ACTIVE=default; PEER_SAVED_DATASETS=""; PEER_SAVED_T
 else
     bad "gfsshape: ladder profile on a ladder host passes" "$(cat "$WORK/gs.out")"
 fi
+
+# --- THE LADDER'S SCOPE: WHAT THIS RELATIONSHIP LANDS, NOT WHAT THE PEER OWNS ---
+#
+# Measured on pve10, 2026-09-08, right after the fix above started producing
+# ladders at all: the FIRST relationship activated took [prune:<TARGET>/<peer>]
+# -- the peer's whole subtree -- and the coverage guard then refused the other
+# three siblings on their own re-activation, correctly:
+#
+#   'hdd/backups/192.168.28.99/hdd/lab/ct-201' overlaps
+#   'hdd/backups/192.168.28.99', already owned by relationship 'lab-vm101'
+#
+# Three live relationships that could no longer be re-activated. Backup now
+# writes one [prune:] per landing path, the way sync has since REV-033 slice 8.
+GSS="$WORK/gfsscope"; rm -rf "$GSS"; mkdir -p "$GSS"
+
+gss_head() {   # <config> -- defaults + the two templates every fixture needs
+    cat > "$1" <<'GSSEOF'
+[defaults]
+	host_label = pve10
+
+[template:profile__default__standard_hourly]
+	send_schedule = 1 * * * *
+	prefix        = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 25 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+GSSEOF
+}
+gss_dataset() {   # <config> <landing path> <owner>
+    printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=%s\n\tuse_template = profile__default__standard_hourly\n' "$2" "$3" >> "$1"
+}
+gss_prune() {     # <config> <scope> <owner>
+    printf '\n[prune:%s]\n\t# managed-by: zfs-backup.sh client=%s\n\tuse_template = profile__default__keep_hourly\n\tgfs          = yes\n' "$2" "$3" >> "$1"
+}
+gss_plan() {   # <is_new> <config> <name> <mode> <recorded prune scope> <src dataset>...
+    local isnew="$1" cfg="$2" nm="$3" mode="$4" rec="$5"; shift 5
+    ( PROFILE_GFS=1
+      PROFILE_ACTIVE=""
+      MANAGED_DATASETS=""
+      MANAGED_PRUNE_SCOPE="$rec"
+      PEER_SAVED_DATASETS="$*"
+      PEER_SAVED_TARGET="hdd/backups"
+      PEER_SAVED_MODE="$mode"
+      LOAD_LABEL="192.168.28.99"
+      client_section_plan "$cfg" "$nm" "$isnew" >/dev/null 2>&1
+      printf 'scope=[%s] legacy=[%s] gen=%s\n' \
+             "$PLAN_PRUNE_SCOPE" "${PLAN_PRUNE_LEGACY:-}" "$PLAN_PRUNE_NEEDS_GEN" )
+}
+
+# 1. A NEW relationship never plans a ladder at the peer root.
+gss_head "$GSS/fresh.conf"
+R1=$(gss_plan 1 "$GSS/fresh.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if [ "$R1" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[] gen=1" ]; then
+    ok "gfsscope: a new relationship scopes its ladder to its OWN landing path"
+else
+    bad "gfsscope: new relationship scopes to its landing path" "$R1"
+fi
+
+# 2. THE DEFECT ITSELF: two relationships pulling from the SAME peer must not
+#    plan scopes that swallow one another. This is the assertion that would
+#    have failed on 2026-09-08, and it is checked with path_overlaps -- the
+#    same predicate the coverage guard refuses on -- rather than by eyeballing
+#    the strings.
+gss_head "$GSS/two.conf"
+gss_dataset "$GSS/two.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_dataset "$GSS/two.conf" hdd/backups/192.168.28.99/hdd/lab/ct-201 lab-ct201
+S_A=$(gss_plan 1 "$GSS/two.conf" lab-vm101 "" "" hdd/lab/vm-101)
+S_B=$(gss_plan 1 "$GSS/two.conf" lab-ct201 "" "" hdd/lab/ct-201)
+A_SCOPE=$(printf '%s' "$S_A" | sed -n 's/^scope=\[\([^]]*\)\].*/\1/p')
+B_SCOPE=$(printf '%s' "$S_B" | sed -n 's/^scope=\[\([^]]*\)\].*/\1/p')
+if [ -n "$A_SCOPE" ] && [ -n "$B_SCOPE" ] \
+   && ! path_overlaps "$A_SCOPE" "$B_SCOPE" && ! path_overlaps "$B_SCOPE" "$A_SCOPE"; then
+    ok "gfsscope: two relationships to the SAME peer plan DISJOINT ladders -- neither can lock the other out"
+else
+    bad "gfsscope: sibling relationships plan disjoint ladders" "A=$A_SCOPE B=$B_SCOPE"
+fi
+# ...and the positive control for that predicate: the OLD scope really did
+# overlap, so the assertion above is discriminating and not vacuously true.
+if path_overlaps "hdd/backups/192.168.28.99" "$B_SCOPE"; then
+    ok "gfsscope: ...while the old peer-root scope DID swallow the sibling (control)"
+else
+    bad "gfsscope: the old peer-root scope overlaps the sibling" "B=$B_SCOPE"
+fi
+
+# 3. MIGRATION: a relationship carrying the old peer-root ladder is told to
+#    drop it, in the same transaction that writes the replacements.
+gss_head "$GSS/legacy.conf"
+gss_dataset "$GSS/legacy.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/legacy.conf" hdd/backups/192.168.28.99 lab-vm101
+R3=$(gss_plan 0 "$GSS/legacy.conf" lab-vm101 "" hdd/backups/192.168.28.99 hdd/lab/vm-101)
+if [ "$R3" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[hdd/backups/192.168.28.99] gen=1" ]; then
+    ok "gfsscope: re-activation names the old peer-root ladder for removal and regenerates"
+else
+    bad "gfsscope: re-activation migrates off the peer-root ladder" "$R3"
+fi
+
+# 4. CONTROL: the same peer-root ladder owned by SOMEBODY ELSE is not ours to
+#    delete. Without this, 'legacy' could be "whatever sits at the peer root".
+gss_head "$GSS/foreign.conf"
+gss_dataset "$GSS/foreign.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/foreign.conf" hdd/backups/192.168.28.99 lab-ktos-inny
+R4=$(gss_plan 0 "$GSS/foreign.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if printf '%s' "$R4" | grep -q 'legacy=\[\]'; then
+    ok "gfsscope: ...but a peer-root ladder owned by ANOTHER relationship is left alone"
+else
+    bad "gfsscope: a foreign peer-root ladder is not removed" "$R4"
+fi
+
+# 5. REV-20260809-089 KEPT: an unchanged relationship already in the new shape
+#    is left entirely alone -- its retention is NOT re-derived from today's
+#    profile. This is the property the old single-ladder shape existed to give,
+#    and the one that actually mattered.
+gss_head "$GSS/settled.conf"
+gss_dataset "$GSS/settled.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/settled.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+R5=$(gss_plan 0 "$GSS/settled.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if [ "$R5" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[] gen=0" ]; then
+    ok "gfsscope: an already-migrated relationship re-activates with NOTHING regenerated (REV-089)"
+else
+    bad "gfsscope: settled relationship regenerates nothing" "$R5"
+fi
+
+# 6. SYNC IS UNTOUCHED: its scopes are the source datasets themselves, and it
+#    has no peer root to migrate off.
+gss_head "$GSS/sync.conf"
+R6=$(gss_plan 1 "$GSS/sync.conf" lab-sync sync "" tank/a tank/b)
+if [ "$R6" = "scope=[tank/a tank/b] legacy=[] gen=1" ]; then
+    ok "gfsscope: sync mode is unchanged -- one ladder per source dataset, no legacy"
+else
+    bad "gfsscope: sync mode unchanged" "$R6"
+fi
 fi   # --- koniec sekcji gfsshape ---
 
 echo "--------------------------------------------"
