@@ -11042,6 +11042,62 @@ case "$lj_stub" in
 esac
 
 
+
+# --- A COMMENT IS NOT AN OWNERSHIP RECORD (REV-20260908-140 F1, P1) ---------
+# cron permits arbitrary comments. The shared reader took the FIRST `# Source:`
+# line in whatever it was handed, and four of its five callers hand it the whole
+# crontab -- so a line above our block decided which config the INSTALL GUARDS
+# compared against, and config B could replace the block generated from config
+# A, deleting every send, prune and monitor line A described.
+#
+# The fixture is the reviewer's, byte for byte.
+LJB="$LJ/bound"; mkdir -p "$LJB/bin"
+cat > "$LJB/crontab.root" <<'LJEOF'
+# Source: /tmp/want.conf -- unrelated user comment
+# BEGIN zfs-backup-managed (generated)
+# Source: /tmp/actual.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+0 1 * * * /r/snapsend.sh tank/live tank/backup
+# END zfs-backup-managed
+LJEOF
+cat > "$LJB/bin/crontab" <<'LJEOF'
+#!/bin/sh
+who=root
+[ "$1" = "-u" ] && who="$2"
+[ -f "$LJBX/crontab.$who" ] && cat "$LJBX/crontab.$who" || exit 1
+LJEOF
+chmod +x "$LJB/bin/crontab"
+
+ljb_source() {   # -> what the shared reader derives from the WHOLE crontab
+    ( export PATH="$LJB/bin:$PATH" LJBX="$LJB"
+      crontab_for_target 2>/dev/null | cron_block_source )
+}
+if [ "$(ljb_source)" = "/tmp/actual.conf" ]; then
+    ok "cronsource: a foreign '# Source:' ABOVE the block is ignored -- the block's own line decides"
+else
+    bad "cronsource: the foreign line above the block is ignored" "$(ljb_source)"
+fi
+# THE CONTROL THAT MAKES IT A DISCRIMINATOR: with the foreign line removed the
+# answer must be the SAME. Without this, "always returns actual.conf" could be
+# satisfied by a reader that ignores its input.
+sed -i '1d' "$LJB/crontab.root"
+if [ "$(ljb_source)" = "/tmp/actual.conf" ]; then
+    ok "cronsource: ...and without it the answer is unchanged (the control)"
+else
+    bad "cronsource: unchanged without the foreign line" "$(ljb_source)"
+fi
+# AND A BLOCK WITH NO SOURCE LINE AT ALL yields nothing -- fail closed, so a
+# caller cannot mistake a stale global comment for an ownership record.
+cat > "$LJB/crontab.root" <<'LJEOF'
+# Source: /tmp/want.conf -- unrelated user comment
+# BEGIN zfs-backup-managed (generated)
+0 1 * * * /r/snapsend.sh tank/live tank/backup
+# END zfs-backup-managed
+LJEOF
+if [ -z "$(ljb_source)" ]; then
+    ok "cronsource: a block carrying NO Source line yields nothing, never the comment above it"
+else
+    bad "cronsource: a block with no Source line yields nothing" "$(ljb_source)"
+fi
 fi   # --- koniec sekcji listjobs ---
 if want showscope; then
 # ============================================================================

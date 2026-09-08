@@ -2468,7 +2468,25 @@ config_has_relationship_policy() {   # <file> -> 0 when something is already ins
 # So the grammar lives here now, once, reading a STREAM so that a crontab, a
 # temp file and a block region can all be asked the same question.
 cron_block_source() {   # <stdin: crontab or block text> -> the config path, or empty
-    grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/'
+    # BOUNDED TO THE MANAGED BLOCK (REV-20260908-140 F1, P1).
+    #
+    # The first version read the first `# Source:` line in whatever it was
+    # given, and four of the five callers hand it the WHOLE crontab. cron
+    # permits arbitrary comments, so an unrelated line above our block --
+    #
+    #   # Source: /tmp/want.conf -- unrelated user comment
+    #   # BEGIN zfs-backup-managed (generated)
+    #   # Source: /tmp/actual.conf -- DO NOT EDIT BY HAND, ...
+    #
+    # made assert_cron_config_matches_installed accept want.conf and permit
+    # replacing the block generated from actual.conf, deleting every send,
+    # prune and monitor line it described. A comment is not an ownership
+    # record; only bytes between OUR markers are.
+    #
+    # sed does the bounding rather than the caller, because the caller that
+    # forgets is exactly the failure this consolidation exists to prevent.
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+        | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/'
 }
 
 
