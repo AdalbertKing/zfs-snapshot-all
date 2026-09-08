@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30.*
+*Evidence: E1, E2, E3, E9, E30, E46.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -1350,3 +1350,29 @@ twinned function before classifying it -- is what caught it, and is now the
 one that produces the `direction:`/`port-by:` reasons in `twins.sha256`, so a
 severity claim about a twin has to survive a read of the twin.
 
+
+### E46 - A proxy for the property, and a fixture that could not reach the branch
+
+**2026-09-08, `list-jobs` as merged in PR #357, found by the Reviewer
+(REV-20260908-138), P2, one day after the merge.**
+
+*Genesis.* The verb refuses to publish job rows for a config it cannot read. I
+tested that with `[ -f "$cfg" ]` and consumed the parser through
+`done < <(config_section_dump "$cfg")`. `-f` proves the path is a regular file;
+it does not prove the file can be OPENED, and a producer inside process
+substitution has no exit status the loop can reach. So awk's refusal went to
+stderr, the loop saw no lines, and an empty parse was indistinguishable from a
+config with no sections: `rc=0`, `"jobs":[],"count":0,"unreadable":[]` -- the
+verb recreating the exact failure it was written to prevent.
+
+*Cause.* Two mistakes with one shape. I checked a PROXY for the property
+(is it a regular file) instead of the property (can it be read), and my negative
+fixture named a path that does not exist -- which fails the `-f` check one line
+earlier and therefore could never reach the branch it was written for. The suite
+passed 365/0 while the branch under test was unreachable.
+
+*Rule.* R1, evidence. The mechanical form: when a check stands for "X will
+work", the fixture must make X actually fail, and the assertion must prove the
+branch ran -- not merely that the command survived. Where the property is
+"a read succeeds", the read IS the test; and a producer whose status you cannot
+read must be buffered, then checked, before anything is published.

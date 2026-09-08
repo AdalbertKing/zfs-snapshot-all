@@ -10895,6 +10895,98 @@ else
     bad "listjobs: transfer shows prefix, prune shows pattern" "$lj_txt"
 fi
 
+
+# --- THE PARSE IS THE READABILITY TEST (REV-20260908-138 F1) ----------------
+# `-f` proves a path is a regular file; it does not prove it can be OPENED. The
+# first implementation consumed config_section_dump through process
+# substitution, where the producer's exit status is unreachable: awk's refusal
+# went to stderr, the loop saw no lines, and the document went out as rc=0 with
+# `"jobs":[],"count":0,"unreadable":[]` -- this verb recreating the very failure
+# it was written to prevent, a host running lines while the window says there is
+# no work.
+#
+# THE FIXTURE HAS TO BE REAL, and no single trick is portable. A mode-000 file
+# is unopenable for an ordinary user (the CI runner) and readable for root and
+# on Git Bash; /proc/1/mem is a regular file that refuses to open on Linux and
+# does not exist elsewhere. So the route is CHOSEN BY MEASUREMENT -- the fixture
+# is used only after this suite has confirmed, by trying, that opening it
+# actually fails here -- and the environments that can offer neither still run
+# the same assertion through a parser stubbed to fail, which is the exact
+# condition the code checks.
+lj_unopenable=""
+printf 'x\n' > "$LJ/nieczytelny.conf"; chmod 000 "$LJ/nieczytelny.conf" 2>/dev/null
+if [ -f "$LJ/nieczytelny.conf" ] && ! head -c 1 "$LJ/nieczytelny.conf" >/dev/null 2>&1; then
+    lj_unopenable="$LJ/nieczytelny.conf"
+elif [ -f /proc/1/mem ] && ! head -c 1 /proc/1/mem >/dev/null 2>&1; then
+    lj_unopenable=/proc/1/mem
+fi
+chmod 644 "$LJ/nieczytelny.conf" 2>/dev/null
+
+: > "$LJ/spool/zamkniety"
+if [ -n "$lj_unopenable" ]; then
+    [ "$lj_unopenable" = "$LJ/nieczytelny.conf" ] && chmod 000 "$LJ/nieczytelny.conf" 2>/dev/null
+    cat > "$LJ/crontab.zamkniety" <<LJEOF
+# BEGIN zfs-backup-managed -- Source: $lj_unopenable
+9 9 * * * /r/zfs-job.sh "t" -- /r/snapsend.sh "e" "f"
+# END zfs-backup-managed
+LJEOF
+    lj_run --json
+    lj_shut="$(cat "$WORK/lj.out")"
+    chmod 644 "$LJ/nieczytelny.conf" 2>/dev/null
+    if printf '%s' "$lj_shut" | grep -q '"account":"zamkniety".*"lines_in_block":1'; then
+        ok "listjobs: a config that IS a regular file but cannot be opened is reported ($lj_unopenable)"
+    else
+        bad "listjobs: a config that is a regular file but cannot be opened is reported" "$lj_shut"
+    fi
+    if ! printf '%s' "$lj_shut" | sed 's/"unreadable":.*//' | grep -q 'zamkniety'; then
+        ok "listjobs: ...and the failed-open block contributes no job row"
+    else
+        bad "listjobs: the failed-open block contributes no job row" "$lj_shut"
+    fi
+    # THE REST OF THE DOCUMENT SURVIVES. A refusal for one account must not cost
+    # the five jobs the other account really declares.
+    if printf '%s' "$lj_shut" | grep -q '"count":5'; then
+        ok "listjobs: ...and the other account's five jobs are still published"
+    else
+        bad "listjobs: the other account's jobs survive a failed-open block" "$lj_shut"
+    fi
+    rm -f "$LJ/crontab.zamkniety" "$LJ/spool/zamkniety"
+else
+    ok "listjobs: (this environment cannot make a regular file unopenable -- the stub route below covers the same branch)"
+    rm -f "$LJ/spool/zamkniety"
+fi
+
+# THE SAME BRANCH, WITHOUT DEPENDING ON THE FILESYSTEM: a parser that fails the
+# way awk fails. This runs everywhere, including as root and on Git Bash, and it
+# pins the actual condition the code tests -- the producer's exit status --
+# rather than one way of provoking it.
+lj_stub="$( export PATH="$LJ/bin:$PATH" LJX="$LJ"
+            CLIENTS_DIR="$LJ/clients"
+            RELATIONSHIPS_DIR="$LJ/rel"
+            PEER_STATE_DIR="$LJ/peers"
+            CRON_SPOOL_DIRS=("$LJ/spool")
+            config_section_dump() { return 2; }
+            cmd_list_jobs --json 2>/dev/null )"
+if printf '%s' "$lj_stub" | grep -q '"count":0'; then
+    ok "listjobs: a failed PARSE publishes no jobs -- it is not read as an empty config"
+else
+    bad "listjobs: a failed parse publishes no jobs" "$lj_stub"
+fi
+# ORDER-INDEPENDENT ON PURPOSE: the accounts come out in cron_known_accounts'
+# order, and pinning "zfsbackup is the first element" made this fail while the
+# behaviour was right -- both accounts WERE reported.
+if printf '%s' "$lj_stub" | grep -q '"account":"zfsbackup","config":"[^"]*jobs\.conf","lines_in_block":3'; then
+    ok "listjobs: ...and says which account is running how many lines it cannot explain"
+else
+    bad "listjobs: a failed parse names the account and its line count" "$lj_stub"
+fi
+# A COMPLETE DOCUMENT, not a truncated one: the same discipline REV-20260907-136
+# imposed on the other readers.
+case "$lj_stub" in
+    *'"host":'*'"jobs":['*'"count":'*'"unreadable":['*']}') ok "listjobs: ...and the document is complete, never half-written" ;;
+    *) bad "listjobs: the document is complete after a failed parse" "$lj_stub" ;;
+esac
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 03c749093fd58a6d -->
+<!-- status-covers-digest: 3bf14c89281e767b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -77,6 +77,34 @@
   (PR #352 właśnie zdjął z niego render z powodu kosztu); po tej zmianie plik
   odrzucany przez generator trafia do katalogu operatora już tylko ręcznie.
 
+- **REV-138: `list-jobs` chowal zainstalowany blok, gdy configu nie dalo sie OTWORZYC (2026-09-08).**
+  Recenzent zmierzyl to dzien po scaleniu, na `/proc/1/mem` -- zwyklym pliku,
+  ktory przechodzi `test -f` i odmawia otwarcia.
+  - `-f` dowodzi, ze sciezka jest zwyklym plikiem; **nie dowodzi, ze da sie go
+    otworzyc**. A producent w `< <( )` nie ma statusu, do ktorego petla siega.
+    Wiec odmowa awk szla na stderr, petla nie widziala linii, i dokument
+    wychodzil jako `rc=0` z `"jobs":[],"count":0,"unreadable":[]` -- czyli ten
+    czasownik odtwarzal dokladnie te awarie, dla ktorej powstal: host wykonuje
+    linie, a okno mowi, ze nie ma pracy. Ta sama forma dotyczy zwyklego configu
+    roota czytanego przez konto delegowane.
+  - **Poprawka:** parsowanie ladunkiem do pliku, sprawdzenie statusu, i dopiero
+    potem iteracja -- ta sama dyscyplina buforowania przed publikacja, ktora
+    REV-136 nalozyl na pozostale czytelniki. Obie drogi do diagnostyki (brak
+    naglowka `# Source:` i padniete parsowanie) maja teraz **jeden** emiter.
+  - **Kontrola negatywna:** ta sama atrapa na `1f6a1b38` daje
+    `{"jobs":[],"count":0,"unreadable":[]}`; na poprawce -- dwa wpisy z liczba
+    linii i kompletny dokument.
+  - **Dyskryminator dobierany POMIAREM, nie zalozeniem:** zadna sztuczka na
+    "zwykly plik, ktorego nie da sie otworzyc" nie jest przenosna (tryb 000 jest
+    nieotwieralny dla runnera CI, a czytelny dla roota i na Git Bash;
+    `/proc/1/mem` istnieje tylko na Linuksie). Suita **probuje** swojej atrapy i
+    uzywa jej tylko, gdy otwarcie naprawde padlo -- a w kazdym srodowisku
+    dodatkowo przepuszcza te sama galaz przez parser podstawiony tak, by
+    zawiodl.
+  - **Nieobjete, nazwane wprost:** config, ktory otwiera sie i parsuje czysto,
+    ale nie deklaruje ani jednej sekcji dla konta, ktorego blok wykonuje linie.
+    To trzecia przyczyna tego samego ksztaltu "okno pokazuje nic" i nie jest
+    "nieczytelnoscia" -- rozstrzygniecie oddane recenzentowi zamiast zgadniete.
 - **`list-jobs` — czym ekran główny GUI ma być karmiony (2026-09-08).** Decyzja
   właściciela po pomiarze: *„czyta co jest"*.
   - **Pomiar, który wymusił ten czasownik.** `status --json` wypisuje REKORDY
