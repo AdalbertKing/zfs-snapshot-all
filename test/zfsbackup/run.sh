@@ -11665,6 +11665,46 @@ if [ "$R6" = "scope=[tank/a tank/b] legacy=[] gen=1" ]; then
 else
     bad "gfsscope: sync mode unchanged" "$R6"
 fi
+
+# 7. THE FIFTH EXEMPTION on the clobber guard. Migrating off the peer-root
+#    ladder genuinely DROPS coverage, so assert_target_block_not_clobbered is
+#    right to refuse it -- it did, on pve10, with "2 job line(s) would be
+#    DELETED". These lines are the real ones, copied off that host.
+GSL_OLD='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-vm101)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-vm101 -P "__replicate_:2" "hdd/backups/192.168.28.99" "automated_" -H24 -D7 -W4 -M12'
+GSL_NEW='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-vm101-vm-101)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-vm101 -P "__replicate_:2" "hdd/backups/192.168.28.99/hdd/lab/vm-101" "automated_" -H24 -D7 -W4 -M12'
+GSL_SIB='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-ct201-ct-201)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-ct201 -P "__replicate_:2" "hdd/backups/192.168.28.99/hdd/lab/ct-201" "automated_" -H24 -D7 -W4 -M12'
+
+if ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+     printf '%s\n' "$GSL_NEW" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: the clobber guard excuses the peer-root ladder REPLACED by its own narrower one"
+else
+    bad "gfsscope: the migrated ladder is excused" "not excused"
+fi
+# CONTROL A: without a migration planned this run, nothing is excused -- the
+# guard must still refuse. This is what stops the exemption from being a
+# permanent hole.
+if ! ( PRUNE_SCOPE_MIGRATED=""
+       printf '%s\n' "$GSL_NEW" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and excuses NOTHING when this run planned no migration"
+else
+    bad "gfsscope: no migration planned means no exemption" "excused anyway"
+fi
+# CONTROL B: a ladder that simply VANISHED is not excused. Without this the
+# exemption would launder exactly the loss the guard exists to catch.
+if ! ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+       printf '%s\n' "" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and a ladder that vanished with no replacement is still refused"
+else
+    bad "gfsscope: a vanished ladder is refused" "excused"
+fi
+# CONTROL C: a SIBLING's ladder under the same scope does not excuse this
+# relationship's loss -- the replacement has to be ours (-L).
+if ! ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+       printf '%s\n' "$GSL_SIB" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and another relationship's ladder does not excuse ours"
+else
+    bad "gfsscope: a sibling's ladder does not excuse ours" "excused"
+fi
 fi   # --- koniec sekcji gfsshape ---
 
 echo "--------------------------------------------"

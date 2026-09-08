@@ -1187,6 +1187,12 @@ SOURCE_PRUNE_EMITTED_DS=()
 # before removal, so a re-activation preserves an admin's edited source retention
 # and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
 declare -A SOURCE_PRUNE_PRESERVED=()
+# The peer-root ladder scope this run migrated OFF, if any (2026-09-08). Set by
+# emit_client_sections when it actually removes one, read by
+# assert_target_block_not_clobbered -- which is otherwise right to refuse the
+# install, because narrowing a ladder DOES drop coverage. See the fifth
+# exemption there for why this one narrowing is excused and what it says aloud.
+PRUNE_SCOPE_MIGRATED=""
 
 # Remove the rendered artifacts and REPORT what it could not remove.
 #
@@ -3291,6 +3297,41 @@ line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorb
     ' | grep -q ABSORBED
 }
 
+# THE ONE NARROWING THIS GUARD EXCUSES, and it says so out loud.
+#
+# Migrating a relationship off the peer-root ladder (2026-09-08) genuinely
+# REDUCES what that line prunes: it stops covering the sibling relationships'
+# landing paths, which is the entire point -- they were never its data. Every
+# other exemption above proves "the job is still here"; this one cannot, because
+# coverage really is dropped. So it is gated on three things at once and none of
+# them is a resemblance test: this run's own plan decided to migrate (the caller
+# sets PRUNE_SCOPE_MIGRATED only after actually removing the section), the lost
+# line's dataset argument is EXACTLY that scope, and a surviving line runs the
+# SAME engine for the SAME relationship over a path strictly UNDER it. A ladder
+# that simply disappeared, or one narrowed to somewhere else, or one belonging to
+# another relationship, still refuses the install.
+#
+# Identity is `-L <pair label>` plus the engine, NOT the whole line: the scope
+# and the notify title move together in this migration (one ladder per landing
+# path can say WHICH path alerted, and a single peer-wide one could not), so a
+# byte-for-byte twin does not exist by construction.
+line_scope_narrowed_by_migration() {   # <lost line> ; proposed lines on stdin -> 0 excused
+    local scope="${PRUNE_SCOPE_MIGRATED:-}"
+    [ -n "$scope" ] || return 1
+    local lost="$1" pline lab eng
+    case "$lost" in *"\"$scope\""*) ;; *) return 1 ;; esac
+    lab=$(printf '%s' "$lost" | sed -n 's/.* -L \([^ ]*\).*/\1/p')
+    eng=$(printf '%s' "$lost" | grep -oE '(delsnaps|check-snap-age)\.sh' | head -1)
+    [ -n "$lab" ] && [ -n "$eng" ] || return 1
+    while IFS= read -r pline; do
+        [ -n "$pline" ] || continue
+        case "$pline" in *"\"$scope/"*) ;; *) continue ;; esac
+        case "$pline" in *" -L $lab "*) ;; *) continue ;; esac
+        case "$pline" in *"$eng"*) return 0 ;; esac
+    done
+    return 1
+}
+
 assert_target_block_not_clobbered() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     local tcron; tcron=$(mktemp) || die "mktemp failed"
@@ -3364,6 +3405,17 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             if [ -n "$twin" ]; then
                 local _rold _rnew; _rold=$(retention_flags_of "$line"); _rnew=$(retention_flags_of "$twin")
                 warn "  retention changed, the job itself stays: ${_rold% } -> ${_rnew% }"
+                warn "    $line"
+                continue
+            fi
+            # Fifth exemption: the peer-root ladder this run is migrating off.
+            # Unlike the four above it admits that coverage IS dropped, and
+            # names who stops being covered -- see line_scope_narrowed_by_migration.
+            if printf '%s\n' "$proposed" | line_scope_narrowed_by_migration "$line"; then
+                warn "  ladder scope migrated: '$PRUNE_SCOPE_MIGRATED' -> this relationship's own landing path(s)"
+                warn "    that scope was the peer's WHOLE subtree on this collector, so it was also pruning"
+                warn "    any SIBLING relationship pulling from the same source. It no longer does."
+                warn "    RE-ACTIVATE EACH SIBLING to give it its own ladder, or its copies stop being pruned."
                 warn "    $line"
                 continue
             fi
@@ -3855,6 +3907,9 @@ Nothing was changed."
 emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local workfile="$1" name="$2" ds localpath
     local is_new_relationship="${3:-0}"
+    # Reset per call for the same reason as the array below: a stale value here
+    # would excuse a coverage loss this run did not plan.
+    PRUNE_SCOPE_MIGRATED=""
     # Reset per call: which source datasets got a REMOTE [prune:] this run. The
     # flow reads it after this returns to run the fail-closed grant check for
     # exactly those (and only those) before publishing -- an empty list on a
@@ -4159,6 +4214,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # regenerate. This does not rely on that.)
         if [ -n "${PLAN_PRUNE_LEGACY:-}" ] && [ "${#regen_ds[@]}" -gt 0 ]; then
             remove_managed_sections "$workfile" "$name" "$PLAN_PRUNE_LEGACY"
+            PRUNE_SCOPE_MIGRATED="$PLAN_PRUNE_LEGACY"
         fi
         local _plocal
         for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
