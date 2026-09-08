@@ -10760,7 +10760,12 @@ cmd_show_scope() {
 
     # -p for parseable creation and used: the sort and the arithmetic must not
     # depend on the locale's date format or on human-readable byte suffixes.
-    local depth="-d 1"; [ "$rec" -eq 1 ] && depth=""
+    # -d 1 lists this dataset's own snapshots; -r walks its descendants.
+    # `zfs list` DOES NOT recurse by default -- an empty flag here is not
+    # "recursive", it is "this dataset only", so --recursive silently did
+    # nothing. Measured on pve10 2026-09-08 against a real pool: a parent with
+    # one snapshot and a child with six reported one either way.
+    local depth="-d 1"; [ "$rec" -eq 1 ] && depth="-r"
     local snaps rc
     snaps=$(zfs list -H -p -t snapshot $depth -o name,creation,used -- "$ds" 2>/dev/null); rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -10811,10 +10816,17 @@ cmd_show_scope() {
         key="${matched:-@other}"
         cnt["$key"]=$(( ${cnt["$key"]:-0} + 1 ))
         bytes["$key"]=$(( ${bytes["$key"]:-0} + used ))
-        if [ -z "${newest_at["$key"]:-}" ] || [ "$at" -gt "${newest_at["$key"]}" ]; then
+        # TIES ARE REAL AND THEY ARE COMMON. `creation` has one-second
+        # resolution, so a recursive snapshot, a catch-up run or any tight loop
+        # produces several snapshots stamped the same second -- measured on
+        # pve10, where four hourly snapshots created in one second made
+        # "newest" whichever the listing happened to hand over first, and the
+        # panel showed 04-00-01 while 07-00-01 existed. So the NAME breaks the
+        # tie: it carries the stamp the operator reads, and it sorts.
+        if [ -z "${newest_at["$key"]:-}" ] || [ "$at" -gt "${newest_at["$key"]}" ]            || { [ "$at" -eq "${newest_at["$key"]}" ] && [[ "$snapname" > "${newest_name["$key"]}" ]]; }; then
             newest_at["$key"]="$at"; newest_name["$key"]="$snapname"
         fi
-        if [ -z "${oldest_at["$key"]:-}" ] || [ "$at" -lt "${oldest_at["$key"]}" ]; then
+        if [ -z "${oldest_at["$key"]:-}" ] || [ "$at" -lt "${oldest_at["$key"]}" ]            || { [ "$at" -eq "${oldest_at["$key"]}" ] && [[ "$snapname" < "${oldest_name["$key"]}" ]]; }; then
             oldest_at["$key"]="$at"; oldest_name["$key"]="$snapname"
         fi
     done <<SCOPEEOF
