@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E51.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25, E28, E50.*
+*Evidence: E3, E9, E15, E24, E25, E28, E52.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -1527,7 +1527,6 @@ not"** -- and the answer is a grep over the function, not a memory of what was
 just edited. Related: E41, where the same fix was applied at one site and
 shipped missing at two others, one day earlier.
 
-<<<<<<< HEAD
 ### E50 - I consolidated five copies without reading what they read
 
 **2026-09-08, `cron_block_source()` as merged in PR #364, found by the Reviewer
@@ -1560,8 +1559,7 @@ the body has to be correct for the crontab, so the bounding belongs inside the
 helper -- `sed -n '/BEGIN/,/END/p'` before the grep -- and not in a note asking
 callers to narrow first. The caller that forgets is exactly what consolidation
 is supposed to make impossible.
-=======
-### E50 — The transfers screen was 25 lines tall on a 24-line terminal (2026-09-09, R6)
+### E52 — The transfers screen was 25 lines tall on a 24-line terminal (2026-09-09, R6)
 
 **Genesis.** Five TUI windows rendered as pure text. Every screen "looked
 right" in the first render; the detail panel on Transfery ended after four
@@ -1580,7 +1578,7 @@ line's width are compared with the terminal size, in the test, for every
 screen and every window, at 80, 120 and 200. The assertion exists now and it
 is the one that found this.
 
-### E51 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
+### E53 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
 
 **Genesis.** Replacing `"\t"` by `"|"` in `cmd_list_replicas` through a
 Python patch fed to the Bash tool as a heredoc. The patch printed "edits: 1",
@@ -1599,4 +1597,3 @@ Patches with backslashes go through a file written by the Write tool or build
 the character with `chr(92)`; and every text replacement asserts that it
 matched, so a no-op cannot pass as done.
 
->>>>>>> origin/main
