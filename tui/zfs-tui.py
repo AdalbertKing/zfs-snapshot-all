@@ -151,23 +151,28 @@ def fit_left(text, n, ch=None):
 
 
 def wrap(text, n):
-    """Lamanie po slowach do n znakow; dlugie sciezki tna sie twardo."""
-    out, line = [], ""
-    for word in (u"%s" % text).split(" "):
-        while len(word) > n:
-            if line:
+    """Lamanie po slowach do n znakow; wciecie pierwszej linii jest zachowane i
+    powtorzone w kolejnych, dlugie sciezki tna sie twardo."""
+    text = u"%s" % text
+    indent = len(text) - len(text.lstrip(" "))
+    pad = " " * min(indent, max(0, n - 10))
+    out, line = [], pad
+    for word in text.strip().split(" "):
+        room = n - len(pad)
+        while len(word) > room:
+            if line.strip():
                 out.append(line)
-                line = ""
-            out.append(word[:n])
-            word = word[n:]
-        if not line:
-            line = word
+            out.append(pad + word[:room])
+            word = word[room:]
+            line = pad
+        if not line.strip():
+            line = pad + word
         elif len(line) + 1 + len(word) <= n:
             line += " " + word
         else:
             out.append(line)
-            line = word
-    if line or not out:
+            line = pad + word
+    if line.strip() or not out:
         out.append(line)
     return out
 
@@ -747,8 +752,6 @@ def rel_detail_pairs(row, data, now, ch):
         if fin and st:
             txt += "  %s" % fmt_dur(fin - st)
         txt += "  %s" % mode
-        if base:
-            txt += "  od @%s" % base.split("@", 1)[-1]
         if note:
             txt += "  " + note
         pairs.append(("Ostatni bieg", txt))
@@ -764,10 +767,10 @@ def rel_detail_pairs(row, data, now, ch):
         m0 = row["monitors"][0]
         mon += "   progi %s / %s" % (m0.get("warn") or "?", m0.get("crit") or "?")
     if row["reasons"]:
-        mon += "   " + row["reasons"][0]
+        # Jedna linia w panelu; pelny tekst monitora jest w oknie (Enter).
+        mon += "   " + row["reasons"][0].splitlines()[0]
     elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
         mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
-    pairs.append(("Kopie", mon))
     warns = []
     if rel.get("endpoint_diverged"):
         warns.append(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)"
@@ -783,6 +786,7 @@ def rel_detail_pairs(row, data, now, ch):
             warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
     if warns:
         pairs.append(("Uwaga", "  |  ".join(warns)))
+    pairs.append(("Kopie", mon))
     return pairs
 
 
