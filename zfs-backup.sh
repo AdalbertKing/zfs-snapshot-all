@@ -541,6 +541,14 @@ Inspection / teardown:
                                     to. A profile that does not validate is a row
                                     saying so, never a fatal for the whole catalogue.
   zfs-backup.sh show-config NAME [--json] [--config=PATH]
+  zfs-backup.sh import-relation FILE [--name=NEW] [--yes]
+                                    Replays what export-relation --json wrote: the
+                                    add-client argv in the file, in that order, then
+                                    activate. Prints both commands and stops without
+                                    --yes. Fields the export listed as not_replayable
+                                    are printed back as the manual step they are
+                                    (set-endpoint). Refuses a name that already exists
+                                    here (--name=NEW imports it under another).
   zfs-backup.sh export-relation NAME [--json] [--config=PATH]
                                     The relationship's DECLARATIONS -- the answers a
                                     person gave -- as a document, plus the exact
@@ -11796,6 +11804,209 @@ export_relation_numbered() {   # <prefix, e.g. EXCLUDE_CHILD> -> one value per l
     done
 }
 
+# ------------------------------------------------------------------------------
+# import-relation FILE -- replay what export-relation promised (2026-09-09)
+# ------------------------------------------------------------------------------
+# Owner: "zrob import zapisanej relacji z pliku, skoro mamy eksport."
+#
+# The export already carries the answer: `replay` names the verb, the name, the
+# argv IN ORDER and the verb that follows. This reader reproduces exactly that
+# and nothing else -- it invents no flag, reads no installed section (those
+# ride along as documentation and are NOT an import input, as export says), and
+# lists `not_replayable` back to the operator as the manual step it is.
+#
+# THE JSON IS PARSED BY A CHARACTER SCANNER, NOT BY A REGEX. A value can hold
+# `]`, `}`, `,` or `"` (an --exclude-child regex, a path with a quote), so
+# "take everything up to the next bracket" would be the hand-written parser
+# this repo keeps out of its contracts. The scanner below knows exactly two
+# things about JSON: a string is `"..."` with `\"` and `\\` inside, and objects
+# and arrays nest. That is the whole grammar the export emits.
+#
+# Without --yes it PRINTS the two commands and stops; with --yes it runs them
+# through the same functions the CLI would, so every refusal (name taken, host
+# unreachable, profile invalid, overlap) is the verb's own, not a copy.
+#
+# JSON extraction helpers: <json text> <object key> -> the raw value text.
+json_value_of() {   # <text> <key> -> raw value (string with quotes, or {...}/[...]) at top level of the FIRST object that carries the key
+    printf '%s' "$1" | awk -v key="\"$2\"" '
+        BEGIN { RS = "\001" }
+        {
+            s = $0; n = length(s); i = 1
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\"") {                       # a string: is it our key?
+                    j = i + 1; str = ""
+                    while (j <= n) {
+                        d = substr(s, j, 1)
+                        if (d == "\\") { str = str d substr(s, j + 1, 1); j += 2; continue }
+                        if (d == "\"") break
+                        str = str d; j++
+                    }
+                    tok = "\"" str "\""
+                    k = j + 1
+                    while (k <= n && substr(s, k, 1) ~ /[ \t\r\n]/) k++
+                    if (tok == key && substr(s, k, 1) == ":") {
+                        k++
+                        while (k <= n && substr(s, k, 1) ~ /[ \t\r\n]/) k++
+                        v = substr(s, k, 1)
+                        if (v == "\"") {                # string value
+                            m = k + 1
+                            while (m <= n) {
+                                d = substr(s, m, 1)
+                                if (d == "\\") { m += 2; continue }
+                                if (d == "\"") break
+                                m++
+                            }
+                            print substr(s, k, m - k + 1); exit
+                        }
+                        if (v == "{" || v == "[") {     # nested value: match brackets, skipping strings
+                            depth = 0; m = k
+                            while (m <= n) {
+                                d = substr(s, m, 1)
+                                if (d == "\"") {
+                                    m++
+                                    while (m <= n) { e = substr(s, m, 1); if (e == "\\") { m += 2; continue } if (e == "\"") break; m++ }
+                                } else if (d == "{" || d == "[") depth++
+                                else if (d == "}" || d == "]") { depth--; if (depth == 0) { print substr(s, k, m - k + 1); exit } }
+                                m++
+                            }
+                            exit
+                        }
+                        # a bare literal (number, true, null): up to the next delimiter
+                        m = k
+                        while (m <= n && substr(s, m, 1) !~ /[,}\]]/) m++
+                        print substr(s, k, m - k); exit
+                    }
+                    i = j + 1; continue
+                }
+                i++
+            }
+        }'
+}
+
+json_unquote() {   # <"quoted json string"> -> the value, \" and \\ decoded
+    printf '%s' "$1" | awk '
+        BEGIN { RS = "\001" }
+        {
+            s = $0
+            if (substr(s, 1, 1) == "\"") s = substr(s, 2, length(s) - 2)
+            out = ""; i = 1; n = length(s)
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\\" && i < n) { out = out substr(s, i + 1, 1); i += 2; continue }
+                out = out c; i++
+            }
+            printf "%s", out
+        }'
+}
+
+json_array_strings() {   # <[ "a", "b" ]> -> one decoded string per line
+    printf '%s' "$1" | awk '
+        BEGIN { RS = "\001" }
+        {
+            s = $0; n = length(s); i = 1
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\"") {
+                    j = i + 1; out = ""
+                    while (j <= n) {
+                        d = substr(s, j, 1)
+                        if (d == "\\" && j < n) { out = out substr(s, j + 1, 1); j += 2; continue }
+                        if (d == "\"") break
+                        out = out d; j++
+                    }
+                    print out
+                    i = j + 1; continue
+                }
+                i++
+            }
+        }'
+}
+
+cmd_import_relation() {   # FILE [--name=NEW] [--yes]
+    local file="" newname="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --name=*)   newname="${a#*=}" ;;
+            --yes|-y)   yes=1 ;;
+            -*)         die "import-relation: unknown option '$a' (only --name=NEW and --yes)" ;;
+            *)          [ -z "$file" ] || die "import-relation: exactly one file"; file="$a" ;;
+        esac
+    done
+    [ -n "$file" ] || die "import-relation requires the file export-relation wrote (--json)"
+    [ -r "$file" ] || die "import-relation: cannot read '$file'"
+    local doc; doc=$(cat "$file") || die "import-relation: cannot read '$file'"
+
+    local schema; schema=$(json_unquote "$(json_value_of "$doc" schema)")
+    [ "$schema" = "zfs-backup/relation-export/1" ] \
+        || die "import-relation: '$file' is not a relation export (schema '${schema:-none}'; expected zfs-backup/relation-export/1). Only the --json form of export-relation is importable; the text form is for people."
+    local replay; replay=$(json_value_of "$doc" replay)
+    [ -n "$replay" ] || die "import-relation: '$file' has no 'replay' block -- nothing to reproduce"
+    local verb; verb=$(json_unquote "$(json_value_of "$replay" verb)")
+    [ "$verb" = "add-client" ] || die "import-relation: replay verb '$verb' is not one this build reproduces (only add-client)"
+    local name; name=$(json_unquote "$(json_value_of "$replay" name)")
+    [ -n "$newname" ] && name="$newname"
+    client_name_valid "$name" || die "import-relation: invalid relationship name '$name'"
+    local -a argv=()
+    local x
+    while IFS= read -r x; do
+        [ -n "$x" ] || continue
+        # Every argument the export wrote is a create flag; a stray positional
+        # would be handed to add-client as a second name. Refuse it here, by
+        # shape, so a doctored file cannot smuggle one in.
+        case "$x" in --*) ;; *) die "import-relation: replay argv carries '$x', which is not a flag -- the file is not one export-relation wrote" ;; esac
+        argv+=("$x")
+    done <<ARGV
+$(json_array_strings "$(json_value_of "$replay" argv)")
+ARGV
+    [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    local -a then_verbs=()
+    while IFS= read -r x; do [ -n "$x" ] && then_verbs+=("$x"); done <<THEN
+$(json_array_strings "$(json_value_of "$replay" then)")
+THEN
+    for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
+        [ "$x" = activate ] || die "import-relation: replay names a follow-up verb '$x' this build does not reproduce (only activate)"
+    done
+    local from; from=$(json_unquote "$(json_value_of "$doc" exported_from)")
+    local at;   at=$(json_unquote "$(json_value_of "$doc" exported_at)")
+
+    if [ -f "$(client_conf_path "$name")" ]; then
+        die "import-relation: a relationship named '$name' already exists here -- import under another name (--name=NEW) or remove-client it first. Nothing was changed."
+    fi
+
+    echo "Import relacji '$name' z $file"
+    echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+    echo
+    echo "Wykona sie DOKLADNIE to (te argumenty, ta kolejnosc, z pliku):"
+    printf '  zfs-backup.sh add-client %s' "$name"
+    for x in "${argv[@]}"; do printf ' \\\n      %s' "$x"; done
+    printf '\n'
+    for x in ${then_verbs[@]+"${then_verbs[@]}"}; do printf '  zfs-backup.sh %s %s --yes\n' "$x" "$name"; done
+    local unrep; unrep=$(json_value_of "$doc" not_replayable)
+    if [ -n "$unrep" ] && [ "$unrep" != "[]" ]; then
+        echo
+        echo "NIE odtwarza sie z pliku -- do ustawienia RECZNIE po imporcie:"
+        local uf uv
+        while IFS= read -r x; do
+            [ -n "$x" ] || continue
+            echo "  $x"
+        done <<UNREP
+$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
+UNREP
+    fi
+    if [ "$yes" -ne 1 ]; then
+        echo
+        echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+        return 0
+    fi
+    echo
+    cmd_add_client "$name" "${argv[@]}" || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
+    for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
+        cmd_activate "$name" --yes || die "import-relation: '$x $name' did not complete -- the record exists; re-run 'zfs-backup.sh activate $name' to resume (it is idempotent)."
+    done
+    log "import-relation: '$name' reproduced from $file"
+}
+
 cmd_export_relation() {
     local name="" as_json=0 config_arg="" a
     for a in "$@"; do
@@ -14608,6 +14819,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         status)           shift; cmd_status "$@" ;;
         show-config)      shift; cmd_show_config "$@" ;;
         export-relation)  shift; cmd_export_relation "$@" ;;
+        import-relation)  shift; cmd_import_relation "$@" ;;
         list-profiles)    shift; cmd_list_profiles "$@" ;;
         save-profile)     shift; cmd_save_profile "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
