@@ -3838,8 +3838,13 @@ fi
 # one `recursive = yes`. (REV-20260811-102 step 3 also emits one NON-recursive
 # `recursive = no` per remote source dataset -- one here for rpool/data -- which is
 # a separate scope and does not double the target ladder.)
-if [ "$(grep -c 'recursive    = yes' "$EC_FS")" = 1 ] \
-        && [ "$(grep -c 'recursive    = no' "$EC_FS")" = 1 ]; then
+# Since 2026-09-08 the target ladder is scoped to the LANDING PATH of each
+# dataset, not to TARGET/<peer>: a flat root lands as one entry with nothing
+# under it, so its ladder is `recursive = no` like the remote source prune --
+# two `no`, zero `yes`. A recursive `yes` on a flat landing would be the
+# leaf-under-a-recursive-parent race delsnaps already had fixed.
+if [ "$(grep -c 'recursive    = yes' "$EC_FS")" = 0 ] \
+        && [ "$(grep -c 'recursive    = no' "$EC_FS")" = 2 ]; then
     ok "field survival: prune recursion is written once, by the relationship"
 else
     bad "field survival: prune recursion is written once, by the relationship" "$(grep -n recursive "$EC_FS")"
@@ -4346,7 +4351,11 @@ emit9() {   # <conf> <name> <host> <is_new> [mode] [datasets]
 }
 
 # --- backup mode: one [dataset:] + one recursive GFS ladder ---
-C9="$P9/backup.conf"; DS9="tank/backups/pve9/rpool/data"; PR9="tank/backups/pve9"
+# PR9 == DS9 since 2026-09-08: the ladder is scoped to what THIS relationship
+# lands (one [prune:] per landing path), no longer to the peer's whole subtree,
+# which is shared by every relationship pointing at that peer and so belongs to
+# none of them (measured on pve10; account in client_section_plan).
+C9="$P9/backup.conf"; DS9="tank/backups/pve9/rpool/data"; PR9="$DS9"
 : > "$C9"
 
 # STEP 1 -- first activation creates the normal managed sections.
@@ -4500,7 +4509,10 @@ fi
 # An owned section with no src field cannot be refreshed -- refusing beats
 # leaving the relationship silently pointing at the old endpoint.
 N9="$P9/nosrc.conf"
-printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n\tflags        = -K /dev/null\n' "$DS9" > "$N9"
+# The owned [prune:] at the landing path is what puts the dataset on the
+# PRESERVE path (2026-09-08 shape); without it the section would be
+# regenerated from scratch, which is not the refresh this asserts about.
+printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n\tflags        = -K /dev/null\n\n[prune:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n' "$DS9" "$DS9" > "$N9"
 out=$(emit9 "$N9" c9 10.9.9.1 0); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"no 'src' field to refresh"*) true ;; *) false ;; esac; then
     ok "89 an owned section with no src refuses rather than silently keeping the old endpoint"
@@ -4838,7 +4850,7 @@ gx_prune_line() {   # <label> -> A's rendered delsnaps line, from the REAL gener
 # path. A brand-new CONFIG legitimately gets the CONFIG-wide safety defaults.
 printf '[defaults]\n\thost_label = gxtest\n' > "$GXC"
 out=$(emit_gx cliA labelA 10.8.8.1); rc=$?
-if [ "$rc" -eq 0 ] && grep -qF "[excluded:vzdump]" "$GXC" && grep -qxF "[prune:tank/backups/labelA]" "$GXC"; then
+if [ "$rc" -eq 0 ] && grep -qF "[excluded:vzdump]" "$GXC" && grep -qxF "[prune:tank/backups/labelA/rpool/data]" "$GXC"; then
     ok "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults"
 else
     bad "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults" "rc=$rc out=$out file=$(cat "$GXC")"
@@ -5335,8 +5347,9 @@ before_src="$(srcsec 'zfsbackup@10.9.9.1:rpool/data' | grep use_template)"
 emit_src3b 10.9.9.2 0   # ordinary endpoint change / re-activation
 after_src="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep use_template)"
 after_sshf="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep ssh_flags)"
-# emit_src3 uses LOAD_LABEL=pve9, so the TARGET prune scope is tank/backups/pve9
-after_tgt="$(srcsec 'tank/backups/pve9' | grep use_template)"
+# emit_src3 uses LOAD_LABEL=pve9; since 2026-09-08 the TARGET ladder is scoped
+# to the landing path tank/backups/pve9/rpool/data, not to the peer root.
+after_tgt="$(srcsec 'tank/backups/pve9/rpool/data' | grep use_template)"
 # 1. the edited SOURCE policy survived the endpoint change (NOT regenerated)
 if [ "$after_src" = "	use_template = profile__prof__src_keep_hourly,profile__prof__src_keep_daily" ]; then
     ok "56/107: re-activation PRESERVES the edited source retention (policy not regenerated)"
