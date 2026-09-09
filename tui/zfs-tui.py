@@ -2034,25 +2034,42 @@ def curses_loop(ui):
                        ord("t"): "t", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
                        ord("?"): "F1", ord("h"): "F1"})
         stdscr.keypad(True)
-        # OBA DIALEKTY STRZALEK I F-KLAWISZY. keypad() wlacza w terminalu tryb
-        # aplikacyjny (ESC O B), ale terminal, ktory go nie honoruje -- albo
-        # pty, ktore go nie widzi -- sle ESC [ B, a terminfo xterm zna tylko
-        # pierwszy. Zmierzone na pve10 2026-09-09: 'j' przesuwal kursor,
-        # ESC [ B nie, i pauza poszla na ZLY wiersz. Wiec obie formy sa
-        # zdefiniowane wprost; dla curses to ten sam klawisz.
+        # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
+        # terminalu tryb aplikacyjny (ESC O B), a terminal, ktory go nie honoruje
+        # -- albo pty, ktore go nie widzi -- sle ESC [ B; terminfo xterm zna
+        # tylko pierwszy, a curses.define_key na pve10 nic nie zmienil
+        # (zmierzone 2026-09-09: 'j' przesuwal kursor, ESC [ B nie, i pauza
+        # poszla na ZLY wiersz). Wiec po ESC dobieramy bajty sami, z krotkim
+        # czekaniem, i mapujemy sekwencje z tablicy -- goly ESC to Esc.
         E = chr(27)
-        for seq, code in (("[A", curses.KEY_UP), ("[B", curses.KEY_DOWN), ("[C", curses.KEY_RIGHT), ("[D", curses.KEY_LEFT),
-                          ("OA", curses.KEY_UP), ("OB", curses.KEY_DOWN), ("OC", curses.KEY_RIGHT), ("OD", curses.KEY_LEFT),
-                          ("[H", curses.KEY_HOME), ("[F", curses.KEY_END), ("OH", curses.KEY_HOME), ("OF", curses.KEY_END),
-                          ("[1~", curses.KEY_HOME), ("[4~", curses.KEY_END), ("[5~", curses.KEY_PPAGE), ("[6~", curses.KEY_NPAGE),
-                          ("[2~", curses.KEY_IC), ("[3~", curses.KEY_DC),
-                          ("OP", curses.KEY_F1), ("OQ", curses.KEY_F2), ("OR", curses.KEY_F3), ("OS", curses.KEY_F4),
-                          ("[11~", curses.KEY_F1), ("[12~", curses.KEY_F2), ("[13~", curses.KEY_F3), ("[14~", curses.KEY_F4),
-                          ("[15~", curses.KEY_F5), ("[17~", curses.KEY_F6), ("[18~", curses.KEY_F7), ("[19~", curses.KEY_F8)):
+        SEQ = {"[A": "up", "[B": "down", "OA": "up", "OB": "down", "[H": "home", "[F": "end", "OH": "home", "OF": "end",
+               "[1~": "home", "[4~": "end", "[5~": "pgup", "[6~": "pgdn", "[2~": "ins", "[3~": "del",
+               "OP": "F1", "OQ": "F2", "OR": "F3", "OS": "F4", "[11~": "F1", "[12~": "F2", "[13~": "F3", "[14~": "F4",
+               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
+
+        def read_key():
+            k = stdscr.getch()
+            if k != 27:
+                return k, None
+            stdscr.nodelay(True)
+            seq = ""
             try:
-                curses.define_key(E + seq, code)
-            except (curses.error, AttributeError):
-                pass
+                deadline = time.time() + 0.15
+                while time.time() < deadline and len(seq) < 6:
+                    c = stdscr.getch()
+                    if c == -1:
+                        time.sleep(0.01)
+                        continue
+                    if c > 255:
+                        break
+                    seq += chr(c)
+                    if seq in SEQ or (seq.startswith("[") and seq.endswith("~")) or (seq.startswith("O") and len(seq) == 2):
+                        break
+            finally:
+                stdscr.nodelay(False)
+            if not seq:
+                return 27, None
+            return -2, SEQ.get(seq)
         while True:
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
@@ -2070,14 +2087,14 @@ def curses_loop(ui):
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
             else:
                 stdscr.timeout(2000 if ui.screen == "transfery" and not ui.window else -1)
-            k = stdscr.getch()
+            k, seqname = read_key()
             if k == -1:
                 if not ui.window:
                     ui.refresh("progress")
                 continue
             if k == curses.KEY_RESIZE:
                 continue
-            name = KEYMAP.get(k)
+            name = seqname if k == -2 else KEYMAP.get(k)
             # W polu tekstowym KAZDY drukowalny znak jest wejsciem, nie klawiszem
             # skrotu -- inaczej sciezki z 'q' albo 'j' nie daloby sie wpisac.
             if ui.window and ui.window[0] == "prompt" and name not in ("esc", "enter", "bs") and 32 <= k < 0x110000:
