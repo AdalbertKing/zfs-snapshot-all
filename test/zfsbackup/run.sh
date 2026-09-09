@@ -11829,6 +11829,113 @@ else
     bad "gfsscope: sync mode unchanged" "$R6"
 fi
 
+# 6b. REV-20260909-141: THE MIGRATION CARRIES THE INSTALLED POLICY, not the
+#     profile's. The reviewer's fixture: a legacy peer-root ladder whose
+#     gfs_pattern (automated_hourly) is NARROWER than the active profile's
+#     (automated_). After re-activation the peer-root section is gone, the
+#     per-landing one exists, and the REAL gen-cron.sh renders the delete line
+#     with the installed pattern -- not the profile's. Judged on the generated
+#     command, because that is what the engine is handed.
+GSM="$WORK/gfsmigrate"; rm -rf "$GSM"; mkdir -p "$GSM/prof"
+mkprof_copy "$GSM/prof"
+gsm_emit() {   # <conf> <is_new> -> rc; output in $WORK/gsm.out
+    ( ssh() { return 0; }
+      load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      PROFILE_ROOT="$GSM" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
+      PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=pve9 \
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.9.9.1 LOAD_FLAGS="-K /dev/null" \
+      PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 \
+      MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+      emit_client_sections "$1" c9 "$2" ) >"$WORK/gsm.out" 2>&1
+}
+# The REAL consumer, the way section 89 crosses that boundary: emit_client_sections
+# writes only the relationship's sections; [defaults] and the rendered templates
+# are ensure_cron_config's job in the flow, so they are composed here.
+( . "$REPO/lib-profile.sh"
+  _t=$(mktemp); _d=$(mktemp); _p=$(mktemp); _e=$(mktemp); _L=$(mktemp)
+  bash "$REPO/gen-cron.sh" --dump-tier-letters > "$_L"
+  profile_split_one_file "$GSM/prof.conf" "$_t" "$_d" "$_p" "$_e"
+  profile_render_templates "$_t" prof "$GSM/tpl.conf" "" "$_L" ) || true
+gsm_render() {   # <sections config> -> the delsnaps -G line(s) the REAL gen-cron.sh renders
+    { printf '[defaults]\n\thost_label = gsm\n\n'; cat "$GSM/tpl.conf"; printf '\n'; cat "$1"; } > "$GSM/cand.conf"
+    bash "$REPO/gen-cron.sh" -c "$GSM/cand.conf" 2>"$GSM/cand.err" | grep 'delsnaps.sh -G'
+}
+# CREATE once, through the real path.
+GSMC="$GSM/backup.conf"; : > "$GSMC"
+gsm_emit "$GSMC" 1 || bad "gfsmigrate: fixture CREATE" "$(cat "$WORK/gsm.out")"
+# Now REWRITE it into the legacy shape the reviewer supplied: the per-landing
+# ladder becomes the peer-root ladder, with an admin's narrower pattern and a
+# custom schedule -- policy that differs from the profile on every field that
+# can differ.
+python_free_rewrite() {
+    awk '
+        /^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; inl = 1; next }
+        /^\[/ { inl = 0 }
+        inl && /^\tgfs_pattern[ \t]*=/   { print "\tgfs_pattern  = automated_hourly"; next }
+        inl && /^\tprune_schedule[ \t]*=/ { print "\tprune_schedule = 13 3 * * *"; next }
+        inl && /^\trecursive[ \t]*=/      { print "\trecursive    = yes"; next }
+        { print }
+    ' "$GSMC" > "$GSMC.new" && mv "$GSMC.new" "$GSMC"
+}
+python_free_rewrite
+gsm_before=$(gsm_render "$GSMC")
+if grep -qxF '[prune:tank/backups/pve9]' "$GSMC" && grep -q 'gfs_pattern  = automated_hourly' "$GSMC" \
+        && printf '%s' "$gsm_before" | grep -q '"tank/backups/pve9" "automated_hourly"'; then
+    ok "gfsmigrate: fixture -- a VALID legacy peer-root ladder with policy that differs from the profile (control: the real gen-cron.sh renders it)"
+else
+    bad "gfsmigrate: fixture is a valid legacy ladder" "rendered: $gsm_before" "$(cat "$GSM/cand.err")" "$(cat "$GSMC")"
+fi
+# THE RE-ACTIVATION -- the reviewer's exact call shape: existing relationship.
+gsm_emit "$GSMC" 0; gsm_rc=$?
+gsm_after=$(gsm_render "$GSMC")
+if [ "$gsm_rc" -eq 0 ] && ! grep -qxF '[prune:tank/backups/pve9]' "$GSMC" \
+        && grep -qxF '[prune:tank/backups/pve9/rpool/data]' "$GSMC"; then
+    ok "gfsmigrate: re-activation rc=0, the peer-root section is gone, the per-landing one exists"
+else
+    bad "gfsmigrate: migration shape" "rc=$gsm_rc" "$(cat "$WORK/gsm.out")" "$(cat "$GSMC")"
+fi
+# THE DISCRIMINATOR: the installed pattern is what the engine is handed.
+if printf '%s' "$gsm_after" | grep -q '"tank/backups/pve9/rpool/data" "automated_hourly"' \
+        && ! printf '%s' "$gsm_after" | grep 'tank/backups/pve9/rpool/data' | grep -q '"automated_" '; then   # judged on the TARGET line; the remote source prune legitimately carries the profile's automated_
+    ok "gfsmigrate: the REAL gen-cron.sh renders the migrated ladder with the INSTALLED gfs_pattern (automated_hourly), not the profile's (automated_)"
+else
+    bad "gfsmigrate: installed gfs_pattern survives the migration in the rendered command" "before: $gsm_before" "after:  $gsm_after"
+fi
+if printf '%s' "$gsm_after" | grep -q '^13 3 \* \* \* '; then
+    ok "gfsmigrate: ...and the installed prune_schedule survives too (not re-staggered from the profile)"
+else
+    bad "gfsmigrate: installed prune_schedule survives" "$gsm_after"
+fi
+if grep -A12 '^\[prune:tank/backups/pve9/rpool/data\]' "$GSMC" | grep -q 'recursive    = no' \
+        && grep -A12 '^\[prune:tank/backups/pve9/rpool/data\]' "$GSMC" | grep -q 'notify       = c9-data'; then
+    ok "gfsmigrate: only the topology-owned lines are recomputed for the new path (recursive, notify)"
+else
+    bad "gfsmigrate: topology lines recomputed" "$(grep -A12 '^\[prune:tank/backups/pve9/rpool/data\]' "$GSMC")"
+fi
+# POSITIVE CONTROL: the same migration with policy EQUAL to the profile's must
+# still produce a section the profile would have produced -- proving the
+# assertion above discriminates on the pattern, not on the migration itself.
+GSMD="$GSM/same.conf"; : > "$GSMD"
+gsm_emit "$GSMD" 1
+awk '/^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; next } { print }' "$GSMD" > "$GSMD.new" && mv "$GSMD.new" "$GSMD"
+gsm_emit "$GSMD" 0; gsm_drc=$?
+gsm_dafter=$(gsm_render "$GSMD")
+if [ "$gsm_drc" -eq 0 ] && printf '%s' "$gsm_dafter" | grep -q '"tank/backups/pve9/rpool/data" "automated_" '; then
+    ok "gfsmigrate: control -- an unchanged installed policy migrates to the same command the profile gives"
+else
+    bad "gfsmigrate: control with unchanged policy" "rc=$gsm_drc" "$gsm_dafter"
+fi
+# FAIL CLOSED: a legacy header the planner names but whose body cannot be read
+# back must refuse, never fall back to the profile.
+GSME="$GSM/empty.conf"; cp "$GSMC" "$GSME"
+awk '/^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; print "\t# managed-by: zfs-backup.sh client=c9"; skip = 1; next } /^\[/ { skip = 0 } !skip { print }' "$GSME" > "$GSME.new" && mv "$GSME.new" "$GSME"
+gsm_emit "$GSME" 0; gsm_erc=$?
+if [ "$gsm_erc" -ne 0 ] && grep -q 'could not be read back' "$WORK/gsm.out"; then
+    ok "gfsmigrate: a legacy ladder with no readable policy REFUSES the migration instead of re-deriving from the profile"
+else
+    bad "gfsmigrate: empty legacy body refuses" "rc=$gsm_erc" "$(cat "$WORK/gsm.out")"
+fi
+
 # 7. THE FIFTH EXEMPTION on the clobber guard. Migrating off the peer-root
 #    ladder genuinely DROPS coverage, so assert_target_block_not_clobbered is
 #    right to refuse it -- it did, on pve10, with "2 job line(s) would be
