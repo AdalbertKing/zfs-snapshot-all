@@ -2034,6 +2034,25 @@ def curses_loop(ui):
                        ord("t"): "t", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
                        ord("?"): "F1", ord("h"): "F1"})
         stdscr.keypad(True)
+        # OBA DIALEKTY STRZALEK I F-KLAWISZY. keypad() wlacza w terminalu tryb
+        # aplikacyjny (ESC O B), ale terminal, ktory go nie honoruje -- albo
+        # pty, ktore go nie widzi -- sle ESC [ B, a terminfo xterm zna tylko
+        # pierwszy. Zmierzone na pve10 2026-09-09: 'j' przesuwal kursor,
+        # ESC [ B nie, i pauza poszla na ZLY wiersz. Wiec obie formy sa
+        # zdefiniowane wprost; dla curses to ten sam klawisz.
+        E = chr(27)
+        for seq, code in (("[A", curses.KEY_UP), ("[B", curses.KEY_DOWN), ("[C", curses.KEY_RIGHT), ("[D", curses.KEY_LEFT),
+                          ("OA", curses.KEY_UP), ("OB", curses.KEY_DOWN), ("OC", curses.KEY_RIGHT), ("OD", curses.KEY_LEFT),
+                          ("[H", curses.KEY_HOME), ("[F", curses.KEY_END), ("OH", curses.KEY_HOME), ("OF", curses.KEY_END),
+                          ("[1~", curses.KEY_HOME), ("[4~", curses.KEY_END), ("[5~", curses.KEY_PPAGE), ("[6~", curses.KEY_NPAGE),
+                          ("[2~", curses.KEY_IC), ("[3~", curses.KEY_DC),
+                          ("OP", curses.KEY_F1), ("OQ", curses.KEY_F2), ("OR", curses.KEY_F3), ("OS", curses.KEY_F4),
+                          ("[11~", curses.KEY_F1), ("[12~", curses.KEY_F2), ("[13~", curses.KEY_F3), ("[14~", curses.KEY_F4),
+                          ("[15~", curses.KEY_F5), ("[17~", curses.KEY_F6), ("[18~", curses.KEY_F7), ("[19~", curses.KEY_F8)):
+            try:
+                curses.define_key(E + seq, code)
+            except (curses.error, AttributeError):
+                pass
         while True:
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
