@@ -11781,7 +11781,17 @@ cmd_save_profile() {
 
 # <record field>:<create flag>, in the order the wizard asks. A field with no
 # flag is listed in EXPORT_RELATION_UNREPLAYABLE instead, never silently.
-EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target REQUESTED_DATASETS:requested RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
+EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
+# REQUESTED_DATASETS is NOT in the map because its flag depends on another
+# field. add-client records the list under one name whichever way it was
+# given, but replays it two ways: with a mode it is `--requested=` (narrows the
+# DRAFT the source writes); without one it IS the list, `--datasets=`, and
+# `--requested=` without `--mode=` is refused at the command line. The first
+# export wrote `--requested=` for every record; measured 2026-09-09 on pve10,
+# import-relation --yes of a relationship made with --datasets died in
+# add-client's own parser -- the replay the file promised was not replayable.
+# The exportrel parser scrape could not see it: both flags exist.
+EXPORT_RELATION_LIST_FIELD="REQUESTED_DATASETS"
 # Declarations that are true and have no create flag. PASSIVE is here for a
 # different reason than the endpoints: it HAS a flag (--passive) but it is a
 # bare switch, so it is emitted by the composer below rather than as key=value.
@@ -12042,6 +12052,15 @@ cmd_export_relation() {
         first=0
         decl_json="$decl_json\"$(json_escape "$fld")\":\"$(json_escape "$val")\""
         argv+=("--$flag=$val")
+        if [ "$fld" = CLIENT_TARGET ]; then
+            # The dataset list rides right after the target, where the wizard
+            # asks it -- as the flag add-client will accept for THIS record.
+            val="${!EXPORT_RELATION_LIST_FIELD:-}"
+            if [ -n "$val" ]; then
+                decl_json="$decl_json,\"$EXPORT_RELATION_LIST_FIELD\":\"$(json_escape "$val")\""
+                if [ -n "${RUX_MODE:-}" ]; then argv+=("--requested=$val"); else argv+=("--datasets=$val"); fi
+            fi
+        fi
     done
     # PASSIVE is a bare switch on the create path, so it cannot ride the
     # key=value loop above.
