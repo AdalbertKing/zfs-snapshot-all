@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3aa2d9992a0cdefd -->
+<!-- status-covers-digest: 9a1efcc1567380de -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -50,7 +50,12 @@
     poszła na ZŁY wiersz (`duplikat` zamiast `lab-ct201`); `curses.define_key`
     nic nie zmienił. Naprawa: sekwencje po ESC czytane wprost, z krótkim
     oczekiwaniem, oba dialekty strzałek i F-klawiszy w jednej tablicy.
-    Ponowna jazda z `ESC [ B` — w toku w chwili tego wpisu; wynik w PR.
+    Ponowna jazda z `ESC [ B` i `ESC O B` (pty, watchdog): oba dialekty na
+    właściwym wierszu; F4+`t` = `pause-client` (status: `paused_local=true`),
+    drugie F4+`t` = `resume-client` (false), F7 = eksport 1609 B; host
+    zostawiony jak zastany. Drugi znaleziony błąd: `q` po gołym Esc ginęło w
+    czytniku sekwencji i TUI wisiało — nieznane bajty wracają `ungetch`,
+    `escdelay` 25 ms.
   - **Czego nie ma:** kreator `Ins` (etap E: szablon z `list-profiles
     --no-render`, 0,8 s zamiast 8 s), menu Kolektor, modyfikacja relacji
     (odłożona decyzją właściciela: tylko to, co CLI umie).
