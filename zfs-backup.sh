@@ -11048,6 +11048,38 @@ jobs_block_worklines() {   # <account> -> how many ENGINE lines the installed bl
     printf '%s' "$n"
 }
 
+# THE LINES THIS SCOPE ACTUALLY RUNS, verbatim from the installed block.
+#
+# Owner, 2026-09-08, looking at the detail panel: "A gdzie linia bash skladajaca
+# komende wsadowa?" -- a fair question. Everything else here is the DECLARATION
+# (the config); this is what the host will really execute, which is not the same
+# object and is the one an operator wants to read before believing any of it.
+#
+# MATCHED, NOT ATTRIBUTED, and the wording matters. A line can cover SEVERAL
+# datasets (check-snap-age takes a comma list, delsnaps -R a whole subtree) and
+# one config section can render SEVERAL lines (send, prune, monitor). So this
+# reports "lines that mention this scope", never "the line for this job" -- the
+# second would be a claim this reader cannot make without re-implementing
+# gen-cron's composition.
+#
+# The scope is matched as a WHOLE PATH between delimiters, not as a substring:
+# hdd/backups and hdd/backups2 are different scopes, and a substring test would
+# hand the first the second's lines.
+jobs_block_lines_for() {   # <account> <scope> -> matching engine lines, one per line
+    local acct="$1" scope="$2" blk
+    blk=$(mktemp) || die "mktemp failed"
+    if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 0; fi
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk"         | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh'         | awk -v s="$scope" '
+            {
+                n = split($0, _unused, "")   # keep awk from reformatting
+                line = $0
+                # delimiters around a dataset in a rendered line: quote, comma,
+                # space, colon (a remote host prefix) or end of line
+                if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) print line
+            }'
+    rm -f "$blk"
+}
+
 # The one-level lookup, in gen-cron's documented order: the section's own
 # tier-specific field, the section's plain field, the tier template, [defaults].
 jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
@@ -11252,6 +11284,17 @@ cmd_list_jobs() {
                     jsonw_field monitor_crit "$crit"
                     printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
                     printf ',"readable":true,"lines_in_block":%s' "$nlines"
+                    # WHAT WILL ACTUALLY RUN, verbatim. See jobs_block_lines_for:
+                    # matched by scope, never attributed to this row alone.
+                    printf ',"cron_lines":['
+                    local _cl _cfirst=1
+                    while IFS= read -r _cl; do
+                        [ -n "$_cl" ] || continue
+                        [ "$_cfirst" -eq 1 ] || printf ','
+                        _cfirst=0
+                        printf '"%s"' "$(json_escape "$_cl")"
+                    done < <(jobs_block_lines_for "$acct" "$sec")
+                    printf ']'
                     printf '}'
                 else
                     # THE FAMILY IS NOT ONE FIELD. A transfer line stamps with
