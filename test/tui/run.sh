@@ -225,7 +225,7 @@ act() {   # <keys> [extra] -> ekran; dziennik komend w $XL (wyzerowany)
 ZB="$(cd "$REPO" && pwd)/zfs-backup.sh"
 A="$(act down,F4)"
 if has "$A" '╔═ POTWIERDZENIE: Wstrzymaj relację lab-ct201 ═' && has "$A" 'Wykona się DOKŁADNIE to:' \
-        && has "$A" "zfs-backup.sh' pause-client lab-ct201" || has "$A" "zfs-backup.sh pause-client lab-ct201"; then
+        && has "$A" 'pause-client'; then   # the shell line WRAPS on a long checkout path (CI: /home/runner/work/...), so the verb and the name may sit on different lines
     ok "akcje: F4 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
 else
     bad "akcje: F4 podglad pauzy" "$A"
