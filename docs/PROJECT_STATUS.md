@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ef3ed0322d5edcdd -->
+<!-- status-covers-digest: 37919cbfb0d2763b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **PR #368 (REV-140 + kształt drabiny): z czerwonego na 768/0 (2026-09-09).**
+  Dzień stania na 29 czerwonych asercjach skończył się jednym pomiarem na pve9
+  (suita w 2 min zamiast 20): **18 z nich to była moja regresja**, nie stare
+  asercje — reguła „głosują tylko szablony, których ktoś używa" (słuszna dla
+  configu hosta, pve10 z 09-08) zastosowana do PLIKU PROFILU, który sekcji nie
+  ma, sprawiała, że `migrate-profile` nigdy nie widział profilu płaskiego jako
+  płaskiego i pisał `[prune:]` bez `use_template`, które gen-cron odrzucał.
+  Poprawka: `detect_profile_gfs <plik> all` dla profilu docelowego, kontrola
+  ujemna w `gfsshape` przypina obie odpowiedzi dla tego samego pliku.
+  8 asercji przypinało stary zakres drabiny (`[prune:TARGET/<peer>]`) i zostały
+  przepisane na kontrakt „jedno `[prune:]` na lądowisko"; 3 to wyciek
+  `PROFILE_LOADED` w nowych sondach. Lekcja jest w error-logu (R2: zmierz po
+  właściwej stronie granicy, tu: host natywny zamiast Git Bash).
 
 - **TUI: pięć okien nad czytelnikami `--json` (2026-09-09).**
   Właściciel: *„zrobić te nieszczęsne okna, ogarnąć problemy, sprawdzić
