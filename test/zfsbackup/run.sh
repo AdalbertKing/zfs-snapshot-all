@@ -11485,7 +11485,7 @@ fi
 # decides, and this pins exactly the combination that produced four
 # retention-less relationships on the lab.
 gs_plan() {   # <is_new> <profile> <config> -> rc, message in $WORK/gs.out
-    ( PROFILE_GFS=0
+    ( PROFILE_GFS=0; PROFILE_LOADED=""
       PROFILE_GFS_WHY="profile__d30h24__hourly"
       PROFILE_ACTIVE="$2"
       PEER_SAVED_DATASETS=""
@@ -11526,7 +11526,7 @@ else
     bad "gfsshape: re-activation is not refused" "$(cat "$WORK/gs.out")"
 fi
 # CONTROL 3: on a LADDER host the ladder profile is the ordinary case.
-if ( PROFILE_GFS=1; PROFILE_ACTIVE=default; PEER_SAVED_DATASETS=""; PEER_SAVED_TARGET="hdd/backups"
+if ( PROFILE_GFS=1; PROFILE_LOADED=""; PROFILE_ACTIVE=default; PEER_SAVED_DATASETS=""; PEER_SAVED_TARGET="hdd/backups"
      PEER_SAVED_MODE=""; LOAD_LABEL="peer"; client_section_plan "$GS/orphan.conf" proba 1 ) >"$WORK/gs.out" 2>&1; then
     ok "gfsshape: on a LADDER host the ladder profile passes, and plans a prune scope"
 else
@@ -11570,7 +11570,7 @@ gss_prune() {     # <config> <scope> <owner>
 }
 gss_plan() {   # <is_new> <config> <name> <mode> <recorded prune scope> <src dataset>...
     local isnew="$1" cfg="$2" nm="$3" mode="$4" rec="$5"; shift 5
-    ( PROFILE_GFS=1
+    ( PROFILE_GFS=1; PROFILE_LOADED=""
       PROFILE_ACTIVE=""
       MANAGED_DATASETS=""
       MANAGED_PRUNE_SCOPE="$rec"
