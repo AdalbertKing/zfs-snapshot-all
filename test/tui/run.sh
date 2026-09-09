@@ -53,10 +53,15 @@ hasE() { printf '%s' "$1" | grep -qE -- "$2"; }
 # EKRAN 1: RELACJE -- wiersz to RELACJA (para hostow), nie zadanie
 # ============================================================================
 S="$(screen relacje)"
-if hasE "$S" '^║ lab-ct201 +active +aktualne +OK [0-9:]+ 1 s +[0-9]{2}:30 +║'; then
-    ok "relacje: jeden wiersz na RELACJE -- nazwa, stan z rekordu, kopie z monitora, ostatni wynik z progress, nastepny bieg z harmonogramu"
+if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +[0-9]{2}:30 +║'; then
+    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), stan z rekordu, kopie z monitora, nastepny bieg z harmonogramu"
 else
     bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S"
+fi
+if has "$S" 'Ostatni bieg brak zapisu w historii'; then
+    ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
+else
+    bad "relacje: ostatni wynik w panelu" "$S"
 fi
 # Wlasciciel, 2026-09-08: wiersz ma byc relacja. Szczeble drabiny (keep_hourly...)
 # to zadania i na ekranie glownym ich NIE ma.
@@ -76,7 +81,7 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S" '^║ duplikat +seeding +-- +brak zapisu +seed duplikat +║'; then
+if hasE "$S" '^║ duplikat +pve10[?]192.168.28.99 +seeding +-- +seed duplikat +║'; then
     ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S"
@@ -107,7 +112,7 @@ fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
 SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down 2>&1)"
-if hasE "$SP" '^║ lab-srv-b +active PAUZA +aktualne +OK [0-9: ]+s +-- pauza -- +║'; then
+if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +active PAUZA +aktualne +-- pauza -- +║'; then
     ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
@@ -141,7 +146,7 @@ fi
 
 # --- BLOK NIECZYTELNY JEST WIERSZEM ------------------------------------------
 U="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/unreadable.json" --monitors "$FIX/monitors.json" --screen relacje 2>&1)"
-if hasE "$U" 'konto backupacct +nieczytelny +nie odpowiada +11 linii w cronie'; then
+if hasE "$U" 'konto backupacct +[?] +nieczytelny +nie odpowiada'; then
     ok "relacje: blok bez czytelnego configu jest WIERSZEM z liczba linii, ktore chodza"
 else
     bad "relacje: nieczytelny blok jako wiersz" "$U"
@@ -154,6 +159,198 @@ if has "$E" "To NIE znaczy 'host nic nie robi'"; then
 else
     bad "relacje: pusty host" "$E"
 fi
+
+# ============================================================================
+# EKRAN F2: ZADANIA -- co chodzi w cronie, z relacja i KIERUNKIEM
+# ============================================================================
+# Wlasciciel, 2026-09-09: "obok kolumny relacja wstaw kolumne z kierunkiem np.
+# pve9>pve10, lub pve9<>pve10, lub local" -- lewa strona to ZAWSZE ten host.
+Z="$(screen zadania)"
+if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
+    ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja"
+else
+    bad "zadania: tytul" "$Z"
+fi
+if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +….*/lab/vm-101 +aktualne +║'; then
+    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, zakres ciety od lewej, werdykt slowem"
+else
+    bad "zadania: wiersz wysylki" "$Z"
+fi
+if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +'; then
+    ok "zadania: porzadki na ladowisku = 'local' i to, co trzymaja (-H24)"
+else
+    bad "zadania: wiersz porzadkow" "$Z"
+fi
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192.168.28.99 +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
+    ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
+else
+    bad "zadania: zdalne porzadki" "$Z"
+fi
+Z120="$(screen zadania "" --width 120)"
+if has "$Z120" 'Harmonogram' && ! has "$Z" 'Harmonogram'; then
+    ok "zadania: harmonogram jest kolumna od 100 kolumn, przy 80 zostaje w panelu"
+else
+    bad "zadania: kolumna harmonogramu" "$Z" "$Z120"
+fi
+if has "$Z" 'harmonogram 24 * * * *'; then
+    ok "zadania: ...i w panelu jest przy 80"
+else
+    bad "zadania: harmonogram w panelu" "$Z"
+fi
+ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania 2>&1)"
+if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +wysyłka hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +wysyłka daily'; then
+    ok "zadania: wysylka = 'hostA>pve9', pobranie = 'hostA<pve1', kopia na hoscie = 'local'; zadanie bez etykiety mowi '(bez rel.)'"
+else
+    bad "zadania: trzy kierunki na hostA" "$ZH"
+fi
+ZE="$(screen zadania down,enter)"
+if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'szczebel keep_hourly  (sekcja prune)' && has "$ZE" 'kierunek local'; then
+    ok "zadania: Enter otwiera szczegoly zadania -- szczebel, sekcja, kierunek, harmonogram"
+else
+    bad "zadania: Enter" "$ZE"
+fi
+
+# ============================================================================
+# EKRAN F3: RELACJE -- AKCJE. Komenda bash NAJPIERW, potem 't', potem wyjscie.
+# ============================================================================
+# Wlasciciel, 2026-09-09: "przypominam o podgladzie komendy bash". Czasowniki
+# nie sa uruchamiane: --exec-log zapisuje DOKLADNA linie, ktora poszlaby do
+# powloki, i to ona jest asercja. Atrapa ma ten sam przebieg sterowania, co
+# prawdziwy bieg (okno wyjscia, komunikat) -- rozni sie tylko brakiem procesu.
+XL="$(mktemp)"
+act() {   # <keys> [extra] -> ekran; dziennik komend w $XL (wyzerowany)
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
+}
+ZB="$(cd "$REPO" && pwd)/zfs-backup.sh"
+A="$(act down,F4)"
+if has "$A" '╔═ POTWIERDZENIE: Wstrzymaj relację lab-ct201 ═' && has "$A" 'Wykona się DOKŁADNIE to:' \
+        && has "$A" 'pause-client'; then   # the shell line WRAPS on a long checkout path (CI: /home/runner/work/...), so the verb and the name may sit on different lines
+    ok "akcje: F4 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
+else
+    bad "akcje: F4 podglad pauzy" "$A"
+fi
+if [ ! -s "$XL" ]; then
+    ok "akcje: ...i sam podglad NICZEGO nie uruchamia"
+else
+    bad "akcje: podglad nie uruchamia" "$(cat "$XL")"
+fi
+A="$(act down,F4,t)"
+if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[atrapa]'; then
+    ok "akcje: 't' wykonuje DOKLADNIE pokazana komende (pause-client NAME --reason=...) i otwiera okno wyjscia"
+else
+    bad "akcje: t wykonuje" "$(cat "$XL")" "$A"
+fi
+A="$(act down,F4,esc)"
+if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano'; then
+    ok "akcje: Esc w potwierdzeniu anuluje i mowi to; dziennik pusty"
+else
+    bad "akcje: Esc anuluje" "$(cat "$XL")" "$A"
+fi
+A="$(act down,F4,q)"
+if [ ! -s "$XL" ] && has "$A" 'anulowano'; then
+    ok "akcje: KAZDY klawisz poza 't' anuluje (tu: q) -- nie ma przypadkowego wykonania"
+else
+    bad "akcje: inny klawisz anuluje" "$(cat "$XL")" "$A"
+fi
+# pauza -> wznowienie: ta sama litera, przeciwny czasownik, decyduje REKORD
+AP="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --exec-log "$XL" --screen relacje --keys down,down,down,F4,t 2>&1)"
+if grep -q "resume-client lab-srv-b$" "$XL" && has "$AP" 'WYJŚCIE: Wznów relację lab-srv-b'; then
+    ok "akcje: F4 na relacji WSTRZYMANEJ wola resume-client (decyduje paused_local z rekordu)"
+else
+    bad "akcje: F4 = resume na pauzie" "$(cat "$XL")" "$AP"
+fi
+A="$(act down,del)"
+if has "$A" 'POTWIERDZENIE: Usuń relację lab-ct201' && has "$A" 'remove-client lab-ct201' && has "$A" 'KOPII na dysku nie rusza'; then
+    ok "akcje: Del pokazuje remove-client i mowi, czego NIE robi (kopii nie rusza)"
+else
+    bad "akcje: Del" "$A"
+fi
+A="$(act down,del,t)"
+if grep -q "remove-client lab-ct201$" "$XL"; then
+    ok "akcje: ...i po 't' wola dokladnie remove-client NAME"
+else
+    bad "akcje: Del t" "$(cat "$XL")"
+fi
+# F4 na F3 to PAUZA, nie przelaczenie na Transfery
+A="$(act F4)"
+if ! has "$A" '╔═ Zakończone' && has "$A" 'POTWIERDZENIE'; then
+    ok "akcje: F4 na ekranie Relacje to pauza, a nie skok do Transferow (tam F4 z innych ekranow)"
+else
+    bad "akcje: F4 na F3" "$A"
+fi
+# eksport: podpowiedz pelnej sciezki, do zmiany
+A="$(HOME=/root act down,F7)"
+if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" 'lab-ct201.export.json_'; then
+    ok "akcje: F7 podpowiada PELNA sciezke pliku eksportu (/root/<relacja>.export.json) i pozwala ja zmienic"
+else
+    bad "akcje: F7 podpowiedz" "$A"
+fi
+A="$(HOME=/root act down,F7,bs,bs,bs,bs,text:yaml,enter)"
+if has "$A" 'POTWIERDZENIE: Eksport relacji lab-ct201' && has "$A" 'export-relation lab-ct201' && has "$A" 'lab-ct201.export.yaml'; then
+    ok "akcje: ...Backspace i wpisany tekst zmieniaja sciezke, a komenda pokazuje przekierowanie do NIEJ"
+else
+    bad "akcje: F7 edycja sciezki" "$A"
+fi
+A="$(HOME=/root act down,F7,enter,t)"
+if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.json'\?$" "$XL"; then
+    ok "akcje: 't' wykonuje eksport DO wskazanego pliku"
+else
+    bad "akcje: F7 t" "$(cat "$XL")"
+fi
+# import: podglad (bez --yes) w potwierdzeniu, potem --yes
+A="$(HOME=/root act down,F8,text:e.json,enter)"
+if has "$A" 'POTWIERDZENIE: Import relacji z e.json' && has "$A" 'import-relation' && hasE "$A" "e.json'? --yes" && has "$A" '[atrapa] podgląd:'; then
+    ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
+else
+    bad "akcje: F8" "$A"
+fi
+A="$(HOME=/root act down,F8,text:e.json,enter,t)"
+if grep -q "import-relation .*e.json'\? --yes$" "$XL"; then
+    ok "akcje: ...i 't' wola import-relation PLIK --yes"
+else
+    bad "akcje: F8 t" "$(cat "$XL")"
+fi
+# odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
+A="$(act end,del)"; act end,del,t >/dev/null
+if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; then
+    ok "akcje: na rekordzie 'removed' akcja odmawia, mowi dlaczego, i nic nie idzie do powloki"
+else
+    bad "akcje: removed odmawia" "$(cat "$XL")" "$A"
+fi
+AH="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4 2>&1)"
+"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4,t >/dev/null 2>&1
+if [ ! -s "$XL" ] && has "$AH" 'to nie jest relacja (zadanie bez rekordu)'; then
+    ok "akcje: na zadaniu BEZ rekordu (ksztalt produkcji) akcja odmawia -- nie ma czego pauzowac czasownikiem"
+else
+    bad "akcje: bez rekordu odmawia" "$(cat "$XL")" "$AH"
+fi
+A="$(act down,ins)"
+if has "$A" 'kreator nowej relacji to następny etap' && [ ! -s "$XL" ]; then
+    ok "akcje: Ins mowi, ze kreator jest nastepnym etapem, i nazywa dzisiejsza droge (add-client)"
+else
+    bad "akcje: Ins" "$A"
+fi
+if has "$S" 'Enter F4:pauza Del F7:eksport F8:import Ins'; then
+    ok "akcje: stopka ramki F3 wymienia klawisze akcji przy 80 kolumnach"
+else
+    bad "akcje: stopka" "$S"
+fi
+# szerokosc: okna akcji tez trzymaja kontrakt
+aw_ok=1
+for w in 80 120 200; do
+    for keys in down,F4 down,del down,F7 down,F4,t; do
+        out="$(HOME=/root act "$keys" --width "$w")"
+        n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
+        case "$n" in "0 24") ;; *) aw_ok=0; echo "  akcje w=$w keys=$keys -> $n" ;; esac
+    done
+done
+if [ "$aw_ok" -eq 1 ]; then
+    ok "akcje: okna potwierdzenia, pola i wyjscia maja dokladnie szerokosc terminala (80/120/200)"
+else
+    bad "akcje: szerokosci okien"
+fi
+rm -f "$XL"
 
 # ============================================================================
 # OKNO RELACJI (Enter)
@@ -238,11 +435,11 @@ if has "$T" 'na łączu: niemierzalne'; then
 else
     bad "transfery: niemierzalne" "$T"
 fi
-TF="$(screen relacje F3)"
-if has "$TF" '╔═ Zakończone' && has "$TF" '[F3 Transfery]'; then
-    ok "transfery: F3 z innego ekranu przelacza i podswietla klawisz w listwie"
+TF="$(screen zadania F4)"
+if has "$TF" '╔═ Zakończone' && has "$TF" '[F4 Transfery]'; then
+    ok "transfery: F4 z innego ekranu przelacza i podswietla klawisz w listwie"
 else
-    bad "transfery: F3" "$TF"
+    bad "transfery: F4" "$TF"
 fi
 TW="$(screen transfery down,enter)"
 if has "$TW" '╔═ transfer lab-srv-b ═' && has "$TW" 'Migawka  hdd/lab/srv-b/db@automated_hourly'; then
@@ -319,8 +516,8 @@ fi
 # ============================================================================
 widths_ok=1
 for w in 80 120 200; do
-    for sc in relacje transfery monitor nosniki; do
-        for keys in "" "enter"; do
+    for sc in zadania relacje transfery monitor nosniki; do
+        for keys in "" "enter" "F1"; do
             out="$(screen "$sc" "$keys" --width "$w" --height 24)"
             n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
             case "$n" in "0 24") ;; *) widths_ok=0; echo "  $sc w=$w keys=$keys -> (zle linie, wszystkie): $n" ;; esac
@@ -340,7 +537,7 @@ else
 fi
 # Terminal bez UTF-8: ramki +-|= i slowa bez ogonkow. Zero bajtow spoza ASCII.
 ascii_ok=1
-for sc in relacje transfery monitor nosniki; do
+for sc in zadania relacje transfery monitor nosniki; do
     for keys in "" "enter" "F1"; do
         out="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen "$sc" --keys "$keys" 2>&1)"
         if [ "$(printf '%s' "$out" | LC_ALL=C grep -c '[^ -~]')" -ne 0 ]; then ascii_ok=0; echo "  $sc keys=$keys ma bajty spoza ASCII"; fi
@@ -353,19 +550,19 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +active +aktualne' && has "$A" 'Zrodla (1)'; then
+if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +aktualne' && has "$A" 'Zrodla (1)'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
 fi
-HLP="$(screen relacje F1)"
-if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta'; then
+HLP="$(screen relacje F1 --height 60)"
+if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' && has "$HLP" 'NAJPIERW komenda bash'; then
     ok "pomoc: F1 otwiera pomoc ze slownikiem kolumny Kopie"
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" ' F1 Pomoc [F2 Relacje] F3 Transfery F4 Monitor F5 Nośniki Enter Więcej q Wyjście'; then
-    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach co do znaku i podswietla aktywny ekran"
+if has "$S" ' F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Monitor F6 Nośniki q Wyjście'; then
+    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran"
 else
     bad "wyglad: listwa F" "$S"
 fi
