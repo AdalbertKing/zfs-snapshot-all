@@ -544,7 +544,7 @@ Inspection / teardown:
   zfs-backup.sh import-relation FILE [--name=NEW] [--yes]
                                     Replays what export-relation --json wrote: the
                                     add-client argv in the file, in that order, then
-                                    activate. Prints both commands and stops without
+                                    seed and activate. Prints the commands and stops without
                                     --yes. Fields the export listed as not_replayable
                                     are printed back as the manual step they are
                                     (set-endpoint). Refuses a name that already exists
@@ -11975,7 +11975,7 @@ ARGV
 $(json_array_strings "$(json_value_of "$replay" then)")
 THEN
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
-        [ "$x" = activate ] || die "import-relation: replay names a follow-up verb '$x' this build does not reproduce (only activate)"
+        case "$x" in seed|activate) ;; *) die "import-relation: replay names a follow-up verb '$x' this build does not reproduce (only seed and activate)" ;; esac
     done
     local from; from=$(json_unquote "$(json_value_of "$doc" exported_from)")
     local at;   at=$(json_unquote "$(json_value_of "$doc" exported_at)")
@@ -12012,7 +12012,12 @@ UNREP
     echo
     cmd_add_client "$name" "${argv[@]}" || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
-        cmd_activate "$name" --yes || die "import-relation: '$x $name' did not complete -- the record exists; re-run 'zfs-backup.sh activate $name' to resume (it is idempotent)."
+        echo
+        echo ">>> import-relation: $x $name"
+        case "$x" in
+            seed)     cmd_seed "$name" --yes ;;
+            activate) cmd_activate "$name" --yes ;;
+        esac || die "import-relation: '$x $name' did not complete -- the record exists and the lifecycle is resumable: fix what it named, then re-run 'zfs-backup.sh $x $name' (a NEW peer first needs deploy.sh --join there, as add-client printed)."
     done
     log "import-relation: '$name' reproduced from $file"
 }
@@ -12101,7 +12106,7 @@ EXF
         echo "Odtworzenie (te argumenty, ta kolejnosc):"
         printf '  zfs-backup.sh add-client %s' "$name"
         for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
-        printf '\n  zfs-backup.sh activate %s\n' "$name"
+        printf '\n  zfs-backup.sh seed %s\n  zfs-backup.sh activate %s\n' "$name" "$name"
         if [ -n "$unrep_json" ]; then
             echo
             echo "NIE odtwarza sie z tego pliku (kreator o to nie pyta):"
@@ -12127,7 +12132,10 @@ EXF
     jsonw_field exported_from "$(hostname 2>/dev/null || printf '?')"
     jsonw_field exported_at   "$(date -Is 2>/dev/null || printf '?')"
     printf ',"declarations":{%s}' "$decl_json"
-    printf ',"replay":{"verb":"add-client","name":"%s","argv":[%s],"then":["activate"]}' \
+    # "then" is the documented lifecycle after add-client: seed, then activate.
+    # The first version wrote ["activate"] alone, and activate refuses an
+    # unseeded record -- measured 2026-09-09 when import-relation replayed it.
+    printf ',"replay":{"verb":"add-client","name":"%s","argv":[%s],"then":["seed","activate"]}' \
         "$(json_escape "$name")" "$argv_json"
     printf ',"not_replayable":[%s]' "$unrep_json"
     # The installed sections, verbatim, as documentation. NOT an import input:

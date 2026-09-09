@@ -10369,6 +10369,14 @@ case "$ex_probe" in
 esac
 rm -rf "$EX/probe-clients"
 
+# THE LIFECYCLE AFTER add-client IS seed THEN activate. ["activate"] alone was
+# the first version; activate refuses an unseeded record, so an import that
+# obeyed the file died one step in (pve10, 2026-09-09).
+case "$ex_out" in
+    *'"then":["seed","activate"]'*) ok "exportrel: replay.then is the documented lifecycle, seed then activate" ;;
+    *) bad "exportrel: replay.then is the documented lifecycle, seed then activate" "$ex_out" ;;
+esac
+
 # THE GAP RULE, called out on its own: EXCLUDE_CHILD_3 exists in the record and
 # must NOT be exported, because numbering stops at the first gap everywhere else
 # in this program and an export that reached past one would promise an exclusion
@@ -10455,11 +10463,12 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         source "$1"; shift
         cmd_add_client() { printf "add-client|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_activate()   { printf "activate|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_seed()       { printf "seed|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 im_run "$IM/ksiegowosc.json"; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im.out" \
-        && grep -q 'zfs-backup.sh activate ksiegowosc --yes' "$WORK/im.out" \
+        && grep -q 'zfs-backup.sh seed ksiegowosc --yes' "$WORK/im.out" && grep -q 'zfs-backup.sh activate ksiegowosc --yes' "$WORK/im.out" \
         && grep -q 'nie zostalo zmienione' "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
     ok "importrel: without --yes the two commands are shown, and NOTHING is called"
 else
@@ -10473,9 +10482,10 @@ fi
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
 im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
 if [ "$im_rc" -eq 0 ] && grep -qF -- "$im_want" "$IM/calls.log" \
-        && grep -q '^activate|ksiegowosc|--yes$' "$IM/calls.log" \
-        && [ "$(grep -c . "$IM/calls.log")" -eq 2 ]; then
-    ok "importrel: --yes hands add-client the file's argv VERBATIM (regex, backslash, quote, comma survive) and then activate --yes"
+        && [ "$(sed -n 2p "$IM/calls.log")" = 'seed|ksiegowosc|--yes' ] \
+        && [ "$(sed -n 3p "$IM/calls.log")" = 'activate|ksiegowosc|--yes' ] \
+        && [ "$(grep -c . "$IM/calls.log")" -eq 3 ]; then
+    ok "importrel: --yes hands add-client the file's argv VERBATIM (regex, backslash, quote, comma survive), then seed --yes, then activate --yes -- the lifecycle, in order"
 else
     bad "importrel: --yes replays argv verbatim" "rc=$im_rc" "want: $im_want" "$(cat "$IM/calls.log" "$WORK/im.err")"
 fi
