@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9a1efcc1567380de -->
+<!-- status-covers-digest: 5f94f724fa6f74a1 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,35 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **TUI, etap E: kreator nowej relacji `Ins` z wyborem szablonu (2026-09-09).**
+  Właściciel: *„Tworzenie/modyfikacja relacji to ekran pozwalający na wybraniu
+  gotowego template"* i *„przypominam o podglądzie komendy bash"*. Kreator
+  odwzorowuje formę jednokomendową `zfs-backup.sh --source=HOST:DATASET
+  --target=DATASET [--profile] [--source-profile] [--name] [--port]
+  [--local-user] [--grant-remotely] [--manual-join]`: pola w kolejności formy,
+  Enter na polu Profil otwiera listę z `list-profiles --json --no-render`
+  (0,8 s / 16 profili na pve10; ważność sprawdza `add-client` dla jednego
+  wybranego), `[ PLAN ]` uruchamia czasownik BEZ `--install` (read-only,
+  „touches neither host") i pokazuje jego plan obok pełnej komendy z
+  `--install --yes`; `t` odpala ją odłączoną, okno pokazuje wyjście, cykl jest
+  wznawialny tą samą komendą. Puste Źródło/Cel odmawiają w formularzu, zepsute
+  `list-profiles` nie blokuje (nazwę można wpisać ręcznie). Modyfikacja relacji
+  celowo nie istnieje (decyzja właściciela: tylko to, co CLI umie).
+  - **Suita `test/tui` 95/0** (fikstura `list-profiles.json` dosłownie z pve10):
+    formularz, lista, wybór, plan+potwierdzenie, argv co do flagi (nazwa, port,
+    profil źródła, konto, oba przełączniki), odmowy, Esc, szerokości 80/120/200.
+  - **Na żywo (pve10, pty):** `Ins` → wpisane `192.168.28.99:hdd/lab/srv-a`
+    i `hdd/backups`, lista szablonów, `[ PLAN ]` pokazał prawdziwy „RUX plan
+    (read-only)", `t` uruchomiło formę z `--install --yes`, która zatrzymała się
+    na własnej odmowie pokrycia (`lab-srv-a` już to lądowisko ma); rekord
+    `lab-wiz` po niej usunięty `remove-client`. **Wada znaleziona tą jazdą:**
+    nazwa dziennika akcji brała `argv[1]`, a dla formy jednokomendowej to
+    `--source=…:hdd/lab/srv-a` z ukośnikiem — katalog nie istniał i start
+    padał cicho; nazwa jest teraz filtrowana (`nowa-relacja-<stempel>.log`).
+  - **Znana luka bez zmian:** nieudany cykl (`add-client` OK → `seed`/guard
+    odmawia) zostawia rekord `pending_enroll`; kreator tego nie maskuje —
+    rekord widać na F3 z krokiem „activate NAME", a `Del` go usuwa.
 
 - **TUI, etap C: F2 Zadania z kierunkiem, F3 Relacje z akcjami (2026-09-09).**
   Właściciel: F2 pokazuje ZADANIA z crona z relacją i kolumną **Kierunek**

@@ -326,11 +326,110 @@ else
     bad "akcje: bez rekordu odmawia" "$(cat "$XL")" "$AH"
 fi
 A="$(act down,ins)"
-if has "$A" 'kreator nowej relacji to następny etap' && [ ! -s "$XL" ]; then
-    ok "akcje: Ins mowi, ze kreator jest nastepnym etapem, i nazywa dzisiejsza droge (add-client)"
+if has "$A" '╔═ Nowa relacja (forma jednokomandowa) ═' || has "$A" '╔═ Nowa relacja (forma jednokomendowa) ═' && [ ! -s "$XL" ]; then
+    ok "akcje: Ins otwiera kreator nowej relacji, nic nie wykonujac"
 else
     bad "akcje: Ins" "$A"
 fi
+# ============================================================================
+# KREATOR NOWEJ RELACJI (Ins) -- forma jednokomendowa, szablon z listy, PLAN
+# ============================================================================
+# Wlasciciel: "Tworzenie/modyfikacja relacji to z kolei ekran pozwalajacy na
+# wybraniu gotowego template" i "przypominam o podgladzie komendy bash".
+# Kolejnosc: pola -> [ PLAN ] (czasownik bez --install, read-only) -> pelna
+# komenda z --install --yes -> 't'. Fikstura szablonow to doslowne wyjscie
+# `list-profiles --json --no-render` z pve10 (16 profili, 0,8 s).
+wiz() {   # <keys> [extra] -> ekran; dziennik w $XL
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
+}
+W="$(wiz ins)"
+if has "$W" '╔═ Nowa relacja (forma jednokomendowa) ═' && has "$W" '> Źródło HOST:DATASET    _' && has "$W" 'Profil (szablon)       default' \
+        && has "$W" '[ PLAN ]' && has "$W" 'szablonów do wyboru: 16'; then
+    ok "kreator: Ins otwiera formularz w kolejnosci formy jednokomendowej, profil domyslnie 'default', 16 szablonow z list-profiles"
+else
+    bad "kreator: formularz" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter)"
+if has "$W" '╔═ Szablon dla pola: Profil (szablon) ═' && hasE "$W" '^║ > default +gfs +one-family' && hasE "$W" '^║   d7h24 +flat +family-per-tier'; then
+    ok "kreator: Enter na polu Profil otwiera liste szablonow (nazwa, mechanizm, ksztalt, opis), kursor na obecnym"
+else
+    bad "kreator: lista szablonow" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,down,enter)"
+if has "$W" 'Profil (szablon)       m12w4d7h24-age'; then
+    ok "kreator: wybor z listy wraca do formularza z nowa wartoscia"
+else
+    bad "kreator: wybor szablonu" "$W"
+fi
+# PLAN: komenda bez --install (read-only) jest pokazana jako podglad, a do
+# potwierdzenia idzie ta sama z --install --yes.
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,end,enter)"
+if has "$W" 'POTWIERDZENIE: Nowa relacja: 192.168.28.99:hdd/lab/x -> hdd/backups' && has "$W" '--source=192.168.28.99:hdd/lab/x --target=hdd/backups' \
+        && has "$W" '--profile=default --install --yes' && has "$W" '[atrapa] plan:' && has "$W" 'Plan czasownika (read-only, bez --install)'; then
+    ok "kreator: [ PLAN ] pokazuje plan czasownika (bez --install) i pelna komende z --install --yes do potwierdzenia"
+else
+    bad "kreator: plan i potwierdzenie" "$W"
+fi
+if [ ! -s "$XL" ]; then
+    ok "kreator: ...i do tego miejsca nic nie zostalo wykonane (plan w atrapie tez nie jest zapisem)"
+else
+    bad "kreator: nic przed t" "$(cat "$XL")"
+fi
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,end,enter,t)"
+if grep -q -- "--source=192.168.28.99:hdd/lab/x --target=hdd/backups --profile=default --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja'; then
+    ok "kreator: 't' wykonuje DOKLADNIE pokazana forme jednokomendowa z --install --yes i otwiera okno wyjscia"
+else
+    bad "kreator: t" "$(cat "$XL")" "$W"
+fi
+# kazde pole trafia do argv pod swoja flaga, przelaczniki jako gole flagi
+W="$(wiz ins,text:h:d,enter,text:t,enter,down,text:nazwa,enter,text:2222,enter,text:d7h24,down,text:bak,enter,space,down,space,down,enter,t)"
+if grep -q -- "--source=h:d --target=t --profile=default --source-profile=d7h24 --name=nazwa --port=2222 --local-user=bak --grant-remotely --manual-join --install --yes$" "$XL"; then
+    ok "kreator: nazwa, port, profil zrodla, konto lokalne i oba przelaczniki ida do argv pod swoimi flagami, w kolejnosci formy"
+else
+    bad "kreator: pelne argv" "$(cat "$XL")"
+fi
+# ODMOWY: puste zrodlo/cel -- komunikat W formularzu, nic nie wykonane; Esc anuluje
+W="$(wiz ins,end,enter)"
+if has "$W" 'kreator: Źródło i Cel są wymagane' && has "$W" '╔═ Nowa relacja' && [ ! -s "$XL" ]; then
+    ok "kreator: puste Zrodlo/Cel -- odmowa W formularzu (nie znika), nic nie wykonane"
+else
+    bad "kreator: puste pola" "$W"
+fi
+W="$(wiz ins,text:x:y,esc)"
+if has "$W" 'anulowano -- nic nie wykonano' && ! has "$W" '╔═ Nowa relacja' && [ ! -s "$XL" ]; then
+    ok "kreator: Esc zamyka formularz bez sladu"
+else
+    bad "kreator: Esc" "$W"
+fi
+W="$(wiz ins,text:h:d,enter,text:t,enter,enter,esc)"
+if has "$W" 'Profil (szablon)       default' && has "$W" '╔═ Nowa relacja'; then
+    ok "kreator: Esc na liscie szablonow wraca do formularza bez zmiany pola"
+else
+    bad "kreator: Esc na liscie" "$W"
+fi
+# bez zrodla szablonow (brak pliku): formularz nadal dziala, mowi o bledzie
+WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --exec-log "$XL" --screen relacje --keys ins 2>&1)"
+if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie'; then
+    ok "kreator: zepsute list-profiles nie blokuje kreatora -- mowi o bledzie i pozwala wpisac nazwe"
+else
+    bad "kreator: blad list-profiles" "$WE"
+fi
+# szerokosci okien kreatora
+wz_ok=1
+for w in 80 120 200; do
+    for keys in ins "ins,text:a:b,enter,text:c,enter,enter" "ins,text:a:b,enter,text:c,enter,end,enter"; do
+        out="$(wiz "$keys" --width "$w")"
+        n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
+        case "$n" in "0 24") ;; *) wz_ok=0; echo "  kreator w=$w keys=$keys -> $n" ;; esac
+    done
+done
+if [ "$wz_ok" -eq 1 ]; then
+    ok "kreator: formularz, lista szablonow i potwierdzenie maja dokladnie szerokosc terminala (80/120/200)"
+else
+    bad "kreator: szerokosci"
+fi
+
 if has "$S" 'Enter F4:pauza Del F7:eksport F8:import Ins'; then
     ok "akcje: stopka ramki F3 wymienia klawisze akcji przy 80 kolumnach"
 else
