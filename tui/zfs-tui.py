@@ -421,6 +421,7 @@ class Data(object):
         self.status = self.jobs = self.monitors = self.progress = self.replicas = None
         self.errors = {}
         self.configs = {}     # show-config NAME --json, na zadanie
+        self.profiles = None  # list-profiles --json --no-render, na zadanie (kreator)
         self.read_at = 0
 
     def failed(self, key):
@@ -450,6 +451,24 @@ def collect(repo, files, only=None):
             data.errors.pop(key, None)
     data.read_at = int(time.time())
     return data
+
+
+def load_profiles(repo, files, data):
+    """Lista szablonow do kreatora. --no-render: 0,8 s zamiast 8 s na pve10
+    (16 profili); `valid`/`families` nie sa potrzebne do WYBORU -- profil
+    sprawdza add-client dla tego jednego, ktory zostal wybrany."""
+    if data.profiles is not None:
+        return data.profiles, data.errors.get("profiles")
+    if files.get("profiles"):
+        doc, err = load_file(files["profiles"])
+    elif files.get("offline"):
+        doc, err = None, None
+    else:
+        doc, err = run_verb(repo, ["list-profiles", "--json", "--no-render"])
+    data.profiles = (doc or {}).get("profiles", [])
+    if err:
+        data.errors["profiles"] = err
+    return data.profiles, err
 
 
 def load_config(repo, files, data, name):
@@ -1002,7 +1021,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
         body.append(fit(u"... jeszcze %d" % (len(rows) - first - list_h), inner))
     while len(body) < list_h + 2:
         body.append("")
-    footer = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa" if width >= 100
+    footer = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa relacja" if width >= 100
               else u"Enter F4:pauza Del F7:eksport F8:import Ins") if rows else ""
     listbox = box(ch, title, body, lbw, footer=footer)
     if cur_y is not None:
@@ -1544,7 +1563,8 @@ HELP = [
     "",
     u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, zakres, kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
-    u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa (wkrótce)",
+    u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
+    u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install)",
     u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
     u"                 na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
@@ -1751,7 +1771,115 @@ class UI(object):
             default = os.path.join(home_dir(), "")
             self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = podgląd, Esc = anuluj):", default, self.import_preview)
         elif k == "ins":
-            self.message = u"kreator nowej relacji to następny etap; dziś: zfs-backup.sh add-client NAME --host=HOST --profile=... (usage)"
+            self.wizard_open()
+
+    # ------------------------------------------------------------------
+    # KREATOR NOWEJ RELACJI (etap E). Odwzorowuje forme jednokomendowa
+    # `zfs-backup.sh --source=HOST:DATASET --target=DATASET [--profile=...]`,
+    # tak jak mowi dokument decyzji: pola w kolejnosci, w jakiej forma pyta,
+    # szablon z listy, potem PLAN czasownika (read-only, bez --install), potem
+    # pelna komenda z --install --yes do potwierdzenia. Kreator nie liczy nic
+    # sam: co odmawia czasownik, odmawia tu tak samo, tymi samymi slowami.
+    WIZARD_FIELDS = [
+        ("source", u"Źródło HOST:DATASET", "text", u"np. 192.168.28.99:hdd/lab/srv-a -- co pobieramy i skąd"),
+        ("target", u"Cel (dataset tutaj)", "text", u"np. hdd/backups -- pod nim ląduje <peer>/<ścieżka źródła>"),
+        ("profile", u"Profil (szablon)", "pick", u"Enter otwiera listę z list-profiles"),
+        ("name", u"Nazwa relacji", "text", u"puste = z nazwy hosta; potrzebna, gdy ten host ma już relację"),
+        ("port", u"Port SSH", "text", u"puste = 22"),
+        ("source_profile", u"Profil źródła", "pick", u"puste = ten sam co Profil (retencja niesymetryczna, gdy inny)"),
+        ("local_user", u"Konto lokalne", "text", u"puste = root; nazwa = konto delegowane (utworzone, jeśli brak)"),
+        ("grant", u"--grant-remotely", "toggle", u"tak = zatwierdź zakres na źródle w tym samym biegu"),
+        ("manual", u"--manual-join", "toggle", u"tak = pakiet do przeniesienia ręcznie zamiast join przez ssh"),
+        ("go", u"[ PLAN ]", "go", u"Enter: czasownik planuje (read-only), potem komenda do potwierdzenia"),
+    ]
+
+    def wizard_open(self):
+        profiles, perr = load_profiles(self.repo, self.files, self.data)
+        vals = {"source": "", "target": "", "profile": "default", "name": "", "port": "",
+                "source_profile": "", "local_user": "", "grant": False, "manual": False}
+        self.window = ("form", {"title": u"Nowa relacja (forma jednokomendowa)", "vals": vals, "cur": 0,
+                                "profiles": profiles, "perr": perr})
+        self.scroll = 0
+
+    def wizard_argv(self, vals, install):
+        a = [self.zb(), "--source=%s" % vals["source"], "--target=%s" % vals["target"]]
+        if vals.get("profile"):
+            a.append("--profile=%s" % vals["profile"])
+        if vals.get("source_profile"):
+            a.append("--source-profile=%s" % vals["source_profile"])
+        if vals.get("name"):
+            a.append("--name=%s" % vals["name"])
+        if vals.get("port"):
+            a.append("--port=%s" % vals["port"])
+        if vals.get("local_user"):
+            a.append("--local-user=%s" % vals["local_user"])
+        if vals.get("grant"):
+            a.append("--grant-remotely")
+        if vals.get("manual"):
+            a.append("--manual-join")
+        if install:
+            a += ["--install", "--yes"]
+        return a
+
+    def wizard_plan(self, vals):
+        """Krok PLAN: czasownik bez --install jest read-only i mowi, co by zrobil."""
+        if not vals["source"].strip() or not vals["target"].strip():
+            self.message = u"kreator: Źródło i Cel są wymagane (czasownik odmówiłby dokładnie tak samo)"
+            return
+        argv = self.wizard_argv(vals, False)
+        if self.exec_log:
+            plan = [u"[atrapa] plan: " + self.shell_line(argv)]
+        else:
+            try:
+                p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
+                plan = p.stdout.decode("utf-8", "replace").splitlines()
+            except OSError as e:
+                self.message = u"nie udało się uruchomić planu: %s" % e
+                return
+            if p.returncode != 0:
+                self.window = ("output", {"title": u"Plan odmówił -- popraw pola (Esc wraca do formularza)", "path": None, "proc": None,
+                                          "shell": self.shell_line(argv), "lines": plan, "rc": p.returncode, "back_to": self.window})
+                self.scroll = 0
+                return
+        self.confirm(u"Nowa relacja: %s -> %s" % (vals["source"], vals["target"]), self.wizard_argv(vals, True),
+                     [u"Plan czasownika (read-only, bez --install):", ""] + sum((wrap("  " + x, 72) for x in plan), []) +
+                     ["", u"--install --yes: enrol (join przez ssh) -> seed -> activate, wznawialne tą samą komendą."])
+
+    def form_lines(self, obj, width):
+        out = []
+        vals = obj["vals"]
+        for i, (key, label, kind, hint) in enumerate(self.WIZARD_FIELDS):
+            mark = ">" if i == obj["cur"] else " "
+            if kind == "toggle":
+                shown = "[x] tak" if vals[key] else "[ ] nie"
+            elif kind == "go":
+                shown = ""
+            else:
+                shown = vals[key] + ("_" if i == obj["cur"] else "")
+            out.append(fit("%s %-22s %s" % (mark, label, shown), width - 4))
+            if i == obj["cur"]:
+                out.append(fit("      " + hint, width - 4))
+        out.append("")
+        if obj.get("perr"):
+            out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
+        else:
+            out.append(fit(u" szablonów do wyboru: %d (Enter na polu Profil)" % len(obj.get("profiles") or []), width - 4))
+        out.append(fit(u" strzałki = pole, pisz = wartość, Backspace, spacja = przełącz, Enter na [ PLAN ], Esc = anuluj", width - 4))
+        if self.message:
+            out += ["", fit(u" ! " + self.message, width - 4)]
+        return out
+
+    def picker_lines(self, obj, width):
+        out = []
+        for i, pr in enumerate(obj["items"]):
+            mark = ">" if i == obj["cur"] else " "
+            tiers = ", ".join(t.get("name", "") for t in pr.get("tiers", [])[:4])
+            out.append(fit("%s %-16s %-9s %-11s %s" % (mark, pr.get("name", "?"), pr.get("mechanism", "") or "", pr.get("shape", "") or "", pr.get("description", "") or ""), width - 4))
+            if i == obj["cur"]:
+                out.append(fit(u"      szczeble: %s%s   źródło: %s" % (tiers, " ..." if len(pr.get("tiers", [])) > 4 else "", pr.get("source", "?")), width - 4))
+        if not obj["items"]:
+            out.append(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu")
+        return out
 
     def import_preview(self, path):
         """Krok 1 importu: to, co czasownik drukuje BEZ --yes, jako podglad."""
@@ -1791,6 +1919,55 @@ class UI(object):
             elif raw and len(raw) == 1 and raw.isprintable():
                 obj["value"] += raw
             return "stay"
+        if self.window and self.window[0] == "pick":
+            obj = self.window[1]
+            if k == "esc":
+                self.window = obj["back"]
+            elif k in ("down", "j"):
+                obj["cur"] = min(obj["cur"] + 1, max(0, len(obj["items"]) - 1))
+            elif k in ("up", "k"):
+                obj["cur"] = max(0, obj["cur"] - 1)
+            elif k == "enter":
+                if obj["items"]:
+                    obj["back"][1]["vals"][obj["field"]] = obj["items"][obj["cur"]].get("name", "")
+                self.window = obj["back"]
+            return "stay"
+        if self.window and self.window[0] == "form":
+            obj = self.window[1]
+            key, label, kind, hint = self.WIZARD_FIELDS[obj["cur"]]
+            if k == "esc":
+                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+            elif k in ("down",):
+                obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
+            elif k in ("up",):
+                obj["cur"] = max(0, obj["cur"] - 1)
+            elif k == "end":
+                obj["cur"] = len(self.WIZARD_FIELDS) - 1
+            elif k == "home":
+                obj["cur"] = 0
+            elif k == "enter":
+                if kind == "go":
+                    self.wizard_plan(obj["vals"])
+                elif kind == "pick":
+                    items = list(obj.get("profiles") or [])
+                    cur = 0
+                    for i, pr in enumerate(items):
+                        if pr.get("name") == obj["vals"][key]:
+                            cur = i
+                    self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window})
+                elif kind == "toggle":
+                    obj["vals"][key] = not obj["vals"][key]
+                else:
+                    obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
+            elif k == "space" and kind == "toggle":
+                obj["vals"][key] = not obj["vals"][key]
+            elif k == "bs" and kind == "text":
+                obj["vals"][key] = obj["vals"][key][:-1]
+            elif k.startswith("text:") and kind in ("text", "pick"):
+                obj["vals"][key] += k[5:]
+            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick"):
+                obj["vals"][key] += raw
+            return "stay"
         if self.window and self.window[0] == "confirm":
             obj = self.window[1]
             if k in ("t", "text:t"):
@@ -1813,6 +1990,9 @@ class UI(object):
         if self.window and self.window[0] == "output":
             if k in ("esc", "q", "enter"):
                 obj = self.window[1]
+                if obj.get("back_to"):
+                    self.window, self.scroll = obj["back_to"], 0
+                    return "stay"
                 self.window, self.scroll = None, 0
                 if obj.get("proc") is not None and obj["proc"].poll() is None:
                     self.message = u"proces biegnie dalej (pid %d); wyjście: %s" % (obj["proc"].pid, obj["path"])
@@ -1934,6 +2114,15 @@ def _ui_render(self, width, height):
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=u"t wykonaj   Esc anuluj")
+        elif kind == "form":
+            scr, self.scroll = render_window(base, obj["title"], self.form_lines(obj, width), 0, width, height, self.ch,
+                                             footer=u"Enter na [ PLAN ] = dalej   Esc = anuluj")
+        elif kind == "pick":
+            scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
+                                             footer=u"Enter wybiera   Esc wraca bez zmiany")
+            if obj["cur"] * 2 >= height - 4:
+                scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), obj["cur"] * 2 - (height - 6), width, height, self.ch,
+                                                 footer=u"Enter wybiera   Esc wraca bez zmiany")
         elif kind == "output":
             lines = self.output_lines(obj, width)
             if self.scroll == 0 and obj.get("proc") is not None and obj["proc"].poll() is None:
@@ -2113,7 +2302,10 @@ def curses_loop(ui):
             name = seqname if k == -2 else KEYMAP.get(k)
             # W polu tekstowym KAZDY drukowalny znak jest wejsciem, nie klawiszem
             # skrotu -- inaczej sciezki z 'q' albo 'j' nie daloby sie wpisac.
-            if ui.window and ui.window[0] == "prompt" and name not in ("esc", "enter", "bs") and 32 <= k < 0x110000:
+            if ui.window and ui.window[0] == "form" and k == 32:
+                ui.key("space", h)
+                continue
+            if ui.window and ui.window[0] in ("prompt", "form") and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
@@ -2157,11 +2349,12 @@ def main(argv):
     ap.add_argument("--progress", help="czytaj progress --json z pliku")
     ap.add_argument("--replicas", help="czytaj list-replicas --json z pliku")
     ap.add_argument("--config", help="czytaj show-config --json z pliku (okno relacji)")
+    ap.add_argument("--profiles", help="czytaj list-profiles --json --no-render z pliku (kreator)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     a = ap.parse_args(argv)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
-             "replicas": a.replicas, "config": a.config, "offline": a.offline}
+             "replicas": a.replicas, "config": a.config, "profiles": a.profiles, "offline": a.offline}
     ch = Chars(want_ascii(a))
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
