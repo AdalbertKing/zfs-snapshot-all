@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 45c51b2d7edfec6e -->
+<!-- status-covers-digest: 3aa2d9992a0cdefd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,40 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **TUI, etap C: F2 Zadania z kierunkiem, F3 Relacje z akcjami (2026-09-09).**
+  Właściciel: F2 pokazuje ZADANIA z crona z relacją i kolumną **Kierunek**
+  (lewa strona to zawsze ten host: `pve10>pve9` wysyłam, `pve10<pve9`
+  pobieram, `pve10<>pve9` obie strony, `local`); relacje dostają własne okno
+  F3 do zarządzania; każda akcja pokazuje **komendę bash przed wykonaniem**.
+  - **F3 akcje:** `F4` pause-client/resume-client (decyduje rekord), `Del`
+    remove-client, `F7` `export-relation --json > PLIK` (pełna ścieżka
+    podpowiedziana, do zmiany), `F8` `import-relation PLIK` (podgląd
+    czasownika bez `--yes`, potem `--yes`), `Ins` nazywa kreator jako następny
+    etap. Okno potwierdzenia = dokładna linia powłoki (shlex, nigdy ucięta);
+    wykonuje tylko `t`, każdy inny klawisz anuluje i mówi to. Czasownik biegnie
+    ODŁĄCZONY (własna sesja, wyjście do `~/.zfs-tui/<czasownik>-<stempel>.log`),
+    okno pokazuje ogon pliku jak `tail -f`; Esc zamyka okno, proces biegnie
+    dalej (seed może trwać godziny i widać go na F4). Odmowy PRZED
+    czymkolwiek: rekord `removed`, wiersz bez rekordu (kształt produkcji), zły
+    ekran. TUI nie ma kopii żadnej reguły — odmowa jest odmową czasownika.
+  - **Suita `test/tui` 83/0.** Akcje przypięte przez `--exec-log`: atrapa
+    zapisuje DOKŁADNĄ linię powłoki zamiast ją uruchamiać i dzieli z prawdziwym
+    biegiem przebieg sterowania (potwierdzenie, okno wyjścia, komunikat);
+    dyskryminator to równość argv. Kontrakt szerokości 80/120/200 i ASCII
+    rozszerzony na nowe okna.
+  - **Na żywo (pve10, pty):** F3→F4→`t` wykonało prawdziwe `pause-client`,
+    drugie `F4`+`t` `resume-client`, `F7` zapisało eksport — wszystko przez
+    odłączone procesy z dziennikami w `~/.zfs-tui/`. **Wada znaleziona tą
+    jazdą:** strzałka w dół jako `ESC [ B` (tryb normalny terminala / pty) nie
+    ruszała kursora — curses pod `TERM=xterm` zna tylko `ESC O B` — więc akcja
+    poszła na ZŁY wiersz (`duplikat` zamiast `lab-ct201`); `curses.define_key`
+    nic nie zmienił. Naprawa: sekwencje po ESC czytane wprost, z krótkim
+    oczekiwaniem, oba dialekty strzałek i F-klawiszy w jednej tablicy.
+    Ponowna jazda z `ESC [ B` — w toku w chwili tego wpisu; wynik w PR.
+  - **Czego nie ma:** kreator `Ins` (etap E: szablon z `list-profiles
+    --no-render`, 0,8 s zamiast 8 s), menu Kolektor, modyfikacja relacji
+    (odłożona decyzją właściciela: tylko to, co CLI umie).
 
 - **REV-141 (P1): migracja starej drabiny niesie ZAINSTALOWANĄ politykę, nie profilu (2026-09-09).**
   Recenzent pokazał: przy przejściu z `[prune:TARGET/<peer>]` na zakres
