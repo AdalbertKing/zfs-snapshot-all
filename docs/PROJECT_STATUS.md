@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 26add3df5619192e -->
+<!-- status-covers-digest: 45c51b2d7edfec6e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-141 (P1): migracja starej drabiny niesie ZAINSTALOWANĄ politykę, nie profilu (2026-09-09).**
+  Recenzent pokazał: przy przejściu z `[prune:TARGET/<peer>]` na zakres
+  per-lądowisko nowe sekcje szły z `PROFILE_PRUNE_FILE`, więc ręczne
+  `gfs_pattern = automated_hourly` wracało jako `automated_` z profilu — szersza
+  rodzina pod nożem GFS, rc=0, a wyjątek strażnika clobber to ukrywał. Teraz
+  ciało starej sekcji jest przechwytywane PRZED usunięciem
+  (`capture_legacy_ladder_policy`) i odtwarzane co do bajtu pod każdym
+  lądowiskiem; przeliczane są tylko `recursive`, `pair_label`, `notify`.
+  Nieczytelne ciało = odmowa migracji, nie powrót do profilu. Dyskryminator
+  `gfsshape` 6b sądzi po wyjściu PRAWDZIWEGO `gen-cron.sh` (linia `delsnaps -G`
+  z `automated_hourly` i zachowanym harmonogramem), z kontrolą pozytywną i
+  fail-closed. `gfsshape` 28/0, pełna suita na pve9 789/0.
 
 - **`import-relation FILE` — odtworzenie relacji z pliku eksportu (2026-09-09).**
   Właściciel: *„zrób import zapisanej relacji z pliku, skoro mamy eksport"*.

@@ -2049,6 +2049,37 @@ remove_client_remote_source_prunes() {   # <file> <name>
 # scope, changing only topology (REV-20260811-107: reactivation must not regenerate
 # installed source policy from the profile). Runs in the CURRENT shell so the
 # associative array is populated (no pipe/subshell).
+# THE LEGACY LADDER'S POLICY, captured before the section goes (REV-20260909-141).
+#
+# Migrating off the peer-root ladder removes [prune:TARGET/<peer>] and writes
+# one [prune:<landing>] per dataset. The first version built those replacements
+# from PROFILE_PRUNE_FILE -- the profile on disk today -- and the reviewer's
+# fixture showed what that costs: an installed `gfs_pattern = automated_hourly`
+# came back as the profile's `automated_`, widening the family the GFS delete
+# engine may prune, with rc=0 and the clobber guard's own exemption hiding the
+# swap. An installed CONFIG is runtime truth (REV-089); a migration is a
+# topology move and must carry the installed policy with it, exactly as the
+# source-prune re-activation above carries its body under a new endpoint.
+#
+# What is POLICY here: every directive of the section except the ones the new
+# path decides -- `recursive` (a flat landing is not a subtree), `pair_label`
+# (name-derived) and `notify` (named after the landing) -- and the marker,
+# which the emitter writes. use_template, gfs, gfs_pattern, prune_schedule,
+# keep/retain, monitor_* and quiesce all survive byte-for-byte.
+LEGACY_LADDER_BODY=""
+capture_legacy_ladder_policy() {   # <file> <exact header, e.g. [prune:tank/backups/pve9]> -> sets LEGACY_LADDER_BODY
+    LEGACY_LADDER_BODY=$(awk -v h="$2" '
+        $0 == h { insec = 1; next }
+        /^\[/  { insec = 0 }
+        insec {
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (t ~ /^# managed-by: /) next
+            if (t ~ /^(recursive|pair_label|notify)[ \t]*=/) next
+            if (t == "") next
+            print
+        }' "$1")
+}
+
 capture_client_remote_source_prunes() {   # <file> <name> ; fills SOURCE_PRUNE_PRESERVED
     SOURCE_PRUNE_PRESERVED=()
     # Same split, same reason as remove_client_remote_source_prunes above: a
@@ -4230,7 +4261,13 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # (Today the two always coincide: with the old shape no dataset can
         # pass the [prune:$localpath] ownership check, so all of them
         # regenerate. This does not rely on that.)
+        LEGACY_LADDER_BODY=""
         if [ -n "${PLAN_PRUNE_LEGACY:-}" ] && [ "${#regen_ds[@]}" -gt 0 ]; then
+            # Its POLICY first, its removal second: the replacements below are
+            # written from what was installed, not from today's profile
+            # (REV-20260909-141).
+            capture_legacy_ladder_policy "$workfile" "[prune:$PLAN_PRUNE_LEGACY]"
+            [ -n "$LEGACY_LADDER_BODY" ] || die "refusing to migrate the ladder at [prune:$PLAN_PRUNE_LEGACY]: its installed policy could not be read back, and a replacement built from the profile would silently re-derive retention (REV-20260909-141). Nothing was installed."
             remove_managed_sections "$workfile" "$name" "$PLAN_PRUNE_LEGACY"
             PRUNE_SCOPE_MIGRATED="$PLAN_PRUNE_LEGACY"
         fi
@@ -4241,6 +4278,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 echo
                 echo "[prune:$_plocal]"
                 echo "	$marker"
+                if [ -n "$LEGACY_LADDER_BODY" ]; then
+                    # MIGRATION: the installed policy, verbatim, under the new
+                    # path. The topology-owned lines follow below exactly as for
+                    # a fresh section; nothing here is taken from the profile.
+                    printf '%s\n' "$LEGACY_LADDER_BODY"
+                else
                 # gfs_pattern is 'automated_' rather than any tier's own
                 # narrower pattern, because the ladder has to see every
                 # snapshot it is bucketing.
@@ -4262,6 +4305,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 if [ "$sync_mode" -eq 0 ] && [ -n "$stagger_prune_expr" ]; then
                     echo "	prune_schedule = $stagger_prune_expr"
                 fi
+                fi   # legacy body vs profile
                 # Mirrors the pull's recursion, same reasoning as
                 # append_source_prune_create: a solid root's children are
                 # pulled by -R at every tick, so their landed snapshots must be
