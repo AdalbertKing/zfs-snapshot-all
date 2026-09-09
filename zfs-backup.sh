@@ -6028,11 +6028,11 @@ cmd_list_replicas() {
     # Parsed with awk rather than sourced: a config is data, never a program.
     local rows; rows=$(awk '
         /^\[replica:/ {
-            if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist)
+            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist)
             name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
             src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; next
         }
-        /^\[/ { if (name != "") { print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist); name="" } next }
+        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist); name="" } next }
         name != "" {
             line=$0; sub(/^[ \t]+/,"",line)
             k=line; sub(/[ \t]*=.*$/,"",k)
@@ -6045,7 +6045,7 @@ cmd_list_replicas() {
             else if (k=="recursive") rec=v
             else if (k=="history") hist=v
         }
-        END { if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist) }
+        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) }
     ' "$config")
 
     local gate="$SCRIPT_DIR/zfs-media-gate.sh"
@@ -6055,7 +6055,13 @@ cmd_list_replicas() {
         if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
         return 0
     fi
-    while IFS="$(printf '\t')" read -r name src dst sched pref media rec hist; do
+    # '|' AND NOT A TAB. Tab is IFS whitespace, and bash collapses a run of IFS
+    # whitespace into ONE separator, so a replica written by `add-replica --fixed`
+    # (no `media` line) read back with `recursive` in the media slot and `history`
+    # in the recursive slot: every field after the empty one shifted left.
+    # Measured 2026-09-09 on pve9 with a temporary config. `|` cannot occur in a
+    # dataset name, a cron schedule or a prefix.
+    while IFS='|' read -r name src dst sched pref media rec hist; do
         [ -n "$name" ] || continue
         pool="${dst%%/*}"
         present="unknown"; last=""
@@ -10904,6 +10910,21 @@ cmd_monitor() {
 #              IT IS ON
 
 # ------------------------------------------------------------------------------
+# gui -- WEJSCIE DO EKRANU
+# ------------------------------------------------------------------------------
+# Jeden czasownik, jeden plik. TUI zyje w tui/zfs-tui.py, bo czytelniki wydaja
+# JSON, a parser JSON-a w bashu bylby recznie pisanym parserem -- ten sam ksztalt,
+# ktory ten pakiet tepi kontraktami. `python3` z `curses` stoi na kazdym hoscie
+# floty (pve2/pve1 3.9.2, pve10 3.11.2, sprawdzone 2026-09-08), wiec to nie jest
+# nowa zaleznosc, tylko ta, ktora juz tam jest.
+cmd_gui() {
+    local tui="$SCRIPT_DIR/tui/zfs-tui.py"
+    [ -f "$tui" ] || die "gui: brak $tui -- checkout jest niekompletny"
+    command -v python3 >/dev/null 2>&1         || die "gui: nie ma python3 na tym hoscie. Ekran go potrzebuje; same czasowniki (--json) dzialaja bez niego."
+    python3 "$tui" "$@"
+}
+
+# ------------------------------------------------------------------------------
 # show-scope -- WHAT IS ACTUALLY ON THE DISK, for the detail panel
 # ------------------------------------------------------------------------------
 # Screen 2 of the GUI. Screen 1 (`list-jobs`) says what this host is DECLARED to
@@ -11215,6 +11236,45 @@ jobs_block_worklines() {   # <account> -> how many ENGINE lines the installed bl
     printf '%s' "$n"
 }
 
+# THE LINES THIS SCOPE ACTUALLY RUNS, verbatim from the installed block.
+#
+# Owner, 2026-09-08, looking at the detail panel: "A gdzie linia bash skladajaca
+# komende wsadowa?" -- a fair question. Everything else here is the DECLARATION
+# (the config); this is what the host will really execute, which is not the same
+# object and is the one an operator wants to read before believing any of it.
+#
+# MATCHED, NOT ATTRIBUTED, and the wording matters. A line can cover SEVERAL
+# datasets (check-snap-age takes a comma list, delsnaps -R a whole subtree) and
+# one config section can render SEVERAL lines (send, prune, monitor). So this
+# reports "lines that mention this scope", never "the line for this job" -- the
+# second would be a claim this reader cannot make without re-implementing
+# gen-cron's composition.
+#
+# The scope is matched as a WHOLE PATH between delimiters, not as a substring:
+# hdd/backups and hdd/backups2 are different scopes, and a substring test would
+# hand the first the second's lines.
+#
+# THE SECOND KEY IS THE RELATION LABEL. A pull line names the REMOTE source and
+# the local landing PARENT, never the landing dataset itself, so a pull job's
+# own transfer line does not mention the job's scope -- measured on the lab
+# 2026-09-09: the window showed prune and monitor for lab-ct201 and not the
+# snapget line that does the work. gen-cron stamps every engine line with
+# `-L <label>`; that is the same key the monitor reader uses, not a new one.
+jobs_block_lines_for() {   # <account> <scope> [label] -> matching engine lines, one per line
+    local acct="$1" scope="$2" label="${3:-}" blk
+    blk=$(mktemp) || die "mktemp failed"
+    if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 0; fi
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk"         | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh'         | awk -v s="$scope" -v l="$label" '
+            {
+                line = $0
+                # delimiters around a dataset in a rendered line: quote, comma,
+                # space, colon (a remote host prefix) or end of line
+                if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) { print line; next }
+                if (l != "" && line ~ ("[[:space:]]-L[[:space:]]+\"?" l "\"?([[:space:]]|$)")) print line
+            }'
+    rm -f "$blk"
+}
+
 # The one-level lookup, in gen-cron's documented order: the section's own
 # tier-specific field, the section's plain field, the tier template, [defaults].
 jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
@@ -11419,6 +11479,17 @@ cmd_list_jobs() {
                     jsonw_field monitor_crit "$crit"
                     printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
                     printf ',"readable":true,"lines_in_block":%s' "$nlines"
+                    # WHAT WILL ACTUALLY RUN, verbatim. See jobs_block_lines_for:
+                    # matched by scope, never attributed to this row alone.
+                    printf ',"cron_lines":['
+                    local _cl _cfirst=1
+                    while IFS= read -r _cl; do
+                        [ -n "$_cl" ] || continue
+                        [ "$_cfirst" -eq 1 ] || printf ','
+                        _cfirst=0
+                        printf '"%s"' "$(json_escape "$_cl")"
+                    done < <(jobs_block_lines_for "$acct" "$sec" "$label")
+                    printf ']'
                     printf '}'
                 else
                     # THE FAMILY IS NOT ONE FIELD. A transfer line stamps with
@@ -14532,6 +14603,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
         show-scope)       shift; cmd_show_scope "$@" ;;
+        gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
         remove-client)    shift; cmd_remove_client "$@" ;;

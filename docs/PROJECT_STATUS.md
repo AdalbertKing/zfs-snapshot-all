@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 565780126de85589 -->
+<!-- status-covers-digest: ef3ed0322d5edcdd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,65 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **TUI: pięć okien nad czytelnikami `--json` (2026-09-09).**
+  Właściciel: *„zrobić te nieszczęsne okna, ogarnąć problemy, sprawdzić
+  funkcjonalność i sensowny wygląd tych okien oraz poprawność ich działań"*.
+  Jeden plik `tui/zfs-tui.py`, jeden czasownik `zfs-backup.sh gui`, Python 3 z
+  biblioteki standardowej i `curses` (na całej flocie: 3.9.2 / 3.11.2). Idiom
+  Turbo Vision: ramki podwójne, panel szczegółów, okno na wierzchu, listwa
+  F-klawiszy. Wszystko **tylko do odczytu**.
+  - **Wiersz ekranu głównego to RELACJA** (korekta właściciela z 2026-09-08),
+    sklejona z czterech czytelników: rekord ze `status`, świeżość kopii z
+    `monitor` (po etykiecie), ostatni bieg z `progress` (po etykiecie),
+    następny bieg z harmonogramu `list-jobs` przez własny parser crona
+    (semantyka vixie: dom i dow oba ograniczone = LUB; wartości spoza zakresu
+    dają „nie wiem", nie wyjątek). Relacja nieaktywna pokazuje zamiast godziny
+    **następny krok CLI** (`seed`, `activate`); wstrzymana — `PAUZA` i
+    `-- pauza --`. Sekcje configu bez rekordu relacji (kształt PRODUKCJI: 0/7
+    hostów ma rekordy) i blok nieczytelny są wierszami, nie są chowane.
+  - **Okno relacji (Enter):** zakres, polityka złożona z `show-config`
+    (szablony → `trzyma -H24 -D7 -W4 -M12   co: 44 * * * *   drabina GFS`),
+    linie monitora, ostatnie transfery, sekcje configu i **linie crona, które
+    host naprawdę wykona**, oraz komendy CLI właściwe dla stanu — **nazwane,
+    nie wykonywane** (etap C/D planu z dokumentu decyzji).
+  - **Transfery** (w toku / zakończone, „niemierzalne" zamiast zera przy
+    `wire_bytes=-1`, auto-odczyt `progress` co 2 s tylko na tym ekranie),
+    **Monitor** (werdykty słowami właściciela, `PAUZA`, ostrzeżenie o innym
+    pliku silnika w cronie), **Nośniki** (cztery stany słowem, legenda i komenda
+    `add-replica`, gdy sekcji `[replica:]` nie ma).
+  - **Kontrakt wyglądu z §2 dokumentu decyzji, przypięty suitą:** każda linia
+    dokładnie 80/120/200 kolumn; panel obok listy od 120; tryb ASCII (`+-|=`,
+    słowa bez ogonków, strzałki `->`/`<-`) bez jednego bajtu spoza ASCII;
+    kolumna „Kopie" mówi *aktualne / spóźnione / stare / nie odpowiada / bez
+    monitora*, nigdy słownikiem kodów wyjścia.
+  - **Dowód bez terminala i z terminalem.** Rysowanie to funkcja czysta
+    (STAN → LINIE); `--render-once --screen X --keys ...` drukuje to, co
+    narysowałby curses po tej sekwencji klawiszy — suita `test/tui` **55/55**,
+    fikstury to dosłowne wyjścia czasowników z pve10 (w tym stan pauzy:
+    `pause-client`, odczyt, `resume-client`) i `list-replicas` z pve9. Pętla
+    curses przejechana na pve10 przez pty (`F2`–`F5`, `Enter`, `Esc`, `F1`,
+    `q`): wyjście 0, w strumieniu kolory 31/32/33/36 i pasek 46, bez śladu
+    wyjątku. Bez tty program odmawia i mówi, jak zobaczyć ekran (rc=2).
+  - **Dwie wady czytelników znalezione przez okna, naprawione w tym PR:**
+    (1) `list-jobs --json` `cron_lines` dopasowywało linie po ZAKRESIE, a linia
+    `snapget` pobrania nazywa zdalne źródło i RODZICA lądowiska, nigdy samo
+    lądowisko — okno pokazywało porządki i monitor bez linii, która robi
+    robotę; drugi klucz to `-L <etykieta>`, ten sam co w monitorze. (2)
+    `list-replicas --json` dzieliło wiersze awk TABEM i czytało `IFS=tab`; tab
+    to białe IFS, więc PUSTE pole (`add-replica --fixed` nie pisze `media`)
+    zapadało się i każde następne pole przesuwało się w lewo: zmierzone na pve9
+    `media="yes", recursive="latest"`. Separator to teraz `|`.
+  - **Znalezione przy okazji, NIE naprawione:** korzenie **pve10 i pve9 były
+    zapełnione w 100 %** (2,8 G dysku: 260 M cache apt, 210–226 M journala,
+    ~200 M `.git` każdego z klonów). `apt-get clean` + `journalctl --vacuum`
+    dały 128 M (pve10) i 330 M (pve9); dziennik aktywny nie chce się skurczyć
+    poniżej ~200 M bez zmiany `SystemMaxUse`. Dodatkowo **pve10 nie dociąga
+    GitHuba**: `git fetch` kończy się błędem certyfikatu (`subject name
+    canada.ca`), czyli godzinny `git pull` na pve10 od jakiegoś czasu nic nie
+    wdraża — gałąź wgrana bundlem. Do zbadania osobno (DNS/proxy w labie).
+  - **Czego nie ma:** akcji (Ins/Del/F4 pauza) i ekranu ustawień — to etapy C
+    i D planu; menu `Kolektor`; `show-scope` w panelu (ekran 2 z 2026-09-08
+    nie jest jeszcze podpięty pod okno relacji).
 - **LAB pve10: cztery relacje bez retencji i bez monitora — dwie wady, obie naprawione (2026-09-08).**
   Znalezione na PRAWDZIWYM labie (pve9 źródło, pve10 kolektor, cztery relacje
   założone jednokomendową ścieżką), nie w suicie. Suita nie mogła tego znaleźć,
@@ -7865,6 +7924,7 @@ przebiegnięty ponownie na diffie `a567328..HEAD` — `alertmail` 18/18 (nowa),
 | `scopefields` | **35/35** | pola ZAKRESU — `passive`, `exclude_family`, `exclude_child_<n>` — druga polowa rozbicia, ktore zaczely pola LACZA. W `flags` zostawala TOZSAMOSC (`-K/-k/-O/-p`) plus trzy DECYZJE o tym, co relacja bierze ze zrodla: czy sama stempluje snapshoty, czy adoptuje cudza rodzine (`-e`), ktorych rodzin nie adoptuje (`-E`), ktorych dzieci nie bierze (`-X`). Pinuje, ze nazwane pola renderuja te same tokeny w tej samej KOLEJNOSCI co zapis reczny (kolejnosc, bo przestawiony `flags` to szum w kazdym `crontab diff`), ze ta sama opcja z `flags` i z pola jest ODRZUCANA, oraz ze `passive = no` obok recznego `-e` tez jest odrzucane: `no` nie renderuje nic, wiec nie ma dubla, jest tylko config czytajacy odwrotnie, niz dziala. `exclude_child_<n>` jest NUMEROWANE, bo wartosc to REGEX i moze zawierac kazdy separator, ktory wybralaby lista; dziura w numeracji jest odrzucana zamiast po cichu ucinac liste. Kontrola negatywna wbudowana: poprzedni `gen-cron.sh` musi odrzucic kazdy config, ktory sie tu renderuje |
 | `subtree` | **10/10** | `validate_subtree` w OBU silnikach — dowod, ze rekurencyjny transfer wyladowal na KAZDYM potomku, nie tylko na korzeniu. Kampania na zywo zmierzyla, ze `zfs recv` strumienia `-R` POMIJA potomka, ktorego stan lokalny nie przyjmuje przyrostu, ladauje reszte i konczy sie zerem — bieg raportowal sukces, a jedno dziecko przestalo byc kopiowane. Pierwsza wersja samej kontroli byla fail-open dwukrotnie (blad inwentarza zwracal „wszystko dobrze"; test przynaleznosci byl PODCIAGIEM, wiec `@s3-extra` spelnial `@s3`) — oba przypadki przypiete tu dyskryminatorami wobec zaslepionych `zfs`/`ssh`. Kontrola negatywna wobec silnikow sprzed poprawki: **4 asercje padaja**, 6 przechodzi |
 | `realshape` | **18/18** (nowa, 2026-09-08) | luka, ktorej pozostale suity NIE MOGA pokryc: atrapa jest pisana z tego samego przekonania co kod, wiec nie moze mu zaprzeczyc. Trzy wady w dwa dni stad -- `monitor --json` niepoprawny JSON (atrapa drukowala jedna linie na ZAKRES, silnik drukuje jedna na DATASET), `show-scope --recursive` bez efektu (atrapa odpowiada tak samo niezaleznie od flag), zla "najnowsza" (atrapa miala rozne znaczniki, prawdziwa pula je remisuje przy rozdzielczosci sekundy). Ta suita **niczego nie udaje**: odtwarza BAJTY PRZECHWYCONE Z HOSTOW (`test/realshape/captures/`, zsanityzowane z nazw, dokladne co do struktury, z zapisanymi komendami przechwytu) i sprawdza jedno i drugie -- ze czytelniki je parsuja, i ze KSZTALT, na ktorym opieraja sie atrapy w innych suitach, jest nadal ksztaltem rzeczywistosci. Zarobila na siebie w pierwszym uruchomieniu: wobec przechwyconego bloku produkcyjnego `list-jobs` zglaszal JEDENASCIE dzialajacych linii jako niewyjasnialne, bo czytal naglowek gramatyka (`# BEGIN ... -- Source:`), ktorej zaden generator nigdy nie napisal. Dodatkowo testuje SAMA MASZYNERIE: `--section X` uruchamia X i nic wiecej, a kazda nazwa z linii pomocy naprawde selekcjonuje (to znalazlo, ze 57/58/59/102/108/110/122 nie uruchamialy niczego) |
+| `tui` | **18/18** (nowa, 2026-09-08) | ekran 1 GUI sprawdzony BEZ terminala. Rysowanie jest funkcja czysta (STAN -> LINIE), a `--render-once` drukuje dokladnie to, co widzi operator -- to jedyny sposob, w jaki ten ekran da sie sprawdzic, bo `plink -batch` nie daje tty i petli curses nie da sie stad uruchomic na hoscie. Fikstury NIE sa pisane recznie: powstaly przez uruchomienie `list-jobs --json` i `monitor --json` na przechwyconym bloku crona, wiec lancuch jest pelny (bajty z hosta -> czasownik -> ekran). Przypiete: **konto i config w naglowku** (na produkcji root ma zero blokow zarzadzanych, a konto delegowane jedenascie linii -- ekran bez tej linii pokazywalby pustke na zajetym hoscie), **kierunek rysowany wokol "ten host"** (strona strzalki, nie kolejnosc nazw), **werdykt przy wlasciwym wierszu** -- w tym wiersz POBRANIA, ktorego monitor pilnuje lokalnego CELU, podczas gdy zakres zadania to zdalne ZRODLO, wiec laczy je etykieta relacji (pierwsza wersja pokazywala tam "BEZ MONITORA", chociaz monitor mowil KRYTYCZNY); **"BEZ MONITORA" nie udaje OK** ani NIEZNANY ("pytalem, nie wiem"); blok bez czytelnego configu jest **wierszem z liczba linii**, ktore wykonuje; 80 kolumn i miesci sie w niskim oknie |
 | `twins` | **81/81** (2026-09-07: +B2 powód dla różnej pary, 8 wierszy; 2026-09-03: zbiór bliźniaków WYPROWADZANY z obu silników, nie spisany; 15 nazw, +A0 licznik, +3 przypięte; +G: `json_escape` w `delsnaps.sh` = biblioteka, `destroy_one`/`emit_stats` to homonimy) | alarm dryfu ośmiu funkcji, które `snapsend.sh` i `snapget.sh` definiują pod TĄ SAMĄ nazwą i sygnaturą (`get_sorted_snapshots`, `find_conflicting_snapshots`, `find_recursive_name_collisions`, `validate_snapshot`, `find_common_snapshot`, `create_snapshot`, `transfer_data`, `process_dataset`). Przypięty skrót na kopię; zmiana po jednej stronie bez drugiej = FAIL nazywający, która strona się ruszyła. **Nie twierdzi, że bliźniaki są równoważne** — nie są i nie powinny być (`process_dataset` różni się w 450 z ~550 linii, bo push czyta lokalnie i pisze zdalnie, a pull odwrotnie). Zmiany wyłącznie w komentarzach i białych znakach są normalizowane, żeby blessowanie nie stało się odruchem. Cztery tryby awarii zweryfikowane przy budowie: zmiana jednostronna, obustronna, sama zmiana komentarza (cisza), przemianowanie funkcji |
 | `statekey` | 16/16 | klucz stanu i jego kolizje |
 | `selfupdate` | **58/58** (+14 sekcja 28, +4 sekcja 29, 2026-09-03; na tym boxie bez SKIP) | kontroler aktualizacji i rollbacku; sekcja 28: dziewięć funkcji, które `deploy.sh` nosi jako awaryjne kopie z `update-control.sh`, mierzone jako bliźniaki — zbiór wyprowadzany, osiem identycznych modulo program w podpowiedzi `--resume-updates`, `emergency_disable` przypięte per strona w `controller-twins.sha256` (różni się celowo: kontroler umie zdjąć sobie prawo wykonania, `deploy.sh` nie może) |
