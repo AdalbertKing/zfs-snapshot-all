@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E51.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25, E28.*
+*Evidence: E3, E9, E15, E24, E25, E28, E50.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -1526,3 +1526,42 @@ time is not "is this call checked now" but **"which calls in here are still
 not"** -- and the answer is a grep over the function, not a memory of what was
 just edited. Related: E41, where the same fix was applied at one site and
 shipped missing at two others, one day earlier.
+
+### E50 — The transfers screen was 25 lines tall on a 24-line terminal (2026-09-09, R6)
+
+**Genesis.** Five TUI windows rendered as pure text. Every screen "looked
+right" in the first render; the detail panel on Transfery ended after four
+rows, which read as "the panel is short", not as "the panel is cut".
+
+**Cause.** The two list boxes were sized by an arithmetic that counted rows
+but not the header, the rule and the two borders of each box, so the sum of
+boxes plus panel was 25 for a height of 24 and the last lines of the panel
+were sliced off. Nothing measured the line count against the height until
+the width/height assertion was written -- the same R6 shape as a green total
+that cannot say an assertion never ran: a screen that fills the terminal
+cannot say a line fell off the bottom.
+
+**Rule.** R6. A rendered screen is evidence only when its line count and every
+line's width are compared with the terminal size, in the test, for every
+screen and every window, at 80, 120 and 200. The assertion exists now and it
+is the one that found this.
+
+### E51 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
+
+**Genesis.** Replacing `"\t"` by `"|"` in `cmd_list_replicas` through a
+Python patch fed to the Bash tool as a heredoc. The patch printed "edits: 1",
+then "edits: 0" on the awk lines, and the third attempt with `repr()` showed
+the file still carrying the tab.
+
+**Cause.** The tool's heredoc drops one level of backslashes, so the literal
+`"\t"` in the patch arrived as a quote-TAB-quote string that matched nothing.
+A `replace()` that matches nothing is a silent no-op, and the print of the
+count was the only thing that stopped the chain (R4). The fact "the patch
+contains a backslash-t" was true on my side of the tool boundary and false on
+the other (R2).
+
+**Rule.** R4, and R2's boundary list gains one entry: **this tool's heredoc**.
+Patches with backslashes go through a file written by the Write tool or build
+the character with `chr(92)`; and every text replacement asserts that it
+matched, so a no-op cannot pass as done.
+

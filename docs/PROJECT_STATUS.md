@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2df5dda5aced2c59 -->
+<!-- status-covers-digest: ef3ed0322d5edcdd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,66 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **TUI: pięć okien nad czytelnikami `--json` (2026-09-09).**
+  Właściciel: *„zrobić te nieszczęsne okna, ogarnąć problemy, sprawdzić
+  funkcjonalność i sensowny wygląd tych okien oraz poprawność ich działań"*.
+  Jeden plik `tui/zfs-tui.py`, jeden czasownik `zfs-backup.sh gui`, Python 3 z
+  biblioteki standardowej i `curses` (na całej flocie: 3.9.2 / 3.11.2). Idiom
+  Turbo Vision: ramki podwójne, panel szczegółów, okno na wierzchu, listwa
+  F-klawiszy. Wszystko **tylko do odczytu**.
+  - **Wiersz ekranu głównego to RELACJA** (korekta właściciela z 2026-09-08),
+    sklejona z czterech czytelników: rekord ze `status`, świeżość kopii z
+    `monitor` (po etykiecie), ostatni bieg z `progress` (po etykiecie),
+    następny bieg z harmonogramu `list-jobs` przez własny parser crona
+    (semantyka vixie: dom i dow oba ograniczone = LUB; wartości spoza zakresu
+    dają „nie wiem", nie wyjątek). Relacja nieaktywna pokazuje zamiast godziny
+    **następny krok CLI** (`seed`, `activate`); wstrzymana — `PAUZA` i
+    `-- pauza --`. Sekcje configu bez rekordu relacji (kształt PRODUKCJI: 0/7
+    hostów ma rekordy) i blok nieczytelny są wierszami, nie są chowane.
+  - **Okno relacji (Enter):** zakres, polityka złożona z `show-config`
+    (szablony → `trzyma -H24 -D7 -W4 -M12   co: 44 * * * *   drabina GFS`),
+    linie monitora, ostatnie transfery, sekcje configu i **linie crona, które
+    host naprawdę wykona**, oraz komendy CLI właściwe dla stanu — **nazwane,
+    nie wykonywane** (etap C/D planu z dokumentu decyzji).
+  - **Transfery** (w toku / zakończone, „niemierzalne" zamiast zera przy
+    `wire_bytes=-1`, auto-odczyt `progress` co 2 s tylko na tym ekranie),
+    **Monitor** (werdykty słowami właściciela, `PAUZA`, ostrzeżenie o innym
+    pliku silnika w cronie), **Nośniki** (cztery stany słowem, legenda i komenda
+    `add-replica`, gdy sekcji `[replica:]` nie ma).
+  - **Kontrakt wyglądu z §2 dokumentu decyzji, przypięty suitą:** każda linia
+    dokładnie 80/120/200 kolumn; panel obok listy od 120; tryb ASCII (`+-|=`,
+    słowa bez ogonków, strzałki `->`/`<-`) bez jednego bajtu spoza ASCII;
+    kolumna „Kopie" mówi *aktualne / spóźnione / stare / nie odpowiada / bez
+    monitora*, nigdy słownikiem kodów wyjścia.
+  - **Dowód bez terminala i z terminalem.** Rysowanie to funkcja czysta
+    (STAN → LINIE); `--render-once --screen X --keys ...` drukuje to, co
+    narysowałby curses po tej sekwencji klawiszy — suita `test/tui` **55/55**,
+    fikstury to dosłowne wyjścia czasowników z pve10 (w tym stan pauzy:
+    `pause-client`, odczyt, `resume-client`) i `list-replicas` z pve9. Pętla
+    curses przejechana na pve10 przez pty (`F2`–`F5`, `Enter`, `Esc`, `F1`,
+    `q`): wyjście 0, w strumieniu kolory 31/32/33/36 i pasek 46, bez śladu
+    wyjątku. Bez tty program odmawia i mówi, jak zobaczyć ekran (rc=2).
+  - **Dwie wady czytelników znalezione przez okna, naprawione w tym PR:**
+    (1) `list-jobs --json` `cron_lines` dopasowywało linie po ZAKRESIE, a linia
+    `snapget` pobrania nazywa zdalne źródło i RODZICA lądowiska, nigdy samo
+    lądowisko — okno pokazywało porządki i monitor bez linii, która robi
+    robotę; drugi klucz to `-L <etykieta>`, ten sam co w monitorze. (2)
+    `list-replicas --json` dzieliło wiersze awk TABEM i czytało `IFS=tab`; tab
+    to białe IFS, więc PUSTE pole (`add-replica --fixed` nie pisze `media`)
+    zapadało się i każde następne pole przesuwało się w lewo: zmierzone na pve9
+    `media="yes", recursive="latest"`. Separator to teraz `|`.
+  - **Znalezione przy okazji, NIE naprawione:** korzenie **pve10 i pve9 były
+    zapełnione w 100 %** (2,8 G dysku: 260 M cache apt, 210–226 M journala,
+    ~200 M `.git` każdego z klonów). `apt-get clean` + `journalctl --vacuum`
+    dały 128 M (pve10) i 330 M (pve9); dziennik aktywny nie chce się skurczyć
+    poniżej ~200 M bez zmiany `SystemMaxUse`. Dodatkowo **pve10 nie dociąga
+    GitHuba**: `git fetch` kończy się błędem certyfikatu (`subject name
+    canada.ca`), czyli godzinny `git pull` na pve10 od jakiegoś czasu nic nie
+    wdraża — gałąź wgrana bundlem. Do zbadania osobno (DNS/proxy w labie).
+  - **Czego nie ma:** akcji (Ins/Del/F4 pauza) i ekranu ustawień — to etapy C
+    i D planu; menu `Kolektor`; `show-scope` w panelu (ekran 2 z 2026-09-08
+    nie jest jeszcze podpięty pod okno relacji).
 
 - **Parytet push↔pull, runda 1 — §8 z `OWNER-ENGINE-MERGE-2026-09-07.md` (2026-09-07, właściciel odmroził `snapsend.sh`).**
   Dyrektywa: *„Zacznij §8 — plan naprawczy parytetu, odmrażam snapsend.sh"*.
