@@ -2041,6 +2041,12 @@ def curses_loop(ui):
         # (zmierzone 2026-09-09: 'j' przesuwal kursor, ESC [ B nie, i pauza
         # poszla na ZLY wiersz). Wiec po ESC dobieramy bajty sami, z krotkim
         # czekaniem, i mapujemy sekwencje z tablicy -- goly ESC to Esc.
+        # Goly Esc ma byc natychmiastowy: ncurses czeka domyslnie 1 s na ciag
+        # dalszy, a swoj ciag dalszy zbieramy sami ponizej.
+        try:
+            curses.set_escdelay(25)
+        except (AttributeError, curses.error):
+            pass
         E = chr(27)
         SEQ = {"[A": "up", "[B": "down", "OA": "up", "OB": "down", "[H": "home", "[F": "end", "OH": "home", "OF": "end",
                "[1~": "home", "[4~": "end", "[5~": "pgup", "[6~": "pgdn", "[2~": "ins", "[3~": "del",
@@ -2069,7 +2075,17 @@ def curses_loop(ui):
                 stdscr.nodelay(False)
             if not seq:
                 return 27, None
-            return -2, SEQ.get(seq)
+            if seq in SEQ:
+                return -2, SEQ[seq]
+            # Nie nasza sekwencja (np. ESC, a chwile pozniej 'q'): oddaj bajty
+            # z powrotem, w kolejnosci, i zglos goly Esc. Bez tego 'q' po Esc
+            # gineło i TUI wisiało -- zmierzone na pve10 2026-09-09 (jazda 6).
+            for ch_ in reversed(seq):
+                try:
+                    curses.ungetch(ord(ch_))
+                except curses.error:
+                    pass
+            return 27, None
         while True:
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
