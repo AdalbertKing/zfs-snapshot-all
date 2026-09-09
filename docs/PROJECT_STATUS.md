@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 37919cbfb0d2763b -->
+<!-- status-covers-digest: 26add3df5619192e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,38 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`import-relation FILE` — odtworzenie relacji z pliku eksportu (2026-09-09).**
+  Właściciel: *„zrób import zapisanej relacji z pliku, skoro mamy eksport"*.
+  Czasownik czyta blok `replay` z `export-relation --json` i odtwarza DOKŁADNIE
+  to, co plik obiecuje: `add-client NAME <argv w tej kolejności>`, potem
+  `seed`, potem `activate`. Bez `--yes` pokazuje komendy i kończy; z `--yes`
+  woła te same funkcje co CLI, więc każda odmowa (nazwa zajęta, pokrycie,
+  profil, host) jest odmową czasownika, nie kopią. Pola `not_replayable`
+  wracają jako krok ręczny (`set-endpoint`). `--name=NEW` importuje pod inną
+  nazwą; istniejąca nazwa odmawia PRZED wywołaniem czegokolwiek. JSON parsuje
+  skaner znakowy (stringi z `\"` i `\\`, zagnieżdżenia), nie regex — wartość
+  może nieść `]`, `,` i `"` (regex w `--exclude-child`).
+  - **Dwie wady EKSPORTU, które znalazł dopiero import na żywo (pve10):**
+    (1) lista datasetów szła zawsze jako `--requested=`, a `add-client` odrzuca
+    `--requested` bez `--mode=` — replay z pliku nie był odtwarzalny dla
+    najczęstszego kształtu; scrape parsera w suicie tego nie widział, bo obie
+    flagi istnieją. Teraz: bez `RUX_MODE` → `--datasets=`, z nim →
+    `--requested=` + `--mode=`. (2) `"then":["activate"]` — `activate` odmawia
+    rekordowi bez zasiewu; cykl to `seed`, potem `activate`, i tak jest w pliku.
+  - **Kontrole:** sekcja `exportrel` 31/0 — argv przez atrapę `add-client`/`seed`/
+    `activate` rejestrującą wywołania (dyskryminator: regex, backslash, cudzysłów
+    i przecinek w jednej wartości przeżywają co do bajtu), oba kształty listy,
+    replay argv przepchnięty przez PRAWDZIWY parser `add-client` (odmowa, jeśli
+    jest, ma być za flagami), kontrole ujemne: eksport tekstowy (schema),
+    przemycony pozycyjny, obcy czasownik — nic nie jest wołane.
+  - **Na żywo (pve10):** podgląd bez zmian; `--yes` na `--name=lab-vm101-imp2`
+    przeszedł `add-client` → `seed` i zatrzymał się na własnej odmowie pokrycia
+    (`hdd/backups/192.168.28.99/hdd/lab/vm-101` należy do `lab-vm101`), rekord
+    usunięty `remove-client`. Znana luka bez zmian: nieudany cykl zostawia
+    rekord w `pending_enroll`/`seeding` — to do osobnego zgłoszenia.
+  - **Wynik dla GUI:** okno Relacje dostanie klawisz importu bez własnej logiki —
+    czasownik pokazuje komendy przed wykonaniem (zasada 12 dokumentu decyzji).
 
 - **PR #368 (REV-140 + kształt drabiny): z czerwonego na 768/0 (2026-09-09).**
   Dzień stania na 29 czerwonych asercjach skończył się jednym pomiarem na pve9

@@ -10222,7 +10222,7 @@ for ex_pair in $EXPORT_RELATION_MAP; do
     ex_flag="${ex_pair#*:}"
     printf '%s\n' "$ex_parser" | grep -qxF "$ex_flag" || ex_missing="$ex_missing $ex_flag"
 done
-for ex_flag in passive exclude-child exclude-family; do
+for ex_flag in passive exclude-child exclude-family requested datasets; do
     printf '%s\n' "$ex_parser" | grep -qxF "$ex_flag" || ex_missing="$ex_missing $ex_flag"
 done
 if [ -z "$ex_missing" ]; then
@@ -10331,12 +10331,52 @@ esac
 
 # THE REPLAY ARGV, exactly.
 ex_argv="${ex_out#*\"argv\":\[}"; ex_argv="${ex_argv%%\]*}"
-ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--requested=rpool/data/vm-101","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
+# `--datasets=`, NOT `--requested=`: this record has no RUX_MODE, so the list
+# IS the request and add-client refuses --requested without --mode. The first
+# export wrote --requested for every record; the lab's import found it.
+ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
 if [ "$ex_argv" = "$ex_want" ]; then
     ok "exportrel: the replay argv is exactly the flags the declarations map to"
 else
     bad "exportrel: the replay argv is exactly the flags the declarations map to" "want: $ex_want" "got:  $ex_argv"
 fi
+# WITH A MODE the same list replays as --requested= (it narrows the DRAFT the
+# source writes), and --mode= rides along; without one (above) it is --datasets=.
+# One field, two flags, chosen by the record -- the pair is the discriminator.
+sed 's/^CLIENT_NAME=ksiegowosc$/CLIENT_NAME=ksiegowosc/; $a RUX_MODE=backup' "$EX/clients/ksiegowosc.conf" > "$EX/clients/ksiegmode.conf"
+sed -i 's/^CLIENT_NAME=.*/CLIENT_NAME=ksiegmode/' "$EX/clients/ksiegmode.conf"
+ex_run export-relation ksiegmode --json; ex_mrc=$?
+ex_margv="$(cat "$WORK/ex.out")"; ex_margv="${ex_margv#*\"argv\":\[}"; ex_margv="${ex_margv%%\]*}"
+case "$ex_mrc:$ex_margv" in
+    0:*'"--requested=rpool/data/vm-101"'*'"--mode=backup"'*) ok "exportrel: with RUX_MODE the list replays as --requested= and --mode= rides along" ;;
+    *) bad "exportrel: with RUX_MODE the list replays as --requested= and --mode= rides along" "rc=$ex_mrc" "$ex_margv" ;;
+esac
+case "$ex_margv" in
+    *'--datasets='*) bad "exportrel: ...and NOT as --datasets= (add-client refuses both at once)" "$ex_margv" ;;
+    *) ok "exportrel: ...and NOT as --datasets= (add-client refuses both at once)" ;;
+esac
+rm -f "$EX/clients/ksiegmode.conf"
+# THE CONTROL THAT WOULD HAVE CAUGHT IT: the replay argv through add-client's
+# REAL parser, up to its first refusal. Anything about the flags is refused at
+# the command line before any host is touched; the first non-flag refusal this
+# record can reach is the endpoint (no pairing, no host) -- so "got past the
+# flag checks" is exactly "the refusal names the endpoint, not a flag".
+ex_probe="$( ( export CLIENTS_DIR="$EX/probe-clients" SERVER_CONF="$EX/no-server-conf"; mkdir -p "$EX/probe-clients"
+    bash -c 'source "$1"; shift; cmd_add_client "$@"' ex probe-import $(printf '%s' "$ex_argv" | tr -d '"' | tr ',' '\n' | tr '\n' ' ') ) 2>&1 )"
+case "$ex_probe" in
+    *"--requested= only means something"*|*"unknown option"*|*"alternative ways"*) bad "exportrel: the replay argv passes add-client's REAL flag checks" "$ex_probe" ;;
+    *) ok "exportrel: the replay argv passes add-client's REAL flag checks (refusal, if any, is past the flags)" ;;
+esac
+rm -rf "$EX/probe-clients"
+
+# THE LIFECYCLE AFTER add-client IS seed THEN activate. ["activate"] alone was
+# the first version; activate refuses an unseeded record, so an import that
+# obeyed the file died one step in (pve10, 2026-09-09).
+case "$ex_out" in
+    *'"then":["seed","activate"]'*) ok "exportrel: replay.then is the documented lifecycle, seed then activate" ;;
+    *) bad "exportrel: replay.then is the documented lifecycle, seed then activate" "$ex_out" ;;
+esac
+
 # THE GAP RULE, called out on its own: EXCLUDE_CHILD_3 exists in the record and
 # must NOT be exported, because numbering stops at the first gap everywhere else
 # in this program and an export that reached past one would promise an exclusion
@@ -10406,6 +10446,99 @@ else
 fi
 
 # REFUSALS.
+# --- import-relation: THE FILE'S replay, REPRODUCED VERBATIM (2026-09-09) ------
+# Owner: "zrob import zapisanej relacji z pliku, skoro mamy eksport." The
+# discriminator is argv EQUALITY against a stub that records what add-client
+# was handed: a byte off in one flag is a different relationship.
+IM="$WORK/importrel"; rm -rf "$IM"; mkdir -p "$IM/clients"
+ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/ksiegowosc.json"
+# a flag value carrying every character a naive splitter would trip on
+sed -i 's/"argv":\["--host=10.0.0.11"/"argv":["--host=10.0.0.11","--exclude-child=(a|b)[0-9]\\\\,x\\"y"/' "$IM/ksiegowosc.json"
+im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; stdout/err in $WORK/im.*
+    ( export CLIENTS_DIR="$IM/clients" SERVER_CONF="$IM/no-server-conf" IM_LOG="$IM/calls.log"
+      : > "$IM_LOG"
+      bash -c '
+        # $1, not $0: sourced under $0 == its own path the program would take the
+        # BASH_SOURCE guard for a direct run and dispatch our argv as a command.
+        source "$1"; shift
+        cmd_add_client() { printf "add-client|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_activate()   { printf "activate|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_seed()       { printf "seed|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
+}
+im_run "$IM/ksiegowosc.json"; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im.out" \
+        && grep -q 'zfs-backup.sh seed ksiegowosc --yes' "$WORK/im.out" && grep -q 'zfs-backup.sh activate ksiegowosc --yes' "$WORK/im.out" \
+        && grep -q 'nie zostalo zmienione' "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: without --yes the two commands are shown, and NOTHING is called"
+else
+    bad "importrel: without --yes the two commands are shown, and NOTHING is called" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
+fi
+if grep -q 'ACTIVE_ENDPOINT *= 10.0.0.11:22' "$WORK/im.out"; then
+    ok "importrel: the export's not_replayable fields come back as the manual step, not silently"
+else
+    bad "importrel: not_replayable fields shown" "$(cat "$WORK/im.out")"
+fi
+im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
+if [ "$im_rc" -eq 0 ] && grep -qF -- "$im_want" "$IM/calls.log" \
+        && [ "$(sed -n 2p "$IM/calls.log")" = 'seed|ksiegowosc|--yes' ] \
+        && [ "$(sed -n 3p "$IM/calls.log")" = 'activate|ksiegowosc|--yes' ] \
+        && [ "$(grep -c . "$IM/calls.log")" -eq 3 ]; then
+    ok "importrel: --yes hands add-client the file's argv VERBATIM (regex, backslash, quote, comma survive), then seed --yes, then activate --yes -- the lifecycle, in order"
+else
+    bad "importrel: --yes replays argv verbatim" "rc=$im_rc" "want: $im_want" "$(cat "$IM/calls.log" "$WORK/im.err")"
+fi
+# the rest of the argv (target, requested, profile...) must be there too, in order
+if awk -F'|' 'NR==1 { for (i=1;i<=NF;i++) if ($i ~ /^--target=/) t=i; for (i=1;i<=NF;i++) if ($i ~ /^--profile=d7h24$/) p=i; exit !(t && p && t < p) }' "$IM/calls.log"; then
+    ok "importrel: ...with the remaining create flags present and in the export's order"
+else
+    bad "importrel: remaining flags in order" "$(cat "$IM/calls.log")"
+fi
+# a name that exists here refuses BEFORE anything is called
+mkdir -p "$IM/clients"; printf 'CLIENT_NAME=ksiegowosc\nSTATE=active\n' > "$IM/clients/ksiegowosc.conf"
+im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q "already exists here" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: an existing name refuses before add-client is called"
+else
+    bad "importrel: existing name refuses" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+im_run "$IM/ksiegowosc.json" --name=ksiegowosc2 --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc2|' "$IM/calls.log"; then
+    ok "importrel: --name=NEW imports the same file under another name"
+else
+    bad "importrel: --name=NEW" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+rm -f "$IM/clients/ksiegowosc.conf"
+# NEGATIVE CONTROLS: the text export, a doctored positional, a foreign verb
+ex_run export-relation ksiegowosc; cp "$WORK/ex.out" "$IM/text.txt"
+im_run "$IM/text.txt" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q "not a relation export" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: the TEXT export is refused by schema, nothing called"
+else
+    bad "importrel: text export refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+sed 's/"argv":\["--host=10.0.0.11"/"argv":["--host=10.0.0.11","evil-second-name"/' "$IM/ksiegowosc.json" > "$IM/doctored.json"
+im_run "$IM/doctored.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q "is not a flag" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: a positional smuggled into argv is refused by shape, nothing called"
+else
+    bad "importrel: smuggled positional refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+sed 's/"verb":"add-client"/"verb":"remove-client"/' "$IM/ksiegowosc.json" > "$IM/verb.json"
+im_run "$IM/verb.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q "not one this build reproduces" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: a replay verb other than add-client is refused, nothing called"
+else
+    bad "importrel: foreign verb refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+# usage says so
+if bash "$ZFSBACKUP" 2>&1 | grep -q 'import-relation FILE'; then
+    ok "importrel: the verb is in the usage text"
+else
+    bad "importrel: usage" ""
+fi
+
 if ! ex_run export-relation && grep -q "requires a relationship name" "$WORK/ex.err" "$WORK/ex.out"; then
     ok "exportrel: no name is refused"
 else
