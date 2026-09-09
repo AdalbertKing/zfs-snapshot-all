@@ -1187,6 +1187,12 @@ SOURCE_PRUNE_EMITTED_DS=()
 # before removal, so a re-activation preserves an admin's edited source retention
 # and moves only topology (scope header + ssh_flags) -- REV-20260811-107.
 declare -A SOURCE_PRUNE_PRESERVED=()
+# The peer-root ladder scope this run migrated OFF, if any (2026-09-08). Set by
+# emit_client_sections when it actually removes one, read by
+# assert_target_block_not_clobbered -- which is otherwise right to refuse the
+# install, because narrowing a ladder DOES drop coverage. See the fifth
+# exemption there for why this one narrowing is excused and what it says aloud.
+PRUNE_SCOPE_MIGRATED=""
 
 # Remove the rendered artifacts and REPORT what it could not remove.
 #
@@ -2427,16 +2433,68 @@ config_is_frozen_legacy() {   # <file> -> 0 when the frozen pre-GFS family is pr
     ' "$1" 2>/dev/null | grep -q frozen
 }
 
-detect_profile_gfs() {   # <file> -> sets PROFILE_GFS
+# THE HOST'S SHAPE IS DECIDED BY TEMPLATES SOMEBODY USES (2026-09-08).
+#
+# This answers "does this host already run a flat shape whose tiers prune
+# themselves", so that a new relationship does not stack the standard ladder on
+# top of one and prune the same snapshots twice. The question is about LIVE
+# policy -- and the first version asked it of every [template:] in the file,
+# including orphans left behind by relationships that no longer exist.
+#
+# MEASURED ON pve10, 2026-09-08. The config carried
+# [template:profile__d30h24__hourly] from a removed relationship: send_schedule
+# and prune_schedule together, the flat shape. On that evidence the host was
+# declared flat, so for four NEW relationships created from the ladder profile
+# `default` the ladder branch was skipped, MANAGED_PRUNE_SCOPE was recorded
+# EMPTY, no local [prune:] section was written -- and because a staleness check
+# rides the (scope,pattern) pair prune already needed, no monitor either. Four
+# active relationships, copies growing without retention, nothing watching. The
+# fingerprint was in the file: keep_hourly/daily/weekly/monthly emitted and
+# referenced by nothing.
+#
+# So the scan is limited to templates a live [dataset:]/[prune:] section names
+# in its use_template. An orphan is not policy; it is litter.
+#
+# PROFILE_GFS_WHY records the template that decided it, so a refusal downstream
+# can name the reason instead of describing it.
+# TWO INPUTS, TWO QUESTIONS (2026-09-09). Pointed at a HOST CONFIG the question
+# is "what policy is in force", and only a template a live section names may
+# answer. Pointed at a PROFILE's rendered templates (migrate-profile asks about
+# the DESTINATION) there are no sections at all, so under the used-only rule a
+# flat profile could never be read as flat: measured on the suite after the
+# 2026-09-08 change, migrate-profile onto a flat profile emitted a [prune:]
+# with no use_template and gen-cron refused the config (96b/96m/122a, rc=1).
+# The second argument `all` says "every template votes" -- for a file that IS
+# the candidate list, not a file that may carry litter.
+detect_profile_gfs() {   # <file> [all] -> sets PROFILE_GFS, PROFILE_GFS_WHY
     PROFILE_GFS=1
+    PROFILE_GFS_WHY=""
     [ -r "$1" ] || return 0
-    awk '
-        /^\[template:/ { has_send=0; has_prune=0; intpl=1; next }
-        /^\[/          { intpl=0 }
-        intpl && /^[ 	]*send_schedule[ 	]*=/  { has_send=1 }
-        intpl && /^[ 	]*prune_schedule[ 	]*=/ { has_prune=1 }
-        intpl && has_send && has_prune { print "flat"; exit }
-    ' "$1" 2>/dev/null | grep -q flat && PROFILE_GFS=0
+    local hit
+    hit=$(awk -v all="${2:-}" '
+        # pass 1: which templates does a live section actually use
+        FNR == NR {
+            if (all == "all") { nextfile }
+            if ($0 ~ /^\[(dataset|prune):/) { insec = 1; next }
+            if ($0 ~ /^\[/)                  { insec = 0 }
+            if (insec && $0 ~ /^[ 	]*use_template[ 	]*=/) {
+                v = $0; sub(/^[^=]*=[ 	]*/, "", v); gsub(/[ 	]/, "", v)
+                n = split(v, a, ",")
+                for (i = 1; i <= n; i++) if (a[i] != "") ref[a[i]] = 1
+            }
+            next
+        }
+        # pass 2: only those templates get a vote
+        /^\[template:/ {
+            name = $0; sub(/^\[template:/, "", name); sub(/\]$/, "", name)
+            used = (all == "all") || (name in ref); has_send = 0; has_prune = 0; intpl = 1; next
+        }
+        /^\[/ { intpl = 0 }
+        intpl && used && /^[ 	]*send_schedule[ 	]*=/  { has_send = 1 }
+        intpl && used && /^[ 	]*prune_schedule[ 	]*=/ { has_prune = 1 }
+        intpl && used && has_send && has_prune { print name; exit }
+    ' "$1" "$1" 2>/dev/null)
+    [ -n "$hit" ] && { PROFILE_GFS=0; PROFILE_GFS_WHY="$hit"; }
     return 0
 }
 
@@ -2468,7 +2526,25 @@ config_has_relationship_policy() {   # <file> -> 0 when something is already ins
 # So the grammar lives here now, once, reading a STREAM so that a crontab, a
 # temp file and a block region can all be asked the same question.
 cron_block_source() {   # <stdin: crontab or block text> -> the config path, or empty
-    grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/'
+    # BOUNDED TO THE MANAGED BLOCK (REV-20260908-140 F1, P1).
+    #
+    # The first version read the first `# Source:` line in whatever it was
+    # given, and four of the five callers hand it the WHOLE crontab. cron
+    # permits arbitrary comments, so an unrelated line above our block --
+    #
+    #   # Source: /tmp/want.conf -- unrelated user comment
+    #   # BEGIN zfs-backup-managed (generated)
+    #   # Source: /tmp/actual.conf -- DO NOT EDIT BY HAND, ...
+    #
+    # made assert_cron_config_matches_installed accept want.conf and permit
+    # replacing the block generated from actual.conf, deleting every send,
+    # prune and monitor line it described. A comment is not an ownership
+    # record; only bytes between OUR markers are.
+    #
+    # sed does the bounding rather than the caller, because the caller that
+    # forgets is exactly the failure this consolidation exists to prevent.
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+        | grep -m1 '^# Source: ' | sed -E 's/^# Source: (.*) -- .*/\1/'
 }
 
 
@@ -3231,6 +3307,41 @@ line_coverage_absorbed() {   # <lost line> ; proposed lines on stdin -> 0 absorb
     ' | grep -q ABSORBED
 }
 
+# THE ONE NARROWING THIS GUARD EXCUSES, and it says so out loud.
+#
+# Migrating a relationship off the peer-root ladder (2026-09-08) genuinely
+# REDUCES what that line prunes: it stops covering the sibling relationships'
+# landing paths, which is the entire point -- they were never its data. Every
+# other exemption above proves "the job is still here"; this one cannot, because
+# coverage really is dropped. So it is gated on three things at once and none of
+# them is a resemblance test: this run's own plan decided to migrate (the caller
+# sets PRUNE_SCOPE_MIGRATED only after actually removing the section), the lost
+# line's dataset argument is EXACTLY that scope, and a surviving line runs the
+# SAME engine for the SAME relationship over a path strictly UNDER it. A ladder
+# that simply disappeared, or one narrowed to somewhere else, or one belonging to
+# another relationship, still refuses the install.
+#
+# Identity is `-L <pair label>` plus the engine, NOT the whole line: the scope
+# and the notify title move together in this migration (one ladder per landing
+# path can say WHICH path alerted, and a single peer-wide one could not), so a
+# byte-for-byte twin does not exist by construction.
+line_scope_narrowed_by_migration() {   # <lost line> ; proposed lines on stdin -> 0 excused
+    local scope="${PRUNE_SCOPE_MIGRATED:-}"
+    [ -n "$scope" ] || return 1
+    local lost="$1" pline lab eng
+    case "$lost" in *"\"$scope\""*) ;; *) return 1 ;; esac
+    lab=$(printf '%s' "$lost" | sed -n 's/.* -L \([^ ]*\).*/\1/p')
+    eng=$(printf '%s' "$lost" | grep -oE '(delsnaps|check-snap-age)\.sh' | head -1)
+    [ -n "$lab" ] && [ -n "$eng" ] || return 1
+    while IFS= read -r pline; do
+        [ -n "$pline" ] || continue
+        case "$pline" in *"\"$scope/"*) ;; *) continue ;; esac
+        case "$pline" in *" -L $lab "*) ;; *) continue ;; esac
+        case "$pline" in *"$eng"*) return 0 ;; esac
+    done
+    return 1
+}
+
 assert_target_block_not_clobbered() {   # <config whose render is about to be installed>
     local file="$1" u; u=$(cron_target_user)
     local tcron; tcron=$(mktemp) || die "mktemp failed"
@@ -3304,6 +3415,17 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
             if [ -n "$twin" ]; then
                 local _rold _rnew; _rold=$(retention_flags_of "$line"); _rnew=$(retention_flags_of "$twin")
                 warn "  retention changed, the job itself stays: ${_rold% } -> ${_rnew% }"
+                warn "    $line"
+                continue
+            fi
+            # Fifth exemption: the peer-root ladder this run is migrating off.
+            # Unlike the four above it admits that coverage IS dropped, and
+            # names who stops being covered -- see line_scope_narrowed_by_migration.
+            if printf '%s\n' "$proposed" | line_scope_narrowed_by_migration "$line"; then
+                warn "  ladder scope migrated: '$PRUNE_SCOPE_MIGRATED' -> this relationship's own landing path(s)"
+                warn "    that scope was the peer's WHOLE subtree on this collector, so it was also pruning"
+                warn "    any SIBLING relationship pulling from the same source. It no longer does."
+                warn "    RE-ACTIVATE EACH SIBLING to give it its own ladder, or its copies stop being pruned."
                 warn "    $line"
                 continue
             fi
@@ -3634,46 +3756,81 @@ set_or_remove_section_field() {   # <file> <exact header> <field> <value>
 # rule drifting apart is exactly the failure this project has paid for before,
 # so there is only one.
 declare -a PLAN_REGEN_DS=() PLAN_REGEN_PATHS=() PLAN_KEEP_DS=()
-PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0
+PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0; PLAN_PRUNE_LEGACY=""
 client_section_plan() {   # <file> <client name> <is_new_relationship>
     local file="$1" name="$2" is_new="$3" ds localpath
     local sync_mode=0
     [ "${PEER_SAVED_MODE:-}" = sync ] && sync_mode=1
     PLAN_REGEN_DS=(); PLAN_REGEN_PATHS=(); PLAN_KEEP_DS=()
-    PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0
+    PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0; PLAN_PRUNE_LEGACY=""
 
     for ds in $PEER_SAVED_DATASETS; do
         localpath=$(client_local_path "$ds")
         if [ "$is_new" -eq 0 ] \
            && section_owned_by "$file" "[dataset:$localpath]" "$name" "$localpath" \
-           && { [ "$sync_mode" -eq 0 ] || [ "${PROFILE_GFS:-1}" -ne 1 ] \
-                || section_owned_by "$file" "[prune:$ds]" "$name" "$ds"; }; then
-            # sync mode puts this client's [dataset:] and [prune:] at the SAME
-            # path, and preserving one means never calling
-            # remove_managed_sections on that path -- so the prune half would
-            # escape the ownership check entirely. Require both, or regenerate.
+           && { [ "${PROFILE_GFS:-1}" -ne 1 ] \
+                || section_owned_by "$file" "[prune:$localpath]" "$name" "$localpath"; }; then
+            # This client's [dataset:] and [prune:] sit at the SAME path, and
+            # preserving one means never calling remove_managed_sections on
+            # that path -- so the prune half would escape the ownership check
+            # entirely. Require both, or regenerate.
+            #
+            # Until 2026-09-08 this applied to sync only, because backup swept
+            # one ladder over the peer's whole subtree instead. It no longer
+            # does (see the scope block below), so both modes are checked here.
             PLAN_KEEP_DS+=("$ds")
         else
             PLAN_REGEN_DS+=("$ds"); PLAN_REGEN_PATHS+=("$localpath")
         fi
     done
 
+    # THE LADDER IS SCOPED TO WHAT THIS RELATIONSHIP LANDS, NOT TO THE PEER.
+    #
+    # Backup mode used to sweep ONE recursive ladder over "$PEER_SAVED_TARGET/
+    # $LOAD_LABEL" -- the peer's whole subtree on this collector. That is right
+    # only while a peer has exactly one relationship, and the product does not
+    # promise that: --name exists precisely because "more than one relationship
+    # already points at the same host".
+    #
+    # MEASURED ON pve10, 2026-09-08. Four relationships pull from 192.168.28.99
+    # into hdd/backups/192.168.28.99/hdd/lab/{vm-101,ct-201,srv-a,srv-b}. The
+    # moment the first of them was activated it took [prune:hdd/backups/
+    # 192.168.28.99] -- and the coverage guard then REFUSED the other three,
+    # correctly, on their own re-activation:
+    #
+    #   FATAL: refusing to add 'lab-ct201': it would take coverage another
+    #   relationship already owns. 'hdd/backups/192.168.28.99/hdd/lab/ct-201'
+    #   overlaps 'hdd/backups/192.168.28.99', already owned by 'lab-vm101'.
+    #
+    # Three live relationships that could no longer be re-activated, from one
+    # sibling's ladder. Sync already solved this exact problem (REV-20260802-033
+    # slice 8 / U7): it has no single parent it owns either, so it writes one
+    # [prune:] per landing path. Backup now does the same, and the two branches
+    # collapse -- client_local_path() is the identity in sync mode, so the list
+    # below is the sync list unchanged.
+    #
+    # What is given up is the REV-20260809-089 convenience that a dataset newly
+    # in scope landed UNDER an existing ladder with no section change. It never
+    # bought much: a new root needs its own [dataset:] section in the same
+    # transaction anyway. What that REV actually requires -- that re-activating
+    # an unchanged relationship leaves its owned ladder alone rather than
+    # re-deriving retention from today's profile -- is kept, and pinned by a
+    # control in the gfsshape section.
     if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
-        if [ "$sync_mode" -eq 1 ]; then
-            local -a scopes=()
-            for ds in $PEER_SAVED_DATASETS; do scopes+=("$ds"); done
-            PLAN_PRUNE_SCOPE="${scopes[*]}"
-            [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && PLAN_PRUNE_NEEDS_GEN=1
-        else
-            # One recursive ladder over the client's whole subtree: a dataset
-            # newly in scope lands UNDER it without the section needing to
-            # change, so an already-owned ladder needs no regeneration even
-            # when some datasets do. LOAD_LABEL is peer_label "$PEER_HOST" --
-            # the pairing peer, not the endpoint address -- so set-endpoint
-            # does not move this path.
-            PLAN_PRUNE_SCOPE="$PEER_SAVED_TARGET/$LOAD_LABEL"
-            if [ "$is_new" -ne 0 ] \
-               || ! section_owned_by "$file" "[prune:$PLAN_PRUNE_SCOPE]" "$name" "$PLAN_PRUNE_SCOPE"; then
+        local -a scopes=()
+        for ds in $PEER_SAVED_DATASETS; do scopes+=("$(client_local_path "$ds")"); done
+        PLAN_PRUNE_SCOPE="${scopes[*]}"
+        [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && PLAN_PRUNE_NEEDS_GEN=1
+        # MIGRATION. A relationship installed by the old code still owns the
+        # peer-root ladder. Leaving it would keep the overlap alive forever and
+        # would prune this peer's whole subtree under one relationship's policy,
+        # so it is removed in the same transaction that writes the new sections.
+        # Ownership-checked like everything else: a peer-root ladder somebody
+        # wrote by hand is not ours to delete.
+        if [ "$sync_mode" -eq 0 ]; then
+            local legacy="$PEER_SAVED_TARGET/$LOAD_LABEL"
+            if section_owned_by "$file" "[prune:$legacy]" "$name" "$legacy"; then
+                PLAN_PRUNE_LEGACY="$legacy"
                 PLAN_PRUNE_NEEDS_GEN=1
             fi
         fi
@@ -3714,12 +3871,55 @@ client_section_plan() {   # <file> <client name> <is_new_relationship>
             fi
         fi
     fi
+
+    # B: A RELATIONSHIP WITH NO RETENTION AT ALL IS REFUSED, NOT WRITTEN.
+    #
+    # Two shapes exist and each carries its own retention: a LADDER profile
+    # prunes from one [prune:] section over the client's subtree, a FLAT profile
+    # prunes inside each tier it sends. The host's shape decides which branch
+    # runs -- and when the host reads FLAT while the relationship's profile
+    # declares a LADDER, neither happens: the ladder branch is skipped because
+    # of the host, and the profile's send tier does not self-prune because it is
+    # a ladder profile. The result is a relationship that copies data forever
+    # and prunes nothing, with no monitor either (a staleness check rides the
+    # pair prune needed).
+    #
+    # Measured on pve10, 2026-09-08: four active relationships in exactly that
+    # state, MANAGED_PRUNE_SCOPE recorded empty, reported `active` throughout.
+    # The cause there was an orphan template and is fixed above; this refusal is
+    # for every OTHER way of reaching the same state -- a host genuinely running
+    # a flat relationship, and a ladder profile asked for beside it.
+    #
+    # Only at CREATE time. An installed relationship must keep re-activating
+    # (REV-20260810-090), and the profile is consulted only when it is readable,
+    # for the same reason.
+    if [ "$is_new" -ne 0 ] && [ "${PROFILE_GFS:-1}" -ne 1 ] \
+       && [ "$PLAN_PRUNE_NEEDS_GEN" -eq 0 ] && [ -n "${PROFILE_ACTIVE:-}" ]; then
+        if profile_validate_file "$(profile_file "$PROFILE_ACTIVE")" "$GENCRON" >/dev/null 2>&1; then
+            load_active_profile
+            if profile_declares_ladder; then
+                die "refusing to create '$name' with NO RETENTION AT ALL.
+
+This host reads as FLAT$([ -n "${PROFILE_GFS_WHY:-}" ] && printf " -- [template:%s] carries both send_schedule and prune_schedule" "$PROFILE_GFS_WHY"), so the standard ladder is not installed on top of it (that would prune the same snapshots twice on the same schedule). But profile '$PROFILE_ACTIVE' is a LADDER profile: its send tier does not prune itself either. The relationship would copy data forever and delete nothing, and nothing would monitor it -- a staleness check is derived per tier wherever a pattern already resolves for pruning.
+
+Three ways out, and this command picks none of them for you:
+  * create this relationship with a FLAT profile, matching the host (--profile=NAME);
+  * migrate the host to the ladder shape first, in one previewed transaction: zfs-backup.sh migrate-profile;
+  * if the flat template is a leftover from a relationship that no longer exists, remove it from the config -- an orphan template no longer decides this, but a REFERENCED one does.
+
+Nothing was changed."
+            fi
+        fi
+    fi
     return 0
 }
 
 emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local workfile="$1" name="$2" ds localpath
     local is_new_relationship="${3:-0}"
+    # Reset per call for the same reason as the array below: a stale value here
+    # would excuse a coverage loss this run did not plan.
+    PRUNE_SCOPE_MIGRATED=""
     # Reset per call: which source datasets got a REMOTE [prune:] this run. The
     # flow reads it after this returns to run the fail-closed grant check for
     # exactly those (and only those) before publishing -- an empty list on a
@@ -3819,7 +4019,6 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     regen_ds=(${PLAN_REGEN_DS[@]+"${PLAN_REGEN_DS[@]}"})
     regen_paths=(${PLAN_REGEN_PATHS[@]+"${PLAN_REGEN_PATHS[@]}"})
     keep_ds=(${PLAN_KEEP_DS[@]+"${PLAN_KEEP_DS[@]}"})
-    local prune_needs_gen="$PLAN_PRUNE_NEEDS_GEN"
 
     # REV-20260810-090 F1: only now, and only if the plan says something must be
     # written from it. A reactivation that preserves everything never touches the
@@ -3995,89 +4194,82 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
 
     prune_scope=""
     if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
-        if [ "$sync_mode" -eq 1 ]; then
-            # REV-20260802-033 slice 8 / U7 required sync mapping: sync has no
-            # single parent this client owns to sweep recursively -- each
-            # dataset lands at its OWN top-level path, scattered across
-            # whatever pools the source scope named. One [prune:] per dataset
-            # instead, at exactly the paths already removed above via
-            # `managed` -- no separate remove_managed_sections call needed,
-            # those ARE the same paths. recursive=no: each entry is already
-            # the exact leaf this client's own [dataset:] section writes to,
-            # so there is nothing under it for a recursive sweep to find that
-            # is not ALSO its own separately listed entry here -- recursive
-            # would be the leaf-under-a-recursive-parent race this project
-            # already fixed once for delsnaps (prune scope race).
-            #
-            # REV-20260809-089: a [prune:] section carries NO topology-owned
-            # field at all -- it is pure policy plus name-derived labels. So a
-            # preserved dataset's prune section needs no in-place refresh
-            # either: the correct action on re-activation is to leave it
-            # entirely alone. Only the regenerated datasets get one written,
-            # and those are exactly the paths remove_managed_sections cleared
-            # above (same paths -- sync's local name IS the source name), so
-            # no separate removal call is needed here.
-            for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
-                {
-                    echo
-                    echo "[prune:$ds]"
-                    echo "	$marker"
-                    profile_emit "$PROFILE_PRUNE_FILE"
-                    # Mirrors the pull's recursion, same reasoning as
-                    # append_source_prune_create: a solid root's children are
-                    # pulled by -R at every tick, so their landed snapshots
-                    # must be pruned by -R at every tick too.
-                    if is_recursive_root "$ds"; then
-                        echo "	recursive    = yes"
-                    else
-                        echo "	recursive    = no"
-                    fi
-                    echo "	pair_label   = $name"
-                    echo "	notify       = ${name}-$(basename "$ds")"
-                } >> "$workfile" || return 1
-            done
-            prune_scope="$PLAN_PRUNE_SCOPE"
-        else
-            # One ladder for the whole client. gfs_pattern is 'automated_'
-            # rather than any tier's own narrower pattern, because the ladder
-            # has to see every snapshot it is bucketing. Recursive over the
-            # client's subtree is safe here: every dataset of a client
-            # carries the same single send tier, so a recursive sweep cannot
-            # hit the "this leaf only has some of these tiers" trap that
-            # forces per-leaf monitor carriers elsewhere in this estate.
-            #
-            # REV-20260809-089: the ladder carries no topology-owned field, and
-            # it is ONE recursive section over the client's whole subtree -- a
-            # dataset newly in scope lands under it without the section needing
-            # to change. So on re-activation an already-owned ladder is left
-            # untouched, not removed and re-derived from today's profile.
-            prune_scope="$PLAN_PRUNE_SCOPE"
-            if [ "$prune_needs_gen" -eq 1 ]; then
-                remove_managed_sections "$workfile" "$name" "$prune_scope"
-                {
-                    echo
-                    echo "[prune:$prune_scope]"
-                    echo "	$marker"
-                    profile_emit "$PROFILE_PRUNE_FILE"
-                    # Declared-passive: the copy-side monitor rides these
-                    # tiers, and it must be blind to exactly the families the
-                    # pickup refuses to adopt (-E list), or an excluded family
-                    # arriving by other means keeps a dead relation green.
-                    if [ "${PASSIVE:-0}" = "1" ]; then
-                        local _pex; _pex=$(client_passive_flags | awk '{for(i=1;i<=NF;i++) if ($i=="-E") printf "%s%s", (n++?",":""), $(i+1)}')
-                        [ -n "$_pex" ] && echo "	monitor_exclude = $_pex"
-                    fi
-                    # Same stagger as the send side, keeping the 20-minute
-                    # gap the profile had between them. A prune that wraps
-                    # past the hour is fine: it deletes by age and keep-count,
-                    # not by "did a backup just run".
-                    [ -n "$stagger_prune_expr" ] && echo "	prune_schedule = $stagger_prune_expr"
-                    echo "	recursive    = yes"
-                    echo "	pair_label   = $name"
-                    echo "	notify       = ${name}"
-                } >> "$workfile" || return 1
-            fi
+        # ONE [prune:] PER LANDING PATH, in BOTH modes.
+        #
+        # REV-20260802-033 slice 8 / U7 established this for sync: there is no
+        # single parent the client owns to sweep recursively -- each dataset
+        # lands at its OWN path, scattered across whatever pools the source
+        # scope named. Since 2026-09-08 backup is in the same position and for
+        # the same reason: TARGET/<peer> is shared by every relationship
+        # pointing at that peer, so a ladder there belongs to none of them.
+        # Measured on pve10 -- the account is in client_section_plan.
+        #
+        # The paths written here are exactly the ones remove_managed_sections
+        # already cleared above via `managed`, so no separate removal call is
+        # needed -- with ONE exception, the peer-root ladder an older build
+        # left behind, which is not among them.
+        #
+        # REV-20260809-089: a [prune:] section carries NO topology-owned field
+        # at all -- it is pure policy plus name-derived labels. So a preserved
+        # dataset's prune section needs no in-place refresh either: the correct
+        # action on re-activation is to leave it entirely alone. Only the
+        # REGENERATED datasets get one written.
+        prune_scope="$PLAN_PRUNE_SCOPE"
+        # The legacy peer-root ladder goes ONLY in the same breath as writing
+        # its replacements. If nothing is being regenerated there is nothing to
+        # replace it with, and dropping it would leave the relationship with no
+        # retention at all -- the exact state this whole round exists to end.
+        # (Today the two always coincide: with the old shape no dataset can
+        # pass the [prune:$localpath] ownership check, so all of them
+        # regenerate. This does not rely on that.)
+        if [ -n "${PLAN_PRUNE_LEGACY:-}" ] && [ "${#regen_ds[@]}" -gt 0 ]; then
+            remove_managed_sections "$workfile" "$name" "$PLAN_PRUNE_LEGACY"
+            PRUNE_SCOPE_MIGRATED="$PLAN_PRUNE_LEGACY"
         fi
+        local _plocal
+        for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
+            _plocal=$(client_local_path "$ds")
+            {
+                echo
+                echo "[prune:$_plocal]"
+                echo "	$marker"
+                # gfs_pattern is 'automated_' rather than any tier's own
+                # narrower pattern, because the ladder has to see every
+                # snapshot it is bucketing.
+                profile_emit "$PROFILE_PRUNE_FILE"
+                # Declared-passive: the copy-side monitor rides these tiers,
+                # and it must be blind to exactly the families the pickup
+                # refuses to adopt (-E list), or an excluded family arriving by
+                # other means keeps a dead relation green.
+                if [ "${PASSIVE:-0}" = "1" ]; then
+                    local _pex; _pex=$(client_passive_flags | awk '{for(i=1;i<=NF;i++) if ($i=="-E") printf "%s%s", (n++?",":""), $(i+1)}')
+                    [ -n "$_pex" ] && echo "	monitor_exclude = $_pex"
+                fi
+                # Backup only, and unchanged from the single-ladder form: the
+                # same stagger as the send side, keeping the 20-minute gap the
+                # profile had between them. A prune that wraps past the hour is
+                # fine -- it deletes by age and keep-count, not by "did a backup
+                # just run". Sync keeps taking its schedule from the profile's
+                # own tiers, as it always has.
+                if [ "$sync_mode" -eq 0 ] && [ -n "$stagger_prune_expr" ]; then
+                    echo "	prune_schedule = $stagger_prune_expr"
+                fi
+                # Mirrors the pull's recursion, same reasoning as
+                # append_source_prune_create: a solid root's children are
+                # pulled by -R at every tick, so their landed snapshots must be
+                # pruned by -R at every tick too. A flat root has nothing under
+                # it that is not ALSO its own separately listed entry here, and
+                # a recursive sweep over one would be the leaf-under-a-
+                # recursive-parent race this project already fixed for delsnaps.
+                if is_recursive_root "$ds"; then
+                    echo "	recursive    = yes"
+                else
+                    echo "	recursive    = no"
+                fi
+                echo "	pair_label   = $name"
+                echo "	notify       = ${name}-$(basename "$ds")"
+            } >> "$workfile" || return 1
+        done
     fi
 
     # REV-20260811-102 step 3: bound the REMOTE source's tool-owned automated_
@@ -9813,7 +10005,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # own rendered templates: a tier carrying both send_schedule and
     # prune_schedule is flat, anything else is a ladder. One rule, one
     # implementation, two inputs.
-    detect_profile_gfs "$PROFILE_TPL_FILE"
+    detect_profile_gfs "$PROFILE_TPL_FILE" all
 
     local f name migrated=0
     local -a managed=(); local prune_scope=""

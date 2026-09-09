@@ -64,8 +64,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -3838,8 +3838,13 @@ fi
 # one `recursive = yes`. (REV-20260811-102 step 3 also emits one NON-recursive
 # `recursive = no` per remote source dataset -- one here for rpool/data -- which is
 # a separate scope and does not double the target ladder.)
-if [ "$(grep -c 'recursive    = yes' "$EC_FS")" = 1 ] \
-        && [ "$(grep -c 'recursive    = no' "$EC_FS")" = 1 ]; then
+# Since 2026-09-08 the target ladder is scoped to the LANDING PATH of each
+# dataset, not to TARGET/<peer>: a flat root lands as one entry with nothing
+# under it, so its ladder is `recursive = no` like the remote source prune --
+# two `no`, zero `yes`. A recursive `yes` on a flat landing would be the
+# leaf-under-a-recursive-parent race delsnaps already had fixed.
+if [ "$(grep -c 'recursive    = yes' "$EC_FS")" = 0 ] \
+        && [ "$(grep -c 'recursive    = no' "$EC_FS")" = 2 ]; then
     ok "field survival: prune recursion is written once, by the relationship"
 else
     bad "field survival: prune recursion is written once, by the relationship" "$(grep -n recursive "$EC_FS")"
@@ -4346,7 +4351,11 @@ emit9() {   # <conf> <name> <host> <is_new> [mode] [datasets]
 }
 
 # --- backup mode: one [dataset:] + one recursive GFS ladder ---
-C9="$P9/backup.conf"; DS9="tank/backups/pve9/rpool/data"; PR9="tank/backups/pve9"
+# PR9 == DS9 since 2026-09-08: the ladder is scoped to what THIS relationship
+# lands (one [prune:] per landing path), no longer to the peer's whole subtree,
+# which is shared by every relationship pointing at that peer and so belongs to
+# none of them (measured on pve10; account in client_section_plan).
+C9="$P9/backup.conf"; DS9="tank/backups/pve9/rpool/data"; PR9="$DS9"
 : > "$C9"
 
 # STEP 1 -- first activation creates the normal managed sections.
@@ -4500,7 +4509,10 @@ fi
 # An owned section with no src field cannot be refreshed -- refusing beats
 # leaving the relationship silently pointing at the old endpoint.
 N9="$P9/nosrc.conf"
-printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n\tflags        = -K /dev/null\n' "$DS9" > "$N9"
+# The owned [prune:] at the landing path is what puts the dataset on the
+# PRESERVE path (2026-09-08 shape); without it the section would be
+# regenerated from scratch, which is not the refresh this asserts about.
+printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n\tflags        = -K /dev/null\n\n[prune:%s]\n\t# managed-by: zfs-backup.sh client=c9\n\tuse_template = x\n' "$DS9" "$DS9" > "$N9"
 out=$(emit9 "$N9" c9 10.9.9.1 0); rc=$?
 if [ "$rc" -ne 0 ] && case "$out" in *"no 'src' field to refresh"*) true ;; *) false ;; esac; then
     ok "89 an owned section with no src refuses rather than silently keeping the old endpoint"
@@ -4838,7 +4850,7 @@ gx_prune_line() {   # <label> -> A's rendered delsnaps line, from the REAL gener
 # path. A brand-new CONFIG legitimately gets the CONFIG-wide safety defaults.
 printf '[defaults]\n\thost_label = gxtest\n' > "$GXC"
 out=$(emit_gx cliA labelA 10.8.8.1); rc=$?
-if [ "$rc" -eq 0 ] && grep -qF "[excluded:vzdump]" "$GXC" && grep -qxF "[prune:tank/backups/labelA]" "$GXC"; then
+if [ "$rc" -eq 0 ] && grep -qF "[excluded:vzdump]" "$GXC" && grep -qxF "[prune:tank/backups/labelA/rpool/data]" "$GXC"; then
     ok "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults"
 else
     bad "92 step 1: a genuinely new CONFIG still gets the CONFIG-wide safety defaults" "rc=$rc out=$out file=$(cat "$GXC")"
@@ -5335,8 +5347,9 @@ before_src="$(srcsec 'zfsbackup@10.9.9.1:rpool/data' | grep use_template)"
 emit_src3b 10.9.9.2 0   # ordinary endpoint change / re-activation
 after_src="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep use_template)"
 after_sshf="$(srcsec 'zfsbackup@10.9.9.2:rpool/data' | grep ssh_flags)"
-# emit_src3 uses LOAD_LABEL=pve9, so the TARGET prune scope is tank/backups/pve9
-after_tgt="$(srcsec 'tank/backups/pve9' | grep use_template)"
+# emit_src3 uses LOAD_LABEL=pve9; since 2026-09-08 the TARGET ladder is scoped
+# to the landing path tank/backups/pve9/rpool/data, not to the peer root.
+after_tgt="$(srcsec 'tank/backups/pve9/rpool/data' | grep use_template)"
 # 1. the edited SOURCE policy survived the endpoint change (NOT regenerated)
 if [ "$after_src" = "	use_template = profile__prof__src_keep_hourly,profile__prof__src_keep_daily" ]; then
     ok "56/107: re-activation PRESERVES the edited source retention (policy not regenerated)"
@@ -11042,6 +11055,62 @@ case "$lj_stub" in
 esac
 
 
+
+# --- A COMMENT IS NOT AN OWNERSHIP RECORD (REV-20260908-140 F1, P1) ---------
+# cron permits arbitrary comments. The shared reader took the FIRST `# Source:`
+# line in whatever it was handed, and four of its five callers hand it the whole
+# crontab -- so a line above our block decided which config the INSTALL GUARDS
+# compared against, and config B could replace the block generated from config
+# A, deleting every send, prune and monitor line A described.
+#
+# The fixture is the reviewer's, byte for byte.
+LJB="$LJ/bound"; mkdir -p "$LJB/bin"
+cat > "$LJB/crontab.root" <<'LJEOF'
+# Source: /tmp/want.conf -- unrelated user comment
+# BEGIN zfs-backup-managed (generated)
+# Source: /tmp/actual.conf -- DO NOT EDIT BY HAND, re-run gen-cron.sh instead
+0 1 * * * /r/snapsend.sh tank/live tank/backup
+# END zfs-backup-managed
+LJEOF
+cat > "$LJB/bin/crontab" <<'LJEOF'
+#!/bin/sh
+who=root
+[ "$1" = "-u" ] && who="$2"
+[ -f "$LJBX/crontab.$who" ] && cat "$LJBX/crontab.$who" || exit 1
+LJEOF
+chmod +x "$LJB/bin/crontab"
+
+ljb_source() {   # -> what the shared reader derives from the WHOLE crontab
+    ( export PATH="$LJB/bin:$PATH" LJBX="$LJB"
+      crontab_for_target 2>/dev/null | cron_block_source )
+}
+if [ "$(ljb_source)" = "/tmp/actual.conf" ]; then
+    ok "cronsource: a foreign '# Source:' ABOVE the block is ignored -- the block's own line decides"
+else
+    bad "cronsource: the foreign line above the block is ignored" "$(ljb_source)"
+fi
+# THE CONTROL THAT MAKES IT A DISCRIMINATOR: with the foreign line removed the
+# answer must be the SAME. Without this, "always returns actual.conf" could be
+# satisfied by a reader that ignores its input.
+sed -i '1d' "$LJB/crontab.root"
+if [ "$(ljb_source)" = "/tmp/actual.conf" ]; then
+    ok "cronsource: ...and without it the answer is unchanged (the control)"
+else
+    bad "cronsource: unchanged without the foreign line" "$(ljb_source)"
+fi
+# AND A BLOCK WITH NO SOURCE LINE AT ALL yields nothing -- fail closed, so a
+# caller cannot mistake a stale global comment for an ownership record.
+cat > "$LJB/crontab.root" <<'LJEOF'
+# Source: /tmp/want.conf -- unrelated user comment
+# BEGIN zfs-backup-managed (generated)
+0 1 * * * /r/snapsend.sh tank/live tank/backup
+# END zfs-backup-managed
+LJEOF
+if [ -z "$(ljb_source)" ]; then
+    ok "cronsource: a block carrying NO Source line yields nothing, never the comment above it"
+else
+    bad "cronsource: a block with no Source line yields nothing" "$(ljb_source)"
+fi
 fi   # --- koniec sekcji listjobs ---
 if want showscope; then
 # ============================================================================
@@ -11343,6 +11412,331 @@ else
     bad "showscope: the positive control on the same fixture" "$ss_ok"
 fi
 fi   # --- koniec sekcji showscope ---
+if want gfsshape; then
+
+# ============================================================================
+# gfsshape: THE HOST'S SHAPE, AND THE RELATIONSHIP THAT WOULD HAVE NO RETENTION
+# (2026-09-08). Self-contained; always eligible, also under `--section gfsshape`.
+#
+# Measured on the real lab, pve10, and this is the whole reason the section
+# exists: four relationships created through the one-command path were reported
+# `active` while pruning NOTHING and being monitored by NOTHING. The chain, each
+# link verified on the host:
+#
+#   an ORPHAN [template:profile__d30h24__hourly] left by a removed relationship
+#     -> detect_profile_gfs scans every template in the file -> host reads FLAT
+#     -> the ladder branch is skipped -> MANAGED_PRUNE_SCOPE recorded EMPTY
+#     -> no local [prune:] section -> copies never pruned
+#     -> and a staleness check rides the (scope,pattern) pair prune needed,
+#        so no monitor either.
+#
+# Two changes, and each has its own controls here: the shape is decided only by
+# templates a live section USES (A), and a relationship that would end up with
+# no retention at all is refused instead of written (B).
+# ============================================================================
+. "$REPO/test/harness.sh"
+
+GS="$WORK/gfsshape"; rm -rf "$GS"; mkdir -p "$GS"
+
+# The lab's shape, reduced: a flat orphan nobody references, beside a live ladder.
+cat > "$GS/orphan.conf" <<'GSEOF'
+[defaults]
+	host_label = pve10
+
+[template:profile__d30h24__hourly]
+	send_schedule  = 1 * * * *
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[template:profile__default__standard_hourly]
+	send_schedule = 1 * * * *
+	prefix        = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 25 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+
+[dataset:hdd/backups/peer/x]
+	use_template = profile__default__standard_hourly
+
+[prune:hdd/backups/peer]
+	use_template = profile__default__keep_hourly
+	gfs          = yes
+GSEOF
+# Byte-identical except that the flat template is the one a live section USES.
+sed 's|use_template = profile__default__standard_hourly|use_template = profile__d30h24__hourly|' \
+    "$GS/orphan.conf" > "$GS/live-flat.conf"
+
+detect_profile_gfs "$GS/orphan.conf"
+if [ "$PROFILE_GFS" -eq 1 ] && [ -z "${PROFILE_GFS_WHY:-}" ]; then
+    ok "gfsshape: an ORPHAN flat template does not decide the host's shape"
+else
+    bad "gfsshape: an orphan flat template does not decide the shape" \
+        "PROFILE_GFS=$PROFILE_GFS why=${PROFILE_GFS_WHY:-}"
+fi
+# THE CONTROL THAT MAKES IT A DISCRIMINATOR. Same bytes, one reference moved:
+# a flat template a live section USES must still flip the host to flat, or the
+# fix would have silently disabled the guard it was narrowing.
+detect_profile_gfs "$GS/live-flat.conf"
+if [ "$PROFILE_GFS" -eq 0 ] && [ "${PROFILE_GFS_WHY:-}" = "profile__d30h24__hourly" ]; then
+    ok "gfsshape: ...but a REFERENCED one still does, and is named"
+else
+    bad "gfsshape: a referenced flat template flips the shape and is named" \
+        "PROFILE_GFS=$PROFILE_GFS why=${PROFILE_GFS_WHY:-}"
+fi
+detect_profile_gfs "$GS/nie-ma-takiego.conf"
+if [ "$PROFILE_GFS" -eq 1 ]; then
+    ok "gfsshape: an unreadable or fresh config still answers 'ladder' (unchanged)"
+else
+    bad "gfsshape: fresh config answers ladder" "PROFILE_GFS=$PROFILE_GFS"
+fi
+
+# --- B: THE REFUSAL --------------------------------------------------------
+# client_section_plan is driven directly: the caller's environment is what
+# decides, and this pins exactly the combination that produced four
+# retention-less relationships on the lab.
+gs_plan() {   # <is_new> <profile> <config> -> rc, message in $WORK/gs.out
+    ( PROFILE_GFS=0; PROFILE_LOADED=""
+      PROFILE_GFS_WHY="profile__d30h24__hourly"
+      PROFILE_ACTIVE="$2"
+      PEER_SAVED_DATASETS=""
+      PEER_SAVED_TARGET="hdd/backups"
+      PEER_SAVED_MODE=""
+      LOAD_LABEL="peer"
+      client_section_plan "$3" proba "$1" ) >"$WORK/gs.out" 2>&1
+}
+
+if ! gs_plan 1 default "$GS/live-flat.conf" && grep -q 'NO RETENTION AT ALL' "$WORK/gs.out"; then
+    ok "gfsshape: a LADDER profile on a FLAT host is refused at CREATE -- not written with no retention"
+else
+    bad "gfsshape: a ladder profile on a flat host is refused" "$(cat "$WORK/gs.out")"
+fi
+if grep -q 'profile__d30h24__hourly' "$WORK/gs.out"; then
+    ok "gfsshape: ...and the refusal NAMES the template that made the host flat"
+else
+    bad "gfsshape: the refusal names the deciding template" "$(cat "$WORK/gs.out")"
+fi
+if grep -q 'migrate-profile' "$WORK/gs.out" && grep -q 'Nothing was changed' "$WORK/gs.out"; then
+    ok "gfsshape: ...names the ways out, and says nothing was changed"
+else
+    bad "gfsshape: the refusal names the ways out" "$(cat "$WORK/gs.out")"
+fi
+
+# CONTROL 1: a FLAT profile on a flat host is the legitimate case and must pass.
+# Without this the refusal could be "always refuse on a flat host".
+if gs_plan 1 d30h24 "$GS/live-flat.conf"; then
+    ok "gfsshape: a FLAT profile on the same flat host is NOT refused -- it prunes inside its tiers"
+else
+    bad "gfsshape: a flat profile on a flat host passes" "$(cat "$WORK/gs.out")"
+fi
+# CONTROL 2: re-activation of an EXISTING relationship must not start dying --
+# REV-20260810-090 requires an installed relationship to keep re-activating.
+if gs_plan 0 default "$GS/live-flat.conf"; then
+    ok "gfsshape: re-activation (is_new=0) is never refused -- an installed relationship keeps working"
+else
+    bad "gfsshape: re-activation is not refused" "$(cat "$WORK/gs.out")"
+fi
+# CONTROL 3: on a LADDER host the ladder profile is the ordinary case.
+if ( PROFILE_GFS=1; PROFILE_LOADED=""; PROFILE_ACTIVE=default; PEER_SAVED_DATASETS=""; PEER_SAVED_TARGET="hdd/backups"
+     PEER_SAVED_MODE=""; LOAD_LABEL="peer"; client_section_plan "$GS/orphan.conf" proba 1 ) >"$WORK/gs.out" 2>&1; then
+    ok "gfsshape: on a LADDER host the ladder profile passes, and plans a prune scope"
+else
+    bad "gfsshape: ladder profile on a ladder host passes" "$(cat "$WORK/gs.out")"
+fi
+
+# CONTROL 4: THE SAME DETECTOR, TWO INPUTS. Pointed at a HOST CONFIG only a
+# template a live section uses may vote (the pve10 litter case above). Pointed
+# at a PROFILE's rendered templates there are no sections at all, so under that
+# rule a flat profile could never read as flat -- and migrate-profile onto a
+# flat profile wrote a [prune:] with no use_template that gen-cron refused
+# (96b/96m/122a went rc=1 after the 2026-09-08 change). `all` is the second
+# question; this pair discriminates the two.
+printf '[template:flat_hourly]
+	send_schedule = 5 * * * *
+	prune_schedule = 25 * * * *
+' > "$GS/flat-profile.tpl"
+if ( detect_profile_gfs "$GS/flat-profile.tpl"; [ "$PROFILE_GFS" = 1 ] )    && ( detect_profile_gfs "$GS/flat-profile.tpl" all; [ "$PROFILE_GFS" = 0 ] && [ "$PROFILE_GFS_WHY" = flat_hourly ] ); then
+    ok "gfsshape: a sectionless PROFILE file reads LADDER as a host config (litter rule) and FLAT with 'all' (candidate list) -- the migrate-profile input"
+else
+    bad "gfsshape: detect_profile_gfs 'all' mode for a profile file" "$(detect_profile_gfs "$GS/flat-profile.tpl" all; echo "all: $PROFILE_GFS/$PROFILE_GFS_WHY")"
+fi
+
+# --- THE LADDER'S SCOPE: WHAT THIS RELATIONSHIP LANDS, NOT WHAT THE PEER OWNS ---
+#
+# Measured on pve10, 2026-09-08, right after the fix above started producing
+# ladders at all: the FIRST relationship activated took [prune:<TARGET>/<peer>]
+# -- the peer's whole subtree -- and the coverage guard then refused the other
+# three siblings on their own re-activation, correctly:
+#
+#   'hdd/backups/192.168.28.99/hdd/lab/ct-201' overlaps
+#   'hdd/backups/192.168.28.99', already owned by relationship 'lab-vm101'
+#
+# Three live relationships that could no longer be re-activated. Backup now
+# writes one [prune:] per landing path, the way sync has since REV-033 slice 8.
+GSS="$WORK/gfsscope"; rm -rf "$GSS"; mkdir -p "$GSS"
+
+gss_head() {   # <config> -- defaults + the two templates every fixture needs
+    cat > "$1" <<'GSSEOF'
+[defaults]
+	host_label = pve10
+
+[template:profile__default__standard_hourly]
+	send_schedule = 1 * * * *
+	prefix        = automated_hourly_
+
+[template:profile__default__keep_hourly]
+	prune_schedule = 25 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+GSSEOF
+}
+gss_dataset() {   # <config> <landing path> <owner>
+    printf '\n[dataset:%s]\n\t# managed-by: zfs-backup.sh client=%s\n\tuse_template = profile__default__standard_hourly\n' "$2" "$3" >> "$1"
+}
+gss_prune() {     # <config> <scope> <owner>
+    printf '\n[prune:%s]\n\t# managed-by: zfs-backup.sh client=%s\n\tuse_template = profile__default__keep_hourly\n\tgfs          = yes\n' "$2" "$3" >> "$1"
+}
+gss_plan() {   # <is_new> <config> <name> <mode> <recorded prune scope> <src dataset>...
+    local isnew="$1" cfg="$2" nm="$3" mode="$4" rec="$5"; shift 5
+    ( PROFILE_GFS=1; PROFILE_LOADED=""
+      PROFILE_ACTIVE=""
+      MANAGED_DATASETS=""
+      MANAGED_PRUNE_SCOPE="$rec"
+      PEER_SAVED_DATASETS="$*"
+      PEER_SAVED_TARGET="hdd/backups"
+      PEER_SAVED_MODE="$mode"
+      LOAD_LABEL="192.168.28.99"
+      client_section_plan "$cfg" "$nm" "$isnew" >/dev/null 2>&1
+      printf 'scope=[%s] legacy=[%s] gen=%s\n' \
+             "$PLAN_PRUNE_SCOPE" "${PLAN_PRUNE_LEGACY:-}" "$PLAN_PRUNE_NEEDS_GEN" )
+}
+
+# 1. A NEW relationship never plans a ladder at the peer root.
+gss_head "$GSS/fresh.conf"
+R1=$(gss_plan 1 "$GSS/fresh.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if [ "$R1" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[] gen=1" ]; then
+    ok "gfsscope: a new relationship scopes its ladder to its OWN landing path"
+else
+    bad "gfsscope: new relationship scopes to its landing path" "$R1"
+fi
+
+# 2. THE DEFECT ITSELF: two relationships pulling from the SAME peer must not
+#    plan scopes that swallow one another. This is the assertion that would
+#    have failed on 2026-09-08, and it is checked with path_overlaps -- the
+#    same predicate the coverage guard refuses on -- rather than by eyeballing
+#    the strings.
+gss_head "$GSS/two.conf"
+gss_dataset "$GSS/two.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_dataset "$GSS/two.conf" hdd/backups/192.168.28.99/hdd/lab/ct-201 lab-ct201
+S_A=$(gss_plan 1 "$GSS/two.conf" lab-vm101 "" "" hdd/lab/vm-101)
+S_B=$(gss_plan 1 "$GSS/two.conf" lab-ct201 "" "" hdd/lab/ct-201)
+A_SCOPE=$(printf '%s' "$S_A" | sed -n 's/^scope=\[\([^]]*\)\].*/\1/p')
+B_SCOPE=$(printf '%s' "$S_B" | sed -n 's/^scope=\[\([^]]*\)\].*/\1/p')
+if [ -n "$A_SCOPE" ] && [ -n "$B_SCOPE" ] \
+   && ! path_overlaps "$A_SCOPE" "$B_SCOPE" && ! path_overlaps "$B_SCOPE" "$A_SCOPE"; then
+    ok "gfsscope: two relationships to the SAME peer plan DISJOINT ladders -- neither can lock the other out"
+else
+    bad "gfsscope: sibling relationships plan disjoint ladders" "A=$A_SCOPE B=$B_SCOPE"
+fi
+# ...and the positive control for that predicate: the OLD scope really did
+# overlap, so the assertion above is discriminating and not vacuously true.
+if path_overlaps "hdd/backups/192.168.28.99" "$B_SCOPE"; then
+    ok "gfsscope: ...while the old peer-root scope DID swallow the sibling (control)"
+else
+    bad "gfsscope: the old peer-root scope overlaps the sibling" "B=$B_SCOPE"
+fi
+
+# 3. MIGRATION: a relationship carrying the old peer-root ladder is told to
+#    drop it, in the same transaction that writes the replacements.
+gss_head "$GSS/legacy.conf"
+gss_dataset "$GSS/legacy.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/legacy.conf" hdd/backups/192.168.28.99 lab-vm101
+R3=$(gss_plan 0 "$GSS/legacy.conf" lab-vm101 "" hdd/backups/192.168.28.99 hdd/lab/vm-101)
+if [ "$R3" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[hdd/backups/192.168.28.99] gen=1" ]; then
+    ok "gfsscope: re-activation names the old peer-root ladder for removal and regenerates"
+else
+    bad "gfsscope: re-activation migrates off the peer-root ladder" "$R3"
+fi
+
+# 4. CONTROL: the same peer-root ladder owned by SOMEBODY ELSE is not ours to
+#    delete. Without this, 'legacy' could be "whatever sits at the peer root".
+gss_head "$GSS/foreign.conf"
+gss_dataset "$GSS/foreign.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/foreign.conf" hdd/backups/192.168.28.99 lab-ktos-inny
+R4=$(gss_plan 0 "$GSS/foreign.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if printf '%s' "$R4" | grep -q 'legacy=\[\]'; then
+    ok "gfsscope: ...but a peer-root ladder owned by ANOTHER relationship is left alone"
+else
+    bad "gfsscope: a foreign peer-root ladder is not removed" "$R4"
+fi
+
+# 5. REV-20260809-089 KEPT: an unchanged relationship already in the new shape
+#    is left entirely alone -- its retention is NOT re-derived from today's
+#    profile. This is the property the old single-ladder shape existed to give,
+#    and the one that actually mattered.
+gss_head "$GSS/settled.conf"
+gss_dataset "$GSS/settled.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+gss_prune   "$GSS/settled.conf" hdd/backups/192.168.28.99/hdd/lab/vm-101 lab-vm101
+R5=$(gss_plan 0 "$GSS/settled.conf" lab-vm101 "" "" hdd/lab/vm-101)
+if [ "$R5" = "scope=[hdd/backups/192.168.28.99/hdd/lab/vm-101] legacy=[] gen=0" ]; then
+    ok "gfsscope: an already-migrated relationship re-activates with NOTHING regenerated (REV-089)"
+else
+    bad "gfsscope: settled relationship regenerates nothing" "$R5"
+fi
+
+# 6. SYNC IS UNTOUCHED: its scopes are the source datasets themselves, and it
+#    has no peer root to migrate off.
+gss_head "$GSS/sync.conf"
+R6=$(gss_plan 1 "$GSS/sync.conf" lab-sync sync "" tank/a tank/b)
+if [ "$R6" = "scope=[tank/a tank/b] legacy=[] gen=1" ]; then
+    ok "gfsscope: sync mode is unchanged -- one ladder per source dataset, no legacy"
+else
+    bad "gfsscope: sync mode unchanged" "$R6"
+fi
+
+# 7. THE FIFTH EXEMPTION on the clobber guard. Migrating off the peer-root
+#    ladder genuinely DROPS coverage, so assert_target_block_not_clobbered is
+#    right to refuse it -- it did, on pve10, with "2 job line(s) would be
+#    DELETED". These lines are the real ones, copied off that host.
+GSL_OLD='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-vm101)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-vm101 -P "__replicate_:2" "hdd/backups/192.168.28.99" "automated_" -H24 -D7 -W4 -M12'
+GSL_NEW='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-vm101-vm-101)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-vm101 -P "__replicate_:2" "hdd/backups/192.168.28.99/hdd/lab/vm-101" "automated_" -H24 -D7 -W4 -M12'
+GSL_SIB='44 * * * * /r/zfs-job.sh "pve10 gfs prune (lab-ct201-ct-201)" --log=/r/cron.log -- /r/delsnaps.sh -G -R -L lab-ct201 -P "__replicate_:2" "hdd/backups/192.168.28.99/hdd/lab/ct-201" "automated_" -H24 -D7 -W4 -M12'
+
+if ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+     printf '%s\n' "$GSL_NEW" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: the clobber guard excuses the peer-root ladder REPLACED by its own narrower one"
+else
+    bad "gfsscope: the migrated ladder is excused" "not excused"
+fi
+# CONTROL A: without a migration planned this run, nothing is excused -- the
+# guard must still refuse. This is what stops the exemption from being a
+# permanent hole.
+if ! ( PRUNE_SCOPE_MIGRATED=""
+       printf '%s\n' "$GSL_NEW" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and excuses NOTHING when this run planned no migration"
+else
+    bad "gfsscope: no migration planned means no exemption" "excused anyway"
+fi
+# CONTROL B: a ladder that simply VANISHED is not excused. Without this the
+# exemption would launder exactly the loss the guard exists to catch.
+if ! ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+       printf '%s\n' "" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and a ladder that vanished with no replacement is still refused"
+else
+    bad "gfsscope: a vanished ladder is refused" "excused"
+fi
+# CONTROL C: a SIBLING's ladder under the same scope does not excuse this
+# relationship's loss -- the replacement has to be ours (-L).
+if ! ( PRUNE_SCOPE_MIGRATED="hdd/backups/192.168.28.99"
+       printf '%s\n' "$GSL_SIB" | line_scope_narrowed_by_migration "$GSL_OLD" ); then
+    ok "gfsscope: ...and another relationship's ladder does not excuse ours"
+else
+    bad "gfsscope: a sibling's ladder does not excuse ours" "excused"
+fi
+fi   # --- koniec sekcji gfsshape ---
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

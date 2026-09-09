@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E51.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25, E28, E50.*
+*Evidence: E3, E9, E15, E24, E25, E28, E52.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -1527,7 +1527,39 @@ not"** -- and the answer is a grep over the function, not a memory of what was
 just edited. Related: E41, where the same fix was applied at one site and
 shipped missing at two others, one day earlier.
 
-### E50 — The transfers screen was 25 lines tall on a 24-line terminal (2026-09-09, R6)
+### E50 - I consolidated five copies without reading what they read
+
+**2026-09-08, `cron_block_source()` as merged in PR #364, found by the Reviewer
+(REV-20260908-140), P1.**
+
+*Genesis.* `list-jobs` had shipped with a header grammar I invented, and the fix
+was to use the one the tree already had -- in four inline copies plus
+gen-cron.sh. I extracted a helper, pointed all five call sites at it, and wrote
+in the commit message that the grammar now lives once. It does. It is also
+wrong, and was wrong in all four copies before me: it takes the first
+`# Source:` line in whatever it is handed, and four of the five callers hand it
+the WHOLE crontab. cron permits arbitrary comments, so a line above this
+project's block decided which config the install guards compared against -- and
+`assert_cron_config_matches_installed` would then permit replacing the block
+generated from a different config, deleting every send, prune and monitor line
+it described.
+
+*Cause.* R3, and a specific form of it. I treated consolidation as a mechanical
+edit: same expression, fewer copies, no behaviour change -- which was true and
+was the whole problem. **A helper is a claim that several callers want the same
+thing.** Checking that claim is part of making it, and I checked only that the
+five sites produced identical text, never what the text was reading. The defect
+was pre-existing; the consolidation is what made it one line and therefore my
+responsibility to have read.
+
+*Rule.* R3, evidence. When several copies become one, state what the shared
+function's INPUT is for each caller and check that the body is correct for the
+widest of them. Here four callers pass a whole crontab and one passes a block:
+the body has to be correct for the crontab, so the bounding belongs inside the
+helper -- `sed -n '/BEGIN/,/END/p'` before the grep -- and not in a note asking
+callers to narrow first. The caller that forgets is exactly what consolidation
+is supposed to make impossible.
+### E52 — The transfers screen was 25 lines tall on a 24-line terminal (2026-09-09, R6)
 
 **Genesis.** Five TUI windows rendered as pure text. Every screen "looked
 right" in the first render; the detail panel on Transfery ended after four
@@ -1546,7 +1578,7 @@ line's width are compared with the terminal size, in the test, for every
 screen and every window, at 80, 120 and 200. The assertion exists now and it
 is the one that found this.
 
-### E51 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
+### E53 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
 
 **Genesis.** Replacing `"\t"` by `"|"` in `cmd_list_replicas` through a
 Python patch fed to the Bash tool as a heredoc. The patch printed "edits: 1",
