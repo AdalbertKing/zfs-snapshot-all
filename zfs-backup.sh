@@ -5846,11 +5846,11 @@ cmd_list_replicas() {
     # Parsed with awk rather than sourced: a config is data, never a program.
     local rows; rows=$(awk '
         /^\[replica:/ {
-            if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist)
+            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist)
             name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
             src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; next
         }
-        /^\[/ { if (name != "") { print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist); name="" } next }
+        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist); name="" } next }
         name != "" {
             line=$0; sub(/^[ \t]+/,"",line)
             k=line; sub(/[ \t]*=.*$/,"",k)
@@ -5863,7 +5863,7 @@ cmd_list_replicas() {
             else if (k=="recursive") rec=v
             else if (k=="history") hist=v
         }
-        END { if (name != "") print name "\t" src "\t" dst "\t" sched "\t" pref "\t" media "\t" rec "\t" (hist==""?"all":hist) }
+        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) }
     ' "$config")
 
     local gate="$SCRIPT_DIR/zfs-media-gate.sh"
@@ -5873,7 +5873,13 @@ cmd_list_replicas() {
         if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
         return 0
     fi
-    while IFS="$(printf '\t')" read -r name src dst sched pref media rec hist; do
+    # '|' AND NOT A TAB. Tab is IFS whitespace, and bash collapses a run of IFS
+    # whitespace into ONE separator, so a replica written by `add-replica --fixed`
+    # (no `media` line) read back with `recursive` in the media slot and `history`
+    # in the recursive slot: every field after the empty one shifted left.
+    # Measured 2026-09-09 on pve9 with a temporary config. `|` cannot occur in a
+    # dataset name, a cron schedule or a prefix.
+    while IFS='|' read -r name src dst sched pref media rec hist; do
         [ -n "$name" ] || continue
         pool="${dst%%/*}"
         present="unknown"; last=""
@@ -11065,17 +11071,24 @@ jobs_block_worklines() {   # <account> -> how many ENGINE lines the installed bl
 # The scope is matched as a WHOLE PATH between delimiters, not as a substring:
 # hdd/backups and hdd/backups2 are different scopes, and a substring test would
 # hand the first the second's lines.
-jobs_block_lines_for() {   # <account> <scope> -> matching engine lines, one per line
-    local acct="$1" scope="$2" blk
+#
+# THE SECOND KEY IS THE RELATION LABEL. A pull line names the REMOTE source and
+# the local landing PARENT, never the landing dataset itself, so a pull job's
+# own transfer line does not mention the job's scope -- measured on the lab
+# 2026-09-09: the window showed prune and monitor for lab-ct201 and not the
+# snapget line that does the work. gen-cron stamps every engine line with
+# `-L <label>`; that is the same key the monitor reader uses, not a new one.
+jobs_block_lines_for() {   # <account> <scope> [label] -> matching engine lines, one per line
+    local acct="$1" scope="$2" label="${3:-}" blk
     blk=$(mktemp) || die "mktemp failed"
     if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; return 0; fi
-    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk"         | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh'         | awk -v s="$scope" '
+    sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' "$blk"         | grep -E 'snapsend\.sh|snapget\.sh|delsnaps\.sh|check-snap-age\.sh'         | awk -v s="$scope" -v l="$label" '
             {
-                n = split($0, _unused, "")   # keep awk from reformatting
                 line = $0
                 # delimiters around a dataset in a rendered line: quote, comma,
                 # space, colon (a remote host prefix) or end of line
-                if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) print line
+                if (line ~ ("(^|[\"[:space:],:])" s "([\"[:space:],]|$)")) { print line; next }
+                if (l != "" && line ~ ("[[:space:]]-L[[:space:]]+\"?" l "\"?([[:space:]]|$)")) print line
             }'
     rm -f "$blk"
 }
@@ -11293,7 +11306,7 @@ cmd_list_jobs() {
                         [ "$_cfirst" -eq 1 ] || printf ','
                         _cfirst=0
                         printf '"%s"' "$(json_escape "$_cl")"
-                    done < <(jobs_block_lines_for "$acct" "$sec")
+                    done < <(jobs_block_lines_for "$acct" "$sec" "$label")
                     printf ']'
                     printf '}'
                 else
