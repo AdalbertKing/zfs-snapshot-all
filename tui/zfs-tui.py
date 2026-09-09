@@ -289,6 +289,8 @@ def _cron_field(spec, lo, hi, names=None):
         else:
             part = names.get(part, part) if names else part
             a = b = int(part)
+        if a < lo or b > hi or a > b or step < 1:
+            raise ValueError(spec)
         for v in range(a, b + 1, step):
             vals.add(v)
     return vals
@@ -524,6 +526,12 @@ def verbs_for(rel):
     return out
 
 
+def ch_arrow(job):
+    """Kierunek zadania bez rekordu, w UTF-8; tryb ASCII odogonkowuje strzalki
+    razem z reszta ekranu (deaccent)."""
+    return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
+
+
 def build_relations(data, now):
     """Wiersze ekranu glownego: RELACJA (para hostow), nie zadanie.
 
@@ -594,7 +602,7 @@ def build_relations(data, now):
         nxt_epoch = cron_next(j.get("schedule", ""), now)
         rows.append({
             "kind": "job", "name": j.get("scope", ""), "rel": None,
-            "state": "bez rekordu (%s)" % j.get("direction", "?"),
+            "state": "bez rekordu %s" % ch_arrow(j),
             "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0], "reasons": [reason] if reason else [],
             "monitors": [], "last": None, "last_txt": "--",
             "transfers": [], "jobs": [x for x in jobs if x.get("scope") == j.get("scope")],
@@ -606,7 +614,7 @@ def build_relations(data, now):
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
             "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None,
-            "state": "config nieczytelny", "verdict": "UNKNOWN", "vword": "nie odpowiada",
+            "state": "nieczytelny", "verdict": "UNKNOWN", "vword": "nie odpowiada",
             "reasons": [u.get("error", "")], "monitors": [], "last": None,
             "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"), "transfers": [],
             "jobs": [], "next_epoch": None, "next": "?", "u": u,
@@ -661,12 +669,12 @@ def top_bar(data, width, now, ascii_only, err_count):
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
     acct = ", ".join(a for a in accounts if a) or "(brak bloku)"
     left = " zfs-snapshot-all"
-    mid = "%s | konto %s" % (host, acct)
-    right = u"odczyt %s%s " % (time.strftime("%H:%M:%S", time.localtime(data.read_at or now)),
-                               u"  ! %d źródła bez odpowiedzi" % err_count if err_count else "")
+    mid = "%s | konto %s%s" % (host, acct, u"   ! bez odpowiedzi: %d" % err_count if err_count else "")
+    right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
     gap = width - len(left) - len(mid) - len(right)
     if gap < 2:
-        line = fit(left + "  " + mid + "  " + right, width)
+        # Ciasno: nazwa programu odpada, fakty (host, konto, blad) zostaja.
+        line = fit(" " + mid + "  " + right, width)
     else:
         line = left + " " * (gap // 2) + mid + " " * (gap - gap // 2) + right
     return fit(line, width)
@@ -795,7 +803,13 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
     host = (data.jobs or {}).get("host") or (data.status or {}).get("host") or "?"
     if data.failed("status"):
         body = source_error_body(ch, "status", data, "status")
-        scr.lines = box(ch, "Relacje na kolektorze %s" % host, body, width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, "Relacje na kolektorze %s" % host, body, width)
+        scr.bars.add(0)
+        while len(scr.lines) < height - 1:
+            scr.lines.append(fit("", width))
+        scr.lines = scr.lines[:height - 1]
+        scr.lines.append(key_bar("relacje", width))
+        scr.bars.add(len(scr.lines) - 1)
         return scr
     live = [r for r in rows if not (r["kind"] == "relation" and r["rel"].get("state") == "removed")]
     title = "Relacje na kolektorze %s (%d)" % (host, len(live))
@@ -803,14 +817,13 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
     beside = width >= 120
     lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
     inner = lbw - 4
+    # Kolumny rosna z danymi, a "Nastepny" dostaje reszte, nie mniej niz 10.
     nw = max(8, min(24, max([len(r["name"]) for r in rows] + [8])))
-    sw = 14
+    sw = max(14, min(20, max([len(r["state"]) for r in rows] + [14])))
     vw = 13
-    lw = 18
+    lw = 18 if any(len(r["last_txt"]) > 2 for r in rows) else 5
+    nw = max(8, min(nw, inner - (sw + vw + lw + 4) - 10))
     rest = inner - (nw + sw + vw + lw + 4)
-    if rest < 10:
-        lw = max(12, lw + rest - 10)
-        rest = inner - (nw + sw + vw + lw + 4)
     hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Stan", sw), fit("Kopie", vw), fit("Ostatni wynik", lw), fit(u"Następny", rest))
     body = [hdr, ch.dash * inner]
     if not rows:
@@ -825,7 +838,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
         first = cursor - list_h + 1
     cur_y = None
     for i, r in enumerate(rows[first:first + list_h], start=first):
-        line = "%s %s %s %s %s" % (fit(r["name"], nw, ch), fit(r["state"], sw, ch),
+        name = fit_left(r["name"], nw, ch) if r["kind"] == "job" else fit(r["name"], nw, ch)
+        line = "%s %s %s %s %s" % (name, fit(r["state"], sw, ch),
                                    fit(r["vword"], vw, ch), fit(r["last_txt"], lw, ch), fit(r["next"], rest, ch))
         if i == cursor:
             cur_y = len(body)
@@ -1071,7 +1085,7 @@ def transfer_detail_pairs(t, now, ch):
                                  ("   od @" + t["base"].split("@", 1)[-1]) if t.get("base") else "   (brak wspólnej bazy)"))]
     tot, dn, wire = int(t.get("total_bytes") or 0), int(t.get("done_bytes") or 0), int(t.get("wire_bytes") or -1)
     b = "%s / %s" % (human_bytes(dn), human_bytes(tot) if tot > 0 else "nieznane")
-    b += u"   na łączu: %s" % (human_bytes(wire) if wire >= 0 else u"niemierzalne (mbuffer nie raportuje w tym trybie)")
+    b += u"   na łączu: %s" % (human_bytes(wire) if wire >= 0 else u"niemierzalne (mbuffer nie raportuje)")
     pairs.append(("Bajty", b))
     if t.get("state") == "running":
         rate, eta = int(t.get("rate_bps") or 0), int(t.get("eta_seconds") or -1)
@@ -1106,13 +1120,17 @@ def render_transfery(data, cursor, width, height, now, ch, message=""):
         cols = (nw, dw, mw, pw, sw, tw)
         hdr = "%s %s %s %s %s %s" % (fit("Relacja", nw), fit("Dataset", dw), fit("Tryb", mw), fit("Dane", pw), fit("Stan", sw), fit("Kiedy", tw))
         panel_h = 0 if beside else 9
+        # Kazda ramka = wiersze + naglowek + kreska + 2 krawedzie. Suma ramek i
+        # panelu ma sie zmiescic w wysokosci minus dwa paski -- inaczej panel
+        # spada poza ekran (tak bylo w pierwszej wersji: 25 linii na 24).
         avail = height - 2 - panel_h
-        run_h = min(len(running) + 3, max(4, avail // 3)) if running else 3
+        run_rows = min(len(running), max(1, avail // 3 - 4)) if running else 1
+        run_h = run_rows + 4
         done_h = avail - run_h
         rbody = [hdr, ch.dash * inner]
         cur_y = None
         if running:
-            for i, t in enumerate(running[:run_h - 2]):
+            for i, t in enumerate(running[:run_rows]):
                 if i == cursor:
                     cur_y = ("run", len(rbody))
                 rbody.append(transfer_row(t, now, cols, ch))
@@ -1131,8 +1149,8 @@ def render_transfery(data, cursor, width, height, now, ch, message=""):
             dbody.append(transfer_row(t, now, cols, ch))
         if not done:
             dbody.append(u"brak zapisów w historii transferów")
-        if len(done) > first + list_h:
-            dbody.append(u"... jeszcze %d" % (len(done) - first - list_h))
+        if len(done) > first + list_h and list_h > 1:
+            dbody[-1] = fit(u"... jeszcze %d" % (len(done) - first - list_h + 1), inner)
         while len(dbody) < list_h + 2:
             dbody.append("")
         donebox = box(ch, u"Zakończone (%d)" % len(done), dbody, lbw,
@@ -1177,7 +1195,7 @@ def monitor_rows(data):
     return mons
 
 
-def monitor_detail_pairs(m, ch):
+def monitor_detail_pairs(m, ch, full=False):
     vw = VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0]
     pairs = [("Relacja", m.get("label") or "(bez etykiety)"),
              ("Datasety (%d)" % len(m.get("datasets", [])), ",  ".join(m.get("datasets", [])) or "?"),
@@ -1188,10 +1206,11 @@ def monitor_detail_pairs(m, ch):
         pairs.append(("Wyklucza", ", ".join(m["exclude"])))
     verdict = vw
     if m.get("reason"):
-        verdict += "   " + "  |  ".join(m["reason"].splitlines())
+        lines = m["reason"].splitlines()
+        # W panelu jedna linia (pelny tekst w oknie po Enter); w oknie wszystkie.
+        verdict += "   " + (lines[0] if not full else "  |  ".join(lines))
     elif m.get("verdict") == "OK":
         verdict += u"   najnowsza migawka mieści się w progu"
-    pairs.append(("Werdykt", verdict))
     notes = []
     if m.get("paused_local"):
         notes.append(u"relacja wstrzymana -- OK z pauzy to nie dowód pokrycia")
@@ -1201,6 +1220,7 @@ def monitor_detail_pairs(m, ch):
         notes.append(u"linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia")
     if notes:
         pairs.append(("Uwaga", "  |  ".join(notes)))
+    pairs.append(("Werdykt", verdict))
     return pairs
 
 
@@ -1301,9 +1321,9 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(16, max([len(r.get("name") or "?") for r in reps] + [8])))
-        sw, mw, lw = 16, 13, 17
+        sw, mw, lw = 12, 13, 10
         dw = inner - (nw + sw + mw + lw + 4)
-        hdr = "%s %s %s %s %s" % (fit("Replika", nw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Ostatnio widziany", lw))
+        hdr = "%s %s %s %s %s" % (fit("Replika", nw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Widziany", lw))
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
         body = [hdr, ch.dash * inner]
@@ -1315,7 +1335,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
                 cur_y = len(body)
             body.append("%s %s %s %s %s" % (fit(r.get("name"), nw, ch), fit(sd, dw, ch),
                                             fit({"on-insert": u"po włożeniu"}.get(r.get("schedule"), r.get("schedule") or "?"), sw, ch),
-                                            fit(st[0], mw, ch), fit(r.get("last_seen") or "nigdy", lw, ch)))
+                                            fit(st[0], mw, ch), fit((r.get("last_seen") or "nigdy")[:10], lw, ch)))
         if not reps:
             body += [u"Brak sekcji [replica:] w configu tego kolektora.",
                      u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
@@ -1494,7 +1514,7 @@ class UI(object):
             return {"kind": "panel", "name": "transfer %s" % (t.get("label") or ""), "pairs": transfer_detail_pairs(t, now, ch)}
         if self.screen == "monitor":
             m = monitor_rows(self.data)[c]
-            return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch)}
+            return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
         return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch)}
 
@@ -1535,6 +1555,8 @@ def deaccent(text):
 
 
 _DEACCENT = {ord(a): b for a, b in zip(u"ąćęłńóśźżĄĆĘŁŃÓŚŹŻ", u"acelnoszzACELNOSZZ")}
+_DEACCENT[ord(u"→")] = ">"
+_DEACCENT[ord(u"←")] = "<"
 
 
 def _ui_render_final(self, width, height):
