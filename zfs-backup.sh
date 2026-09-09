@@ -2457,14 +2457,24 @@ config_is_frozen_legacy() {   # <file> -> 0 when the frozen pre-GFS family is pr
 #
 # PROFILE_GFS_WHY records the template that decided it, so a refusal downstream
 # can name the reason instead of describing it.
-detect_profile_gfs() {   # <file> -> sets PROFILE_GFS, PROFILE_GFS_WHY
+# TWO INPUTS, TWO QUESTIONS (2026-09-09). Pointed at a HOST CONFIG the question
+# is "what policy is in force", and only a template a live section names may
+# answer. Pointed at a PROFILE's rendered templates (migrate-profile asks about
+# the DESTINATION) there are no sections at all, so under the used-only rule a
+# flat profile could never be read as flat: measured on the suite after the
+# 2026-09-08 change, migrate-profile onto a flat profile emitted a [prune:]
+# with no use_template and gen-cron refused the config (96b/96m/122a, rc=1).
+# The second argument `all` says "every template votes" -- for a file that IS
+# the candidate list, not a file that may carry litter.
+detect_profile_gfs() {   # <file> [all] -> sets PROFILE_GFS, PROFILE_GFS_WHY
     PROFILE_GFS=1
     PROFILE_GFS_WHY=""
     [ -r "$1" ] || return 0
     local hit
-    hit=$(awk '
+    hit=$(awk -v all="${2:-}" '
         # pass 1: which templates does a live section actually use
         FNR == NR {
+            if (all == "all") { nextfile }
             if ($0 ~ /^\[(dataset|prune):/) { insec = 1; next }
             if ($0 ~ /^\[/)                  { insec = 0 }
             if (insec && $0 ~ /^[ 	]*use_template[ 	]*=/) {
@@ -2477,7 +2487,7 @@ detect_profile_gfs() {   # <file> -> sets PROFILE_GFS, PROFILE_GFS_WHY
         # pass 2: only those templates get a vote
         /^\[template:/ {
             name = $0; sub(/^\[template:/, "", name); sub(/\]$/, "", name)
-            used = (name in ref); has_send = 0; has_prune = 0; intpl = 1; next
+            used = (all == "all") || (name in ref); has_send = 0; has_prune = 0; intpl = 1; next
         }
         /^\[/ { intpl = 0 }
         intpl && used && /^[ 	]*send_schedule[ 	]*=/  { has_send = 1 }
@@ -9995,7 +10005,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # own rendered templates: a tier carrying both send_schedule and
     # prune_schedule is flat, anything else is a ladder. One rule, one
     # implementation, two inputs.
-    detect_profile_gfs "$PROFILE_TPL_FILE"
+    detect_profile_gfs "$PROFILE_TPL_FILE" all
 
     local f name migrated=0
     local -a managed=(); local prune_scope=""

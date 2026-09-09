@@ -11533,6 +11533,23 @@ else
     bad "gfsshape: ladder profile on a ladder host passes" "$(cat "$WORK/gs.out")"
 fi
 
+# CONTROL 4: THE SAME DETECTOR, TWO INPUTS. Pointed at a HOST CONFIG only a
+# template a live section uses may vote (the pve10 litter case above). Pointed
+# at a PROFILE's rendered templates there are no sections at all, so under that
+# rule a flat profile could never read as flat -- and migrate-profile onto a
+# flat profile wrote a [prune:] with no use_template that gen-cron refused
+# (96b/96m/122a went rc=1 after the 2026-09-08 change). `all` is the second
+# question; this pair discriminates the two.
+printf '[template:flat_hourly]
+	send_schedule = 5 * * * *
+	prune_schedule = 25 * * * *
+' > "$GS/flat-profile.tpl"
+if ( detect_profile_gfs "$GS/flat-profile.tpl"; [ "$PROFILE_GFS" = 1 ] )    && ( detect_profile_gfs "$GS/flat-profile.tpl" all; [ "$PROFILE_GFS" = 0 ] && [ "$PROFILE_GFS_WHY" = flat_hourly ] ); then
+    ok "gfsshape: a sectionless PROFILE file reads LADDER as a host config (litter rule) and FLAT with 'all' (candidate list) -- the migrate-profile input"
+else
+    bad "gfsshape: detect_profile_gfs 'all' mode for a profile file" "$(detect_profile_gfs "$GS/flat-profile.tpl" all; echo "all: $PROFILE_GFS/$PROFILE_GFS_WHY")"
+fi
+
 # --- THE LADDER'S SCOPE: WHAT THIS RELATIONSHIP LANDS, NOT WHAT THE PEER OWNS ---
 #
 # Measured on pve10, 2026-09-08, right after the fix above started producing
