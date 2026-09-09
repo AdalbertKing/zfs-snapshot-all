@@ -1690,7 +1690,14 @@ class UI(object):
         except OSError:
             logdir = "/tmp"
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(logdir, "%s-%s.log" % (argv[1] if len(argv) > 1 else "cmd", stamp))
+        # Nazwa dziennika z czasownika, PRZEFILTROWANA: forma jednokomendowa ma w
+        # argv[1] "--source=host:pula/dataset" -- ukosnik zrobilby z tego
+        # katalog, ktorego nie ma, i akcja padala cicho (pve10, jazda 8).
+        verb = argv[1] if len(argv) > 1 else "cmd"
+        if verb.startswith("--"):
+            verb = "nowa-relacja"
+        verb = "".join(c if (c.isalnum() or c in "._-") else "_" for c in verb)[:40] or "cmd"
+        path = os.path.join(logdir, "%s-%s.log" % (verb, stamp))
         try:
             # Naglowek z komenda idzie do dziennika PRZED otwarciem go dla
             # procesu (tryb dopisywania), zeby proces go nie nadpisal.
