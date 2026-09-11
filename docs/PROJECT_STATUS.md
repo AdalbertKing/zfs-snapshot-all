@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 82241e49ebc0116a -->
+<!-- status-covers-digest: 2cc31909de3c8ab8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,23 +29,33 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
-- **TUI F3 w trzech panelach i linia poleceń jak w mc (2026-09-11).**
+- **TUI F3 w trzech panelach i linia poleceń jak w mc (2026-09-11, czytelność 2026-09-12).**
   Szkic właściciela: góra dzielona lewo/prawo, dół na całą szerokość.
   *„Relacji zwykle wiele nie będzie, za to datasets do niej należące — może być
-  ich dużo"*. Lewa lista relacji (Relacja, Kierunek, Stan; Kopie i Następny
-  dochodzą z szerokością), prawy panel szczegółów **bez Źródeł i Celu**, dolny
-  panel par `źródło → cel` podświetlonej relacji, jedna pod drugą (prawda z
-  linii crona, te same wiersze co F2; relacja bez crona ma pary z rekordu i
-  tytuł to mówi). Para, która się nie mieści, to źródło i pod nim cel — nic
-  nie ucięte; od 100 kolumn przy parze Kopie, Czas o/ś/m i GB. Tab przenosi
-  kursor na pary, Enter na parze skacze do tego zadania na F2.
-  - Prawy panel: stan, **uwaga tuż pod stanem** (panel bywa niski), peer i
-    endpoint, kierunek i konto, polityka, wysyłka (harmonogram, rodzina),
-    porządki (retencja, drabina GFS, harmonogram, retencja u źródła — z
-    `list-jobs`, bez `show-config`), ostatni, następny, kopie z progami,
-    statystyka z okna digestu (biegi, błędy, czas o/ś/m, wolumen), liczba par
-    i lądowisk, historia rekordu. Reszta (pełny powód monitora, linie crona,
-    sekcje configu) w oknie Enter.
+  ich dużo"*. Lewa lista relacji: Relacja, Kierunek, **Typ** (backup | synchro |
+  lokalna | other — z linii crona), Stan, Kopie, **GB całej relacji**, Następny
+  (kolumny dochodzą z szerokością; przy 80 trzy pierwsze bez typu). Prawy
+  panel szczegółów **bez Źródeł i Celu**, dolny panel par `źródło → cel`
+  podświetlonej relacji, jedna pod drugą (prawda z linii crona, te same wiersze
+  co F2; relacja bez crona ma pary z rekordu i tytuł to mówi). Para, która się
+  nie mieści, to źródło i pod nim cel — nic nie ucięte; od 100 kolumn przy parze
+  Kopie, Czas o/ś/m i GB. Tab przenosi kursor na pary, Enter na parze skacze do
+  tego zadania na F2.
+  - **Podział wysokości** (właściciel: *„co gdy datasetów będzie dwadzieścia?"*):
+    góra dostaje tyle, ile potrzebuje lista i tabela szczegółów, dół — całą
+    resztę ekranu; gdy par jest więcej, niż zostaje miejsca, pary wygrywają z
+    panelem (panel ucina koniec, całość jest w oknie Enter), lista nigdy nie
+    traci.
+  - **Prawy panel jako tabela** (właściciel: *„popatrz na to jak czytający
+    człowiek — kolumny i wiersze"*): jeden fakt w wierszu, klucz | wartość:
+    stan, uwaga tuż pod stanem, typ, kierunek, peer, endpoint, konto, profil,
+    rekursja, wysyłka, porządki, porządki u źródła (osobny wiersz), ostatni,
+    następny, kopie, biegi w oknie digestu, czas o/ś/m, wolumen, datasety,
+    utworzona / zasiew / aktywowana. Z `list-jobs` i `job-stats`, bez
+    `show-config`; pełny powód monitora, linie crona i sekcje configu w oknie
+    Enter.
+  - **Malowanie:** ostatnia kolumna terminala zostaje pusta (curses), ale bez
+    wielokropka — każda linia kończyła się `...` (zrzut właściciela).
   - **Linia poleceń** nad listwą klawiszy na każdym ekranie: każdy drukowalny
     znak jest tekstem (litery nie są skrótami — `echo` ma dać `echo`; zmierzone
     na pve9, gdzie `e` jako skrót dawało `cho`), Enter wykonuje **na pierwszym
