@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5f94f724fa6f74a1 -->
+<!-- status-covers-digest: c0aed397c6dbf345 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **TUI F2: kolumna Zakres znika, Źródło i Cel w panelu i oknie (2026-09-11).**
+  Zgłoszenie właściciela: *„Kolumna Zakres na lewym panelu nie jest użyteczna,
+  bo ścieżka jest zawsze długa i się nie mieści"*. Ścieżki idą do prawego
+  panelu w całości jako `źródło` i `cel` (z punktu widzenia tego hosta:
+  pobranie ma źródło zdalne i cel-lądowisko tutaj, wysyłka odwrotnie, porządki
+  tylko cel), to samo na górze okna Enter nad „W CRONIE". Zwolnione miejsce na
+  liście jest zarezerwowane na czasy z digestu (ostatni / średni / maks / GB) —
+  do czasu, aż czasownik je wystawi (`job-stats --json`, następny krok;
+  liczone jak w `alert-digest.sh` z `zfs-snapshot-stats.log`, to samo okno
+  czasu, decyzja właściciela), Harmonogram jest kolumną także przy 80.
+  Suita `test/tui` 96/0 (lokalnie i na pve9).
 
 - **TUI, etap E: kreator nowej relacji `Ins` z wyborem szablonu (2026-09-09).**
   Właściciel: *„Tworzenie/modyfikacja relacji to ekran pozwalający na wybraniu
