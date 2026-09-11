@@ -171,12 +171,12 @@ if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
 else
     bad "zadania: tytul" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +….*/lab/vm-101 +aktualne +║'; then
-    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, zakres ciety od lewej, werdykt slowem"
+if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +24 \* \* \* \* +aktualne +║' && ! has "$Z" 'Zakres'; then
+    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, harmonogram, werdykt slowem -- i ZADNEJ kolumny Zakres (wlasciciel 2026-09-11)"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +'; then
+if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +44 \* \* \* \* '; then
     ok "zadania: porzadki na ladowisku = 'local' i to, co trzymaja (-H24)"
 else
     bad "zadania: wiersz porzadkow" "$Z"
@@ -186,16 +186,25 @@ if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192.168.28.99 +porz
 else
     bad "zadania: zdalne porzadki" "$Z"
 fi
-Z120="$(screen zadania "" --width 120)"
-if has "$Z120" 'Harmonogram' && ! has "$Z" 'Harmonogram'; then
-    ok "zadania: harmonogram jest kolumna od 100 kolumn, przy 80 zostaje w panelu"
+# ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
+# Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel
+# to ladowisko tutaj; kierunek mowi, ktore jest ktorym.
+if has "$Z" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'cel         hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+    ok "zadania: panel pobrania -- ZRODLO zdalne i CEL lokalny, pelne sciezki, nic nie uciete"
 else
-    bad "zadania: kolumna harmonogramu" "$Z" "$Z120"
+    bad "zadania: zrodlo/cel w panelu" "$Z"
 fi
-if has "$Z" 'harmonogram 24 * * * *'; then
-    ok "zadania: ...i w panelu jest przy 80"
+ZP="$(screen zadania down)"
+if has "$ZP" 'źródło      -' && has "$ZP" 'cel         hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+    ok "zadania: porzadki maja tylko CEL (to, co przycinaja), zrodlo '-'"
 else
-    bad "zadania: harmonogram w panelu" "$Z"
+    bad "zadania: porzadki zrodlo/cel" "$ZP"
+fi
+ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down 2>&1)"
+if has "$ZH2" 'źródło      hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'cel         pve9:hdd/backups'; then
+    ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
+else
+    bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania 2>&1)"
 if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +wysyłka hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +wysyłka daily'; then
@@ -203,9 +212,10 @@ if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
 fi
-ZE="$(screen zadania down,enter)"
-if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'szczebel keep_hourly  (sekcja prune)' && has "$ZE" 'kierunek local'; then
-    ok "zadania: Enter otwiera szczegoly zadania -- szczebel, sekcja, kierunek, harmonogram"
+ZE="$(screen zadania enter)"
+if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'źródło   zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'cel      hdd/backups/192.168.28.99/hdd/lab/vm-101' \
+        && has "$ZE" 'szczebel standard_hourly  (sekcja dataset)' && has "$ZE" 'W CRONIE' && has "$ZE" 'snapget.sh'; then
+    ok "zadania: Enter = panel (ze zrodlem i celem na gorze) + W CRONIE z prawdziwa linia"
 else
     bad "zadania: Enter" "$ZE"
 fi

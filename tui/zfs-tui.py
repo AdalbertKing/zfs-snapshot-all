@@ -670,6 +670,21 @@ def build_relations(data, now):
     return rows
 
 
+def job_src_dst(j):
+    """(źródło, cel) zadania. list-jobs daje `scope` i `other_end`, a KIERUNEK
+    mówi, które jest którym: pobranie -- źródło zdalne, cel to lądowisko tutaj;
+    wysyłka i kopia lokalna -- odwrotnie; porządki -- tylko cel (co przycinają)."""
+    d = j.get("direction", "")
+    scope, other = j.get("scope", "") or "?", j.get("other_end", "") or ""
+    if d == "pull":
+        return other or "?", scope
+    if d in ("push", "local"):
+        return scope, other or "?"
+    if d == "prune":
+        return "-", scope
+    return scope, other or "-"
+
+
 def build_jobs(data, now):
     """Wiersze ekranu ZADANIA: jedno zadanie z crona (sekcja wysylki albo
     porzadkow), z relacja i kierunkiem. To jest to, co host naprawde robi."""
@@ -722,19 +737,20 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         beside = width >= 120
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
+        # Wlasciciel, 2026-09-11: kolumna Zakres znika z listy -- sciezka jest
+        # zawsze dluga i nigdy sie nie miesci. Zrodlo i cel sa w panelu, w
+        # calosci. Miejsce po niej dostana czasy z digestu (ostatni / sredni /
+        # maks / GB), gdy czasownik je wystawi; do tego czasu Harmonogram jest
+        # kolumna zawsze, a Kierunek i Zadanie nie sa ucinane.
         nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
         dw = max(8, min(24, max([len(r["dir"]) for r in rows] + [8])))
-        # Harmonogram jest kolumna dopiero od 100 kolumn; przy 80 zostaje w panelu.
-        show_sched = width >= 100
-        tw, hw, vw = 16, (12 if show_sched else 0), 13
-        rest = inner - (nw + dw + tw + hw + vw + (5 if show_sched else 4))
-        if rest < 12:
-            dw = max(8, dw + rest - 12)
-            rest = inner - (nw + dw + tw + hw + vw + (5 if show_sched else 4))
-        if show_sched:
-            hdr = "%s %s %s %s %s %s" % (fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw), fit("Zakres", rest), fit("Harmonogram", hw), fit("Kopie", vw))
-        else:
-            hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw), fit("Zakres", rest), fit("Kopie", vw))
+        tw = max(12, min(24, max([len(r["task"]) for r in rows] + [12])))
+        hw, vw = 13, 13
+        rest = inner - (nw + dw + tw + hw + vw + 4)
+        if rest < 0:
+            tw = max(12, tw + rest)
+            rest = inner - (nw + dw + tw + hw + vw + 4)
+        hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw + max(0, rest)), fit("Harmonogram", hw), fit("Kopie", vw))
         body = [hdr, ch.dash * inner]
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
@@ -745,12 +761,8 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         for i, r in enumerate(rows[first:first + list_h], start=first):
             if i == cursor:
                 cur_y = len(body)
-            if show_sched:
-                body.append("%s %s %s %s %s %s" % (fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw, ch),
-                                                   fit_left(r["scope"], rest, ch), fit(r["schedule"], hw, ch), fit(r["vword"], vw, ch)))
-            else:
-                body.append("%s %s %s %s %s" % (fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw, ch),
-                                                fit_left(r["scope"], rest, ch), fit(r["vword"], vw, ch)))
+            body.append("%s %s %s %s %s" % (fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw + max(0, rest), ch),
+                                            fit(r["schedule"], hw, ch), fit(r["vword"], vw, ch)))
         if not rows:
             body += [u"Zero zadań wyprowadzonych z zainstalowanych bloków.",
                      u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu bloku",
@@ -898,9 +910,10 @@ def rel_detail_pairs(row, data, now, ch):
                 (u"powód", row["reasons"][0] if row["reasons"] else "?")]
     if row["kind"] == "job":
         j = row["job"]
-        pairs = [("zakres", j.get("scope", "?")),
-                 ("kierunek", "%s   %s  %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"),
-                                              (j.get("other_end") or ""))),
+        src, dst = job_src_dst(j)
+        pairs = [(u"źródło", src),
+                 ("cel", dst),
+                 ("kierunek", "%s   %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"))),
                  ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
                  ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
                  ("rodzina", family_of(j) or "?"),
