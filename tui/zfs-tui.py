@@ -34,6 +34,7 @@ import argparse
 import json
 import locale
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -282,6 +283,102 @@ def fmt_dur(sec):
     return "%d d %d h" % (sec // 86400, (sec % 86400) // 3600)
 
 
+def hsecs(sec):
+    """Jak human_secs w alert-digest.sh: 47s | 9m12s | 1h26m -- te same liczby
+    co w mailu, w tym samym ksztalcie."""
+    try:
+        sec = int(sec)
+    except (TypeError, ValueError):
+        return "-"
+    if sec < 0:
+        return "-"
+    if sec < 60:
+        return "%ds" % sec
+    if sec < 3600:
+        return "%dm%02ds" % (sec // 60, sec % 60)
+    return "%dh%02dm" % (sec // 3600, (sec % 3600) // 60)
+
+
+def hbytes_short(n):
+    """41.9G, 6.1M, 512K -- kompaktowo, do kolumny szerokiej na 6 znakow."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "-"
+    if n < 0:
+        return "-"
+    for unit in ("B", "K", "M", "G", "T", "P"):
+        if n < 1024 or unit == "P":
+            if unit == "B":
+                return "%dB" % n
+            txt = "%.1f%s" % (n, unit)
+            return txt if len(txt) <= 5 else "%.0f%s" % (n, unit)
+        n /= 1024.0
+    return "-"
+
+
+def times_cell(last, avg, mx):
+    """ostatni/sredni/maks w JEDNEJ komorce, jedna jednostka dobrana do maksimum,
+    zeby zmiescic sie w 11 znakach przy 80 kolumnach: '60/72/127s', '2/5/9m',
+    '1.2/1.5/2.0h'."""
+    vals = []
+    for v in (last, avg, mx):
+        try:
+            vals.append(int(v))
+        except (TypeError, ValueError):
+            vals.append(-1)
+    if all(v < 0 for v in vals):
+        return "-"
+    top = max(vals)
+    if top < 300:
+        return "/".join("-" if v < 0 else "%d" % v for v in vals) + "s"
+    if top < 3 * 3600:
+        return "/".join("-" if v < 0 else "%d" % ((v + 30) // 60) for v in vals) + "m"
+    return "/".join("-" if v < 0 else "%.1f" % (v / 3600.0) for v in vals) + "h"
+
+
+def job_cron_label(j):
+    """Etykieta zadania w cronie -- to, co zfs-job.sh dostaje w cudzyslowie --
+    BEZ pierwszego slowa (hosta), bo tak liczy ja digest (pola od 5.)."""
+    kind = j.get("section_kind", "")
+    want = ("snapsend.sh", "snapget.sh") if kind == "dataset" else ("delsnaps.sh",)
+    scope = j.get("scope", "")
+    cands = []
+    for ln in j.get("cron_lines") or []:
+        if not any(w in ln for w in want):
+            continue
+        m = re.search(r'zfs-job\.sh "([^"]+)"', ln)
+        if not m:
+            continue
+        cands.append((scope and (('"%s"' % scope) in ln), m.group(1)))
+    if not cands:
+        return ""
+    cands.sort(key=lambda c: 0 if c[0] else 1)
+    parts = cands[0][1].split(" ", 1)
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def job_stats_for(data, j, label):
+    """(wiersz z job-stats albo None, wolumen w bajtach albo None) dla zadania."""
+    st = data.stats or {}
+    row = None
+    for x in st.get("jobs", []):
+        if label and x.get("label") == label:
+            row = x
+            break
+    vol = None
+    if j.get("section_kind") == "dataset":
+        src, dst = job_src_dst(j)
+        fam = family_of(j)
+        if dst and dst not in ("?", "-") and ":" not in dst:
+            vol = 0
+            for v in st.get("volume", []):
+                d = v.get("dataset", "")
+                if (d == dst or d.startswith(dst + "/")) and v.get("family", "") == fam:
+                    vol += int(v.get("bytes") or 0)
+    return row, vol
+
+
 def fmt_ago(epoch, now):
     try:
         d = int(now) - int(epoch)
@@ -418,7 +515,7 @@ class Data(object):
     zrodlo, ktore nie odpowiedzialo, to dwa rozne stany i ekran mowi ktory."""
 
     def __init__(self):
-        self.status = self.jobs = self.monitors = self.progress = self.replicas = None
+        self.status = self.jobs = self.monitors = self.progress = self.replicas = self.stats = None
         self.errors = {}
         self.configs = {}     # show-config NAME --json, na zadanie
         self.profiles = None  # list-profiles --json --no-render, na zadanie (kreator)
@@ -434,7 +531,7 @@ def collect(repo, files, only=None):
     files["_data"] = data
     plan = [("status", ["status", "--json"]), ("jobs", ["list-jobs", "--json"]),
             ("monitors", ["monitor", "--json"]), ("progress", ["progress", "--json"]),
-            ("replicas", ["list-replicas", "--json"])]
+            ("replicas", ["list-replicas", "--json"]), ("stats", ["job-stats", "--json"])]
     for key, args in plan:
         if only and key != only:
             continue
@@ -706,8 +803,16 @@ def build_jobs(data, now):
         else:
             task = u"wysyłka " + fam
         nxt = cron_next(j.get("schedule", ""), now)
+        clabel = job_cron_label(j)
+        srow, vol = job_stats_for(data, j, clabel)
+        if data.failed("stats"):
+            czas, gb = "?", "?"
+        else:
+            czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
+            gb = hbytes_short(vol) if vol is not None else "-"
         rows.append({
             "kind": "job", "name": j.get("label") or "(bez rel.)", "rel": None,
+            "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")]),
             "task": task, "tier": tier, "scope": j.get("scope", ""),
             "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
@@ -742,15 +847,26 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         # calosci. Miejsce po niej dostana czasy z digestu (ostatni / sredni /
         # maks / GB), gdy czasownik je wystawi; do tego czasu Harmonogram jest
         # kolumna zawsze, a Kierunek i Zadanie nie sa ucinane.
+        # Wlasciciel, 2026-09-11: w miejsce Zakresu -- czasy jak w mailu
+        # (ostatni/sredni/maks, jedna komorka) i GB. Przy 80 kolumnach
+        # Harmonogram zostaje w panelu, Kierunek dostaje to, co zostanie.
         nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
-        dw = max(8, min(24, max([len(r["dir"]) for r in rows] + [8])))
-        tw = max(12, min(24, max([len(r["task"]) for r in rows] + [12])))
-        hw, vw = 13, 13
-        rest = inner - (nw + dw + tw + hw + vw + 4)
-        if rest < 0:
-            tw = max(12, tw + rest)
-            rest = inner - (nw + dw + tw + hw + vw + 4)
-        hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw + max(0, rest)), fit("Harmonogram", hw), fit("Kopie", vw))
+        tw = max(12, min(20, max([len(r["task"]) for r in rows] + [12])))
+        cw, gw, vw = 11, 5, 13
+        show_sched = width >= 100
+        hw = 13 if show_sched else 0
+        ncol = 7 if show_sched else 6
+        dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
+        dmax = max([len(r["dir"]) for r in rows] + [8])
+        if dw > dmax:
+            tw = min(tw + (dw - dmax), 24)
+            dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
+        dw = max(8, dw)
+        cols = [fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw)]
+        if show_sched:
+            cols.append(fit("Harmonogram", hw))
+        cols += [fit(u"Czas o/ś/m", cw), fit("GB", gw), fit("Kopie", vw)]
+        hdr = " ".join(cols)
         body = [hdr, ch.dash * inner]
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
@@ -761,8 +877,11 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         for i, r in enumerate(rows[first:first + list_h], start=first):
             if i == cursor:
                 cur_y = len(body)
-            body.append("%s %s %s %s %s" % (fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw + max(0, rest), ch),
-                                            fit(r["schedule"], hw, ch), fit(r["vword"], vw, ch)))
+            cells = [fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw, ch)]
+            if show_sched:
+                cells.append(fit(r["schedule"], hw, ch))
+            cells += [fit(r.get("czas", "-"), cw, ch), fit(r.get("gb", "-"), gw, ch), fit(r["vword"], vw, ch)]
+            body.append(fit(" ".join(cells), inner))
         if not rows:
             body += [u"Zero zadań wyprowadzonych z zainstalowanych bloków.",
                      u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu bloku",
@@ -911,15 +1030,34 @@ def rel_detail_pairs(row, data, now, ch):
     if row["kind"] == "job":
         j = row["job"]
         src, dst = job_src_dst(j)
-        pairs = [(u"źródło", src),
-                 ("cel", dst),
-                 ("kierunek", "%s   %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"))),
-                 ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
-                 ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
-                 ("rodzina", family_of(j) or "?"),
-                 ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
-                 ("kopie", row["vword"] + ("  " + row["reasons"][0].splitlines()[0] if row["reasons"] else "")),
-                 ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
+        # Kolejnosc = to, po co wlasciciel otwiera panel (2026-09-11): zrodlo,
+        # cel, potem czasy i wolumen jak w mailu; reszta nizej (przy 80
+        # kolumnach panel ma 7 linii, calosc jest w oknie po Enter).
+        pairs = [(u"źródło", src), ("cel", dst)]
+        st = data.stats or {}
+        win = st.get("window_days", "?")
+        srow = row.get("srow")
+        if data.failed("stats"):
+            pairs.append(("czas", u"job-stats --json nie odpowiedział -- czasy i wolumen nieznane"))
+        elif srow:
+            pairs.append(("czas", u"ostatni %s / średni %s / maks %s   (jak w mailu)" % (
+                hsecs(srow.get("last_s")), hsecs(srow.get("avg_s")), hsecs(srow.get("max_s")))))
+        else:
+            pairs.append(("czas", u"brak biegów tego zadania w dzienniku w oknie %s dni%s" % (
+                win, "" if row.get("clabel") else u" (nie ma jego linii w cronie)")))
+        if row.get("vol") is not None and not data.failed("stats"):
+            pairs.append(("wolumen", u"%s zapisane w migawkach %s w oknie %s dni" % (
+                hbytes_short(row["vol"]), family_of(j) or "?", win)))
+        if srow and not data.failed("stats"):
+            pairs.append(("biegi", u"%s w oknie %s dni, błędów %s, ostatni %s rc=%s" % (
+                srow.get("runs", "?"), win, srow.get("failures", 0), srow.get("last_at", "?"), srow.get("last_rc", "?"))))
+        pairs += [("kopie", row["vword"] + ("  " + row["reasons"][0].splitlines()[0] if row["reasons"] else "")),
+                  ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
+                  ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
+                  ("rodzina", family_of(j) or "?"),
+                  ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
+                  ("kierunek", "%s   %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"))),
+                  ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
         return pairs
     srcs = rel.get("sources", [])
     pairs = [(u"Źródła (%d)" % len(srcs), ",  ".join(srcs) or "?")]
@@ -1574,7 +1712,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
 HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
     "",
-    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, zakres, kopie",
+    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, czasy i GB jak",
+    u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
     u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install)",
@@ -2368,13 +2507,14 @@ def main(argv):
     ap.add_argument("--monitors", help="czytaj monitor --json z pliku")
     ap.add_argument("--progress", help="czytaj progress --json z pliku")
     ap.add_argument("--replicas", help="czytaj list-replicas --json z pliku")
+    ap.add_argument("--stats", help="czytaj job-stats --json z pliku (czasy i wolumen jak w digescie)")
     ap.add_argument("--config", help="czytaj show-config --json z pliku (okno relacji)")
     ap.add_argument("--profiles", help="czytaj list-profiles --json --no-render z pliku (kreator)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     a = ap.parse_args(argv)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
-             "replicas": a.replicas, "config": a.config, "profiles": a.profiles, "offline": a.offline}
+             "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline}
     ch = Chars(want_ascii(a))
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
