@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c0aed397c6dbf345 -->
+<!-- status-covers-digest: c96b65a42a2556f6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **REV-142 (P1): eksport pisał `--passive` dla `PASSIVE=0` (2026-09-11).**
+  Recenzent: zwykła relacja po `export-relation` → `import-relation --yes`
+  stawała się pasywna (adoptuje cudze migawki zamiast stemplować własne), bo
+  składacz eksportu uznawał za prawdę „wszystko poza literalnym `no`", a
+  rekord nosi `0|1`. Prawda jest jedna i program już ją czyta wszędzie:
+  `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
+  Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
+  `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
 - **TUI F2: kolumna Zakres znika, Źródło i Cel w panelu i oknie (2026-09-11).**
   Zgłoszenie właściciela: *„Kolumna Zakres na lewym panelu nie jest użyteczna,
   bo ścieżka jest zawsze długa i się nie mieści"*. Ścieżki idą do prawego
