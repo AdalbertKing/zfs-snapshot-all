@@ -1578,6 +1578,27 @@ line's width are compared with the terminal size, in the test, for every
 screen and every window, at 80, 120 and 200. The assertion exists now and it
 is the one that found this.
 
+### E54 — The render suite was green while the terminal ate the first letter (2026-09-11, R2)
+
+**Genesis.** The command line under the F-key bar. `test/tui` 121/0 with
+`text:...` tokens. The first pty drive on pve9 typed `echo HELLO` and ran
+`cho HELLO` (rc=127): `e` was a key name (confirm-window shortcut), and with
+an empty line a named key went to the shortcut path, not to the text path.
+The second drive, after making letters text, put F3, Backspace and F10 into
+the line as `ċ`, `ć`: `getch()` returns 263 both for KEY_BACKSPACE and for
+`ć`, and my "printable code point" test could not tell them apart.
+
+**Cause.** The render-once path feeds `UI.key` with names; the curses loop is
+the only place where a byte becomes a name, and the suite never crosses it
+(R2: the fact "letters are text" was true on the UI side of the boundary and
+false on the terminal side). Two boundary defects in one feature, both found
+by the first live keystrokes, neither findable by the render suite.
+
+**Rule.** R2. A feature that adds a new kind of terminal input (not a new
+screen) is not verified until a pty has typed it: the drive script is part of
+the delivery, with the first letter, a special key and a non-ASCII character
+in it.
+
 ### E53 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
 
 **Genesis.** Replacing `"\t"` by `"|"` in `cmd_list_replicas` through a
