@@ -10532,6 +10532,44 @@ if [ "$im_rc" -ne 0 ] && grep -q "not one this build reproduces" "$WORK/im.err" 
 else
     bad "importrel: foreign verb refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
 fi
+# --- REV-20260909-142: PASSIVE IS A SWITCH ONLY FOR "1" -----------------------
+# The reviewer's fixture: an ordinary record (add-client writes PASSIVE=0)
+# exported as --passive, and import replayed it -- a copy that adopts instead
+# of stamping. The boolean the program reads is exactly "1"; the export must
+# read the same one. Judged END TO END through the import stubs, both ways.
+im_rec() {   # <name> <PASSIVE line or ''> -> a record in $IM/clients
+    { sed '/^CLIENT_NAME=/d; /^PASSIVE=/d' "$EX/clients/ksiegowosc.conf"; echo "CLIENT_NAME=$1"; [ -n "$2" ] && echo "$2"; } > "$EX/clients/$1.conf"
+}
+im_rec zwykla "PASSIVE=0"
+ex_run export-relation zwykla --json; cp "$WORK/ex.out" "$IM/zwykla.json"
+im_run "$IM/zwykla.json" --name=zwykla2 --yes
+if ! grep -q -- '--passive' "$IM/zwykla.json" && ! grep -q -- '"PASSIVE"' "$IM/zwykla.json" \
+        && grep -q '^add-client|zwykla2|' "$IM/calls.log" && ! grep -q -- '--passive' "$IM/calls.log"; then
+    ok "importrel/142: an ORDINARY record (PASSIVE=0) exports without --passive and imports without it -- the copy keeps stamping its own family"
+else
+    bad "importrel/142: PASSIVE=0 must not become --passive" "$(grep -o '"argv":\[[^]]*\]' "$IM/zwykla.json")" "$(cat "$IM/calls.log")"
+fi
+for v in "PASSIVE=" "PASSIVE=no"; do
+    im_rec zwykla "$v"
+    ex_run export-relation zwykla --json
+    if ! grep -q -- '--passive' "$WORK/ex.out"; then
+        ok "importrel/142: ...and '$v' is not a switch either"
+    else
+        bad "importrel/142: '$v' exported as --passive" "$(grep -o '"argv":\[[^]]*\]' "$WORK/ex.out")"
+    fi
+done
+# POSITIVE CONTROL: a genuinely passive record carries exactly ONE --passive, both ways.
+im_rec pasywna "PASSIVE=1"
+ex_run export-relation pasywna --json; cp "$WORK/ex.out" "$IM/pasywna.json"
+im_run "$IM/pasywna.json" --name=pasywna2 --yes
+if [ "$(grep -o -- '"--passive"' "$IM/pasywna.json" | wc -l | tr -d ' ')" -eq 1 ] && grep -q '"PASSIVE":"1"' "$IM/pasywna.json" \
+        && [ "$(grep '^add-client|pasywna2|' "$IM/calls.log" | grep -o -- '|--passive' | wc -l | tr -d ' ')" -eq 1 ]; then
+    ok "importrel/142: a PASSIVE=1 record exports and imports with exactly one --passive (control -- the switch still exists)"
+else
+    bad "importrel/142: passive control" "$(grep -o '"argv":\[[^]]*\]' "$IM/pasywna.json")" "$(cat "$IM/calls.log")"
+fi
+rm -f "$EX/clients/zwykla.conf" "$EX/clients/pasywna.conf"
+
 # usage says so
 if bash "$ZFSBACKUP" 2>&1 | grep -q 'import-relation FILE'; then
     ok "importrel: the verb is in the usage text"

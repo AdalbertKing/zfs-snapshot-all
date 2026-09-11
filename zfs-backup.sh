@@ -12112,8 +12112,13 @@ cmd_export_relation() {
         fi
     done
     # PASSIVE is a bare switch on the create path, so it cannot ride the
-    # key=value loop above.
-    if [ -n "${PASSIVE:-}" ] && [ "${PASSIVE:-}" != no ]; then
+    # key=value loop above. THE ONLY TRUTH IS "1": that is what add-client
+    # writes (passive=0|1) and what every reader in this program tests
+    # (`"${PASSIVE:-0}" = "1"`). The first version treated "anything but `no`"
+    # as true, so an ordinary record's PASSIVE=0 exported as --passive and
+    # import-relation faithfully turned the copy passive -- it stops stamping
+    # its own family and adopts instead (REV-20260909-142, P1).
+    if [ "${PASSIVE:-0}" = "1" ]; then
         [ "$first" -eq 1 ] || decl_json="$decl_json,"
         first=0
         decl_json="$decl_json\"PASSIVE\":\"$(json_escape "$PASSIVE")\""
