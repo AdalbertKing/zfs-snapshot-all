@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 96320b8d37f59869 -->
+<!-- status-covers-digest: df8805cb92103dc8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,6 +29,31 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
+- **`job-stats --json` i czasy/GB na F2 — liczby z maila jako kontrakt (2026-09-11).**
+  Właściciel: *„czasy jak w raporcie mailowym: ostatni, średni, maksymalny i
+  ilość GB"*, okno *„jak w digeście — będzie spójnie z tym, co przychodzi na
+  mailu"*. Czasownik nie ma własnej arytmetyki: per zadanie crona (pary
+  `ZFS-JOB BEGIN/END`) biegi, błędy, czas średni/maks/ostatni, ostatni rc i
+  czas; per lądowisko czasy transferów silnika (tylko tam, gdzie linia crona ma
+  `-v 3` — produkcja pve2 ma, laboratoryjne linie pve10 nie); per dataset i
+  rodzina wolumen = `written` migawek utworzonych w oknie. Okno i odkrywanie
+  dzienników te same co w `alert-digest.sh` (`ZFS_DIGEST_DAYS`, `ZFS_CRON_LOGS`);
+  **dwa programy awk są bliźniakami digestu co do bajtu** (znaczniki w obu
+  plikach, równość przypięta sekcją `jobstats`). Fikstury: 2-dniowy wycinek
+  produkcyjnego `cron.log` z pve2 i jego tabela migawek; asercje liczą to, co
+  wycinek zawiera. Zmierzone na żywo: pve2 0,27 s, pve10 0,7 s.
+  - **F2:** w miejsce Zakresu kolumna `Czas o/ś/m` (jedna komórka, jedna
+    jednostka dobrana do maksimum: `60/72/127s`, `2/5/9m`, `1.2/1.5/2.0h`) i
+    `GB`; wiersz zadania znajduje swoją etykietę crona (argument `zfs-job.sh`
+    bez słowa hosta, tak jak kluczuje digest) w `job-stats`. Porządki nie mają
+    wolumenu (`-`), wysyłka do peera też (cel zdalny). Panel: źródło, cel, czas,
+    wolumen, biegi na górze; reszta niżej (całość w oknie Enter). Zepsute
+    `job-stats` → `?` w komórkach i zdanie w panelu, nigdy zero udające pomiar.
+    Wartości oczekiwane w suicie są LICZONE z fikstur, nie wpisane.
+  - Suity: `jobstats` 10/0, pełna `zfsbackup` na pve9 803/0, `tui` 101/0
+    (lokalnie i na pve9). Na żywo na pve10 F2 pokazuje `4/3/4s` i `6.1M` dla
+    `lab-vm101` — te same liczby, które daje `job-stats --json` na tym hoście.
+
 - **TUI F2: kolumna Zakres znika, Źródło i Cel w panelu i oknie (2026-09-11).**
   Zgłoszenie właściciela: *„Kolumna Zakres na lewym panelu nie jest użyteczna,
   bo ścieżka jest zawsze długa i się nie mieści"*. Ścieżki idą do prawego

@@ -39,7 +39,7 @@ for c in python3 python; do "$c" -c 'import sys' >/dev/null 2>&1 && { PY="$c"; b
 export PYTHONIOENCODING=utf-8
 
 NOW=1788960000   # 2026-09-09, srodek dnia -- deterministyczny "nastepny bieg"
-ALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --progress $P10/progress.json --replicas $P10/replicas.json --config $P10/show-config.json"
+ALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --progress $P10/progress.json --replicas $P10/replicas.json --config $P10/show-config.json --stats $P10/job-stats.json"
 PAUSED="--status $P10/status-paused.json --jobs $P10/list-jobs.json --monitors $P10/monitor-paused.json --progress $P10/progress.json --replicas $P10/replicas.json"
 
 screen() {   # <screen> [keys] [extra args...] -> ekran jako tekst, fikstury pve10
@@ -171,13 +171,13 @@ if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
 else
     bad "zadania: tytul" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +24 \* \* \* \* +aktualne +║' && ! has "$Z" 'Zakres'; then
-    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, harmonogram, werdykt slowem -- i ZADNEJ kolumny Zakres (wlasciciel 2026-09-11)"
+if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
+    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +44 \* \* \* \* '; then
-    ok "zadania: porzadki na ladowisku = 'local' i to, co trzymaja (-H24)"
+if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +[0-9]+/[0-9]+/[0-9]+s +- +aktualne'; then
+    ok "zadania: porzadki na ladowisku = 'local', to, co trzymaja (-H24), czasy z ich linii crona, GB '-' (porzadki nic nie pisza)"
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
@@ -186,6 +186,56 @@ if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192.168.28.99 +porz
 else
     bad "zadania: zdalne porzadki" "$Z"
 fi
+# CZASY I GB JAK W MAILU (wlasciciel 2026-09-11: "jak w digescie -- spojnie z
+# tym co przychodzi na mailu"). Zrodlo: job-stats --json z pve10, doslownie.
+# Oczekiwane liczby sa POLICZONE Z FIKSTURY, nie wpisane: etykieta crona
+# zadania (bez hosta) -> wiersz job-stats; wolumen = suma bytes rodziny na
+# ladowisku i pod nim.
+want=$("$PY" - "$P10/job-stats.json" "$P10/list-jobs.json" <<'PYEOF'
+import sys, json
+st = json.load(open(sys.argv[1])); lj = json.load(open(sys.argv[2]))
+j = [x for x in lj["jobs"] if x["label"] == "lab-vm101" and x["section_kind"] == "dataset"][0]
+lbl = [l for l in j["cron_lines"] if "snapget.sh" in l][0].split('zfs-job.sh "', 1)[1].split('"', 1)[0].split(" ", 1)[1]
+row = [x for x in st["jobs"] if x["label"] == lbl][0]
+vol = sum(v["bytes"] for v in st["volume"] if (v["dataset"] == j["scope"] or v["dataset"].startswith(j["scope"] + "/")) and v["family"] == "automated_hourly")
+def h(n):
+    for u in "BKMGTP":
+        if n < 1024 or u == "P": return ("%dB" % n) if u == "B" else "%.1f%s" % (n, u)
+        n /= 1024.0
+print("%d/%d/%ds" % (row["last_s"], row["avg_s"], row["max_s"]), h(vol), row["runs"], row["last_at"])
+PYEOF
+)
+set -- $want
+if has "$Z" " $1 " && has "$Z" " $2 "; then
+    ok "zadania: czasy ($1) i GB ($2) w wierszu wysylki sa DOKLADNIE tym, co job-stats mowi o jej linii crona i jej ladowisku"
+else
+    bad "zadania: czasy/GB z job-stats" "want: $want" "$Z"
+fi
+if has "$Z" "biegi       $3 w oknie 7 dni" && has "$Z" "ostatni $4 $5 rc=0" && has "$Z" 'czas        ostatni ' && has "$Z" '(jak w mailu)' && has "$Z" 'wolumen     '"$2"' zapisane w migawkach automated_hourly w oknie 7 dni'; then
+    ok "zadania: panel nazywa biegi, ostatni czas/rc, czas ostatni/sredni/maks i wolumen z oknem digestu"
+else
+    bad "zadania: panel czasow" "$Z"
+fi
+# bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
+ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania 2>&1)"
+if hasE "$ZS" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
+    ok "zadania: zepsute job-stats -> '?' w komorkach i zdanie w panelu, nigdy zero udajace pomiar"
+else
+    bad "zadania: zepsute job-stats" "$ZS"
+fi
+ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania 2>&1)"
+if hasE "$ZH3" '^║ pve9 +hostA>pve9 +wysyłka hourly +- +- +spóźnione' && has "$ZH3" 'brak biegów tego zadania w dzienniku w oknie 7 dni'; then
+    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje '-' i mowi to w panelu (a wysylka do peera nie ma wolumenu do zmierzenia tutaj)"
+else
+    bad "zadania: brak biegow" "$ZH3"
+fi
+Z100="$(screen zadania "" --width 100)"
+if has "$Z100" 'Harmonogram' && ! has "$Z" 'Harmonogram' && has "$Z" 'harmonogram 24 * * * *'; then
+    ok "zadania: przy 80 harmonogram zostaje w panelu (miejsce maja czasy), od 100 wraca jako kolumna"
+else
+    bad "zadania: harmonogram 80/100" "$Z" "$Z100"
+fi
+
 # ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
 # Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel
 # to ladowisko tutaj; kierunek mowi, ktore jest ktorym.
