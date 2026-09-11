@@ -793,6 +793,12 @@ if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL
 else
     bad "linia: e + edycja + Enter" "$(cat "$XL")" "$C"
 fi
+C="$(: > "$XL"; screen relacje "q,text:uit" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ quit_ *$' && has "$C" 'Relacje na kolektorze'; then
+    ok "linia: litera 'q' na ekranie to TEKST, nie wyjscie (zmierzone na pve9: 'echo' dawalo 'cho', gdy 'e' bylo skrotem)"
+else
+    bad "linia: q jest tekstem" "$C"
+fi
 C="$(: > "$XL"; screen relacje "text:zfs list,F10" --exec-log "$XL")"
 if [ ! -s "$XL" ]; then
     ok "linia: F10 wychodzi takze z tekstem w linii, nic nie uruchamiajac"

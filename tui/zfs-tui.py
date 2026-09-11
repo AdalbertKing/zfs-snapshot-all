@@ -991,8 +991,8 @@ def key_bar(active, width, extra=""):
         line = line[1:]
     if extra and width >= len(line) + len(extra) + 1:
         line += " " + extra
-    if width >= len(line) + 11:
-        line += u" r Odśwież"
+    if width >= len(line) + 12:
+        line += u" F9 Odśwież"
     return fit(line, width)
 
 
@@ -1144,6 +1144,8 @@ def rel_pairs(row, data, now, ch):
                 gb = hbytes_short(vol) if vol is not None else "-"
             out.append({"src": src, "dst": dst, "job": j, "vword": VERDICTS.get(v, (v, 0))[0], "czas": czas, "gb": gb})
         return out, "wg crona"
+    if row.get("kind") != "relation":
+        return out, ("blok nieczytelny" if row.get("kind") == "unreadable" else "wg crona")
     rel = row.get("rel") or {}
     peer = rel.get("peer_host") or "?"
     tgt = rel.get("client_target") or "?"
@@ -1952,12 +1954,13 @@ HELP = [
     u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
     u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
     u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
-    u"                 żeby ją poprawić przed wykonaniem.",
+    u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery nie są",
+    u"                 skrótami na ekranach -- wszystko, co piszesz, idzie do linii.",
     "",
-    u"  strzałki / j k    ruch po liście     PgUp PgDn Home End   szybciej",
-    u"  r                 odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
-    u"  Esc               zamknij okno na wierzchu",
-    u"  q / F10           wyjście (q tylko przy pustej linii poleceń)",
+    u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
+    u"  F9 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
+    u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
+    u"  F10               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
     "",
     u"Słowa w kolumnie 'Kopie':",
     u"  aktualne       najnowsza migawka mieści się w progu ostrzegawczym",
@@ -2476,7 +2479,10 @@ class UI(object):
             elif k == "F1":
                 self.window, self.scroll = ("pomoc", None), 0
             return "stay"
-        # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie.
+        # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie. Litera to
+        # TEKST, nie skrot -- 'echo' ma dac 'echo', nie 'cho' (pve9, pty).
+        if len(k) == 1 and k.isprintable():
+            k = "text:" + k
         if k.startswith("text:"):
             self.cmd += k[5:]
             self.hist_pos = None
@@ -2567,7 +2573,7 @@ class UI(object):
             c = 0
         elif k == "end":
             c = max(0, n - 1)
-        elif k in ("r", "F5r"):
+        elif k in ("F9", "ctrl-r", "F5r"):
             self.refresh()
             self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
         elif k in ("F4", "del", "F7", "F8", "ins") and self.screen == "relacje":
@@ -2753,7 +2759,8 @@ def curses_loop(ui):
                        curses.KEY_BACKSPACE: "bs", 127: "bs", 8: "bs", curses.KEY_ENTER: "enter",
                        10: "enter", 13: "enter", 27: "esc", ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("r"): "r",
                        ord("t"): "t", ord("e"): "e", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
-                       ord("?"): "F1", ord("h"): "F1", curses.KEY_F10: "F10", 9: "tab", 21: "ctrl-u"})
+                       ord("?"): "F1", ord("h"): "F1", curses.KEY_F10: "F10", curses.KEY_F9: "F9", 9: "tab",
+                       21: "ctrl-u", 18: "ctrl-r"})
         stdscr.keypad(True)
         # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
         # terminalu tryb aplikacyjny (ESC O B), a terminal, ktory go nie honoruje
@@ -2772,7 +2779,7 @@ def curses_loop(ui):
         SEQ = {"[A": "up", "[B": "down", "OA": "up", "OB": "down", "[H": "home", "[F": "end", "OH": "home", "OF": "end",
                "[1~": "home", "[4~": "end", "[5~": "pgup", "[6~": "pgdn", "[2~": "ins", "[3~": "del",
                "OP": "F1", "OQ": "F2", "OR": "F3", "OS": "F4", "[11~": "F1", "[12~": "F2", "[13~": "F3", "[14~": "F4",
-               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[21~": "F10", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
+               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[20~": "F9", "[21~": "F10", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
 
         def read_key():
             k = stdscr.getch()
@@ -2844,11 +2851,10 @@ def curses_loop(ui):
                     continue
                 ui.key("text:" + ch_, h)
                 continue
-            # LINIA POLECEN (bez okna na wierzchu): litery-skroty (q r j k t e
-            # cyfry ? h) sa skrotami tylko przy PUSTEJ linii; z tekstem w linii
-            # kazdy drukowalny znak jest tekstem. Backspace/Enter/Esc/strzalki
-            # rozstrzyga UI.key po stanie linii.
-            if not ui.window and 32 <= k < 0x110000 and (name is None or (ui.cmd and name not in ("bs", "enter", "esc"))):
+            # LINIA POLECEN (bez okna na wierzchu): KAZDY drukowalny znak jest
+            # tekstem -- litery-skroty (q r j k h ? cyfry) dzialaja tylko w
+            # oknach. Backspace/Enter/Esc/strzalki rozstrzyga UI.key po stanie linii.
+            if not ui.window and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
