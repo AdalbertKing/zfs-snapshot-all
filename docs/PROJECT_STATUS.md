@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: df8805cb92103dc8 -->
+<!-- status-covers-digest: 82241e49ebc0116a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,6 +29,38 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
+- **TUI F3 w trzech panelach i linia poleceń jak w mc (2026-09-11).**
+  Szkic właściciela: góra dzielona lewo/prawo, dół na całą szerokość.
+  *„Relacji zwykle wiele nie będzie, za to datasets do niej należące — może być
+  ich dużo"*. Lewa lista relacji (Relacja, Kierunek, Stan; Kopie i Następny
+  dochodzą z szerokością), prawy panel szczegółów **bez Źródeł i Celu**, dolny
+  panel par `źródło → cel` podświetlonej relacji, jedna pod drugą (prawda z
+  linii crona, te same wiersze co F2; relacja bez crona ma pary z rekordu i
+  tytuł to mówi). Para, która się nie mieści, to źródło i pod nim cel — nic
+  nie ucięte; od 100 kolumn przy parze Kopie, Czas o/ś/m i GB. Tab przenosi
+  kursor na pary, Enter na parze skacze do tego zadania na F2.
+  - Prawy panel: stan, **uwaga tuż pod stanem** (panel bywa niski), peer i
+    endpoint, kierunek i konto, polityka, wysyłka (harmonogram, rodzina),
+    porządki (retencja, drabina GFS, harmonogram, retencja u źródła — z
+    `list-jobs`, bez `show-config`), ostatni, następny, kopie z progami,
+    statystyka z okna digestu (biegi, błędy, czas o/ś/m, wolumen), liczba par
+    i lądowisk, historia rekordu. Reszta (pełny powód monitora, linie crona,
+    sekcje configu) w oknie Enter.
+  - **Linia poleceń** nad listwą klawiszy na każdym ekranie: każdy drukowalny
+    znak jest tekstem (litery nie są skrótami — `echo` ma dać `echo`; zmierzone
+    na pve9, gdzie `e` jako skrót dawało `cho`), Enter wykonuje **na pierwszym
+    planie** (curses zawieszone, terminal oddany komendzie, cwd = repo, po
+    komendzie `[rc=N]` i Enter wraca), historia w `~/.zfs-tui/history`,
+    strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści. F9/Ctrl-R
+    odświeża, F10 wychodzi. W potwierdzeniu akcji `e` wrzuca pokazaną komendę do
+    linii do poprawki — podgląd komendy bash z edycją. Wejście przez
+    `get_wch`: znak i klawisz specjalny to dwie różne rzeczy (F3/Backspace/F10
+    lądowały w linii jako `ċ`/`ć` przy `getch`), UTF-8 wchodzi w całości.
+  - Suita `test/tui` 121/0. Jazda po prawdziwym pty na pve9 (10/10): F3 w
+    trzech panelach, pisanie z pierwszą literą, Backspace, `ół`, wykonanie na
+    pierwszym planie z rc 0 i 1 i powrotem, `? h 1 q` jako tekst, Tab na pary,
+    historia, Ctrl-U, F10.
+
 - **`job-stats --json` i czasy/GB na F2 — liczby z maila jako kontrakt (2026-09-11).**
   Właściciel: *„czasy jak w raporcie mailowym: ostatni, średni, maksymalny i
   ilość GB"*, okno *„jak w digeście — będzie spójnie z tym, co przychodzi na

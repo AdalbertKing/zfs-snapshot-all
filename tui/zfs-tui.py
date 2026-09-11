@@ -31,6 +31,7 @@ zeby operator wiedzial, co wpisac -- ale ich nie wykonuje (etap C/D planu).
 """
 
 import argparse
+import io
 import json
 import locale
 import os
@@ -957,7 +958,7 @@ class Screen(object):
     (tytul i F-klawisze), `titles` -- linie krawedzi ramek."""
 
     def __init__(self):
-        self.lines, self.cursor_y, self.bars, self.titles = [], None, set(), set()
+        self.lines, self.cursor_y, self.bars, self.titles, self.cmd_y = [], None, set(), set(), None
 
 
 def top_bar(data, width, now, ascii_only, err_count):
@@ -984,12 +985,14 @@ def key_bar(active, width, extra=""):
     parts = ["F1 Pomoc"]
     for key, fk, label in SCREENS:
         parts.append(("[%s %s]" if key == active else "%s %s") % (fk, label))
-    parts.append(u"q Wyjście")
+    parts.append(u"F10 Wyjście")
     line = " " + " ".join(parts)
+    if len(line) > width:
+        line = line[1:]
     if extra and width >= len(line) + len(extra) + 1:
         line += " " + extra
-    if width >= len(line) + 11:
-        line += u" r Odśwież"
+    if width >= len(line) + 12:
+        line += u" F9 Odśwież"
     return fit(line, width)
 
 
@@ -1119,7 +1122,170 @@ def rel_detail_pairs(row, data, now, ch):
     return pairs
 
 
-def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
+def rel_pairs(row, data, now, ch):
+    """Pary zrodlo -> cel podswietlonej relacji (dolny panel F3).
+
+    Wlasciciel, 2026-09-11: relacji jest malo, datasetow w relacji moze byc
+    duzo -- pary maja swoj panel. Prawda pochodzi z linii crona (list-jobs,
+    te same wiersze co F2); relacja bez crona (pending, seeding) dostaje pary
+    policzone z rekordu i JEST TO NAPISANE w tytule panelu."""
+    monitors = (data.monitors or {}).get("monitors", [])
+    out = []
+    jobs = [j for j in row.get("jobs", []) if j.get("section_kind") == "dataset"]
+    if jobs:
+        for j in jobs:
+            src, dst = job_src_dst(j)
+            v, _reason = verdict_for_job(j, monitors)
+            srow, vol = job_stats_for(data, j, job_cron_label(j))
+            if data.failed("stats"):
+                czas, gb = "?", "?"
+            else:
+                czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
+                gb = hbytes_short(vol) if vol is not None else "-"
+            out.append({"src": src, "dst": dst, "job": j, "vword": VERDICTS.get(v, (v, 0))[0], "czas": czas, "gb": gb})
+        return out, "wg crona"
+    if row.get("kind") != "relation":
+        return out, ("blok nieczytelny" if row.get("kind") == "unreadable" else "wg crona")
+    rel = row.get("rel") or {}
+    peer = rel.get("peer_host") or "?"
+    tgt = rel.get("client_target") or "?"
+    for src in rel.get("sources", []):
+        bare = src.split(":", 1)[1] if ":" in src else src
+        out.append({"src": src if ":" in src else "%s:%s" % (peer, src), "dst": "%s/%s/%s" % (tgt, peer, bare),
+                    "job": None, "vword": "--", "czas": "-", "gb": "-"})
+    return out, "wg rekordu, nie crona"
+
+
+def rel_panel_pairs(row, data, now, ch):
+    """Prawy panel F3: wszystko o podswietlonej relacji POZA zrodlem i celem
+    (te sa na dole, w parach). Klucze krotkie, bo panel bywa waski (80 kolumn)."""
+    if row["kind"] != "relation":
+        return rel_detail_pairs(row, data, now, ch)
+    rel = row["rel"]
+    pairs = []
+    st = state_word(rel)
+    if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None):
+        st += "   (peer: %s)" % rel["peer_pair_state"]
+    pairs.append(("Stan", st))
+    peer = "%s   endpoint %s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?")
+    if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint"):
+        peer += "   w cronie: %s" % rel["installed_endpoint"]
+    pairs.append(("Peer", peer))
+    accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
+    pairs.append(("Kierunek", "%s   konto %s" % (row.get("dir") or "?", rel.get("local_user") or ", ".join(accts) or "?")))
+    prof = rel.get("profile") or "?"
+    if rel.get("source_profile"):
+        prof += u"   źródło: %s" % rel["source_profile"]
+    rec = rel.get("recursion") or ""
+    pairs.append(("Polityka", prof + ("   rekursja %s" % rec if rec else "")
+                  + ("   pasywna" if rel.get("passive") == "1" else "")
+                  + (u"   łącze %s" % rel["bandwidth"] if rel.get("bandwidth") else "")))
+    sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
+    prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
+    if sends:
+        scheds = sorted({j.get("schedule", "") for j in sends if j.get("schedule")})
+        fams = sorted({family_of(j) for j in sends if family_of(j)})
+        pairs.append((u"Wysyłka", "co: %s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
+    if prunes:
+        here = [j for j in prunes if j.get("direction") == "prune"]
+        there = [j for j in prunes if j.get("direction") != "prune"]
+        def ret_of(js):
+            return " ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x) or "?"
+        txt = "trzyma %s" % ret_of(here or prunes)
+        if any(j.get("gfs") for j in (here or prunes)):
+            txt += "   drabina GFS"
+        scheds = sorted({j.get("schedule", "") for j in (here or prunes) if j.get("schedule")})
+        txt += "   co: %s" % (", ".join(scheds) or "?")
+        if here and there:
+            tsch = sorted({j.get("schedule", "") for j in there if j.get("schedule")})
+            txt += u"   u źródła: %s co: %s" % (ret_of(there), ", ".join(tsch) or "?")
+        pairs.append((u"Porządki", txt))
+    last = row["last"]
+    if last:
+        w, note = transfer_word(last, now)
+        st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
+        mode = {"incremental": "przyrostowy", "full": u"pełny"}.get(last.get("mode", ""), last.get("mode", ""))
+        txt = "%s  %s" % (w, fmt_full(fin if fin else st_))
+        if fin and st_:
+            txt += "  %s" % fmt_dur(fin - st_)
+        txt += "  %s" % mode
+        if note:
+            txt += "  " + note
+        pairs.append(("Ostatni", txt))
+    else:
+        pairs.append(("Ostatni", u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"))
+    if row["next_epoch"]:
+        pairs.append((u"Następny", "%s  (wg crontaba)" % fmt_full(row["next_epoch"])))
+    else:
+        pairs.append((u"Następny", row["next"]))
+    mon = row["vword"]
+    if row["monitors"]:
+        m0 = row["monitors"][0]
+        mon += "   progi %s / %s" % (m0.get("warn") or "?", m0.get("crit") or "?")
+    if row["reasons"]:
+        mon += "   " + row["reasons"][0].splitlines()[0]
+    elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
+        mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
+    pairs.append(("Kopie", mon))
+    # STATYSTYKA Z DIGESTU: suma po zadaniach wysylki tej relacji (job-stats).
+    if data.failed("stats"):
+        pairs.append(("7 dni", u"? -- job-stats nie odpowiedział"))
+    elif sends:
+        runs = fails = 0
+        last_s, avg_w, mx, vol = -1, 0.0, -1, 0
+        seen = set()
+        for j in sends:
+            srow, v = job_stats_for(data, j, job_cron_label(j))
+            if v:
+                vol += v
+            if not srow or id(srow) in seen:
+                continue
+            seen.add(id(srow))
+            r = int(srow.get("runs") or 0)
+            runs += r
+            fails += int(srow.get("failures") or 0)
+            avg_w += float(srow.get("avg_s") or 0) * r
+            last_s = max(last_s, int(srow.get("last_s") if srow.get("last_s") is not None else -1))
+            mx = max(mx, int(srow.get("max_s") if srow.get("max_s") is not None else -1))
+        days = (data.stats or {}).get("window_days") or 7
+        if runs:
+            txt = u"biegi %d" % runs + (u" (błędy %d)" % fails if fails else "") + "   czas o/ś/m %s   %s" % (
+                times_cell(last_s, int(round(avg_w / runs)), mx), hbytes_short(vol))
+        else:
+            txt = u"brak biegów w dziennikach z tego okna"
+        pairs.append(("%d dni" % days, txt))
+    npairs, _how = rel_pairs(row, data, now, ch)
+    pairs.append(("Datasety", u"%s   lądowisk %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
+    hist = "  ".join(x for x in [
+        "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
+        "zasiew %s" % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
+        "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
+        u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""])
+    if hist:
+        pairs.append(("Historia", hist))
+    warns = []
+    if rel.get("endpoint_diverged"):
+        warns.append(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)"
+                     % (rel.get("installed_endpoint") or "?", rel.get("active_endpoint") or "?"))
+    if rel.get("paused_local"):
+        warns.append(u"relacja wstrzymana (pause-client); starzenie się kopii jest tu oczekiwane")
+    if rel.get("state") != "active" and rel.get("state") != "removed":
+        warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
+    if rel.get("state") == "removed":
+        warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+    for m in row["monitors"]:
+        if m.get("engine_path_differs"):
+            warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
+    if warns:
+        # OSTRZEZENIE TUZ POD STANEM: panel bywa niski (24 wiersze) i ucina
+        # koniec; uwaga nie ma prawa byc tym, co odpadlo.
+        pairs.insert(1, ("Uwaga", "  |  ".join(warns)))
+    return pairs
+
+
+def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0):
+    """F3 w trzech panelach (szkic wlasciciela, 2026-09-11): u gory lista
+    relacji (lewo) i szczegoly (prawo), na dole pary zrodlo -> cel."""
     scr = Screen()
     host = (data.jobs or {}).get("host") or (data.status or {}).get("host") or "?"
     if data.failed("status"):
@@ -1134,76 +1300,130 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message=""):
         return scr
     live = [r for r in rows if not (r["kind"] == "relation" and r["rel"].get("state") == "removed")]
     title = "Relacje na kolektorze %s (%d)" % (host, len(live))
-    # Szerokosci kolumn: nazwa rosnie z danymi, reszta ma stale minimum.
-    beside = width >= 120
-    lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
+    r = rows[cursor] if rows and 0 <= cursor < len(rows) else None
+    pairs, how = rel_pairs(r, data, now, ch) if r is not None else ([], "")
+    binner = width - 4
+    wide = width >= 100
+    # Para na jednej linii, gdy sie miesci; inaczej zrodlo i pod nim cel.
+    tail_w = (13 + 1 + 11 + 1 + 5) if wide else 0
+    plines_of = []
+    for pr in pairs:
+        one = u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
+        if len(one) + (tail_w + 1 if wide else 0) <= binner:
+            plines_of.append([one])
+        else:
+            plines_of.append([pr["src"], u"  %s %s" % (ch.right, pr["dst"])])
+    # PODZIAL: dol dostaje tyle, ile potrzebuja pary (nie wiecej niz polowa),
+    # gora -- reszte; lista, ktora sie nie miesci, przewija sie.
+    avail = height - 2                      # pasek tytulu + listwa klawiszy
+    need = sum(len(x) for x in plines_of) + 2
+    bot_h = max(4, min(need, avail // 2))
+    top_h = avail - bot_h
+    lbw = max(48, int(width * 0.55))
+    pw = width - lbw
     inner = lbw - 4
-    # Kolumny rosna z danymi, a "Nastepny" dostaje reszte, nie mniej niz 10.
+    # Kolumny: Relacja, Kierunek, Stan zawsze; Kopie i Nastepny, gdy sie mieszcza.
     nw = max(8, min(24, max([len(r["name"]) for r in rows] + [8])))
     dw = max(8, min(24, max([len(r.get("dir", "")) for r in rows] + [8])))
-    sw = max(14, min(20, max([len(r["state"]) for r in rows] + [14])))
-    vw = 13
-    nw = max(8, min(nw, inner - (dw + sw + vw + 4) - 12))
-    rest = inner - (nw + dw + sw + vw + 4)
-    if rest < 12:
-        dw = max(8, dw + rest - 12)
-        rest = inner - (nw + dw + sw + vw + 4)
-    hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Kierunek", dw), fit("Stan", sw), fit("Kopie", vw), fit(u"Następny", rest))
+    sw = max(7, min(20, max([len(r["state"]) for r in rows] + [7])))
+    cols = [("Relacja", nw, "name"), ("Kierunek", dw, "dir"), ("Stan", sw, "state")]
+    used = nw + dw + sw + 2
+    if inner - used >= 14:
+        cols.append(("Kopie", 13, "vword"))
+        used += 14
+    if inner - used >= 9:
+        cols.append((u"Następny", inner - used - 1, "next"))
+        used = inner
+    else:
+        # Stan dostaje reszte, zeby wiersz byl pelny.
+        cols[2] = ("Stan", sw + (inner - used), "state")
+    hdr = " ".join(fit(t, w) for t, w, _k in cols)
     body = [hdr, ch.dash * inner]
     if not rows:
         body += [u"Zero relacji i zero zadań na tym hoście.",
-                 u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu rekordu relacji",
-                 u"ani bloku zfs-backup-managed w crontabie żadnego konta."]
-    # Panel: pod lista przy <120 kolumnach, obok od 120.
-    panel_h = 0 if beside else 9
-    list_h = max(3, height - 2 - 2 - panel_h - 2)   # paski + krawedzie + panel
+                 u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu",
+                 u"rekordu relacji ani bloku zfs-backup-managed w crontabie."]
+    list_h = max(3, top_h - 4)
     first = 0
     if cursor >= list_h:
         first = cursor - list_h + 1
     cur_y = None
-    for i, r in enumerate(rows[first:first + list_h], start=first):
-        name = fit_left(r["name"], nw, ch) if r["kind"] == "job" else fit(r["name"], nw, ch)
-        line = "%s %s %s %s %s" % (name, fit(r.get("dir", ""), dw, ch), fit(r["state"], sw, ch),
-                                   fit(r["vword"], vw, ch), fit(r["next"], rest, ch))
+    for i, rr in enumerate(rows[first:first + list_h], start=first):
+        cells = []
+        for _t, w, k in cols:
+            v = rr.get(k, "") or ""
+            cells.append(fit_left(v, w, ch) if (k == "name" and rr["kind"] == "job") else fit(v, w, ch))
         if i == cursor:
             cur_y = len(body)
-        body.append(line)
+        body.append(" ".join(cells))
     if len(rows) > first + list_h:
         body.append(fit(u"... jeszcze %d" % (len(rows) - first - list_h), inner))
     while len(body) < list_h + 2:
         body.append("")
-    footer = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa relacja" if width >= 100
-              else u"Enter F4:pauza Del F7:eksport F8:import Ins") if rows else ""
-    listbox = box(ch, title, body, lbw, footer=footer)
-    if cur_y is not None:
+    body = body[:list_h + 2]
+    listbox = box(ch, title, body, lbw, footer=(u"Tab: pary" if rows else ""))
+    if cur_y is not None and focus == "list":
         scr.cursor_y = 1 + 1 + cur_y   # pasek tytulu + gorna krawedz
     scr.titles.add(1)
     scr.titles.add(len(listbox))
-    panel = []
-    if rows and 0 <= cursor < len(rows):
-        r = rows[cursor]
-        pw = (width - max(MIN_WIDTH, int(width * 0.6))) if beside else width
+    # PRAWY PANEL: szczegoly bez zrodla i celu (te sa na dole).
+    pl = []
+    ptitle = ""
+    if r is not None:
         ptitle = u"%s -- szczegóły" % r["name"]
-        pl = detail_kv(ch, rel_detail_pairs(r, data, now, ch), pw - 4)
-        if beside:
-            pl = pl[:len(listbox) - 2]
-            while len(pl) < len(listbox) - 2:
-                pl.append("")
+        pl = detail_kv(ch, rel_panel_pairs(r, data, now, ch), pw - 4)
+    pl = pl[:len(listbox) - 2]
+    while len(pl) < len(listbox) - 2:
+        pl.append("")
+    panel = box(ch, ptitle, pl, pw, double=False)
+    top = [fit(l, lbw) + fit(p_, pw) for l, p_ in zip(listbox, panel)]
+    # DOLNY PANEL: pary zrodlo -> cel, jedna pod druga; od 100 kolumn z kopiami,
+    # czasem i GB per para (te same liczby co F2).
+    plines = []
+    ph = max(1, bot_h - 2)
+    # Przewijanie parami: pierwsza widoczna para tak, zeby kursor byl w oknie.
+    pfirst = 0
+    while pfirst < pair_cursor and sum(len(x) for x in plines_of[pfirst:pair_cursor + 1]) > ph:
+        pfirst += 1
+    pcur_y = None
+    if r is not None and not pairs:
+        plines.append(u"brak par: rekord nie nazywa żadnego źródła, a w cronie nie ma linii wysyłki tej relacji")
+    shown = 0
+    for i in range(pfirst, len(pairs)):
+        pr, ls = pairs[i], plines_of[i]
+        if len(plines) + len(ls) > ph:
+            break
+        if i == pair_cursor and focus == "pairs":
+            pcur_y = len(plines)
+        for n_, l in enumerate(ls):
+            if wide and n_ == len(ls) - 1:
+                tail = "%s %s %s" % (fit(pr["vword"], 13, ch), fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
+                plines.append(fit(l, binner - len(tail) - 1, ch) + " " + tail)
+            else:
+                plines.append(fit(l, binner, ch))
+        shown += 1
+    if pfirst + shown < len(pairs):
+        more = u"... jeszcze %d" % (len(pairs) - pfirst - shown)
+        if len(plines) < ph:
+            plines.append(more)
         else:
-            pl = pl[:panel_h - 2]
-            while len(pl) < panel_h - 2:
-                pl.append("")
-        panel = box(ch, ptitle, pl, pw, double=False)
-    if beside:
-        body_lines = side_by_side(listbox, panel, width, ch) if panel else listbox
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + body_lines
-    else:
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + listbox + panel
-        if panel:
-            scr.titles.add(len(listbox) + 1)
+            plines[-1] = fit(more, binner)
+    plines = plines[:ph]
+    while len(plines) < ph:
+        plines.append("")
+    btitle = (u"Datasety relacji %s: %s, %s" % (r["name"], plural(len(pairs), "para", "pary", "par"), how)) if r is not None else "Datasety"
+    if wide and pairs:
+        btitle += u"   [źródło %s cel | Kopie | Czas o/ś/m | GB]" % ch.right
+    bfoot = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa  Tab pary" if width >= 100
+             else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else ""
+    if focus == "pairs":
+        bfoot = u"Enter = to zadanie na F2   Tab wraca do relacji   strzałki"
+    bottom = box(ch, btitle, plines, width, footer=bfoot)
+    if pcur_y is not None:
+        scr.cursor_y = 1 + len(top) + 1 + pcur_y
+    scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + top + bottom
+    scr.titles.add(len(top) + 1)
     scr.bars.add(0)
-    if message:
-        scr.lines.append(fit(" " + message, width))
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
@@ -1725,10 +1945,22 @@ HELP = [
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
-    u"  strzałki / j k    ruch po liście     PgUp PgDn Home End   szybciej",
-    u"  r                 odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
-    u"  Esc               zamknij okno na wierzchu",
-    u"  q                 wyjście",
+    u"  F3 w trzech panelach: lista relacji, szczegóły, a na dole pary",
+    u"                 źródło → cel podświetlonej relacji (z linii crona; relacja",
+    u"                 bez crona ma pary z rekordu i tytuł to mówi). Tab przenosi",
+    u"                 kursor na pary; Enter na parze skacze do tego zadania na F2.",
+    "",
+    u"  LINIA POLECEŃ nad listwą klawiszy (jak w mc): pisz, Enter wykonuje na",
+    u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
+    u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
+    u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
+    u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery nie są",
+    u"                 skrótami na ekranach -- wszystko, co piszesz, idzie do linii.",
+    "",
+    u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
+    u"  F9 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
+    u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
+    u"  F10               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
     "",
     u"Słowa w kolumnie 'Kopie':",
     u"  aktualne       najnowsza migawka mieści się w progu ostrzegawczym",
@@ -1758,12 +1990,69 @@ class UI(object):
         self.window = None        # ("relacja", row) | ("pomoc", None) | ("prompt"|"confirm"|"output", dict)
         self.scroll = 0
         self.message = ""
+        self.focus = "list"       # F3: "list" (relacje) | "pairs" (dolny panel par)
+        self.pair_cursor = 0
+        # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
+        # pisac komendy z palca"). Styl mc: kazdy drukowalny znak leci tu,
+        # Enter wykonuje NA PIERWSZYM PLANIE (curses zawieszone), historia w
+        # ~/.zfs-tui/history. q/r/j/k/cyfry sa skrotami TYLKO przy pustej linii.
+        self.cmd = ""
+        self.cmd_hist = self.load_history()
+        self.hist_pos = None
+        self.pending_shell = None
         self.data = collect(repo, files)
         self.rows = build_relations(self.data, self.now())
         self.jobrows = build_jobs(self.data, self.now())
 
     def now(self):
         return self.now_fixed if self.now_fixed is not None else int(time.time())
+
+    def history_path(self):
+        return os.path.join(home_dir(), ".zfs-tui", "history")
+
+    def load_history(self):
+        if self.exec_log:
+            return []
+        try:
+            with io.open(self.history_path(), encoding="utf-8", errors="replace") as fh:
+                return [l.rstrip("\n") for l in fh if l.strip()][-200:]
+        except (IOError, OSError):
+            return []
+
+    def save_history(self):
+        if self.exec_log:
+            return
+        try:
+            d = os.path.dirname(self.history_path())
+            if not os.path.isdir(d):
+                os.makedirs(d)
+            with io.open(self.history_path(), "w", encoding="utf-8") as fh:
+                fh.write("\n".join(self.cmd_hist[-200:]) + "\n")
+        except (IOError, OSError):
+            pass
+
+    def prompt_text(self):
+        user = os.environ.get("USER") or os.environ.get("USERNAME") or "?"
+        host = (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
+        return "%s@%s:%s$ " % (user, host, os.path.basename(self.repo.rstrip("/\\")) or "/")
+
+    def run_cmd(self, line):
+        """Enter w linii polecen. Test (exec-log) zapisuje; na zywo petla curses
+        zawiesza ekran i oddaje terminal komendzie (pending_shell)."""
+        line = line.strip()
+        if not line:
+            return "stay"
+        if not self.cmd_hist or self.cmd_hist[-1] != line:
+            self.cmd_hist.append(line)
+        self.save_history()
+        self.cmd, self.hist_pos = "", None
+        if self.exec_log:
+            with io.open(self.exec_log, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            return "stay"
+        self.pending_shell = line
+        return "shell"
 
     def refresh(self, only=None):
         self.data = collect(self.repo, self.files, only)
@@ -1817,7 +2106,7 @@ class UI(object):
         lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
-        lines += [u"t = wykonaj      Esc / inny klawisz = anuluj"]
+        lines += [u"t = wykonaj      e = do linii poleceń (popraw i Enter)      Esc / inny klawisz = anuluj"]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
                                    "shell": line, "on_yes": on_yes})
         self.scroll = 0
@@ -2135,6 +2424,11 @@ class UI(object):
                     obj["on_yes"]()
                 else:
                     self.run_detached(obj["title"], obj["argv"], obj.get("redirect"))
+            elif k in ("e", "text:e"):
+                # Komenda do linii polecen: widac ja, mozna poprawic, Enter wykona
+                # na pierwszym planie. Nic nie rusza samo.
+                self.window, self.cmd, self.hist_pos = None, obj["shell"], None
+                self.message = u"komenda w linii poleceń -- popraw i Enter wykona (Esc czyści)"
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -2185,10 +2479,79 @@ class UI(object):
             elif k == "F1":
                 self.window, self.scroll = ("pomoc", None), 0
             return "stay"
-        if k == "q":
+        # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie. Litera to
+        # TEKST, nie skrot -- 'echo' ma dac 'echo', nie 'cho' (pve9, pty).
+        if len(k) == 1 and k.isprintable():
+            k = "text:" + k
+        if k.startswith("text:"):
+            self.cmd += k[5:]
+            self.hist_pos = None
+            return "stay"
+        if raw and len(raw) == 1 and raw.isprintable():
+            self.cmd += raw
+            self.hist_pos = None
+            return "stay"
+        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F10")
+        if self.cmd and k not in FKEYS:
+            if k == "bs":
+                self.cmd = self.cmd[:-1]
+            elif k in ("esc", "ctrl-u"):
+                self.cmd, self.hist_pos = "", None
+            elif k == "enter":
+                return self.run_cmd(self.cmd)
+            elif k == "up" and self.cmd_hist:
+                self.hist_pos = len(self.cmd_hist) - 1 if self.hist_pos is None else max(0, self.hist_pos - 1)
+                self.cmd = self.cmd_hist[self.hist_pos]
+            elif k == "down" and self.hist_pos is not None:
+                self.hist_pos = self.hist_pos + 1
+                if self.hist_pos >= len(self.cmd_hist):
+                    self.cmd, self.hist_pos = "", None
+                else:
+                    self.cmd = self.cmd_hist[self.hist_pos]
+            return "stay"
+        if k in ("q", "F10"):
             return "quit"
         if k == "F1":
             self.window, self.scroll = ("pomoc", None), 0
+            return "stay"
+        if k == "tab" and self.screen == "relacje":
+            self.focus = "pairs" if self.focus == "list" else "list"
+            return "stay"
+        if self.screen == "relacje" and self.focus == "pairs" and self.rows:
+            row = self.rows[self.cursor["relacje"]]
+            pairs, _how = rel_pairs(row, self.data, self.now(), self.ch)
+            n = len(pairs)
+            c = self.pair_cursor
+            if k in ("down", "j"):
+                c = min(c + 1, max(0, n - 1))
+            elif k in ("up", "k"):
+                c = max(0, c - 1)
+            elif k == "pgdn":
+                c = min(c + 5, max(0, n - 1))
+            elif k == "pgup":
+                c = max(0, c - 5)
+            elif k == "home":
+                c = 0
+            elif k == "end":
+                c = max(0, n - 1)
+            elif k == "esc":
+                self.focus = "list"
+            elif k == "enter" and n:
+                j = pairs[c].get("job")
+                if j is None:
+                    self.message = u"ta para jest z rekordu, nie z crona -- nie ma zadania na F2"
+                else:
+                    for i, jr in enumerate(self.jobrows):
+                        if jr.get("job") is j:
+                            self.cursor["zadania"], self.screen, self.focus = i, "zadania", "list"
+                            break
+            elif k in ("F4", "del", "F7", "F8", "ins"):
+                self.action(k)
+            else:
+                for key, fk, _label in SCREENS:
+                    if k == fk and k != "F4":
+                        self.screen, self.focus = key, "list"
+            self.pair_cursor = c
             return "stay"
         # F4 na F3 to PAUZA, nie ekran Transfery (tam prowadzi F4 z innych ekranow):
         # tak stoi w makiecie wlasciciela i w listwie stopki.
@@ -2210,7 +2573,7 @@ class UI(object):
             c = 0
         elif k == "end":
             c = max(0, n - 1)
-        elif k in ("r", "F5r"):
+        elif k in ("F9", "ctrl-r", "F5r"):
             self.refresh()
             self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
         elif k in ("F4", "del", "F7", "F8", "ins") and self.screen == "relacje":
@@ -2225,6 +2588,8 @@ class UI(object):
                 # Pozostale ekrany maja panel szczegolow; Enter otwiera go jako
                 # okno, zeby dlugie wartosci nie byly ucinane.
                 self.window, self.scroll = ("panel", self.panel_lines()), 0
+        if self.screen == "relacje" and c != self.cursor["relacje"]:
+            self.pair_cursor = 0
         self.cursor[self.screen] = c
         return "stay"
 
@@ -2252,16 +2617,27 @@ def relation_window_lines_dispatch(ui, obj, width):
 def _ui_render(self, width, height):
     width = max(MIN_WIDTH, width)
     now = self.now()
+    # Ekran jest o jedna linie nizszy: nad listwa klawiszy stoi LINIA POLECEN.
+    sh = height - 1
     if self.screen == "zadania":
-        base = render_zadania(self.data, self.jobrows, self.cursor["zadania"], width, height, now, self.ch, self.message)
+        base = render_zadania(self.data, self.jobrows, self.cursor["zadania"], width, sh, now, self.ch, self.message)
     elif self.screen == "relacje":
-        base = render_relacje(self.data, self.rows, self.cursor["relacje"], width, height, now, self.ch, self.message)
+        base = render_relacje(self.data, self.rows, self.cursor["relacje"], width, sh, now, self.ch, self.message,
+                              focus=self.focus, pair_cursor=self.pair_cursor)
     elif self.screen == "transfery":
-        base = render_transfery(self.data, self.cursor["transfery"], width, height, now, self.ch, self.message)
+        base = render_transfery(self.data, self.cursor["transfery"], width, sh, now, self.ch, self.message)
     elif self.screen == "monitor":
-        base = render_monitor(self.data, self.cursor["monitor"], width, height, now, self.ch, self.message)
+        base = render_monitor(self.data, self.cursor["monitor"], width, sh, now, self.ch, self.message)
     else:
-        base = render_nosniki(self.data, self.cursor["nosniki"], width, height, now, self.ch, self.message)
+        base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message)
+    if not self.window:
+        cl = self.prompt_text() + self.cmd + "_"
+        if len(cl) > width:
+            # Dluga komenda: widac jej KONIEC (tam sie pisze), poczatek za ellipsa.
+            cl = self.ch.ell + cl[len(cl) - width + 1:]
+        base.lines.insert(len(base.lines) - 1, fit(cl, width))
+        base.bars = {0, len(base.lines) - 1}
+        base.cmd_y = len(base.lines) - 2
     if self.window:
         kind, obj = self.window
         if kind == "pomoc":
@@ -2272,7 +2648,7 @@ def _ui_render(self, width, height):
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch, footer=u"Enter dalej   Esc anuluj")
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
-                                             footer=u"t wykonaj   Esc anuluj")
+                                             footer=u"t wykonaj   e do linii poleceń   Esc anuluj")
         elif kind == "form":
             scr, self.scroll = render_window(base, obj["title"], self.form_lines(obj, width), 0, width, height, self.ch,
                                              footer=u"Enter na [ PLAN ] = dalej   Esc = anuluj")
@@ -2309,9 +2685,12 @@ _DEACCENT[ord(u"←")] = "<"
 def _ui_render_final(self, width, height):
     scr = _ui_render(self, width, height)
     if self.message and len(scr.lines) >= 2 and not self.window:
-        # Komunikat ZAWSZE tuz nad listwa klawiszy -- panel nie ma prawa go zepchnac
-        # poza ekran (tak bylo: odmowa akcji na usunietym rekordzie znikala).
-        scr.lines[-2] = fit(" " + self.message, max(MIN_WIDTH, width))
+        # Komunikat ZAWSZE tuz nad listwa klawiszy, w miejscu linii polecen (na
+        # jedna klatke; tekst linii zostaje w stanie) -- panel nie ma prawa go
+        # zepchnac poza ekran (tak bylo: odmowa akcji na usunietym rekordzie znikala).
+        # Z tekstem w linii polecen komunikat idzie o linie wyzej, zeby nie
+        # zaslaniac tego, co uzytkownik wlasnie dostal do poprawki ('e').
+        scr.lines[-3 if self.cmd else -2] = fit(" " + self.message, max(MIN_WIDTH, width))
     if self.ch.ascii:
         scr.lines = [deaccent(l) for l in scr.lines]
     return scr
@@ -2379,8 +2758,9 @@ def curses_loop(ui):
                        curses.KEY_F7: "F7", curses.KEY_F8: "F8", curses.KEY_IC: "ins", curses.KEY_DC: "del",
                        curses.KEY_BACKSPACE: "bs", 127: "bs", 8: "bs", curses.KEY_ENTER: "enter",
                        10: "enter", 13: "enter", 27: "esc", ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("r"): "r",
-                       ord("t"): "t", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
-                       ord("?"): "F1", ord("h"): "F1"})
+                       ord("t"): "t", ord("e"): "e", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
+                       ord("?"): "F1", ord("h"): "F1", curses.KEY_F10: "F10", curses.KEY_F9: "F9", 9: "tab",
+                       21: "ctrl-u", 18: "ctrl-r"})
         stdscr.keypad(True)
         # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
         # terminalu tryb aplikacyjny (ESC O B), a terminal, ktory go nie honoruje
@@ -2399,22 +2779,32 @@ def curses_loop(ui):
         SEQ = {"[A": "up", "[B": "down", "OA": "up", "OB": "down", "[H": "home", "[F": "end", "OH": "home", "OF": "end",
                "[1~": "home", "[4~": "end", "[5~": "pgup", "[6~": "pgdn", "[2~": "ins", "[3~": "del",
                "OP": "F1", "OQ": "F2", "OR": "F3", "OS": "F4", "[11~": "F1", "[12~": "F2", "[13~": "F3", "[14~": "F4",
-               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
+               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[20~": "F9", "[21~": "F10", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
+
+        def wch():
+            """(kod, czy_znak): get_wch odroznia znak od klawisza; -1 = nic."""
+            try:
+                k = stdscr.get_wch()
+            except curses.error:
+                return -1, False
+            if isinstance(k, str):
+                return ord(k), True
+            return k, False
 
         def read_key():
-            k = stdscr.getch()
+            k, is_char = wch()
             if k != 27:
-                return k, None
+                return k, None, is_char
             stdscr.nodelay(True)
             seq = ""
             try:
                 deadline = time.time() + 0.15
                 while time.time() < deadline and len(seq) < 6:
-                    c = stdscr.getch()
+                    c, c_char = wch()
                     if c == -1:
                         time.sleep(0.01)
                         continue
-                    if c > 255:
+                    if not c_char or c > 255:
                         break
                     seq += chr(c)
                     if seq in SEQ or (seq.startswith("[") and seq.endswith("~")) or (seq.startswith("O") and len(seq) == 2):
@@ -2422,9 +2812,9 @@ def curses_loop(ui):
             finally:
                 stdscr.nodelay(False)
             if not seq:
-                return 27, None
+                return 27, None, False
             if seq in SEQ:
-                return -2, SEQ[seq]
+                return -2, SEQ[seq], False
             # Nie nasza sekwencja (np. ESC, a chwile pozniej 'q'): oddaj bajty
             # z powrotem, w kolejnosci, i zglos goly Esc. Bez tego 'q' po Esc
             # gineło i TUI wisiało -- zmierzone na pve10 2026-09-09 (jazda 6).
@@ -2433,7 +2823,7 @@ def curses_loop(ui):
                     curses.ungetch(ord(ch_))
                 except curses.error:
                     pass
-            return 27, None
+            return 27, None, False
         while True:
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
@@ -2451,7 +2841,7 @@ def curses_loop(ui):
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
             else:
                 stdscr.timeout(2000 if ui.screen == "transfery" and not ui.window else -1)
-            k, seqname = read_key()
+            k, seqname, is_char = read_key()
             if k == -1:
                 if not ui.window:
                     ui.refresh("progress")
@@ -2464,17 +2854,49 @@ def curses_loop(ui):
             if ui.window and ui.window[0] == "form" and k == 32:
                 ui.key("space", h)
                 continue
-            if ui.window and ui.window[0] in ("prompt", "form") and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
+            if ui.window and ui.window[0] in ("prompt", "form") and is_char and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
                     continue
                 ui.key("text:" + ch_, h)
                 continue
+            # LINIA POLECEN (bez okna na wierzchu): KAZDY drukowalny znak jest
+            # tekstem -- litery-skroty (q r j k h ? cyfry) dzialaja tylko w
+            # oknach. Backspace/Enter/Esc/strzalki rozstrzyga UI.key po stanie linii.
+            if not ui.window and is_char and 32 <= k < 0x110000:
+                try:
+                    ch_ = chr(k)
+                except ValueError:
+                    continue
+                if ch_.isprintable():
+                    ui.key("text:" + ch_, h)
+                continue
             if name is None:
                 continue
-            if ui.key(name, h) == "quit":
+            res = ui.key(name, h)
+            if res == "quit":
                 return
+            if res == "shell" and ui.pending_shell:
+                line, ui.pending_shell = ui.pending_shell, None
+                curses.endwin()
+                sys.stdout.write("$ %s\n" % line)
+                sys.stdout.flush()
+                try:
+                    rc = subprocess.call(line, shell=True, cwd=ui.repo)
+                except (OSError, KeyboardInterrupt) as e:
+                    rc = "?"
+                    sys.stdout.write("%s\n" % e)
+                sys.stdout.write("[rc=%s]  Enter wraca do okien\n" % rc)
+                sys.stdout.flush()
+                try:
+                    sys.stdin.readline()
+                except (IOError, KeyboardInterrupt):
+                    pass
+                stdscr.clear()
+                stdscr.refresh()
+                ui.refresh()
+                ui.message = u"[rc=%s] %s" % (rc, line)
     curses.wrapper(main)
 
 
