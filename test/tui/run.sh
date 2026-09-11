@@ -53,12 +53,21 @@ hasE() { printf '%s' "$1" | grep -qE -- "$2"; }
 # EKRAN 1: RELACJE -- wiersz to RELACJA (para hostow), nie zadanie
 # ============================================================================
 S="$(screen relacje)"
-if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +[0-9]{2}:30 +║'; then
-    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), stan z rekordu, kopie z monitora, nastepny bieg z harmonogramu"
+S120="$(screen relacje "" --width 120)"
+S200="$(screen relacje "" --width 200)"
+# F3 W TRZECH PANELACH (szkic wlasciciela, 2026-09-11): lista jest WASKA, wiec
+# kolumny Kopie i Nastepny dochodza z szerokoscia; przy 80 sa trzy.
+if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +[0-9]{2}:30 +║'; then
+    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), stan z rekordu, kopie z monitora, nastepny bieg z harmonogramu (200 kolumn)"
 else
-    bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S"
+    bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S200"
 fi
-if has "$S" 'Ostatni bieg brak zapisu w historii'; then
+if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +║│'; then
+    ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Kopie -- panel stoi obok od 80"
+else
+    bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
+fi
+if has "$S" 'Ostatni  brak zapisu w'; then
     ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
 else
     bad "relacje: ostatni wynik w panelu" "$S"
@@ -81,10 +90,10 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S" '^║ duplikat +pve10[?]192.168.28.99 +seeding +-- +seed duplikat +║'; then
-    ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona"
+if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +seeding +-- +seed duplikat +║' && has "$S120" 'Następny seed duplikat'; then
+    ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona -- w kolumnie (200) i w panelu (120)"
 else
-    bad "relacje: nastepny krok dla relacji w zasiewie" "$S"
+    bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
 fi
 # Rekord usuniety jest faktem, ale nie robota: jest, i jest OSTATNI.
 if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *removed' | cut -d: -f1)" -gt "$(printf '%s\n' "$S" | grep -n '^║ lab-vm101' | cut -d: -f1)" ] 2>/dev/null; then
@@ -92,39 +101,95 @@ if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *removed' | cut -d: -f1)" -g
 else
     bad "relacje: rekord removed" "$S"
 fi
-# Panel pod lista przy 80 kolumnach: pierwszy wiersz (duplikat) ma focus.
-if has "$S" 'duplikat -- szczegóły' && has "$S" 'Źródła (1)   hdd/lab/vm-101' && has "$S" "NIE znaczy 'bez awarii'"; then
-    ok "relacje: panel szczegolow pod lista mowi o wierszu z focusem i tlumaczy brak historii"
+# Panel OBOK listy (prawy): pierwszy wiersz (duplikat) ma focus; zrodla i cel
+# NIE sa w panelu -- sa w dolnym panelu par (wlasciciel 2026-09-11).
+if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "NIE znaczy 'bez awarii'"; then
+    ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma"
 else
-    bad "relacje: panel szczegolow" "$S"
+    bad "relacje: panel szczegolow" "$S" "$S200"
 fi
-S4="$(screen relacje down,down,down,down)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00  \(wg crontaba, 24 \* \* \* \*\)'; then
-    ok "relacje: kursor przesuwa panel; nastepny bieg policzony z harmonogramu 24 * * * *"
+if has "$S" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$S" '192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+    ok "relacje: dolny panel -- relacja BEZ crona (seeding) ma pare policzona z rekordu i tytul to MOWI"
+else
+    bad "relacje: pary z rekordu" "$S"
+fi
+S4="$(screen relacje down,down,down,down --width 200)"
+if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny 2026-09-09 [0-9]{2}:24:00  \(wg crontaba\)' && has "$S4" 'Wysyłka  co: 24 * * * *   rodzina automated_hourly'; then
+    ok "relacje: kursor przesuwa panel; nastepny bieg policzony z harmonogramu, wysylka nazywa harmonogram i rodzine"
 else
     bad "relacje: kursor i nastepny bieg" "$S4"
 fi
-if has "$S4" 'Kopie        aktualne   progi 90m / 150m'; then
+if has "$S4" 'Kopie    aktualne   progi 90m / 150m'; then
     ok "relacje: panel nazywa progi monitora przy werdykcie"
 else
     bad "relacje: progi w panelu" "$S4"
 fi
+if has "$S4" 'Porządki trzyma -H24 -D7 -W4 -M12   drabina GFS   co: 44 * * * *   u źródła: -H24 -D7' && has "$S4" '-W4 -M12 co: 3 * * * *'; then
+    ok "relacje: panel -- porzadki z retencja, drabina GFS, harmonogram i retencja u ZRODLA (z list-jobs, bez show-config)"
+else
+    bad "relacje: porzadki w panelu" "$S4"
+fi
+if hasE "$S4" '7 dni +biegi [0-9]+ .*czas o/ś/m [0-9/]+s +[0-9.]+[KMG]' && has "$S4" 'Datasety 1 para   lądowisk 1' && has "$S4" 'Historia utworzona 2026-09-08'; then
+    ok "relacje: panel -- statystyka z okna digestu (biegi, czas o/s/m, wolumen), liczba par i ladowisk, historia rekordu"
+else
+    bad "relacje: statystyka/historia w panelu" "$S4"
+fi
+# DOLNY PANEL Z CRONA: para w jednej linii, gdy sie miesci (200); inaczej
+# zrodlo i pod nim cel (80, 120). Od 100 kolumn kopie, czas i GB per para --
+# te same liczby co F2 -- przy ostatniej linii pary.
+if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Czas o/ś/m | GB]' \
+        && hasE "$S4" '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
+    ok "relacje: dolny panel przy 200 -- para w jednej linii z kopiami, czasem o/s/m i GB"
+else
+    bad "relacje: pary przy 200" "$S4"
+fi
+S4_120="$(screen relacje down,down,down,down --width 120)"
+if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
+    ok "relacje: przy 120 para, ktora sie nie miesci, to zrodlo i pod nim cel z liczbami -- nic nie uciete"
+else
+    bad "relacje: pary przy 120" "$S4_120"
+fi
+S4_80="$(screen relacje down,down,down,down)"
+if has "$S4_80" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && has "$S4_80" '║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 ' && ! has "$S4_80" 'aktualne      4/3/4s'; then
+    ok "relacje: ...a przy 80 to samo bez liczb"
+else
+    bad "relacje: pary przy 80" "$S4_80"
+fi
+# TAB: kursor na pary; Enter na parze skacze do TEGO zadania na F2.
+TP="$(screen relacje down,tab)"
+if has "$TP" 'Enter = to zadanie na F2   Tab wraca do relacji'; then
+    ok "relacje: Tab przenosi kursor na pary (stopka mowi, co robi Enter)"
+else
+    bad "relacje: Tab" "$TP"
+fi
+TE="$(screen relacje down,tab,enter)"
+if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'wysyłka hourly'; then
+    ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
+else
+    bad "relacje: Enter na parze" "$TE"
+fi
+TR="$(screen relacje tab,enter)"
+if has "$TR" '[F3 Relacje]' && has "$TR" 'ta para jest z rekordu, nie z crona'; then
+    ok "relacje: Enter na parze z REKORDU mowi, ze zadania na F2 nie ma"
+else
+    bad "relacje: Enter na parze z rekordu" "$TR"
+fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
-SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down 2>&1)"
+SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 200 2>&1)"
 if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +active PAUZA +aktualne +-- pauza -- +║'; then
     ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
 fi
-if has "$SP" 'Uwaga        relacja wstrzymana (pause-client)'; then
+if has "$SP" 'Uwaga    relacja wstrzymana (pause-client)'; then
     ok "relacje: ...a panel mowi, ze starzenie kopii jest tu oczekiwane"
 else
     bad "relacje: uwaga o pauzie w panelu" "$SP"
 fi
 
 # --- ZADANIA BEZ REKORDU RELACJI (hostA: push/local/pull, WARNING/CRITICAL) --
-H="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen relacje 2>&1)"
+H="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen relacje --width 200 2>&1)"
 if has "$H" 'bez rekordu → pve9' && has "$H" 'bez rekordu → tutaj' && has "$H" 'bez rekordu ← pve1'; then
     ok "relacje: sekcje configu bez rekordu relacji (ksztalt PRODUKCJI: 0/7 hostow ma rekordy) sa wierszami z kierunkiem, nie sa chowane"
 else
@@ -145,7 +210,7 @@ else
 fi
 
 # --- BLOK NIECZYTELNY JEST WIERSZEM ------------------------------------------
-U="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/unreadable.json" --monitors "$FIX/monitors.json" --screen relacje 2>&1)"
+U="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/unreadable.json" --monitors "$FIX/monitors.json" --screen relacje --width 200 2>&1)"
 if hasE "$U" 'konto backupacct +[?] +nieczytelny +nie odpowiada'; then
     ok "relacje: blok bez czytelnego configu jest WIERSZEM z liczba linii, ktore chodza"
 else
@@ -671,6 +736,72 @@ else
 fi
 
 # ============================================================================
+# LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili pisac
+# komendy z palca"). Nad listwa klawiszy, na KAZDYM ekranie; styl mc.
+# ============================================================================
+cl_ok=1
+for sc in zadania relacje transfery monitor nosniki; do
+    out="$(screen "$sc" "")"
+    printf '%s\n' "$out" | tail -2 | head -1 | grep -qE '^[^ ]+@pve10:zfs-snapshot-all\$ _ *$' || { cl_ok=0; echo "  $sc: brak linii polecen"; }
+done
+if [ "$cl_ok" -eq 1 ]; then
+    ok "linia: kazdy ekran ma linie polecen user@host:repo\$ tuz nad listwa klawiszy"
+else
+    bad "linia: obecnosc na ekranach"
+fi
+XL="$(mktemp)"
+C="$(: > "$XL"; screen relacje "text:ls -la,bs" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ ls -l_ *$' && [ ! -s "$XL" ]; then
+    ok "linia: pisanie i Backspace edytuja linie; samo pisanie NICZEGO nie uruchamia"
+else
+    bad "linia: edycja" "$C"
+fi
+C="$(: > "$XL"; screen relacje "text:ls -l,enter" --exec-log "$XL")"
+if [ "$(cat "$XL")" = "ls -l" ] && has "$C" '[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ls -l'; then
+    ok "linia: Enter wykonuje DOKLADNIE wpisana linie (atrapa: dziennik) i czysci linie"
+else
+    bad "linia: Enter" "$(cat "$XL")" "$C"
+fi
+C="$(: > "$XL"; screen relacje "text:ls -l,enter,text:x,up" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ ls -l_ *$'; then
+    ok "linia: strzalka w gore przy niepustej linii = historia"
+else
+    bad "linia: historia" "$C"
+fi
+C="$(: > "$XL"; screen relacje "text:abc,esc" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ _ *$' && [ ! -s "$XL" ]; then
+    ok "linia: Esc czysci linie"
+else
+    bad "linia: Esc" "$C"
+fi
+C="$(: > "$XL"; screen relacje "text:abc,down,down" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ abc_ *$' && has "$C" 'duplikat -- szczegóły'; then
+    ok "linia: z tekstem w linii strzalki NIE ruszaja listy (kursor zostaje na pierwszym wierszu)"
+else
+    bad "linia: strzalki przy tekscie" "$C"
+fi
+# 'e' w potwierdzeniu: komenda akcji laduje w linii do poprawki, nic nie rusza.
+C="$(: > "$XL"; screen relacje "down,F4,e" --exec-log "$XL")"
+if has "$C" "pause-client lab-ct201 '--reason=z TUI" && ! has "$C" 'POTWIERDZENIE' && [ ! -s "$XL" ] && has "$C" 'komenda w linii poleceń -- popraw i Enter'; then
+    ok "linia: 'e' w potwierdzeniu wrzuca pokazana komende do linii polecen (podglad + edycja), dziennik pusty"
+else
+    bad "linia: e w potwierdzeniu" "$C" "$(cat "$XL")"
+fi
+C="$(: > "$XL"; screen relacje "down,F4,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
+if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ]; then
+    ok "linia: ...poprawiona (6 x Backspace) i Enter wykonuje TO, co w linii"
+else
+    bad "linia: e + edycja + Enter" "$(cat "$XL")" "$C"
+fi
+C="$(: > "$XL"; screen relacje "text:zfs list,F10" --exec-log "$XL")"
+if [ ! -s "$XL" ]; then
+    ok "linia: F10 wychodzi takze z tekstem w linii, nic nie uruchamiajac"
+else
+    bad "linia: F10" "$(cat "$XL")"
+fi
+rm -f "$XL"
+
+# ============================================================================
 # KONTRAKT WYGLADU: 80 to przypadek projektowy, 120 i 200 wykorzystuja miejsce
 # ============================================================================
 widths_ok=1
@@ -688,11 +819,11 @@ if [ "$widths_ok" -eq 1 ]; then
 else
     bad "wyglad: szerokosci linii"
 fi
-S120="$(screen relacje "" --width 120)"
-if [ "$(printf '%s\n' "$S120" | grep -c '║.*│')" -gt 5 ] && [ "$(printf '%s\n' "$S" | grep -c '║.*│')" -eq 0 ]; then
-    ok "wyglad: od 120 kolumn panel stoi OBOK listy, przy 80 pod nia"
+if [ "$(printf '%s\n' "$S120" | grep -c '║.*│')" -gt 5 ] && [ "$(printf '%s\n' "$S" | grep -c '║.*│')" -gt 5 ] \
+        && has "$S" '╔═ Datasety relacji' && has "$S120" '╔═ Datasety relacji'; then
+    ok "wyglad: F3 w trzech panelach przy 80 i 120 -- lista, panel obok, pary na dole"
 else
-    bad "wyglad: panel obok od 120" "$S120"
+    bad "wyglad: trzy panele" "$S" "$S120"
 fi
 # Terminal bez UTF-8: ramki +-|= i slowa bez ogonkow. Zero bajtow spoza ASCII.
 ascii_ok=1
@@ -709,7 +840,7 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +aktualne' && has "$A" 'Zrodla (1)'; then
+if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -720,7 +851,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" ' F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Monitor F6 Nośniki q Wyjście'; then
+if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Monitor F6 Nośniki F10 Wyjście'; then
     ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran"
 else
     bad "wyglad: listwa F" "$S"
