@@ -57,20 +57,20 @@ S120="$(screen relacje "" --width 120)"
 S200="$(screen relacje "" --width 200)"
 # F3 W TRZECH PANELACH (szkic wlasciciela, 2026-09-11): lista jest WASKA, wiec
 # kolumny Kopie i Nastepny dochodza z szerokoscia; przy 80 sa trzy.
-if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +[0-9]{2}:30 +║'; then
-    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), stan z rekordu, kopie z monitora, nastepny bieg z harmonogramu (200 kolumn)"
+if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +6.1M +[0-9]{2}:30 +║'; then
+    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), TYP, stan z rekordu, kopie z monitora, GB calej relacji, nastepny bieg (200 kolumn; wlasciciel 2026-09-12: typ i GB w liscie)"
 else
     bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S200"
 fi
-if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +active +aktualne +║│'; then
-    ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Kopie -- panel stoi obok od 80"
+if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +║│'; then
+    ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Typ i Kopie -- panel stoi obok od 80"
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
 fi
-if has "$S" 'Ostatni  brak zapisu w'; then
+if hasE "$S120" 'Ostatni +brak zapisu w historii'; then
     ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
 else
-    bad "relacje: ostatni wynik w panelu" "$S"
+    bad "relacje: ostatni wynik w panelu" "$S120"
 fi
 # Wlasciciel, 2026-09-08: wiersz ma byc relacja. Szczeble drabiny (keep_hourly...)
 # to zadania i na ekranie glownym ich NIE ma.
@@ -90,7 +90,7 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +seeding +-- +seed duplikat +║' && has "$S120" 'Następny seed duplikat'; then
+if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +seeding +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
     ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona -- w kolumnie (200) i w panelu (120)"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
@@ -103,7 +103,7 @@ else
 fi
 # Panel OBOK listy (prawy): pierwszy wiersz (duplikat) ma focus; zrodla i cel
 # NIE sa w panelu -- sa w dolnym panelu par (wlasciciel 2026-09-11).
-if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "NIE znaczy 'bez awarii'"; then
+if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak zapisu w historii (nie wiadomo, nie 'OK')"; then
     ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma"
 else
     bad "relacje: panel szczegolow" "$S" "$S200"
@@ -113,24 +113,24 @@ if has "$S" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$
 else
     bad "relacje: pary z rekordu" "$S"
 fi
-S4="$(screen relacje down,down,down,down --width 200)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny 2026-09-09 [0-9]{2}:24:00  \(wg crontaba\)' && has "$S4" 'Wysyłka  co: 24 * * * *   rodzina automated_hourly'; then
+S4="$(screen relacje down,down,down,down --width 200 --height 40)"
+if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny   2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && has "$S4" 'Wysyłka    24 * * * *   rodzina automated_hourly'; then
     ok "relacje: kursor przesuwa panel; nastepny bieg policzony z harmonogramu, wysylka nazywa harmonogram i rodzine"
 else
     bad "relacje: kursor i nastepny bieg" "$S4"
 fi
-if has "$S4" 'Kopie    aktualne   progi 90m / 150m'; then
+if has "$S4" 'Kopie      aktualne   progi 90m / 150m'; then
     ok "relacje: panel nazywa progi monitora przy werdykcie"
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if has "$S4" 'Porządki trzyma -H24 -D7 -W4 -M12   drabina GFS   co: 44 * * * *   u źródła: -H24 -D7' && has "$S4" '-W4 -M12 co: 3 * * * *'; then
-    ok "relacje: panel -- porzadki z retencja, drabina GFS, harmonogram i retencja u ZRODLA (z list-jobs, bez show-config)"
+if has "$S4" 'Porządki   44 * * * *   trzyma -H24 -D7 -W4 -M12   drabina GFS' && has "$S4" 'U źródła   3 * * * *   trzyma -H24 -D7 -W4 -M12   drabina GFS'; then
+    ok "relacje: panel -- porzadki i porzadki u ZRODLA w OSOBNYCH wierszach: harmonogram, retencja, drabina GFS (z list-jobs, bez show-config)"
 else
     bad "relacje: porzadki w panelu" "$S4"
 fi
-if hasE "$S4" '7 dni +biegi [0-9]+ .*czas o/ś/m [0-9/]+s +[0-9.]+[KMG]' && has "$S4" 'Datasety 1 para   lądowisk 1' && has "$S4" 'Historia utworzona 2026-09-08'; then
-    ok "relacje: panel -- statystyka z okna digestu (biegi, czas o/s/m, wolumen), liczba par i ladowisk, historia rekordu"
+if hasE "$S4" 'Biegi 7d +[0-9]+ ' && hasE "$S4" 'Czas o/ś/m [0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && has "$S4" 'Datasety   1 para   lądowisk 1' && has "$S4" 'Utworzona  2026-09-08' && has "$S4" 'Zasiew     2026-09-08' && has "$S4" 'Aktywowana 2026-09-08'; then
+    ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/zasiew/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
 fi
@@ -155,6 +155,14 @@ if has "$S4_80" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && has "$S4_
 else
     bad "relacje: pary przy 80" "$S4_80"
 fi
+# PODZIAL WYSOKOSCI (wlasciciel 2026-09-12: "co gdy datasetow bedzie 20?"):
+# gora tyle, ile trzeba liscie i panelowi, dol -- CALA reszta.
+S40="$(screen relacje down,down,down,down --width 160 --height 40)"
+if [ "$(printf '%s\n' "$S40" | grep -c '^║ .*║$')" -ge 10 ] && [ "$(printf '%s\n' "$S40" | grep -c '^║.*║│')" -le 24 ]; then
+    ok "relacje: przy 40 wierszach dol ma co najmniej 10 linii na pary, gora nie rosnie ponad potrzebe listy i panelu"
+else
+    bad "relacje: podzial wysokosci" "$S40"
+fi
 # TAB: kursor na pary; Enter na parze skacze do TEGO zadania na F2.
 TP="$(screen relacje down,tab)"
 if has "$TP" 'Enter = to zadanie na F2   Tab wraca do relacji'; then
@@ -177,12 +185,12 @@ fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
 SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 200 2>&1)"
-if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +active PAUZA +aktualne +-- pauza -- +║'; then
+if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +active PAUZA +aktualne +0B +-- pauza -- +║'; then
     ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
 fi
-if has "$SP" 'Uwaga    relacja wstrzymana (pause-client)'; then
+if has "$SP" 'Uwaga      relacja wstrzymana (pause-client)'; then
     ok "relacje: ...a panel mowi, ze starzenie kopii jest tu oczekiwane"
 else
     bad "relacje: uwaga o pauzie w panelu" "$SP"
@@ -211,7 +219,7 @@ fi
 
 # --- BLOK NIECZYTELNY JEST WIERSZEM ------------------------------------------
 U="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/unreadable.json" --monitors "$FIX/monitors.json" --screen relacje --width 200 2>&1)"
-if hasE "$U" 'konto backupacct +[?] +nieczytelny +nie odpowiada'; then
+if hasE "$U" 'konto backupacct +[?] +[?] +nieczytelny +nie odpowiada'; then
     ok "relacje: blok bez czytelnego configu jest WIERSZEM z liczba linii, ktore chodza"
 else
     bad "relacje: nieczytelny blok jako wiersz" "$U"

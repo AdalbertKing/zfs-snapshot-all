@@ -673,6 +673,43 @@ def ch_arrow(job):
     return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
 
 
+def rel_type(peer, dirs):
+    """backup (jedna strona), synchro (obie), lokalna, other -- z linii crona."""
+    dirs = set(dirs)
+    if "pull" in dirs and "push" in dirs:
+        return "synchro"
+    if "pull" in dirs or "push" in dirs:
+        return "backup"
+    if "local" in dirs:
+        return "lokalna"
+    return "backup" if peer and not dirs else "other"
+
+
+def rel_stats(data, jobs):
+    """Suma po zadaniach wysylki: biegi, bledy, czas o/s/m, wolumen (job-stats)."""
+    sends = [j for j in jobs if j.get("section_kind") == "dataset"]
+    out = {"runs": 0, "fails": 0, "last": -1, "avg": -1, "max": -1, "vol": None, "sends": len(sends)}
+    if data.failed("stats") or not sends:
+        return out
+    avg_w, seen = 0.0, set()
+    for j in sends:
+        srow, v = job_stats_for(data, j, job_cron_label(j))
+        if v is not None:
+            out["vol"] = (out["vol"] or 0) + v
+        if not srow or id(srow) in seen:
+            continue
+        seen.add(id(srow))
+        r = int(srow.get("runs") or 0)
+        out["runs"] += r
+        out["fails"] += int(srow.get("failures") or 0)
+        avg_w += float(srow.get("avg_s") or 0) * r
+        out["last"] = max(out["last"], int(srow.get("last_s") if srow.get("last_s") is not None else -1))
+        out["max"] = max(out["max"], int(srow.get("max_s") if srow.get("max_s") is not None else -1))
+    if out["runs"]:
+        out["avg"] = int(round(avg_w / out["runs"]))
+    return out
+
+
 def build_relations(data, now):
     """Wiersze ekranu glownego: RELACJA (para hostow), nie zadanie.
 
@@ -723,9 +760,13 @@ def build_relations(data, now):
         else:
             nxt = "?"
         host = (data.jobs or {}).get("host") or "?"
+        dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") == "dataset"]
+        st = rel_stats(data, my_jobs)
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
-            "dir": direction_of(host, rel.get("peer_host") or "", [x.get("direction", "") for x in my_jobs if x.get("section_kind") == "dataset"]),
+            "dir": direction_of(host, rel.get("peer_host") or "", dirs),
+            "typ": rel_type(rel.get("peer_host"), dirs), "stats": st,
+            "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
             "last": last, "last_txt": last_txt.strip(), "transfers": trs,
             "jobs": my_jobs, "next_epoch": nxt_epoch, "next": nxt,
@@ -743,9 +784,13 @@ def build_relations(data, now):
         seen.add(key)
         v, reason = verdict_for_job(j, monitors)
         nxt_epoch = cron_next(j.get("schedule", ""), now)
+        jobs_here = [x for x in jobs if x.get("scope") == j.get("scope")]
+        st = rel_stats(data, jobs_here)
         rows.append({
             "kind": "job", "name": j.get("scope", ""), "rel": None,
             "dir": direction_of((data.jobs or {}).get("host") or "?", j.get("peer") or "", [j.get("direction", "")]),
+            "typ": rel_type(j.get("peer"), [j.get("direction", "")]), "stats": st,
+            "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "state": "bez rekordu %s" % ch_arrow(j),
             "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0], "reasons": [reason] if reason else [],
             "monitors": [], "last": None, "last_txt": "--",
@@ -758,6 +803,7 @@ def build_relations(data, now):
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
             "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None, "dir": "?",
+            "typ": "?", "gb": "?", "stats": None,
             "state": "nieczytelny", "verdict": "UNKNOWN", "vword": "nie odpowiada",
             "reasons": [u.get("error", "")], "monitors": [], "last": None,
             "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"), "transfers": [],
@@ -1157,8 +1203,10 @@ def rel_pairs(row, data, now, ch):
 
 
 def rel_panel_pairs(row, data, now, ch):
-    """Prawy panel F3: wszystko o podswietlonej relacji POZA zrodlem i celem
-    (te sa na dole, w parach). Klucze krotkie, bo panel bywa waski (80 kolumn)."""
+    """Prawy panel F3 jako TABELA: jeden fakt w wierszu, klucz | wartosc.
+    Wlasciciel, 2026-09-12: "Popatrz na to jak czytajacy czlowiek. Kolumny i
+    wiersze" -- zlepione zdania w jednej wartosci sa nieczytelne. Zrodla i cel
+    sa na dole, w parach."""
     if row["kind"] != "relation":
         return rel_detail_pairs(row, data, now, ch)
     rel = row["rel"]
@@ -1167,102 +1215,6 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None):
         st += "   (peer: %s)" % rel["peer_pair_state"]
     pairs.append(("Stan", st))
-    peer = "%s   endpoint %s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?")
-    if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint"):
-        peer += "   w cronie: %s" % rel["installed_endpoint"]
-    pairs.append(("Peer", peer))
-    accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
-    pairs.append(("Kierunek", "%s   konto %s" % (row.get("dir") or "?", rel.get("local_user") or ", ".join(accts) or "?")))
-    prof = rel.get("profile") or "?"
-    if rel.get("source_profile"):
-        prof += u"   źródło: %s" % rel["source_profile"]
-    rec = rel.get("recursion") or ""
-    pairs.append(("Polityka", prof + ("   rekursja %s" % rec if rec else "")
-                  + ("   pasywna" if rel.get("passive") == "1" else "")
-                  + (u"   łącze %s" % rel["bandwidth"] if rel.get("bandwidth") else "")))
-    sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
-    prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
-    if sends:
-        scheds = sorted({j.get("schedule", "") for j in sends if j.get("schedule")})
-        fams = sorted({family_of(j) for j in sends if family_of(j)})
-        pairs.append((u"Wysyłka", "co: %s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
-    if prunes:
-        here = [j for j in prunes if j.get("direction") == "prune"]
-        there = [j for j in prunes if j.get("direction") != "prune"]
-        def ret_of(js):
-            return " ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x) or "?"
-        txt = "trzyma %s" % ret_of(here or prunes)
-        if any(j.get("gfs") for j in (here or prunes)):
-            txt += "   drabina GFS"
-        scheds = sorted({j.get("schedule", "") for j in (here or prunes) if j.get("schedule")})
-        txt += "   co: %s" % (", ".join(scheds) or "?")
-        if here and there:
-            tsch = sorted({j.get("schedule", "") for j in there if j.get("schedule")})
-            txt += u"   u źródła: %s co: %s" % (ret_of(there), ", ".join(tsch) or "?")
-        pairs.append((u"Porządki", txt))
-    last = row["last"]
-    if last:
-        w, note = transfer_word(last, now)
-        st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
-        mode = {"incremental": "przyrostowy", "full": u"pełny"}.get(last.get("mode", ""), last.get("mode", ""))
-        txt = "%s  %s" % (w, fmt_full(fin if fin else st_))
-        if fin and st_:
-            txt += "  %s" % fmt_dur(fin - st_)
-        txt += "  %s" % mode
-        if note:
-            txt += "  " + note
-        pairs.append(("Ostatni", txt))
-    else:
-        pairs.append(("Ostatni", u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"))
-    if row["next_epoch"]:
-        pairs.append((u"Następny", "%s  (wg crontaba)" % fmt_full(row["next_epoch"])))
-    else:
-        pairs.append((u"Następny", row["next"]))
-    mon = row["vword"]
-    if row["monitors"]:
-        m0 = row["monitors"][0]
-        mon += "   progi %s / %s" % (m0.get("warn") or "?", m0.get("crit") or "?")
-    if row["reasons"]:
-        mon += "   " + row["reasons"][0].splitlines()[0]
-    elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
-        mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
-    pairs.append(("Kopie", mon))
-    # STATYSTYKA Z DIGESTU: suma po zadaniach wysylki tej relacji (job-stats).
-    if data.failed("stats"):
-        pairs.append(("7 dni", u"? -- job-stats nie odpowiedział"))
-    elif sends:
-        runs = fails = 0
-        last_s, avg_w, mx, vol = -1, 0.0, -1, 0
-        seen = set()
-        for j in sends:
-            srow, v = job_stats_for(data, j, job_cron_label(j))
-            if v:
-                vol += v
-            if not srow or id(srow) in seen:
-                continue
-            seen.add(id(srow))
-            r = int(srow.get("runs") or 0)
-            runs += r
-            fails += int(srow.get("failures") or 0)
-            avg_w += float(srow.get("avg_s") or 0) * r
-            last_s = max(last_s, int(srow.get("last_s") if srow.get("last_s") is not None else -1))
-            mx = max(mx, int(srow.get("max_s") if srow.get("max_s") is not None else -1))
-        days = (data.stats or {}).get("window_days") or 7
-        if runs:
-            txt = u"biegi %d" % runs + (u" (błędy %d)" % fails if fails else "") + "   czas o/ś/m %s   %s" % (
-                times_cell(last_s, int(round(avg_w / runs)), mx), hbytes_short(vol))
-        else:
-            txt = u"brak biegów w dziennikach z tego okna"
-        pairs.append(("%d dni" % days, txt))
-    npairs, _how = rel_pairs(row, data, now, ch)
-    pairs.append(("Datasety", u"%s   lądowisk %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
-    hist = "  ".join(x for x in [
-        "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
-        "zasiew %s" % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
-        "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
-        u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""])
-    if hist:
-        pairs.append(("Historia", hist))
     warns = []
     if rel.get("endpoint_diverged"):
         warns.append(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)"
@@ -1276,10 +1228,84 @@ def rel_panel_pairs(row, data, now, ch):
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
             warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
-    if warns:
-        # OSTRZEZENIE TUZ POD STANEM: panel bywa niski (24 wiersze) i ucina
-        # koniec; uwaga nie ma prawa byc tym, co odpadlo.
-        pairs.insert(1, ("Uwaga", "  |  ".join(warns)))
+    for w_ in warns:
+        # OSTRZEZENIE TUZ POD STANEM: panel bywa niski i ucina koniec.
+        pairs.append(("Uwaga", w_))
+    pairs.append(("Typ", row.get("typ") or "?"))
+    pairs.append(("Kierunek", row.get("dir") or "?"))
+    pairs.append(("Peer", rel.get("peer_host") or "?"))
+    pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
+                  + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
+    accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
+    pairs.append(("Konto", rel.get("local_user") or ", ".join(accts) or "?"))
+    pairs.append(("Profil", (rel.get("profile") or "?") + ((u"   u źródła: %s" % rel["source_profile"]) if rel.get("source_profile") else "")))
+    if rel.get("recursion"):
+        pairs.append(("Rekursja", rel["recursion"]))
+    if rel.get("passive") == "1":
+        pairs.append(("Tryb", "pasywny"))
+    if rel.get("bandwidth"):
+        pairs.append((u"Łącze", rel["bandwidth"]))
+    sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
+    prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
+    if sends:
+        scheds = sorted({j.get("schedule", "") for j in sends if j.get("schedule")})
+        fams = sorted({family_of(j) for j in sends if family_of(j)})
+        pairs.append((u"Wysyłka", "%s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
+    if prunes:
+        here = [j for j in prunes if j.get("direction") == "prune"]
+        there = [j for j in prunes if j.get("direction") != "prune"]
+
+        def line_of(js):
+            ret = " ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x) or "?"
+            sch = sorted({j.get("schedule", "") for j in js if j.get("schedule")})
+            return "%s   trzyma %s%s" % (", ".join(sch) or "?", ret, "   drabina GFS" if any(j.get("gfs") for j in js) else "")
+        pairs.append((u"Porządki", line_of(here or prunes)))
+        if here and there:
+            pairs.append((u"U źródła", line_of(there)))
+    last = row["last"]
+    if last:
+        w, note = transfer_word(last, now)
+        st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
+        mode = {"incremental": "przyrostowy", "full": u"pełny"}.get(last.get("mode", ""), last.get("mode", ""))
+        txt = "%s   %s" % (w, fmt_full(fin if fin else st_))
+        if fin and st_:
+            txt += "   %s" % fmt_dur(fin - st_)
+        txt += "   %s" % mode
+        if note:
+            txt += "   " + note
+        pairs.append(("Ostatni", txt))
+    else:
+        pairs.append(("Ostatni", u"brak zapisu w historii (nie wiadomo, nie 'OK')"))
+    if row["next_epoch"]:
+        pairs.append((u"Następny", "%s   (wg crontaba)" % fmt_full(row["next_epoch"])))
+    else:
+        pairs.append((u"Następny", row["next"]))
+    mon = row["vword"]
+    if row["monitors"]:
+        m0 = row["monitors"][0]
+        mon += "   progi %s / %s" % (m0.get("warn") or "?", m0.get("crit") or "?")
+    if row["reasons"]:
+        mon += "   " + row["reasons"][0].splitlines()[0]
+    elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
+        mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
+    pairs.append(("Kopie", mon))
+    # STATYSTYKA Z OKNA DIGESTU (job-stats): trzy wiersze, nie jedno zdanie.
+    stt = row.get("stats") or {}
+    days = (data.stats or {}).get("window_days") or 7
+    if data.failed("stats"):
+        pairs.append(("Biegi %dd" % days, u"? -- job-stats nie odpowiedział"))
+    elif sends:
+        if stt.get("runs"):
+            pairs.append(("Biegi %dd" % days, "%d" % stt["runs"] + (u"   błędy %d" % stt["fails"] if stt["fails"] else "")))
+            pairs.append((u"Czas o/ś/m", times_cell(stt["last"], stt["avg"], stt["max"])))
+        else:
+            pairs.append(("Biegi %dd" % days, u"brak w dziennikach z tego okna"))
+        pairs.append(("Wolumen", row.get("gb") or "-"))
+    npairs, _how = rel_pairs(row, data, now, ch)
+    pairs.append(("Datasety", u"%s   lądowisk %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
+    for key, fld in (("Utworzona", "created_at"), ("Zasiew", "seed_completed_at"), ("Aktywowana", "activated_at"), (u"Usunięta", "removed_at")):
+        if rel.get(fld):
+            pairs.append((key, rel[fld]))
     return pairs
 
 
@@ -1313,30 +1339,44 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
             plines_of.append([one])
         else:
             plines_of.append([pr["src"], u"  %s %s" % (ch.right, pr["dst"])])
-    # PODZIAL: dol dostaje tyle, ile potrzebuja pary (nie wiecej niz polowa),
-    # gora -- reszte; lista, ktora sie nie miesci, przewija sie.
+    # PODZIAL (wlasciciel 2026-09-12: "co gdy datasetow bedzie dwadziescia?"):
+    # gora dostaje tyle, ile potrzebuje lista i panel szczegolow, dol -- CALA
+    # reszte ekranu. Na malym terminalu dol ma nie mniej niz 4 linie.
     avail = height - 2                      # pasek tytulu + listwa klawiszy
-    need = sum(len(x) for x in plines_of) + 2
-    bot_h = max(4, min(need, avail // 2))
-    top_h = avail - bot_h
-    lbw = max(48, int(width * 0.55))
+    lbw = max(48, int(width * 0.6))
     pw = width - lbw
+    panel_rows = rel_panel_pairs(rows[cursor], data, now, ch) if r is not None else []
+    panel_need = len(detail_kv(ch, panel_rows, pw - 4)) + 2
+    # Gdy par jest wiecej, niz zostaje miejsca, PARY WYGRYWAJA z panelem
+    # (panel ucina koniec, calosc jest w oknie Enter); lista nigdy nie traci.
+    need_pairs = sum(len(x) for x in plines_of) + 2
+    top_h = max(len(rows) + 4, 7, min(panel_need, avail - need_pairs))
+    top_h = min(top_h, avail - 4)
+    bot_h = avail - top_h
     inner = lbw - 4
     # Kolumny: Relacja, Kierunek, Stan zawsze; Kopie i Nastepny, gdy sie mieszcza.
     nw = max(8, min(24, max([len(r["name"]) for r in rows] + [8])))
     dw = max(8, min(24, max([len(r.get("dir", "")) for r in rows] + [8])))
     sw = max(7, min(20, max([len(r["state"]) for r in rows] + [7])))
+    tw = max(7, min(8, max([len(r_.get("typ", "")) for r_ in rows] + [7])))
     cols = [("Relacja", nw, "name"), ("Kierunek", dw, "dir"), ("Stan", sw, "state")]
     used = nw + dw + sw + 2
+    if inner - used >= tw + 1:
+        cols.insert(2, ("Typ", tw, "typ"))
+        used += tw + 1
     if inner - used >= 14:
         cols.append(("Kopie", 13, "vword"))
         used += 14
+    if inner - used >= 7:
+        cols.append(("GB", 6, "gb"))
+        used += 7
     if inner - used >= 9:
         cols.append((u"Następny", inner - used - 1, "next"))
         used = inner
     else:
         # Stan dostaje reszte, zeby wiersz byl pelny.
-        cols[2] = ("Stan", sw + (inner - used), "state")
+        t_, w_, k_ = cols[-1]
+        cols[-1] = (t_, w_ + (inner - used), k_)
     hdr = " ".join(fit(t, w) for t, w, _k in cols)
     body = [hdr, ch.dash * inner]
     if not rows:
@@ -1371,7 +1411,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     ptitle = ""
     if r is not None:
         ptitle = u"%s -- szczegóły" % r["name"]
-        pl = detail_kv(ch, rel_panel_pairs(r, data, now, ch), pw - 4)
+        pl = detail_kv(ch, panel_rows, pw - 4)
     pl = pl[:len(listbox) - 2]
     while len(pl) < len(listbox) - 2:
         pl.append("")
@@ -2711,7 +2751,7 @@ def curses_loop(ui):
     def paint(stdscr, scr, h, w):
         stdscr.erase()
         for y, line in enumerate(scr.lines[:h]):
-            line = fit(line, w - 1)
+            line = line[:w - 1]
             base = 0
             if y in scr.bars:
                 base = curses.color_pair(6) if curses.has_colors() else curses.A_REVERSE
