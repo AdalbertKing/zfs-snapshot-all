@@ -358,6 +358,7 @@ fi
 
 RUN_ROWS=""
 if [ -n "$CRON_LOGS" ]; then
+    # --- twin: run-rows (the SAME text lives in zfs-backup.sh cmd_job_stats; a test pins equality) ---
     RUN_ROWS=$(zcat -f $CRON_LOGS 2>/dev/null | awk -v dstart="$_DSTART" '
     function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
     /ZFS-JOB BEGIN/ || /ZFS-JOB END/ {
@@ -393,6 +394,7 @@ if [ -n "$CRON_LOGS" ]; then
     }
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0, lastdur[k]+0 }
     ' | sort)
+    # --- twin end: run-rows ---
 
     # PER-DATASET FIGURES, KEYED ON THE DATASET AND NOTHING ELSE.
     #
@@ -425,6 +427,7 @@ if [ -n "$CRON_LOGS" ]; then
     # secs() reads the whole line, not a field: the job markers are one ISO
     # field while the engine lines put the clock in a second field, and both put
     # the same digits at the same offsets of the LINE.
+    # --- twin: ds-rows (the SAME text lives in zfs-backup.sh cmd_job_stats; a test pins equality) ---
     DS_ROWS=$(zcat -f $CRON_LOGS 2>/dev/null | awk -v dstart="$_DSTART" '
     function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
     substr($0,1,10) < dstart { next }
@@ -442,6 +445,7 @@ if [ -n "$CRON_LOGS" ]; then
     }
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k], lastdur[k]+0 }
     ')
+    # --- twin end: ds-rows ---
 
     # THE WINDOW THE NUMBERS ACTUALLY COVER, measured rather than named.
     #

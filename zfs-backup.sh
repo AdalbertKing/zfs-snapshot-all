@@ -488,6 +488,16 @@ Inspection / teardown:
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
   zfs-backup.sh list-jobs [--json]
+  zfs-backup.sh job-stats --json [--days=N]
+                                    The daily mail's numbers as a contract: per cron
+                                    job (ZFS-JOB BEGIN/END) runs, failures, avg/max/
+                                    last duration, last rc and time; per target
+                                    dataset the engine's transfer times (only where
+                                    the cron line runs it with -v 3); per dataset and
+                                    family the volume (`written` of snapshots created
+                                    in the window). Same window (ZFS_DIGEST_DAYS,
+                                    default 7) and same logs (ZFS_CRON_LOGS) as
+                                    alert-digest.sh -- the awk is its twin, pinned.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
@@ -10987,6 +10997,172 @@ cmd_gui() {
 }
 
 # ------------------------------------------------------------------------------
+# job-stats -- the digest's numbers, as JSON (2026-09-11)
+# ------------------------------------------------------------------------------
+# Owner, for the task screen: "czasy jak w raporcie mailowym: ostatni, sredni,
+# maksymalny i ilosc GB" -- and, asked which window: "jak w digescie, bedzie
+# spojnie z tym co przychodzi na mailu". So this verb does not have an
+# opinion of its own: it is alert-digest.sh's arithmetic over alert-digest.sh's
+# inputs, exposed as a contract instead of a mail body.
+#
+#   per JOB (cron label, from ZFS-JOB BEGIN/END pairs): runs, failures, avg,
+#     max, total, last duration, last rc, last time -- the row of the mail;
+#   per TARGET DATASET (from the engine's EXECUTING TRANSFER / RECV CMD /
+#     Transfer completed lines, which exist only where the cron line runs the
+#     engine with -v 3): transfers, total, max, last;
+#   per TARGET DATASET, volume: `written` of every snapshot created in the
+#     window, per family -- the mail's "GB", computed the way it computes it.
+#
+# The two awk programs are TWINS of the digest's, byte for byte (markers in
+# both files, equality pinned by the jobstats section). The window is the
+# digest's: ZFS_DIGEST_DAYS (default 7) calendar days back from today, from
+# midnight. The logs are the digest's: ZFS_CRON_LOGS, else the same discovery.
+# Where the mail has nothing (no -v 3, no runs in the window) this has nothing
+# -- and says so with an empty list, never a zero dressed as a measurement.
+cmd_job_stats() {
+    local as_json=0 days="${ZFS_DIGEST_DAYS:-7}" a
+    for a in "$@"; do
+        case "$a" in
+            --json)   as_json=1 ;;
+            --days=*) days="${a#*=}" ;;
+            -*)       die "job-stats: unknown option '$a' (only --json and --days=N)" ;;
+            *)        die "job-stats: takes no positional arguments" ;;
+        esac
+    done
+    [ "$as_json" -eq 1 ] || die "job-stats: this reader speaks JSON only -- pass --json (the mail is alert-digest.sh's job)"
+    case "$days" in ''|*[!0-9]*|0) die "job-stats: --days takes a positive count" ;; esac
+    local dstart since_ep
+    dstart=$(date -d "-$((days - 1)) days" '+%Y-%m-%d' 2>/dev/null) || dstart=$(date '+%Y-%m-%d')
+    [ -n "$dstart" ] || dstart=$(date '+%Y-%m-%d')
+    since_ep=$(date -d "$dstart 00:00:00" +%s 2>/dev/null || echo 0)
+    local logs="${ZFS_CRON_LOGS:-}" _cl
+    if [ -z "$logs" ]; then
+        for _cl in /root/scripts/cron.log /home/*/cron.log; do
+            [ -r "$_cl" ] || continue
+            logs="$logs $_cl"
+        done
+    fi
+    local run_rows="" ds_rows=""
+    if [ -n "$logs" ]; then
+        # --- twin: run-rows (the SAME text lives in hostscripts/alert-digest.sh; a test pins equality) ---
+        run_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
+    function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
+    /ZFS-JOB BEGIN/ || /ZFS-JOB END/ {
+        day = substr($1,1,10)
+        if (day < dstart) next
+        lbl = ""
+        for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") $i }
+        if (lbl == "") next
+        if ($3 == "BEGIN") { bt[lbl] = secs($1); next }
+        rc = ($NF ~ /^rc=/) ? substr($NF,4) + 0 : 0
+        n[lbl]++
+        if (rc != 0) f[lbl]++
+        # awk variables are global, so d survives the previous END line. Without
+        # this reset a job whose BEGIN fell outside the window would inherit the
+        # duration of whatever ran before it -- a wrong number that looks right.
+        d = ""
+        if (lbl in bt) {
+            d = secs($1) - bt[lbl]; if (d < 0) d += 86400
+            tot[lbl] += d; c[lbl]++
+            if (d > mx[lbl]) mx[lbl] = d
+            delete bt[lbl]
+        }
+        # THE NEWEST run, compared -- not the last line read. The logs are fed
+        # live-file-first and rotated-after, so "last seen" is the END OF THE
+        # OLDER FILE. Rendered on pve0 that reported every job as last run on
+        # 08-31 while they had all run this morning.
+        # The duration of THAT run travels with it. The table used to show the
+        # sum over the window, which is not a quantity anyone reads -- 27 runs
+        # of a job add up to a number that says nothing about how long the job
+        # takes. Owner, 2026-09-02: "Naglowek czas laczny jest bez sensu."
+        t = day " " substr($1,12,5)
+        if (!(lbl in lastwhen) || t > lastwhen[lbl]) { lastwhen[lbl] = t; lastrc[lbl] = rc; lastdur[lbl] = (d == "" ? -1 : d) }
+    }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\t%s\t%d\t%d\t%d\n", k, n[k], f[k]+0, (c[k] ? tot[k]/c[k] : -1), mx[k]+0, lastwhen[k], lastrc[k], tot[k]+0, lastdur[k]+0 }
+        ' | sort)
+        # --- twin end: run-rows ---
+        # --- twin: ds-rows (the SAME text lives in hostscripts/alert-digest.sh; a test pins equality) ---
+        ds_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
+    function secs(t) { return substr(t,12,2)*3600 + substr(t,15,2)*60 + substr(t,18,2) }
+    substr($0,1,10) < dstart { next }
+    /EXECUTING TRANSFER:/ { t0 = secs($0); ds = ""; next }
+    /RECV CMD:/ { ds = $NF; next }
+    /Transfer completed successfully/ {
+        if (t0 > 0 && ds != "") {
+            d = secs($0) - t0; if (d < 0) d += 86400
+            n[ds]++; tot[ds] += d; if (d > mx[ds]) mx[ds] = d
+            # The newest transfer of THIS dataset, by wall clock, so the row can
+            # show what the last run cost rather than a sum nobody reads.
+            if ($0 > lastline[ds]) { lastline[ds] = $0; lastdur[ds] = d }
+        }
+        t0 = 0; ds = ""
+    }
+    END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k], lastdur[k]+0 }
+        ')
+        # --- twin end: ds-rows ---
+    fi
+    # Volume, the digest's way: `written` of every snapshot created since the
+    # window start, summed per dataset and per family (the snapshot name up to
+    # its timestamp), so a caller can pick the family its job stamps.
+    local vol_rows
+    vol_rows=$(zfs list -H -p -t snapshot -o name,written,creation 2>/dev/null | awk -F'\t' -v since="$since_ep" '
+        { p = index($1, "@"); if (p == 0) next; ds = substr($1, 1, p - 1); sn = substr($1, p + 1) }
+        $3 + 0 < since + 0 { next }
+        {
+            fam = sn; sub(/_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_.*$/, "", fam)
+            key = ds "\t" fam; b[key] += $2; tot[ds] += $2; n[ds]++
+        }
+        END {
+            for (k in b) { split(k, a, "\t"); printf "%s\t%s\t%.0f\n", a[1], a[2], b[k] }
+        }' | sort)
+    printf '{"window_days":%s' "$days"
+    jsonw_field since "$dstart"
+    printf ',"logs":['
+    local first=1
+    for _cl in $logs; do
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '"%s"' "$(json_escape "$_cl")"
+    done
+    printf '],"jobs":['
+    first=1
+    local _k _n _f _avg _mx _lw _lrc _tot _ldur
+    while IFS=$'\t' read -r _k _n _f _avg _mx _lw _lrc _tot _ldur; do
+        [ -n "$_k" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"label":"%s","runs":%s,"failures":%s,"avg_s":%s,"max_s":%s,"total_s":%s,"last_s":%s,"last_rc":%s,"last_at":"%s"}' \
+            "$(json_escape "$_k")" "${_n:-0}" "${_f:-0}" "${_avg:--1}" "${_mx:-0}" "${_tot:-0}" "${_ldur:--1}" "${_lrc:-0}" "$(json_escape "$_lw")"
+    done <<RUNS
+$run_rows
+RUNS
+    printf '],"datasets":['
+    first=1
+    local _ds _cnt _dtot _dmax _dlast
+    while IFS=$'\t' read -r _ds _cnt _dtot _dmax _dlast; do
+        [ -n "$_ds" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"target":"%s","transfers":%s,"total_s":%s,"max_s":%s,"last_s":%s}' \
+            "$(json_escape "$_ds")" "${_cnt:-0}" "${_dtot:-0}" "${_dmax:-0}" "${_dlast:-0}"
+    done <<DSR
+$ds_rows
+DSR
+    printf '],"volume":['
+    first=1
+    local _vds _vfam _vb
+    while IFS=$'\t' read -r _vds _vfam _vb; do
+        [ -n "$_vds" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"dataset":"%s","family":"%s","bytes":%s}' "$(json_escape "$_vds")" "$(json_escape "$_vfam")" "${_vb:-0}"
+    done <<VOL
+$vol_rows
+VOL
+    printf ']}\n'
+}
+
+# ------------------------------------------------------------------------------
 # show-scope -- WHAT IS ACTUALLY ON THE DISK, for the detail panel
 # ------------------------------------------------------------------------------
 # Screen 2 of the GUI. Screen 1 (`list-jobs`) says what this host is DECLARED to
@@ -14901,6 +15077,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
         show-scope)       shift; cmd_show_scope "$@" ;;
+        job-stats)        shift; cmd_job_stats "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

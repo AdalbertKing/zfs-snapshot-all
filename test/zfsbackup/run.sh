@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 . "$SCRIPT_DIR/../harness.sh"   # product_fn / product_range, from THIS checkout (section 96 repoints SCRIPT_DIR later; this runs first)
 ZFSBACKUP="${ZFSBACKUP:-$REPO/zfs-backup.sh}"
+PY_OR_PYTHON=""; for _c in python3 python; do "$_c" -c "import sys" >/dev/null 2>&1 && { PY_OR_PYTHON="$_c"; break; }; done
 [ -r "$ZFSBACKUP" ] || { echo "cannot find zfs-backup.sh at $ZFSBACKUP" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
@@ -64,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -12014,6 +12015,87 @@ else
     bad "gfsscope: a sibling's ladder does not excuse ours" "excused"
 fi
 fi   # --- koniec sekcji gfsshape ---
+if want jobstats; then
+# ============================================================================
+# jobstats: THE MAIL'S NUMBERS AS A CONTRACT (2026-09-11)
+# Owner: "czasy jak w raporcie mailowym" and "jak w digescie -- spojnie z tym
+# co przychodzi na mailu". So the test has two halves: the awk text is the
+# digest's, byte for byte (twins), and the JSON over a REAL production log
+# and a REAL snapshot table (pve2, captured 2026-09-11) says what the mail
+# would say. The captures are not hand-written: a hand-written log would agree
+# with the parser by definition.
+# ============================================================================
+JS="$WORK/jobstats"; rm -rf "$JS"; mkdir -p "$JS/bin"
+CAP="$REPO/test/realshape/captures"
+twin() {   # <file> <name> -> the awk text between the twin markers
+    awk -v n="$2" '$0 ~ ("--- twin: " n " ") { on = 1; next } $0 ~ ("--- twin end: " n " ") { on = 0 } on' "$1" \
+        | sed -e '1d' -e '$d' -e 's/^        //'
+}
+for tw in run-rows ds-rows; do
+    a=$(twin "$ZFSBACKUP" "$tw"); b=$(twin "$REPO/hostscripts/alert-digest.sh" "$tw")
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        ok "jobstats: the '$tw' awk is the digest's, byte for byte (twins pinned)"
+    else
+        bad "jobstats: '$tw' twin drifted" "$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | head -20)"
+    fi
+done
+# the zfs stub replays the captured table; the window is pinned by faking "today"
+# through the capture's own dates: the log spans 2026-09-09..11, so --days large
+# enough to cover it from the real today makes the window irrelevant to the
+# assertions below, which count what the capture holds.
+printf '#!/bin/sh\ncat "%s"\n' "$CAP/zfs-snapshots.pve2-written.txt" > "$JS/bin/zfs"; chmod +x "$JS/bin/zfs"
+js_run() { ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$CAP/cron-log.pve2-2days.txt" bash "$ZFSBACKUP" job-stats --json "$@" ) 2>"$JS/err"; }
+JSOUT=$(js_run --days=3650)
+if printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; then
+    ok "jobstats: the output is valid JSON over a real production log and snapshot table"
+else
+    bad "jobstats: valid JSON" "$JSOUT" "$(cat "$JS/err")"
+fi
+# the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
+# transfers does the log hold?
+want_runs=$(grep -c 'ZFS-JOB END pve2 hourly backup (nextcloud)' "$CAP/cron-log.pve2-2days.txt")
+got_runs=$(printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([j["runs"] for j in d["jobs"] if j["label"]=="hourly backup (nextcloud)"][0])' 2>/dev/null)
+if [ -n "$want_runs" ] && [ "$got_runs" = "$want_runs" ] && [ "$want_runs" -gt 0 ]; then
+    ok "jobstats: runs per job = the number of ZFS-JOB END lines for that label in the log ($want_runs)"
+else
+    bad "jobstats: runs per job" "want=$want_runs got=$got_runs"
+fi
+got=$(printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin)
+j=[j for j in d["jobs"] if j["label"]=="hourly backup (nextcloud)"][0]
+print(j["avg_s"]>=0 and j["max_s"]>=j["avg_s"] and j["last_s"]>=0 and j["last_rc"]==0 and j["last_at"].startswith("2026-09-1"), j["avg_s"], j["max_s"], j["last_s"], j["last_at"])' 2>/dev/null)
+case "$got" in True*) ok "jobstats: avg <= max, last duration and time present, last rc 0 -- $got" ;; *) bad "jobstats: durations" "$got" ;; esac
+want_tr=$(grep -c 'Transfer completed successfully' "$CAP/cron-log.pve2-2days.txt")
+got_tr=$(printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(sum(x["transfers"] for x in d["datasets"]))' 2>/dev/null)
+if [ "$got_tr" = "$want_tr" ] && [ "$want_tr" -gt 0 ]; then
+    ok "jobstats: transfers per target dataset sum to the log's 'Transfer completed successfully' lines ($want_tr)"
+else
+    bad "jobstats: transfers" "want=$want_tr got=$got_tr"
+fi
+got_vol=$(printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin)
+v=[x for x in d["volume"] if x["dataset"]=="hdd/backups/pve2/hdd/vm-disks/subvol-103-disk-0" and x["family"]=="automated_weekly"]
+print(v[0]["bytes"] if v else "none")' 2>/dev/null)
+want_vol=$(awk -F'\t' '$1 ~ /^hdd\/backups\/pve2\/hdd\/vm-disks\/subvol-103-disk-0@automated_weekly_/ { s += $2 } END { printf "%.0f", s }' "$CAP/zfs-snapshots.pve2-written.txt")
+if [ "$got_vol" = "$want_vol" ] && [ "$want_vol" -gt 0 ]; then
+    ok "jobstats: volume per dataset+family = sum of 'written' over the captured table ($want_vol B for subvol-103 weekly)"
+else
+    bad "jobstats: volume" "want=$want_vol got=$got_vol"
+fi
+# THE WINDOW: with --days=1 (today only) the capture from two days ago yields no runs.
+JS1=$(js_run --days=1)
+n1=$(printf '%s' "$JS1" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(len(d["jobs"]), d["window_days"])' 2>/dev/null)
+case "$n1" in "0 1") ok "jobstats: the window is the digest's -- --days=1 sees no run from a capture two days old (empty list, not zeros)" ;; *) bad "jobstats: window" "$n1" ;; esac
+# NO LOGS AT ALL: still valid JSON, empty lists, and the logs field says which files were read (none).
+JSE=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/nie-ma.log" bash "$ZFSBACKUP" job-stats --json ) 2>/dev/null)
+ne=$(printf '%s' "$JSE" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(len(d["jobs"]), len(d["datasets"]))' 2>/dev/null)
+case "$ne" in "0 0") ok "jobstats: an unreadable log gives empty lists, not a failure -- the mail would be empty too" ;; *) bad "jobstats: no logs" "$JSE" ;; esac
+if ! bash "$ZFSBACKUP" job-stats >/dev/null 2>"$JS/err" && grep -q 'JSON only' "$JS/err"; then
+    ok "jobstats: without --json the verb refuses and points at the mail"
+else
+    bad "jobstats: refuses without --json" "$(cat "$JS/err")"
+fi
+fi   # --- koniec sekcji jobstats ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
