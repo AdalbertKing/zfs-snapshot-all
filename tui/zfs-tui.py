@@ -2781,20 +2781,30 @@ def curses_loop(ui):
                "OP": "F1", "OQ": "F2", "OR": "F3", "OS": "F4", "[11~": "F1", "[12~": "F2", "[13~": "F3", "[14~": "F4",
                "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[20~": "F9", "[21~": "F10", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
 
+        def wch():
+            """(kod, czy_znak): get_wch odroznia znak od klawisza; -1 = nic."""
+            try:
+                k = stdscr.get_wch()
+            except curses.error:
+                return -1, False
+            if isinstance(k, str):
+                return ord(k), True
+            return k, False
+
         def read_key():
-            k = stdscr.getch()
+            k, is_char = wch()
             if k != 27:
-                return k, None
+                return k, None, is_char
             stdscr.nodelay(True)
             seq = ""
             try:
                 deadline = time.time() + 0.15
                 while time.time() < deadline and len(seq) < 6:
-                    c = stdscr.getch()
+                    c, c_char = wch()
                     if c == -1:
                         time.sleep(0.01)
                         continue
-                    if c > 255:
+                    if not c_char or c > 255:
                         break
                     seq += chr(c)
                     if seq in SEQ or (seq.startswith("[") and seq.endswith("~")) or (seq.startswith("O") and len(seq) == 2):
@@ -2802,9 +2812,9 @@ def curses_loop(ui):
             finally:
                 stdscr.nodelay(False)
             if not seq:
-                return 27, None
+                return 27, None, False
             if seq in SEQ:
-                return -2, SEQ[seq]
+                return -2, SEQ[seq], False
             # Nie nasza sekwencja (np. ESC, a chwile pozniej 'q'): oddaj bajty
             # z powrotem, w kolejnosci, i zglos goly Esc. Bez tego 'q' po Esc
             # gineło i TUI wisiało -- zmierzone na pve10 2026-09-09 (jazda 6).
@@ -2813,7 +2823,7 @@ def curses_loop(ui):
                     curses.ungetch(ord(ch_))
                 except curses.error:
                     pass
-            return 27, None
+            return 27, None, False
         while True:
             h, w = stdscr.getmaxyx()
             if h < 10 or w < 40:
@@ -2831,7 +2841,7 @@ def curses_loop(ui):
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
             else:
                 stdscr.timeout(2000 if ui.screen == "transfery" and not ui.window else -1)
-            k, seqname = read_key()
+            k, seqname, is_char = read_key()
             if k == -1:
                 if not ui.window:
                     ui.refresh("progress")
@@ -2844,7 +2854,7 @@ def curses_loop(ui):
             if ui.window and ui.window[0] == "form" and k == 32:
                 ui.key("space", h)
                 continue
-            if ui.window and ui.window[0] in ("prompt", "form") and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
+            if ui.window and ui.window[0] in ("prompt", "form") and is_char and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
@@ -2854,7 +2864,7 @@ def curses_loop(ui):
             # LINIA POLECEN (bez okna na wierzchu): KAZDY drukowalny znak jest
             # tekstem -- litery-skroty (q r j k h ? cyfry) dzialaja tylko w
             # oknach. Backspace/Enter/Esc/strzalki rozstrzyga UI.key po stanie linii.
-            if not ui.window and 32 <= k < 0x110000:
+            if not ui.window and is_char and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
