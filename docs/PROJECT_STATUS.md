@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 738f0a18f42d3c59 -->
+<!-- status-covers-digest: 3cd86dfc556c1cce -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,40 +29,59 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
-- **Kreator relacji w siedmiu krokach, po ludzku (2026-09-14, krok (c) kreatora).**
-  Właściciel: *„Kreator relacji jest kompletnie nieczytelny dla człowieka. Ja
-  nic z tego nie rozumiem"* i *„nigdzie nie widzę możliwości ustanowienia
-  innego konta niż root przy tworzeniu relacji. A powinno być"*. Forma
-  jednokomendowa (dziewięć pól argumentów `add-client` naraz) zastąpiona
-  krokami — jedno pytanie na raz, domyślna odpowiedź, podgląd skutku,
-  odpowiedzi z poprzednich kroków w nagłówku, Esc = krok wstecz. Tytuł mówi,
-  co kreator robi: **pobranie danych z innego hosta** (to jest `add-client`).
-  1. *Skąd kopiujemy?* host i dataset (spacja albo puste + Enter = lista
-     datasetów peera).
-  2. *Dokąd trafi kopia?* lokalny dataset-rodzic (lista tego hosta) i liczone
-     na bieżąco lądowisko `<cel>/<peer>/<ścieżka>` z zastrzeżeniem, że plan
-     czasownika to potwierdzi.
-  3. *Jak często i ile trzymać?* szablon, a pod nim słowami, co to znaczy;
-     spacja = lista słowami, Ins = nowy szablon (krok b).
-  4. *Jak nazwać relację?* propozycja z ostatniego członu datasetu.
-  5. *Kto ma uruchamiać kopie na tym hoście?* **radio: root / zfsbackup
-     (domyślnie) / inne konto** — konto delegowane jako wybór, nie puste pole;
-     konto peera `zfsbackup-<host>` wypisane jako fakt (tworzy je JOIN, nie
-     ma czym zmienić). root z radia = bez `--local-user` (tak CLI rozumie root).
-  6. *Zaawansowane (zwykle bez zmian):* port, retencja u źródła, nadanie
-     uprawnień zdalnie, parowanie ręczne.
-  7. *Podsumowanie:* **zdanie** — *„Co godzinę (:01) pve10 pobierze migawki
-     hdd/lab/vm-101 z hosta 192.168.28.99 do hdd/backups/192.168.28.99/hdd/lab/vm-101,
-     trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina GFS, jedna rodzina).
-     Bez zamrażania. Monitor: 90m / 150m. Relacja: vm-101. Zadania na pve10
-     jako zfsbackup. Na peerze konto zfsbackup-pve10 (tworzy JOIN)."* — i
-     dokładna komenda; `[ Pokaż plan ]` (czasownik bez `--install`, read-only,
-     w oknie) i `[ Wykonaj ]` (plan + potwierdzenie `t`, jak dotąd).
-  Klawisze bez nowego rodzaju wejścia (spacja w formularzu już była), więc
-  bez jazdy pty. Suita `test/tui` 148/0 (sekcja kreatora przepisana na kroki:
-  każdy krok, listy, radio, „inne" bez nazwy, root bez `--local-user`, pełne
-  argv pod flagami, plan, Esc wstecz z zachowaniem odpowiedzi, szerokości
-  80/120/200). Wsadowa droga (`--source=… --target=…` z palca) bez zmian.
+- **Kreator relacji na listach, po makiecie właściciela; `check-source` i `prepare-source` (2026-09-14, wieczór).**
+  Właściciel o wersji z polami: *„ten ekran jest kompletnie nieczytelny już
+  w kroku pierwszym. Te spacje, entery. Nie. Kroki są dobre, ale gałkologia
+  wewnątrz jest do bani."* Makieta (artefakt HTML z prawdziwymi danymi labu)
+  przyjęta; kreator przebudowany dokładnie wg niej. **Jedna reguła klawiszy na
+  wszystkie kroki:** strzałki wybierają, Enter = wybierz / zaznacz / dalej,
+  Esc = wstecz, pisanie = filtr listy. Żadnych pól z ukrytym znaczeniem spacji.
+  - **Relacja = para hostów** (ustalone z właścicielem po sprawdzeniu kodu:
+    `--name` istnieje „bo więcej niż jedna relacja może wskazywać ten sam host",
+    ale to furtka, nie schemat; cztery relacje pve10↔pve9 w labie to moja robota
+    z kampanii, nie wzór). **Nowa relacja = host bez relacji**; hosty z relacją
+    są na liście, ale Enter odmawia z powodem (kolejne datasety = modyfikacja
+    relacji, której CLI nie umie). Wiele datasetów w jednej relacji idzie jako
+    `--source=HOST:a,b,c` (lista po przecinku — forma jednokomendowa ją przyjmuje,
+    plan RUX ją pokazuje).
+  - **Krok 1: host → diagnoza → datasety.** Po hoście (z listy albo wpisany
+    adres) kreator pokazuje trzy fakty z **`check-source HOST --json`** (nowy
+    czytelnik): SSH jako root, ZFS z pulami, pakiet (ścieżka, rewizja); host,
+    który odmawia, to fakt w JSON-ie, nie błąd. Brak SSH: kreator wypisuje
+    `ssh-copy-id root@HOST` do wykonania z linii poleceń (klucz roota to decyzja
+    operatora) i tylko „Wróć". Brak pakietu: jedna akcja „Zainstaluj pakiet" =
+    **`prepare-source HOST --yes`** (nowy czasownik): `git clone` origin tego
+    checkoutu do `/root/scripts/zfs-snapshot-all` jako root przez SSH; gdy host
+    nie widzi origin, bundle checkoutu idzie przez scp i klon jest z niego
+    (origin przepięty na URL). Nic więcej: bez crona, bez relacji, bez kluczy —
+    JOIN robi to przy `add-client`. Plan bez `--yes`. Datasety peera jako
+    **drzewo** (wcięcie, ostatni człon, zajęte, typ, liczba podrzędnych):
+    Enter zaznacza `✓`, podrzędne zaznaczonego rodzica są `· (w rodzicu)`,
+    linia „Podrzędne datasety zaznaczonego rodzica" przełącza flat/atomic
+    (`--recursive=`), pisanie filtruje, „Dalej z zaznaczonymi (n)" na górze.
+  - **Kroki 2–7:** lokalne datasety z lądowiskiem każdego zaznaczonego dla
+    *podświetlonego* celu nad listą; szablony słowami (Ins = nowy szablon,
+    po zapisie nowy jest na górze listy jako wybieralny, choć `list-profiles`
+    go jeszcze nie zna); nazwa z nazwy hosta (relacja jest hosta); konto jako
+    trzy linie (root / zfsbackup domyślnie / inne); zaawansowane jako lista
+    ustawień z wartościami i „Bez zmian, dalej" na górze (port, retencja u
+    źródła z listy, uprawnienia zdalnie, parowanie, rekurencja); podsumowanie
+    zdaniem z liczbą i listą datasetów + komenda; „Pokaż plan" i „Wykonaj".
+  - Zmierzone na żywo z pve10: `check-source` pve9b / pve9 / host bez trasy;
+    `prepare-source --yes` do alternatywnego katalogu na pve9b: pierwsza próba
+    padła na **pełnym dysku pve9b** (`git clone` „invalid index-pack output",
+    scp „Failure") — czasownik nic nie zostawił; po zwolnieniu miejsca
+    (apt clean, journald 40M, osierocone dzienniki; pve9b miał też setki
+    `tmp_pack_*` z nieudanych cogodzinnych pulli) klon i weryfikacja OK, katalog
+    usunięty. Kreator na żywo: diagnoza pve9b i prawdziwy plan RUX dla
+    `--source=192.168.28.98:hdd/data,hdd/home` (rc=0, nic nie utworzone).
+  - Suity: `zfsbackup` sekcja `preparesource` 8/0 (stuby zapisują argv i
+    „pamiętają" instalację, więc weryfikacja po klonie widzi jego skutek;
+    ścieżka bundla), `test/tui` 147/0 (sekcja kreatora przepisana na listy).
+    Fikstury: `check-source{,-pkg}.json` i `list-datasets-pve9b.json` to dosłowne
+    wyjścia z pve10 (ten bez pakietu zebrany z `SOURCE_REPO_DIR` na nieistniejący
+    katalog, bo każdy host labu ma już pakiet). Bez nowego rodzaju wejścia
+    terminala, więc bez jazdy pty.
 
 - **Kreator: szablony słowami i nowy szablon z pól bazy (2026-09-14, krok (b) kreatora).**
   Właściciel: *„powinien móc wskazać profil z templates, albo stworzyć całkiem
