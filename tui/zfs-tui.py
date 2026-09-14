@@ -2291,8 +2291,8 @@ class UI(object):
     # pelna komenda z --install --yes do potwierdzenia. Kreator nie liczy nic
     # sam: co odmawia czasownik, odmawia tu tak samo, tymi samymi slowami.
     WIZARD_FIELDS = [
-        ("source", u"Źródło HOST:DATASET", "pickds", u"wpisz HOST i Enter = lista datasetów peera (ssh kluczem roota); albo wpisz HOST:DATASET"),
-        ("target", u"Cel (dataset tutaj)", "pickds", u"Enter = lista datasetów tego hosta; pod celem ląduje <peer>/<ścieżka źródła>"),
+        ("source", u"Źródło HOST:DATASET", "pickds", u"sam HOST + Enter = lista jego datasetów (ssh kluczem roota); HOST:DATASET + Enter = dalej"),
+        ("target", u"Cel (dataset tutaj)", "pickds", u"puste + Enter = lista datasetów tego hosta; wpisane + Enter = dalej. Pod celem ląduje <peer>/<ścieżka>"),
         ("profile", u"Profil (szablon)", "pick", u"Enter otwiera listę z list-profiles"),
         ("name", u"Nazwa relacji", "text", u"puste = z nazwy hosta; potrzebna, gdy ten host ma już relację"),
         ("port", u"Port SSH", "text", u"puste = 22"),
@@ -2516,7 +2516,14 @@ class UI(object):
                             cur = i
                     self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window})
                 elif kind == "pickds":
-                    self.dataset_picker(obj, key, label)
+                    # Wpisana pelna wartosc + Enter = dalej (droga wsadowa);
+                    # sam HOST (zrodlo) albo puste pole (cel) + Enter = lista.
+                    v = obj["vals"][key]
+                    typed = (":" in v and v.split(":", 1)[1].strip()) if key == "source" else v.strip()
+                    if typed:
+                        obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
+                    else:
+                        self.dataset_picker(obj, key, label)
                 elif kind == "toggle":
                     obj["vals"][key] = not obj["vals"][key]
                 else:

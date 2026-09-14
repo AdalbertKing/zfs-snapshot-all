@@ -509,6 +509,55 @@ if [ ! -s "$XL" ]; then
 else
     bad "kreator: nic przed t" "$(cat "$XL")"
 fi
+# LISTY ZAMIAST PISANIA (wlasciciel 2026-09-14): Enter na Zrodle = datasety
+# peera (list-datasets HOST --json, fikstura = doslowne wyjscie z pve10 pytajacego
+# pve9), Enter na Celu = datasety tego hosta. Pole dalej przyjmuje pisanie.
+wizd() {   # <keys> -> ekran z fiksturami list-datasets
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-peer.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
+}
+W="$(wizd ins,enter)"
+if has "$W" '! wpisz najpierw HOST' && has "$W" 'Nowa relacja'; then
+    ok "kreator: Enter na pustym Zrodle prosi o HOST, nie otwiera pustej listy"
+else
+    bad "kreator: puste zrodlo" "$W"
+fi
+W="$(wizd ins,text:192.168.28.99,enter)"
+if has "$W" '╔═ Datasety na 192.168.28.99 (list-datasets 192.168.28.99 --json, ssh jako root' && hasE "$W" '^║ > hdd +filesystem +[0-9,.]+ [KMGT]?i?B +[0-9,.]+ [KMGT]?i?B' && hasE "$W" '^║   hdd/lab/vm-101 +filesystem'; then
+    ok "kreator: Enter na Zrodle z HOST-em otwiera liste datasetow peera (nazwa, typ, zajete, wolne), tytul nazywa czasownik"
+else
+    bad "kreator: lista peera" "$W"
+fi
+W="$(wizd ins,text:192.168.28.99,enter,end,up,enter)"
+if has "$W" 'Źródło HOST:DATASET    192.168.28.99:hdd/lab/vm-101/disk-1_' && ! has "$W" 'Datasety na'; then
+    ok "kreator: wybor z listy wraca do pola jako HOST:DATASET (End, w gore = przedostatni)"
+else
+    bad "kreator: wybor zrodla" "$W"
+fi
+W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,enter)"
+if has "$W" '╔═ Datasety na tym hoście (list-datasets --json)' && hasE "$W" '^║ > hdd +filesystem' && has "$W" 'hdd/backups/192.168.28.99/hdd/lab/ct-201'; then
+    ok "kreator: Enter na Celu otwiera liste datasetow TEGO hosta"
+else
+    bad "kreator: lista lokalna" "$W"
+fi
+W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,enter,down,enter)"
+if has "$W" 'Cel (dataset tutaj)    hdd/backups_'; then
+    ok "kreator: ...i wybor wraca do pola Cel"
+else
+    bad "kreator: wybor celu" "$W"
+fi
+W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,text:hdd/backups,enter,enter)"
+if has "$W" 'Szablon dla pola: Profil' && [ ! -s "$XL" ]; then
+    ok "kreator: pisanie w polu Cel dalej dziala (droga wsadowa), Enter idzie dalej; nic nie wykonano"
+else
+    bad "kreator: pisanie w polu" "$W" "$(cat "$XL")"
+fi
+W="$(wiz ins,text:192.168.28.99,enter)"
+if has "$W" '! lista niedostępna -- wpisz ścieżkę ręcznie' && has "$W" 'Nowa relacja'; then
+    ok "kreator: gdy list-datasets nie odpowiada (tu: offline), formularz mowi to zdaniem i pole zostaje do pisania"
+else
+    bad "kreator: lista niedostepna" "$W"
+fi
 W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,end,enter,t)"
 if grep -q -- "--source=192.168.28.99:hdd/lab/x --target=hdd/backups --profile=default --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja'; then
     ok "kreator: 't' wykonuje DOKLADNIE pokazana forme jednokomendowa z --install --yes i otwiera okno wyjscia"
