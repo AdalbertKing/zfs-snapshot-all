@@ -1,0 +1,1 @@
+{"host":"192.168.28.98","port":22,"ssh":{"ok":true,"error":""},"hostname":"pve9b","zfs":{"ok":true,"pools":[{"name":"hdd","size":"39.5G","free":"39.5G"}]},"package":{"ok":true,"path":"/root/scripts/zfs-snapshot-all","rev":"b9e9cc4"},"git":true,"repo_dir":"/root/scripts/zfs-snapshot-all"}

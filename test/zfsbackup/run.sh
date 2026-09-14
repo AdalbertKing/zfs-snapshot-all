@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -12157,6 +12157,87 @@ else
     bad "listdatasets: host validation" "$(cat "$LD/err")" "$(cat "$LD/ssh.argv" 2>/dev/null)"
 fi
 fi   # --- koniec sekcji listdatasets ---
+
+if want preparesource; then
+# ============================================================================
+# preparesource: A FRESH SOURCE WITHOUT THE PACKAGE (2026-09-14)
+# Owner: "zakladamy, ze nowe zrodlo nie ma nawet pakietu zainstalowanego".
+# check-source = three facts as JSON, never a fatal for a host that refuses;
+# prepare-source = plan by default, --yes clones as root over ssh, and when the
+# clone cannot reach origin a bundle of THIS checkout goes over scp. The stubs
+# record argv and remember "installed" per host, so the verify probe after the
+# clone sees what the clone did.
+# ============================================================================
+PS="$WORK/preparesource"; rm -rf "$PS"; mkdir -p "$PS/bin"
+cat > "$PS/bin/ssh" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${PS_ARGS:?}/ssh.argv"
+host=""; for a in "$@"; do case "$a" in root@*) host="${a#root@}";; esac; done
+cmd="${@: -1}"
+case "$host" in dead) echo "ssh: connect to host dead port 22: No route to host" >&2; exit 255;; esac
+case "$cmd" in
+    *PROBE=done*)
+        echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "GIT=yes"; echo "POOL=hdd,39.5G,38.3G"
+        if [ "$host" = withpkg ] || [ -e "$PS_ARGS/installed-$host" ]; then echo "PKG=/root/scripts/zfs-snapshot-all"; echo "REV=abc1234"; fi
+        echo "PROBE=done";;
+    *"git clone -q -b"*) touch "$PS_ARGS/installed-$host";;
+    *"git clone -q "*) case "$host" in nogh) echo "fatal: unable to access: could not resolve host" >&2; exit 128;; esac; touch "$PS_ARGS/installed-$host";;
+esac
+EOF
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "${PS_ARGS:?}/scp.argv"\n' > "$PS/bin/scp"
+chmod +x "$PS/bin/ssh" "$PS/bin/scp"
+ps_run() { ( PATH="$PS/bin:$PATH" PS_ARGS="$PS" bash "$ZFSBACKUP" "$@" ) 2>"$PS/err"; }
+got=$(ps_run check-source withpkg --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], d["hostname"], d["zfs"]["ok"], d["zfs"]["pools"][0]["name"], d["package"]["ok"], d["package"]["rev"], d["git"])' 2>/dev/null)
+if [ "$got" = "True withpkg True hdd True abc1234 True" ]; then
+    ok "preparesource: check-source on a host with the package -- ssh ok, hostname, pool, package path+rev, git, as JSON"
+else
+    bad "preparesource: check-source withpkg" "$got" "$(cat "$PS/err")"
+fi
+got=$(ps_run check-source fresh:2222 --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["port"], d["ssh"]["ok"], d["package"]["ok"], d["repo_dir"])' 2>/dev/null)
+if [ "$got" = "2222 True False /root/scripts/zfs-snapshot-all" ] && grep -q -- '-p 2222 root@fresh' "$PS/ssh.argv"; then
+    ok "preparesource: check-source on a fresh host -- package false, port from HOST:PORT reaches ssh"
+else
+    bad "preparesource: check-source fresh" "$got" "$(cat "$PS/ssh.argv")"
+fi
+got=$(ps_run check-source dead --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], d["ssh"]["error"], d["zfs"]["ok"], d["package"]["ok"])' 2>/dev/null)
+rc=$?
+if [ "$got" = "False ssh: connect to host dead port 22: No route to host False False" ]; then
+    ok "preparesource: check-source on a host that refuses is a FACT (ssh.ok=false with the reason), not a fatal"
+else
+    bad "preparesource: check-source dead" "$got" "$(cat "$PS/err")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv"
+if ps_run prepare-source fresh >"$PS/out" && grep -q 'PLAN (prepare-source fresh)' "$PS/out" && grep -q 'plan only. Re-run with --yes' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then
+    ok "preparesource: prepare-source without --yes prints the plan and clones nothing"
+else
+    bad "preparesource: plan" "$(cat "$PS/out")" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-*
+if ps_run prepare-source fresh --yes >"$PS/out" && grep -q "git clone -q '[^']*' '/root/scripts/zfs-snapshot-all'" "$PS/ssh.argv" && grep -q '>>> verified: /root/scripts/zfs-snapshot-all (rev abc1234) on fresh' "$PS/out" && [ ! -e "$PS/scp.argv" ]; then
+    ok "preparesource: --yes clones origin into the package path as root and verifies with a second probe; no scp when the clone works"
+else
+    bad "preparesource: --yes clone" "$(cat "$PS/out")" "$(cat "$PS/ssh.argv")" "$(cat "$PS/err")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-*
+if ps_run prepare-source nogh --yes >"$PS/out" && grep -q 'sending a bundle of this checkout instead' "$PS/err" && grep -q 'root@nogh:/tmp/zfs-snapshot-all.bundle' "$PS/scp.argv" \
+        && grep -q "git clone -q -b '[^']*' /tmp/zfs-snapshot-all.bundle '/root/scripts/zfs-snapshot-all' && git -C '/root/scripts/zfs-snapshot-all' remote set-url origin" "$PS/ssh.argv" && grep -q '>>> cloned from a bundle' "$PS/out"; then
+    ok "preparesource: when the clone cannot reach origin, a bundle of this checkout goes over scp, the clone is made from it and origin is re-pointed"
+else
+    bad "preparesource: bundle fallback" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/scp.argv" 2>/dev/null)" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv" "$PS/scp.argv"
+if ps_run prepare-source withpkg --yes >"$PS/out" && grep -q 'already there: /root/scripts/zfs-snapshot-all (rev abc1234). Nothing to do.' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then
+    ok "preparesource: a host that already has the package gets 'nothing to do', no clone"
+else
+    bad "preparesource: already there" "$(cat "$PS/out")" "$(cat "$PS/ssh.argv")"
+fi
+rm -f "$PS/ssh.argv"
+if ! ps_run prepare-source dead --yes >"$PS/out" && grep -q 'no root SSH channel to dead' "$PS/err" && grep -q 'ssh-copy-id root@dead' "$PS/err" && ! grep -q 'git clone' "$PS/ssh.argv"; then
+    ok "preparesource: no ssh channel = refusal naming ssh-copy-id as the operator's step; nothing attempted"
+else
+    bad "preparesource: dead" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv" 2>/dev/null)"
+fi
+fi   # --- koniec sekcji preparesource ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
