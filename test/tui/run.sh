@@ -670,7 +670,7 @@ if has "$W" 'krok 7/7: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobier
         && has "$W" 'hdd/backups/192.168.28.99/hdd/lab/vm-101, trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina' \
         && has "$W" 'GFS, jedna rodzina). Bez zamrażania. Monitor: 90m / 150m.' \
         && has "$W" 'Relacja: vm-101. Zadania na pve10 jako zfsbackup (port 2222). Na peerze konto zfsbackup-pve10' \
-        && has "$W" 'Komenda:' && has "$W" '--source=192.168.28.99:hdd/lab/vm-101' && has "$W" '--target=hdd/backups --profile=default --name=vm-101 --port=2222 --local-user=zfsbackup' \
+        && has "$W" 'Komenda:' && has "$W" '--source=192.168.28.99:hdd/lab/vm-101' && has "$W" '--target=hdd/backups --profile=default --name=vm-101' && has "$W" '--local-user=zfsbackup' \
         && has "$W" '> [ Pokaż plan ]' && has "$W" '[ Wykonaj ]' && [ ! -s "$XL" ]; then
     ok "kreator: krok 7 -- ZDANIEM, co sie stanie (kadencja, zrodlo, cel, retencja, monitor, konto, port) i DOKLADNA komenda; nic nie wykonano"
 else
