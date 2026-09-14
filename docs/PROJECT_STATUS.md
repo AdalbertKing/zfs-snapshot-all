@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3eeae75722213008 -->
+<!-- status-covers-digest: fd6deda37e77ba8d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,6 +29,34 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
+- **Kreator: szablony słowami i nowy szablon z pól bazy (2026-09-14, krok (b) kreatora).**
+  Właściciel: *„powinien móc wskazać profil z templates, albo stworzyć całkiem
+  nowy używając checkboxów, radiobuttons i list"*. **Lista szablonów mówi, co
+  szablon robi**, nie jak się nazywa plik: harmonogram słowami (`co godzinę
+  (:01)`, `co dobę 01:11`, `co tydzień nd 02:21`, `co miesiąc 1. dnia 03:31`),
+  co trzyma (`24 godz., 7 dni, 4 tyg., 12 mies.`), mechanizm (N najnowszych /
+  drabina GFS / wg wieku); przy podświetlonym kształt, które szczeble zamraża,
+  progi monitora, opis. Wszystko policzone z `list-profiles --json`, zero
+  własnej polityki. **Ins na liście = nowy szablon** na bazie podświetlonego:
+  formularz z pól bazy — nazwa, opis, baza (lista), a per szczebel harmonogram
+  (cron + słowa obok), licznik (tylko cyfry), zamrażanie (przełącznik), progi
+  monitora. Zapis przez `save-profile` (ten sam czasownik, co z palca, z jego
+  dwiema bramkami), jeden `--tier` na wywołanie: pierwsze tworzy kopię z opisem
+  i pierwszym zmienionym szczeblem, każdy kolejny zmieniony szczebel to
+  `--from=NOWY --as=NOWY --force --tier=…`; komendy i zdanie, co powstanie,
+  widać przed `t`. Po zapisie kreator relacji ma nowy szablon w polu Profil.
+  Formularz przewija się za kursorem. **Granica:** mechanizm i kształt idą z
+  bazy — `save-profile` zmienia pola szczebli, nie składa profilu z niczego;
+  formularz to mówi. Na jednej rodzinie (drabina) podpowiedź ostrzega, że
+  zamrażanie dotyczy każdej migawki. Zmierzone na pve10: para komend z
+  formularza tworzy `/etc/zfs-snapshot-all/profiles/tui-test-h48.conf`
+  (`quiesce = auto,degrade`, `keep = 48`), `list-profiles` widzi go jako
+  `user gfs` (z ostrzeżeniem czasownika, że nazwa `-h48` obiecuje inną
+  retencję niż `d7h48m12w4` — informacja, nie odmowa); plik usunięty. Suita
+  `test/tui` 138/0 (lista słowami, zamrażane szczeble, formularz z pól bazy,
+  nazwa wymagana, nazwa ≠ baza, edycja pól, komendy w potwierdzeniu, `t` =
+  jeden bieg `&&`, powrót z nowym szablonem, zmiana bazy przebudowuje pola).
+
 - **`list-datasets [HOST[:PORT]] --json` i listy w kreatorze zamiast pisania (2026-09-14, krok (a) kreatora).**
   Właściciel o kreatorze: *„kompletnie nieczytelny dla człowieka"*; ustalony
   plan trzech kroków: (a) listy datasetów, (b) szablony słowami + nowy szablon
