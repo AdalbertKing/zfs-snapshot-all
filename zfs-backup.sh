@@ -11163,14 +11163,19 @@ cmd_prepare_source() {
     else
         warn "prepare-source: git clone on $SRC_HOST failed ($(printf '%s' "$err" | tail -1)) -- sending a bundle of this checkout instead"
         local bundle; bundle=$(mktemp /tmp/zfs-snapshot-all.XXXXXX.bundle) || die "prepare-source: mktemp failed"
+        # HEAD, not a branch name: a detached checkout (CI, a worktree on a
+        # lab host) has no local 'main' to bundle. The receiving side names
+        # the branch itself, so the hourly pull there still says 'main'.
         local branch; branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null); [ -n "$branch" ] && [ "$branch" != HEAD ] || branch=main
-        git -C "$SCRIPT_DIR" bundle create -q "$bundle" "$branch" 2>/dev/null || { rm -f "$bundle"; die "prepare-source: could not bundle branch '$branch' of $SCRIPT_DIR"; }
-        scp -q -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes -P "$SRC_PORT" "$bundle" "root@$SRC_HOST:/tmp/zfs-snapshot-all.bundle" \
+        git -C "$SCRIPT_DIR" bundle create -q "$bundle" HEAD 2>/dev/null || { rm -f "$bundle"; die "prepare-source: could not bundle HEAD of $SCRIPT_DIR"; }
+        scp -q -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" -o ServerAliveInterval="$SSH_SERVER_ALIVE_INTERVAL" -o ServerAliveCountMax="$SSH_SERVER_ALIVE_COUNT" \
+            -P "$SRC_PORT" "$bundle" "root@$SRC_HOST:/tmp/zfs-snapshot-all.bundle" \
             || { rm -f "$bundle"; die "prepare-source: scp of the bundle to $SRC_HOST failed. Nothing was changed there."; }
         rm -f "$bundle"
-        rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git clone -q -b '$branch' /tmp/zfs-snapshot-all.bundle '$SOURCE_REPO_DIR' && git -C '$SOURCE_REPO_DIR' remote set-url origin '$url' && rm -f /tmp/zfs-snapshot-all.bundle" \
-            || die "prepare-source: clone from the bundle on $SRC_HOST failed (see above). /tmp/zfs-snapshot-all.bundle may be left there."
-        echo ">>> cloned from a bundle of this checkout (branch $branch) into $SOURCE_REPO_DIR on $SRC_HOST; origin points at $url"
+        rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git init -q '$SOURCE_REPO_DIR' && git -C '$SOURCE_REPO_DIR' fetch -q /tmp/zfs-snapshot-all.bundle HEAD:refs/heads/$branch && git -C '$SOURCE_REPO_DIR' checkout -q '$branch' && git -C '$SOURCE_REPO_DIR' remote add origin '$url' && rm -f /tmp/zfs-snapshot-all.bundle" \
+            || die "prepare-source: unpacking the bundle on $SRC_HOST failed (see above). /tmp/zfs-snapshot-all.bundle may be left there."
+        echo ">>> unpacked a bundle of this checkout (as branch $branch) into $SOURCE_REPO_DIR on $SRC_HOST; origin points at $url"
     fi
     if source_probe "$SRC_HOST" "$SRC_PORT" && [ -n "$PROBE_PKG" ]; then
         echo ">>> verified: $PROBE_PKG${PROBE_REV:+ (rev $PROBE_REV)} on $SRC_HOST"

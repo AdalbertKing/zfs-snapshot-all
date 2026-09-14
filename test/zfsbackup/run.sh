@@ -12180,7 +12180,7 @@ case "$cmd" in
         echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "GIT=yes"; echo "POOL=hdd,39.5G,38.3G"
         if [ "$host" = withpkg ] || [ -e "$PS_ARGS/installed-$host" ]; then echo "PKG=/root/scripts/zfs-snapshot-all"; echo "REV=abc1234"; fi
         echo "PROBE=done";;
-    *"git clone -q -b"*) touch "$PS_ARGS/installed-$host";;
+    *"git init -q "*) touch "$PS_ARGS/installed-$host";;
     *"git clone -q "*) case "$host" in nogh) echo "fatal: unable to access: could not resolve host" >&2; exit 128;; esac; touch "$PS_ARGS/installed-$host";;
 esac
 EOF
@@ -12220,8 +12220,9 @@ else
 fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv" "$PS"/installed-*
 if ps_run prepare-source nogh --yes >"$PS/out" && grep -q 'sending a bundle of this checkout instead' "$PS/err" && grep -q 'root@nogh:/tmp/zfs-snapshot-all.bundle' "$PS/scp.argv" \
-        && grep -q "git clone -q -b '[^']*' /tmp/zfs-snapshot-all.bundle '/root/scripts/zfs-snapshot-all' && git -C '/root/scripts/zfs-snapshot-all' remote set-url origin" "$PS/ssh.argv" && grep -q '>>> cloned from a bundle' "$PS/out"; then
-    ok "preparesource: when the clone cannot reach origin, a bundle of this checkout goes over scp, the clone is made from it and origin is re-pointed"
+        && grep -q "git init -q '/root/scripts/zfs-snapshot-all' && git -C '/root/scripts/zfs-snapshot-all' fetch -q /tmp/zfs-snapshot-all.bundle HEAD:refs/heads/[^ ]* && git -C '/root/scripts/zfs-snapshot-all' checkout -q '[^']*' && git -C '/root/scripts/zfs-snapshot-all' remote add origin" "$PS/ssh.argv" \
+        && grep -q '>>> unpacked a bundle' "$PS/out" && grep -q -- '-o ConnectTimeout=' "$PS/scp.argv"; then
+    ok "preparesource: when the clone cannot reach origin, a bundle of HEAD (detached checkout too) goes over scp with timeouts, is unpacked as a named branch and origin is added"
 else
     bad "preparesource: bundle fallback" "$(cat "$PS/out")" "$(cat "$PS/err")" "$(cat "$PS/scp.argv" 2>/dev/null)" "$(cat "$PS/ssh.argv")"
 fi
