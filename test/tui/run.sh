@@ -459,51 +459,111 @@ else
     bad "akcje: bez rekordu odmawia" "$(cat "$XL")" "$AH"
 fi
 A="$(act down,ins)"
-if has "$A" '╔═ Nowa relacja (forma jednokomandowa) ═' || has "$A" '╔═ Nowa relacja (forma jednokomendowa) ═' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Nowa relacja: pobranie danych z innego hosta -- krok 1/7' && [ ! -s "$XL" ]; then
     ok "akcje: Ins otwiera kreator nowej relacji, nic nie wykonujac"
 else
     bad "akcje: Ins" "$A"
 fi
 # ============================================================================
-# KREATOR NOWEJ RELACJI (Ins) -- forma jednokomendowa, szablon z listy, PLAN
+# KREATOR NOWEJ RELACJI (Ins) -- W KROKACH, po ludzku (wlasciciel 2026-09-14)
 # ============================================================================
-# Wlasciciel: "Tworzenie/modyfikacja relacji to z kolei ekran pozwalajacy na
-# wybraniu gotowego template" i "przypominam o podgladzie komendy bash".
-# Kolejnosc: pola -> [ PLAN ] (czasownik bez --install, read-only) -> pelna
-# komenda z --install --yes -> 't'. Fikstura szablonow to doslowne wyjscie
-# `list-profiles --json --no-render` z pve10 (16 profili, 0,8 s).
+# "Kreator relacji jest kompletnie nieczytelny dla czlowieka." Siedem krokow,
+# jedno pytanie na raz, domyslna odpowiedz, podglad skutku; na koncu ZDANIE, co
+# sie stanie, i DOKLADNA komenda; plan (read-only) i 't'. Fikstury: szablony
+# i datasety to doslowne wyjscia z pve10.
 wiz() {   # <keys> [extra] -> ekran; dziennik w $XL
     : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-peer.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
-W="$(wiz ins)"
-if has "$W" '╔═ Nowa relacja (forma jednokomendowa) ═' && has "$W" '> Źródło HOST:DATASET    _' && has "$W" 'Profil (szablon)       default' \
-        && has "$W" '[ PLAN ]' && has "$W" 'szablonów do wyboru: 16'; then
-    ok "kreator: Ins otwiera formularz w kolejnosci formy jednokomendowej, profil domyslnie 'default', 16 szablonow z list-profiles"
+wizd() { wiz "$@"; }
+W="$(wiz ins --width 100)"
+if has "$W" '╔═ Nowa relacja: pobranie danych z innego hosta -- krok 1/7: Skąd kopiujemy? ═' && has "$W" '> Host, na którym są dane _' \
+        && has "$W" 'Dataset na tym hoście' && has "$W" 'Enter = dalej   Esc = anuluj' && [ ! -s "$XL" ]; then
+    ok "kreator: Ins otwiera krok 1/7 'Skad kopiujemy?' -- host i dataset, jedno pytanie na raz; tytul mowi, ze to POBRANIE z innego hosta"
 else
-    bad "kreator: formularz" "$W"
+    bad "kreator: krok 1" "$W"
 fi
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter --width 120)"
-# SZABLONY SLOWAMI (wlasciciel 2026-09-14): co robi, nie jak sie nazywa plik.
-# Wszystko policzone z list-profiles --json: harmonogram, liczniki, mechanizm.
-if has "$W" '╔═ Szablon dla pola: Profil (szablon) ═' && has "$W" '> default          co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina GFS' \
+W="$(wiz ins,enter --width 100)"
+if has "$W" '! podaj host, na którym są dane' && has "$W" 'krok 1/7'; then
+    ok "kreator: Enter bez hosta zostaje w kroku 1 i mowi, czego brakuje"
+else
+    bad "kreator: pusty host" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99,enter,enter --width 100)"
+if has "$W" '╔═ Datasety na 192.168.28.99 (list-datasets 192.168.28.99 --json, ssh jako root)' && hasE "$W" '^║ > hdd +filesystem +[0-9,.]+ [KMGT]?i?B'; then
+    ok "kreator: krok 1 -- Enter na pustym datasecie otwiera liste datasetow peera (list-datasets HOST)"
+else
+    bad "kreator: lista peera" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99,enter,enter,end,up,enter --width 100)"
+if has "$W" '> Dataset na tym hoście   hdd/lab/vm-101/disk-1_' && has "$W" 'krok 1/7'; then
+    ok "kreator: wybor z listy wraca do pola datasetu (bez prefiksu hosta -- host jest osobnym polem)"
+else
+    bad "kreator: wybor datasetu" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99,enter,text:hdd/lab/vm-101,space --width 100)"
+if has "$W" '╔═ Datasety na 192.168.28.99'; then
+    ok "kreator: spacja na polu z wartoscia tez otwiera liste (Enter = dalej)"
+else
+    bad "kreator: spacja = lista" "$W"
+fi
+S1="ins,text:192.168.28.99,enter,text:hdd/lab/vm-101,enter"
+W="$(wiz "$S1" --width 100)"
+if has "$W" 'krok 2/7: Dokąd trafi kopia?' && has "$W" 'skąd: 192.168.28.99:hdd/lab/vm-101' && has "$W" '> Lokalny dataset-rodzic _' && has "$W" 'Kopia wyląduje w       (najpierw cel)'; then
+    ok "kreator: krok 2 'Dokad?' -- odpowiedz z kroku 1 w naglowku, cel, podglad ladowiska"
+else
+    bad "kreator: krok 2" "$W"
+fi
+W="$(wiz "$S1,enter" --width 100)"
+if has "$W" '╔═ Datasety na tym hoście (list-datasets --json)' && has "$W" 'hdd/backups/192.168.28.99/hdd/lab/ct-201'; then
+    ok "kreator: krok 2 -- Enter na pustym celu otwiera liste datasetow TEGO hosta"
+else
+    bad "kreator: lista lokalna" "$W"
+fi
+W="$(wiz "$S1,text:hdd/backups" --width 100)"
+if has "$W" 'Kopia wyląduje w       hdd/backups/192.168.28.99/hdd/lab/vm-101' && has "$W" '(konwencja <cel>/<peer>/<ścieżka>; plan czasownika to potwierdzi)'; then
+    ok "kreator: krok 2 -- ladowisko liczone na biezaco z celu, peera i sciezki zrodla, z zastrzezeniem, ze plan to potwierdzi"
+else
+    bad "kreator: ladowisko" "$W"
+fi
+S2="$S1,text:hdd/backups,enter"
+W="$(wiz "$S2" --width 100)"
+if has "$W" 'krok 3/7: Jak często i ile trzymać?' && has "$W" 'dokąd: hdd/backups' && has "$W" '> Szablon                default_' \
+        && has "$W" 'To znaczy              co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina' && has "$W" 'GFS · jedna rodzina · bez zamrażania · monitor 90m / 150m'; then
+    ok "kreator: krok 3 -- szablon domyslny 'default' i pod nim SLOWAMI, co to znaczy"
+else
+    bad "kreator: krok 3" "$W"
+fi
+W="$(wiz "$S2,space" --width 120)"
+if has "$W" '╔═ Szablon dla pola: Szablon ═' && has "$W" '> default          co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina GFS' \
         && has "$W" 'jedna rodzina · bez zamrażania · monitor 90m / 150m · godzinowy create + drabina GFS' \
         && has "$W" '  d7h24            co godzinę (:01), co dobę 01:11 · trzyma 24 godz., 7 dni · N najnowszych' \
         && has "$W" 'co tydzień nd 02:21, co miesiąc 1. dnia 03:31' && has "$W" 'Ins = nowy szablon na bazie podświetlonego'; then
-    ok "kreator: lista szablonow SLOWAMI -- harmonogram, co trzyma, mechanizm; ksztalt, zamrazanie, progi i opis przy podswietlonym; Ins = nowy"
+    ok "kreator: spacja na szablonie = lista szablonow SLOWAMI (harmonogram, co trzyma, mechanizm; ksztalt, zamrazanie, progi, opis); Ins = nowy"
 else
     bad "kreator: lista szablonow slowami" "$W"
 fi
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,down,down --width 120)"
+W="$(wiz "$S2,space,down,down" --width 120)"
 if has "$W" '> m12w4d7h24-gfs' && has "$W" 'rodzina na szczebel · zamraża: dobowe, tygodniowe, miesięczne · monitor 90m / 150m'; then
     ok "kreator: szablon z zamrazaniem mowi, KTORE szczeble zamraza (dobowe, tygodniowe, miesieczne), ksztalt rodzina na szczebel"
 else
     bad "kreator: slowa o zamrazaniu" "$W"
 fi
-# NOWY SZABLON (wlasciciel: "stworzyc calkiem nowy uzywajac checkboxow,
-# radiobuttons i list"): Ins na liscie = formularz z pol BAZY, zapis przez
+W="$(wiz "$S2,space,down,down,enter" --width 120)"
+if has "$W" '> Szablon                m12w4d7h24-gfs_' && has "$W" 'To znaczy              co godzinę (:01), co dobę 01:11, co tydzień nd 02:21'; then
+    ok "kreator: wybor z listy wraca do kroku 3 z nowym szablonem i nowymi slowami pod nim"
+else
+    bad "kreator: wybor szablonu" "$W"
+fi
+W="$(wiz "$S2,space,esc" --width 100)"
+if has "$W" '> Szablon                default_' && has "$W" 'krok 3/7'; then
+    ok "kreator: Esc na liscie szablonow wraca do kroku bez zmiany pola"
+else
+    bad "kreator: Esc na liscie" "$W"
+fi
+# NOWY SZABLON (krok b): Ins na liscie = formularz z pol BAZY, zapis przez
 # save-profile (jeden --tier na wywolanie), nic nie zapisane przed 't'.
-NP="ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,ins"
+NP="$S2,space,ins"
 W="$(wiz "$NP" --width 120 --height 40)"
 if has "$W" '╔═ Nowy szablon na bazie: default ═' && has "$W" '> Nazwa nowego szablonu          _' && has "$W" 'Opis                           godzinowy create + drabina GFS' \
         && has "$W" 'Na bazie                       default' && has "$W" 'szczebel standard_hourly (godzinowe)' && has "$W" 'migawka co (cron)            1 * * * *      = co godzinę (:01)' \
@@ -542,15 +602,15 @@ else
     bad "kreator: potwierdzenie nowego szablonu" "$W" "$(cat "$XL")"
 fi
 W="$(wiz "$NP2,enter,t" --width 120 --height 40)"
-if grep -q -- "save-profile --from=default --as=moj-h48 --tier=standard_hourly --quiesce=auto,degrade && " "$XL" && grep -q -- " save-profile --from=moj-h48 --as=moj-h48 --force --tier=keep_hourly --keep=48'\?\$" "$XL" \
+if grep -q -- "save-profile --from=default --as=moj-h48 --tier=standard_hourly --quiesce=auto,degrade && " "$XL" && grep -q -- " save-profile --from=moj-h48 --as=moj-h48 --force --tier=keep_hourly --keep=48'\\?\$" "$XL" \
         && [ "$(grep -c . "$XL")" -eq 1 ] && has "$W" 'WYJŚCIE: Nowy szablon moj-h48'; then
     ok "kreator: 't' wykonuje obie komendy po kolei (&&) jako jeden bieg i otwiera okno wyjscia"
 else
     bad "kreator: t nowego szablonu" "$(cat "$XL")" "$W"
 fi
 W="$(wiz "$NP2,enter,t,esc" --width 120 --height 40)"
-if has "$W" 'Nowa relacja (forma jednokomendowa)' && has "$W" '> Profil (szablon)       moj-h48_'; then
-    ok "kreator: po zapisie Esc wraca do kreatora relacji z NOWYM szablonem w polu Profil"
+if has "$W" 'krok 3/7' && has "$W" '> Szablon                moj-h48_'; then
+    ok "kreator: po zapisie Esc wraca do kroku 3 z NOWYM szablonem w polu"
 else
     bad "kreator: powrot z nowym szablonem" "$W"
 fi
@@ -560,125 +620,129 @@ if has "$W" 'save-profile --from=d30' && has "$W" '--as=x' && ! has "$W" 'descri
 else
     bad "kreator: zmiana bazy" "$W"
 fi
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,down,enter)"
-if has "$W" 'Profil (szablon)       m12w4d7h24-age'; then
-    ok "kreator: wybor z listy wraca do formularza z nowa wartoscia"
+# KROK 4: nazwa zaproponowana z datasetu
+S3="$S2,enter"
+W="$(wiz "$S3" --width 100)"
+if has "$W" 'krok 4/7: Jak nazwać relację?' && has "$W" 'szablon: default' && has "$W" '> Nazwa relacji          vm-101_'; then
+    ok "kreator: krok 4 -- nazwa zaproponowana z ostatniego czlonu datasetu (vm-101), do zmiany"
 else
-    bad "kreator: wybor szablonu" "$W"
+    bad "kreator: krok 4" "$W"
 fi
-# PLAN: komenda bez --install (read-only) jest pokazana jako podglad, a do
-# potwierdzenia idzie ta sama z --install --yes.
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,end,enter)"
-if has "$W" 'POTWIERDZENIE: Nowa relacja: 192.168.28.99:hdd/lab/x -> hdd/backups' && has "$W" '--source=192.168.28.99:hdd/lab/x --target=hdd/backups' \
-        && has "$W" '--profile=default --install --yes' && has "$W" '[atrapa] plan:' && has "$W" 'Plan czasownika (read-only, bez --install)'; then
-    ok "kreator: [ PLAN ] pokazuje plan czasownika (bez --install) i pelna komende z --install --yes do potwierdzenia"
+# KROK 5: KONTO jako wybor (wlasciciel: "nigdzie nie widze mozliwosci ustanowienia
+# innego konta niz root"). Domyslnie konto delegowane; peer wypisany jako fakt.
+S4="$S3,enter"
+W="$(wiz "$S4" --width 100)"
+if has "$W" 'krok 5/7: Kto ma uruchamiać kopie na tym hoście?' && has "$W" 'nazwa: vm-101' && has "$W" '> Konto                  ( ) root -- bez izolacji' \
+        && has "$W" '(o) zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs' && has "$W" '( ) inne konto (nazwa niżej)' \
+        && has "$W" 'Na peerze              192.168.28.99: transfer pójdzie zawsze z konta zfsbackup-pve10'; then
+    ok "kreator: krok 5 -- radio root / zfsbackup (DOMYSLNIE) / inne; konto peera zfsbackup-<host> wypisane jako fakt (tworzy JOIN)"
 else
-    bad "kreator: plan i potwierdzenie" "$W"
+    bad "kreator: krok 5" "$W"
 fi
-if [ ! -s "$XL" ]; then
-    ok "kreator: ...i do tego miejsca nic nie zostalo wykonane (plan w atrapie tez nie jest zapisem)"
+W="$(wiz "$S4,space,space" --width 100)"
+if has "$W" '(o) root -- bez izolacji'; then
+    ok "kreator: spacja przelacza radio (zfsbackup -> inne -> root)"
 else
-    bad "kreator: nic przed t" "$(cat "$XL")"
+    bad "kreator: radio" "$W"
 fi
-# LISTY ZAMIAST PISANIA (wlasciciel 2026-09-14): Enter na Zrodle = datasety
-# peera (list-datasets HOST --json, fikstura = doslowne wyjscie z pve10 pytajacego
-# pve9), Enter na Celu = datasety tego hosta. Pole dalej przyjmuje pisanie.
-wizd() {   # <keys> -> ekran z fiksturami list-datasets
-    : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-peer.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
-}
-W="$(wizd ins,enter)"
-if has "$W" '! wpisz najpierw HOST' && has "$W" 'Nowa relacja'; then
-    ok "kreator: Enter na pustym Zrodle prosi o HOST, nie otwiera pustej listy"
+W="$(wiz "$S4,space,enter,enter" --width 100)"
+if has "$W" '! podaj nazwę konta' && has "$W" 'krok 5/7'; then
+    ok "kreator: 'inne' bez nazwy nie przechodzi dalej"
 else
-    bad "kreator: puste zrodlo" "$W"
+    bad "kreator: inne bez nazwy" "$W"
 fi
-W="$(wizd ins,text:192.168.28.99,enter)"
-if has "$W" '╔═ Datasety na 192.168.28.99 (list-datasets 192.168.28.99 --json, ssh jako root' && hasE "$W" '^║ > hdd +filesystem +[0-9,.]+ [KMGT]?i?B +[0-9,.]+ [KMGT]?i?B' && hasE "$W" '^║   hdd/lab/vm-101 +filesystem'; then
-    ok "kreator: Enter na Zrodle z HOST-em otwiera liste datasetow peera (nazwa, typ, zajete, wolne), tytul nazywa czasownik"
+W="$(wiz "$S4,space,enter,text:ops,enter" --width 100)"
+if has "$W" 'krok 6/7: Zaawansowane (zwykle bez zmian)' && has "$W" 'konto: ops'; then
+    ok "kreator: 'inne' + nazwa idzie dalej i naglowek pokazuje konto: ops"
 else
-    bad "kreator: lista peera" "$W"
+    bad "kreator: inne konto" "$W"
 fi
-W="$(wizd ins,text:192.168.28.99,enter,end,up,enter)"
-if has "$W" 'Źródło HOST:DATASET    192.168.28.99:hdd/lab/vm-101/disk-1_' && ! has "$W" 'Datasety na'; then
-    ok "kreator: wybor z listy wraca do pola jako HOST:DATASET (End, w gore = przedostatni)"
+W="$(wiz "$S4,enter" --width 100)"
+if has "$W" 'krok 6/7' && has "$W" 'konto: zfsbackup' && has "$W" '> Port SSH peera' && has "$W" 'Retencja u źródła' && has "$W" 'Uprawnienia na peerze nadaj zdalnie [ ] nie' && has "$W" 'Parowanie ręczne               [ ] nie'; then
+    ok "kreator: krok 6 -- port, retencja u zrodla, dwa przelaczniki z domyslnymi wartosciami; pole 'inne konto' pominiete, bo nie wybrane"
 else
-    bad "kreator: wybor zrodla" "$W"
+    bad "kreator: krok 6" "$W"
 fi
-W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,enter)"
-if has "$W" '╔═ Datasety na tym hoście (list-datasets --json)' && hasE "$W" '^║ > hdd +filesystem' && has "$W" 'hdd/backups/192.168.28.99/hdd/lab/ct-201'; then
-    ok "kreator: Enter na Celu otwiera liste datasetow TEGO hosta"
+# KROK 7: ZDANIE + KOMENDA; plan read-only; Wykonaj = plan + potwierdzenie + t
+S6="$S4,enter,text:2222,enter,enter,enter,enter"
+W="$(wiz "$S6" --width 100)"
+if has "$W" 'krok 7/7: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobierze migawki hdd/lab/vm-101 z hosta 192.168.28.99 do' \
+        && has "$W" 'hdd/backups/192.168.28.99/hdd/lab/vm-101, trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina' \
+        && has "$W" 'GFS, jedna rodzina). Bez zamrażania. Monitor: 90m / 150m.' \
+        && has "$W" 'Relacja: vm-101. Zadania na pve10 jako zfsbackup (port 2222). Na peerze konto zfsbackup-pve10' \
+        && has "$W" 'Komenda:' && has "$W" '--source=192.168.28.99:hdd/lab/vm-101' && has "$W" '--target=hdd/backups --profile=default --name=vm-101 --port=2222 --local-user=zfsbackup' \
+        && has "$W" '> [ Pokaż plan ]' && has "$W" '[ Wykonaj ]' && [ ! -s "$XL" ]; then
+    ok "kreator: krok 7 -- ZDANIEM, co sie stanie (kadencja, zrodlo, cel, retencja, monitor, konto, port) i DOKLADNA komenda; nic nie wykonano"
 else
-    bad "kreator: lista lokalna" "$W"
+    bad "kreator: podsumowanie" "$W" "$(cat "$XL")"
 fi
-W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,enter,down,enter)"
-if has "$W" 'Cel (dataset tutaj)    hdd/backups_'; then
-    ok "kreator: ...i wybor wraca do pola Cel"
+W="$(wiz "$S6,enter" --width 100)"
+if has "$W" 'WYJŚCIE: Plan (read-only, bez --install) -- Esc wraca do kreatora' && has "$W" '[atrapa] plan:' && ! has "$W" '--install --yes' && [ ! -s "$XL" ]; then
+    ok "kreator: [ Pokaz plan ] = czasownik bez --install (read-only) w oknie, Esc wraca"
 else
-    bad "kreator: wybor celu" "$W"
+    bad "kreator: pokaz plan" "$W"
 fi
-W="$(wizd ins,text:192.168.28.99:hdd/lab/x,down,text:hdd/backups,enter,enter)"
-if has "$W" 'Szablon dla pola: Profil' && [ ! -s "$XL" ]; then
-    ok "kreator: pisanie w polu Cel dalej dziala (droga wsadowa), Enter idzie dalej; nic nie wykonano"
+W="$(wiz "$S6,enter,esc" --width 100)"
+if has "$W" 'krok 7/7: Podsumowanie'; then
+    ok "kreator: ...i Esc z planu wraca do podsumowania"
 else
-    bad "kreator: pisanie w polu" "$W" "$(cat "$XL")"
+    bad "kreator: powrot z planu" "$W"
 fi
-W="$(wiz ins,text:192.168.28.99,enter)"
-if has "$W" '! lista niedostępna -- wpisz ścieżkę ręcznie' && has "$W" 'Nowa relacja'; then
-    ok "kreator: gdy list-datasets nie odpowiada (tu: offline), formularz mowi to zdaniem i pole zostaje do pisania"
+W="$(wiz "$S6,down,enter" --width 100)"
+if has "$W" 'POTWIERDZENIE: Nowa relacja: 192.168.28.99:hdd/lab/vm-101 -> hdd/backups' && has "$W" '--profile=default --name=vm-101 --port=2222 --local-user=zfsbackup' \
+        && has "$W" '--install --yes' && has "$W" '[atrapa] plan:' && has "$W" 'Plan czasownika (read-only, bez --install)' && [ ! -s "$XL" ]; then
+    ok "kreator: [ Wykonaj ] pokazuje plan czasownika i pelna komende z --install --yes do potwierdzenia; nic przed t"
 else
-    bad "kreator: lista niedostepna" "$W"
+    bad "kreator: wykonaj" "$W" "$(cat "$XL")"
 fi
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,end,enter,t)"
-if grep -q -- "--source=192.168.28.99:hdd/lab/x --target=hdd/backups --profile=default --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja'; then
-    ok "kreator: 't' wykonuje DOKLADNIE pokazana forme jednokomendowa z --install --yes i otwiera okno wyjscia"
+W="$(wiz "$S6,down,enter,t" --width 100)"
+if grep -q -- "--source=192.168.28.99:hdd/lab/vm-101 --target=hdd/backups --profile=default --name=vm-101 --port=2222 --local-user=zfsbackup --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja'; then
+    ok "kreator: 't' wykonuje DOKLADNIE pokazana komende (z --local-user z radia) i otwiera okno wyjscia"
 else
     bad "kreator: t" "$(cat "$XL")" "$W"
 fi
-# kazde pole trafia do argv pod swoja flaga, przelaczniki jako gole flagi
-W="$(wiz ins,text:h:d,enter,text:t,enter,down,text:nazwa,enter,text:2222,enter,text:d7h24,down,text:bak,enter,space,down,space,down,enter,t)"
-if grep -q -- "--source=h:d --target=t --profile=default --source-profile=d7h24 --name=nazwa --port=2222 --local-user=bak --grant-remotely --manual-join --install --yes$" "$XL"; then
-    ok "kreator: nazwa, port, profil zrodla, konto lokalne i oba przelaczniki ida do argv pod swoimi flagami, w kolejnosci formy"
+# root z radia = BEZ --local-user (tak CLI rozumie root); kazde pole pod swoja flaga
+W="$(wiz "$S4,space,space,enter,text:2222,enter,text:d7h24,enter,space,enter,space,enter,down,enter,t" --width 100)"
+if grep -q -- "--source=192.168.28.99:hdd/lab/vm-101 --target=hdd/backups --profile=default --source-profile=d7h24 --name=vm-101 --port=2222 --grant-remotely --manual-join --install --yes$" "$XL"; then
+    ok "kreator: root z radia = bez --local-user; port, retencja u zrodla i oba przelaczniki ida do argv pod swoimi flagami"
 else
     bad "kreator: pelne argv" "$(cat "$XL")"
 fi
-# ODMOWY: puste zrodlo/cel -- komunikat W formularzu, nic nie wykonane; Esc anuluje
-W="$(wiz ins,end,enter)"
-if has "$W" 'kreator: Źródło i Cel są wymagane' && has "$W" '╔═ Nowa relacja' && [ ! -s "$XL" ]; then
-    ok "kreator: puste Zrodlo/Cel -- odmowa W formularzu (nie znika), nic nie wykonane"
+W="$(wiz "$S2,esc,esc" --width 100)"
+if has "$W" 'krok 1/7' && has "$W" 'Host, na którym są dane 192.168.28.99' && has "$W" 'Dataset na tym hoście   hdd/lab/vm-101'; then
+    ok "kreator: Esc = krok wstecz, odpowiedzi zostaja"
 else
-    bad "kreator: puste pola" "$W"
+    bad "kreator: Esc wstecz" "$W"
 fi
-W="$(wiz ins,text:x:y,esc)"
-if has "$W" 'anulowano -- nic nie wykonano' && ! has "$W" '╔═ Nowa relacja' && [ ! -s "$XL" ]; then
-    ok "kreator: Esc zamyka formularz bez sladu"
+W="$(wiz ins,text:x,esc --width 100)"
+if has "$W" 'anulowano -- nic nie wykonano' && ! has "$W" 'Nowa relacja' && [ ! -s "$XL" ]; then
+    ok "kreator: Esc w kroku 1 zamyka kreator bez sladu"
 else
     bad "kreator: Esc" "$W"
 fi
-W="$(wiz ins,text:h:d,enter,text:t,enter,enter,esc)"
-if has "$W" 'Profil (szablon)       default' && has "$W" '╔═ Nowa relacja'; then
-    ok "kreator: Esc na liscie szablonow wraca do formularza bez zmiany pola"
+W="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --exec-log "$XL" --screen relacje --keys "$S1,enter" 2>&1)"
+if has "$W" '! lista niedostępna -- wpisz ścieżkę ręcznie' && has "$W" 'krok 2/7'; then
+    ok "kreator: gdy list-datasets nie odpowiada (tu: offline), krok mowi to zdaniem i pole zostaje do pisania"
 else
-    bad "kreator: Esc na liscie" "$W"
+    bad "kreator: lista niedostepna" "$W"
 fi
-# bez zrodla szablonow (brak pliku): formularz nadal dziala, mowi o bledzie
-WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --exec-log "$XL" --screen relacje --keys ins 2>&1)"
-if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie'; then
-    ok "kreator: zepsute list-profiles nie blokuje kreatora -- mowi o bledzie i pozwala wpisac nazwe"
+WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --exec-log "$XL" --screen relacje --keys "$S2" 2>&1)"
+if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie' && has "$WE" 'krok 3/7'; then
+    ok "kreator: zepsute list-profiles nie blokuje kreatora -- krok 3 mowi o bledzie i pozwala wpisac nazwe"
 else
     bad "kreator: blad list-profiles" "$WE"
 fi
 # szerokosci okien kreatora
 wz_ok=1
 for w in 80 120 200; do
-    for keys in ins "ins,text:a:b,enter,text:c,enter,enter" "ins,text:a:b,enter,text:c,enter,end,enter"; do
+    for keys in ins "$S2" "$S4" "$S6" "$S6,down,enter"; do
         out="$(wiz "$keys" --width "$w")"
         n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
         case "$n" in "0 24") ;; *) wz_ok=0; echo "  kreator w=$w keys=$keys -> $n" ;; esac
     done
 done
 if [ "$wz_ok" -eq 1 ]; then
-    ok "kreator: formularz, lista szablonow i potwierdzenie maja dokladnie szerokosc terminala (80/120/200)"
+    ok "kreator: kazdy krok, lista i potwierdzenie maja dokladnie szerokosc terminala (80/120/200)"
 else
     bad "kreator: szerokosci"
 fi
