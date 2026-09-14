@@ -506,6 +506,23 @@ Inspection / teardown:
                                     does). Read-only: `zfs list` and nothing else.
                                     A peer that refuses the key is an error with the
                                     reason, never an empty list.
+  zfs-backup.sh check-source HOST[:PORT] [--port=N] --json
+                                    Three facts about a host BEFORE a relationship is
+                                    attempted, as root over SSH with root's own key:
+                                    is SSH open, is ZFS there (pools, sizes), is the
+                                    package there (path, revision). A host that refuses
+                                    is a fact too ("ssh":{"ok":false,...}), never a
+                                    fatal: the wizard shows it and says what to do.
+  zfs-backup.sh prepare-source HOST[:PORT] [--port=N] [--yes]
+                                    Put the package on a fresh source: git clone of
+                                    THIS checkout's origin into /root/scripts/
+                                    zfs-snapshot-all there, as root over SSH. When the
+                                    host cannot reach the origin, a bundle of this
+                                    checkout goes over scp and the clone is made from
+                                    it (origin is then pointed at the URL, so the
+                                    usual pull works once the host can see it).
+                                    Nothing else: no cron, no relationship, no key --
+                                    add-client's JOIN does those. Plans without --yes.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
@@ -11040,6 +11057,130 @@ DS
 }
 
 
+# ---------------------------------------------------------------------------
+# check-source / prepare-source -- a fresh source, before add-client (2026-09-14)
+#
+# Owner: "Zakladamy, ze nowe zrodlo nie ma nawet pakietu zainstalowanego." The
+# JOIN runs `cd $REPO_DIR && ./deploy.sh --join=...` ON the source, so without
+# the package there add-client can only print manual instructions. These two
+# verbs are what the wizard's first step shows and offers: three facts (SSH,
+# ZFS, package) and one action (put the package there). Both go as root over
+# SSH with root's own key -- the pairing account does not exist yet. Nothing
+# here touches cron, relationships or keys.
+# ---------------------------------------------------------------------------
+SOURCE_REPO_DIR="${SOURCE_REPO_DIR:-/root/scripts/zfs-snapshot-all}"
+
+source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
+    local host="$1" port="$2" out rc=0
+    PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_PKG=""; PROBE_REV=""
+    out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
+        PROBE_SSH_ERR=$(printf '%s\n' "$out" | grep -v '^$' | tail -1)
+        [ -n "$PROBE_SSH_ERR" ] || PROBE_SSH_ERR="SSH exited $rc without output"
+        return 1
+    fi
+    local line
+    while IFS= read -r line; do
+        case "$line" in
+            HOSTNAME=*) PROBE_HOSTNAME="${line#*=}" ;;
+            ZFS=yes)    PROBE_ZFS=1 ;;
+            GIT=yes)    PROBE_GIT=1 ;;
+            POOL=*)     PROBE_POOLS="${PROBE_POOLS}${PROBE_POOLS:+ }${line#*=}" ;;
+            PKG=*)      PROBE_PKG="${line#*=}" ;;
+            REV=*)      PROBE_REV="${line#*=}" ;;
+        esac
+    done <<PRB
+$out
+PRB
+    return 0
+}
+
+source_host_args() {   # <verb> "$@" -> sets SRC_HOST SRC_PORT SRC_JSON SRC_YES
+    local verb="$1"; shift
+    local a
+    SRC_HOST=""; SRC_PORT=""; SRC_JSON=0; SRC_YES=0
+    for a in "$@"; do
+        case "$a" in
+            --json)   SRC_JSON=1 ;;
+            --yes|-y) SRC_YES=1 ;;
+            --port=*) SRC_PORT="${a#*=}" ;;
+            -*)       die "$verb: unknown option '$a'" ;;
+            *)        [ -z "$SRC_HOST" ] || die "$verb: one HOST at most"; SRC_HOST="$a" ;;
+        esac
+    done
+    [ -n "$SRC_HOST" ] || die "$verb: HOST is required"
+    case "$SRC_HOST" in *:*) [ -n "$SRC_PORT" ] || SRC_PORT="${SRC_HOST##*:}"; SRC_HOST="${SRC_HOST%%:*}" ;; esac
+    [ -z "$SRC_PORT" ] || case "$SRC_PORT" in ''|*[!0-9]*) die "$verb: --port takes a number" ;; esac
+    case "$SRC_HOST" in *[!A-Za-z0-9._-]*) die "$verb: HOST looks wrong: '$SRC_HOST'" ;; esac
+    [ -n "$SRC_PORT" ] || SRC_PORT=22
+}
+
+cmd_check_source() {
+    source_host_args check-source "$@"
+    [ "$SRC_JSON" -eq 1 ] || die "check-source: this reader speaks JSON only -- pass --json"
+    local ssh_ok=true
+    source_probe "$SRC_HOST" "$SRC_PORT" || ssh_ok=false
+    printf '{"host":"%s","port":%s,"ssh":{"ok":%s,"error":"%s"},"hostname":"%s","zfs":{"ok":%s,"pools":[' \
+        "$(json_escape "$SRC_HOST")" "$SRC_PORT" "$ssh_ok" "$(json_escape "$PROBE_SSH_ERR")" "$(json_escape "$PROBE_HOSTNAME")" \
+        "$([ "$PROBE_ZFS" -eq 1 ] && [ -n "$PROBE_POOLS" ] && echo true || echo false)"
+    local first=1 pl n sz fr
+    for pl in $PROBE_POOLS; do
+        IFS=, read -r n sz fr <<<"$pl"
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"name":"%s","size":"%s","free":"%s"}' "$(json_escape "$n")" "$(json_escape "$sz")" "$(json_escape "$fr")"
+    done
+    printf ']},"package":{"ok":%s,"path":"%s","rev":"%s"},"git":%s,"repo_dir":"%s"}\n' \
+        "$([ -n "$PROBE_PKG" ] && echo true || echo false)" "$(json_escape "$PROBE_PKG")" "$(json_escape "$PROBE_REV")" \
+        "$([ "$PROBE_GIT" -eq 1 ] && echo true || echo false)" "$(json_escape "$SOURCE_REPO_DIR")"
+}
+
+cmd_prepare_source() {
+    source_host_args prepare-source "$@"
+    local url; url=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)
+    [ -n "$url" ] || url="https://github.com/AdalbertKing/zfs-snapshot-all.git"
+    if ! source_probe "$SRC_HOST" "$SRC_PORT"; then
+        die "prepare-source: no root SSH channel to $SRC_HOST (BatchMode, root's own key and known_hosts): $PROBE_SSH_ERR. Establish it first, e.g. ssh-copy-id root@$SRC_HOST -- that is the operator's decision, not this verb's. Nothing was changed anywhere."
+    fi
+    log "prepare-source: $SRC_HOST${PROBE_HOSTNAME:+ ($PROBE_HOSTNAME)}: SSH ok; zfs $([ "$PROBE_ZFS" -eq 1 ] && echo yes || echo NO); pools: ${PROBE_POOLS:-none}; git $([ "$PROBE_GIT" -eq 1 ] && echo yes || echo NO)"
+    if [ -n "$PROBE_PKG" ]; then
+        echo ">>> the package is already there: $PROBE_PKG${PROBE_REV:+ (rev $PROBE_REV)}. Nothing to do."
+        echo ">>> next: zfs-backup.sh add-client NAME --host=$SRC_HOST ... (its JOIN runs deploy.sh --join there)"
+        return 0
+    fi
+    [ "$PROBE_GIT" -eq 1 ] || die "prepare-source: $SRC_HOST has no git -- install it there first (apt install git). Nothing was changed."
+    echo "PLAN (prepare-source $SRC_HOST):"
+    echo "  on $SRC_HOST as root:  git clone $url $SOURCE_REPO_DIR"
+    echo "  if the host cannot reach $url: a bundle of this checkout goes over scp and the clone is made from it"
+    echo "  nothing else: no cron, no relationship, no key (add-client's JOIN does those)"
+    if [ "$SRC_YES" -ne 1 ]; then
+        echo ">>> plan only. Re-run with --yes to do it."
+        return 0
+    fi
+    local err
+    if err=$(rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git clone -q '$url' '$SOURCE_REPO_DIR'" 2>&1); then
+        echo ">>> cloned $url into $SOURCE_REPO_DIR on $SRC_HOST"
+    else
+        warn "prepare-source: git clone on $SRC_HOST failed ($(printf '%s' "$err" | tail -1)) -- sending a bundle of this checkout instead"
+        local bundle; bundle=$(mktemp /tmp/zfs-snapshot-all.XXXXXX.bundle) || die "prepare-source: mktemp failed"
+        local branch; branch=$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null); [ -n "$branch" ] && [ "$branch" != HEAD ] || branch=main
+        git -C "$SCRIPT_DIR" bundle create -q "$bundle" "$branch" 2>/dev/null || { rm -f "$bundle"; die "prepare-source: could not bundle branch '$branch' of $SCRIPT_DIR"; }
+        scp -q -o BatchMode=yes -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes -P "$SRC_PORT" "$bundle" "root@$SRC_HOST:/tmp/zfs-snapshot-all.bundle" \
+            || { rm -f "$bundle"; die "prepare-source: scp of the bundle to $SRC_HOST failed. Nothing was changed there."; }
+        rm -f "$bundle"
+        rux_root_ssh "$SRC_HOST" "$SRC_PORT" "git clone -q -b '$branch' /tmp/zfs-snapshot-all.bundle '$SOURCE_REPO_DIR' && git -C '$SOURCE_REPO_DIR' remote set-url origin '$url' && rm -f /tmp/zfs-snapshot-all.bundle" \
+            || die "prepare-source: clone from the bundle on $SRC_HOST failed (see above). /tmp/zfs-snapshot-all.bundle may be left there."
+        echo ">>> cloned from a bundle of this checkout (branch $branch) into $SOURCE_REPO_DIR on $SRC_HOST; origin points at $url"
+    fi
+    if source_probe "$SRC_HOST" "$SRC_PORT" && [ -n "$PROBE_PKG" ]; then
+        echo ">>> verified: $PROBE_PKG${PROBE_REV:+ (rev $PROBE_REV)} on $SRC_HOST"
+    else
+        die "prepare-source: the clone finished but $SOURCE_REPO_DIR/zfs-backup.sh is not executable on $SRC_HOST -- look there"
+    fi
+    echo ">>> next: zfs-backup.sh add-client NAME --host=$SRC_HOST --datasets=... (its JOIN runs deploy.sh --join there)"
+}
+
+
 # ------------------------------------------------------------------------------
 # gui -- WEJSCIE DO EKRANU
 # ------------------------------------------------------------------------------
@@ -15138,6 +15279,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         show-scope)       shift; cmd_show_scope "$@" ;;
         job-stats)        shift; cmd_job_stats "$@" ;;
         list-datasets)    shift; cmd_list_datasets "$@" ;;
+        check-source)     shift; cmd_check_source "$@" ;;
+        prepare-source)   shift; cmd_prepare_source "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
