@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cd54060f2ba60990 -->
+<!-- status-covers-digest: 1f6dcdbdb3e573c8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -85,6 +85,13 @@
     retencji u źródła); **Enter na dziecku zaznaczonego rodzica wyłącza je**
     (`✗`, `--exclude-child=<dataset>`), a przełączenie na `-r` przy wyłączeniach
     odmawia z powodem (silnik odmawia `-X` pod `-r`). Kroków jest 8.
+  - **Poprawka po teście właściciela (2026-09-14, PR #392):** w kreatorze nie
+    dało się wpisać adresu hosta — pętla curses kierowała pisanie tylko do okien
+    `prompt` i `form`, nowe okno `wiz` dostawało skróty literowe albo nic.
+    Render-once tego nie widzi (E54, powtórka: nowe OKNO z pisaniem = nowa
+    droga wejścia). Jazda po pty na pve10 przeciw pve9b (8/8): Ins, typ,
+    „inny host", wpisany adres, prawdziwy `check-source`, drzewo z żywego
+    `list-datasets`, filtr, zaznaczenie, „Dokąd" z lądowiskiem, Esc, F10.
   - Suity: `zfsbackup` sekcja `preparesource` 8/0 (stuby zapisują argv i
     „pamiętają" instalację, więc weryfikacja po klonie widzi jego skutek;
     ścieżka bundla), `test/tui` 147/0 (sekcja kreatora przepisana na listy).

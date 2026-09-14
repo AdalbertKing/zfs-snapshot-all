@@ -1599,6 +1599,16 @@ screen) is not verified until a pty has typed it: the drive script is part of
 the delivery, with the first letter, a special key and a non-ASCII character
 in it.
 
+**Repeat, 2026-09-14 (PR #391 -> fix in #392).** The list wizard added a third
+window kind (`wiz`) with its own text fields. The curses loop routes typed
+characters only into `prompt` and `form` windows; in `wiz` they went to the
+letter shortcuts or were dropped, and the owner could not type a host
+address. `test/tui` was 155/0 -- render-once feeds names past the loop. I had
+written "no new kind of terminal input, so no pty drive" in the PR body: a
+new WINDOW with typing is a new input path, whether or not the keys are new.
+The rule stands; the pty drive of the wizard (address typed, live
+check-source, tree filter) is now part of the delivery.
+
 ### E53 — A fix that was "applied" three times and never written (2026-09-09, R2/R4)
 
 **Genesis.** Replacing `"\t"` by `"|"` in `cmd_list_replicas` through a
