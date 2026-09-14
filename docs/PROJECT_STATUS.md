@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 37c025eed0f27bac -->
+<!-- status-covers-digest: cd54060f2ba60990 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -75,6 +75,16 @@
     `tmp_pack_*` z nieudanych cogodzinnych pulli) klon i weryfikacja OK, katalog
     usunięty. Kreator na żywo: diagnoza pve9b i prawdziwy plan RUX dla
     `--source=192.168.28.98:hdd/data,hdd/home` (rc=0, nic nie utworzone).
+  - **Po pierwszym oglądzie właściciela** (*„nigdzie nie ma wyboru -r -R przy
+    wyborze datasets, ani excluded childs. Niedostępny jest też typ relacji
+    synchro"*): krok 1 to **typ relacji** — backup (pobranie, `add-client`)
+    albo **synchro** (`--mode=sync`: ta sama ścieżka po obu stronach, bez kroku
+    „Dokąd", zakres komituje źródło); w drzewie datasetów linia rekurencji
+    nazywa flagi wprost: `-R` każdy podrzędny osobnym strumieniem (flat,
+    wyłączenia dozwolone) / `-r` jeden strumień (atomic, bez wyłączeń i bez
+    retencji u źródła); **Enter na dziecku zaznaczonego rodzica wyłącza je**
+    (`✗`, `--exclude-child=<dataset>`), a przełączenie na `-r` przy wyłączeniach
+    odmawia z powodem (silnik odmawia `-X` pod `-r`). Kroków jest 8.
   - Suity: `zfsbackup` sekcja `preparesource` 8/0 (stuby zapisują argv i
     „pamiętają" instalację, więc weryfikacja po klonie widzi jego skutek;
     ścieżka bundla), `test/tui` 147/0 (sekcja kreatora przepisana na listy).
