@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fd6deda37e77ba8d -->
+<!-- status-covers-digest: 738f0a18f42d3c59 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,6 +29,41 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
+- **Kreator relacji w siedmiu krokach, po ludzku (2026-09-14, krok (c) kreatora).**
+  Właściciel: *„Kreator relacji jest kompletnie nieczytelny dla człowieka. Ja
+  nic z tego nie rozumiem"* i *„nigdzie nie widzę możliwości ustanowienia
+  innego konta niż root przy tworzeniu relacji. A powinno być"*. Forma
+  jednokomendowa (dziewięć pól argumentów `add-client` naraz) zastąpiona
+  krokami — jedno pytanie na raz, domyślna odpowiedź, podgląd skutku,
+  odpowiedzi z poprzednich kroków w nagłówku, Esc = krok wstecz. Tytuł mówi,
+  co kreator robi: **pobranie danych z innego hosta** (to jest `add-client`).
+  1. *Skąd kopiujemy?* host i dataset (spacja albo puste + Enter = lista
+     datasetów peera).
+  2. *Dokąd trafi kopia?* lokalny dataset-rodzic (lista tego hosta) i liczone
+     na bieżąco lądowisko `<cel>/<peer>/<ścieżka>` z zastrzeżeniem, że plan
+     czasownika to potwierdzi.
+  3. *Jak często i ile trzymać?* szablon, a pod nim słowami, co to znaczy;
+     spacja = lista słowami, Ins = nowy szablon (krok b).
+  4. *Jak nazwać relację?* propozycja z ostatniego członu datasetu.
+  5. *Kto ma uruchamiać kopie na tym hoście?* **radio: root / zfsbackup
+     (domyślnie) / inne konto** — konto delegowane jako wybór, nie puste pole;
+     konto peera `zfsbackup-<host>` wypisane jako fakt (tworzy je JOIN, nie
+     ma czym zmienić). root z radia = bez `--local-user` (tak CLI rozumie root).
+  6. *Zaawansowane (zwykle bez zmian):* port, retencja u źródła, nadanie
+     uprawnień zdalnie, parowanie ręczne.
+  7. *Podsumowanie:* **zdanie** — *„Co godzinę (:01) pve10 pobierze migawki
+     hdd/lab/vm-101 z hosta 192.168.28.99 do hdd/backups/192.168.28.99/hdd/lab/vm-101,
+     trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina GFS, jedna rodzina).
+     Bez zamrażania. Monitor: 90m / 150m. Relacja: vm-101. Zadania na pve10
+     jako zfsbackup. Na peerze konto zfsbackup-pve10 (tworzy JOIN)."* — i
+     dokładna komenda; `[ Pokaż plan ]` (czasownik bez `--install`, read-only,
+     w oknie) i `[ Wykonaj ]` (plan + potwierdzenie `t`, jak dotąd).
+  Klawisze bez nowego rodzaju wejścia (spacja w formularzu już była), więc
+  bez jazdy pty. Suita `test/tui` 148/0 (sekcja kreatora przepisana na kroki:
+  każdy krok, listy, radio, „inne" bez nazwy, root bez `--local-user`, pełne
+  argv pod flagami, plan, Esc wstecz z zachowaniem odpowiedzi, szerokości
+  80/120/200). Wsadowa droga (`--source=… --target=…` z palca) bez zmian.
+
 - **Kreator: szablony słowami i nowy szablon z pól bazy (2026-09-14, krok (b) kreatora).**
   Właściciel: *„powinien móc wskazać profil z templates, albo stworzyć całkiem
   nowy używając checkboxów, radiobuttons i list"*. **Lista szablonów mówi, co

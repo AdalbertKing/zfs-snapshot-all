@@ -2066,7 +2066,8 @@ HELP = [
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
-    u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install;",
+    u"                 (kreator w 7 krokach: skąd, dokąd, szablon, nazwa, konto,",
+    u"                 zaawansowane, podsumowanie zdaniem + komenda -> plan -> 't';",
     u"                 Enter na źródle/celu = lista datasetów zamiast pisania;",
     u"                 szablony opisane słowami, Ins na liście = nowy szablon)",
     u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
@@ -2360,25 +2361,162 @@ class UI(object):
     # szablon z listy, potem PLAN czasownika (read-only, bez --install), potem
     # pelna komenda z --install --yes do potwierdzenia. Kreator nie liczy nic
     # sam: co odmawia czasownik, odmawia tu tak samo, tymi samymi slowami.
-    WIZARD_FIELDS = [
-        ("source", u"Źródło HOST:DATASET", "pickds", u"sam HOST + Enter = lista jego datasetów (ssh kluczem roota); HOST:DATASET + Enter = dalej"),
-        ("target", u"Cel (dataset tutaj)", "pickds", u"puste + Enter = lista datasetów tego hosta; wpisane + Enter = dalej. Pod celem ląduje <peer>/<ścieżka>"),
-        ("profile", u"Profil (szablon)", "pick", u"Enter otwiera listę z list-profiles"),
-        ("name", u"Nazwa relacji", "text", u"puste = z nazwy hosta; potrzebna, gdy ten host ma już relację"),
-        ("port", u"Port SSH", "text", u"puste = 22"),
-        ("source_profile", u"Profil źródła", "pick", u"puste = ten sam co Profil (retencja niesymetryczna, gdy inny)"),
-        ("local_user", u"Konto lokalne", "text", u"puste = root; nazwa = konto delegowane (utworzone, jeśli brak)"),
-        ("grant", u"--grant-remotely", "toggle", u"tak = zatwierdź zakres na źródle w tym samym biegu"),
-        ("manual", u"--manual-join", "toggle", u"tak = pakiet do przeniesienia ręcznie zamiast join przez ssh"),
-        ("go", u"[ PLAN ]", "go", u"Enter: czasownik planuje (read-only), potem komenda do potwierdzenia"),
+    # ------------------------------------------------------------------
+    # KREATOR W KROKACH (wlasciciel 2026-09-14: "kreator relacji jest
+    # kompletnie nieczytelny dla czlowieka"). Jedno pytanie na raz, po ludzku,
+    # z domyslna odpowiedzia i podgladem skutku; reszta (port, flagi) ma
+    # domyslne wartosci i siedzi w kroku "Zaawansowane". Na koncu ZDANIE, co sie
+    # stanie, i DOKLADNA komenda -- nic nie rusza przed 't'. Kreator robi to,
+    # co add-client: POBRANIE danych z innego hosta na ten (tytul to mowi).
+    WIZARD_FIELDS = []   # (kompatybilnosc: pola sa teraz w WIZ_STEPS)
+    WIZ_STEPS = [
+        ("skad", u"Skąd kopiujemy?", [
+            ("src_host", u"Host, na którym są dane", "text", u"adres albo nazwa peera, np. 192.168.28.99; Enter = dalej"),
+            ("src_ds", u"Dataset na tym hoście", "pickds", u"spacja (albo puste + Enter) = lista datasetów peera, ssh kluczem roota; Enter = dalej"),
+        ]),
+        ("dokad", u"Dokąd trafi kopia?", [
+            ("target", u"Lokalny dataset-rodzic", "pickds", u"spacja (albo puste + Enter) = lista datasetów tego hosta; Enter = dalej"),
+            ("_landing", u"Kopia wyląduje w", "info", ""),
+        ]),
+        ("szablon", u"Jak często i ile trzymać?", [
+            ("profile", u"Szablon", "pick", u"spacja = lista szablonów opisana słowami (Ins na liście = nowy); Enter = dalej"),
+            ("_profile_words", u"To znaczy", "info", ""),
+        ]),
+        ("nazwa", u"Jak nazwać relację?", [
+            ("name", u"Nazwa relacji", "text", u"propozycja z datasetu; puste = czasownik weźmie nazwę hosta (przy drugiej relacji z tym hostem nazwa jest konieczna)"),
+        ]),
+        ("konto", u"Kto ma uruchamiać kopie na tym hoście?", [
+            ("account_mode", u"Konto", "radio", u"spacja przełącza; Enter = dalej"),
+            ("local_user", u"  nazwa innego konta", "text", u"tylko gdy wybrane 'inne'; konto zostanie utworzone, jeśli go nie ma"),
+            ("_peer_account", u"Na peerze", "info", ""),
+        ]),
+        ("zaaw", u"Zaawansowane (zwykle bez zmian)", [
+            ("port", u"Port SSH peera", "text", u"puste = 22"),
+            ("source_profile", u"Retencja u źródła", "pick", u"puste = taka sama jak tutaj; spacja = lista, inny szablon = retencja niesymetryczna u peera"),
+            ("grant", u"Uprawnienia na peerze nadaj zdalnie", "toggle", u"tak = zatwierdź zakres na źródle w tym samym biegu (para musi być już sparowana)"),
+            ("manual", u"Parowanie ręczne", "toggle", u"tak = pakiet do przeniesienia ręcznie zamiast join przez ssh"),
+        ]),
+        ("podsum", u"Podsumowanie", [
+            ("_summary", u"", "info", ""),
+            ("plan", u"[ Pokaż plan ]", "go", u"czasownik bez --install: read-only, mówi, co by zrobił"),
+            ("go", u"[ Wykonaj ]", "go", u"plan, potem komenda z --install --yes do potwierdzenia 't'"),
+        ]),
     ]
+    RADIO_OPTS = {
+        "account_mode": [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
+                         ("zfsbackup", u"zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)"),
+                         ("other", u"inne konto (nazwa niżej)")],
+    }
 
     def wizard_open(self):
         profiles, perr = load_profiles(self.repo, self.files, self.data)
-        vals = {"source": "", "target": "", "profile": "default", "name": "", "port": "",
-                "source_profile": "", "local_user": "", "grant": False, "manual": False}
-        self.window = ("form", {"title": u"Nowa relacja (forma jednokomendowa)", "vals": vals, "cur": 0,
+        vals = {"src_host": "", "src_ds": "", "target": "", "profile": "default", "name": "", "port": "",
+                "source_profile": "", "account_mode": "zfsbackup", "local_user": "", "grant": False, "manual": False}
+        self.window = ("form", {"kind": "wizard", "step": 0, "vals": vals, "cur": 0,
                                 "profiles": profiles, "perr": perr})
+        self.wizard_set_step(self.window[1], 0)
+        self.scroll = 0
+
+    def wizard_set_step(self, obj, step):
+        obj["step"] = step
+        sid, title, fields = self.WIZ_STEPS[step]
+        obj["fields"] = fields
+        obj["title"] = u"Nowa relacja: pobranie danych z innego hosta -- krok %d/%d: %s" % (step + 1, len(self.WIZ_STEPS), title)
+        obj["cur"] = 0
+        while obj["cur"] < len(fields) - 1 and fields[obj["cur"]][2] in ("info", "head"):
+            obj["cur"] += 1
+        if sid == "nazwa" and not obj["vals"]["name"].strip():
+            ds = obj["vals"]["src_ds"].strip().rstrip("/")
+            obj["vals"]["name"] = ds.rsplit("/", 1)[-1] if ds else ""
+
+    def wizard_next_step(self, obj):
+        """Enter na ostatnim polu kroku: sprawdz, co ten krok wymaga, i dalej."""
+        vals, sid = obj["vals"], self.WIZ_STEPS[obj["step"]][0]
+        if sid == "skad":
+            if not vals["src_host"].strip():
+                self.message = u"podaj host, na którym są dane"
+                obj["cur"] = 0
+                return
+            if not vals["src_ds"].strip():
+                self.message = u"podaj dataset na tym hoście (Enter na pustym polu = lista)"
+                obj["cur"] = 1
+                return
+        if sid == "dokad" and not vals["target"].strip():
+            self.message = u"podaj lokalny dataset-rodzic (Enter na pustym polu = lista)"
+            return
+        if sid == "konto" and vals["account_mode"] == "other" and not vals["local_user"].strip():
+            self.message = u"podaj nazwę konta"
+            obj["cur"] = 1
+            return
+        if obj["step"] + 1 < len(self.WIZ_STEPS):
+            self.wizard_set_step(obj, obj["step"] + 1)
+
+    def wizard_account(self, vals):
+        m = vals.get("account_mode", "zfsbackup")
+        return "" if m == "root" else ("zfsbackup" if m == "zfsbackup" else vals.get("local_user", "").strip())
+
+    def wizard_info(self, obj, key, width):
+        """Linie informacyjne kreatora: skutek odpowiedzi, liczony na biezaco."""
+        vals = obj["vals"]
+        host = (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
+        if key == "_landing":
+            if vals["target"].strip() and vals["src_host"].strip() and vals["src_ds"].strip():
+                return [u"%s/%s/%s" % (vals["target"].strip().rstrip("/"), vals["src_host"].strip(), vals["src_ds"].strip().lstrip("/")),
+                        u"(konwencja <cel>/<peer>/<ścieżka>; plan czasownika to potwierdzi)"]
+            return [u"(najpierw cel)"]
+        if key == "_profile_words":
+            pr = self.wizard_profile(obj)
+            if pr is None:
+                return [u"szablonu '%s' nie ma na liście -- czasownik sprawdzi" % vals["profile"]]
+            w = profile_words(pr)
+            return wrap(u"%s · %s · %s · %s · %s · %s" % (w["cadence"], w["retention"], w["mech"], w["shape"], w["quiesce"], w["monitor"]), width - 30)
+        if key == "_peer_account":
+            return [u"%s: transfer pójdzie zawsze z konta zfsbackup-%s, które JOIN utworzy przy pierwszym połączeniu" % (vals["src_host"].strip() or "peer", host)]
+        if key == "_summary":
+            return self.wizard_summary(obj, width)
+        return []
+
+    def wizard_profile(self, obj):
+        for pr in (obj.get("profiles") or []):
+            if pr.get("name") == obj["vals"]["profile"]:
+                return pr
+        return None
+
+    def wizard_summary(self, obj, width):
+        vals = obj["vals"]
+        host = (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
+        pr = self.wizard_profile(obj)
+        w = profile_words(pr) if pr else None
+        land = u"%s/%s/%s" % (vals["target"].strip().rstrip("/"), vals["src_host"].strip(), vals["src_ds"].strip().lstrip("/"))
+        acct = self.wizard_account(vals) or "root"
+        if w:
+            sent = u"%s %s pobierze migawki %s z hosta %s do %s, %s (%s, %s). %s. Monitor: %s." % (
+                w["cadence"][0].upper() + w["cadence"][1:], host, vals["src_ds"].strip(), vals["src_host"].strip(), land,
+                w["retention"].replace("trzyma ", u"trzymając "), w["mech"], w["shape"], w["quiesce"][0].upper() + w["quiesce"][1:], w["monitor"].replace("monitor ", ""))
+        else:
+            sent = u"%s pobierze migawki %s z hosta %s do %s wg szablonu %s." % (host, vals["src_ds"].strip(), vals["src_host"].strip(), land, vals["profile"])
+        out = wrap(sent, width - 6)
+        out += wrap(u"Relacja: %s. Zadania na %s jako %s%s. Na peerze konto zfsbackup-%s (tworzy JOIN).%s%s" % (
+            vals["name"].strip() or u"(z nazwy hosta)", host, acct, u" (port %s)" % vals["port"].strip() if vals["port"].strip() else "", host,
+            u" Retencja u źródła: %s." % vals["source_profile"] if vals["source_profile"].strip() else "",
+            u" Parowanie ręczne." if vals["manual"] else ""), width - 6)
+        out += ["", u"Komenda:"] + wrap("  " + self.shell_line(self.wizard_argv(vals, True)), width - 6)
+        return out
+
+    def wizard_show_plan(self, obj):
+        argv = self.wizard_argv(obj["vals"], False)
+        if self.exec_log:
+            lines = [u"[atrapa] plan: " + self.shell_line(argv)]
+            rc = 0
+        else:
+            try:
+                p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
+                lines, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
+            except OSError as e:
+                self.message = u"nie udało się uruchomić planu: %s" % e
+                return
+        self.window = ("output", {"title": u"Plan (read-only, bez --install) -- Esc wraca do kreatora", "path": None, "proc": None,
+                                  "shell": self.shell_line(argv), "lines": lines, "rc": rc, "back_to": self.window})
         self.scroll = 0
 
     def dataset_picker(self, obj, key, label):
@@ -2387,14 +2525,15 @@ class UI(object):
         HOST:DATASET. Cel: lista tutaj. Blad czytelnika = zdanie w formularzu,
         pole dalej przyjmuje pisanie (wsadowa droga zostaje)."""
         vals = obj["vals"]
-        if key == "source":
-            host = vals["source"].split(":", 1)[0].strip()
+        if key == "src_ds":
+            host = vals["src_host"].strip()
             if not host:
-                self.message = u"wpisz najpierw HOST (np. 192.168.28.99), potem Enter da listę jego datasetów"
+                self.message = u"wpisz najpierw host (krok wyżej), potem Enter da listę jego datasetów"
+                obj["cur"] = 0
                 return
             items, err = load_datasets(self.repo, self.files, self.data, host, vals.get("port", "").strip())
-            prefix, title = host + ":", u"Datasety na %s (list-datasets %s --json, ssh jako root)" % (host, host)
-            current = vals["source"].split(":", 1)[1] if ":" in vals["source"] else ""
+            prefix, title = "", u"Datasety na %s (list-datasets %s --json, ssh jako root)" % (host, host)
+            current = vals["src_ds"]
         else:
             items, err = load_datasets(self.repo, self.files, self.data)
             prefix, title = "", u"Datasety na tym hoście (list-datasets --json)"
@@ -2560,7 +2699,7 @@ class UI(object):
         self.confirm(u"Nowy szablon %s (na bazie %s)" % (name, base.get("name", "?")), argv, note, on_yes=on_yes)
 
     def wizard_argv(self, vals, install):
-        a = [self.zb(), "--source=%s" % vals["source"], "--target=%s" % vals["target"]]
+        a = [self.zb(), "--source=%s:%s" % (vals["src_host"].strip(), vals["src_ds"].strip()), "--target=%s" % vals["target"].strip()]
         if vals.get("profile"):
             a.append("--profile=%s" % vals["profile"])
         if vals.get("source_profile"):
@@ -2569,8 +2708,8 @@ class UI(object):
             a.append("--name=%s" % vals["name"])
         if vals.get("port"):
             a.append("--port=%s" % vals["port"])
-        if vals.get("local_user"):
-            a.append("--local-user=%s" % vals["local_user"])
+        if self.wizard_account(vals):
+            a.append("--local-user=%s" % self.wizard_account(vals))
         if vals.get("grant"):
             a.append("--grant-remotely")
         if vals.get("manual"):
@@ -2581,8 +2720,8 @@ class UI(object):
 
     def wizard_plan(self, vals):
         """Krok PLAN: czasownik bez --install jest read-only i mowi, co by zrobil."""
-        if not vals["source"].strip() or not vals["target"].strip():
-            self.message = u"kreator: Źródło i Cel są wymagane (czasownik odmówiłby dokładnie tak samo)"
+        if not vals["src_host"].strip() or not vals["src_ds"].strip() or not vals["target"].strip():
+            self.message = u"kreator: skąd (host i dataset) i dokąd są wymagane (czasownik odmówiłby dokładnie tak samo)"
             return
         argv = self.wizard_argv(vals, False)
         if self.exec_log:
@@ -2599,15 +2738,56 @@ class UI(object):
                                           "shell": self.shell_line(argv), "lines": plan, "rc": p.returncode, "back_to": self.window})
                 self.scroll = 0
                 return
-        self.confirm(u"Nowa relacja: %s -> %s" % (vals["source"], vals["target"]), self.wizard_argv(vals, True),
+        self.confirm(u"Nowa relacja: %s:%s -> %s" % (vals["src_host"].strip(), vals["src_ds"].strip(), vals["target"].strip()), self.wizard_argv(vals, True),
                      [u"Plan czasownika (read-only, bez --install):", ""] + sum((wrap("  " + x, 72) for x in plan), []) +
                      ["", u"--install --yes: enrol (join przez ssh) -> seed -> activate, wznawialne tą samą komendą."])
+
+    def open_profile_pick(self, obj, key, label):
+        if obj.get("profiles") is None:
+            obj["profiles"], obj["perr"] = load_profiles(self.repo, self.files, self.data)
+        items = list(obj.get("profiles") or [])
+        cur = 0
+        for i, pr in enumerate(items):
+            if pr.get("name") == obj["vals"][key]:
+                cur = i
+        self.window = ("pick", {"title": u"Szablon dla pola: %s" % label.strip(), "items": items, "cur": cur, "field": key, "back": self.window,
+                                "allow_new": obj.get("kind") != "profile"})
+        self.scroll = 0
+
+    def form_advance(self, obj, FIELDS):
+        """Enter = nastepne pole; w kreatorze na ostatnim polu kroku = nastepny krok."""
+        if obj.get("kind") == "wizard" and FIELDS[obj["cur"]][0] == "src_host" and not obj["vals"]["src_host"].strip():
+            self.message = u"podaj host, na którym są dane"
+            return
+        c = obj["cur"] + 1
+        while c < len(FIELDS) and (FIELDS[c][2] in ("head", "info")
+                                   or (FIELDS[c][0] == "local_user" and obj["vals"].get("account_mode") != "other")):
+            c += 1
+        if c < len(FIELDS):
+            obj["cur"] = c
+        elif obj.get("kind") == "wizard":
+            self.wizard_next_step(obj)
 
     def form_lines(self, obj, width):
         out = []
         vals = obj["vals"]
         FIELDS = obj.get("fields") or self.WIZARD_FIELDS
         lw = max(22, min(30, max(len(f[1]) for f in FIELDS)))
+        if obj.get("kind") == "wizard":
+            # Odpowiedzi z poprzednich krokow, zawsze na oku.
+            done = []
+            if obj["step"] > 0:
+                done.append(u"skąd: %s:%s" % (vals["src_host"].strip(), vals["src_ds"].strip()))
+            if obj["step"] > 1:
+                done.append(u"dokąd: %s" % vals["target"].strip())
+            if obj["step"] > 2:
+                done.append(u"szablon: %s" % vals["profile"])
+            if obj["step"] > 3:
+                done.append(u"nazwa: %s" % (vals["name"].strip() or "(z hosta)"))
+            if obj["step"] > 4:
+                done.append(u"konto: %s" % (self.wizard_account(vals) or "root"))
+            if done:
+                out += wrap(u"  " + u"   ".join(done), width - 4) + [""]
         for i, (key, label, kind, hint) in enumerate(FIELDS):
             mark = ">" if i == obj["cur"] else " "
             if kind == "toggle":
@@ -2618,10 +2798,23 @@ class UI(object):
                 out.append("")
                 out.append(fit("  " + label, width - 4))
                 continue
+            elif kind == "info":
+                lines = self.wizard_info(obj, key, width)
+                for n_, l in enumerate(lines):
+                    out.append(fit(("  " + l) if not label else "  %-*s %s" % (lw, label if n_ == 0 else "", l), width - 4))
+                continue
+            elif kind == "radio":
+                if i == obj["cur"]:
+                    obj["_cur_y"] = len(out)
+                for n_, (o, olabel) in enumerate(self.RADIO_OPTS.get(key, [])):
+                    out.append(fit("%s %-*s (%s) %s" % (mark if n_ == 0 else " ", lw, label if n_ == 0 else "", "o" if vals[key] == o else " ", olabel), width - 4))
+                if i == obj["cur"]:
+                    out.append(fit("      " + hint, width - 4))
+                continue
             else:
                 shown = vals[key] + ("_" if i == obj["cur"] else "")
                 if kind == "pickds" and i == obj["cur"]:
-                    shown += u"      [Enter = lista]"
+                    shown += u"      [spacja = lista]" if obj.get("kind") == "wizard" else u"      [Enter = lista]"
                 if kind == "cron":
                     shown += u"      = %s" % cron_words(vals[key])
             if i == obj["cur"]:
@@ -2630,6 +2823,14 @@ class UI(object):
             if i == obj["cur"]:
                 out.append(fit("      " + hint, width - 4))
         out.append("")
+        if obj.get("kind") == "wizard":
+            sid = self.WIZ_STEPS[obj["step"]][0]
+            if obj.get("perr") and sid == "szablon":
+                out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
+            out.append(fit(u" Enter = dalej   Esc = %s   strzałki = pole   pisz = wartość   spacja = przełącz" % (u"krok wstecz" if obj["step"] > 0 else u"anuluj"), width - 4))
+            if self.message:
+                out += ["", fit(u" ! " + self.message, width - 4)]
+            return out
         if obj.get("kind") == "profile":
             out.append(fit(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).", width - 4))
             out.append(fit(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.", width - 4))
@@ -2737,12 +2938,15 @@ class UI(object):
             FIELDS = obj.get("fields") or self.WIZARD_FIELDS
             key, label, kind, hint = FIELDS[obj["cur"]]
             if k == "esc":
-                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+                if obj.get("kind") == "wizard" and obj["step"] > 0:
+                    self.wizard_set_step(obj, obj["step"] - 1)   # krok wstecz
+                else:
+                    self.window, self.message = None, u"anulowano -- nic nie wykonano"
             elif k in ("down", "up"):
-                # Naglowki szczebli nie sa polami: kursor je przeskakuje.
+                # Naglowki i linie informacyjne nie sa polami: kursor je przeskakuje.
                 step = 1 if k == "down" else -1
                 c = obj["cur"] + step
-                while 0 <= c < len(FIELDS) and FIELDS[c][2] == "head":
+                while 0 <= c < len(FIELDS) and FIELDS[c][2] in ("head", "info"):
                     c += step
                 if 0 <= c < len(FIELDS):
                     obj["cur"] = c
@@ -2753,33 +2957,36 @@ class UI(object):
             elif k == "enter":
                 if kind == "go" and obj.get("kind") == "profile":
                     self.profile_plan(obj)
+                elif kind == "go" and key == "plan":
+                    self.wizard_show_plan(obj)
                 elif kind == "go":
                     self.wizard_plan(obj["vals"])
+                elif kind == "pick" and obj.get("kind") == "wizard":
+                    self.form_advance(obj, FIELDS)   # w kreatorze Enter = dalej, spacja = lista
                 elif kind == "pick":
-                    if obj.get("profiles") is None:
-                        obj["profiles"], obj["perr"] = load_profiles(self.repo, self.files, self.data)
-                    items = list(obj.get("profiles") or [])
-                    cur = 0
-                    for i, pr in enumerate(items):
-                        if pr.get("name") == obj["vals"][key]:
-                            cur = i
-                    self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window,
-                                            "allow_new": obj.get("kind") != "profile"})
+                    self.open_profile_pick(obj, key, label)
                 elif kind == "pickds":
                     # Wpisana pelna wartosc + Enter = dalej (droga wsadowa);
                     # sam HOST (zrodlo) albo puste pole (cel) + Enter = lista.
                     v = obj["vals"][key]
-                    typed = (":" in v and v.split(":", 1)[1].strip()) if key == "source" else v.strip()
-                    if typed:
-                        obj["cur"] = min(obj["cur"] + 1, len(FIELDS) - 1)
+                    if v.strip():
+                        self.form_advance(obj, FIELDS)
                     else:
                         self.dataset_picker(obj, key, label)
-                elif kind == "toggle":
+                elif kind == "toggle" and obj.get("kind") != "wizard":
                     obj["vals"][key] = not obj["vals"][key]
                 else:
-                    obj["cur"] = min(obj["cur"] + 1, len(FIELDS) - 1)
+                    self.form_advance(obj, FIELDS)
             elif k == "space" and kind == "toggle":
                 obj["vals"][key] = not obj["vals"][key]
+            elif k == "space" and kind == "pick" and obj.get("kind") == "wizard":
+                self.open_profile_pick(obj, key, label)
+            elif k == "space" and kind == "pickds" and obj.get("kind") == "wizard":
+                self.dataset_picker(obj, key, label)
+            elif k in ("space", "right", "left") and kind == "radio":
+                opts = [o for o, _ in self.RADIO_OPTS.get(key, [])]
+                i = opts.index(obj["vals"][key]) if obj["vals"][key] in opts else 0
+                obj["vals"][key] = opts[(i + (-1 if k == "left" else 1)) % len(opts)]
             elif k == "bs" and kind in ("text", "pickds", "num", "cron"):
                 obj["vals"][key] = obj["vals"][key][:-1]
             elif k.startswith("text:") and kind in ("text", "pick", "pickds", "cron"):
@@ -3031,7 +3238,8 @@ def _ui_render(self, width, height):
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
                                              footer=(u"Enter na [ ZAPISZ ] = dalej   Esc = wróć" if obj.get("kind") == "profile"
-                                                     else u"Enter na [ PLAN ] = dalej   Esc = anuluj"))
+                                                     else (u"krok %d z %d   Enter = dalej   Esc = wstecz" % (obj["step"] + 1, len(self.WIZ_STEPS)) if obj.get("kind") == "wizard"
+                                                           else u"Enter na [ PLAN ] = dalej   Esc = anuluj")))
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")
