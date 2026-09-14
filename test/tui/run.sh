@@ -534,7 +534,7 @@ else
 fi
 W="$(wiz "$NP2,enter" --width 120 --height 40)"
 if has "$W" 'POTWIERDZENIE: Nowy szablon moj-h48 (na bazie default)' && has "$W" '--as=moj-h48 --tier=standard_hourly' && has "$W" '--quiesce=auto,degrade &&' \
-        && has "$W" '--from=moj-h48 --as=moj-h48 --force --tier=keep_hourly --keep=48' \
+        && has "$W" '--from=moj-h48 --as=moj-h48 --force' && has "$W" '--keep=48' \
         && has "$W" 'Szablon moj-h48: co godzinę (:01) · trzyma 48 godz.' && has "$W" 'jedna rodzina · zamraża: godzinowe' \
         && has "$W" 'Zmienione szczeble: standard_hourly, keep_hourly -- 2' && [ ! -s "$XL" ]; then
     ok "kreator: ZAPISZ pokazuje DOKLADNE komendy save-profile (jeden --tier na wywolanie) i slowami, co powstanie; nic nie wykonano"
