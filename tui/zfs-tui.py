@@ -2536,11 +2536,14 @@ class UI(object):
     # (check-source: SSH, ZFS, pakiet) i jedna akcja (prepare-source), potem
     # datasety z listy (wiele, drzewo), dokad, szablon slowami, nazwa, konto
     # (root / zfsbackup / inne), zaawansowane, podsumowanie zdaniem + komenda.
-    WIZ_ORDER = ["host", "diag", "ds", "target", "profile", "name", "acct", "adv", "summary"]
-    WIZ_TITLES = {"host": u"Z którego hosta?", "diag": u"Sprawdzam host", "ds": u"Które datasety?", "target": u"Dokąd trafi kopia?",
+    WIZ_ORDER = ["mode", "host", "diag", "ds", "target", "profile", "name", "acct", "adv", "summary"]
+    WIZ_TITLES = {"mode": u"Typ relacji", "host": u"Z którego hosta?", "diag": u"Sprawdzam host", "ds": u"Które datasety?", "target": u"Dokąd trafi kopia?",
                   "profile": u"Jak często i ile trzymać?", "name": u"Jak nazwać relację?", "acct": u"Kto ma uruchamiać kopie?",
                   "adv": u"Zaawansowane (zwykle bez zmian)", "summary": u"Podsumowanie"}
-    WIZ_STEPNO = {"host": 1, "diag": 1, "ds": 1, "target": 2, "profile": 3, "name": 4, "acct": 5, "adv": 6, "summary": 7}
+    WIZ_STEPNO = {"mode": 1, "host": 2, "diag": 2, "ds": 2, "target": 3, "profile": 4, "name": 5, "acct": 6, "adv": 7, "summary": 8}
+    WIZ_NSTEP = 8
+    WIZ_MODES = [("backup", u"backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)"),
+                 ("sync", u"synchro   obie strony trzymają to samo pod TĄ SAMĄ ścieżką, bez celu (--mode=sync)")]
     WIZ_ACCTS = [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
                  ("zfsbackup", u"zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)"),
                  ("other", u"inne konto -- podasz nazwę")]
@@ -2550,9 +2553,9 @@ class UI(object):
 
     def wizard_open(self):
         profiles, perr = load_profiles(self.repo, self.files, self.data)
-        vals = {"host": "", "hostname": "", "port": "", "ds": [], "target": "", "profile": "default", "name": "",
+        vals = {"mode": "backup", "host": "", "hostname": "", "port": "", "ds": [], "excl": [], "target": "", "profile": "default", "name": "",
                 "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat"}
-        self.window = ("wiz", {"kind": "wiz", "step": "host", "cur": 0, "filter": "", "typing": None, "text": "",
+        self.window = ("wiz", {"kind": "wiz", "step": "mode", "cur": 0, "filter": "", "typing": None, "text": "",
                                "vals": vals, "profiles": profiles, "perr": perr})
         self.scroll = 0
 
@@ -2598,7 +2601,9 @@ class UI(object):
         """Linie kroku jako lista: wybieralne (sel) i informacyjne. Filtr zaweza wybieralne."""
         v, st, f = obj["vals"], obj["step"], obj["filter"].lower()
         items = []
-        if st == "host":
+        if st == "mode":
+            items = [{"key": k, "sel": True, "text": t} for k, t in self.WIZ_MODES]
+        elif st == "host":
             items = [dict(x, sel=True) for x in self.wiz_hosts()]
         elif st == "diag":
             doc, err = load_check(self.repo, self.files, self.data, v["host"], v["port"])
@@ -2614,18 +2619,20 @@ class UI(object):
                          {"key": "back", "sel": True, "text": u"Wróć"}]
         elif st == "ds":
             tree, err = self.wiz_ds_tree(obj)
-            items = [{"key": "go", "sel": True, "text": u"Dalej z zaznaczonymi (%d)" % len(v["ds"])},
-                     {"key": "rec", "sel": True, "text": u"Podrzędne datasety zaznaczonego rodzica: %s" % (
-                         u"każdy osobnym strumieniem (flat) -- zalecane" if v["recursion"] == "flat" else u"jednym strumieniem (atomic) -- bez retencji u źródła")}]
+            items = [{"key": "go", "sel": True, "text": u"Dalej z zaznaczonymi (%d%s)" % (len(v["ds"]), (u", wyłączone %d" % len(v["excl"])) if v["excl"] else "")},
+                     {"key": "rec", "sel": True, "text": u"Podrzędne zaznaczonego rodzica: %s" % (
+                         u"-R  każdy osobnym strumieniem (flat), wyłączenia ✗ dozwolone -- zalecane" if v["recursion"] == "flat"
+                         else u"-r  jeden strumień (atomic): bez wyłączeń, bez retencji u źródła")}]
             if err:
                 items.append({"key": "manual", "sel": True, "text": u"Lista niedostępna (%s) -- wpisz ścieżki ręcznie" % err})
             for d in tree:
                 covered = any(d["name"].startswith(x + "/") for x in v["ds"])
-                mark = u"✓" if d["name"] in v["ds"] else (u"·" if covered else " ")
+                excl = d["name"] in v["excl"] or any(d["name"].startswith(x + "/") for x in v["excl"])
+                mark = u"✓" if d["name"] in v["ds"] else (u"✗" if (covered and excl) else (u"·" if covered else " "))
                 txt = u"%s %s%s" % (mark, "  " * d["depth"], d["name"].rsplit("/", 1)[-1] if d["depth"] else d["name"])
                 extra = u"%s  %s%s" % (hbytes_short(d["used"]), d["type"], (u"  +%d podrzędne" % d["kids"]) if d["kids"] else "")
                 if covered:
-                    extra += u"  (w rodzicu)"
+                    extra += u"  (wyłączony -X)" if excl else u"  (w rodzicu; Enter = wyłącz)"
                 items.append({"key": d["name"], "sel": True, "text": fit(txt, 46) + " " + extra, "full": d["name"]})
         elif st == "target":
             loc, err = load_datasets(self.repo, self.files, self.data)
@@ -2655,7 +2662,7 @@ class UI(object):
                      {"key": "srcprof", "sel": True, "text": u"%s %s" % (fit(u"Retencja u źródła", 30), v["srcprof"] or u"taka sama jak tutaj (%s)" % v["profile"])},
                      {"key": "grant", "sel": True, "text": u"%s %s" % (fit(u"Uprawnienia na peerze", 30), u"nadaj zdalnie: tak" if v["grant"] else u"nadaj zdalnie: nie (JOIN zrobi to przy pierwszym połączeniu)")},
                      {"key": "manual", "sel": True, "text": u"%s %s" % (fit(u"Parowanie", 30), u"ręczne: pakiet do przeniesienia" if v["manual"] else u"przez ssh (automatyczne)")},
-                     {"key": "rec", "sel": True, "text": u"%s %s" % (fit(u"Podrzędne datasety", 30), u"każdy osobno (flat)" if v["recursion"] == "flat" else u"jednym strumieniem (atomic)")}]
+                     {"key": "rec", "sel": True, "text": u"%s %s" % (fit(u"Podrzędne datasety", 30), u"-R  każdy osobno (flat)" if v["recursion"] == "flat" else u"-r  jednym strumieniem (atomic)")}]
         elif st == "summary":
             items = [{"key": "plan", "sel": True, "text": u"Pokaż plan  (czasownik bez --install: nic nie zmienia)"},
                      {"key": "run", "sel": True, "text": u"Wykonaj  (plan, potem komenda z --install --yes do potwierdzenia)"}]
@@ -2667,15 +2674,17 @@ class UI(object):
         v, st = obj["vals"], obj["step"]
         o = self.WIZ_ORDER.index(st)
         a = []
-        if o > 2:
-            a.append(u"skąd: %s (%s)" % (v["host"], ", ".join(v["ds"]) or "?"))
+        if o > 0:
+            a.append(u"typ: %s" % (u"synchro" if v["mode"] == "sync" else u"backup"))
         if o > 3:
+            a.append(u"skąd: %s (%s%s)" % (v["host"], ", ".join(v["ds"]) or "?", (u"; bez %s" % ", ".join(v["excl"])) if v["excl"] else ""))
+        if o > 4 and v["mode"] != "sync":
             a.append(u"dokąd: %s" % v["target"])
-        if o > 4:
-            a.append(u"szablon: %s" % v["profile"])
         if o > 5:
-            a.append(u"nazwa: %s" % (v["name"] or "(z hosta)"))
+            a.append(u"szablon: %s" % v["profile"])
         if o > 6:
+            a.append(u"nazwa: %s" % (v["name"] or "(z hosta)"))
+        if o > 7:
             a.append(u"konto: %s" % (self.wiz_account(v) or "root"))
         return a
 
@@ -2685,7 +2694,11 @@ class UI(object):
     def wizard_argv(self, vals, install):
         v = vals
         host = v["host"].strip() + ((":" + v["port"].strip()) if v["port"].strip() and v["port"].strip() != "22" else "")
-        a = [self.zb(), "--source=%s:%s" % (host, ",".join(v["ds"])), "--target=%s" % v["target"].strip()]
+        a = [self.zb(), "--source=%s:%s" % (host, ",".join(v["ds"]))]
+        if v.get("mode") == "sync":
+            a.append("--mode=sync")
+        else:
+            a.append("--target=%s" % v["target"].strip())
         if v.get("profile"):
             a.append("--profile=%s" % v["profile"])
         if v.get("srcprof"):
@@ -2694,6 +2707,8 @@ class UI(object):
             a.append("--name=%s" % v["name"].strip())
         if v.get("recursion") and v["recursion"] != "flat":
             a.append("--recursive=%s" % v["recursion"])
+        for x in v.get("excl", []):
+            a.append("--exclude-child=%s" % x)
         if self.wiz_account(v):
             a.append("--local-user=%s" % self.wiz_account(v))
         if v.get("grant"):
@@ -2717,17 +2732,23 @@ class UI(object):
         n = len(v["ds"])
         what = u"migawki %s" % (u"datasetu %s" % v["ds"][0] if n == 1 else u"%d datasetów (%s)" % (n, ", ".join(v["ds"])))
         acct = self.wiz_account(v) or "root"
-        if w:
-            sent = u"%s %s pobierze %s z hosta %s do %s/%s/…, %s (%s, %s). %s. Monitor: %s." % (
-                w["cadence"][0].upper() + w["cadence"][1:], host, what, v["host"], v["target"], v["host"],
-                w["retention"].replace("trzyma ", u"trzymając "), w["mech"], w["shape"], w["quiesce"][0].upper() + w["quiesce"][1:], w["monitor"].replace("monitor ", ""))
+        if v["excl"]:
+            what += u" bez %s" % ", ".join(v["excl"])
+        if v["mode"] == "sync":
+            where = u"%s i %s będą trzymać %s pod tą samą ścieżką po obu stronach" % (host, v["host"], what)
         else:
-            sent = u"%s pobierze %s z hosta %s do %s/%s/… wg szablonu %s." % (host, what, v["host"], v["target"], v["host"], v["profile"])
+            where = u"%s pobierze %s z hosta %s do %s/%s/…" % (host, what, v["host"], v["target"], v["host"])
+        if w:
+            sent = u"%s %s, %s (%s, %s). %s. Monitor: %s." % (
+                w["cadence"][0].upper() + w["cadence"][1:], where, w["retention"].replace("trzyma ", u"trzymając "), w["mech"], w["shape"],
+                w["quiesce"][0].upper() + w["quiesce"][1:], w["monitor"].replace("monitor ", ""))
+        else:
+            sent = u"%s wg szablonu %s." % (where, v["profile"])
         out = wrap(sent, width - 6)
         out += wrap(u"Relacja: %s. Zadania na %s jako %s%s. Na peerze konto zfsbackup-%s (tworzy JOIN).%s%s%s" % (
             v["name"] or u"(z nazwy hosta)", host, acct, (u" (port %s)" % v["port"]) if v["port"].strip() and v["port"] != "22" else "", host,
             (u" Retencja u źródła: %s." % v["srcprof"]) if v["srcprof"] else "", u" Parowanie ręczne." if v["manual"] else "",
-            u" Podrzędne jednym strumieniem (atomic)." if v["recursion"] == "atomic" else ""), width - 6)
+            u" Podrzędne jednym strumieniem (-r, atomic)." if v["recursion"] == "atomic" else u" Podrzędne osobno (-R)." if any(True for _ in v["ds"]) else ""), width - 6)
         out += ["", u"Komenda:"] + wrap("  " + self.shell_line(self.wizard_argv(v, True)), width - 6)
         return out
 
@@ -2892,15 +2913,21 @@ class UI(object):
             if o == 0:
                 self.window, self.message = None, u"anulowano -- nic nie wykonano"
                 return
-            self.wiz_goto(obj, self.WIZ_ORDER[o - 1])
-            if self.WIZ_ORDER[o - 1] == "diag":
-                self.wiz_goto(obj, "host")
+            prev = self.WIZ_ORDER[o - 1]
+            if prev == "diag":
+                prev = "host"
+            if prev == "target" and v["mode"] == "sync":
+                prev = "ds"
+            self.wiz_goto(obj, prev)
         elif k == "enter":
             self.message = ""
             if it is None:
                 return
             key = it.get("key")
-            if st == "host":
+            if st == "mode":
+                v["mode"] = key
+                self.wiz_goto(obj, "host")
+            elif st == "host":
                 if key == "__other__":
                     obj["typing"], obj["text"] = "host", ""
                 elif not it.get("ok", True):
@@ -2933,19 +2960,31 @@ class UI(object):
                     if not v["ds"]:
                         self.message = u"zaznacz co najmniej jeden dataset (Enter na linii)"
                         return
-                    self.wiz_goto(obj, "target")
+                    self.wiz_goto(obj, "profile" if v["mode"] == "sync" else "target")
                 elif key == "rec":
+                    if v["recursion"] == "flat" and v["excl"]:
+                        self.message = u"-r (atomic) nie ma czego filtrować: najpierw cofnij wyłączenia (%s), silnik odmawia -X pod -r" % ", ".join(v["excl"])
+                        return
                     v["recursion"] = "atomic" if v["recursion"] == "flat" else "flat"
                 elif key == "manual":
                     obj["typing"], obj["text"] = "ds", ",".join(v["ds"])
                 else:
                     if any(key.startswith(x + "/") for x in v["ds"]):
-                        self.message = u"%s jest już objęty przez zaznaczonego rodzica" % key
+                        # Dziecko zaznaczonego rodzica: Enter wylacza (-X) i wlacza z powrotem.
+                        if v["recursion"] == "atomic":
+                            self.message = u"pod -r (atomic) nie da się wyłączyć podrzędnego -- przełącz na -R"
+                            return
+                        if key in v["excl"]:
+                            v["excl"].remove(key)
+                        else:
+                            v["excl"] = [x for x in v["excl"] if not x.startswith(key + "/")] + [key]
                         return
                     if key in v["ds"]:
                         v["ds"].remove(key)
+                        v["excl"] = [x for x in v["excl"] if not x.startswith(key + "/")]
                     else:
                         v["ds"] = [x for x in v["ds"] if not x.startswith(key + "/")] + [key]
+                        v["excl"] = [x for x in v["excl"] if x != key]
             elif st == "target":
                 if key == "manual":
                     obj["typing"], obj["text"] = "target", v["target"]
@@ -2978,6 +3017,9 @@ class UI(object):
                 elif key == "manual":
                     v["manual"] = not v["manual"]
                 elif key == "rec":
+                    if v["recursion"] == "flat" and v["excl"]:
+                        self.message = u"-r (atomic) nie ma czego filtrować: najpierw cofnij wyłączenia w kroku datasetów"
+                        return
                     v["recursion"] = "atomic" if v["recursion"] == "flat" else "flat"
             elif st == "summary":
                 if key == "plan":
@@ -3002,7 +3044,7 @@ class UI(object):
 
     def wizard_plan(self, vals):
         """Wykonaj: czasownik bez --install jest read-only i mowi, co by zrobil; potem potwierdzenie."""
-        if not vals["host"].strip() or not vals["ds"] or not vals["target"].strip():
+        if not vals["host"].strip() or not vals["ds"] or (vals["mode"] != "sync" and not vals["target"].strip()):
             self.message = u"kreator: skąd (host i datasety) i dokąd są wymagane"
             return
         argv = self.wizard_argv(vals, False)
@@ -3457,9 +3499,9 @@ def _ui_render(self, width, height):
             if cur is not None and cur >= inner_h - 2:
                 wscroll = cur - (inner_h - 2) + 1
             st = obj["step"]
-            title = u"Nowa relacja: pobranie danych z innego hosta -- krok %d/7: %s" % (self.WIZ_STEPNO[st], self.WIZ_TITLES[st])
+            title = u"Nowa relacja -- krok %d/%d: %s" % (self.WIZ_STEPNO[st], self.WIZ_NSTEP, self.WIZ_TITLES[st])
             foot = u"↑↓ wybór   Enter = %s   Esc = %s%s" % (u"zaznacz / dalej" if st == "ds" else u"wybierz i dalej",
-                                                             u"anuluj" if st == "host" and not obj["typing"] else u"wstecz",
+                                                             u"anuluj" if st == "mode" and not obj["typing"] else u"wstecz",
                                                              u"   pisz = filtruj listę" if st in ("host", "ds", "target", "profile") and not obj["typing"] else "")
             if st == "profile" and not obj["typing"]:
                 foot += u"   Ins = nowy szablon"

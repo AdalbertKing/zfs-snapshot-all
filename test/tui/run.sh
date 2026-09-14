@@ -459,7 +459,7 @@ else
     bad "akcje: bez rekordu odmawia" "$(cat "$XL")" "$AH"
 fi
 A="$(act down,ins)"
-if has "$A" '╔═ Nowa relacja: pobranie danych z innego hosta -- krok 1/7: Z którego hosta?' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Nowa relacja -- krok 1/8: Typ relacji' && [ ! -s "$XL" ]; then
     ok "akcje: Ins otwiera kreator nowej relacji, nic nie wykonujac"
 else
     bad "akcje: Ins" "$A"
@@ -483,28 +483,35 @@ wizn() {  # jak wiz, ale host BEZ pakietu
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-pve9b.json" --check-source "$P10/check-source.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
 W="$(wiz ins --width 110)"
-if has "$W" '╔═ Nowa relacja: pobranie danych z innego hosta -- krok 1/7: Z którego hosta? ═' && has "$W" '> 192.168.28.99     relacje: duplikat, lab-ct201, lab-srv-a, lab-srv-b, lab-vm101 -- kolejne datasety' \
-        && has "$W" 'inny host…        wpisz adres; pakiet nie musi tam być' && has "$W" '↑↓ wybór   Enter = wybierz i dalej   Esc = anuluj   pisz = filtruj listę' && [ ! -s "$XL" ]; then
-    ok "kreator: krok 1 = lista hostow; host z relacja jest na liscie z nazwami relacji, 'inny host' wpuszcza adres; stopka = jedna regula klawiszy"
+if has "$W" '╔═ Nowa relacja -- krok 1/8: Typ relacji ═' && has "$W" '> backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)' \
+        && has "$W" '  synchro   obie strony trzymają to samo pod TĄ SAMĄ ścieżką, bez celu (--mode=sync)' && has "$W" 'Esc = anuluj'; then
+    ok "kreator: krok 1 = typ relacji -- backup (pobranie) albo synchro (--mode=sync), kursor na backup"
+else
+    bad "kreator: typ relacji" "$W"
+fi
+W="$(wiz ins,enter --width 110)"
+if has "$W" '╔═ Nowa relacja -- krok 2/8: Z którego hosta? ═' && has "$W" '> 192.168.28.99     relacje: duplikat, lab-ct201, lab-srv-a, lab-srv-b, lab-vm101 -- kolejne datasety' \
+        && has "$W" 'inny host…        wpisz adres; pakiet nie musi tam być' && has "$W" '↑↓ wybór   Enter = wybierz i dalej   Esc = wstecz   pisz = filtruj listę' && [ ! -s "$XL" ]; then
+    ok "kreator: krok 2 = lista hostow; host z relacja jest na liscie z nazwami relacji, 'inny host' wpuszcza adres; stopka = jedna regula klawiszy"
 else
     bad "kreator: krok 1" "$W"
 fi
-W="$(wiz ins,enter --width 110)"
-if has "$W" '! z 192.168.28.99 relacja już jest; kolejne datasety = modyfikacja relacji (CLI jeszcze nie umie)' && has "$W" 'krok 1/7: Z którego hosta?'; then
+W="$(wiz ins,enter,enter --width 110)"
+if has "$W" '! z 192.168.28.99 relacja już jest; kolejne datasety = modyfikacja relacji (CLI jeszcze nie umie)' && has "$W" 'krok 2/8: Z którego hosta?'; then
     ok "kreator: Enter na hoscie z relacja odmawia i mowi dlaczego (relacja = para hostow; modyfikacji CLI nie umie)"
 else
     bad "kreator: host z relacja" "$W"
 fi
-W="$(wiz ins,down,enter --width 110)"
+W="$(wiz ins,enter,down,enter --width 110)"
 if has "$W" '> Adres hosta                    _' && has "$W" 'po Enterze kreator sprawdzi SSH, ZFS i pakiet'; then
     ok "kreator: 'inny host' = jedno pole na adres"
 else
     bad "kreator: inny host" "$W"
 fi
 # DIAGNOZA: trzy fakty z check-source, jedna akcja.
-H="ins,down,enter,text:192.168.28.98,enter"
+H="ins,enter,down,enter,text:192.168.28.98,enter"
 W="$(wizn "$H" --width 110)"
-if has "$W" 'krok 1/7: Sprawdzam host' && has "$W" '192.168.28.98   (pve9b)' && has "$W" 'SSH jako root .............. OK   klucz roota pve10 jest tam zaufany' \
+if has "$W" 'krok 2/8: Sprawdzam host' && has "$W" '192.168.28.98   (pve9b)' && has "$W" 'SSH jako root .............. OK   klucz roota pve10 jest tam zaufany' \
         && has "$W" 'ZFS ........................ OK   hdd 39.5G (wolne 39.5G)' && has "$W" 'pakiet zfs-snapshot-all .... BRAK /root/scripts/zsa-none nie istnieje' \
         && has "$W" '> Zainstaluj pakiet na 192.168.28.98  (prepare-source: git clone jako root; bez crona, bez relacji)' && has "$W" '  Wróć'; then
     ok "kreator: diagnoza hosta bez pakietu -- SSH OK, ZFS OK z pula, pakiet BRAK, akcja 'Zainstaluj pakiet' i 'Wroc'"
@@ -524,7 +531,7 @@ else
     bad "kreator: t prepare-source" "$(cat "$XL")" "$W"
 fi
 W="$(wizn "$H,enter,t,esc" --width 110)"
-if has "$W" 'krok 1/7: Sprawdzam host'; then
+if has "$W" 'krok 2/8: Sprawdzam host'; then
     ok "kreator: Esc z okna wyjscia wraca do diagnozy (liczonej od nowa)"
 else
     bad "kreator: powrot z instalacji" "$W"
@@ -544,7 +551,7 @@ fi
 # DATASETY: drzewo, wiele, rekurencja, filtr.
 D="$H,enter"
 W="$(wiz "$D" --width 110 --height 34)"
-if has "$W" 'krok 1/7: Które datasety?' && has "$W" '> Dalej z zaznaczonymi (0)' && has "$W" 'Podrzędne datasety zaznaczonego rodzica: każdy osobnym strumieniem (flat) -- zalecane' \
+if has "$W" 'krok 2/8: Które datasety?' && has "$W" '> Dalej z zaznaczonymi (0)' && has "$W" 'Podrzędne zaznaczonego rodzica: -R  każdy osobnym strumieniem (flat), wyłączenia ✗ dozwolone -- zalecane' \
         && hasE "$W" '^║     hdd +33.2M  filesystem  \+16 podrzędne' && hasE "$W" '^║       data +9.1M  filesystem  \+3 podrzędne' && hasE "$W" '^║         photos +3.0M  filesystem' \
         && hasE "$W" '^║         vm-201-disk-0 +12.0K  volume'; then
     ok "kreator: lista datasetow peera jako DRZEWO (wciecie, ostatni czlon, zajete, typ, liczba podrzednych), z linia rekurencji na gorze"
@@ -559,19 +566,31 @@ else
 fi
 SEL="$D,down,down,down,down,down,down,enter,down,down,down,down,down,down,enter,home"
 W="$(wiz "$SEL" --width 110 --height 34)"
-if has "$W" '> Dalej z zaznaczonymi (2)' && hasE "$W" '^║   ✓   data +9.1M' && hasE "$W" '^║   ·     docs +3.0M  filesystem  \(w rodzicu\)' && hasE "$W" '^║   ✓   home +6.1M'; then
+if has "$W" '> Dalej z zaznaczonymi (2)' && hasE "$W" '^║   ✓   data +9.1M' && hasE "$W" '^║   ·     docs +3.0M  filesystem  \(w rodzicu; Enter = wyłącz\)' && hasE "$W" '^║   ✓   home +6.1M'; then
     ok "kreator: Enter zaznacza (✓), podrzedne zaznaczonego rodzica sa '· (w rodzicu)', licznik w pierwszej linii"
 else
     bad "kreator: zaznaczanie" "$W"
 fi
 W="$(wiz "$SEL,down,down,down,down,down,down,down,enter" --width 110 --height 34)"
-if has "$W" '! hdd/data/docs jest już objęty przez zaznaczonego rodzica'; then
-    ok "kreator: Enter na podrzednym zaznaczonego rodzica mowi, ze juz jest objety"
+if hasE "$W" '^║ . ✗     docs +3.0M  filesystem  \(wyłączony -X\)' && has "$W" 'Dalej z zaznaczonymi (2, wyłączone 1)'; then
+    ok "kreator: Enter na podrzednym zaznaczonego rodzica WYLACZA go (✗, -X), licznik mowi ile wylaczonych"
 else
-    bad "kreator: podrzedny objety" "$W"
+    bad "kreator: wylaczenie podrzednego" "$W"
+fi
+W="$(wiz "$SEL,down,down,down,down,down,down,down,enter,up,up,up,up,up,up,enter" --width 110 --height 34)"
+if has "$W" '! -r (atomic) nie ma czego filtrować: najpierw cofnij wyłączenia (hdd/data/docs)'; then
+    ok "kreator: z wylaczeniem przelaczenie na -r odmawia (silnik odmawia -X pod -r)"
+else
+    bad "kreator: -r z wylaczeniami" "$W"
+fi
+W="$(wiz "$SEL,down,enter,down,down,down,down,down,down,enter" --width 110 --height 34)"
+if has "$W" '! pod -r (atomic) nie da się wyłączyć podrzędnego -- przełącz na -R'; then
+    ok "kreator: pod -r Enter na podrzednym odmawia i mowi, ze trzeba -R"
+else
+    bad "kreator: wylaczenie pod -r" "$W"
 fi
 W="$(wiz "$SEL,down,enter" --width 110 --height 34)"
-if has "$W" 'Podrzędne datasety zaznaczonego rodzica: jednym strumieniem (atomic) -- bez retencji u źródła'; then
+if has "$W" 'Podrzędne zaznaczonego rodzica: -r  jeden strumień (atomic): bez wyłączeń, bez retencji u źródła'; then
     ok "kreator: linia rekurencji przelacza flat <-> atomic"
 else
     bad "kreator: rekurencja" "$W"
@@ -585,7 +604,7 @@ fi
 # DOKAD: lista lokalna, ladowisko dla PODSWIETLONEGO celu nad lista.
 T="$SEL,enter"
 W="$(wiz "$T,down" --width 110 --height 34)"
-if has "$W" 'krok 2/7: Dokąd trafi kopia?' && has "$W" 'skąd: 192.168.28.98 (hdd/data, hdd/home)' && has "$W" 'kopie wylądują w: hdd/backups/192.168.28.98/hdd/data' \
+if has "$W" 'krok 3/8: Dokąd trafi kopia?' && has "$W" 'skąd: 192.168.28.98 (hdd/data, hdd/home)' && has "$W" 'kopie wylądują w: hdd/backups/192.168.28.98/hdd/data' \
         && has "$W" '                  hdd/backups/192.168.28.98/hdd/home' && has "$W" '> hdd/backups '; then
     ok "kreator: krok 2 -- lista lokalnych datasetow, ladowisko kazdego zaznaczonego dla PODSWIETLONEGO celu, zanim padnie Enter"
 else
@@ -594,7 +613,7 @@ fi
 # SZABLON slowami, Ins = nowy szablon (formularz z krokow b), Esc wraca do kreatora.
 P="$T,down,enter"
 W="$(wiz "$P" --width 120 --height 34)"
-if has "$W" 'krok 3/7: Jak często i ile trzymać?' && has "$W" 'dokąd: hdd/backups' && has "$W" '> default          co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina GFS' \
+if has "$W" 'krok 4/8: Jak często i ile trzymać?' && has "$W" 'dokąd: hdd/backups' && has "$W" '> default          co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina GFS' \
         && has "$W" 'jedna rodzina · bez zamrażania · monitor 90m / 150m · godzinowy create' && has "$W" 'Ins = nowy szablon'; then
     ok "kreator: krok 3 -- lista szablonow SLOWAMI z kursorem na 'default', opis pod podswietlonym, Ins = nowy szablon"
 else
@@ -607,14 +626,14 @@ else
     bad "kreator: Ins nowy szablon" "$W"
 fi
 W="$(wiz "$P,ins,esc" --width 120 --height 34)"
-if has "$W" 'krok 3/7' && has "$W" '> default '; then
+if has "$W" 'krok 4/8' && has "$W" '> default '; then
     ok "kreator: Esc z formularza szablonu wraca do kroku 3"
 else
     bad "kreator: Esc z szablonu" "$W"
 fi
 NP2="$P,ins,text:moj-h48,down,down,down,down,space,down,bs,bs,text:48,end,enter,t,esc"
 W="$(wiz "$NP2" --width 120 --height 34)"
-if grep -q "save-profile --from=default --as=moj-h48" "$XL" && has "$W" 'krok 3/7' && has "$W" '> moj-h48          (zapisany przed chwilą albo wpisany ręcznie; czasownik sprawdzi)'; then
+if grep -q "save-profile --from=default --as=moj-h48" "$XL" && has "$W" 'krok 4/8' && has "$W" '> moj-h48          (zapisany przed chwilą albo wpisany ręcznie; czasownik sprawdzi)'; then
     ok "kreator: zapis nowego szablonu (t) i Esc wraca do kroku 3 z NOWYM szablonem na gorze listy, podswietlonym"
 else
     bad "kreator: nowy szablon z kreatora" "$(cat "$XL")" "$W"
@@ -622,14 +641,14 @@ fi
 # NAZWA, KONTO, ZAAWANSOWANE.
 N="$P,enter"
 W="$(wiz "$N" --width 110)"
-if has "$W" 'krok 4/7: Jak nazwać relację?' && has "$W" 'szablon: default' && has "$W" '> Nazwa relacji                  pve9b_' && has "$W" 'relacja jest hosta, nie datasetu'; then
+if has "$W" 'krok 5/8: Jak nazwać relację?' && has "$W" 'szablon: default' && has "$W" '> Nazwa relacji                  pve9b_' && has "$W" 'relacja jest hosta, nie datasetu'; then
     ok "kreator: krok 4 -- nazwa zaproponowana z nazwy HOSTA (pve9b), bo relacja jest hosta"
 else
     bad "kreator: nazwa" "$W"
 fi
 A="$N,enter"
-W="$(wiz "$A" --width 110)"
-if has "$W" 'krok 5/7: Kto ma uruchamiać kopie?' && has "$W" 'nazwa: pve9b' && has "$W" '  root -- bez izolacji' && has "$W" '> zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)' && has "$W" '  inne konto -- podasz nazwę'; then
+W="$(wiz "$A" --width 130)"
+if has "$W" 'krok 6/8: Kto ma uruchamiać kopie?' && has "$W" 'nazwa: pve9b' && has "$W" '  root -- bez izolacji' && has "$W" '> zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)' && has "$W" '  inne konto -- podasz nazwę'; then
     ok "kreator: krok 5 -- trzy linie konta, kursor na zfsbackup (domyslne konto delegowane)"
 else
     bad "kreator: konto" "$W"
@@ -641,15 +660,15 @@ else
     bad "kreator: inne bez nazwy" "$W"
 fi
 W="$(wiz "$A,down,enter,text:ops,enter" --width 130)"
-if has "$W" 'krok 6/7' && has "$W" 'konto: ops'; then
+if has "$W" 'krok 7/8' && has "$W" 'konto: ops'; then
     ok "kreator: 'inne konto' + nazwa idzie dalej, naglowek pokazuje konto: ops"
 else
     bad "kreator: inne konto" "$W"
 fi
 Z="$A,enter"
 W="$(wiz "$Z" --width 110)"
-if has "$W" 'krok 6/7: Zaawansowane (zwykle bez zmian)' && has "$W" '> Bez zmian, dalej' && has "$W" 'Port SSH peera                 22' && has "$W" 'Retencja u źródła              taka sama jak tutaj (default)' \
-        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             każdy osobno (flat)'; then
+if has "$W" 'krok 7/8: Zaawansowane (zwykle bez zmian)' && has "$W" '> Bez zmian, dalej' && has "$W" 'Port SSH peera                 22' && has "$W" 'Retencja u źródła              taka sama jak tutaj (default)' \
+        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             -R  każdy osobno (flat)'; then
     ok "kreator: krok 6 -- lista ustawien z wartosciami, 'Bez zmian, dalej' na gorze"
 else
     bad "kreator: zaawansowane" "$W"
@@ -669,7 +688,7 @@ fi
 # PODSUMOWANIE: zdanie + komenda; plan; Wykonaj -> potwierdzenie -> t.
 S7="$Z,enter"
 W="$(wiz "$S7" --width 110 --height 34)"
-if has "$W" 'krok 7/7: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobierze migawki 2 datasetów (hdd/data, hdd/home) z hosta 192.168.28.98 do' \
+if has "$W" 'krok 8/8: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobierze migawki 2 datasetów (hdd/data, hdd/home) z hosta 192.168.28.98 do' \
         && has "$W" 'hdd/backups/192.168.28.98/…, trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina GFS, jedna rodzina).' \
         && has "$W" 'Bez zamrażania. Monitor: 90m / 150m.' && has "$W" 'Relacja: pve9b. Zadania na pve10 jako zfsbackup. Na peerze konto zfsbackup-pve10 (tworzy JOIN).' \
         && has "$W" 'Komenda:' && has "$W" '--source=192.168.28.98:hdd/data,hdd/home' && has "$W" '--name=pve9b' && has "$W" '--local-user=zfsbackup' \
@@ -685,7 +704,7 @@ else
     bad "kreator: plan" "$W"
 fi
 W="$(wiz "$S7,enter,esc" --width 110 --height 34)"
-if has "$W" 'krok 7/7: Podsumowanie'; then
+if has "$W" 'krok 8/8: Podsumowanie'; then
     ok "kreator: Esc z planu wraca do podsumowania"
 else
     bad "kreator: powrot z planu" "$W"
@@ -709,9 +728,42 @@ if grep -q -- "--source=192.168.28.98:2222:hdd/data,hdd/home --target=hdd/backup
 else
     bad "kreator: pelne argv" "$(cat "$XL")"
 fi
+# SYNCHRO: bez kroku 'Dokad', komenda z --mode=sync, zdanie o obu stronach
+SY="ins,down,enter,down,enter,text:192.168.28.98,enter,enter,down,down,down,down,down,down,enter,home,enter"
+W="$(wiz "$SY" --width 120 --height 34)"
+if has "$W" 'krok 4/8: Jak często i ile trzymać?' && has "$W" 'typ: synchro   skąd: 192.168.28.98 (hdd/data)' && ! has "$W" 'dokąd:'; then
+    ok "kreator: synchro pomija krok 'Dokad' (mapowanie to tozsamosc) i idzie z datasetow do szablonu"
+else
+    bad "kreator: synchro bez celu" "$W"
+fi
+W="$(wiz "$SY,enter,enter,enter,enter" --width 120 --height 34)"
+if has "$W" 'krok 8/8: Podsumowanie' && has "$W" 'pve10 i 192.168.28.98 będą trzymać migawki datasetu hdd/data pod tą samą ścieżką po obu stronach' && has "$W" '--source=192.168.28.98:hdd/data --mode=sync' && ! has "$W" '--target='; then
+    ok "kreator: synchro -- zdanie o obu stronach i komenda --mode=sync bez --target"
+else
+    bad "kreator: synchro podsumowanie" "$W"
+fi
+W="$(wiz "$SY,enter,enter,enter,enter,down,enter,t" --width 120 --height 34)"
+if grep -q -- "--source=192.168.28.98:hdd/data --mode=sync --profile=default --name=pve9b --local-user=zfsbackup --install --yes$" "$XL"; then
+    ok "kreator: synchro 't' wykonuje forme jednokomendowa z --mode=sync"
+else
+    bad "kreator: synchro argv" "$(cat "$XL")"
+fi
+W="$(wiz "$SY,esc" --width 120 --height 34)"
+if has "$W" 'krok 2/8: Które datasety?'; then
+    ok "kreator: synchro Esc z szablonu wraca do datasetow (bez 'Dokad')"
+else
+    bad "kreator: synchro Esc" "$W"
+fi
+# WYLACZENIA W ARGV
+W="$(wiz "$SEL,down,down,down,down,down,down,down,enter,home,enter,down,enter,enter,enter,enter,enter,down,enter,t" --width 110 --height 34)"
+if grep -q -- "--source=192.168.28.98:hdd/data,hdd/home --target=hdd/backups --profile=default --name=pve9b --exclude-child=hdd/data/docs --local-user=zfsbackup --install --yes$" "$XL"; then
+    ok "kreator: wylaczony podrzedny idzie do argv jako --exclude-child=<dataset>"
+else
+    bad "kreator: exclude-child argv" "$(cat "$XL")"
+fi
 # ESC = krok wstecz z zachowaniem odpowiedzi; Esc w kroku 1 = anuluj
 W="$(wiz "$P,esc" --width 110 --height 34)"
-if has "$W" 'krok 2/7' && has "$W" 'skąd: 192.168.28.98 (hdd/data, hdd/home)'; then
+if has "$W" 'krok 3/8' && has "$W" 'skąd: 192.168.28.98 (hdd/data, hdd/home)'; then
     ok "kreator: Esc = krok wstecz, odpowiedzi zostaja"
 else
     bad "kreator: Esc wstecz" "$W"
@@ -723,7 +775,7 @@ else
     bad "kreator: Esc" "$W"
 fi
 WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --datasets-remote "$P10/list-datasets-pve9b.json" --datasets-local "$P10/list-datasets.json" --check-source "$P10/check-source-pkg.json" --exec-log "$XL" --screen relacje --keys "$T,down,enter" --width 110 2>&1)"
-if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie' && has "$WE" 'krok 3/7'; then
+if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie' && has "$WE" 'krok 4/8'; then
     ok "kreator: zepsute list-profiles nie blokuje kreatora -- krok 3 ma linie 'wpisz nazwe recznie'"
 else
     bad "kreator: blad list-profiles" "$WE"
