@@ -1,0 +1,1 @@
+{"host":"192.168.28.98","port":22,"ssh":{"ok":true,"error":""},"hostname":"pve9b","zfs":{"ok":true,"pools":[{"name":"hdd","size":"39.5G","free":"39.5G"}]},"package":{"ok":false,"path":"","rev":""},"git":true,"repo_dir":"/root/scripts/zsa-none"}

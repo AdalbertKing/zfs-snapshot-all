@@ -590,6 +590,7 @@ class Data(object):
         self.configs = {}     # show-config NAME --json, na zadanie
         self.profiles = None  # list-profiles --json --no-render, na zadanie (kreator)
         self.datasets = {}    # list-datasets [HOST] --json, na zadanie (kreator: listy zamiast pisania)
+        self.checks = {}      # check-source HOST --json, na zadanie (kreator: diagnoza swiezego zrodla)
         self.read_at = 0
 
     def failed(self, key):
@@ -657,6 +658,22 @@ def load_datasets(repo, files, data, host="", port=""):
         doc, err = run_verb(repo, args)
     data.datasets[key] = ((doc or {}).get("datasets", []), err)
     return data.datasets[key]
+
+
+def load_check(repo, files, data, host, port=""):
+    """check-source HOST --json: trzy fakty (SSH, ZFS, pakiet). Host, ktory
+    odmawia, to fakt w JSON-ie, nie blad czytelnika."""
+    key = "%s:%s" % (host, port)
+    if key in data.checks:
+        return data.checks[key]
+    if files.get("check_source"):
+        doc, err = load_file(files["check_source"])
+    elif files.get("offline"):
+        doc, err = None, u"tryb offline: check-source nie uruchomiono"
+    else:
+        doc, err = run_verb(repo, ["check-source", host] + (["--port=%s" % port] if port else []) + ["--json"])
+    data.checks[key] = (doc, err)
+    return data.checks[key]
 
 
 def load_config(repo, files, data, name):
@@ -2066,8 +2083,10 @@ HELP = [
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
-    u"                 (kreator w 7 krokach: skąd, dokąd, szablon, nazwa, konto,",
-    u"                 zaawansowane, podsumowanie zdaniem + komenda -> plan -> 't';",
+    u"                 (kreator w 7 krokach, same listy: host -> diagnoza (SSH, ZFS,",
+    u"                 pakiet; brak pakietu = prepare-source) -> datasety (wiele,",
+    u"                 drzewo) -> dokąd -> szablon słowami -> nazwa -> konto ->",
+    u"                 zaawansowane -> zdanie + komenda -> plan -> 't';",
     u"                 Enter na źródle/celu = lista datasetów zamiast pisania;",
     u"                 szablony opisane słowami, Ins na liście = nowy szablon)",
     u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
@@ -2362,197 +2381,6 @@ class UI(object):
     # pelna komenda z --install --yes do potwierdzenia. Kreator nie liczy nic
     # sam: co odmawia czasownik, odmawia tu tak samo, tymi samymi slowami.
     # ------------------------------------------------------------------
-    # KREATOR W KROKACH (wlasciciel 2026-09-14: "kreator relacji jest
-    # kompletnie nieczytelny dla czlowieka"). Jedno pytanie na raz, po ludzku,
-    # z domyslna odpowiedzia i podgladem skutku; reszta (port, flagi) ma
-    # domyslne wartosci i siedzi w kroku "Zaawansowane". Na koncu ZDANIE, co sie
-    # stanie, i DOKLADNA komenda -- nic nie rusza przed 't'. Kreator robi to,
-    # co add-client: POBRANIE danych z innego hosta na ten (tytul to mowi).
-    WIZARD_FIELDS = []   # (kompatybilnosc: pola sa teraz w WIZ_STEPS)
-    WIZ_STEPS = [
-        ("skad", u"Skąd kopiujemy?", [
-            ("src_host", u"Host, na którym są dane", "text", u"adres albo nazwa peera, np. 192.168.28.99; Enter = dalej"),
-            ("src_ds", u"Dataset na tym hoście", "pickds", u"spacja (albo puste + Enter) = lista datasetów peera, ssh kluczem roota; Enter = dalej"),
-        ]),
-        ("dokad", u"Dokąd trafi kopia?", [
-            ("target", u"Lokalny dataset-rodzic", "pickds", u"spacja (albo puste + Enter) = lista datasetów tego hosta; Enter = dalej"),
-            ("_landing", u"Kopia wyląduje w", "info", ""),
-        ]),
-        ("szablon", u"Jak często i ile trzymać?", [
-            ("profile", u"Szablon", "pick", u"spacja = lista szablonów opisana słowami (Ins na liście = nowy); Enter = dalej"),
-            ("_profile_words", u"To znaczy", "info", ""),
-        ]),
-        ("nazwa", u"Jak nazwać relację?", [
-            ("name", u"Nazwa relacji", "text", u"propozycja z datasetu; puste = czasownik weźmie nazwę hosta (przy drugiej relacji z tym hostem nazwa jest konieczna)"),
-        ]),
-        ("konto", u"Kto ma uruchamiać kopie na tym hoście?", [
-            ("account_mode", u"Konto", "radio", u"spacja przełącza; Enter = dalej"),
-            ("local_user", u"  nazwa innego konta", "text", u"tylko gdy wybrane 'inne'; konto zostanie utworzone, jeśli go nie ma"),
-            ("_peer_account", u"Na peerze", "info", ""),
-        ]),
-        ("zaaw", u"Zaawansowane (zwykle bez zmian)", [
-            ("port", u"Port SSH peera", "text", u"puste = 22"),
-            ("source_profile", u"Retencja u źródła", "pick", u"puste = taka sama jak tutaj; spacja = lista, inny szablon = retencja niesymetryczna u peera"),
-            ("grant", u"Uprawnienia na peerze nadaj zdalnie", "toggle", u"tak = zatwierdź zakres na źródle w tym samym biegu (para musi być już sparowana)"),
-            ("manual", u"Parowanie ręczne", "toggle", u"tak = pakiet do przeniesienia ręcznie zamiast join przez ssh"),
-        ]),
-        ("podsum", u"Podsumowanie", [
-            ("_summary", u"", "info", ""),
-            ("plan", u"[ Pokaż plan ]", "go", u"czasownik bez --install: read-only, mówi, co by zrobił"),
-            ("go", u"[ Wykonaj ]", "go", u"plan, potem komenda z --install --yes do potwierdzenia 't'"),
-        ]),
-    ]
-    RADIO_OPTS = {
-        "account_mode": [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
-                         ("zfsbackup", u"zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)"),
-                         ("other", u"inne konto (nazwa niżej)")],
-    }
-
-    def wizard_open(self):
-        profiles, perr = load_profiles(self.repo, self.files, self.data)
-        vals = {"src_host": "", "src_ds": "", "target": "", "profile": "default", "name": "", "port": "",
-                "source_profile": "", "account_mode": "zfsbackup", "local_user": "", "grant": False, "manual": False}
-        self.window = ("form", {"kind": "wizard", "step": 0, "vals": vals, "cur": 0,
-                                "profiles": profiles, "perr": perr})
-        self.wizard_set_step(self.window[1], 0)
-        self.scroll = 0
-
-    def wizard_set_step(self, obj, step):
-        obj["step"] = step
-        sid, title, fields = self.WIZ_STEPS[step]
-        obj["fields"] = fields
-        obj["title"] = u"Nowa relacja: pobranie danych z innego hosta -- krok %d/%d: %s" % (step + 1, len(self.WIZ_STEPS), title)
-        obj["cur"] = 0
-        while obj["cur"] < len(fields) - 1 and fields[obj["cur"]][2] in ("info", "head"):
-            obj["cur"] += 1
-        if sid == "nazwa" and not obj["vals"]["name"].strip():
-            ds = obj["vals"]["src_ds"].strip().rstrip("/")
-            obj["vals"]["name"] = ds.rsplit("/", 1)[-1] if ds else ""
-
-    def wizard_next_step(self, obj):
-        """Enter na ostatnim polu kroku: sprawdz, co ten krok wymaga, i dalej."""
-        vals, sid = obj["vals"], self.WIZ_STEPS[obj["step"]][0]
-        if sid == "skad":
-            if not vals["src_host"].strip():
-                self.message = u"podaj host, na którym są dane"
-                obj["cur"] = 0
-                return
-            if not vals["src_ds"].strip():
-                self.message = u"podaj dataset na tym hoście (Enter na pustym polu = lista)"
-                obj["cur"] = 1
-                return
-        if sid == "dokad" and not vals["target"].strip():
-            self.message = u"podaj lokalny dataset-rodzic (Enter na pustym polu = lista)"
-            return
-        if sid == "konto" and vals["account_mode"] == "other" and not vals["local_user"].strip():
-            self.message = u"podaj nazwę konta"
-            obj["cur"] = 1
-            return
-        if obj["step"] + 1 < len(self.WIZ_STEPS):
-            self.wizard_set_step(obj, obj["step"] + 1)
-
-    def wizard_account(self, vals):
-        m = vals.get("account_mode", "zfsbackup")
-        return "" if m == "root" else ("zfsbackup" if m == "zfsbackup" else vals.get("local_user", "").strip())
-
-    def wizard_info(self, obj, key, width):
-        """Linie informacyjne kreatora: skutek odpowiedzi, liczony na biezaco."""
-        vals = obj["vals"]
-        host = (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
-        if key == "_landing":
-            if vals["target"].strip() and vals["src_host"].strip() and vals["src_ds"].strip():
-                return [u"%s/%s/%s" % (vals["target"].strip().rstrip("/"), vals["src_host"].strip(), vals["src_ds"].strip().lstrip("/")),
-                        u"(konwencja <cel>/<peer>/<ścieżka>; plan czasownika to potwierdzi)"]
-            return [u"(najpierw cel)"]
-        if key == "_profile_words":
-            pr = self.wizard_profile(obj)
-            if pr is None:
-                return [u"szablonu '%s' nie ma na liście -- czasownik sprawdzi" % vals["profile"]]
-            w = profile_words(pr)
-            return wrap(u"%s · %s · %s · %s · %s · %s" % (w["cadence"], w["retention"], w["mech"], w["shape"], w["quiesce"], w["monitor"]), width - 30)
-        if key == "_peer_account":
-            return [u"%s: transfer pójdzie zawsze z konta zfsbackup-%s, które JOIN utworzy przy pierwszym połączeniu" % (vals["src_host"].strip() or "peer", host)]
-        if key == "_summary":
-            return self.wizard_summary(obj, width)
-        return []
-
-    def wizard_profile(self, obj):
-        for pr in (obj.get("profiles") or []):
-            if pr.get("name") == obj["vals"]["profile"]:
-                return pr
-        return None
-
-    def wizard_summary(self, obj, width):
-        vals = obj["vals"]
-        host = (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
-        pr = self.wizard_profile(obj)
-        w = profile_words(pr) if pr else None
-        land = u"%s/%s/%s" % (vals["target"].strip().rstrip("/"), vals["src_host"].strip(), vals["src_ds"].strip().lstrip("/"))
-        acct = self.wizard_account(vals) or "root"
-        if w:
-            sent = u"%s %s pobierze migawki %s z hosta %s do %s, %s (%s, %s). %s. Monitor: %s." % (
-                w["cadence"][0].upper() + w["cadence"][1:], host, vals["src_ds"].strip(), vals["src_host"].strip(), land,
-                w["retention"].replace("trzyma ", u"trzymając "), w["mech"], w["shape"], w["quiesce"][0].upper() + w["quiesce"][1:], w["monitor"].replace("monitor ", ""))
-        else:
-            sent = u"%s pobierze migawki %s z hosta %s do %s wg szablonu %s." % (host, vals["src_ds"].strip(), vals["src_host"].strip(), land, vals["profile"])
-        out = wrap(sent, width - 6)
-        out += wrap(u"Relacja: %s. Zadania na %s jako %s%s. Na peerze konto zfsbackup-%s (tworzy JOIN).%s%s" % (
-            vals["name"].strip() or u"(z nazwy hosta)", host, acct, u" (port %s)" % vals["port"].strip() if vals["port"].strip() else "", host,
-            u" Retencja u źródła: %s." % vals["source_profile"] if vals["source_profile"].strip() else "",
-            u" Parowanie ręczne." if vals["manual"] else ""), width - 6)
-        out += ["", u"Komenda:"] + wrap("  " + self.shell_line(self.wizard_argv(vals, True)), width - 6)
-        return out
-
-    def wizard_show_plan(self, obj):
-        argv = self.wizard_argv(obj["vals"], False)
-        if self.exec_log:
-            lines = [u"[atrapa] plan: " + self.shell_line(argv)]
-            rc = 0
-        else:
-            try:
-                p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
-                lines, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
-            except OSError as e:
-                self.message = u"nie udało się uruchomić planu: %s" % e
-                return
-        self.window = ("output", {"title": u"Plan (read-only, bez --install) -- Esc wraca do kreatora", "path": None, "proc": None,
-                                  "shell": self.shell_line(argv), "lines": lines, "rc": rc, "back_to": self.window})
-        self.scroll = 0
-
-    def dataset_picker(self, obj, key, label):
-        """Enter na polu zrodla/celu: lista datasetow zamiast pisania.
-        Zrodlo: HOST z pola (przed ':'), lista u peera, wybor wraca jako
-        HOST:DATASET. Cel: lista tutaj. Blad czytelnika = zdanie w formularzu,
-        pole dalej przyjmuje pisanie (wsadowa droga zostaje)."""
-        vals = obj["vals"]
-        if key == "src_ds":
-            host = vals["src_host"].strip()
-            if not host:
-                self.message = u"wpisz najpierw host (krok wyżej), potem Enter da listę jego datasetów"
-                obj["cur"] = 0
-                return
-            items, err = load_datasets(self.repo, self.files, self.data, host, vals.get("port", "").strip())
-            prefix, title = "", u"Datasety na %s (list-datasets %s --json, ssh jako root)" % (host, host)
-            current = vals["src_ds"]
-        else:
-            items, err = load_datasets(self.repo, self.files, self.data)
-            prefix, title = "", u"Datasety na tym hoście (list-datasets --json)"
-            current = vals["target"]
-        if err:
-            self.message = u"lista niedostępna -- wpisz ścieżkę ręcznie. %s" % err
-            return
-        if not items:
-            self.message = u"list-datasets nie zwrócił żadnego datasetu -- wpisz ścieżkę ręcznie"
-            return
-        cur = 0
-        for i, d in enumerate(items):
-            if d.get("name") == current:
-                cur = i
-        self.window = ("pick", {"kind": "datasets", "title": title, "items": items, "cur": cur, "field": key,
-                                "prefix": prefix, "back": self.window})
-        self.scroll = 0
-
-    # ------------------------------------------------------------------
     # NOWY SZABLON (wlasciciel 2026-09-14: "albo wskazac profil z templates,
     # albo stworzyc calkiem nowy uzywajac checkboxow, radiobuttons i list").
     # Formularz = pola z BAZY (liczniki, harmonogramy, zamrazanie, progi), zapis
@@ -2692,36 +2520,532 @@ class UI(object):
         def on_yes():
             self.run_detached(u"Nowy szablon %s" % name, argv, logname="save-profile")
             self.data.profiles = None
-            if back_form and back_form[0] == "form":
+            if back_form and back_form[0] in ("form", "wiz"):
                 back_form[1]["vals"]["profile"] = name
                 back_form[1]["profiles"] = None
+                back_form[1]["cur"] = 0
                 self.window[1]["back_to"] = back_form
         self.confirm(u"Nowy szablon %s (na bazie %s)" % (name, base.get("name", "?")), argv, note, on_yes=on_yes)
 
+    # ------------------------------------------------------------------
+    # KREATOR NA LISTACH (makieta wlasciciela, 2026-09-14): jedna regula klawiszy
+    # na wszystkie kroki -- strzalki wybieraja, Enter wybiera/zaznacza/idzie
+    # dalej, Esc wraca, pisanie filtruje liste. Relacja = para hostow: "nowa"
+    # to host, z ktorym relacji jeszcze nie ma; hosty z relacja sa szare (ich
+    # datasety to modyfikacja, ktorej CLI nie umie). Po hoscie DIAGNOZA
+    # (check-source: SSH, ZFS, pakiet) i jedna akcja (prepare-source), potem
+    # datasety z listy (wiele, drzewo), dokad, szablon slowami, nazwa, konto
+    # (root / zfsbackup / inne), zaawansowane, podsumowanie zdaniem + komenda.
+    WIZ_ORDER = ["mode", "host", "diag", "ds", "target", "profile", "name", "acct", "adv", "summary"]
+    WIZ_TITLES = {"mode": u"Typ relacji", "host": u"Z którego hosta?", "diag": u"Sprawdzam host", "ds": u"Które datasety?", "target": u"Dokąd trafi kopia?",
+                  "profile": u"Jak często i ile trzymać?", "name": u"Jak nazwać relację?", "acct": u"Kto ma uruchamiać kopie?",
+                  "adv": u"Zaawansowane (zwykle bez zmian)", "summary": u"Podsumowanie"}
+    WIZ_STEPNO = {"mode": 1, "host": 2, "diag": 2, "ds": 2, "target": 3, "profile": 4, "name": 5, "acct": 6, "adv": 7, "summary": 8}
+    WIZ_NSTEP = 8
+    WIZ_MODES = [("backup", u"backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)"),
+                 ("sync", u"synchro   obie strony trzymają to samo pod TĄ SAMĄ ścieżką, bez celu (--mode=sync)")]
+    WIZ_ACCTS = [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
+                 ("zfsbackup", u"zfsbackup -- konto delegowane (zostanie utworzone, dostanie zfs allow)"),
+                 ("other", u"inne konto -- podasz nazwę")]
+
+    def this_host(self):
+        return (self.data.jobs or {}).get("host") or (self.data.status or {}).get("host") or "?"
+
+    def wizard_open(self):
+        profiles, perr = load_profiles(self.repo, self.files, self.data)
+        vals = {"mode": "backup", "host": "", "hostname": "", "port": "", "ds": [], "excl": [], "target": "", "profile": "default", "name": "",
+                "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat"}
+        self.window = ("wiz", {"kind": "wiz", "step": "mode", "cur": 0, "filter": "", "typing": None, "text": "",
+                               "vals": vals, "profiles": profiles, "perr": perr})
+        self.scroll = 0
+
+    def wiz_goto(self, obj, step):
+        obj["step"], obj["cur"], obj["filter"], obj["typing"], obj["text"] = step, 0, "", None, ""
+        self.message = ""
+        if step == "name":
+            obj["typing"], obj["text"] = "name", obj["vals"]["name"] or obj["vals"]["hostname"] or obj["vals"]["host"].replace(".", "-")
+        if step == "target" and obj["vals"]["target"]:
+            items = self.wiz_items(obj)
+            for i, it in enumerate(items):
+                if it.get("key") == obj["vals"]["target"]:
+                    obj["cur"] = i
+        if step == "profile":
+            items = self.wiz_items(obj)
+            for i, it in enumerate(items):
+                if it.get("key") == obj["vals"]["profile"]:
+                    obj["cur"] = i
+
+    def wiz_hosts(self):
+        """Hosty do wyboru: peery z rekordow (szare -- relacja juz jest) i 'inny host'."""
+        rels = {}
+        for r in self.rows:
+            if r["kind"] == "relation" and r["rel"].get("state") != "removed" and r["rel"].get("peer_host"):
+                rels.setdefault(r["rel"]["peer_host"], []).append(r["name"])
+        out = []
+        for h in sorted(rels):
+            out.append({"key": h, "ok": False, "text": u"%s  %s" % (fit(h, 16), u"relacje: %s -- kolejne datasety to modyfikacja relacji (CLI jeszcze nie umie)" % ", ".join(rels[h]))})
+        out.append({"key": "__other__", "ok": True, "text": u"%s  wpisz adres; pakiet nie musi tam być" % fit(u"inny host…", 16)})
+        return out
+
+    def wiz_ds_tree(self, obj):
+        items, err = load_datasets(self.repo, self.files, self.data, obj["vals"]["host"], obj["vals"]["port"])
+        names = [d.get("name", "") for d in items]
+        out = []
+        for d in items:
+            n = d.get("name", "")
+            kids = sum(1 for x in names if x.startswith(n + "/"))
+            out.append({"name": n, "depth": n.count("/"), "kids": kids, "used": int(d.get("used") or 0), "type": d.get("type", "")})
+        return out, err
+
+    def wiz_items(self, obj):
+        """Linie kroku jako lista: wybieralne (sel) i informacyjne. Filtr zaweza wybieralne."""
+        v, st, f = obj["vals"], obj["step"], obj["filter"].lower()
+        items = []
+        if st == "mode":
+            items = [{"key": k, "sel": True, "text": t} for k, t in self.WIZ_MODES]
+        elif st == "host":
+            items = [dict(x, sel=True) for x in self.wiz_hosts()]
+        elif st == "diag":
+            doc, err = load_check(self.repo, self.files, self.data, v["host"], v["port"])
+            d = doc or {}
+            if err:
+                items = [{"key": "back", "sel": True, "text": u"Wróć (check-source nie odpowiedział: %s)" % err}]
+            elif not (d.get("ssh") or {}).get("ok"):
+                items = [{"key": "back", "sel": True, "text": u"Wróć (najpierw wstęp SSH, patrz wyżej)"}]
+            elif (d.get("package") or {}).get("ok"):
+                items = [{"key": "go", "sel": True, "text": u"Dalej: lista datasetów na %s" % v["host"]}]
+            else:
+                items = [{"key": "install", "sel": True, "text": u"Zainstaluj pakiet na %s  (prepare-source: git clone jako root; bez crona, bez relacji)" % v["host"]},
+                         {"key": "back", "sel": True, "text": u"Wróć"}]
+        elif st == "ds":
+            tree, err = self.wiz_ds_tree(obj)
+            items = [{"key": "go", "sel": True, "text": u"Dalej z zaznaczonymi (%d%s)" % (len(v["ds"]), (u", wyłączone %d" % len(v["excl"])) if v["excl"] else "")},
+                     {"key": "rec", "sel": True, "text": u"Podrzędne zaznaczonego rodzica: %s" % (
+                         u"-R  każdy osobnym strumieniem (flat), wyłączenia ✗ dozwolone -- zalecane" if v["recursion"] == "flat"
+                         else u"-r  jeden strumień (atomic): bez wyłączeń, bez retencji u źródła")}]
+            if err:
+                items.append({"key": "manual", "sel": True, "text": u"Lista niedostępna (%s) -- wpisz ścieżki ręcznie" % err})
+            for d in tree:
+                covered = any(d["name"].startswith(x + "/") for x in v["ds"])
+                excl = d["name"] in v["excl"] or any(d["name"].startswith(x + "/") for x in v["excl"])
+                mark = u"✓" if d["name"] in v["ds"] else (u"✗" if (covered and excl) else (u"·" if covered else " "))
+                txt = u"%s %s%s" % (mark, "  " * d["depth"], d["name"].rsplit("/", 1)[-1] if d["depth"] else d["name"])
+                extra = u"%s  %s%s" % (hbytes_short(d["used"]), d["type"], (u"  +%d podrzędne" % d["kids"]) if d["kids"] else "")
+                if covered:
+                    extra += u"  (wyłączony -X)" if excl else u"  (w rodzicu; Enter = wyłącz)"
+                items.append({"key": d["name"], "sel": True, "text": fit(txt, 46) + " " + extra, "full": d["name"]})
+        elif st == "target":
+            loc, err = load_datasets(self.repo, self.files, self.data)
+            if err:
+                items.append({"key": "manual", "sel": True, "text": u"Lista niedostępna (%s) -- wpisz ścieżkę ręcznie" % err})
+            for d in loc:
+                items.append({"key": d.get("name", ""), "sel": True, "text": u"%s %9s %9s" % (fit(d.get("name", ""), 46), hbytes_short(int(d.get("used") or 0)), hbytes_short(int(d.get("avail") or 0)))})
+        elif st == "profile":
+            if obj.get("profiles") is None:
+                obj["profiles"], obj["perr"] = load_profiles(self.repo, self.files, self.data)
+            names = [pr.get("name") for pr in (obj.get("profiles") or [])]
+            if v["profile"] and v["profile"] not in names:
+                # Szablon zapisany przed chwila (albo wpisany recznie): lista z
+                # list-profiles jeszcze go nie ma -- ma byc wybieralny, nie znikac.
+                items.append({"key": v["profile"], "sel": True, "text": u"%s (zapisany przed chwilą albo wpisany ręcznie; czasownik sprawdzi)" % fit(v["profile"], 16)})
+            for pr in (obj.get("profiles") or []):
+                w = profile_words(pr)
+                items.append({"key": pr.get("name", "?"), "sel": True, "text": u"%s %s · %s · %s" % (fit(pr.get("name", "?"), 16), w["cadence"], w["retention"], w["mech"]),
+                              "sub": u"%s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], pr.get("description", "") or "")})
+            if obj.get("perr"):
+                items.append({"key": "manual", "sel": True, "text": u"list-profiles: błąd źródła (%s) -- wpisz nazwę szablonu ręcznie" % obj["perr"][:40]})
+        elif st == "acct":
+            items = [{"key": k, "sel": True, "text": t} for k, t in self.WIZ_ACCTS]
+        elif st == "adv":
+            items = [{"key": "go", "sel": True, "text": u"Bez zmian, dalej"},
+                     {"key": "port", "sel": True, "text": u"%s %s" % (fit(u"Port SSH peera", 30), v["port"] or "22")},
+                     {"key": "srcprof", "sel": True, "text": u"%s %s" % (fit(u"Retencja u źródła", 30), v["srcprof"] or u"taka sama jak tutaj (%s)" % v["profile"])},
+                     {"key": "grant", "sel": True, "text": u"%s %s" % (fit(u"Uprawnienia na peerze", 30), u"nadaj zdalnie: tak" if v["grant"] else u"nadaj zdalnie: nie (JOIN zrobi to przy pierwszym połączeniu)")},
+                     {"key": "manual", "sel": True, "text": u"%s %s" % (fit(u"Parowanie", 30), u"ręczne: pakiet do przeniesienia" if v["manual"] else u"przez ssh (automatyczne)")},
+                     {"key": "rec", "sel": True, "text": u"%s %s" % (fit(u"Podrzędne datasety", 30), u"-R  każdy osobno (flat)" if v["recursion"] == "flat" else u"-r  jednym strumieniem (atomic)")}]
+        elif st == "summary":
+            items = [{"key": "plan", "sel": True, "text": u"Pokaż plan  (czasownik bez --install: nic nie zmienia)"},
+                     {"key": "run", "sel": True, "text": u"Wykonaj  (plan, potem komenda z --install --yes do potwierdzenia)"}]
+        if f and st in ("host", "ds", "target", "profile"):
+            items = [it for i, it in enumerate(items) if (st == "ds" and i < 2) or it.get("key", "").lower().find(f) >= 0 or it.get("text", "").lower().find(f) >= 0]
+        return items
+
+    def wiz_answers(self, obj):
+        v, st = obj["vals"], obj["step"]
+        o = self.WIZ_ORDER.index(st)
+        a = []
+        if o > 0:
+            a.append(u"typ: %s" % (u"synchro" if v["mode"] == "sync" else u"backup"))
+        if o > 3:
+            a.append(u"skąd: %s (%s%s)" % (v["host"], ", ".join(v["ds"]) or "?", (u"; bez %s" % ", ".join(v["excl"])) if v["excl"] else ""))
+        if o > 4 and v["mode"] != "sync":
+            a.append(u"dokąd: %s" % v["target"])
+        if o > 5:
+            a.append(u"szablon: %s" % v["profile"])
+        if o > 6:
+            a.append(u"nazwa: %s" % (v["name"] or "(z hosta)"))
+        if o > 7:
+            a.append(u"konto: %s" % (self.wiz_account(v) or "root"))
+        return a
+
+    def wiz_account(self, v):
+        return "" if v["acct"] == "root" else ("zfsbackup" if v["acct"] == "zfsbackup" else v["other"].strip())
+
     def wizard_argv(self, vals, install):
-        a = [self.zb(), "--source=%s:%s" % (vals["src_host"].strip(), vals["src_ds"].strip()), "--target=%s" % vals["target"].strip()]
-        if vals.get("profile"):
-            a.append("--profile=%s" % vals["profile"])
-        if vals.get("source_profile"):
-            a.append("--source-profile=%s" % vals["source_profile"])
-        if vals.get("name"):
-            a.append("--name=%s" % vals["name"])
-        if vals.get("port"):
-            a.append("--port=%s" % vals["port"])
-        if self.wizard_account(vals):
-            a.append("--local-user=%s" % self.wizard_account(vals))
-        if vals.get("grant"):
+        v = vals
+        host = v["host"].strip() + ((":" + v["port"].strip()) if v["port"].strip() and v["port"].strip() != "22" else "")
+        a = [self.zb(), "--source=%s:%s" % (host, ",".join(v["ds"]))]
+        if v.get("mode") == "sync":
+            a.append("--mode=sync")
+        else:
+            a.append("--target=%s" % v["target"].strip())
+        if v.get("profile"):
+            a.append("--profile=%s" % v["profile"])
+        if v.get("srcprof"):
+            a.append("--source-profile=%s" % v["srcprof"])
+        if v.get("name"):
+            a.append("--name=%s" % v["name"].strip())
+        if v.get("recursion") and v["recursion"] != "flat":
+            a.append("--recursive=%s" % v["recursion"])
+        for x in v.get("excl", []):
+            a.append("--exclude-child=%s" % x)
+        if self.wiz_account(v):
+            a.append("--local-user=%s" % self.wiz_account(v))
+        if v.get("grant"):
             a.append("--grant-remotely")
-        if vals.get("manual"):
+        if v.get("manual"):
             a.append("--manual-join")
         if install:
             a += ["--install", "--yes"]
         return a
 
+    def wiz_profile(self, obj):
+        for pr in (obj.get("profiles") or []):
+            if pr.get("name") == obj["vals"]["profile"]:
+                return pr
+        return None
+
+    def wiz_summary(self, obj, width):
+        v, host = obj["vals"], self.this_host()
+        pr = self.wiz_profile(obj)
+        w = profile_words(pr) if pr else None
+        n = len(v["ds"])
+        what = u"migawki %s" % (u"datasetu %s" % v["ds"][0] if n == 1 else u"%d datasetów (%s)" % (n, ", ".join(v["ds"])))
+        acct = self.wiz_account(v) or "root"
+        if v["excl"]:
+            what += u" bez %s" % ", ".join(v["excl"])
+        if v["mode"] == "sync":
+            where = u"%s i %s będą trzymać %s pod tą samą ścieżką po obu stronach" % (host, v["host"], what)
+        else:
+            where = u"%s pobierze %s z hosta %s do %s/%s/…" % (host, what, v["host"], v["target"], v["host"])
+        if w:
+            sent = u"%s %s, %s (%s, %s). %s. Monitor: %s." % (
+                w["cadence"][0].upper() + w["cadence"][1:], where, w["retention"].replace("trzyma ", u"trzymając "), w["mech"], w["shape"],
+                w["quiesce"][0].upper() + w["quiesce"][1:], w["monitor"].replace("monitor ", ""))
+        else:
+            sent = u"%s wg szablonu %s." % (where, v["profile"])
+        out = wrap(sent, width - 6)
+        out += wrap(u"Relacja: %s. Zadania na %s jako %s%s. Na peerze konto zfsbackup-%s (tworzy JOIN).%s%s%s" % (
+            v["name"] or u"(z nazwy hosta)", host, acct, (u" (port %s)" % v["port"]) if v["port"].strip() and v["port"] != "22" else "", host,
+            (u" Retencja u źródła: %s." % v["srcprof"]) if v["srcprof"] else "", u" Parowanie ręczne." if v["manual"] else "",
+            u" Podrzędne jednym strumieniem (-r, atomic)." if v["recursion"] == "atomic" else u" Podrzędne osobno (-R)." if any(True for _ in v["ds"]) else ""), width - 6)
+        out += ["", u"Komenda:"] + wrap("  " + self.shell_line(self.wizard_argv(v, True)), width - 6)
+        return out
+
+    def wiz_lines(self, obj, width):
+        """Linie okna kreatora i indeks linii z kursorem."""
+        v, st = obj["vals"], obj["step"]
+        out, cur_line = [], None
+        W = width - 4
+        ans = self.wiz_answers(obj)
+        if ans:
+            out += [fit("  " + x, W) for x in wrap(u"   ".join(ans), W - 2)] + [""]
+        if obj["typing"]:
+            label = {"host": u"Adres hosta", "name": u"Nazwa relacji", "other": u"Nazwa konta", "port": u"Port SSH peera", "ds": u"Ścieżki datasetów (po przecinku)", "target": u"Lokalny dataset-rodzic", "profile": u"Nazwa szablonu"}[obj["typing"]]
+            hint = {"host": u"np. 10.0.0.9 -- po Enterze kreator sprawdzi SSH, ZFS i pakiet na tym hoście",
+                    "name": u"propozycja z nazwy hosta; relacja jest hosta, nie datasetu",
+                    "other": u"konto zostanie utworzone, jeśli go nie ma", "port": u"puste = 22",
+                    "ds": u"np. hdd/data,hdd/home", "target": u"np. hdd/backups", "profile": u"nazwa pliku szablonu"}[obj["typing"]]
+            cur_line = len(out)
+            out.append(fit(u"> %s %s_" % (fit(label, 30), obj["text"]), W))
+            out += ["", fit("  " + hint, W)]
+        else:
+            if st == "diag":
+                doc, err = load_check(self.repo, self.files, self.data, v["host"], v["port"])
+                d = doc or {}
+                ssh, zfs, pkg = d.get("ssh") or {}, d.get("zfs") or {}, d.get("package") or {}
+                out.append(fit(u"  %s%s" % (v["host"], (u"   (%s)" % d["hostname"]) if d.get("hostname") else ""), W))
+                if err:
+                    out.append(fit(u"    check-source nie odpowiedział: %s" % err, W))
+                else:
+                    out.append(fit(u"    SSH jako root .............. %s" % (u"OK   klucz roota %s jest tam zaufany" % self.this_host() if ssh.get("ok") else u"BRAK %s" % (ssh.get("error") or "?")), W))
+                    pools = ", ".join(u"%s %s (wolne %s)" % (x.get("name"), x.get("size"), x.get("free")) for x in (zfs.get("pools") or []))
+                    out.append(fit(u"    ZFS ........................ %s" % ((u"OK   " + pools) if zfs.get("ok") else (u"?    nie sprawdzono (brak SSH)" if not ssh.get("ok") else u"BRAK zfs albo żadnej puli")), W))
+                    out.append(fit(u"    pakiet zfs-snapshot-all .... %s" % ((u"OK   %s (rev %s)" % (pkg.get("path"), pkg.get("rev") or "?")) if pkg.get("ok") else (u"?    nie sprawdzono (brak SSH)" if not ssh.get("ok") else u"BRAK %s nie istnieje" % (d.get("repo_dir") or ""))), W))
+                    out.append("")
+                    if not ssh.get("ok"):
+                        out += [fit(u"  Bez wstępu SSH kreator nie zrobi nic na tym hoście. Klucz roota to Twoja decyzja, nie kreatora:", W),
+                                fit(u"    ssh-copy-id root@%s        (na %s, z linii poleceń)" % (v["host"], self.this_host()), W),
+                                fit(u"  potem Esc i jeszcze raz ten host.", W)]
+                    elif not pkg.get("ok"):
+                        out += [fit(u"  Bez pakietu JOIN na źródle nie ma czego uruchomić. Instalacja = to, co runbook robi ręcznie:", W),
+                                fit(u"    git clone … %s   na %s przez SSH roota (gdy host nie widzi GitHuba: bundlem z %s)" % (d.get("repo_dir") or "", v["host"], self.this_host()), W)]
+                    if not zfs.get("ok") and ssh.get("ok"):
+                        out.append(fit(u"  ! bez ZFS nie ma czego kopiować -- to nie jest źródło dla tego programu", W))
+                out.append("")
+            if st == "ds":
+                out.append(fit(u"  %s %s" % (fit(u"  dataset (drzewo)", 46), u"zajęte  typ            Enter = zaznacz/odznacz  ✓ wybrany  · w rodzicu"), W))
+            if st == "target":
+                items0 = self.wiz_items(obj)
+                if items0 and v["ds"] and 0 <= obj["cur"] < len(items0) and items0[obj["cur"]].get("key") != "manual":
+                    # Ladowisko dla PODSWIETLONEGO celu, zanim padnie Enter -- nad lista, zeby bylo widac.
+                    tgt = items0[obj["cur"]]["key"]
+                    for i, d in enumerate(v["ds"][:4]):
+                        out.append(fit(u"  %s%s/%s/%s" % (u"kopie wylądują w: " if i == 0 else u"                  ", tgt, v["host"], d), W))
+                    if len(v["ds"]) > 4:
+                        out.append(fit(u"                  … i %d więcej" % (len(v["ds"]) - 4), W))
+                    out.append(fit(u"  (konwencja <cel>/<peer>/<ścieżka>; plan czasownika to potwierdzi)", W))
+                    out.append("")
+                out.append(fit(u"  %s %9s %9s" % (fit("dataset", 46), u"zajęte", "wolne"), W))
+            if st == "summary":
+                out += [fit("  " + x, W) for x in self.wiz_summary(obj, width)] + [""]
+            items = self.wiz_items(obj)
+            if obj["cur"] >= len(items):
+                obj["cur"] = max(0, len(items) - 1)
+            for i, it in enumerate(items):
+                if i == obj["cur"]:
+                    cur_line = len(out)
+                out.append(fit((">" if i == obj["cur"] else " ") + " " + it["text"], W))
+                if st == "profile" and i == obj["cur"] and it.get("sub"):
+                    out.append(fit("      " + it["sub"], W))
+            if not items:
+                out.append(fit(u"  nic nie pasuje do filtru „%s” -- Backspace" % obj["filter"], W))
+            if obj["filter"]:
+                out += ["", fit(u"  filtr: %s_" % obj["filter"], W)]
+        if self.message:
+            out += ["", fit(u"  ! " + self.message, W)]
+        return out, cur_line
+
+    def wiz_key(self, obj, k, height):
+        v, st = obj["vals"], obj["step"]
+        items = self.wiz_items(obj)
+        it = items[obj["cur"]] if 0 <= obj["cur"] < len(items) else None
+        if obj["typing"]:
+            t = obj["text"]
+            if k == "esc":
+                if obj["typing"] == "name":
+                    self.wiz_goto(obj, "profile")
+                else:
+                    obj["typing"], obj["text"] = None, ""
+            elif k == "bs":
+                obj["text"] = t[:-1]
+            elif k.startswith("text:"):
+                obj["text"] += k[5:]
+            elif k == "enter":
+                self.message = ""
+                t = t.strip()
+                ty = obj["typing"]
+                if ty == "host":
+                    if not t:
+                        self.message = u"podaj adres"
+                        return
+                    v["host"], v["hostname"] = t, ""
+                    self.wiz_goto(obj, "diag")
+                elif ty == "name":
+                    v["name"] = t
+                    self.wiz_goto(obj, "acct")
+                    obj["cur"] = 1
+                elif ty == "other":
+                    if not t:
+                        self.message = u"podaj nazwę konta"
+                        return
+                    v["other"] = t
+                    self.wiz_goto(obj, "adv")
+                elif ty == "port":
+                    v["port"] = t if t and t != "22" else ""
+                    obj["typing"], obj["text"], obj["cur"] = None, "", 1
+                elif ty == "ds":
+                    v["ds"] = [x.strip() for x in t.split(",") if x.strip()]
+                    if not v["ds"]:
+                        self.message = u"podaj co najmniej jedną ścieżkę"
+                        return
+                    self.wiz_goto(obj, "target")
+                elif ty == "target":
+                    if not t:
+                        self.message = u"podaj ścieżkę"
+                        return
+                    v["target"] = t
+                    self.wiz_goto(obj, "profile")
+                elif ty == "profile":
+                    if not t:
+                        self.message = u"podaj nazwę szablonu"
+                        return
+                    v["profile"] = t
+                    self.wiz_goto(obj, "name")
+            return
+        if k in ("down", "j"):
+            obj["cur"] = min(obj["cur"] + 1, max(0, len(items) - 1))
+        elif k in ("up", "k"):
+            obj["cur"] = max(0, obj["cur"] - 1)
+        elif k == "pgdn":
+            obj["cur"] = min(obj["cur"] + max(1, height - 8), max(0, len(items) - 1))
+        elif k == "pgup":
+            obj["cur"] = max(0, obj["cur"] - max(1, height - 8))
+        elif k == "home":
+            obj["cur"] = 0
+        elif k == "end":
+            obj["cur"] = max(0, len(items) - 1)
+        elif k == "bs":
+            obj["filter"] = obj["filter"][:-1]
+            obj["cur"] = 0
+        elif k.startswith("text:") and st in ("host", "ds", "target", "profile"):
+            obj["filter"] += k[5:]
+            obj["cur"] = 0
+        elif k == "ins" and st == "profile" and it and it.get("key") != "manual":
+            pr = self.wiz_profile(obj) if it.get("key") == v["profile"] else [p for p in (obj.get("profiles") or []) if p.get("name") == it.get("key")][0]
+            self.profile_form_open(pr, self.window)
+        elif k == "esc":
+            self.message = ""
+            if obj["filter"]:
+                obj["filter"] = ""
+                return
+            o = self.WIZ_ORDER.index(st)
+            if o == 0:
+                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+                return
+            prev = self.WIZ_ORDER[o - 1]
+            if prev == "diag":
+                prev = "host"
+            if prev == "target" and v["mode"] == "sync":
+                prev = "ds"
+            self.wiz_goto(obj, prev)
+        elif k == "enter":
+            self.message = ""
+            if it is None:
+                return
+            key = it.get("key")
+            if st == "mode":
+                v["mode"] = key
+                self.wiz_goto(obj, "host")
+            elif st == "host":
+                if key == "__other__":
+                    obj["typing"], obj["text"] = "host", ""
+                elif not it.get("ok", True):
+                    self.message = u"z %s relacja już jest; kolejne datasety = modyfikacja relacji (CLI jeszcze nie umie)" % key
+                else:
+                    v["host"], v["hostname"] = key, ""
+                    self.wiz_goto(obj, "diag")
+            elif st == "diag":
+                if key == "back":
+                    self.wiz_goto(obj, "host")
+                elif key == "go":
+                    doc, _e = load_check(self.repo, self.files, self.data, v["host"], v["port"])
+                    v["hostname"] = (doc or {}).get("hostname") or ""
+                    self.wiz_goto(obj, "ds")
+                elif key == "install":
+                    argv = [self.zb(), "prepare-source", v["host"]] + (["--port=%s" % v["port"]] if v["port"] else []) + ["--yes"]
+                    back = self.window
+                    hk = "%s:%s" % (v["host"], v["port"])
+
+                    def on_yes():
+                        self.run_detached(u"Instalacja pakietu na %s" % v["host"], argv, logname="prepare-source")
+                        self.data.checks.pop(hk, None)   # diagnoza od nowa po instalacji
+                        self.window[1]["back_to"] = back
+                    self.confirm(u"Zainstaluj pakiet na %s" % v["host"], argv,
+                                 [u"git clone tego samego repozytorium, co tutaj, do /root/scripts/zfs-snapshot-all na %s, jako root przez SSH." % v["host"],
+                                  u"Gdy host nie widzi origin: bundle tego checkoutu idzie przez scp. Nic więcej: bez crona, bez relacji, bez kluczy."],
+                                 on_yes=on_yes)
+            elif st == "ds":
+                if key == "go":
+                    if not v["ds"]:
+                        self.message = u"zaznacz co najmniej jeden dataset (Enter na linii)"
+                        return
+                    self.wiz_goto(obj, "profile" if v["mode"] == "sync" else "target")
+                elif key == "rec":
+                    if v["recursion"] == "flat" and v["excl"]:
+                        self.message = u"-r (atomic) nie ma czego filtrować: najpierw cofnij wyłączenia (%s), silnik odmawia -X pod -r" % ", ".join(v["excl"])
+                        return
+                    v["recursion"] = "atomic" if v["recursion"] == "flat" else "flat"
+                elif key == "manual":
+                    obj["typing"], obj["text"] = "ds", ",".join(v["ds"])
+                else:
+                    if any(key.startswith(x + "/") for x in v["ds"]):
+                        # Dziecko zaznaczonego rodzica: Enter wylacza (-X) i wlacza z powrotem.
+                        if v["recursion"] == "atomic":
+                            self.message = u"pod -r (atomic) nie da się wyłączyć podrzędnego -- przełącz na -R"
+                            return
+                        if key in v["excl"]:
+                            v["excl"].remove(key)
+                        else:
+                            v["excl"] = [x for x in v["excl"] if not x.startswith(key + "/")] + [key]
+                        return
+                    if key in v["ds"]:
+                        v["ds"].remove(key)
+                        v["excl"] = [x for x in v["excl"] if not x.startswith(key + "/")]
+                    else:
+                        v["ds"] = [x for x in v["ds"] if not x.startswith(key + "/")] + [key]
+                        v["excl"] = [x for x in v["excl"] if x != key]
+            elif st == "target":
+                if key == "manual":
+                    obj["typing"], obj["text"] = "target", v["target"]
+                else:
+                    v["target"] = key
+                    self.wiz_goto(obj, "profile")
+            elif st == "profile":
+                if key == "manual":
+                    obj["typing"], obj["text"] = "profile", v["profile"]
+                else:
+                    v["profile"] = key
+                    self.wiz_goto(obj, "name")
+            elif st == "acct":
+                v["acct"] = key
+                if key == "other":
+                    obj["typing"], obj["text"] = "other", v["other"]
+                else:
+                    self.wiz_goto(obj, "adv")
+            elif st == "adv":
+                if key == "go":
+                    self.wiz_goto(obj, "summary")
+                elif key == "port":
+                    obj["typing"], obj["text"] = "port", v["port"] or "22"
+                elif key == "srcprof":
+                    items_ = list(obj.get("profiles") or [])
+                    self.window = ("pick", {"title": u"Retencja u źródła (Esc = taka sama jak tutaj)", "items": items_, "cur": 0, "field": "srcprof", "back": self.window, "allow_new": False})
+                    self.scroll = 0
+                elif key == "grant":
+                    v["grant"] = not v["grant"]
+                elif key == "manual":
+                    v["manual"] = not v["manual"]
+                elif key == "rec":
+                    if v["recursion"] == "flat" and v["excl"]:
+                        self.message = u"-r (atomic) nie ma czego filtrować: najpierw cofnij wyłączenia w kroku datasetów"
+                        return
+                    v["recursion"] = "atomic" if v["recursion"] == "flat" else "flat"
+            elif st == "summary":
+                if key == "plan":
+                    self.wizard_show_plan(obj)
+                else:
+                    self.wizard_plan(obj["vals"])
+
+    def wizard_show_plan(self, obj):
+        argv = self.wizard_argv(obj["vals"], False)
+        if self.exec_log:
+            lines, rc = [u"[atrapa] plan: " + self.shell_line(argv)], 0
+        else:
+            try:
+                p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
+                lines, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
+            except OSError as e:
+                self.message = u"nie udało się uruchomić planu: %s" % e
+                return
+        self.window = ("output", {"title": u"Plan (read-only, bez --install) -- Esc wraca do kreatora", "path": None, "proc": None,
+                                  "shell": self.shell_line(argv), "lines": lines, "rc": rc, "back_to": self.window})
+        self.scroll = 0
+
     def wizard_plan(self, vals):
-        """Krok PLAN: czasownik bez --install jest read-only i mowi, co by zrobil."""
-        if not vals["src_host"].strip() or not vals["src_ds"].strip() or not vals["target"].strip():
-            self.message = u"kreator: skąd (host i dataset) i dokąd są wymagane (czasownik odmówiłby dokładnie tak samo)"
+        """Wykonaj: czasownik bez --install jest read-only i mowi, co by zrobil; potem potwierdzenie."""
+        if not vals["host"].strip() or not vals["ds"] or (vals["mode"] != "sync" and not vals["target"].strip()):
+            self.message = u"kreator: skąd (host i datasety) i dokąd są wymagane"
             return
         argv = self.wizard_argv(vals, False)
         if self.exec_log:
@@ -2734,11 +3058,11 @@ class UI(object):
                 self.message = u"nie udało się uruchomić planu: %s" % e
                 return
             if p.returncode != 0:
-                self.window = ("output", {"title": u"Plan odmówił -- popraw pola (Esc wraca do formularza)", "path": None, "proc": None,
+                self.window = ("output", {"title": u"Plan odmówił -- popraw odpowiedzi (Esc wraca do kreatora)", "path": None, "proc": None,
                                           "shell": self.shell_line(argv), "lines": plan, "rc": p.returncode, "back_to": self.window})
                 self.scroll = 0
                 return
-        self.confirm(u"Nowa relacja: %s:%s -> %s" % (vals["src_host"].strip(), vals["src_ds"].strip(), vals["target"].strip()), self.wizard_argv(vals, True),
+        self.confirm(u"Nowa relacja %s z %s" % (vals["name"].strip() or "(z hosta)", vals["host"].strip()), self.wizard_argv(vals, True),
                      [u"Plan czasownika (read-only, bez --install):", ""] + sum((wrap("  " + x, 72) for x in plan), []) +
                      ["", u"--install --yes: enrol (join przez ssh) -> seed -> activate, wznawialne tą samą komendą."])
 
@@ -2755,39 +3079,18 @@ class UI(object):
         self.scroll = 0
 
     def form_advance(self, obj, FIELDS):
-        """Enter = nastepne pole; w kreatorze na ostatnim polu kroku = nastepny krok."""
-        if obj.get("kind") == "wizard" and FIELDS[obj["cur"]][0] == "src_host" and not obj["vals"]["src_host"].strip():
-            self.message = u"podaj host, na którym są dane"
-            return
+        """Enter = nastepne pole (naglowki przeskakiwane)."""
         c = obj["cur"] + 1
-        while c < len(FIELDS) and (FIELDS[c][2] in ("head", "info")
-                                   or (FIELDS[c][0] == "local_user" and obj["vals"].get("account_mode") != "other")):
+        while c < len(FIELDS) and FIELDS[c][2] == "head":
             c += 1
         if c < len(FIELDS):
             obj["cur"] = c
-        elif obj.get("kind") == "wizard":
-            self.wizard_next_step(obj)
 
     def form_lines(self, obj, width):
         out = []
         vals = obj["vals"]
-        FIELDS = obj.get("fields") or self.WIZARD_FIELDS
+        FIELDS = obj.get("fields") or []
         lw = max(22, min(30, max(len(f[1]) for f in FIELDS)))
-        if obj.get("kind") == "wizard":
-            # Odpowiedzi z poprzednich krokow, zawsze na oku.
-            done = []
-            if obj["step"] > 0:
-                done.append(u"skąd: %s:%s" % (vals["src_host"].strip(), vals["src_ds"].strip()))
-            if obj["step"] > 1:
-                done.append(u"dokąd: %s" % vals["target"].strip())
-            if obj["step"] > 2:
-                done.append(u"szablon: %s" % vals["profile"])
-            if obj["step"] > 3:
-                done.append(u"nazwa: %s" % (vals["name"].strip() or "(z hosta)"))
-            if obj["step"] > 4:
-                done.append(u"konto: %s" % (self.wizard_account(vals) or "root"))
-            if done:
-                out += wrap(u"  " + u"   ".join(done), width - 4) + [""]
         for i, (key, label, kind, hint) in enumerate(FIELDS):
             mark = ">" if i == obj["cur"] else " "
             if kind == "toggle":
@@ -2798,23 +3101,8 @@ class UI(object):
                 out.append("")
                 out.append(fit("  " + label, width - 4))
                 continue
-            elif kind == "info":
-                lines = self.wizard_info(obj, key, width)
-                for n_, l in enumerate(lines):
-                    out.append(fit(("  " + l) if not label else "  %-*s %s" % (lw, label if n_ == 0 else "", l), width - 4))
-                continue
-            elif kind == "radio":
-                if i == obj["cur"]:
-                    obj["_cur_y"] = len(out)
-                for n_, (o, olabel) in enumerate(self.RADIO_OPTS.get(key, [])):
-                    out.append(fit("%s %-*s (%s) %s" % (mark if n_ == 0 else " ", lw, label if n_ == 0 else "", "o" if vals[key] == o else " ", olabel), width - 4))
-                if i == obj["cur"]:
-                    out.append(fit("      " + hint, width - 4))
-                continue
             else:
                 shown = vals[key] + ("_" if i == obj["cur"] else "")
-                if kind == "pickds" and i == obj["cur"]:
-                    shown += u"      [spacja = lista]" if obj.get("kind") == "wizard" else u"      [Enter = lista]"
                 if kind == "cron":
                     shown += u"      = %s" % cron_words(vals[key])
             if i == obj["cur"]:
@@ -2823,14 +3111,6 @@ class UI(object):
             if i == obj["cur"]:
                 out.append(fit("      " + hint, width - 4))
         out.append("")
-        if obj.get("kind") == "wizard":
-            sid = self.WIZ_STEPS[obj["step"]][0]
-            if obj.get("perr") and sid == "szablon":
-                out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
-            out.append(fit(u" Enter = dalej   Esc = %s   strzałki = pole   pisz = wartość   spacja = przełącz" % (u"krok wstecz" if obj["step"] > 0 else u"anuluj"), width - 4))
-            if self.message:
-                out += ["", fit(u" ! " + self.message, width - 4)]
-            return out
         if obj.get("kind") == "profile":
             out.append(fit(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).", width - 4))
             out.append(fit(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.", width - 4))
@@ -2908,6 +3188,9 @@ class UI(object):
             elif raw and len(raw) == 1 and raw.isprintable():
                 obj["value"] += raw
             return "stay"
+        if self.window and self.window[0] == "wiz":
+            self.wiz_key(self.window[1], k, height)
+            return "stay"
         if self.window and self.window[0] == "pick":
             obj = self.window[1]
             if k == "esc":
@@ -2935,18 +3218,18 @@ class UI(object):
             return "stay"
         if self.window and self.window[0] == "form":
             obj = self.window[1]
-            FIELDS = obj.get("fields") or self.WIZARD_FIELDS
+            FIELDS = obj.get("fields") or []
             key, label, kind, hint = FIELDS[obj["cur"]]
             if k == "esc":
-                if obj.get("kind") == "wizard" and obj["step"] > 0:
-                    self.wizard_set_step(obj, obj["step"] - 1)   # krok wstecz
+                if obj.get("back") and obj["back"][0] == "wiz":
+                    self.window = obj["back"]   # formularz szablonu wraca do kreatora
                 else:
                     self.window, self.message = None, u"anulowano -- nic nie wykonano"
             elif k in ("down", "up"):
-                # Naglowki i linie informacyjne nie sa polami: kursor je przeskakuje.
+                # Naglowki szczebli nie sa polami: kursor je przeskakuje.
                 step = 1 if k == "down" else -1
                 c = obj["cur"] + step
-                while 0 <= c < len(FIELDS) and FIELDS[c][2] in ("head", "info"):
+                while 0 <= c < len(FIELDS) and FIELDS[c][2] == "head":
                     c += step
                 if 0 <= c < len(FIELDS):
                     obj["cur"] = c
@@ -2957,43 +3240,21 @@ class UI(object):
             elif k == "enter":
                 if kind == "go" and obj.get("kind") == "profile":
                     self.profile_plan(obj)
-                elif kind == "go" and key == "plan":
-                    self.wizard_show_plan(obj)
-                elif kind == "go":
-                    self.wizard_plan(obj["vals"])
-                elif kind == "pick" and obj.get("kind") == "wizard":
-                    self.form_advance(obj, FIELDS)   # w kreatorze Enter = dalej, spacja = lista
                 elif kind == "pick":
                     self.open_profile_pick(obj, key, label)
-                elif kind == "pickds":
-                    # Wpisana pelna wartosc + Enter = dalej (droga wsadowa);
-                    # sam HOST (zrodlo) albo puste pole (cel) + Enter = lista.
-                    v = obj["vals"][key]
-                    if v.strip():
-                        self.form_advance(obj, FIELDS)
-                    else:
-                        self.dataset_picker(obj, key, label)
-                elif kind == "toggle" and obj.get("kind") != "wizard":
+                elif kind == "toggle":
                     obj["vals"][key] = not obj["vals"][key]
                 else:
                     self.form_advance(obj, FIELDS)
             elif k == "space" and kind == "toggle":
                 obj["vals"][key] = not obj["vals"][key]
-            elif k == "space" and kind == "pick" and obj.get("kind") == "wizard":
-                self.open_profile_pick(obj, key, label)
-            elif k == "space" and kind == "pickds" and obj.get("kind") == "wizard":
-                self.dataset_picker(obj, key, label)
-            elif k in ("space", "right", "left") and kind == "radio":
-                opts = [o for o, _ in self.RADIO_OPTS.get(key, [])]
-                i = opts.index(obj["vals"][key]) if obj["vals"][key] in opts else 0
-                obj["vals"][key] = opts[(i + (-1 if k == "left" else 1)) % len(opts)]
-            elif k == "bs" and kind in ("text", "pickds", "num", "cron"):
+            elif k == "bs" and kind in ("text", "num", "cron"):
                 obj["vals"][key] = obj["vals"][key][:-1]
-            elif k.startswith("text:") and kind in ("text", "pick", "pickds", "cron"):
+            elif k.startswith("text:") and kind in ("text", "pick", "cron"):
                 obj["vals"][key] += k[5:]
             elif k.startswith("text:") and kind == "num":
                 obj["vals"][key] += "".join(c for c in k[5:] if c.isdigit())
-            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick", "pickds", "cron"):
+            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick", "cron"):
                 obj["vals"][key] += raw
             elif raw and len(raw) == 1 and raw.isdigit() and kind == "num":
                 obj["vals"][key] += raw
@@ -3231,15 +3492,30 @@ def _ui_render(self, width, height):
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=u"t wykonaj   e do linii poleceń   Esc anuluj")
+        elif kind == "wiz":
+            lines, cur = self.wiz_lines(obj, width)
+            inner_h = height - 3
+            wscroll = 0
+            if cur is not None and cur >= inner_h - 2:
+                wscroll = cur - (inner_h - 2) + 1
+            st = obj["step"]
+            title = u"Nowa relacja -- krok %d/%d: %s" % (self.WIZ_STEPNO[st], self.WIZ_NSTEP, self.WIZ_TITLES[st])
+            foot = u"↑↓ wybór   Enter = %s   Esc = %s%s" % (u"zaznacz / dalej" if st == "ds" else u"wybierz i dalej",
+                                                             u"anuluj" if st == "mode" and not obj["typing"] else u"wstecz",
+                                                             u"   pisz = filtruj listę" if st in ("host", "ds", "target", "profile") and not obj["typing"] else "")
+            if st == "profile" and not obj["typing"]:
+                foot += u"   Ins = nowy szablon"
+            scr, self.scroll = render_window(base, title, lines, wscroll, width, height, self.ch, footer=foot)
+            if cur is not None:
+                scr.cursor_y = 2 + cur - wscroll
+            return scr
         elif kind == "form":
             lines = self.form_lines(obj, width)
             # Dlugi formularz (nowy szablon) przewija sie za kursorem.
             cy = obj.get("_cur_y", 0)
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
-                                             footer=(u"Enter na [ ZAPISZ ] = dalej   Esc = wróć" if obj.get("kind") == "profile"
-                                                     else (u"krok %d z %d   Enter = dalej   Esc = wstecz" % (obj["step"] + 1, len(self.WIZ_STEPS)) if obj.get("kind") == "wizard"
-                                                           else u"Enter na [ PLAN ] = dalej   Esc = anuluj")))
+                                             footer=u"Enter na [ ZAPISZ ] = dalej   Esc = wróć")
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")
@@ -3523,12 +3799,13 @@ def main(argv):
     ap.add_argument("--profiles", help="czytaj list-profiles --json --no-render z pliku (kreator)")
     ap.add_argument("--datasets-local", help="czytaj list-datasets --json (ten host) z pliku (kreator)")
     ap.add_argument("--datasets-remote", help="czytaj list-datasets HOST --json (peer) z pliku (kreator)")
+    ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     a = ap.parse_args(argv)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
              "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,
-             "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote}
+             "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source}
     ch = Chars(want_ascii(a))
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
