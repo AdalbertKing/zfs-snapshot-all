@@ -500,7 +500,7 @@ Inspection / teardown:
                                     alert-digest.sh -- the awk is its twin, pinned.
   zfs-backup.sh list-datasets [HOST[:PORT]] [--port=N] --json
                                     The datasets a wizard can offer as a list: this
-                                    host's (no HOST) or a peer's, over ssh as root
+                                    host's (no HOST) or a peer's, over SSH as root
                                     with root's own key and known_hosts (the pairing
                                     account does not exist before the relationship
                                     does). Read-only: `zfs list` and nothing else.
