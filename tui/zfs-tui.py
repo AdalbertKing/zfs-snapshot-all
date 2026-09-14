@@ -520,6 +520,7 @@ class Data(object):
         self.errors = {}
         self.configs = {}     # show-config NAME --json, na zadanie
         self.profiles = None  # list-profiles --json --no-render, na zadanie (kreator)
+        self.datasets = {}    # list-datasets [HOST] --json, na zadanie (kreator: listy zamiast pisania)
         self.read_at = 0
 
     def failed(self, key):
@@ -567,6 +568,26 @@ def load_profiles(repo, files, data):
     if err:
         data.errors["profiles"] = err
     return data.profiles, err
+
+
+def load_datasets(repo, files, data, host="", port=""):
+    """Lista datasetow: tutaj (host pusty) albo u peera (ssh kluczem roota).
+    Wlasciciel, 2026-09-14: 'albo wpisuje recznie, albo dostaje liste i wybiera'.
+    Blad (peer nie wpuszcza, brak w known_hosts) wraca jako tekst -- pole dalej
+    przyjmuje pisanie."""
+    key = "%s:%s" % (host, port)
+    if key in data.datasets:
+        return data.datasets[key]
+    fx = files.get("datasets_remote" if host else "datasets_local")
+    if fx:
+        doc, err = load_file(fx)
+    elif files.get("offline"):
+        doc, err = None, u"tryb offline: list-datasets nie uruchomiono"
+    else:
+        args = ["list-datasets"] + ([host] if host else []) + (["--port=%s" % port] if port else []) + ["--json"]
+        doc, err = run_verb(repo, args)
+    data.datasets[key] = ((doc or {}).get("datasets", []), err)
+    return data.datasets[key]
 
 
 def load_config(repo, files, data, name):
@@ -1976,7 +1997,8 @@ HELP = [
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
-    u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install)",
+    u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install;",
+    u"                 Enter na źródle/celu = lista datasetów zamiast pisania)",
     u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
     u"                 na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
@@ -2269,8 +2291,8 @@ class UI(object):
     # pelna komenda z --install --yes do potwierdzenia. Kreator nie liczy nic
     # sam: co odmawia czasownik, odmawia tu tak samo, tymi samymi slowami.
     WIZARD_FIELDS = [
-        ("source", u"Źródło HOST:DATASET", "text", u"np. 192.168.28.99:hdd/lab/srv-a -- co pobieramy i skąd"),
-        ("target", u"Cel (dataset tutaj)", "text", u"np. hdd/backups -- pod nim ląduje <peer>/<ścieżka źródła>"),
+        ("source", u"Źródło HOST:DATASET", "pickds", u"wpisz HOST i Enter = lista datasetów peera (ssh kluczem roota); albo wpisz HOST:DATASET"),
+        ("target", u"Cel (dataset tutaj)", "pickds", u"Enter = lista datasetów tego hosta; pod celem ląduje <peer>/<ścieżka źródła>"),
         ("profile", u"Profil (szablon)", "pick", u"Enter otwiera listę z list-profiles"),
         ("name", u"Nazwa relacji", "text", u"puste = z nazwy hosta; potrzebna, gdy ten host ma już relację"),
         ("port", u"Port SSH", "text", u"puste = 22"),
@@ -2287,6 +2309,38 @@ class UI(object):
                 "source_profile": "", "local_user": "", "grant": False, "manual": False}
         self.window = ("form", {"title": u"Nowa relacja (forma jednokomendowa)", "vals": vals, "cur": 0,
                                 "profiles": profiles, "perr": perr})
+        self.scroll = 0
+
+    def dataset_picker(self, obj, key, label):
+        """Enter na polu zrodla/celu: lista datasetow zamiast pisania.
+        Zrodlo: HOST z pola (przed ':'), lista u peera, wybor wraca jako
+        HOST:DATASET. Cel: lista tutaj. Blad czytelnika = zdanie w formularzu,
+        pole dalej przyjmuje pisanie (wsadowa droga zostaje)."""
+        vals = obj["vals"]
+        if key == "source":
+            host = vals["source"].split(":", 1)[0].strip()
+            if not host:
+                self.message = u"wpisz najpierw HOST (np. 192.168.28.99), potem Enter da listę jego datasetów"
+                return
+            items, err = load_datasets(self.repo, self.files, self.data, host, vals.get("port", "").strip())
+            prefix, title = host + ":", u"Datasety na %s (list-datasets %s --json, ssh jako root)" % (host, host)
+            current = vals["source"].split(":", 1)[1] if ":" in vals["source"] else ""
+        else:
+            items, err = load_datasets(self.repo, self.files, self.data)
+            prefix, title = "", u"Datasety na tym hoście (list-datasets --json)"
+            current = vals["target"]
+        if err:
+            self.message = u"lista niedostępna -- wpisz ścieżkę ręcznie. %s" % err
+            return
+        if not items:
+            self.message = u"list-datasets nie zwrócił żadnego datasetu -- wpisz ścieżkę ręcznie"
+            return
+        cur = 0
+        for i, d in enumerate(items):
+            if d.get("name") == current:
+                cur = i
+        self.window = ("pick", {"kind": "datasets", "title": title, "items": items, "cur": cur, "field": key,
+                                "prefix": prefix, "back": self.window})
         self.scroll = 0
 
     def wizard_argv(self, vals, install):
@@ -2344,6 +2398,8 @@ class UI(object):
                 shown = ""
             else:
                 shown = vals[key] + ("_" if i == obj["cur"] else "")
+                if kind == "pickds" and i == obj["cur"]:
+                    shown += u"      [Enter = lista]"
             out.append(fit("%s %-22s %s" % (mark, label, shown), width - 4))
             if i == obj["cur"]:
                 out.append(fit("      " + hint, width - 4))
@@ -2359,6 +2415,14 @@ class UI(object):
 
     def picker_lines(self, obj, width):
         out = []
+        if obj.get("kind") == "datasets":
+            nw = max(20, width - 4 - 2 - 11 - 11 - 11)
+            out.append(fit("  %-*s %-10s %10s %10s" % (nw, "dataset", "typ", u"zajęte", "wolne"), width - 4))
+            for i, d in enumerate(obj["items"]):
+                mark = ">" if i == obj["cur"] else " "
+                out.append(fit("%s %s %-10s %10s %10s" % (mark, fit_left(d.get("name", "?"), nw, self.ch), d.get("type", ""),
+                                                          human_bytes(int(d.get("used") or 0)), human_bytes(int(d.get("avail") or 0))), width - 4))
+            return out
         for i, pr in enumerate(obj["items"]):
             mark = ">" if i == obj["cur"] else " "
             tiers = ", ".join(t.get("name", "") for t in pr.get("tiers", [])[:4])
@@ -2417,8 +2481,16 @@ class UI(object):
                 obj["cur"] = max(0, obj["cur"] - 1)
             elif k == "enter":
                 if obj["items"]:
-                    obj["back"][1]["vals"][obj["field"]] = obj["items"][obj["cur"]].get("name", "")
+                    obj["back"][1]["vals"][obj["field"]] = obj.get("prefix", "") + obj["items"][obj["cur"]].get("name", "")
                 self.window = obj["back"]
+            elif k == "pgdn":
+                obj["cur"] = min(obj["cur"] + 10, max(0, len(obj["items"]) - 1))
+            elif k == "pgup":
+                obj["cur"] = max(0, obj["cur"] - 10)
+            elif k == "home":
+                obj["cur"] = 0
+            elif k == "end":
+                obj["cur"] = max(0, len(obj["items"]) - 1)
             return "stay"
         if self.window and self.window[0] == "form":
             obj = self.window[1]
@@ -2443,17 +2515,19 @@ class UI(object):
                         if pr.get("name") == obj["vals"][key]:
                             cur = i
                     self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window})
+                elif kind == "pickds":
+                    self.dataset_picker(obj, key, label)
                 elif kind == "toggle":
                     obj["vals"][key] = not obj["vals"][key]
                 else:
                     obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
             elif k == "space" and kind == "toggle":
                 obj["vals"][key] = not obj["vals"][key]
-            elif k == "bs" and kind == "text":
+            elif k == "bs" and kind in ("text", "pickds"):
                 obj["vals"][key] = obj["vals"][key][:-1]
-            elif k.startswith("text:") and kind in ("text", "pick"):
+            elif k.startswith("text:") and kind in ("text", "pick", "pickds"):
                 obj["vals"][key] += k[5:]
-            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick"):
+            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick", "pickds"):
                 obj["vals"][key] += raw
             return "stay"
         if self.window and self.window[0] == "confirm":
@@ -2695,8 +2769,9 @@ def _ui_render(self, width, height):
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")
-            if obj["cur"] * 2 >= height - 4:
-                scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), obj["cur"] * 2 - (height - 6), width, height, self.ch,
+            per = 1 if obj.get("kind") == "datasets" else 2
+            if obj["cur"] * per >= height - 4:
+                scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), obj["cur"] * per - (height - 6), width, height, self.ch,
                                                  footer=u"Enter wybiera   Esc wraca bez zmiany")
         elif kind == "output":
             lines = self.output_lines(obj, width)
@@ -2972,11 +3047,14 @@ def main(argv):
     ap.add_argument("--stats", help="czytaj job-stats --json z pliku (czasy i wolumen jak w digescie)")
     ap.add_argument("--config", help="czytaj show-config --json z pliku (okno relacji)")
     ap.add_argument("--profiles", help="czytaj list-profiles --json --no-render z pliku (kreator)")
+    ap.add_argument("--datasets-local", help="czytaj list-datasets --json (ten host) z pliku (kreator)")
+    ap.add_argument("--datasets-remote", help="czytaj list-datasets HOST --json (peer) z pliku (kreator)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
     a = ap.parse_args(argv)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
-             "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline}
+             "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,
+             "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote}
     ch = Chars(want_ascii(a))
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
