@@ -3719,7 +3719,7 @@ def curses_loop(ui):
             if ui.window and ui.window[0] == "form" and k == 32:
                 ui.key("space", h)
                 continue
-            if ui.window and ui.window[0] in ("prompt", "form") and is_char and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
+            if ui.window and ui.window[0] in ("prompt", "form", "wiz") and is_char and name not in ("esc", "enter", "bs", "up", "down") and 32 <= k < 0x110000:
                 try:
                     ch_ = chr(k)
                 except ValueError:
