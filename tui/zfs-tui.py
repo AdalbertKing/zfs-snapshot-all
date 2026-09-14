@@ -486,6 +486,75 @@ def cron_next(spec, now):
 # ---------------------------------------------------------------------------
 # CZYTELNICY
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# SZABLONY SLOWAMI. Wlasciciel, 2026-09-14: lista szablonow ma mowic, co
+# szablon ROBI, nie jak sie nazywa plik. Wszystko liczone z list-profiles
+# --json: harmonogram szczebla tworzacego, licznik kazdego szczebla, mechanizm,
+# ksztalt, zamrazanie, progi monitora. Zero wlasnej polityki -- same slowa.
+# ---------------------------------------------------------------------------
+TIER_WORDS = [("hourly", u"godz."), ("daily", u"dni"), ("weekly", u"tyg."), ("monthly", u"mies."), ("yearly", u"lat")]
+TIER_ADJ = [("hourly", u"godzinowe"), ("daily", u"dobowe"), ("weekly", u"tygodniowe"), ("monthly", u"miesięczne"), ("yearly", u"roczne")]
+DOW = [u"nd", u"pn", u"wt", u"śr", u"cz", u"pt", u"so"]
+
+
+def tier_unit(name, table=TIER_WORDS):
+    for suf, w in table:
+        if name.endswith(suf):
+            return w
+    return name
+
+
+def cron_words(spec):
+    """5 pol crona -> slowa: 'co godzinę (:01)', 'co dobę 01:11', 'co tydzień nd 02:21',
+    'co miesiąc 1. dnia 03:31'; reszta wraca jak jest."""
+    f = (spec or "").split()
+    if len(f) != 5:
+        return spec or "?"
+    mi, ho, dom, mon, dow = f
+    if not mi.isdigit():
+        return spec
+    if ho == "*" and dom == "*" and mon == "*" and dow == "*":
+        return u"co godzinę (:%02d)" % int(mi)
+    if not ho.isdigit():
+        return spec
+    hm = "%02d:%02d" % (int(ho), int(mi))
+    if dom == "*" and mon == "*" and dow == "*":
+        return u"co dobę %s" % hm
+    if dom == "*" and mon == "*" and dow.isdigit():
+        return u"co tydzień %s %s" % (DOW[int(dow) % 7], hm)
+    if dom.isdigit() and mon == "*" and dow == "*":
+        return u"co miesiąc %s. dnia %s" % (dom, hm)
+    if dom.isdigit() and mon.isdigit():
+        return u"co rok %s.%s %s" % (dom, mon, hm)
+    return spec
+
+
+def profile_words(p):
+    """Slownik slow o szablonie: cadence, retention, mech, shape, quiesce, monitor."""
+    tiers = p.get("tiers", [])
+    creators = [t for t in tiers if t.get("send_schedule")]
+    cad = ", ".join(cron_words(t["send_schedule"]) for t in creators) or "?"
+    ret = []
+    for t in tiers:
+        if t.get("keep"):
+            ret.append(u"%s %s" % (t["keep"], tier_unit(t.get("name", ""))))
+        elif t.get("retain"):
+            r = t["retain"].lstrip("-")
+            n = r[1:] if r[:1].isalpha() else r
+            ret.append(u"%s %s" % (n, tier_unit(t.get("name", ""))))
+    mech = {"flat": u"N najnowszych", "gfs": u"drabina GFS", "age": u"wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
+    shape = {"one-family": u"jedna rodzina", "family-per-tier": u"rodzina na szczebel"}.get(p.get("shape", ""), p.get("shape") or "?")
+    q = [tier_unit(t.get("name", ""), TIER_ADJ) for t in tiers if t.get("quiesce")]
+    quiesce = (u"zamraża: %s" % ", ".join(q)) if q else u"bez zamrażania"
+    mon = ""
+    for t in tiers:
+        if t.get("monitor_warn") or t.get("monitor_crit"):
+            mon = u"monitor %s / %s" % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")
+            break
+    return {"cadence": cad, "retention": u"trzyma " + (", ".join(ret) if ret else "?"), "mech": mech,
+            "shape": shape, "quiesce": quiesce, "monitor": mon or u"bez progów"}
+
+
 def run_verb(repo, args):
     """Uruchom czytelnik i oddaj sparsowany JSON, albo blad jako tekst.
 
@@ -1998,7 +2067,8 @@ HELP = [
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
     u"                 (kreator: źródło, cel, szablon z listy -> plan -> --install;",
-    u"                 Enter na źródle/celu = lista datasetów zamiast pisania)",
+    u"                 Enter na źródle/celu = lista datasetów zamiast pisania;",
+    u"                 szablony opisane słowami, Ins na liście = nowy szablon)",
     u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
     u"                 na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
@@ -2177,7 +2247,7 @@ class UI(object):
         self.window = ("prompt", {"title": title, "label": label, "value": value, "on_enter": on_enter})
         self.scroll = 0
 
-    def run_detached(self, title, argv, redirect=None):
+    def run_detached(self, title, argv, redirect=None, logname=None):
         """Uruchom czasownik w tle, wyjscie do pliku, okno pokazuje ogon pliku."""
         shell = self.shell_line(argv, redirect)
         if self.exec_log:
@@ -2196,7 +2266,7 @@ class UI(object):
         # Nazwa dziennika z czasownika, PRZEFILTROWANA: forma jednokomendowa ma w
         # argv[1] "--source=host:pula/dataset" -- ukosnik zrobilby z tego
         # katalog, ktorego nie ma, i akcja padala cicho (pve10, jazda 8).
-        verb = argv[1] if len(argv) > 1 else "cmd"
+        verb = logname or (argv[1] if len(argv) > 1 else "cmd")
         if verb.startswith("--"):
             verb = "nowa-relacja"
         verb = "".join(c if (c.isalnum() or c in "._-") else "_" for c in verb)[:40] or "cmd"
@@ -2343,6 +2413,152 @@ class UI(object):
                                 "prefix": prefix, "back": self.window})
         self.scroll = 0
 
+    # ------------------------------------------------------------------
+    # NOWY SZABLON (wlasciciel 2026-09-14: "albo wskazac profil z templates,
+    # albo stworzyc calkiem nowy uzywajac checkboxow, radiobuttons i list").
+    # Formularz = pola z BAZY (liczniki, harmonogramy, zamrazanie, progi), zapis
+    # przez save-profile -- ten sam czasownik, ktory admin wpisalby z palca, z
+    # jego dwiema bramkami (walidator i prawdziwy render). Mechanizm i ksztalt
+    # sa z bazy: save-profile zmienia pola szczebli, nie sklada profilu z niczego.
+    def profile_form_fields(self, base):
+        fields = [("name", u"Nazwa nowego szablonu", "text", u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- czasownik sprawdzi"),
+                  ("desc", u"Opis", "text", u"jedno zdanie, co ten szablon robi (pole description)"),
+                  ("base", u"Na bazie", "pick", u"Enter = lista szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz")]
+        for t in base.get("tiers", []):
+            tn = t.get("name", "")
+            adj = tier_unit(tn, TIER_ADJ)
+            fields.append((u"h|%s" % tn, u"szczebel %s (%s)" % (tn, adj), "head", ""))
+            if t.get("send_schedule"):
+                fields.append(("t|%s|send_schedule" % tn, u"  migawka co (cron)", "cron", u"5 pól crona; obok słowa, jak to czyta człowiek"))
+            if t.get("keep"):
+                fields.append(("t|%s|keep" % tn, u"  trzymaj %s" % tier_unit(tn), "num", u"licznik: ile %s zostaje (0 = nic z tego szczebla)" % tier_unit(tn)))
+            elif t.get("retain"):
+                fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", u"flaga silnika, np. -h24 = młodsze niż 24 godziny"))
+            if t.get("prune_schedule"):
+                fields.append(("t|%s|prune_schedule" % tn, u"  porządki co (cron)", "cron", u"kiedy kasować nadmiar"))
+            if t.get("send_schedule"):
+                qh = u"tak = auto,degrade (spójna migawka; gdy nie da się zamrozić, robi zwykłą)"
+                if base.get("shape") == "one-family":
+                    qh = u"UWAGA: jedna rodzina -- zamrażanie dotyczy KAŻDEJ migawki tego szczebla (np. 24 razy na dobę)"
+                fields.append(("t|%s|quiesce" % tn, u"  zamrażaj system plików", "toggle", qh))
+            if t.get("monitor_warn") or t.get("monitor_crit"):
+                fields.append(("t|%s|monitor_warn" % tn, u"  monitor: ostrzeż po", "text", u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie"))
+                fields.append(("t|%s|monitor_crit" % tn, u"  monitor: alarm po", "text", u"np. 150m, 48h, 10d -- starsza niż to = alarm"))
+        fields.append(("go", u"[ ZAPISZ ]", "go", u"Enter: komendy save-profile do potwierdzenia (nic nie zapisane przed 't')"))
+        return fields
+
+    def profile_form_vals(self, base, keep=None):
+        vals = {"name": (keep or {}).get("name", ""), "desc": (keep or {}).get("desc") or base.get("description", "") or "", "base": base.get("name", "")}
+        for t in base.get("tiers", []):
+            tn = t.get("name", "")
+            for f in ("send_schedule", "keep", "retain", "prune_schedule", "monitor_warn", "monitor_crit"):
+                vals["t|%s|%s" % (tn, f)] = t.get(f, "") or ""
+            vals["t|%s|quiesce" % tn] = bool(t.get("quiesce"))
+        return vals
+
+    def profile_form_open(self, base, back):
+        self.window = ("form", {"kind": "profile", "title": u"Nowy szablon na bazie: %s" % base.get("name", "?"),
+                                "fields": self.profile_form_fields(base), "vals": self.profile_form_vals(base),
+                                "base": base, "cur": 0, "back": back, "profiles": back[1].get("profiles") if back else None})
+        self.scroll = 0
+
+    def profile_form_rebuild(self, obj):
+        """Zmiana bazy = nowe pola szczebli; nazwa i opis zostaja."""
+        name = obj["vals"].get("base", "")
+        base = None
+        for pr in (obj.get("profiles") or []):
+            if pr.get("name") == name:
+                base = pr
+        if base is None:
+            self.message = u"nie ma szablonu '%s' na liście" % name
+            obj["vals"]["base"] = obj["base"].get("name", "")
+            return
+        keep = dict(obj["vals"])
+        if (keep.get("desc") or "") == (obj["base"].get("description") or ""):
+            keep["desc"] = ""   # opis nieedytowany idzie za nowa baza
+        obj["base"], obj["title"] = base, u"Nowy szablon na bazie: %s" % name
+        obj["fields"], obj["vals"] = self.profile_form_fields(base), self.profile_form_vals(base, keep)
+        obj["cur"] = min(obj["cur"], len(obj["fields"]) - 1)
+
+    def profile_argvs(self, obj):
+        """Lista argv save-profile: pierwsza tworzy kopie (+ opis + pierwszy
+        zmieniony szczebel), kazdy kolejny zmieniony szczebel to osobne wywolanie
+        --from=NOWY --as=NOWY --force (czasownik bierze JEDEN --tier na raz)."""
+        vals, base = obj["vals"], obj["base"]
+        name = vals["name"].strip()
+        changes = []
+        for t in base.get("tiers", []):
+            tn = t.get("name", "")
+            ch = []
+            for f in ("send_schedule", "keep", "retain", "prune_schedule", "monitor_warn", "monitor_crit"):
+                key = "t|%s|%s" % (tn, f)
+                if key in vals and (vals[key] or "").strip() != (t.get(f, "") or ""):
+                    ch.append("--%s=%s" % (f, vals[key].strip()))
+            qk = "t|%s|quiesce" % tn
+            if qk in vals and bool(t.get("quiesce")) != bool(vals[qk]):
+                ch.append("--quiesce=%s" % ("auto,degrade" if vals[qk] else ""))
+            if ch:
+                changes.append((tn, ch))
+        first = [self.zb(), "save-profile", "--from=%s" % base.get("name", ""), "--as=%s" % name]
+        if (vals.get("desc") or "").strip() and vals["desc"].strip() != (base.get("description") or ""):
+            first.append("--description=%s" % vals["desc"].strip())
+        argvs = []
+        if changes:
+            tn, ch = changes[0]
+            argvs.append(first + ["--tier=%s" % tn] + ch)
+            for tn, ch in changes[1:]:
+                argvs.append([self.zb(), "save-profile", "--from=%s" % name, "--as=%s" % name, "--force", "--tier=%s" % tn] + ch)
+        else:
+            argvs.append(first)
+        return argvs, changes
+
+    def profile_plan(self, obj):
+        vals, base = obj["vals"], obj["base"]
+        name = vals["name"].strip()
+        if not name:
+            self.message = u"nazwa nowego szablonu jest wymagana"
+            return
+        if any(not (c.isalnum() or c in "._-") for c in name) or name.startswith("."):
+            self.message = u"nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik"
+            return
+        if name == base.get("name"):
+            self.message = u"nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)"
+            return
+        for key, _l, kind, _h in obj["fields"]:
+            if kind == "cron" and len((vals.get(key) or "").split()) != 5:
+                self.message = u"harmonogram '%s' to nie 5 pól crona" % (vals.get(key) or "")
+                return
+        argvs, changes = self.profile_argvs(obj)
+        # Slowa o tym, co powstanie: baza z naniesionymi zmianami.
+        synth = json.loads(json.dumps(base))
+        synth["name"], synth["description"] = name, vals.get("desc") or base.get("description", "")
+        for t in synth.get("tiers", []):
+            tn = t.get("name", "")
+            for f in ("send_schedule", "keep", "retain", "prune_schedule", "monitor_warn", "monitor_crit"):
+                key = "t|%s|%s" % (tn, f)
+                if key in vals:
+                    t[f] = vals[key].strip()
+            t["quiesce"] = "auto,degrade" if vals.get("t|%s|quiesce" % tn) else ""
+        w = profile_words(synth)
+        note = wrap(u"Szablon %s: %s · %s · %s · %s · %s · %s" % (name, w["cadence"], w["retention"], w["mech"], w["shape"], w["quiesce"], w["monitor"]), 72) + [""]
+        if len(argvs) > 1:
+            note += wrap(u"Zmienione szczeble: %s -- %d wywołania save-profile po kolei (jeden --tier na raz):" % (", ".join(tn for tn, _ in changes), len(argvs)), 72)
+            for a in argvs[1:]:
+                note += wrap("  " + self.shell_line(a), 72)
+            note.append("")
+        note += wrap(u"Zapis idzie do /etc/zfs-snapshot-all/profiles/%s.conf. Dwie bramki czasownika: walidator i prawdziwy render." % name, 72)
+        back_form = obj.get("back")
+        argv = argvs[0] if len(argvs) == 1 else ["bash", "-c", " && ".join(self.shell_line(a) for a in argvs)]
+
+        def on_yes():
+            self.run_detached(u"Nowy szablon %s" % name, argv, logname="save-profile")
+            self.data.profiles = None
+            if back_form and back_form[0] == "form":
+                back_form[1]["vals"]["profile"] = name
+                back_form[1]["profiles"] = None
+                self.window[1]["back_to"] = back_form
+        self.confirm(u"Nowy szablon %s (na bazie %s)" % (name, base.get("name", "?")), argv, note, on_yes=on_yes)
+
     def wizard_argv(self, vals, install):
         a = [self.zb(), "--source=%s" % vals["source"], "--target=%s" % vals["target"]]
         if vals.get("profile"):
@@ -2390,20 +2606,37 @@ class UI(object):
     def form_lines(self, obj, width):
         out = []
         vals = obj["vals"]
-        for i, (key, label, kind, hint) in enumerate(self.WIZARD_FIELDS):
+        FIELDS = obj.get("fields") or self.WIZARD_FIELDS
+        lw = max(22, min(30, max(len(f[1]) for f in FIELDS)))
+        for i, (key, label, kind, hint) in enumerate(FIELDS):
             mark = ">" if i == obj["cur"] else " "
             if kind == "toggle":
                 shown = "[x] tak" if vals[key] else "[ ] nie"
             elif kind == "go":
                 shown = ""
+            elif kind == "head":
+                out.append("")
+                out.append(fit("  " + label, width - 4))
+                continue
             else:
                 shown = vals[key] + ("_" if i == obj["cur"] else "")
                 if kind == "pickds" and i == obj["cur"]:
                     shown += u"      [Enter = lista]"
-            out.append(fit("%s %-22s %s" % (mark, label, shown), width - 4))
+                if kind == "cron":
+                    shown += u"      = %s" % cron_words(vals[key])
+            if i == obj["cur"]:
+                obj["_cur_y"] = len(out)
+            out.append(fit("%s %-*s %s" % (mark, lw, label, shown), width - 4))
             if i == obj["cur"]:
                 out.append(fit("      " + hint, width - 4))
         out.append("")
+        if obj.get("kind") == "profile":
+            out.append(fit(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).", width - 4))
+            out.append(fit(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.", width - 4))
+            out.append(fit(u" strzałki = pole, pisz = wartość, spacja = przełącz, Enter na [ ZAPISZ ], Esc = wróć", width - 4))
+            if self.message:
+                out += ["", fit(u" ! " + self.message, width - 4)]
+            return out
         if obj.get("perr"):
             out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
         else:
@@ -2423,14 +2656,17 @@ class UI(object):
                 out.append(fit("%s %s %-10s %10s %10s" % (mark, fit_left(d.get("name", "?"), nw, self.ch), d.get("type", ""),
                                                           human_bytes(int(d.get("used") or 0)), human_bytes(int(d.get("avail") or 0))), width - 4))
             return out
+        # SZABLONY SLOWAMI (wlasciciel 2026-09-14): co robi, nie jak sie nazywa.
         for i, pr in enumerate(obj["items"]):
             mark = ">" if i == obj["cur"] else " "
-            tiers = ", ".join(t.get("name", "") for t in pr.get("tiers", [])[:4])
-            out.append(fit("%s %-16s %-9s %-11s %s" % (mark, pr.get("name", "?"), pr.get("mechanism", "") or "", pr.get("shape", "") or "", pr.get("description", "") or ""), width - 4))
+            w = profile_words(pr)
+            out.append(fit(u"%s %-16s %s · %s · %s" % (mark, pr.get("name", "?"), w["cadence"], w["retention"], w["mech"]), width - 4))
             if i == obj["cur"]:
-                out.append(fit(u"      szczeble: %s%s   źródło: %s" % (tiers, " ..." if len(pr.get("tiers", [])) > 4 else "", pr.get("source", "?")), width - 4))
+                out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], pr.get("description", "") or ""), width - 4))
         if not obj["items"]:
             out.append(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu")
+        elif obj.get("allow_new"):
+            out += ["", fit(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)", width - 4)]
         return out
 
     def import_preview(self, path):
@@ -2483,6 +2719,10 @@ class UI(object):
                 if obj["items"]:
                     obj["back"][1]["vals"][obj["field"]] = obj.get("prefix", "") + obj["items"][obj["cur"]].get("name", "")
                 self.window = obj["back"]
+                if obj["items"] and obj["back"][1].get("kind") == "profile" and obj["field"] == "base":
+                    self.profile_form_rebuild(obj["back"][1])
+            elif k == "ins" and obj.get("allow_new") and obj["items"]:
+                self.profile_form_open(obj["items"][obj["cur"]], obj["back"])
             elif k == "pgdn":
                 obj["cur"] = min(obj["cur"] + 10, max(0, len(obj["items"]) - 1))
             elif k == "pgup":
@@ -2494,47 +2734,61 @@ class UI(object):
             return "stay"
         if self.window and self.window[0] == "form":
             obj = self.window[1]
-            key, label, kind, hint = self.WIZARD_FIELDS[obj["cur"]]
+            FIELDS = obj.get("fields") or self.WIZARD_FIELDS
+            key, label, kind, hint = FIELDS[obj["cur"]]
             if k == "esc":
                 self.window, self.message = None, u"anulowano -- nic nie wykonano"
-            elif k in ("down",):
-                obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
-            elif k in ("up",):
-                obj["cur"] = max(0, obj["cur"] - 1)
+            elif k in ("down", "up"):
+                # Naglowki szczebli nie sa polami: kursor je przeskakuje.
+                step = 1 if k == "down" else -1
+                c = obj["cur"] + step
+                while 0 <= c < len(FIELDS) and FIELDS[c][2] == "head":
+                    c += step
+                if 0 <= c < len(FIELDS):
+                    obj["cur"] = c
             elif k == "end":
-                obj["cur"] = len(self.WIZARD_FIELDS) - 1
+                obj["cur"] = len(FIELDS) - 1
             elif k == "home":
                 obj["cur"] = 0
             elif k == "enter":
-                if kind == "go":
+                if kind == "go" and obj.get("kind") == "profile":
+                    self.profile_plan(obj)
+                elif kind == "go":
                     self.wizard_plan(obj["vals"])
                 elif kind == "pick":
+                    if obj.get("profiles") is None:
+                        obj["profiles"], obj["perr"] = load_profiles(self.repo, self.files, self.data)
                     items = list(obj.get("profiles") or [])
                     cur = 0
                     for i, pr in enumerate(items):
                         if pr.get("name") == obj["vals"][key]:
                             cur = i
-                    self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window})
+                    self.window = ("pick", {"title": u"Szablon dla pola: %s" % label, "items": items, "cur": cur, "field": key, "back": self.window,
+                                            "allow_new": obj.get("kind") != "profile"})
                 elif kind == "pickds":
                     # Wpisana pelna wartosc + Enter = dalej (droga wsadowa);
                     # sam HOST (zrodlo) albo puste pole (cel) + Enter = lista.
                     v = obj["vals"][key]
                     typed = (":" in v and v.split(":", 1)[1].strip()) if key == "source" else v.strip()
                     if typed:
-                        obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
+                        obj["cur"] = min(obj["cur"] + 1, len(FIELDS) - 1)
                     else:
                         self.dataset_picker(obj, key, label)
                 elif kind == "toggle":
                     obj["vals"][key] = not obj["vals"][key]
                 else:
-                    obj["cur"] = min(obj["cur"] + 1, len(self.WIZARD_FIELDS) - 1)
+                    obj["cur"] = min(obj["cur"] + 1, len(FIELDS) - 1)
             elif k == "space" and kind == "toggle":
                 obj["vals"][key] = not obj["vals"][key]
-            elif k == "bs" and kind in ("text", "pickds"):
+            elif k == "bs" and kind in ("text", "pickds", "num", "cron"):
                 obj["vals"][key] = obj["vals"][key][:-1]
-            elif k.startswith("text:") and kind in ("text", "pick", "pickds"):
+            elif k.startswith("text:") and kind in ("text", "pick", "pickds", "cron"):
                 obj["vals"][key] += k[5:]
-            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick", "pickds"):
+            elif k.startswith("text:") and kind == "num":
+                obj["vals"][key] += "".join(c for c in k[5:] if c.isdigit())
+            elif raw and len(raw) == 1 and raw.isprintable() and kind in ("text", "pick", "pickds", "cron"):
+                obj["vals"][key] += raw
+            elif raw and len(raw) == 1 and raw.isdigit() and kind == "num":
                 obj["vals"][key] += raw
             return "stay"
         if self.window and self.window[0] == "confirm":
@@ -2771,8 +3025,13 @@ def _ui_render(self, width, height):
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=u"t wykonaj   e do linii poleceń   Esc anuluj")
         elif kind == "form":
-            scr, self.scroll = render_window(base, obj["title"], self.form_lines(obj, width), 0, width, height, self.ch,
-                                             footer=u"Enter na [ PLAN ] = dalej   Esc = anuluj")
+            lines = self.form_lines(obj, width)
+            # Dlugi formularz (nowy szablon) przewija sie za kursorem.
+            cy = obj.get("_cur_y", 0)
+            fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
+            scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
+                                             footer=(u"Enter na [ ZAPISZ ] = dalej   Esc = wróć" if obj.get("kind") == "profile"
+                                                     else u"Enter na [ PLAN ] = dalej   Esc = anuluj"))
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")

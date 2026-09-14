@@ -483,11 +483,82 @@ if has "$W" '╔═ Nowa relacja (forma jednokomendowa) ═' && has "$W" '> Źr�
 else
     bad "kreator: formularz" "$W"
 fi
-W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter)"
-if has "$W" '╔═ Szablon dla pola: Profil (szablon) ═' && hasE "$W" '^║ > default +gfs +one-family' && hasE "$W" '^║   d7h24 +flat +family-per-tier'; then
-    ok "kreator: Enter na polu Profil otwiera liste szablonow (nazwa, mechanizm, ksztalt, opis), kursor na obecnym"
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter --width 120)"
+# SZABLONY SLOWAMI (wlasciciel 2026-09-14): co robi, nie jak sie nazywa plik.
+# Wszystko policzone z list-profiles --json: harmonogram, liczniki, mechanizm.
+if has "$W" '╔═ Szablon dla pola: Profil (szablon) ═' && has "$W" '> default          co godzinę (:01) · trzyma 24 godz., 7 dni, 4 tyg., 12 mies. · drabina GFS' \
+        && has "$W" 'jedna rodzina · bez zamrażania · monitor 90m / 150m · godzinowy create + drabina GFS' \
+        && has "$W" '  d7h24            co godzinę (:01), co dobę 01:11 · trzyma 24 godz., 7 dni · N najnowszych' \
+        && has "$W" 'co tydzień nd 02:21, co miesiąc 1. dnia 03:31' && has "$W" 'Ins = nowy szablon na bazie podświetlonego'; then
+    ok "kreator: lista szablonow SLOWAMI -- harmonogram, co trzyma, mechanizm; ksztalt, zamrazanie, progi i opis przy podswietlonym; Ins = nowy"
 else
-    bad "kreator: lista szablonow" "$W"
+    bad "kreator: lista szablonow slowami" "$W"
+fi
+W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,down,down --width 120)"
+if has "$W" '> m12w4d7h24-gfs' && has "$W" 'rodzina na szczebel · zamraża: dobowe, tygodniowe, miesięczne · monitor 90m / 150m'; then
+    ok "kreator: szablon z zamrazaniem mowi, KTORE szczeble zamraza (dobowe, tygodniowe, miesieczne), ksztalt rodzina na szczebel"
+else
+    bad "kreator: slowa o zamrazaniu" "$W"
+fi
+# NOWY SZABLON (wlasciciel: "stworzyc calkiem nowy uzywajac checkboxow,
+# radiobuttons i list"): Ins na liscie = formularz z pol BAZY, zapis przez
+# save-profile (jeden --tier na wywolanie), nic nie zapisane przed 't'.
+NP="ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,ins"
+W="$(wiz "$NP" --width 120 --height 40)"
+if has "$W" '╔═ Nowy szablon na bazie: default ═' && has "$W" '> Nazwa nowego szablonu          _' && has "$W" 'Opis                           godzinowy create + drabina GFS' \
+        && has "$W" 'Na bazie                       default' && has "$W" 'szczebel standard_hourly (godzinowe)' && has "$W" 'migawka co (cron)            1 * * * *      = co godzinę (:01)' \
+        && has "$W" 'zamrażaj system plików       [ ] nie' && has "$W" 'szczebel keep_hourly (godzinowe)' && has "$W" 'trzymaj godz.                24' \
+        && has "$W" 'monitor: ostrzeż po          90m' && has "$W" 'trzymaj mies.                12' && has "$W" '[ ZAPISZ ]'; then
+    ok "kreator: Ins na liscie otwiera formularz nowego szablonu z POL BAZY: nazwa, opis, baza, per szczebel harmonogram (slowami), licznik, zamrazanie, progi"
+else
+    bad "kreator: formularz nowego szablonu" "$W"
+fi
+W="$(wiz "$NP,end,enter" --width 120 --height 40)"
+if has "$W" '! nazwa nowego szablonu jest wymagana' && [ ! -s "$XL" ]; then
+    ok "kreator: ZAPISZ bez nazwy odmawia w formularzu, nic nie wykonano"
+else
+    bad "kreator: nazwa wymagana" "$W" "$(cat "$XL")"
+fi
+W="$(wiz "$NP,text:default,end,enter" --width 120 --height 40)"
+if has "$W" '! nazwa musi być inna niż baza'; then
+    ok "kreator: nazwa rowna bazie odrzucona (pakietowego szablonu nie nadpiszemy)"
+else
+    bad "kreator: nazwa = baza" "$W"
+fi
+NP2="$NP,text:moj-h48,down,down,down,down,space,down,bs,bs,text:48,end"
+W="$(wiz "$NP2" --width 120 --height 40)"
+if has "$W" 'zamrażaj system plików       [x] tak' && has "$W" 'trzymaj godz.                48' && has "$W" '> [ ZAPISZ ]'; then
+    ok "kreator: spacja przelacza zamrazanie, licznik przyjmuje tylko cyfry, End idzie na [ ZAPISZ ]"
+else
+    bad "kreator: edycja pol" "$W"
+fi
+W="$(wiz "$NP2,enter" --width 120 --height 40)"
+if has "$W" 'POTWIERDZENIE: Nowy szablon moj-h48 (na bazie default)' && has "$W" '--as=moj-h48 --tier=standard_hourly' && has "$W" '--quiesce=auto,degrade &&' \
+        && has "$W" '--from=moj-h48 --as=moj-h48 --force --tier=keep_hourly --keep=48' \
+        && has "$W" 'Szablon moj-h48: co godzinę (:01) · trzyma 48 godz.' && has "$W" 'jedna rodzina · zamraża: godzinowe' \
+        && has "$W" 'Zmienione szczeble: standard_hourly, keep_hourly -- 2' && [ ! -s "$XL" ]; then
+    ok "kreator: ZAPISZ pokazuje DOKLADNE komendy save-profile (jeden --tier na wywolanie) i slowami, co powstanie; nic nie wykonano"
+else
+    bad "kreator: potwierdzenie nowego szablonu" "$W" "$(cat "$XL")"
+fi
+W="$(wiz "$NP2,enter,t" --width 120 --height 40)"
+if grep -q -- "save-profile --from=default --as=moj-h48 --tier=standard_hourly --quiesce=auto,degrade && " "$XL" && grep -q -- " save-profile --from=moj-h48 --as=moj-h48 --force --tier=keep_hourly --keep=48'\?\$" "$XL" \
+        && [ "$(grep -c . "$XL")" -eq 1 ] && has "$W" 'WYJŚCIE: Nowy szablon moj-h48'; then
+    ok "kreator: 't' wykonuje obie komendy po kolei (&&) jako jeden bieg i otwiera okno wyjscia"
+else
+    bad "kreator: t nowego szablonu" "$(cat "$XL")" "$W"
+fi
+W="$(wiz "$NP2,enter,t,esc" --width 120 --height 40)"
+if has "$W" 'Nowa relacja (forma jednokomendowa)' && has "$W" '> Profil (szablon)       moj-h48_'; then
+    ok "kreator: po zapisie Esc wraca do kreatora relacji z NOWYM szablonem w polu Profil"
+else
+    bad "kreator: powrot z nowym szablonem" "$W"
+fi
+W="$(wiz "$NP,text:x,down,down,enter,home,down,enter,end,enter" --width 120 --height 40)"
+if has "$W" 'save-profile --from=d30' && has "$W" '--as=x' && ! has "$W" 'description=' && has "$W" 'Szablon x: co dobę 01:11 · trzyma 30 dni · N najnowszych'; then
+    ok "kreator: zmiana bazy (Enter na 'Na bazie', wybor) przebudowuje pola szczebli i komende"
+else
+    bad "kreator: zmiana bazy" "$W"
 fi
 W="$(wiz ins,text:192.168.28.99:hdd/lab/x,enter,text:hdd/backups,enter,enter,down,enter)"
 if has "$W" 'Profil (szablon)       m12w4d7h24-age'; then
