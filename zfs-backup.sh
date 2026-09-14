@@ -498,6 +498,14 @@ Inspection / teardown:
                                     in the window). Same window (ZFS_DIGEST_DAYS,
                                     default 7) and same logs (ZFS_CRON_LOGS) as
                                     alert-digest.sh -- the awk is its twin, pinned.
+  zfs-backup.sh list-datasets [HOST[:PORT]] [--port=N] --json
+                                    The datasets a wizard can offer as a list: this
+                                    host's (no HOST) or a peer's, over SSH as root
+                                    with root's own key and known_hosts (the pairing
+                                    account does not exist before the relationship
+                                    does). Read-only: `zfs list` and nothing else.
+                                    A peer that refuses the key is an error with the
+                                    reason, never an empty list.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
@@ -10981,6 +10989,57 @@ cmd_monitor() {
 # list-jobs -- WHAT THIS HOST ACTUALLY DOES, AND WHICH SIDE OF EACH RELATIONSHIP
 #              IT IS ON
 
+# ---------------------------------------------------------------------------
+# list-datasets -- what a wizard can OFFER instead of asking to type (2026-09-14)
+#
+# Owner: "albo wpisuje recznie sciezke jak we wsadowej wersji, albo dostaje
+# liste datasets po drugiej stronie i wybiera z niej". Local: `zfs list` here.
+# Remote: the same over ssh as ROOT with root's key -- before the relationship
+# exists there is no pairing account to use, and after it exists the operator
+# is still allowed to look. StrictHostKeyChecking=yes and BatchMode: a peer
+# that is not in root's known_hosts, or refuses the key, is an ERROR with the
+# ssh reason on stderr and rc=1 -- the wizard then says "type it by hand".
+# Never an empty list pretending the peer has nothing.
+# ---------------------------------------------------------------------------
+cmd_list_datasets() {
+    local as_json=0 host="" port="" a
+    for a in "$@"; do
+        case "$a" in
+            --json)   as_json=1 ;;
+            --port=*) port="${a#*=}" ;;
+            -*)       die "list-datasets: unknown option '$a' (only --json and --port=N)" ;;
+            *)        [ -z "$host" ] || die "list-datasets: one HOST at most"; host="$a" ;;
+        esac
+    done
+    [ "$as_json" -eq 1 ] || die "list-datasets: this reader speaks JSON only -- pass --json"
+    case "$host" in *:*) [ -n "$port" ] || port="${host##*:}"; host="${host%%:*}" ;; esac
+    [ -z "$port" ] || case "$port" in ''|*[!0-9]*) die "list-datasets: --port takes a number" ;; esac
+    case "$host" in *[!A-Za-z0-9._-]*) die "list-datasets: HOST looks wrong: '$host'" ;; esac
+    local rows rc=0
+    if [ -z "$host" ]; then
+        rows=$(zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name 2>&1) || rc=$?
+    else
+        rows=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name" 2>&1) || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s\n' "$rows" | tail -3 >&2
+        die "list-datasets: ${host:+$host: }zfs list failed (rc=$rc)"
+    fi
+    printf '{"host":"%s","port":%s,"account":"%s","datasets":[' \
+        "$(json_escape "${host:-local}")" "${port:-22}" "$([ -n "$host" ] && echo root || id -un)"
+    local first=1 _n _t _u _av
+    while IFS=$'\t' read -r _n _t _u _av; do
+        [ -n "$_n" ] || continue
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"name":"%s","type":"%s","used":%s,"avail":%s}' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
+    done <<DS
+$rows
+DS
+    printf ']}\n'
+}
+
+
 # ------------------------------------------------------------------------------
 # gui -- WEJSCIE DO EKRANU
 # ------------------------------------------------------------------------------
@@ -15078,6 +15137,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         list-jobs)        shift; cmd_list_jobs "$@" ;;
         show-scope)       shift; cmd_show_scope "$@" ;;
         job-stats)        shift; cmd_job_stats "$@" ;;
+        list-datasets)    shift; cmd_list_datasets "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

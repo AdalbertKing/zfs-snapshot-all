@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2cc31909de3c8ab8 -->
+<!-- status-covers-digest: 3eeae75722213008 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,6 +29,29 @@
   `PASSIVE=1`. Eksport emituje przełącznik i deklarację tylko dla `1`.
   Dyskryminatory przez atrapy importu w obie strony (0/pusty/`no` → brak,
   `1` → dokładnie jeden). `exportrel` 35/0, suita na pve9 793 PASS / 0 FAIL.
+- **`list-datasets [HOST[:PORT]] --json` i listy w kreatorze zamiast pisania (2026-09-14, krok (a) kreatora).**
+  Właściciel o kreatorze: *„kompletnie nieczytelny dla człowieka"*; ustalony
+  plan trzech kroków: (a) listy datasetów, (b) szablony słowami + nowy szablon
+  z checkboxów/radio/list przez `save-profile`, (c) kreator w krokach z kontem
+  delegowanym jako wybór (root / zfsbackup / inne; konto peera `zfsbackup-<host>`
+  wypisane jako informacja, bo tworzy je JOIN) i podsumowaniem zdaniem.
+  Ten wpis to (a). Czasownik: `zfs list -H -p -o name,type,used,avail`
+  tutaj (bez HOST) albo u peera przez ssh **jako root kluczem roota**
+  (konto parowania nie istnieje przed relacją; StrictHostKeyChecking=yes,
+  BatchMode). Peer, który nie wpuszcza, to rc=1 z powodem ssh na stderr, nigdy
+  pusta lista; HOST ze znakami powłoki odrzucony przed ssh. Zmierzone na pve10:
+  lokalnie 0,13 s, pve9 0,37 s, host bez trasy 0,3 s (martwy host czeka do
+  ConnectTimeout 15 s). **Kreator:** pole Źródło i Cel dalej przyjmują pisanie
+  (droga wsadowa); sam HOST + Enter otwiera listę datasetów peera i wybór wraca
+  jako `HOST:DATASET`; puste Cel + Enter otwiera listę tego hosta; wpisana
+  wartość + Enter = dalej. Lista: nazwa, typ, zajęte, wolne; PgUp/PgDn/Home/End.
+  Błąd czytelnika = zdanie w formularzu, pole zostaje do pisania.
+  Fikstury `test/tui/fixtures/pve10/list-datasets{,-peer}.json` to dosłowne
+  wyjście z pve10 (lokalnie i pytając pve9). Suity: `zfsbackup` sekcja
+  `listdatasets` 5/0 (stuby zapisują argv: ssh dostaje `-p PORT root@HOST`,
+  bez ssh dla lokalnej listy), `test/tui` 129/0. Bez nowego rodzaju wejścia
+  terminala (klawisze jak dotąd), więc bez jazdy pty.
+
 - **TUI F3 w trzech panelach i linia poleceń jak w mc (2026-09-11, czytelność 2026-09-12).**
   Szkic właściciela: góra dzielona lewo/prawo, dół na całą szerokość.
   *„Relacji zwykle wiele nie będzie, za to datasets do niej należące — może być

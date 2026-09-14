@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -12096,6 +12096,67 @@ else
     bad "jobstats: refuses without --json" "$(cat "$JS/err")"
 fi
 fi   # --- koniec sekcji jobstats ---
+
+if want listdatasets; then
+# ============================================================================
+# listdatasets: WHAT THE WIZARD CAN OFFER (2026-09-14)
+# Owner: "albo wpisuje recznie sciezke, albo dostaje liste datasets po drugiej
+# stronie i wybiera z niej". Local = `zfs list` here; remote = the same over ssh
+# as ROOT with root's key (no pairing account exists before the relationship).
+# Stubs record the exact argv, so the test says WHAT was asked of ssh, not only
+# that something came back. A peer that refuses is an error with the reason on
+# stderr and rc=1 -- never an empty list.
+# ============================================================================
+LD="$WORK/listdatasets"; rm -rf "$LD"; mkdir -p "$LD/bin"
+cat > "$LD/bin/zfs" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" > "${LD_ARGS:?}/zfs.argv"
+printf 'tank\tfilesystem\t1000\t9000\ntank/data\tfilesystem\t500\t9000\ntank/vm-1\tvolume\t300\t9000\n'
+EOF
+cat > "$LD/bin/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" > "${LD_ARGS:?}/ssh.argv"
+case "$*" in
+    *deadpeer*) echo "ssh: connect to host deadpeer port 22: No route to host" >&2; exit 255 ;;
+esac
+printf 'pool\tfilesystem\t1\t2\npool/guest\tvolume\t3\t2\n'
+EOF
+chmod +x "$LD/bin/zfs" "$LD/bin/ssh"
+ld_run() { ( PATH="$LD/bin:$PATH" LD_ARGS="$LD" bash "$ZFSBACKUP" list-datasets "$@" ) 2>"$LD/err"; }
+LDOUT=$(ld_run --json)
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["host"], [x["name"] for x in d["datasets"]], d["datasets"][2]["type"], d["datasets"][1]["used"])' 2>/dev/null)
+if [ "$got" = "local ['tank', 'tank/data', 'tank/vm-1'] volume 500" ] && grep -q -- '-H -p -o name,type,used,avail -t filesystem,volume' "$LD/zfs.argv" && [ ! -e "$LD/ssh.argv" ]; then
+    ok "listdatasets: no HOST = this host's zfs list (name, type, used, avail; filesystems and volumes), no ssh at all"
+else
+    bad "listdatasets: local" "$LDOUT" "$(cat "$LD/zfs.argv" 2>/dev/null)" "$(cat "$LD/err")"
+fi
+rm -f "$LD/zfs.argv" "$LD/ssh.argv"
+LDOUT=$(ld_run peer.example:2222 --json)
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["host"], d["port"], d["account"], [x["name"] for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "peer.example 2222 root ['pool', 'pool/guest']" ] && grep -q -- '-o BatchMode=yes' "$LD/ssh.argv" && grep -q -- '-o StrictHostKeyChecking=yes' "$LD/ssh.argv" \
+        && grep -q -- '-p 2222 root@peer.example zfs list -H -p -o name,type,used,avail' "$LD/ssh.argv" && [ ! -e "$LD/zfs.argv" ]; then
+    ok "listdatasets: HOST:PORT = zfs list over ssh as root@HOST on that port, BatchMode and strict host keys; nothing runs locally"
+else
+    bad "listdatasets: remote" "$LDOUT" "$(cat "$LD/ssh.argv" 2>/dev/null)" "$(cat "$LD/err")"
+fi
+rm -f "$LD/zfs.argv" "$LD/ssh.argv"
+if ! ld_run deadpeer --json >"$LD/out" && [ ! -s "$LD/out" ] && grep -q 'No route to host' "$LD/err" && grep -q 'deadpeer: zfs list failed (rc=255)' "$LD/err"; then
+    ok "listdatasets: a peer that does not answer is rc=1 with ssh's reason on stderr and NO JSON -- never an empty list"
+else
+    bad "listdatasets: dead peer" "$(cat "$LD/out")" "$(cat "$LD/err")"
+fi
+if ! ld_run >/dev/null && grep -q 'JSON only' "$LD/err"; then
+    ok "listdatasets: without --json the verb refuses"
+else
+    bad "listdatasets: refuses without --json" "$(cat "$LD/err")"
+fi
+rm -f "$LD/zfs.argv" "$LD/ssh.argv"
+if ! ld_run 'peer;rm -rf /' --json >/dev/null && grep -q 'HOST looks wrong' "$LD/err" && [ ! -e "$LD/ssh.argv" ]; then
+    ok "listdatasets: a HOST with shell characters is refused before any ssh"
+else
+    bad "listdatasets: host validation" "$(cat "$LD/err")" "$(cat "$LD/ssh.argv" 2>/dev/null)"
+fi
+fi   # --- koniec sekcji listdatasets ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
