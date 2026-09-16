@@ -2542,6 +2542,10 @@ class UI(object):
                   "adv": u"Zaawansowane (zwykle bez zmian)", "summary": u"Podsumowanie"}
     WIZ_STEPNO = {"mode": 1, "host": 2, "diag": 2, "ds": 2, "target": 3, "profile": 4, "name": 5, "acct": 6, "adv": 7, "summary": 8}
     WIZ_NSTEP = 8
+    # Domyslne maski = migawki, ktore robi sam Proxmox i sam je sprzata:
+    # replikacja pvesr (__replicate_<job>_<czas>__), vzdump, migracja na zywo.
+    # Kopiowanie ich nie ma sensu, a ich zniknieciu u zrodla nie ma co placzac.
+    WIZ_EXFAM_DEFAULT = "__replicate_,vzdump,__migration__"
     WIZ_MODES = [("backup", u"backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)"),
                  ("sync", u"synchro   obie strony trzymają to samo pod TĄ SAMĄ ścieżką, bez celu (--mode=sync)")]
     WIZ_ACCTS = [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
@@ -2554,7 +2558,7 @@ class UI(object):
     def wizard_open(self):
         profiles, perr = load_profiles(self.repo, self.files, self.data)
         vals = {"mode": "backup", "host": "", "hostname": "", "port": "", "ds": [], "excl": [], "target": "", "profile": "default", "name": "",
-                "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat"}
+                "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat", "exfam": self.WIZ_EXFAM_DEFAULT}
         self.window = ("wiz", {"kind": "wiz", "step": "mode", "cur": 0, "filter": "", "typing": None, "text": "",
                                "vals": vals, "profiles": profiles, "perr": perr})
         self.scroll = 0
@@ -2662,7 +2666,8 @@ class UI(object):
                      {"key": "srcprof", "sel": True, "text": u"%s %s" % (fit(u"Retencja u źródła", 30), v["srcprof"] or u"taka sama jak tutaj (%s)" % v["profile"])},
                      {"key": "grant", "sel": True, "text": u"%s %s" % (fit(u"Uprawnienia na peerze", 30), u"nadaj zdalnie: tak" if v["grant"] else u"nadaj zdalnie: nie (JOIN zrobi to przy pierwszym połączeniu)")},
                      {"key": "manual", "sel": True, "text": u"%s %s" % (fit(u"Parowanie", 30), u"ręczne: pakiet do przeniesienia" if v["manual"] else u"przez ssh (automatyczne)")},
-                     {"key": "rec", "sel": True, "text": u"%s %s" % (fit(u"Podrzędne datasety", 30), u"-R  każdy osobno (flat)" if v["recursion"] == "flat" else u"-r  jednym strumieniem (atomic)")}]
+                     {"key": "rec", "sel": True, "text": u"%s %s" % (fit(u"Podrzędne datasety", 30), u"-R  każdy osobno (flat)" if v["recursion"] == "flat" else u"-r  jednym strumieniem (atomic)")},
+                     {"key": "exfam", "sel": True, "text": u"%s %s" % (fit(u"Pomijaj migawki o nazwach od…", 30), v["exfam"] or u"(żadnych)")}]
         elif st == "summary":
             items = [{"key": "plan", "sel": True, "text": u"Pokaż plan  (czasownik bez --install: nic nie zmienia)"},
                      {"key": "run", "sel": True, "text": u"Wykonaj  (plan, potem komenda z --install --yes do potwierdzenia)"}]
@@ -2709,6 +2714,8 @@ class UI(object):
             a.append("--recursive=%s" % v["recursion"])
         for x in v.get("excl", []):
             a.append("--exclude-child=%s" % x)
+        if v.get("exfam"):
+            a.append("--exclude-family=%s" % v["exfam"])
         if self.wiz_account(v):
             a.append("--local-user=%s" % self.wiz_account(v))
         if v.get("grant"):
@@ -2749,6 +2756,8 @@ class UI(object):
             v["name"] or u"(z nazwy hosta)", host, acct, (u" (port %s)" % v["port"]) if v["port"].strip() and v["port"] != "22" else "", host,
             (u" Retencja u źródła: %s." % v["srcprof"]) if v["srcprof"] else "", u" Parowanie ręczne." if v["manual"] else "",
             u" Podrzędne jednym strumieniem (-r, atomic)." if v["recursion"] == "atomic" else u" Podrzędne osobno (-R)." if any(True for _ in v["ds"]) else ""), width - 6)
+        if v.get("exfam"):
+            out += wrap(u"Migawki o nazwach od %s nie będą kopiowane." % u" i ".join(u"„%s…”" % x for x in v["exfam"].split(",")), width - 6)
         out += ["", u"Komenda:"] + wrap("  " + self.shell_line(self.wizard_argv(v, True)), width - 6)
         return out
 
@@ -2761,10 +2770,11 @@ class UI(object):
         if ans:
             out += [fit("  " + x, W) for x in wrap(u"   ".join(ans), W - 2)] + [""]
         if obj["typing"]:
-            label = {"host": u"Adres hosta", "name": u"Nazwa relacji", "other": u"Nazwa konta", "port": u"Port SSH peera", "ds": u"Ścieżki datasetów (po przecinku)", "target": u"Lokalny dataset-rodzic", "profile": u"Nazwa szablonu"}[obj["typing"]]
+            label = {"host": u"Adres hosta", "name": u"Nazwa relacji", "other": u"Nazwa konta", "port": u"Port SSH peera", "exfam": u"Pomijaj migawki o nazwach od…", "ds": u"Ścieżki datasetów (po przecinku)", "target": u"Lokalny dataset-rodzic", "profile": u"Nazwa szablonu"}[obj["typing"]]
             hint = {"host": u"np. 10.0.0.9 -- po Enterze kreator sprawdzi SSH, ZFS i pakiet na tym hoście",
                     "name": u"propozycja z nazwy hosta; relacja jest hosta, nie datasetu",
                     "other": u"konto zostanie utworzone, jeśli go nie ma", "port": u"puste = 22",
+                    "exfam": u"początki nazw po przecinku; domyślnie migawki Proxmoxa (replikacja pvesr, vzdump, migracja). Puste = kopiuj wszystkie (--exclude-family)",
                     "ds": u"np. hdd/data,hdd/home", "target": u"np. hdd/backups", "profile": u"nazwa pliku szablonu"}[obj["typing"]]
             cur_line = len(out)
             out.append(fit(u"> %s %s_" % (fit(label, 30), obj["text"]), W))
@@ -2864,6 +2874,9 @@ class UI(object):
                 elif ty == "port":
                     v["port"] = t if t and t != "22" else ""
                     obj["typing"], obj["text"], obj["cur"] = None, "", 1
+                elif ty == "exfam":
+                    v["exfam"] = ",".join(x.strip() for x in t.split(",") if x.strip())
+                    obj["typing"], obj["text"], obj["cur"] = None, "", 6
                 elif ty == "ds":
                     v["ds"] = [x.strip() for x in t.split(",") if x.strip()]
                     if not v["ds"]:
@@ -3008,6 +3021,8 @@ class UI(object):
                     self.wiz_goto(obj, "summary")
                 elif key == "port":
                     obj["typing"], obj["text"] = "port", v["port"] or "22"
+                elif key == "exfam":
+                    obj["typing"], obj["text"] = "exfam", v["exfam"]
                 elif key == "srcprof":
                     items_ = list(obj.get("profiles") or [])
                     self.window = ("pick", {"title": u"Retencja u źródła (Esc = taka sama jak tutaj)", "items": items_, "cur": 0, "field": "srcprof", "back": self.window, "allow_new": False})

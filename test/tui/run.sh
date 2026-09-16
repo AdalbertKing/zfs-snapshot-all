@@ -668,8 +668,9 @@ fi
 Z="$A,enter"
 W="$(wiz "$Z" --width 110)"
 if has "$W" 'krok 7/8: Zaawansowane (zwykle bez zmian)' && has "$W" '> Bez zmian, dalej' && has "$W" 'Port SSH peera                 22' && has "$W" 'Retencja u źródła              taka sama jak tutaj (default)' \
-        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             -R  każdy osobno (flat)'; then
-    ok "kreator: krok 6 -- lista ustawien z wartosciami, 'Bez zmian, dalej' na gorze"
+        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             -R  każdy osobno (flat)' \
+        && has "$W" 'Pomijaj migawki o nazwach od…  __replicate_,vzdump,__migration__'; then
+    ok "kreator: krok 6 -- lista ustawien z wartosciami, 'Bez zmian, dalej' na gorze, w tym pomijanie migawek po masce z DOMYSLNYMI maskami Proxmoxa"
 else
     bad "kreator: zaawansowane" "$W"
 fi
@@ -678,6 +679,38 @@ if has "$W" 'Port SSH peera                 2222' && has "$W" 'nadaj zdalnie: ta
     ok "kreator: Enter na ustawieniu zmienia je (port pisany, przelaczniki przelaczane)"
 else
     bad "kreator: edycja zaawansowanych" "$W"
+fi
+# POMIJANIE MIGAWEK PO MASCE (wlasciciel 2026-09-16): --exclude-family=A,B, silnik -E
+BS34="$(printf 'bs,%.0s' $(seq 34))"
+W="$(wiz "$Z,end,enter" --width 130)"
+if has "$W" '> Pomijaj migawki o nazwach od…  __replicate_,vzdump,__migration___' && has "$W" 'domyślnie migawki Proxmoxa (replikacja pvesr, vzdump, migracja). Puste = kopiuj wszystkie'; then
+    ok "kreator: Enter na 'Pomijaj migawki' otwiera pole z domyslnymi maskami Proxmoxa do edycji i wyjasnieniem"
+else
+    bad "kreator: pole pomijania migawek" "$W"
+fi
+W="$(wiz "$Z,end,enter,${BS34}text:pvesr_ ,enter" --width 130)"
+if has "$W" 'Pomijaj migawki o nazwach od…  pvesr_ ' && ! has "$W" 'pvesr_ _' && has "$W" 'krok 7/8'; then
+    ok "kreator: wpisana maska wraca do ustawien oczyszczona ze spacji (przecinka nie da sie wpisac przez --keys)"
+else
+    bad "kreator: lista pomijania" "$W"
+fi
+W="$(wiz "$Z,end,enter,${BS34}text:pvesr_,enter,home,enter" --width 130 --height 34)"
+if has "$W" 'Migawki o nazwach od „pvesr_…” nie będą kopiowane.' && has "$W" '--exclude-family=pvesr_'; then
+    ok "kreator: podsumowanie mowi zdaniem, ktore migawki sa pomijane, a komenda ma --exclude-family"
+else
+    bad "kreator: podsumowanie pomijania" "$W"
+fi
+W="$(wiz "$Z,end,enter,${BS34}text:pvesr_,enter,home,enter,down,enter,t" --width 130 --height 34)"
+if grep -q -- "--name=pve9b --exclude-family=pvesr_ --local-user=zfsbackup --install --yes$" "$XL"; then
+    ok "kreator: 't' wykonuje komende z --exclude-family=pvesr_"
+else
+    bad "kreator: exclude-family argv" "$(cat "$XL")"
+fi
+W="$(wiz "$Z,end,enter,${BS34}enter,home,enter,down,enter,t" --width 130 --height 34)"
+if ! grep -q -- "--exclude-family" "$XL" && grep -q -- "--install --yes$" "$XL"; then
+    ok "kreator: puste pole = kopiuj wszystkie migawki, bez --exclude-family w komendzie"
+else
+    bad "kreator: puste maski" "$(cat "$XL")"
 fi
 W="$(wiz "$Z,down,down,enter" --width 120)"
 if has "$W" '╔═ Retencja u źródła (Esc = taka sama jak tutaj) ═' && has "$W" '  d7h24            co godzinę'; then
@@ -688,7 +721,7 @@ fi
 # PODSUMOWANIE: zdanie + komenda; plan; Wykonaj -> potwierdzenie -> t.
 S7="$Z,enter"
 W="$(wiz "$S7" --width 110 --height 34)"
-if has "$W" 'krok 8/8: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobierze migawki 2 datasetów (hdd/data, hdd/home) z hosta 192.168.28.98 do' \
+if has "$W" 'Migawki o nazwach od „__replicate_…” i „vzdump…” i „__migration__…” nie będą kopiowane.' && has "$W" 'krok 8/8: Podsumowanie' && has "$W" 'Co godzinę (:01) pve10 pobierze migawki 2 datasetów (hdd/data, hdd/home) z hosta 192.168.28.98 do' \
         && has "$W" 'hdd/backups/192.168.28.98/…, trzymając 24 godz., 7 dni, 4 tyg., 12 mies. (drabina GFS, jedna rodzina).' \
         && has "$W" 'Bez zamrażania. Monitor: 90m / 150m.' && has "$W" 'Relacja: pve9b. Zadania na pve10 jako zfsbackup. Na peerze konto zfsbackup-pve10 (tworzy JOIN).' \
         && has "$W" 'Komenda:' && has "$W" '--source=192.168.28.98:hdd/data,hdd/home' && has "$W" '--name=pve9b' && has "$W" '--local-user=zfsbackup' \
@@ -716,14 +749,14 @@ else
     bad "kreator: wykonaj" "$W" "$(cat "$XL")"
 fi
 W="$(wiz "$S7,down,enter,t" --width 110 --height 34)"
-if grep -q -- "--source=192.168.28.98:hdd/data,hdd/home --target=hdd/backups --profile=default --name=pve9b --local-user=zfsbackup --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja pve9b'; then
+if grep -q -- "--source=192.168.28.98:hdd/data,hdd/home --target=hdd/backups --profile=default --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --install --yes$" "$XL" && has "$W" 'WYJŚCIE: Nowa relacja pve9b'; then
     ok "kreator: 't' wykonuje DOKLADNIE pokazana komende (lista datasetow po przecinku, konto z listy) i otwiera okno wyjscia"
 else
     bad "kreator: t" "$(cat "$XL")" "$W"
 fi
 # root z listy = bez --local-user; atomic, port, retencja, przelaczniki pod flagami
 W="$(wiz "$A,up,enter,down,enter,bs,bs,text:2222,enter,down,enter,home,enter,down,enter,down,enter,down,enter,home,enter,down,enter,t" --width 110 --height 34)"
-if grep -q -- "--source=192.168.28.98:2222:hdd/data,hdd/home --target=hdd/backups --profile=default --source-profile=Y5M12D31H24 --name=pve9b --recursive=atomic --grant-remotely --manual-join --install --yes$" "$XL"; then
+if grep -q -- "--source=192.168.28.98:2222:hdd/data,hdd/home --target=hdd/backups --profile=default --source-profile=Y5M12D31H24 --name=pve9b --recursive=atomic --exclude-family=__replicate_,vzdump,__migration__ --grant-remotely --manual-join --install --yes$" "$XL"; then
     ok "kreator: root = bez --local-user; port w HOST:PORT, retencja u zrodla, atomic, oba przelaczniki -- kazde pod swoja flaga"
 else
     bad "kreator: pelne argv" "$(cat "$XL")"
@@ -743,7 +776,7 @@ else
     bad "kreator: synchro podsumowanie" "$W"
 fi
 W="$(wiz "$SY,enter,enter,enter,enter,down,enter,t" --width 120 --height 34)"
-if grep -q -- "--source=192.168.28.98:hdd/data --mode=sync --profile=default --name=pve9b --local-user=zfsbackup --install --yes$" "$XL"; then
+if grep -q -- "--source=192.168.28.98:hdd/data --mode=sync --profile=default --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --install --yes$" "$XL"; then
     ok "kreator: synchro 't' wykonuje forme jednokomendowa z --mode=sync"
 else
     bad "kreator: synchro argv" "$(cat "$XL")"
@@ -756,7 +789,7 @@ else
 fi
 # WYLACZENIA W ARGV
 W="$(wiz "$SEL,down,down,down,down,down,down,down,enter,home,enter,down,enter,enter,enter,enter,enter,down,enter,t" --width 110 --height 34)"
-if grep -q -- "--source=192.168.28.98:hdd/data,hdd/home --target=hdd/backups --profile=default --name=pve9b --exclude-child=hdd/data/docs --local-user=zfsbackup --install --yes$" "$XL"; then
+if grep -q -- "--source=192.168.28.98:hdd/data,hdd/home --target=hdd/backups --profile=default --name=pve9b --exclude-child=hdd/data/docs --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --install --yes$" "$XL"; then
     ok "kreator: wylaczony podrzedny idzie do argv jako --exclude-child=<dataset>"
 else
     bad "kreator: exclude-child argv" "$(cat "$XL")"
