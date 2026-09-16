@@ -668,8 +668,9 @@ fi
 Z="$A,enter"
 W="$(wiz "$Z" --width 110)"
 if has "$W" 'krok 7/8: Zaawansowane (zwykle bez zmian)' && has "$W" '> Bez zmian, dalej' && has "$W" 'Port SSH peera                 22' && has "$W" 'Retencja u źródła              taka sama jak tutaj (default)' \
-        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             -R  każdy osobno (flat)'; then
-    ok "kreator: krok 6 -- lista ustawien z wartosciami, 'Bez zmian, dalej' na gorze"
+        && has "$W" 'Uprawnienia na peerze          nadaj zdalnie: nie' && has "$W" 'Parowanie                      przez ssh (automatyczne)' && has "$W" 'Podrzędne datasety             -R  każdy osobno (flat)' \
+        && has "$W" 'Pomijaj migawki o nazwach od…  (żadnych)'; then
+    ok "kreator: krok 6 -- lista ustawien z wartosciami, 'Bez zmian, dalej' na gorze, w tym pomijanie migawek po masce"
 else
     bad "kreator: zaawansowane" "$W"
 fi
@@ -678,6 +679,31 @@ if has "$W" 'Port SSH peera                 2222' && has "$W" 'nadaj zdalnie: ta
     ok "kreator: Enter na ustawieniu zmienia je (port pisany, przelaczniki przelaczane)"
 else
     bad "kreator: edycja zaawansowanych" "$W"
+fi
+# POMIJANIE MIGAWEK PO MASCE (wlasciciel 2026-09-16): --exclude-family=A,B, silnik -E
+W="$(wiz "$Z,end,enter" --width 130)"
+if has "$W" '> Pomijaj migawki o nazwach od…  _' && has "$W" 'np. pvesr_,manual_ -- takie migawki nie będą kopiowane (--exclude-family)'; then
+    ok "kreator: Enter na 'Pomijaj migawki' otwiera pole listy poczatkow nazw z wyjasnieniem"
+else
+    bad "kreator: pole pomijania migawek" "$W"
+fi
+W="$(wiz "$Z,end,enter,text:pvesr_ ,enter" --width 130)"
+if has "$W" 'Pomijaj migawki o nazwach od…  pvesr_ ' && ! has "$W" 'pvesr_ _' && has "$W" 'krok 7/8'; then
+    ok "kreator: wpisana maska wraca do ustawien oczyszczona ze spacji (przecinka nie da sie wpisac przez --keys)"
+else
+    bad "kreator: lista pomijania" "$W"
+fi
+W="$(wiz "$Z,end,enter,text:pvesr_,enter,home,enter" --width 130 --height 34)"
+if has "$W" 'Migawki o nazwach od „pvesr_…” nie będą kopiowane.' && has "$W" '--exclude-family=pvesr_'; then
+    ok "kreator: podsumowanie mowi zdaniem, ktore migawki sa pomijane, a komenda ma --exclude-family"
+else
+    bad "kreator: podsumowanie pomijania" "$W"
+fi
+W="$(wiz "$Z,end,enter,text:pvesr_,enter,home,enter,down,enter,t" --width 130 --height 34)"
+if grep -q -- "--name=pve9b --exclude-family=pvesr_ --local-user=zfsbackup --install --yes$" "$XL"; then
+    ok "kreator: 't' wykonuje komende z --exclude-family=pvesr_"
+else
+    bad "kreator: exclude-family argv" "$(cat "$XL")"
 fi
 W="$(wiz "$Z,down,down,enter" --width 120)"
 if has "$W" '╔═ Retencja u źródła (Esc = taka sama jak tutaj) ═' && has "$W" '  d7h24            co godzinę'; then
