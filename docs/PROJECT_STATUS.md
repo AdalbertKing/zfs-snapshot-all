@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c6a41423cd636bc1 -->
+<!-- status-covers-digest: 10c6bc599c1922a9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -92,6 +92,9 @@
     migawki o nazwach od…", Enter = lista początków nazw po przecinku; w
     podsumowaniu zdanie „Migawki o nazwach od „pvesr_…” nie będą kopiowane."
     Dzieci datasetów wyłącza się pojedynczo (`✗`), tak jak we wsadowej wersji.
+    **Domyślnie** (właściciel): maski migawek Proxmoxa — `__replicate_`
+    (replikacja pvesr), `vzdump`, `__migration__` (migracja na żywo); pole
+    startuje z tą listą do edycji, puste = kopiuj wszystkie.
   - **Poprawka po teście właściciela (2026-09-14, PR #392):** w kreatorze nie
     dało się wpisać adresu hosta — pętla curses kierowała pisanie tylko do okien
     `prompt` i `form`, nowe okno `wiz` dostawało skróty literowe albo nic.
