@@ -2542,6 +2542,10 @@ class UI(object):
                   "adv": u"Zaawansowane (zwykle bez zmian)", "summary": u"Podsumowanie"}
     WIZ_STEPNO = {"mode": 1, "host": 2, "diag": 2, "ds": 2, "target": 3, "profile": 4, "name": 5, "acct": 6, "adv": 7, "summary": 8}
     WIZ_NSTEP = 8
+    # Domyslne maski = migawki, ktore robi sam Proxmox i sam je sprzata:
+    # replikacja pvesr (__replicate_<job>_<czas>__), vzdump, migracja na zywo.
+    # Kopiowanie ich nie ma sensu, a ich zniknieciu u zrodla nie ma co placzac.
+    WIZ_EXFAM_DEFAULT = "__replicate_,vzdump,__migration__"
     WIZ_MODES = [("backup", u"backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)"),
                  ("sync", u"synchro   obie strony trzymają to samo pod TĄ SAMĄ ścieżką, bez celu (--mode=sync)")]
     WIZ_ACCTS = [("root", u"root -- bez izolacji (tak działa większość floty dziś)"),
@@ -2554,7 +2558,7 @@ class UI(object):
     def wizard_open(self):
         profiles, perr = load_profiles(self.repo, self.files, self.data)
         vals = {"mode": "backup", "host": "", "hostname": "", "port": "", "ds": [], "excl": [], "target": "", "profile": "default", "name": "",
-                "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat", "exfam": ""}
+                "acct": "zfsbackup", "other": "", "srcprof": "", "grant": False, "manual": False, "recursion": "flat", "exfam": self.WIZ_EXFAM_DEFAULT}
         self.window = ("wiz", {"kind": "wiz", "step": "mode", "cur": 0, "filter": "", "typing": None, "text": "",
                                "vals": vals, "profiles": profiles, "perr": perr})
         self.scroll = 0
@@ -2770,7 +2774,7 @@ class UI(object):
             hint = {"host": u"np. 10.0.0.9 -- po Enterze kreator sprawdzi SSH, ZFS i pakiet na tym hoście",
                     "name": u"propozycja z nazwy hosta; relacja jest hosta, nie datasetu",
                     "other": u"konto zostanie utworzone, jeśli go nie ma", "port": u"puste = 22",
-                    "exfam": u"początki nazw po przecinku, np. pvesr_,manual_ -- takie migawki nie będą kopiowane (--exclude-family); puste = kopiuj wszystkie",
+                    "exfam": u"początki nazw po przecinku; domyślnie migawki Proxmoxa (replikacja pvesr, vzdump, migracja). Puste = kopiuj wszystkie (--exclude-family)",
                     "ds": u"np. hdd/data,hdd/home", "target": u"np. hdd/backups", "profile": u"nazwa pliku szablonu"}[obj["typing"]]
             cur_line = len(out)
             out.append(fit(u"> %s %s_" % (fit(label, 30), obj["text"]), W))
