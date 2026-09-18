@@ -12221,7 +12221,7 @@ fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv"
 # The REAL OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON
 # string is invalid JSON; the wizard then could not read the reason at all.
-got=$(ps_run check-source deadcr --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], repr(d["ssh"]["error"].strip()))' 2>&1)
+got=$(ps_run check-source deadcr --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], repr(d["ssh"]["error"]))' 2>&1)
 if [ "$got" = "False 'ssh: connect to host deadcr port 22: Connection timed out'" ]; then
     ok "preparesource: check-source stays VALID JSON when ssh's reason ends with CR LF, as the real client's does"
 else

@@ -11089,7 +11089,11 @@ source_probe() {   # <host> <port> -> sets PROBE_* ; returns 0 when ssh answered
     PROBE_SSH_ERR=""; PROBE_HOSTNAME=""; PROBE_POOLS=""; PROBE_ZFS=0; PROBE_GIT=0; PROBE_PKG=""; PROBE_REV=""
     out=$(rux_root_ssh "$host" "$port" "echo HOSTNAME=\$(hostname); command -v zfs >/dev/null 2>&1 && echo ZFS=yes; command -v git >/dev/null 2>&1 && echo GIT=yes; zpool list -H -o name,size,free 2>/dev/null | while IFS=\$(printf '\\t') read -r n sz fr; do echo POOL=\$n,\$sz,\$fr; done; [ -x '$SOURCE_REPO_DIR/zfs-backup.sh' ] && { echo PKG=$SOURCE_REPO_DIR; echo REV=\$(git -C '$SOURCE_REPO_DIR' rev-parse --short HEAD 2>/dev/null); }; echo PROBE=done" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PROBE=done$'; then
-        PROBE_SSH_ERR=$(printf '%s\n' "$out" | grep -v '^$' | tail -1)
+        # OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON string
+        # is INVALID JSON and json_escape (a frozen twin) does not escape it, so
+        # the reason is flattened HERE: no CR, tabs to spaces, one line.
+        # (Found by the live wizard drive on pve10, 2026-09-18; the stub had no CR.)
+        PROBE_SSH_ERR=$(printf '%s\n' "$out" | tr -d '\r' | tr '\t' ' ' | grep -v '^$' | tail -1)
         [ -n "$PROBE_SSH_ERR" ] || PROBE_SSH_ERR="SSH exited $rc without output"
         return 1
     fi

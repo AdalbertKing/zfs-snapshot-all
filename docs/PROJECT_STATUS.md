@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0d14a2e8d7edc297 -->
+<!-- status-covers-digest: 4199d79ae41a9a26 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -59,10 +59,13 @@
     diagnostykę CR LF, a `json_escape` przepuszczał surowy CR do łańcucha;
     kreator pokazywał „check-source nie zwrócił JSON-a" zamiast powodu. Atrapa
     ssh w suicie nie miała CR (fikstura zamiast prawdziwego wyjścia).
-    `json_escape` zamienia teraz CR/LF/TAB na sekwencje JSON -- we WSZYSTKICH
-    trzech kopiach-bliźniakach (`lib-backup-common.sh`, `lib-zfs-snap.sh`,
-    `delsnaps.sh`; suita `twins` przypina je bajt w bajt i złapała pierwszą
-    wersję, która zmieniła tylko jedną: 81/0 po wyrównaniu); dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
+    Naprawione w `source_probe` (powód ssh spłaszczany: bez CR, tabulatory na
+    spacje). `json_escape` NIE ruszony: ma trzy kopie-bliźniaki przypięte bajt
+    w bajt, dwie w zamrożonych silnikach -- zmiana wymaga zgody właściciela i
+    wpisu w ENGINE-FREEZE (pierwsza wersja poprawki to zrobiła; `twins` i
+    bramka zamrożenia ją zatrzymały, cofnięta). **Luka zostaje:** `json_escape`
+    nadal przepuszcza CR/LF/TAB, jeśli trafią do innego pola;
+    dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
     Uwaga: Git Bash zjada CR w `$(…)`, więc kontrola negatywna NIE pada na
     Windows — pada na Linuksie (zmierzone na pve10 na kodzie z main:
     `JSONDecodeError: Invalid control character`).
