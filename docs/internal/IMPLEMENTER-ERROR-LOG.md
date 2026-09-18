@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40.*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1647,3 +1647,13 @@ suite exists to catch, in a suite that did not use a capture.
 from a capture (`| od -c` once), not from memory. Second boundary recorded
 here: **Git Bash strips CR inside `$(...)`**, so the negative control for a CR
 defect cannot fail on this Windows box; it was measured on pve10 instead.
+
+**Same day, two more under existing rules.** (R8) The first fix went into
+`json_escape` in `lib-backup-common.sh` without grepping for its copies: it has
+two pinned twins in FROZEN engine files, and `./test/impact.sh` names the
+coupling (`json-escape`) -- I read the suite list, not the couplings. CI's
+`twins` caught it. (R4) The follow-up ran `impact.sh --verify | tail -2 &&
+git commit`: the pipe's status is `tail`'s, so the commit went out over a
+FROZEN refusal. Gate results are read from the gate's own exit code
+(`cmd > file; rc=$?`), never through a pipe. The engine edit was reverted; the
+defect is fixed where it arose, in `source_probe`.
