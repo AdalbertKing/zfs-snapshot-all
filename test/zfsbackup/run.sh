@@ -12186,6 +12186,7 @@ printf '%s\n' "$*" >> "${PS_ARGS:?}/ssh.argv"
 host=""; for a in "$@"; do case "$a" in root@*) host="${a#root@}";; esac; done
 cmd="${@: -1}"
 case "$host" in dead) echo "ssh: connect to host dead port 22: No route to host" >&2; exit 255;; esac
+case "$host" in deadcr) printf 'ssh: connect to host deadcr port 22: Connection timed out\r\n' >&2; exit 255;; esac
 case "$cmd" in
     *PROBE=done*)
         echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "GIT=yes"; echo "POOL=hdd,39.5G,38.3G"
@@ -12218,6 +12219,14 @@ else
     bad "preparesource: check-source dead" "$got" "$(cat "$PS/err")"
 fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv"
+# The REAL OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON
+# string is invalid JSON; the wizard then could not read the reason at all.
+got=$(ps_run check-source deadcr --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], repr(d["ssh"]["error"].strip()))' 2>&1)
+if [ "$got" = "False 'ssh: connect to host deadcr port 22: Connection timed out'" ]; then
+    ok "preparesource: check-source stays VALID JSON when ssh's reason ends with CR LF, as the real client's does"
+else
+    bad "preparesource: check-source with a CR in the reason is not JSON" "$got"
+fi
 if ps_run prepare-source fresh >"$PS/out" && grep -q 'PLAN (prepare-source fresh)' "$PS/out" && grep -q 'plan only. Re-run with --yes' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: prepare-source without --yes prints the plan and clones nothing"
 else
