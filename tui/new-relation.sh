@@ -257,7 +257,7 @@ pick_one() {    # -> PICK ; 1 = wstecz
         wt --title "Nie ma czego dodać" --msgbox "Koszyk obejmuje już wszystkie datasety z $HOST." 8 "$W"; return 1
     fi
     wt --title "$(title 4 "Dodaj dataset z $HOST")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
-       --menu "Strzałki = ruch, Enter = wybierz JEDEN dataset. Następne dodasz za chwilę.\nTego, co koszyk już obejmuje, lista nie pokazuje." "$H" "$W" "$LH" \
+       --menu "Strzałki = ruch, Enter = wybierz JEDEN dataset (następne za chwilę).\nTego, co koszyk już obejmuje, lista nie pokazuje." "$H" "$W" "$LH" \
        "${items[@]}" || return 1
     PICK="$WT_OUT"; [ -n "$PICK" ]
 }
@@ -267,7 +267,7 @@ add_flow() {    # <nazwa> -> 0 = dodano, 1 = nic się nie zmieniło
     if [ "$k" -eq 0 ]; then B_ROOT+=("$name"); B_EXCL+=(""); return 0; fi
     geom
     wt --title "$(title 4 "$name -- co kopiować?")" --cancel-button "Wstecz" --notags \
-       --radiolist "$name ma pod sobą: $k.\n\nCała gałąź = $name i WSZYSTKO pod nim, także to, co powstanie później.\nWybrane podrzędne = dokładnie te, które wskażesz; nowe trzeba będzie dopisać." "$(fit 10)" "$W" 3 \
+       --radiolist "$name ma pod sobą: $k.\n\nCała gałąź = wszystko pod nim, także to, co powstanie później.\nWybrane podrzędne = dokładnie wskazane; nowe trzeba będzie dopisać." "$(fit 10)" "$W" 3 \
        whole  "Całą gałąź" ON \
        except "Całą gałąź z wyjątkami…   (odznaczysz, czego NIE kopiować)" OFF \
        some   "Tylko wybrane podrzędne…  (zaznaczysz, co kopiować)" OFF || return 1
@@ -337,7 +337,7 @@ pick_recursion() {
     geom
     local f=OFF a=OFF; [ "$RECURSION" = atomic ] && a=ON || f=ON
     wt --title "$(title 4 'Jak kopiować gałęzie?')" --cancel-button "Wstecz" --notags \
-       --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset gałęzi ma własne migawki; awaria jednego nie\nzatrzymuje reszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili;\nnie da się wtedy niczego pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
+       --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset ma własne migawki; awaria jednego nie zatrzymuje\nreszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili, ale\nnie da się wtedy nic pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
        flat   "Każdy dataset osobno (-R)  -- zalecane" "$f" \
        atomic "Cała gałąź atomowo (-r)" "$a" || return 1
     [ -n "$WT_OUT" ] && RECURSION="$WT_OUT"
