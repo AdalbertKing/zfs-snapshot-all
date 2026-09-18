@@ -523,6 +523,15 @@ Inspection / teardown:
                                     usual pull works once the host can see it).
                                     Nothing else: no cron, no relationship, no key --
                                     add-client's JOIN does those. Plans without --yes.
+  zfs-backup.sh new-relation
+                                    The new-relationship wizard as a chain of whiptail
+                                    windows (type, source host, what is on it, which
+                                    datasets, which children to skip). It composes the
+                                    one-command form and runs nothing on its own; the
+                                    single exception is prepare-source, asked for in
+                                    a yes/no window. Needs whiptail and python3.
+                                    Steps 1-4 of 10 today: it ends by SHOWING the
+                                    command so far.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
@@ -11206,6 +11215,17 @@ cmd_gui() {
     python3 "$tui" "$@"
 }
 
+# new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
+# whiptail windows, not hand-drawn curses). A separate file on purpose: it is an
+# interactive front end over verbs that already exist, and it must stay testable
+# with a stub whiptail without sourcing 15k lines.
+cmd_new_relation() {
+    local wiz="$SCRIPT_DIR/tui/new-relation.sh"
+    [ -f "$wiz" ] || die "new-relation: brak $wiz -- checkout jest niekompletny"
+    [ $# -eq 0 ] || die "new-relation: kreator nie przyjmuje argumentow (wersja wsadowa: --source=... , patrz --help)"
+    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$wiz"
+}
+
 # ------------------------------------------------------------------------------
 # job-stats -- the digest's numbers, as JSON (2026-09-11)
 # ------------------------------------------------------------------------------
@@ -15291,6 +15311,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         list-datasets)    shift; cmd_list_datasets "$@" ;;
         check-source)     shift; cmd_check_source "$@" ;;
         prepare-source)   shift; cmd_prepare_source "$@" ;;
+        new-relation)     shift; cmd_new_relation "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

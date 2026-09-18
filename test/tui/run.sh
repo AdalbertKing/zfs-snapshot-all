@@ -1213,6 +1213,194 @@ else
     bad "cron: vixie OR i wejscia bledne" "$CR"
 fi
 
+# ============================================================================
+# new-relation: KREATOR NA WHIPTAILU, kroki 1-4 (2026-09-18)
+#
+# Wlasciciel 2026-09-16: formularze w whiptail, nie rysowane w curses. Tu sprawdzana
+# jest LOGIKA ciagu okien: co kreator proponuje, w jakiej kolejnosci, co z tego
+# sklada. Atrapa whiptaila ma ten sam kontrakt sterowania co prawdziwy: odpowiedz
+# na stderr, rc 0 = OK, 1 = Wstecz/Nie, 255 = Esc; --infobox nie czeka na nic.
+# WYGLAD (ramki, 80x25, polskie znaki) jest dowodzony jazda po pty z prawdziwym
+# whiptailem na hoscie -- atrapa nie ma o nim nic do powiedzenia (R12).
+# ============================================================================
+NR="$(mktemp -d)"; mkdir -p "$NR/bin"
+NRS="$REPO/tui/new-relation.sh"
+cat > "$NR/bin/whiptail" <<'EOF'
+#!/bin/bash
+# argv w jednej linii dziennika; odpowiedzi kolejno z pliku: "rc<TAB>tekst" (| = nowa linia)
+printf '%s\n' "$(printf '%s ~ ' "$@")" >> "${NR_DIR:?}/wt.log"
+for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
+n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
+line=$(sed -n "${n}p" "$NR_DIR/answers")
+[ -n "$line" ] || { echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"; exit 255; }
+rc="${line%%	*}"; out="${line#*	}"
+printf '%s' "$out" | tr '|' '\n' >&2
+exit "$rc"
+EOF
+cat > "$NR/bin/zb" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
+case "$1" in
+    status)         cat "$NR_FIX/status.json" ;;
+    check-source)   if [ -e "$NR_DIR/installed" ]; then cat "$NR_FIX/check-source-pkg.json"; else cat "$NR_FIX/${NR_CHECK:-check-source-pkg.json}"; fi ;;
+    list-datasets)  cat "$NR_FIX/list-datasets-pve9b.json" ;;
+    prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
+    *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
+nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed"
+    printf '%s' "$1" > "$NR/answers"; shift
+    ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err"
+}
+T=$'\t'
+# 1. droga glowna: backup, pakiet jest, rodzic + jego dziecko + lisc, -R, jedno dziecko pominiete
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/data|hdd/data/docs|hdd/test-kreator
+0${T}flat
+0${T}hdd/data/mail
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && has "$NROUT" "$NR/bin/zb --source=192.168.28.98:hdd/data,hdd/test-kreator --exclude-child=hdd/data/mail" && ! has "$NROUT" "hdd/data/docs"; then
+    ok "new-relation: backup -- zaznaczone datasety w JEDNYM --source po przecinku, pominiety podrzedny jako --exclude-child, dziecko zaznaczonego rodzica odpada (jedzie z nim)"
+else
+    bad "new-relation: droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
+fi
+if grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qF -- '--notags' \
+   && grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +\+3 podrzędne ~ OFF' \
+   && grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol'; then
+    ok "new-relation: lista datasetow = drzewo z wcieciem, rozmiar, 'zvol', liczba podrzednych z polska odmiana; nic nie zaznaczone na starcie"
+else
+    bad "new-relation: ksztalt listy datasetow" "$(grep -F -- '--checklist' "$NR/wt.log" | head -1)"
+fi
+if grep -F -- 'POMINĄĆ' "$NR/wt.log" | grep -qF 'hdd/data/docs ~ hdd/data/docs ~ OFF' && ! grep -F -- 'POMINĄĆ' "$NR/wt.log" | grep -qF 'hdd/ct'; then
+    ok "new-relation: do pominiecia oferowane sa TYLKO podrzedne zaznaczonych datasetow, zadne cudze"
+else
+    bad "new-relation: lista podrzednych do pominiecia" "$(grep -F -- 'POMINĄĆ' "$NR/wt.log")"
+fi
+if grep -F -- 'Jak kopiować' "$NR/wt.log" | grep -qF 'Odznaczone jako zbędne' && grep -F -- 'Jak kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs'; then
+    ok "new-relation: odrzucone dziecko jest NAZWANE w nastepnym oknie -- nic nie znika po cichu"
+else
+    bad "new-relation: odrzucone dziecko przemilczane" "$(grep -F -- 'Jak kopiować' "$NR/wt.log")"
+fi
+# 2. synchro + atomowo: bez okna pominiec (pod -r silnik odmawia -X)
+NROUT=$(nr_run "0${T}sync
+0${T}192.168.28.98:2222
+0${T}
+0${T}hdd/data
+0${T}atomic
+0${T}
+")
+if has "$NROUT" "--source=192.168.28.98:2222:hdd/data --mode=sync --recursive=atomic" && ! grep -qF 'POMINĄĆ' "$NR/wt.log" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log"; then
+    ok "new-relation: synchro + atomowo = --mode=sync --recursive=atomic, port jedzie w adresie, okna pominiec NIE MA (pod -r nie da sie pominac)"
+else
+    bad "new-relation: synchro/atomowo" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
+fi
+# 3. sam lisc: zadnych pytan o podrzedne
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}
+")
+if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && ! has "$NROUT" "--recursive" && ! grep -qF 'Jak kopiować' "$NR/wt.log"; then
+    ok "new-relation: dataset bez podrzednych = zadnych pytan o rekursje ani pominiecia"
+else
+    bad "new-relation: lisc" "$NROUT" "$(cat "$NR/wt.log")"
+fi
+# 4. host, z ktorym relacja JEST: odmowa ze slowem dlaczego, potem Wstecz, Wyjdz
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.99
+0${T}
+1${T}
+1${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 1 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -F 'Ta relacja już istnieje' "$NR/wt.log" | grep -qF 'lab-ct201' \
+   && ! grep -F 'Ta relacja już istnieje' "$NR/wt.log" | grep -qF ': 192.168.28.99,' && ! grep -q '^check-source' "$NR/zb.log"; then
+    ok "new-relation: host z istniejaca relacja = odmowa z nazwami relacji (rekord 'removed' sie nie liczy), bez sondy SSH; Wstecz z kroku 1 = wyjscie rc=1"
+else
+    bad "new-relation: istniejaca relacja" "rc=$NRRC" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
+fi
+# 5. brak pakietu: pytanie -> prepare-source --yes -> ponowna sonda -> dalej
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}
+0${T}hdd/test-kreator
+0${T}
+" NR_CHECK=check-source.json)
+if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
+   && [ "$(grep -c '^check-source' "$NR/zb.log")" -eq 2 ] && grep -F -- '--yesno' "$NR/wt.log" | grep -qF 'Brak pakietu na źródle' && grep -qF 'Źródło gotowe' "$NR/wt.log"; then
+    ok "new-relation: brak pakietu -> pytanie wprost -> prepare-source --yes -> DRUGA sonda pokazuje 'Zrodlo gotowe' -> datasety"
+else
+    bad "new-relation: instalacja pakietu" "$NROUT" "$(cat "$NR/zb.log")" "$(cat "$NR/wt.log")"
+fi
+# 6. brak pakietu, odmowa: NIC nie jest instalowane, wraca do pytania o host
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+1${T}
+1${T}
+1${T}
+" NR_CHECK=check-source.json); NRRC=$?
+if [ "$NRRC" -eq 1 ] && ! grep -q '^prepare-source' "$NR/zb.log" && [ "$(grep -c 'Z którego hosta' "$NR/wt.log")" -ge 2 ] && ! grep -q '^list-datasets' "$NR/zb.log"; then
+    ok "new-relation: 'Wstecz' na pytaniu o instalacje = prepare-source NIE wolany, powrot do adresu hosta, listy datasetow nikt nie pobiera"
+else
+    bad "new-relation: odmowa instalacji" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(cat "$NR/wt.log")"
+fi
+# 7. zly adres nie dochodzi do zadnego czasownika
+NROUT=$(nr_run "0${T}backup
+0${T}pve9b;reboot
+0${T}
+1${T}
+1${T}
+")
+if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
+    ok "new-relation: adres ze znakami powloki = okno 'Zly adres', zaden czasownik go nie dostaje"
+else
+    bad "new-relation: walidacja adresu" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log" 2>/dev/null)"
+fi
+# 8. kazde okno z wyborem ma rozmiar liczbowy i szerokosc <= 100 (nie na sztywno ponad ekran)
+if ! grep -E -- '--(checklist|radiolist|inputbox)' "$NR/wt.log" >/dev/null; then
+    bad "new-relation: brak okien w dzienniku"
+elif "$PY" - "$NR/wt.log" <<'PYEOF'
+import sys, re
+bad = 0
+for l in open(sys.argv[1], encoding="utf-8"):
+    a = l.rstrip("\n").split(" ~ ")
+    for k in ("--checklist", "--radiolist", "--inputbox", "--msgbox", "--yesno"):
+        if k in a:
+            i = a.index(k); h, w = a[i + 2], a[i + 3]
+            if not (h.isdigit() and w.isdigit() and int(w) <= 100 and int(h) >= 7): bad += 1
+sys.exit(1 if bad else 0)
+PYEOF
+then
+    ok "new-relation: kazde okno dostaje liczbowa wysokosc i szerokosc <= 100, wyliczone, nie wpisane"
+else
+    bad "new-relation: geometria okien" "$(cat "$NR/wt.log")"
+fi
+# 10. DROGA OPERATORA: czasownik, nie plik. zfs-backup.sh new-relation otwiera krok 1.
+rm -f "$NR/wt.log" "$NR/wt.n"; printf '1%s\n' "$T" > "$NR/answers"
+NROUT=$( NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" bash "$REPO/zfs-backup.sh" new-relation 2>&1 ); NRRC=$?
+if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Krok 1/10: Jaka relacja?' "$NR/wt.log"; then
+    ok "new-relation: czasownik zfs-backup.sh new-relation otwiera kreator na kroku 1; Wyjdz = nic nie zmieniono, rc != 0"
+else
+    bad "new-relation: czasownik" "rc=$NRRC" "$NROUT" "$(cat "$NR/wt.log" 2>/dev/null)"
+fi
+if ! bash "$REPO/zfs-backup.sh" new-relation --source=x >/dev/null 2>"$NR/err" && grep -qF 'nie przyjmuje argumentow' "$NR/err"; then
+    ok "new-relation: argumenty = odmowa ze wskazaniem wersji wsadowej (kreator nie jest druga skladnia)"
+else
+    bad "new-relation: argumenty" "$(cat "$NR/err")"
+fi
+# 9. bez eval: wartosci ze zdalnego hosta sa danymi
+if ! grep -nE '(^|[^#])\beval\b' "$NRS" | grep -v '^[0-9]*:#' | grep -q .; then
+    ok "new-relation: w kreatorze nie ma eval -- odpowiedzi check-source czytane przez read -r"
+else
+    bad "new-relation: eval w kreatorze" "$(grep -n 'eval' "$NRS")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
