@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4fe9a78e0657868d -->
+<!-- status-covers-digest: fe124ba3ccf90609 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -35,19 +35,24 @@
     datasetów to modyfikacja, której nie ma. **Krok 3** `check-source`: trzy
     fakty (SSH, ZFS z pulami, pakiet z rewizją); brak SSH → okno z dwiema
     komendami (`ssh-keyscan`, `ssh-copy-id`); brak pakietu → „Zainstaluj" =
-    `prepare-source --yes`, potem druga sonda. **Krok 4 = KOSZYK** (przebudowany tego samego dnia po
-    pokazie; właściciel o jednej liście kratek na całym drzewie: *„mylący"* --
-    puste kratki przy dzieciach, które i tak jadą z rodzicem, i dało się
-    zaznaczyć rodzica razem z dzieckiem). Dodaje się po jednej pozycji: lista
-    (menu, nie kratki) → dla datasetu z podrzędnymi jedno pytanie: *cała gałąź*
-    (także przyszłe podrzędne) / *cała gałąź z wyjątkami* (lista tego, co pod
-    nią, wszystko zaznaczone, odznacza się pomijane) / *tylko wybrane
-    podrzędne* (rodzic NIE jest źródłem). Okno koszyka mówi słowami, co jedzie
-    („cała gałąź BEZ: mail", „pojedynczy dataset") i ma Dodaj / Usuń / Dalej.
-    Czego koszyk już obejmuje, tego lista do dodania nie pokazuje; gałąź dodana
-    po własnym dziecku pyta „Zastąp". Pytanie -R/-r pada RAZ, po „Dalej", i
-    tylko gdy są gałęzie bez wyjątków -- w CLI to jedno ustawienie na relację,
-    „bez rekurencji" nie jest kształtem relacji, a pod -r nie da się pominąć.
+    `prepare-source --yes`, potem druga sonda. **Krok 4 = KOSZYK MIEJSC** (trzecia wersja tego samego dnia,
+    obie poprzednie odrzucone przez właściciela po pokazie: lista kratek na
+    całym drzewie była *„myląca"* -- puste kratki przy dzieciach, które i tak
+    jadą z rodzicem; pytanie „co kopiować?" tylko dla datasetów z dziećmi było
+    *„też źle"* -- „czysty Proxmox, wskazuję rpool/data, żeby kopiował maszyny,
+    których tam jeszcze nie ma"). **Zmierzone na pve10 ← pve11, linią crona
+    odpaloną dosłownie:** dataset założony pod źródłem PO ustawieniu relacji
+    kopiuje się sam przy następnym biegu, w -R i w -r; prawa konta dziedziczą
+    się w dół. Stąd model: pozycja koszyka to MIEJSCE -- ono i wszystko, co pod
+    nim jest i co POWSTANIE. Nie ma „liści" i „gałęzi" (to opis stanu z
+    dzisiaj), „sam rodzic bez dzieci" nie jest kształtem relacji. Lista miejsc
+    (menu) → od razu koszyk, bez pytań; koszyk mówi słowami („dziś 3 pod nim;
+    BEZ: mail", „dziś nic pod nim; nowe skopiują się same") i ma Dodaj miejsce /
+    Wyjątki / Usuń / Dalej. Wyjątki są akcją koszyka, tylko gdy pod miejscem
+    coś już leży (przyszłego nie da się wskazać), i pamiętają stan. Czego
+    koszyk już obejmuje, tego lista nie pokazuje; miejsce dodane po własnym
+    dziecku pyta „Zastąp". **-R/-r wypadło z kroku 4** (to „jak", nie „co"):
+    domyślnie -R, atomowo trafi do ustawień zaawansowanych.
   - **Wzorce `--exclude-child` z kreatora: `^nazwa$` (+ `^nazwa/`, gdy pomijany
     ma własne dzieci), bez metaznaków powłoki.** Prześledzone w kodzie: wzorzec
     idzie rekord → pole `flags` configu → linia crona, wszędzie wklejany BEZ
@@ -64,8 +69,8 @@
     hosta czytane `read -r`, nigdy wykonywane.
   - **Dowody:** suita `tui` 178/0 — 15 asercji kreatora na atrapie whiptaila o
     tym samym kontrakcie sterowania (odpowiedź na stderr, rc 0/1/255,
-    `--infobox` nie czeka), w tym droga operatora przez czasownik; kontrola
-    negatywna (wyłączone `covered`) → 1 FAIL. **Wygląd** dowiedziony
+    `--infobox` nie czeka), w tym droga operatora przez czasownik; kontrole
+    negatywne (wyłączone `covered`; wyjątki bez pamięci stanu) → po 1 FAIL. **Wygląd** dowiedziony
     osobno: jazda po pty z PRAWDZIWYM whiptailem na pve10 → pve9b w 80x25,
     z mini-emulatorem ekranu (CSI/ACS), który oddaje to, co widzi operator —
     wszystkie okna kroków 1–4 mieszczą się, ramki całe. Atrapa o wyglądzie nie

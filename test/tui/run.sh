@@ -1255,14 +1255,17 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
     ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err"
 }
 T=$'\t'
-# KOSZYK (2026-09-18, po uwagach wlasciciela: jedna lista kratek na calym drzewie
-# byla mylaca). Kazde dodanie to JEDNA decyzja; okno koszyka mowi slowami, co jedzie.
-# 1. galaz z wyjatkiem + lisc: wyjatek = zakotwiczony wzorzec BEZ metaznakow powloki
+# KOSZYK MIEJSC (2026-09-18, trzecia wersja tego dnia). Wlasciciel: jedna lista kratek
+# byla mylaca; pytanie "co kopiowac?" tylko dla datasetow z dziecmi tez -- "czysty
+# Proxmox, wskazuje rpool/data, zeby kopiowal maszyny, ktorych tam jeszcze nie ma".
+# Zmierzone na pve10<-pve11: dataset zalozony pod zrodlem PO relacji kopiuje sie sam,
+# w -R i w -r. Pozycja = MIEJSCE; dodanie nie zadaje pytan; wyjatki to akcja koszyka.
+# 1. miejsce z dziecmi + wyjatek + puste miejsce
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/data
-0${T}except
+0${T}exc
 0${T}hdd/data/docs|hdd/data/photos
 0${T}add
 0${T}hdd/test-kreator
@@ -1270,109 +1273,100 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 "); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "--source=192.168.28.98:hdd/data,hdd/test-kreator '--exclude-child=^hdd/data/mail\$' " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
-    ok "new-relation: koszyk -- galaz z wyjatkiem + lisc = JEDNO --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
+    ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
     bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
 fi
-NRMENU2="$(grep -F -- 'Dodaj dataset z' "$NR/wt.log" | sed -n 2p)"
-if [ -n "$NRMENU2" ] && ! has "$NRMENU2" "hdd/data ~" && ! has "$NRMENU2" "hdd/data/docs ~" && has "$NRMENU2" "hdd/ct ~" \
-   && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +3 podrzędne ~' \
-   && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol'; then
-    ok "new-relation: lista do dodania = drzewo (wciecie, rozmiar, zvol, liczba podrzednych); tego, co koszyk juz obejmuje, druga lista NIE pokazuje"
+if ! grep -qF -- '--radiolist' <(grep -F 'Krok 4/10' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log"; then
+    ok "new-relation: dodanie miejsca NIE zadaje pytan -- w kroku 4 nie ma ani 'co kopiowac?', ani -R/-r (to 'jak', nie 'co')"
 else
-    bad "new-relation: lista do dodania" "$NRMENU2" "$(grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1)"
+    bad "new-relation: pytanie w kroku 4" "$(grep -F -- '--radiolist' "$NR/wt.log")"
 fi
-if grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1 | grep -qF 'cała gałąź BEZ: mail' && grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1 | grep -qF 'pojedynczy dataset' \
-   && ! grep -qF 'Jak kopiować gałęzie' "$NR/wt.log"; then
-    ok "new-relation: okno koszyka mowi SLOWAMI, co jedzie ('cala galaz BEZ: mail', 'pojedynczy dataset'); przy wyjatkach pytania -R/-r NIE MA (pod -r nie da sie pominac)"
+NRMENU2="$(grep -F -- 'Które miejsce z' "$NR/wt.log" | sed -n 2p)"
+if [ -n "$NRMENU2" ] && ! has "$NRMENU2" "hdd/data ~" && ! has "$NRMENU2" "hdd/data/docs ~" && has "$NRMENU2" "hdd/ct ~" \
+   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +3 pod nim ~' \
+   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol' \
+   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qF 'albo POWSTANIE'; then
+    ok "new-relation: lista miejsc = drzewo (wciecie, rozmiar, zvol, 'N pod nim') i mowi wprost 'albo POWSTANIE'; tego, co koszyk juz obejmuje, druga lista NIE pokazuje"
 else
-    bad "new-relation: okno koszyka" "$(grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1)"
+    bad "new-relation: lista miejsc" "$NRMENU2" "$(grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1)"
+fi
+NRB="$(grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1)"
+if has "$NRB" 'co JEST i co POWSTANIE pod' && has "$NRB" 'dziś 3 pod nim; BEZ: mail' && has "$NRB" 'dziś nic pod nim; nowe skopiują się same'; then
+    ok "new-relation: okno koszyka mowi SLOWAMI -- 'dzis 3 pod nim; BEZ: mail', a o pustym miejscu 'dzis nic pod nim; nowe skopiuja sie same' (przypadek rpool/data)"
+else
+    bad "new-relation: okno koszyka" "$NRB"
 fi
 if grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF ' ~ ON ~ ' \
    && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/ct'; then
-    ok "new-relation: wyjatki = lista TYLKO tego, co pod wybrana galezia, wszystko zaznaczone (kopiowane) na starcie"
+    ok "new-relation: wyjatki = lista TYLKO tego, co pod wybranym miejscem, wszystko zaznaczone (kopiowane) na starcie"
 else
     bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
 fi
-# 2. synchro + cala galaz + atomowo
+# 2. puste miejsce samo: akcji 'Wyjatki' NIE MA (przyszlego nie da sie wskazac), synchro z portem
 NROUT=$(nr_run "0${T}sync
 0${T}192.168.28.98:2222
-0${T}
-0${T}hdd/data
-0${T}whole
-0${T}next
-0${T}atomic
-0${T}
-")
-if has "$NROUT" "--source=192.168.28.98:2222:hdd/data --mode=sync --recursive=atomic" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
-   && grep -F 'Jak kopiować gałęzie' "$NR/wt.log" | grep -qF 'JEDNO na całą relację'; then
-    ok "new-relation: cala galaz bez wyjatkow -> JEDNO pytanie -R/-r na relacje; synchro + atomowo = --mode=sync --recursive=atomic, port w adresie"
-else
-    bad "new-relation: synchro/atomowo" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
-fi
-# 3. sam lisc: zadnych pytan o galezie
-NROUT=$(nr_run "0${T}backup
-0${T}192.168.28.98
 0${T}
 0${T}hdd/test-kreator
 0${T}next
 0${T}
 ")
-if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && ! has "$NROUT" "--recursive" && ! grep -qF 'Jak kopiować gałęzie' "$NR/wt.log" && ! grep -qF 'co kopiować?' "$NR/wt.log"; then
-    ok "new-relation: dataset bez podrzednych = prosto do koszyka, zadnych pytan o galaz ani rekursje"
+if has "$NROUT" "--source=192.168.28.98:2222:hdd/test-kreator --mode=sync" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
+   && ! grep -F -- 'Co kopiować z' "$NR/wt.log" | grep -qF ' ~ exc ~ '; then
+    ok "new-relation: miejsce, pod ktorym dzis nic nie ma -> koszyk BEZ akcji 'Wyjatki'; synchro = --mode=sync, port w adresie"
 else
-    bad "new-relation: lisc" "$NROUT" "$(cat "$NR/wt.log")"
+    bad "new-relation: puste miejsce / synchro" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
 fi
-# 3a. tylko wybrane podrzedne: rodzic NIE jest zrodlem
+# 3. wyjatki otwarte drugi raz pamietaja stan (odznaczone wraca odznaczone)
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/ct
-0${T}some
+0${T}exc
 0${T}hdd/ct/subvol-301-disk-0
+0${T}exc
+1${T}
 0${T}next
 0${T}
 ")
-if has "$NROUT" "--source=192.168.28.98:hdd/ct/subvol-301-disk-0 " && ! has "$NROUT" ":hdd/ct," && ! has "$NROUT" "exclude-child" \
-   && grep -F 'które podrzędne?' "$NR/wt.log" | grep -qF 'Sam hdd/ct NIE będzie kopiowany' && grep -F 'które podrzędne?' "$NR/wt.log" | grep -qF ' ~ OFF ~ '; then
-    ok "new-relation: 'tylko wybrane podrzedne' = dokladnie wskazane jako zrodla, rodzic NIE; okno mowi to wprost, nic nie zaznaczone na starcie"
+if has "$NROUT" "'--exclude-child=^hdd/ct/subvol-302-disk-0\$'" && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-302-disk-0 ~ [^~]* ~ OFF' \
+   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-301-disk-0 ~ [^~]* ~ ON'; then
+    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany = odznaczony); Wstecz niczego nie zmienia"
 else
-    bad "new-relation: wybrane podrzedne" "$NROUT" "$(grep -F 'które podrzędne?' "$NR/wt.log")"
+    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
 fi
-# 3b. galaz dodana PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
+# 3b. miejsce dodane PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/data/docs
 0${T}add
 0${T}hdd/data
-0${T}whole
 0${T}
 0${T}next
-0${T}flat
 0${T}
 ")
 if has "$NROUT" "--source=192.168.28.98:hdd/data " && ! has "$NROUT" "hdd/data/docs" && grep -F -- '--yesno' "$NR/wt.log" | grep -F 'obejmuje to, co już wybrane' | grep -qF 'hdd/data/docs'; then
-    ok "new-relation: galaz dodana po wlasnym dziecku -> pytanie 'Zastap' z NAZWA dziecka; w komendzie zostaje sama galaz"
+    ok "new-relation: miejsce dodane po wlasnym dziecku -> pytanie 'Zastap' z NAZWA dziecka; w komendzie zostaje samo miejsce"
 else
-    bad "new-relation: zastapienie dziecka galezia" "$NROUT" "$(grep -F -- '--yesno' "$NR/wt.log")"
+    bad "new-relation: zastapienie dziecka miejscem" "$NROUT" "$(grep -F -- '--yesno' "$NR/wt.log")"
 fi
-# 3c. pominieta GALAZ (ma wlasne dzieci) = dwa wzorce: ^nazwa$ i ^nazwa/
+# 3c. pominiety dataset Z WLASNYMI dziecmi = dwa wzorce: ^nazwa$ i ^nazwa/
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd
-0${T}except
+0${T}exc
 0${T}hdd/ct/subvol-301-disk-0|hdd/ct/subvol-302-disk-0|hdd/data|hdd/data/docs|hdd/data/mail|hdd/data/photos|hdd/db|hdd/db/postgres|hdd/home|hdd/home/adam|hdd/home/ewa|hdd/test-kreator|hdd/vm-disks|hdd/vm-disks/vm-201-disk-0|hdd/vm-disks/vm-202-disk-0
 0${T}next
 0${T}
 ")
 if has "$NROUT" "--source=192.168.28.98:hdd '--exclude-child=^hdd/ct\$' '--exclude-child=^hdd/ct/' " && [ "$(printf '%s' "$NROUT" | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
-    ok "new-relation: odznaczona galaz z dziecmi = ^nazwa\$ i ^nazwa/ (dzieci pominietej galezi nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
+    ok "new-relation: odznaczony dataset z dziecmi = ^nazwa\$ i ^nazwa/ (jego dzieci nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
 else
-    bad "new-relation: pominieta galaz" "$NROUT"
+    bad "new-relation: pominiety z dziecmi" "$NROUT"
 fi
-# 3d. usuniecie jedynej pozycji -> znow lista do dodania; Wstecz x3 = wyjscie
+# 3d. usuniecie jedynej pozycji -> znow lista miejsc; Wstecz x3 = wyjscie
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -1383,8 +1377,8 @@ NROUT=$(nr_run "0${T}backup
 1${T}
 1${T}
 "); NRRC=$?
-if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Dodaj dataset z' "$NR/wt.log")" -eq 2 ] && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | tail -1 | grep -qF 'hdd/test-kreator ~'; then
-    ok "new-relation: 'Usun pozycje' oproznia koszyk -> wraca lista do dodania Z usunietym datasetem; Wstecz prowadzi do hosta i wyjscia"
+if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Które miejsce z' "$NR/wt.log")" -eq 2 ] && grep -F -- 'Które miejsce z' "$NR/wt.log" | tail -1 | grep -qF 'hdd/test-kreator ~'; then
+    ok "new-relation: 'Usun pozycje' oproznia koszyk -> wraca lista miejsc Z usunietym datasetem; Wstecz prowadzi do hosta i wyjscia"
 else
     bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/wt.log")"
 fi
