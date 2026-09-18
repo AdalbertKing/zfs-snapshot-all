@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4199d79ae41a9a26 -->
+<!-- status-covers-digest: 032946796a5ac846 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -35,21 +35,37 @@
     datasetów to modyfikacja, której nie ma. **Krok 3** `check-source`: trzy
     fakty (SSH, ZFS z pulami, pakiet z rewizją); brak SSH → okno z dwiema
     komendami (`ssh-keyscan`, `ssh-copy-id`); brak pakietu → „Zainstaluj" =
-    `prepare-source --yes`, potem druga sonda. **Krok 4** lista datasetów jako
-    drzewo (wcięcie, rozmiar, `zvol`, „+3 podrzędne"); zaznaczone dziecko
-    zaznaczonego rodzica odpada i jest NAZWANE w następnym oknie; jeśli są
-    podrzędne: radiolista -R (zalecane) / -r, a pod -R lista „które POMINĄĆ"
-    tylko z podrzędnych zaznaczonych datasetów. Koniec na razie = okno z
-    zebranymi odpowiedziami i komendą dotąd.
+    `prepare-source --yes`, potem druga sonda. **Krok 4 = KOSZYK** (przebudowany tego samego dnia po
+    pokazie; właściciel o jednej liście kratek na całym drzewie: *„mylący"* --
+    puste kratki przy dzieciach, które i tak jadą z rodzicem, i dało się
+    zaznaczyć rodzica razem z dzieckiem). Dodaje się po jednej pozycji: lista
+    (menu, nie kratki) → dla datasetu z podrzędnymi jedno pytanie: *cała gałąź*
+    (także przyszłe podrzędne) / *cała gałąź z wyjątkami* (lista tego, co pod
+    nią, wszystko zaznaczone, odznacza się pomijane) / *tylko wybrane
+    podrzędne* (rodzic NIE jest źródłem). Okno koszyka mówi słowami, co jedzie
+    („cała gałąź BEZ: mail", „pojedynczy dataset") i ma Dodaj / Usuń / Dalej.
+    Czego koszyk już obejmuje, tego lista do dodania nie pokazuje; gałąź dodana
+    po własnym dziecku pyta „Zastąp". Pytanie -R/-r pada RAZ, po „Dalej", i
+    tylko gdy są gałęzie bez wyjątków -- w CLI to jedno ustawienie na relację,
+    „bez rekurencji" nie jest kształtem relacji, a pod -r nie da się pominąć.
+  - **Wzorce `--exclude-child` z kreatora: `^nazwa$` (+ `^nazwa/`, gdy pomijany
+    ma własne dzieci), bez metaznaków powłoki.** Prześledzone w kodzie: wzorzec
+    idzie rekord → pole `flags` configu → linia crona, wszędzie wklejany BEZ
+    cudzysłowów, więc `(`/`|` rozbiłyby komendę co noc. `^…$` przechodzi przez
+    `sh` bez zmian i nie łapie `…disk-01` (zmierzone na pve10). Surowa nazwa
+    bez kotwic (tak robi stary kreator w curses) łapie też nazwy dłuższe --
+    **wada starego kreatora, nienaprawiona, zniknie razem z nim.** Czy wzorzec
+    dojeżdża cało do silnika po `--install`, NIE zmierzone (plan `add-client`
+    wzorców nie pokazuje) -- do zmierzenia przy kroku 10.
   - **Zasady okien:** rozmiar z `tput` przy każdym oknie, szerokość ≤ 100,
     każdy tekst mieści się w 80 kolumnach; `NEWT_COLORS` z widocznym bieżącym
     wierszem; Esc/„Wstecz" = krok wstecz, w kroku 1 wyjście; polskie znaki
     (wymuszane `C.UTF-8`, gdy locale nie jest UTF-8). Wartości ze zdalnego
     hosta czytane `read -r`, nigdy wykonywane.
-  - **Dowody:** suita `tui` 174/0 — 11 asercji kreatora na atrapie whiptaila o
+  - **Dowody:** suita `tui` 178/0 — 15 asercji kreatora na atrapie whiptaila o
     tym samym kontrakcie sterowania (odpowiedź na stderr, rc 0/1/255,
     `--infobox` nie czeka), w tym droga operatora przez czasownik; kontrola
-    negatywna (wyłączone odrzucanie dzieci) → 2 FAIL. **Wygląd** dowiedziony
+    negatywna (wyłączone `covered`) → 1 FAIL. **Wygląd** dowiedziony
     osobno: jazda po pty z PRAWDZIWYM whiptailem na pve10 → pve9b w 80x25,
     z mini-emulatorem ekranu (CSI/ACS), który oddaje to, co widzi operator —
     wszystkie okna kroków 1–4 mieszczą się, ramki całe. Atrapa o wyglądzie nie

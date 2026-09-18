@@ -41,7 +41,6 @@ trap 'rm -rf "$TMPD"' EXIT
 
 # --- odpowiedzi -------------------------------------------------------------
 MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
-DS=(); EXCL=(); DROPPED=(); CH_NAMES=()
 
 # --- okna -------------------------------------------------------------------
 geom() {   # H W LH z bieżącego terminala
@@ -107,7 +106,7 @@ step_host() {
             wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDodanie datasetów do istniejącej relacji to jej modyfikacja,\na tego kreator jeszcze nie umie.\n\nPodaj host, z którym relacji nie ma." 14 "$W"
             continue
         fi
-        [ "$h" = "$HOST" ] || { DS=(); EXCL=(); }
+        [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
         HOST="$h"; PORT="$p"
         return 0
     done
@@ -172,8 +171,19 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
     done
 }
 
-# --- krok 4: datasety -------------------------------------------------------
-load_tree() {   # -> $TMPD/tree.tsv: name <TAB> etykieta ; rc!=0 = błąd w $TMPD/ds.err
+# --- krok 4: datasety -- KOSZYK ---------------------------------------------
+# Właściciel 2026-09-18 o jednej liście kratek na całym drzewie: "mylący" -- puste
+# kratki przy dzieciach, które i tak jadą z rodzicem; da się zaznaczyć rodzica I
+# dziecko. Koszyk: dodajesz po jednej pozycji, każda to JEDNA decyzja (cała gałąź /
+# gałąź z wyjątkami / wybrane podrzędne), a okno koszyka mówi słowami, co będzie
+# kopiowane. Czego koszyk już obejmuje, tego lista do dodania nie pokazuje.
+#
+# Fakty z CLI, które to kształtują: --recursive=flat|atomic jest JEDNO na relację;
+# "bez rekurencji" nie jest kształtem relacji; pod atomic nie da się nic pominąć.
+T_NAME=(); T_KIDS=(); T_LABEL=()      # drzewo źródła
+B_ROOT=(); B_EXCL=()                   # koszyk: korzeń, pominięte (po jednym w linii)
+
+load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
     "$ZB" list-datasets "$(hostport)" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
     "$PY" - "$TMPD/ds.json" <<'PYEOF' | tr -d '\r' >"$TMPD/tree.tsv"
 import sys, json
@@ -186,80 +196,167 @@ def human(n):
             return ("%d%s" % (n, u)) if u == "B" or n >= 100 else ("%.1f%s" % (n, u))
         n /= 1024.0
 def kids_words(k):
-    if k == 1: return "+1 podrzędny"
-    if k % 10 in (2, 3, 4) and k % 100 not in (12, 13, 14): return "+%d podrzędne" % k
-    return "+%d podrzędnych" % k
+    if k == 1: return "1 podrzędny"
+    if k % 10 in (2, 3, 4) and k % 100 not in (12, 13, 14): return "%d podrzędne" % k
+    return "%d podrzędnych" % k
 rows = []
 for d in ds:
     n = d.get("name", ""); depth = n.count("/")
     label = ("  " * depth) + (n if depth == 0 else n.rsplit("/", 1)[1])
     kids = sum(1 for x in names if x.startswith(n + "/"))
-    rows.append((n, label, human(d.get("used")), "zvol" if d.get("type") == "volume" else "", kids))
-wl = max([len(r[1]) for r in rows] + [10])
-for n, label, used, typ, kids in rows:
-    print("%s\t%s  %7s  %-4s  %s" % (n, label.ljust(wl), used, typ, kids_words(kids) if kids else ""))
+    rows.append((n, kids, label, human(d.get("used")), "zvol" if d.get("type") == "volume" else ""))
+wl = max([len(r[2]) for r in rows] + [10])
+for n, kids, label, used, typ in rows:
+    print("%s\t%d\t%s  %7s  %-4s  %s" % (n, kids, label.ljust(wl), used, typ, kids_words(kids) if kids else ""))
 PYEOF
-}
-in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
-
-pick_datasets() {
-    local items=() n label st
-    while IFS=$'\t' read -r n label; do
-        st=OFF; in_list "$n" ${DS[@]+"${DS[@]}"} && st=ON
-        items+=("$n" "$label" "$st")
+    T_NAME=(); T_KIDS=(); T_LABEL=()
+    local n k l
+    while IFS=$'\t' read -r n k l; do
+        [ -n "$n" ] || continue
+        T_NAME+=("$n"); T_KIDS+=("$k"); T_LABEL+=("$l")
     done <"$TMPD/tree.tsv"
-    while :; do
-        geom
-        wt --title "$(title 4 "Które datasety z $HOST?")" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "Strzałki = ruch, spacja = zaznacz, Enter = dalej.\nZaznaczony dataset idzie RAZEM z podrzędnymi (które pominąć -- za chwilę)." "$H" "$W" "$LH" \
-           "${items[@]}" || return 1
-        [ -n "$WT_OUT" ] && break
-        wt --title "Nic nie zaznaczone" --msgbox "Zaznacz spacją co najmniej jeden dataset." 8 "$W"
-    done
-    # Zaznaczony potomek zaznaczonego przodka i tak jedzie z przodkiem.
-    local all=() a b covered; DS=(); DROPPED=()
-    while IFS= read -r n; do [ -n "$n" ] && all+=("$n"); done <<<"$WT_OUT"
-    for a in "${all[@]}"; do
-        covered=0
-        for b in "${all[@]}"; do case "$a" in "$b"/*) covered=1 ;; esac; done
-        if [ "$covered" -eq 1 ]; then DROPPED+=("$a"); else DS+=("$a"); fi
-    done
+    [ "${#T_NAME[@]}" -gt 0 ] || { echo "źródło nie ma żadnego datasetu" >"$TMPD/ds.err"; return 1; }
+}
+kids_count() { local i; for i in "${!T_NAME[@]}"; do [ "${T_NAME[$i]}" = "$1" ] && { echo "${T_KIDS[$i]}"; return; }; done; echo 0; }
+covered() {     # <nazwa> -> 0, gdy koszyk już ją obejmuje (jest korzeniem albo leży pod korzeniem)
+    local r; for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do case "$1" in "$r"|"$r"/*) return 0 ;; esac; done; return 1
+}
+basket_del() {  # <indeks>
+    local i nr=() ne=()
+    for i in "${!B_ROOT[@]}"; do [ "$i" = "$1" ] && continue; nr+=("${B_ROOT[$i]}"); ne+=("${B_EXCL[$i]}"); done
+    B_ROOT=(${nr[@]+"${nr[@]}"}); B_EXCL=(${ne[@]+"${ne[@]}"})
+}
+resolve_under() {   # <korzeń> -> 0 = wolno dodać; pozycje POD nim wypadają po zgodzie
+    local i under=() txt=""
+    for i in "${!B_ROOT[@]}"; do case "${B_ROOT[$i]}" in "$1"/*) under+=("$i"); txt="$txt  ${B_ROOT[$i]}\n" ;; esac; done
+    [ "${#under[@]}" -eq 0 ] && return 0
+    geom
+    wt --title "$1 obejmuje to, co już wybrane" --yes-button "Zastąp" --no-button "Zostaw" \
+       --yesno "W koszyku są już pozycje leżące pod $1:\n\n$txt\nCała gałąź $1 je zawiera. Zastąpić je jedną pozycją $1?" "$(fit $((${#under[@]} + 6)))" "$W" || return 1
+    for ((i=${#under[@]}-1; i>=0; i--)); do basket_del "${under[$i]}"; done
     return 0
 }
-children_of_selected() {   # -> CH_NAMES[]
-    local n label p; CH_NAMES=()
-    while IFS=$'\t' read -r n label; do
-        for p in "${DS[@]}"; do
-            case "$n" in "$p"/*) CH_NAMES+=("$n") ;; esac
-        done
-    done <"$TMPD/tree.tsv"
+describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
+    local r="${B_ROOT[$1]}" e="${B_EXCL[$1]}" k short x
+    k="$(kids_count "$r")"
+    if [ "$k" -eq 0 ]; then echo "pojedynczy dataset"; return; fi
+    if [ -z "$e" ]; then echo "cała gałąź ($k pod nim dziś, przyszłe też)"; return; fi
+    short=""
+    while IFS= read -r x; do [ -n "$x" ] && short="$short${short:+, }${x#"$r"/}"; done <<<"$e"
+    echo "cała gałąź BEZ: $short"
 }
-lines_of() { local x; for x in "$@"; do printf '  %s\\n' "$x"; done; }
+
+pick_one() {    # -> PICK ; 1 = wstecz
+    local items=() i
+    for i in "${!T_NAME[@]}"; do
+        covered "${T_NAME[$i]}" && continue
+        items+=("${T_NAME[$i]}" "${T_LABEL[$i]}")
+    done
+    geom
+    if [ "${#items[@]}" -eq 0 ]; then
+        wt --title "Nie ma czego dodać" --msgbox "Koszyk obejmuje już wszystkie datasety z $HOST." 8 "$W"; return 1
+    fi
+    wt --title "$(title 4 "Dodaj dataset z $HOST")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
+       --menu "Strzałki = ruch, Enter = wybierz JEDEN dataset. Następne dodasz za chwilę.\nTego, co koszyk już obejmuje, lista nie pokazuje." "$H" "$W" "$LH" \
+       "${items[@]}" || return 1
+    PICK="$WT_OUT"; [ -n "$PICK" ]
+}
+add_flow() {    # <nazwa> -> 0 = dodano, 1 = nic się nie zmieniło
+    local name="$1" k how i n st items=() ex=() all=()
+    k="$(kids_count "$name")"
+    if [ "$k" -eq 0 ]; then B_ROOT+=("$name"); B_EXCL+=(""); return 0; fi
+    geom
+    wt --title "$(title 4 "$name -- co kopiować?")" --cancel-button "Wstecz" --notags \
+       --radiolist "$name ma pod sobą: $k.\n\nCała gałąź = $name i WSZYSTKO pod nim, także to, co powstanie później.\nWybrane podrzędne = dokładnie te, które wskażesz; nowe trzeba będzie dopisać." "$(fit 10)" "$W" 3 \
+       whole  "Całą gałąź" ON \
+       except "Całą gałąź z wyjątkami…   (odznaczysz, czego NIE kopiować)" OFF \
+       some   "Tylko wybrane podrzędne…  (zaznaczysz, co kopiować)" OFF || return 1
+    how="$WT_OUT"
+    case "$how" in
+        whole)
+            resolve_under "$name" || return 1
+            B_ROOT+=("$name"); B_EXCL+=(""); return 0 ;;
+        except)
+            for i in "${!T_NAME[@]}"; do
+                case "${T_NAME[$i]}" in "$name"/*) items+=("${T_NAME[$i]}" "${T_LABEL[$i]}" ON); all+=("${T_NAME[$i]}") ;; esac
+            done
+            geom
+            wt --title "$(title 4 "$name -- czego NIE kopiować?")" --cancel-button "Wstecz" --notags --separate-output \
+               --checklist "Wszystko pod $name jest zaznaczone = będzie kopiowane.\nODZNACZ spacją to, co ma zostać pominięte (razem z tym, co pod nim)." "$H" "$W" "$LH" \
+               "${items[@]}" || return 1
+            for n in "${all[@]}"; do
+                printf '%s\n' "$WT_OUT" | grep -qxF -- "$n" && continue
+                st=0; for i in ${ex[@]+"${ex[@]}"}; do case "$n" in "$i"/*) st=1 ;; esac; done
+                [ "$st" -eq 1 ] || ex+=("$n")       # pominięty przodek już obejmuje potomka
+            done
+            resolve_under "$name" || return 1
+            B_ROOT+=("$name"); B_EXCL+=("$(printf '%s\n' ${ex[@]+"${ex[@]}"})"); return 0 ;;
+        some)
+            for i in "${!T_NAME[@]}"; do
+                n="${T_NAME[$i]}"
+                [ "${n%/*}" = "$name" ] || continue
+                covered "$n" && continue
+                items+=("$n" "${T_LABEL[$i]}" OFF)
+            done
+            geom
+            if [ "${#items[@]}" -eq 0 ]; then
+                wt --title "Nie ma czego dodać" --msgbox "Wszystkie podrzędne $name są już w koszyku." 8 "$W"; return 1
+            fi
+            wt --title "$(title 4 "$name -- które podrzędne?")" --cancel-button "Wstecz" --notags --separate-output \
+               --checklist "ZAZNACZ spacją te, które mają być kopiowane. Każdy idzie ze wszystkim, co ma pod sobą.\nSam $name NIE będzie kopiowany." "$H" "$W" "$LH" \
+               "${items[@]}" || return 1
+            [ -n "$WT_OUT" ] || return 1
+            st=1
+            while IFS= read -r n; do
+                [ -n "$n" ] || continue
+                resolve_under "$n" || continue
+                B_ROOT+=("$n"); B_EXCL+=(""); st=0
+            done <<<"$WT_OUT"
+            return "$st" ;;
+    esac
+    return 1
+}
+remove_flow() {
+    local items=() i n
+    for i in "${!B_ROOT[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")" OFF); done
+    geom
+    wt --title "$(title 4 'Usuń z koszyka')" --ok-button "Usuń zaznaczone" --cancel-button "Wstecz" --notags --separate-output \
+       --checklist "Zaznacz spacją pozycje do usunięcia." "$(fit $((${#B_ROOT[@]} + 3)))" "$W" "${#B_ROOT[@]}" \
+       "${items[@]}" || return 0
+    for n in $(printf '%s\n' "$WT_OUT" | sort -rn); do basket_del "$n"; done
+}
+needs_recursion_question() {   # 0 = jest o co pytać: są gałęzie i nic nie pominięto
+    local i any=1
+    for i in "${!B_ROOT[@]}"; do
+        [ -n "${B_EXCL[$i]}" ] && return 1
+        [ "$(kids_count "${B_ROOT[$i]}")" -gt 0 ] && any=0
+    done
+    return "$any"
+}
 pick_recursion() {
     geom
-    local f=OFF a=OFF note=""; [ "$RECURSION" = atomic ] && a=ON || f=ON
-    [ "${#DROPPED[@]}" -gt 0 ] && note="\nOdznaczone jako zbędne (jadą z nadrzędnym):\n$(lines_of "${DROPPED[@]}")"
-    wt --title "$(title 4 'Jak kopiować podrzędne?')" --cancel-button "Wstecz" --notags \
-       --radiolist "Wybrane:\n$(lines_of "${DS[@]}")Podrzędnych pod nimi: ${#CH_NAMES[@]}.\n$note\nOsobno (-R): każdy podrzędny ma własne migawki; wybrane można pominąć.\nAtomowo (-r): jedna migawka na całe drzewo; pominąć się nie da." \
-       "$(fit $((${#DS[@]} + ${#DROPPED[@]} + 9)))" "$W" 2 \
-       flat   "Każdy podrzędny osobno (-R)  -- zalecane" "$f" \
-       atomic "Całe drzewo atomowo (-r)" "$a" || return 1
+    local f=OFF a=OFF; [ "$RECURSION" = atomic ] && a=ON || f=ON
+    wt --title "$(title 4 'Jak kopiować gałęzie?')" --cancel-button "Wstecz" --notags \
+       --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset gałęzi ma własne migawki; awaria jednego nie\nzatrzymuje reszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili;\nnie da się wtedy niczego pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
+       flat   "Każdy dataset osobno (-R)  -- zalecane" "$f" \
+       atomic "Cała gałąź atomowo (-r)" "$a" || return 1
     [ -n "$WT_OUT" ] && RECURSION="$WT_OUT"
     return 0
 }
-pick_excluded() {
+basket_window() {   # -> ACT = add | del | next ; 1 = wstecz
+    local txt="" i shown=0 max
     geom
-    local items=() n st
-    for n in "${CH_NAMES[@]}"; do
-        st=OFF; in_list "$n" ${EXCL[@]+"${EXCL[@]}"} && st=ON
-        items+=("$n" "$n" "$st")
+    max=$((H - 13)); [ "$max" -lt 3 ] && max=3
+    for i in "${!B_ROOT[@]}"; do
+        if [ "$shown" -ge "$max" ]; then txt="$txt  … i jeszcze $((${#B_ROOT[@]} - shown))\n"; break; fi
+        txt="$txt  ${B_ROOT[$i]}\n      $(describe "$i")\n"; shown=$((shown + 1))
     done
-    wt --title "$(title 4 'Które podrzędne POMINĄĆ?')" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "Zaznaczone NIE będą kopiowane. Nic nie zaznaczone = kopiuj wszystkie.\nSpacja = zaznacz, Enter = dalej." "$H" "$W" "$LH" \
-       "${items[@]}" || return 1
-    EXCL=()
-    while IFS= read -r n; do [ -n "$n" ] && EXCL+=("$n"); done <<<"$WT_OUT"
-    return 0
+    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \
+       --menu "W koszyku:\n\n$txt" "$(fit $((shown * 2 + 8)))" "$W" 3 \
+       add  "Dodaj następny dataset…" \
+       del  "Usuń pozycję…" \
+       next "Dalej" || return 1
+    ACT="$WT_OUT"
 }
 step_datasets() {
     geom
@@ -268,47 +365,61 @@ step_datasets() {
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         return 1
     fi
-    local sub=pick
     while :; do
-        case "$sub" in
-            pick) pick_datasets || return 1
-                  children_of_selected
-                  if [ "${#CH_NAMES[@]}" -eq 0 ]; then RECURSION=flat; EXCL=(); return 0; fi
-                  sub=rec ;;
-            rec)  if pick_recursion; then
-                      if [ "$RECURSION" = atomic ]; then EXCL=(); return 0; fi
-                      sub=excl
-                  else sub=pick; fi ;;
-            excl) if pick_excluded; then return 0; else sub=rec; fi ;;
+        if [ "${#B_ROOT[@]}" -eq 0 ]; then     # pusty koszyk: od razu lista, bez pustego okna
+            pick_one || return 1
+            add_flow "$PICK"
+            continue
+        fi
+        basket_window || return 1
+        case "$ACT" in
+            add)  if pick_one; then add_flow "$PICK"; fi ;;
+            del)  remove_flow ;;
+            next) if needs_recursion_question; then pick_recursion || continue; else RECURSION=flat; fi
+                  return 0 ;;
         esac
     done
 }
 
 # --- komenda ----------------------------------------------------------------
+# Wzorce dla -X BEZ metaznaków powłoki. Rekord -> pole `flags` w configu -> linia
+# crona, wszędzie wklejane BEZ cudzysłowów: `(`, `|` rozbiłyby komendę co noc.
+# `^nazwa$` i `^nazwa/` przechodzą przez sh bez zmian (zmierzone na pve10) i nie
+# łapią `nazwa1`. Kropka w nazwie zostaje kropką wzorca: nadzbiór, w praktyce ten sam.
 build_argv() {   # -> ARGV[] ; na razie z kroków 1-4
-    local IFS=, x
-    ARGV=("$ZB" "--source=$(hostport):${DS[*]}")
+    local IFS=, i x D='$'
+    ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
     [ "$MODE" = sync ] && ARGV+=("--mode=sync")
     [ "$RECURSION" = atomic ] && ARGV+=("--recursive=atomic")
-    for x in ${EXCL[@]+"${EXCL[@]}"}; do ARGV+=("--exclude-child=$x"); done
+    for i in "${!B_ROOT[@]}"; do
+        while IFS= read -r x; do
+            [ -n "$x" ] || continue
+            ARGV+=("--exclude-child=^$x${D}")
+            [ "$(kids_count "$x")" -gt 0 ] && ARGV+=("--exclude-child=^$x/")
+        done <<<"${B_EXCL[$i]}"
+    done
     return 0
 }
+shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
+    case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
+}
+quoted_argv() { local a; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
 step_preview() {   # tymczasowy koniec: co zebrane, bez wykonania
     geom
     build_argv
+    local i
     {
         echo "Zebrane w krokach 1-4 (nic nie zostało wykonane):"
         echo
         echo "  Typ relacji : $([ "$MODE" = sync ] && echo synchro || echo backup)"
         echo "  Źródło      : $HOST${HOSTNAME_R:+ ($HOSTNAME_R)}, port $PORT"
-        echo "  Datasety    :"; printf '                  %s\n' "${DS[@]}"
-        echo "  Podrzędne   : $([ "$RECURSION" = atomic ] && echo 'całe drzewo atomowo (-r)' || echo 'każdy osobno (-R)')"
-        echo "  Pominięte   :"; printf '                  %s\n' ${EXCL[@]+"${EXCL[@]}"}
-        [ "${#EXCL[@]}" -eq 0 ] && echo "                  (żadne)"
+        echo "  Kopiowane   :"
+        for i in "${!B_ROOT[@]}"; do printf '      %s\n          %s\n' "${B_ROOT[$i]}" "$(describe "$i")"; done
+        echo "  Gałęzie     : $([ "$RECURSION" = atomic ] && echo 'atomowo (-r)' || echo 'każdy dataset osobno (-R)')"
         echo
         echo "Komenda dotąd:"
         echo
-        printf '  %s \\\n' "${ARGV[0]}"; printf '      %s\n' "${ARGV[@]:1}"
+        printf '  %s \\\n' "${ARGV[0]}"; quoted_argv
         echo
         echo "Kroki 5-10 (dokąd, szablon, nazwa, konto, maski migawek, wykonanie)"
         echo "-- w budowie."
@@ -330,4 +441,4 @@ while :; do
 done
 clear 2>/dev/null
 build_argv
-printf 'new-relation (kroki 1-4), komenda dotąd:\n%s\n' "${ARGV[*]}"
+printf 'new-relation (kroki 1-4), komenda dotąd:\n'; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; printf '\n'

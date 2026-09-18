@@ -1255,61 +1255,138 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
     ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err"
 }
 T=$'\t'
-# 1. droga glowna: backup, pakiet jest, rodzic + jego dziecko + lisc, -R, jedno dziecko pominiete
+# KOSZYK (2026-09-18, po uwagach wlasciciela: jedna lista kratek na calym drzewie
+# byla mylaca). Kazde dodanie to JEDNA decyzja; okno koszyka mowi slowami, co jedzie.
+# 1. galaz z wyjatkiem + lisc: wyjatek = zakotwiczony wzorzec BEZ metaznakow powloki
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/data|hdd/data/docs|hdd/test-kreator
-0${T}flat
-0${T}hdd/data/mail
+0${T}hdd/data
+0${T}except
+0${T}hdd/data/docs|hdd/data/photos
+0${T}add
+0${T}hdd/test-kreator
+0${T}next
 0${T}
 "); NRRC=$?
-if [ "$NRRC" -eq 0 ] && has "$NROUT" "$NR/bin/zb --source=192.168.28.98:hdd/data,hdd/test-kreator --exclude-child=hdd/data/mail" && ! has "$NROUT" "hdd/data/docs"; then
-    ok "new-relation: backup -- zaznaczone datasety w JEDNYM --source po przecinku, pominiety podrzedny jako --exclude-child, dziecko zaznaczonego rodzica odpada (jedzie z nim)"
+if [ "$NRRC" -eq 0 ] && has "$NROUT" "--source=192.168.28.98:hdd/data,hdd/test-kreator '--exclude-child=^hdd/data/mail\$' " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
+    ok "new-relation: koszyk -- galaz z wyjatkiem + lisc = JEDNO --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
-    bad "new-relation: droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
+    bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
 fi
-if grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qF -- '--notags' \
-   && grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +\+3 podrzędne ~ OFF' \
-   && grep -F -- '--checklist' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol'; then
-    ok "new-relation: lista datasetow = drzewo z wcieciem, rozmiar, 'zvol', liczba podrzednych z polska odmiana; nic nie zaznaczone na starcie"
+NRMENU2="$(grep -F -- 'Dodaj dataset z' "$NR/wt.log" | sed -n 2p)"
+if [ -n "$NRMENU2" ] && ! has "$NRMENU2" "hdd/data ~" && ! has "$NRMENU2" "hdd/data/docs ~" && has "$NRMENU2" "hdd/ct ~" \
+   && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +3 podrzędne ~' \
+   && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol'; then
+    ok "new-relation: lista do dodania = drzewo (wciecie, rozmiar, zvol, liczba podrzednych); tego, co koszyk juz obejmuje, druga lista NIE pokazuje"
 else
-    bad "new-relation: ksztalt listy datasetow" "$(grep -F -- '--checklist' "$NR/wt.log" | head -1)"
+    bad "new-relation: lista do dodania" "$NRMENU2" "$(grep -F -- 'Dodaj dataset z' "$NR/wt.log" | head -1)"
 fi
-if grep -F -- 'POMINĄĆ' "$NR/wt.log" | grep -qF 'hdd/data/docs ~ hdd/data/docs ~ OFF' && ! grep -F -- 'POMINĄĆ' "$NR/wt.log" | grep -qF 'hdd/ct'; then
-    ok "new-relation: do pominiecia oferowane sa TYLKO podrzedne zaznaczonych datasetow, zadne cudze"
+if grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1 | grep -qF 'cała gałąź BEZ: mail' && grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1 | grep -qF 'pojedynczy dataset' \
+   && ! grep -qF 'Jak kopiować gałęzie' "$NR/wt.log"; then
+    ok "new-relation: okno koszyka mowi SLOWAMI, co jedzie ('cala galaz BEZ: mail', 'pojedynczy dataset'); przy wyjatkach pytania -R/-r NIE MA (pod -r nie da sie pominac)"
 else
-    bad "new-relation: lista podrzednych do pominiecia" "$(grep -F -- 'POMINĄĆ' "$NR/wt.log")"
+    bad "new-relation: okno koszyka" "$(grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1)"
 fi
-if grep -F -- 'Jak kopiować' "$NR/wt.log" | grep -qF 'Odznaczone jako zbędne' && grep -F -- 'Jak kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs'; then
-    ok "new-relation: odrzucone dziecko jest NAZWANE w nastepnym oknie -- nic nie znika po cichu"
+if grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF ' ~ ON ~ ' \
+   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/ct'; then
+    ok "new-relation: wyjatki = lista TYLKO tego, co pod wybrana galezia, wszystko zaznaczone (kopiowane) na starcie"
 else
-    bad "new-relation: odrzucone dziecko przemilczane" "$(grep -F -- 'Jak kopiować' "$NR/wt.log")"
+    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
 fi
-# 2. synchro + atomowo: bez okna pominiec (pod -r silnik odmawia -X)
+# 2. synchro + cala galaz + atomowo
 NROUT=$(nr_run "0${T}sync
 0${T}192.168.28.98:2222
 0${T}
 0${T}hdd/data
+0${T}whole
+0${T}next
 0${T}atomic
 0${T}
 ")
-if has "$NROUT" "--source=192.168.28.98:2222:hdd/data --mode=sync --recursive=atomic" && ! grep -qF 'POMINĄĆ' "$NR/wt.log" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log"; then
-    ok "new-relation: synchro + atomowo = --mode=sync --recursive=atomic, port jedzie w adresie, okna pominiec NIE MA (pod -r nie da sie pominac)"
+if has "$NROUT" "--source=192.168.28.98:2222:hdd/data --mode=sync --recursive=atomic" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
+   && grep -F 'Jak kopiować gałęzie' "$NR/wt.log" | grep -qF 'JEDNO na całą relację'; then
+    ok "new-relation: cala galaz bez wyjatkow -> JEDNO pytanie -R/-r na relacje; synchro + atomowo = --mode=sync --recursive=atomic, port w adresie"
 else
     bad "new-relation: synchro/atomowo" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
 fi
-# 3. sam lisc: zadnych pytan o podrzedne
+# 3. sam lisc: zadnych pytan o galezie
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/test-kreator
+0${T}next
 0${T}
 ")
-if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && ! has "$NROUT" "--recursive" && ! grep -qF 'Jak kopiować' "$NR/wt.log"; then
-    ok "new-relation: dataset bez podrzednych = zadnych pytan o rekursje ani pominiecia"
+if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && ! has "$NROUT" "--recursive" && ! grep -qF 'Jak kopiować gałęzie' "$NR/wt.log" && ! grep -qF 'co kopiować?' "$NR/wt.log"; then
+    ok "new-relation: dataset bez podrzednych = prosto do koszyka, zadnych pytan o galaz ani rekursje"
 else
     bad "new-relation: lisc" "$NROUT" "$(cat "$NR/wt.log")"
+fi
+# 3a. tylko wybrane podrzedne: rodzic NIE jest zrodlem
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/ct
+0${T}some
+0${T}hdd/ct/subvol-301-disk-0
+0${T}next
+0${T}
+")
+if has "$NROUT" "--source=192.168.28.98:hdd/ct/subvol-301-disk-0 " && ! has "$NROUT" ":hdd/ct," && ! has "$NROUT" "exclude-child" \
+   && grep -F 'które podrzędne?' "$NR/wt.log" | grep -qF 'Sam hdd/ct NIE będzie kopiowany' && grep -F 'które podrzędne?' "$NR/wt.log" | grep -qF ' ~ OFF ~ '; then
+    ok "new-relation: 'tylko wybrane podrzedne' = dokladnie wskazane jako zrodla, rodzic NIE; okno mowi to wprost, nic nie zaznaczone na starcie"
+else
+    bad "new-relation: wybrane podrzedne" "$NROUT" "$(grep -F 'które podrzędne?' "$NR/wt.log")"
+fi
+# 3b. galaz dodana PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/data/docs
+0${T}add
+0${T}hdd/data
+0${T}whole
+0${T}
+0${T}next
+0${T}flat
+0${T}
+")
+if has "$NROUT" "--source=192.168.28.98:hdd/data " && ! has "$NROUT" "hdd/data/docs" && grep -F -- '--yesno' "$NR/wt.log" | grep -F 'obejmuje to, co już wybrane' | grep -qF 'hdd/data/docs'; then
+    ok "new-relation: galaz dodana po wlasnym dziecku -> pytanie 'Zastap' z NAZWA dziecka; w komendzie zostaje sama galaz"
+else
+    bad "new-relation: zastapienie dziecka galezia" "$NROUT" "$(grep -F -- '--yesno' "$NR/wt.log")"
+fi
+# 3c. pominieta GALAZ (ma wlasne dzieci) = dwa wzorce: ^nazwa$ i ^nazwa/
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd
+0${T}except
+0${T}hdd/ct/subvol-301-disk-0|hdd/ct/subvol-302-disk-0|hdd/data|hdd/data/docs|hdd/data/mail|hdd/data/photos|hdd/db|hdd/db/postgres|hdd/home|hdd/home/adam|hdd/home/ewa|hdd/test-kreator|hdd/vm-disks|hdd/vm-disks/vm-201-disk-0|hdd/vm-disks/vm-202-disk-0
+0${T}next
+0${T}
+")
+if has "$NROUT" "--source=192.168.28.98:hdd '--exclude-child=^hdd/ct\$' '--exclude-child=^hdd/ct/' " && [ "$(printf '%s' "$NROUT" | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
+    ok "new-relation: odznaczona galaz z dziecmi = ^nazwa\$ i ^nazwa/ (dzieci pominietej galezi nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
+else
+    bad "new-relation: pominieta galaz" "$NROUT"
+fi
+# 3d. usuniecie jedynej pozycji -> znow lista do dodania; Wstecz x3 = wyjscie
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}del
+0${T}0
+1${T}
+1${T}
+1${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Dodaj dataset z' "$NR/wt.log")" -eq 2 ] && grep -F -- 'Dodaj dataset z' "$NR/wt.log" | tail -1 | grep -qF 'hdd/test-kreator ~'; then
+    ok "new-relation: 'Usun pozycje' oproznia koszyk -> wraca lista do dodania Z usunietym datasetem; Wstecz prowadzi do hosta i wyjscia"
+else
+    bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/wt.log")"
 fi
 # 4. host, z ktorym relacja JEST: odmowa ze slowem dlaczego, potem Wstecz, Wyjdz
 NROUT=$(nr_run "0${T}backup
@@ -1330,6 +1407,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 0${T}hdd/test-kreator
+0${T}next
 0${T}
 " NR_CHECK=check-source.json)
 if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
@@ -1370,7 +1448,7 @@ import sys, re
 bad = 0
 for l in open(sys.argv[1], encoding="utf-8"):
     a = l.rstrip("\n").split(" ~ ")
-    for k in ("--checklist", "--radiolist", "--inputbox", "--msgbox", "--yesno"):
+    for k in ("--checklist", "--radiolist", "--inputbox", "--msgbox", "--yesno", "--menu"):
         if k in a:
             i = a.index(k); h, w = a[i + 2], a[i + 3]
             if not (h.isdigit() and w.isdigit() and int(w) <= 100 and int(h) >= 7): bad += 1
