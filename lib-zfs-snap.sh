@@ -27,6 +27,13 @@ json_escape() {
     local s="$1"
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"
+    # A raw CR/LF/TAB inside a JSON string is INVALID JSON, not an ugly one:
+    # OpenSSH ends its diagnostics with CR LF, so check-source on an unreachable
+    # host printed a document no parser would read (found by the live wizard
+    # drive on pve10, 2026-09-18 -- the ssh stub had no CR).
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\t'/\\t}"
     printf '%s' "$s"
 }
 

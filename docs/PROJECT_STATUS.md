@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 66483fb19345d362 -->
+<!-- status-covers-digest: 0d14a2e8d7edc297 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -59,8 +59,10 @@
     diagnostykę CR LF, a `json_escape` przepuszczał surowy CR do łańcucha;
     kreator pokazywał „check-source nie zwrócił JSON-a" zamiast powodu. Atrapa
     ssh w suicie nie miała CR (fikstura zamiast prawdziwego wyjścia).
-    `json_escape` w `lib-backup-common.sh` zamienia teraz CR/LF/TAB na
-    sekwencje JSON; dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
+    `json_escape` zamienia teraz CR/LF/TAB na sekwencje JSON -- we WSZYSTKICH
+    trzech kopiach-bliźniakach (`lib-backup-common.sh`, `lib-zfs-snap.sh`,
+    `delsnaps.sh`; suita `twins` przypina je bajt w bajt i złapała pierwszą
+    wersję, która zmieniła tylko jedną: 81/0 po wyrównaniu); dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
     Uwaga: Git Bash zjada CR w `$(…)`, więc kontrola negatywna NIE pada na
     Windows — pada na Linuksie (zmierzone na pve10 na kodzie z main:
     `JSONDecodeError: Invalid control character`).
