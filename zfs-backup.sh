@@ -11032,16 +11032,21 @@ cmd_list_datasets() {
     case "$host" in *:*) [ -n "$port" ] || port="${host##*:}"; host="${host%%:*}" ;; esac
     [ -z "$port" ] || case "$port" in ''|*[!0-9]*) die "list-datasets: --port takes a number" ;; esac
     case "$host" in *[!A-Za-z0-9._-]*) die "list-datasets: HOST looks wrong: '$host'" ;; esac
-    local rows rc=0
+    # REV-143: stdout is DATA, stderr is diagnostics. A login banner or an SSH
+    # warning on a successful run must never be parsed as a dataset row, so the
+    # two streams stay apart and stderr is only shown when the command failed.
+    local rows rc=0 errf
+    errf=$(mktemp) || die "list-datasets: mktemp failed"
     if [ -z "$host" ]; then
-        rows=$(zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name 2>&1) || rc=$?
+        rows=$(zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name 2>"$errf") || rc=$?
     else
-        rows=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name" 2>&1) || rc=$?
+        rows=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name" 2>"$errf") || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
-        printf '%s\n' "$rows" | tail -3 >&2
+        tail -3 "$errf" >&2; rm -f "$errf"
         die "list-datasets: ${host:+$host: }zfs list failed (rc=$rc)"
     fi
+    rm -f "$errf"
     printf '{"host":"%s","port":%s,"account":"%s","datasets":[' \
         "$(json_escape "${host:-local}")" "${port:-22}" "$([ -n "$host" ] && echo root || id -un)"
     local first=1 _n _t _u _av

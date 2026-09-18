@@ -12118,6 +12118,7 @@ cat > "$LD/bin/ssh" <<'EOF'
 printf '%s\n' "$*" > "${LD_ARGS:?}/ssh.argv"
 case "$*" in
     *deadpeer*) echo "ssh: connect to host deadpeer port 22: No route to host" >&2; exit 255 ;;
+    *bannerpeer*) echo "Authorized access only" >&2; echo "Warning: Permanently added the ECDSA host key" >&2 ;;
 esac
 printf 'pool\tfilesystem\t1\t2\npool/guest\tvolume\t3\t2\n'
 EOF
@@ -12144,6 +12145,16 @@ if ! ld_run deadpeer --json >"$LD/out" && [ ! -s "$LD/out" ] && grep -q 'No rout
     ok "listdatasets: a peer that does not answer is rc=1 with ssh's reason on stderr and NO JSON -- never an empty list"
 else
     bad "listdatasets: dead peer" "$(cat "$LD/out")" "$(cat "$LD/err")"
+fi
+# REV-143 F1: a login banner / SSH warning on stderr of a SUCCESSFUL run is
+# diagnostics, not data. Merged streams turned it into a dataset named
+# "Authorized access only" that the picker offered first.
+LDOUT=$(ld_run bannerpeer --json)
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(len(d["datasets"]), [x["name"] for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "2 ['pool', 'pool/guest']" ] && ! printf '%s' "$LDOUT" | grep -q 'Authorized'; then
+    ok "listdatasets: REV-143 -- stderr of a successful ssh (banner, host-key warning) never becomes a dataset: exactly 2, by name"
+else
+    bad "listdatasets: REV-143 banner parsed as dataset" "$LDOUT" "$got"
 fi
 if ! ld_run >/dev/null && grep -q 'JSON only' "$LD/err"; then
     ok "listdatasets: without --json the verb refuses"
