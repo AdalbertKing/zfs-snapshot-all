@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 30b50c4fd6bd35cb -->
+<!-- status-covers-digest: 66483fb19345d362 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,53 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kreator relacji na WHIPTAILU, kroki 1–4 z 10 (2026-09-18).** Decyzja
+  właściciela z 2026-09-16: formularze rysowane ręcznie w curses są
+  „siermiężne i nieużyteczne"; okna mają być klockami („stare Turbo Vision").
+  GUI w przeglądarce odpada na hostach PVE (port 8006 Proxmoxa). Tabele F2–F6
+  zostają w curses.
+  - **Czasownik `zfs-backup.sh new-relation`** → `tui/new-relation.sh`, bash +
+    whiptail + python3 do JSON-a. Kreator NIC nie wykonuje: składa jedną komendę
+    `--source=…`; jedyny wyjątek to `prepare-source`, o który pyta oknem tak/nie.
+  - **Krok 1** radiolista backup/synchro. **Krok 2** pole adresu `host[:port]`;
+    host, z którym relacja już jest (rekord nie-`removed` w `status --json`),
+    dostaje odmowę z nazwami relacji — relacja to para hostów, dokładanie
+    datasetów to modyfikacja, której nie ma. **Krok 3** `check-source`: trzy
+    fakty (SSH, ZFS z pulami, pakiet z rewizją); brak SSH → okno z dwiema
+    komendami (`ssh-keyscan`, `ssh-copy-id`); brak pakietu → „Zainstaluj" =
+    `prepare-source --yes`, potem druga sonda. **Krok 4** lista datasetów jako
+    drzewo (wcięcie, rozmiar, `zvol`, „+3 podrzędne"); zaznaczone dziecko
+    zaznaczonego rodzica odpada i jest NAZWANE w następnym oknie; jeśli są
+    podrzędne: radiolista -R (zalecane) / -r, a pod -R lista „które POMINĄĆ"
+    tylko z podrzędnych zaznaczonych datasetów. Koniec na razie = okno z
+    zebranymi odpowiedziami i komendą dotąd.
+  - **Zasady okien:** rozmiar z `tput` przy każdym oknie, szerokość ≤ 100,
+    każdy tekst mieści się w 80 kolumnach; `NEWT_COLORS` z widocznym bieżącym
+    wierszem; Esc/„Wstecz" = krok wstecz, w kroku 1 wyjście; polskie znaki
+    (wymuszane `C.UTF-8`, gdy locale nie jest UTF-8). Wartości ze zdalnego
+    hosta czytane `read -r`, nigdy wykonywane.
+  - **Dowody:** suita `tui` 174/0 — 11 asercji kreatora na atrapie whiptaila o
+    tym samym kontrakcie sterowania (odpowiedź na stderr, rc 0/1/255,
+    `--infobox` nie czeka), w tym droga operatora przez czasownik; kontrola
+    negatywna (wyłączone odrzucanie dzieci) → 2 FAIL. **Wygląd** dowiedziony
+    osobno: jazda po pty z PRAWDZIWYM whiptailem na pve10 → pve9b w 80x25,
+    z mini-emulatorem ekranu (CSI/ACS), który oddaje to, co widzi operator —
+    wszystkie okna kroków 1–4 mieszczą się, ramki całe. Atrapa o wyglądzie nie
+    mówi nic; jazda nie jest w CI (wymaga hosta z whiptailem i peera).
+  - **Wada znaleziona jazdą na żywo, nie suitą:** `check-source` na
+    nieosiągalnym hoście wypisywał NIEPOPRAWNY JSON — OpenSSH kończy swoją
+    diagnostykę CR LF, a `json_escape` przepuszczał surowy CR do łańcucha;
+    kreator pokazywał „check-source nie zwrócił JSON-a" zamiast powodu. Atrapa
+    ssh w suicie nie miała CR (fikstura zamiast prawdziwego wyjścia).
+    `json_escape` w `lib-backup-common.sh` zamienia teraz CR/LF/TAB na
+    sekwencje JSON; dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
+    Uwaga: Git Bash zjada CR w `$(…)`, więc kontrola negatywna NIE pada na
+    Windows — pada na Linuksie (zmierzone na pve10 na kodzie z main:
+    `JSONDecodeError: Invalid control character`).
+  - **Nie zrobione:** kroki 5–10 (dokąd, szablon, nazwa, konto, maski migawek,
+    plan i wykonanie) — po pokazie właścicielowi. `Ins` na F3 nadal otwiera
+    stary kreator w curses; przełączenie razem z krokiem 10. Ścieżki „brak
+    pakietu" i „SSH nie wpuszcza" przeszły tylko na atrapie, nie na żywo.
 - **REV-143 (P2): baner SSH stawał się datasetem w `list-datasets` (2026-09-18).**
   Recenzent: `cmd_list_datasets` łapał `zfs list` z `2>&1` i parsował każdą
   linię jako wiersz TSV, więc baner logowania albo ostrzeżenie o kluczu hosta
