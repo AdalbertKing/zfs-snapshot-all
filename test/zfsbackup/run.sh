@@ -12118,6 +12118,7 @@ cat > "$LD/bin/ssh" <<'EOF'
 printf '%s\n' "$*" > "${LD_ARGS:?}/ssh.argv"
 case "$*" in
     *deadpeer*) echo "ssh: connect to host deadpeer port 22: No route to host" >&2; exit 255 ;;
+    *bannerpeer*) echo "Authorized access only" >&2; echo "Warning: Permanently added the ECDSA host key" >&2 ;;
 esac
 printf 'pool\tfilesystem\t1\t2\npool/guest\tvolume\t3\t2\n'
 EOF
@@ -12144,6 +12145,16 @@ if ! ld_run deadpeer --json >"$LD/out" && [ ! -s "$LD/out" ] && grep -q 'No rout
     ok "listdatasets: a peer that does not answer is rc=1 with ssh's reason on stderr and NO JSON -- never an empty list"
 else
     bad "listdatasets: dead peer" "$(cat "$LD/out")" "$(cat "$LD/err")"
+fi
+# REV-143 F1: a login banner / SSH warning on stderr of a SUCCESSFUL run is
+# diagnostics, not data. Merged streams turned it into a dataset named
+# "Authorized access only" that the picker offered first.
+LDOUT=$(ld_run bannerpeer --json)
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(len(d["datasets"]), [x["name"] for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "2 ['pool', 'pool/guest']" ] && ! printf '%s' "$LDOUT" | grep -q 'Authorized'; then
+    ok "listdatasets: REV-143 -- stderr of a successful ssh (banner, host-key warning) never becomes a dataset: exactly 2, by name"
+else
+    bad "listdatasets: REV-143 banner parsed as dataset" "$LDOUT" "$got"
 fi
 if ! ld_run >/dev/null && grep -q 'JSON only' "$LD/err"; then
     ok "listdatasets: without --json the verb refuses"
@@ -12175,6 +12186,7 @@ printf '%s\n' "$*" >> "${PS_ARGS:?}/ssh.argv"
 host=""; for a in "$@"; do case "$a" in root@*) host="${a#root@}";; esac; done
 cmd="${@: -1}"
 case "$host" in dead) echo "ssh: connect to host dead port 22: No route to host" >&2; exit 255;; esac
+case "$host" in deadcr) printf 'ssh: connect to host deadcr port 22: Connection timed out\r\n' >&2; exit 255;; esac
 case "$cmd" in
     *PROBE=done*)
         echo "HOSTNAME=$host"; echo "ZFS=yes"; echo "GIT=yes"; echo "POOL=hdd,39.5G,38.3G"
@@ -12207,6 +12219,14 @@ else
     bad "preparesource: check-source dead" "$got" "$(cat "$PS/err")"
 fi
 rm -f "$PS/ssh.argv" "$PS/scp.argv"
+# The REAL OpenSSH ends its diagnostics with CR LF. A raw CR inside a JSON
+# string is invalid JSON; the wizard then could not read the reason at all.
+got=$(ps_run check-source deadcr --json | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["ssh"]["ok"], repr(d["ssh"]["error"]))' 2>&1)
+if [ "$got" = "False 'ssh: connect to host deadcr port 22: Connection timed out'" ]; then
+    ok "preparesource: check-source stays VALID JSON when ssh's reason ends with CR LF, as the real client's does"
+else
+    bad "preparesource: check-source with a CR in the reason is not JSON" "$got"
+fi
 if ps_run prepare-source fresh >"$PS/out" && grep -q 'PLAN (prepare-source fresh)' "$PS/out" && grep -q 'plan only. Re-run with --yes' "$PS/out" && ! grep -q 'git clone' "$PS/ssh.argv"; then
     ok "preparesource: prepare-source without --yes prints the plan and clones nothing"
 else

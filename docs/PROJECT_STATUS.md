@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 10c6bc599c1922a9 -->
+<!-- status-covers-digest: fe124ba3ccf90609 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,88 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kreator relacji na WHIPTAILU, kroki 1–4 z 10 (2026-09-18).** Decyzja
+  właściciela z 2026-09-16: formularze rysowane ręcznie w curses są
+  „siermiężne i nieużyteczne"; okna mają być klockami („stare Turbo Vision").
+  GUI w przeglądarce odpada na hostach PVE (port 8006 Proxmoxa). Tabele F2–F6
+  zostają w curses.
+  - **Czasownik `zfs-backup.sh new-relation`** → `tui/new-relation.sh`, bash +
+    whiptail + python3 do JSON-a. Kreator NIC nie wykonuje: składa jedną komendę
+    `--source=…`; jedyny wyjątek to `prepare-source`, o który pyta oknem tak/nie.
+  - **Krok 1** radiolista backup/synchro. **Krok 2** pole adresu `host[:port]`;
+    host, z którym relacja już jest (rekord nie-`removed` w `status --json`),
+    dostaje odmowę z nazwami relacji — relacja to para hostów, dokładanie
+    datasetów to modyfikacja, której nie ma. **Krok 3** `check-source`: trzy
+    fakty (SSH, ZFS z pulami, pakiet z rewizją); brak SSH → okno z dwiema
+    komendami (`ssh-keyscan`, `ssh-copy-id`); brak pakietu → „Zainstaluj" =
+    `prepare-source --yes`, potem druga sonda. **Krok 4 = KOSZYK MIEJSC** (trzecia wersja tego samego dnia,
+    obie poprzednie odrzucone przez właściciela po pokazie: lista kratek na
+    całym drzewie była *„myląca"* -- puste kratki przy dzieciach, które i tak
+    jadą z rodzicem; pytanie „co kopiować?" tylko dla datasetów z dziećmi było
+    *„też źle"* -- „czysty Proxmox, wskazuję rpool/data, żeby kopiował maszyny,
+    których tam jeszcze nie ma"). **Zmierzone na pve10 ← pve11, linią crona
+    odpaloną dosłownie:** dataset założony pod źródłem PO ustawieniu relacji
+    kopiuje się sam przy następnym biegu, w -R i w -r; prawa konta dziedziczą
+    się w dół. Stąd model: pozycja koszyka to MIEJSCE -- ono i wszystko, co pod
+    nim jest i co POWSTANIE. Nie ma „liści" i „gałęzi" (to opis stanu z
+    dzisiaj), „sam rodzic bez dzieci" nie jest kształtem relacji. Lista miejsc
+    (menu) → od razu koszyk, bez pytań; koszyk mówi słowami („dziś 3 pod nim;
+    BEZ: mail", „dziś nic pod nim; nowe skopiują się same") i ma Dodaj miejsce /
+    Wyjątki / Usuń / Dalej. Wyjątki są akcją koszyka, tylko gdy pod miejscem
+    coś już leży (przyszłego nie da się wskazać), i pamiętają stan. Czego
+    koszyk już obejmuje, tego lista nie pokazuje; miejsce dodane po własnym
+    dziecku pyta „Zastąp". **-R/-r wypadło z kroku 4** (to „jak", nie „co"):
+    domyślnie -R, atomowo trafi do ustawień zaawansowanych.
+  - **Wzorce `--exclude-child` z kreatora: `^nazwa$` (+ `^nazwa/`, gdy pomijany
+    ma własne dzieci), bez metaznaków powłoki.** Prześledzone w kodzie: wzorzec
+    idzie rekord → pole `flags` configu → linia crona, wszędzie wklejany BEZ
+    cudzysłowów, więc `(`/`|` rozbiłyby komendę co noc. `^…$` przechodzi przez
+    `sh` bez zmian i nie łapie `…disk-01` (zmierzone na pve10). Surowa nazwa
+    bez kotwic (tak robi stary kreator w curses) łapie też nazwy dłuższe --
+    **wada starego kreatora, nienaprawiona, zniknie razem z nim.** Czy wzorzec
+    dojeżdża cało do silnika po `--install`, NIE zmierzone (plan `add-client`
+    wzorców nie pokazuje) -- do zmierzenia przy kroku 10.
+  - **Zasady okien:** rozmiar z `tput` przy każdym oknie, szerokość ≤ 100,
+    każdy tekst mieści się w 80 kolumnach; `NEWT_COLORS` z widocznym bieżącym
+    wierszem; Esc/„Wstecz" = krok wstecz, w kroku 1 wyjście; polskie znaki
+    (wymuszane `C.UTF-8`, gdy locale nie jest UTF-8). Wartości ze zdalnego
+    hosta czytane `read -r`, nigdy wykonywane.
+  - **Dowody:** suita `tui` 178/0 — 15 asercji kreatora na atrapie whiptaila o
+    tym samym kontrakcie sterowania (odpowiedź na stderr, rc 0/1/255,
+    `--infobox` nie czeka), w tym droga operatora przez czasownik; kontrole
+    negatywne (wyłączone `covered`; wyjątki bez pamięci stanu) → po 1 FAIL. **Wygląd** dowiedziony
+    osobno: jazda po pty z PRAWDZIWYM whiptailem na pve10 → pve9b w 80x25,
+    z mini-emulatorem ekranu (CSI/ACS), który oddaje to, co widzi operator —
+    wszystkie okna kroków 1–4 mieszczą się, ramki całe. Atrapa o wyglądzie nie
+    mówi nic; jazda nie jest w CI (wymaga hosta z whiptailem i peera).
+  - **Wada znaleziona jazdą na żywo, nie suitą:** `check-source` na
+    nieosiągalnym hoście wypisywał NIEPOPRAWNY JSON — OpenSSH kończy swoją
+    diagnostykę CR LF, a `json_escape` przepuszczał surowy CR do łańcucha;
+    kreator pokazywał „check-source nie zwrócił JSON-a" zamiast powodu. Atrapa
+    ssh w suicie nie miała CR (fikstura zamiast prawdziwego wyjścia).
+    Naprawione w `source_probe` (powód ssh spłaszczany: bez CR, tabulatory na
+    spacje). `json_escape` NIE ruszony: ma trzy kopie-bliźniaki przypięte bajt
+    w bajt, dwie w zamrożonych silnikach -- zmiana wymaga zgody właściciela i
+    wpisu w ENGINE-FREEZE (pierwsza wersja poprawki to zrobiła; `twins` i
+    bramka zamrożenia ją zatrzymały, cofnięta). **Luka zostaje:** `json_escape`
+    nadal przepuszcza CR/LF/TAB, jeśli trafią do innego pola;
+    dyskryminator w `preparesource` (atrapa z CR LF): 9/0.
+    Uwaga: Git Bash zjada CR w `$(…)`, więc kontrola negatywna NIE pada na
+    Windows — pada na Linuksie (zmierzone na pve10 na kodzie z main:
+    `JSONDecodeError: Invalid control character`).
+  - **Nie zrobione:** kroki 5–10 (dokąd, szablon, nazwa, konto, maski migawek,
+    plan i wykonanie) — po pokazie właścicielowi. `Ins` na F3 nadal otwiera
+    stary kreator w curses; przełączenie razem z krokiem 10. Ścieżki „brak
+    pakietu" i „SSH nie wpuszcza" przeszły tylko na atrapie, nie na żywo.
+- **REV-143 (P2): baner SSH stawał się datasetem w `list-datasets` (2026-09-18).**
+  Recenzent: `cmd_list_datasets` łapał `zfs list` z `2>&1` i parsował każdą
+  linię jako wiersz TSV, więc baner logowania albo ostrzeżenie o kluczu hosta
+  przy rc=0 lądowało w JSON-ie jako dataset o nazwie „Authorized access only",
+  a picker w kreatorze domyślnie stał na pierwszej pozycji. Teraz stdout to
+  dane, stderr idzie do pliku tymczasowego czytanego tylko przy błędzie (gałąź
+  lokalna i zdalna). Dyskryminator z recenzji w `listdatasets` (dokładnie 2
+  datasety, po nazwie): 6/0; na kodzie z main 5/1. `source_probe` nietknięty --
+  czyta tylko własne linie `KLUCZ=` i wymaga `PROBE=done`.
 - **REV-142 (P1): eksport pisał `--passive` dla `PASSIVE=0` (2026-09-11).**
   Recenzent: zwykła relacja po `export-relation` → `import-relation --yes`
   stawała się pasywna (adoptuje cudze migawki zamiast stemplować własne), bo
