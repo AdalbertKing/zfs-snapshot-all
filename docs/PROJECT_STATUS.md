@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 10c6bc599c1922a9 -->
+<!-- status-covers-digest: 30b50c4fd6bd35cb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,15 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **REV-143 (P2): baner SSH stawał się datasetem w `list-datasets` (2026-09-18).**
+  Recenzent: `cmd_list_datasets` łapał `zfs list` z `2>&1` i parsował każdą
+  linię jako wiersz TSV, więc baner logowania albo ostrzeżenie o kluczu hosta
+  przy rc=0 lądowało w JSON-ie jako dataset o nazwie „Authorized access only",
+  a picker w kreatorze domyślnie stał na pierwszej pozycji. Teraz stdout to
+  dane, stderr idzie do pliku tymczasowego czytanego tylko przy błędzie (gałąź
+  lokalna i zdalna). Dyskryminator z recenzji w `listdatasets` (dokładnie 2
+  datasety, po nazwie): 6/0; na kodzie z main 5/1. `source_probe` nietknięty --
+  czyta tylko własne linie `KLUCZ=` i wymaga `PROBE=done`.
 - **REV-142 (P1): eksport pisał `--passive` dla `PASSIVE=0` (2026-09-11).**
   Recenzent: zwykła relacja po `export-relation` → `import-relation --yes`
   stawała się pasywna (adoptuje cudze migawki zamiast stemplować własne), bo
