@@ -2133,8 +2133,13 @@ class UI(object):
     """Caly stan interfejsu i przejscia po klawiszach. Bez curses, zeby dalo
     sie to przetestowac sekwencja klawiszy (`--keys`)."""
 
-    def __init__(self, repo, files, ch, now=None, exec_log=None):
+    def __init__(self, repo, files, ch, now=None, exec_log=None, wizard="whiptail"):
         self.repo, self.files, self.ch = repo, files, ch
+        # Ins na F3: "whiptail" = czasownik new-relation (okna-klocki, decyzja wlasciciela
+        # 2026-09-16), terminal oddany kreatorowi i powrot TUTAJ po jego zakonczeniu;
+        # "curses" = stary kreator rysowany recznie, zostaje tylko dla swojej suity.
+        self.wizard = wizard
+        self.pending_nowait = False
         self.now_fixed = now
         self.exec_log = exec_log   # testy: zamiast uruchamiac, zapisz komende tutaj
         self.screen = "zadania"
@@ -2204,6 +2209,18 @@ class UI(object):
             self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
             return "stay"
         self.pending_shell = line
+        return "shell"
+
+    def run_wizard(self):
+        """Ins: oddaj terminal kreatorowi whiptail i wroc na F3 z odswiezonymi danymi.
+        Kreator sam konczy sie oknem z wynikiem, wiec petla nie dopytuje o Enter."""
+        line = "%s new-relation" % shlex.quote(self.zb())
+        if self.exec_log:
+            with io.open(self.exec_log, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            return "stay"
+        self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
     def refresh(self, only=None):
@@ -2371,7 +2388,10 @@ class UI(object):
             default = os.path.join(home_dir(), "")
             self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = podgląd, Esc = anuluj):", default, self.import_preview)
         elif k == "ins":
-            self.wizard_open()
+            if self.wizard == "curses":
+                self.wizard_open()
+            else:
+                return self.run_wizard()
 
     # ------------------------------------------------------------------
     # KREATOR NOWEJ RELACJI (etap E). Odwzorowuje forme jednokomendowa
@@ -3404,7 +3424,9 @@ class UI(object):
                             self.cursor["zadania"], self.screen, self.focus = i, "zadania", "list"
                             break
             elif k in ("F4", "del", "F7", "F8", "ins"):
-                self.action(k)
+                res = self.action(k)
+                if res:
+                    return res
             else:
                 for key, fk, _label in SCREENS:
                     if k == fk and k != "F4":
@@ -3435,8 +3457,7 @@ class UI(object):
             self.refresh()
             self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
         elif k in ("F4", "del", "F7", "F8", "ins") and self.screen == "relacje":
-            self.action(k)
-            return "stay"
+            return self.action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
@@ -3759,20 +3780,23 @@ def curses_loop(ui):
                 return
             if res == "shell" and ui.pending_shell:
                 line, ui.pending_shell = ui.pending_shell, None
+                nowait, ui.pending_nowait = ui.pending_nowait, False
                 curses.endwin()
-                sys.stdout.write("$ %s\n" % line)
-                sys.stdout.flush()
+                if not nowait:
+                    sys.stdout.write("$ %s\n" % line)
+                    sys.stdout.flush()
                 try:
                     rc = subprocess.call(line, shell=True, cwd=ui.repo)
                 except (OSError, KeyboardInterrupt) as e:
                     rc = "?"
                     sys.stdout.write("%s\n" % e)
-                sys.stdout.write("[rc=%s]  Enter wraca do okien\n" % rc)
-                sys.stdout.flush()
-                try:
-                    sys.stdin.readline()
-                except (IOError, KeyboardInterrupt):
-                    pass
+                if not nowait:
+                    sys.stdout.write("[rc=%s]  Enter wraca do okien\n" % rc)
+                    sys.stdout.flush()
+                    try:
+                        sys.stdin.readline()
+                    except (IOError, KeyboardInterrupt):
+                        pass
                 stdscr.clear()
                 stdscr.refresh()
                 ui.refresh()
@@ -3799,6 +3823,8 @@ def main(argv):
     ap.add_argument("--screen", default="zadania", choices=[s[0] for s in SCREENS], help="ktory ekran (z --render-once)")
     ap.add_argument("--keys", default="", help="sekwencja klawiszy po przecinku, np. down,down,enter,pgdn; 'text:abc' wpisuje tekst, 'bs' kasuje (z --render-once)")
     ap.add_argument("--exec-log", help="TESTY: zamiast uruchamiac czasowniki, dopisuj komendy do tego pliku")
+    ap.add_argument("--wizard", choices=("whiptail", "curses"), default="whiptail",
+                    help="Ins na F3: whiptail = zfs-backup.sh new-relation (domyslnie); curses = stary kreator (tylko jego suita)")
     ap.add_argument("--width", type=int, default=80)
     ap.add_argument("--height", type=int, default=24)
     ap.add_argument("--now", type=int, help="epoch 'teraz' (testy: deterministyczny nastepny bieg)")
@@ -3822,7 +3848,7 @@ def main(argv):
              "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,
              "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source}
     ch = Chars(want_ascii(a))
-    ui = UI(repo, files, ch, a.now, a.exec_log)
+    ui = UI(repo, files, ch, a.now, a.exec_log, a.wizard)
     if a.render_once:
         ui.screen = a.screen
         for k in [x for x in a.keys.split(",") if x]:

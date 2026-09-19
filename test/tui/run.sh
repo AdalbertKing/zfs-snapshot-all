@@ -451,18 +451,24 @@ if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; the
 else
     bad "akcje: removed odmawia" "$(cat "$XL")" "$A"
 fi
-AH="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4 2>&1)"
-"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4,t >/dev/null 2>&1
+AH="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --wizard curses --exec-log "$XL" --screen relacje --keys F4 2>&1)"
+"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --wizard curses --exec-log "$XL" --screen relacje --keys F4,t >/dev/null 2>&1
 if [ ! -s "$XL" ] && has "$AH" 'to nie jest relacja (zadanie bez rekordu)'; then
     ok "akcje: na zadaniu BEZ rekordu (ksztalt produkcji) akcja odmawia -- nie ma czego pauzowac czasownikiem"
 else
     bad "akcje: bez rekordu odmawia" "$(cat "$XL")" "$AH"
 fi
 A="$(act down,ins)"
-if has "$A" '╔═ Nowa relacja -- krok 1/8: Typ relacji' && [ ! -s "$XL" ]; then
-    ok "akcje: Ins otwiera kreator nowej relacji, nic nie wykonujac"
+if grep -Eq "zfs-backup.sh'? new-relation\$" "$XL" && ! has "$A" 'krok 1/8'; then
+    ok "akcje: Ins na F3 oddaje terminal czasownikowi new-relation (kreator whiptail), NIE otwiera starego kreatora w curses"
 else
-    bad "akcje: Ins" "$A"
+    bad "akcje: Ins -> new-relation" "$(cat "$XL")" "$A"
+fi
+A="$(act down,ins --wizard curses)"
+if has "$A" '╔═ Nowa relacja -- krok 1/8: Typ relacji' && [ ! -s "$XL" ]; then
+    ok "akcje: --wizard curses zostawia stary kreator dla jego suity (do usuniecia razem z nia)"
+else
+    bad "akcje: Ins --wizard curses" "$A"
 fi
 # ============================================================================
 # KREATOR NOWEJ RELACJI (Ins) -- NA LISTACH, wg makiety wlasciciela (2026-09-14)
@@ -476,11 +482,11 @@ fi
 # katalog, bo w labie kazdy host ma juz pakiet; list-datasets pve9b; szablony).
 wiz() {   # <keys> [extra] -> ekran; dziennik w $XL; host z pakietem
     : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-pve9b.json" --check-source "$P10/check-source-pkg.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-pve9b.json" --check-source "$P10/check-source-pkg.json" --wizard curses --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
 wizn() {  # jak wiz, ale host BEZ pakietu
     : > "$XL"
-    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-pve9b.json" --check-source "$P10/check-source.json" --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --datasets-local "$P10/list-datasets.json" --datasets-remote "$P10/list-datasets-pve9b.json" --check-source "$P10/check-source.json" --wizard curses --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
 W="$(wiz ins --width 110)"
 if has "$W" '╔═ Nowa relacja -- krok 1/8: Typ relacji ═' && has "$W" '> backup    pobranie na ten host: kopie pod <cel>/<peer>/…, retencja tutaj (add-client)' \
@@ -542,7 +548,7 @@ if has "$W" 'pakiet zfs-snapshot-all .... OK   /root/scripts/zfs-snapshot-all (r
 else
     bad "kreator: diagnoza z pakietem" "$W"
 fi
-WD="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --exec-log "$XL" --screen relacje --keys "$H" --width 110 2>&1)"
+WD="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --wizard curses --exec-log "$XL" --screen relacje --keys "$H" --width 110 2>&1)"
 if has "$WD" 'check-source nie odpowiedział: tryb offline' && has "$WD" '> Wróć (check-source nie odpowiedział'; then
     ok "kreator: gdy check-source nie odpowiada (tu: offline), diagnoza mowi to zdaniem i zostaje tylko 'Wroc'"
 else
@@ -807,7 +813,7 @@ if has "$W" 'anulowano -- nic nie wykonano' && ! has "$W" 'Nowa relacja' && [ ! 
 else
     bad "kreator: Esc" "$W"
 fi
-WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --datasets-remote "$P10/list-datasets-pve9b.json" --datasets-local "$P10/list-datasets.json" --check-source "$P10/check-source-pkg.json" --exec-log "$XL" --screen relacje --keys "$T,down,enter" --width 110 2>&1)"
+WE="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$FIX/nie-ma.json" --datasets-remote "$P10/list-datasets-pve9b.json" --datasets-local "$P10/list-datasets.json" --check-source "$P10/check-source-pkg.json" --wizard curses --exec-log "$XL" --screen relacje --keys "$T,down,enter" --width 110 2>&1)"
 if has "$WE" 'list-profiles: błąd źródła' && has "$WE" 'wpisz nazwę szablonu ręcznie' && has "$WE" 'krok 4/8'; then
     ok "kreator: zepsute list-profiles nie blokuje kreatora -- krok 3 ma linie 'wpisz nazwe recznie'"
 else
@@ -1243,7 +1249,9 @@ printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
     status)         cat "$NR_FIX/status.json" ;;
     check-source)   if [ -e "$NR_DIR/installed" ]; then cat "$NR_FIX/check-source-pkg.json"; else cat "$NR_FIX/${NR_CHECK:-check-source-pkg.json}"; fi ;;
-    list-datasets)  cat "$NR_FIX/list-datasets-pve9b.json" ;;
+    list-datasets)  if [ "$2" = "--json" ]; then cat "$NR_FIX/list-datasets.json"; else cat "$NR_FIX/list-datasets-pve9b.json"; fi ;;
+    list-profiles)  cat "$NR_FIX/list-profiles.json" ;;
+    --source=*)     case " $* " in *" --install "*) echo ">>> atrapa: zainstalowano"; exit "${NR_INSTALL_RC:-0}" ;; *) echo "RUX plan (atrapa)"; exit "${NR_PLAN_RC:-0}" ;; esac ;;
     prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -1252,9 +1260,28 @@ chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
     rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed"
     printf '%s' "$1" > "$NR/answers"; shift
-    ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err"
+    ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err" </dev/null
+    local rc=$?
+    grep -- ' --install --yes$' "$NR/zb.log" 2>/dev/null | sed 's/^/CMD: /; s/$/ /'
+    return "$rc"
 }
 T=$'\t'
+# Kroki 5-10 z domyslnymi odpowiedziami: cel, szablon, nazwa, konto, 'bez zmian', plan, WYKONAJ
+NRT="0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}go
+0${T}
+0${T}
+"
+NRTS="0${T}default
+0${T}pve9b
+0${T}root
+0${T}go
+0${T}
+0${T}
+"
 # KOSZYK MIEJSC (2026-09-18, trzecia wersja tego dnia). Wlasciciel: jedna lista kratek
 # byla mylaca; pytanie "co kopiowac?" tylko dla datasetow z dziecmi tez -- "czysty
 # Proxmox, wskazuje rpool/data, zeby kopiowal maszyny, ktorych tam jeszcze nie ma".
@@ -1270,9 +1297,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}add
 0${T}hdd/test-kreator
 0${T}next
-0${T}
-"); NRRC=$?
-if [ "$NRRC" -eq 0 ] && has "$NROUT" "--source=192.168.28.98:hdd/data,hdd/test-kreator '--exclude-child=^hdd/data/mail\$' " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
+${NRT}"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=192.168.28.98:hdd/data,hdd/test-kreator --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/data/mail\$ --exclude-family=__replicate_,vzdump,__migration__ --grant-remotely --install --yes " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
     ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
     bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
@@ -1292,8 +1318,8 @@ else
     bad "new-relation: lista miejsc" "$NRMENU2" "$(grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1)"
 fi
 NRB="$(grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1)"
-if has "$NRB" 'co JEST i co POWSTANIE pod' && has "$NRB" 'dziś 3 pod nim; BEZ: mail' && has "$NRB" 'dziś nic pod nim; nowe skopiują się same'; then
-    ok "new-relation: okno koszyka mowi SLOWAMI -- 'dzis 3 pod nim; BEZ: mail', a o pustym miejscu 'dzis nic pod nim; nowe skopiuja sie same' (przypadek rpool/data)"
+if has "$NRB" 'POMIJANE: mail' && has "$NRB" 'dziś pod nim: docs, photos' && has "$NRB" 'dziś nic pod nim' && [ "$(printf '%s' "$NRB" | grep -o 'wszystko, co pod nim POWSTANIE' | wc -l)" -eq 2 ]    && has "$NRB" 'Sposób: każdy dataset osobno (-R) -- zmień'; then
+    ok "new-relation: okno koszyka POKAZUJE, co dzis lezy pod miejscem, pomijane ZAWSZE w calosci ('POMIJANE: mail', takze na 24 wierszach), o pustym mowi 'dzis nic pod nim', przy kazdym '+ wszystko, co pod nim POWSTANIE'; -R/-r jako akcja koszyka"
 else
     bad "new-relation: okno koszyka" "$NRB"
 fi
@@ -1309,9 +1335,8 @@ NROUT=$(nr_run "0${T}sync
 0${T}
 0${T}hdd/test-kreator
 0${T}next
-0${T}
-")
-if has "$NROUT" "--source=192.168.28.98:2222:hdd/test-kreator --mode=sync" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
+${NRTS}")
+if has "$NROUT" "CMD: --source=192.168.28.98:2222:hdd/test-kreator --mode=sync --profile=default --name=pve9b --exclude-family=" && ! has "$NROUT" "--target" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
    && ! grep -F -- 'Co kopiować z' "$NR/wt.log" | grep -qF ' ~ exc ~ '; then
     ok "new-relation: miejsce, pod ktorym dzis nic nie ma -> koszyk BEZ akcji 'Wyjatki'; synchro = --mode=sync, port w adresie"
 else
@@ -1327,9 +1352,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}exc
 1${T}
 0${T}next
-0${T}
-")
-if has "$NROUT" "'--exclude-child=^hdd/ct/subvol-302-disk-0\$'" && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-302-disk-0 ~ [^~]* ~ OFF' \
+${NRT}")
+if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-302-disk-0 ~ [^~]* ~ OFF' \
    && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-301-disk-0 ~ [^~]* ~ ON'; then
     ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany = odznaczony); Wstecz niczego nie zmienia"
 else
@@ -1344,9 +1368,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/data
 0${T}
 0${T}next
-0${T}
-")
-if has "$NROUT" "--source=192.168.28.98:hdd/data " && ! has "$NROUT" "hdd/data/docs" && grep -F -- '--yesno' "$NR/wt.log" | grep -F 'obejmuje to, co już wybrane' | grep -qF 'hdd/data/docs'; then
+${NRT}")
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd/data --target" && ! has "$NROUT" "hdd/data/docs" && grep -F -- '--yesno' "$NR/wt.log" | grep -F 'obejmuje to, co już wybrane' | grep -qF 'hdd/data/docs'; then
     ok "new-relation: miejsce dodane po wlasnym dziecku -> pytanie 'Zastap' z NAZWA dziecka; w komendzie zostaje samo miejsce"
 else
     bad "new-relation: zastapienie dziecka miejscem" "$NROUT" "$(grep -F -- '--yesno' "$NR/wt.log")"
@@ -1359,9 +1382,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}exc
 0${T}hdd/ct/subvol-301-disk-0|hdd/ct/subvol-302-disk-0|hdd/data|hdd/data/docs|hdd/data/mail|hdd/data/photos|hdd/db|hdd/db/postgres|hdd/home|hdd/home/adam|hdd/home/ewa|hdd/test-kreator|hdd/vm-disks|hdd/vm-disks/vm-201-disk-0|hdd/vm-disks/vm-202-disk-0
 0${T}next
-0${T}
-")
-if has "$NROUT" "--source=192.168.28.98:hdd '--exclude-child=^hdd/ct\$' '--exclude-child=^hdd/ct/' " && [ "$(printf '%s' "$NROUT" | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
+${NRT}")
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
     ok "new-relation: odznaczony dataset z dziecmi = ^nazwa\$ i ^nazwa/ (jego dzieci nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
 else
     bad "new-relation: pominiety z dziecmi" "$NROUT"
@@ -1402,9 +1424,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/test-kreator
 0${T}next
-0${T}
-" NR_CHECK=check-source.json)
-if has "$NROUT" "--source=192.168.28.98:hdd/test-kreator" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
+${NRT}" NR_CHECK=check-source.json)
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
    && [ "$(grep -c '^check-source' "$NR/zb.log")" -eq 2 ] && grep -F -- '--yesno' "$NR/wt.log" | grep -qF 'Brak pakietu na źródle' && grep -qF 'Źródło gotowe' "$NR/wt.log"; then
     ok "new-relation: brak pakietu -> pytanie wprost -> prepare-source --yes -> DRUGA sonda pokazuje 'Zrodlo gotowe' -> datasety"
 else

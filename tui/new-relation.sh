@@ -14,7 +14,8 @@
 #   - na liście tylko wybory, które mają sens; jeden domyślnie zaznaczony;
 #   - Esc i przycisk "Wstecz" = krok wstecz; w kroku 1 = wyjście.
 #
-# Stan: kroki 1-4 (typ, host, diagnoza, datasety). Kroki 5-10 po pokazie.
+# Stan: 10 kroków -- typ, host, diagnoza, co kopiować (koszyk miejsc), dokąd, szablon,
+# nazwa, konto, ustawienia dodatkowe, podsumowanie -> plan -> wykonanie.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u
@@ -61,6 +62,22 @@ info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
     "$WT" --backtitle "Nowa relacja -- kolektor $(hostname)" --title "$1" --infobox "$2" 7 "$W"
 }
 title() { printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"; }
+lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
+    local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
+}
+yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
+    # W oknie z --scrolltext fokus startuje na tekście i Enter nic nie robi, dopóki nie
+    # przejdziesz Tabem na przyciski (zmierzone jazdą po pty). Więc: bez przewijania,
+    # kiedy tylko się da, a kiedy nie -- tytuł mówi o Tabie.
+    local f="$1" t="$2" y="$3" n="$4" extra="${5:-}" lines
+    geom
+    lines=$(fold -s -w $((W - 4)) "$f" | grep -c '')      # whiptail zawija; licz wiersze PO zawinięciu
+    if [ "$lines" -le $((H - 6)) ]; then
+        wt --title "$t" --yes-button "$y" --no-button "$n" $extra --yesno "$(cat "$f")" "$(fit $((lines + 1)))" "$W"
+    else
+        wt --title "$t  [strzałki = przewijaj, Tab = przyciski]" --yes-button "$y" --no-button "$n" $extra --scrolltext --yesno "$(cat "$f")" "$H" "$W"
+    fi
+}
 hostport() { [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 
 # --- krok 1: typ ------------------------------------------------------------
@@ -157,7 +174,7 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
         fi
         facts="${facts}  [+] ZFS     pule: ${C_POOLS:-brak}\n"
         if [ "$C_PKG" -eq 1 ]; then
-            wt --title "$(title 3 'Źródło gotowe')" --ok-button "Dalej" --msgbox "${facts}  [+] Pakiet  $C_DIR (rewizja ${C_REV:-?})\n\nWszystko jest. Dalej: lista datasetów." 13 "$W"
+            wt --title "$(title 3 'Źródło gotowe')" --yes-button "Dalej" --no-button "Wstecz" --yesno "${facts}  [+] Pakiet  $C_DIR (rewizja ${C_REV:-?})\n\nWszystko jest. Dalej: lista datasetów." 13 "$W" || return 1
             return 0
         fi
         wt --title "$(title 3 'Brak pakietu na źródle')" --yes-button "Zainstaluj" --no-button "Wstecz" \
@@ -310,20 +327,69 @@ remove_flow() {
        "${items[@]}" || return 0
     for n in $(printf '%s\n' "$WT_OUT" | sort -rn); do basket_del "$n"; done
 }
-basket_window() {   # -> ACT = add | exc | del | next ; 1 = wstecz
-    local txt="" i shown=0 max menu=()
+is_excluded() { # <indeks> <nazwa> -> 0, gdy nazwa jest pomijana (sama albo przez przodka)
+    local x
+    while IFS= read -r x; do [ -n "$x" ] && case "$2" in "$x"|"$x"/*) return 0 ;; esac; done <<<"${B_EXCL[$1]}"
+    return 1
+}
+entry_lines() { # <indeks> <ile nazw kopiowanych pokazać> -> 2-3 wiersze o pozycji koszyka
+    # Zwarty zapis: na terminalu 24-wierszowym lista "po jednym w wierszu" chowała pomijane
+    # pod "... i jeszcze 2". POMIJANE są więc ZAWSZE wypisane w całości; skraca się tylko
+    # listę kopiowanych.
+    local r="${B_ROOT[$1]}" cap="$2" i n kept="" nk=0 more=0 excl=""
+    for i in "${!T_NAME[@]}"; do
+        n="${T_NAME[$i]}"; case "$n" in "$r"/*) ;; *) continue ;; esac
+        if is_excluded "$1" "$n"; then
+            # potomek pominiętego przodka nie wymaga własnej wzmianki
+            [ "${n%/*}" != "$r" ] && is_excluded "$1" "${n%/*}" && continue
+            excl="$excl${excl:+, }${n#"$r"/}"
+        elif [ "$nk" -lt "$cap" ]; then kept="$kept${kept:+, }${n#"$r"/}"; nk=$((nk + 1))
+        else more=$((more + 1)); fi
+    done
+    printf '  %s   (+ wszystko, co pod nim POWSTANIE)\n' "$r"
+    if [ -z "$kept" ] && [ -z "$excl" ]; then printf '      dziś nic pod nim\n'
+    else
+        [ -n "$kept" ] && printf '      dziś pod nim: %s%s\n' "$kept" "$( [ "$more" -gt 0 ] && echo " … i $more innych")"
+        [ -z "$kept" ] && printf '      dziś pod nim: nic, co byłoby kopiowane\n'
+    fi
+    [ -n "$excl" ] && printf '      POMIJANE: %s\n' "$excl"
+    return 0
+}
+mode_words() { [ "$RECURSION" = atomic ] && echo "cała gałąź atomowo (-r)" || echo "każdy dataset osobno (-R)"; }
+any_excl() { local i; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
+mode_flow() {   # -R/-r: JEDNO na relację; atomowo wyklucza wyjątki, więc pyta, zanim je zdejmie
     geom
-    max=$((H - 14)); [ "$max" -lt 3 ] && max=3
+    local f=OFF a=OFF i; [ "$RECURSION" = atomic ] && a=ON || f=ON
+    wt --title "$(title 4 'Sposób kopiowania')" --cancel-button "Wstecz" --notags \
+       --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset ma własne migawki; awaria jednego nie zatrzymuje\nreszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili, ale\nnie da się wtedy nic pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
+       flat   "Każdy dataset osobno (-R)  -- zalecane" "$f" \
+       atomic "Cała gałąź atomowo (-r)" "$a" || return 0
+    [ -n "$WT_OUT" ] || return 0
+    if [ "$WT_OUT" = atomic ] && any_excl; then
+        wt --title "Atomowo nie pozwala pomijać" --yes-button "Zdejmij wyjątki" --no-button "Wstecz" \
+           --yesno "W koszyku są wyjątki, a przy kopiowaniu atomowym nie da się nic pominąć.\n\nZdjąć wszystkie wyjątki i przejść na atomowo?" 11 "$W" || return 0
+        for i in "${!B_ROOT[@]}"; do B_EXCL[$i]=""; done
+    fi
+    RECURSION="$WT_OUT"
+}
+basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
+    local txt="" i lines=0 avail cap menu=() block n
+    geom
+    avail=$((H - 13)); [ "$avail" -lt 4 ] && avail=4
+    cap=6; [ "${#B_ROOT[@]}" -gt 2 ] && cap=3
     for i in "${!B_ROOT[@]}"; do
-        if [ "$shown" -ge "$max" ]; then txt="$txt  … i jeszcze $((${#B_ROOT[@]} - shown))\n"; break; fi
-        txt="$txt  ${B_ROOT[$i]}\n      $(describe "$i")\n"; shown=$((shown + 1))
+        block="$(entry_lines "$i" "$cap")"; n=$(printf '%s\n' "$block" | fold -s -w $((W - 4)) | grep -c '')
+        if [ $((lines + n)) -gt "$avail" ] && [ "$lines" -gt 0 ]; then
+            txt="$txt  … i jeszcze miejsc: $((${#B_ROOT[@]} - i))\n"; lines=$((lines + 1)); break
+        fi
+        txt="$txt${block//$'\n'/\\n}\n"; lines=$((lines + n))
     done
     with_kids
     menu=(add "Dodaj miejsce…")
     [ "${#WK[@]}" -gt 0 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
-    menu+=(del "Usuń pozycję…" next "Dalej")
+    menu+=(mode "Sposób: $(mode_words) -- zmień…" del "Usuń pozycję…" next "Dalej")
     wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \
-       --menu "Kopiowane -- wszystko, co JEST i co POWSTANIE pod:\n\n$txt" "$(fit $((shown * 2 + 9)))" "$W" "$((${#menu[@]} / 2))" \
+       --menu "Kopiowane będzie:\n\n$txt" "$(fit $((lines + 8)))" "$W" "$((${#menu[@]} / 2))" \
        "${menu[@]}" || return 1
     ACT="$WT_OUT"
 }
@@ -343,21 +409,211 @@ step_datasets() {
         basket_window || return 1
         case "$ACT" in
             add)  if pick_one; then add_flow "$PICK"; fi ;;
-            exc)  except_flow ;;
+            exc)  if [ "$RECURSION" = atomic ]; then
+                      geom
+                      wt --title "Przy atomowo nie da się pomijać" --msgbox "Sposób kopiowania to teraz: $(mode_words).\nJedna migawka całej gałęzi nie ma gdzie niczego odfiltrować.\n\nŻeby wskazać wyjątki, zmień najpierw Sposób na 'każdy dataset osobno'." 12 "$W"
+                  else except_flow; fi ;;
+            mode) mode_flow ;;
             del)  remove_flow ;;
-            next) return 0 ;;   # -R/-r to "jak", nie "co": domyślnie -R, atomowo w ustawieniach zaawansowanych
+            next) return 0 ;;
         esac
     done
 }
 
+# --- krok 5: dokąd (tylko backup) ---------------------------------------------
+# Lekcja ze starego kreatora: lista pokazywała cudze lądowiska i podgląd jeździł za
+# kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
+TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""
+EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
+status_tsv() {  # -> $TMPD/rel.tsv: nazwa <TAB> peer <TAB> target (relacje nie-removed)
+    "$ZB" status --json 2>/dev/null | "$PY" -c '
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(0)
+for r in d.get("relations", []):
+    if r.get("state") != "removed":
+        print("%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", "")))' | tr -d '\r' >"$TMPD/rel.tsv"
+}
+step_target() {
+    [ "$MODE" = sync ] && return 0
+    local items=() t n cnt first="" seen="" p
+    info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
+    status_tsv
+    while IFS=$'\t' read -r n p t; do
+        [ -n "$t" ] || continue
+        case " $seen " in *" $t "*) continue ;; esac
+        seen="$seen $t"; cnt=$(awk -F'\t' -v t="$t" '$3==t' "$TMPD/rel.tsv" | grep -c .)
+        items+=("$t" "$t   -- używają go już relacje na tym hoście: $cnt")
+        [ -n "$first" ] || first="$t"
+    done <"$TMPD/rel.tsv"
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        case " $seen " in *" $t "*) continue ;; esac
+        items+=("$t" "$t   -- istnieje na tym hoście, jeszcze nieużywany"); seen="$seen $t"
+        [ -n "$first" ] || first="$t"
+    done < <("$ZB" list-datasets --json 2>/dev/null | "$PY" -c '
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(0)
+for x in d.get("datasets", []):
+    n = x.get("name", "")
+    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' | tr -d '\r')
+    items+=(__other__ "Inna ścieżka…   (wpiszesz dataset na tym hoście)")
+    if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
+    while :; do
+        geom
+        wt --title "$(title 5 'Dokąd na tym hoście?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${first:-__other__}" \
+           --menu "Kopie wylądują pod:  <wybrane>/$HOST/<dataset źródła>\nnp.  ${first:-hdd/backups}/$HOST/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
+           "${items[@]}" || return 1
+        if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
+        wt --title "$(title 5 'Dokąd -- inna ścieżka')" --cancel-button "Wstecz" \
+           --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>/$HOST/<dataset źródła>" 11 "$W" "$TARGET" || continue
+        t="${WT_OUT// /}"
+        case "$t" in ''|/*|*/|*[!A-Za-z0-9._:/-]*) wt --title "Zła ścieżka" --msgbox "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu)." 9 "$W"; continue ;; esac
+        TARGET="$t"; return 0
+    done
+}
+in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
+
+# --- krok 6: szablon ----------------------------------------------------------
+load_profiles() {   # -> $TMPD/prof.tsv: nazwa <TAB> zdanie ; słowa z tui/zfs-tui.py (jedno źródło słów)
+    "$ZB" list-profiles --json >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
+    "$PY" - "$TMPD/prof.json" "$HERE/tui/zfs-tui.py" <<'PYEOF' | tr -d '\r' >"$TMPD/prof.tsv"
+import sys, json, importlib.util
+spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[2])
+tui = importlib.util.module_from_spec(spec); spec.loader.exec_module(tui)
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+def short_cadence(p):
+    # "co godzinę (:01), co dobę 01:11, co tydzień nd 02:21" -> "co godzinę, dobę, tydzień"
+    out = []
+    for t in p.get("tiers", []):
+        if t.get("send_schedule"):
+            w = tui.cron_words(t["send_schedule"]).split()
+            out.append(w[1] if len(w) > 1 and w[0] == "co" else " ".join(w[:2]))
+    return ("co " + ", ".join(out)) if out else "?"
+rows = []
+for p in d.get("profiles", []):
+    w = tui.profile_words(p)
+    mech = {"flat": "N najnowszych", "gfs": "GFS", "age": "wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
+    # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
+    # z najdrobniejszego szczebla; pełne zdanie z rytmem idzie do podsumowania (3. pole).
+    rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p)))
+rows.sort(key=lambda r: (r[0] != "default", r[0].lower()))     # default na górze
+for n, t, c in rows:
+    print("%s\t%s\t%s" % (n, t, c))
+PYEOF
+    [ -s "$TMPD/prof.tsv" ]
+}
+step_profile() {
+    local items=() n w c
+    geom
+    info "$(title 6 'Szablon')" "Czytam szablony retencji..."
+    if ! load_profiles; then
+        wt --title "$(title 6 'Szablon -- lista niedostępna')" --cancel-button "Wstecz" \
+           --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
+        PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; return 0
+    fi
+    while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
+    geom
+    wt --title "$(title 6 'Jak często i jak długo trzymać?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${PROFILE:-default}" \
+       --menu "Szablon = jak często robić migawki i ile ich trzymać (da się zmienić później).\n'default' wystarcza zwykle; pozostałe to warianty admina." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" \
+       "${items[@]}" || return 1
+    PROFILE="$WT_OUT"
+}
+
+# --- krok 7: nazwa ------------------------------------------------------------
+step_name() {
+    local n
+    [ -n "$RNAME" ] || RNAME="${HOSTNAME_R:-$HOST}"
+    while :; do
+        geom
+        wt --title "$(title 7 'Nazwa relacji')" --cancel-button "Wstecz" \
+           --inputbox "Pod tą nazwą relacja będzie widoczna na F3, w cronie i w mailach.\nLitery, cyfry, kropka, myślnik, podkreślenie." 11 "$W" "$RNAME" || return 1
+        n="${WT_OUT// /}"
+        case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- dozwolone: litery, cyfry, kropka, myślnik, podkreślenie." 8 "$W"; continue ;; esac
+        [ -s "$TMPD/rel.tsv" ] || status_tsv
+        if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rel.tsv"; then
+            wt --title "Nazwa zajęta" --msgbox "Relacja o nazwie '$n' już jest na tym hoście. Podaj inną." 8 "$W"; RNAME="$n"; continue
+        fi
+        RNAME="$n"; return 0
+    done
+}
+
+# --- krok 8: konto ------------------------------------------------------------
+step_account() {
+    local r=OFF z=OFF o=OFF a
+    case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
+    geom
+    wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --cancel-button "Wstecz" --notags \
+       --radiolist "Konto na TYM hoście, z którego cron będzie pobierał kopie.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
+       root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
+       zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
+       other     "inne konto…  (podasz nazwę)" "$o" || return 1
+    [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
+    [ "$ACCT" = other ] || return 0
+    while :; do
+        wt --title "$(title 8 'Nazwa konta')" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
+        a="${WT_OUT// /}"
+        case "$a" in ''|root|*[!a-z0-9_-]*) wt --title "Zła nazwa konta" --msgbox "Małe litery, cyfry, myślnik, podkreślenie; nie 'root'." 8 "$W"; continue ;; esac
+        ACCT_OTHER="$a"; return 0
+    done
+}
+account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT_OTHER" ;; *) echo "" ;; esac; }
+
+# --- krok 9: ustawienia dodatkowe ---------------------------------------------
+step_extra() {
+    local grant_w masks_w src_w man_w
+    while :; do
+        geom
+        [ "$GRANT" -eq 1 ] && grant_w="nadaj stąd, od razu" || grant_w="zatwierdzę sam na źródle"
+        masks_w="${EXFAM:-(żadne -- kopiuj wszystkie migawki)}"
+        src_w="${SRCPROF:-taka sama jak tutaj ($PROFILE)}"
+        [ "$MANUAL" -eq 1 ] && man_w="ręczne (paczka do przeniesienia)" || man_w="przez SSH, automatycznie"
+        wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item go \
+           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 9)" "$W" 5 \
+           go    "Bez zmian, dalej" \
+           grant "Prawa na źródle:        $grant_w" \
+           masks "Pomijane migawki:       $masks_w" \
+           src   "Retencja u źródła:      $src_w" \
+           man   "Parowanie:              $man_w" || return 1
+        case "$WT_OUT" in
+            go) return 0 ;;
+            grant)
+                wt --title "Prawa na źródle" --yes-button "Nadaj stąd" --no-button "Zatwierdzę sam" \
+                   --yesno "Źródło musi nadać kontu kolektora prawa zfs do wybranych miejsc.\n\n'Nadaj stąd' = kreator zrobi to przez SSH jako root (--grant-remotely).\n'Zatwierdzę sam' = instalacja ZATRZYMA SIĘ i poda komendę do wykonania\nna źródle (deploy.sh --commit-scope=...); potem ponawia się tę samą komendę." 14 "$W"
+                case $? in 0) GRANT=1 ;; 1) GRANT=0 ;; esac ;;      # Esc (255) = bez zmian
+            masks)
+                wt --title "Pomijane migawki" --cancel-button "Wstecz" \
+                   --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja).\nPuste = kopiuj wszystkie." 12 "$W" "$EXFAM" && EXFAM="${WT_OUT// /}" ;;
+            src)
+                if [ -s "$TMPD/prof.tsv" ]; then
+                    local items=(__same__ "taka sama jak tutaj ($PROFILE)") n w c
+                    while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
+                    wt --title "Retencja migawek U ŹRÓDŁA" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-__same__}" \
+                       --menu "Ile migawek zostawiać na źródle (osobno od tego, co trzymasz tutaj)." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
+                       "${items[@]}" && { [ "$WT_OUT" = __same__ ] && SRCPROF="" || SRCPROF="$WT_OUT"; }
+                fi ;;
+            man)
+                wt --title "Parowanie" --yes-button "Przez SSH" --no-button "Ręczne" \
+                   --yesno "Przez SSH = kreator sam dołącza źródło do relacji.\nRęczne = powstaje paczka, którą przenosisz na źródło i uruchamiasz tam\n(dla źródeł, do których ten host nie ma wstępu po SSH)." 11 "$W"
+                case $? in 0) MANUAL=0 ;; 1) MANUAL=1 ;; esac ;;
+        esac
+    done
+}
+
+# --- komenda ----------------------------------------------------------------
 # Wzorce dla -X BEZ metaznaków powłoki. Rekord -> pole `flags` w configu -> linia
 # crona, wszędzie wklejane BEZ cudzysłowów: `(`, `|` rozbiłyby komendę co noc.
-# `^nazwa$` i `^nazwa/` przechodzą przez sh bez zmian (zmierzone na pve10) i nie
-# łapią `nazwa1`. Kropka w nazwie zostaje kropką wzorca: nadzbiór, w praktyce ten sam.
-build_argv() {   # -> ARGV[] ; na razie z kroków 1-4
-    local IFS=, i x D='$'
+# `^nazwa$` i `^nazwa/` przechodzą przez sh bez zmian i nie łapią `nazwa1`
+# (zmierzone od kreatora do celu, pve10 <- pve11, 2026-09-19). Kropka w nazwie
+# zostaje kropką wzorca: nadzbiór, w praktyce ten sam.
+build_argv() {   # [install] -> ARGV[]
+    local IFS=, i x D='$' a
     ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
-    [ "$MODE" = sync ] && ARGV+=("--mode=sync")
+    if [ "$MODE" = sync ]; then ARGV+=("--mode=sync"); else ARGV+=("--target=$TARGET"); fi
+    [ -n "$PROFILE" ] && ARGV+=("--profile=$PROFILE")
+    [ -n "$SRCPROF" ] && ARGV+=("--source-profile=$SRCPROF")
+    [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
     [ "$RECURSION" = atomic ] && ARGV+=("--recursive=atomic")
     for i in "${!B_ROOT[@]}"; do
         while IFS= read -r x; do
@@ -366,47 +622,81 @@ build_argv() {   # -> ARGV[] ; na razie z kroków 1-4
             [ "$(kids_count "$x")" -gt 0 ] && ARGV+=("--exclude-child=^$x/")
         done <<<"${B_EXCL[$i]}"
     done
+    [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
+    a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
+    [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
+    [ "$MANUAL" -eq 1 ] && ARGV+=("--manual-join")
+    [ "${1:-}" = install ] && ARGV+=("--install" "--yes")
     return 0
 }
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }
-quoted_argv() { local a; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
-step_preview() {   # tymczasowy koniec: co zebrane, bez wykonania
-    geom
-    build_argv
-    local i
-    {
-        echo "Zebrane w krokach 1-4 (nic nie zostało wykonane):"
-        echo
-        echo "  Typ relacji : $([ "$MODE" = sync ] && echo synchro || echo backup)"
-        echo "  Źródło      : $HOST${HOSTNAME_R:+ ($HOSTNAME_R)}, port $PORT"
-        echo "  Kopiowane   : wszystko, co jest i co powstanie pod:"
-        for i in "${!B_ROOT[@]}"; do printf '      %s\n          %s\n' "${B_ROOT[$i]}" "$(describe "$i")"; done
-        echo "  Sposób      : $([ "$RECURSION" = atomic ] && echo 'atomowo (-r)' || echo 'każdy dataset osobno (-R)')"
-        echo
-        echo "Komenda dotąd:"
-        echo
-        printf '  %s \\\n' "${ARGV[0]}"; quoted_argv
-        echo
-        echo "Kroki 5-10 (dokąd, szablon, nazwa, konto, maski migawek, wykonanie)"
-        echo "-- w budowie."
-    } >"$TMPD/preview.txt"
-    wt --title "Kroki 1-4 zebrane" --ok-button "Koniec" --scrolltext --textbox "$TMPD/preview.txt" "$H" "$W" || return 1
+cmd_lines() { local a; printf '  %s \\\n' "${ARGV[0]}"; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
+cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; }
+
+# --- krok 10: podsumowanie -> plan -> wykonanie ---------------------------------
+summary_text() {
+    local i a; a="$(account_name)"
+    if [ "$MODE" = sync ]; then
+        echo "SYNCHRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
+    else
+        echo "BACKUP: $(hostname) będzie POBIERAĆ z $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} do $TARGET/$HOST/..."
+    fi
+    for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
+    echo "Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}."
+    echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
+    echo "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}"
+    echo "Prawa na źródle: $( [ "$GRANT" -eq 1 ] && echo "nadane stąd, od razu" || echo "zatwierdzisz SAM -- instalacja stanie i poda komendę" )$( [ "$MANUAL" -eq 1 ] && echo "; parowanie ręczne")"
+    echo
+    echo "Komenda (to samo wpisałbyś z palca):"
+    cmd_oneline; echo
+    any_excl && echo "(^nazwa${D:-\$} = dokładnie ten dataset, nie łapie np. ...disk-01)"
     return 0
+}
+step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
+    local rc
+    while :; do
+        geom
+        build_argv install
+        summary_text >"$TMPD/summary.txt"
+        yesno_text "$TMPD/summary.txt" "$(title 10 'Podsumowanie')" "Pokaż plan" "Wstecz" || return 1
+        build_argv
+        info "$(title 10 'Plan')" "Pytam czasownik o plan (nic nie zmienia)..."
+        "${ARGV[@]}" >"$TMPD/plan.txt" 2>&1; rc=$?
+        { echo "PLAN -- nic jeszcze nie zostało zmienione (rc=$rc):"; echo; cat "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"
+        if [ "$rc" -ne 0 ]; then
+            wt --title "$(title 10 'Plan ODRZUCONY przez czasownik')" --scrolltext --msgbox "$(cat "$TMPD/plan2.txt")" "$H" "$W"
+            continue
+        fi
+        yesno_text "$TMPD/plan2.txt" "$(title 10 'Plan')" "WYKONAJ" "Wstecz" || continue
+        build_argv install
+        clear 2>/dev/null
+        echo "\$ $(cmd_oneline)"; echo
+        "${ARGV[@]}" 2>&1 | tee "$TMPD/run.log"; RC_RUN=${PIPESTATUS[0]}
+        echo
+        if [ "$RC_RUN" -eq 0 ]; then echo "=== GOTOWE: relacja '$RNAME' założona (rc=0). Enter = dalej"
+        else echo "=== NIE UDAŁO SIĘ (rc=$RC_RUN) -- przeczytaj powyżej. Enter = dalej"; fi
+        [ -t 0 ] && read -r _
+        return 0
+    done
 }
 
 # --- pętla kroków: 0 = dalej, 1 = wstecz ------------------------------------
+RC_RUN=1
 step=mode
 while :; do
     case "$step" in
         mode)    if step_mode;     then step=host;    else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
         host)    if step_host;     then step=diag;    else step=mode; fi ;;
         diag)    if step_diag;     then step=ds;      else step=host; fi ;;
-        ds)      if step_datasets; then step=preview; else step=host; fi ;;
-        preview) if step_preview;  then break;        else step=ds;   fi ;;
+        ds)      if step_datasets; then step=target;  else step=host; fi ;;
+        target)  if step_target;   then step=profile; else step=ds; fi ;;
+        profile) if step_profile;  then step=name;    else [ "$MODE" = sync ] && step=ds || step=target; fi ;;
+        name)    if step_name;     then step=acct;    else step=profile; fi ;;
+        acct)    if step_account;  then step=extra;   else step=name; fi ;;
+        extra)   if step_extra;    then step=summary; else step=acct; fi ;;
+        summary) if step_summary;  then break;        else step=extra; fi ;;
     esac
 done
-clear 2>/dev/null
-build_argv
-printf 'new-relation (kroki 1-4), komenda dotąd:\n'; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; printf '\n'
+exit "$RC_RUN"
