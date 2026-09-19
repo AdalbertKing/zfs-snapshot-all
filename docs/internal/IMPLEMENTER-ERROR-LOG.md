@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40.*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1628,3 +1628,32 @@ Patches with backslashes go through a file written by the Write tool or build
 the character with `chr(92)`; and every text replacement asserts that it
 matched, so a no-op cannot pass as done.
 
+
+### E55 — The ssh stub spoke cleaner than ssh (2026-09-18, R2)
+
+**Genesis.** `check-source` (PR #390) shipped with a `dead`-host assertion:
+the ssh stub prints `No route to host` and exits 255, the JSON carries the
+reason, green. The first live drive of the whiptail wizard against an
+unreachable address showed "check-source did not return JSON": the real
+OpenSSH ends its diagnostics with CR LF, `json_escape` passed the raw CR into
+the string, and the document was invalid for every parser.
+
+**Cause.** The stub's text was typed by me, so it agreed with my escaper by
+construction. The fact "the error reason is a plain line" was true on the
+fixture side and false on the tool side (R2) -- the same defect the `realshape`
+suite exists to catch, in a suite that did not use a capture.
+
+**Rule.** R2. A stub that imitates a real tool's DIAGNOSTIC copies its bytes
+from a capture (`| od -c` once), not from memory. Second boundary recorded
+here: **Git Bash strips CR inside `$(...)`**, so the negative control for a CR
+defect cannot fail on this Windows box; it was measured on pve10 instead.
+
+**Same day, two more under existing rules.** (R8) The first fix went into
+`json_escape` in `lib-backup-common.sh` without grepping for its copies: it has
+two pinned twins in FROZEN engine files, and `./test/impact.sh` names the
+coupling (`json-escape`) -- I read the suite list, not the couplings. CI's
+`twins` caught it. (R4) The follow-up ran `impact.sh --verify | tail -2 &&
+git commit`: the pipe's status is `tail`'s, so the commit went out over a
+FROZEN refusal. Gate results are read from the gate's own exit code
+(`cmd > file; rc=$?`), never through a pipe. The engine edit was reverted; the
+defect is fixed where it arose, in `source_probe`.

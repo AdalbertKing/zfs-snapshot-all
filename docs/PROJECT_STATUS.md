@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 30b50c4fd6bd35cb -->
+<!-- status-covers-digest: 4255244dea356bf8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,101 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kreator relacji na WHIPTAILU -- komplet 10 kroków, podpięty pod `Ins` na F3 (2026-09-18/19).**
+  Decyzja właściciela z 2026-09-16: formularze rysowane ręcznie w curses są
+  „siermiężne i nieużyteczne"; okna mają być klockami („stare Turbo Vision").
+  GUI w przeglądarce odpada na hostach PVE (port 8006 Proxmoxa). Tabele F2–F6
+  zostają w curses.
+  - **Czasownik `zfs-backup.sh new-relation`** → `tui/new-relation.sh` (bash +
+    whiptail + python3 do JSON-a). Kreator składa JEDNĄ komendę `--source=…`,
+    pokazuje ją, pyta czasownik o PLAN, a po „WYKONAJ" uruchamia ją z
+    `--install --yes` na pierwszym planie. Poza tym wykonuje tylko
+    `prepare-source`, o który pyta oknem tak/nie. **`Ins` na F3** oddaje
+    terminal kreatorowi i po jego zakończeniu wraca na F3 z odświeżonymi
+    danymi (nowa relacja od razu na liście); stary kreator w curses zostaje
+    pod `--wizard curses` tylko dla własnej suity -- do usunięcia razem z nią.
+  - **Kroki:** 1 typ (backup/synchro) · 2 adres hosta (host z istniejącą
+    relacją = odmowa z nazwami; pole pamięta wpisany tekst) · 3 diagnoza z
+    `check-source` (SSH, ZFS, pakiet; brak pakietu → „Zainstaluj") · 4 CO
+    KOPIOWAĆ · 5 dokąd (tylko backup; kandydaci z POWODEM: cel używany już
+    przez N relacji, istniejące `*/backups`, „inna ścieżka") · 6 szablon
+    (`default` pierwszy, wiersz = co trzyma + mechanizm) · 7 nazwa (z nazwy
+    hosta; zajęta = odmowa) · 8 konto (root / zfsbackup / inne) · 9 ustawienia
+    dodatkowe (prawa na źródle, pomijane migawki z domyślnymi maskami
+    Proxmoxa, retencja u źródła, parowanie) · 10 podsumowanie → plan →
+    wykonanie.
+  - **Krok 4 = KOSZYK MIEJSC** -- trzecia wersja; dwie poprzednie właściciel
+    odrzucił po pokazie (lista kratek na całym drzewie: *„mylący"*; pytanie „co
+    kopiować?" tylko dla datasetów z dziećmi: *„też źle -- czysty Proxmox,
+    wskazuję rpool/data, żeby kopiował maszyny, których tam jeszcze nie ma"*).
+    **Zmierzone na pve10 ← pve11, linią crona odpaloną dosłownie:** dataset
+    założony pod źródłem PO ustawieniu relacji kopiuje się sam przy następnym
+    biegu, w -R i w -r; prawa konta dziedziczą się w dół. Stąd model: pozycja
+    koszyka to MIEJSCE -- ono i wszystko, co pod nim jest i co POWSTANIE. Nie
+    ma „liści" i „gałęzi"; „sam rodzic bez dzieci" nie jest kształtem relacji.
+    Lista miejsc (menu) → od razu koszyk, bez pytań. Koszyk POKAZUJE, co dziś
+    leży pod miejscem („dziś pod nim: docs, photos", „POMIJANE: mail" -- pomijane
+    zawsze w całości, także na 24 wierszach) i ma akcje: Dodaj miejsce / Wyjątki
+    (tylko gdy coś już leży; pamiętają stan) / **Sposób -R/-r** (jedno na
+    relację; przejście na atomowo przy wyjątkach pyta, czy je zdjąć, a „Wyjątki"
+    przy atomowo odsyłają do zmiany sposobu) / Usuń / Dalej. Czego koszyk już
+    obejmuje, tego lista nie pokazuje; miejsce dodane po własnym dziecku pyta
+    „Zastąp".
+  - **Wzorce `--exclude-child` z kreatora: `^nazwa$` (+ `^nazwa/`, gdy pomijany
+    ma własne dzieci), bez metaznaków powłoki.** Wzorzec idzie rekord → pole
+    `flags` configu → linia crona, wszędzie wklejany BEZ cudzysłowów, więc
+    `(`/`|` rozbiłyby komendę co noc. **Zmierzone od kreatora do celu (pve10 ←
+    pve11, 2026-09-19):** `^hdd/xt/vm-202-disk-0$` + `^hdd/xt/vm-202-disk-0/`
+    dojechały do linii crona bez zmian; u celu powstały `vm-201-disk-0` i
+    `vm-202-disk-01`, a `vm-202-disk-0` i jego `sub` -- nie. Surowa nazwa bez
+    kotwic (tak robi stary kreator w curses) łapie też nazwy dłuższe -- wada
+    starego kreatora, zniknie razem z nim.
+  - **Zasady okien:** rozmiar z `tput` przy każdym oknie, szerokość ≤ 100,
+    teksty w 80 kolumnach; `NEWT_COLORS` z widocznym bieżącym wierszem;
+    **„Wstecz" na KAŻDYM oknie z decyzją** (Esc = to samo; w oknach tak/nie z
+    ustawień Esc = bez zmian); polskie znaki (wymuszane `C.UTF-8`); wartości ze
+    zdalnego hosta czytane `read -r`, nigdy wykonywane; czytelniki (status,
+    lista datasetów, szablony, sonda) wołane RAZ na przebieg -- cofanie nie każe
+    czekać od nowa.
+  - **Co znalazła kampania „jak admin" (2026-09-19, prawdziwy whiptail, 80x25,
+    przez prawdziwe GUI: F3 → Ins → … → powrót na F3):** okno z `--scrolltext`
+    trzyma fokus na tekście i Enter nic nie robi, dopóki nie przejdzie się
+    Tabem na przyciski → podsumowanie i plan mieszczą się BEZ przewijania
+    (wiersze liczone po zawinięciu), a gdy się nie da, tytuł mówi o Tabie;
+    16 szablonów zjadało opis okna i ucinało wiersze → `default` na górze,
+    zwarte wiersze, lista nie wyższa niż miejsce po opisie; koszyk na 24
+    wierszach chował pomijane pod „… i jeszcze 2" → zapis w linii; cofnięcie
+    o krok czytało wszystko od nowa (9 s) → pamięć na przebieg; „zatwierdzę
+    sam na źródle" kończyło się napisem „NIE UDAŁO SIĘ", choć instalacja MA
+    wtedy stanąć → „ZATRZYMANE ZGODNIE Z WYBOREM" z dwoma krokami i komendą
+    zapisaną do pliku.
+  - **Przebiegi na żywo (pve10 kolektor):** backup z pve11 z wyjątkiem,
+    konto root -- relacja `active`, pomijany nie powstał u celu; synchro z
+    pve9b, konto `zfsbackup`, uruchomione z F3 przez `Ins` -- po powrocie
+    `pve9b active` na liście; odmowa dla hosta z relacją; host nieosiągalny;
+    cofanie z kroku 7 do koszyka, wyjątek, konflikt z atomowo. Po kampanii
+    relacje testowe usunięte po obu stronach, dane skasowane; na pve11 zostały
+    datasety `hdd/data`, `hdd/ct/*`, `hdd/vm/*` do dalszych prób.
+  - **Wada znaleziona jazdą na żywo, nie suitą:** `check-source` na
+    nieosiągalnym hoście wypisywał NIEPOPRAWNY JSON -- OpenSSH kończy swoją
+    diagnostykę CR LF. Naprawione w `source_probe` (powód spłaszczany).
+    `json_escape` NIE ruszony: ma trzy kopie-bliźniaki przypięte bajt w bajt,
+    dwie w zamrożonych silnikach (pierwsza wersja poprawki to zrobiła; `twins`
+    i bramka zamrożenia ją zatrzymały, cofnięta). **Luka zostaje:**
+    `json_escape` przepuszcza CR/LF/TAB, jeśli trafią do innego pola.
+  - **Dowody:** suita `tui` 183/0 -- 24 asercje kreatora na atrapie whiptaila
+    o tym samym kontrakcie sterowania (odpowiedź na stderr, rc 0/1/255,
+    `--infobox` nie czeka) i atrapie czasownika (plan / instalacja / odmowa
+    bez nadania), w tym droga operatora przez czasownik i przez `Ins`;
+    kontrole negatywne (wyłączone `covered`; wyjątki bez pamięci stanu) → po 1
+    FAIL. Wygląd i klawisze dowodzone osobno jazdą po pty z mini-emulatorem
+    ekranu -- atrapa o nich nic nie mówi i ta jazda nie jest w CI.
+  - **Nie zrobione / nie zmierzone:** ścieżka „brak pakietu → Zainstaluj" i
+    „zatwierdzę sam" tylko na atrapie; nowy szablon z poziomu kreatora;
+    modyfikacja istniejącej relacji (dodanie miejsca); po powrocie na F3
+    kursor nie staje na nowej relacji; tekst planu jest po angielsku (to
+    wyjście czasownika); stary kreator curses + ~48 jego asercji nadal w
+    drzewie.
 - **REV-143 (P2): baner SSH stawał się datasetem w `list-datasets` (2026-09-18).**
   Recenzent: `cmd_list_datasets` łapał `zfs list` z `2>&1` i parsował każdą
   linię jako wiersz TSV, więc baner logowania albo ostrzeżenie o kluczu hosta
