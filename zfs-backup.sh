@@ -525,13 +525,15 @@ Inspection / teardown:
                                     add-client's JOIN does those. Plans without --yes.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
-                                    windows (type, source host, what is on it, which
-                                    datasets, which children to skip). It composes the
-                                    one-command form and runs nothing on its own; the
-                                    single exception is prepare-source, asked for in
-                                    a yes/no window. Needs whiptail and python3.
-                                    Steps 1-4 of 10 today: it ends by SHOWING the
-                                    command so far.
+                                    windows: type, source host, what is on it, WHICH
+                                    PLACES to copy (a place = it and everything under
+                                    it, now or later), where to, template, name,
+                                    account, extras. It composes the one-command form,
+                                    shows it, asks this program for the PLAN, and only
+                                    after "WYKONAJ" runs it with --install --yes. The
+                                    one other thing it runs is prepare-source, asked
+                                    for in a yes/no window. Ins on the GUI's F3 starts
+                                    it and returns there. Needs whiptail and python3.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and

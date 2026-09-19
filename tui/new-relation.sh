@@ -94,13 +94,8 @@ step_mode() {
 
 # --- krok 2: host -----------------------------------------------------------
 existing_relation() {   # <host> -> nazwy relacji (nie-removed) z tym hostem
-    "$ZB" status --json 2>/dev/null | "$PY" -c '
-import sys, json
-try: d = json.load(sys.stdin)
-except Exception: sys.exit(0)
-h = sys.argv[1]
-print(", ".join(r.get("name", "") for r in d.get("relations", [])
-      if r.get("peer_host") == h and r.get("state") != "removed"))' "$1"
+    status_tsv
+    awk -F'\t' -v h="$1" '$2==h{printf "%s%s", (n++ ? ", " : ""), $1}' "$TMPD/rel.tsv"
 }
 step_host() {
     local init rel h p
@@ -117,7 +112,7 @@ step_host() {
             wt --title "Zły adres" --msgbox "'$WT_OUT' nie wygląda na adres hosta.\nDozwolone: litery, cyfry, kropka, myślnik; opcjonalnie :port." 9 "$W"; continue ;; esac
         case "$p" in ''|*[!0-9]*)
             wt --title "Zły port" --msgbox "Port '$p' nie jest liczbą." 8 "$W"; continue ;; esac
-        info "$(title 2 'Z którego hosta?')" "Sprawdzam, czy z $h nie ma już relacji..."
+        [ -e "$TMPD/rel.done" ] || info "$(title 2 'Z którego hosta?')" "Sprawdzam, czy z $h nie ma już relacji..."
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
             wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDodanie datasetów do istniejącej relacji to jej modyfikacja,\na tego kreator jeszcze nie umie.\n\nPodaj host, z którym relacji nie ma." 14 "$W"
@@ -158,6 +153,7 @@ PYEOF
 }
 step_diag() {   # 0 = dalej, 1 = wróć do hosta
     local facts
+    [ "$DIAG_OK_FOR" = "$(hostport)" ] && return 0      # już sprawdzony w tym przebiegu
     while :; do
         geom
         info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root..."
@@ -175,6 +171,7 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
         facts="${facts}  [+] ZFS     pule: ${C_POOLS:-brak}\n"
         if [ "$C_PKG" -eq 1 ]; then
             wt --title "$(title 3 'Źródło gotowe')" --yes-button "Dalej" --no-button "Wstecz" --yesno "${facts}  [+] Pakiet  $C_DIR (rewizja ${C_REV:-?})\n\nWszystko jest. Dalej: lista datasetów." 13 "$W" || return 1
+            DIAG_OK_FOR="$(hostport)"
             return 0
         fi
         wt --title "$(title 3 'Brak pakietu na źródle')" --yes-button "Zainstaluj" --no-button "Wstecz" \
@@ -202,7 +199,9 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
 T_NAME=(); T_KIDS=(); T_LABEL=()      # drzewo źródła
 B_ROOT=(); B_EXCL=()                   # koszyk: korzeń, pominięte (po jednym w linii)
 
+TREE_FOR=""; DIAG_OK_FOR=""
 load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
+    [ "$TREE_FOR" = "$(hostport)" ] && [ "${#T_NAME[@]}" -gt 0 ] && return 0
     "$ZB" list-datasets "$(hostport)" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
     "$PY" - "$TMPD/ds.json" <<'PYEOF' | tr -d '\r' >"$TMPD/tree.tsv"
 import sys, json
@@ -233,6 +232,7 @@ PYEOF
         T_NAME+=("$n"); T_KIDS+=("$k"); T_LABEL+=("$l")
     done <"$TMPD/tree.tsv"
     [ "${#T_NAME[@]}" -gt 0 ] || { echo "źródło nie ma żadnego datasetu" >"$TMPD/ds.err"; return 1; }
+    TREE_FOR="$(hostport)"
 }
 kids_count() { local i; for i in "${!T_NAME[@]}"; do [ "${T_NAME[$i]}" = "$1" ] && { echo "${T_KIDS[$i]}"; return; }; done; echo 0; }
 covered() {     # <nazwa> -> 0, gdy koszyk już ją obejmuje (jest korzeniem albo leży pod korzeniem)
@@ -395,7 +395,7 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
 }
 step_datasets() {
     geom
-    info "$(title 4 'Datasety')" "Pobieram listę datasetów z $HOST..."
+    [ "$TREE_FOR" = "$(hostport)" ] || info "$(title 4 'Datasety')" "Pobieram listę datasetów z $HOST..."
     if ! load_tree; then
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         return 1
@@ -425,7 +425,12 @@ step_datasets() {
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
 TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""
 EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
+# PAMIĘĆ NA CZAS JEDNEGO PRZEBIEGU. Czytelniki odpowiadają po 5-12 s; bez tego każde
+# "Wstecz" i ponowne "Dalej" kazało czekać od nowa (zmierzone jazdą: cofnięcie z kroku 7
+# do 6 = 9 s na "Czytam szablony"). Stan hosta nie zmienia się w trakcie klikania.
 status_tsv() {  # -> $TMPD/rel.tsv: nazwa <TAB> peer <TAB> target (relacje nie-removed)
+    [ -e "$TMPD/rel.done" ] && return 0
+    : >"$TMPD/rel.done"
     "$ZB" status --json 2>/dev/null | "$PY" -c '
 import sys, json
 try: d = json.load(sys.stdin)
@@ -437,7 +442,7 @@ for r in d.get("relations", []):
 step_target() {
     [ "$MODE" = sync ] && return 0
     local items=() t n cnt first="" seen="" p
-    info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
+    [ -e "$TMPD/targets.tsv" ] || info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
     status_tsv
     while IFS=$'\t' read -r n p t; do
         [ -n "$t" ] || continue
@@ -446,18 +451,19 @@ step_target() {
         items+=("$t" "$t   -- używają go już relacje na tym hoście: $cnt")
         [ -n "$first" ] || first="$t"
     done <"$TMPD/rel.tsv"
-    while IFS= read -r t; do
-        [ -n "$t" ] || continue
-        case " $seen " in *" $t "*) continue ;; esac
-        items+=("$t" "$t   -- istnieje na tym hoście, jeszcze nieużywany"); seen="$seen $t"
-        [ -n "$first" ] || first="$t"
-    done < <("$ZB" list-datasets --json 2>/dev/null | "$PY" -c '
+    [ -e "$TMPD/targets.tsv" ] || "$ZB" list-datasets --json 2>/dev/null | "$PY" -c '
 import sys, json
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for x in d.get("datasets", []):
     n = x.get("name", "")
-    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' | tr -d '\r')
+    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' | tr -d '\r' >"$TMPD/targets.tsv"
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        case " $seen " in *" $t "*) continue ;; esac
+        items+=("$t" "$t   -- istnieje na tym hoście, jeszcze nieużywany"); seen="$seen $t"
+        [ -n "$first" ] || first="$t"
+    done <"$TMPD/targets.tsv"
     items+=(__other__ "Inna ścieżka…   (wpiszesz dataset na tym hoście)")
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
     while :; do
@@ -477,6 +483,7 @@ in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0
 
 # --- krok 6: szablon ----------------------------------------------------------
 load_profiles() {   # -> $TMPD/prof.tsv: nazwa <TAB> zdanie ; słowa z tui/zfs-tui.py (jedno źródło słów)
+    [ -s "$TMPD/prof.tsv" ] && return 0
     "$ZB" list-profiles --json >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
     "$PY" - "$TMPD/prof.json" "$HERE/tui/zfs-tui.py" <<'PYEOF' | tr -d '\r' >"$TMPD/prof.tsv"
 import sys, json, importlib.util
@@ -507,7 +514,7 @@ PYEOF
 step_profile() {
     local items=() n w c
     geom
-    info "$(title 6 'Szablon')" "Czytam szablony retencji..."
+    [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
         wt --title "$(title 6 'Szablon -- lista niedostępna')" --cancel-button "Wstecz" \
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
@@ -676,6 +683,14 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         "${ARGV[@]}" 2>&1 | tee "$TMPD/run.log"; RC_RUN=${PIPESTATUS[0]}
         echo
         if [ "$RC_RUN" -eq 0 ]; then echo "=== GOTOWE: relacja '$RNAME' założona (rc=0). Enter = dalej"
+        elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
+            # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
+            echo "=== ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '$RNAME' czeka na zgodę źródła."
+            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)"
+            echo "    2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
+            cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
+            echo "       $(cmd_oneline)"
+            echo "    Enter = dalej"
         else echo "=== NIE UDAŁO SIĘ (rc=$RC_RUN) -- przeczytaj powyżej. Enter = dalej"; fi
         [ -t 0 ] && read -r _
         return 0

@@ -1251,7 +1251,13 @@ case "$1" in
     check-source)   if [ -e "$NR_DIR/installed" ]; then cat "$NR_FIX/check-source-pkg.json"; else cat "$NR_FIX/${NR_CHECK:-check-source-pkg.json}"; fi ;;
     list-datasets)  if [ "$2" = "--json" ]; then cat "$NR_FIX/list-datasets.json"; else cat "$NR_FIX/list-datasets-pve9b.json"; fi ;;
     list-profiles)  cat "$NR_FIX/list-profiles.json" ;;
-    --source=*)     case " $* " in *" --install "*) echo ">>> atrapa: zainstalowano"; exit "${NR_INSTALL_RC:-0}" ;; *) echo "RUX plan (atrapa)"; exit "${NR_PLAN_RC:-0}" ;; esac ;;
+    --source=*)     case " $* " in
+                        *" --install "*) case " $* " in
+                                *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
+                                *) echo "FATAL: the source has GRANTED nothing yet: on the source run"; echo "    deploy.sh --commit-scope=pve10"; exit 1 ;;
+                            esac ;;
+                        *) echo "RUX plan (atrapa)"; exit 0 ;;
+                    esac ;;
     prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -1260,7 +1266,7 @@ chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
     rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed"
     printf '%s' "$1" > "$NR/answers"; shift
-    ( export NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err" </dev/null
+    ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err" </dev/null
     local rc=$?
     grep -- ' --install --yes$' "$NR/zb.log" 2>/dev/null | sed 's/^/CMD: /; s/$/ /'
     return "$rc"
@@ -1403,6 +1409,63 @@ if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Które miejsce z' "$NR/wt.log")" -eq 2
     ok "new-relation: 'Usun pozycje' oproznia koszyk -> wraca lista miejsc Z usunietym datasetem; Wstecz prowadzi do hosta i wyjscia"
 else
     bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/wt.log")"
+fi
+# 3e. kroki 5-10: nazwa zajeta -> odmowa i powrot do pola; Wstecz i ponowne Dalej NIE czytaja od nowa
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}lab-ct201
+0${T}
+1${T}
+0${T}d30
+0${T}pve9b
+0${T}zfsbackup
+0${T}go
+0${T}
+0${T}
+")
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --install --yes " \
+   && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
+    ok "new-relation: kroki 5-10 -- zajeta nazwa odmowiona, Wstecz z nazwy do szablonu zmienia wybor (d30), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
+else
+    bad "new-relation: kroki 5-10" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
+fi
+if grep -F 'Jak często i jak długo' "$NR/wt.log" | head -1 | grep -qE -- "--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ default ~ default +trzyma 24 godz., 7 dni, 4 tyg., 12 mies.  \\[GFS\\]"; then
+    ok "new-relation: lista szablonow -- 'default' PIERWSZY, wiersz = co trzyma + mechanizm (to odroznia d30h24 / -age / -gfs), bez ucinania rytmem"
+else
+    bad "new-relation: lista szablonow" "$(grep -F 'Jak często i jak długo' "$NR/wt.log" | head -1 | cut -c1-400)"
+fi
+if grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
+   && ! grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF -- '--scrolltext'; then
+    ok "new-relation: podsumowanie miesci sie BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
+else
+    bad "new-relation: podsumowanie" "$(grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | cut -c1-600)"
+fi
+# 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}grant
+1${T}
+0${T}go
+0${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NROUT" "deploy.sh --commit-scope=pve10" && ! has "$NROUT" "NIE UDAŁO SIĘ" \
+   && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
+    ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
+else
+    bad "new-relation: zatwierdze sam" "rc=$NRRC" "$NROUT" "$(ls "$NR")"
 fi
 # 4. host, z ktorym relacja JEST: odmowa ze slowem dlaczego, potem Wstecz, Wyjdz
 NROUT=$(nr_run "0${T}backup
