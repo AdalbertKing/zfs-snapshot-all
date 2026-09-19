@@ -34,7 +34,7 @@ command -v "$WT" >/dev/null 2>&1 || { echo "new-relation: brak '$WT' (pakiet whi
 
 # Polskie znaki: newt liczy szerokości wg locale. Bez UTF-8 ramki się rozjeżdżają.
 case "$(locale charmap 2>/dev/null)" in UTF-8) ;; *) export LC_ALL=C.UTF-8 ;; esac
-export PYTHONIOENCODING=utf-8
+export PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1    # import tui/zfs-tui.py nie ma zostawiac __pycache__ w checkoucie hosta
 export NEWT_COLORS="${NEWT_COLORS:-root=,blue window=black,white border=black,white title=black,white listbox=black,white actlistbox=white,black sellistbox=black,white actsellistbox=white,black checkbox=black,white actcheckbox=white,black button=black,cyan actbutton=white,red textbox=black,white entry=black,white label=black,white}"
 
 TMPD="$(mktemp -d)" || exit 1
