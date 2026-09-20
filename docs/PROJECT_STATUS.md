@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4fd52b18250b6719 -->
+<!-- status-covers-digest: 1653dc2b3051d42a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,42 @@
   lista się skróciła -- kursor zostaje, bo nie ma czego zgadywać. Suita `tui`
   189/0 (dwie nowe asercje wykonują metodę na dwóch stanach danych, z trzema
   przypadkami negatywnymi); na main obu metod nie ma, więc asercja tam pada.
+- **ZAWĘŻENIE ZAKRESU ZOSTAWIAŁO SZERSZĄ ZGODĘ NA ZAMRAŻANIE (2026-09-20, wieczór).**
+  Znalezione podczas pomiaru pod odłożony czasownik „zabierz dataset z zakresu
+  źródła": zanim taki czasownik powstanie, musi być wiadomo, co robi
+  `deploy.sh --commit-scope` przy zawężonym zakresie. **Zmierzone na pve9b**
+  (relacja `rs-lab`, datasety `hdd/rs/a` + `hdd/rs/b`): po nadaniu zgody na
+  zamrażanie dla obu i zawężeniu zakresu do `a` **bez** `--allow-quiesce`
+  nadanie ZFS na `b` zostało poprawnie cofnięte, ale whitelista
+  `/etc/zfs-quiesce-allow/<konto>` **nadal wymieniała `hdd/rs/b`** -- konto
+  kolektora mogło więc zamrażać gości, których dyski leżą na datasecie, którego
+  nie wolno mu już replikować. Nagłówek `install_quiesce_grant` mówi wprost, że
+  te dwie listy „nie mogą się rozjechać"; rozjeżdżały się dokładnie na tej
+  ścieżce. Ten sam bieg drukował „guest quiesce NOT granted (…) remote quiesce
+  will refuse", podczas gdy reguła sudoers i whitelista stały nietknięte --
+  zdanie fałszywe i mylące w obie strony (operator mógł sądzić, że zgodę zabrał).
+  - **Poprawka (`deploy.sh`):** gałąź bez `--allow-quiesce` patrzy teraz na to,
+    co jest NA DYSKU. Istniejąca zgoda **zostaje** (zawężenie zakresu replikacji
+    nie jest prośbą o odebranie prawa do zamrażania), ale jest przepisywana do
+    bieżącego zakresu z tej samej listy `still_granted`, której użyły `zfs allow`
+    -- więc obie listy nie mogą już być różne z konstrukcji. Bieg mówi, co zgoda
+    teraz obejmuje i jak ją odebrać w całości (`--revoke-quiesce=KONTO`, czasownik,
+    który już istniał). Gdy nic nie jest nadane, zostaje stary komunikat.
+  - **Dowody.** Suita `quiescehelper` 121/0 (dwie nowe asercje; trzecie miejsce
+    wywołania `install_quiesce_grant` jest liczone OSOBNO, bo strzeże go obecność
+    plików zgody, a nie flaga -- gołe uruchomienie nadal nie nadaje niczego).
+    Kontrola negatywna: na kodzie z main tej gałęzi nie ma (0 wystąpień), więc
+    pierwsza asercja pada. **Na żywo na pve9b** z klonu gałęzi: po zawężeniu
+    whitelista = `hdd/rs/a`, reguła sudoers stoi, `zfs allow hdd/rs/b` puste.
+    **Test ocalałego:** konto delegowane nadal dosięga helpera
+    (`zfs-quiesce-helper status` → `OK account=zfsbackup-pve10`, rc=0), a linia
+    crona relacji odpalona dosłownie dała rc=0 i nową migawkę godzinową u celu.
+    Obowiązek `deploy-check-only` wykonany na obu kształtach hosta: pve9b rc=0
+    („audit clean"), pve10 rc=1 z dwoma znanymi brakami labu -- **identycznymi**
+    jak z checkoutu main, więc nie z tej zmiany.
+  - **Czego NIE zmierzono:** prawdziwego zamrożenia gościa (pve9b nie ma gości),
+    więc „ocalały działa" jest dowiedzione na poziomie dostępu do helpera i biegu
+    replikacji, nie na poziomie `fsfreeze`.
 
 - **REV-144: `delete-relation` ZATRZYMUJE SIĘ, gdy połowa źródła nie wyszła (2026-09-20, wieczór).**
   Recenzent (P2, blokujący): nieudana sonda źródła albo nieudany `deploy.sh --leave`

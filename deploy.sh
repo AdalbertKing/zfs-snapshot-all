@@ -3744,8 +3744,26 @@ do_commit_scope() {
     # -- identical reasoning to the pre-slice-2 code this replaces. Uses
     # still_granted, not granted: a dataset held back from revoke above keeps
     # its quiesce grant too, for the same reason it keeps its ZFS permission.
+    # The invariant above is only kept if this branch also looks at what is
+    # ALREADY on disk. A grant made by an earlier run does not disappear because
+    # a later --commit-scope was typed without --allow-quiesce, so the old `else`
+    # said two false things at once: that quiesce is not granted, and that remote
+    # quiesce will refuse -- while the sudoers rule and the whitelist both stood.
+    # Worse, the whitelist kept naming datasets this very run had just REVOKED,
+    # so the account could still freeze guests whose disks live on a dataset it
+    # is no longer allowed to replicate. That is the drift this comment says
+    # cannot happen (measured on pve9b, 2026-09-20: scope narrowed from a,b to a,
+    # `zfs allow hdd/rs/b` empty, whitelist still listing hdd/rs/b).
+    #
+    # So: an existing grant is KEPT -- narrowing the replication scope is not a
+    # request to take the freeze permission away -- but it is re-written to this
+    # scope, and the operator is told what it now covers and how to remove it.
     if [ "$ALLOW_QUIESCE" -eq 1 ]; then
         install_quiesce_grant "$account" "${still_granted[*]}"
+    elif [ -e "/etc/sudoers.d/zfs-quiesce-$account" ] || [ -e "/etc/zfs-quiesce-allow/$account" ]; then
+        log "guest quiesce was granted to $account by an earlier run and is KEPT (this run did not ask to change it)."
+        install_quiesce_grant "$account" "${still_granted[*]}"
+        log "its whitelist now matches this scope exactly: ${still_granted[*]:-(nothing)}. To take the freeze permission away entirely: deploy.sh --revoke-quiesce=$account"
     else
         log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."
     fi
