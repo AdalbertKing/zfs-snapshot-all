@@ -37,14 +37,14 @@ while :; do
     items=()
     case "$SRC_LINE" in
         skipped*) note_src="Źródło ($PEER): bez zmian -- ${SRC_LINE#skipped -- }" ;;
-        *)        note_src=""; items+=(src "Posprzątaj na źródle $PEER: konto kolektora i jego prawa zfs" "$SRC") ;;
+        *)        note_src=""; items+=(src "Posprzątaj na źródle $PEER (konto i prawa zfs)" "$SRC") ;;
     esac
-    items+=(rec "Zwolnij nazwę '$NAME' (usuń stary rekord -- potrzebne, żeby założyć ją od nowa)" "$REC")
-    [ -n "$COPIES" ] && items+=(data "SKASUJ KOPIE na tym hoście: $COPIES  (nieodwracalne)" "$DATA")
+    items+=(rec "Zwolnij nazwę '$NAME' (żeby dało się założyć ją od nowa)" "$REC")
+    [ -n "$COPIES" ] && items+=(data "SKASUJ KOPIE na tym hoście (nieodwracalne)" "$DATA")
     head="Relacja '$NAME' (stan: ${STATE:-?}) przestanie działać: znikną jej zadania z crona."
     [ "$STATE" = removed ] && head="Relacja '$NAME' jest już usunięta -- zostało po niej to, co niżej."
     wt --title "Usuń relację $NAME -- co jeszcze?" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "$head\n${note_src:+$note_src\n}\nSpacja = zaznacz/odznacz. Kopii na dysku domyślnie NIE ruszam." "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
+       --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+Kopie na tym hoście: $COPIES\n}Spacja = zaznacz/odznacz. Kopii domyślnie NIE ruszam." "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
        "${items[@]}" || { clear 2>/dev/null; echo "delete-relation: przerwane, nic nie zmieniono"; exit 1; }
     SRC=OFF; REC=OFF; DATA=OFF
     while IFS= read -r x; do case "$x" in src) SRC=ON ;; rec) REC=ON ;; data) DATA=ON ;; esac; done <<<"$WT_OUT"
