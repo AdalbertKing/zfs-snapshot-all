@@ -387,6 +387,56 @@ else
     esac
 fi
 
+# ---- --unpair with NO MANIFEST: the goal state, not an error (2026-09-20) ----
+#
+# The incident of 2026-09-20 deleted a peer's pairing manifest and keys while the
+# relationship record was still alive. The way back is "tear it down and pair
+# again", and `remove-client --unpair` is the first half of it -- but do_unpair
+# refused because the thing it was asked to remove was already gone, so the
+# relationship could be neither removed nor repaired. Two properties are pinned:
+# the run succeeds and says so, and it deletes NOTHING (those key files are keyed
+# by the peer ADDRESS and a live sibling relationship may share them -- E57).
+eval "$(product_range "$DEPLOY_SRC" '^unpair_assert_no_cron_users\(\)' '^# do_unpair -- end the relationship' | sed '$d')"
+eval "$(product_range "$DEPLOY_SRC" '^do_unpair\(\) \{' '^    record_load manifest' | sed '$d')
+    return 0
+}"
+if declare -F do_unpair >/dev/null && declare -F unpair_assert_no_cron_users >/dev/null; then
+    check "unpair: the SHIPPED do_unpair is what is under test" "0" "0"
+else
+    check "unpair: could not lift do_unpair from deploy.sh -- anchors changed, update this suite" "0" "1"
+fi
+UP="$TMPD/unpair"; mkdir -p "$UP/keys"
+PEER_KEY_DIR="$UP/keys"; PEER_HOST=10.9.9.9
+for k in _ed25519 _ed25519.pub _known_hosts _alias_known_hosts; do echo k > "$UP/keys/10.9.9.9$k"; done
+crontab() { cat "$UP/crontab.txt" 2>/dev/null; }     # the guard reads it; empty by default
+: > "$UP/crontab.txt"
+_uo=$(do_unpair 10.9.9.9 "$UP/does-not-exist.conf" 2>&1); _urc=$?
+if [ "$_urc" -eq 0 ]; then
+    check "unpair: a missing manifest SUCCEEDS instead of dying, so 'remove and pair again' has a road" "0" "0"
+else
+    check "unpair: a missing manifest SUCCEEDS instead of dying" "0" "1: rc=$_urc $_uo"
+fi
+case "$_uo" in
+    *"nothing left to unpair"*) check "unpair: ...and it says so in words the operator can act on" "0" "0" ;;
+    *)                          check "unpair: ...and it says so" "0" "1: $_uo" ;;
+esac
+_kept=1; for k in _ed25519 _ed25519.pub _known_hosts _alias_known_hosts; do [ -e "$UP/keys/10.9.9.9$k" ] || _kept=0; done
+check "unpair: it deletes NOTHING -- address-keyed key files may belong to a live sibling relationship (E57)" "0" "$([ "$_kept" -eq 1 ]; echo $?)"
+case "$_uo" in
+    *"LEFT ALONE"*) check "unpair: ...and it names what it left, instead of leaving it silently" "0" "0" ;;
+    *)              check "unpair: ...and it names what it left" "0" "1: $_uo" ;;
+esac
+# CONTROL: the cron guard still bites. A pairing whose jobs still run must not be
+# waved through just because its manifest is missing.
+printf 'x 10.9.9.9_ed25519 x\n' > "$UP/crontab.txt"
+_uo=$( do_unpair 10.9.9.9 "$UP/does-not-exist.conf" 2>&1 ); _urc=$?
+if [ "$_urc" -ne 0 ]; then
+    check "unpair control: with jobs still using the peer it REFUSES, manifest or no manifest" "0" "0"
+else
+    check "unpair control: it waved through a peer whose jobs still run" "0" "1: $_uo"
+fi
+unset -f crontab
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

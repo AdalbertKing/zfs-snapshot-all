@@ -6510,7 +6510,38 @@ unpair_report_residual_access() {
 # and it may well be relied on by something else on this host by now.
 do_unpair() {
     local label="$1" mpath="$2"
-    [ -r "$mpath" ] || die "no pairing for '$PEER_HOST' on this host -- nothing to unpair (looked for $mpath)"
+    # A MISSING MANIFEST IS THE GOAL STATE, NOT AN ERROR (2026-09-20).
+    #
+    # This used to `die`, and that closed the only road back. After the pairing
+    # artifacts are gone -- the incident of 2026-09-20 deleted a manifest and its
+    # keys while the relationship record was still alive -- the operator's way
+    # out is "tear it down and pair again", and `remove-client --unpair` is the
+    # first half of it. Refusing there because the thing being torn down is
+    # already absent left the relationship un-removable and un-repairable: the
+    # command failed, the record stayed, the name stayed taken.
+    #
+    # The CRON GUARD still runs, because "no manifest" says nothing about whether
+    # jobs are still using this peer -- that check greps by label and address and
+    # needs no manifest. What this branch deliberately does NOT do is delete
+    # anything: the key files here are keyed by the peer ADDRESS and may be
+    # shared with another live relationship (E57, the same incident), and a
+    # teardown that cannot read its own manifest is the last place to be guessing
+    # about ownership. Re-pairing rewrites them anyway.
+    if [ ! -r "$mpath" ]; then
+        warn "no pairing manifest for '$PEER_HOST' on this host (looked for $mpath) -- the pairing state is already gone."
+        unpair_assert_no_cron_users "$label" ""
+        local _k _left=""
+        for _k in "$PEER_KEY_DIR/${label}_ed25519" "$PEER_KEY_DIR/${label}_ed25519.pub" \
+                  "$PEER_KEY_DIR/${label}_known_hosts" "$PEER_KEY_DIR/${label}_alias_known_hosts"; do
+            [ -e "$_k" ] && _left="$_left $_k"
+        done
+        if [ -n "$_left" ]; then
+            log "key files still on disk and LEFT ALONE (they are keyed by the peer address and another relationship may share them):$_left"
+            log "  a fresh --pair with this peer rewrites them; 'clean-relationships.sh --purge=...' is the tool that decides whether they are orphaned."
+        fi
+        log "nothing left to unpair for '$PEER_HOST' -- this relationship can be removed and paired again."
+        return 0
+    fi
     record_load manifest "$mpath"
 
     local local_user="${PEER_SAVED_LOCAL_USER:-}"
