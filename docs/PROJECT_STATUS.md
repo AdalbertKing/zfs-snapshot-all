@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dbfe6b6fdb695fa6 -->
+<!-- status-covers-digest: b4c8269c1b058f64 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,52 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **INCYDENT LABOWY I POPRAWKA: `--purge` zabierał WSPÓLNE parowanie (2026-09-20, po południu).**
+  Właściciel usunął z GUI (`Del`) rekordy martwych relacji i dwie żywe, po czym
+  kazał sprawdzić stan realny. **Stan był zły:** `status` pokazywał trzy relacje
+  `active`, a `/root/.ssh/pairing/` i `peers/` na pve10 były PUSTE -- `test`
+  każdej odpowiadał *„no pairing manifest"*, każda linia crona wskazywała klucz,
+  którego nie było. **Przyczyna (błąd implementera, E57):** `delete-relation`
+  składa `clean-relationships.sh --purge=NAZWA`, a ten razem z rekordem usuwał
+  artefakty kluczowane ADRESEM (manifest parowania, cztery pliki kluczy) --
+  klasyfikacja LIVE/ORPHAN była po NAZWIE, artefakty po ADRESIE. Usunięcie
+  martwych rekordów hostów .99 i .96 zerwało żywe `lab-ct201`, `lab-srv-a` i
+  `pve11`. Pierwszy zrobił szkodę rekord NAZWANY adresem (`192.168.28.99`):
+  wtedy `peers/<id>.conf` to właśnie wspólny manifest. `remove-client` tę
+  zasadę znał od dawna (zostawia parowanie, gdy używa go inna relacja); luka
+  była tylko w `--purge`, a kampania z rana czyściła wyłącznie relacje bez
+  „rodzeństwa", więc jej nie zobaczyła.
+  - **Poprawka w `clean-relationships.sh`:** `addr_live_users` -- artefakty
+    adresowe idą z purge tylko wtedy, gdy z adresu nie korzysta żadna inna
+    nie-`removed` relacja; to samo dla tożsamości będącej adresem (manifest i
+    `--leave`). Purge mówi wtedy wprost: *„the pairing with X is LEFT ALONE --
+    still used by: …"*. Suita `cleanrel` 92/0 (dwie nowe asercje, w tym
+    „ostatnia relacja nadal zabiera parowanie"); na kodzie z main 90/2.
+    **Dowód na żywo:** druga relacja z pve11 założona i usunięta --
+    parowanie .96 zostało, `test pve11` rc=0.
+  - **Naprawa labu:** `--unpair` padał (manifestu już nie było), więc dla
+    ostatniej relacji z danym hostem dopisane ręcznie to, co `remove-client`
+    dopisuje sam (`STATE=removed`), potem zwykłe `delete-relation` (kopie
+    zostały) i założenie od nowa. Przy okazji w kształcie ustalonym przez
+    właściciela -- JEDNA relacja na parę hostów: `pve9` (miejsca
+    `hdd/lab/ct-201` + `hdd/lab/srv-a`) i `pve11` (`hdd/ct`), obie
+    `m12w4d7h24-gfs` z `--grant-quiesce`. `vm-101` i `srv-b` pominięte --
+    usunięte świadomie. Zweryfikowane: klucze i manifesty są, `test` rc=0,
+    trzy linie crona odpalone dosłownie rc=0, nowe migawki u celu, audyt
+    „nothing orphaned". Kopie rekordów sprzed naprawy: pve10
+    `/root/wt/records-backup/`.
+  - **Co jeszcze pokazał ten przebieg.** (1) **Kolektor ma KSZTAŁT:** gdy żywa
+    relacja używa szablonu bez drabiny, aktywacja szablonu-drabiny (`default`,
+    `Y5…`, `passive`) jest odmawiana (*„This host reads as FLAT … NO RETENTION
+    AT ALL"*). Kreator tego nie wiedział i oferował „Bez zamrażania → default"
+    prosto w FATAL; teraz na takim kolektorze nie pyta o spójność i pokazuje
+    tylko szablony, które się aktywują, z wyjaśnieniem. (2) **LUKA, nienaprawiona:**
+    przy wspólnym hoście `delete-relation` pomija stronę źródła, więc nadania
+    `zfs allow` i wpis w zakresie źródła dla usuniętych datasetów ZOSTAJĄ. Nie
+    ma czasownika „zabierz dataset z zakresu"; w labie posprzątane ręcznie
+    (edycja `.scope` + `--commit-scope`, 1 nadanie cofnięte). (3) **LUKA:** relacja,
+    której parowanie zniknęło, nie ma drogi „sparuj od nowa" -- ponowienie
+    komendy to no-op, `remove-client` pada na `--unpair`.
 - **GUI SPÓJNE Z CYKLEM ŻYCIA RELACJI: załóż → pauza → usuń → załóż od nowa (2026-09-20).**
   Właściciel: *„Musi być obsłużone z GUI pauzowanie i usuwanie relacji. (…) Admin
   chce coś zmienić -- usuwa i tworzy nową? Na razie bym to zaakceptował. Ale

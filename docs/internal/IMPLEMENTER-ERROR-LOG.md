@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22.*
+*Evidence: E13, E22, E57.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1684,3 +1684,29 @@ Second lesson, same day: the live campaign found four defects the stubs could
 not (this one, the empty ladder section for every quiescing profile, the
 missing freeze grant, the name held by a tombstone). For a front end over
 verbs, the lab run is the test and the stub suite is the regression net.
+
+### E57 — I composed a destructive step without measuring it where it bites (2026-09-20, R2/R12)
+
+**Genesis.** `delete-relation` runs three existing halves; the third is
+`clean-relationships.sh --purge=NAME`. I read its header ("it does not touch
+anything it classifies as LIVE"), saw it refuse a live NAME, and proved the
+whole cycle live that morning: create, pause, delete, create again. In the
+afternoon the owner cleared dead records from the GUI and asked me to check the
+real state. Three relationships said `active` and had no keys: the purge of
+removed records had deleted the ADDRESS-keyed pairing manifest and key files
+their live siblings were using.
+
+**Cause.** The tool's LIVE guard is per NAME; four of its artefact families are
+per ADDRESS. I carried "it protects what is live" across that boundary without
+measuring it (R2). And my campaign exercised one shape only -- the last
+relationship with a peer -- while the lab's ordinary shape was several
+relationships per peer; I wrote "the cycle passed live" and the sentence hid
+the shape that was never run (R12). `remove-client`, forty lines from where I
+was working, already carried the rule ("leaving the pairing in place -- keyed by
+the peer ADDRESS and X still uses it"); I did not ask why it needed one.
+
+**Rule.** R2/R12. Before composing a destructive step into a new verb, run it
+in the shape where sharing exists: two relationships on one peer, delete one,
+then TEST THE OTHER -- not "does the deleted one disappear" but "does the
+survivor still work". A green `status` is not that test; it read `active` the
+whole time. The check is the link test and one real cron line.

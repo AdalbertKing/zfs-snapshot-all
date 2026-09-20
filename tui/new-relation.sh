@@ -395,7 +395,7 @@ import sys, json
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for r in d.get("relations", []):
-    print("%s\t%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", ""), r.get("state", "")))' | tr -d '\r' >"$TMPD/rel.all"
+    print("%s\t%s\t%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", ""), r.get("state", ""), r.get("profile", "")))' | tr -d '\r' >"$TMPD/rel.all"
     awk -F'\t' '$4!="removed"' "$TMPD/rel.all" >"$TMPD/rel.tsv"
     awk -F'\t' '$4=="removed"{print $1}' "$TMPD/rel.all" >"$TMPD/rel.removed"
 }
@@ -465,10 +465,11 @@ for p in d.get("profiles", []):
     # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
     # z najdrobniejszego szczebla; pełne zdanie z rytmem idzie do podsumowania (3. pole).
     frozen = [t for t in p.get("tiers", []) if t.get("send_schedule") and t.get("quiesce")]
-    rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p), w["quiesce"], 1 if frozen else 0))
+    rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p), w["quiesce"], 1 if frozen else 0,
+                 "ladder" if (p.get("shape") == "one-family" and p.get("mechanism") == "gfs") else "flat"))
 rows.sort(key=lambda r: (r[0] != "default", r[0].lower()))     # default na górze
-for n, t, c, q, f in rows:
-    print("%s\t%s\t%s\t%s\t%d" % (n, t, c, q, f))
+for n, t, c, q, f, sh in rows:
+    print("%s\t%s\t%s\t%s\t%d\t%s" % (n, t, c, q, f, sh))
 PYEOF
     [ -s "$TMPD/prof.tsv" ]
 }
@@ -480,8 +481,25 @@ PYEOF
 # Dlatego najpierw pytanie o spójność (domyślnie: zamrażaj), potem lista szablonów,
 # które to spełniają.
 FREEZE=1
+# KOLEKTOR MA KSZTAŁT. Gdy choć jedna żywa relacja używa szablonu BEZ drabiny (wszystko poza
+# jedna-rodzina+GFS: default, Y5..., passive),
+# aktywacja relacji z szablonem-drabiną (default, Y5..., passive) jest ODMAWIANA
+# ("This host reads as FLAT ... refusing to create ... with NO RETENTION AT ALL" --
+# zmierzone na pve10, 2026-09-20). Kreator nie może więc takich szablonów oferować:
+# operator przeszedłby 10 kroków po to, żeby dostać FATAL przy aktywacji.
+host_is_flat() {    # 0 = na tym kolektorze są już relacje "rodzina na szczebel"
+    local n p t st pr fp
+    status_tsv
+    while IFS=$'\t' read -r n p t st pr; do
+        [ "$st" = removed ] && continue
+        [ -n "$pr" ] || continue
+        fp=$(awk -F'\t' -v n="$pr" '$1==n{print $6}' "$TMPD/prof.tsv")
+        [ "$fp" = flat ] && return 0
+    done <"$TMPD/rel.all"
+    return 1
+}
 step_profile() {
-    local items=() n w c q f y=OFF x=OFF def sub=freeze
+    local items=() n w c q f sh y=OFF x=OFF def sub=freeze flat=0
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
@@ -489,6 +507,8 @@ step_profile() {
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; return 0
     fi
+    host_is_flat && flat=1
+    if [ "$flat" -eq 1 ]; then FREEZE=1; sub=list; fi     # nie ma o co pytać: drabin i tak nie wolno
     while :; do
         geom
         if [ "$sub" = freeze ]; then
@@ -501,18 +521,21 @@ step_profile() {
             sub=list; continue
         fi
         items=()
-        while IFS=$'\t' read -r n w c q f; do
-            [ -n "$n" ] && [ "$f" = "$FREEZE" ] && items+=("$n" "$(printf '%-15s %s' "$n" "$w")")
+        while IFS=$'\t' read -r n w c q f sh; do
+            [ -n "$n" ] || continue
+            if [ "$flat" -eq 1 ]; then [ "$sh" = flat ] || continue
+            else [ "$f" = "$FREEZE" ] || continue; fi
+            items+=("$n" "$(printf '%-15s %s' "$n" "$w")")
         done <"$TMPD/prof.tsv"
         if [ "${#items[@]}" -eq 0 ]; then    # nie ma szablonu o takiej spójności -- pokaż wszystkie, nie pustą listę
-            while IFS=$'\t' read -r n w c q f; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s  (%s)' "$n" "$w" "$q")"); done <"$TMPD/prof.tsv"
+            while IFS=$'\t' read -r n w c q f sh; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s  (%s)' "$n" "$w" "$q")"); done <"$TMPD/prof.tsv"
         fi
         [ "$FREEZE" -eq 1 ] && def=m12w4d7h24-gfs || def=default
         in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
         in_list "$def" "${items[@]}" || def="${items[0]}"
         wt --title "$(title 6 'Jak długo trzymać?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "$( [ "$FREEZE" -eq 1 ] && echo "Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez)." || echo "Szablony BEZ zamrażania." ) W nawiasie: jak\nliczona jest retencja. Szablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" \
-           "${items[@]}" || { sub=freeze; continue; }
+           --menu "$( if [ "$flat" -eq 1 ]; then echo "Ten kolektor ma już relacje z szablonem bez drabiny GFS, więc szablony-\ndrabiny (default...) nie dadzą się tu aktywować. Poniższe zamrażają\ndobowe i rzadsze; bez zgody źródła (krok 9) migawki wyjdą niezamrożone."; elif [ "$FREEZE" -eq 1 ]; then echo "Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez). W nawiasie: jak\nliczona jest retencja. Szablon da się zmienić później."; else echo "Szablony BEZ zamrażania. W nawiasie: jak liczona jest retencja.\nSzablon da się zmienić później."; fi )" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" \
+           "${items[@]}" || { [ "$flat" -eq 1 ] && return 1; sub=freeze; continue; }
         PROFILE="$WT_OUT"; return 0
     done
 }

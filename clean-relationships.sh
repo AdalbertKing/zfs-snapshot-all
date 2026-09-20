@@ -288,6 +288,31 @@ classify() {
 # is a list they cannot check.
 artefacts_for() { _artefacts_raw "$@" | awk -F'\t' '!seen[$2]++'; }
 
+# addr_live_users <id> <addr> -> the OTHER relationships, not removed, whose record
+# names the same peer address. The pairing manifest, the four key files and the
+# scaffolds are keyed by ADDRESS and shared by every relationship with that peer, so
+# they belong to a relationship's purge only when it is the LAST one there.
+#
+# Until 2026-09-20 they went with whichever record was purged first. Measured on
+# pve10 that day, by the owner clearing dead records from the GUI: purging the
+# removed records of 192.168.28.99 and 192.168.28.96 deleted
+# peers/<addr>.conf and <addr>_ed25519 while lab-ct201, lab-srv-a and pve11 were
+# ACTIVE on those peers -- status still said `active`, every cron line pointed at
+# a key that no longer existed, and `test` answered "no pairing manifest". The
+# tool's own rule is "it does not touch anything it classifies as LIVE"; the
+# classification was per NAME and the artefacts per ADDRESS.
+addr_live_users() {
+    local id="$1" addr="$2" n out=""
+    [ -n "$addr" ] || return 0
+    for n in "${!NAME_ADDR[@]}"; do
+        [ "$n" = "$id" ] && continue
+        [ "${NAME_ADDR[$n]}" = "$addr" ] || continue
+        case "${NAME_STATE[$n]:-}" in removed) continue ;; esac
+        out="$out${out:+, }$n"
+    done
+    printf '%s' "$out"
+}
+
 _artefacts_raw() {
     # An identity that IS an address -- an orphan key file with no client
     # record left to name it -- resolves to itself. Without this the
@@ -360,7 +385,12 @@ _artefacts_raw() {
     done < <(grep -hE '^(RUX_TARGET|MANAGED_DATASETS|PEER_JOIN_GRANTED_DATASETS)=' \
                  "$CLIENTS_DIR/$id.conf" "$PEER_STATE_DIR/$id.conf" 2>/dev/null \
              | cut -d= -f2- | tr -d "'\"" | sed 's/\\ /\n/g' | tr ', \t' '\n\n\n')
-    [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
+    # An identity that IS an address other live relationships use: peers/<id>.conf is
+    # then THEIR pairing manifest, not this record's join manifest. That was the first
+    # purge that did the damage on pve10 -- a removed record named 192.168.28.99.
+    local id_is_shared_addr=""
+    id_is_shared_addr=$(addr_live_users "$id" "$id")
+    [ -z "$id_is_shared_addr" ] && [ -e "$PEER_STATE_DIR/$id.conf" ]    && echo "manifest	$PEER_STATE_DIR/$id.conf"
     [ -e "$PEER_STATE_DIR/$id.scope" ]   && echo "scope	$PEER_STATE_DIR/$id.scope"
     [ -e "$PEER_STATE_DIR/$id.scope.sha256" ] && echo "scope	$PEER_STATE_DIR/$id.scope.sha256"
     [ -e "$PEER_STATE_DIR/$id.scope.request" ] && echo "scope	$PEER_STATE_DIR/$id.scope.request"
@@ -373,8 +403,9 @@ _artefacts_raw() {
     # existence; the directory's owner proves nothing.
     [ -d "$HOME_ROOT/zfsbackup-$id" ] && ! id "zfsbackup-$id" >/dev/null 2>&1 \
         && echo "homedir	$HOME_ROOT/zfsbackup-$id"
-    # Address-keyed families, reachable only through the client record.
-    if [ -n "$addr" ]; then
+    # Address-keyed families, reachable only through the client record -- and ONLY
+    # when no other live relationship shares the address (addr_live_users above).
+    if [ -n "$addr" ] && [ -z "$(addr_live_users "$id" "$addr")" ]; then
         [ -e "$PEER_STATE_DIR/$addr.conf" ] && echo "pairing	$PEER_STATE_DIR/$addr.conf"
         for f in "$PEER_KEY_DIR/${addr}_ed25519" "$PEER_KEY_DIR/${addr}_ed25519.pub" \
                  "$PEER_KEY_DIR/${addr}_known_hosts" "$PEER_KEY_DIR/${addr}_alias_known_hosts"; do
@@ -1013,9 +1044,11 @@ purge_one() {
     fi
 
     log "purging '$id'"
+    local _shared; _shared=$(addr_live_users "$id" "${NAME_ADDR[$id]:-}")
+    [ -z "$_shared" ] || log "  the pairing with ${NAME_ADDR[$id]} (manifest, keys) is LEFT ALONE -- still used by: $_shared"
 
     # 1. The source's own verb, only when its map is still there.
-    if [ -s "$PEER_STATE_DIR/$id.conf" ] && [ -x "$DEPLOY" ]; then
+    if [ -s "$PEER_STATE_DIR/$id.conf" ] && [ -x "$DEPLOY" ] && [ -z "$(addr_live_users "$id" "$id")" ]; then
         log "  deploy.sh --leave=$id (its manifest is present, so the tool can still do this properly)"
         local lout lrc
         lout=$(bash "$DEPLOY" --leave="$id" </dev/null 2>&1); lrc=$?
