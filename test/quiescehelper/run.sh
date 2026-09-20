@@ -1139,14 +1139,23 @@ else
 fi
 
 # A plain `bash deploy.sh` maintains every host in the fleet. It must never
-# grant privilege nobody asked for, so every call site stays behind the flag.
+# grant privilege nobody asked for, so no call site may be reachable without
+# either the flag or a grant that ALREADY exists on this host.
+#
+# The third site (2026-09-20) is the narrowed --commit-scope: it re-writes a
+# standing grant so its whitelist follows the replication scope, and it is
+# guarded by the presence of that grant's own files. It cannot create one --
+# with nothing on disk the branch is not taken and the "NOT granted" note is
+# printed instead. That distinction is the whole reason it is counted apart
+# here rather than folded into the flag count.
 sites=$(grep -c 'install_quiesce_grant "' "$REPO/deploy.sh")
 guarded=$(grep -B4 'install_quiesce_grant "' "$REPO/deploy.sh" | grep -c 'ALLOW_QUIESCE" -eq 1')
-if [ "$sites" = 2 ] && [ "$guarded" = 2 ]; then
-    ok "local-quiesce: both call sites are behind --allow-quiesce (a bare re-run grants nothing)"
+kept=$(grep -B2 'install_quiesce_grant "' "$REPO/deploy.sh" | grep -c '\-e "/etc/sudoers.d/zfs-quiesce-\$account" \] || \[ -e "/etc/zfs-quiesce-allow/\$account" \]')
+if [ "$sites" = 3 ] && [ "$guarded" = 2 ] && [ "$kept" = 1 ]; then
+    ok "local-quiesce: every call site is behind --allow-quiesce, except the one that can only RE-WRITE a grant already on disk (a bare re-run still grants nothing)"
 else
-    bad "local-quiesce: both call sites are behind --allow-quiesce (a bare re-run grants nothing)" \
-        "wywolan=$sites strzezonych=$guarded"
+    bad "local-quiesce: a call site that could grant without being asked" \
+        "wywolan=$sites strzezonych=$guarded odtwarzajacych=$kept"
 fi
 
 # ...and must not REVOKE one either. A re-run without the flag on a host that
@@ -1179,6 +1188,37 @@ if grep -q '^        echo "# managed by deploy.sh --allow-quiesce' "$REPO/deploy
 else
     bad "local-quiesce: the whitelist header names the flag, not a mode that may not apply" \
         "$(grep -n 'managed by deploy.sh' "$REPO/deploy.sh")"
+fi
+
+# ---- commit-scope, narrowed WITHOUT the flag: the whitelist must follow -----
+#
+# MEASURED on pve9b 2026-09-20, not imagined: a relationship granted quiesce over
+# {hdd/rs/a, hdd/rs/b}, then re-committed with a scope narrowed to {hdd/rs/a} and
+# no --allow-quiesce, ended with `zfs allow hdd/rs/b` empty (the replication grant
+# WAS revoked) and /etc/zfs-quiesce-allow/<account> still listing hdd/rs/b. The
+# account could still freeze guests whose disks live on a dataset it is no longer
+# allowed to replicate -- the exact drift the header of install_quiesce_grant says
+# cannot happen. The run also printed "guest quiesce NOT granted ... remote quiesce
+# will refuse" while the sudoers rule and the whitelist both stood.
+#
+# The branch must therefore consult what is ON DISK, keep an existing grant (a
+# narrowed replication scope is not a request to drop the freeze permission), and
+# re-write it to the CURRENT scope -- the same still_granted list the zfs allow
+# calls above used, so the two lists cannot be different by construction.
+qsc=$(sed -n '/Same list, so the quiesce scope cannot drift/,/^    # Recorded for the NEXT narrower commit/p' "$REPO/deploy.sh")
+if printf '%s' "$qsc" | grep -q 'elif \[ -e "/etc/sudoers.d/zfs-quiesce-\$account" \] || \[ -e "/etc/zfs-quiesce-allow/\$account" \]; then' \
+   && [ "$(printf '%s' "$qsc" | grep -c 'install_quiesce_grant "\$account" "\${still_granted\[\*\]}"')" -eq 2 ] \
+   && printf '%s' "$qsc" | grep -q 'is KEPT' \
+   && printf '%s' "$qsc" | grep -q -- '--revoke-quiesce=\$account'; then
+    ok "commit-scope: a scope narrowed WITHOUT --allow-quiesce keeps an existing grant but RE-WRITES its whitelist from the same still_granted list -- the whitelist cannot keep naming a dataset whose replication grant this run just revoked (pve9b, 2026-09-20)"
+else
+    bad "commit-scope: the quiesce whitelist can drift from the replication scope" "$qsc"
+fi
+if [ "$(printf '%s' "$qsc" | grep -c 'NOT granted')" -eq 1 ] \
+   && printf '%s' "$qsc" | grep -B1 'NOT granted' | head -1 | grep -q '^    else$'; then
+    ok "commit-scope: ...and the 'NOT granted -- remote quiesce will refuse' sentence is reserved for the case where nothing is granted, instead of being printed over a grant that stands"
+else
+    bad "commit-scope: still claims 'NOT granted' where a grant exists" "$qsc"
 fi
 
 # ---- REV-20260801-022 F1: an explicit grant must not exit 0 ----------------
