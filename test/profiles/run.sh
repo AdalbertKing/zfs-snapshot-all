@@ -949,5 +949,58 @@ else
 fi
 
 
+# 6. PASSIVE CONSUMPTION ON A FLAT COLLECTOR (2026-09-20).
+#
+# Measured on pve10 against a real sync relationship from a source that already
+# carries its own automated_* family. Three guards in a row made passive
+# consumption unreachable there, and each was right on its own:
+#
+#   --profile=d30      gen-cron: the tier would create 'automated_...' and prune
+#                      'automated_daily' -- the adopted family grows unbounded;
+#   --profile=passive  activate: "This host reads as FLAT ... NO RETENTION AT ALL"
+#                      -- passive carries a [prune] fragment, which IS the ladder
+#                      shape, and a flat host does not install the ladder on top.
+#
+# passive-flat is the missing piece: prefixless like passive, flat like the host.
+# The three properties below are what make it that, and each one was a failed
+# activation on the way here -- so each is pinned rather than described.
+PF="$ROOT/profiles/passive-flat.conf"
+if [ -f "$PF" ]; then
+    if ! grep -qE '^[[:space:]]*prefix[[:space:]]*=' "$PF"; then
+        ok "passive-flat: no 'prefix' at all -- it adopts a family somebody else stamps, exactly like passive"
+    else
+        bad "passive-flat: declares a prefix, so it is not passive" "$(grep -n 'prefix' "$PF")"
+    fi
+    if ! grep -qE '^\[prune\]' "$PF" && grep -qE '^\[dataset\]' "$PF"; then
+        ok "passive-flat: no [prune] fragment -- that fragment is what profile_declares_ladder reads as LADDER, and a flat host refuses a ladder profile at CREATE"
+    else
+        bad "passive-flat: carries a [prune] fragment, which a flat host refuses" "$(grep -n '^\[' "$PF")"
+    fi
+    tier="$(sed -n '/^\[template:/,/^\[/p' "$PF")"
+    if printf '%s' "$tier" | grep -qE '^[[:space:]]*send_schedule' && printf '%s' "$tier" | grep -qE '^[[:space:]]*prune_schedule' \
+       && printf '%s' "$tier" | grep -qE '^[[:space:]]*pattern[[:space:]]*=[[:space:]]*automated$'; then
+        ok "passive-flat: ONE tier that both consumes and prunes, and its pattern is 'automated' -- the family it adopts; 'pattern = -' is refused here because a send tier is read as creating 'automated_...'"
+    else
+        bad "passive-flat: the tier is not self-pruning, or names the wrong family" "$tier"
+    fi
+    if grep -qE '^\[template:passive_flat_hourly\]' "$PF"; then
+        ok "passive-flat: the tier is named for a cadence gen-cron knows -- the retention letter comes from the LAST word of the template name, so 'passive_flat' alone rendered nothing (and the FATAL that followed carried no reason)"
+    else
+        bad "passive-flat: tier name has no cadence word, so keep cannot become a retention letter" "$(grep -n '^\[template:' "$PF")"
+    fi
+    if render_profile "$PF" "passive-flat" > "$FLOOR/pf.out" 2>/dev/null; then
+        if grep -q 'delsnaps.sh' "$FLOOR/pf.out" && grep -qE '"automated" -H[0-9]+' "$FLOOR/pf.out" \
+           && ! grep -qE 'delsnaps[^|]*@' "$FLOOR/pf.out"; then
+            ok "passive-flat: the REAL gen-cron renders a prune line over the adopted family, counted flat, and LOCAL -- a passive relationship must not prune the source's own family"
+        else
+            bad "passive-flat: rendered prune line is wrong" "$(grep -m2 delsnaps "$FLOOR/pf.out" | cut -c1-200)"
+        fi
+    else
+        bad "passive-flat: does not render through the real gen-cron" "$PROFILE_ERR"
+    fi
+else
+    bad "passive-flat: the profile file is missing" "$PF"
+fi
+
 echo "profiles: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
