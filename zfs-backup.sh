@@ -11300,11 +11300,14 @@ cmd_delete_relation() {
         return $?
     fi
     record_load client "$cpath"
-    local peer="$PEER_HOST" state="$STATE" copies="$MANAGED_DATASETS" port="22" tgt="${CLIENT_TARGET:-}"
+    # Every field defaulted: a record that was never activated has no MANAGED_DATASETS,
+    # and under `set -u` that was a crash on exactly the records this verb exists to
+    # clear away (found by the delrel section, 2026-09-20).
+    local peer="${PEER_HOST:-}" state="${STATE:-}" copies="${MANAGED_DATASETS:-}" port="22" tgt="${CLIENT_TARGET:-}"
     # The label the SOURCE knows this collector by -- derived exactly as deploy.sh
     # --unpair derives the `--leave=` it prints (hostname -s, sanitised).
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
-    case "$ACTIVE_ENDPOINT" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
     case "$port" in ''|*[!0-9]*) port=22 ;; esac
 
     # Who else uses this peer? Counted from the records, in a subshell per file so
