@@ -397,10 +397,10 @@ for r in d.get("relations", []):
 }
 step_target() {
     [ "$MODE" = sync ] && return 0
-    local items=() t n cnt first="" seen="" p
+    local items=() t n cnt first="" seen="" p _st
     [ -e "$TMPD/targets.tsv" ] || info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
     status_tsv
-    while IFS=$'\t' read -r n p t; do
+    while IFS=$'\t' read -r n p t _st; do      # 4. pole (stan) MUSI mieć własną zmienną: inaczej wpada do $t
         [ -n "$t" ] || continue
         case " $seen " in *" $t "*) continue ;; esac
         seen="$seen $t"; cnt=$(awk -F'\t' -v t="$t" '$3==t' "$TMPD/rel.tsv" | grep -c .)

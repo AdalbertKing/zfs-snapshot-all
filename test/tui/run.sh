@@ -1240,6 +1240,36 @@ n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/
 line=$(sed -n "${n}p" "$NR_DIR/answers")
 [ -n "$line" ] || { echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"; exit 255; }
 rc="${line%%	*}"; out="${line#*	}"
+# KONTRAKT PRAWDZIWEGO WHIPTAILA: z listy da sie wybrac TYLKO to, co na niej jest. Bez
+# tego atrapa przyjela 'hdd/backups', gdy kreator oferowal 'hdd/backups<TAB>active'
+# (wada znaleziona dopiero na pve10, 2026-09-20) -- odpowiedz omijala oferte.
+kind=""; step=0; i=0; tags=()
+for a in "$@"; do
+    i=$((i+1))
+    case "$a" in --menu) kind=menu; step=2; at=$i ;; --radiolist|--checklist) kind=list; step=3; at=$i ;; esac
+done
+if [ -n "$kind" ]; then
+    j=$((at + 5)); while [ "$j" -le "$#" ]; do tags+=("${!j}"); j=$((j + step)); done
+    # Oferta sama w sobie: znacznik z tabulatorem to sklejone pola (tak wygladal cel
+    # 'hdd/backups<TAB>active'), a --default-item spoza listy to kursor nie tam, gdzie mysli kod.
+    for t in "${tags[@]}"; do
+        case "$t" in *"	"*) echo "ATRAPA: znacznik listy zawiera TAB (sklejone pola): '$t'" >> "$NR_DIR/wt.log"; echo "ATRAPA: TAB w znaczniku" >&2; exit 255 ;; esac
+    done
+    i=0; for a in "$@"; do
+        i=$((i+1))
+        if [ "$a" = "--default-item" ]; then
+            k=$((i+1)); di="${!k}"; ok=0; for t in "${tags[@]}"; do [ "$t" = "$di" ] && ok=1; done
+            [ "$ok" -eq 1 ] || { echo "ATRAPA: --default-item '$di' NIE MA na liscie: ${tags[*]}" >> "$NR_DIR/wt.log"; echo "ATRAPA: default-item spoza listy" >&2; exit 255; }
+        fi
+    done
+fi
+if [ -n "$kind" ] && [ "$rc" = 0 ] && [ -n "$out" ]; then
+    while IFS= read -r want; do
+        [ -n "$want" ] || continue
+        ok=0; for t in "${tags[@]}"; do [ "$t" = "$want" ] && ok=1; done
+        [ "$ok" -eq 1 ] || { echo "ATRAPA: odpowiedzi '$want' NIE MA na oferowanej liscie: ${tags[*]}" >> "$NR_DIR/wt.log"; echo "ATRAPA: '$want' spoza listy" >&2; exit 255; }
+    done <<<"$(printf '%s' "$out" | tr '|' '\n')"
+fi
 printf '%s' "$out" | tr '|' '\n' >&2
 exit "$rc"
 EOF
