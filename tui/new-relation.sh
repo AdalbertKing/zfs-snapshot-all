@@ -380,6 +380,10 @@ step_datasets() {
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
 TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""
 EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
+# Zamrażanie ma DWIE połowy (zmierzone pve10 <- pve9b, 2026-09-20): szablon, który każe
+# zamrażać, ORAZ zgoda źródła, żeby konto kolektora mogło zamrażać jego gości. Bez zgody
+# każda "zamrażana" migawka wychodzi jako automated_<szczebel>_crash_<czas>.
+GQUIESCE=1
 # PAMIĘĆ NA CZAS JEDNEGO PRZEBIEGU. Czytelniki odpowiadają po 5-12 s; bez tego każde
 # "Wstecz" i ponowne "Dalej" kazało czekać od nowa (zmierzone jazdą: cofnięcie z kroku 7
 # do 6 = 9 s na "Czytam szablony"). Stan hosta nie zmienia się w trakcie klikania.
@@ -567,7 +571,7 @@ account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT
 
 # --- krok 9: ustawienia dodatkowe ---------------------------------------------
 step_extra() {
-    local grant_w masks_w src_w man_w
+    local grant_w masks_w src_w man_w q_w
     while :; do
         geom
         [ "$GRANT" -eq 1 ] && grant_w="nadaj stąd, od razu" || grant_w="zatwierdzę sam na źródle"
@@ -575,10 +579,15 @@ step_extra() {
         src_w="${SRCPROF:-taka sama jak tutaj ($PROFILE)}"
         [ "$RECURSION" = atomic ] && { src_w="BRAK -- przy atomowo program nie sprząta u źródła"; SRCPROF=""; }
         [ "$MANUAL" -eq 1 ] && man_w="ręczne (paczka do przeniesienia)" || man_w="przez SSH, automatycznie"
+        if [ "$FREEZE" -ne 1 ]; then q_w="nie dotyczy (szablon bez zamrażania)"
+        elif [ "$GRANT" -ne 1 ]; then q_w="dasz sam na źródle (--allow-quiesce)"
+        elif [ "$GQUIESCE" -eq 1 ]; then q_w="nadaj stąd (inaczej migawki '_crash_')"
+        else q_w="NIE nadawaj -- migawki wyjdą jako '_crash_'"; fi
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item go \
-           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 9)" "$W" 5 \
+           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 10)" "$W" 6 \
            go    "Bez zmian, dalej" \
            grant "Prawa na źródle:        $grant_w" \
+           quies "Zgoda na zamrażanie:    $q_w" \
            masks "Pomijane migawki:       $masks_w" \
            src   "Retencja u źródła:      $src_w" \
            man   "Parowanie:              $man_w" || return 1
@@ -588,6 +597,16 @@ step_extra() {
                 wt --title "Prawa na źródle" --yes-button "Nadaj stąd" --no-button "Zatwierdzę sam" \
                    --yesno "Źródło musi nadać kontu kolektora prawa zfs do wybranych miejsc.\n\n'Nadaj stąd' = kreator zrobi to przez SSH jako root (--grant-remotely).\n'Zatwierdzę sam' = instalacja ZATRZYMA SIĘ i poda komendę do wykonania\nna źródle (deploy.sh --commit-scope=...); potem ponawia się tę samą komendę." 14 "$W"
                 case $? in 0) GRANT=1 ;; 1) GRANT=0 ;; esac ;;      # Esc (255) = bez zmian
+            quies)
+                if [ "$FREEZE" -ne 1 ]; then
+                    wt --title "Zgoda na zamrażanie" --msgbox "Wybrany szablon niczego nie zamraża, więc zgoda nie jest potrzebna.\n(Zamrażanie wybiera się w kroku 6.)" 9 "$W"
+                elif [ "$GRANT" -ne 1 ]; then
+                    wt --title "Zgoda na zamrażanie" --msgbox "Prawa na źródle nadajesz sam, więc i tę zgodę dasz tam:\n\n  deploy.sh --commit-scope=$(hostname -s) --allow-quiesce\n\nBez niej migawki dobowe i rzadsze wyjdą jako '_crash_' (niezamrożone)." 12 "$W"
+                else
+                    wt --title "Zgoda na zamrażanie gości na źródle" --yes-button "Nadaj stąd" --no-button "Nie nadawaj" \
+                       --yesno "Szablon każe zamrażać gości (VM/CT) przed migawką dobową i rzadszą.\nŻeby to DZIAŁAŁO, źródło musi pozwolić kontu tego kolektora na zamrażanie\n(--grant-quiesce = deploy.sh --allow-quiesce po stronie źródła).\n\nBez zgody relacja działa, ale te migawki wyjdą jako\nautomated_<szczebel>_crash_<czas> -- jak po wyrwaniu wtyczki." 15 "$W"
+                    case $? in 0) GQUIESCE=1 ;; 1) GQUIESCE=0 ;; esac
+                fi ;;
             masks)
                 wt --title "Pomijane migawki" --cancel-button "Wstecz" \
                    --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja).\nPuste = kopiuj wszystkie." 12 "$W" "$EXFAM" && EXFAM="${WT_OUT// /}" ;;
@@ -633,6 +652,7 @@ build_argv() {   # [install] -> ARGV[]
     [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
+    [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
     [ "$MANUAL" -eq 1 ] && ARGV+=("--manual-join")
     [ "${1:-}" = install ] && ARGV+=("--install" "--yes")
     return 0
@@ -653,6 +673,10 @@ summary_text() {
     echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
     echo "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}"
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
+    if [ "$FREEZE" -eq 1 ]; then
+        if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce)."
+        else echo "Zamrażanie: BEZ zgody źródła migawki wyjdą jako '_crash_' (niezamrożone)."; fi
+    fi
     echo "Prawa na źródle: $( [ "$GRANT" -eq 1 ] && echo "nadane stąd, od razu" || echo "zatwierdzisz SAM -- instalacja stanie i poda komendę" )$( [ "$MANUAL" -eq 1 ] && echo "; parowanie ręczne")"
     echo
     echo "Komenda (to samo wpisałbyś z palca):"
@@ -685,7 +709,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
             # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
             echo "=== ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '$RNAME' czeka na zgodę źródła."
-            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)"
+            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
+            [ "$FREEZE" -eq 1 ] && echo "       (--allow-quiesce: bez tego szablon zamrażający da migawki '_crash_')"
             echo "    2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
             cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
             echo "       $(cmd_oneline)"

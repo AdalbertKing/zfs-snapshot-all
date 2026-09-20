@@ -308,6 +308,12 @@ Usage:
                                                        records GRANTED_REMOTELY_BY. The ordinary
                                                        fetch+hash+includes verification still
                                                        runs afterwards and still decides.
+                                                       --grant-quiesce (only WITH it) adds
+                                                       --allow-quiesce to that commit: a profile
+                                                       that quiesces only freezes anything once
+                                                       the source lets this account freeze its
+                                                       guests; without it every quiesced tier
+                                                       degrades to automated_<tier>_crash_<ts>.
   zfs-backup.sh --source=HOST:DATASET --mode=sync [--port=N] [--profile=NAME]
                 [--name=NAME] [--local-user=NAME] [--install] [--yes|-y]
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
@@ -14928,8 +14934,22 @@ joined it does step 3 for you."
     fi
 }
 
+# --grant-quiesce (2026-09-20). A profile that quiesces (every family-per-tier one:
+# daily and rarer tiers carry `quiesce = auto,degrade`) only FREEZES anything if the
+# source let this collector's account freeze its guests -- deploy.sh's --allow-quiesce,
+# a separate grant from the dataset scope. --grant-remotely never passed it, so a
+# relationship installed in one command with a quiescing profile degraded every night.
+# Measured on pve10 <- pve9b: before the grant the daily snapshot is named
+# automated_daily_crash_<ts>, after `--commit-scope=pve10 --allow-quiesce` it is
+# automated_daily_<ts>. Opt-in, explicit, and only alongside --grant-remotely: it is
+# the same root-over-SSH authority that flag already exercises, one grant wider, and
+# it is recorded in the same audit line.
+RUX_GRANT_QUIESCE="${RUX_GRANT_QUIESCE:-0}"
+
 rux_grant_remotely() {   # <host> <port> <requested dataset>
     local host="$1" port="$2" requested="$3"
+    local aq="" aq_note=""
+    [ "${RUX_GRANT_QUIESCE:-0}" -eq 1 ] && { aq=" --allow-quiesce"; aq_note=" +quiesce"; }
     local sfile hfile
     sfile=$(peer_scope_path "$COLLECTOR_LABEL")
     hfile=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
@@ -14961,6 +14981,19 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
             esac
         done < <(dataset_list_split "$requested")
         if [ -z "$missing" ]; then
+            if [ -n "$aq" ]; then
+                # The datasets are covered, the freeze grant may not be: re-committing
+                # is idempotent for the scope and is the only place --allow-quiesce lands.
+                local q_repo="" _qd
+                for _qd in "$SCRIPT_DIR" /root/scripts/zfs-snapshot-all /root/zfs-snapshot-all; do
+                    if rux_root_ssh "$host" "$port" "test -x '$_qd/deploy.sh'" >/dev/null 2>&1; then q_repo="$_qd"; break; fi
+                done
+                [ -n "$q_repo" ] || die "--grant-quiesce: could not find deploy.sh on $host"
+                log "--grant-remotely: scope already covers the request; re-committing on $host for --grant-quiesce"
+                rux_root_ssh "$host" "$port" "cd '$q_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
+                    || die "--grant-quiesce: deploy.sh --commit-scope='$COLLECTOR_LABEL' --allow-quiesce FAILED on $host (see above)"
+                return 0
+            fi
             log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' covering the request -- nothing to grant"
             return 0
         fi
@@ -14987,10 +15020,10 @@ include_children = yes
 ' "$_rh"
             done <<< "$missing"
         } | rux_root_ssh_in "$host" "$port" "cat >> '$sfile'"             || die "--grant-remotely: could not append to the scope file on $host -- nothing was committed"
-        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
+        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
         local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
         rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
-' '$ext_stamp (extension)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
+' '$ext_stamp (extension$aq_note)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
         log "--grant-remotely: extension committed on $host as '$COLLECTOR_LABEL', audit recorded"
         return 0
     fi
@@ -15055,11 +15088,11 @@ An operator prepared that file, and this flag is not permission to overwrite the
     } | rux_root_ssh_in "$host" "$port" "cat > '$sfile'" \
         || die "--grant-remotely: could not write the scope file on $host -- nothing was committed"
 
-    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4 \
+    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
         || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was written; finish or inspect locally there."
 
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
-    rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp' >> '$mfile'" \
+    rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp$aq_note' >> '$mfile'" \
         || warn "--grant-remotely: the grant is committed but the audit line could not be appended to $mfile on $host -- add it by hand"
     log "--grant-remotely: committed on $host as '$COLLECTOR_LABEL', audit recorded"
 }
@@ -15275,6 +15308,7 @@ rux_entry() {
             --name=*)    name="${a#*=}" ;;
             --local-user=*) local_user="${a#*=}"; flag_local_user rux "$local_user" ;;
             --grant-remotely) grant_remotely=1 ;;
+            --grant-quiesce)  RUX_GRANT_QUIESCE=1 ;;
             --manual-join) manual_join=1 ;;
             --install)   do_install=1 ;;
             --plan)      do_install=0 ;;
@@ -15284,6 +15318,8 @@ rux_entry() {
         esac
     done
 
+    [ "${RUX_GRANT_QUIESCE:-0}" -eq 0 ] || [ "$grant_remotely" -eq 1 ] \
+        || die "rux: --grant-quiesce only means something WITH --grant-remotely: it adds --allow-quiesce to the commit-scope this host runs on the source. Without --grant-remotely the source's operator commits the scope, and whether guests may be frozen is their flag there (deploy.sh --commit-scope=$COLLECTOR_LABEL --allow-quiesce)."
     local host dataset
     IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
     # Deferred scope: --source=HOST: (no dataset). The source proposes its own
