@@ -11348,7 +11348,7 @@ cmd_delete_relation() {
         return 0
     fi
 
-    local self="$SCRIPT_DIR/zfs-backup.sh" rc=0
+    local self="$SCRIPT_DIR/zfs-backup.sh" rc=0 source_failed=0
     if [ "$do_collector" -eq 1 ]; then
         log "delete-relation: 1/4 remove-client $name"
         "$self" remove-client "$name" || die "delete-relation: remove-client failed -- stopped BEFORE the source and the record were touched. Fix what it said and run this again."
@@ -11365,10 +11365,30 @@ cmd_delete_relation() {
             log "delete-relation: nothing of '$label' is left on $peer (no manifest, no account) -- the source's half was already done"
         elif [ "$present" -eq 0 ] && rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$label'"; then :
         else
-            rc=1
+            rc=1; source_failed=1
             log "!!! delete-relation: the source's half did NOT complete. The collector's half is done. On $peer, as root:"
             log "!!!     cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label"
         fi
+    fi
+    # The RECORD is the retry state (REV-144). Purging it after a failed source
+    # half would delete the peer, the endpoint and the label this very command
+    # needs to try again -- the next `delete-relation NAME --yes` would answer
+    # "no relationship 'NAME'" and the printed manual line would be all that is
+    # left. So a source half that did not complete stops the composite here,
+    # before the purge and before any irreversible copy destruction. The cases
+    # where there IS nothing to do on the source -- --keep-source, no peer, a
+    # shared peer another live relationship needs, a source positively proven
+    # clean, a successful --leave -- are not failures and go on as before.
+    if [ "$source_failed" -eq 1 ]; then
+        log "!!! delete-relation: STOPPED before 3/4. The record of '$name' is KEPT so that the"
+        log "!!!     same command can be run again once the source's half is done:"
+        if [ "$destroy" -eq 1 ]; then
+            log "!!!     zfs-backup.sh delete-relation $name --destroy-copies --yes"
+            log "!!!     The copies were NOT destroyed."
+        else
+            log "!!!     zfs-backup.sh delete-relation $name --yes"
+        fi
+        return 1
     fi
     if [ "$do_record" -eq 1 ]; then
         log "delete-relation: 3/4 purge the record of '$name'"

@@ -12319,6 +12319,40 @@ if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq
 else
     bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
 fi
+# REV-144: THE RECORD IS THE RETRY STATE. A source half that did not complete used to
+# be logged as rc=1 and then walked straight into `--purge` -- which deleted the peer,
+# the endpoint and the label the retry needs, so `delete-relation NAME --yes` answered
+# "no relationship" ever after -- and on into --destroy-copies. The boundary is executed
+# here, with an `ssh` that fails the way a dead peer fails (255) and a `zfs` that records
+# every call it is given.
+printf 'CLIENT_NAME=e\nSTATE=removed\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:22\nCLIENT_TARGET=tank/b\nMANAGED_DATASETS=tank/b/10.0.0.9/p/x\n' > "$DR/clients/e.conf"
+mkdir -p "$DR/bin"
+printf '#!/bin/sh\necho "ssh: connect to host failed" >&2\nexit %s\n' '255' > "$DR/bin/ssh"
+printf '#!/bin/sh\necho "$@" >>"%s"\nexit 0\n' "$DR/zfs.calls" > "$DR/bin/zfs"
+chmod +x "$DR/bin/ssh" "$DR/bin/zfs"
+: > "$DR/zfs.calls"
+DROUT=$( PATH="$DR/bin:$PATH" dr_run e --destroy-copies --yes ); rc=$?
+if [ "$rc" -ne 0 ] && [ -f "$DR/clients/e.conf" ] && grep -q '^MANAGED_DATASETS=tank/b/10.0.0.9/p/x$' "$DR/clients/e.conf" \
+   && ! printf '%s%s' "$DROUT" "$(cat "$DR/err")" | grep -q '3/4 purge the record' \
+   && ! printf '%s%s' "$DROUT" "$(cat "$DR/err")" | grep -q '4/4 zfs destroy' \
+   && [ ! -s "$DR/zfs.calls" ] \
+   && printf '%s' "$DROUT" | grep -q 'STOPPED before 3/4' \
+   && printf '%s' "$DROUT" | grep -q 'delete-relation e --destroy-copies --yes'; then
+    ok "delrel: when the source's half does NOT complete, the composite stops there -- nonzero, the record (with its peer, endpoint and copy list) is KEPT so the same command can retry, the purge does not run and NOT ONE zfs destroy is issued (REV-144)"
+else
+    bad "delrel: a failed source half still purged the record / destroyed copies" "rc=$rc" "$DROUT" "$(cat "$DR/err")" "zfs: $(cat "$DR/zfs.calls")"
+fi
+# The positive control: the same boundary with a source that is positively proven clean
+# (the probe's `[ -e manifest ] || id ...` answers 1 = nothing of ours there) is NOT a
+# failure and must still reach the purge -- the guard is about failure, not about caution.
+printf '#!/bin/sh\nexit 1\n' > "$DR/bin/ssh"
+DROUT=$( PATH="$DR/bin:$PATH" dr_run e --yes )
+if printf '%s%s' "$DROUT" "$(cat "$DR/err")" | grep -q "nothing of .* is left on 10.0.0.9" \
+   && printf '%s%s' "$DROUT" "$(cat "$DR/err")" | grep -q "3/4 purge the record of 'e'"; then
+    ok "delrel: ...and a source proven to hold nothing of ours is not a failure -- that run still goes on to purge the record"
+else
+    bad "delrel: the clean-source path no longer purges" "$DROUT" "$(cat "$DR/err")"
+fi
 # activation: a profile with no ladder gets no ladder section
 if grep -q '\[ -n "\$LEGACY_LADDER_BODY" \] || profile_declares_ladder || continue' "$ZFSBACKUP"; then
     ok "delrel: activate-client writes a [prune:] ladder section only for a profile that DECLARES one -- every quiescing (family-per-tier) profile used to get an empty one and gen-cron refused it (pve10, 2026-09-20)"
