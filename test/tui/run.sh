@@ -1512,6 +1512,42 @@ if has "$NROUT" " --name=192.168.28.99 " && grep -q '^delete-relation 192.168.28
 else
     bad "new-relation: nazwa usunietej relacji" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'USUNI' "$NR/wt.log" | cut -c1-300)"
 fi
+# 3g. OKNO USUWANIA mowi PRAWDE o tym, co sie stalo. Odkad nieudana polowa zrodla
+#     ZATRZYMUJE czasownik przed purge (REV-144), rekord ZOSTAJE -- a stare zdanie
+#     "USUNIETA Z POZOSTALOSCIAMI" bylo wtedy nieprawda: nazwa nadal zajeta, kopie stoja.
+DRD="$NR/drd"; rm -rf "$DRD"; mkdir -p "$DRD"
+cat > "$NR/bin/zb-del" <<'EOF'
+#!/bin/bash
+# plan: zwykly plan czasownika. --yes: polowa zrodla NIE wychodzi -> STOP przed 3/4, rc=1.
+if [ "$1" = delete-relation ]; then
+    case " $* " in
+        *" --yes "*)
+            echo ">>> delete-relation: 2/4 source side on 10.0.0.9"
+            echo ">>> !!! delete-relation: the source's half did NOT complete. The collector's half is done. On 10.0.0.9, as root:"
+            echo ">>> !!! delete-relation: STOPPED before 3/4. The record of '$2' is KEPT so that the"
+            exit 1 ;;
+        *)  echo "delete-relation '$2' (state=removed, peer=10.0.0.9):"
+            echo "  1. collector : skipped -- the record already says 'removed'"
+            echo "  2. source    : on 10.0.0.9 (port 22), as root over SSH: deploy.sh --leave=pve10  -- the account and its zfs grants there"
+            echo "  3. record    : clean-relationships.sh --purge=$2  -- frees the NAME (it refuses anything still LIVE)"
+            echo "  4. copies    : KEPT on this host (tank/b/x) -- pass --destroy-copies to destroy them too"
+            echo "plan only. Re-run with --yes to do it. Nothing was changed."
+            exit 0 ;;
+    esac
+fi
+exit 9
+EOF
+chmod +x "$NR/bin/zb-del"
+printf '0\t\n0\t\n' > "$DRD/answers"   # checklist: domyslne; potem yesno "WYKONAJ"
+DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del"
+         bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
+if has "$DROUT" "ZATRZYMANE" && has "$DROUT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DROUT" "uruchom to samo jeszcze raz" \
+   && ! has "$DROUT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DROUT" "GOTOWE"; then
+    ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
+else
+    bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
+fi
+
 # 3h. KOLEKTOR MA KSZTALT: gdy zywa relacja uzywa szablonu "rodzina na szczebel", aktywacja
 #     szablonu-drabiny jest odmawiana ("This host reads as FLAT ... NO RETENTION AT ALL",
 #     zmierzone na pve10). Kreator nie moze ich wtedy oferowac ani pytac o "bez zamrazania".

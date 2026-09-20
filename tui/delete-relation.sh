@@ -63,9 +63,17 @@ while :; do
     yesno_text "$TMPD/plan2.txt" "Usuń relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
     clear 2>/dev/null
     echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-    "${ARGV[@]}" --yes; RC=$?
+    "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
     echo
+    # Dwa różne niepowodzenia, dwa różne komunikaty. Odkąd nieudana połowa ŹRÓDŁA
+    # zatrzymuje czasownik przed purge (REV-144), rekord ZOSTAJE -- i wtedy "usunięta
+    # z pozostałościami" jest nieprawdą: nazwa nadal jest zajęta, kopie stoją, a ta
+    # sama komenda jest do powtórzenia. Rozpoznajemy to po zdaniu, które wypisuje.
     if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: relacja '$NAME' usunięta (rc=0). Enter = dalej"
+    elif grep -q 'STOPPED before 3/4' "$TMPD/run.log" 2>/dev/null; then
+        echo "=== ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono (rc=$RC)."
+        echo "    Rekord relacji '$NAME' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją."
+        echo "    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz. Enter = dalej"
     else echo "=== USUNIĘTA Z POZOSTAŁOŚCIAMI (rc=$RC) -- linie '!!!' powyżej mówią, co zostało. Enter = dalej"; fi
     [ -t 0 ] && read -r _
     exit "$RC"
