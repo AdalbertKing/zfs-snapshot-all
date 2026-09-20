@@ -11262,22 +11262,32 @@ cmd_gui() {
 # Plans without --yes, like every composite in this program.
 # ------------------------------------------------------------------------------
 cmd_delete_relation() {
-    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 a
+    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 a
     for a in "$@"; do
         case "$a" in
             --yes|-y)          yes=1 ;;
             --keep-source)     keep_source=1 ;;
             --keep-record)     keep_record=1 ;;
             --destroy-copies)  destroy=1 ;;
-            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --yes)" ;;
+            --ask)             ask=1 ;;
+            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --ask --yes)" ;;
             *)                 [ -z "$name" ] || die "delete-relation: takes exactly one NAME"; name="$a" ;;
         esac
     done
     [ -n "$name" ] || die "uzycie: zfs-backup.sh delete-relation NAZWA [--keep-source] [--keep-record] [--destroy-copies] [--yes]"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "delete-relation: no relationship '$name' on this host"
+    if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows (Del on the GUI's F3)
+        local dlg="$SCRIPT_DIR/tui/delete-relation.sh"
+        [ -f "$dlg" ] || die "delete-relation: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
+        return $?
+    fi
     record_load client "$cpath"
     local peer="$PEER_HOST" state="$STATE" copies="$MANAGED_DATASETS" port="22"
+    # The label the SOURCE knows this collector by -- derived exactly as deploy.sh
+    # --unpair derives the `--leave=` it prints (hostname -s, sanitised).
+    local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
     case "$ACTIVE_ENDPOINT" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
     case "$port" in ''|*[!0-9]*) port=22 ;; esac
 
@@ -11303,7 +11313,7 @@ cmd_delete_relation() {
     echo "delete-relation '$name' (state=${state:-?}, peer=${peer:-?}):"
     if [ "$do_collector" -eq 1 ]; then echo "  1. collector : remove-client $name  -- config sections and cron lines of THIS relationship"
     else echo "  1. collector : skipped -- the record already says 'removed'"; fi
-    if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$COLLECTOR_LABEL  -- the account and its zfs grants there"
+    if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
     else echo "  2. source    : skipped -- $why_source"; fi
     if [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
     else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
@@ -11326,11 +11336,19 @@ cmd_delete_relation() {
     fi
     if [ "$do_source" -eq 1 ]; then
         log "delete-relation: 2/4 source side on $peer"
-        if rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$COLLECTOR_LABEL'"; then :
+        # Ask first whether there is anything of ours there. A relationship removed
+        # earlier, whose source was already left by hand, is the ordinary case for
+        # "free the name" -- and --leave on an absent label is an ERROR by design,
+        # which made a clean removal report leftovers (measured on pve10, 2026-09-20).
+        local present=0
+        rux_root_ssh "$peer" "$port" "[ -e '/etc/zfs-snapshot-all/peers/$label.conf' ] || id 'zfsbackup-$label' >/dev/null 2>&1" || present=$?
+        if [ "$present" -eq 1 ]; then
+            log "delete-relation: nothing of '$label' is left on $peer (no manifest, no account) -- the source's half was already done"
+        elif [ "$present" -eq 0 ] && rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$label'"; then :
         else
             rc=1
             log "!!! delete-relation: the source's half did NOT complete. The collector's half is done. On $peer, as root:"
-            log "!!!     cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$COLLECTOR_LABEL"
+            log "!!!     cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label"
         fi
     fi
     if [ "$do_record" -eq 1 ]; then

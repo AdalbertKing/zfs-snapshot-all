@@ -2211,6 +2211,17 @@ class UI(object):
         self.pending_shell = line
         return "shell"
 
+    def run_dialog(self, argv):
+        """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi."""
+        line = " ".join(shlex.quote(x) for x in argv)
+        if self.exec_log:
+            with io.open(self.exec_log, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            return "stay"
+        self.pending_shell, self.pending_nowait = line, True
+        return "shell"
+
     def run_wizard(self):
         """Ins: oddaj terminal kreatorowi whiptail i wroc na F3 z odswiezonymi danymi.
         Kreator sam konczy sie oknem z wynikiem, wiec petla nie dopytuje o Enter."""
@@ -2257,7 +2268,7 @@ class UI(object):
             line += " > " + shlex.quote(redirect)
         return line
 
-    def current_relation(self):
+    def current_relation(self, allow_removed=False):
         """Relacja pod kursorem na F3, albo powod, dla ktorego akcji nie ma."""
         if self.screen != "relacje":
             return None, u"akcje na relacjach są na ekranie F3 Relacje"
@@ -2266,7 +2277,7 @@ class UI(object):
         r = self.rows[self.cursor["relacje"]]
         if r["kind"] != "relation":
             return None, u"to nie jest relacja (%s) -- akcje dotyczą rekordów relacji" % ("zadanie bez rekordu" if r["kind"] == "job" else "nieczytelny blok")
-        if r["rel"].get("state") == "removed":
+        if r["rel"].get("state") == "removed" and not allow_removed:
             return None, u"relacja '%s' jest już usunięta (removed_at %s)" % (r["name"], r["rel"].get("removed_at") or "?")
         return r, ""
 
@@ -2360,7 +2371,8 @@ class UI(object):
 
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""
-        r, why = self.current_relation()
+        # Del dziala takze na rekordzie `removed`: tam znaczy "zwolnij nazwe / posprzataj reszte".
+        r, why = self.current_relation(allow_removed=(k == "del"))
         if r is None:
             self.message = why
             return
@@ -2375,9 +2387,11 @@ class UI(object):
                              [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
                               u"monitor mówi OK z pauzy. Odwrotność: F4 na tej relacji jeszcze raz (resume-client)."])
         elif k == "del":
-            self.confirm(u"Usuń relację %s" % n, [self.zb(), "remove-client", n],
-                         [u"Usuwa sekcje configu i linie crona TEJ relacji. KOPII na dysku nie rusza --",
-                          u"to osobna, świadoma decyzja. Parowanie z peerem zostaje, jeśli używa go inna relacja."])
+            # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
+            # samo remove-client zostawialo rekord `removed`, ktory trzymal NAZWE, wiec
+            # "usun i zaloz od nowa" -- jedyna dzis droga zmiany relacji -- nie dzialalo
+            # (zmierzone na pve10, 2026-09-20).
+            return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
         elif k == "F7":
             default = os.path.join(home_dir(), "%s.export.json" % n)
             self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zatwierdź, Esc = anuluj):", default,
