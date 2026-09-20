@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c1731684c14721f0 -->
+<!-- status-covers-digest: 4fd52b18250b6719 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **F3: kursor staje na relacji, która przybyła (2026-09-20, wieczór).**
+  Lista relacji jest posortowana, a kursor to INDEKS -- `refresh()` po powrocie
+  z kreatora tylko przycinał go do długości listy. Po założeniu relacji kursor
+  zostawał więc na starym miejscu i wskazywał CUDZY wiersz, a panel obok
+  pokazywał szczegóły nie tej relacji, którą operator właśnie założył.
+  `cursor_to_new()` porównuje nazwy sprzed oddania terminala kreatorowi z tymi
+  po powrocie: jeśli przybyła **dokładnie jedna**, kursor idzie na nią i ekran
+  wraca na listę F3, a stopka to mówi. Gdy nie przybyło nic, przybyły dwie albo
+  lista się skróciła -- kursor zostaje, bo nie ma czego zgadywać. Suita `tui`
+  189/0 (dwie nowe asercje wykonują metodę na dwóch stanach danych, z trzema
+  przypadkami negatywnymi); na main obu metod nie ma, więc asercja tam pada.
 
 - **REV-144: `delete-relation` ZATRZYMUJE SIĘ, gdy połowa źródła nie wyszła (2026-09-20, wieczór).**
   Recenzent (P2, blokujący): nieudana sonda źródła albo nieudany `deploy.sh --leave`
