@@ -12374,8 +12374,8 @@ rs_run() { ( CLIENTS_DIR="$RS/clients" bash "$ZFSBACKUP" remove-source "$@" ) 2>
 RSOUT=$(rs_run r1 pool/a/b); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$RSOUT" | grep -q "1\. source    : /etc/zfs-snapshot-all/peers/.*\.scope" \
    && printf '%s' "$RSOUT" | grep -q '2\. source    : deploy.sh --commit-scope=' \
-   && printf '%s' "$RSOUT" | grep -q '3\. collector : activate r1' \
-   && printf '%s' "$RSOUT" | grep -q '4\. copies    : KEPT on this host' \
+   && printf '%s' "$RSOUT" | grep -q '3\. collector : its .dataset:./.prune:. sections are dropped'    && printf '%s' "$RSOUT" | grep -q '4\. collector : activate r1' \
+   && printf '%s' "$RSOUT" | grep -q '5\. copies    : KEPT on this host' \
    && printf '%s' "$RSOUT" | grep -q '^plan only\.'; then
     ok "rmsrc: without --yes it is a PLAN naming all four steps in the order they run -- scope, commit, re-activate -- and saying copies are kept"
 else

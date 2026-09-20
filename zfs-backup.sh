@@ -11558,8 +11558,9 @@ cmd_remove_source() {
     echo "remove-source '$ds' from '$name' (peer $peer, port $port):"
     echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
-    echo "  3. collector : activate $name  -- config and cron are regenerated from the narrowed scope"
-    echo "  4. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
+    echo "  3. collector : its [dataset:]/[prune:] sections are dropped from the config here (activation only ADDS, so a removal has to say so itself)"
+    echo "  4. collector : activate $name  -- config and cron are regenerated from the narrowed scope"
+    echo "  5. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
@@ -11613,9 +11614,48 @@ cmd_remove_source() {
         die "remove-source: stopped at 2/3 -- this host's config and cron were NOT touched, so the two sides can still be brought back together by one retry."
     fi
 
-    log "remove-source: 3/3 regenerating this host's config and cron from the narrowed scope"
+    # ACTIVATION IS ADDITIVE, so re-running it is NOT enough -- measured on pve10
+    # 2026-09-20 with the first version of this verb: the source grant was gone
+    # and the scope no longer named the dataset, yet `[dataset:hdd/lab/srv-b/www]`
+    # sat untouched in the collector's config and its cron line kept running
+    # against a dataset it was no longer allowed to read. Gate 2's "add B, do not
+    # mutate A" is right for CREATE and is exactly why a REMOVE has to say so
+    # itself. The section is therefore dropped explicitly, with the same
+    # marker-verified helper remove-client uses, before the regeneration.
+    log "remove-source: 3/4 dropping this dataset's sections from the config on this host"
+    local landing="" m
+    for m in ${MANAGED_DATASETS:-}; do
+        case "$m" in
+            "$ds"|*/"$ds") landing="$m"; break ;;
+        esac
+    done
+    [ -n "$landing" ] || landing="$ds"
+    local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
+    cron_context_resolve record "" "" "$recorded_cron_config" "$recorded_local_user"
+    CRON_CONFIG="$CRON_CTX_FILE"
+    if [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
+        assert_cron_config_matches_installed "$CRON_CONFIG"
+        assert_no_foreign_managed_block "$CRON_CONFIG"
+        local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
+            || die "remove-source: mktemp failed next to $CRON_CONFIG -- the source side is already narrowed; re-run this command"
+        workfile_track "$workfile"
+        cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "remove-source: could not copy $CRON_CONFIG"; }
+        chmod 0644 "$workfile" 2>/dev/null || :
+        remove_managed_sections "$workfile" "$name" "$landing"
+        if ! bash "$GENCRON" -c "$workfile" >/dev/null 2>&1; then
+            rm -f "$workfile"
+            die "remove-source: the config with '$landing' removed did not validate, so NOTHING here was replaced. The source side is already narrowed; fix the config and re-run this command."
+        fi
+        atomic_replace_and_install "$workfile" "$CRON_CONFIG" \
+            || die "remove-source: could not install the config without '$landing' -- the source side is already narrowed; re-run this command."
+        log "remove-source: '$landing' is out of $CRON_CONFIG and out of the installed cron"
+    else
+        log "remove-source: no installed config for '$name' on this host -- nothing to drop here"
+    fi
+
+    log "remove-source: 4/4 regenerating this host's config and cron from the narrowed scope"
     "$SCRIPT_DIR/zfs-backup.sh" activate "$name" --yes \
-        || die "remove-source: the source side is done ('$ds' is out of its scope and its grant is revoked), but re-activation here failed. Fix what it said and run exactly: $SCRIPT_DIR/zfs-backup.sh activate $name --yes"
+        || die "remove-source: the source side is done and the section is gone, but re-activation failed. Fix what it said and run exactly: $SCRIPT_DIR/zfs-backup.sh activate $name --yes"
     log "remove-source: '$ds' is no longer part of '$name'. Copies already received are untouched."
 }
 
