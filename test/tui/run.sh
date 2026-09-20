@@ -1281,7 +1281,9 @@ case "$1" in
     list-datasets)  if [ "$2" = "--json" ]; then cat "$NR_FIX/list-datasets.json"; else cat "$NR_FIX/list-datasets-pve9b.json"; fi ;;
     list-profiles)  cat "$NR_FIX/list-profiles.json" ;;
     delete-relation) case " $* " in *" --yes "*) : > "$NR_DIR/freed-$2"; echo "delete-relation: '$2' is gone." ;; *) echo "delete-relation '$2' (state=removed, peer=192.168.28.99):"; echo "plan only." ;; esac ;;
-    status)         if [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"; else cat "$NR_FIX/status.json"; fi ;;
+    status)         if [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
+                    elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # kolektor "plaski"
+                    else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case " $* " in
                         *" --install "*) case " $* " in
                                 *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
@@ -1295,7 +1297,7 @@ esac
 EOF
 chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err" </dev/null
     local rc=$?
@@ -1509,6 +1511,29 @@ if has "$NROUT" " --name=192.168.28.99 " && grep -q '^delete-relation 192.168.28
     ok "new-relation: nazwe trzymana przez rekord 'removed' kreator proponuje ZWOLNIC (delete-relation NAZWA --yes) i dopiero wtedy jej uzywa -- 'usun i zaloz od nowa' dziala"
 else
     bad "new-relation: nazwa usunietej relacji" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'USUNI' "$NR/wt.log" | cut -c1-300)"
+fi
+# 3h. KOLEKTOR MA KSZTALT: gdy zywa relacja uzywa szablonu "rodzina na szczebel", aktywacja
+#     szablonu-drabiny jest odmawiana ("This host reads as FLAT ... NO RETENTION AT ALL",
+#     zmierzone na pve10). Kreator nie moze ich wtedy oferowac ani pytac o "bez zamrazania".
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}d7h24
+0${T}pve9b
+0${T}root
+0${T}go
+0${T}
+0${T}
+" NR_FLAT=1)
+NRL="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | head -1)"
+if has "$NROUT" " --profile=d7h24 " && ! grep -qF 'Spójność migawek' "$NR/wt.log" && has "$NRL" "szablony-" && has "$NRL" "nie dadzą się tu aktywować" \
+   && ! has "$NRL" ' ~ default ~ ' && ! has "$NRL" ' ~ Y5M12D31H24 ~ ' && ! has "$NRL" ' ~ passive ~ ' && has "$NRL" ' ~ d30 ~ '; then
+    ok "new-relation: na kolektorze, ktory ma juz relacje z szablonem bez drabiny, kreator NIE oferuje szablonow-drabin (default, Y5..., passive) i nie pyta o 'bez zamrazania' -- aktywacja by je odrzucila; okno mowi dlaczego"
+else
+    bad "new-relation: ksztalt kolektora" "$NROUT" "$(printf '%s' "$NRL" | cut -c1-500)" "$(cat "$NR/err")"
 fi
 # 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
 NROUT=$(nr_run "0${T}backup
