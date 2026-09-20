@@ -1190,6 +1190,41 @@ else
     bad "every function the tool defines is referenced by at least one other line of it" "defined and never named:$dead"
 fi
 
+# ---------------------------------------------------------------------------
+# SHARED PAIRING (2026-09-20). Measured on pve10 by the owner clearing dead
+# records from the GUI: purging the REMOVED records of a peer deleted that peer's
+# pairing manifest and key files while other relationships with the same peer
+# were ACTIVE -- status kept saying `active`, every cron line pointed at a key
+# that no longer existed. The artefacts are keyed by ADDRESS and shared; they go
+# with a purge only when no other live relationship uses the address. The case
+# includes the shape that did the damage first: a removed record whose NAME is
+# the address itself.
+# ---------------------------------------------------------------------------
+T="$WORK/shared"; rm -rf "$T"; mkdir -p "$T/clients" "$T/peers" "$T/keys" "$T/pairing" "$T/rel" "$T/home" "$T/removed"
+printf 'STATE=active\nPEER_HOST=10.9.9.9\n'  > "$T/clients/alive.conf"
+printf 'STATE=removed\nPEER_HOST=10.9.9.9\n' > "$T/clients/gone.conf"
+printf 'STATE=removed\nPEER_HOST=10.9.9.9\n' > "$T/clients/10.9.9.9.conf"
+printf 'STATE=removed\nPEER_HOST=10.8.8.8\n' > "$T/clients/lonely.conf"
+for a in 10.9.9.9 10.8.8.8; do
+    printf 'PEER_SAVED_ROLE=pull\n' > "$T/peers/$a.conf"
+    for k in _ed25519 _ed25519.pub _known_hosts _alias_known_hosts; do echo k > "$T/keys/$a$k"; done
+done
+out=$(run_cr "$T" --purge=gone --yes); rc1=$?
+out2=$(run_cr "$T" --purge=10.9.9.9 --yes); rc2=$?
+if [ ! -e "$T/clients/gone.conf" ] && [ ! -e "$T/clients/10.9.9.9.conf" ] \
+   && [ -e "$T/peers/10.9.9.9.conf" ] && [ -e "$T/keys/10.9.9.9_ed25519" ] && [ -e "$T/keys/10.9.9.9_alias_known_hosts" ] \
+   && grep -q 'LEFT ALONE -- still used by: alive' <<<"$out" && grep -q 'LEFT ALONE -- still used by: alive' <<<"$out2"; then
+    ok "purging a removed record -- by NAME, or one NAMED after the address -- leaves the pairing manifest and the keys alone while a live relationship shares the peer, and says who"
+else
+    bad "a purge took a SHARED pairing with it" "rc=$rc1/$rc2" "$(ls "$T/clients" "$T/peers" "$T/keys" | tr '\n' ' ')" "$out" "$out2"
+fi
+out=$(run_cr "$T" --purge=lonely --yes)
+if [ ! -e "$T/clients/lonely.conf" ] && [ ! -e "$T/peers/10.8.8.8.conf" ] && [ ! -e "$T/keys/10.8.8.8_ed25519" ] && [ -e "$T/keys/10.9.9.9_ed25519" ]; then
+    ok "...and the LAST relationship with a peer still takes that peer's pairing and keys -- the guard is about sharing, not a blanket keep"
+else
+    bad "the last relationship's pairing was not purged (or the wrong one was)" "$(ls "$T/clients" "$T/peers" "$T/keys" | tr '\n' ' ')" "$out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
