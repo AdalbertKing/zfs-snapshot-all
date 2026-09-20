@@ -12390,6 +12390,16 @@ if ! rs_run r1 >/dev/null && grep -q 'uzycie: zfs-backup.sh remove-source' "$RS/
 else
     bad "rmsrc: refusals" "$(cat "$RS/err")"
 fi
+# THE ARGUMENT ORDER OF THE INSTALL, pinned because getting it backwards DELETED
+# the live config on pve10 (the helper takes the live file first, the candidate
+# second; reversed, it treats the live config as the candidate).
+rs_call=$(sed -n "/remove-source: 3\/4 dropping/,/4\/4 regenerating/p" "$ZFSBACKUP" | grep -F 'atomic_replace_and_install')
+if printf '%s' "$rs_call" | grep -qF 'atomic_replace_and_install "$CRON_CONFIG" "$workfile"'; then
+    ok "rmsrc: the install is called (live file, candidate) -- reversed, it takes the live config for the candidate and the config VANISHES (measured on pve10)"
+else
+    bad "rmsrc: install argument order" "$rs_call"
+fi
+
 # The EDIT itself, against real scope text. Three branches, three shapes.
 SC="$RS/scope"
 printf '# comment\n[dataset:pool/one]\ninclude_parent = yes\ninclude_children = yes\n[dataset:pool/two]\ninclude_parent = yes\ninclude_children = yes\n' > "$SC"

@@ -11646,7 +11646,12 @@ cmd_remove_source() {
             rm -f "$workfile"
             die "remove-source: the config with '$landing' removed did not validate, so NOTHING here was replaced. The source side is already narrowed; fix the config and re-run this command."
         fi
-        atomic_replace_and_install "$workfile" "$CRON_CONFIG" \
+        # ARGUMENT ORDER IS (LIVE FILE, CANDIDATE). The first version had it
+        # reversed and thereby handed the live config in as the candidate: the
+        # live run on pve10 ended with /etc/zfs-snapshot-all/jobs.pve10.conf
+        # GONE while the installed cron kept running from it. A stub could not
+        # have shown that; the host did, in one command.
+        atomic_replace_and_install "$CRON_CONFIG" "$workfile" \
             || die "remove-source: could not install the config without '$landing' -- the source side is already narrowed; re-run this command."
         log "remove-source: '$landing' is out of $CRON_CONFIG and out of the installed cron"
     else
