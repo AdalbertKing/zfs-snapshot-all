@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fed9edd9ccd37702 -->
+<!-- status-covers-digest: 2df92a9a8f939e10 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,28 @@
   lista się skróciła -- kursor zostaje, bo nie ma czego zgadywać. Suita `tui`
   189/0 (dwie nowe asercje wykonują metodę na dwóch stanach danych, z trzema
   przypadkami negatywnymi); na main obu metod nie ma, więc asercja tam pada.
+- **KREATOR: KROK 9 TO CHECKLISTA, A PRZYCISKI TO „DALEJ"/„WSTECZ" (2026-09-20, noc).**
+  Właściciel, patrząc na żywy ekran: *„krok 9/10 nie przechodzi dalej -- można tylko
+  dać wstecz lub wejść do podświetlonej pozycji"*, a o pierwszym wierszu listy
+  („Bez zmian, dalej"): *„to jest potworek. Ma być przycisk Dalej, wstecz a wybiera
+  się enterem na liście (…) Wyprostuj to wszędzie."*
+  - **Co było źle.** Krok 9 był EDYTOREM USTAWIEŃ: menu, którego pierwszy wiersz
+    udawał przycisk. Po zmianie czegokolwiek niżej czytał się jak „odrzuć to, co
+    wybrałeś", a przyciski nazywały się „Wybierz" i „Wstecz" -- nic na ekranie nie
+    mówiło „tędy dalej".
+  - **Ograniczenie, ZMIERZONE:** whiptail (newt 0.52.23) ma dokładnie dwa przyciski,
+    nie ma `--extra-button`. Ekran, który jednocześnie EDYTUJE pozycje i ma „Dalej",
+    jest w tym narzędziu niewykonalny -- więc krok 9 przestał być edytorem.
+  - **Teraz:** krok 9 to CHECKLISTA (spacja przełącza, Enter = Dalej, przyciski
+    „Dalej"/„Wstecz"), a pozycje wymagające WARTOŚCI (własne maski, inna retencja
+    u źródła) pytają o nią w następnym oknie, które też ma normalne Dalej/Wstecz.
+    Każde okno kreatora z listą lub polem ma przycisk „Dalej" -- nie „Wybierz" i nie
+    domyślne `<Ok>` (to drugie było widać na żywym ekranie kroku 2).
+  - **Dowody:** suita `tui` 191/0 -- dwie nowe asercje: krok 9 jest checklistą
+    z Dalej/Wstecz i żadna pozycja nie zawiera „Bez zmian"/„DALEJ --"; w żadnym
+    oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
+    protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
+    whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
 - **REV-145: nieudana aktualizacja whitelisty zamrażania raportowana jako sukces (2026-09-20, noc).**
   Recenzent, P2, na PR #403: nowa gałąź wołała `install_quiesce_grant` i NIE
   sprawdzała, co zwrócił. `deploy.sh` chodzi pod `set -uo pipefail`, nie `set -e`,
