@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1653dc2b3051d42a -->
+<!-- status-covers-digest: b90e72e2c158bb31 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,17 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **F3: kursor staje na relacji, która przybyła (2026-09-20, wieczór).**
+  Lista relacji jest posortowana, a kursor to INDEKS -- `refresh()` po powrocie
+  z kreatora tylko przycinał go do długości listy. Po założeniu relacji kursor
+  zostawał więc na starym miejscu i wskazywał CUDZY wiersz, a panel obok
+  pokazywał szczegóły nie tej relacji, którą operator właśnie założył.
+  `cursor_to_new()` porównuje nazwy sprzed oddania terminala kreatorowi z tymi
+  po powrocie: jeśli przybyła **dokładnie jedna**, kursor idzie na nią i ekran
+  wraca na listę F3, a stopka to mówi. Gdy nie przybyło nic, przybyły dwie albo
+  lista się skróciła -- kursor zostaje, bo nie ma czego zgadywać. Suita `tui`
+  189/0 (dwie nowe asercje wykonują metodę na dwóch stanach danych, z trzema
+  przypadkami negatywnymi); na main obu metod nie ma, więc asercja tam pada.
 - **ZAWĘŻENIE ZAKRESU ZOSTAWIAŁO SZERSZĄ ZGODĘ NA ZAMRAŻANIE (2026-09-20, wieczór).**
   Znalezione podczas pomiaru pod odłożony czasownik „zabierz dataset z zakresu
   źródła": zanim taki czasownik powstanie, musi być wiadomo, co robi
