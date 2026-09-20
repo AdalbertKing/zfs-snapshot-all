@@ -1188,6 +1188,45 @@ else
 fi
 
 # ============================================================================
+# KURSOR PO POWROCIE Z KREATORA (Ins na F3)
+#
+# Lista relacji jest posortowana, a kursor to INDEKS. Po zalozeniu relacji
+# `refresh()` tylko przycinal indeks do dlugosci listy, wiec kursor zostawal na
+# starym miejscu i wskazywal cudzy wiersz -- panel obok pokazywal szczegoly nie
+# tej relacji, ktora operator wlasnie zalozyl. Sprawdzane na dwoch STANACH
+# danych (przed i po), przez wywolanie tej samej metody, ktorej uzywa petla.
+CUR="$("$PY" - "$TUI" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("tui", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+class U(object):    # tylko to, czego dotyka cursor_to_new
+    rel_names = m.UI.rel_names.__func__ if hasattr(m.UI.rel_names, "__func__") else m.UI.rel_names
+    cursor_to_new = m.UI.cursor_to_new.__func__ if hasattr(m.UI.cursor_to_new, "__func__") else m.UI.cursor_to_new
+    def __init__(self, names):
+        self.rows = [{"name": n, "rel": {"name": n}} for n in names]
+        self.cursor = {"relacje": 0}; self.screen = "zadania"; self.focus = "pairs"
+u = U(["alfa", "beta", "delta"]); before = u.rel_names()
+u2 = U(["alfa", "beta", "ceta", "delta"]); u2.cursor["relacje"] = 0
+print("moved %s idx %d screen %s focus %s" % (u2.cursor_to_new(before), u2.cursor["relacje"], u2.screen, u2.focus))
+u3 = U(["alfa", "beta", "delta"]); u3.cursor["relacje"] = 2
+print("same %s idx %d" % (u3.cursor_to_new(before), u3.cursor["relacje"]))
+u4 = U(["alfa", "beta", "ceta", "delta", "eta"]); u4.cursor["relacje"] = 1
+print("two %s idx %d" % (u4.cursor_to_new(before), u4.cursor["relacje"]))
+u5 = U(["alfa", "beta"]); u5.cursor["relacje"] = 1
+print("gone %s idx %d" % (u5.cursor_to_new(before), u5.cursor["relacje"]))
+EOF
+)"
+if has "$CUR" 'moved True idx 2 screen relacje focus list'; then
+    ok "kursor: po powrocie z kreatora kursor staje na relacji, ktora PRZYBYLA (nie na starym indeksie), a ekran wraca na liste F3"
+else
+    bad "kursor: nowa relacja" "$CUR"
+fi
+if has "$CUR" 'same False idx 2' && has "$CUR" 'two False idx 1' && has "$CUR" 'gone False idx 1'; then
+    ok "kursor: gdy nic nie przybylo, przybyly dwie relacje albo lista sie SKROCILA -- kursor zostaje tam, gdzie byl (nie zgadujemy)"
+else
+    bad "kursor: przypadki bez jednoznacznej nowej relacji" "$CUR"
+fi
+
+# ============================================================================
 # PARSER CRONA: nastepny bieg, semantyka vixie
 # ============================================================================
 CR="$("$PY" - "$TUI" "$NOW" <<'EOF'

@@ -2140,6 +2140,7 @@ class UI(object):
         # "curses" = stary kreator rysowany recznie, zostaje tylko dla swojej suity.
         self.wizard = wizard
         self.pending_nowait = False
+        self.rel_names_before = None   # Ins: lista relacji sprzed oddania terminala kreatorowi
         self.now_fixed = now
         self.exec_log = exec_log   # testy: zamiast uruchamiac, zapisz komende tutaj
         self.screen = "zadania"
@@ -2222,9 +2223,37 @@ class UI(object):
         self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
+    def rel_names(self):
+        """Nazwy relacji tak, jak lista je teraz pokazuje -- do porownania PRZED i PO."""
+        out = []
+        for r in self.rows or []:
+            n = (r.get("rel") or {}).get("name") or r.get("name")
+            if n:
+                out.append(n)
+        return out
+
+    def cursor_to_new(self, before):
+        """Po powrocie z kreatora: kursor na relacji, ktora PRZYBYLA.
+
+        Bez tego kursor zostawal na starym INDEKSIE, a lista jest posortowana --
+        wiec po dodaniu relacji wskazywal cudzy wiersz, a panel obok pokazywal
+        szczegoly nie tej relacji, ktora operator wlasnie zalozyl. Gdy przybylo
+        wiecej niz jedna (albo zadna), nie zgadujemy: kursor zostaje.
+        """
+        new = [n for n in self.rel_names() if n not in set(before)]
+        if len(new) != 1:
+            return False
+        try:
+            self.cursor["relacje"] = self.rel_names().index(new[0])
+        except ValueError:
+            return False
+        self.screen, self.focus = "relacje", "list"
+        return True
+
     def run_wizard(self):
         """Ins: oddaj terminal kreatorowi whiptail i wroc na F3 z odswiezonymi danymi.
         Kreator sam konczy sie oknem z wynikiem, wiec petla nie dopytuje o Enter."""
+        self.rel_names_before = self.rel_names()
         line = "%s new-relation" % shlex.quote(self.zb())
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
@@ -3815,6 +3844,10 @@ def curses_loop(ui):
                 stdscr.refresh()
                 ui.refresh()
                 ui.message = u"[rc=%s] %s" % (rc, line)
+                before = getattr(ui, "rel_names_before", None)
+                ui.rel_names_before = None
+                if before is not None and ui.cursor_to_new(before):
+                    ui.message = u"[rc=%s] %s  --  kursor na nowej relacji" % (rc, line)
     curses.wrapper(main)
 
 
