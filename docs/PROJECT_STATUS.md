@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 273aad2f9019ceea -->
+<!-- status-covers-digest: c1731684c14721f0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -47,6 +47,13 @@
     kopia `hdd/backups/rev144-proof/data`, host `192.0.2.44`): bieg 1 stanął,
     rekord i dataset zostały nietknięte; bieg 2 -- dosłownie ta wydrukowana
     komenda -- dokończył i skasował. Lab posprzątany, checkout pve10 nietknięty.
+  - **Spójność GUI.** Okno `Del` raportowało każde rc≠0 jako „USUNIĘTA Z
+    POZOSTAŁOŚCIAMI" -- po nowej bramce to nieprawda: nic nie zostało usunięte
+    poza połową kolektora, nazwa jest nadal zajęta, kopie stoją. Okno rozpoznaje
+    zatrzymanie i mówi: *„ZATRZYMANE (…) rekord ZOSTAŁ (…) uruchom to samo jeszcze
+    raz"*. Asercja uruchamia dialog z atrapą whiptaila i czasownikiem zwracającym
+    rc=1 ze zdaniem `STOPPED before 3/4` (suita `tui` 187/0); kontrola negatywna
+    na poprzedniej wersji dialogu daje stare zdanie.
   - **Wciąż otwarte (nie ten finding):** przy WSPÓLNYM hoście krok 2 jest
     pomijany w całości, więc nadania `zfs allow` i wpis w zakresie źródła
     zostają -- nie ma czasownika „zabierz dataset z zakresu źródła".
