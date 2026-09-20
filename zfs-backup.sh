@@ -11641,7 +11641,12 @@ cmd_remove_source() {
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "remove-source: could not copy $CRON_CONFIG"; }
         chmod 0644 "$workfile" 2>/dev/null || :
         remove_managed_sections "$workfile" "$name" "$landing"
-        if ! bash "$GENCRON" -c "$workfile" >/dev/null 2>&1; then
+        # THROUGH THE WRAPPER, not `bash $GENCRON` -- the generated block bakes
+        # the running copy's paths into every line, so a relationship whose jobs
+        # run as a delegated account must be validated by THAT account's
+        # checkout. The contract assertion in test/localbackup exists to stop
+        # exactly this shortcut, and it caught this call on CI.
+        if ! gencron_as_target -c "$workfile" >/dev/null 2>&1; then
             rm -f "$workfile"
             die "remove-source: the config with '$landing' removed did not validate, so NOTHING here was replaced. The source side is already narrowed; fix the config and re-run this command."
         fi

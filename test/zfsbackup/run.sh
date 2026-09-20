@@ -6346,11 +6346,18 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # property: the gap is READERS (list-replicas, run-replicas,
 # install-media-trigger) which resolve the same config an install would write,
 # so that what they show or run is what cron would.
+# 10/14 since 2026-09-21: remove-source. It is a WRITER -- it drops one dataset's
+# sections from the installed config -- and it is aimed the same way every other
+# writer is: cron_context_resolve record, then assert_cron_config_matches_installed,
+# then a validated candidate through atomic_replace_and_install. Bumping this line
+# is that acknowledgement. (Its first version got the install arguments backwards
+# and DELETED the live config on pve10; this contract is the other half of why
+# such a writer is pinned here at all.)
 # 13 since 2026-09-02: purge-replica-copy joined that reader set. It resolves
 # the config to learn WHERE the copy lives and never writes it back, which is
 # why the writer count is unchanged -- and it is the acknowledgement this
 # pinned number exists to force.
-if [ "$writers" -eq 9 ] && [ "$resolvers" -eq 13 ]; then
+if [ "$writers" -eq 10 ] && [ "$resolvers" -eq 14 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
