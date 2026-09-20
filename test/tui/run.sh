@@ -1344,13 +1344,13 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
     return "$rc"
 }
 T=$'\t'
-# Kroki 5-10 z domyslnymi odpowiedziami: cel, szablon, nazwa, konto, 'bez zmian', plan, WYKONAJ
+# Kroki 5-10 z domyslnymi odpowiedziami: cel, szablon, nazwa, konto, checklista ustawien, plan, WYKONAJ
 NRT="0${T}hdd/backups
 0${T}no
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}go
+0${T}grant|skip
 0${T}
 0${T}
 "
@@ -1358,7 +1358,7 @@ NRTS="0${T}no
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}go
+0${T}grant|skip
 0${T}
 0${T}
 "
@@ -1500,7 +1500,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
-0${T}go
+0${T}grant|quies|skip
 0${T}
 0${T}
 ")
@@ -1542,7 +1542,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.99
 0${T}
 0${T}root
-0${T}go
+0${T}grant|skip
 0${T}
 0${T}
 ")
@@ -1587,6 +1587,32 @@ else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
 fi
 
+# 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.
+#
+# Wlasciciel, 2026-09-20, po zobaczeniu ekranu na zywo: "krok 9/10 nie przechodzi
+# dalej -- mozna tylko dac wstecz lub wejsc do podswietlonej pozycji", a o wierszu
+# "Bez zmian, dalej": "to jest potworek. Ma byc przycisk Dalej, wstecz a wybiera
+# sie enterem na liscie". Whiptail (newt 0.52.23) ma DWA przyciski, wiec ekran,
+# ktory jednoczesnie edytuje pozycje i ma Dalej, jest niewykonalny -- stad
+# checklista: spacja przelacza, Enter = Dalej. ZADNA pozycja listy nie moze byc
+# pseudo-akcja "dalej".
+NRL="$(grep -F 'Krok 9/10: Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+if has "$NRL" '--checklist' && has "$NRL" -- '--ok-button ~ Dalej ~' && has "$NRL" -- '--cancel-button ~ Wstecz ~' \
+   && ! has "$NRL" 'Bez zmian' && ! has "$NRL" 'DALEJ --' && has "$NRL" 'SPACJA przełącza'; then
+    ok "new-relation: krok 9 to CHECKLISTA z przyciskami Dalej/Wstecz -- zadna pozycja listy nie udaje przycisku 'dalej' (wlasciciel, 2026-09-20)"
+else
+    bad "new-relation: ksztalt kroku 9" "$(printf '%s' "$NRL" | cut -c1-400)"
+fi
+# ...i to samo dla KAZDEGO okna z lista w kreatorze: przycisk zatwierdzenia nazywa
+# sie "Dalej" (albo nazywa AKCJE, jak "Usun zaznaczone"), nigdy "Wybierz" -- bo
+# lista JEST odpowiedzia i Enter na pozycji ma isc dalej.
+if [ "$(grep -c -- '--ok-button "Wybierz"' "$REPO/tui/new-relation.sh")" -eq 0 ] \
+   && [ "$(grep -c -- '--ok-button "Dalej"' "$REPO/tui/new-relation.sh")" -ge 6 ]; then
+    ok "new-relation: w zadnym oknie przycisk zatwierdzenia nie nazywa sie juz 'Wybierz' -- lista jest odpowiedzia, wiec przycisk to 'Dalej'"
+else
+    bad "new-relation: przyciski list" "$(grep -n -- '--ok-button' "$REPO/tui/new-relation.sh" | cut -c1-120)"
+fi
+
 # 3h. KOLEKTOR MA KSZTALT: gdy zywa relacja uzywa szablonu "rodzina na szczebel", aktywacja
 #     szablonu-drabiny jest odmawiana ("This host reads as FLAT ... NO RETENTION AT ALL",
 #     zmierzone na pve10). Kreator nie moze ich wtedy oferowac ani pytac o "bez zamrazania".
@@ -1599,7 +1625,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}d7h24
 0${T}pve9b
 0${T}root
-0${T}go
+0${T}grant|quies|skip
 0${T}
 0${T}
 " NR_FLAT=1)
@@ -1621,9 +1647,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant
-1${T}
-0${T}go
+0${T}skip
 0${T}
 0${T}
 "); NRRC=$?

@@ -227,7 +227,7 @@ pick_one() {    # -> PICK ; 1 = wstecz
     if [ "${#items[@]}" -eq 0 ]; then
         wt --title "Nie ma czego dodać" --msgbox "Koszyk obejmuje już wszystkie datasety z $HOST." 8 "$W"; return 1
     fi
-    wt --title "$(title 4 "Które miejsce z $HOST kopiować?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
+    wt --title "$(title 4 "Które miejsce z $HOST kopiować?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
        --menu "Wybierz MIEJSCE. Kopiowane będzie ono i wszystko, co pod nim jest\nalbo POWSTANIE (np. rpool/data na czystym Proxmoxie)." "$H" "$W" "$LH" \
        "${items[@]}" || return 1
     PICK="$WT_OUT"; [ -n "$PICK" ]
@@ -248,7 +248,7 @@ except_flow() { # wyjątki dla jednej pozycji; stan obecny wraca jako odznaczone
     else
         for i in "${WK[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")"); done
         geom
-        wt --title "$(title 4 'Wyjątki -- dla którego miejsca?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
+        wt --title "$(title 4 'Wyjątki -- dla którego miejsca?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
            --menu "Wyjątki można wskazać tylko tam, gdzie pod miejscem coś już leży." "$(fit $((${#WK[@]} + 3)))" "$W" "${#WK[@]}" \
            "${items[@]}" || return 0
         idx="$WT_OUT"
@@ -343,7 +343,7 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
     menu=(add "Dodaj miejsce…")
     [ "${#WK[@]}" -gt 0 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
     menu+=(mode "Sposób: $(mode_words) -- zmień…" del "Usuń pozycję…" next "Dalej")
-    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \
+    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item next \
        --menu "Kopiowane będzie:\n\n$txt" "$(fit $((lines + 8)))" "$W" "$((${#menu[@]} / 2))" \
        "${menu[@]}" || return 1
     ACT="$WT_OUT"
@@ -428,7 +428,7 @@ for x in d.get("datasets", []):
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
     while :; do
         geom
-        wt --title "$(title 5 'Dokąd na tym hoście?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${first:-__other__}" \
+        wt --title "$(title 5 'Dokąd na tym hoście?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${first:-__other__}" \
            --menu "Kopie wylądują pod:  <wybrane>/$HOST/<dataset źródła>\nnp.  ${first:-hdd/backups}/$HOST/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
         if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
@@ -533,7 +533,7 @@ step_profile() {
         [ "$FREEZE" -eq 1 ] && def=m12w4d7h24-gfs || def=default
         in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
         in_list "$def" "${items[@]}" || def="${items[0]}"
-        wt --title "$(title 6 'Jak długo trzymać?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(title 6 'Jak długo trzymać?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "$( if [ "$flat" -eq 1 ]; then echo "Ten kolektor ma już relacje z szablonem bez drabiny GFS, więc szablony-\ndrabiny (default...) nie dadzą się tu aktywować. Poniższe zamrażają\ndobowe i rzadsze; bez zgody źródła (krok 9) migawki wyjdą niezamrożone."; elif [ "$FREEZE" -eq 1 ]; then echo "Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez). W nawiasie: jak\nliczona jest retencja. Szablon da się zmienić później."; else echo "Szablony BEZ zamrażania. W nawiasie: jak liczona jest retencja.\nSzablon da się zmienić później."; fi )" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" \
            "${items[@]}" || { [ "$flat" -eq 1 ] && return 1; sub=freeze; continue; }
         PROFILE="$WT_OUT"; return 0
@@ -594,60 +594,80 @@ account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT
 
 # --- krok 9: ustawienia dodatkowe ---------------------------------------------
 step_extra() {
-    local grant_w masks_w src_w man_w q_w
+    # LISTA JEST ODPOWIEDZIĄ, przyciski to Dalej i Wstecz -- decyzja właściciela
+    # 2026-09-20: "Ma byc przycisk Dalej, wstecz a wybiera sie enterem na liscie".
+    # Poprzednio to był edytor ustawień: menu, którego PIERWSZY WIERSZ ("Bez zmian,
+    # dalej") był wyjściem naprzód. Właściciel nazwał to potworkiem i miał rację --
+    # wiersz udawał ustawienie, a po zmianie czegokolwiek niżej czytał się jak
+    # "odrzuć to, co wybrałeś". Whiptail (newt 0.52.23, ZMIERZONE) ma dokładnie dwa
+    # przyciski: OK i Cancel -- nie ma trzeciego, więc ekran, który jednocześnie
+    # EDYTUJE pozycje i ma Dalej, jest w tym narzędziu niewykonalny. Stąd checklista:
+    # spacja przełącza, Enter = Dalej, Esc/Wstecz = krok w tył. Pozycje, które
+    # potrzebują wartości (własne maski, inna retencja u źródła), pytają o nią
+    # w NASTĘPNYM oknie -- każde z nich ma już normalne Dalej/Wstecz.
+    local items=() on_grant=OFF on_q=OFF on_skip=OFF on_masks=OFF on_srcp=OFF on_man=OFF
+    local want_masks=0 want_srcp=0 defmask="__replicate_,vzdump,__migration__"
     while :; do
         geom
-        [ "$GRANT" -eq 1 ] && grant_w="nadaj stąd, od razu" || grant_w="zatwierdzę sam na źródle"
-        masks_w="${EXFAM:-(żadne -- kopiuj wszystkie migawki)}"
-        src_w="${SRCPROF:-taka sama jak tutaj ($PROFILE)}"
-        [ "$RECURSION" = atomic ] && { src_w="BRAK -- przy atomowo program nie sprząta u źródła"; SRCPROF=""; }
-        [ "$MANUAL" -eq 1 ] && man_w="ręczne (paczka do przeniesienia)" || man_w="przez SSH, automatycznie"
-        if [ "$FREEZE" -ne 1 ]; then q_w="nie dotyczy (szablon bez zamrażania)"
-        elif [ "$GRANT" -ne 1 ]; then q_w="dasz sam na źródle (--allow-quiesce)"
-        elif [ "$GQUIESCE" -eq 1 ]; then q_w="nadaj stąd (inaczej migawki '_crash_')"
-        else q_w="NIE nadawaj -- migawki wyjdą jako '_crash_'"; fi
-        wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item go \
-           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 10)" "$W" 6 \
-           go    "Bez zmian, dalej" \
-           grant "Prawa na źródle:        $grant_w" \
-           quies "Zgoda na zamrażanie:    $q_w" \
-           masks "Pomijane migawki:       $masks_w" \
-           src   "Retencja u źródła:      $src_w" \
-           man   "Parowanie:              $man_w" || return 1
-        case "$WT_OUT" in
-            go) return 0 ;;
-            grant)
-                wt --title "Prawa na źródle" --yes-button "Nadaj stąd" --no-button "Zatwierdzę sam" \
-                   --yesno "Źródło musi nadać kontu kolektora prawa zfs do wybranych miejsc.\n\n'Nadaj stąd' = kreator zrobi to przez SSH jako root (--grant-remotely).\n'Zatwierdzę sam' = instalacja ZATRZYMA SIĘ i poda komendę do wykonania\nna źródle (deploy.sh --commit-scope=...); potem ponawia się tę samą komendę." 14 "$W"
-                case $? in 0) GRANT=1 ;; 1) GRANT=0 ;; esac ;;      # Esc (255) = bez zmian
-            quies)
-                if [ "$FREEZE" -ne 1 ]; then
-                    wt --title "Zgoda na zamrażanie" --msgbox "Wybrany szablon niczego nie zamraża, więc zgoda nie jest potrzebna.\n(Zamrażanie wybiera się w kroku 6.)" 9 "$W"
-                elif [ "$GRANT" -ne 1 ]; then
-                    wt --title "Zgoda na zamrażanie" --msgbox "Prawa na źródle nadajesz sam, więc i tę zgodę dasz tam:\n\n  deploy.sh --commit-scope=$(hostname -s) --allow-quiesce\n\nBez niej migawki dobowe i rzadsze wyjdą jako '_crash_' (niezamrożone)." 12 "$W"
-                else
-                    wt --title "Zgoda na zamrażanie gości na źródle" --yes-button "Nadaj stąd" --no-button "Nie nadawaj" \
-                       --yesno "Szablon każe zamrażać gości (VM/CT) przed migawką dobową i rzadszą.\nŻeby to DZIAŁAŁO, źródło musi pozwolić kontu tego kolektora na zamrażanie\n(--grant-quiesce = deploy.sh --allow-quiesce po stronie źródła).\n\nBez zgody relacja działa, ale te migawki wyjdą jako\nautomated_<szczebel>_crash_<czas> -- jak po wyrwaniu wtyczki." 15 "$W"
-                    case $? in 0) GQUIESCE=1 ;; 1) GQUIESCE=0 ;; esac
-                fi ;;
-            masks)
-                wt --title "Pomijane migawki" --cancel-button "Wstecz" \
-                   --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja).\nPuste = kopiuj wszystkie." 12 "$W" "$EXFAM" && EXFAM="${WT_OUT// /}" ;;
-            src)
-                if [ "$RECURSION" = atomic ]; then
-                    wt --title "Retencja u źródła" --msgbox "Przy kopiowaniu atomowym (-r) program NIE sprząta migawek u źródła:\nsilniki nie trzymają wtedy zakładki, więc sprzątanie mogłoby zerwać\nłańcuch przyrostów. Migawki na źródle trzeba sprzątać samemu,\nalbo wrócić do kroku 4 i zmienić Sposób na 'każdy dataset osobno'." 12 "$W"
-                elif [ -s "$TMPD/prof.tsv" ]; then
-                    local items=(__same__ "taka sama jak tutaj ($PROFILE)") n w c
-                    while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
-                    wt --title "Retencja migawek U ŹRÓDŁA" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-__same__}" \
-                       --menu "Ile migawek zostawiać na źródle (osobno od tego, co trzymasz tutaj)." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
-                       "${items[@]}" && { [ "$WT_OUT" = __same__ ] && SRCPROF="" || SRCPROF="$WT_OUT"; }
-                fi ;;
-            man)
-                wt --title "Parowanie" --yes-button "Przez SSH" --no-button "Ręczne" \
-                   --yesno "Przez SSH = kreator sam dołącza źródło do relacji.\nRęczne = powstaje paczka, którą przenosisz na źródło i uruchamiasz tam\n(dla źródeł, do których ten host nie ma wstępu po SSH)." 11 "$W"
-                case $? in 0) MANUAL=0 ;; 1) MANUAL=1 ;; esac ;;
-        esac
+        [ "$GRANT" -eq 1 ] && on_grant=ON || on_grant=OFF
+        [ "$GQUIESCE" -eq 1 ] && on_q=ON || on_q=OFF
+        [ -n "$EXFAM" ] && on_skip=ON || on_skip=OFF
+        [ -n "$EXFAM" ] && [ "$EXFAM" != "$defmask" ] && on_masks=ON || on_masks=OFF
+        [ -n "$SRCPROF" ] && on_srcp=ON || on_srcp=OFF
+        [ "$MANUAL" -eq 1 ] && on_man=ON || on_man=OFF
+        [ "$RECURSION" = atomic ] && { SRCPROF=""; on_srcp=OFF; }
+        items=(grant "Prawa na źródle nadaj STĄD, przez SSH jako root -- bez tego instalacja stanie i poda komendę do wykonania na źródle" "$on_grant")
+        if [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
+            items+=(quies "Nadaj też zgodę na ZAMRAŻANIE gości -- bez niej migawki dobowe i rzadsze wyjdą jako '_crash_'" "$on_q")
+        fi
+        items+=(skip "Pomijaj migawki Proxmoxa: ${EXFAM:-$defmask}" "$on_skip")
+        items+=(masks "...ale własne maski zamiast domyślnych (podasz je w następnym oknie)" "$on_masks")
+        if [ "$RECURSION" != atomic ]; then
+            items+=(srcp "Inna retencja U ŹRÓDŁA niż tutaj ($PROFILE) -- wybierzesz w następnym oknie" "$on_srcp")
+        fi
+        items+=(man "Parowanie RĘCZNE: paczka do przeniesienia (gdy ten host nie ma wstępu po SSH)" "$on_man")
+        wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
+           --checklist "Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej." "$(fit $((${#items[@]} / 3 + 7)))" "$W" "$((${#items[@]} / 3))" \
+           "${items[@]}" || return 1
+        GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0; want_srcp=0
+        local keep_skip=0 x
+        while IFS= read -r x; do
+            case "$x" in
+                grant) GRANT=1 ;;
+                quies) GQUIESCE=1 ;;
+                skip)  keep_skip=1 ;;
+                masks) want_masks=1 ;;
+                srcp)  want_srcp=1 ;;
+                man)   MANUAL=1 ;;
+            esac
+        done <<<"$WT_OUT"
+        # Zgoda na zamrażanie ma sens tylko razem z nadaniem praw stąd; gdy pozycji
+        # nie było na liście, nie wolno jej cichcem zostawić włączonej.
+        [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ] || GQUIESCE=0
+        if [ "$keep_skip" -eq 0 ]; then
+            EXFAM=""
+        elif [ "$want_masks" -eq 1 ]; then
+            wt --title "$(title 9 'Własne maski migawek')" --ok-button "Dalej" --cancel-button "Wstecz" \
+               --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja)." 11 "$W" \
+               "${EXFAM:-$defmask}" || continue
+            EXFAM="${WT_OUT// /}"
+            [ -n "$EXFAM" ] || EXFAM="$defmask"
+        else
+            EXFAM="$defmask"
+        fi
+        if [ "$want_srcp" -eq 1 ] && [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.tsv" ]; then
+            local pitems=() n w c
+            while IFS=$'\t' read -r n w c; do [ -n "$n" ] && [ "$n" != "$PROFILE" ] && pitems+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
+            if [ "${#pitems[@]}" -gt 0 ]; then
+                wt --title "$(title 9 'Retencja migawek U ŹRÓDŁA')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-${pitems[0]}}" \
+                   --menu "Ile migawek zostawiać na ŹRÓDLE -- osobno od tego, co trzymasz tutaj ($PROFILE)." "$(fit $((${#pitems[@]} / 2 + 4)))" "$W" "$((${#pitems[@]} / 2))" \
+                   "${pitems[@]}" || continue
+                SRCPROF="$WT_OUT"
+            fi
+        else
+            SRCPROF=""
+        fi
+        return 0
     done
 }
 
