@@ -9045,6 +9045,32 @@ cmd_set_endpoint() {
 #
 # REV-20260802-033 U9: extracted from cmd_verify_endpoint so it can be run
 # against ANY candidate host:port, not just the one already on record --
+# Does the SOURCE hold no snapshot at all of this dataset? (2026-09-20)
+#
+# The PLAN= verdict cannot answer it: "no common base because the source has
+# nothing to send" and "no common base because the copy here has drifted" print
+# the same line, and only the second is the full-transfer-forever this project
+# refuses to activate into. Containers (a recursive root holding only children)
+# and swap volumes are the ordinary first case, and before this existed they
+# made an otherwise perfect relationship unactivatable.
+#
+# FAIL-CLOSED, deliberately: anything other than a clean, empty answer -- ssh
+# refusing, the account not allowed to list, a timeout -- returns 1, which keeps
+# the old refusal. A question this cannot answer must never soften a guard.
+# Runs as the DELEGATED account over the pairing key, the same identity the
+# transfer uses, through load_ssh_opts rather than a second hand-built option
+# list (measured on pve9: the account may list snapshots; it needs no extra
+# permission for that).
+probe_source_has_no_snapshots() {   # <host> <port> <alias-known-hosts> <dataset>
+    local phost="$1" pport="$2" pkh="$3" pds="$4" out rc
+    case "$pds" in ''|*[$'\n\t ']*) return 1 ;; esac    # never interpolate a surprise
+    local -a opts; load_ssh_opts "${LOAD_KEYFILE:-}" "${LOAD_ALIAS:-}" "$pkh" "$pport"; opts=("${LOAD_SSH_OPTS[@]}")
+    out=$(ssh -n "${opts[@]}" "${LOAD_ACCOUNT}@${phost}" \
+              "zfs list -H -o name -t snapshot -d1 -- $(printf '%q' "$pds")" 2>/dev/null); rc=$?
+    [ "$rc" -eq 0 ] || return 1
+    [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]
+}
+
 # verify-endpoint below calls this once per candidate until one comes back
 # clean. Sets $PROBE_DETAIL to a human-readable report of whatever went
 # wrong (empty on success). Re-derives the alias known_hosts file itself
@@ -9054,6 +9080,8 @@ cmd_set_endpoint() {
 probe_snapget_endpoint() {   # <host> <port>
     local phost="$1" pport="$2"
     PROBE_DETAIL=""
+    # (probe_source_has_no_snapshots is defined above; see its header for why
+    #  this question has to be asked rather than read off the PLAN line.)
     local pkh; pkh=$(ensure_alias_known_hosts "$LOAD_LABEL" "${PEER_SAVED_LOCAL_USER:-}" "$pport" "$LOAD_ALIAS") || {
         PROBE_DETAIL="  no pinned host key for port $pport (never verified there before)"
         return 1
@@ -9080,33 +9108,66 @@ probe_snapget_endpoint() {   # <host> <port>
             fi
             continue
         fi
-        plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
-        case "$plan" in
-            # base=null is NOT an incremental: it means "no common snapshot",
-            # i.e. a full transfer on every run, forever -- the exact shape the
-            # 2026-08-01 live defect wore, and LAB-E measured this verdict
-            # slipping through as "incremental-only confirmed" for an EXCLUDED
-            # child the probe should never have asked about. It now counts as
-            # needing a full, so activation stops and names the dataset.
-            "PLAN=INCREMENTAL base=null"*)
-                needs_full=$((needs_full + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  FULL-FOREVER (base=null): $ds"$'\n' ;;
-            PLAN=INCREMENTAL*) ;;
-            PLAN=FULL*)
-                needs_full=$((needs_full + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds would need a FULL transfer -- no common base"$'\n' ;;
-            *)
-                unknown=$((unknown + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n'
-                # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
-                # was captured but printed only on rc!=0, so this branch said
-                # '<none>' and nothing else -- LAB-E and the closing campaign
-                # both stalled here blind. The engine's own last lines ARE the
-                # reason; show them.
-                if [ -s "$errtmp" ]; then
-                    while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
-                fi ;;
-        esac
+        # EVERY PLAN LINE, NOT THE FIRST. With -R the engine expands a recursive
+        # root and prints one verdict per dataset in that expansion -- and the
+        # FIRST is the root itself. A root that is a CONTAINER (no snapshots of
+        # its own: `hdd/lab` holding ct-201, srv-a, vm-101 ...) therefore always
+        # answered base=null, so `grep -m1` read a verdict about a dataset with
+        # nothing to send and declared the whole endpoint unverifiable. Measured
+        # on pve10 <- pve9 2026-09-20: eleven children every one of them a clean
+        # incremental, and the relationship could not be activated because of
+        # the twelfth line, which was the container.
+        local plan_lines; plan_lines=$(printf '%s\n' "$out" | grep '^PLAN=' || true)
+        if [ -z "$plan_lines" ]; then
+            unknown=$((unknown + 1))
+            PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: <none>)"$'\n'
+            # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
+            # was captured but printed only on rc!=0, so this branch said
+            # '<none>' and nothing else -- LAB-E and the closing campaign
+            # both stalled here blind. The engine's own last lines ARE the
+            # reason; show them.
+            if [ -s "$errtmp" ]; then
+                while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
+            fi
+            continue
+        fi
+        local pds
+        while IFS= read -r plan; do
+            [ -n "$plan" ] || continue
+            # The dataset this verdict is about -- the engine names it, so a
+            # per-line message can too instead of blaming the root it was asked
+            # about. `src=` is present on every PLAN line the engine emits.
+            pds=$(printf '%s' "$plan" | sed -n -E 's/.* src=([^ ]+).*/\1/p')
+            [ -n "$pds" ] || pds="$ds"
+            case "$plan" in
+                # base=null is NOT an incremental: it means "no common snapshot",
+                # i.e. a full transfer on every run, forever -- the exact shape the
+                # 2026-08-01 live defect wore, and LAB-E measured this verdict
+                # slipping through as "incremental-only confirmed" for an EXCLUDED
+                # child the probe should never have asked about. It now counts as
+                # needing a full, so activation stops and names the dataset.
+                #
+                # WITH ONE MEASURED EXCEPTION: a dataset the SOURCE has never
+                # snapshotted cannot cost a full transfer, because there is
+                # nothing to send at all -- a container root and a swap volume
+                # are the ordinary cases. That is not something the verdict line
+                # can say (it looks identical either way), so it is ASKED, once,
+                # over the same pairing key, and only for the datasets that came
+                # back null. An empty answer means "nothing to replicate yet";
+                # snapshots there mean the real full-forever this guard is for.
+                "PLAN=INCREMENTAL base=null"*|PLAN=FULL*)
+                    if probe_source_has_no_snapshots "$phost" "$pport" "$pkh" "$pds"; then
+                        PROBE_DETAIL="${PROBE_DETAIL}  nothing to replicate yet (the SOURCE has no snapshot of it): $pds"$'\n'
+                    else
+                        needs_full=$((needs_full + 1))
+                        PROBE_DETAIL="${PROBE_DETAIL}  FULL-FOREVER (no common base, and the source HAS snapshots): $pds"$'\n'
+                    fi ;;
+                PLAN=INCREMENTAL*) ;;
+                *)
+                    unknown=$((unknown + 1))
+                    PROBE_DETAIL="${PROBE_DETAIL}  $pds: unreadable PLAN= verdict (got: $plan)"$'\n' ;;
+            esac
+        done <<< "$plan_lines"
     done
     rm -f "$errtmp"
     [ "$failed" -eq 0 ] && [ "$unknown" -eq 0 ] && [ "$needs_full" -eq 0 ]
@@ -9174,7 +9235,22 @@ cmd_verify_endpoint() {
                 die "relationship '$name' is DISABLED at the peer, so its endpoints cannot be verified -- the peer answered, it refused. This is not an address problem.
 Enable it first: $0 enable-client $name   (then re-run verify-endpoint)" ;;
         esac
-        die "none of the known endpoints answered for '$name' (tried: ${candidates[*]}):
+        # SAY WHICH QUESTION FAILED. "None of the endpoints answered" is about
+        # reachability, and printing it over a report whose every line is
+        # "FULL-FOREVER" sent the operator hunting a network problem that does
+        # not exist -- measured on pve10 2026-09-20, where the link was perfect
+        # and the objection was about a snapshot base. The report below already
+        # distinguishes the two; the headline must not contradict it.
+        local _why="none of the known endpoints answered"
+        case "$tried_report" in
+            *"FULL-FOREVER"*|*"would need a FULL transfer"*)
+                case "$tried_report" in
+                    *"FAILED (rc="*|*"no pinned host key"*)
+                        _why="no endpoint passed BOTH checks (some did not answer, some answered but could not promise an incremental)" ;;
+                    *)  _why="the endpoint ANSWERED, but the next run would not be incremental -- this is not an address problem" ;;
+                esac ;;
+        esac
+        die "$_why for '$name' (tried: ${candidates[*]}):
 $tried_report
 If the peer has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"
     fi
