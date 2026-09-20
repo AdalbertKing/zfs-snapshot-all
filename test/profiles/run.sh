@@ -949,6 +949,26 @@ else
 fi
 
 
+# 5b. A REFUSAL THAT CANNOT SPEAK (2026-09-20). profile_keep_to_retain is called
+#     inside a command substitution, so the PROFILE_ERR it sets lands in a
+#     SUBSHELL and is gone by the time the caller tests the status -- the
+#     operator got `FATAL: profile '<file>':` and nothing after the colon.
+#     Measured while writing passive-flat, whose first tier name had no cadence.
+KR="$FLOOR/p/nocadence.conf"
+sed -e 's/^\[template:hourly\]/[template:tier_flat]/' -e 's/use_template = hourly,/use_template = tier_flat,/'     "$ROOT/profiles/m31w4d7h24.conf" > "$KR"
+kt="$(mktemp)"; kd="$(mktemp)"; kp="$(mktemp)"; ke="$(mktemp)"; ko="$(mktemp)"; kl="$(mktemp)"
+bash "$GEN" --dump-tier-letters > "$kl" 2>/dev/null
+profile_split_one_file "$KR" "$kt" "$kd" "$kp" "$ke" >/dev/null 2>&1
+if ! profile_render_templates "$kt" nocadence "$ko" "" "$kl" >/dev/null 2>&1; then
+    case "$PROFILE_ERR" in
+        *"is not one gen-cron knows"*) ok "keep->retain: a tier whose name carries no cadence is refused WITH ITS REASON -- the message survives the command substitution it is produced in (it used to arrive empty)" ;;
+        "") bad "keep->retain: the refusal arrived EMPTY -- the subshell swallowed PROFILE_ERR again" ;;
+        *)  bad "keep->retain: wrong reason" "$PROFILE_ERR" ;;
+    esac
+else
+    bad "keep->retain: a tier with no cadence rendered instead of being refused" "$(head -5 "$ko")"
+fi
+
 # 6. PASSIVE CONSUMPTION ON A FLAT COLLECTOR (2026-09-20).
 #
 # Measured on pve10 against a real sync relationship from a source that already
