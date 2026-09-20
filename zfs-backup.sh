@@ -4329,6 +4329,16 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         fi
         local _plocal
         for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
+            # A profile whose tiers prune THEMSELVES (family-per-tier: d30h24,
+            # m12w4d7h24-*, prod -- every one that can quiesce) declares no [prune]
+            # fragment, and its retention rides the [dataset:] section's templates.
+            # Writing a ladder section for it anyway produced `[prune:...] has no
+            # use_template`, gen-cron refused, and activation stopped at
+            # endpoint_verified -- so NO quiescing profile could be activated through
+            # add-client. Measured on pve10 <- pve11, 2026-09-20, from the wizard's
+            # default. profile_declares_ladder is the guard save-profile's gate
+            # already used for the same reason.
+            [ -n "$LEGACY_LADDER_BODY" ] || profile_declares_ladder || continue
             _plocal=$(client_local_path "$ds")
             {
                 echo
