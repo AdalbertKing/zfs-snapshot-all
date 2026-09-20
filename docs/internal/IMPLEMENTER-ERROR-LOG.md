@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1738,3 +1738,33 @@ means the durable record, before any purge and before anything irreversible.
 And when a verb stops halfway, say so in the surface the operator actually uses:
 the GUI window here was still printing "removed, with leftovers" for a run that
 had removed nothing.
+
+### E59 — the same rule, broken again four hours later (REV-20260920-145, R4)
+**2026-09-20, `do_commit_scope`.**
+
+*Genesis.* In the morning I shipped REV-144: a composite that recorded a failed
+step and walked on into a purge and an irreversible destroy. I wrote E58 under
+R4 for it, in this file, with the sentence "a recorded failure is not a handled
+failure". In the evening I added a branch to `do_commit_scope` that calls
+`install_quiesce_grant` -- and did not look at what it returned. `deploy.sh`
+runs under `set -uo pipefail`, not `set -e`, so the failure was walked past: the
+run printed "its whitelist now matches this scope exactly", replaced the durable
+`PEER_JOIN_GRANTED_DATASETS`, wrote the scope hash and returned 0. The installer
+is transactional and RESTORES the previous whitelist on failure, so that run
+would have left the old, WIDER freeze permission standing beside a replication
+grant the same run had just narrowed -- the exact drift the branch was written
+to remove. Found by the reviewer, not by me.
+
+*Cause.* Not ignorance of the rule -- I had just written it down. The mechanism
+was that I was reading the new code as a FIX and not as code: the branch was
+"the correct behaviour", so I checked what it did when it worked and never asked
+what it does when it does not. E58 and E59 differ only in which half I skipped:
+there I recorded the failure and continued anyway, here I did not even record
+it. Both are one habit -- treating the happy path as the whole path.
+
+*Rule.* R4, and this entry is here as EVIDENCE THAT IT IS NOT BEING APPLIED
+rather than as a new category. The concrete form for this codebase: in a script
+without `set -e`, every call that can fail is an `if`, a `||` or a checked `rc=$?`
+-- there is no fourth form, and "it is a helper we wrote" is not an exemption.
+The check belongs in the same commit as the call, because a fix that only works
+when nothing goes wrong is not a fix.

@@ -2083,6 +2083,25 @@ install_quiesce_grant() {
 # Shared (kept, and SAID so): /usr/local/sbin/zfs-quiesce-helper is one file for
 # every peer on this host. Removing it would silently break the other
 # relationships, so it stays and the operator is told it stays.
+# The failure half of the quiesce update inside --commit-scope (REV-20260920-145).
+# Separate function because both branches need it and because what it does is a
+# decision, not a message: the replication grant has already been narrowed, the
+# transactional installer has already put the OLD whitelist back, so the ONLY
+# coherent states left are "no freeze permission" or "undo the revoke". This
+# takes the first: a freeze permission wider than the replication permission is
+# the exact drift the caller exists to prevent. It never returns.
+quiesce_update_failed() {   # <account> <label> -- exits nonzero, writing nothing durable
+    local account="$1" label="$2"
+    warn "the guest quiesce whitelist for $account could NOT be updated to this scope."
+    warn "The replication grant was already narrowed, and the failed update left the PREVIOUS (wider) whitelist in place -- that account could freeze guests on datasets it may no longer replicate."
+    if revoke_quiesce_grant "$account"; then
+        warn "So the freeze permission was taken away entirely. Restore it with: deploy.sh --commit-scope=$label --allow-quiesce"
+    else
+        warn "AND it could not be taken away either. Do it by hand NOW: deploy.sh --revoke-quiesce=$account"
+    fi
+    die "commit-scope did NOT complete for '$label': nothing durable was written (no new scope hash, no new PEER_JOIN_GRANTED_DATASETS), so the previous record still describes what is granted and re-running this same command retries safely."
+}
+
 revoke_quiesce_grant() {
     local account="$1" removed=0
     local allow="/etc/zfs-quiesce-allow/$account"
@@ -3758,11 +3777,32 @@ do_commit_scope() {
     # So: an existing grant is KEPT -- narrowing the replication scope is not a
     # request to take the freeze permission away -- but it is re-written to this
     # scope, and the operator is told what it now covers and how to remove it.
+    #
+    # AND ITS RETURN STATUS IS CHECKED, in both branches (REV-20260920-145).
+    # `deploy.sh` runs under `set -uo pipefail`, NOT `set -e`, so an unchecked
+    # call is simply walked past: the first version of this branch printed "its
+    # whitelist now matches this scope exactly", replaced
+    # PEER_JOIN_GRANTED_DATASETS, wrote the scope hash and returned 0 -- after a
+    # failed update. install_quiesce_grant is transactional and RESTORES the
+    # previous whitelist when it fails, so that run would have left the OLD,
+    # WIDER freeze permission standing next to the narrowed replication grant:
+    # exactly the drift this whole block exists to remove, now with the durable
+    # record already saying the dataset is gone and no retry signal left. It is
+    # the same mistake as REV-144 one layer down -- recording or ignoring a
+    # failure is not handling it.
+    #
+    # FAIL-CLOSED, then stop. The freeze permission must never be wider than the
+    # replication permission that accompanies it, and by this point the `zfs
+    # unallow` above has already run. So on failure the grant is taken away
+    # entirely (acceptance criterion 4's second option: "keep the quiesce grant
+    # disabled until a retry completes") and nothing durable is written: no new
+    # hash, no new PEER_JOIN_GRANTED_DATASETS, so the OLD record stays valid and
+    # the same command retries safely.
     if [ "$ALLOW_QUIESCE" -eq 1 ]; then
-        install_quiesce_grant "$account" "${still_granted[*]}"
+        install_quiesce_grant "$account" "${still_granted[*]}" || quiesce_update_failed "$account" "$label"
     elif [ -e "/etc/sudoers.d/zfs-quiesce-$account" ] || [ -e "/etc/zfs-quiesce-allow/$account" ]; then
         log "guest quiesce was granted to $account by an earlier run and is KEPT (this run did not ask to change it)."
-        install_quiesce_grant "$account" "${still_granted[*]}"
+        install_quiesce_grant "$account" "${still_granted[*]}" || quiesce_update_failed "$account" "$label"
         log "its whitelist now matches this scope exactly: ${still_granted[*]:-(nothing)}. To take the freeze permission away entirely: deploy.sh --revoke-quiesce=$account"
     else
         log "guest quiesce NOT granted to $account -- remote quiesce (snapget -q) will refuse. Re-run --commit-scope=$label --allow-quiesce if this peer should be able to freeze guests here."

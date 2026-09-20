@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b90e72e2c158bb31 -->
+<!-- status-covers-digest: fed9edd9ccd37702 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,30 @@
   lista się skróciła -- kursor zostaje, bo nie ma czego zgadywać. Suita `tui`
   189/0 (dwie nowe asercje wykonują metodę na dwóch stanach danych, z trzema
   przypadkami negatywnymi); na main obu metod nie ma, więc asercja tam pada.
+- **REV-145: nieudana aktualizacja whitelisty zamrażania raportowana jako sukces (2026-09-20, noc).**
+  Recenzent, P2, na PR #403: nowa gałąź wołała `install_quiesce_grant` i NIE
+  sprawdzała, co zwrócił. `deploy.sh` chodzi pod `set -uo pipefail`, nie `set -e`,
+  więc porażka była po prostu mijana. A ten instalator jest transakcyjny i przy
+  awarii PRZYWRACA poprzednią whitelistę -- czyli bieg kończył się tak, że stara,
+  SZERSZA zgoda na zamrażanie stała obok nadania replikacji, które ten sam bieg
+  przed chwilą zawęził. Dokładnie ten dryf, dla którego #403 powstał. Do tego
+  trwały rekord był już nadpisany nową listą, hash zapisany, a komenda zwracała 0.
+  - **Poprawka:** obie gałęzie sprawdzają status; nowa funkcja `quiesce_update_failed`
+    mówi, co się stało, ZDEJMUJE zgodę (żeby nie była szersza niż nadanie replikacji)
+    i kończy błędem PRZED zapisem manifestu i hasha -- więc poprzedni rekord dalej
+    opisuje prawdę i to samo polecenie bezpiecznie ponawia. Gdy i zdjęcie zgody
+    padnie, bieg mówi to wprost i podaje komendę ręczną.
+  - **Dowody:** `quiescehelper` 125/0 -- test WYKONUJE granicę: wyciąga z `deploy.sh`
+    SZYPIONĄ funkcję `do_commit_scope` (asercja pilnuje, że to ta sama, nie przepisana)
+    i uruchamia ją na atrapach z wymuszoną awarią instalatora; kontrola pozytywna
+    z instalatorem, któremu się udaje, sprawdza dokładnie odwrotność każdej z tych
+    własności. Kontrola negatywna na main `7dff3038`: rc=0, manifest nadpisany,
+    hash zapisany, „commit-scope complete" wydrukowane. `deploy-check-only` na obu
+    kształtach hosta: pve9b rc=0 („audit clean"), pve10 rc=1 z brakami labu
+    identycznymi jak z main.
+  - **Wpis E59 w dzienniku błędów:** ta sama reguła R4 złamana drugi raz tego samego
+    dnia (po E58) -- zapisane jako dowód, że reguła nie jest stosowana, nie jako
+    nowa kategoria.
 - **SYNCHRO NA PŁASKIM KOLEKTORZE BYŁO NIEWYKONALNE -- `passive-flat` (2026-09-20, noc).**
   Właściciel próbował z GUI dodać relację *synchro* pve10 <- pve9 (.99) i nie szło.
   Prześledzone na hostach, nie z pamięci. Trzy odmowy jedna za drugą, każda sama

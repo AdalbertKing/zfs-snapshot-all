@@ -1221,6 +1221,95 @@ else
     bad "commit-scope: still claims 'NOT granted' where a grant exists" "$qsc"
 fi
 
+# ---- REV-20260920-145: a FAILED whitelist update must not report success ----
+#
+# The reviewer's finding on PR #403, and it is the same mistake as REV-144 one
+# layer down: the new branch called install_quiesce_grant and never looked at
+# its return status. deploy.sh runs under `set -uo pipefail`, not `set -e`, so a
+# failed transactional update was walked past -- and because that installer
+# RESTORES the previous whitelist when it fails, the run ended with the OLD,
+# WIDER freeze permission standing next to a replication grant that `zfs
+# unallow` had already narrowed, the durable record rewritten to the new list,
+# the hash written, and rc=0. Every retry signal gone.
+#
+# This EXECUTES the boundary: the shipped do_commit_scope() is extracted from
+# deploy.sh and run against stubs, with the installer forced to fail.
+CS="$WORK/commitscope"; rm -rf "$CS"; mkdir -p "$CS"
+awk '/^do_commit_scope\(\) \{/,/^\}/' "$REPO/deploy.sh" > "$CS/fn.sh"
+awk '/^quiesce_update_failed\(\) \{/,/^\}/' "$REPO/deploy.sh" >> "$CS/fn.sh"
+grep -q 'do_commit_scope()' "$CS/fn.sh" && grep -q 'quiesce_update_failed()' "$CS/fn.sh" \
+    && ok "commit-scope sandbox: the SHIPPED function is the one under test (extracted from deploy.sh, not retyped)" \
+    || bad "commit-scope sandbox: extraction failed" "$(head -3 "$CS/fn.sh")"
+
+cat > "$CS/harness.sh" <<'HEOF'
+#!/bin/bash
+set -uo pipefail
+CS="$1"; FAIL_INSTALL="$2"
+log()  { echo ">>> $*"; }
+warn() { echo "!!! $*"; }
+die()  { echo "FATAL: $*"; exit 1; }
+COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
+commit_scope_dataset_held() { return 1; }
+id()   { case "$1" in -u) echo 4242 ;; *) return 0 ;; esac; }
+zfs() {                       # allow/unallow succeed; every dataset exists
+    case "$1" in
+        list)    return 0 ;;
+        allow)   echo "zfs allow $*" >> "$CS/zfs.log"; return 0 ;;
+        unallow) echo "unallow $*" >> "$CS/zfs.log"; return 0 ;;
+        *)       return 0 ;;
+    esac
+}
+install_quiesce_grant() { echo "install($2)" >> "$CS/q.log"; [ "$FAIL_INSTALL" = 1 ] && return 1; return 0; }
+revoke_quiesce_grant()  { echo "revoke($1)"  >> "$CS/q.log"; return 0; }
+peer_scope_granted_hash_path() { echo "$CS/hash"; }
+join_scope_enumerate() { echo pool/a; }   # the scope this run commits: narrowed from a,b to a
+do_commit_scope_check() {     # what the real one leaves behind for the caller
+    COMMIT_SCOPE_MPATH="$CS/manifest"; COMMIT_SCOPE_SFILE="$CS/scope"; COMMIT_SCOPE_ACCOUNT=backup
+    PEER_JOIN_GRANTED_DATASETS="pool/a pool/b"; PEER_JOIN_ACCOUNT_UID=4242
+}
+ALLOW_QUIESCE=0
+declare -a granted=()
+. "$CS/fn.sh"
+do_commit_scope peer
+HEOF
+chmod +x "$CS/harness.sh"
+
+cs_run() {   # <fail?> -> rc; state in $CS
+    rm -f "$CS/zfs.log" "$CS/q.log" "$CS/hash" "$CS/out"
+    printf 'PEER_JOIN_GRANTED_DATASETS="pool/a pool/b"\nPEER_JOIN_ACCOUNT_UID=4242\n' > "$CS/manifest"
+    printf 'scope-bytes\n' > "$CS/scope"
+    mkdir -p "$CS/etc"; : > "$CS/etc/marker"
+    bash "$CS/harness.sh" "$CS" "$1" > "$CS/out" 2>&1
+}
+
+# The grant marker the branch keys on lives at an absolute path, so the sandbox
+# cannot create it -- instead the ALLOW_QUIESCE=1 branch is exercised, which
+# reaches the same install+check with the same consequences.
+sed -i 's/^ALLOW_QUIESCE=0$/ALLOW_QUIESCE=1/' "$CS/harness.sh"
+
+cs_run 1; rc=$?
+man_after="$(grep '^PEER_JOIN_GRANTED_DATASETS=' "$CS/manifest")"
+if [ "$rc" -ne 0 ] && [ "$man_after" = 'PEER_JOIN_GRANTED_DATASETS="pool/a pool/b"' ] && [ ! -e "$CS/hash" ] \
+   && ! grep -q 'commit-scope complete' "$CS/out" && ! grep -q 'matches this scope exactly' "$CS/out" \
+   && grep -q 'revoke(backup)' "$CS/q.log"; then
+    ok "commit-scope: an install_quiesce_grant that FAILS makes the command nonzero, writes nothing durable (the prior PEER_JOIN_GRANTED_DATASETS and no new hash -- so the same command retries safely) and claims no success (REV-145)"
+else
+    bad "commit-scope: a failed whitelist update was reported as success" "rc=$rc" "manifest=$man_after" "hash=$( [ -e "$CS/hash" ] && echo written || echo none)" "$(cat "$CS/out")"
+fi
+if grep -q 'revoke(backup)' "$CS/q.log" && grep -q 'taken away entirely' "$CS/out"; then
+    ok "commit-scope: ...and it leaves permissions COHERENT -- the replication grant is already narrowed, so the freeze permission is taken away rather than left WIDER than it, and the run says how to restore it"
+else
+    bad "commit-scope: a failed update left the wider freeze permission standing" "$(cat "$CS/q.log")" "$(cat "$CS/out")"
+fi
+cs_run 0; rc=$?
+man_after="$(grep '^PEER_JOIN_GRANTED_DATASETS=' "$CS/manifest")"
+if [ "$rc" -eq 0 ] && [ "$man_after" = 'PEER_JOIN_GRANTED_DATASETS="pool/a"' ] && [ -e "$CS/hash" ] \
+   && grep -q 'commit-scope complete' "$CS/out" && ! grep -q 'revoke(backup)' "$CS/q.log"; then
+    ok "commit-scope control: when the update SUCCEEDS the same path still records the new list, writes the hash, reports completion and takes nothing away -- the guard is about failure, not caution"
+else
+    bad "commit-scope control: the successful path regressed" "rc=$rc" "manifest=$man_after" "$(cat "$CS/out")"
+fi
+
 # ---- REV-20260801-022 F1: an explicit grant must not exit 0 ----------------
 #
 # The first version of the local path leaned on Phase 8's account DETECTION and
