@@ -393,18 +393,6 @@ if grep -q "resume-client lab-srv-b$" "$XL" && has "$AP" 'WYJŚCIE: Wznów relac
 else
     bad "akcje: F4 = resume na pauzie" "$(cat "$XL")" "$AP"
 fi
-A="$(act down,del)"
-if has "$A" 'POTWIERDZENIE: Usuń relację lab-ct201' && has "$A" 'remove-client lab-ct201' && has "$A" 'KOPII na dysku nie rusza'; then
-    ok "akcje: Del pokazuje remove-client i mowi, czego NIE robi (kopii nie rusza)"
-else
-    bad "akcje: Del" "$A"
-fi
-A="$(act down,del,t)"
-if grep -q "remove-client lab-ct201$" "$XL"; then
-    ok "akcje: ...i po 't' wola dokladnie remove-client NAME"
-else
-    bad "akcje: Del t" "$(cat "$XL")"
-fi
 # F4 na F3 to PAUZA, nie przelaczenie na Transfery
 A="$(act F4)"
 if ! has "$A" '╔═ Zakończone' && has "$A" 'POTWIERDZENIE'; then
@@ -445,9 +433,9 @@ else
     bad "akcje: F8 t" "$(cat "$XL")"
 fi
 # odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
-A="$(act end,del)"; act end,del,t >/dev/null
+A="$(act end,F4)"; act end,F4,t >/dev/null
 if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; then
-    ok "akcje: na rekordzie 'removed' akcja odmawia, mowi dlaczego, i nic nie idzie do powloki"
+    ok "akcje: na rekordzie 'removed' PAUZA odmawia, mowi dlaczego, i nic nie idzie do powloki (Del tam dziala -- zwalnia nazwe)"
 else
     bad "akcje: removed odmawia" "$(cat "$XL")" "$A"
 fi
@@ -463,6 +451,18 @@ if grep -Eq "zfs-backup.sh'? new-relation\$" "$XL" && ! has "$A" 'krok 1/8'; the
     ok "akcje: Ins na F3 oddaje terminal czasownikowi new-relation (kreator whiptail), NIE otwiera starego kreatora w curses"
 else
     bad "akcje: Ins -> new-relation" "$(cat "$XL")" "$A"
+fi
+A="$(act down,del)"
+if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
+    ok "akcje: Del na F3 oddaje terminal dialogowi CALEGO usuwania (delete-relation NAZWA --ask), nie samemu remove-client"
+else
+    bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
+fi
+A="$(act end,del)"
+if grep -Eq "delete-relation 192.168.28.99 --ask\$" "$XL" && ! has "$A" 'jest już usunięta'; then
+    ok "akcje: Del dziala takze na rekordzie 'removed' -- tam znaczy 'zwolnij nazwe / posprzataj reszte'"
+else
+    bad "akcje: Del na removed" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(act down,ins --wizard curses)"
 if has "$A" '╔═ Nowa relacja -- krok 1/8: Typ relacji' && [ ! -s "$XL" ]; then
@@ -1240,6 +1240,36 @@ n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/
 line=$(sed -n "${n}p" "$NR_DIR/answers")
 [ -n "$line" ] || { echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"; exit 255; }
 rc="${line%%	*}"; out="${line#*	}"
+# KONTRAKT PRAWDZIWEGO WHIPTAILA: z listy da sie wybrac TYLKO to, co na niej jest. Bez
+# tego atrapa przyjela 'hdd/backups', gdy kreator oferowal 'hdd/backups<TAB>active'
+# (wada znaleziona dopiero na pve10, 2026-09-20) -- odpowiedz omijala oferte.
+kind=""; step=0; i=0; tags=()
+for a in "$@"; do
+    i=$((i+1))
+    case "$a" in --menu) kind=menu; step=2; at=$i ;; --radiolist|--checklist) kind=list; step=3; at=$i ;; esac
+done
+if [ -n "$kind" ]; then
+    j=$((at + 5)); while [ "$j" -le "$#" ]; do tags+=("${!j}"); j=$((j + step)); done
+    # Oferta sama w sobie: znacznik z tabulatorem to sklejone pola (tak wygladal cel
+    # 'hdd/backups<TAB>active'), a --default-item spoza listy to kursor nie tam, gdzie mysli kod.
+    for t in "${tags[@]}"; do
+        case "$t" in *"	"*) echo "ATRAPA: znacznik listy zawiera TAB (sklejone pola): '$t'" >> "$NR_DIR/wt.log"; echo "ATRAPA: TAB w znaczniku" >&2; exit 255 ;; esac
+    done
+    i=0; for a in "$@"; do
+        i=$((i+1))
+        if [ "$a" = "--default-item" ]; then
+            k=$((i+1)); di="${!k}"; ok=0; for t in "${tags[@]}"; do [ "$t" = "$di" ] && ok=1; done
+            [ "$ok" -eq 1 ] || { echo "ATRAPA: --default-item '$di' NIE MA na liscie: ${tags[*]}" >> "$NR_DIR/wt.log"; echo "ATRAPA: default-item spoza listy" >&2; exit 255; }
+        fi
+    done
+fi
+if [ -n "$kind" ] && [ "$rc" = 0 ] && [ -n "$out" ]; then
+    while IFS= read -r want; do
+        [ -n "$want" ] || continue
+        ok=0; for t in "${tags[@]}"; do [ "$t" = "$want" ] && ok=1; done
+        [ "$ok" -eq 1 ] || { echo "ATRAPA: odpowiedzi '$want' NIE MA na oferowanej liscie: ${tags[*]}" >> "$NR_DIR/wt.log"; echo "ATRAPA: '$want' spoza listy" >&2; exit 255; }
+    done <<<"$(printf '%s' "$out" | tr '|' '\n')"
+fi
 printf '%s' "$out" | tr '|' '\n' >&2
 exit "$rc"
 EOF
@@ -1247,10 +1277,11 @@ cat > "$NR/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    status)         cat "$NR_FIX/status.json" ;;
     check-source)   if [ -e "$NR_DIR/installed" ]; then cat "$NR_FIX/check-source-pkg.json"; else cat "$NR_FIX/${NR_CHECK:-check-source-pkg.json}"; fi ;;
     list-datasets)  if [ "$2" = "--json" ]; then cat "$NR_FIX/list-datasets.json"; else cat "$NR_FIX/list-datasets-pve9b.json"; fi ;;
     list-profiles)  cat "$NR_FIX/list-profiles.json" ;;
+    delete-relation) case " $* " in *" --yes "*) : > "$NR_DIR/freed-$2"; echo "delete-relation: '$2' is gone." ;; *) echo "delete-relation '$2' (state=removed, peer=192.168.28.99):"; echo "plan only." ;; esac ;;
+    status)         if [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"; else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case " $* " in
                         *" --install "*) case " $* " in
                                 *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
@@ -1274,6 +1305,7 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
 T=$'\t'
 # Kroki 5-10 z domyslnymi odpowiedziami: cel, szablon, nazwa, konto, 'bez zmian', plan, WYKONAJ
 NRT="0${T}hdd/backups
+0${T}no
 0${T}default
 0${T}pve9b
 0${T}root
@@ -1281,7 +1313,8 @@ NRT="0${T}hdd/backups
 0${T}
 0${T}
 "
-NRTS="0${T}default
+NRTS="0${T}no
+0${T}default
 0${T}pve9b
 0${T}root
 0${T}go
@@ -1417,10 +1450,12 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
+0${T}no
 0${T}default
 0${T}lab-ct201
 0${T}
 1${T}
+0${T}yes
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
@@ -1428,22 +1463,52 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 ")
-if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --install --yes " \
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
     ok "new-relation: kroki 5-10 -- zajeta nazwa odmowiona, Wstecz z nazwy do szablonu zmienia wybor (d30), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
 else
     bad "new-relation: kroki 5-10" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
-if grep -F 'Jak często i jak długo' "$NR/wt.log" | head -1 | grep -qE -- "--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ default ~ default +trzyma 24 godz., 7 dni, 4 tyg., 12 mies.  \\[GFS\\]"; then
-    ok "new-relation: lista szablonow -- 'default' PIERWSZY, wiersz = co trzyma + mechanizm (to odroznia d30h24 / -age / -gfs), bez ucinania rytmem"
+NRL1="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | head -1)"; NRL2="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | tail -1)"
+if grep -F 'Spójność migawek' "$NR/wt.log" | head -1 | grep -qE 'yes ~ Zamrażaj przy migawkach dobowych i rzadszych  -- zalecane ~ ON ~ no ~ [^~]* ~ OFF' \
+   && has "$NRL1" 'Szablony BEZ zamrażania' && has "$NRL1" ' ~ default ~ default ' && ! has "$NRL1" ' ~ d30h24 ~ ' \
+   && has "$NRL2" 'Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez)' && has "$NRL2" ' ~ d30 ~ ' && has "$NRL2" '--default-item ~ m12w4d7h24-gfs' && ! has "$NRL2" ' ~ default ~ default '; then
+    ok "new-relation: krok 6 -- zamrazanie WIDAC przy tworzeniu relacji: najpierw pytanie o spojnosc (domyslnie ZAMRAZAJ wszystko oprocz godzinowych), potem lista tylko szablonow, ktore to spelniaja; 'default' (drabina, zamrazac nie moze) jest tylko na liscie 'bez'"
 else
-    bad "new-relation: lista szablonow" "$(grep -F 'Jak często i jak długo' "$NR/wt.log" | head -1 | cut -c1-400)"
+    bad "new-relation: krok 6, zamrazanie" "$(grep -F 'Spójność migawek' "$NR/wt.log" | head -1 | cut -c1-300)" "$(printf '%s' "$NRL1" | cut -c1-300)" "$(printf '%s' "$NRL2" | cut -c1-300)"
+fi
+if grep -qF 'zamraża: dobowe' "$NR/wt.log"; then
+    ok "new-relation: podsumowanie mowi slowami, co wybrany szablon zamraza"
+else
+    bad "new-relation: podsumowanie bez zamrazania" "$(grep -F 'Szablon:' "$NR/wt.log" | tail -2)"
 fi
 if grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF 'BACKUP: ' && grep -qF 'Konto: zfsbackup.' "$NR/wt.log" \
    && ! grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF -- '--scrolltext'; then
     ok "new-relation: podsumowanie miesci sie BEZ przewijania (w oknie z --scrolltext Enter nie dziala, dopoki nie przejdziesz Tabem na przyciski -- zmierzone jazda po pty)"
 else
     bad "new-relation: podsumowanie" "$(grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | cut -c1-600)"
+fi
+# 3g. nazwa trzymana przez rekord `removed`: zmierzone na pve10 -- plan mowil "removed and
+#     cannot be revived", a kreator i tak pokazywal WYKONAJ. Teraz pyta o zwolnienie nazwy.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}no
+0${T}default
+0${T}192.168.28.99
+0${T}
+0${T}root
+0${T}go
+0${T}
+0${T}
+")
+if has "$NROUT" " --name=192.168.28.99 " && grep -q '^delete-relation 192.168.28.99 --yes$' "$NR/zb.log" && grep -F "trzyma USUNIĘTA relacja" "$NR/wt.log" | grep -qF -- '--yes-button ~ Zwolnij nazwę'; then
+    ok "new-relation: nazwe trzymana przez rekord 'removed' kreator proponuje ZWOLNIC (delete-relation NAZWA --yes) i dopiero wtedy jej uzywa -- 'usun i zaloz od nowa' dziala"
+else
+    bad "new-relation: nazwa usunietej relacji" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'USUNI' "$NR/wt.log" | cut -c1-300)"
 fi
 # 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
 NROUT=$(nr_run "0${T}backup
@@ -1452,6 +1517,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
+0${T}no
 0${T}default
 0${T}pve9b
 0${T}root

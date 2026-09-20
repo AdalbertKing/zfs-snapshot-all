@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47, E49.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -1657,3 +1657,30 @@ git commit`: the pipe's status is `tail`'s, so the commit went out over a
 FROZEN refusal. Gate results are read from the gate's own exit code
 (`cmd > file; rc=$?`), never through a pipe. The engine edit was reverted; the
 defect is fixed where it arose, in `source_probe`.
+
+### E56 — The stub took an answer the real window never offered (2026-09-20, R1/R12)
+
+**Genesis.** Adding a fourth field (state) to the wizard's relation TSV. The
+reader was `read -r n p t`, so the last variable swallowed the rest of the line
+and the target became `hdd/backups<TAB>active`. `test/tui` was 185/0. The first
+live run on pve10 composed `--target='hdd/backups        active'` and the verb
+refused.
+
+**Cause.** The whiptail stub answered from a script of answers and never looked
+at what the window OFFERED -- so `hdd/backups` was "chosen" from a menu whose
+only such tag was the glued one. A guard that cannot be reached (R1): the suite
+had assertions about the command, and no way for a broken menu to fail them.
+The owner's sentence the same day was exact: *"Testy na atrapie to nie testy."*
+Making the stub strict was not enough either -- the first version checked only
+the answer, and a second, healthy candidate in the same menu kept the negative
+control GREEN. It took the offer's own invariants to fail it.
+
+**Rule.** R1/R12. A stub of an interactive tool enforces the tool's OFFER
+contract, not only its return contract: an answer must be one of the offered
+tags, `--default-item` must be one of them, and a tag carrying a TAB is glued
+fields. And the negative control is run against the stub change itself -- a
+stricter stub that still passes the known defect has proven nothing.
+Second lesson, same day: the live campaign found four defects the stubs could
+not (this one, the empty ladder section for every quiescing profile, the
+missing freeze grant, the name held by a tombstone). For a front end over
+verbs, the lab run is the test and the stub suite is the regression net.

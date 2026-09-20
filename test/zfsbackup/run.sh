@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -12259,6 +12259,73 @@ else
     bad "preparesource: dead" "$(cat "$PS/err")" "$(cat "$PS/ssh.argv" 2>/dev/null)"
 fi
 fi   # --- koniec sekcji preparesource ---
+
+if want delrel; then
+# ============================================================================
+# delrel: THE WHOLE REMOVAL AS ONE COMMAND, and the freeze grant (2026-09-20)
+#
+# Owner: "Musi byc obsluzone z GUI pauzowanie i usuwanie relacji (...) logicznie
+# pakiet musi byc spojny." Measured on pve10 <- pve11: after remove-client the
+# wizard offered the same name again and the plan said "removed and cannot be
+# revived". delete-relation composes the three existing halves; what it SKIPS it
+# skips on evidence read from the records, and that is what is pinned here. The
+# three halves themselves are exercised live (create -> pause -> resume -> delete
+# -> create again under the same name), not by this section.
+# ============================================================================
+DR="$WORK/delrel"; rm -rf "$DR"; mkdir -p "$DR/clients"
+printf 'CLIENT_NAME=a\nSTATE=active\nPEER_HOST=10.0.0.5\nACTIVE_ENDPOINT=10.0.0.5:22\nCLIENT_TARGET=tank/b\nMANAGED_DATASETS=tank/b/10.0.0.5/p/x\n' > "$DR/clients/a.conf"
+printf 'CLIENT_NAME=b\nSTATE=active\nPEER_HOST=10.0.0.5\n' > "$DR/clients/b.conf"
+printf 'CLIENT_NAME=c\nSTATE=removed\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:2222\n' > "$DR/clients/c.conf"
+printf 'CLIENT_NAME=d\nSTATE=removed\nPEER_HOST=10.0.0.5\n' > "$DR/clients/d.conf"
+dr_run() { ( CLIENTS_DIR="$DR/clients" bash "$ZFSBACKUP" delete-relation "$@" ) 2>"$DR/err"; }
+DROUT=$(dr_run a); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$DROUT" | grep -q '1\. collector : remove-client a ' \
+   && printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- other relationships still use 10.0.0.5: b$' \
+   && printf '%s' "$DROUT" | grep -q '3\. record    : clean-relationships.sh --purge=a ' \
+   && printf '%s' "$DROUT" | grep -q '4\. copies    : KEPT on this host (tank/b/10.0.0.5/p/x)' \
+   && printf '%s' "$DROUT" | grep -q '^plan only\. Re-run with --yes' && [ -f "$DR/clients/a.conf" ]; then
+    ok "delrel: a peer shared with another LIVE relationship keeps its source half (the removed record 'd' on the same peer does not count); copies are kept; without --yes it is a plan and nothing moves"
+else
+    bad "delrel: plan for a shared peer" "rc=$rc" "$DROUT" "$(cat "$DR/err")"
+fi
+DROUT=$(dr_run c)
+if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already says 'removed'" \
+   && printf '%s' "$DROUT" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DROUT" | grep -q '4\. copies    : KEPT on this host -- pass'; then
+    ok "delrel: on a record that already says 'removed' the collector half is skipped -- the verb then means 'free the name'; a never-activated record (no MANAGED_DATASETS) is not a crash; the port comes from the recorded endpoint"
+else
+    bad "delrel: plan for a removed record" "$DROUT" "$(cat "$DR/err")"
+fi
+DROUT=$(dr_run a --keep-source --keep-record --destroy-copies)
+if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- --keep-source' && printf '%s' "$DROUT" | grep -q "3\. record    : kept (--keep-record) -- the name 'a' stays taken" \
+   && printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of:' && printf '%s' "$DROUT" | grep -q '^ *tank/b/10.0.0.5/p/x$'; then
+    ok "delrel: --keep-source / --keep-record / --destroy-copies each change exactly their own line of the plan, and the copies to destroy are NAMED"
+else
+    bad "delrel: option lines" "$DROUT"
+fi
+if ! dr_run zz >/dev/null && grep -q "no relationship 'zz' on this host" "$DR/err" && ! dr_run a --bogus >/dev/null && grep -q "unknown option '--bogus'" "$DR/err"; then
+    ok "delrel: an unknown name and an unknown option are refusals, before anything is read or run"
+else
+    bad "delrel: refusals" "$(cat "$DR/err")"
+fi
+# --grant-quiesce: the freeze grant rides --grant-remotely and nothing else
+if ! ( bash "$ZFSBACKUP" --source=h:p/x --target=t/b --grant-quiesce ) >/dev/null 2>"$DR/err" && grep -q -- '--grant-quiesce only means something WITH --grant-remotely' "$DR/err" && grep -q -- '--allow-quiesce' "$DR/err"; then
+    ok "delrel: --grant-quiesce without --grant-remotely is refused, and the refusal names the source-side flag it stands for"
+else
+    bad "delrel: --grant-quiesce guard" "$(cat "$DR/err")"
+fi
+if [ "$(grep -c -- "--commit-scope='\$COLLECTOR_LABEL'\$aq\"" "$ZFSBACKUP")" -eq 3 ] && ! grep -q -- "deploy.sh --commit-scope='\$COLLECTOR_LABEL'\" 2>&1" "$ZFSBACKUP"; then
+    ok "delrel: every remote commit-scope --grant-remotely runs (first commit, extension, already-covered re-commit) carries the freeze grant when asked -- none was left without it"
+else
+    bad "delrel: a remote commit-scope without \$aq" "$(grep -n -- "--commit-scope='\$COLLECTOR_LABEL'" "$ZFSBACKUP" | cut -c1-160)"
+fi
+# activation: a profile with no ladder gets no ladder section
+if grep -q '\[ -n "\$LEGACY_LADDER_BODY" \] || profile_declares_ladder || continue' "$ZFSBACKUP"; then
+    ok "delrel: activate-client writes a [prune:] ladder section only for a profile that DECLARES one -- every quiescing (family-per-tier) profile used to get an empty one and gen-cron refused it (pve10, 2026-09-20)"
+else
+    bad "delrel: the ladder guard in activation is gone"
+fi
+fi   # --- koniec sekcji delrel ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

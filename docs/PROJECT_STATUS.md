@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4255244dea356bf8 -->
+<!-- status-covers-digest: dbfe6b6fdb695fa6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,85 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **GUI SPÓJNE Z CYKLEM ŻYCIA RELACJI: załóż → pauza → usuń → załóż od nowa (2026-09-20).**
+  Właściciel: *„Musi być obsłużone z GUI pauzowanie i usuwanie relacji. (…) Admin
+  chce coś zmienić -- usuwa i tworzy nową? Na razie bym to zaakceptował. Ale
+  logicznie pakiet musi być spójny"* oraz *„Testy na atrapie to nie testy."*
+  Wszystko niżej przeszło NA ŻYWO przez prawdziwe GUI (pve10 kolektor, pve11 i
+  pve9b źródła, prawdziwy whiptail 80x25), a wady znalezione po drodze są w tej
+  samej gałęzi.
+  - **`zfs-backup.sh delete-relation NAZWA [--keep-source] [--keep-record]
+    [--destroy-copies] [--ask] [--yes]`** -- CAŁE usunięcie jedną komendą.
+    Gotowej nie było (sprawdzone: dispatcher, `deploy.sh`, `clean-relationships.sh`,
+    DEPLOYMENT-PROXMOX §9 -- procedura to dwa ręczne kroki na dwóch hostach, trzeci
+    nieudokumentowany). Czasownik niczego nie dubluje: woła po kolei
+    `remove-client`, na źródle `deploy.sh --leave=<ten kolektor>` i
+    `clean-relationships.sh --purge=NAZWA`, każde ze swoimi strażnikami. Dwie
+    połowy pomija NA DOWODZIE: źródło, gdy z tym peerem jest inna żywa relacja
+    (parowanie i konto są wspólne), i kolektor, gdy rekord już mówi `removed`
+    (wtedy znaczy „zwolnij nazwę"). Na źródle najpierw pyta, czy cokolwiek
+    naszego tam jest -- `--leave` na nieobecnej etykiecie jest z założenia błędem.
+    Kopie na dysku zostają, chyba że `--destroy-copies` (wtedy też puste
+    skorupki po ścieżce, zwykłym `zfs destroy` bez `-r`). Plan bez `--yes`.
+    **`Del` na F3** otwiera te same pytania w oknach (`--ask` →
+    `tui/delete-relation.sh`), pokazuje plan czasownika, po WYKONAJ wraca na F3;
+    działa też na rekordzie `removed`. **F4 (pauza/wznowienie)** bez zmian.
+  - **Dlaczego to było niespójne (zmierzone):** po `remove-client pve11` kreator
+    proponował nazwę `pve11`, a plan odpowiadał *„removed and cannot be revived --
+    use a different name"* -- rekord-nagrobek trzyma NAZWĘ. Kreator pyta teraz
+    „Zwolnij nazwę?" (`delete-relation NAZWA --yes`) zamiast iść w ślepy zaułek.
+  - **ZAMRAŻANIE MA DWIE POŁOWY.** (1) Jest własnością SZABLONU: „rodzina na
+    szczebel" zamraża dobowe i rzadsze, godzinowych nie; `default` (jedna
+    rodzina + drabina) zamrażać nie może. Kreator stawiał `default` jako
+    domyślny i tej różnicy nie pokazywał. Teraz krok 6 najpierw pyta o spójność
+    (domyślnie: zamrażaj wszystko oprócz godzinowych -- reguła właściciela),
+    potem pokazuje tylko szablony, które to spełniają (domyślnie
+    `m12w4d7h24-gfs`, ta sama retencja co `default`); podsumowanie mówi słowami,
+    co szablon zamraża. (2) **Zgoda źródła:** `--grant-remotely` nigdy nie
+    przekazywało `--allow-quiesce`, więc relacja założona jedną komendą z
+    szablonem zamrażającym degradowała się co noc. **Zmierzone pve10 ← pve9b:**
+    przed zgodą migawka dobowa to `automated_daily_crash_<czas>`, po
+    `--commit-scope=pve10 --allow-quiesce` -- `automated_daily_<czas>`. Nowa
+    flaga **`--grant-quiesce`** (tylko RAZEM z `--grant-remotely`, jawny opt-in,
+    ta sama władza roota po SSH o jedno nadanie szersza, w audycie
+    `GRANTED_REMOTELY_BY=… +quiesce`). W kreatorze „Zgoda na zamrażanie" w
+    kroku 9, domyślnie włączona przy szablonie zamrażającym; przy „zatwierdzę
+    sam" komenda dla źródła dostaje `--allow-quiesce`. Przeszło od kreatora do
+    migawki bez `_crash_`. **Do oceny Recenzenta:** to rozszerzenie wyjątku
+    `--grant-remotely` w warstwie parowania.
+  - **WADA WARSTWY WSADOWEJ znaleziona domyślnym wyborem kreatora:** aktywacja
+    relacji z szablonem BEZ drabiny (`[prune]`) i tak dopisywała sekcję
+    `[prune:<cel>]` -- pustą -- i `gen-cron` odmawiał (*„has no use_template"*);
+    relacja stawała na `endpoint_verified`. Czyli ŻADEN szablon zamrażający nie
+    dawał się aktywować przez `add-client`. Strażnik `profile_declares_ladder`
+    (używany już przez bramkę `save-profile`) jest teraz także w aktywacji. Po
+    poprawce: 4 szczeble wysyłki, sprzątanie po obu stronach, monitory; linia
+    dobowa niesie `-q auto,degrade`, godzinowa nie.
+  - **Warianty kreatora przejechane na żywo** (poza dwoma z 09-19): dwa miejsca
+    + atomowo + cel „inna ścieżka" (nieistniejący, utworzony) + szablon bez
+    zamrażania + konto o własnej nazwie (własny crontab) + puste maski →
+    `active`; „zatwierdzę sam" → instalacja staje, zgoda na źródle, ponowienie
+    zapisanej komendy → `active`; brak pakietu → „Zainstaluj" → ponowna sonda;
+    nieznany klucz hosta → okno z powodem i dwiema komendami; pauza i wznowienie
+    F4; `Del` z kasowaniem kopii; założenie ponownie pod tą samą nazwą.
+    **Znalezione i poprawione:** cel wychodził jako `hdd/backups<TAB>active`
+    (czwarte pole TSV wpadało do zmiennej) -- instalacja odmówiła czysto;
+    przy atomowo krok 9 obiecywał retencję u źródła, której program wtedy nie
+    robi -- teraz mówi to wprost, także w podsumowaniu; `delete-relation` na
+    rekordzie bez `MANAGED_DATASETS` padał na `unbound variable`.
+  - **Atrapa whiptaila dostała kontrakt OFERTY** (E56): odpowiedź i
+    `--default-item` muszą być na oferowanej liście, znacznik nie może zawierać
+    tabulatora. Bez tego wada z celem przechodziła 185/0; z nią -- 8 FAIL.
+  - **Dowody:** `tui` 185/0, `zfsbackup --section delrel` 7/0; na żywo jak
+    wyżej. **NIE zmierzone:** parowanie ręczne (paczka), port inny niż 22 (lab
+    ma tylko 22), źródło bez ZFS, terminal inny niż 80x25/100x40, prawdziwe
+    putty (jazda po pty z emulatorem ekranu), przerwanie instalacji w połowie.
+    Zamrażanie zmierzone po NAZWIE migawki, bez prawdziwego gościa na źródle
+    (`auto` nie miał kogo zamrozić -- różnica `_crash_`/bez pochodzi z nadania).
+  - **Stan labu po kampanii:** na pve10 została relacja `pve11`
+    (`m12w4d7h24-gfs`, z `+quiesce`) jako żywy przykład; pozostałe testowe
+    usunięte po obu stronach razem z kopiami. pve10 i pve11 stoją na gałęzi
+    `feat/gui-coherent-lifecycle`.
 - **Kreator relacji na WHIPTAILU -- komplet 10 kroków, podpięty pod `Ins` na F3 (2026-09-18/19).**
   Decyzja właściciela z 2026-09-16: formularze rysowane ręcznie w curses są
   „siermiężne i nieużyteczne"; okna mają być klockami („stare Turbo Vision").

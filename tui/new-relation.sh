@@ -22,21 +22,9 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
-WT="${WHIPTAIL:-whiptail}"
-# Interpreter wybierany przez URUCHOMIENIE, nie przez `command -v`: nazwa, ktora
-# sie rozwiazuje, nie musi dzialac (alias sklepowy na Windows).
-PY=""
-for c in ${PYTHON:+"$PYTHON"} python3 python; do "$c" -c 'import sys' >/dev/null 2>&1 && { PY="$c"; break; }; done
+. "$HERE/tui/wt-lib.sh" || { echo "new-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+WT_BACKTITLE="Nowa relacja -- kolektor $(hostname)"
 NSTEP=10
-
-command -v "$WT" >/dev/null 2>&1 || { echo "new-relation: brak '$WT' (pakiet whiptail)" >&2; exit 1; }
-[ -n "$PY" ] || { echo "new-relation: brak dzialajacego python3" >&2; exit 1; }
-
-# Polskie znaki: newt liczy szerokości wg locale. Bez UTF-8 ramki się rozjeżdżają.
-case "$(locale charmap 2>/dev/null)" in UTF-8) ;; *) export LC_ALL=C.UTF-8 ;; esac
-export PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1    # import tui/zfs-tui.py nie ma zostawiac __pycache__ w checkoucie hosta
-export NEWT_COLORS="${NEWT_COLORS:-root=,blue window=black,white border=black,white title=black,white listbox=black,white actlistbox=white,black sellistbox=black,white actsellistbox=white,black checkbox=black,white actcheckbox=white,black button=black,cyan actbutton=white,red textbox=black,white entry=black,white label=black,white}"
-
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
@@ -44,40 +32,7 @@ trap 'rm -rf "$TMPD"' EXIT
 MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
 
 # --- okna -------------------------------------------------------------------
-geom() {   # H W LH z bieżącego terminala
-    local l c
-    l=$(tput lines 2>/dev/null) || l=24; c=$(tput cols 2>/dev/null) || c=80
-    case "$l" in ''|*[!0-9]*) l=24 ;; esac; case "$c" in ''|*[!0-9]*) c=80 ;; esac
-    H=$((l - 2)); W=$((c - 4)); [ "$W" -gt 100 ] && W=100; LH=$((H - 9))
-    [ "$LH" -lt 3 ] && LH=3
-    return 0
-}
-fit() {    # <wiersze tekstu+listy> -> wysokość okna, nie większa niż ekran
-    local h=$(($1 + 7)); [ "$h" -gt "$H" ] && h=$H; echo "$h"
-}
-wt() {     # whiptail z odpowiedzią w WT_OUT; rc: 0 = OK, inne = wstecz
-    WT_OUT=$("$WT" --backtitle "Nowa relacja -- kolektor $(hostname)" "$@" 3>&1 1>&2 2>&3)
-}
-info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
-    "$WT" --backtitle "Nowa relacja -- kolektor $(hostname)" --title "$1" --infobox "$2" 7 "$W"
-}
 title() { printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"; }
-lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
-    local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
-}
-yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
-    # W oknie z --scrolltext fokus startuje na tekście i Enter nic nie robi, dopóki nie
-    # przejdziesz Tabem na przyciski (zmierzone jazdą po pty). Więc: bez przewijania,
-    # kiedy tylko się da, a kiedy nie -- tytuł mówi o Tabie.
-    local f="$1" t="$2" y="$3" n="$4" extra="${5:-}" lines
-    geom
-    lines=$(fold -s -w $((W - 4)) "$f" | grep -c '')      # whiptail zawija; licz wiersze PO zawinięciu
-    if [ "$lines" -le $((H - 6)) ]; then
-        wt --title "$t" --yes-button "$y" --no-button "$n" $extra --yesno "$(cat "$f")" "$(fit $((lines + 1)))" "$W"
-    else
-        wt --title "$t  [strzałki = przewijaj, Tab = przyciski]" --yes-button "$y" --no-button "$n" $extra --scrolltext --yesno "$(cat "$f")" "$H" "$W"
-    fi
-}
 hostport() { [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 
 # --- krok 1: typ ------------------------------------------------------------
@@ -425,6 +380,10 @@ step_datasets() {
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
 TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""
 EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
+# Zamrażanie ma DWIE połowy (zmierzone pve10 <- pve9b, 2026-09-20): szablon, który każe
+# zamrażać, ORAZ zgoda źródła, żeby konto kolektora mogło zamrażać jego gości. Bez zgody
+# każda "zamrażana" migawka wychodzi jako automated_<szczebel>_crash_<czas>.
+GQUIESCE=1
 # PAMIĘĆ NA CZAS JEDNEGO PRZEBIEGU. Czytelniki odpowiadają po 5-12 s; bez tego każde
 # "Wstecz" i ponowne "Dalej" kazało czekać od nowa (zmierzone jazdą: cofnięcie z kroku 7
 # do 6 = 9 s na "Czytam szablony"). Stan hosta nie zmienia się w trakcie klikania.
@@ -436,15 +395,16 @@ import sys, json
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for r in d.get("relations", []):
-    if r.get("state") != "removed":
-        print("%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", "")))' | tr -d '\r' >"$TMPD/rel.tsv"
+    print("%s\t%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", ""), r.get("state", "")))' | tr -d '\r' >"$TMPD/rel.all"
+    awk -F'\t' '$4!="removed"' "$TMPD/rel.all" >"$TMPD/rel.tsv"
+    awk -F'\t' '$4=="removed"{print $1}' "$TMPD/rel.all" >"$TMPD/rel.removed"
 }
 step_target() {
     [ "$MODE" = sync ] && return 0
-    local items=() t n cnt first="" seen="" p
+    local items=() t n cnt first="" seen="" p _st
     [ -e "$TMPD/targets.tsv" ] || info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
     status_tsv
-    while IFS=$'\t' read -r n p t; do
+    while IFS=$'\t' read -r n p t _st; do      # 4. pole (stan) MUSI mieć własną zmienną: inaczej wpada do $t
         [ -n "$t" ] || continue
         case " $seen " in *" $t "*) continue ;; esac
         seen="$seen $t"; cnt=$(awk -F'\t' -v t="$t" '$3==t' "$TMPD/rel.tsv" | grep -c .)
@@ -504,15 +464,24 @@ for p in d.get("profiles", []):
     mech = {"flat": "N najnowszych", "gfs": "GFS", "age": "wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
     # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
     # z najdrobniejszego szczebla; pełne zdanie z rytmem idzie do podsumowania (3. pole).
-    rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p)))
+    frozen = [t for t in p.get("tiers", []) if t.get("send_schedule") and t.get("quiesce")]
+    rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p), w["quiesce"], 1 if frozen else 0))
 rows.sort(key=lambda r: (r[0] != "default", r[0].lower()))     # default na górze
-for n, t, c in rows:
-    print("%s\t%s\t%s" % (n, t, c))
+for n, t, c, q, f in rows:
+    print("%s\t%s\t%s\t%s\t%d" % (n, t, c, q, f))
 PYEOF
     [ -s "$TMPD/prof.tsv" ]
 }
+# Zamrażanie (quiesce) jest własnością SZABLONU, nie flagą relacji: szablony "rodzina na
+# szczebel" zamrażają dobowe i rzadsze, a godzinowych nie; `default` (jedna rodzina +
+# drabina) nie może zamrażać wcale, bo jego dobowa migawka JEST jedną z godzinowych.
+# Właściciel 2026-09-20: "Jeśli jest to w szablonie, to musi być widoczne podczas
+# tworzenia relacji" i "u nas dla wszystkich oprócz hourly domyślnie włączony".
+# Dlatego najpierw pytanie o spójność (domyślnie: zamrażaj), potem lista szablonów,
+# które to spełniają.
+FREEZE=1
 step_profile() {
-    local items=() n w c
+    local items=() n w c q f y=OFF x=OFF def sub=freeze
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
@@ -520,12 +489,32 @@ step_profile() {
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; return 0
     fi
-    while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
-    geom
-    wt --title "$(title 6 'Jak często i jak długo trzymać?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${PROFILE:-default}" \
-       --menu "Szablon = jak często robić migawki i ile ich trzymać (da się zmienić później).\n'default' wystarcza zwykle; pozostałe to warianty admina." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" \
-       "${items[@]}" || return 1
-    PROFILE="$WT_OUT"
+    while :; do
+        geom
+        if [ "$sub" = freeze ]; then
+            y=OFF; x=OFF; [ "$FREEZE" -eq 1 ] && y=ON || x=ON
+            wt --title "$(title 6 'Spójność migawek')" --cancel-button "Wstecz" --notags \
+               --radiolist "Zamrożenie: tuż przed migawką gość (VM/CT) wstrzymuje na chwilę zapis, więc\nmigawka jest spójna, a nie 'jak po wyrwaniu wtyczki'. Gdy zamrożenie się\nnie uda, migawka i tak powstaje. Godzinowych nie zamrażamy nigdy." "$(fit 8)" "$W" 2 \
+               yes "Zamrażaj przy migawkach dobowych i rzadszych  -- zalecane" "$y" \
+               no  "Bez zamrażania  (goście bez agenta, zwykłe systemy plików)" "$x" || return 1
+            case "$WT_OUT" in yes) FREEZE=1 ;; no) FREEZE=0 ;; esac
+            sub=list; continue
+        fi
+        items=()
+        while IFS=$'\t' read -r n w c q f; do
+            [ -n "$n" ] && [ "$f" = "$FREEZE" ] && items+=("$n" "$(printf '%-15s %s' "$n" "$w")")
+        done <"$TMPD/prof.tsv"
+        if [ "${#items[@]}" -eq 0 ]; then    # nie ma szablonu o takiej spójności -- pokaż wszystkie, nie pustą listę
+            while IFS=$'\t' read -r n w c q f; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s  (%s)' "$n" "$w" "$q")"); done <"$TMPD/prof.tsv"
+        fi
+        [ "$FREEZE" -eq 1 ] && def=m12w4d7h24-gfs || def=default
+        in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
+        in_list "$def" "${items[@]}" || def="${items[0]}"
+        wt --title "$(title 6 'Jak długo trzymać?')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$def" \
+           --menu "$( [ "$FREEZE" -eq 1 ] && echo "Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez)." || echo "Szablony BEZ zamrażania." ) W nawiasie: jak\nliczona jest retencja. Szablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" \
+           "${items[@]}" || { sub=freeze; continue; }
+        PROFILE="$WT_OUT"; return 0
+    done
 }
 
 # --- krok 7: nazwa ------------------------------------------------------------
@@ -541,6 +530,19 @@ step_name() {
         [ -s "$TMPD/rel.tsv" ] || status_tsv
         if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rel.tsv"; then
             wt --title "Nazwa zajęta" --msgbox "Relacja o nazwie '$n' już jest na tym hoście. Podaj inną." 8 "$W"; RNAME="$n"; continue
+        fi
+        if grep -qxF -- "$n" "$TMPD/rel.removed" 2>/dev/null; then
+            # Zmierzone na pve10: bez tego plan odpowiadał "removed and cannot be revived",
+            # a kreator i tak pokazywał WYKONAJ.
+            RNAME="$n"
+            wt --title "Nazwę '$n' trzyma USUNIĘTA relacja" --yes-button "Zwolnij nazwę" --no-button "Inna nazwa" \
+               --yesno "Relacja '$n' została kiedyś usunięta, ale jej stary rekord nadal trzyma nazwę\n(program nie wskrzesza usuniętych relacji).\n\n'Zwolnij nazwę' = zfs-backup.sh delete-relation $n --yes: usuwa stary rekord\ni sprząta po nim na źródle, jeśli coś tam zostało. Kopii na dysku nie rusza." 14 "$W" || continue
+            info "Zwalniam nazwę $n" "delete-relation $n --yes ..."
+            if "$ZB" delete-relation "$n" --yes >"$TMPD/free.log" 2>&1; then
+                rm -f "$TMPD/rel.done"; status_tsv
+            else
+                wt --title "Nie udało się zwolnić nazwy" --msgbox "$(tail -6 "$TMPD/free.log")" 14 "$W"; continue
+            fi
         fi
         RNAME="$n"; return 0
     done
@@ -569,17 +571,23 @@ account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT
 
 # --- krok 9: ustawienia dodatkowe ---------------------------------------------
 step_extra() {
-    local grant_w masks_w src_w man_w
+    local grant_w masks_w src_w man_w q_w
     while :; do
         geom
         [ "$GRANT" -eq 1 ] && grant_w="nadaj stąd, od razu" || grant_w="zatwierdzę sam na źródle"
         masks_w="${EXFAM:-(żadne -- kopiuj wszystkie migawki)}"
         src_w="${SRCPROF:-taka sama jak tutaj ($PROFILE)}"
+        [ "$RECURSION" = atomic ] && { src_w="BRAK -- przy atomowo program nie sprząta u źródła"; SRCPROF=""; }
         [ "$MANUAL" -eq 1 ] && man_w="ręczne (paczka do przeniesienia)" || man_w="przez SSH, automatycznie"
+        if [ "$FREEZE" -ne 1 ]; then q_w="nie dotyczy (szablon bez zamrażania)"
+        elif [ "$GRANT" -ne 1 ]; then q_w="dasz sam na źródle (--allow-quiesce)"
+        elif [ "$GQUIESCE" -eq 1 ]; then q_w="nadaj stąd (inaczej migawki '_crash_')"
+        else q_w="NIE nadawaj -- migawki wyjdą jako '_crash_'"; fi
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item go \
-           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 9)" "$W" 5 \
+           --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 10)" "$W" 6 \
            go    "Bez zmian, dalej" \
            grant "Prawa na źródle:        $grant_w" \
+           quies "Zgoda na zamrażanie:    $q_w" \
            masks "Pomijane migawki:       $masks_w" \
            src   "Retencja u źródła:      $src_w" \
            man   "Parowanie:              $man_w" || return 1
@@ -589,11 +597,23 @@ step_extra() {
                 wt --title "Prawa na źródle" --yes-button "Nadaj stąd" --no-button "Zatwierdzę sam" \
                    --yesno "Źródło musi nadać kontu kolektora prawa zfs do wybranych miejsc.\n\n'Nadaj stąd' = kreator zrobi to przez SSH jako root (--grant-remotely).\n'Zatwierdzę sam' = instalacja ZATRZYMA SIĘ i poda komendę do wykonania\nna źródle (deploy.sh --commit-scope=...); potem ponawia się tę samą komendę." 14 "$W"
                 case $? in 0) GRANT=1 ;; 1) GRANT=0 ;; esac ;;      # Esc (255) = bez zmian
+            quies)
+                if [ "$FREEZE" -ne 1 ]; then
+                    wt --title "Zgoda na zamrażanie" --msgbox "Wybrany szablon niczego nie zamraża, więc zgoda nie jest potrzebna.\n(Zamrażanie wybiera się w kroku 6.)" 9 "$W"
+                elif [ "$GRANT" -ne 1 ]; then
+                    wt --title "Zgoda na zamrażanie" --msgbox "Prawa na źródle nadajesz sam, więc i tę zgodę dasz tam:\n\n  deploy.sh --commit-scope=$(hostname -s) --allow-quiesce\n\nBez niej migawki dobowe i rzadsze wyjdą jako '_crash_' (niezamrożone)." 12 "$W"
+                else
+                    wt --title "Zgoda na zamrażanie gości na źródle" --yes-button "Nadaj stąd" --no-button "Nie nadawaj" \
+                       --yesno "Szablon każe zamrażać gości (VM/CT) przed migawką dobową i rzadszą.\nŻeby to DZIAŁAŁO, źródło musi pozwolić kontu tego kolektora na zamrażanie\n(--grant-quiesce = deploy.sh --allow-quiesce po stronie źródła).\n\nBez zgody relacja działa, ale te migawki wyjdą jako\nautomated_<szczebel>_crash_<czas> -- jak po wyrwaniu wtyczki." 15 "$W"
+                    case $? in 0) GQUIESCE=1 ;; 1) GQUIESCE=0 ;; esac
+                fi ;;
             masks)
                 wt --title "Pomijane migawki" --cancel-button "Wstecz" \
                    --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja).\nPuste = kopiuj wszystkie." 12 "$W" "$EXFAM" && EXFAM="${WT_OUT// /}" ;;
             src)
-                if [ -s "$TMPD/prof.tsv" ]; then
+                if [ "$RECURSION" = atomic ]; then
+                    wt --title "Retencja u źródła" --msgbox "Przy kopiowaniu atomowym (-r) program NIE sprząta migawek u źródła:\nsilniki nie trzymają wtedy zakładki, więc sprzątanie mogłoby zerwać\nłańcuch przyrostów. Migawki na źródle trzeba sprzątać samemu,\nalbo wrócić do kroku 4 i zmienić Sposób na 'każdy dataset osobno'." 12 "$W"
+                elif [ -s "$TMPD/prof.tsv" ]; then
                     local items=(__same__ "taka sama jak tutaj ($PROFILE)") n w c
                     while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
                     wt --title "Retencja migawek U ŹRÓDŁA" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-__same__}" \
@@ -632,12 +652,10 @@ build_argv() {   # [install] -> ARGV[]
     [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
+    [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
     [ "$MANUAL" -eq 1 ] && ARGV+=("--manual-join")
     [ "${1:-}" = install ] && ARGV+=("--install" "--yes")
     return 0
-}
-shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
-    case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }
 cmd_lines() { local a; printf '  %s \\\n' "${ARGV[0]}"; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
 cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; }
@@ -652,8 +670,13 @@ summary_text() {
     fi
     for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
     echo "Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}."
-    echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
+    echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
     echo "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}"
+    [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
+    if [ "$FREEZE" -eq 1 ]; then
+        if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce)."
+        else echo "Zamrażanie: BEZ zgody źródła migawki wyjdą jako '_crash_' (niezamrożone)."; fi
+    fi
     echo "Prawa na źródle: $( [ "$GRANT" -eq 1 ] && echo "nadane stąd, od razu" || echo "zatwierdzisz SAM -- instalacja stanie i poda komendę" )$( [ "$MANUAL" -eq 1 ] && echo "; parowanie ręczne")"
     echo
     echo "Komenda (to samo wpisałbyś z palca):"
@@ -686,7 +709,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
             # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
             echo "=== ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '$RNAME' czeka na zgodę źródła."
-            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)"
+            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
+            [ "$FREEZE" -eq 1 ] && echo "       (--allow-quiesce: bez tego szablon zamrażający da migawki '_crash_')"
             echo "    2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
             cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
             echo "       $(cmd_oneline)"

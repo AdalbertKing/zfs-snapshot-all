@@ -71,3 +71,5 @@
 # inside deploy.sh; now deploy.sh installs them from here by copying.
 !hostscripts/
 !hostscripts/**
+__pycache__/
+*.pyc

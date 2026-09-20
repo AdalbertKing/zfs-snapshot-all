@@ -308,6 +308,12 @@ Usage:
                                                        records GRANTED_REMOTELY_BY. The ordinary
                                                        fetch+hash+includes verification still
                                                        runs afterwards and still decides.
+                                                       --grant-quiesce (only WITH it) adds
+                                                       --allow-quiesce to that commit: a profile
+                                                       that quiesces only freezes anything once
+                                                       the source lets this account freeze its
+                                                       guests; without it every quiesced tier
+                                                       degrades to automated_<tier>_crash_<ts>.
   zfs-backup.sh --source=HOST:DATASET --mode=sync [--port=N] [--profile=NAME]
                 [--name=NAME] [--local-user=NAME] [--install] [--yes|-y]
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
@@ -523,6 +529,16 @@ Inspection / teardown:
                                     usual pull works once the host can see it).
                                     Nothing else: no cron, no relationship, no key --
                                     add-client's JOIN does those. Plans without --yes.
+  zfs-backup.sh delete-relation NAME [--keep-source] [--keep-record] [--destroy-copies] [--yes]
+                                    The WHOLE removal as one command: remove-client
+                                    here, deploy.sh --leave on the source (skipped
+                                    while another relationship uses that peer), and
+                                    the purge of the removed record -- which is what
+                                    frees the NAME, so "remove and create again" works.
+                                    On a record that already says 'removed' it only
+                                    frees the name. Copies on disk are kept unless
+                                    --destroy-copies. Plans without --yes. Del on the
+                                    GUI's F3 asks these same questions in windows.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
                                     windows: type, source host, what is on it, WHICH
@@ -4319,6 +4335,16 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         fi
         local _plocal
         for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
+            # A profile whose tiers prune THEMSELVES (family-per-tier: d30h24,
+            # m12w4d7h24-*, prod -- every one that can quiesce) declares no [prune]
+            # fragment, and its retention rides the [dataset:] section's templates.
+            # Writing a ladder section for it anyway produced `[prune:...] has no
+            # use_template`, gen-cron refused, and activation stopped at
+            # endpoint_verified -- so NO quiescing profile could be activated through
+            # add-client. Measured on pve10 <- pve11, 2026-09-20, from the wizard's
+            # default. profile_declares_ladder is the guard save-profile's gate
+            # already used for the same reason.
+            [ -n "$LEGACY_LADDER_BODY" ] || profile_declares_ladder || continue
             _plocal=$(client_local_path "$ds")
             {
                 echo
@@ -11221,6 +11247,155 @@ cmd_gui() {
     python3 "$tui" "$@"
 }
 
+# ------------------------------------------------------------------------------
+# delete-relation NAME -- the WHOLE removal, as one command (2026-09-20)
+#
+# Owner: "Musi byc obsluzone z GUI pauzowanie i usuwanie relacji. [...] Co sie
+# dzieje, gdy admin chce zmienic cos w relacji -- usuwa i tworzy nowa? Narazie
+# bym to zaakceptowal. Ale logicznie pakiet musi byc spojny."
+#
+# It was not. Measured live on pve10 <- pve11 the same day: `remove-client pve11`
+# succeeded, the wizard then offered the name `pve11` again, and the plan
+# answered "this relationship was removed and cannot be revived -- use a
+# different name". Removal has three halves and the package had a verb for each
+# but no way to say "all of it":
+#
+#     remove-client NAME                      the collector's half
+#     deploy.sh --leave=<this collector>      the source's half (account, grants)
+#     clean-relationships.sh --purge=NAME     the tombstone record, which is what
+#                                             holds the NAME
+#
+# This verb RUNS THOSE THREE, in that order, and adds nothing of its own to
+# them. Each half keeps its own guards (remove-client's cron assertions,
+# --leave's manifest, --purge's LIVE/ORPHAN classification). Two halves are
+# skipped on evidence, not on a guess:
+#   * the source's half, when another live relationship uses the same peer --
+#     the pairing, the account and the grants are shared by address;
+#   * the collector's half, when the record already says `removed` -- then this
+#     is "free the name", which is exactly what the wizard needs.
+# The copies on disk are NOT touched unless --destroy-copies is given: that is
+# the one step here that cannot be undone, so it is never a default.
+# Plans without --yes, like every composite in this program.
+# ------------------------------------------------------------------------------
+cmd_delete_relation() {
+    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)          yes=1 ;;
+            --keep-source)     keep_source=1 ;;
+            --keep-record)     keep_record=1 ;;
+            --destroy-copies)  destroy=1 ;;
+            --ask)             ask=1 ;;
+            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --ask --yes)" ;;
+            *)                 [ -z "$name" ] || die "delete-relation: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh delete-relation NAZWA [--keep-source] [--keep-record] [--destroy-copies] [--yes]"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "delete-relation: no relationship '$name' on this host"
+    if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows (Del on the GUI's F3)
+        local dlg="$SCRIPT_DIR/tui/delete-relation.sh"
+        [ -f "$dlg" ] || die "delete-relation: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
+        return $?
+    fi
+    record_load client "$cpath"
+    # Every field defaulted: a record that was never activated has no MANAGED_DATASETS,
+    # and under `set -u` that was a crash on exactly the records this verb exists to
+    # clear away (found by the delrel section, 2026-09-20).
+    local peer="${PEER_HOST:-}" state="${STATE:-}" copies="${MANAGED_DATASETS:-}" port="22" tgt="${CLIENT_TARGET:-}"
+    # The label the SOURCE knows this collector by -- derived exactly as deploy.sh
+    # --unpair derives the `--leave=` it prints (hostname -s, sanitised).
+    local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
+    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+
+    # Who else uses this peer? Counted from the records, in a subshell per file so
+    # one record's fields never leak into the next.
+    local others="" f o
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        [ "$f" = "$cpath" ] && continue
+        o=$( CLIENT_NAME=""; STATE=""; PEER_HOST=""; record_load client "$f"
+             [ "$PEER_HOST" = "$peer" ] && [ "$STATE" != "removed" ] && printf '%s' "${CLIENT_NAME:-$(basename "$f" .conf)}" )
+        [ -n "$o" ] && others="$others${others:+, }$o"
+    done
+
+    local do_collector=1 do_source=1 do_record=1 why_source=""
+    [ "$state" = "removed" ] && do_collector=0
+    if [ "$keep_source" -eq 1 ]; then do_source=0; why_source="--keep-source"
+    elif [ -z "$peer" ]; then do_source=0; why_source="the record names no peer"
+    elif [ -n "$others" ]; then do_source=0; why_source="other relationships still use $peer: $others"
+    fi
+    [ "$keep_record" -eq 1 ] && do_record=0
+
+    echo "delete-relation '$name' (state=${state:-?}, peer=${peer:-?}):"
+    if [ "$do_collector" -eq 1 ]; then echo "  1. collector : remove-client $name  -- config sections and cron lines of THIS relationship"
+    else echo "  1. collector : skipped -- the record already says 'removed'"; fi
+    if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
+    else echo "  2. source    : skipped -- $why_source"; fi
+    if [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
+    else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
+    if [ "$destroy" -eq 1 ]; then
+        echo "  4. COPIES    : zfs destroy -r, on THIS host, of:"
+        local d; for d in $copies; do echo "                   $d"; done
+        [ -n "$copies" ] || echo "                   (the record lists none)"
+    else
+        echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
+    fi
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+
+    local self="$SCRIPT_DIR/zfs-backup.sh" rc=0
+    if [ "$do_collector" -eq 1 ]; then
+        log "delete-relation: 1/4 remove-client $name"
+        "$self" remove-client "$name" || die "delete-relation: remove-client failed -- stopped BEFORE the source and the record were touched. Fix what it said and run this again."
+    fi
+    if [ "$do_source" -eq 1 ]; then
+        log "delete-relation: 2/4 source side on $peer"
+        # Ask first whether there is anything of ours there. A relationship removed
+        # earlier, whose source was already left by hand, is the ordinary case for
+        # "free the name" -- and --leave on an absent label is an ERROR by design,
+        # which made a clean removal report leftovers (measured on pve10, 2026-09-20).
+        local present=0
+        rux_root_ssh "$peer" "$port" "[ -e '/etc/zfs-snapshot-all/peers/$label.conf' ] || id 'zfsbackup-$label' >/dev/null 2>&1" || present=$?
+        if [ "$present" -eq 1 ]; then
+            log "delete-relation: nothing of '$label' is left on $peer (no manifest, no account) -- the source's half was already done"
+        elif [ "$present" -eq 0 ] && rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$label'"; then :
+        else
+            rc=1
+            log "!!! delete-relation: the source's half did NOT complete. The collector's half is done. On $peer, as root:"
+            log "!!!     cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label"
+        fi
+    fi
+    if [ "$do_record" -eq 1 ]; then
+        log "delete-relation: 3/4 purge the record of '$name'"
+        "$SCRIPT_DIR/clean-relationships.sh" --purge="$name" --yes || { rc=1; log "!!! delete-relation: the record of '$name' was NOT purged (see above) -- the name stays taken"; }
+    fi
+    if [ "$destroy" -eq 1 ]; then
+        local d
+        for d in $copies; do
+            log "delete-relation: 4/4 zfs destroy -r $d"
+            zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; continue; }
+            # The empty shells above it (<target>/<peer>/<pool>...) were created for this
+            # copy alone. Plain `zfs destroy`, NO -r: a parent that still holds anything --
+            # another relationship's copy, a snapshot -- refuses by itself, and that
+            # refusal is the guard. Never above <target>/<peer>, never the target itself.
+            local up="${d%/*}"
+            while [ -n "$tgt" ] && [ -n "$peer" ] && case "$up" in "$tgt/$peer"|"$tgt/$peer"/*) true ;; *) false ;; esac; do
+                zfs destroy "$up" 2>/dev/null || break
+                log "delete-relation:     and the empty parent $up"
+                up="${up%/*}"
+            done
+        done
+    fi
+    [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
+                    || log "delete-relation: '$name' removed WITH LEFTOVERS -- read the !!! lines above."
+    return "$rc"
+}
+
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
 # whiptail windows, not hand-drawn curses). A separate file on purpose: it is an
 # interactive front end over verbs that already exist, and it must stay testable
@@ -14762,8 +14937,22 @@ joined it does step 3 for you."
     fi
 }
 
+# --grant-quiesce (2026-09-20). A profile that quiesces (every family-per-tier one:
+# daily and rarer tiers carry `quiesce = auto,degrade`) only FREEZES anything if the
+# source let this collector's account freeze its guests -- deploy.sh's --allow-quiesce,
+# a separate grant from the dataset scope. --grant-remotely never passed it, so a
+# relationship installed in one command with a quiescing profile degraded every night.
+# Measured on pve10 <- pve9b: before the grant the daily snapshot is named
+# automated_daily_crash_<ts>, after `--commit-scope=pve10 --allow-quiesce` it is
+# automated_daily_<ts>. Opt-in, explicit, and only alongside --grant-remotely: it is
+# the same root-over-SSH authority that flag already exercises, one grant wider, and
+# it is recorded in the same audit line.
+RUX_GRANT_QUIESCE="${RUX_GRANT_QUIESCE:-0}"
+
 rux_grant_remotely() {   # <host> <port> <requested dataset>
     local host="$1" port="$2" requested="$3"
+    local aq="" aq_note=""
+    [ "${RUX_GRANT_QUIESCE:-0}" -eq 1 ] && { aq=" --allow-quiesce"; aq_note=" +quiesce"; }
     local sfile hfile
     sfile=$(peer_scope_path "$COLLECTOR_LABEL")
     hfile=$(peer_scope_granted_hash_path "$COLLECTOR_LABEL")
@@ -14795,6 +14984,19 @@ rux_grant_remotely() {   # <host> <port> <requested dataset>
             esac
         done < <(dataset_list_split "$requested")
         if [ -z "$missing" ]; then
+            if [ -n "$aq" ]; then
+                # The datasets are covered, the freeze grant may not be: re-committing
+                # is idempotent for the scope and is the only place --allow-quiesce lands.
+                local q_repo="" _qd
+                for _qd in "$SCRIPT_DIR" /root/scripts/zfs-snapshot-all /root/zfs-snapshot-all; do
+                    if rux_root_ssh "$host" "$port" "test -x '$_qd/deploy.sh'" >/dev/null 2>&1; then q_repo="$_qd"; break; fi
+                done
+                [ -n "$q_repo" ] || die "--grant-quiesce: could not find deploy.sh on $host"
+                log "--grant-remotely: scope already covers the request; re-committing on $host for --grant-quiesce"
+                rux_root_ssh "$host" "$port" "cd '$q_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
+                    || die "--grant-quiesce: deploy.sh --commit-scope='$COLLECTOR_LABEL' --allow-quiesce FAILED on $host (see above)"
+                return 0
+            fi
             log "--grant-remotely: $host already has a committed scope for '$COLLECTOR_LABEL' covering the request -- nothing to grant"
             return 0
         fi
@@ -14821,10 +15023,10 @@ include_children = yes
 ' "$_rh"
             done <<< "$missing"
         } | rux_root_ssh_in "$host" "$port" "cat >> '$sfile'"             || die "--grant-remotely: could not append to the scope file on $host -- nothing was committed"
-        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
+        rux_root_ssh "$host" "$port" "cd '$extend_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4             || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was extended; finish or inspect locally there."
         local ext_mfile; ext_mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
         rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q
-' '$ext_stamp (extension)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
+' '$ext_stamp (extension$aq_note)' >> '$ext_mfile'"             || warn "--grant-remotely: the extension is committed but the audit line could not be appended to $ext_mfile on $host -- add it by hand"
         log "--grant-remotely: extension committed on $host as '$COLLECTOR_LABEL', audit recorded"
         return 0
     fi
@@ -14889,11 +15091,11 @@ An operator prepared that file, and this flag is not permission to overwrite the
     } | rux_root_ssh_in "$host" "$port" "cat > '$sfile'" \
         || die "--grant-remotely: could not write the scope file on $host -- nothing was committed"
 
-    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'" 2>&1 | tail -4 \
+    rux_root_ssh "$host" "$port" "cd '$remote_repo' && ./deploy.sh --commit-scope='$COLLECTOR_LABEL'$aq" 2>&1 | tail -4 \
         || die "--grant-remotely: deploy.sh --commit-scope='$COLLECTOR_LABEL' FAILED on $host (see above). The scope file was written; finish or inspect locally there."
 
     local mfile; mfile=$(peer_manifest_path "$COLLECTOR_LABEL")
-    rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp' >> '$mfile'" \
+    rux_root_ssh "$host" "$port" "printf 'GRANTED_REMOTELY_BY=%q\n' '$stamp$aq_note' >> '$mfile'" \
         || warn "--grant-remotely: the grant is committed but the audit line could not be appended to $mfile on $host -- add it by hand"
     log "--grant-remotely: committed on $host as '$COLLECTOR_LABEL', audit recorded"
 }
@@ -15109,6 +15311,7 @@ rux_entry() {
             --name=*)    name="${a#*=}" ;;
             --local-user=*) local_user="${a#*=}"; flag_local_user rux "$local_user" ;;
             --grant-remotely) grant_remotely=1 ;;
+            --grant-quiesce)  RUX_GRANT_QUIESCE=1 ;;
             --manual-join) manual_join=1 ;;
             --install)   do_install=1 ;;
             --plan)      do_install=0 ;;
@@ -15118,6 +15321,8 @@ rux_entry() {
         esac
     done
 
+    [ "${RUX_GRANT_QUIESCE:-0}" -eq 0 ] || [ "$grant_remotely" -eq 1 ] \
+        || die "rux: --grant-quiesce only means something WITH --grant-remotely: it adds --allow-quiesce to the commit-scope this host runs on the source. Without --grant-remotely the source's operator commits the scope, and whether guests may be frozen is their flag there (deploy.sh --commit-scope=$COLLECTOR_LABEL --allow-quiesce)."
     local host dataset
     IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
     # Deferred scope: --source=HOST: (no dataset). The source proposes its own
@@ -15318,6 +15523,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         check-source)     shift; cmd_check_source "$@" ;;
         prepare-source)   shift; cmd_prepare_source "$@" ;;
         new-relation)     shift; cmd_new_relation "$@" ;;
+        delete-relation)  shift; cmd_delete_relation "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
