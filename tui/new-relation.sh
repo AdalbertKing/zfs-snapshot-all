@@ -39,7 +39,7 @@ hostport() { [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 step_mode() {
     geom
     local b=OFF s=OFF; [ "$MODE" = sync ] && s=ON || b=ON
-    wt --title "$(title 1 'Jaka relacja?')" --cancel-button "Wyjdź" --notags \
+    wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
        --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nSynchro: oba hosty trzymają te same datasety pod tą samą ścieżką.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 7)" "$W" 2 \
        backup "Backup   (ten host pobiera ze źródła)" "$b" \
        sync   "Synchro  (to samo po obu stronach)" "$s" || return 1
@@ -57,7 +57,7 @@ step_host() {
     init="$(hostport)"
     while :; do
         geom
-        wt --title "$(title 2 'Z którego hosta?')" --cancel-button "Wstecz" \
+        wt --title "$(title 2 'Z którego hosta?')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "Adres hosta źródłowego: IP albo nazwa, opcjonalnie :port.\n\nPakiet nie musi tam jeszcze być -- następny krok to sprawdzi\ni zaproponuje instalację. Potrzebny jest tylko wstęp SSH jako root." \
            13 "$W" "$init" || return 1
         init="$WT_OUT"      # po odmowie pole wraca z tym, co wpisano -- do poprawienia, nie od zera
@@ -262,7 +262,7 @@ except_flow() { # wyjątki dla jednej pozycji; stan obecny wraca jako odznaczone
         items+=("$n" "${T_LABEL[$i]}" "$st"); all+=("$n")
     done
     geom
-    wt --title "$(title 4 "$name -- czego NIE kopiować?")" --cancel-button "Wstecz" --notags --separate-output \
+    wt --title "$(title 4 " --ok-button "Dalej"$name -- czego NIE kopiować?")" --cancel-button "Wstecz" --notags --separate-output \
        --checklist "Zaznaczone = kopiowane. ODZNACZ spacją to, co ma być pomijane\n(razem z tym, co pod nim). Przyszłych datasetów pominąć się nie da." "$H" "$W" "$LH" \
        "${items[@]}" || return 0
     for n in "${all[@]}"; do
@@ -315,7 +315,7 @@ any_excl() { local i; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && ret
 mode_flow() {   # -R/-r: JEDNO na relację; atomowo wyklucza wyjątki, więc pyta, zanim je zdejmie
     geom
     local f=OFF a=OFF i; [ "$RECURSION" = atomic ] && a=ON || f=ON
-    wt --title "$(title 4 'Sposób kopiowania')" --cancel-button "Wstecz" --notags \
+    wt --title "$(title 4 'Sposób kopiowania')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
        --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset ma własne migawki; awaria jednego nie zatrzymuje\nreszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili, ale\nnie da się wtedy nic pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
        flat   "Każdy dataset osobno (-R)  -- zalecane" "$f" \
        atomic "Cała gałąź atomowo (-r)" "$a" || return 0
@@ -432,7 +432,7 @@ for x in d.get("datasets", []):
            --menu "Kopie wylądują pod:  <wybrane>/$HOST/<dataset źródła>\nnp.  ${first:-hdd/backups}/$HOST/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
         if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
-        wt --title "$(title 5 'Dokąd -- inna ścieżka')" --cancel-button "Wstecz" \
+        wt --title "$(title 5 'Dokąd -- inna ścieżka')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>/$HOST/<dataset źródła>" 11 "$W" "$TARGET" || continue
         t="${WT_OUT// /}"
         case "$t" in ''|/*|*/|*[!A-Za-z0-9._:/-]*) wt --title "Zła ścieżka" --msgbox "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu)." 9 "$W"; continue ;; esac
@@ -503,7 +503,7 @@ step_profile() {
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
-        wt --title "$(title 6 'Szablon -- lista niedostępna')" --cancel-button "Wstecz" \
+        wt --title "$(title 6 'Szablon -- lista niedostępna')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; return 0
     fi
@@ -513,7 +513,7 @@ step_profile() {
         geom
         if [ "$sub" = freeze ]; then
             y=OFF; x=OFF; [ "$FREEZE" -eq 1 ] && y=ON || x=ON
-            wt --title "$(title 6 'Spójność migawek')" --cancel-button "Wstecz" --notags \
+            wt --title "$(title 6 'Spójność migawek')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
                --radiolist "Zamrożenie: tuż przed migawką gość (VM/CT) wstrzymuje na chwilę zapis, więc\nmigawka jest spójna, a nie 'jak po wyrwaniu wtyczki'. Gdy zamrożenie się\nnie uda, migawka i tak powstaje. Godzinowych nie zamrażamy nigdy." "$(fit 8)" "$W" 2 \
                yes "Zamrażaj przy migawkach dobowych i rzadszych  -- zalecane" "$y" \
                no  "Bez zamrażania  (goście bez agenta, zwykłe systemy plików)" "$x" || return 1
@@ -546,7 +546,7 @@ step_name() {
     [ -n "$RNAME" ] || RNAME="${HOSTNAME_R:-$HOST}"
     while :; do
         geom
-        wt --title "$(title 7 'Nazwa relacji')" --cancel-button "Wstecz" \
+        wt --title "$(title 7 'Nazwa relacji')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "Pod tą nazwą relacja będzie widoczna na F3, w cronie i w mailach.\nLitery, cyfry, kropka, myślnik, podkreślenie." 11 "$W" "$RNAME" || return 1
         n="${WT_OUT// /}"
         case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- dozwolone: litery, cyfry, kropka, myślnik, podkreślenie." 8 "$W"; continue ;; esac
@@ -576,7 +576,7 @@ step_account() {
     local r=OFF z=OFF o=OFF a
     case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
     geom
-    wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --cancel-button "Wstecz" --notags \
+    wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
        --radiolist "Konto na TYM hoście, z którego cron będzie pobierał kopie.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
        root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
        zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
@@ -584,7 +584,7 @@ step_account() {
     [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
     [ "$ACCT" = other ] || return 0
     while :; do
-        wt --title "$(title 8 'Nazwa konta')" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
+        wt --title "$(title 8 'Nazwa konta')" --ok-button "Dalej" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
         a="${WT_OUT// /}"
         case "$a" in ''|root|*[!a-z0-9_-]*) wt --title "Zła nazwa konta" --msgbox "Małe litery, cyfry, myślnik, podkreślenie; nie 'root'." 8 "$W"; continue ;; esac
         ACCT_OTHER="$a"; return 0
