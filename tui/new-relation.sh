@@ -573,6 +573,7 @@ step_extra() {
         [ "$GRANT" -eq 1 ] && grant_w="nadaj stąd, od razu" || grant_w="zatwierdzę sam na źródle"
         masks_w="${EXFAM:-(żadne -- kopiuj wszystkie migawki)}"
         src_w="${SRCPROF:-taka sama jak tutaj ($PROFILE)}"
+        [ "$RECURSION" = atomic ] && { src_w="BRAK -- przy atomowo program nie sprząta u źródła"; SRCPROF=""; }
         [ "$MANUAL" -eq 1 ] && man_w="ręczne (paczka do przeniesienia)" || man_w="przez SSH, automatycznie"
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item go \
            --menu "Wartości domyślne są dobre dla zwykłej relacji. Enter na pozycji = zmień." "$(fit 9)" "$W" 5 \
@@ -591,7 +592,9 @@ step_extra() {
                 wt --title "Pomijane migawki" --cancel-button "Wstecz" \
                    --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja).\nPuste = kopiuj wszystkie." 12 "$W" "$EXFAM" && EXFAM="${WT_OUT// /}" ;;
             src)
-                if [ -s "$TMPD/prof.tsv" ]; then
+                if [ "$RECURSION" = atomic ]; then
+                    wt --title "Retencja u źródła" --msgbox "Przy kopiowaniu atomowym (-r) program NIE sprząta migawek u źródła:\nsilniki nie trzymają wtedy zakładki, więc sprzątanie mogłoby zerwać\nłańcuch przyrostów. Migawki na źródle trzeba sprzątać samemu,\nalbo wrócić do kroku 4 i zmienić Sposób na 'każdy dataset osobno'." 12 "$W"
+                elif [ -s "$TMPD/prof.tsv" ]; then
                     local items=(__same__ "taka sama jak tutaj ($PROFILE)") n w c
                     while IFS=$'\t' read -r n w c; do [ -n "$n" ] && items+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
                     wt --title "Retencja migawek U ŹRÓDŁA" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-__same__}" \
@@ -649,6 +652,7 @@ summary_text() {
     echo "Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}."
     echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
     echo "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}"
+    [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
     echo "Prawa na źródle: $( [ "$GRANT" -eq 1 ] && echo "nadane stąd, od razu" || echo "zatwierdzisz SAM -- instalacja stanie i poda komendę" )$( [ "$MANUAL" -eq 1 ] && echo "; parowanie ręczne")"
     echo
     echo "Komenda (to samo wpisałbyś z palca):"

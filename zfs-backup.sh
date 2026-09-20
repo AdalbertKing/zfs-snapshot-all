@@ -11294,7 +11294,7 @@ cmd_delete_relation() {
         return $?
     fi
     record_load client "$cpath"
-    local peer="$PEER_HOST" state="$STATE" copies="$MANAGED_DATASETS" port="22"
+    local peer="$PEER_HOST" state="$STATE" copies="$MANAGED_DATASETS" port="22" tgt="${CLIENT_TARGET:-}"
     # The label the SOURCE knows this collector by -- derived exactly as deploy.sh
     # --unpair derives the `--leave=` it prints (hostname -s, sanitised).
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
@@ -11369,7 +11369,17 @@ cmd_delete_relation() {
         local d
         for d in $copies; do
             log "delete-relation: 4/4 zfs destroy -r $d"
-            zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; }
+            zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; continue; }
+            # The empty shells above it (<target>/<peer>/<pool>...) were created for this
+            # copy alone. Plain `zfs destroy`, NO -r: a parent that still holds anything --
+            # another relationship's copy, a snapshot -- refuses by itself, and that
+            # refusal is the guard. Never above <target>/<peer>, never the target itself.
+            local up="${d%/*}"
+            while [ -n "$tgt" ] && [ -n "$peer" ] && case "$up" in "$tgt/$peer"|"$tgt/$peer"/*) true ;; *) false ;; esac; do
+                zfs destroy "$up" 2>/dev/null || break
+                log "delete-relation:     and the empty parent $up"
+                up="${up%/*}"
+            done
         done
     fi
     [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
