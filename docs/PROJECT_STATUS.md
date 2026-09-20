@@ -54,6 +54,45 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **SYNCHRO NA PŁASKIM KOLEKTORZE BYŁO NIEWYKONALNE -- `passive-flat` (2026-09-20, noc).**
+  Właściciel próbował z GUI dodać relację *synchro* pve10 <- pve9 (.99) i nie szło.
+  Prześledzone na hostach, nie z pamięci. Trzy odmowy jedna za drugą, każda sama
+  w sobie słuszna:
+  1. **`verify-endpoint` na kontenerze.** Zakres rozwijał się do jednego wpisu --
+     rekursyjnego korzenia `hdd/lab`, który jest KONTENEREM: zero migawek po obu
+     stronach (zmierzone). Sonda czyta pierwszą linię `PLAN=`, dla kontenera zawsze
+     „brak wspólnej bazy" → `FULL-FOREVER (base=null)` → odmowa. Komunikat przy tym
+     kłamie: *„none of the known endpoints answered"*, podczas gdy endpoint
+     odpowiedział bez zarzutu. **Obejście na źródle:** `include_parent = no`
+     (weryfikowane są dzieci). **Zostaje jako wada do naprawy** -- weryfikacja ma
+     patrzeć na rozwinięte dzieci, a komunikat mówić, co naprawdę zawiodło.
+  2. **Dataset bez ani jednej migawki.** `hdd/lab/vm-101/swap` -- 0 migawek na
+     źródle, u celu nie istniał, więc przyrostowo nie potwierdzi się nigdy.
+     Wykluczony w zakresie (`exclude = ...`); swap to kanoniczny kandydat.
+  3. **Brakujący kształt szablonu.** Źródło ma WŁASNĄ rodzinę `automated_*`, więc
+     silnik przechodzi w tryb pasywny (`-e`) i szablon musi być BEZPREFIKSOWY.
+     `d30` → gen-cron słusznie odmawia (tworzy `automated_...`, sprząta
+     `automated_daily` → rodzina rośnie bez końca). Jedyny bezprefiksowy `passive`
+     jest DRABINĄ (ma fragment `[prune]`), a pve10 czyta się jako FLAT → aktywacja
+     odmawia: *„NO RETENTION AT ALL"*. **Pasywna synchronizacja na płaskim
+     kolektorze była więc niewykonalna** -- brakowało jednego klocka.
+  - **Klocek: `profiles/passive-flat.conf`.** Bezprefiksowy jak `passive`, płaski
+    jak host: JEDEN szczebel, który i konsumuje, i sprząta; `pattern = automated`
+    (rodzina, którą adoptuje -- `pattern = -` jest tu odrzucane, bo szczebel
+    z `send_schedule` czyta się jako tworzący `automated_...`); bez fragmentu
+    `[prune]`, bo to on właśnie jest drabiną; nazwa szczebla kończy się na
+    `_hourly`, bo litera retencji bierze się z OSTATNIEGO członu nazwy
+    (`passive_flat` nie renderował się wcale, a FATAL nie niósł powodu -- osobna,
+    drobna wada do zgłoszenia). Licznik płaski `keep = 168`; szablony są
+    wzorcami admina, więc liczba jest punktem wyjścia, nie prawem.
+  - **Dowód na żywo (pve10 <- pve9, prawdziwe ZFS i cron):** relacja `pve9-synchro`
+    **aktywna**, `test` rc=0; linia backupu i linia prune odpalone DOSŁOWNIE z
+    crontaba -- obie rc=0; prune jest LOKALNY (`"automated" -H168`, bez `-R`, bez
+    konta zdalnego), więc rodzina u źródła nietknięta: 252 migawki tam, 10 u celu.
+    Ocalałe relacje `pve11` i `pve9b` dalej `active`, `test` rc=0. Suita
+    `profiles` 92/0 (pięć nowych asercji: brak prefiksu, brak `[prune]`, szczebel
+    samosprzątający z `pattern = automated`, nazwa z kadencją, render przez
+    PRAWDZIWY gen-cron z lokalną linią prune).
 
 - **ZAWĘŻENIE ZAKRESU ZOSTAWIAŁO SZERSZĄ ZGODĘ NA ZAMRAŻANIE (2026-09-20, wieczór).**
   Znalezione podczas pomiaru pod odłożony czasownik „zabierz dataset z zakresu
