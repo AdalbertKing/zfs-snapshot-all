@@ -523,6 +523,16 @@ Inspection / teardown:
                                     usual pull works once the host can see it).
                                     Nothing else: no cron, no relationship, no key --
                                     add-client's JOIN does those. Plans without --yes.
+  zfs-backup.sh delete-relation NAME [--keep-source] [--keep-record] [--destroy-copies] [--yes]
+                                    The WHOLE removal as one command: remove-client
+                                    here, deploy.sh --leave on the source (skipped
+                                    while another relationship uses that peer), and
+                                    the purge of the removed record -- which is what
+                                    frees the NAME, so "remove and create again" works.
+                                    On a record that already says 'removed' it only
+                                    frees the name. Copies on disk are kept unless
+                                    --destroy-copies. Plans without --yes. Del on the
+                                    GUI's F3 asks these same questions in windows.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
                                     windows: type, source host, what is on it, WHICH
@@ -11221,6 +11231,124 @@ cmd_gui() {
     python3 "$tui" "$@"
 }
 
+# ------------------------------------------------------------------------------
+# delete-relation NAME -- the WHOLE removal, as one command (2026-09-20)
+#
+# Owner: "Musi byc obsluzone z GUI pauzowanie i usuwanie relacji. [...] Co sie
+# dzieje, gdy admin chce zmienic cos w relacji -- usuwa i tworzy nowa? Narazie
+# bym to zaakceptowal. Ale logicznie pakiet musi byc spojny."
+#
+# It was not. Measured live on pve10 <- pve11 the same day: `remove-client pve11`
+# succeeded, the wizard then offered the name `pve11` again, and the plan
+# answered "this relationship was removed and cannot be revived -- use a
+# different name". Removal has three halves and the package had a verb for each
+# but no way to say "all of it":
+#
+#     remove-client NAME                      the collector's half
+#     deploy.sh --leave=<this collector>      the source's half (account, grants)
+#     clean-relationships.sh --purge=NAME     the tombstone record, which is what
+#                                             holds the NAME
+#
+# This verb RUNS THOSE THREE, in that order, and adds nothing of its own to
+# them. Each half keeps its own guards (remove-client's cron assertions,
+# --leave's manifest, --purge's LIVE/ORPHAN classification). Two halves are
+# skipped on evidence, not on a guess:
+#   * the source's half, when another live relationship uses the same peer --
+#     the pairing, the account and the grants are shared by address;
+#   * the collector's half, when the record already says `removed` -- then this
+#     is "free the name", which is exactly what the wizard needs.
+# The copies on disk are NOT touched unless --destroy-copies is given: that is
+# the one step here that cannot be undone, so it is never a default.
+# Plans without --yes, like every composite in this program.
+# ------------------------------------------------------------------------------
+cmd_delete_relation() {
+    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)          yes=1 ;;
+            --keep-source)     keep_source=1 ;;
+            --keep-record)     keep_record=1 ;;
+            --destroy-copies)  destroy=1 ;;
+            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --yes)" ;;
+            *)                 [ -z "$name" ] || die "delete-relation: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh delete-relation NAZWA [--keep-source] [--keep-record] [--destroy-copies] [--yes]"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "delete-relation: no relationship '$name' on this host"
+    record_load client "$cpath"
+    local peer="$PEER_HOST" state="$STATE" copies="$MANAGED_DATASETS" port="22"
+    case "$ACTIVE_ENDPOINT" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+
+    # Who else uses this peer? Counted from the records, in a subshell per file so
+    # one record's fields never leak into the next.
+    local others="" f o
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        [ "$f" = "$cpath" ] && continue
+        o=$( CLIENT_NAME=""; STATE=""; PEER_HOST=""; record_load client "$f"
+             [ "$PEER_HOST" = "$peer" ] && [ "$STATE" != "removed" ] && printf '%s' "${CLIENT_NAME:-$(basename "$f" .conf)}" )
+        [ -n "$o" ] && others="$others${others:+, }$o"
+    done
+
+    local do_collector=1 do_source=1 do_record=1 why_source=""
+    [ "$state" = "removed" ] && do_collector=0
+    if [ "$keep_source" -eq 1 ]; then do_source=0; why_source="--keep-source"
+    elif [ -z "$peer" ]; then do_source=0; why_source="the record names no peer"
+    elif [ -n "$others" ]; then do_source=0; why_source="other relationships still use $peer: $others"
+    fi
+    [ "$keep_record" -eq 1 ] && do_record=0
+
+    echo "delete-relation '$name' (state=${state:-?}, peer=${peer:-?}):"
+    if [ "$do_collector" -eq 1 ]; then echo "  1. collector : remove-client $name  -- config sections and cron lines of THIS relationship"
+    else echo "  1. collector : skipped -- the record already says 'removed'"; fi
+    if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$COLLECTOR_LABEL  -- the account and its zfs grants there"
+    else echo "  2. source    : skipped -- $why_source"; fi
+    if [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
+    else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
+    if [ "$destroy" -eq 1 ]; then
+        echo "  4. COPIES    : zfs destroy -r, on THIS host, of:"
+        local d; for d in $copies; do echo "                   $d"; done
+        [ -n "$copies" ] || echo "                   (the record lists none)"
+    else
+        echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
+    fi
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+
+    local self="$SCRIPT_DIR/zfs-backup.sh" rc=0
+    if [ "$do_collector" -eq 1 ]; then
+        log "delete-relation: 1/4 remove-client $name"
+        "$self" remove-client "$name" || die "delete-relation: remove-client failed -- stopped BEFORE the source and the record were touched. Fix what it said and run this again."
+    fi
+    if [ "$do_source" -eq 1 ]; then
+        log "delete-relation: 2/4 source side on $peer"
+        if rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --leave='$COLLECTOR_LABEL'"; then :
+        else
+            rc=1
+            log "!!! delete-relation: the source's half did NOT complete. The collector's half is done. On $peer, as root:"
+            log "!!!     cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$COLLECTOR_LABEL"
+        fi
+    fi
+    if [ "$do_record" -eq 1 ]; then
+        log "delete-relation: 3/4 purge the record of '$name'"
+        "$SCRIPT_DIR/clean-relationships.sh" --purge="$name" --yes || { rc=1; log "!!! delete-relation: the record of '$name' was NOT purged (see above) -- the name stays taken"; }
+    fi
+    if [ "$destroy" -eq 1 ]; then
+        local d
+        for d in $copies; do
+            log "delete-relation: 4/4 zfs destroy -r $d"
+            zfs destroy -r "$d" || { rc=1; log "!!! delete-relation: could not destroy $d"; }
+        done
+    fi
+    [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
+                    || log "delete-relation: '$name' removed WITH LEFTOVERS -- read the !!! lines above."
+    return "$rc"
+}
+
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
 # whiptail windows, not hand-drawn curses). A separate file on purpose: it is an
 # interactive front end over verbs that already exist, and it must stay testable
@@ -15318,6 +15446,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         check-source)     shift; cmd_check_source "$@" ;;
         prepare-source)   shift; cmd_prepare_source "$@" ;;
         new-relation)     shift; cmd_new_relation "$@" ;;
+        delete-relation)  shift; cmd_delete_relation "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;
