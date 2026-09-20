@@ -11559,8 +11559,7 @@ cmd_remove_source() {
     echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
     echo "  3. collector : its [dataset:]/[prune:] sections are dropped from the config here (activation only ADDS, so a removal has to say so itself)"
-    echo "  4. collector : activate $name  -- config and cron are regenerated from the narrowed scope"
-    echo "  5. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
+    echo "  4. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
@@ -11622,7 +11621,7 @@ cmd_remove_source() {
     # mutate A" is right for CREATE and is exactly why a REMOVE has to say so
     # itself. The section is therefore dropped explicitly, with the same
     # marker-verified helper remove-client uses, before the regeneration.
-    log "remove-source: 3/4 dropping this dataset's sections from the config on this host"
+    log "remove-source: 3/3 dropping this dataset's sections from the config on this host"
     local landing="" m
     for m in ${MANAGED_DATASETS:-}; do
         case "$m" in
@@ -11658,9 +11657,13 @@ cmd_remove_source() {
         log "remove-source: no installed config for '$name' on this host -- nothing to drop here"
     fi
 
-    log "remove-source: 4/4 regenerating this host's config and cron from the narrowed scope"
-    "$SCRIPT_DIR/zfs-backup.sh" activate "$name" --yes \
-        || die "remove-source: the source side is done and the section is gone, but re-activation failed. Fix what it said and run exactly: $SCRIPT_DIR/zfs-backup.sh activate $name --yes"
+    # NO RE-ACTIVATION STEP, and that is measured rather than assumed: on an
+    # already-active relationship `activate` short-circuits with "already active
+    # -- nothing to do" (pve10, 2026-09-20), so a step advertised as "regenerate
+    # from the narrowed scope" would have regenerated nothing while saying it
+    # did. Step 3 IS the whole collector-side change: the sections leave the
+    # config and the installed cron together, through the same validated atomic
+    # install every other writer here uses.
     log "remove-source: '$ds' is no longer part of '$name'. Copies already received are untouched."
 }
 

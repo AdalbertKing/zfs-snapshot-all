@@ -12374,8 +12374,8 @@ rs_run() { ( CLIENTS_DIR="$RS/clients" bash "$ZFSBACKUP" remove-source "$@" ) 2>
 RSOUT=$(rs_run r1 pool/a/b); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$RSOUT" | grep -q "1\. source    : /etc/zfs-snapshot-all/peers/.*\.scope" \
    && printf '%s' "$RSOUT" | grep -q '2\. source    : deploy.sh --commit-scope=' \
-   && printf '%s' "$RSOUT" | grep -q '3\. collector : its .dataset:./.prune:. sections are dropped'    && printf '%s' "$RSOUT" | grep -q '4\. collector : activate r1' \
-   && printf '%s' "$RSOUT" | grep -q '5\. copies    : KEPT on this host' \
+   && printf '%s' "$RSOUT" | grep -q '3\. collector : its .dataset:./.prune:. sections are dropped'    && printf '%s' "$RSOUT" | grep -q '3\. collector : its' \
+   && printf '%s' "$RSOUT" | grep -q '4\. copies    : KEPT on this host' \
    && printf '%s' "$RSOUT" | grep -q '^plan only\.'; then
     ok "rmsrc: without --yes it is a PLAN naming all four steps in the order they run -- scope, commit, re-activate -- and saying copies are kept"
 else
@@ -12393,7 +12393,7 @@ fi
 # THE ARGUMENT ORDER OF THE INSTALL, pinned because getting it backwards DELETED
 # the live config on pve10 (the helper takes the live file first, the candidate
 # second; reversed, it treats the live config as the candidate).
-rs_call=$(sed -n "/remove-source: 3\/4 dropping/,/4\/4 regenerating/p" "$ZFSBACKUP" | grep -F 'atomic_replace_and_install')
+rs_call=$(sed -n "/remove-source: 3.3 dropping/,/is no longer part of/p" "$ZFSBACKUP" | grep -F 'atomic_replace_and_install')
 if printf '%s' "$rs_call" | grep -qF 'atomic_replace_and_install "$CRON_CONFIG" "$workfile"'; then
     ok "rmsrc: the install is called (live file, candidate) -- reversed, it takes the live config for the candidate and the config VANISHES (measured on pve10)"
 else
