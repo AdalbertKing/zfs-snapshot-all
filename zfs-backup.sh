@@ -539,6 +539,17 @@ Inspection / teardown:
                                     frees the name. Copies on disk are kept unless
                                     --destroy-copies. Plans without --yes. Del on the
                                     GUI's F3 asks these same questions in windows.
+  zfs-backup.sh remove-source NAME DATASET [--yes]
+                                    Take ONE dataset out of a relationship, on both
+                                    sides: the SOURCE's scope file loses it (so its
+                                    zfs grant is revoked and the freeze whitelist
+                                    narrows with it), then this host regenerates its
+                                    config and cron from the narrowed scope. Needed
+                                    because delete-relation skips the source side
+                                    entirely when the peer is SHARED with another live
+                                    relationship. Copies already received are KEPT --
+                                    this verb never destroys data. Plans without --yes,
+                                    and a failed step stops the next one.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
                                     windows: type, source host, what is on it, WHICH
@@ -11492,6 +11503,122 @@ cmd_delete_relation() {
     return "$rc"
 }
 
+# remove-source NAME DATASET -- take ONE dataset out of a relationship (2026-09-20)
+#
+# THE GAP THIS CLOSES, measured rather than imagined. `delete-relation` removes a
+# whole relationship, and when its peer is SHARED with another live relationship
+# it deliberately skips the source side entirely -- so the `zfs allow` grants and
+# the source's scope entry for the datasets that went away STAYED. There was no
+# verb for "this one dataset is no longer part of the relationship", and the
+# operator was left editing the scope file by hand (which is what I did on pve9
+# on 2026-09-20 to get a relationship activatable).
+#
+# WHERE THE TRUTH LIVES decides the order. The scope file on the SOURCE is what
+# the source grants from and what the collector generates jobs from -- one file,
+# one representation of the choice (lib-scope.sh's header). So this verb does not
+# invent a second place to say it: it edits that file, re-runs --commit-scope
+# there (which revokes the ZFS grant and narrows the quiesce whitelist, both
+# fail-closed since REV-145), and only then re-activates here so the config and
+# the cron follow. Each step is checked and the next one does not start if the
+# previous failed -- E58/E59, the lesson of this same day, twice.
+#
+# WHAT IT NEVER DOES: destroy copies. The data already received stays exactly
+# where it is; a relationship shrinking is not a reason to delete a backup, and
+# the operator who wants it gone can say so with `zfs destroy` after reading what
+# this prints. That is the same rule --unpair follows for received data.
+cmd_remove_source() {
+    local name="" ds="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            -*)       die "remove-source: unknown option '$a' (only --yes)" ;;
+            *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "remove-source: takes exactly NAME and DATASET"; fi ;;
+        esac
+    done
+    [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh remove-source NAZWA DATASET [--yes]"
+    case "$ds" in
+        */*) : ;;
+        *)   die "remove-source: '$ds' does not look like a dataset (pool/path)" ;;
+    esac
+    case "$ds" in
+        *[!A-Za-z0-9_./:-]*) die "remove-source: '$ds' carries characters a dataset name cannot have -- refusing to send it anywhere" ;;
+    esac
+
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "remove-source: no relationship '$name' on this host"
+    record_load client "$cpath"
+    local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
+    local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
+    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+    [ -n "$peer" ] || die "remove-source: the record of '$name' names no peer host -- nothing to reach"
+    [ "$state" = removed ] && die "remove-source: '$name' is already removed -- there is no scope left to narrow"
+
+    local sfile="/etc/zfs-snapshot-all/peers/$label.scope"
+    echo "remove-source '$ds' from '$name' (peer $peer, port $port):"
+    echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
+    echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
+    echo "  3. collector : activate $name  -- config and cron are regenerated from the narrowed scope"
+    echo "  4. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+
+    # The edit runs on the SOURCE, as an awk program over a file this side never
+    # parses: the scope file is untrusted structured data (lib-scope.sh), and the
+    # dataset name is validated above precisely so it can be passed as an awk
+    # VARIABLE (-v) rather than interpolated into the program text.
+    log "remove-source: 1/3 narrowing the scope on $peer"
+    local awk_prog
+    awk_prog='
+      BEGIN { done=0; inroot=0; already=0 }
+      /^\[dataset:/ {
+          # `already` is checked HERE too, not only at EOF: a re-run on a scope
+          # whose root already carries this exclusion used to append a second
+          # copy when another [dataset:] section followed it (caught by the
+          # idempotence assertion, which is why that assertion exists).
+          if (inroot && !done && !already) { print "exclude = " target; done=1 }
+          inroot=0
+          sec=$0; sub(/^\[dataset:/,"",sec); sub(/\]$/,"",sec)
+          if (sec == target) { skip=1; next }          # the dataset IS a scope root: drop its section
+          skip=0
+          if (index(target, sec "/") == 1) inroot=1     # the dataset lives under this root
+          print; next
+      }
+      skip == 1 { next }
+      { if (inroot && $0 ~ /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*/) {
+            v=$0; sub(/^[[:space:]]*exclude[[:space:]]*=[[:space:]]*/,"",v)
+            if (v == target) { already=1 }
+        }
+        print }
+      END { if (inroot && !done && !already) print "exclude = " target
+            if (already) print "ALREADY-EXCLUDED" > "/dev/stderr" }
+    '
+    local out rc
+    out=$(rux_root_ssh "$peer" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $(printf '%q' "$sfile") > $(printf '%q' "$sfile").new 2>/tmp/rs-awk.err && grep -q ALREADY-EXCLUDED /tmp/rs-awk.err && echo ALREADY || mv $(printf '%q' "$sfile").new $(printf '%q' "$sfile")" 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "!!! remove-source: could not narrow the scope on $peer -- NOTHING was changed here either."
+        log "!!!     $out"
+        die "remove-source: stopped at 1/3. Fix what the source said and run this again."
+    fi
+    case "$out" in
+        *ALREADY*) log "remove-source: '$ds' was already out of scope on $peer -- nothing to narrow, going on to re-commit and re-activate so this side matches." ;;
+    esac
+
+    log "remove-source: 2/3 committing the narrowed scope on $peer"
+    if ! rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
+        log "!!! remove-source: the source did NOT commit the narrowed scope. Its scope FILE is already narrowed, so re-running this same command retries the commit."
+        log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
+        die "remove-source: stopped at 2/3 -- this host's config and cron were NOT touched, so the two sides can still be brought back together by one retry."
+    fi
+
+    log "remove-source: 3/3 regenerating this host's config and cron from the narrowed scope"
+    "$SCRIPT_DIR/zfs-backup.sh" activate "$name" --yes \
+        || die "remove-source: the source side is done ('$ds' is out of its scope and its grant is revoked), but re-activation here failed. Fix what it said and run exactly: $SCRIPT_DIR/zfs-backup.sh activate $name --yes"
+    log "remove-source: '$ds' is no longer part of '$name'. Copies already received are untouched."
+}
+
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
 # whiptail windows, not hand-drawn curses). A separate file on purpose: it is an
 # interactive front end over verbs that already exist, and it must stay testable
@@ -15620,6 +15747,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         prepare-source)   shift; cmd_prepare_source "$@" ;;
         new-relation)     shift; cmd_new_relation "$@" ;;
         delete-relation)  shift; cmd_delete_relation "$@" ;;
+        remove-source)    shift; cmd_remove_source "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

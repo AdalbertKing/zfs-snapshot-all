@@ -12359,6 +12359,63 @@ if grep -q '\[ -n "\$LEGACY_LADDER_BODY" \] || profile_declares_ladder || contin
 else
     bad "delrel: the ladder guard in activation is gone"
 fi
+# remove-source: THE VERB THAT WAS MISSING (2026-09-20)
+#
+# delete-relation skips the source side entirely when the peer is SHARED, so the
+# zfs grants and the scope entry of a dataset that left the relationship STAYED.
+# There was no verb for "this one dataset is out"; on pve9 it was done by editing
+# the scope file by hand. The plan and the refusals are pinned here; the awk
+# program that does the edit is exercised below against real scope text, because
+# that is the part with the branches.
+RS="$WORK/rmsrc"; rm -rf "$RS"; mkdir -p "$RS/clients"
+printf 'CLIENT_NAME=r1\nSTATE=active\nPEER_HOST=10.0.0.5\nACTIVE_ENDPOINT=10.0.0.5:2222\n' > "$RS/clients/r1.conf"
+printf 'CLIENT_NAME=r2\nSTATE=removed\nPEER_HOST=10.0.0.6\n' > "$RS/clients/r2.conf"
+rs_run() { ( CLIENTS_DIR="$RS/clients" bash "$ZFSBACKUP" remove-source "$@" ) 2>"$RS/err"; }
+RSOUT=$(rs_run r1 pool/a/b); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$RSOUT" | grep -q "1\. source    : /etc/zfs-snapshot-all/peers/.*\.scope" \
+   && printf '%s' "$RSOUT" | grep -q '2\. source    : deploy.sh --commit-scope=' \
+   && printf '%s' "$RSOUT" | grep -q '3\. collector : activate r1' \
+   && printf '%s' "$RSOUT" | grep -q '4\. copies    : KEPT on this host' \
+   && printf '%s' "$RSOUT" | grep -q '^plan only\.'; then
+    ok "rmsrc: without --yes it is a PLAN naming all four steps in the order they run -- scope, commit, re-activate -- and saying copies are kept"
+else
+    bad "rmsrc: plan" "rc=$rc" "$RSOUT" "$(cat "$RS/err")"
+fi
+if ! rs_run r1 >/dev/null && grep -q 'uzycie: zfs-backup.sh remove-source' "$RS/err" \
+   && ! rs_run r1 notadataset >/dev/null && grep -q "does not look like a dataset" "$RS/err" \
+   && ! rs_run r1 'pool/a;rm -rf /' >/dev/null && grep -q "refusing to send it anywhere" "$RS/err" \
+   && ! rs_run zz pool/a >/dev/null && grep -q "no relationship 'zz'" "$RS/err" \
+   && ! rs_run r2 pool/a >/dev/null && grep -q "already removed" "$RS/err"; then
+    ok "rmsrc: refusals come first -- a missing dataset argument, something that is not a dataset, a name carrying shell metacharacters (never sent anywhere), an unknown relationship, and one that is already removed"
+else
+    bad "rmsrc: refusals" "$(cat "$RS/err")"
+fi
+# The EDIT itself, against real scope text. Three branches, three shapes.
+SC="$RS/scope"
+printf '# comment\n[dataset:pool/one]\ninclude_parent = yes\ninclude_children = yes\n[dataset:pool/two]\ninclude_parent = yes\ninclude_children = yes\n' > "$SC"
+rs_awk=$(sed -n "/^      BEGIN {/,/^    '/p" "$ZFSBACKUP" | sed '$d')
+[ -n "$rs_awk" ] || bad "rmsrc: could not lift the awk program from zfs-backup.sh -- anchors changed"
+awk -v target=pool/two "$rs_awk" "$SC" > "$RS/o1" 2>/dev/null
+if ! grep -q 'pool/two' "$RS/o1" && grep -q '\[dataset:pool/one\]' "$RS/o1" && [ "$(grep -c include_parent "$RS/o1")" -eq 1 ]; then
+    ok "rmsrc/awk: a dataset that IS a scope root loses its whole section, and the OTHER root keeps every line of its own"
+else
+    bad "rmsrc/awk: dropping a root section" "$(cat "$RS/o1")"
+fi
+awk -v target=pool/one/child "$rs_awk" "$SC" > "$RS/o2" 2>/dev/null
+if grep -q '^exclude = pool/one/child$' "$RS/o2" \
+   && [ "$(sed -n '/\[dataset:pool\/one\]/,/\[dataset:pool\/two\]/p' "$RS/o2" | grep -c '^exclude = pool/one/child$')" -eq 1 ] \
+   && grep -q '\[dataset:pool/two\]' "$RS/o2"; then
+    ok "rmsrc/awk: a dataset UNDER a root is excluded inside that root's own section (not appended at the end, where it would belong to the wrong root)"
+else
+    bad "rmsrc/awk: excluding a child" "$(cat "$RS/o2")"
+fi
+awk -v target=pool/one/child "$rs_awk" "$RS/o2" > "$RS/o3" 2>"$RS/e3"
+if grep -q ALREADY-EXCLUDED "$RS/e3" && [ "$(grep -c '^exclude = pool/one/child$' "$RS/o3")" -eq 1 ]; then
+    ok "rmsrc/awk: running it again on an already-excluded dataset SAYS so and does not write the exclusion twice"
+else
+    bad "rmsrc/awk: idempotence" "$(cat "$RS/o3")" "$(cat "$RS/e3")"
+fi
+
 fi   # --- koniec sekcji delrel ---
 
 echo "--------------------------------------------"
