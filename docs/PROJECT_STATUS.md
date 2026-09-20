@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b4c8269c1b058f64 -->
+<!-- status-covers-digest: c1731684c14721f0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,43 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-144: `delete-relation` ZATRZYMUJE SIĘ, gdy połowa źródła nie wyszła (2026-09-20, wieczór).**
+  Recenzent (P2, blokujący): nieudana sonda źródła albo nieudany `deploy.sh --leave`
+  były zapisywane jako `rc=1`, po czym komenda szła dalej -- w `clean-relationships.sh
+  --purge`, a przy `--destroy-copies` w `zfs destroy -r`. Rekord relacji to jednak
+  nie podsumowanie operacji, tylko jej **trwały stan powtórzenia**: adres hosta,
+  endpoint (czyli port) i lista kopii są TYLKO tam. Po jego skasowaniu
+  wydrukowane przez ten sam bieg „uruchom to jeszcze raz" jest niewykonalne --
+  `delete-relation NAZWA --yes` odpowiada `no relationship`. Gorsze było 4/4:
+  nieodwracalne kasowanie kopii wykonywane w biegu, który sam mówi, że mu się
+  nie udało.
+  - **Poprawka:** nowa bramka między krokiem 2 a 3 -- nieudana połowa źródła
+    kończy komendę kodem 1, PRZED purge i przed jakimkolwiek `zfs destroy`,
+    i drukuje dokładną komendę do powtórzenia (z `--destroy-copies`, jeśli
+    o nie proszono) plus zdanie, że kopie NIE zostały skasowane. Bramka stoi
+    na PORAŻCE, nie na ostrożności: `--keep-source`, rekord bez hosta, host
+    używany przez inną żywą relację, źródło dowiedzione jako czyste i udany
+    `--leave` zachowują się jak dotąd i nadal purgują.
+  - **Dowody.** Sekcja `delrel` 9/0 (dwie nowe asercje: wykonana granica błędu
+    z `ssh` zwracającym 255 i `zfs`, który zapisuje każde wywołanie -- oraz
+    kontrola pozytywna, żeby test nie przeszedł przez uczynienie czasownika
+    tchórzliwym). Kontrola negatywna na kodzie z main `85f1b36d`: te same
+    atrapy dają `3/4 purge`, `4/4 zfs destroy -r` i trzy prawdziwe wywołania
+    `zfs destroy`. **Na żywo na pve10** (osobny klon, prawdziwy `ssh` i `zfs`,
+    kopia `hdd/backups/rev144-proof/data`, host `192.0.2.44`): bieg 1 stanął,
+    rekord i dataset zostały nietknięte; bieg 2 -- dosłownie ta wydrukowana
+    komenda -- dokończył i skasował. Lab posprzątany, checkout pve10 nietknięty.
+  - **Spójność GUI.** Okno `Del` raportowało każde rc≠0 jako „USUNIĘTA Z
+    POZOSTAŁOŚCIAMI" -- po nowej bramce to nieprawda: nic nie zostało usunięte
+    poza połową kolektora, nazwa jest nadal zajęta, kopie stoją. Okno rozpoznaje
+    zatrzymanie i mówi: *„ZATRZYMANE (…) rekord ZOSTAŁ (…) uruchom to samo jeszcze
+    raz"*. Asercja uruchamia dialog z atrapą whiptaila i czasownikiem zwracającym
+    rc=1 ze zdaniem `STOPPED before 3/4` (suita `tui` 187/0); kontrola negatywna
+    na poprzedniej wersji dialogu daje stare zdanie.
+  - **Wciąż otwarte (nie ten finding):** przy WSPÓLNYM hoście krok 2 jest
+    pomijany w całości, więc nadania `zfs allow` i wpis w zakresie źródła
+    zostają -- nie ma czasownika „zabierz dataset z zakresu źródła".
 
 - **INCYDENT LABOWY I POPRAWKA: `--purge` zabierał WSPÓLNE parowanie (2026-09-20, po południu).**
   Właściciel usunął z GUI (`Del`) rekordy martwych relacji i dwie żywe, po czym

@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1710,3 +1710,31 @@ in the shape where sharing exists: two relationships on one peer, delete one,
 then TEST THE OTHER -- not "does the deleted one disappear" but "does the
 survivor still work". A green `status` is not that test; it read `active` the
 whole time. The check is the link test and one real cron line.
+
+### E58 — a composite that RECORDED the failure and walked on anyway (REV-20260920-144, R4)
+**2026-09-20, `cmd_delete_relation`.**
+
+*Genesis.* The verb runs four steps and keeps one `rc`. When the source half
+failed I set `rc=1`, printed the manual command the operator would need, and let
+control fall through — into `clean-relationships.sh --purge`, which deletes the
+RECORD, and then into `zfs destroy -r`. The record is the only place the peer
+address, the endpoint (hence the port) and the list of copies live, so the very
+retry the run had just printed could not be run: `delete-relation NAME --yes`
+answers `no relationship`. With `--destroy-copies` the same fall-through reached
+an irreversible destroy inside a run whose own output said a half of it failed.
+
+*Cause.* R4 in its less obvious form. I read R4 as being about steps that fail
+*silently*; this step failed loudly, and I still chained the mutation behind it,
+because I had written the failure into a variable and mistook recording it for
+handling it. There is a second habit under it: I treated the four steps as
+independent reports of a batch, when step 3 in fact CONSUMES the state steps 1–2
+depend on for a second attempt. Nothing in the code said "this is the retry
+state" — and because nothing said it, I did not ask what purging it costs.
+
+*Rule.* R4, widened by this case: **a recorded failure is not a handled
+failure.** Before a composite continues past a failed step, ask what the next
+step DESTROYS that a retry would need, and stop there — in this project that
+means the durable record, before any purge and before anything irreversible.
+And when a verb stops halfway, say so in the surface the operator actually uses:
+the GUI window here was still printing "removed, with leftovers" for a run that
+had removed nothing.
