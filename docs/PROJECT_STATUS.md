@@ -54,6 +54,25 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **PARYTET PUSH↔PULL (P-0) PRZESUNIĘTY NA 2026-10-19 -- z nowym faktem (2026-09-21).**
+  Budzik `port-by:2026-09-21` w `test/twins/twins.sha256` zadzwonił zgodnie
+  z projektem: `process_dataset` nadal różni się między silnikami, a decyzji
+  o porcie nie było. **Nowy fakt, podany przez właściciela tego dnia:
+  PRODUKCJA CHODZI WYŁĄCZNIE NA PUSHU.** Strażnik rozbieżności (odmowy przy
+  braku wspólnej bazy, `written@`, nowszej migawce u celu, żywym dysku gościa)
+  istnieje tylko w `snapget.sh`; `snapsend.sh` niesie `recv -F` bezwarunkowo --
+  czyli brakująca odmowa siedzi dokładnie pod kopiami, które naprawdę chodzą.
+  W labie odwrotnie: 14 linii to samo pobieranie, zero wysyłania (zmierzone).
+  - **Decyzja właściciela o kolejności:** „najpierw dokończyć GUI, dopiero
+    wrócić do poprawy kodu". Termin przesunięty na **2026-10-19** wraz z tym
+    powodem zapisanym w linii `twins.sha256`; suita 81/0. P-0 wchodzi jako
+    pierwsza rzecz po zamknięciu prac nad ekranami.
+  - **Scalenie silników** (`OWNER-ENGINE-MERGE-2026-09-07.md`, werdykt:
+    „zasadne, ale nie jako deduplikacja -- jako scalenie dwóch kierunków w jeden
+    silnik, pod recenzją, 8-11 dni") pozostaje ZA P-0, zgodnie z własnym
+    zdaniem tamtego dokumentu: bez parytetu scalenie musiałoby przy każdej
+    z ośmiu funkcji wybierać, która wersja przeżyje.
+
 - **STARY KREATOR CURSES USUNIĘTY (2026-09-21, polecenie właściciela).**
   Od 2026-09-16 obowiązuje decyzja, że formularze są oknami whiptaila; kreator
   rysowany ręcznie w curses żył od tamtej pory już tylko dla własnej suity, za
