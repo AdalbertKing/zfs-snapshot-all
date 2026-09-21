@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ba65895e23cb8e49 -->
+<!-- status-covers-digest: befc08fe3429a3db -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -54,6 +54,24 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **STARY KREATOR CURSES USUNIĘTY (2026-09-21, polecenie właściciela).**
+  Od 2026-09-16 obowiązuje decyzja, że formularze są oknami whiptaila; kreator
+  rysowany ręcznie w curses żył od tamtej pory już tylko dla własnej suity, za
+  flagą `--wizard curses`. Dwie drogi do tego samego ekranu to dwie drogi do
+  utrzymania, a suita pokrywała tę, której operator nie widzi.
+  - **Usunięte:** blok `wizard_open`…`wizard_plan` w `tui/zfs-tui.py` (554
+    linie: kroki, drzewo datasetów, podsumowanie, `wiz_*`, stałe `WIZ_*`),
+    gałąź okna `"wiz"` w dyspozytorach klawiszy i renderu, flaga CLI
+    `--wizard` i parametr konstruktora. `Ins` na F3 zawsze oddaje terminal
+    czasownikowi `new-relation`.
+  - **Suita `tui`:** 385 linii mniej, **139/0** (było 191/0 -- odeszły 52
+    asercje starego kreatora, doszła jedna, która pilnuje, że NIE MA ani flagi
+    `--wizard`, ani `wizard_open`/`WIZ_STEPNO` w pliku).
+  - **Kontrola martwego kodu:** suita `deadcode` 7/0 -- żadna usunięta funkcja
+    nie miała wywołań spoza bloku (sprawdzone pojedynczo przed cięciem;
+    `open_profile_pick`/`form_advance` należą do formularza NOWEGO SZABLONU
+    i zostają).
+
 - **INCYDENT LABOWY: ścieżka KLONU w żywym crontabie (2026-09-20/21).**
   Dowodząc `remove-source` na żywo uruchamiałem czasownik z klonu gałęzi
   (`/root/wt/fix4` na pve10). `gen-cron` bierze `REPO_DIR` z miejsca, w którym
@@ -391,8 +409,8 @@
     `--install --yes` na pierwszym planie. Poza tym wykonuje tylko
     `prepare-source`, o który pyta oknem tak/nie. **`Ins` na F3** oddaje
     terminal kreatorowi i po jego zakończeniu wraca na F3 z odświeżonymi
-    danymi (nowa relacja od razu na liście); stary kreator w curses zostaje
-    pod `--wizard curses` tylko dla własnej suity -- do usunięcia razem z nią.
+    danymi (nowa relacja od razu na liście). Stary kreator rysowany w curses
+    został USUNIĘTY 2026-09-21 wraz z flagą `--wizard` i swoimi asercjami.
   - **Kroki:** 1 typ (backup/synchro) · 2 adres hosta (host z istniejącą
     relacją = odmowa z nazwami; pole pamięta wpisany tekst) · 3 diagnoza z
     `check-source` (SSH, ZFS, pakiet; brak pakietu → „Zainstaluj") · 4 CO
@@ -473,8 +491,8 @@
     „zatwierdzę sam" tylko na atrapie; nowy szablon z poziomu kreatora;
     modyfikacja istniejącej relacji (dodanie miejsca); po powrocie na F3
     kursor nie staje na nowej relacji; tekst planu jest po angielsku (to
-    wyjście czasownika); stary kreator curses + ~48 jego asercji nadal w
-    drzewie.
+    wyjście czasownika). Stary kreator curses i jego asercje -- USUNIĘTE
+    2026-09-21.
 - **REV-143 (P2): baner SSH stawał się datasetem w `list-datasets` (2026-09-18).**
   Recenzent: `cmd_list_datasets` łapał `zfs list` z `2>&1` i parsował każdą
   linię jako wiersz TSV, więc baner logowania albo ostrzeżenie o kluczu hosta
