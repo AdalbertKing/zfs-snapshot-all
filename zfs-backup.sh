@@ -13836,6 +13836,12 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
     jsonw_field profile            "${PROFILE:-}"
     jsonw_field source_profile     "${SOURCE_PROFILE:-}"
     jsonw_field client_target      "${CLIENT_TARGET:-}"
+    # KIERUNEK RELACJI, a nie domysl czytelnika (2026-09-21). GUI nie mialo skad
+    # wziac trybu, wiec kazda relacje rysowalo jako "backup" -- lacznie z synchro,
+    # ktora nie ma celu i lezy u siebie pod TA SAMA sciezka. Rekord wie to od
+    # poczatku (RUX_MODE), a pusty CLIENT_TARGET jest drugim, niezaleznym swiadkiem
+    # tego samego faktu; gdy rekord milczy (relacje sprzed tego pola), mowi wlasnie on.
+    jsonw_field mode               "${RUX_MODE:-$([ -z "${CLIENT_TARGET:-}" ] && printf sync || printf backup)}"
     jsonw_field local_user         "${LOCAL_USER:-}"
     jsonw_field bandwidth          "${BANDWIDTH:-}"
     jsonw_field recursion          "${RECURSION:-}"

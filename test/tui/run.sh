@@ -137,12 +137,24 @@ fi
 # DOLNY PANEL Z CRONA: para w jednej linii, gdy sie miesci (200); inaczej
 # zrodlo i pod nim cel (80, 120). Od 100 kolumn kopie, czas i GB per para --
 # te same liczby co F2 -- przy ostatniej linii pary.
-if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Czas o/ś/m | GB]' \
+if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Szczeble | Czas o/ś/m | GB]' \
         && hasE "$S4" '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
     ok "relacje: dolny panel przy 200 -- para w jednej linii z kopiami, czasem o/s/m i GB"
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# JEDEN DATASET = JEDEN WIERSZ, cztery szczeble = "x4" w kolumnie. Relacja
+# lab-ct201 ma w atrapie cztery linie crona nad jednym datasetem; przed
+# 2026-09-21 panel rysowal ja CZTERY RAZY i nazywal "4 pary" (zmierzone na
+# pve10). Liczy sie i to, co widac, i co mowi tytul.
+S4CT="$(screen relacje down --width 200)"
+_ct=$(printf '%s' "$S4CT" | grep -cE '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201 → ')
+if [ "$_ct" -le 1 ] && ! has "$S4CT" 'ct-201: 4 pary'; then
+    ok "relacje: dataset z kilkoma szczeblami zajmuje JEDEN wiersz panelu, nie tyle wierszy, ile ma linii crona"
+else
+    bad "relacje: powtorzony dataset w panelu par" "wierszy ct-201: $_ct" "$(printf '%s' "$S4CT" | grep -E 'Datasety relacji' | head -1)"
+fi
+
 S4_120="$(screen relacje down,down,down,down --width 120)"
 if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
     ok "relacje: przy 120 para, ktora sie nie miesci, to zrodlo i pod nim cel z liczbami -- nic nie uciete"

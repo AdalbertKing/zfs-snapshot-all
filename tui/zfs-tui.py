@@ -780,8 +780,18 @@ def ch_arrow(job):
     return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
 
 
-def rel_type(peer, dirs):
-    """backup (jedna strona), synchro (obie), lokalna, other -- z linii crona."""
+def rel_type(peer, dirs, mode=None):
+    """backup (jedna strona), synchro (obie), lokalna, other.
+
+    ZAPISANY TRYB WYGRYWA z odczytem linii crona. Relacja synchro ma wszystkie
+    swoje linie w jedna strone (kolektor ciagnie do siebie, pod TA SAMA sciezke),
+    wiec heurystyka "pull i push = synchro" nazywala ja backupem -- ekran F3
+    pokazywal `pve9-synchro | backup`, czyli nieprawde o tym, co ta relacja robi
+    (zmierzone na pve10, 2026-09-21). Rekord zna odpowiedz i `status --json` ja
+    teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
+    """
+    if mode:
+        return "synchro" if mode == "sync" else mode
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "synchro"
@@ -872,7 +882,7 @@ def build_relations(data, now):
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel.get("peer_host") or "", dirs),
-            "typ": rel_type(rel.get("peer_host"), dirs), "stats": st,
+            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
             "last": last, "last_txt": last_txt.strip(), "transfers": trs,
@@ -1295,8 +1305,35 @@ def rel_pairs(row, data, now, ch):
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
                 gb = hbytes_short(vol) if vol is not None else "-"
-            out.append({"src": src, "dst": dst, "job": j, "vword": VERDICTS.get(v, (v, 0))[0], "czas": czas, "gb": gb})
-        return out, "wg crona"
+            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": VERDICTS.get(v, (v, 0))[0],
+                         "czas": czas, "gb": gb, "vol": vol, "tiers": 1})
+        # JEDEN WIERSZ = JEDEN DATASET, nie jedna linia crona (2026-09-21).
+        # Relacja z czterema szczeblami nad jednym datasetem rysowala ten sam
+        # `zrodlo -> cel` CZTERY RAZY i nazywala to "4 pary" -- osiem linii ekranu
+        # na powiedzenie jednej rzeczy, i do tego nieprawdziwa liczba. Szczeble sa
+        # faktem o HARMONOGRAMIE, nie o tym, co z czym jest sparowane; panel zlicza
+        # je w kolumnie, werdykt bierze NAJGORSZY (zeby jeden spozniony szczebel nie
+        # znikl za trzema aktualnymi), a wolumen sumuje.
+        grouped, order = {}, []
+        for r in out:
+            key = (r["src"], r["dst"])
+            if key not in grouped:
+                grouped[key] = r
+                order.append(key)
+                continue
+            g = grouped[key]
+            g["tiers"] += 1
+            # NAJGORSZY liczony przez worst(), nie przez druga kolumne VERDICTS --
+            # ta jest numerem KOLORU (OK=2, CRITICAL=1), wiec porownanie jej dalo
+            # by "najgorszy = najjasniejszy". Zlapane przy czytaniu wlasnego diffu.
+            g["v"] = worst([g["v"], r["v"]])
+            g["vword"] = VERDICTS.get(g["v"], (g["v"], 0))[0]
+            if g.get("vol") is not None and r.get("vol") is not None:
+                g["vol"] = g["vol"] + r["vol"]
+                g["gb"] = hbytes_short(g["vol"])
+            if r["czas"] not in ("-", "?") and g["czas"] in ("-", "?"):
+                g["czas"] = r["czas"]
+        return [grouped[k] for k in order], "wg crona"
     if row.get("kind") != "relation":
         return out, ("blok nieczytelny" if row.get("kind") == "unreadable" else "wg crona")
     rel = row.get("rel") or {}
@@ -1544,7 +1581,12 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
             pcur_y = len(plines)
         for n_, l in enumerate(ls):
             if wide and n_ == len(ls) - 1:
-                tail = "%s %s %s" % (fit(pr["vword"], 13, ch), fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
+                # SZCZEBLE w kolumnie zamiast powtorzonego wiersza: "x4" mowi,
+                # ze ten dataset obsluguja cztery linie crona, i zajmuje trzy
+                # znaki zamiast szesciu linii ekranu.
+                _t = pr.get("tiers", 1)
+                tail = "%s %s %s %s" % (fit(pr["vword"], 13, ch), fit(("x%d" % _t) if _t > 1 else "", 4, ch),
+                                        fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
                 plines.append(fit(l, binner - len(tail) - 1, ch) + " " + tail)
             else:
                 plines.append(fit(l, binner, ch))
@@ -1558,9 +1600,18 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     plines = plines[:ph]
     while len(plines) < ph:
         plines.append("")
-    btitle = (u"Datasety relacji %s: %s, %s" % (r["name"], plural(len(pairs), "para", "pary", "par"), how)) if r is not None else "Datasety"
+    # TYTUL LICZY DWIE ROZNE RZECZY, bo to dwie rozne rzeczy: ile DATASETOW jest
+    # w relacji i ile LINII CRONA je obsluguje. Wczesniej mowil "4 pary" o jednym
+    # datasecie z czterema szczeblami (pve10, 2026-09-21).
+    _tiers = sum(p.get("tiers", 1) for p in pairs)
+    btitle = "Datasety"
+    if r is not None:
+        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "para", "pary", "par"))
+        if _tiers > len(pairs):
+            btitle += u" w %s crona" % plural(_tiers, "linii", "liniach", "liniach")
+        btitle += u", %s" % how
     if wide and pairs:
-        btitle += u"   [źródło %s cel | Kopie | Czas o/ś/m | GB]" % ch.right
+        btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
     bfoot = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa  Tab pary" if width >= 100
              else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else ""
     if focus == "pairs":
