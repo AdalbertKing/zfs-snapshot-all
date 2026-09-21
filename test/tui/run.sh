@@ -194,7 +194,7 @@ else
     bad "relacje: Tab" "$TP"
 fi
 TE="$(screen relacje down,tab,enter)"
-if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'wysyłka hourly'; then
+if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'pobranie hourly'; then
     ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
 else
     bad "relacje: Enter na parze" "$TE"
@@ -267,8 +267,8 @@ if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
 else
     bad "zadania: tytul" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
-    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
+if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
+    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
@@ -277,7 +277,7 @@ if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +[0-9]+/[0-9]+/[0-9]+s +- +a
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192.168.28.99 +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
     ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
 else
     bad "zadania: zdalne porzadki" "$Z"
@@ -314,7 +314,7 @@ else
 fi
 # bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
 ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania 2>&1)"
-if hasE "$ZS" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
+if hasE "$ZS" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
     ok "zadania: zepsute job-stats -> '?' w komorkach i zdanie w panelu, nigdy zero udajace pomiar"
 else
     bad "zadania: zepsute job-stats" "$ZS"
@@ -353,7 +353,7 @@ else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania 2>&1)"
-if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +wysyłka hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +wysyłka daily'; then
+if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +pobranie hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +kopia daily'; then
     ok "zadania: wysylka = 'hostA>pve9', pobranie = 'hostA<pve1', kopia na hoscie = 'local'; zadanie bez etykiety mowi '(bez rel.)'"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"

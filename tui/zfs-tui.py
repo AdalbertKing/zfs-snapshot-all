@@ -965,7 +965,14 @@ def build_jobs(data, now):
         if kind == "prune":
             task = u"porządki " + (ret if ret else fam)
         else:
-            task = u"wysyłka " + fam
+            # SLOWO ZGODNE Z KIERUNKIEM. Kazde zadanie transferu nazywalo sie
+            # "wysylka", takze w relacji, w ktorej ten host POBIERA -- a to
+            # wlasnie ta strona chodzi w labie i tak czyta ja operator
+            # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
+            # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
+            _d = j.get("direction", "")
+            _w = {"pull": u"pobranie ", "push": u"wysyłka ", "local": u"kopia "}.get(_d, u"transfer ")
+            task = _w + fam
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
         srow, vol = job_stats_for(data, j, clabel)
