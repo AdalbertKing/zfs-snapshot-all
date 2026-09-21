@@ -491,7 +491,21 @@ profile_render_templates() {   # <templates file> <profile> <outfile> [excluded 
                     local _k _kv
                     _k="$(printf '%s' "$raw" | sed -n -E 's/^[[:space:]]*keep[[:space:]]*=[[:space:]]*(.*)$/\1/p')"
                     if [ -n "$_k" ] && [ -n "$letters" ] && [ -n "$canon" ]; then
-                        _kv="$(profile_keep_to_retain "$canon" "${_k%%[[:space:]]*}" "$letters")" || return 1
+                        # THE ERROR TRAVELS ON STDERR, because this call is a
+                        # command substitution: `PROFILE_ERR=...` set inside
+                        # $( ) is set in a SUBSHELL and is gone by the time the
+                        # `||` runs here. The caller then died with an EMPTY
+                        # reason -- measured 2026-09-20 on a profile whose tier
+                        # name carried no cadence: `FATAL: profile '...':` and
+                        # nothing after the colon, for a refusal that has a
+                        # perfectly good sentence to offer.
+                        local _perr; _perr=$(mktemp) || { PROFILE_ERR="mktemp failed"; return 1; }
+                        if ! _kv="$(profile_keep_to_retain "$canon" "${_k%%[[:space:]]*}" "$letters" 2>"$_perr")"; then
+                            PROFILE_ERR="$file:$n: $(cat "$_perr")"
+                            rm -f "$_perr"
+                            return 1
+                        fi
+                        rm -f "$_perr"
                         printf '\tretain         = %s\n' "$_kv" >> "$out"
                     else
                         printf '%s\n' "$raw" >> "$out"
@@ -658,16 +672,23 @@ profile_split_one_file() {   # <profile.conf> <tpl out> <ds out> <prune out> <ex
 # naming the alternative. Guessing a letter would silently apply the wrong
 # counter to a retention ladder, which is the kind of mistake that is invisible
 # until a restore needs the snapshot that was never kept.
-profile_keep_to_retain() {   # <canonical template name> <keep value> <letters file> -> retain
+# EVERY REFUSAL HERE IS WRITTEN TWICE, and that is deliberate: PROFILE_ERR for a
+# caller that invokes this directly, and the same sentence on STDERR for the one
+# that cannot see the variable at all. The only caller runs it inside a command
+# substitution to capture the retain value, so its PROFILE_ERR assignment happens
+# in a subshell and dies with it -- which is how a refusal with a perfectly good
+# explanation reached the operator as `FATAL: profile '<file>':` and nothing more.
+profile_keep_to_retain() {   # <canonical template name> <keep value> <letters file> -> retain (stdout); reason on stderr
     PROFILE_ERR=""
     local name="$1" keep="$2" letters="$3" cadence letter
     case "$keep" in
-        ''|*[!0-9]*) PROFILE_ERR="keep='$keep' on '[template:$name]' is not a count"; return 1 ;;
+        ''|*[!0-9]*) PROFILE_ERR="keep='$keep' on '[template:$name]' is not a count"; printf '%s\n' "$PROFILE_ERR" >&2; return 1 ;;
     esac
     cadence="${name##*_}"
     letter="$(awk -v c="$cadence" '$1==c {print $2; exit}' "$letters")"
     if [ -z "$letter" ]; then
         PROFILE_ERR="'[template:$name]' uses 'keep = $keep', and the retention letter is derived from the tier cadence -- '$cadence' is not one gen-cron knows ($(awk '{printf "%s ", $1}' "$letters")). Name the tier for its cadence, or write 'retain = -<LETTER>$keep' explicitly"
+        printf '%s\n' "$PROFILE_ERR" >&2
         return 1
     fi
     printf -- '-%s%s' "$letter" "$keep"

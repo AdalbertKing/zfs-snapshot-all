@@ -539,6 +539,17 @@ Inspection / teardown:
                                     frees the name. Copies on disk are kept unless
                                     --destroy-copies. Plans without --yes. Del on the
                                     GUI's F3 asks these same questions in windows.
+  zfs-backup.sh remove-source NAME DATASET [--yes]
+                                    Take ONE dataset out of a relationship, on both
+                                    sides: the SOURCE's scope file loses it (so its
+                                    zfs grant is revoked and the freeze whitelist
+                                    narrows with it), then this host regenerates its
+                                    config and cron from the narrowed scope. Needed
+                                    because delete-relation skips the source side
+                                    entirely when the peer is SHARED with another live
+                                    relationship. Copies already received are KEPT --
+                                    this verb never destroys data. Plans without --yes,
+                                    and a failed step stops the next one.
   zfs-backup.sh new-relation
                                     The new-relationship wizard as a chain of whiptail
                                     windows: type, source host, what is on it, WHICH
@@ -9045,6 +9056,32 @@ cmd_set_endpoint() {
 #
 # REV-20260802-033 U9: extracted from cmd_verify_endpoint so it can be run
 # against ANY candidate host:port, not just the one already on record --
+# Does the SOURCE hold no snapshot at all of this dataset? (2026-09-20)
+#
+# The PLAN= verdict cannot answer it: "no common base because the source has
+# nothing to send" and "no common base because the copy here has drifted" print
+# the same line, and only the second is the full-transfer-forever this project
+# refuses to activate into. Containers (a recursive root holding only children)
+# and swap volumes are the ordinary first case, and before this existed they
+# made an otherwise perfect relationship unactivatable.
+#
+# FAIL-CLOSED, deliberately: anything other than a clean, empty answer -- ssh
+# refusing, the account not allowed to list, a timeout -- returns 1, which keeps
+# the old refusal. A question this cannot answer must never soften a guard.
+# Runs as the DELEGATED account over the pairing key, the same identity the
+# transfer uses, through load_ssh_opts rather than a second hand-built option
+# list (measured on pve9: the account may list snapshots; it needs no extra
+# permission for that).
+probe_source_has_no_snapshots() {   # <host> <port> <alias-known-hosts> <dataset>
+    local phost="$1" pport="$2" pkh="$3" pds="$4" out rc
+    case "$pds" in ''|*[$'\n\t ']*) return 1 ;; esac    # never interpolate a surprise
+    local -a opts; load_ssh_opts "${LOAD_KEYFILE:-}" "${LOAD_ALIAS:-}" "$pkh" "$pport"; opts=("${LOAD_SSH_OPTS[@]}")
+    out=$(ssh -n "${opts[@]}" "${LOAD_ACCOUNT}@${phost}" \
+              "zfs list -H -o name -t snapshot -d1 -- $(printf '%q' "$pds")" 2>/dev/null); rc=$?
+    [ "$rc" -eq 0 ] || return 1
+    [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]
+}
+
 # verify-endpoint below calls this once per candidate until one comes back
 # clean. Sets $PROBE_DETAIL to a human-readable report of whatever went
 # wrong (empty on success). Re-derives the alias known_hosts file itself
@@ -9054,6 +9091,8 @@ cmd_set_endpoint() {
 probe_snapget_endpoint() {   # <host> <port>
     local phost="$1" pport="$2"
     PROBE_DETAIL=""
+    # (probe_source_has_no_snapshots is defined above; see its header for why
+    #  this question has to be asked rather than read off the PLAN line.)
     local pkh; pkh=$(ensure_alias_known_hosts "$LOAD_LABEL" "${PEER_SAVED_LOCAL_USER:-}" "$pport" "$LOAD_ALIAS") || {
         PROBE_DETAIL="  no pinned host key for port $pport (never verified there before)"
         return 1
@@ -9080,33 +9119,66 @@ probe_snapget_endpoint() {   # <host> <port>
             fi
             continue
         fi
-        plan=$(printf '%s\n' "$out" | grep -m1 '^PLAN=' || true)
-        case "$plan" in
-            # base=null is NOT an incremental: it means "no common snapshot",
-            # i.e. a full transfer on every run, forever -- the exact shape the
-            # 2026-08-01 live defect wore, and LAB-E measured this verdict
-            # slipping through as "incremental-only confirmed" for an EXCLUDED
-            # child the probe should never have asked about. It now counts as
-            # needing a full, so activation stops and names the dataset.
-            "PLAN=INCREMENTAL base=null"*)
-                needs_full=$((needs_full + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  FULL-FOREVER (base=null): $ds"$'\n' ;;
-            PLAN=INCREMENTAL*) ;;
-            PLAN=FULL*)
-                needs_full=$((needs_full + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds would need a FULL transfer -- no common base"$'\n' ;;
-            *)
-                unknown=$((unknown + 1))
-                PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: ${plan:-<none>})"$'\n'
-                # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
-                # was captured but printed only on rc!=0, so this branch said
-                # '<none>' and nothing else -- LAB-E and the closing campaign
-                # both stalled here blind. The engine's own last lines ARE the
-                # reason; show them.
-                if [ -s "$errtmp" ]; then
-                    while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
-                fi ;;
-        esac
+        # EVERY PLAN LINE, NOT THE FIRST. With -R the engine expands a recursive
+        # root and prints one verdict per dataset in that expansion -- and the
+        # FIRST is the root itself. A root that is a CONTAINER (no snapshots of
+        # its own: `hdd/lab` holding ct-201, srv-a, vm-101 ...) therefore always
+        # answered base=null, so `grep -m1` read a verdict about a dataset with
+        # nothing to send and declared the whole endpoint unverifiable. Measured
+        # on pve10 <- pve9 2026-09-20: eleven children every one of them a clean
+        # incremental, and the relationship could not be activated because of
+        # the twelfth line, which was the container.
+        local plan_lines; plan_lines=$(printf '%s\n' "$out" | grep '^PLAN=' || true)
+        if [ -z "$plan_lines" ]; then
+            unknown=$((unknown + 1))
+            PROBE_DETAIL="${PROBE_DETAIL}  $ds: no PLAN= verdict (got: <none>)"$'\n'
+            # rc=0 with no verdict was UNDIAGNOSABLE: the engine's stderr
+            # was captured but printed only on rc!=0, so this branch said
+            # '<none>' and nothing else -- LAB-E and the closing campaign
+            # both stalled here blind. The engine's own last lines ARE the
+            # reason; show them.
+            if [ -s "$errtmp" ]; then
+                while IFS= read -r errline; do PROBE_DETAIL="${PROBE_DETAIL}    $errline"$'\n'; done < <(tail -n 4 "$errtmp")
+            fi
+            continue
+        fi
+        local pds
+        while IFS= read -r plan; do
+            [ -n "$plan" ] || continue
+            # The dataset this verdict is about -- the engine names it, so a
+            # per-line message can too instead of blaming the root it was asked
+            # about. `src=` is present on every PLAN line the engine emits.
+            pds=$(printf '%s' "$plan" | sed -n -E 's/.* src=([^ ]+).*/\1/p')
+            [ -n "$pds" ] || pds="$ds"
+            case "$plan" in
+                # base=null is NOT an incremental: it means "no common snapshot",
+                # i.e. a full transfer on every run, forever -- the exact shape the
+                # 2026-08-01 live defect wore, and LAB-E measured this verdict
+                # slipping through as "incremental-only confirmed" for an EXCLUDED
+                # child the probe should never have asked about. It now counts as
+                # needing a full, so activation stops and names the dataset.
+                #
+                # WITH ONE MEASURED EXCEPTION: a dataset the SOURCE has never
+                # snapshotted cannot cost a full transfer, because there is
+                # nothing to send at all -- a container root and a swap volume
+                # are the ordinary cases. That is not something the verdict line
+                # can say (it looks identical either way), so it is ASKED, once,
+                # over the same pairing key, and only for the datasets that came
+                # back null. An empty answer means "nothing to replicate yet";
+                # snapshots there mean the real full-forever this guard is for.
+                "PLAN=INCREMENTAL base=null"*|PLAN=FULL*)
+                    if probe_source_has_no_snapshots "$phost" "$pport" "$pkh" "$pds"; then
+                        PROBE_DETAIL="${PROBE_DETAIL}  nothing to replicate yet (the SOURCE has no snapshot of it): $pds"$'\n'
+                    else
+                        needs_full=$((needs_full + 1))
+                        PROBE_DETAIL="${PROBE_DETAIL}  FULL-FOREVER (no common base, and the source HAS snapshots): $pds"$'\n'
+                    fi ;;
+                PLAN=INCREMENTAL*) ;;
+                *)
+                    unknown=$((unknown + 1))
+                    PROBE_DETAIL="${PROBE_DETAIL}  $pds: unreadable PLAN= verdict (got: $plan)"$'\n' ;;
+            esac
+        done <<< "$plan_lines"
     done
     rm -f "$errtmp"
     [ "$failed" -eq 0 ] && [ "$unknown" -eq 0 ] && [ "$needs_full" -eq 0 ]
@@ -9174,7 +9246,22 @@ cmd_verify_endpoint() {
                 die "relationship '$name' is DISABLED at the peer, so its endpoints cannot be verified -- the peer answered, it refused. This is not an address problem.
 Enable it first: $0 enable-client $name   (then re-run verify-endpoint)" ;;
         esac
-        die "none of the known endpoints answered for '$name' (tried: ${candidates[*]}):
+        # SAY WHICH QUESTION FAILED. "None of the endpoints answered" is about
+        # reachability, and printing it over a report whose every line is
+        # "FULL-FOREVER" sent the operator hunting a network problem that does
+        # not exist -- measured on pve10 2026-09-20, where the link was perfect
+        # and the objection was about a snapshot base. The report below already
+        # distinguishes the two; the headline must not contradict it.
+        local _why="none of the known endpoints answered"
+        case "$tried_report" in
+            *"FULL-FOREVER"*|*"would need a FULL transfer"*)
+                case "$tried_report" in
+                    *"FAILED (rc="*|*"no pinned host key"*)
+                        _why="no endpoint passed BOTH checks (some did not answer, some answered but could not promise an incremental)" ;;
+                    *)  _why="the endpoint ANSWERED, but the next run would not be incremental -- this is not an address problem" ;;
+                esac ;;
+        esac
+        die "$_why for '$name' (tried: ${candidates[*]}):
 $tried_report
 If the peer has a genuinely new address, record it: $0 set-endpoint $name --host=NEW"
     fi
@@ -11414,6 +11501,175 @@ cmd_delete_relation() {
     [ "$rc" -eq 0 ] && log "delete-relation: '$name' is gone${others:+ (the pairing with $peer stays: $others)}." \
                     || log "delete-relation: '$name' removed WITH LEFTOVERS -- read the !!! lines above."
     return "$rc"
+}
+
+# remove-source NAME DATASET -- take ONE dataset out of a relationship (2026-09-20)
+#
+# THE GAP THIS CLOSES, measured rather than imagined. `delete-relation` removes a
+# whole relationship, and when its peer is SHARED with another live relationship
+# it deliberately skips the source side entirely -- so the `zfs allow` grants and
+# the source's scope entry for the datasets that went away STAYED. There was no
+# verb for "this one dataset is no longer part of the relationship", and the
+# operator was left editing the scope file by hand (which is what I did on pve9
+# on 2026-09-20 to get a relationship activatable).
+#
+# WHERE THE TRUTH LIVES decides the order. The scope file on the SOURCE is what
+# the source grants from and what the collector generates jobs from -- one file,
+# one representation of the choice (lib-scope.sh's header). So this verb does not
+# invent a second place to say it: it edits that file, re-runs --commit-scope
+# there (which revokes the ZFS grant and narrows the quiesce whitelist, both
+# fail-closed since REV-145), and only then re-activates here so the config and
+# the cron follow. Each step is checked and the next one does not start if the
+# previous failed -- E58/E59, the lesson of this same day, twice.
+#
+# WHAT IT NEVER DOES: destroy copies. The data already received stays exactly
+# where it is; a relationship shrinking is not a reason to delete a backup, and
+# the operator who wants it gone can say so with `zfs destroy` after reading what
+# this prints. That is the same rule --unpair follows for received data.
+cmd_remove_source() {
+    local name="" ds="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            -*)       die "remove-source: unknown option '$a' (only --yes)" ;;
+            *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "remove-source: takes exactly NAME and DATASET"; fi ;;
+        esac
+    done
+    [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh remove-source NAZWA DATASET [--yes]"
+    case "$ds" in
+        */*) : ;;
+        *)   die "remove-source: '$ds' does not look like a dataset (pool/path)" ;;
+    esac
+    case "$ds" in
+        *[!A-Za-z0-9_./:-]*) die "remove-source: '$ds' carries characters a dataset name cannot have -- refusing to send it anywhere" ;;
+    esac
+
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "remove-source: no relationship '$name' on this host"
+    record_load client "$cpath"
+    local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
+    local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
+    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+    [ -n "$peer" ] || die "remove-source: the record of '$name' names no peer host -- nothing to reach"
+    [ "$state" = removed ] && die "remove-source: '$name' is already removed -- there is no scope left to narrow"
+
+    local sfile="/etc/zfs-snapshot-all/peers/$label.scope"
+    echo "remove-source '$ds' from '$name' (peer $peer, port $port):"
+    echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
+    echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
+    echo "  3. collector : its [dataset:]/[prune:] sections are dropped from the config here (activation only ADDS, so a removal has to say so itself)"
+    echo "  4. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+
+    # The edit runs on the SOURCE, as an awk program over a file this side never
+    # parses: the scope file is untrusted structured data (lib-scope.sh), and the
+    # dataset name is validated above precisely so it can be passed as an awk
+    # VARIABLE (-v) rather than interpolated into the program text.
+    log "remove-source: 1/3 narrowing the scope on $peer"
+    local awk_prog
+    awk_prog='
+      BEGIN { done=0; inroot=0; already=0 }
+      /^\[dataset:/ {
+          # `already` is checked HERE too, not only at EOF: a re-run on a scope
+          # whose root already carries this exclusion used to append a second
+          # copy when another [dataset:] section followed it (caught by the
+          # idempotence assertion, which is why that assertion exists).
+          if (inroot && !done && !already) { print "exclude = " target; done=1 }
+          inroot=0
+          sec=$0; sub(/^\[dataset:/,"",sec); sub(/\]$/,"",sec)
+          if (sec == target) { skip=1; next }          # the dataset IS a scope root: drop its section
+          skip=0
+          if (index(target, sec "/") == 1) inroot=1     # the dataset lives under this root
+          print; next
+      }
+      skip == 1 { next }
+      { if (inroot && $0 ~ /^[[:space:]]*exclude[[:space:]]*=[[:space:]]*/) {
+            v=$0; sub(/^[[:space:]]*exclude[[:space:]]*=[[:space:]]*/,"",v)
+            if (v == target) { already=1 }
+        }
+        print }
+      END { if (inroot && !done && !already) print "exclude = " target
+            if (already) print "ALREADY-EXCLUDED" > "/dev/stderr" }
+    '
+    local out rc
+    out=$(rux_root_ssh "$peer" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $(printf '%q' "$sfile") > $(printf '%q' "$sfile").new 2>/tmp/rs-awk.err && grep -q ALREADY-EXCLUDED /tmp/rs-awk.err && echo ALREADY || mv $(printf '%q' "$sfile").new $(printf '%q' "$sfile")" 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "!!! remove-source: could not narrow the scope on $peer -- NOTHING was changed here either."
+        log "!!!     $out"
+        die "remove-source: stopped at 1/3. Fix what the source said and run this again."
+    fi
+    case "$out" in
+        *ALREADY*) log "remove-source: '$ds' was already out of scope on $peer -- nothing to narrow, going on to re-commit and re-activate so this side matches." ;;
+    esac
+
+    log "remove-source: 2/3 committing the narrowed scope on $peer"
+    if ! rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
+        log "!!! remove-source: the source did NOT commit the narrowed scope. Its scope FILE is already narrowed, so re-running this same command retries the commit."
+        log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
+        die "remove-source: stopped at 2/3 -- this host's config and cron were NOT touched, so the two sides can still be brought back together by one retry."
+    fi
+
+    # ACTIVATION IS ADDITIVE, so re-running it is NOT enough -- measured on pve10
+    # 2026-09-20 with the first version of this verb: the source grant was gone
+    # and the scope no longer named the dataset, yet `[dataset:hdd/lab/srv-b/www]`
+    # sat untouched in the collector's config and its cron line kept running
+    # against a dataset it was no longer allowed to read. Gate 2's "add B, do not
+    # mutate A" is right for CREATE and is exactly why a REMOVE has to say so
+    # itself. The section is therefore dropped explicitly, with the same
+    # marker-verified helper remove-client uses, before the regeneration.
+    log "remove-source: 3/3 dropping this dataset's sections from the config on this host"
+    local landing="" m
+    for m in ${MANAGED_DATASETS:-}; do
+        case "$m" in
+            "$ds"|*/"$ds") landing="$m"; break ;;
+        esac
+    done
+    [ -n "$landing" ] || landing="$ds"
+    local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
+    cron_context_resolve record "" "" "$recorded_cron_config" "$recorded_local_user"
+    CRON_CONFIG="$CRON_CTX_FILE"
+    if [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
+        assert_cron_config_matches_installed "$CRON_CONFIG"
+        assert_no_foreign_managed_block "$CRON_CONFIG"
+        local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") \
+            || die "remove-source: mktemp failed next to $CRON_CONFIG -- the source side is already narrowed; re-run this command"
+        workfile_track "$workfile"
+        cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "remove-source: could not copy $CRON_CONFIG"; }
+        chmod 0644 "$workfile" 2>/dev/null || :
+        remove_managed_sections "$workfile" "$name" "$landing"
+        # THROUGH THE WRAPPER, not `bash $GENCRON` -- the generated block bakes
+        # the running copy's paths into every line, so a relationship whose jobs
+        # run as a delegated account must be validated by THAT account's
+        # checkout. The contract assertion in test/localbackup exists to stop
+        # exactly this shortcut, and it caught this call on CI.
+        if ! gencron_as_target -c "$workfile" >/dev/null 2>&1; then
+            rm -f "$workfile"
+            die "remove-source: the config with '$landing' removed did not validate, so NOTHING here was replaced. The source side is already narrowed; fix the config and re-run this command."
+        fi
+        # ARGUMENT ORDER IS (LIVE FILE, CANDIDATE). The first version had it
+        # reversed and thereby handed the live config in as the candidate: the
+        # live run on pve10 ended with /etc/zfs-snapshot-all/jobs.pve10.conf
+        # GONE while the installed cron kept running from it. A stub could not
+        # have shown that; the host did, in one command.
+        atomic_replace_and_install "$CRON_CONFIG" "$workfile" \
+            || die "remove-source: could not install the config without '$landing' -- the source side is already narrowed; re-run this command."
+        log "remove-source: '$landing' is out of $CRON_CONFIG and out of the installed cron"
+    else
+        log "remove-source: no installed config for '$name' on this host -- nothing to drop here"
+    fi
+
+    # NO RE-ACTIVATION STEP, and that is measured rather than assumed: on an
+    # already-active relationship `activate` short-circuits with "already active
+    # -- nothing to do" (pve10, 2026-09-20), so a step advertised as "regenerate
+    # from the narrowed scope" would have regenerated nothing while saying it
+    # did. Step 3 IS the whole collector-side change: the sections leave the
+    # config and the installed cron together, through the same validated atomic
+    # install every other writer here uses.
+    log "remove-source: '$ds' is no longer part of '$name'. Copies already received are untouched."
 }
 
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
@@ -15544,6 +15800,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         prepare-source)   shift; cmd_prepare_source "$@" ;;
         new-relation)     shift; cmd_new_relation "$@" ;;
         delete-relation)  shift; cmd_delete_relation "$@" ;;
+        remove-source)    shift; cmd_remove_source "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

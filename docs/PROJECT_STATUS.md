@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2df92a9a8f939e10 -->
+<!-- status-covers-digest: ba65895e23cb8e49 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -54,6 +54,55 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **CZTERY OTWARTE WADY ZAMKNIĘTE (2026-09-21, polecenie właściciela „napraw te cztery rzeczy").**
+  1. **`verify-endpoint` czytał tylko PIERWSZĄ linię `PLAN=`.** Przy rekursyjnym
+     korzeniu silnik drukuje werdykt na KAŻDY dataset rozwinięcia, a pierwszy
+     dotyczy korzenia -- a korzeń-kontener (bez własnych migawek) zawsze daje
+     „brak wspólnej bazy". Jedenaścioro dzieci było czystymi przyrostami i
+     relacja i tak nie dawała się aktywować. Teraz czytane są wszystkie linie, a
+     dataset, którego ŹRÓDŁO nigdy nie migawkowało, to „nie ma czego kopiować",
+     nie „pełny transfer na zawsze". Rozróżnienia nie da się odczytać z werdyktu
+     (obie sytuacje wyglądają tak samo), więc jest ONO PYTANE -- raz, tym samym
+     kluczem parowania, tylko dla datasetów, które wyszły na null --
+     i **fail-closed**: cokolwiek innego niż czysta, pusta odpowiedź zostawia
+     starą odmowę. Komunikat nie mówi już „none of the known endpoints answered"
+     nad raportem o bazie migawek, tylko *„the endpoint ANSWERED, but the next
+     run would not be incremental"*.
+  2. **Odmowa, która nie umiała się wypowiedzieć.** `profile_keep_to_retain` jest
+     wołana w `$( )`, więc `PROFILE_ERR` ustawiał się w PODPOWŁOCE i ginął --
+     operator dostawał `FATAL: profile '<plik>':` i nic dalej. Powód idzie teraz
+     także przez stderr i dociera do wywołującego.
+  3. **`remove-source NAZWA DATASET`** -- czasownik, którego brakowało.
+     `delete-relation` przy WSPÓLNYM hoście pomija stronę źródła w całości, więc
+     nadania i wpis w zakresie zostawały. Nowy czasownik zabiera jeden dataset po
+     obu stronach: zakres na źródle, `--commit-scope` (cofa nadanie i zawęża
+     whitelistę zamrażania), a tu -- sekcje `[dataset:]`/`[prune:]` znikają
+     z configu i z zainstalowanego crona. Kopie ZOSTAJĄ. Nieudany krok zatrzymuje
+     następny.
+  4. **`--unpair` na brakującym manifeście** to stan docelowy, nie błąd. Po
+     incydencie 09-20 (parowanie skasowane, rekord żywy) droga „usuń i sparuj od
+     nowa" była zamknięta, bo teardown odmawiał, że nie ma czego usuwać. Teraz
+     kończy się sukcesem, **niczego nie kasuje** (klucze są kluczowane ADRESEM i
+     może ich używać żywa relacja-rodzeństwo -- E57) i nazywa to, co zostawił;
+     strażnik crona dalej odmawia, gdy zadania nadal chodzą.
+  - **Co znalazł LAB, czego atrapy znaleźć nie mogły.** Pierwsza wersja
+     `remove-source` (a) zostawiała sekcję w configu kolektora, bo **aktywacja
+     jest addytywna** -- usunięcie musi powiedzieć to samo; (b) wołała
+     `atomic_replace_and_install` z ODWRÓCONYMI argumentami, przez co **żywy plik
+     configu zniknął** (cron dalej chodził; odtworzone z kopii roboczej, blok
+     przeinstalowany z właściwego pliku); (c) miała krok „re-aktywacja", który na
+     aktywnej relacji jest no-opem -- obiecywałby regenerację, której nie ma.
+     Wszystkie trzy poprawione i przypięte asercjami.
+  - **Dowody na żywo (pve10 ↔ pve9).** Punkt 1: ten sam rekord, stary kod rc=1
+     („FULL-FOREVER: hdd/lab"), nowy rc=0 „verified" -- a po skasowaniu bazy
+     jednego dziecka nowy kod **dalej blokuje**, nazywając `hdd/lab/srv-a`
+     i odróżniając go od kontenera i od `swap`. Punkt 3: `remove-source` na żywej
+     relacji -- 0 wystąpień datasetu w configu i w cronie, 9 sekcji zamiast 10,
+     relacja `pve11` w tym samym pliku nietknięta, wszystkie trzy relacje `test`
+     rc=0, linie crona odpalone dosłownie rc=0, kopia danych na miejscu.
+     Suity: `profiles` 93/0, `draftscope` 52/0 (sześć nowych asercji `--unpair`),
+     `zfsbackup/delrel` 15/0 (siedem nowych `rmsrc`), `deadcode` 7/0.
+
 - **REV-145: nieudana aktualizacja whitelisty zamrażania raportowana jako sukces (2026-09-20, noc).**
   Recenzent, P2, na PR #403: nowa gałąź wołała `install_quiesce_grant` i NIE
   sprawdzała, co zwrócił. `deploy.sh` chodzi pod `set -uo pipefail`, nie `set -e`,

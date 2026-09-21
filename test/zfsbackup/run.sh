@@ -6346,11 +6346,18 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # property: the gap is READERS (list-replicas, run-replicas,
 # install-media-trigger) which resolve the same config an install would write,
 # so that what they show or run is what cron would.
+# 10/14 since 2026-09-21: remove-source. It is a WRITER -- it drops one dataset's
+# sections from the installed config -- and it is aimed the same way every other
+# writer is: cron_context_resolve record, then assert_cron_config_matches_installed,
+# then a validated candidate through atomic_replace_and_install. Bumping this line
+# is that acknowledgement. (Its first version got the install arguments backwards
+# and DELETED the live config on pve10; this contract is the other half of why
+# such a writer is pinned here at all.)
 # 13 since 2026-09-02: purge-replica-copy joined that reader set. It resolves
 # the config to learn WHERE the copy lives and never writes it back, which is
 # why the writer count is unchanged -- and it is the acknowledgement this
 # pinned number exists to force.
-if [ "$writers" -eq 9 ] && [ "$resolvers" -eq 13 ]; then
+if [ "$writers" -eq 10 ] && [ "$resolvers" -eq 14 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -12359,6 +12366,73 @@ if grep -q '\[ -n "\$LEGACY_LADDER_BODY" \] || profile_declares_ladder || contin
 else
     bad "delrel: the ladder guard in activation is gone"
 fi
+# remove-source: THE VERB THAT WAS MISSING (2026-09-20)
+#
+# delete-relation skips the source side entirely when the peer is SHARED, so the
+# zfs grants and the scope entry of a dataset that left the relationship STAYED.
+# There was no verb for "this one dataset is out"; on pve9 it was done by editing
+# the scope file by hand. The plan and the refusals are pinned here; the awk
+# program that does the edit is exercised below against real scope text, because
+# that is the part with the branches.
+RS="$WORK/rmsrc"; rm -rf "$RS"; mkdir -p "$RS/clients"
+printf 'CLIENT_NAME=r1\nSTATE=active\nPEER_HOST=10.0.0.5\nACTIVE_ENDPOINT=10.0.0.5:2222\n' > "$RS/clients/r1.conf"
+printf 'CLIENT_NAME=r2\nSTATE=removed\nPEER_HOST=10.0.0.6\n' > "$RS/clients/r2.conf"
+rs_run() { ( CLIENTS_DIR="$RS/clients" bash "$ZFSBACKUP" remove-source "$@" ) 2>"$RS/err"; }
+RSOUT=$(rs_run r1 pool/a/b); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$RSOUT" | grep -q "1\. source    : /etc/zfs-snapshot-all/peers/.*\.scope" \
+   && printf '%s' "$RSOUT" | grep -q '2\. source    : deploy.sh --commit-scope=' \
+   && printf '%s' "$RSOUT" | grep -q '3\. collector : its .dataset:./.prune:. sections are dropped'    && printf '%s' "$RSOUT" | grep -q '3\. collector : its' \
+   && printf '%s' "$RSOUT" | grep -q '4\. copies    : KEPT on this host' \
+   && printf '%s' "$RSOUT" | grep -q '^plan only\.'; then
+    ok "rmsrc: without --yes it is a PLAN naming all four steps in the order they run -- scope, commit, re-activate -- and saying copies are kept"
+else
+    bad "rmsrc: plan" "rc=$rc" "$RSOUT" "$(cat "$RS/err")"
+fi
+if ! rs_run r1 >/dev/null && grep -q 'uzycie: zfs-backup.sh remove-source' "$RS/err" \
+   && ! rs_run r1 notadataset >/dev/null && grep -q "does not look like a dataset" "$RS/err" \
+   && ! rs_run r1 'pool/a;rm -rf /' >/dev/null && grep -q "refusing to send it anywhere" "$RS/err" \
+   && ! rs_run zz pool/a >/dev/null && grep -q "no relationship 'zz'" "$RS/err" \
+   && ! rs_run r2 pool/a >/dev/null && grep -q "already removed" "$RS/err"; then
+    ok "rmsrc: refusals come first -- a missing dataset argument, something that is not a dataset, a name carrying shell metacharacters (never sent anywhere), an unknown relationship, and one that is already removed"
+else
+    bad "rmsrc: refusals" "$(cat "$RS/err")"
+fi
+# THE ARGUMENT ORDER OF THE INSTALL, pinned because getting it backwards DELETED
+# the live config on pve10 (the helper takes the live file first, the candidate
+# second; reversed, it treats the live config as the candidate).
+rs_call=$(sed -n "/remove-source: 3.3 dropping/,/is no longer part of/p" "$ZFSBACKUP" | grep -F 'atomic_replace_and_install')
+if printf '%s' "$rs_call" | grep -qF 'atomic_replace_and_install "$CRON_CONFIG" "$workfile"'; then
+    ok "rmsrc: the install is called (live file, candidate) -- reversed, it takes the live config for the candidate and the config VANISHES (measured on pve10)"
+else
+    bad "rmsrc: install argument order" "$rs_call"
+fi
+
+# The EDIT itself, against real scope text. Three branches, three shapes.
+SC="$RS/scope"
+printf '# comment\n[dataset:pool/one]\ninclude_parent = yes\ninclude_children = yes\n[dataset:pool/two]\ninclude_parent = yes\ninclude_children = yes\n' > "$SC"
+rs_awk=$(sed -n "/^      BEGIN {/,/^    '/p" "$ZFSBACKUP" | sed '$d')
+[ -n "$rs_awk" ] || bad "rmsrc: could not lift the awk program from zfs-backup.sh -- anchors changed"
+awk -v target=pool/two "$rs_awk" "$SC" > "$RS/o1" 2>/dev/null
+if ! grep -q 'pool/two' "$RS/o1" && grep -q '\[dataset:pool/one\]' "$RS/o1" && [ "$(grep -c include_parent "$RS/o1")" -eq 1 ]; then
+    ok "rmsrc/awk: a dataset that IS a scope root loses its whole section, and the OTHER root keeps every line of its own"
+else
+    bad "rmsrc/awk: dropping a root section" "$(cat "$RS/o1")"
+fi
+awk -v target=pool/one/child "$rs_awk" "$SC" > "$RS/o2" 2>/dev/null
+if grep -q '^exclude = pool/one/child$' "$RS/o2" \
+   && [ "$(sed -n '/\[dataset:pool\/one\]/,/\[dataset:pool\/two\]/p' "$RS/o2" | grep -c '^exclude = pool/one/child$')" -eq 1 ] \
+   && grep -q '\[dataset:pool/two\]' "$RS/o2"; then
+    ok "rmsrc/awk: a dataset UNDER a root is excluded inside that root's own section (not appended at the end, where it would belong to the wrong root)"
+else
+    bad "rmsrc/awk: excluding a child" "$(cat "$RS/o2")"
+fi
+awk -v target=pool/one/child "$rs_awk" "$RS/o2" > "$RS/o3" 2>"$RS/e3"
+if grep -q ALREADY-EXCLUDED "$RS/e3" && [ "$(grep -c '^exclude = pool/one/child$' "$RS/o3")" -eq 1 ]; then
+    ok "rmsrc/awk: running it again on an already-excluded dataset SAYS so and does not write the exclusion twice"
+else
+    bad "rmsrc/awk: idempotence" "$(cat "$RS/o3")" "$(cat "$RS/e3")"
+fi
+
 fi   # --- koniec sekcji delrel ---
 
 echo "--------------------------------------------"
