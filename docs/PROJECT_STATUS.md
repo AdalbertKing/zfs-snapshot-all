@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: befc08fe3429a3db -->
+<!-- status-covers-digest: 6fc0adf223142667 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -54,6 +54,36 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **EKRANY: PIERWSZA RUNDA DOPRACOWANIA (2026-09-21, polecenie „dokończyć GUI").**
+  Obejrzane na żywo na pve10 (render deterministyczny, nie zrzut z emulatora --
+  jedna „wada", którą zobaczyłem na pty, okazała się artefaktem mojego narzędzia
+  i NIE została naprawiana). Pięć rzeczy, każda zmierzona przed i po:
+  1. **F3 pokazywał `pve9-synchro` jako `backup`.** Typ relacji był ZGADYWANY
+     z kierunków linii crona, a relacja synchro ma je wszystkie w jedną stronę.
+     `status --json` podaje teraz pole `mode` (z rekordu `RUX_MODE`, a gdy rekord
+     milczy -- z pustego `CLIENT_TARGET`, który jest drugim świadkiem tego samego
+     faktu); ekran czyta zapisany tryb i zgaduje tylko dla zadań bez rekordu.
+  2. **Dolny panel F3 rysował ten sam dataset tyle razy, ile relacja ma
+     szczebli** -- osiem linii ekranu na jedną rzecz -- i nazywał to „4 pary".
+     Teraz: jeden wiersz na dataset, liczba szczebli jako `x4`, werdykt
+     NAJGORSZY z nich (przez `worst()`, nie przez numer koloru), wolumen
+     zsumowany; tytuł liczy osobno datasety i osobno linie crona.
+  3. **To samo ostrzeżenie powtarzało się raz na monitor** i wypychało z panelu
+     Stan, Typ i Kierunek. Jedno ostrzeżenie na FAKT.
+  4. **Każde zadanie transferu nazywało się „wysyłka"** -- także w relacji, w
+     której ten host POBIERA (czyli w całym labie). Słowo idzie teraz za
+     kierunkiem z linii crona: `pobranie` / `wysyłka` / `kopia`.
+  5. **Szerokość pogarszała widok.** Przy 100 kolumnach adres peera ucinało
+     o JEDEN znak; przy 120 -- gdzie panel staje z boku, a tabela ma tyle
+     miejsca co przy 80 -- tabela dostawała jeszcze kolumnę Harmonogram
+     i nagłówki wychodziły jako „Czas..." i „Kopie …". Decyzja o kolumnie
+     patrzy teraz na szerokość TABELI, nie terminala; wąska kolumna pożycza
+     znak od czasów, ale żadna nie schodzi poniżej własnego nagłówka.
+  - **Suita `tui` 148/0** (było 141): nowe asercje pilnują pojedynczego wiersza
+    na dataset, niepowtarzania ostrzeżeń i tego, że **żaden nagłówek nie jest
+    ucięty przy 80/100/120/140/200** -- czyli że poszerzenie terminala nigdy
+    znowu nie pogorszy ekranu.
+
 - **PARYTET PUSH↔PULL (P-0) PRZESUNIĘTY NA 2026-10-19 -- z nowym faktem (2026-09-21).**
   Budzik `port-by:2026-09-21` w `test/twins/twins.sha256` zadzwonił zgodnie
   z projektem: `process_dataset` nadal różni się między silnikami, a decyzji
