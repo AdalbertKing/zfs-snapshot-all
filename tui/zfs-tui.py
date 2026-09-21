@@ -1032,6 +1032,17 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         if dw > dmax:
             tw = min(tw + (dw - dmax), 24)
             dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
+        # JEDEN ZNAK POTRAFI UCIAC ADRES. Przy 100 kolumnach -- szerokosci, ktorej
+        # uzywa wlasciciel -- Kierunkowi brakowalo dokladnie jednego znaku i
+        # `pve10<192.168.28.96` wychodzilo jako `pve10<192.168.28.…` (zmierzone
+        # 2026-09-21: przy 101 miesci sie w calosci). Kolumna czasow ma zapas,
+        # bo `3/3/4s` to szesc znakow z jedenastu -- oddaje tyle, ile ma ponad
+        # swoja najdluzsza wartosc, i ani znaku wiecej.
+        if dw < dmax:
+            cmax = max([len(r.get("czas") or "-") for r in rows] + [6])
+            give = min(dmax - dw, max(0, cw - cmax))
+            cw -= give
+            dw += give
         dw = max(8, dw)
         cols = [fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw)]
         if show_sched:
