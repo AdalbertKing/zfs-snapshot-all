@@ -2020,8 +2020,18 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(20, max([len(m.get("label") or "(bez rel.)") for m in mons] + [8])))
+        # RODZINA NIE UCINA SIE O JEDEN ZNAK. Kolumna miala na sztywno 16, a
+        # `automated_monthly` ma 17 -- ekran pokazywal `automated_month…` przy
+        # kazdej szerokosci (zmierzone na pve10, 2026-09-21). Bierze tyle, ile
+        # potrzebuje najdluzsza rodzina, ale nie wiecej niz 20 i nigdy kosztem
+        # Datasetu ponizej 20 znakow: sciezka i tak jest dluzsza niz kolumna,
+        # wiec jeden znak mniej jest tam niewidoczny, a tu usuwa falszywe uciecie.
         fw, pw, vw = 16, 12, 14
+        fw = max(fw, min(20, max([len(m.get("pattern") or "") for m in mons] + [fw])))
         dw = inner - (nw + fw + pw + vw + 4)
+        while dw < 20 and fw > 16:
+            fw -= 1
+            dw = inner - (nw + fw + pw + vw + 4)
         hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Dataset", dw), fit("Rodzina", fw), fit("Progi", pw), fit("Kopie", vw))
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
