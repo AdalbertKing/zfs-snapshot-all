@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1768,3 +1768,35 @@ without `set -e`, every call that can fail is an `if`, a `||` or a checked `rc=$
 -- there is no fourth form, and "it is a helper we wrote" is not an exemption.
 The check belongs in the same commit as the call, because a fix that only works
 when nothing goes wrong is not a fix.
+
+### E60 — I ran a verb from a throwaway clone, and the clone's path went into the live crontab (2026-09-20/21, R2)
+
+**Genesis.** `remove-source` had to be proven on a real host, and the branch was
+not merged, so I ran it from `/root/wt/fix4` -- a shallow clone of the branch on
+pve10. It worked: the dataset left the scope, the grant was revoked, the section
+left the config. Then I deleted the clone and reported the proof. What I did not
+do was look at what the install had written. `gen-cron` derives REPO_DIR from
+WHERE IT RUNS, so every regenerated line named `/root/wt/fix4/zfs-job.sh`. With
+the clone gone, all 35 managed lines were `rc=127` for about twenty hours: the
+`pve11` backup did not run at all in that window, and the monitors failed every
+fifteen minutes (400 `check-snap-age.sh: not found` lines in cron.log). No data
+was lost -- pve11 caught up in one run, and the sync relationship's source had
+itself stopped producing snapshots the day before -- but that is luck, not
+design.
+
+**Cause.** R2, in the form this project has already written down for me: project
+memory carries "main-vs-branch on a host: gen-cron pastes the TREE PATH;
+normalise and report the line count". I knew the rule, I was inside exactly the
+situation it describes, and I still treated "the verb did the right thing" as
+the whole result. A clone is a different SIDE of a boundary from the deployed
+checkout, and what the run wrote there was never measured -- I measured the
+scope file, the grant, the config section, and not the thing that actually runs
+every hour.
+
+**Rule.** R2, and one concrete reflex to go with it: **a verb run from a clone
+is not finished until you count the installed lines that point outside the
+deployed checkout** -- `crontab -l | grep -c '/root/wt/'` must be 0 before the
+clone is deleted, and if it is not, regenerate the managed block from the
+deployed checkout (`gen-cron.sh -c <config> --install`) and re-run one line
+literally. The cheaper alternative, when the change is already merged, is simply
+not to run verbs from clones: pull the deployment and run it there.

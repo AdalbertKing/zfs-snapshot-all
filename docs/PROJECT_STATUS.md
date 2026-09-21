@@ -54,6 +54,20 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **INCYDENT LABOWY: ścieżka KLONU w żywym crontabie (2026-09-20/21).**
+  Dowodząc `remove-source` na żywo uruchamiałem czasownik z klonu gałęzi
+  (`/root/wt/fix4` na pve10). `gen-cron` bierze `REPO_DIR` z miejsca, w którym
+  DZIAŁA, więc instalacja przepisała cały zarządzany blok na ścieżki klonu --
+  a klon potem skasowałem. Przez ~20 godzin wszystkie 35 linii kończyło się
+  `rc=127`: `pve11` nie zrobił ani jednej kopii, monitory padały co 15 minut
+  (400 wpisów `check-snap-age.sh: not found`). **Bez utraty danych:** pve11
+  dogonił jednym biegiem (źródło i cel na `2026-09-21_18-20-42`), a źródło
+  relacji synchro samo przestało produkować migawki dzień wcześniej.
+  **Naprawa:** `gen-cron.sh -c <config> --install` z WDROŻONEGO checkoutu;
+  0 linii poza `/root/scripts`, obie relacje odpalone dosłownie rc=0.
+  Wpis **E60** w dzienniku błędów: czasownik uruchomiony z klonu nie jest
+  skończony, dopóki nie policzysz linii wskazujących poza wdrożony checkout.
+
 - **CZTERY OTWARTE WADY ZAMKNIĘTE (2026-09-21, polecenie właściciela „napraw te cztery rzeczy").**
   1. **`verify-endpoint` czytał tylko PIERWSZĄ linię `PLAN=`.** Przy rekursyjnym
      korzeniu silnik drukuje werdykt na KAŻDY dataset rozwinięcia, a pierwszy
