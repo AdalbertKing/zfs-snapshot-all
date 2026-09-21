@@ -1191,7 +1191,11 @@ def source_error_body(ch, key, data, verb):
     """Zepsute zrodlo to komunikat, nie pusta tabela (kontrola ujemna etapu B)."""
     return [u"błąd źródła: %s --json nie odpowiedział poprawnym JSON-em." % verb,
             "", fit(u"  %s" % data.errors[key], 200),
-            "", u"Ten ekran nie ma z czego rysować. Uruchom czasownik ręcznie, żeby zobaczyć pełny błąd."]
+            "", u"Ten ekran nie ma z czego rysować. Zobacz pełny błąd komendą:",
+            # NAZWIJ KOMENDE, nie kategorie. "Uruchom czasownik recznie" kazalo
+            # operatorowi zgadnac, ktory to czasownik i z jaka flaga -- a ekran
+            # zna jedno i drugie. Ten sam idiom, co w odmowach CLI w tym projekcie.
+            u"    zfs-backup.sh %s --json" % verb]
 
 
 def detail_kv(ch, pairs, width):
@@ -1250,7 +1254,14 @@ def rel_detail_pairs(row, data, now, ch):
                   ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
                   ("rodzina", family_of(j) or "?"),
                   ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
-                  ("kierunek", "%s   %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"))),
+                  # JEDEN KIERUNEK, NIE DWA ZAPISY TEGO SAMEGO. Linia brzmiala
+                  # `pve10<192.168.28.96   ← 192.168.28.96` -- druga polowa
+                  # powtarzala pierwsza innym alfabetem. Zostaje zapis z kolumny
+                  # F2 (ten host ZAWSZE po lewej) plus SLOWO, ktore mowi, co to
+                  # znaczy -- bo to slowo jest tym, czego szuka czytajacy.
+                  ("kierunek", "%s   %s" % (row.get("dir", "?"),
+                      {"pull": u"ten host pobiera", "push": u"ten host wysyła",
+                       "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))),
                   ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
         return pairs
     srcs = rel.get("sources", [])

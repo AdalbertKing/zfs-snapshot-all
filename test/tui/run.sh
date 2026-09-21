@@ -143,6 +143,17 @@ if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel 
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# ZEPSUTE ZRODLO MA NAZWAC KOMENDE. Ekran mowil "uruchom czasownik recznie",
+# czyli kazal zgadnac, ktory to czasownik i z jaka flaga -- a zna jedno i drugie.
+BAD="$(mktemp -d)/bad.json"; printf '{ZEPSUTY
+' > "$BAD"
+EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen monitor --keys "" --monitors "$BAD" --width 100 2>&1)"
+if has "$EB" 'zfs-backup.sh monitor --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
+    ok "zepsute zrodlo: ekran nazywa DOKLADNA komende do wpisania, zamiast odsylac do 'czasownika'"
+else
+    bad "zepsute zrodlo: brak komendy" "$EB"
+fi
+
 # POMOC MA OPISYWAC TO, CO JEST. Po usunieciu kreatora curses (2026-09-21)
 # ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
 # tekst pomocy to tez ekran, i tez sie dezaktualizuje.
