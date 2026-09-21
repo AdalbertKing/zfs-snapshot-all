@@ -1045,7 +1045,11 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         # bo `3/3/4s` to szesc znakow z jedenastu -- oddaje tyle, ile ma ponad
         # swoja najdluzsza wartosc, i ani znaku wiecej.
         if dw < dmax:
-            cmax = max([len(r.get("czas") or "-") for r in rows] + [6])
+            # ...ale nie ponizej WLASNEGO NAGLOWKA: pierwsza wersja pozyczala
+            # tyle, ile wynosila najdluzsza WARTOSC, i przy 120 kolumnach naglowek
+            # wychodzil jako "Czas..." -- kolumna, ktora miesci dane, a nie miesci
+            # swojej nazwy, nie jest czytelniejsza od uciecia obok.
+            cmax = max([len(r.get("czas") or "-") for r in rows] + [6, len(u"Czas o/ś/m")])
             give = min(dmax - dw, max(0, cw - cmax))
             cw -= give
             dw += give

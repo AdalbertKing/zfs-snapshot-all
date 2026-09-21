@@ -143,6 +143,30 @@ if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel 
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# SZEROKOSC NIE MOZE POGARSZAC WIDOKU, a naglowek kolumny musi sie miescic.
+# Zmierzone na pve10 2026-09-21: przy 100 kolumnach adres peera ucinalo o JEDEN
+# znak, a przy 120 -- gdzie panel staje z boku i tabela ma tyle co przy 80 --
+# tabela dostawala jeszcze kolumne Harmonogram i naglowki wychodzily jako
+# "Czas..." i "Kopie …". Poszerzenie terminala psulo ekran.
+Z100="$(screen zadania "" --width 100)"; Z120="$(screen zadania "" --width 120)"; Z140="$(screen zadania "" --width 140)"
+if has "$Z100" 'pve10<192.168.28.99' && ! has "$Z100" 'pve10<192.168.28.…'; then
+    ok "zadania: przy 100 kolumnach adres peera miesci sie w CALOSCI (brakowalo jednego znaku)"
+else
+    bad "zadania: uciety adres przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
+fi
+if ! has "$Z120" 'Harmonogram' && has "$Z140" 'pve10<192.168.28.99'; then
+    ok "zadania: przy 120 (panel z boku, tabela jak przy 80) kolumna Harmonogram NIE wchodzi na sile, a przy 140 adres jest caly"
+else
+    bad "zadania: kolumny przy panelu z boku" "$(printf '%s' "$Z120" | sed -n '3,4p')"
+fi
+for _w in 80 100 120 140 200; do
+    _h="$(screen zadania "" --width $_w | sed -n '3p')"
+    case "$_h" in
+        *"Czas..."*|*"Kopie …"*|*"Kopie..."*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
+        *) ok "zadania: przy $_w kolumnach zaden naglowek kolumny nie jest uciety" ;;
+    esac
+done
+
 # JEDNO OSTRZEZENIE NA FAKT. Relacja ma monitor na kazdy szczebel, wiec uwaga
 # "cron wola inny plik silnika" wchodzila do panelu tyle razy, ile szczebli, i
 # wypychala z niego Stan/Typ/Kierunek (zmierzone na pve10, 2026-09-21).
