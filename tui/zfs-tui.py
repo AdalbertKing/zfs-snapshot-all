@@ -1024,7 +1024,13 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
         tw = max(12, min(20, max([len(r["task"]) for r in rows] + [12])))
         cw, gw, vw = 11, 5, 13
-        show_sched = width >= 100
+        # O KOLUMNIE DECYDUJE SZEROKOSC TABELI, NIE TERMINALA. Od 120 kolumn panel
+        # staje z BOKU i lista ma tyle miejsca, co przy 80 -- a mimo to dostawala
+        # kolumne Harmonogram, ktora przy 80 jest swiadomie chowana. Efekt byl taki,
+        # ze poszerzenie terminala ze 100 do 120 psulo tabele: Kierunek spadal do
+        # osmiu znakow, a naglowki wychodzily jako "Czas..." i "Kopie …"
+        # (zmierzone na pve10, 2026-09-21).
+        show_sched = inner >= 96
         hw = 13 if show_sched else 0
         ncol = 7 if show_sched else 6
         dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
