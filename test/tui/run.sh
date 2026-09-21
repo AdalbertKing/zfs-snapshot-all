@@ -143,6 +143,16 @@ if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel 
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# POMOC MA OPISYWAC TO, CO JEST. Po usunieciu kreatora curses (2026-09-21)
+# ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
+# tekst pomocy to tez ekran, i tez sie dezaktualizuje.
+H1="$(screen zadania F1 --width 100)"
+if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && has "$H1" 'kreator w 10 krokach' && has "$H1" 'whiptail'; then
+    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (10 okien whiptaila), a nie usunietego poprzednika"
+else
+    bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
+fi
+
 # SZEROKOSC NIE MOZE POGARSZAC WIDOKU, a naglowek kolumny musi sie miescic.
 # Zmierzone na pve10 2026-09-21: przy 100 kolumnach adres peera ucinalo o JEDEN
 # znak, a przy 120 -- gdzie panel staje z boku i tabela ma tyle co przy 80 --
