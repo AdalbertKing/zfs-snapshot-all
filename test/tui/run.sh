@@ -143,6 +143,17 @@ if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel 
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# JEDNO OSTRZEZENIE NA FAKT. Relacja ma monitor na kazdy szczebel, wiec uwaga
+# "cron wola inny plik silnika" wchodzila do panelu tyle razy, ile szczebli, i
+# wypychala z niego Stan/Typ/Kierunek (zmierzone na pve10, 2026-09-21).
+S4W="$(screen relacje down --width 200)"
+_w=$(printf '%s' "$S4W" | grep -c 'cron woła inny plik silnika' || true)
+if [ "$_w" -le 1 ]; then
+    ok "relacje: to samo ostrzezenie nie powtarza sie raz na monitor -- panel zostaje czytelny"
+else
+    bad "relacje: powtorzone ostrzezenie w panelu" "wystapien: $_w"
+fi
+
 # JEDEN DATASET = JEDEN WIERSZ, cztery szczeble = "x4" w kolumnie. Relacja
 # lab-ct201 ma w atrapie cztery linie crona nad jednym datasetem; przed
 # 2026-09-21 panel rysowal ja CZTERY RAZY i nazywal "4 pary" (zmierzone na

@@ -1276,9 +1276,16 @@ def rel_detail_pairs(row, data, now, ch):
         warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
         warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+    # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
+    # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
+    # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
+    _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
+            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            if w not in _seen:
+                _seen.add(w)
+                warns.append(w)
     if warns:
         pairs.append(("Uwaga", "  |  ".join(warns)))
     pairs.append(("Kopie", mon))
@@ -1369,9 +1376,16 @@ def rel_panel_pairs(row, data, now, ch):
         warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
         warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+    # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
+    # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
+    # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
+    _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
+            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            if w not in _seen:
+                _seen.add(w)
+                warns.append(w)
     for w_ in warns:
         # OSTRZEZENIE TUZ POD STANEM: panel bywa niski i ucina koniec.
         pairs.append(("Uwaga", w_))
