@@ -1732,7 +1732,15 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
             if s.get("kind") == "dataset":
                 sched = f.get("send_schedule") or (tmpl.get(used[0], {}).get("send_schedule") if used else "") or "?"
                 pref = f.get("prefix") or (tmpl.get(used[0], {}).get("prefix") if used else "") or "?"
-                out.extend(detail_kv(ch, [(u"wysyłka", u"%s   co: %s   stempel %s" % (s.get("name"), sched, pref))], w))
+                # TO SAMO SLOWO CO NA F2, ta sama zasada: nazwa idzie za
+                # kierunkiem. Kierunek niesie pole `src`, NIE nazwa sekcji --
+                # nazwa to LADOWISKO (sciezka u siebie), wiec pierwsza wersja
+                # tej poprawki nazywala pobranie "kopia". Zdalne `konto@host:ds`
+                # w `src` = ten host pobiera; zdalna NAZWA = wysyla; obie
+                # lokalne = kopia u siebie.
+                _src, _dst = f.get("src") or "", s.get("name") or ""
+                _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
+                out.extend(detail_kv(ch, [(_w, u"%s   co: %s   stempel %s" % (s.get("name"), sched, pref))], w))
             else:
                 ret = []
                 for u in used:

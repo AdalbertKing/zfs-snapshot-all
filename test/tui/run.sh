@@ -555,8 +555,8 @@ else
     bad "okno: sekcje configu w oknie" "$WC"
 fi
 WP="$(screen relacje down,down,down,down,enter --height 60)"
-if has "$WP" 'wysyłka  hdd/backups/192.168.28.99/hdd/lab/vm-101   co: 24 * * * *' && has "$WP" 'stempel automated_hourly_' && has "$WP" 'trzyma -H24 -D7 -W4' && has "$WP" '-M12   co: 44 * * * *   drabina GFS' && has "$WP" 'porządki zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101'; then
-    ok "okno: POLITYKA z show-config -- wysylka i porzadki z retencja zlozona z szablonow"
+if has "$WP" 'pobranie hdd/backups/192.168.28.99/hdd/lab/vm-101   co: 24 * * * *' && has "$WP" 'stempel automated_hourly_' && has "$WP" 'trzyma -H24 -D7 -W4' && has "$WP" '-M12   co: 44 * * * *   drabina GFS' && has "$WP" 'porządki zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101'; then
+    ok "okno: POLITYKA z show-config -- transfer nazwany ZGODNIE Z KIERUNKIEM (pobranie, bo src jest zdalny) i porzadki z retencja zlozona z szablonow"
 else
     bad "okno: polityka z show-config" "$WP"
 fi
