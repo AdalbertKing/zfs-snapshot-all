@@ -780,8 +780,18 @@ def ch_arrow(job):
     return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
 
 
-def rel_type(peer, dirs):
-    """backup (jedna strona), synchro (obie), lokalna, other -- z linii crona."""
+def rel_type(peer, dirs, mode=None):
+    """backup (jedna strona), synchro (obie), lokalna, other.
+
+    ZAPISANY TRYB WYGRYWA z odczytem linii crona. Relacja synchro ma wszystkie
+    swoje linie w jedna strone (kolektor ciagnie do siebie, pod TA SAMA sciezke),
+    wiec heurystyka "pull i push = synchro" nazywala ja backupem -- ekran F3
+    pokazywal `pve9-synchro | backup`, czyli nieprawde o tym, co ta relacja robi
+    (zmierzone na pve10, 2026-09-21). Rekord zna odpowiedz i `status --json` ja
+    teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
+    """
+    if mode:
+        return "synchro" if mode == "sync" else mode
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "synchro"
@@ -872,7 +882,7 @@ def build_relations(data, now):
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel.get("peer_host") or "", dirs),
-            "typ": rel_type(rel.get("peer_host"), dirs), "stats": st,
+            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
             "last": last, "last_txt": last_txt.strip(), "transfers": trs,
@@ -955,7 +965,14 @@ def build_jobs(data, now):
         if kind == "prune":
             task = u"porządki " + (ret if ret else fam)
         else:
-            task = u"wysyłka " + fam
+            # SLOWO ZGODNE Z KIERUNKIEM. Kazde zadanie transferu nazywalo sie
+            # "wysylka", takze w relacji, w ktorej ten host POBIERA -- a to
+            # wlasnie ta strona chodzi w labie i tak czyta ja operator
+            # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
+            # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
+            _d = j.get("direction", "")
+            _w = {"pull": u"pobranie ", "push": u"wysyłka ", "local": u"kopia "}.get(_d, u"transfer ")
+            task = _w + fam
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
         srow, vol = job_stats_for(data, j, clabel)
@@ -1007,7 +1024,13 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
         tw = max(12, min(20, max([len(r["task"]) for r in rows] + [12])))
         cw, gw, vw = 11, 5, 13
-        show_sched = width >= 100
+        # O KOLUMNIE DECYDUJE SZEROKOSC TABELI, NIE TERMINALA. Od 120 kolumn panel
+        # staje z BOKU i lista ma tyle miejsca, co przy 80 -- a mimo to dostawala
+        # kolumne Harmonogram, ktora przy 80 jest swiadomie chowana. Efekt byl taki,
+        # ze poszerzenie terminala ze 100 do 120 psulo tabele: Kierunek spadal do
+        # osmiu znakow, a naglowki wychodzily jako "Czas..." i "Kopie …"
+        # (zmierzone na pve10, 2026-09-21).
+        show_sched = inner >= 96
         hw = 13 if show_sched else 0
         ncol = 7 if show_sched else 6
         dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
@@ -1015,6 +1038,21 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         if dw > dmax:
             tw = min(tw + (dw - dmax), 24)
             dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
+        # JEDEN ZNAK POTRAFI UCIAC ADRES. Przy 100 kolumnach -- szerokosci, ktorej
+        # uzywa wlasciciel -- Kierunkowi brakowalo dokladnie jednego znaku i
+        # `pve10<192.168.28.96` wychodzilo jako `pve10<192.168.28.…` (zmierzone
+        # 2026-09-21: przy 101 miesci sie w calosci). Kolumna czasow ma zapas,
+        # bo `3/3/4s` to szesc znakow z jedenastu -- oddaje tyle, ile ma ponad
+        # swoja najdluzsza wartosc, i ani znaku wiecej.
+        if dw < dmax:
+            # ...ale nie ponizej WLASNEGO NAGLOWKA: pierwsza wersja pozyczala
+            # tyle, ile wynosila najdluzsza WARTOSC, i przy 120 kolumnach naglowek
+            # wychodzil jako "Czas..." -- kolumna, ktora miesci dane, a nie miesci
+            # swojej nazwy, nie jest czytelniejsza od uciecia obok.
+            cmax = max([len(r.get("czas") or "-") for r in rows] + [6, len(u"Czas o/ś/m")])
+            give = min(dmax - dw, max(0, cw - cmax))
+            cw -= give
+            dw += give
         dw = max(8, dw)
         cols = [fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw)]
         if show_sched:
@@ -1153,7 +1191,11 @@ def source_error_body(ch, key, data, verb):
     """Zepsute zrodlo to komunikat, nie pusta tabela (kontrola ujemna etapu B)."""
     return [u"błąd źródła: %s --json nie odpowiedział poprawnym JSON-em." % verb,
             "", fit(u"  %s" % data.errors[key], 200),
-            "", u"Ten ekran nie ma z czego rysować. Uruchom czasownik ręcznie, żeby zobaczyć pełny błąd."]
+            "", u"Ten ekran nie ma z czego rysować. Zobacz pełny błąd komendą:",
+            # NAZWIJ KOMENDE, nie kategorie. "Uruchom czasownik recznie" kazalo
+            # operatorowi zgadnac, ktory to czasownik i z jaka flaga -- a ekran
+            # zna jedno i drugie. Ten sam idiom, co w odmowach CLI w tym projekcie.
+            u"    zfs-backup.sh %s --json" % verb]
 
 
 def detail_kv(ch, pairs, width):
@@ -1212,7 +1254,14 @@ def rel_detail_pairs(row, data, now, ch):
                   ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
                   ("rodzina", family_of(j) or "?"),
                   ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
-                  ("kierunek", "%s   %s" % (row.get("dir", "?"), ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?"))),
+                  # JEDEN KIERUNEK, NIE DWA ZAPISY TEGO SAMEGO. Linia brzmiala
+                  # `pve10<192.168.28.96   ← 192.168.28.96` -- druga polowa
+                  # powtarzala pierwsza innym alfabetem. Zostaje zapis z kolumny
+                  # F2 (ten host ZAWSZE po lewej) plus SLOWO, ktore mowi, co to
+                  # znaczy -- bo to slowo jest tym, czego szuka czytajacy.
+                  ("kierunek", "%s   %s" % (row.get("dir", "?"),
+                      {"pull": u"ten host pobiera", "push": u"ten host wysyła",
+                       "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))),
                   ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
         return pairs
     srcs = rel.get("sources", [])
@@ -1266,9 +1315,16 @@ def rel_detail_pairs(row, data, now, ch):
         warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
         warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+    # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
+    # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
+    # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
+    _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
+            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            if w not in _seen:
+                _seen.add(w)
+                warns.append(w)
     if warns:
         pairs.append(("Uwaga", "  |  ".join(warns)))
     pairs.append(("Kopie", mon))
@@ -1295,8 +1351,35 @@ def rel_pairs(row, data, now, ch):
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
                 gb = hbytes_short(vol) if vol is not None else "-"
-            out.append({"src": src, "dst": dst, "job": j, "vword": VERDICTS.get(v, (v, 0))[0], "czas": czas, "gb": gb})
-        return out, "wg crona"
+            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": VERDICTS.get(v, (v, 0))[0],
+                         "czas": czas, "gb": gb, "vol": vol, "tiers": 1})
+        # JEDEN WIERSZ = JEDEN DATASET, nie jedna linia crona (2026-09-21).
+        # Relacja z czterema szczeblami nad jednym datasetem rysowala ten sam
+        # `zrodlo -> cel` CZTERY RAZY i nazywala to "4 pary" -- osiem linii ekranu
+        # na powiedzenie jednej rzeczy, i do tego nieprawdziwa liczba. Szczeble sa
+        # faktem o HARMONOGRAMIE, nie o tym, co z czym jest sparowane; panel zlicza
+        # je w kolumnie, werdykt bierze NAJGORSZY (zeby jeden spozniony szczebel nie
+        # znikl za trzema aktualnymi), a wolumen sumuje.
+        grouped, order = {}, []
+        for r in out:
+            key = (r["src"], r["dst"])
+            if key not in grouped:
+                grouped[key] = r
+                order.append(key)
+                continue
+            g = grouped[key]
+            g["tiers"] += 1
+            # NAJGORSZY liczony przez worst(), nie przez druga kolumne VERDICTS --
+            # ta jest numerem KOLORU (OK=2, CRITICAL=1), wiec porownanie jej dalo
+            # by "najgorszy = najjasniejszy". Zlapane przy czytaniu wlasnego diffu.
+            g["v"] = worst([g["v"], r["v"]])
+            g["vword"] = VERDICTS.get(g["v"], (g["v"], 0))[0]
+            if g.get("vol") is not None and r.get("vol") is not None:
+                g["vol"] = g["vol"] + r["vol"]
+                g["gb"] = hbytes_short(g["vol"])
+            if r["czas"] not in ("-", "?") and g["czas"] in ("-", "?"):
+                g["czas"] = r["czas"]
+        return [grouped[k] for k in order], "wg crona"
     if row.get("kind") != "relation":
         return out, ("blok nieczytelny" if row.get("kind") == "unreadable" else "wg crona")
     rel = row.get("rel") or {}
@@ -1332,9 +1415,16 @@ def rel_panel_pairs(row, data, now, ch):
         warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
         warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+    # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
+    # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
+    # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
+    _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            warns.append(u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron"))
+            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            if w not in _seen:
+                _seen.add(w)
+                warns.append(w)
     for w_ in warns:
         # OSTRZEZENIE TUZ POD STANEM: panel bywa niski i ucina koniec.
         pairs.append(("Uwaga", w_))
@@ -1544,7 +1634,12 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
             pcur_y = len(plines)
         for n_, l in enumerate(ls):
             if wide and n_ == len(ls) - 1:
-                tail = "%s %s %s" % (fit(pr["vword"], 13, ch), fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
+                # SZCZEBLE w kolumnie zamiast powtorzonego wiersza: "x4" mowi,
+                # ze ten dataset obsluguja cztery linie crona, i zajmuje trzy
+                # znaki zamiast szesciu linii ekranu.
+                _t = pr.get("tiers", 1)
+                tail = "%s %s %s %s" % (fit(pr["vword"], 13, ch), fit(("x%d" % _t) if _t > 1 else "", 4, ch),
+                                        fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
                 plines.append(fit(l, binner - len(tail) - 1, ch) + " " + tail)
             else:
                 plines.append(fit(l, binner, ch))
@@ -1558,9 +1653,18 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     plines = plines[:ph]
     while len(plines) < ph:
         plines.append("")
-    btitle = (u"Datasety relacji %s: %s, %s" % (r["name"], plural(len(pairs), "para", "pary", "par"), how)) if r is not None else "Datasety"
+    # TYTUL LICZY DWIE ROZNE RZECZY, bo to dwie rozne rzeczy: ile DATASETOW jest
+    # w relacji i ile LINII CRONA je obsluguje. Wczesniej mowil "4 pary" o jednym
+    # datasecie z czterema szczeblami (pve10, 2026-09-21).
+    _tiers = sum(p.get("tiers", 1) for p in pairs)
+    btitle = "Datasety"
+    if r is not None:
+        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "para", "pary", "par"))
+        if _tiers > len(pairs):
+            btitle += u" w %s crona" % plural(_tiers, "linii", "liniach", "liniach")
+        btitle += u", %s" % how
     if wide and pairs:
-        btitle += u"   [źródło %s cel | Kopie | Czas o/ś/m | GB]" % ch.right
+        btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
     bfoot = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa  Tab pary" if width >= 100
              else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else ""
     if focus == "pairs":
@@ -1639,7 +1743,15 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
             if s.get("kind") == "dataset":
                 sched = f.get("send_schedule") or (tmpl.get(used[0], {}).get("send_schedule") if used else "") or "?"
                 pref = f.get("prefix") or (tmpl.get(used[0], {}).get("prefix") if used else "") or "?"
-                out.extend(detail_kv(ch, [(u"wysyłka", u"%s   co: %s   stempel %s" % (s.get("name"), sched, pref))], w))
+                # TO SAMO SLOWO CO NA F2, ta sama zasada: nazwa idzie za
+                # kierunkiem. Kierunek niesie pole `src`, NIE nazwa sekcji --
+                # nazwa to LADOWISKO (sciezka u siebie), wiec pierwsza wersja
+                # tej poprawki nazywala pobranie "kopia". Zdalne `konto@host:ds`
+                # w `src` = ten host pobiera; zdalna NAZWA = wysyla; obie
+                # lokalne = kopia u siebie.
+                _src, _dst = f.get("src") or "", s.get("name") or ""
+                _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
+                out.extend(detail_kv(ch, [(_w, u"%s   co: %s   stempel %s" % (s.get("name"), sched, pref))], w))
             else:
                 ret = []
                 for u in used:
@@ -1927,8 +2039,18 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(20, max([len(m.get("label") or "(bez rel.)") for m in mons] + [8])))
+        # RODZINA NIE UCINA SIE O JEDEN ZNAK. Kolumna miala na sztywno 16, a
+        # `automated_monthly` ma 17 -- ekran pokazywal `automated_month…` przy
+        # kazdej szerokosci (zmierzone na pve10, 2026-09-21). Bierze tyle, ile
+        # potrzebuje najdluzsza rodzina, ale nie wiecej niz 20 i nigdy kosztem
+        # Datasetu ponizej 20 znakow: sciezka i tak jest dluzsza niz kolumna,
+        # wiec jeden znak mniej jest tam niewidoczny, a tu usuwa falszywe uciecie.
         fw, pw, vw = 16, 12, 14
+        fw = max(fw, min(20, max([len(m.get("pattern") or "") for m in mons] + [fw])))
         dw = inner - (nw + fw + pw + vw + 4)
+        while dw < 20 and fw > 16:
+            fw -= 1
+            dw = inner - (nw + fw + pw + vw + 4)
         hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Dataset", dw), fit("Rodzina", fw), fit("Progi", pw), fit("Kopie", vw))
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
@@ -2083,14 +2205,14 @@ HELP = [
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku, Ins nowa relacja",
-    u"                 (kreator w 7 krokach, same listy: host -> diagnoza (SSH, ZFS,",
-    u"                 pakiet; brak pakietu = prepare-source) -> datasety (wiele,",
-    u"                 drzewo) -> dokąd -> szablon słowami -> nazwa -> konto ->",
-    u"                 zaawansowane -> zdanie + komenda -> plan -> 't';",
-    u"                 Enter na źródle/celu = lista datasetów zamiast pisania;",
-    u"                 szablony opisane słowami, Ins na liście = nowy szablon)",
-    u"                 Akcja: NAJPIERW komenda bash, potem 't', potem wyjście",
-    u"                 na żywo. Esc zamyka okno, a proces biegnie dalej.",
+    u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
+    u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach",
+    u"                 (typ -> host -> diagnoza; brak pakietu = Zainstaluj ->",
+    u"                 miejsca do kopiowania -> dokąd -> szablon -> nazwa ->",
+    u"                 konto -> ustawienia -> podsumowanie i WYKONAJ), Del to",
+    u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
+    u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
+    u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
     u"  F5  Monitor    każda linia monitora z werdyktem i powodem (monitor)",
     u"  F6  Nośniki    repliki na dyskach wymiennych i cztery stany nośnika",

@@ -137,12 +137,80 @@ fi
 # DOLNY PANEL Z CRONA: para w jednej linii, gdy sie miesci (200); inaczej
 # zrodlo i pod nim cel (80, 120). Od 100 kolumn kopie, czas i GB per para --
 # te same liczby co F2 -- przy ostatniej linii pary.
-if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Czas o/ś/m | GB]' \
+if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Szczeble | Czas o/ś/m | GB]' \
         && hasE "$S4" '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
     ok "relacje: dolny panel przy 200 -- para w jednej linii z kopiami, czasem o/s/m i GB"
 else
     bad "relacje: pary przy 200" "$S4"
 fi
+# ZEPSUTE ZRODLO MA NAZWAC KOMENDE. Ekran mowil "uruchom czasownik recznie",
+# czyli kazal zgadnac, ktory to czasownik i z jaka flaga -- a zna jedno i drugie.
+BAD="$(mktemp -d)/bad.json"; printf '{ZEPSUTY
+' > "$BAD"
+EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen monitor --keys "" --monitors "$BAD" --width 100 2>&1)"
+if has "$EB" 'zfs-backup.sh monitor --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
+    ok "zepsute zrodlo: ekran nazywa DOKLADNA komende do wpisania, zamiast odsylac do 'czasownika'"
+else
+    bad "zepsute zrodlo: brak komendy" "$EB"
+fi
+
+# POMOC MA OPISYWAC TO, CO JEST. Po usunieciu kreatora curses (2026-09-21)
+# ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
+# tekst pomocy to tez ekran, i tez sie dezaktualizuje.
+H1="$(screen zadania F1 --width 100)"
+if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && has "$H1" 'kreator w 10 krokach' && has "$H1" 'whiptail'; then
+    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (10 okien whiptaila), a nie usunietego poprzednika"
+else
+    bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
+fi
+
+# SZEROKOSC NIE MOZE POGARSZAC WIDOKU, a naglowek kolumny musi sie miescic.
+# Zmierzone na pve10 2026-09-21: przy 100 kolumnach adres peera ucinalo o JEDEN
+# znak, a przy 120 -- gdzie panel staje z boku i tabela ma tyle co przy 80 --
+# tabela dostawala jeszcze kolumne Harmonogram i naglowki wychodzily jako
+# "Czas..." i "Kopie …". Poszerzenie terminala psulo ekran.
+Z100="$(screen zadania "" --width 100)"; Z120="$(screen zadania "" --width 120)"; Z140="$(screen zadania "" --width 140)"
+if has "$Z100" 'pve10<192.168.28.99' && ! has "$Z100" 'pve10<192.168.28.…'; then
+    ok "zadania: przy 100 kolumnach adres peera miesci sie w CALOSCI (brakowalo jednego znaku)"
+else
+    bad "zadania: uciety adres przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
+fi
+if ! has "$Z120" 'Harmonogram' && has "$Z140" 'pve10<192.168.28.99'; then
+    ok "zadania: przy 120 (panel z boku, tabela jak przy 80) kolumna Harmonogram NIE wchodzi na sile, a przy 140 adres jest caly"
+else
+    bad "zadania: kolumny przy panelu z boku" "$(printf '%s' "$Z120" | sed -n '3,4p')"
+fi
+for _w in 80 100 120 140 200; do
+    _h="$(screen zadania "" --width $_w | sed -n '3p')"
+    case "$_h" in
+        *"Czas..."*|*"Kopie …"*|*"Kopie..."*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
+        *) ok "zadania: przy $_w kolumnach zaden naglowek kolumny nie jest uciety" ;;
+    esac
+done
+
+# JEDNO OSTRZEZENIE NA FAKT. Relacja ma monitor na kazdy szczebel, wiec uwaga
+# "cron wola inny plik silnika" wchodzila do panelu tyle razy, ile szczebli, i
+# wypychala z niego Stan/Typ/Kierunek (zmierzone na pve10, 2026-09-21).
+S4W="$(screen relacje down --width 200)"
+_w=$(printf '%s' "$S4W" | grep -c 'cron woła inny plik silnika' || true)
+if [ "$_w" -le 1 ]; then
+    ok "relacje: to samo ostrzezenie nie powtarza sie raz na monitor -- panel zostaje czytelny"
+else
+    bad "relacje: powtorzone ostrzezenie w panelu" "wystapien: $_w"
+fi
+
+# JEDEN DATASET = JEDEN WIERSZ, cztery szczeble = "x4" w kolumnie. Relacja
+# lab-ct201 ma w atrapie cztery linie crona nad jednym datasetem; przed
+# 2026-09-21 panel rysowal ja CZTERY RAZY i nazywal "4 pary" (zmierzone na
+# pve10). Liczy sie i to, co widac, i co mowi tytul.
+S4CT="$(screen relacje down --width 200)"
+_ct=$(printf '%s' "$S4CT" | grep -cE '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201 → ')
+if [ "$_ct" -le 1 ] && ! has "$S4CT" 'ct-201: 4 pary'; then
+    ok "relacje: dataset z kilkoma szczeblami zajmuje JEDEN wiersz panelu, nie tyle wierszy, ile ma linii crona"
+else
+    bad "relacje: powtorzony dataset w panelu par" "wierszy ct-201: $_ct" "$(printf '%s' "$S4CT" | grep -E 'Datasety relacji' | head -1)"
+fi
+
 S4_120="$(screen relacje down,down,down,down --width 120)"
 if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
     ok "relacje: przy 120 para, ktora sie nie miesci, to zrodlo i pod nim cel z liczbami -- nic nie uciete"
@@ -171,7 +239,7 @@ else
     bad "relacje: Tab" "$TP"
 fi
 TE="$(screen relacje down,tab,enter)"
-if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'wysyłka hourly'; then
+if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'pobranie hourly'; then
     ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
 else
     bad "relacje: Enter na parze" "$TE"
@@ -244,8 +312,8 @@ if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
 else
     bad "zadania: tytul" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
-    ok "zadania: wysylka pobrania = 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
+if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
+    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
@@ -254,7 +322,7 @@ if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +[0-9]+/[0-9]+/[0-9]+s +- +a
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192.168.28.99 +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
     ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
 else
     bad "zadania: zdalne porzadki" "$Z"
@@ -291,7 +359,7 @@ else
 fi
 # bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
 ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania 2>&1)"
-if hasE "$ZS" '^║ lab-vm101 +pve10<192.168.28.99 +wysyłka hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
+if hasE "$ZS" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
     ok "zadania: zepsute job-stats -> '?' w komorkach i zdanie w panelu, nigdy zero udajace pomiar"
 else
     bad "zadania: zepsute job-stats" "$ZS"
@@ -330,7 +398,7 @@ else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania 2>&1)"
-if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +wysyłka hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +wysyłka daily'; then
+if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +pobranie hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +kopia daily'; then
     ok "zadania: wysylka = 'hostA>pve9', pobranie = 'hostA<pve1', kopia na hoscie = 'local'; zadanie bez etykiety mowi '(bez rel.)'"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
@@ -508,8 +576,8 @@ else
     bad "okno: sekcje configu w oknie" "$WC"
 fi
 WP="$(screen relacje down,down,down,down,enter --height 60)"
-if has "$WP" 'wysyłka  hdd/backups/192.168.28.99/hdd/lab/vm-101   co: 24 * * * *' && has "$WP" 'stempel automated_hourly_' && has "$WP" 'trzyma -H24 -D7 -W4' && has "$WP" '-M12   co: 44 * * * *   drabina GFS' && has "$WP" 'porządki zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101'; then
-    ok "okno: POLITYKA z show-config -- wysylka i porzadki z retencja zlozona z szablonow"
+if has "$WP" 'pobranie hdd/backups/192.168.28.99/hdd/lab/vm-101   co: 24 * * * *' && has "$WP" 'stempel automated_hourly_' && has "$WP" 'trzyma -H24 -D7 -W4' && has "$WP" '-M12   co: 44 * * * *   drabina GFS' && has "$WP" 'porządki zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101'; then
+    ok "okno: POLITYKA z show-config -- transfer nazwany ZGODNIE Z KIERUNKIEM (pobranie, bo src jest zdalny) i porzadki z retencja zlozona z szablonow"
 else
     bad "okno: polityka z show-config" "$WP"
 fi
