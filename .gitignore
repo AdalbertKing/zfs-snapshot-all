@@ -71,5 +71,17 @@
 # inside deploy.sh; now deploy.sh installs them from here by copying.
 !hostscripts/
 !hostscripts/**
+# .claude/agents/ holds subagent definitions -- a prompt plus a model pin, so
+# that mechanical work (reading CI, inventory greps, the fast gates) runs on a
+# cheap model instead of the session model. They are shared working rules, not
+# a local preference: an agent whose prompt forbids `--bless` and forbids
+# claiming production behaviour it never measured is worth exactly as much to
+# the next checkout as to this one. Only agents/ is admitted -- settings.json
+# and settings.local.json stay out, and settings.json is tracked ONLY because
+# git already knew it, which is the same trap the deploy.sh note above
+# describes.
+!.claude/
+!.claude/agents/
+!.claude/agents/**
 __pycache__/
 *.pyc
