@@ -54,6 +54,39 @@
     oknie nie ma już `--ok-button "Wybierz"`. Fixture'y kroku 9 przepisane na
     protokół checklisty. Ekrany oglądane na żywo na pve10 przez pty z prawdziwym
     whiptailem: `<Dalej>` i `<Wstecz>` tam, gdzie było `<Ok>`.
+- **SPRZĄTANIE GAŁĘZI I DWA DOKUMENTY ODZYSKANE Z NICH (2026-09-22).**
+  Po scaleniu #415 w repozytorium leżało **215 gałęzi lokalnych** (poza
+  `main`) i **26 na origin**. Zmiecione: wszystkie 215 lokalnych i 22 zdalne --
+  każda sprawdzona, czy jej treść jest w `main` **po treści**, nie po nazwie. Zostały cztery
+  zdalne, które niosły coś, czego w `main` nie było; dwie z nich zamyka ten
+  commit:
+  - **`docs/project/PUBLICATION-FLOW.md`** (napisany 2026-08-14, leżał na
+    niescalonej gałęzi sześć tygodni). Wgrany PO PRZEMIERZENIU: przepis na
+    otwieranie PR-a przepisany z gołego `curl` na `test/gh-api.sh` (wrapper sam
+    składa URL ze ścieżki względnej tego repozytorium i odmawia `DELETE`),
+    dopisana bramka digestu statusu jako trzy OSTATNIE komendy dostawy, stan
+    ochrony `main` zmierzony ponownie.
+  - **`docs/discussions/PROTOCOL-V2.1-REVIEWER-PROPOSAL-2026-08-12.md`** --
+    propozycja recenzenta, na którą w `main` leżała już odpowiedź
+    implementera (`PROTOCOL-V2.1-CLAUDE-RESPONSE-2026-08-12.md`). Dialog był
+    w drzewie jednostronny; dokument wchodzi bez zmian, bo należy do drugiej
+    roli.
+  - **OCHRONA `main` NADAL WYŁĄCZONA -- zmierzone 2026-09-22.**
+    `GET branches/main/protection` daje `404 Branch not protected`, sześć
+    tygodni po uzgodnieniu. Bezpośredni push na `main` przechodzi, więc
+    „zielone CI na głowie PR-a” jest **dyscypliną, nie bramką**. Wymaga sesji
+    właściciela na desktopie; `PUBLICATION-FLOW.md` nazywa obie zaległe
+    czynności (ochrona + `Allow auto-merge`).
+  - **Nie ruszone, czeka na decyzję:** `chore/drop-flat-multitier-profiles`
+    (niedokończone przycięcie katalogu profili -- `*-age` i płaski `d7h24`
+    wciąż w drzewie) oraz `review/REV-20260814-122-transactional-writer`:
+    **nieopublikowana recenzja** z werdyktem `CHANGES-REQUIRED`, której numeru
+    nie ma w ledgerze, a numer 122 został później użyty ponownie
+    (`REV-20260827-122`, CLOSED). Treść zarzutu wygasła (recenzowany
+    `cf668df5` jest w `main`, żaden dokument nie nazywa już fantomowego SHA),
+    ale scalenie tego pliku ZMIENIŁOBY routing recenzji -- to nie jest
+    czynność porządkowa i czeka na słowo właściciela.
+
 - **EKRANY: PIERWSZA RUNDA DOPRACOWANIA (2026-09-21, polecenie „dokończyć GUI").**
   Obejrzane na żywo na pve10 (render deterministyczny, nie zrzut z emulatora --
   jedna „wada", którą zobaczyłem na pty, okazała się artefaktem mojego narzędzia
