@@ -2552,7 +2552,7 @@ class UI(object):
                                                   redirect=path))
         elif k == "F8":
             default = os.path.join(home_dir(), "")
-            self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = podgląd, Esc = anuluj):", default, self.import_preview)
+            self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", default, self.import_name)
         elif k == "ins":
             return self.run_wizard()
 
@@ -2794,9 +2794,23 @@ class UI(object):
             out += ["", fit(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)", width - 4)]
         return out
 
-    def import_preview(self, path):
+    def import_name(self, path):
+        """Krok 0 importu: nazwa relacji. Bez tego pola import na hoscie, ktory
+        MA juz relacje o nazwie z pliku, konczyl sie odmowa czasownika kazaca
+        podac --name=NEW -- a GUI nie mialo gdzie (zmierzone na pve10,
+        2026-09-23). Podpowiedz = nazwa z pliku; --name idzie tylko przy zmianie."""
+        try:
+            with io.open(path, encoding="utf-8") as f:
+                name = json.load(f).get("name") or ""
+        except (OSError, IOError, ValueError, AttributeError):
+            name = ""  # czasownik sam powie, co jest z plikiem nie tak
+        self.prompt(u"Import relacji z %s" % os.path.basename(path),
+                    u"Nazwa relacji (Enter = podgląd, Esc = anuluj):", name,
+                    lambda new: self.import_preview(path, new.strip() if new.strip() != name else ""))
+
+    def import_preview(self, path, name=""):
         """Krok 1 importu: to, co czasownik drukuje BEZ --yes, jako podglad."""
-        argv = [self.zb(), "import-relation", path]
+        argv = [self.zb(), "import-relation", path] + (["--name=" + name] if name else [])
         if self.exec_log:
             preview = [u"[atrapa] podgląd: " + self.shell_line(argv)]
         else:
