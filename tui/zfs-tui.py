@@ -2445,8 +2445,8 @@ class UI(object):
                                    "shell": line, "on_yes": on_yes})
         self.scroll = 0
 
-    def prompt(self, title, label, value, on_enter):
-        self.window = ("prompt", {"title": title, "label": label, "value": value, "on_enter": on_enter})
+    def prompt(self, title, label, value, on_enter, error=None):
+        self.window = ("prompt", {"title": title, "label": label, "value": value, "on_enter": on_enter, "error": error})
         self.scroll = 0
 
     def run_detached(self, title, argv, redirect=None, logname=None):
@@ -2553,8 +2553,7 @@ class UI(object):
                                                   [u"Deklaracje (to, co człowiek podał) plus argv do odtworzenia. Bez stanu, historii, ścieżek hosta."],
                                                   redirect=path))
         elif k == "F8":
-            default = os.path.join(home_dir(), "")
-            self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", default, self.import_name)
+            self.import_ask_file(os.path.join(home_dir(), ""))
         elif k == "ins":
             return self.run_wizard()
 
@@ -2796,11 +2795,22 @@ class UI(object):
             out += ["", fit(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)", width - 4)]
         return out
 
+    def import_ask_file(self, value, error=None):
+        """Krok -1 importu: sciezka do pliku eksportu."""
+        self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", value, self.import_name, error)
+
     def import_name(self, path):
         """Krok 0 importu: nazwa relacji. Bez tego pola import na hoscie, ktory
         MA juz relacje o nazwie z pliku, konczyl sie odmowa czasownika kazaca
         podac --name=NEW -- a GUI nie mialo gdzie (zmierzone na pve10,
-        2026-09-23). Podpowiedz = nazwa z pliku; --name idzie tylko przy zmianie."""
+        2026-09-23). Podpowiedz = nazwa z pliku; --name idzie tylko przy zmianie.
+        Sciezka jest sprawdzana TUTAJ: pole bylo podpowiedziane z "/root/", operator
+        dopisal wzgledna sciezke i dostal zle zlozona sciezke, ktora dochodzila do
+        czasownika i tam dostawala odmowe "cannot read" (zmierzone na pve10,
+        2026-09-23) -- teraz zla sciezka zostaje w polu pliku."""
+        if not os.path.isfile(path):
+            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę (Esc = anuluj)" % path)
+            return
         try:
             with io.open(path, encoding="utf-8") as f:
                 name = json.load(f).get("name") or ""
@@ -3145,8 +3155,10 @@ def _ui_render(self, width, height):
         if kind == "pomoc":
             scr, self.scroll = render_window(base, "Pomoc", HELP, self.scroll, width, height, self.ch)
         elif kind == "prompt":
-            lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), "",
-                     u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc anuluje."]
+            lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), ""]
+            if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
+                lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
+            lines.append(u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc anuluje.")
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch, footer=u"Enter dalej   Esc anuluj")
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,

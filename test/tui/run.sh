@@ -488,25 +488,34 @@ else
     bad "akcje: F7 t" "$(cat "$XL")"
 fi
 # import: podglad (bez --yes) w potwierdzeniu, potem --yes
-A="$(HOME=/root act down,F8,text:e.json,enter,enter)"
-if has "$A" 'POTWIERDZENIE: Import relacji z e.json' && has "$A" 'import-relation' && hasE "$A" "e.json'? --yes" && has "$A" '[atrapa] podgląd:'; then
-    ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
-else
-    bad "akcje: F8" "$A"
-fi
-A="$(HOME=/root act down,F8,text:e.json,enter,enter,t)"
-if grep -q "import-relation .*e.json'\? --yes$" "$XL"; then
-    ok "akcje: ...i 't' wola import-relation PLIK --yes"
-else
-    bad "akcje: F8 t" "$(cat "$XL")"
-fi
-# import: drugi krok to NAZWA, podpowiedziana z pliku; --name tylko przy zmianie.
-# Bez niego import na hoscie z relacja o tej nazwie konczyl sie odmowa kazaca
-# podac --name=NEW, ktorego GUI nie przyjmowalo (pve10, 2026-09-23).
 IMPF="$(mktemp)"
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
+A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter")"
+if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
+    ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
+else
+    bad "akcje: F8" "$A"
+fi
+A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter,t")"
+if grep -q "import-relation .*$(basename "$IMPF")'\? --yes$" "$XL"; then
+    ok "akcje: ...i 't' wola import-relation PLIK --yes"
+else
+    bad "akcje: F8 t" "$(cat "$XL")"
+fi
+# F8 z nieistniejaca sciezka: podpowiedz "/root/" + dopisana wzgledna sciezka
+# skladala sie w /root/tmp/f8.json, ktorej nie ma -- czasownik odmawial "cannot
+# read", operator dowiadywal sie o tym po nazwie relacji (pve10, 2026-09-23).
+A="$(HOME=/root act "down,F8,text:tmp/nie-ma-takiego.json,enter")"
+if has "$A" 'Import relacji z pliku' && has "$A" 'nie ma takiego pliku' && [ ! -s "$XL" ]; then
+    ok "akcje: F8 z nieistniejaca sciezka zostaje w polu pliku, mowi 'nie ma takiego pliku' i nic nie uruchamia (pve10: /root/ + tmp/f8.json)"
+else
+    bad "akcje: F8 nieistniejaca sciezka" "$A" "$(cat "$XL")"
+fi
+# import: drugi krok to NAZWA, podpowiedziana z pliku; --name tylko przy zmianie.
+# Bez niego import na hoscie z relacja o tej nazwie konczyl sie odmowa kazaca
+# podac --name=NEW, ktorego GUI nie przyjmowalo (pve10, 2026-09-23).
 A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
 if has "$A" 'Nazwa relacji' && has "$A" 'pve9-synchro_'; then
     ok "akcje: F8 po pliku pyta o NAZWE i podpowiada te z pliku"
