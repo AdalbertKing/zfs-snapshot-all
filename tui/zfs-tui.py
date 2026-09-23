@@ -1666,7 +1666,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     if wide and pairs:
         btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
     bfoot = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa  Tab pary" if width >= 100
-             else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else ""
+             else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else u"F8 import z pliku   Ins nowa relacja"
     if focus == "pairs":
         bfoot = u"Enter = to zadanie na F2   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
@@ -2524,6 +2524,13 @@ class UI(object):
 
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""
+        # Import i nowa relacja NIE potrzebuja istniejacej relacji: na pustym
+        # kolektorze -- dokladnie tam, gdzie sie importuje -- F8 i Ins milczaly,
+        # bo ponizej najpierw szukamy zaznaczonej relacji (pve11, 2026-09-23).
+        if k == "F8":
+            return self.import_ask_file(os.path.join(home_dir(), ""))
+        if k == "ins":
+            return self.run_wizard()
         # Del dziala takze na rekordzie `removed`: tam znaczy "zwolnij nazwe / posprzataj reszte".
         r, why = self.current_relation(allow_removed=(k == "del"))
         if r is None:
@@ -2551,10 +2558,6 @@ class UI(object):
                         lambda path: self.confirm(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"],
                                                   [u"Deklaracje (to, co człowiek podał) plus argv do odtworzenia. Bez stanu, historii, ścieżek hosta."],
                                                   redirect=path))
-        elif k == "F8":
-            self.import_ask_file(os.path.join(home_dir(), ""))
-        elif k == "ins":
-            return self.run_wizard()
 
     # ------------------------------------------------------------------
     # KREATOR NOWEJ RELACJI (etap E). Odwzorowuje forme jednokomendowa

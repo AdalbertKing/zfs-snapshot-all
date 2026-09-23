@@ -524,6 +524,26 @@ else
     bad "akcje: F8 bez kroku z nazwa" "$A"
 fi
 rm -f "$IMPF"
+# F8/Ins na PUSTYM kolektorze (zero relacji, zero zadan): milczaly, bo szukaly
+# najpierw zaznaczonej relacji, ktorej na pustym ekranie nie ma (pve11,
+# 2026-09-23). Fikstura empty.json/empty-mon.json (linia 297) to jedyny host
+# bez zadnego rekordu -- brak --status daje 0 relacji.
+act_empty() {   # <keys> -> ekran; dziennik komend w $XL (wyzerowany)
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
+}
+E="$(act_empty "")"
+if has "$E" 'F8 import z pliku'; then
+    ok "akcje: pusty kolektor -- stopka podpowiada F8 import i Ins nowa relacja (pve11 2026-09-23)"
+else
+    bad "akcje: pusty kolektor stopka" "$E"
+fi
+E="$(act_empty F8)"
+if has "$E" 'Import relacji z pliku'; then
+    ok "akcje: pusty kolektor -- F8 otwiera import (wczesniej milczal: brak zaznaczonej relacji)"
+else
+    bad "akcje: pusty kolektor F8" "$E"
+fi
 # odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
 A="$(act end,F4)"; act end,F4,t >/dev/null
 if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; then

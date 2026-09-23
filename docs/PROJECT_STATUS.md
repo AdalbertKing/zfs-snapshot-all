@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 56f1f0c499140186 -->
+<!-- status-covers-digest: 46235bc725557e4f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,21 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Pusty kolektor: F8 i Ins działają (2026-09-23, pve11).** Na kolektorze bez
+  relacji, czyli tam, gdzie importuje się najczęściej, F8 i Ins milczały:
+  `action()` najpierw szukało zaznaczonej relacji. Teraz import i nowa relacja
+  idą przed tym sprawdzeniem, a stopka pustego ekranu mówi „F8 import z pliku /
+  Ins nowa relacja”. `tui` 154/0; dwie nowe asercje padają na `main`.
+  - **Import na INNY kolektor (pve11 ← pve9) NIE jest jeszcze skuteczny.** Plik
+    eksportu nie niesie zakresu. Relacja `pve9-synchro` to `hdd/lab` bez `swap`
+    i `www` (9 datasetów), a zakres żyje tylko w `peers/pve10.scope` na
+    źródle. `--join` dla pve11 zaproponował domyślne 15 datasetów
+    (`hdd/archive`, `hdd/data`, `hdd/lab`). Decyzja właściciela 2026-09-23:
+    eksport ma nieść zakres, import na nowy kolektor robi zdalny join i grant
+    DOKŁADNIE tego zakresu, a `t` w oknie planu jest zgodą źródła. W toku.
+    Stan labu: pve11 ma rekord `pve9-synchro` `pending_enroll`, pve9 ma
+    przerwany join (konto `zfsbackup-pve11` bez uprawnień, szkic
+    `peers/pve11.scope`).
 - **IMPORT = „doprowadź host do stanu z pliku”; werdykt PRZED zmianą (2026-09-23, właściciel).**
   Po trzech poprawkach okno po oknie właściciel: *„to jest banalne okno i operacja,
   popraw to całościowo … chcę zaimportować konfigurację skutecznie”*.
