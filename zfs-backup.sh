@@ -8000,6 +8000,26 @@ client_passive_flags() {
     printf '%s' "$out"
 }
 
+# REC_ARGS=(-R -X re ...) for a recursive root, () otherwise (2026-09-23). The
+# recursion flag and the relationship's exclusions travel TOGETHER: seed passed
+# both, but verify-endpoint, the activation dry-run and `test` passed -R alone,
+# so an excluded child the seed rightly skipped was probed as "FULL-FOREVER" and
+# stopped every activation of a relationship with --exclude-child (measured
+# twice on pve11 <- pve9b). Filled from the record fields directly: no word
+# splitting and no globbing of a regex like ^hdd/vms/vm[0-9]$.
+client_recursive_args() {   # <dataset> -> REC_ARGS
+    local i=1 n v
+    REC_ARGS=()
+    is_recursive_root "$1" || return 0
+    REC_ARGS=(-R)
+    while :; do
+        n="EXCLUDE_CHILD_$i"; v="${!n:-}"
+        [ -n "$v" ] || break
+        REC_ARGS+=(-X "$v")
+        i=$((i + 1))
+    done
+}
+
 client_exclude_flags() {   # -> " -X <re>" for each recorded exclusion
     local i=1 n v out=""
     while :; do
@@ -9131,7 +9151,8 @@ probe_snapget_endpoint() {   # <host> <port>
         # what made the old text heuristic fragile) but not discarded either
         # -- REV-20260802-033 F4, the source-IP/firewall diagnostic lives here.
         # shellcheck disable=SC2086
-        out=$(bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
+        client_recursive_args "$ds"
+        out=$(bash "$SNAPGET" -n ${REC_ARGS[@]+"${REC_ARGS[@]}"} $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
         if [ "$rc" -ne 0 ]; then
             failed=$((failed + 1))
             PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'
@@ -9562,7 +9583,7 @@ cmd_activate_client() {
         # mirror the recursive-root flag, so the ACTIVATION preview warned
         # "neither -r nor -R was given" about a relationship whose installed
         # line carries -R -- a proposal disagreeing with what it proposes.
-        is_recursive_root "$ds" && dr_args+=(-R)
+        client_recursive_args "$ds"; dr_args+=(${REC_ARGS[@]+"${REC_ARGS[@]}"})
         # shellcheck disable=SC2086
         if [ -n "$base" ]; then
             set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"
@@ -14266,7 +14287,8 @@ cmd_test() {
     local base; base=$(snapget_local_base)
     for ds in $PEER_SAVED_DATASETS; do
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" -n $(is_recursive_root "$ds" && printf %s -R) $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
+        client_recursive_args "$ds"
+        if bash "$SNAPGET" -n ${REC_ARGS[@]+"${REC_ARGS[@]}"} $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
             warn "  FAILED: $ds"
@@ -15532,6 +15554,31 @@ include_children = yes
             want+=$'\n'
         done < <(dataset_list_split "$requested")
         want="${want%$'\n'}"
+        # --exclude-child is a regex over dataset NAMES; the scope grammar takes
+        # exact paths. Resolve one against the other on the source, so the grant
+        # withholds rights on exactly the datasets the jobs will skip (before
+        # this, an excluded child got delegated rights -- measured on pve11 <-
+        # pve9b, vm-202-disk-0). An exclusion matching nothing is left out.
+        if [ -n "${RUX_GRANT_EXCLUDES:-}" ]; then
+            local _names _re _root _matched _ex_lines=""
+            while IFS= read -r _root; do
+                [ -n "$_root" ] || continue
+                _names=$(rux_root_ssh "$host" "$port" "zfs list -H -o name -r -- '$_root'" 2>/dev/null) \
+                    || die "--grant-remotely: could not list '$_root' on $host to resolve --exclude-child -- nothing was granted"
+                _matched=""
+                while IFS= read -r _re; do
+                    [ -n "$_re" ] || continue
+                    _matched+=$(printf '%s\n' "$_names" | grep -E -- "$_re" | grep -vxF -- "$_root" || true)
+                    _matched+=$'\n'
+                done <<< "$RUX_GRANT_EXCLUDES"
+                _matched=$(printf '%s\n' "$_matched" | grep . | sort -u || true)
+                [ -n "$_matched" ] || continue
+                _ex_lines=$(printf 'exclude = %s\n' $_matched)
+                want=$(printf '%s\n' "$want" | EX_LINES="$_ex_lines" awk -v root="[dataset:$_root]" '
+                    { print } $0 == root { inroot = 1; next }
+                    inroot && /^include_children/ { print ENVIRON["EX_LINES"]; inroot = 0 }')
+            done < <(dataset_list_split "$requested")
+        fi
     fi
 
     # The comparison has to be list-against-list. Comparing the peer's stanzas
@@ -15693,7 +15740,7 @@ rux_remote_install() {
 
     # The grant step runs BEFORE the verification and never replaces it: what
     # --grant-remotely wrote is proven the same way a hand-committed scope is.
-    [ "$grant_remotely" -eq 1 ] && rux_grant_remotely "$host" "$port" "$dataset"
+    [ "$grant_remotely" -eq 1 ] && RUX_GRANT_EXCLUDES=$(printf '%s\n' ${excludes[@]+"${excludes[@]}"}) rux_grant_remotely "$host" "$port" "$dataset"
 
     rux_verify_requested_scope "$cpath" "$dataset"
 
