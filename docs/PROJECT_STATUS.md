@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bfe535df72c87214 -->
+<!-- status-covers-digest: b4e0e7d186ba7e4c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,26 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
+  `export-relation pve9-synchro --json` wrócił do tego samego hosta i czasownik
+  odmówił, jak powinien: *nazwa zajęta, podaj `--name=NEW`*. GUI nie miało
+  gdzie jej wpisać, więc import na hoście, który ma relację o tej nazwie, był
+  z F8 niewykonalny. Teraz po pliku przychodzi drugie pole: nazwa podpowiedziana
+  z pliku (`name`), a `--name=` trafia do komendy tylko przy zmianie. Sprawdzone
+  na żywo (klon w `/tmp` na pve10, E60 = 0/0, klon usunięty): podpowiedź
+  `pve9-synchro`; bez zmiany jest odmowa czasownika; z `pve9-kopia` potwierdzenie pokazuje
+  `import-relation /tmp/f8.json --name=pve9-kopia --yes` i poprawny podgląd.
+  **`t` NIE wykonane** — utworzyłoby drugą, prawdziwą relację na tej samej
+  parze. Suita `tui` 153/0 (było 150); trzy nowe asercje na prawdziwym pliku padają
+  na `main` (kontrola 3/3 FAIL).
+  - **Luka znaleziona przy okazji, NIE naprawiona (decyzja właściciela):**
+    eksport relacji `sync` nie niesie zakresu datasetów. `REQUESTED_DATASETS`
+    jest puste, a zakres (`include_parent = no`, dwa `exclude`) żyje po stronie
+    źródła w `peers/<KOLEKTOR>.scope` na pve9, przypisany do nazwy
+    **kolektora**. Import na tym samym kolektorze odtworzy więc ten sam zakres;
+    import na INNYM kolektorze nie ma skąd go wziąć. Podgląd mówi „wykona się
+    DOKŁADNIE to", a `not_replayable` wymienia tylko `ACTIVE_ENDPOINT`: o
+    zakresie nie wspomina.
 - **F3: kursor staje na relacji, która przybyła (2026-09-20, wieczór).**
   Lista relacji jest posortowana, a kursor to INDEKS -- `refresh()` po powrocie
   z kreatora tylko przycinał go do długości listy. Po założeniu relacji kursor
@@ -839,8 +859,9 @@
   F3 do zarządzania; każda akcja pokazuje **komendę bash przed wykonaniem**.
   - **F3 akcje:** `F4` pause-client/resume-client (decyduje rekord), `Del`
     remove-client, `F7` `export-relation --json > PLIK` (pełna ścieżka
-    podpowiedziana, do zmiany), `F8` `import-relation PLIK` (podgląd
-    czasownika bez `--yes`, potem `--yes`), `Ins` nazywa kreator jako następny
+    podpowiedziana, do zmiany), `F8` `import-relation PLIK [--name=NOWA]`
+    (plik, potem nazwa podpowiedziana z pliku; `--name` tylko przy zmianie;
+    podgląd czasownika bez `--yes`, potem `--yes`), `Ins` nazywa kreator jako następny
     etap. Okno potwierdzenia = dokładna linia powłoki (shlex, nigdy ucięta);
     wykonuje tylko `t`, każdy inny klawisz anuluje i mówi to. Czasownik biegnie
     ODŁĄCZONY (własna sesja, wyjście do `~/.zfs-tui/<czasownik>-<stempel>.log`),

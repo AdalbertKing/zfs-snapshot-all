@@ -488,18 +488,44 @@ else
     bad "akcje: F7 t" "$(cat "$XL")"
 fi
 # import: podglad (bez --yes) w potwierdzeniu, potem --yes
-A="$(HOME=/root act down,F8,text:e.json,enter)"
+A="$(HOME=/root act down,F8,text:e.json,enter,enter)"
 if has "$A" 'POTWIERDZENIE: Import relacji z e.json' && has "$A" 'import-relation' && hasE "$A" "e.json'? --yes" && has "$A" '[atrapa] podgląd:'; then
     ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
 else
     bad "akcje: F8" "$A"
 fi
-A="$(HOME=/root act down,F8,text:e.json,enter,t)"
+A="$(HOME=/root act down,F8,text:e.json,enter,enter,t)"
 if grep -q "import-relation .*e.json'\? --yes$" "$XL"; then
     ok "akcje: ...i 't' wola import-relation PLIK --yes"
 else
     bad "akcje: F8 t" "$(cat "$XL")"
 fi
+# import: drugi krok to NAZWA, podpowiedziana z pliku; --name tylko przy zmianie.
+# Bez niego import na hoscie z relacja o tej nazwie konczyl sie odmowa kazaca
+# podac --name=NEW, ktorego GUI nie przyjmowalo (pve10, 2026-09-23).
+IMPF="$(mktemp)"
+printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
+IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
+CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
+A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
+if has "$A" 'Nazwa relacji' && has "$A" 'pve9-synchro_'; then
+    ok "akcje: F8 po pliku pyta o NAZWE i podpowiada te z pliku"
+else
+    bad "akcje: F8 nazwa z pliku" "$A"
+fi
+HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter,t" >/dev/null
+if grep -q "import-relation .* --yes$" "$XL" && ! grep -q -- "--name=" "$XL"; then
+    ok "akcje: ...nazwa bez zmian -> BEZ --name (czasownik bierze ja z pliku)"
+else
+    bad "akcje: F8 nazwa bez zmian" "$(cat "$XL")"
+fi
+HOME=/root act "down,F8,$CLR,text:$IMPP,enter,bs,bs,bs,bs,bs,bs,bs,text:kopia,enter,t" >/dev/null
+if grep -q "import-relation .* --name=pve9-kopia --yes$" "$XL"; then
+    ok "akcje: ...zmieniona nazwa -> import-relation PLIK --name=NOWA --yes"
+else
+    bad "akcje: F8 --name" "$(cat "$XL")"
+fi
+rm -f "$IMPF"
 # odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
 A="$(act end,F4)"; act end,F4,t >/dev/null
 if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; then

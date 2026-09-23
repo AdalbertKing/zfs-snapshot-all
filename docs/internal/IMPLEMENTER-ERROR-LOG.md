@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -111,7 +111,7 @@ cost data rather than an argument:
 
 - **R9** — run locally only a suite you edited; everything else goes to CI.
 - **R10** — verify a suite's targeted mode works before paying for the full run.
-- **R11** — never edit a suite that is running, or run one you are still editing.
+- **R11** — never edit a suite that is running, or run one you are still editing. *(E11, E61)*
 
 ---
 
@@ -676,7 +676,7 @@ Both directions are real. Bash reads a script incrementally, so an edit mid-run
 executes garbage from that offset; and a suite edited between two runs of a
 comparison invalidates the comparison.
 
-*Evidence: E11.*
+*Evidence: E11, E61.*
 
 ### How to keep this honest
 
@@ -1800,3 +1800,39 @@ clone is deleted, and if it is not, regenerate the managed block from the
 deployed checkout (`gen-cron.sh -c <config> --install`) and re-run one line
 literally. The cheaper alternative, when the change is already merged, is simply
 not to run verbs from clones: pull the deployment and run it there.
+
+### E61 — I edited the tui suite while it was running (2026-09-23, R11)
+
+**Genesis.** F8 import got a name step (`fix/gui-f8-import-name`). I started
+`test/tui/run.sh` in the background, and while it ran I read two FAILs from its
+log, diagnosed them (my new tests typed a path AFTER the prompt's `/root/`
+default) and edited `test/tui/run.sh` in place. The running bash then read the
+file from its old offset: `line 1217: i: command not found`. The run was
+garbage from that point and had to be killed and repeated.
+
+**Cause.** R11, known and written down, broken by the reflex "the failure is
+understood, fix it now". A background run makes the suite look finished when it
+is not -- the file is still open under its interpreter.
+
+**Rule.** R11. The reflex: **a suite running in the background is locked until
+its completion notice arrives.** Diagnose from the log, write the fix down,
+apply it after the notice. The underlying test defect had already shown itself
+once, on the live probe on pve10 while the suite ran (`/root//tmp/f8.json` in
+the verb's refusal) -- I fixed the probe and did not ask whether the tests I had
+just written typed the path the same way. They did.
+
+### E62 — status gate run before the code was staged (2026-09-23, R4)
+
+**Genesis.** One chained command: fill the suite count, `--refresh-status`,
+`git add` everything, `--verify`. The digest is computed over the STAGED tree;
+`tui/zfs-tui.py` was not staged yet, so the refresh recorded the digest of
+`main`'s tui and `--verify` then reported STALE (summarised as `GRAPH DRIFT`).
+The handoff of 2026-09-22 already counted this gate breaking three times.
+
+**Cause.** R4: a mutation (`--refresh-status`) chained behind a state it did
+not check -- what is in the index.
+
+**Rule.** R4. The order is fixed and has four steps, not three:
+`git add <code>` -> `--refresh-status` -> `git add docs/PROJECT_STATUS.md` ->
+`--verify`. And read the whole `--verify` output, not `tail -3`: the summary
+line named the wrong gate.
