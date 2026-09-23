@@ -12955,6 +12955,9 @@ THEN
             || die "import-relation: a relationship named '$name' exists here but could not be exported for comparison -- nothing was changed. Check it with: zfs-backup.sh show-config $name"
         here_argv=$(json_array_strings "$(json_value_of "$(json_value_of "$here_doc" replay)" argv)")
         file_argv=$(printf '%s\n' ${argv[@]+"${argv[@]}"})
+        if [ "$here_argv" = "$file_argv" ] && [ "$(record_get "$ecpath" STATE)" != active ]; then
+            die "import-relation: relationship '$name' is here, identical to $file, but NOT finished (state '$(record_get "$ecpath" STATE)'). Finish it instead of importing again: zfs-backup.sh seed $name, then zfs-backup.sh activate $name -- or remove it (zfs-backup.sh delete-relation $name) and import again. Nothing was changed."
+        fi
         if [ "$here_argv" = "$file_argv" ]; then
             echo "Relacja '$name' JUZ JEST na tym hoscie i jest identyczna z plikiem $file"
             echo "  (te same deklaracje: $(printf '%s ' ${argv[@]+"${argv[@]}"}))"
@@ -12982,6 +12985,48 @@ Nothing was changed. A relationship is changed by removing it and importing the 
             other=$(record_get "$f" CLIENT_NAME)
             die "import-relation: this host already has relationship '$other' with $peer_host (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
         done
+    fi
+
+    # NEW COLLECTOR WITH A SCOPE (2026-09-23): replay through the one-command
+    # form the wizard uses (--source=HOST:ROOT --install --grant-remotely), with
+    # the file's scope granted EXACTLY on the source. add-client alone stops at
+    # "carry this package, run --join there" and the source then offers its
+    # default draft (pve11 <- pve9: 15 datasets for a relationship of 9).
+    local -a scope_arr=() rux_args=()
+    local scope_json; scope_json=$(json_value_of "$doc" scope)
+    if [ -n "$scope_json" ] && [ "$scope_json" != null ] && [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
+        while IFS= read -r x; do scope_arr+=("$x"); done <<SCOPE
+$(json_array_strings "$scope_json")
+SCOPE
+        local roots
+        roots=$(printf '%s\n' ${scope_arr[@]+"${scope_arr[@]}"} | sed -n 's/^\[dataset:\(.*\)\]$/\1/p' | paste -sd, -)
+        [ -n "$roots" ] || die "import-relation: the file's scope names no [dataset:] root -- it is not one export-relation wrote. Nothing was changed."
+        rux_args=(--source="$peer_host:$roots" --mode="$peer_mode" --name="$name")
+        for x in ${argv[@]+"${argv[@]}"}; do
+            case "$x" in --host=*|--mode=*) ;; *) rux_args+=("$x") ;; esac
+        done
+        rux_args+=(--install --yes --grant-remotely)
+        echo "Import relacji '$name' z $file -- NOWY KOLEKTOR"
+        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+        echo
+        echo "Wykona sie DOKLADNIE to (jedno polecenie: parowanie ze zrodlem, zakres, seed, aktywacja):"
+        printf '  zfs-backup.sh'
+        for x in "${rux_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        printf '\n\n'
+        echo "Na $peer_host zostanie ZATWIERDZONY dla tego kolektora ten zakres (z pliku, 1:1):"
+        printf '    %s\n' "${scope_arr[@]}"
+        echo "  't' w GUI / --yes tutaj = zgoda zrodla na ten zakres (decyzja wlasciciela 2026-09-23)."
+        if [ "$yes" -ne 1 ]; then
+            echo
+            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            return 0
+        fi
+        echo
+        RUX_EXACT_SCOPE=$(printf '%s\n' "${scope_arr[@]}")
+        export RUX_EXACT_SCOPE
+        rux_entry "${rux_args[@]}"
+        log "import-relation: '$name' reproduced from $file on a new collector, scope granted on $peer_host as exported"
+        return 0
     fi
 
     echo "Import relacji '$name' z $file"
@@ -13166,6 +13211,38 @@ EXF
     printf ',"replay":{"verb":"add-client","name":"%s","argv":[%s],"then":["seed","activate"]}' \
         "$(json_escape "$name")" "$argv_json"
     printf ',"not_replayable":[%s]' "$unrep_json"
+    # THE SCOPE (2026-09-23). A mode-based relationship's dataset set is not in
+    # its record: it is the scope the SOURCE committed for this collector
+    # (peers/<collector>.scope there), and it can be narrowed on the source
+    # after creation (include_parent = no, exclude = ...). Without it an import
+    # on another collector asked the source for its default draft -- measured
+    # pve11 <- pve9: 15 datasets offered for a relationship of 9. Read here the
+    # same way seed reads it (delegated account, hash-checked), active stanzas
+    # only, one line per array element (json_escape carries no newlines).
+    # null when it cannot be read: the file then says so instead of guessing.
+    printf ',"scope":'
+    if [ -n "${RUX_MODE:-}" ]; then
+        local scope_lines
+        scope_lines=$( die_confine_to_subshell
+                       load_client_and_connection "$cpath" >/dev/null 2>&1 || exit 1
+                       t=$(mktemp) || exit 1
+                       fetch_committed_scope "$t" >/dev/null 2>&1 || { rm -f "$t"; exit 1; }
+                       awk '/^# ====/{exit} /^[[:space:]]*#/{next} NF' "$t"; rm -f "$t" )
+        if [ -n "$scope_lines" ]; then
+            local sfirst=1 sl
+            printf '['
+            while IFS= read -r sl; do
+                [ "$sfirst" -eq 1 ] || printf ','
+                sfirst=0
+                printf '"%s"' "$(json_escape "$sl")"
+            done <<< "$scope_lines"
+            printf ']'
+        else
+            printf 'null'
+        fi
+    else
+        printf 'null'
+    fi
     # The installed sections, verbatim, as documentation. NOT an import input:
     # the wizard reproduces them from the profile plus the answers above. What
     # is here and is not reproduced that way is a hand edit, and seeing it is
@@ -15440,18 +15517,28 @@ include_children = yes
     # other dataset argument in the package (dataset_list_split, lib-scope.sh).
     # A single-item list renders byte-identical to what this wrote before, so an
     # existing draft written by an earlier run still compares equal below.
-    local want="" _rq
-    while IFS= read -r _rq; do
-        want+=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$_rq")
-        want+=$'\n'
-    done < <(dataset_list_split "$requested")
-    want="${want%$'\n'}"
+    local want="" _rq want_headers
+    if [ -n "${RUX_EXACT_SCOPE:-}" ]; then
+        # import-relation onto a NEW collector (2026-09-23): the file carries
+        # the scope the source committed for the original collector; grant
+        # EXACTLY that, not the request-shaped template. The operator's `t` on
+        # a plan that printed this scope is the source's consent (owner
+        # decision 2026-09-23). Same write, commit and audit path as below.
+        want="$RUX_EXACT_SCOPE"
+        want_headers=$(printf '%s\n' "$want" | awk '/^\[dataset:/{print}')
+    else
+        while IFS= read -r _rq; do
+            want+=$(printf '[dataset:%s]\ninclude_parent = yes\ninclude_children = yes\n' "$_rq")
+            want+=$'\n'
+        done < <(dataset_list_split "$requested")
+        want="${want%$'\n'}"
+    fi
 
     # The comparison has to be list-against-list. Comparing the peer's stanzas
     # to a single "[dataset:$requested]" would refuse every multi-dataset
     # request outright, and -- worse -- would compare a two-line block against a
     # one-line string and call a MATCHING scope a conflict.
-    local want_headers; want_headers=$(dataset_list_split "$requested" | sed 's/^/[dataset:/; s/$/]/')
+    [ -n "$want_headers" ] || want_headers=$(dataset_list_split "$requested" | sed 's/^/[dataset:/; s/$/]/')
     local existing_active
     existing_active=$(rux_root_ssh "$host" "$port" "cat -- '$sfile' 2>/dev/null" \
         | awk '/^# ==========/{exit} /^\[dataset:/{print}')
@@ -15484,7 +15571,11 @@ An operator prepared that file, and this flag is not permission to overwrite the
     log "--grant-remotely: writing the request-shaped scope and committing it on $host (audited)"
     {
         printf '# Scope for peer %s -- GENERATED BY --grant-remotely from %s.\n' "$COLLECTOR_LABEL" "$stamp"
-        printf '# Equal to the request by construction; widen only by editing here and re-running --commit-scope locally.\n'
+        if [ -n "${RUX_EXACT_SCOPE:-}" ]; then
+            printf '# Copied from a relation export (import-relation); widen or narrow only by editing here and re-running --commit-scope locally.\n'
+        else
+            printf '# Equal to the request by construction; widen only by editing here and re-running --commit-scope locally.\n'
+        fi
         printf '%s\n' "$want"
     } | rux_root_ssh_in "$host" "$port" "cat > '$sfile'" \
         || die "--grant-remotely: could not write the scope file on $host -- nothing was committed"
