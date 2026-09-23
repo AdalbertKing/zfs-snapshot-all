@@ -126,6 +126,47 @@ So:
 Reporting rule: report on completion, not per iteration. One message with the
 result, not a running commentary on which suite is at which line.
 
+## Which model -- delegation
+
+Owner direction, 2026-09-23: **the session model orchestrates; simple work goes
+to cheaper subagents.** Token cost is a routing parameter, not an afterthought.
+The session decides, briefs, reviews and integrates; it does not type what a
+cheaper model can type.
+
+| role | agent (`.claude/agents/`) | model | may | may not |
+|---|---|---|---|---|
+| CI state for a SHA | `ci-reader` | haiku | read GitHub via `gh-api.sh GET` | re-run, merge, guess a queued result |
+| where X is / who calls it | `repo-greper` | haiku | grep, list `file:line` | say anything runs on a host |
+| fast gates | `gate-runner` | haiku | `reviewctl --verify`, `impact --verify` | write forms, suites |
+| prose vs tree | `text-checker` | haiku | read, compare text to code/diff | edit, confirm live claims |
+| typing a decided change | `simple-coder` | sonnet | Read/Edit/Write the files named | Bash, git, hosts, frozen engines, design |
+| everything else | session | -- | decide, diagnose, live hosts, git, PR, merge | -- |
+
+Routing, in the order the session asks it:
+
+1. **Is it a decision?** Diagnosis, design, choosing between readings of a
+   review, anything destructive, anything on a live host, git history, PR and
+   merge: the session. Never delegated.
+2. **Is it reading?** Inventory, CI, gates, checking a text against the tree:
+   a haiku reader. The session acts on the report, and re-checks any claim it
+   is about to repeat to the Owner (a reader's report is a lead, not evidence).
+3. **Is it typing a change already fully specified** -- files, functions,
+   expected behaviour, the discriminating input for the test? `simple-coder`.
+   If writing the brief costs as much as the edit (a one-line change in a
+   file the session already has open), the session types it.
+4. **Independent pieces run in parallel** (several agents in one message).
+   Two `simple-coder`s never edit the same file at once; use
+   `isolation: "worktree"` when their files could overlap.
+
+The session's duties after a delegated edit do not shrink: read the diff like
+an enemy, run `bash -n` / the targeted check / the edited suite, build the
+negative control against `main`. A subagent's "done" is not a check.
+
+Measured when the roles were set up (2026-09-23): one `gate-runner` call on
+the full `impact --verify` cost ~30k haiku tokens and ~13 minutes of wall time
+on this Windows box. The wall time was the gate, not the model. Launch it in
+the background; do not block on it.
+
 ## Project status document
 
 `docs/PROJECT_STATUS.md` is the shared **product/operational** current-state document. It describes what the tree and deployed estate do today, but it is **not review workflow state and must not be used to decide whose move it is**. Workflow ownership comes only from the generated `docs/internal/reviews/REVIEW_LEDGER.md` as required by Protocol V2.
