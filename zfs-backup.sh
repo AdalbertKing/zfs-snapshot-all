@@ -8580,11 +8580,6 @@ cmd_seed() {
             || die "could not reach $PEER_HOST or list its datasets -- has --join run there yet?"
     fi
 
-    {
-        cat "$cpath"
-        echo "STATE=seeding"
-    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
-
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
     # Before assert_no_coverage_overlap, not after: that guard asks whether two
@@ -8611,6 +8606,17 @@ cmd_seed() {
         seed_candidates+=("$(client_local_path "$ds")")
     done
     assert_no_coverage_overlap "$name" "${seed_candidates[@]}"
+
+    # STATE=seeding only AFTER the refusals above (2026-09-23). It used to be
+    # written before load_client_and_connection, so a seed the coverage guard
+    # refused -- a refusal no re-run can fix -- left the record in 'seeding',
+    # and F3 offered "seed <name>" as the next step forever (measured on pve10:
+    # a live relationship imported under a second name). 'seeding' means a
+    # transfer is about to start, and from here on one is.
+    {
+        cat "$cpath"
+        echo "STATE=seeding"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
 
     local base; base=$(snapget_local_base)
     if [ "$yes" -ne 1 ]; then
@@ -12840,6 +12846,36 @@ json_array_strings() {   # <[ "a", "b" ]> -> one decoded string per line
         }'
 }
 
+# Undo what add-client and a refused seed wrote for ONE name: the record and
+# that name's line in the per-host alias known_hosts file. Nothing per HOST --
+# the keypair, the pinned key, the pairing package and the manifest are shared
+# with every other relationship to the same peer (clean-relationships purges by
+# address, and would take a sibling's alias line with it: E57).
+import_relation_undo_record() {   # <name>
+    local name="$1" cpath host label user src dst alias tmp
+    cpath=$(client_conf_path "$name")
+    host=$(record_get "$cpath" PEER_HOST)
+    if [ -n "$host" ]; then
+        label=$(peer_label "$host")
+        user=$(record_get "$(peer_manifest_path "$label")" PEER_SAVED_LOCAL_USER)
+        src=$(local_knownhosts_path "$label" "$user")
+        dst="${src%_known_hosts}_alias_known_hosts"
+        alias=$(host_key_alias "$name")
+        if [ -f "$dst" ] && grep -q "^$alias " "$dst"; then
+            tmp=$(mktemp) || die "import-relation: mktemp failed while removing the alias line of '$name' from $dst"
+            # cat INTO the file, not mv over it: keeps its owner and mode, which
+            # ensure_alias_known_hosts set for the account that reads it.
+            if awk -v a="$alias" '$1 != a' "$dst" > "$tmp" && cat "$tmp" > "$dst"; then
+                log "import-relation: removed the host-key alias line '$alias' from $dst"
+            else
+                warn "import-relation: could not remove the alias line '$alias' from $dst -- harmless (a lookup entry for a name that no longer exists), remove it by hand"
+            fi
+            rm -f "$tmp"
+        fi
+    fi
+    rm -f "$cpath" && log "import-relation: removed the record $cpath"
+}
+
 cmd_import_relation() {   # FILE [--name=NEW] [--yes]
     local file="" newname="" yes=0 a
     for a in "$@"; do
@@ -12917,14 +12953,37 @@ UNREP
         return 0
     fi
     echo
+    # Was the peer paired BEFORE this import? Then a seed that fails is a refusal
+    # about THIS relationship (coverage, scope) -- not "run --join there first"
+    # -- and the record this import just created is debris. Measured on pve10
+    # 2026-09-23: a live relationship imported under a second name left a record
+    # stuck in 'seeding' plus its alias line, and the "resumable" hint below
+    # never printed: seed's die ended the whole process, so `|| die` was dead.
+    # `--host=` is the exported PEER_HOST verbatim, so this is the same label
+    # seed looks the manifest up by.
+    local peer="" prepaired=0
+    for x in "${argv[@]}"; do case "$x" in --host=*) peer="${x#--host=}" ;; esac; done
+    [ -n "$peer" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer")")" ] && prepaired=1
+
     cmd_add_client "$name" "${argv[@]}" || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
         echo
         echo ">>> import-relation: $x $name"
-        case "$x" in
-            seed)     cmd_seed "$name" --yes ;;
-            activate) cmd_activate "$name" --yes ;;
-        esac || die "import-relation: '$x $name' did not complete -- the record exists and the lifecycle is resumable: fix what it named, then re-run 'zfs-backup.sh $x $name' (a NEW peer first needs deploy.sh --join there, as add-client printed)."
+        # In a subshell with die confined to it: otherwise the verb's own die
+        # ends this process and nothing below ever runs.
+        if ( die_confine_to_subshell
+             case "$x" in
+                 seed)     cmd_seed "$name" --yes ;;
+                 activate) cmd_activate "$name" --yes ;;
+             esac ); then
+            continue
+        fi
+        if [ "$x" = seed ] && [ "$prepaired" -eq 1 ] \
+           && [ "$(record_get "$(client_conf_path "$name")" STATE)" = pending_enroll ]; then
+            import_relation_undo_record "$name"
+            die "import-relation: seed of '$name' was refused on a peer that was already paired -- the record this import created and its host-key alias line were removed. Keys, the pairing package and the peer are untouched; nothing to undo. The refusal above says why."
+        fi
+        die "import-relation: '$x $name' did not complete -- the record exists and the lifecycle is resumable: fix what it named, then re-run 'zfs-backup.sh $x $name' (a NEW peer first needs deploy.sh --join there, as add-client printed)."
     done
     log "import-relation: '$name' reproduced from $file"
 }
