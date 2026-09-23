@@ -706,3 +706,23 @@ WEWNATRZ programu awk, wiec przepisanie funkcji zostawialo jej stary ogon; przy
 sprzataniu tego ogona skasowalem cale `ds_volume`. `bash -n` nie widzi zadnego z
 tych bledow — duplikat jest skladniowo poprawny, a brakujaca funkcja to blad
 wykonania. Zlapala je dopiero suita.
+
+## 2026-09-23 — GUI: „Proste, intuicyjne GUI bez udziwnień”; import na nowy kolektor: `t` = zgoda źródła
+
+**Zasada obowiązująca (właściciel, 2026-09-23):** *„Proste, intuicyjne GUI bez
+udziwnień.”* Decyzja należy do czasownika, a GUI ją pokazuje i pyta o
+potwierdzenie. Operację projektuje się w całości, nie okno po oknie. Każde
+dodatkowe pole, pytanie czy okno musi się czymś bronić. Pochodzenie: F8
+poprawiane trzy razy po kawałku (pole nazwy, sprawdzanie pliku, komunikat
+pokrycia), aż właściciel: *„to jest banalne okno i operacja, popraw to
+całościowo”*. Wynik: `import-relation` wydaje werdykt przed zmianą (już jest /
+różni się / ta sama para / plan), a F8 to plik i werdykt.
+
+**Import na nowy kolektor (właściciel, 2026-09-23):** eksport relacji trybu
+niesie zakres, który źródło zatwierdziło dla kolektora (`peers/<kolektor>.scope`,
+tylko aktywne stanze). Import na kolektorze, który tej relacji nie ma, idzie
+formą jednokomendową (`--source=… --install --grant-remotely`) i zatwierdza na
+źródle **dokładnie** ten zakres. `t` w oknie planu, które pokazuje ten zakres,
+jest zgodą źródła. To świadomy wyjątek od domyślnego „grant to decyzja źródła”
+(2026-08-17). Wymaga kanału root-ssh kolektor → źródło. Bez niego import kończy
+się odmową, zanim cokolwiek powstanie.
