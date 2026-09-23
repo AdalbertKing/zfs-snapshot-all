@@ -15517,7 +15517,7 @@ include_children = yes
     # other dataset argument in the package (dataset_list_split, lib-scope.sh).
     # A single-item list renders byte-identical to what this wrote before, so an
     # existing draft written by an earlier run still compares equal below.
-    local want="" _rq want_headers
+    local want="" _rq want_headers=""
     if [ -n "${RUX_EXACT_SCOPE:-}" ]; then
         # import-relation onto a NEW collector (2026-09-23): the file carries
         # the scope the source committed for the original collector; grant
