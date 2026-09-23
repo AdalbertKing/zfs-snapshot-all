@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: abfc2bf7edac1f22 -->
+<!-- status-covers-digest: 0f9ac9a5a4dcad46 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -50,6 +50,16 @@
     **107 maili** („STUCK IN THE QUEUE”), więc alerty z tego hosta nie wychodzą.
     Do tego pve10 widzi GitHuba tylko chwilami (błąd certyfikatu `canada.ca`
     wrócił godzinę po udanym fetchu), więc godzinny pull nie jest tam pewny (E64).
+- **F8: zła ścieżka zostaje w polu pliku (2026-09-23, po teście właściciela).**
+  Pole pliku jest podpowiedziane katalogiem domowym (`/root/`). Właściciel
+  dopisał `tmp/f8.json`, dostał `/root/tmp/f8.json`, GUI poszło dalej do nazwy
+  i dopiero czasownik odmówił (`cannot read`). To był trzeci raz tej samej
+  pułapki w jeden dzień (moja sonda, moje testy, właściciel). Teraz plik jest
+  sprawdzany w pierwszym kroku: nieistniejąca ścieżka wraca do pola, z wpisanym
+  tekstem do poprawienia i komunikatem `! nie ma takiego pliku` **w oknie**.
+  Pole `error` promptu jest nowe, bo linia komunikatu pod oknem jest zasłonięta
+  przez jego stopkę. Nowa asercja pada na `main`, a dwa stare testy F8 piszą
+  teraz prawdziwy plik zamiast nieistniejącego `e.json`. Suita `tui` 154/0.
 - **F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
   `export-relation pve9-synchro --json` wrócił do tego samego hosta i czasownik
   odmówił, jak powinien: *nazwa zajęta, podaj `--name=NEW`*. GUI nie miało
