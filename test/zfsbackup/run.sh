@@ -10530,14 +10530,48 @@ if awk -F'|' 'NR==1 { for (i=1;i<=NF;i++) if ($i ~ /^--target=/) t=i; for (i=1;i
 else
     bad "importrel: remaining flags in order" "$(cat "$IM/calls.log")"
 fi
-# a name that exists here refuses BEFORE anything is called
+# a name that exists here refuses BEFORE anything is called. This bare record
+# (CLIENT_NAME + STATE only) exports without dying (rc 0, empty argv, since
+# record_load only checks field names, not completeness) -- so the verdict
+# reached is DIFFERS (verdict 2), not "could not be exported".
 mkdir -p "$IM/clients"; printf 'CLIENT_NAME=ksiegowosc\nSTATE=active\n' > "$IM/clients/ksiegowosc.conf"
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
-if [ "$im_rc" -ne 0 ] && grep -q "already exists here" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
-    ok "importrel: an existing name refuses before add-client is called"
+if [ "$im_rc" -ne 0 ] && grep -q "DIFFERS" "$WORK/im.err" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: an existing, different relationship refuses before add-client is called"
 else
-    bad "importrel: existing name refuses" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+    bad "importrel: existing, different relationship refuses" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
 fi
+
+# --- IDENTICAL: the same relationship imported back onto its own host is a
+# no-op (verdict 1: here_argv == file_argv), owner 2026-09-23. A FRESH export
+# of the same record, without the doctoring sed above -- $IM/clients gets the
+# record ex_run exported ksiegowosc.json FROM in the first place.
+cp "$EX/clients/ksiegowosc.conf" "$IM/clients/ksiegowosc.conf"
+ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/same.json"
+im_run "$IM/same.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q "Nic do zrobienia" "$WORK/im.out" && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel: the same relationship imported back onto its own host is a no-op success -- 'already here, identical', nothing called (owner, pve10 2026-09-23)"
+else
+    bad "importrel: same relationship imported back is a no-op" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
+fi
+rm -f "$IM/clients/ksiegowosc.conf"
+
+# --- SAME PEER: a second mode-based relationship to a peer already covered by
+# a RUX_MODE record refuses BEFORE add-client (verdict 3), pve10 2026-09-23.
+# --mode=sync inserted right after --host=10.0.0.11 in the file's argv (the
+# JSON text there is literally '"--host=10.0.0.11",' -- checked above at the
+# sed that built $IM/ksiegowosc.json).
+sed 's/"--host=10.0.0.11",/"--host=10.0.0.11","--mode=sync",/' "$IM/ksiegowosc.json" > "$IM/samepeer.json"
+printf 'CLIENT_NAME=inna\nPEER_HOST=10.0.0.11\nRUX_MODE=sync\nSTATE=active\n' > "$IM/clients/inna.conf"
+im_run "$IM/samepeer.json" --name=nowa --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q "already has relationship 'inna'" "$WORK/im.err" \
+        && [ ! -s "$IM/calls.log" ] && [ ! -f "$IM/clients/nowa.conf" ]; then
+    ok "importrel: a second mode-based relationship to the same peer is refused BEFORE add-client -- one scope per collector (pve10 2026-09-23)"
+else
+    bad "importrel: second mode-based relationship to same peer refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
+fi
+rm -f "$IM/clients/inna.conf" "$IM/samepeer.json"
+
 # --- 2026-09-23, pve10: a refused seed's cleanup depends on whether the peer was
 # already paired BEFORE this import (import_relation_undo_record) -- a stub
 # cmd_seed that dies, like the real one, so die_confine_to_subshell is what

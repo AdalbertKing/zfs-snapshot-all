@@ -2204,9 +2204,8 @@ HELP = [
     u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, czasy i GB jak",
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
-    u"                 F7 eksport do pliku, F8 import: pyta o plik, potem nazwę",
-    u"                 (podpowiedziana z pliku; zmiana importuje pod nową),",
-    u"                 Ins nowa relacja",
+    u"                 F7 eksport do pliku, F8 import z pliku: najpierw werdykt",
+    u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
     u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach",
     u"                 (typ -> host -> diagnoza; brak pakietu = Zainstaluj ->",
@@ -2800,45 +2799,44 @@ class UI(object):
         self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", value, self.import_name, error)
 
     def import_name(self, path):
-        """Krok 0 importu: nazwa relacji. Bez tego pola import na hoscie, ktory
-        MA juz relacje o nazwie z pliku, konczyl sie odmowa czasownika kazaca
-        podac --name=NEW -- a GUI nie mialo gdzie (zmierzone na pve10,
-        2026-09-23). Podpowiedz = nazwa z pliku; --name idzie tylko przy zmianie.
-        Sciezka jest sprawdzana TUTAJ: pole bylo podpowiedziane z "/root/", operator
-        dopisal wzgledna sciezke i dostal zle zlozona sciezke, ktora dochodzila do
-        czasownika i tam dostawala odmowe "cannot read" (zmierzone na pve10,
-        2026-09-23) -- teraz zla sciezka zostaje w polu pliku."""
+        """Krok 1 importu: plik istnieje? Pole jest podpowiedziane z "/root/", a
+        dopisana wzgledna sciezka dawala /root/tmp/f8.json, ktora dochodzila do
+        czasownika i tam dostawala "cannot read" (pve10, 2026-09-23) -- zla
+        sciezka zostaje w polu pliku."""
         if not os.path.isfile(path):
             self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę (Esc = anuluj)" % path)
             return
-        try:
-            with io.open(path, encoding="utf-8") as f:
-                name = json.load(f).get("name") or ""
-        except (OSError, IOError, ValueError, AttributeError):
-            name = ""  # czasownik sam powie, co jest z plikiem nie tak
-        self.prompt(u"Import relacji z %s" % os.path.basename(path),
-                    u"Nazwa relacji (Enter = podgląd, Esc = anuluj):", name,
-                    lambda new: self.import_preview(path, new.strip() if new.strip() != name else ""))
+        self.import_preview(path)
 
-    def import_preview(self, path, name=""):
-        """Krok 1 importu: to, co czasownik drukuje BEZ --yes, jako podglad."""
-        argv = [self.zb(), "import-relation", path] + (["--name=" + name] if name else [])
+    # Czasownik bez --yes konczy PLAN tym zdaniem. Kazdy inny wynik z rc 0 to
+    # werdykt bez niczego do wykonania (np. "relacja juz jest, identyczna").
+    IMPORT_PLAN_MARK = u"To byl podglad"
+
+    def import_preview(self, path):
+        """Krok 2 importu: WERDYKT czasownika (bez --yes). Decyduje czasownik, nie
+        GUI (2026-09-23, wlasciciel: "banalne okno i operacja"): relacja juz jest
+        i identyczna -> okno z wynikiem, nic do wykonania; odmowa -> okno z
+        odmowa; plan -> potwierdzenie, `t` wykonuje z --yes. Krok z nazwa
+        relacji zniknal: werdykt sam mowi, kiedy nazwa ma znaczenie, a --name
+        zostaje w CLI (import na innym kolektorze pod inna nazwa)."""
+        argv = [self.zb(), "import-relation", path]
         if self.exec_log:
-            preview = [u"[atrapa] podgląd: " + self.shell_line(argv)]
+            preview, rc = [u"[atrapa] podgląd: " + self.shell_line(argv), self.IMPORT_PLAN_MARK], 0
         else:
             try:
                 p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
-                preview = p.stdout.decode("utf-8", "replace").splitlines()
-                if p.returncode != 0:
-                    self.window = ("output", {"title": u"Import: podgląd odmówił", "path": None, "proc": None,
-                                              "shell": self.shell_line(argv), "lines": preview, "rc": p.returncode})
-                    self.scroll = 0
-                    return
             except OSError as e:
                 self.message = u"nie udało się uruchomić podglądu: %s" % e
                 return
+            preview, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
+        if rc != 0 or not any(self.IMPORT_PLAN_MARK in x for x in preview):
+            self.window = ("output", {"title": u"Import: odmowa" if rc else u"Import: nic do zrobienia",
+                                      "path": None, "proc": None, "shell": self.shell_line(argv),
+                                      "lines": preview, "rc": rc})
+            self.scroll = 0
+            return
         self.confirm(u"Import relacji z %s" % os.path.basename(path), argv + ["--yes"],
-                     [u"Podgląd (to samo, co czasownik pokazał bez --yes):", ""] + sum((wrap("  " + x, 72) for x in preview), []))
+                     [u"Plan (to samo, co czasownik pokazał bez --yes):", ""] + sum((wrap("  " + x, 72) for x in preview), []))
 
     def key(self, k, height=24, raw=None):
         """Jeden klawisz -> nowy stan. `k` to nazwa: 'down', 'F2', 'enter', 'q', 'esc'...;

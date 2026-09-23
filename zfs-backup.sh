@@ -3732,13 +3732,28 @@ assert_no_coverage_overlap() {   # <this client> <requested path>...
         die "could not check whether '$me' overlaps existing coverage -- refusing rather than guessing; nothing has been changed$badmsg"
     fi
     [ -z "$conflicts" ] && return 0
-    local line other owned req msg=""
-    while IFS=$'\t' read -r other owned req; do
-        [ -n "$other" ] || continue
-        msg="$msg
-  '$req' overlaps '$owned', already owned by relationship '$other'"
-    done <<< "$conflicts"
-    die "refusing to add '$me': it would take coverage another relationship already owns.$msg
+    # SUMMARY FIRST, one line per requested dataset (2026-09-23, owner on pve10):
+    # the old form printed every (owned, requested) pair, both directions, so
+    # importing a 9-dataset relationship a second time gave 20 lines -- 'ct-201
+    # overlaps ct-201' among them -- and the one fact the operator needed ("these
+    # are the SAME datasets as relationship X") had to be dug out by hand.
+    local summary detail
+    summary=$(printf '%s\n' "$conflicts" | awk -F'\t' -v total="$#" '
+        $1 != "" && !seen[$1 FS $3]++ { n[$1]++; if (!($1 in order)) { order[$1] = ++k; name[k] = $1 } }
+        END { for (i = 1; i <= k; i++) printf "  %d of %d requested dataset(s) are already covered by relationship '"'"'%s'"'"'\n", n[name[i]], total, name[i] }')
+    detail=$(printf '%s\n' "$conflicts" | awk -F'\t' '
+        $1 == "" { next }
+        !($3 in seenreq) { seenreq[$3] = 1; ord[++k] = $3 }
+        $2 == $3 { exact[$3] = exact[$3] (exact[$3] == "" ? "" : ", ") "'"'"'" $1 "'"'"'"; next }
+        !seen[$1 FS $2 FS $3]++ { near[$3] = near[$3] (near[$3] == "" ? "" : ", ") "'"'"'" $1 "'"'"' owns " $2 }
+        END { for (i = 1; i <= k; i++) { r = ord[i]
+                  printf "    %-34s <- %s\n", r, (r in exact) ? exact[r] : near[r] } }')
+    die "refusing to add '$me': it would take coverage another relationship already owns.
+$summary
+A second relationship over the same datasets is refused by design: create or import it on another collector, or remove the owning relationship first.
+
+Per requested dataset (<- the relationship that owns it, or its overlapping parent/child):
+$detail
 
 Two high-level relationships covering the same datasets would send and prune the same snapshots under different policy. Nothing has been changed -- no config, no crontab.
 If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
@@ -12923,8 +12938,50 @@ THEN
     local from; from=$(json_unquote "$(json_value_of "$doc" exported_from)")
     local at;   at=$(json_unquote "$(json_value_of "$doc" exported_at)")
 
-    if [ -f "$(client_conf_path "$name")" ]; then
-        die "import-relation: a relationship named '$name' already exists here -- import under another name (--name=NEW) or remove-client it first. Nothing was changed."
+    # VERDICT BEFORE ANY CHANGE (2026-09-23, owner: "zaimportowac konfiguracje
+    # skutecznie"). Import means "bring this host to the state in the file", so
+    # it is decided up front, not discovered half-way by add-client or seed:
+    #   1. the relationship is here and IDENTICAL to the file -> done, rc 0;
+    #   2. it is here and DIFFERENT -> refused, with the differences;
+    #   3. the name is free but this host already has a mode-based relationship
+    #      with the same peer -> refused: the peer keeps ONE scope file per
+    #      collector (peers/<collector>.scope), so a second relationship of that
+    #      kind to the same peer covers the same datasets by construction;
+    #   4. otherwise -> create, seed, activate (a refused seed undoes the record).
+    local ecpath; ecpath=$(client_conf_path "$name")
+    if [ -f "$ecpath" ]; then
+        local here_doc here_argv file_argv
+        here_doc=$( die_confine_to_subshell; cmd_export_relation "$name" --json 2>/dev/null ) \
+            || die "import-relation: a relationship named '$name' exists here but could not be exported for comparison -- nothing was changed. Check it with: zfs-backup.sh show-config $name"
+        here_argv=$(json_array_strings "$(json_value_of "$(json_value_of "$here_doc" replay)" argv)")
+        file_argv=$(printf '%s\n' ${argv[@]+"${argv[@]}"})
+        if [ "$here_argv" = "$file_argv" ]; then
+            echo "Relacja '$name' JUZ JEST na tym hoscie i jest identyczna z plikiem $file"
+            echo "  (te same deklaracje: $(printf '%s ' ${argv[@]+"${argv[@]}"}))"
+            echo "  stan: $(record_get "$ecpath" STATE)"
+            echo "Nic do zrobienia -- import zakonczony."
+            return 0
+        fi
+        local diff_lines
+        diff_lines=$( { printf '%s\n' "$here_argv" | sed 's/^/  tu:   /'; printf '%s\n' "$file_argv" | sed 's/^/  plik: /'; } \
+                      | awk '{ k = substr($0, 9); c[k]++; l[NR] = $0; key[NR] = k } END { for (i = 1; i <= NR; i++) if (c[key[i]] == 1) print l[i] }')
+        die "import-relation: relationship '$name' already exists here and DIFFERS from $file:
+$diff_lines
+Nothing was changed. A relationship is changed by removing it and importing the file again (zfs-backup.sh delete-relation $name), or import the file under another name on another collector (--name=NEW)."
+    fi
+    local peer_host="" peer_mode="" f other
+    for x in ${argv[@]+"${argv[@]}"}; do
+        case "$x" in --host=*) peer_host="${x#--host=}" ;; --mode=*) peer_mode="${x#--mode=}" ;; esac
+    done
+    if [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
+        for f in "$CLIENTS_DIR"/*.conf; do
+            [ -f "$f" ] || continue
+            [ "$(record_get "$f" PEER_HOST)" = "$peer_host" ] || continue
+            [ -n "$(record_get "$f" RUX_MODE)" ] || continue
+            [ "$(record_get "$f" STATE)" = removed ] && continue
+            other=$(record_get "$f" CLIENT_NAME)
+            die "import-relation: this host already has relationship '$other' with $peer_host (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
+        done
     fi
 
     echo "Import relacji '$name' z $file"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0f9ac9a5a4dcad46 -->
+<!-- status-covers-digest: 56f1f0c499140186 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,32 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **IMPORT = „doprowadź host do stanu z pliku”; werdykt PRZED zmianą (2026-09-23, właściciel).**
+  Po trzech poprawkach okno po oknie właściciel: *„to jest banalne okno i operacja,
+  popraw to całościowo … chcę zaimportować konfigurację skutecznie”*.
+  `import-relation` decyduje teraz, zanim cokolwiek zmieni:
+  1. relacja o tej nazwie JEST i jej eksport ma ten sam `replay.argv` co plik
+     → „JUZ JEST … identyczna … Nic do zrobienia”, rc 0. To jest skuteczny
+     import pliku na host, który tę relację ma;
+  2. jest, ale inna → odmowa z samymi różnicami (`tu:` / `plik:`);
+  3. nazwa wolna, a ten host ma już relację trybu (sync/passive) z tym samym
+     peerem → odmowa jednym zdaniem. Peer trzyma JEDEN zakres na kolektor
+     (`peers/<kolektor>.scope`), więc druga taka relacja pokrywa te same
+     datasety z konstrukcji. Wcześniej wychodziło to dopiero w `seed`, po
+     założeniu rekordu;
+  4. inaczej plan: add-client, seed, activate (odmowa seed cofa rekord, #421).
+  **F8** to plik → werdykt czasownika. Plan daje potwierdzenie i `t`,
+  a „nic do zrobienia” i odmowa dają okno wyniku. **Krok z nazwą zniknął z GUI**
+  (`--name` zostaje w CLI). Strażnik pokrycia (`assert_no_coverage_overlap`)
+  mówi najpierw „N z M datasetów należy już do relacji X”, potem jedna linia
+  na dataset zamiast każdej pary w obie strony (20 linii → 9).
+  - **Dowody:** na pve10 z drzewa gałęzi, dla prawdziwego pliku
+    `pve9-synchro`: identyczny → rc 0 „Nic do zrobienia”; ta sama para pod
+    inną nazwą → odmowa przed czymkolwiek; inny profil → `tu:
+    --profile=passive-flat / plik: --profile=inny`. Render F8 z prawdziwym
+    czasownikiem: okno „Import: nic do zrobienia”. Rekordy, plik aliasów i
+    crontab bez zmian (E60 0). `zfsbackup --section exportrel` 39/0, na
+    `main` 36/3; F8 w `tui` 4/4, cała suita `tui` 152/0.
 - **Import odrzucony przez `seed` sprząta po sobie; `seed` nie zostawia `seeding` po odmowie (2026-09-23).**
   Właściciel na pve10 zaimportował żywą `pve9-synchro` pod nazwą
   `pve9-synchro1`. Strażnik pokrycia słusznie odmówił (te same 9 datasetów),
@@ -60,7 +86,7 @@
   Pole `error` promptu jest nowe, bo linia komunikatu pod oknem jest zasłonięta
   przez jego stopkę. Nowa asercja pada na `main`, a dwa stare testy F8 piszą
   teraz prawdziwy plik zamiast nieistniejącego `e.json`. Suita `tui` 154/0.
-- **F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
+- **[ZASTĄPIONE tego samego dnia -- patrz „IMPORT = doprowadź host do stanu z pliku”; krok z nazwą usunięty z GUI] F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
   `export-relation pve9-synchro --json` wrócił do tego samego hosta i czasownik
   odmówił, jak powinien: *nazwa zajęta, podaj `--name=NEW`*. GUI nie miało
   gdzie jej wpisać, więc import na hoście, który ma relację o tej nazwie, był
