@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 46235bc725557e4f -->
+<!-- status-covers-digest: 3b18b0d4a86f6dc5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,21 +21,39 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Import na INNY kolektor DZIAŁA: eksport niesie zakres, import go zatwierdza 1:1 (2026-09-23, pve11 ← pve9).**
+  Wcześniej plik eksportu nie niósł zakresu relacji trybu. Relacja
+  `pve9-synchro` to `hdd/lab` bez `swap` i `www` (9 datasetów), a
+  `--join` dla pve11 proponował domyślne 15 (`hdd/archive`, `hdd/data`,
+  `hdd/lab`). Teraz:
+  - **eksport** zapisuje `"scope"`: aktywne stanze zakresu, który źródło
+    zatwierdziło dla kolektora, czytane jak w `seed` (konto delegowane,
+    sprawdzany skrót); `null`, gdy relacja nie ma trybu albo odczyt padł;
+  - **import** na kolektorze, który tej relacji nie ma, idzie formą
+    jednokomendową kreatora: `--source=HOST:ROOT --mode --name --install
+    --yes --grant-remotely`, a `rux_grant_remotely` zatwierdza **dokładnie**
+    zakres z pliku (`RUX_EXACT_SCOPE`) zamiast szablonu z żądania. Plan
+    pokazuje ten zakres, a `t` jest zgodą źródła (OWNER-DECISIONS 2026-09-23).
+    Relacja identyczna, ale niedokończona, nie jest już „nic do zrobienia”:
+    odmowa wskazuje `seed`/`activate`.
+  - **Dowód na żywo:** na pve11 import z pliku z pve10 jednym poleceniem, rc
+    0, relacja `active`. `peers/pve11.scope` na pve9 jest bajt w bajt taki
+    sam jak `pve10.scope` (skrót zatwierdzenia się zgadza), audyt
+    `GRANTED_REMOTELY_BY=root@pve11`. Na pve11 9 datasetów, najnowsza
+    migawka ta sama co na pve10. Linia crona pve11 rc 0, ocalały pve10 rc 0,
+    w cronie brak `/tmp`.
+  - **Warunek:** kanał root-ssh kolektor → źródło. Na labie dodany (klucz
+    roota pve11 w `authorized_keys` pve9, za zgodą właściciela). **pve11
+    dzieli klucz roota z pve9b** (klon), co dopisuje się do otwartej sprawy
+    wspólnego klucza.
+  - Sprzątanie poprzedniej próby: `delete-relation` na pve11 nie miał kanału
+    do pve9 i zatrzymał się przed stroną źródła; `deploy.sh --leave=pve11`
+    zrobiony z pve10, potem `delete-relation --keep-source`.
 - **Pusty kolektor: F8 i Ins działają (2026-09-23, pve11).** Na kolektorze bez
   relacji, czyli tam, gdzie importuje się najczęściej, F8 i Ins milczały:
   `action()` najpierw szukało zaznaczonej relacji. Teraz import i nowa relacja
   idą przed tym sprawdzeniem, a stopka pustego ekranu mówi „F8 import z pliku /
   Ins nowa relacja”. `tui` 154/0; dwie nowe asercje padają na `main`.
-  - **Import na INNY kolektor (pve11 ← pve9) NIE jest jeszcze skuteczny.** Plik
-    eksportu nie niesie zakresu. Relacja `pve9-synchro` to `hdd/lab` bez `swap`
-    i `www` (9 datasetów), a zakres żyje tylko w `peers/pve10.scope` na
-    źródle. `--join` dla pve11 zaproponował domyślne 15 datasetów
-    (`hdd/archive`, `hdd/data`, `hdd/lab`). Decyzja właściciela 2026-09-23:
-    eksport ma nieść zakres, import na nowy kolektor robi zdalny join i grant
-    DOKŁADNIE tego zakresu, a `t` w oknie planu jest zgodą źródła. W toku.
-    Stan labu: pve11 ma rekord `pve9-synchro` `pending_enroll`, pve9 ma
-    przerwany join (konto `zfsbackup-pve11` bez uprawnień, szkic
-    `peers/pve11.scope`).
 - **IMPORT = „doprowadź host do stanu z pliku”; werdykt PRZED zmianą (2026-09-23, właściciel).**
   Po trzech poprawkach okno po oknie właściciel: *„to jest banalne okno i operacja,
   popraw to całościowo … chcę zaimportować konfigurację skutecznie”*.

@@ -10703,6 +10703,116 @@ else
     bad "importrel: usage" ""
 fi
 
+# --- THE SCOPE (2026-09-23): a mode-based relationship's export carries the
+# COMMITTED scope (active stanzas only, read the way seed reads it), not the
+# source's default draft -- pve11 2026-09-23: without this an import onto a
+# new collector got 15 datasets offered for a relationship of 9.
+mkdir -p "$IM/scope/clients"
+{
+    echo "CLIENT_NAME=scoped"
+    echo "PEER_HOST=10.0.0.11"
+    echo "STATE=active"
+    echo "PROFILE=passive-flat"
+    echo "RUX_MODE=sync"
+} > "$IM/scope/clients/scoped.conf"
+{
+    echo "CLIENT_NAME=unscoped"
+    echo "PEER_HOST=10.0.0.11"
+    echo "STATE=active"
+    echo "PROFILE=passive-flat"
+} > "$IM/scope/clients/unscoped.conf"
+scope_run() {   # <name> -> $WORK/scope.out / $WORK/scope.err, returns rc
+    ( export CLIENTS_DIR="$IM/scope/clients" SERVER_CONF="$IM/no-server-conf"
+      bash -c '
+        source "$1"; shift
+        load_client_and_connection() { :; }
+        fetch_committed_scope() { printf "%s\n" "# header comment" "[dataset:hdd/lab]" "include_parent = no" "" "include_children = yes" "exclude = hdd/lab/x" "# ====== inventory" "# hdd/lab/y  filesystem" > "$1"; }
+        cmd_export_relation "$@"' x "$ZFSBACKUP" "$@" ) >"$WORK/scope.out" 2>"$WORK/scope.err"
+}
+scope_run scoped --json
+got_scope=$(printf '%s' "$(cat "$WORK/scope.out")" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d["scope"]))' 2>/dev/null)
+if [ "$got_scope" = '["[dataset:hdd/lab]", "include_parent = no", "include_children = yes", "exclude = hdd/lab/x"]' ]; then
+    ok "exportrel: a mode-based relationship exports its COMMITTED scope, active stanzas only (pve11 2026-09-23: without it a new collector got the source's default draft)"
+else
+    bad "exportrel: a mode-based relationship exports its COMMITTED scope, active stanzas only (pve11 2026-09-23: without it a new collector got the source's default draft)" \
+        "got: $got_scope" "$(cat "$WORK/scope.out" "$WORK/scope.err")"
+fi
+scope_run unscoped --json
+got_scope2=$(printf '%s' "$(cat "$WORK/scope.out")" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["scope"])' 2>/dev/null)
+if [ "$got_scope2" = "None" ]; then
+    ok "exportrel: a relationship without a mode exports scope null"
+else
+    bad "exportrel: a relationship without a mode exports scope null" "got: $got_scope2" "$(cat "$WORK/scope.out" "$WORK/scope.err")"
+fi
+rm -rf "$IM/scope"
+
+# --- NEW COLLECTOR WITH A SCOPE (2026-09-23): a file whose replay names a
+# --host/--mode pair and carries a non-null scope replays through the
+# one-command form (--source=HOST:ROOTS --install --yes --grant-remotely),
+# with the file's scope EXACTLY -- add-client alone would stop at "carry this
+# package" and let the source offer its own default draft.
+NC="$IM/newcol"; rm -rf "$NC"; mkdir -p "$NC/clients"
+"$PY_OR_PYTHON" -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["name"] = "nowy"
+d["replay"]["name"] = "nowy"
+d["replay"]["argv"] = ["--host=10.0.0.11", "--mode=sync", "--profile=d7h24"]
+d["scope"] = ["[dataset:hdd/lab]", "include_parent = no", "include_children = yes", "exclude = hdd/lab/x"]
+json.dump(d, open(sys.argv[2], "w"))
+' "$IM/ksiegowosc.json" "$NC/nowy.json"
+nc_run() {   # <args...> -> rc; stdout/err in $WORK/nc.out/.err; rux_entry's call captured
+    ( export CLIENTS_DIR="$NC/clients" SERVER_CONF="$IM/no-server-conf" \
+             RUX_ARGV_OUT="$NC/rux.argv" RUX_SCOPE_OUT="$NC/rux.scope"
+      bash -c '
+        source "$1"; shift
+        rux_entry() { printf "%s\n" "$@" > "$RUX_ARGV_OUT"; printf "%s" "$RUX_EXACT_SCOPE" > "$RUX_SCOPE_OUT"; }
+        cmd_import_relation "$@"' x "$ZFSBACKUP" "$@" ) >"$WORK/nc.out" 2>"$WORK/nc.err"
+}
+rm -f "$NC/rux.argv" "$NC/rux.scope"
+nc_run "$NC/nowy.json"; nc_rc=$?
+if [ "$nc_rc" -eq 0 ] && grep -q "NOWY KOLEKTOR" "$WORK/nc.out" && grep -q "exclude = hdd/lab/x" "$WORK/nc.out" \
+        && [ ! -f "$NC/rux.argv" ]; then
+    ok "importrel: new collector -- plan shows the scope and calls nothing without --yes"
+else
+    bad "importrel: new collector -- plan shows the scope and calls nothing without --yes" \
+        "rc=$nc_rc" "$(cat "$WORK/nc.out" "$WORK/nc.err")"
+fi
+nc_run "$NC/nowy.json" --yes; nc_rc=$?
+nc_want_argv=$(printf '%s\n' --source=10.0.0.11:hdd/lab --mode=sync --name=nowy --profile=d7h24 --install --yes --grant-remotely)
+nc_want_scope=$(printf '%s\n' '[dataset:hdd/lab]' 'include_parent = no' 'include_children = yes' 'exclude = hdd/lab/x')
+if [ "$nc_rc" -eq 0 ] && [ -f "$NC/rux.argv" ] && [ "$(cat "$NC/rux.argv")" = "$nc_want_argv" ] \
+        && [ "$(cat "$NC/rux.scope")" = "$nc_want_scope" ]; then
+    ok "importrel: new collector -- --yes replays through the one-command form with --grant-remotely and the file's scope EXACTLY (pve11 2026-09-23)"
+else
+    bad "importrel: new collector -- --yes replays through the one-command form with --grant-remotely and the file's scope EXACTLY (pve11 2026-09-23)" \
+        "rc=$nc_rc" "argv: $(cat "$NC/rux.argv" 2>/dev/null)" "want: $nc_want_argv" \
+        "scope: $(cat "$NC/rux.scope" 2>/dev/null)" "want: $nc_want_scope" "$(cat "$WORK/nc.err")"
+fi
+
+# --- an existing record that IS the same relationship (here_argv == file_argv)
+# but not yet finished (STATE != active) is not "done" -- refused, naming the
+# seed/activate it needs, not silently re-run.
+rm -f "$NC/rux.argv" "$NC/rux.scope"
+printf 'CLIENT_NAME=nowy\nPEER_HOST=10.0.0.11\nSTATE=pending_enroll\n' > "$NC/clients/nowy.conf"
+nc_run_unfinished() {   # <args...> -> rc; cmd_export_relation stubbed to echo the SAME argv as the file
+    ( export CLIENTS_DIR="$NC/clients" SERVER_CONF="$IM/no-server-conf" \
+             RUX_ARGV_OUT="$NC/rux.argv" RUX_SCOPE_OUT="$NC/rux.scope"
+      bash -c '
+        source "$1"; shift
+        cmd_export_relation() { printf "%s" "{\"replay\":{\"argv\":[\"--host=10.0.0.11\",\"--mode=sync\",\"--profile=d7h24\"]}}"; }
+        rux_entry() { printf "%s\n" "$@" > "$RUX_ARGV_OUT"; printf "%s" "$RUX_EXACT_SCOPE" > "$RUX_SCOPE_OUT"; }
+        cmd_import_relation "$@"' x "$ZFSBACKUP" "$@" ) >"$WORK/nc.out" 2>"$WORK/nc.err"
+}
+nc_run_unfinished "$NC/nowy.json" --yes; nc_rc=$?
+if [ "$nc_rc" -ne 0 ] && grep -q "NOT finished" "$WORK/nc.err" && [ ! -f "$NC/rux.argv" ]; then
+    ok "importrel: an identical but unfinished relationship is not 'done' -- refused with seed/activate named"
+else
+    bad "importrel: an identical but unfinished relationship is not 'done' -- refused with seed/activate named" \
+        "rc=$nc_rc" "$(cat "$WORK/nc.out" "$WORK/nc.err")"
+fi
+rm -rf "$NC"
+
 if ! ex_run export-relation && grep -q "requires a relationship name" "$WORK/ex.err" "$WORK/ex.out"; then
     ok "exportrel: no name is refused"
 else
