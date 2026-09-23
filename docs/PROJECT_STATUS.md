@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b4e0e7d186ba7e4c -->
+<!-- status-covers-digest: 4d7fa4d515dc571a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,16 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **F8: zła ścieżka zostaje w polu pliku (2026-09-23, po teście właściciela).**
+  Pole pliku jest podpowiedziane katalogiem domowym (`/root/`). Właściciel
+  dopisał `tmp/f8.json`, dostał `/root/tmp/f8.json`, GUI poszło dalej do nazwy
+  i dopiero czasownik odmówił (`cannot read`). To był trzeci raz tej samej
+  pułapki w jeden dzień (moja sonda, moje testy, właściciel). Teraz plik jest
+  sprawdzany w pierwszym kroku: nieistniejąca ścieżka wraca do pola, z wpisanym
+  tekstem do poprawienia i komunikatem `! nie ma takiego pliku` **w oknie**.
+  Pole `error` promptu jest nowe, bo linia komunikatu pod oknem jest zasłonięta
+  przez jego stopkę. Nowa asercja pada na `main`, a dwa stare testy F8 piszą
+  teraz prawdziwy plik zamiast nieistniejącego `e.json`. Suita `tui` 154/0.
 - **F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
   `export-relation pve9-synchro --json` wrócił do tego samego hosta i czasownik
   odmówił, jak powinien: *nazwa zajęta, podaj `--name=NEW`*. GUI nie miało
