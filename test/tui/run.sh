@@ -492,13 +492,13 @@ IMPF="$(mktemp)"
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
-A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter")"
+A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
 if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
     ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
 else
     bad "akcje: F8" "$A"
 fi
-A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter,t")"
+A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,t")"
 if grep -q "import-relation .*$(basename "$IMPF")'\? --yes$" "$XL"; then
     ok "akcje: ...i 't' wola import-relation PLIK --yes"
 else
@@ -513,26 +513,15 @@ if has "$A" 'Import relacji z pliku' && has "$A" 'nie ma takiego pliku' && [ ! -
 else
     bad "akcje: F8 nieistniejaca sciezka" "$A" "$(cat "$XL")"
 fi
-# import: drugi krok to NAZWA, podpowiedziana z pliku; --name tylko przy zmianie.
-# Bez niego import na hoscie z relacja o tej nazwie konczyl sie odmowa kazaca
-# podac --name=NEW, ktorego GUI nie przyjmowalo (pve10, 2026-09-23).
+# F8 nie ma juz kroku z nazwa (2026-09-23): werdykt daje czasownik bez --yes
+# (juz jest i identyczna / rozni sie / plan), --name zostaje w CLI. Routing
+# werdyktu na PRAWDZIWYM czasowniku jest dowiedziony na pve10 -- w trybie
+# atrapy czasownik sie nie wykonuje, wiec tu jest tylko brak kroku z nazwa.
 A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
-if has "$A" 'Nazwa relacji' && has "$A" 'pve9-synchro_'; then
-    ok "akcje: F8 po pliku pyta o NAZWE i podpowiada te z pliku"
+if ! has "$A" 'Nazwa relacji' && has "$A" 'POTWIERDZENIE: Import relacji'; then
+    ok "akcje: F8 po pliku idzie prosto do werdyktu/planu -- bez pola nazwy"
 else
-    bad "akcje: F8 nazwa z pliku" "$A"
-fi
-HOME=/root act "down,F8,$CLR,text:$IMPP,enter,enter,t" >/dev/null
-if grep -q "import-relation .* --yes$" "$XL" && ! grep -q -- "--name=" "$XL"; then
-    ok "akcje: ...nazwa bez zmian -> BEZ --name (czasownik bierze ja z pliku)"
-else
-    bad "akcje: F8 nazwa bez zmian" "$(cat "$XL")"
-fi
-HOME=/root act "down,F8,$CLR,text:$IMPP,enter,bs,bs,bs,bs,bs,bs,bs,text:kopia,enter,t" >/dev/null
-if grep -q "import-relation .* --name=pve9-kopia --yes$" "$XL"; then
-    ok "akcje: ...zmieniona nazwa -> import-relation PLIK --name=NOWA --yes"
-else
-    bad "akcje: F8 --name" "$(cat "$XL")"
+    bad "akcje: F8 bez kroku z nazwa" "$A"
 fi
 rm -f "$IMPF"
 # odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
