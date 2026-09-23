@@ -4150,6 +4150,13 @@ else
     bad "seed overlap: child of an owned path refuses before any real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
 fi
 
+st=$(record_get "$SD/clients/beta.conf" STATE)
+if [ "$st" = "pending_enroll" ]; then
+    ok "seed overlap: a refused seed leaves the record in pending_enroll, not 'seeding' (pve10 2026-09-23: F3 then offered 'seed' forever)"
+else
+    bad "seed overlap: a refused seed leaves the record in pending_enroll, not 'seeding' (pve10 2026-09-23: F3 then offered 'seed' forever)" "STATE=$st $(cat "$SD/clients/beta.conf")"
+fi
+
 # 2. child already owned would be the mirror case; exercised instead as
 #    parent-requested here (rpool, parent of alpha's rpool/data) -- both
 #    directions of path_overlaps() are already pinned locally in section 45,
@@ -10531,6 +10538,63 @@ if [ "$im_rc" -ne 0 ] && grep -q "already exists here" "$WORK/im.err" && [ ! -s 
 else
     bad "importrel: existing name refuses" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
 fi
+# --- 2026-09-23, pve10: a refused seed's cleanup depends on whether the peer was
+# already paired BEFORE this import (import_relation_undo_record) -- a stub
+# cmd_seed that dies, like the real one, so die_confine_to_subshell is what
+# stops the process, not a `return 1`.
+im_run_refused() {   # <args...> -> rc; stdout/err in $WORK/im.*
+    ( export CLIENTS_DIR="$IM/clients" SERVER_CONF="$IM/no-server-conf" IM_LOG="$IM/calls.log"
+      export PEER_STATE_DIR="$IM/peerstate" IM_KEYS="$IM/keys"
+      : > "$IM_LOG"
+      bash -c '
+        source "$1"; shift
+        PEER_KEY_DIR="$IM_KEYS"   # AFTER source: lib-pairing.sh sets it unconditionally, an export is overwritten
+        cmd_add_client() {
+            local nm="$1"
+            { printf "add-client|%s" "$nm"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+            printf "CLIENT_NAME=%s\nPEER_HOST=10.0.0.11\nSTATE=pending_enroll\n" "$nm" > "$CLIENTS_DIR/$nm.conf"
+        }
+        cmd_seed() {
+            local nm="$1"
+            { printf "seed|%s" "$nm"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+            die "refusing to add $nm: it would take coverage another relationship already owns."
+        }
+        cmd_activate()   { printf "activate|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
+}
+mkdir -p "$IM/peerstate" "$IM/keys"
+im_alias_two_lines() {
+    printf 'zfs-client-sibling ssh-ed25519 AAAAsibling\nzfs-client-kopia ssh-ed25519 AAAAkopia\n' > "$IM/keys/10.0.0.11_alias_known_hosts"
+}
+# 2a. peer already paired -- the record and ONLY its alias line are removed.
+rm -f "$IM/clients/kopia.conf"
+printf 'PEER_SAVED_ACCOUNT=zfsbackup\n' > "$IM/peerstate/10.0.0.11.conf"
+im_alias_two_lines
+im_run_refused "$IM/ksiegowosc.json" --name=kopia --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ ! -f "$IM/clients/kopia.conf" ] \
+        && [ "$(grep -c . "$IM/keys/10.0.0.11_alias_known_hosts")" -eq 1 ] \
+        && grep -q '^zfs-client-sibling ' "$IM/keys/10.0.0.11_alias_known_hosts" \
+        && grep -q "were removed" "$WORK/im.err" \
+        && ! grep -q '^activate|' "$IM/calls.log"; then
+    ok "importrel: seed refused on an already-paired peer -> the import's record and ONLY its alias line are removed, sibling line kept, activate never called (pve10 2026-09-23)"
+else
+    bad "importrel: seed refused on an already-paired peer" "rc=$im_rc" \
+        "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log" "$IM/keys/10.0.0.11_alias_known_hosts" 2>/dev/null)"
+fi
+# 2b. new peer (no pre-existing manifest) -- the record stays, resumable.
+rm -f "$IM/peerstate/10.0.0.11.conf" "$IM/clients/kopia.conf"
+im_alias_two_lines
+im_run_refused "$IM/ksiegowosc.json" --name=kopia --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ -f "$IM/clients/kopia.conf" ] \
+        && [ "$(grep -c . "$IM/keys/10.0.0.11_alias_known_hosts")" -eq 2 ] \
+        && grep -q "resumable" "$WORK/im.err"; then
+    ok "importrel: seed failing on a NEW peer keeps the record -- the join-then-seed lifecycle stays resumable"
+else
+    bad "importrel: seed failing on a NEW peer keeps the record" "rc=$im_rc" \
+        "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log" "$IM/keys/10.0.0.11_alias_known_hosts" 2>/dev/null)"
+fi
+rm -f "$IM/clients/kopia.conf"; rm -rf "$IM/peerstate" "$IM/keys"
+
 im_run "$IM/ksiegowosc.json" --name=ksiegowosc2 --yes; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc2|' "$IM/calls.log"; then
     ok "importrel: --name=NEW imports the same file under another name"

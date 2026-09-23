@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b4e0e7d186ba7e4c -->
+<!-- status-covers-digest: abfc2bf7edac1f22 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,35 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Import odrzucony przez `seed` sprząta po sobie; `seed` nie zostawia `seeding` po odmowie (2026-09-23).**
+  Właściciel na pve10 zaimportował żywą `pve9-synchro` pod nazwą
+  `pve9-synchro1`. Strażnik pokrycia słusznie odmówił (te same 9 datasetów),
+  ale zostawił rekord zawieszony w `seeding`, a do tego linię aliasu klucza
+  hosta. F3 podpowiadał wtedy „seed pve9-synchro1” w nieskończoność.
+  Komunikat importu „resumable” nie wyświetlał się wcale, bo `die` w `seed`
+  kończy proces, więc `|| die` było martwe od 2026-09-09 (E63).
+  - **`seed`** zapisuje `STATE=seeding` dopiero PO `assert_no_coverage_overlap`,
+    więc odmowa zostawia rekord w stanie sprzed.
+  - **`import-relation`** puszcza kroki następcze w `( die_confine_to_subshell; … )`.
+    Jeśli `seed` padnie, a peer był sparowany PRZED importem (manifest
+    istniał), `import_relation_undo_record` usuwa rekord i TYLKO linię aliasu
+    tej nazwy. Klucze, pinned key, paczka parowania i manifest są wspólne z
+    relacjami-rodzeństwem, więc zostają. Dla NOWEGO peera rekord zostaje, bo
+    droga `deploy.sh --join`, potem `seed` ma być wznawialna.
+  - **Sprzątanie na pve10** zrobione ręcznie, NIE przez `delete-relation`/
+    `clean-relationships`: te purgują per ADRES i zabrałyby linię aliasu żywej
+    `pve9-synchro`. Kopia usuniętych plików leży w
+    `/root/cleanup-pve9-synchro1-20260923/`. Linia `pve9-synchro` odpalona
+    dosłownie z crontaba: rc=0.
+  - **Dowody:** powtórzony na pve10 dokładnie scenariusz właściciela z kodem
+    gałęzi: rc=1, rekord i linia aliasu usunięte, plik aliasów sha256 = przed
+    importem, crontab bez śladu klonu. `zfsbackup --section exportrel` 37/0;
+    dwie nowe asercje padają na `main` (35/2). Sekcja 47: asercja
+    `pending_enroll` po odmowie. Atrapa `seed` UMIERA jak prawdziwa.
+  - **Znalezione przy okazji, NIE ruszane:** na pve10 w kolejce exim4 stoi
+    **107 maili** („STUCK IN THE QUEUE”), więc alerty z tego hosta nie wychodzą.
+    Do tego pve10 widzi GitHuba tylko chwilami (błąd certyfikatu `canada.ca`
+    wrócił godzinę po udanym fetchu), więc godzinny pull nie jest tam pewny (E64).
 - **F8: import pyta o NAZWĘ (2026-09-23).** Na pve10 prawdziwy plik
   `export-relation pve9-synchro --json` wrócił do tego samego hosta i czasownik
   odmówił, jak powinien: *nazwa zajęta, podaj `--name=NEW`*. GUI nie miało

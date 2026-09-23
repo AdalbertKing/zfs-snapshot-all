@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1836,3 +1836,34 @@ not check -- what is in the index.
 `git add <code>` -> `--refresh-status` -> `git add docs/PROJECT_STATUS.md` ->
 `--verify`. And read the whole `--verify` output, not `tail -3`: the summary
 line named the wrong gate.
+
+### E63 — `cmd_seed ... || die "resumable"` was unreachable for two weeks (2026-09-23, R1)
+
+**Genesis.** import-relation (2026-09-09) ran its follow-up verbs as
+`case ... cmd_seed "$name" --yes ;; esac || die "... the lifecycle is resumable ..."`.
+cmd_seed ends with `die`, and `die` is `exit` -- so the `||` branch could never
+run. The owner found it by importing a live relationship under a second name on
+pve10: the coverage guard refused (correctly), the process ended there, and what
+remained was a record stuck in `seeding` plus its alias line, with no word from
+the import at all. The suite never saw it: its seed stub `printf`ed and returned.
+
+**Cause.** R1: a guard -- here an error message and the only place that could
+clean up -- that cannot execute, reviewed as if it could. The stub did not share
+the product's control flow (memory: "Atrapa = kontrakt sterowania": return vs exit).
+
+**Rule.** R1. For every `verb || handler`: does the verb return, or can it exit?
+If it can exit, the handler needs `( die_confine_to_subshell; verb )`, and the
+stub in its test must `die`, not `return 1`.
+
+### E64 — "pve10 sees GitHub again" from one fetch (2026-09-23, R2)
+
+**Genesis.** One `git fetch` on pve10 returned 0 and I told the owner the hourly
+pull would deploy there again. An hour later the same fetch failed with the old
+certificate error (`canada.ca`). One success of an intermittent path was
+reported as a changed state.
+
+**Cause.** R2 in time instead of space: a fact measured once at 12:4x carried to
+"from now on".
+
+**Rule.** R2. A connectivity fact is a sample, not a state: report it with its
+time, and do not promise behaviour (the hourly pull) that depends on it holding.
