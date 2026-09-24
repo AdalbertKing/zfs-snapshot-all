@@ -4222,6 +4222,71 @@ else
     bad "seed overlap: a disjoint dataset (different peer) still reaches the real transfer" "rc=$rc out=$out recorder=$(cat "$SD_RECORDER" 2>/dev/null)"
 fi
 
+# --- 47a. client_recursive_args(): the recursion flag and every recorded
+#          exclusion travel together, filled from the record fields directly
+#          (no word splitting, no globbing of a regex like ^tank/vms/vm[0-9]$)
+#          -- 2026-09-23, see the function's own header. -----------------
+out=$( (
+    is_recursive_root() { [ "$1" = tank/vms ]; }
+    EXCLUDE_CHILD_1='^tank/vms/vm[0-9]$'
+    EXCLUDE_CHILD_2='^tank/vms/a b$'
+    client_recursive_args tank/vms
+    printf '%s\n' "${REC_ARGS[@]}"
+) )
+expected=$'-R\n-X\n^tank/vms/vm[0-9]$\n-X\n^tank/vms/a b$'
+if [ "$out" = "$expected" ]; then
+    ok "exclude-child: client_recursive_args carries -R with every -X regex intact (no splitting, no globbing)"
+else
+    bad "exclude-child: client_recursive_args carries -R with every -X regex intact (no splitting, no globbing)" "out=$out"
+fi
+
+out=$( (
+    is_recursive_root() { [ "$1" = tank/vms ]; }
+    client_recursive_args tank/other
+    printf '%s\n' "${#REC_ARGS[@]}"
+) )
+if [ "$out" = "0" ]; then
+    ok "exclude-child: a non-recursive dataset gets no -R and no -X"
+else
+    bad "exclude-child: a non-recursive dataset gets no -R and no -X" "count=$out"
+fi
+
+# --- 47b. probe_snapget_endpoint() passes those same exclusions to the real
+#          engine invocation -- REV-20260923, measured live on pve11 <- pve9b:
+#          without this, an excluded child was probed anyway and reported
+#          FULL-FOREVER, stopping activation of a relationship that uses
+#          --exclude-child. -----------------------------------------------
+EP="$WORK/excludeprobe"; mkdir -p "$EP"
+EP_LOG="$EP/recorder.log"
+EP_SNAPGET="$EP/snapget_recorder.sh"
+cat > "$EP_SNAPGET" <<EOF
+#!/bin/bash
+printf '%s\n' "\$@" >> "$EP_LOG"
+args=("\$@")
+n=\${#args[@]}
+endpoint="\${args[\$((n-2))]}"
+ds="\${endpoint#*:}"
+echo "PLAN=INCREMENTAL base=x src=\$ds"
+exit 0
+EOF
+chmod +x "$EP_SNAPGET"
+
+rm -f "$EP_LOG"
+( ensure_alias_known_hosts() { echo /dev/null; }
+  is_recursive_root() { [ "$1" = tank/vms ]; }
+  snapget_local_base() { echo tank/backups; }
+  probe_source_has_no_snapshots() { return 1; }
+  SNAPGET="$EP_SNAPGET"
+  LOAD_LABEL=x LOAD_ALIAS=a LOAD_KEYFILE=/dev/null LOAD_ACCOUNT=acc
+  PEER_SAVED_DATASETS=tank/vms
+  EXCLUDE_CHILD_1='^tank/vms/vm3$'
+  probe_snapget_endpoint 10.0.0.1 22 ) >/dev/null 2>&1
+if awk 'BEGIN{a="";b="";c="";found=0} {a=b;b=c;c=$0; if(a=="-R" && b=="-X" && c=="^tank/vms/vm3$") found=1} END{exit !found}' "$EP_LOG" 2>/dev/null; then
+    ok "exclude-child: verify-endpoint's probe passes -X with -R (pve11 2026-09-23: an excluded child stopped activation as FULL-FOREVER)"
+else
+    bad "exclude-child: verify-endpoint's probe passes -X with -R (pve11 2026-09-23: an excluded child stopped activation as FULL-FOREVER)" "log=$(cat "$EP_LOG" 2>/dev/null)"
+fi
+
 
 # --- 48. read_server_conf() clobbers a client's own recorded CRON_CONFIG,
 #         found live during the REV-082/083/085 campaign -------------------

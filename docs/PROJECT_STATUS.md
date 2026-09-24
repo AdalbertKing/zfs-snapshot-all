@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 87dc68a2f06516f4 -->
+<!-- status-covers-digest: a317e1cf43b8ac40 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,28 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **`--exclude-child` działa wszędzie, nie tylko w `seed` (2026-09-23, pve11 ← pve9b).**
+  Właściciel założył kreatorem relację z wykluczonym dzieckiem (`hdd/vms/vm3`,
+  wcześniej `vm-202-disk-0`). `seed` go słusznie pominął, ale:
+  - **sonda `verify-endpoint`**, próbny bieg w `activate` i czasownik `test`
+    wołały `snapget -n -R` BEZ `-X`, więc wykluczony dataset wychodził jako
+    „FULL-FOREVER” i **zatrzymywał każdą aktywację** relacji z wykluczeniem
+    (odtworzone dwa razy);
+  - **grant na źródle** zatwierdzał zakres „z żądania” bez wykluczeń, więc
+    konto dostawało prawa na datasecie, którego zadania nie ruszają.
+
+  Teraz `client_recursive_args` buduje `-R -X re…` z pól rekordu (bez dzielenia
+  i globbingu regexów) i używają go trzy miejsca, które go pomijały. Grant
+  rozwiązuje regexy na liście datasetów źródła (przez kanał root) i zapisuje
+  dokładne `exclude = <dataset>` pod stanzą korzenia.
+  - **Dowód na żywo:** zawieszona na `seed_complete` relacja `pve9b` na pve11
+    dokończona `activate --yes`: „incremental-only confirmed”, `active`,
+    linie crona z `-X ^hdd/vms/vm3$`. Pobranie `hdd/vms` z crona rc 0 (`vm1`,
+    `vm2`, bez `vm3`). **Asymetryczna retencja działa:** cel `-H24 -D31 -M12
+    -Y5`, źródło `-H24 -D7 -W4 -M12`. Ocalały pve10 ← pve9b rc 0.
+  - `rux` 46/0 (na `main` 45/1); w `zfsbackup` testy 47a/47b.
+  - **Nie naprawione:** prawa na `vm3` nadane PRZED poprawką zostały na pve9b
+    (grant tej relacji był już zatwierdzony). Nowe granty je pomijają.
 - **Import na INNY kolektor DZIAŁA: eksport niesie zakres, import go zatwierdza 1:1 (2026-09-23, pve11 ← pve9).**
   Wcześniej plik eksportu nie niósł zakresu relacji trybu. Relacja
   `pve9-synchro` to `hdd/lab` bez `swap` i `www` (9 datasetów), a
