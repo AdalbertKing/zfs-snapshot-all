@@ -1003,6 +1003,42 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
 # and crash semantics; silently converting one into the other to satisfy a safety
 # check is the "helpful repair" this project refuses everywhere else. Refuse, name
 # both options, let a human choose.
+# TWO COLLECTORS, ONE SOURCE FAMILY (owner note 16, 2026-09-24). Measured on the
+# lab: pve11 <- pve9b was granted hdd/vm-disks with its own source retention
+# while pve10 <- pve9b already creates AND prunes automated_hourly there. Both
+# jobs would destroy the same family under different rules, and each would
+# delete the other's incremental base. Nothing refused it: the coverage guard is
+# per collector, and the source committed an overlapping scope without a word.
+# The source cannot tell who prunes; this relationship can -- it is about to
+# install a source prune on exactly these datasets. So: if a DIFFERENT peer
+# account (zfsbackup-<collector>, created by --join) already holds `destroy` on
+# one of them, refuse before anything is installed. A passive/sync relationship
+# emits no source prune and never reaches this (two synchro collectors on one
+# source were tested live the same day and are legitimate). The source's own
+# local account is not a peer and is not counted.
+assert_no_foreign_source_pruner() {   # <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
+    local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
+    local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
+    local ds out rc others="" o
+    for ds in "$@"; do
+        out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
+        [ "$rc" -eq 0 ] || die "foreign-pruner check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a source prune without knowing who else prunes there. Output: $(printf '%s' "$out" | tail -2)"
+        o=$(printf '%s\n' "$out" | awk -v me="$account" '
+            $1 == "user" && $2 ~ /^zfsbackup-./ && $2 != me {
+                n = split($3, p, ","); for (i = 1; i <= n; i++) if (p[i] == "destroy") { print $2; break } }' | sort -u | tr '\n' ' ')
+        [ -n "$o" ] && others="$others
+  $ds: ${o% }"
+    done
+    [ -z "$others" ] && return 0
+    die "refusing to install source retention: another collector can already DELETE snapshots on these source datasets on $host:$others
+
+Two collectors pruning the same snapshot family on one source, each under its own retention, delete each other's incremental bases -- and every run still reports success. Choose one:
+  * copy these datasets WITHOUT managing retention on the source (a passive relationship leaves the source's snapshots to their owner);
+  * copy datasets no other collector manages;
+  * or remove the other collector's relationship first.
+Nothing was installed."
+}
+
 assert_no_atomic_with_source_retention() {   # <configfile> <local dataset path>...
     local cfg="$1"; shift
     local lp rec
@@ -9624,6 +9660,9 @@ cmd_activate_client() {
         ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
               "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
             || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
+        ( assert_no_foreign_source_pruner "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+              "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+            || { rm -f "$workfile"; die "another collector already prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
     fi
 
     echo
@@ -15673,6 +15712,10 @@ rux_remote_install() {
     local host="$1" port="$2" dataset="$3" target="$4" mode="$5" profile="$6" yes="$7" verbose="$8" explicit_name="$9" local_user="${10}" grant_remotely="${11:-0}" manual_join="${12:-0}"
 
     local name; name=$(rux_resolve_name "$host" "$explicit_name") || return 1
+    # Owner note 18: every deploy.sh this enrolment runs (--pair, the remote
+    # --join, the --draft-config refresh) prints its host phases to a log, not
+    # to the operator -- one line each instead of ~250 lines between the steps.
+    export DEPLOY_PHASES_QUIET=1
     # A declared-passive relationship defaults to the PASSIVE profile: its
     # templates are prefixless and its monitors run in any-mode, which is the
     # only shape that matches the declaration. An explicit --profile= still

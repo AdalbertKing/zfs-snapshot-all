@@ -4217,6 +4217,32 @@ fi
 # deliberately.
 
 # ------------------------------------------------------------------------------
+# QUIET HOST PHASES (owner note 18, 2026-09-24). The one-command form and the
+# wizard call deploy.sh up to three times in one enrolment (--pair, the remote
+# --join, the --draft-config refresh), and each call printed phases 1-7 in full:
+# ~250 lines in which the one thing the operator had to act on was lost. With
+# DEPLOY_PHASES_QUIET=1 (set only by those callers) the phases go to a log file
+# and the screen gets one line plus any warning. A failure inside the phases is
+# not hidden: the EXIT trap puts the output back and prints the log's tail.
+# If an EXIT trap is already set, quiet mode stays OFF rather than replace it.
+PHASES_QUIET_ON=0
+phases_unquiet() {   # [tail] -> restore stdout/stderr; with "tail" show the end of the log
+    [ "$PHASES_QUIET_ON" = 1 ] || return 0
+    exec 1>&7 2>&8 7>&- 8>&-
+    PHASES_QUIET_ON=0
+    if [ "${1:-}" = tail ]; then
+        echo "!!! host deployment phases did not finish -- last lines of $PHASES_LOG:" >&2
+        tail -n 25 "$PHASES_LOG" >&2
+    fi
+}
+if [ "${DEPLOY_PHASES_QUIET:-0}" = 1 ] && [ -z "$(trap -p EXIT)" ]; then
+    PHASES_LOG=$(mktemp /tmp/zfs-deploy-phases.XXXXXX 2>/dev/null) || PHASES_LOG=""
+    if [ -n "$PHASES_LOG" ]; then
+        exec 7>&1 8>&2 >"$PHASES_LOG" 2>&1
+        PHASES_QUIET_ON=1
+        trap 'phases_unquiet tail' EXIT
+    fi
+fi
 log "Phase 1: dependencies"
 # ------------------------------------------------------------------------------
 # The list below is derived from what the package's scripts ACTUALLY invoke, not
@@ -5228,6 +5254,12 @@ if [ -n "$MISSING_OPTIONAL" ]; then
 else
     log "all dependencies present"
 fi
+if [ "$PHASES_QUIET_ON" = 1 ]; then
+    trap - EXIT
+    phases_unquiet
+    grep -E '^!!!|still missing' "$PHASES_LOG" | head -8 >&2
+    log "host deployment phases: done on $(hostname -s 2>/dev/null || hostname) (details: $PHASES_LOG)"
+fi
 
 # ------------------------------------------------------------------------------
 # Peer pairing (--pair / --join) -- see PAIRING-DESIGN.md for the full design.
@@ -5715,7 +5747,7 @@ EOF
            && timeout "$PEER_REMOTE_JOIN_TIMEOUT" \
                ssh -n -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
                   -p "$PEER_PORT" "root@$PEER_HOST" \
-                  "cd $REPO_DIR && ./deploy.sh --join=/root/$(basename "$pkg")"; then
+                  "cd $REPO_DIR && DEPLOY_PHASES_QUIET=${DEPLOY_PHASES_QUIET:-0} ./deploy.sh --join=/root/$(basename "$pkg")"; then
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
             if [ -n "$PEER_MODE" ]; then

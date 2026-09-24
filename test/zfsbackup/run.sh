@@ -5324,6 +5324,41 @@ msg="$( ( assert_no_atomic_with_source_retention "$ATOM/cand.conf" tank/bk/atomi
     && ok "55c REV-111B: the refusal names the conflict, both resolutions, and that nothing changed" \
     || bad "55c REV-111B: the refusal names the conflict, both resolutions, and that nothing changed" "$(printf '%s' "$msg"|tail -1)"
 
+# --- 55d. owner note 16 (2026-09-24): assert_no_foreign_source_pruner ---
+#
+# A DIFFERENT collector account (zfsbackup-<peer>) already holding `destroy` on a
+# source dataset must refuse the installation of a second, independent source
+# prune -- the two would delete each other's incremental bases while each run
+# still reports success. The source's own plain `zfsbackup` account and a peer
+# WITHOUT `destroy` do not count. Stub `zfs allow` output over ssh; no real host.
+FSP="$WORK/foreignpruner"; mkdir -p "$FSP/bin"
+cat > "$FSP/bin/ssh" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *"tank/a"*) printf '%b' '---- Permissions on tank/a ----\nLocal+Descendent permissions:\n\tuser zfsbackup-pve10 bookmark,destroy,hold,send,snapshot\n\tuser zfsbackup-me bookmark,destroy,snapshot\n\tuser zfsbackup destroy,snapshot\n' ;;
+  *"tank/b"*) printf '%b' '---- Permissions on tank/b ----\nLocal+Descendent permissions:\n\tuser zfsbackup-me bookmark,destroy,snapshot\n\tuser zfsbackup destroy\n\tuser zfsbackup-other send,snapshot\n' ;;
+  *"tank/c"*) exit 1 ;;
+  *) : ;;
+esac
+EOF
+chmod +x "$FSP/bin/ssh"
+fsp() { ( PATH="$FSP/bin:$PATH"; assert_no_foreign_source_pruner zfsbackup-me 10.0.0.9 22 /dev/null zfs-client-x /dev/null "$@" ) >/dev/null 2>&1; }
+fsp tank/b && ok "55d foreign-pruner: own account, the source's local zfsbackup and a peer without destroy do not count" \
+           || bad "55d foreign-pruner: own account, the source's local zfsbackup and a peer without destroy do not count" ""
+fsp tank/b tank/a && bad "55d foreign-pruner: a DIFFERENT peer account with destroy refuses the source prune (pve11 <- pve9b hdd/vm-disks, owner note 16)" "returned 0" \
+                  || ok "55d foreign-pruner: a DIFFERENT peer account with destroy refuses the source prune (pve11 <- pve9b hdd/vm-disks, owner note 16)"
+msg="$( ( PATH="$FSP/bin:$PATH"; assert_no_foreign_source_pruner zfsbackup-me 10.0.0.9 22 /dev/null zfs-client-x /dev/null tank/b tank/a ) 2>&1 )"
+{ printf '%s' "$msg" | grep -qF "tank/a: zfsbackup-pve10" \
+  && printf '%s' "$msg" | grep -qi "another collector can already DELETE"; } \
+    && ok "55d foreign-pruner: the refusal names tank/a: zfsbackup-pve10 and the reason" \
+    || bad "55d foreign-pruner: the refusal names tank/a: zfsbackup-pve10 and the reason" "$(printf '%s' "$msg"|tail -3)"
+msg="$( ( PATH="$FSP/bin:$PATH"; assert_no_foreign_source_pruner zfsbackup-me 10.0.0.9 22 /dev/null zfs-client-x /dev/null tank/c ) 2>&1 )"
+fsp tank/c && bad "55d foreign-pruner: an unreadable zfs allow fails closed" "returned 0" \
+           || ok "55d foreign-pruner: an unreadable zfs allow fails closed"
+printf '%s' "$msg" | grep -qi 'failed' \
+    && ok "55d foreign-pruner: the ssh/zfs-allow failure message says failed" \
+    || bad "55d foreign-pruner: the ssh/zfs-allow failure message says failed" "$(printf '%s' "$msg"|tail -2)"
+
 # --- 56. REV-20260811-102 step 3: REMOTE source prune emission (pull relationship) ---
 #
 # emit_client_sections must also bound the tool-owned automated_ snapshots on the
