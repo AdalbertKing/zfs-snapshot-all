@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 146df406e4232a44 -->
+<!-- status-covers-digest: f2d224c376f5f8f3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **F2: kolumna „Następny”, sortowanie `s`, panel obok od 150 kolumn (R3-4, 2026-09-24).**
+  - Kolumny F2 w kolejności priorytetu: Relacja, Kierunek, Zadanie, Harmonogram,
+    Następny, Kopie, GB, Czas o/ś/m. Każda ma szerokość swojej treści; kolumna,
+    która się nie mieści, wypada z listy (jej dane są w panelu). Kierunek nie jest
+    ucinany. „Następny”: dziś `HH:MM`, `jutro HH:MM`, w tygodniu `pn HH:MM`,
+    dalej `DD.MM HH:MM`.
+  - `s` przełącza trzy widoki: relacje (w środku wg następnego biegu), oś czasu,
+    ostatni bieg (najstarszy i nieznany pierwszy). Nazwa widoku stoi w tytule;
+    kursor zostaje na tym samym zadaniu.
+  - Panel szczegółów obok listy dopiero od 150 kolumn (F2, F4, F6); przy 120
+    stoi pod listą, a lista ma pełną szerokość.
+  - Zmiana dostarczona jednym commitem, żeby łatwo ją cofnąć (`git revert`).
+  - **Dowody:** `tui` 179 PASS (6 testów „linia:” pada tylko w worktree).
+    Render na danych pve10 przy 80/100/120/160 kolumnach.
 
 - **Ekrany, runda 3: IP na pasku, zakładki okna relacji, panele w grupach, klawisz `u` w F4 (2026-09-24).**
   - **R3-1:** pasek górny „pve10 192.168.28.97 | konto …”. IP z trasy domyślnej
