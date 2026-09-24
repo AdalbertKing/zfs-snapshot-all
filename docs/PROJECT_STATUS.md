@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e1efe1733302ee05 -->
+<!-- status-covers-digest: 146df406e4232a44 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,30 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Ekrany, runda 3: IP na pasku, zakładki okna relacji, panele w grupach, klawisz `u` w F4 (2026-09-24).**
+  - **R3-1:** pasek górny „pve10 192.168.28.97 | konto …”. IP z trasy domyślnej
+    (`ip -4 route get`, limit 2 s, błąd = bez IP); `--host-ip` dla testów.
+  - **R3-2 (zakładki, rekomendacja przyjęta przy „koduj”):** Enter na F3 otwiera
+    okno z zakładkami **Opis | Config | Cron** (Tab). Config pokazuje sekcje
+    relacji z `show-config` jako klucz = wartość, plik u góry, bez edycji.
+    Długie listy łamane po przecinkach bez gubienia znaków (zwykłe zawijanie
+    ucinało środek nazwy szablonu). Relacja bez configu: „configu jeszcze nie
+    ma” i podgląd `activate`. Cron: linie crona relacji.
+  - **R3-3 + R3-5:** zakładka Opis i panel F2 w grupach pytań operatora, z pustą
+    linią między grupami. Wspólny przedrostek ścieżek wypisany raz: `9 datasetów w
+    hdd/lab: ct-201, ct-201/data, …`. Jednakowe wpisy polityki złożone w `xN`, z
+    retencją szczebla płaskiego (`trzyma -H168`). Z powodów monitora
+    pokazywany pierwszy i „(i N podobnych)”. Harmonogram jest drugą linią panelu
+    F2, więc przy 80×24 nie wypada.
+  - **Uwaga 8:** F4 domyślnie pokazuje pełny dziennik; `u` chowa i pokazuje
+    transfery relacji, których już nie ma (stan w tytule, w stopce i w F1).
+  - **Dowody:** render na żywych danych pve10 (`pve9-synchro`: Opis ~33 linie,
+    wszystkie grupy w jednym ekranie; Config z pełnymi listami `use_template`).
+    `tui` 172 PASS; 6 testów „linia:” pada tylko w worktree (sprawdzają nazwę
+    katalogu repo). Zmiany wpisał `simple-coder`, a sesja przywróciła to, co
+    zgubił (Historia, polityka z configu), zwinęła listy (R3-5) i poprawiła
+    zawijanie configu.
 
 - **Ekrany po uwagach właściciela (2026-09-24): `<>` dla synchro, jeden wiersz na grupę, porządki synchro, bez F5, logi Del i kreatora.**
   - **1, 2:** relacja synchro ma w F2, F3 i panelu kierunek `pve10<>192.168.28.99`

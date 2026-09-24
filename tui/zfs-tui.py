@@ -621,9 +621,31 @@ class Data(object):
         self.datasets = {}    # list-datasets [HOST] --json, na zadanie (kreator: listy zamiast pisania)
         self.checks = {}      # check-source HOST --json, na zadanie (kreator: diagnoza swiezego zrodla)
         self.read_at = 0
+        self.host_ip = None   # R3-1: adres IP hosta do paska tytulu; None = nieznany/offline
 
     def failed(self, key):
         return self.errors.get(key)
+
+
+def resolve_host_ip(files):
+    """R3-1: IP hosta do paska tytulu. Testy/offline daja go przez --host-ip
+    (`files["host_ip"]`); na zywo -- adres trasy domyslnej (`ip -4 route get`),
+    bo to jest adres, pod ktorym host naprawde odpowiada, a nie pierwszy
+    interfejs z listy. Nigdy nie wiesza ekranu: timeout krotki, brak polecenia
+    albo bledny wynik = brak IP, nie wyjatek."""
+    if files.get("host_ip"):
+        return files["host_ip"]
+    if files.get("offline"):
+        return None
+    try:
+        p = subprocess.run(["ip", "-4", "route", "get", "1.1.1.1"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    m = re.search(r'\bsrc\s+(\S+)', p.stdout.decode("utf-8", "replace"))
+    return m.group(1) if m else None
 
 
 def collect(repo, files, only=None):
@@ -647,6 +669,7 @@ def collect(repo, files, only=None):
             data.errors[key] = err
         else:
             data.errors.pop(key, None)
+    data.host_ip = resolve_host_ip(files)
     data.read_at = int(time.time())
     return data
 
@@ -1313,12 +1336,14 @@ class Screen(object):
 
 def top_bar(data, width, now, ascii_only, err_count):
     host = (data.jobs or {}).get("host") or "(host?)"
+    ip = getattr(data, "host_ip", None)
     jobs = (data.jobs or {}).get("jobs", [])
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
     acct = ", ".join(a for a in accounts if a) or "(brak bloku)"
     left = " zfs-snapshot-all"
-    mid = "%s | konto %s%s" % (host, acct, u"   ! bez odpowiedzi: %d" % err_count if err_count else "")
+    mid = "%s%s | konto %s%s" % (host, (" " + ip) if ip else "", acct,
+                                  u"   ! bez odpowiedzi: %d" % err_count if err_count else "")
     right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
     gap = width - len(left) - len(mid) - len(right)
     if gap < 2:
@@ -1358,10 +1383,17 @@ def source_error_body(ch, key, data, verb):
 
 
 def detail_kv(ch, pairs, width):
-    """Panel klucz: wartosc; wartosc lamana, klucz tylko przy pierwszej linii."""
+    """Panel klucz: wartosc; wartosc lamana, klucz tylko przy pierwszej linii.
+
+    Para ("", "") to PUSTY ODSTEP MIEDZY GRUPAMI (R3-3/R3-5, uwagi wlasciciela
+    2026-09-24), nie zwykly wiersz -- inaczej wyszlaby z niej pusta kolumna
+    klucza (same spacje szerokosci kw) zamiast prawdziwie pustej linii."""
     kw = max([len(k) for k, _ in pairs] + [8])
     out = []
     for k, v in pairs:
+        if k == "" and v == "":
+            out.append("")
+            continue
         chunks = wrap(u"%s" % v, max(10, width - kw - 2)) or [""]
         for i, c in enumerate(chunks):
             out.append("%s %s" % (fit(k if i == 0 else "", kw), c))
@@ -1392,19 +1424,43 @@ def rel_detail_pairs(row, data, now, ch):
     if row["kind"] == "job":
         j = row["job"]
         jobs_here = row.get("jobs") or [j]
+        # GRUPOWANIE PANELU PYTANIAMI OPERATORA (R3-3/R3-5, uwagi wlasciciela
+        # 2026-09-24): "9 zakresow" jednego wiersza x9 wypychalo z panelu
+        # WSZYSTKO inne (harmonogram, straznik) -- to, co wypelniala lista
+        # "zakres N" per dataset, jest teraz JEDNA linia "zakres" z liczba i
+        # skroconymi nazwami; dla pojedynczego zadania "zakres" jest po prostu
+        # zrodlo -> cel. Grupy: zakres / czas (czas, biegi, wolumen) / plan
+        # (harmonogram, trzyma, straznik+progi) / konto -- rozdzielone PUSTA
+        # LINIA, bez linii-linijek. Kierunek i Kopie sa juz kolumnami listy F2,
+        # wiec panel ich nie powtarza.
         if len(jobs_here) > 1:
-            # GRUPA: kilka datasetow pod jednym wierszem F2 (ta sama relacja,
-            # kierunek, zadanie, harmonogram -- build_jobs je zlaczyl). Panel
-            # wymienia KAZDY, bo to jest to, co naprawde chodzi (owner brief,
-            # runda 2 ekranow) -- jeden zrodlo/cel na linie, nie jedna para
-            # dla calej grupy.
-            pairs = [(u"zakres %d" % i, "%s -> %s" % job_src_dst(jj)) for i, jj in enumerate(jobs_here, 1)]
+            # wspolny przedrostek RAZ, potem krotkie nazwy: "9 datasetów w hdd/lab:
+            # ct-201, ct-201/data, ..." -- inaczej dluga sciezka zjadala miejsce, a
+            # nazwy, dla ktorych czyta sie ten wiersz, ginely za "..."
+            scopes = [(jj.get("scope", "") or "?").split(":")[-1] for jj in jobs_here]
+            parts = [x.split("/") for x in scopes]
+            common = []
+            for seg in zip(*parts):
+                if len(set(seg)) != 1:
+                    break
+                common.append(seg[0])
+            if parts and len(common) >= min(len(x) for x in parts):
+                common = common[:-1]          # cala nazwa wspolna -> zostaw lisc do pokazania
+            base = "/".join(common)
+            short = ["/".join(x[len(common):]) or "/".join(x) for x in parts]
+            shown, budget = [], 48
+            for x in short:
+                if shown and sum(len(y) + 2 for y in shown) + len(x) > budget:
+                    break
+                shown.append(x)
+            more = "" if len(shown) == len(short) else ", ..."
+            zakres = u"%d datasetów%s: %s%s" % (len(jobs_here), (u" w " + base) if base else "",
+                                              ", ".join(shown), more)
         else:
             src, dst = job_src_dst(j)
-            # Kolejnosc = to, po co wlasciciel otwiera panel (2026-09-11): zrodlo,
-            # cel, potem czasy i wolumen jak w mailu; reszta nizej (przy 80
-            # kolumnach panel ma 7 linii, calosc jest w oknie po Enter).
-            pairs = [(u"źródło", src), ("cel", dst)]
+            zakres = u"%s %s %s" % (src, ch.right, dst)
+        pairs = [(u"zakres", zakres), ("", ""),
+                 ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"]))]
         st = data.stats or {}
         win = st.get("window_days", "?")
         srow = row.get("srow")
@@ -1416,13 +1472,26 @@ def rel_detail_pairs(row, data, now, ch):
         else:
             pairs.append(("czas", u"brak biegów tego zadania w dzienniku w oknie %s dni%s" % (
                 win, "" if row.get("clabel") else u" (nie ma jego linii w cronie)")))
-        if row.get("vol") is not None and not data.failed("stats"):
-            pairs.append(("wolumen", u"%s zapisane w migawkach %s w oknie %s dni" % (
-                hbytes_short(row["vol"]), family_of(j) or "?", win)))
         if srow and not data.failed("stats"):
             pairs.append(("biegi", u"%s w oknie %s dni, błędów %s, ostatni %s rc=%s" % (
                 srow.get("runs", "?"), win, srow.get("failures", 0), srow.get("last_at", "?"), srow.get("last_rc", "?"))))
-        pairs += [("kopie", row["vword"] + ("  " + row["reasons"][0].splitlines()[0] if row["reasons"] else ""))]
+        if row.get("vol") is not None and not data.failed("stats"):
+            pairs.append(("wolumen", u"%s zapisane w migawkach %s w oknie %s dni" % (
+                hbytes_short(row["vol"]), family_of(j) or "?", win)))
+        pairs.append(("", ""))
+        tier = row.get("tier") or j.get("tier") or "?"
+        pairs.append(("trzyma", (j.get("retain") or j.get("keep") or "-")
+                      + ("  drabina GFS" if j.get("gfs") else "")
+                      + ("   szczebel %s (sekcja %s)" % (tier, j.get("section_kind", "?")))))
+        # SYNCHRO NIE "POBIERA" -- kazda strona ciagnie do siebie pod ta sama
+        # sciezka, wiec "ten host pobiera" jest nieprawdziwe dla synchro;
+        # rekord (row["mode"]) wygrywa z surowym kierunkiem linii crona (owner
+        # brief, runda 2 ekranow). Zostaje w panelu -- kolumna Kierunek na
+        # liscie F2 niesie sam zapis (`pve20<>...`), nie to zdanie.
+        pairs.append(("kierunek", "%s   %s" % (row.get("dir", "?"),
+                      u"oba hosty trzymają te same datasety" if row.get("mode") == "sync" else
+                      {"pull": u"ten host pobiera", "push": u"ten host wysyła",
+                       "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))))
         # STRAZNIK I PROGI (F5 zniesiony, wariant b): to, co dawal osobny ekran
         # Monitor, wchodzi tu -- dopasowany TA SAMA regula co werdykt (zakres+
         # rodzina, dla pobrania etykieta+rodzina), zeby nie zgadywac inaczej niz
@@ -1435,30 +1504,11 @@ def rel_detail_pairs(row, data, now, ch):
                 if key not in seen_mon:
                     seen_mon.add(key)
                     mons.append(m)
-        pairs += [("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
-                  ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
-                  ("rodzina", family_of(j) or "?"),
-                  ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
-                  # JEDEN KIERUNEK, NIE DWA ZAPISY TEGO SAMEGO. Linia brzmiala
-                  # `pve10<192.168.28.96   ← 192.168.28.96` -- druga polowa
-                  # powtarzala pierwsza innym alfabetem. Zostaje zapis z kolumny
-                  # F2 (ten host ZAWSZE po lewej) plus SLOWO, ktore mowi, co to
-                  # znaczy -- bo to slowo jest tym, czego szuka czytajacy.
-                  # SYNCHRO NIE "POBIERA" -- kazda strona ciagnie do siebie pod
-                  # ta sama sciezka, wiec "ten host pobiera" jest nieprawdziwe;
-                  # rekord (row["mode"]) wygrywa z surowym kierunkiem linii crona
-                  # (owner brief, runda 2 ekranow).
-                  ("kierunek", "%s   %s" % (row.get("dir", "?"),
-                      u"oba hosty trzymają te same datasety" if row.get("mode") == "sync" else
-                      {"pull": u"ten host pobiera", "push": u"ten host wysyła",
-                       "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))),
-                  ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
-        # na KONCU: przy 80x24 panel pod lista ma kilka linii, a harmonogram jest
-        # wazniejszy niz strażnik -- dopisane wyzej wypychaly go poza ekran
         if mons:
             m0 = mons[0]
-            pairs.append((u"strażnik", u"%s   konto %s" % (m0.get("schedule") or "?", m0.get("account") or "?")))
-            pairs.append((u"progi", u"ostrzeżenie %s / alarm %s" % (m0.get("warn") or "?", m0.get("crit") or "?")))
+            pairs.append((u"strażnik", u"%s   progi %s / %s" % (m0.get("schedule") or "?", m0.get("warn") or "?", m0.get("crit") or "?")))
+        pairs.append(("", ""))
+        pairs.append(("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?"))))
         return pairs
     srcs = rel.get("sources", [])
     pairs = [(u"Źródła (%d)" % len(srcs), ",  ".join(srcs) or "?")]
@@ -1880,23 +1930,41 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
 
 
 # --- Relacja (okno na wierzchu) --------------------------------------------
-def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
-    """Tresc okna relacji, jako linie; okno przewija sie, wiec bez limitu."""
-    w = width - 4
-    out = []
-    H = lambda t: out.extend(["", (ch.dash * 2 + " " + t + " " + ch.dash * max(0, w - len(t) - 4))[:w]])
-    if row["kind"] != "relation":
-        for k, v in rel_detail_pairs(row, data, now, ch):
-            out.extend(detail_kv(ch, [(k, v)], w))
-        j = row.get("job")
-        if j:
-            H("W CRONIE")
-            out.extend(cron_lines_of(row["jobs"], w, ch))
-        return out
+def _tabs_title(ch, active):
+    """R3-2: 'Opis | Config | Cron' w gornej krawedzi okna relacji, aktywna w
+    nawiasach -- tak jak wlasciciel narysowal w uwadze."""
+    labels = [("opis", u"Opis"), ("config", u"Config"), ("cron", u"Cron")]
+    parts = [(u"[ %s ]" % lab) if key == active else lab for key, lab in labels]
+    return u"  ".join(parts)
+
+
+def compact_paths(paths):
+    """["h@x:hdd/lab/a", "h@x:hdd/lab/b"] -> "h@x:hdd/lab: a, b" -- wspolny
+    przedrostek RAZ (R3-5: 9 pelnych sciezek zalewalo okno). Jedna sciezka --
+    bez zmian."""
+    if len(paths) < 2:
+        return ",  ".join(paths)
+    parts = [x.split("/") for x in paths]
+    common = []
+    for seg in zip(*parts):
+        if len(set(seg)) != 1:
+            break
+        common.append(seg[0])
+    if len(common) >= min(len(x) for x in parts):
+        common = common[:-1]
+    if not common:
+        return ",  ".join(paths)
+    return "%s: %s" % ("/".join(common), ", ".join("/".join(x[len(common):]) for x in parts))
+
+
+def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
+    """Zakladka Opis: co/jak dlugo trzyma/czy dziala/komendy, grupami po
+    pytaniu operatora, PUSTA LINIA miedzy grupami, bez linii-linijek."""
     rel = row["rel"]
-    n = row["name"]
+    out = []
     out.extend(detail_kv(ch, [
         ("Stan", state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
+        ("Kierunek", row.get("dir") or "?"),
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         ("Historia", "  ".join(x for x in [
@@ -1905,20 +1973,24 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
             "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
             u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
-    H("ZAKRES")
-    pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), ",  ".join(rel.get("sources", [])) or "?"),
-             ("Cel", rel.get("client_target") or "?")]
+    out.append("")
+    out.append(u"co kopiuje")
+    pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?"),
+             ("Cel", rel.get("client_target") or (u"ta sama ścieżka (synchro)" if rel.get("mode") == "sync" else "?"))]
     if rel.get("managed_datasets"):
-        pairs.append((u"Lądowiska", ",  ".join(rel["managed_datasets"])))
+        pairs.append((u"Lądowiska (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"])))
     if rel.get("managed_prune_scope"):
         pairs.append((u"Porządki", ",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
         pairs.append(("Konto", rel["local_user"]))
     out.extend(detail_kv(ch, pairs, w))
-    H("POLITYKA")
+    out.append("")
+    out.append(u"jak długo trzyma")
     pairs = [("Profil", rel.get("profile") or "?")]
     if rel.get("source_profile"):
         pairs.append((u"Profil źródła", rel["source_profile"]))
+    elif rel.get("passive") == "1" or rel.get("mode") == "sync":
+        pairs.append((u"Profil źródła", u"bez porządków"))
     if rel.get("recursion"):
         pairs.append(("Rekursja", rel["recursion"]))
     if rel.get("passive") == "1":
@@ -1926,28 +1998,30 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
     if rel.get("bandwidth"):
         pairs.append((u"Łącze", rel["bandwidth"]))
     out.extend(detail_kv(ch, pairs, w))
+    # CO I KIEDY -- slowami, z configu (to byla sekcja POLITYKA; zakladka Config
+    # pokazuje te same sekcje doslownie). Bez tego "jak dlugo trzyma" mowilo tylko
+    # nazwe profilu, a nie ile i kiedy (sesja, przeglad 2026-09-24).
     cfg = None
     if data is not None and repo is not None and files is not None:
-        cfg, cerr = load_config(repo, files, data, n)
+        cfg, cerr = load_config(repo, files, data, row["name"])
         if cerr:
             out.append(u"  show-config: błąd źródła: %s" % cerr)
     if cfg:
         tmpl = {t.get("name"): t.get("fields", {}) for t in cfg.get("templates", [])}
-        for s in cfg.get("sections", []):
-            f = s.get("fields", {})
+        pol, order = {}, []       # (slowo, opis bez nazwy) -> [nazwy]; kolejnosc pierwszego wystapienia
+        for sec in cfg.get("sections", []):
+            f = sec.get("fields", {})
             used = [x for x in (f.get("use_template") or "").split(",") if x]
-            if s.get("kind") == "dataset":
+            if sec.get("kind") == "dataset":
                 sched = f.get("send_schedule") or (tmpl.get(used[0], {}).get("send_schedule") if used else "") or "?"
                 pref = f.get("prefix") or (tmpl.get(used[0], {}).get("prefix") if used else "") or "?"
-                # TO SAMO SLOWO CO NA F2, ta sama zasada: nazwa idzie za
-                # kierunkiem. Kierunek niesie pole `src`, NIE nazwa sekcji --
-                # nazwa to LADOWISKO (sciezka u siebie), wiec pierwsza wersja
-                # tej poprawki nazywala pobranie "kopia". Zdalne `konto@host:ds`
-                # w `src` = ten host pobiera; zdalna NAZWA = wysyla; obie
-                # lokalne = kopia u siebie.
-                _src, _dst = f.get("src") or "", s.get("name") or ""
+                _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
-                out.extend(detail_kv(ch, [(_w, u"%s   co: %s   stempel %s" % (s.get("name"), sched, pref))], w))
+                _ret = f.get("retain") or (tmpl.get(used[0], {}).get("retain") or tmpl.get(used[0], {}).get("keep") if used else "")
+                key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % _ret) if _ret else ""))
+                pol.setdefault(key, []).append(sec.get("name") or "?")
+                if key not in order:
+                    order.append(key)
             else:
                 ret = []
                 for u in used:
@@ -1957,43 +2031,154 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
                 if f.get("retain"):
                     ret.append(f["retain"])
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
-                out.extend(detail_kv(ch, [(u"porządki", u"%s   trzyma %s   co: %s%s" % (
-                    s.get("name"), " ".join(ret) or "?", sched,
-                    "   drabina GFS" if f.get("gfs") == "yes" else ""))], w))
-    H("KOPIE (monitor)")
+                _pw = u"porządki źródła" if "@" in (sec.get("name") or "") else u"porządki"
+                key = (_pw, u"trzyma %s   co: %s%s" % (" ".join(ret) or "?", sched,
+                                                       "   drabina GFS" if f.get("gfs") == "yes" else ""))
+                pol.setdefault(key, []).append(sec.get("name") or "?")
+                if key not in order:
+                    order.append(key)
+        for key in order:
+            names = pol[key]
+            what = compact_paths(names) if len(names) > 1 else names[0]
+            label = key[0] + (" x%d" % len(names) if len(names) > 1 else "")
+            out.extend(detail_kv(ch, [(label, u"%s   %s" % (key[1], what))], w))
+    out.append("")
+    out.append(u"czy działa")
     if row["monitors"]:
         for m in row["monitors"]:
             vw = VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0]
             out.extend(detail_kv(ch, [(vw, "%s   rodzina %s   progi %s / %s   co %s" % (
-                ", ".join(m.get("datasets", [])), m.get("pattern") or "?", m.get("warn") or "?",
+                compact_paths(m.get("datasets", [])), m.get("pattern") or "?", m.get("warn") or "?",
                 m.get("crit") or "?", m.get("schedule") or "?"))], w))
             if m.get("reason"):
-                for ln in m["reason"].splitlines():
+                # R3-5: dziewiec linii CRITICAL rozniacych sie tylko datasetem zalewalo
+                # okno -- pierwsza w calosci, reszta liczba (pelne w zakladce Cron/logu)
+                rl = [ln for ln in m["reason"].splitlines() if ln.strip()]
+                for ln in rl[:1]:
                     out.extend(wrap("    " + ln, w))
+                if len(rl) > 1:
+                    out.append(u"    (i %d podobnych dla pozostałych datasetów)" % (len(rl) - 1))
             if m.get("paused_local"):
                 out.append(u"    linia wstrzymana (pauza)")
     else:
         out.append(u"  bez monitora -- nikt nie sprawdza, czy kopia dalej się robi")
-    H("TRANSFERY (ostatnie)")
-    if row["transfers"]:
-        for t in row["transfers"][:6]:
-            wd, note = transfer_word(t, now)
-            st, fin = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0)
-            out.append(fit("  %-6s %s  %s  %s  %s" % (
-                wd, fmt_full(fin or st), fmt_dur(fin - st) if fin and st else "",
-                {"incremental": "przyrostowy", "full": u"pełny"}.get(t.get("mode", ""), t.get("mode", "")),
-                fit_left(t.get("dataset", ""), max(10, w - 50), ch)), w))
+    last = row["last"]
+    if last:
+        wd, note = transfer_word(last, now)
+        st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
+        txt = "%s  %s" % (wd, fmt_full(fin or st_))
+        if fin and st_:
+            txt += "  %s" % fmt_dur(fin - st_)
+        if note:
+            txt += "  " + note
+        out.extend(detail_kv(ch, [(u"Ostatni transfer", txt)], w))
     else:
-        out.append("  brak zapisu w historii")
-    H("W CRONIE")
+        out.extend(detail_kv(ch, [(u"Ostatni transfer", u"brak zapisu w historii")], w))
+    out.append("")
+    out.append(u"komendy")
+    for v in verbs_for(rel):
+        out.append("  " + v)
+    return out
+
+
+def _relation_cron_lines(row, ch, w):
+    """Zakladka Cron: to, co dawniej stalo pod naglowkiem 'W CRONIE' w Opisie."""
+    rel = row.get("rel") or {}
+    out = []
     if row["jobs"]:
         out.extend(cron_lines_of(row["jobs"], w, ch))
     else:
         out.append(u"  brak linii w cronie dla tej etykiety" + ("" if rel.get("state") == "active" else u" (relacja nie jest aktywna)"))
-    H("KOMENDY CLI DLA TEGO STANU (nazwane, nie wykonywane)")
-    for v in verbs_for(rel):
-        out.append("  " + v)
+    accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
+    if accts:
+        out.append("")
+        out.append(u"konto: %s" % ", ".join(accts))
     return out
+
+
+def kv_config_lines(k, v, w):
+    """Jedna para configu do podgladu DOSLOWNEGO. Dluga wartosc bez spacji (lista
+    use_template) lamana PO PRZECINKACH, kazdy element w swojej linii, a zbyt
+    dlugi kawalek -- twardo po znakach, BEZ gubienia srodka (zwykly wrap ucinal
+    "profile__default__keep_monthly" do "profi...t__keep_monthly")."""
+    head = u"  %s = " % k
+    if len(head) + len(v) <= w:
+        return [head + v]
+    if "," in v and " " not in v:
+        items = v.split(",")
+        out = [head + items[0] + ("," if len(items) > 1 else "")]
+        for i, it in enumerate(items[1:], 1):
+            out.append(u"      " + it + ("," if i < len(items) - 1 else ""))
+    else:
+        out = [head + v]
+    res = []
+    for ln in out:
+        while len(ln) > w:
+            res.append(ln[:w])
+            ln = u"      " + ln[w:]
+        res.append(ln)
+    return res
+
+
+def _relation_config_lines(row, data, ch, w, repo, files):
+    """Zakladka Config: sekcje configu relacji WERBATIM (klucz=wartosc), tak
+    jak je oddaje show-config --json -- read-only, bez interpretacji (to robi
+    zakladka Opis)."""
+    n = row["name"]
+    if data is None or repo is None or files is None:
+        return [u"configu nie da się odczytać w tym trybie"]
+    cfg, cerr = load_config(repo, files, data, n)
+    if cerr:
+        return [u"błąd źródła: %s" % cerr, u"  zfs-backup.sh show-config %s --json" % n]
+    if not cfg or not cfg.get("sections"):
+        return [u"configu jeszcze nie ma -- powstanie przy aktywacji", "",
+                u"podgląd: zfs-backup.sh activate %s" % n]
+    out = [u"plik: %s" % (cfg.get("config") or "?"),
+           u"(odtworzone z show-config -- klucz=wartość, nie surowy tekst pliku)"]
+    used = set()
+    for s in cfg.get("sections", []):
+        out.append("")
+        out.append(u"[%s:%s]" % (s.get("kind", "?"), s.get("name", "?")))
+        f = s.get("fields", {})
+        for k in sorted(f):
+            out.extend(kv_config_lines(k, f[k], w))
+            if k == "use_template":
+                used.update(x for x in (f[k] or "").split(",") if x)
+    for t in cfg.get("templates", []):
+        if t.get("name") not in used:
+            continue
+        out.append("")
+        out.append(u"[template:%s]" % t.get("name", "?"))
+        tf = t.get("fields", {})
+        for k in sorted(tf):
+            out.extend(kv_config_lines(k, tf[k], w))
+    out.append("")
+    out.append(u"tylko do odczytu -- zmiana relacji: usuń i załóż / import z pliku")
+    return out
+
+
+def relation_window_lines(row, data, now, ch, width, repo=None, files=None, tab="opis"):
+    """Tresc okna relacji, jako linie; okno przewija sie, wiec bez limitu.
+
+    Relacja (kind=="relation") ma TRZY ZAKLADKI (R3-2, uwagi wlasciciela
+    2026-09-24): Opis, Config, Cron -- Tab przelacza, tresc zalezy od `tab`.
+    Zadanie/straznik/nieczytelny blok (kind != "relation") nie maja zakladek
+    -- zostaje stary jednoczesciowy widok z W CRONIE."""
+    w = width - 4
+    if row["kind"] != "relation":
+        out = []
+        for k, v in rel_detail_pairs(row, data, now, ch):
+            out.extend(detail_kv(ch, [(k, v)], w))
+        j = row.get("job")
+        if j:
+            out.extend(["", (ch.dash * 2 + " W CRONIE " + ch.dash * max(0, w - 14))[:w]])
+            out.extend(cron_lines_of(row["jobs"], w, ch))
+        return out
+    if tab == "config":
+        return _relation_config_lines(row, data, ch, w, repo, files)
+    if tab == "cron":
+        return _relation_cron_lines(row, ch, w)
+    return _relation_opis_lines(row, data, now, ch, w, repo, files)
 
 
 def cron_lines_of(jobs, w, ch):
@@ -2045,8 +2230,21 @@ def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc za
 
 
 # --- Transfery -------------------------------------------------------------
-def build_transfers(data, now):
+def relation_exists(data, label):
+    """NOTE 8: relacja 'ktorej juz nie ma' = bez etykiety, albo etykieta, ktorej
+    status --json juz nie wymienia (usunieta albo nigdy nie byla rekordem)."""
+    if not label:
+        return False
+    for r in (data.status or {}).get("relations", []):
+        if r.get("name") == label and r.get("state") != "removed":
+            return True
+    return False
+
+
+def build_transfers(data, now, hide_gone=False):
     jobs = list((data.progress or {}).get("jobs", []))
+    if hide_gone:
+        jobs = [j for j in jobs if relation_exists(data, j.get("label"))]
     running = [j for j in jobs if j.get("state") == "running"]
     done = [j for j in jobs if j.get("state") != "running"]
     running.sort(key=lambda j: int(j.get("started_epoch") or 0), reverse=True)
@@ -2113,13 +2311,13 @@ def transfer_detail_pairs(t, now, ch):
     return pairs
 
 
-def render_transfery(data, cursor, width, height, now, ch, message=""):
+def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone=False):
     scr = Screen()
     top = top_bar(data, width, now, ch.ascii, len(data.errors))
     if data.failed("progress"):
         scr.lines = [top] + box(ch, "Transfery", source_error_body(ch, "progress", data, "progress"), width)
     else:
-        running, done = build_transfers(data, now)
+        running, done = build_transfers(data, now, hide_gone)
         allrows = running + done
         beside = width >= 120
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
@@ -2169,7 +2367,12 @@ def render_transfery(data, cursor, width, height, now, ch, message=""):
             dbody[-1] = fit(u"... jeszcze %d" % (len(done) - first - list_h + 1), inner)
         while len(dbody) < list_h + 2:
             dbody.append("")
-        donebox = box(ch, u"Zakończone (%d)" % len(done), dbody, lbw,
+        # NOTE 8 (wlasciciel, 2026-09-24): 'u' na F4 chowa transfery relacji,
+        # ktorych juz nie ma (etykieta '(bez rel.)' albo usunieta) -- domyslnie
+        # POKAZANE, bo to dziennik transferow, nie lista zywych relacji. Tytul
+        # MOWI, w ktorym stanie jest (nie ma innego wspolnego naglowka "Transfery").
+        done_title = u"Zakończone (%d) -- bez usuniętych relacji" % len(done) if hide_gone else u"Zakończone (%d)" % len(done)
+        donebox = box(ch, done_title, dbody, lbw,
                       footer=u"Enter szczegóły" if allrows else "")
         left = runbox + donebox
         if cur_y:
@@ -2198,7 +2401,7 @@ def render_transfery(data, cursor, width, height, now, ch, message=""):
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("transfery", width))
+    scr.lines.append(key_bar("transfery", width, extra=(u"u pokaż usunięte" if hide_gone else u"u ukryj usunięte")))
     scr.bars.add(len(scr.lines) - 1)
     return scr
 
@@ -2417,7 +2620,8 @@ HELP = [
     u"                 w mailu (ostatni/średni/maks, okno digestu), kopie; panel",
     u"                 szczegółów dodaje strażnika (harmonogram, konto, progi),",
     u"                 a strażnik bez zadania (nic do pilnowania) jest własnym wierszem",
-    u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
+    u"  F3  Relacje    zarządzanie: Enter szczegóły (okno ma zakładki Opis/",
+    u"                 Config/Cron, Tab przełącza), F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku: najpierw werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
@@ -2428,7 +2632,8 @@ HELP = [
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
-    u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
+    u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress);",
+    u"                 u chowa/pokazuje transfery relacji, których już nie ma",
     u"  F6  Nośniki    repliki na dyskach wymiennych i cztery stany nośnika",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
@@ -2443,7 +2648,8 @@ HELP = [
     u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
     u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
     u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery nie są",
-    u"                 skrótami na ekranach -- wszystko, co piszesz, idzie do linii.",
+    u"                 skrótami na ekranach (wyjątek: 'u' na F4, patrz wyżej) --",
+    u"                 wszystko inne, co piszesz, idzie do linii.",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
     u"  F9 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
@@ -2487,6 +2693,8 @@ class UI(object):
         self.message = ""
         self.focus = "list"       # F3: "list" (relacje) | "pairs" (dolny panel par)
         self.pair_cursor = 0
+        self.rel_tab = "opis"     # R3-2: zakladka okna relacji -- "opis" | "config" | "cron"
+        self.hide_transfers_gone = False   # NOTE 8: 'u' na F4 -- domyslnie POKAZANE (dziennik transferow)
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
         # pisac komendy z palca"). Styl mc: kazdy drukowalny znak leci tu,
         # Enter wykonuje NA PIERWSZYM PLANIE (curses zawieszone), historia w
@@ -2646,7 +2854,7 @@ class UI(object):
         if screen == "relacje":
             return len(self.rows)
         if screen == "transfery":
-            r, d = build_transfers(self.data, self.now())
+            r, d = build_transfers(self.data, self.now(), self.hide_transfers_gone)
             return len(r) + len(d)
         if screen == "monitor":
             return len(monitor_rows(self.data))
@@ -3220,6 +3428,15 @@ class UI(object):
                 self.scroll = 10 ** 6
             return "stay"
         if self.window:
+            kind_, obj_ = self.window
+            # R3-2: Tab przelacza zakladki OKNA RELACJI (Opis -> Config -> Cron
+            # -> Opis); dziala tylko dla kind=="relation" -- okno zadania czy
+            # panelu nie ma zakladek, wiec Tab tam nie robi nic (spada dalej).
+            if kind_ == "relacja" and obj_.get("kind") == "relation" and k == "tab":
+                order = ["opis", "config", "cron"]
+                self.rel_tab = order[(order.index(self.rel_tab) + 1) % len(order)]
+                self.scroll = 0
+                return "stay"
             if k in ("esc", "q", "enter"):
                 self.window, self.scroll = None, 0
             elif k in ("down", "j"):
@@ -3236,6 +3453,14 @@ class UI(object):
                 self.scroll = 10 ** 6
             elif k == "F1":
                 self.window, self.scroll = ("pomoc", None), 0
+            return "stay"
+        # NOTE 8 (wlasciciel, 2026-09-24): 'u' na F4 chowa/pokazuje transfery
+        # relacji, ktorych juz nie ma -- WYJATEK od "litery nie sa skrotami"
+        # (dziennik transferow ma miec przelacznik), zastrzezony do pustej
+        # linii polecen, zeby dalo sie wpisac slowo zawierajace 'u'.
+        if k == "u" and self.screen == "transfery" and not self.cmd:
+            self.hide_transfers_gone = not self.hide_transfers_gone
+            self.cursor["transfery"] = min(self.cursor["transfery"], max(0, self.count("transfery") - 1))
             return "stay"
         # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie. Litera to
         # TEKST, nie skrot -- 'echo' ma dac 'echo', nie 'cho' (pve9, pty).
@@ -3340,7 +3565,7 @@ class UI(object):
             return self.action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
-                self.window, self.scroll = ("relacja", self.rows[c]), 0
+                self.window, self.scroll, self.rel_tab = ("relacja", self.rows[c]), 0, "opis"
             elif self.screen == "zadania":
                 self.window, self.scroll = ("relacja", self.jobrows[c]), 0
             else:
@@ -3356,7 +3581,7 @@ class UI(object):
         now, ch = self.now(), self.ch
         c = self.cursor[self.screen]
         if self.screen == "transfery":
-            r, d = build_transfers(self.data, now)
+            r, d = build_transfers(self.data, now, self.hide_transfers_gone)
             t = (r + d)[c]
             return {"kind": "panel", "name": "transfer %s" % (t.get("label") or ""), "pairs": transfer_detail_pairs(t, now, ch)}
         if self.screen == "monitor":
@@ -3366,10 +3591,10 @@ class UI(object):
         return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch)}
 
 
-def relation_window_lines_dispatch(ui, obj, width):
+def relation_window_lines_dispatch(ui, obj, width, tab="opis"):
     if obj.get("kind") == "panel":
         return detail_kv(ui.ch, obj["pairs"], width - 4)
-    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files)
+    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files, tab)
 
 
 # render() w UI korzysta z tej wersji, zeby okno-panel i okno-relacja szly ta sama droga.
@@ -3384,7 +3609,8 @@ def _ui_render(self, width, height):
         base = render_relacje(self.data, self.rows, self.cursor["relacje"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor)
     elif self.screen == "transfery":
-        base = render_transfery(self.data, self.cursor["transfery"], width, sh, now, self.ch, self.message)
+        base = render_transfery(self.data, self.cursor["transfery"], width, sh, now, self.ch, self.message,
+                                hide_gone=self.hide_transfers_gone)
     elif self.screen == "monitor":
         base = render_monitor(self.data, self.cursor["monitor"], width, sh, now, self.ch, self.message)
     else:
@@ -3431,8 +3657,12 @@ def _ui_render(self, width, height):
             scr, self.scroll = render_window(base, u"WYJŚCIE: " + obj["title"], lines, self.scroll, width, height, self.ch,
                                              footer=u"Esc zamyka okno (proces zostaje)   strzałki przewijają")
         else:
-            title = (u"Relacja %s" % obj["name"]) if obj.get("kind") == "relation" else obj["name"]
-            lines = relation_window_lines_dispatch(self, obj, width)
+            if obj.get("kind") == "relation":
+                title = u"Relacja %s %s %s" % (obj["name"], self.ch.dh * 3, _tabs_title(self.ch, self.rel_tab))
+                lines = relation_window_lines_dispatch(self, obj, width, self.rel_tab)
+            else:
+                title = obj["name"]
+                lines = relation_window_lines_dispatch(self, obj, width, "opis")
             scr, self.scroll = render_window(base, title, lines, self.scroll, width, height, self.ch)
         return scr
     return base
@@ -3712,11 +3942,13 @@ def main(argv):
     ap.add_argument("--datasets-remote", help="czytaj list-datasets HOST --json (peer) z pliku (kreator)")
     ap.add_argument("--check-source", help="czytaj check-source HOST --json z pliku (kreator: diagnoza hosta)")
     ap.add_argument("--offline", action="store_true", help="nie uruchamiaj czasownikow; zrodla bez pliku sa puste")
+    ap.add_argument("--host-ip", help="R3-1: IP hosta w pasku tytulu (testy/offline; na zywo liczony z trasy domyslnej)")
     a = ap.parse_args(argv)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = {"status": a.status, "jobs": a.jobs, "monitors": a.monitors, "progress": a.progress,
              "replicas": a.replicas, "stats": a.stats, "config": a.config, "profiles": a.profiles, "offline": a.offline,
-             "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source}
+             "datasets_local": a.datasets_local, "datasets_remote": a.datasets_remote, "check_source": a.check_source,
+             "host_ip": a.host_ip}
     ch = Chars(want_ascii(a))
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:

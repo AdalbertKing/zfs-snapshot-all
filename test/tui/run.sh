@@ -84,6 +84,19 @@ if has "$S" 'pve10 | konto root'; then
 else
     bad "relacje: host i konto w pasku" "$S"
 fi
+# R3-1: IP hosta obok jego nazwy w pasku tytulu -- w trybie offline/testowym
+# przez --host-ip (bez niego, offline, brak IP w pasku: nie wywolujemy 'ip').
+SIP="$(screen relacje "" --host-ip 10.9.9.9)"
+if has "$SIP" 'pve10 10.9.9.9 |'; then
+    ok "relacje: pasek tytulu z --host-ip pokazuje IP obok nazwy hosta"
+else
+    bad "relacje: --host-ip w pasku tytulu" "$SIP"
+fi
+if ! has "$S" '10.9.9.9' ; then
+    ok "relacje: bez --host-ip w offline pasek nie wymysla adresu"
+else
+    bad "relacje: pasek bez --host-ip" "$S"
+fi
 if has "$S" 'Relacje na kolektorze pve10 (5)'; then
     ok "relacje: tytul ramki liczy relacje ZYWE (5), bez rekordu usunietego"
 else
@@ -159,11 +172,17 @@ fi
 # POMOC MA OPISYWAC TO, CO JEST. Po usunieciu kreatora curses (2026-09-21)
 # ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
 # tekst pomocy to tez ekran, i tez sie dezaktualizuje.
-H1="$(screen zadania F1 --width 100)"
+H1="$(screen zadania F1 --width 100 --height 120)"
 if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && has "$H1" 'kreator w 10 krokach' && has "$H1" 'whiptail'; then
     ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (10 okien whiptaila), a nie usunietego poprzednika"
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
+fi
+# NOTE 8: pomoc ma nazywac 'u' (F4) i wyjatek od "litery nie sa skrotami".
+if has "$H1" "u chowa/pokazuje transfery" && has "$H1" "wyjątek: 'u' na F4"; then
+    ok "pomoc: opisuje 'u' na F4 (chowanie usunietych relacji) i wyjatek od reguly liter"
+else
+    bad "pomoc: brak opisu 'u'" "$H1"
 fi
 
 # SZEROKOSC NIE MOZE POGARSZAC WIDOKU, a naglowek kolumny musi sie miescic.
@@ -241,7 +260,7 @@ else
     bad "relacje: Tab" "$TP"
 fi
 TE="$(screen relacje down,tab,enter)"
-if has "$TE" '[F2 Zadania]' && has "$TE" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' && has "$TE" 'pobranie hourly'; then
+if has "$TE" '[F2 Zadania]' && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && has "$TE" 'pobranie hourly'; then
     ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
 else
     bad "relacje: Enter na parze" "$TE"
@@ -406,11 +425,19 @@ if hasE "$G" '^║ sync-test +pve20<>192\.168\.28\.50 +pobranie hourly x3 ' \
 else
     bad "zadania: F2 grupowanie i symbol synchro" "$G"
 fi
-if has "$G" 'zakres 1' && has "$G" 'zakres 2' && has "$G" 'zakres 3' \
-    && has "$G" 'hdd/lab/a' && has "$G" 'hdd/lab/b' && has "$G" 'hdd/lab/c'; then
-    ok "zadania: panel wiersza x3 wymienia WSZYSTKIE trzy zakresy, nie jedna pare zrodlo/cel"
+if has "$G" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' \
+    && ! has "$G" 'zakres 1' && ! has "$G" 'zakres 2'; then
+    ok "zadania: panel wiersza x3 -- JEDNA linia 'zakres' z liczba i wszystkimi trzema datasetami (R3-3: nie 'zakres N' per dataset)"
 else
     bad "zadania: panel grupy" "$G"
+fi
+# R3-3: przy malym terminalu (30 wierszy) 'harmonogram' MA byc widoczny, mimo
+# ze zakres grupy jest jedna dluga linia -- puste linie miedzy grupami.
+G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
+if has "$G30" '3 datasetów w' && has "$G30" 'harmonogram'; then
+    ok "zadania: panel grupy przy --height 30 -- 'zakres' jedna linia, 'harmonogram' wciaz widoczny (puste linie oddzielaja grupy)"
+else
+    bad "zadania: panel grupy przy malym terminalu" "$G30"
 fi
 if has "$G" 'oba hosty trzymają te same datasety'; then
     ok "zadania: panel kierunku synchro mowi 'oba hosty trzymaja', nie 'ten host pobiera'"
@@ -426,19 +453,19 @@ fi
 # ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
 # Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel
 # to ladowisko tutaj; kierunek mowi, ktore jest ktorym.
-if has "$Z" 'źródło      zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'cel         hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
-    ok "zadania: panel pobrania -- ZRODLO zdalne i CEL lokalny, pelne sciezki, nic nie uciete"
+if has "$Z" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' && hasE "$Z" 'zakres +zfsbackup'; then
+    ok "zadania: panel pobrania -- 'zakres' = ZRODLO zdalne i CEL lokalny, pelne sciezki, nic nie uciete (R3-3: jedna linia)"
 else
     bad "zadania: zrodlo/cel w panelu" "$Z"
 fi
 ZP="$(screen zadania down)"
-if has "$ZP" 'źródło      -' && has "$ZP" 'cel         hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$ZP" 'zakres +- ' && has "$ZP" 'hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "zadania: porzadki maja tylko CEL (to, co przycinaja), zrodlo '-'"
 else
     bad "zadania: porzadki zrodlo/cel" "$ZP"
 fi
 ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down 2>&1)"
-if has "$ZH2" 'źródło      hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'cel         pve9:hdd/backups'; then
+if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'zakres +hdd/vm-disks'; then
     ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
 else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
@@ -450,18 +477,18 @@ else
     bad "zadania: trzy kierunki na hostA" "$ZH"
 fi
 ZE="$(screen zadania enter)"
-if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'źródło   zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'cel      hdd/backups/192.168.28.99/hdd/lab/vm-101' \
-        && has "$ZE" 'szczebel standard_hourly  (sekcja dataset)' && has "$ZE" 'W CRONIE' && has "$ZE" 'snapget.sh'; then
-    ok "zadania: Enter = panel (ze zrodlem i celem na gorze) + W CRONIE z prawdziwa linia"
+if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
+        && hasE "$ZE" 'trzyma +- +szczebel standard_hourly \(sekcja dataset\)' && has "$ZE" 'W CRONIE' && has "$ZE" 'snapget.sh'; then
+    ok "zadania: Enter = panel ('zakres' ze zrodlem i celem, 'trzyma' z retencja i szczeblem) + W CRONIE z prawdziwa linia"
 else
     bad "zadania: Enter" "$ZE"
 fi
 # F5 ZNIESIONY (uwaga 2): to, co dawal ekran Monitor -- harmonogram straznika,
-# konto, progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA
-# SAMA regula co werdykt (monitors_for_job). Z fikstur pve10: lab-vm101 ma
-# monitor "*/15 * * * *", konto root, warn 90m, crit 150m.
-if hasE "$ZE" 'strażnik +\*/15 \* \* \* \* +konto root' && hasE "$ZE" 'progi +ostrzeżenie 90m / alarm 150m'; then
-    ok "zadania: panel F2 nazywa straznika (harmonogram, konto) i progi (ostrzezenie/alarm) -- to, co dawal usuniety F5"
+# progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA SAMA
+# regula co werdykt (monitors_for_job); R3-3 laczy straznik+progi w JEDNA
+# linie. Z fikstur pve10: lab-vm101 ma monitor "*/15 * * * *", warn 90m, crit 150m.
+if hasE "$ZE" 'strażnik +\*/15 \* \* \* \* +progi 90m / 150m'; then
+    ok "zadania: panel F2 nazywa straznika (harmonogram) i progi na JEDNEJ linii -- to, co dawal usuniety F5"
 else
     bad "zadania: straznik/progi w panelu F2" "$ZE"
 fi
@@ -682,16 +709,18 @@ fi
 # ============================================================================
 # OKNO RELACJI (Enter)
 # ============================================================================
-W="$(screen relacje down,enter)"
+W="$(screen relacje down,enter --height 80)"
 if has "$W" '╔═ Relacja lab-ct201 ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
 else
     bad "okno: otwarcie" "$W"
 fi
-if has "$W" 'Lądowiska  hdd/backups/192.168.28.99/hdd/lab/ct-201' && has "$W" 'Źródła (1) zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201'; then
-    ok "okno: zakres -- zrodla z rekordu i ladowiska (MANAGED_DATASETS)"
+if hasE "$W" 'Lądowiska [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
+        && has "$W" 'co kopiuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
+        && ! has "$W" 'W CRONIE'; then
+    ok "okno: zakladka Opis -- zrodla z rekordu, ladowiska (MANAGED_DATASETS), grupy pytaniami operatora, bez W CRONIE (R3-2/2b)"
 else
-    bad "okno: zakres" "$W"
+    bad "okno: zakres/Opis" "$W"
 fi
 W2="$(screen relacje down,enter --height 60)"
 if has "$W2" 'zfs-backup.sh pause-client lab-ct201' && ! has "$W2" 'resume-client'; then
@@ -699,25 +728,39 @@ if has "$W2" 'zfs-backup.sh pause-client lab-ct201' && ! has "$W2" 'resume-clien
 else
     bad "okno: komendy dla stanu active" "$W2"
 fi
-# LINIE CRONA PO ETYKIECIE. Linia snapget dla pobrania nazywa zdalne zrodlo i
-# RODZICA ladowiska, nigdy samo ladowisko -- dopasowanie po zakresie jej nie
-# widzialo (zmierzone na pve10 2026-09-09). Klucz drugi: -L <etykieta>.
-WC="$(screen relacje down,enter --height 60)"
-if has "$WC" 'snapget.sh -m' && has "$WC" '-L lab-ct201' && has "$WC" 'delsnaps.sh -G -R -L'; then
-    ok "okno: W CRONIE pokazuje linie snapget (po etykiecie -L), delsnaps i monitor -- to, co host naprawde wykona"
+# ZAKLADKI (R3-2): Tab z Opisu -> Config -> Cron. LINIE CRONA PO ETYKIECIE
+# (linia snapget dla pobrania nazywa zdalne zrodlo i RODZICA ladowiska, nigdy
+# samo ladowisko -- dopasowanie po zakresie jej nie widzialo, zmierzone na
+# pve10 2026-09-09; klucz drugi: -L <etykieta>) sa teraz w zakladce Cron.
+WCFG="$(screen relacje down,enter,tab --height 160)"
+if has "$WCFG" '[ Config ]' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
+        && has "$WCFG" 'tylko do odczytu'; then
+    ok "okno: zakladka Config -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory, read-only"
 else
-    bad "okno: linie crona po etykiecie" "$WC"
+    bad "okno: zakladka Config" "$WCFG"
 fi
-if has "$WC" '30 * * * *    standard_hourly' && has "$WC" 'keep_monthly -M12'; then
-    ok "okno: ...oraz sekcje configu z harmonogramem, szczeblem i retencja"
+WC="$(screen relacje down,enter,tab,tab --height 60)"
+if has "$WC" '[ Cron ]' && has "$WC" 'snapget.sh -m' && has "$WC" '-L lab-ct201' && has "$WC" 'delsnaps.sh -G -R -L'; then
+    ok "okno: zakladka Cron pokazuje linie snapget (po etykiecie -L), delsnaps i monitor -- to, co host naprawde wykona"
 else
-    bad "okno: sekcje configu w oknie" "$WC"
+    bad "okno: zakladka Cron" "$WC"
 fi
-WP="$(screen relacje down,down,down,down,enter --height 60)"
-if has "$WP" 'pobranie hdd/backups/192.168.28.99/hdd/lab/vm-101   co: 24 * * * *' && has "$WP" 'stempel automated_hourly_' && has "$WP" 'trzyma -H24 -D7 -W4' && has "$WP" '-M12   co: 44 * * * *   drabina GFS' && has "$WP" 'porządki zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101'; then
-    ok "okno: POLITYKA z show-config -- transfer nazwany ZGODNIE Z KIERUNKIEM (pobranie, bo src jest zdalny) i porzadki z retencja zlozona z szablonow"
+# Relacja W ZASIEWIE (bez pliku configu) -- Config ma powiedziec to, nie
+# pokazac cudzy config z fikstury.
+WCFGSEED="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --keys enter,tab --height 60 --width 100 2>&1)"
+if has "$WCFGSEED" 'configu jeszcze nie ma -- powstanie przy aktywacji' && has "$WCFGSEED" 'zfs-backup.sh activate duplikat'; then
+    ok "okno: zakladka Config relacji bez zainstalowanego configu (seeding) mowi to, nie zgaduje"
 else
-    bad "okno: polityka z show-config" "$WP"
+    bad "okno: zakladka Config relacji w zasiewie" "$WCFGSEED"
+fi
+WP="$(screen relacje down,down,down,down,enter,tab --height 160)"
+if has "$WP" '[ Config ]' && has "$WP" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' \
+        && has "$WP" 'send_schedule = 24 * * * *' && has "$WP" 'src = zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' \
+        && has "$WP" '[prune:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$WP" 'prune_schedule = 44 * * * *' \
+        && has "$WP" '[template:profile__default__keep_monthly]' && has "$WP" 'retain = -M12'; then
+    ok "okno: zakladka Config -- sekcje [dataset:]/[prune:] i szablony UZYTE (use_template), werbatim z show-config"
+else
+    bad "okno: zakladka Config -- sekcje relacji lab-vm101" "$WP"
 fi
 WS="$(screen relacje enter --height 60)"
 if has "$WS" 'zfs-backup.sh activate duplikat'; then
@@ -737,7 +780,7 @@ if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct
 else
     bad "okno: Esc" "$WE"
 fi
-if has "$W" 'Esc zamyka   strzałki/PgUp/PgDn przewijają   1-21 z'; then
+if hasE "$(screen relacje down,enter)" 'Esc zamyka   strzałki/PgUp/PgDn przewijają   [0-9]+-[0-9]+ z [0-9]+'; then
     ok "okno: stopka mowi, jak wyjsc i ile jest do przewiniecia"
 else
     bad "okno: stopka" "$W"
@@ -761,6 +804,28 @@ if has "$T" 'na łączu: niemierzalne'; then
     ok "transfery: panel mowi 'niemierzalne', nie zero, gdy wire_bytes=-1"
 else
     bad "transfery: niemierzalne" "$T"
+fi
+# NOTE 8 (wlasciciel, 2026-09-24): 'u' chowa/pokazuje transfery relacji,
+# ktorych juz nie ma -- z 14 zapisow fikstury 6 ma etykiete "labsp"/"lab1"/""
+# (brak rekordu w status.json), 8 nalezy do zywych relacji. Listwa (dopisek
+# 'u ...') potrzebuje szerszego terminala, zeby sie zmiescic -- stad --width 130.
+TW130="$(screen transfery "" --width 130)"
+if has "$TW130" 'u ukryj usunięte' && ! has "$TW130" 'u pokaż usunięte'; then
+    ok "transfery: domyslnie POKAZANE (dziennik transferow), listwa mowi 'u ukryj usunięte'"
+else
+    bad "transfery: domyslny stan 'u'" "$TW130"
+fi
+TU="$(screen transfery u --width 130)"
+if has "$TU" 'Zakończone (8)' && has "$TU" 'bez usuniętych relacji' && ! has "$TU" '(bez rel.)' && has "$TU" 'u pokaż usunięte'; then
+    ok "transfery: 'u' chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
+else
+    bad "transfery: 'u' chowa" "$TU"
+fi
+TUU="$(screen transfery u,u --width 130)"
+if has "$TUU" 'Zakończone (14)' && has "$TUU" '(bez rel.)' && ! has "$TUU" 'bez usuniętych relacji'; then
+    ok "transfery: drugie 'u' pokazuje je znowu"
+else
+    bad "transfery: 'u' pokazuje znowu" "$TUU"
 fi
 TF="$(screen zadania F4)"
 if has "$TF" '╔═ Zakończone' && has "$TF" '[F4 Transfery]'; then
