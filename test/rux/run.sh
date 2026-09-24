@@ -777,6 +777,44 @@ else
         "rc=$rc out=$out order=$(cat "$WORK/24b/order" 2>/dev/null)"
 fi
 
+# 24c. --exclude-child, carried through --grant-remotely: the requested root's
+#      children are listed on the SOURCE (zfs list) and the ones a regex
+#      matches become exact 'exclude =' lines in the committed scope -- so the
+#      grant withholds rights on exactly the datasets the jobs are configured
+#      to skip (before this, an excluded child got delegated rights anyway --
+#      measured on pve11 <- pve9b, 2026-09-23). Fresh enrolment: no committed
+#      scope, no pre-existing draft, so the plain write path is taken.
+mkdir -p "$WORK/24c"
+SCOPE_OUT="$WORK/24c/scope.txt"
+out="$( (
+    COLLECTOR_LABEL=colhost
+    RUX_GRANT_EXCLUDES='^hdd/vms/vm3$'
+    rux_root_ssh() {   # <host> <port> <cmd...>
+        shift 2
+        case "$*" in
+            true) return 0 ;;
+            *"test -s"*) return 1 ;;                       # nothing committed yet
+            *"test -x"*) return 0 ;;                       # deploy.sh found
+            *"zfs list"*) printf 'hdd/vms\nhdd/vms/vm1\nhdd/vms/vm3\n'; return 0 ;;
+            *"cat -- "*) return 0 ;;                       # no existing draft
+            *"cat > "*) cat > "$SCOPE_OUT"; return 0 ;;
+            *"--commit-scope"*) return 0 ;;
+            *"printf 'GRANTED_REMOTELY_BY"*|*GRANTED_REMOTELY_BY*) return 0 ;;
+            *) echo "UNEXPECTED rux_root_ssh: $*" >&2; return 9 ;;
+        esac
+    }
+    rux_root_ssh_in() { rux_root_ssh "$@"; }
+    rux_grant_remotely pve2 22 hdd/vms
+) 2>&1 )"; rc=$?
+seq=$(grep -E '^\[dataset:hdd/vms\]$|^include_parent = yes$|^include_children = yes$|^exclude = hdd/vms/vm3$' "$SCOPE_OUT" 2>/dev/null)
+expected=$'[dataset:hdd/vms]\ninclude_parent = yes\ninclude_children = yes\nexclude = hdd/vms/vm3'
+if [ "$rc" -eq 0 ] && [ "$seq" = "$expected" ] && ! grep -qxF 'exclude = hdd/vms/vm1' "$SCOPE_OUT" 2>/dev/null; then
+    ok "grant: --exclude-child becomes exact 'exclude =' lines in the committed scope -- no rights on a child the jobs skip (pve11 2026-09-23)"
+else
+    bad "grant: --exclude-child becomes exact 'exclude =' lines in the committed scope -- no rights on a child the jobs skip (pve11 2026-09-23)" \
+        "rc=$rc out=$out scope=$(cat "$SCOPE_OUT" 2>/dev/null)"
+fi
+
 # 25. rux_grant_remotely_preflight: a peer that has NOT joined this collector
 #     is refused BEFORE anything is built. Found live 2026-08-20 -- the flag's
 #     promise is one command instead of four, and it cannot keep it on an
