@@ -880,6 +880,13 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         clear 2>/dev/null
         echo "\$ $(cmd_oneline)"; echo
         "${ARGV[@]}" 2>&1 | tee "$TMPD/run.log"; RC_RUN=${PIPESTATUS[0]}
+        # DZIENNIK DLA F3 Ins (owner note 5): TUI ustawia ZFS_TUI_LOG na
+        # sciezke ~/.zfs-tui/new-relation-<stamp>.log przed oddaniem terminala
+        # tu; dopisujemy do niego, zeby wynik biegu nie zniknal w $TMPD.
+        if [ -n "${ZFS_TUI_LOG:-}" ] && [ -f "$TMPD/run.log" ]; then
+            cat "$TMPD/run.log" >>"$ZFS_TUI_LOG" 2>/dev/null
+            echo "rc=$RC_RUN" >>"$ZFS_TUI_LOG" 2>/dev/null
+        fi
         echo
         if [ "$RC_RUN" -eq 0 ]; then echo "=== GOTOWE: relacja '$RNAME' założona (rc=0). Enter = dalej"
         elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then

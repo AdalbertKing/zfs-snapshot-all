@@ -1,0 +1,12 @@
+{"host": "pve10", "account": "root", "jobs": [
+ {"account": "root", "config": "/etc/zfs-snapshot-all/jobs.pve10.conf", "section_kind": "dataset", "scope": "tank/a",
+  "tier": "profile__p__flat_hourly", "direction": "pull", "peer": "10.0.0.9", "other_end": "acc@10.0.0.9:tank/a",
+  "label": "sx", "schedule": "31 * * * *", "pattern": "automated", "prefix": "automated_", "keep": "", "retain": "-H168",
+  "gfs": "", "quiesce": "", "monitor_warn": "3h", "monitor_crit": "5h", "recursive": false, "readable": true, "lines_in_block": 4,
+  "cron_lines": [
+   "31 * * * * /r/zfs-job.sh \"pve10 profile__p__flat_hourly backup (sx-a)\" -- /r/snapget.sh -m \"automated_\" -e \"acc@10.0.0.9:tank/a\"",
+   "31 * * * * /r/zfs-job.sh \"pve10 profile__p__flat_hourly backup (sx-b)\" -- /r/snapget.sh -m \"automated_\" -e \"acc@10.0.0.9:tank/b\"",
+   "17 * * * * /r/zfs-job.sh \"pve10 profile__p__flat_hourly prune (sx-b)\" -- /r/delsnaps.sh \"tank/b\" \"automated\" -H168",
+   "21 * * * * /r/zfs-job.sh \"pve10 profile__p__flat_hourly prune (sx-a)\" -- /r/delsnaps.sh \"tank/a\" \"automated\" -H168"
+  ]}
+]}
