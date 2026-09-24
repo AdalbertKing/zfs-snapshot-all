@@ -185,29 +185,84 @@ else
     bad "pomoc: brak opisu 'u'" "$H1"
 fi
 
-# SZEROKOSC NIE MOZE POGARSZAC WIDOKU, a naglowek kolumny musi sie miescic.
-# Zmierzone na pve10 2026-09-21: przy 100 kolumnach adres peera ucinalo o JEDEN
-# znak, a przy 120 -- gdzie panel staje z boku i tabela ma tyle co przy 80 --
-# tabela dostawala jeszcze kolumne Harmonogram i naglowki wychodzily jako
-# "Czas..." i "Kopie …". Poszerzenie terminala psulo ekran.
-Z100="$(screen zadania "" --width 100)"; Z120="$(screen zadania "" --width 120)"; Z140="$(screen zadania "" --width 140)"
-if has "$Z100" 'pve10<192.168.28.99' && ! has "$Z100" 'pve10<192.168.28.…'; then
-    ok "zadania: przy 100 kolumnach adres peera miesci sie w CALOSCI (brakowalo jednego znaku)"
+# SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4, wersja 2, wlasciciel 2026-09-24).
+# Kierunek NIE UCINA SIE NIGDY (pelny adres synchro), Harmonogram zostaje
+# kolumna (nie ucieka juz do panelu jak wczesniej) -- to 'Czas o/ś/m', ostatnia
+# w priorytecie, spada pierwsza, kiedy tabela jest ciasna. Panel idzie OBOK
+# listy od 150, nie od 120 jak wczesniej (punkt 3) -- 120 zabieral liscie
+# miejsce, ktorego panelowi i tak nie oddawal w calosci.
+Z100="$(screen zadania "" --width 100)"
+if has "$Z100" 'Następny' && has "$Z100" 'Harmonogram' && has "$Z100" 'pve10<192.168.28.99' \
+   && ! has "$Z100" 'pve10<192.168.28.…'; then
+    ok "zadania: przy 100 kolumnach sa Nastepny i Harmonogram, adres peera CALY (Czas wchodzi tylko, gdy zostanie miejsce)"
 else
-    bad "zadania: uciety adres przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
+    bad "zadania: kolumny przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
 fi
-if ! has "$Z120" 'Harmonogram' && has "$Z140" 'pve10<192.168.28.99'; then
-    ok "zadania: przy 120 (panel z boku, tabela jak przy 80) kolumna Harmonogram NIE wchodzi na sile, a przy 140 adres jest caly"
+# 200, nie 160: od 150 panel stoi obok i lista ma 60% szerokosci
+Z160="$(screen zadania "" --width 200)"
+if has "$Z160" 'Relacja' && has "$Z160" 'Kierunek' && has "$Z160" 'Zadanie' && has "$Z160" 'Harmonogram' \
+   && has "$Z160" 'Następny' && has "$Z160" 'Kopie' && has "$Z160" 'GB' && has "$Z160" 'Czas o/ś/m'; then
+    ok "zadania: przy 200 kolumnach wchodzi wszystkich osiem naglowkow"
 else
-    bad "zadania: kolumny przy panelu z boku" "$(printf '%s' "$Z120" | sed -n '3,4p')"
+    bad "zadania: naglowki przy 160" "$(printf '%s' "$Z160" | sed -n '3p')"
 fi
-for _w in 80 100 120 140 200; do
+if [ "$(printf '%s\n' "$Z160" | grep -c '║.*│')" -gt 0 ]; then
+    ok "zadania: przy 160 panel stoi OBOK listy (prog 150, nie 120)"
+else
+    bad "zadania: panel obok przy 160" "$Z160"
+fi
+Z120="$(screen zadania "" --width 120)"
+if [ "$(printf '%s\n' "$Z120" | grep -c '║.*│')" -eq 0 ]; then
+    ok "zadania: przy 120 panel jest POD lista (prog przesuniety na 150)"
+else
+    bad "zadania: panel pod lista przy 120" "$Z120"
+fi
+for _w in 80 100 120 140 160 200; do
     _h="$(screen zadania "" --width $_w | sed -n '3p')"
     case "$_h" in
-        *"Czas..."*|*"Kopie …"*|*"Kopie..."*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
+        *"Czas..."*|*"Kopie …"*|*"Kopie..."*|*"Harmonogr…"*|*"Następn…"*) bad "zadania: uciety NAGLOWEK kolumny przy $_w" "$_h" ;;
         *) ok "zadania: przy $_w kolumnach zaden naglowek kolumny nie jest uciety" ;;
     esac
 done
+
+# KOLUMNA NASTEPNY -- format wg R3-4 (test b): dzis tylko godzina, jutro
+# "jutro HH:MM", w tygodniu dwuliterowy dzien tygodnia, dalej "DD.MM HH:MM".
+# Liczone NIEZALEZNIE od tablicy dni tygodnia w module (WD ponizej to REFERENCJA
+# z brief'u, nie import z zfs-tui.py) -- inaczej test bylby tautologia.
+NXOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, time, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+now = time.mktime((2026, 9, 9, 12, 0, 0, 0, 0, -1))
+WD = [u"pn", u"wt", u"śr", u"cz", u"pt", u"so", u"nd"]  # pon..niedz, z brief'u R3-4
+cases = [
+    ("today", time.mktime((2026, 9, 9, 14, 0, 0, 0, 0, -1)), "14:00"),
+    ("tomorrow", time.mktime((2026, 9, 10, 9, 5, 0, 0, 0, -1)), u"jutro 09:05"),
+    ("far", time.mktime((2026, 9, 20, 10, 30, 0, 0, 0, -1)), "20.09 10:30"),
+]
+ok_all = True
+for name, epoch, want in cases:
+    got = m.fmt_next_short(epoch, now)
+    print("%s|%s|%s" % (name, got, want))
+# "w tygodniu" liczone z prawdziwym dniem tygodnia (nie zgadujemy kalendarza recznie)
+week_epoch = time.mktime((2026, 9, 14, 8, 0, 0, 0, 0, -1))
+wd = WD[time.localtime(week_epoch).tm_wday]
+print("week|%s|%s 08:00" % (m.fmt_next_short(week_epoch, now), wd))
+PYEOF
+)"
+NXBAD=""
+while IFS='|' read -r nm got want; do
+    want=${want%$'\r'}   # print pythona na Windows konczy linie CRLF
+    [ "$got" = "$want" ] || NXBAD="$NXBAD $nm(got=$got,want=$want)"
+done <<EOF
+$NXOUT
+EOF
+if [ -z "$NXBAD" ]; then
+    ok "zadania: fmt_next_short -- dzis/jutro/tydzien/DD.MM zgodne ze specyfikacja R3-4"
+else
+    bad "zadania: fmt_next_short" "$NXBAD" "$NXOUT"
+fi
 
 # JEDNO OSTRZEZENIE NA FAKT. Relacja ma monitor na kazdy szczebel, wiec uwaga
 # "cron wola inny plik silnika" wchodzila do panelu tyle razy, ile szczebli, i
@@ -328,18 +383,23 @@ fi
 # Wlasciciel, 2026-09-09: "obok kolumny relacja wstaw kolumne z kierunkiem np.
 # pve9>pve10, lub pve9<>pve10, lub local" -- lewa strona to ZAWSZE ten host.
 Z="$(screen zadania)"
-if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) ═'; then
-    ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja"
+if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) -- sort'; then
+    ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja, tytul nazywa domyslny widok sortowania"
 else
     bad "zadania: tytul" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[0-9-]+/[0-9-]+/[0-9-]+s +[0-9.]+[KMG] +aktualne +║' && ! has "$Z" 'Zakres'; then
-    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej), rodzina bez automated_, CZASY i GB jak w mailu, werdykt slowem -- i ZADNEJ kolumny Zakres"
+# R3-4: kolejnosc kolumn po priorytecie zmienila sie (Kopie/GB/Czas nie sa juz w
+# tej samej kolejnosci co dawniej, Harmonogram i Nastepny moga wejsc miedzy
+# Zadanie a nimi) -- sprawdzamy PREFIKS wiersza (Relacja/Kierunek/Zadanie, ktore
+# sa priorytetem 1-3 i zawsze pierwsze) i ze werdykt gdzies na tym wierszu jest,
+# bez wiazania sie do dokladnej pozycji kolumn koncowych.
+if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.99 +pobranie hourly ' && ! has "$Z" 'Zakres'; then
+    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej, adres CALY), i ZADNEJ kolumny Zakres"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +[0-9]+/[0-9]+/[0-9]+s +- +aktualne'; then
-    ok "zadania: porzadki na ladowisku = 'local', to, co trzymaja (-H24), czasy z ich linii crona, GB '-' (porzadki nic nie pisza)"
+if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 '; then
+    ok "zadania: porzadki na ladowisku = 'local', z tym, co trzymaja (-H24) w zadaniu"
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
@@ -368,10 +428,14 @@ print("%d/%d/%ds" % (row["last_s"], row["avg_s"], row["max_s"]), h(vol), row["ru
 PYEOF
 )
 set -- $want
-if has "$Z" " $1 " && has "$Z" " $2 "; then
+# R3-4: przy 80 kolumnach 'Czas o/ś/m' moze spasc z listy (priorytet 8) --
+# sprawdzamy DOKLADNA liczbe na SZEROKIM ekranie (200), gdzie wchodzi caly
+# priorytet; wartosc jest ta sama niezaleznie od tego, czy kolumna sie zmiesci.
+Z200="$(screen zadania "" --width 200)"
+if has "$Z200" " $1 " && has "$Z200" " $2 "; then
     ok "zadania: czasy ($1) i GB ($2) w wierszu wysylki sa DOKLADNIE tym, co job-stats mowi o jej linii crona i jej ladowisku"
 else
-    bad "zadania: czasy/GB z job-stats" "want: $want" "$Z"
+    bad "zadania: czasy/GB z job-stats" "want: $want" "$Z200"
 fi
 if has "$Z" "biegi       $3 w oknie 7 dni" && has "$Z" "ostatni $4 $5 rc=0" && has "$Z" 'czas        ostatni ' && has "$Z" '(jak w mailu)' && has "$Z" 'wolumen     '"$2"' zapisane w migawkach automated_hourly w oknie 7 dni'; then
     ok "zadania: panel nazywa biegi, ostatni czas/rc, czas ostatni/sredni/maks i wolumen z oknem digestu"
@@ -379,23 +443,58 @@ else
     bad "zadania: panel czasow" "$Z"
 fi
 # bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
-ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania 2>&1)"
-if hasE "$ZS" '^║ lab-vm101 +pve10<192\.168\.28\.[0-9.…]+ +pobranie hourly +[?] +[?] +aktualne' && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
-    ok "zadania: zepsute job-stats -> '?' w komorkach i zdanie w panelu, nigdy zero udajace pomiar"
+ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania --width 200 2>&1)"
+# R3-4: Kopie/GB/Czas zamienily miejsca w priorytecie (Kopie teraz przed GB i
+# Czas) -- sprawdzamy fakty NA WIERSZU bez wiazania sie do ich wzajemnej
+# kolejnosci.
+ZS_LINE=$(printf '%s\n' "$ZS" | grep -E '^║ lab-vm101 +pve10<192\.168\.28\.99 ')
+QCOUNT=$(printf '%s' "$ZS_LINE" | grep -o '?' | wc -l | tr -d ' ')
+if [ -n "$ZS_LINE" ] && printf '%s' "$ZS_LINE" | grep -qF 'aktualne' && [ "${QCOUNT:-0}" -ge 2 ] \
+   && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
+    ok "zadania: zepsute job-stats -> '?' w komorkach (GB, Czas) i zdanie w panelu, nigdy zero udajace pomiar"
 else
-    bad "zadania: zepsute job-stats" "$ZS"
+    bad "zadania: zepsute job-stats" "$ZS_LINE" "$ZS"
 fi
-ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania 2>&1)"
-if hasE "$ZH3" '^║ pve9 +hostA>pve9 +wysyłka hourly +- +- +spóźnione' && has "$ZH3" 'brak biegów tego zadania w dzienniku w oknie 7 dni'; then
-    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje '-' i mowi to w panelu (a wysylka do peera nie ma wolumenu do zmierzenia tutaj)"
+ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania --width 200 2>&1)"
+ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +hostA>pve9 +wysyłka hourly ')
+if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'spóźnione' \
+   && has "$ZH3" 'brak biegów tego zadania w dzienniku w oknie 7 dni'; then
+    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje werdykt i mowi 'brak biegow' w panelu (a wysylka do peera nie ma wolumenu do zmierzenia tutaj)"
 else
-    bad "zadania: brak biegow" "$ZH3"
+    bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
 fi
-Z100="$(screen zadania "" --width 100)"
-if has "$Z100" 'Harmonogram' && ! has "$Z" 'Harmonogram' && has "$Z" 'harmonogram 24 * * * *'; then
-    ok "zadania: przy 80 harmonogram zostaje w panelu (miejsce maja czasy), od 100 wraca jako kolumna"
+
+# SORTOWANIE F2 (test c, R3-4): 's' cykluje trzy widoki, tytul mowi ktory.
+# jobs.json (fixture hostA) ma zadanie GODZINOWE "wysyłka hourly" (schedule
+# "5 * * * *" -- nastepny bieg w ciagu godziny od NOW) i zadanie DOBOWE
+# "kopia daily" (schedule "21 0 * * *" -- NOW jest "środek dnia", 00:21 juz
+# minelo, nastepny bieg dopiero jutro) -- kolejnosc miedzy nimi w widoku "os
+# czasu" jest wiec DETERMINISTYCZNA niezaleznie od dokladnej minuty NOW.
+ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
+ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
+if has "$ZSORT1" 'sort: oś czasu'; then
+    ok "zadania: 's' raz -- tytul mowi 'oś czasu'"
 else
-    bad "zadania: harmonogram 80/100" "$Z" "$Z100"
+    bad "zadania: 's' raz -- tytul" "$ZSORT1"
+fi
+L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka hourly' | head -1 | cut -d: -f1)
+L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia daily' | head -1 | cut -d: -f1)
+if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
+    ok "zadania: 's' raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
+else
+    bad "zadania: 's' raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
+fi
+ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s,s --width 200 2>&1)"
+if has "$ZSORT2" 'sort: ostatni bieg'; then
+    ok "zadania: 's' dwa razy -- tytul mowi 'sort: ostatni bieg'"
+else
+    bad "zadania: 's' dwa razy -- tytul" "$ZSORT2"
+fi
+ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s,s,s --width 200 2>&1)"
+if has "$ZSORT3" 'sort: relacje' && ! has "$ZSORT3" 'oś czasu' && ! has "$ZSORT3" 'ostatni bieg'; then
+    ok "zadania: 's' trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
+else
+    bad "zadania: 's' trzy razy -- powrot" "$ZSORT3"
 fi
 
 # ============================================================================
@@ -464,7 +563,8 @@ if hasE "$ZP" 'zakres +- ' && has "$ZP" 'hdd/backups/192.168.28.99/hdd/lab/vm-10
 else
     bad "zadania: porzadki zrodlo/cel" "$ZP"
 fi
-ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down 2>&1)"
+ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down 2>&1)"
+# down,down: widok domyslny grupuje wiersze relacji -- oba "(bez rel.)" sa pierwsze
 if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'zakres +hdd/vm-disks'; then
     ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
 else
@@ -808,20 +908,20 @@ fi
 # NOTE 8 (wlasciciel, 2026-09-24): 'u' chowa/pokazuje transfery relacji,
 # ktorych juz nie ma -- z 14 zapisow fikstury 6 ma etykiete "labsp"/"lab1"/""
 # (brak rekordu w status.json), 8 nalezy do zywych relacji. Listwa (dopisek
-# 'u ...') potrzebuje szerszego terminala, zeby sie zmiescic -- stad --width 130.
-TW130="$(screen transfery "" --width 130)"
+# 'u ...') potrzebuje szerszego terminala, zeby sie zmiescic, a panel ma stac obok (prog 150) -- stad --width 160.
+TW130="$(screen transfery "" --width 160)"
 if has "$TW130" 'u ukryj usunięte' && ! has "$TW130" 'u pokaż usunięte'; then
     ok "transfery: domyslnie POKAZANE (dziennik transferow), listwa mowi 'u ukryj usunięte'"
 else
     bad "transfery: domyslny stan 'u'" "$TW130"
 fi
-TU="$(screen transfery u --width 130)"
+TU="$(screen transfery u --width 160)"
 if has "$TU" 'Zakończone (8)' && has "$TU" 'bez usuniętych relacji' && ! has "$TU" '(bez rel.)' && has "$TU" 'u pokaż usunięte'; then
     ok "transfery: 'u' chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
 else
     bad "transfery: 'u' chowa" "$TU"
 fi
-TUU="$(screen transfery u,u --width 130)"
+TUU="$(screen transfery u,u --width 160)"
 if has "$TUU" 'Zakończone (14)' && has "$TUU" '(bez rel.)' && ! has "$TUU" 'bez usuniętych relacji'; then
     ok "transfery: drugie 'u' pokazuje je znowu"
 else

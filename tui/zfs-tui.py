@@ -287,6 +287,66 @@ def fmt_when_short(epoch, now):
     return time.strftime("%d.%m %H:%M", t)
 
 
+def fmt_next_short(epoch, now):
+    """Kolumna 'Nastepny' na F2 (R3-4, uwaga wlasciciela 2026-09-24, wersja 2
+    po makiecie): dzis -- tylko godzina, jutro -- 'jutro HH:MM', w tygodniu --
+    dwuliterowy dzien tygodnia (pn wt sr cz pt so nd), dalej -- 'DD.MM HH:MM'.
+    Krotsze niz pelne fmt_when/fmt_full, bo kolumna ma stala szerokosc 11."""
+    try:
+        epoch = int(epoch)
+    except (TypeError, ValueError):
+        return "?"
+    if epoch <= 0:
+        return "?"
+    t, n = time.localtime(epoch), time.localtime(now)
+    hhmm = time.strftime("%H:%M", t)
+    if t[:3] == n[:3]:
+        return hhmm
+    # Roznica dni liczona przez polnoc, nie przez /86400 z surowych epok --
+    # inaczej strefa/czas letni przesunie granice "jutro" o godzine.
+    midnight_t = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
+    midnight_n = time.mktime((n.tm_year, n.tm_mon, n.tm_mday, 0, 0, 0, 0, 0, -1))
+    diff_days = int(round((midnight_t - midnight_n) / 86400.0))
+    if diff_days == 1:
+        return u"jutro %s" % hhmm
+    if 2 <= diff_days <= 6:
+        wd = [u"pn", u"wt", u"śr", u"cz", u"pt", u"so", u"nd"][t.tm_wday]
+        return u"%s %s" % (wd, hhmm)
+    return "%s %s" % (time.strftime("%d.%m", t), hhmm)
+
+
+def parse_last_at(s):
+    """'last_at' z job-stats: 'YYYY-MM-DD HH:MM' albo (przyszlosciowo) epoka --
+    epoka lub None, nigdy wyjatek (R3-4, sortowanie 'wg ostatniego')."""
+    if s is None:
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(time.mktime(time.strptime(str(s), "%Y-%m-%d %H:%M")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def last_run_epoch_for_row(data, row):
+    """Ostatni bieg wiersza F2 wg dziennika, do sortowania 'wg ostatniego'
+    (R3-4): dla wiersza zgrupowanego (x2, x9...) NAJSTARSZY z grupy -- to jest
+    najgorszy widoczny przypadek, nie ten, ktory akurat trafil do g['srow']."""
+    if data.failed("stats"):
+        return None
+    cands = []
+    for jj in row.get("jobs") or []:
+        clabel = job_cron_label(jj)
+        srow, _vol = job_stats_for(data, jj, clabel)
+        if srow:
+            e = parse_last_at(srow.get("last_at"))
+            if e is not None:
+                cands.append(e)
+    return min(cands) if cands else None
+
+
 def fmt_full(epoch):
     try:
         epoch = int(epoch)
@@ -1181,65 +1241,85 @@ def build_jobs(data, now):
     return rows
 
 
-def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
+def sort_zad_rows(rows, mode, data):
+    """Widok F2 wg `mode` (R3-4, wersja 2): 0 -- relacje w tej samej kolejnosci,
+    co dzis, w srodku wg najblizszego biegu (bez terminu na koniec); 1 -- os
+    czasu, wszystko wg najblizszego biegu; 2 -- wg ostatniego biegu, od
+    najstarszego/nieznanego (podejrzane pierwsze). `sorted()` jest stabilny,
+    wiec remisy zostaja w kolejnosci wejsciowej -- to daje "ta sama kolejnosc
+    relacji, co dzis" bez odrebnej logiki."""
+    if mode == 1:
+        return sorted(rows, key=lambda r: (r["next_epoch"] is None, r["next_epoch"] or 0))
+    if mode == 2:
+        def key2(r):
+            e = last_run_epoch_for_row(data, r)
+            return (0, 0) if e is None else (1, e)
+        return sorted(rows, key=key2)
+    names = []
+    for r in rows:
+        if r["name"] not in names:
+            names.append(r["name"])
+    buckets = {n: [] for n in names}
+    for r in rows:
+        buckets[r["name"]].append(r)
+    out = []
+    for n in names:
+        out.extend(sorted(buckets[n], key=lambda r: (r["next_epoch"] is None, r["next_epoch"] or 0)))
+    return out
+
+
+# SORT F2: trzy widoki, cyklem po 's' (R3-4, uwaga wlasciciela 2026-09-24,
+# wersja 2). Nazwa widoku wchodzi w tytul tabeli, zeby operator wiedzial, co
+# akurat widzi -- ta sama zasada co "u" na F4 (NOTE 8).
+# Krotkie: przy 80 kolumnach dluzsza nazwa ucinala sie w tytule (zmierzone).
+ZAD_SORT_LABELS = [u"sort: relacje",
+                   u"sort: oś czasu",
+                   u"sort: ostatni bieg"]
+
+# KOLUMNY F2 PO PRIORYTECIE (R3-4, wersja 2 po makiecie wlasciciela): Kierunek
+# NIE UCINA SIE NIGDY (pelny adres synchro), Harmonogram zostaje jako kolumna
+# (nie ucieka do panelu jak wczesniej). Szerokosc kazdej kolumny jest jej
+# WLASNA SZEROKOSCIA TRESCI (nie mniej niz naglowek, bez gornego widelca) --
+# tabela wypelnia sie od pierwszej kolumny, a ta, ktora nie zmiesci sie w
+# pozostalym miejscu, spada z LISTY (jej dane sa w panelu szczegolow i tak,
+# 'Czas o/ś/m' jest tam jako 'czas').
+_ZAD_COLS = [
+    ("name", "Relacja", lambda r: r["name"]),
+    ("dir", "Kierunek", lambda r: r["dir"]),
+    ("task", "Zadanie", lambda r: r["task"]),
+    ("schedule", "Harmonogram", lambda r: r["schedule"]),
+    ("next_disp", u"Następny", lambda r: r.get("next_disp") or "-"),
+    ("vword", "Kopie", lambda r: r["vword"] or "-"),
+    ("gb", "GB", lambda r: r.get("gb") or "-"),
+    ("czas", u"Czas o/ś/m", lambda r: r.get("czas") or "-"),
+]
+
+
+def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_mode=0):
     scr = Screen()
     host = (data.jobs or {}).get("host") or "?"
     top = top_bar(data, width, now, ch.ascii, len(data.errors))
     if data.failed("jobs"):
         scr.lines = [top] + box(ch, u"Zadania na %s" % host, source_error_body(ch, "jobs", data, "list-jobs"), width)
     else:
-        beside = width >= 120
+        # PANEL Z BOKU OD 150, nie od 120 (R3-4, punkt 3): 120 dawal panelowi
+        # miejsce, ale zabieral je liscie -- ten sam prog dzielony przez F2/F4/F6.
+        beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
-        # Wlasciciel, 2026-09-11: kolumna Zakres znika z listy -- sciezka jest
-        # zawsze dluga i nigdy sie nie miesci. Zrodlo i cel sa w panelu, w
-        # calosci. Miejsce po niej dostana czasy z digestu (ostatni / sredni /
-        # maks / GB), gdy czasownik je wystawi; do tego czasu Harmonogram jest
-        # kolumna zawsze, a Kierunek i Zadanie nie sa ucinane.
-        # Wlasciciel, 2026-09-11: w miejsce Zakresu -- czasy jak w mailu
-        # (ostatni/sredni/maks, jedna komorka) i GB. Przy 80 kolumnach
-        # Harmonogram zostaje w panelu, Kierunek dostaje to, co zostanie.
-        nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
-        tw = max(12, min(24, max([len(r["task"]) for r in rows] + [12])))   # 24: "pobranie automated x9", "porządki źródła -H168 x9"
-        cw, gw = 11, 5
-        # "Kopie" tak szeroka, jak jej najdluzsze SLOWO (nie ponizej naglowka): stale 13
-        # pod "nie odpowiada" zabieralo dwa znaki Kierunkowi, kiedy Zadanie urosło do
-        # "pobranie automated x9" -- przy 100 kolumnach adres synchro wychodził z "…".
-        vw = max(len("Kopie"), min(13, max([len(r.get("vword") or "") for r in rows] + [5])))
-        # O KOLUMNIE DECYDUJE SZEROKOSC TABELI, NIE TERMINALA. Od 120 kolumn panel
-        # staje z BOKU i lista ma tyle miejsca, co przy 80 -- a mimo to dostawala
-        # kolumne Harmonogram, ktora przy 80 jest swiadomie chowana. Efekt byl taki,
-        # ze poszerzenie terminala ze 100 do 120 psulo tabele: Kierunek spadal do
-        # osmiu znakow, a naglowki wychodzily jako "Czas..." i "Kopie …"
-        # (zmierzone na pve10, 2026-09-21).
-        show_sched = inner >= 96
-        hw = 13 if show_sched else 0
-        ncol = 7 if show_sched else 6
-        dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
-        dmax = max([len(r["dir"]) for r in rows] + [8])
-        if dw > dmax:
-            tw = min(tw + (dw - dmax), 24)
-            dw = inner - (nw + tw + cw + gw + vw + hw + (ncol - 1))
-        # JEDEN ZNAK POTRAFI UCIAC ADRES. Przy 100 kolumnach -- szerokosci, ktorej
-        # uzywa wlasciciel -- Kierunkowi brakowalo dokladnie jednego znaku i
-        # `pve10<192.168.28.96` wychodzilo jako `pve10<192.168.28.…` (zmierzone
-        # 2026-09-21: przy 101 miesci sie w calosci). Kolumna czasow ma zapas,
-        # bo `3/3/4s` to szesc znakow z jedenastu -- oddaje tyle, ile ma ponad
-        # swoja najdluzsza wartosc, i ani znaku wiecej.
-        if dw < dmax:
-            # ...ale nie ponizej WLASNEGO NAGLOWKA: pierwsza wersja pozyczala
-            # tyle, ile wynosila najdluzsza WARTOSC, i przy 120 kolumnach naglowek
-            # wychodzil jako "Czas..." -- kolumna, ktora miesci dane, a nie miesci
-            # swojej nazwy, nie jest czytelniejsza od uciecia obok.
-            cmax = max([len(r.get("czas") or "-") for r in rows] + [6, len(u"Czas o/ś/m")])
-            give = min(dmax - dw, max(0, cw - cmax))
-            cw -= give
-            dw += give
-        dw = max(8, dw)
-        cols = [fit("Relacja", nw), fit("Kierunek", dw), fit("Zadanie", tw)]
-        if show_sched:
-            cols.append(fit("Harmonogram", hw))
-        cols += [fit(u"Czas o/ś/m", cw), fit("GB", gw), fit("Kopie", vw)]
+        for r in rows:
+            r["next_disp"] = fmt_next_short(r["next_epoch"], now) if r.get("next_epoch") else "-"
+        widths = {}
+        for key, header, get in _ZAD_COLS:
+            widths[key] = max([len(header)] + [len(get(r) or "-") for r in rows])
+        included, total = [], 0
+        for key, header, get in _ZAD_COLS:
+            w = widths[key]
+            add = w + (1 if included else 0)
+            if total + add <= inner:
+                included.append((key, header, get, w))
+                total += add
+        cols = [fit(header, w) for _, header, _, w in included]
         hdr = " ".join(cols)
         body = [hdr, ch.dash * inner]
         panel_h = 0 if beside else 9
@@ -1251,10 +1331,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         for i, r in enumerate(rows[first:first + list_h], start=first):
             if i == cursor:
                 cur_y = len(body)
-            cells = [fit(r["name"], nw, ch), fit(r["dir"], dw, ch), fit(r["task"], tw, ch)]
-            if show_sched:
-                cells.append(fit(r["schedule"], hw, ch))
-            cells += [fit(r.get("czas", "-"), cw, ch), fit(r.get("gb", "-"), gw, ch), fit(r["vword"], vw, ch)]
+            cells = [fit(get(r) or "-", w, ch) for _, _, get, w in included]
             body.append(fit(" ".join(cells), inner))
         if not rows:
             body += [u"Zero zadań wyprowadzonych z zainstalowanych bloków.",
@@ -1265,9 +1342,11 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         while len(body) < list_h + 2:
             body.append("")
         n_rel = len({r["name"] for r in rows if r["kind"] == "job"})
-        lb = box(ch, u"Zadania na %s (%s, %s)" % (host, plural(len([r for r in rows if r["kind"] == "job"]), "zadanie", "zadania", u"zadań"),
-                                                    plural(n_rel, "relacja", "relacje", "relacji")), body, lbw,
-                 footer=u"Enter szczegóły" if rows else "")
+        title = u"Zadania na %s (%s, %s) -- %s" % (
+            host, plural(len([r for r in rows if r["kind"] == "job"]), "zadanie", "zadania", u"zadań"),
+            plural(n_rel, "relacja", "relacje", "relacji"), ZAD_SORT_LABELS[sort_mode])
+        footer = u"s sortowanie" + (u"   Enter szczegóły" if rows else "")
+        lb = box(ch, title, body, lbw, footer=footer)
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -2319,7 +2398,9 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
     else:
         running, done = build_transfers(data, now, hide_gone)
         allrows = running + done
-        beside = width >= 120
+        # PROG 150, nie 120 (R3-4, punkt 3, wlasciciel 2026-09-24): ten sam prog
+        # co F2/F6 -- ponizej niego panel zabieral liscie miejsce, ktorego nie oddawal.
+        beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(20, max([len(t.get("label") or "(bez rel.)") for t in allrows] + [8])))
@@ -2450,7 +2531,9 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         scr.lines = [top] + box(ch, "Monitor", source_error_body(ch, "monitors", data, "monitor"), width)
     else:
         mons = monitor_rows(data)
-        beside = width >= 120
+        # PROG 150, nie 120 -- ten sam prog co F2/F4/F6 (R3-4, punkt 3); ekran
+        # jest martwy (F5 zniesiony), ale wspolny prog zostaje wspolny.
+        beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(20, max([len(m.get("label") or "(bez rel.)") for m in mons] + [8])))
@@ -2546,7 +2629,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         scr.lines = [top] + box(ch, u"Nośniki", source_error_body(ch, "replicas", data, "list-replicas"), width)
     else:
         reps = list((data.replicas or {}).get("replicas", []))
-        beside = width >= 120
+        # PROG 150, nie 120 -- ten sam prog co F2/F4 (R3-4, punkt 3, wlasciciel 2026-09-24).
+        beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(16, max([len(r.get("name") or "?") for r in reps] + [8])))
@@ -2616,10 +2700,12 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
 HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
     "",
-    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, czasy i GB jak",
-    u"                 w mailu (ostatni/średni/maks, okno digestu), kopie; panel",
-    u"                 szczegółów dodaje strażnika (harmonogram, konto, progi),",
-    u"                 a strażnik bez zadania (nic do pilnowania) jest własnym wierszem",
+    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, harmonogram,",
+    u"                 następny bieg, czasy i GB jak w mailu (ostatni/średni/maks,",
+    u"                 okno digestu), kopie; panel szczegółów dodaje strażnika",
+    u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
+    u"                 pilnowania) jest własnym wierszem. s przełącza sortowanie",
+    u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (okno ma zakładki Opis/",
     u"                 Config/Cron, Tab przełącza), F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku: najpierw werdykt",
@@ -2648,7 +2734,7 @@ HELP = [
     u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
     u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
     u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery nie są",
-    u"                 skrótami na ekranach (wyjątek: 'u' na F4, patrz wyżej) --",
+    u"                 skrótami na ekranach (wyjątek: 'u' na F4 i 's' na F2, patrz wyżej) --",
     u"                 wszystko inne, co piszesz, idzie do linii.",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
@@ -2695,6 +2781,7 @@ class UI(object):
         self.pair_cursor = 0
         self.rel_tab = "opis"     # R3-2: zakladka okna relacji -- "opis" | "config" | "cron"
         self.hide_transfers_gone = False   # NOTE 8: 'u' na F4 -- domyslnie POKAZANE (dziennik transferow)
+        self.zad_sort = 0   # R3-4: 's' na F2 -- domyslnie relacje, w srodku wg nastepnego
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
         # pisac komendy z palca"). Styl mc: kazdy drukowalny znak leci tu,
         # Enter wykonuje NA PIERWSZYM PLANIE (curses zawieszone), historia w
@@ -2706,7 +2793,7 @@ class UI(object):
         self.pending_log_path = None   # Del/Ins: dziennik dla ZFS_TUI_LOG, do dopisania do message po biegu
         self.data = collect(repo, files)
         self.rows = build_relations(self.data, self.now())
-        self.jobrows = build_jobs(self.data, self.now())
+        self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
 
     def now(self):
         return self.now_fixed if self.now_fixed is not None else int(time.time())
@@ -2844,7 +2931,7 @@ class UI(object):
     def refresh(self, only=None):
         self.data = collect(self.repo, self.files, only)
         self.rows = build_relations(self.data, self.now())
-        self.jobrows = build_jobs(self.data, self.now())
+        self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         for k in self.cursor:
             self.cursor[k] = min(self.cursor[k], max(0, self.count(k) - 1))
 
@@ -3462,6 +3549,20 @@ class UI(object):
             self.hide_transfers_gone = not self.hide_transfers_gone
             self.cursor["transfery"] = min(self.cursor["transfery"], max(0, self.count("transfery") - 1))
             return "stay"
+        # R3-4 (wlasciciel, 2026-09-24): 's' na F2 przelacza widok sortowania --
+        # ten sam WYJATEK i ten sam warunek (pusta linia polecen) co 'u' na F4.
+        # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
+        # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
+        if k == "s" and self.screen == "zadania" and not self.cmd:
+            cur_row = self.jobrows[self.cursor["zadania"]] if self.jobrows and 0 <= self.cursor["zadania"] < len(self.jobrows) else None
+            self.zad_sort = (self.zad_sort + 1) % 3
+            self.jobrows = sort_zad_rows(self.jobrows, self.zad_sort, self.data)
+            if cur_row is not None:
+                for i, r in enumerate(self.jobrows):
+                    if r is cur_row:
+                        self.cursor["zadania"] = i
+                        break
+            return "stay"
         # LINIA POLECEN: pisanie, kasowanie, historia, wykonanie. Litera to
         # TEKST, nie skrot -- 'echo' ma dac 'echo', nie 'cho' (pve9, pty).
         if len(k) == 1 and k.isprintable():
@@ -3604,7 +3705,8 @@ def _ui_render(self, width, height):
     # Ekran jest o jedna linie nizszy: nad listwa klawiszy stoi LINIA POLECEN.
     sh = height - 1
     if self.screen == "zadania":
-        base = render_zadania(self.data, self.jobrows, self.cursor["zadania"], width, sh, now, self.ch, self.message)
+        base = render_zadania(self.data, self.jobrows, self.cursor["zadania"], width, sh, now, self.ch, self.message,
+                              sort_mode=self.zad_sort)
     elif self.screen == "relacje":
         base = render_relacje(self.data, self.rows, self.cursor["relacje"], width, sh, now, self.ch, self.message,
                               focus=self.focus, pair_cursor=self.pair_cursor)
