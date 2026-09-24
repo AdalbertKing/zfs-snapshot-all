@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Piec okien nad zfs-snapshot-all: Relacje, Relacja, Transfery, Monitor, Nosniki.
+"""Cztery okna nad zfs-snapshot-all: Relacje, Relacja, Transfery, Nosniki.
 
 Owner, 2026-09-09: "Prosze zrobic te nieszczesne okna, ogarnac problemy,
 sprawdzic funkcjonalnosc i sensowny wyglad tych okien oraz poprawnosc ich
@@ -105,8 +105,13 @@ ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
 # Wlasciciel, 2026-09-09: F2 to ZADANIA (co chodzi w cronie, z relacja i
 # kierunkiem), a relacje dostaja WLASNE okno do zarzadzania (F3). Kierunek jest
 # zapisany zawsze z tego hosta: lewa strona to my, prawa to peer.
+#
+# F5 MONITOR ZNIKL (wlasciciel, wariant b, 2026-09-24): F2 i F5 pokazywaly ten
+# sam werdykt "Kopie" i wlasciciel nie widzial roznicy. Swiezosc zostaje na
+# F3/F2; to, co F5 pokazywal WIECEJ (harmonogram straznika, progi, straznik bez
+# zadania), przenioslo sie do panelu F2 (rel_detail_pairs, build_jobs).
 SCREENS = [("zadania", "F2", "Zadania"), ("relacje", "F3", "Relacje"), ("transfery", "F4", "Transfery"),
-           ("monitor", "F5", "Monitor"), ("nosniki", "F6", u"Nośniki")]
+           ("nosniki", "F6", u"Nośniki")]
 
 
 def home_dir():
@@ -744,6 +749,21 @@ def verdict_for_job(job, monitors):
     return "BEZ MONITORA", ""
 
 
+def monitors_for_job(job, monitors):
+    """Jak verdict_for_job(), ale odzyskuje SAME LINIE monitora (nie tylko
+    werdykt) -- panel F2 potrzebuje straznika (harmonogram, konto) i progow, a
+    nie tylko slowa. Ta sama reguła dopasowania: zakres+rodzina, a dla
+    pobrania (zakres zdalny) etykieta+rodzina."""
+    scope, fam = job.get("scope", ""), family_of(job)
+    out = [m for m in monitors if scope in m.get("datasets", []) and m.get("pattern", "") == fam]
+    if out:
+        return out
+    label = job.get("label", "")
+    if label:
+        return [m for m in monitors if m.get("label", "") == label and m.get("pattern", "") == fam]
+    return []
+
+
 def transfers_for(progress, label):
     jobs = [j for j in (progress or {}).get("jobs", []) if j.get("label", "") == label]
     jobs.sort(key=lambda j: int(j.get("started_epoch") or 0), reverse=True)
@@ -1110,6 +1130,31 @@ def build_jobs(data, now):
             "state": "nieczytelny", "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"),
             "monitors": [], "transfers": [], "last": None,
         })
+    # STRAZNIK BEZ ZADANIA (F5 zniesiony, wariant b, uwaga 3): linia monitora,
+    # ktora NIE dopasowala sie do zadnego zadania (verdict_for_job/
+    # monitors_for_job) -- watchdog pilnujacy czegos, czego juz nie ma w
+    # cronie. Zniknac nie moze: usuniety ekran Monitor wlasnie temu sluzyl
+    # (check-snap-age.sh naglowek: monitor, ktory nigdy nie chodzi, wyglada jak
+    # monitor mowiacy OK).
+    matched = set()
+    for j in (data.jobs or {}).get("jobs", []):
+        for m in monitors_for_job(j, monitors):
+            matched.add(id(m))
+    for m in monitors:
+        if id(m) in matched:
+            continue
+        v = m.get("verdict", "UNKNOWN")
+        rel = rels_by_name.get(m.get("label") or "")
+        rows.append({
+            "kind": "monitor", "name": m.get("label") or "(bez etykiety)", "rel": None,
+            "dir": direction_of(host, rel.get("peer_host") or "", [], rel.get("mode")) if rel else "?",
+            "task": u"strażnik bez zadania", "scope": ",".join(m.get("datasets", [])) or "?",
+            "schedule": m.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
+            "reasons": [m.get("reason", "")] if m.get("reason") else [],
+            "next_epoch": None, "next": "?", "job": None, "jobs": [], "m": m,
+            "state": "", "last_txt": "", "monitors": [m], "transfers": [], "last": None,
+            "czas": "-", "gb": "-", "vol": None, "tier": "",
+        })
     return rows
 
 
@@ -1339,6 +1384,11 @@ def rel_detail_pairs(row, data, now, ch):
     if row["kind"] == "unreadable":
         return [("blok", "%s -- config nieczytelny, %s" % (row["name"], row["last_txt"])),
                 (u"powód", row["reasons"][0] if row["reasons"] else "?")]
+    if row["kind"] == "monitor":
+        # STRAZNIK BEZ ZADANIA (uwaga 4b, F5 zniesiony): linia monitora, ktora
+        # nie dopasowala sie do zadnego zadania na F2 -- reszta jej szczegolow
+        # jest tym samym, co dawal usuniety ekran Monitor.
+        return monitor_detail_pairs(row["m"], ch, full=True)
     if row["kind"] == "job":
         j = row["job"]
         jobs_here = row.get("jobs") or [j]
@@ -1372,8 +1422,20 @@ def rel_detail_pairs(row, data, now, ch):
         if srow and not data.failed("stats"):
             pairs.append(("biegi", u"%s w oknie %s dni, błędów %s, ostatni %s rc=%s" % (
                 srow.get("runs", "?"), win, srow.get("failures", 0), srow.get("last_at", "?"), srow.get("last_rc", "?"))))
-        pairs += [("kopie", row["vword"] + ("  " + row["reasons"][0].splitlines()[0] if row["reasons"] else "")),
-                  ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
+        pairs += [("kopie", row["vword"] + ("  " + row["reasons"][0].splitlines()[0] if row["reasons"] else ""))]
+        # STRAZNIK I PROGI (F5 zniesiony, wariant b): to, co dawal osobny ekran
+        # Monitor, wchodzi tu -- dopasowany TA SAMA regula co werdykt (zakres+
+        # rodzina, dla pobrania etykieta+rodzina), zeby nie zgadywac inaczej niz
+        # verdict_for_job().
+        mons = []
+        seen_mon = set()
+        for jj in jobs_here:
+            for m in monitors_for_job(jj, (data.monitors or {}).get("monitors", [])):
+                key = (m.get("label", ""), m.get("pattern", ""))
+                if key not in seen_mon:
+                    seen_mon.add(key)
+                    mons.append(m)
+        pairs += [("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"])),
                   ("szczebel", (row.get("tier") or j.get("tier") or "?") + ("  (sekcja %s)" % j.get("section_kind", "?"))),
                   ("rodzina", family_of(j) or "?"),
                   ("trzyma", (j.get("retain") or j.get("keep") or "-") + ("  drabina GFS" if j.get("gfs") else "")),
@@ -1391,6 +1453,12 @@ def rel_detail_pairs(row, data, now, ch):
                       {"pull": u"ten host pobiera", "push": u"ten host wysyła",
                        "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))),
                   ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
+        # na KONCU: przy 80x24 panel pod lista ma kilka linii, a harmonogram jest
+        # wazniejszy niz strażnik -- dopisane wyzej wypychaly go poza ekran
+        if mons:
+            m0 = mons[0]
+            pairs.append((u"strażnik", u"%s   konto %s" % (m0.get("schedule") or "?", m0.get("account") or "?")))
+            pairs.append((u"progi", u"ostrzeżenie %s / alarm %s" % (m0.get("warn") or "?", m0.get("crit") or "?")))
         return pairs
     srcs = rel.get("sources", [])
     pairs = [(u"Źródła (%d)" % len(srcs), ",  ".join(srcs) or "?")]
@@ -2346,7 +2414,9 @@ HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
     "",
     u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, czasy i GB jak",
-    u"                 w mailu (ostatni/średni/maks, okno digestu), kopie",
+    u"                 w mailu (ostatni/średni/maks, okno digestu), kopie; panel",
+    u"                 szczegółów dodaje strażnika (harmonogram, konto, progi),",
+    u"                 a strażnik bez zadania (nic do pilnowania) jest własnym wierszem",
     u"  F3  Relacje    zarządzanie: Enter szczegóły, F4 pauza/wznów, Del usuń,",
     u"                 F7 eksport do pliku, F8 import z pliku: najpierw werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
@@ -2359,7 +2429,6 @@ HELP = [
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress)",
-    u"  F5  Monitor    każda linia monitora z werdyktem i powodem (monitor)",
     u"  F6  Nośniki    repliki na dyskach wymiennych i cztery stany nośnika",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
@@ -2426,6 +2495,7 @@ class UI(object):
         self.cmd_hist = self.load_history()
         self.hist_pos = None
         self.pending_shell = None
+        self.pending_log_path = None   # Del/Ins: dziennik dla ZFS_TUI_LOG, do dopisania do message po biegu
         self.data = collect(repo, files)
         self.rows = build_relations(self.data, self.now())
         self.jobrows = build_jobs(self.data, self.now())
@@ -2480,6 +2550,28 @@ class UI(object):
         self.pending_shell = line
         return "shell"
 
+    def start_verb_log(self, verb, line):
+        """~/.zfs-tui/<verb>-<stamp>.log z naglowkiem '$ <komenda>' -- Del
+        (delete-relation) i Ins (new-relation) dostaja dziennik jak
+        run_detached (uwaga 5 wlasciciela: import/export go mialy, Del/Ins
+        nie). Sciezka idzie do dziecka przez ZFS_TUI_LOG, zeby
+        new-relation.sh/cmd_delete_relation mogly do niej dopisac swoj wlasny
+        wynik."""
+        logdir = os.path.join(home_dir(), ".zfs-tui")
+        try:
+            os.makedirs(logdir, exist_ok=True)
+        except OSError:
+            logdir = "/tmp"
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        v = "".join(c if (c.isalnum() or c in "._-") else "_" for c in verb)[:40] or "cmd"
+        path = os.path.join(logdir, "%s-%s.log" % (v, stamp))
+        try:
+            with open(path, "wb") as hdr:
+                hdr.write(("$ %s\n" % line).encode("utf-8"))
+        except OSError:
+            return None
+        return path
+
     def run_dialog(self, argv):
         """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi."""
         line = " ".join(shlex.quote(x) for x in argv)
@@ -2488,6 +2580,11 @@ class UI(object):
                 fh.write(line + "\n")
             self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
             return "stay"
+        log_path = self.start_verb_log(argv[1] if len(argv) > 1 else "cmd", line)
+        if log_path:
+            self.pending_log_path = log_path
+            line = "ZFS_TUI_LOG=%s %s" % (shlex.quote(log_path), line)
+            self.message = u"dziennik: %s" % log_path
         self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
@@ -2528,6 +2625,11 @@ class UI(object):
                 fh.write(line + "\n")
             self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
             return "stay"
+        log_path = self.start_verb_log("new-relation", line)
+        if log_path:
+            self.pending_log_path = log_path
+            line = "ZFS_TUI_LOG=%s %s" % (shlex.quote(log_path), line)
+            self.message = u"dziennik: %s" % log_path
         self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
@@ -3568,6 +3670,9 @@ def curses_loop(ui):
                 ui.rel_names_before = None
                 if before is not None and ui.cursor_to_new(before):
                     ui.message = u"[rc=%s] %s  --  kursor na nowej relacji" % (rc, line)
+                log_path, ui.pending_log_path = ui.pending_log_path, None
+                if log_path:
+                    ui.message += u"   dziennik: %s" % log_path
     curses.wrapper(main)
 
 

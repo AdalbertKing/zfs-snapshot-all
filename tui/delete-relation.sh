@@ -64,6 +64,11 @@ while :; do
     clear 2>/dev/null
     echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
     "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    # Uwaga 5 (właściciel, 2026-09-24): usunięcie zostawia ślad jak import -- GUI podaje
+    # ZFS_TUI_LOG z nagłówkiem "$ komenda"; tu dopisujemy przebieg kroków i rc.
+    if [ -n "${ZFS_TUI_LOG:-}" ]; then
+        { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
+    fi
     echo
     # Dwa różne niepowodzenia, dwa różne komunikaty. Odkąd nieudana połowa ŹRÓDŁA
     # zatrzymuje czasownik przed purge (REV-144), rekord ZOSTAJE -- i wtedy "usunięta

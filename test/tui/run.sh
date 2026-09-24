@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# tui -- PIEC OKIEN, SPRAWDZONE BEZ TERMINALA
+# tui -- CZTERY OKNA, SPRAWDZONE BEZ TERMINALA (F5 Monitor zniesiony 2026-09-24)
 #
 # Owner, 2026-09-09: "zrobic te nieszczesne okna, ogarnac problemy, sprawdzic
 # funkcjonalnosc i sensowny wyglad tych okien oraz poprawnosc ich dzialan."
@@ -145,10 +145,12 @@ else
 fi
 # ZEPSUTE ZRODLO MA NAZWAC KOMENDE. Ekran mowil "uruchom czasownik recznie",
 # czyli kazal zgadnac, ktory to czasownik i z jaka flaga -- a zna jedno i drugie.
+# (Ten sam kontrakt dla verba "monitor" byl tu sprawdzany na usunietym ekranie
+# F5 -- kontrola ujemna na "progress" i "list-replicas" zostaje nizej.)
 BAD="$(mktemp -d)/bad.json"; printf '{ZEPSUTY
 ' > "$BAD"
-EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen monitor --keys "" --monitors "$BAD" --width 100 2>&1)"
-if has "$EB" 'zfs-backup.sh monitor --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
+EB="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen transfery --keys "" --progress "$BAD" --width 100 2>&1)"
+if has "$EB" 'zfs-backup.sh progress --json' && has "$EB" 'błąd źródła' && ! has "$EB" 'Uruchom czasownik ręcznie'; then
     ok "zepsute zrodlo: ekran nazywa DOKLADNA komende do wpisania, zamiast odsylac do 'czasownika'"
 else
     bad "zepsute zrodlo: brak komendy" "$EB"
@@ -454,6 +456,30 @@ if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'źródło   zfsbackup-pve10@19
 else
     bad "zadania: Enter" "$ZE"
 fi
+# F5 ZNIESIONY (uwaga 2): to, co dawal ekran Monitor -- harmonogram straznika,
+# konto, progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA
+# SAMA regula co werdykt (monitors_for_job). Z fikstur pve10: lab-vm101 ma
+# monitor "*/15 * * * *", konto root, warn 90m, crit 150m.
+if hasE "$ZE" 'strażnik +\*/15 \* \* \* \* +konto root' && hasE "$ZE" 'progi +ostrzeżenie 90m / alarm 150m'; then
+    ok "zadania: panel F2 nazywa straznika (harmonogram, konto) i progi (ostrzezenie/alarm) -- to, co dawal usuniety F5"
+else
+    bad "zadania: straznik/progi w panelu F2" "$ZE"
+fi
+# STRAZNIK BEZ ZADANIA (uwaga 3): monitor, ktory NIE dopasowal sie do zadnego
+# zadania na F2, nie moze zniknac -- watchdog pilnujacy czegos, czego juz nie
+# ma w cronie, jest samodzielnym wierszem "straznik bez zadania".
+ZG="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --width 200 2>&1)"
+if hasE "$ZG" '^║ ghost +[?] +strażnik bez zadania' && has "$ZG" 'aktualne'; then
+    ok "zadania: monitor bez dopasowanego zadania jest WIERSZEM 'straznik bez zadania' (F5 zniesiony, uwaga 3)"
+else
+    bad "zadania: straznik bez zadania" "$ZG"
+fi
+ZGE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --keys enter 2>&1)"
+if hasE "$ZGE" 'Relacja +ghost' && has "$ZGE" 'hdd/nowhere/ghost'; then
+    ok "zadania: Enter na straznikiu bez zadania otwiera monitor_detail_pairs (to, co dawal F5)"
+else
+    bad "zadania: panel straznika bez zadania" "$ZGE"
+fi
 
 # ============================================================================
 # EKRAN F3: RELACJE -- AKCJE. Komenda bash NAJPIERW, potem 't', potem wyjscie.
@@ -620,6 +646,30 @@ if grep -Eq "delete-relation 192.168.28.99 --ask\$" "$XL" && ! has "$A" 'jest ju
 else
     bad "akcje: Del na removed" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
+# DZIENNIK DLA Del/Ins (owner note 5): w trybie --exec-log NIC sie nie
+# uruchamia, wiec sciezka rzeczywista (run_dialog/run_wizard poza atrapa) nie
+# jest tu do sprawdzenia na zywo -- jednostkowo: start_verb_log() produkuje
+# "~/.zfs-tui/<verb>-<stamp>.log" i wypisuje doń naglowek "$ <komenda>".
+LOGTMP="$(mktemp -d)"
+LOGPATH="$(HOME="$LOGTMP" "$PY" -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('zfstui', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+ui = mod.UI.__new__(mod.UI)
+print(mod.UI.start_verb_log(ui, 'delete-relation', 'zfs-backup.sh delete-relation nazwa --ask'))
+" "$TUI")"
+LOGPATH="${LOGPATH%$'\r'}"   # print() pythona na Windowsie konczy linie CRLF
+case "$LOGPATH" in
+    *.zfs-tui[/\\]delete-relation-*.log)   # Windowsowy python zwraca C:\...\.zfs-tui\..., Linux /tmp/.../.zfs-tui/...
+        if [ -f "$LOGPATH" ] && head -1 "$LOGPATH" | grep -qF '$ zfs-backup.sh delete-relation nazwa --ask'; then
+            ok "linia: start_verb_log() (uzywana przez Del/Ins) daje ~/.zfs-tui/delete-relation-<stamp>.log z naglowkiem '\$ komenda'"
+        else
+            bad "linia: naglowek dziennika" "$(cat "$LOGPATH" 2>/dev/null)"
+        fi ;;
+    *) bad "linia: sciezka dziennika Del/Ins" "$LOGPATH" ;;
+esac
+rm -rf "$LOGTMP"
 # Stary kreator curses zostal USUNIETY 2026-09-21 (polecenie wlasciciela): dwie
 # drogi do tego samego ekranu to dwie drogi do utrzymania. Flagi --wizard juz nie
 # ma, a Ins zawsze oddaje terminal czasownikowi new-relation -- pinowane wyzej.
@@ -738,36 +788,22 @@ else
 fi
 
 # ============================================================================
-# MONITOR
+# F5 MONITOR ZNIESIONY (wlasciciel, wariant b, 2026-09-24): F2 i F5 pokazywaly
+# ten sam werdykt "Kopie" i wlasciciel nie widzial roznicy. Ekran monitor
+# zniknal; jego dodatkowa trescia (harmonogram straznika, progi, straznik bez
+# zadania) przejmuje panel F2 -- testy nizej (blok F2 i "wyglad") sprawdzaja to.
 # ============================================================================
-M="$(screen monitor)"
-if has "$M" '╔═ Monitor -- 4 linie, najgorzej: aktualne ═'; then
-    ok "monitor: tytul liczy linie i nazywa najgorszy werdykt slowem"
+Z4W="$(screen zadania)"
+if ! has "$Z4W" 'F5' && ! has "$Z4W" 'Monitor'; then
+    ok "F5: ekran domyslny (F2) nie wspomina juz F5 ani Monitora -- listwa i panel"
 else
-    bad "monitor: tytul" "$M"
+    bad "F5: pozostalosc na ekranie" "$Z4W"
 fi
-if hasE "$M" '^║ lab-vm101 +….*hdd/lab/vm-101 +automated_hourly +90m/150m +aktualne +║'; then
-    ok "monitor: wiersz = relacja, dataset, rodzina, progi, werdykt slowem"
+EMSC="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen monitor 2>&1)"; EMRC=$?
+if [ "$EMRC" -ne 0 ] && has "$EMSC" 'monitor'; then
+    ok "F5: '--screen monitor' nie jest juz poprawnym wyborem argparse (choices = SCREENS)"
 else
-    bad "monitor: wiersz" "$M"
-fi
-MP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen monitor --keys end 2>&1)"
-if hasE "$MP" '^║ lab-srv-b .*aktualne PAUZA +║' && has "$MP" 'OK -- relationship lab-srv-b is paused'; then
-    ok "monitor: linia wstrzymana ma PAUZA przy werdykcie, a panel cytuje zdanie silnika o pauzie"
-else
-    bad "monitor: pauza" "$MP"
-fi
-MH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen monitor --keys down 2>&1)"
-if hasE "$MH" '^║ pve1 .*stare +║' && has "$MH" 'spóźnione' && has "$MH" 'Uwaga        cron woła /r/check-snap-age.sh'; then
-    ok "monitor: CRITICAL/WARNING slowami, posortowane od najgorszego, i ostrzezenie o innym pliku silnika w cronie"
-else
-    bad "monitor: hostA" "$MH"
-fi
-ME="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --screen monitor 2>&1)"
-if has "$ME" 'NIKT nie sprawdza'; then
-    ok "monitor: zero linii monitora jest nazwane wprost, nie pusta ramka"
-else
-    bad "monitor: pusty" "$ME"
+    bad "F5: --screen monitor nadal dziala" "$EMSC"
 fi
 
 # ============================================================================
@@ -805,7 +841,7 @@ fi
 # komendy z palca"). Nad listwa klawiszy, na KAZDYM ekranie; styl mc.
 # ============================================================================
 cl_ok=1
-for sc in zadania relacje transfery monitor nosniki; do
+for sc in zadania relacje transfery nosniki; do
     out="$(screen "$sc" "")"
     printf '%s\n' "$out" | tail -2 | head -1 | grep -qE '^[^ ]+@pve10:zfs-snapshot-all\$ _ *$' || { cl_ok=0; echo "  $sc: brak linii polecen"; }
 done
@@ -877,7 +913,7 @@ rm -f "$XL"
 # ============================================================================
 widths_ok=1
 for w in 80 120 200; do
-    for sc in zadania relacje transfery monitor nosniki; do
+    for sc in zadania relacje transfery nosniki; do
         for keys in "" "enter" "F1"; do
             out="$(screen "$sc" "$keys" --width "$w" --height 24)"
             n="$(printf '%s\n' "$out" | "$PY" -c "import sys; ls=sys.stdin.read().split('\n')[:-1]; print(sum(1 for l in ls if len(l)!=$w), len(ls))")"
@@ -898,7 +934,7 @@ else
 fi
 # Terminal bez UTF-8: ramki +-|= i slowa bez ogonkow. Zero bajtow spoza ASCII.
 ascii_ok=1
-for sc in zadania relacje transfery monitor nosniki; do
+for sc in zadania relacje transfery nosniki; do
     for keys in "" "enter" "F1"; do
         out="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen "$sc" --keys "$keys" 2>&1)"
         if [ "$(printf '%s' "$out" | LC_ALL=C grep -c '[^ -~]')" -ne 0 ]; then ascii_ok=0; echo "  $sc keys=$keys ma bajty spoza ASCII"; fi
@@ -922,8 +958,8 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Monitor F6 Nośniki F10 Wyjście'; then
-    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran"
+if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F6 Nośniki F10 Wyjście'; then
+    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 zniesiony)"
 else
     bad "wyglad: listwa F" "$S"
 fi
@@ -951,12 +987,11 @@ else
     bad "ujemna: licznik w pasku" "$X"
 fi
 XT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$BROKEN" --screen transfery 2>&1)"
-XM="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --monitors "$BROKEN" --screen monitor 2>&1)"
 XN="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --replicas "$BROKEN" --screen nosniki 2>&1)"
-if has "$XT" 'błąd źródła: progress --json' && has "$XM" 'błąd źródła: monitor --json' && has "$XN" 'błąd źródła: list-replicas --json'; then
-    ok "ujemna: kazdy z pozostalych ekranow nazywa SWOJE zepsute zrodlo"
+if has "$XT" 'błąd źródła: progress --json' && has "$XN" 'błąd źródła: list-replicas --json'; then
+    ok "ujemna: kazdy z pozostalych ekranow nazywa SWOJE zepsute zrodlo (F5/monitor zniesiony razem z ekranem)"
 else
-    bad "ujemna: zepsute zrodla na pozostalych ekranach" "$XT" "$XM" "$XN"
+    bad "ujemna: zepsute zrodla na pozostalych ekranach" "$XT" "$XN"
 fi
 XZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$FIX/nie-ma-takiego-pliku.json" --screen relacje 2>&1)"
 if has "$XZ" 'błąd źródła' && ! has "$XZ" 'Traceback'; then
