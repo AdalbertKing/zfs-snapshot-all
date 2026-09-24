@@ -1629,6 +1629,25 @@ if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF
 else
     bad "new-relation: edytor pomijanych migawek" "$NROUT" "$(grep -F 'prefiks' "$NR/wt.log" | cut -c1-300)"
 fi
+# R2-1 (wlasciciel, 2026-09-24): okno pokazywalo PUSTE wiersze -- znacznik (schowany przez
+# --notags) byl prefiksem, a opis pusty. Test wyzej sprawdzal tylko WYNIK; ten sprawdza,
+# co WIDZI operator: kazdy prefiks ma niepusty opis w oknie edytora.
+NRPFX="$(grep -F 'Pomijane migawki -- prefiksy' "$NR/wt.log" | head -1)"
+if has "$NRPFX" ' ~ vzdump ~ vzdump ~ ON ~ ' && has "$NRPFX" ' ~ __replicate_ ~ __replicate_ ~ ON ~ '; then
+    ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow (R2-1: puste wiersze na pve11)"
+else
+    bad "new-relation: edytor prefiksow -- puste wiersze" "$(printf '%s' "$NRPFX" | cut -c1-400)"
+fi
+# R2-2: okno planu zaczyna sie od komendy, ktora sie WYKONA, i decyzji po polsku.
+# tresc okna ma wiele linii, a atrapa loguje ja doslownie -- bierzemy CALE okno: od jego
+# linii tytulowej do nastepnego wywolania (linia zaczynajaca sie od "--").
+NRPLAN="$(awk '/Krok 10\/10: Plan ~ --yes-button ~ WYKONAJ/{f=1; buf=""} f && /^--/ && !/Krok 10\/10: Plan ~ --yes-button ~ WYKONAJ/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
+if has "$NRPLAN" 'Po WYKONAJ uruchomi się DOKŁADNIE' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
+   && has "$NRPLAN" 'Pomijane migawki: __replicate_,__migration__,_tmp' && ! has "$NRPLAN" 'grant-remotely is noted'; then
+    ok "new-relation: okno planu pokazuje komende po WYKONAJ i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
+else
+    bad "new-relation: okno planu (R2-2)" "$(printf '%s' "$NRPLAN" | cut -c1-600)"
+fi
 
 # 4. host, z ktorym relacja JEST: odmowa ze slowem dlaczego, potem Wstecz, Wyjdz
 NROUT=$(nr_run "0${T}backup
