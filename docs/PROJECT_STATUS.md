@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a317e1cf43b8ac40 -->
+<!-- status-covers-digest: 1e3bfa5e361343ef -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,41 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kreator, runda 1 po testach właściciela (2026-09-24).** Z listy uwag GUI:
+  - **Retencja źródła = same liczby** (uwaga 19, pomysł właściciela). Zamiast
+    wybierać cały profil źródła, który dwa razy kasował inną rodzinę niż cel
+    („prunes a different snapshot FAMILY”), operator zmienia liczby szczebli
+    profilu CELU. Profil źródła powstaje z profilu celu czasownikiem
+    `save-profile`, więc rodziny są te same z konstrukcji, a jego trzy bramki
+    sprawdzają wynik. Nazwa pochodna jest deterministyczna
+    (`<cel>-src-H24D3M12`), a takie profile nie są szablonami w kroku 6.
+    **0 = brak szczebla:** nowe `save-profile --drop-tier=NAZWA` usuwa szczebel
+    i jego wpis z `use_template`, bo gen-cron słusznie odrzuca `keep = 0`
+    (w płaskich porządkach zero kasuje całą rodzinę). Odmowa, gdy żaden inny
+    szczebel nie sprząta tej rodziny: źródło trzymałoby ją w nieskończoność.
+  - **Jedna lista szablonów** ze znacznikami `[zamraża]` / `[płaski]` zamiast
+    filtra po pytaniu o spójność (uwaga 15). Tytuły mówią „w celu” / „w
+    źródle (na HOST)” (uwaga 9).
+  - **Płaskość per KONTO, nie per host.** Czasownik liczy ją na config konta;
+    kreator liczył na cały host i na pve11 schował `d30h24` dla relacji na
+    koncie `zfsbackup`, choć synchro stało na koncie root. Teraz kreator
+    sprawdza konto wybrane w kroku 8 i odmawia słowami tylko wtedy, gdy
+    czasownik by odmówił.
+  - **Błąd tabulatorów** (uwaga 11): pusty cel relacji synchro sklejał pola
+    TSV, więc stan `active` był proponowany jako dataset docelowy. Emitery
+    piszą `-` zamiast pustego pola.
+  - **Pomijane migawki**: edytor prefiksów (checklista i „Dodaj nowy
+    prefiks…”) zamiast pola z przecinkami (uwagi 10 i 13; zgubiony przecinek
+    dawał `__migration___tmp`).
+  - **Dowody:** `tui` 161/0; nowe asercje (cel `active`, konto, edytor
+    prefiksów, retencja źródła T1/T2/T3, profile pochodne) padają na `main`.
+    `save-profile --drop-tier` sprawdzony na `default` (bez tygodniowego, bez
+    godzinowego: przyjęte) i `d30h24` (bez godzinowego: odmowa); testy w
+    `saveprof`. **Na żywo kreatora nie przeszedłem**: jest interaktywny i czeka
+    na test właściciela po wdrożeniu.
+  - **Otwarte:** „płaskość per cel” zamiast per config (drabina GFS jest dziś
+    instalowana dla całego configu) to zmiana czasownika i generatora z
+    własną recenzją (Gate2, REV-092), niezrobiona.
 - **`--exclude-child` działa wszędzie, nie tylko w `seed` (2026-09-23, pve11 ← pve9b).**
   Właściciel założył kreatorem relację z wykluczonym dzieckiem (`hdd/vms/vm3`,
   wcześniej `vm-202-disk-0`). `seed` go słusznie pominął, ale:

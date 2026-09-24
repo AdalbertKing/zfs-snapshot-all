@@ -378,7 +378,7 @@ step_datasets() {
 # --- krok 5: dokąd (tylko backup) ---------------------------------------------
 # Lekcja ze starego kreatora: lista pokazywała cudze lądowiska i podgląd jeździł za
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
-TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""
+TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""; SRCKEEP=""
 EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
 # Zamrażanie ma DWIE połowy (zmierzone pve10 <- pve9b, 2026-09-20): szablon, który każe
 # zamrażać, ORAZ zgoda źródła, żeby konto kolektora mogło zamrażać jego gości. Bez zgody
@@ -387,15 +387,22 @@ GQUIESCE=1
 # PAMIĘĆ NA CZAS JEDNEGO PRZEBIEGU. Czytelniki odpowiadają po 5-12 s; bez tego każde
 # "Wstecz" i ponowne "Dalej" kazało czekać od nowa (zmierzone jazdą: cofnięcie z kroku 7
 # do 6 = 9 s na "Czytam szablony"). Stan hosta nie zmienia się w trakcie klikania.
-status_tsv() {  # -> $TMPD/rel.tsv: nazwa <TAB> peer <TAB> target (relacje nie-removed)
+status_tsv() {  # -> $TMPD/rel.tsv: nazwa <TAB> peer <TAB> target <TAB> stan <TAB> szablon <TAB> konto (relacje nie-removed)
+    # Puste pole staje sie "-": IFS=$'\t' read TRAKTUJE TAB jak biala spacje w IFS
+    # i ZLEPIA sasiadujace puste pola w jeden separator (zmierzone: uwaga wlasciciela
+    # nr 11 -- relacja synchro z pustym client_target zesunela pole "stan" (active)
+    # do zmiennej celu w kroku 5, ktory zaproponowal "active" jako dataset docelowy
+    # -- zywe na pve11). Kazdy czytelnik nizej testuje pole na "" LUB "-".
     [ -e "$TMPD/rel.done" ] && return 0
     : >"$TMPD/rel.done"
     "$ZB" status --json 2>/dev/null | "$PY" -c '
 import sys, json
+def x(v): return v if v else "-"
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
 for r in d.get("relations", []):
-    print("%s\t%s\t%s\t%s\t%s" % (r.get("name", ""), r.get("peer_host", ""), r.get("client_target", ""), r.get("state", ""), r.get("profile", "")))' | tr -d '\r' >"$TMPD/rel.all"
+    print("%s\t%s\t%s\t%s\t%s\t%s" % (x(r.get("name")), x(r.get("peer_host")), x(r.get("client_target")),
+          x(r.get("state")), x(r.get("profile")), x(r.get("local_user"))))' | tr -d '\r' >"$TMPD/rel.all"
     awk -F'\t' '$4!="removed"' "$TMPD/rel.all" >"$TMPD/rel.tsv"
     awk -F'\t' '$4=="removed"{print $1}' "$TMPD/rel.all" >"$TMPD/rel.removed"
 }
@@ -405,7 +412,7 @@ step_target() {
     [ -e "$TMPD/targets.tsv" ] || info "$(title 5 'Dokąd?')" "Sprawdzam, dokąd trafiają kopie na tym hoście..."
     status_tsv
     while IFS=$'\t' read -r n p t _st; do      # 4. pole (stan) MUSI mieć własną zmienną: inaczej wpada do $t
-        [ -n "$t" ] || continue
+        case "$t" in ''|-) continue ;; esac    # puste (relacja synchro) = "-", nie cel
         case " $seen " in *" $t "*) continue ;; esac
         seen="$seen $t"; cnt=$(awk -F'\t' -v t="$t" '$3==t' "$TMPD/rel.tsv" | grep -c .)
         items+=("$t" "$t   -- używają go już relacje na tym hoście: $cnt")
@@ -459,7 +466,16 @@ def short_cadence(p):
             out.append(w[1] if len(w) > 1 and w[0] == "co" else " ".join(w[:2]))
     return ("co " + ", ".join(out)) if out else "?"
 rows = []
+# Szczeble retencji do okna "Jak długo trzymać w źródle" (uwaga 19): profil, szczebel,
+# rodzina, ile trzyma. Tylko szczeble z keep -- tworzące (send_schedule bez keep) nie.
+with open(sys.argv[1] + ".tiers", "w", encoding="utf-8", newline="\n") as tf:   # newline: na Windowsie tryb tekstowy pisze CRLF
+    for p in d.get("profiles", []):
+        for t in p.get("tiers", []):
+            if t.get("keep"):
+                tf.write("%s\t%s\t%s\t%s\n" % (p.get("name", "-"), t.get("name", "-"), t.get("pattern") or "-", t["keep"]))
 for p in d.get("profiles", []):
+    if "-src-" in (p.get("name") or ""):
+        continue    # profil POCHODNY retencji źródła -- nie jest szablonem do wyboru w kroku 6
     w = tui.profile_words(p)
     mech = {"flat": "N najnowszych", "gfs": "GFS", "age": "wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
     # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
@@ -469,75 +485,65 @@ for p in d.get("profiles", []):
                  "ladder" if (p.get("shape") == "one-family" and p.get("mechanism") == "gfs") else "flat"))
 rows.sort(key=lambda r: (r[0] != "default", r[0].lower()))     # default na górze
 for n, t, c, q, f, sh in rows:
-    print("%s\t%s\t%s\t%s\t%d\t%s" % (n, t, c, q, f, sh))
+    print("%s\t%s\t%s\t%s\t%d\t%s" % (n or "-", t or "-", c or "-", q or "-", f, sh or "-"))
 PYEOF
     [ -s "$TMPD/prof.tsv" ]
 }
-# Zamrażanie (quiesce) jest własnością SZABLONU, nie flagą relacji: szablony "rodzina na
-# szczebel" zamrażają dobowe i rzadsze, a godzinowych nie; `default` (jedna rodzina +
-# drabina) nie może zamrażać wcale, bo jego dobowa migawka JEST jedną z godzinowych.
-# Właściciel 2026-09-20: "Jeśli jest to w szablonie, to musi być widoczne podczas
-# tworzenia relacji" i "u nas dla wszystkich oprócz hourly domyślnie włączony".
-# Dlatego najpierw pytanie o spójność (domyślnie: zamrażaj), potem lista szablonów,
-# które to spełniają.
 FREEZE=1
-# KOLEKTOR MA KSZTAŁT. Gdy choć jedna żywa relacja używa szablonu BEZ drabiny (wszystko poza
-# jedna-rodzina+GFS: default, Y5..., passive),
-# aktywacja relacji z szablonem-drabiną (default, Y5..., passive) jest ODMAWIANA
-# ("This host reads as FLAT ... refusing to create ... with NO RETENTION AT ALL" --
-# zmierzone na pve10, 2026-09-20). Kreator nie może więc takich szablonów oferować:
-# operator przeszedłby 10 kroków po to, żeby dostać FATAL przy aktywacji.
-host_is_flat() {    # 0 = na tym kolektorze są już relacje "rodzina na szczebel"
-    local n p t st pr fp
+# KONTO MA KSZTAŁT (nie cały kolektor). Zmierzone na pve10, 2026-09-20: gdy jakaś
+# ŻYWA relacja już używa szablonu PŁASKIEGO (jedna rodzina na szczebel), aktywacja
+# szablonu-drabiny (GFS) jest ODMAWIANA ("This host reads as FLAT ... refusing to
+# create ... with NO RETENTION AT ALL"). Configi są jednak per KONTO (root =
+# jobs.<host>.conf, konto X = jobs.<host>.X.conf) -- czasownik odmawia dla konta
+# relacji, nie dla hosta. Zmierzone na pve11, 2026-09-23: relacja SYNCHRO na
+# koncie root miała szablon płaski, a kreator -- filtrując krok 6 po całym hoście
+# -- nie zaproponował ŻADNEJ drabiny kontu zfsbackup, choć czasownik by ją przyjął
+# (inny config, inne konto). Dlatego krok 6 pokazuje WSZYSTKIE szablony (właściciel
+# 2026-09-20: "jeśli jest to w szablonie, to musi być widoczne"; oznaczone
+# [zamraża]/[płaski]), a niedopasowanie sprawdza się PO wyborze konta, w kroku 8,
+# dla TEGO konta.
+account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCIE używa szablonu płaskiego
+    local want="$1" n p t st pr lu fp
+    [ "$want" != root ] || want=""
     status_tsv
-    while IFS=$'\t' read -r n p t st pr; do
+    while IFS=$'\t' read -r n p t st pr lu; do
         [ "$st" = removed ] && continue
-        [ -n "$pr" ] || continue
+        case "$pr" in ''|-) continue ;; esac
+        case "$lu" in ''|-) lu="" ;; esac
+        [ "$lu" = "$want" ] || continue
         fp=$(awk -F'\t' -v n="$pr" '$1==n{print $6}' "$TMPD/prof.tsv")
         [ "$fp" = flat ] && return 0
     done <"$TMPD/rel.all"
     return 1
 }
 step_profile() {
-    local items=() n w c q f sh y=OFF x=OFF def sub=freeze flat=0
+    local items=() n w c q f sh def label
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
         wt --title "$(title 6 'Szablon -- lista niedostępna')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
-        PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; return 0
+        PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; FREEZE=1; return 0
     fi
-    host_is_flat && flat=1
-    if [ "$flat" -eq 1 ]; then FREEZE=1; sub=list; fi     # nie ma o co pytać: drabin i tak nie wolno
-    while :; do
-        geom
-        if [ "$sub" = freeze ]; then
-            y=OFF; x=OFF; [ "$FREEZE" -eq 1 ] && y=ON || x=ON
-            wt --title "$(title 6 'Spójność migawek')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --radiolist "Zamrożenie: tuż przed migawką gość (VM/CT) wstrzymuje na chwilę zapis, więc\nmigawka jest spójna, a nie 'jak po wyrwaniu wtyczki'. Gdy zamrożenie się\nnie uda, migawka i tak powstaje. Godzinowych nie zamrażamy nigdy." "$(fit 8)" "$W" 2 \
-               yes "Zamrażaj przy migawkach dobowych i rzadszych  -- zalecane" "$y" \
-               no  "Bez zamrażania  (goście bez agenta, zwykłe systemy plików)" "$x" || return 1
-            case "$WT_OUT" in yes) FREEZE=1 ;; no) FREEZE=0 ;; esac
-            sub=list; continue
-        fi
-        items=()
-        while IFS=$'\t' read -r n w c q f sh; do
-            [ -n "$n" ] || continue
-            if [ "$flat" -eq 1 ]; then [ "$sh" = flat ] || continue
-            else [ "$f" = "$FREEZE" ] || continue; fi
-            items+=("$n" "$(printf '%-15s %s' "$n" "$w")")
-        done <"$TMPD/prof.tsv"
-        if [ "${#items[@]}" -eq 0 ]; then    # nie ma szablonu o takiej spójności -- pokaż wszystkie, nie pustą listę
-            while IFS=$'\t' read -r n w c q f sh; do [ -n "$n" ] && items+=("$n" "$(printf '%-15s %s  (%s)' "$n" "$w" "$q")"); done <"$TMPD/prof.tsv"
-        fi
-        [ "$FREEZE" -eq 1 ] && def=m12w4d7h24-gfs || def=default
-        in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
-        in_list "$def" "${items[@]}" || def="${items[0]}"
-        wt --title "$(title 6 'Jak długo trzymać?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "$( if [ "$flat" -eq 1 ]; then echo "Ten kolektor ma już relacje z szablonem bez drabiny GFS, więc szablony-\ndrabiny (default...) nie dadzą się tu aktywować. Poniższe zamrażają\ndobowe i rzadsze; bez zgody źródła (krok 9) migawki wyjdą niezamrożone."; elif [ "$FREEZE" -eq 1 ]; then echo "Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez). W nawiasie: jak\nliczona jest retencja. Szablon da się zmienić później."; else echo "Szablony BEZ zamrażania. W nawiasie: jak liczona jest retencja.\nSzablon da się zmienić później."; fi )" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" \
-           "${items[@]}" || { [ "$flat" -eq 1 ] && return 1; sub=freeze; continue; }
-        PROFILE="$WT_OUT"; return 0
-    done
+    items=()
+    while IFS=$'\t' read -r n w c q f sh; do
+        [ -n "$n" ] || continue
+        label="$(printf '%-15s %s' "$n" "$w")"
+        [ "$f" = 1 ] && label="$label  [zamraża]"
+        [ "$sh" = flat ] && label="$label  [płaski]"
+        items+=("$n" "$label")
+    done <"$TMPD/prof.tsv"
+    def=default
+    in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
+    in_list "$def" "${items[@]}" || def="${items[0]}"
+    geom
+    wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+       --menu "Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [płaski] = jedna rodzina,\nN najnowszych, bez drabiny GFS -- takiego wymaga konto, na którym już\ndziała inny płaski szablon (sprawdzane po wyborze konta w kroku 8).\nSzablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 6)" \
+       "${items[@]}" || return 1
+    PROFILE="$WT_OUT"
+    f="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $5}' "$TMPD/prof.tsv")"
+    case "$f" in 1) FREEZE=1 ;; *) FREEZE=0 ;; esac
+    return 0
 }
 
 # --- krok 7: nazwa ------------------------------------------------------------
@@ -573,21 +579,32 @@ step_name() {
 
 # --- krok 8: konto ------------------------------------------------------------
 step_account() {
-    local r=OFF z=OFF o=OFF a
-    case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
-    geom
-    wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-       --radiolist "Konto na TYM hoście, z którego cron będzie pobierał kopie.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
-       root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
-       zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
-       other     "inne konto…  (podasz nazwę)" "$o" || return 1
-    [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
-    [ "$ACCT" = other ] || return 0
+    local r=OFF z=OFF o=OFF a acct_name shape
     while :; do
-        wt --title "$(title 8 'Nazwa konta')" --ok-button "Dalej" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
-        a="${WT_OUT// /}"
-        case "$a" in ''|root|*[!a-z0-9_-]*) wt --title "Zła nazwa konta" --msgbox "Małe litery, cyfry, myślnik, podkreślenie; nie 'root'." 8 "$W"; continue ;; esac
-        ACCT_OTHER="$a"; return 0
+        case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
+        geom
+        wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+           --radiolist "Konto na TYM hoście, z którego cron będzie pobierał kopie.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
+           root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
+           zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
+           other     "inne konto…  (podasz nazwę)" "$o" || return 1
+        [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
+        r=OFF; z=OFF; o=OFF
+        if [ "$ACCT" = other ]; then
+            while :; do
+                wt --title "$(title 8 'Nazwa konta')" --ok-button "Dalej" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
+                a="${WT_OUT// /}"
+                case "$a" in ''|root|*[!a-z0-9_-]*) wt --title "Zła nazwa konta" --msgbox "Małe litery, cyfry, myślnik, podkreślenie; nie 'root'." 8 "$W"; continue ;; esac
+                ACCT_OTHER="$a"; break
+            done
+        fi
+        acct_name="$(account_name)"
+        shape="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $6}' "$TMPD/prof.tsv" 2>/dev/null)"
+        if account_is_flat "$acct_name" && [ "$shape" != flat ]; then
+            wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie ${acct_name:-root} już działają relacje z szablonem PŁASKIM\n(jedna rodzina na szczebel, bez drabiny GFS) -- to jest jego config.\nSzablonu-drabiny (GFS) nie da się do niego dodać, czasownik by to\nodmówił ('This host reads as FLAT').\n\nWybierz inne konto, albo Wstecz do kroku 6 po szablon płaski." "$(fit 8)" "$W"
+            continue
+        fi
+        return 0
     done
 }
 account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT_OTHER" ;; *) echo "" ;; esac; }
@@ -605,14 +622,12 @@ step_extra() {
     # spacja przełącza, Enter = Dalej, Esc/Wstecz = krok w tył. Pozycje, które
     # potrzebują wartości (własne maski, inna retencja u źródła), pytają o nią
     # w NASTĘPNYM oknie -- każde z nich ma już normalne Dalej/Wstecz.
-    local items=() on_grant=OFF on_q=OFF on_skip=OFF on_masks=OFF on_srcp=OFF on_man=OFF
+    local items=() on_grant=OFF on_q=OFF on_srcp=OFF on_man=OFF
     local want_masks=0 want_srcp=0 defmask="__replicate_,vzdump,__migration__"
     while :; do
         geom
         [ "$GRANT" -eq 1 ] && on_grant=ON || on_grant=OFF
         [ "$GQUIESCE" -eq 1 ] && on_q=ON || on_q=OFF
-        [ -n "$EXFAM" ] && on_skip=ON || on_skip=OFF
-        [ -n "$EXFAM" ] && [ "$EXFAM" != "$defmask" ] && on_masks=ON || on_masks=OFF
         [ -n "$SRCPROF" ] && on_srcp=ON || on_srcp=OFF
         [ "$MANUAL" -eq 1 ] && on_man=ON || on_man=OFF
         [ "$RECURSION" = atomic ] && { SRCPROF=""; on_srcp=OFF; }
@@ -620,10 +635,21 @@ step_extra() {
         if [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
             items+=(quies "Nadaj też zgodę na ZAMRAŻANIE gości -- bez niej migawki dobowe i rzadsze wyjdą jako '_crash_'" "$on_q")
         fi
-        items+=(skip "Pomijaj migawki Proxmoxa: ${EXFAM:-$defmask}" "$on_skip")
-        items+=(masks "...ale własne maski zamiast domyślnych (podasz je w następnym oknie)" "$on_masks")
+        # POMIJANE MIGAWKI: jedna pozycja, nie dwie. Dopóki lista jest domyślna,
+        # "skip" pokazuje ją wprost i "masks" tylko otwiera edytor (odznaczone).
+        # Gdy lista już się różni od domyślnej (bo operator ją zmienił), pozycja
+        # "skip" znika -- jest już czym modyfikować, nie czym się zgadzać -- a
+        # "masks" mówi wprost, co jest pomijane, i jest zaznaczona (właściciel,
+        # uwagi 10+13: zgubiona przecinkiem maska w polu tekstowym -> edytor
+        # zamiast wpisywania z palca, lista pokazuje aktualny stan).
+        if [ "$EXFAM" = "$defmask" ]; then
+            items+=(skip "Pomijaj migawki Proxmoxa: $EXFAM" ON)
+            items+=(masks "Modyfikuj lub dodaj pomijane migawki po prefiksach" OFF)
+        else
+            items+=(masks "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}  (Modyfikuj lub dodaj)" ON)
+        fi
         if [ "$RECURSION" != atomic ]; then
-            items+=(srcp "Inna retencja U ŹRÓDŁA niż tutaj ($PROFILE) -- wybierzesz w następnym oknie" "$on_srcp")
+            items+=(srcp "Inna retencja u źródła (na $HOST) niż tutaj -- wybierzesz w następnym oknie" "$on_srcp")
         fi
         items+=(man "Parowanie RĘCZNE: paczka do przeniesienia (gdy ten host nie ma wstępu po SSH)" "$on_man")
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
@@ -644,29 +670,124 @@ step_extra() {
         # Zgoda na zamrażanie ma sens tylko razem z nadaniem praw stąd; gdy pozycji
         # nie było na liście, nie wolno jej cichcem zostawić włączonej.
         [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ] || GQUIESCE=0
-        if [ "$keep_skip" -eq 0 ]; then
+        if [ "$EXFAM" = "$defmask" ] && [ "$keep_skip" -eq 0 ] && [ "$want_masks" -eq 0 ]; then
             EXFAM=""
         elif [ "$want_masks" -eq 1 ]; then
-            wt --title "$(title 9 'Własne maski migawek')" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "Początki nazw migawek, których NIE kopiować, po przecinku.\nDomyślne to migawki samego Proxmoxa (replikacja, vzdump, migracja)." 11 "$W" \
-               "${EXFAM:-$defmask}" || continue
-            EXFAM="${WT_OUT// /}"
-            [ -n "$EXFAM" ] || EXFAM="$defmask"
-        else
-            EXFAM="$defmask"
+            prefix_editor || continue
         fi
-        if [ "$want_srcp" -eq 1 ] && [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.tsv" ]; then
-            local pitems=() n w c
-            while IFS=$'\t' read -r n w c; do [ -n "$n" ] && [ "$n" != "$PROFILE" ] && pitems+=("$n" "$(printf '%-14s %s' "$n" "$w")"); done <"$TMPD/prof.tsv"
-            if [ "${#pitems[@]}" -gt 0 ]; then
-                wt --title "$(title 9 'Retencja migawek U ŹRÓDŁA')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${SRCPROF:-${pitems[0]}}" \
-                   --menu "Ile migawek zostawiać na ŹRÓDLE -- osobno od tego, co trzymasz tutaj ($PROFILE)." "$(fit $((${#pitems[@]} / 2 + 4)))" "$W" "$((${#pitems[@]} / 2))" \
-                   "${pitems[@]}" || continue
-                SRCPROF="$WT_OUT"
-            fi
+        if [ "$want_srcp" -eq 1 ] && [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
+            source_retention_editor || continue
         else
             SRCPROF=""
         fi
+        return 0
+    done
+}
+# RETENCJA ŹRÓDŁA = SAME LICZBY (właściciel, uwaga 19, 2026-09-24). Wcześniej operator
+# wybierał CAŁY profil źródła i dwa razy wybrał taki, który kasuje inną rodzinę niż cel
+# ('prunes a different snapshot FAMILY' -- odmowa dopiero na końcu). Teraz: szczeble
+# profilu CELU z jego liczbami jako podpowiedzią; operator zmienia liczby, a profil
+# źródła powstaje z profilu celu czasownikiem save-profile (te same rodziny z
+# konstrukcji; jego trzy bramki sprawdzają wynik). 0 = brak szczebla (--drop-tier),
+# dozwolone tylko, gdy rodzinę sprząta inny szczebel -- inaczej źródło trzymałoby ją
+# w nieskończoność. Nazwa deterministyczna: <cel>-src-<litery i liczby>; te same liczby
+# = ten sam profil, nadpisywany identyczną treścią.
+tier_word() {   # <nazwa szczebla> -> słowo
+    case "$1" in
+        *hourly) echo "godzinowe" ;; *daily) echo "dobowe" ;; *weekly) echo "tygodniowe" ;;
+        *monthly) echo "miesięczne" ;; *yearly|*annual) echo "roczne" ;; *) echo "$1" ;;
+    esac
+}
+tier_letter() { case "$1" in *hourly) echo H ;; *daily) echo D ;; *weekly) echo W ;; *monthly) echo M ;; *yearly|*annual) echo Y ;; *) echo X ;; esac; }
+source_retention_editor() {
+    local -a tn=() tp=() tk=() sk=()
+    local t p k i n items v ok name out
+    while IFS=$'\t' read -r n t p k; do
+        [ "$n" = "$PROFILE" ] || continue
+        k="${k%$'\r'}"
+        tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k")
+    done <"$TMPD/prof.json.tiers"
+    [ "${#tn[@]}" -gt 0 ] || { wt --title "Retencja źródła" --msgbox "Szablon $PROFILE nie ma szczebli z liczbą do zmiany." 8 "$W"; return 1; }
+    # poprzednie liczby tego samego szablonu (powrót do okna)
+    if [ -n "$SRCKEEP" ] && [ "${SRCKEEP%%:*}" = "$PROFILE" ]; then read -r -a sk <<<"${SRCKEEP#*:}"; fi
+    while :; do
+        items=()
+        for i in "${!tn[@]}"; do
+            items+=("$i" "$(printf '%-12s cel %-4s -> źródło %s' "$(tier_word "${tn[$i]}")" "${tk[$i]}" "$([ "${sk[$i]}" = 0 ] && echo 'brak' || echo "${sk[$i]}")")")
+        done
+        items+=(ok "Gotowe")
+        geom
+        wt --title "$(title 9 "Jak długo trzymać w źródle (na $HOST)?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item ok \
+           --menu "Te same szczeble co tutaj ($PROFILE) -- zmień tylko liczby.\n0 = źródło nie trzyma tego szczebla wcale." "$(fit $((${#tn[@]} + 6)))" "$W" "$((${#tn[@]} + 1))" \
+           "${items[@]}" || return 1
+        if [ "$WT_OUT" != ok ]; then
+            i="$WT_OUT"
+            wt --title "$(tier_word "${tn[$i]}") u źródła" --ok-button "Dalej" --cancel-button "Wstecz" \
+               --inputbox "Ile $(tier_word "${tn[$i]}") trzymać na $HOST (tutaj: ${tk[$i]}; 0 = bez tego szczebla):" 9 "$W" "${sk[$i]}" || continue
+            v="${WT_OUT// /}"
+            case "$v" in ''|*[!0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą, 0 albo więcej." 8 "$W"; continue ;; esac
+            v=$((10#$v))
+            if [ "$v" -eq 0 ]; then
+                ok=0
+                for n in "${!tn[@]}"; do [ "$n" != "$i" ] && [ "${tp[$n]}" = "${tp[$i]}" ] && [ "${sk[$n]}" != 0 ] && ok=1; done
+                [ "$ok" -eq 1 ] || { wt --title "Tego szczebla nie da się wyłączyć" --msgbox "Rodziny ${tp[$i]} nie sprząta żaden inny szczebel -- bez niego źródło\ntrzymałoby te migawki w nieskończoność. Zostaw co najmniej 1." 9 "$W"; continue; }
+            fi
+            sk[$i]="$v"
+            continue
+        fi
+        SRCKEEP="$PROFILE:${sk[*]}"
+        # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
+        [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
+        name="$PROFILE-src-"
+        local -a args=(--from="$PROFILE" --force)
+        for i in "${!tn[@]}"; do
+            [ "${sk[$i]}" = 0 ] && { args+=(--drop-tier="${tn[$i]}"); continue; }
+            name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
+        done
+        info "$(title 9 'Retencja źródła')" "Zapisuję szablon źródła $name..."
+        out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
+            || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue; }
+        for i in "${!tn[@]}"; do
+            [ "${sk[$i]}" = 0 ] || [ "${sk[$i]}" = "${tk[$i]}" ] && continue
+            out=$("$ZB" save-profile --from="$name" --as="$name" --force --tier="${tn[$i]}" --keep="${sk[$i]}" 2>&1) \
+                || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue 2; }
+        done
+        SRCPROF="$name"
+        return 0
+    done
+}
+# EDYTOR POMIJANYCH MIGAWEK (właściciel, uwagi 10+13). Wcześniej to było jedno
+# pole tekstowe -- łatwo było zgubić przecinek ("__migration___tmp" zamiast
+# "__migration__,_tmp"). Checklista pokazuje, co jest pomijane, ODZNACZ, żeby
+# przestać; "Dodaj nowy prefiks…" otwiera pole na kolejny -- bez ryzyka
+# przepisywania całej listy z pamięci.
+prefix_editor() {   # edytuje EXFAM; 0 = zapisano (może być pusta), 1 = Wstecz (bez zmian)
+    local base items=() p new kept=() want_add=0 x
+    base="$EXFAM"; [ -n "$base" ] || base="$defmask"
+    while :; do
+        items=()
+        local IFS=,; for p in $base; do [ -n "$p" ] && items+=("$p" "" ON); done; unset IFS
+        items+=(__add__ "Dodaj nowy prefiks…" OFF)
+        geom
+        wt --title "Pomijane migawki -- prefiksy" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
+           --checklist "Zaznaczone prefiksy są pomijane. ODZNACZ, żeby przestać pomijać.\n'Dodaj nowy prefiks…' otwiera pole na kolejny." "$(fit $((${#items[@]} / 3 + 4)))" "$W" "$((${#items[@]} / 3))" \
+           "${items[@]}" || return 1
+        want_add=0; kept=()
+        while IFS= read -r x; do
+            case "$x" in __add__) want_add=1 ;; '') ;; *) kept+=("$x") ;; esac
+        done <<<"$WT_OUT"
+        if [ "$want_add" -eq 1 ]; then
+            while :; do
+                wt --title "Nowy prefiks" --ok-button "Dalej" --cancel-button "Wstecz" \
+                   --inputbox "Nowy prefiks (bez spacji i przecinków):" 9 "$W" "" || break
+                new="$WT_OUT"
+                case "$new" in ''|*' '*|*,*) wt --title "Zły prefiks" --msgbox "'$WT_OUT' -- bez spacji i przecinków, nie może być puste." 8 "$W"; continue ;; esac
+                kept+=("$new"); break
+            done
+            local IFS=,; base="${kept[*]}"; unset IFS
+            continue
+        fi
+        local IFS=,; EXFAM="${kept[*]}"; unset IFS
         return 0
     done
 }

@@ -1050,8 +1050,9 @@ case "$1" in
     list-datasets)  if [ "$2" = "--json" ]; then cat "$NR_FIX/list-datasets.json"; else cat "$NR_FIX/list-datasets-pve9b.json"; fi ;;
     list-profiles)  cat "$NR_FIX/list-profiles.json" ;;
     delete-relation) case " $* " in *" --yes "*) : > "$NR_DIR/freed-$2"; echo "delete-relation: '$2' is gone." ;; *) echo "delete-relation '$2' (state=removed, peer=192.168.28.99):"; echo "plan only." ;; esac ;;
-    status)         if [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
-                    elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # kolektor "plaski"
+    status)         if [ -n "${NR_STATUS:-}" ]; then cat "$NR_STATUS"
+                    elif [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
+                    elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
     --source=*)     case " $* " in
                         *" --install "*) case " $* " in
@@ -1061,6 +1062,7 @@ case "$1" in
                         *) echo "RUX plan (atrapa)"; exit 0 ;;
                     esac ;;
     prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
+    save-profile)   echo "save-profile: ok (atrapa)" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -1076,7 +1078,6 @@ nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienn
 T=$'\t'
 # Kroki 5-10 z domyslnymi odpowiedziami: cel, szablon, nazwa, konto, checklista ustawien, plan, WYKONAJ
 NRT="0${T}hdd/backups
-0${T}no
 0${T}default
 0${T}pve9b
 0${T}root
@@ -1084,8 +1085,7 @@ NRT="0${T}hdd/backups
 0${T}
 0${T}
 "
-NRTS="0${T}no
-0${T}default
+NRTS="0${T}default
 0${T}pve9b
 0${T}root
 0${T}grant|skip
@@ -1214,19 +1214,19 @@ if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Które miejsce z' "$NR/wt.log")" -eq 2
 else
     bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/wt.log")"
 fi
-# 3e. kroki 5-10: nazwa zajeta -> odmowa i powrot do pola; Wstecz i ponowne Dalej NIE czytaja od nowa
+# 3e. kroki 5-10: nazwa zajeta -> odmowa i powrot do pola; Wstecz z nazwy do
+#     kroku 6 (bez pytania o spojnosc -- usunieta, patrz "krok 6, lista szablonow"
+#     nizej); ponowne Dalej NIE czyta list-profiles/status od nowa.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
-0${T}no
 0${T}default
 0${T}lab-ct201
 0${T}
 1${T}
-0${T}yes
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
@@ -1240,13 +1240,33 @@ if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backu
 else
     bad "new-relation: kroki 5-10" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
-NRL1="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | head -1)"; NRL2="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | tail -1)"
-if grep -F 'Spójność migawek' "$NR/wt.log" | head -1 | grep -qE 'yes ~ Zamrażaj przy migawkach dobowych i rzadszych  -- zalecane ~ ON ~ no ~ [^~]* ~ OFF' \
-   && has "$NRL1" 'Szablony BEZ zamrażania' && has "$NRL1" ' ~ default ~ default ' && ! has "$NRL1" ' ~ d30h24 ~ ' \
-   && has "$NRL2" 'Szablony ZAMRAŻAJĄCE dobowe i rzadsze (godzinowe bez)' && has "$NRL2" ' ~ d30 ~ ' && has "$NRL2" '--default-item ~ m12w4d7h24-gfs' && ! has "$NRL2" ' ~ default ~ default '; then
-    ok "new-relation: krok 6 -- zamrazanie WIDAC przy tworzeniu relacji: najpierw pytanie o spojnosc (domyslnie ZAMRAZAJ wszystko oprocz godzinowych), potem lista tylko szablonow, ktore to spelniaja; 'default' (drabina, zamrazac nie moze) jest tylko na liscie 'bez'"
+# krok 6 -- WSZYSTKIE szablony na jednej liscie, bez pytania o spojnosc, znaczniki
+# [zamraża]/[płaski] przy kazdym (wlasciciel, uwaga 15: "nie moglem znalezc
+# d30h24" -- filtrowanie po spojnosci i plaskosci hosta je chowalo).
+if ! grep -qF 'Spójność migawek' "$NR/wt.log"; then
+    ok "new-relation: krok 6 nie pyta juz o spojnosc migawek -- jedna lista, wszystkie szablony"
 else
-    bad "new-relation: krok 6, zamrazanie" "$(grep -F 'Spójność migawek' "$NR/wt.log" | head -1 | cut -c1-300)" "$(printf '%s' "$NRL1" | cut -c1-300)" "$(printf '%s' "$NRL2" | cut -c1-300)"
+    bad "new-relation: krok 6 wciaz pyta o spojnosc" "$(grep -F 'Spójność migawek' "$NR/wt.log" | head -1 | cut -c1-300)"
+fi
+NRL6="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
+printf '%s' "$NRL6" > "$NR/step6.line"
+if "$PY" - "$NR/step6.line" <<'PYEOF'
+import sys
+parts = open(sys.argv[1], encoding="utf-8").read().split(" ~ ")
+def desc(tag):
+    for i, p in enumerate(parts):
+        if p == tag and i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+d_def = desc("default"); d_30 = desc("d30")
+ok = d_def is not None and "[zamraża]" not in d_def and "[płaski]" not in d_def
+ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[płaski]" in d_30
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "new-relation: krok 6 -- 'default' (drabina, nie zamraza) bez znacznikow, 'd30' (plaski, zamraza dobowe) z OBOMA znacznikami -- jedna lista, zaden filtr"
+else
+    bad "new-relation: krok 6 lista szablonow" "$(printf '%s' "$NRL6" | cut -c1-800)"
 fi
 if grep -qF 'zamraża: dobowe' "$NR/wt.log"; then
     ok "new-relation: podsumowanie mowi slowami, co wybrany szablon zamraza"
@@ -1259,6 +1279,90 @@ if grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | grep -qF 'BACKUP: ' && grep -
 else
     bad "new-relation: podsumowanie" "$(grep -F 'Podsumowanie' "$NR/wt.log" | tail -1 | cut -c1-600)"
 fi
+
+# 3j. RETENCJA U ZRODLA (wlasciciel, uwaga 19, 2026-09-24): krok 9 -- "Inna
+#     retencja u zrodla" -> menu szczebli profilu CELU z jego liczbami; zmiana
+#     liczby > 0 buduje profil pochodny przez save-profile, 0 = --drop-tier
+#     (dozwolone tylko, gdy inny szczebel tej samej rodziny wciaz sprzata).
+# T1: dobowe 7 -> 3, tygodniowe 4 -> 0 (godzinowe i miesieczne bez zmian).
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}grant|srcp|skip
+0${T}1
+0${T}3
+0${T}2
+0${T}0
+0${T}ok
+0${T}
+0${T}
+")
+NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
+if grep -qF 'save-profile --from=default --force --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
+   && grep -qF 'save-profile --from=default-src-H24D3M12 --as=default-src-H24D3M12 --force --tier=keep_daily --keep=3' "$NR/zb.log" \
+   && has "$NROUT" '--source-profile=default-src-H24D3M12'; then
+    ok "new-relation: retencja zrodla to LICZBY szczebli celu -> profil pochodny przez save-profile, 0 = --drop-tier (wlasciciel, uwaga 19)"
+else
+    bad "new-relation: retencja zrodla, T1" "$NROUT" "$(cat "$NR/zb.log")"
+fi
+# profile pochodne (-src-) w fiksturze nie sa szablonami do wyboru w kroku 6
+if [ -n "$NRL6SRC" ] && ! has "$NRL6SRC" 'default-src-X ~'; then
+    ok "new-relation: profile pochodne (-src-) nie sa szablonami w kroku 6"
+else
+    bad "new-relation: profil pochodny w liscie kroku 6" "$NRL6SRC"
+fi
+# T2: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc (d30h24:
+#     godzinowe i dobowe to DWIE ROZNE rodziny, kazda z jednym szczeblem).
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}d30h24
+0${T}pve9b
+0${T}root
+0${T}grant|srcp|skip
+0${T}0
+0${T}0
+0${T}
+0${T}ok
+0${T}
+0${T}
+")
+if grep -qF 'Tego szczebla nie da się wyłączyć' "$NR/wt.log" && ! grep -q '^save-profile' "$NR/zb.log"; then
+    ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
+else
+    bad "new-relation: T2 odmowa wylaczenia jedynego szczebla" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
+fi
+# T3: otwarcie edytora i 'Gotowe' bez zmian = SRCPROF zostaje pusty, bez osobnego
+#     profilu i bez wywolania save-profile.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}grant|srcp|skip
+0${T}ok
+0${T}
+0${T}
+")
+if ! grep -q '^save-profile' "$NR/zb.log" && ! has "$NROUT" '--source-profile='; then
+    ok "new-relation: retencja zrodla bez zmian = bez osobnego profilu"
+else
+    bad "new-relation: T3 gotowe bez zmian" "$NROUT" "$(cat "$NR/zb.log")"
+fi
+
 # 3g. nazwa trzymana przez rekord `removed`: zmierzone na pve10 -- plan mowil "removed and
 #     cannot be revived", a kreator i tak pokazywal WYKONAJ. Teraz pyta o zwolnienie nazwy.
 NROUT=$(nr_run "0${T}backup
@@ -1267,7 +1371,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
-0${T}no
 0${T}default
 0${T}192.168.28.99
 0${T}
@@ -1343,28 +1446,32 @@ else
     bad "new-relation: przyciski list" "$(grep -n -- '--ok-button' "$REPO/tui/new-relation.sh" | cut -c1-120)"
 fi
 
-# 3h. KOLEKTOR MA KSZTALT: gdy zywa relacja uzywa szablonu "rodzina na szczebel", aktywacja
-#     szablonu-drabiny jest odmawiana ("This host reads as FLAT ... NO RETENTION AT ALL",
-#     zmierzone na pve10). Kreator nie moze ich wtedy oferowac ani pytac o "bez zamrazania".
+# 3h. KONTO MA KSZTALT, nie caly kolektor (przeprojektowane po pve11, 2026-09-23:
+#     synchro na koncie root chowala szablony-drabiny takze kontu zfsbackup).
+#     Krok 6 nie filtruje juz nic; niedopasowanie sprawdza sie PO wyborze konta
+#     w kroku 8. NR_FLAT=1: KAZDA zywa relacja (wszystkie na koncie root, bo
+#     status.json fikstury nie ma pola local_user) ma szablon plaski.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
-0${T}d7h24
+0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|quies|skip
+0${T}
+0${T}zfsbackup
+0${T}grant|skip
 0${T}
 0${T}
 " NR_FLAT=1)
-NRL="$(grep -F 'Jak długo trzymać?' "$NR/wt.log" | head -1)"
-if has "$NROUT" " --profile=d7h24 " && ! grep -qF 'Spójność migawek' "$NR/wt.log" && has "$NRL" "szablony-" && has "$NRL" "nie dadzą się tu aktywować" \
-   && ! has "$NRL" ' ~ default ~ ' && ! has "$NRL" ' ~ Y5M12D31H24 ~ ' && ! has "$NRL" ' ~ passive ~ ' && has "$NRL" ' ~ d30 ~ '; then
-    ok "new-relation: na kolektorze, ktory ma juz relacje z szablonem bez drabiny, kreator NIE oferuje szablonow-drabin (default, Y5..., passive) i nie pyta o 'bez zamrazania' -- aktywacja by je odrzucila; okno mowi dlaczego"
+if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
+   && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
+   && [ "$(grep -cF -- 'Na jakim koncie mają chodzić zadania' "$NR/wt.log")" -eq 2 ]; then
+    ok "new-relation: konto root uzywa juz szablonu plaskiego (config root) -> wybor konta root ze szablonem-drabina (default) pokazuje 'Szablon nie pasuje do konta' i wraca do kroku 8; konto zfsbackup (inny config) przyjmuje ta sama drabine"
 else
-    bad "new-relation: ksztalt kolektora" "$NROUT" "$(printf '%s' "$NRL" | cut -c1-500)" "$(cat "$NR/err")"
+    bad "new-relation: niedopasowanie szablonu do konta" "$NROUT" "$(grep -F 'Szablon nie pasuje' "$NR/wt.log" | cut -c1-400)" "$(cat "$NR/err")"
 fi
 # 3f. 'Zatwierdze sam na zrodle': instalacja MA stanac -- to nie awaria, tylko dwa kroki do zrobienia
 NROUT=$(nr_run "0${T}backup
@@ -1373,7 +1480,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/test-kreator
 0${T}next
 0${T}hdd/backups
-0${T}no
 0${T}default
 0${T}pve9b
 0${T}root
@@ -1387,6 +1493,52 @@ if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NRO
 else
     bad "new-relation: zatwierdze sam" "rc=$NRRC" "$NROUT" "$(ls "$NR")"
 fi
+# A. TSV PLACEHOLDER (wlasciciel, uwaga 11): relacja SYNCHRO ma pusty client_target;
+#    IFS=$'\t' read ZLEPIA sasiadujace puste pole z nastepnym (TAB jest biala spacja
+#    w IFS), wiec stan 'active' zsuwal sie do zmiennej celu i krok 5 oferowal 'active'
+#    jako dataset docelowy -- zywe na pve11.
+cat > "$NR/status-empty-target.json" <<'EOF'
+{"relations":[{"name":"synchro-empty","state":"active","peer_host":"10.9.9.9","client_target":"","profile":"default","local_user":""}]}
+EOF
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+${NRT}" NR_STATUS="$NR/status-empty-target.json"); NRRC=$?
+NRTGT="$(grep -F -- 'Dokąd na tym hoście' "$NR/wt.log" | head -1)"
+if [ "$NRRC" -eq 0 ] && ! hasE "$NRTGT" ' ~ active ~ '; then
+    ok "new-relation: relacja synchro z PUSTYM client_target nie wypycha 'active' na liste celow w kroku 5 (owner note 11: puste pole staje sie '-', nie zlepia sie z nastepnym)"
+else
+    bad "new-relation: 'active' jako cel w kroku 5" "$NROUT" "$NRTGT"
+fi
+
+# D. POMIJANE MIGAWKI PO PREFIKSACH (wlasciciel, uwagi 10+13): zamiast pola tekstowego
+#    (latwo zgubic przecinek -- "__migration___tmp") edytor-checklista; dodanie nowego
+#    prefiksu i odznaczenie istniejacego w JEDNYM przebiegu.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}masks
+0${T}__replicate_|__migration__|__add__
+0${T}_tmp
+0${T}__replicate_|__migration__|_tmp
+0${T}
+0${T}
+")
+if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane migawki -- prefiksy' "$NR/wt.log" \
+   && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
+    ok "new-relation: edytor prefiksow -- 'Dodaj nowy prefiks' dopisuje _tmp, odznaczenie vzdump usuwa go z --exclude-family"
+else
+    bad "new-relation: edytor pomijanych migawek" "$NROUT" "$(grep -F 'prefiks' "$NR/wt.log" | cut -c1-300)"
+fi
+
 # 4. host, z ktorym relacja JEST: odmowa ze slowem dlaczego, potem Wstecz, Wyjdz
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.99
