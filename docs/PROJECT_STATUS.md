@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1e3bfa5e361343ef -->
+<!-- status-covers-digest: 9291bc7e20a2241d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,24 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kreator, runda 2: puste prefiksy i plan bez komendy (2026-09-24).** Test
+  właściciela na pve11 ← pve9 (`hdd/archive`):
+  - **R2-1 (wada):** okno „Pomijane migawki -- prefiksy” pokazywało puste
+    wiersze. Pozycja miała znacznik = prefiks (schowany przez `--notags`) i
+    PUSTY opis. Test sprawdzał tylko wynik (`--exclude-family`), nie treść
+    okna, więc dopisana jest asercja na to, co widzi operator.
+  - **R2-2:** okno planu (krok 10) pokazywało sam angielski plan czasownika.
+    Teraz zaczyna się od pełnej komendy, która wykona się po WYKONAJ, i
+    decyzji po polsku (cel, retencja tutaj i u źródła, pomijane, konto), bez
+    mylącej linii „--grant-remotely is noted”.
+  - **Na żywo przy tym teście:** retencja źródła jako liczby zadziałała
+    (`Y5M12D31H24-src-H24D7M3`, roczne = 0 → brak szczebla; porządki celu
+    i źródła osobno). Odmowa „Tego szczebla nie da się wyłączyć”
+    (`d30h24`, godzinowe = 0) sprawdzona na prawdziwym kreatorze na pve11 z
+    atrapą odpowiedzi whiptail; nic nie założono. Relacja testowa `pve9`
+    usunięta z pve11; ocalałe (pve11 ← pve9b, pve10 ← pve9b, pve10 ← pve9
+    synchro) rc 0 z crona.
+  - `tui` 163/0.
 - **Kreator, runda 1 po testach właściciela (2026-09-24).** Z listy uwag GUI:
   - **Retencja źródła = same liczby** (uwaga 19, pomysł właściciela). Zamiast
     wybierać cały profil źródła, który dwa razy kasował inną rodzinę niż cel
