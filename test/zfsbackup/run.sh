@@ -11172,6 +11172,54 @@ else
     bad "saveprof: the installed config is byte-identical after the gate-3 cases too" "$(diff "$PF/cron.orig" "$PF/cron.conf")"
 fi
 
+# ---------------------------------------------------------------------------
+# --drop-tier=NAME (2026-09-24, owner: "szczebel = 0 to po prostu brak
+# szczebla"). Removes a [template:NAME] section and NAME from every
+# use_template list; refused when the tier is the only one left pruning its
+# family, and when the tier does not exist.
+# ---------------------------------------------------------------------------
+cp "$REPO/profiles/default.conf" "$PF/pkg/default.conf"
+pf_use_template_prune() {   # <file> -> the [prune] use_template value, whitespace stripped
+    awk '/^\[/ { cur = $0 } cur == "[prune]" && /^[[:space:]]*use_template[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); print v }' "$1" | tr -d '[:space:]'
+}
+
+if pf_run --from=default --as=dropw --drop-tier=keep_weekly \
+   && ! grep -q '^\[template:keep_weekly\]' "$PF/user/dropw.conf" \
+   && [ "$(pf_use_template_prune "$PF/user/dropw.conf")" = "keep_hourly,keep_daily,keep_monthly" ]; then
+    ok "saveprof: --drop-tier removes the tier and its use_template entry (owner 2026-09-24: 'szczebel = 0 to brak szczebla')"
+else
+    bad "saveprof: --drop-tier removes the tier and its use_template entry (owner 2026-09-24: 'szczebel = 0 to brak szczebla')" \
+        "$(cat "$WORK/pf.err")" "$(grep -n 'template:\|use_template' "$PF/user/dropw.conf" 2>/dev/null)"
+fi
+
+if pf_run --from=default --as=dropwm --drop-tier=keep_weekly --drop-tier=keep_monthly \
+   && [ "$(pf_use_template_prune "$PF/user/dropwm.conf")" = "keep_hourly,keep_daily" ]; then
+    ok "saveprof: --drop-tier is repeatable"
+else
+    bad "saveprof: --drop-tier is repeatable" \
+        "$(cat "$WORK/pf.err")" "$(grep -n 'template:\|use_template' "$PF/user/dropwm.conf" 2>/dev/null)"
+fi
+
+pf_before="$(pf_files)"
+if ! pf_run --from=d30h24 --as=dropfam --drop-tier=hourly \
+   && grep -q 'no other tier prunes its family' "$WORK/pf.err" \
+   && [ ! -e "$PF/user/dropfam.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: dropping the only tier that prunes a family is refused, nothing written (the source would keep it forever)"
+else
+    bad "saveprof: dropping the only tier that prunes a family is refused, nothing written (the source would keep it forever)" \
+        "$(cat "$WORK/pf.out" "$WORK/pf.err")" "$(pf_files)"
+fi
+
+pf_before="$(pf_files)"
+if ! pf_run --from=default --as=dropnope --drop-tier=nope \
+   && grep -q "has no tier 'nope'" "$WORK/pf.err" \
+   && [ ! -e "$PF/user/dropnope.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: --drop-tier of a tier that does not exist is refused"
+else
+    bad "saveprof: --drop-tier of a tier that does not exist is refused" \
+        "$(cat "$WORK/pf.out" "$WORK/pf.err")" "$(pf_files)"
+fi
 
 fi   # --- koniec sekcji saveprof ---
 if want listjobs; then

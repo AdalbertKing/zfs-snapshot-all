@@ -12553,12 +12553,13 @@ save_profile_name_shape() {   # <name> -> normalised letter+count shape, or empt
 
 cmd_save_profile() {
     local from="" as="" tier="" desc="" force=0 a
-    local -a fname=() fvalue=()
+    local -a fname=() fvalue=() drop=()
     for a in "$@"; do
         case "$a" in
             --from=*)        from="${a#*=}" ;;
             --as=*)          as="${a#*=}" ;;
             --tier=*)        tier="${a#*=}" ;;
+            --drop-tier=*)   drop+=("${a#*=}") ;;
             --description=*) desc="${a#*=}" ;;
             --force)         force=1 ;;
             --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
@@ -12615,6 +12616,38 @@ cmd_save_profile() {
         set_or_remove_section_field "$work" "[template:$tier]" "${fname[$i]}" "${fvalue[$i]}" \
             || { rm -rf "$workdir"; die "save-profile: could not write '${fname[$i]}' into [template:$tier] -- nothing was written"; }
         i=$((i + 1))
+    done
+    # --drop-tier=NAME (2026-09-24, owner: "szczebel = 0 to po prostu brak
+    # szczebla"). gen-cron refuses `keep = 0` -- and rightly: on a flat per-tier
+    # prune a zero keeps NOTHING of that family. An absent tier is valid and
+    # prunes nothing for that rung, so "zero" is spelled by removing the tier:
+    # its [template:] section and its name from every use_template list. A
+    # tier whose family no other tier prunes is refused, because the source
+    # would then keep that family forever while reporting success.
+    local d _pat _others
+    for d in ${drop[@]+"${drop[@]}"}; do
+        cron_config_section "$work" "[template:$d]" | grep -q . \
+            || { rm -rf "$workdir"; die "save-profile: --drop-tier: '$from' has no tier '$d'. Nothing was written."; }
+        _pat=$(cron_config_section "$work" "[template:$d]" | sed -n -E 's/^[[:space:]]*pattern[[:space:]]*=[[:space:]]*//p' | head -1)
+        _others=$(awk -v me="[template:$d]" -v pat="$_pat" '
+            /^\[/ { cur = $0; next }
+            cur ~ /^\[template:/ && cur != me && /^[[:space:]]*pattern[[:space:]]*=/ {
+                v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+                if (v == pat && /./ && !(cur in seen)) { seen[cur] = 1; n++ } }
+            /^[[:space:]]*keep[[:space:]]*=/ { if (cur in seen) k[cur] = 1 }
+            END { c = 0; for (t in k) c++; print c }' "$work")
+        [ -n "$_pat" ] && [ "${_others:-0}" -gt 0 ] \
+            || { rm -rf "$workdir"; die "save-profile: --drop-tier=$d refused: no other tier prunes its family '${_pat:-?}' -- the snapshots would be kept forever. Keep at least one tier of that family. Nothing was written."; }
+        awk -v me="[template:$d]" -v t="$d" '
+            /^\[/ { skip = ($0 == me) }
+            skip { next }
+            /^[[:space:]]*use_template[[:space:]]*=/ {
+                lead = $0; sub(/=.*/, "= ", lead); v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+                n = split(v, a, ","); out = ""
+                for (i = 1; i <= n; i++) { x = a[i]; gsub(/[[:space:]]/, "", x); if (x != "" && x != t) out = out (out == "" ? "" : ",") x }
+                print lead out; next }
+            { print }' "$work" > "$work.drop" && mv -f "$work.drop" "$work" \
+            || { rm -rf "$workdir"; die "save-profile: could not remove tier '$d' -- nothing was written"; }
     done
     if [ -n "$desc" ]; then
         set_or_remove_section_field "$work" "[profile]" description "$desc" \
