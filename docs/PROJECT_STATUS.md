@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9291bc7e20a2241d -->
+<!-- status-covers-digest: bdd8ab3ecb382d6a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,32 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Dwa kolektory nie kasują już jednej rodziny na źródle; wdrożenie hosta nie zalewa ekranu (2026-09-24).**
+  - **Uwaga 16 (poważna):** na labie pve11 ← pve9b dostał `hdd/vm-disks` z
+    własną retencją źródła, a pve10 ← pve9b już tworzy i kasuje tam
+    `automated_hourly`. Dwa kolektory kasowałyby tę samą rodzinę według
+    różnych reguł i zrywały sobie bazy przyrostów. Nic tego nie pilnowało.
+    Teraz aktywacja, która instaluje porządki źródła, czyta `zfs allow` na tych
+    datasetach (tym samym kanałem co `assert_source_prune_grant`) i odmawia,
+    zanim cokolwiek zainstaluje, gdy `destroy` ma tam konto INNEGO peera
+    (`zfsbackup-<kolektor>`). Lokalne konto źródła się nie liczy. Relacje
+    pasywne i synchro porządków źródła nie instalują, więc ich to nie dotyczy
+    (dwa kolektory synchro na jednym źródle działają tego samego dnia).
+    **Na żywo na pve11** (kanał relacji `pve9b`, tylko odczyt): `hdd/home`,
+    `hdd/vms` → przechodzi; `hdd/vm-disks` → odmowa z nazwą `zfsbackup-pve10`.
+    Testy 55d (5/0; na `main` padają asercje treści odmowy).
+  - **Uwaga 18:** forma jednokomendowa (kreator, import na nowy kolektor)
+    wołała `deploy.sh` do trzech razy i każde wywołanie drukowało fazy 1–7
+    (~250 linii). Z `DEPLOY_PHASES_QUIET=1`, ustawianym tylko przez tę formę
+    (także dla zdalnego `--join`), fazy idą do logu: na ekranie zostaje jedna
+    linia i ostrzeżenia, a awaria w fazach pokazuje ogon logu i FATAL. Jeśli
+    pułapka EXIT jest już ustawiona, tryb cichy się nie włącza. Mechanika
+    sprawdzona na sucho (głośno / cicho-sukces / cicho-awaria); **na hoście
+    po wdrożeniu**.
+  - **Uwaga 4 (przyczyna ustalona, poprawka w PR ekranów):** relacja synchro
+    na szablonie płaskim ma pobranie i porządki w JEDNEJ sekcji; `list-jobs`
+    daje jedno zadanie z dwiema liniami w `cron_lines`, a F2 pokazuje tylko
+    „pobranie”. W cronie pve10 jest 18 linii `pve9-synchro` (9 + 9).
 - **Kreator, runda 2: puste prefiksy i plan bez komendy (2026-09-24).** Test
   właściciela na pve11 ← pve9 (`hdd/archive`):
   - **R2-1 (wada):** okno „Pomijane migawki -- prefiksy” pokazywało puste
