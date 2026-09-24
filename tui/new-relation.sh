@@ -766,7 +766,7 @@ prefix_editor() {   # edytuje EXFAM; 0 = zapisano (może być pusta), 1 = Wstecz
     base="$EXFAM"; [ -n "$base" ] || base="$defmask"
     while :; do
         items=()
-        local IFS=,; for p in $base; do [ -n "$p" ] && items+=("$p" "" ON); done; unset IFS
+        local IFS=,; for p in $base; do [ -n "$p" ] && items+=("$p" "$p" ON); done; unset IFS
         items+=(__add__ "Dodaj nowy prefiks…" OFF)
         geom
         wt --title "Pomijane migawki -- prefiksy" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
@@ -858,7 +858,19 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         build_argv
         info "$(title 10 'Plan')" "Pytam czasownik o plan (nic nie zmienia)..."
         "${ARGV[@]}" >"$TMPD/plan.txt" 2>&1; rc=$?
-        { echo "PLAN -- nic jeszcze nie zostało zmienione (rc=$rc):"; echo; cat "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"
+        # R2-2 (właściciel, 2026-09-24): to okno ma pokazać, CO się wykona po WYKONAJ -- pełną
+        # komendę i decyzje po polsku -- a dopiero pod spodem plan czasownika. Wcześniej było
+        # tu tylko angielskie "RUX plan" bez komendy, retencji źródła, pomijanych i konta.
+        # Linia "--grant-remotely is noted, but --plan is read-only" myliła (grant NASTĄPI
+        # po WYKONAJ), więc jej tu nie ma.
+        { echo "Po WYKONAJ uruchomi się DOKŁADNIE:"
+          build_argv install; cmd_oneline; echo; build_argv
+          echo
+          echo "Cel: ${TARGET:-(synchro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."
+          echo "Pomijane migawki: ${EXFAM:-żadne}.  Konto: $(a="$(account_name)"; echo "${a:-root}")."
+          echo
+          echo "Plan czasownika -- nic jeszcze nie zostało zmienione (rc=$rc):"
+          grep -v -- '--grant-remotely is noted' "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"
         if [ "$rc" -ne 0 ]; then
             wt --title "$(title 10 'Plan ODRZUCONY przez czasownik')" --scrolltext --msgbox "$(cat "$TMPD/plan2.txt")" "$H" "$W"
             continue
