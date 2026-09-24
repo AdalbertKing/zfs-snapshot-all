@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bdd8ab3ecb382d6a -->
+<!-- status-covers-digest: e1efe1733302ee05 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,34 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Ekrany po uwagach właściciela (2026-09-24): `<>` dla synchro, jeden wiersz na grupę, porządki synchro, bez F5, logi Del i kreatora.**
+  - **1, 2:** relacja synchro ma w F2, F3 i panelu kierunek `pve10<>192.168.28.99`
+    („oba hosty trzymają te same datasety”); rozstrzyga pole `mode` rekordu.
+  - **3:** F2 składa linie crona różniące się tylko zakresem w jeden wiersz z
+    `xN` (werdykt najgorszy, wolumen sumowany, w panelu każdy zakres).
+  - **4:** szczebel płaski (np. `passive-flat` relacji synchro) ma pobranie i
+    porządki w jednej sekcji. F2 pokazywał tylko pobranie: na pve10 18 linii
+    `pve9-synchro`, porządków brak. Teraz jest wiersz „porządki -H168 x9” z
+    WŁASNEJ linii `delsnaps` zadania (ten sam szczebel i znacznik, bo
+    `cron_lines` niesie cały blok), bez dubla sekcji `[prune:]`. Porządki u
+    źródła nazywają się „porządki źródła” i nie mylą się z porządkami celu.
+  - **6b (decyzja: wariant b):** ekranu F5 Monitor nie ma. Strażnik (harmonogram,
+    konto) i progi są w panelu F2, a strażnik bez zadania jest wierszem F2
+    „strażnik bez zadania”.
+  - **7:** F4 „Kiedy” dla starszych wpisów: `DD.MM GG:MM` + czas trwania,
+    kolumna szeroka jak treść; Dataset oddaje miejsce.
+  - **5:** Del i Ins zostawiają `~/.zfs-tui/<czasownik>-<stempel>.log` (nagłówek
+    `$ komenda`, przebieg i rc; `ZFS_TUI_LOG` dla kreatora i okna usuwania).
+  - Kolumny F2 „Zadanie” i „Kopie” liczone według treści: przy 100 kolumnach
+    adres synchro mieści się w całości (przy 80 ucięty, jak przed zmianą).
+  - **Dowody:** render na żywych danych z pve10 (`list-jobs`/`status`/`monitor`
+    z hosta): `pve10<>192.168.28.99`, `pobranie automated x9`,
+    `porządki -H168 x9`, porządki celu pve11 `16 * * * *` osobno od porządków
+    źródła `21 * * * *`. `tui` 162 PASS; 6 testów „linia:” pada tylko w
+    worktree (sprawdzają nazwę katalogu `zfs-snapshot-all` w linii poleceń).
+    Nowe asercje (uwaga 4 na fiksturze, `x3`, `<>`, F4 „Kiedy”, strażnik w
+    panelu, strażnik bez zadania, ścieżka logu) padają na `main`.
 
 - **Dwa kolektory nie kasują już jednej rodziny na źródle; wdrożenie hosta nie zalewa ekranu (2026-09-24).**
   - **Uwaga 16 (poważna):** na labie pve11 ← pve9b dostał `hdd/vm-disks` z
