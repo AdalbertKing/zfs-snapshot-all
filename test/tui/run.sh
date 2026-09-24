@@ -322,7 +322,7 @@ if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 +[0-9]+/[0-9]+/[0-9]+s +- +a
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +porządki -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +porządki źródła -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
     ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
 else
     bad "zadania: zdalne porzadki" "$Z"
@@ -380,6 +380,16 @@ fi
 # ============================================================================
 # SYNCHRO: "<>" nie "<" (rekord mowi, linia crona nie umie) + F2 GRUPOWANIE
 # ============================================================================
+# UWAGA 4 (wlasciciel, 2026-09-24): szczebel plaski (pobranie + porzadki w JEDNEJ sekcji)
+# mial w F2 tylko "pobranie". Porzadki z WLASNEJ linii zadania (tag "(sx-a)"), a linia
+# porzadkow sasiedniego datasetu z tego samego bloku ("(sx-b)", inny harmonogram) nie wchodzi.
+FP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
+if hasE "$FP" '^║ sx +[^ ]+ +porządki -H168 +21 \* \* \* \*' && ! hasE "$FP" 'porządki -H168 +17 \* \* \* \*' \
+   && [ "$(printf '%s\n' "$FP" | grep -c 'porządki -H168')" -eq 1 ]; then
+    ok "zadania: szczebel plaski pokazuje WLASNE porzadki (harmonogram z jego linii delsnaps), bez cudzych z bloku (uwaga 4: pve9-synchro)"
+else
+    bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "$FP"
+fi
 # Atrapa relacji: sync-test ma TRZY linie crona identyczne poza zakresem (a/b/c,
 # ten sam harmonogram) plus czwarta pod INNYM harmonogramem (d) -- ta czwarta
 # NIE ma sie zlaczyc. backup-test to relacja BEZ rekordu synchro (mode

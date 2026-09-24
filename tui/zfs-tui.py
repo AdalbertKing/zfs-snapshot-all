@@ -977,6 +977,10 @@ def build_jobs(data, now):
     monitors = (data.monitors or {}).get("monitors", [])
     host = (data.jobs or {}).get("host") or "?"
     rels_by_name = {r.get("name"): r for r in (data.status or {}).get("relations", [])}
+    # porzadki, ktore JUZ maja wlasna sekcje [prune:] -- ich linii zaszytej w sekcji
+    # [dataset:] nie pokazujemy drugi raz (relacja, harmonogram, retencja)
+    prune_sections = set((jj.get("label") or "", jj.get("schedule") or "", jj.get("retain") or jj.get("keep") or "")
+                         for jj in (data.jobs or {}).get("jobs", []) if jj.get("section_kind") == "prune")
     for j in (data.jobs or {}).get("jobs", []):
         v, reason = verdict_for_job(j, monitors)
         tier = j.get("tier", "")
@@ -988,7 +992,11 @@ def build_jobs(data, now):
         # "porzadki -D7" (co trzyma). Nazwa szczebla jest w panelu.
         fam = family_of(j).replace("automated_", "") or tier or "?"
         if kind == "prune":
-            task = u"porządki " + (ret if ret else fam)
+            # Sekcja [prune:] ze zdalnym zakresem (konto@host:dataset) sprzata migawki
+            # U ZRODLA; z lokalnym -- tutaj. Odkad F2 pokazuje tez porzadki szczebli
+            # plaskich (uwaga 4), obie strony mialy ten sam napis "porzadki -H24".
+            where = u"porządki źródła " if "@" in (j.get("scope") or "") else u"porządki "
+            task = where + (ret if ret else fam)
         else:
             # SLOWO ZGODNE Z KIERUNKIEM. Kazde zadanie transferu nazywalo sie
             # "wysylka", takze w relacji, w ktorej ten host POBIERA -- a to
@@ -1017,6 +1025,39 @@ def build_jobs(data, now):
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
             "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
+        # SZCZEBEL, KTORY SAM SIE SPRZATA (uwaga 4, 2026-09-24). Szablon plaski (np.
+        # passive-flat relacji synchro) ma pobranie i porzadki w JEDNEJ sekcji
+        # [dataset:]; list-jobs daje jedno zadanie, a linia delsnaps siedzi w jego
+        # cron_lines. F2 pokazywal tylko "pobranie" -- na pve10 18 linii crona
+        # pve9-synchro, a porzadkow nie bylo na ekranie wcale. Osobny wiersz, z
+        # harmonogramem wzietym z tej linii.
+        # TYLKO WLASNA linia: cron_lines niesie linie calego BLOKU (na pve10 zadanie
+        # ct-201 mialo tez linie ct-201/data...; w fiksturze sekcja dataset niosla
+        # linie sekcji [prune:]) -- pierwsza z brzegu linia delsnaps liczyla cudze
+        # porzadki drugi raz. Wlasna = ten sam szczebel i ten sam znacznik "(...)"
+        # co linia transferu TEGO zadania. Brak dopasowania = brak wiersza.
+        own_tag = ""
+        raw_tier = j.get("tier") or ""
+        for cl in j.get("cron_lines") or []:
+            if "delsnaps.sh" not in cl and raw_tier and raw_tier in cl and (j.get("scope") or "\0") in cl:
+                m = re.search(r'\(([^)]*)\)"', cl)
+                own_tag = m.group(1) if m else ""
+                break
+        if kind == "dataset" and ret and own_tag:
+            for cl in j.get("cron_lines") or []:
+                if "delsnaps.sh" not in cl or raw_tier not in cl or ("(%s)" % own_tag) not in cl:
+                    continue
+                psched = " ".join(cl.split()[:5])
+                if (j.get("label") or "", psched, ret) in prune_sections:
+                    break
+                pnxt = cron_next(psched, now)
+                pit = dict(items[-1])
+                pit.update({"task": u"porządki " + ret, "schedule": psched, "czas": "-", "gb": "-",
+                            "vol": None, "srow": None, "next_epoch": pnxt,
+                            "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
+                            "reasons": list(items[-1]["reasons"])})
+                items.append(pit)
+                break
     # GRUPOWANIE: relacja synchro (albo kazda inna z kilkoma datasetami pod tym
     # samym zadaniem) miala tyle wierszy F2, ile linii crona -- ten sam blad,
     # ktory `rel_pairs` naprawil na F3 (2026-09-21). Klucz = to, co wiersz
@@ -1091,8 +1132,12 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message=""):
         # (ostatni/sredni/maks, jedna komorka) i GB. Przy 80 kolumnach
         # Harmonogram zostaje w panelu, Kierunek dostaje to, co zostanie.
         nw = max(8, min(16, max([len(r["name"]) for r in rows] + [8])))
-        tw = max(12, min(20, max([len(r["task"]) for r in rows] + [12])))
-        cw, gw, vw = 11, 5, 13
+        tw = max(12, min(24, max([len(r["task"]) for r in rows] + [12])))   # 24: "pobranie automated x9", "porządki źródła -H168 x9"
+        cw, gw = 11, 5
+        # "Kopie" tak szeroka, jak jej najdluzsze SLOWO (nie ponizej naglowka): stale 13
+        # pod "nie odpowiada" zabieralo dwa znaki Kierunkowi, kiedy Zadanie urosło do
+        # "pobranie automated x9" -- przy 100 kolumnach adres synchro wychodził z "…".
+        vw = max(len("Kopie"), min(13, max([len(r.get("vword") or "") for r in rows] + [5])))
         # O KOLUMNIE DECYDUJE SZEROKOSC TABELI, NIE TERMINALA. Od 120 kolumn panel
         # staje z BOKU i lista ma tyle miejsca, co przy 80 -- a mimo to dostawala
         # kolumne Harmonogram, ktora przy 80 jest swiadomie chowana. Efekt byl taki,
