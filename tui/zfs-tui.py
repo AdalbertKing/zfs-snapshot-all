@@ -114,12 +114,19 @@ def home_dir():
     return os.environ.get("HOME") or os.path.expanduser("~")
 
 
-def direction_of(host, peer, dirs):
+def direction_of(host, peer, dirs, mode=None):
     """`pve10>pve9` wysylam, `pve10<pve9` pobieram, `pve10<>pve9` w obie strony,
-    `local` w obrebie hosta. Lewa strona to ZAWSZE ten host."""
+    `local` w obrebie hosta. Lewa strona to ZAWSZE ten host.
+
+    ZAPISANY TRYB WYGRYWA z odczytem linii crona -- relacja synchro ciagnie
+    OBIE strony PULLEM (kazdy kolektor pobiera od drugiego pod ta sama
+    sciezka), wiec heurystyka z samych `dirs` widziala tylko "pull" i rysowala
+    `<`, nie `<>` (owner brief, runda 2 ekranow)."""
     dirs = set(dirs)
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
+    if mode == "sync":
+        return "%s<>%s" % (host, peer)
     if "pull" in dirs and "push" in dirs:
         return "%s<>%s" % (host, peer)
     if "pull" in dirs:
@@ -256,6 +263,23 @@ def fmt_when(epoch, now):
     if t[:3] == n[:3]:
         return time.strftime("%H:%M", t)
     return time.strftime("%Y-%m-%d %H:%M", t)
+
+
+def fmt_when_short(epoch, now):
+    """Jak fmt_when(), ale dni starsze niz dzis dostaja zapis BEZ ROKU
+    (`20.09 22:00`) -- kolumna Kiedy na F4 musi zmiescic date I dlugosc biegu
+    w jednej komorce; pelna `%Y-%m-%d %H:%M` (16 znakow) nie zostawiala miejsca
+    na czas trwania i ucinala go wielokropkiem (owner brief, runda 2 ekranow)."""
+    try:
+        epoch = int(epoch)
+    except (TypeError, ValueError):
+        return "?"
+    if epoch <= 0:
+        return "?"
+    t, n = time.localtime(epoch), time.localtime(now)
+    if t[:3] == n[:3]:
+        return time.strftime("%H:%M", t)
+    return time.strftime("%d.%m %H:%M", t)
 
 
 def fmt_full(epoch):
@@ -881,7 +905,7 @@ def build_relations(data, now):
         st = rel_stats(data, my_jobs)
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
-            "dir": direction_of(host, rel.get("peer_host") or "", dirs),
+            "dir": direction_of(host, rel.get("peer_host") or "", dirs, rel.get("mode")),
             "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
@@ -949,9 +973,10 @@ def job_src_dst(j):
 def build_jobs(data, now):
     """Wiersze ekranu ZADANIA: jedno zadanie z crona (sekcja wysylki albo
     porzadkow), z relacja i kierunkiem. To jest to, co host naprawde robi."""
-    rows = []
+    items = []
     monitors = (data.monitors or {}).get("monitors", [])
     host = (data.jobs or {}).get("host") or "?"
+    rels_by_name = {r.get("name"): r for r in (data.status or {}).get("relations", [])}
     for j in (data.jobs or {}).get("jobs", []):
         v, reason = verdict_for_job(j, monitors)
         tier = j.get("tier", "")
@@ -973,6 +998,7 @@ def build_jobs(data, now):
             _d = j.get("direction", "")
             _w = {"pull": u"pobranie ", "push": u"wysyłka ", "local": u"kopia "}.get(_d, u"transfer ")
             task = _w + fam
+        mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
         srow, vol = job_stats_for(data, j, clabel)
@@ -981,16 +1007,59 @@ def build_jobs(data, now):
         else:
             czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
             gb = hbytes_short(vol) if vol is not None else "-"
-        rows.append({
+        items.append({
             "kind": "job", "name": j.get("label") or "(bez rel.)", "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
-            "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")]),
-            "task": task, "tier": tier, "scope": j.get("scope", ""),
+            "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
+            "mode": mode, "task": task, "tier": tier, "scope": j.get("scope", ""),
             "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
             "reasons": [reason] if reason else [], "next_epoch": nxt,
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
             "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
+    # GRUPOWANIE: relacja synchro (albo kazda inna z kilkoma datasetami pod tym
+    # samym zadaniem) miala tyle wierszy F2, ile linii crona -- ten sam blad,
+    # ktory `rel_pairs` naprawil na F3 (2026-09-21). Klucz = to, co wiersz
+    # OPOWIADA (relacja, kierunek, zadanie, harmonogram); scope roznicuje
+    # datasety, ale nie zmienia opowiesci, wiec nie wchodzi do klucza. Werdykt
+    # NAJGORSZY przez worst() -- druga kolumna VERDICTS to numer koloru, nie
+    # powaga (ta sama pulapka, opisana w rel_pairs). Wolumen sumowany, kiedy
+    # znany dla kazdego z grupy; kolejnosc = pierwsze wystapienie.
+    grouped, order = {}, []
+    for it in items:
+        key = (it["name"], it["dir"], it["task"], it["schedule"])
+        if key not in grouped:
+            grouped[key] = it
+            order.append(key)
+            it["_verdicts"] = [it["verdict"]]
+            it["_count"] = 1
+            continue
+        g = grouped[key]
+        g["_count"] += 1
+        g["_verdicts"].append(it["verdict"])
+        g["jobs"].append(it["job"])
+        for r in it["reasons"]:
+            if r not in g["reasons"]:
+                g["reasons"].append(r)
+        if it["next_epoch"] and (g["next_epoch"] is None or it["next_epoch"] < g["next_epoch"]):
+            g["next_epoch"], g["next"] = it["next_epoch"], it["next"]
+        if g.get("vol") is not None and it.get("vol") is not None:
+            g["vol"] = g["vol"] + it["vol"]
+            g["gb"] = hbytes_short(g["vol"])
+        else:
+            g["vol"], g["gb"] = None, ("?" if data.failed("stats") else "-")
+        if it["czas"] not in ("-", "?") and g["czas"] in ("-", "?"):
+            g["czas"] = it["czas"]
+    rows = []
+    for key in order:
+        g = grouped[key]
+        g["verdict"] = worst(g["_verdicts"])
+        g["vword"] = VERDICTS.get(g["verdict"], (g["verdict"], 0))[0]
+        if g["_count"] > 1:
+            g["task"] = "%s x%d" % (g["task"], g["_count"])
+        del g["_verdicts"]
+        del g["_count"]
+        rows.append(g)
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
             "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None, "dir": "?",
@@ -1227,11 +1296,20 @@ def rel_detail_pairs(row, data, now, ch):
                 (u"powód", row["reasons"][0] if row["reasons"] else "?")]
     if row["kind"] == "job":
         j = row["job"]
-        src, dst = job_src_dst(j)
-        # Kolejnosc = to, po co wlasciciel otwiera panel (2026-09-11): zrodlo,
-        # cel, potem czasy i wolumen jak w mailu; reszta nizej (przy 80
-        # kolumnach panel ma 7 linii, calosc jest w oknie po Enter).
-        pairs = [(u"źródło", src), ("cel", dst)]
+        jobs_here = row.get("jobs") or [j]
+        if len(jobs_here) > 1:
+            # GRUPA: kilka datasetow pod jednym wierszem F2 (ta sama relacja,
+            # kierunek, zadanie, harmonogram -- build_jobs je zlaczyl). Panel
+            # wymienia KAZDY, bo to jest to, co naprawde chodzi (owner brief,
+            # runda 2 ekranow) -- jeden zrodlo/cel na linie, nie jedna para
+            # dla calej grupy.
+            pairs = [(u"zakres %d" % i, "%s -> %s" % job_src_dst(jj)) for i, jj in enumerate(jobs_here, 1)]
+        else:
+            src, dst = job_src_dst(j)
+            # Kolejnosc = to, po co wlasciciel otwiera panel (2026-09-11): zrodlo,
+            # cel, potem czasy i wolumen jak w mailu; reszta nizej (przy 80
+            # kolumnach panel ma 7 linii, calosc jest w oknie po Enter).
+            pairs = [(u"źródło", src), ("cel", dst)]
         st = data.stats or {}
         win = st.get("window_days", "?")
         srow = row.get("srow")
@@ -1259,7 +1337,12 @@ def rel_detail_pairs(row, data, now, ch):
                   # powtarzala pierwsza innym alfabetem. Zostaje zapis z kolumny
                   # F2 (ten host ZAWSZE po lewej) plus SLOWO, ktore mowi, co to
                   # znaczy -- bo to slowo jest tym, czego szuka czytajacy.
+                  # SYNCHRO NIE "POBIERA" -- kazda strona ciagnie do siebie pod
+                  # ta sama sciezka, wiec "ten host pobiera" jest nieprawdziwe;
+                  # rekord (row["mode"]) wygrywa z surowym kierunkiem linii crona
+                  # (owner brief, runda 2 ekranow).
                   ("kierunek", "%s   %s" % (row.get("dir", "?"),
+                      u"oba hosty trzymają te same datasety" if row.get("mode") == "sync" else
                       {"pull": u"ten host pobiera", "push": u"ten host wysyła",
                        "local": u"kopia u siebie"}.get(j.get("direction", ""), u"kierunek nieznany"))),
                   ("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?")))]
@@ -1858,6 +1941,18 @@ def build_transfers(data, now):
     return running, done
 
 
+def transfer_when(t, now):
+    """Kolumna Kiedy: 'w toku' liczy od ostatniej aktualizacji, zakonczony
+    dostaje date (skrocona, bez roku, jesli nie dzis -- fmt_when_short) plus
+    czas trwania. Wydzielone z transfer_row(), zeby render_transfery mogl
+    zmierzyc DLUGOSC tej kolumny PRZED narysowaniem wierszy (tw sie od niej
+    liczy, nie odwrotnie)."""
+    if t.get("state") == "running":
+        return fmt_ago(t.get("updated_epoch"), now)
+    st, fin = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0)
+    return "%s %s" % (fmt_when_short(fin or st, now), fmt_dur(fin - st) if fin and st else "")
+
+
 def transfer_row(t, now, cols, ch):
     nw, dw, mw, pw, sw, tw = cols
     wd, note = transfer_word(t, now)
@@ -1870,11 +1965,9 @@ def transfer_row(t, now, cols, ch):
             prog = human_bytes(dn)
         else:
             prog = "?"
-        when = fmt_ago(t.get("updated_epoch"), now)
     else:
         prog = human_bytes(tot) if tot > 0 else (human_bytes(dn) if dn > 0 else "-")
-        st, fin = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0)
-        when = "%s %s" % (fmt_when(fin or st, now), fmt_dur(fin - st) if fin and st else "")
+    when = transfer_when(t, now)
     ds = t.get("dataset", "").split("@", 1)[0]
     return "%s %s %s %s %s %s" % (fit(t.get("label") or "(bez rel.)", nw, ch), fit_left(ds, dw, ch), fit(mode, mw, ch),
                                   fit(prog, pw, ch), fit(wd, sw, ch), fit(when, tw, ch))
@@ -1919,8 +2012,14 @@ def render_transfery(data, cursor, width, height, now, ch, message=""):
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(20, max([len(t.get("label") or "(bez rel.)") for t in allrows] + [8])))
-        mw, pw, sw, tw = 9, 12, 7, 16
-        dw = inner - (nw + mw + pw + sw + tw + 5)
+        mw, pw, sw = 9, 12, 7
+        # KIEDY NIE UCINA SIE NIGDY -- data starsza niz dzis plus czas trwania
+        # nie mieszcily sie w stalych 16 znakach i wychodzily jako
+        # "2026-09-20 22:0…" (owner brief, runda 2). Szerokosc liczona z
+        # TRESCI (fmt_when_short + fmt_dur), nie z gory ustalona; Dataset
+        # dostaje reszte i to on traci miejsce, kiedy terminal jest wazki.
+        tw = max(12, min(20, max([len(transfer_when(t, now)) for t in allrows] + [12])))
+        dw = max(8, inner - (nw + mw + pw + sw + tw + 5))
         cols = (nw, dw, mw, pw, sw, tw)
         hdr = "%s %s %s %s %s %s" % (fit("Relacja", nw), fit("Dataset", dw), fit("Tryb", mw), fit("Dane", pw), fit("Stan", sw), fit("Kiedy", tw))
         panel_h = 0 if beside else 9

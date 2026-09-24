@@ -377,6 +377,40 @@ else
     bad "zadania: harmonogram 80/100" "$Z" "$Z100"
 fi
 
+# ============================================================================
+# SYNCHRO: "<>" nie "<" (rekord mowi, linia crona nie umie) + F2 GRUPOWANIE
+# ============================================================================
+# Atrapa relacji: sync-test ma TRZY linie crona identyczne poza zakresem (a/b/c,
+# ten sam harmonogram) plus czwarta pod INNYM harmonogramem (d) -- ta czwarta
+# NIE ma sie zlaczyc. backup-test to relacja BEZ rekordu synchro (mode
+# nieobecny), zeby pokazac, ze "<" zostaje, kiedy rekord nie mowi "sync".
+GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
+G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 2>&1)"
+GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
+if hasE "$G" '^║ sync-test +pve20<>192\.168\.28\.50 +pobranie hourly x3 ' \
+    && [ "$(printf '%s\n' "$G" | grep -cE '^║ sync-test ')" -eq 2 ] \
+    && hasE "$G" '^║ backup-test +pve20<192\.168\.28\.60 +pobranie hourly '; then
+    ok "zadania: F2 -- synchro rysuje '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz z 'x3', czwarty (inny harmonogram) NIE laczy sie; backup zostaje na '<'"
+else
+    bad "zadania: F2 grupowanie i symbol synchro" "$G"
+fi
+if has "$G" 'zakres 1' && has "$G" 'zakres 2' && has "$G" 'zakres 3' \
+    && has "$G" 'hdd/lab/a' && has "$G" 'hdd/lab/b' && has "$G" 'hdd/lab/c'; then
+    ok "zadania: panel wiersza x3 wymienia WSZYSTKIE trzy zakresy, nie jedna pare zrodlo/cel"
+else
+    bad "zadania: panel grupy" "$G"
+fi
+if has "$G" 'oba hosty trzymają te same datasety'; then
+    ok "zadania: panel kierunku synchro mowi 'oba hosty trzymaja', nie 'ten host pobiera'"
+else
+    bad "zadania: panel kierunku synchro" "$G"
+fi
+if hasE "$GR" '^║ sync-test +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ backup-test +pve20<192\.168\.28\.60 '; then
+    ok "relacje: F3 tez rysuje '<>' dla synchro (z rekordu, nie z linii crona) i '<' dla backupu"
+else
+    bad "relacje: symbol synchro na F3" "$GR"
+fi
+
 # ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
 # Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel
 # to ladowisko tutaj; kierunek mowi, ktore jest ktorym.
@@ -679,6 +713,18 @@ if has "$TW" '╔═ transfer lab-srv-b ═' && has "$TW" 'Migawka  hdd/lab/srv-
     ok "transfery: Enter otwiera szczegoly wiersza pod kursorem jako okno"
 else
     bad "transfery: Enter" "$TW"
+fi
+
+# KOLUMNA KIEDY NIE UCINA SIE. Wpis z innego dnia niz "dzis" (fmt_when_short:
+# DD.MM HH:MM, bez roku) plus czas trwania (45 min) mial sie NIE zmiescic w
+# starej stalej szerokosci 16 i wychodzil jako "...22:0…" (owner brief, runda 2).
+OLD100="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 100 2>&1)"
+OLD120="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 120 2>&1)"
+if hasE "$OLD100" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} 45 min' && ! has "$OLD100" '…' \
+    && hasE "$OLD120" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} 45 min' && ! has "$OLD120" '…'; then
+    ok "transfery: Kiedy starszego wpisu -- DD.MM HH:MM + czas trwania w calosci, bez wielokropka, przy 100 i 120 kolumnach"
+else
+    bad "transfery: kolumna Kiedy starszego wpisu" "$OLD100" "$OLD120"
 fi
 
 # ============================================================================
