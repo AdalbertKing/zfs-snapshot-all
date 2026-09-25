@@ -1345,7 +1345,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         title = u"Zadania na %s (%s, %s) -- %s" % (
             host, plural(len([r for r in rows if r["kind"] == "job"]), "zadanie", "zadania", u"zadań"),
             plural(n_rel, "relacja", "relacje", "relacji"), ZAD_SORT_LABELS[sort_mode])
-        footer = u"s sortowanie" + (u"   Enter szczegóły" if rows else "")
+        footer = u"F7 sortowanie" + (u"   Enter szczegóły" if rows else "")
         lb = box(ch, title, body, lbw, footer=footer)
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
@@ -1370,7 +1370,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("zadania", width))
+    scr.lines.append(key_bar("zadania", width, extra=" ".join("%s %s" % a for a in screen_actions("zadania"))))
     scr.bars.add(len(scr.lines) - 1)
     return scr
 
@@ -1433,9 +1433,27 @@ def top_bar(data, width, now, ascii_only, err_count):
     return fit(line, width)
 
 
+# KLAWISZE F (R4-1/R4-2, wlasciciel 2026-09-24): F1-F6 to GLOWNE OKNA, F10
+# wyjscie, a F7/F8/F9 to AKCJE BIEZACEGO OKNA, podpisane w listwie (styl mc).
+# Litery NIE sa skrotami: kazdy drukowalny znak idzie do linii polecen (bash)
+# -- 'u' na F4 i 's' na F2 z rundy 3 byly martwe w prawdziwym GUI, bo petla
+# curses oddawala je linii, zanim ekran je zobaczyl. Odswiez przeszlo z F9 na
+# F5 (wolne po zniesieniu Monitora), zeby F9 bylo trzecia akcja okna.
+def screen_actions(active, hide_gone=False):
+    """[(klawisz, podpis)] akcji okna -- JEDNO zrodlo dla listwy i dla pomocy."""
+    if active == "zadania":
+        return [("F7", u"Sortuj")]
+    if active == "relacje":
+        return [("F7", u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
+    if active == "transfery":
+        return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
+    return []
+
+
 def key_bar(active, width, extra=""):
     """Listwa F-klawiszy. Przy 80 kolumnach miesci sie DOKLADNIE, wiec kazde
-    slowo tu jest policzone; przy szerszym terminalu dochodzi odswiezenie."""
+    slowo tu jest policzone; przy szerszym terminalu dochodza akcje okna
+    (F7-F9, `extra`) i odswiezenie (F5)."""
     parts = ["F1 Pomoc"]
     for key, fk, label in SCREENS:
         parts.append(("[%s %s]" if key == active else "%s %s") % (fk, label))
@@ -1446,7 +1464,7 @@ def key_bar(active, width, extra=""):
     if extra and width >= len(line) + len(extra) + 1:
         line += " " + extra
     if width >= len(line) + 12:
-        line += u" F9 Odśwież"
+        line += u" F5 Odśwież"
     return fit(line, width)
 
 
@@ -1990,8 +2008,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         btitle += u", %s" % how
     if wide and pairs:
         btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
-    bfoot = (u"Enter szczegóły  F4 pauza  Del usuń  F7 eksport  F8 import  Ins nowa  Tab pary" if width >= 100
-             else u"Enter F4:pauza Del F7:eksport F8:import Ins Tab") if rows else u"F8 import z pliku   Ins nowa relacja"
+    bfoot = (u"Enter szczegóły  F7 pauza  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" if width >= 100
+             else u"Enter F7:pauza F8:eksport F9:import Del Ins Tab") if rows else u"F9 import z pliku   Ins nowa relacja"
     if focus == "pairs":
         bfoot = u"Enter = to zadanie na F2   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
@@ -2454,7 +2472,7 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
         # MOWI, w ktorym stanie jest (nie ma innego wspolnego naglowka "Transfery").
         done_title = u"Zakończone (%d) -- bez usuniętych relacji" % len(done) if hide_gone else u"Zakończone (%d)" % len(done)
         donebox = box(ch, done_title, dbody, lbw,
-                      footer=u"Enter szczegóły" if allrows else "")
+                      footer=((u"F7 pokaż usunięte" if hide_gone else u"F7 ukryj usunięte") + (u"   Enter szczegóły" if allrows else "")))
         left = runbox + donebox
         if cur_y:
             which, y = cur_y
@@ -2482,7 +2500,7 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("transfery", width, extra=(u"u pokaż usunięte" if hide_gone else u"u ukryj usunięte")))
+    scr.lines.append(key_bar("transfery", width, extra=" ".join("%s %s" % a for a in screen_actions("transfery", hide_gone))))
     scr.bars.add(len(scr.lines) - 1)
     return scr
 
@@ -2704,11 +2722,11 @@ HELP = [
     u"                 następny bieg, czasy i GB jak w mailu (ostatni/średni/maks,",
     u"                 okno digestu), kopie; panel szczegółów dodaje strażnika",
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
-    u"                 pilnowania) jest własnym wierszem. s przełącza sortowanie",
+    u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (okno ma zakładki Opis/",
-    u"                 Config/Cron, Tab przełącza), F4 pauza/wznów, Del usuń,",
-    u"                 F7 eksport do pliku, F8 import z pliku: najpierw werdykt",
+    u"                 Config/Cron, Tab przełącza), F7 pauza/wznów, Del usuń,",
+    u"                 F8 eksport do pliku, F9 import z pliku: najpierw werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
     u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach",
@@ -2719,7 +2737,7 @@ HELP = [
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress);",
-    u"                 u chowa/pokazuje transfery relacji, których już nie ma",
+    u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
     u"  F6  Nośniki    repliki na dyskach wymiennych i cztery stany nośnika",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
@@ -2733,12 +2751,15 @@ HELP = [
     u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
     u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
     u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
-    u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery nie są",
-    u"                 skrótami na ekranach (wyjątek: 'u' na F4 i 's' na F2, patrz wyżej) --",
-    u"                 wszystko inne, co piszesz, idzie do linii.",
+    u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery NIGDY",
+    u"                 nie są skrótami na ekranach -- wszystko, co piszesz, idzie",
+    u"                 do linii.",
+    "",
+    u"  F1-F6             główne okna; F10 wyjście",
+    u"  F7 F8 F9          akcje BIEŻĄCEGO okna, podpisane w listwie i w ramce",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
-    u"  F9 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
+    u"  F5 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
     u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
     u"  F10               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
     "",
@@ -3066,9 +3087,9 @@ class UI(object):
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""
         # Import i nowa relacja NIE potrzebuja istniejacej relacji: na pustym
-        # kolektorze -- dokladnie tam, gdzie sie importuje -- F8 i Ins milczaly,
+        # kolektorze -- dokladnie tam, gdzie sie importuje -- import i Ins milczaly,
         # bo ponizej najpierw szukamy zaznaczonej relacji (pve11, 2026-09-23).
-        if k == "F8":
+        if k == "F9":
             return self.import_ask_file(os.path.join(home_dir(), ""))
         if k == "ins":
             return self.run_wizard()
@@ -3079,21 +3100,21 @@ class UI(object):
             return
         n = r["name"]
         rel = r["rel"]
-        if k == "F4":
+        if k == "F7":
             if rel.get("paused_local"):
                 self.confirm(u"Wznów relację %s" % n, [self.zb(), "resume-client", n],
                              [u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo."])
             else:
                 self.confirm(u"Wstrzymaj relację %s" % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                              [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
-                              u"monitor mówi OK z pauzy. Odwrotność: F4 na tej relacji jeszcze raz (resume-client)."])
+                              u"monitor mówi OK z pauzy. Odwrotność: F7 na tej relacji jeszcze raz (resume-client)."])
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
             # samo remove-client zostawialo rekord `removed`, ktory trzymal NAZWE, wiec
             # "usun i zaloz od nowa" -- jedyna dzis droga zmiany relacji -- nie dzialalo
             # (zmierzone na pve10, 2026-09-20).
             return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
-        elif k == "F7":
+        elif k == "F8":
             default = os.path.join(home_dir(), "%s.export.json" % n)
             self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zatwierdź, Esc = anuluj):", default,
                         lambda path: self.confirm(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"],
@@ -3541,19 +3562,18 @@ class UI(object):
             elif k == "F1":
                 self.window, self.scroll = ("pomoc", None), 0
             return "stay"
-        # NOTE 8 (wlasciciel, 2026-09-24): 'u' na F4 chowa/pokazuje transfery
-        # relacji, ktorych juz nie ma -- WYJATEK od "litery nie sa skrotami"
-        # (dziennik transferow ma miec przelacznik), zastrzezony do pustej
-        # linii polecen, zeby dalo sie wpisac slowo zawierajace 'u'.
-        if k == "u" and self.screen == "transfery" and not self.cmd:
+        # AKCJE OKNA NA F7 (R4-2): przelacznik transferow usunietych relacji na F4
+        # (NOTE 8) i widok sortowania na F2 (R3-4). Wczesniej byly to litery 'u'
+        # i 's' -- martwe w prawdziwym GUI, bo petla curses oddaje kazdy
+        # drukowalny znak linii polecen. Dzialaja takze przy tekscie w linii
+        # (klawisz F nie jest tekstem, wiec niczego nie zabiera).
+        if k == "F7" and self.screen == "transfery":
             self.hide_transfers_gone = not self.hide_transfers_gone
             self.cursor["transfery"] = min(self.cursor["transfery"], max(0, self.count("transfery") - 1))
             return "stay"
-        # R3-4 (wlasciciel, 2026-09-24): 's' na F2 przelacza widok sortowania --
-        # ten sam WYJATEK i ten sam warunek (pusta linia polecen) co 'u' na F4.
         # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
         # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
-        if k == "s" and self.screen == "zadania" and not self.cmd:
+        if k == "F7" and self.screen == "zadania":
             cur_row = self.jobrows[self.cursor["zadania"]] if self.jobrows and 0 <= self.cursor["zadania"] < len(self.jobrows) else None
             self.zad_sort = (self.zad_sort + 1) % 3
             self.jobrows = sort_zad_rows(self.jobrows, self.zad_sort, self.data)
@@ -3575,7 +3595,8 @@ class UI(object):
             self.cmd += raw
             self.hist_pos = None
             return "stay"
-        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F10")
+        # Klawisz F dziala takze przy tekscie w linii -- nie jest tekstem.
+        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10")
         if self.cmd and k not in FKEYS:
             if k == "bs":
                 self.cmd = self.cmd[:-1]
@@ -3629,20 +3650,23 @@ class UI(object):
                         if jr.get("job") is j:
                             self.cursor["zadania"], self.screen, self.focus = i, "zadania", "list"
                             break
-            elif k in ("F4", "del", "F7", "F8", "ins"):
+            elif k in ("F7", "F8", "F9", "del", "ins"):
                 res = self.action(k)
                 if res:
                     return res
+            elif k in ("F5", "ctrl-r"):
+                self.refresh()
+                self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
             else:
                 for key, fk, _label in SCREENS:
-                    if k == fk and k != "F4":
+                    if k == fk:
                         self.screen, self.focus = key, "list"
             self.pair_cursor = c
             return "stay"
-        # F4 na F3 to PAUZA, nie ekran Transfery (tam prowadzi F4 z innych ekranow):
-        # tak stoi w makiecie wlasciciela i w listwie stopki.
+        # F2-F6 ZAWSZE przelaczaja okno (R4-1: F4 na F3 bylo pauza i przechwytywalo
+        # Transfery). Pauza jest teraz na F7.
         for key, fk, _label in SCREENS:
-            if k == fk and not (k == "F4" and self.screen == "relacje"):
+            if k == fk:
                 self.screen = key
                 return "stay"
         n = self.count(self.screen)
@@ -3659,10 +3683,10 @@ class UI(object):
             c = 0
         elif k == "end":
             c = max(0, n - 1)
-        elif k in ("F9", "ctrl-r", "F5r"):
+        elif k in ("F5", "ctrl-r"):
             self.refresh()
             self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
-        elif k in ("F4", "del", "F7", "F8", "ins") and self.screen == "relacje":
+        elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
@@ -3800,6 +3824,27 @@ UI.render = _ui_render_final
 # ---------------------------------------------------------------------------
 # CURSES: cienka petla nad UI
 # ---------------------------------------------------------------------------
+# Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
+# na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
+# kazdy drukowalny znak jest tekstem linii polecen.
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("r"): "r", ord("t"): "t", ord("e"): "e",
+               ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
+               ord("?"): "F1", ord("h"): "F1"}
+
+
+def live_key_name(ui, k):
+    """Nazwa klawisza z --keys, przepuszczona przez TE SAME reguly co petla
+    curses (R4-2). Pojedynczy drukowalny znak bez okna na wierzchu -- albo w
+    polu tekstowym -- to TEKST; w innym oknie znaczy tyle, ile LETTER_KEYS,
+    a spoza niej nic. Bez tego `--keys u` sprawdzal skrot, ktorego operator
+    nie mogl nacisnac (runda 3: 'u' i 's' zielone w testach, martwe na zywo)."""
+    if len(k) != 1 or not k.isprintable():
+        return k
+    if not ui.window or ui.window[0] in ("prompt", "form"):
+        return "text:" + k
+    return LETTER_KEYS.get(ord(k), "")
+
+
 def curses_loop(ui):
     import curses
 
@@ -3834,7 +3879,7 @@ def curses_loop(ui):
                     start = i + len(word)
         stdscr.refresh()
 
-    KEYMAP = {}
+    KEYMAP = dict(LETTER_KEYS)
 
     def main(stdscr):
         curses.curs_set(0)
@@ -3855,9 +3900,7 @@ def curses_loop(ui):
                        curses.KEY_F3: "F3", curses.KEY_F4: "F4", curses.KEY_F5: "F5", curses.KEY_F6: "F6",
                        curses.KEY_F7: "F7", curses.KEY_F8: "F8", curses.KEY_IC: "ins", curses.KEY_DC: "del",
                        curses.KEY_BACKSPACE: "bs", 127: "bs", 8: "bs", curses.KEY_ENTER: "enter",
-                       10: "enter", 13: "enter", 27: "esc", ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("r"): "r",
-                       ord("t"): "t", ord("e"): "e", ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
-                       ord("?"): "F1", ord("h"): "F1", curses.KEY_F10: "F10", curses.KEY_F9: "F9", 9: "tab",
+                       10: "enter", 13: "enter", 27: "esc", curses.KEY_F10: "F10", curses.KEY_F9: "F9", 9: "tab",
                        21: "ctrl-u", 18: "ctrl-r"})
         stdscr.keypad(True)
         # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
@@ -4056,7 +4099,8 @@ def main(argv):
     if a.render_once:
         ui.screen = a.screen
         for k in [x for x in a.keys.split(",") if x]:
-            if ui.key(k, a.height) == "quit":
+            name = live_key_name(ui, k)
+            if name and ui.key(name, a.height) == "quit":
                 break
         print("\n".join(ui.render(a.width, a.height).lines))
         return 0
