@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4a567901f441e060 -->
+<!-- status-covers-digest: 80dd7dfb3dac6fbf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,21 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Rozrzut harmonogramu zachowuje odstępy szczebli profilu (R5-7, 2026-09-25).**
+  - **Zmierzone na pve10:** pve9b (m31w4d7h24) miało hourly, daily, weekly i monthly WSZYSTKIE
+    o minucie :00 (profil: :01, 01:11, 02:21, 03:31). Pobranie godzinowe i dzienne startują w tej
+    samej minucie na tych samych datasetach; blokada silnika przepuszcza jedno, drugie loguje
+    „Another instance … skipping” i kończy **rc=0**. Brak kopii dziennej od 22.09, widział to
+    tylko monitor (CRITICAL 71 h). pve11 ma wszystko o :56 -- ten sam układ.
+  - **Zmiana (`zfs-backup.sh`):** przy rozrzucie szczebel po szczeblu minuta relacji trafia
+    na PIERWSZY szczebel, a pozostałe przesuwają się o tę samą różnicę (`schedule_spread_tiers`):
+    dla :00 -- hourly :00, daily 01:10, weekly 02:20, monthly 03:30. Szczebel z minutą nieliczbową
+    (`*/15`) dostaje minutę relacji jak dotąd. Test `stagger` (2 nowe, 28/0).
+  - **Nie obejmuje istniejących relacji:** minuta zapisuje się przy ZAKŁADANIU. pve9b i pve11
+    na pve10 mają stary układ, dopóki nie zostaną założone ponownie (np. eksport → usunięcie →
+    import) -- do decyzji właściciela.
+  - **Znana luka (silnik, zamrożony):** pominięcie biegu przez blokadę kończy się rc=0 --
+    dziennik wygląda zdrowo.
 - **`progress --json` odporne na rekord ze sklejonym drugim końcem (R5-8, 2026-09-25).**
   - **Zmierzone na pve10:** jeden plik rekordu miał `…"finished_epoch":1790364665},"state":"verified","finished_epoch":1790368264}`
     (drugi koniec dokładnie godzinę później) -- cały dokument JSON nieważny, GUI „! bez odpowiedzi: 1”,

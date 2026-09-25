@@ -4260,23 +4260,21 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # multi-cadence profile could not be given one -- and got no spreading, which
     # is how two `prod` relationships on pve9 came to fire two seconds apart.
     # gen-cron now resolves both schedules per tier, so each tier keeps its OWN
-    # cadence and receives THIS relationship's minute.
+    # cadence and is SHIFTED by this relationship's minute, keeping the profile's
+    # offsets between tiers (schedule_spread_tiers, R5-7).
     #
     # Built here, once, next to the single-field values, so both paths share
     # schedule_pick_minute's answer and the 20-minute send/prune gap.
     local _tier_sched=""
     if [ -z "$stagger_send_expr" ] || [ -z "$stagger_prune_expr" ]; then
-        local _t _e
-        while IFS="$(printf '\t')" read -r _t _e; do
-            [ -n "$_t" ] && [ -n "$_e" ] || continue
-            _tier_sched="$_tier_sched	send_schedule_$_t = $(schedule_with_minute "$_e" "$stagger_min")
-"
-        done < <([ -z "$stagger_send_expr" ] && schedule_tier_exprs send)
-        while IFS="$(printf '\t')" read -r _t _e; do
-            [ -n "$_t" ] && [ -n "$_e" ] || continue
-            _tier_sched="$_tier_sched	prune_schedule_$_t = $(schedule_with_minute "$_e" "$stagger_prune")
-"
-        done < <([ -z "$stagger_prune_expr" ] && schedule_tier_exprs prune)
+        # $(...) strips the trailing newline, so each block gets its own back --
+        # otherwise the last send line and the first prune line fuse into one.
+        local _ss="" _sp=""
+        [ -z "$stagger_send_expr" ]  && _ss="$(schedule_tier_exprs send  | schedule_spread_tiers send  "$stagger_min")"
+        [ -z "$stagger_prune_expr" ] && _sp="$(schedule_tier_exprs prune | schedule_spread_tiers prune "$stagger_prune")"
+        _tier_sched="${_ss:+$_ss
+}${_sp:+$_sp
+}"
         [ -n "$_tier_sched" ] && log "schedule: spreading this relationship tier by tier (its profile declares several cadences, and one section-level value would have flattened them onto the first)"
     fi
 
@@ -4711,6 +4709,37 @@ schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
 # (e.g. "0 3 * * *") into an hourly one -- caught by the suite's assertion that
 # a profile's cadence reaches the rendered cron. The spread is about WHICH
 # minute inside the tier's own rhythm, never about the rhythm itself.
+# THE TIERS KEEP THEIR OFFSETS (R5-7, pve10 2026-09-25). The first version
+# gave EVERY tier this relationship's minute: m31w4d7h24 declares hourly :01,
+# daily 01:11, weekly 02:21, monthly 03:31 -- ten minutes apart on purpose --
+# and pve9b was installed with all four at :00. The hourly and the daily pull
+# then start in the SAME minute on the SAME datasets, the engine's per-dataset
+# lock lets one through, and the other logs "Another instance ... skipping"
+# and exits 0: pve9b had no daily copy from 2026-09-22 and only the monitor
+# said so (CRITICAL 71h). pve11 had all four tiers at :56 for the same reason.
+# Now the relationship's minute is where the FIRST tier lands and every other
+# tier moves by the same delta, so the profile's spacing survives the spread.
+# A tier whose minute is not a plain number (a */15 or a list) cannot be
+# shifted meaningfully and gets the relationship's minute, as before.
+#   stdin: "<tier>\t<cron expression>" per tier (schedule_tier_exprs)
+#   out:   "\t<send|prune>_schedule_<tier> = <expression>" per tier, newline-separated
+schedule_spread_tiers() {   # <send|prune> <minute for the first tier>
+    local field="$1" min="$2" t e delta="" m out=""
+    while IFS="$(printf '\t')" read -r t e; do
+        [ -n "$t" ] && [ -n "$e" ] || continue
+        m="${e%% *}"
+        case "$m" in
+            ''|*[!0-9]*) out="$out	${field}_schedule_$t = $(schedule_with_minute "$e" "$min")
+" ; continue ;;
+        esac
+        [ -n "$delta" ] || delta=$(( min - 10#$m ))
+        out="$out	${field}_schedule_$t = $(schedule_with_minute "$e" "$(( ((10#$m + delta) % 60 + 60) % 60 ))")
+"
+    done
+    printf '%s' "${out%
+}"
+}
+
 schedule_with_minute() {   # <cron expression> <minute> -> expression with field 1 replaced
     local expr="$1" min="$2"
     # NO expression means we do not know this profile's cadence -- either it
