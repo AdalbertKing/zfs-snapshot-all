@@ -3066,6 +3066,19 @@ class UI(object):
         self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
+    def ask_refresh(self):
+        """F5 (tester R4, B7): zbieranie danych na zywym hoscie trwa kilka
+        sekund (pve10: ~5,6 s). Klawisz tylko ZAMAWIA odswiezenie i wypisuje
+        'odswiezam...'; petla najpierw to rysuje, potem wola run_pending()."""
+        self.pending_refresh = True
+        self.message = u"odświeżam… (czasowniki: status, list-jobs, monitor, job-stats -- kilka sekund)"
+
+    def run_pending(self):
+        if getattr(self, "pending_refresh", False):
+            self.pending_refresh = False
+            self.refresh()
+            self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
+
     def refresh(self, only=None):
         self.data = collect(self.repo, self.files, only)
         self.rows = build_relations(self.data, self.now())
@@ -3862,8 +3875,7 @@ class UI(object):
                 if res:
                     return res
             elif k in ("F5", "ctrl-r"):
-                self.refresh()
-                self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
+                self.ask_refresh()
             else:
                 for key, fk, _label in SCREENS:
                     if k == fk:
@@ -3891,8 +3903,7 @@ class UI(object):
         elif k == "end":
             c = max(0, n - 1)
         elif k in ("F5", "ctrl-r"):
-            self.refresh()
-            self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
+            self.ask_refresh()
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
         elif k == "enter" and n:
@@ -4230,6 +4241,9 @@ def curses_loop(ui):
             res = ui.key(name, h)
             if res == "quit":
                 return
+            if getattr(ui, "pending_refresh", False):
+                paint(stdscr, ui.render(w, h), h, w)
+                ui.run_pending()
             if res == "shell" and ui.pending_shell:
                 line, ui.pending_shell = ui.pending_shell, None
                 nowait, ui.pending_nowait = ui.pending_nowait, False
@@ -4314,6 +4328,7 @@ def main(argv):
             name = live_key_name(ui, k)
             if name and ui.key(name, a.height) == "quit":
                 break
+            ui.run_pending()
         print("\n".join(ui.render(a.width, a.height).lines))
         return 0
     if not sys.stdout.isatty():

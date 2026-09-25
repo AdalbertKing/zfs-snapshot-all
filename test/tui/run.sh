@@ -1036,13 +1036,13 @@ fi
 # R4-1/R4-2 PRZEZ PRAWDZIWA PETLE CURSES (pty), nie przez --keys: runda 3
 # miala 'u' i 's' zielone tutaj i martwe na zywo. Klawisze ida jako bajty
 # terminala (ESC [ 18 ~ = F7); kazdy blok to to, co program narysowal po nim.
-PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
+PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7,F5' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
 pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; on = ($0 == k && i == n) ; next } on'; }
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
 elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F7 3)" 'oś czasu' \
      && has "$(pkb F4 5)" 'W toku' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
-     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'; then
+     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb F5 8)" 'odświeżam'; then
     ok "pty: 's' i 'u' to tekst linii, F7 sortuje F2 i chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
