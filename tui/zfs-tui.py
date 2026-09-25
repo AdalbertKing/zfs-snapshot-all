@@ -119,6 +119,38 @@ def home_dir():
     return os.environ.get("HOME") or os.path.expanduser("~")
 
 
+# R4-10 (wlasciciel 2026-09-24): eksport i import relacji domyslnie w JEDNYM
+# miejscu na hoscie, obok profili uzytkownika (/etc/zfs-snapshot-all/profiles,
+# PROFILE_USER_ROOT w zfs-backup.sh). Poza checkoutem: git go nie widzi, pull
+# go nie nadpisze, a katalog nie zalezy od konta (dawniej $HOME -- inny dla
+# roota, inny dla zfsbackup). Zmienna srodowiska -- dla testow.
+def relations_dir():
+    return os.environ.get("ZFS_TUI_RELATIONS_DIR") or "/etc/zfs-snapshot-all/relations"
+
+
+EXPORT_SCHEMA = "zfs-backup/relation-export/"
+
+
+def export_file_info(path):
+    """(nazwa relacji, mtime) pliku eksportu albo None, gdy to nie eksport.
+    Lista importu pokazuje TYLKO pliki eksportu (R4-9): krotsza i nie da sie
+    wybrac czegos, czego czasownik i tak nie przyjmie."""
+    try:
+        if os.path.getsize(path) > 1024 * 1024:
+            return None
+        with open(path, "rb") as fh:
+            doc = json.loads(fh.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or not str(doc.get("schema", "")).startswith(EXPORT_SCHEMA):
+        return None
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        mt = 0
+    return doc.get("name") or "?", mt
+
+
 def direction_of(host, peer, dirs, mode=None):
     """`pve10>pve9` wysylam, `pve10<pve9` pobieram, `pve10<>pve9` w obie strony,
     `local` w obrebie hosta. Lewa strona to ZAWSZE ten host.
@@ -2801,7 +2833,9 @@ HELP = [
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, pod nim CONFIG i CRON,",
     u"                 przewijane), F7 pauza/wznów, Del usuń,",
-    u"                 F8 eksport do pliku, F9 import z pliku: najpierw werdykt",
+    u"                 F8 eksport do pliku (Enter zapisuje, domyślnie w",
+    u"                 /etc/zfs-snapshot-all/relations), F9 import: lista plików",
+    u"                 eksportu z tego katalogu, potem werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
     u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach",
@@ -3164,7 +3198,8 @@ class UI(object):
         # kolektorze -- dokladnie tam, gdzie sie importuje -- import i Ins milczaly,
         # bo ponizej najpierw szukamy zaznaczonej relacji (pve11, 2026-09-23).
         if k == "F9":
-            return self.import_ask_file(os.path.join(home_dir(), ""))
+            d = relations_dir()
+            return self.import_files(d if os.path.isdir(d) else home_dir())
         if k == "ins":
             return self.run_wizard()
         # Del dziala takze na rekordzie `removed`: tam znaczy "zwolnij nazwe / posprzataj reszte".
@@ -3189,11 +3224,24 @@ class UI(object):
             # (zmierzone na pve10, 2026-09-20).
             return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
         elif k == "F8":
-            default = os.path.join(home_dir(), "%s.export.json" % n)
-            self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zatwierdź, Esc = anuluj):", default,
-                        lambda path: self.confirm(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"],
-                                                  [u"Deklaracje (to, co człowiek podał) plus argv do odtworzenia. Bez stanu, historii, ścieżek hosta."],
-                                                  redirect=path))
+            default = os.path.join(relations_dir(), "%s.export.json" % n)
+            self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = anuluj):", default,
+                        lambda path: self.export_to(n, path))
+
+    def export_to(self, n, path):
+        """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
+        podwojna robota. Istniejacy plik jest nadpisywany bez pytania (decyzja
+        wlasciciela). Katalog tworzony, jesli go nie ma; brak prawa zapisu to
+        komunikat w tym samym polu, nie cichy blad."""
+        d = os.path.dirname(path)
+        if d and not os.path.isdir(d):
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as e:
+                self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, Esc = anuluj):", path, lambda p: self.export_to(n, p),
+                            u"nie da się utworzyć katalogu %s: %s" % (d, e.strerror or e))
+                return
+        self.run_detached(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"], redirect=path)
 
     # ------------------------------------------------------------------
     # KREATOR NOWEJ RELACJI (etap E). Odwzorowuje forme jednokomendowa
@@ -3433,6 +3481,59 @@ class UI(object):
             out += ["", fit(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)", width - 4)]
         return out
 
+    def import_files(self, d):
+        """R4-9: import zaczyna sie od LISTY plikow (jak w menedzerze plikow), a
+        nie od wpisywania sciezki. '..' w gore, katalogi, pliki eksportu
+        (najnowsze pierwsze, z data i nazwa relacji z pliku); ostatnia pozycja
+        -- wpisanie sciezki recznie."""
+        d = os.path.abspath(d)
+        items = []
+        parent = os.path.dirname(d)
+        if parent and parent != d:
+            items.append({"kind": "up", "path": parent, "label": u".."})
+        try:
+            names = sorted(os.listdir(d))
+        except OSError as e:
+            names = []
+            self.message = u"nie da się odczytać katalogu %s: %s" % (d, e.strerror or e)
+        dirs, files = [], []
+        for nm in names:
+            fp = os.path.join(d, nm)
+            if nm.startswith("."):
+                continue
+            if os.path.isdir(fp):
+                dirs.append({"kind": "dir", "path": fp, "label": nm + "/"})
+            elif os.path.isfile(fp):
+                info = export_file_info(fp)
+                if info:
+                    files.append({"kind": "file", "path": fp, "label": nm, "rel": info[0], "mtime": info[1]})
+        files.sort(key=lambda x: -x["mtime"])
+        items += dirs + files
+        items.append({"kind": "manual", "path": d, "label": u"[ wpisz ścieżkę ręcznie ]"})
+        cur = next((i for i, it in enumerate(items) if it["kind"] == "file"), len(items) - 1)
+        self.window = ("files", {"title": u"Import relacji z pliku -- %s" % d, "dir": d, "items": items, "cur": cur,
+                                 "nfiles": len(files)})
+        self.scroll = 0
+
+    def files_lines(self, obj, width):
+        out = []
+        w = width - 4
+        fl = [it for it in obj["items"] if it["kind"] == "file"]
+        # Kolumna nazwy pliku tak szeroka, jak najdluzsza nazwa -- ale nazwa
+        # relacji (to, po co operator patrzy) ma sie zmiescic przy 80 kolumnach.
+        relw = max([len(it["rel"]) for it in fl] + [1])
+        lw = max(10, min(max([len(it["label"]) for it in fl] + [10]), w - 2 - 1 - 16 - 2 - 8 - relw))
+        for i, it in enumerate(obj["items"]):
+            mark = ">" if i == obj["cur"] else " "
+            if it["kind"] == "file":
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(it["mtime"])) if it["mtime"] else "?"
+                out.append(fit(u"%s %-*s %s  relacja %s" % (mark, lw, fit_left(it["label"], lw, self.ch), when, it["rel"]), w))
+            else:
+                out.append(fit(u"%s %s" % (mark, it["label"]), w))
+        if not obj["nfiles"]:
+            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (F8 na F3 zapisuje je w %s)" % relations_dir(), w)]
+        return out
+
     def import_ask_file(self, value, error=None):
         """Krok -1 importu: sciezka do pliku eksportu."""
         self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", value, self.import_name, error)
@@ -3495,6 +3596,33 @@ class UI(object):
             elif raw and len(raw) == 1 and raw.isprintable():
                 obj["value"] += raw
             return "stay"
+            return "stay"
+        if self.window and self.window[0] == "files":
+            obj = self.window[1]
+            n = len(obj["items"])
+            if k in ("esc", "q"):
+                self.window, self.message = None, u"anulowano"
+            elif k in ("down", "j"):
+                obj["cur"] = min(obj["cur"] + 1, n - 1)
+            elif k in ("up", "k"):
+                obj["cur"] = max(0, obj["cur"] - 1)
+            elif k == "pgdn":
+                obj["cur"] = min(obj["cur"] + 10, n - 1)
+            elif k == "pgup":
+                obj["cur"] = max(0, obj["cur"] - 10)
+            elif k == "home":
+                obj["cur"] = 0
+            elif k == "end":
+                obj["cur"] = n - 1
+            elif k == "enter" and n:
+                it = obj["items"][obj["cur"]]
+                if it["kind"] in ("up", "dir"):
+                    self.import_files(it["path"])
+                elif it["kind"] == "manual":
+                    self.import_ask_file(os.path.join(it["path"], ""))
+                else:
+                    self.window = None
+                    self.import_name(it["path"])
             return "stay"
         if self.window and self.window[0] == "pick":
             obj = self.window[1]
@@ -3839,6 +3967,10 @@ def _ui_render(self, width, height):
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
                                              footer=u"Enter na [ ZAPISZ ] = dalej   Esc = wróć")
+        elif kind == "files":
+            top_ = max(0, obj["cur"] - (height - 7))
+            scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
+                                             footer=u"Enter = wejdź / importuj   Esc = anuluj   strzałki")
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")
