@@ -178,11 +178,12 @@ if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && 
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
 fi
-# NOTE 8: pomoc ma nazywac 'u' (F4) i wyjatek od "litery nie sa skrotami".
-if has "$H1" "u chowa/pokazuje transfery" && has "$H1" "wyjątek: 'u' na F4"; then
-    ok "pomoc: opisuje 'u' na F4 (chowanie usunietych relacji) i wyjatek od reguly liter"
+# R4-2: pomoc mowi, ze F7-F9 to akcje okna, F5 odswieza, a litery NIGDY nie sa skrotami.
+if has "$H1" "F7 chowa/pokazuje transfery" && has "$H1" "F7 F8 F9          akcje BIEŻĄCEGO okna" \
+   && has "$H1" "F5 / Ctrl-R" && ! has "$H1" "wyjątek: 'u'" && ! has "$H1" "F9 / Ctrl-R"; then
+    ok "pomoc: F7-F9 = akcje okna, F5 odswieza, bez wyjatku dla liter (R4-2)"
 else
-    bad "pomoc: brak opisu 'u'" "$H1"
+    bad "pomoc: klawisze R4-2" "$H1"
 fi
 
 # SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4, wersja 2, wlasciciel 2026-09-24).
@@ -464,37 +465,43 @@ else
     bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
 fi
 
-# SORTOWANIE F2 (test c, R3-4): 's' cykluje trzy widoki, tytul mowi ktory.
+# SORTOWANIE F2 (test c, R3-4; R4-2: F7, nie 's'): F7 cykluje trzy widoki, tytul mowi ktory.
 # jobs.json (fixture hostA) ma zadanie GODZINOWE "wysyłka hourly" (schedule
 # "5 * * * *" -- nastepny bieg w ciagu godziny od NOW) i zadanie DOBOWE
 # "kopia daily" (schedule "21 0 * * *" -- NOW jest "środek dnia", 00:21 juz
 # minelo, nastepny bieg dopiero jutro) -- kolejnosc miedzy nimi w widoku "os
 # czasu" jest wiec DETERMINISTYCZNA niezaleznie od dokladnej minuty NOW.
 ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
-ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
+ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7 --width 200 2>&1)"
 if has "$ZSORT1" 'sort: oś czasu'; then
-    ok "zadania: 's' raz -- tytul mowi 'oś czasu'"
+    ok "zadania: F7 raz -- tytul mowi 'oś czasu'"
 else
-    bad "zadania: 's' raz -- tytul" "$ZSORT1"
+    bad "zadania: F7 raz -- tytul" "$ZSORT1"
 fi
 L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka hourly' | head -1 | cut -d: -f1)
 L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia daily' | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
-    ok "zadania: 's' raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
+    ok "zadania: F7 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
 else
-    bad "zadania: 's' raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
+    bad "zadania: F7 raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
 fi
-ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s,s --width 200 2>&1)"
+ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7,F7 --width 200 2>&1)"
 if has "$ZSORT2" 'sort: ostatni bieg'; then
-    ok "zadania: 's' dwa razy -- tytul mowi 'sort: ostatni bieg'"
+    ok "zadania: F7 dwa razy -- tytul mowi 'sort: ostatni bieg'"
 else
-    bad "zadania: 's' dwa razy -- tytul" "$ZSORT2"
+    bad "zadania: F7 dwa razy -- tytul" "$ZSORT2"
 fi
-ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s,s,s --width 200 2>&1)"
-if has "$ZSORT3" 'sort: relacje' && ! has "$ZSORT3" 'oś czasu' && ! has "$ZSORT3" 'ostatni bieg'; then
-    ok "zadania: 's' trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
+ZSORTS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
+if has "$ZSORTS" 'sort: relacje' && has "$ZSORTS" '$ s_ '; then
+    ok "zadania: 's' to TEKST linii polecen -- widok sortowania zostaje (R4-2)"
 else
-    bad "zadania: 's' trzy razy -- powrot" "$ZSORT3"
+    bad "zadania: 's' jako tekst" "$ZSORTS"
+fi
+ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7,F7,F7 --width 200 2>&1)"
+if has "$ZSORT3" 'sort: relacje' && ! has "$ZSORT3" 'oś czasu' && ! has "$ZSORT3" 'ostatni bieg'; then
+    ok "zadania: F7 trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
+else
+    bad "zadania: F7 trzy razy -- powrot" "$ZSORT3"
 fi
 
 # ============================================================================
@@ -621,107 +628,108 @@ act() {   # <keys> [extra] -> ekran; dziennik komend w $XL (wyzerowany)
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
 ZB="$(cd "$REPO" && pwd)/zfs-backup.sh"
-A="$(act down,F4)"
+A="$(act down,F7)"
 if has "$A" '╔═ POTWIERDZENIE: Wstrzymaj relację lab-ct201 ═' && has "$A" 'Wykona się DOKŁADNIE to:' \
         && has "$A" 'pause-client'; then   # the shell line WRAPS on a long checkout path (CI: /home/runner/work/...), so the verb and the name may sit on different lines
-    ok "akcje: F4 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
+    ok "akcje: F7 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
 else
-    bad "akcje: F4 podglad pauzy" "$A"
+    bad "akcje: F7 podglad pauzy" "$A"
 fi
 if [ ! -s "$XL" ]; then
     ok "akcje: ...i sam podglad NICZEGO nie uruchamia"
 else
     bad "akcje: podglad nie uruchamia" "$(cat "$XL")"
 fi
-A="$(act down,F4,t)"
+A="$(act down,F7,t)"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[atrapa]'; then
     ok "akcje: 't' wykonuje DOKLADNIE pokazana komende (pause-client NAME --reason=...) i otwiera okno wyjscia"
 else
     bad "akcje: t wykonuje" "$(cat "$XL")" "$A"
 fi
-A="$(act down,F4,esc)"
+A="$(act down,F7,esc)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano'; then
     ok "akcje: Esc w potwierdzeniu anuluje i mowi to; dziennik pusty"
 else
     bad "akcje: Esc anuluje" "$(cat "$XL")" "$A"
 fi
-A="$(act down,F4,q)"
+A="$(act down,F7,q)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano'; then
     ok "akcje: KAZDY klawisz poza 't' anuluje (tu: q) -- nie ma przypadkowego wykonania"
 else
     bad "akcje: inny klawisz anuluje" "$(cat "$XL")" "$A"
 fi
 # pauza -> wznowienie: ta sama litera, przeciwny czasownik, decyduje REKORD
-AP="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --exec-log "$XL" --screen relacje --keys down,down,down,F4,t 2>&1)"
+AP="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --exec-log "$XL" --screen relacje --keys down,down,down,F7,t 2>&1)"
 if grep -q "resume-client lab-srv-b$" "$XL" && has "$AP" 'WYJŚCIE: Wznów relację lab-srv-b'; then
-    ok "akcje: F4 na relacji WSTRZYMANEJ wola resume-client (decyduje paused_local z rekordu)"
+    ok "akcje: F7 na relacji WSTRZYMANEJ wola resume-client (decyduje paused_local z rekordu)"
 else
-    bad "akcje: F4 = resume na pauzie" "$(cat "$XL")" "$AP"
+    bad "akcje: F7 = resume na pauzie" "$(cat "$XL")" "$AP"
 fi
-# F4 na F3 to PAUZA, nie przelaczenie na Transfery
+# R4-1 (wlasciciel 2026-09-24): F4 na F3 to OKNO Transfery, nie pauza --
+# klawisze F1-F6 sa zawsze glownymi oknami; pauza jest na F7.
 A="$(act F4)"
-if ! has "$A" '╔═ Zakończone' && has "$A" 'POTWIERDZENIE'; then
-    ok "akcje: F4 na ekranie Relacje to pauza, a nie skok do Transferow (tam F4 z innych ekranow)"
+if has "$A" '╔═ Zakończone' && has "$A" '[F4 Transfery]' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
+    ok "akcje: F4 na ekranie Relacje przelacza na Transfery (R4-1), nie wstrzymuje relacji"
 else
     bad "akcje: F4 na F3" "$A"
 fi
 # eksport: podpowiedz pelnej sciezki, do zmiany
-A="$(HOME=/root act down,F7)"
+A="$(HOME=/root act down,F8)"
 if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" 'lab-ct201.export.json_'; then
-    ok "akcje: F7 podpowiada PELNA sciezke pliku eksportu (/root/<relacja>.export.json) i pozwala ja zmienic"
+    ok "akcje: F8 podpowiada PELNA sciezke pliku eksportu (/root/<relacja>.export.json) i pozwala ja zmienic"
 else
-    bad "akcje: F7 podpowiedz" "$A"
+    bad "akcje: F8 podpowiedz" "$A"
 fi
-A="$(HOME=/root act down,F7,bs,bs,bs,bs,text:yaml,enter)"
+A="$(HOME=/root act down,F8,bs,bs,bs,bs,text:yaml,enter)"
 if has "$A" 'POTWIERDZENIE: Eksport relacji lab-ct201' && has "$A" 'export-relation lab-ct201' && has "$A" 'lab-ct201.export.yaml'; then
     ok "akcje: ...Backspace i wpisany tekst zmieniaja sciezke, a komenda pokazuje przekierowanie do NIEJ"
 else
-    bad "akcje: F7 edycja sciezki" "$A"
+    bad "akcje: F8 edycja sciezki" "$A"
 fi
-A="$(HOME=/root act down,F7,enter,t)"
+A="$(HOME=/root act down,F8,enter,t)"
 if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.json'\?$" "$XL"; then
     ok "akcje: 't' wykonuje eksport DO wskazanego pliku"
 else
-    bad "akcje: F7 t" "$(cat "$XL")"
+    bad "akcje: F8 t" "$(cat "$XL")"
 fi
 # import: podglad (bez --yes) w potwierdzeniu, potem --yes
 IMPF="$(mktemp)"
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
-A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter")"
 if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
-    ok "akcje: F8 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
+    ok "akcje: F9 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
 else
-    bad "akcje: F8" "$A"
+    bad "akcje: F9" "$A"
 fi
-A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter,t")"
+A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter,t")"
 if grep -q "import-relation .*$(basename "$IMPF")'\? --yes$" "$XL"; then
     ok "akcje: ...i 't' wola import-relation PLIK --yes"
 else
-    bad "akcje: F8 t" "$(cat "$XL")"
+    bad "akcje: F9 t" "$(cat "$XL")"
 fi
-# F8 z nieistniejaca sciezka: podpowiedz "/root/" + dopisana wzgledna sciezka
+# F9 z nieistniejaca sciezka: podpowiedz "/root/" + dopisana wzgledna sciezka
 # skladala sie w /root/tmp/f8.json, ktorej nie ma -- czasownik odmawial "cannot
 # read", operator dowiadywal sie o tym po nazwie relacji (pve10, 2026-09-23).
-A="$(HOME=/root act "down,F8,text:tmp/nie-ma-takiego.json,enter")"
+A="$(HOME=/root act "down,F9,text:tmp/nie-ma-takiego.json,enter")"
 if has "$A" 'Import relacji z pliku' && has "$A" 'nie ma takiego pliku' && [ ! -s "$XL" ]; then
-    ok "akcje: F8 z nieistniejaca sciezka zostaje w polu pliku, mowi 'nie ma takiego pliku' i nic nie uruchamia (pve10: /root/ + tmp/f8.json)"
+    ok "akcje: F9 z nieistniejaca sciezka zostaje w polu pliku, mowi 'nie ma takiego pliku' i nic nie uruchamia (pve10: /root/ + tmp/f8.json)"
 else
-    bad "akcje: F8 nieistniejaca sciezka" "$A" "$(cat "$XL")"
+    bad "akcje: F9 nieistniejaca sciezka" "$A" "$(cat "$XL")"
 fi
-# F8 nie ma juz kroku z nazwa (2026-09-23): werdykt daje czasownik bez --yes
+# F9 nie ma juz kroku z nazwa (2026-09-23): werdykt daje czasownik bez --yes
 # (juz jest i identyczna / rozni sie / plan), --name zostaje w CLI. Routing
 # werdyktu na PRAWDZIWYM czasowniku jest dowiedziony na pve10 -- w trybie
 # atrapy czasownik sie nie wykonuje, wiec tu jest tylko brak kroku z nazwa.
-A="$(HOME=/root act "down,F8,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter")"
 if ! has "$A" 'Nazwa relacji' && has "$A" 'POTWIERDZENIE: Import relacji'; then
-    ok "akcje: F8 po pliku idzie prosto do werdyktu/planu -- bez pola nazwy"
+    ok "akcje: F9 po pliku idzie prosto do werdyktu/planu -- bez pola nazwy"
 else
-    bad "akcje: F8 bez kroku z nazwa" "$A"
+    bad "akcje: F9 bez kroku z nazwa" "$A"
 fi
 rm -f "$IMPF"
-# F8/Ins na PUSTYM kolektorze (zero relacji, zero zadan): milczaly, bo szukaly
+# F9/Ins na PUSTYM kolektorze (zero relacji, zero zadan): milczaly, bo szukaly
 # najpierw zaznaczonej relacji, ktorej na pustym ekranie nie ma (pve11,
 # 2026-09-23). Fikstura empty.json/empty-mon.json (linia 297) to jedyny host
 # bez zadnego rekordu -- brak --status daje 0 relacji.
@@ -730,26 +738,26 @@ act_empty() {   # <keys> -> ekran; dziennik komend w $XL (wyzerowany)
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
 }
 E="$(act_empty "")"
-if has "$E" 'F8 import z pliku'; then
-    ok "akcje: pusty kolektor -- stopka podpowiada F8 import i Ins nowa relacja (pve11 2026-09-23)"
+if has "$E" 'F9 import z pliku'; then
+    ok "akcje: pusty kolektor -- stopka podpowiada F9 import i Ins nowa relacja (pve11 2026-09-23)"
 else
     bad "akcje: pusty kolektor stopka" "$E"
 fi
-E="$(act_empty F8)"
+E="$(act_empty F9)"
 if has "$E" 'Import relacji z pliku'; then
-    ok "akcje: pusty kolektor -- F8 otwiera import (wczesniej milczal: brak zaznaczonej relacji)"
+    ok "akcje: pusty kolektor -- F9 otwiera import (wczesniej milczal: brak zaznaczonej relacji)"
 else
-    bad "akcje: pusty kolektor F8" "$E"
+    bad "akcje: pusty kolektor F9" "$E"
 fi
 # odmowy PRZED czymkolwiek: rekord usuniety, wiersz bez rekordu, inny ekran
-A="$(act end,F4)"; act end,F4,t >/dev/null
+A="$(act end,F7)"; act end,F7,t >/dev/null
 if [ ! -s "$XL" ] && has "$A" "relacja '192.168.28.99' jest już usunięta"; then
     ok "akcje: na rekordzie 'removed' PAUZA odmawia, mowi dlaczego, i nic nie idzie do powloki (Del tam dziala -- zwalnia nazwe)"
 else
     bad "akcje: removed odmawia" "$(cat "$XL")" "$A"
 fi
-AH="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4 2>&1)"
-"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F4,t >/dev/null 2>&1
+AH="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F7 2>&1)"
+"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --exec-log "$XL" --screen relacje --keys F7,t >/dev/null 2>&1
 if [ ! -s "$XL" ] && has "$AH" 'to nie jest relacja (zadanie bez rekordu)'; then
     ok "akcje: na zadaniu BEZ rekordu (ksztalt produkcji) akcja odmawia -- nie ma czego pauzowac czasownikiem"
 else
@@ -905,27 +913,58 @@ if has "$T" 'na łączu: niemierzalne'; then
 else
     bad "transfery: niemierzalne" "$T"
 fi
-# NOTE 8 (wlasciciel, 2026-09-24): 'u' chowa/pokazuje transfery relacji,
+# NOTE 8 (wlasciciel, 2026-09-24), R4-2: F7 chowa/pokazuje transfery relacji,
 # ktorych juz nie ma -- z 14 zapisow fikstury 6 ma etykiete "labsp"/"lab1"/""
 # (brak rekordu w status.json), 8 nalezy do zywych relacji. Listwa (dopisek
-# 'u ...') potrzebuje szerszego terminala, zeby sie zmiescic, a panel ma stac obok (prog 150) -- stad --width 160.
+# 'F7 ...') potrzebuje szerszego terminala, zeby sie zmiescic, a panel ma stac obok (prog 150) -- stad --width 160.
 TW130="$(screen transfery "" --width 160)"
-if has "$TW130" 'u ukryj usunięte' && ! has "$TW130" 'u pokaż usunięte'; then
-    ok "transfery: domyslnie POKAZANE (dziennik transferow), listwa mowi 'u ukryj usunięte'"
+if has "$TW130" 'F7 Ukryj usunięte' && ! has "$TW130" 'F7 Pokaż usunięte' && has "$TW130" 'F7 ukryj usunięte   Enter'; then
+    ok "transfery: domyslnie POKAZANE (dziennik transferow), listwa i ramka mowia 'F7 ukryj usunięte'"
 else
-    bad "transfery: domyslny stan 'u'" "$TW130"
+    bad "transfery: domyslny stan F7" "$TW130"
 fi
-TU="$(screen transfery u --width 160)"
-if has "$TU" 'Zakończone (8)' && has "$TU" 'bez usuniętych relacji' && ! has "$TU" '(bez rel.)' && has "$TU" 'u pokaż usunięte'; then
-    ok "transfery: 'u' chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
+TU="$(screen transfery F7 --width 160)"
+if has "$TU" 'Zakończone (8)' && has "$TU" 'bez usuniętych relacji' && ! has "$TU" '(bez rel.)' && has "$TU" 'F7 Pokaż usunięte'; then
+    ok "transfery: F7 chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
 else
-    bad "transfery: 'u' chowa" "$TU"
+    bad "transfery: F7 chowa" "$TU"
 fi
-TUU="$(screen transfery u,u --width 160)"
+TUU="$(screen transfery F7,F7 --width 160)"
 if has "$TUU" 'Zakończone (14)' && has "$TUU" '(bez rel.)' && ! has "$TUU" 'bez usuniętych relacji'; then
-    ok "transfery: drugie 'u' pokazuje je znowu"
+    ok "transfery: drugie F7 pokazuje je znowu"
 else
-    bad "transfery: 'u' pokazuje znowu" "$TUU"
+    bad "transfery: F7 pokazuje znowu" "$TUU"
+fi
+# R4-2: LITERA TO TEKST. 'u' w rundzie 3 bylo zielone w tym tescie i martwe na
+# zywo: --keys podawal 'u' prosto do UI.key, a petla curses oddaje je linii
+# polecen. --keys idzie teraz ta sama droga (live_key_name), wiec 'u' ma NIC
+# nie schowac i stanac w linii polecen.
+TUL="$(screen transfery u --width 160)"
+if has "$TUL" 'Zakończone (14)' && ! has "$TUL" 'bez usuniętych relacji' && has "$TUL" '$ u_ '; then
+    ok "transfery: 'u' to TEKST linii polecen, nie skrot (R4-2: droga --keys = droga petli curses)"
+else
+    bad "transfery: 'u' jako tekst" "$TUL"
+fi
+# R4-1/R4-2 PRZEZ PRAWDZIWA PETLE CURSES (pty), nie przez --keys: runda 3
+# miala 'u' i 's' zielone tutaj i martwe na zywo. Klawisze ida jako bajty
+# terminala (ESC [ 18 ~ = F7); kazdy blok to to, co program narysowal po nim.
+PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
+pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; on = ($0 == k && i == n) ; next } on'; }
+if [ "$PKRC" -eq 2 ]; then
+    echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
+elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F7 3)" 'oś czasu' \
+     && has "$(pkb F4 5)" 'W toku' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
+     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'; then
+    ok "pty: 's' i 'u' to tekst linii, F7 sortuje F2 i chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
+else
+    bad "pty: klawisze przez petle curses" "$PK"
+fi
+# R4-2: Odswiez przeszlo z F9 na F5 (F9 = trzecia akcja okna, na F3 import).
+TR="$(screen zadania F5 --width 140)"
+if has "$TR" 'odświeżono' && has "$TR" 'F5 Odśwież' && ! has "$TR" 'F9 Odśwież'; then
+    ok "listwa: F5 odswieza i tak jest podpisane (F9 zwolnione na akcje okna)"
+else
+    bad "listwa: F5 odswiez" "$TR"
 fi
 TF="$(screen zadania F4)"
 if has "$TF" '╔═ Zakończone' && has "$TF" '[F4 Transfery]'; then
@@ -1047,13 +1086,13 @@ else
     bad "linia: strzalki przy tekscie" "$C"
 fi
 # 'e' w potwierdzeniu: komenda akcji laduje w linii do poprawki, nic nie rusza.
-C="$(: > "$XL"; screen relacje "down,F4,e" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "down,F7,e" --exec-log "$XL")"
 if has "$C" "pause-client lab-ct201 '--reason=z TUI" && ! has "$C" 'POTWIERDZENIE' && [ ! -s "$XL" ] && has "$C" 'komenda w linii poleceń -- popraw i Enter'; then
     ok "linia: 'e' w potwierdzeniu wrzuca pokazana komende do linii polecen (podglad + edycja), dziennik pusty"
 else
     bad "linia: e w potwierdzeniu" "$C" "$(cat "$XL")"
 fi
-C="$(: > "$XL"; screen relacje "down,F4,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "down,F7,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ]; then
     ok "linia: ...poprawiona (6 x Backspace) i Enter wykonuje TO, co w linii"
 else

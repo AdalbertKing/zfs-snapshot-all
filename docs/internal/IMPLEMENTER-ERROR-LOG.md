@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57.*
+*Evidence: E13, E22, E57, E67.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1898,3 +1898,22 @@ passed".
 **Rule.** R4. Before any merge, print and read the conclusion counts for the
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
+
+
+### E67 — 'u' and 's' green in the suite, dead in the GUI (2026-09-24, R12)
+
+**Genesis.** Round 3 shipped 'u' on F4 (hide transfers of removed relations)
+and 's' on F2 (sort view) as letter shortcuts guarded by "empty command line".
+The suite drove them with `--render-once --keys u`, and I "tested for the
+owner" the same way on pve10 and pve11: all green. The owner pressed 'u' in
+the real GUI and it went to the bash command line.
+
+**Cause.** `--keys` fed the token straight into `UI.key()`. The curses loop
+does not: every printable character with no window on top becomes
+`text:<c>` before `UI.key()` sees it. The test drove a path the operator
+cannot walk -- the piece I wrote, not what comes out of the program.
+
+**Rule.** R12. A key test goes through the same translation the terminal
+input goes through. `--keys` now uses `live_key_name()` (the loop's rules),
+and `test/tui/pty-keys.py` drives the real curses loop in a pty with terminal
+byte sequences.
