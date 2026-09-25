@@ -569,6 +569,20 @@ grep -q -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null \
     && ok "slice2: the seed uses the prefix read back out of the rendered cron line" \
     || bad "slice2: the seed uses the prefix read back out of the rendered cron line" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
+# ---- A' seed: --recursive reaches the FIRST snapshot too ----------------------
+# Measured on pve9 2026-09-25: the cron lines had -R, the install-time seed did
+# not, so the first snapshots landed on the roots only. `--yes` is refused with
+# --target='' (confirmed by eye), so the answer comes on stdin.
+for _r in flat:-R atomic:-r; do
+    rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+    out="$(runi snapsend-ok "t" --install --source=rpool/data --target='' --recursive="${_r%%:*}" --config="$CFG")"
+    if grep -qE -- "-m automated_hourly_ .* ${_r#*:} rpool/data\$" "$WORK/seed-calls" 2>/dev/null; then
+        ok "A'/seed: --recursive=${_r%%:*} seeds with ${_r#*:}, like the installed line"
+    else
+        bad "A'/seed: --recursive=${_r%%:*} seeds with ${_r#*:}, like the installed line" "calls=$(cat "$WORK/seed-calls" 2>/dev/null) :: $(printf '%s' "$out" | tail -3)"
+    fi
+done
+
 # ---- multi-root: one seed per source, still one install ----------------------
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --target=hdd/backups --config="$CFG")"

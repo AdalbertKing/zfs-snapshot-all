@@ -1932,7 +1932,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Wolumen", row.get("gb") or "-"))
     npairs, _how = rel_pairs(row, data, now, ch)
     pairs.append(("Datasety", u"%s   lądowisk %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
-    for key, fld in (("Utworzona", "created_at"), ("Zasiew", "seed_completed_at"), ("Aktywowana", "activated_at"), (u"Usunięta", "removed_at")):
+    for key, fld in (("Utworzona", "created_at"), (u"Pełna kopia", "seed_completed_at"), ("Aktywowana", "activated_at"), (u"Usunięta", "removed_at")):
         if rel.get(fld):
             pairs.append((key, rel[fld]))
     return pairs
@@ -2150,7 +2150,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                                           ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         ("Historia", "  ".join(x for x in [
             "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
-            "zasiew %s" % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
+            u"pełna kopia %s" % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
             "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
             u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
