@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fd2404db90582e82 -->
+<!-- status-covers-digest: 4491ca009bb7b3ce -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI, runda 4 etap 3: jedno okno szczegółów -- opis, CONFIG, CRON (R4-6, R4-7, 2026-09-25).**
+  - Enter na relacji (F3), na zadaniu (F2) i na parze (panel par F3) otwiera okno
+    **jednego układu**: szczegóły, pod nimi sekcja **CONFIG**, potem **CRON**, przewijane.
+    Zakładki Opis/Config/Cron z R3-2 zniknęły (Tab w oknie nic nie robi).
+  - Okno zadania i pary pokazuje config zawężony: tylko sekcja tego zakresu i szablon
+    tego szczebla. Zadanie bez relacji mówi, że show-config pokazuje tylko relacje.
+  - Enter na parze **nie skacze już na F2** (mylące, bez powrotu); Esc wraca na panel par.
+  - **Dowody:** `tui` PASS=191 FAIL=0 (pty pominięty na Windows); render na fiksturach
+    pve10: kolejność sekcji szczegóły < CONFIG < CRON sprawdzana testem.
 
 - **GUI, runda 4 etap 2: kolumny F2 -- Zadanie | Prefiks | Trzyma | szt., odstępy (R4-3, R4-4, R4-5, 2026-09-25).**
   - Zadanie to samo słowo: pobranie / wysyłka / kopia / **lokalny prune** / **zdalny
