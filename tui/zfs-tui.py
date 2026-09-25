@@ -98,9 +98,9 @@ COLOR_WORDS = [
 ]
 
 ARROWS_UTF = {"local": u"→ tutaj", "push": u"→ {peer}", "pull": u"← {peer}",
-              "snapshot": "(migawka)", "prune": u"porządki"}
+              "snapshot": "(migawka)", "prune": u"prune"}
 ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
-                "snapshot": "(migawka)", "prune": "porzadki"}
+                "snapshot": "(migawka)", "prune": "prune"}
 
 # Wlasciciel, 2026-09-09: F2 to ZADANIA (co chodzi w cronie, z relacja i
 # kierunkiem), a relacje dostaja WLASNE okno do zarzadzania (F3). Kierunek jest
@@ -1073,6 +1073,34 @@ def job_src_dst(j):
     return scope, other or "-"
 
 
+KEEP_UNITS = {"H": u"godz.", "D": u"dni", "W": u"tyg.", "M": u"mies.", "Y": u"lat"}
+
+
+def keep_cell(ret):
+    """Kolumna 'Trzyma' (R4-4): '-H24' -> '24 godz.', '-D7' -> '7 dni'. Sama
+    liczba bylaby klamstwem: drabina GFS przycina rodzine automated_hourly
+    takze szczeblem '-D7' (fikstura pve10) -- "7" przy "automated_hourly"
+    czytaloby sie jak 7 godzinowych. Goly licznik (keep = 7) zostaje liczba."""
+    out = []
+    for t in (ret or "").split():
+        t = t.lstrip("-")
+        m = re.match(r"^([HDWMY])(\d+)$", t)
+        if m:
+            out.append(u"%s %s" % (m.group(2), KEEP_UNITS[m.group(1)]))
+        elif t:
+            out.append(t)
+    return " ".join(out) or "-"
+
+
+def prefix_cell(j):
+    """Kolumna 'Prefiks' (R4-4): rodzina migawek tak, jak ja widac w `zfs list`
+    (automated_hourly), nie nazwa szczebla ('hourly' nie mowi o czestotliwosci,
+    tylko o nazwie -- pytanie wlasciciela 2026-09-24). Wzorzec '-' (pasywny,
+    kazda migawka) i brak rodziny to '-'."""
+    fam = family_of(j)
+    return fam if fam and fam != "-" else "-"
+
+
 def build_jobs(data, now):
     """Wiersze ekranu ZADANIA: jedno zadanie z crona (sekcja wysylki albo
     porzadkow), z relacja i kierunkiem. To jest to, co host naprawde robi."""
@@ -1091,15 +1119,16 @@ def build_jobs(data, now):
             tier = tier.rsplit("__", 1)[-1]
         kind = j.get("section_kind", "")
         ret = j.get("retain") or j.get("keep") or ""
-        # Krotko i po ludzku: "wysylka hourly" (rodzina bez automated_),
-        # "porzadki -D7" (co trzyma). Nazwa szczebla jest w panelu.
-        fam = family_of(j).replace("automated_", "") or tier or "?"
+        # R4-4 (wlasciciel 2026-09-24): Zadanie to SAMO slowo; rodzina, retencja
+        # i liczba datasetow sa osobnymi kolumnami (Prefiks, Trzyma, szt.) --
+        # "pobranie hourly x2" i "porzadki -H24 x2" byly nieczytelne.
+        pref = prefix_cell(j)
+        keep = "-"
         if kind == "prune":
             # Sekcja [prune:] ze zdalnym zakresem (konto@host:dataset) sprzata migawki
-            # U ZRODLA; z lokalnym -- tutaj. Odkad F2 pokazuje tez porzadki szczebli
-            # plaskich (uwaga 4), obie strony mialy ten sam napis "porzadki -H24".
-            where = u"porządki źródła " if "@" in (j.get("scope") or "") else u"porządki "
-            task = where + (ret if ret else fam)
+            # U ZRODLA ("zdalny prune"); z lokalnym -- tutaj ("lokalny prune").
+            task = u"zdalny prune" if "@" in (j.get("scope") or "") else u"lokalny prune"
+            keep = keep_cell(ret)
         else:
             # SLOWO ZGODNE Z KIERUNKIEM. Kazde zadanie transferu nazywalo sie
             # "wysylka", takze w relacji, w ktorej ten host POBIERA -- a to
@@ -1107,8 +1136,7 @@ def build_jobs(data, now):
             # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
-            _w = {"pull": u"pobranie ", "push": u"wysyłka ", "local": u"kopia "}.get(_d, u"transfer ")
-            task = _w + fam
+            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia"}.get(_d, u"transfer")
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
@@ -1122,7 +1150,7 @@ def build_jobs(data, now):
             "kind": "job", "name": j.get("label") or "(bez rel.)", "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
-            "mode": mode, "task": task, "tier": tier, "scope": j.get("scope", ""),
+            "mode": mode, "task": task, "pref": pref, "keep": keep, "cnt": 1, "tier": tier, "scope": j.get("scope", ""),
             "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
             "reasons": [reason] if reason else [], "next_epoch": nxt,
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
@@ -1155,7 +1183,7 @@ def build_jobs(data, now):
                     break
                 pnxt = cron_next(psched, now)
                 pit = dict(items[-1])
-                pit.update({"task": u"porządki " + ret, "schedule": psched, "czas": "-", "gb": "-",
+                pit.update({"task": u"lokalny prune", "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-",
                             "vol": None, "srow": None, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
                             "reasons": list(items[-1]["reasons"])})
@@ -1171,7 +1199,7 @@ def build_jobs(data, now):
     # znany dla kazdego z grupy; kolejnosc = pierwsze wystapienie.
     grouped, order = {}, []
     for it in items:
-        key = (it["name"], it["dir"], it["task"], it["schedule"])
+        key = (it["name"], it["dir"], it["task"], it.get("pref"), it.get("keep"), it["schedule"])
         if key not in grouped:
             grouped[key] = it
             order.append(key)
@@ -1199,15 +1227,15 @@ def build_jobs(data, now):
         g = grouped[key]
         g["verdict"] = worst(g["_verdicts"])
         g["vword"] = VERDICTS.get(g["verdict"], (g["verdict"], 0))[0]
-        if g["_count"] > 1:
-            g["task"] = "%s x%d" % (g["task"], g["_count"])
+        g["cnt"] = g["_count"]
         del g["_verdicts"]
         del g["_count"]
         rows.append(g)
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
             "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None, "dir": "?",
-            "task": "nieczytelny blok", "scope": u.get("config") or "(bez Source)", "schedule": "",
+            "task": "nieczytelny blok", "pref": "-", "keep": "-", "cnt": "",
+            "scope": u.get("config") or "(bez Source)", "schedule": "",
             "verdict": "UNKNOWN", "vword": "nie odpowiada", "reasons": [u.get("error", "")],
             "next_epoch": None, "next": "?", "job": None, "jobs": [], "u": u,
             "state": "nieczytelny", "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"),
@@ -1231,7 +1259,8 @@ def build_jobs(data, now):
         rows.append({
             "kind": "monitor", "name": m.get("label") or "(bez etykiety)", "rel": None,
             "dir": direction_of(host, rel.get("peer_host") or "", [], rel.get("mode")) if rel else "?",
-            "task": u"strażnik bez zadania", "scope": ",".join(m.get("datasets", [])) or "?",
+            "task": u"strażnik bez zadania", "pref": "-", "keep": "-", "cnt": len(m.get("datasets", [])) or "",
+            "scope": ",".join(m.get("datasets", [])) or "?",
             "schedule": m.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
             "reasons": [m.get("reason", "")] if m.get("reason") else [],
             "next_epoch": None, "next": "?", "job": None, "jobs": [], "m": m,
@@ -1283,16 +1312,28 @@ ZAD_SORT_LABELS = [u"sort: relacje",
 # tabela wypelnia sie od pierwszej kolumny, a ta, ktora nie zmiesci sie w
 # pozostalym miejscu, spada z LISTY (jej dane sa w panelu szczegolow i tak,
 # 'Czas o/ś/m' jest tam jako 'czas').
+# R4-4: Zadanie | Prefiks | Trzyma | szt. zamiast "pobranie hourly x2".
+# KOLEJNOSC NA EKRANIE != KOLEJNOSC WAZNOSCI: kolumny wchodza wg _ZAD_PRIO
+# (Kopie i Nastepny przed Prefiksem, Harmonogram jest tez w panelu), a stoja
+# w kolejnosci _ZAD_COLS. Przy 100 kolumnach na danych pve10 spadaja Trzyma, szt.,
+# Harmonogram, GB i Czas (zmierzone 2026-09-25; wszystkie sa w panelu).
 _ZAD_COLS = [
     ("name", "Relacja", lambda r: r["name"]),
     ("dir", "Kierunek", lambda r: r["dir"]),
     ("task", "Zadanie", lambda r: r["task"]),
+    ("pref", "Prefiks", lambda r: r.get("pref") or "-"),
+    ("keep", "Trzyma", lambda r: r.get("keep") or "-"),
+    ("cnt", "szt.", lambda r: str(r.get("cnt") or "")),
     ("schedule", "Harmonogram", lambda r: r["schedule"]),
     ("next_disp", u"Następny", lambda r: r.get("next_disp") or "-"),
     ("vword", "Kopie", lambda r: r["vword"] or "-"),
     ("gb", "GB", lambda r: r.get("gb") or "-"),
     ("czas", u"Czas o/ś/m", lambda r: r.get("czas") or "-"),
 ]
+_ZAD_PRIO = ["name", "dir", "task", "vword", "next_disp", "pref", "keep", "cnt", "schedule", "gb", "czas"]
+# R4-3: co najmniej dwie spacje miedzy kolumnami; R4-5: zapas szerokosci
+# rozdzielony rowno na odstepy (do _ZAD_GAP_MAX), reszta zostaje po prawej.
+_ZAD_GAP, _ZAD_GAP_MAX = 2, 6
 
 
 def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_mode=0):
@@ -1312,15 +1353,23 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         widths = {}
         for key, header, get in _ZAD_COLS:
             widths[key] = max([len(header)] + [len(get(r) or "-") for r in rows])
-        included, total = [], 0
-        for key, header, get in _ZAD_COLS:
-            w = widths[key]
-            add = w + (1 if included else 0)
+        chosen, total = set(), 0
+        for key in _ZAD_PRIO:
+            # "24" bez prefiksu nie mowi, 24 CZEGO (przy 80 kolumnach bylo
+            # "lokalny prune 24 / 7 / 4 / 12" jeden pod drugim) -- Trzyma tylko z Prefiksem.
+            if key == "keep" and "pref" not in chosen:
+                continue
+            add = widths[key] + (_ZAD_GAP if chosen else 0)
             if total + add <= inner:
-                included.append((key, header, get, w))
+                chosen.add(key)
                 total += add
+        included = [(key, header, get, widths[key]) for key, header, get in _ZAD_COLS if key in chosen]
+        gap = _ZAD_GAP
+        if len(included) > 1:
+            gap = min(_ZAD_GAP_MAX, _ZAD_GAP + (inner - total) // (len(included) - 1))
+        sep = " " * gap
         cols = [fit(header, w) for _, header, _, w in included]
-        hdr = " ".join(cols)
+        hdr = sep.join(cols)
         body = [hdr, ch.dash * inner]
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
@@ -1331,8 +1380,8 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         for i, r in enumerate(rows[first:first + list_h], start=first):
             if i == cursor:
                 cur_y = len(body)
-            cells = [fit(get(r) or "-", w, ch) for _, _, get, w in included]
-            body.append(fit(" ".join(cells), inner))
+            cells = [fit(get(r) or ("" if key == "cnt" else "-"), w, ch) for key, _, get, w in included]
+            body.append(fit(sep.join(cells), inner))
         if not rows:
             body += [u"Zero zadań wyprowadzonych z zainstalowanych bloków.",
                      u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu bloku",
@@ -1498,8 +1547,10 @@ def detail_kv(ch, pairs, width):
 
 
 def side_by_side(left, right, width, ch):
-    """Panel obok listy od ~120 kolumn: lista dostaje 60%, panel reszte."""
-    lw = max(MIN_WIDTH, int(width * 0.6))
+    """Panel obok listy: lista zajmuje tyle, ile jej ramka, panel reszte.
+    Szerokosc brana Z RAMKI, nie liczona drugi raz: dwie kopie tej samej
+    proporcji rozjechaly sie przy probie 65% dla F2 i lista wyszla ucieta."""
+    lw = len(left[0]) if left else max(MIN_WIDTH, int(width * 0.6))
     rw = width - lw
     n = max(len(left), len(right))
     left = left + [""] * (n - len(left))
@@ -2128,7 +2179,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                 if f.get("retain"):
                     ret.append(f["retain"])
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
-                _pw = u"porządki źródła" if "@" in (sec.get("name") or "") else u"porządki"
+                _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
                 key = (_pw, u"trzyma %s   co: %s%s" % (" ".join(ret) or "?", sched,
                                                        "   drabina GFS" if f.get("gfs") == "yes" else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
@@ -2718,8 +2769,10 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
 HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
     "",
-    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie, harmonogram,",
-    u"                 następny bieg, czasy i GB jak w mailu (ostatni/średni/maks,",
+    u"  F2  Zadania    co chodzi w cronie: relacja, kierunek, zadanie (pobranie,",
+    u"                 wysyłka, lokalny/zdalny prune), prefiks migawek, ile trzyma,",
+    u"                 szt. (datasetów w wierszu), harmonogram, następny bieg,",
+    u"                 czasy i GB jak w mailu (ostatni/średni/maks,",
     u"                 okno digestu), kopie; panel szczegółów dodaje strażnika",
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
