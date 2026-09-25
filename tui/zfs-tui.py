@@ -1931,7 +1931,7 @@ def rel_panel_pairs(row, data, now, ch):
             pairs.append(("Biegi %dd" % days, u"brak w dziennikach z tego okna"))
         pairs.append(("Wolumen", row.get("gb") or "-"))
     npairs, _how = rel_pairs(row, data, now, ch)
-    pairs.append(("Datasety", u"%s   lądowisk %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
+    pairs.append(("Datasety", u"%s   cel %d" % (plural(len(npairs), "para", "pary", "par"), len(rel.get("managed_datasets") or []))))
     for key, fld in (("Utworzona", "created_at"), (u"Pełna kopia", "seed_completed_at"), ("Aktywowana", "activated_at"), (u"Usunięta", "removed_at")):
         if rel.get(fld):
             pairs.append((key, rel[fld]))
@@ -1961,12 +1961,29 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     pairs, how = rel_pairs(r, data, now, ch) if r is not None else ([], "")
     binner = width - 4
     wide = width >= 100
-    # Para na jednej linii, gdy sie miesci; inaczej zrodlo i pod nim cel.
-    tail_w = (13 + 1 + 11 + 1 + 5) if wide else 0
+    # R5-4 (wlasciciel 2026-09-25): kolumny z PRAWDZIWYM naglowkiem nad nimi,
+    # nie w tytule ramki, i bez dziury -- wartosci doklejane do prawej krawedzi
+    # zostawialy 60 spacji miedzy "zrodlo -> cel" a Kopie. Ta sama zasada co F2
+    # (R4-3/R4-5): szerokosc = tresc, odstep >= 2, zapas rozlozony na odstepy.
+    pcol = None
+    if wide and pairs:
+        _kw = max([len(u"Kopie")] + [len(p_["vword"]) for p_ in pairs])
+        _tw = len(u"Szczeble")
+        _cw = max([len(u"Czas o/ś/m")] + [len(p_["czas"]) for p_ in pairs])
+        _gw = max([len(u"GB")] + [len(p_["gb"]) for p_ in pairs])
+        _ones = [u"%s %s %s" % (p_["src"], ch.right, p_["dst"]) for p_ in pairs]
+        _tail = _kw + _tw + _cw + _gw + 4 * 2
+        _sw = min(max([len(u"Źródło → cel")] + [len(x) for x in _ones]), max(20, binner - _tail))
+        _gap = max(2, min(6, (binner - _sw - _kw - _tw - _cw - _gw) // 4))
+        pcol = (_sw, _kw, _tw, _cw, _gw, _gap)
     plines_of = []
     for pr in pairs:
         one = u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
-        if len(one) + (tail_w + 1 if wide else 0) <= binner:
+        if pcol is None:
+            fits = len(one) <= binner
+        else:
+            fits = len(one) <= pcol[0]
+        if fits:
             plines_of.append([one])
         else:
             plines_of.append([pr["src"], u"  %s %s" % (ch.right, pr["dst"])])
@@ -1980,7 +1997,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     panel_need = len(detail_kv(ch, panel_rows, pw - 4)) + 2
     # Gdy par jest wiecej, niz zostaje miejsca, PARY WYGRYWAJA z panelem
     # (panel ucina koniec, calosc jest w oknie Enter); lista nigdy nie traci.
-    need_pairs = sum(len(x) for x in plines_of) + 2
+    need_pairs = sum(len(x) for x in plines_of) + 2 + (2 if pcol else 0)
     top_h = max(len(rows) + 4, 7, min(panel_need, avail - need_pairs))
     top_h = min(top_h, avail - 4)
     bot_h = avail - top_h
@@ -2052,6 +2069,12 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     # czasem i GB per para (te same liczby co F2).
     plines = []
     ph = max(1, bot_h - 2)
+    if pcol:
+        _sw, _kw, _tw, _cw, _gw, _gap = pcol
+        _g = " " * _gap
+        plines.append(_g.join([fit(u"Źródło %s cel" % ch.right, _sw), fit(u"Kopie", _kw), fit(u"Szczeble", _tw),
+                               fit(u"Czas o/ś/m", _cw), fit(u"GB", _gw)]))
+        plines.append(ch.dash * min(binner, _sw + _kw + _tw + _cw + _gw + 4 * _gap))
     # Przewijanie parami: pierwsza widoczna para tak, zeby kursor byl w oknie.
     pfirst = 0
     while pfirst < pair_cursor and sum(len(x) for x in plines_of[pfirst:pair_cursor + 1]) > ph:
@@ -2067,14 +2090,14 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         if i == pair_cursor and focus == "pairs":
             pcur_y = len(plines)
         for n_, l in enumerate(ls):
-            if wide and n_ == len(ls) - 1:
-                # SZCZEBLE w kolumnie zamiast powtorzonego wiersza: "x4" mowi,
-                # ze ten dataset obsluguja cztery linie crona, i zajmuje trzy
-                # znaki zamiast szesciu linii ekranu.
-                _t = pr.get("tiers", 1)
-                tail = "%s %s %s %s" % (fit(pr["vword"], 13, ch), fit(("%d" % _t) if _t > 1 else "", 4, ch),
-                                        fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
-                plines.append(fit(l, binner - len(tail) - 1, ch) + " " + tail)
+            if pcol and n_ == len(ls) - 1:
+                # SZCZEBLE w kolumnie zamiast powtorzonego wiersza: liczba linii
+                # crona, ktore obsluguja ten dataset -- takze 1 (pusta komorka
+                # pod naglowkiem nic nie mowila, R5-4).
+                _sw, _kw, _tw, _cw, _gw, _gap = pcol
+                _g = " " * _gap
+                plines.append(_g.join([fit(l, _sw, ch), fit(pr["vword"], _kw, ch), fit("%d" % pr.get("tiers", 1), _tw, ch),
+                                       fit(pr["czas"], _cw, ch), fit(pr["gb"], _gw, ch)]))
             else:
                 plines.append(fit(l, binner, ch))
         shown += 1
@@ -2098,7 +2121,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
             btitle += u" w %s crona" % plural(_tiers, "linii", "liniach", "liniach")
         btitle += u", %s" % how
     if wide and pairs:
-        btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
+        pass   # R5-4: nazwy kolumn stoja nad kolumnami, nie w tytule
     _pw = u"wznów" if _paused else u"pauza"
     bfoot = (u"Enter szczegóły  F7 %s  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" % _pw if width >= 100
              else u"Enter F7:%s F8:eksport F9:import Del Ins Tab" % _pw) if rows else u"F9 import z pliku   Ins nowa relacja"
@@ -2156,10 +2179,15 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     ], w))
     out.append("")
     out.append(u"co kopiuje")
-    pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?"),
-             ("Cel", rel.get("client_target") or (u"ta sama ścieżka (synchro)" if rel.get("mode") == "sync" else "?"))]
+    pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
+    # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
+    # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
+    # przy synchro dopisek w tej samej linii.
+    _sync = u"   (ta sama ścieżka -- synchro)" if rel.get("mode") == "sync" else ""
     if rel.get("managed_datasets"):
-        pairs.append((u"Lądowiska (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"])))
+        pairs.append((u"Cele (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
+    else:
+        pairs.append(("Cel", (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
         pairs.append((u"Prune", ",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
@@ -2397,24 +2425,98 @@ def cron_lines_of(jobs, w, ch):
 
     Otoczka zfs-job.sh (--log/--notify/--detail) jest POMIJANA i to jest
     powiedziane: sama komenda silnika mowi, co sie stanie."""
-    out = []
-    seen = set()
+    # R5-5 (wlasciciel 2026-09-25): KAZDY ZAKRES ZE SWOIMI LINIAMI. list-jobs
+    # daje kazdemu zadaniu cron_lines calego BLOKU, a pierwsza wersja drukowala
+    # je wszystkie pod pierwszym zadaniem i pomijala powtorki -- pve9-synchro
+    # mialo 19 linii pod hdd/lab/ct-201 i osiem pustych naglowkow.
+    # GRUPA = zadania tego samego rodzaju, zakresu i harmonogramu: drabina GFS
+    # to JEDNA linia delsnaps dla czterech szczebli, wiec cztery szczeble to
+    # jeden naglowek. Linia nalezy do grupy, gdy jej zakres (albo drugi koniec)
+    # stoi w niej jako argument w cudzyslowie i jej rodzina tez; transfer tylko
+    # do [dataset:], prune i straznik najpierw do [prune:]. Linia wielu grup
+    # (straznik z lista datasetow) idzie do wspolnych na koncu.
+    def _eng(ln):
+        e = ln.split(" -- ", 1)[1] if " -- " in ln else " ".join(ln.split()[5:])
+        return e.split(" >>")[0]
+
+    groups, gkey = [], {}
     for j in jobs:
-        arrow = ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?")
-        ret = j.get("retain") or j.get("keep") or ""
-        tier = j.get("tier", "")
-        if "__" in tier:
-            tier = tier.rsplit("__", 1)[-1]
-        out.append(fit("  %s %-13s %-20s %s" % (fit(arrow, 16, ch), j.get("schedule", "?"), fit(tier + ((" " + ret) if ret else ""), 20, ch),
-                                               fit_left(j.get("scope", ""), max(10, w - 54), ch)), w))
-        for ln in j.get("cron_lines") or []:
-            if ln in seen:
+        k = (j.get("section_kind"), j.get("scope"), j.get("schedule"), j.get("direction"))
+        if k not in gkey:
+            gkey[k] = len(groups)
+            groups.append([])
+        groups[gkey[k]].append(j)
+
+    def _matches(g, elems, fams):
+        for j in g:
+            fam = family_of(j)
+            if fam and fam not in fams:
                 continue
-            seen.add(ln)
-            sched = " ".join(ln.split()[:5])
-            engine = ln.split(" -- ", 1)[1] if " -- " in ln else " ".join(ln.split()[5:])
-            engine = engine.split(" >>")[0]
-            out.extend(wrap("      %s   %s" % (sched, engine), w))
+            if j.get("scope") in elems:
+                return "scope"
+            if j.get("other_end") and j["other_end"] in elems:
+                return "end"
+        return None
+
+    def _owner(ln):
+        eng = _eng(ln)
+        toks = re.findall(r'"([^"]*)"', eng)
+        elems = set(x for t in toks for x in t.split(","))
+        fams = set(t.rstrip("_") for t in toks)
+        # delsnaps -G z "automated_" tnie drabine calej rodziny: pasuje do
+        # kazdego szczebla, ktorego rodzina zaczyna sie od tego prefiksu.
+        fams |= set(family_of(j) for j in jobs if any(family_of(j).startswith(t) for t in toks if t.endswith("_")))
+        hit = [(i, _matches(g, elems, fams)) for i, g in enumerate(groups)]
+        hit = [(i, h) for i, h in hit if h]
+        if "snapget.sh" in eng or "snapsend.sh" in eng:
+            hit = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "dataset"]
+        else:
+            pr = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "prune"]
+            hit = pr or hit
+        sc = [i for i, h in hit if h == "scope"]
+        pick = sc if sc else [i for i, _h in hit]
+        return pick[0] if len(pick) == 1 else None, len(pick)
+
+    lines, seen = [], set()
+    for j in jobs:
+        for ln in j.get("cron_lines") or []:
+            if ln not in seen:
+                seen.add(ln)
+                lines.append(ln)
+    mine = [[] for _g in groups]
+    shared = []
+    for ln in lines:
+        gi, nown = _owner(ln)
+        if gi is None:
+            shared.append((ln, nown))
+        else:
+            mine[gi].append(ln)
+
+    out = []
+
+    def _emit(ln):
+        out.extend(wrap("      %s   %s" % (" ".join(ln.split()[:5]), _eng(ln)), w))
+
+    for gi, g in enumerate(groups):
+        j = g[0]
+        arrow = ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?")
+        tiers = []
+        for x in g:
+            t = x.get("tier", "")
+            if "__" in t:
+                t = t.rsplit("__", 1)[-1]
+            r = x.get("retain") or x.get("keep") or ""
+            tiers.append(t + ((" " + r) if r else ""))
+        # Nazwa szczebla w calosci (R5-5: "passive_flat_hourly…" ucinalo sie).
+        out.extend(wrap("  %s  %s  %s  %s" % (arrow, j.get("schedule", "?"), ", ".join(tiers), j.get("scope", "")), w))
+        for ln in mine[gi]:
+            _emit(ln)
+    if shared:
+        n_ = max([k for _l, k in shared] + [0])
+        out.append("")
+        out.append(u"  wspólne (%s)" % (u"strażnik i linie obejmujące %d zakresów" % n_ if n_ > 1 else u"linie bez jednego właściciela"))
+        for ln, _k in shared:
+            _emit(ln)
     if jobs and not any(j.get("cron_lines") for j in jobs):
         out.append(u"  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)")
     return out
@@ -3136,8 +3238,9 @@ class UI(object):
                                    "shell": line, "on_yes": on_yes})
         self.scroll = 0
 
-    def prompt(self, title, label, value, on_enter, error=None):
-        self.window = ("prompt", {"title": title, "label": label, "value": value, "on_enter": on_enter, "error": error})
+    def prompt(self, title, label, value, on_enter, error=None, footer=None):
+        self.window = ("prompt", {"title": title, "label": label, "value": value, "on_enter": on_enter, "error": error,
+                                  "footer": footer})
         self.scroll = 0
 
     def run_detached(self, title, argv, redirect=None, logname=None):
@@ -3248,7 +3351,7 @@ class UI(object):
         elif k == "F8":
             default = os.path.join(relations_dir(), "%s.export.json" % n)
             self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = anuluj):", default,
-                        lambda path: self.export_to(n, path))
+                        lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc anuluj")
 
     def export_to(self, n, path):
         """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
@@ -3976,7 +4079,8 @@ def _ui_render(self, width, height):
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
                 lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
             lines.append(u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc anuluje.")
-            scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch, footer=u"Enter dalej   Esc anuluj")
+            scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
+                                             footer=obj.get("footer") or u"Enter dalej   Esc anuluj")
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=u"t wykonaj   e do linii poleceń   Esc anuluj")

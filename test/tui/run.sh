@@ -162,7 +162,7 @@ if hasE "$ZT" 'trzyma +24 godz\.' && ! hasE "$ZT" 'trzyma +-H24'; then
 else
     bad "zadania: panel trzyma" "$ZT"
 fi
-if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   lądowisk 1' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywowana +2026-09-08'; then
+if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   cel 1' && ! has "$S4" 'lądowisk' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywowana +2026-09-08'; then
     ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/pelna kopia/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze; 'Zasiew' -> 'Pelna kopia' R5-1)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
@@ -170,9 +170,16 @@ fi
 # DOLNY PANEL Z CRONA: para w jednej linii, gdy sie miesci (200); inaczej
 # zrodlo i pod nim cel (80, 120). Od 100 kolumn kopie, czas i GB per para --
 # te same liczby co F2 -- przy ostatniej linii pary.
-if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona   [źródło → cel | Kopie | Szczeble | Czas o/ś/m | GB]' \
-        && hasE "$S4" '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
-    ok "relacje: dolny panel przy 200 -- para w jednej linii z kopiami, czasem o/s/m i GB"
+# R5-4: nazwy kolumn w WIERSZU NAGLOWKA nad kolumnami, nie w tytule ramki, i
+# wartosc pod swoim naglowkiem (ta sama kolumna tekstu), bez dziury.
+S4H="$(printf '%s\n' "$S4" | grep -E '║ Źródło → cel +Kopie +Szczeble +Czas o/ś/m +GB' | head -1)"
+S4R="$(printf '%s\n' "$S4" | grep -E '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9]+ +[0-9/]+s +[0-9.]+[KMG]' | head -1)"
+# Pozycja w ZNAKACH, nie bajtach ("Zrodlo" ma litery wielobajtowe; wc -m na
+# Git Bash liczy bajty) -- liczy Python.
+_same=$("$PY" -c 'import sys; h,r=sys.argv[1],sys.argv[2]; print(1 if h and r and h.index("Kopie")==r.index("aktualne") else 0)' "$S4H" "$S4R" 2>/dev/null)
+if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona' && ! has "$S4" '[źródło' \
+        && [ -n "$S4H" ] && [ -n "$S4R" ] && [ "$_same" = 1 ]; then
+    ok "relacje: dolny panel przy 200 -- wiersz naglowka nad kolumnami, para w jednej linii, Kopie pod Kopie (R5-4)"
 else
     bad "relacje: pary przy 200" "$S4"
 fi
@@ -311,7 +318,7 @@ else
 fi
 
 S4_120="$(screen relacje down,down,down,down --width 120)"
-if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9/]+s +[0-9.]+[KMG] +║'; then
+if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9]+ +[0-9/]+s +[0-9.]+[KMG] +║'; then
     ok "relacje: przy 120 para, ktora sie nie miesci, to zrodlo i pod nim cel z liczbami -- nic nie uciete"
 else
     bad "relacje: pary przy 120" "$S4_120"
@@ -723,7 +730,7 @@ fi
 RD="$(mktemp -d)"; RDP="$RD"; command -v cygpath >/dev/null 2>&1 && RDP="$(cygpath -m "$RD")"
 export ZFS_TUI_RELATIONS_DIR="$RDP"
 A="$(act down,F8)"
-if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'; then
+if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'    && has "$A" 'Enter zapisz' && ! has "$A" 'Enter dalej'; then
     ok "akcje: F8 podpowiada sciezke w katalogu relacji (<dir>/<relacja>.export.json) i mowi, ze istniejacy plik bedzie nadpisany"
 else
     bad "akcje: F8 podpowiedz" "$A"
@@ -902,10 +909,10 @@ if has "$W" '╔═ Relacja lab-ct201 ═'; then
 else
     bad "okno: otwarcie" "$W"
 fi
-if hasE "$W" 'Lądowiska [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
+if hasE "$W" 'Cele [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && ! has "$W" 'Lądowisk' && ! hasE "$W" '║ Cel  ' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
         && has "$W" 'co kopiuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
         && ! has "$W" 'W CRONIE' && ! has "$W" '[ Opis ]'; then
-    ok "okno: szczegoly -- zrodla z rekordu, ladowiska (MANAGED_DATASETS), grupy pytaniami operatora, bez zakladek (R4-7)"
+    ok "okno: szczegoly -- zrodla z rekordu, JEDEN wiersz 'Cele (N)' (R5-3, MANAGED_DATASETS), grupy pytaniami operatora, bez zakladek (R4-7)"
 else
     bad "okno: zakres/Opis" "$W"
 fi
@@ -940,6 +947,21 @@ if has "$WC" '── CRON ' && has "$WC" 'snapget.sh -m' && has "$WC" '-L lab-ct
     ok "okno: sekcja CRON pokazuje linie snapget (po etykiecie -L), delsnaps i monitor -- to, co host naprawde wykona"
 else
     bad "okno: sekcja CRON" "$WC"
+fi
+# R5-5 (wlasciciel 2026-09-25): kazdy naglowek ze SWOIMI liniami. Drabina GFS
+# (keep_hourly..keep_monthly, jedna linia delsnaps) to jeden naglowek, a jej
+# delsnaps i straznik stoja pod nim -- nie pod transferem i nie we "wspolnych".
+# 160 kolumn: przy 80 naglowek grupy zawija sie w kilka linii.
+WCG="$(screen relacje down,enter --width 160 --height 300 | sed -n '/── CRON /,/konto:/p')"
+_lh=$(printf '%s\n' "$WCG" | grep -n '← 192.168.28.99  30 \* \* \* \*' | head -1 | cut -d: -f1)
+_ls=$(printf '%s\n' "$WCG" | grep -n 'snapget.sh -m "automated_hourly_"' | head -1 | cut -d: -f1)
+_lp=$(printf '%s\n' "$WCG" | grep -n 'prune  50 \* \* \* \*  keep_hourly -H24, keep_daily -D7, keep_weekly -W4, keep_monthly -M12' | head -1 | cut -d: -f1)
+_ld=$(printf '%s\n' "$WCG" | grep -n 'delsnaps.sh -G -R -L lab-ct201' | head -1 | cut -d: -f1)
+_lm=$(printf '%s\n' "$WCG" | grep -n 'check-snap-age.sh -R -L lab-ct201' | head -1 | cut -d: -f1)
+if [ -n "$_lh" ] && [ -n "$_ls" ] && [ -n "$_lp" ] && [ -n "$_ld" ] && [ -n "$_lm" ]    && [ "$_lh" -lt "$_ls" ] && [ "$_ls" -lt "$_lp" ] && [ "$_lp" -lt "$_ld" ] && [ "$_ld" -lt "$_lm" ]    && ! printf '%s\n' "$WCG" | grep -q 'wspólne'; then
+    ok "okno: CRON wg zakresow -- transfer pod swoim naglowkiem, drabina GFS jednym naglowkiem z delsnaps i straznikiem pod nim (R5-5)"
+else
+    bad "okno: CRON wg zakresow" "naglowek=$_lh snapget=$_ls prune=$_lp delsnaps=$_ld straznik=$_lm" "$WCG"
 fi
 # Relacja W ZASIEWIE (bez pliku configu) -- Config ma powiedziec to, nie
 # pokazac cudzy config z fikstury.

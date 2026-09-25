@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 443f6f7733d808e9 -->
+<!-- status-covers-digest: 516a3d39631e38c9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI, runda 5: Cele, tabela par, CRON wg zakresów, stopka eksportu (R5-3..R5-6, 2026-09-25).**
+  - R5-3: „Lądowiska” + osobny „Cel” → jeden wiersz **„Cele (N)”** z listą datasetów
+    docelowych (przy synchro dopisek „ta sama ścieżka”); panel F3 „Datasety 1 para   cel 1”.
+  - R5-4: panel par F3 ma **wiersz nagłówka nad kolumnami** (Źródło → cel, Kopie, Szczeble,
+    Czas o/ś/m, GB) zamiast nazw w tytule ramki; wartości pod nagłówkami, bez dziury;
+    Szczeble także „1”.
+  - R5-5: sekcja CRON w oknie relacji/zadania -- **każda grupa zadań ze swoimi liniami**.
+    Grupa = rodzaj + zakres + harmonogram (drabina GFS czterech szczebli = jeden nagłówek,
+    jedna linia delsnaps). Transfer należy do `[dataset:]`, prune i strażnik najpierw do
+    `[prune:]`; strażnik wielu zakresów we „wspólnych”. Nazwy szczebli bez ucinania.
+    Na żywych danych pve10: pve11 16/16 linii, pve9b 16/16, pve9-synchro 18 + strażnik 9 zakresów.
+  - R5-6: stopka okna eksportu „Enter zapisz” (było „Enter dalej”).
+  - **Dowody:** `tui` PASS=199 FAIL=0; render na żywych danych pve10 (kopia w /tmp).
 
 - **A′ poprawka: pierwsze migawki przy instalacji też z `-R`/`-r`; w GUI „Pełna kopia” zamiast „Zasiew” (R5-1, 2026-09-25).**
   - Instalacja producenta migawek na pve9 (`local-backup --target='' --recursive=flat`,
