@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 190eabff09b281e7 -->
+<!-- status-covers-digest: 443f6f7733d808e9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **A′ poprawka: pierwsze migawki przy instalacji też z `-R`/`-r`; w GUI „Pełna kopia” zamiast „Zasiew” (R5-1, 2026-09-25).**
+  - Instalacja producenta migawek na pve9 (`local-backup --target='' --recursive=flat`,
+    konto `zfsbackup`, 4 korzenie hdd/lab) zasiała tylko korzenie -- ścieżka seed nie czytała
+    `--recursive` („neither -r nor -R was given”). Linie crona miały `-R` od początku.
+    Teraz seed dostaje `-R` (flat) / `-r` (atomic), jak zainstalowana linia; 2 testy.
+  - GUI: panel F3 i historia w oknie relacji mówią „Pełna kopia” zamiast „Zasiew”
+    (decyzja właściciela R5-1).
+  - **Dowody:** `tui` PASS=198 FAIL=0; `localbackup` lokalnie: 2 nowe testy PASS (pełna
+    suita na CI -- Git Bash w tej suicie kłamie).
 
 - **`local-backup --target='' --recursive=flat|atomic` -- migawki z dziećmi bez kopiowania (luka A′, 2026-09-25).**
   - **Przyczyna (zmierzona):** pve9-synchro (pve10<>pve9, `passive-flat`, `snapget -e`) od

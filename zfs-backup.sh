@@ -7293,6 +7293,15 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 
     log "seed: pierwsza wysylka kazdego zrodla, prefiks '$seed_prefix' (to moze potrwac)..."
     local seed_failed=0 sr
+    # The seed makes the FIRST snapshot the same way the installed line will,
+    # so --recursive reaches it too: without this the seed on pve9
+    # (2026-09-25) stamped only the four roots and warned "neither -r nor -R
+    # was given", and the children waited for the first cron run.
+    local -a seed_rec=()
+    case "$lb_recursion" in
+        flat)   seed_rec=(-R) ;;
+        atomic) seed_rec=(-r) ;;
+    esac
     for sr in "${roots[@]}"; do
         # ONE ARGUMENT when nothing is copied, which is the same shape the
         # installed cron line has: snapsend with a single dataset creates the
@@ -7300,7 +7309,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         # happened to work, but it made the seed and the job it is seeding
         # differ in the one place they must not.
         if [ "$no_copy" -eq 1 ]; then
-            if bash "$SNAPSEND" -m "$seed_prefix" -v 3 "$sr"; then
+            if bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${seed_rec[@]+"${seed_rec[@]}"} "$sr"; then
                 log "  OK: $sr (snapshot only -- nothing is copied)"
             else
                 warn "  FAILED: $sr (snapshot only)"

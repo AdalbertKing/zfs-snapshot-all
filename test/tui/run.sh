@@ -162,8 +162,8 @@ if hasE "$ZT" 'trzyma +24 godz\.' && ! hasE "$ZT" 'trzyma +-H24'; then
 else
     bad "zadania: panel trzyma" "$ZT"
 fi
-if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   lądowisk 1' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Zasiew +2026-09-08' && hasE "$S4" 'Aktywowana +2026-09-08'; then
-    ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/zasiew/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze)"
+if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   lądowisk 1' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywowana +2026-09-08'; then
+    ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/pelna kopia/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze; 'Zasiew' -> 'Pelna kopia' R5-1)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
 fi
