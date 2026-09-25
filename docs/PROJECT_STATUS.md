@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2fbdcb85db85d4c3 -->
+<!-- status-covers-digest: 897c9cc76a5b8d44 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,17 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI, runda 4: poprawki z testu testera na pve10/pve11 (2026-09-25).**
+  - B1: listwa F3 podpisuje akcje okna (F7/F8/F9) -- podpisy były tylko na F2 i F4.
+  - B2: panel F3 nazywa transfer wg kierunku (Pobranie / Wysyłka / Kopia) i mówi
+    „Lokalny prune” / „Zdalny prune” zamiast „Porządki” / „U źródła”.
+  - B3: kolumna Szczeble w panelu par F3 bez „x” (sama liczba).
+  - B4: polityka w oknie relacji: „(9 szt.)” zamiast „x9”, retencja z jednostką,
+    „bez prune (źródło nie kasuje)” zamiast „bez porządków”.
+  - B5: panel F2 „trzyma 24 godz.” jak kolumna Trzyma, nie surowe `-H24`.
+  - B6: na wstrzymanej relacji F7 podpisane „Wznów” (listwa i ramka), nie „Pauza”.
+  - **Dowody:** `tui` PASS=198 FAIL=0 (pty pominięty na Windows).
 
 - **GUI, runda 4 etap 4: eksport bez drugiego potwierdzenia, import z listy plików, katalog relacji (R4-8, R4-9, R4-10, 2026-09-25).**
   - Eksport (F8 na F3): podpowiedź `/etc/zfs-snapshot-all/relations/<relacja>.export.json`,
