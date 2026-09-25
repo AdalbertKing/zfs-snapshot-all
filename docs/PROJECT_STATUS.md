@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 44bd80e3158d56f1 -->
+<!-- status-covers-digest: fd2404db90582e82 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI, runda 4 etap 2: kolumny F2 -- Zadanie | Prefiks | Trzyma | szt., odstępy (R4-3, R4-4, R4-5, 2026-09-25).**
+  - Zadanie to samo słowo: pobranie / wysyłka / kopia / **lokalny prune** / **zdalny
+    prune** (dawniej „porządki” / „porządki źródła”, także w oknie relacji).
+  - **Prefiks** = rodzina migawek jak w `zfs list` (`automated_hourly`), **Trzyma** =
+    retencja z jednostką (`24 godz.`, `7 dni`, `4 tyg.`, `12 mies.`; drabina GFS
+    przycina `automated_hourly` także szczeblem `-D7`, więc goła liczba myliłaby),
+    **szt.** = datasetów w zgrupowanym wierszu (dawne `x3`). Trzyma tylko razem z Prefiksem.
+  - Kolumny wchodzą wg ważności (Relacja, Kierunek, Zadanie, Kopie, Następny,
+    Prefiks, Trzyma, szt., Harmonogram, GB, Czas). Przy 100 kolumnach na danych pve10
+    zostaje 6 pierwszych -- reszta jest w panelu.
+  - Odstęp między kolumnami co najmniej 2 spacje; zapas szerokości rozłożony na
+    odstępy (do 6), zamiast pustki po prawej. `side_by_side` bierze szerokość listy z ramki.
+  - **Dowody:** `tui` PASS=189 FAIL=0 (pty pominięty na Windows); render na danych pve10
+    przy 80/100/120/150/190; kontrola negatywna odstępów na TUI z `main`.
 
 - **GUI, runda 4 etap 1: klawisze F -- F1-F6 okna, F7/F8/F9 akcje okna, F5 odśwież (R4-1, R4-2, 2026-09-25).**
   - **Błąd R4-1:** F4 na F3 wstrzymywało relację zamiast otworzyć Transfery. Teraz

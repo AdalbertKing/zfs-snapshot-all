@@ -186,24 +186,26 @@ else
     bad "pomoc: klawisze R4-2" "$H1"
 fi
 
-# SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4, wersja 2, wlasciciel 2026-09-24).
-# Kierunek NIE UCINA SIE NIGDY (pelny adres synchro), Harmonogram zostaje
-# kolumna (nie ucieka juz do panelu jak wczesniej) -- to 'Czas o/ś/m', ostatnia
-# w priorytecie, spada pierwsza, kiedy tabela jest ciasna. Panel idzie OBOK
+# SZEROKOSC: KOLUMNY PO PRIORYTECIE (R3-4; R4-4 dolozyl Prefiks/Trzyma/szt.).
+# Kierunek NIE UCINA SIE NIGDY (pelny adres synchro). Kolejnosc wchodzenia:
+# Relacja, Kierunek, Zadanie, Kopie, Nastepny, Prefiks, Trzyma, szt.,
+# Harmonogram, GB, Czas -- przy 100 kolumnach Harmonogram jest juz tylko w
+# panelu (11 kolumn sie nie miesci). Panel idzie OBOK
 # listy od 150, nie od 120 jak wczesniej (punkt 3) -- 120 zabieral liscie
 # miejsce, ktorego panelowi i tak nie oddawal w calosci.
 Z100="$(screen zadania "" --width 100)"
-if has "$Z100" 'Następny' && has "$Z100" 'Harmonogram' && has "$Z100" 'pve10<192.168.28.99' \
-   && ! has "$Z100" 'pve10<192.168.28.…'; then
-    ok "zadania: przy 100 kolumnach sa Nastepny i Harmonogram, adres peera CALY (Czas wchodzi tylko, gdy zostanie miejsce)"
+if has "$Z100" 'Następny' && has "$Z100" 'Prefiks' && has "$Z100" 'Kopie' && has "$Z100" 'pve10<192.168.28.99' \
+   && ! has "$Z100" 'pve10<192.168.28.…' && ! has "$Z100" '…'; then
+    ok "zadania: przy 100 kolumnach sa Nastepny, Prefiks i Kopie, adres peera CALY, nic nie uciete (R4-4)"
 else
     bad "zadania: kolumny przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
 fi
-# 200, nie 160: od 150 panel stoi obok i lista ma 60% szerokosci
-Z160="$(screen zadania "" --width 200)"
-if has "$Z160" 'Relacja' && has "$Z160" 'Kierunek' && has "$Z160" 'Zadanie' && has "$Z160" 'Harmonogram' \
+# 260: od 150 panel stoi obok i lista ma 60% szerokosci; 11 kolumn R4-4
+Z160="$(screen zadania "" --width 260)"
+if has "$Z160" 'Relacja' && has "$Z160" 'Kierunek' && has "$Z160" 'Zadanie' && has "$Z160" 'Prefiks' \
+   && has "$Z160" 'Trzyma' && has "$Z160" 'szt.' && has "$Z160" 'Harmonogram' \
    && has "$Z160" 'Następny' && has "$Z160" 'Kopie' && has "$Z160" 'GB' && has "$Z160" 'Czas o/ś/m'; then
-    ok "zadania: przy 200 kolumnach wchodzi wszystkich osiem naglowkow"
+    ok "zadania: przy 260 kolumnach wchodzi wszystkich jedenascie naglowkow"
 else
     bad "zadania: naglowki przy 160" "$(printf '%s' "$Z160" | sed -n '3p')"
 fi
@@ -316,7 +318,7 @@ else
     bad "relacje: Tab" "$TP"
 fi
 TE="$(screen relacje down,tab,enter)"
-if has "$TE" '[F2 Zadania]' && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && has "$TE" 'pobranie hourly'; then
+if has "$TE" '[F2 Zadania]' && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && hasE "$TE" '^║ lab-ct201 .*pobranie '; then
     ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
 else
     bad "relacje: Enter na parze" "$TE"
@@ -383,7 +385,8 @@ fi
 # ============================================================================
 # Wlasciciel, 2026-09-09: "obok kolumny relacja wstaw kolumne z kierunkiem np.
 # pve9>pve10, lub pve9<>pve10, lub local" -- lewa strona to ZAWSZE ten host.
-Z="$(screen zadania)"
+# R4-4: Prefiks i Trzyma wchodza od ~100 kolumn (przy 80 nie ma na nie miejsca).
+Z="$(screen zadania "" --width 100)"
 if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) -- sort'; then
     ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja, tytul nazywa domyslny widok sortowania"
 else
@@ -394,17 +397,17 @@ fi
 # Zadanie a nimi) -- sprawdzamy PREFIKS wiersza (Relacja/Kierunek/Zadanie, ktore
 # sa priorytetem 1-3 i zawsze pierwsze) i ze werdykt gdzies na tym wierszu jest,
 # bez wiazania sie do dokladnej pozycji kolumn koncowych.
-if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.99 +pobranie hourly ' && ! has "$Z" 'Zakres'; then
+if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.99 +pobranie +automated_hourly ' && ! has "$Z" 'Zakres'; then
     ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej, adres CALY), i ZADNEJ kolumny Zakres"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +local +porządki -H24 '; then
-    ok "zadania: porzadki na ladowisku = 'local', z tym, co trzymaja (-H24) w zadaniu"
+if hasE "$Z" '^║ lab-vm101 +local +lokalny prune +automated_hourly +24 godz\. '; then
+    ok "zadania: porzadki na ladowisku = 'local', 'lokalny prune', rodzina w Prefiksie i retencja z jednostka w Trzyma (R4-4)"
 else
     bad "zadania: wiersz porzadkow" "$Z"
 fi
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +porządki źródła -H24 ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +porządki -H24 ')" -eq 1 ]; then
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +zdalny prune +automated_hourly +24 godz\. ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +lokalny prune +automated_hourly +24 godz\. ')" -eq 1 ]; then
     ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
 else
     bad "zadania: zdalne porzadki" "$Z"
@@ -432,7 +435,8 @@ set -- $want
 # R3-4: przy 80 kolumnach 'Czas o/ś/m' moze spasc z listy (priorytet 8) --
 # sprawdzamy DOKLADNA liczbe na SZEROKIM ekranie (200), gdzie wchodzi caly
 # priorytet; wartosc jest ta sama niezaleznie od tego, czy kolumna sie zmiesci.
-Z200="$(screen zadania "" --width 200)"
+# R4-4: 11 kolumn -- Czas wchodzi dopiero przy bardzo szerokiej liscie.
+Z200="$(screen zadania "" --width 260)"
 if has "$Z200" " $1 " && has "$Z200" " $2 "; then
     ok "zadania: czasy ($1) i GB ($2) w wierszu wysylki sa DOKLADNIE tym, co job-stats mowi o jej linii crona i jej ladowisku"
 else
@@ -457,7 +461,7 @@ else
     bad "zadania: zepsute job-stats" "$ZS_LINE" "$ZS"
 fi
 ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania --width 200 2>&1)"
-ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +hostA>pve9 +wysyłka hourly ')
+ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly ')
 if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'spóźnione' \
    && has "$ZH3" 'brak biegów tego zadania w dzienniku w oknie 7 dni'; then
     ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje werdykt i mowi 'brak biegow' w panelu (a wysylka do peera nie ma wolumenu do zmierzenia tutaj)"
@@ -478,8 +482,8 @@ if has "$ZSORT1" 'sort: oś czasu'; then
 else
     bad "zadania: F7 raz -- tytul" "$ZSORT1"
 fi
-L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka hourly' | head -1 | cut -d: -f1)
-L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia daily' | head -1 | cut -d: -f1)
+L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka ' | head -1 | cut -d: -f1)
+L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia ' | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
     ok "zadania: F7 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
 else
@@ -505,14 +509,25 @@ else
 fi
 
 # ============================================================================
+# R4-3/R4-5: co najmniej dwie spacje miedzy kolumnami; kiedy wszystkie sie
+# mieszcza, zapas idzie w odstepy, a nie w pustke po prawej (zrzut wlasciciela
+# z pve11 przy ~190 kolumnach). Fikstura hostA: 11 kolumn, przy 200 lista ma 130.
+R45N="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 100 2>&1 | sed -n 3p)"
+R45W="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 260 2>&1 | sed -n 3p)"
+if printf '%s' "$R45N" | grep -qE 'Kierunek  +Zadanie' && ! printf '%s' "${R45N#║ }" | grep -qE '[^ ] [A-ZŁŚ][a-zęąśłó]' \
+   && printf '%s' "$R45W" | grep -qE 'Kierunek {3,}Zadanie {3,}Prefiks'; then
+    ok "zadania: odstep miedzy kolumnami >= 2 spacje; przy szerokiej liscie zapas rozlozony na odstepy (R4-3, R4-5)"
+else
+    bad "zadania: odstepy kolumn" "$R45N" "$R45W"
+fi
 # SYNCHRO: "<>" nie "<" (rekord mowi, linia crona nie umie) + F2 GRUPOWANIE
 # ============================================================================
 # UWAGA 4 (wlasciciel, 2026-09-24): szczebel plaski (pobranie + porzadki w JEDNEJ sekcji)
 # mial w F2 tylko "pobranie". Porzadki z WLASNEJ linii zadania (tag "(sx-a)"), a linia
 # porzadkow sasiedniego datasetu z tego samego bloku ("(sx-b)", inny harmonogram) nie wchodzi.
 FP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
-if hasE "$FP" '^║ sx +[^ ]+ +porządki -H168 +21 \* \* \* \*' && ! hasE "$FP" 'porządki -H168 +17 \* \* \* \*' \
-   && [ "$(printf '%s\n' "$FP" | grep -c 'porządki -H168')" -eq 1 ]; then
+if hasE "$FP" '^║ sx +[^ ]+ +lokalny prune +automated +168 godz\. +1 +21 \* \* \* \*' && ! hasE "$FP" 'lokalny prune .* +17 \* \* \* \*' \
+   && [ "$(printf '%s\n' "$FP" | grep -c 'lokalny prune')" -eq 1 ]; then
     ok "zadania: szczebel plaski pokazuje WLASNE porzadki (harmonogram z jego linii delsnaps), bez cudzych z bloku (uwaga 4: pve9-synchro)"
 else
     bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "$FP"
@@ -524,10 +539,10 @@ fi
 GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
 G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
-if hasE "$G" '^║ sync-test +pve20<>192\.168\.28\.50 +pobranie hourly x3 ' \
+if hasE "$G" '^║ sync-test +pve20<>192\.168\.28\.50 +pobranie +automated_hourly +- +3 +5 \* \* \* \*' \
     && [ "$(printf '%s\n' "$G" | grep -cE '^║ sync-test ')" -eq 2 ] \
-    && hasE "$G" '^║ backup-test +pve20<192\.168\.28\.60 +pobranie hourly '; then
-    ok "zadania: F2 -- synchro rysuje '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz z 'x3', czwarty (inny harmonogram) NIE laczy sie; backup zostaje na '<'"
+    && hasE "$G" '^║ backup-test +pve20<192\.168\.28\.60 +pobranie +automated_hourly +- +1 '; then
+    ok "zadania: F2 -- synchro rysuje '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz z 'szt.' 3, czwarty (inny harmonogram) NIE laczy sie; backup zostaje na '<'"
 else
     bad "zadania: F2 grupowanie i symbol synchro" "$G"
 fi
@@ -577,8 +592,8 @@ if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' 
 else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
-ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania 2>&1)"
-if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +pobranie hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +kopia daily'; then
+ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 120 2>&1)"
+if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +pobranie +automated_hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +kopia +automated_daily'; then
     ok "zadania: wysylka = 'hostA>pve9', pobranie = 'hostA<pve1', kopia na hoscie = 'local'; zadanie bez etykiety mowi '(bez rel.)'"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
