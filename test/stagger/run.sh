@@ -270,6 +270,46 @@ else
     bad "a saturated host still yields a bare minute, not a diagnostic string"         "returned '$got_sat' -- this value would become the cron minute"
 fi
 
+# --- R5-7: tiers keep the profile's offsets ----------------------------------
+# pve9b (m31w4d7h24) was installed with hourly, daily, weekly and monthly all at
+# :00 -- the profile has them at :01, 01:11, 02:21, 03:31. Hourly and daily then
+# start in the same minute on the same datasets, the per-dataset lock lets one
+# through, the other skips with rc=0: no daily copy from 2026-09-22 (pve10).
+spread() {   # <send|prune> <minute> -> schedule_spread_tiers on the m31w4d7h24 tiers
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      lift schedule_with_minute
+      lift schedule_spread_tiers
+      printf 'printf "profile__m__hourly	%s
+profile__m__daily	%s
+profile__m__weekly	%s
+profile__m__monthly	%s
+profile__m__odd	%s
+" | schedule_spread_tiers %s %s
+'           "1 * * * *" "11 1 * * *" "21 2 * * 0" "31 3 1 * *" "*/15 * * * *" "$1" "$2"; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -f "$t"
+}
+got_sp="$(spread send 0)"
+want_sp="$(printf '	send_schedule_profile__m__hourly = 0 * * * *
+	send_schedule_profile__m__daily = 10 1 * * *
+	send_schedule_profile__m__weekly = 20 2 * * 0
+	send_schedule_profile__m__monthly = 30 3 1 * *
+	send_schedule_profile__m__odd = 0 * * * *')"
+if [ "$got_sp" = "$want_sp" ]; then
+    ok "R5-7: tiers shift together -- hourly on the relationship's minute, daily/weekly/monthly keep +10/+20/+30"
+else
+    bad "R5-7: tiers shift together" "got: $(printf '%s' "$got_sp" | tr '	
+' ' |')"
+fi
+got_wrap="$(spread prune 56)"
+if printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__daily = 6 1 \* \* \*'    && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__hourly = 56 \* \* \* \*'; then
+    ok "R5-7: the shift wraps past the hour (56 + 10 -> 6), never a minute 66"
+else
+    bad "R5-7: the shift wraps past the hour" "got: $(printf '%s' "$got_wrap" | tr '	
+' ' |')"
+fi
+
 # --- determinism ------------------------------------------------------------
 if [ "$(pick "$NAME" "")" = "$free_pick" ] && [ "$(pick "$NAME" "")" = "$free_pick" ]; then
     ok "the same relationship always lands on the same minute"
