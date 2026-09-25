@@ -2062,7 +2062,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     bfoot = (u"Enter szczegóły  F7 pauza  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" if width >= 100
              else u"Enter F7:pauza F8:eksport F9:import Del Ins Tab") if rows else u"F9 import z pliku   Ins nowa relacja"
     if focus == "pairs":
-        bfoot = u"Enter = to zadanie na F2   Tab wraca do relacji   strzałki"
+        bfoot = u"Enter szczegóły pary (config, cron)   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
     if pcur_y is not None:
         scr.cursor_y = 1 + len(top) + 1 + pcur_y
@@ -2078,14 +2078,6 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
 
 
 # --- Relacja (okno na wierzchu) --------------------------------------------
-def _tabs_title(ch, active):
-    """R3-2: 'Opis | Config | Cron' w gornej krawedzi okna relacji, aktywna w
-    nawiasach -- tak jak wlasciciel narysowal w uwadze."""
-    labels = [("opis", u"Opis"), ("config", u"Config"), ("cron", u"Cron")]
-    parts = [(u"[ %s ]" % lab) if key == active else lab for key, lab in labels]
-    return u"  ".join(parts)
-
-
 def compact_paths(paths):
     """["h@x:hdd/lab/a", "h@x:hdd/lab/b"] -> "h@x:hdd/lab: a, b" -- wspolny
     przedrostek RAZ (R3-5: 9 pelnych sciezek zalewalo okno). Jedna sciezka --
@@ -2230,7 +2222,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
 
 
 def _relation_cron_lines(row, ch, w):
-    """Zakladka Cron: to, co dawniej stalo pod naglowkiem 'W CRONIE' w Opisie."""
+    """Sekcja CRON okna: linie, ktore host naprawde wykona (dla zadania/pary --
+    tylko jego linie, bo row["jobs"] jest zawezone)."""
     rel = row.get("rel") or {}
     out = []
     if row["jobs"]:
@@ -2268,26 +2261,19 @@ def kv_config_lines(k, v, w):
     return res
 
 
-def _relation_config_lines(row, data, ch, w, repo, files):
-    """Zakladka Config: sekcje configu relacji WERBATIM (klucz=wartosc), tak
-    jak je oddaje show-config --json -- read-only, bez interpretacji (to robi
-    zakladka Opis)."""
-    n = row["name"]
-    if data is None or repo is None or files is None:
-        return [u"configu nie da się odczytać w tym trybie"]
-    cfg, cerr = load_config(repo, files, data, n)
-    if cerr:
-        return [u"błąd źródła: %s" % cerr, u"  zfs-backup.sh show-config %s --json" % n]
-    if not cfg or not cfg.get("sections"):
-        return [u"configu jeszcze nie ma -- powstanie przy aktywacji", "",
-                u"podgląd: zfs-backup.sh activate %s" % n]
+def config_sections_lines(cfg, w, keep_section=None, keep_template=None):
+    """Sekcje configu WERBATIM (klucz=wartosc), tak jak je oddaje show-config
+    --json -- read-only. `keep_section(sec)` / `keep_template(name)` zawezaja do
+    jednego zadania albo pary (R4-6); bez nich -- cala relacja."""
     out = [u"plik: %s" % (cfg.get("config") or "?"),
            u"(odtworzone z show-config -- klucz=wartość, nie surowy tekst pliku)"]
     used = set()
-    for s in cfg.get("sections", []):
+    for sec in cfg.get("sections", []):
+        if keep_section is not None and not keep_section(sec):
+            continue
         out.append("")
-        out.append(u"[%s:%s]" % (s.get("kind", "?"), s.get("name", "?")))
-        f = s.get("fields", {})
+        out.append(u"[%s:%s]" % (sec.get("kind", "?"), sec.get("name", "?")))
+        f = sec.get("fields", {})
         for k in sorted(f):
             out.extend(kv_config_lines(k, f[k], w))
             if k == "use_template":
@@ -2295,38 +2281,74 @@ def _relation_config_lines(row, data, ch, w, repo, files):
     for t in cfg.get("templates", []):
         if t.get("name") not in used:
             continue
+        if keep_template is not None and not keep_template(t.get("name")):
+            continue
         out.append("")
         out.append(u"[template:%s]" % t.get("name", "?"))
         tf = t.get("fields", {})
         for k in sorted(tf):
             out.extend(kv_config_lines(k, tf[k], w))
-    out.append("")
-    out.append(u"tylko do odczytu -- zmiana relacji: usuń i załóż / import z pliku")
     return out
 
 
-def relation_window_lines(row, data, now, ch, width, repo=None, files=None, tab="opis"):
-    """Tresc okna relacji, jako linie; okno przewija sie, wiec bez limitu.
+def _relation_config_lines(row, data, ch, w, repo, files):
+    """Sekcja CONFIG okna: dla relacji -- wszystkie jej sekcje; dla zadania albo
+    pary (R4-6) -- tylko sekcja tego zakresu i szablon tego szczebla."""
+    n = row["name"]
+    if data is None or repo is None or files is None:
+        return [u"configu nie da się odczytać w tym trybie"]
+    jobs = row.get("jobs") or []
+    if row["kind"] != "relation" and not (row.get("kind") == "job" and jobs and jobs[0].get("label")):
+        cf = sorted({j.get("config") for j in jobs if j.get("config")})
+        return [u"zadanie bez relacji -- show-config pokazuje tylko relacje",
+                u"plik: %s" % (", ".join(cf) or "?")]
+    cfg, cerr = load_config(repo, files, data, n)
+    if cerr:
+        return [u"błąd źródła: %s" % cerr, u"  zfs-backup.sh show-config %s --json" % n]
+    if not cfg or not cfg.get("sections"):
+        return [u"configu jeszcze nie ma -- powstanie przy aktywacji", "",
+                u"podgląd: zfs-backup.sh activate %s" % n]
+    if row["kind"] == "relation":
+        return config_sections_lines(cfg, w)
+    # Zadanie/para: sekcja o tym samym rodzaju i nazwie (= zakres z list-jobs)
+    # i tylko szablon szczebla, ktory to zadanie wykonuje.
+    want = {(j.get("section_kind"), j.get("scope")) for j in jobs}
+    tiers = {j.get("tier") for j in jobs if j.get("tier")}
+    out = config_sections_lines(cfg, w, keep_section=lambda sec: (sec.get("kind"), sec.get("name")) in want,
+                                keep_template=lambda name: name in tiers)
+    if len(out) == 2:
+        out.append(u"(nie znaleziono sekcji tego zadania w configu relacji)")
+    return out
 
-    Relacja (kind=="relation") ma TRZY ZAKLADKI (R3-2, uwagi wlasciciela
-    2026-09-24): Opis, Config, Cron -- Tab przelacza, tresc zalezy od `tab`.
-    Zadanie/straznik/nieczytelny blok (kind != "relation") nie maja zakladek
-    -- zostaje stary jednoczesciowy widok z W CRONIE."""
+
+def section_header(ch, title, w):
+    """'── CONFIG ─────' -- jeden wzor naglowka sekcji we wszystkich oknach (R4-7)."""
+    return (ch.dash * 2 + " " + title + " " + ch.dash * max(0, w - len(title) - 4))[:w]
+
+
+def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
+    """Tresc okna szczegolow, jako linie; okno przewija sie, wiec bez limitu.
+
+    JEDEN UKLAD dla relacji (Enter na F3), zadania (Enter na F2) i pary (Enter
+    na parze w F3) -- R4-6/R4-7, wlasciciel 2026-09-24: najpierw szczegoly,
+    pod nimi sekcja CONFIG, potem CRON. Zakladki Opis/Config/Cron z R3-2
+    zniknely: to byla ukryta funkcja (trzeba bylo wiedziec o Tab), a okno
+    zadania mialo W CRONIE bez configu."""
     w = width - 4
-    if row["kind"] != "relation":
+    if row["kind"] == "relation":
+        out = _relation_opis_lines(row, data, now, ch, w, repo, files)
+    else:
         out = []
         for k, v in rel_detail_pairs(row, data, now, ch):
             out.extend(detail_kv(ch, [(k, v)], w))
-        j = row.get("job")
-        if j:
-            out.extend(["", (ch.dash * 2 + " W CRONIE " + ch.dash * max(0, w - 14))[:w]])
-            out.extend(cron_lines_of(row["jobs"], w, ch))
-        return out
-    if tab == "config":
-        return _relation_config_lines(row, data, ch, w, repo, files)
-    if tab == "cron":
-        return _relation_cron_lines(row, ch, w)
-    return _relation_opis_lines(row, data, now, ch, w, repo, files)
+        if row["kind"] not in ("job",):
+            return out
+    out.extend(["", section_header(ch, "CONFIG", w)])
+    out.extend(_relation_config_lines(row, data, ch, w, repo, files))
+    out.extend(["", section_header(ch, "CRON", w)])
+    out.extend(_relation_cron_lines(row, ch, w))
+    out.extend(["", u"tylko do odczytu -- zmiana relacji: usuń i załóż / import z pliku"])
+    return out
 
 
 def cron_lines_of(jobs, w, ch):
@@ -2777,8 +2799,8 @@ HELP = [
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
-    u"  F3  Relacje    zarządzanie: Enter szczegóły (okno ma zakładki Opis/",
-    u"                 Config/Cron, Tab przełącza), F7 pauza/wznów, Del usuń,",
+    u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, pod nim CONFIG i CRON,",
+    u"                 przewijane), F7 pauza/wznów, Del usuń,",
     u"                 F8 eksport do pliku, F9 import z pliku: najpierw werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
@@ -2798,7 +2820,7 @@ HELP = [
     u"  F3 w trzech panelach: lista relacji, szczegóły, a na dole pary",
     u"                 źródło → cel podświetlonej relacji (z linii crona; relacja",
     u"                 bez crona ma pary z rekordu i tytuł to mówi). Tab przenosi",
-    u"                 kursor na pary; Enter na parze skacze do tego zadania na F2.",
+    u"                 kursor na pary; Enter na parze pokazuje jej config i cron.",
     "",
     u"  LINIA POLECEŃ nad listwą klawiszy (jak w mc): pisz, Enter wykonuje na",
     u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
@@ -2853,7 +2875,6 @@ class UI(object):
         self.message = ""
         self.focus = "list"       # F3: "list" (relacje) | "pairs" (dolny panel par)
         self.pair_cursor = 0
-        self.rel_tab = "opis"     # R3-2: zakladka okna relacji -- "opis" | "config" | "cron"
         self.hide_transfers_gone = False   # NOTE 8: 'u' na F4 -- domyslnie POKAZANE (dziennik transferow)
         self.zad_sort = 0   # R3-4: 's' na F2 -- domyslnie relacje, w srodku wg nastepnego
         # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili
@@ -3589,15 +3610,6 @@ class UI(object):
                 self.scroll = 10 ** 6
             return "stay"
         if self.window:
-            kind_, obj_ = self.window
-            # R3-2: Tab przelacza zakladki OKNA RELACJI (Opis -> Config -> Cron
-            # -> Opis); dziala tylko dla kind=="relation" -- okno zadania czy
-            # panelu nie ma zakladek, wiec Tab tam nie robi nic (spada dalej).
-            if kind_ == "relacja" and obj_.get("kind") == "relation" and k == "tab":
-                order = ["opis", "config", "cron"]
-                self.rel_tab = order[(order.index(self.rel_tab) + 1) % len(order)]
-                self.scroll = 0
-                return "stay"
             if k in ("esc", "q", "enter"):
                 self.window, self.scroll = None, 0
             elif k in ("down", "j"):
@@ -3695,13 +3707,18 @@ class UI(object):
             elif k == "esc":
                 self.focus = "list"
             elif k == "enter" and n:
+                # R4-6 (wlasciciel 2026-09-24): Enter na parze otwiera OKNO tej
+                # pary (szczegoly, CONFIG, CRON) -- skok na F2 byl mylacy i nie
+                # dalo sie wrocic. Esc zamyka okno i zostawia kursor na parze.
                 j = pairs[c].get("job")
                 if j is None:
-                    self.message = u"ta para jest z rekordu, nie z crona -- nie ma zadania na F2"
+                    self.message = u"ta para jest z rekordu, nie z crona -- nie ma jej linii ani sekcji do pokazania"
                 else:
-                    for i, jr in enumerate(self.jobrows):
-                        if jr.get("job") is j:
-                            self.cursor["zadania"], self.screen, self.focus = i, "zadania", "list"
+                    for jr in self.jobrows:
+                        if any(x is j for x in jr.get("jobs") or []):
+                            one = dict(jr)
+                            one.update({"job": j, "jobs": [j], "cnt": 1})
+                            self.window, self.scroll = ("relacja", one), 0
                             break
             elif k in ("F7", "F8", "F9", "del", "ins"):
                 res = self.action(k)
@@ -3743,7 +3760,7 @@ class UI(object):
             return self.action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
-                self.window, self.scroll, self.rel_tab = ("relacja", self.rows[c]), 0, "opis"
+                self.window, self.scroll = ("relacja", self.rows[c]), 0
             elif self.screen == "zadania":
                 self.window, self.scroll = ("relacja", self.jobrows[c]), 0
             else:
@@ -3769,10 +3786,10 @@ class UI(object):
         return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch)}
 
 
-def relation_window_lines_dispatch(ui, obj, width, tab="opis"):
+def relation_window_lines_dispatch(ui, obj, width):
     if obj.get("kind") == "panel":
         return detail_kv(ui.ch, obj["pairs"], width - 4)
-    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files, tab)
+    return relation_window_lines(obj, ui.data, ui.now(), ui.ch, width, ui.repo, ui.files)
 
 
 # render() w UI korzysta z tej wersji, zeby okno-panel i okno-relacja szly ta sama droga.
@@ -3837,11 +3854,12 @@ def _ui_render(self, width, height):
                                              footer=u"Esc zamyka okno (proces zostaje)   strzałki przewijają")
         else:
             if obj.get("kind") == "relation":
-                title = u"Relacja %s %s %s" % (obj["name"], self.ch.dh * 3, _tabs_title(self.ch, self.rel_tab))
-                lines = relation_window_lines_dispatch(self, obj, width, self.rel_tab)
+                title = u"Relacja %s" % obj["name"]
+            elif obj.get("kind") == "job":
+                title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
                 title = obj["name"]
-                lines = relation_window_lines_dispatch(self, obj, width, "opis")
+            lines = relation_window_lines_dispatch(self, obj, width)
             scr, self.scroll = render_window(base, title, lines, self.scroll, width, height, self.ch)
         return scr
     return base

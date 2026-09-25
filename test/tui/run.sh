@@ -310,22 +310,30 @@ if [ "$(printf '%s\n' "$S40" | grep -c '^║ .*║$')" -ge 10 ] && [ "$(printf '
 else
     bad "relacje: podzial wysokosci" "$S40"
 fi
-# TAB: kursor na pary; Enter na parze skacze do TEGO zadania na F2.
+# TAB: kursor na pary; Enter na parze otwiera OKNO tej pary (R4-6), nie skok na F2.
 TP="$(screen relacje down,tab)"
-if has "$TP" 'Enter = to zadanie na F2   Tab wraca do relacji'; then
+if has "$TP" 'Enter szczegóły pary (config, cron)   Tab wraca do relacji'; then
     ok "relacje: Tab przenosi kursor na pary (stopka mowi, co robi Enter)"
 else
     bad "relacje: Tab" "$TP"
 fi
-TE="$(screen relacje down,tab,enter)"
-if has "$TE" '[F2 Zadania]' && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && hasE "$TE" '^║ lab-ct201 .*pobranie '; then
-    ok "relacje: Enter na parze = F2 z kursorem na zadaniu wysylki tej pary"
+TE="$(screen relacje down,tab,enter --height 60)"
+if ! has "$TE" 'Zadania na pve10' && has "$TE" '╔═ Zadanie: lab-ct201  pobranie  automated_hourly' \
+   && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && has "$TE" '── CONFIG ' && has "$TE" '── CRON ' \
+   && has "$TE" 'snapget.sh -m'; then
+    ok "relacje: Enter na parze = okno tej pary (szczegoly, CONFIG, CRON) na F3, bez skoku na F2 (R4-6)"
 else
     bad "relacje: Enter na parze" "$TE"
 fi
+TEE="$(screen relacje down,tab,down,enter,esc)"
+if has "$TEE" '[F3 Relacje]' && has "$TEE" 'Enter szczegóły pary (config, cron)' && ! has "$TEE" '╔═ Zadanie:'; then
+    ok "relacje: Esc z okna pary wraca na panel par (kursor zostaje na parach)"
+else
+    bad "relacje: Esc z okna pary" "$TEE"
+fi
 TR="$(screen relacje tab,enter)"
 if has "$TR" '[F3 Relacje]' && has "$TR" 'ta para jest z rekordu, nie z crona'; then
-    ok "relacje: Enter na parze z REKORDU mowi, ze zadania na F2 nie ma"
+    ok "relacje: Enter na parze z REKORDU mowi, ze nie ma jej linii ani sekcji"
 else
     bad "relacje: Enter na parze z rekordu" "$TR"
 fi
@@ -598,10 +606,12 @@ if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly' && hasE "$ZH" 
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
 fi
-ZE="$(screen zadania enter)"
-if has "$ZE" '╔═ lab-vm101 ═' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
-        && hasE "$ZE" 'trzyma +- +szczebel standard_hourly \(sekcja dataset\)' && has "$ZE" 'W CRONIE' && has "$ZE" 'snapget.sh'; then
-    ok "zadania: Enter = panel ('zakres' ze zrodlem i celem, 'trzyma' z retencja i szczeblem) + W CRONIE z prawdziwa linia"
+ZE="$(screen zadania enter --height 80)"
+if has "$ZE" '╔═ Zadanie: lab-vm101 ' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
+        && hasE "$ZE" 'trzyma +- +szczebel standard_hourly \(sekcja dataset\)' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
+        && has "$ZE" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$ZE" '[template:profile__default__standard_hourly]' \
+        && ! has "$ZE" '[template:profile__default__keep_monthly]'; then
+    ok "zadania: Enter = szczegoly + CONFIG (TYLKO sekcja i szablon tego zadania) + CRON z prawdziwa linia (R4-6)"
 else
     bad "zadania: Enter" "$ZE"
 fi
@@ -840,8 +850,8 @@ else
 fi
 if hasE "$W" 'Lądowiska [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
         && has "$W" 'co kopiuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
-        && ! has "$W" 'W CRONIE'; then
-    ok "okno: zakladka Opis -- zrodla z rekordu, ladowiska (MANAGED_DATASETS), grupy pytaniami operatora, bez W CRONIE (R3-2/2b)"
+        && ! has "$W" 'W CRONIE' && ! has "$W" '[ Opis ]'; then
+    ok "okno: szczegoly -- zrodla z rekordu, ladowiska (MANAGED_DATASETS), grupy pytaniami operatora, bez zakladek (R4-7)"
 else
     bad "okno: zakres/Opis" "$W"
 fi
@@ -851,39 +861,48 @@ if has "$W2" 'zfs-backup.sh pause-client lab-ct201' && ! has "$W2" 'resume-clien
 else
     bad "okno: komendy dla stanu active" "$W2"
 fi
-# ZAKLADKI (R3-2): Tab z Opisu -> Config -> Cron. LINIE CRONA PO ETYKIECIE
-# (linia snapget dla pobrania nazywa zdalne zrodlo i RODZICA ladowiska, nigdy
-# samo ladowisko -- dopasowanie po zakresie jej nie widzialo, zmierzone na
-# pve10 2026-09-09; klucz drugi: -L <etykieta>) sa teraz w zakladce Cron.
-WCFG="$(screen relacje down,enter,tab --height 160)"
-if has "$WCFG" '[ Config ]' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
-        && has "$WCFG" 'tylko do odczytu'; then
-    ok "okno: zakladka Config -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory, read-only"
+# JEDNO OKNO (R4-7, zamiast zakladek R3-2): szczegoly, pod nimi CONFIG, potem
+# CRON -- w tej kolejnosci. LINIE CRONA PO ETYKIECIE (linia snapget dla pobrania
+# nazywa zdalne zrodlo i RODZICA ladowiska, nigdy samo ladowisko -- dopasowanie
+# po zakresie jej nie widzialo, zmierzone na pve10 2026-09-09; klucz drugi:
+# -L <etykieta>) sa w sekcji CRON.
+WCFG="$(screen relacje down,enter --height 200)"
+LCFG=$(printf '%s\n' "$WCFG" | grep -n '── CONFIG ' | head -1 | cut -d: -f1)
+LCRN=$(printf '%s\n' "$WCFG" | grep -n '── CRON ' | head -1 | cut -d: -f1)
+LKOM=$(printf '%s\n' "$WCFG" | grep -n '║ komendy' | head -1 | cut -d: -f1)
+if [ -n "$LCFG" ] && [ -n "$LCRN" ] && [ -n "$LKOM" ] && [ "$LKOM" -lt "$LCFG" ] && [ "$LCFG" -lt "$LCRN" ]; then
+    ok "okno: kolejnosc sekcji -- szczegoly, CONFIG, CRON (R4-7, decyzja wlasciciela)"
 else
-    bad "okno: zakladka Config" "$WCFG"
+    bad "okno: kolejnosc sekcji" "komendy=$LKOM config=$LCFG cron=$LCRN" "$WCFG"
 fi
-WC="$(screen relacje down,enter,tab,tab --height 60)"
-if has "$WC" '[ Cron ]' && has "$WC" 'snapget.sh -m' && has "$WC" '-L lab-ct201' && has "$WC" 'delsnaps.sh -G -R -L'; then
-    ok "okno: zakladka Cron pokazuje linie snapget (po etykiecie -L), delsnaps i monitor -- to, co host naprawde wykona"
+if has "$WCFG" '── CONFIG ' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
+        && has "$WCFG" 'tylko do odczytu'; then
+    ok "okno: sekcja CONFIG -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory, read-only"
 else
-    bad "okno: zakladka Cron" "$WC"
+    bad "okno: sekcja CONFIG" "$WCFG"
+fi
+WC="$WCFG"
+if has "$WC" '── CRON ' && has "$WC" 'snapget.sh -m' && has "$WC" '-L lab-ct201' && has "$WC" 'delsnaps.sh -G -R -L'; then
+    ok "okno: sekcja CRON pokazuje linie snapget (po etykiecie -L), delsnaps i monitor -- to, co host naprawde wykona"
+else
+    bad "okno: sekcja CRON" "$WC"
 fi
 # Relacja W ZASIEWIE (bez pliku configu) -- Config ma powiedziec to, nie
 # pokazac cudzy config z fikstury.
-WCFGSEED="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --keys enter,tab --height 60 --width 100 2>&1)"
+WCFGSEED="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --keys enter --height 80 --width 100 2>&1)"
 if has "$WCFGSEED" 'configu jeszcze nie ma -- powstanie przy aktywacji' && has "$WCFGSEED" 'zfs-backup.sh activate duplikat'; then
-    ok "okno: zakladka Config relacji bez zainstalowanego configu (seeding) mowi to, nie zgaduje"
+    ok "okno: CONFIG relacji bez zainstalowanego configu (seeding) mowi to, nie zgaduje"
 else
-    bad "okno: zakladka Config relacji w zasiewie" "$WCFGSEED"
+    bad "okno: CONFIG relacji w zasiewie" "$WCFGSEED"
 fi
-WP="$(screen relacje down,down,down,down,enter,tab --height 160)"
-if has "$WP" '[ Config ]' && has "$WP" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' \
+WP="$(screen relacje down,down,down,down,enter --height 260)"
+if has "$WP" '── CONFIG ' && has "$WP" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' \
         && has "$WP" 'send_schedule = 24 * * * *' && has "$WP" 'src = zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' \
         && has "$WP" '[prune:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$WP" 'prune_schedule = 44 * * * *' \
         && has "$WP" '[template:profile__default__keep_monthly]' && has "$WP" 'retain = -M12'; then
-    ok "okno: zakladka Config -- sekcje [dataset:]/[prune:] i szablony UZYTE (use_template), werbatim z show-config"
+    ok "okno: CONFIG relacji -- sekcje [dataset:]/[prune:] i szablony UZYTE (use_template), werbatim z show-config"
 else
-    bad "okno: zakladka Config -- sekcje relacji lab-vm101" "$WP"
+    bad "okno: CONFIG -- sekcje relacji lab-vm101" "$WP"
 fi
 WS="$(screen relacje enter --height 60)"
 if has "$WS" 'zfs-backup.sh activate duplikat'; then
@@ -891,7 +910,7 @@ if has "$WS" 'zfs-backup.sh activate duplikat'; then
 else
     bad "okno: komendy dla stanu seeding" "$WS"
 fi
-WPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down,enter,end 2>&1)"
+WPZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down,enter --height 120 2>&1)"
 if has "$WPZ" 'zfs-backup.sh resume-client lab-srv-b' && ! has "$WPZ" 'pause-client lab-srv-b'; then
     ok "okno: relacja wstrzymana nazywa resume-client, nie pause-client"
 else
