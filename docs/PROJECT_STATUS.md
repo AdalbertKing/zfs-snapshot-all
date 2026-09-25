@@ -9980,6 +9980,14 @@ stanem recenzji.
 
 ### Znane luki, nie planowane do zamknięcia teraz
 
+- **Import relacji na TYM SAMYM kolektorze nie łączy się ze źródłem** (2026-09-25, pve10:
+  ponowne założenie pve9b i pve11). `delete-relation` (`remove-client`) kasuje klucz parowania,
+  `import-relation` odtwarza relację przez `add-client`, który generuje NOWY klucz -- źródło go
+  nie zna i `seed` pada: „could not list datasets … has --join run there yet?”. Trzeba ręcznie
+  skopiować paczkę `/root/scripts/pairing/<kolektor>-to-<host>.tgz` na źródło, uruchomić tam
+  `deploy.sh --join=…`, potem `seed` i `activate`. Import na NOWYM kolektorze robi to sam
+  (`--grant-remotely`); ta sama ścieżka mogłaby obsłużyć też ten przypadek.
+
 - **Tryb tylko-migawki bez strażnika wieku** (2026-09-25). `local-backup --target=''`
   generuje migawki i ich prune, ale nie `check-snap-age`: szablony retencji źródła
   (`src_keep_*`) nie niosą `monitor_warn`/`monitor_crit`. Producent migawek, który
