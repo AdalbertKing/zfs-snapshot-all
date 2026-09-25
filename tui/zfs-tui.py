@@ -1520,12 +1520,14 @@ def top_bar(data, width, now, ascii_only, err_count):
 # -- 'u' na F4 i 's' na F2 z rundy 3 byly martwe w prawdziwym GUI, bo petla
 # curses oddawala je linii, zanim ekran je zobaczyl. Odswiez przeszlo z F9 na
 # F5 (wolne po zniesieniu Monitora), zeby F9 bylo trzecia akcja okna.
-def screen_actions(active, hide_gone=False):
-    """[(klawisz, podpis)] akcji okna -- JEDNO zrodlo dla listwy i dla pomocy."""
+def screen_actions(active, hide_gone=False, paused=False):
+    """[(klawisz, podpis)] akcji okna -- JEDNO zrodlo dla listwy i dla pomocy.
+    Na F3 podpis F7 mowi, co klawisz ZROBI z zaznaczona relacja: na
+    wstrzymanej -- Wznow (tester R4, B6: listwa mowila Pauza, a F7 wznawial)."""
     if active == "zadania":
         return [("F7", u"Sortuj")]
     if active == "relacje":
-        return [("F7", u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
+        return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     return []
@@ -1660,7 +1662,7 @@ def rel_detail_pairs(row, data, now, ch):
                 hbytes_short(row["vol"]), family_of(j) or "?", win)))
         pairs.append(("", ""))
         tier = row.get("tier") or j.get("tier") or "?"
-        pairs.append(("trzyma", (j.get("retain") or j.get("keep") or "-")
+        pairs.append(("trzyma", keep_cell(j.get("retain") or j.get("keep") or "")
                       + ("  drabina GFS" if j.get("gfs") else "")
                       + ("   szczebel %s (sekcja %s)" % (tier, j.get("section_kind", "?")))))
         # SYNCHRO NIE "POBIERA" -- kazda strona ciagnie do siebie pod ta sama
@@ -1873,18 +1875,22 @@ def rel_panel_pairs(row, data, now, ch):
     if sends:
         scheds = sorted({j.get("schedule", "") for j in sends if j.get("schedule")})
         fams = sorted({family_of(j) for j in sends if family_of(j)})
-        pairs.append((u"Wysyłka", "%s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
+        # Slowo wg KIERUNKU, jak na F2 ("Wysylka" w relacji, w ktorej ten host
+        # pobiera, bylo nieprawda -- test testera rundy 4, pve10).
+        _ds = {j.get("direction", "") for j in sends}
+        _tw = {"pull": u"Pobranie", "push": u"Wysyłka", "local": u"Kopia"}.get(_ds.pop(), u"Transfer") if len(_ds) == 1 else u"Transfer"
+        pairs.append((_tw, "%s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
     if prunes:
         here = [j for j in prunes if j.get("direction") == "prune"]
         there = [j for j in prunes if j.get("direction") != "prune"]
 
         def line_of(js):
-            ret = " ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x) or "?"
+            ret = keep_cell(" ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x))
             sch = sorted({j.get("schedule", "") for j in js if j.get("schedule")})
             return "%s   trzyma %s%s" % (", ".join(sch) or "?", ret, "   drabina GFS" if any(j.get("gfs") for j in js) else "")
-        pairs.append((u"Porządki", line_of(here or prunes)))
+        pairs.append((u"Lokalny prune" if here else u"Zdalny prune", line_of(here or prunes)))
         if here and there:
-            pairs.append((u"U źródła", line_of(there)))
+            pairs.append((u"Zdalny prune", line_of(there)))
     last = row["last"]
     if last:
         w, note = transfer_word(last, now)
@@ -1937,6 +1943,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     relacji (lewo) i szczegoly (prawo), na dole pary zrodlo -> cel."""
     scr = Screen()
     host = (data.jobs or {}).get("host") or (data.status or {}).get("host") or "?"
+    _paused = bool(rows and 0 <= cursor < len(rows) and ((rows[cursor].get("rel") or {}).get("paused_local")))
+    _acts = " ".join("%s %s" % a for a in screen_actions("relacje", paused=_paused))
     if data.failed("status"):
         body = source_error_body(ch, "status", data, "status")
         scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, "Relacje na kolektorze %s" % host, body, width)
@@ -1944,7 +1952,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
         scr.lines = scr.lines[:height - 1]
-        scr.lines.append(key_bar("relacje", width))
+        scr.lines.append(key_bar("relacje", width, extra=_acts))
         scr.bars.add(len(scr.lines) - 1)
         return scr
     live = [r for r in rows if not (r["kind"] == "relation" and r["rel"].get("state") == "removed")]
@@ -2064,7 +2072,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
                 # ze ten dataset obsluguja cztery linie crona, i zajmuje trzy
                 # znaki zamiast szesciu linii ekranu.
                 _t = pr.get("tiers", 1)
-                tail = "%s %s %s %s" % (fit(pr["vword"], 13, ch), fit(("x%d" % _t) if _t > 1 else "", 4, ch),
+                tail = "%s %s %s %s" % (fit(pr["vword"], 13, ch), fit(("%d" % _t) if _t > 1 else "", 4, ch),
                                         fit(pr["czas"], 11, ch), fit(pr["gb"], 5, ch))
                 plines.append(fit(l, binner - len(tail) - 1, ch) + " " + tail)
             else:
@@ -2091,8 +2099,9 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         btitle += u", %s" % how
     if wide and pairs:
         btitle += u"   [źródło %s cel | Kopie | Szczeble | Czas o/ś/m | GB]" % ch.right
-    bfoot = (u"Enter szczegóły  F7 pauza  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" if width >= 100
-             else u"Enter F7:pauza F8:eksport F9:import Del Ins Tab") if rows else u"F9 import z pliku   Ins nowa relacja"
+    _pw = u"wznów" if _paused else u"pauza"
+    bfoot = (u"Enter szczegóły  F7 %s  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" % _pw if width >= 100
+             else u"Enter F7:%s F8:eksport F9:import Del Ins Tab" % _pw) if rows else u"F9 import z pliku   Ins nowa relacja"
     if focus == "pairs":
         bfoot = u"Enter szczegóły pary (config, cron)   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
@@ -2104,7 +2113,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("relacje", width))
+    scr.lines.append(key_bar("relacje", width, extra=_acts))
     scr.bars.add(len(scr.lines) - 1)
     return scr
 
@@ -2152,7 +2161,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     if rel.get("managed_datasets"):
         pairs.append((u"Lądowiska (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"])))
     if rel.get("managed_prune_scope"):
-        pairs.append((u"Porządki", ",  ".join(rel["managed_prune_scope"])))
+        pairs.append((u"Prune", ",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
         pairs.append(("Konto", rel["local_user"]))
     out.extend(detail_kv(ch, pairs, w))
@@ -2162,7 +2171,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     if rel.get("source_profile"):
         pairs.append((u"Profil źródła", rel["source_profile"]))
     elif rel.get("passive") == "1" or rel.get("mode") == "sync":
-        pairs.append((u"Profil źródła", u"bez porządków"))
+        pairs.append((u"Profil źródła", u"bez prune (źródło nie kasuje)"))
     if rel.get("recursion"):
         pairs.append(("Rekursja", rel["recursion"]))
     if rel.get("passive") == "1":
@@ -2190,7 +2199,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                 _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
                 _ret = f.get("retain") or (tmpl.get(used[0], {}).get("retain") or tmpl.get(used[0], {}).get("keep") if used else "")
-                key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % _ret) if _ret else ""))
+                key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
                 if key not in order:
                     order.append(key)
@@ -2204,7 +2213,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     ret.append(f["retain"])
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
                 _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
-                key = (_pw, u"trzyma %s   co: %s%s" % (" ".join(ret) or "?", sched,
+                key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(" ".join(ret)) if ret else "?", sched,
                                                        "   drabina GFS" if f.get("gfs") == "yes" else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
                 if key not in order:
@@ -2212,7 +2221,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         for key in order:
             names = pol[key]
             what = compact_paths(names) if len(names) > 1 else names[0]
-            label = key[0] + (" x%d" % len(names) if len(names) > 1 else "")
+            label = key[0] + (u" (%d szt.)" % len(names) if len(names) > 1 else "")
             out.extend(detail_kv(ch, [(label, u"%s   %s" % (key[1], what))], w))
     out.append("")
     out.append(u"czy działa")

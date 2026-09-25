@@ -127,22 +127,42 @@ else
     bad "relacje: pary z rekordu" "$S"
 fi
 S4="$(screen relacje down,down,down,down --width 200 --height 40)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny   2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && has "$S4" 'Wysyłka    24 * * * *   rodzina automated_hourly'; then
-    ok "relacje: kursor przesuwa panel; nastepny bieg policzony z harmonogramu, wysylka nazywa harmonogram i rodzine"
+if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +24 \* \* \* \*   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
+    ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; transfer nazwany wg KIERUNKU (Pobranie, nie Wysylka -- tester R4)"
 else
     bad "relacje: kursor i nastepny bieg" "$S4"
 fi
-if has "$S4" 'Kopie      aktualne   progi 90m / 150m'; then
+if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
     ok "relacje: panel nazywa progi monitora przy werdykcie"
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if has "$S4" 'Porządki   44 * * * *   trzyma -H24 -D7 -W4 -M12   drabina GFS' && has "$S4" 'U źródła   3 * * * *   trzyma -H24 -D7 -W4 -M12   drabina GFS'; then
-    ok "relacje: panel -- porzadki i porzadki u ZRODLA w OSOBNYCH wierszach: harmonogram, retencja, drabina GFS (z list-jobs, bez show-config)"
+if hasE "$S4" 'Lokalny prune 44 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' && hasE "$S4" 'Zdalny prune +3 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' \
+   && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
+    ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
 else
     bad "relacje: porzadki w panelu" "$S4"
 fi
-if hasE "$S4" 'Biegi 7d +[0-9]+ ' && hasE "$S4" 'Czas o/ś/m [0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && has "$S4" 'Datasety   1 para   lądowisk 1' && has "$S4" 'Utworzona  2026-09-08' && has "$S4" 'Zasiew     2026-09-08' && has "$S4" 'Aktywowana 2026-09-08'; then
+# TESTER R4 (2026-09-25): B1 listwa F3 z akcjami, B3 Szczeble bez 'x',
+# B5 panel F2 z retencja z jednostka jak kolumna Trzyma.
+if has "$S4" 'F7 Pauza F8 Eksport F9 Import' && ! hasE "$S4" '║.* x[0-9]+ +[0-9/]+s' && ! hasE "$S4" 'aktualne +x[0-9]'; then
+    ok "relacje: listwa F3 podpisuje akcje okna (F7 Pauza F8 Eksport F9 Import); kolumna Szczeble bez 'x' (tester R4: B1, B3)"
+else
+    bad "relacje: listwa F3 / Szczeble" "$S4"
+fi
+SPW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 130 2>&1)"
+if has "$SPW" 'F7 Wznów F8 Eksport' && has "$SPW" 'F7 wznów  F8 eksport' && ! has "$SPW" 'F7 Pauza'; then
+    ok "relacje: na WSTRZYMANEJ relacji listwa i ramka mowia 'F7 Wznow', nie 'Pauza' (tester R4: B6)"
+else
+    bad "relacje: podpis F7 na pauzie" "$SPW"
+fi
+ZT="$(screen zadania down --width 100 --height 40)"
+if hasE "$ZT" 'trzyma +24 godz\.' && ! hasE "$ZT" 'trzyma +-H24'; then
+    ok "zadania: panel 'trzyma' z jednostka jak kolumna Trzyma, nie surowe -H24 (tester R4: B5)"
+else
+    bad "zadania: panel trzyma" "$ZT"
+fi
+if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   lądowisk 1' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Zasiew +2026-09-08' && hasE "$S4" 'Aktywowana +2026-09-08'; then
     ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/zasiew/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
@@ -345,7 +365,7 @@ if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +active PAUZA +aktual
 else
     bad "relacje: wiersz pauzy" "$SP"
 fi
-if has "$SP" 'Uwaga      relacja wstrzymana (pause-client)'; then
+if hasE "$SP" 'Uwaga +relacja wstrzymana .pause-client.'; then
     ok "relacje: ...a panel mowi, ze starzenie kopii jest tu oczekiwane"
 else
     bad "relacje: uwaga o pauzie w panelu" "$SP"
