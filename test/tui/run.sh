@@ -698,37 +698,71 @@ if has "$A" '╔═ Zakończone' && has "$A" '[F4 Transfery]' && ! has "$A" 'POT
 else
     bad "akcje: F4 na F3" "$A"
 fi
-# eksport: podpowiedz pelnej sciezki, do zmiany
-A="$(HOME=/root act down,F8)"
-if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" 'lab-ct201.export.json_'; then
-    ok "akcje: F8 podpowiada PELNA sciezke pliku eksportu (/root/<relacja>.export.json) i pozwala ja zmienic"
+# EKSPORT (R4-8, R4-10): domyslnie w katalogu relacji (/etc/zfs-snapshot-all/relations,
+# w testach ZFS_TUI_RELATIONS_DIR), Enter ZAPISUJE -- bez drugiego 't'.
+RD="$(mktemp -d)"; RDP="$RD"; command -v cygpath >/dev/null 2>&1 && RDP="$(cygpath -m "$RD")"
+export ZFS_TUI_RELATIONS_DIR="$RDP"
+A="$(act down,F8)"
+if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'; then
+    ok "akcje: F8 podpowiada sciezke w katalogu relacji (<dir>/<relacja>.export.json) i mowi, ze istniejacy plik bedzie nadpisany"
 else
     bad "akcje: F8 podpowiedz" "$A"
 fi
-A="$(HOME=/root act down,F8,bs,bs,bs,bs,text:yaml,enter)"
-if has "$A" 'POTWIERDZENIE: Eksport relacji lab-ct201' && has "$A" 'export-relation lab-ct201' && has "$A" 'lab-ct201.export.yaml'; then
-    ok "akcje: ...Backspace i wpisany tekst zmieniaja sciezke, a komenda pokazuje przekierowanie do NIEJ"
+A="$(act down,F8,enter)"
+if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.json'\?$" "$XL" && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Eksport relacji lab-ct201'; then
+    ok "akcje: Enter w polu sciezki od razu wykonuje eksport DO tego pliku -- bez potwierdzenia 't' (R4-8)"
 else
-    bad "akcje: F8 edycja sciezki" "$A"
+    bad "akcje: F8 Enter zapisuje" "$(cat "$XL")" "$A"
 fi
-A="$(HOME=/root act down,F8,enter,t)"
-if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.json'\?$" "$XL"; then
-    ok "akcje: 't' wykonuje eksport DO wskazanego pliku"
+A="$(act down,F8,bs,bs,bs,bs,text:yaml,enter)"
+if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.yaml'\?$" "$XL"; then
+    ok "akcje: ...Backspace i wpisany tekst zmieniaja sciezke, a eksport idzie do NIEJ"
 else
-    bad "akcje: F8 t" "$(cat "$XL")"
+    bad "akcje: F8 edycja sciezki" "$(cat "$XL")" "$A"
 fi
-# import: podglad (bez --yes) w potwierdzeniu, potem --yes
+ZFS_TUI_RELATIONS_DIR="$RDP/nowy" act down,F8,enter >/dev/null
+if [ -d "$RD/nowy" ] && grep -q "nowy.lab-ct201.export.json" "$XL"; then
+    ok "akcje: eksport do katalogu, ktorego nie ma -- katalog jest tworzony (pierwszy eksport na hoscie)"
+else
+    bad "akcje: F8 tworzy katalog" "$(ls -la "$RD")" "$(cat "$XL")"
+fi
+# IMPORT (R4-9): LISTA plikow katalogu relacji, nie wpisywanie sciezki.
+# W katalogu: plik eksportu, plik JSON, ktory NIE jest eksportem, i podkatalog.
+printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$RD/pve9-synchro.export.json"
+printf '{"x":1}' > "$RD/cos-innego.json"
+mkdir -p "$RD/archiwum"
+A="$(act down,F9)"
+if has "$A" '╔═ Import relacji z pliku' && has "$A" '> pve9-synchro.export.json' && has "$A" 'relacja pve9-synchro' \
+   && has "$A" 'archiwum/' && has "$A" '..' && has "$A" '[ wpisz ścieżkę ręcznie ]' && ! has "$A" 'cos-innego.json'; then
+    ok "akcje: F9 = lista plikow katalogu relacji: '..', katalogi, TYLKO pliki eksportu (z nazwa relacji), kursor na eksporcie, na koncu 'wpisz recznie' (R4-9)"
+else
+    bad "akcje: F9 lista plikow" "$A"
+fi
+A="$(act down,F9,enter)"
+if has "$A" 'POTWIERDZENIE: Import relacji z pve9-synchro.export.json' && has "$A" '[atrapa] podgląd:'; then
+    ok "akcje: Enter na pliku z listy = werdykt/plan importu tego pliku"
+else
+    bad "akcje: F9 Enter na pliku" "$A"
+fi
+A="$(act down,F9,up,enter)"
+if has "$A" '╔═ Import relacji z pliku' && has "$A" '  ..' && has "$A" '> [ wpisz' && ! has "$A" 'pve9-synchro.export.json'; then
+    ok "akcje: Enter na katalogu wchodzi do niego (archiwum: pusty, sam '..' i 'wpisz recznie')"
+else
+    bad "akcje: F9 wejscie do katalogu" "$A"
+fi
+rm -rf "$RD/archiwum" "$RD/cos-innego.json"
+# import przez 'wpisz sciezke recznie': podglad (bez --yes) w potwierdzeniu, potem --yes
 IMPF="$(mktemp)"
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
-A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter")"
 if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
-    ok "akcje: F9 pyta o plik, pokazuje PODGLAD czasownika (bez --yes) i komende z --yes do potwierdzenia"
+    ok "akcje: F9 -> 'wpisz recznie' -> plik: PODGLAD czasownika (bez --yes) i komenda z --yes do potwierdzenia"
 else
     bad "akcje: F9" "$A"
 fi
-A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter,t")"
+A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter,t")"
 if grep -q "import-relation .*$(basename "$IMPF")'\? --yes$" "$XL"; then
     ok "akcje: ...i 't' wola import-relation PLIK --yes"
 else
@@ -737,7 +771,7 @@ fi
 # F9 z nieistniejaca sciezka: podpowiedz "/root/" + dopisana wzgledna sciezka
 # skladala sie w /root/tmp/f8.json, ktorej nie ma -- czasownik odmawial "cannot
 # read", operator dowiadywal sie o tym po nazwie relacji (pve10, 2026-09-23).
-A="$(HOME=/root act "down,F9,text:tmp/nie-ma-takiego.json,enter")"
+A="$(HOME=/root act "down,F9,end,enter,text:tmp/nie-ma-takiego.json,enter")"
 if has "$A" 'Import relacji z pliku' && has "$A" 'nie ma takiego pliku' && [ ! -s "$XL" ]; then
     ok "akcje: F9 z nieistniejaca sciezka zostaje w polu pliku, mowi 'nie ma takiego pliku' i nic nie uruchamia (pve10: /root/ + tmp/f8.json)"
 else
@@ -747,13 +781,13 @@ fi
 # (juz jest i identyczna / rozni sie / plan), --name zostaje w CLI. Routing
 # werdyktu na PRAWDZIWYM czasowniku jest dowiedziony na pve10 -- w trybie
 # atrapy czasownik sie nie wykonuje, wiec tu jest tylko brak kroku z nazwa.
-A="$(HOME=/root act "down,F9,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter")"
 if ! has "$A" 'Nazwa relacji' && has "$A" 'POTWIERDZENIE: Import relacji'; then
     ok "akcje: F9 po pliku idzie prosto do werdyktu/planu -- bez pola nazwy"
 else
     bad "akcje: F9 bez kroku z nazwa" "$A"
 fi
-rm -f "$IMPF"
+rm -f "$IMPF"; rm -rf "$RD"; unset ZFS_TUI_RELATIONS_DIR
 # F9/Ins na PUSTYM kolektorze (zero relacji, zero zadan): milczaly, bo szukaly
 # najpierw zaznaczonej relacji, ktorej na pustym ekranie nie ma (pve11,
 # 2026-09-23). Fikstura empty.json/empty-mon.json (linia 297) to jedyny host
