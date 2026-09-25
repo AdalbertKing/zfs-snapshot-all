@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0bbef5d54119516c -->
+<!-- status-covers-digest: 190eabff09b281e7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`local-backup --target='' --recursive=flat|atomic` -- migawki z dziećmi bez kopiowania (luka A′, 2026-09-25).**
+  - **Przyczyna (zmierzona):** pve9-synchro (pve10<>pve9, `passive-flat`, `snapget -e`) od
+    2026-09-20 18:13 nic nie przenosiło -- rc=0 co godzinę, monitor CRITICAL. Pasywne
+    pobieranie nie robi migawek u źródła, a producent (stare relacje pobierania z pve10)
+    zniknął 20.09. Tryb tylko-migawki nie umiał dzieci: `snapsend` bez `-r`, `delsnaps` bez
+    `-R`, a rodzic+dziecko razem to odmowa „overlap”.
+  - **Zmiana:** `--recursive=flat|atomic` (tylko przy `--target=''`) pisze `recursive =` w
+    `[dataset:]` i `recursive = yes` w `[prune:]` retencji źródła -- generator robi z tego
+    `snapsend -R`/`-r` i `delsnaps -R`. Z celem: odmowa z powodem. Podgląd bez celu nie drukuje
+    już „Retencja CELU: GFS …” (kryterium 3 REV-20260901-132).
+  - **Znana luka (osobna, wcześniejsza):** tryb tylko-migawki nie tworzy strażnika wieku
+    (`check-snap-age`) -- szablony retencji źródła nie niosą progów monitora.
+  - **Operacyjnie:** wariant „profil aktywny” dla synchro jest niewykonalny -- seed sam
+    przechodzi w pasywny (źródło ma rodzinę `automated_*`), a płaski kolektor pve10 przyjmuje
+    tylko profil płaski. pve9-synchro przywrócone importem z eksportu (passive-flat, cron 1:1).
+  - **Dowody:** `test/localbackup` na pve9: 4 nowe testy A′ PASS; kontrola negatywna z `main`:
+    te 4 FAIL; 22 porażki środowiskowe (prawdziwy blok crona `zfsbackup` na pve9) identyczne
+    na obu wersjach -- pełna suita na CI.
 
 - **GUI: F5 najpierw mówi „odświeżam…”, potem liczy (tester R4, B7, 2026-09-25).**
   Zbieranie danych na pve10 trwa ~5,6 s (monitor 2,4 s, list-jobs 1,7 s, job-stats

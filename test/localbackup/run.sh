@@ -1378,6 +1378,44 @@ for _p in default y5m12d31h24-gfs; do
     fi
 done
 
+# ---- luka A' (2026-09-25): --target='' --recursive covers the children ------
+#
+# Without it a snapshot-only job made snapshots on the named root only, and a
+# parent+child source list is refused as an overlap -- so children could not
+# get snapshots at all. A passive sync collector (snapget -e) pulling those
+# children ran rc=0 hourly and moved nothing (pve10 <> pve9, dead since
+# 2026-09-20). One `recursive =` on the section scopes send and prune alike.
+out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+        bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
+_snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R "rpool/data"$')"
+_pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .* -R .*"rpool/data"')"
+_pruneN="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data"' | grep -cv -- ' -R ')"
+if [ "$rc" -eq 0 ] && [ "$_snapR" -ge 1 ] && [ "$_pruneR" -ge 1 ] && [ "$_pruneN" -eq 0 ]; then
+    ok "A': --target='' --recursive=flat snapshots AND prunes the subtree (-R on both, no non-recursive prune left)"
+else
+    bad "A': --target='' --recursive=flat snapshots AND prunes the subtree" "rc=$rc snapsend-R=$_snapR delsnaps-R=$_pruneR delsnaps-bez-R=$_pruneN
+$(printf '%s\n' "$out" | grep -E 'snapsend|delsnaps|FATAL' | head -5)"
+fi
+if printf '%s\n' "$out" | grep -q 'Retencja CELU:    (brak celu' && ! printf '%s\n' "$out" | grep -q 'Retencja CELU:    GFS'; then
+    ok "A'/132-3: with no target the plan prints no target retention"
+else
+    bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
+fi
+out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=flat --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive is for --target=''"; then
+    ok "A': --recursive with a target is refused, with the reason"
+else
+    bad "A': --recursive with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
+fi
+out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
+        bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q "got 'ture'"; then
+    ok "A': an unknown --recursive value is fatal, not falsy"
+else
+    bad "A': an unknown --recursive value is fatal, not falsy" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
+fi
+
 # ---- the same two profiles, WITH a target -----------------------------------
 #
 # The mirror of the block above, and the half that was never asked. Measured on

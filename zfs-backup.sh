@@ -243,7 +243,7 @@ Usage:
                                     The cleanest source preset creates NOTHING: drop
                                     [dataset], keep [prune]. See profiles/README.md,
                                     "A profile that only prunes".
-                [--local-user=NAME] [--install] [--yes|-y]
+                [--local-user=NAME] [--recursive=flat|atomic] [--install] [--yes|-y]
                                     LOCAL backup ('local-backup ...' is an alias).
                                     --source omitted:  proposed from this host's ZFS inventory and shown,
                                                        with every skipped dataset and its reason; a PROPOSED
@@ -257,6 +257,12 @@ Usage:
                                                        so this has to be said out loud -- and it is
                                                        refused under --yes, because an empty target
                                                        is also what an unset shell variable expands to.
+                                    --recursive=flat|atomic  (only with --target='')
+                                                       the snapshots, their prune and the monitor
+                                                       cover each source's children too, present and
+                                                       future: flat = per descendant, atomic = one
+                                                       zfs snapshot -r. The producer a passive sync
+                                                       collector needs on a source with children.
                                     --local-user:      account these jobs run as; omitted means root.
                                                        Same flag and same default as the remote form --
                                                        the account is a per-deployment decision, never a
@@ -6589,6 +6595,7 @@ cmd_local_backup() {
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
     local do_install=0 assume_yes=0
     local local_user="" local_user_given=0 resolver_user=""
+    local lb_recursion=""
     local -a source_flags=()
     for a in "$@"; do
         case "$a" in
@@ -6612,6 +6619,20 @@ cmd_local_backup() {
             # account and the block still landed in root's crontab, because
             # nothing here ever set LOCAL_USER.
             --local-user=*) local_user="${a#*=}"; flag_local_user local-backup "$local_user"; local_user_given=1 ;;
+            # SNAPSHOT-ONLY WITH CHILDREN (luka A', 2026-09-25). With no target,
+            # a root's children got no snapshots at all: snapsend without -r,
+            # delsnaps without -R, and naming parent and child together is
+            # refused as an overlap. A passive sync collector (snapget -e)
+            # pulling those children then ran rc=0 every hour and moved nothing
+            # (pve10 <> pve9, dead from 2026-09-20). The generator already
+            # scopes all three lines from one `recursive =` on the section;
+            # this only lets the composer write it. Same grammar as add-client.
+            --recursive=*) lb_recursion="${a#*=}"
+                case "$lb_recursion" in
+                    flat|atomic) ;;
+                    no) lb_recursion="" ;;
+                    *) die "local-backup: --recursive must be 'flat' (each descendant its own snapshot and prune) or 'atomic' (one zfs snapshot -r of the subtree), got '$lb_recursion'" ;;
+                esac ;;
             *) die "local-backup: unknown option $a" ;;
         esac
     done
@@ -6971,6 +6992,11 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         LB_PRUNE[$r]="$(schedule_with_minute "$(schedule_template_expr prune)" "$_lb_pmin")"
     done
 
+    # --recursive only where it was measured to be missing: with a target the
+    # landing side (children created under dst, their own target prune) is a
+    # different question, and this flag does not pretend to answer it.
+    [ -z "$lb_recursion" ] || [ "$no_copy" -eq 1 ] \
+        || die "local-backup: --recursive is for --target='' (snapshots stay in the source). With a target, back up each child explicitly or use the remote form's --recursive."
     {
         for r in "${roots[@]}"; do
             echo
@@ -6982,6 +7008,9 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # absent dst as "create a snapshot and transfer nothing" -- the
             # same shape a hand-written single-host config has always used.
             [ "$no_copy" -eq 0 ] && echo "	dst          = $target"
+            # One declaration scopes the snapshot, the inline prune and the
+            # monitor (gen-cron, REV-20260807-054).
+            [ -n "$lb_recursion" ] && echo "	recursive    = $lb_recursion"
             echo "	notify       = local-$(basename "$r")"
         done
         # Retention, not shape -- the same F1 correction as the remote path. A
@@ -7043,6 +7072,9 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
                 emit_source_prune_fragment "$LB_RETFRAG"
+                # --recursive (luka A'): the source prune walks the same subtree
+                # the snapshot does, or every child's family grows unbounded.
+                [ -n "$lb_recursion" ] && echo "	recursive    = yes"
                 # Same reason as the send line: without its own minute, two
                 # source prunes with identical policy merge into one delsnaps
                 # line and the first one's identity changes underneath the
@@ -7109,7 +7141,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     local ladder
     ladder="$(grep -oE 'retain *= *-[HDWMY][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMY][0-9]+' | tr '\n' ' ')"
     echo "  Retencja ZRODLA:  GFS ${ladder:-(patrz profil)}(na kazdym zrodle -- ogranicza automated_hourly_ na produkcji)"
-    echo "  Retencja CELU:    GFS ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA; edytuj osobno w kandydacie przed instalacja)"
+    # No target, no target retention -- REV-20260901-132 acceptance 3, which
+    # the no-copy fix left printing a ladder for a store that does not exist.
+    if [ "$no_copy" -eq 1 ]; then
+        echo "  Retencja CELU:    (brak celu -- nic nie jest kopiowane)"
+    else
+        echo "  Retencja CELU:    GFS ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA; edytuj osobno w kandydacie przed instalacja)"
+    fi
+    [ -n "$lb_recursion" ] && echo "  Rekursja:         $lb_recursion -- migawki, prune i straznik obejmuja tez dzieci (obecne i przyszle)"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
     echo
     echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
