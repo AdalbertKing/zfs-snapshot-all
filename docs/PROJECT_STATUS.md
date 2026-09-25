@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 897c9cc76a5b8d44 -->
+<!-- status-covers-digest: 0bbef5d54119516c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,11 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI: F5 najpierw mówi „odświeżam…”, potem liczy (tester R4, B7, 2026-09-25).**
+  Zbieranie danych na pve10 trwa ~5,6 s (monitor 2,4 s, list-jobs 1,7 s, job-stats
+  1,0 s, zmierzone); ekran stał bez znaku, czy klawisz zadziałał. Klawisz zamawia
+  odświeżenie, pętla rysuje komunikat, potem liczy. Test pty sprawdza „odświeżam”.
 
 - **GUI, runda 4: poprawki z testu testera na pve10/pve11 (2026-09-25).**
   - B1: listwa F3 podpisuje akcje okna (F7/F8/F9) -- podpisy były tylko na F2 i F4.
