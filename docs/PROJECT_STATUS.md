@@ -9939,6 +9939,18 @@ stanem recenzji.
 
 ### Znane luki, nie planowane do zamknięcia teraz
 
+- **Tryb tylko-migawki bez strażnika wieku** (2026-09-25). `local-backup --target=''`
+  generuje migawki i ich prune, ale nie `check-snap-age`: szablony retencji źródła
+  (`src_keep_*`) nie niosą `monitor_warn`/`monitor_crit`. Producent migawek, który
+  przestanie działać, nie da alarmu na swoim hoście (pve9 od #439/#440).
+- **`delete-relation` wymaga GitHuba na kolektorze** (2026-09-25, pve10). `remove-client`
+  woła `deploy.sh --unpair`, a ten robi `git pull`. Chwilowy brak DNS zatrzymał usuwanie
+  W POŁOWIE: sekcje configu i linie crona relacji już usunięte, rekord dalej `active`.
+  Powtórka po powrocie sieci doszła do końca. Ta sama klasa co „dokończ transakcję”:
+  krok, który może paść (sieć), stoi po kroku, który już coś zmienił.
+- **pve9: dwie stare linie `/tmp` w cronie roota** (`rev140`/`pgtest`, sprzed 2026-09-25) --
+  pozostałość laba, nie ruszane; do decyzji właściciela.
+
 - **Test odtworzenia vsql2.** Jedyna rzecz, która dowodzi, że snapshot się
   przywraca — `engaged` z `sqlfreeze` mówi tylko, że SQL uczestniczył. Nie
   wykonany; **właściciel wykonuje go ręcznie** (decyzja z 2026-07-31), więc nie
