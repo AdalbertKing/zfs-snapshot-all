@@ -594,6 +594,26 @@ else
     echo "     agregat: $(grep -o "relations.*" "$pg_tmp/agg.json" 2>/dev/null | cut -c1-160)"
 fi
 
+# R5-8 (pve10 2026-09-25): a record with a SECOND end glued on -- what
+# progress_done writes when a transfer finishes before its watcher replaced
+# the previous run's finished record -- must not make the whole document
+# invalid. The reader keeps the first complete object.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/glued"; export ZFS_PROGRESS_DIR
+  mkdir -p "$pg_tmp/glued"
+  printf '{"label":"x","dataset":"a@s1","state":"verified","finished_epoch":1790364665},"state":"verified","finished_epoch":1790368264}\n' > "$pg_tmp/glued/a.json"
+  printf '{"label":"x","dataset":"b@s1","state":"ok","finished_epoch":1790364665}\n' > "$pg_tmp/glued/b.json"
+  . "$REPO/zfs-backup.sh" 2>/dev/null
+  cmd_progress --json > "$pg_tmp/glued.json" 2>/dev/null
+) >/dev/null 2>&1
+_pgv=""
+for _py in python3 python; do "$_py" -c 'import sys' >/dev/null 2>&1 && { _pgv=$("$_py" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(len(d["jobs"]), d["jobs"][0].get("finished_epoch"))' "$pg_tmp/glued.json" 2>&1); break; }; done
+if [ "$_pgv" = "2 1790364665" ]; then
+    PASS=$((PASS+1)); echo "PASS F a record with a glued-on second end still yields valid JSON (first object kept)"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F a record with a glued-on second end still yields valid JSON (first object kept)"
+    echo "     python: $_pgv :: $(cut -c1-200 "$pg_tmp/glued.json" 2>/dev/null)"
+fi
+
 # THE RECORD IS A DATA LAYER FOR MACHINES, NOT A STATUS LINE (owner direction,
 # 2026-08-23): a future GUI/monitor must read per-job and per-relation state
 # without scraping text. So the identity fields are pinned as a contract:
