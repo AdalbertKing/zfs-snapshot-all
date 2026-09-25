@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0a8eba6f710967d7 -->
+<!-- status-covers-digest: 80dd7dfb3dac6fbf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -36,6 +36,17 @@
     import) -- do decyzji właściciela.
   - **Znana luka (silnik, zamrożony):** pominięcie biegu przez blokadę kończy się rc=0 --
     dziennik wygląda zdrowo.
+- **`progress --json` odporne na rekord ze sklejonym drugim końcem (R5-8, 2026-09-25).**
+  - **Zmierzone na pve10:** jeden plik rekordu miał `…"finished_epoch":1790364665},"state":"verified","finished_epoch":1790368264}`
+    (drugi koniec dokładnie godzinę później) -- cały dokument JSON nieważny, GUI „! bez odpowiedzi: 1”,
+    F4 bez danych.
+  - **Przyczyna (silnik, zamrożony):** `progress_done` (`lib-zfs-snap.sh`) dokleja koniec do
+    tego, co jest w pliku; transfer, który kończy się przed pierwszym zapisem podglądacza
+    (0 B), zastaje ZAKOŃCZONY rekord poprzedniego biegu. Naprawa w silniku czeka na słowo
+    właściciela (ENGINE-FREEZE).
+  - **Zmiana (czytelnik, `zfs-backup.sh`):** `progress --json` oddaje z każdego pliku pierwszy
+    kompletny obiekt. Test `twins` F (sklejony rekord -> poprawny JSON, pierwszy obiekt);
+    kontrola negatywna: `main` na tej samej fiksturze -- JSON nieważny.
 
 - **GUI, runda 5: Cele, tabela par, CRON wg zakresów, stopka eksportu (R5-3..R5-6, 2026-09-25).**
   - R5-3: „Lądowiska” + osobny „Cel” → jeden wiersz **„Cele (N)”** z listą datasetów

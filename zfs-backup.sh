@@ -5521,7 +5521,17 @@ cmd_progress() {
             [ -e "$f" ] || continue
             [ "$first" -eq 1 ] || printf ','
             first=0
-            cat "$f"
+            # ONE OBJECT PER RECORD, whatever the file holds (R5-8, pve10
+            # 2026-09-25). progress_done (lib-zfs-snap.sh, FROZEN) appends its
+            # ',"state":..,"finished_epoch":..}' to whatever body the file has;
+            # a transfer that ends before its watcher's first write leaves the
+            # PREVIOUS run's finished record there, and gets a second end glued
+            # on: `...,"finished_epoch":A},"state":"ok","finished_epoch":B}`.
+            # One such file made the whole document invalid and the GUI showed
+            # "bez odpowiedzi". The reader keeps the first complete object --
+            # still a true record of that earlier transfer; the engine-side
+            # fix waits for the owner's word on the freeze.
+            sed -e 's/}\(,"state":"[^"]*","finished_epoch":[0-9]*}\)\{1,\}$/}/' "$f" | head -n 1
         done
         printf '],"relations":['
         first=1
