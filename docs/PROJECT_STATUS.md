@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4491ca009bb7b3ce -->
+<!-- status-covers-digest: 2fbdcb85db85d4c3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI, runda 4 etap 4: eksport bez drugiego potwierdzenia, import z listy plików, katalog relacji (R4-8, R4-9, R4-10, 2026-09-25).**
+  - Eksport (F8 na F3): podpowiedź `/etc/zfs-snapshot-all/relations/<relacja>.export.json`,
+    **Enter zapisuje** (bez `t`), istniejący plik nadpisywany bez pytania, brakujący katalog
+    tworzony; brak prawa zapisu = komunikat w tym samym polu.
+  - Import (F9 na F3): **lista plików** katalogu relacji -- `..`, katalogi, tylko pliki
+    eksportu (schema `zfs-backup/relation-export/`, z datą i nazwą relacji), najnowsze
+    pierwsze; na końcu „wpisz ścieżkę ręcznie”. Enter na pliku = werdykt jak dotąd.
+  - Katalog relacji leży obok profili użytkownika, poza checkoutem (git go nie widzi,
+    pull go nie nadpisze) i nie zależy od konta. Katalog tworzy GUI przy pierwszym
+    eksporcie -- GUI uruchomione jako `zfsbackup` nie ma prawa pisać w `/etc` (znana luka;
+    dotąd GUI chodzi jako root).
+  - **Dowody:** `tui` PASS=195 FAIL=0 (pty pominięty na Windows).
 
 - **GUI, runda 4 etap 3: jedno okno szczegółów -- opis, CONFIG, CRON (R4-6, R4-7, 2026-09-25).**
   - Enter na relacji (F3), na zadaniu (F2) i na parze (panel par F3) otwiera okno
