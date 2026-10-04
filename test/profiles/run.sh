@@ -998,8 +998,8 @@ if [ -f "$PF" ]; then
     fi
     tier="$(sed -n '/^\[template:/,/^\[/p' "$PF")"
     if printf '%s' "$tier" | grep -qE '^[[:space:]]*send_schedule' && printf '%s' "$tier" | grep -qE '^[[:space:]]*prune_schedule' \
-       && printf '%s' "$tier" | grep -qE '^[[:space:]]*pattern[[:space:]]*=[[:space:]]*automated$'; then
-        ok "passive-flat: ONE tier that both consumes and prunes, and its pattern is 'automated' -- the family it adopts; 'pattern = -' is refused here because a send tier is read as creating 'automated_...'"
+       && printf '%s' "$tier" | grep -qE '^[[:space:]]*pattern[[:space:]]*=[[:space:]]*-$'; then
+        ok "passive-flat: ONE tier that both consumes and prunes, and its pattern is '-' -- it adopts every family but the excluded ones, so it counts every family (R5-2; 'automated' let a manual snapshot copied from the source grow on the collector forever)"
     else
         bad "passive-flat: the tier is not self-pruning, or names the wrong family" "$tier"
     fi
@@ -1009,9 +1009,13 @@ if [ -f "$PF" ]; then
         bad "passive-flat: tier name has no cadence word, so keep cannot become a retention letter" "$(grep -n '^\[template:' "$PF")"
     fi
     if render_profile "$PF" "passive-flat" > "$FLOOR/pf.out" 2>/dev/null; then
-        if grep -q 'delsnaps.sh' "$FLOOR/pf.out" && grep -qE '"automated" -H[0-9]+' "$FLOOR/pf.out" \
+        # '"" -H', not '"-" -H': delsnaps.sh matches its pattern as a literal
+        # prefix, so the config's '-' must reach it EMPTY or the prune selects
+        # nothing and still reports success (gen-cron's delsnaps_pattern).
+        if grep -q 'delsnaps.sh' "$FLOOR/pf.out" && grep -qE '"" -H[0-9]+' "$FLOOR/pf.out" \
+           && ! grep -qE 'delsnaps[^|]*"-"' "$FLOOR/pf.out" \
            && ! grep -qE 'delsnaps[^|]*@' "$FLOOR/pf.out"; then
-            ok "passive-flat: the REAL gen-cron renders a prune line over the adopted family, counted flat, and LOCAL -- a passive relationship must not prune the source's own family"
+            ok "passive-flat: the REAL gen-cron renders a prune line over EVERY family (empty delsnaps pattern, not a literal '-'), counted flat, and LOCAL -- a passive relationship must not prune the source's own family"
         else
             bad "passive-flat: rendered prune line is wrong" "$(grep -m2 delsnaps "$FLOOR/pf.out" | cut -c1-200)"
         fi

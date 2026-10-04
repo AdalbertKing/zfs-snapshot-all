@@ -4287,11 +4287,21 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             profile_emit "$PROFILE_DS_FILE"
             if sync_ds_is_passive "$ds"; then
                 # Dataset-level fields beat the template's (resolve_field), so
-                # these four lines are the whole passive shape:
-                #   -e            consume the newest EXISTING snapshot;
-                #   prefix        the generic family, not one tier's -- the
-                #                 owner's newest snapshot is the right one
-                #                 whichever tier produced it;
+                # these lines are the whole passive shape:
+                #   -e -E         consume the newest EXISTING snapshot, whatever
+                #                 it is called, minus the excluded families
+                #                 (client_family_excludes) -- when the profile
+                #                 is prefixless (passive, passive-flat). The
+                #                 first version always wrote 'prefix =
+                #                 automated_', and snapget -m narrowed the
+                #                 pickup to that family, so a manual or foreign
+                #                 snapshot on the source was never copied (R5-2,
+                #                 owner 2026-10-04: "everything except the
+                #                 exclusions, unless defined otherwise"). The
+                #                 same list reaches the monitor as
+                #                 monitor_exclude, so an excluded family cannot
+                #                 keep a dead relation green. A profile that
+                #                 stamps a family still adopts only that one;
                 #   :31 schedule  offset off the owner's :01 -- pulling at the
                 #                 same minute as the producer races it and
                 #                 reproduces the same-minute bucket collision
@@ -4301,12 +4311,23 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 #                 cadence; 90m thresholds would false-alarm on
                 #                 a healthy chain -- the threshold-vs-cadence
                 #                 lesson, third occurrence on this estate).
-                echo "	prefix       = automated_"
+                local _sync_any=0
+                profile_is_prefixless && _sync_any=1
+                # A family-stamping profile (default, prod, ...): its ladder
+                # and monitor know only that family, so the pickup stays on it.
+                # Without this line the TEMPLATE's own prefix
+                # (automated_hourly_) would apply and narrow it further.
+                [ "$_sync_any" -eq 1 ] || echo "	prefix       = automated_"
                 echo "	send_schedule = 31 * * * *"
                 echo "	monitor_warn = 3h"
                 echo "	monitor_crit = 5h"
+                [ "$_sync_any" -eq 1 ] && echo "	monitor_exclude = $(client_family_excludes)"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS -e"
+                if [ "$_sync_any" -eq 1 ]; then
+                    echo "	flags        = $LOAD_FLAGS -e$(client_family_exclude_flags)"
+                else
+                    echo "	flags        = $LOAD_FLAGS -e"
+                fi
             elif [ "${PASSIVE:-0}" = "1" ]; then
                 # DECLARED passive (LAB-E, 2026-08-23) -- distinct from the
                 # sync-chain branch above, which detects OUR OWN family: this
@@ -4319,6 +4340,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # not page, a fresh one must not paint a stale relation green.
                 [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
                 [ -n "$_tier_sched" ] && printf '%s' "$_tier_sched"
+                # On the DATASET too, not only on the ladder's [prune:] below:
+                # a FLAT profile (passive-flat) has no ladder, its monitor rides
+                # this section's tier, and without this line it watched every
+                # family including the excluded ones.
+                echo "	monitor_exclude = $(client_family_excludes)"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
             else
@@ -8111,16 +8137,45 @@ is_recursive_root() {   # <dataset> -> 0 yes
 # everything the DECLARATION implies, or a re-activation quietly turns a
 # passive relationship active and it starts stamping the source.
 client_passive_flags() {
-    local out="" i=1 n v
     [ "${PASSIVE:-0}" = "1" ] || { printf ''; return 0; }
-    out=" -e"
+    printf ' -e%s' "$(client_family_exclude_flags)"
+}
+
+# The snapshot families a passive pickup must never ADOPT (R5-2, owner
+# 2026-10-04): the recorded EXCLUDE_FAMILY_n list, or -- when the relationship
+# recorded none -- Proxmox's three reserved families. A passive relationship
+# takes "the newest snapshot, whatever it is called, minus these", and without
+# a default the newest could be a vzdump or pvesr snapshot that vanishes on the
+# source within hours, taking the next incremental's base with it. Both passive
+# shapes use it: the DECLARED one (--passive) and the sync-chain one, which until
+# this change narrowed the pickup to 'automated_' instead and so silently left
+# every other family on the source behind (measured on pve9 2026-09-25: a manual
+# snapshot newer than the last automated_ was not pulled, rc=0).
+# One value per field, never re-split: a recorded prefix is data and may hold
+# anything a field can (the noeval section pins this with a value shaped like a
+# command substitution). Joining the fields and splitting them again cut such a
+# value in two -- caught by that section on the first run of this change.
+client_family_list() {   # -> FAMILY_LIST=(recorded prefixes, or the default three)
+    local i=1 n v
+    FAMILY_LIST=()
     while :; do
         n="EXCLUDE_FAMILY_$i"; v="${!n:-}"
         [ -n "$v" ] || break
-        out="$out -E $v"
+        FAMILY_LIST+=("$v")
         i=$((i + 1))
     done
+    [ "${#FAMILY_LIST[@]}" -gt 0 ] || FAMILY_LIST=(vzdump __replicate_ __migration__)
+}
+client_family_exclude_flags() {   # -> " -E <prefix>" per excluded family
+    local f out=""
+    client_family_list
+    for f in "${FAMILY_LIST[@]}"; do out="$out -E $f"; done
     printf '%s' "$out"
+}
+client_family_excludes() {   # -> the same list, comma-separated (monitor_exclude)
+    local IFS=,
+    client_family_list
+    printf '%s' "${FAMILY_LIST[*]}"
 }
 
 # REC_ARGS=(-R -X re ...) for a recursive root, () otherwise (2026-09-23). The
@@ -8209,6 +8264,18 @@ profile_family_root() {
         esac
     fi
     printf '%s' "${root:-automated_}"
+}
+
+# Does the active profile stamp NO family of its own? True for `passive` and
+# `passive-flat`: no tier names a prefix and the ladder (if any) prunes on no
+# gfs_pattern. That is the profile saying "this relationship adopts whatever it
+# finds", and only then does a sync-chain pickup take every family minus the
+# exclusions (R5-2). A profile that stamps a family keeps adopting THAT family:
+# its prune and its monitor only know that family, so a wider pickup would copy
+# snapshots nothing on the collector ever deletes.
+profile_is_prefixless() {
+    load_active_profile
+    ! grep -qE '^[[:space:]]*(prefix|gfs_pattern)[[:space:]]*='         "$PROFILE_TPL_FILE" "$PROFILE_PRUNE_FILE" 2>/dev/null
 }
 
 # The seed's name: root + daily_. For the default profile this is byte-for-
@@ -8853,7 +8920,15 @@ cmd_seed() {
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
-        if [ "$fam_rc" -eq 0 ]; then
+        if [ "$fam_rc" -eq 0 ] && [ "${PEER_SAVED_MODE:-}" = sync ] && profile_is_prefixless; then
+            # The same pickup the installed sync-chain line will carry (R5-2):
+            # the newest snapshot of ANY family minus the excluded ones, not
+            # the newest automated_ -- a seed narrower than its cron line
+            # would start the copy from an older base than the first run
+            # then adopts.
+            read -r -a seed_flags <<< "-e$(client_family_exclude_flags)"
+            log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot of any family except $(client_family_excludes), creating nothing on the source"
+        elif [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
@@ -9016,7 +9091,15 @@ cmd_final_catchup() {
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
-        if [ "$fam_rc" -eq 0 ]; then
+        if [ "$fam_rc" -eq 0 ] && [ "${PEER_SAVED_MODE:-}" = sync ] && profile_is_prefixless; then
+            # The same pickup the installed sync-chain line will carry (R5-2):
+            # the newest snapshot of ANY family minus the excluded ones, not
+            # the newest automated_ -- a seed narrower than its cron line
+            # would start the copy from an older base than the first run
+            # then adopts.
+            read -r -a seed_flags <<< "-e$(client_family_exclude_flags)"
+            log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot of any family except $(client_family_excludes), creating nothing on the source"
+        elif [ "$fam_rc" -eq 0 ]; then
             seed_flags=(-m "$seed_root" -e)
             log "seed: '$ds' already carries an automated_* family on $LOAD_HOST -- PASSIVE seed (-e): adopting the newest existing snapshot as the base, creating nothing on the source"
         fi
