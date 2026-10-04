@@ -2102,23 +2102,39 @@ quiesce_update_failed() {   # <account> <label> -- exits nonzero, writing nothin
     die "commit-scope did NOT complete for '$label': nothing durable was written (no new scope hash, no new PEER_JOIN_GRANTED_DATASETS), so the previous record still describes what is granted and re-running this same command retries safely."
 }
 
+#
+# Returns nonzero when a file of the grant EXISTED and is still there
+# (REV-20260920-145 follow-up). The first version counted only successes, so two
+# failed removals left removed=0 and fell into "nothing to revoke", rc=0 -- with
+# both files standing. quiesce_update_failed() and --revoke-quiesce both decide
+# on this status, so "could not remove" must never read as "nothing was there".
 revoke_quiesce_grant() {
-    local account="$1" removed=0
+    local account="$1" removed=0 stuck=0
     local allow="/etc/zfs-quiesce-allow/$account"
     local rule="/etc/sudoers.d/zfs-quiesce-$account"
 
     if [ -e "$allow" ]; then
-        rm -f "$allow" && { log "removed the quiesce whitelist $allow"; removed=1; } \
-            || warn "could not remove $allow -- $account may still be able to quiesce guests here"
+        if rm -f "$allow" && [ ! -e "$allow" ]; then
+            log "removed the quiesce whitelist $allow"; removed=1
+        else
+            warn "could not remove $allow -- $account may still be able to quiesce guests here"; stuck=1
+        fi
     fi
     if [ -e "$rule" ]; then
-        rm -f "$rule" && { log "removed the sudoers rule $rule"; removed=1; } \
-            || warn "could not remove $rule -- $account may still reach the helper through sudo"
+        if rm -f "$rule" && [ ! -e "$rule" ]; then
+            log "removed the sudoers rule $rule"; removed=1
+        else
+            warn "could not remove $rule -- $account may still reach the helper through sudo"; stuck=1
+        fi
     fi
 
-    if [ "$removed" -eq 0 ]; then
+    if [ "$removed" -eq 0 ] && [ "$stuck" -eq 0 ]; then
         log "no quiesce grant found for '$account' on this host -- nothing to revoke"
         return 0
+    fi
+    if [ "$removed" -eq 0 ]; then
+        warn "the quiesce grant for '$account' is still in place -- remove the files named above by hand"
+        return 1
     fi
 
     # A leftover broken rule would break sudo for everyone, so confirm the
@@ -2137,7 +2153,9 @@ revoke_quiesce_grant() {
             log "no account on this host has a quiesce grant any more -- remove the helper by hand if you want it gone: rm -f /usr/local/sbin/zfs-quiesce-helper"
         fi
     fi
-    return 0
+    # One half removed, the other stuck: the helper already refuses this account
+    # (it needs both), but a file of the grant is still on disk -- say so in rc.
+    return "$stuck"
 }
 
 if [ "$JOIN_CHECK" -eq 1 ]; then
