@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3d6715cd889b27b4 -->
+<!-- status-covers-digest: 102c8adc6b651acf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,38 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pasywne pobranie bierze WSZYSTKIE rodziny poza wyjątkami (R5-2, decyzja właściciela 2026-10-04).**
+  - **Zmierzone na żywo (pve10 <- pve9, `hdd/lab/ct-201`):** ręczna migawka na źródle,
+    nowsza niż ostatnia `automated_`. Linia synchro w obecnym kształcie (`-m "automated_" -e`)
+    -- rc=0, migawka NIE przyszła. Te same flagi w nowym kształcie (`-e -E vzdump -E
+    __replicate_ -E __migration__`) -- rc=0, przyszła. Migawka testowa usunięta po obu
+    stronach, baza `automated_hourly_…18-57-01` nietknięta.
+  - **Zmiana (`zfs-backup.sh`):** ścieżka sync-chain (źródło ma już naszą rodzinę) na
+    profilu BEZPREFIKSOWYM (`passive`, `passive-flat`) nie pisze już `prefix = automated_`:
+    `flags` dostaje `-e` plus `-E` wyjątków, a `monitor_exclude` tę samą listę. Wyjątki to
+    zapisane `EXCLUDE_FAMILY_n` relacji, a gdy brak -- trzy rodziny Proxmoksa (domyślne
+    `-E` dotyczą też `--passive` bez `--exclude-family`, które dotąd dawało gołe `-e`).
+    Seed i final-catchup synchro biorą te same flagi. Profil z WŁASNĄ rodziną (`default`,
+    `prod`...) zostaje przy dawnym kształcie -- jego drabina i monitor znają tylko tę
+    rodzinę („chyba że tak zostało zdefiniowane”); wygenerowana sekcja bajt w bajt jak na main.
+    `--passive` dostaje też `monitor_exclude` w sekcji `[dataset:]` (profil płaski nie ma
+    drabiny, monitor jedzie na szczeblu datasetu i dotąd widział wykluczone rodziny).
+  - **Prune bezprefiksowy (`profiles/passive-flat.conf`: `pattern = -`).** Licznik, nie
+    drabina: najnowsza migawka -- baza -- zawsze zostaje. **Przy tym znaleziona wada
+    gen-cron:** `-` z configu szedł do `delsnaps.sh` dosłownie, a ten porównuje prefiks
+    literalnie -- na pve10 `delsnaps -n … "hdd/lab/ct-201" "-" -H168` → „No snapshots
+    found”, rc=0, czyli prune, który nic nie usuwa i melduje sukces. Teraz
+    `delsnaps_pattern` zamienia `-` na pusty wzorzec (linie inline i `[prune:]` bez GFS;
+    drabina GFS używa `gfs_pattern`, nie dotyczyło jej). Na pve10 `"" -H168` zostawia 168
+    najnowszych.
+  - **Testy:** `zfsbackup --section passivepick` 6/0 (na main 1/5 -- kontrola z profilem
+    `default` przechodzi na obu, i ma); `noeval` 4/0 -- złapała przy pierwszym biegu, że
+    sklejanie listy spacją cięło wartość pola na pół (teraz tablica). `profiles` 93/0:
+    asercje passive-flat przepisane na `pattern = -` i render `"" -H`; gen-cron z main
+    na tym profilu daje `"-" -H168`.
+  - **Do zrobienia na słowo właściciela:** istniejące `pve9-synchro` ma stary kształt
+    sekcji -- trzeba założyć ponownie (eksport → delete --keep-source → import).
 
 - **Rozrzut harmonogramu zachowuje odstępy szczebli profilu (R5-7, 2026-09-25).**
   - **Zmierzone na pve10:** pve9b (m31w4d7h24) miało hourly, daily, weekly i monthly WSZYSTKIE
@@ -697,9 +729,9 @@
      odmawia: *„NO RETENTION AT ALL"*. **Pasywna synchronizacja na płaskim
      kolektorze była więc niewykonalna** -- brakowało jednego klocka.
   - **Klocek: `profiles/passive-flat.conf`.** Bezprefiksowy jak `passive`, płaski
-    jak host: JEDEN szczebel, który i konsumuje, i sprząta; `pattern = automated`
-    (rodzina, którą adoptuje -- `pattern = -` jest tu odrzucane, bo szczebel
-    z `send_schedule` czyta się jako tworzący `automated_...`); bez fragmentu
+    jak host: JEDEN szczebel, który i konsumuje, i sprząta; od R5-2 (2026-10-04)
+    `pattern = -`, czyli prune liczy WSZYSTKIE rodziny (pierwotne `automated`
+    wymuszał wpisywany na sztywno `prefix = automated_` -- patrz wpis R5-2); bez fragmentu
     `[prune]`, bo to on właśnie jest drabiną; nazwa szczebla kończy się na
     `_hourly`, bo litera retencji bierze się z OSTATNIEGO członu nazwy
     (`passive_flat` nie renderował się wcale, a FATAL nie niósł powodu -- osobna,

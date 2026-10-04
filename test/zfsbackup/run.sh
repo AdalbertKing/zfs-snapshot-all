@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -9140,7 +9140,7 @@ fi
 NE="$WORK/noeval"; rm -rf "$NE"; mkdir -p "$NE"
 cat > "$NE/probe.sh" <<'EOF'
 set -u
-eval "$FN_X"; eval "$FN_P"
+eval "$FN_X"; eval "$FN_P"; eval "$FN_L"; eval "$FN_G"
 EXCLUDE_CHILD_1='-swap$'
 EXCLUDE_CHILD_2='a b$(touch "$NE_MARK")'
 EXCLUDE_CHILD_4='never reached: numbering stops at the first gap'
@@ -9150,6 +9150,7 @@ EXCLUDE_FAMILY_2='$(touch "$NE_MARK")'
 printf '[%s][%s]' "$(client_exclude_flags)" "$(client_passive_flags)"
 EOF
 got=$(FN_X="$(product_fn "$ZFSBACKUP" client_exclude_flags)" FN_P="$(product_fn "$ZFSBACKUP" client_passive_flags)" \
+      FN_L="$(product_fn "$ZFSBACKUP" client_family_list)" FN_G="$(product_fn "$ZFSBACKUP" client_family_exclude_flags)" \
       NE_MARK="$NE/marker" bash "$NE/probe.sh" 2>&1)
 want='[ -X -swap$ -X a b$(touch "$NE_MARK")][ -e -E vzdump -E $(touch "$NE_MARK")]'
 if [ "$got" = "$want" ]; then
@@ -9175,6 +9176,90 @@ fi
 
 
 fi   # --- koniec sekcji noeval ---
+if want passivepick; then
+# ============================================================================
+# A PASSIVE PICKUP TAKES EVERY FAMILY EXCEPT THE EXCLUDED ONES (R5-2, owner
+# 2026-10-04). Self-contained; always eligible, also under `--section
+# passivepick`.
+#
+# Measured on pve9 -> pve10 (pve9-synchro, 2026-09-25): the sync-chain section
+# always carried 'prefix = automated_', snapget -m narrowed the pickup to that
+# family, and a manual snapshot newer than the last automated_ one was never
+# copied -- rc=0, nothing said. The owner's model is the one --passive already
+# had: the newest snapshot of ANY family, minus the excluded ones, and by
+# default those are Proxmox's three reserved families.
+#
+# Driven through the SHIPPED emit_client_sections, with the source probe stubbed
+# to report an existing automated_ family -- the condition that makes a sync
+# dataset passive in the first place.
+# ============================================================================
+PK="$WORK/passivepick"; rm -rf "$PK"; mkdir -p "$PK/clients"
+pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of the emit
+    local prof="$1" fam="${2-}" wf="$PK/$1.conf"
+    : > "$wf"
+    ( unset PASSIVE EXCLUDE_FAMILY_1 EXCLUDE_FAMILY_2
+      [ -n "$fam" ] && EXCLUDE_FAMILY_1="$fam"
+      CLIENTS_DIR="$PK/clients" PEER_SAVED_MODE=sync PEER_SAVED_TARGET=""
+      LOAD_LABEL=pk LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.4.4.4 LOAD_FLAGS="-K /dev/null"
+      PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
+      PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
+      ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
+      load_ssh_opts() { LOAD_SSH_OPTS=(); }
+      emit_client_sections "$wf" pk ) > "$PK/$prof.log" 2>&1 || return 1
+    sed -n '/^\[dataset:/,/^$/p' "$wf"
+}
+pk_def='vzdump -E __replicate_ -E __migration__'
+
+sec=$(pk_emit passive-flat); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -q 'PASSIVE consumption\|use_template' \
+   && ! printf '%s\n' "$sec" | grep -qE '^[[:space:]]*prefix[[:space:]]*=' \
+   && printf '%s\n' "$sec" | grep -qE "^[[:space:]]*flags[[:space:]]*= .* -e -E $pk_def\$" \
+   && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*monitor_exclude = vzdump,__replicate_,__migration__$'; then
+    ok "passivepick: a sync-chain dataset on a PREFIXLESS profile (passive-flat) adopts any family -- no prefix line, -e plus the default -E list, and the monitor blind to the same families"
+else
+    bad "passivepick: a sync-chain dataset on a prefixless profile still narrows the pickup" "rc=$rc" "$sec" "$(tail -3 "$PK/passive-flat.log")"
+fi
+
+sec=$(pk_emit passive-flat smiec_); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= .* -e -E smiec_$' \
+   && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*monitor_exclude = smiec_$'; then
+    ok "passivepick: ...a RECORDED exclusion list replaces the default rather than adding to it -- the record is the relationship's own decision"
+else
+    bad "passivepick: a recorded exclusion list is not what the section carries" "rc=$rc" "$sec"
+fi
+
+sec=$(pk_emit default); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*prefix[[:space:]]*= automated_$' \
+   && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= -K /dev/null -e$' \
+   && ! printf '%s\n' "$sec" | grep -q 'monitor_exclude'; then
+    ok "passivepick control: a FAMILY-stamping profile (default) keeps adopting that family -- prefix automated_, bare -e -- because its ladder and its monitor know only that family"
+else
+    bad "passivepick control: the family-profile shape changed" "rc=$rc" "$sec"
+fi
+
+# The declared half: --passive with no --exclude-family used to render a bare
+# -e, which adopts a vzdump or pvesr snapshot whenever one is the newest.
+got=$(unset EXCLUDE_FAMILY_1; PASSIVE=1 client_passive_flags)
+if [ "$got" = " -e -E $pk_def" ]; then
+    ok "passivepick: a DECLARED passive relationship with no recorded exclusions gets the same default -E list"
+else
+    bad "passivepick: declared passive without exclusions renders a bare -e" "got=[$got]"
+fi
+
+# The seed must adopt what the installed line will: on a prefixless profile the
+# sync seed takes the same -e -E pickup, not -m automated_ -e. Both transfer
+# sites; source-read like 67d, because the seed needs a live source to run.
+for fn in cmd_seed cmd_final_catchup; do
+    body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+    if printf '%s\n' "$body" | grep -q 'PEER_SAVED_MODE:-}" = sync \] && profile_is_prefixless; then' \
+       && printf '%s\n' "$body" | grep -q 'read -r -a seed_flags <<< "-e$(client_family_exclude_flags)"'; then
+        ok "passivepick: $fn seeds a prefixless sync pickup with the same -e -E flags as the cron line"
+    else
+        bad "passivepick: $fn still seeds a prefixless sync pickup narrower than its cron line" "$(printf '%s\n' "$body" | grep -n 'seed_flags' | head -5)"
+    fi
+done
+
+fi   # --- koniec sekcji passivepick ---
 if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).

@@ -3463,6 +3463,18 @@ job_cron_line() {
 # It is never inferred: a group of separately named datasets that happen to
 # share a parent is still a list, not a subtree, and collapsing it to a sweep
 # would prune snapshots nobody named.
+# CONFIG v4's '-' ("no pattern", every family) as delsnaps.sh spells it: an
+# EMPTY prefix (R5-2, 2026-10-04). check-snap-age.sh understands '-' itself;
+# delsnaps.sh does not -- it matches the argument as a literal prefix, so '-'
+# selected only names starting with a dash, i.e. nothing, and the prune
+# reported success while deleting nothing. Measured while making passive-flat
+# prefixless: its inline prune rendered `"hdd/lab/ct-201" "-" -H168`. The GFS
+# ladder never hit this because it prunes on gfs_pattern, which is omitted
+# (empty) for a prefixless ladder rather than spelled '-'.
+delsnaps_pattern() {   # <config pattern> -> delsnaps.sh pattern argument
+    if [ "$1" = "-" ]; then printf ''; else printf '%s' "$1"; fi
+}
+
 emit_inline_prune() {
     local key list ds tier pattern retain schedule notify recursive pairlbl gfs
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
@@ -3484,7 +3496,7 @@ emit_inline_prune() {
         [ "$recursive" = "1" ] && rflag="-R "
         [ "$gfs" = "1" ] && gflag="-G "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$(delsnaps_pattern "$pattern")\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -3500,7 +3512,7 @@ emit_prune_sections() {
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
