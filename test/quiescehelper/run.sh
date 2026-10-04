@@ -1310,6 +1310,94 @@ else
     bad "commit-scope control: the successful path regressed" "rc=$rc" "manifest=$man_after" "$(cat "$CS/out")"
 fi
 
+# ---- REV-20260920-145 follow-up: a removal that FAILS is not "nothing there" --
+#
+# The reviewer's second finding. quiesce_update_failed() decides on the status
+# of revoke_quiesce_grant(), and that function counted only SUCCESSFUL removals:
+# with both `rm`s failing, removed stayed 0, it printed "no quiesce grant found
+# -- nothing to revoke" and returned 0 while both files stood. The caller then
+# told the operator the freeze permission "was taken away entirely" -- and its
+# other branch, the one with the emergency command, could not be reached. The
+# check above stubbed revoke_quiesce_grant() to return 0, so it never saw this.
+#
+# This EXECUTES the shipped function with its absolute paths moved into a
+# sandbox and `rm` made to fail on the grant files.
+RV="$WORK/revokefail"; rm -rf "$RV"; mkdir -p "$RV/etc/zfs-quiesce-allow" "$RV/etc/sudoers.d" "$RV/sbin"
+awk '/^revoke_quiesce_grant\(\) \{/,/^\}/' "$REPO/deploy.sh" \
+    | sed -e "s#/etc/zfs-quiesce-allow#$RV/etc/zfs-quiesce-allow#g" \
+          -e "s#/etc/sudoers.d#$RV/etc/sudoers.d#g" \
+          -e "s#/usr/local/sbin/zfs-quiesce-helper#$RV/sbin/zfs-quiesce-helper#g" > "$RV/fn.sh"
+grep -q 'revoke_quiesce_grant()' "$RV/fn.sh" && grep -qF "local allow=\"$RV/etc/" "$RV/fn.sh" \
+    && grep -qF "local rule=\"$RV/etc/" "$RV/fn.sh" \
+    && ok "revoke sandbox: the SHIPPED revoke_quiesce_grant() is under test, with every absolute path moved into the sandbox" \
+    || bad "revoke sandbox: extraction or path redirection failed" "$(head -5 "$RV/fn.sh")"
+
+cat > "$RV/harness.sh" <<'HEOF'
+#!/bin/bash
+set -uo pipefail
+RV="$1"; STUCK="$2"           # which grant files rm cannot remove: none | both | rule
+log()  { echo ">>> $*"; }
+warn() { echo "!!! $*"; }
+quiesce_allow_dir_empty() { return 1; }
+rm() {
+    case "$STUCK:$*" in
+        both:*zfs-quiesce*|rule:*sudoers.d*) return 1 ;;
+    esac
+    command rm "$@"
+}
+. "$RV/fn.sh"
+revoke_quiesce_grant backup
+HEOF
+
+rv_run() {   # <none|both|rule> -> rc; output in $RV/out
+    printf 'pool/a\n' > "$RV/etc/zfs-quiesce-allow/backup"
+    printf 'backup ALL=(root) NOPASSWD: x\n' > "$RV/etc/sudoers.d/zfs-quiesce-backup"
+    bash "$RV/harness.sh" "$RV" "$1" > "$RV/out" 2>&1
+}
+rv_allow="$RV/etc/zfs-quiesce-allow/backup"; rv_rule="$RV/etc/sudoers.d/zfs-quiesce-backup"
+
+rv_run both; rc=$?
+if [ "$rc" -ne 0 ] && [ -e "$rv_allow" ] && [ -e "$rv_rule" ] \
+   && ! grep -q 'nothing to revoke' "$RV/out" && grep -q 'still in place' "$RV/out"; then
+    ok "revoke: when BOTH grant files exist and neither can be removed it returns nonzero and says the grant is still in place -- not 'nothing to revoke', rc=0 (REV-145)"
+else
+    bad "revoke: a failed removal still reads as 'nothing there'" "rc=$rc allow=$([ -e "$rv_allow" ] && echo yes || echo no) rule=$([ -e "$rv_rule" ] && echo yes || echo no)" "$(cat "$RV/out")"
+fi
+rv_run rule; rc=$?
+if [ "$rc" -ne 0 ] && [ ! -e "$rv_allow" ] && [ -e "$rv_rule" ] && grep -q "could not remove $rv_rule" "$RV/out"; then
+    ok "revoke: ...and when only ONE of the two can be removed it still returns nonzero and names the file left behind"
+else
+    bad "revoke: a half-failed removal returned success" "rc=$rc allow=$([ -e "$rv_allow" ] && echo yes || echo no) rule=$([ -e "$rv_rule" ] && echo yes || echo no)" "$(cat "$RV/out")"
+fi
+rv_run none; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$rv_allow" ] && [ ! -e "$rv_rule" ] && ! grep -q 'could not remove' "$RV/out"; then
+    ok "revoke control: the same harness with rm working removes both files and returns 0 -- the failure above is the injected rm, not the sandbox"
+else
+    bad "revoke control: the successful path regressed in the sandbox" "rc=$rc" "$(cat "$RV/out")"
+fi
+
+# And the caller: the install fails AFTER the replication grant was narrowed,
+# then the revoke fails too. quiesce_update_failed() must reach its emergency
+# branch -- the manual command -- and must not claim the permission was removed.
+sed -e '/^revoke_quiesce_grant()  {/c\
+quiesce_allow_dir_empty() { return 1; }\
+rm() { case "$*" in *zfs-quiesce*) return 1 ;; esac; command rm "$@"; }\
+. "$RV_FN"' "$CS/harness.sh" > "$CS/harness-stuck.sh"
+rm -f "$CS/zfs.log" "$CS/q.log" "$CS/hash" "$CS/out"
+printf 'PEER_JOIN_GRANTED_DATASETS="pool/a pool/b"\nPEER_JOIN_ACCOUNT_UID=4242\n' > "$CS/manifest"
+printf 'pool/a\n' > "$rv_allow"; printf 'backup ALL=(root) NOPASSWD: x\n' > "$rv_rule"
+RV_FN="$RV/fn.sh" bash "$CS/harness-stuck.sh" "$CS" 1 > "$CS/out" 2>&1; rc=$?
+man_after="$(grep '^PEER_JOIN_GRANTED_DATASETS=' "$CS/manifest")"
+if [ "$rc" -ne 0 ] && grep -q 'could not be taken away either' "$CS/out" \
+   && grep -q -- '--revoke-quiesce=backup' "$CS/out" && ! grep -q 'taken away entirely' "$CS/out" \
+   && [ -e "$rv_allow" ] && [ -e "$rv_rule" ] \
+   && [ "$man_after" = 'PEER_JOIN_GRANTED_DATASETS="pool/a pool/b"' ] && [ ! -e "$CS/hash" ] \
+   && ! grep -q 'commit-scope complete' "$CS/out"; then
+    ok "commit-scope: install fails AND the revoke cannot remove the grant -- the run says so, gives the manual --revoke-quiesce command, never claims the permission was taken away, and still writes nothing durable (REV-145)"
+else
+    bad "commit-scope: a revoke that failed was reported as a removed freeze permission" "rc=$rc" "manifest=$man_after" "$(cat "$CS/out")"
+fi
+
 # ---- REV-20260801-022 F1: an explicit grant must not exit 0 ----------------
 #
 # The first version of the local path leaned on Phase 8's account DETECTION and

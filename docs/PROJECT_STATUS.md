@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 80dd7dfb3dac6fbf -->
+<!-- status-covers-digest: 3d6715cd889b27b4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -663,6 +663,17 @@
   - **Wpis E59 w dzienniku błędów:** ta sama reguła R4 złamana drugi raz tego samego
     dnia (po E58) -- zapisane jako dowód, że reguła nie jest stosowana, nie jako
     nowa kategoria.
+  - **Druga runda (recenzent 2026-09-26, kryteria 6-7):** `revoke_quiesce_grant` liczył
+    tylko UDANE usunięcia. Gdy oba `rm` padły, wypisywał „nothing to revoke” i
+    zwracał 0, a oba pliki zostawały -- więc `quiesce_update_failed` mówił „zgoda
+    zdjęta całkowicie”, a gałąź z komendą awaryjną była nieosiągalna. Teraz plik,
+    który istniał i dalej istnieje po `rm`, daje kod niezerowy (także gdy padnie
+    tylko jeden z dwóch) i komunikat „still in place”; `--revoke-quiesce` zwraca ten
+    kod. Test WYKONUJE wyciągniętą funkcję w piaskownicy z `rm` zmuszonym do porażki
+    (oba pliki / jeden / kontrola bez awarii) oraz całą ścieżkę `do_commit_scope`
+    z prawdziwym revoke: oczekiwane „could not be taken away either” i
+    `--revoke-quiesce=backup`, bez „taken away entirely”. Kontrola negatywna na main
+    `2702d89c`: 3 z 9 asercji sekcji padają, na gałęzi 9/0.
 - **SYNCHRO NA PŁASKIM KOLEKTORZE BYŁO NIEWYKONALNE -- `passive-flat` (2026-09-20, noc).**
   Właściciel próbował z GUI dodać relację *synchro* pve10 <- pve9 (.99) i nie szło.
   Prześledzone na hostach, nie z pamięci. Trzy odmowy jedna za drugą, każda sama
