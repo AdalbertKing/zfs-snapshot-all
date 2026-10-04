@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -9260,6 +9260,59 @@ for fn in cmd_seed cmd_final_catchup; do
 done
 
 fi   # --- koniec sekcji passivepick ---
+if want probehistory; then
+# ============================================================================
+# verify-endpoint: LONGER RETENTION HERE IS NOT A DEAD ENDPOINT (2026-10-04).
+# Self-contained; always eligible, also under `--section probehistory`.
+#
+# Measured on pve10 re-activating pve9-synchro: `snapget -n` printed
+# PLAN=INCREMENTAL for every dataset and exited 1 because pve10 still held 144
+# hourlies pve9 had already pruned -- its list of "conflicts". The probe read
+# rc=1 as "none of the known endpoints answered", so every relationship whose
+# collector keeps longer than its source could not be re-activated. The
+# shipped probe_conflicts_are_history is driven here with `zfs` stubbed to the
+# createtxg listing of the target; live, the same function accepted 145 and
+# refused the moment one target-only snapshot NEWER than the base existed.
+# ============================================================================
+ph_run() {   # <snapget -n stdout> -> "rc count"
+    ( zfs() { printf 't/x@old1\t10\nt/x@old2\t20\nt/x@b2\t30\nt/x@new\t40\n'; }
+      if probe_conflicts_are_history "$1"; then echo "0 $PROBE_HISTORY_COUNT"; else echo "1 -"; fi )
+}
+ph_plan='PLAN=INCREMENTAL base=b2 src=s/x tgt=t/x'
+
+got=$(ph_run "$ph_plan"$'\n''t/x@old1'$'\n''t/x@old2')
+[ "$got" = "0 2" ] \
+    && ok "probehistory: target-only snapshots all OLDER than the common base are history -- accepted, and counted" \
+    || bad "probehistory: target-only snapshots all OLDER than the common base are history -- accepted, and counted" "got=$got"
+
+got=$(ph_run "$ph_plan"$'\n''t/x@old1'$'\n''t/x@new')
+[ "$got" = "1 -" ] \
+    && ok "probehistory: ONE target-only snapshot NEWER than the base is divergence -- still refused" \
+    || bad "probehistory: ONE target-only snapshot NEWER than the base is divergence -- still refused" "got=$got"
+
+got=$(ph_run 'PLAN=FULL base=null src=s/x tgt=t/x'$'\n''t/x@old1')
+[ "$got" = "1 -" ] \
+    && ok "probehistory: a dataset with NO common base is never excused by this rule" \
+    || bad "probehistory: a dataset with NO common base is never excused by this rule" "got=$got"
+
+got=$(ph_run "$ph_plan"$'\n''t/x@old1'$'\n''some other line')
+[ "$got" = "1 -" ] \
+    && ok "probehistory: any stdout line that is neither a verdict nor a snapshot name keeps the failure" \
+    || bad "probehistory: any stdout line that is neither a verdict nor a snapshot name keeps the failure" "got=$got"
+
+got=$(ph_run 't/x@old1')
+[ "$got" = "1 -" ] \
+    && ok "probehistory: no PLAN= verdict at all keeps the failure -- there is no base to compare against" \
+    || bad "probehistory: no PLAN= verdict at all keeps the failure -- there is no base to compare against" "got=$got"
+
+body=$(awk 'index($0, "probe_snapget_endpoint() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
+if printf '%s\n' "$body" | grep -q 'if \[ "\$rc" -eq 1 \] && probe_conflicts_are_history "\$out"; then'; then
+    ok "probehistory: the endpoint probe consults it, and only for rc=1 -- every other exit code fails exactly as before"
+else
+    bad "probehistory: the endpoint probe does not consult the history rule" "$(printf '%s\n' "$body" | grep -n 'rc' | head -5)"
+fi
+
+fi   # --- koniec sekcji probehistory ---
 if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
