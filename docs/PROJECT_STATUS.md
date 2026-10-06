@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fb1325db5f01aeda -->
+<!-- status-covers-digest: 1837fc3f8bdf45f0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Strażnik instalacji zna przejście na lustro (2026-10-06).**
+  - **Zmierzone na pve10 (pve9-synchro), `activate-client --yes` po #461:** strażnik
+    `assert_target_block_not_clobbered` odmówił z „18 job line(s) would be DELETED”. 9 to
+    pobrania różniące się tylko `-M`, 9 to prune celu, który lustro zastępuje.
+  - **Zmiana (`zfs-backup.sh`), szósty wyjątek strażnika:**
+    - pobranie `snapget.sh` różniące się od nowego tylko całym tokenem `-M` to ten sam job;
+    - LOKALNY prune celu (bez `@`, bez `-B`) jest zwolniony tylko wtedy, gdy każdy dataset w
+      jego zakresie to lądowisko, któremu TA aktywacja dała `-M` (`MIRRORED_LANDINGS`, zapisywane
+      przez `emit_client_sections` przy tworzeniu i przy odświeżeniu zachowanej sekcji).
+    - Oba wyjątki są wypisywane. Inny wołający ma pustą listę, więc dalej dostaje odmowę.
+  - **Testy (pve10):** nowa sekcja `zfsbackup --section mirrorguard` 5/0: przejście
+    przechodzi i jest nazwane; odmowa bez listy, odmowa dla znikniętego pobrania, dla prune
+    ŹRÓDŁA (`u@h:`) i dla pobrania `-M` innego datasetu. Kontrola negatywna na main: 4 FAIL.
+    `passivepick` 10/0, `probehistory` 11/0.
 
 - **Ponowna aktywacja daje istniejącej relacji synchro kształt lustra (2026-10-06).**
   - **Zmierzone na pve10 (pve9-synchro), podgląd bez `--yes`:** zachowana sekcja (REV-089)
