@@ -1079,6 +1079,10 @@ cat > "$MIR/p.conf" <<'EOF'
 	notify = x
 EOF
 mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/p.conf" 2>&1); mrc=$?
+# This shape was test/negative/gfs-empty-ladder until 2026-10-06 (refused). Its
+# stated worry -- a -G line with no retain flags -- still holds: MIR9 pins that
+# no delsnaps line is emitted at all. What changed is that the section is now
+# legitimate: a mirrored sync landing whose ladder only carries monitors.
 check "MIR8 a ladder with prune = no is a monitor-only section: rc=0" "0" "$mrc"
 check "MIR9 ...no delsnaps -G line" "0" "$(printf '%s\n' "$mo" | grep -c 'delsnaps.sh')"
 check "MIR10 ...the tier that carries a monitor still monitors" "1" "$(printf '%s\n' "$mo" | grep -c 'check-snap-age.sh')"
