@@ -279,6 +279,7 @@ spread() {   # <send|prune> <minute> -> schedule_spread_tiers on the m31w4d7h24 
     local t; t=$(mktemp)
     { echo 'set -u'
       lift schedule_with_minute
+      lift schedule_shift_expr
       lift schedule_spread_tiers
       printf 'printf "profile__m__hourly	%s
 profile__m__daily	%s
@@ -303,10 +304,64 @@ else
 ' ' |')"
 fi
 got_wrap="$(spread prune 56)"
-if printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__daily = 6 1 \* \* \*'    && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__hourly = 56 \* \* \* \*'; then
-    ok "R5-7: the shift wraps past the hour (56 + 10 -> 6), never a minute 66"
+# U2 (2026-10-06): the minute that passes :59 carries the hour. This case used
+# to pin "6 1" -- the daily tier moved BACK 50 minutes instead of on by 55.
+if printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__daily = 6 2 \* \* \*' \
+   && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__weekly = 16 3 \* \* 0' \
+   && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__monthly = 26 4 1 \* \*' \
+   && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__hourly = 56 \* \* \* \*' \
+   && printf '%s' "$got_wrap" | grep -qx '	prune_schedule_profile__m__odd = 56 \* \* \* \*'; then
+    ok "U2: a shift past :59 carries the hour (daily 01:11 + 55 -> 02:06), never a minute 66 and never back into the same hour"
 else
-    bad "R5-7: the shift wraps past the hour" "got: $(printf '%s' "$got_wrap" | tr '	
+    bad "U2: a shift past :59 carries the hour" "got: $(printf '%s' "$got_wrap" | tr '
+' ' |')"
+fi
+
+# The shape measured on lab-ab: relationship minute 29, so the pull ladder
+# :00/01:10/02:20/03:30 lands at :29/01:39/02:49/03:59 and the prune ladder
+# :20/01:30/02:40/03:50 is spread from 29 + 20 = 49 (unwrapped). Every prune
+# must come AFTER its own tier's pull -- the weekly prune had been at 02:09.
+spread_tiers() {   # <send|prune> <minute> <hourly> <daily> <weekly> <monthly>
+    local t; t=$(mktemp)
+    { echo 'set -u'
+      lift schedule_with_minute
+      lift schedule_shift_expr
+      lift schedule_spread_tiers
+      printf 'printf "h\t%s\nd\t%s\nw\t%s\nm\t%s\n" | schedule_spread_tiers %s %s\n' "$3" "$4" "$5" "$6" "$1" "$2"; } > "$t"
+    bash "$t" 2>/dev/null
+    rm -f "$t"
+}
+tmin() {   # "<min> <hour> ..." -> minutes since midnight (hour * means 0)
+    local m h; read -r m h _ <<< "$1"; [ "$h" = '*' ] && h=0; echo $(( 10#$h * 60 + 10#$m ))
+}
+sendl="$(spread_tiers send 29 "0 * * * *" "10 1 * * *" "20 2 * * 0" "30 3 1 * *")"
+prunel="$(spread_tiers prune 49 "20 * * * *" "30 1 * * *" "40 2 * * 0" "50 3 1 * *")"
+u2_ok=1; u2_why=""
+for tier in d w m; do
+    se=$(printf '%s\n' "$sendl"  | sed -n "s/^	send_schedule_$tier = //p")
+    pe=$(printf '%s\n' "$prunel" | sed -n "s/^	prune_schedule_$tier = //p")
+    if [ -z "$se" ] || [ -z "$pe" ] || [ "$(tmin "$pe")" -le "$(tmin "$se")" ]; then u2_ok=0; u2_why="$u2_why $tier: pull [$se] prune [$pe];"; fi
+done
+if [ "$u2_ok" -eq 1 ] && printf '%s\n' "$prunel" | grep -qx '	prune_schedule_w = 9 3 \* \* 0'; then
+    ok "U2: lab-ab shape (minute 29) -- every tier's prune runs AFTER its pull; weekly prune 03:09, not 02:09"
+else
+    bad "U2: lab-ab shape -- a prune lands before its pull" "$u2_why" "$prunel"
+fi
+
+# Midnight: a DAILY tier wraps to the next day's hour 0; a WEEKLY one does not
+# (carrying it would move it to another day) and keeps the in-hour wrap. A
+# negative delta carries backwards.
+got_mid="$(spread_tiers send 30 "10 * * * *" "50 23 * * *" "50 23 * * 0" "15 2 1 * *")"
+got_neg="$(spread_tiers send 5 "30 * * * *" "10 1 * * *" "20 2 * * 0" "30 3 1 * *")"
+if printf '%s\n' "$got_mid" | grep -qx '	send_schedule_d = 10 0 \* \* \*' \
+   && printf '%s\n' "$got_mid" | grep -qx '	send_schedule_w = 10 23 \* \* 0' \
+   && printf '%s\n' "$got_mid" | grep -qx '	send_schedule_m = 35 2 1 \* \*' \
+   && printf '%s\n' "$got_neg" | grep -qx '	send_schedule_d = 45 0 \* \* \*' \
+   && printf '%s\n' "$got_neg" | grep -qx '	send_schedule_w = 55 1 \* \* 0'; then
+    ok "U2: a daily tier carries across midnight, a weekly one does not move to another day, and a negative shift carries backwards"
+else
+    bad "U2: midnight / negative carry" "mid: $(printf '%s' "$got_mid" | tr '
+' ' |')" "neg: $(printf '%s' "$got_neg" | tr '
 ' ' |')"
 fi
 

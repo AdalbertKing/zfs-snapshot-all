@@ -157,11 +157,15 @@ B_ROOT=(); B_EXCL=()                   # koszyk: korzeń, pominięte (po jednym 
 TREE_FOR=""; DIAG_OK_FOR=""
 load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
     [ "$TREE_FOR" = "$(hostport)" ] && [ "${#T_NAME[@]}" -gt 0 ] && return 0
-    "$ZB" list-datasets "$(hostport)" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
-    "$PY" - "$TMPD/ds.json" <<'PYEOF' | tr -d '\r' >"$TMPD/tree.tsv"
+    "$ZB" list-datasets "$(hostport)" --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
+    "$PY" - "$TMPD/ds.json" "$TMPD/own.tsv" <<'PYEOF' | tr -d '\r' >"$TMPD/tree.tsv"
 import sys, json
 ds = json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []
 names = [d.get("name", "") for d in ds]
+# Migawki spoza rodzin Proxmoksa, na dataset (U8: krok 6 przy synchro).
+with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as of:
+    for d in ds:
+        of.write("%s\t%d\n" % (d.get("name", ""), int(d.get("own_snapshots") or 0)))
 def human(n):
     n = float(n or 0)
     for u in ("B", "K", "M", "G", "T", "P"):
@@ -516,8 +520,26 @@ account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCI
     done <"$TMPD/rel.all"
     return 1
 }
+# SYNCHRO Z ŁAŃCUCHA (U8, 2026-10-06). Gdy korzeń z koszyka ma już WŁASNE migawki
+# (spoza vzdump/__replicate_/__migration__), źródło jest ogniwem łańcucha: ktoś inny
+# je robi i przycina. Synchro ma wtedy odbierać to, co jest -- każdą rodzinę --
+# i nic na źródle nie tworzyć: to jest passive-flat. Bez własnych migawek szablon
+# bezprefiksowy stemplowałby gołe znaczniki czasu, więc wtedy NIE jest polecany.
+sync_from_chain() {   # -> 0, gdy synchro i któryś korzeń koszyka ma własne migawki
+    [ "$MODE" = sync ] || return 1
+    local r n c
+    for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
+        while IFS=$'\t' read -r n c; do
+            [ "$n" = "$r" ] || continue
+            case "$c" in ''|*[!0-9]*) c=0 ;; esac
+            [ "$c" -gt 0 ] && return 0
+        done <"$TMPD/own.tsv" 2>/dev/null
+    done
+    return 1
+}
+REC_PROFILE=passive-flat
 step_profile() {
-    local items=() n w c q f sh def label
+    local items=() n w c q f sh def label chain=0 lead=""
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
@@ -526,19 +548,32 @@ step_profile() {
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; FREEZE=1; return 0
     fi
     items=()
+    sync_from_chain && chain=1
     while IFS=$'\t' read -r n w c q f sh; do
         [ -n "$n" ] || continue
-        label="$(printf '%-15s %s' "$n" "$w")"
+        # [polecany] zaraz za nazwą: przy przycięciu wiersza do okna ginie koniec.
+        if [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ]; then
+            label="$(printf '%-15s [polecany] %s' "$n" "$w")"
+        else
+            label="$(printf '%-15s %s' "$n" "$w")"
+        fi
         [ "$f" = 1 ] && label="$label  [zamraża]"
         [ "$sh" = flat ] && label="$label  [płaski]"
-        items+=("$n" "$label")
+        # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
+        # [zamraża] [płaski] były szersze niż okno i ucinały jej prawy bok.
+        items+=("$n" "$(clip_label "$label" $((W - 10)))")
     done <"$TMPD/prof.tsv"
     def=default
+    if [ "$chain" -eq 1 ] && in_list "$REC_PROFILE" "${items[@]}"; then
+        def="$REC_PROFILE"
+        lead="Źródło ma już własne migawki (łańcuch): polecany $REC_PROFILE --\nodbiera każdą rodzinę źródła i niczego tam nie tworzy.\n\n"
+    fi
+    local tl=6; [ -n "$lead" ] && tl=9    # trzy linie wstępu więcej nad listą
     in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
     in_list "$def" "${items[@]}" || def="${items[0]}"
     geom
     wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-       --menu "Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [płaski] = jedna rodzina,\nN najnowszych, bez drabiny GFS -- takiego wymaga konto, na którym już\ndziała inny płaski szablon (sprawdzane po wyborze konta w kroku 8).\nSzablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 6)" \
+       --menu "${lead}Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [płaski] = jedna rodzina,\nN najnowszych, bez drabiny GFS -- takiego wymaga konto, na którym już\ndziała inny płaski szablon (sprawdzane po wyborze konta w kroku 8).\nSzablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     PROFILE="$WT_OUT"
     f="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $5}' "$TMPD/prof.tsv")"
@@ -631,9 +666,13 @@ step_extra() {
         [ -n "$SRCPROF" ] && on_srcp=ON || on_srcp=OFF
         [ "$MANUAL" -eq 1 ] && on_man=ON || on_man=OFF
         [ "$RECURSION" = atomic ] && { SRCPROF=""; on_srcp=OFF; }
-        items=(grant "Prawa na źródle nadaj STĄD, przez SSH jako root -- bez tego instalacja stanie i poda komendę do wykonania na źródle" "$on_grant")
+        # KRÓTKIE ETYKIETY, objaśnienia nad listą (U5, 2026-10-06): etykieta
+        # dłuższa niż okno rozjeżdżała ramkę checklisty (zmierzone w kroku 9 na
+        # 80 kolumnach). Każda i tak przechodzi przez clip_label -- przy wąskim
+        # terminalu ucięta z '…', nigdy przez ramkę.
+        items=(grant "Prawa na źródle nadaj stąd (SSH jako root)" "$on_grant")
         if [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
-            items+=(quies "Nadaj też zgodę na ZAMRAŻANIE gości -- bez niej migawki dobowe i rzadsze wyjdą jako '_crash_'" "$on_q")
+            items+=(quies "Nadaj też zgodę na zamrażanie gości" "$on_q")
         fi
         # POMIJANE MIGAWKI: jedna pozycja, nie dwie. Dopóki lista jest domyślna,
         # "skip" pokazuje ją wprost i "masks" tylko otwiera edytor (odznaczone).
@@ -644,16 +683,18 @@ step_extra() {
         # zamiast wpisywania z palca, lista pokazuje aktualny stan).
         if [ "$EXFAM" = "$defmask" ]; then
             items+=(skip "Pomijaj migawki Proxmoxa: $EXFAM" ON)
-            items+=(masks "Modyfikuj lub dodaj pomijane migawki po prefiksach" OFF)
+            items+=(masks "Zmień listę pomijanych migawek" OFF)
         else
-            items+=(masks "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}  (Modyfikuj lub dodaj)" ON)
+            items+=(masks "Pomijane: ${EXFAM:-żadne, kopiowane wszystkie} (zmień)" ON)
         fi
         if [ "$RECURSION" != atomic ]; then
-            items+=(srcp "Inna retencja u źródła (na $HOST) niż tutaj -- wybierzesz w następnym oknie" "$on_srcp")
+            items+=(srcp "Inna retencja u źródła niż tutaj (następne okno)" "$on_srcp")
         fi
-        items+=(man "Parowanie RĘCZNE: paczka do przeniesienia (gdy ten host nie ma wstępu po SSH)" "$on_man")
+        items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
+        local _i
+        for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej." "$(fit $((${#items[@]} / 3 + 7)))" "$W" "$((${#items[@]} / 3))" \
+           --checklist "Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła." "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
            "${items[@]}" || return 1
         GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0; want_srcp=0
         local keep_skip=0 x

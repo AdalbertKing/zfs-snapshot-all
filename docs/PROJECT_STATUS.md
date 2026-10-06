@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 76e1dd49c652d649 -->
+<!-- status-covers-digest: 029bdc6dcb1af24f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,31 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Uwagi z testu łańcucha: U2, U5, U6, U8 (2026-10-06, właściciel: „koduj U2, U8, U5 i U6”).**
+  - **U2 – rozrzut przenosi godzinę.** `schedule_spread_tiers` zawijało minutę w tej samej
+    godzinie: na lab-ab (minuta 29) prune tygodniowy 02:40 wypadał o 02:09, a pobranie o 02:49.
+    Minuta po :59 przesuwa teraz godzinę (`schedule_shift_expr`), także wstecz. Szczebel
+    codzienny przechodzi przez północ, tygodniowy i miesięczny nie, bo zmieniłyby dzień. Baza
+    prune to minuta pobrania + 20 bez `% 60`, więc obie strony przesuwają się o to samo.
+    Dotyczy nowo zakładanych relacji (minuta zapisuje się przy tworzeniu).
+  - **U5 – ramki kreatora.** W kroku 9 etykiety są krótkie, a objaśnienia stoją nad listą. Każda
+    pozycja w krokach 6 i 9 przechodzi przez `clip_label` (`tui/wt-lib.sh`). W 80 kolumnach krok 6
+    też ucinał prawą ramkę (wyszło przy teście U8).
+  - **U6 – F3 bez fałszywego „cron woła inny plik silnika”.** Konto delegowane ma własny klon,
+    więc ścieżka zawsze się różniła. `engine_differs`: różny = inna ścieżka I inna treść (albo
+    pliku nie da się czytać).
+  - **U8 – synchro z łańcucha podpowiada `passive-flat`.** `list-datasets --json --own-snapshots`
+    liczy migawki spoza rodzin Proxmoksa; bez flagi wyjście się nie zmienia. Gdy korzeń koszyka
+    synchro ma własne migawki, krok 6 ma wstęp „Źródło ma już własne migawki (łańcuch)”,
+    `passive-flat [polecany]` i ustawia go jako domyślny.
+  - **Testy:** `stagger` 30/0 (+3 U2, kontrola na main 3 FAIL); `zfsbackup --section monitorjson`
+    32/0 i `listdatasets` 8/0 (kontrola 1+1 FAIL).
+  - **Na żywo, GUI 80×24:**
+    - pve9 ← pve9b (synchro): krok 6 z rekomendacją, Enter wybrał `passive-flat` (krok 10),
+      ramki kroków 6 i 9 całe; kontrola w trybie backup: brak rekomendacji;
+    - pve10, F3 na relacji pve9b (konto zfsbackup): 0 ostrzeżeń, main 1;
+    - nic nie zostało założone.
 
 - **Replika na `snapget -M` (2026-10-06, właściciel: „Tak, rób w tej kolejności”).**
   - **Było:** `[replica:]` renderował `snapsend.sh -m P …`; nośnik nie miał żadnej retencji i
