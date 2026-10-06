@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8554830851fc6549 -->
+<!-- status-covers-digest: 54ca25b27fb9f038 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Czytnik monitorów: samotny `-` to WZORZEC, nie flaga (2026-10-06, test łańcucha a<b<>c z GUI).**
+  - **Zmierzone na pve9:** relacja synchro `gui-bc` założona kreatorem GUI -- F3 pokazywał
+    „Kopie: nie odpowiada … unknown flag '-' in the installed line -- refusing to guess”, panel
+    par „bez monitora”, choć monitor sam w sobie zwracał rc=0. `cmd_monitor` (źródło
+    `monitor --json`, z którego czyta GUI) dopasowywał `"-"` -- CONFIG v4 „dowolna migawka”,
+    pozycyjny WZORZEC check-snap-age -- do gałęzi `-*` i odrzucał całą linię. Błąd był już dla
+    relacji `--passive`; od R5-2 (#448) dotyka też każdego synchro łańcuchowego (pve9-synchro).
+  - **Zmiana (`zfs-backup.sh`):** `-)` jest pozycyjnym, przed `-*`. Prawdziwa nieznana flaga
+    (`--nonsense`) dalej odrzucana.
+  - **Test:** `zfsbackup --section monitorjson` 31/0 (+3: linia pasywna przeczytana z wzorcem
+    `-`, silnik dostaje `… -x vzdump -x __replicate_ hdd/x - 3h 5h`, `--nonsense` dalej
+    odmawia); na main 28/3.
 
 - **Bieg pominięty przez blokadę silnika to OSTRZEŻENIE, nie cisza (2026-10-06, właściciel: „Zgłaszaj jako ostrzeżenie, odmrażam snapsend i snapget”).**
   - **Było:** `snapsend`/`snapget`, gdy poprzedni bieg trzyma blokadę datasetu, logowały

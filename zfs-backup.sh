@@ -11353,6 +11353,14 @@ cmd_monitor() {
                         -v|--verbose)   : ;;
                         -L) j=$((j + 1)); label="${argv[$j]:-}" ;;
                         -x) j=$((j + 1)); excl="$excl${excl:+,}${argv[$j]:-}" ;;
+                        # A lone '-' is not a flag: it is CONFIG v4's "no
+                        # pattern" (any snapshot), which check-snap-age.sh
+                        # takes as its PATTERN positional. Every passive
+                        # monitor carries it -- since R5-2 every sync-chain
+                        # one too -- and reading it as a flag put "unknown
+                        # flag '-'" and "nie odpowiada" on a healthy relation
+                        # in the GUI (pve9 gui-bc, 2026-10-06).
+                        -)  pos+=("-") ;;
                         -*) parsed=false; reason="unknown flag '${argv[$j]}' in the installed line -- refusing to guess what it means" ;;
                         *)  pos+=("${argv[$j]}") ;;
                     esac
