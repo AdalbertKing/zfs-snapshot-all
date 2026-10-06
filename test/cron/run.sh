@@ -1023,7 +1023,7 @@ mir_conf() {   # <dataset flags> <extra dataset lines> -> $MIR/c.conf
 	send_schedule  = 31 * * * *
 	prune_schedule = 21 * * * *
 	pattern        = -
-	keep           = 168
+	retain         = -H168
 	monitor_warn   = 3h
 	monitor_crit   = 5h
 [dataset:hdd/x]
