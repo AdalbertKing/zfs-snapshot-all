@@ -255,6 +255,29 @@ for _w in 80 100 120 140 160 200; do
     esac
 done
 
+# SYNCHRO JAKO LUSTRO (wlasciciel 2026-10-06): zadanie pobrania, ktorego WLASNA
+# linia snapget niesie -M, nie ma wlasnej retencji celu -- F2 'Trzyma' mowi
+# "lustro", a nie szablonowe 168 szt. Linia CUDZEGO zadania z -M (ten sam blok,
+# inny dataset) nie czyni lustrem tego zadania.
+MIOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+mir = {"tier": "passive_flat_hourly", "scope": "hdd/x", "cron_lines": [
+    '31 * * * * zfs-job.sh "h profile__passive-flat__passive_flat_hourly backup (r-x)" -- snapget.sh -m "" -e -M -L r "u@h:hdd/x"']}
+plain = {"tier": "passive_flat_hourly", "scope": "hdd/y", "cron_lines": [
+    '31 * * * * zfs-job.sh "h profile__passive-flat__passive_flat_hourly backup (r-y)" -- snapget.sh -m "" -e -L r "u@h:hdd/y"',
+    '31 * * * * zfs-job.sh "h profile__passive-flat__passive_flat_hourly backup (r-x)" -- snapget.sh -m "" -e -M -L r "u@h:hdd/x"']}
+print("%s %s" % (m.job_is_mirror(mir), m.job_is_mirror(plain)))
+PYEOF
+)"
+if [ "$MIOUT" = "True False" ]; then
+    ok "lustro: -M we WLASNEJ linii pobrania czyni zadanie lustrem; cudza linia z -M w tym samym bloku -- nie"
+else
+    bad "lustro: -M we WLASNEJ linii pobrania czyni zadanie lustrem; cudza linia z -M w tym samym bloku -- nie" "got=$MIOUT"
+fi
+
 # KOLUMNA NASTEPNY -- format wg R3-4 (test b): dzis tylko godzina, jutro
 # "jutro HH:MM", w tygodniu dwuliterowy dzien tygodnia, dalej "DD.MM HH:MM".
 # Liczone NIEZALEZNIE od tablicy dni tygodnia w module (WD ponizej to REFERENCJA

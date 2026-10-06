@@ -4130,6 +4130,20 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     sync_ds_is_passive() {   # <source dataset> -> 0 if its family already exists
         case " ${passive_ds[*]:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac
     }
+    # SYNC IS A MIRROR (owner 2026-10-06: "synchro jako lustro dla wszystkich").
+    # Every pull of a sync relationship carries snapget -M: after the copy the
+    # target drops what the source no longer has, so the two sides hold the
+    # same snapshots, and the target keeps no retention of its own (its
+    # [prune:] section says prune = no; gen-cron drops a mirrored tier's inline
+    # prune). Not for recursive = atomic: the engine mirrors per dataset and
+    # refuses -r, so such a dataset keeps its own retention, and says so.
+    sync_mirror_flag() {   # <source dataset> -> " -M" or ""
+        [ "$sync_mode" -eq 1 ] || return 0
+        if is_recursive_root "$1" && [ "${RECURSION:-}" = atomic ]; then
+            return 0
+        fi
+        printf ' -M'
+    }
     if [ "$sync_mode" -eq 1 ]; then
         local pds pds_rc
         # Ask about THIS profile's family, not the literal automated_ root.
@@ -4326,9 +4340,9 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 [ "$_sync_any" -eq 1 ] && echo "	monitor_exclude = $(client_family_excludes)"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
                 if [ "$_sync_any" -eq 1 ]; then
-                    echo "	flags        = $LOAD_FLAGS -e$(client_family_exclude_flags)"
+                    echo "	flags        = $LOAD_FLAGS -e$(client_family_exclude_flags)$(sync_mirror_flag "$ds")"
                 else
-                    echo "	flags        = $LOAD_FLAGS -e"
+                    echo "	flags        = $LOAD_FLAGS -e$(sync_mirror_flag "$ds")"
                 fi
             elif [ "${PASSIVE:-0}" = "1" ]; then
                 # DECLARED passive (LAB-E, 2026-08-23) -- distinct from the
@@ -4348,12 +4362,12 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 # family including the excluded ones.
                 echo "	monitor_exclude = $(client_family_excludes)"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)$(sync_mirror_flag "$ds")"
             else
                 [ -n "$stagger_send_expr" ] && echo "	send_schedule = $stagger_send_expr"
                 [ -n "$_tier_sched" ] && printf '%s' "$_tier_sched"
                 echo "	src          = ${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
-                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)"
+                echo "	flags        = $LOAD_FLAGS$(client_exclude_flags)$(sync_mirror_flag "$ds")"
             fi
             # The LINK cap, as its own field rather than a -b hidden in the
             # string above: gen-cron.sh renders the identical token, and a
@@ -4471,6 +4485,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 if [ "$sync_mode" -eq 0 ] && [ -n "$stagger_prune_expr" ]; then
                     echo "	prune_schedule = $stagger_prune_expr"
                 fi
+                # A mirrored landing keeps no retention of its own: the pull
+                # (-M) makes it hold what the source holds. The ladder's tiers
+                # stay for their MONITORS; prune = no drops their delsnaps lines.
+                [ -n "$(sync_mirror_flag "$ds")" ] && echo "	prune        = no"
                 fi   # legacy body vs profile
                 # Mirrors the pull's recursion, same reasoning as
                 # append_source_prune_create: a solid root's children are
