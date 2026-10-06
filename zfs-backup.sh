@@ -4229,8 +4229,39 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # refused the install because two jobs appeared to be vanishing. A
         # preserved section must come back with everything it had, not with
         # everything this function happens to know about.
-        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS$(client_exclude_flags)$(client_passive_flags)" \
+        #
+        # The same holds for the PICKUP and the MIRROR, measured 2026-10-06
+        # re-activating pve9-synchro: the refresh above knew only the DECLARED
+        # passive shape, so a sync-chain passive section (-e -E vzdump ...)
+        # came back with transport flags alone -- no -e, so with its empty
+        # prefix the next pull would have tried to stamp a bare-timestamp
+        # snapshot on the source -- and without the -M the re-activation was
+        # run to add.
+        # Both are re-derived exactly as the create path below writes them;
+        # the section's own `prefix` field (written there only for a
+        # family-stamping profile) says which pickup it was created with, so
+        # the profile is not consulted (REV-090: a preserving re-activation
+        # must survive its profile being renamed or removed).
+        # The recorded -X stays in front of either pickup, as it was before.
+        local _pick
+        _pick="$(client_exclude_flags)"
+        if sync_ds_is_passive "$ds"; then
+            if [ -n "$(section_field "$workfile" "[dataset:$localpath]" prefix)" ]; then
+                _pick="$_pick -e"
+            else
+                _pick="$_pick -e$(client_family_exclude_flags)"
+            fi
+        else
+            _pick="$_pick$(client_passive_flags)"
+        fi
+        update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS${_pick}$(sync_mirror_flag "$ds")" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
+        # A mirrored landing's own ladder, if it has one, stops pruning (its
+        # tiers stay for their monitors), as on the create path.
+        if [ -n "$(sync_mirror_flag "$ds")" ] && grep -qxF "[prune:$localpath]" "$workfile"; then
+            set_or_remove_section_field "$workfile" "[prune:$localpath]" prune no \
+                || die "[prune:$localpath] in $workfile could not be marked 'prune = no' for the mirror -- refusing to install a mirrored pull next to a target ladder that still prunes. Fix or remove that section by hand and re-run."
+        fi
         # The link cap is refreshed the same way and for the same reason -- it
         # is a function of the RECORD, not of the installed policy. Unlike
         # 'flags' it may legitimately be absent (no cap), and a cap removed
@@ -9409,6 +9440,25 @@ probe_conflicts_are_history() {
     PROBE_HISTORY_COUNT=$n
 }
 
+# activate-client's rehearsal of one dataset: the engine's own dry-run, with
+# the same history rule verify-endpoint applies (REV-146) -- rc=1 whose only
+# conflicts are target-only snapshots OLDER than the base is this host keeping
+# longer than the source, not divergence. Without it a sync relationship whose
+# target outlived the source's retention could never be re-activated: measured
+# 2026-10-06 on pve9-synchro, 164 older snapshots per dataset refused the very
+# re-activation that gives it the mirror (-M) shape, which then removes them.
+#   in:  <dataset> <snapget args...>    out: the engine's stdout, rc 0 = clean
+activate_dryrun_snapget() {
+    local ds="$1" out rc; shift
+    out=$(bash "$SNAPGET" "$@"); rc=$?
+    [ -n "$out" ] && printf '%s\n' "$out"
+    if [ "$rc" -eq 1 ] && probe_conflicts_are_history "$out"; then
+        log "  $ds: $PROBE_HISTORY_COUNT older snapshot(s) exist only on this host -- history, not a conflict$([ "${PEER_SAVED_MODE:-}" = sync ] && echo " (the sync mirror, snapget -M, removes them at the next pull)")"
+        rc=0
+    fi
+    return "$rc"
+}
+
 # verify-endpoint below calls this once per candidate until one comes back
 # clean. Sets $PROBE_DETAIL to a human-readable report of whatever went
 # wrong (empty on success). Re-derives the alias known_hosts file itself
@@ -9883,7 +9933,7 @@ cmd_activate_client() {
             set -- "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
         fi
         # shellcheck disable=SC2086
-        if bash "$SNAPGET" "${dr_args[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "$@"; then
+        if activate_dryrun_snapget "$ds" "${dr_args[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "$@"; then
             log "  OK: $ds -> $localpath"
         else
             warn "  FAILED: $ds -> $localpath"
