@@ -488,6 +488,20 @@ case "$k3c" in
     *)                ok "K3: control -- without a base nothing is spread (the template's own schedule, as before)" ;;
 esac
 
+# K3, the reader beside it: `status` printed the spread source schedules as
+# SOURCES (its src match took any line containing "src" before '='). Only the
+# field named src is a source.
+k3cfg=$(mktemp)
+printf '[dataset:x]\n\t# managed-by: zfs-backup.sh client=c\n\tsrc          = a@h:hdd/data\n[prune:a@h:hdd/data]\n\t# managed-by: zfs-backup.sh client=c\n\tprune_schedule_profile__p__src_hourly = 29 * * * *\n' > "$k3cfg"
+k3t=$(mktemp)
+{ lift status_sources_from_config; printf 'CRON_CONFIG=%q status_sources_from_config c\n' "$k3cfg"; } > "$k3t"
+k3s=$(bash "$k3t" 2>&1); rm -f "$k3t" "$k3cfg"
+if [ "$k3s" = "a@h:hdd/data" ]; then
+    ok "K3: status lists the src field only -- a spread prune_schedule_<..src_hourly> line is not a source"
+else
+    bad "K3: status lists schedules as sources" "got=[$k3s]"
+fi
+
 echo "--------------------------------------------"
 echo "stagger: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

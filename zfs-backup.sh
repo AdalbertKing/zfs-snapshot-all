@@ -11523,7 +11523,10 @@ status_sources_from_config() {   # <client name> -> the src= of every section it
         case "$line" in
             "[dataset:"*) cur="" ;;
             *"managed-by: zfs-backup.sh client=$name") cur="yes" ;;
-            *"src"*=*)
+            # The FIELD named src, not any line containing "src": K3's
+            # prune_schedule_<...src_hourly> fields are lines like that, and the
+            # first live run printed their schedules as sources.
+            [[:space:]]src[[:space:]]*=*|src[[:space:]]*=*)
                 [ "$cur" = yes ] || continue
                 out="$out ${line#*= }" ;;
         esac

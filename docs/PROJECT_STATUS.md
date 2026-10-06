@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8d75aabf68d8e8a4 -->
+<!-- status-covers-digest: 442f9fae8f48f58d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,28 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **K3: prune źródła szablonów wieloszczeblowych rozrzucony szczebel po szczeblu (2026-10-06, właściciel: „koduj K3”).**
+  - **Było (kampania labowa):** przy szablonie z kilkoma rytmami prune źródła nie dostawał
+    własnego harmonogramu i każda relacja przycinała źródło w minutach szablonu (:21, 01:31,
+    02:41, 03:51). `k2-ab` (pve9) i `g3-ab` (pve11) waliły w pve9b w tej samej minucie.
+  - **Zmiana:**
+    - `zfs-backup.sh` (`append_source_prune_create`): bez wspólnego harmonogramu sekcja
+      `[prune:]` źródła dostaje `prune_schedule_<szablon>` dla każdego szczebla, przesunięte od
+      trzeciego slotu relacji (minuta pobrania + 40) przez `schedule_spread_tiers`, z
+      zachowaniem odstępów szczebli i przeniesieniem godziny;
+    - gen-cron czyta `prune_schedule_<szczebel>` także w `[prune:]` i dopuszcza je w walidacji;
+    - przy okazji `status`: linia „Zrodla” brała każdą linię z „src” przed „=”, więc pokazywała
+      harmonogramy szczebli jako źródła. Teraz bierze tylko pole `src`.
+  - Dotyczy relacji zakładanych od teraz. Istniejąca sekcja prune źródła jest zachowywana
+    przy ponownej aktywacji (REV-089), tak jak minuta pobrań.
+  - **Testy:** `stagger` 33/0 (+3, kontrola na main 2 FAIL), `cron` 165/0 (+3 SPK, kontrola 3 FAIL).
+  - **Na żywo, pve9b ← pve11 `hdd/data` (relacja testowa `k3-test`, m31w4d7h24):** pobranie
+    :49, lokalny prune :09, prune źródła :29. Dobowy 01:59 / 02:19 / 02:39, tygodniowy
+    03:09 / 03:29 / 03:49, miesięczny 04:19 / 04:39 / 04:59.
+  - **Przy okazji wyszło (K6, niezakodowane):** `deploy.sh --leave` pada na `userdel`, gdy
+    konto ma jeszcze żywy proces („currently used by process”), np. zaraz po ostatniej sesji
+    SSH. `delete-relation` zatrzymał się wtedy bezpiecznie (REV-144: rekord i kopie zostały).
 
 - **K4: konto delegowane relacji synchro dostaje tylko swoje lądowiska (2026-10-06, właściciel: „koduj K4”).**
   - **Było (znalezione w kampanii labowej):** pełny zestaw praw (z `destroy` i `rollback`)
