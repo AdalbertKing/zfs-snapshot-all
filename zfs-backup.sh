@@ -3977,6 +3977,12 @@ set_or_remove_section_field() {   # <file> <exact header> <field> <value>
         # Absent: insert. Anything but "not found" is a real failure.
     fi
     local tmp; tmp=$(mktemp) || return 1
+    # The inserted line goes right after the section's LAST non-blank line, not
+    # in front of the next header: the blank lines that separate sections are
+    # held back and printed after it. Inserting at the next header left the new
+    # field below that blank line, visually between two sections (measured on
+    # pve10, 2026-10-06: prune_foreign under [dataset:...ct], one line above
+    # [template:...]). Same section either way to the parser; not to a reader.
     FIELD_VALUE="$value" awk -v want="$want" -v field="$field" '
         function flush_insert() {
             if (insert && ENVIRON["FIELD_VALUE"] != "") {
@@ -3984,8 +3990,11 @@ set_or_remove_section_field() {   # <file> <exact header> <field> <value>
                 insert=0
             }
         }
+        function flush_blanks() { printf "%s", blanks; blanks="" }
         $0 == want { seen=1; emit=1; insert=1; print; next }
-        emit && /^\[/ { flush_insert(); emit=0 }
+        emit && /^\[/ { flush_insert(); flush_blanks(); emit=0 }
+        emit && /^[ \t]*$/ { blanks = blanks $0 "\n"; next }
+        emit { flush_blanks() }
         emit {
             line=$0
             sub(/^[ \t]+/, "", line)
@@ -3998,7 +4007,7 @@ set_or_remove_section_field() {   # <file> <exact header> <field> <value>
             }
         }
         { print }
-        END { flush_insert(); if (!seen) exit 3 }
+        END { flush_insert(); flush_blanks(); if (!seen) exit 3 }
     ' "$file" > "$tmp"
     rc=$?
     [ "$rc" -eq 0 ] || { rm -f "$tmp"; return "$rc"; }
