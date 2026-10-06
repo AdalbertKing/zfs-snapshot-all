@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d35fa0402e584293 -->
+<!-- status-covers-digest: 3d2ace9f1efabbf2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **U9: `delete-relation --destroy-copies` widzi kopie po seedzie bez aktywacji (2026-10-06, właściciel: „koduj U9”).**
+  - **Było:** listę kopii brało tylko z `MANAGED_DATASETS`, które zapisuje AKTYWACJA. Relacja
+    po pełnej kopii (seed), ale bez aktywacji, miała kopie na dysku, a plan mówił „(the record
+    lists none)” i nic nie niszczył.
+  - **Zmiana:** gdy rekord nie wymienia kopii, plan wylicza lądowiska tak jak seed
+    (`client_local_path` dla datasetów z parowania). Robi to w podpowłoce, żeby nic nie
+    wyciekło do dalszych kroków. Na liście są tylko lądowiska, które istnieją na dysku. Dziecko
+    innego z listy odpada, bo `destroy -r` korzenia je obejmuje. Plan mówi, skąd wziął listę.
+  - **Testy:** `zfsbackup --section delrel` 16/0 (+1). Kontrola na main: U9 FAIL i zmieniona
+    linia planu FAIL. Jeden przebieg na kodzie z main dał też jednorazowy FAIL testu
+    „clean-source”, który przy powtórzeniach się nie pojawił.
+  - **Na żywo, pve10:** kopia prawdziwego rekordu pve9b ze stanem `seed_complete` i bez
+    `MANAGED_DATASETS`, sam plan: wyliczone `hdd/backups/192.168.28.98/hdd/vm-disks`; main dla
+    tego samego rekordu: „(the record lists none)”. Nic nie zmieniono.
 
 - **Pole dopisywane do sekcji stoi pod jej ostatnią linią (2026-10-06, kosmetyka).**
   `set_or_remove_section_field` wstawiało brakujące pole przed NASTĘPNYM nagłówkiem, czyli

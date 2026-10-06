@@ -13144,10 +13144,28 @@ else
 fi
 DROUT=$(dr_run a --keep-source --keep-record --destroy-copies)
 if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- --keep-source' && printf '%s' "$DROUT" | grep -q "3\. record    : kept (--keep-record) -- the name 'a' stays taken" \
-   && printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of:' && printf '%s' "$DROUT" | grep -q '^ *tank/b/10.0.0.5/p/x$'; then
+   && printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of (from the record):' && printf '%s' "$DROUT" | grep -q '^ *tank/b/10.0.0.5/p/x$'; then
     ok "delrel: --keep-source / --keep-record / --destroy-copies each change exactly their own line of the plan, and the copies to destroy are NAMED"
 else
     bad "delrel: option lines" "$DROUT"
+fi
+# U9 (2026-10-06): a relationship SEEDED and never activated has copies on disk
+# but no MANAGED_DATASETS (activation writes it). The plan derives the landings
+# the way the seed placed them, lists only those that EXIST, and drops one that
+# sits under another listed one (destroy -r of the root takes it).
+printf 'CLIENT_NAME=s\nSTATE=seed_complete\nPEER_HOST=10.0.0.7\nACTIVE_ENDPOINT=10.0.0.7:22\nCLIENT_TARGET=tank/b\n' > "$DR/clients/s.conf"
+DROUT=$( ( CLIENTS_DIR="$DR/clients"
+           . "$ZFSBACKUP"
+           load_client_and_connection() { PEER_SAVED_MODE=backup PEER_SAVED_TARGET=tank/b LOAD_LABEL=10.0.0.7
+                                          PEER_SAVED_DATASETS="hdd/ct hdd/ct/sub hdd/gone"; }
+           zfs() { case "$*" in *tank/b/10.0.0.7/hdd/gone*) return 1 ;; *) return 0 ;; esac; }
+           cmd_delete_relation s --keep-source --destroy-copies ) 2>&1 )
+if printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of (from the pairing -- seeded, never activated' \
+   && [ "$(printf '%s\n' "$DROUT" | grep -c '^ *tank/b/10.0.0.7/hdd/ct$')" -eq 1 ] \
+   && ! printf '%s' "$DROUT" | grep -q 'hdd/ct/sub\|hdd/gone' && ! printf '%s' "$DROUT" | grep -qF '(the record lists none)'; then
+    ok "delrel: U9 -- a seeded, never-activated relationship's copies are derived from the pairing: the existing root is listed, its child is covered by -r, a missing one is not listed"
+else
+    bad "delrel: U9 -- copies after a seed without activation" "$DROUT"
 fi
 if ! dr_run zz >/dev/null && grep -q "no relationship 'zz' on this host" "$DR/err" && ! dr_run a --bogus >/dev/null && grep -q "unknown option '--bogus'" "$DR/err"; then
     ok "delrel: an unknown name and an unknown option are refusals, before anything is read or run"
