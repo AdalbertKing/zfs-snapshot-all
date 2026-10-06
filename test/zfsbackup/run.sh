@@ -10257,6 +10257,34 @@ case "$mn_got" in
     *) bad "monitorjson: an unreadable line is UNKNOWN, not OK" "$mn_got" ;;
 esac
 
+# THE PASSIVE SHAPE (pve9 gui-bc, 2026-10-06). A passive monitor watches "any
+# snapshot" -- PATTERN '-' -- minus its excluded families. The reader took the
+# lone '-' for an unknown flag, refused the line, and the GUI said "nie
+# odpowiada" about a healthy relation. Added to the account's block AFTER the
+# assertions above, so their counts stay what they pin.
+cp "$MN/crontab.zfsbackup" "$MN/crontab.zfsbackup.orig"
+sed -i '/^# END zfs-backup-managed/i 7 * * * * d=$(/home/zfsbackup/scripts/check-snap-age.sh -R -L delta -x vzdump -x __replicate_ "hdd/x" "-" 3h 5h 2>&1); rc=$?' "$MN/crontab.zfsbackup"
+mn_run --json
+mn_got="$(cat "$WORK/mn.out")"
+mn_has '"label":"delta","paused_local":false,"datasets":["hdd/x"],"pattern":"-","warn":"3h","crit":"5h","recursive":true' \
+       "monitorjson: a passive line's lone '-' is its PATTERN positional, not a flag -- the line is read"
+if grep -qx -- '-R -L delta -x vzdump -x __replicate_ hdd/x - 3h 5h' "$MN/engine.log"; then
+    ok "monitorjson: ...and the engine receives it as the pattern, with the exclusions"
+else
+    bad "monitorjson: ...and the engine receives it as the pattern, with the exclusions" "$(cat "$MN/engine.log")"
+fi
+case "$mn_got" in
+    *"unknown flag '-'"*) bad "monitorjson: '-' no longer reported as an unknown flag" "$mn_got" ;;
+    *"unknown flag '--nonsense'"*) ok "monitorjson: '-' no longer reported as an unknown flag, while '--nonsense' still is" ;;
+    *) bad "monitorjson: the --nonsense refusal disappeared with the fix" "$mn_got" ;;
+esac
+# Put the fixture back and re-read, so every assertion below sees exactly the
+# four lines it was written against.
+mv -f "$MN/crontab.zfsbackup.orig" "$MN/crontab.zfsbackup"
+mn_run --json; mn_rc=$?
+mn_got="$(cat "$WORK/mn.out")"
+
+
 # CRITICAL outranks UNKNOWN in the host-wide worst, which is the engine's own
 # rule for the same question.
 # THE ENGINE PRINTS ONE LINE PER DATASET, and a raw newline inside a JSON
