@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3d2ace9f1efabbf2 -->
+<!-- status-covers-digest: 8d75aabf68d8e8a4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,33 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **K4: konto delegowane relacji synchro dostaje tylko swoje lądowiska (2026-10-06, właściciel: „koduj K4”).**
+  - **Było (znalezione w kampanii labowej):** pełny zestaw praw (z `destroy` i `rollback`)
+    szedł na RODZICA lądowiska, z dziedziczeniem, czyli także na każde rodzeństwo. Na pve9
+    konto synchro `g3-bc` utworzyło i usunęło migawkę na lądowisku `k2-ab` roota. Na pve10 i
+    pve11 rodzicem wcześniej synchronizowanego datasetu była cała pula `hdd`.
+  - **Zmiana (`zfs-backup.sh`, aktywacja):**
+    - `sync_delegate_landings`: nadanie na samym lądowisku. Seed robi root, więc lądowisko
+      istnieje przy aktywacji. Gdy go nie ma, na rodzicu ląduje tylko `create,mount,receive`
+      LOKALNIE, z ostrzeżeniem o ponownej aktywacji;
+    - `sync_narrow_legacy_grants`: pełny zestaw na którymkolwiek PRZODKU lądowiska (z pulą)
+      jest odbierany. Nie dotyczy przodka, którego nazwa jest sekcją configu (kopia lokalna
+      nadaje tak swoje źródła), ani przodka, pod którym ląduje relacja backup tego samego konta.
+      Wtedy jest tylko ostrzeżenie z gotowym poleceniem. Lądowiska innych relacji synchro tego
+      konta dostają własne nadanie przed odebraniem.
+  - **Zmierzone przed wyborem kształtu:** nadanie lokalne albo „przy tworzeniu” (`zfs allow
+    -l/-c`) NIE wystarcza, bo ZFS sprawdza usunięcie migawki jak potomka. Nadanie z
+    dziedziczeniem na samym lądowisku niesie przyrost, nowe dziecko przy `-R` oraz
+    migawki i usuwanie, a sąsiad zostaje odmówiony.
+  - **Testy:** `zfsbackup --section k4grant` 6/0 (kontrola na main 0/6).
+  - **Na żywo:** ponowna aktywacja `g3-bc` (pve9) i `k2-bc` (pve11). Nadania są teraz tylko
+    na lądowiskach; odebrane z rodzica na pve9 oraz z rodzica i z puli `hdd` na pve11.
+    Konto odmówione na cudzym lądowisku i na `hdd/ct`. Pobrania rc=0, a lustro zdjęło migawkę
+    jako `zfsbackup`.
+  - **Zostaje:** pełny zestaw dla `zfsbackup` na puli `hdd` na pve10. Pochodzi spoza synchro
+    (backup/parowanie) i leży nad relacją backup tego konta, więc ta zmiana go nie rusza.
+    Do osobnej decyzji.
 
 - **U9: `delete-relation --destroy-copies` widzi kopie po seedzie bez aktywacji (2026-10-06, właściciel: „koduj U9”).**
   - **Było:** listę kopii brało tylko z `MANAGED_DATASETS`, które zapisuje AKTYWACJA. Relacja

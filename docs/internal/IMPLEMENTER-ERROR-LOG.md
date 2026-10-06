@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57, E67.*
+*Evidence: E13, E22, E57, E67, E72.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1899,6 +1899,24 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E72 — a delegated sync account could destroy its neighbours (found 2026-10-06, R12)
+
+**Genesis.** Sync relationships on a delegated account got the receive set
+(destroy and rollback included) on the PARENT of each landing,
+Local+Descendent -- the simplest grant that let the first receive create the
+landing. The lab campaign of 2026-10-06 put a sync account and a root-owned
+backup under one parent on pve9: the sync account created and destroyed a
+snapshot on root's landing. On pve10 and pve11 the parent of an earlier synced
+dataset was the pool itself.
+
+**Cause.** R12: every test of the delegation proved the account COULD do its
+job (receive, prune); none asked what ELSE it could reach. Isolation is a
+negative property -- it only exists if something tried to cross it and failed.
+
+**Rule.** R12. A permission change ships with the NEGATIVE test next to the
+positive one: the account doing its job, and the same account refused on the
+nearest dataset that is not its own (a sibling under the same parent).
 
 ### E71 — a one-line follow-up fix pushed without the gates (2026-10-06, R4)
 
