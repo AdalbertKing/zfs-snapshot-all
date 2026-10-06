@@ -387,7 +387,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.70'
+VERSION='v2.71'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -2292,7 +2292,14 @@ exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     log 0 "Another instance targeting the same datasets is already running (lock: $LOCKFILE) - skipping this run"
     emit_stats "$1" "${2:-}" "skipped_lock" "0"
-    exit 0
+    # 75 (EX_TEMPFAIL), not 0 (owner, 2026-10-06: "report it as a warning").
+    # A skipped run copied NOTHING, and exit 0 told every caller it had: the
+    # cron envelope stayed silent and a seed reported success. Measured on
+    # pve10 2026-09-22..25: pve9b's daily pull lost the lock to the hourly one
+    # three nights running (23-25.09), rc=0, and only the staleness monitor noticed (71 h).
+    # zfs-job.sh turns 75 into a WARNING (notify-warn.sh), not a failure mail;
+    # every other caller already reads nonzero as "not done", which is true.
+    exit 75
 fi
 ###############################################################################
 #END 5A2

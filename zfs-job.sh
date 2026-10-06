@@ -34,6 +34,12 @@
 #   ZFS-JOB END <label> rc=<n>       on exit, with the COMMAND's status
 #   the notify script                called only when rc is not 0, with the
 #                                    label and the last N lines of stderr
+#   the WARN script, instead         when rc is 75 (EX_TEMPFAIL): the engine
+#                                    skipped the run because the previous one
+#                                    still holds its lock (2026-10-06). Nothing
+#                                    was copied, which is worth knowing, and
+#                                    nothing broke, which is not worth a
+#                                    failure mail -- so it joins the digest.
 #
 # AND IT EXITS 0 REGARDLESS. That is deliberate and is not laziness: the inline
 # envelope ended in `rm -f "$e"`, so the line always exited 0, and cron mails
@@ -44,7 +50,7 @@
 # ------------------------------------------------------------------------------
 set -u
 
-VERSION='v1.0'
+VERSION='v1.1'
 
 usage() {
     cat >&2 <<'EOF'
@@ -58,6 +64,9 @@ Usage: zfs-job.sh <label> [--log=FILE] [--notify=SCRIPT] [--detail=N] -- <comman
             (default: <this script's parent dir>/cron.log)
   --notify  called as: <script> "<label>" "<last N lines of stderr>"
             (default: <this script's parent dir>/notify-fail.sh)
+  --warn    called the same way when the command exits 75 (skipped: the
+            previous run still holds the lock), INSTEAD of --notify
+            (default: notify-warn.sh beside the --notify script)
   --detail  how many trailing stderr lines the notification carries (default 8)
 
   Exits 0 whatever the command returned -- see the header for why. The
@@ -74,7 +83,7 @@ EOF
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _base="$(dirname "$_here")"
 
-LABEL=""; LOG="$_base/cron.log"; NOTIFY="$_base/notify-fail.sh"; DETAIL=8
+LABEL=""; LOG="$_base/cron.log"; NOTIFY="$_base/notify-fail.sh"; WARN=""; DETAIL=8
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -82,6 +91,7 @@ while [ "$#" -gt 0 ]; do
         -h|--help)    usage ;;
         --log=*)      LOG="${1#--log=}"; shift ;;
         --notify=*)   NOTIFY="${1#--notify=}"; shift ;;
+        --warn=*)     WARN="${1#--warn=}"; shift ;;
         --detail=*)   DETAIL="${1#--detail=}"; shift ;;
         --)           shift; break ;;
         -*)           echo "zfs-job: unknown option: $1" >&2; usage ;;
@@ -108,7 +118,15 @@ rc=$?
 cat "$e" >>"$LOG" 2>/dev/null
 printf '%s ZFS-JOB END %s rc=%s\n' "$(date -Is)" "$LABEL" "$rc" >>"$LOG" 2>/dev/null
 
-if [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
+# Beside the notify script by default: deploy.sh installs the two together, in
+# /root/scripts/ for root and in the account's home for a delegated account, so
+# the generated lines need no extra argument (they are near cron's 1000-byte
+# limit already -- see the header).
+[ -n "$WARN" ] || WARN="$(dirname "$NOTIFY")/notify-warn.sh"
+if [ "$rc" -eq 75 ]; then
+    [ -x "$WARN" ] && "$WARN" "$LABEL -- skipped, the previous run still holds the lock" \
+        "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
+elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
     "$NOTIFY" "$LABEL" "$(tail -n "$DETAIL" "$e" 2>/dev/null)" 2>>"$LOG"
 fi
 
