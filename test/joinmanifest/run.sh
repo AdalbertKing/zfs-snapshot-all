@@ -315,7 +315,30 @@ else
     bad "guided join: a completed byte-identical scope makes package resubmission a no-op" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
 fi
 
+# U1 (2026-10-06): the one-command enrolment with --grant-remotely runs this
+# --join with no terminal and signs the scope from the collector afterwards.
+# With JOIN_SCOPE_BY_COLLECTOR=1 the join neither drafts, nor asks, nor
+# grants -- and says so; with stdin closed and WITHOUT the flag it still
+# stops at the consent question, exactly as before (the control).
 rm -f "$SCOPE" "$HASH"; : > "$GUIDED_CALLS"
+out="$(JOIN_SCOPE_BY_COLLECTOR=1 guided_join_scope pve1 < /dev/null 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -s "$GUIDED_CALLS" ] && [ ! -e "$SCOPE" ] \
+        && ! join_scope_is_committed pve1 \
+        && printf '%s' "$out" | grep -q 'committed by the collector itself'; then
+    ok "guided join: with JOIN_SCOPE_BY_COLLECTOR=1 it drafts nothing, asks nothing, grants nothing, and says the collector signs"
+else
+    bad "guided join: with JOIN_SCOPE_BY_COLLECTOR=1 it drafts nothing, asks nothing, grants nothing, and says the collector signs" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
+fi
+rm -f "$SCOPE" "$SCOPE.request" "$HASH"; : > "$GUIDED_CALLS"
+out="$(guided_join_scope pve1 < /dev/null 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && ! join_scope_is_committed pve1 \
+        && printf '%s' "$out" | grep -q 'join interrupted before scope acceptance'; then
+    ok "guided join: control -- without the flag and with no terminal it still stops at the consent question and grants nothing"
+else
+    bad "guided join: control -- without the flag and with no terminal it still stops at the consent question and grants nothing" "rc=$rc calls=$(cat "$GUIDED_CALLS") out=$out"
+fi
+
+rm -f "$SCOPE" "$SCOPE.request" "$HASH"; : > "$GUIDED_CALLS"
 out="$(guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && [ "$(cat "$GUIDED_CALLS")" = $'draft\ncommit' ] \
         && join_scope_is_committed pve1; then

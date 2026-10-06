@@ -3939,6 +3939,21 @@ guided_join_scope() {   # <label>
         log "scope for '$label' is already committed and byte-identical -- resuming join needs no further work"
         return 0
     fi
+    # THE COLLECTOR SIGNS IT (U1, 2026-10-06). A --join run remotely by the
+    # one-command enrolment has no terminal, so the consent question below
+    # could only ever end in "join interrupted before scope acceptance" -- a
+    # FATAL on every successful --grant-remotely run, after which the
+    # collector printed "falling back to the manual steps" and then granted
+    # the scope anyway. With JOIN_SCOPE_BY_COLLECTOR=1 the collector has said
+    # it will write and commit the scope itself (exactly its request,
+    # audited -- rux_grant_remotely), so this neither drafts nor asks nor
+    # grants: it says so and leaves the scope to that step. Without the flag
+    # nothing changes -- a human at this console still gives the consent.
+    if [ "${JOIN_SCOPE_BY_COLLECTOR:-0}" = 1 ]; then
+        JOIN_SCOPE_DEFERRED=1
+        log "scope for '$label': written and committed by the collector itself (--grant-remotely, exactly its request, audited) -- nothing is granted and nothing is asked here"
+        return 0
+    fi
     if [ ! -e "$sfile" ]; then
         do_draft_scope "$label"
     else
@@ -5734,6 +5749,8 @@ EOF
     # everything but a scp/ssh transport failure into one bucket.
     local remote_ok=0 scope_rc=-1
     local remote_scope; remote_scope=$(peer_scope_path "$my_label")
+    # 0 or 1, never anything else: this value is pasted into a remote command.
+    local by_collector=0; [ "${JOIN_SCOPE_BY_COLLECTOR:-0}" = 1 ] && by_collector=1
     if [ "$PEER_JOIN_REMOTELY" -eq 1 ]; then
         log "--join-remotely: delivering the wsad and running --join on $PEER_HOST over the pin just established..."
         # BOUNDED, and stdin CLOSED. `--join` asks for scope acceptance and
@@ -5765,10 +5782,17 @@ EOF
            && timeout "$PEER_REMOTE_JOIN_TIMEOUT" \
                ssh -n -o UserKnownHostsFile=/root/.ssh/known_hosts -o StrictHostKeyChecking=yes \
                   -p "$PEER_PORT" "root@$PEER_HOST" \
-                  "cd $REPO_DIR && DEPLOY_PHASES_QUIET=${DEPLOY_PHASES_QUIET:-0} ./deploy.sh --join=/root/$(basename "$pkg")"; then
+                  "cd $REPO_DIR && DEPLOY_PHASES_QUIET=${DEPLOY_PHASES_QUIET:-0} JOIN_SCOPE_BY_COLLECTOR=$by_collector ./deploy.sh --join=/root/$(basename "$pkg")"; then
             remote_ok=1
             log "remote --join on $PEER_HOST succeeded."
-            if [ -n "$PEER_MODE" ]; then
+            if [ -n "$PEER_MODE" ] && [ "$by_collector" -eq 1 ]; then
+                # Same promise as in guided_join_scope: the collector writes
+                # the scope next, so a draft here is a document nobody will
+                # read, and P6's "nothing was granted -- finish it THERE" would
+                # be false a moment later.
+                scope_rc=6
+                log "the scope on $PEER_HOST is written and committed by the collector's --grant-remotely next -- no draft, no editor here"
+            elif [ -n "$PEER_MODE" ]; then
                 if have_terminal; then
                     log "opening the scope editor on $PEER_HOST over ssh -t (drafts it first only if it does not exist yet, same as 'crontab -e')..."
                 else
@@ -5828,6 +5852,9 @@ EOF
                     log "  cd $REPO_DIR"
                     log "  \${EDITOR:-vi} $remote_scope"
                     log "  ./deploy.sh --commit-scope-check=$my_label"
+                    ;;
+                6)
+                    log "Zakres: zapisze i zatwierdzi go kolektor zaraz po tym kroku (--grant-remotely), dokladnie wg prosby. Na $PEER_HOST nie trzeba nic robic."
                     ;;
                 5)
                     # P6. Not a failure -- a refusal to fake consent. The draft
@@ -6373,7 +6400,11 @@ EOF
             && log "Tryb '$PEER_CONF_MODE' -- wybor datasetow odbywa sie teraz na tym hoście."
         guided_join_scope "$label"
     fi
-    log "Join i uprawnienia sa gotowe. Cron zostanie pokazany i zainstalowany przez 'zfs-backup.sh activate' na kolektorze."
+    if [ "${JOIN_SCOPE_DEFERRED:-0}" = 1 ]; then
+        log "Join gotowy. Uprawnienia ZFS nada kolektor zaraz po tym kroku (--grant-remotely); cron pokaze i zainstaluje 'zfs-backup.sh activate' na kolektorze."
+    else
+        log "Join i uprawnienia sa gotowe. Cron zostanie pokazany i zainstalowany przez 'zfs-backup.sh activate' na kolektorze."
+    fi
     log "===================================================================="
 }
 

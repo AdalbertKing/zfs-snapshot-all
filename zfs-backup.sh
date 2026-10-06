@@ -279,9 +279,11 @@ Usage:
                                     target. Composes the existing add-client -> seed ->
                                     activate lifecycle -- one command, resumable by re-
                                     running it identically after any interruption.
-                                    --name omitted:    derived from HOST; only needed when
-                                                       more than one relationship already
-                                                       points at the same host
+                                    --name omitted:    derived from HOST, or the existing
+                                                       relationship with HOST is resumed.
+                                                       ONE relationship per pair of hosts:
+                                                       a NEW name for a host that already
+                                                       has one is refused (delete it first)
                                     --local-user=NAME: CREATE-time only. The account the
                                                        generated jobs run as (root, or any
                                                        delegated user -- created if absent).
@@ -15422,6 +15424,30 @@ rux_resolve_name() {
     if [ -n "$explicit" ]; then
         client_name_valid "$explicit" \
             || die "rux: --name='$explicit' is not a valid client name (letters, digits, dot, dash, underscore only)"
+        # ONE RELATIONSHIP PER PAIR OF HOSTS (D1, 2026-10-06). The wizard and
+        # import-relation refuse a second relationship to a host; this path did
+        # not, because an explicit --name skipped the host lookup entirely. A
+        # second name for the same host then reused the SHARED pairing record
+        # (peers/<addr>.conf), wrote its own mode and request into it, extended
+        # the scope the source had committed for the FIRST relationship, and
+        # only then failed at --join -- measured on pve10, whose live 'pve11'
+        # relationship got a sync request pasted into its pairing record.
+        # Resuming the SAME name stays allowed (that is how an interrupted run
+        # is finished), and so does a host that already carries several legacy
+        # relationships when one of them is named: refusing those would strand
+        # them. A NEW name next to a live relationship is what is refused.
+        local _own; _own=$(client_conf_path "$explicit")
+        if [ ! -e "$_own" ] || [ "$(record_get "$_own" STATE)" = removed ]; then
+            local _f _other
+            for _f in "$CLIENTS_DIR"/*.conf; do
+                [ -f "$_f" ] || continue
+                [ "$(record_get "$_f" PEER_HOST)" = "$host" ] || continue
+                [ "$(record_get "$_f" STATE)" = removed ] && continue
+                _other=$(record_get "$_f" CLIENT_NAME)
+                [ "$_other" = "$explicit" ] && continue
+                die "rux: this host already has relationship '$_other' with $host. A relationship is a PAIR OF HOSTS -- one per pair, with as many datasets as it needs -- so a second one under --name=$explicit is refused before anything is created or paired. Resume it (--name=$_other or no --name), or remove it first (zfs-backup.sh delete-relation $_other). Nothing was changed."
+            done
+        fi
         printf '%s\n' "$explicit"
         return 0
     fi
@@ -16047,7 +16073,13 @@ rux_remote_install() {
         # opts into the explicit two-sided form instead.
         [ "$manual_join" -eq 1 ] || add_args+=(--join-remotely)
         log "rux: enrolling '$name' (source=$host:${dataset:-<deferred>}, mode=${mode:-backup})"
+        # U1: the remote --join must not ask for a consent nobody can give
+        # and fail on it; --grant-remotely below writes and commits the scope
+        # itself. deploy.sh --pair passes this on to the remote --join.
+        # Exported for the deploy.sh child only, and unset right after.
+        [ "$grant_remotely" -eq 1 ] && export JOIN_SCOPE_BY_COLLECTOR=1
         cmd_add_client "${add_args[@]}"
+        unset JOIN_SCOPE_BY_COLLECTOR
         {
             write_client_field RUX_SOURCE "$host:$dataset"
             write_client_field RUX_TARGET "$target"
