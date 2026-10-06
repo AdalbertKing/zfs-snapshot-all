@@ -304,6 +304,14 @@ if ! sed -n '/\[dataset:tank\/b\]/,$p' "$TMPD/sec.conf" | grep -q bandwidth; the
 else
     bad "the insert lands in the named section, not the next one" "$(cat "$TMPD/sec.conf")"
 fi
+# ...and right after its LAST field, with the blank separator still BELOW it.
+# Inserting at the next header put the field after the blank line, visually
+# between two sections (measured on pve10, 2026-10-06, prune_foreign).
+if [ "$(sed -n '4,6p' "$TMPD/sec.conf" | tr '\t\n' '_|')" = "_pair_label   = rel|_bandwidth = 2M||" ]; then
+    ok "the inserted field follows the section's last field; the blank line between sections stays below it"
+else
+    bad "the inserted field follows the section's last field" "$(cat -A "$TMPD/sec.conf")"
+fi
 
 # update (field present)
 mksection "bandwidth    = 1M"

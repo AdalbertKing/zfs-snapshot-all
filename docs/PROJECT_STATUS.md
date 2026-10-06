@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5aaa1aa4db1d4337 -->
+<!-- status-covers-digest: d35fa0402e584293 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,13 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Pole dopisywane do sekcji stoi pod jej ostatnią linią (2026-10-06, kosmetyka).**
+  `set_or_remove_section_field` wstawiało brakujące pole przed NASTĘPNYM nagłówkiem, czyli
+  za pustą linią oddzielającą sekcje. Parser czytał je poprawnie, ale w pliku wyglądało jak
+  zawieszone między sekcjami (pve10: `prune_foreign` po reaktywacji pve9b i pve11). Puste
+  linie na końcu sekcji są teraz wstrzymywane i idą po wstawionym polu. `linkfields` 50/0
+  (+1, kontrola na main 1 FAIL).
 
 - **U4: obce migawki na kolektorze backupu są cięte jak własne (2026-10-06, właściciel: „obce migawki powinny być cięte jak własne”).**
   - **Było:** pobranie niesie `-I`, więc wszystko, co źródło ma między naszymi migawkami
