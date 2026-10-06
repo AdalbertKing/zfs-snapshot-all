@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 102c8adc6b651acf -->
+<!-- status-covers-digest: 06d891d62059a3be -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **R5-8: rekord postępu bez doklejonego drugiego końca (2026-10-06, właściciel: „Odmrażam”).**
+  - **Przyczyna (z kodu, objaw zmierzony na pve10 25.09):** `progress_done` w
+    `lib-zfs-snap.sh` znał tylko koniec „running”. Drugi transfer do tego samego celu w
+    jednym biegu (seed + dogonienie, wznowienie) potrafi skończyć się, zanim obserwator
+    zapisze nowy rekord „running” -- funkcja zastawała rekord ZAKOŃCZONY, nic nie ucinała
+    i doklejała drugi koniec. `progress --json` się na tym wykładał, GUI: „bez odpowiedzi”.
+  - **Zmiana:** koniec „running” ALBO zakończony jest ucinany od PIERWSZEGO `,"state":` i
+    zastępowany nowym -- więc i plik sklejony przez starszą wersję naprawia się przy
+    następnym końcu transferu. Inne kształty zostają nietknięte, jak dotąd. Odporność
+    czytelnika (#443) zostaje. Wpis w `docs/project/ENGINE-FREEZE.md`, baza zamrożenia
+    przepięta (`--refreeze`).
+  - **Test:** `twins` 83/0 (+1) -- wykonuje prawdziwą funkcję na rekordzie zakończonym i
+    na sklejonym; oba wychodzą jako jeden obiekt z jednym `state`. Kontrola na lib z main:
+    `{...,"finished_epoch":1},"state":"ok",...}` -- dokładnie sklejka z pve10.
 
 - **Pasywne pobranie bierze WSZYSTKIE rodziny poza wyjątkami (R5-2, decyzja właściciela 2026-10-04).**
   - **Zmierzone na żywo (pve10 <- pve9, `hdd/lab/ct-201`):** ręczna migawka na źródle,

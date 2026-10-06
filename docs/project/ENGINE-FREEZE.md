@@ -4,7 +4,7 @@
 <!-- frozen: snapget.sh 100755 eaa136115d1631b59386a993bb40d8ca24a0d91c -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 815091201f438853c75cd746e036e47d4f7358c3 -->
+<!-- frozen: lib-zfs-snap.sh 100644 0701a4865690e0112495b7f893ba935da45454d4 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -815,6 +815,24 @@ Owner-authorized refreezes:
   Regression tests: `test/quiesce` gains 11, verified to fail on the frozen
   baseline and pass after — including controls that the new recogniser does
   NOT relabel an ordinary remote failure as an administrative block.
+
+- **2026-10-06** -- `lib-zfs-snap.sh`: `progress_done` replaces a FINISHED end
+  instead of gluing a second one on (R5-8). **PRE-AUTHORISED** by the owner, in
+  those words: *"Odmrażam. rób wszystko"*, in answer to the open item "R5-8:
+  the fix is in the frozen lib-zfs-snap.sh, needs your unfreeze".
+  Measured on pve10 2026-09-25: a progress record ended
+  `...,"state":"verified","finished_epoch":1790364665},"state":"verified",...}`,
+  `progress --json` broke on it and the GUI showed "bez odpowiedzi". Cause: the
+  function only knew the RUNNING end; a second transfer to the same target in
+  one run (seed then catch-up, a resume) can finish before its watcher writes a
+  fresh running record, so it found a finished record, stripped nothing, and
+  appended. It now cuts at the first `,"state":` when the record ends either in
+  the running marker or in a finished one, so an already-glued file is healed
+  by the next finish. Anything else is left untouched, as before.
+  **No transfer semantics changed:** this is the progress record only, which no
+  transfer decision reads. The reader-side tolerance (#443) stays.
+  Regression test: `test/twins` gains 1, executing the shipped function on a
+  finished record and on a glued one; fails on the frozen baseline.
 
 ## How it is enforced
 
