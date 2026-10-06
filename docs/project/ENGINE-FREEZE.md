@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 ae0c3b9beb6cd5a54f7153f84de32c7cc632acdf -->
-<!-- frozen: snapget.sh 100755 9ae2f8bc2e7e78faa08796c2ed8a4ffde626db65 -->
+<!-- frozen: snapget.sh 100755 3228d7032315769f37497782cd6b753fe4fa14c9 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 0701a4865690e0112495b7f893ba935da45454d4 -->
@@ -885,6 +885,25 @@ Owner-authorized refreezes:
   stub listings -- every refusal case deletes nothing; the real snapget refuses
   -M -r), `test/cron` MIR1-MIR11, `test/zfsbackup --section passivepick` (sync
   pulls end in -M, a backup relationship does not), `test/tui` (F2 'lustro').
+
+- 2026-10-06 (snapget.sh): **the mirror's summary is visible when it did something.**
+  Owner direction, verbatim: "Odmrażam snapget, rób A" (the -M mirror), then,
+  for the replica, "Tak, rób w tej kolejności" (sync mirror first, then the
+  replica onto snapget -M). snapget stays v2.72: one log level.
+  The first live mirror run removed 163 snapshots from one dataset on pve10 and
+  cron.log -- which carries level 0 only -- said nothing, because
+  `mirror_target`'s summary was log 1. It is log 0 now whenever anything was
+  removed or could not be removed, log 1 for a run that changed nothing. The
+  per-snapshot "destroyed" lines stay at 1.
+  twin: NOT ported -- -M is snapget's alone (sync and replica are pulls).
+  Outside the engine, same change set: gen-cron's [replica:] renders
+  `snapget.sh -m P -M` (local form, no host) instead of `snapsend.sh -m P`;
+  cron2conf reads both. No engine code path changed for that: the local form
+  is the one the merge study measured identical to snapsend's for a local copy,
+  and the #tgt- anchor tag is md5(target, -j) in both.
+  Regression tests: `test/twins` section M (+1: summary level 0 when something
+  was removed or stuck, 1 otherwise), `test/cron2conf` (replica fixtures in the
+  new shape, replica-fixed, fixtures-engine/replica-snapsend).
 
 ## How it is enforced
 
