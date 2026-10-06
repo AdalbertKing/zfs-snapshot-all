@@ -38,6 +38,12 @@
     kontrola bez blokady: nie 75. Silniki z main: 2 asercje padają. `cron` 143/0 -- X8/X8b/X9 na
     prawdziwym `zfs-job.sh`: 75 → tylko skrypt ostrzeżenia, END z rc=75; 1 → tylko skrypt
     błędu. `zfs-job.sh` z main przy 75 woła skrypt błędu.
+  - **Na żywo po wgraniu (pve10, `2daddf61`, 2026-10-06 11:10):** ta sama linia crona
+    uruchomiona dwa razy naraz. Root, pve9-synchro `ct-201`: pierwsza rc=0, druga rc=75, w
+    `/var/lib/zfs-snapshot-all/alert-queue.log` dokładnie jedno `WARN … -- skipped, the previous
+    run still holds the lock`, żadnego `ALERT`. Konto `zfsbackup`, pve9b: druga rc=75 i `WARN`
+    tak samo (pierwsza padła rc=1 na ssh do .98, który właśnie zniknął z sieci razem z .96 --
+    to osobny `ALERT`, nie skutek zmiany).
 
 - **pve9: blok testowy `pgtest` zdjęty z crona roota (2026-10-06, właściciel: „rób wszystko”).**
   Blok `zfs-backup-managed` roota na pve9 to były tylko dwie linie z testu REV-140
