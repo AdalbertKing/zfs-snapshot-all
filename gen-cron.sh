@@ -1540,9 +1540,14 @@ validate_field_names() {
         # `exclude_family` must not fall through this arm -- it is a field in
         # its own right, in the allow-list above, and reaching this case at all
         # would mean it had been misspelled.
+        # prune_schedule_<tier> is read in a [prune:] section too (K3,
+        # 2026-10-06): zfs-backup.sh spreads a multi-cadence SOURCE prune tier
+        # by tier there, the way it spreads the dataset's own tiers.
         case "$field" in
-            flags_*|send_schedule_*|prune_schedule_*)
+            flags_*|send_schedule_*)
                 [ "$kind" = "dataset" ] && continue ;;
+            prune_schedule_*)
+                { [ "$kind" = "dataset" ] || [ "$kind" = "prune" ]; } && continue ;;
             exclude_child_*)
                 if [ "$kind" = "dataset" ]; then
                     case "${field#exclude_child_}" in
@@ -2634,7 +2639,7 @@ build_prune_section() {
             if [ "${pattern:0:${#gfs_pattern}}" != "$gfs_pattern" ]; then
                 die "[prune:$scope] tier=$tier: this tier feeds the gfs ladder but its 'pattern' ('$pattern') does not start with 'gfs_pattern' ('$gfs_pattern') -- delsnaps.sh matches by prefix, so the ladder never sees this tier's snapshots. Its retention count would be spent on whatever gfs_pattern does match, and '$pattern' snapshots would be pruned by nothing while their monitor stays green. Make 'gfs_pattern' a common prefix of every tier in use_template (e.g. 'automated_' for automated_hourly/automated_daily), or omit it entirely for a prefixless ladder."
             fi
-            prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            prune_schedule="$(resolve_field_tiered prune_schedule "$tier" "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
             lint_cron_schedule "$prune_schedule" "[prune:$scope] tier=$tier" prune_schedule
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
@@ -2652,7 +2657,7 @@ build_prune_section() {
             # buckets' arithmetic on that same tick is cheap and idempotent.
             [ -z "$gfs_schedule" ] && gfs_schedule="$prune_schedule"
         elif [ "$emit_prune" -eq 1 ]; then
-            prune_schedule="$(resolve_field prune_schedule "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
+            prune_schedule="$(resolve_field_tiered prune_schedule "$tier" "$sec" "$tmpl" defaults)" || die "[prune:$scope] tier=$tier: template has no prune_schedule"
             lint_cron_schedule "$prune_schedule" "[prune:$scope] tier=$tier" prune_schedule
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
