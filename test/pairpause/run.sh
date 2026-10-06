@@ -171,6 +171,50 @@ else
     bad "check-snap-age: a path-traversal label is UNKNOWN, refused before any path is probed" "rc=$rc" "$out"
 fi
 
+# ---- a run SKIPPED by the lock exits 75, not 0 (owner, 2026-10-06) ----------
+#
+# The same gate family, one step later: the per-dataset lock. A run that finds
+# the previous one still holding it copies nothing, and exit 0 said otherwise
+# to every caller -- the cron envelope stayed silent (pve9b's daily pull lost
+# the lock to the hourly one three nights running, 23-25.09, rc=0). It now
+# exits 75 so zfs-job.sh can raise a warning. The REAL scripts, with the lock
+# held by flock(1) on the exact file the engine computes; zfs and mbuffer are
+# stubs because nothing before the lock calls them -- it only asks they exist.
+if command -v flock >/dev/null 2>&1 && command -v md5sum >/dev/null 2>&1; then
+    LK="$WORK/lock"; mkdir -p "$LK/bin"
+    printf '#!/bin/sh\nexit 1\n' > "$LK/bin/zfs"; printf '#!/bin/sh\nexit 0\n' > "$LK/bin/mbuffer"
+    chmod +x "$LK/bin/zfs" "$LK/bin/mbuffer"
+    for script in "$SNAPGET" "$SNAPSEND"; do
+        sname="$(basename "$script")"
+        key=$(printf '%s\0%s\0%s' "$BOGUS" "" "" | md5sum | cut -d' ' -f1)
+        lf="$LK/$sname.$key.lock"
+        : > "$LK/stats.log"
+        ( flock -x 9; sleep 6 ) 9>"$lf" &
+        holder=$!
+        sleep 1
+        out=$(PATH="$LK/bin:$PATH" STATS_LOG="$LK/stats.log" LOCKDIR="$LK" \
+              bash "$script" "$BOGUS" 2>&1); rc=$?
+        kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+        if [ "$rc" -eq 75 ] && echo "$out" | grep -q "skipping this run" \
+           && grep -q '"status":"skipped_lock"' "$LK/stats.log"; then
+            ok "$sname: a run skipped by the held lock exits 75 (not 0), says so, and still records skipped_lock"
+        else
+            bad "$sname: a run skipped by the held lock exits 75 (not 0), says so, and still records skipped_lock" "rc=$rc" "$out"
+        fi
+        # Control: the same run with the lock FREE passes the gate -- whatever it
+        # then fails on (the stub zfs), it is neither 75 nor the skip line.
+        out=$(PATH="$LK/bin:$PATH" STATS_LOG="$LK/stats.log" LOCKDIR="$LK" \
+              bash "$script" "$BOGUS" 2>&1); rc=$?
+        if [ "$rc" -ne 75 ] && ! echo "$out" | grep -q "skipping this run"; then
+            ok "$sname: control -- with the lock free the same run passes the lock gate (rc=$rc, no skip line)"
+        else
+            bad "$sname: control -- with the lock free the same run passes the lock gate" "rc=$rc" "$out"
+        fi
+    done
+else
+    echo "SKIP lock-exit checks: flock/md5sum not available here (CI runs them)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

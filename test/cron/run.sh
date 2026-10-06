@@ -990,6 +990,25 @@ x_old_ran=$(grep -c 'engine ran' "$X_OLDLOG" 2>/dev/null); x_old_ran="${x_old_ra
 check "X7 control: the old shape IS mute under the same failure" \
       "engine=0" "engine=$x_old_ran"
 
+# X8/X9: exit 75 is a WARNING, not a failure (owner, 2026-10-06). The engines
+# exit 75 when the previous run still holds the lock; the REAL zfs-job.sh must
+# call notify-warn.sh (beside notify-fail.sh, the default) and NOT the failure
+# script -- and a real failure must still go to the failure script only.
+X_N="$X_W/notes"; mkdir -p "$X_N"
+printf '#!/bin/sh\necho "FAIL|$1" >> %s/calls\n' "$X_N" > "$X_N/notify-fail.sh"
+printf '#!/bin/sh\necho "WARN|$1" >> %s/calls\n' "$X_N" > "$X_N/notify-warn.sh"
+printf '#!/bin/sh\necho "skipping this run" >&2\nexit "$1"\n' > "$X_N/engine.sh"
+chmod +x "$X_N/notify-fail.sh" "$X_N/notify-warn.sh" "$X_N/engine.sh"
+: > "$X_N/calls"
+bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" -- "$X_N/engine.sh" 75
+check "X8 exit 75 calls notify-warn.sh beside the notify script, never notify-fail" \
+      "WARN|lbl -- skipped, the previous run still holds the lock" "$(cat "$X_N/calls")"
+check "X8b ...and the END marker still records the real status" \
+      "1" "$(grep -c 'ZFS-JOB END lbl rc=75' "$X_N/log")"
+: > "$X_N/calls"
+bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" -- "$X_N/engine.sh" 1
+check "X9 control: exit 1 still goes to notify-fail.sh only" "FAIL|lbl" "$(cat "$X_N/calls")"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
