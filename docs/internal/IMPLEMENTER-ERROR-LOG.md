@@ -1916,6 +1916,12 @@ activate-client's own dry-run lacked the REV-146 history rule, which only
 verify-endpoint had. Neither reached the installed crontab: the dry-run refused
 first, and the second preview was read before `--yes`.
 
+With both fixed (#461) the real `--yes` met a third site: the install guard
+(`assert_target_block_not_clobbered`) counted "18 job line(s) would be DELETED"
+-- nine pulls changed by one token, nine target prunes the mirror replaces. The
+guard was right to refuse something it had no way to recognise; nothing had
+taught it the conversion.
+
 **Cause.** R3: "every sync pull carries -M" was written as a comment over the
 create branches and applied there. I did not grep for the other site that writes
 `flags` -- the refresh of a kept section. The same was true of REV-146's rule:

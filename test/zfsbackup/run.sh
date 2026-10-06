@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -9433,6 +9433,82 @@ got=$(ph_act 1 "t/x@new")
     || bad "probehistory: the rehearsal excused a NEWER target-only snapshot" "got=$got" "$(cat "$PHB/act.log")"
 
 fi   # --- koniec sekcji probehistory ---
+
+if want mirrorguard; then
+# ============================================================================
+# THE INSTALL GUARD AND THE MIRROR (2026-10-06). Self-contained; always
+# eligible, also under `--section mirrorguard`.
+#
+# Measured on pve10 re-activating pve9-synchro to give it the mirror shape:
+# "18 job line(s) would be DELETED" -- nine pulls whose only change was -M, and
+# nine target prunes the mirror replaces. The shipped
+# assert_target_block_not_clobbered on stub crontabs: the conversion passes and
+# says what it excused; each way of reaching for the exemption without being
+# the conversion is still refused.
+# ============================================================================
+MG="$WORK/mirrorguard"; rm -rf "$MG"; mkdir -p "$MG/bin"; : > "$MG/new.conf"
+mg_pull='31 * * * * /root/x/zfs-job.sh "h p backup (r-a)" --log=/root/cron.log -- /root/x/snapget.sh -m "" -e -E vzdump'
+mg_tprune='21 * * * * /root/x/zfs-job.sh "h p prune (r-a)" --log=/root/cron.log -- /root/x/delsnaps.sh -L r -P "vzdump:2" "tank/a" "" -H168'
+mg_sprune='41 * * * * /root/x/zfs-job.sh "h p prune (r-src-a)" --log=/root/cron.log -- /root/x/delsnaps.sh -L r -P "vzdump:2" "u@h:tank/a" "" -H24'
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_pull -A -L r \"u@h:tank/a\""
+  echo "$mg_tprune"
+  echo "$mg_sprune"
+  echo '# END zfs-backup-managed'; } > "$MG/target.cron"
+printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$MG/target.cron" > "$MG/bin/crontab"; chmod +x "$MG/bin/crontab"
+mg_guard() {   # <proposal file> <MIRRORED_LANDINGS words> -> "rc" ; output in $MG/out
+    PATH="$MG/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+        "source '$ZFSBACKUP'; MIRRORED_LANDINGS=($2); gencron_as_target() { cat '$1'; }; assert_target_block_not_clobbered '$MG/new.conf'" > "$MG/out" 2>&1
+    echo "$?"
+}
+# the conversion: the pull gains -M, the target prune goes, the SOURCE prune stays
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_pull -M -A -L r \"u@h:tank/a\""
+  echo "$mg_sprune"
+  echo '# END zfs-backup-managed'; } > "$MG/conv.txt"
+got=$(mg_guard "$MG/conv.txt" "tank/a")
+if [ "$got" = 0 ] && grep -q 'the pull now mirrors its source (-M)' "$MG/out" \
+   && grep -q 'target retention replaced by the mirror (-M)' "$MG/out"; then
+    ok "mirrorguard: a pull gaining -M and its landing's prune going are the conversion -- installed, and both named"
+else
+    bad "mirrorguard: the mirror conversion was refused or passed silently" "rc=$got" "$(cat "$MG/out")"
+fi
+got=$(mg_guard "$MG/conv.txt" "")
+if [ "$got" != 0 ] && grep -q '1 job line(s) would be DELETED' "$MG/out" && grep -q 'prune (r-a)' "$MG/out"; then
+    ok "mirrorguard: ...the same proposal from a caller that mirrored NOTHING still refuses the vanished target prune"
+else
+    bad "mirrorguard: the target-prune exemption applies without this run having mirrored the landing" "rc=$got" "$(cat "$MG/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_sprune"
+  echo '# END zfs-backup-managed'; } > "$MG/nopull.txt"
+got=$(mg_guard "$MG/nopull.txt" "tank/a")
+if [ "$got" != 0 ] && grep -q '1 job line(s) would be DELETED' "$MG/out" && grep -q 'backup (r-a)' "$MG/out"; then
+    ok "mirrorguard: ...a pull that VANISHES is still a deletion, mirrored landing or not"
+else
+    bad "mirrorguard: a vanished pull was excused" "rc=$got" "$(cat "$MG/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_pull -M -A -L r \"u@h:tank/a\""
+  echo '# END zfs-backup-managed'; } > "$MG/nosrc.txt"
+got=$(mg_guard "$MG/nosrc.txt" "tank/a")
+if [ "$got" != 0 ] && grep -q '1 job line(s) would be DELETED' "$MG/out" && grep -q 'prune (r-src-a)' "$MG/out"; then
+    ok "mirrorguard: ...the SOURCE's prune (u@h:...) is not the landing's retention -- its loss is still refused"
+else
+    bad "mirrorguard: a remote source prune was excused as mirrored target retention" "rc=$got" "$(cat "$MG/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_pull -M -A -L r \"u@h:tank/b\""
+  echo "$mg_sprune"
+  echo '# END zfs-backup-managed'; } > "$MG/other.txt"
+got=$(mg_guard "$MG/other.txt" "tank/a")
+if [ "$got" != 0 ] && grep -q 'backup (r-a)' "$MG/out"; then
+    ok "mirrorguard: ...a -M pull of ANOTHER dataset does not stand in for this one"
+else
+    bad "mirrorguard: a -M pull of another dataset excused this one's pull" "rc=$got" "$(cat "$MG/out")"
+fi
+
+fi   # --- koniec sekcji mirrorguard ---
 if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
