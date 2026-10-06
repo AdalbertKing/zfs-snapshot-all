@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 102c8adc6b651acf -->
+<!-- status-covers-digest: 267992831bb193ba -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **verify-endpoint: dłuższa retencja na kolektorze to nie martwy endpoint (2026-10-04, decyzja właściciela „A”).**
+  - **Zmierzone na pve10** przy ponownym zakładaniu pve9-synchro: seed przeszedł, aktywacja
+    stanęła na „none of the known endpoints answered”. `snapget -n` drukował
+    `PLAN=INCREMENTAL` dla każdego datasetu i kończył **rc=1**, bo pve10 trzymał 144 godzinowe,
+    których producent na pve9 już nie ma (lista „konfliktów” na stdout). Linia crona
+    przechodzi obok nich co godzinę -- przyrost od wspólnej bazy starszych nie rusza. Każda
+    relacja z kolektorem trzymającym dłużej niż źródło stawała więc na ponownej aktywacji.
+  - **Zmiana (`zfs-backup.sh`):** `probe_conflicts_are_history` -- rc=1 sondy jest
+    przyjmowane TYLKO gdy stdout to linie `PLAN=` i nazwy migawek tylko-na-celu, a każda z
+    nich jest STARSZA (createtxg na kopii) od wspólnej bazy swojego datasetu. Migawka na
+    celu NOWSZA niż baza, brak bazy, obca linia albo nieczytelny txg -- odmowa jak dotąd.
+    Linie `PLAN=` dalej decydują (FULL-FOREVER nadal zatrzymuje).
+  - **Na żywo (pve10, prawdziwe wyjście sondy):** 145 starszych → przyjęte; z dodaną na
+    celu migawką nowszą od bazy → odmowa; migawka testowa usunięta.
+  - **Testy:** `zfsbackup --section probehistory` 8/0; na main 6/2 -- padają dokładnie
+    przyjęcie historii przez regułę i przez WYKONANĄ sondę (sześć pozostałych to bramki
+    odmowy, które main spełnia, bo odmawia zawsze). Sonda uruchamiana naprawdę z atrapą
+    silnika: to samo wyjście z kodem 1 przechodzi, z kodem 2 daje `FAILED (rc=2)`
+    (REV-20261004-146, kryterium 4).
 
 - **Pasywne pobranie bierze WSZYSTKIE rodziny poza wyjątkami (R5-2, decyzja właściciela 2026-10-04).**
   - **Zmierzone na żywo (pve10 <- pve9, `hdd/lab/ct-201`):** ręczna migawka na źródle,

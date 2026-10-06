@@ -9329,6 +9329,66 @@ probe_source_has_no_snapshots() {   # <host> <port> <alias-known-hosts> <dataset
     [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]
 }
 
+# Is a `snapget -n` rc=1 ONLY its list of snapshots that exist on this host
+# and no longer on the source, every one of them OLDER than that dataset's
+# common base? (pve10 <- pve9, 2026-10-04, re-activating pve9-synchro.)
+#
+# snapget -n exits 1 whenever the target holds a snapshot the source does not
+# (its "conflicts", printed on stdout after the PLAN= lines). A collector that
+# keeps LONGER than its source always does: pve10 kept 168 hourlies of
+# hdd/lab/ct-201, the producer on pve9 fewer, and 144 of them were "conflicts".
+# The cron line pulls past them every hour -- an incremental from the common
+# base does not touch older snapshots -- so the relationship was healthy, and
+# the only thing that failed was this probe, reading rc=1 as "the endpoint did
+# not answer". Every re-activation of an asymmetric-retention relationship
+# stopped here.
+#
+# Only HISTORY is accepted: a target-only snapshot NEWER than the base is real
+# divergence (the receive would roll it away), so it still fails, as does any
+# stdout line that is neither a PLAN= verdict nor a snapshot name, a dataset
+# with no base, or a creation txg that cannot be read. Compared by createtxg on
+# this host's own copy, where both snapshots live.
+#   in:  the probe's stdout       out: PROBE_HISTORY_COUNT, rc 0 = history only
+probe_conflicts_are_history() {
+    local out="$1" line tgt snap base n=0 btxg stxg
+    local -A pbase=() txg=() listed=()
+    PROBE_HISTORY_COUNT=0
+    while IFS= read -r line; do
+        case "$line" in
+            PLAN=*)
+                tgt=$(printf '%s' "$line" | sed -n -E 's/.* tgt=([^ ]+).*/\1/p')
+                base=$(printf '%s' "$line" | sed -n -E 's/.* base=([^ ]+).*/\1/p')
+                [ -n "$tgt" ] && pbase[$tgt]="$base" ;;
+        esac
+    done <<< "$out"
+    [ "${#pbase[@]}" -gt 0 ] || return 1
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in
+            PLAN=*) continue ;;
+            *@*) ;;
+            *) return 1 ;;
+        esac
+        tgt="${line%@*}"; snap="${line#*@}"
+        base="${pbase[$tgt]:-}"
+        case "$base" in ''|null) return 1 ;; esac
+        if [ -z "${listed[$tgt]:-}" ]; then
+            local name val
+            while IFS=$'\t' read -r name val; do
+                txg[$name]="$val"
+            done < <(zfs list -H -p -o name,createtxg -t snapshot -d 1 -- "$tgt" 2>/dev/null)
+            listed[$tgt]=1
+        fi
+        btxg="${txg[$tgt@$base]:-}"; stxg="${txg[$line]:-}"
+        case "$btxg" in ''|*[!0-9]*) return 1 ;; esac
+        case "$stxg" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$stxg" -lt "$btxg" ] || return 1
+        n=$((n + 1))
+    done <<< "$out"
+    [ "$n" -gt 0 ] || return 1
+    PROBE_HISTORY_COUNT=$n
+}
+
 # verify-endpoint below calls this once per candidate until one comes back
 # clean. Sets $PROBE_DETAIL to a human-readable report of whatever went
 # wrong (empty on success). Re-derives the alias known_hosts file itself
@@ -9359,6 +9419,12 @@ probe_snapget_endpoint() {   # <host> <port>
         # shellcheck disable=SC2086
         client_recursive_args "$ds"
         out=$(bash "$SNAPGET" -n ${REC_ARGS[@]+"${REC_ARGS[@]}"} $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" "$base" 2>"$errtmp"); local rc=$?
+        # rc=1 that is only longer retention here (probe_conflicts_are_history):
+        # the endpoint answered, and the PLAN= lines below still decide.
+        if [ "$rc" -eq 1 ] && probe_conflicts_are_history "$out"; then
+            log "  $ds: $PROBE_HISTORY_COUNT older snapshot(s) exist only on this host (it keeps longer than the source) -- history, not a conflict"
+            rc=0
+        fi
         if [ "$rc" -ne 0 ]; then
             failed=$((failed + 1))
             PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'
