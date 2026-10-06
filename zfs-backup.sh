@@ -3312,6 +3312,54 @@ schedule_normalized_identity() {
     sed -E 's/^[^ ]+ [^ ]+ [^ ]+ [^ ]+ [^ ]+ /<SCHEDULE> /'
 }
 
+# THE MIRROR (-M) IS THE SAME PULL, and its landing's own prune is what it
+# replaces (sync is a mirror since 2026-10-06). Re-activating an installed sync
+# relationship to give it that shape changes every pull line by one token and
+# drops every target prune line -- measured on pve10 (pve9-synchro): "18 job
+# line(s) would be DELETED", nine of them the pulls themselves. Both halves are
+# excused NARROWLY, and both speak:
+#   * a pull: only the whole token -M on a snapget.sh line is taken out, so a
+#     line that differs anywhere else is still a different job;
+#   * a target prune: only a LOCAL delsnaps.sh line (no '@' -- a remote source
+#     prune is the source's retention and the mirror does not replace it; no
+#     -B -- bookmarks are not snapshots) whose every scope dataset is a landing
+#     this very run mirrored (MIRRORED_LANDINGS, filled by emit_client_sections
+#     as it writes -M). Any other caller has an empty list and no exemption.
+mirror_normalized_identity() {
+    sed -E '/snapget\.sh/ s/ -M( |$)/\1/'
+}
+MIRRORED_LANDINGS=()
+line_is_mirrored_target_prune() {   # <lost line> -> 0 when the mirror replaces it
+    local line="$1" scope m hit
+    case "$line" in *delsnaps.sh*) ;; *) return 1 ;; esac
+    case "$line" in *" -B "*) return 1 ;; esac
+    [ "${#MIRRORED_LANDINGS[@]}" -gt 0 ] || return 1
+    # The scope is the second-to-last quoted value of the command's own
+    # arguments ("<scope>" "<pattern>" -H..), the shape line_coverage_absorbed
+    # reads; the segment ends at the stderr redirect.
+    scope=$(printf '%s\n' "$line" | awk '{
+        at = index($0, "delsnaps.sh"); seg = substr($0, at)
+        cut = index(seg, " 2>"); if (cut > 0) seg = substr(seg, 1, cut - 1)
+        n = 0; inq = 0; cur = ""
+        for (i = 1; i <= length(seg); i++) {
+            ch = substr(seg, i, 1)
+            if (ch == "\"") { if (inq) { n++; v[n] = cur; cur = ""; inq = 0 } else inq = 1; continue }
+            if (inq) cur = cur ch
+        }
+        if (n >= 2) print v[n-1]
+    }')
+    [ -n "$scope" ] || return 1
+    case "$scope" in *@*) return 1 ;; esac
+    local -a members=()
+    IFS=',' read -ra members <<< "$scope"
+    for m in "${members[@]}"; do
+        hit=0
+        local l; for l in "${MIRRORED_LANDINGS[@]}"; do [ "$l" = "$m" ] && { hit=1; break; }; done
+        [ "$hit" -eq 1 ] || return 1
+    done
+    return 0
+}
+
 endpoint_normalized_identity() {
     sed -E -e 's/(-A "[^@"]+@)[^:"]+:/\1<ENDPOINT>:/' \
            -e 's/"([^"@ ]+@)[^:" ]+:/"\1<ENDPOINT>:/g' \
@@ -3582,6 +3630,18 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                 warn "    that scope was the peer's WHOLE subtree on this collector, so it was also pruning"
                 warn "    any SIBLING relationship pulling from the same source. It no longer does."
                 warn "    RE-ACTIVATE EACH SIBLING to give it its own ladder, or its copies stop being pruned."
+                warn "    $line"
+                continue
+            fi
+            # Sixth exemption: sync became a mirror (see
+            # mirror_normalized_identity). Like the two above it speaks.
+            if printf '%s\n' "$proposed_norm" | mirror_normalized_identity | grep -qxF -- "$norm"; then
+                warn "  the pull now mirrors its source (-M), the job itself stays:"
+                warn "    $line"
+                continue
+            fi
+            if line_is_mirrored_target_prune "$line"; then
+                warn "  target retention replaced by the mirror (-M) -- this landing now holds what its source holds:"
                 warn "    $line"
                 continue
             fi
@@ -4091,6 +4151,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # Reset per call for the same reason as the array below: a stale value here
     # would excuse a coverage loss this run did not plan.
     PRUNE_SCOPE_MIGRATED=""
+    MIRRORED_LANDINGS=()
     # Reset per call: which source datasets got a REMOTE [prune:] this run. The
     # flow reads it after this returns to run the fail-closed grant check for
     # exactly those (and only those) before publishing -- an empty list on a
@@ -4254,6 +4315,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         else
             _pick="$_pick$(client_passive_flags)"
         fi
+        [ -n "$(sync_mirror_flag "$ds")" ] && MIRRORED_LANDINGS+=("$localpath")
         update_section_field "$workfile" "[dataset:$localpath]" flags "$LOAD_FLAGS${_pick}$(sync_mirror_flag "$ds")" \
             || die "[dataset:$localpath] in $workfile has no 'flags' field to refresh -- refusing to leave the relationship carrying stale transport flags. Fix or remove that section by hand and re-run."
         # A mirrored landing's own ladder, if it has one, stops pruning (its
@@ -4327,6 +4389,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
 
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
+        [ -n "$(sync_mirror_flag "$ds")" ] && MIRRORED_LANDINGS+=("$localpath")
         {
             echo
             echo "[dataset:$localpath]"
