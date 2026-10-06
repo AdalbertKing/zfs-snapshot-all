@@ -551,14 +551,14 @@ step_profile() {
     sync_from_chain && chain=1
     while IFS=$'\t' read -r n w c q f sh; do
         [ -n "$n" ] || continue
-        # [polecany] zaraz za nazwą: przy przycięciu wiersza do okna ginie koniec.
-        if [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ]; then
-            label="$(printf '%-15s [polecany] %s' "$n" "$w")"
-        else
-            label="$(printf '%-15s %s' "$n" "$w")"
-        fi
-        [ "$f" = 1 ] && label="$label  [zamraża]"
-        [ "$sh" = flat ] && label="$label  [płaski]"
+        # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
+        # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[płaski]/[polecany]
+        # -- to one rozstrzygają wybór (kroki 8 i 9).
+        local marks=""
+        [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}[polecany] "
+        [ "$f" = 1 ] && marks="${marks}[zamraża] "
+        [ "$sh" = flat ] && marks="${marks}[płaski] "
+        label="$(printf '%-15s %s%s' "$n" "$marks" "$w")"
         # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
         # [zamraża] [płaski] były szersze niż okno i ucinały jej prawy bok.
         items+=("$n" "$(clip_label "$label" $((W - 10)))")
