@@ -9289,6 +9289,31 @@ else
     bad "passivepick: repeated re-activation duplicates the mirror shape" "$(grep -nE -- ' -M|prune *= *no' "$PK/last.conf")"
 fi
 
+# U4 (owner 2026-10-06): a BACKUP landing prunes foreign snapshots like its
+# own -- prune_foreign = yes on its [dataset:] (and on its ladder, when the
+# profile has one). Sync is a mirror and gets none. A re-activation over an
+# installed backup section that predates the field adds it, once.
+sec=$(PK_MODE=backup PK_TARGET=tank/backups pk_emit default); rc=$?
+pf_b=$(grep -cE '^[[:space:]]*prune_foreign[[:space:]]*= yes$' "$PK/last.conf")
+sec=$(pk_emit default); rc2=$?
+pf_s=$(grep -cE '^[[:space:]]*prune_foreign' "$PK/last.conf")
+if [ "$rc" -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$pf_b" -ge 1 ] && [ "$pf_s" -eq 0 ]; then
+    ok "passivepick: U4 -- a backup landing carries prune_foreign = yes ($pf_b section(s)), a sync landing none"
+else
+    bad "passivepick: U4 -- prune_foreign on backup only" "rc=$rc/$rc2 backup=$pf_b sync=$pf_s"
+fi
+PK_MODE=backup PK_TARGET=tank/backups pk_emit default >/dev/null
+sed -i '/^[[:space:]]*prune_foreign[[:space:]]*=/d' "$PK/default.conf"
+PK_MODE=backup PK_TARGET=tank/backups PK_KEEP=1 pk_emit default >/dev/null; rc=$?
+pf_r=$(grep -cE '^[[:space:]]*prune_foreign[[:space:]]*= yes$' "$PK/last.conf")
+PK_MODE=backup PK_TARGET=tank/backups PK_KEEP=1 pk_emit default >/dev/null
+pf_r2=$(grep -cE '^[[:space:]]*prune_foreign[[:space:]]*= yes$' "$PK/last.conf")
+if [ "$rc" -eq 0 ] && [ "$pf_r" -eq "$pf_b" ] && [ "$pf_r2" -eq "$pf_b" ]; then
+    ok "passivepick: U4 -- re-activating an installed backup section gives it prune_foreign, and a second re-activation does not duplicate it"
+else
+    bad "passivepick: U4 -- re-activation and prune_foreign" "rc=$rc want=$pf_b got=$pf_r then=$pf_r2" "$(cat "$PK/last.conf" | head -60)"
+fi
+
 # The declared half: --passive with no --exclude-family used to render a bare
 # -e, which adopts a vzdump or pvesr snapshot whenever one is the newest.
 got=$(unset EXCLUDE_FAMILY_1; PASSIVE=1 client_passive_flags)
@@ -9507,6 +9532,32 @@ if [ "$got" != 0 ] && grep -q 'backup (r-a)' "$MG/out"; then
 else
     bad "mirrorguard: a -M pull of another dataset excused this one's pull" "rc=$got" "$(cat "$MG/out")"
 fi
+
+# U4: re-activation gives the finest tier its foreign protections -- the same
+# job with an empty pattern and -P "<other family>:all". Excused, and named;
+# a changed count or a different (non-empty) pattern is still a deletion.
+mg_hp='21 * * * * /root/x/zfs-job.sh "h p prune (r-a)" --log=/root/cron.log -- /root/x/delsnaps.sh -L r'
+{ echo '# BEGIN zfs-backup-managed'
+  echo "$mg_hp \"tank/a\" \"automated_hourly\" -H24"
+  echo '# END zfs-backup-managed'; } > "$MG/target.cron"
+for _v in 'fg:"" -H24:-P "automated_daily:all" -P "replica_:2" ' 'cnt:"" -H12:-P "automated_daily:all" ' 'pat:"automated_h" -H24:-P "automated_daily:all" '; do
+    _n="${_v%%:*}"; _r="${_v#*:}"; _tail="${_r%%:*}"; _pp="${_r#*:}"
+    { echo '# BEGIN zfs-backup-managed'
+      echo "$mg_hp ${_pp}\"tank/a\" ${_tail}"
+      echo '# END zfs-backup-managed'; } > "$MG/$_n.txt"
+done
+got=$(mg_guard "$MG/fg.txt" "")
+if [ "$got" = 0 ] && grep -q 'foreign snapshots on this landing are now pruned with this tier' "$MG/out"; then
+    ok "mirrorguard: U4 -- the finest tier gaining foreign protections (empty pattern, -P :all) is the same job -- installed, and named"
+else
+    bad "mirrorguard: U4 -- the foreign rewrite of the finest tier was refused or silent" "rc=$got" "$(cat "$MG/out")"
+fi
+got=$(mg_guard "$MG/cnt.txt" "")
+[ "$got" != 0 ] && ok "mirrorguard: U4 -- ...the same rewrite with a different COUNT is still refused" \
+                || bad "mirrorguard: U4 -- a changed count was excused as the foreign rewrite" "$(cat "$MG/out")"
+got=$(mg_guard "$MG/pat.txt" "")
+[ "$got" != 0 ] && ok "mirrorguard: U4 -- ...and a different non-empty pattern is still a deletion" \
+                || bad "mirrorguard: U4 -- a changed pattern was excused as the foreign rewrite" "$(cat "$MG/out")"
 
 fi   # --- koniec sekcji mirrorguard ---
 if want statusjson; then
@@ -12670,6 +12721,9 @@ gsm_emit "$GSMC" 1 || bad "gfsmigrate: fixture CREATE" "$(cat "$WORK/gsm.out")"
 # can differ.
 python_free_rewrite() {
     awk '
+        # A legacy install predates prune_foreign (U4, 2026-10-06): the fresh
+        # emit carries it, the shape this fixture stands for never did.
+        /^\tprune_foreign[ \t]*=/ { next }
         /^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; inl = 1; next }
         /^\[/ { inl = 0 }
         inl && /^\tgfs_pattern[ \t]*=/   { print "\tgfs_pattern  = automated_hourly"; next }
@@ -12718,7 +12772,8 @@ fi
 # assertion above discriminates on the pattern, not on the migration itself.
 GSMD="$GSM/same.conf"; : > "$GSMD"
 gsm_emit "$GSMD" 1
-awk '/^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; next } { print }' "$GSMD" > "$GSMD.new" && mv "$GSMD.new" "$GSMD"
+awk '/^\tprune_foreign[ \t]*=/ { next }   # a legacy install predates the field (U4)
+     /^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; next } { print }' "$GSMD" > "$GSMD.new" && mv "$GSMD.new" "$GSMD"
 gsm_emit "$GSMD" 0; gsm_drc=$?
 gsm_dafter=$(gsm_render "$GSMD")
 if [ "$gsm_drc" -eq 0 ] && printf '%s' "$gsm_dafter" | grep -q '"tank/backups/pve9/rpool/data" "automated_" '; then

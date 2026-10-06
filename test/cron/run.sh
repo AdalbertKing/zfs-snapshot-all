@@ -1095,6 +1095,108 @@ case "$mrc:$mo" in
 esac
 
 # ===========================================================================
+# FOR. FOREIGN SNAPSHOTS ARE PRUNED LIKE OUR OWN (U4, owner 2026-10-06: "obce
+# migawki powinny byc ciete jak wlasne"). prune_foreign = yes on a landing:
+# the FINEST tier's line drops its pattern (delsnaps then takes every snapshot
+# not protected) and protects every OTHER family pruned on that path with
+# :all, plus the replica families with :2. The other tiers are untouched; a
+# GFS ladder is the carrier when there is one; a remote [prune:] refuses.
+FOR="$TMPD/foreign"; mkdir -p "$FOR"
+for_conf() {   # <dataset extra lines> <extra sections> -> $FOR/c.conf
+    cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	keep           = 24
+[template:daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	keep           = 7
+[dataset:tank/b/rpool/vm]
+	use_template = daily,hourly
+	src          = zb@10.0.0.1:rpool/vm
+	pair_label   = r1
+$1
+$2
+EOF
+}
+for_run() { REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$FOR/c.conf" 2>&1; }
+for_conf "	prune_foreign = yes" ""
+fo=$(for_run); frc=$?
+check "FOR1 a prune_foreign landing renders, rc=0" "0" "$frc"
+check "FOR2 ...the FINEST tier (hourly, listed second) loses its pattern and protects the daily family and replica_:2" "1" \
+      "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -L r1 -P "automated_daily:all" -P "replica_:2" "tank/b/rpool/vm" "" -H24')"
+check "FOR3 ...the daily tier keeps its own line, pattern and count" "1" \
+      "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -L r1 "tank/b/rpool/vm" "automated_daily" -D7')"
+check "FOR4 ...and nothing else prunes there" "2" "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh')"
+for_conf "" ""
+fo=$(for_run)
+check "FOR5 control: without the field the hourly line keeps its pattern and carries no extra -P" "1" \
+      "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -L r1 "tank/b/rpool/vm" "automated_hourly" -H24')"
+for_conf "	prune_foreign = yes" "[replica:usb]
+	source   = tank/b/rpool/vm
+	dst      = usb/rep
+	schedule = 30 2 * * *
+	prefix   = kopia_
+	media    = removable
+[excluded:vzdump]
+	keep = 2"
+fo=$(for_run)
+check "FOR6 a [replica:] prefix in the config is protected :2 too, and the [excluded:] floor still rides every line after it" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '"automated_daily:all" -P "kopia_:2" -P "replica_:2" -P "vzdump:2" "tank/b/rpool/vm" "" -H24')"
+cat > "$FOR/c.conf" <<'EOF'
+[defaults]
+	host_label = f
+[template:hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	pattern        = automated_hourly
+	retain         = -H24
+[template:daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	pattern        = automated_daily
+	retain         = -D7
+[dataset:tank/b/rpool/vm]
+	use_template = hourly,daily
+	src          = zb@10.0.0.1:rpool/vm
+	pair_label   = r1
+[prune:tank/b/rpool/vm]
+	use_template   = hourly,daily
+	gfs            = yes
+	gfs_pattern    = automated_
+	prune_schedule = 21 * * * *
+	pair_label     = r1
+	prune_foreign  = yes
+EOF
+fo=$(for_run)
+check "FOR7 a GFS ladder is the carrier: no pattern, replica_:2, the same rungs" "1" \
+      "$(printf '%s\n' "$fo" | grep -c 'delsnaps.sh -G -L r1 -P "replica_:2" "tank/b/rpool/vm" "" -H24 -D7')"
+cat > "$FOR/c.conf" <<'EOF'
+[defaults]
+	host_label = f
+[template:t]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+[prune:zb@10.0.0.1:rpool/vm]
+	use_template  = t
+	prune_foreign = yes
+EOF
+fo=$(for_run); frc=$?
+case "$frc:$fo" in
+    0:*) bad "FOR8 prune_foreign on a REMOTE scope is refused (foreign snapshots there belong to the source)" "$fo" ;;
+    *"prune_foreign = yes on a REMOTE scope"*) ok "FOR8 prune_foreign on a REMOTE scope is refused (foreign snapshots there belong to the source)" ;;
+    *) bad "FOR8 prune_foreign on a REMOTE scope is refused" "$fo" ;;
+esac
+
+# ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
 # Inline prune entities are grouped so that datasets sharing a schedule, a

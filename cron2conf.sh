@@ -736,7 +736,10 @@ classify_lines() {
     done
     if [ -z "$HOST_LABEL" ]; then
         local e notify
-        for e in "${SEND_E[@]}"; do
+        # PULL_E too (same shape, notify last): a backup collector PULLS, and
+        # with a GFS ladder it has no plain prune line either -- such a host
+        # could not be recovered at all (measured 2026-10-06, pulls + -G only).
+        for e in "${SEND_E[@]}" "${PULL_E[@]}"; do
             notify="${e##*"$SEP"}"
             parse_notify_text "$notify" && { HOST_LABEL="$N_HOST"; break; }
         done
@@ -809,7 +812,78 @@ get_section() {
     SECTION_KEY="$key"
 }
 section_add_template() { local key="$1" t="$2"; SECTION_TEMPLATES["$key"]="${SECTION_TEMPLATES[$key]:+${SECTION_TEMPLATES[$key]},}${t}"; }
-section_set_field() { local key="$1" k="$2" v="$3"; [ -n "$v" ] && SECTION_FIELDS["$key"]="${SECTION_FIELDS[$key]}${k} = ${v}"$'\n'; }
+# The SAME field with the SAME value is written once: a prune line and the
+# monitor matched to it both carry -L, and the second write made gen-cron
+# refuse the recovered config ("duplicate field 'pair_label'") -- measured
+# 2026-10-06 on any relationship whose prune tier has a monitor. A different
+# value is still appended, so a real conflict stays loud.
+section_set_field() {
+    local key="$1" k="$2" v="$3"
+    [ -n "$v" ] || return 0
+    case $'\n'"${SECTION_FIELDS[$key]:-}" in *$'\n'"${k} = ${v}"$'\n'*) return 0 ;; esac
+    SECTION_FIELDS["$key"]="${SECTION_FIELDS[$key]:-}${k} = ${v}"$'\n'
+}
+
+# ---- foreign-snapshot carriers (U4, gen-cron apply_foreign_prune) ----------
+# gen-cron gives the FINEST prune line of a prune_foreign landing an EMPTY
+# pattern plus `-P "<other family>:all"` for every other family pruned on the
+# same path and `-P "<replica prefix>:2"`. Read naively those -P would become
+# [excluded:<family>] keep = all -- and the regenerated config would then
+# protect the daily/weekly/monthly families from their OWN prune lines, i.e.
+# stop pruning them at all. So a line is recognised as the carrier first: an
+# empty pattern carrying an ":all" protection for a pattern another prune line
+# on the same scope uses, or the replica protection. Those protections are
+# taken off it (they are gen-cron's own rendering, not the admin's floors),
+# and the scope is marked prune_foreign.
+declare -A FOREIGN_SCOPE=()
+foreign_strip() {   # <protect csv> <other patterns, space-joined> <replica prefixes, space-joined> -> FS_OUT, FS_HIT
+    local tok out="" pfx keep hit=0
+    local IFS=','
+    for tok in $1; do
+        [ -n "$tok" ] || continue
+        pfx="${tok%%:*}"; keep="${tok#*:}"
+        if [ "$keep" = all ] && case " $2 " in *" $pfx "*) true ;; *) false ;; esac; then hit=1; continue; fi
+        if [ "$keep" = 2 ] && case " $3 " in *" $pfx "*) true ;; *) false ;; esac; then hit=1; continue; fi
+        out="${out}${tok},"
+    done
+    FS_HIT=$hit
+    FS_OUT="$out"
+}
+mark_foreign_prune() {
+    local i j e f sched scope pattern retain rec cc protect notify plbl sshf others reps newp
+    reps="replica_"
+    for e in "${REPL_E[@]+"${REPL_E[@]}"}"; do
+        IFS="$SEP" read -r _ _ _ _ f _ <<< "$e"
+        [ -n "$f" ] && reps="$reps $f"
+    done
+    for i in "${!PRUNE_E[@]}"; do
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "${PRUNE_E[$i]}"
+        [ -z "$pattern" ] || continue
+        others=""
+        for j in "${!PRUNE_E[@]}"; do
+            [ "$j" = "$i" ] && continue
+            IFS="$SEP" read -r _ f2s f2p _ <<< "${PRUNE_E[$j]}"
+            [ "$f2s" = "$scope" ] && [ -n "$f2p" ] && others="$others $f2p"
+        done
+        foreign_strip "$protect" "$others" "$reps"; newp="$FS_OUT"
+        [ "$FS_HIT" -eq 1 ] || continue
+        FOREIGN_SCOPE["$scope"]=1
+        PRUNE_E[$i]="${sched}${SEP}${scope}${SEP}${pattern}${SEP}${retain}${SEP}${rec}${SEP}${cc}${SEP}${newp}${SEP}${notify}${SEP}${plbl}${SEP}${sshf}"
+    done
+    for i in "${!GFS_E[@]}"; do
+        IFS="$SEP" read -r sched scope pattern retain rec cc protect notify plbl sshf <<< "${GFS_E[$i]}"
+        [ -z "$pattern" ] || continue
+        others=""
+        for j in "${!PRUNE_E[@]}"; do
+            IFS="$SEP" read -r _ f2s f2p _ <<< "${PRUNE_E[$j]}"
+            [ "$f2s" = "$scope" ] && [ -n "$f2p" ] && others="$others $f2p"
+        done
+        foreign_strip "$protect" "$others" "$reps"; newp="$FS_OUT"
+        [ "$FS_HIT" -eq 1 ] || continue
+        FOREIGN_SCOPE["$scope"]=1
+        GFS_E[$i]="${sched}${SEP}${scope}${SEP}-${SEP}${retain}${SEP}${rec}${SEP}${cc}${SEP}${newp}${SEP}${notify}${SEP}${plbl}${SEP}${sshf}"
+    done
+}
 
 # ---- excluded (-P) sections: union of every distinct "prefix:keep" seen ----
 build_excluded_sections() {
@@ -1002,6 +1076,7 @@ emit_prune_and_monitor_sections() {
         [ "$cc" = "1" ] && section_set_field "$key" clear_cut yes
         [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
         [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
+        [ -n "${FOREIGN_SCOPE[$scope]:-}" ] && section_set_field "$key" prune_foreign yes
         members="${PRUNE_BUCKET[$bkey]}"
         while IFS= read -r line; do
             [ -n "$line" ] || continue
@@ -1012,7 +1087,19 @@ emit_prune_and_monitor_sections() {
                 [ -n "${MON_USED[$midx]:-}" ] && continue
                 local msched mscope mpattern mwarn mcrit mrec mnotify mplbl
                 IFS="$SEP" read -r msched mscope mpattern mwarn mcrit mrec mnotify mplbl <<< "${MON_E[$midx]}"
-                if [ "$mscope" = "$scope" ] && [ "$mrec" = "$rec" ] && [ "$mpattern" = "$pattern" ]; then
+                # The foreign carrier's line lost its pattern; its monitor
+                # still names the family, so it is the one on this scope whose
+                # pattern no OTHER prune line here uses.
+                local _fmatch=0
+                if [ -z "$pattern" ] && [ -n "${FOREIGN_SCOPE[$scope]:-}" ] && [ "$mscope" = "$scope" ] && [ "$mrec" = "$rec" ]; then
+                    _fmatch=1
+                    local _o
+                    for _o in "${PRUNE_E[@]}"; do
+                        IFS="$SEP" read -r _ _os _op _ <<< "$_o"
+                        [ "$_os" = "$scope" ] && [ "$_op" = "$mpattern" ] && { _fmatch=0; break; }
+                    done
+                fi
+                if [ "$_fmatch" -eq 1 ] || { [ "$mscope" = "$scope" ] && [ "$mrec" = "$rec" ] && [ "$mpattern" = "$pattern" ]; }; then
                     match_idx="$midx"; mon_warn="$mwarn"; mon_crit="$mcrit"
                     parse_notify_text "$mnotify" && { mon_tier="$N_TIER"; mon_label="$N_LABEL"; }
                     [ -n "$mplbl" ] && section_set_field "$key" pair_label "$mplbl"
@@ -1020,6 +1107,15 @@ emit_prune_and_monitor_sections() {
                 fi
             done
             [ "$match_idx" -ge 0 ] && MON_USED["$match_idx"]=1
+            # The carrier's family comes back from its monitor; with none, "-"
+            # (prefixless) renders the same empty pattern.
+            if [ -z "$pattern" ] && [ -n "${FOREIGN_SCOPE[$scope]:-}" ]; then
+                if [ "$match_idx" -ge 0 ]; then
+                    IFS="$SEP" read -r _ _ pattern _ <<< "${MON_E[$match_idx]}"
+                else
+                    pattern="-"
+                fi
+            fi
             new_template prune_schedule "$sched" pattern "$pattern" retain "$retain" notify_raw_prune "$notify" \
                  tier_label "$mon_tier" notify "$mon_label" monitor_warn "$mon_warn" monitor_crit "$mon_crit"
             section_add_template "$key" "$NEW_TEMPLATE_NAME"
@@ -1060,6 +1156,7 @@ build_gfs_sections() {
         local key="$SECTION_KEY"
         section_set_field "$key" gfs yes
         section_set_field "$key" gfs_pattern "$pattern"
+        [ -n "${FOREIGN_SCOPE[$scope]:-}" ] && section_set_field "$key" prune_foreign yes
         [ -n "$plbl" ] && section_set_field "$key" pair_label "$plbl"
         [ -n "$sshf" ] && section_set_field "$key" ssh_flags "$sshf"
         section_set_field "$key" pattern "$pattern"
@@ -1171,6 +1268,7 @@ render_config() {
 ###############################################################################
 extract_block
 classify_lines
+mark_foreign_prune
 build_excluded_sections
 build_send_sections
 build_pull_sections

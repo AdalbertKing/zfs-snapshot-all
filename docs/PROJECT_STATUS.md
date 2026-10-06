@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bf0c523830db4091 -->
+<!-- status-covers-digest: 5aaa1aa4db1d4337 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,43 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **U4: obce migawki na kolektorze backupu są cięte jak własne (2026-10-06, właściciel: „obce migawki powinny być cięte jak własne”).**
+  - **Było:** pobranie niesie `-I`, więc wszystko, co źródło ma między naszymi migawkami
+    (ręczne, cudze rodziny), lądowało na kolektorze i nikt tego nie przycinał.
+  - **Zmiana:**
+    - `zfs-backup.sh` pisze `prune_foreign = yes` w `[dataset:]` (i `[prune:]`, gdy profil
+      ma drabinę) każdego lądowiska BACKUP, przy tworzeniu i przy ponownej aktywacji.
+      Synchro nie, bo jest lustrem;
+    - gen-cron (`apply_foreign_prune`): linia NAJDROBNIEJSZEGO szczebla (najmniejsza
+      jednostka retencji; przy drabinie GFS ona sama) traci maskę i dostaje `-P
+      "<inna rodzina>:all"` dla każdej rodziny przycinanej na tej ścieżce oraz `-P
+      "<prefiks repliki>:2"` (`replica_` i prefiksy `[replica:]` z configu). Obce liczą się
+      razem z godzinowymi. Najnowsza migawka, czyli baza pobrania, zostaje zawsze.
+      Pozostałe szczeble są bez zmian. Zakres zdalny jest odmawiany;
+    - strażnik instalacji: siódmy wyjątek, ta sama linia z pustą maską i nową ochroną
+      (wypisywany). Inny licznik albo inny niepusty wzorzec dalej są odrzucane;
+    - `cron2conf` rozpoznaje linię przewoźnika (pusta maska + `:all` dla wzorca innej linii
+      na tym zakresie albo `replica_:2`). Zdejmuje tę ochronę, zamiast robić z niej
+      `[excluded:] keep = all`, które wyłączyłoby przycinanie dobowych itd. Wzorzec szczebla
+      odtwarza z jego monitora i ustawia `prune_foreign = yes`.
+  - **Przy okazji, dwa błędy `cron2conf` sprzed zmiany (na main też):**
+    - linia prune i dopasowany monitor z `-L` dawały podwójne `pair_label`, więc gen-cron
+      odmawiał odtworzonego configu;
+    - kolektor z samymi pobraniami i drabiną GFS nie dawał się odtworzyć („could not
+      determine host_label”), bo `PULL_E` nie było czytane.
+  - **Testy:**
+    - `cron` 162/0 (+8 FOR, kontrola na main 7 FAIL);
+    - `cron2conf` 35/0 (+4 round-tripy: foreign-tiers, foreign-gfs, monitor-pairlabel,
+      pull-gfs-only; kontrola 4 FAIL);
+    - `zfsbackup --section passivepick` 12/0, `mirrorguard` 8/0 (kontrola 1+1 FAIL).
+  - **Na żywo, pve11:**
+    - prawdziwy `delsnaps` na roboczym `hdd/u4test`: obca migawka wypadła razem z
+      najstarszymi godzinowymi, dobowa i `vzdump` zostały, `replica_` trzyma 2 najnowsze;
+      dataset usunięty;
+    - `gui-ab`: ponowna aktywacja rc=0, strażnik nazwał zmianę, linia godzinowa na sucho:
+      0 do usunięcia przy 9 godzinowych na 24.
+  - **Uwaga:** istniejące relacje backup dostaną to przy ponownej aktywacji, nie same.
 
 - **Uwagi z testu łańcucha: U2, U5, U6, U8 (2026-10-06, właściciel: „koduj U2, U8, U5 i U6”).**
   - **U2 – rozrzut przenosi godzinę.** `schedule_spread_tiers` zawijało minutę w tej samej
