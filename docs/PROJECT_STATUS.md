@@ -35,9 +35,11 @@
     Linie `PLAN=` dalej decydują (FULL-FOREVER nadal zatrzymuje).
   - **Na żywo (pve10, prawdziwe wyjście sondy):** 145 starszych → przyjęte; z dodaną na
     celu migawką nowszą od bazy → odmowa; migawka testowa usunięta.
-  - **Testy:** `zfsbackup --section probehistory` 6/0; na main 4/2 -- padają dokładnie
-    przyjęcie historii i wpięcie w sondę (cztery pozostałe to bramki odmowy, które main
-    spełnia, bo odmawia zawsze).
+  - **Testy:** `zfsbackup --section probehistory` 8/0; na main 6/2 -- padają dokładnie
+    przyjęcie historii przez regułę i przez WYKONANĄ sondę (sześć pozostałych to bramki
+    odmowy, które main spełnia, bo odmawia zawsze). Sonda uruchamiana naprawdę z atrapą
+    silnika: to samo wyjście z kodem 1 przechodzi, z kodem 2 daje `FAILED (rc=2)`
+    (REV-20261004-146, kryterium 4).
 
 - **Pasywne pobranie bierze WSZYSTKIE rodziny poza wyjątkami (R5-2, decyzja właściciela 2026-10-04).**
   - **Zmierzone na żywo (pve10 <- pve9, `hdd/lab/ct-201`):** ręczna migawka na źródle,
