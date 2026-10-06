@@ -364,6 +364,11 @@ Instead of `--mode=backup` in step 2:
 
 One difference, but a fundamental one: **paths are reproduced one to one.**
 
+And since 2026-10-06 so are the **snapshots**: a sync relationship is a mirror.
+Every pull carries `snapget.sh -M`, so what the source prunes is removed here at
+the next run, and the destination keeps no retention of its own. History beyond
+the source's own retention belongs to a backup relationship, not to sync.
+
 ```
 source:       rpool/data/vm-100-disk-0
 destination:  rpool/data/vm-100-disk-0     <- identical path, other host
