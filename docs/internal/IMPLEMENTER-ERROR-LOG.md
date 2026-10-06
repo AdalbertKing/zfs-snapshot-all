@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1899,6 +1899,20 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E71 — a one-line follow-up fix pushed without the gates (2026-10-06, R4)
+
+**Genesis.** PR #464 went red on `tui`: `clip_label` hid `[płaski]` in the
+step-6 row at width 76. I fixed the label order, ran the suite, committed and
+pushed -- without `./test/impact.sh --refresh-status` and `--verify`. The
+status digest covers `tui/new-relation.sh`, so the next CI run went red on
+"dependency graph matches the tree" and cost one more full CI round.
+
+**Cause.** R4: the gates were treated as part of "a stage", not of "a commit".
+A follow-up felt too small to need them; size is not what the digest measures.
+
+**Rule.** R4. Every commit that touches a tracked file runs `--refresh-status`
+and `--verify` first, follow-ups included.
 
 ### E70 — the mirror reached every sync section a CREATE writes, and none a re-activation keeps (2026-10-06, R3)
 
