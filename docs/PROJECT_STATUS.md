@@ -10097,6 +10097,16 @@ stanem recenzji.
 
 ### Znane luki, nie planowane do zamknięcia teraz
 
+- **Osierocone nadania ZFS po uid przechodzą na NOWE konto z tym samym uid** (2026-10-06,
+  odbudowa pve9). `zfs allow` zapisuje nadanie po numerze uid w PULI, a pula przeżywa
+  reinstalację systemu. Na odtworzonym pve9 stara pula `hdd` niosła nadania starego
+  `zfsbackup` (uid 1001: na całe `hdd` z `destroy,receive,rollback` i na 4 korzeniach
+  `hdd/lab`) oraz starego `zfsbackup-pve10` (uid 1005). `deploy.sh --join` założył nowe
+  `zfsbackup-pve10` z uid **1001** -- i to konto od razu widziało całą pulę, szerzej niż jego
+  zakres, ZANIM `--commit-scope` cokolwiek nadał. Zdjęte ręcznie (`zfs unallow -u 1001/1005`)
+  przed zatwierdzeniem zakresu. Właściwie: `deploy.sh` przy zakładaniu konta (i `--check-only`)
+  powinien wykrywać nadania dla uid bez konta oraz dla świeżo nadanego uid i odmawiać.
+
 - **Tryb próbny `snapget -n` nie zna zapasowej ścieżki przez zakładkę** (2026-10-06, pve10
   <- pve9). Po przestoju dłuższym niż retencja źródła `PLAN=` mówi `base=null`, a prawdziwy
   bieg idzie przyrostowo od zakładki `#tgt-…` i kończy rc=0. `verify-endpoint` (i każdy,
