@@ -4644,7 +4644,9 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 else
                     echo "	recursive    = no"
                 fi
-                [ "$sync_mode" -eq 0 ] && echo "	prune_foreign = yes"
+                # Not on a MIGRATED ladder: that moves the installed policy
+                # verbatim (REV-141); the next ordinary re-activation adds it.
+                [ "$sync_mode" -eq 0 ] && [ -z "$LEGACY_LADDER_BODY" ] && echo "	prune_foreign = yes"
                 echo "	pair_label   = $name"
                 echo "	notify       = ${name}-$(basename "$ds")"
             } >> "$workfile" || return 1

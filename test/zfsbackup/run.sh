@@ -12721,6 +12721,9 @@ gsm_emit "$GSMC" 1 || bad "gfsmigrate: fixture CREATE" "$(cat "$WORK/gsm.out")"
 # can differ.
 python_free_rewrite() {
     awk '
+        # A legacy install predates prune_foreign (U4, 2026-10-06): the fresh
+        # emit carries it, the shape this fixture stands for never did.
+        /^\tprune_foreign[ \t]*=/ { next }
         /^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; inl = 1; next }
         /^\[/ { inl = 0 }
         inl && /^\tgfs_pattern[ \t]*=/   { print "\tgfs_pattern  = automated_hourly"; next }
@@ -12769,7 +12772,8 @@ fi
 # assertion above discriminates on the pattern, not on the migration itself.
 GSMD="$GSM/same.conf"; : > "$GSMD"
 gsm_emit "$GSMD" 1
-awk '/^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; next } { print }' "$GSMD" > "$GSMD.new" && mv "$GSMD.new" "$GSMD"
+awk '/^\tprune_foreign[ \t]*=/ { next }   # a legacy install predates the field (U4)
+     /^\[prune:tank\/backups\/pve9\/rpool\/data\]$/ { print "[prune:tank/backups/pve9]"; next } { print }' "$GSMD" > "$GSMD.new" && mv "$GSMD.new" "$GSMD"
 gsm_emit "$GSMD" 0; gsm_drc=$?
 gsm_dafter=$(gsm_render "$GSMD")
 if [ "$gsm_drc" -eq 0 ] && printf '%s' "$gsm_dafter" | grep -q '"tank/backups/pve9/rpool/data" "automated_" '; then
