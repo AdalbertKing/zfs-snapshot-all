@@ -1196,6 +1196,30 @@ case "$frc:$fo" in
     *) bad "FOR8 prune_foreign on a REMOTE scope is refused" "$fo" ;;
 esac
 
+# K3 (2026-10-06): a [prune:] section accepts prune_schedule_<tier> and each
+# tier's line runs at ITS OWN spread minute; a tier without the field keeps its
+# template's schedule (control).
+cat > "$FOR/c.conf" <<'EOF'
+[defaults]
+	host_label = f
+[template:src_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+[template:src_daily]
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	retain         = -D7
+[prune:zb@10.0.0.1:rpool/vm]
+	use_template   = src_hourly,src_daily
+	prune_schedule_src_hourly = 5 * * * *
+	ssh_flags      = -p 22
+EOF
+fo=$(for_run); frc=$?
+check "SPK1 a [prune:] with prune_schedule_<tier> renders, rc=0" "0" "$frc"
+check "SPK2 ...the hourly source prune runs at its own spread minute" "1" "$(printf '%s\n' "$fo" | grep -c '^5 \* \* \* \* .*delsnaps.sh .*"automated_hourly" -H24')"
+check "SPK3 ...the daily one, given no field, keeps its template's schedule" "1" "$(printf '%s\n' "$fo" | grep -c '^31 1 \* \* \* .*delsnaps.sh .*"automated_daily" -D7')"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #

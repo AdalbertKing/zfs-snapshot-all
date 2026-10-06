@@ -450,6 +450,58 @@ done
 # dependencies into this suite would mean a stub per dependency, and a harness
 # that elaborate is a second implementation to keep true, not a test.
 
+# K3 (lab campaign, 2026-10-06): A MULTI-CADENCE SOURCE PRUNE IS SPREAD TIER
+# BY TIER. With no single schedule the source prune kept the template's
+# minutes -- every relationship pruned its source at :21, 01:31, ... and two
+# collectors hit pve9b in the same minute. Given its base (send minute + 40,
+# unwrapped), each source tier now moves by the same delta, hour carried.
+emit_src_prune_tiered() {   # <base minute> -> the emitted section
+    local t; t=$(mktemp); local wf; wf=$(mktemp)
+    printf '[template:profile__p__src_hourly]\n\tprune_schedule = 21 * * * *\n\n[template:profile__p__src_daily]\n\tprune_schedule = 31 1 * * *\n' > "$wf"
+    { echo 'set -u'
+      echo 'PROFILE_PRUNE_FILE=/dev/null'
+      printf 'emit_source_prune_fragment() { printf "\\tuse_template = profile__p__src_hourly,profile__p__src_daily\\n"; }\n'
+      echo 'is_recursive_root() { return 1; }'
+      lift schedule_with_minute
+      lift schedule_shift_expr
+      lift schedule_spread_tiers
+      lift append_source_prune_create
+      printf 'append_source_prune_create %q pve9 "# managed" %q "-p 22" hdd/labsrc /dev/null "" %q\n' \
+             "$wf" "acct@1.2.3.4:hdd/labsrc" "$1"
+    } > "$t"
+    bash "$t" >/dev/null 2>&1
+    sed -n '/^\[prune:/,$p' "$wf"; rm -f "$t" "$wf"
+}
+k3a="$(emit_src_prune_tiered 60)"   # relationship minute 20
+k3b="$(emit_src_prune_tiered 85)"   # relationship minute 45
+if printf '%s\n' "$k3a" | grep -qx '	prune_schedule_profile__p__src_hourly = 0 \* \* \* \*' \
+   && printf '%s\n' "$k3a" | grep -qx '	prune_schedule_profile__p__src_daily = 10 2 \* \* \*' \
+   && printf '%s\n' "$k3b" | grep -qx '	prune_schedule_profile__p__src_hourly = 25 \* \* \* \*' \
+   && printf '%s\n' "$k3b" | grep -qx '	prune_schedule_profile__p__src_daily = 35 2 \* \* \*'; then
+    ok "K3: a multi-cadence source prune is spread tier by tier from the third slot -- two relationships, two different minute sets, tier offsets kept, hour carried"
+else
+    bad "K3: multi-cadence source prune not spread" "a: $(printf '%s' "$k3a" | tr '\t\n' ' |')" "b: $(printf '%s' "$k3b" | tr '\t\n' ' |')"
+fi
+k3c="$(emit_src_prune_tiered "")"
+case "$k3c" in
+    *prune_schedule*) bad "K3: control -- without a base nothing is spread (the template's own schedule, as before)" "$k3c" ;;
+    *)                ok "K3: control -- without a base nothing is spread (the template's own schedule, as before)" ;;
+esac
+
+# K3, the reader beside it: `status` printed the spread source schedules as
+# SOURCES (its src match took any line containing "src" before '='). Only the
+# field named src is a source.
+k3cfg=$(mktemp)
+printf '[dataset:x]\n\t# managed-by: zfs-backup.sh client=c\n\tsrc          = a@h:hdd/data\n[prune:a@h:hdd/data]\n\t# managed-by: zfs-backup.sh client=c\n\tprune_schedule_profile__p__src_hourly = 29 * * * *\n' > "$k3cfg"
+k3t=$(mktemp)
+{ lift status_sources_from_config; printf 'CRON_CONFIG=%q status_sources_from_config c\n' "$k3cfg"; } > "$k3t"
+k3s=$(bash "$k3t" 2>&1); rm -f "$k3t" "$k3cfg"
+if [ "$k3s" = "a@h:hdd/data" ]; then
+    ok "K3: status lists the src field only -- a spread prune_schedule_<..src_hourly> line is not a source"
+else
+    bad "K3: status lists schedules as sources" "got=[$k3s]"
+fi
+
 echo "--------------------------------------------"
 echo "stagger: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
