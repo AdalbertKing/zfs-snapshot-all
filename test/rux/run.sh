@@ -449,6 +449,97 @@ else
     bad "16b. --name=a disambiguates and selects the named relationship" "rc=$rc out=$out"
 fi
 
+# 16c/16d. ONE RELATIONSHIP PER PAIR OF HOSTS (D1, 2026-10-06). An explicit NEW
+#     --name for a host that already has a LIVE relationship used to skip the
+#     host lookup entirely: the second relationship reused the shared pairing
+#     record and extended the first one's committed scope before failing at
+#     --join (measured on pve10). Refused now -- in the plan AND under
+#     --install, before any pairing call. A removed (tombstone) record does not
+#     count, and resuming the existing name (16b) is untouched.
+mkdir -p "$WORK/16c/clients"
+cat > "$WORK/16c/clients/pve2.conf" <<EOF
+CLIENT_NAME=pve2
+PEER_HOST=pve2
+STATE=active
+RUX_SOURCE=pve2:rpool/data
+RUX_TARGET=hdd/backup
+RUX_MODE=
+EOF
+: > "$INST_PAIR_LOG"
+out="$( ( CLIENTS_DIR="$WORK/16c/clients"
+    rux_entry --source=pve2:rpool/other --target=hdd/backup --name=nowa
+) 2>&1 )"; rc=$?
+out2="$( ( CLIENTS_DIR="$WORK/16c/clients"
+    DEPLOY="$INST_DEPLOY"
+    cmd_seed()     { echo "SEED $*" >> "$WORK/16c/order"; }
+    cmd_activate() { echo "ACTIVATE $*" >> "$WORK/16c/order"; }
+    rux_entry --source=pve2:rpool/other --target=hdd/backup --name=nowa --install --yes
+) 2>&1 )"; rc2=$?
+if [ "$rc" -ne 0 ] && [ "$rc2" -ne 0 ] \
+        && printf '%s' "$out" | grep -q "already has relationship 'pve2' with pve2" \
+        && printf '%s' "$out2" | grep -q "already has relationship 'pve2' with pve2" \
+        && [ ! -s "$INST_PAIR_LOG" ] && [ ! -e "$WORK/16c/order" ] \
+        && [ ! -e "$WORK/16c/clients/nowa.conf" ]; then
+    ok "16c. a NEW --name for a host with a live relationship is refused in the plan and under --install -- no pairing, no record"
+else
+    bad "16c. a NEW --name for a host with a live relationship is refused in the plan and under --install -- no pairing, no record" \
+        "rc=$rc rc2=$rc2 out=$out out2=$out2 pair=$(cat "$INST_PAIR_LOG" 2>/dev/null)"
+fi
+printf 'STATE=removed\n' >> "$WORK/16c/clients/pve2.conf"
+out="$( ( CLIENTS_DIR="$WORK/16c/clients"
+    rux_entry --source=pve2:rpool/other --target=hdd/backup --name=nowa
+) 2>&1 )"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'relationship name:.*nowa$'; then
+    ok "16d. control: once that relationship is removed, the same new --name plans normally"
+else
+    bad "16d. control: once that relationship is removed, the same new --name plans normally" "rc=$rc out=$out"
+fi
+
+# 21c/21d. U1 (2026-10-06): with --grant-remotely the fresh enrolment tells
+#     the remote --join that the collector signs the scope itself
+#     (JOIN_SCOPE_BY_COLLECTOR=1, which deploy.sh --pair carries over ssh), so
+#     the join stops asking a question nobody can answer. Executed: the
+#     add-client stand-in records the variable it was called with; the flag
+#     is gone again by the time seed runs, and without --grant-remotely it is
+#     never set.
+for _gr in 1 0; do
+    rm -rf "$WORK/21c"; mkdir -p "$WORK/21c/clients"
+    out="$( (
+        profile_validate_file() { return 0; }
+        read_server_conf() { DEFAULT_TARGET=""; LOCAL_USER=""; }
+        CLIENTS_DIR="$WORK/21c/clients"
+        RELATIONSHIPS_DIR="$WORK/21c/rel"
+        rux_grant_remotely_preflight() { :; }
+        rux_grant_remotely() { echo "GRANT" >> "$WORK/21c/order"; }
+        rux_verify_requested_scope() { :; }
+        cmd_add_client() {
+            echo "ADD ${JOIN_SCOPE_BY_COLLECTOR:-unset}" >> "$WORK/21c/order"
+            printf 'CLIENT_NAME=pve2\nPEER_HOST=pve2\nSTATE=pending_enroll\n' > "$CLIENTS_DIR/pve2.conf"
+        }
+        cmd_seed()     { echo "SEED ${JOIN_SCOPE_BY_COLLECTOR:-unset}" >> "$WORK/21c/order"; }
+        cmd_activate() { echo "ACTIVATE" >> "$WORK/21c/order"; }
+        if [ "$_gr" = 1 ]; then
+            rux_entry --source=pve2:rpool/data --target=hdd/backup --grant-remotely --install --yes
+        else
+            rux_entry --source=pve2:rpool/data --target=hdd/backup --install --yes
+        fi
+    ) 2>&1 )"; rc=$?
+    _ord="$(tr '\n' ' ' < "$WORK/21c/order" 2>/dev/null)"
+    if [ "$_gr" = 1 ]; then
+        if [ "$rc" -eq 0 ] && [ "$_ord" = "ADD 1 GRANT SEED unset ACTIVATE " ]; then
+            ok "21c. --grant-remotely: add-client runs with JOIN_SCOPE_BY_COLLECTOR=1, and it is unset again before seed"
+        else
+            bad "21c. --grant-remotely: add-client runs with JOIN_SCOPE_BY_COLLECTOR=1, and it is unset again before seed" "rc=$rc order=$_ord out=$out"
+        fi
+    else
+        if [ "$rc" -eq 0 ] && [ "$_ord" = "ADD unset SEED unset ACTIVATE " ]; then
+            ok "21d. control: without --grant-remotely the remote --join is never told the collector signs the scope"
+        else
+            bad "21d. control: without --grant-remotely the remote --join is never told the collector signs the scope" "rc=$rc order=$_ord out=$out"
+        fi
+    fi
+done
+
 # ------------------------------------------------------------------------------
 # 17. rux_verify_requested_scope: the request is checked against the scope the
 #     source actually COMMITTED, fetched over the pairing channel -- never
