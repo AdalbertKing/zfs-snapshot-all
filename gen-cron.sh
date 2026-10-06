@@ -3708,10 +3708,24 @@ emit_replicas() {
     done
 }
 
-# One snapsend.sh call for one source of a replica job.
+# One engine call for one source of a replica job.
+#
+# snapget.sh -M since 2026-10-06 (owner: replica onto the same engine as sync,
+# "Tak, rob w tej kolejnosci"). A replica copies what THIS host already holds,
+# so the source is local and the call is snapget's local form ("src" "dst",
+# no host) -- the same code path snapsend took for it, measured in the merge
+# study (docs/project). What the switch buys:
+#   -M  the medium holds what the collector holds: after the copy it drops
+#       every snapshot gone from the source and older than the common base,
+#       so it stops growing for ever (it had no retention of its own);
+#   the pull's divergence gate: a medium carrying a snapshot newer than the
+#       base that the source does not have is refused, where the push
+#       overwrote it.
+# The #tgt- anchor bookmark is the same one: both engines tag it with
+# md5(target, -j), and neither sets -j here.
 replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst>
     local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" c
-    c="$REPO_DIR/snapsend.sh -m \"$prefix\""
+    c="$REPO_DIR/snapget.sh -m \"$prefix\" -M"
     [ "$recursive" = "1" ] && c="$c -R"
     [ -n "$hist" ] && c="$c $hist"
     [ -n "$flags" ] && c="$c $flags"

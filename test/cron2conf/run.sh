@@ -167,6 +167,34 @@ else
     echo "PASS legacy/corpus-is-pre-marker"; pass=$((pass+1))
 fi
 
+# ---- the replica engine switch (2026-10-06) ---------------------------------
+#
+# Until 2026-10-06 a [replica:] rendered `snapsend.sh -m "P" ...`; it renders
+# `snapget.sh -m "P" -M ...` now (gen-cron replica_engine_cmd). Every host
+# installed before that carries the old line, and this tool exists to recover
+# a config from what a host runs -- so the OLD line must still be read, and the
+# config it yields must render the NEW engine with the same fields. Not a
+# round-trip (the engine changes by design): same jobs, same arguments, the
+# engine name and -M the only difference.
+for cf in "$DIR"/fixtures-engine/*.crontab; do
+    [ -e "$cf" ] || continue
+    name="$(basename "$cf" .crontab)"
+    conf="$(mktemp)"
+    out="$(bash "$C2C" -f "$cf" -o "$conf" 2>&1)"; rc=$?
+    rendered="$(env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
+                bash "$GEN" -c "$conf" 2>&1)"
+    want="$(sed 's#/snapsend\.sh -m "\([^"]*\)"#/snapget.sh -m "\1" -M#g' "$cf" | extract_block)"
+    got="$(printf '%s\n' "$rendered" | extract_block)"
+    if [ "$rc" -eq 0 ] && [ "$want" = "$got" ] && ! printf '%s\n' "$got" | grep -q snapsend; then
+        echo "PASS engine/$name (an installed snapsend replica is read, and renders as snapget -M with every field kept)"; pass=$((pass+1))
+    else
+        echo "FAIL engine/$name (rc=$rc)"; printf '  %s\n' "$out"
+        diff <(printf '%s\n' "$want") <(printf '%s\n' "$got")
+        fail=$((fail+1))
+    fi
+    rm -f "$conf"
+done
+
 # ---- negative (fatal, rc=1) ----
 for cf in "$DIR"/negative/*.crontab; do
     [ -e "$cf" ] || continue

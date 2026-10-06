@@ -784,6 +784,23 @@ got=$(mt_run "e" "vzdump-1 __replicate_x old e" e)
 got=$(mt_run "e" "a b e" e b)
 [ "$got" = "1|t/x@a " ] && ok "M a snapshot that will not die is reported (run fails) while the others still go" \
                         || bad "M a snapshot that will not die is reported (run fails) while the others still go" "got=$got"
+# THE SUMMARY IS VISIBLE WHEN THE MIRROR DID SOMETHING (2026-10-06): the first
+# live run removed 163 snapshots on pve10 and cron.log, which carries level 0
+# only, said nothing. Level 0 when anything was removed or stuck, level 1 for
+# a run that changed nothing.
+mt_lvl() {   # <src> <tgt> <base> [stuck] -> the level of the summary line
+    ( set +u
+      log() { case "$2" in "Mirror (-M) on "*) echo "$1" >> "$MT/lvl" ;; esac; }
+      MT_SRC="$1" MT_TGT="$2" MT_BASE="$3" MT_STUCK="${4:-}"
+      get_sorted_snapshots() { if [ -n "${2:-}" ]; then printf '%s' "$MT_SRC" | tr ' ' '\n'; else printf '%s' "$MT_TGT" | tr ' ' '\n'; fi; }
+      find_common_snapshot() { echo -n "$MT_BASE"; }
+      zfs() { [ -n "$MT_STUCK" ] && [ "$2" = "t/x@$MT_STUCK" ] && return 1; return 0; }
+      : > "$MT/lvl"; . "$MT/fn.sh"; mirror_target "s/x" "t/x" u h >/dev/null 2>&1
+      tr '\n' ' ' < "$MT/lvl" )
+}
+got="$(mt_lvl "a b d e" "a b c d e" e)|$(mt_lvl "a b e" "a b e" e)|$(mt_lvl "e" "a e" e a)"
+[ "$got" = "0 |1 |0 " ] && ok "M the summary is level 0 when snapshots were removed or stuck, level 1 when the mirror changed nothing" \
+                        || bad "M the summary is level 0 when snapshots were removed or stuck, level 1 when the mirror changed nothing" "got=$got"
 rm -rf "$MT"
 # The real script refuses -M with -r, before it touches anything.
 out=$(bash "$SG" -M -r "u@h:s/x" 2>&1); rc=$?

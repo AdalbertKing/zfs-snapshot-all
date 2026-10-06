@@ -374,6 +374,32 @@ parse_send_cmd() {
     return 0
 }
 
+# parse_replica_cmd CMD -- one engine call of a [replica:] job. Since
+# 2026-10-06 gen-cron emits the LOCAL pull with the mirror:
+#   snapget.sh -m "PREFIX" -M [flags] "SOURCE" "DST"
+# with a SOURCE that names no host. The older push form
+#   snapsend.sh -m "PREFIX" [flags] "SOURCE" "DST"
+# is still read, because every host installed before the switch carries it
+# and this tool exists to recover a config from what a host runs; the config
+# it writes renders the new form. -M is the replica's shape, not a flag the
+# section carries, so it is taken out of C_FLAGS here.
+parse_replica_cmd() {
+    local cmd="$1"
+    if [[ "$cmd" == */snapget.sh\ -m\ \"* ]]; then
+        C_REPO="${cmd%%/snapget.sh -m \"*}"
+        local -a p; qsplit p "$cmd"
+        [ "${#p[@]}" -eq 6 ] || return 1
+        [[ "${p[3]}" == *:* ]] && return 1
+        case " $(trim "${p[2]}") " in *" -M "*) ;; *) return 1 ;; esac
+        C_PREFIX="${p[1]}"
+        C_FLAGS="$(trim "$(printf ' %s ' "$(trim "${p[2]}")" | sed 's/ -M / /')")"
+        C_SRC="${p[3]}"
+        C_DST="${p[5]}"
+        return 0
+    fi
+    parse_send_cmd "$cmd"
+}
+
 # parse_get_cmd CMD -- the pull engine, called by gen-cron.sh as
 #   snapget.sh -m "PREFIX" [flags] "REMOTE_SPEC" ["LOCAL_BASE"]
 # where REMOTE_SPEC is user@host:dataset (the section's 'src') and LOCAL_BASE
@@ -600,6 +626,26 @@ DG_FOUND=0
 
 REPO_DIR="" CRON_LOG="" NOTIFY_SCRIPT="" WARN_SCRIPT="" DIGEST_SCRIPT="" HOST_LABEL=""
 
+# A replica's engine flags, split back into the section's fields. -R is the
+# section's own 'recursive', not a transfer flag, and -i/-T are the 'history'
+# field. Everything else is genuinely flags and was once being DROPPED -- a
+# replica with -b would have come back without its bandwidth cap.
+replica_fold_flags() {   # <flags> -> RF_REC RF_HIST RF_REST
+    local _tok _want=0
+    RF_REC=0; RF_HIST=""; RF_REST=""
+    for _tok in $1; do
+        if [ "$_want" -eq 1 ]; then RF_HIST="$RF_HIST $_tok"; _want=0; continue; fi
+        case "$_tok" in
+            -R) RF_REC=1 ;;
+            -i) RF_HIST="newest" ;;
+            -T) RF_HIST="auto:"; _want=1 ;;
+            *)  RF_REST="${RF_REST:+$RF_REST }$_tok" ;;
+        esac
+    done
+    # `-T 3` arrives as two tokens; the count is glued back on here.
+    case "$RF_HIST" in "auto: "*) RF_HIST="auto:${RF_HIST#auto: }" ;; esac
+}
+
 classify_lines() {
     local line
     for line in "${BLOCK_LINES[@]}"; do
@@ -608,7 +654,7 @@ classify_lines() {
             # first, so the engine parsers below see the call they expect.
             if unwrap_media_bracket "$CMD"; then
                 CMD="$C_MEDIA_INNER"
-                parse_send_cmd "$CMD" || die "a removable-media job whose inner command is not snapsend.sh: $line"
+                parse_replica_cmd "$CMD" || die "a removable-media job whose inner command is not a replica engine call (snapget.sh -M or snapsend.sh): $line"
                 # EVERY engine call in the bracket, folded back into the one
                 # section that produced them. They came from a single
                 # [replica:] so they must agree on everything except the
@@ -617,8 +663,8 @@ classify_lines() {
                 # the wrong thing to do quietly.
                 local _rsrc="$C_SRC" _rdst="$C_DST" _rpref="$C_PREFIX" _rflags="$C_FLAGS" _k
                 for ((_k=1; _k<${#C_MEDIA_INNERS[@]}; _k++)); do
-                    parse_send_cmd "${C_MEDIA_INNERS[_k]}" \
-                        || die "a removable-media job whose inner command is not snapsend.sh: ${C_MEDIA_INNERS[_k]}"
+                    parse_replica_cmd "${C_MEDIA_INNERS[_k]}" \
+                        || die "a removable-media job whose inner command is not a replica engine call (snapget.sh -M or snapsend.sh): ${C_MEDIA_INNERS[_k]}"
                     [ "$C_DST"    = "$_rdst"   ] || die "a replica bracket whose engine calls disagree on the target: '$_rdst' vs '$C_DST'"
                     [ "$C_PREFIX" = "$_rpref"  ] || die "a replica bracket whose engine calls disagree on the snapshot prefix: '$_rpref' vs '$C_PREFIX'"
                     [ "$C_FLAGS"  = "$_rflags" ] || die "a replica bracket whose engine calls disagree on the flags: '$_rflags' vs '$C_FLAGS'"
@@ -632,23 +678,19 @@ classify_lines() {
                 # these lines.
                 [ -n "$HOST_LABEL" ] || HOST_LABEL="$N_HOST"
                 REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
-                local _rec=0 _hist="" _rest="" _tok _want=0
-                # -R is the section's own 'recursive', not a transfer flag, and
-                # -i/-T are the 'history' field. Everything else is genuinely
-                # flags and was being DROPPED here -- a replica with -b would
-                # have come back without its bandwidth cap.
-                for _tok in $C_FLAGS; do
-                    if [ "$_want" -eq 1 ]; then _hist="$_hist $_tok"; _want=0; continue; fi
-                    case "$_tok" in
-                        -R) _rec=1 ;;
-                        -i) _hist="newest" ;;
-                        -T) _hist="auto:"; _want=1 ;;
-                        *)  _rest="${_rest:+$_rest }$_tok" ;;
-                    esac
-                done
-                # `-T 3` arrives as two tokens; the count is glued back on here.
-                case "$_hist" in "auto: "*) _hist="auto:${_hist#auto: }" ;; esac
-                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${_rec}${SEP}${N_LABEL}${SEP}${_hist}${SEP}${_rest}")
+                replica_fold_flags "$C_FLAGS"
+                REPL_E+=("${SCHED}${SEP}${C_MEDIA_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}removable${SEP}${RF_REC}${SEP}${N_LABEL}${SEP}${RF_HIST}${SEP}${RF_REST}")
+                continue
+            fi
+            # A replica onto a FIXED disk has no bracket: one local snapget -M
+            # call (a pull that names no host is nothing else gen-cron emits).
+            # Its name is the notify label, which gen-cron defaults to it.
+            if [[ "$CMD" == */snapget.sh\ * ]] && parse_replica_cmd "$CMD"; then
+                parse_notify_text "$NOTIFY" || die "cannot parse replica notify text: '$NOTIFY'"
+                [ -n "$HOST_LABEL" ] || HOST_LABEL="$N_HOST"
+                REPO_DIR="${REPO_DIR:-$C_REPO}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"; NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-$NOTIFYSCRIPT}"
+                replica_fold_flags "$C_FLAGS"
+                REPL_E+=("${SCHED}${SEP}${N_LABEL}${SEP}${C_SRC}${SEP}${C_DST}${SEP}${C_PREFIX}${SEP}${SEP}${RF_REC}${SEP}${N_LABEL}${SEP}${RF_HIST}${SEP}${RF_REST}")
                 continue
             fi
             if parse_send_cmd "$CMD"; then

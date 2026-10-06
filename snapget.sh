@@ -1197,7 +1197,13 @@ mirror_target() {
             log 0 "Mirror (-M): could not destroy $tgt@$s (held or busy?) -- left in place"
         fi
     done <<< "$tgt_list"
-    log 1 "Mirror (-M) on '$tgt': $gone removed (gone from the source, older than '$base'), $stuck could not be removed, $reserved reserved left alone"
+    # Level 0 whenever the mirror DID something: a deletion is history leaving
+    # the target, and the cron log is where an operator looks for why it is
+    # gone. At level 1 the first live run removed 163 snapshots from one
+    # dataset on pve10 and cron.log said nothing (2026-10-06).
+    local _lvl=1
+    [ $((gone + stuck)) -gt 0 ] && _lvl=0
+    log "$_lvl" "Mirror (-M) on '$tgt': $gone removed (gone from the source, older than '$base'), $stuck could not be removed, $reserved reserved left alone"
     [ "$stuck" -eq 0 ]
 }
 
