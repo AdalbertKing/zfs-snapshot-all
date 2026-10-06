@@ -21,6 +21,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **pve9: blok testowy `pgtest` zdjęty z crona roota (2026-10-06, właściciel: „rób wszystko”).**
+  Blok `zfs-backup-managed` roota na pve9 to były tylko dwie linie z testu REV-140
+  (`/root/rev140/snapget.sh`, `delsnaps.sh`, etykieta `apx`, config i klucz w nieistniejącym
+  już `/tmp/tmp.7TIYGdXIAP`) -- co godzinę rc=1, 2580 linii w `cron.log`. Zdjęty przez
+  `gen-cron.sh --uninstall` jako root; diff przed/po: znikło dokładnie 6 linii bloku, blok
+  hosta (self-update, digest, capacity) i cron konta `zfsbackup` (producent, 8 zadań)
+  nietknięte. Kopia: `/root/b-cron-pgtest-202610061033`. Katalog `/root/rev140` zostaje.
+
 - **R5-8: rekord postępu bez doklejonego drugiego końca (2026-10-06, właściciel: „Odmrażam”).**
   - **Przyczyna (z kodu, objaw zmierzony na pve10 25.09):** `progress_done` w
     `lib-zfs-snap.sh` znał tylko koniec „running”. Drugi transfer do tego samego celu w
@@ -10093,9 +10101,6 @@ stanem recenzji.
   W POŁOWIE: sekcje configu i linie crona relacji już usunięte, rekord dalej `active`.
   Powtórka po powrocie sieci doszła do końca. Ta sama klasa co „dokończ transakcję”:
   krok, który może paść (sieć), stoi po kroku, który już coś zmienił.
-- **pve9: dwie stare linie `/tmp` w cronie roota** (`rev140`/`pgtest`, sprzed 2026-09-25) --
-  pozostałość laba, nie ruszane; do decyzji właściciela.
-
 - **Test odtworzenia vsql2.** Jedyna rzecz, która dowodzi, że snapshot się
   przywraca — `engaged` z `sqlfreeze` mówi tylko, że SQL uczestniczył. Nie
   wykonany; **właściciel wykonuje go ręcznie** (decyzja z 2026-07-31), więc nie
