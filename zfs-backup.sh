@@ -3325,6 +3325,22 @@ schedule_normalized_identity() {
 #     -B -- bookmarks are not snapshots) whose every scope dataset is a landing
 #     this very run mirrored (MIRRORED_LANDINGS, filled by emit_client_sections
 #     as it writes -M). Any other caller has an empty list and no exemption.
+# FOREIGN SNAPSHOTS JOIN THE FINEST TIER (U4, see gen-cron apply_foreign_prune).
+# Re-activating an installed backup relationship to give it prune_foreign
+# rewrites ONE prune line: its pattern becomes empty and it gains -P "<other
+# family>:all" protections. The job is the same -- same schedule, scope,
+# retention, label -- so the identity used here drops every -P "..." token and
+# the pattern argument of a delsnaps.sh line (the quoted value right before the
+# retention flags). Only applied when the NEW line has the empty pattern and
+# the old one did not; anything else differing still differs.
+foreign_normalized_identity() {
+    sed -E -e '/delsnaps\.sh/ s/ -P "[^"]*"//g' \
+           -e '/delsnaps\.sh/ s/ "[^"]*"( -[HDWMYhdwmy][0-9 ])/ "<PAT>"\1/'
+}
+foreign_pattern_empty() {   # <line> -> 0 when its delsnaps pattern argument is ""
+    printf '%s\n' "$1" | grep -qE '/?delsnaps\.sh .* "" -[HDWMYhdwmy][0-9 ]'
+}
+
 mirror_normalized_identity() {
     sed -E '/snapget\.sh/ s/ -M( |$)/\1/'
 }
@@ -3644,6 +3660,23 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                 warn "  target retention replaced by the mirror (-M) -- this landing now holds what its source holds:"
                 warn "    $line"
                 continue
+            fi
+            # Seventh exemption: the finest tier now also prunes FOREIGN
+            # snapshots (prune_foreign). Speaks, like the three above.
+            if ! foreign_pattern_empty "$line"; then
+                local fnorm ftwin=""
+                fnorm=$(printf '%s\n' "$norm" | foreign_normalized_identity)
+                while IFS= read -r pline; do
+                    [ -n "$pline" ] || continue
+                    foreign_pattern_empty "$pline" || continue
+                    [ "$(printf '%s\n' "$pline" | foreign_normalized_identity)" = "$fnorm" ] || continue
+                    ftwin="$pline"; break
+                done <<< "$proposed_norm"
+                if [ -n "$ftwin" ]; then
+                    warn "  foreign snapshots on this landing are now pruned with this tier, like its own (prune_foreign):"
+                    warn "    $line"
+                    continue
+                fi
             fi
             still_lost="$still_lost$line
 "
@@ -4324,6 +4357,17 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             set_or_remove_section_field "$workfile" "[prune:$localpath]" prune no \
                 || die "[prune:$localpath] in $workfile could not be marked 'prune = no' for the mirror -- refusing to install a mirrored pull next to a target ladder that still prunes. Fix or remove that section by hand and re-run."
         fi
+        # U4: a backup landing prunes foreign snapshots like its own. Derived
+        # from the relationship's MODE, so a re-activation gives an installed
+        # backup the field the create path writes.
+        if [ "$sync_mode" -eq 0 ]; then
+            set_or_remove_section_field "$workfile" "[dataset:$localpath]" prune_foreign yes \
+                || die "[dataset:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section by hand and re-run."
+            if grep -qxF "[prune:$localpath]" "$workfile"; then
+                set_or_remove_section_field "$workfile" "[prune:$localpath]" prune_foreign yes \
+                    || die "[prune:$localpath] in $workfile could not take 'prune_foreign = yes'. Fix or remove that section by hand and re-run."
+            fi
+        fi
         # The link cap is refreshed the same way and for the same reason -- it
         # is a function of the RECORD, not of the installed policy. Unlike
         # 'flags' it may legitimately be absent (no cap), and a cap removed
@@ -4490,6 +4534,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                     echo "	recursive    = flat"
                 fi
             fi
+            # U4 (owner 2026-10-06): on a BACKUP landing, foreign snapshots
+            # the pull brought (-I) are pruned like this host's own -- see
+            # gen-cron apply_foreign_prune. Not for sync: that is a mirror.
+            [ "$sync_mode" -eq 0 ] && echo "	prune_foreign = yes"
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
@@ -4596,6 +4644,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 else
                     echo "	recursive    = no"
                 fi
+                [ "$sync_mode" -eq 0 ] && echo "	prune_foreign = yes"
                 echo "	pair_label   = $name"
                 echo "	notify       = ${name}-$(basename "$ds")"
             } >> "$workfile" || return 1

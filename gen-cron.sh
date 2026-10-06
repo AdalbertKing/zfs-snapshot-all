@@ -131,6 +131,13 @@ set -o pipefail
 #                                          # fields will eventually want.
 #       autotune     = yes|no              # default yes; 'no' suppresses the
 #                                          # automatic -A described below
+#       prune_foreign = yes|no             # default no. yes: FOREIGN snapshots on
+#                                          # this path (any family no prune line
+#                                          # here names -- a manual one, another
+#                                          # tool's) are pruned like this host's
+#                                          # own: they count in the FINEST tier
+#                                          # (see apply_foreign_prune). Written
+#                                          # by zfs-backup.sh on a backup landing.
 #       pair_label   = <name>              # REV-045: the zfs-backup.sh client
 #                                          # this dataset's jobs belong to.
 #                                          # Becomes -L on the transfer line
@@ -1423,10 +1430,10 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive media \
                         bandwidth compression cipher \
-                        passive exclude_family $DATASET_POLICY_FIELDS
+                        passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
-                        gfs gfs_pattern pair_label $PRUNE_POLICY_FIELDS
+                        gfs gfs_pattern pair_label prune_foreign $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
 
 # [replica:<name>] -- ANOTHER COPY OF WHAT THIS HOST ALREADY HOLDS.
@@ -2063,6 +2070,7 @@ build_entities() {
     declare -ga BOOKMARK_PRUNE_ENTITIES=()
     declare -ga REPLICA_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
+    declare -gA FOREIGN_SCOPES=()   # scope -> 1 when its section says prune_foreign = yes
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
     local section kind name
@@ -2445,6 +2453,8 @@ build_dataset() {
             fi
             # A mirrored tier keeps its pattern for the monitor below and
             # drops only the target prune (see tier_mirror above).
+            resolve_bool_field prune_foreign "$ds" "" "[dataset:$ds_path]" 0
+            [ "$BOOL_FIELD" -eq 1 ] && [ "$tier_mirror" -eq 0 ] && FOREIGN_SCOPES["$ds_path"]=1
             [ "$tier_mirror" -eq 1 ] || INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
@@ -2502,6 +2512,13 @@ build_prune_section() {
     local recursive clearcut
     resolve_bool_field recursive "$sec" "" "[prune:$scope]" 0; recursive="$BOOL_FIELD"
     resolve_bool_field clear_cut "$sec" "" "[prune:$scope]" 0; clearcut="$BOOL_FIELD"
+    resolve_bool_field prune_foreign "$sec" "" "[prune:$scope]" 0
+    if [ "$BOOL_FIELD" -eq 1 ]; then
+        case "$scope" in
+            *:*) die "[prune:$scope]: prune_foreign = yes on a REMOTE scope -- foreign snapshots on a source belong to whoever made them there; this host prunes foreign snapshots only on its own landing" ;;
+        esac
+        FOREIGN_SCOPES["$scope"]=1
+    fi
 
     local ssh_flags
     ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
@@ -2992,7 +3009,7 @@ group_inline_prune() {
     declare -ga INLINE_PRUNE_GROUP_ORDER=()
     local e ds tier pattern retain schedule notify recursive pairlbl gfs key
     for e in "${INLINE_PRUNE_ENTITIES[@]}"; do
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs <<< "$e"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs fprot <<< "$e"
         # 'recursive' is IN the key. A delsnaps.sh line carries -R or it does
         # not, for every dataset it names -- so merging a recursive dataset
         # with a non-recursive one would silently give one of them the wrong
@@ -3029,7 +3046,7 @@ group_inline_prune() {
         # buckets were asked for, or the reverse -- while the config still read
         # correctly. That is the exact shape of the merge defects this key has
         # already been widened for twice.
-        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}${SEP}${gfs}"
+        key="${schedule}${SEP}${pattern}${SEP}${retain}${SEP}${recursive}${SEP}${notify}${SEP}${pairlbl}${SEP}${gfs}${SEP}${fprot}"
         [ -z "${INLINE_PRUNE_GROUPS[$key]+x}" ] && INLINE_PRUNE_GROUP_ORDER+=("$key")
         INLINE_PRUNE_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -3497,17 +3514,112 @@ job_cron_line() {
 # prefixless: its inline prune rendered `"hdd/lab/ct-201" "-" -H168`. The GFS
 # ladder never hit this because it prunes on gfs_pattern, which is omitted
 # (empty) for a prefixless ladder rather than spelled '-'.
+# FOREIGN SNAPSHOTS ARE PRUNED LIKE OUR OWN (U4, owner 2026-10-06: "obce
+# migawki powinny byc ciete jak wlasne"). On a backup collector every pull
+# carries -I, so whatever the source holds between two of our snapshots lands
+# here too -- a manual snapshot, another tool's family -- and no prune line
+# ever named it: it stayed for good (measured on the a<b<>c lab).
+#
+# A delsnaps.sh line with NO pattern takes every snapshot that is not
+# protected by -P. So the FINEST tier's line on such a path loses its pattern
+# and gains `-P "<family>:all"` for every OTHER family a prune line on the same
+# path names: those keep their own rules untouched, and the finest tier now
+# counts its own family AND everything foreign together -- a foreign snapshot
+# lives exactly as long as an hourly would ("the 24 newest" of the two). The
+# newest snapshot, which is the next pull's base, is always among those kept,
+# own or foreign. A GFS ladder on the path is the carrier instead (it already
+# buckets every family it matches). The replica families (any [replica:]
+# prefix here, and add-replica's default replica_) keep their 2 newest -- the
+# newest is a medium's next base -- and stop growing for ever.
+#
+# The finest tier is the one whose retention flag has the smallest unit
+# (H < D < W < M < Y, case-insensitive); a tie goes to the first. Remote scopes
+# never get here (refused where the field is read).
+retain_rank() {   # <retain flags> -> 1 (hours) .. 5 (years), 9 unknown
+    case "${1#-}" in
+        [Hh]*) echo 1 ;; [Dd]*) echo 2 ;; [Ww]*) echo 3 ;; [Mm]*) echo 4 ;; [Yy]*) echo 5 ;; *) echo 9 ;;
+    esac
+}
+apply_foreign_prune() {
+    local scope i s t p r rank best bestrank kind carrier_pat fprot pair sp spat pfx e
+    for scope in "${!FOREIGN_SCOPES[@]}"; do
+        best=""; bestrank=99; kind=""; carrier_pat=""
+        for i in "${!GFS_PRUNE_SEC_ENTITIES[@]}"; do
+            IFS="$SEP" read -r s p _ <<< "${GFS_PRUNE_SEC_ENTITIES[$i]}"
+            [ "$s" = "$scope" ] && { best=$i; kind=gfs; carrier_pat="$p"; break; }
+        done
+        if [ -z "$kind" ]; then
+            for i in "${!INLINE_PRUNE_ENTITIES[@]}"; do
+                IFS="$SEP" read -r s t p r _ <<< "${INLINE_PRUNE_ENTITIES[$i]}"
+                [ "$s" = "$scope" ] || continue
+                rank=$(retain_rank "$r")
+                [ "$rank" -lt "$bestrank" ] && { bestrank=$rank; best=$i; kind=inline; carrier_pat="$p"; }
+            done
+            for i in "${!PRUNE_SEC_ENTITIES[@]}"; do
+                IFS="$SEP" read -r s t p r _ <<< "${PRUNE_SEC_ENTITIES[$i]}"
+                [ "$s" = "$scope" ] || continue
+                rank=$(retain_rank "$r")
+                [ "$rank" -lt "$bestrank" ] && { bestrank=$rank; best=$i; kind=sec; carrier_pat="$p"; }
+            done
+        fi
+        if [ -z "$kind" ]; then
+            warn "'$scope': prune_foreign = yes, but no prune line covers that path -- foreign snapshots there are NOT pruned"
+            continue
+        fi
+        # Everything else a prune line names on this path keeps its own rule.
+        declare -A _seen=(); fprot=""
+        for pair in "${SCOPE_PATTERNS[@]}"; do
+            IFS="$SEP" read -r sp spat <<< "$pair"
+            [ "$sp" = "$scope" ] || continue
+            case "$spat" in ''|-) continue ;; esac
+            [ "$spat" = "$carrier_pat" ] && continue
+            [ -n "${_seen[$spat]:-}" ] && continue
+            _seen[$spat]=1
+            fprot="${fprot}-P \"${spat}:all\" "
+        done
+        for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}" "x${SEP}x${SEP}x${SEP}x${SEP}replica_"; do
+            IFS="$SEP" read -r _ _ _ _ pfx _ <<< "$e"
+            [ -n "$pfx" ] && [ -z "${_seen[$pfx]:-}" ] || continue
+            _seen[$pfx]=1
+            fprot="${fprot}-P \"${pfx}:2\" "
+        done
+        unset _seen
+        case "$kind" in
+            gfs)    GFS_PRUNE_SEC_ENTITIES[$best]="$(foreign_rewrite "${GFS_PRUNE_SEC_ENTITIES[$best]}" 2)${SEP}${fprot}" ;;
+            inline) INLINE_PRUNE_ENTITIES[$best]="$(foreign_rewrite "${INLINE_PRUNE_ENTITIES[$best]}" 3)${SEP}${fprot}" ;;
+            sec)    PRUNE_SEC_ENTITIES[$best]="$(foreign_rewrite "${PRUNE_SEC_ENTITIES[$best]}" 3)${SEP}${fprot}" ;;
+        esac
+    done
+}
+# Replace field N (1-based) of a SEP-joined entity with "-" (no pattern).
+# Split by hand: `read -a` drops TRAILING empty fields (an unset pair_label),
+# and the protections appended after the entity would then land in its slot.
+foreign_rewrite() {   # <entity> <field number>
+    local rest="$1" n="$2" out="" f i=1
+    while :; do
+        if [[ "$rest" == *"$SEP"* ]]; then
+            f="${rest%%"$SEP"*}"; rest="${rest#*"$SEP"}"
+            [ "$i" -eq "$n" ] && f="-"
+            out="${out}${f}${SEP}"; i=$((i + 1))
+        else
+            [ "$i" -eq "$n" ] && rest="-"
+            out="${out}${rest}"; break
+        fi
+    done
+    printf '%s' "$out"
+}
+
 delsnaps_pattern() {   # <config pattern> -> delsnaps.sh pattern argument
     if [ "$1" = "-" ]; then printf ''; else printf '%s' "$1"; fi
 }
 
 emit_inline_prune() {
-    local key list ds tier pattern retain schedule notify recursive pairlbl gfs
+    local key list ds tier pattern retain schedule notify recursive pairlbl gfs fprot
     for key in "${INLINE_PRUNE_GROUP_ORDER[@]}"; do
         list="${INLINE_PRUNE_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs <<< "${members[0]}"
+        IFS="$SEP" read -r ds tier pattern retain schedule notify recursive pairlbl gfs fprot <<< "${members[0]}"
 
         local -a targets=()
         local m mds mtier mpat mret msch mnot mrec mlbl mgfs
@@ -3522,7 +3634,7 @@ emit_inline_prune() {
         [ "$recursive" = "1" ] && rflag="-R "
         [ "$gfs" = "1" ] && gflag="-G "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${PROTECT_FLAGS}\"$joined\" \"$(delsnaps_pattern "$pattern")\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${gflag}${rflag}${lflag}${fprot}${PROTECT_FLAGS}\"$joined\" \"$(delsnaps_pattern "$pattern")\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -3530,15 +3642,15 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl fprot
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl fprot <<< "$e"
         local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh ${flag}${fflag}${lflag}${sflag}${fprot}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -3546,15 +3658,15 @@ emit_prune_sections() {
 # gfs=yes sections: one combined delsnaps.sh -G line per section, covering
 # every contributing tier's retain count at once (see build_prune_section).
 emit_gfs_prune_sections() {
-    local e scope pattern retain schedule notify recursive clearcut sshflags pairlbl
+    local e scope pattern retain schedule notify recursive clearcut sshflags pairlbl fprot
     for e in "${GFS_PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags pairlbl <<< "$e"
+        IFS="$SEP" read -r scope pattern retain schedule notify recursive clearcut sshflags pairlbl fprot <<< "$e"
         local flag="" fflag="" sflag="" lflag=""
         [ "$recursive" = "1" ] && flag="-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "
-        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${lflag}${sflag}${PROTECT_FLAGS}\"$scope\" \"$pattern\" $retain"
+        local cmd="$REPO_DIR/delsnaps.sh -G ${flag}${fflag}${lflag}${sflag}${fprot}${PROTECT_FLAGS}\"$scope\" \"$(delsnaps_pattern "$pattern")\" $retain"
         RETAIN_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
     done
 }
@@ -4654,6 +4766,7 @@ validate_field_names
 apply_path_settings
 
 build_entities
+apply_foreign_prune
 group_send
 group_inline_prune
 group_bookmark_prune
