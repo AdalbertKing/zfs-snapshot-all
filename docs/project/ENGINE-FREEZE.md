@@ -1,7 +1,7 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 e64de0ccde3eb220cd7f6fb3a2566f2b80315261 -->
-<!-- frozen: snapget.sh 100755 eaa136115d1631b59386a993bb40d8ca24a0d91c -->
+<!-- frozen: snapsend.sh 100755 ae0c3b9beb6cd5a54f7153f84de32c7cc632acdf -->
+<!-- frozen: snapget.sh 100755 92a9e3b4c0cc59c184550931699dfde5026d48c3 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 0701a4865690e0112495b7f893ba935da45454d4 -->
@@ -833,6 +833,32 @@ Owner-authorized refreezes:
   transfer decision reads. The reader-side tolerance (#443) stays.
   Regression test: `test/twins` gains 1, executing the shipped function on a
   finished record and on a glued one; fails on the frozen baseline.
+
+- 2026-10-06 (snapsend.sh, snapget.sh): **a run skipped by the lock exits 75,
+  not 0.** Owner direction, verbatim, in answer to "the engine that skips a run
+  because the previous one still holds the lock exits 0 -- leave it, or report
+  it as a warning?": "Zgłaszaj jako ostrzeżenie, odmrażam snapsend i snapget".
+  snapsend v2.73 -> v2.74, snapget v2.70 -> v2.71.
+  Measured on pve10 2026-09-23..25: pve9b's daily pull started in the same
+  minute as the hourly one, lost the per-dataset lock three nights running,
+  logged "Another instance ... skipping this run" and exited 0 -- the cron
+  envelope stayed silent and only the staleness monitor said anything (71 h).
+  The one changed line in each engine is the `exit` of the lock gate: 0 -> 75
+  (EX_TEMPFAIL). The skip line and the `skipped_lock` stats record are
+  unchanged. `zfs-job.sh` (not frozen) maps 75 to `notify-warn.sh` beside the
+  notify script instead of a failure mail. Every in-repo caller (seed,
+  final-catchup, the activation rehearsal, the endpoint probe, `test`) already
+  reads nonzero as "not done", which is now true where it used to read a skip
+  as success.
+  twin: both engines changed, byte-identically -- the lock gate is one of the
+  shared blocks, and the comment above the new `exit` is the same text in
+  both.
+  Regression tests: `test/pairpause` +4 (each REAL engine with the lock held by
+  flock(1) on the exact file it computes: rc=75 + skip line + skipped_lock;
+  control with the lock free: no 75), fails 2/4 on the frozen baseline;
+  `test/cron` X8/X8b/X9 (the real zfs-job.sh: 75 -> warn script only, END
+  marker keeps rc=75, 1 -> failure script only); main's zfs-job.sh sent 75 to
+  the failure script.
 
 ## How it is enforced
 

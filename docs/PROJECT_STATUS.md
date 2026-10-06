@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 30ac780370270f6a -->
+<!-- status-covers-digest: 8554830851fc6549 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,24 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Bieg pominięty przez blokadę silnika to OSTRZEŻENIE, nie cisza (2026-10-06, właściciel: „Zgłaszaj jako ostrzeżenie, odmrażam snapsend i snapget”).**
+  - **Było:** `snapsend`/`snapget`, gdy poprzedni bieg trzyma blokadę datasetu, logowały
+    „Another instance … skipping this run” i kończyły **rc=0** -- koperta crona milczała, seed
+    meldował sukces. pve9b 23-25.09: dzienne pobranie przegrało z godzinowym trzy noce z rzędu,
+    widział to tylko monitor wieku (71 h).
+  - **Zmiana:** w obu silnikach (bliźniaczo) wyjście bramki blokady 0 → **75** (EX_TEMPFAIL);
+    linia o pominięciu i rekord `skipped_lock` bez zmian. `zfs-job.sh` v1.1: kod 75 woła
+    `notify-warn.sh` (domyślnie obok `notify-fail.sh`, opcja `--warn=`) z etykietą
+    „… -- skipped, the previous run still holds the lock” -- trafia do dziennego podsumowania,
+    nie jako mail o awarii. Linie crona bez zmian (limit 1000 bajtów). snapsend v2.74,
+    snapget v2.71; wpis w `ENGINE-FREEZE.md`, `--refreeze`. `delsnaps.sh` (nieodmrożony)
+    dalej kończy rc=0 przy blokadzie.
+  - **Testy (na pve10, natywny bash i `flock`):** `pairpause` 22/0 -- oba PRAWDZIWE silniki z
+    blokadą trzymaną przez `flock` na dokładnie tym pliku, który liczą: rc=75, linia, rekord;
+    kontrola bez blokady: nie 75. Silniki z main: 2 asercje padają. `cron` 143/0 -- X8/X8b/X9 na
+    prawdziwym `zfs-job.sh`: 75 → tylko skrypt ostrzeżenia, END z rc=75; 1 → tylko skrypt
+    błędu. `zfs-job.sh` z main przy 75 woła skrypt błędu.
 
 - **pve9: blok testowy `pgtest` zdjęty z crona roota (2026-10-06, właściciel: „rób wszystko”).**
   Blok `zfs-backup-managed` roota na pve9 to były tylko dwie linie z testu REV-140
@@ -116,8 +134,8 @@
   - **Nie obejmuje istniejących relacji:** minuta zapisuje się przy ZAKŁADANIU. pve9b i pve11
     na pve10 mają stary układ, dopóki nie zostaną założone ponownie (np. eksport → usunięcie →
     import) -- do decyzji właściciela.
-  - **Znana luka (silnik, zamrożony):** pominięcie biegu przez blokadę kończy się rc=0 --
-    dziennik wygląda zdrowo.
+  - **Pominięcie biegu przez blokadę kończyło się rc=0** -- zamknięte 2026-10-06 (kod 75 i
+    ostrzeżenie, wpis wyżej).
 - **`progress --json` odporne na rekord ze sklejonym drugim końcem (R5-8, 2026-09-25).**
   - **Zmierzone na pve10:** jeden plik rekordu miał `…"finished_epoch":1790364665},"state":"verified","finished_epoch":1790368264}`
     (drugi koniec dokładnie godzinę później) -- cały dokument JSON nieważny, GUI „! bez odpowiedzi: 1”,
