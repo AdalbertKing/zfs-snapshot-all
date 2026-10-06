@@ -1108,6 +1108,18 @@ def job_src_dst(j):
 KEEP_UNITS = {"H": u"godz.", "D": u"dni", "W": u"tyg.", "M": u"mies.", "Y": u"lat"}
 
 
+def job_is_mirror(j):
+    """-M w WLASNEJ linii pobrania tego zadania: synchro jako lustro (wlasciciel
+    2026-10-06). Cel trzyma wtedy to, co zrodlo -- bez wlasnej retencji, wiec
+    'Trzyma' z szablonu bylaby nieprawda."""
+    tier = j.get("tier") or ""
+    scope = j.get("scope") or "\0"
+    for cl in j.get("cron_lines") or []:
+        if "snapget.sh" in cl and tier in cl and scope in cl:
+            return " -M " in cl
+    return False
+
+
 def keep_cell(ret):
     """Kolumna 'Trzyma' (R4-4): '-H24' -> '24 godz.', '-D7' -> '7 dni'. Sama
     liczba bylaby klamstwem: drabina GFS przycina rodzine automated_hourly
@@ -1169,6 +1181,8 @@ def build_jobs(data, now):
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
             task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia"}.get(_d, u"transfer")
+            if _d == "pull" and job_is_mirror(j):
+                keep = u"lustro"
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
@@ -2200,6 +2214,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         pairs.append((u"Profil źródła", rel["source_profile"]))
     elif rel.get("passive") == "1" or rel.get("mode") == "sync":
         pairs.append((u"Profil źródła", u"bez prune (źródło nie kasuje)"))
+    if any(job_is_mirror(j) for j in row.get("jobs") or []):
+        pairs.append((u"Cel", u"lustro źródła: trzyma to, co źródło (bez własnej retencji)"))
     if rel.get("recursion"):
         pairs.append(("Rekursja", rel["recursion"]))
     if rel.get("passive") == "1":

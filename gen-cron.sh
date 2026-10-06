@@ -2215,7 +2215,7 @@ build_dataset() {
         # both declared inside the send branch, so a tier that does not send
         # would otherwise still see the previous tier's values and be checked
         # against a family it never creates, at a cadence it never runs.
-        local tier_created_prefix="" tier_creates=0 tier_send_schedule=""
+        local tier_created_prefix="" tier_creates=0 tier_send_schedule="" tier_mirror=0
         local send_schedule
         # PER TIER, like flags. A [dataset:] carrying several tiers with several
         # cadences could not be staggered before: a single section-level
@@ -2335,6 +2335,17 @@ build_dataset() {
             [ -n "$quiesce" ] || quiesce="$(settings_get quiesce "")"
             lint_quiesce "$quiesce" "[dataset:$ds_path] tier=$tier" "$direction"
             flags="$(maybe_add_quiesce "$flags" "$quiesce")"
+            # MIRROR (-M, owner 2026-10-06: "synchro jako lustro"). The pull
+            # itself makes the target hold what the source holds, so this
+            # tier's own prune of the target would be a SECOND retention
+            # fighting the first -- it is not emitted (the monitor still is).
+            # Pull only: snapsend.sh has no -M. Not with recursive=atomic:
+            # the engine mirrors per dataset and refuses -r.
+            case " $flags " in *" -M "*) tier_mirror=1 ;; esac
+            if [ "$tier_mirror" -eq 1 ]; then
+                [ "$direction" = pull ] || die "[dataset:$ds_path] tier=$tier: -M (mirror) is a PULL option -- a sync relationship is pulled by the collector; snapsend.sh has no -M"
+                [ "$ds_recursive" = atomic ] && die "[dataset:$ds_path] tier=$tier: -M (mirror) cannot go with recursive = atomic -- the mirror works per dataset; use recursive = flat"
+            fi
             # Baseline render for --migrate-recursion: the recursion VALUE was
             # already taken from these flags before the tier loop; here the
             # letters are only stripped out, so lint_flags sees what a migrated
@@ -2432,7 +2443,9 @@ build_dataset() {
             if [ "$tier_gfs" -eq 1 ] && ! [[ "$retain_flag" =~ ^-[HDWMY][0-9]+$ ]]; then
                 die "[dataset:$ds_path] tier=$tier: gfs=yes needs a single count-based retain flag (-H/-D/-W/-M/-Y followed by a number), got '$retain_flag'"
             fi
-            INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
+            # A mirrored tier keeps its pattern for the monitor below and
+            # drops only the target prune (see tier_mirror above).
+            [ "$tier_mirror" -eq 1 ] || INLINE_PRUNE_ENTITIES+=("${ds_path}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${rec_scope}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${ds_path}${SEP}${pattern}")
 
             # ---- monitor (rides this same pattern and the same scope) ----
@@ -2520,7 +2533,8 @@ build_prune_section() {
     # shared prefix the COMBINED ladder call matches against, which is a
     # different, wider net by design (it has to see snapshots from every
     # contributing tier to bucket them by elapsed time).
-    local gfs gfs_pattern="" gfs_retain_parts="" gfs_schedule=""
+    local gfs gfs_pattern="" gfs_retain_parts="" gfs_schedule="" any_prune=0 mute_tiers=0
+    local _mon_before=${#MONITOR_ENTITIES[@]}
     resolve_bool_field gfs "$sec" "" "[prune:$scope]" 0; gfs="$BOOL_FIELD"
     if [ "$gfs" -eq 1 ]; then
         # Phase 3.5: 'gfs_pattern' omitted across the section/defaults chain
@@ -2558,6 +2572,7 @@ build_prune_section() {
         # (delsnaps' own lock cannot prevent it -- it is keyed on the dataset
         # list, and these two lines legitimately have different lists.)
         resolve_bool_field prune "$sec" "$tmpl" "[prune:$scope] tier=$tier" 1; emit_prune="$BOOL_FIELD"
+        [ "$emit_prune" -eq 1 ] && any_prune=1
 
         plabel="$(resolve_field notify "$sec" "$tmpl" "")" || plabel=""
         pattern="$(require_field pattern "$sec" "$tmpl" defaults)" \
@@ -2629,7 +2644,12 @@ build_prune_section() {
             PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
-            die "[prune:$scope] tier=$tier: prune=no and no monitor_warn/monitor_crit -- the section would emit nothing at all"
+            # Per tier this is only "this tier emits nothing" -- normal on a
+            # ladder whose section says prune = no (a mirrored sync landing:
+            # some tiers carry the monitors, others only ever pruned). The
+            # refusal that matters is a SECTION that emits nothing at all,
+            # checked once after the loop.
+            mute_tiers=$((mute_tiers + 1))
         fi
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
@@ -2656,7 +2676,13 @@ build_prune_section() {
     # contribution collected in the loop above -- not per-tier, because the
     # whole point of gfs=yes is ONE delsnaps.sh -G line covering every tier at
     # once instead of one line each.
-    if [ "$gfs" -eq 1 ]; then
+    if [ "$any_prune" -eq 0 ] && [ "${#MONITOR_ENTITIES[@]}" -eq "$_mon_before" ]; then
+        die "[prune:$scope]: prune=no and no monitor_warn/monitor_crit on any tier -- the section would emit nothing at all"
+    fi
+    # A ladder section whose every tier says prune = no is a MONITOR-only
+    # section (a mirrored sync landing: the pull decides what stays). It used
+    # to die here for having no retain to build a -G line from.
+    if [ "$gfs" -eq 1 ] && [ "$any_prune" -eq 1 ]; then
         gfs_retain_parts="$(trim "$gfs_retain_parts")"
         [ -n "$gfs_retain_parts" ] || die "[prune:$scope]: gfs=yes but no tier in use_template actually contributed a retain value (all prune=no?) -- nothing for -G to build a ladder from"
         local gpraw gpnotify

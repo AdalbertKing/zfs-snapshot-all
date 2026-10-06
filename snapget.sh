@@ -228,6 +228,16 @@ set -o pipefail
 #                    -x`). Repeatable. Applied on BOTH the normal and the
 #                    resumed receive -- unlike -o, this is receive-side state
 #                    and a resume token carries no property excludes of its own.
+#   -M               Mirror (sync relationships, owner 2026-10-06: "synchro
+#                    jako lustro"). After a SUCCESSFUL pull, destroy on the
+#                    target every snapshot the source no longer has that is
+#                    OLDER than the common base -- the target then holds what
+#                    the source holds. Never the base or anything newer (a
+#                    newer target-only snapshot is divergence, left for the
+#                    next pull to refuse loudly), never a Proxmox-reserved
+#                    family, and nothing at all when the source list cannot be
+#                    read or comes back empty. Per dataset, so with -R every
+#                    expanded child mirrors its own source. Not with -r.
 #   -F               Reconcile before pulling (recursively, under -r): if a
 #                    CHILD dataset has a snapshot named like the incremental
 #                    base but under a DIFFERENT GUID (independently created,
@@ -387,7 +397,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.71'
+VERSION='v2.72'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -573,6 +583,8 @@ SSH_KEY=""
 declare -a EXTRA_SSH_OPTS=()
 # -F: reconcile (destroy target-only snapshots) before the real pull.
 RECONCILE=0
+# -M: mirror the source's snapshot set after a successful pull (mirror_target).
+MIRROR=0
 declare -a CONFLICT_SNAPSHOTS=()
 # Used only by -F -- see find_recursive_name_collisions.
 declare -a NAME_COLLISIONS=()
@@ -1126,6 +1138,67 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
         return 0
     fi
     return 1
+}
+
+# mirror_target <src> <tgt> <remote user> <remote host> -> 0 done, 1 refused/partial
+# (-M, owner 2026-10-06: a sync relationship is a MIRROR of its source.)
+#
+# Runs only after a successful pull, under this run's own lock, from the same
+# listing and the same common-base finder the pull itself used -- so it cannot
+# race a transfer and cannot disagree with it about what "common" means.
+#
+# Deletes on the TARGET exactly the snapshots that are (a) absent from the
+# source's current list and (b) strictly OLDER than the common base, in the
+# target's own creation order. Refuses -- deleting nothing -- when the source
+# list cannot be read, when it is EMPTY (an empty answer is never evidence that
+# everything was pruned: a wrong path, a wiped pool and a broken channel all
+# look like that), when there is no common base, or when the base is not found
+# by name on the target (a renamed base, matched by GUID: the order on the
+# target is then not provable). Proxmox-reserved families are never touched.
+# A snapshot that will not die (held, busy) is reported and left; the run
+# still fails so somebody looks.
+mirror_target() {
+    local src="$1" tgt="$2" ruser="$3" rhost="$4"
+    local src_list tgt_list base s
+    src_list=$(get_sorted_snapshots "$src" "$ruser" "$rhost") || {
+        log 0 "Mirror (-M) on '$tgt': the source list of '$src' could not be read -- NOTHING deleted"
+        return 1
+    }
+    [ -n "$src_list" ] || {
+        log 0 "Mirror (-M) on '$tgt': '$src' lists NO snapshots -- an empty answer is not proof of anything; NOTHING deleted"
+        return 1
+    }
+    tgt_list=$(get_sorted_snapshots "$tgt") || {
+        log 0 "Mirror (-M) on '$tgt': its own snapshot list could not be read -- NOTHING deleted"
+        return 1
+    }
+    base=$(find_common_snapshot "$src" "$tgt" "$ruser" "$rhost") || base=""
+    if [ -z "$base" ] || [ "$base" = null ]; then
+        log 0 "Mirror (-M) on '$tgt': no common base with '$src' -- NOTHING deleted"
+        return 1
+    fi
+    if ! printf '%s\n' "$tgt_list" | grep -qxF -- "$base"; then
+        log 0 "Mirror (-M) on '$tgt': the common base '$base' is not on the target under that name (matched by GUID) -- order not provable, NOTHING deleted"
+        return 1
+    fi
+    local -A on_src=()
+    while IFS= read -r s; do [ -n "$s" ] && on_src["$s"]=1; done <<< "$src_list"
+    local gone=0 stuck=0 reserved=0
+    while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        [ "$s" = "$base" ] && break
+        [ -n "${on_src[$s]:-}" ] && continue
+        case "$s" in __replicate_*|vzdump*|__migration__*) reserved=$((reserved + 1)); continue ;; esac
+        if zfs destroy "$tgt@$s" 2>/dev/null; then
+            gone=$((gone + 1))
+            log 1 "Mirror (-M): destroyed $tgt@$s -- no longer on the source"
+        else
+            stuck=$((stuck + 1))
+            log 0 "Mirror (-M): could not destroy $tgt@$s (held or busy?) -- left in place"
+        fi
+    done <<< "$tgt_list"
+    log 1 "Mirror (-M) on '$tgt': $gone removed (gone from the source, older than '$base'), $stuck could not be removed, $reserved reserved left alone"
+    [ "$stuck" -eq 0 ]
 }
 
 process_dataset() {
@@ -1904,7 +1977,7 @@ PAIR_LABEL=""
 # than being rewritten to -r/-R. If they emitted short flags, getopts would
 # count a second declaration for the same one the user wrote, and the refusal
 # would quote a spelling that never appeared on the command line.
-OPTSTRING="m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FX:SK:O:q:Q:L:E:"
+OPTSTRING="m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FMX:SK:O:q:Q:L:E:"
 
 opt_takes_arg() {   # <letter>
     case "$OPTSTRING" in *"$1:"*) return 0 ;; *) return 1 ;; esac
@@ -2025,11 +2098,12 @@ while getopts "$OPTSTRING" opt; do
         O) EXTRA_SSH_OPTS+=("$OPTARG");;
         b) BWLIMIT="$OPTARG";;
         F) RECONCILE=1;;
+        M) MIRROR=1;;
         L) PAIR_LABEL="$OPTARG";;
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -j -o -x -c -b -K -O -U -F -L -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -j -o -x -c -b -K -O -U -F -M -L -V" >&2
             exit 1
             ;;
     esac
@@ -2044,6 +2118,13 @@ fi
 # Two different modes keep their own message: it is the mistake people actually
 # make, and the useful answer is what the two modes MEAN, not how many were
 # given.
+# -M decides per dataset, from that dataset's own listing. Under -r one
+# atomic stream covers a whole subtree whose children are never listed one by
+# one here, so a mirror would either skip them silently or guess -- refused.
+if [ $MIRROR -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
+    echo "Error: -M (mirror) is per dataset and is not available with -r (one atomic stream); use -R" >&2
+    exit 1
+fi
 if [ $FLAT_RECURSE -eq 1 ] && [ $RECURSIVE -eq 1 ]; then
     echo "Error: -r and -R are mutually exclusive (-r = one atomic zfs recv -R stream, -R = independent per-dataset pulls)" >&2
     exit 1
@@ -2581,6 +2662,12 @@ for src_path in "${DATASETS[@]}"; do
         stats_start=$(date +%s)
         if process_dataset "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"; then
             emit_stats "$dataset" "$src_path" "success" "$(( $(date +%s) - stats_start ))" "$STATS_RESUMED"
+            # The copy is done and recorded as done; a mirror that then
+            # refuses or leaves something behind fails the run on its own
+            # account, so the cron envelope says so.
+            if [ $MIRROR -eq 1 ] && ! mirror_target "$src_path" "$dataset" "$REMOTE_USER" "$REMOTE_HOST"; then
+                FAILED_DATASETS+=("$dataset (mirror)")
+            fi
         else
             emit_stats "$dataset" "$src_path" "failed" "$(( $(date +%s) - stats_start ))" "$STATS_RESUMED"
             FAILED_DATASETS+=("$dataset")

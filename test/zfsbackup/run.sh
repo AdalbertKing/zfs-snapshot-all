@@ -9199,13 +9199,14 @@ pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of th
     : > "$wf"
     ( unset PASSIVE EXCLUDE_FAMILY_1 EXCLUDE_FAMILY_2
       [ -n "$fam" ] && EXCLUDE_FAMILY_1="$fam"
-      CLIENTS_DIR="$PK/clients" PEER_SAVED_MODE=sync PEER_SAVED_TARGET=""
+      CLIENTS_DIR="$PK/clients" PEER_SAVED_MODE="${PK_MODE:-sync}" PEER_SAVED_TARGET="${PK_TARGET:-}"
       LOAD_LABEL=pk LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.4.4.4 LOAD_FLAGS="-K /dev/null"
       PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
       PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
       ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
       load_ssh_opts() { LOAD_SSH_OPTS=(); }
       emit_client_sections "$wf" pk ) > "$PK/$prof.log" 2>&1 || return 1
+    cp "$wf" "$PK/last.conf"
     sed -n '/^\[dataset:/,/^$/p' "$wf"
 }
 pk_def='vzdump -E __replicate_ -E __migration__'
@@ -9213,7 +9214,7 @@ pk_def='vzdump -E __replicate_ -E __migration__'
 sec=$(pk_emit passive-flat); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -q 'PASSIVE consumption\|use_template' \
    && ! printf '%s\n' "$sec" | grep -qE '^[[:space:]]*prefix[[:space:]]*=' \
-   && printf '%s\n' "$sec" | grep -qE "^[[:space:]]*flags[[:space:]]*= .* -e -E $pk_def\$" \
+   && printf '%s\n' "$sec" | grep -qE "^[[:space:]]*flags[[:space:]]*= .* -e -E $pk_def -M\$" \
    && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*monitor_exclude = vzdump,__replicate_,__migration__$'; then
     ok "passivepick: a sync-chain dataset on a PREFIXLESS profile (passive-flat) adopts any family -- no prefix line, -e plus the default -E list, and the monitor blind to the same families"
 else
@@ -9221,7 +9222,7 @@ else
 fi
 
 sec=$(pk_emit passive-flat smiec_); rc=$?
-if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= .* -e -E smiec_$' \
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= .* -e -E smiec_ -M$' \
    && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*monitor_exclude = smiec_$'; then
     ok "passivepick: ...a RECORDED exclusion list replaces the default rather than adding to it -- the record is the relationship's own decision"
 else
@@ -9230,11 +9231,24 @@ fi
 
 sec=$(pk_emit default); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*prefix[[:space:]]*= automated_$' \
-   && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= -K /dev/null -e$' \
-   && ! printf '%s\n' "$sec" | grep -q 'monitor_exclude'; then
+   && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= -K /dev/null -e -M$' \
+   && ! printf '%s\n' "$sec" | grep -q 'monitor_exclude' \
+   && sed -n '/^\[prune:/,/^$/p' "$PK/last.conf" | grep -qE '^[[:space:]]*prune[[:space:]]*= no$'; then
     ok "passivepick control: a FAMILY-stamping profile (default) keeps adopting that family -- prefix automated_, bare -e -- because its ladder and its monitor know only that family"
 else
     bad "passivepick control: the family-profile shape changed" "rc=$rc" "$sec"
+fi
+
+# SYNC IS A MIRROR (owner 2026-10-06): every sync pull above ends in -M, and
+# the ladder profile's target [prune:] says prune = no (checked in the default
+# case). The control: a BACKUP relationship keeps its own retention -- no -M,
+# no prune = no.
+sec=$(PK_MODE=backup PK_TARGET=tank/backups pk_emit default); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -qE -- ' -M( |$)' "$PK/last.conf" \
+   && ! grep -qE '^[[:space:]]*prune[[:space:]]*= no$' "$PK/last.conf"; then
+    ok "passivepick: control -- a BACKUP relationship gets no -M and keeps its own target prune (only sync mirrors)"
+else
+    bad "passivepick: control -- a BACKUP relationship gets no -M and keeps its own target prune (only sync mirrors)" "rc=$rc" "$(cat "$PK/last.conf" 2>/dev/null | head -40)" "$(tail -5 "$PK/default.log")"
 fi
 
 # The declared half: --passive with no --exclude-family used to render a bare

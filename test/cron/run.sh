@@ -1010,6 +1010,91 @@ bash "$REPO/zfs-job.sh" "lbl" --log="$X_N/log" --notify="$X_N/notify-fail.sh" --
 check "X9 control: exit 1 still goes to notify-fail.sh only" "FAIL|lbl" "$(cat "$X_N/calls")"
 
 # ===========================================================================
+# MIR. SYNC IS A MIRROR (owner 2026-10-06). A pull tier carrying -M makes the
+# target hold what the source holds, so the generator drops that tier's own
+# target prune and keeps its monitor; a [prune:] ladder with prune = no is a
+# monitor-only section. -M on a push or with recursive = atomic is refused.
+MIR="$TMPD/mirror"; mkdir -p "$MIR"
+mir_conf() {   # <dataset flags> <extra dataset lines> -> $MIR/c.conf
+    cat > "$MIR/c.conf" <<EOF
+[defaults]
+	host_label = m
+[template:flat_hourly]
+	send_schedule  = 31 * * * *
+	prune_schedule = 21 * * * *
+	pattern        = -
+	retain         = -H168
+	monitor_warn   = 3h
+	monitor_crit   = 5h
+[dataset:hdd/x]
+	use_template = flat_hourly
+	src          = zb@10.0.0.1:hdd/x
+	flags        = $1
+$2
+EOF
+}
+mir_conf "-e -M" ""
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/c.conf" 2>&1); mrc=$?
+check "MIR1 a mirrored pull renders, rc=0" "0" "$mrc"
+check "MIR2 ...its pull line carries -M" "1" "$(printf '%s\n' "$mo" | grep -c 'snapget.sh -m "" -e -M ')"
+check "MIR3 ...and NO target prune line (the mirror is the retention)" "0" "$(printf '%s\n' "$mo" | grep -c 'delsnaps.sh')"
+check "MIR4 ...while the monitor stays" "1" "$(printf '%s\n' "$mo" | grep -c 'check-snap-age.sh')"
+mir_conf "-e" ""
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/c.conf" 2>&1)
+check "MIR5 control: the same tier WITHOUT -M keeps its target prune" "1" "$(printf '%s\n' "$mo" | grep -c 'delsnaps.sh')"
+mir_conf "-e -M" "	recursive    = atomic"
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/c.conf" 2>&1); mrc=$?
+case "$mrc:$mo" in
+    0:*) bad "MIR6 -M with recursive = atomic is refused" "$mo" ;;
+    *"cannot go with recursive = atomic"*) ok "MIR6 -M with recursive = atomic is refused" ;;
+    *) bad "MIR6 -M with recursive = atomic is refused" "$mo" ;;
+esac
+sed -i 's#^\tsrc          = zb@10.0.0.1:hdd/x$#\tdst          = zb@10.0.0.1:hdd/y#' "$MIR/c.conf"
+sed -i '/^\trecursive    = atomic$/d' "$MIR/c.conf"
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/c.conf" 2>&1); mrc=$?
+case "$mrc:$mo" in
+    0:*) bad "MIR7 -M on a PUSH section is refused (snapsend.sh has no -M)" "$mo" ;;
+    *"is a PULL option"*) ok "MIR7 -M on a PUSH section is refused (snapsend.sh has no -M)" ;;
+    *) bad "MIR7 -M on a PUSH section is refused (snapsend.sh has no -M)" "$mo" ;;
+esac
+cat > "$MIR/p.conf" <<'EOF'
+[defaults]
+	host_label = m
+[template:k1]
+	pattern = automated_hourly
+	keep = 24
+	prune_schedule = 21 * * * *
+	monitor_warn = 90m
+	monitor_crit = 150m
+[template:k2]
+	pattern = automated_daily
+	keep = 7
+	prune_schedule = 31 1 * * *
+[prune:hdd/x]
+	use_template = k1,k2
+	gfs = yes
+	gfs_pattern = automated_
+	prune = no
+	recursive = no
+	notify = x
+EOF
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/p.conf" 2>&1); mrc=$?
+# This shape was test/negative/gfs-empty-ladder until 2026-10-06 (refused). Its
+# stated worry -- a -G line with no retain flags -- still holds: MIR9 pins that
+# no delsnaps line is emitted at all. What changed is that the section is now
+# legitimate: a mirrored sync landing whose ladder only carries monitors.
+check "MIR8 a ladder with prune = no is a monitor-only section: rc=0" "0" "$mrc"
+check "MIR9 ...no delsnaps -G line" "0" "$(printf '%s\n' "$mo" | grep -c 'delsnaps.sh')"
+check "MIR10 ...the tier that carries a monitor still monitors" "1" "$(printf '%s\n' "$mo" | grep -c 'check-snap-age.sh')"
+sed -i '/monitor_warn = 90m/d; /monitor_crit = 150m/d' "$MIR/p.conf"
+mo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$MIR/p.conf" 2>&1); mrc=$?
+case "$mrc:$mo" in
+    0:*) bad "MIR11 a prune = no section with no monitor on ANY tier is still refused" "$mo" ;;
+    *"on any tier -- the section would emit nothing at all"*) ok "MIR11 a prune = no section with no monitor on ANY tier is still refused" ;;
+    *) bad "MIR11 a prune = no section with no monitor on ANY tier is still refused" "$mo" ;;
+esac
+
+# ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
 # Inline prune entities are grouped so that datasets sharing a schedule, a

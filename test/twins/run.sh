@@ -722,6 +722,77 @@ for _hn in destroy_one emit_stats; do
     fi
 done
 
+# ---- M. snapget -M: a sync relationship is a MIRROR (owner 2026-10-06) ------
+# The shipped mirror_target, extracted, against stub listings and a stub zfs
+# that records destroys. What it must delete is narrow on purpose: snapshots
+# the source no longer has AND that are older than the common base -- never the
+# base, never anything newer, never a Proxmox-reserved family -- and NOTHING
+# when the source cannot be read, answers empty, or the base is not on the
+# target by name. Push has no -M (sync is pull-only), so this is snapget's alone.
+SG="${SNAPGET:-$REPO/snapget.sh}"
+MT="$(mktemp -d)"
+sed -n '/^mirror_target() {/,/^}/p' "$SG" > "$MT/fn.sh"
+if grep -q '^mirror_target() {' "$MT/fn.sh"; then
+    ok "M mirror_target is extracted from the shipped snapget.sh"
+else
+    bad "M mirror_target is extracted from the shipped snapget.sh" "missing in $SG"
+fi
+mt_run() {   # <src list|FAIL> <tgt list> <base|NONE> [stuck name] -> "rc|destroyed..."
+    ( set +u
+      log() { :; }
+      MT_SRC="$1" MT_TGT="$2" MT_BASE="$3" MT_STUCK="${4:-}"
+      get_sorted_snapshots() {
+          if [ -n "${2:-}" ]; then
+              [ "$MT_SRC" = FAIL ] && return 1
+              printf '%s' "$MT_SRC" | tr ' ' '\n'
+          else
+              printf '%s' "$MT_TGT" | tr ' ' '\n'
+          fi
+      }
+      find_common_snapshot() { [ "$MT_BASE" = NONE ] && { echo -n null; return 0; }; echo -n "$MT_BASE"; }
+      zfs() {
+          [ "$1" = destroy ] || return 0
+          [ -n "$MT_STUCK" ] && [ "$2" = "t/x@$MT_STUCK" ] && return 1
+          echo "$2" >> "$MT/destroyed"
+      }
+      : > "$MT/destroyed"
+      . "$MT/fn.sh"
+      mirror_target "s/x" "t/x" u h; r=$?
+      printf '%s|%s' "$r" "$(tr '\n' ' ' < "$MT/destroyed")" )
+}
+got=$(mt_run "a b d e" "a b c d e" e)
+[ "$got" = "0|t/x@c " ] && ok "M a snapshot gone from the source and older than the base is destroyed, the rest stays" \
+                         || bad "M a snapshot gone from the source and older than the base is destroyed, the rest stays" "got=$got"
+got=$(mt_run "a b e" "a b e x" e)
+[ "$got" = "0|" ] && ok "M a target-only snapshot NEWER than the base is divergence -- never mirrored away" \
+                  || bad "M a target-only snapshot NEWER than the base is divergence -- never mirrored away" "got=$got"
+got=$(mt_run "" "a b c" c)
+[ "$got" = "1|" ] && ok "M an EMPTY source list deletes nothing and fails the run" \
+                  || bad "M an EMPTY source list deletes nothing and fails the run" "got=$got"
+got=$(mt_run FAIL "a b c" c)
+[ "$got" = "1|" ] && ok "M an unreadable source list deletes nothing and fails the run" \
+                  || bad "M an unreadable source list deletes nothing and fails the run" "got=$got"
+got=$(mt_run "b c" "a b c" NONE)
+[ "$got" = "1|" ] && ok "M no common base deletes nothing" \
+                  || bad "M no common base deletes nothing" "got=$got"
+got=$(mt_run "x c" "a b c2" c)
+[ "$got" = "1|" ] && ok "M a base not on the target by name (GUID match) deletes nothing -- order not provable" \
+                  || bad "M a base not on the target by name (GUID match) deletes nothing -- order not provable" "got=$got"
+got=$(mt_run "e" "vzdump-1 __replicate_x old e" e)
+[ "$got" = "0|t/x@old " ] && ok "M Proxmox-reserved families are left alone, an ordinary gone snapshot is not" \
+                          || bad "M Proxmox-reserved families are left alone, an ordinary gone snapshot is not" "got=$got"
+got=$(mt_run "e" "a b e" e b)
+[ "$got" = "1|t/x@a " ] && ok "M a snapshot that will not die is reported (run fails) while the others still go" \
+                        || bad "M a snapshot that will not die is reported (run fails) while the others still go" "got=$got"
+rm -rf "$MT"
+# The real script refuses -M with -r, before it touches anything.
+out=$(bash "$SG" -M -r "u@h:s/x" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '-M (mirror) is per dataset and is not available with -r'; then
+    ok "M the real snapget refuses -M together with -r (one atomic stream cannot be mirrored per dataset)"
+else
+    bad "M the real snapget refuses -M together with -r (one atomic stream cannot be mirrored per dataset)" "rc=$rc out=$out"
+fi
+
 echo
 echo "twins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

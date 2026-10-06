@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 30ba11332d1317b8 -->
+<!-- status-covers-digest: 45abdeccf02a3b78 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Synchro to LUSTRO źródła (2026-10-06, właściciel: „synchro jako lustro dla wszystkich”, „Odmrażam snapget, rób A”).**
+  - **Było:** cel synchro miał WŁASNĄ retencję -- brał wszystko, co źródło dodało, i nic z
+    tego, co usunęło (stąd reguła historii z REV-146).
+  - **Zmiana:** `snapget.sh -M` (v2.72): po udanym pobraniu, pod blokadą biegu, z tej samej listy
+    i tej samej wspólnej bazy, usuwa na celu migawki nieobecne u źródła i STARSZE od bazy. Nigdy
+    bazy ani nowszych, nigdy rodzin Proxmoksa; nic, gdy listy źródła nie da się odczytać albo
+    jest pusta, gdy nie ma bazy albo bazy nie ma na celu pod tą nazwą. Niezdejmowalna migawka
+    (hold) = zgłoszona, bieg rc≠0. Z `-r` odmowa. `zfs-backup.sh` dokłada `-M` do każdego
+    pobrania relacji synchro (poza `recursive = atomic`) i pisze `prune = no` w `[prune:]` celu;
+    gen-cron pomija prune celu szczebla z `-M` (monitor zostaje), a drabina z `prune = no` na
+    wszystkich szczeblach jest sekcją samych monitorów (dotąd odmowa). GUI: F2 „Trzyma” =
+    „lustro”, szczegóły relacji „Cel: lustro źródła”; kreator (krok 1) i
+    `docs/DEPLOYMENT-PROXMOX.md` mówią o tym wprost. `ENGINE-FREEZE.md`: wpis, bliźniak nie
+    przeniesiony (synchro jest tylko pull).
+  - **Testy (pve10):** `twins` 93/0 (+10, sekcja M: wycięta `mirror_target` na atrapach, każda
+    odmowa niczego nie usuwa; prawdziwy `snapget -M -r` odmawia), `cron` 154/0 (MIR1-11),
+    `zfsbackup --section passivepick` 7/0 (synchro kończy się `-M`, backup nie), `profiles` 93/0,
+    `tui` +1 (6 testów pty pada też na czystym main na pve10, w CI zielone).
+  - **Do zrobienia po wdrożeniu:** ponowne założenie istniejących relacji synchro (pve9-synchro,
+    gui-bc), żeby dostały nowy kształt; dowód lustra na żywo.
 
 - **Jedna relacja na parę hostów także we wsadzie (D1) i uczciwy `--grant-remotely` (U1), 2026-10-06.**
   - **D1 -- zmierzone na pve10:** `zfs-backup.sh --source=192.168.28.96:… --name=lab-bc` przy

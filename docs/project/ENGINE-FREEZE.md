@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 ae0c3b9beb6cd5a54f7153f84de32c7cc632acdf -->
-<!-- frozen: snapget.sh 100755 92a9e3b4c0cc59c184550931699dfde5026d48c3 -->
+<!-- frozen: snapget.sh 100755 9ae2f8bc2e7e78faa08796c2ed8a4ffde626db65 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 0701a4865690e0112495b7f893ba935da45454d4 -->
@@ -859,6 +859,32 @@ Owner-authorized refreezes:
   `test/cron` X8/X8b/X9 (the real zfs-job.sh: 75 -> warn script only, END
   marker keeps rc=75, 1 -> failure script only); main's zfs-job.sh sent 75 to
   the failure script.
+
+- 2026-10-06 (snapget.sh): **-M, a sync relationship is a mirror of its source.**
+  Owner direction, verbatim: "synchro jako lustro dla wszystkich, koduj", then,
+  asked whether to put it in the engine: "Odmrażam snapget, rób A".
+  snapget v2.71 -> v2.72.
+  Until now a sync target kept its OWN retention: it took everything the source
+  added and nothing the source removed, so it held more than the source (the
+  REV-146 history rule exists because of that). New: after a SUCCESSFUL pull,
+  under the run's own lock and from the listing and common-base finder the pull
+  itself used, `mirror_target` destroys on the target every snapshot that is
+  absent from the source AND older than the common base. Never the base or
+  anything newer (a newer target-only snapshot is divergence, left for the next
+  pull to refuse), never a Proxmox-reserved family, and nothing at all when the
+  source list cannot be read or is EMPTY, when there is no common base, or when
+  the base is not on the target by name. A snapshot that will not die is reported
+  and fails the run. Refused with -r (the mirror is per dataset).
+  twin: NOT ported -- sync relationships are pull-only (the collector pulls);
+  snapsend.sh has no sync mode to mirror, and gen-cron refuses -M on a push.
+  Wiring outside the engine: zfs-backup.sh adds -M to every sync pull (not
+  recursive = atomic) and writes `prune = no` into the target [prune:] ladder;
+  gen-cron drops a -M tier's inline target prune and keeps its monitor, and a
+  ladder whose tiers all say prune = no is now a monitor-only section.
+  Regression tests: `test/twins` section M (+10: the shipped mirror_target on
+  stub listings -- every refusal case deletes nothing; the real snapget refuses
+  -M -r), `test/cron` MIR1-MIR11, `test/zfsbackup --section passivepick` (sync
+  pulls end in -M, a backup relationship does not), `test/tui` (F2 'lustro').
 
 ## How it is enforced
 
