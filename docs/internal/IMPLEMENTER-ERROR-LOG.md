@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1899,6 +1899,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E69 — `update-grub` in a chroot on the hypervisor wrote an empty root= (2026-10-06, R2)
+
+**Genesis.** Repairing the lab VM pve9 (VM 109 on pve2): its kernel 53 had no
+initrd. I mounted its root zvol on pve2, chrooted, and ran `update-initramfs`
+and `update-grub`. `update-grub` resolved the root device through grub-probe on
+the HYPERVISOR's view of the disk (`/dev/zd48p1`) and wrote
+`root=PARTUUID=` -- empty. The next boot stopped in the initramfs with
+"ALERT! PARTUUID= does not exist". I had read the grub.cfg BEFORE the run
+(correct PARTUUID) and did not read it AFTER. The owner stopped the repair and
+the VM was rebuilt from a fresh image, so nothing depended on it -- but the
+repair had made a second fault on top of the first.
+
+**Cause.** R2: "update-grub produces a correct grub.cfg" is true inside the
+guest; in a chroot on another kernel's device names it is a different side of
+the boundary, and I carried the conclusion across without measuring it.
+
+**Rule.** R2. After any generator runs in a chroot (grub, initramfs, fstab),
+diff its output against the file it replaced before booting -- the root=,
+UUIDs and module lists in particular.
 
 ### E68 — committed and pushed behind a gate whose failure `| tail` swallowed (2026-10-06, R4)
 
