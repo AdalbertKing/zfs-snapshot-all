@@ -4380,7 +4380,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # otherwise the last send line and the first prune line fuse into one.
         local _ss="" _sp=""
         [ -z "$stagger_send_expr" ]  && _ss="$(schedule_tier_exprs send  | schedule_spread_tiers send  "$stagger_min")"
-        [ -z "$stagger_prune_expr" ] && _sp="$(schedule_tier_exprs prune | schedule_spread_tiers prune "$stagger_prune")"
+        [ -z "$stagger_prune_expr" ] && _sp="$(schedule_tier_exprs prune | schedule_spread_tiers prune "$(( stagger_min + 20 ))")"
         _tier_sched="${_ss:+$_ss
 }${_sp:+$_sp
 }"
@@ -4861,23 +4861,59 @@ schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
 # tier moves by the same delta, so the profile's spacing survives the spread.
 # A tier whose minute is not a plain number (a */15 or a list) cannot be
 # shifted meaningfully and gets the relationship's minute, as before.
+#
+# THE HOUR CARRIES (U2, 2026-10-06). The shift used to wrap the minute inside
+# its own hour: on lab-ab (minute 29) the weekly prune 02:40 became 02:09 while
+# the weekly pull 02:20 became 02:49 -- the prune ran 40 minutes BEFORE the
+# copy it prunes. A minute that passes :59 now moves the hour on, and one that
+# falls below :00 moves it back, whenever the hour is a plain number. A daily
+# tier (day-of-month and day-of-week both '*') also wraps across midnight; a
+# weekly or monthly one does not, because carrying it past midnight would move
+# it to another DAY -- it keeps the old in-hour wrap. The minute given may be
+# 60 or more (the prune base is the send minute + 20, unwrapped, so both sides
+# shift by the same delta); it is reduced only where it is written.
 #   stdin: "<tier>\t<cron expression>" per tier (schedule_tier_exprs)
 #   out:   "\t<send|prune>_schedule_<tier> = <expression>" per tier, newline-separated
 schedule_spread_tiers() {   # <send|prune> <minute for the first tier>
-    local field="$1" min="$2" t e delta="" m out=""
+    local field="$1" min="$2" t e delta="" m out="" nm carry
     while IFS="$(printf '\t')" read -r t e; do
         [ -n "$t" ] && [ -n "$e" ] || continue
         m="${e%% *}"
         case "$m" in
-            ''|*[!0-9]*) out="$out	${field}_schedule_$t = $(schedule_with_minute "$e" "$min")
+            ''|*[!0-9]*) out="$out	${field}_schedule_$t = $(schedule_with_minute "$e" "$(( min % 60 ))")
 " ; continue ;;
         esac
         [ -n "$delta" ] || delta=$(( min - 10#$m ))
-        out="$out	${field}_schedule_$t = $(schedule_with_minute "$e" "$(( ((10#$m + delta) % 60 + 60) % 60 ))")
+        nm=$(( 10#$m + delta ))
+        if [ "$nm" -ge 0 ]; then carry=$(( nm / 60 )); else carry=$(( -((59 - nm) / 60) )); fi
+        nm=$(( nm - carry * 60 ))
+        out="$out	${field}_schedule_$t = $(schedule_shift_expr "$e" "$nm" "$carry")
 "
     done
     printf '%s' "${out%
 }"
+}
+
+# schedule_with_minute plus the hour carry (see schedule_spread_tiers). Any
+# field that is not a plain number is left alone, and so is the carry that
+# would cross midnight on a tier bound to a day.
+schedule_shift_expr() {   # <cron expression> <minute 0-59> <hour carry> -> expression
+    local expr="$1" min="$2" carry="$3" mm h dom mon dow nh
+    read -r mm h dom mon dow <<< "$expr"
+    if [ "$carry" -ne 0 ] && [ -n "$dow" ]; then
+        case "$h" in
+            ''|*[!0-9]*) ;;
+            *)  nh=$(( 10#$h + carry ))
+                if [ "$nh" -ge 0 ] && [ "$nh" -le 23 ]; then
+                    h="$nh"
+                elif [ "$dom" = '*' ] && [ "$dow" = '*' ]; then
+                    h=$(( (nh % 24 + 24) % 24 ))
+                fi ;;
+        esac
+        printf '%s %s %s %s %s' "$min" "$h" "$dom" "$mon" "$dow"
+        return 0
+    fi
+    schedule_with_minute "$expr" "$min"
 }
 
 schedule_with_minute() {   # <cron expression> <minute> -> expression with field 1 replaced
@@ -11543,7 +11579,7 @@ cmd_monitor() {
                 jsonw_field engine_in_cron "$engine_named"
                 jsonw_field engine_run     "$CHECKSNAPAGE"
                 printf ',"engine_path_differs":%s' \
-                    "$([ "$engine_named" = "$CHECKSNAPAGE" ] && echo false || echo true)"
+                    "$(engine_differs "$engine_named" "$CHECKSNAPAGE" && echo true || echo false)"
                 printf ',"parsed":%s,"rc":%s' "$parsed" "$rc"
                 jsonw_field verdict "$verdict"
                 jsonw_text  reason  "$reason"
@@ -11600,13 +11636,26 @@ cmd_monitor() {
 # ssh reason on stderr and rc=1 -- the wizard then says "type it by hand".
 # Never an empty list pretending the peer has nothing.
 # ---------------------------------------------------------------------------
+# Does the engine a cron line names differ from the one this reader ran?
+# A delegated account runs its OWN clone (/home/<acct>/zfs-snapshot-all), so
+# the PATH always differs from root's and F3 warned on every such relationship
+# though nothing was wrong (U6, 2026-10-06). Different = a different path whose
+# file is not byte-identical, or cannot be read at all -- the case the warning
+# exists for (a stale or foreign copy).
+engine_differs() {   # <path in the cron line> <path this reader ran> -> 0 = differs
+    [ "$1" = "$2" ] && return 1
+    [ -r "$1" ] && [ -r "$2" ] && cmp -s -- "$1" "$2" && return 1
+    return 0
+}
+
 cmd_list_datasets() {
-    local as_json=0 host="" port="" a
+    local as_json=0 host="" port="" a own=0
     for a in "$@"; do
         case "$a" in
             --json)   as_json=1 ;;
             --port=*) port="${a#*=}" ;;
-            -*)       die "list-datasets: unknown option '$a' (only --json and --port=N)" ;;
+            --own-snapshots) own=1 ;;
+            -*)       die "list-datasets: unknown option '$a' (only --json, --port=N and --own-snapshots)" ;;
             *)        [ -z "$host" ] || die "list-datasets: one HOST at most"; host="$a" ;;
         esac
     done
@@ -11628,6 +11677,34 @@ cmd_list_datasets() {
         tail -3 "$errf" >&2; rm -f "$errf"
         die "list-datasets: ${host:+$host: }zfs list failed (rc=$rc)"
     fi
+    # --own-snapshots (U8, 2026-10-06): per dataset, how many snapshots it
+    # carries OUTSIDE Proxmox's reserved families. The wizard asks it for a sync
+    # relationship: a source that already holds snapshots of its own is a link
+    # in a chain, and the pickup that takes every family (passive-flat) is what
+    # it should be offered first. Opt-in, so the plain listing stays exactly
+    # what it was and costs no second zfs call.
+    local -A own_n=()
+    if [ "$own" -eq 1 ]; then
+        local snaps _s _d
+        rc=0
+        if [ -z "$host" ]; then
+            snaps=$(zfs list -H -o name -t snapshot 2>"$errf") || rc=$?
+        else
+            snaps=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -o name -t snapshot" 2>"$errf") || rc=$?
+        fi
+        if [ "$rc" -ne 0 ]; then
+            tail -3 "$errf" >&2; rm -f "$errf"
+            die "list-datasets: ${host:+$host: }zfs list -t snapshot failed (rc=$rc)"
+        fi
+        while IFS= read -r _s; do
+            case "$_s" in *@*) ;; *) continue ;; esac
+            _d="${_s%%@*}"
+            case "${_s#*@}" in vzdump*|__replicate_*|__migration__*) continue ;; esac
+            own_n[$_d]=$(( ${own_n[$_d]:-0} + 1 ))
+        done <<SN
+$snaps
+SN
+    fi
     rm -f "$errf"
     printf '{"host":"%s","port":%s,"account":"%s","datasets":[' \
         "$(json_escape "${host:-local}")" "${port:-22}" "$([ -n "$host" ] && echo root || id -un)"
@@ -11636,7 +11713,9 @@ cmd_list_datasets() {
         [ -n "$_n" ] || continue
         [ "$first" -eq 1 ] || printf ','
         first=0
-        printf '{"name":"%s","type":"%s","used":%s,"avail":%s}' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
+        printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
+        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s' "${own_n[$_n]:-0}"
+        printf '}'
     done <<DS
 $rows
 DS

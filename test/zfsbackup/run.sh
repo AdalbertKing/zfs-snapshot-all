@@ -10393,6 +10393,23 @@ mn_has '"engine_in_cron":"/root/scripts/check-snap-age.sh"' \
        "monitorjson: the path the cron line names is reported"
 mn_has '"engine_path_differs":true' \
        "monitorjson: a difference between the line's engine and the one that ran is stated, not hidden"
+# U6 (2026-10-06): a delegated account runs its OWN clone, so the path differs
+# on every such relationship; F3 warned on all of them. Different now means a
+# different path whose file is not byte-identical, or is not readable.
+ED="$WORK/enginediff"; rm -rf "$ED"; mkdir -p "$ED/a" "$ED/b"
+printf 'engine v1\n' > "$ED/a/check-snap-age.sh"; cp "$ED/a/check-snap-age.sh" "$ED/b/check-snap-age.sh"
+ed_got=""
+for _c in "$ED/a/check-snap-age.sh|$ED/a/check-snap-age.sh" "$ED/b/check-snap-age.sh|$ED/a/check-snap-age.sh" \
+          "$ED/nope/check-snap-age.sh|$ED/a/check-snap-age.sh"; do
+    ( engine_differs "${_c%%|*}" "${_c#*|}" ) && ed_got="${ed_got}D" || ed_got="${ed_got}s"
+done
+printf 'engine v2\n' > "$ED/b/check-snap-age.sh"
+( engine_differs "$ED/b/check-snap-age.sh" "$ED/a/check-snap-age.sh" ) && ed_got="${ed_got}D" || ed_got="${ed_got}s"
+if [ "$ed_got" = "ssDD" ]; then
+    ok "monitorjson: U6 -- the same file under another clone's path is NOT a different engine; an unreadable or changed one is"
+else
+    bad "monitorjson: U6 -- engine_differs (same path, identical copy, missing, changed)" "got=$ed_got want=ssDD"
+fi
 if [ "$(grep -c . "$MN/engine.log")" -eq 3 ]; then
     ok "monitorjson: the engine ran exactly three times -- the unreadable line was NOT run"
 else
@@ -12905,6 +12922,35 @@ if ! ld_run >/dev/null && grep -q 'JSON only' "$LD/err"; then
     ok "listdatasets: without --json the verb refuses"
 else
     bad "listdatasets: refuses without --json" "$(cat "$LD/err")"
+fi
+# U8 (2026-10-06): --own-snapshots counts, per dataset, the snapshots OUTSIDE
+# Proxmox's reserved families -- what tells the wizard a sync source is a link
+# in a chain. Without the flag the listing is unchanged and no second zfs call
+# is made.
+LO="$WORK/listown"; rm -rf "$LO"; mkdir -p "$LO/bin"
+cat > "$LO/bin/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${LD_ARGS:?}/ssh.argv"
+case "$*" in
+    *"-t snapshot"*) printf 'pool/a@automated_hourly_1\npool/a@reczny\npool/a@vzdump_x\npool/b@__replicate_101_x\npool/b@__migration__\n' ;;
+    *) printf 'pool\tfilesystem\t1\t2\npool/a\tfilesystem\t1\t2\npool/b\tvolume\t3\t2\n' ;;
+esac
+EOF
+chmod +x "$LO/bin/ssh"
+lo_run() { ( PATH="$LO/bin:$PATH" LD_ARGS="$LO" bash "$ZFSBACKUP" list-datasets "$@" ) 2>"$LO/err"; }
+LDOUT=$(lo_run peer.example --json --own-snapshots)
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["own_snapshots"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0), ('pool/a', 2), ('pool/b', 0)]" ] && [ "$(grep -c . "$LO/ssh.argv")" -eq 2 ]; then
+    ok "listdatasets: --own-snapshots counts per dataset the snapshots outside vzdump/__replicate_/__migration__ (pool/a 2, pool/b 0)"
+else
+    bad "listdatasets: --own-snapshots" "got=$got" "$LDOUT" "$(cat "$LO/err")"
+fi
+rm -f "$LO/ssh.argv"
+LDOUT=$(lo_run peer.example --json)
+if ! printf '%s' "$LDOUT" | grep -q own_snapshots && [ "$(grep -c . "$LO/ssh.argv")" -eq 1 ]; then
+    ok "listdatasets: ...without --own-snapshots the JSON carries no such field and only ONE zfs call is made"
+else
+    bad "listdatasets: plain listing changed by --own-snapshots" "$LDOUT" "$(cat "$LO/ssh.argv")"
 fi
 rm -f "$LD/zfs.argv" "$LD/ssh.argv"
 if ! ld_run 'peer;rm -rf /' --json >/dev/null && grep -q 'HOST looks wrong' "$LD/err" && [ ! -e "$LD/ssh.argv" ]; then

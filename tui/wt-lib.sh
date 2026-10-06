@@ -45,6 +45,11 @@ info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
 lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
     local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
 }
+clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
+    local t="$1" m="$2"
+    [ "$m" -lt 8 ] && m=8
+    if [ "${#t}" -gt "$m" ]; then printf '%s…' "${t:0:$((m - 1))}"; else printf '%s' "$t"; fi
+}
 yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
     # W oknie z --scrolltext fokus startuje na tekście i Enter nic nie robi, dopóki nie
     # przejdziesz Tabem na przyciski (zmierzone jazdą po pty). Więc: bez przewijania,
