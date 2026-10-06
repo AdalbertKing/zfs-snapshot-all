@@ -4869,6 +4869,8 @@ sync_narrow_legacy_grants() {   # <user> <this client> <landing>...
                        record_load client "$f" 2>/dev/null
                        [ "$STATE" = removed ] && exit 0
                        [ "${LOCAL_USER:-}" = "$user" ] || exit 0
+                       [ "${CLIENT_NAME:-$(basename "$f" .conf)}" = "$me" ] && exit 0   # its landings were granted just before
+
                        printf '%s|%s|%s' "${CLIENT_NAME:-$(basename "$f" .conf)}" "${CLIENT_TARGET:-}" "${MANAGED_DATASETS:-}" )
                 [ -n "$rec" ] || continue
                 local rn="${rec%%|*}" rest="${rec#*|}"; local rt="${rest%%|*}" rm="${rest#*|}" m
