@@ -11994,6 +11994,27 @@ cmd_delete_relation() {
     case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
     case "$port" in ''|*[!0-9]*) port=22 ;; esac
 
+    # U9 (2026-10-06): MANAGED_DATASETS is written by ACTIVATION. A relationship
+    # that was SEEDED and never activated already has full copies on disk, and
+    # --destroy-copies used to say "(the record lists none)" and leave them. The
+    # landings are derived the way the seed itself placed them (client_local_path
+    # over the pairing's dataset list), in a subshell so nothing it loads leaks
+    # into the steps below, and only those that EXIST here are listed. A dataset
+    # under another listed one is dropped: `destroy -r` of the root takes it.
+    local copies_from="the record"
+    if [ -z "$copies" ] && [ "$state" != removed ]; then
+        local _derived
+        _derived=$( load_client_and_connection "$cpath" >/dev/null 2>&1 || exit 0
+                    for _ds in ${PEER_SAVED_DATASETS:-}; do
+                        _lp=$(client_local_path "$_ds")
+                        zfs list -H -o name -- "$_lp" >/dev/null 2>&1 && printf '%s\n' "$_lp"
+                    done | sort -u | awk '{ for (i = 1; i <= n; i++) if (index($0, k[i] "/") == 1) next; k[++n] = $0; print }' )
+        if [ -n "$_derived" ]; then
+            copies=$(printf '%s\n' "$_derived" | tr '\n' ' '); copies="${copies% }"
+            copies_from="the pairing -- seeded, never activated, so the record lists none"
+        fi
+    fi
+
     # Who else uses this peer? Counted from the records, in a subshell per file so
     # one record's fields never leak into the next.
     local others="" f o
@@ -12021,7 +12042,7 @@ cmd_delete_relation() {
     if [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
     else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
     if [ "$destroy" -eq 1 ]; then
-        echo "  4. COPIES    : zfs destroy -r, on THIS host, of:"
+        echo "  4. COPIES    : zfs destroy -r, on THIS host, of (from $copies_from):"
         local d; for d in $copies; do echo "                   $d"; done
         [ -n "$copies" ] || echo "                   (the record lists none)"
     else
