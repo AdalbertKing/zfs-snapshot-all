@@ -369,6 +369,15 @@ Every pull carries `snapget.sh -M`, so what the source prunes is removed here at
 the next run, and the destination keeps no retention of its own. History beyond
 the source's own retention belongs to a backup relationship, not to sync.
 
+A backup relationship, in turn, prunes **foreign** snapshots on its landing like
+its own (since 2026-10-06). Every pull carries `-I`, so whatever the source holds
+between two of our snapshots -- a manual one, another tool's family -- lands
+here too, and used to stay for good. The landing's `[dataset:]` (and its
+`[prune:]` ladder) says `prune_foreign = yes`; gen-cron then renders the finest
+tier's prune with no pattern and with `-P "<family>:all"` for every other family
+pruned there, so a foreign snapshot counts with the hourly ones and goes when an
+hourly one would. The replica families keep their two newest.
+
 ```
 source:       rpool/data/vm-100-disk-0
 destination:  rpool/data/vm-100-disk-0     <- identical path, other host
