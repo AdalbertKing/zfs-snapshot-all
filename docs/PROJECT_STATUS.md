@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 54ca25b27fb9f038 -->
+<!-- status-covers-digest: 30ba11332d1317b8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Jedna relacja na parę hostów także we wsadzie (D1) i uczciwy `--grant-remotely` (U1), 2026-10-06.**
+  - **D1 -- zmierzone na pve10:** `zfs-backup.sh --source=192.168.28.96:… --name=lab-bc` przy
+    żywej relacji `pve11` (ten sam host) nie odmówił. Jawne `--name` omijało wyszukiwanie po
+    hoście, więc druga relacja wpisała swój tryb i prośbę do WSPÓLNEGO `peers/192.168.28.96.conf`,
+    rozszerzyła zakres zatwierdzony na pve11 dla pierwszej relacji i dopiero potem padła na
+    `--join`. Kreator GUI i `import-relation` odmawiały od dawna. **Zmiana:** `rux_resolve_name`
+    odmawia NOWEJ nazwy przy żywej relacji do tego hosta, w planie i pod `--install`, zanim
+    cokolwiek zostanie sparowane. Wznowienie tej samej nazwy i wskazanie jednej z kilku starych
+    relacji (`--name=a`) bez zmian. Opis `--name` w pomocy poprawiony.
+  - **U1:** przy udanym `--grant-remotely` log pokazywał „FATAL: join interrupted before scope
+    acceptance” i „falling back to the manual steps below” (zdalny `--join` nie ma terminala,
+    więc pytanie o zgodę zawsze się urywało), po czym kolektor i tak zatwierdzał zakres. **Zmiana:**
+    przy `--grant-remotely` kolektor przekazuje zdalnemu `--join` `JOIN_SCOPE_BY_COLLECTOR=1`
+    (`deploy.sh --pair`, przez ssh): `--join` nie szkicuje, nie pyta i nie nadaje -- mówi, że zakres
+    zapisze kolektor -- a w trybie synchro nie powstaje szkic „dokończ TAM”. Bez flagi zgoda
+    nadal należy do człowieka na źródle. Starsze źródło flagę zignoruje (zachowanie jak dotąd).
+  - **Testy:** `rux` +4 (16c/16d, 21c/21d; na pve10 gałąź 49/1, kod z main 47/3 -- padają dokładnie
+    16c i 21c; „2.” pada na obu, zależy od pul hosta), `joinmanifest` 34/0 (+2: z flagą nic się
+    nie dzieje i jest to powiedziane; kontrola bez flagi dalej staje na pytaniu).
 
 - **Czytnik monitorów: samotny `-` to WZORZEC, nie flaga (2026-10-06, test łańcucha a<b<>c z GUI).**
   - **Zmierzone na pve9:** relacja synchro `gui-bc` założona kreatorem GUI -- F3 pokazywał
