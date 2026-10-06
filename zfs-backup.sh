@@ -4792,6 +4792,108 @@ flag_profile() {   # <cmd> <value> -- refuses an empty, blank-carrying or flag-s
 # parity pin, not by sourcing deploy.sh (no source edge, see deps.conf).
 ZFS_PERMS_LOCAL_RECEIVE="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
 
+# K4 (lab campaign, 2026-10-06): A SYNC RELATIONSHIP'S DELEGATED ACCOUNT GETS
+# ITS LANDINGS, NOT THEIR PARENT. The receive set (with destroy and rollback)
+# used to go on the PARENT of each landing, Local+Descendent -- so every
+# sibling came with it: on pve9 the account of sync `g3-bc` created and
+# destroyed a snapshot on root's backup landing `k2-ab` next door; where a
+# synced dataset sits right under the pool, the parent IS the pool (pve10,
+# pve11: the account could destroy anything on the host).
+#
+# Measured on pve9 before choosing this shape: a Local+Descendent grant on the
+# landing itself carries an incremental receive, a NEW child arriving under -R,
+# and snapshot/destroy on the landing and every child; the sibling stays
+# refused. A Local-only or create-time grant (zfs allow -l / -c) does NOT --
+# ZFS checks a snapshot destroy as a descendant, so the account could not prune
+# its own copy. The seed runs as root and creates the landing before
+# activation, so the landing exists when this runs; if it does not, only
+# create/mount/receive go on the parent, LOCAL only, and the next re-activation
+# grants the landing.
+sync_delegate_landings() {   # <user> <landing>...
+    local user="$1" l parent; shift
+    for l in "$@"; do
+        if zfs list -H -o name -- "$l" >/dev/null 2>&1; then
+            zfs allow -u "$user" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$l" \
+                || die "activate: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on $l for '$user' failed"
+            log "activate: sync receive delegated to '$user' on its landing $l (not on its parent)"
+        else
+            parent="${l%/*}"; [ "$parent" != "$l" ] || parent="$l"
+            zfs list -H -o name -- "$parent" >/dev/null 2>&1 || zfs create -p -- "$parent" \
+                || die "activate: could not create the local landing parent '$parent' for sync dataset '$l'"
+            zfs allow -l -u "$user" create,mount,receive -- "$parent" \
+                || die "activate: zfs allow -l (create,mount,receive) on $parent for '$user' failed"
+            warn "activate: landing $l does not exist yet -- '$user' may only CREATE it under $parent (local, no descendants); re-activate after the first receive to give it its landing"
+        fi
+    done
+}
+
+# The grants the old code left behind: the FULL receive set, Local+Descendent,
+# for <user> on an ANCESTOR of one of this relationship's landings. Each one is
+# taken back -- unless it is not provably ours to take:
+#   * a config section names that dataset ([dataset:X] / [prune:X]) -- a local
+#     backup delegates its own source roots with the same set;
+#   * a live BACKUP relationship of the same account lands under it -- its
+#     base grant may be exactly that dataset.
+# Those are reported with the command, not touched. A live SYNC relationship of
+# the same account under it is given its own landings first, so nothing it
+# needs goes with the parent.
+sync_parent_grant_of() {   # <user> <dataset> -> the user's Local+Descendent perms set ON that dataset (sorted), or ""
+    zfs allow -- "$2" 2>/dev/null | awk -v u="$1" -v ds="$2" '
+        /^---- Permissions on / { mine = ($4 == ds) ; sect = ""; next }
+        mine && /permissions:$/ { sect = $0; next }
+        mine && sect ~ /^Local\+Descendent/ && $1 == "user" && $2 == u { print $3 }' \
+        | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//'
+}
+sync_narrow_legacy_grants() {   # <user> <this client> <landing>...
+    local user="$1" me="$2"; shift 2
+    local full; full=$(printf '%s' "$ZFS_PERMS_LOCAL_RECEIVE" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+    local -A seen=()
+    local l a f
+    local landings=" $* "
+    for l in "$@"; do
+        a="$l"
+        while [[ "$a" == */* ]]; do
+            a="${a%/*}"
+            [ -n "${seen[$a]:-}" ] && continue
+            seen[$a]=1
+            case "$landings" in *" $a "*) continue ;; esac
+            [ "$(sync_parent_grant_of "$user" "$a")" = "$full" ] || continue
+            if grep -qxF -e "[dataset:$a]" -e "[prune:$a]" "${CLIENTS_DIR%/*}"/*.conf 2>/dev/null; then
+                warn "activate: '$user' holds the full receive set on $a and a config section names it -- left alone (not provably this relationship's). To revoke by hand: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
+                continue
+            fi
+            local block="" regrant="" rec
+            for f in "$CLIENTS_DIR"/*.conf; do
+                [ -f "$f" ] || continue
+                rec=$( CLIENT_NAME=""; STATE=""; LOCAL_USER=""; CLIENT_TARGET=""; MANAGED_DATASETS=""
+                       record_load client "$f" 2>/dev/null
+                       [ "$STATE" = removed ] && exit 0
+                       [ "${LOCAL_USER:-}" = "$user" ] || exit 0
+                       printf '%s|%s|%s' "${CLIENT_NAME:-$(basename "$f" .conf)}" "${CLIENT_TARGET:-}" "${MANAGED_DATASETS:-}" )
+                [ -n "$rec" ] || continue
+                local rn="${rec%%|*}" rest="${rec#*|}"; local rt="${rest%%|*}" rm="${rest#*|}" m
+                for m in $rm; do
+                    case "$m" in "$a"/*) ;; *) continue ;; esac
+                    if [ -n "$rt" ]; then block="$block $rn"; else regrant="$regrant $m"; fi
+                done
+            done
+            if [ -n "$block" ]; then
+                warn "activate: '$user' holds the full receive set on $a, and backup relationship(s)$block of the same account land under it -- left alone. To revoke by hand once those have their own base grant: zfs unallow -u $user $ZFS_PERMS_LOCAL_RECEIVE $a"
+                continue
+            fi
+            local r
+            for r in $regrant; do
+                zfs list -H -o name -- "$r" >/dev/null 2>&1 || continue
+                zfs allow -u "$user" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$r" \
+                    || die "activate: could not give '$user' its own grant on $r before narrowing $a"
+            done
+            zfs unallow -u "$user" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$a" \
+                || die "activate: could not take back the receive set of '$user' on $a"
+            log "activate: TOOK BACK the receive set of '$user' on $a (an ancestor of its landing -- every sibling came with it)${regrant:+; its sync landing(s) under it got their own grant:$regrant}"
+        done
+    done
+}
+
 # The default cron-config location for THIS host, used only when nothing has
 # recorded one yet (no server.conf CRON_CONFIG, no client record, no installed
 # managed block to read a Source line from). /etc/zfs-snapshot-all is the
@@ -9914,19 +10016,12 @@ cmd_activate_client() {
     # exist to carry the delegation; zfs receive -p creates children under it).
     # Idempotent -- zfs allow re-applied is a no-op -- and skipped for root.
     if [ "${PEER_SAVED_MODE:-}" = sync ] && [ -n "${LOCAL_USER:-}" ] && [ "$LOCAL_USER" != root ]; then
-        local sync_ds sync_parent
-        for sync_ds in $PEER_SAVED_DATASETS; do
-            sync_parent="${sync_ds%/*}"
-            [ "$sync_parent" != "$sync_ds" ] || sync_parent="$sync_ds"
-            if ! zfs list -H -o name -- "$sync_parent" >/dev/null 2>&1; then
-                zfs create -p -- "$sync_parent" \
-                    || die "activate: could not create the local landing parent '$sync_parent' for sync dataset '$sync_ds'"
-                log "activate: created local landing parent $sync_parent (sync reproduces the source path here)"
-            fi
-            zfs allow -u "$LOCAL_USER" "$ZFS_PERMS_LOCAL_RECEIVE" -- "$sync_parent" \
-                || die "activate: zfs allow ($ZFS_PERMS_LOCAL_RECEIVE) on $sync_parent for '$LOCAL_USER' failed"
-        done
-        log "activate: sync receive delegated ($ZFS_PERMS_LOCAL_RECEIVE) to '$LOCAL_USER' on the local landing parent(s)"
+        # K4: the landings themselves, never their parent; then take back what
+        # the old code granted on an ancestor (sync_narrow_legacy_grants).
+        local sync_ds; local -a sync_landings=()
+        for sync_ds in $PEER_SAVED_DATASETS; do sync_landings+=("$(client_local_path "$sync_ds")"); done
+        sync_delegate_landings "$LOCAL_USER" "${sync_landings[@]}"
+        sync_narrow_legacy_grants "$LOCAL_USER" "$name" "${sync_landings[@]}"
     fi
     # The SAME delegation for backup mode, which never had it: only the sync
     # branch above delegated local receive, so a backup relationship's

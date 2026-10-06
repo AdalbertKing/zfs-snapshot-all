@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -9560,6 +9560,84 @@ got=$(mg_guard "$MG/pat.txt" "")
                 || bad "mirrorguard: U4 -- a changed pattern was excused as the foreign rewrite" "$(cat "$MG/out")"
 
 fi   # --- koniec sekcji mirrorguard ---
+
+if want k4grant; then
+# ============================================================================
+# K4 (lab campaign, 2026-10-06): A SYNC ACCOUNT GETS ITS LANDINGS, NOT THEIR
+# PARENT. Self-contained; always eligible, also under `--section k4grant`.
+#
+# Measured on pve9: the account of sync g3-bc created and destroyed a snapshot
+# on root's backup landing k2-ab next door -- the receive set sat on the shared
+# parent, Local+Descendent. The shipped helpers, with `zfs` stubbed: it answers
+# `zfs list` from K4_EXIST, prints a legacy full grant for every dataset in
+# K4_GRANT, and records every allow/unallow it is asked for.
+# ============================================================================
+K4="$WORK/k4grant"; rm -rf "$K4"; mkdir -p "$K4/clients"
+k4_full="snapshot,destroy,send,receive,create,mount,rollback,hold,release,canmount,bookmark"
+k4_run() {   # <function> <args...> -> calls in $K4/calls, output in $K4/out
+    : > "$K4/calls"
+    ( CLIENTS_DIR="$K4/clients"
+      zfs() {
+          case "$1" in
+              list) local x; for x in $K4_EXIST; do [ "$x" = "${@: -1}" ] && return 0; done; return 1 ;;
+              allow)
+                  if [ "$2" = "--" ]; then
+                      case " $K4_GRANT " in *" $3 "*)
+                          printf -- '---- Permissions on %s --------\nLocal+Descendent permissions:\n\tuser zfsbackup %s\n' "$3" "$k4_full" ;;
+                      esac
+                      return 0
+                  fi
+                  echo "$*" >> "$K4/calls"; return 0 ;;
+              unallow|create) echo "$*" >> "$K4/calls"; return 0 ;;
+          esac
+      }
+      "$@" ) > "$K4/out" 2>&1
+}
+K4_EXIST="p p/a p/a/l" K4_GRANT="" k4_run sync_delegate_landings zfsbackup p/a/l
+if [ "$(cat "$K4/calls")" = "allow -u zfsbackup $k4_full -- p/a/l" ]; then
+    ok "k4grant: the receive set goes on the LANDING, and nothing on its parent"
+else
+    bad "k4grant: delegation target" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+K4_EXIST="p p/a" K4_GRANT="" k4_run sync_delegate_landings zfsbackup p/a/l
+if [ "$(cat "$K4/calls")" = "allow -l -u zfsbackup create,mount,receive -- p/a" ] && grep -q 're-activate after the first receive' "$K4/out"; then
+    ok "k4grant: a landing that does not exist yet gets only create/mount/receive on its parent, LOCAL (no descendants), and says re-activate"
+else
+    bad "k4grant: missing landing" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+K4_EXIST="p p/a p/a/l" K4_GRANT="p/a p" k4_run sync_narrow_legacy_grants zfsbackup me p/a/l
+if [ "$(sort "$K4/calls" | tr '\n' '|')" = "unallow -u zfsbackup $k4_full -- p|unallow -u zfsbackup $k4_full -- p/a|" ]; then
+    ok "k4grant: the old full grants on EVERY ancestor of the landing (the pool included) are taken back"
+else
+    bad "k4grant: legacy narrowing" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+printf '[dataset:p/a]\n\tsrc = x\n' > "$K4/jobs.test.conf"
+K4_EXIST="p p/a p/a/l" K4_GRANT="p/a p" k4_run sync_narrow_legacy_grants zfsbackup me p/a/l
+rm -f "$K4/jobs.test.conf"
+if [ "$(cat "$K4/calls")" = "unallow -u zfsbackup $k4_full -- p" ] && grep -q 'a config section names it -- left alone' "$K4/out"; then
+    ok "k4grant: ...but not one a config section names (a local backup delegates its own source roots the same way) -- reported, with the command"
+else
+    bad "k4grant: config-named ancestor" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+printf 'CLIENT_NAME=bk\nSTATE=active\nLOCAL_USER=zfsbackup\nCLIENT_TARGET=p\nMANAGED_DATASETS=p/h/x\n' > "$K4/clients/bk.conf"
+K4_EXIST="p p/a p/a/l" K4_GRANT="p" k4_run sync_narrow_legacy_grants zfsbackup me p/a/l
+rm -f "$K4/clients/bk.conf"
+if [ ! -s "$K4/calls" ] && grep -q 'backup relationship(s) bk of the same account land under it -- left alone' "$K4/out"; then
+    ok "k4grant: ...nor one a BACKUP relationship of the same account lands under (its base grant may be exactly that)"
+else
+    bad "k4grant: backup under ancestor" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+printf 'CLIENT_NAME=s2\nSTATE=active\nLOCAL_USER=zfsbackup\nCLIENT_TARGET=\nMANAGED_DATASETS=p/a/other\n' > "$K4/clients/s2.conf"
+printf 'CLIENT_NAME=r\nSTATE=active\nLOCAL_USER=\nCLIENT_TARGET=p\nMANAGED_DATASETS=p/a/root-owned\n' > "$K4/clients/r.conf"
+K4_EXIST="p p/a p/a/l p/a/other" K4_GRANT="p/a" k4_run sync_narrow_legacy_grants zfsbackup me p/a/l
+rm -f "$K4/clients/s2.conf" "$K4/clients/r.conf"
+if [ "$(cat "$K4/calls" | tr '\n' '|')" = "allow -u zfsbackup $k4_full -- p/a/other|unallow -u zfsbackup $k4_full -- p/a|" ]; then
+    ok "k4grant: another SYNC landing of the same account under that parent gets its own grant FIRST; a root-owned relationship there does not block (it is what the grant exposed)"
+else
+    bad "k4grant: sibling sync re-grant" "$(cat "$K4/calls")" "$(cat "$K4/out")"
+fi
+
+fi   # --- koniec sekcji k4grant ---
 if want statusjson; then
 # ============================================================================
 # status --json: THE FIRST READER OF THE GUI DATA LAYER (V1, 2026-09-07).
