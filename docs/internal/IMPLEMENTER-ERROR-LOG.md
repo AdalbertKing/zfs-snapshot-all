@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1898,6 +1898,29 @@ passed".
 **Rule.** R4. Before any merge, print and read the conclusion counts for the
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
+
+
+### E68 — committed and pushed behind a gate whose failure `| tail` swallowed (2026-10-06, R4)
+
+**Genesis.** Resolving a merge of `main` into the R5-8 branch, one command did:
+an edit script, `git add`, `impact.sh --refresh-status`, then
+`impact.sh --verify 2>&1 | tail -2 && git commit ... && git push`. The edit
+script failed (its pattern was LF, the file was CRLF), so the add and the
+refresh never ran; `--verify` then FAILED (stale status digest) -- and the
+commit and the push still happened, because the `&&` read the exit status of
+`tail`, not of `--verify`. Branch `fix/r5-8-progress-done` got `74f1d945` with
+a stale digest and without the status edits it was meant to carry. Caught by
+reading the output, not by the chain; repaired by the next commit
+(`7b51091d`), nothing merged in between.
+
+**Cause.** R4 again: a mutation (commit, push) chained behind a step that can
+fail silently -- here the pipe made a loud failure silent. The fourth R4 entry
+in two weeks.
+
+**Rule.** R4. A gate that decides a commit is run on its own and its status is
+captured (`cmd > out 2>&1; rc=$?`), then the commit runs only under
+`[ "$rc" -eq 0 ]`. Never `gate | tail && mutate`. And an edit script that
+stops the chain must stop ALL of it, not only the next link.
 
 
 ### E67 — 'u' and 's' green in the suite, dead in the GUI (2026-09-24, R12)
