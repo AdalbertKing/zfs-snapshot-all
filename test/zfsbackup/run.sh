@@ -9196,12 +9196,12 @@ if want passivepick; then
 PK="$WORK/passivepick"; rm -rf "$PK"; mkdir -p "$PK/clients"
 pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of the emit
     local prof="$1" fam="${2-}" wf="$PK/$1.conf"
-    : > "$wf"
+    [ -n "${PK_KEEP:-}" ] || : > "$wf"
     ( unset PASSIVE EXCLUDE_FAMILY_1 EXCLUDE_FAMILY_2
       [ -n "$fam" ] && EXCLUDE_FAMILY_1="$fam"
       CLIENTS_DIR="$PK/clients" PEER_SAVED_MODE="${PK_MODE:-sync}" PEER_SAVED_TARGET="${PK_TARGET:-}"
       LOAD_LABEL=pk LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.4.4.4 LOAD_FLAGS="-K /dev/null"
-      PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS=1
+      PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS="${PK_GFS:-1}"
       PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
       ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
       load_ssh_opts() { LOAD_SSH_OPTS=(); }
@@ -9249,6 +9249,44 @@ if [ "$rc" -eq 0 ] && ! grep -qE -- ' -M( |$)' "$PK/last.conf" \
     ok "passivepick: control -- a BACKUP relationship gets no -M and keeps its own target prune (only sync mirrors)"
 else
     bad "passivepick: control -- a BACKUP relationship gets no -M and keeps its own target prune (only sync mirrors)" "rc=$rc" "$(cat "$PK/last.conf" 2>/dev/null | head -40)" "$(tail -5 "$PK/default.log")"
+fi
+
+# RE-ACTIVATION GIVES AN INSTALLED SYNC SECTION THE SAME SHAPE (2026-10-06).
+# Measured re-activating pve9-synchro on pve10 to give it the mirror: the
+# PRESERVED section's flags were refreshed from the transport flags, -X and the
+# DECLARED passive only, so the sync-chain pickup lost -e -E ... (its empty
+# prefix the next pull would then have tried to stamp a snapshot on the
+# source) and never got -M.
+# The installed shape before the mirror is rebuilt here by taking -M (and the
+# ladder's prune = no) back out of a fresh emit; the second emit runs over that
+# file, so every section is PRESERVED, not regenerated.
+# PK_GFS=0 for the flat profile: with PROFILE_GFS=1 and no ladder to own, the
+# plan regenerates the section, and the case would test the create path again.
+pk_strip_mirror() {   # <conf>
+    sed -i -e '/^[[:space:]]*flags[[:space:]]*=/s/ -M$//' -e '/^[[:space:]]*prune[[:space:]]*= no$/d' "$1"
+}
+PK_GFS=0 pk_emit passive-flat >/dev/null; pk_strip_mirror "$PK/passive-flat.conf"
+sec=$(PK_GFS=0 PK_KEEP=1 pk_emit passive-flat); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE "^[[:space:]]*flags[[:space:]]*= -K /dev/null -e -E $pk_def -M\$" \
+   && [ "$(grep -c '^\[dataset:' "$PK/last.conf")" -eq 1 ]; then
+    ok "passivepick: RE-ACTIVATION of an installed prefixless sync section keeps -e -E and adds -M -- the preserved refresh no longer knows only the declared passive"
+else
+    bad "passivepick: re-activation of an installed prefixless sync section lost its pickup or its mirror" "rc=$rc" "$sec" "$(tail -3 "$PK/passive-flat.log")"
+fi
+pk_emit default >/dev/null; pk_strip_mirror "$PK/default.conf"
+sec=$(PK_KEEP=1 pk_emit default); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -qE '^[[:space:]]*flags[[:space:]]*= -K /dev/null -e -M$' \
+   && [ "$(sed -n '/^\[prune:/,/^$/p' "$PK/last.conf" | grep -cE '^[[:space:]]*prune[[:space:]]*= no$')" -eq 1 ]; then
+    ok "passivepick: ...a family-stamping section keeps its bare -e (its prefix line says so), gains -M, and its preserved ladder gets exactly one prune = no"
+else
+    bad "passivepick: re-activation of an installed family-profile sync section" "rc=$rc" "$sec" "$(sed -n '/^\[prune:/,/^$/p' "$PK/last.conf")" "$(tail -3 "$PK/default.log")"
+fi
+PK_KEEP=1 pk_emit default >/dev/null
+if [ "$(grep -cE -- ' -M( |$)' "$PK/last.conf")" -eq 1 ] \
+   && [ "$(grep -cE '^[[:space:]]*prune[[:space:]]*= no$' "$PK/last.conf")" -eq 1 ]; then
+    ok "passivepick: ...and a THIRD activation over the mirrored file changes nothing -- one -M, one prune = no"
+else
+    bad "passivepick: repeated re-activation duplicates the mirror shape" "$(grep -nE -- ' -M|prune *= *no' "$PK/last.conf")"
 fi
 
 # The declared half: --passive with no --exclude-family used to render a bare
@@ -9360,6 +9398,39 @@ case "$got" in
     *)
         bad "probehistory: a non-1 exit was excused by the history rule" "got=$got" "$(cat "$PHB/log")" ;;
 esac
+
+# ACTIVATE-CLIENT'S REHEARSAL, the same rule (2026-10-06). Re-activating
+# pve9-synchro to give it the mirror shape died in activate-client's own
+# dry-run: 164 older snapshots per dataset, rc=1, "9 dataset(s) failed the
+# dry-run" -- the rule above lived only in verify-endpoint. The shipped
+# activate_dryrun_snapget on the same stub engine: exit 1 history-only passes,
+# exit 2 and a NEWER target-only snapshot still fail.
+ph_act() {   # <engine exit status> <extra stdout line or ""> -> "rc"
+    ( SNAPGET="$PHB/snapget" PH_RC="$1" PH_EXTRA="$2"; export PH_RC PH_EXTRA
+      PEER_SAVED_MODE=sync
+      zfs() { printf 't/x@old1\t10\nt/x@old2\t20\nt/x@b2\t30\nt/x@new\t40\n'; }
+      activate_dryrun_snapget s/x -n u@h:s/x t > "$PHB/act.log" 2>&1; echo "$?" )
+}
+cat > "$PHB/snapget" <<'EOS'
+#!/bin/bash
+printf 'PLAN=INCREMENTAL base=b2 src=s/x tgt=t/x\nt/x@old1\nt/x@old2\n'
+[ -n "$PH_EXTRA" ] && printf '%s\n' "$PH_EXTRA"
+exit "$PH_RC"
+EOS
+got=$(ph_act 1 "")
+if [ "$got" = 0 ] && grep -q 's/x: 2 older snapshot(s) exist only on this host -- history, not a conflict (the sync mirror' "$PHB/act.log"; then
+    ok "probehistory: activate-client's rehearsal passes an exit-1 history-only answer and names the mirror that removes it"
+else
+    bad "probehistory: activate-client's rehearsal refused an exit-1 history-only answer" "got=$got" "$(cat "$PHB/act.log")"
+fi
+got=$(ph_act 2 "")
+[ "$got" = 2 ] \
+    && ok "probehistory: ...the same output with exit 2 still fails the rehearsal, with the engine's own status" \
+    || bad "probehistory: a non-1 exit was excused in the rehearsal" "got=$got" "$(cat "$PHB/act.log")"
+got=$(ph_act 1 "t/x@new")
+[ "$got" = 1 ] \
+    && ok "probehistory: ...and one target-only snapshot NEWER than the base still fails the rehearsal -- divergence" \
+    || bad "probehistory: the rehearsal excused a NEWER target-only snapshot" "got=$got" "$(cat "$PHB/act.log")"
 
 fi   # --- koniec sekcji probehistory ---
 if want statusjson; then

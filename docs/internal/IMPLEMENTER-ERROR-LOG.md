@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1899,6 +1899,35 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E70 — the mirror reached every sync section a CREATE writes, and none a re-activation keeps (2026-10-06, R3)
+
+**Genesis.** #460 made every sync pull carry `snapget -M` and wired it into the
+three branches of `emit_client_sections` that write a NEW `[dataset:]` section,
+with tests on a fresh emit. Its own status entry said the existing relations had
+to be re-activated afterwards to get the shape. The first re-activation
+(pve9-synchro on pve10) showed two things. First, the PRESERVED-section refresh
+(REV-089) rewrote `flags` from the transport flags, `-X` and the DECLARED
+passive only. So the sync-chain pickup came back with no `-e -E ...`, and with
+its empty prefix the next pull would have tried to stamp a snapshot on the
+source. It also never got `-M`. That loss predates the mirror: any re-activation
+of a sync-chain passive relation since R5-2 would have done it. Second,
+activate-client's own dry-run lacked the REV-146 history rule, which only
+verify-endpoint had. Neither reached the installed crontab: the dry-run refused
+first, and the second preview was read before `--yes`.
+
+**Cause.** R3: "every sync pull carries -M" was written as a comment over the
+create branches and applied there. I did not grep for the other site that writes
+`flags` -- the refresh of a kept section. The same was true of REV-146's rule:
+written for one caller of `snapget -n`, not checked against the others. And
+R12: the tests drove the piece (a fresh emit), not the path the operator then
+walks (re-activation over an installed file).
+
+**Rule.** R3. When a change says "every X carries Y", list every site that
+WRITES X (here: `grep -n 'flags' ` over the create AND the refresh paths) and
+put the discriminating test on each. A follow-up the change itself names
+("re-create the existing relations") is part of the change's test, not an
+after-step.
 
 ### E69 — `update-grub` in a chroot on the hypervisor wrote an empty root= (2026-10-06, R2)
 

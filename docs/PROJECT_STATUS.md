@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 45abdeccf02a3b78 -->
+<!-- status-covers-digest: fb1325db5f01aeda -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Ponowna aktywacja daje istniejącej relacji synchro kształt lustra (2026-10-06).**
+  - **Zmierzone na pve10 (pve9-synchro), podgląd bez `--yes`:** zachowana sekcja (REV-089)
+    dostawała `flags` tylko z transportu, `-X` i JAWNEGO passive. Odbiór pasywny łańcucha
+    synchro tracił więc `-e -E …` (z pustym prefiksem następne pobranie próbowałoby
+    stemplować migawkę na źródle) i nie dostawał `-M`. Do tego dry-run w `activate-client`
+    nie znał reguły historii z REV-146: 164 starsze migawki na zbiór danych dawały rc=1 i
+    „9 dataset(s) failed the dry-run”.
+  - **Zmiana (`zfs-backup.sh`):**
+    - zachowana sekcja dostaje odbiór i lustro wyliczone tak jak przy tworzeniu. Rodzaj
+      odbioru mówi własne pole `prefix` sekcji, bez sięgania do profilu (REV-090);
+    - zachowany `[prune:]` lustra dostaje `prune = no`;
+    - próba dry-run idzie przez `activate_dryrun_snapget`, z tą samą regułą historii co
+      `verify-endpoint`.
+  - **Testy (pve10):** `zfsbackup --section passivepick` 10/0 (+3: ponowna aktywacja,
+    prefixless i rodzinowa, trzecia aktywacja nic nie dubluje), `--section probehistory`
+    11/0 (+3). Kontrola negatywna na `zfs-backup.sh` z main: odpowiednio 3 i 3 FAIL. Podgląd
+    na żywo: 9 sekcji z `-e -E vzdump -E __replicate_ -E __migration__ -M`, 9 linii prune
+    celu znika, Test OK (9).
 
 - **Synchro to LUSTRO źródła (2026-10-06, właściciel: „synchro jako lustro dla wszystkich”, „Odmrażam snapget, rób A”).**
   - **Było:** cel synchro miał WŁASNĄ retencję -- brał wszystko, co źródło dodało, i nic z
