@@ -299,8 +299,22 @@ progress_done() {   # <watcher pid> <dataset> <target> <status>
     # ,state:running} and never matches. The record then kept its running
     # marker forever and the guard below silently declined to write. Caught by
     # the end-of-stage battery, not by reading.
-    body=${body%,\"state\":\"running\"\}}
-    case "$body" in *'"state":"running"'*) return 0 ;; esac
+    #
+    # And replace an end that is already FINISHED the same way (R5-8, owner
+    # unfreeze 2026-10-06). A second transfer to the same target in one run --
+    # a full seed followed by its catch-up, a resume after a failed attempt --
+    # can finish before its watcher has written a fresh running record, so the
+    # file still holds the previous transfer's finished one. The first version
+    # only knew the running end, found none, and glued a second end on:
+    #   {...,"state":"verified","finished_epoch":1790364665},"state":"verified",...}
+    # Measured on pve10 2026-09-25: `progress --json` then broke on that file
+    # and the GUI showed "bez odpowiedzi". Cut at the FIRST state key (%%), so a
+    # record glued by an older build is healed by the next finish, not kept.
+    case "$body" in
+        *',"state":"running"}'|*',"finished_epoch":'*'}') body=${body%%,\"state\":*} ;;
+        *) return 0 ;;
+    esac
+    case "$body" in *'"state":'*) return 0 ;; esac
     printf '%s' "$body" 2>/dev/null > "${pfile}.tmp" || return 0
     printf ',"state":"%s","finished_epoch":%s}\n' "$(json_escape "$status")" "$(date +%s)" 2>/dev/null >> "${pfile}.tmp"
     mv -f "${pfile}.tmp" "$pfile" 2>/dev/null

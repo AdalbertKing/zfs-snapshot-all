@@ -614,6 +614,39 @@ else
     echo "     python: $_pgv :: $(cut -c1-200 "$pg_tmp/glued.json" 2>/dev/null)"
 fi
 
+# R5-8, the WRITER half (lib-zfs-snap.sh unfrozen by the owner 2026-10-06):
+# progress_done on a target whose record is already FINISHED -- the second
+# transfer of one run, ended before its watcher wrote -- must REPLACE the end,
+# and a record an older build already glued must come out whole. Executed
+# against the shipped function; the reader fix above only tolerated the damage.
+( set +u; VERBOSE=0; ZFS_PROGRESS_DIR="$pg_tmp/rewrite"; export ZFS_PROGRESS_DIR
+  mkdir -p "$pg_tmp/rewrite"
+  . "$REPO/lib-zfs-snap.sh" 2>/dev/null
+  f="$(progress_path 'tank/twice')"
+  printf '{"dataset":"a@s1","pid":1,"state":"verified","finished_epoch":1790364665}\n' > "$f"
+  progress_done "" "a@s2" "tank/twice" ok
+  cp "$f" "$pg_tmp/twice.json"
+  g="$(progress_path 'tank/glued')"
+  printf '{"dataset":"b@s1","pid":1,"state":"verified","finished_epoch":1790364665},"state":"verified","finished_epoch":1790368264}\n' > "$g"
+  progress_done "" "b@s2" "tank/glued" failed
+  cp "$g" "$pg_tmp/healed.json"
+) >/dev/null 2>&1
+_pgw=""
+for _py in python3 python; do "$_py" -c 'import sys' >/dev/null 2>&1 && { _pgw=$("$_py" -c '
+import json,sys
+out=[]
+for f in sys.argv[1:]:
+    t=open(f).read()
+    d=json.loads(t)
+    out.append("%s:%d" % (d["state"], t.count("\"state\"")))
+print(" ".join(out))' "$pg_tmp/twice.json" "$pg_tmp/healed.json" 2>&1); break; }; done
+if [ "$_pgw" = "ok:1 failed:1" ]; then
+    PASS=$((PASS+1)); echo "PASS F progress_done REPLACES a finished end instead of gluing a second one, and heals a record an older build glued (one object, one state key, the new state)"
+else
+    FAIL=$((FAIL+1)); echo "FAIL F progress_done REPLACES a finished end instead of gluing a second one, and heals a record an older build glued (one object, one state key, the new state)"
+    echo "     python: $_pgw :: $(cat "$pg_tmp/twice.json" "$pg_tmp/healed.json" 2>/dev/null | cut -c1-200)"
+fi
+
 # THE RECORD IS A DATA LAYER FOR MACHINES, NOT A STATUS LINE (owner direction,
 # 2026-08-23): a future GUI/monitor must read per-job and per-relation state
 # without scraping text. So the identity fields are pinned as a contract:

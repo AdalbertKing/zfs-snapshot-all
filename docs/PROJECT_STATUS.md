@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 267992831bb193ba -->
+<!-- status-covers-digest: 30ac780370270f6a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,20 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **R5-8: rekord postępu bez doklejonego drugiego końca (2026-10-06, właściciel: „Odmrażam”).**
+  - **Przyczyna (z kodu, objaw zmierzony na pve10 25.09):** `progress_done` w
+    `lib-zfs-snap.sh` znał tylko koniec „running”. Drugi transfer do tego samego celu w
+    jednym biegu (seed + dogonienie, wznowienie) potrafi skończyć się, zanim obserwator
+    zapisze nowy rekord „running” -- funkcja zastawała rekord ZAKOŃCZONY, nic nie ucinała
+    i doklejała drugi koniec. `progress --json` się na tym wykładał, GUI: „bez odpowiedzi”.
+  - **Zmiana:** koniec „running” ALBO zakończony jest ucinany od PIERWSZEGO `,"state":` i
+    zastępowany nowym -- więc i plik sklejony przez starszą wersję naprawia się przy
+    następnym końcu transferu. Inne kształty zostają nietknięte, jak dotąd. Odporność
+    czytelnika (#443) zostaje. Wpis w `docs/project/ENGINE-FREEZE.md`, baza zamrożenia
+    przepięta (`--refreeze`).
+  - **Test:** `twins` 83/0 (+1) -- wykonuje prawdziwą funkcję na rekordzie zakończonym i
+    na sklejonym; oba wychodzą jako jeden obiekt z jednym `state`. Kontrola na lib z main:
+    `{...,"finished_epoch":1},"state":"ok",...}` -- dokładnie sklejka z pve10.
 - **verify-endpoint: dłuższa retencja na kolektorze to nie martwy endpoint (2026-10-04, decyzja właściciela „A”).**
   - **Zmierzone na pve10** przy ponownym zakładaniu pve9-synchro: seed przeszedł, aktywacja
     stanęła na „none of the known endpoints answered”. `snapget -n` drukował
@@ -70,8 +84,16 @@
     sklejanie listy spacją cięło wartość pola na pół (teraz tablica). `profiles` 93/0:
     asercje passive-flat przepisane na `pattern = -` i render `"" -H`; gen-cron z main
     na tym profilu daje `"-" -H168`.
-  - **Do zrobienia na słowo właściciela:** istniejące `pve9-synchro` ma stary kształt
-    sekcji -- trzeba założyć ponownie (eksport → delete --keep-source → import).
+  - **pve9-synchro założone ponownie (2026-10-04/06, na słowo właściciela).** Eksport →
+    `delete-relation --keep-source` → `import-relation`: seed przeszedł nowymi flagami,
+    aktywacja stanęła na `verify-endpoint` (wpis wyżej, REV-146) i relacja była bez crona
+    od 04.10 20:28 do 06.10 ~10:15. Przez te 38 h producent na pve9 (godzinowe 24 h)
+    wyciął wspólną bazę -- `snapget -n` mówił `base=null`, ale prawdziwy bieg poszedł
+    przyrostowo od zakładki `#tgt-…` z 04.10 19:57 (rc=0, każdy z 9 datasetów). Potem
+    stary szablon `passive-flat` (z `pattern = automated`) w configu zablokował aktywację
+    strażnikiem kolizji szablonów; nikt go nie używał, wycięty (crony innych relacji bez
+    zmian). Aktywne od 06.10: 19 linii, `snapget -m "" -e -E vzdump -E __replicate_ -E
+    __migration__`, `delsnaps … "" -H168` z `-P`, monitor `-x … "-"` rc=0.
 
 - **Rozrzut harmonogramu zachowuje odstępy szczebli profilu (R5-7, 2026-09-25).**
   - **Zmierzone na pve10:** pve9b (m31w4d7h24) miało hourly, daily, weekly i monthly WSZYSTKIE
@@ -10042,6 +10064,17 @@ stanem recenzji.
   odłożona.
 
 ### Znane luki, nie planowane do zamknięcia teraz
+
+- **Tryb próbny `snapget -n` nie zna zapasowej ścieżki przez zakładkę** (2026-10-06, pve10
+  <- pve9). Po przestoju dłuższym niż retencja źródła `PLAN=` mówi `base=null`, a prawdziwy
+  bieg idzie przyrostowo od zakładki `#tgt-…` i kończy rc=0. `verify-endpoint` (i każdy,
+  kto czyta `PLAN=`) uzna wtedy relację za wymagającą pełnej kopii. Obejście: jeden
+  prawdziwy bieg linii crona przed aktywacją. Naprawa w zamrożonym `snapget.sh`.
+- **Usunięta relacja zostawia swoje szablony `[template:profile__…]` w configu kolektora**
+  (2026-10-06). Gdy profil się potem zmieni, ponowne założenie relacji na nim staje na
+  strażniku kolizji szablonów („already exists … with different effective policy”).
+  Zmierzone przy pve9-synchro po zmianie `passive-flat`. Obejście: wyciąć szablon, którego
+  żadna sekcja nie używa. Właściwie: `remove-client` sprząta szablony-sieroty.
 
 - **Import relacji na TYM SAMYM kolektorze nie łączy się ze źródłem** (2026-09-25, pve10:
   ponowne założenie pve9b i pve11). `delete-relation` (`remove-client`) kasuje klucz parowania,
