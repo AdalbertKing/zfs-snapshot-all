@@ -475,6 +475,22 @@ Each relationship gets **its own account on the source, its own key, and its
 own grant scope**. Relationships know nothing of each other and cannot touch
 each other — compromising one source opens no route to the rest.
 
+### Changing a relationship that is already running
+
+To change retention or schedules, do not delete and re-create:
+
+```bash
+./zfs-backup.sh edit-relation prod01 --profile=m31w4d7h24 --plan
+./zfs-backup.sh edit-relation prod01 --profile=m31w4d7h24 --yes
+```
+
+The relationship's sections are generated again from the profile, as at
+creation, and installed through the same preview and guards. Nothing is
+copied again. Without `--profile` the recorded profile is used, which gives an
+older relationship today's schedule spread. The snapshot family must stay: a
+profile with no family in common is a new relationship. In the GUI: Enter on
+the relationship in F3, then `e`.
+
 ---
 
 ## 9. Teardown

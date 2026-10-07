@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 442f9fae8f48f58d -->
+<!-- status-covers-digest: a8ac991fe9fc69e9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,50 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zmiana zainstalowanej relacji bez usuwania: `edit-relation` (2026-10-07, właściciel: „Pozostają replika i modyfikacja istniejącej konfiguracji. Obecnie robimy to przez kasowanie i tworzenie na nowo”).**
+  - **Było:** relację dało się zmienić tylko przez `delete-relation` i założenie od nowa.
+    Ponowna aktywacja celowo zachowuje zainstalowaną politykę (REV-089), a `migrate-profile`
+    przestawia cały kolektor naraz. Nowe kształty (U2 minuty, K3 prune źródła per szczebel)
+    trafiały więc tylko do relacji zakładanych od nowa.
+  - **Jest:** `zfs-backup.sh edit-relation NAZWA [--profile=P] [--source-profile=S] [--plan|--yes|--ask]`.
+    - To tryb `activate-client` (`--regenerate`): sekcje relacji są generowane od nowa z
+      szablonu, tak jak przy zakładaniu, i instalowane przez te same bramki: gen-cron,
+      próba `snapget -n`, sprawdzenie praw na źródle, podgląd configu i crona, strażnik
+      antykasowania, atomowa podmiana. Bez parowania, bez seeda, dane nie są ruszane.
+    - Bez `--profile` używa zapisanego szablonu: odświeżenie, które daje starej relacji
+      dzisiejszy rozrzut minut i retencję źródła per szczebel.
+    - `--source-profile=` (pusty) usuwa asymetrię. Szablon źródła musi mieć te same rodziny
+      i mechanizm co cel (istniejąca reguła `assert_source_profile_families`).
+    - **Rodzina migawek zostaje.** Szablon bez wspólnej rodziny z zainstalowanym (także
+      pasywny, który nie stempluje nic) jest odmawiany: to nowa relacja. Rodzina, która
+      odpada (np. `m12w4d7h24` → `d30`), jest dozwolona, ale nazwana przed zgodą: jej
+      istniejące migawki zostają na celu i źródle.
+    - Strażnik antykasowania ma ósmy wyjątek: linie z `-L <nazwa>` edytowanej relacji są
+      zastępowane, nie „tracone”, i tylko gdy nowy blok nadal ją uruchamia. Każda
+      zastąpiona linia jest wypisywana. Linie innych relacji (także `r2` przy edycji `r`)
+      podlegają dawnym siedmiu regułom.
+    - Szablony, które edycja osierociła, są usuwane z configu (tylko te, do których
+      relacja odwoływała się przed edycją).
+    - Rekord dostaje `PROFILE` i `SOURCE_PROFILE` po udanej instalacji.
+    - Przy okazji: podsumowanie aktywacji mówiło o hoście, nie o relacji („Profil: legacy”,
+      „Tryb pasywny: TAK”, gdy obok stała płaska relacja synchro). Teraz podaje szablon tej
+      relacji i jej kształt, a „pasywny” tylko dla jej własnych sekcji.
+  - **GUI:** Enter na relacji w F3 → `e` w oknie szczegółów. Okna whiptail
+    (`tui/edit-relation.sh`): szablon celu (obecny zaznaczony), retencja źródła, PLAN
+    (`--plan`: nowe zadania tej relacji, ile starych zastępują, komenda), WYKONAJ.
+    Odmowa czasownika jest pokazywana jego słowami.
+  - **Testy:** `zfsbackup --section editrel` 8/0 (kontrola na `main`: 6 FAIL), `tui` 203/0 (+3).
+  - **Na żywo, pve10:**
+    - `pve11` (root, backup) `m12w4d7h24-gfs` → `m31w4d7h24` (drabina → płaski), zadania
+      pobrania, prune celu i prune źródła rc=0, monitor OK; z powrotem na GFS, rc=0;
+    - `pve9b` (konto zfsbackup) i `pve9-synchro` (synchro, lustro) odświeżone bez zmian;
+    - odmowy: `--profile=passive` (brak wspólnej rodziny), `--source-profile=d30` (inna
+      rodzina źródła); `--profile=d30` pokazuje „rodziny przestają być tworzone”;
+    - GUI przez pty: `e` → wybór `m31w4d7h24` → plan → WYKONAJ → „GOTOWE”, rekord zmieniony.
+  - **Zostaje:** zmiana konta, trybu (backup/synchro) i listy datasetów to nadal nowa relacja
+    (lista datasetów: `remove-source` w dół). Okno „Relacja” w F3 pokazuje rytm z szablonu,
+    nie z sekcji (np. „pobranie co: 1 * * * *” przy minucie :56) -- znane, niezmienione.
 
 - **K3: prune źródła szablonów wieloszczeblowych rozrzucony szczebel po szczeblu (2026-10-06, właściciel: „koduj K3”).**
   - **Było (kampania labowa):** przy szablonie z kilkoma rytmami prune źródła nie dostawał

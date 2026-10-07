@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1899,6 +1899,22 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E73 — the heredoc ate the backslash again (2026-10-07, R3)
+
+**Genesis.** edit-relation: a Python patch piped through a Bash heredoc had to
+replace a line ending in ` \` (a shell continuation). The script's own
+assertion stopped it ("AssertionError", nothing written); the same edit then
+went through the Edit tool.
+
+**Cause.** R3, the E65 shape exactly: the memory says "heredoc zjada backslash
+-- Write tool / chr(92)", E65 says it, and the edit was still typed into a
+heredoc because it was "only two lines".
+
+**Rule.** R3. A replacement that contains a backslash goes through the Edit
+tool or a script file written with Write -- never a heredoc, whatever its size.
+The assertion is why this cost one retry and not a corrupted file: keep
+`assert s.count(old) == 1` in every patch script.
 
 ### E72 — a delegated sync account could destroy its neighbours (found 2026-10-06, R12)
 
