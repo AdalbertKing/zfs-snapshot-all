@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73, E74.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1899,6 +1899,24 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E74 — two PRs, nothing delegated (2026-10-07, R3)
+
+**Genesis.** The Owner asked whether the work goes to cheaper agents. It had
+not: #470 (edit-relation) and #471 (replica GUI) were typed, read and checked
+entirely by the session -- two whiptail dialog scripts over fixed verb
+contracts (tui/edit-relation.sh, tui/replica.sh), the test additions for both
+(zfsbackup editrel and runreplicas, cron ONI, tui), and the PROJECT_STATUS
+entry of each, neither of which saw `text-checker`.
+
+**Cause.** R3: "Which model -- delegation" in CLAUDE.md stated the whole rule, and the
+memory index points at it. Momentum on live-host work made every next step look
+like "faster to do it myself", and nothing at the end of a round asked.
+
+**Rule.** R3, plus a forcing function: every round's report names what went to
+which agent and what the session kept and why (CLAUDE.md, "Which model").
+A status or PR text goes through `text-checker` before its commit, in the
+background. A red CI log goes to `ci-reader` first (applied the same day, #471).
 
 ### E73 — the heredoc ate the backslash again (2026-10-07, R3)
 
