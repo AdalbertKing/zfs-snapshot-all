@@ -615,6 +615,70 @@ product_fn "$DEPLOY_SRC" pair_mode_after_inheritance > "$PM_SRC"
     fi
 }
 
+# ============================================================================
+# K6 (2026-10-07): --leave's userdel met "currently used by process" -- the tail
+# of the last SSH session or the account's systemd --user. The shipped
+# leave_end_account_processes, lifted from deploy.sh, over stub
+# pgrep/pkill/loginctl/usermod/sleep: a process that survives TERM goes on KILL,
+# the account is expired first (PAM refuses a new key login meanwhile), and a
+# process that never dies is reported, not waited on for ever.
+# ============================================================================
+K6="$(mktemp -d)"; mkdir -p "$K6/bin"
+k6fn=$(sed -n '/^leave_end_account_processes() {/,/^}$/p' "$REPO/deploy.sh")
+[ -n "$k6fn" ] || bad "K6: could not lift leave_end_account_processes from deploy.sh -- anchors changed"
+# State: $K6/alive holds "yes" while the account has a process; $K6/dies_on says
+# which signal ends it (TERM, KILL or never). Every call is logged.
+cat > "$K6/bin/pgrep" <<EOF
+#!/bin/bash
+[ "\$(cat $K6/alive)" = yes ] && { echo 4242; exit 0; }; exit 1
+EOF
+cat > "$K6/bin/pkill" <<EOF
+#!/bin/bash
+echo "pkill \$*" >> $K6/log
+case "\$1" in -TERM) [ "\$(cat $K6/dies_on)" = TERM ] && echo no > $K6/alive ;;
+              -KILL) [ "\$(cat $K6/dies_on)" = KILL ] && echo no > $K6/alive ;; esac
+exit 0
+EOF
+printf '#!/bin/bash\necho "loginctl $*" >> %s/log\n' "$K6" > "$K6/bin/loginctl"
+printf '#!/bin/bash\necho "usermod $*" >> %s/log\n' "$K6" > "$K6/bin/usermod"
+printf '#!/bin/bash\nexit 0\n' > "$K6/bin/sleep"
+chmod +x "$K6/bin/"*
+k6run() {   # <alive yes|no> <dies_on> -> rc ; log in $K6/log
+    echo "$1" > "$K6/alive"; echo "$2" > "$K6/dies_on"; : > "$K6/log"
+    PATH="$K6/bin:$PATH" bash -c "log() { echo \">>> \$*\"; }; $k6fn
+leave_end_account_processes acct" >/dev/null 2>&1
+    echo "$?"
+}
+rc=$(k6run no TERM)
+if [ "$rc" = 0 ] && grep -qx 'usermod -e 1 acct' "$K6/log" && ! grep -q pkill "$K6/log"; then
+    ok "K6: an account with nothing running is only expired -- no signal sent"
+else
+    bad "K6: idle account" "rc=$rc" "$(cat "$K6/log")"
+fi
+rc=$(k6run yes TERM)
+if [ "$rc" = 0 ] && grep -qx 'loginctl terminate-user acct' "$K6/log" && grep -qx 'pkill -TERM -u acct' "$K6/log" && ! grep -q KILL "$K6/log"; then
+    ok "K6: a lingering session is ended (loginctl, then TERM) and the wait stops as soon as it is gone"
+else
+    bad "K6: TERM path" "rc=$rc" "$(cat "$K6/log")"
+fi
+rc=$(k6run yes KILL)
+if [ "$rc" = 0 ] && [ "$(grep -c 'pkill -TERM' "$K6/log")" -eq 3 ] && grep -qx 'pkill -KILL -u acct' "$K6/log"; then
+    ok "K6: ...one that ignores TERM gets KILL after three tries"
+else
+    bad "K6: KILL path" "rc=$rc" "$(cat "$K6/log")"
+fi
+rc=$(k6run yes never)
+if [ "$rc" != 0 ] && [ "$(grep -c '^pkill' "$K6/log")" -eq 10 ]; then
+    ok "K6: ...one that never goes is reported (rc != 0) after a bounded ten attempts"
+else
+    bad "K6: never dies" "rc=$rc" "$(cat "$K6/log")"
+fi
+grep -q 'leave_end_account_processes "$account"' "$REPO/deploy.sh" \
+    && [ "$(grep -c 'leave_end_account_processes "$account"' "$REPO/deploy.sh")" -ge 2 ] \
+    && ok "K6: --leave calls it before userdel and again before the one retry" \
+    || bad "K6: --leave does not call leave_end_account_processes before userdel and its retry"
+rm -rf "$K6"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

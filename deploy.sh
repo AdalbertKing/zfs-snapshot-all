@@ -2102,6 +2102,39 @@ quiesce_update_failed() {   # <account> <label> -- exits nonzero, writing nothin
     die "commit-scope did NOT complete for '$label': nothing durable was written (no new scope hash, no new PEER_JOIN_GRANTED_DATASETS), so the previous record still describes what is granted and re-running this same command retries safely."
 }
 
+# K6 (lab campaign, 2026-10-06): --leave's `userdel -r` failed with "user ... is
+# currently used by process N" right after the relationship's last SSH session
+# -- the tail of that session, or the account's `systemd --user`, which Debian
+# keeps for a few seconds after logout. delete-relation stopped safely on it
+# (REV-144) and a re-run passed, so every removal could need a second run.
+# `passwd -l` before it does not help: it locks the password, not key logins.
+#
+# So, before userdel: EXPIRE the account (sshd with PAM -- the Debian/Proxmox
+# default -- then refuses a new login, key or not, while we wait), end its login
+# sessions where loginctl exists, then TERM and finally KILL what is left --
+# bounded, about ten seconds. The source account only serves the collector's
+# SSH; delete-relation removes the collector's jobs (step 1, remove-client)
+# before it calls --leave (step 2), so nothing it runs is still wanted.
+leave_end_account_processes() {   # <account> -> 0 when nothing of it is left running
+    local a="$1" i
+    usermod -e 1 "$a" >/dev/null 2>&1 || true
+    pgrep -u "$a" >/dev/null 2>&1 || return 0
+    log "leave: '$a' still has processes ($(pgrep -u "$a" | tr '\n' ' ')) -- ending them before userdel"
+    if command -v loginctl >/dev/null 2>&1; then
+        loginctl terminate-user "$a" >/dev/null 2>&1 || true
+    fi
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -u "$a" >/dev/null 2>&1 || return 0
+        if [ "$i" -le 3 ]; then
+            pkill -TERM -u "$a" >/dev/null 2>&1 || true
+        else
+            pkill -KILL -u "$a" >/dev/null 2>&1 || true
+        fi
+        sleep 1
+    done
+    ! pgrep -u "$a" >/dev/null 2>&1
+}
+
 #
 # Returns nonzero when a file of the grant EXISTED and is still there
 # (REV-20260920-145 follow-up). The first version counted only successes, so two
@@ -4143,7 +4176,13 @@ do_leave() {
         if id "$account" >/dev/null 2>&1; then
             revoke_quiesce_grant "$account"
             passwd -l "$account" >/dev/null 2>&1 || true
-            userdel -r "$account" 2>&1 || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
+            # K6: one retry after ending the account's processes again -- the
+            # first userdel can still meet the tail of the last session.
+            leave_end_account_processes "$account" \
+                || warn "leave: '$account' still has processes after the wait ($(pgrep -u "$account" 2>/dev/null | tr '\n' ' ')) -- userdel will say what holds it"
+            userdel -r "$account" 2>&1 \
+                || { sleep 2; leave_end_account_processes "$account"; userdel -r "$account" 2>&1; } \
+                || die "userdel -r $account failed -- its ZFS grants are already revoked and verified gone; resolve the account removal by hand, then re-run --leave='$label' to finish cleaning up state"
             log "leave: removed account '$account' (uid $uid) and its home directory"
         else
             log "leave: account '$account' (uid $uid) already gone; its orphaned grant is now cleared"
