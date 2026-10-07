@@ -11732,6 +11732,50 @@ cmd_enable_client() {
 # cron really pulls), the stats JSONL (what happened), and the progress records
 # (what is happening). No ssh: status must work when the peer is unreachable,
 # which is exactly when it is most likely to be run.
+# K2 (lab campaign, 2026-10-06): `status` printed "bez quiesce" for every
+# relationship. It echoed ${QUIESCE_MODE:-...}, a variable nothing in this
+# program sets (only lib-zfs-snap.sh, which this file does not source), so the
+# default always won -- while the installed pulls carried `-q auto,degrade` on
+# their daily and coarser tiers. The answer now comes from where the GUI's F3
+# panel takes its schedules: the job lines in the managed block of the
+# relationship's account, matched on its own pair label (` -L NAME `), the -q
+# value of each copy job and the tier its label names.
+status_quiesce_from_cron() {   # <relationship name> -> one line
+    local name="$1" tab
+    [ -n "${INSTALLED_ENDPOINT:-}${MANAGED_DATASETS:-}" ] || { echo "(jeszcze nie aktywowany)"; return 0; }
+    tab=$(crontab_for_target 2>/dev/null) || { echo "? (crontab konta ${LOCAL_USER:-root} nieczytelny)"; return 0; }
+    printf '%s\n' "$tab" \
+      | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+      | grep -F -- " -L $name " | grep -E 'snap(get|send)\.sh' \
+      | awk '
+          function rank(t) {
+              if (t ~ /hourly/) return 1; if (t ~ /daily/) return 2; if (t ~ /weekly/) return 3
+              if (t ~ /monthly/) return 4; if (t ~ /yearly/) return 5; return 9
+          }
+          {
+              t = "?"
+              if (match($0, /zfs-job\.sh "[^"]*"/)) {
+                  l = substr($0, RSTART + 12, RLENGTH - 13); n = split(l, w, " ")
+                  if (n >= 2) { t = w[2]; sub(/^profile__.*__/, "", t) }
+              }
+              q = "-"
+              for (i = 1; i <= NF; i++) if ($i == "-q" && i < NF) q = $(i + 1)
+              print rank(t) "\t" t "\t" q
+          }' \
+      | sort -u | sort -t "$(printf '\t')" -k1,1n -k2,2 \
+      | awk -F '\t' '
+          { if ($2 in seen) next; seen[$2] = 1
+            if ($3 == "-") off = off (off ? ", " : "") $2
+            else { if (!($3 in on)) ord[++k] = $3; on[$3] = on[$3] (on[$3] ? ", " : "") $2 } }
+          END {
+              if (k == 0 && off == "") { print "? (brak linii tej relacji w cronie)"; exit }
+              if (k == 0) { print "crash-consistent (bez quiesce)"; exit }
+              s = ""; for (i = 1; i <= k; i++) s = s (s ? "; " : "") "quiesce " ord[i] " (" on[ord[i]] ")"
+              if (off != "") s = s "; bez: " off
+              print s
+          }'
+}
+
 status_sources_from_config() {   # <client name> -> the src= of every section it owns
     local name="$1" cfg="${CRON_CONFIG:-}" line cur="" out=""
     [ -n "$cfg" ] && [ -r "$cfg" ] || return 1
@@ -15211,7 +15255,7 @@ cmd_status() {
     _st_src=$(status_sources_from_config "$CLIENT_NAME")         || _st_src="${PEER_SAVED_DATASETS:-?}"
     echo "Zrodla:            $_st_src"
     echo "Cel:               ${MANAGED_DATASETS:-(jeszcze nie aktywowany)}"
-    echo "Spojnosc:          ${QUIESCE_MODE:-crash-consistent (bez quiesce)}"
+    echo "Spojnosc:          $(status_quiesce_from_cron "$CLIENT_NAME")"
     echo "Utworzono:         ${CREATED_AT:-?}"
     [ -n "${SEED_COMPLETED_AT:-}" ]    && echo "Seed ukonczony:    $SEED_COMPLETED_AT"
     [ -n "${ENDPOINT_VERIFIED_AT:-}" ] && echo "Endpoint zweryf.:  $ENDPOINT_VERIFIED_AT (${ENDPOINT_VERIFIED_FOR:-?})"

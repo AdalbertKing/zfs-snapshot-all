@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13505,6 +13505,56 @@ else
 fi
 
 fi   # --- koniec sekcji runreplicas ---
+
+if want statusquiesce; then
+# ============================================================================
+# K2 (2026-10-07): `status` "Spojnosc" echoed ${QUIESCE_MODE:-bez quiesce}, a
+# variable nothing here sets -- every relationship read "bez quiesce" while its
+# pulls carried -q. Now from the relationship's own job lines in its account's
+# managed block. Shipped status_quiesce_from_cron over a stub crontab.
+# ============================================================================
+SQ="$WORK/statusquiesce"; rm -rf "$SQ"; mkdir -p "$SQ"
+cat > "$SQ/tab" <<'EOF'
+# BEGIN zfs-backup-managed
+56 * * * * /x/zfs-job.sh "h profile__m__hourly snapshot (r-ct)" -- /x/snapget.sh -m "automated_hourly_" -R -L r "u@h:hdd/ct" "hdd/b"
+6 2 * * * /x/zfs-job.sh "h profile__m__daily snapshot (r-ct)" -- /x/snapget.sh -m "automated_daily_" -R -q auto,degrade -L r "u@h:hdd/ct" "hdd/b"
+26 4 1 * * /x/zfs-job.sh "h profile__m__monthly snapshot (r-ct)" -- /x/snapget.sh -m "automated_monthly_" -R -q auto,degrade -L r "u@h:hdd/ct" "hdd/b"
+16 * * * * /x/zfs-job.sh "h profile__m__hourly prune (r-ct)" -- /x/delsnaps.sh -R -L r -q x "hdd/b/hdd/ct" "" -H24
+31 * * * * /x/zfs-job.sh "h profile__p__hourly backup (r2-a)" -- /x/snapget.sh -m "" -e -q agent -L r2 "u@h:hdd/a"
+# END zfs-backup-managed
+EOF
+sq() {   # <name> [INSTALLED_ENDPOINT] -> the Spojnosc text
+    bash -c "source '$ZFSBACKUP'; INSTALLED_ENDPOINT='${2-e:22}'; crontab_for_target() { cat '$SQ/tab'; }; status_quiesce_from_cron '$1'" 2>&1
+}
+got=$(sq r)
+if [ "$got" = "quiesce auto,degrade (daily, monthly); bez: hourly" ]; then
+    ok "statusquiesce: the -q of each copy tier, in tier order, and the tiers without it -- prunes and other relationships ignored"
+else
+    bad "statusquiesce: mixed tiers" "got: $got"
+fi
+got=$(sq r2)
+if [ "$got" = "quiesce agent (hourly)" ]; then
+    ok "statusquiesce: ...a relationship whose name the other's starts with is read on its own label only"
+else
+    bad "statusquiesce: r2" "got: $got"
+fi
+sed -i 's/ -q auto,degrade//' "$SQ/tab"
+got=$(sq r)
+if [ "$got" = "crash-consistent (bez quiesce)" ]; then
+    ok "statusquiesce: ...no -q on any copy line is crash-consistent"
+else
+    bad "statusquiesce: none" "got: $got"
+fi
+got=$(sq nosuch)
+case "$got" in "? (brak linii"*) ok "statusquiesce: ...a relationship with no job line says so, it does not claim crash-consistent" ;; *) bad "statusquiesce: no lines" "got: $got" ;; esac
+got=$(sq r "")
+if [ "$got" = "(jeszcze nie aktywowany)" ]; then
+    ok "statusquiesce: ...a relationship never activated reads 'not activated', no crontab asked"
+else
+    bad "statusquiesce: not activated" "got: $got"
+fi
+
+fi   # --- koniec sekcji statusquiesce ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

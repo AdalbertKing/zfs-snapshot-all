@@ -946,6 +946,34 @@ fi
 # ============================================================================
 # OKNO RELACJI (Enter)
 # ============================================================================
+# RYTM PER SZCZEBEL (2026-10-07): okno bralo rytm i retencje tylko z PIERWSZEGO
+# szablonu sekcji i nie znalo pol send_schedule_<szablon> / prune_schedule_<szablon>
+# (rozrzut U2/K3) -- pve11 na pve10 mowilo "co: 1 * * * *" przy pobraniu o :56.
+TCFG="$(mktemp)"
+"$PY" - "$P10/show-config.json" "$TCFG" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["templates"] += [
+    {"name": "profile__m__hourly", "fields": {"send_schedule": "1 * * * *", "prefix": "automated_hourly_", "keep": "24", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__m__daily",  "fields": {"send_schedule": "11 1 * * *", "prefix": "automated_daily_", "keep": "7", "prune_schedule": "31 1 * * *"}},
+    {"name": "profile__m__src_hourly", "fields": {"keep": "12", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__m__src_daily",  "fields": {"keep": "3", "prune_schedule": "31 1 * * *"}}]
+d["sections"] = [
+    {"kind": "dataset", "name": "hdd/b/x", "fields": {"use_template": "profile__m__hourly,profile__m__daily",
+        "send_schedule_profile__m__hourly": "56 * * * *", "send_schedule_profile__m__daily": "6 2 * * *",
+        "src": "u@h:hdd/x", "pair_label": "lab-ct201"}},
+    {"kind": "prune", "name": "u@h:hdd/x", "fields": {"use_template": "profile__m__src_hourly,profile__m__src_daily",
+        "prune_schedule_profile__m__src_hourly": "36 * * * *", "prune_schedule_profile__m__src_daily": "46 2 * * *"}}]
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
+rm -f "$TCFG"
+if has "$WT" 'co: 56 * * * *   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: 6 2 * * *   stempel automated_daily_   trzyma 7' \
+   && has "$WT" 'trzyma 12   co: 36 * * * *' && has "$WT" 'trzyma 3   co: 46 2 * * *' && ! has "$WT" 'co: 1 * * * *'; then
+    ok "okno: rytm i retencja KAZDEGO szczebla, z polami szczebla sekcji (send_/prune_schedule_<szablon>) przed szablonem"
+else
+    bad "okno: rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
+fi
 W="$(screen relacje down,enter --height 80)"
 if has "$W" '╔═ Relacja lab-ct201 ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
@@ -1732,7 +1760,7 @@ else
     bad "new-relation: kroki 5-10" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
 # krok 6 -- WSZYSTKIE szablony na jednej liscie, bez pytania o spojnosc, znaczniki
-# [zamraża]/[płaski] przy kazdym (wlasciciel, uwaga 15: "nie moglem znalezc
+# [zamraża]/[drabina] przy kazdym (wlasciciel, uwaga 15: "nie moglem znalezc
 # d30h24" -- filtrowanie po spojnosci i plaskosci hosta je chowalo).
 if ! grep -qF 'Spójność migawek' "$NR/wt.log"; then
     ok "new-relation: krok 6 nie pyta juz o spojnosc migawek -- jedna lista, wszystkie szablony"
@@ -1745,17 +1773,23 @@ if "$PY" - "$NR/step6.line" <<'PYEOF'
 import sys
 parts = open(sys.argv[1], encoding="utf-8").read().split(" ~ ")
 def desc(tag):
-    for i, p in enumerate(parts):
-        if p == tag and i + 1 < len(parts):
+    # OSTATNIE wystapienie: lista idzie po --menu, a "default" stoi wczesniej
+    # jako wartosc --default-item -- pierwsze trafienie bylo "--menu", i stara
+    # asercja (brak znacznikow) przechodzila na nim przypadkiem.
+    for i in range(len(parts) - 2, -1, -1):
+        if parts[i] == tag:
             return parts[i + 1]
     return None
-d_def = desc("default"); d_30 = desc("d30")
-ok = d_def is not None and "[zamraża]" not in d_def and "[płaski]" not in d_def
-ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[płaski]" in d_30
+d_def = desc("default"); d_30 = desc("d30"); d_g = desc("d7h24-gfs")
+# K5: [drabina] stoi przy JEDNEJ drabinie (default), nie przy retencji w szczeblach
+# -- ani przy d30 (N najnowszych), ani przy -gfs (rodzina na szczebel, kazda z GFS).
+ok = d_def is not None and "[zamraża]" not in d_def and "[drabina]" in d_def
+ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_30
+ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
 sys.exit(0 if ok else 1)
 PYEOF
 then
-    ok "new-relation: krok 6 -- 'default' (drabina, nie zamraza) bez znacznikow, 'd30' (plaski, zamraza dobowe) z OBOMA znacznikami -- jedna lista, zaden filtr"
+    ok "new-relation: krok 6 -- 'default' [drabina] bez [zamraża], 'd30' [zamraża] bez [drabina], 'd7h24-gfs' bez znacznika ksztaltu (K5) -- jedna lista, zaden filtr"
 else
     bad "new-relation: krok 6 lista szablonow" "$(printf '%s' "$NRL6" | cut -c1-800)"
 fi
