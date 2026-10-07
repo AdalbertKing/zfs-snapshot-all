@@ -597,11 +597,15 @@ out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --targe
 # described it as plan/preview only. Help that contradicts the tool is a defect
 # in the public contract, so the contract is asserted, not just the behaviour.
 usage_txt="$(usage 2>&1)"
-{ printf '%s' "$usage_txt" | grep -q -- '--install'   && printf '%s' "$usage_txt" | grep -qE -- '--yes\|?-y|-y'; }     && ok "112 F1: Usage advertises --install and --yes/-y"     || bad "112 F1: Usage advertises --install and --yes/-y" "$(printf '%s' "$usage_txt" | grep -i 'source=DATASET' )"
+# Here-strings, not `printf | grep -q`: grep -q quits at the first hit, printf
+# then dies on a broken pipe, and under pipefail that reads as "no match" -- it
+# went red on #471 once the Usage grew past what the pipe buffers. (The old
+# pattern also carried a literal backspace byte where a word-boundary escape was meant.)
+{ grep -q -- '--install' <<< "$usage_txt" && grep -qE -- '--yes\|?-y|-y' <<< "$usage_txt"; }     && ok "112 F1: Usage advertises --install and --yes/-y"     || bad "112 F1: Usage advertises --install and --yes/-y" "$(printf '%s' "$usage_txt" | grep -i 'source=DATASET' )"
 # and the OLD unconditional claim must be gone -- the discriminating half:
 # a Usage that merely LISTS --install while still saying "plan/preview only"
 # would pass the assertion above and still mislead.
-printf '%s' "$usage_txt" | grep -qi 'plan/preview only'     && bad "112 F1: Usage no longer claims the command is plan/preview only" "still says plan/preview only"     || ok "112 F1: Usage no longer claims the command is plan/preview only"
+grep -qi 'plan/preview only' <<< "$usage_txt"     && bad "112 F1: Usage no longer claims the command is plan/preview only" "still says plan/preview only"     || ok "112 F1: Usage no longer claims the command is plan/preview only"
 
 # ==============================================================================
 # Slice 3 -- target discovery when --target is omitted.

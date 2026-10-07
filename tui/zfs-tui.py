@@ -1544,6 +1544,8 @@ def screen_actions(active, hide_gone=False, paused=False):
         return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
+    if active == "nosniki":
+        return [("F7", u"Uruchom teraz")]
     return []
 
 
@@ -2902,11 +2904,11 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         if not reps:
             body += [u"Brak sekcji [replica:] w configu tego kolektora.",
                      u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
-                     u"Dodaje się ją przez: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
+                     u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
         while len(body) < list_h + 2:
             body.append("")
         lb = box(ch, u"Repliki na nośnikach wymiennych (%d)" % len(reps), body,
-                 lbw, footer=u"Enter szczegóły" if reps else "")
+                 lbw, footer=u"Enter szczegóły (e zmienia)   F7 uruchom teraz   Ins nowa   Del usuń" if reps else u"Ins nowa replika")
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -2974,7 +2976,7 @@ HELP = [
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress);",
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
-    u"  F6  Nośniki    repliki na dyskach wymiennych i cztery stany nośnika",
+    u"  F6  Nośniki    repliki i 4 stany nośnika; Ins/Del/F7 uruchom, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -3332,6 +3334,32 @@ class UI(object):
         else:
             out.append(u"--- zakończone, rc=%s -- czasownik ODMÓWIŁ albo padł; przeczytaj powyżej" % rc + (u"   (dziennik: %s)" % obj["path"] if obj.get("path") else ""))
         return out
+
+    def replica_action(self, k):
+        """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
+        F7 uruchom teraz. Logika jest w czasownikach; tu tylko pytanie."""
+        if k == "ins":
+            return self.run_dialog([self.zb(), "add-replica", "--ask"])
+        reps = (self.data.replicas or {}).get("replicas", [])
+        if k == "F7":
+            if not reps:
+                self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)"
+                return
+            self.confirm(u"Uruchom repliki teraz", [self.zb(), "run-replicas"],
+                         [u"Każda replika z configu, raz, teraz -- tak jak z crona.",
+                          u"Nośnik, którego nie ma, jest pomijany bez alarmu (to kontrakt bramy);",
+                          u"wymienny jest importowany na czas kopii i eksportowany po niej."])
+            return
+        c = self.cursor["nosniki"]
+        if not reps or not (0 <= c < len(reps)):
+            self.message = u"brak replik"
+            return
+        n = reps[c].get("name")
+        if k == "del":
+            self.confirm(u"Usuń replikę %s" % n, [self.zb(), "remove-replica", n, "--install", "--yes"],
+                         [u"Znika sekcja [replica:%s] i jej zadanie z crona." % n,
+                          u"Kopia na nośniku ZOSTAJE. Usunięcie kopii to osobny krok:",
+                          u"  zfs-backup.sh purge-replica-copy %s" % n])
 
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""
@@ -3881,6 +3909,11 @@ class UI(object):
         if self.window:
             if k in ("esc", "q", "enter"):
                 self.window, self.scroll = None, 0
+            elif k == "e" and self.window[0] == "panel" and self.window[1].get("replica"):
+                # ZMIANA REPLIKI: te same okna co Ins na F6, wypelnione.
+                n = self.window[1]["replica"]
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "add-replica", n, "--ask"]) or "stay"
             elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
@@ -4032,6 +4065,8 @@ class UI(object):
             self.ask_refresh()
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
+        elif k in ("F7", "del", "ins") and self.screen == "nosniki":
+            return self.replica_action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
@@ -4057,7 +4092,8 @@ class UI(object):
             m = monitor_rows(self.data)[c]
             return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
-        return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch)}
+        return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch),
+                "replica": rp.get("name")}
 
 
 def relation_window_lines_dispatch(ui, obj, width):
@@ -4133,6 +4169,8 @@ def _ui_render(self, width, height):
                                              footer=u"Esc zamyka okno (proces zostaje)   strzałki przewijają")
         else:
             foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
+            if obj.get("replica"):
+                foot = u"e zmień replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień relację   Esc zamyka   strzałki/PgUp/PgDn przewijają"

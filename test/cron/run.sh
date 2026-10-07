@@ -1220,6 +1220,37 @@ check "SPK1 a [prune:] with prune_schedule_<tier> renders, rc=0" "0" "$frc"
 check "SPK2 ...the hourly source prune runs at its own spread minute" "1" "$(printf '%s\n' "$fo" | grep -c '^5 \* \* \* \* .*delsnaps.sh .*"automated_hourly" -H24')"
 check "SPK3 ...the daily one, given no field, keeps its template's schedule" "1" "$(printf '%s\n' "$fo" | grep -c '^31 1 \* \* \* .*delsnaps.sh .*"automated_daily" -D7')"
 
+# ON-INSERT (2026-10-07, owner: "replika ma swoj harmonogram ... after connect"):
+# a replica with no time renders as a COMMENT carrying the job -- cron never
+# fires it, run-replicas (the udev rule's verb) does. A real schedule keeps its
+# ordinary line (control); anything else is still linted.
+oi_conf() {   # <schedule>
+    cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:usb1]
+	source   = tank/data
+	dst      = usb/rep
+	schedule = $1
+	prefix   = replica_
+	media    = removable
+EOF
+}
+oi_conf on-insert
+fo=$(for_run); frc=$?
+check "ONI1 schedule = on-insert renders, rc=0" "0" "$frc"
+check "ONI2 ...as ONE '#on-insert' comment line carrying the bracketed replica job" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^#on-insert /R/zfs-job.sh "f replica copy (usb1)" .*zfs-media-gate.sh attach usb usb1 ')"
+check "ONI3 ...and no line cron would fire for it" "0" \
+      "$(printf '%s\n' "$fo" | grep -E '^[0-9*@]' | grep -c 'replica copy (usb1)')"
+oi_conf "30 2 * * *"
+fo=$(for_run)
+check "ONI4 control: a real schedule keeps its ordinary cron line" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^30 2 \* \* \* /R/zfs-job.sh "f replica copy (usb1)"')"
+oi_conf "on-insertx"
+fo=$(for_run); frc=$?
+check "ONI5 any other word is still linted as a cron schedule and refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
