@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13369,6 +13369,106 @@ else
 fi
 
 fi   # --- koniec sekcji delrel ---
+
+if want editrel; then
+# ============================================================================
+# edit-relation (2026-10-07): an INSTALLED relationship regenerated in place.
+#
+# Measured on pve10 editing pve11 from m12w4d7h24-gfs to m31w4d7h24: the
+# anti-deletion guard refused "16 job line(s) would be DELETED" -- every line
+# of the relationship carries its template name, so a profile change renames
+# all of them. The eighth exemption lets THAT relationship's own lines go, and
+# only while the new block still runs it. Shipped guard on stub crontabs.
+# ============================================================================
+ER="$WORK/editrel"; rm -rf "$ER"; mkdir -p "$ER/bin"; : > "$ER/new.conf"
+er_r1='57 * * * * /root/x/zfs-job.sh "h profile__a__hourly snapshot (r-ct)" -- /root/x/snapget.sh -m "automated_hourly_" -A -L r "u@h:tank/ct" "hdd/b"'
+er_r2='17 * * * * /root/x/zfs-job.sh "h profile__a__hourly prune (r-ct)" -- /root/x/delsnaps.sh -G -R -L r "hdd/b/tank/ct" "" -H24'
+er_s1='31 * * * * /root/x/zfs-job.sh "h profile__p__hourly backup (s-a)" -- /root/x/snapget.sh -m "" -e -A -L s "u@h:tank/a"'
+er_q1='41 * * * * /root/x/zfs-job.sh "h profile__a__hourly snapshot (r2-ct)" -- /root/x/snapget.sh -m "automated_hourly_" -A -L r2 "u@h:tank/q" "hdd/b"'
+er_n1='57 * * * * /root/x/zfs-job.sh "h profile__b__hourly snapshot (r-ct)" -- /root/x/snapget.sh -m "automated_hourly_" -A -L r "u@h:tank/ct" "hdd/b"'
+er_n2='17 * * * * /root/x/zfs-job.sh "h profile__b__hourly prune (r-ct)" -- /root/x/delsnaps.sh -R -L r "hdd/b/tank/ct" "automated_hourly" -H24'
+{ echo '# BEGIN zfs-backup-managed'; echo "$er_r1"; echo "$er_r2"; echo "$er_s1"; echo "$er_q1"; echo '# END zfs-backup-managed'; } > "$ER/target.cron"
+printf '#!/bin/bash\ncat "%s"\nexit 0\n' "$ER/target.cron" > "$ER/bin/crontab"; chmod +x "$ER/bin/crontab"
+er_guard() {   # <proposal file> <EDIT_RELATION_NAME> -> rc ; output in $ER/out
+    PATH="$ER/bin:$PATH" LOCAL_USER="zfsbackup" bash -c \
+        "source '$ZFSBACKUP'; EDIT_RELATION_NAME='$2'; gencron_as_target() { cat '$1'; }; assert_target_block_not_clobbered '$ER/new.conf'" > "$ER/out" 2>&1
+    echo "$?"
+}
+{ echo '# BEGIN zfs-backup-managed'; echo "$er_n1"; echo "$er_n2"; echo "$er_s1"; echo "$er_q1"; echo '# END zfs-backup-managed'; } > "$ER/edit.txt"
+got=$(er_guard "$ER/edit.txt" r)
+if [ "$got" = 0 ] && [ "$(grep -c "edited relationship 'r'" "$ER/out")" -eq 2 ]; then
+    ok "editrel: the edited relationship's own lines, renamed by a profile change, are replaced -- installed, each one named"
+else
+    bad "editrel: an edit of relationship r was refused or passed silently" "rc=$got" "$(cat "$ER/out")"
+fi
+got=$(er_guard "$ER/edit.txt" "")
+if [ "$got" != 0 ] && grep -q '2 job line(s) would be DELETED' "$ER/out"; then
+    ok "editrel: ...the same proposal outside an edit is still two deletions (control)"
+else
+    bad "editrel: the exemption applies without edit-relation having named the relationship" "rc=$got" "$(cat "$ER/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'; echo "$er_n1"; echo "$er_n2"; echo "$er_q1"; echo '# END zfs-backup-managed'; } > "$ER/nos.txt"
+got=$(er_guard "$ER/nos.txt" r)
+if [ "$got" != 0 ] && grep -q '1 job line(s) would be DELETED' "$ER/out" && grep -q 'backup (s-a)' "$ER/out"; then
+    ok "editrel: ...ANOTHER relationship's vanished line is still a deletion during an edit"
+else
+    bad "editrel: editing r excused relationship s's lost job" "rc=$got" "$(cat "$ER/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'; echo "$er_n1"; echo "$er_n2"; echo "$er_s1"; echo '# END zfs-backup-managed'; } > "$ER/nor2.txt"
+got=$(er_guard "$ER/nor2.txt" r)
+if [ "$got" != 0 ] && grep -q '1 job line(s) would be DELETED' "$ER/out" && grep -q '(r2-ct)' "$ER/out"; then
+    ok "editrel: ...a relationship whose name merely STARTS with the edited one (r2 vs r) is not covered"
+else
+    bad "editrel: editing r excused r2's lost job" "rc=$got" "$(cat "$ER/out")"
+fi
+{ echo '# BEGIN zfs-backup-managed'; echo "$er_s1"; echo "$er_q1"; echo '# END zfs-backup-managed'; } > "$ER/gone.txt"
+got=$(er_guard "$ER/gone.txt" r)
+if [ "$got" != 0 ] && grep -q '2 job line(s) would be DELETED' "$ER/out"; then
+    ok "editrel: ...an edit that leaves the relationship NO job at all is refused, not excused"
+else
+    bad "editrel: an edit that removed the whole relationship passed" "rc=$got" "$(cat "$ER/out")"
+fi
+
+# The families a section stamps come from its templates, not only from its
+# own prefix field -- a multi-family profile carries none of its own.
+cat > "$ER/fam.conf" <<'EOF'
+[template:profile__a__hourly]
+	prefix         = automated_hourly_
+[template:profile__a__daily]
+	prefix         = automated_daily_
+[template:profile__z__monthly]
+	prefix         = automated_monthly_
+
+[dataset:hdd/b/tank/ct]
+	use_template = profile__a__hourly,profile__a__daily
+	src          = u@h:tank/ct
+
+[dataset:hdd/b/tank/p]
+	use_template = profile__a__hourly
+	prefix       =
+EOF
+fam=$(bash -c "source '$ZFSBACKUP'; section_stamped_families '$ER/fam.conf' hdd/b/tank/ct" 2>&1 | paste -sd' ')
+if [ "$fam" = "automated_daily_ automated_hourly_" ]; then
+    ok "editrel: section_stamped_families reads the families from the section's templates (and only those it uses)"
+else
+    bad "editrel: section_stamped_families" "got: $fam"
+fi
+
+# The flags belong to edit-relation: activate-client alone must not take them.
+out=$(bash "$ZFSBACKUP" activate-client x --profile=d30 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'that is edit-relation NAME'; then
+    ok "editrel: activate-client --profile without edit-relation is refused before anything is read"
+else
+    bad "editrel: activate-client accepted --profile" "rc=$rc" "$out"
+fi
+out=$(bash "$ZFSBACKUP" edit-relation x --target=y 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'edit-relation: unknown option --target=y'; then
+    ok "editrel: edit-relation refuses an option it does not edit"
+else
+    bad "editrel: edit-relation accepted --target" "rc=$rc" "$out"
+fi
+
+fi   # --- koniec sekcji editrel ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

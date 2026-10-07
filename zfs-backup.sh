@@ -547,7 +547,7 @@ Inspection / teardown:
                                     frees the name. Copies on disk are kept unless
                                     --destroy-copies. Plans without --yes. Del on the
                                     GUI's F3 asks these same questions in windows.
-  zfs-backup.sh edit-relation NAME [--profile=P] [--source-profile=S] [--yes]
+  zfs-backup.sh edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]
                                     Change an INSTALLED relationship in place: its
                                     sections are generated again from the profile
                                     (target retention, schedules, source retention),
@@ -558,7 +558,8 @@ Inspection / teardown:
                                     old relationship picks up today's schedule spread);
                                     --source-profile= (empty) drops the asymmetry. The
                                     snapshot FAMILY may not change -- that is a new
-                                    relationship. Plans without --yes.
+                                    relationship. Asks without --yes; --plan only
+                                    shows; --ask = the GUI's windows ('e' on F3).
   zfs-backup.sh remove-source NAME DATASET [--yes]
                                     Take ONE dataset out of a relationship, on both
                                     sides: the SOURCE's scope file loses it (so its
@@ -1327,6 +1328,10 @@ declare -A SOURCE_PRUNE_PRESERVED=()
 # edit-relation: the installed source policy is NOT replayed -- it is exactly
 # what the edit regenerates from the profile.
 ACTIVATE_REGENERATE=0
+EDIT_DROPPED_FAMILIES=""
+# ...and the one relationship whose own job lines the anti-deletion guard
+# lets the regenerated block replace (its eighth exemption).
+EDIT_RELATION_NAME=""
 # The peer-root ladder scope this run migrated OFF, if any (2026-09-08). Set by
 # emit_client_sections when it actually removes one, read by
 # assert_target_block_not_clobbered -- which is otherwise right to refuse the
@@ -3713,6 +3718,19 @@ assert_target_block_not_clobbered() {   # <config whose render is about to be in
                     warn "    $line"
                     continue
                 fi
+            fi
+            # Eighth exemption: edit-relation. The admin asked for THIS
+            # relationship's jobs to be generated again, so its old lines
+            # (template names, families and shape may all change) are replaced,
+            # not lost -- but only lines carrying its own pair label, and only
+            # while the new block still runs that relationship at all. Every
+            # other line is held to the seven rules above. Speaks.
+            if [ -n "${EDIT_RELATION_NAME:-}" ] \
+               && printf '%s\n' "$line" | grep -qF -- " -L $EDIT_RELATION_NAME " \
+               && printf '%s\n' "$proposed" | grep -qF -- " -L $EDIT_RELATION_NAME "; then
+                warn "  edited relationship '$EDIT_RELATION_NAME': this job is replaced by its regenerated set:"
+                warn "    $line"
+                continue
             fi
             still_lost="$still_lost$line
 "
@@ -9980,20 +9998,21 @@ activation_is_new_relationship() {   # <state> <installed-endpoint>
 cmd_activate_client() {
     cmd_reset_invocation_state
     local name="${1:-}"; shift || true
-    local yes=0 verbose=0 regen=0
+    local yes=0 verbose=0 regen=0 plan_only=0
     local edit_profile="" edit_profile_given=0 edit_src="" edit_src_given=0
     for a in "$@"; do
         case "$a" in
             --yes|-y) yes=1 ;;
             --verbose) verbose=1 ;;
             --regenerate) regen=1 ;;
+            --plan) plan_only=1 ;;
             --profile=*) edit_profile="${a#*=}"; edit_profile_given=1; flag_profile edit-relation "$edit_profile" ;;
             --source-profile=*) edit_src="${a#*=}"; edit_src_given=1
                 [ -z "$edit_src" ] || flag_profile edit-relation "$edit_src" ;;
             *) die "activate-client: unknown option $a" ;;
         esac
     done
-    if [ "$regen" -eq 0 ] && { [ "$edit_profile_given" -eq 1 ] || [ "$edit_src_given" -eq 1 ]; }; then
+    if [ "$regen" -eq 0 ] && { [ "$edit_profile_given" -eq 1 ] || [ "$edit_src_given" -eq 1 ] || [ "$plan_only" -eq 1 ]; }; then
         die "activate-client: --profile/--source-profile change an installed relationship -- that is edit-relation NAME"
     fi
     local cpath; cpath=$(client_conf_path "$name")
@@ -10036,6 +10055,7 @@ cmd_activate_client() {
             || die "edit-relation: '$name' is in state '${STATE:-unknown}' -- only an installed (active) relationship can be edited. Nothing was changed."
         is_new_relationship=1
         ACTIVATE_REGENERATE=1
+        EDIT_RELATION_NAME="$name"
     fi
     case "${STATE:-}" in
         endpoint_verified|active) ;;
@@ -10178,14 +10198,24 @@ cmd_activate_client() {
         # THE FAMILY STAYS. A profile stamping another prefix is a different
         # relationship: the snapshots already on both sides would be nobody's,
         # never pruned by the new policy and never a base for it.
-        local _old_pfx _new_pfx
+        # A tier ADDED is an ordinary edit (a new family starts arriving); a
+        # tier DROPPED is allowed but named before consent, because what it
+        # already stamped stays on both sides and nothing prunes it any more.
+        # No family in common is refused -- passive (stamping none) included.
+        local _old_fam _new_fam _f
+        EDIT_DROPPED_FAMILIES=""
         for ds in $PEER_SAVED_DATASETS; do
             localpath=$(client_local_path "$ds")
-            _old_pfx=$(installed_dataset_field "$cronfile" "$localpath" prefix)
-            _new_pfx=$(installed_dataset_field "$workfile" "$localpath" prefix)
-            [ "$_old_pfx" = "$_new_pfx" ] && continue
-            rm -f "$workfile"
-            die "edit-relation: profile '$PROFILE' stamps the family '${_new_pfx:-<none>}' on $ds, the installed relationship stamps '${_old_pfx:-<none>}'. Changing the snapshot family is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."
+            _old_fam=$(section_stamped_families "$cronfile" "$localpath")
+            _new_fam=$(section_stamped_families "$workfile" "$localpath")
+            [ "$_old_fam" = "$_new_fam" ] && continue
+            if [ -z "$(comm -12 <(printf '%s\n' "$_old_fam") <(printf '%s\n' "$_new_fam"))" ]; then
+                rm -f "$workfile"
+                die "edit-relation: profile '$PROFILE' stamps [${_new_fam//$'\n'/ }] on $ds, the installed relationship stamps [${_old_fam//$'\n'/ }] -- no family in common. That is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."
+            fi
+            for _f in $(comm -23 <(printf '%s\n' "$_old_fam") <(printf '%s\n' "$_new_fam")); do
+                case " $EDIT_DROPPED_FAMILIES " in *" $_f "*) ;; *) EDIT_DROPPED_FAMILIES="${EDIT_DROPPED_FAMILIES:+$EDIT_DROPPED_FAMILIES }$_f" ;; esac
+            done
         done
         remove_templates_orphaned_by "$workfile" "$tpl_before"
     fi
@@ -10326,17 +10356,26 @@ cmd_activate_client() {
         echo "Cel:                 (sync -- ta sama sciezka co zrodlo, dla kazdego datasetu osobno)"
     fi
     echo "Tryb:                pull"
-    if [ "${PROFILE_GFS:-1}" -eq 1 ]; then
-        echo "Profil:              standard GFS -- jedna wysylka co godzine (:01), jedna"
-        echo "                     kaskadowa drabina retencji (:21): -H24 -D7 -W4 -M12"
+    # THIS relationship's profile and shape. The old text described the HOST
+    # (any flat template anywhere read as "legacy") and named a fixed -H24 -D7
+    # -W4 -M12 whatever the profile said -- seen re-activating pve11 on pve10
+    # next to a flat sync relationship, 2026-10-07.
+    if [ -n "${prune_scope:-}" ]; then
+        echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}} -- drabina GFS w osobnej sekcji prune"
     else
-        echo "Profil:              legacy (plaska retencja per tier -- ten host ma config"
-        echo "                     sprzed podzialu profilu)"
+        echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}} -- retencja w szczeblach wysylki"
     fi
     # F7: name the passive shape out loud BEFORE consent -- a silent non-passive
     # choice on a chained middle dataset is exactly what the lab watched destroy
-    # both links' common bases in 80 minutes.
-    if grep -qE '^\s*flags\s*=.*\s-e(\s|$)' "$workfile" 2>/dev/null; then
+    # both links' common bases in 80 minutes. Only THIS relationship's sections:
+    # a passive neighbour in the same file is not this relationship's shape.
+    local _passive_here=0 _pds
+    for _pds in $PEER_SAVED_DATASETS; do
+        case " $(installed_dataset_field "$workfile" "$(client_local_path "$_pds")" flags) " in
+            *" -e "*) _passive_here=1 ;;
+        esac
+    done
+    if [ "$_passive_here" -eq 1 ]; then
         echo "Tryb pasywny:        TAK dla czesci/calosci zakresu -- ta relacja KONSUMUJE"
         echo "                     istniejaca rodzine snapshotow zrodla (snapget -e):"
         echo "                     zadnych nowych snapshotow na zrodle, zadnego prune"
@@ -10372,7 +10411,19 @@ cmd_activate_client() {
         echo "                     profil zrodla '${old_src_profile:-<ten sam>}' -> '${SOURCE_PROFILE:-<ten sam>}'"
         echo "                     sekcje relacji generowane od nowa (retencja, harmonogramy);"
         echo "                     dane nie sa przenoszone, seed nie jest potrzebny."
+        if [ -n "$EDIT_DROPPED_FAMILIES" ]; then
+            echo "UWAGA:               rodziny przestaja byc tworzone i ciete: $EDIT_DROPPED_FAMILIES"
+            echo "                     ich istniejace migawki ZOSTAJA na celu i zrodle -- usun je"
+            echo "                     recznie, jesli nie sa potrzebne."
+        fi
         echo
+    fi
+    # --plan: everything above ran (generation, gen-cron, dry-run, grant checks,
+    # preview) and nothing below does. The GUI shows this before asking.
+    if [ "$plan_only" -eq 1 ]; then
+        rm -f "$workfile"
+        echo "plan only -- nothing was changed (run again with --yes to apply)"
+        return 0
     fi
     if [ "$yes" -ne 1 ]; then
         read -rp "$([ "$regen" -eq 1 ] && echo "Zastosowac zmiane relacji?" || echo "Aktywowac backup?") [t/N] " ans
@@ -11376,6 +11427,28 @@ remove_orphan_profile_templates() {   # <file>
     done < <(grep -oE '^\[template:[^]]+\]' "$file" | sed 's/^\[template://; s/\]$//')
 }
 
+# The snapshot families a [dataset:] section stamps: its own `prefix` and the
+# `prefix` of every template it uses, sorted, one per line. An empty prefix is
+# a passive pickup and stamps nothing.
+section_stamped_families() {   # <file> <dataset path>
+    awk -v hdr="[dataset:$2]" '
+        function val(l) { sub(/^[^=]*=[ \t]*/, "", l); sub(/[ \t]+$/, "", l); return l }
+        FNR == NR {
+            if ($0 == hdr) { insec = 1; next }
+            if ($0 ~ /^\[/) insec = 0
+            if (insec && $0 ~ /^[ \t]*use_template[ \t]*=/) {
+                v = val($0); gsub(/[ \t]/, "", v); n = split(v, a, ",")
+                for (i = 1; i <= n; i++) if (a[i] != "") used[a[i]] = 1
+            }
+            if (insec && $0 ~ /^[ \t]*prefix[ \t]*=/) { v = val($0); if (v != "") print v }
+            next
+        }
+        /^\[template:/ { t = $0; sub(/^\[template:/, "", t); sub(/\]$/, "", t); intpl = (t in used); next }
+        /^\[/ { intpl = 0 }
+        intpl && /^[ \t]*prefix[ \t]*=/ { v = val($0); if (v != "") print v }
+    ' "$1" "$1" 2>/dev/null | sort -u
+}
+
 # Every template name any section references, one per line.
 config_referenced_templates() {   # <file>
     awk -F= '
@@ -12203,14 +12276,22 @@ cmd_gui() {
 # grant checks and install guards, with nothing moved on disk.
 cmd_edit_relation() {
     local name="${1:-}"; shift || true
-    [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--yes]"
-    local a
+    [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
+    local a ask=0
     for a in "$@"; do
         case "$a" in
-            --yes|-y|--verbose|--profile=*|--source-profile=*) ;;
+            --yes|-y|--verbose|--plan|--profile=*|--source-profile=*) ;;
+            --ask) ask=1 ;;
             *) die "edit-relation: unknown option $a" ;;
         esac
     done
+    if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows ('e' on the GUI's F3)
+        [ -r "$(client_conf_path "$name")" ] || die "edit-relation: no relationship '$name' on this host"
+        local dlg="$SCRIPT_DIR/tui/edit-relation.sh"
+        [ -f "$dlg" ] || die "edit-relation: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
+        return $?
+    fi
     cmd_activate_client "$name" --regenerate "$@"
 }
 

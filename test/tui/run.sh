@@ -884,6 +884,26 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
+# ZMIANA RELACJI (2026-10-07): 'e' w oknie szczegolow (Enter na F3) oddaje
+# terminal oknom edit-relation; bez okna 'e' jest tekstem linii polecen.
+A="$(act down,enter,e)"
+if grep -Eq "zfs-backup.sh'? edit-relation lab-ct201 --ask\$" "$XL"; then
+    ok "akcje: 'e' w oknie relacji na F3 oddaje terminal oknom zmiany (edit-relation NAZWA --ask)"
+else
+    bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(act down,enter)"
+if has "$A" 'e zmień relację'; then
+    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień relację')"
+else
+    bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(act down,e)"
+if [ ! -s "$XL" ]; then
+    ok "akcje: ...bez okna 'e' jest tekstem linii polecen i niczego nie uruchamia"
+else
+    bad "akcje: 'e' bez okna uruchomil czasownik" "$(cat "$XL")"
+fi
 A="$(act end,del)"
 if grep -Eq "delete-relation 192.168.28.99 --ask\$" "$XL" && ! has "$A" 'jest już usunięta'; then
     ok "akcje: Del dziala takze na rekordzie 'removed' -- tam znaczy 'zwolnij nazwe / posprzataj reszte'"

@@ -2958,8 +2958,8 @@ HELP = [
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
-    u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, pod nim CONFIG i CRON,",
-    u"                 przewijane), F7 pauza/wznów, Del usuń,",
+    u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
+    u"                 zmienia relację: szablon, plan), F7 pauza/wznów, Del usuń,",
     u"                 F8 eksport do pliku (Enter zapisuje, domyślnie w",
     u"                 /etc/zfs-snapshot-all/relations), F9 import: lista plików",
     u"                 eksportu z tego katalogu, potem werdykt",
@@ -3881,6 +3881,13 @@ class UI(object):
         if self.window:
             if k in ("esc", "q", "enter"):
                 self.window, self.scroll = None, 0
+            elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+                # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
+                # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
+                # jest tekstem linii polecen), stad 'e' w oknie szczegolow.
+                n = self.window[1]["name"]
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -4125,14 +4132,16 @@ def _ui_render(self, width, height):
             scr, self.scroll = render_window(base, u"WYJŚCIE: " + obj["title"], lines, self.scroll, width, height, self.ch,
                                              footer=u"Esc zamyka okno (proces zostaje)   strzałki przewijają")
         else:
+            foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
+                foot = u"e zmień relację   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
                 title = obj["name"]
             lines = relation_window_lines_dispatch(self, obj, width)
-            scr, self.scroll = render_window(base, title, lines, self.scroll, width, height, self.ch)
+            scr, self.scroll = render_window(base, title, lines, self.scroll, width, height, self.ch, footer=foot)
         return scr
     return base
 
