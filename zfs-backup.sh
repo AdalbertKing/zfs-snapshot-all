@@ -344,12 +344,17 @@ Usage:
 Replicas -- more copies of what this host already holds, usually onto disks
 that get unplugged. Every field is a flag, and add-replica is an upsert, so a
 front end never edits the config file:
+  zfs-backup.sh add-replica [NAME] --ask
+                                    The windows for a replica (F6 in the GUI): Ins = new,
+                                    Enter + 'e' = change. Ask, show the plan, install.
   zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
                                     Default schedule is 02:30 nightly, after the
                                     daily tier: a replica is not an online mirror,
                                     and every run is a window in which the medium
                                     is at risk.
-                                    [--schedule='30 2 * * *'] [--prefix=replica_]
+                                    [--schedule='30 2 * * *'|on-insert] [--prefix=replica_]
+                                    on-insert = no time, only when the disk is
+                                    plugged in (needs install-media-trigger).
                                     [--recursive=yes|no] [--fixed|--removable]
                                     [--history=all|newest|auto:N]
                                     [--notify=TEXT] [--plan|--install] [--yes]
@@ -6356,13 +6361,21 @@ cmd_run_replicas() {
         || die "run-replicas: the config could not be rendered -- nothing was run"
     # The replica lines and only those: a bracketed job is a replica by
     # construction, because media_bracket is the only thing that emits one.
+    # A FIXED replica has no bracket, so it is found by its job label
+    # ("<host> replica copy (<name>)", emitted for every replica) -- matching
+    # the bracket alone left it out of every manual and on-insert run.
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         n=$((n+1))
-        # Strip the five schedule fields; what is left is what cron runs.
-        bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1
+        # Strip the five schedule fields; what is left is what cron runs. An
+        # on-insert replica carries the marker '#on-insert' in their place
+        # (cron never fires it; this verb, called by the udev rule, does).
+        case "$line" in
+            "#on-insert "*) bash -c "${line#"#on-insert "}" || rc=1 ;;
+            *)              bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1 ;;
+        esac
     done <<EOF
-$(printf '%s' "$block" | grep 'zfs-media-gate.sh attach')
+$(printf '%s' "$block" | grep -E 'zfs-media-gate\.sh attach|zfs-job\.sh "[^"]* replica copy \(')
 EOF
     [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
     return "$rc"
@@ -6469,6 +6482,24 @@ cmd_remove_media_trigger() {
 }
 
 cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [...]
+    # --ask [NAME]: the same questions as whiptail windows (F6 in the GUI: Ins =
+    # a new replica, Enter + 'e' = change one). The windows only ask and show
+    # this verb's plan; the answer comes back here as an ordinary call.
+    local _ask=0 _askname="" _aa
+    for _aa in "$@"; do
+        case "$_aa" in
+            --ask) _ask=1 ;;
+            -*) ;;
+            *) _askname="$_aa" ;;
+        esac
+    done
+    if [ "$_ask" -eq 1 ]; then
+        [ "$#" -le 2 ] || die "add-replica --ask takes at most a NAME -- the windows ask for the rest"
+        local dlg="$SCRIPT_DIR/tui/replica.sh"
+        [ -f "$dlg" ] || die "add-replica: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" ${_askname:+"$_askname"}
+        return $?
+    fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can

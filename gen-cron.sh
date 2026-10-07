@@ -2808,6 +2808,12 @@ build_replica_section() {
 
     ini_has "$sec" schedule || die "[replica:$name] has no 'schedule'"
     local schedule; schedule="$(ini_get "$sec" schedule)"
+    # ON-INSERT (owner 2026-10-07: "replika ma swoj harmonogram ... wersja after
+    # connect"): no time at all, the job runs when its disk is plugged in. It is
+    # rendered as a COMMENT in the managed block, so cron never fires it, and
+    # run-replicas -- which the udev rule (install-media-trigger) calls on every
+    # insertion -- runs it like any other replica line.
+    if [ "$schedule" != on-insert ]; then
     lint_cron_schedule "$schedule" "[replica:$name]" schedule
 
     # A REPLICA THAT RUNS MORE THAN ONCE A DAY IS EXPOSING THE MEDIUM MORE THAN
@@ -2828,6 +2834,7 @@ build_replica_section() {
         *'*'*|*,*|*-*)
             warn "[replica:$name]: schedule='$schedule' runs more than once a day. Every run imports '$name''s medium, and a medium can only be harmed while its pool is imported -- on the lab, pulling one mid-run hung the host until it was reset. A replica is meant to run once a night after the daily tier, or when the disk is plugged in. Keeping it is your call; the cost is the number of runs." ;;
     esac
+    fi   # schedule != on-insert
 
     # A FAMILY OF ITS OWN, and this is the owner's point (2026-08-28): the
     # replica's snapshots must not be mistaken for the source's. They exist on
@@ -3821,7 +3828,12 @@ emit_replicas() {
                 cmd="( $cmd; exit \$m )"
             fi
         fi
-        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        if [ "$schedule" = on-insert ]; then
+            # A comment: cron skips it, run-replicas strips the marker and runs it.
+            JOB_LINES+=("$(job_cron_line "#on-insert" "$cmd" "$notify")")
+        else
+            JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        fi
     done
 }
 
