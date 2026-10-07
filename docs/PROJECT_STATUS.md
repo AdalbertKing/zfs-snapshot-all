@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a83b6ee5212e961c -->
+<!-- status-covers-digest: 10e9da833d0392ff -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,30 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **K6: `deploy.sh --leave` nie pada już na `userdel` (2026-10-07, właściciel: „rób K6”).**
+  - **Było (kampania labowa):** `userdel -r` przerywał z „user … is currently used by process
+    N”, gdy konto relacji miało jeszcze żywy proces: końcówkę ostatniej sesji SSH albo
+    `systemd --user`, który Debian trzyma kilka sekund po wylogowaniu. `delete-relation`
+    zatrzymywał się wtedy bezpiecznie (REV-144), ale usunięcie trzeba było puszczać drugi raz.
+    `passwd -l` przed `userdel` blokuje hasło, a nie logowanie kluczem.
+  - **Jest:** `leave_end_account_processes` przed `userdel`:
+    - wygasza konto (`usermod -e 1`), więc sshd z PAM (domyślnie na Debianie i Proxmoksie)
+      odrzuca nowe logowanie, także kluczem;
+    - kończy sesje (`loginctl terminate-user`, jeśli jest), potem wysyła TERM trzy razy, a w
+      końcu KILL;
+    - ma limit ok. dziesięciu prób;
+    - `userdel` dostaje jedno ponowienie po kolejnym sprzątaniu procesów.
+
+    Na źródle konto obsługuje tylko SSH kolektora. W `delete-relation` jego zadania dla tej
+    relacji zdejmuje krok 1 (`remove-client`), zanim krok 2 woła `--leave`, więc nic z tego,
+    co kończymy, nie jest już potrzebne.
+  - **Testy:** `joinmanifest` 39/0 (+5 K6: konto bez procesów, TERM, KILL po trzech TERM,
+    proces nieśmiertelny zgłoszony po 10 próbach, oba wywołania w `--leave`); na `main`
+    funkcji nie ma, więc wszystkie padają.
+  - **Na żywo, pve9b:** konto `k6test` z żywym procesem. Goły `userdel -r`: „currently used
+    by process”, rc=8. Z funkcją: proces zakończony, `userdel` rc=0, konta i katalogu
+    domowego nie ma.
 
 - **Trzy ekrany, które przeczyły cronowi: K2, okno „Relacja”, K5 (2026-10-07, właściciel: „rób 1, 2 i 3”).**
   - **K2, `status` „Spojnosc”:** zawsze pisało „crash-consistent (bez quiesce)”, bo czytało
