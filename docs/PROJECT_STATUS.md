@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cab03447799af6f8 -->
+<!-- status-covers-digest: 9bcee1216189c92e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,45 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Replika z GUI i harmonogram „po włożeniu” (2026-10-07, właściciel: „Tak, rób replikę”; „replika ma swój harmonogram ... wersja after connect”).**
+  - **Było:**
+    - F6 „Nośniki” tylko pokazywał repliki. Dodanie, zmiana, usunięcie i uruchomienie szły
+      z linii poleceń.
+    - Harmonogram był obowiązkowym wpisem crona. Reguła udev (`install-media-trigger`)
+      uruchamiała `run-replicas`, ale replika „tylko po włożeniu” nie dała się zapisać:
+      gen-cron odrzucał `on-insert`, choć GUI miało już na to słowo.
+    - `run-replicas` brało tylko linie z bramą nośnika, więc replika na nośnik stały
+      (`--fixed`) nigdy nie ruszała ręcznie ani po włożeniu.
+  - **Jest:**
+    - `schedule = on-insert` (`add-replica --schedule=on-insert`): gen-cron zapisuje zadanie
+      w bloku jako komentarz `#on-insert …`. Cron go nie odpala; `run-replicas` (F7, reguła
+      udev) zdejmuje znacznik i uruchamia je jak każdą replikę.
+    - `run-replicas` bierze też linie po etykiecie `replica copy (…)`, czyli repliki stałe.
+    - Reguła udev ustawia `HOME=/root` (pod udev mbuffer zapisywał ostrzeżenia do logu).
+    - GUI, F6: Ins = nowa replika, Enter + `e` = zmiana (okna whiptail `tui/replica.sh`:
+      nazwa, źródła z listy datasetów hosta, nośnik z pul zaimportowanych i w slocie, baza
+      na nośniku z ofertą `zfs create`, wymienny/stały, kiedy, plan, WYKONAJ). Del = usuń
+      (kopia na nośniku zostaje), F7 = uruchom teraz. Zmiana to `add-replica` z tą samą
+      nazwą, które nadpisuje sekcję.
+    - Okno „kiedy” daje „tylko po włożeniu” dla nośnika wymiennego. Gdy reguły udev brak,
+      okno pyta o nią osobno (to trwała zmiana zachowania hosta) i zakłada ją po
+      instalacji repliki.
+  - **Inwentarz:** na żadnym hoście (lab i produkcja) nie ma dziś zainstalowanej repliki,
+    więc przejście istniejących replik na `snapget -M` nie ma czego dotyczyć.
+  - **Testy:** `cron` 168/0 (+5 ONI; `main` odrzuca `on-insert`), `zfsbackup --section
+    runreplicas` 3/0 (na `main` 2 FAIL), `tui` 209/0 (+6).
+  - **Na żywo, pve9, nośnik `repl` (dysk USB w QEMU):**
+    - CLI: replika `usb1` (`hdd/data`, po włożeniu), `run-replicas` rc=0, GUID-y migawek
+      źródła i nośnika zgodne;
+    - `udevadm trigger --action=add` na `sdc1` (symulacja włożenia):
+      `zfs-replica-insert-sdc1.service` → kopia → eksport; bez zmian na źródle brama
+      pomija bieg;
+    - GUI przez pty: `e` (po włożeniu → 02:30), F7 (rc=0), Del, Ins (nowa, po włożeniu)
+      do „GOTOWE”.
+  - **Zostaje:** `purge-replica-copy` (kasowanie kopii z nośnika) jest tylko w CLI. Na
+    nośniku `repl` leżą stare kopie labowe z sierpnia (`repl/replica/hdd/backups/192.168.28.{8,9}`,
+    `hdd/lab/srv-a`).
 
 - **Zmiana zainstalowanej relacji bez usuwania: `edit-relation` (2026-10-07, właściciel: „Pozostają replika i modyfikacja istniejącej konfiguracji. Obecnie robimy to przez kasowanie i tworzenie na nowo”).**
   - **Było:** relację dało się zmienić tylko przez `delete-relation` i założenie od nowa.

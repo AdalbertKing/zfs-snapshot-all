@@ -2904,7 +2904,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         if not reps:
             body += [u"Brak sekcji [replica:] w configu tego kolektora.",
                      u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
-                     u"Dodaje się ją przez: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
+                     u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
         while len(body) < list_h + 2:
             body.append("")
         lb = box(ch, u"Repliki na nośnikach wymiennych (%d)" % len(reps), body,

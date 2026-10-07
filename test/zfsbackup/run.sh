@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13469,6 +13469,42 @@ else
 fi
 
 fi   # --- koniec sekcji editrel ---
+
+if want runreplicas; then
+# ============================================================================
+# run-replicas (2026-10-07): what F7 on F6 and the udev rule run. It used to
+# take only lines carrying the media bracket, so a FIXED replica (no bracket)
+# never ran by hand, and an on-insert replica (a '#on-insert' comment in the
+# block) did not exist. The shipped cmd_run_replicas over a stub render: every
+# replica line runs, the comment marker is stripped, nothing else runs.
+# ============================================================================
+RR="$WORK/runreplicas"; rm -rf "$RR"; mkdir -p "$RR"; : > "$RR/c.conf"; : > "$RR/ran"
+cat > "$RR/block" <<EOF
+# BEGIN zfs-backup-managed
+30 2 * * * echo bracketed >> $RR/ran # zfs-media-gate.sh attach
+#on-insert echo oninsert >> $RR/ran # zfs-media-gate.sh attach
+30 3 * * * echo fixed >> $RR/ran # zfs-job.sh "h replica copy (fx)" --log=x
+21 * * * * echo notareplica >> $RR/ran # zfs-job.sh "h hourly prune (x)" --log=x
+# END zfs-backup-managed
+EOF
+rr_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block'; }; cmd_run_replicas --config='$RR/c.conf'" 2>&1); rr_rc=$?
+if [ "$rr_rc" -eq 0 ] && grep -qx bracketed "$RR/ran" && grep -qx oninsert "$RR/ran"; then
+    ok "runreplicas: a scheduled bracketed replica and an on-insert one (marker stripped) both run"
+else
+    bad "runreplicas: bracketed / on-insert" "rc=$rr_rc" "$(cat "$RR/ran")" "$rr_out"
+fi
+if grep -qx fixed "$RR/ran"; then
+    ok "runreplicas: ...a FIXED replica (no media bracket) runs too, found by its job label"
+else
+    bad "runreplicas: the fixed replica did not run" "$(cat "$RR/ran")"
+fi
+if ! grep -qx notareplica "$RR/ran"; then
+    ok "runreplicas: ...a job that is not a replica does not run"
+else
+    bad "runreplicas: a non-replica line ran" "$(cat "$RR/ran")"
+fi
+
+fi   # --- koniec sekcji runreplicas ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

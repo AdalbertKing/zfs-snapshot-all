@@ -6432,7 +6432,7 @@ cmd_install_media_trigger() {
 # for a backup would stall every other device on this machine for the length of
 # the transfer.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
-  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k $SCRIPT_DIR/zfs-backup.sh run-replicas --config=$config"
+  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --config=$config"
 EOF
 )"
     echo ">>> reguła do zapisania w $rules:"

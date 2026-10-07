@@ -1192,6 +1192,49 @@ if has "$NE" 'Brak sekcji [replica:]' && has "$NE" 'NIE TEN DYSK' && has "$NE" '
 else
     bad "nosniki: pusty" "$NE"
 fi
+# REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
+# add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
+nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys "$1" 2>&1
+}
+A="$(nact ins)"
+if grep -Eq "zfs-backup.sh'? add-replica --ask\$" "$XL"; then
+    ok "nosniki: Ins oddaje terminal oknom nowej repliki (add-replica --ask)"
+else
+    bad "nosniki: Ins -> add-replica --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(nact enter,e)"
+if grep -Eq "zfs-backup.sh'? add-replica sejf-a --ask\$" "$XL"; then
+    ok "nosniki: Enter i 'e' w oknie repliki oddaje terminal oknom ZMIANY tej repliki (add-replica NAZWA --ask)"
+else
+    bad "nosniki: e -> add-replica NAZWA --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(nact enter)"
+if has "$A" 'e zmień replikę'; then
+    ok "nosniki: ...okno repliki mowi o tym w stopce"
+else
+    bad "nosniki: stopka okna repliki" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(nact down,del)"; nact down,del,t >/dev/null
+if has "$A" 'POTWIERDZENIE: Usuń replikę sejf-b' && has "$A" 'Kopia na nośniku ZOSTAJE' \
+   && grep -Eq "remove-replica sejf-b --install --yes\$" "$XL"; then
+    ok "nosniki: Del pyta (kopia na nosniku zostaje) i po 't' usuwa replike POD KURSOREM"
+else
+    bad "nosniki: Del -> remove-replica" "$(cat "$XL")" "$A"
+fi
+A="$(nact F7)"; nact F7,t >/dev/null
+if has "$A" 'POTWIERDZENIE: Uruchom repliki teraz' && grep -Eq "zfs-backup.sh'? run-replicas\$" "$XL"; then
+    ok "nosniki: F7 pyta i po 't' uruchamia repliki teraz (run-replicas)"
+else
+    bad "nosniki: F7 -> run-replicas" "$(cat "$XL")" "$A"
+fi
+nact e >/dev/null
+if [ ! -s "$XL" ]; then
+    ok "nosniki: ...bez okna 'e' jest tekstem linii polecen i niczego nie uruchamia"
+else
+    bad "nosniki: 'e' bez okna uruchomil czasownik" "$(cat "$XL")"
+fi
 
 # ============================================================================
 # LINIA POLECEN (wlasciciel 2026-09-11: "chcemy moc w kazdej chwili pisac
