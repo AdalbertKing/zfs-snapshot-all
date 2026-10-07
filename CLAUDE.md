@@ -128,44 +128,82 @@ result, not a running commentary on which suite is at which line.
 
 ## Which model -- delegation
 
-Owner direction, 2026-09-23: **the session model orchestrates; simple work goes
-to cheaper subagents.** Token cost is a routing parameter, not an afterthought.
-The session decides, briefs, reviews and integrates; it does not type what a
-cheaper model can type.
+Owner direction, 2026-09-23, re-cut 2026-10-07: **the session model
+orchestrates; simple work goes to cheaper subagents.** Token cost is a routing
+parameter, not an afterthought. The session decides, briefs, reviews and
+integrates; it does not type what a cheaper model can type.
 
-| role | agent (`.claude/agents/`) | model | may | may not |
+**Models are named by ALIAS, never by ID.** The agent files say `haiku` /
+`sonnet`; the harness maps each alias to the newest model of that line.
+Measured 2026-10-07: a `haiku` agent reports itself as Haiku 5.5 (the Owner's
+model picker lists Opus 5.5, Fable 5.1, Sonnet 5.5, Haiku 5.5). A newer
+model arrives in every agent by itself, with no edit here. Ask an agent which
+model it is (one line, no tools) rather than trusting a list in a prompt -- the
+session's own environment note still named Haiku 4.5 that day.
+
+**It has to pay, in tokens.** Price per million tokens, 2026-10-07 (input /
+output): Opus 5.5 $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50. Two
+facts decide the routing:
+
+- **The session's context is the hidden cost.** Everything the session reads
+  stays in the conversation and is re-read, from cache, on every later turn. A
+  20k-token CI log read by the session costs ~$0.08 once and ~$0.20 more over the
+  ~50 turns it then rides along; the same log read by `ci-reader` cost ~30k Haiku
+  tokens, about $0.005. Reading goes to Haiku: an order of magnitude, and the
+  session's context stays lean.
+- **Starting an agent has a fixed price**: ~60k Haiku tokens for a one-line,
+  zero-tool call (its system prompt), ~$0.006. Cheap in money, so the test is
+  whether the work needs doing at all, not whether Haiku can afford it.
+
+Typing through `simple-coder` is roughly break-even with the session typing it:
+a ~200-line dialog is ~$0.15-0.20 of Sonnet (start, reading the files, output)
+plus the session's brief and review, against ~$0.08 of Opus output plus carrying
+the text in context. So it pays only for a large self-contained piece (~150
+lines and up) or for parallel work -- below that the session types, and a
+delegation for its own sake is waste.
+
+| role | agent (`.claude/agents/`) | model | use it for | may not |
 |---|---|---|---|---|
-| CI state for a SHA | `ci-reader` | haiku | read GitHub via `gh-api.sh GET` | re-run, merge, guess a queued result |
-| where X is / who calls it | `repo-greper` | haiku | grep, list `file:line` | say anything runs on a host |
-| fast gates | `gate-runner` | haiku | `reviewctl --verify`, `impact --verify` | write forms, suites |
-| prose vs tree | `text-checker` | haiku | read, compare text to code/diff | edit, confirm live claims |
-| typing a decided change | `simple-coder` | sonnet | Read/Edit/Write the files named | Bash, git, hosts, frozen engines, design |
-| everything else | session | -- | decide, diagnose, live hosts, git, PR, merge | -- |
+| CI diagnosis | `ci-reader` | haiku | a RED check: which test failed, the log excerpt, does `main` pass it | re-run, merge, guess a queued result |
+| inventory | `repo-greper` | haiku | "where is X / who calls it / which suites cover it" across more than two files | say anything runs on a host |
+| prose vs tree | `text-checker` | haiku | **every** PROJECT_STATUS / error-log / response / PR text before its commit | edit, confirm live claims |
+| gate explanation | `gate-runner` | haiku | only when a gate's drift report must be read and explained | write forms, suites |
+| typing a decided change | `simple-coder` | sonnet | test sections from a spec, a whiptail dialog over a fixed verb contract, docs from bullet notes | Bash, git, hosts, frozen engines, design |
+| everything else | session | -- | decide, diagnose, guards, engines, live hosts, git, PR, merge | -- |
+
+**No model at all** when a plain command does the job: waiting for green CI and
+merging is a polling script in the session's scratchpad (`wait-merge.sh`, not
+in the repo; zero tokens); `impact.sh --verify` /
+`--refresh-status` run inline with their output trimmed (`> file; tail -1`). A
+subagent for a shell call costs more than the call -- measured 2026-09-23, one
+`gate-runner` run of `impact --verify` was ~30k haiku tokens for a one-line answer.
 
 Routing, in the order the session asks it:
 
 1. **Is it a decision?** Diagnosis, design, choosing between readings of a
-   review, anything destructive, anything on a live host, git history, PR and
-   merge: the session. Never delegated.
-2. **Is it reading?** Inventory, CI, gates, checking a text against the tree:
-   a haiku reader. The session acts on the report, and re-checks any claim it
-   is about to repeat to the Owner (a reader's report is a lead, not evidence).
-3. **Is it typing a change already fully specified** -- files, functions,
-   expected behaviour, the discriminating input for the test? `simple-coder`.
-   If writing the brief costs as much as the edit (a one-line change in a
-   file the session already has open), the session types it.
-4. **Independent pieces run in parallel** (several agents in one message).
-   Two `simple-coder`s never edit the same file at once; use
-   `isolation: "worktree"` when their files could overlap.
+   review, a guard, an engine, anything destructive, anything on a live host,
+   git history, PR and merge: the session. Never delegated.
+2. **Is it a plain command?** Run it, no agent.
+3. **Is it reading?** Inventory, a red CI log, a text against the tree: a haiku
+   reader, in the background, while the session works on. The report is a lead,
+   not evidence: re-check any claim before repeating it to the Owner.
+4. **Is it typing a change already fully specified** -- files, functions,
+   expected behaviour, the discriminating input for each test, what the negative
+   control must show? `simple-coder`, when the piece is ~150 lines or more, or
+   runs in parallel with other work. Below that the session types (see the
+   arithmetic above).
+5. **Independent pieces run in parallel** (several agents in one message). Two
+   `simple-coder`s never edit the same file at once; use `isolation:
+   "worktree"` when their files could overlap.
 
 The session's duties after a delegated edit do not shrink: read the diff like
 an enemy, run `bash -n` / the targeted check / the edited suite, build the
 negative control against `main`. A subagent's "done" is not a check.
 
-Measured when the roles were set up (2026-09-23): one `gate-runner` call on
-the full `impact --verify` cost ~30k haiku tokens and ~13 minutes of wall time
-on this Windows box. The wall time was the gate, not the model. Launch it in
-the background; do not block on it.
+**Every report at the end of a round names the split in one line:** what went
+to which agent, and what the session kept and why. Rounds #470 (edit-relation)
+and #471 (replica GUI) went out with nothing delegated and no `text-checker` pass
+on their status entries (E74). The line is how the Owner sees the rule being applied.
 
 ## Project status document
 
