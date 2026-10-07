@@ -2239,16 +2239,38 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         for sec in cfg.get("sections", []):
             f = sec.get("fields", {})
             used = [x for x in (f.get("use_template") or "").split(",") if x]
+            # KAZDY SZCZEBEL OSOBNO, z tym samym pierwszenstwem co gen-cron
+            # (resolve_field_tiered): pole szczebla w sekcji (send_schedule_<szablon>,
+            # zapisywane przez rozrzut U2/K3), potem pole sekcji, potem szablon.
+            # Okno bralo tylko PIERWSZY szablon i jego rytm: przy relacji
+            # m12w4d7h24-gfs mowilo "co: 1 * * * *", a cron pobieral o :56, 02:06,
+            # 03:16 i 04:26 (pve10, 2026-10-07).
+            def _tf(field, u):
+                return f.get(field + "_" + u) if u else None
             if sec.get("kind") == "dataset":
-                sched = f.get("send_schedule") or (tmpl.get(used[0], {}).get("send_schedule") if used else "") or "?"
-                pref = f.get("prefix") or (tmpl.get(used[0], {}).get("prefix") if used else "") or "?"
                 _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
-                _ret = f.get("retain") or (tmpl.get(used[0], {}).get("retain") or tmpl.get(used[0], {}).get("keep") if used else "")
-                key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
-                pol.setdefault(key, []).append(sec.get("name") or "?")
-                if key not in order:
-                    order.append(key)
+                for u in (used or [""]):
+                    t = tmpl.get(u, {}) if u else {}
+                    sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
+                    pref = f.get("prefix") or t.get("prefix") or "?"
+                    _ret = f.get("retain") or f.get("keep") or t.get("retain") or t.get("keep") or ""
+                    key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
+                    pol.setdefault(key, []).append(sec.get("name") or "?")
+                    if key not in order:
+                        order.append(key)
+            elif any(_tf("prune_schedule", u) for u in used):
+                # Prune rozrzucony szczebel po szczeblu (K3): jedna linia na szczebel.
+                _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
+                for u in used:
+                    t = tmpl.get(u, {})
+                    r = t.get("retain") or t.get("keep") or ""
+                    sched = _tf("prune_schedule", u) or f.get("prune_schedule") or t.get("prune_schedule") or "?"
+                    key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", sched,
+                                                           "   drabina GFS" if (t.get("gfs") or f.get("gfs")) == "yes" else ""))
+                    pol.setdefault(key, []).append(sec.get("name") or "?")
+                    if key not in order:
+                        order.append(key)
             else:
                 ret = []
                 for u in used:

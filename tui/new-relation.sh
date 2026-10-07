@@ -504,8 +504,16 @@ FREEZE=1
 # -- nie zaproponował ŻADNEJ drabiny kontu zfsbackup, choć czasownik by ją przyjął
 # (inny config, inne konto). Dlatego krok 6 pokazuje WSZYSTKIE szablony (właściciel
 # 2026-09-20: "jeśli jest to w szablonie, to musi być widoczne"; oznaczone
-# [zamraża]/[płaski]), a niedopasowanie sprawdza się PO wyborze konta, w kroku 8,
+# [zamraża]/[drabina]), a niedopasowanie sprawdza się PO wyborze konta, w kroku 8,
 # dla TEGO konta.
+#
+# K5 (2026-10-07): znacznik stał przy złej stronie i mówił nieprawdę. "[płaski]"
+# dostawał każdy szablon poza jedną drabiną -- także -gfs (cztery rodziny, każda
+# na własnej drabinie GFS), a opis okna mówił "jedna rodzina, N najnowszych, bez
+# drabiny". Podział jest dobry (retencja w szczeblach -- N najnowszych, wg wieku
+# albo GFS per rodzina -- kontra JEDNA drabina dla jednej rodziny w osobnej
+# sekcji prune), więc zostaje; znacznik idzie na tę stronę, która ma
+# ograniczenie: [drabina] (default, Y5M12D31H24, passive).
 account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCIE używa szablonu płaskiego
     local want="$1" n p t st pr lu fp
     [ "$want" != root ] || want=""
@@ -552,15 +560,15 @@ step_profile() {
     while IFS=$'\t' read -r n w c q f sh; do
         [ -n "$n" ] || continue
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
-        # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[płaski]/[polecany]
+        # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
         local marks=""
         [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}[polecany] "
         [ "$f" = 1 ] && marks="${marks}[zamraża] "
-        [ "$sh" = flat ] && marks="${marks}[płaski] "
+        [ "$sh" = ladder ] && marks="${marks}[drabina] "
         label="$(printf '%-15s %s%s' "$n" "$marks" "$w")"
         # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
-        # [zamraża] [płaski] były szersze niż okno i ucinały jej prawy bok.
+        # [zamraża] [drabina] były szersze niż okno i ucinały jej prawy bok.
         items+=("$n" "$(clip_label "$label" $((W - 10)))")
     done <"$TMPD/prof.tsv"
     def=default
@@ -573,7 +581,7 @@ step_profile() {
     in_list "$def" "${items[@]}" || def="${items[0]}"
     geom
     wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-       --menu "${lead}Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [płaski] = jedna rodzina,\nN najnowszych, bez drabiny GFS -- takiego wymaga konto, na którym już\ndziała inny płaski szablon (sprawdzane po wyborze konta w kroku 8).\nSzablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
+       --menu "${lead}Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [drabina] = JEDNA drabina GFS\ndla jednej rodziny, w osobnej sekcji; pozostałe trzymają retencję w każdym\nszczeblu. [drabina] nie wejdzie na konto, na którym już działa szablon z retencją\nw szczeblach (sprawdzane po wyborze konta w kroku 8). Szablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     PROFILE="$WT_OUT"
     f="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $5}' "$TMPD/prof.tsv")"
@@ -636,7 +644,7 @@ step_account() {
         acct_name="$(account_name)"
         shape="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $6}' "$TMPD/prof.tsv" 2>/dev/null)"
         if account_is_flat "$acct_name" && [ "$shape" != flat ]; then
-            wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie ${acct_name:-root} już działają relacje z szablonem PŁASKIM\n(jedna rodzina na szczebel, bez drabiny GFS) -- to jest jego config.\nSzablonu-drabiny (GFS) nie da się do niego dodać, czasownik by to\nodmówił ('This host reads as FLAT').\n\nWybierz inne konto, albo Wstecz do kroku 6 po szablon płaski." "$(fit 8)" "$W"
+            wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie ${acct_name:-root} już działają relacje z retencją W SZCZEBLACH\n(każdy szczebel przycina się sam) -- to jest jego config. Szablonu [drabina]\n(jedna drabina GFS w osobnej sekcji) nie da się do niego dodać, czasownik\nby to odmówił ('This host reads as FLAT').\n\nWybierz inne konto, albo Wstecz do kroku 6 po szablon bez znacznika [drabina]." "$(fit 8)" "$W"
             continue
         fi
         return 0

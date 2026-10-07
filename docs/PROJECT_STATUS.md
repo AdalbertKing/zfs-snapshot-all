@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9bcee1216189c92e -->
+<!-- status-covers-digest: a83b6ee5212e961c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,31 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Trzy ekrany, które przeczyły cronowi: K2, okno „Relacja”, K5 (2026-10-07, właściciel: „rób 1, 2 i 3”).**
+  - **K2, `status` „Spojnosc”:** zawsze pisało „crash-consistent (bez quiesce)”, bo czytało
+    zmienną `QUIESCE_MODE`, której `zfs-backup.sh` nigdzie nie ustawia. Teraz
+    `status_quiesce_from_cron` czyta linie kopii tej relacji z bloku crona jej konta (po
+    ` -L NAZWA `), bierze `-q` każdego szczebla i podaje np. „quiesce auto,degrade (daily,
+    weekly, monthly); bez: hourly”. Relacja bez linii w cronie dostaje „? (brak linii…)”, a nie
+    fałszywe „bez quiesce”. Na pve10: `pve11` i `pve9b` jak wyżej, `pve9-synchro` bez quiesce.
+  - **Okno „Relacja” (Enter na F3):** brało rytm i retencję tylko z PIERWSZEGO szablonu
+    sekcji i nie znało pól szczebla (`send_schedule_<szablon>`, `prune_schedule_<szablon>`,
+    zapisywanych przez rozrzut U2/K3). Przy `pve11` pisało „co: 1 * * * *”, choć cron pobierał
+    o :56. Teraz jedna linia na szczebel, z tym samym pierwszeństwem co gen-cron (pole
+    szczebla w sekcji, pole sekcji, szablon); prune źródła rozrzucony per szczebel też
+    dostaje linię na szczebel.
+  - **K5, kreator krok 6:** znacznik `[płaski]` dostawał każdy szablon poza jedną drabiną,
+    także `-gfs` (dwie lub cztery rodziny, każda z drabiną GFS), a opis mówił „jedna rodzina, N
+    najnowszych, bez drabiny”. Podział zostaje (retencja w szczeblach kontra jedna drabina w
+    osobnej sekcji), znacznik przechodzi na stronę z ograniczeniem: `[drabina]` przy
+    `default`, `Y5M12D31H24`, `passive`. Opis listy i komunikat kroku 8 mówią teraz o
+    „retencji w szczeblach”.
+  - **Testy:** `zfsbackup --section statusquiesce` 5/0 (na `main` 0/5); `tui` 210/0 (+1 okno
+    per szczebel; test listy szablonów sprawdza `[drabina]` i to, że `-gfs` jej nie ma).
+    Przy okazji ten test szukał wiersza `default` po pierwszym trafieniu, a pierwsze było
+    wartością `--default-item`, więc stara asercja (brak znaczników) przechodziła na pustym.
+    Kontrola okna na `main`: „co: 1 * * * *”, po zmianie :56 i 02:06.
 
 - **Replika z GUI i harmonogram „po włożeniu” (2026-10-07, właściciel: „Tak, rób replikę”; „replika ma swój harmonogram ... wersja after connect”).**
   - **Było:**
