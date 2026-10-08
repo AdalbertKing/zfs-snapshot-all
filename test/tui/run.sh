@@ -2369,6 +2369,102 @@ else
     bad "new-relation: eval w kreatorze" "$(grep -n 'eval' "$NRS")"
 fi
 
+# ============================================================================
+# replica: KREATOR REPLIKI NA WHIPTAILU (uwagi 20 i 16+19, 2026-10-08)
+#
+# Ta sama atrapa whiptaila co kreator relacji; zb, zpool i zfs to atrapy, ktore tylko
+# odpowiadaja i zapisuja wywolania. Sprawdzane: (1) zrodlo obejmujace kopie relacji
+# -> domyslnie BEZ wlasnych migawek, --passive w komendzie; (2) okno A z nowymi
+# harmonogramami i okno B "takze po wlozeniu?", gdy reguly udev nie ma -- Tak =
+# regula w planie jako krok i install-media-trigger po instalacji; (3) "tylko po
+# wlozeniu" nie pyta B, regula i tak w planie; (4) gdy regula JUZ jest, B sie nie pojawia.
+# ============================================================================
+RP="$(mktemp -d)"; mkdir -p "$RP/bin"
+cp "$NR/bin/whiptail" "$RP/bin/whiptail"
+cat > "$RP/bin/zb" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
+case "$1" in
+    list-replicas) echo '{"replicas":[]}' ;;
+    status) echo '{"relations":[{"name":"pve11b","state":"active","managed_datasets":["hdd/backups/192.168.28.96/hdd/vm"]}]}' ;;
+    add-replica) case " $* " in
+            *" --plan "*) echo "co sie zmieni w crontabie:"; echo "  +0 22 * * 5 /x/zfs-job.sh \"h replica copy ($2)\" -- ..."; exit 0 ;;
+            *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
+        esac ;;
+    install-media-trigger) echo ">>> atrapa: regula"; exit 0 ;;
+    *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+esac
+EOF
+printf '#!/bin/sh\ncase "$1" in list) echo hdd ;; import) printf "   pool: repl\\n" ;; esac\nexit 0\n' > "$RP/bin/zpool"
+printf '#!/bin/sh\necho "zfs $*" >> "$NR_DIR/zb.log"\ncase "$*" in *"-t filesystem,volume"*) printf "hdd\\nhdd/backups\\nhdd/backups/192.168.28.96\\nhdd/backups/192.168.28.96/hdd/vm\\nhdd/data\\n" ;; esac\nexit 0\n' > "$RP/bin/zfs"
+chmod +x "$RP/bin/"*
+rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
+    rm -f "$RP/wt.log" "$RP/wt.n" "$RP/zb.log"
+    printf '%s' "$1" > "$RP/answers"; shift
+    ( export NR_DIR="$RP" WHIPTAIL="$RP/bin/whiptail" ZFS_BACKUP="$RP/bin/zb" PYTHON="$PY" PATH="$RP/bin:$PATH" \
+             ZFS_REPLICA_RULES="$RP/rules" "$@"; bash "$REPO/tui/replica.sh" ) 2>"$RP/err" </dev/null
+}
+rm -f "$RP/rules"
+# (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak
+RPOUT=$(rp_run "0${T}usb2
+0${T}hdd/backups
+0${T}passive
+0${T}repl
+0${T}repl/replica
+0${T}removable
+0${T}0 22 * * 5
+0${T}
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --install --yes$' "$RP/zb.log" \
+   && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
+   && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
+   && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
+   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \
+   && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" \
+   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku, wg harmonogramu albo teraz: F7 na F6'; then
+    ok "replica: zrodlo z kopiami relacji -> domyslnie bez wlasnych migawek (--passive); okno A tydzien, okno B Tak -> regula jako krok planu i install-media-trigger"
+else
+    bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
+fi
+# (3): zrodlo bez kopii relacji -> domyslnie wlasne; "tylko po wlozeniu" -> bez okna B
+RPOUT=$(rp_run "0${T}usb3
+0${T}hdd/data
+0${T}own
+0${T}repl
+0${T}repl/replica
+0${T}removable
+0${T}on-insert
+0${T}
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --install --yes$' "$RP/zb.log" \
+   && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
+   && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
+   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku albo teraz: F7 na F6'; then
+    ok "replica: oryginal -> domyslnie wlasne migawki; 'tylko po wlozeniu' nie pyta o B, regula i tak zakladana"
+else
+    bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
+fi
+# (4): regula juz jest -> okna B nie ma, plan mowi, ze kopia rusza po wlozeniu
+echo '# Managed by zfs-backup.sh install-media-trigger' > "$RP/rules"
+RPOUT=$(rp_run "0${T}usb4
+0${T}hdd/data
+0${T}own
+0${T}repl
+0${T}repl/replica
+0${T}removable
+0${T}0 22 * * *
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && ! grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
+   && grep -qF 'kopia rusza od razu (reguła udev jest na hoście)' "$RP/wt.log"; then
+    ok "replica: gdy regula udev juz jest, okna B nie ma (regula i tak uruchamia przy wlozeniu), plan to mowi"
+else
+    bad "replica: kreator, regula juz jest" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+fi
+rm -rf "$RP"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

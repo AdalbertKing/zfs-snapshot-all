@@ -13621,6 +13621,30 @@ else
     bad "runreplicas: --name unknown" "rc=$rr_rc" "$rr_out"
 fi
 
+# add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes
+# and carries no prefix; --passive with --prefix is a refusal; list-replicas shows a
+# passive replica's prefix as '-' (the GUI says "bez wlasnych migawek").
+PV="$WORK/passivereplica"; rm -rf "$PV"; mkdir -p "$PV"
+printf '[defaults]\n\thost_label = h\n' > "$PV/c.conf"
+( source "$ZFSBACKUP"; replica_section_upsert "$PV/c.conf" pv "hdd/backups" "repl/replica" "0 22 * * 5" "" 1 removable "" "" "" "" 1 ) 2>&1
+if grep -q "^$(printf '\t')passive   = yes\$" "$PV/c.conf" && ! grep -q 'prefix' "$PV/c.conf"; then
+    ok "addreplica: --passive writes 'passive = yes' and no prefix"
+else
+    bad "addreplica: passive section" "$(cat "$PV/c.conf")"
+fi
+out=$(bash "$ZFSBACKUP" add-replica pv --source=hdd/backups --dst=repl/replica --passive --prefix=replica_ 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--passive takes no snapshots of its own'; then
+    ok "addreplica: --passive together with --prefix is refused"
+else
+    bad "addreplica: --passive --prefix" "rc=$rc" "$out"
+fi
+lr=$( ( source "$ZFSBACKUP"; zfs() { return 1; }; zpool() { return 1; }; cmd_list_replicas --json --config="$PV/c.conf" ) 2>&1 )
+if printf '%s' "$lr" | grep -q '"name":"pv"[^}]*"prefix":"-"'; then
+    ok "addreplica: list-replicas shows a passive replica's prefix as '-'"
+else
+    bad "addreplica: list-replicas passive" "$lr"
+fi
+rm -rf "$PV"
 fi   # --- koniec sekcji runreplicas ---
 
 if want statusquiesce; then

@@ -45,7 +45,9 @@ VERSION='v1.1'
 usage() {
     cat >&2 <<'EOF'
 Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
-                         [--source DS]... [--prefix P] [--stats FILE] [--quiet]
+                         [--source DS]... [--prefix P|-] [--stats FILE] [--quiet]
+
+  --prefix - means ANY snapshot: a passive replica takes none of its own.
 
   --source is repeatable: one job may copy several datasets onto the same
   medium, inside ONE import/export window. The no-work fast path then needs
@@ -76,6 +78,12 @@ EOF
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
 _skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""; _src=""
 SOURCE=""; PREFIX=""; ENGINE_RC=""; AGE_WARN=""; AGE_CRIT=""
+# --prefix - : ANY snapshot (a passive replica, which takes none of its own and
+# carries every family already there -- owner note 20, 2026-10-08). PREFIX is
+# then empty, so "@${PREFIX}" matches every snapshot name; has_family says the
+# family is known even though it has no name.
+PREFIX_ANY=0
+has_family() { [ -n "$PREFIX" ] || [ "$PREFIX_ANY" = 1 ]; }
 # --source is REPEATABLE. One replica job may copy several datasets onto the
 # same medium, and it must do so inside ONE import/export window: the window is
 # the exposure, so a job with three sources that bracketed each one separately
@@ -131,6 +139,7 @@ while [ "$#" -gt 0 ]; do
                       fi; shift ;;
     esac
 done
+[ "$PREFIX" = "-" ] && { PREFIX=""; PREFIX_ANY=1; }
 [ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
 case "$VERB" in attach|detach|status|age) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
 
@@ -200,7 +209,7 @@ scan_guid() {
 # against to decide whether that medium is still current.
 newest_source_snap() {   # [dataset] -- defaults to the first source
     local _nds="${1:-$SOURCE}"
-    [ -n "$_nds" ] && [ -n "$PREFIX" ] || return 1
+    [ -n "$_nds" ] && has_family || return 1
     zfs list -H -t snapshot -o name -d 1 "$_nds" 2>/dev/null \
         | grep "@${PREFIX}" | tail -1 | sed 's/.*@//'
 }
@@ -444,7 +453,7 @@ attach)
     # The job copies all of them in one window, so one source with work to do
     # is reason enough to open it -- and one source this medium is behind on is
     # reason enough not to skip, however current the others are.
-    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
+    if [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
         _work=no
         for _src in "${SOURCES[@]}"; do
             if ! zfs list -H -o name "$_src" >/dev/null 2>&1; then _work=unknown; break; fi
@@ -610,7 +619,7 @@ guid=%s
     # ONLY when there is no common snapshot AT ALL. A target sharing any
     # snapshot of the family is an ordinary incremental and must not be touched
     # by this.
-    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ] && [ -n "$DATASET" ]; then
+    if [ "${#SOURCES[@]}" -gt 0 ] && has_family && [ -n "$DATASET" ]; then
         for _src in "${SOURCES[@]}"; do
             _tgt="$DATASET/$_src"
             zfs list -H -o name "$_tgt" >/dev/null 2>&1 || continue
@@ -724,7 +733,7 @@ detach)
     # engine reported success. A run that skipped, failed, or was somebody else's
     # import leaves the record exactly as it was -- an unproved medium must never
     # be recorded as current.
-    if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
+    if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
         _now_guid="$(pool_guid)"
         if [ -n "$_now_guid" ]; then
             if record_write "$_now_guid"; then

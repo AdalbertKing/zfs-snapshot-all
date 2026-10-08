@@ -23,7 +23,7 @@ trap 'rm -rf "$TMPD"' EXIT
 geom
 info "Replika" "Czytam repliki, datasety i nośniki..."
 "$ZB" list-replicas --json >"$TMPD/rep.json" 2>"$TMPD/rep.err" || echo '{"replicas":[]}' >"$TMPD/rep.json"
-# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia
+# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia <TAB> prefiks ("-" = pasywna)
 "$PY" - "$TMPD/rep.json" >"$TMPD/rep.tsv" <<'PYEOF'
 import sys, json
 try:
@@ -33,18 +33,40 @@ except Exception:
 for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
-                     r.get("monitor_warn") or "-"]))
+                     r.get("monitor_warn") or "-", r.get("prefix") or "-"]))
 PYEOF
-SRCS=""; DST=""; SCHED="30 2 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""
+SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
     [ "$MEDIA" = - ] && MEDIA=fixed
     case "$REC" in yes|1|true) REC=yes ;; *) REC=no ;; esac
+    [ "${CURPFX:-}" = - ] && PASSIVE=yes || PASSIVE=no
 fi
+RULE_HERE=no; grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES" && RULE_HERE=yes
+
+# Lądowiska relacji na tym kolektorze (managed_datasets z status --json): replika,
+# której źródło je obejmuje, ma domyślnie NIE robić własnych migawek (uwaga 20).
+"$ZB" status --json 2>/dev/null | "$PY" -c '
+import sys, json
+try: d = json.load(sys.stdin)
+except Exception: d = {}
+for r in d.get("relations", []):
+    if r.get("state") == "removed": continue
+    for m in r.get("managed_datasets") or []:
+        if m and m != "*": print(m)' >"$TMPD/landings" 2>/dev/null
+covers_landing() {   # -> 0, gdy któreś źródło z $SRCS jest lądowiskiem albo je zawiera
+    local s l
+    for s in ${SRCS//,/ }; do
+        while IFS= read -r l; do
+            case "$l" in "$s"|"$s"/*) return 0 ;; esac
+        done <"$TMPD/landings"
+    done
+    return 1
+}
 # Pule: zaimportowane i te w slocie (zpool import). Nośnikiem nie może być pula źródła.
 zpool list -H -o name 2>/dev/null >"$TMPD/pools.here"
 zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
@@ -56,7 +78,7 @@ while :; do
     case "$step" in
     1)  # nazwa
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
-        wt --title "Nowa replika -- 1/5 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
+        wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
            --inputbox "Nazwa repliki (litery, cyfry, . _ -). Nazywa nośnik i stan jego bramy,\nnp. usb1 albo sejf-a." 10 "$W" "$NAME" \
            || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
@@ -72,12 +94,25 @@ while :; do
             on=OFF; case ",$SRCS," in *",$d,"*) on=ON ;; esac
             items+=("$d" "$(clip_label "$d" $((W - 14)))" "$on")
         done <"$TMPD/ds.all"
-        wt --title "Replika $NAME -- 2/5 co kopiować" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
+        wt --title "Replika $NAME -- 2/6 co kopiować" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
            --checklist "Datasety TEGO hosta do skopiowania na nośnik (spacja = zaznacz).\nRazem z dziećmi: $REC. Jeden nośnik może trzymać kilka źródeł." \
            "$H" "$W" "$(lhfit $((${#items[@]} / 3)) 3)" "${items[@]}" || { [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }; step=1; continue; }
         s=$(printf '%s\n' "$WT_OUT" | grep -v '^$' | paste -sd, -)
         [ -n "$s" ] || { wt --title "Nic nie zaznaczono" --msgbox "Zaznacz co najmniej jeden dataset." 8 "$W"; continue; }
-        SRCS="$s"; step=3 ;;
+        SRCS="$s"; step=25 ;;
+    25) # migawki: własne czy istniejące (uwaga 20, 2026-10-08)
+        # Kopie relacji na tym kolektorze dostają migawki od swojego źródła; migawka
+        # replica_ postawiona na nich znika przy następnym pobraniu (kopia idzie za
+        # źródłem). Dla nich domyślnie: bez własnych migawek.
+        def=own; covers_landing && def=passive
+        [ "$PASSIVE" = yes ] && def=passive; [ "$PASSIVE" = no ] && def=own
+        lead=""; covers_landing && lead="Źródło obejmuje kopie relacji tego kolektora -- dla nich polecane\n'istniejące': migawka replica_ zniknęłaby przy następnym pobraniu relacji.\n\n"
+        wt --title "Replika $NAME -- 3/6 migawki" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+           --menu "${lead}Jakie migawki ma przenosić replika?" "$(fit 9)" "$W" 2 \
+           passive "Istniejące -- bez własnych migawek (kopiuje to, co już jest)" \
+           own "Własne -- przy każdym biegu migawka z przedrostkiem replica_" || { step=2; continue; }
+        [ "$WT_OUT" = passive ] && PASSIVE=yes || PASSIVE=no
+        step=3 ;;
     3)  # nośnik
         # Czytane przy KAZDYM wejsciu (uwaga 14, 2026-10-08): dysk podpiety w trakcie kreatora
         # nie pojawial sie po "Wstecz", bo lista byla zrobiona raz, na starcie.
@@ -92,9 +127,9 @@ while :; do
         while IFS= read -r p; do [ -n "$p" ] && items+=("$p" "$p  (w slocie, niezaimportowana)"); done <"$TMPD/pools.slot"
         items+=(__other__ "Wpisz nazwę puli…  (nośnik teraz odłączony)")
         cur="${DST%%/*}"
-        wt --title "Replika $NAME -- 3/5 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${cur:-__other__}" \
+        wt --title "Replika $NAME -- 4/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${cur:-__other__}" \
            --menu "Pula na nośniku. Kopia ląduje pod  <pula>/<baza>/<dataset źródła>." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
-           "${items[@]}" || { step=2; continue; }
+           "${items[@]}" || { step=25; continue; }
         pool="$WT_OUT"
         if [ "$pool" = __other__ ]; then
             wt --title "Replika $NAME -- nośnik" --ok-button "Dalej" --cancel-button "Wstecz" \
@@ -113,22 +148,24 @@ while :; do
         fi
         DST="$d"; step=4 ;;
     4)  # rodzaj nośnika
-        wt --title "Replika $NAME -- 4/5 rodzaj nośnika" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$MEDIA" \
+        wt --title "Replika $NAME -- 5/6 rodzaj nośnika" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$MEDIA" \
            --menu "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można wyjąć).\nStały: pula jest zawsze w maszynie, bez importu/eksportu." 12 "$W" 2 \
            removable "wymienny (USB, dysk do sejfu)" fixed "stały (inna pula w tej maszynie)" || { step=3; continue; }
         MEDIA="$WT_OUT"; step=5 ;;
-    5)  # harmonogram
-        items=("30 2 * * *" "raz na dobę o 02:30 (domyślnie: po szczeblu dobowym)" "30 3 * * 0" "raz w tygodniu, niedziela 03:30")
+    5)  # harmonogram -- okno A "Kiedy kopiować?" i okno B "także po włożeniu?"
+        # (właściciel 2026-10-08, zastępuje uwagi 16 i 19). Reguła udev nie ma
+        # osobnego pytania: gdy jest potrzebna i jej nie ma, plan wymienia ją jako krok.
+        items=("0 22 * * *" "codziennie o 22:00" "0 22 * * 5" "co tydzień, piątek 22:00" "0 22 1 * *" "co miesiąc, 1. dnia o 22:00"
+               __other__ "własny harmonogram (cron)…")
         # Tylko wymienny: stały dysk nigdy nie jest "wkładany".
-        [ "$MEDIA" = removable ] && items+=(on-insert "tylko po włożeniu dysku (bez godziny; reguła udev)")
-        items+=(__other__ "inny wpis crona")
-        def="$SCHED"; case "$SCHED" in "30 2 * * *"|"30 3 * * 0"|on-insert) ;; *) def=__other__ ;; esac
-        [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def="30 2 * * *"
-        wt --title "Replika $NAME -- 5/5 kiedy" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "Każdy bieg otwiera nośnik, więc rzadziej = bezpieczniej. Nośnika, którego nie ma,\nbieg nie rusza (cicho). Obecny: $SCHED" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
+        [ "$MEDIA" = removable ] && items+=(on-insert "tylko po włożeniu dysku")
+        def="$SCHED"; case "$SCHED" in "0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
+        [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def="0 22 * * *"
+        wt --title "Replika $NAME -- 6/6 kiedy kopiować?" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+           --menu "Każdy bieg otwiera nośnik, więc rzadziej = bezpieczniej. Nośnika, którego nie ma,\nbieg nie rusza (cicho). Obecny: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
-            wt --title "Replika $NAME -- harmonogram" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$SCHED" || continue
+            wt --title "Replika $NAME -- własny harmonogram" --ok-button "Dalej" --cancel-button "Wstecz" \
+               --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$([ "$SCHED" = on-insert ] || echo "$SCHED")" || continue
             SCHED="$(printf '%s' "$WT_OUT" | tr -s ' ')"
         else
             SCHED="$WT_OUT"
@@ -144,18 +181,16 @@ while :; do
             MONDAYS="${WT_OUT// /}"
             case "$MONDAYS" in ''|*[!0-9]*) [ -n "$MONDAYS" ] && { wt --title "To nie liczba" --msgbox "Podaj liczbę dni albo zostaw puste." 8 "$W"; continue; } ;; esac
         fi
-        # PO WŁOŻENIU = reguła udev (install-media-trigger): jedna na host, uruchamia
-        # run-replicas przy każdym dysku z etykietą ZFS. To trwała zmiana tego, jak
-        # host reaguje na sprzęt, więc o nią pytamy osobno i tylko gdy jej nie ma.
+        # Okno B: tylko nośnik wymienny z harmonogramem, i tylko gdy reguły jeszcze nie
+        # ma -- reguła jest jedna na host i uruchamia przy włożeniu WSZYSTKIE repliki,
+        # więc gdy już jest, "nie" niczego by nie zmieniło.
         TRIG=no
-        if [ "$MEDIA" = removable ] && ! grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES"; then
+        if [ "$MEDIA" = removable ] && [ "$RULE_HERE" = no ]; then
             if [ "$SCHED" = on-insert ]; then
-                wt --title "Replika $NAME -- reguła udev" --yes-button "Załóż" --no-button "Wstecz" \
-                   --yesno "Replika 'po włożeniu' rusza tylko z reguły udev, a tej reguły na hoście nie ma.\nZałożyć ją (install-media-trigger)? Działa dla wszystkich replik tego hosta:\nkażdy włożony dysk z ZFS uruchamia run-replicas; nie ten dysk = cichy pominięty." 11 "$W" || continue
                 TRIG=yes
             else
-                wt --title "Replika $NAME -- także po włożeniu?" --yes-button "Tak" --no-button "Nie" --defaultno \
-                   --yesno "Oprócz harmonogramu można uruchamiać repliki także zaraz po włożeniu dysku\n(reguła udev, install-media-trigger; jedna na host, dla wszystkich replik).\nZałożyć ją?" 10 "$W" && TRIG=yes
+                wt --title "Replika $NAME -- także po włożeniu?" --yes-button "Tak" --no-button "Nie" \
+                   --yesno "Uruchamiać kopię także od razu po włożeniu dysku?\n\nTak: włożony dysk repliki -- kopia od razu, potem dalej wg harmonogramu.\nKażdy inny dysk -- nic się nie dzieje." 11 "$W" && TRIG=yes
             fi
         fi
         step=6 ;;
@@ -163,6 +198,7 @@ while :; do
         ARGV=("$ZB" add-replica "$NAME" "--source=$SRCS" "--dst=$DST" "--schedule=$SCHED")
         [ "$MEDIA" = fixed ] && ARGV+=(--fixed) || ARGV+=(--removable)
         [ "$REC" = yes ] && ARGV+=(--recursive=yes) || ARGV+=(--recursive=no)
+        [ "$PASSIVE" = yes ] && ARGV+=(--passive)
         [ -n "$MONDAYS" ] && ARGV+=("--monitor-warn=${MONDAYS}d" "--monitor-crit=$(( (MONDAYS * 3 + 1) / 2 ))d")
         info "Replika $NAME" "Liczę plan..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
@@ -176,15 +212,19 @@ while :; do
             echo
             echo "Replika:    $NAME$([ "$EDIT" -eq 1 ] && echo '  (zmiana istniejącej)')"
             echo "Źródła:     $SRCS  (z dziećmi: $REC)"
+            echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "istniejące -- bez własnych" || echo "własne, przedrostek replica_")"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
-            echo "Kiedy:      $([ "$SCHED" = on-insert ] && echo "po włożeniu dysku (bez godziny)" || echo "$SCHED")"
+            echo "Kiedy:      $([ "$SCHED" = on-insert ] && echo "tylko po włożeniu dysku" || echo "$SCHED")"
             if [ -n "$MONDAYS" ]; then echo "Ostrzeżenie: po $MONDAYS dniach bez kopii, alarm po $(( (MONDAYS * 3 + 1) / 2 ))"
             elif [ "$SCHED" = on-insert ]; then echo "Ostrzeżenie: brak (replika po włożeniu bez progu)"
             else echo "Ostrzeżenie: z harmonogramu (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45)"; fi
-            if grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES"; then
-                echo "Po włożeniu: reguła udev jest ($RULES)"
+            if [ "$MEDIA" = removable ] && [ "$RULE_HERE" = yes ]; then
+                echo "Po włożeniu: kopia rusza od razu (reguła udev jest na hoście)"
             elif [ "$TRIG" = yes ]; then
-                echo "Po włożeniu: reguła udev ZOSTANIE ZAŁOŻONA (install-media-trigger --install)"
+                echo "Po włożeniu: kopia rusza od razu -- krok: reguła udev ZOSTANIE ZAŁOŻONA"
+                echo "             (install-media-trigger --install; jedna na host, dla wszystkich replik)"
+            elif [ "$MEDIA" = removable ]; then
+                echo "Po włożeniu: nic -- kopia tylko wg harmonogramu"
             fi
             grep -E '^(!!!|WARNING|>>> )' "$TMPD/plan.txt" | grep -iv 'plan' | sed 's/^/  /' | head -4
             echo
@@ -210,7 +250,11 @@ while :; do
             { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
         fi
         echo
-        if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC). Pierwszy bieg: wg harmonogramu albo F7 na F6. Enter = dalej"
+        if [ "$RC" -eq 0 ]; then
+            if [ "$SCHED" = on-insert ]; then _first="po włożeniu dysku albo teraz: F7 na F6"
+            elif [ "$MEDIA" = removable ] && { [ "$TRIG" = yes ] || [ "$RULE_HERE" = yes ]; }; then _first="po włożeniu dysku, wg harmonogramu albo teraz: F7 na F6"
+            else _first="wg harmonogramu albo teraz: F7 na F6"; fi
+            echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC). Pierwsza kopia: $_first. Enter = dalej"
         else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
         [ -t 0 ] && read -r _
         exit "$RC" ;;

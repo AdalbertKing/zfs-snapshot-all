@@ -1310,6 +1310,42 @@ rm_conf wk "30 3 * * 0" "" "	monitor = no
 fo=$(for_run); frc=$?
 check "RMON11 ...and refuses to be combined with thresholds" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
 
+# PASSIVE REPLICA (owner note 20, 2026-10-08): a replica of a relationship's
+# copies takes no snapshots of its own -- replica_ on a landing was discarded by
+# the next pull (P-0). passive = yes: snapget -e (no -m), the gate's family and
+# the fixed-media monitor's pattern are "-" (any snapshot).
+pv_conf() {   # <media line or empty> <extra lines>
+    cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:pv]
+	source   = tank/a
+	dst      = usb/rep
+	schedule = 30 2 * * *
+	passive  = yes
+$1
+$2
+EOF
+}
+pv_conf "	media    = removable" ""
+fo=$(for_run); frc=$?
+check "PRV1 passive = yes with no prefix renders, rc=0" "0" "$frc"
+check "PRV2 ...the engine runs -e -M with no -m (no snapshot of its own)" "1" \
+      "$(printf '%s\n' "$fo" | grep 'replica copy (pv)' | grep -c '/R/snapget\.sh -e -M "tank/a" "usb/rep"')"
+check "PRV3 ...the gate is told any family: --source tank/a --prefix - (attach and detach)" "2" \
+      "$(printf '%s\n' "$fo" | grep 'replica copy (pv)' | grep -o -- '--source tank/a --prefix -' | grep -c .)"
+pv_conf "" ""
+fo=$(for_run)
+check "PRV4 a FIXED passive replica's monitor reads any snapshot on the copy (pattern '-')" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^\*/15 \* \* \* \* d=\$(/R/check-snap-age\.sh -L pv "usb/rep/tank/a" "-" 2d 4d ')"
+pv_conf "" "	prefix   = replica_"
+fo=$(for_run); frc=$?
+check "PRV5 passive = yes together with a prefix is refused (say one of them)" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+oi_conf "30 2 * * *"
+fo=$(for_run)
+check "PRV6 control: a replica with a prefix still stamps its own family (-m \"replica_\" -M)" "1" \
+      "$(printf '%s\n' "$fo" | grep 'replica copy (usb1)' | grep -c 'snapget\.sh -m "replica_" -M')"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #

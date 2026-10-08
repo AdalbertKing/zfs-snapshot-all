@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix notify media recursive flags history monitor_warn monitor_crit monitor
+_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2842,7 +2842,17 @@ build_replica_section() {
     # incoming family's prefix would make the collector's own retention and
     # staleness reasoning answer for snapshots it never took.
     local prefix; prefix="$(resolve_field prefix "$sec" "" "")" || prefix=""
-    [ -n "$prefix" ] || die "[replica:$name] has no 'prefix' -- a replica takes its own snapshot family, separate from the one it is copying, so that the copy's snapshots are never confused with the source's"
+    # PASSIVE (owner note 20, 2026-10-08): a replica of a RELATIONSHIP'S COPIES on
+    # this collector must not take snapshots of its own there. Measured on pve9b:
+    # replica_ snapshots on hdd/backups/192.168.28.96/... were discarded by the
+    # next pull of that relationship (P-0, a backup copy follows its source) --
+    # every hour, in the log and on the GUI. `passive = yes` takes no snapshot and
+    # carries what is already there (snapget -e), every family.
+    local passive; resolve_bool_field passive "$sec" "" "[replica:$name]" 0; passive="$BOOL_FIELD"
+    if [ "$passive" = 1 ]; then
+        [ -z "$prefix" ] || die "[replica:$name]: passive = yes together with prefix='$prefix' -- a passive replica takes no snapshots, so it has no family to name. Say one of them."
+    fi
+    [ -n "$prefix" ] || [ "$passive" = 1 ] || die "[replica:$name] has no 'prefix' -- a replica takes its own snapshot family, separate from the one it is copying, so that the copy's snapshots are never confused with the source's (or say passive = yes: no snapshots of its own, it carries the ones already there)"
     case "$prefix" in
         *[!A-Za-z0-9._-]*) die "[replica:$name]: prefix='$prefix' -- letters, digits, dot, dash, underscore only (it becomes part of a snapshot name)" ;;
     esac
@@ -2961,7 +2971,7 @@ build_replica_section() {
         esac
     fi
 
-    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}")
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}")
 }
 
 build_bookmark_prune_section() {
@@ -3824,10 +3834,13 @@ emit_monitor() {
 # one disk is out. That is the same reason 'media' sits in the send group key.
 emit_replicas() {
     local e name source dst schedule prefix notify media recursive hist flags cmd
-    local mwarn mcrit mnotify mwarntext mbroken mcmd mtargets
+    local mwarn mcrit mnotify mwarntext mbroken mcmd mtargets passive fam
     local -a srcs=(); local s one
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken <<< "$e"
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken passive <<< "$e"
+        # What the gate and the monitor look for: the replica's own family, or
+        # with passive = yes any snapshot ("-", as check-snap-age and the gate read it).
+        fam="$prefix"; [ "$passive" = 1 ] && fam="-"
         IFS=',' read -ra srcs <<< "$source"
         # ONE ENGINE CALL PER SOURCE, ALL INSIDE ONE BRACKET.
         #
@@ -3850,11 +3863,11 @@ emit_replicas() {
         # reason a flat -R send does not abort its siblings.
         cmd=""
         if [ "${#srcs[@]}" -le 1 ]; then
-            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst")"
+            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst" "$passive")"
             if [ "$media" = removable ]; then
                 cmd="$cmd; m=\$?"
             fi
-            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
+            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1)"
         else
             # A LOOP, not the engine call repeated. Same reason as the comma
             # list above: cron refuses a command over 1000 bytes, and repeating
@@ -3868,10 +3881,10 @@ emit_replicas() {
             # replica_engine_cmd quotes its source argument, so passing the
             # literal $s yields "$s" in the emitted line -- expanded by the
             # shell cron runs it in, and quoted there, which is what we want.
-            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst")"
+            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst" "$passive")"
             cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
             if [ "$media" = removable ]; then
-                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$prefix" 1)"
+                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1)"
             else
                 # NO BRACKET, so nothing else would carry the folded status out:
                 # the line's rc would be that of the last `[ $m -eq 0 ]` test,
@@ -3898,7 +3911,7 @@ emit_replicas() {
             else
                 mtargets=""
                 for s in "${srcs[@]}"; do mtargets="${mtargets:+$mtargets,}$dst/$s"; done
-                mcmd="$REPO_DIR/check-snap-age.sh -L $name \"$mtargets\" \"$prefix\" $mwarn $mcrit"
+                mcmd="$REPO_DIR/check-snap-age.sh -L $name \"$mtargets\" \"$fam\" $mwarn $mcrit"
             fi
             MONITOR_LINES+=("*/15 * * * * d=\$($mcmd 2>&1); rc=\$?; [ -n \"\$d\" ] && echo \"\$d\" >>$CRON_LOG; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$mwarntext\" \"\$d\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$mnotify\" \"\$d\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$mbroken\" \"\$d\" 2>>$CRON_LOG")
         fi
@@ -3920,9 +3933,11 @@ emit_replicas() {
 #       overwrote it.
 # The #tgt- anchor bookmark is the same one: both engines tag it with
 # md5(target, -j), and neither sets -j here.
-replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst>
-    local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" c
-    c="$REPO_DIR/snapget.sh -m \"$prefix\" -M"
+replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst> [passive]
+    local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" passive="${7:-0}" c
+    # passive: -e, no -m -- the newest snapshot already there, whatever family.
+    if [ "$passive" = 1 ]; then c="$REPO_DIR/snapget.sh -e -M"
+    else c="$REPO_DIR/snapget.sh -m \"$prefix\" -M"; fi
     [ "$recursive" = "1" ] && c="$c -R"
     [ -n "$hist" ] && c="$c $hist"
     [ -n "$flags" ] && c="$c $flags"

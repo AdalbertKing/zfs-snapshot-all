@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1aa0a434ab84bea6 -->
+<!-- status-covers-digest: f8eee67827af65f2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,28 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Runda GUI, paczka C1 — replika: pasywna (uwaga 20) i harmonogram (16+19) (2026-10-09, właściciel: „rób paczkę C”).**
+  - **Replika pasywna:** `[replica:]` przyjmuje `passive = yes` (bez `prefix`; oba naraz
+    = odmowa). Silnik: `snapget.sh -e -M` bez `-m` — żadnej własnej migawki, przenosi
+    to, co już jest, każdą rodzinę. Bramka nośnika dostaje `--prefix -` (dowolna
+    migawka), więc zapis „nośnik aktualny” i szybka ścieżka działają jak przy
+    prefiksie; monitor nośnika stałego czyta wzorzec `-` (check-snap-age: dowolna).
+    Wsad: `add-replica --passive`; `list-replicas` pokazuje prefiks `-`, panel F6
+    „bez własnych migawek (przenosi istniejące)”. Powód: migawki `replica_` na
+    kopiach relacji znikały przy następnym pobraniu (P-0), co godzinę w logu.
+  - **Kreator repliki (6 kroków):** nowy krok 3 „Jakie migawki ma przenosić replika?” — „Istniejące”
+    (domyślne, gdy źródło obejmuje kopie relacji tego kolektora, z `managed_datasets`
+    w `status --json`) albo „Własne, replica_”. Krok „Kiedy kopiować?”: codziennie
+    22:00 / co tydzień pt 22:00 / co miesiąc 1. dnia 22:00 / własny cron / tylko po
+    włożeniu (wymienny). Okno „Uruchamiać kopię także od razu po włożeniu dysku?”
+    (domyślnie Tak) tylko dla nośnika wymiennego z harmonogramem i tylko gdy reguły
+    udev nie ma — reguła jest jedna na host i uruchamia przy włożeniu wszystkie
+    repliki. Reguła nie ma osobnego pytania: plan wymienia ją jako krok. Komunikat
+    końcowy: „Pierwsza kopia: po włożeniu dysku … albo teraz: F7 na F6”.
+  - **Testy:** `cron` PRV1-PRV6, `mediagate` L8p (`--prefix -` zapisuje nośnik jako aktualny), `zfsbackup --section runreplicas` (w niej:
+    sekcja configu z `passive = yes`, odmowa z `--prefix`, `list-replicas`), `tui` — pierwszy test kreatora
+    repliki na atrapie whiptail (3 przebiegi); kontrola negatywna: na `replica.sh`
+    z `main` wszystkie trzy padają.
 - **Runda GUI, paczka B — uwagi 4, 5, 11, 12 (2026-10-09, właściciel: „rób paczkę B”).**
   - **Inny kolektor już przycina (4):** nowy czytelnik `zfs-backup source-pruners
     HOST[:PORT] DATASET...` — `zfs allow` przez root SSH, wypisuje „dataset<TAB>konto”
