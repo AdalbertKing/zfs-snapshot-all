@@ -70,7 +70,7 @@ step_host() {
         [ -e "$TMPD/rel.done" ] || info "$(title 2 'Z którego hosta?')" "Sprawdzam, czy z $h nie ma już relacji..."
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
-            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDodanie datasetów do istniejącej relacji to jej modyfikacja,\na tego kreator jeszcze nie umie.\n\nPodaj host, z którym relacji nie ma." 14 "$W"
+            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się na F3: Enter na niej,\npotem 'e' i „Dodaj dataset ze źródła” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma." 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }

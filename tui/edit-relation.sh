@@ -1,6 +1,10 @@
 #!/bin/bash
 # edit-relation.sh NAZWA -- zmiana zainstalowanej relacji w oknach whiptail ('e' na F3).
 #
+# Pierwsze okno: CO zmienić -- szablon (edit-relation), dodać dataset ze źródła
+# (add-source) albo usunąć dataset z relacji (remove-source). Każda ścieżka
+# pokazuje PLAN swojego czasownika i po "WYKONAJ" uruchamia go z --yes.
+#
 # Do 2026-10-07 jedyną drogą zmiany relacji było usunięcie i założenie od nowa. Okno
 # NIE ma własnej logiki: pyta o to, o co pyta `zfs-backup.sh edit-relation` (szablon
 # celu, szablon retencji źródła), pokazuje PLAN tego czasownika (--plan: generacja,
@@ -36,7 +40,10 @@ try:
 except Exception:
     st = {}
 with open(sys.argv[4] + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
-    f.write("%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-"))
+    f.write("%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
+                                        st.get("peer_host") or "-",
+                                        # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
+                                        ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-"))
 d = json.load(open(sys.argv[2], encoding="utf-8"))
 rows = []
 for p in d.get("profiles", []):
@@ -50,12 +57,79 @@ with open(sys.argv[4] + "/prof.tsv", "w", encoding="utf-8", newline="\n") as f:
     for n, t in rows:
         f.write("%s\t%s\n" % (n, t))
 PYEOF
-IFS=$'\t' read -r STATE CUR_P CUR_S <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; }
+IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
 if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
     exit 1
 fi
+
+# Plan czasownika, okno z planem, WYKONAJ -- wspólne dla dodania i usunięcia datasetu.
+run_verb_with_plan() {   # <tytuł> <argv...> (bez --yes)
+    local title="$1"; shift
+    info "$title" "Liczę plan..."
+    if ! "$@" >"$TMPD/vplan.txt" 2>&1; then
+        tail -6 "$TMPD/vplan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
+        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+        return 1
+    fi
+    { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/vplan.txt"; echo
+      echo "Komenda:  $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/vplan2.txt"
+    yesno_text "$TMPD/vplan2.txt" "$title -- plan" "WYKONAJ" "Wstecz" --defaultno || return 1
+    clear 2>/dev/null
+    echo "\$ $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
+    "$@" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    if [ -n "${ZFS_TUI_LOG:-}" ]; then { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :; fi
+    echo
+    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: $title (rc=$RC). Enter = dalej"
+    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
+    [ -t 0 ] && read -r _
+    exit "$RC"
+}
+while :; do
+    geom
+    wt --title "Zmień relację $NAME" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item szablon \
+       --menu "Relacja $NAME ze źródła ${PEER}. Datasety: ${SRCS//,/, }\nCo zmienić?" 13 "$W" 3 \
+       szablon "Szablon (retencja, harmonogramy, retencja źródła)" \
+       dodaj   "Dodaj dataset ze źródła" \
+       usun    "Usuń dataset z relacji (kopie zostają)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+    ACTION="$WT_OUT"
+    case "$ACTION" in
+        szablon) break ;;
+        dodaj)
+            info "Dodaj dataset" "Czytam datasety na $PEER..."
+            if ! "$ZB" list-datasets "$PEER" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then
+                wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $PEER nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
+            fi
+            "$PY" - "$TMPD/ds.json" "$SRCS" >"$TMPD/ds.tsv" <<'PYEOF'
+import sys, json
+have = [x for x in sys.argv[2].split(",") if x and x != "-"]
+for d in json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []:
+    n = d.get("name") or ""
+    if "/" not in n or any(n == h or n.startswith(h + "/") for h in have):
+        continue    # pula sama w sobie i to, co relacja już ma (z dziećmi) -- nie do dodania
+    print("%s\t%s" % (n, d.get("type") or ""))
+PYEOF
+            items=()
+            while IFS=$'\t' read -r n t; do [ -n "$n" ] && items+=("$n" "$(clip_label "$n  ($t)" $((W - 10)))"); done <"$TMPD/ds.tsv"
+            [ "${#items[@]}" -gt 0 ] || { wt --title "Nie ma czego dodać" --msgbox "Na $PEER nie ma datasetu spoza tej relacji." 8 "$W"; continue; }
+            wt --title "Dodaj dataset do $NAME" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+               --menu "Dataset ze źródła $PEER. Wchodzi z dziećmi; pierwsza (pełna) kopia idzie od razu,\nresztą zajmuje się cron. Pozostałe datasety relacji zostają nietknięte." \
+               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" || continue
+            run_verb_with_plan "Dodaj $WT_OUT do $NAME" "$ZB" add-source "$NAME" "$WT_OUT" || continue ;;
+        usun)
+            items=()
+            for n in ${SRCS//,/ }; do [ "$n" != - ] && items+=("$n" "$n"); done
+            [ "${#items[@]}" -gt 0 ] || { wt --title "Brak datasetów" --msgbox "Relacja nie ma datasetów do usunięcia." 8 "$W"; continue; }
+            if [ "${#items[@]}" -eq 2 ]; then
+                wt --title "Ostatni dataset" --msgbox "To jedyny dataset relacji. Relację bez datasetów usuwa się w całości: Del na F3." 9 "$W"; continue
+            fi
+            wt --title "Usuń dataset z $NAME" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+               --menu "Dataset przestaje być kopiowany: źródło odbiera prawa, tu znikają jego zadania.\nKopie, które już są na tym hoście, ZOSTAJĄ." \
+               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || continue
+            run_verb_with_plan "Usuń $WT_OUT z $NAME" "$ZB" remove-source "$NAME" "$WT_OUT" || continue ;;
+    esac
+done
 
 PROFILE="${CUR_P:-default}"; SRCP="${CUR_S:-__same__}"
 step=1

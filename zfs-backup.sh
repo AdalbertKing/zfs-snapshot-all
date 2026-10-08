@@ -565,6 +565,16 @@ Inspection / teardown:
                                     snapshot FAMILY may not change -- that is a new
                                     relationship. Asks without --yes; --plan only
                                     shows; --ask = the GUI's windows ('e' on F3).
+  zfs-backup.sh add-source NAME DATASET [--yes]
+                                    Put ONE more dataset into an installed relationship,
+                                    on both sides -- the inverse of remove-source. The
+                                    SOURCE's scope file takes it (an exclusion under an
+                                    existing root is lifted, or it becomes a root of its
+                                    own), the source re-commits its scope (the grant
+                                    follows), this host re-activates the relationship
+                                    (only the new dataset's sections are generated;
+                                    the rest keeps its installed policy, REV-089) and
+                                    its first copy runs once now. Plans without --yes.
   zfs-backup.sh remove-source NAME DATASET [--yes]
                                     Take ONE dataset out of a relationship, on both
                                     sides: the SOURCE's scope file loses it (so its
@@ -10205,6 +10215,22 @@ cmd_activate_client() {
     # PROFILE_GFS is read off the installed file first, for the same reason.
     detect_profile_gfs "$workfile"
     client_section_plan "$workfile" "$name" "$is_new_relationship"
+    # A DATASET NEWLY IN SCOPE IS GENERATED FROM THE RELATIONSHIP'S OWN PROFILE.
+    #
+    # apply_client_profile_choice stages the recorded PROFILE / SOURCE_PROFILE
+    # only at CREATE, so a re-activation that has to GENERATE sections -- a
+    # dataset that joined the scope since -- rendered them from the global
+    # default instead. Measured on pve10, 2026-10-08 (add-source pve9b
+    # hdd/home): the relationship runs m31w4d7h24, the new dataset came out on
+    # `default` -- one hourly tier, no prune on the collector, its copies kept
+    # for ever. The installed sections stay preserved (REV-089); only the ones
+    # being generated take the profile, and the plan is computed again because
+    # its ladder-or-flat answer reads the profile.
+    if [ "$is_new_relationship" -eq 0 ] && [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && [ -n "${PROFILE:-}" ]; then
+        apply_client_profile_choice 1 "$PROFILE"
+        PROFILE_LOADED=""
+        client_section_plan "$workfile" "$name" "$is_new_relationship"
+    fi
     ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
 
     # First activation generates the sections from the profile. A re-activation
@@ -12667,7 +12693,14 @@ cmd_remove_source() {
         workfile_track "$workfile"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "remove-source: could not copy $CRON_CONFIG"; }
         chmod 0644 "$workfile" 2>/dev/null || :
-        remove_managed_sections "$workfile" "$name" "$landing"
+        # The SOURCE's prune goes too. It sits under its own header,
+        # [prune:account@host:dataset] -- the landing's `src` -- so dropping the
+        # landing alone left the collector pruning a dataset that had just left
+        # the relationship, and a later add-source replayed that old policy as
+        # "installed" (measured on pve10, 2026-10-08). Same ownership check:
+        # remove_managed_sections refuses a section it did not write.
+        local srcscope; srcscope=$(installed_dataset_field "$workfile" "$landing" src)
+        remove_managed_sections "$workfile" "$name" "$landing" ${srcscope:+"$srcscope"}
         # THROUGH THE WRAPPER, not `bash $GENCRON` -- the generated block bakes
         # the running copy's paths into every line, so a relationship whose jobs
         # run as a delegated account must be validated by THAT account's
@@ -12685,6 +12718,33 @@ cmd_remove_source() {
         atomic_replace_and_install "$CRON_CONFIG" "$workfile" \
             || die "remove-source: could not install the config without '$landing' -- the source side is already narrowed; re-run this command."
         log "remove-source: '$landing' is out of $CRON_CONFIG and out of the installed cron"
+        # The REQUEST follows too (the inverse of add-source): a stale entry
+        # would let a later activation adopt '$ds' again the moment a sibling
+        # relationship of this collector is granted it on the same source --
+        # the very thing REQUESTED_DATASETS exists to prevent.
+        # And so does MANAGED_DATASETS: status, delete-relation --destroy-copies
+        # and the section-ownership check all read it, and it kept naming the
+        # landing that had just been dropped (measured on pve10, 2026-10-08).
+        local _rq _keep="" _m _mkeep=""
+        if [ -n "${REQUESTED_DATASETS:-}" ]; then
+            while IFS= read -r _rq; do
+                [ "$_rq" = "$ds" ] && continue
+                _keep="${_keep:+$_keep,}$_rq"
+            done < <(dataset_list_split "$REQUESTED_DATASETS")
+        fi
+        for _m in ${MANAGED_DATASETS:-}; do
+            [ "$_m" = "$landing" ] && continue
+            _mkeep="${_mkeep:+$_mkeep }$_m"
+        done
+        if { cat "$cpath"
+             [ -n "${REQUESTED_DATASETS:-}" ] && write_client_field REQUESTED_DATASETS "$_keep"
+             write_client_field MANAGED_DATASETS "$_mkeep"; } > "${cpath}.new" \
+           && mv -f "${cpath}.new" "$cpath"; then
+            chmod 0600 "$cpath" 2>/dev/null || :
+        else
+            rm -f "${cpath}.new"
+            warn "remove-source: could not take '$ds' out of the record of '$name' ($cpath) -- remove it from REQUESTED_DATASETS and '$landing' from MANAGED_DATASETS by hand"
+        fi
     else
         log "remove-source: no installed config for '$name' on this host -- nothing to drop here"
     fi
@@ -12697,6 +12757,171 @@ cmd_remove_source() {
     # config and the installed cron together, through the same validated atomic
     # install every other writer here uses.
     log "remove-source: '$ds' is no longer part of '$name'. Copies already received are untouched."
+}
+
+# add-source NAME DATASET [--yes] (2026-10-08, owner: "rob 5, potem 4")
+#
+# Adding a dataset to a relationship that already runs was not possible: the
+# wizard said "Dodanie datasetow do istniejacej relacji to jej modyfikacja, a
+# tego kreator jeszcze nie umie", and the only route was delete-relation and
+# creating it again with the longer list. This is remove-source run backwards,
+# through the same doors:
+#   1. the source's scope file takes the dataset -- an `exclude = DATASET` under
+#      an existing root is lifted, a dataset already covered by a root with
+#      include_children = yes is left as it is, anything else becomes a root of
+#      its own; an EXCLUDED ANCESTOR is refused (lifting it would bring in more
+#      than was asked for);
+#   2. the source re-commits its scope, so the account is granted exactly that;
+#   3. this host re-activates the relationship: a dataset newly in scope takes
+#      the generation path, every section already installed is preserved
+#      (REV-089), and activation's own coverage and foreign-pruner guards apply;
+#   4. the new dataset's finest copy job runs once now, so the first (full)
+#      copy is not left waiting for the next tick.
+cmd_add_source() {
+    local name="" ds="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            -*)       die "add-source: unknown option '$a' (only --yes)" ;;
+            *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "add-source: takes exactly NAME and DATASET"; fi ;;
+        esac
+    done
+    [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh add-source NAZWA DATASET [--yes]"
+    case "$ds" in
+        */*) : ;;
+        *)   die "add-source: '$ds' does not look like a dataset (pool/path)" ;;
+    esac
+    case "$ds" in
+        *[!A-Za-z0-9_./:-]*) die "add-source: '$ds' carries characters a dataset name cannot have -- refusing to send it anywhere" ;;
+    esac
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "add-source: no relationship '$name' on this host"
+    record_load client "$cpath"
+    local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
+    local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
+    case "${ACTIVE_ENDPOINT:-}" in *:*) port="${ACTIVE_ENDPOINT##*:}" ;; esac
+    case "$port" in ''|*[!0-9]*) port=22 ;; esac
+    [ -n "$peer" ] || die "add-source: the record of '$name' names no peer host -- nothing to reach"
+    [ "$state" = active ] || die "add-source: '$name' is in state '${state:-unknown}' -- only an installed (active) relationship takes one more dataset; a new relationship is created with its whole list"
+    local sfile="/etc/zfs-snapshot-all/peers/$label.scope"
+    echo "add-source '$ds' to '$name' (peer $peer, port $port):"
+    echo "  1. source    : $sfile -- the dataset joins the scope this relationship grants from"
+    echo "  2. source    : deploy.sh --commit-scope=$label  -- grants it to this relationship's account"
+    echo "  3. collector : activate-client $name -- sections for the new dataset only; the installed policy of the rest stays"
+    echo "  4. first copy: the new dataset's finest copy job runs once now (a full send); cron keeps it from then on"
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+
+    log "add-source: 1/4 widening the scope on $peer"
+    local out rc
+    out=$(rux_root_ssh "$peer" "$port" "zfs list -H -o name $(printf '%q' "$ds")" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || die "add-source: '$ds' is not a dataset on $peer ($out) -- nothing was changed"
+    local awk_prog
+    awk_prog='
+      function flush() {
+          if (cur == "") return
+          if (cur == target) st = "ROOT"
+          else if (index(target, cur "/") == 1 && ch == "yes") {
+              if (hit) st = "LIFT"; else if (st == "") st = "COVERED"
+          }
+      }
+      /^\[dataset:/ { flush(); cur=$0; sub(/^\[dataset:/,"",cur); sub(/\]$/,"",cur); ch=""; hit=0; print; next }
+      /^\[/ { flush(); cur=""; print; next }
+      {
+          k=$0; sub(/[ \t]*=.*/,"",k); gsub(/^[ \t]+/,"",k)
+          v=$0; sub(/^[^=]*=[ \t]*/,"",v); sub(/[ \t]+$/,"",v)
+          if (cur != "" && k == "include_children") ch = v
+          if (cur != "" && k == "exclude" && index(target, cur "/") == 1) {
+              if (v == target) { hit = 1; next }
+              if (index(target, v "/") == 1) anc = v
+          }
+          print
+      }
+      END {
+          flush()
+          if (anc != "") { print "EXCLUDED-ANCESTOR " anc > "/dev/stderr"; exit 3 }
+          if (st == "ROOT" || st == "COVERED") { print "ALREADY-IN-SCOPE" > "/dev/stderr"; exit 0 }
+          if (st == "LIFT") { print "LIFTED" > "/dev/stderr"; exit 0 }
+          print ""; print "[dataset:" target "]"; print "include_parent = yes"; print "include_children = yes"
+          print "ADDED-ROOT" > "/dev/stderr"
+      }
+    '
+    local q; q=$(printf '%q' "$sfile")
+    out=$(rux_root_ssh "$peer" "$port" "awk -v target=$(printf '%q' "$ds") $(printf '%q' "$awk_prog") $q > $q.new 2>/tmp/as-awk.err; r=\$?; cat /tmp/as-awk.err; if [ \$r -ne 0 ]; then rm -f $q.new; exit \$r; fi; if grep -q ALREADY-IN-SCOPE /tmp/as-awk.err; then rm -f $q.new; else mv $q.new $q; fi" 2>&1); rc=$?
+    case "$out" in
+        *EXCLUDED-ANCESTOR*) die "add-source: on $peer an ANCESTOR of '$ds' is excluded (${out##*EXCLUDED-ANCESTOR }) -- lifting it would bring in more than '$ds'. Nothing was changed; narrow by hand or add that ancestor instead." ;;
+    esac
+    if [ "$rc" -ne 0 ]; then
+        log "!!! add-source: could not widen the scope on $peer -- NOTHING was changed here either."
+        log "!!!     $out"
+        die "add-source: stopped at 1/4. Fix what the source said and run this again."
+    fi
+    case "$out" in
+        *ALREADY-IN-SCOPE*) log "add-source: '$ds' is already in the scope on $peer -- nothing to widen, going on to re-commit and re-activate so this side matches." ;;
+        *LIFTED*)           log "add-source: the exclusion of '$ds' under its root is lifted on $peer" ;;
+        *ADDED-ROOT*)       log "add-source: '$ds' is a new root of the scope on $peer" ;;
+    esac
+
+    log "add-source: 2/4 committing the widened scope on $peer"
+    if ! rux_root_ssh "$peer" "$port" "cd '$SOURCE_REPO_DIR' && ./deploy.sh --commit-scope='$label'"; then
+        log "!!! add-source: the source did NOT commit the widened scope. Its scope FILE is already widened, so re-running this same command retries the commit."
+        log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
+        die "add-source: stopped at 2/4 -- this host's config and cron were NOT touched, so one retry brings the two sides together."
+    fi
+
+    log "add-source: 3/4 re-activating '$name' on this host"
+    # THE REQUEST FOLLOWS THE SCOPE. The source's committed scope is the union
+    # of every relationship this collector holds there, so activation keeps
+    # only the roots inside REQUESTED_DATASETS and skips the rest as a sibling's
+    # -- measured on pve10, 2026-10-08: the new root was granted on the source
+    # and then dropped here with "outside this relationship's request". An
+    # empty request filters nothing and is left as it is.
+    if [ -n "${REQUESTED_DATASETS:-}" ]; then
+        local _rq _in=0
+        while IFS= read -r _rq; do
+            case "$ds" in "$_rq"|"$_rq"/*) _in=1 ;; esac
+        done < <(dataset_list_split "$REQUESTED_DATASETS")
+        if [ "$_in" -eq 0 ]; then
+            { cat "$cpath"; write_client_field REQUESTED_DATASETS "$REQUESTED_DATASETS,$ds"; } > "${cpath}.new" \
+                && mv -f "${cpath}.new" "$cpath" \
+                || die "add-source: could not record '$ds' in the request of '$name' ($cpath) -- the source already grants it; re-run this command"
+            chmod 0600 "$cpath" 2>/dev/null || :
+            log "add-source: '$ds' recorded in the request of '$name'"
+        fi
+    fi
+    # A child process: activation dies on any refusal, and its plan, dry-run
+    # and guards are exactly the ones an ordinary re-activation shows.
+    if ! bash "$SCRIPT_DIR/zfs-backup.sh" activate-client "$name" --yes; then
+        die "add-source: the source already grants '$ds', but the re-activation here stopped (see above) -- this host's config and cron are unchanged. Fix what it said and run: zfs-backup.sh activate-client $name"
+    fi
+
+    log "add-source: 4/4 the first copy of '$ds'"
+    record_load client "$cpath"
+    local tab line cmd n=0
+    tab=$(crontab_for_target 2>/dev/null) || tab=""
+    line=$(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+        | grep -F -- " -L $name " | grep -F -- ":$ds\"" | grep -E 'snapget\.sh' \
+        | awk '$2 == "*" && !h { h = $0 } !f { f = $0 } END { print (h != "" ? h : f) }')
+    # ^ the FINEST copy job: one whose hour field is `*` (it runs every hour)
+    #   if there is one, else the first -- not merely the first line found.
+    if [ -z "$line" ]; then
+        warn "add-source: no copy job for '$ds' found in the installed cron -- the dataset IS in the relationship, its first copy runs at the next tick"
+    else
+        cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
+        if [ "$(cron_target_user)" = root ]; then
+            bash -c "$cmd" </dev/null && n=1
+        else
+            su -s /bin/bash "$(cron_target_user)" -c "$cmd" </dev/null && n=1
+        fi
+        if [ "$n" -eq 1 ]; then
+            log "add-source: first copy of '$ds' done"
+        else
+            warn "add-source: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
+        fi
+    fi
+    log "add-source: '$ds' is now part of '$name'."
 }
 
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
@@ -17114,6 +17339,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         delete-relation)  shift; cmd_delete_relation "$@" ;;
         edit-relation)    shift; cmd_edit_relation "$@" ;;
         remove-source)    shift; cmd_remove_source "$@" ;;
+        add-source)       shift; cmd_add_source "$@" ;;
         gui)              shift; cmd_gui "$@" ;;
         progress)         shift; cmd_progress "$@" ;;
         test)             shift; cmd_test "$@" ;;

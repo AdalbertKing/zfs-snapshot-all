@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13555,6 +13555,69 @@ else
 fi
 
 fi   # --- koniec sekcji statusquiesce ---
+
+if want addsource; then
+# ============================================================================
+# add-source (2026-10-08): the scope-widening awk, lifted from cmd_add_source
+# and run on scope files the way the source runs it. Inverse of rmsrc/awk:
+# an exclusion under a root is LIFTED, a dataset a root with children already
+# covers is left ALREADY-IN-SCOPE, anything else becomes a ROOT of its own, and
+# an EXCLUDED ANCESTOR is refused (lifting it would bring in more than asked).
+# ============================================================================
+AS="$WORK/addsource"; rm -rf "$AS"; mkdir -p "$AS"
+as_awk=$(sed -n "/^      function flush() {/,/^    '/p" "$ZFSBACKUP" | sed '$d')
+[ -n "$as_awk" ] || bad "addsource: could not lift the awk program from zfs-backup.sh -- anchors changed"
+as_run() {   # <scope text> <target> -> stdout new file, stderr verdict; rc
+    printf '%b' "$1" > "$AS/in"
+    awk -v target="$2" "$as_awk" "$AS/in" > "$AS/out" 2> "$AS/err"
+    echo "$?"
+}
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = yes\n' pool/a/x)
+if [ "$rc" = 0 ] && grep -qx ALREADY-IN-SCOPE "$AS/err" && cmp -s "$AS/in" "$AS/out"; then
+    ok "addsource/awk: a child of a root with include_children = yes is already in scope -- file unchanged"
+else
+    bad "addsource/awk: covered child" "rc=$rc" "$(cat "$AS/err")" "$(cat "$AS/out")"
+fi
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = yes\nexclude = pool/a/x\nexclude = pool/a/y\n' pool/a/x)
+if [ "$rc" = 0 ] && grep -qx LIFTED "$AS/err" && ! grep -q '^exclude = pool/a/x$' "$AS/out" && grep -q '^exclude = pool/a/y$' "$AS/out"; then
+    ok "addsource/awk: its exclusion under the root is LIFTED, and only its own"
+else
+    bad "addsource/awk: lift" "rc=$rc" "$(cat "$AS/err")" "$(cat "$AS/out")"
+fi
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = yes\n' pool/b)
+if [ "$rc" = 0 ] && grep -qx ADDED-ROOT "$AS/err" && grep -qx '\[dataset:pool/b\]' "$AS/out" \
+   && [ "$(sed -n '/^\[dataset:pool\/b\]/,$p' "$AS/out" | grep -c '^include_\(parent\|children\) = yes$')" -eq 2 ] \
+   && grep -qx '\[dataset:pool/a\]' "$AS/out"; then
+    ok "addsource/awk: an unrelated dataset becomes a ROOT of its own (parent and children), the old root stays"
+else
+    bad "addsource/awk: new root" "rc=$rc" "$(cat "$AS/err")" "$(cat "$AS/out")"
+fi
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = yes\nexclude = pool/a/x\n' pool/a/x/y)
+if [ "$rc" = 3 ] && grep -q '^EXCLUDED-ANCESTOR pool/a/x$' "$AS/err"; then
+    ok "addsource/awk: a dataset whose ANCESTOR is excluded is refused (rc 3), not widened past what was asked"
+else
+    bad "addsource/awk: excluded ancestor" "rc=$rc" "$(cat "$AS/err")"
+fi
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = no\n' pool/a/x)
+if [ "$rc" = 0 ] && grep -qx ADDED-ROOT "$AS/err" && grep -qx '\[dataset:pool/a/x\]' "$AS/out"; then
+    ok "addsource/awk: under a root WITHOUT children it is not covered -- it becomes its own root"
+else
+    bad "addsource/awk: root without children" "rc=$rc" "$(cat "$AS/err")" "$(cat "$AS/out")"
+fi
+rc=$(as_run '[dataset:pool/a]\ninclude_parent = yes\ninclude_children = yes\n' pool/a)
+if [ "$rc" = 0 ] && grep -qx ALREADY-IN-SCOPE "$AS/err"; then
+    ok "addsource/awk: ...and the root itself is already in scope"
+else
+    bad "addsource/awk: root itself" "rc=$rc" "$(cat "$AS/err")"
+fi
+out=$(bash "$ZFSBACKUP" add-source x pool/a --bogus 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "add-source: unknown option '--bogus'"; then
+    ok "addsource: unknown options are refused before anything is read"
+else
+    bad "addsource: option parsing" "rc=$rc" "$out"
+fi
+
+fi   # --- koniec sekcji addsource ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
