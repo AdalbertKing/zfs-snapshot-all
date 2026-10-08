@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aaae02ef5aac8e5d -->
+<!-- status-covers-digest: c75192dac129382d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Okno „Zmień relację”: pytanie zawsze w ramce (2026-10-08, właściciel: „rób 1 i 2”, zakres 1.0).**
+  - **Było:** nagłówek menu niósł pełną listę datasetów relacji; przy 14 datasetach lustra na
+    pve10 lista zawijała się na kilka wierszy i wypychała „Co zmienić?” poza ramkę okna.
+  - **Jest:** `tui/edit-relation.sh` pokazuje „Datasety (N): …”, przycięte do szerokości okna
+    (`clip_label`), w osobnym wierszu; pełna lista jest w oknie „Usuń dataset”.
+  - **Dowód na żywo, pve10** (kopia drzewa w `/tmp`, okno otwarte i zamknięte bez zmian):
+    stara wersja bez pytania na ekranie, nowa: nagłówek, „Datasety (14): …” i „Co zmienić?”.
 
 - **GUI pokazuje błąd biegu i to, co P-0 wyrzucił; `add-source` kopiuje każde nowe źródło (2026-10-08, właściciel: „rób 1 i 2”, po labie P-0 na pve10).**
   - **Było (zmierzone w labie):**
