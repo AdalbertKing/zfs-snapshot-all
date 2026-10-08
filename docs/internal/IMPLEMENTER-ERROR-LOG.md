@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1899,6 +1899,22 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E75 — committed and pushed after the gate said STALE (2026-10-08, R4)
+
+**Genesis.** PR #485 (edit-config), second commit. The command was
+`./test/impact.sh --verify > file; echo rc; tail -1 file; git commit ... && git push`.
+`--verify` returned 1 ("PROJECT_STATUS.md ... STALE", "GRAPH DRIFT") and the very
+next statement committed and pushed anyway: the commit was chained to `echo`, not
+to the gate. CI went red on "dependency graph matches the tree".
+
+**Cause.** The same shape as E68 and E71: the rc was printed and read by nobody
+before the mutation. Printing a status is not checking it.
+
+**Rule (R4, unchanged).** A mutation follows a gate only through the gate's own
+exit status (`gate && commit`, or `rc=$?; [ $rc -eq 0 ] && commit`). The follow-up
+commit did exactly that. Third time under R4 in three days -- the rule is known
+and was not applied.
 
 ### E74 — two PRs, nothing delegated (2026-10-07, R3)
 

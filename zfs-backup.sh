@@ -84,7 +84,7 @@ set -uo pipefail
 # summary, frequent/archive profiles, remote-quiesce.
 # ------------------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
 SNAPSEND="$SCRIPT_DIR/snapsend.sh"
@@ -654,6 +654,20 @@ Inspection / teardown:
                                     to. A profile that does not validate is a row
                                     saying so, never a fatal for the whole catalogue.
   zfs-backup.sh show-config NAME [--json] [--config=PATH]
+  zfs-backup.sh edit-config [NAME] [--account=USER] [--yes]
+                                    crontab -e for the config: opens a copy in
+                                    $VISUAL/$EDITOR/vi (with NAME: the config that
+                                    holds that relationship, cursor on it in vi-like
+                                    editors), checks it
+                                    with gen-cron (on a refusal: edit again or stop),
+                                    shows how the cron block changes and installs on
+                                    one confirmation (--yes: no question). The
+                                    previous config stays as <config>.edit-<time>.
+                                    A [dataset:] section of a relationship added or
+                                    removed by hand is followed on the source (scope
+                                    and grant, like add-source/remove-source), in the
+                                    record, and with a first copy; the section stays
+                                    as written. Also: /usr/local/bin/zfs-backup.
   zfs-backup.sh import-relation FILE [--name=NEW] [--yes]
                                     Replays what export-relation --json wrote: the
                                     add-client argv in the file, in that order, then
@@ -12624,11 +12638,14 @@ cmd_delete_relation() {
 # the operator who wants it gone can say so with `zfs destroy` after reading what
 # this prints. That is the same rule --unpair follows for received data.
 cmd_remove_source() {
-    local name="" ds="" yes=0 a
+    local name="" ds="" yes=0 source_only=0 a
     for a in "$@"; do
         case "$a" in
             --yes|-y) yes=1 ;;
-            -*)       die "remove-source: unknown option '$a' (only --yes)" ;;
+            # edit-config: the section is already gone by hand; only the
+            # source side (narrow the scope, revoke the grant) is wanted here.
+            --source-only) source_only=1 ;;
+            -*)       die "remove-source: unknown option '$a' (only --yes, --source-only)" ;;
             *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "remove-source: takes exactly NAME and DATASET"; fi ;;
         esac
     done
@@ -12708,6 +12725,10 @@ cmd_remove_source() {
         log "!!! remove-source: the source did NOT commit the narrowed scope. Its scope FILE is already narrowed, so re-running this same command retries the commit."
         log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
         die "remove-source: stopped at 2/3 -- this host's config and cron were NOT touched, so the two sides can still be brought back together by one retry."
+    fi
+    if [ "$source_only" -eq 1 ]; then
+        log "remove-source: --source-only -- '$ds' is out of the scope on $peer; this host's config, cron and record are left to the caller"
+        return 0
     fi
 
     # ACTIVATION IS ADDITIVE, so re-running it is NOT enough -- measured on pve10
@@ -12822,11 +12843,14 @@ cmd_remove_source() {
 #   4. the new dataset's finest copy job runs once now, so the first (full)
 #      copy is not left waiting for the next tick.
 cmd_add_source() {
-    local name="" ds="" yes=0 a
+    local name="" ds="" yes=0 source_only=0 a
     for a in "$@"; do
         case "$a" in
             --yes|-y) yes=1 ;;
-            -*)       die "add-source: unknown option '$a' (only --yes)" ;;
+            # edit-config: the dataset's section is already written by hand;
+            # only the source side (scope + grant) is wanted from this verb.
+            --source-only) source_only=1 ;;
+            -*)       die "add-source: unknown option '$a' (only --yes, --source-only)" ;;
             *)        if [ -z "$name" ]; then name="$a"; elif [ -z "$ds" ]; then ds="$a"; else die "add-source: takes exactly NAME and DATASET"; fi ;;
         esac
     done
@@ -12913,6 +12937,10 @@ cmd_add_source() {
         log "!!! add-source: the source did NOT commit the widened scope. Its scope FILE is already widened, so re-running this same command retries the commit."
         log "!!!     on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --commit-scope=$label"
         die "add-source: stopped at 2/4 -- this host's config and cron were NOT touched, so one retry brings the two sides together."
+    fi
+    if [ "$source_only" -eq 1 ]; then
+        log "add-source: --source-only -- '$ds' is granted on $peer; this host's config, cron and record are left to the caller"
+        return 0
     fi
 
     log "add-source: 3/4 re-activating '$name' on this host"
@@ -13008,6 +13036,273 @@ add_source_first_copy() {
     else
         warn "add-source: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
     fi
+}
+
+# edit-config [NAME] [--account=USER] [--yes] (2026-10-08, owner: "rob edit-config
+# z dowiazaniem zfs-backup") -- crontab -e for this package's config.
+#
+# The config is where a relationship's policy lives; the cron block is made from
+# it and nothing else. This verb opens a COPY in $VISUAL / $EDITOR / vi, checks
+# it with gen-cron (the same check every other verb runs), shows how the cron
+# block changes, and on one confirmation installs it the way the rest of the
+# package does (gencron_as_target -- the right paths for a delegated account;
+# a hand-run gen-cron.sh --install rewrites them, measured on pve0).
+#
+# A [dataset:] section added or removed by hand is not just text: the source
+# grants this relationship's account only the datasets in its scope. So for a
+# section that belongs to a RELATIONSHIP (its managed-by marker, or a src whose
+# account@host is one of the relationship's) the source is brought along the
+# way add-source / remove-source do it (scope + grant, --source-only), the record
+# follows, and an added dataset gets its first copy. The hand-written section is
+# installed as written; only its marker and pair_label are added when missing.
+cfg_dataset_sections() {   # <config> -> "section<TAB>src<TAB>client" per [dataset:] section ('-' = none)
+    awk '
+      function out() { if (sec != "") printf "%s\t%s\t%s\n", sec, (src == "" ? "-" : src), (cli == "" ? "-" : cli) }
+      /^\[/ {
+          out(); sec = ""; src = ""; cli = ""
+          if ($0 ~ /^\[dataset:/) { sec = $0; sub(/^\[dataset:/, "", sec); sub(/\].*$/, "", sec) }
+          next
+      }
+      sec != "" && /^[ \t]*#[ \t]*managed-by:[ \t]*zfs-backup\.sh[ \t]+client=/ {
+          c = $0; sub(/.*client=/, "", c); sub(/[ \t].*$/, "", c); cli = c; next
+      }
+      sec != "" && /^[ \t]*src[ \t]*=/ { v = $0; sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); src = v; next }
+      END { out() }' "$1"
+}
+
+cfg_mark_section() {   # <config> <section> <relationship> -- marker and pair_label, when missing
+    local f="$1" sec="$2" name="$3" t
+    t=$(mktemp "$(dirname "$f")/.zfsbackup-mark.XXXXXX") || return 1
+    awk -v want="$sec" -v name="$name" '
+      function flush(   i, hasm, hasp) {
+          if (n == 0) return
+          if (cur == want) {
+              hasm = 0; hasp = 0
+              for (i = 2; i <= n; i++) {
+                  if (buf[i] ~ /^[ \t]*#[ \t]*managed-by:[ \t]*zfs-backup\.sh[ \t]+client=/) hasm = 1
+                  if (buf[i] ~ /^[ \t]*pair_label[ \t]*=/) hasp = 1
+              }
+              print buf[1]
+              if (!hasm) print "\t# managed-by: zfs-backup.sh client=" name
+              last = n; while (last > 1 && buf[last] ~ /^[ \t]*$/) last--
+              for (i = 2; i <= last; i++) print buf[i]
+              if (!hasp) print "\tpair_label   = " name
+              for (i = last + 1; i <= n; i++) print buf[i]
+          } else {
+              for (i = 1; i <= n; i++) print buf[i]
+          }
+          n = 0
+      }
+      /^\[/ { flush(); cur = ""; if ($0 ~ /^\[dataset:/) { cur = $0; sub(/^\[dataset:/, "", cur); sub(/\].*$/, "", cur) } }
+      { buf[++n] = $0 }
+      END { flush() }' "$f" > "$t" && cat "$t" > "$f"
+    local rc=$?
+    rm -f "$t"
+    return $rc
+}
+
+record_note_dataset() {   # <name> <add|drop> <source dataset> <landing> -- REQUESTED/MANAGED follow the config
+    local name="$1" op="$2" ds="$3" landing="$4" cpath
+    cpath=$(client_conf_path "$name")
+    (
+        record_load client "$cpath"
+        local req="${REQUESTED_DATASETS:-}" man="" m _rq _in=0 _keep=""
+        if [ "$op" = add ]; then
+            if [ -n "$req" ]; then
+                while IFS= read -r _rq; do
+                    case "$ds" in "$_rq"|"$_rq"/*) _in=1 ;; esac
+                done < <(dataset_list_split "$req")
+                [ "$_in" -eq 1 ] || req="$req,$ds"
+            fi
+            man="${MANAGED_DATASETS:-}"
+            case " $man " in *" $landing "*) ;; *) man="${man:+$man }$landing" ;; esac
+        else
+            if [ -n "$req" ]; then
+                while IFS= read -r _rq; do
+                    [ "$_rq" = "$ds" ] && continue
+                    _keep="${_keep:+$_keep,}$_rq"
+                done < <(dataset_list_split "$req")
+                req="$_keep"
+            fi
+            for m in ${MANAGED_DATASETS:-}; do
+                [ "$m" = "$landing" ] && continue
+                man="${man:+$man }$m"
+            done
+        fi
+        { cat "$cpath"
+          [ -n "${REQUESTED_DATASETS:-}" ] && write_client_field REQUESTED_DATASETS "$req"
+          write_client_field MANAGED_DATASETS "$man"; } > "${cpath}.new" \
+            && mv -f "${cpath}.new" "$cpath" && chmod 0600 "$cpath"
+    ) || warn "edit-config: the record of '$name' could not follow '$ds' ($op) -- fix MANAGED_DATASETS in $(client_conf_path "$name") by hand"
+}
+
+edit_config_ask() {   # <question> <default y|n> -> 0 yes, 1 no
+    local ans
+    printf '%s ' "$1"
+    IFS= read -r ans || ans=""
+    case "${ans:-$2}" in t|T|y|Y|tak|TAK|yes) return 0 ;; *) return 1 ;; esac
+}
+
+cmd_edit_config() {
+    local name="" account="" yes=0 a
+    for a in "$@"; do
+        case "$a" in
+            --account=*) account="${a#*=}" ;;
+            --yes|-y)    yes=1 ;;
+            -*)          die "edit-config: unknown option '$a' (only --account=USER and --yes)" ;;
+            *)           [ -z "$name" ] || die "edit-config: takes at most one relationship NAME"; name="$a" ;;
+        esac
+    done
+    local cfg
+    if [ -n "$name" ]; then
+        local cpath; cpath=$(client_conf_path "$name")
+        [ -r "$cpath" ] || die "edit-config: no relationship '$name' on this host"
+        record_load client "$cpath"
+        local rec_user="${LOCAL_USER:-}"
+        [ -z "$account" ] || [ "$account" = "${rec_user:-root}" ] \
+            || die "edit-config: '$name' belongs to account '${rec_user:-root}', not '$account' -- drop --account"
+        cron_context_resolve record "" "" "${CRON_CONFIG:-}" "$rec_user"
+        cfg="$CRON_CTX_FILE"
+        [ -n "$cfg" ] || cfg=$(default_cron_config)
+    else
+        # No relationship named: the config this ACCOUNT's crontab was actually
+        # installed from (the block's '# Source:' line), not a guessed default --
+        # a crontab has one managed block, and editing another file would replace
+        # every job the installed one describes. Account: the one named, else root.
+        cron_context_resolve adopt "" "${account:-root}" "" ""
+        cfg="$CRON_CTX_FILE"
+        [ -n "$cfg" ] || cfg=$(default_cron_config)
+    fi
+    [ -f "$cfg" ] || die "edit-config: no config $cfg for account '$(cron_target_user)' -- files here: $(ls /etc/zfs-snapshot-all/jobs.*.conf 2>/dev/null | tr '\n' ' ')"
+    assert_cron_config_matches_installed "$cfg"
+
+    local tmp sum0 errf
+    tmp=$(mktemp "$(dirname "$cfg")/.zfsbackup-edit.XXXXXX") || die "edit-config: mktemp failed next to $cfg"
+    cp -p "$cfg" "$tmp" || die "edit-config: could not copy $cfg"
+    sum0=$(sha256sum "$cfg" | cut -d' ' -f1)
+    errf=$(mktemp) || die "edit-config: mktemp failed"
+
+    local -a ed; read -r -a ed <<< "${VISUAL:-${EDITOR:-vi}}"
+    local jump=""
+    if [ -n "$name" ]; then
+        local ln; ln=$(grep -n -m1 -- "managed-by: zfs-backup.sh client=$name\$" "$tmp" | cut -d: -f1)
+        [ -n "$ln" ] && [ "$ln" -gt 1 ] && jump="+$((ln - 1))"
+        case "$(basename "${ed[0]}")" in vi|vim|nvim|view|nano|emacs|mcedit|micro|joe|jed) ;; *) jump="" ;; esac
+    fi
+
+    local newblk
+    while :; do
+        "${ed[@]}" ${jump:+"$jump"} "$tmp"
+        if cmp -s "$cfg" "$tmp"; then
+            rm -f "$tmp" "$errf"
+            echo "edit-config: bez zmian -- nic nie zainstalowano."
+            return 0
+        fi
+        if newblk=$(gencron_as_target -c "$tmp" 2>"$errf"); then
+            break
+        fi
+        echo "edit-config: generator odrzucił config:"
+        sed 's/^/  /' "$errf"
+        if ! edit_config_ask "Edytować dalej? [T/n]" y; then
+            rm -f "$errf"
+            echo "edit-config: nic nie zainstalowano. Twoja wersja: $tmp"
+            return 1
+        fi
+    done
+    rm -f "$errf"
+
+    # What the edit does to the relationships: [dataset:] sections added or removed.
+    local -A osrc ocli nsrc ncli pfx
+    local s v c
+    while IFS=$'\t' read -r s v c; do
+        [ -n "$s" ] || continue
+        osrc[$s]="$v"; ocli[$s]="$c"
+        case "$v" in *@*:*) [ "$c" != - ] && pfx[${v%%:*}]="$c" ;; esac
+    done < <(cfg_dataset_sections "$cfg")
+    while IFS=$'\t' read -r s v c; do
+        [ -n "$s" ] && { nsrc[$s]="$v"; ncli[$s]="$c"; }
+    done < <(cfg_dataset_sections "$tmp")
+    local adds="" drops="" plain="" rel ds
+    for s in "${!nsrc[@]}"; do
+        [ -n "${osrc[$s]+x}" ] && continue
+        v="${nsrc[$s]}"; rel="${ncli[$s]}"
+        case "$v" in *@*:*) ;; *) continue ;; esac
+        [ "$rel" = - ] && rel="${pfx[${v%%:*}]:-}"
+        if [ -z "$rel" ] || [ "$rel" = - ]; then
+            # Remote src, but no relationship here pulls from that account@host:
+            # an ordinary section, said out loud rather than skipped in silence.
+            plain="${plain}${s}"$'\n'
+            continue
+        fi
+        adds="${adds}${rel}"$'\t'"${v#*:}"$'\t'"${s}"$'\n'
+    done
+    for s in "${!osrc[@]}"; do
+        [ -n "${nsrc[$s]+x}" ] && continue
+        v="${osrc[$s]}"; rel="${ocli[$s]}"
+        case "$v" in *@*:*) ;; *) continue ;; esac
+        [ "$rel" != - ] || continue
+        drops="${drops}${rel}"$'\t'"${v#*:}"$'\t'"${s}"$'\n'
+    done
+
+    echo "edit-config: $cfg (konto $(cron_target_user))"
+    echo "Zmiany w cronie:"
+    # The rendered block names its source file; the copy's temporary name is not
+    # a change anyone made, so it is shown under the real one.
+    local d; d=$(diff <(gencron_as_target -c "$cfg" 2>/dev/null) <(printf '%s\n' "$newblk" | sed "s#$tmp#$cfg#") | grep '^[<>]' | sed 's/^</  -/; s/^>/  +/')
+    if [ -n "$d" ]; then printf '%s\n' "$d"; else echo "  (blok crona bez zmian -- zmienił się tylko config)"; fi
+    while IFS= read -r s; do
+        [ -n "$s" ] && echo "  uwaga: [dataset:$s] pobiera z hosta, z którego nie pobiera żadna relacja tutaj -- zwykła sekcja, bez kroków na źródle i bez rekordu"
+    done <<< "$plain"
+    if [ -n "$adds$drops" ]; then
+        echo "Kroki na źródle:"
+        while IFS=$'\t' read -r rel ds s; do
+            [ -n "$rel" ] && echo "  + $ds do relacji $rel: na źródle zakres i prawa (add-source --source-only), tutaj rekord, potem pierwsza kopia"
+        done <<< "$adds"
+        while IFS=$'\t' read -r rel ds s; do
+            [ -n "$rel" ] && echo "  - $ds z relacji $rel: na źródle odebranie praw (remove-source --source-only), tutaj rekord; kopie zostają"
+        done <<< "$drops"
+    fi
+    if [ "$yes" -ne 1 ] && ! edit_config_ask "Zainstalować? [t/N]" n; then
+        echo "edit-config: nic nie zainstalowano. Twoja wersja: $tmp"
+        return 1
+    fi
+    if [ "$(sha256sum "$cfg" | cut -d' ' -f1)" != "$sum0" ]; then
+        echo "edit-config: $cfg zmienił się w trakcie edycji (inny czasownik albo admin) -- nic nie nadpisano. Twoja wersja: $tmp"
+        return 1
+    fi
+
+    # The source first: a refusal there leaves this host exactly as it was.
+    while IFS=$'\t' read -r rel ds s; do
+        [ -n "$rel" ] || continue
+        if ! bash "$SCRIPT_DIR/zfs-backup.sh" add-source "$rel" "$ds" --yes --source-only; then
+            echo "edit-config: źródło relacji $rel nie przyznało '$ds' -- tutaj nic nie zainstalowano. Twoja wersja: $tmp"
+            return 1
+        fi
+        cfg_mark_section "$tmp" "$s" "$rel" || { echo "edit-config: nie udało się oznaczyć sekcji $s. Twoja wersja: $tmp"; return 1; }
+    done <<< "$adds"
+    if [ -n "$adds" ] && ! gencron_as_target -c "$tmp" >/dev/null 2>&1; then
+        echo "edit-config: config po oznaczeniu sekcji nie przeszedł generatora -- nic nie zainstalowano. Twoja wersja: $tmp"
+        return 1
+    fi
+
+    local bak; bak="$cfg.edit-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$cfg" "$bak" || die "edit-config: could not keep the previous config as $bak -- nothing installed. Your version: $tmp"
+    workfile_track "$tmp"
+    atomic_replace_and_install "$cfg" "$tmp"
+    log "edit-config: zainstalowano $cfg; poprzednia wersja: $bak"
+
+    while IFS=$'\t' read -r rel ds s; do
+        [ -n "$rel" ] || continue
+        record_note_dataset "$rel" add "$ds" "$s"
+        ( record_load client "$(client_conf_path "$rel")"; add_source_first_copy "$rel" "$ds" )
+    done <<< "$adds"
+    while IFS=$'\t' read -r rel ds s; do
+        [ -n "$rel" ] || continue
+        bash "$SCRIPT_DIR/zfs-backup.sh" remove-source "$rel" "$ds" --yes --source-only \
+            || warn "edit-config: źródło relacji $rel nie odebrało praw do '$ds' -- powtórz: zfs-backup.sh remove-source $rel $ds --yes --source-only"
+        record_note_dataset "$rel" drop "$ds" "$s"
+    done <<< "$drops"
+    echo "edit-config: gotowe."
 }
 
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
@@ -17470,6 +17765,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
         show-config)      shift; cmd_show_config "$@" ;;
+        edit-config)      shift; cmd_edit_config "$@" ;;
         export-relation)  shift; cmd_export_relation "$@" ;;
         import-relation)  shift; cmd_import_relation "$@" ;;
         list-profiles)    shift; cmd_list_profiles "$@" ;;
