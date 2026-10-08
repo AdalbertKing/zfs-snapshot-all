@@ -1235,6 +1235,37 @@ def build_jobs(data, now):
                             "reasons": list(items[-1]["reasons"])})
                 items.append(pit)
                 break
+    # REPLIKI NA F2 (2026-10-08, wlasciciel: "czy zadania repliki wchodza do listy
+    # zadan?"). list-jobs czyta tylko sekcje relacji, wiec replik tu nie bylo, choc
+    # to zadania z crona (albo "po wlozeniu") z rc, czasem i bledami -- a job-stats
+    # juz je liczyl. Wiersz z list-replicas i statystyk; werdykt "bez monitora",
+    # dopoki replika nie ma progu, ktory mozna przekroczyc.
+    for rp in (data.replicas or {}).get("replicas", []):
+        rname = rp.get("name") or "?"
+        srow = replica_stats_row(data, rname)
+        sched = rp.get("schedule") or "?"
+        on_ins = sched == "on-insert"
+        rnxt = None if on_ins else cron_next(sched, now)
+        reasons = []
+        if srow and str(srow.get("last_rc")) not in ("0", "None"):
+            reasons.append(u"ostatni bieg rc=%s" % srow.get("last_rc"))
+        if data.failed("stats"):
+            czas = "?"
+        else:
+            czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
+        items.append({
+            "kind": "replica", "name": rname, "rel": None, "replica": rp,
+            "clabel": u"replica copy (%s)" % rname, "srow": srow, "vol": None, "czas": czas, "gb": "-",
+            "dir": u"%s>%s" % (host, (rp.get("dst") or "?").split("/")[0]),
+            "mode": None, "task": u"replika", "pref": rp.get("prefix") or "-", "keep": "-",
+            "cnt": len(rp.get("sources") or []) or 1, "tier": "", "scope": rp.get("source") or "",
+            # "po włożeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
+            # kolumnę i przy 80 znakach wypychało Trzyma z ekranu WSZYSTKIM wierszom.
+            "schedule": "-" if on_ins else sched, "verdict": "BEZ MONITORA",
+            "vword": VERDICTS["BEZ MONITORA"][0], "reasons": reasons, "next_epoch": rnxt,
+            "next": (u"po włożeniu" if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
+            "job": {}, "jobs": [], "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
+        })
     # GRUPOWANIE: relacja synchro (albo kazda inna z kilkoma datasetami pod tym
     # samym zadaniem) miala tyle wierszy F2, ile linii crona -- ten sam blad,
     # ktory `rel_pairs` naprawil na F3 (2026-09-21). Klucz = to, co wiersz
@@ -1395,7 +1426,8 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         for r in rows:
-            r["next_disp"] = fmt_next_short(r["next_epoch"], now) if r.get("next_epoch") else "-"
+            r["next_disp"] = fmt_next_short(r["next_epoch"], now) if r.get("next_epoch") else \
+                (r.get("next") if r.get("kind") == "replica" else "-")
         widths = {}
         for key, header, get in _ZAD_COLS:
             widths[key] = max([len(header)] + [len(get(r) or "-") for r in rows])
@@ -1448,7 +1480,10 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         if rows and 0 <= cursor < len(rows):
             r = rows[cursor]
             pw_ = (width - lbw) if beside else width
-            pl = detail_kv(ch, rel_detail_pairs(r, data, now, ch), pw_ - 4)
+            if r["kind"] == "replica":
+                pl = detail_kv(ch, replica_detail_pairs(r["replica"], ch, r["srow"], data.failed("stats")), pw_ - 4)
+            else:
+                pl = detail_kv(ch, rel_detail_pairs(r, data, now, ch), pw_ - 4)
             lim = (len(lb) - 2) if beside else (panel_h - 2)
             pl = pl[:lim]
             while len(pl) < lim:
@@ -2883,7 +2918,17 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
 
 
 # --- Nosniki ---------------------------------------------------------------
-def replica_detail_pairs(r, ch):
+def replica_stats_row(data, name):
+    """Wiersz job-stats repliki: zadanie ma etykiete "<host> replica copy (<nazwa>)",
+    a job-stats trzyma ja bez hosta."""
+    want = u"replica copy (%s)" % name
+    for x in (data.stats or {}).get("jobs", []):
+        if x.get("label") == want:
+            return x
+    return None
+
+
+def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
     pairs = [(u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
              ("Cel", "%s %s   (pula %s)" % (ch.right, r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
@@ -2893,6 +2938,16 @@ def replica_detail_pairs(r, ch):
                  "   historia: %s" % r["history"] if r.get("history") and r["history"] != "all" else "")),
              (u"Nośnik", "%s -- %s" % (st[0], st[2])),
              ("Ostatnio", r.get("last_seen") or u"nigdy nie widziany (brak pliku last-seen bramy)")]
+    # BIEGI REPLIKI (2026-10-08, wlasciciel: "czy widzimy gdzies statystyki zadan
+    # repliki?"). job-stats je liczyl, ale zaden ekran ich nie pokazywal.
+    if stats_failed:
+        pairs.append((u"Ost. bieg", u"? (job-stats nie odpowiedział)"))
+    elif srow:
+        pairs.append((u"Ost. bieg", u"%s   rc=%s   %s s" % (srow.get("last_at") or "?", srow.get("last_rc"), srow.get("last_s"))))
+        pairs.append((u"Biegi", u"%s w oknie statystyk, błędów %s, czas śr./maks. %s/%s s" % (
+            srow.get("runs"), srow.get("failures"), srow.get("avg_s"), srow.get("max_s"))))
+    else:
+        pairs.append((u"Ost. bieg", u"brak w oknie statystyk (zadanie nie biegło albo nośnika nie było)"))
     return pairs
 
 
@@ -2936,7 +2991,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         panel = []
         if reps and 0 <= cursor < len(reps):
             pw_ = (width - max(MIN_WIDTH, int(width * 0.6))) if beside else width
-            pl = detail_kv(ch, replica_detail_pairs(reps[cursor], ch), pw_ - 4)
+            pl = detail_kv(ch, replica_detail_pairs(reps[cursor], ch, replica_stats_row(data, reps[cursor].get("name")),
+                                                    data.failed("stats")), pw_ - 4)
             lim = (len(lb) - 2) if beside else (panel_h - 2)
             pl = pl[:lim]
             while len(pl) < lim:
@@ -4091,6 +4147,12 @@ class UI(object):
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
+            elif self.screen == "zadania" and self.jobrows[c].get("kind") == "replica":
+                # Wiersz repliki: ten sam panel co na F6 (z 'e' = zmiana repliki).
+                jr = self.jobrows[c]
+                self.window, self.scroll = ("panel", {
+                    "kind": "panel", "name": u"replika %s" % jr["name"], "replica": jr["name"],
+                    "pairs": replica_detail_pairs(jr["replica"], self.ch, jr["srow"], self.data.failed("stats"))}), 0
             elif self.screen == "zadania":
                 self.window, self.scroll = ("relacja", self.jobrows[c]), 0
             else:
@@ -4113,7 +4175,8 @@ class UI(object):
             m = monitor_rows(self.data)[c]
             return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
-        return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"), "pairs": replica_detail_pairs(rp, ch),
+        return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"),
+                "pairs": replica_detail_pairs(rp, ch, replica_stats_row(self.data, rp.get("name")), self.data.failed("stats")),
                 "replica": rp.get("name")}
 
 

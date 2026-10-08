@@ -444,7 +444,12 @@ fi
 # Wlasciciel, 2026-09-09: "obok kolumny relacja wstaw kolumne z kierunkiem np.
 # pve9>pve10, lub pve9<>pve10, lub local" -- lewa strona to ZAWSZE ten host.
 # R4-4: Prefiks i Trzyma wchodza od ~100 kolumn (przy 80 nie ma na nie miejsca).
-Z="$(screen zadania "" --width 100)"
+# BEZ fikstury replik (2026-10-08): repliki sa wierszami F2, a replika sejf-a ma
+# nastepny bieg "jutro 02:30" -- kolumna Nastepny rosnie o 6 znakow i przy 100
+# kolumnach Prefiks spada. Tak samo bywa na hoscie, gdy najblizszy bieg zadania
+# dobowego jest jutro; te testy pinuja tresc wierszy relacji przy 100 kolumnach,
+# wiersze replik maja wlasne testy przy NOSNIKACH.
+Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 100 2>&1)"
 if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) -- sort'; then
     ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja, tytul nazywa domyslny widok sortowania"
 else
@@ -1220,6 +1225,30 @@ if has "$NE" 'Brak sekcji [replica:]' && has "$NE" 'NIE TEN DYSK' && has "$NE" '
 else
     bad "nosniki: pusty" "$NE"
 fi
+# REPLIKI NA F2 I ICH BIEGI (2026-10-08): list-jobs replik nie zna, wiec F2 ich nie
+# pokazywal, a job-stats liczyl ich biegi, ktorych zaden ekran nie wyswietlal.
+RST="$(mktemp)"
+"$PY" - "$P10/job-stats.json" "$RST" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d.setdefault("jobs", []).append({"label": "replica copy (sejf-a)", "runs": 4, "failures": 1, "avg_s": 3,
+                                 "max_s": 7, "total_s": 12, "last_s": 2, "last_rc": 1, "last_at": "2026-09-08 02:30"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
+Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
+if hasE "$Z2" 'sejf-a +pve10>bkp +replika ' && hasE "$Z2" 'sejf-b +pve10>rpool +replika .*po włożeniu'; then
+    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', nosnik w kierunku, 'po włożeniu' bez godziny)"
+else
+    bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
+fi
+N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
+if has "$N2" 'Ost. bieg   2026-09-08 02:30   rc=1   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
+    ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc, czas) i biegi/bledy z job-stats"
+else
+    bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Biegi')"
+fi
+rm -f "$RST"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
