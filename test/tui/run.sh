@@ -633,6 +633,13 @@ if hasE "$GR" '^║ sync-test +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ bac
 else
     bad "relacje: symbol synchro na F3" "$GR"
 fi
+# Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
+# strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.
+if has "$GR" 'lustro' && ! has "$GR" 'synchro'; then
+    ok "relacje: relacja trybu sync nazywa sie na ekranie 'lustro', nie 'synchro'"
+else
+    bad "relacje: nazwa lustro na F3" "$GR"
+fi
 
 # ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
 # Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel

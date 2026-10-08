@@ -40,9 +40,9 @@ step_mode() {
     geom
     local b=OFF s=OFF; [ "$MODE" = sync ] && s=ON || b=ON
     wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nSynchro: LUSTRO -- te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 7)" "$W" 2 \
+       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 7)" "$W" 2 \
        backup "Backup   (ten host pobiera ze źródła)" "$b" \
-       sync   "Synchro  (to samo po obu stronach)" "$s" || return 1
+       sync   "Lustro   (to samo po obu stronach)" "$s" || return 1
     [ -n "$WT_OUT" ] && MODE="$WT_OUT"
     return 0
 }
@@ -901,7 +901,7 @@ cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; d
 summary_text() {
     local i a; a="$(account_name)"
     if [ "$MODE" = sync ]; then
-        echo "SYNCHRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
+        echo "LUSTRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
     else
         echo "BACKUP: $(hostname) będzie POBIERAĆ z $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} do $TARGET/$HOST/..."
     fi
@@ -939,7 +939,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
         { echo "Po WYKONAJ uruchomi się DOKŁADNIE:"
           build_argv install; cmd_oneline; echo; build_argv
           echo
-          echo "Cel: ${TARGET:-(synchro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."
+          echo "Cel: ${TARGET:-(lustro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."
           echo "Pomijane migawki: ${EXFAM:-żadne}.  Konto: $(a="$(account_name)"; echo "${a:-root}")."
           echo
           echo "Plan czasownika -- nic jeszcze nie zostało zmienione (rc=$rc):"

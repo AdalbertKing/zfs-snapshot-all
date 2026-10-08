@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b651e4f7b95f7e7b -->
+<!-- status-covers-digest: 614cc4a0b486c818 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **„Synchro” nazywa się w GUI „lustro” (2026-10-08, właściciel: „tak, zmień synchro na lustro w GUI”).**
+  - **Dlaczego:** to nie jest synchronizacja dwukierunkowa. Dane idą w jedną stronę, od
+    dawcy do kolektora, a zmiana na kolektorze nigdy nie wraca do źródła. Od backupu
+    relacja różni się dwiema rzeczami: retencją (kopia trzyma to, co źródło, pobranie
+    z `-M`) i miejscem (ta sama ścieżka co u źródła, bez bazy pod kolektorem).
+  - **Co się zmieniło:** sam tekst na ekranie. Kreator nowej relacji (wybór typu, plan,
+    podsumowanie) i panel F3 („Typ: lustro” oraz dopisek przy celu „ta sama ścieżka -- lustro”).
+    W konfiguracji, rekordzie relacji i CLI tryb nadal nazywa się `sync` (`--mode=sync`),
+    więc istniejące relacje i crontaby się nie zmieniają.
+  - **Lustro wobec P-0:** relacja lustro pobiera bez bazy lokalnej, na tę samą ścieżkę.
+    Dla P-0 to tryb sync: zapis na kopii → odmowa, pusta migawka → odbiór bez `-F`. Tak
+    było też przed P-0.
 
 - **P-0: KOPIA BACKUPU PODĄŻA ZA ŹRÓDŁEM — jedna polityka rozjazdu w obu silnikach (2026-10-08, właściciel: „odmrażam, wariant D3 … gdy mamy migawki z rodziny w celu, a nie mamy ich w źródle uznajemy że są nadmiarowe. Nie pieścimy się z nimi”).**
   - **Było (zmierzone na pve9, pula plikowa):** push (`snapsend.sh`, czyli cała produkcja)

@@ -940,7 +940,12 @@ def ch_arrow(job):
 
 
 def rel_type(peer, dirs, mode=None):
-    """backup (jedna strona), synchro (obie), lokalna, other.
+    """backup (jedna strona), lustro (obie), lokalna, other.
+
+    "lustro", nie "synchro" (wlasciciel 2026-10-08: "zmien synchro na lustro w
+    GUI"): dane ida w JEDNA strone, od dawcy do kolektora; od backupu rozni sie
+    retencja (kopia trzyma to, co zrodlo) i miejscem (ta sama sciezka, bez bazy). W konfiguracji tryb nadal
+    nazywa sie `sync` (--mode=sync); zmienia sie tylko to, co widac na ekranie.
 
     ZAPISANY TRYB WYGRYWA z odczytem linii crona. Relacja synchro ma wszystkie
     swoje linie w jedna strone (kolektor ciagnie do siebie, pod TA SAMA sciezke),
@@ -950,10 +955,10 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return "synchro" if mode == "sync" else mode
+        return "lustro" if mode == "sync" else mode
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
-        return "synchro"
+        return "lustro"
     if "pull" in dirs or "push" in dirs:
         return "backup"
     if "local" in dirs:
@@ -2247,7 +2252,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
     # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
     # przy synchro dopisek w tej samej linii.
-    _sync = u"   (ta sama ścieżka -- synchro)" if rel.get("mode") == "sync" else ""
+    _sync = u"   (ta sama ścieżka -- lustro)" if rel.get("mode") == "sync" else ""
     if rel.get("managed_datasets"):
         pairs.append((u"Cele (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
     else:
