@@ -9750,6 +9750,26 @@ else
     bad "statusjson: mode dla synchro" "$(sj_show | grep gamma | cut -c1-200)"
 fi
 rm -f "$SJ/clients/gamma.conf" 2>/dev/null || true
+# Owner note 6 (2026-10-08): a relationship whose activation did not finish has no
+# section in the config, so its sources come from REQUESTED_DATASETS -- a COMMA list,
+# written by write_client_field as "a\,b". F3 showed it as ONE pair.
+cat > "$SJ/clients/delta.conf" <<'SJEOF'
+CLIENT_NAME=delta
+STATE=endpoint_verified
+PEER_HOST=10.0.0.4
+REQUESTED_DATASETS=hdd/vm\,hdd/ct
+SJEOF
+sj_run --json
+got=$("$PY_OR_PYTHON" -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+print([r["sources"] for r in d["relations"] if r["name"]=="delta"][0])' "$WORK/sj.out" 2>&1 | tr -d '\r')
+if [ "$got" = "['hdd/vm', 'hdd/ct']" ]; then
+    ok "statusjson: a relationship without config sections reports its REQUESTED datasets as separate sources"
+else
+    bad "statusjson: sources from the request" "$got"
+fi
+rm -f "$SJ/clients/delta.conf" 2>/dev/null || true
 sj_run --json
 sj_got="$(cat "$WORK/sj.out")"
 if [ "$sj_got" = "{\"relations\":[$sj_alpha,$sj_beta]}" ]; then
@@ -13538,6 +13558,21 @@ if ! grep -qx notareplica "$RR/ran"; then
     ok "runreplicas: ...a job that is not a replica does not run"
 else
     bad "runreplicas: a non-replica line ran" "$(cat "$RR/ran")"
+fi
+# --name= (owner note 18, 2026-10-08): F7 on F6 runs the SELECTED replica only; an
+# unknown name is an error, not a quiet "nothing to run".
+: > "$RR/ran"
+rr_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block'; }; cmd_run_replicas --config='$RR/c.conf' --name=fx" 2>&1); rr_rc=$?
+if [ "$rr_rc" -eq 0 ] && [ "$(cat "$RR/ran")" = fixed ]; then
+    ok "runreplicas: --name=fx runs that replica and nothing else"
+else
+    bad "runreplicas: --name" "rc=$rr_rc" "$(cat "$RR/ran")" "$rr_out"
+fi
+rr_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block'; }; cmd_run_replicas --config='$RR/c.conf' --name=nope" 2>&1); rr_rc=$?
+if [ "$rr_rc" -ne 0 ] && printf '%s' "$rr_out" | grep -q "no replica 'nope'"; then
+    ok "runreplicas: --name of a replica that does not exist is refused"
+else
+    bad "runreplicas: --name unknown" "rc=$rr_rc" "$rr_out"
 fi
 
 fi   # --- koniec sekcji runreplicas ---

@@ -51,11 +51,15 @@ for p in d.get("profiles", []):
     if not n or "-src-" in n:
         continue
     w = tui.profile_words(p)
-    rows.append((n, "%s  [%s]" % (w["retention"], w["mech"])))
+    rows.append((n, w["retention"], w["mech"]))
 rows.sort(key=lambda r: r[0].lower())
+# Columns of FIXED width (owner note 23, 2026-10-08): name, what it keeps, [kind] -- the
+# "[obecny] " mark is a column of its own in front, so it no longer shifts its row.
+wn = max([len(r[0]) for r in rows] + [1])
+wr = max([len(r[1]) for r in rows] + [1])
 with open(sys.argv[4] + "/prof.tsv", "w", encoding="utf-8", newline="\n") as f:
-    for n, t in rows:
-        f.write("%s\t%s\n" % (n, t))
+    for n, ret, mech in rows:
+        f.write("%s\t%-*s  %-*s  [%s]\n" % (n, wn, n, wr, ret, mech))
 PYEOF
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
@@ -102,6 +106,8 @@ while :; do
             # czasownik sam pyta o instalacje i pokazuje, co zrobi na zrodle.
             clear 2>/dev/null
             "$ZB" edit-config "$NAME"; RC=$?
+            # 3 = zamkniety bez zmian: nic do czytania, wracamy od razu (uwaga 22)
+            [ "$RC" -eq 3 ] && exit 0
             echo "=== edit-config zakończony (rc=$RC). Enter = dalej"
             [ -t 0 ] && read -r _
             exit "$RC" ;;
@@ -148,8 +154,8 @@ while :; do
         items=()
         while IFS=$'\t' read -r n t; do
             [ -n "$n" ] || continue
-            mark=""; [ "$n" = "$CUR_P" ] && mark="[obecny] "
-            items+=("$n" "$(clip_label "$mark$n  $t" $((W - 10)))")
+            mark="         "; [ "$n" = "$CUR_P" ] && mark="[obecny] "
+            items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
         wt --title "Zmień relację $NAME -- 1/2 szablon celu" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item "$PROFILE" \
            --menu "Obecny szablon: ${CUR_P:-<nie zapisany>}\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel)." \
@@ -157,11 +163,11 @@ while :; do
         PROFILE="$WT_OUT"; step=2; continue
     fi
     if [ "$step" -eq 2 ]; then
-        items=(__same__ "taka sama jak w celu (bez asymetrii)")
+        items=(__same__ "         taka sama jak w celu (bez asymetrii)")
         while IFS=$'\t' read -r n t; do
             [ -n "$n" ] || continue
-            mark=""; [ "$n" = "$CUR_S" ] && mark="[obecny] "
-            items+=("$n" "$(clip_label "$mark$n  $t" $((W - 10)))")
+            mark="         "; [ "$n" = "$CUR_S" ] && mark="[obecny] "
+            items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
         wt --title "Zmień relację $NAME -- 2/2 retencja na źródle" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$SRCP" \
            --menu "Obecnie: ${CUR_S:-taka sama jak w celu}\nIle migawek trzymać na ŹRÓDLE. Szablon źródła musi mieć te same rodziny\ni ten sam mechanizm co szablon celu (inaczej czasownik odmówi)." \

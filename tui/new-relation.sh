@@ -266,7 +266,7 @@ except_flow() { # wyjątki dla jednej pozycji; stan obecny wraca jako odznaczone
         items+=("$n" "${T_LABEL[$i]}" "$st"); all+=("$n")
     done
     geom
-    wt --title "$(title 4 " --ok-button "Dalej"$name -- czego NIE kopiować?")" --cancel-button "Wstecz" --notags --separate-output \
+    wt --title "$(title 4 "$name -- czego NIE kopiować?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
        --checklist "Zaznaczone = kopiowane. ODZNACZ spacją to, co ma być pomijane\n(razem z tym, co pod nim). Przyszłych datasetów pominąć się nie da." "$H" "$W" "$LH" \
        "${items[@]}" || return 0
     for n in "${all[@]}"; do
@@ -426,29 +426,64 @@ step_target() {
 import sys, json
 try: d = json.load(sys.stdin)
 except Exception: sys.exit(0)
+# "Przegladaj..." (uwaga 1, 2026-10-08): wszystkie SYSTEMY PLIKOW tego hosta, do osobnego
+# pliku -- zvol nie moze byc celem.
+fs = open(sys.argv[1], "w", encoding="utf-8", newline="\n")
 for x in d.get("datasets", []):
     n = x.get("name", "")
-    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' | tr -d '\r' >"$TMPD/targets.tsv"
+    if n and x.get("type", "filesystem") == "filesystem": fs.write(n + "\n")
+    if n.count("/") == 1 and n.rsplit("/", 1)[1].lower() in ("backups", "backup", "kopie"): print(n)' "$TMPD/fs.all" | tr -d '\r' >"$TMPD/targets.tsv"
     while IFS= read -r t; do
         [ -n "$t" ] || continue
         case " $seen " in *" $t "*) continue ;; esac
         items+=("$t" "$t   -- istnieje na tym hoście, jeszcze nieużywany"); seen="$seen $t"
         [ -n "$first" ] || first="$t"
     done <"$TMPD/targets.tsv"
-    items+=(__other__ "Inna ścieżka…   (wpiszesz dataset na tym hoście)")
+    items+=(__browse__ "Przeglądaj…     (wszystkie datasety tego hosta)")
+    items+=(__other__ "Wpisz ścieżkę…  (dataset na tym hoście, może jeszcze nie istnieć)")
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
     while :; do
         geom
         wt --title "$(title 5 'Dokąd na tym hoście?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${first:-__other__}" \
            --menu "Kopie wylądują pod:  <wybrane>/$HOST/<dataset źródła>\nnp.  ${first:-hdd/backups}/$HOST/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
+        if [ "$WT_OUT" = __browse__ ]; then
+            browse_target && return 0
+            continue
+        fi
         if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
-        wt --title "$(title 5 'Dokąd -- inna ścieżka')" --ok-button "Dalej" --cancel-button "Wstecz" \
+        wt --title "$(title 5 'Dokąd -- wpisz ścieżkę')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>/$HOST/<dataset źródła>" 11 "$W" "$TARGET" || continue
         t="${WT_OUT// /}"
         case "$t" in ''|/*|*/|*[!A-Za-z0-9._:/-]*) wt --title "Zła ścieżka" --msgbox "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu)." 9 "$W"; continue ;; esac
         TARGET="$t"; return 0
     done
+}
+# "Przegladaj..." (uwaga 1): plaska lista systemow plikow tego hosta, wciecie wg glebokosci.
+# Ukryte sa wnetrza ladowisk innych relacji (<cel>/<peer>/...): wybor tam i tak odrzucilby
+# straznik pokrycia kilka krokow dalej. 0 = TARGET ustawiony, 1 = wstecz do listy.
+browse_target() {
+    local items=() n t p hid=0 skip d ind _rn _st
+    [ -s "$TMPD/fs.all" ] || { wt --title "Brak listy" --msgbox "Nie udało się odczytać datasetów tego hosta (list-datasets)." 8 "$W"; return 1; }
+    while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        skip=0
+        while IFS=$'\t' read -r _rn p t _st; do
+            case "$t" in ''|-) continue ;; esac
+            case "$n" in "$t/$p"|"$t/$p"/*) skip=1; break ;; esac
+        done <"$TMPD/rel.tsv"
+        [ "$skip" -eq 1 ] && { hid=$((hid + 1)); continue; }
+        d="${n//[!/]/}"; ind="$(printf '%*s' $((${#d} * 2)) '')"
+        items+=("$n" "$(clip_label "$ind$n" $((W - 10)))")
+    done <"$TMPD/fs.all"
+    [ "${#items[@]}" -gt 0 ] || { wt --title "Brak datasetów" --msgbox "Na tym hoście nie ma datasetu, pod którym mogłyby lądować kopie." 8 "$W"; return 1; }
+    local note=""; [ "$hid" -gt 0 ] && note="\nUkryto $hid kopii innych relacji."
+    geom
+    wt --title "$(title 5 'Dokąd -- przeglądaj')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+       --menu "Datasety tego hosta. Kopie trafią pod:  <wybrany>/$HOST/<dataset źródła>$note" \
+       "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || return 1
+    TARGET="$WT_OUT"
+    return 0
 }
 in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }
 
@@ -908,7 +943,8 @@ summary_text() {
     for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
     echo "Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}."
     echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
-    echo "Pomijane migawki: ${EXFAM:-żadne (kopiowane wszystkie)}"
+    if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
+    else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
     if [ "$FREEZE" -eq 1 ]; then
         if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce)."
@@ -940,7 +976,9 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
           build_argv install; cmd_oneline; echo; build_argv
           echo
           echo "Cel: ${TARGET:-(lustro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."
-          echo "Pomijane migawki: ${EXFAM:-żadne}.  Konto: $(a="$(account_name)"; echo "${a:-root}")."
+          if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
+          else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
+          echo "Konto: $(a="$(account_name)"; echo "${a:-root}")."
           echo
           echo "Plan czasownika -- nic jeszcze nie zostało zmienione (rc=$rc):"
           grep -v -- '--grant-remotely is noted' "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"

@@ -1258,8 +1258,8 @@ fi
 # NOSNIKI
 # ============================================================================
 N="$(screen nosniki)"
-if hasE "$N" '^║ sejf-a +hdd/lab → bkp/sejf-a +30 2 \* \* \* +W SEJFIE +nigdy +║' && hasE "$N" '^║ sejf-b +hdd/lab,hdd/backups → rpool/… +po włożeniu +W SEJFIE'; then
-    ok "nosniki: wiersz = replika, zrodlo -> cel, harmonogram (on-insert po polsku), stan nosnika SLOWEM, ostatnio widziany"
+if hasE "$N" '^║ sejf-a +hdd/lab → bkp/sejf-a +30 2 \* \* \* +W SEJFIE +brak +║' && hasE "$N" '^║ sejf-b +hdd/lab,hdd/backups → rpool/… +po włożeniu +W SEJFIE'; then
+    ok "nosniki: wiersz = replika, zrodlo -> cel, harmonogram (on-insert po polsku), stan nosnika SLOWEM, kiedy ostatnia aktualna kopia (Kopia z)"
 else
     bad "nosniki: wiersze" "$N"
 fi
@@ -1355,11 +1355,29 @@ if grep -Eq "zfs-backup.sh'? remove-replica sejf-b --ask\$" "$XL"; then
 else
     bad "nosniki: Del -> remove-replica" "$(cat "$XL")" "$A"
 fi
-A="$(nact F7)"; nact F7,t >/dev/null
-if has "$A" 'POTWIERDZENIE: Uruchom repliki teraz' && grep -Eq "zfs-backup.sh'? run-replicas\$" "$XL"; then
-    ok "nosniki: F7 pyta i po 't' uruchamia repliki teraz (run-replicas)"
+# Uwaga 17 (2026-10-08): dysk w slocie mowi, czy kopia na nim jest aktualna.
+RSL="$(mktemp)"
+"$PY" - "$P10/replicas.json" "$RSL" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0].update({"present": "available", "last_current": "2026-10-08 20:46"})
+d["replicas"][1].update({"present": "available", "last_current": ""})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+S1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --width 200 --height 50 2>&1)"
+S2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RSL" --screen nosniki --keys down --width 200 --height 50 2>&1)"
+if has "$S1" 'W SLOCIE -- kopia aktualna z 2026-10-08 20:46' && has "$S2" 'W SLOCIE -- brak kopii' && has "$S1" 'Kopia z'; then
+    ok "nosniki: dysk w slocie mowi, czy kopia na nim jest aktualna (z czasem) albo ze kopii brak; kolumna 'Kopia z'"
 else
-    bad "nosniki: F7 -> run-replicas" "$(cat "$XL")" "$A"
+    bad "nosniki: w slocie + kopia" "$(printf '%s\n' "$S1" | grep -E 'SLOCIE|Kopia')" "$(printf '%s\n' "$S2" | grep -E 'SLOCIE')"
+fi
+rm -f "$RSL"
+A="$(nact F7)"
+# Uwaga 18 (2026-10-08): F7 uruchamia ZAZNACZONA replike od razu -- bez okna "t".
+if ! has "$A" 'POTWIERDZENIE' && grep -Eq "zfs-backup.sh'? run-replicas '?--name=sejf-a'?\$" "$XL"; then
+    ok "nosniki: F7 uruchamia od razu replike POD KURSOREM (run-replicas --name=sejf-a), bez pytania"
+else
+    bad "nosniki: F7 -> run-replicas --name" "$(cat "$XL")" "$A"
 fi
 nact e >/dev/null
 if [ ! -s "$XL" ]; then
@@ -2211,7 +2229,8 @@ fi
 # linii tytulowej do nastepnego wywolania (linia zaczynajaca sie od "--").
 NRPLAN="$(awk '/Krok 10\/10: Plan ~ --yes-button ~ WYKONAJ/{f=1; buf=""} f && /^--/ && !/Krok 10\/10: Plan ~ --yes-button ~ WYKONAJ/{f=0} f{buf=buf $0 "\n"} END{printf "%s", buf}' "$NR/wt.log")"
 if has "$NRPLAN" 'Po WYKONAJ uruchomi się DOKŁADNIE' && has "$NRPLAN" '--exclude-family=__replicate_,__migration__,_tmp' \
-   && has "$NRPLAN" 'Pomijane migawki: __replicate_,__migration__,_tmp' && ! has "$NRPLAN" 'grant-remotely is noted'; then
+   && has "$NRPLAN" 'Pomijane migawki z prefiksami: __replicate_, __migration__, _tmp.' \
+   && printf '%s' "$NRPLAN" | grep -q '^Konto: ' && ! has "$NRPLAN" 'grant-remotely is noted'; then
     ok "new-relation: okno planu pokazuje komende po WYKONAJ i decyzje po polsku, bez mylacego 'grant-remotely is noted' (R2-2)"
 else
     bad "new-relation: okno planu (R2-2)" "$(printf '%s' "$NRPLAN" | cut -c1-600)"

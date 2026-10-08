@@ -79,6 +79,10 @@ while :; do
         [ -n "$s" ] || { wt --title "Nic nie zaznaczono" --msgbox "Zaznacz co najmniej jeden dataset." 8 "$W"; continue; }
         SRCS="$s"; step=3 ;;
     3)  # nośnik
+        # Czytane przy KAZDYM wejsciu (uwaga 14, 2026-10-08): dysk podpiety w trakcie kreatora
+        # nie pojawial sie po "Wstecz", bo lista byla zrobiona raz, na starcie.
+        zpool list -H -o name 2>/dev/null >"$TMPD/pools.here"
+        zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
         items=()
         while IFS= read -r p; do
             [ -n "$p" ] || continue
@@ -86,7 +90,7 @@ while :; do
             items+=("$p" "$p  (zaimportowana)")
         done <"$TMPD/pools.here"
         while IFS= read -r p; do [ -n "$p" ] && items+=("$p" "$p  (w slocie, niezaimportowana)"); done <"$TMPD/pools.slot"
-        items+=(__other__ "inna pula (nośnik w sejfie) -- wpiszę nazwę")
+        items+=(__other__ "Wpisz nazwę puli…  (nośnik teraz odłączony)")
         cur="${DST%%/*}"
         wt --title "Replika $NAME -- 3/5 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${cur:-__other__}" \
            --menu "Pula na nośniku. Kopia ląduje pod  <pula>/<baza>/<dataset źródła>." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
