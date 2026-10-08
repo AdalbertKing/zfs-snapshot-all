@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f63c8321fac02c36 -->
+<!-- status-covers-digest: e9f41b43a699a8f9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Kasowanie kopii z nośnika w GUI: Del na F6 (2026-10-08, właściciel: „tak, zrób to po add-source”).**
+  - **Było:** Del na F6 usuwał replikę i zostawiał kopię na nośniku. Kopię dało się skasować
+    tylko z linii poleceń (`purge-replica-copy`).
+  - **Jest:** Del otwiera okna whiptail (`remove-replica NAZWA --ask` → `tui/replica-delete.sh`),
+    jak usuwanie relacji:
+    - pole „SKASUJ KOPIĘ na nośniku … (nieodwracalne)”, domyślnie odznaczone; pojawia się
+      tylko, gdy nośnik jest w maszynie (zaimportowany albo w slocie). Bez nośnika okno mówi
+      to wprost i podaje komendę na później;
+    - plan obu czasowników: co `purge-replica-copy` skasuje (z rozmiarami), potem
+      `remove-replica`;
+    - WYKONAJ: najpierw kasowanie kopii (czyta jeszcze sekcję `[replica:]`), potem usunięcie
+      repliki. Gdy kasowanie kopii nie wyjdzie, replika ZOSTAJE i nic dalej się nie dzieje.
+  - **Testy:** `tui` (Del na F6 prowadzi do `remove-replica NAZWA --ask` dla repliki pod
+    kursorem).
+  - **Na żywo, pve9:** nośnik testowy `k7test` z pliku i replika stała `k7` (`hdd/archive`),
+    jedna kopia, potem GUI przez pty: Del, zaznaczone kasowanie kopii, plan, WYKONAJ,
+    „GOTOWE”. Kopia na nośniku skasowana, sekcja i zadanie repliki zniknęły, `usb1` bez
+    zmian. Nośnik testowy usunięty.
 
 - **Dodanie datasetu do istniejącej relacji: `add-source` (CLI + GUI) i trzy wady przy okazji (2026-10-08, właściciel: „rób 5, potem 4”).**
   - **Przegląd produkcji (5):** pve2, pve1 (28.9), pve0, pve1 (11.11) na `2a2f54d7` (self-update
