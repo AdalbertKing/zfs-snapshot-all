@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e9f41b43a699a8f9 -->
+<!-- status-covers-digest: fc663d12d5dfdae5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Repliki na liście zadań (F2) i ich biegi w GUI (2026-10-08, właściciel: „czy zadania repliki wchodzą do listy zadań? czy widzimy gdzieś statystyki zadań repliki?”).**
+  - **Było:** `list-jobs` czyta tylko sekcje relacji, więc F2 replik nie pokazywał. `job-stats`
+    liczył ich biegi (etykieta `replica copy (<nazwa>)`), ale żaden ekran ich nie wyświetlał;
+    F6 miał tylko stan nośnika i „widziany”.
+  - **Jest (tylko GUI, kontrakt JSON `list-jobs` bez zmian):**
+    - F2: każda replika jest wierszem: zadanie „replika”, kierunek `<host>>pula nośnika`,
+      prefiks, liczba źródeł, harmonogram (`-` dla repliki „po włożeniu”; ten tekst idzie do
+      kolumny Następny), czas ostatni/średni/maks. z `job-stats`. Werdykt „bez monitora”, dopóki
+      replika nie ma progu; ostatni bieg z rc ≠ 0 trafia do powodów. Enter na wierszu otwiera
+      panel repliki (z `e` = zmiana).
+    - Panel repliki (F6 i F2): „Ost. bieg” (kiedy, rc, czas) i „Biegi” (liczba w oknie
+      statystyk, błędy, czas średni/maks.).
+  - **Testy:** `tui` 213/0 (+2: wiersze replik na F2, biegi w panelu). Render F2 przy 100
+    znakach, na którym stoją testy wierszy prune, idzie teraz bez fikstury replik: replika z biegiem „jutro 02:30”
+    poszerza kolumnę Następny i Prefiks spada z ekranu, tak samo jak na hoście, gdy najbliższy
+    bieg zadania dobowego jest jutro.
+  - **Na żywo, pve9 (`usb1`):** wiersz na F2 („replika”, po włożeniu), Enter: panel z ostatnim
+    biegiem 2026-10-07 19:57 rc=0 2 s i 5 biegami bez błędów; to samo w panelu F6.
 
 - **Kasowanie kopii z nośnika w GUI: Del na F6 (2026-10-08, właściciel: „tak, zrób to po add-source”).**
   - **Było:** Del na F6 usuwał replikę i zostawiał kopię na nośniku. Kopię dało się skasować
