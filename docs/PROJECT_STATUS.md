@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 614cc4a0b486c818 -->
+<!-- status-covers-digest: 354c93234b8d8e1b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -30,9 +30,19 @@
     podsumowanie) i panel F3 („Typ: lustro” oraz dopisek przy celu „ta sama ścieżka -- lustro”).
     W konfiguracji, rekordzie relacji i CLI tryb nadal nazywa się `sync` (`--mode=sync`),
     więc istniejące relacje i crontaby się nie zmieniają.
-  - **Lustro wobec P-0:** relacja lustro pobiera bez bazy lokalnej, na tę samą ścieżkę.
-    Dla P-0 to tryb sync: zapis na kopii → odmowa, pusta migawka → odbiór bez `-F`. Tak
-    było też przed P-0.
+  - **Lustro wobec P-0 (właściciel: „tak, orz gdy gość nie działa”):** lustro też podąża
+    za źródłem: zapis i migawki na kopii po wspólnej migawce są wyrzucane przez `recv -F`
+    z linią log 0 „Mirror copy (no running guest on that path) … discarding …”. Odmowa
+    zostaje, gdy ta ścieżka jest dyskiem VM/kontenera DZIAŁAJĄCEGO na tym węźle albo gdy
+    konto nie może odpytać stanu gościa (`guest_disk_is_live`, sprawdzane przed rozjazdem).
+    Gość skonfigurowany na innym węźle liczy się jako niedziałający; lokalnego dysku ZFS
+    i tak może używać tylko gość z tego węzła. Dysk gościa
+    rozpoznawany po nazwie (`vm-N-disk-M`, `subvol-N-disk-M`).
+    - **Dowód na żywo, pve10 ← pve9, `pve9-synchro`, `hdd/lab/ct-201/data`:** 256 KiB
+      zapisane na kopii. Silnik z main odmówił (rc=1), gałąź wyrzuciła zapis
+      („discarding 278528 byte(s) written after @p0src”), migawka dojechała, plik zniknął.
+      Pusta ręczna migawka na kopii znikała już wcześniej: odbiór bez `-F`, potem sprzątanie
+      `-M`.
 
 - **P-0: KOPIA BACKUPU PODĄŻA ZA ŹRÓDŁEM — jedna polityka rozjazdu w obu silnikach (2026-10-08, właściciel: „odmrażam, wariant D3 … gdy mamy migawki z rodziny w celu, a nie mamy ich w źródle uznajemy że są nadmiarowe. Nie pieścimy się z nimi”).**
   - **Było (zmierzone na pve9, pula plikowa):** push (`snapsend.sh`, czyli cała produkcja)
@@ -48,11 +58,10 @@
     zapisanych bajtach. Kopia jest doprowadzana do źródła przez `recv -F`, a linia log 0
     mówi CO wyrzucono: migawki z nazwy albo liczbę bajtów
     (`Backup copy '…' follows its source -- discarding …`).
-  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** pobranie bez bazy, na tę
-    samą ścieżkę -- **w tym relacja synchro/lustro z GUI** (linia `snapget … -M
-    user@host:ścieżka`, sprawdzone w crontabie pve10; dla niej P-0 nie zmienia niczego,
-    pull zawsze tak odmawiał) -- oraz `-t` (ścieżka dokładna, kierunek
-    odtwarzania). Zapis na takim celu → odmowa w obu silnikach. Na takim celu sama pusta
+  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** pobranie bez bazy i bez
+    `-M` (tryb sync silnika), push `user@host` bez bazy oraz `-t` (ścieżka dokładna,
+    kierunek odtwarzania). Lustro z GUI (`snapget … -M user@host:ścieżka`) orze, gdy
+    ścieżka nie jest dyskiem działającego gościa (punkt o lustrze wyżej). Zapis na takim celu → odmowa w obu silnikach. Na takim celu sama pusta
     migawka → odbiór bez `-F`, migawka zostaje (jak zawsze w pull). W każdym trybie oba
     silniki odmawiają, gdy nie da się ustalić rozjazdu (zawiodło zapytanie `written@`).
     Brak wspólnej migawki (przypadek E) → odmowa w obu silnikach tymi samymi słowami

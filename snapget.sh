@@ -236,7 +236,8 @@ set -o pipefail
 #                    newer target-only snapshot is divergence, and the PULL
 #                    itself discards it with -F, saying so at level 0, when
 #                    the path is no running guest's disk -- P-0, owner
-#                    2026-10-08: "tak, orz gdy gosc nie dziala"), never a Proxmox-reserved
+#                    2026-10-08: "tak, orz gdy gość nie działa"), never a
+#                    Proxmox-reserved
 #                    family, and nothing at all when the source list cannot be
 #                    read or comes back empty. Per dataset, so with -R every
 #                    expanded child mirrors its own source. Not with -r.
@@ -1747,7 +1748,7 @@ process_dataset() {
                 # A mirror reaches here only when guest_disk_is_live (above) let
                 # it through: the path is no running guest's disk.
                 local p0_what="Backup copy"
-                [ "$MIRROR" -eq 1 ] && [ -z "$LOCAL_BASE" ] && p0_what="Mirror copy (no running guest on that path)"
+                [ "$MIRROR" -eq 1 ] && p0_what="Mirror copy (no running guest on that path)"
                 log 0 "$p0_what '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$written" "${tgt_snaps[@]}") (zfs recv -F)"
             elif [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
@@ -2666,10 +2667,12 @@ fi
 BACKUP_LANDING=0
 [ -n "$LOCAL_BASE" ] && [ "$TARGET_EXACT" -eq 0 ] && BACKUP_LANDING=1
 # The MIRROR (-M, the GUI's "lustro") follows its source the same way, at the
-# source's own path (owner, 2026-10-08: "tak, orz gdy gosc nie dziala"). Safe to
+# source's own path (owner, 2026-10-08: "tak, orz gdy gość nie działa"). Safe to
 # do here because guest_disk_is_live runs first in process_dataset and refuses
-# when that path is the disk of a RUNNING guest (or when it cannot tell), so a
-# copy reaching the divergence check is not a live system. Not with -t.
+# when that path is the disk of a guest RUNNING on this node, or when this
+# account cannot query the guest's state. A guest configured on another node
+# counts as not running here -- correct for a node-local ZFS disk, which only a
+# guest on this node can use. Not with -t.
 [ "$MIRROR" -eq 1 ] && [ "$TARGET_EXACT" -eq 0 ] && BACKUP_LANDING=1
 declare -a FAILED_DATASETS=()
 ADOPT_SKIPPED=0

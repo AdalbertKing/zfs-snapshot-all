@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
-<!-- frozen: snapget.sh 100755 e59cb2a2ebc707bb17d78a4a9f14d6e4caf51189 -->
+<!-- frozen: snapget.sh 100755 c460ff118c58b3eb52f36013d9f9fd9ae07efd89 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 77eadee355d879ffb2faad2786f5ff6e8927f7f0 -->
@@ -948,9 +948,12 @@ Owner-authorized refreezes:
   no local base, so #480 treated it as sync: a write on the copy was refused,
   with -f as the remedy. Now BACKUP_LANDING is also set for -M without -t, and
   the same plough-with-log applies ("Mirror copy (no running guest on that
-  path) '...' follows its source -- discarding ..."). Safe because
-  guest_disk_is_live already runs first in process_dataset and refuses when the
-  path is the disk of a RUNNING guest, or when the account cannot tell.
+  path) '...' follows its source -- discarding ...", for every -M pull, with a
+  base or without). Safe because guest_disk_is_live already runs first in
+  process_dataset and refuses when the path is the disk of a guest RUNNING on
+  this node, or when the account cannot query the guest's state. A guest whose
+  config is on another node counts as not running -- correct for a node-local
+  ZFS disk, which only a guest on this node can use.
   Limit: a guest disk is recognised by its leaf name (vm-N-disk-M,
   subvol-N-disk-M); a dataset named otherwise is never treated as a guest.
   -t and a bare sync pull without -M still refuse.
