@@ -633,6 +633,57 @@ if hasE "$GR" '^║ sync-test +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ bac
 else
     bad "relacje: symbol synchro na F3" "$GR"
 fi
+# BLAD BIEGU I WYRZUCENIA (2026-10-08, wlasciciel "rob 1 i 2"): monitor patrzy
+# tylko na wiek kopii -- na pve10 lustro, ktore odmowilo pobrania (dzialajacy
+# gosc 901), bylo "aktualne" na F2 i F3. Ostatni bieg z rc != 0 (poza 75 =
+# pominiety przez blokade) daje "błąd biegu"; to, co bieg wyrzucil (P-0), panel.
+GEJ="$(mktemp)"; GES="$(mktemp)"
+"$PY" - "$GJ" "$GEJ" "$GES" <<'PYEOF'
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8"))
+# Real shape (pve10, 2026-10-08): every job of a block carries the WHOLE block's
+# lines, and a pull line quotes its SOURCE (the job's other_end), not the scope.
+# Matched on the scope alone, every job took the first line's label -- the
+# failure of 'b' was then read from 'a' and the row stayed "aktualne".
+block = {}
+for x in j["jobs"]:
+    leaf = x["scope"].rsplit("/", 1)[-1]
+    block.setdefault(x["label"], []).append('%s /x/zfs-job.sh "pve20 hourly backup (%s-%s)" -- /x/snapget.sh -m "automated_hourly_" -M "%s" ""'
+                                            % (x["schedule"], x["label"], leaf, x["other_end"]))
+for x in j["jobs"]:
+    x["cron_lines"] = list(block[x["label"]])
+json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
+def row(leaf, rc):
+    return {"label": "hourly backup (sync-test-%s)" % leaf, "runs": 5, "failures": 1 if rc else 0, "avg_s": 3, "max_s": 7,
+            "total_s": 15, "last_s": 2, "last_rc": rc, "last_at": "2026-09-08 13:48"}
+json.dump({"window_days": 7, "jobs": [row("a", 0), row("b", 1), row("c", 0), row("d", 75)],
+           "events": [{"label": "hourly backup (sync-test-b)", "discard_at": "", "discard": "", "error_at": "2026-09-08 13:48",
+                       "error": "Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING."},
+                      {"label": "hourly backup (sync-test-a)", "discard_at": "2026-09-08 12:16",
+                       "discard": "hdd/lab/a: 1 snapshot(s) after @s1 that the source no longer has: p0manual",
+                       "error_at": "", "error": ""}],
+           "datasets": [], "volume": []}, open(sys.argv[3], "w", encoding="utf-8"))
+PYEOF
+GE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen zadania --width 200 --height 50 2>&1)"
+if [ "$(printf '%s\n' "$GE" | grep -cE '^║ sync-test .*błąd biegu')" = 1 ] && ! hasE "$GE" '^║ backup-test .*błąd biegu'; then
+    ok "zadania: wiersz z datasetem, ktorego ostatni bieg sie nie udal (b, rc=1) to 'błąd biegu'; rc=75 (d, blokada) nie; inna relacja tez nie"
+else
+    bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test')"
+fi
+if hasE "$GE" 'błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
+   && has "$GE" 'wyrzucono   2026-09-08 12:16  hdd/lab/a: 1 snapshot(s)' \
+   && has "$GE" 'w 3 zadaniach, błędów 1,'; then
+    ok "zadania: panel wiersza mowi, ktory dataset i dlaczego (blad z dziennika) oraz co bieg wyrzucil z kopii"
+else
+    bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'błąd|wyrzuc')"
+fi
+GER="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 2>&1)"
+if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-test .*błąd biegu'; then
+    ok "relacje: relacja z nieudanym ostatnim biegiem jest na F3 'błąd biegu', nie 'aktualne'"
+else
+    bad "relacje: błąd biegu na F3" "$(printf '%s\n' "$GER" | grep -E '^║ (sync|backup)-test')"
+fi
+rm -f "$GEJ" "$GES"
 # Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
 # strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.
 if has "$GR" 'lustro' && ! has "$GR" 'synchro'; then

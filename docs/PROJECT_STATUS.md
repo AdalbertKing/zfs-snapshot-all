@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 354c93234b8d8e1b -->
+<!-- status-covers-digest: aaae02ef5aac8e5d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,48 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI pokazuje błąd biegu i to, co P-0 wyrzucił; `add-source` kopiuje każde nowe źródło (2026-10-08, właściciel: „rób 1 i 2”, po labie P-0 na pve10).**
+  - **Było (zmierzone w labie):**
+    - lustro odmówiło pobrania, bo na kopii działał kontener 901, a F2 i F3 mówiły
+      „aktualne”, bo monitor patrzy tylko na wiek kopii (próg 3 h);
+    - to, co P-0 wyrzucał z kopii, było tylko w `cron.log`;
+    - `add-source hdd/lab/ct-201/p0cli` objął też rodzeństwo `p0gui`, ale skopiował tylko
+      `p0cli`, więc do następnego biegu crona monitor relacji zgłaszał „does not exist”
+      i co 15 minut kolejkował alert „monitor BROKEN”.
+  - **Znaleziona po drodze starsza wada GUI:** zadanie było łączone z linią crona po zakresie
+    w cudzysłowie, a linia pobrania cytuje ŹRÓDŁO (`konto@host:dataset`). Każde zadanie
+    lustra dostawało więc etykietę pierwszej linii bloku: wszystkie 12 datasetów
+    `pve9-synchro` pokazywały statystyki `ct-201`. Teraz dopasowanie idzie także po drugim
+    końcu (`other_end`).
+  - **Jest:**
+    - `job-stats --json` ma tablicę `events`: dla każdej etykiety zadania ostatnie
+      „discarding …” (czas końca tego biegu i co wyrzucono) oraz błąd najnowszego biegu:
+      pierwsza linia z odmową lub błędem, a gdy takiej nie ma, ostatnia linia silnika.
+      Linie należą do zadania, jeśli stoją w logu przed jego `ZFS-JOB END`;
+    - GUI ma nowy werdykt **„błąd biegu”** (najgorszy): na F2 dla zadania, którego najnowszy
+      bieg skończył się rc≠0 (75, czyli pominięcie przez blokadę, to nie błąd), i na F3 dla
+      aktywnej relacji, której zadanie transferu ma taki bieg (porządki nie eskalują);
+    - panel F2 pokazuje „błąd” (kiedy, dataset, rc, powód) dla każdego datasetu wiersza
+      i do 6 najnowszych „wyrzucono” (kiedy, co); linia „biegi” wiersza zbiorczego sumuje
+      wszystkie jego zadania;
+    - `add-source` robi pierwszą kopię podanego datasetu i każdego innego źródła, które
+      dostało linię kopii dopiero przy tej aktywacji, i mówi, które przyszło „z nim”;
+    - o tym, czy pierwsza kopia się udała, przesądza `END … rc=` w logu zadania, bo
+      `zfs-job.sh` zawsze kończy się 0. Dotąd `add-source` pisał „done” także po porażce.
+  - **Dowód na żywo, pve10 (gałąź na checkoucie roota na czas testu, potem z powrotem na main):**
+    - kontener 901 działa, bieg lustra odmawia → F2 i F3 „błąd biegu”, panel: „błąd …
+      rc=1 Refusing … guest 901 … RUNNING”, „biegi 1106 … w 12 zadaniach, błędów 12,
+      ostatni 14:11 rc=1”;
+    - kontener zatrzymany → bieg orze → wiersz znów „aktualne”, na górze „wyrzucono 14:14 …
+      1051136 byte(s) written after …”;
+    - `add-source pve9-synchro hdd/lab/ct-201/p0s1` → „'p0s2' came into 'pve9-synchro' with
+      it”, pierwsza kopia obu, monitor relacji rc=0.
+  - **Testy:**
+    - `test/tui` 3 nowe asercje na liniach w prawdziwym kształcie (cały blok w każdym
+      zadaniu, cytowany drugi koniec). Na main i na commicie bez poprawki etykiet: 3 FAIL;
+    - `test/zfsbackup --section jobstats` (events; na main brak `events`) i
+      `--section addsource` (wybór źródeł relacji; pierwsza kopia oceniana po END rc).
 
 - **„Synchro” nazywa się w GUI „lustro” (2026-10-08, właściciel: „tak, zmień synchro na lustro w GUI”).**
   - **Dlaczego:** to nie jest synchronizacja dwukierunkowa. Dane idą w jedną stronę, od
