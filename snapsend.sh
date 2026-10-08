@@ -1773,14 +1773,20 @@ process_dataset() {
         # written@ alone misses it) or bytes written after it.
         local p0_ahead=""
         [ -n "$recv_base" ] && p0_ahead=$(snaps_after "$recv_base" "${tgt_snaps[@]}")
-        if [ "${BACKUP_LANDING:-0}" -eq 1 ] && { [ -n "$p0_ahead" ] || { [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; }; }; then
-            log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}") (zfs recv -F)"
-        elif [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; then
-            log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t) and differs from the common snapshot -- $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}"). A forced receive could roll back a live system there; look at it, and resolve it by hand."
+        # The order and the refusals are snapget.sh's, so the two engines give
+        # the same answer whichever side runs the receive.
+        if [ -z "$recv_base" ]; then
+            log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
             abort_held_snapshot "$snapshot" "$tgt_dataset"
             return 1
-        elif [ "${BACKUP_LANDING:-0}" -ne 1 ] && { [ -z "$recv_base" ] || [ -z "$p0_written" ]; }; then
-            log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t), and how far it has moved from the common snapshot could not be determined -- not forcing a receive onto it."
+        elif [ "${BACKUP_LANDING:-0}" -eq 1 ] && { [ -n "$p0_ahead" ] || { [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; }; }; then
+            log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}") (zfs recv -F)"
+        elif [ -z "$p0_written" ]; then
+            log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
+            abort_held_snapshot "$snapshot" "$tgt_dataset"
+            return 1
+        elif [ "$p0_written" != "0" ]; then
+            log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t) and differs from the common snapshot -- $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}"). A forced receive could roll back a live system there; look at it, and resolve it by hand."
             abort_held_snapshot "$snapshot" "$tgt_dataset"
             return 1
         elif [ "${BACKUP_LANDING:-0}" -ne 1 ] && [ -n "$p0_ahead" ]; then

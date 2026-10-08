@@ -1428,14 +1428,14 @@ check "P D: pull the same" "auto_1 auto_3" "$(snaps_of "$PLP/$POOL/pr")"
 check "P D: push names the rolled-away snapshot" "yes" "$(said_s 'after @auto_1 that the source no longer has: auto_2')"
 check "P D: pull names it" "yes" "$(said_g 'after @auto_1 that the source no longer has: auto_2')"
 
-# P9. Not a backup landing (-t, an exact path -- the restore direction): the
+# P9-P10. Not a backup landing (-t, an exact path -- the restore direction): the
 # same surplus is refused by both, and the copy is left as it was.
 zfs create -p "$POOL/px" || exit 1
 zfs snapshot "$POOL/px@auto_1"
 run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC
 run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC
 check "P -t first: both landed" "0 0" "$RC_S $RC_G"
-# P10 first: an EMPTY snapshot on the exact path adds no bytes. Both receive
+# P10: an EMPTY snapshot on the exact path adds no bytes. Both receive
 # without -F and keep it (snapget always did; push now matches).
 zfs snapshot "$PBK/xs@manual"
 zfs snapshot "$PLP/xg@manual"

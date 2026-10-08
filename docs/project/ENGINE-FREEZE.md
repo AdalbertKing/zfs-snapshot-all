@@ -1,6 +1,6 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 8a2a29c90aefa438f082dbc438cb73049200be8e -->
+<!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
 <!-- frozen: snapget.sh 100755 24d6fbe774b78de1d1298c1c22c1d690bbeb2ae9 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
@@ -923,15 +923,21 @@ Owner-authorized refreezes:
   common snapshot is discarded by -F, and a level-0 line says what: the
   snapshots by name, or the bytes written (`divergence_summary`, new in the
   lib). Not a backup landing (bare user@host sync to the same path, or -t):
-  refused, as snapget always did; snapsend now refuses too, and also when it
-  cannot determine the divergence. No common snapshot at all (case E) is
-  unchanged: ZFS itself refuses a full stream into a target with snapshots.
+  bytes written after the common snapshot are refused, as snapget always did,
+  and snapsend now refuses them too; snapshots alone (nothing written) are
+  received WITHOUT -F and kept, in both. In every mode both engines refuse when
+  the divergence cannot be determined (written@ query failed) and when the
+  common snapshot cannot be named on the target, in snapget's words. No common
+  snapshot at all (case E): the outcome is the refusal it always was (ZFS
+  refuses a full stream into a target with snapshots), but snapsend now says so
+  itself, before sending, in snapget's words.
   Not ported: snapget's guest_disk_is_live -- it reads guest state on the LOCAL
   node and push's target is remote. snapsend checks the top dataset only (with
   -r the stream's own -F governs the children), and a bookmark-anchored
   incremental is not inspected.
   twin: process_dataset's reason column changes from port-by:2026-10-19 to
-  direction (the remaining difference is which side is remote).
+  direction: which side is remote, plus snapget's guest_disk_is_live, which
+  has no push twin (above).
 
 ## How it is enforced
 
