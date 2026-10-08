@@ -791,6 +791,21 @@ if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && grep -q '^snap
 else
     bad "L8p: --prefix - records the medium" "$(cat "$SYNCFILE" 2>/dev/null)" "$(ls "$STATE")"
 fi
+# L8q. ...but a passive replica NEVER takes the no-work fast path. With the record
+#      just written (the medium proved current for the root's newest snapshot) and
+#      every source quiet, an own-family replica skips (L1's case); a passive one
+#      must import and run -- its children's new snapshots are received ones, which
+#      the quiet test cannot see. Control: the same state with --prefix replica_ skips.
+POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc_own=$?
+POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"; rm -f "$STATE/rep.imported-by-us"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix -)"; rc_pas=$?
+if [ "$rc_own" = 1 ] && [ "$rc_pas" = 0 ] && grep -qx rotpool "$IMPORTED_LOG"; then
+    ok "L8q: a passive replica (--prefix -) never skips as 'already current' -- it imports and runs; control: --prefix replica_ skips"
+else
+    bad "L8q: passive fast path" "own rc=$rc_own (want 1), passive rc=$rc_pas (want 0)" "imported: $(cat "$IMPORTED_LOG")" "$out"
+fi
+POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 
 # ---------------------------------------------------------------------------

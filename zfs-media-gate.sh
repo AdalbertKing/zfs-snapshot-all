@@ -453,7 +453,16 @@ attach)
     # The job copies all of them in one window, so one source with work to do
     # is reason enough to open it -- and one source this medium is behind on is
     # reason enough not to skip, however current the others are.
-    if [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
+    # NOT FOR A PASSIVE REPLICA (--prefix -). "Quiet" below means: nothing written
+    # since the newest snapshot of the replica's OWN family -- which every run of
+    # an own-family replica stamps on every dataset of the tree. A passive replica
+    # stamps nothing; the newest snapshot on a child is the one its relationship
+    # just RECEIVED, so written@ is 0 there by construction and the tree always
+    # looks quiet, while the record proves only the root's newest snapshot.
+    # Measured on pve9b, 2026-10-08 23:03 UTC: usb1 (hdd/backups, passive) was
+    # skipped as "already current" and copied nothing new. A passive replica
+    # therefore always runs; the engine itself sends only what is missing.
+    if [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
         _work=no
         for _src in "${SOURCES[@]}"; do
             if ! zfs list -H -o name "$_src" >/dev/null 2>&1; then _work=unknown; break; fi

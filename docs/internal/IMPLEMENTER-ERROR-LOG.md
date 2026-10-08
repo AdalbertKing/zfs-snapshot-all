@@ -1900,6 +1900,31 @@ exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
 
+### E76 — a passive replica skipped as "already current" and copied nothing (2026-10-08, R12)
+
+**Genesis.** PR #488 (paczka C1, passive replica) taught the media gate `--prefix -`
+(any snapshot) by widening every `[ -n "$PREFIX" ]` to `has_family`, including the
+no-work FAST PATH in `attach`. Tested: the record and the current-marker advance with
+`--prefix -` (L8p). Live on pve9b the first passive run of usb1 (hdd/backups,
+recursive) ended in 0 seconds -- the gate skipped (exit 1, which the job bracket
+reports as rc=0), nothing imported: "quiet" there means nothing
+written since the newest snapshot of the replica's OWN family -- which an own-family
+run stamps on every dataset of the tree. A passive run stamps nothing; a child's
+newest snapshot is the one its relationship just received, so written@ is 0 by
+construction, and the record proves only the root's snapshot. The tree always looked
+quiet and current.
+
+**Cause.** R12: L8p proved the shape it ran (detach records with any family) and the
+report treated it as "the gate handles passive". The fast path's premise -- the family
+is ours, so its newest snapshot marks our last run -- was never re-read when the
+family stopped being ours.
+
+**Rule (R12, unchanged).** When a value changes MEANING (here: "the family" from "ours"
+to "anyone's"), every branch that reads it is a shape to prove, not only the one the
+change was written for. Fixed by keeping the fast path for an own family only (L8q,
+with the own-family skip as its control); caught by the live run before any
+production host used it.
+
 ### E75 — committed and pushed after the gate said STALE (2026-10-08, R4)
 
 **Genesis.** PR #485 (edit-config), second commit. The command was
@@ -1949,6 +1974,11 @@ heredoc because it was "only two lines".
 tool or a script file written with Write -- never a heredoc, whatever its size.
 The assertion is why this cost one retry and not a corrupted file: keep
 `assert s.count(old) == 1` in every patch script.
+
+**Repeated 2026-10-08/09** (paczki B and C1): three more Python patches typed into a
+`python - <<'EOF'` heredoc lost their backslashes (`\t`, `\r\n`, `\$`) and failed their
+own asserts or wrote a broken script. Each was redone through the Write tool. The rule
+is known; the shortcut still gets reached for when the patch "looks small".
 
 ### E72 — a delegated sync account could destroy its neighbours (found 2026-10-06, R12)
 
