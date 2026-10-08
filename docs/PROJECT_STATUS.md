@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 10e9da833d0392ff -->
+<!-- status-covers-digest: 882bc5f90187acb1 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,30 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **K1: retencja źródła w kreatorze także dla szablonów wiekowych `-age` (2026-10-07, właściciel: „rób K1”).**
+  - **Było:** okno „Jak długo trzymać w źródle” (krok 9) brało tylko szczeble z licznikiem
+    sztuk (`keep`). Szablony `-age` mają `retain` (`-h24`, `-d7`…), więc dla nich okno mówiło
+    „nie ma szczebli z liczbą do zmiany” i asymetrii nie dało się ustawić.
+  - **Jest:** lista szczebli dla okna bierze też szczeble wieku, z ich jednostką. Okno pokazuje
+    „cel 24 godz. -> źródło 12 godz.” i pyta o liczbę w tej jednostce. Szablon źródła powstaje
+    jak dotąd z szablonu celu (`save-profile --from=<cel> --as=<nazwa> --force`, `--drop-tier`
+    dla zera), a zmienione szczeble dostają `--tier=X --retain=-<jednostka><liczba>` zamiast
+    `--keep`. Rodziny i tryb GFS się nie zmieniają, więc straż rodzin
+    (`assert_source_profile_families`, porównuje wzorzec i tryb gfs) go przyjmuje.
+    Zmiana tylko w kreatorze; `save-profile` już przyjmował każde pole szczebla.
+  - **Testy:** `tui` 211/0 (+1: `d7h24-age`, godzinowe 24 -> 12 i dobowe 7 -> 3; okno pokazuje
+    jednostki, zapis `--retain=-h12` i `--retain=-d3`, żadnego `--keep`).
+  - **Na żywo, pve11 ← pve10 `hdd/archive` (relacja testowa `k1test`):**
+    - kreator przez pty: okno źródła z jednostkami, zmiana liczb, plan z
+      `--source-profile=d7h24-age-src-H12D3`;
+    - instalacja tą komendą: prune źródła `-h12` i `-d3`, prune celu `-d7`; wszystkie zadania
+      relacji rc=0;
+    - `delete-relation k1test --yes` rc=0. K6 zadziałał w prawdziwym usuwaniu: „still has
+      processes … ending them before userdel”, konto usunięte za pierwszym razem.
+
+    Kopia testowa, szablony testowe i kopia checkoutu usunięte; na pve11 zostaje zaufany
+    klucz roota do pve10, jak przy wcześniejszych kluczach labu.
 
 - **K6: `deploy.sh --leave` nie pada już na `userdel` (2026-10-07, właściciel: „rób K6”).**
   - **Było (kampania labowa):** `userdel -r` przerywał z „user … is currently used by process

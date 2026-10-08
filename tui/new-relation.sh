@@ -472,11 +472,19 @@ def short_cadence(p):
 rows = []
 # Szczeble retencji do okna "Jak długo trzymać w źródle" (uwaga 19): profil, szczebel,
 # rodzina, ile trzyma. Tylko szczeble z keep -- tworzące (send_schedule bez keep) nie.
+# K1 (2026-10-07): także szczeble WIEKU (retain = -h24, -d7 ...): okno znało tylko keep
+# i dla szablonów -age mówiło "nie ma szczebli z liczbą do zmiany". 5. kolumna = tryb:
+# "keep" albo "retain:<litera jednostki>".
+import re
 with open(sys.argv[1] + ".tiers", "w", encoding="utf-8", newline="\n") as tf:   # newline: na Windowsie tryb tekstowy pisze CRLF
     for p in d.get("profiles", []):
         for t in p.get("tiers", []):
             if t.get("keep"):
-                tf.write("%s\t%s\t%s\t%s\n" % (p.get("name", "-"), t.get("name", "-"), t.get("pattern") or "-", t["keep"]))
+                tf.write("%s\t%s\t%s\t%s\tkeep\n" % (p.get("name", "-"), t.get("name", "-"), t.get("pattern") or "-", t["keep"]))
+            elif t.get("retain"):
+                m = re.match(r"^-([hdwmy])([0-9]+)$", t["retain"])
+                if m:
+                    tf.write("%s\t%s\t%s\t%s\tretain:%s\n" % (p.get("name", "-"), t.get("name", "-"), t.get("pattern") or "-", m.group(2), m.group(1)))
 for p in d.get("profiles", []):
     if "-src-" in (p.get("name") or ""):
         continue    # profil POCHODNY retencji źródła -- nie jest szablonem do wyboru w kroku 6
@@ -748,13 +756,16 @@ tier_word() {   # <nazwa szczebla> -> słowo
     esac
 }
 tier_letter() { case "$1" in *hourly) echo H ;; *daily) echo D ;; *weekly) echo W ;; *monthly) echo M ;; *yearly|*annual) echo Y ;; *) echo X ;; esac; }
+age_unit() {   # <litera jednostki retain> -> słowo
+    case "$1" in h) echo "godz." ;; d) echo "dni" ;; w) echo "tyg." ;; m) echo "mies." ;; y) echo "lat" ;; *) echo "$1" ;; esac
+}
 source_retention_editor() {
-    local -a tn=() tp=() tk=() sk=()
-    local t p k i n items v ok name out
-    while IFS=$'\t' read -r n t p k; do
+    local -a tn=() tp=() tk=() sk=() tm=()
+    local t p k m i n items v ok name out u q
+    while IFS=$'\t' read -r n t p k m; do
         [ "$n" = "$PROFILE" ] || continue
-        k="${k%$'\r'}"
-        tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k")
+        k="${k%$'\r'}"; m="${m%$'\r'}"
+        tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k"); tm+=("${m:-keep}")
     done <"$TMPD/prof.json.tiers"
     [ "${#tn[@]}" -gt 0 ] || { wt --title "Retencja źródła" --msgbox "Szablon $PROFILE nie ma szczebli z liczbą do zmiany." 8 "$W"; return 1; }
     # poprzednie liczby tego samego szablonu (powrót do okna)
@@ -762,7 +773,9 @@ source_retention_editor() {
     while :; do
         items=()
         for i in "${!tn[@]}"; do
-            items+=("$i" "$(printf '%-12s cel %-4s -> źródło %s' "$(tier_word "${tn[$i]}")" "${tk[$i]}" "$([ "${sk[$i]}" = 0 ] && echo 'brak' || echo "${sk[$i]}")")")
+            # Licznik sztuk: gołe liczby. Wiek: liczba z jednostką (K1).
+            u=""; case "${tm[$i]}" in retain:*) u=" $(age_unit "${tm[$i]#retain:}")" ;; esac
+            items+=("$i" "$(printf '%-12s cel %-10s -> źródło %s' "$(tier_word "${tn[$i]}")" "${tk[$i]}$u" "$([ "${sk[$i]}" = 0 ] && echo 'brak' || echo "${sk[$i]}$u")")")
         done
         items+=(ok "Gotowe")
         geom
@@ -771,8 +784,13 @@ source_retention_editor() {
            "${items[@]}" || return 1
         if [ "$WT_OUT" != ok ]; then
             i="$WT_OUT"
+            case "${tm[$i]}" in
+                retain:*) u="$(age_unit "${tm[$i]#retain:}")"
+                          q="Jak długo trzymać $(tier_word "${tn[$i]}") na $HOST, w: $u (tutaj: ${tk[$i]} $u; 0 = bez tego szczebla):" ;;
+                *)        q="Ile $(tier_word "${tn[$i]}") trzymać na $HOST (tutaj: ${tk[$i]}; 0 = bez tego szczebla):" ;;
+            esac
             wt --title "$(tier_word "${tn[$i]}") u źródła" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "Ile $(tier_word "${tn[$i]}") trzymać na $HOST (tutaj: ${tk[$i]}; 0 = bez tego szczebla):" 9 "$W" "${sk[$i]}" || continue
+               --inputbox "$q" 9 "$W" "${sk[$i]}" || continue
             v="${WT_OUT// /}"
             case "$v" in ''|*[!0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą, 0 albo więcej." 8 "$W"; continue ;; esac
             v=$((10#$v))
@@ -798,7 +816,13 @@ source_retention_editor() {
             || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue; }
         for i in "${!tn[@]}"; do
             [ "${sk[$i]}" = 0 ] || [ "${sk[$i]}" = "${tk[$i]}" ] && continue
-            out=$("$ZB" save-profile --from="$name" --as="$name" --force --tier="${tn[$i]}" --keep="${sk[$i]}" 2>&1) \
+            # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem
+            # (z tą samą jednostką) -- inny mechanizm odrzuciłby straż rodzin.
+            case "${tm[$i]}" in
+                retain:*) v="--retain=-${tm[$i]#retain:}${sk[$i]}" ;;
+                *)        v="--keep=${sk[$i]}" ;;
+            esac
+            out=$("$ZB" save-profile --from="$name" --as="$name" --force --tier="${tn[$i]}" "$v" 2>&1) \
                 || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue 2; }
         done
         SRCPROF="$name"
