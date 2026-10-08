@@ -1836,6 +1836,36 @@ if grep -qF 'save-profile --from=default --force --drop-tier=keep_weekly --as=de
 else
     bad "new-relation: retencja zrodla, T1" "$NROUT" "$(cat "$NR/zb.log")"
 fi
+# T1-age (K1, 2026-10-07): szablon WIEKU. Okno znalo tylko keep i dla -age mowilo
+# "nie ma szczebli z liczba do zmiany". Teraz te same szczeble z jednostka, a zapis
+# idzie przez --retain=-<jednostka><liczba> (licznik zostaje licznikiem, wiek wiekiem).
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}d7h24-age
+0${T}pve9b
+0${T}root
+0${T}grant|srcp|skip
+0${T}0
+0${T}12
+0${T}1
+0${T}3
+0${T}ok
+0${T}
+0${T}
+")
+if grep -qF 'cel 24 godz.' "$NR/wt.log" && grep -qF 'cel 7 dni' "$NR/wt.log" \
+   && grep -qF 'save-profile --from=d7h24-age-src-H12D3 --as=d7h24-age-src-H12D3 --force --tier=hourly --retain=-h12' "$NR/zb.log" \
+   && grep -qF 'save-profile --from=d7h24-age-src-H12D3 --as=d7h24-age-src-H12D3 --force --tier=daily --retain=-d3' "$NR/zb.log" \
+   && ! grep -q -- '--keep=' "$NR/zb.log" \
+   && has "$NROUT" '--source-profile=d7h24-age-src-H12D3'; then
+    ok "new-relation: retencja zrodla dla szablonu WIEKU -- szczeble z jednostka, zapis przez --retain, nie --keep (K1)"
+else
+    bad "new-relation: retencja zrodla, T1-age (K1)" "$(grep -F 'zrodle\|źródle' "$NR/wt.log" | tail -2)" "$(cat "$NR/zb.log")"
+fi
 # profile pochodne (-src-) w fiksturze nie sa szablonami do wyboru w kroku 6
 if [ -n "$NRL6SRC" ] && ! has "$NRL6SRC" 'default-src-X ~'; then
     ok "new-relation: profile pochodne (-src-) nie sa szablonami w kroku 6"
