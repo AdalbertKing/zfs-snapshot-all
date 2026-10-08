@@ -37,6 +37,7 @@ import locale
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -91,6 +92,15 @@ MEDIA_STATES = {
     "wrong_medium": ("NIE TEN DYSK", 1, u"w slocie jest dysk, ale NIE TEN. Brama odmówi replikacji; wyjęcie złego nośnika to ruch człowieka przy maszynie"),
     "unknown":      ("?", 4, u"brama nośnika (zfs-media-gate.sh) nie odpowiedziała -- stan nieznany, nie 'brak'"),
 }
+
+def media_state_line(r, st):
+    """Stan nosnika w panelu repliki (uwaga 17, 2026-10-08). Dysk w maszynie mowi tez,
+    czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
+    if r.get("present") in ("available", "here"):
+        lc = r.get("last_current") or ""
+        return u"%s -- %s" % (st[0], (u"kopia aktualna z %s" % lc) if lc else u"brak kopii")
+    return u"%s -- %s" % (st[0], st[2])
+
 
 # Slowa, ktore curses koloruje, gdziekolwiek stoja w linii. Sa wybrane tak,
 # zeby nie byly podciagami zwyklego tekstu.
@@ -174,6 +184,10 @@ def direction_of(host, peer, dirs, mode=None):
         return "%s<%s" % (host, peer)
     if "push" in dirs:
         return "%s>%s" % (host, peer)
+    # Relacja jeszcze bez linii crona (np. aktywacja nie doszla do konca): rekord zna tryb,
+    # a relacja zakladana przez pakiet na kolektorze POBIERA (uwaga 7, 2026-10-08).
+    if mode == "backup":
+        return "%s<%s" % (host, peer)
     return "%s?%s" % (host, peer)
 
 
@@ -3030,7 +3044,7 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
                  {"on-insert": u"po włożeniu nośnika"}.get(r.get("schedule"), r.get("schedule") or "?"),
                  r.get("prefix") or "?", "   rekursywnie" if r.get("recursive") == "yes" else "",
                  "   historia: %s" % r["history"] if r.get("history") and r["history"] != "all" else "")),
-             (u"Nośnik", "%s -- %s" % (st[0], st[2])),
+             (u"Nośnik", media_state_line(r, st)),
              ("Ostatnio", r.get("last_seen") or u"nigdy nie widziany (brak pliku last-seen bramy)")]
     # BIEGI REPLIKI (2026-10-08, wlasciciel: "czy widzimy gdzies statystyki zadan
     # repliki?"). job-stats je liczyl, ale zaden ekran ich nie pokazywal.
@@ -3059,7 +3073,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         nw = max(8, min(16, max([len(r.get("name") or "?") for r in reps] + [8])))
         sw, mw, lw = 12, 13, 10
         dw = inner - (nw + sw + mw + lw + 4)
-        hdr = "%s %s %s %s %s" % (fit("Replika", nw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Widziany", lw))
+        hdr = "%s %s %s %s %s" % (fit("Replika", nw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Kopia z", lw))
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
         body = [hdr, ch.dash * inner]
@@ -3071,7 +3085,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
                 cur_y = len(body)
             body.append("%s %s %s %s %s" % (fit(r.get("name"), nw, ch), fit(sd, dw, ch),
                                             fit({"on-insert": u"po włożeniu"}.get(r.get("schedule"), r.get("schedule") or "?"), sw, ch),
-                                            fit(st[0], mw, ch), fit((r.get("last_seen") or "nigdy")[:10], lw, ch)))
+                                            fit(st[0], mw, ch), fit((r.get("last_current") or "brak")[:10], lw, ch)))
         if not reps:
             body += [u"Brak sekcji [replica:] w configu tego kolektora.",
                      u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
@@ -3509,24 +3523,20 @@ class UI(object):
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
-        F7 uruchom teraz. Logika jest w czasownikach; tu tylko pytanie."""
+        F7 uruchom zaznaczona teraz (bez pytania). Logika jest w czasownikach."""
         if k == "ins":
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
-        if k == "F7":
-            if not reps:
-                self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)"
-                return
-            self.confirm(u"Uruchom repliki teraz", [self.zb(), "run-replicas"],
-                         [u"Każda replika z configu, raz, teraz -- tak jak z crona.",
-                          u"Nośnik, którego nie ma, jest pomijany bez alarmu (to kontrakt bramy);",
-                          u"wymienny jest importowany na czas kopii i eksportowany po niej."])
-            return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
-            self.message = u"brak replik"
+            self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)" if k == "F7" else u"brak replik"
             return
         n = reps[c].get("name")
+        if k == "F7":
+            # ZAZNACZONA replika, od razu, bez pytania (uwaga 18, 2026-10-08): kopia niczego
+            # nie niszczy, a "t" niczego nie chronilo. Wynik w oknie, jak kazdy bieg w tle.
+            self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            return
         if k == "del":
             # Okna whiptail (remove-replica --ask): pytaja tez, czy skasowac KOPIE
             # na nosniku (domyslnie nie), i pokazuja plan obu czasownikow.
@@ -4596,11 +4606,22 @@ def curses_loop(ui):
                 if not nowait:
                     sys.stdout.write("$ %s\n" % line)
                     sys.stdout.flush()
+                # Ctrl+C belongs to the dialog, not to us: with SIGINT left on, the GUI got
+                # KeyboardInterrupt too, lost the dialog's exit code and showed "[rc=?]"
+                # (owner note 8, 2026-10-08). Ignored here, restored right after -- and
+                # back to default in the child: an ignored SIGINT is inherited across
+                # exec, and the command would then ignore Ctrl+C as well.
+                _old_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
                 try:
-                    rc = subprocess.call(line, shell=True, cwd=ui.repo)
-                except (OSError, KeyboardInterrupt) as e:
+                    rc = subprocess.call(line, shell=True, cwd=ui.repo,
+                                         preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+                except OSError as e:
                     rc = "?"
                     sys.stdout.write("%s\n" % e)
+                finally:
+                    signal.signal(signal.SIGINT, _old_int)
+                if rc == 130:
+                    rc = u"130, przerwane (Ctrl+C)"
                 if not nowait:
                     sys.stdout.write("[rc=%s]  Enter wraca do okien\n" % rc)
                     sys.stdout.flush()

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 69e1073b1d955e80 -->
+<!-- status-covers-digest: 7a6958c3d463fe0d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,29 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Runda GUI, paczka A — poprawki z testów właściciela (2026-10-08, właściciel: „Zacznij kodowac poprawki”).**
+  - **Kreator relacji:** krok „Dokąd” ma „Przeglądaj…” — płaska lista wszystkich
+    systemów plików tego hosta z wcięciem wg głębokości; lądowiska innych relacji są ukryte
+    (z notą „Ukryto N kopii innych relacji.”). Krok 4 (pomijane migawki) ma poprawny
+    tytuł; plan i podsumowanie mówią „Pomijane migawki z prefiksami: …” albo „żadne
+    (kopiowane wszystkie)”; w planie konto stoi w osobnej linii.
+  - **F3:** relacja bez sekcji w configu (aktywacja niedokończona) pokazuje źródła z
+    `REQUESTED_DATASETS` jako osobne pozycje, nie jedną „a,b”. Kierunek dla trybu
+    `backup` jest wyliczany, nie „?”.
+  - **edit-relation:** szablony w wyrównanych kolumnach, bieżący oznaczony
+    „[obecny]”; po „Config” zamkniętym bez zmian okno nie czeka na Enter.
+  - **edit-config:** edytor `$VISUAL`/`$EDITOR`, inaczej `nano`, dopiero potem `vi`;
+    zamknięcie bez zmian kończy się kodem 3.
+  - **Replika:** krok 3 kreatora skanuje pule przy każdym wejściu; F6 kolumna
+    „Kopia z” i panel „W SLOCIE -- kopia aktualna z …” / „brak kopii” czytają znacznik
+    `<nazwa>.current` bramki (nowe pole `last_current` w `list-replicas --json`).
+    F7 uruchamia tylko tę replikę: `run-replicas --name=NAZWA`, bez potwierdzenia;
+    nieznana nazwa to błąd.
+  - **Okno poleceń GUI:** Ctrl+C przerywa polecenie, nie GUI; kod 130 pokazany jako
+    „przerwane (Ctrl+C)”.
+  - **Testy:** `statusjson` (źródła z żądania, kontrola negatywna: bez podziału test
+    pada), `runreplicas` (`--name`, nieznana nazwa), `tui` (plan kroku 10, stan
+    nośnika, F7).
 - **`zfs-backup edit-config` — „crontab -e” dla configu; polecenie `/usr/local/bin/zfs-backup` (2026-10-08, właściciel: „rób edit-config z dowiązaniem zfs-backup”).**
   - **Po co:** config jest jedynym miejscem polityki (retencja, harmonogramy, flagi,
     monitory), a cron powstaje tylko z niego. Dotąd admin edytował plik i sam wołał

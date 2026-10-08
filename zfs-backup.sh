@@ -376,7 +376,7 @@ front end never edits the config file:
                                     safe), wrong_medium (a disk IS in the slot and it
                                     is not this one). --json is the GUI data layer,
                                     same contract as `progress --json`.
-  zfs-backup.sh run-replicas [--config=F]
+  zfs-backup.sh run-replicas [--name=REPLIKA] [--config=F]
                                     Run every replica job now. A medium that is
                                     not here skips quietly, so this is safe to
                                     fire on any insertion.
@@ -656,9 +656,9 @@ Inspection / teardown:
   zfs-backup.sh show-config NAME [--json] [--config=PATH]
   zfs-backup.sh edit-config [NAME] [--account=USER] [--yes]
                                     crontab -e for the config: opens a copy in
-                                    $VISUAL/$EDITOR/vi (with NAME: the config that
-                                    holds that relationship, cursor on it in vi-like
-                                    editors), checks it
+                                    $VISUAL/$EDITOR/nano/vi (with NAME: the config that
+                                    holds that relationship, cursor on it in nano, vi and
+                                    similar editors), checks it
                                     with gen-cron (on a refusal: edit again or stop),
                                     shows how the cron block changes and installs on
                                     one confirmation (--yes: no question). The
@@ -668,6 +668,7 @@ Inspection / teardown:
                                     and grant, like add-source/remove-source), in the
                                     record, and with a first copy; the section stays
                                     as written. Also: /usr/local/bin/zfs-backup.
+                                    Exit 3: closed with no change, nothing installed.
   zfs-backup.sh import-relation FILE [--name=NEW] [--yes]
                                     Replays what export-relation --json wrote: the
                                     add-client argv in the file, in that order, then
@@ -6373,10 +6374,12 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
 # on its own -- that is the gate's whole contract -- so this can fire on every
 # insertion without knowing which disk arrived.
 cmd_run_replicas() {
-    local config="" a
+    local config="" only="" a
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
+            # One replica by name (owner note 18, 2026-10-08: F7 on F6 runs the SELECTED one).
+            --name=*)   only="${a#*=}" ;;
             -*)         die "run-replicas: unknown option '$a'" ;;
             *)          die "run-replicas: takes no positional arguments" ;;
         esac
@@ -6396,6 +6399,7 @@ cmd_run_replicas() {
     # the bracket alone left it out of every manual and on-insert run.
     while IFS= read -r line; do
         [ -n "$line" ] || continue
+        [ -z "$only" ] || case "$line" in *"replica copy ($only)"*) ;; *) continue ;; esac
         n=$((n+1))
         # Strip the five schedule fields; what is left is what cron runs. An
         # on-insert replica carries the marker '#on-insert' in their place
@@ -6407,6 +6411,9 @@ cmd_run_replicas() {
     done <<EOF
 $(printf '%s' "$block" | grep -E 'zfs-media-gate\.sh attach|zfs-job\.sh "[^"]* replica copy \(')
 EOF
+    if [ "$n" -eq 0 ] && [ -n "$only" ]; then
+        die "run-replicas: no replica '$only' in $config"
+    fi
     [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
     return "$rc"
 }
@@ -6792,6 +6799,13 @@ cmd_list_replicas() {
         fi
         [ -r "/var/lib/zfs-snapshot-all/media/$name.last-seen" ] \
             && last="$(cat "/var/lib/zfs-snapshot-all/media/$name.last-seen" 2>/dev/null)"
+        # When this medium last got a CURRENT copy: the gate's <label>.current marker,
+        # written on every recorded copy and on a "medium already current" skip -- the
+        # same fact the age monitor reads (owner note 17: "w slocie" said nothing
+        # about whether the copy on that disk is any good).
+        local lcur=""
+        [ -e "/var/lib/zfs-snapshot-all/media/$name.current" ] \
+            && lcur="$(date -r "/var/lib/zfs-snapshot-all/media/$name.current" '+%Y-%m-%d %H:%M' 2>/dev/null)"
         if [ "$as_json" -eq 1 ]; then
             [ "$first" -eq 1 ] || printf ','
             first=0
@@ -6810,8 +6824,8 @@ $(printf '%s' "$src" | tr ',' '\n')
 JSRC
             # monitor_warn/crit: only what the SECTION says (empty = derived from
             # the schedule by gen-cron, or none for on-insert).
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","monitor_warn":"%s","monitor_crit":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$mw" "$mc"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
@@ -13182,7 +13196,10 @@ cmd_edit_config() {
     sum0=$(sha256sum "$cfg" | cut -d' ' -f1)
     errf=$(mktemp) || die "edit-config: mktemp failed"
 
-    local -a ed; read -r -a ed <<< "${VISUAL:-${EDITOR:-vi}}"
+    # nano before vi (owner note 21, 2026-10-08: "utknalem, to chyba vi"): hosts set
+    # no $EDITOR, and vi is the editor an occasional admin cannot leave.
+    local _defed=vi; command -v nano >/dev/null 2>&1 && _defed=nano
+    local -a ed; read -r -a ed <<< "${VISUAL:-${EDITOR:-$_defed}}"
     local jump=""
     if [ -n "$name" ]; then
         local ln; ln=$(grep -n -m1 -- "managed-by: zfs-backup.sh client=$name\$" "$tmp" | cut -d: -f1)
@@ -13196,7 +13213,9 @@ cmd_edit_config() {
         if cmp -s "$cfg" "$tmp"; then
             rm -f "$tmp" "$errf"
             echo "edit-config: bez zmian -- nic nie zainstalowano."
-            return 0
+            # Its own exit code, so a front end can return at once with nothing to read
+            # (owner note 22): 3 = the editor was closed with no change.
+            return 3
         fi
         if newblk=$(gencron_as_target -c "$tmp" 2>"$errf"); then
             break
@@ -15707,7 +15726,10 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
     client_paused "${CLIENT_NAME:-}" && paused=true
     local diverged=false
     [ -n "${INSTALLED_ENDPOINT:-}" ] && [ "${INSTALLED_ENDPOINT:-}" != "${ACTIVE_ENDPOINT:-}" ] && diverged=true
-    local srcs; srcs=$(status_sources_from_config "${CLIENT_NAME:-}") || srcs="${REQUESTED_DATASETS:-}"
+    # The request is a COMMA list and jsonw_array splits on blanks: an activation that had
+    # not installed yet showed "hdd/vm,hdd/ct" as ONE pair on F3 (owner note 6, 2026-10-08).
+    local _rq="${REQUESTED_DATASETS:-}" srcs
+    srcs=$(status_sources_from_config "${CLIENT_NAME:-}") || srcs="${_rq//,/ }"
     local label; label=$(status_pair_label_from_config "${CLIENT_NAME:-}") || label="${CLIENT_NAME:-}"
 
     local peerstate="NOT_ASKED"
