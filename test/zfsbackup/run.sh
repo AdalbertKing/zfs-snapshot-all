@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13618,6 +13618,56 @@ else
 fi
 
 fi   # --- koniec sekcji addsource ---
+
+if want replicamonitor; then
+# ============================================================================
+# `monitor` reads a replica's gate line (2026-10-08): `zfs-media-gate.sh age
+# "POOL" "LABEL" --warn D --crit D` is the staleness monitor of a replica on a
+# REMOVABLE medium. It used to see only check-snap-age lines. The shipped
+# cmd_monitor over a stub crontab, running the REAL gate (zfs/zpool stubbed,
+# its state dir in the work area).
+# ============================================================================
+RM="$WORK/replicamonitor"; rm -rf "$RM"; mkdir -p "$RM/bin" "$RM/state"
+printf '#!/bin/sh\nexit 0\n' > "$RM/bin/zfs"; printf '#!/bin/sh\nexit 0\n' > "$RM/bin/zpool"; chmod +x "$RM/bin/"*
+cat > "$RM/tab" <<EOF
+# BEGIN zfs-backup-managed
+*/15 * * * * d=\$($REPO/zfs-media-gate.sh age "usb" "fresh" --warn 9d --crit 14d 2>&1); rc=\$?
+*/15 * * * * d=\$($REPO/zfs-media-gate.sh age "usb2" "old" --warn 9d --crit 14d 2>&1); rc=\$?
+*/15 * * * * d=\$($REPO/zfs-media-gate.sh age "usb3" "broken" --warn nine 2>&1); rc=\$?
+# END zfs-backup-managed
+EOF
+echo $(( $(date +%s) - 3600 )) > "$RM/state/fresh.current"
+echo $(( $(date +%s) - 20 * 86400 )) > "$RM/state/old.current"
+rmj=$(PATH="$RM/bin:$PATH" MEDIA_STATE_DIR="$RM/state" bash -c "source '$ZFSBACKUP'; cron_known_accounts() { echo root; }; cron_read() { cp '$RM/tab' \"\$2\"; }; cmd_monitor --json" 2>&1)
+rmv() {   # <label> <field> -> value from the JSON
+    printf '%s' "$rmj" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+for m in d['monitors']:
+    if m.get('label')=='$1': print(m.get('$2')); break" 2>/dev/null
+}
+if [ "$(rmv fresh verdict)" = OK ] && [ "$(rmv fresh pattern)" = replica ] && [ "$(rmv fresh warn)" = 9d ] \
+   && printf '%s' "$(rmv fresh engine_run)" | grep -q 'zfs-media-gate\.sh$'; then
+    ok "replicamonitor: a gate age line is a monitor -- label = replica, pattern 'replica', its thresholds, run by the gate"
+else
+    bad "replicamonitor: gate line read" "$rmj"
+fi
+if [ "$(rmv old verdict)" = CRITICAL ] && [ "$(rmv old rc)" = 2 ]; then
+    ok "replicamonitor: ...a medium last proved current 20 days ago is CRITICAL against 9d/14d"
+else
+    bad "replicamonitor: old medium" "$rmj"
+fi
+if printf '%s' "$rmj" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+b=[m for m in d['monitors'] if m.get('parsed') is False]
+sys.exit(0 if len(b)==1 and b[0].get('verdict')=='UNKNOWN' and d.get('worst') in ('CRITICAL','UNKNOWN') else 1)"; then
+    ok "replicamonitor: ...a malformed gate line is reported unparsed (UNKNOWN), not skipped"
+else
+    bad "replicamonitor: malformed line" "$rmj"
+fi
+
+fi   # --- koniec sekcji replicamonitor ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

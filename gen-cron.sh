@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix notify media recursive flags history
+_allow_fields replica  source dst schedule prefix notify media recursive flags history monitor_warn monitor_crit monitor
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2854,6 +2854,57 @@ build_replica_section() {
     [ -n "$label" ] || label="$name"
     notify="$(notify_text "$host_label" "replica" "copy" "$label")"
 
+    # STALENESS (2026-10-08, owner: "dwie repliki tygodniowe i jedna miesieczna --
+    # na kazdy nosnik oddzielna ilosc dni?"). Not by hand for each medium: the
+    # thresholds follow the replica's own rhythm -- daily 2d/4d, weekly 9d/14d,
+    # monthly 35d/45d -- and monitor_warn/monitor_crit in the section override
+    # them. An on-insert replica has no rhythm to derive from, so it is watched
+    # only when the section says so.
+    local mwarn mcrit mon
+    mwarn="$(resolve_field monitor_warn "$sec" "" "")" || mwarn=""
+    mcrit="$(resolve_field monitor_crit "$sec" "" "")" || mcrit=""
+    # `monitor = no` switches it off -- what cron2conf writes for a replica
+    # recovered from a crontab that had no monitor line for it.
+    mon="$(resolve_field monitor "$sec" "" "")" || mon=""
+    case "$mon" in
+        ''|yes) ;;
+        no) [ -z "$mwarn$mcrit" ] || die "[replica:$name]: monitor = no together with monitor_warn/monitor_crit -- say one of them" ;;
+        *)  die "[replica:$name]: monitor = '$mon' -- yes or no" ;;
+    esac
+    if [ "$mon" = no ]; then
+        :
+    elif [ -n "$mwarn$mcrit" ]; then
+        [ -n "$mwarn" ] && [ -n "$mcrit" ] \
+            || die "[replica:$name]: monitor_warn and monitor_crit go together (got '$mwarn' / '$mcrit')"
+        local _mv _ms _msecs=()
+        for _mv in "$mwarn" "$mcrit"; do
+            [[ "$_mv" =~ ^[0-9]+[mhdw]$ ]] \
+                || die "[replica:$name]: monitor threshold '$_mv' -- a number and ONE unit: m, h, d or w (e.g. 9d)"
+            case "$_mv" in
+                *m) _ms=$(( ${_mv%m} * 60 )) ;;  *h) _ms=$(( ${_mv%h} * 3600 )) ;;
+                *d) _ms=$(( ${_mv%d} * 86400 )) ;; *w) _ms=$(( ${_mv%w} * 604800 )) ;;
+            esac
+            _msecs+=("$_ms")
+        done
+        # The gate refuses the same thing at run time (rc 3, "monitor BROKEN");
+        # said here, where it is written, instead of every fifteen minutes there.
+        [ "${_msecs[0]}" -lt "${_msecs[1]}" ] \
+            || die "[replica:$name]: monitor_warn ($mwarn) must be below monitor_crit ($mcrit)"
+    elif [ "$schedule" != on-insert ]; then
+        local _mi _ho _dom _mon _dow
+        read -r _mi _ho _dom _mon _dow <<< "$schedule"
+        if [ "$_dom" != "*" ] || [ "$_mon" != "*" ]; then mwarn=35d; mcrit=45d
+        elif [ "$_dow" != "*" ]; then mwarn=9d; mcrit=14d
+        else mwarn=2d; mcrit=4d
+        fi
+    fi
+    local mnotify="" mwarntext="" mbroken=""
+    if [ -n "$mwarn" ]; then
+        mnotify="$(notify_text "$host_label" "replica" "stale" "$label")"
+        mwarntext="$(notify_text "$host_label" "replica" "getting stale" "$label")"
+        mbroken="$(notify_text "$host_label" "replica" "monitor BROKEN" "$label")"
+    fi
+
     local media; media="$(resolve_field media "$sec" "" "")" || media=""
     case "$media" in
         ''|removable) ;;
@@ -2910,7 +2961,7 @@ build_replica_section() {
         esac
     fi
 
-    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}")
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}")
 }
 
 build_bookmark_prune_section() {
@@ -3773,9 +3824,10 @@ emit_monitor() {
 # one disk is out. That is the same reason 'media' sits in the send group key.
 emit_replicas() {
     local e name source dst schedule prefix notify media recursive hist flags cmd
+    local mwarn mcrit mnotify mwarntext mbroken mcmd mtargets
     local -a srcs=(); local s one
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags <<< "$e"
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken <<< "$e"
         IFS=',' read -ra srcs <<< "$source"
         # ONE ENGINE CALL PER SOURCE, ALL INSIDE ONE BRACKET.
         #
@@ -3833,6 +3885,22 @@ emit_replicas() {
             JOB_LINES+=("$(job_cron_line "#on-insert" "$cmd" "$notify")")
         else
             JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+        fi
+        # THE STALENESS MONITOR, in the same shape as every other monitor line
+        # (rc 1 warn, 2 crit, >=3 broken), so `monitor`, the queue and the daily
+        # digest take it as they are. A REMOVABLE medium is usually not in the
+        # machine, so its age is the gate's record of when it was last proved
+        # current; a FIXED one always is, and every run stamps a new replica
+        # snapshot on it, so the ordinary check-snap-age reads the copy itself.
+        if [ -n "$mwarn" ]; then
+            if [ "$media" = removable ]; then
+                mcmd="$REPO_DIR/zfs-media-gate.sh age \"${dst%%/*}\" \"$name\" --warn $mwarn --crit $mcrit"
+            else
+                mtargets=""
+                for s in "${srcs[@]}"; do mtargets="${mtargets:+$mtargets,}$dst/$s"; done
+                mcmd="$REPO_DIR/check-snap-age.sh -L $name \"$mtargets\" \"$prefix\" $mwarn $mcrit"
+            fi
+            MONITOR_LINES+=("*/15 * * * * d=\$($mcmd 2>&1); rc=\$?; [ -n \"\$d\" ] && echo \"\$d\" >>$CRON_LOG; [ \$rc -eq 1 ] && $WARN_SCRIPT \"$mwarntext\" \"\$d\" 2>>$CRON_LOG; [ \$rc -eq 2 ] && $NOTIFY_SCRIPT \"$mnotify\" \"\$d\" 2>>$CRON_LOG; [ \$rc -ge 3 ] && $NOTIFY_SCRIPT \"$mbroken\" \"\$d\" 2>>$CRON_LOG")
         fi
     done
 }

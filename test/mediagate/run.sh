@@ -1017,6 +1017,47 @@ unset SRC_TREE_tank_src SRC_TREE_tank_other SRC_SNAP_tank_src SRC_SNAP_tank_othe
 unset SRC_WRITTEN_tank_src SRC_WRITTEN_tank_other
 SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
 
+# ---------------------------------------------------------------------------
+# AG. AGE (2026-10-08): how long since a medium was last PROVED current, for the
+# staleness monitor of a replica. Same exit codes as check-snap-age. The record
+# is <label>.current (written on a recorded copy AND on a proved-current skip);
+# a medium recorded before it existed falls back to .synced's mtime.
+# ---------------------------------------------------------------------------
+POOLS="hdd"; IMPORTABLE=""; DATASETS="hdd"
+rm -f "$STATE"/agerep.*
+out="$(g age agepool agerep --warn 2d --crit 4d)"; rc=$?
+check "AG1: no record at all is a WARNING (rc 1), never OK" "1" "$rc"
+has "no copy has ever been recorded" "$out" && ok "AG1: ...and says so" || bad "AG1: ...and says so" "$out"
+touch -d "3 days ago" "$STATE/agerep.synced"
+out="$(g age agepool agerep --warn 2d --crit 4d)"; rc=$?
+check "AG2: an older .synced record falls back to its mtime -- 3 days against 2d/4d is a WARNING" "1" "$rc"
+out="$(g age agepool agerep --warn 5d --crit 9d)"; rc=$?
+check "AG3: ...and OK under a wider threshold" "0" "$rc"
+echo $(( $(date +%s) - 15 * 86400 )) > "$STATE/agerep.current"
+out="$(g age agepool agerep --warn 9d --crit 14d)"; rc=$?
+check "AG4: .current 15 days old against 9d/14d is CRITICAL (rc 2) -- and wins over the fresher .synced" "2" "$rc"
+has "last_current=" "$out" && ok "AG4: ...naming when it was last proved current" || bad "AG4: ...naming when" "$out"
+echo $(( $(date +%s) - 3600 )) > "$STATE/agerep.current"
+out="$(g age agepool agerep --warn 9d --crit 14d)"; rc=$?
+check "AG5: a fresh .current is OK" "0" "$rc"
+out="$(g age agepool agerep --warn 14d --crit 9d)"; rc=$?
+check "AG6: warn not below crit is refused as UNKNOWN (rc 3)" "3" "$rc"
+out="$(g age agepool agerep --warn 9x --crit 14d)"; rc=$?
+check "AG7: a threshold without a known unit is UNKNOWN (rc 3)" "3" "$rc"
+rm -f "$STATE"/agerep.*
+
+# AG8. The proved-current SKIP writes .current -- a quiet source makes no new
+# copy, and its medium must not read as stale for it.
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a"
+SRC_TREE="tank/src tank/src/a"; SRC_SNAP="replica_s2"; SRC_WRITTEN=0; POOL_GUID=11111111
+rm -f "$STATE/rep.current"
+printf 'guid=11111111\nsnap:tank/src=replica_s2\n' > "$STATE/rep.synced"
+out="$(g attach rotpool rep --dataset rotpool/replica --source tank/src --prefix replica_)"; rc=$?
+check "AG8: the no-work skip still skips" "1" "$rc"
+[ -s "$STATE/rep.current" ] && ok "AG8: ...and records the medium as proved current (.current)" \
+                            || bad "AG8: ...and records the medium as proved current (.current)" "$(ls "$STATE")"
+SRC_TREE=""; SRC_SNAP=""; SRC_WRITTEN=""; POOL_GUID=11111111
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

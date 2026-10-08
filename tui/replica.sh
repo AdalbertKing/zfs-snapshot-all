@@ -23,7 +23,7 @@ trap 'rm -rf "$TMPD"' EXIT
 geom
 info "Replika" "Czytam repliki, datasety i nośniki..."
 "$ZB" list-replicas --json >"$TMPD/rep.json" 2>"$TMPD/rep.err" || echo '{"replicas":[]}' >"$TMPD/rep.json"
-# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive
+# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia
 "$PY" - "$TMPD/rep.json" >"$TMPD/rep.tsv" <<'PYEOF'
 import sys, json
 try:
@@ -32,12 +32,13 @@ except Exception:
     d = {}
 for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
-                     r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-"]))
+                     r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
+                     r.get("monitor_warn") or "-"]))
 PYEOF
-SRCS=""; DST=""; SCHED="30 2 * * *"; MEDIA=removable; REC=yes; TRIG=no
+SRCS=""; DST=""; SCHED="30 2 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
@@ -128,6 +129,17 @@ while :; do
         else
             SCHED="$WT_OUT"
         fi
+        # OSTRZEŻENIE (2026-10-08): przy harmonogramie progi idą z niego same
+        # (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45). "Po włożeniu" nie ma
+        # rytmu, więc tu pytamy: po ilu dniach bez kopii ostrzec (puste = wcale).
+        MONDAYS=""
+        _defdays=""; case "${CURWARN:-}" in *d) _defdays="${CURWARN%d}" ;; esac
+        if [ "$SCHED" = on-insert ]; then
+            wt --title "Replika $NAME -- ostrzeżenie" --ok-button "Dalej" --cancel-button "Wstecz" \
+               --inputbox "Po ilu dniach bez kopii na tym nośniku ostrzec (mail z raportu dziennego)?\nAlarm przyjdzie po półtora raza tylu dniach. Puste = bez ostrzeżenia." 10 "$W" "$_defdays" || continue
+            MONDAYS="${WT_OUT// /}"
+            case "$MONDAYS" in ''|*[!0-9]*) [ -n "$MONDAYS" ] && { wt --title "To nie liczba" --msgbox "Podaj liczbę dni albo zostaw puste." 8 "$W"; continue; } ;; esac
+        fi
         # PO WŁOŻENIU = reguła udev (install-media-trigger): jedna na host, uruchamia
         # run-replicas przy każdym dysku z etykietą ZFS. To trwała zmiana tego, jak
         # host reaguje na sprzęt, więc o nią pytamy osobno i tylko gdy jej nie ma.
@@ -147,6 +159,7 @@ while :; do
         ARGV=("$ZB" add-replica "$NAME" "--source=$SRCS" "--dst=$DST" "--schedule=$SCHED")
         [ "$MEDIA" = fixed ] && ARGV+=(--fixed) || ARGV+=(--removable)
         [ "$REC" = yes ] && ARGV+=(--recursive=yes) || ARGV+=(--recursive=no)
+        [ -n "$MONDAYS" ] && ARGV+=("--monitor-warn=${MONDAYS}d" "--monitor-crit=$(( (MONDAYS * 3 + 1) / 2 ))d")
         info "Replika $NAME" "Liczę plan..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
             grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
@@ -161,6 +174,9 @@ while :; do
             echo "Źródła:     $SRCS  (z dziećmi: $REC)"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             echo "Kiedy:      $([ "$SCHED" = on-insert ] && echo "po włożeniu dysku (bez godziny)" || echo "$SCHED")"
+            if [ -n "$MONDAYS" ]; then echo "Ostrzeżenie: po $MONDAYS dniach bez kopii, alarm po $(( (MONDAYS * 3 + 1) / 2 ))"
+            elif [ "$SCHED" = on-insert ]; then echo "Ostrzeżenie: brak (replika po włożeniu bez progu)"
+            else echo "Ostrzeżenie: z harmonogramu (dobowo 2/4 dni, tygodniowo 9/14, miesięcznie 35/45)"; fi
             if grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES"; then
                 echo "Po włożeniu: reguła udev jest ($RULES)"
             elif [ "$TRIG" = yes ]; then

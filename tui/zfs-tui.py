@@ -1249,6 +1249,19 @@ def build_jobs(data, now):
         reasons = []
         if srow and str(srow.get("last_rc")) not in ("0", "None"):
             reasons.append(u"ostatni bieg rc=%s" % srow.get("last_rc"))
+        # WERDYKT Z MONITORA REPLIKI (2026-10-08): nosnik wymienny -- linia bramy
+        # (`zfs-media-gate.sh age`, etykieta = nazwa repliki, wzorzec "replica");
+        # staly -- check-snap-age na kopii (dst/zrodlo) z prefiksem repliki.
+        rver = "BEZ MONITORA"
+        _dst = rp.get("dst") or ""
+        for m in monitors:
+            if (m.get("pattern") == "replica" and m.get("label") == rname) or \
+               (_dst and m.get("pattern") == rp.get("prefix") and
+                    any((d or "").startswith(_dst + "/") for d in m.get("datasets") or [])):
+                rver = m.get("verdict") or "UNKNOWN"
+                if rver != "OK" and m.get("reason"):
+                    reasons.append(m["reason"])
+                break
         if data.failed("stats"):
             czas = "?"
         else:
@@ -1261,8 +1274,8 @@ def build_jobs(data, now):
             "cnt": len(rp.get("sources") or []) or 1, "tier": "", "scope": rp.get("source") or "",
             # "po włożeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
             # kolumnę i przy 80 znakach wypychało Trzyma z ekranu WSZYSTKIM wierszom.
-            "schedule": "-" if on_ins else sched, "verdict": "BEZ MONITORA",
-            "vword": VERDICTS["BEZ MONITORA"][0], "reasons": reasons, "next_epoch": rnxt,
+            "schedule": "-" if on_ins else sched, "verdict": rver,
+            "vword": VERDICTS.get(rver, (rver, 0))[0], "reasons": reasons, "next_epoch": rnxt,
             "next": (u"po włożeniu" if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
             "job": {}, "jobs": [], "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })

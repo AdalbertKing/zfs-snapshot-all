@@ -1249,6 +1249,24 @@ else
     bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Biegi')"
 fi
 rm -f "$RST"
+# WERDYKT REPLIKI Z JEJ MONITORA (2026-10-08): linia bramy (`age`) daje monitor z
+# etykieta = nazwa repliki i wzorcem "replica"; wiersz F2 bierze z niego werdykt.
+RMN="$(mktemp)"
+"$PY" - "$P10/monitor.json" "$RMN" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d.setdefault("monitors", []).append({"account": "root", "label": "sejf-a", "pattern": "replica", "datasets": ["bkp"],
+    "warn": "2d", "crit": "4d", "verdict": "WARNING", "rc": 1, "parsed": True,
+    "reason": "WARNING replica=sejf-a pool=bkp last_current=2026-09-06 02:30 age=3d0h (warn=2d crit=4d)"})
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+Z3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$RMN" --replicas "$P10/replicas.json" --screen zadania --width 200 --height 60 2>&1)"
+if hasE "$Z3" 'sejf-a +pve10>bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10>rpool +replika .*bez monitora'; then
+    ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b)"
+else
+    bad "zadania: werdykt repliki z monitora" "$(printf '%s' "$Z3" | grep -E 'sejf')"
+fi
+rm -f "$RMN"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)

@@ -358,6 +358,10 @@ front end never edits the config file:
                                     [--recursive=yes|no] [--fixed|--removable]
                                     [--history=all|newest|auto:N]
                                     [--notify=TEXT] [--plan|--install] [--yes]
+                                    [--monitor-warn=9d --monitor-crit=14d] -- by default
+                                    derived from the schedule (daily 2d/4d, weekly
+                                    9d/14d, monthly 35d/45d); an on-insert replica
+                                    is watched only when these are given.
                                     Plans by default; --install swaps the config and
                                     the crontab together. --removable (the default)
                                     brackets the run in zpool import/export, so a
@@ -6311,9 +6315,9 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
 # Replace or append one [replica:NAME] block in a config file, in place.
 # Everything outside the block is preserved byte for byte -- a config carries
 # other people's sections and comments somebody wrote by hand.
-replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history>
+replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit]
     local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
-    local history="${10:-}"
+    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}"
     local tmp; tmp=$(mktemp) || return 1
     awk -v want="[replica:$name]" '
         $0 == want { skip=1; next }
@@ -6334,6 +6338,8 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
         # would put a field in the file that changes nothing.
         [ -n "$history" ] && [ "$history" != "all" ] && printf '\thistory   = %s\n' "$history"
         [ -n "$notify" ] && printf '\tnotify    = %s\n' "$notify"
+        [ -n "$mwarn" ] && printf '\tmonitor_warn = %s\n' "$mwarn"
+        [ -n "$mcrit" ] && printf '\tmonitor_crit = %s\n' "$mcrit"
         :
     } >> "$tmp" || { rm -f "$tmp"; return 1; }
     mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
@@ -6511,6 +6517,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         return $?
     fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
+    local mon_warn="" mon_crit=""
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
     # send either shape. One medium often holds more than one thing worth
@@ -6527,6 +6534,10 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             --schedule=*)  sched="${a#*=}" ;;
             --prefix=*)    pref="${a#*=}" ;;
             --notify=*)    notify="${a#*=}" ;;
+            # Staleness thresholds (2026-10-08). Without them gen-cron derives
+            # them from the schedule; an on-insert replica is watched only with them.
+            --monitor-warn=*) mon_warn="${a#*=}" ;;
+            --monitor-crit=*) mon_crit="${a#*=}" ;;
             # HOW MUCH OF THE GAP TRAVELS when a common snapshot survived.
             # Validated here as well as in gen-cron, so a typo fails at the
             # command line instead of after the config has been composed.
@@ -6650,7 +6661,7 @@ REPEOF
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
-    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" \
+    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" \
         || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
 
     show_activation_proposal "$config" "$cand" || {
@@ -6704,11 +6715,11 @@ cmd_list_replicas() {
     # Parsed with awk rather than sourced: a config is data, never a program.
     local rows; rows=$(awk '
         /^\[replica:/ {
-            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist)
+            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc
             name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
-            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; next
+            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; mw=""; mc=""; next
         }
-        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist); name="" } next }
+        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc; name="" } next }
         name != "" {
             line=$0; sub(/^[ \t]+/,"",line)
             k=line; sub(/[ \t]*=.*$/,"",k)
@@ -6720,12 +6731,14 @@ cmd_list_replicas() {
             else if (k=="media") media=v
             else if (k=="recursive") rec=v
             else if (k=="history") hist=v
+            else if (k=="monitor_warn") mw=v
+            else if (k=="monitor_crit") mc=v
         }
-        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) }
+        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc }
     ' "$config")
 
     local gate="$SCRIPT_DIR/zfs-media-gate.sh"
-    local name src dst sched pref media rec hist pool present last first=1
+    local name src dst sched pref media rec hist mw mc pool present last first=1
     if [ "$as_json" -eq 1 ]; then printf '{"replicas":['; fi
     if [ -z "$rows" ]; then
         if [ "$as_json" -eq 1 ]; then printf ']}\n'; else echo "brak sekcji [replica:] w $config"; fi
@@ -6737,7 +6750,7 @@ cmd_list_replicas() {
     # in the recursive slot: every field after the empty one shifted left.
     # Measured 2026-09-09 on pve9 with a temporary config. `|` cannot occur in a
     # dataset name, a cron schedule or a prefix.
-    while IFS='|' read -r name src dst sched pref media rec hist; do
+    while IFS='|' read -r name src dst sched pref media rec hist mw mc; do
         [ -n "$name" ] || continue
         pool="${dst%%/*}"
         present="unknown"; last=""
@@ -6781,8 +6794,10 @@ cmd_list_replicas() {
             done <<JSRC
 $(printf '%s' "$src" | tr ',' '\n')
 JSRC
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last"
+            # monitor_warn/crit: only what the SECTION says (empty = derived from
+            # the schedule by gen-cron, or none for on-insert).
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","monitor_warn":"%s","monitor_crit":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$mw" "$mc"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
@@ -11973,17 +11988,33 @@ cmd_monitor() {
         blk=$(mktemp) || die "mktemp failed"
         if ! cron_read "$acct" "$blk" 2>/dev/null; then rm -f "$blk"; continue; fi
         while IFS= read -r line; do
-            case "$line" in *check-snap-age.sh*) ;; *) continue ;; esac
+            # A replica on a REMOVABLE medium is watched by the gate's own age
+            # check (2026-10-08): the medium is usually not in the machine, so
+            # there is no snapshot to measure -- only the gate's record of when
+            # it was last proved current. Same exit codes as check-snap-age.
+            case "$line" in *check-snap-age.sh*|*"zfs-media-gate.sh age "*) ;; *) continue ;; esac
             seen=$((seen + 1))
-            local region schedule engine_named
-            engine_named=$(monitor_engine_path "$line")
-            # The schedule is the first five fields of the crontab line, before
-            # anything this reader interprets.
+            local region schedule engine_named is_gate=no engine_run="$CHECKSNAPAGE"
+            case "$line" in *"zfs-media-gate.sh age "*) is_gate=yes ;; esac
+            if [ "$is_gate" = yes ]; then
+                engine_named=$(printf '%s' "$line" | grep -oE '[^ (]*zfs-media-gate\.sh' | head -1)
+                engine_run="$SCRIPT_DIR/zfs-media-gate.sh"
+            else
+                engine_named=$(monitor_engine_path "$line")
+            fi
             schedule=$(printf '%s' "$line" | awk '{print $1, $2, $3, $4, $5}')
-
             local rec=no label="" excl="" ds="" pat="" warn="" crit=""
             local parsed=true reason=""
-            if ! region=$(monitor_arg_region "$line"); then
+            if [ "$is_gate" = yes ]; then
+                local _g
+                _g=$(printf '%s' "$line" | sed -nE 's/.*zfs-media-gate\.sh age "([^"]+)" "([^"]+)" --warn ([0-9]+[mhdw]) --crit ([0-9]+[mhdw]).*/\1|\2|\3|\4/p')
+                if [ -n "$_g" ]; then
+                    IFS='|' read -r ds label warn crit <<< "$_g"
+                    pat=replica
+                else
+                    parsed=false; reason="the line names zfs-media-gate.sh age but its arguments are not '\"POOL\" \"LABEL\" --warn D --crit D'"
+                fi
+            elif ! region=$(monitor_arg_region "$line"); then
                 parsed=false; reason="the line names check-snap-age.sh but carries no readable argument region"
             else
                 local -a argv=()
@@ -12018,7 +12049,11 @@ cmd_monitor() {
             fi
 
             local rc=3 verdict=UNKNOWN outtxt=""
-            if [ "$parsed" = true ]; then
+            if [ "$parsed" = true ] && [ "$is_gate" = yes ]; then
+                outtxt=$(bash "$engine_run" age "$ds" "$label" --warn "$warn" --crit "$crit" 2>&1); rc=$?
+                verdict=$(monitor_verdict_word "$rc")
+                reason="$outtxt"
+            elif [ "$parsed" = true ]; then
                 local -a runargs=()
                 [ "$rec" = yes ] && runargs+=(-R)
                 [ -n "$label" ] && runargs+=(-L "$label")
@@ -12052,9 +12087,9 @@ cmd_monitor() {
                 printf ',"recursive":%s' "$([ "$rec" = yes ] && echo true || echo false)"
                 printf ',"exclude":'; jsonw_array "${excl//,/ }"
                 jsonw_field engine_in_cron "$engine_named"
-                jsonw_field engine_run     "$CHECKSNAPAGE"
+                jsonw_field engine_run     "$engine_run"
                 printf ',"engine_path_differs":%s' \
-                    "$(engine_differs "$engine_named" "$CHECKSNAPAGE" && echo true || echo false)"
+                    "$(engine_differs "$engine_named" "$engine_run" && echo true || echo false)"
                 printf ',"parsed":%s,"rc":%s' "$parsed" "$rc"
                 jsonw_field verdict "$verdict"
                 jsonw_text  reason  "$reason"

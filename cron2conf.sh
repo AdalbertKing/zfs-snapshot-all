@@ -622,6 +622,9 @@ declare -a GFS_E=()       # sched<SEP>scope<SEP>pattern<SEP>retain_parts<SEP>rec
 declare -a BOOK_E=()      # sched<SEP>scope<SEP>pattern<SEP>age<SEP>recursive<SEP>notify
 declare -a MON_E=()       # sched<SEP>scope<SEP>pattern<SEP>warn<SEP>crit<SEP>recursive<SEP>notify
 declare -a REPL_E=()      # sched<SEP>label<SEP>source<SEP>dst<SEP>prefix<SEP>media<SEP>recursive<SEP>notify
+# A replica's staleness monitor (2026-10-08): "<warn>|<crit>" per replica label.
+# Its line is recognised by its alert text, "<host> replica stale (<label>)".
+declare -A REPL_MON=()
 DG_FOUND=0
 
 REPO_DIR="" CRON_LOG="" NOTIFY_SCRIPT="" WARN_SCRIPT="" DIGEST_SCRIPT="" HOST_LABEL=""
@@ -717,6 +720,22 @@ classify_lines() {
             die "unrecognized job line (not snapsend.sh, snapget.sh or delsnaps.sh): $line"
         fi
         if parse_monitor_envelope "$line"; then
+            # A REPLICA's staleness monitor belongs to its [replica:] section, not
+            # to a dataset: gen-cron writes it from the section (removable: the
+            # gate's `age`, fixed: check-snap-age on the copy).
+            if [[ "$NOTIFY" =~ \ replica\ stale\ \((.+)\)$ ]]; then
+                _rl="${BASH_REMATCH[1]}"; _rw=""; _rc=""
+                if [[ "$CMD" =~ zfs-media-gate\.sh\ age\ \"[^\"]+\"\ \"[^\"]+\"\ --warn\ ([0-9]+[mhdw])\ --crit\ ([0-9]+[mhdw]) ]]; then
+                    _rw="${BASH_REMATCH[1]}"; _rc="${BASH_REMATCH[2]}"
+                elif parse_checkage_cmd "$CMD"; then
+                    _rw="$C_WARN"; _rc="$C_CRIT"
+                else
+                    die "replica monitor line calls neither the gate's age nor check-snap-age.sh: $line"
+                fi
+                REPL_MON["$_rl"]="$_rw|$_rc"
+                WARN_SCRIPT="${WARN_SCRIPT:-$WARNSCRIPT}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"
+                continue
+            fi
             parse_checkage_cmd "$CMD" || die "monitor line does not call check-snap-age.sh: $line"
             WARN_SCRIPT="${WARN_SCRIPT:-$WARNSCRIPT}"; CRON_LOG="${CRON_LOG:-$CRONLOG}"
             MON_E+=("${SCHED}${SEP}${C_SCOPE}${SEP}${C_PATTERN}${SEP}${C_WARN}${SEP}${C_CRIT}${SEP}${C_RECURSIVE}${SEP}${NOTIFY}${SEP}${C_PAIR_LABEL}")
@@ -1199,6 +1218,16 @@ build_replica_sections() {
         [ -n "$hist" ] && section_set_field "$key" history "$hist"
         [ -n "$flags" ] && section_set_field "$key" flags "$flags"
         [ -n "$notify" ] && [ "$notify" != "$label" ] && section_set_field "$key" notify "$notify"
+        # THE MONITOR AS FOUND. gen-cron derives one from the schedule when the
+        # section says nothing, so a replica that had NO monitor line must say
+        # `monitor = no`, or the recovered config would add one; one that had a
+        # line carries its thresholds explicitly.
+        if [ -n "${REPL_MON[$notify]:-}" ]; then
+            section_set_field "$key" monitor_warn "${REPL_MON[$notify]%%|*}"
+            section_set_field "$key" monitor_crit "${REPL_MON[$notify]#*|}"
+        else
+            section_set_field "$key" monitor no
+        fi
     done
 }
 
