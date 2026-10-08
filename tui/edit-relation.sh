@@ -89,13 +89,22 @@ run_verb_with_plan() {   # <tytuł> <argv...> (bez --yes)
 while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item szablon \
-       --menu "Relacja $NAME ze źródła ${PEER}.\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 13 "$W" 3 \
+       --menu "Relacja $NAME ze źródła ${PEER}.\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 14 "$W" 4 \
        szablon "Szablon (retencja, harmonogramy, retencja źródła)" \
        dodaj   "Dodaj dataset ze źródła" \
-       usun    "Usuń dataset z relacji (kopie zostają)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+       usun    "Usuń dataset z relacji (kopie zostają)" \
+       config  "Edytuj config w edytorze (jak crontab -e)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
         szablon) break ;;
+        config)
+            # edit-config (2026-10-08): edytor dostaje caly terminal, jak crontab -e;
+            # czasownik sam pyta o instalacje i pokazuje, co zrobi na zrodle.
+            clear 2>/dev/null
+            "$ZB" edit-config "$NAME"; RC=$?
+            echo "=== edit-config zakończony (rc=$RC). Enter = dalej"
+            [ -t 0 ] && read -r _
+            exit "$RC" ;;
         dodaj)
             info "Dodaj dataset" "Czytam datasety na $PEER..."
             if ! "$ZB" list-datasets "$PEER" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then

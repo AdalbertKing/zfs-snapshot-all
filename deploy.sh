@@ -4530,6 +4530,33 @@ else
     fi
 fi
 
+# Overridable so the deploy tests can point it into a sandbox.
+CMD_LINK="${ZFS_CMD_LINK:-/usr/local/bin/zfs-backup}"
+# ------------------------------------------------------------------------------
+log "Phase 2b: command link $CMD_LINK"
+# ------------------------------------------------------------------------------
+# Owner, 2026-10-08: "rob edit-config z dowiazaniem zfs-backup" -- `zfs-backup
+# edit-config`, `zfs-backup status`, ... instead of the full path into the
+# checkout. A symlink, so it always runs the checkout this deploy maintains;
+# zfs-backup.sh resolves its own directory through it (readlink -f). Written
+# from every deploy, so the hourly self-update brings it to every host. A FILE
+# (not a link) at that path is somebody else's and is left alone.
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    if [ "$(readlink "$CMD_LINK" 2>/dev/null)" = "$REPO_DIR/zfs-backup.sh" ]; then
+        log "command link present: $CMD_LINK -> $REPO_DIR/zfs-backup.sh"
+    else
+        warn "no command link $CMD_LINK -> $REPO_DIR/zfs-backup.sh -- run without --check-only to create it"
+    fi
+elif [ -e "$CMD_LINK" ] && [ ! -L "$CMD_LINK" ]; then
+    warn "$CMD_LINK exists and is not a link -- left exactly as it is; the command is $REPO_DIR/zfs-backup.sh"
+elif [ "$(readlink "$CMD_LINK" 2>/dev/null)" = "$REPO_DIR/zfs-backup.sh" ]; then
+    log "command link already in place: $CMD_LINK -> $REPO_DIR/zfs-backup.sh"
+elif mkdir -p "$(dirname "$CMD_LINK")" && ln -sfn "$REPO_DIR/zfs-backup.sh" "$CMD_LINK"; then
+    log "command link: $CMD_LINK -> $REPO_DIR/zfs-backup.sh"
+else
+    warn "could not create $CMD_LINK -- the command is $REPO_DIR/zfs-backup.sh"
+fi
+
 # ------------------------------------------------------------------------------
 log "Phase 6: verify the deployment"
 # ------------------------------------------------------------------------------
