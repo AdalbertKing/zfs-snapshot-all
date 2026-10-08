@@ -27,6 +27,10 @@
 #   zfs-media-gate.sh attach <pool> <label>   import if needed; 0 = go, 1 = away
 #   zfs-media-gate.sh detach <pool> <label>   export, but ONLY if we imported it
 #   zfs-media-gate.sh status <pool> <label>   look, change nothing
+#   zfs-media-gate.sh age <pool> <label> --warn D --crit D
+#                                            how long since this medium was last
+#                                            PROVED current; 0/1/2 like
+#                                            check-snap-age, 3 = cannot tell
 #
 # ONLY WHAT WE TOOK. If the pool was already imported when `attach` ran, it was
 # somebody else's decision -- a person looking at it, another job, an operator
@@ -40,7 +44,7 @@ VERSION='v1.1'
 
 usage() {
     cat >&2 <<'EOF'
-Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--dir DIR]...
+Usage: zfs-media-gate.sh <attach|detach|status|age> <pool> <label> [--dataset D] [--dir DIR]...
                          [--source DS]... [--prefix P] [--stats FILE] [--quiet]
 
   --source is repeatable: one job may copy several datasets onto the same
@@ -53,6 +57,10 @@ Usage: zfs-media-gate.sh <attach|detach|status> <pool> <label> [--dataset D] [--
              2  something is wrong and a human is needed
   detach   export the pool, but only if this tool imported it.
   status   report presence; change nothing.
+  age      --warn D --crit D (e.g. 9d, 36h): time since the medium was last
+           proved current. 0 ok, 1 warning, 2 critical, 3 cannot tell --
+           the exit codes of check-snap-age, so a monitor line reads it the
+           same way.
 EOF
     exit 2
 }
@@ -67,7 +75,7 @@ EOF
 # passed straight through to `zpool import -d`.
 VERB=""; POOL=""; LABEL=""; DATASET=""; STATS=""; QUIET=0; _own=0; _erc=0; _fm=""
 _skip=no; _rec_guid=""; _rec_snap=""; _now_guid=""; _new_snap=""; _src=""
-SOURCE=""; PREFIX=""; ENGINE_RC=""
+SOURCE=""; PREFIX=""; ENGINE_RC=""; AGE_WARN=""; AGE_CRIT=""
 # --source is REPEATABLE. One replica job may copy several datasets onto the
 # same medium, and it must do so inside ONE import/export window: the window is
 # the exposure, so a job with three sources that bracketed each one separately
@@ -111,6 +119,10 @@ while [ "$#" -gt 0 ]; do
         --engine-rc=*) ENGINE_RC="${1#--engine-rc=}"; shift ;;
         --prefix)     PREFIX="${2:-}"; shift 2 ;;
         --prefix=*)   PREFIX="${1#--prefix=}"; shift ;;
+        --warn)       AGE_WARN="${2:-}"; shift 2 ;;
+        --warn=*)     AGE_WARN="${1#--warn=}"; shift ;;
+        --crit)       AGE_CRIT="${2:-}"; shift 2 ;;
+        --crit=*)     AGE_CRIT="${1#--crit=}"; shift ;;
         -*)           echo "unknown option: $1" >&2; usage ;;
         *)            if   [ -z "$VERB" ];  then VERB="$1"
                       elif [ -z "$POOL" ];  then POOL="$1"
@@ -120,7 +132,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [ -n "$VERB" ] && [ -n "$POOL" ] && [ -n "$LABEL" ] || usage
-case "$VERB" in attach|detach|status) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
+case "$VERB" in attach|detach|status|age) ;; *) echo "unknown verb: $VERB" >&2; usage ;; esac
 
 # SOURCE is the first one, for the messages that name a dataset.
 [ "${#SOURCES[@]}" -gt 0 ] && SOURCE="${SOURCES[0]}"
@@ -233,6 +245,47 @@ record_write() {   # <guid> -- every source, or nothing at all
 }
 
 SYNCED="$STATE_DIR/$LABEL.synced"
+# WHEN THIS MEDIUM WAS LAST PROVED CURRENT (2026-10-08, owner: a warning when a
+# replica has gone too long without a copy). Two moments prove it: a run that
+# copied and recorded what the medium now holds, and a run that SKIPPED because
+# the medium already held everything. The second matters: a quiet source makes
+# no new copy, and a medium that is up to date must not read as stale.
+CURRENT="$STATE_DIR/$LABEL.current"
+mark_current() { mkdir -p "$STATE_DIR" 2>/dev/null && date '+%s' > "$CURRENT" 2>/dev/null || :; }
+
+if [ "$VERB" = age ]; then
+    to_sec() {   # 90m / 36h / 9d / 2w -> seconds; empty on anything else
+        case "$1" in
+            *[!0-9mhdw]*|'') return 1 ;;
+            *m) echo $(( ${1%m} * 60 )) ;;
+            *h) echo $(( ${1%h} * 3600 )) ;;
+            *d) echo $(( ${1%d} * 86400 )) ;;
+            *w) echo $(( ${1%w} * 604800 )) ;;
+            *)  return 1 ;;
+        esac
+    }
+    _w=$(to_sec "$AGE_WARN") && _c=$(to_sec "$AGE_CRIT") && [ "$_w" -lt "$_c" ] \
+        || { echo "UNKNOWN replica=$LABEL -- --warn and --crit need durations like 9d/36h, warn below crit (got '$AGE_WARN' / '$AGE_CRIT')"; exit 3; }
+    _at=""
+    if [ -r "$CURRENT" ]; then
+        _at=$(head -1 "$CURRENT" 2>/dev/null); case "$_at" in ''|*[!0-9]*) _at="" ;; esac
+    fi
+    # A medium recorded before this file existed still has its .synced record:
+    # its mtime is the last copy that advanced it.
+    [ -n "$_at" ] || { [ -r "$SYNCED" ] && _at=$(stat -c %Y "$SYNCED" 2>/dev/null); }
+    if [ -z "$_at" ]; then
+        echo "WARNING replica=$LABEL pool=$POOL -- no copy has ever been recorded for this medium (warn=$AGE_WARN crit=$AGE_CRIT)"
+        exit 1
+    fi
+    _age=$(( $(date +%s) - _at ))
+    _when=$(date -d "@$_at" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$_at")
+    _d=$(( _age / 86400 )); _h=$(( (_age % 86400) / 3600 ))
+    if [ "$_age" -ge "$_c" ]; then _v=CRITICAL; _rc=2
+    elif [ "$_age" -ge "$_w" ]; then _v=WARNING; _rc=1
+    else _v=OK; _rc=0; fi
+    echo "$_v replica=$LABEL pool=$POOL last_current=$_when age=${_d}d${_h}h (warn=$AGE_WARN crit=$AGE_CRIT)"
+    exit "$_rc"
+fi
 
 # Is the marker OURS, and about the pool that is in the slot right now?
 #
@@ -445,6 +498,7 @@ EOF
             fi
             if [ "$_skip" = yes ]; then
                 say "SKIPPED: this medium (guid $_now_guid) is already current for every source of this job (${SOURCES[*]}), and nothing has been written to any of them since. Nothing to copy, so the disk is left alone -- every minute this pool is NOT imported is a minute it can be pulled safely."
+                mark_current
                 emit skipped_nothing_to_do; exit 1
             fi
         fi
@@ -673,8 +727,11 @@ detach)
     if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && [ -n "$PREFIX" ]; then
         _now_guid="$(pool_guid)"
         if [ -n "$_now_guid" ]; then
-            record_write "$_now_guid" || \
+            if record_write "$_now_guid"; then
+                mark_current
+            else
                 say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than trusting a record it does not have."
+            fi
         fi
     fi
 

@@ -1251,6 +1251,56 @@ oi_conf "on-insertx"
 fo=$(for_run); frc=$?
 check "ONI5 any other word is still linted as a cron schedule and refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
 
+# REPLICA STALENESS (2026-10-08, owner: two weekly replicas and a monthly one --
+# a threshold per medium by hand?). Not by hand: derived from the schedule,
+# overridable in the section; on-insert only when the section says so. A
+# removable medium is watched by the gate's age, a fixed one by check-snap-age
+# on the copy itself.
+rm_conf() {   # <name> <schedule> <media line or empty> <extra lines>
+    cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:$1]
+	source   = tank/a,tank/b
+	dst      = usb/rep
+	schedule = $2
+	prefix   = replica_
+$3
+$4
+EOF
+}
+rm_conf wk "30 3 * * 0" "" ""
+fo=$(for_run)
+check "RMON1 a FIXED weekly replica is watched by check-snap-age on the copy, 9d/14d from its schedule" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^\*/15 \* \* \* \* d=\$(/R/check-snap-age\.sh -L wk "usb/rep/tank/a,usb/rep/tank/b" "replica_" 9d 14d ')"
+rm_conf mo "30 4 1 * *" "	media    = removable" ""
+fo=$(for_run)
+check "RMON2 a REMOVABLE monthly one by the gate's age, 35d/45d" "1" \
+      "$(printf '%s\n' "$fo" | grep -c '^\*/15 \* \* \* \* d=\$(/R/zfs-media-gate\.sh age "usb" "mo" --warn 35d --crit 45d ')"
+rm_conf dy "30 2 * * *" "	media    = removable" ""
+fo=$(for_run)
+check "RMON3 ...a daily one 2d/4d" "1" "$(printf '%s\n' "$fo" | grep -c -- '--warn 2d --crit 4d')"
+rm_conf oi on-insert "	media    = removable" ""
+fo=$(for_run)
+check "RMON4 an on-insert replica WITHOUT thresholds has no monitor line" "0" "$(printf '%s\n' "$fo" | grep -c 'zfs-media-gate\.sh age')"
+rm_conf oi on-insert "	media    = removable" "	monitor_warn = 10d
+	monitor_crit = 16d"
+fo=$(for_run)
+check "RMON5 ...WITH them it is watched, at exactly those" "1" "$(printf '%s\n' "$fo" | grep -c -- 'age "usb" "oi" --warn 10d --crit 16d')"
+check "RMON6 ...rc 1 warns (getting stale), rc 2 alerts (stale), rc>=3 is a broken monitor" "1" \
+      "$(printf '%s\n' "$fo" | grep 'age "usb" "oi"' | grep -c '/W "f replica getting stale (oi)".*/N "f replica stale (oi)".*/N "f replica monitor BROKEN (oi)"')"
+rm_conf oi on-insert "	media    = removable" "	monitor_warn = 10d"
+fo=$(for_run); frc=$?
+check "RMON7 monitor_warn without monitor_crit is refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+rm_conf oi on-insert "	media    = removable" "	monitor_warn = 14d
+	monitor_crit = 9d"
+fo=$(for_run); frc=$?
+check "RMON8 warn not below crit is refused where it is written, not at run time" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+rm_conf oi on-insert "	media    = removable" "	monitor_warn = 9dd
+	monitor_crit = 14d"
+fo=$(for_run); frc=$?
+check "RMON9 a threshold with two units (9dd) is refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #

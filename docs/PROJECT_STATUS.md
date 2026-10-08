@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fc663d12d5dfdae5 -->
+<!-- status-covers-digest: 4b802c0bd176005c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,46 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Ostrzeżenie, gdy replika za długo nie dostała kopii (2026-10-08, właściciel: „dwie repliki tygodniowe i jedna miesięczna — na każdy nośnik oddzielna ilość dni?”; „tak, rób ostrzeżenie w tym kształcie”).**
+  - **Było:** replika, której dysk nie był wkładany od tygodni, milczała. To było celowe
+    („dysk w sejfie to nie alarm”), ale nic nie mówiło, że kopia się zestarzała.
+  - **Progi bez ręcznego ustawiania:** wynikają z harmonogramu repliki: dobowo 2d/4d,
+    tygodniowo 9d/14d, miesięcznie 35d/45d. `monitor_warn` / `monitor_crit` w sekcji
+    `[replica:]` (albo `add-replica --monitor-warn= --monitor-crit=`) je nadpisują. Replika „po
+    włożeniu” nie ma rytmu, więc jest pilnowana tylko z ustawionym progiem; okno repliki pyta
+    wtedy „po ilu dniach bez kopii ostrzec” (alarm po półtora raza tylu dniach, zaokrąglonym
+    w górę: 10 → 15). gen-cron odmawia progu bez jednej jednostki (`9dd`) i warn ≥ crit.
+  - **Jak liczony jest wiek:**
+    - nośnik WYMIENNY zwykle nie jest w maszynie, więc mierzy go brama: nowa podkomenda
+      `zfs-media-gate.sh age "POOL" "NAZWA" --warn D --crit D` (kody jak `check-snap-age`:
+      0/1/2, 3 = nie da się ocenić). Liczy od zapisu `<nazwa>.current`, który brama robi przy
+      udanej, zapisanej kopii ORAZ przy pominięciu „nośnik już aktualny” (ciche źródło nie
+      robi nowej kopii, a aktualny nośnik nie może wyglądać na stary). Starszy nośnik bez tego
+      pliku liczy się od czasu `<nazwa>.synced`; brak obu = ostrzeżenie „nie było jeszcze
+      kopii”;
+    - nośnik STAŁY jest zawsze w maszynie, a każdy bieg stawia na nim nową migawkę repliki,
+      więc pilnuje go zwykły `check-snap-age -L <nazwa>` na kopii (`dst/źródło`, prefiks
+      repliki).
+  - **Droga alertu bez zmian:** linia monitora ma ten sam kształt co pozostałe (co 15 min;
+    rc 1 → `notify-warn` „replica getting stale”, rc 2 → `notify-fail` „replica stale”, rc ≥ 3
+    → „monitor BROKEN”), więc kolejka i raport dzienny biorą ją bez zmian.
+    `zfs-backup.sh monitor` rozpoznaje linię bramy (etykieta = nazwa repliki, wzorzec
+    `replica`), a GUI daje wierszowi repliki na F2 werdykt z jego monitora.
+    `list-replicas --json` podaje progi ustawione wprost w sekcji (`monitor_warn`/`monitor_crit`;
+    puste, gdy próg wynika z harmonogramu).
+  - **Testy:** `cron` 177/0 (+9 RMON: stała tygodniowa, wymienna miesięczna i dobowa, „po
+    włożeniu” bez i z progiem, teksty alertów, odmowa samego `monitor_warn`, warn ≥ crit i
+    `9dd`); `mediagate` 152/0 (+11 AG: brak zapisu, starszy `.synced`, `.current` ma pierwszeństwo, krytyczny,
+    złe progi, zapis `.current` przy pominięciu); `zfsbackup --section replicamonitor` 3/0 (na
+    `main` 0/3); `tui` 214/0 (+1: werdykt repliki z monitora).
+  - **Na żywo, pve9:**
+    - `age` na `usb1`: OK (0d12h od kopii), z zaniżonym progiem CRITICAL;
+    - tymczasowa stała tygodniowa: `check-snap-age` 9d/14d, „aktualne” w `monitor` i na F2;
+    - tymczasowa wymienna miesięczna bez nośnika: linia bramy 35d/45d, „nie było jeszcze
+      kopii”, na F2 „spóźnione”.
+
+    Repliki testowe i pula z pliku usunięte; `usb1` (po włożeniu, bez progu) bez zmian.
 
 - **Repliki na liście zadań (F2) i ich biegi w GUI (2026-10-08, właściciel: „czy zadania repliki wchodzą do listy zadań? czy widzimy gdzieś statystyki zadań repliki?”).**
   - **Było:** `list-jobs` czyta tylko sekcje relacji, więc F2 replik nie pokazywał. `job-stats`
