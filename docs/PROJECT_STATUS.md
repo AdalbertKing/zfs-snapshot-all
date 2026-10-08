@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f8eee67827af65f2 -->
+<!-- status-covers-digest: d98e92aecde171d5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -27,6 +27,12 @@
     to, co już jest, każdą rodzinę. Bramka nośnika dostaje `--prefix -` (dowolna
     migawka), więc zapis „nośnik aktualny” i szybka ścieżka działają jak przy
     prefiksie; monitor nośnika stałego czyta wzorzec `-` (check-snap-age: dowolna).
+    Replika pasywna NIE korzysta z szybkiej ścieżki „nośnik już aktualny” — zawsze
+    importuje i uruchamia kopię (silnik wysyła tylko brakujące). Szybka ścieżka
+    zakłada, że najnowsza migawka to migawka repliki z jej poprzedniego biegu; przy
+    pasywnej na dzieciach stoją migawki odebrane przez relację, więc drzewo zawsze
+    wyglądało na „ciche” (zmierzone na pve9b 2026-10-08 23:03 UTC: usb1 pominięta,
+    nic nie skopiowane; E76).
     Wsad: `add-replica --passive`; `list-replicas` pokazuje prefiks `-`, panel F6
     „bez własnych migawek (przenosi istniejące)”. Powód: migawki `replica_` na
     kopiach relacji znikały przy następnym pobraniu (P-0), co godzinę w logu.
@@ -39,7 +45,7 @@
     udev nie ma — reguła jest jedna na host i uruchamia przy włożeniu wszystkie
     repliki. Reguła nie ma osobnego pytania: plan wymienia ją jako krok. Komunikat
     końcowy: „Pierwsza kopia: po włożeniu dysku … albo teraz: F7 na F6”.
-  - **Testy:** `cron` PRV1-PRV6, `mediagate` L8p (`--prefix -` zapisuje nośnik jako aktualny), `zfsbackup --section runreplicas` (w niej:
+  - **Testy:** `cron` PRV1-PRV6, `mediagate` L8p (`--prefix -` zapisuje nośnik jako aktualny) i L8q (pasywna nie pomija biegu; kontrola: z prefiksem pomija), `zfsbackup --section runreplicas` (w niej:
     sekcja configu z `passive = yes`, odmowa z `--prefix`, `list-replicas`), `tui` — pierwszy test kreatora
     repliki na atrapie whiptail (3 przebiegi); kontrola negatywna: na `replica.sh`
     z `main` wszystkie trzy padają.
