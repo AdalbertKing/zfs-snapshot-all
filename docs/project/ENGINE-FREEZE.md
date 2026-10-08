@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
-<!-- frozen: snapget.sh 100755 f5680ba404a132607c9f3792f2663f4c07f9dd07 -->
+<!-- frozen: snapget.sh 100755 c460ff118c58b3eb52f36013d9f9fd9ae07efd89 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 77eadee355d879ffb2faad2786f5ff6e8927f7f0 -->
@@ -939,6 +939,25 @@ Owner-authorized refreezes:
   twin: process_dataset's reason column changes from port-by:2026-10-19 to
   direction: which side is remote, plus snapget's guest_disk_is_live, which
   has no push twin (above).
+
+- 2026-10-08 (snapget.sh): **P-0 for the mirror: -M follows its source too,
+  unless the path is a running guest's disk.**
+  Owner direction, verbatim, asked whether the mirror should be ploughed like a
+  backup: "tak, orz gdy gość nie działa". snapget stays v2.73.
+  The GUI's sync/mirror relationship pulls `snapget.sh -M user@host:path` with
+  no local base, so #480 treated it as sync: a write on the copy was refused,
+  with -f as the remedy. Now BACKUP_LANDING is also set for -M without -t, and
+  the same plough-with-log applies ("Mirror copy (no running guest on that
+  path) '...' follows its source -- discarding ...", for every -M pull, with a
+  base or without). Safe because guest_disk_is_live already runs first in
+  process_dataset and refuses when the path is the disk of a guest RUNNING on
+  this node, or when the account cannot query the guest's state. A guest whose
+  config is on another node counts as not running -- correct for a node-local
+  ZFS disk, which only a guest on this node can use.
+  Limit: a guest disk is recognised by its leaf name (vm-N-disk-M,
+  subvol-N-disk-M); a dataset named otherwise is never treated as a guest.
+  -t and a bare sync pull without -M still refuse.
+  twin: NOT ported -- -M is snapget's alone; snapsend has no mirror.
 
 ## How it is enforced
 
