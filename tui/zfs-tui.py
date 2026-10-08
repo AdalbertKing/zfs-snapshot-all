@@ -3040,9 +3040,10 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
     pairs = [(u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
              ("Cel", "%s %s   (pula %s)" % (ch.right, r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
-             ("Harmonogram", "%s   stempel %s%s%s" % (
+             ("Harmonogram", "%s   %s%s%s" % (
                  {"on-insert": u"po włożeniu nośnika"}.get(r.get("schedule"), r.get("schedule") or "?"),
-                 r.get("prefix") or "?", "   rekursywnie" if r.get("recursive") == "yes" else "",
+                 u"bez własnych migawek (przenosi istniejące)" if r.get("prefix") == "-"
+                 else u"stempel %s" % (r.get("prefix") or "?"), "   rekursywnie" if r.get("recursive") == "yes" else "",
                  "   historia: %s" % r["history"] if r.get("history") and r["history"] != "all" else "")),
              (u"Nośnik", media_state_line(r, st)),
              ("Ostatnio", r.get("last_seen") or u"nigdy nie widziany (brak pliku last-seen bramy)")]

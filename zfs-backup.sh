@@ -352,7 +352,12 @@ front end never edits the config file:
                                     daily tier: a replica is not an online mirror,
                                     and every run is a window in which the medium
                                     is at risk.
-                                    [--schedule='30 2 * * *'|on-insert] [--prefix=replica_]
+                                    [--schedule='30 2 * * *'|on-insert] [--prefix=replica_|--passive]
+                                    --passive = no snapshots of its own: it carries
+                                    the ones already there (for a replica of a
+                                    relationship's copies, whose next pull would
+                                    discard any replica_ snapshot). list-replicas
+                                    shows its prefix as '-'.
                                     on-insert = no time, only when the disk is
                                     plugged in (needs install-media-trigger).
                                     [--recursive=yes|no] [--fixed|--removable]
@@ -6343,9 +6348,9 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
 # Replace or append one [replica:NAME] block in a config file, in place.
 # Everything outside the block is preserved byte for byte -- a config carries
 # other people's sections and comments somebody wrote by hand.
-replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit]
+replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit] [passive 0|1]
     local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
-    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}"
+    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}"
     local tmp; tmp=$(mktemp) || return 1
     awk -v want="[replica:$name]" '
         $0 == want { skip=1; next }
@@ -6359,7 +6364,8 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
         printf '\tsource    = %s\n' "$source"
         printf '\tdst       = %s\n' "$dst"
         printf '\tschedule  = %s\n' "$sched"
-        printf '\tprefix    = %s\n' "$pref"
+        if [ "$passive" = 1 ]; then printf '\tpassive   = yes\n'
+        else printf '\tprefix    = %s\n' "$pref"; fi
         [ -n "$media" ]  && printf '\tmedia     = %s\n' "$media"
         [ "$rec" = "1" ] && printf '\trecursive = yes\n'
         # 'all' is gen-cron's default and it emits nothing for it, so writing it
@@ -6551,7 +6557,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         return $?
     fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
-    local mon_warn="" mon_crit=""
+    local mon_warn="" mon_crit="" passive=0 _prefset=0
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
     # send either shape. One medium often holds more than one thing worth
@@ -6566,7 +6572,11 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
                            for _s1 in "${_sp[@]}"; do [ -n "$_s1" ] && sources+=("$_s1"); done ;;
             --dst=*)       dst="${a#*=}" ;;
             --schedule=*)  sched="${a#*=}" ;;
-            --prefix=*)    pref="${a#*=}" ;;
+            --prefix=*)    pref="${a#*=}"; _prefset=1 ;;
+            # PASSIVE (owner note 20, 2026-10-08): no snapshots of its own -- it
+            # carries what is already there. For a replica of a relationship's
+            # copies, whose next pull would discard any replica_ snapshot.
+            --passive)     passive=1 ;;
             --notify=*)    notify="${a#*=}" ;;
             # Staleness thresholds (2026-10-08). Without them gen-cron derives
             # them from the schedule; an on-insert replica is watched only with them.
@@ -6601,6 +6611,10 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET [--source=DATASET2 ...] --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
     case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
     [ "${#sources[@]}" -gt 0 ] || die "add-replica: --source= names the dataset on THIS host to copy (repeat it for more than one)"
+    if [ "$passive" -eq 1 ]; then
+        [ "$_prefset" -eq 0 ] || die "add-replica: --passive takes no snapshots of its own, so --prefix=$pref names nothing -- say one of them"
+        pref=""
+    fi
     local _i _j
     for ((_i=0; _i<${#sources[@]}; _i++)); do
         for ((_j=_i+1; _j<${#sources[@]}; _j++)); do
@@ -6695,7 +6709,7 @@ REPEOF
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
-    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" \
+    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" "$passive" \
         || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
 
     show_activation_proposal "$config" "$cand" || {
@@ -6762,6 +6776,7 @@ cmd_list_replicas() {
             else if (k=="dst") dst=v
             else if (k=="schedule") sched=v
             else if (k=="prefix") pref=v
+            else if (k=="passive" && v ~ /^(yes|1|true)$/) pref="-"
             else if (k=="media") media=v
             else if (k=="recursive") rec=v
             else if (k=="history") hist=v

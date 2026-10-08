@@ -776,6 +776,23 @@ else
 fi
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 
+# L8p. A PASSIVE replica (owner note 20, 2026-10-08) has no family of its own:
+#      --prefix - means ANY snapshot. The record and the "current" marker must
+#      advance exactly as with a prefix -- without them F6 says "brak kopii" for
+#      ever and the age monitor goes red on a medium that is current.
+rm -f "$STATE/rep.current"
+POOLS="hdd"; IMPORTABLE="rotpool"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+g detach rotpool rep --source tank/src --prefix - --engine-rc 0 >/dev/null 2>&1
+if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && grep -q '^snap:tank/src=replica_s2$' "$SYNCFILE" \
+   && [ -e "$STATE/rep.current" ]; then
+    ok "L8p: --prefix - (passive replica) records the medium and marks it current, from the newest snapshot of ANY family"
+else
+    bad "L8p: --prefix - records the medium" "$(cat "$SYNCFILE" 2>/dev/null)" "$(ls "$STATE")"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+
 # ---------------------------------------------------------------------------
 # M. SEVERAL SOURCES, ONE MEDIUM, ONE WINDOW
 #
