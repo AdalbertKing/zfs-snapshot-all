@@ -1739,7 +1739,10 @@ process_dataset() {
             # (-f) as the only way out, fills disks and blocks a collector for
             # days on large data -- the owner's reason for D3 over the
             # set-aside variant.
-            if [ "$written" != "0" ] && [ -n "$written" ] && [ "${BACKUP_LANDING:-0}" -eq 1 ]; then
+            # Moved = snapshots after the base (an empty one adds no bytes, so
+            # written@ alone misses it) or bytes written after it.
+            local p0_ahead; p0_ahead=$(snaps_after "$recv_base" "${tgt_snaps[@]}")
+            if [ "${BACKUP_LANDING:-0}" -eq 1 ] && { [ -n "$p0_ahead" ] || { [ -n "$written" ] && [ "$written" != "0" ]; }; }; then
                 log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$written" "${tgt_snaps[@]}") (zfs recv -F)"
             elif [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then

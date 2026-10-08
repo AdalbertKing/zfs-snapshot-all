@@ -1748,6 +1748,7 @@ process_dataset() {
         abort_held_snapshot "$snapshot" "$tgt_dataset"
         return 1
     fi
+    local p0_no_force=0
     if [ $FORCE_FULL_SEND -ne 1 ] && [[ "$common_snapshot" != "null" ]] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
         local recv_base="" p0_written="" p0_guid p0_t
         if printf '%s\n' "${tgt_snaps[@]}" | grep -qFx -- "$common_snapshot"; then
@@ -1768,21 +1769,28 @@ process_dataset() {
                 p0_written=$(zfs get -Hp -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
             fi
         fi
-        if [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; then
-            if [ "${BACKUP_LANDING:-0}" -eq 1 ]; then
-                log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}") (zfs recv -F)"
-            else
-                log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t) and differs from the common snapshot -- $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}"). A forced receive could roll back a live system there; look at it, and resolve it by hand."
-                abort_held_snapshot "$snapshot" "$tgt_dataset"
-                return 1
-            fi
+        # Moved = snapshots after the base (an empty one adds no bytes, so
+        # written@ alone misses it) or bytes written after it.
+        local p0_ahead=""
+        [ -n "$recv_base" ] && p0_ahead=$(snaps_after "$recv_base" "${tgt_snaps[@]}")
+        if [ "${BACKUP_LANDING:-0}" -eq 1 ] && { [ -n "$p0_ahead" ] || { [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; }; }; then
+            log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}") (zfs recv -F)"
+        elif [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; then
+            log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t) and differs from the common snapshot -- $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}"). A forced receive could roll back a live system there; look at it, and resolve it by hand."
+            abort_held_snapshot "$snapshot" "$tgt_dataset"
+            return 1
         elif [ "${BACKUP_LANDING:-0}" -ne 1 ] && { [ -z "$recv_base" ] || [ -z "$p0_written" ]; }; then
             log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t), and how far it has moved from the common snapshot could not be determined -- not forcing a receive onto it."
             abort_held_snapshot "$snapshot" "$tgt_dataset"
             return 1
+        elif [ "${BACKUP_LANDING:-0}" -ne 1 ] && [ -n "$p0_ahead" ]; then
+            # Not a backup landing, nothing written, only snapshots after the
+            # base: receive WITHOUT -F and keep them, as snapget.sh does.
+            p0_no_force=1
         fi
     fi
     local recv_flags="-F -s"
+    [ "${p0_no_force:-0}" -eq 1 ] && recv_flags="-s"
     [ $UNMOUNT -eq 1 ] && recv_flags="$recv_flags -u"
     [ -n "$RECV_EXCLUDE_FLAGS" ] && recv_flags="$recv_flags$RECV_EXCLUDE_FLAGS"
     local recv_cmd="zfs recv $recv_flags $tgt_dataset"

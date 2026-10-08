@@ -631,16 +631,28 @@ adopt_legacy_state() {
 # hold, so the sentence is the same whichever side runs the receive.
 divergence_summary() {
     local base="$1" written="$2"; shift 2
-    local s seen=0 n=0 names=""
-    for s in "$@"; do
-        [ "$seen" -eq 1 ] && { names="$names $s"; n=$((n + 1)); }
-        [ "$s" = "$base" ] && seen=1
-    done
+    local s n=0 names=""
+    while IFS= read -r s; do
+        [ -n "$s" ] && { names="$names $s"; n=$((n + 1)); }
+    done < <(snaps_after "$base" "$@")
     if [ "$n" -gt 0 ]; then
         printf '%d snapshot(s) after @%s that the source no longer has:%s' "$n" "$base" "$names"
     else
         printf '%s byte(s) written after @%s' "$written" "$base"
     fi
+}
+
+# snaps_after <base> <snapshots, oldest first...> -- the names after <base>,
+# one per line. A snapshot taken on the copy with nothing written before it
+# adds no bytes, so `written@<base>` stays 0 and only this list shows that the
+# copy moved (measured on pve9, 2026-10-08: pull then kept it, push's -F
+# destroyed it in silence).
+snaps_after() {
+    local base="$1" s seen=0; shift
+    for s in "$@"; do
+        [ "$seen" -eq 1 ] && printf '%s\n' "$s"
+        [ "$s" = "$base" ] && seen=1
+    done
 }
 
 get_snapshot_guid() {

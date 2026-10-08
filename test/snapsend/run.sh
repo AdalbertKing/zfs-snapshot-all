@@ -1430,15 +1430,29 @@ zfs snapshot "$POOL/px@auto_1"
 run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC
 run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC
 check "P -t first: both landed" "0 0" "$RC_S $RC_G"
+# P10 first: an EMPTY snapshot on the exact path adds no bytes. Both receive
+# without -F and keep it (snapget always did; push now matches).
 zfs snapshot "$PBK/xs@manual"
 zfs snapshot "$PLP/xg@manual"
 zfs snapshot "$POOL/px@auto_2"
+run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC
+run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC
+check "P -t empty snapshot: both receive" "0 0" "$RC_S $RC_G"
+check "P -t empty snapshot: push kept it" "auto_1 manual auto_2" "$(snaps_of "$PBK/xs")"
+check "P -t empty snapshot: pull kept it" "auto_1 manual auto_2" "$(snaps_of "$PLP/xg")"
+# P9: a WRITE on the exact path -- refused by both, the copy left as it was.
+for _c in "$PBK/xs" "$PLP/xg"; do
+    zfs mount "$_c" 2>/dev/null
+    dd if=/dev/urandom of="$(zfs get -H -o value mountpoint "$_c")/stray" bs=64k count=4 2>/dev/null
+    sync
+done
+zfs snapshot "$POOL/px@auto_3"
 run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC; OUT_S="$OUT"
 run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC; OUT_G="$OUT"
-check "P -t surplus: both refuse" "1 1" "$RC_S $RC_G"
-check "P -t surplus: push left the copy alone" "auto_1 manual" "$(snaps_of "$PBK/xs")"
-check "P -t surplus: pull left the copy alone" "auto_1 manual" "$(snaps_of "$PLP/xg")"
-check "P -t surplus: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
+check "P -t write: both refuse" "1 1" "$RC_S $RC_G"
+check "P -t write: push left the copy alone" "auto_1 manual auto_2" "$(snaps_of "$PBK/xs")"
+check "P -t write: pull left the copy alone" "auto_1 manual auto_2" "$(snaps_of "$PLP/xg")"
+check "P -t write: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
 
 # --- summary ----------------------------------------------------------------
 
