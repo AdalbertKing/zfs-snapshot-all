@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d59c4b4ba8ccc4c9 -->
+<!-- status-covers-digest: 614cc4a0b486c818 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,19 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **„Synchro” nazywa się w GUI „lustro” (2026-10-08, właściciel: „tak, zmień synchro na lustro w GUI”).**
+  - **Dlaczego:** to nie jest synchronizacja dwukierunkowa. Dane idą w jedną stronę, od
+    dawcy do kolektora, a zmiana na kolektorze nigdy nie wraca do źródła. Od backupu
+    relacja różni się dwiema rzeczami: retencją (kopia trzyma to, co źródło, pobranie
+    z `-M`) i miejscem (ta sama ścieżka co u źródła, bez bazy pod kolektorem).
+  - **Co się zmieniło:** sam tekst na ekranie. Kreator nowej relacji (wybór typu, plan,
+    podsumowanie) i panel F3 („Typ: lustro” oraz dopisek przy celu „ta sama ścieżka -- lustro”).
+    W konfiguracji, rekordzie relacji i CLI tryb nadal nazywa się `sync` (`--mode=sync`),
+    więc istniejące relacje i crontaby się nie zmieniają.
+  - **Lustro wobec P-0:** relacja lustro pobiera bez bazy lokalnej, na tę samą ścieżkę.
+    Dla P-0 to tryb sync: zapis na kopii → odmowa, pusta migawka → odbiór bez `-F`. Tak
+    było też przed P-0.
+
 - **P-0: KOPIA BACKUPU PODĄŻA ZA ŹRÓDŁEM — jedna polityka rozjazdu w obu silnikach (2026-10-08, właściciel: „odmrażam, wariant D3 … gdy mamy migawki z rodziny w celu, a nie mamy ich w źródle uznajemy że są nadmiarowe. Nie pieścimy się z nimi”).**
   - **Było (zmierzone na pve9, pula plikowa):** push (`snapsend.sh`, czyli cała produkcja)
     niósł `recv -F` bezwarunkowo i **po cichu** kasował ręczną migawkę na kopii, cofał zapis
@@ -29,14 +42,16 @@
     trybie, a jedynym wyjściem było `-f`, czyli PEŁNA kopia od nowa. Na dużych danych to
     przepełnione dyski i kolektor zablokowany na dni; dlatego właściciel wybrał D3, a nie
     wariant z odkładaniem.
-  - **Jest (snapsend v2.75, snapget v2.73):** na kopii pod bazą (backup oraz synchro/lustro
-    pod `-M`) wszystko, co leży na kopii po wspólnej migawce, jest nadmiarem. Mowa o
+  - **Jest (snapsend v2.75, snapget v2.73):** na kopii pod bazą (relacja backupowa)
+    wszystko, co leży na kopii po wspólnej migawce, jest nadmiarem. Mowa o
     migawkach po niej (także pustych, które nie dodają bajtów do `written@`) albo o
     zapisanych bajtach. Kopia jest doprowadzana do źródła przez `recv -F`, a linia log 0
     mówi CO wyrzucono: migawki z nazwy albo liczbę bajtów
     (`Backup copy '…' follows its source -- discarding …`).
-  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** tryb silnika `user@host`
-    bez bazy (ta sama ścieżka na drugim hoście) oraz `-t` (ścieżka dokładna, kierunek
+  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** pobranie bez bazy, na tę
+    samą ścieżkę -- **w tym relacja synchro/lustro z GUI** (linia `snapget … -M
+    user@host:ścieżka`, sprawdzone w crontabie pve10; dla niej P-0 nie zmienia niczego,
+    pull zawsze tak odmawiał) -- oraz `-t` (ścieżka dokładna, kierunek
     odtwarzania). Zapis na takim celu → odmowa w obu silnikach. Na takim celu sama pusta
     migawka → odbiór bez `-F`, migawka zostaje (jak zawsze w pull). W każdym trybie oba
     silniki odmawiają, gdy nie da się ustalić rozjazdu (zawiodło zapytanie `written@`).
