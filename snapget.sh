@@ -233,9 +233,10 @@ set -o pipefail
 #                    target every snapshot the source no longer has that is
 #                    OLDER than the common base -- the target then holds what
 #                    the source holds. Never the base or anything newer (a
-#                    newer target-only snapshot is divergence: since P-0,
-#                    2026-10-08, the next pull discards it with -F and says
-#                    so in the log), never a Proxmox-reserved
+#                    newer target-only snapshot is divergence: a sync pull
+#                    has no base, so P-0 keeps refusing it when bytes were
+#                    written after the base, and receives without -F, keeping
+#                    it, when it is only an empty snapshot), never a Proxmox-reserved
 #                    family, and nothing at all when the source list cannot be
 #                    read or comes back empty. Per dataset, so with -R every
 #                    expanded child mirrors its own source. Not with -r.

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d59c4b4ba8ccc4c9 -->
+<!-- status-covers-digest: b651e4f7b95f7e7b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -29,14 +29,16 @@
     trybie, a jedynym wyjściem było `-f`, czyli PEŁNA kopia od nowa. Na dużych danych to
     przepełnione dyski i kolektor zablokowany na dni; dlatego właściciel wybrał D3, a nie
     wariant z odkładaniem.
-  - **Jest (snapsend v2.75, snapget v2.73):** na kopii pod bazą (backup oraz synchro/lustro
-    pod `-M`) wszystko, co leży na kopii po wspólnej migawce, jest nadmiarem. Mowa o
+  - **Jest (snapsend v2.75, snapget v2.73):** na kopii pod bazą (relacja backupowa)
+    wszystko, co leży na kopii po wspólnej migawce, jest nadmiarem. Mowa o
     migawkach po niej (także pustych, które nie dodają bajtów do `written@`) albo o
     zapisanych bajtach. Kopia jest doprowadzana do źródła przez `recv -F`, a linia log 0
     mówi CO wyrzucono: migawki z nazwy albo liczbę bajtów
     (`Backup copy '…' follows its source -- discarding …`).
-  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** tryb silnika `user@host`
-    bez bazy (ta sama ścieżka na drugim hoście) oraz `-t` (ścieżka dokładna, kierunek
+  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** pobranie bez bazy, na tę
+    samą ścieżkę -- **w tym relacja synchro/lustro z GUI** (linia `snapget … -M
+    user@host:ścieżka`, sprawdzone w crontabie pve10; dla niej P-0 nie zmienia niczego,
+    pull zawsze tak odmawiał) -- oraz `-t` (ścieżka dokładna, kierunek
     odtwarzania). Zapis na takim celu → odmowa w obu silnikach. Na takim celu sama pusta
     migawka → odbiór bez `-F`, migawka zostaje (jak zawsze w pull). W każdym trybie oba
     silniki odmawiają, gdy nie da się ustalić rozjazdu (zawiodło zapytanie `written@`).
