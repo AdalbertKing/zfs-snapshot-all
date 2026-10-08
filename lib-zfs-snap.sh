@@ -622,6 +622,39 @@ adopt_legacy_state() {
 
 # Emit the GUID of one dataset@snapshot. Mirrors get_timestamp's remote-vs-
 # local branching but reads the `guid` property instead of `creation`.
+# divergence_summary <recv_base> <written bytes> <target snapshots, oldest first...>
+#
+# P-0 (owner, 2026-10-08, "odmrazam", variant D3): what `zfs recv -F` is about
+# to discard on a BACKUP copy, as one sentence for the log. Snapshots after the
+# common base are named (they are destroyed); otherwise the bytes written after
+# it (they are rolled back). Pure: both engines call it with what they already
+# hold, so the sentence is the same whichever side runs the receive.
+divergence_summary() {
+    local base="$1" written="$2"; shift 2
+    local s n=0 names=""
+    while IFS= read -r s; do
+        [ -n "$s" ] && { names="$names $s"; n=$((n + 1)); }
+    done < <(snaps_after "$base" "$@")
+    if [ "$n" -gt 0 ]; then
+        printf '%d snapshot(s) after @%s that the source no longer has:%s' "$n" "$base" "$names"
+    else
+        printf '%s byte(s) written after @%s' "$written" "$base"
+    fi
+}
+
+# snaps_after <base> <snapshots, oldest first...> -- the names after <base>,
+# one per line. A snapshot taken on the copy with nothing written before it
+# adds no bytes, so `written@<base>` stays 0 and only this list shows that the
+# copy moved (measured on pve9, 2026-10-08: pull then kept it, push's -F
+# destroyed it in silence).
+snaps_after() {
+    local base="$1" s seen=0; shift
+    for s in "$@"; do
+        [ "$seen" -eq 1 ] && printf '%s\n' "$s"
+        [ "$s" = "$base" ] && seen=1
+    done
+}
+
 get_snapshot_guid() {
     local dataset="$1"
     local snap="$2"

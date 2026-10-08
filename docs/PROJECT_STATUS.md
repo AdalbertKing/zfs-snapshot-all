@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dd6e041efaa2a393 -->
+<!-- status-covers-digest: d59c4b4ba8ccc4c9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,40 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **P-0: KOPIA BACKUPU PODĄŻA ZA ŹRÓDŁEM — jedna polityka rozjazdu w obu silnikach (2026-10-08, właściciel: „odmrażam, wariant D3 … gdy mamy migawki z rodziny w celu, a nie mamy ich w źródle uznajemy że są nadmiarowe. Nie pieścimy się z nimi”).**
+  - **Było (zmierzone na pve9, pula plikowa):** push (`snapsend.sh`, czyli cała produkcja)
+    niósł `recv -F` bezwarunkowo i **po cichu** kasował ręczną migawkę na kopii, cofał zapis
+    na kopii i kasował migawki okresu, z którego źródło cofnięto. Wszystko przy rc=0, bez
+    słowa w logu. Pull (`snapget.sh`) w tych samych trzech przypadkach odmawiał w każdym
+    trybie, a jedynym wyjściem było `-f`, czyli PEŁNA kopia od nowa. Na dużych danych to
+    przepełnione dyski i kolektor zablokowany na dni; dlatego właściciel wybrał D3, a nie
+    wariant z odkładaniem.
+  - **Jest (snapsend v2.75, snapget v2.73):** na kopii pod bazą (backup oraz synchro/lustro
+    pod `-M`) wszystko, co leży na kopii po wspólnej migawce, jest nadmiarem. Mowa o
+    migawkach po niej (także pustych, które nie dodają bajtów do `written@`) albo o
+    zapisanych bajtach. Kopia jest doprowadzana do źródła przez `recv -F`, a linia log 0
+    mówi CO wyrzucono: migawki z nazwy albo liczbę bajtów
+    (`Backup copy '…' follows its source -- discarding …`).
+  - **Odmowa zostaje tam, gdzie kopia może być żywym systemem:** tryb silnika `user@host`
+    bez bazy (ta sama ścieżka na drugim hoście) oraz `-t` (ścieżka dokładna, kierunek
+    odtwarzania). Zapis na takim celu → odmowa w obu silnikach. Na takim celu sama pusta
+    migawka → odbiór bez `-F`, migawka zostaje (jak zawsze w pull). W każdym trybie oba
+    silniki odmawiają, gdy nie da się ustalić rozjazdu (zawiodło zapytanie `written@`).
+    Brak wspólnej migawki (przypadek E) → odmowa w obu silnikach tymi samymi słowami
+    („shares no common snapshot … needs -f”); push mówi to teraz sam, przed wysłaniem.
+  - **Czego push nie ma:** `guest_disk_is_live` z pull czyta stan gościa na węźle
+    LOKALNYM, a cel push jest zdalny. Push sprawdza tylko dataset szczytowy (przy `-r`
+    dzieci rozstrzyga `-F` strumienia). Przyrost zakotwiczony zakładką nie jest badany.
+  - **Bliźniaki:** `process_dataset` zmienił `port-by:2026-10-19` na `direction:`. Zostaje
+    różnica kierunku (która strona jest zdalna) i `guest_disk_is_live`, którego push nie ma.
+    Wpis w `ENGINE-FREEZE.md` z cytatem właściciela.
+  - **Dowód:** `test/snapsend` NA ŻYWO na pve9 (root, pula plikowa) **258/0**. Sekcja P to
+    ten sam argv przez oba silniki. P5: brak wspólnej migawki. P6: ręczna migawka na kopii
+    backupu, wyrzucona. P7: zapis na kopii backupu, cofnięty. P8: źródło cofnięte, migawka
+    okresu wyrzucona. P9: zapis na `-t`, odmowa. P10: pusta migawka na `-t`, zostaje. **Kontrola
+    negatywna:** ten sam suite na silnikach z `main` (9263bdd0) → 15 FAIL, wszystkie
+    w nowych przypadkach. `twins` 94/0.
 
 - **Ostrzeżenie, gdy replika za długo nie dostała kopii (2026-10-08, właściciel: „dwie repliki tygodniowe i jedna miesięczna — na każdy nośnik oddzielna ilość dni?”; „tak, rób ostrzeżenie w tym kształcie”).**
   - **Było:** replika, której dysk nie był wkładany od tygodni, milczała. To było celowe
@@ -1184,25 +1218,6 @@
     na dataset, niepowtarzania ostrzeżeń i tego, że **żaden nagłówek nie jest
     ucięty przy 80/100/120/140/200** -- czyli że poszerzenie terminala nigdy
     znowu nie pogorszy ekranu.
-
-- **PARYTET PUSH↔PULL (P-0) PRZESUNIĘTY NA 2026-10-19 -- z nowym faktem (2026-09-21).**
-  Budzik `port-by:2026-09-21` w `test/twins/twins.sha256` zadzwonił zgodnie
-  z projektem: `process_dataset` nadal różni się między silnikami, a decyzji
-  o porcie nie było. **Nowy fakt, podany przez właściciela tego dnia:
-  PRODUKCJA CHODZI WYŁĄCZNIE NA PUSHU.** Strażnik rozbieżności (odmowy przy
-  braku wspólnej bazy, `written@`, nowszej migawce u celu, żywym dysku gościa)
-  istnieje tylko w `snapget.sh`; `snapsend.sh` niesie `recv -F` bezwarunkowo --
-  czyli brakująca odmowa siedzi dokładnie pod kopiami, które naprawdę chodzą.
-  W labie odwrotnie: 14 linii to samo pobieranie, zero wysyłania (zmierzone).
-  - **Decyzja właściciela o kolejności:** „najpierw dokończyć GUI, dopiero
-    wrócić do poprawy kodu". Termin przesunięty na **2026-10-19** wraz z tym
-    powodem zapisanym w linii `twins.sha256`; suita 81/0. P-0 wchodzi jako
-    pierwsza rzecz po zamknięciu prac nad ekranami.
-  - **Scalenie silników** (`OWNER-ENGINE-MERGE-2026-09-07.md`, werdykt:
-    „zasadne, ale nie jako deduplikacja -- jako scalenie dwóch kierunków w jeden
-    silnik, pod recenzją, 8-11 dni") pozostaje ZA P-0, zgodnie z własnym
-    zdaniem tamtego dokumentu: bez parytetu scalenie musiałoby przy każdej
-    z ośmiu funkcji wybierać, która wersja przeżyje.
 
 - **STARY KREATOR CURSES USUNIĘTY (2026-09-21, polecenie właściciela).**
   Od 2026-09-16 obowiązuje decyzja, że formularze są oknami whiptaila; kreator
@@ -9988,7 +10003,7 @@ dopasowania po GUID, gdzie migawka na celu ma inną nazwę niż na źródle
 
 | Pakiet | Wynik | Czego wymaga | Zakres |
 |---|---|---|---|
-| `snapsend` | **202/202** ostatni pomiar; **+25 asercji sekcji P (2026-09-07) NIEURUCHOMIONE** — czekają na lab; P5 czerwone dla push do P-0 | root, zfs, mbuffer | silnik push/pull, semantyka flag; sekcja P: ten sam argv obydwoma silnikami |
+| `snapsend` | **258/0** na żywo, pve9, 2026-10-08 (sekcja P z P-0: P5–P10) | root, zfs, mbuffer | silnik push/pull, semantyka flag; sekcja P: ten sam argv obydwoma silnikami |
 | `scenarios` | **34/34** | root, zfs, mbuffer | wygenerowane linie crona uruchamiane dosłownie |
 | `remote` | **145/145** | drugi host, ssh, zfs | kampania dwuhostowa, **oba klastry, root i konto**: metropolis pve1 → pve2; 192.168.11.x pve0 → pve1 (root `--peer-parent rpool`, konto `rpool/data` po obu stronach) |
 | `delsnaps` | — | root, zfs | retencja, prefiksy, GFS — poza grafem dla tej zmiany |

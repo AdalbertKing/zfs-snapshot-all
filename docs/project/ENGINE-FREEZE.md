@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 ae0c3b9beb6cd5a54f7153f84de32c7cc632acdf -->
-<!-- frozen: snapget.sh 100755 3228d7032315769f37497782cd6b753fe4fa14c9 -->
+<!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
+<!-- frozen: snapget.sh 100755 24d6fbe774b78de1d1298c1c22c1d690bbeb2ae9 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 0701a4865690e0112495b7f893ba935da45454d4 -->
+<!-- frozen: lib-zfs-snap.sh 100644 77eadee355d879ffb2faad2786f5ff6e8927f7f0 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -904,6 +904,40 @@ Owner-authorized refreezes:
   Regression tests: `test/twins` section M (+1: summary level 0 when something
   was removed or stuck, 1 otherwise), `test/cron2conf` (replica fixtures in the
   new shape, replica-fixed, fixtures-engine/replica-snapsend).
+
+- 2026-10-08 (snapsend.sh, snapget.sh, lib-zfs-snap.sh): **P-0 -- one
+  divergence policy for both engines: a backup copy follows its source.**
+  Owner direction, verbatim: "odmrażam, wariant D3 - dlaczego? Bo D2 spowoduje
+  pełną kopie - przepełnimy dyski i zablokujemy kolektor przy dużych danych na
+  dni. W takiej sytuacji gdy mamy migawki z rodziny w celu, a nie mamy ich w
+  źródle uznajemy że są nadmiarowe. Nie pieścimy się z nimi."
+  snapsend v2.74 -> v2.75, snapget v2.72 -> v2.73.
+  Measured before the change (pve9, file pool): snapsend's unconditional
+  `recv -F` silently destroyed a manual snapshot on the copy, rolled back a
+  write to it, and destroyed family snapshots of a period the source had been
+  rolled back from -- all rc=0, no log line. snapget refused the same three
+  cases in every mode, with -f (a FULL resend) as its only remedy.
+  New, in both engines: on a BACKUP LANDING (a copy under a base; snapsend:
+  TARGET_BASE set and no -t; snapget: LOCAL_BASE set and no -t -- this includes
+  sync relationships pulled under -M) whatever sits on the copy after the
+  common snapshot is discarded by -F, and a level-0 line says what: the
+  snapshots by name, or the bytes written (`divergence_summary`, new in the
+  lib). Not a backup landing (bare user@host sync to the same path, or -t):
+  bytes written after the common snapshot are refused, as snapget always did,
+  and snapsend now refuses them too; snapshots alone (nothing written) are
+  received WITHOUT -F and kept, in both. In every mode both engines refuse when
+  the divergence cannot be determined (written@ query failed) and when the
+  common snapshot cannot be named on the target, in snapget's words. No common
+  snapshot at all (case E): the outcome is the refusal it always was (ZFS
+  refuses a full stream into a target with snapshots), but snapsend now says so
+  itself, before sending, in snapget's words.
+  Not ported: snapget's guest_disk_is_live -- it reads guest state on the LOCAL
+  node and push's target is remote. snapsend checks the top dataset only (with
+  -r the stream's own -F governs the children), and a bookmark-anchored
+  incremental is not inspected.
+  twin: process_dataset's reason column changes from port-by:2026-10-19 to
+  direction: which side is remote, plus snapget's guest_disk_is_live, which
+  has no push twin (above).
 
 ## How it is enforced
 
