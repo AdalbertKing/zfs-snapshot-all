@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c75192dac129382d -->
+<!-- status-covers-digest: f776fe360ca70eb6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,58 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`zfs-backup edit-config` — „crontab -e” dla configu; polecenie `/usr/local/bin/zfs-backup` (2026-10-08, właściciel: „rób edit-config z dowiązaniem zfs-backup”).**
+  - **Po co:** config jest jedynym miejscem polityki (retencja, harmonogramy, flagi,
+    monitory), a cron powstaje tylko z niego. Dotąd admin edytował plik i sam wołał
+    `gen-cron.sh`; jako konto delegowane ręczne `gen-cron.sh --install` po cichu
+    przepisuje ścieżki logów i powiadomień (zmierzone na pve0).
+  - **Składnia:** `zfs-backup edit-config [NAZWA] [--account=KONTO] [--yes]`:
+    - bez argumentów: config roota;
+    - `--account=`: config konta delegowanego;
+    - `NAZWA`: config, w którym jest ta relacja; w vi/vim/nano/emacs/mcedit i podobnych
+      kursor staje na jej pierwszej sekcji.
+  - **Przebieg:**
+    1. kopia w `$VISUAL`/`$EDITOR`/`vi`;
+    2. bez zmian → „bez zmian”;
+    3. sprawdzenie generatorem; przy odmowie pokazuje błąd i pyta „Edytować dalej?”,
+       a „nie” zostawia kopię z Twoimi zmianami;
+    4. podgląd zmian w bloku crona i kroków na źródle;
+    5. „Zainstalować? [t/N]”;
+    6. gdy config zmienił się w trakcie edycji (inny czasownik) → odmowa, nic nie
+       nadpisano;
+    7. najpierw źródło dla dodanych datasetów (odmowa źródła → tutaj nic nie
+       zainstalowano; prawa przyznane wcześniej w tej samej edycji nie są cofane);
+    8. poprzednia wersja zostaje jako `<config>.edit-<czas>`, instalacja tą samą drogą
+       co reszta pakietu;
+    9. potem rekord, pierwsza kopia dodanych i odebranie praw usuniętym (niepowodzenie
+       odebrania tylko ostrzega, z poleceniem do powtórzenia).
+  - **Integralność z relacjami:** sekcja `[dataset:]` relacji dopisana albo usunięta
+    ręcznie pociąga źródło (zakres i prawa: `add-source`/`remove-source --source-only`,
+    nowa flaga) i rekord (`MANAGED_DATASETS`). Dodany dataset dostaje pierwszą kopię.
+    Sekcja zostaje taka, jak ją napisano; brakujący znacznik relacji i `pair_label` są
+    dopisywane. Relacja sekcji to jej znacznik albo relacja, która już pobiera z tego
+    samego `konto@host:`; sekcja z hostem, z którego nie pobiera żadna relacja, jest w
+    podglądzie nazwana zwykłą sekcją (bez kroków na źródle i bez rekordu).
+  - **Polecenie `zfs-backup`:** faza 2b instalatora zakłada dowiązanie
+    `/usr/local/bin/zfs-backup` → `zfs-backup.sh`, więc godzinna samoaktualizacja
+    przenosi je na każdy host. Plik, który nie jest dowiązaniem, zostaje nietknięty.
+    `zfs-backup.sh` wylicza swój katalog przez `readlink -f`.
+  - **GUI:** okno „Zmień relację” ma czwartą pozycję, „Edytuj config w edytorze (jak
+    crontab -e)”, która oddaje terminal `edit-config NAZWA`.
+  - **Dowód na żywo, pve10** (gałąź na checkoucie roota na czas testu), lustro `pve9-synchro`:
+    - bez zmian;
+    - błędny próg `3hh` → odmowa generatora, „nie”, crontab nietknięty;
+    - próg 3h→4h → zainstalowany, kopia poprzedniej wersji;
+    - zmiana configu w trakcie → odmowa;
+    - **ręcznie dopisana sekcja `hdd/lab/p0new`** → pve9 przyznał dataset, sekcja z
+      dopisanym znacznikiem i `pair_label`, pierwsza kopia, rekord zna dataset;
+    - **usunięcie tej sekcji** → pve9 odebrał prawa i wykluczył dataset, linia crona
+      zniknęła, rekord bez niego, kopia została;
+    - wywołanie przez dowiązanie działa.
+  - **Testy:** `test/zfsbackup --section editconfig`: lista sekcji, oznaczanie sekcji,
+    pomoc, wywołanie przez dowiązanie. Na pve10 4/0; w Git Bash dowiązanie jest
+    POMINIĘTE, bo `ln -s` robi tam kopię.
 
 - **Okno „Zmień relację”: pytanie zawsze w ramce (2026-10-08, właściciel: „rób 1 i 2”, zakres 1.0).**
   - **Było:** nagłówek menu niósł pełną listę datasetów relacji; przy 14 datasetach lustra na

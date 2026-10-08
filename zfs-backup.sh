@@ -657,7 +657,8 @@ Inspection / teardown:
   zfs-backup.sh edit-config [NAME] [--account=USER] [--yes]
                                     crontab -e for the config: opens a copy in
                                     $VISUAL/$EDITOR/vi (with NAME: the config that
-                                    holds that relationship, cursor on it), checks it
+                                    holds that relationship, cursor on it in vi-like
+                                    editors), checks it
                                     with gen-cron (on a refusal: edit again or stop),
                                     shows how the cron block changes and installs on
                                     one confirmation (--yes: no question). The
@@ -13217,13 +13218,18 @@ cmd_edit_config() {
     while IFS=$'\t' read -r s v c; do
         [ -n "$s" ] && { nsrc[$s]="$v"; ncli[$s]="$c"; }
     done < <(cfg_dataset_sections "$tmp")
-    local adds="" drops="" rel ds
+    local adds="" drops="" plain="" rel ds
     for s in "${!nsrc[@]}"; do
         [ -n "${osrc[$s]+x}" ] && continue
         v="${nsrc[$s]}"; rel="${ncli[$s]}"
         case "$v" in *@*:*) ;; *) continue ;; esac
         [ "$rel" = - ] && rel="${pfx[${v%%:*}]:-}"
-        [ -n "$rel" ] && [ "$rel" != - ] || continue
+        if [ -z "$rel" ] || [ "$rel" = - ]; then
+            # Remote src, but no relationship here pulls from that account@host:
+            # an ordinary section, said out loud rather than skipped in silence.
+            plain="${plain}${s}"$'\n'
+            continue
+        fi
         adds="${adds}${rel}"$'\t'"${v#*:}"$'\t'"${s}"$'\n'
     done
     for s in "${!osrc[@]}"; do
@@ -13236,8 +13242,13 @@ cmd_edit_config() {
 
     echo "edit-config: $cfg (konto $(cron_target_user))"
     echo "Zmiany w cronie:"
-    local d; d=$(diff <(gencron_as_target -c "$cfg" 2>/dev/null) <(printf '%s\n' "$newblk") | grep '^[<>]' | sed 's/^</  -/; s/^>/  +/')
+    # The rendered block names its source file; the copy's temporary name is not
+    # a change anyone made, so it is shown under the real one.
+    local d; d=$(diff <(gencron_as_target -c "$cfg" 2>/dev/null) <(printf '%s\n' "$newblk" | sed "s#$tmp#$cfg#") | grep '^[<>]' | sed 's/^</  -/; s/^>/  +/')
     if [ -n "$d" ]; then printf '%s\n' "$d"; else echo "  (blok crona bez zmian -- zmienił się tylko config)"; fi
+    while IFS= read -r s; do
+        [ -n "$s" ] && echo "  uwaga: [dataset:$s] pobiera z hosta, z którego nie pobiera żadna relacja tutaj -- zwykła sekcja, bez kroków na źródle i bez rekordu"
+    done <<< "$plain"
     if [ -n "$adds$drops" ]; then
         echo "Kroki na źródle:"
         while IFS=$'\t' read -r rel ds s; do

@@ -65,8 +65,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13690,6 +13690,59 @@ fi
 
 fi   # --- koniec sekcji addsource ---
 
+if want editconfig; then
+# ============================================================================
+# edit-config (2026-10-08, owner: "rob edit-config z dowiazaniem zfs-backup"):
+# crontab -e for the config. What it decides from the text alone is pinned
+# here: which [dataset:] sections a config holds (src, owning relationship),
+# and how a hand-written section is marked as a relationship's -- marker and
+# pair_label added only when missing, everything else kept as written. The
+# whole flow (editor, gen-cron, install, the source side) is proved live.
+# ============================================================================
+EC="$WORK/editconfig"; rm -rf "$EC"; mkdir -p "$EC"
+ec_fn=$(sed -n '/^cfg_dataset_sections() {/,/^}/p; /^cfg_mark_section() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$ec_fn" ] || bad "editconfig: could not lift cfg_dataset_sections/cfg_mark_section -- anchors changed"
+printf '%s\n' '[defaults]' 'prefix = automated_' '' \
+    '[dataset:hdd/lab/a]' '	# managed-by: zfs-backup.sh client=rel-x' '	src          = u@10.0.0.1:hdd/lab/a' '	pair_label   = rel-x' '' \
+    '[prune:hdd/lab/a]' '	src = u@10.0.0.1:hdd/lab/a' '' \
+    '[dataset:hdd/lab/new]' '	src          = u@10.0.0.1:hdd/lab/new' '	notify       = rel-x-new' '' \
+    '[dataset:rpool/local]' '	use_template = t' > "$EC/cfg"
+got=$(bash -c "$ec_fn
+cfg_dataset_sections '$EC/cfg'")
+want=$(printf '%s\t%s\t%s\n' hdd/lab/a u@10.0.0.1:hdd/lab/a rel-x hdd/lab/new u@10.0.0.1:hdd/lab/new - rpool/local - -)
+if [ "$got" = "$want" ]; then
+    ok "editconfig: sections listed with src and owning relationship (marker), [prune:] not counted, '-' for none"
+else
+    bad "editconfig: cfg_dataset_sections" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))"
+fi
+cp "$EC/cfg" "$EC/cfg2"
+bash -c "$ec_fn
+cfg_mark_section '$EC/cfg2' hdd/lab/new rel-x; cfg_mark_section '$EC/cfg2' hdd/lab/a rel-x"
+sec_new=$(awk '/^\[/{p=($0=="[dataset:hdd/lab/new]")} p' "$EC/cfg2")
+want_new=$(printf '%s\n' '[dataset:hdd/lab/new]' '	# managed-by: zfs-backup.sh client=rel-x' '	src          = u@10.0.0.1:hdd/lab/new' '	notify       = rel-x-new' '	pair_label   = rel-x' '')
+if [ "$sec_new" = "$want_new" ] \
+   && diff <(awk '/^\[/{p=($0!="[dataset:hdd/lab/new]")} p' "$EC/cfg") <(awk '/^\[/{p=($0!="[dataset:hdd/lab/new]")} p' "$EC/cfg2") >/dev/null; then
+    ok "editconfig: a hand-written section gets marker (after its header) and pair_label (after its last line); a section that has both, and every other section, is unchanged"
+else
+    bad "editconfig: cfg_mark_section" "$sec_new" "$(diff "$EC/cfg" "$EC/cfg2")"
+fi
+if bash "$ZFSBACKUP" --help 2>&1 | grep -q 'zfs-backup.sh edit-config \[NAME\] \[--account=USER\] \[--yes\]'; then
+    ok "editconfig: the verb is in the usage"
+else
+    bad "editconfig: usage line missing"
+fi
+# Through a symlink (deploy Phase 2b: /usr/local/bin/zfs-backup) the script must
+# still find its own directory -- before readlink -f it looked in the link's.
+ln -sfn "$ZFSBACKUP" "$EC/zfs-backup-link"
+if [ ! -L "$EC/zfs-backup-link" ]; then
+    echo "SKIP editconfig: run through a symlink -- this platform made a copy, not a link (Git Bash); CI runs it"
+elif [ "$(sed -n 's/^SCRIPT_DIR=.*readlink -f.*/yes/p' "$ZFSBACKUP")" = yes ] \
+   && bash "$EC/zfs-backup-link" --help 2>&1 | grep -q 'edit-config'; then
+    ok "editconfig: zfs-backup.sh run through a symlink resolves its own directory (readlink -f)"
+else
+    bad "editconfig: run through a symlink"
+fi
+fi
 if want replicamonitor; then
 # ============================================================================
 # `monitor` reads a replica's gate line (2026-10-08): `zfs-media-gate.sh age
