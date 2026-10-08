@@ -1244,10 +1244,9 @@ if has "$A" 'e zmień replikę'; then
 else
     bad "nosniki: stopka okna repliki" "$(printf '%s' "$A" | tail -3)"
 fi
-A="$(nact down,del)"; nact down,del,t >/dev/null
-if has "$A" 'POTWIERDZENIE: Usuń replikę sejf-b' && has "$A" 'Kopia na nośniku ZOSTAJE' \
-   && grep -Eq "remove-replica sejf-b --install --yes\$" "$XL"; then
-    ok "nosniki: Del pyta (kopia na nosniku zostaje) i po 't' usuwa replike POD KURSOREM"
+A="$(nact down,del)"
+if grep -Eq "zfs-backup.sh'? remove-replica sejf-b --ask\$" "$XL"; then
+    ok "nosniki: Del oddaje terminal oknom usuwania repliki POD KURSOREM (remove-replica NAZWA --ask: kopia na nosniku tylko na zyczenie)"
 else
     bad "nosniki: Del -> remove-replica" "$(cat "$XL")" "$A"
 fi

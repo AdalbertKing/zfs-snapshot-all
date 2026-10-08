@@ -3378,10 +3378,9 @@ class UI(object):
             return
         n = reps[c].get("name")
         if k == "del":
-            self.confirm(u"Usuń replikę %s" % n, [self.zb(), "remove-replica", n, "--install", "--yes"],
-                         [u"Znika sekcja [replica:%s] i jej zadanie z crona." % n,
-                          u"Kopia na nośniku ZOSTAJE. Usunięcie kopii to osobny krok:",
-                          u"  zfs-backup.sh purge-replica-copy %s" % n])
+            # Okna whiptail (remove-replica --ask): pytaja tez, czy skasowac KOPIE
+            # na nosniku (domyslnie nie), i pokazuja plan obu czasownikow.
+            return self.run_dialog([self.zb(), "remove-replica", n, "--ask"])
 
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""

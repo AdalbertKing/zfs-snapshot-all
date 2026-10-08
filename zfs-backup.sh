@@ -6829,18 +6829,27 @@ config_has_job_sections() {   # <file>
 # zero jobs while the real cron lines survived, with nothing left recording
 # what they were.
 cmd_remove_replica() {
-    local name="" config="" do_install=0 assume_yes=0 a _ans
+    local name="" config="" do_install=0 assume_yes=0 ask=0 a _ans
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
             --plan)     do_install=0 ;;
             --install)  do_install=1 ;;
             --yes|-y)   assume_yes=1 ;;
+            --ask)      ask=1 ;;
             -*)         die "remove-replica: unknown option '$a'" ;;
             *)          if [ -z "$name" ]; then name="$a"; else die "remove-replica: takes exactly one name"; fi ;;
         esac
     done
     [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
+    # --ask: the GUI's windows (Del on F6) -- the same two verbs, remove-replica
+    # and, only if asked, purge-replica-copy, shown as a plan before anything runs.
+    if [ "$ask" -eq 1 ]; then
+        local dlg="$SCRIPT_DIR/tui/replica-delete.sh"
+        [ -f "$dlg" ] || die "remove-replica: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
+        return $?
+    fi
     local resolver_user; resolver_user="$(cron_target_user)"
     cron_context_resolve adopt "$config" "$resolver_user" "" ""
     config="$CRON_CTX_FILE"
