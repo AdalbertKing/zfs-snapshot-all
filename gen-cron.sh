@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix notify media recursive flags history monitor_warn monitor_crit
+_allow_fields replica  source dst schedule prefix notify media recursive flags history monitor_warn monitor_crit monitor
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2860,10 +2860,20 @@ build_replica_section() {
     # monthly 35d/45d -- and monitor_warn/monitor_crit in the section override
     # them. An on-insert replica has no rhythm to derive from, so it is watched
     # only when the section says so.
-    local mwarn mcrit
+    local mwarn mcrit mon
     mwarn="$(resolve_field monitor_warn "$sec" "" "")" || mwarn=""
     mcrit="$(resolve_field monitor_crit "$sec" "" "")" || mcrit=""
-    if [ -n "$mwarn$mcrit" ]; then
+    # `monitor = no` switches it off -- what cron2conf writes for a replica
+    # recovered from a crontab that had no monitor line for it.
+    mon="$(resolve_field monitor "$sec" "" "")" || mon=""
+    case "$mon" in
+        ''|yes) ;;
+        no) [ -z "$mwarn$mcrit" ] || die "[replica:$name]: monitor = no together with monitor_warn/monitor_crit -- say one of them" ;;
+        *)  die "[replica:$name]: monitor = '$mon' -- yes or no" ;;
+    esac
+    if [ "$mon" = no ]; then
+        :
+    elif [ -n "$mwarn$mcrit" ]; then
         [ -n "$mwarn" ] && [ -n "$mcrit" ] \
             || die "[replica:$name]: monitor_warn and monitor_crit go together (got '$mwarn' / '$mcrit')"
         local _mv _ms _msecs=()

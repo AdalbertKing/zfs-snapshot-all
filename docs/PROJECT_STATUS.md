@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4b802c0bd176005c -->
+<!-- status-covers-digest: dd6e041efaa2a393 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -48,7 +48,14 @@
     `replica`), a GUI daje wierszowi repliki na F2 werdykt z jego monitora.
     `list-replicas --json` podaje progi ustawione wprost w sekcji (`monitor_warn`/`monitor_crit`;
     puste, gdy próg wynika z harmonogramu).
-  - **Testy:** `cron` 177/0 (+9 RMON: stała tygodniowa, wymienna miesięczna i dobowa, „po
+  - **`monitor = no` i `cron2conf`:** `monitor = no` w `[replica:]` wyłącza monitor
+    (z progami jest odmową). Pierwsze CI wyszło czerwone w `cron2conf`: odtworzenie configu ze
+    starego crontabu renderowało się z nowymi liniami monitora, których tam nie było. Teraz
+    `cron2conf` rozpoznaje linię monitora repliki po tekście alertu („`<host> replica stale
+    (<nazwa>)`”) i zapisuje jej progi przy replice, a replice bez takiej linii daje
+    `monitor = no`. Odtworzony config renderuje się więc dokładnie do tego, co zastał. Admin,
+    który chce ostrzeżenia dla takiej repliki, usuwa `monitor = no`.
+  - **Testy:** `cron2conf` 36/0 (+1 roundtrip `replica-monitor`: linie bramy wracają jako progi); `cron` 179/0 (+11 RMON, w tym `monitor = no`: stała tygodniowa, wymienna miesięczna i dobowa, „po
     włożeniu” bez i z progiem, teksty alertów, odmowa samego `monitor_warn`, warn ≥ crit i
     `9dd`); `mediagate` 152/0 (+11 AG: brak zapisu, starszy `.synced`, `.current` ma pierwszeństwo, krytyczny,
     złe progi, zapis `.current` przy pominięciu); `zfsbackup --section replicamonitor` 3/0 (na

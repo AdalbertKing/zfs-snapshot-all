@@ -1300,6 +1300,15 @@ rm_conf oi on-insert "	media    = removable" "	monitor_warn = 9dd
 	monitor_crit = 14d"
 fo=$(for_run); frc=$?
 check "RMON9 a threshold with two units (9dd) is refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+rm_conf wk "30 3 * * 0" "" "	monitor = no"
+fo=$(for_run); frc=$?
+check "RMON10 monitor = no (what cron2conf writes for a replica found without one) switches the derived monitor off" "0:0" \
+      "$frc:$(printf '%s\n' "$fo" | grep -c 'check-snap-age')"
+rm_conf wk "30 3 * * 0" "" "	monitor = no
+	monitor_warn = 9d
+	monitor_crit = 14d"
+fo=$(for_run); frc=$?
+check "RMON11 ...and refuses to be combined with thresholds" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
 
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
