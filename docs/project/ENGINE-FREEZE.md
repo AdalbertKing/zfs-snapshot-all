@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
-<!-- frozen: snapget.sh 100755 24d6fbe774b78de1d1298c1c22c1d690bbeb2ae9 -->
+<!-- frozen: snapget.sh 100755 f5680ba404a132607c9f3792f2663f4c07f9dd07 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 77eadee355d879ffb2faad2786f5ff6e8927f7f0 -->
@@ -918,11 +918,12 @@ Owner-authorized refreezes:
   rolled back from -- all rc=0, no log line. snapget refused the same three
   cases in every mode, with -f (a FULL resend) as its only remedy.
   New, in both engines: on a BACKUP LANDING (a copy under a base; snapsend:
-  TARGET_BASE set and no -t; snapget: LOCAL_BASE set and no -t -- this includes
-  sync relationships pulled under -M) whatever sits on the copy after the
+  TARGET_BASE set and no -t; snapget: LOCAL_BASE set and no -t) whatever sits on the copy after the
   common snapshot is discarded by -F, and a level-0 line says what: the
   snapshots by name, or the bytes written (`divergence_summary`, new in the
-  lib). Not a backup landing (bare user@host sync to the same path, or -t):
+  lib). Not a backup landing (sync to the same path -- this INCLUDES the GUI's
+  sync/mirror relationships, which pull `user@host:path` with no local base,
+  measured on pve10's crontab -- or -t):
   bytes written after the common snapshot are refused, as snapget always did,
   and snapsend now refuses them too; snapshots alone (nothing written) are
   received WITHOUT -F and kept, in both. In every mode both engines refuse when
