@@ -485,7 +485,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.74'
+VERSION='v2.75'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1729,6 +1729,59 @@ process_dataset() {
     # -s makes ZFS SAVE partial receive state on interruption (and expose a
     # receive_resume_token) instead of rolling it back -- this is the
     # precondition for the resumable-transfer logic above to ever fire.
+    # P-0 (owner, 2026-10-08, "odmrazam", variant D3) -- the receive below has
+    # always carried -F. On a BACKUP LANDING (a copy under a base) that stays:
+    # surplus on the copy after the common snapshot is discarded so the copy
+    # follows its source -- but it is now SAID, where it used to be silent
+    # (measured on pve9: a manual snapshot, a write and snapshots of a rolled-
+    # back period all vanished at rc=0 with no line in the log). On the
+    # source's own path (sync) or an exact one (-t) the same surplus means the
+    # target may be live, and this run refuses as snapget.sh does.
+    # Not ported: snapget's live-guest check, which reads guest state on the
+    # LOCAL node; this engine's target is remote.
+    # No common snapshot and no bookmark, onto a target that has snapshots (case
+    # E): ZFS refuses a full stream there even with -F. Say it in snapget's
+    # words, before sending a byte, instead of leaving it to zfs recv's error.
+    if [ $FORCE_FULL_SEND -ne 1 ] && [ "$FULL_HISTORY_SEND" -ne 1 ] && [[ "$common_snapshot" == "null" ]] \
+       && [ -z "$bookmark_base" ] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
+        log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
+        abort_held_snapshot "$snapshot" "$tgt_dataset"
+        return 1
+    fi
+    if [ $FORCE_FULL_SEND -ne 1 ] && [[ "$common_snapshot" != "null" ]] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
+        local recv_base="" p0_written="" p0_guid p0_t
+        if printf '%s\n' "${tgt_snaps[@]}" | grep -qFx -- "$common_snapshot"; then
+            recv_base="$common_snapshot"
+        else
+            # A renamed base matched by GUID: the target's own name for it.
+            p0_guid=$(get_snapshot_guid "$src_dataset" "$common_snapshot")
+            if [ -n "$p0_guid" ]; then
+                for p0_t in "${tgt_snaps[@]}"; do
+                    [ "$(get_snapshot_guid "$tgt_dataset" "$p0_t" "$remote_user" "$remote_host")" = "$p0_guid" ] && { recv_base="$p0_t"; break; }
+                done
+            fi
+        fi
+        if [ -n "$recv_base" ]; then
+            if [ -n "$remote_host" ]; then
+                p0_written=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "zfs get -Hp -o value 'written@${recv_base}' '$tgt_dataset' 2>/dev/null")
+            else
+                p0_written=$(zfs get -Hp -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
+            fi
+        fi
+        if [ -n "$p0_written" ] && [ "$p0_written" != "0" ]; then
+            if [ "${BACKUP_LANDING:-0}" -eq 1 ]; then
+                log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}") (zfs recv -F)"
+            else
+                log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t) and differs from the common snapshot -- $(divergence_summary "$recv_base" "$p0_written" "${tgt_snaps[@]}"). A forced receive could roll back a live system there; look at it, and resolve it by hand."
+                abort_held_snapshot "$snapshot" "$tgt_dataset"
+                return 1
+            fi
+        elif [ "${BACKUP_LANDING:-0}" -ne 1 ] && { [ -z "$recv_base" ] || [ -z "$p0_written" ]; }; then
+            log 0 "Refusing: '$tgt_dataset' is not a backup landing (the source's own path, or -t), and how far it has moved from the common snapshot could not be determined -- not forcing a receive onto it."
+            abort_held_snapshot "$snapshot" "$tgt_dataset"
+            return 1
+        fi
+    fi
     local recv_flags="-F -s"
     [ $UNMOUNT -eq 1 ] && recv_flags="$recv_flags -u"
     [ -n "$RECV_EXCLUDE_FLAGS" ] && recv_flags="$recv_flags$RECV_EXCLUDE_FLAGS"
@@ -2629,6 +2682,11 @@ if [ "$TARGET_EXACT" -eq 1 ]; then
     fi
 fi
 
+# P-0: a BACKUP LANDING is a copy under a base (local path or host:base) --
+# not the source's own path on another host (sync, bare user@host) and not an
+# exact path (-t, a restore).
+BACKUP_LANDING=0
+[ -n "$TARGET_BASE" ] && [ "$TARGET_EXACT" -eq 0 ] && BACKUP_LANDING=1
 declare -a FAILED_DATASETS=()
 for dataset in "${DATASETS[@]}"; do
     if [ $AUTOTUNE_ACTIVE -eq 1 ]; then

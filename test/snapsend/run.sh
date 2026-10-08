@@ -1352,16 +1352,10 @@ check "P incremental: the agreed answer is success" "0" "$RC_S"
 check "P incremental: push holds what the source holds" "$(snaps_of "$POOL/pi")" "$(snaps_of "$PBK/$POOL/pi")"
 check "P incremental: pull holds the same" "$(snaps_of "$PBK/$POOL/pi")" "$(snaps_of "$PLP/$POOL/pi")"
 
-# P5. A DIVERGED target: it exists and holds a snapshot the source never had.
-# Pull refuses ("already exists and shares no common snapshot -- needs -f",
-# REV-20260804-037/038) and leaves the copy alone. Push carries `zfs recv -F`
-# unconditionally (snapsend.sh, recv_flags="-F -s"): a full stream onto that
-# target REPLACES it. This is P-0 in OWNER-ENGINE-MERGE-2026-09-07.md section
-# 8, the largest item of the parity plan, and it is a CONTRACT change for
-# push (a refusal where it used to proceed), so it waits for the owner's word.
-# Until it lands this case is RED for push -- by design, and said here rather
-# than hidden: a copy the operator wrote into must not be rolled back by a
-# nightly job that did not say it would.
+# P5. A target with NO common snapshot (case E of P-0): it exists and holds a
+# snapshot the source never had. Both refuse in the same words and leave the
+# copy alone -- ZFS refuses a full stream there even with -F, and push now says
+# so before sending (P-0, owner 2026-10-08, ENGINE-FREEZE.md).
 zfs create -p "$POOL/pd" || exit 1
 zfs snapshot "$POOL/pd@auto_1"
 zfs create -p "$PBK/$POOL/pd" || exit 1
@@ -1376,6 +1370,75 @@ check "P diverged target: pull says why" "yes" \
       "$(printf '%s\n' "$OUT_G" | grep -q 'shares no common snapshot' && echo yes || echo no)"
 check "P diverged target: push says why, in the same words" "yes" \
       "$(printf '%s\n' "$OUT_S" | grep -q 'shares no common snapshot' && echo yes || echo no)"
+
+# P-0 (owner, 2026-10-08, "odmrazam, wariant D3"): A BACKUP COPY FOLLOWS ITS
+# SOURCE. What sits on the copy after the common snapshot is surplus; both
+# engines discard it with -F and say what, at level 0. Before: push did it
+# silently, pull refused with a full resend (-f) as the only way out.
+said_s() { printf '%s\n' "$OUT_S" | grep -q -- "$1" && echo yes || echo no; }
+said_g() { printf '%s\n' "$OUT_G" | grep -q -- "$1" && echo yes || echo no; }
+
+# P6. Case B: a snapshot taken by hand on the copy, after the common one.
+zfs create -p "$POOL/pb" || exit 1
+zfs snapshot "$POOL/pb@auto_1"
+pair_rc "B first" -e -m "auto_" "$POOL/pb"
+zfs snapshot "$PBK/$POOL/pb@manual"
+zfs snapshot "$PLP/$POOL/pb@manual"
+zfs snapshot "$POOL/pb@auto_2"
+pair_rc "B manual snapshot on the copy" -e -m "auto_" "$POOL/pb"
+check "P B: the agreed answer is success" "0" "$RC_S"
+check "P B: push followed the source (manual gone)" "auto_1 auto_2" "$(snaps_of "$PBK/$POOL/pb")"
+check "P B: pull the same" "auto_1 auto_2" "$(snaps_of "$PLP/$POOL/pb")"
+check "P B: push names what it discarded" "yes" "$(said_s 'discarding 1 snapshot(s) after @auto_1 that the source no longer has: manual')"
+check "P B: pull names it in the same words" "yes" "$(said_g 'discarding 1 snapshot(s) after @auto_1 that the source no longer has: manual')"
+
+# P7. Case C: a write to the copy after the common snapshot.
+zfs create -p "$POOL/pw" || exit 1
+zfs snapshot "$POOL/pw@auto_1"
+pair_rc "C first" -e -m "auto_" "$POOL/pw"
+for _c in "$PBK/$POOL/pw" "$PLP/$POOL/pw"; do
+    zfs mount "$_c" 2>/dev/null
+    dd if=/dev/urandom of="$(zfs get -H -o value mountpoint "$_c")/stray" bs=64k count=4 2>/dev/null
+    sync
+done
+zfs snapshot "$POOL/pw@auto_2"
+pair_rc "C write on the copy" -e -m "auto_" "$POOL/pw"
+check "P C: the agreed answer is success" "0" "$RC_S"
+check "P C: push followed the source" "auto_1 auto_2" "$(snaps_of "$PBK/$POOL/pw")"
+check "P C: pull the same" "auto_1 auto_2" "$(snaps_of "$PLP/$POOL/pw")"
+check "P C: push says it rolled back bytes" "yes" "$(said_s 'byte(s) written after @auto_1')"
+check "P C: pull says the same" "yes" "$(said_g 'byte(s) written after @auto_1')"
+
+# P8. Case D: the SOURCE was rolled back past a snapshot the copy holds.
+zfs create -p "$POOL/pr" || exit 1
+zfs snapshot "$POOL/pr@auto_1"
+zfs snapshot "$POOL/pr@auto_2"
+pair_rc "D first" -e -m "auto_" "$POOL/pr"
+zfs rollback -r "$POOL/pr@auto_1"
+zfs snapshot "$POOL/pr@auto_3"
+pair_rc "D source rolled back" -e -m "auto_" "$POOL/pr"
+check "P D: the agreed answer is success" "0" "$RC_S"
+check "P D: push followed the source (auto_2 gone)" "auto_1 auto_3" "$(snaps_of "$PBK/$POOL/pr")"
+check "P D: pull the same" "auto_1 auto_3" "$(snaps_of "$PLP/$POOL/pr")"
+check "P D: push names the rolled-away snapshot" "yes" "$(said_s 'after @auto_1 that the source no longer has: auto_2')"
+check "P D: pull names it" "yes" "$(said_g 'after @auto_1 that the source no longer has: auto_2')"
+
+# P9. Not a backup landing (-t, an exact path -- the restore direction): the
+# same surplus is refused by both, and the copy is left as it was.
+zfs create -p "$POOL/px" || exit 1
+zfs snapshot "$POOL/px@auto_1"
+run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC
+run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC
+check "P -t first: both landed" "0 0" "$RC_S $RC_G"
+zfs snapshot "$PBK/xs@manual"
+zfs snapshot "$PLP/xg@manual"
+zfs snapshot "$POOL/px@auto_2"
+run_send_out -t -e -m "auto_" "$POOL/px" "$PBK/xs"; RC_S=$RC; OUT_S="$OUT"
+run_get_out  -t -e -m "auto_" "$POOL/px" "$PLP/xg"; RC_G=$RC; OUT_G="$OUT"
+check "P -t surplus: both refuse" "1 1" "$RC_S $RC_G"
+check "P -t surplus: push left the copy alone" "auto_1 manual" "$(snaps_of "$PBK/xs")"
+check "P -t surplus: pull left the copy alone" "auto_1 manual" "$(snaps_of "$PLP/xg")"
+check "P -t surplus: push says it is not a backup landing" "yes" "$(said_s 'is not a backup landing')"
 
 # --- summary ----------------------------------------------------------------
 

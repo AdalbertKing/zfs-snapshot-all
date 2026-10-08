@@ -233,8 +233,9 @@ set -o pipefail
 #                    target every snapshot the source no longer has that is
 #                    OLDER than the common base -- the target then holds what
 #                    the source holds. Never the base or anything newer (a
-#                    newer target-only snapshot is divergence, left for the
-#                    next pull to refuse loudly), never a Proxmox-reserved
+#                    newer target-only snapshot is divergence: since P-0,
+#                    2026-10-08, the next pull discards it with -F and says
+#                    so in the log), never a Proxmox-reserved
 #                    family, and nothing at all when the source list cannot be
 #                    read or comes back empty. Per dataset, so with -R every
 #                    expanded child mirrors its own source. Not with -r.
@@ -397,7 +398,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.72'
+VERSION='v2.73'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1727,7 +1728,20 @@ process_dataset() {
             # gate exists to avoid, just triggered by string formatting
             # instead of a real divergence. -p forces raw, parsable bytes.
             local written; written=$(zfs get -Hp -o value "written@${recv_base}" "$tgt_dataset" 2>/dev/null)
-            if [ "$written" != "0" ]; then
+            # P-0 (owner, 2026-10-08, "odmrazam", variant D3): A BACKUP COPY
+            # FOLLOWS ITS SOURCE. On a landing under a base (not sync, not -t)
+            # whatever sits on the copy after the common snapshot -- a manual
+            # snapshot, a write, snapshots of our own family the source no longer
+            # has after an admin rolled it back -- is surplus, and the copy is
+            # brought up to date over it, with -F, saying what was discarded.
+            # The refusal below stays for sync and -t, where the path may hold
+            # a live system. Stopping a backup over surplus, with a FULL resend
+            # (-f) as the only way out, fills disks and blocks a collector for
+            # days on large data -- the owner's reason for D3 over the
+            # set-aside variant.
+            if [ "$written" != "0" ] && [ -n "$written" ] && [ "${BACKUP_LANDING:-0}" -eq 1 ]; then
+                log 0 "Backup copy '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$written" "${tgt_snaps[@]}") (zfs recv -F)"
+            elif [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
                     log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
                 elif [ "${#tgt_snaps[@]}" -gt 0 ] && [ "${tgt_snaps[-1]}" != "$recv_base" ]; then
@@ -1763,8 +1777,9 @@ process_dataset() {
                 fi
                 abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
                 return 1
+            else
+                recv_force_flag=""
             fi
-            recv_force_flag=""
         fi
     elif [ $FORCE_FULL_SEND -ne 1 ]; then
         # target does not exist yet: nothing to roll back, -F would be a
@@ -2638,6 +2653,10 @@ if [ "$TARGET_EXACT" -eq 1 ]; then
     fi
 fi
 
+# P-0: a BACKUP LANDING is a copy under a base, written by name mapping -- not
+# the source's own path (sync) and not an exact path (-t, a restore).
+BACKUP_LANDING=0
+[ -n "$LOCAL_BASE" ] && [ "$TARGET_EXACT" -eq 0 ] && BACKUP_LANDING=1
 declare -a FAILED_DATASETS=()
 ADOPT_SKIPPED=0
 for src_path in "${DATASETS[@]}"; do
