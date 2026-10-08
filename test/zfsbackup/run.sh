@@ -12946,6 +12946,35 @@ if printf '%s' "$JSOUT" | "$PY_OR_PYTHON" -c 'import sys,json; json.load(sys.std
 else
     bad "jobstats: valid JSON" "$JSOUT" "$(cat "$JS/err")"
 fi
+# EVENTS (2026-10-08, owner "rob 1 i 2"): what a run DISCARDED (P-0) and why
+# its newest run FAILED, per job label. The engine's stderr sits before the
+# job's END line; another job's BEGIN can land inside it and must not cut it.
+D=$(date +%Y-%m-%d)
+cat > "$JS/ev.log" <<EVLOG
+${D}T10:31:00+02:00 ZFS-JOB BEGIN pve10 hourly backup (ev-a)
+${D} 10:31:05 - Mirror copy (no running guest on that path) 'hdd/lab/a' follows its source -- discarding 1 snapshot(s) after @s1 that the source no longer has: p0manual (zfs recv -F)
+${D}T10:31:06+02:00 ZFS-JOB END pve10 hourly backup (ev-a) rc=0
+${D}T10:32:00+02:00 ZFS-JOB BEGIN pve10 hourly backup (ev-b)
+${D} 10:32:01 - Processing: x
+${D}T10:32:02+02:00 ZFS-JOB BEGIN pve10 hourly backup (ev-c)
+${D} 10:32:03 - Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
+${D}T10:32:04+02:00 ZFS-JOB END pve10 hourly backup (ev-b) rc=1
+${D}T10:32:05+02:00 ZFS-JOB END pve10 hourly backup (ev-c) rc=75
+EVLOG
+EVOUT=$( ( PATH="$JS/bin:$PATH" ZFS_CRON_LOGS="$JS/ev.log" bash "$ZFSBACKUP" job-stats --json ) 2>"$JS/err")
+got=$(printf '%s' "$EVOUT" | "$PY_OR_PYTHON" -c '
+import sys,json; d=json.load(sys.stdin); e={x["label"]: x for x in d["events"]}
+print(e["hourly backup (ev-a)"]["discard"]); print(e["hourly backup (ev-b)"]["error"]); print(e["hourly backup (ev-b)"]["discard"] == "")
+print("hourly backup (ev-c)" in e)' 2>&1 | tr -d '\r')
+want="hdd/lab/a: 1 snapshot(s) after @s1 that the source no longer has: p0manual
+Refusing 'hdd/lab/b': it is the disk of guest 901, which is currently RUNNING.
+True
+False"
+if [ "$got" = "$want" ]; then
+    ok "jobstats: events -- what a run discarded (copy: text, the count kept), why the newest run failed (an interleaved BEGIN does not cut it), and rc=75 (lock skip) is no event"
+else
+    bad "jobstats: events" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))" "$(cat "$JS/err")"
+fi
 # the NUMBERS, against the capture read by hand: how many "nextcloud" runs and
 # transfers does the log hold?
 want_runs=$(grep -c 'ZFS-JOB END pve2 hourly backup (nextcloud)' "$CAP/cron-log.pve2-2days.txt")
@@ -13567,6 +13596,48 @@ if want addsource; then
 AS="$WORK/addsource"; rm -rf "$AS"; mkdir -p "$AS"
 as_awk=$(sed -n "/^      function flush() {/,/^    '/p" "$ZFSBACKUP" | sed '$d')
 [ -n "$as_awk" ] || bad "addsource: could not lift the awk program from zfs-backup.sh -- anchors changed"
+# add-source seeds EVERY source that got its copy job only now (2026-10-08):
+# adding hdd/lab/ct-201/p0cli brought its sibling p0gui in too, uncopied, and
+# the relationship's monitor reported it missing until the next cron tick.
+as_fn=$(sed -n '/^relation_copy_sources() {/,/^}/p; /^add_source_first_copy() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$as_fn" ] || bad "addsource: could not lift relation_copy_sources/add_source_first_copy -- anchors changed"
+cat > "$AS/tab" <<'TAB'
+5 * * * * root-cmd
+# BEGIN zfs-backup-managed
+31 * * * * /x/zfs-job.sh "h hourly backup (r-a)" --log=LOGF -- /x/snapget.sh -m "" -M -L rel "u@10.0.0.1:hdd/lab/a" ""
+31 * * * * /x/zfs-job.sh "h hourly backup (r-b)" --log=LOGF -- /x/snapget.sh -m "" -M -L rel "u@10.0.0.1:hdd/lab/a/b" ""
+45 * * * * /x/zfs-job.sh "h prune (r-a)" --log=LOGF -- /x/delsnaps.sh -L rel "hdd/lab/a" "automated_"
+31 * * * * /x/zfs-job.sh "h hourly backup (o-c)" --log=LOGF -- /x/snapget.sh -m "" -L other "u@10.0.0.2:hdd/lab/c" ""
+# END zfs-backup-managed
+TAB
+got=$(bash -c "crontab_for_target() { cat '$AS/tab'; }; $as_fn
+relation_copy_sources rel" 2>&1)
+if [ "$got" = "hdd/lab/a
+hdd/lab/a/b" ]; then
+    ok "addsource: relation_copy_sources lists what THIS relationship's copy jobs pull -- not its prune lines, not another relationship's"
+else
+    bad "addsource: relation_copy_sources" "$got"
+fi
+# zfs-job.sh EXITS 0 WHATEVER THE ENGINE DID; the first copy is judged by the
+# job's END line in its log. A stub job that fails the engine but exits 0 must
+# not be reported as done.
+printf '#!/bin/sh\nprintf "%%s ZFS-JOB END h hourly backup (r-a) rc=%%s\\n" now "$ZJ_RC" >> "%s"\nexit 0\n' "$AS/job.log" > "$AS/zfs-job.sh"
+chmod +x "$AS/zfs-job.sh"
+sed "s#/x/zfs-job.sh#$AS/zfs-job.sh#; s#LOGF#$AS/job.log#" "$AS/tab" > "$AS/tab2"
+as_seed() {   # <engine rc the stub records> -> the verb's messages
+    : > "$AS/job.log"
+    ZJ_RC="$1" bash -c "crontab_for_target() { cat '$AS/tab2'; }; cron_target_user() { echo root; }
+log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; $as_fn
+add_source_first_copy rel hdd/lab/a" 2>&1
+}
+out1=$(as_seed 1); out0=$(as_seed 0)
+if printf '%s' "$out1" | grep -q 'WARN add-source: the first copy of .hdd/lab/a. did not finish' \
+   && ! printf '%s' "$out1" | grep -q 'first copy of .hdd/lab/a. done' \
+   && printf '%s' "$out0" | grep -q 'LOG add-source: first copy of .hdd/lab/a. done'; then
+    ok "addsource: the first copy is judged by the job's END rc in its log, not by zfs-job.sh's own exit (always 0)"
+else
+    bad "addsource: first copy verdict" "rc=1: $out1" "rc=0: $out0"
+fi
 as_run() {   # <scope text> <target> -> stdout new file, stderr verdict; rc
     printf '%b' "$1" > "$AS/in"
     awk -v target="$2" "$as_awk" "$AS/in" > "$AS/out" 2> "$AS/err"

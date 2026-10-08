@@ -12935,37 +12935,79 @@ cmd_add_source() {
             log "add-source: '$ds' recorded in the request of '$name'"
         fi
     fi
+    # Which of this relationship's sources already have a copy job, BEFORE the
+    # re-activation: everything that has one only after it is new here and
+    # gets its first copy below -- not just "$ds". Measured on pve10,
+    # 2026-10-08: adding hdd/lab/ct-201/p0cli re-expanded the root hdd/lab/
+    # ct-201 and brought in its sibling p0gui too; only p0cli was copied, and
+    # until the next cron tick the relationship's monitor reported p0gui
+    # "does not exist" and queued a "monitor BROKEN" alert every 15 minutes.
+    local seeded_before
+    seeded_before=$(relation_copy_sources "$name")
     # A child process: activation dies on any refusal, and its plan, dry-run
     # and guards are exactly the ones an ordinary re-activation shows.
     if ! bash "$SCRIPT_DIR/zfs-backup.sh" activate-client "$name" --yes; then
         die "add-source: the source already grants '$ds', but the re-activation here stopped (see above) -- this host's config and cron are unchanged. Fix what it said and run: zfs-backup.sh activate-client $name"
     fi
 
-    log "add-source: 4/4 the first copy of '$ds'"
     record_load client "$cpath"
-    local tab line cmd n=0
+    # "$ds" first, then every other source that got its copy job only now.
+    local seed s
+    seed=$( { printf '%s\n' "$ds"; relation_copy_sources "$name" | grep -vxF -f <(printf '%s\n' "$seeded_before" "$ds"); } )
+    while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        [ "$s" = "$ds" ] || log "add-source: '$s' came into '$name' with it (a child of a root the relationship already had)"
+        log "add-source: 4/4 the first copy of '$s'"
+        add_source_first_copy "$name" "$s"
+    done <<< "$seed"
+    log "add-source: '$ds' is now part of '$name'."
+}
+
+# relation_copy_sources <name> -> one source dataset per line: what the copy
+# (snapget) jobs of this relationship in the installed managed cron block pull.
+relation_copy_sources() {
+    local tab
+    tab=$(crontab_for_target 2>/dev/null) || tab=""
+    printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+        | grep -F -- " -L $1 " | grep -E 'snapget\.sh' \
+        | grep -oE '"[^" ]+@[^" ]+:[^" ]+"' | sed -E 's/^"[^:]*:(.*)"$/\1/' | sort -u
+}
+
+# add_source_first_copy <name> <dataset> -- runs that dataset's FINEST copy job
+# once, now: one whose hour field is `*` (it runs every hour) if there is one,
+# else the first -- not merely the first line found.
+add_source_first_copy() {
+    local name="$1" ds="$2" tab line cmd n=0
     tab=$(crontab_for_target 2>/dev/null) || tab=""
     line=$(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
         | grep -F -- " -L $name " | grep -F -- ":$ds\"" | grep -E 'snapget\.sh' \
         | awk '$2 == "*" && !h { h = $0 } !f { f = $0 } END { print (h != "" ? h : f) }')
-    # ^ the FINEST copy job: one whose hour field is `*` (it runs every hour)
-    #   if there is one, else the first -- not merely the first line found.
     if [ -z "$line" ]; then
         warn "add-source: no copy job for '$ds' found in the installed cron -- the dataset IS in the relationship, its first copy runs at the next tick"
-    else
-        cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
-        if [ "$(cron_target_user)" = root ]; then
-            bash -c "$cmd" </dev/null && n=1
-        else
-            su -s /bin/bash "$(cron_target_user)" -c "$cmd" </dev/null && n=1
-        fi
-        if [ "$n" -eq 1 ]; then
-            log "add-source: first copy of '$ds' done"
-        else
-            warn "add-source: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
-        fi
+        return 0
     fi
-    log "add-source: '$ds' is now part of '$name'."
+    cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
+    # zfs-job.sh EXITS 0 WHATEVER THE ENGINE DID (it reports a failure itself,
+    # through the notify script) -- so the line's own status says nothing.
+    # The engine's rc is the job's END line in its log. Measured on pve10,
+    # 2026-10-08: a refused pull ran under zfs-job.sh with rc=0.
+    local label logf rc
+    label=$(printf '%s' "$cmd" | sed -nE 's/.*zfs-job\.sh "([^"]+)".*/\1/p')
+    logf=$(printf '%s' "$cmd" | sed -nE 's/.* --log=([^ ]+).*/\1/p')
+    if [ "$(cron_target_user)" = root ]; then
+        bash -c "$cmd" </dev/null
+    else
+        su -s /bin/bash "$(cron_target_user)" -c "$cmd" </dev/null
+    fi
+    if [ -n "$label" ] && [ -n "$logf" ]; then
+        rc=$(grep -aF -- "ZFS-JOB END $label rc=" "$logf" 2>/dev/null | tail -1 | sed -E 's/.* rc=//')
+        [ "$rc" = 0 ] && n=1
+    fi
+    if [ "$n" -eq 1 ]; then
+        log "add-source: first copy of '$ds' done"
+    else
+        warn "add-source: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
+    fi
 }
 
 # new-relation -- the wizard, in whiptail (owner decision 2026-09-16: forms are
@@ -13025,7 +13067,7 @@ cmd_job_stats() {
             logs="$logs $_cl"
         done
     fi
-    local run_rows="" ds_rows=""
+    local run_rows="" ds_rows="" ev_rows=""
     if [ -n "$logs" ]; then
         # --- twin: run-rows (the SAME text lives in hostscripts/alert-digest.sh; a test pins equality) ---
         run_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
@@ -13083,6 +13125,51 @@ cmd_job_stats() {
     END { for (k in n) printf "%s\t%d\t%d\t%d\t%d\n", k, n[k], tot[k], mx[k], lastdur[k]+0 }
         ')
         # --- twin end: ds-rows ---
+        # EVENTS (2026-10-08, owner: "rob 1 i 2"): what a run DISCARDED on its
+        # copy (P-0, "follows its source -- discarding ...") and why the newest
+        # run of a job FAILED -- the GUI showed "aktualne" over both. Not a twin
+        # of the digest's rows. zfs-job.sh appends the engine's stderr right
+        # before the job's END line, so the lines since the previous END are
+        # this job's; other jobs' BEGIN lines can land in between and are skipped.
+        # Empty fields travel as "-": IFS=$'\t' collapses empty ones in `read`.
+        ev_rows=$(zcat -f $logs 2>/dev/null | awk -v dstart="$dstart" '
+    /ZFS-JOB BEGIN/ { next }
+    /ZFS-JOB END/ {
+        day = substr($1,1,10)
+        if (day < dstart) { nb = 0; next }
+        lbl = ""
+        for (i = 5; i <= NF; i++) { if ($i ~ /^rc=/) break; lbl = lbl (lbl == "" ? "" : " ") $i }
+        rc = ($NF ~ /^rc=/) ? substr($NF,4) + 0 : 0
+        t = day " " substr($1,12,5)
+        dtxt = ""; etxt = ""; tail = ""
+        for (k = 1; k <= nb; k++) {
+            ln = buf[k]
+            p = index(ln, "follows its source -- discarding ")
+            if (p > 0) {
+                x = substr(ln, p + 33); sub(/ \(zfs recv -F\)$/, "", x)
+                q = index(ln, "\047"); r = substr(ln, q + 1); tgt = substr(r, 1, index(r, "\047") - 1)
+                dtxt = dtxt (dtxt == "" ? "" : "; ") tgt ": " x
+            }
+            if (etxt == "" && ln ~ /Refusing|ERROR|FATAL|[Ee]rror:|cannot /) etxt = ln
+            if (ln ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ - /) tail = ln
+        }
+        if (etxt == "") etxt = tail
+        sub(/^[0-9-]+ [0-9:]+ - /, "", etxt)
+        gsub(/\t/, " ", dtxt); gsub(/\t/, " ", etxt)
+        if (lbl != "") {
+            if (dtxt != "" && (!(lbl in dat) || t >= dat[lbl])) { dat[lbl] = t; dsc[lbl] = substr(dtxt, 1, 400) }
+            if (!(lbl in lw) || t >= lw[lbl]) { lw[lbl] = t; ler[lbl] = (rc != 0 && rc != 75) ? substr(etxt, 1, 400) : "" }
+        }
+        nb = 0; next
+    }
+    { if (nb < 400) buf[++nb] = $0 }
+    END {
+        for (k in lw) {
+            if (!(k in dat) && ler[k] == "") continue
+            printf "%s\t%s\t%s\t%s\t%s\n", k, (k in dat) ? dat[k] : "-", (k in dat) ? dsc[k] : "-",
+                (ler[k] != "") ? lw[k] : "-", (ler[k] != "") ? ler[k] : "-"
+        }
+    }' | sort)
     fi
     # Volume, the digest's way: `written` of every snapshot created since the
     # window start, summed per dataset and per family (the snapshot name up to
@@ -13119,6 +13206,21 @@ cmd_job_stats() {
     done <<RUNS
 $run_rows
 RUNS
+    printf '],"events":['
+    first=1
+    local _el _dat _dsc _eat _err
+    while IFS=$'\t' read -r _el _dat _dsc _eat _err; do
+        [ -n "$_el" ] || continue
+        [ "$_dat" = - ] && _dat=""; [ "$_dsc" = - ] && _dsc=""
+        [ "$_eat" = - ] && _eat=""; [ "$_err" = - ] && _err=""
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        printf '{"label":"%s","discard_at":"%s","discard":"%s","error_at":"%s","error":"%s"}' \
+            "$(json_escape "$_el")" "$(json_escape "$_dat")" "$(json_escape "$_dsc")" \
+            "$(json_escape "$_eat")" "$(json_escape "$_err")"
+    done <<EVENTS
+$ev_rows
+EVENTS
     printf '],"datasets":['
     first=1
     local _ds _cnt _dtot _dmax _dlast

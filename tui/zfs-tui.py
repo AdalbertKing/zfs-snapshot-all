@@ -61,13 +61,17 @@ MIN_WIDTH = 80
 # monitor, ktory nigdy nie chodzi, wyglada dokladnie jak monitor mowiacy, ze
 # wszystko dobrze.
 VERDICTS = {
+    # BLAD (2026-10-08, wlasciciel "rob 1 i 2"): ostatni bieg zadania skonczyl
+    # sie bledem (rc != 0, poza 75 = pominiety przez blokade). Monitor patrzy
+    # tylko na wiek kopii, wiec odmowa pobrania byla "aktualne" przez 3 godziny.
+    "BLAD":         (u"błąd biegu",   1),
     "OK":           ("aktualne",      2),
     "WARNING":      (u"spóźnione",    3),
     "CRITICAL":     ("stare",         1),
     "UNKNOWN":      ("nie odpowiada", 4),
     "BEZ MONITORA": ("bez monitora",  4),
 }
-VERDICT_ORDER = ["CRITICAL", "WARNING", "UNKNOWN", "BEZ MONITORA", "OK"]
+VERDICT_ORDER = ["BLAD", "CRITICAL", "WARNING", "UNKNOWN", "BEZ MONITORA", "OK"]
 
 # Stan transferu z progress --json -> slowo. `verified` to `ok` podniesione po
 # weryfikacji GUID (lib-zfs-snap.sh), wiec dla operatora to to samo "OK".
@@ -499,6 +503,27 @@ def job_stats_for(data, j, label):
                 if (d == dst or d.startswith(dst + "/")) and v.get("family", "") == fam:
                     vol += int(v.get("bytes") or 0)
     return row, vol
+
+
+def job_run_issue(data, j):
+    """(blad, wyrzucenie) zadania z job-stats: blad = (rc, kiedy, tekst), gdy
+    jego NAJNOWSZY bieg sie nie udal (rc nie 0 i nie 75 -- pominiecie przez
+    blokade to nie blad); wyrzucenie = (kiedy, tekst) ostatniego biegu, ktory
+    cos z kopii wyrzucil (P-0, "follows its source -- discarding")."""
+    if data.failed("stats"):
+        return None, None
+    label = job_cron_label(j)
+    srow, _ = job_stats_for(data, j, label)
+    ev = {}
+    for x in (data.stats or {}).get("events", []):
+        if label and x.get("label") == label:
+            ev = x
+            break
+    fail = None
+    if srow and str(srow.get("last_rc")) not in ("0", "75", "None"):
+        fail = (srow.get("last_rc"), srow.get("last_at") or "?", ev.get("error") or "")
+    disc = (ev.get("discard_at") or "?", ev["discard"]) if ev.get("discard") else None
+    return fail, disc
 
 
 def fmt_ago(epoch, now):
@@ -1043,6 +1068,16 @@ def build_relations(data, now):
         host = (data.jobs or {}).get("host") or "?"
         dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") == "dataset"]
         st = rel_stats(data, my_jobs)
+        # Relacja, w ktorej ostatni bieg ktoregos zadania sie nie udal, nie jest
+        # "aktualne" (2026-10-08) -- ten sam fakt, co wiersz "błąd biegu" na F2.
+        if rel.get("state") == "active":
+            for j in sends:
+                fail, _ = job_run_issue(data, j)
+                if fail:
+                    verdict = worst([verdict, "BLAD"])
+                    vword = VERDICTS[verdict][0]
+                    reasons.append(u"%s: ostatni bieg %s rc=%s: %s" % (
+                        (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or u"zobacz cron.log"))
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel.get("peer_host") or "", dirs, rel.get("mode")),
@@ -1197,13 +1232,29 @@ def build_jobs(data, now):
         else:
             czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
             gb = hbytes_short(vol) if vol is not None else "-"
+        # BLAD BIEGU I WYRZUCENIA (2026-10-08): monitor mowi tylko o wieku kopii.
+        # Ostatni bieg, ktory sie nie udal, robi wiersz "błąd biegu"; to, co bieg
+        # wyrzucil z kopii (P-0), idzie do panelu. Tylko transfer -- porzadki
+        # maja swoje wiersze i swoj werdykt.
+        v0, reasons0 = v, ([reason] if reason else [])
+        fails, discs = [], []
+        if kind != "prune":
+            fail, disc = job_run_issue(data, j)
+            sc = (j.get("scope") or "?").split(":")[-1]
+            if fail:
+                fails.append((sc, fail))
+                v = "BLAD"
+            if disc:
+                discs.append((sc, disc))
+        reasons = list(reasons0) + [u"ostatni bieg %s rc=%s: %s" % (f[1], f[0], f[2] or u"zobacz cron.log")
+                                    for _, f in fails]
         items.append({
             "kind": "job", "name": j.get("label") or "(bez rel.)", "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
             "mode": mode, "task": task, "pref": pref, "keep": keep, "cnt": 1, "tier": tier, "scope": j.get("scope", ""),
             "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
-            "reasons": [reason] if reason else [], "next_epoch": nxt,
+            "reasons": reasons, "fails": fails, "discards": discs, "next_epoch": nxt,
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
             "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
@@ -1237,7 +1288,8 @@ def build_jobs(data, now):
                 pit.update({"task": u"lokalny prune", "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-",
                             "vol": None, "srow": None, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
-                            "reasons": list(items[-1]["reasons"])})
+                            "verdict": v0, "vword": VERDICTS.get(v0, (v0, 0))[0],
+                            "reasons": list(reasons0), "fails": [], "discards": []})
                 items.append(pit)
                 break
     # REPLIKI NA F2 (2026-10-08, wlasciciel: "czy zadania repliki wchodza do listy
@@ -1305,6 +1357,8 @@ def build_jobs(data, now):
         g["_count"] += 1
         g["_verdicts"].append(it["verdict"])
         g["jobs"].append(it["job"])
+        g.setdefault("fails", []).extend(it.get("fails") or [])
+        g.setdefault("discards", []).extend(it.get("discards") or [])
         for r in it["reasons"]:
             if r not in g["reasons"]:
                 g["reasons"].append(r)
@@ -1726,6 +1780,12 @@ def rel_detail_pairs(row, data, now, ch):
         if srow and not data.failed("stats"):
             pairs.append(("biegi", u"%s w oknie %s dni, błędów %s, ostatni %s rc=%s" % (
                 srow.get("runs", "?"), win, srow.get("failures", 0), srow.get("last_at", "?"), srow.get("last_rc", "?"))))
+        # Co poszlo zle i co zostalo wyrzucone -- dla KAZDEGO datasetu wiersza,
+        # nie tylko pierwszego (wiersz lustra niesie ich kilkanascie).
+        for sc, (rc, at, txt) in row.get("fails") or []:
+            pairs.append((u"błąd", u"%s  %s  rc=%s  %s" % (at, sc, rc, txt or u"(szczegóły w cron.log)")))
+        for sc, (at, txt) in sorted(row.get("discards") or [], key=lambda d: d[1][0], reverse=True)[:6]:
+            pairs.append((u"wyrzucono", u"%s  %s" % (at, txt)))
         if row.get("vol") is not None and not data.failed("stats"):
             pairs.append(("wolumen", u"%s zapisane w migawkach %s w oknie %s dni" % (
                 hbytes_short(row["vol"]), family_of(j) or "?", win)))
