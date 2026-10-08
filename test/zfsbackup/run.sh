@@ -6464,7 +6464,12 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # the config to learn WHERE the copy lives and never writes it back, which is
 # why the writer count is unchanged -- and it is the acknowledgement this
 # pinned number exists to force.
-if [ "$writers" -eq 10 ] && [ "$resolvers" -eq 14 ]; then
+# 11/16 since 2026-10-08: edit-config. A WRITER (it installs the config the
+# admin edited) and aimed like the others: with a relationship named,
+# cron_context_resolve record; without, cron_context_resolve adopt -- the file
+# this account's crontab was installed from -- then
+# assert_cron_config_matches_installed and atomic_replace_and_install.
+if [ "$writers" -eq 11 ] && [ "$resolvers" -eq 16 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -6495,6 +6500,8 @@ cmd_activate_client adopt
 cmd_migrate_profile aim
 cmd_audit_source_retention aim
 cmd_remove_client record
+cmd_edit_config record
+cmd_edit_config adopt
 POLICIES
 
 # --- 64. P10 closed: aim it, or be told you have not ------------------------

@@ -13165,9 +13165,13 @@ cmd_edit_config() {
         cfg="$CRON_CTX_FILE"
         [ -n "$cfg" ] || cfg=$(default_cron_config)
     else
-        [ "$account" = root ] && account=""
-        LOCAL_USER="$account"
-        cfg=$(default_cron_config)
+        # No relationship named: the config this ACCOUNT's crontab was actually
+        # installed from (the block's '# Source:' line), not a guessed default --
+        # a crontab has one managed block, and editing another file would replace
+        # every job the installed one describes. Account: the one named, else root.
+        cron_context_resolve adopt "" "${account:-root}" "" ""
+        cfg="$CRON_CTX_FILE"
+        [ -n "$cfg" ] || cfg=$(default_cron_config)
     fi
     [ -f "$cfg" ] || die "edit-config: no config $cfg for account '$(cron_target_user)' -- files here: $(ls /etc/zfs-snapshot-all/jobs.*.conf 2>/dev/null | tr '\n' ' ')"
     assert_cron_config_matches_installed "$cfg"
