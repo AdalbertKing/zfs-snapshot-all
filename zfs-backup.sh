@@ -536,6 +536,12 @@ Inspection / teardown:
                                     package there (path, revision). A host that refuses
                                     is a fact too ("ssh":{"ok":false,...}), never a
                                     fatal: the wizard shows it and says what to do.
+  zfs-backup.sh source-pruners HOST[:PORT] [--port=N] DATASET...
+                                    Which OTHER collectors can already delete snapshots
+                                    on these source datasets (`zfs allow`, root over
+                                    SSH): "dataset<TAB>zfsbackup-<collector>" per line,
+                                    nothing = no conflict. The same question
+                                    activate-client's gate asks, before anything exists.
   zfs-backup.sh prepare-source HOST[:PORT] [--port=N] [--yes]
                                     Put the package on a fresh source: git clone of
                                     THIS checkout's origin into /root/scripts/
@@ -1071,6 +1077,15 @@ assert_source_prune_grant() {   # <account> <host> <port> <keyfile> <alias> <ali
 # emits no source prune and never reaches this (two synchro collectors on one
 # source were tested live the same day and are legitimate). The source's own
 # local account is not a peer and is not counted.
+# foreign_pruners_from_allow <my account> -- reads `zfs allow` output on stdin,
+# prints the OTHER zfsbackup-* accounts holding `destroy` there, one per line.
+# One reader for the activation gate below and for source-pruners (the wizard).
+foreign_pruners_from_allow() {
+    awk -v me="$1" '
+        $1 == "user" && $2 ~ /^zfsbackup-./ && $2 != me {
+            n = split($3, p, ","); for (i = 1; i <= n; i++) if (p[i] == "destroy") { print $2; break } }' | sort -u
+}
+
 assert_no_foreign_source_pruner() {   # <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
     local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
     local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
@@ -1078,9 +1093,7 @@ assert_no_foreign_source_pruner() {   # <account> <host> <port> <keyfile> <alias
     for ds in "$@"; do
         out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
         [ "$rc" -eq 0 ] || die "foreign-pruner check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a source prune without knowing who else prunes there. Output: $(printf '%s' "$out" | tail -2)"
-        o=$(printf '%s\n' "$out" | awk -v me="$account" '
-            $1 == "user" && $2 ~ /^zfsbackup-./ && $2 != me {
-                n = split($3, p, ","); for (i = 1; i <= n; i++) if (p[i] == "destroy") { print $2; break } }' | sort -u | tr '\n' ' ')
+        o=$(printf '%s\n' "$out" | foreign_pruners_from_allow "$account" | tr '\n' ' ')
         [ -n "$o" ] && others="$others
   $ds: ${o% }"
     done
@@ -9859,8 +9872,18 @@ probe_conflicts_are_history() {
 # re-activation that gives it the mirror (-M) shape, which then removes them.
 #   in:  <dataset> <snapget args...>    out: the engine's stdout, rc 0 = clean
 activate_dryrun_snapget() {
-    local ds="$1" out rc; shift
-    out=$(bash "$SNAPGET" "$@"); rc=$?
+    local ds="$1" out rc errf; shift
+    # Two warnings are about the DRY-RUN's own arguments, not the relationship
+    # (owner note 5, 2026-10-08): it runs without -m, and a trimmed root's children
+    # are their own lines here, so "no -m given" and "has N child dataset(s) but
+    # neither -r nor -R" came once per dataset and described nothing installed.
+    # The engine logs to STDERR; everything else there is passed on unchanged.
+    errf=$(mktemp) || errf=/dev/null
+    out=$(bash "$SNAPGET" "$@" 2>"$errf"); rc=$?
+    if [ "$errf" != /dev/null ]; then
+        grep -v -e 'WARNING: no -m given' -e 'child dataset(s) but neither -r nor -R' "$errf" >&2
+        rm -f "$errf"
+    fi
     [ -n "$out" ] && printf '%s\n' "$out"
     if [ "$rc" -eq 1 ] && probe_conflicts_are_history "$out"; then
         log "  $ds: $PROBE_HISTORY_COUNT older snapshot(s) exist only on this host -- history, not a conflict$([ "${PEER_SAVED_MODE:-}" = sync ] && echo " (the sync mirror, snapget -M, removes them at the next pull)")"
@@ -10585,6 +10608,19 @@ cmd_activate_client() {
         return 0
     fi
     log "client '$name' active (cron runs over endpoint '$(endpoint_display)')."
+    activate_first_copies "$name"
+}
+
+# activate_first_copies <name> (owner note 12, 2026-10-08) -- one run of every
+# source dataset's finest copy job, right after activation. The seed's base can be
+# an OLD source snapshot (pve11b: automated_hourly from 20 days before), so until
+# the first cron tick a fresh relationship read as CRITICAL on the age monitor and
+# would alert. The same run add-source makes for a dataset it adds.
+activate_first_copies() {
+    local name="$1" ds
+    while IFS= read -r ds; do
+        [ -n "$ds" ] && add_source_first_copy "$name" "$ds" activate-client
+    done < <(relation_copy_sources "$name")
 }
 
 # ------------------------------------------------------------------------------
@@ -12343,6 +12379,39 @@ cmd_check_source() {
         "$([ "$PROBE_GIT" -eq 1 ] && echo true || echo false)" "$(json_escape "$SOURCE_REPO_DIR")"
 }
 
+# source-pruners HOST[:PORT] [--port=N] DATASET... (owner note 4, 2026-10-08)
+#
+# READ-ONLY. Which OTHER collectors can already delete snapshots on these source
+# datasets -- the same question activate-client's foreign-pruner gate asks, but
+# over root SSH and before anything exists. Measured on pve9b <- pve11: the gate
+# fired at activation, after the account, the grants and a FULL seed of three
+# datasets; the wizard asks this right after the datasets are known.
+# Prints "dataset<TAB>account" per conflict; nothing printed = no conflict.
+# This collector's own account (zfsbackup-<this host>) is not counted.
+cmd_source_pruners() {
+    local host="" port="" a d out
+    local -a dss=()
+    for a in "$@"; do
+        case "$a" in
+            --port=*) port="${a#*=}" ;;
+            -*)       die "source-pruners: unknown option '$a'" ;;
+            *)        if [ -z "$host" ]; then host="$a"; else dss+=("$a"); fi ;;
+        esac
+    done
+    [ -n "$host" ] && [ "${#dss[@]}" -gt 0 ] || die "source-pruners: usage: source-pruners HOST[:PORT] DATASET..."
+    case "$host" in *:*) [ -n "$port" ] || port="${host##*:}"; host="${host%%:*}" ;; esac
+    case "$host" in *[!A-Za-z0-9._-]*) die "source-pruners: HOST looks wrong: '$host'" ;; esac
+    case "${port:-22}" in *[!0-9]*) die "source-pruners: --port takes a number" ;; esac
+    local me; me="zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')"
+    for d in "${dss[@]}"; do
+        case "$d" in ''|*[!A-Za-z0-9_.:/-]*) die "source-pruners: not a dataset name: '$d'" ;; esac
+        out=$(rux_root_ssh "$host" "${port:-22}" "zfs allow -- '$d'" 2>&1) \
+            || die "source-pruners: 'zfs allow $d' on $host failed: $(printf '%s' "$out" | tail -1)"
+        printf '%s\n' "$out" | foreign_pruners_from_allow "$me" | while IFS= read -r a; do printf '%s\t%s\n' "$d" "$a"; done
+    done
+    return 0
+}
+
 cmd_prepare_source() {
     source_host_args prepare-source "$@"
     local url; url=$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null)
@@ -12468,6 +12537,16 @@ cmd_edit_relation() {
     cmd_activate_client "$name" --regenerate "$@"
 }
 
+# record_is_removed_name_live_as_source <name> -- true when the collector record
+# NAME says removed AND the same name is this host's live identity as a source:
+# the account zfsbackup-NAME exists and its join manifest is present (the same
+# evidence clean-relationships.sh classifies as LIVE).
+record_is_removed_name_live_as_source() {
+    local cp; cp=$(client_conf_path "$1")
+    [ -e "$cp" ] && [ "$(record_get "$cp" STATE)" = removed ] || return 1
+    id "zfsbackup-$1" >/dev/null 2>&1 && [ -s "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}/$1.conf" ]
+}
+
 cmd_delete_relation() {
     local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 a
     for a in "$@"; do
@@ -12546,7 +12625,9 @@ cmd_delete_relation() {
     else echo "  1. collector : skipped -- the record already says 'removed'"; fi
     if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
     else echo "  2. source    : skipped -- $why_source"; fi
-    if [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
+    if [ "$do_record" -eq 1 ] && record_is_removed_name_live_as_source "$name"; then
+        echo "  3. record    : archived as $(basename "$(client_conf_path "$name")").removed-<time> -- '$name' is also this host's live SOURCE identity (account zfsbackup-$name), which is not touched"
+    elif [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
     else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
     if [ "$destroy" -eq 1 ]; then
         echo "  4. COPIES    : zfs destroy -r, on THIS host, of (from $copies_from):"
@@ -12602,7 +12683,20 @@ cmd_delete_relation() {
         fi
         return 1
     fi
-    if [ "$do_record" -eq 1 ]; then
+    if [ "$do_record" -eq 1 ] && record_is_removed_name_live_as_source "$name"; then
+        # Owner note 11 (2026-10-08): on pve9b the removed COLLECTOR record 'pve11'
+        # shared its name with a live relationship in the other direction -- this
+        # host is the SOURCE for collector pve11 (account zfsbackup-pve11, peers/
+        # pve11.*). The purge groups by name, saw that live half and refused, so the
+        # collector's tombstone could never go. Here only the tombstone is ours: it
+        # is archived the way add-client archives it, and nothing of the source
+        # side is touched.
+        local _arch; _arch="$(client_conf_path "$name").removed-$(date '+%Y%m%d-%H%M%S')"
+        log "delete-relation: 3/4 archive the record of '$name' -- the name is also this host's live identity as a SOURCE (account zfsbackup-$name), which stays"
+        mv -f "$(client_conf_path "$name")" "$_arch" \
+            && log "delete-relation: the record is kept as $_arch" \
+            || { rc=1; log "!!! delete-relation: the record of '$name' could not be archived -- the name stays taken"; }
+    elif [ "$do_record" -eq 1 ]; then
         log "delete-relation: 3/4 purge the record of '$name'"
         "$SCRIPT_DIR/clean-relationships.sh" --purge="$name" --yes || { rc=1; log "!!! delete-relation: the record of '$name' was NOT purged (see above) -- the name stays taken"; }
     fi
@@ -13015,17 +13109,18 @@ relation_copy_sources() {
         | grep -oE '"[^" ]+@[^" ]+:[^" ]+"' | sed -E 's/^"[^:]*:(.*)"$/\1/' | sort -u
 }
 
-# add_source_first_copy <name> <dataset> -- runs that dataset's FINEST copy job
-# once, now: one whose hour field is `*` (it runs every hour) if there is one,
-# else the first -- not merely the first line found.
+# add_source_first_copy <name> <dataset> [verb] -- runs that dataset's FINEST copy
+# job once, now: one whose hour field is `*` (it runs every hour) if there is one,
+# else the first -- not merely the first line found. [verb] only names the caller
+# in its messages (add-source, activate-client).
 add_source_first_copy() {
-    local name="$1" ds="$2" tab line cmd n=0
+    local name="$1" ds="$2" verb="${3:-add-source}" tab line cmd n=0
     tab=$(crontab_for_target 2>/dev/null) || tab=""
     line=$(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
         | grep -F -- " -L $name " | grep -F -- ":$ds\"" | grep -E 'snapget\.sh' \
         | awk '$2 == "*" && !h { h = $0 } !f { f = $0 } END { print (h != "" ? h : f) }')
     if [ -z "$line" ]; then
-        warn "add-source: no copy job for '$ds' found in the installed cron -- the dataset IS in the relationship, its first copy runs at the next tick"
+        warn "$verb: no copy job for '$ds' found in the installed cron -- the dataset IS in the relationship, its first copy runs at the next tick"
         return 0
     fi
     cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
@@ -13046,9 +13141,9 @@ add_source_first_copy() {
         [ "$rc" = 0 ] && n=1
     fi
     if [ "$n" -eq 1 ]; then
-        log "add-source: first copy of '$ds' done"
+        log "$verb: first copy of '$ds' done"
     else
-        warn "add-source: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
+        warn "$verb: the first copy of '$ds' did not finish (see the job log) -- cron runs it again at the next tick"
     fi
 }
 
@@ -17011,13 +17106,14 @@ rux_remote_plan() {
             echo "  stages that would run:         seed -> activate"
             ;;
         removed)
-            # Its own case since 2026-08-20. It used to fall into the catch-all
-            # below and be called an "unknown state", pointing at
-            # status/seed/activate -- none of which can revive a removed record,
-            # and nothing else in the tree can either: `removed` is terminal.
-            echo "  stages that would run:         NONE -- this relationship was removed and cannot be revived."
-            echo "  to back this peer up again:    use a different relationship name (--name=NEW), which enrols"
-            echo "                                 alongside the removed record and leaves its history intact."
+            # `removed` is terminal: nothing revives that record. But the NAME is
+            # free -- the install path treats a removed record as none (rux_remote_install)
+            # and add-client archives it as <name>.conf.removed-<time>. The plan used
+            # to answer "NONE -- cannot be revived" while --install went ahead, so the
+            # wizard made the admin delete the old record first (owner note 11, 2026-10-08).
+            echo "  stages that would run:         add-client (enrol + attempt remote join) -> seed -> activate"
+            echo "  old record:                    a REMOVED relationship of this name -- add-client keeps it as"
+            echo "                                 $(basename "$cpath").removed-<time> and reuses the name; the copies on disk stay"
             ;;
         seed_complete|endpoint_verified|endpoint_change_pending)
             echo "  stages that would run:         activate"
@@ -17798,6 +17894,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         job-stats)        shift; cmd_job_stats "$@" ;;
         list-datasets)    shift; cmd_list_datasets "$@" ;;
         check-source)     shift; cmd_check_source "$@" ;;
+        source-pruners)   shift; cmd_source_pruners "$@" ;;
         prepare-source)   shift; cmd_prepare_source "$@" ;;
         new-relation)     shift; cmd_new_relation "$@" ;;
         delete-relation)  shift; cmd_delete_relation "$@" ;;

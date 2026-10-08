@@ -9464,6 +9464,26 @@ got=$(ph_act 1 "t/x@new")
     && ok "probehistory: ...and one target-only snapshot NEWER than the base still fails the rehearsal -- divergence" \
     || bad "probehistory: the rehearsal excused a NEWER target-only snapshot" "got=$got" "$(cat "$PHB/act.log")"
 
+# Owner note 5 (2026-10-08): the rehearsal's own arguments (no -m, a trimmed root's
+# children as their own lines) made the engine warn once per dataset about nothing
+# installed. Those two are dropped; any OTHER engine warning still reaches the admin,
+# and the rc and the history rule are untouched.
+cat > "$PHB/snapget" <<'EOS'
+#!/bin/bash
+echo "2026-10-08 10:00:00 - WARNING: no -m given -- the new snapshot will be named with a bare timestamp" >&2
+echo "2026-10-08 10:00:00 - WARNING: s/x has 2 child dataset(s) but neither -r nor -R was given -- only s/x" >&2
+echo "2026-10-08 10:00:00 - WARNING: something else entirely" >&2
+printf 'PLAN=INCREMENTAL base=b2 src=s/x tgt=t/x\n'
+exit 0
+EOS
+got=$(ph_act 0 "")
+if [ "$got" = 0 ] && ! grep -q -e 'no -m given' -e 'neither -r nor -R' "$PHB/act.log" \
+   && grep -q 'something else entirely' "$PHB/act.log" && grep -q '^PLAN=INCREMENTAL' "$PHB/act.log"; then
+    ok "probehistory: the rehearsal drops its own 'no -m' and 'neither -r nor -R' warnings, keeps any other warning and the plan"
+else
+    bad "probehistory: rehearsal warning filter" "got=$got" "$(cat "$PHB/act.log")"
+fi
+
 fi   # --- koniec sekcji probehistory ---
 
 if want mirrorguard; then
@@ -13276,6 +13296,32 @@ if printf '%s' "$DROUT" | grep -q "1\. collector : skipped -- the record already
 else
     bad "delrel: plan for a removed record" "$DROUT" "$(cat "$DR/err")"
 fi
+# Owner note 11 (2026-10-08): a removed COLLECTOR record whose name is also this
+# host's live SOURCE identity (account zfsbackup-NAME + peers/NAME.conf) -- the purge
+# groups by name and refused forever. Only the record is archived; peers/ stays.
+mkdir -p "$DR/peers"; printf 'PEER_JOIN_GRANTED_DATASETS="p/x"\n' > "$DR/peers/c.conf"
+dr_src() {   # <args...> -> output; account zfsbackup-c "exists" via a stubbed id
+    ( CLIENTS_DIR="$DR/clients" PEER_STATE_DIR="$DR/peers"
+      . "$ZFSBACKUP"
+      id() { [ "$1" = zfsbackup-c ]; }
+      rux_root_ssh() { echo "SSH $*"; return 0; }
+      cmd_delete_relation "$@" ) 2>&1
+}
+DROUT=$(dr_src c)
+if printf '%s' "$DROUT" | grep -q "3\. record    : archived as c.conf.removed-<time> -- 'c' is also this host's live SOURCE identity" \
+   && [ -f "$DR/clients/c.conf" ]; then
+    ok "delrel: plan -- a removed record whose name is this host's live SOURCE identity is ARCHIVED, not purged"
+else
+    bad "delrel: plan for a removed record named like a live source identity" "$DROUT"
+fi
+DROUT=$(dr_src c --keep-source --yes)
+if [ ! -f "$DR/clients/c.conf" ] && ls "$DR/clients"/c.conf.removed-* >/dev/null 2>&1 && [ -s "$DR/peers/c.conf" ] \
+   && ! printf '%s' "$DROUT" | grep -q 'clean-relationships'; then
+    ok "delrel: --yes archives ONLY clients/c.conf (kept as c.conf.removed-<time>), peers/c.conf is untouched and no purge runs"
+else
+    bad "delrel: archive of a removed record named like a live source identity" "$DROUT" "$(ls "$DR/clients" "$DR/peers")"
+fi
+mv "$DR/clients"/c.conf.removed-* "$DR/clients/c.conf" 2>/dev/null; rm -rf "$DR/peers"
 DROUT=$(dr_run a --keep-source --keep-record --destroy-copies)
 if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- --keep-source' && printf '%s' "$DROUT" | grep -q "3\. record    : kept (--keep-record) -- the name 'a' stays taken" \
    && printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of (from the record):' && printf '%s' "$DROUT" | grep -q '^ *tank/b/10.0.0.5/p/x$'; then
@@ -13663,7 +13709,7 @@ fi
 # zfs-job.sh EXITS 0 WHATEVER THE ENGINE DID; the first copy is judged by the
 # job's END line in its log. A stub job that fails the engine but exits 0 must
 # not be reported as done.
-printf '#!/bin/sh\nprintf "%%s ZFS-JOB END h hourly backup (r-a) rc=%%s\\n" now "$ZJ_RC" >> "%s"\nexit 0\n' "$AS/job.log" > "$AS/zfs-job.sh"
+printf '#!/bin/sh\nprintf "%%s ZFS-JOB END %%s rc=%%s\\n" now "$1" "$ZJ_RC" >> "%s"\nexit 0\n' "$AS/job.log" > "$AS/zfs-job.sh"
 chmod +x "$AS/zfs-job.sh"
 sed "s#/x/zfs-job.sh#$AS/zfs-job.sh#; s#LOGF#$AS/job.log#" "$AS/tab" > "$AS/tab2"
 as_seed() {   # <engine rc the stub records> -> the verb's messages
@@ -13679,6 +13725,25 @@ if printf '%s' "$out1" | grep -q 'WARN add-source: the first copy of .hdd/lab/a.
     ok "addsource: the first copy is judged by the job's END rc in its log, not by zfs-job.sh's own exit (always 0)"
 else
     bad "addsource: first copy verdict" "rc=1: $out1" "rc=0: $out0"
+fi
+# Owner note 12 (2026-10-08): activation ends with the same first copy for EVERY
+# source of the relationship -- a fresh relationship whose seed base was an old
+# source snapshot read CRITICAL until the first cron tick. Only this relationship's
+# copy jobs run (not 'other', not the prune line), each source once.
+af_fn=$(sed -n '/^activate_first_copies() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$af_fn" ] || bad "addsource: could not lift activate_first_copies -- anchor changed"
+: > "$AS/job.log"
+out=$(ZJ_RC=0 bash -c "crontab_for_target() { cat '$AS/tab2'; }; cron_target_user() { echo root; }
+log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; $as_fn
+$af_fn
+activate_first_copies rel" 2>&1)
+if [ "$(grep -c 'ZFS-JOB END' "$AS/job.log")" = 2 ] \
+   && printf '%s' "$out" | grep -q "LOG activate-client: first copy of .hdd/lab/a. done" \
+   && printf '%s' "$out" | grep -q "LOG activate-client: first copy of .hdd/lab/a/b. done" \
+   && ! printf '%s' "$out" | grep -q 'hdd/lab/c'; then
+    ok "addsource: activate-client runs the first copy of each of the relationship's sources once, and only theirs"
+else
+    bad "addsource: activation first copies" "$out" "$(cat "$AS/job.log")"
 fi
 as_run() {   # <scope text> <target> -> stdout new file, stderr verdict; rc
     printf '%b' "$1" > "$AS/in"

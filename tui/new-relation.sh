@@ -646,19 +646,10 @@ step_name() {
         if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rel.tsv"; then
             wt --title "Nazwa zajęta" --msgbox "Relacja o nazwie '$n' już jest na tym hoście. Podaj inną." 8 "$W"; RNAME="$n"; continue
         fi
-        if grep -qxF -- "$n" "$TMPD/rel.removed" 2>/dev/null; then
-            # Zmierzone na pve10: bez tego plan odpowiadał "removed and cannot be revived",
-            # a kreator i tak pokazywał WYKONAJ.
-            RNAME="$n"
-            wt --title "Nazwę '$n' trzyma USUNIĘTA relacja" --yes-button "Zwolnij nazwę" --no-button "Inna nazwa" \
-               --yesno "Relacja '$n' została kiedyś usunięta, ale jej stary rekord nadal trzyma nazwę\n(program nie wskrzesza usuniętych relacji).\n\n'Zwolnij nazwę' = zfs-backup.sh delete-relation $n --yes: usuwa stary rekord\ni sprząta po nim na źródle, jeśli coś tam zostało. Kopii na dysku nie rusza." 14 "$W" || continue
-            info "Zwalniam nazwę $n" "delete-relation $n --yes ..."
-            if "$ZB" delete-relation "$n" --yes >"$TMPD/free.log" 2>&1; then
-                rm -f "$TMPD/rel.done"; status_tsv
-            else
-                wt --title "Nie udało się zwolnić nazwy" --msgbox "$(tail -6 "$TMPD/free.log")" 14 "$W"; continue
-            fi
-        fi
+        # Nazwa USUNIĘTEJ relacji jest wolna: add-client archiwizuje jej stary rekord
+        # (<nazwa>.conf.removed-<czas>) i plan to mówi. Dawniej kreator kazał ją
+        # najpierw „zwolnić” przez delete-relation -- zbędny krok, który na pve9b nie
+        # przechodził (uwaga 11, 2026-10-08).
         RNAME="$n"; return 0
     done
 }
@@ -957,13 +948,44 @@ summary_text() {
     any_excl && echo "(^nazwa${D:-\$} = dokładnie ten dataset, nie łapie np. ...disk-01)"
     return 0
 }
-step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz
+# INNY KOLEKTOR JUŻ PRZYCINA TE DATASETY (uwaga 4, 2026-10-08). Aktywacja odmawia,
+# gdy cudze konto zfsbackup-* ma `destroy` na źródle -- dwie retencje zjadają sobie
+# bazy. Na pve9b <- pve11 odmowa przyszła dopiero po koncie, grantach i PEŁNYM seedzie
+# trzech datasetów. To samo pytanie (source-pruners) pada tu, przed WYKONAJ.
+# Dotyczy tylko relacji, która przycina źródło: backup, szablon nie-pasywny, nie atomowo.
+# 0 = dalej, 1 = wstecz, 2 = wróć do datasetów, 3 = wróć do szablonu (pasywny)
+check_pruners() {
+    [ "$MODE" = backup ] || return 0
+    case "$PROFILE" in passive|passive-flat) return 0 ;; esac
+    [ "$RECURSION" = atomic ] && return 0
+    info "$(title 10 'Plan')" "Sprawdzam, czy inny kolektor nie przycina już tych datasetów..."
+    if ! "$ZB" source-pruners "$(hostport)" "${B_ROOT[@]}" >"$TMPD/pruners.tsv" 2>"$TMPD/pruners.err"; then
+        wt --title "Nie sprawdzono innych kolektorów" --msgbox "source-pruners nie odpowiedział:\n$(tail -2 "$TMPD/pruners.err")\n\nAktywacja i tak to sprawdzi -- przed instalacją crona." 12 "$W"
+        return 0
+    fi
+    [ -s "$TMPD/pruners.tsv" ] || return 0
+    local lst; lst=$(awk -F'\t' '{printf "    %s  -- %s\n", $1, $2}' "$TMPD/pruners.tsv")
+    geom
+    wt --title "Inny kolektor już przycina te datasety" --notags --ok-button "Dalej" --cancel-button "Wstecz" \
+       --menu "Na $HOST migawki tych datasetów może już kasować inny kolektor:\n$lst\nDwie retencje na jednym źródle kasują sobie nawzajem bazy -- aktywacja odmówi.\nAlbo usuń tamtą relację (na tamtym kolektorze), albo:" "$H" "$W" 2 \
+       pasywnie "Pasywnie -- bez retencji u źródła (szablon passive)" \
+       datasety "Inne datasety -- wróć do wyboru" || return 1
+    case "$WT_OUT" in
+        pasywnie) PROFILE=passive; SRCPROF=""; return 3 ;;
+        datasety) return 2 ;;
+    esac
+    return 1
+}
+
+step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = do szablonu
     local rc
     while :; do
         geom
         build_argv install
         summary_text >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "$(title 10 'Podsumowanie')" "Pokaż plan" "Wstecz" || return 1
+        check_pruners; rc=$?
+        case "$rc" in 0) ;; 1) continue ;; *) return "$rc" ;; esac
         build_argv
         info "$(title 10 'Plan')" "Pytam czasownik o plan (nic nie zmienia)..."
         "${ARGV[@]}" >"$TMPD/plan.txt" 2>&1; rc=$?
@@ -1029,7 +1051,8 @@ while :; do
         name)    if step_name;     then step=acct;    else step=profile; fi ;;
         acct)    if step_account;  then step=extra;   else step=name; fi ;;
         extra)   if step_extra;    then step=summary; else step=acct; fi ;;
-        summary) if step_summary;  then break;        else step=extra; fi ;;
+        summary) step_summary
+                 case $? in 0) break ;; 2) step=ds ;; 3) step=profile ;; *) step=extra ;; esac ;;
     esac
 done
 exit "$RC_RUN"

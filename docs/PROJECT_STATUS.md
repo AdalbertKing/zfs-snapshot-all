@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7a6958c3d463fe0d -->
+<!-- status-covers-digest: 1aa0a434ab84bea6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,32 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Runda GUI, paczka B — uwagi 4, 5, 11, 12 (2026-10-09, właściciel: „rób paczkę B”).**
+  - **Inny kolektor już przycina (4):** nowy czytelnik `zfs-backup source-pruners
+    HOST[:PORT] DATASET...` — `zfs allow` przez root SSH, wypisuje „dataset<TAB>konto”
+    dla cudzych kont `zfsbackup-*` z `destroy`; własne konto kolektora się nie liczy.
+    To samo czytanie co bramka aktywacji (`foreign_pruners_from_allow`, jedna funkcja).
+    Kreator pyta o to przed planem, tylko dla relacji przycinającej źródło (backup,
+    szablon nie-pasywny, nie atomowo), i daje wybór: „Pasywnie” (szablon passive) albo
+    „Inne datasety”. Zmierzone z pve9b na pve11: `hdd/ct  zfsbackup-pve10`.
+    Sprawdzane są korzenie z koszyka; prawo nadane tylko na dziecku wychwyci dopiero
+    bramka aktywacji.
+  - **Szum w suchym biegu aktywacji (5):** ostrzeżenia silnika „no -m given” i „has N
+    child dataset(s) but neither -r nor -R” są odfiltrowane ze stderr suchego biegu
+    `activate-client`; pozostałe ostrzeżenia przechodzą. Silniki bez zmian.
+  - **Nazwa usuniętej relacji (11):** plan (`--plan`) dla rekordu `removed` mówi
+    „add-client (enrol + attempt remote join) -> seed -> activate” i że stary rekord zostanie zarchiwizowany —
+    tak, jak robi to instalacja. Kreator nie każe już „zwalniać nazwy”.
+    `delete-relation` na rekordzie `removed`, którego nazwa jest też żywą tożsamością
+    tego hosta jako ŹRÓDŁA (konto `zfsbackup-NAZWA` i `peers/NAZWA.conf`), archiwizuje
+    tylko `clients/NAZWA.conf` (jako `.removed-<czas>`) zamiast purge, który odmawiał.
+  - **Świeża relacja świeci „stare” (12):** `activate-client` kończy się jednym
+    przebiegiem najczęstszego zadania kopiującego każdego źródła relacji
+    (`activate_first_copies`, przez tę samą `add_source_first_copy` co add-source).
+  - **Testy:** `probehistory` (filtr ostrzeżeń), `addsource` (pierwsze kopie po
+    aktywacji), `delrel` (archiwizacja przy tożsamości źródła), `tui` (okno konfliktu,
+    „Pasywnie”, nazwa usuniętej relacji bez pytania); kontrole negatywne na
+    `zfs-backup.sh` z `main`: nowe testy padają.
 - **Runda GUI, paczka A — poprawki z testów właściciela (2026-10-08, właściciel: „Zacznij kodowac poprawki”).**
   - **Kreator relacji:** krok „Dokąd” ma „Przeglądaj…” — płaska lista wszystkich
     systemów plików tego hosta z wcięciem wg głębokości; lądowiska innych relacji są ukryte

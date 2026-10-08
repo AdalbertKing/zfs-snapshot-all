@@ -1703,6 +1703,7 @@ case "$1" in
                         *) echo "RUX plan (atrapa)"; exit 0 ;;
                     esac ;;
     prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
+    source-pruners) [ -n "${NR_PRUNERS:-}" ] && printf '%b' "$NR_PRUNERS"; exit 0 ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -2040,8 +2041,51 @@ else
     bad "new-relation: T3 gotowe bez zmian" "$NROUT" "$(cat "$NR/zb.log")"
 fi
 
-# 3g. nazwa trzymana przez rekord `removed`: zmierzone na pve10 -- plan mowil "removed and
-#     cannot be revived", a kreator i tak pokazywal WYKONAJ. Teraz pyta o zwolnienie nazwy.
+# 3f. INNY KOLEKTOR JUZ PRZYCINA (uwaga 4, 2026-10-08): pytanie pada przed planem, nie po
+#     seedzie. "Pasywnie" wraca do kroku szablonu z wybranym passive; po nim relacja nie
+#     przycina zrodla, wiec drugi raz nie pyta, a komenda niesie --profile=passive.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}grant|skip
+0${T}
+0${T}pasywnie
+0${T}passive
+0${T}pve9b
+0${T}root
+0${T}grant|skip
+0${T}
+0${T}
+" NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
+if [ "$NRRC" -eq 0 ] && has "$NROUT" " --profile=passive " && grep -q '^source-pruners 192.168.28.98 hdd/test-kreator$' "$NR/zb.log" \
+   && [ "$(grep -c '^source-pruners' "$NR/zb.log")" = 1 ] \
+   && grep -F 'Inny kolektor już przycina' "$NR/wt.log" | grep -qF 'hdd/test-kreator  -- zfsbackup-pve10'; then
+    ok "new-relation: konflikt z innym kolektorem wychodzi PRZED planem, z nazwa konta; 'Pasywnie' daje --profile=passive i nie pyta drugi raz"
+else
+    bad "new-relation: konflikt z innym kolektorem" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'przycina' "$NR/wt.log" | cut -c1-400)"
+fi
+# ...a bez konfliktu: pytanie padlo (source-pruners w dzienniku), okna nie ma.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+${NRT}"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && grep -q '^source-pruners ' "$NR/zb.log" && ! grep -qF 'Inny kolektor' "$NR/wt.log" && has "$NROUT" " --profile=default "; then
+    ok "new-relation: bez cudzego kolektora sprawdzenie przechodzi bez okna"
+else
+    bad "new-relation: sprawdzenie bez konfliktu" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")"
+fi
+
+# 3g. nazwa trzymana przez rekord `removed` jest WOLNA (uwaga 11, 2026-10-08): add-client
+#     archiwizuje stary rekord, plan to mowi. Dawniej kreator kazal ja "zwolnic" przez
+#     delete-relation, co na pve9b nie przechodzilo. Teraz: bez pytania, bez delete-relation.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -2050,14 +2094,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}192.168.28.99
-0${T}
 0${T}root
 0${T}grant|skip
 0${T}
 0${T}
 ")
-if has "$NROUT" " --name=192.168.28.99 " && grep -q '^delete-relation 192.168.28.99 --yes$' "$NR/zb.log" && grep -F "trzyma USUNIĘTA relacja" "$NR/wt.log" | grep -qF -- '--yes-button ~ Zwolnij nazwę'; then
-    ok "new-relation: nazwe trzymana przez rekord 'removed' kreator proponuje ZWOLNIC (delete-relation NAZWA --yes) i dopiero wtedy jej uzywa -- 'usun i zaloz od nowa' dziala"
+if has "$NROUT" " --name=192.168.28.99 " && ! grep -q '^delete-relation' "$NR/zb.log" && ! grep -qF "USUNIĘTA relacja" "$NR/wt.log"; then
+    ok "new-relation: nazwa relacji 'removed' jest wolna -- kreator jej uzywa bez pytania i bez delete-relation (add-client archiwizuje stary rekord)"
 else
     bad "new-relation: nazwa usunietej relacji" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'USUNI' "$NR/wt.log" | cut -c1-300)"
 fi
