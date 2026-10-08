@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 882bc5f90187acb1 -->
+<!-- status-covers-digest: f63c8321fac02c36 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,56 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Dodanie datasetu do istniejącej relacji: `add-source` (CLI + GUI) i trzy wady przy okazji (2026-10-08, właściciel: „rób 5, potem 4”).**
+  - **Przegląd produkcji (5):** pve2, pve1 (28.9), pve0, pve1 (11.11) na `2a2f54d7` (self-update
+    09:11), pule ONLINE 42–62%, monitory OK, w ostatniej dobie 52/53/209/49 zadań bez błędu.
+    `status` nie ma tam czego opisać: produkcja nie ma rekordów relacji.
+  - **Było:** dataset dało się z relacji tylko zdjąć (`remove-source`). Dodanie oznaczało
+    `delete-relation` i założenie od nowa, a kreator mówił „tego jeszcze nie umie”.
+  - **Jest:** `zfs-backup.sh add-source NAZWA DATASET [--yes]`, czyli `remove-source` od tyłu:
+    1. plik zakresu na źródle przyjmuje dataset. Wykluczenie pod istniejącym korzeniem jest
+       zdejmowane, dataset pokryty korzeniem z dziećmi zostaje bez zmian, każdy inny staje się
+       własnym korzeniem. Wykluczony PRZODEK jest odmową;
+    2. `deploy.sh --commit-scope` na źródle (uprawnienia);
+    3. dataset dopisany do `REQUESTED_DATASETS` relacji (gdy lista jest niepusta; pusta nie
+       filtruje), potem ponowna aktywacja: sekcje tylko dla nowego datasetu, reszta
+       zachowana (REV-089);
+    4. zadanie kopii nowego datasetu rusza od razu (pierwsza pełna kopia): godzinowe, jeśli
+       relacja je ma, inaczej pierwsze znalezione.
+
+    Każdy krok można powtórzyć; zatrzymanie po kroku 1 albo 2 nie rusza tego hosta.
+  - **GUI:** okno `e` (Enter na F3) zaczyna się od „Co zmienić?”: szablon, dodaj dataset ze
+    źródła (lista z `list-datasets`, bez tego, co relacja już ma), usuń dataset (kopie
+    zostają). Kreator przy zajętej parze hostów odsyła teraz tutaj zamiast „nie umie”.
+  - **Wady znalezione po drodze, poprawione:**
+    - **Ponowna aktywacja generowała nowy dataset z globalnego `default`**, a nie z szablonu
+      relacji (`apply_client_profile_choice` działał tylko przy zakładaniu). Pierwsze
+      `add-source` dało `hdd/home` jeden szczebel godzinowy bez prune na kolektorze, czyli
+      kopie bez końca. Teraz ponowna aktywacja (`activate-client`), która musi coś
+      wygenerować, ładuje `PROFILE` relacji (i `SOURCE_PROFILE`, jeśli jest zapisany).
+    - **`remove-source` zostawiał prune ŹRÓDŁA** (`[prune:konto@host:dataset]`): kolektor
+      dalej przycinał dataset spoza relacji, a późniejsze `add-source` przejmowało tę starą
+      politykę jako zainstalowaną. Teraz znika razem z lądowiskiem.
+    - **`remove-source` nie poprawiał rekordu:** `REQUESTED_DATASETS` (stary wpis pozwoliłby
+      przejąć dataset, gdyby dostała go inna relacja tego kolektora) i `MANAGED_DATASETS`
+      (`status`, `delete-relation --destroy-copies`). Teraz oba tracą usunięty dataset
+      (w tym samym kroku co config, gdy relacja ma zainstalowany config).
+  - **Testy:** `zfsbackup --section addsource` 7/0: program awk zakresu (zdjęcie wykluczenia,
+    dataset pokryty przez korzeń, sam korzeń, nowy korzeń, korzeń bez dzieci, odmowa
+    wykluczonego przodka) i odmowa nieznanej opcji. Na `main` funkcji nie ma
+    (`git show origin/main:zfs-backup.sh`), więc wycięcie awk jest puste i testy padają.
+  - **Na żywo, pve10, relacja `pve9b` (konto zfsbackup, `m31w4d7h24`):**
+    - `add-source hdd/home` (z dziećmi `adam`, `ewa`): GUID-y migawek zgodne, linie
+      `vm-disks` bez zmian. Po poprawce profilu cztery szczeble `m31w4d7h24` po obu stronach;
+    - kontrola na starym `remove-source`: prune źródła zostawał (1 linia), po poprawce 0;
+    - GUI przez pty: „Dodaj dataset” `hdd/db` (z `postgres`) i „Usuń dataset” `hdd/db`, oba
+      kończą się „GOTOWE”;
+    - rekord po usunięciu: `REQUESTED_DATASETS` i `MANAGED_DATASETS` bez `hdd/db`.
+
+    Kopia testowa `hdd/db` i cztery szablony `profile__default__src_keep_*` z pierwszego,
+    błędnego przebiegu usunięte (render crona identyczny przed i po). `hdd/home` zostaje w
+    relacji `pve9b` jako przykład.
 
 - **K1: retencja źródła w kreatorze także dla szablonów wiekowych `-age` (2026-10-07, właściciel: „rób K1”).**
   - **Było:** okno „Jak długo trzymać w źródle” (krok 9) brało tylko szczeble z licznikiem
