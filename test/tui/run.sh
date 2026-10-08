@@ -641,10 +641,17 @@ GEJ="$(mktemp)"; GES="$(mktemp)"
 "$PY" - "$GJ" "$GEJ" "$GES" <<'PYEOF'
 import json, sys
 j = json.load(open(sys.argv[1], encoding="utf-8"))
+# Real shape (pve10, 2026-10-08): every job of a block carries the WHOLE block's
+# lines, and a pull line quotes its SOURCE (the job's other_end), not the scope.
+# Matched on the scope alone, every job took the first line's label -- the
+# failure of 'b' was then read from 'a' and the row stayed "aktualne".
+block = {}
 for x in j["jobs"]:
     leaf = x["scope"].rsplit("/", 1)[-1]
-    x["cron_lines"] = ['%s /x/zfs-job.sh "pve20 hourly backup (%s-%s)" -- /x/snapget.sh -m "automated_hourly_" "%s"'
-                       % (x["schedule"], x["label"], leaf, x["scope"])]
+    block.setdefault(x["label"], []).append('%s /x/zfs-job.sh "pve20 hourly backup (%s-%s)" -- /x/snapget.sh -m "automated_hourly_" -M "%s" ""'
+                                            % (x["schedule"], x["label"], leaf, x["other_end"]))
+for x in j["jobs"]:
+    x["cron_lines"] = list(block[x["label"]])
 json.dump(j, open(sys.argv[2], "w", encoding="utf-8"))
 def row(leaf, rc):
     return {"label": "hourly backup (sync-test-%s)" % leaf, "runs": 5, "failures": 1 if rc else 0, "avg_s": 3, "max_s": 7,
@@ -664,7 +671,8 @@ else
     bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test')"
 fi
 if hasE "$GE" 'błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
-   && has "$GE" 'wyrzucono   2026-09-08 12:16  hdd/lab/a: 1 snapshot(s)'; then
+   && has "$GE" 'wyrzucono   2026-09-08 12:16  hdd/lab/a: 1 snapshot(s)' \
+   && has "$GE" 'w 3 zadaniach, błędów 1,'; then
     ok "zadania: panel wiersza mowi, ktory dataset i dlaczego (blad z dziennika) oraz co bieg wyrzucil z kopii"
 else
     bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'błąd|wyrzuc')"

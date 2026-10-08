@@ -469,6 +469,13 @@ def job_cron_label(j):
     kind = j.get("section_kind", "")
     want = ("snapsend.sh", "snapget.sh") if kind == "dataset" else ("delsnaps.sh",)
     scope = j.get("scope", "")
+    # The line quotes the scope OR the other end: a pull names its SOURCE
+    # ("konto@host:dataset") and, for a mirror, no local path at all. Matching
+    # on the scope alone gave every mirror job the label of the block's first
+    # line -- on pve10 all 12 datasets of pve9-synchro showed the stats of
+    # ct-201, and a refused pull of another dataset stayed "aktualne"
+    # (measured 2026-10-08).
+    ends = ['"%s"' % x for x in (scope, j.get("other_end") or "") if x]
     cands = []
     for ln in j.get("cron_lines") or []:
         if not any(w in ln for w in want):
@@ -476,7 +483,7 @@ def job_cron_label(j):
         m = re.search(r'zfs-job\.sh "([^"]+)"', ln)
         if not m:
             continue
-        cands.append((scope and (('"%s"' % scope) in ln), m.group(1)))
+        cands.append((any(e in ln for e in ends), m.group(1)))
     if not cands:
         return ""
     cands.sort(key=lambda c: 0 if c[0] else 1)
@@ -1254,7 +1261,7 @@ def build_jobs(data, now):
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
             "mode": mode, "task": task, "pref": pref, "keep": keep, "cnt": 1, "tier": tier, "scope": j.get("scope", ""),
             "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
-            "reasons": reasons, "fails": fails, "discards": discs, "next_epoch": nxt,
+            "reasons": reasons, "fails": fails, "discards": discs, "srows": [srow] if srow else [], "next_epoch": nxt,
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
             "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
@@ -1289,7 +1296,7 @@ def build_jobs(data, now):
                             "vol": None, "srow": None, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
                             "verdict": v0, "vword": VERDICTS.get(v0, (v0, 0))[0],
-                            "reasons": list(reasons0), "fails": [], "discards": []})
+                            "reasons": list(reasons0), "fails": [], "discards": [], "srows": []})
                 items.append(pit)
                 break
     # REPLIKI NA F2 (2026-10-08, wlasciciel: "czy zadania repliki wchodza do listy
@@ -1358,6 +1365,7 @@ def build_jobs(data, now):
         g["_verdicts"].append(it["verdict"])
         g["jobs"].append(it["job"])
         g.setdefault("fails", []).extend(it.get("fails") or [])
+        g.setdefault("srows", []).extend(it.get("srows") or [])
         g.setdefault("discards", []).extend(it.get("discards") or [])
         for r in it["reasons"]:
             if r not in g["reasons"]:
@@ -1777,7 +1785,15 @@ def rel_detail_pairs(row, data, now, ch):
         else:
             pairs.append(("czas", u"brak biegów tego zadania w dzienniku w oknie %s dni%s" % (
                 win, "" if row.get("clabel") else u" (nie ma jego linii w cronie)")))
-        if srow and not data.failed("stats"):
+        srows = row.get("srows") or []
+        if len(srows) > 1 and not data.failed("stats"):
+            # Wiersz zbiorczy: biegi i bledy WSZYSTKICH jego zadan, ostatni = najnowszy
+            # z nich -- pierwszy z grupy mowil "rc=0" nad linia "błąd" innego datasetu.
+            newest = max(srows, key=lambda x: x.get("last_at") or "")
+            pairs.append(("biegi", u"%s w oknie %s dni w %d zadaniach, błędów %s, ostatni %s rc=%s" % (
+                sum(int(x.get("runs") or 0) for x in srows), win, len(srows),
+                sum(int(x.get("failures") or 0) for x in srows), newest.get("last_at", "?"), newest.get("last_rc", "?"))))
+        elif srow and not data.failed("stats"):
             pairs.append(("biegi", u"%s w oknie %s dni, błędów %s, ostatni %s rc=%s" % (
                 srow.get("runs", "?"), win, srow.get("failures", 0), srow.get("last_at", "?"), srow.get("last_rc", "?"))))
         # Co poszlo zle i co zostalo wyrzucone -- dla KAZDEGO datasetu wiersza,
