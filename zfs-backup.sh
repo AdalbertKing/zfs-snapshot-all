@@ -398,6 +398,14 @@ front end never edits the config file:
                                     Run every replica job now. A medium that is
                                     not here skips quietly, so this is safe to
                                     fire on any insertion.
+  zfs-backup.sh prepare-media POOL DEVICE [--base=replica] [--yes]  |  prepare-media --list
+                                    Prepare a disk as a replica medium: zpool create
+                                    -m none -o failmode=continue, zfs create POOL/BASE,
+                                    zpool export. ERASES the disk. Refused only when it
+                                    is in use (in an imported pool, or mounted). A
+                                    second disk of the same replica takes the same
+                                    POOL and BASE (the gate tells them apart by GUID).
+                                    Plans without --yes. --list: the free disks.
   zfs-backup.sh install-media-trigger [--install]
                                     OPTIONAL, and not implied by anything. A udev
                                     rule that runs the replicas when a disk
@@ -6452,6 +6460,102 @@ EOF
 
 # install-media-trigger -- fire the replicas when a disk appears.
 #
+# ------------------------------------------------------------------------------
+# prepare-media POOL DEVICE [--base=BASE] [--yes]   |   prepare-media --list
+#
+# Owner note 15 (2026-10-08): "Prepare the medium once, by hand" was the one step
+# of a replica the package could not do, from batch or from the GUI. This is it:
+#
+#   zpool create -m none -o failmode=continue POOL DEVICE
+#   zfs create POOL/BASE           -- the dataset that tells the gate it is THIS disk
+#   zpool export POOL              -- the disk can go to the safe
+#
+# failmode=continue, not the ZFS default: on a disk that gets unplugged,
+# failmode=wait turns a pull-while-imported into an unkillable hang (measured on
+# the lab; the gate warns about it on every import). A second disk for the same
+# replica (rotation) is prepared with the same POOL and BASE -- the gate tells
+# the two apart by pool GUID.
+#
+# Refused only when the disk is IN USE: a member of an imported pool, or
+# something on it mounted (or used as swap). An old filesystem that nothing uses
+# is wiped -- the plan says so, and it runs only with --yes. Admin tool.
+#
+# --list: the disks that are not in use, one per line, for the GUI:
+#   <by-id path><TAB><size><TAB><model><TAB><serial><TAB><what is on it>
+# The last field says what a prepare would erase: "zfs:<pool>" for a disk that
+# carries an EXPORTED pool (another replica's medium in the slot, say), the
+# filesystem type for anything else, "-" for an empty disk.
+media_disk_in_use() {   # <device> -> reason on stdout, rc 0 = in use
+    local dev; dev=$(readlink -f "$1" 2>/dev/null) || dev="$1"
+    local name="${dev##*/}" m z
+    m=$(lsblk -nr -o MOUNTPOINT "$dev" 2>/dev/null | grep -v '^$' | head -1)
+    [ -n "$m" ] && { echo "something on it is mounted at $m"; return 0; }
+    # Every vdev path an imported pool uses, resolved to its whole disk.
+    while IFS= read -r z; do
+        z=$(readlink -f "$z" 2>/dev/null) || continue
+        local pk; pk=$(lsblk -nr -o PKNAME "$z" 2>/dev/null | head -1)
+        [ "$z" = "$dev" ] || [ "${pk:-}" = "$name" ] && { echo "it is part of an imported pool ($z)"; return 0; }
+    done < <(zpool status -P 2>/dev/null | awk '$1 ~ "^/dev/" {print $1}')
+    return 1
+}
+
+cmd_prepare_media() {
+    local pool="" dev="" base="replica" yes=0 list=0 a
+    for a in "$@"; do
+        case "$a" in
+            --list)   list=1 ;;
+            --base=*) base="${a#*=}" ;;
+            --yes|-y) yes=1 ;;
+            -*)       die "prepare-media: unknown option '$a'" ;;
+            *)        if [ -z "$pool" ]; then pool="$a"; elif [ -z "$dev" ]; then dev="$a"; else die "prepare-media: takes POOL and DEVICE, got a third argument '$a'"; fi ;;
+        esac
+    done
+    if [ "$list" -eq 1 ]; then
+        local n size model serial id
+        while read -r n size; do
+            [ -n "$n" ] || continue
+            media_disk_in_use "/dev/$n" >/dev/null && continue
+            # The stable name, never sdX: that is what the plan and the GUI show.
+            id=$(find /dev/disk/by-id -maxdepth 1 -lname "*/$n" ! -name 'wwn-*' 2>/dev/null | sort | head -1)
+            [ -n "$id" ] || id="/dev/$n"
+            model=$(lsblk -dn -o MODEL "/dev/$n" 2>/dev/null | sed 's/ *$//')
+            serial=$(lsblk -dn -o SERIAL "/dev/$n" 2>/dev/null | sed 's/ *$//')
+            local onit
+            onit=$(lsblk -nr -o FSTYPE,LABEL "/dev/$n" 2>/dev/null | awk '$1 != "" {print ($1 == "zfs_member" ? "zfs:" $2 : $1)}' | sort -u | paste -sd, -)
+            printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$size" "${model:--}" "${serial:--}" "${onit:--}"
+        done < <(lsblk -dn -o NAME,SIZE,TYPE 2>/dev/null | awk '$3 == "disk" && $1 !~ /^zd/ {print $1, $2}')   # zd* = zvols, not disks
+        return 0
+    fi
+    [ -n "$pool" ] && [ -n "$dev" ] || die "usage: prepare-media POOL DEVICE [--base=BASE] [--yes]   (prepare-media --list shows the free disks)"
+    case "$pool" in *[!A-Za-z0-9._-]*|[!A-Za-z]*) die "prepare-media: pool name '$pool' -- a letter first, then letters, digits, . _ -" ;; esac
+    case "$base" in ''|/*|*/|*[!A-Za-z0-9._/-]*) die "prepare-media: --base='$base' -- a dataset path under the pool, e.g. replica" ;; esac
+    [ -b "$(readlink -f "$dev" 2>/dev/null)" ] || die "prepare-media: '$dev' is not a block device on this host"
+    local why
+    if why=$(media_disk_in_use "$dev"); then
+        die "prepare-media: $dev is in use -- $why. Nothing was changed."
+    fi
+    zpool list -H -o name "$pool" >/dev/null 2>&1 \
+        && die "prepare-media: a pool named '$pool' is imported on this host. Export it first (another disk of this replica), or pick another name. Nothing was changed."
+    local real; real=$(readlink -f "$dev")
+    echo "PLAN (prepare-media):"
+    echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
+    lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
+    echo "  1. zpool create -f -m none -o failmode=continue $pool $dev   -- EVERYTHING on the disk is erased"
+    echo "  2. zfs create $pool/$base   -- marks it as this replica's medium"
+    echo "  3. zpool export $pool       -- the disk can be unplugged"
+    if zpool import 2>/dev/null | awk -v p="$pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; then
+        echo "  note:     another disk with a pool '$pool' is in the slot (not imported) -- a rotation pair, told apart by GUID"
+    fi
+    if [ "$yes" -ne 1 ]; then
+        echo ">>> plan only. Re-run with --yes to do it."
+        return 0
+    fi
+    zpool create -f -m none -o failmode=continue "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
+    zfs create "$pool/$base" || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
+    zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it by hand before unplugging"
+    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, exported. Use it as --dst=$pool/$base."
+}
+
 # OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the
 # insertion trigger is opt-in and must not arrive together with the schedule.
 # `add-replica` never touches udev, and a host that only ever wants the nightly
@@ -17966,6 +18070,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
         install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
+        prepare-media)    shift; cmd_prepare_media "$@" ;;
         remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;
         # Forwarded, not implemented: restore lives in zfs-restore.sh since the
         # 2026-08-17 split -- it is the one operation whose active side writes

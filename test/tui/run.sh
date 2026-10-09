@@ -2449,6 +2449,12 @@ case "$1" in
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
         esac ;;
     install-media-trigger) echo ">>> atrapa: regula"; exit 0 ;;
+    prepare-media) case " $* " in
+            *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
+' ;;
+            *" --yes "*)  echo ">>> prepare-media: medium ready" ;;
+            *)            echo "PLAN (prepare-media):"; echo "  1. zpool create ... EVERYTHING on the disk is erased" ;;
+        esac ;;
     *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -2519,6 +2525,33 @@ if [ "$RPRC" -eq 0 ] && ! grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep
     ok "replica: gdy regula udev juz jest, okna B nie ma (regula i tak uruchamia przy wlozeniu), plan to mowi"
 else
     bad "replica: kreator, regula juz jest" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+fi
+# (5) "Przygotuj nowy nosnik..." (uwaga 15): lista wolnych dyskow z prepare-media --list,
+#     nazwa puli i baza, plan wsadu z --defaultno, wykonanie z --yes, i replika dostaje
+#     --dst=<pula>/<baza> bez pytania o baze drugi raz.
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb5
+0${T}hdd/data
+0${T}own
+0${T}__prep__
+0${T}/dev/disk/by-id/usb-C
+0${T}sejf
+0${T}replica
+0${T}
+0${T}removable
+0${T}0 22 * * *
+1${T}
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
+   && grep -q '^prepare-media sejf /dev/disk/by-id/usb-C --base=replica$' "$RP/zb.log" \
+   && grep -q '^prepare-media sejf /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
+   && grep -q '^add-replica usb5 --source=hdd/data --dst=sejf/replica .* --install --yes$' "$RP/zb.log" \
+   && grep -F 'przygotowanie nośnika' "$RP/wt.log" | grep -qF -- '--defaultno' \
+   && grep -F 'który dysk' "$RP/wt.log" | grep -qF '2G  QEMU  USB-C  (pusty)'; then
+    ok "replica: 'Przygotuj nowy nosnik' -- wolne dyski z prepare-media --list, plan z --defaultno, --yes, dst = pula/baza"
+else
+    bad "replica: przygotowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 

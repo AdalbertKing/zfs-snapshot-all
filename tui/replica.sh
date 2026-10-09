@@ -72,6 +72,52 @@ zpool list -H -o name 2>/dev/null >"$TMPD/pools.here"
 zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
 zfs list -H -o name -t filesystem,volume 2>/dev/null >"$TMPD/ds.all"
 
+# PRZYGOTOWANIE NOŚNIKA (uwaga 15, 2026-10-08): pusty dysk -> pula repliki, przez wsad
+# prepare-media (zpool create -m none -o failmode=continue, zfs create POOL/BAZA, export).
+# Dwie drogi, jeden czasownik: nowy nośnik (pula i baza do wpisania) albo kolejny dysk
+# TEJ repliki (rotacja: ta sama pula i baza, brama rozróżnia dyski po GUID).
+# 0 = przygotowano (PREP_DST), 1 = wstecz.
+prep_media() {   # <pula> <baza> <stałe: 1 = nie pytaj o nazwy>
+    local pool="$1" base="$2" fixed="$3" items=() id sz model serial onit dev
+    info "Replika $NAME -- nośnik" "Szukam dysków, których nic nie używa..."
+    "$ZB" prepare-media --list >"$TMPD/disks.tsv" 2>"$TMPD/disks.err" || :
+    while IFS=$'\t' read -r id sz model serial onit; do
+        [ -n "$id" ] || continue
+        case "$onit" in -) onit="pusty" ;; zfs:*) onit="UWAGA: ma pulę ${onit#zfs:}" ;; *) onit="ma: $onit" ;; esac
+        items+=("$id" "$(clip_label "$sz  $model  $serial  ($onit)" $((W - 12)))")
+    done <"$TMPD/disks.tsv"
+    if [ "${#items[@]}" -eq 0 ]; then
+        wt --title "Brak wolnego dysku" --msgbox "Każdy dysk tego hosta jest w puli albo zamontowany.\nPodłącz dysk na nośnik i wybierz to jeszcze raz.$( [ -s "$TMPD/disks.err" ] && printf '\n\n%s' "$(tail -2 "$TMPD/disks.err")")" 10 "$W"
+        return 1
+    fi
+    geom
+    wt --title "Replika $NAME -- który dysk?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+       --menu "Dyski, których nic nie używa. Wybrany zostanie WYCZYSZCZONY." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
+       "${items[@]}" || return 1
+    dev="$WT_OUT"
+    if [ "$fixed" != 1 ]; then
+        wt --title "Replika $NAME -- nazwa puli" --ok-button "Dalej" --cancel-button "Wstecz" \
+           --inputbox "Nazwa puli na nośniku. Drugi dysk tej samej repliki dostaje tę samą nazwę." 9 "$W" "$pool" || return 1
+        pool="${WT_OUT// /}"; [ -n "$pool" ] || return 1
+        wt --title "Replika $NAME -- baza na nośniku" --ok-button "Dalej" --cancel-button "Wstecz" \
+           --inputbox "Dataset bazowy na nośniku -- po nim brama poznaje właściwy dysk." 9 "$W" "$base" || return 1
+        base="${WT_OUT// /}"; [ -n "$base" ] || return 1
+    fi
+    "$ZB" prepare-media "$pool" "$dev" --base="$base" >"$TMPD/prep.plan" 2>&1
+    if ! grep -q '^PLAN' "$TMPD/prep.plan"; then
+        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E 'FATAL' "$TMPD/prep.plan" | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
+        return 1
+    fi
+    yesno_text "$TMPD/prep.plan" "Replika $NAME -- przygotowanie nośnika" "Przygotuj (KASUJE dysk)" "Wstecz" --defaultno || return 1
+    info "Replika $NAME -- nośnik" "Przygotowuję $dev..."
+    if ! "$ZB" prepare-media "$pool" "$dev" --base="$base" --yes >"$TMPD/prep.log" 2>&1; then
+        wt --title "Przygotowanie nie wyszło" --msgbox "$(tail -4 "$TMPD/prep.log" | fold -s -w $((W - 6)))" 12 "$W"
+        return 1
+    fi
+    PREP_DST="$pool/$base"
+    return 0
+}
+
 step=1
 while :; do
     geom
@@ -124,13 +170,27 @@ while :; do
             case ",$SRCS," in *",$p,"*|*",$p/"*) continue ;; esac   # pula źródła nie jest nośnikiem
             items+=("$p" "$p  (zaimportowana)")
         done <"$TMPD/pools.here"
-        while IFS= read -r p; do [ -n "$p" ] && items+=("$p" "$p  (w slocie, niezaimportowana)"); done <"$TMPD/pools.slot"
+        # Dwa dyski jednej repliki w slocie mają tę samą nazwę puli: jedna pozycja.
+        while IFS= read -r p; do [ -n "$p" ] && items+=("$p" "$p  (w slocie, niezaimportowana)"); done < <(sort -u "$TMPD/pools.slot")
         items+=(__other__ "Wpisz nazwę puli…  (nośnik teraz odłączony)")
+        items+=(__prep__ "Przygotuj nowy nośnik…  (pusty dysk -> pula repliki)")
+        [ "$EDIT" -eq 1 ] && [ -n "$DST" ] && items+=(__rot__ "Przygotuj kolejny dysk dla tej repliki…  (${DST%%/*}, ta sama baza)")
         cur="${DST%%/*}"
         wt --title "Replika $NAME -- 4/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${cur:-__other__}" \
            --menu "Pula na nośniku. Kopia ląduje pod  <pula>/<baza>/<dataset źródła>." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || { step=25; continue; }
         pool="$WT_OUT"
+        if [ "$pool" = __prep__ ]; then
+            prep_media "repl" "replica" 0 || continue
+            DST="$PREP_DST"; step=4; continue
+        fi
+        if [ "$pool" = __rot__ ]; then
+            # Ta sama pula i baza co replika: dysk do rotacji, sama replika się nie zmienia.
+            if prep_media "${DST%%/*}" "${DST#*/}" 1; then
+                wt --title "Kolejny dysk gotowy" --msgbox "Drugi dysk repliki '$NAME' jest gotowy ($DST).\nDo slotu wkładaj JEDEN dysk naraz -- dwa z tą samą pulą brama odrzuca." 10 "$W"
+            fi
+            continue
+        fi
         if [ "$pool" = __other__ ]; then
             wt --title "Replika $NAME -- nośnik" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Nazwa puli na nośniku (nośnik może być teraz w sejfie):" 9 "$W" "$cur" || continue
