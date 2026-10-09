@@ -3484,6 +3484,16 @@ class UI(object):
 
     def refresh(self, only=None):
         self.data = collect(self.repo, self.files, only)
+        if only is None:
+            # PELNE odswiezenie czysci tez dane czytane na zadanie (wlasciciel 2026-10-09,
+            # uwaga 1: "powrot do okna powinien zawsze wymuszac odswiez -- wszedzie"):
+            # szablony (F5) i config relacji (panel na F3). Data jest wspoldzielona miedzy
+            # odswiezeniami, wiec bez tego zapisany szablon nie pojawial sie na liscie,
+            # a panel CONFIG pokazywal stan sprzed "Zmien relacje".
+            self.data.profiles = None
+            self.data.configs = {}
+            if self.screen == "szablony":
+                self.ensure_profiles()
         self.rows = build_relations(self.data, self.now())
         self.jobrows = sort_zad_rows(build_jobs(self.data, self.now()), self.zad_sort, self.data)
         for k in self.cursor:
@@ -3627,11 +3637,9 @@ class UI(object):
             load_profiles(self.repo, self.files, self.data)
 
     def run_template_dialog(self, argv):
-        res = self.run_dialog(argv)
-        self.data.profiles = None
-        self.ensure_profiles()
-        self.cursor["szablony"] = min(self.cursor["szablony"], max(0, self.count("szablony") - 1))
-        return res
+        # Okno biegnie DOPIERO po powrocie do petli (run_dialog tylko je zamawia); szablony
+        # czyta refresh() po jego zamknieciu. Czytanie ich tutaj bylo PRZED zapisem.
+        return self.run_dialog(argv)
 
     def template_action(self, k):
         """Ins na F5: nowy szablon NA PODSTAWIE zaznaczonego; Del: usun wlasny (okna
@@ -4377,9 +4385,6 @@ class UI(object):
         elif k == "end":
             c = max(0, n - 1)
         elif k == "ctrl-r":
-            if self.screen == "szablony":
-                self.data.profiles = None
-                self.ensure_profiles()
             self.ask_refresh()
         elif k in ("del", "ins") and self.screen == "szablony":
             return self.template_action(k) or "stay"

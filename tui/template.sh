@@ -158,6 +158,12 @@ for line in open(tiers, encoding="utf-8"):
     else:
         continue
     row["sched"] = bool(sched)
+    # Szczebel, ktory SAM robi swoje migawki (ma harmonogram), sam je tez sprzata --
+    # wylaczenie zabiera jedno i drugie, wiec nie ma czego pilnowac (wlasciciel
+    # 2026-10-09, uwaga 3). Straznik rodziny zostaje tylko dla drabiny (szczebel bez
+    # harmonogramu sprzata migawki innego).
+    if sched:
+        row["family"] = None
     rows.append(row)
 # OKNO KOMPLETNE (właściciel 2026-10-09: "pokazywać również miesięczne, roczne,
 # tygodniowe po prostu nie pozaznaczane"): zawsze pięć szczebli po kolei; tych,
@@ -175,7 +181,7 @@ for t, letter, dflt, dq in CANON:
         continue
     lab, glab = words(t)
     row = {"key": t, "label": lab, "glabel": glab, "on": False, "add": True, "value": dflt, "base": dflt,
-           "family": (fam if ladder else "automated_" + t),
+           "family": (fam if ladder else None),
            "q": (None if ladder else dq), "base_q": dq}
     if age:
         row.update({"mode": "retain", "letter": letter, "unit": UNIT[letter]})

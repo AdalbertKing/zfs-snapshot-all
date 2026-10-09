@@ -11897,13 +11897,23 @@ else
         "$(cat "$WORK/pf.err")" "$(grep -n 'template:\|use_template' "$PF/user/dropwm.conf" 2>/dev/null)"
 fi
 
-pf_before="$(pf_files)"
-if ! pf_run --from=d30h24 --as=dropfam --drop-tier=hourly \
-   && grep -q 'no other tier prunes its family' "$WORK/pf.err" \
-   && [ ! -e "$PF/user/dropfam.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
-    ok "saveprof: dropping the only tier that prunes a family is refused, nothing written (the source would keep it forever)"
+# Owner 2026-10-09 (note 3, "To moj szablon, moge go zmieniac jak chce"): a tier
+# that MAKES its own family takes its snapshots and its pruning away together --
+# accepted. Refused only when another tier still makes the family and nothing
+# would prune it: the last rung of a ladder.
+if pf_run --from=d30h24 --as=dropfam --drop-tier=hourly \
+   && ! grep -q '^\[template:hourly\]' "$PF/user/dropfam.conf"; then
+    ok "saveprof: dropping a tier that makes its own family is accepted (snapshots and pruning go together)"
 else
-    bad "saveprof: dropping the only tier that prunes a family is refused, nothing written (the source would keep it forever)" \
+    bad "saveprof: dropping a self-made family tier" "$(cat "$WORK/pf.out" "$WORK/pf.err")"
+fi
+pf_before="$(pf_files)"
+if ! pf_run --from=default --as=dropall --drop-tier=keep_hourly --drop-tier=keep_daily --drop-tier=keep_weekly --drop-tier=keep_monthly \
+   && grep -q 'another tier still makes its family' "$WORK/pf.err" \
+   && [ ! -e "$PF/user/dropall.conf" ] && [ "$(pf_files)" = "$pf_before" ]; then
+    ok "saveprof: dropping the last rung of a ladder is refused, nothing written (the family would be kept forever)"
+else
+    bad "saveprof: dropping the last rung of a ladder is refused, nothing written (the family would be kept forever)" \
         "$(cat "$WORK/pf.out" "$WORK/pf.err")" "$(pf_files)"
 fi
 

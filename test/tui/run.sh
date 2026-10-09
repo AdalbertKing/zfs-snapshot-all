@@ -279,6 +279,37 @@ else
     bad "lustro: -M we WLASNEJ linii pobrania czyni zadanie lustrem; cudza linia z -M w tym samym bloku -- nie" "got=$MIOUT"
 fi
 
+# ODSWIEZANIE PO POWROCIE (wlasciciel 2026-10-09, uwaga 1: zapisany szablon pojawial sie na
+# F5 dopiero po Odswiez). Pelne refresh() czyta od nowa takze dane czytane na zadanie:
+# szablony (F5) i config relacji (panel F3). Plik szablonow podmieniony miedzy odczytami
+# = to, co robi save-profile w oknie potomnym.
+RFOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, json, os, tempfile, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+d = tempfile.mkdtemp()
+pf = os.path.join(d, "profiles.json")
+def put(names):
+    json.dump({"profiles": [{"name": n, "source": "user", "tiers": []} for n in names]}, open(pf, "w"))
+put(["a"])
+files = {"profiles": pf, "offline": True}
+ui = m.UI(d, files, m.Chars(True), 1700000000, None)
+ui.screen = "szablony"
+ui.ensure_profiles()
+n1 = ui.count("szablony")
+put(["a", "FLAT_W4HD7H12"])
+ui.data.configs["r1"] = ("stary", None)
+ui.refresh()
+print("%d %d %s" % (n1, ui.count("szablony"), "r1" in ui.data.configs))
+PYEOF
+)"
+if [ "$RFOUT" = "1 2 False" ]; then
+    ok "odswiezanie: pelne odswiezenie czyta szablony (F5) i config relacji od nowa -- zapisany szablon od razu na liscie"
+else
+    bad "odswiezanie: szablony i config po powrocie" "got=$RFOUT (chce: 1 2 False)"
+fi
+
 # KOLUMNA NASTEPNY -- format wg R3-4 (test b): dzis tylko godzina, jutro
 # "jutro HH:MM", w tygodniu dwuliterowy dzien tygodnia, dalej "DD.MM HH:MM".
 # Liczone NIEZALEZNIE od tablicy dni tygodnia w module (WD ponizej to REFERENCJA
@@ -2667,14 +2698,39 @@ if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --tie
 else
     bad "template: zamrazanie (tabela)" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-300)" "$(cat "$TP/err")"
 fi
-# 3. Szczebla, ktory jako jedyny sprzata swoja rodzine, nie da sie wylaczyc -- okno mowi
-#    o tym i zostaje; Esc = Wstecz, nic nie zapisane.
-TPOUT=$(tp_grid "down,down,space" new d7h24 ""); TPRC=$?
-GRIDSCR=$(printf '%s' "$TPOUT")
-if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Tego szczebla nie da się wyłączyć'; then
-    ok "template: jedynego szczebla rodziny nie da sie wylaczyc; okno mowi i niczego nie zapisuje"
+# 3. Wlasciciel 2026-10-09 (uwaga 3): szczebel, ktory SAM robi i sprzata swoje migawki,
+#    wylacza sie bez przeszkod (--drop-tier). Pilnowana jest tylko drabina: ostatniego
+#    szczebla sprzatajacego cudza rodzine nie da sie wylaczyc (okno mowi, w ramce).
+#    Wszystkich szczebli tez nie: "Zostaw wlaczony choc jeden szczebel."
+TPOUT=$(tp_grid "down,down,space,enter" new d7h24 "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=d7h24-moj --drop-tier=hourly ' "$TP/zb.log"; then
+    ok "template: szczebel z wlasna rodzina wylacza sie (--drop-tier), bez straznika"
 else
-    bad "template: wylaczenie jedynego szczebla" "rc=$TPRC" "$GRIDSCR" "$(cat "$TP/zb.log")"
+    bad "template: wylaczenie szczebla z wlasna rodzina" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | tail -8)"
+fi
+TPOUT=$(tp_grid "down,down,space,down,space,enter" new d7h24 ""); TPRC=$?
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$TPOUT" | grep -qF 'Zostaw włączony choć jeden szczebel.'; then
+    ok "template: wszystkich szczebli wylaczyc sie nie da -- okno mowi, nic nie zapisuje"
+else
+    bad "template: wylaczenie wszystkich" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | tail -8)"
+fi
+TPOUT=$(tp_grid "down,down,down,space,down,space" new drab ""); TPRC=$?
+GRIDSCR=$(printf '%s' "$TPOUT")
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Tego szczebla nie da się' \
+   && printf '%s' "$GRIDSCR" | grep -E '^│ +Tego szczebla' | grep -q '│$' && ! printf '%s' "$GRIDSCR" | grep -qE '^Tego szczebla'; then
+    ok "template: drabina -- ostatniego szczebla sprzatajacego rodzine nie da sie wylaczyc; komunikat w ramce, bez kopii pod nia"
+else
+    bad "template: drabina, ostatni szczebel" "rc=$TPRC" "$GRIDSCR" "$(cat "$TP/zb.log")"
+fi
+# 3b. Uwaga 2: kursor w polu nazwy chodzi po tekscie -- Home, wpis na poczatku, End,
+#     cztery w lewo, Del w srodku.
+TPOUT=$(tp_grid "home,x,end,left,left,left,left,del,enter" new d7h24 "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=xd7h24moj ' "$TP/zb.log"; then
+    ok "template: pole nazwy -- kursor chodzi po tekscie (Home/End/strzalki), Del kasuje w srodku"
+else
+    bad "template: edycja nazwy w miejscu" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -5)"
 fi
 TPOUT=$(tp_run edit d7h24 "0${T}
 "); TPRC=$?

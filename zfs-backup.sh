@@ -14930,9 +14930,13 @@ cmd_save_profile() {
     # prune a zero keeps NOTHING of that family. An absent tier is valid and
     # prunes nothing for that rung, so "zero" is spelled by removing the tier:
     # its [template:] section and its name from every use_template list. A
-    # tier whose family no other tier prunes is refused, because the source
-    # would then keep that family forever while reporting success.
-    local d _pat _others
+    # tier whose family another tier still CREATES while no other tier prunes
+    # it is refused, because that family would then be kept forever while
+    # reporting success. A tier that creates its own family (one family per
+    # tier) takes its snapshots and its pruning away together, so it may go
+    # (owner, 2026-10-09: "To moj szablon, moge go zmieniac jak chce" -- the
+    # first guard refused every tier of such a template).
+    local d _pat _others _makers
     for d in ${drop[@]+"${drop[@]}"}; do
         cron_config_section "$work" "[template:$d]" | grep -q . \
             || { rm -rf "$workdir"; die "save-profile: --drop-tier: '$from' has no tier '$d'. Nothing was written."; }
@@ -14944,8 +14948,20 @@ cmd_save_profile() {
                 if (v == pat && /./ && !(cur in seen)) { seen[cur] = 1; n++ } }
             /^[[:space:]]*keep[[:space:]]*=/ { if (cur in seen) k[cur] = 1 }
             END { c = 0; for (t in k) c++; print c }' "$work")
-        [ -n "$_pat" ] && [ "${_others:-0}" -gt 0 ] \
-            || { rm -rf "$workdir"; die "save-profile: --drop-tier=$d refused: no other tier prunes its family '${_pat:-?}' -- the snapshots would be kept forever. Keep at least one tier of that family. Nothing was written."; }
+        # Who else MAKES this family: another section whose prefix starts with
+        # the pattern (automated_hourly_ for automated_hourly).
+        _makers=$(awk -v me="[template:$d]" -v pat="$_pat" '
+            /^\[/ { cur = $0; next }
+            cur ~ /^\[template:/ && cur != me && /^[[:space:]]*prefix[[:space:]]*=/ {
+                v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+                if (pat != "" && index(v, pat) == 1) n++ }
+            END { print n + 0 }' "$work")
+        # pattern '-' (passive: someone else's family, any name) is always being made.
+        [ "$_pat" = "-" ] && _makers=1
+        if [ -n "$_pat" ] && [ "${_makers:-0}" -gt 0 ] && [ "${_others:-0}" -eq 0 ]; then
+            rm -rf "$workdir"
+            die "save-profile: --drop-tier=$d refused: another tier still makes its family '$_pat' and no other tier prunes it -- those snapshots would be kept forever. Keep at least one tier pruning that family. Nothing was written."
+        fi
         awk -v me="[template:$d]" -v t="$d" '
             /^\[/ { skip = ($0 == me) }
             skip { next }

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bef63fd710c9bdab -->
+<!-- status-covers-digest: d319a799d073753e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,30 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Runda uwag 2026-10-09, paczki P1 i P2: odświeżanie po powrocie, pola tekstowe w tabeli, wyłączanie szczebli.**
+  - **P1, odświeżanie (uwaga 1: „powrót do okna powinien zawsze wymuszać odśwież — wszędzie”):**
+    pełne odświeżenie czyta od nowa także dane czytane na żądanie: listę szablonów (F5)
+    i config relacji (panel na F3). Przyczyna: okno szablonu czytało listę PRZED swoim
+    uruchomieniem (okno biegnie dopiero po powrocie do pętli), a po powrocie szablonów
+    nikt nie czytał; config relacji był trzymany do końca sesji, więc po „Zmień relację”
+    panel pokazywał stary.
+  - **P2, okno-tabela (`tui/grid.py`):** w polach Nazwa i Opis strzałki, Home i End
+    chodzą po tekście, Backspace i Del kasują przy kursorze, wpis wstawia się w miejscu
+    kursora (uwaga 2). Komunikat okna zawija się w ramce zamiast wychodzić poza nią
+    i powtarzać się pod nią. Z wszystkimi szczeblami wyłączonymi okno nie przejdzie
+    dalej („Zostaw włączony choć jeden szczebel.” po Enter).
+  - **P2, wyłączanie szczebla (uwaga 3):** szczebel, który sam robi swoje migawki
+    (szablon „rodzina na szczebel”), wyłącza się bez przeszkód — razem z migawkami znika
+    ich sprzątanie. Pilnowana jest tylko drabina. Okno szablonu: ostatniego szczebla
+    drabiny nie da się odznaczyć. `save-profile --drop-tier`: odmowa, gdy rodzinę
+    szczebla dalej robi inny szczebel (albo jest cudza, `passive`), a żaden inny jej
+    nie sprząta. Drabina zawsze ma szczebel, który robi migawki, więc obie reguły dają
+    ten sam wynik. Okno retencji źródła w kreatorze relacji bez zmian: jak dotąd nie
+    pozwala wyłączyć jedynego szczebla rodziny.
+  - **Testy:** `tui` (odświeżanie szablonów i configu; wyłączenie szczebla z własną
+    rodziną, wszystkich, ostatniego w drabinie; edycja nazwy w miejscu); `zfsbackup`
+    saveprof (szczebel z własną rodziną przyjęty, ostatni szczebel drabiny odrzucony).
 
 - **Sposób liczenia w oknie szablonu: (*) GFS ( ) WIEK (age) ( ) PŁASKI (flat) (2026-10-09, właściciel: „brakuje w oknie wyboru (*) GFS () AGE () FLAT — z wyjaśnieniem różnicy”).**
   - **Okno (F5 → Ins / Enter + `e`):** nad tabelą wybór sposobu dla całego szablonu,
