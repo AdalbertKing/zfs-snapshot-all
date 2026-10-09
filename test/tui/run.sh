@@ -2434,7 +2434,9 @@ fi
 # -> domyslnie BEZ wlasnych migawek, --passive w komendzie; (2) okno A z nowymi
 # harmonogramami i okno B "takze po wlozeniu?", gdy reguly udev nie ma -- Tak =
 # regula w planie jako krok i install-media-trigger po instalacji; (3) "tylko po
-# wlozeniu" nie pyta B, regula i tak w planie; (4) gdy regula JUZ jest, B sie nie pojawia.
+# wlozeniu" nie pyta B, regula i tak w planie; (4) gdy regula JUZ jest, B sie nie pojawia;
+# (5) przygotowanie nowego nosnika; (6) koszyk z wyjatkiem; (7) zmiana repliki -- koszyk
+# startuje z jej zrodel i wyjatkow. Krok 2 to wspolny koszyk (tui/basket-lib.sh).
 # ============================================================================
 RP="$(mktemp -d)"; mkdir -p "$RP/bin"
 cp "$NR/bin/whiptail" "$RP/bin/whiptail"
@@ -2442,8 +2444,9 @@ cat > "$RP/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    list-replicas) echo '{"replicas":[]}' ;;
+    list-replicas) if [ -n "${RP_REPS:-}" ]; then printf '%s\n' "$RP_REPS"; else echo '{"replicas":[]}'; fi ;;
     status) echo '{"relations":[{"name":"pve11b","state":"active","managed_datasets":["hdd/backups/192.168.28.96/hdd/vm"]}]}' ;;
+    list-datasets) echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}' ;;
     add-replica) case " $* " in
             *" --plan "*) echo "co sie zmieni w crontabie:"; echo "  +0 22 * * 5 /x/zfs-job.sh \"h replica copy ($2)\" -- ..."; exit 0 ;;
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
@@ -2465,12 +2468,13 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
     rm -f "$RP/wt.log" "$RP/wt.n" "$RP/zb.log"
     printf '%s' "$1" > "$RP/answers"; shift
     ( export NR_DIR="$RP" WHIPTAIL="$RP/bin/whiptail" ZFS_BACKUP="$RP/bin/zb" PYTHON="$PY" PATH="$RP/bin:$PATH" \
-             ZFS_REPLICA_RULES="$RP/rules" "$@"; bash "$REPO/tui/replica.sh" ) 2>"$RP/err" </dev/null
+             ZFS_REPLICA_RULES="$RP/rules" "$@"; bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
 rm -f "$RP/rules"
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak
 RPOUT=$(rp_run "0${T}usb2
 0${T}hdd/backups
+0${T}next
 0${T}passive
 0${T}repl
 0${T}repl/replica
@@ -2493,6 +2497,7 @@ fi
 # (3): zrodlo bez kopii relacji -> domyslnie wlasne; "tylko po wlozeniu" -> bez okna B
 RPOUT=$(rp_run "0${T}usb3
 0${T}hdd/data
+0${T}next
 0${T}own
 0${T}repl
 0${T}repl/replica
@@ -2513,6 +2518,7 @@ fi
 echo '# Managed by zfs-backup.sh install-media-trigger' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
+0${T}next
 0${T}own
 0${T}repl
 0${T}repl/replica
@@ -2532,6 +2538,7 @@ fi
 rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb5
 0${T}hdd/data
+0${T}next
 0${T}own
 0${T}__prep__
 0${T}/dev/disk/by-id/usb-C
@@ -2552,6 +2559,47 @@ if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
     ok "replica: 'Przygotuj nowy nosnik' -- wolne dyski z prepare-media --list, plan z --defaultno, --yes, dst = pula/baza"
 else
     bad "replica: przygotowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
+fi
+# (6) WYJATKI (uwaga 13): ten sam koszyk co w relacji -- "Wyjatki..." przy hdd/data,
+#     odznaczone mail -> --exclude-child=^hdd/data/mail$ w komendzie i "Pomijane" w planie;
+#     w koszyku repliki nie ma pozycji "Sposob" (zawsze -R).
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb6
+0${T}hdd/data
+0${T}exc
+0${T}hdd/data/docs
+0${T}next
+0${T}own
+0${T}repl
+0${T}repl/replica
+0${T}removable
+0${T}0 22 * * *
+1${T}
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/replica .*--recursive=yes --exclude-child=^hdd/data/mail\$ --install --yes$' "$RP/zb.log" \
+   && grep -qF 'Pomijane:   hdd/data/mail' "$RP/wt.log" \
+   && grep -F 'Co kopiować z' "$RP/wt.log" | head -1 | grep -qF 'Replika usb6 -- 2/6' \
+   && ! grep -F 'Co kopiować z' "$RP/wt.log" | grep -qF 'Sposób:'; then
+    ok "replica: koszyk jak w relacji -- wyjatek (odznaczony mail) daje --exclude-child=^hdd/data/mail\$, plan go wymienia, bez pozycji 'Sposob'"
+else
+    bad "replica: koszyk z wyjatkiem" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(grep -F 'Co kopiować' "$RP/wt.log" | cut -c1-250)"
+fi
+# (7) ZMIANA repliki: koszyk startuje ze zrodel i wyjatkow, ktore replika juz ma
+#     (list-replicas: sources + exclude_child), "Dalej" bez zmian oddaje je z powrotem.
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}repl
+0${T}repl/replica
+0${T}removable
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"]}]}' RP_NAME=usb7)
+if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ --install --yes$' "$RP/zb.log"; then
+    ok "replica: zmiana repliki -- koszyk startuje z jej zrodel i wyjatkow (list-replicas exclude_child) i oddaje je bez zmian"
+else
+    bad "replica: zmiana -- koszyk z istniejacej repliki" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 

@@ -14,6 +14,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "replica: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/basket-lib.sh" || { echo "replica: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 EDIT=0; [ -n "$NAME" ] && EDIT=1
 WT_BACKTITLE="$([ "$EDIT" -eq 1 ] && echo "Zmiana repliki $NAME" || echo "Nowa replika") -- kolektor $(hostname)"
@@ -23,7 +24,7 @@ trap 'rm -rf "$TMPD"' EXIT
 geom
 info "Replika" "Czytam repliki, datasety i nośniki..."
 "$ZB" list-replicas --json >"$TMPD/rep.json" 2>"$TMPD/rep.err" || echo '{"replicas":[]}' >"$TMPD/rep.json"
-# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia <TAB> prefiks ("-" = pasywna)
+# rep.tsv: nazwa <TAB> źródła(,) <TAB> dst <TAB> harmonogram <TAB> media <TAB> recursive <TAB> próg ostrzeżenia <TAB> prefiks ("-" = pasywna) <TAB> wyjątki (-X, spacjami)
 "$PY" - "$TMPD/rep.json" >"$TMPD/rep.tsv" <<'PYEOF'
 import sys, json
 try:
@@ -33,12 +34,12 @@ except Exception:
 for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
-                     r.get("monitor_warn") or "-", r.get("prefix") or "-"]))
+                     r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-"]))
 PYEOF
 SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
@@ -70,7 +71,35 @@ covers_landing() {   # -> 0, gdy któreś źródło z $SRCS jest lądowiskiem al
 # Pule: zaimportowane i te w slocie (zpool import). Nośnikiem nie może być pula źródła.
 zpool list -H -o name 2>/dev/null >"$TMPD/pools.here"
 zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
-zfs list -H -o name -t filesystem,volume 2>/dev/null >"$TMPD/ds.all"
+# Koszyk (basket-lib.sh) w replice: datasety TEGO hosta, zawsze z dziećmi (-R), bez
+# pozycji "Sposób". title() -- nagłówek okien koszyka jako krok 2/6 repliki.
+HOST="$(hostname -s 2>/dev/null || hostname)"; RECURSION=flat; BASKET_NO_MODE=1
+title() { printf 'Replika %s -- 2/6 %s' "${NAME:-}" "$2"; }
+basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to pominięty x, '^x/' jego dzieci
+    local r x
+    B_ROOT=(); B_EXCL=()
+    for r in ${SRCS//,/ }; do
+        [ -n "$r" ] && [ "$r" != - ] || continue
+        local ex=""
+        for x in ${CURX:-}; do
+            [ "$x" = - ] && continue
+            case "$x" in "^$r/"*'$') x="${x#^}"; ex="$ex${ex:+$'\n'}${x%\$}" ;; esac
+        done
+        B_ROOT+=("$r"); B_EXCL+=("$ex")
+    done
+}
+basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x ma dzieci) -- jak w relacji
+    local i x
+    XARGS=()
+    for i in "${!B_ROOT[@]}"; do
+        while IFS= read -r x; do
+            [ -n "$x" ] || continue
+            XARGS+=("--exclude-child=^$x\$")
+            [ "$(kids_count "$x")" -gt 0 ] && XARGS+=("--exclude-child=^$x/")
+        done <<<"${B_EXCL[$i]}"
+    done
+}
+XARGS=()
 
 # PRZYGOTOWANIE NOŚNIKA (uwaga 15, 2026-10-08): pusty dysk -> pula repliki, przez wsad
 # prepare-media (zpool create -m none -o failmode=continue, zfs create POOL/BAZA, export).
@@ -133,19 +162,21 @@ while :; do
             wt --title "Nazwa zajęta" --msgbox "Replika '$n' już jest. Zmienia się ją z F6: Enter na niej, potem 'e'." 8 "$W"; continue
         fi
         NAME="$n"; step=2 ;;
-    2)  # źródła
-        items=()
-        while IFS= read -r d; do
-            [ -n "$d" ] || continue
-            on=OFF; case ",$SRCS," in *",$d,"*) on=ON ;; esac
-            items+=("$d" "$(clip_label "$d" $((W - 14)))" "$on")
-        done <"$TMPD/ds.all"
-        wt --title "Replika $NAME -- 2/6 co kopiować" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "Datasety TEGO hosta do skopiowania na nośnik (spacja = zaznacz).\nRazem z dziećmi: $REC. Jeden nośnik może trzymać kilka źródeł." \
-           "$H" "$W" "$(lhfit $((${#items[@]} / 3)) 3)" "${items[@]}" || { [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }; step=1; continue; }
-        s=$(printf '%s\n' "$WT_OUT" | grep -v '^$' | paste -sd, -)
-        [ -n "$s" ] || { wt --title "Nic nie zaznaczono" --msgbox "Zaznacz co najmniej jeden dataset." 8 "$W"; continue; }
-        SRCS="$s"; step=25 ;;
+    2)  # co kopiować -- TEN SAM koszyk co w kreatorze relacji (uwaga 13, 2026-10-08)
+        if [ "${#T_NAME[@]}" -eq 0 ]; then
+            info "Replika $NAME" "Czytam datasety tego hosta..."
+            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+                wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
+                clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+            fi
+            [ -n "$SRCS" ] && basket_from_replica
+        fi
+        if ! basket_step; then
+            [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+            step=1; continue
+        fi
+        SRCS="$(IFS=,; printf '%s' "${B_ROOT[*]}")"; REC=yes; basket_xargs
+        step=25 ;;
     25) # migawki: własne czy istniejące (uwaga 20, 2026-10-08)
         # Kopie relacji na tym kolektorze dostają migawki od swojego źródła; migawka
         # replica_ postawiona na nich znika przy następnym pobraniu (kopia idzie za
@@ -258,6 +289,7 @@ while :; do
         ARGV=("$ZB" add-replica "$NAME" "--source=$SRCS" "--dst=$DST" "--schedule=$SCHED")
         [ "$MEDIA" = fixed ] && ARGV+=(--fixed) || ARGV+=(--removable)
         [ "$REC" = yes ] && ARGV+=(--recursive=yes) || ARGV+=(--recursive=no)
+        ARGV+=(${XARGS[@]+"${XARGS[@]}"})
         [ "$PASSIVE" = yes ] && ARGV+=(--passive)
         [ -n "$MONDAYS" ] && ARGV+=("--monitor-warn=${MONDAYS}d" "--monitor-crit=$(( (MONDAYS * 3 + 1) / 2 ))d")
         info "Replika $NAME" "Liczę plan..."
@@ -271,7 +303,10 @@ while :; do
             echo "PLAN -- nic jeszcze nie zostało zmienione:"
             echo
             echo "Replika:    $NAME$([ "$EDIT" -eq 1 ] && echo '  (zmiana istniejącej)')"
-            echo "Źródła:     $SRCS  (z dziećmi: $REC)"
+            echo "Źródła:     ${SRCS//,/, }  (z tym, co pod nimi jest i powstanie)"
+            for _i in "${!B_ROOT[@]}"; do
+                [ -n "${B_EXCL[$_i]}" ] && echo "Pomijane:   $(printf '%s' "${B_EXCL[$_i]}" | paste -sd, - | sed 's/,/, /g')"
+            done
             echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "istniejące -- bez własnych" || echo "własne, przedrostek replica_")"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             echo "Kiedy:      $([ "$SCHED" = on-insert ] && echo "tylko po włożeniu dysku" || echo "$SCHED")"

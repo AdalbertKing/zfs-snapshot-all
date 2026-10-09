@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 862373258b9fc9b7 -->
+<!-- status-covers-digest: bd00a3bf7197a684 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,25 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Replika: ten sam koszyk datasetów co w relacji, paczka C3 (uwaga 13) (2026-10-09, właściciel: „rób C3”).**
+  - **Wspólny plik `tui/basket-lib.sh`:** koszyk miejsc wydzielony z kreatora
+    relacji bez zmiany zachowania (drzewo z `list-datasets --json`, dodaj miejsce,
+    wyjątki, usuń, „Sposób”); `BASKET_NO_MODE=1` chowa „Sposób”. Kreator relacji
+    go dołącza (krok 4), kreator repliki też (krok 2/6, datasety tego hosta, zawsze
+    z dziećmi `-R`). Płaska lista kratek w replice (z rodzicem i dzieckiem naraz)
+    zniknęła.
+  - **Wyjątki repliki:** `add-replica --exclude-child=REGEX` (powtarzalne, wymaga
+    `--recursive=yes`, bez spacji i cudzysłowów) zapisuje `flags = -X ...` w
+    sekcji `[replica:]`; `list-replicas --json` ma pole `exclude_child`. Przy zmianie
+    repliki (F6 → `e`) koszyk startuje z jej źródeł i wyjątków; plan wymienia
+    „Pomijane”.
+  - **Na żywo (pve9b, dane testowe, sprzątnięte):** replika `rtest` (stały nośnik)
+    `hdd/rsrc` z wyjątkiem `^hdd/rsrc/skip$` — linia `snapget.sh … -M -R -X
+    ^hdd/rsrc/skip$`, po `run-replicas --name=rtest` jest `a`, nie ma `skip`;
+    `list-replicas` zwraca `exclude_child`. Crontab po `remove-replica` jak przed.
+  - **Testy:** `tui` (kreator repliki przez koszyk: 6 przebiegów, w tym wyjątek i
+    zmiana repliki), `zfsbackup --section runreplicas` (flags `-X`, `exclude_child`,
+    odmowy). Kreator relacji na wspólnym koszyku — cała suita `tui` w CI.
 - **Kopia lokalna jako relacja, L2 — zmiana szablonu i datasetów (2026-10-09, właściciel: „Kontynuuj od najprostszych”).**
   - **`local-backup --replace`** (tylko z `--name` istniejącej, aktywnej relacji
     lokalnej o tym samym celu): sekcje tej relacji (marker `local-backup` +
