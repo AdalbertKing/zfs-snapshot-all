@@ -24,10 +24,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "new-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/basket-lib.sh" || { echo "new-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/retention-lib.sh" || { echo "new-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 WT_BACKTITLE="Nowa relacja -- kolektor $(hostname)"
 NSTEP=10
 TMPD="$(mktemp -d)" || exit 1
-trap 'rm -rf "$TMPD"' EXIT
+# Szkic ukrytego szablonu relacji ("Ręcznie" w kroku 6) znika, gdy relacja nie powstała.
+MANUAL_P=""; NR_DONE=0
+drop_manual_draft() {
+    [ -n "$MANUAL_P" ] && [ "$NR_DONE" -ne 1 ] && "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
+    MANUAL_P=""
+}
+trap 'drop_manual_draft; rm -rf "$TMPD"' EXIT
 
 # --- odpowiedzi -------------------------------------------------------------
 MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
@@ -339,16 +346,19 @@ with open(sys.argv[1] + ".tiers", "w", encoding="utf-8", newline="\n") as tf:   
 for p in d.get("profiles", []):
     if "-src-" in (p.get("name") or ""):
         continue    # profil POCHODNY retencji źródła -- nie jest szablonem do wyboru w kroku 6
+    # UKRYTY szablon relacji (relacja-<NAZWA>, P4): w pliku jest (zamrażanie, kształt
+    # dla kroku 8), na liście kroku 6 -- nie (7. kolumna = 1).
     w = tui.profile_words(p)
     mech = {"flat": "N najnowszych", "gfs": "GFS", "age": "wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
     # Wiersz listy: co trzyma + mechanizm (to odróżnia d30h24 / -age / -gfs). Rytm wynika
     # z najdrobniejszego szczebla; pełne zdanie z rytmem idzie do podsumowania (3. pole).
     frozen = [t for t in p.get("tiers", []) if t.get("send_schedule") and t.get("quiesce")]
     rows.append((p.get("name", "?"), "%s  [%s]" % (w["retention"], mech), short_cadence(p), w["quiesce"], 1 if frozen else 0,
-                 "ladder" if (p.get("shape") == "one-family" and p.get("mechanism") == "gfs") else "flat"))
+                 "ladder" if (p.get("shape") == "one-family" and p.get("mechanism") == "gfs") else "flat",
+                 1 if p.get("hidden") else 0))
 rows.sort(key=lambda r: (r[0] != "default", r[0].lower()))     # default na górze
-for n, t, c, q, f, sh in rows:
-    print("%s\t%s\t%s\t%s\t%d\t%s" % (n or "-", t or "-", c or "-", q or "-", f, sh or "-"))
+for n, t, c, q, f, sh, hd in rows:
+    print("%s\t%s\t%s\t%s\t%d\t%s\t%d" % (n or "-", t or "-", c or "-", q or "-", f, sh or "-", hd))
 PYEOF
     [ -s "$TMPD/prof.tsv" ]
 }
@@ -405,8 +415,35 @@ sync_from_chain() {   # -> 0, gdy synchro i któryś korzeń koszyka ma własne 
     return 1
 }
 REC_PROFILE=passive-flat
+# Domyślna nazwa relacji (krok 7 proponuje to samo) -- od niej nazwa szkicu "Ręcznie".
+rname_default() {
+    if [ -n "$RNAME" ]; then echo "$RNAME"
+    elif [ "$MODE" = local ]; then echo "lokalna-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
+    else echo "${HOSTNAME_R:-$HOST}"; fi
+}
+# RĘCZNIE (P4, właściciel 2026-10-09: relacja "z szablonu i ręcznie"): ta sama tabela co
+# szablon na F5 (sposób, wszystkie szczeble, liczby, zamrażanie); wynik = ukryty szablon
+# relacja-<NAZWA> (save-profile --hidden), F5 go nie pokazuje. 0 = zapisany, 1 = wstecz.
+step_manual() {
+    local base out hn
+    base="$PROFILE"
+    case "$base" in ''|relacja-*) base="" ;; esac
+    awk -F'\t' -v n="$base" '$1==n && $7!=1 {f=1} END{exit !f}' "$TMPD/prof.tsv" || base=d7h24
+    awk -F'\t' -v n="$base" '$1==n {f=1} END{exit !f}' "$TMPD/prof.tsv" || base="$(awk -F'\t' '$7!=1{print $1; exit}' "$TMPD/prof.tsv")"
+    hn="relacja-$(rname_default)"
+    clear 2>/dev/null
+    ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/margs" "$(title 6 'Ręcznie: jak długo trzymać w celu')" || return 1
+    local -a margs=(); mapfile -t margs <"$TMPD/margs"
+    info "$(title 6 'Ręcznie')" "Zapisuję ustawienia relacji..."
+    out=$("$ZB" save-profile "--from=$base" "--as=$hn" --hidden --force ${margs[@]+"${margs[@]}"} "--description=Własne ustawienia relacji (kreator)" 2>&1) \
+        || { wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"; return 1; }
+    [ -n "$MANUAL_P" ] && [ "$MANUAL_P" != "$hn" ] && "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
+    MANUAL_P="$hn"; PROFILE="$hn"
+    rm -f "$TMPD/prof.tsv"; load_profiles
+    return 0
+}
 step_profile() {
-    local items=() n w c q f sh def label chain=0 lead=""
+    local items=() n w c q f sh hd def label chain=0 lead=""
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
@@ -414,10 +451,11 @@ step_profile() {
            --inputbox "list-profiles nie odpowiedział ($(tail -1 "$TMPD/prof.err" 2>/dev/null)).\nWpisz nazwę szablonu ręcznie (domyślny: default)." 11 "$W" "${PROFILE:-default}" || return 1
         PROFILE="${WT_OUT// /}"; [ -n "$PROFILE" ] || PROFILE=default; FREEZE=1; return 0
     fi
-    items=()
+    items=(__manual__ "$(clip_label "$(printf '%-15s %s' 'Ręcznie…' 'tabela szczebli: sposób, szczeble, liczby, zamrażanie')" $((W - 10)))")
     sync_from_chain && chain=1
-    while IFS=$'\t' read -r n w c q f sh; do
+    while IFS=$'\t' read -r n w c q f sh hd; do
         [ -n "$n" ] || continue
+        [ "${hd:-0}" = 1 ] && continue
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
         # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
@@ -437,12 +475,18 @@ step_profile() {
     fi
     local tl=6; [ -n "$lead" ] && tl=9    # trzy linie wstępu więcej nad listą
     in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
-    in_list "$def" "${items[@]}" || def="${items[0]}"
+    [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && def=__manual__
+    in_list "$def" "${items[@]}" || def="${items[2]}"
     geom
     wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
        --menu "${lead}Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [drabina] = JEDNA drabina GFS\ndla jednej rodziny, w osobnej sekcji; pozostałe trzymają retencję w każdym\nszczeblu. [drabina] nie wejdzie na konto, na którym już działa szablon z retencją\nw szczeblach (sprawdzane po wyborze konta w kroku 8). Szablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
-    PROFILE="$WT_OUT"
+    if [ "$WT_OUT" = __manual__ ]; then
+        step_manual || { step_profile; return $?; }
+    else
+        drop_manual_draft
+        PROFILE="$WT_OUT"
+    fi
     f="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $5}' "$TMPD/prof.tsv")"
     case "$f" in 1) FREEZE=1 ;; *) FREEZE=0 ;; esac
     return 0
@@ -469,7 +513,17 @@ step_name() {
         # (<nazwa>.conf.removed-<czas>) i plan to mówi. Dawniej kreator kazał ją
         # najpierw „zwolnić” przez delete-relation -- zbędny krok, który na pve9b nie
         # przechodził (uwaga 11, 2026-10-08).
-        RNAME="$n"; return 0
+        RNAME="$n"
+        # Szkic "Ręcznie" nazywa się jak relacja: relacja-<NAZWA>.
+        if [ -n "$MANUAL_P" ] && [ "$MANUAL_P" != "relacja-$RNAME" ]; then
+            if "$ZB" save-profile "--from=$MANUAL_P" "--as=relacja-$RNAME" --hidden --force "--description=Własne ustawienia relacji $RNAME" >/dev/null 2>"$TMPD/mv.err"; then
+                "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
+                MANUAL_P="relacja-$RNAME"; PROFILE="$MANUAL_P"; rm -f "$TMPD/prof.tsv"; load_profiles
+            else
+                wt --title "Nie udało się przenieść ustawień" --msgbox "$(tail -3 "$TMPD/mv.err")" 12 "$W"; continue
+            fi
+        fi
+        return 0
     done
 }
 
@@ -578,6 +632,7 @@ step_extra() {
         # Retencja źródła: zawsze jedno pytanie "tyle samo co tutaj?" (uwaga 2,
         # 2026-10-09) zamiast pozycji na liście i menu szczebli z "Gotowe".
         if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
+            SRC_TITLE="$(title 9 "Jak długo trzymać u źródła ($HOST)?")"
             source_retention_editor || continue
         else
             SRCPROF=""
@@ -594,79 +649,6 @@ step_extra() {
 # dozwolone tylko, gdy rodzinę sprząta inny szczebel -- inaczej źródło trzymałoby ją
 # w nieskończoność. Nazwa deterministyczna: <cel>-src-<litery i liczby>; te same liczby
 # = ten sam profil, nadpisywany identyczną treścią.
-tier_word() {   # <nazwa szczebla> -> słowo
-    case "$1" in
-        *hourly) echo "godzinowe" ;; *daily) echo "dobowe" ;; *weekly) echo "tygodniowe" ;;
-        *monthly) echo "miesięczne" ;; *yearly|*annual) echo "roczne" ;; *) echo "$1" ;;
-    esac
-}
-tier_letter() { case "$1" in *hourly) echo H ;; *daily) echo D ;; *weekly) echo W ;; *monthly) echo M ;; *yearly|*annual) echo Y ;; *) echo X ;; esac; }
-age_unit() {   # <litera jednostki retain> -> słowo
-    case "$1" in h) echo "godz." ;; d) echo "dni" ;; w) echo "tyg." ;; m) echo "mies." ;; y) echo "lat" ;; *) echo "$1" ;; esac
-}
-source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = wstecz
-    # UWAGA 2 (właściciel, 2026-10-09): bez menu szczebli z pozycją "Gotowe" (OK robiło
-    # podświetloną pozycję, więc "Dalej" nie szło dalej). Teraz jedno okno-tabela.
-    local -a tn=() tp=() tk=() sk=() tm=()
-    local t p k m i n v name out u
-    while IFS=$'\t' read -r n t p k m; do
-        [ "$n" = "$PROFILE" ] || continue
-        k="${k%$'\r'}"; m="${m%$'\r'}"
-        tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k"); tm+=("${m:-keep}")
-    done <"$TMPD/prof.json.tiers"
-    [ "${#tn[@]}" -gt 0 ] || { SRCPROF=""; return 0; }
-    # poprzednie liczby tego samego szablonu (powrót do okna)
-    if [ -n "$SRCKEEP" ] && [ "${SRCKEEP%%:*}" = "$PROFILE" ]; then read -r -a sk <<<"${SRCKEEP#*:}"; fi
-    # OKNO-TABELA (właściciel 2026-10-09, jak w menedżerach migawek QNAP/Synology):
-    # szczebel | tutaj (cel) | u źródła, kratka = szczebel u źródła w ogóle. tui/grid.py
-    # (curses -- wyjątek od whiptail); Dalej bez zmian = źródło jak cel.
-    : >"$TMPD/srcrows.tsv"
-    for i in "${!tn[@]}"; do
-        u=""; case "${tm[$i]}" in retain:*) u="$(age_unit "${tm[$i]#retain:}")" ;; esac
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(tier_word "${tn[$i]}")" "${tk[$i]}" "${sk[$i]}" "$u" "${tp[$i]}" >>"$TMPD/srcrows.tsv"
-    done
-    "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "$(title 9 "Jak długo trzymać u źródła ($HOST)?")" <<'PYEOF'
-import json, sys
-rows = []
-for line in open(sys.argv[1], encoding="utf-8"):
-    i, lab, here, src, unit, fam = (line.rstrip("\n").split("\t") + [""] * 6)[:6]
-    rows.append({"key": i, "label": lab, "on": src != "0", "value": (here if src == "0" else src), "unit": unit,
-                 "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None})
-json.dump({"title": sys.argv[3], "head": [u"SZCZEBEL", u"TUTAJ (cel)", u"U ŹRÓDŁA"], "rows": rows,
-           "note": [u"Źródło sprząta te same migawki co cel, tylko trzyma ich mniej albo więcej.",
-                    u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle."]},
-          open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
-PYEOF
-    clear 2>/dev/null
-    # shellcheck disable=SC2086
-    ${ZFS_GRID:-$PY $HERE/tui/grid.py} --spec "$TMPD/srcspec.json" --out "$TMPD/srcout.json" || return 1
-    while IFS=$'\t' read -r i v; do
-        [ -n "$i" ] && sk[$i]="$v"
-    done < <("$PY" -c '
-import json, sys
-for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
-    print("%s\t%s" % (r["key"], r["value"] if r["on"] else "0"))' "$TMPD/srcout.json" | tr -d '\r')
-    SRCKEEP="$PROFILE:${sk[*]}"
-    # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
-    [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
-    name="$PROFILE-src-"
-    local -a args=(--from="$PROFILE" --force)
-    for i in "${!tn[@]}"; do
-        if [ "${sk[$i]}" = 0 ]; then args+=(--drop-tier="${tn[$i]}"); continue; fi
-        name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
-        [ "${sk[$i]}" = "${tk[$i]}" ] && continue
-        # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem.
-        case "${tm[$i]}" in
-            retain:*) args+=(--tier="${tn[$i]}" "--retain=-${tm[$i]#retain:}${sk[$i]}") ;;
-            *)        args+=(--tier="${tn[$i]}" "--keep=${sk[$i]}") ;;
-        esac
-    done
-    info "$(title 9 'Retencja źródła')" "Zapisuję szablon źródła $name..."
-    out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
-        || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }
-    SRCPROF="$name"
-    return 0
-}
 # EDYTOR POMIJANYCH MIGAWEK (właściciel, uwagi 10+13). Wcześniej to było jedno
 # pole tekstowe -- łatwo było zgubić przecinek ("__migration___tmp" zamiast
 # "__migration__,_tmp"). Checklista pokazuje, co jest pomijane, ODZNACZ, żeby
@@ -752,7 +734,7 @@ summary_text() {
     fi
     for i in "${!B_ROOT[@]}"; do echo "    ${B_ROOT[$i]}  -- $(describe "$i")"; done
     echo "Sposób:  $(mode_words).   Nazwa: $RNAME.   Konto: ${a:-root}."
-    echo "Szablon: $PROFILE$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
+    echo "Szablon: $( [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && echo "Ręcznie -- $PROFILE" || echo "$PROFILE")$( [ -s "$TMPD/prof.tsv" ] && awk -F'\t' -v n="$PROFILE" '$1==n{print "  (" $3 "; " $2 "; " $4 ")"}' "$TMPD/prof.tsv")$( [ -n "$SRCPROF" ] && echo "; u źródła: $SRCPROF")"
     if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
     else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
@@ -848,6 +830,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
             echo "rc=$RC_RUN" >>"$ZFS_TUI_LOG" 2>/dev/null
         fi
         echo
+        [ "$RC_RUN" -eq 0 ] && NR_DONE=1
         if [ "$RC_RUN" -eq 0 ]; then echo "=== GOTOWE: relacja '$RNAME' założona (rc=0). Enter = dalej"
         elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
             # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.

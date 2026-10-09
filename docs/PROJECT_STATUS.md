@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2506204e775078fa -->
+<!-- status-covers-digest: a8bb23b4d0b60b09 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,29 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Runda uwag 2026-10-09, paczka P4: relacja z szablonu albo ręcznie, jedno okno retencji źródła (uwagi 5, 9, 10).**
+  - **„Zmień relację” (`tui/edit-relation.sh`), sześć pozycji:** Dodaj do kopii dataset ze
+    źródła; Usuń z kopii dataset; Szablon (gotowy szablon dla celu); Harmonogram kopii
+    i retencja (tabela szczebli); Ręczna edycja konfigu; Zapisz ustawienia relacji jako
+    szablon. Po „Szablon” i „Harmonogram…” retencję ŹRÓDŁA ustawia to samo okno-tabela
+    co w kreatorze (`tui/retention-lib.sh`) — druga lista szablonów dla źródła zniknęła.
+  - **Ukryty szablon relacji:** „Harmonogram kopii i retencja” i „Ręcznie…” w kroku 6
+    kreatora otwierają tę samą tabelę co szablon na F5 (sposób, wszystkie szczeble,
+    liczby, zamrażanie; `template.sh relation`), a wynik zapisują jako `relacja-<NAZWA>`
+    przez `save-profile --hidden` (`[profile] hidden = yes`, `list-profiles` mówi
+    `"hidden"`). F5 i listy szablonów go nie pokazują. W kreatorze szkic idzie za nazwą
+    relacji (zmiana nazwy w kroku 7 przenosi go) i znika, gdy relacja nie powstanie;
+    w „Zmień relację” niewykonany plan przywraca poprzednią treść (albo usuwa plik).
+  - **Z relacji szablon:** „Zapisz ustawienia relacji jako szablon” kopiuje szablon relacji
+    pod nową nazwą jako zwykły (znak „ukryty” nie przechodzi na kopię).
+  - **Na żywo (pve9b):** ukryty szablon relacji lokalnej z dodanym szczeblem tygodniowym
+    przyjęty przez bramki i przez plan `edit-relation` (bez instalacji); plik usunięty.
+  - **Znane braki:** usunięcie relacji nie usuwa jej ukrytego szablonu; pomiar „źródło
+    trzyma więcej / mniej niż cel” na żywo jeszcze nie zrobiony.
+  - **Testy:** `tui` (kreator: Ręcznie, Ręcznie + inna nazwa; „Zmień relację”: harmonogram,
+    cofnięcie przy niewykonanym planie, szablon + okno retencji źródła, zapis jako
+    szablon); `zfsbackup` saveprof (`--hidden`, kopia bez znaku).
 
 - **Runda uwag 2026-10-09, paczka P3: klawisze F tylko na pasku, bez dubli (uwaga 4: „Klawisze F są podublowane z paska i wewnątrz okna”, „trzeba to zrobić poprawnie bez dubli”).**
   - **Pasek (ostatnia linia ekranu) to jedyna legenda klawiszy F** (pomoc F1 opisuje

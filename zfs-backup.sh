@@ -676,6 +676,11 @@ Inspection / teardown:
                                     The same as windows (F5 in the GUI: Ins = a new
                                     template based on NAZWA, Enter + 'e' = change an own one).
                                     [--description=TEKST] [--force]
+                                    [--drop-tier=T] [--add-tier=T [--keep|--retain|--quiesce=..]]
+                                    [--method=gfs|age|flat] [--hidden] -- --hidden marks a
+                                    relationship's own template (relacja-NAZWA): F5 and
+                                    the template lists do not show it; a copy without
+                                    --hidden is an ordinary template.
                                     Open an existing template, change it, save it as
                                     your own -- into /etc/zfs-snapshot-all/profiles,
                                     never into the package directory (the next
@@ -14837,7 +14842,7 @@ cmd_save_profile() {
         [ -n "$_af" ] || die "save-profile --ask needs --from=NAME (a new template based on it) or --edit=NAME"
         template_dialog new "$_af"; return $?
     fi
-    local from="" as="" tier="" desc="" method="" force=0 a
+    local from="" as="" tier="" desc="" method="" force=0 hidden=0 a
     # ftier: the tier each field belongs to -- the --tier= given LAST before it.
     # One call can change several tiers (owner note 24: the F5 dialog asks every
     # tier in turn); a single --tier= reads exactly as before.
@@ -14852,6 +14857,7 @@ cmd_save_profile() {
             --method=*)      method="${a#*=}" ;;
             --description=*) desc="${a#*=}" ;;
             --force)         force=1 ;;
+            --hidden)        hidden=1 ;;
             --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
                              fvalue+=("${a#*=}"); ftier+=("$tier") ;;
             -*)              die "save-profile: unknown option '$a'" ;;
@@ -14973,6 +14979,13 @@ cmd_save_profile() {
             { print }' "$work" > "$work.drop" && mv -f "$work.drop" "$work" \
             || { rm -rf "$workdir"; die "save-profile: could not remove tier '$d' -- nothing was written"; }
     done
+    # HIDDEN (owner 2026-10-09, P4: "ukryty szablon relacji"): a relationship built by
+    # hand -- the tier table instead of a ready template -- gets a template of its own,
+    # relacja-<NAME>, which F5 and the template lists do not show. The mark is never
+    # inherited: a copy is visible unless --hidden says otherwise, so "save the
+    # relationship's settings as a template" yields an ordinary one.
+    set_or_remove_section_field "$work" "[profile]" hidden "$([ "$hidden" -eq 1 ] && echo yes)" \
+        || { rm -rf "$workdir"; die "save-profile: could not write the hidden mark -- nothing was written"; }
     if [ -n "$desc" ]; then
         set_or_remove_section_field "$work" "[profile]" description "$desc" \
             || { rm -rf "$workdir"; die "save-profile: could not write the description -- nothing was written"; }
@@ -15880,6 +15893,7 @@ list_profiles_render() {   # <profile file> <package|user> [render 0|1] -> one J
     jsonw_field source      "$src"
     printf ',"used_by":%s' "${PROFILE_USED_BY[$nm]:-0}"
     jsonw_field description "$desc"
+    jsonw_field hidden      "${PROF_F["profile:|hidden"]:-}"
     jsonw_field version     "$ver"
 
     # Validated BEFORE loading, and by the same validator load_active_profile

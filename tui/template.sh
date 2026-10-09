@@ -7,12 +7,18 @@
 # trzymania (płaski/wiekowy/GFS) oraz układ szczebli idą z szablonu bazowego -- okno
 # pyta tylko o to, ile czego trzymać. Szablon fabryczny jest nie do zmiany ani usunięcia.
 #
+# template.sh relation BAZA PLIK [TYTUŁ] -- ta sama tabela dla RELACJI (P4, właściciel
+# 2026-10-09: "Harmonogram kopii i retencja" w "Zmień relację" i "Ręcznie" w kreatorze):
+# bez nazwy i opisu, bez planu i zapisu -- argumenty save-profile idą do PLIK (jeden na
+# linię), linie planu do PLIK.plan; zapis ukrytego szablonu relacji robi wołający.
+#
 # Wyjście: 0 = zrobione albo nie było czego robić, 1 = przerwane/nie wyszło, 2 = zły argument.
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u
 
-ACTION="${1:-}"; NAME="${2:-}"
-case "$ACTION" in new|edit|delete) ;; *) echo "użycie: template.sh <new|edit|delete> NAZWA" >&2; exit 2 ;; esac
+ACTION="${1:-}"; NAME="${2:-}"; ROUT="${3:-}"; RTITLE="${4:-}"
+case "$ACTION" in new|edit|delete) ;; relation) [ -n "$ROUT" ] || { echo "użycie: template.sh relation BAZA PLIK [TYTUŁ]" >&2; exit 2; } ;;
+    *) echo "użycie: template.sh <new|edit|delete> NAZWA" >&2; exit 2 ;; esac
 [ -n "$NAME" ] || { echo "użycie: template.sh <new|edit|delete> NAZWA" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -104,7 +110,10 @@ if [ "$ACTION" = delete ]; then
 fi
 
 # ---------------------------------------------------------------- new / edit
-if [ "$ACTION" = edit ]; then
+if [ "$ACTION" = relation ]; then
+    NEW="${RTITLE:-Harmonogram kopii i retencja}"
+    TITLE="$NEW"
+elif [ "$ACTION" = edit ]; then
     case "$SRC" in
         package) wt --title "Szablon fabryczny" --msgbox "Fabrycznego szablonu '$NAME' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić." 9 "$W"; exit 0 ;;
         shadow)  wt --title "Szablon fabryczny" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
@@ -211,13 +220,15 @@ choice = {"key": "method", "label": u"Sposób", "value": base_m, "base": base_m,
                                 u"Seria migawek w krótkim czasie wypycha starsze."]}],
           "locked": (u"Drabina na jednej rodzinie migawek liczy tylko GFS." if ladder else None)}
 title = (u"Zmiana szablonu %s" % name) if action == "edit" else (u"Nowy szablon na podstawie %s" % name)
+if action == "relation":
+    title = new
 s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
-     "fields": ([] if action == "edit" else [{"key": "name", "label": u"Nazwa", "value": new}]),
-     "after": [{"key": "desc", "label": u"Opis", "value": bdesc if action == "edit" else ""}],
+     "fields": ([] if action in ("edit", "relation") else [{"key": "name", "label": u"Nazwa", "value": new}]),
+     "after": ([] if action == "relation" else [{"key": "desc", "label": u"Opis", "value": bdesc if action == "edit" else ""}]),
      "note": [u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.",
               u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny."],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
-     "name_key": ("" if action == "edit" else "name"), "auto_desc": ("" if action == "edit" else "desc"),
+     "name_key": ("" if action in ("edit", "relation") else "name"), "auto_desc": ("" if action in ("edit", "relation") else "desc"),
      "choice": choice}
 json.dump(s, open(spec, "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
@@ -289,6 +300,10 @@ with open(tmpd + "/plan.lines", "w", encoding="utf-8") as f:
 with open(tmpd + "/vals.txt", "w", encoding="utf-8") as f:
     f.write(o["fields"].get("name", "") + "\n" + o["fields"].get("desc", "") + "\n")
 PYEOF
+    if [ "$ACTION" = relation ]; then
+        tr -d '\r' <"$TMPD/targs.txt" >"$ROUT"; tr -d '\r' <"$TMPD/plan.lines" >"$ROUT.plan"
+        exit 0
+    fi
     mapfile -t TARGS <"$TMPD/targs.txt"
     { IFS= read -r GNAME; IFS= read -r DESC; } <"$TMPD/vals.txt"
     [ "$ACTION" = new ] && NEW="$GNAME"
