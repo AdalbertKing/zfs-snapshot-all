@@ -1254,6 +1254,34 @@ else
     bad "F5: --screen monitor nadal dziala" "$EMSC"
 fi
 
+# RELACJA LOKALNA na F3 (2026-10-09): rekord z mode=local i bez peera. Wiersz mowi
+# "<host> → tutaj" i "lokalna", panel zamiast Peer/Endpoint pokazuje zrodlo i cel.
+LOKD="$(mktemp -d)"
+"$PY" - "$P10" "$LOKD" <<'PYEOF'
+import json, sys
+p, d = sys.argv[1], sys.argv[2]
+st = json.load(open(p + "/status.json", encoding="utf-8"))
+r = dict(st["relations"][0])
+r.update({"name": "lok", "state": "active", "mode": "local", "peer_host": "", "pair_label": "lok",
+          "client_target": "hdd/kopie", "sources": ["rpool/data"], "managed_datasets": ["hdd/kopie/rpool/data"],
+          "active_endpoint": "", "installed_endpoint": "", "source_profile": ""})
+st["relations"] = [r] + st["relations"]
+json.dump(st, open(d + "/status.json", "w", encoding="utf-8"))
+j = json.load(open(p + "/list-jobs.json", encoding="utf-8"))
+n = dict([x for x in j["jobs"] if x.get("section_kind") == "dataset"][0])
+n.update({"label": "lok", "direction": "local", "scope": "dataset:rpool/data", "schedule": "1 * * * *"})
+j["jobs"].append(n)
+json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
+PYEOF
+LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
+if hasE "$LOK" '^║ lok +pve10 → tutaj +lokalna +active ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
+   && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
+    ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
+else
+    bad "relacje: relacja lokalna" "$LOK"
+fi
+rm -rf "$LOKD"
+
 # ============================================================================
 # NOSNIKI
 # ============================================================================
@@ -1695,7 +1723,9 @@ case "$1" in
                     elif [ -e "$NR_DIR/freed-192.168.28.99" ]; then sed 's/"name": *"192.168.28.99"/"name":"zwolniona"/' "$NR_FIX/status.json"
                     elif [ -n "${NR_FLAT:-}" ]; then sed 's/"profile": *"default"/"profile":"d30h24"/g' "$NR_FIX/status.json"     # konto root "plaskie"
                     else cat "$NR_FIX/status.json"; fi ;;
-    --source=*)     case " $* " in
+    --source=*)     case "$1" in --source=*:*) ;; *)   # kopia lokalna: bez hosta, bez praw
+                        case " $* " in *" --install "*) echo ">>> atrapa: lokalna zainstalowana"; exit 0 ;; *) echo "Plan lokalnego backupu (atrapa)"; exit 0 ;; esac ;; esac
+                    case " $* " in
                         *" --install "*) case " $* " in
                                 *" --grant-remotely "*) echo ">>> atrapa: zainstalowano"; exit 0 ;;
                                 *) echo "FATAL: the source has GRANTED nothing yet: on the source run"; echo "    deploy.sh --commit-scope=pve10"; exit 1 ;;
@@ -2081,6 +2111,33 @@ if [ "$NRRC" -eq 0 ] && grep -q '^source-pruners ' "$NR/zb.log" && ! grep -qF 'I
     ok "new-relation: bez cudzego kolektora sprawdzenie przechodzi bez okna"
 else
     bad "new-relation: sprawdzenie bez konfliktu" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")"
+fi
+
+# 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
+#     diagnozy, koszyk z datasetow TEGO hosta (list-datasets bez adresu), bez "Sposobu"
+#     (zawsze -R), w ustawieniach bez praw/zamrazania/parowania, kroki numerowane x/8,
+#     komenda = wsad local-backup z --name. Bez okna "Pobieram z hosta".
+NROUT=$(nr_run "0${T}local
+0${T}hdd/backups/192.168.28.99/hdd/lab
+0${T}next
+0${T}__other__
+0${T}hdd/kopie
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
+0${T}skip
+0${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
+   && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
+   && grep -qF 'Krok 2/8: Co kopiować z' "$NR/wt.log" && ! grep -F 'Krok 2/8: Co kopiować z' "$NR/wt.log" | grep -qF 'Sposób:' \
+   && ! grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | grep -qE ' ~ (grant|quies|man) ~ ' \
+   && grep -F 'Dokąd na tym hoście' "$NR/wt.log" | head -1 | grep -qF 'Kopie wylądują pod:  <wybrane>/<dataset źródła>' \
+   && grep -F 'Nazwa relacji' "$NR/wt.log" | grep -qF ' ~ lokalna-hdd-backups-192.168.28.99-hdd-lab ~ '; then
+    ok "new-relation: kopia lokalna -- bez hosta i diagnozy, datasety tego hosta, zawsze -R, bez praw/parowania, kroki x/8, komenda local-backup z --name"
+else
+    bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Krok' "$NR/wt.log" | cut -c1-200 | head -12)"
 fi
 
 # 3g. nazwa trzymana przez rekord `removed` jest WOLNA (uwaga 11, 2026-10-08): add-client

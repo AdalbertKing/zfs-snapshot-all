@@ -32,18 +32,36 @@ trap 'rm -rf "$TMPD"' EXIT
 MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
 
 # --- okna -------------------------------------------------------------------
-title() { printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"; }
-hostport() { [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
+title() {
+    if [ "$MODE" = local ]; then
+        local n="$1"; [ "$n" -gt 3 ] && n=$((n - 2))
+        printf 'Krok %s/8: %s' "$n" "$2"
+    else
+        printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"
+    fi
+}
+# Kopia lokalna nie ma drugiego hosta: czytelniki pytamy bez adresu (= ten host).
+hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 
 # --- krok 1: typ ------------------------------------------------------------
 step_mode() {
     geom
-    local b=OFF s=OFF; [ "$MODE" = sync ] && s=ON || b=ON
+    local b=OFF s=OFF l=OFF
+    case "$MODE" in sync) s=ON ;; local) l=ON ;; *) b=ON ;; esac
     wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 7)" "$W" 2 \
-       backup "Backup   (ten host pobiera ze źródła)" "$b" \
-       sync   "Lustro   (to samo po obu stronach)" "$s" || return 1
-    [ -n "$WT_OUT" ] && MODE="$WT_OUT"
+       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nLokalnie: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 8)" "$W" 3 \
+       backup "Backup    (ten host pobiera ze źródła)" "$b" \
+       sync   "Lustro    (to samo po obu stronach)" "$s" \
+       local  "Lokalnie  (kopia na tym hoście)" "$l" || return 1
+    if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
+        # Inna droga = inne źródło: koszyk z poprzedniej nie należy do tej.
+        B_ROOT=(); B_EXCL=(); TREE_FOR="-"
+        MODE="$WT_OUT"; [ "$MODE" = local ] || GRANT=1
+    fi
+    if [ "$MODE" = local ]; then
+        HOST="$(hostname -s 2>/dev/null || hostname)"; PORT=22; HOSTNAME_R=""
+        RECURSION=flat; GRANT=0; MANUAL=0; GQUIESCE=0
+    fi
     return 0
 }
 
@@ -157,7 +175,8 @@ B_ROOT=(); B_EXCL=()                   # koszyk: korzeń, pominięte (po jednym 
 TREE_FOR=""; DIAG_OK_FOR=""
 load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
     [ "$TREE_FOR" = "$(hostport)" ] && [ "${#T_NAME[@]}" -gt 0 ] && return 0
-    "$ZB" list-datasets "$(hostport)" --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
+    local -a _lh=(); [ "$MODE" = local ] || _lh=("$(hostport)")
+    "$ZB" list-datasets ${_lh[@]+"${_lh[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
     "$PY" - "$TMPD/ds.json" "$TMPD/own.tsv" <<'PYEOF' | tr -d '\r' >"$TMPD/tree.tsv"
 import sys, json
 ds = json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []
@@ -346,7 +365,8 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
     with_kids
     menu=(add "Dodaj miejsce…")
     [ "${#WK[@]}" -gt 0 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
-    menu+=(mode "Sposób: $(mode_words) -- zmień…" del "Usuń pozycję…" next "Dalej")
+    [ "$MODE" = local ] || menu+=(mode "Sposób: $(mode_words) -- zmień…")
+    menu+=(del "Usuń pozycję…" next "Dalej")
     wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item next \
        --menu "Kopiowane będzie:\n\n$txt" "$(fit $((lines + 8)))" "$W" "$((${#menu[@]} / 2))" \
        "${menu[@]}" || return 1
@@ -355,6 +375,7 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
 step_datasets() {
     geom
     [ "$TREE_FOR" = "$(hostport)" ] || info "$(title 4 'Datasety')" "Pobieram listę datasetów z $HOST..."
+    # load_tree zapamiętuje drzewo po hostport(); dla kopii lokalnej to "" -- tak samo.
     if ! load_tree; then
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         return 1
@@ -442,10 +463,12 @@ for x in d.get("datasets", []):
     items+=(__browse__ "Przeglądaj…     (wszystkie datasety tego hosta)")
     items+=(__other__ "Wpisz ścieżkę…  (dataset na tym hoście, może jeszcze nie istnieć)")
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi
+    # Kopia lokalna nie ma poziomu hosta: ląduje pod <cel>/<pełna ścieżka źródła>.
+    local lv="/$HOST"; [ "$MODE" = local ] && lv=""
     while :; do
         geom
         wt --title "$(title 5 'Dokąd na tym hoście?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "${first:-__other__}" \
-           --menu "Kopie wylądują pod:  <wybrane>/$HOST/<dataset źródła>\nnp.  ${first:-hdd/backups}/$HOST/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
+           --menu "Kopie wylądują pod:  <wybrane>$lv/<dataset źródła>\nnp.  ${first:-hdd/backups}$lv/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
         if [ "$WT_OUT" = __browse__ ]; then
             browse_target && return 0
@@ -453,7 +476,7 @@ for x in d.get("datasets", []):
         fi
         if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
         wt --title "$(title 5 'Dokąd -- wpisz ścieżkę')" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>/$HOST/<dataset źródła>" 11 "$W" "$TARGET" || continue
+           --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>$lv/<dataset źródła>" 11 "$W" "$TARGET" || continue
         t="${WT_OUT// /}"
         case "$t" in ''|/*|*/|*[!A-Za-z0-9._:/-]*) wt --title "Zła ścieżka" --msgbox "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu)." 9 "$W"; continue ;; esac
         TARGET="$t"; return 0
@@ -635,6 +658,9 @@ step_profile() {
 # --- krok 7: nazwa ------------------------------------------------------------
 step_name() {
     local n
+    if [ -z "$RNAME" ] && [ "$MODE" = local ]; then
+        RNAME="lokalna-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
+    fi
     [ -n "$RNAME" ] || RNAME="${HOSTNAME_R:-$HOST}"
     while :; do
         geom
@@ -712,8 +738,9 @@ step_extra() {
         # dłuższa niż okno rozjeżdżała ramkę checklisty (zmierzone w kroku 9 na
         # 80 kolumnach). Każda i tak przechodzi przez clip_label -- przy wąskim
         # terminalu ucięta z '…', nigdy przez ramkę.
-        items=(grant "Prawa na źródle nadaj stąd (SSH jako root)" "$on_grant")
-        if [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
+        items=()
+        [ "$MODE" = local ] || items=(grant "Prawa na źródle nadaj stąd (SSH jako root)" "$on_grant")
+        if [ "$MODE" != local ] && [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
             items+=(quies "Nadaj też zgodę na zamrażanie gości" "$on_q")
         fi
         # POMIJANE MIGAWKI: jedna pozycja, nie dwie. Dopóki lista jest domyślna,
@@ -732,11 +759,13 @@ step_extra() {
         if [ "$RECURSION" != atomic ]; then
             items+=(srcp "Inna retencja u źródła niż tutaj (następne okno)" "$on_srcp")
         fi
-        items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
+        [ "$MODE" = local ] || items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
         local _i
         for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
+        local _xh="Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła."
+        [ "$MODE" = local ] && _xh="Domyślne są dobre. SPACJA przełącza, ENTER = Dalej."
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła." "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
+           --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
            "${items[@]}" || return 1
         GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0; want_srcp=0
         local keep_skip=0 x
@@ -899,8 +928,13 @@ prefix_editor() {   # edytuje EXFAM; 0 = zapisano (może być pusta), 1 = Wstecz
 # zostaje kropką wzorca: nadzbiór, w praktyce ten sam.
 build_argv() {   # [install] -> ARGV[]
     local IFS=, i x D='$' a
-    ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
-    if [ "$MODE" = sync ]; then ARGV+=("--mode=sync"); else ARGV+=("--target=$TARGET"); fi
+    if [ "$MODE" = local ]; then
+        # Kopia lokalna = istniejący wsad local-backup: --source bez hosta, drzewo -R.
+        ARGV=("$ZB" "--source=${B_ROOT[*]}" "--target=$TARGET" "--recursive=flat")
+    else
+        ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
+    fi
+    if [ "$MODE" = sync ]; then ARGV+=("--mode=sync"); elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET"); fi
     [ -n "$PROFILE" ] && ARGV+=("--profile=$PROFILE")
     [ -n "$SRCPROF" ] && ARGV+=("--source-profile=$SRCPROF")
     [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
@@ -926,7 +960,9 @@ cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; d
 # --- krok 10: podsumowanie -> plan -> wykonanie ---------------------------------
 summary_text() {
     local i a; a="$(account_name)"
-    if [ "$MODE" = sync ]; then
+    if [ "$MODE" = local ]; then
+        echo "LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:"
+    elif [ "$MODE" = sync ]; then
         echo "LUSTRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
     else
         echo "BACKUP: $(hostname) będzie POBIERAĆ z $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} do $TARGET/$HOST/..."
@@ -937,6 +973,14 @@ summary_text() {
     if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
     else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
+    if [ "$MODE" = local ]; then
+        [ "$FREEZE" -eq 1 ] && echo "Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi."
+        echo
+        echo "Komenda (to samo wpisałbyś z palca):"
+        cmd_oneline; echo
+        any_excl && echo "(^nazwa${D:-\$} = dokładnie ten dataset, nie łapie np. ...disk-01)"
+        return 0
+    fi
     if [ "$FREEZE" -eq 1 ]; then
         if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce)."
         else echo "Zamrażanie: BEZ zgody źródła migawki wyjdą jako '_crash_' (niezamrożone)."; fi
@@ -1042,10 +1086,11 @@ RC_RUN=1
 step=mode
 while :; do
     case "$step" in
-        mode)    if step_mode;     then step=host;    else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
+        mode)    if step_mode;     then [ "$MODE" = local ] && step=ds || step=host
+                 else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
         host)    if step_host;     then step=diag;    else step=mode; fi ;;
         diag)    if step_diag;     then step=ds;      else step=host; fi ;;
-        ds)      if step_datasets; then step=target;  else step=host; fi ;;
+        ds)      if step_datasets; then step=target;  else [ "$MODE" = local ] && step=mode || step=host; fi ;;
         target)  if step_target;   then step=profile; else step=ds; fi ;;
         profile) if step_profile;  then step=name;    else [ "$MODE" = sync ] && step=ds || step=target; fi ;;
         name)    if step_name;     then step=acct;    else step=profile; fi ;;

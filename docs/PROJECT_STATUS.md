@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d98e92aecde171d5 -->
+<!-- status-covers-digest: 21da9ab1f9f71ee9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,37 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kopia lokalna jako relacja, L1 (2026-10-09, właściciel: „Nie działa założenie relacji jednohostowej w GUI… zaproponuj zmiany”, ekrany zaakceptowane bez ekranu 1a).**
+  - **Kreator (F3 → Ins):** w kroku 1 trzecia pozycja „Lokalnie (kopia na tym
+    hoście)”. Bez kroków host i diagnoza (8 kroków): koszyk z datasetów TEGO hosta
+    (`list-datasets` bez adresu), zawsze każdy dataset osobno (`-R`, bez pozycji
+    „Sposób”), „Dokąd” mówi `<cel>/<dataset źródła>`, w ustawieniach tylko pomijane
+    migawki i inna retencja u źródła. Domyślna nazwa `lokalna-<źródło>`. WYKONAJ
+    uruchamia istniejący wsad lokalny z `--name`.
+  - **Wsad `local-backup`:** nowe `--name=NAZWA`, `--exclude-child=`,
+    `--exclude-family=`; `--recursive=flat` dozwolone z celem (zmierzone na pve9b:
+    `snapsend -R -X` lokalnie kopiuje drzewo do `<cel>/<pełna ścieżka źródła>`,
+    pomija wyjątek, nowe dziecko dochodzi przy następnym biegu); `atomic` z celem
+    nadal odmowa. Z `--name`: sekcje mają `pair_label` (linie dostają `-L`, działa
+    pauza), każde źródło ma własną retencję lądowiska `[prune:<cel>/<źródło>]`, seed
+    idzie z tym samym `-R`/`-X`, po instalacji powstaje rekord `RUX_MODE=local`
+    (`MANAGED_DATASETS` = kopie, nigdy źródła). Bez `--name` zachowanie bez zmian.
+  - **Czasowniki:** `status --json` podaje `mode: local`; F3 pokazuje
+    `<host> → tutaj`, typ „lokalna”, w panelu źródło i cel zamiast Peer/Endpoint.
+    `pause-client`/`resume-client` działają (bramka `-L`). `remove-client` /
+    `delete-relation` mają gałąź lokalną: zdejmują tylko sekcje z markerem
+    `local-backup` ORAZ `pair_label = NAZWA`, bez `--unpair`; `--destroy-copies`
+    niszczy kopie i puste poziomy pod celem (nigdy sam cel). `migrate-profile` i
+    `audit-source-retention` pomijają relację lokalną; `edit-relation`, `add-source`,
+    `remove-source` odmawiają jej wprost (to L2), config zmienia `edit-config`.
+  - **Na żywo (pve9b, dane testowe, sprzątnięte):** założenie z `--name`,
+    `-R -X -L` w liniach, pauza („SKIPPED: relationship lt is paused”), wznowienie,
+    `delete-relation --destroy-copies --yes` — crontab identyczny jak przed testem.
+  - **Testy:** `localbackup` (rekord, sekcje, seed, zajęta nazwa, odmowy,
+    `remove-client` lokalny, `edit-relation`, poziomy pod celem; testy z instalacją
+    wymagają `flock` — tu SKIP, w CI biegną), `tui` (kreator „Lokalnie”, F3).
+  - **Zostaje (L2):** zmiana szablonu (`e`) i dodawanie/usuwanie datasetów dla
+    relacji lokalnej.
 - **Runda GUI, paczka C1 — replika: pasywna (uwaga 20) i harmonogram (16+19) (2026-10-09, właściciel: „rób paczkę C”).**
   - **Replika pasywna:** `[replica:]` przyjmuje `passive = yes` (bez `prefix`; oba naraz
     = odmowa). Silnik: `snapget.sh -e -M` bez `-m` — żadnej własnej migawki, przenosi
