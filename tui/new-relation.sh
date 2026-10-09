@@ -518,15 +518,14 @@ step_extra() {
     # spacja przełącza, Enter = Dalej, Esc/Wstecz = krok w tył. Pozycje, które
     # potrzebują wartości (własne maski, inna retencja u źródła), pytają o nią
     # w NASTĘPNYM oknie -- każde z nich ma już normalne Dalej/Wstecz.
-    local items=() on_grant=OFF on_q=OFF on_srcp=OFF on_man=OFF
-    local want_masks=0 want_srcp=0 defmask="__replicate_,vzdump,__migration__"
+    local items=() on_grant=OFF on_q=OFF on_man=OFF
+    local want_masks=0 defmask="__replicate_,vzdump,__migration__"
     while :; do
         geom
         [ "$GRANT" -eq 1 ] && on_grant=ON || on_grant=OFF
         [ "$GQUIESCE" -eq 1 ] && on_q=ON || on_q=OFF
-        [ -n "$SRCPROF" ] && on_srcp=ON || on_srcp=OFF
         [ "$MANUAL" -eq 1 ] && on_man=ON || on_man=OFF
-        [ "$RECURSION" = atomic ] && { SRCPROF=""; on_srcp=OFF; }
+        [ "$RECURSION" = atomic ] && SRCPROF=""
         # KRÓTKIE ETYKIETY, objaśnienia nad listą (U5, 2026-10-06): etykieta
         # dłuższa niż okno rozjeżdżała ramkę checklisty (zmierzone w kroku 9 na
         # 80 kolumnach). Każda i tak przechodzi przez clip_label -- przy wąskim
@@ -549,9 +548,6 @@ step_extra() {
         else
             items+=(masks "Pomijane: ${EXFAM:-żadne, kopiowane wszystkie} (zmień)" ON)
         fi
-        if [ "$RECURSION" != atomic ]; then
-            items+=(srcp "Inna retencja u źródła niż tutaj (następne okno)" "$on_srcp")
-        fi
         [ "$MODE" = local ] || items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
         local _i
         for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
@@ -560,7 +556,7 @@ step_extra() {
         wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
            --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
            "${items[@]}" || return 1
-        GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0; want_srcp=0
+        GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0
         local keep_skip=0 x
         while IFS= read -r x; do
             case "$x" in
@@ -568,7 +564,6 @@ step_extra() {
                 quies) GQUIESCE=1 ;;
                 skip)  keep_skip=1 ;;
                 masks) want_masks=1 ;;
-                srcp)  want_srcp=1 ;;
                 man)   MANUAL=1 ;;
             esac
         done <<<"$WT_OUT"
@@ -580,7 +575,9 @@ step_extra() {
         elif [ "$want_masks" -eq 1 ]; then
             prefix_editor || continue
         fi
-        if [ "$want_srcp" -eq 1 ] && [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
+        # Retencja źródła: zawsze jedno pytanie "tyle samo co tutaj?" (uwaga 2,
+        # 2026-10-09) zamiast pozycji na liście i menu szczebli z "Gotowe".
+        if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
             source_retention_editor || continue
         else
             SRCPROF=""
@@ -607,75 +604,79 @@ tier_letter() { case "$1" in *hourly) echo H ;; *daily) echo D ;; *weekly) echo 
 age_unit() {   # <litera jednostki retain> -> słowo
     case "$1" in h) echo "godz." ;; d) echo "dni" ;; w) echo "tyg." ;; m) echo "mies." ;; y) echo "lat" ;; *) echo "$1" ;; esac
 }
-source_retention_editor() {
+source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = wstecz
+    # UWAGA 2 (właściciel, 2026-10-09): bez menu szczebli z pozycją "Gotowe" (OK robiło
+    # podświetloną pozycję, więc "Dalej" nie szło dalej). Teraz: jedno pytanie, a po
+    # "Zmień" każdy szczebel po kolei (Dalej = następny, Wstecz = poprzedni).
     local -a tn=() tp=() tk=() sk=() tm=()
-    local t p k m i n items v ok name out u q
+    local t p k m i n v ok name out u q rc here="" defno=""
     while IFS=$'\t' read -r n t p k m; do
         [ "$n" = "$PROFILE" ] || continue
         k="${k%$'\r'}"; m="${m%$'\r'}"
         tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k"); tm+=("${m:-keep}")
     done <"$TMPD/prof.json.tiers"
-    [ "${#tn[@]}" -gt 0 ] || { wt --title "Retencja źródła" --msgbox "Szablon $PROFILE nie ma szczebli z liczbą do zmiany." 8 "$W"; return 1; }
+    [ "${#tn[@]}" -gt 0 ] || { SRCPROF=""; return 0; }
     # poprzednie liczby tego samego szablonu (powrót do okna)
     if [ -n "$SRCKEEP" ] && [ "${SRCKEEP%%:*}" = "$PROFILE" ]; then read -r -a sk <<<"${SRCKEEP#*:}"; fi
-    while :; do
-        items=()
-        for i in "${!tn[@]}"; do
-            # Licznik sztuk: gołe liczby. Wiek: liczba z jednostką (K1).
-            u=""; case "${tm[$i]}" in retain:*) u=" $(age_unit "${tm[$i]#retain:}")" ;; esac
-            items+=("$i" "$(printf '%-12s cel %-10s -> źródło %s' "$(tier_word "${tn[$i]}")" "${tk[$i]}$u" "$([ "${sk[$i]}" = 0 ] && echo 'brak' || echo "${sk[$i]}$u")")")
-        done
-        items+=(ok "Gotowe")
-        geom
-        wt --title "$(title 9 "Jak długo trzymać w źródle (na $HOST)?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item ok \
-           --menu "Te same szczeble co tutaj ($PROFILE) -- zmień tylko liczby.\n0 = źródło nie trzyma tego szczebla wcale." "$(fit $((${#tn[@]} + 6)))" "$W" "$((${#tn[@]} + 1))" \
-           "${items[@]}" || return 1
-        if [ "$WT_OUT" != ok ]; then
-            i="$WT_OUT"
-            case "${tm[$i]}" in
-                retain:*) u="$(age_unit "${tm[$i]#retain:}")"
-                          q="Jak długo trzymać $(tier_word "${tn[$i]}") na $HOST, w: $u (tutaj: ${tk[$i]} $u; 0 = bez tego szczebla):" ;;
-                *)        q="Ile $(tier_word "${tn[$i]}") trzymać na $HOST (tutaj: ${tk[$i]}; 0 = bez tego szczebla):" ;;
-            esac
-            wt --title "$(tier_word "${tn[$i]}") u źródła" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "$q" 9 "$W" "${sk[$i]}" || continue
-            v="${WT_OUT// /}"
-            case "$v" in ''|*[!0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą, 0 albo więcej." 8 "$W"; continue ;; esac
-            v=$((10#$v))
-            if [ "$v" -eq 0 ]; then
-                ok=0
-                for n in "${!tn[@]}"; do [ "$n" != "$i" ] && [ "${tp[$n]}" = "${tp[$i]}" ] && [ "${sk[$n]}" != 0 ] && ok=1; done
-                [ "$ok" -eq 1 ] || { wt --title "Tego szczebla nie da się wyłączyć" --msgbox "Rodziny ${tp[$i]} nie sprząta żaden inny szczebel -- bez niego źródło\ntrzymałoby te migawki w nieskończoność. Zostaw co najmniej 1." 9 "$W"; continue; }
-            fi
-            sk[$i]="$v"
-            continue
-        fi
-        SRCKEEP="$PROFILE:${sk[*]}"
-        # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
-        [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
-        name="$PROFILE-src-"
-        local -a args=(--from="$PROFILE" --force)
-        for i in "${!tn[@]}"; do
-            [ "${sk[$i]}" = 0 ] && { args+=(--drop-tier="${tn[$i]}"); continue; }
-            name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
-        done
-        info "$(title 9 'Retencja źródła')" "Zapisuję szablon źródła $name..."
-        out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
-            || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue; }
-        for i in "${!tn[@]}"; do
-            [ "${sk[$i]}" = 0 ] || [ "${sk[$i]}" = "${tk[$i]}" ] && continue
-            # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem
-            # (z tą samą jednostką) -- inny mechanizm odrzuciłby straż rodzin.
-            case "${tm[$i]}" in
-                retain:*) v="--retain=-${tm[$i]#retain:}${sk[$i]}" ;;
-                *)        v="--keep=${sk[$i]}" ;;
-            esac
-            out=$("$ZB" save-profile --from="$name" --as="$name" --force --tier="${tn[$i]}" "$v" 2>&1) \
-                || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; continue 2; }
-        done
-        SRCPROF="$name"
-        return 0
+    for i in "${!tn[@]}"; do
+        u=""; case "${tm[$i]}" in retain:*) u=" $(age_unit "${tm[$i]#retain:}")" ;; esac
+        here="$here${here:+, }${tk[$i]}$u $(tier_word "${tn[$i]}")"
     done
+    [ -n "$SRCPROF" ] && defno="--defaultno"
+    geom
+    wt --title "$(title 9 "Retencja u źródła ($HOST)")" --yes-button "Tak, dalej" --no-button "Zmień" $defno \
+       --yesno "Źródło trzyma tyle samo co tutaj?\n\nTutaj ($PROFILE): $here." 10 "$W"
+    rc=$?
+    case "$rc" in
+        0) SRCPROF=""; SRCKEEP=""; return 0 ;;
+        1) ;;
+        *) return 1 ;;
+    esac
+    i=0
+    while [ "$i" -lt "${#tn[@]}" ]; do
+        case "${tm[$i]}" in
+            retain:*) u="$(age_unit "${tm[$i]#retain:}")"
+                      q="Jak długo trzymać $(tier_word "${tn[$i]}") na $HOST, w: $u?\n(tutaj: ${tk[$i]} $u; 0 = bez tego szczebla)" ;;
+            *)        q="Ile $(tier_word "${tn[$i]}") trzymać na $HOST?\n(tutaj: ${tk[$i]}; 0 = bez tego szczebla)" ;;
+        esac
+        wt --title "$(title 9 "Retencja u źródła -- $(tier_word "${tn[$i]}") ($((i + 1))/${#tn[@]})")" --ok-button "Dalej" --cancel-button "Wstecz" \
+           --inputbox "$q" 10 "$W" "${sk[$i]}" || { [ "$i" -eq 0 ] && return 1; i=$((i - 1)); continue; }
+        v="${WT_OUT// /}"
+        case "$v" in ''|*[!0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą, 0 albo więcej." 8 "$W"; continue ;; esac
+        sk[$i]=$((10#$v)); i=$((i + 1))
+    done
+    # 0 = bez szczebla: tylko gdy rodzinę sprząta inny szczebel -- inaczej źródło
+    # trzymałoby te migawki w nieskończoność.
+    for i in "${!tn[@]}"; do
+        [ "${sk[$i]}" = 0 ] || continue
+        ok=0
+        for n in "${!tn[@]}"; do [ "$n" != "$i" ] && [ "${tp[$n]}" = "${tp[$i]}" ] && [ "${sk[$n]}" != 0 ] && ok=1; done
+        if [ "$ok" -eq 0 ]; then
+            wt --title "Tego szczebla nie da się wyłączyć" --msgbox "Rodziny ${tp[$i]} ($(tier_word "${tn[$i]}")) nie sprząta żaden inny szczebel -- bez niego\nźródło trzymałoby te migawki w nieskończoność. Zostaw co najmniej 1." 9 "$W"
+            SRCKEEP="$PROFILE:${sk[*]}"
+            return 1
+        fi
+    done
+    SRCKEEP="$PROFILE:${sk[*]}"
+    # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
+    [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
+    name="$PROFILE-src-"
+    local -a args=(--from="$PROFILE" --force)
+    for i in "${!tn[@]}"; do
+        if [ "${sk[$i]}" = 0 ]; then args+=(--drop-tier="${tn[$i]}"); continue; fi
+        name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
+        [ "${sk[$i]}" = "${tk[$i]}" ] && continue
+        # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem.
+        case "${tm[$i]}" in
+            retain:*) args+=(--tier="${tn[$i]}" "--retain=-${tm[$i]#retain:}${sk[$i]}") ;;
+            *)        args+=(--tier="${tn[$i]}" "--keep=${sk[$i]}") ;;
+        esac
+    done
+    info "$(title 9 'Retencja źródła')" "Zapisuję szablon źródła $name..."
+    out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
+        || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }
+    SRCPROF="$name"
+    return 0
 }
 # EDYTOR POMIJANYCH MIGAWEK (właściciel, uwagi 10+13). Wcześniej to było jedno
 # pole tekstowe -- łatwo było zgubić przecinek ("__migration___tmp" zamiast
