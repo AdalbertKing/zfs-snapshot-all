@@ -82,7 +82,7 @@ class Grid(object):
         for r in self.rows:
             if r.get("on") and r.get("value") not in ("", "-", None) and r.get("glabel"):
                 parts.append(u"%s %s" % (r["value"], r["glabel"]))
-            if r.get("q"):
+            if r.get("on") and r.get("q"):
                 qs.append(r.get("glabel") or r.get("label"))
         txt = u"%s; %s" % (u" + ".join(parts) or u"bez szczebli",
                            (u"zamraża: " + u", ".join(qs)) if qs else u"bez zamrażania")

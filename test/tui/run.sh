@@ -2627,7 +2627,7 @@ cat > "$TP/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":"","quiesce":"","send_schedule":"1 * * * *","pattern":"automated_hourly"},{"name":"daily","keep":"7","retain":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","pattern":"automated_daily"}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
+    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":"","quiesce":"","send_schedule":"1 * * * *","pattern":"automated_hourly"},{"name":"daily","keep":"7","retain":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","pattern":"automated_daily"}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]},{"name":"drab","source":"package","used_by":0,"description":"drabina","tiers":[{"name":"standard_hourly","keep":"","retain":"","quiesce":"","send_schedule":"1 * * * *","pattern":""},{"name":"keep_hourly","keep":"24","retain":"","quiesce":"","send_schedule":"","pattern":"automated_hourly"},{"name":"keep_daily","keep":"7","retain":"","quiesce":"","send_schedule":"","pattern":"automated_hourly"}]}]}' ;;
     save-profile) echo ">>> atrapa: zapisano" ;;
     delete-profile) case " $* " in *" --yes "*) echo ">>> atrapa: usunieto" ;; *) echo "PLAN (delete-profile):"; echo "  built from it: 2 relationship(s)" ;; esac ;;
     *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
@@ -2690,6 +2690,28 @@ if [ "$TPRC" -eq 0 ] && grep -qx 'delete-profile moj' "$TP/zb.log" && grep -qx '
     ok "template: Del na wlasnym -- plan czasownika (2 relacje: zostaja, ale bez szablonu do odswiezenia), domyslnie Wstecz, potem --yes"
 else
     bad "template: usuwanie" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(tail -3 "$TP/wt.log" | cut -c1-250)"
+fi
+# 4. OKNO KOMPLETNE (wlasciciel 2026-10-09: "pokazywac rowniez miesieczne, roczne,
+#    tygodniowe po prostu nie pozaznaczane"): d7h24 ma dwa szczeble, tabela ma piec;
+#    zaznaczenie tygodniowego = --add-tier=weekly (domyslnie 4, zamrazany jak dobowy).
+TPOUT=$(tp_grid "down,down,down,space,enter" new d7h24 "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --add-tier=weekly --description=24 godzinowych + 7 dobowych + 4 tygodniowych; zamraża: dobowych, tygodniowych' "$TP/zb.log" \
+   && printf '%s' "$TPOUT" | grep -qE '\[ \] miesięczne' && printf '%s' "$TPOUT" | grep -qE '\[ \] roczne' \
+   && grep -qF 'tygodniowe: dodany, 4, zamrażany' "$TP/wt.log"; then
+    ok "template: tabela pokazuje wszystkie piec szczebli; brakujace odznaczone, kratka = --add-tier"
+else
+    bad "template: dodanie szczebla" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | tail -20)" "$(tail -3 "$TP/wt.log" | cut -c1-300)" "$(cat "$TP/err")"
+fi
+# 5. Drabina (jedna rodzina): dodany szczebel to nowy szczebel drabiny -- bez kratki
+#    zamrazania (zamraza sie szczebel, ktory robi migawki); liczba zmieniona = --keep po --add-tier.
+TPOUT=$(tp_grid "down,down,down,down,down,down,space,right,bs,3,enter" new drab "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -q '^save-profile --from=drab --as=drab-moj --add-tier=yearly --keep=3 --description=' "$TP/zb.log" \
+   && ! grep -q -- '--quiesce' "$TP/zb.log" && grep -qF 'roczne: dodany, 3' "$TP/wt.log"; then
+    ok "template: drabina -- dodany szczebel roczny z liczba, bez zamrazania"
+else
+    bad "template: dodanie szczebla drabiny" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | tail -20)" "$(cat "$TP/err")"
 fi
 rm -rf "$TP"
 

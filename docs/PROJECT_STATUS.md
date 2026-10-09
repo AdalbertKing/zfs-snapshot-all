@@ -21,6 +21,27 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Tabela szablonu jest kompletna: zawsze pięć szczebli (2026-10-09, właściciel: „okno powinno być kompletne i pokazywać również miesięczne, roczne, tygodniowe po prostu nie pozaznaczane”).**
+  - **Okno (F5 → Ins / Enter + `e`):** szczeble trzymania godzinowe, dobowe,
+    tygodniowe, miesięczne, roczne zawsze po kolei (drabina ma nad nimi jeszcze
+    wiersz szczebla, który robi migawki); szczebla, którego bazowy szablon nie ma,
+    nie zaznaczono.
+    Zaznaczenie go dodaje (domyślnie 24 / 7 / 4 / 12 / 5, zamrażany jak w szablonach
+    fabrycznych: wszystkie poza godzinowym). Opis z wyborów liczy zamrażanie tylko
+    zaznaczonych szczebli.
+  - **`save-profile --add-tier=<hourly|daily|weekly|monthly|yearly>`:** dodaje szczebel
+    w kształcie bazowego. Rodzina na szczebel: nowa sekcja z własną rodziną
+    `automated_<szczebel>_`, harmonogramem z szablonów fabrycznych i tym samym sposobem
+    liczenia (GFS / płaski / wiek). Drabina na jednej rodzinie: nowy szczebel drabiny
+    nazwany jak pozostałe (`keep_weekly`, w `passive` `passive_keep_weekly`) na
+    jej rodzinie. Pola po `--add-tier` (`--keep`, `--retain`,
+    `--quiesce`) idą do dodanego szczebla. Minuta zajęta przez inny szczebel przesuwa
+    się o 5 (np. roczny obok miesięcznego `31 3 1 * *` → `36 3 1 1 *`). Szczebel, który
+    już jest, = odmowa; wynik przechodzi te same trzy bramki co każda zmiana.
+  - **Testy:** `zfsbackup` saveprof (dodanie do rodziny na szczebel, do drabiny,
+    odmowa istniejącego); `tui` (pięć wierszy, kratka = `--add-tier`, drabina bez
+    kratki zamrażania).
+
 - **Okno-tabela szczebli (curses, `tui/grid.py`): szablon na F5 i retencja u źródła (2026-10-09, właściciel: „tak, rób w curses, oba okna … podobne do … qnap czy synology”, „Uprośćmy tworzenie szablonów”).**
   - **Wyjątek od zasady „formularze w whiptail”:** whiptail nie ma wiersza z polem
     liczby i dwiema kratkami. `tui/grid.py` rysuje tabelę szczebel × liczba × kratka;
