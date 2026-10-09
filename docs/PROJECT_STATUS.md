@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 00eaaada6a6af955 -->
+<!-- status-covers-digest: 94f9a420289f35d5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Okna szablonu (F5): zamrażanie jako kratka, opis z wyborów (2026-10-09, właściciel przy teście: „Koherentne powinien być checkbox”).**
+  - Nowy krok przed opisem: „Które szczeble zamrażają gości przed migawką (spójne
+    migawki)?” — lista szczebli, które robią migawki, zaznaczona jak w bazowym.
+    Zmiana daje `--tier=T --quiesce=auto,degrade` (włączenie) albo `--quiesce=`
+    (pole zdjęte); plan wymienia „zamrażanie <szczebel>: tak -> nie”.
+  - Podpowiedź opisu składa się z wyborów („24 godzinowych + 14 dobowych; bez
+    zamrażania”) zamiast tekstu bazowego, który po zmianie liczb przestawał być prawdą;
+    przy zmianie własnego zostaje jego opis.
+  - Etykiety szczebli rozpoznają też `keep_daily` / `standard_hourly` (szablony GFS).
+  - **Na żywo (pve9b):** `save-profile --tier=daily --quiesce= --tier=hourly
+    --quiesce=auto,degrade` — przyjęte przez bramki, plik testowy usunięty.
+  - **Testy:** `tui` — okna szablonu 4/4 (nowy test: odznaczenie zamrażania dobowego
+    i podpowiedź opisu).
 
 - **Kreator relacji: retencja u źródła jednym pytaniem (uwaga 2) (2026-10-09, właściciel: „1 tak”).**
   - Pozycja „Inna retencja u źródła” zniknęła z listy ustawień (krok 9) razem z menu
