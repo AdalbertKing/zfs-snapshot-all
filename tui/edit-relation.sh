@@ -62,6 +62,9 @@ with open(sys.argv[4] + "/prof.tsv", "w", encoding="utf-8", newline="\n") as f:
         f.write("%s\t%-*s  %-*s  [%s]\n" % (n, wn, n, wr, ret, mech))
 PYEOF
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }
+# Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
+SRCHOST="$PEER"; LDS_ARGS=("$PEER")
+if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
 if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
@@ -93,7 +96,7 @@ run_verb_with_plan() {   # <tytuł> <argv...> (bez --yes)
 while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item szablon \
-       --menu "Relacja $NAME ze źródła ${PEER}.\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 14 "$W" 4 \
+       --menu "Relacja $NAME ze źródła ${SRCHOST}.\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 14 "$W" 4 \
        szablon "Szablon (retencja, harmonogramy, retencja źródła)" \
        dodaj   "Dodaj dataset ze źródła" \
        usun    "Usuń dataset z relacji (kopie zostają)" \
@@ -112,9 +115,9 @@ while :; do
             [ -t 0 ] && read -r _
             exit "$RC" ;;
         dodaj)
-            info "Dodaj dataset" "Czytam datasety na $PEER..."
-            if ! "$ZB" list-datasets "$PEER" --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then
-                wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $PEER nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
+            info "Dodaj dataset" "Czytam datasety z $SRCHOST..."
+            if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then
+                wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $SRCHOST nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
             "$PY" - "$TMPD/ds.json" "$SRCS" >"$TMPD/ds.tsv" <<'PYEOF'
 import sys, json
@@ -127,9 +130,9 @@ for d in json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []:
 PYEOF
             items=()
             while IFS=$'\t' read -r n t; do [ -n "$n" ] && items+=("$n" "$(clip_label "$n  ($t)" $((W - 10)))"); done <"$TMPD/ds.tsv"
-            [ "${#items[@]}" -gt 0 ] || { wt --title "Nie ma czego dodać" --msgbox "Na $PEER nie ma datasetu spoza tej relacji." 8 "$W"; continue; }
+            [ "${#items[@]}" -gt 0 ] || { wt --title "Nie ma czego dodać" --msgbox "Na $SRCHOST nie ma datasetu spoza tej relacji." 8 "$W"; continue; }
             wt --title "Dodaj dataset do $NAME" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --menu "Dataset ze źródła $PEER. Wchodzi z dziećmi; pierwsza (pełna) kopia idzie od razu,\nresztą zajmuje się cron. Pozostałe datasety relacji zostają nietknięte." \
+               --menu "Dataset ze źródła $SRCHOST. Wchodzi z dziećmi; pierwsza (pełna) kopia idzie od razu,\nresztą zajmuje się cron. Pozostałe datasety relacji zostają nietknięte." \
                "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" || continue
             run_verb_with_plan "Dodaj $WT_OUT do $NAME" "$ZB" add-source "$NAME" "$WT_OUT" || continue ;;
         usun)

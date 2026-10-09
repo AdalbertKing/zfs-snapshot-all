@@ -679,14 +679,61 @@ if ! grep -qxF '[dataset:rpool/data]' "$RL/c.conf" && ! grep -qxF '[prune:hdd/ba
 else
     bad "local relationship: remove-client" "$out" "$(cat "$RL/c.conf")"
 fi
-# Captured first, then matched: under pipefail a `die | grep -q` pipeline reports
-# the die's exit status even when grep found the line.
-printf 'CLIENT_NAME=l2\nRUX_MODE=local\nSTATE=active\n' > "$RL/clients/l2.conf"
-out="$( ( CLIENTS_DIR="$RL/clients"; cmd_edit_relation l2 --profile=d30 ) 2>&1 )"
-if grep -q "is a LOCAL relationship" <<< "$out"; then
-    ok "local relationship: edit-relation says plainly it does not handle a local one yet, instead of dying in the loader"
+# L2 (2026-10-09): a local relationship is CHANGED by describing it again --
+# local_relation_argv reads it back (sources/target from the record, exclusions
+# from its [dataset:] section), the verb changes one thing, and local-backup runs
+# with --replace. Pinned without an install: the argv, and what each verb hands on.
+printf 'CLIENT_NAME=l2\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nRECURSION=flat\nPROFILE=d7h24\nCRON_CONFIG=%s\n' "$RL/l2.conf" > "$RL/clients/l2.conf"
+cat > "$RL/l2.conf" <<'EOF'
+[dataset:rpool/a]
+	# managed-by: zfs-backup.sh local-backup source=rpool/a
+	pair_label   = l2
+	exclude_child_1 = ^rpool/a/tmp$
+	exclude_family = vzdump
+EOF
+got=$( ( CLIENTS_DIR="$RL/clients"; local_relation_argv l2; printf '%s\n' "${LRA[@]}" ) 2>&1 )
+want='--source=rpool/a,rpool/b
+--target=hdd/backups
+--name=l2
+--recursive=flat
+--config='"$RL/l2.conf"'
+--profile=d7h24
+--exclude-child=^rpool/a/tmp$
+--exclude-family=vzdump'
+[ "$got" = "$want" ] && ok "local relationship: local_relation_argv reads it back -- record (sources, target, recursion, profile, config) + its section's exclusions" \
+                     || bad "local relationship: local_relation_argv" "$got"
+lb_spy() {   # <verb args...> -> the local-backup arguments the verb handed on
+    ( CLIENTS_DIR="$RL/clients"; cmd_local_backup() { printf '%s\n' "$@"; }; log() { :; }; "$@" ) 2>&1
+}
+got=$(lb_spy cmd_edit_relation l2 --profile=d30 --plan)
+if printf '%s\n' "$got" | grep -qx -- '--profile=d30' && printf '%s\n' "$got" | grep -qx -- '--replace' \
+   && ! printf '%s\n' "$got" | grep -qx -- '--install' && [ "$(printf '%s\n' "$got" | grep -c -- '^--profile=')" = 2 ]; then
+    ok "local relationship: edit-relation --profile=P --plan hands local-backup the relationship plus the new profile (last wins) and --replace, no install"
 else
-    bad "local relationship: edit-relation refusal" "$out"
+    bad "local relationship: edit-relation on a local one" "$got"
+fi
+got=$(lb_spy cmd_add_source l2 rpool/c --yes)
+printf '%s\n' "$got" | grep -qx -- '--source=rpool/a,rpool/b,rpool/c' && printf '%s\n' "$got" | grep -qx -- '--install' && printf '%s\n' "$got" | grep -qx -- '--yes' \
+    && ok "local relationship: add-source --yes = the same relationship with one source more, installed" \
+    || bad "local relationship: add-source" "$got"
+got=$(lb_spy cmd_remove_source l2 rpool/a)
+printf '%s\n' "$got" | grep -qx -- '--source=rpool/b' && ! printf '%s\n' "$got" | grep -qx -- '--install' \
+    && ok "local relationship: remove-source (no --yes) = a plan without that source" \
+    || bad "local relationship: remove-source" "$got"
+printf 'CLIENT_NAME=l3\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\nCRON_CONFIG=%s\n' "$RL/l2.conf" > "$RL/clients/l3.conf"
+g1=$(lb_spy cmd_remove_source l3 rpool/a); g2=$(lb_spy cmd_remove_source l3 rpool/zz); g3=$(lb_spy cmd_add_source l3 rpool/a)
+if printf '%s' "$g1" | grep -q 'is the last source' && printf '%s' "$g2" | grep -q 'is not a source' && printf '%s' "$g3" | grep -q 'is already in'; then
+    ok "local relationship: removing the last source, a non-source, or adding one already there is refused before anything runs"
+else
+    bad "local relationship: source refusals" "$g1" "$g2" "$g3"
+fi
+rm -f "$WORK/crontab-store"; seed_cfg
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --replace --config="$CFG")"
+out2="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --name=nosuch --replace --config="$CFG")"
+if printf '%s' "$out" | grep -q -- '--replace needs --name' && printf '%s' "$out2" | grep -q "'nosuch' is not an active local relationship"; then
+    ok "local relationship: --replace without --name, or for a relationship that does not exist, is refused"
+else
+    bad "local relationship: --replace refusals" "$(printf '%s' "$out" | tail -2)" "$(printf '%s' "$out2" | tail -2)"
 fi
 csl=""; for c in "hdd/backups/rpool:hdd/backups::local:0" "hdd/backups:hdd/backups::local:1" "hdd:hdd/backups::local:1" \
                  "t/p/x:t:p::0" "t/q:t:p::1"; do
