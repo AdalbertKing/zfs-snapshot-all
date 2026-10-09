@@ -23,7 +23,9 @@ OUT:  {"action":"next"|"back", "fields":{key: value}, "rows":[{"key","on","value
       (wybor jest w "fields" pod swoim kluczem)
 
 --keys: bez terminala -- nazwy klawiszy (up, down, left, right, tab, btab, space,
-enter, esc, bs, albo jeden znak), potem wydruk ekranu; tak to sprawdzaja testy.
+enter, esc, bs, del, home, end, albo jeden znak), potem wydruk ekranu; tak to
+sprawdzaja testy. W polu tekstowym (nazwa, opis) strzalki, Home i End chodza po
+tekscie, Backspace i Del kasuja przy kursorze (wlasciciel 2026-10-09, uwaga 2).
 Okno samo nie zapisuje niczego poza OUT -- zapis robi czasownik w kreatorze.
 """
 import argparse
@@ -113,6 +115,9 @@ class Grid(object):
             self.shown.append(self.msg)
         self.msg = ""
         kind, idx, line = self.items[self.cur]
+        if kind in ("field", "after") and k in ("left", "right", "home", "end", "del", "bs"):
+            self._edit(kind, idx, k)
+            return
         if k in ("tab", "right") and not (k == "right" and kind in ("field", "after")):
             if k == "tab" or self._same_line(self.cur + 1, line):
                 self.cur = min(self.cur + 1, len(self.items) - 1)
@@ -159,11 +164,6 @@ class Grid(object):
             if kind == "val":
                 self.rows[idx]["value"] = self.rows[idx]["value"][:-1]
                 self._auto_desc()
-            elif kind in ("field", "after"):
-                f = self._field(kind, idx)
-                f["value"] = f["value"][:-1]
-                if f.get("key") == self.desc_key:
-                    self.desc_touched = True
             return
         if len(k) == 1 and k.isprintable():
             if kind == "val":
@@ -173,12 +173,40 @@ class Grid(object):
             elif kind in ("field", "after"):
                 self._type(kind, idx, k)
 
+    def _pos(self, f):
+        p = f.get("pos")
+        if p is None or p > len(f["value"]):
+            p = len(f["value"])
+        return max(0, p)
+
     def _type(self, kind, idx, ch):
         f = self._field(kind, idx)
+        p = self._pos(f)
         if len(f["value"]) < 60:
-            f["value"] += ch
+            f["value"] = f["value"][:p] + ch + f["value"][p:]
+            f["pos"] = p + 1
         if f.get("key") == self.desc_key:
             self.desc_touched = True
+
+    def _edit(self, kind, idx, k):
+        """Kursor w polu tekstowym: chodzi po tekscie, kasuje przy sobie."""
+        f = self._field(kind, idx)
+        v, p = f["value"], self._pos(f)
+        if k == "left":
+            p = max(0, p - 1)
+        elif k == "right":
+            p = min(len(v), p + 1)
+        elif k == "home":
+            p = 0
+        elif k == "end":
+            p = len(v)
+        elif k == "bs" and p > 0:
+            v, p = v[:p - 1] + v[p:], p - 1
+        elif k == "del" and p < len(v):
+            v = v[:p] + v[p + 1:]
+        if v != f["value"] and f.get("key") == self.desc_key:
+            self.desc_touched = True
+        f["value"], f["pos"] = v, p
 
     def _same_line(self, j, line):
         return 0 <= j < len(self.items) and self.items[j][2] == line
@@ -222,6 +250,10 @@ class Grid(object):
                     self.msg = u"Szablon '%s' już jest -- podaj inną nazwę." % v
                     return False
                 f["value"] = v
+        countable = [r for r in self.rows if r.get("can_off", True)]
+        if countable and not any(r.get("on") for r in countable):
+            self.msg = u"Zostaw włączony choć jeden szczebel."
+            return False
         for r in self.rows:
             if r.get("on") and r.get("value") not in ("-",) and r.get("editable", True):
                 v = r["value"]
@@ -313,7 +345,17 @@ class Grid(object):
         add(bl + nxt + u"      " + back,
             segs=[(("btn", "next"), len(bl), len(bl) + len(nxt)),
                   (("btn", "back"), len(bl) + len(nxt) + 6, len(bl) + len(nxt) + 6 + len(back))])
-        add(u" " + self.msg if self.msg else u"")
+        msg_rows = []
+        if self.msg:
+            words, cur_l = self.msg.split(u" "), u""
+            for wd_ in words:
+                if cur_l and len(cur_l) + 1 + len(wd_) > inner - 1:
+                    add(u" " + cur_l); msg_rows.append(len(lines) - 1); cur_l = wd_
+                else:
+                    cur_l = (cur_l + u" " + wd_) if cur_l else wd_
+            add(u" " + cur_l); msg_rows.append(len(lines) - 1)
+        else:
+            add(u"")
         title = u" %s " % (self.spec.get("title") or u"Szczeble")
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
@@ -321,6 +363,10 @@ class Grid(object):
         kind, idx, _ = self.items[self.cur]
         sp = spans.get((kind, idx))
         focus = (sp[0] + 1, sp[1] + 1, sp[2] + 1) if sp else None
+        self.caret = None
+        if sp and kind in ("field", "after"):
+            self.caret = (sp[0] + 1, sp[1] + 1 + self._pos(self._field(kind, idx)))
+        self.msg_rows = [r + 1 for r in msg_rows]
         return out, focus
 
 
@@ -346,6 +392,7 @@ def run_curses(g):
         scr.keypad(True)
         km = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
               curses.KEY_BTAB: "btab", curses.KEY_BACKSPACE: "bs", curses.KEY_ENTER: "enter", 10: "enter", 13: "enter",
+              curses.KEY_HOME: "home", curses.KEY_END: "end", curses.KEY_DC: "del",
               9: "tab", 27: "esc", 127: "bs", 8: "bs", 32: "space"}
         while g.done is None:
             h, wd = scr.getmaxyx()
@@ -368,11 +415,21 @@ def run_curses(g):
                         scr.addstr(y0 + fy, x0 + a, lines[fy][a:b], (curses.color_pair(2) if curses.has_colors() else curses.A_REVERSE) | curses.A_BOLD)
                     except curses.error:
                         pass
-            if g.msg:
-                try:
-                    scr.addstr(min(h - 2, y0 + len(lines)), x0, g.msg[:wd - x0 - 1], (curses.color_pair(3) if curses.has_colors() else curses.A_BOLD))
-                except curses.error:
-                    pass
+            for my in getattr(g, "msg_rows", []):
+                if y0 + my < h - 1:
+                    try:
+                        scr.addstr(y0 + my, x0 + 1, lines[my][1:-1][:wd - x0 - 2], (curses.color_pair(3) if curses.has_colors() else curses.A_BOLD))
+                    except curses.error:
+                        pass
+            caret = getattr(g, "caret", None)
+            try:
+                if caret and y0 + caret[0] < h - 1:
+                    curses.curs_set(1)
+                    scr.move(y0 + caret[0], x0 + caret[1])
+                else:
+                    curses.curs_set(0)
+            except curses.error:
+                pass
             scr.refresh()
             ch = scr.get_wch()
             if isinstance(ch, str):
