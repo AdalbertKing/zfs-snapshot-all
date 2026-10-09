@@ -679,7 +679,8 @@ Inspection / teardown:
                                     [--drop-tier=T] [--add-tier=T [--keep|--retain|--quiesce=..]]
                                     [--method=gfs|age|flat] [--hidden] -- --hidden marks a
                                     relationship's own template (relacja-NAZWA): F5 and
-                                    the template lists do not show it; a copy without
+                                    the GUI template lists do not show it (list-profiles
+                                    --json carries "hidden"); a copy without
                                     --hidden is an ordinary template.
                                     Open an existing template, change it, save it as
                                     your own -- into /etc/zfs-snapshot-all/profiles,
