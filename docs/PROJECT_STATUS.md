@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d319a799d073753e -->
+<!-- status-covers-digest: 2506204e775078fa -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Runda uwag 2026-10-09, paczka P3: klawisze F tylko na pasku, bez dubli (uwaga 4: „Klawisze F są podublowane z paska i wewnątrz okna”, „trzeba to zrobić poprawnie bez dubli”).**
+  - **Pasek (ostatnia linia ekranu) to jedyna legenda klawiszy F** (pomoc F1 opisuje
+    je słowami): F1 Pomoc, okna F2–F6, akcje bieżącego okna F7–F9 (także F7 Uruchom
+    na F6, którego pasek wcześniej nie miał) i F10, zawsze wszystkie, przy szerokości
+    od 80 kolumn. Ramki okien mówią już tylko o klawiszach nie-F (Enter, Ins, Del, Tab,
+    `e`). Dubel brał się stąd, że przy szerokim terminalu pasek doklejał F7–F9, a ramka
+    miała je zawsze.
+  - **Aktywne okno bez `[nawiasów]`:** zaznaczone kolorem na pasku. Gdy pełny zapis się
+    nie mieści, pasek przechodzi na zapis skrócony jak w Norton Commanderze: cyfra
+    w kolorze + nazwa, bez litery F — najpierw ze spacjami, a gdy i to się nie mieści,
+    bez nich (F3 przy 80 kolumnach: `1Pomoc2Zadania…10Wyjście`). Ctrl-R Odśwież
+    dochodzi, gdy jest miejsce.
+  - **Pomoc F1:** opis F5 Szablony; F7–F9 „podpisane TYLKO na pasku”. Usunięte martwe
+    przypisania klawiszy: cyfry 1–5 i `r` w oknach nic nie robiły, a pomoc mówiła, że
+    cyfry nie są skrótami.
+  - **Testy (`tui`):** każdy ekran przy 80/120/200 kolumnach — F tylko w linii paska,
+    każda akcja na pasku dokładnie raz; zaznaczenie aktywnego okna (F4) przy 80/120/200.
+    Na starym kodzie oba czerwone.
 
 - **Runda uwag 2026-10-09, paczki P1 i P2: odświeżanie po powrocie, pola tekstowe w tabeli, wyłączanie szczebli.**
   - **P1, odświeżanie (uwaga 1: „powrót do okna powinien zawsze wymuszać odśwież — wszędzie”):**

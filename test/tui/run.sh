@@ -151,8 +151,8 @@ else
     bad "relacje: listwa F3 / Szczeble" "$S4"
 fi
 SPW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 130 2>&1)"
-if has "$SPW" 'F7 Wznów F8 Eksport' && has "$SPW" 'F7 wznów  F8 eksport' && ! has "$SPW" 'F7 Pauza'; then
-    ok "relacje: na WSTRZYMANEJ relacji listwa i ramka mowia 'F7 Wznow', nie 'Pauza' (tester R4: B6)"
+if has "$SPW" 'F7 Wznów F8 Eksport' && ! has "$SPW" 'F7 wznów' && ! has "$SPW" 'F7 Pauza'; then
+    ok "relacje: na WSTRZYMANEJ relacji pasek mowi 'F7 Wznow', nie 'Pauza' (tester R4: B6); ramka bez F (uwaga 4)"
 else
     bad "relacje: podpis F7 na pauzie" "$SPW"
 fi
@@ -408,13 +408,13 @@ else
     bad "relacje: Enter na parze" "$TE"
 fi
 TEE="$(screen relacje down,tab,down,enter,esc)"
-if has "$TEE" '[F3 Relacje]' && has "$TEE" 'Enter szczegóły pary (config, cron)' && ! has "$TEE" '╔═ Zadanie:'; then
+if has "$TEE" 'Relacje na kolektorze' && has "$TEE" 'Enter szczegóły pary (config, cron)' && ! has "$TEE" '╔═ Zadanie:'; then
     ok "relacje: Esc z okna pary wraca na panel par (kursor zostaje na parach)"
 else
     bad "relacje: Esc z okna pary" "$TEE"
 fi
 TR="$(screen relacje tab,enter)"
-if has "$TR" '[F3 Relacje]' && has "$TR" 'ta para jest z rekordu, nie z crona'; then
+if has "$TR" 'Relacje na kolektorze' && has "$TR" 'ta para jest z rekordu, nie z crona'; then
     ok "relacje: Enter na parze z REKORDU mowi, ze nie ma jej linii ani sekcji"
 else
     bad "relacje: Enter na parze z rekordu" "$TR"
@@ -838,7 +838,7 @@ fi
 # R4-1 (wlasciciel 2026-09-24): F4 na F3 to OKNO Transfery, nie pauza --
 # klawisze F1-F6 sa zawsze glownymi oknami; pauza jest na F7.
 A="$(act F4)"
-if has "$A" '╔═ Zakończone' && has "$A" '[F4 Transfery]' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
+if has "$A" '╔═ Zakończone' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
     ok "akcje: F4 na ekranie Relacje przelacza na Transfery (R4-1), nie wstrzymuje relacji"
 else
     bad "akcje: F4 na F3" "$A"
@@ -942,8 +942,8 @@ act_empty() {   # <keys> -> ekran; dziennik komend w $XL (wyzerowany)
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
 }
 E="$(act_empty "")"
-if has "$E" 'F9 import z pliku'; then
-    ok "akcje: pusty kolektor -- stopka podpowiada F9 import i Ins nowa relacja (pve11 2026-09-23)"
+if has "$E" 'Ins nowa relacja' && ! has "$E" 'F9 import z pliku' && hasE "$E" '9Import|F9 Import'; then
+    ok "akcje: pusty kolektor -- ramka podpowiada Ins nowa relacja, F9 Import jest na pasku (pve11 2026-09-23; uwaga 4)"
 else
     bad "akcje: pusty kolektor stopka" "$E"
 fi
@@ -1194,8 +1194,8 @@ fi
 # (brak rekordu w status.json), 8 nalezy do zywych relacji. Listwa (dopisek
 # 'F7 ...') potrzebuje szerszego terminala, zeby sie zmiescic, a panel ma stac obok (prog 150) -- stad --width 160.
 TW130="$(screen transfery "" --width 160)"
-if has "$TW130" 'F7 Ukryj usunięte' && ! has "$TW130" 'F7 Pokaż usunięte' && has "$TW130" 'F7 ukryj usunięte   Enter'; then
-    ok "transfery: domyslnie POKAZANE (dziennik transferow), listwa i ramka mowia 'F7 ukryj usunięte'"
+if has "$TW130" 'F7 Ukryj usunięte' && ! has "$TW130" 'F7 Pokaż usunięte' && ! has "$TW130" 'F7 ukryj usunięte'; then
+    ok "transfery: domyslnie POKAZANE (dziennik transferow), pasek mowi 'F7 Ukryj usunięte', ramka bez F"
 else
     bad "transfery: domyslny stan F7" "$TW130"
 fi
@@ -1247,7 +1247,7 @@ fi
 # kazde oddaje terminal oknom tui/template.sh przez czasownik --ask.
 SZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen szablony --width 160 --height 30 2>&1)"
 if hasE "$SZ" '║ d7h24 +fabryczny +N najnowszych +24 godz., 7 dni +0 ' && has "$SZ" 'Szablony retencji (17)' \
-   && has "$SZ" 'Rodzaj   fabryczny' && has "$SZ" 'Szczebel' && has "$SZ" 'Ins nowy na podstawie zaznaczonego' && has "$SZ" '[F5 Szablony]'; then
+   && has "$SZ" 'Rodzaj   fabryczny' && has "$SZ" 'Szczebel' && has "$SZ" 'Ins nowy na podstawie zaznaczonego' && has "$SZ" 'F5 Szablony'; then
     ok "szablony: F5 -- tabela (nazwa, rodzaj, sposob, trzyma, uzyty), panel ze szczeblami, stopka z Ins/e/Del"
 else
     bad "szablony: ekran F5" "$SZ"
@@ -1264,8 +1264,8 @@ else
     bad "szablony: akcje" "ins: $A1" "e: $B1" "del: $C1"
 fi
 TF="$(screen zadania F4)"
-if has "$TF" '╔═ Zakończone' && has "$TF" '[F4 Transfery]'; then
-    ok "transfery: F4 z innego ekranu przelacza i podswietla klawisz w listwie"
+if has "$TF" '╔═ Zakończone' && ! has "$TF" '[F4'; then
+    ok "transfery: F4 z innego ekranu przelacza (aktywne okno na pasku kolorem, bez nawiasow)"
 else
     bad "transfery: F4" "$TF"
 fi
@@ -1296,7 +1296,7 @@ fi
 # ============================================================================
 Z4W="$(screen zadania)"
 # F5 wrocilo 2026-10-09 jako ekran Szablony (uwaga 24) -- Monitora nadal nie ma.
-if ! has "$Z4W" 'Monitor' && has "$Z4W" 'F5 Szablony'; then
+if ! has "$Z4W" 'Monitor' && hasE "$Z4W" 'F5 Szablony|5Szablony'; then
     ok "F5: ekran domyslny (F2) nie wspomina Monitora; F5 to dzis Szablony"
 else
     bad "F5: pozostalosc na ekranie" "$Z4W"
@@ -1584,16 +1584,58 @@ if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +\|' && has "$A" 'Datas
 else
     bad "wyglad: slowa w ASCII" "$A"
 fi
-HLP="$(screen relacje F1 --height 60)"
+HLP="$(screen relacje F1 --height 72)"
 if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' && has "$HLP" 'NAJPIERW komenda bash'; then
     ok "pomoc: F1 otwiera pomoc ze slownikiem kolumny Kopie"
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Szablony F6 Nośniki F10 Wyjście'; then
-    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 = Szablony)"
+if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Nośniki7Pauza8Eksport9Import10Wyjście'; then
+    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F (zapis skrocony, cyfra = F; F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
+fi
+# BEZ DUBLI (wlasciciel 2026-10-09, uwaga 4: "Klawisze F sa podublowane z paska i wewnatrz
+# okna"; "trzeba to zrobic poprawnie bez dubli"). Kazdy ekran, kazda szerokosc: klawisz F
+# wystepuje TYLKO w ostatniej linii (pasek), a kazda akcja okna jest na pasku dokladnie raz.
+NODUP=""
+for _sc in zadania relacje transfery szablony nosniki; do
+    for _w in 80 120 200; do
+        _o="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen "$_sc" --width "$_w" --height 30 2>&1)"
+        _body="$(printf '%s\n' "$_o" | sed '$d')"; _bar="$(printf '%s\n' "$_o" | tail -1)"
+        printf '%s' "$_body" | grep -qE '(^|[^A-Za-z0-9])F([1-9]|10)([^0-9]|$)' && NODUP="$NODUP $_sc/$_w:F-w-oknie"
+        case "$_sc" in
+            zadania) _acts="Sortuj" ;; relacje) _acts="Pauza Eksport Import" ;; transfery) _acts="usunięte" ;;
+            nosniki) _acts="Uruchom" ;; *) _acts="" ;;
+        esac
+        for _a in Pomoc Zadania Relacje Transfery Szablony Nośniki Wyjście $_acts; do
+            [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
+        done
+    done
+done
+if [ -z "$NODUP" ]; then
+    ok "klawisze: na kazdym ekranie (80/120/200 kolumn) F tylko na pasku, kazda akcja na pasku dokladnie raz"
+else
+    bad "klawisze: dubel albo brak na pasku" "$NODUP"
+fi
+# Aktywne okno: kolor (marks), bez [nawiasow] -- na kazdej szerokosci zaznaczony jest ten ekran.
+MKOUT="$("$PY" - "$TUI" <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+out = []
+for w in (80, 120, 200):
+    line, marks = m.key_bar_parts("transfery", w, m.screen_actions("transfery"))
+    act = [line[a:b] for a, b, k in marks if k == "active"]
+    out.append("%s:%s" % (w, "|".join(act)))
+print(" ".join(out))
+PYEOF
+)"
+if [ "$MKOUT" = "80:4Transfery 120:F4 Transfery 200:F4 Transfery" ]; then
+    ok "klawisze: aktywne okno zaznaczone na pasku kolorem (marks), bez nawiasow"
+else
+    bad "klawisze: zaznaczenie aktywnego okna" "got=$MKOUT"
 fi
 # Zadnego slownika kodow wyjscia w kolumnie Kopie: to slowa wlasciciela.
 if ! hasE "$S" 'KRYTYCZNY|NIEZNANY|najgorszy werdykt'; then

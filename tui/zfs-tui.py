@@ -1570,7 +1570,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         title = u"Zadania na %s (%s, %s) -- %s" % (
             host, plural(len([r for r in rows if r["kind"] == "job"]), "zadanie", "zadania", u"zadań"),
             plural(n_rel, "relacja", "relacje", "relacji"), ZAD_SORT_LABELS[sort_mode])
-        footer = u"F7 sortowanie" + (u"   Enter szczegóły" if rows else "")
+        footer = u"Enter szczegóły" if rows else ""
         lb = box(ch, title, body, lbw, footer=footer)
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
@@ -1598,8 +1598,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("zadania", width, extra=" ".join("%s %s" % a for a in screen_actions("zadania"))))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "zadania", width, screen_actions("zadania"))
     return scr
 
 
@@ -1639,6 +1638,7 @@ class Screen(object):
 
     def __init__(self):
         self.lines, self.cursor_y, self.bars, self.titles, self.cmd_y = [], None, set(), set(), None
+        self.marks = {}   # linia -> [(od, do, "active"|"key")]: pasek F (aktywne okno, cyfry)
 
 
 def top_bar(data, width, now, ascii_only, err_count):
@@ -1682,22 +1682,50 @@ def screen_actions(active, hide_gone=False, paused=False):
     return []
 
 
-def key_bar(active, width, extra=""):
-    """Listwa F-klawiszy. Przy 80 kolumnach miesci sie DOKLADNIE, wiec kazde
-    slowo tu jest policzone; przy szerszym terminalu dochodza akcje okna
-    (F7-F9, `extra`) i odswiezenie (F5)."""
-    parts = ["F1 Pomoc"]
+def key_bar_parts(active, width, actions=()):
+    """Pasek klawiszy F (wlasciciel 2026-10-09, uwaga 4: "wszystkie informacje o
+    klawiszach F w calym pakiecie na niebieskim pasku, a na dolnej ramce jedynie
+    unikalne dla okna inne niz F"; "trzeba to zrobic poprawnie bez dubli").
+    JEDYNE miejsce, gdzie ekran mowi o F: F1, okna F2-F6, akcje okna F7-F9 i F10 --
+    zawsze wszystkie, przy kazdej szerokosci. Aktywne okno bez [nawiasow]: zaznacza
+    je kolor (marks). Gdy pelny zapis sie nie miesci, zapis skrocony jak w Norton
+    Commanderze: cyfra (w kolorze) + nazwa, bez litery F.
+    -> (linia, [(od, do, "active"|"key")])"""
+    items = [("F1", u"Pomoc", None)]
     for key, fk, label in SCREENS:
-        parts.append(("[%s %s]" if key == active else "%s %s") % (fk, label))
-    parts.append(u"F10 Wyjście")
-    line = " " + " ".join(parts)
-    if len(line) > width:
-        line = line[1:]
-    if extra and width >= len(line) + len(extra) + 1:
-        line += " " + extra
+        items.append((fk, label, key))
+    items += [(k, lab, None) for k, lab in actions]
+    items.append(("F10", u"Wyjście", None))
+    for compact, sep in ((False, u" "), (True, u" "), (True, u"")):
+        line, marks = u" ", []
+        for fk, label, key in items:
+            if line.strip():
+                line += sep
+            start = len(line)
+            num = fk[1:] if compact else fk
+            line += num + (u"" if compact else u" ") + label
+            if compact:
+                marks.append((start, start + len(num), "key"))
+            if key == active:
+                marks.append((start, len(line), "active"))
+        if len(line) <= width:
+            break
     if width >= len(line) + 16:
-        line += u" Ctrl-R Odśwież"
-    return fit(line, width)
+        line += u"  Ctrl-R Odśwież"
+    return fit(line, width), marks
+
+
+def push_key_bar(scr, active, width, actions=()):
+    line, marks = key_bar_parts(active, width, actions)
+    scr.lines.append(line)
+    y = len(scr.lines) - 1
+    scr.bars.add(y)
+    scr.marks[y] = marks
+
+
+def key_bar(active, width, extra=""):
+    """Sama linia paska (testy i stare wywolania); akcje okna przez push_key_bar."""
+    return key_bar_parts(active, width)[0]
 
 
 def source_error_body(ch, key, data, verb):
@@ -2112,7 +2140,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     scr = Screen()
     host = (data.jobs or {}).get("host") or (data.status or {}).get("host") or "?"
     _paused = bool(rows and 0 <= cursor < len(rows) and ((rows[cursor].get("rel") or {}).get("paused_local")))
-    _acts = " ".join("%s %s" % a for a in screen_actions("relacje", paused=_paused))
+    _acts = screen_actions("relacje", paused=_paused)
     if data.failed("status"):
         body = source_error_body(ch, "status", data, "status")
         scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, "Relacje na kolektorze %s" % host, body, width)
@@ -2120,8 +2148,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
         scr.lines = scr.lines[:height - 1]
-        scr.lines.append(key_bar("relacje", width, extra=_acts))
-        scr.bars.add(len(scr.lines) - 1)
+        push_key_bar(scr, "relacje", width, _acts)
         return scr
     live = [r for r in rows if not (r["kind"] == "relation" and r["rel"].get("state") == "removed")]
     title = "Relacje na kolektorze %s (%d)" % (host, len(live))
@@ -2290,9 +2317,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         btitle += u", %s" % how
     if wide and pairs:
         pass   # R5-4: nazwy kolumn stoja nad kolumnami, nie w tytule
-    _pw = u"wznów" if _paused else u"pauza"
-    bfoot = (u"Enter szczegóły  F7 %s  F8 eksport  F9 import  Del usuń  Ins nowa  Tab pary" % _pw if width >= 100
-             else u"Enter F7:%s F8:eksport F9:import Del Ins Tab" % _pw) if rows else u"F9 import z pliku   Ins nowa relacja"
+    # Bez klawiszy F: te sa na pasku (uwaga 4, bez dubli).
+    bfoot = u"Enter szczegóły  Ins nowa  Del usuń  Tab pary" if rows else u"Ins nowa relacja"
     if focus == "pairs":
         bfoot = u"Enter szczegóły pary (config, cron)   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
@@ -2304,8 +2330,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("relacje", width, extra=_acts))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "relacje", width, _acts)
     return scr
 
 
@@ -2882,7 +2907,7 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
         # MOWI, w ktorym stanie jest (nie ma innego wspolnego naglowka "Transfery").
         done_title = u"Zakończone (%d) -- bez usuniętych relacji" % len(done) if hide_gone else u"Zakończone (%d)" % len(done)
         donebox = box(ch, done_title, dbody, lbw,
-                      footer=((u"F7 pokaż usunięte" if hide_gone else u"F7 ukryj usunięte") + (u"   Enter szczegóły" if allrows else "")))
+                      footer=(u"Enter szczegóły" if allrows else ""))
         left = runbox + donebox
         if cur_y:
             which, y = cur_y
@@ -2910,8 +2935,7 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("transfery", width, extra=" ".join("%s %s" % a for a in screen_actions("transfery", hide_gone))))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "transfery", width, screen_actions("transfery", hide_gone))
     return scr
 
 
@@ -3031,8 +3055,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("monitor", width))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "monitor", width)
     return scr
 
 
@@ -3105,7 +3128,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         while len(body) < list_h + 2:
             body.append("")
         lb = box(ch, u"Repliki na nośnikach wymiennych (%d)" % len(reps), body,
-                 lbw, footer=u"Enter szczegóły (e zmienia)   F7 uruchom teraz   Ins nowa   Del usuń" if reps else u"Ins nowa replika")
+                 lbw, footer=u"Enter szczegóły (e zmienia)   Ins nowa   Del usuń" if reps else u"Ins nowa replika")
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -3141,8 +3164,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("nosniki", width))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "nosniki", width, screen_actions("nosniki"))
     return scr
 
 
@@ -3226,8 +3248,7 @@ def render_szablony(data, cursor, width, height, now, ch, message=""):
     while len(scr.lines) < height - 1:
         scr.lines.append(fit("", width))
     scr.lines = scr.lines[:height - 1]
-    scr.lines.append(key_bar("szablony", width))
-    scr.bars.add(len(scr.lines) - 1)
+    push_key_bar(scr, "szablony", width)
     return scr
 
 
@@ -3259,6 +3280,8 @@ HELP = [
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress);",
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
+    u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
+    u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Nośniki    repliki i 4 stany nośnika; Ins/Del/F7 uruchom, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
@@ -3277,7 +3300,8 @@ HELP = [
     u"                 do linii.",
     "",
     u"  F1-F6             główne okna; F10 wyjście",
-    u"  F7 F8 F9          akcje BIEŻĄCEGO okna, podpisane w listwie i w ramce",
+    u"  F7 F8 F9          akcje BIEŻĄCEGO okna -- podpisane TYLKO na pasku na dole",
+    u"                    (wąski terminal: zapis skrócony, cyfra = klawisz F)",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
     u"  Ctrl-R            odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
@@ -4557,8 +4581,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("r"): "r", ord("t"): "t", ord("e"): "e",
-               ord("1"): "F2", ord("2"): "F3", ord("3"): "F4", ord("4"): "F5", ord("5"): "F6",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e",
                ord("?"): "F1", ord("h"): "F1"}
 
 
@@ -4594,6 +4617,18 @@ def curses_loop(ui):
                 stdscr.addstr(y, 0, line, base)
             except curses.error:
                 pass
+            # Pasek F: aktywne okno i cyfry zapisu skroconego w kolorze (bez [nawiasow]).
+            for a, b, kind in scr.marks.get(y, ()):
+                if a >= len(line):
+                    continue
+                if kind == "active":
+                    attr = (curses.color_pair(7) if curses.has_colors() else curses.A_REVERSE) | curses.A_BOLD
+                else:
+                    attr = (curses.color_pair(8) if curses.has_colors() else curses.A_BOLD) | curses.A_BOLD
+                try:
+                    stdscr.addstr(y, a, line[a:b], attr)
+                except curses.error:
+                    pass
             if y in scr.bars or y == scr.cursor_y or not curses.has_colors():
                 continue
             for word, pair in COLOR_WORDS:
@@ -4621,6 +4656,11 @@ def curses_loop(ui):
                     curses.init_pair(i, fg, -1)
                 except curses.error:
                     pass
+            try:
+                curses.init_pair(7, curses.COLOR_YELLOW, curses.COLOR_BLUE)   # aktywne okno na pasku F
+                curses.init_pair(8, curses.COLOR_WHITE, curses.COLOR_BLACK)   # cyfra w zapisie skroconym
+            except curses.error:
+                pass
             try:
                 curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_CYAN)
             except curses.error:
