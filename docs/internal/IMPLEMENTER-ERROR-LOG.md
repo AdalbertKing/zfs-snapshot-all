@@ -1919,7 +1919,8 @@ the source inline, still pointed at the target's templates; and the lookup of a
 source template by the TARGET's name could not find it in the source profile's
 own namespace. Found by looking at the screen, not by a test.
 
-**Cause.** R12: the L1/L2 tests asserted the ARGUMENTS the wizard hands on and
+**Cause.** R12: the local-copy tests (the wizard's local path in the tui suite,
+the L2 section of the localbackup suite) asserted the ARGUMENTS the wizard hands on and
 the record it writes, never the rendered retention on the source line. A field
 that is accepted, stored and displayed reads as working.
 

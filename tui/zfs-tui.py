@@ -4015,7 +4015,7 @@ class UI(object):
         if obj.get("perr"):
             out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
         else:
-            out.append(fit(u" szablonów do wyboru: %d (Enter na polu Profil)" % len(obj.get("profiles") or []), width - 4))
+            out.append(fit(u" szablonów do wyboru: %d (Enter na polu Szablon)" % len(obj.get("profiles") or []), width - 4))
         out.append(fit(u" strzałki = pole, pisz = wartość, Backspace, spacja = przełącz, Enter na [ PLAN ], Esc = anuluj", width - 4))
         if self.message:
             out += ["", fit(u" ! " + self.message, width - 4)]

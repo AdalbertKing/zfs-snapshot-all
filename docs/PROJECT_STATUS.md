@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 07957578e067690a -->
+<!-- status-covers-digest: 2cb55a5c1f6f348c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,7 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Kampania testów GUI 2026-10-09 („patrz jak człowiek”), paczka 1: błędy i słowa.** Ekrany F2–F6 i kreatory przechodzone na pve9b na żywych danych (kreatory przez nagrywający whiptail, do planu, bez WYKONAJ); lista znalezisk K1–K48 w notatkach kampanii.
+- **Kampania testów GUI 2026-10-09 („patrz jak człowiek”), paczka 1: błędy i słowa.** Ekrany F2–F6 i kreatory przechodzone na pve9b na żywych danych (kreatory przez nagrywający whiptail, do planu, bez WYKONAJ); lista znalezisk K1–K48 w notatkach kampanii (poza repozytorium); numery K przy poprawkach w kodzie.
   - **Błąd (E78): relacja lokalna pomijała retencję źródła.** `local-backup
     --source-profile` przy szablonie płaskim przycinał źródło liczbą celu (na pve9b
     `d30-src-D7` → źródło `-D30`). Teraz sekcja źródła używa szablonów źródła
