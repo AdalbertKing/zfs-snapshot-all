@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a8bb23b4d0b60b09 -->
+<!-- status-covers-digest: 585281e33961ebf6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -27,11 +27,12 @@
     i retencja (tabela szczebli); Ręczna edycja konfigu; Zapisz ustawienia relacji jako
     szablon. Po „Szablon” i „Harmonogram…” retencję ŹRÓDŁA ustawia to samo okno-tabela
     co w kreatorze (`tui/retention-lib.sh`) — druga lista szablonów dla źródła zniknęła.
-  - **Ukryty szablon relacji:** „Harmonogram kopii i retencja” i „Ręcznie…” w kroku 6
-    kreatora otwierają tę samą tabelę co szablon na F5 (sposób, wszystkie szczeble,
+  - **Ukryty szablon relacji:** „Ręcznie…” w kroku 6 kreatora i „Harmonogram kopii
+    i retencja” w „Zmień relację” otwierają tę samą tabelę co szablon na F5 (sposób, wszystkie szczeble,
     liczby, zamrażanie; `template.sh relation`), a wynik zapisują jako `relacja-<NAZWA>`
     przez `save-profile --hidden` (`[profile] hidden = yes`, `list-profiles` mówi
-    `"hidden"`). F5 i listy szablonów go nie pokazują. W kreatorze szkic idzie za nazwą
+    `"hidden"` w `--json`). Nie pokazują go F5, lista szablonów w kreatorze i w „Zmień
+    relację”; `list-profiles` w linii poleceń wypisuje go jak każdy. W kreatorze szkic idzie za nazwą
     relacji (zmiana nazwy w kroku 7 przenosi go) i znika, gdy relacja nie powstanie;
     w „Zmień relację” niewykonany plan przywraca poprzednią treść (albo usuwa plik).
   - **Z relacji szablon:** „Zapisz ustawienia relacji jako szablon” kopiuje szablon relacji
