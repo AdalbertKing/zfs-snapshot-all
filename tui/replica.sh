@@ -115,7 +115,7 @@ XARGS=()
 # 0 = przygotowano (PREP_DST), 1 = wstecz.
 prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = wstecz
     # P5 (właściciel 2026-10-09): bez pytań o nazwy -- pula nazywa się sama (<host>-<replika>
-    # albo pula tej repliki), baza zawsze "replica". Dysk pamiętany po ID puli (GUID).
+    # albo pula tej repliki), baza "replica" (kolejny dysk: baza repliki). Dysk pamiętany po ID puli (GUID).
     local pool="$1" base="$2" items=() id sz model serial onit dev
     info "Replika $NAME -- nośnik" "Szukam dysków, których nic nie używa..."
     "$ZB" prepare-media --list >"$TMPD/disks.tsv" 2>"$TMPD/disks.err" || :
