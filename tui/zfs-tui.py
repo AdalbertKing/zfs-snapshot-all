@@ -828,7 +828,9 @@ def load_profiles(repo, files, data):
         doc, err = None, None
     else:
         doc, err = run_verb(repo, ["list-profiles", "--json", "--no-render"])
-    data.profiles = (doc or {}).get("profiles", [])
+    # Ukryty szablon relacji (relacja-<NAZWA>, P4 2026-10-09) nie jest szablonem do wyboru:
+    # F5 go nie pokazuje (zmienia go "Zmien relacje -> Harmonogram kopii i retencja").
+    data.profiles = [p for p in (doc or {}).get("profiles", []) if not p.get("hidden")]
     if err:
         data.errors["profiles"] = err
     return data.profiles, err

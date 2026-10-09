@@ -11618,6 +11618,22 @@ else
     bad "saveprof: --method ladder" "$(cat "$WORK/pf.err")"
 fi
 rm -f "$PF/user/mt1.conf" "$PF/user/mt2.conf" "$PF/user/mt4.conf"
+# --hidden (owner 2026-10-09, P4: "ukryty szablon relacji"): [profile] hidden = yes,
+# list-profiles --json says "hidden":"yes"; a copy WITHOUT --hidden is an ordinary
+# template (the mark is never inherited).
+pf_lp() { ( export PROFILE_USER_ROOT="$PF/user" PROFILE_ROOT="$PF/pkg" CRON_CONFIG="$PF/cron.conf" SERVER_CONF="$PF/no-server-conf"
+            bash "$ZFSBACKUP" list-profiles --json --no-render ) 2>/dev/null; }
+if pf_run --from=d7h24 --as=relacja-r1 --hidden --tier=daily --keep=9 \
+   && grep -qE '^[[:space:]]*hidden[[:space:]]*=[[:space:]]*yes$' "$PF/user/relacja-r1.conf" \
+   && pf_lp | tr -d '\n' | grep -qE '"name":"relacja-r1"[^}]*"hidden":"yes"' \
+   && pf_run --from=relacja-r1 --as=r1-szablon \
+   && ! grep -qE '^[[:space:]]*hidden[[:space:]]*=' "$PF/user/r1-szablon.conf" \
+   && pf_sec r1-szablon daily | grep -qE 'keep += 9$'; then
+    ok "saveprof: --hidden marks a relationship's own template (list-profiles: hidden); a copy without it is ordinary"
+else
+    bad "saveprof: --hidden" "$(cat "$WORK/pf.err")" "$(grep -n 'hidden' "$PF/user/relacja-r1.conf" "$PF/user/r1-szablon.conf" 2>&1)" "$(pf_lp | tr -d '\n' | grep -o '"name":"relacja-r1"[^}]*' | cut -c1-300)"
+fi
+rm -f "$PF/user/relacja-r1.conf" "$PF/user/r1-szablon.conf"
 rm -f "$PF/user/at1.conf" "$PF/user/at2.conf" "$PF/pkg/default.conf"
 
 # ---------------------------------------------------------------------------

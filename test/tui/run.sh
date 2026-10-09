@@ -1831,6 +1831,7 @@ case "$1" in
     prepare-source) : > "$NR_DIR/installed"; echo "prepared" ;;
     source-pruners) [ -n "${NR_PRUNERS:-}" ] && printf '%b' "$NR_PRUNERS"; exit 0 ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
+    delete-profile) echo "delete-profile: ok (atrapa)" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -2829,6 +2830,126 @@ else
     bad "template: drabina, sposob" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -14)"
 fi
 rm -rf "$TP"
+
+# ============================================================================
+# P4 (wlasciciel 2026-10-09): relacja "z szablonu i recznie" -- ukryty szablon relacji.
+# Kreator: krok 6 "Recznie..." = tabela szczebli (tui/template.sh relation), wynik
+# save-profile --hidden jako relacja-<NAZWA>; zmiana nazwy w kroku 7 przenosi szkic.
+# ============================================================================
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/data
+0${T}next
+0${T}hdd/backups
+0${T}__manual__
+0${T}pve9b
+0${T}root
+0${T}grant|skip
+0${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-pve9b --hidden --force --description=' "$NR/zb.log" \
+   && has "$NROUT" "--profile=relacja-pve9b " && ! grep -q '^delete-profile' "$NR/zb.log"; then
+    ok "new-relation: Recznie -- tabela szczebli, ukryty szablon relacja-<nazwa> (--hidden), relacja z --profile=relacja-<nazwa>"
+else
+    bad "new-relation: Recznie" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(tail -3 "$NR/err")"
+fi
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/data
+0${T}next
+0${T}hdd/backups
+0${T}__manual__
+0${T}inna
+0${T}root
+0${T}grant|skip
+0${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=relacja-pve9b --as=relacja-inna --hidden --force' "$NR/zb.log" \
+   && grep -q '^delete-profile relacja-pve9b --yes' "$NR/zb.log" && has "$NROUT" "--profile=relacja-inna "; then
+    ok "new-relation: Recznie + inna nazwa w kroku 7 -- szkic przeniesiony na relacja-<nowa nazwa>, stary usuniety"
+else
+    bad "new-relation: Recznie + zmiana nazwy" "rc=$NRRC" "$(cat "$NR/zb.log")"
+fi
+
+# Zmien relacje (tui/edit-relation.sh): menu 6 pozycji; "Harmonogram kopii i retencja" =
+# tabela (template.sh relation) -> ukryty szablon -> okno retencji zrodla -> plan.
+ER="$(mktemp -d)"; mkdir -p "$ER/bin"
+cp "$NR/bin/whiptail" "$ER/bin/whiptail"
+cat > "$ER/bin/zb" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
+case "$1" in
+    status)         echo '{"relations":[{"name":"r1","state":"active","profile":"d7h24","source_profile":"","peer_host":"192.168.28.99","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
+    list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
+    save-profile)   echo "save-profile: ok (atrapa)" ;;
+    delete-profile) echo "delete-profile: ok (atrapa)" ;;
+    edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo ;; esac ;;
+    *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+esac
+EOF
+# Kazde okno-tabela bierze KOLEJNA linie klawiszy z $ER/gridkeys (brak linii = Esc):
+# tabela szczebli i okno retencji zrodla dostaja rozne klawisze, a powrot do tabeli
+# po Wstecz z planu nie kreci sie w kolko.
+cat > "$ER/bin/grid" <<'EOF'
+#!/bin/bash
+n=$(cat "$NR_DIR/grid.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/grid.n"
+k=$(sed -n "${n}p" "$NR_DIR/gridkeys"); [ -n "$k" ] || k=esc
+exec $GRID_PY "$GRID_REPO/tui/grid.py" --keys "$k" "$@"
+EOF
+chmod +x "$ER/bin/zb" "$ER/bin/grid"
+er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki w $ER
+    rm -f "$ER/wt.log" "$ER/wt.n" "$ER/zb.log" "$ER/grid.n"
+    printf '%s' "$1" > "$ER/answers"
+    printf '%b\n' "${2:-enter\nenter}" > "$ER/gridkeys"
+    ( export NR_DIR="$ER" NR_FIX="$P10" WHIPTAIL="$ER/bin/whiptail" ZFS_BACKUP="$ER/bin/zb" PYTHON="$PY"
+      export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
+      bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
+}
+EROUT=$(er_run "0${T}harm
+0${T}
+"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden --force --description=' "$ER/zb.log" \
+   && grep -q '^edit-relation r1 --profile=relacja-r1 --source-profile= --yes' "$ER/zb.log" && ! grep -q '^delete-profile' "$ER/zb.log" \
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Dodaj do kopii dataset ze źródła' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
+    ok "edit-relation: menu 6 pozycji; Harmonogram kopii i retencja -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
+else
+    bad "edit-relation: harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
+fi
+EROUT=$(er_run "0${T}harm
+1${T}
+" "enter\nenter\nesc"); ERRC=$?
+if [ "$ERRC" -ne 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden' "$ER/zb.log" \
+   && grep -q '^delete-profile relacja-r1 --yes' "$ER/zb.log" && ! grep -q -- '--yes$' <(grep '^edit-relation' "$ER/zb.log"); then
+    ok "edit-relation: plan nie wykonany -- ukryty szablon relacji cofniety (nie bylo go wczesniej = usuniety)"
+else
+    bad "edit-relation: cofniecie ukrytego szablonu" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+EROUT=$(er_run "0${T}szablon
+0${T}d30h24
+0${T}
+" "right,bs,bs,1,2,enter"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d30h24 --force --tier=hourly --keep=12 --as=d30h24-src-H12D30 ' "$ER/zb.log" \
+   && grep -q '^edit-relation r1 --profile=d30h24 --source-profile=d30h24-src-H12D30 --yes' "$ER/zb.log" \
+   && ! grep -qF '2/2 retencja na źródle' "$ER/wt.log"; then
+    ok "edit-relation: Szablon -> gotowy szablon celu, retencja zrodla w TYM SAMYM oknie-tabeli co kreator (bez drugiej listy szablonow)"
+else
+    bad "edit-relation: szablon + retencja zrodla" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+fi
+EROUT=$(er_run "0${T}zapisz
+0${T}r1-szablon
+0${T}
+1${T}
+"); ERRC=$?
+if grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia relacji r1$' "$ER/zb.log" && ! grep -q -- '--hidden' "$ER/zb.log"; then
+    ok "edit-relation: Zapisz ustawienia relacji jako szablon -- zwykly szablon (bez --hidden), widoczny na F5"
+else
+    bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+rm -rf "$ER"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
