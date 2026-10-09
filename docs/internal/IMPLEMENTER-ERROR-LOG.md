@@ -1907,6 +1907,27 @@ exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
 
+### E78 — a local relationship's source retention was never applied (found 2026-10-09, R12)
+
+**Genesis.** PR #490/#492 (L1/L2, local copy as a relationship) let the wizard
+pass `--source-profile` to `local-backup`, and the record stored it
+(`SOURCE_PROFILE=d30-src-D7` on pve9b). The owner's GUI campaign of 2026-10-09
+read the installed cron line: the SOURCE was pruned with `-D30`, the target's
+count. `local-backup` prepared the source profile (`source_profile_prepare`) and
+then never read it for a flat profile -- the `[dataset:]` section, which prunes
+the source inline, still pointed at the target's templates; and the lookup of a
+source template by the TARGET's name could not find it in the source profile's
+own namespace. Found by looking at the screen, not by a test.
+
+**Cause.** R12: the local-copy tests (the wizard's local path in the tui suite,
+the L2 section of the localbackup suite) asserted the ARGUMENTS the wizard hands on and
+the record it writes, never the rendered retention on the source line. A field
+that is accepted, stored and displayed reads as working.
+
+**Rule (R12).** For a retention option, the proof is the rendered `delsnaps`
+flag on the scope it governs, with a control without the option -- now the K21
+test in the localbackup suite.
+
 ### E77 — two pinned contracts changed without looking for their pins (2026-10-09, R12)
 
 **Genesis.** PR #494 (F5 "Szablony", owner note 24) changed two contracts on
@@ -1924,6 +1945,14 @@ already -- `grep` for the old key/word/function before pushing, not after CI.
 
 **Rule (R12, unchanged).** Before reversing a contract, grep the suites for what
 pins it (here: "F5", "Odśwież", "shadow", profile_file) and run those sections.
+
+**Repeat, 2026-10-09 (#506, GUI campaign).** The rule was not applied in full. The
+screen words changed on purpose (state active -> działa, raw cron -> words, `>` ->
+arrow, "Krok 1/10" -> "Krok 1"); I grepped for some pins (`active`, `rc=`, `co:`)
+and fixed seven, and CI found eleven more (`seeding`, `removed`, `*/15`, `pve10>bkp`,
+`24 * * * *`, the ASCII render, the step title). One was a real layout effect, not a
+stale pin: "pierwsza kopia" was wide enough to push the Kopie column out at 120
+columns. The grep has to cover every OLD word the change replaces, one by one.
 
 ### E76 — a passive replica skipped as "already current" and copied nothing (2026-10-08, R12)
 

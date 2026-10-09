@@ -2100,6 +2100,21 @@ profile_to_src_id() {   # <template identity>
 # Without this the candidate carried two [template:...src_keep_hourly] sections
 # and gen-cron refused the whole thing -- measured on a host whose config still
 # had the family from an earlier run.
+# The SOURCE copy of a target template. With --source-profile the source half was
+# rendered from ANOTHER profile, under its own namespace (profile__<source>__<tier>),
+# so the target identity is looked up there by its tier -- the last '__' part.
+# Owner campaign 2026-10-09 (K21): a local relationship's source retention was the
+# target's, whatever the wizard asked for; the source profile was prepared and then
+# never read for a flat profile, and this lookup by the target's name found nothing.
+source_template_section() {   # <target template identity>
+    if [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && [ -n "${SRC_PROFILE_NAME:-}" ]; then
+        local ns; ns="$(profile_ns_name "$SRC_PROFILE_NAME" "${1##*__}")"
+        profile_template_section "$ns" "$SRC_PROFILE_TPL_FILE" | sed "1s|.*|[template:$1]|"
+    else
+        profile_template_section "$1" "$PROFILE_TPL_FILE"
+    fi
+}
+
 emit_source_template_family() {   # <rendered prune fragment> [existing config]
     local id src section
     while IFS= read -r id; do
@@ -2108,7 +2123,7 @@ emit_source_template_family() {   # <rendered prune fragment> [existing config]
         if [ -n "${2:-}" ] && [ -f "$2" ] && grep -qxF "[template:$src]" "$2"; then
             continue
         fi
-        section="$(profile_template_section "$id" "${SRC_PROFILE_TPL_FILE:-$PROFILE_TPL_FILE}")"
+        section="$(source_template_section "$id")"
         [ -n "$section" ] || die "local-backup source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE retention that would silently reuse the TARGET's template authority (REV-20260811-106)"
         printf '[template:%s]\n' "$src"
         printf '%s\n' "$section" | tail -n +2
@@ -7826,12 +7841,23 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             die "local-backup: relationship '$lb_name' already exists on this host (state $(record_get "$_lbrec" STATE)). Choose another --name, or remove it first (zfs-backup.sh delete-relation $lb_name). Nothing was changed."
         fi
     fi
+    # A FLAT profile prunes the source INLINE, in the tiers the [dataset:] section
+    # references -- so with --source-profile those tiers must be the SOURCE family
+    # (same schedules and families, the source's counts). A ladder keeps its source
+    # retention in a [prune:] of its own, below.
+    local lb_src_inline=0
+    [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && [ "$no_copy" -eq 0 ] && ! [ -s "${PROFILE_PRUNE_FILE:-}" ] && lb_src_inline=1
     {
+        [ "$lb_src_inline" -eq 1 ] && emit_source_template_family "$PROFILE_DS_FILE" "$cand"
         for r in "${roots[@]}"; do
             echo
             echo "[dataset:$r]"
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
-            profile_emit "$PROFILE_DS_FILE"
+            if [ "$lb_src_inline" -eq 1 ]; then
+                emit_source_prune_fragment "$PROFILE_DS_FILE"
+            else
+                profile_emit "$PROFILE_DS_FILE"
+            fi
             [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
             # No `dst` line at all when nothing is copied. gen-cron reads an
             # absent dst as "create a snapshot and transfer nothing" -- the
@@ -7987,15 +8013,17 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     echo "  Preset:           $profile"
     # REV-102: the two independent retention policies, both from the same preset
     # ladder at CREATE, editable separately in the candidate before install.
-    local ladder
-    ladder="$(grep -oE 'retain *= *-[HDWMY][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMY][0-9]+' | tr '\n' ' ')"
-    echo "  Retencja ZRODLA:  GFS ${ladder:-(patrz profil)}(na kazdym zrodle -- ogranicza automated_hourly_ na produkcji)"
+    local ladder sladder
+    ladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
+    sladder="$ladder"
+    [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && sladder="$(grep -oE 'retain *= *-[HDWMYhdwmy][0-9]+' "$SRC_PROFILE_TPL_FILE" 2>/dev/null | grep -oE '\-[HDWMYhdwmy][0-9]+' | tr '\n' ' ')"
+    echo "  Retencja ZRODLA:  ${sladder:-(patrz profil)}$([ -n "${SRC_PROFILE_NAME:-}" ] && echo "z '$SRC_PROFILE_NAME' ")(na kazdym zrodle)"
     # No target, no target retention -- REV-20260901-132 acceptance 3, which
     # the no-copy fix left printing a ladder for a store that does not exist.
     if [ "$no_copy" -eq 1 ]; then
         echo "  Retencja CELU:    (brak celu -- nic nie jest kopiowane)"
     else
-        echo "  Retencja CELU:    GFS ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA; edytuj osobno w kandydacie przed instalacja)"
+        echo "  Retencja CELU:    ${ladder:-(patrz profil)}(na magazynie -- NIEZALEZNA od zrodla)"
     fi
     [ -n "$lb_recursion" ] && echo "  Rekursja:         $lb_recursion -- migawki, prune i straznik obejmuja tez dzieci (obecne i przyszle)"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
@@ -8168,7 +8196,9 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             fi
         elif [ "$lb_replace" -eq 1 ] && zfs list -H -o name "$target/$sr" >/dev/null 2>&1; then
             log "  already copied: $sr -> $target/$sr (no new seed)"
-        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
+        # -L: the relationship's name, as on its cron line -- without it the first copy
+        # stood on F4 as "(bez rel.)" (owner campaign 2026-10-09, K10).
+        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
             warn "  FAILED: $sr -> $target"
@@ -16262,7 +16292,16 @@ SCDUMP
         # copy written here would have been a second answer to "is this mine",
         # and the one on the screen would be the unverified one.
         case "${_sc_kind[$i]}" in dataset|prune|prune-bookmarks) ;; *) continue ;; esac
-        section_owned_by "$config" "[${_sc_kind[$i]}:${_sc_name[$i]}]" "$name" "${_sc_name[$i]}" || continue
+        # A LOCAL relationship is torn down by strip_local_relation_sections (the
+        # local-backup marker AND its pair_label), not by section_owned_by -- which
+        # knows only the copies (MANAGED_DATASETS) and so hid the SOURCE section:
+        # F2's job window said "nie znaleziono sekcji" (owner campaign 2026-10-09, K20).
+        # Same rule, so this screen still shows exactly the set teardown removes.
+        if [ "${RUX_MODE:-}" = local ]; then
+            local_section_of "$config" "[${_sc_kind[$i]}:${_sc_name[$i]}]" "$name" || continue
+        else
+            section_owned_by "$config" "[${_sc_kind[$i]}:${_sc_name[$i]}]" "$name" "${_sc_name[$i]}" || continue
+        fi
         owned+=("$i")
         while IFS=$'\001' read -r k v; do
             [ "$k" = use_template ] || continue
@@ -17335,6 +17374,16 @@ copy_shell_level() {
 # sections are the ones local-backup wrote for it: the `# managed-by: zfs-backup.sh
 # local-backup` marker AND `pair_label = <name>` -- both, so another relationship's
 # section, or a hand-written one that only borrowed the label, stays.
+# local_section_of <file> <exact header> <name> -- the section belongs to local
+# relationship <name>: the predicate strip_local_relation_sections drops by.
+local_section_of() {
+    cron_config_section "$1" "$2" | awk -v lbl="$3" '
+        { t = $0; sub(/^[ \t]+/, "", t)
+          if (t ~ /^# managed-by: zfs-backup\.sh local-backup /) mk = 1
+          if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); if (v == lbl) pl = 1 } }
+        END { exit !(mk && pl) }'
+}
+
 strip_local_relation_sections() {
     awk -v lbl="$2" '
         function flush() {

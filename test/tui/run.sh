@@ -57,17 +57,17 @@ S120="$(screen relacje "" --width 120)"
 S200="$(screen relacje "" --width 200)"
 # F3 W TRZECH PANELACH (szkic wlasciciela, 2026-09-11): lista jest WASKA, wiec
 # kolumny Kopie i Nastepny dochodza z szerokoscia; przy 80 sa trzy.
-if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +6.1M +[0-9]{2}:30 +║'; then
+if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +6.1M +[0-9]{2}:30 +║'; then
     ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), TYP, stan z rekordu, kopie z monitora, GB calej relacji, nastepny bieg (200 kolumn; wlasciciel 2026-09-12: typ i GB w liscie)"
 else
     bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S200"
 fi
-if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +║│'; then
+if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +działa +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +║│'; then
     ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Typ i Kopie -- panel stoi obok od 80"
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
 fi
-if hasE "$S120" 'Ostatni +brak zapisu w historii'; then
+if hasE "$S120" 'Ostatni +brak wpisu w'; then
     ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
 else
     bad "relacje: ostatni wynik w panelu" "$S120"
@@ -103,20 +103,20 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +seeding +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
+if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +1\. kopia +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
     ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona -- w kolumnie (200) i w panelu (120)"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
 fi
 # Rekord usuniety jest faktem, ale nie robota: jest, i jest OSTATNI.
-if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *removed' | cut -d: -f1)" -gt "$(printf '%s\n' "$S" | grep -n '^║ lab-vm101' | cut -d: -f1)" ] 2>/dev/null; then
+if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *usunięta' | cut -d: -f1)" -gt "$(printf '%s\n' "$S" | grep -n '^║ lab-vm101' | cut -d: -f1)" ] 2>/dev/null; then
     ok "relacje: rekord 'removed' jest widoczny i stoi na koncu listy"
 else
     bad "relacje: rekord removed" "$S"
 fi
 # Panel OBOK listy (prawy): pierwszy wiersz (duplikat) ma focus; zrodla i cel
 # NIE sa w panelu -- sa w dolnym panelu par (wlasciciel 2026-09-11).
-if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak zapisu w historii (nie wiadomo, nie 'OK')"; then
+if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak wpisu w historii transferów (to nie znaczy 'OK')"; then
     ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma"
 else
     bad "relacje: panel szczegolow" "$S" "$S200"
@@ -127,7 +127,7 @@ else
     bad "relacje: pary z rekordu" "$S"
 fi
 S4="$(screen relacje down,down,down,down --width 200 --height 40)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +24 \* \* \* \*   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
+if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +co godzinę \(:24\)   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
     ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; transfer nazwany wg KIERUNKU (Pobranie, nie Wysylka -- tester R4)"
 else
     bad "relacje: kursor i nastepny bieg" "$S4"
@@ -137,7 +137,7 @@ if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if hasE "$S4" 'Lokalny prune 44 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' && hasE "$S4" 'Zdalny prune +3 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' \
+if hasE "$S4" 'Lokalny prune co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Zdalny prune +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
    && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
     ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
 else
@@ -422,7 +422,7 @@ fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
 SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 200 2>&1)"
-if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +active PAUZA +aktualne +0B +-- pauza -- +║'; then
+if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +działa PAUZA +aktualne +0B +-- pauza -- +║'; then
     ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
@@ -764,7 +764,7 @@ fi
 # progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA SAMA
 # regula co werdykt (monitors_for_job); R3-3 laczy straznik+progi w JEDNA
 # linie. Z fikstur pve10: lab-vm101 ma monitor "*/15 * * * *", warn 90m, crit 150m.
-if hasE "$ZE" 'strażnik +\*/15 \* \* \* \* +progi 90m / 150m'; then
+if hasE "$ZE" 'strażnik +co 15 min +progi 90m / 150m'; then
     ok "zadania: panel F2 nazywa straznika (harmonogram) i progi na JEDNEJ linii -- to, co dawal usuniety F5"
 else
     bad "zadania: straznik/progi w panelu F2" "$ZE"
@@ -1063,8 +1063,8 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
 rm -f "$TCFG"
-if has "$WT" 'co: 56 * * * *   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: 6 2 * * *   stempel automated_daily_   trzyma 7' \
-   && has "$WT" 'trzyma 12   co: 36 * * * *' && has "$WT" 'trzyma 3   co: 46 2 * * *' && ! has "$WT" 'co: 1 * * * *'; then
+if has "$WT" 'co: co godzinę (:56)   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: co dobę 02:06   stempel automated_daily_   trzyma 7' \
+   && has "$WT" 'trzyma 12   co: co godzinę (:36)' && has "$WT" 'trzyma 3   co: co dobę 02:46' && ! has "$WT" 'co: co godzinę (:01)'; then
     ok "okno: rytm i retencja KAZDEGO szczebla, z polami szczebla sekcji (send_/prune_schedule_<szablon>) przed szablonem"
 else
     bad "okno: rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
@@ -1328,7 +1328,7 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +pve10 → tutaj +lokalna +active ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
+if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
    && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
     ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
 else
@@ -1377,13 +1377,13 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
 Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z2" 'sejf-a +pve10>bkp +replika ' && hasE "$Z2" 'sejf-b +pve10>rpool +replika .*po włożeniu'; then
+if hasE "$Z2" 'sejf-a +pve10 → bkp +replika ' && hasE "$Z2" 'sejf-b +pve10 → rpool +replika .*po włożeniu'; then
     ok "zadania: repliki sa wierszami F2 (zadanie 'replika', nosnik w kierunku, 'po włożeniu' bez godziny)"
 else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
-if has "$N2" 'Ost. bieg   2026-09-08 02:30   rc=1   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
+if has "$N2" 'Ost. bieg   2026-09-08 02:30   BŁĄD (rc=1)   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
     ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc, czas) i biegi/bledy z job-stats"
 else
     bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Biegi')"
@@ -1401,7 +1401,7 @@ d.setdefault("monitors", []).append({"account": "root", "label": "sejf-a", "patt
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 Z3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$RMN" --replicas "$P10/replicas.json" --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z3" 'sejf-a +pve10>bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10>rpool +replika .*bez monitora'; then
+if hasE "$Z3" 'sejf-a +pve10 → bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10 → rpool +replika .*bez monitora'; then
     ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b)"
 else
     bad "zadania: werdykt repliki z monitora" "$(printf '%s' "$Z3" | grep -E 'sejf')"
@@ -1579,7 +1579,7 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +dzia(ł|l)a +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -2495,7 +2495,7 @@ fi
 # 10. DROGA OPERATORA: czasownik, nie plik. zfs-backup.sh new-relation otwiera krok 1.
 rm -f "$NR/wt.log" "$NR/wt.n"; printf '1%s\n' "$T" > "$NR/answers"
 NROUT=$( NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" bash "$REPO/zfs-backup.sh" new-relation 2>&1 ); NRRC=$?
-if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Krok 1/10: Jaka relacja?' "$NR/wt.log"; then
+if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Krok 1: Jaka relacja?' "$NR/wt.log"; then
     ok "new-relation: czasownik zfs-backup.sh new-relation otwiera kreator na kroku 1; Wyjdz = nic nie zmieniono, rc != 0"
 else
     bad "new-relation: czasownik" "rc=$NRRC" "$NROUT" "$(cat "$NR/wt.log" 2>/dev/null)"

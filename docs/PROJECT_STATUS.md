@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 37697064f58024a7 -->
+<!-- status-covers-digest: 49c155b87d6db0b2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,32 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Kampania testów GUI 2026-10-09 („patrz jak człowiek”), paczka 1: błędy i słowa.** Ekrany F2–F6 i kreatory przechodzone na pve9b na żywych danych (kreatory przez nagrywający whiptail, do planu, bez WYKONAJ); lista znalezisk K1–K48 w notatkach kampanii (poza repozytorium); numery K przy poprawkach w kodzie.
+  - **Błąd (E78): relacja lokalna pomijała retencję źródła.** `local-backup
+    --source-profile` przy szablonie płaskim przycinał źródło liczbą celu (na pve9b
+    `d30-src-D7` → źródło `-D30`). Teraz sekcja źródła używa szablonów źródła
+    (`profile__<cel>__src_<szczebel>`), a szablon źródła jest szukany w jego własnej
+    przestrzeni nazw (`source_template_section`) — także dla drabiny (sprawdzone na
+    pve9b: płaski źródło `-D7` / cel `-D30`, drabina źródło `-D3` / cel `-D7`). Relacja
+    `lokalna-hdd-vm-disks` na pve9b ma jeszcze stare linie — poprawią się po „Zmień
+    relację”. Plan `local-backup` nie mówi już „GFS” przy każdym szablonie.
+  - **Relacja lokalna na ekranach:** `show-config` pokazuje też jej sekcję źródła (okno
+    zadania na F2 mówiło „nie znaleziono sekcji”); pierwsza kopia przy zakładaniu ma
+    etykietę relacji (`-L`), więc F4 nie pokazuje jej jako „(bez rel.)”; kierunek
+    „lokalnie” zamiast „pve9b → tutaj”; bez polecenia `set-bandwidth` w oknie.
+  - **F2:** strażnik repliki nie ma już osobnego wiersza „? strażnik bez zadania”.
+  - **Słowa:** harmonogramy słowami („co dobę 01:02”, „co 15 min”) w F2/F3; stan
+    relacji po polsku (działa / usunięta); „Szablon” zamiast „Profil”, „Sposób: każdy
+    dataset osobno” zamiast „Rekursja flat”; ostatni bieg repliki „OK” / „BŁĄD (rc=N)”;
+    „1 relacja / 2 relacje / 5 relacji”; pomoc F1 opisuje „Zmień relację”; okno zadania
+    wskazuje „Zmień relację” zamiast „usuń i załóż”.
+  - **Kreatory:** pierwsze okno „Krok 1” (bez „/10”, które zmieniało się na „/8”);
+    opis kroku szablonu bez numerów kroków i krótszy; konto „uruchamiał zadania”;
+    replika: dysk innej repliki nie jest do wyboru (notka pod listą), opis harmonogramu
+    i nazwy bez żargonu.
+  - **Testy:** `localbackup` K21 (źródło `-D7`, cel `-D30`, kontrola bez szablonu
+    źródła `-D30`; na starym kodzie czerwony); `tui` — zaktualizowane słowa.
 
 - **Runda uwag 2026-10-09, paczka P5: replika rozpoznaje dyski po ID, nośnik tylko podłączony, „po włożeniu” per replika (uwagi 6, 7, 8; właściciel: „tak, po ID”).**
   - **Dysk po ID puli (`media_guids`):** sekcja `[replica:]` może wymienić ID pul
