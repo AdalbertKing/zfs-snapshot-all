@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8570da618dc26525 -->
+<!-- status-covers-digest: 70588620b2553b72 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,29 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Przygotowanie nośnika repliki — `prepare-media`, paczka C2 (uwaga 15) (2026-10-09, właściciel: „Kontynuuj od najprostszych”).**
+  - **Wsad:** `zfs-backup prepare-media POOL URZĄDZENIE [--base=replica] [--yes]`:
+    `zpool create -f -m none -o failmode=continue`, `zfs create POOL/BAZA`, `zpool
+    export`. Plan bez `--yes` (wymienia, co zostanie skasowane). Dysk z czymkolwiek
+    na nim jest czyszczony; odmowa, gdy jest w użyciu (coś na nim zamontowane albo
+    jest częścią zaimportowanej puli, także przez partycję), gdy pula o tej nazwie
+    jest już zaimportowana, oraz przy złej nazwie puli, bazie albo urządzeniu. Drugi dysk tej samej repliki (rotacja) dostaje tę samą
+    pulę i bazę; gdy dysk z taką pulą jest już w slocie, plan to mówi.
+    `prepare-media --list`: wolne dyski (ścieżka by-id, rozmiar, model, serial, co
+    na nim jest — np. `zfs:repl` dla dysku z wyeksportowaną pulą); bez zvoli.
+  - **GUI (kreator repliki, krok „nośnik”):** „Przygotuj nowy nośnik…” (lista
+    wolnych dysków, nazwa puli, baza, plan z domyślnym „Wstecz”, wykonanie; replika
+    dostaje `--dst=<pula>/<baza>`), a przy zmianie istniejącej repliki (F6 → `e`)
+    także „Przygotuj kolejny dysk dla tej repliki…” (ta sama pula i baza). Dwa dyski
+    jednej repliki w slocie to jedna pozycja na liście pul.
+  - **Na żywo (pve9b):** dołożony dysk testowy USB-C (VM 110, `scsi4`, 2G):
+    `--list` pomija `sda` (zamontowany `/`) i `sdb` (pula `hdd`), pokazuje USB-B jako
+    `zfs:repl`; przygotowanie USB-C jako drugiego dysku `repl` — `failmode=continue`,
+    `mountpoint=none`, `repl/replica`, wyeksportowany. Po teście USB-C wyczyszczony
+    do pustego (do testu GUI); USB-B (usb1) nietknięty.
+  - **Testy:** `zfsbackup --section runreplicas` (dysk w użyciu: zamontowany,
+    partycja vdeva zaimportowanej puli, wolny; odmowy argumentów; na `main` oba te
+    testy padają), `tui` (kreator repliki: przygotowanie nowego nośnika).
 - **Kopia lokalna jako relacja, L1 (2026-10-09, właściciel: „Nie działa założenie relacji jednohostowej w GUI… zaproponuj zmiany”, ekrany zaakceptowane bez ekranu 1a).**
   - **Kreator (F3 → Ins):** w kroku 1 trzecia pozycja „Lokalnie (kopia na tym
     hoście)”. Bez kroków host i diagnoza (8 kroków): koszyk z datasetów TEGO hosta

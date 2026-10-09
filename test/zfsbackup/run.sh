@@ -13650,6 +13650,38 @@ else
     bad "addreplica: list-replicas passive" "$lr"
 fi
 rm -rf "$PV"
+# prepare-media (owner note 15, 2026-10-08): refused only when the disk is IN USE.
+# media_disk_in_use over stubbed lsblk / zpool / readlink: a mounted partition, a
+# partition of an imported pool's vdev, and a free disk carrying an EXPORTED pool.
+PMD="$WORK/prepmedia"; rm -rf "$PMD"; mkdir -p "$PMD"
+pm_case() {   # <device> -> "rc|reason"
+    ( source "$ZFSBACKUP"
+      readlink() { [ "$1" = -f ] && shift; printf '%s\n' "$1"; }
+      lsblk() { case "$*" in
+          *"MOUNTPOINT /dev/sda"*) printf '\n/\n' ;;
+          *"MOUNTPOINT"*) printf '\n' ;;
+          *"PKNAME /dev/sdb1"*) echo sdb ;;
+          *"PKNAME"*) echo "" ;;
+        esac; }
+      zpool() { [ "$1" = status ] && printf '\tNAME\n\t  /dev/sdb1  ONLINE\n'; }
+      r=$(media_disk_in_use "$1"); printf '%s|%s' "$?" "$r" )
+}
+a=$(pm_case /dev/sda); b=$(pm_case /dev/sdb); c=$(pm_case /dev/sdc)
+if [ "${a%%|*}" = 0 ] && printf '%s' "$a" | grep -q 'mounted at /' \
+   && [ "${b%%|*}" = 0 ] && printf '%s' "$b" | grep -q 'part of an imported pool' && [ "${c%%|*}" = 1 ]; then
+    ok "prepare-media: in use = mounted or a vdev of an imported pool (via its partition); any other disk is free"
+else
+    bad "prepare-media: media_disk_in_use" "sda=$a" "sdb=$b" "sdc=$c"
+fi
+out=$(bash "$ZFSBACKUP" prepare-media 2>&1); r1=$?
+out2=$(bash "$ZFSBACKUP" prepare-media 1bad /dev/x 2>&1); r2=$?
+if [ "$r1" -ne 0 ] && printf '%s' "$out" | grep -q 'usage: prepare-media POOL DEVICE' \
+   && [ "$r2" -ne 0 ] && printf '%s' "$out2" | grep -q "pool name '1bad'"; then
+    ok "prepare-media: no arguments and a bad pool name are refusals, before any disk is touched"
+else
+    bad "prepare-media: refusals" "$out" "$out2"
+fi
+rm -rf "$PMD"
 fi   # --- koniec sekcji runreplicas ---
 
 if want statusquiesce; then
