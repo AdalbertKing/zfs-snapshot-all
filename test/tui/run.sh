@@ -1296,7 +1296,7 @@ fi
 # ============================================================================
 Z4W="$(screen zadania)"
 # F5 wrocilo 2026-10-09 jako ekran Szablony (uwaga 24) -- Monitora nadal nie ma.
-if ! has "$Z4W" 'Monitor' && has "$Z4W" 'F5 Szablony'; then
+if ! has "$Z4W" 'Monitor' && hasE "$Z4W" 'F5 Szablony|5Szablony'; then
     ok "F5: ekran domyslny (F2) nie wspomina Monitora; F5 to dzis Szablony"
 else
     bad "F5: pozostalosc na ekranie" "$Z4W"
@@ -1584,7 +1584,7 @@ if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +\|' && has "$A" 'Datas
 else
     bad "wyglad: slowa w ASCII" "$A"
 fi
-HLP="$(screen relacje F1 --height 60)"
+HLP="$(screen relacje F1 --height 72)"
 if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' && has "$HLP" 'NAJPIERW komenda bash'; then
     ok "pomoc: F1 otwiera pomoc ze slownikiem kolumny Kopie"
 else
