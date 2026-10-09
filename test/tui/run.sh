@@ -2649,7 +2649,7 @@ tp_grid() {   # <klawisze> <akcja> <nazwa> <odpowiedzi whiptail> -> jak tp_run
 }
 # 1. NOWY w jednym oknie: nazwa (pole na gorze), godzinowe 24 -> 48 w tabeli, opis z
 #    wyborow (dobowe w bazowym zamraza), plan, WYKONAJ.
-TPOUT=$(tp_grid "bs,bs,bs,bs,bs,bs,bs,bs,bs,m,o,j,7,down,right,bs,bs,4,8,enter" new d7h24 "0${T}
+TPOUT=$(tp_grid "bs,bs,bs,bs,bs,bs,bs,bs,bs,m,o,j,7,down,down,right,bs,bs,4,8,enter" new d7h24 "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hourly --keep=48 --description=48 godzinowych + 7 dobowych; zamraża: dobowych' "$TP/zb.log" \
    && grep -qF 'godzinowe: 24 -> 48' "$TP/wt.log" && grep -qF 'dobowe: 7  (bez zmian)' "$TP/wt.log"; then
@@ -2659,7 +2659,7 @@ else
 fi
 # 2. ZAMRAZANIE TO KRATKA w tabeli (wlasciciel 2026-10-09): odznaczenie dobowego daje
 #    --tier=daily --quiesce= (pole zdjete), opis "bez zamrazania".
-TPOUT=$(tp_grid "down,down,right,right,space,enter" new d7h24 "0${T}
+TPOUT=$(tp_grid "down,down,down,right,right,space,enter" new d7h24 "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --tier=daily --quiesce= --description=24 godzinowych + 7 dobowych; bez zamrażania' "$TP/zb.log" \
    && grep -qF 'zamrażanie dobowe: tak -> nie' "$TP/wt.log"; then
@@ -2669,7 +2669,7 @@ else
 fi
 # 3. Szczebla, ktory jako jedyny sprzata swoja rodzine, nie da sie wylaczyc -- okno mowi
 #    o tym i zostaje; Esc = Wstecz, nic nie zapisane.
-TPOUT=$(tp_grid "down,space" new d7h24 ""); TPRC=$?
+TPOUT=$(tp_grid "down,down,space" new d7h24 ""); TPRC=$?
 GRIDSCR=$(printf '%s' "$TPOUT")
 if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Tego szczebla nie da się wyłączyć'; then
     ok "template: jedynego szczebla rodziny nie da sie wylaczyc; okno mowi i niczego nie zapisuje"
@@ -2694,7 +2694,7 @@ fi
 # 4. OKNO KOMPLETNE (wlasciciel 2026-10-09: "pokazywac rowniez miesieczne, roczne,
 #    tygodniowe po prostu nie pozaznaczane"): d7h24 ma dwa szczeble, tabela ma piec;
 #    zaznaczenie tygodniowego = --add-tier=weekly (domyslnie 4, zamrazany jak dobowy).
-TPOUT=$(tp_grid "down,down,down,space,enter" new d7h24 "0${T}
+TPOUT=$(tp_grid "down,down,down,down,space,enter" new d7h24 "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --add-tier=weekly --description=24 godzinowych + 7 dobowych + 4 tygodniowych; zamraża: dobowych, tygodniowych' "$TP/zb.log" \
    && printf '%s' "$TPOUT" | grep -qE '\[ \] miesięczne' && printf '%s' "$TPOUT" | grep -qE '\[ \] roczne' \
@@ -2705,13 +2705,30 @@ else
 fi
 # 5. Drabina (jedna rodzina): dodany szczebel to nowy szczebel drabiny -- bez kratki
 #    zamrazania (zamraza sie szczebel, ktory robi migawki); liczba zmieniona = --keep po --add-tier.
-TPOUT=$(tp_grid "down,down,down,down,down,down,space,right,bs,3,enter" new drab "0${T}
+TPOUT=$(tp_grid "down,down,down,down,down,down,down,space,right,bs,3,enter" new drab "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -q '^save-profile --from=drab --as=drab-moj --add-tier=yearly --keep=3 --description=' "$TP/zb.log" \
    && ! grep -q -- '--quiesce' "$TP/zb.log" && grep -qF 'roczne: dodany, 3' "$TP/wt.log"; then
     ok "template: drabina -- dodany szczebel roczny z liczba, bez zamrazania"
 else
     bad "template: dodanie szczebla drabiny" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | tail -20)" "$(cat "$TP/err")"
+fi
+# 6. SPOSOB LICZENIA (wlasciciel 2026-10-09: "brakuje w oknie wyboru (*) GFS () AGE () FLAT
+#    -- z wyjasnieniem roznicy"): wybor nad tabela, objasnienie wybranego; WIEK = --method=age,
+#    liczby zostaja, jednostka przy liczbie (dni / godz.) i zmieniona liczba jako --retain.
+TPOUT=$(tp_grid "down,right,space,down,down,bs,1,4,enter" new d7h24 "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --method=age --tier=daily --retain=-d14 --description=24 godzinowych + 14 dobowych; zamraża: dobowych' "$TP/zb.log"    && printf '%s' "$TPOUT" | grep -qF '( ) GFS   (*) WIEK (age)   ( ) PŁASKI (flat)' && printf '%s' "$TPOUT" | grep -qF 'Kasuje migawki starsze niż N okresów'    && grep -qF 'sposób: PŁASKI (flat) -> WIEK (age) (liczby zostają)' "$TP/wt.log" && grep -qF 'dobowe: 7 -> 14 dni' "$TP/wt.log"; then
+    ok "template: wybor sposobu (GFS / WIEK / PLASKI) z objasnieniem; WIEK = --method=age, liczba jako --retain"
+else
+    bad "template: wybor sposobu" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -14)" "$(tail -3 "$TP/wt.log" | cut -c1-300)" "$(cat "$TP/err")"
+fi
+# 7. Drabina liczy tylko GFS: wybor zablokowany, okno mowi dlaczego, nic sie nie zmienia.
+TPOUT=$(tp_grid "down,right,space" new drab ""); TPRC=$?
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$TPOUT" | grep -qF '(*) GFS'    && printf '%s' "$TPOUT" | grep -qF 'MSG: Drabina na jednej rodzinie migawek liczy tylko GFS.'; then
+    ok "template: drabina -- wybor sposobu zablokowany na GFS, okno mowi dlaczego"
+else
+    bad "template: drabina, sposob" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -14)"
 fi
 rm -rf "$TP"
 
