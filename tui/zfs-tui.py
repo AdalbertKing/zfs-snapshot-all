@@ -949,8 +949,8 @@ def transfer_word(t, now):
     return TRANSFER_STATES.get(st, (st or "?", 0))[0], ""
 
 
-STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"pierwsza kopia",
-            "seed_complete": u"po pierwszej kopii", "endpoint_verified": u"sprawdzona"}
+STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"1. kopia",
+            "seed_complete": u"po 1. kopii", "endpoint_verified": u"sprawdzona"}
 
 
 def pl_relacje(n):

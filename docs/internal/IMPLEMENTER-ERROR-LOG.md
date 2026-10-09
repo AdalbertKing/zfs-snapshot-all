@@ -1946,6 +1946,14 @@ already -- `grep` for the old key/word/function before pushing, not after CI.
 **Rule (R12, unchanged).** Before reversing a contract, grep the suites for what
 pins it (here: "F5", "Odśwież", "shadow", profile_file) and run those sections.
 
+**Repeat, 2026-10-09 (#506, GUI campaign).** The rule was not applied in full. The
+screen words changed on purpose (state active -> działa, raw cron -> words, `>` ->
+arrow, "Krok 1/10" -> "Krok 1"); I grepped for some pins (`active`, `rc=`, `co:`)
+and fixed seven, and CI found eleven more (`seeding`, `removed`, `*/15`, `pve10>bkp`,
+`24 * * * *`, the ASCII render, the step title). One was a real layout effect, not a
+stale pin: "pierwsza kopia" was wide enough to push the Kopie column out at 120
+columns. The grep has to cover every OLD word the change replaces, one by one.
+
 ### E76 — a passive replica skipped as "already current" and copied nothing (2026-10-08, R12)
 
 **Genesis.** PR #488 (paczka C1, passive replica) taught the media gate `--prefix -`

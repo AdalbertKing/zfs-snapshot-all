@@ -67,7 +67,7 @@ if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +działa +║│' && hasE "$S"
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
 fi
-if hasE "$S120" 'Ostatni +brak zapisu w historii'; then
+if hasE "$S120" 'Ostatni +brak wpisu w'; then
     ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
 else
     bad "relacje: ostatni wynik w panelu" "$S120"
@@ -103,13 +103,13 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +seeding +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
+if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +1\. kopia +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
     ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona -- w kolumnie (200) i w panelu (120)"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
 fi
 # Rekord usuniety jest faktem, ale nie robota: jest, i jest OSTATNI.
-if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *removed' | cut -d: -f1)" -gt "$(printf '%s\n' "$S" | grep -n '^║ lab-vm101' | cut -d: -f1)" ] 2>/dev/null; then
+if [ "$(printf '%s\n' "$S" | grep -n '192.168.28.99 *usunięta' | cut -d: -f1)" -gt "$(printf '%s\n' "$S" | grep -n '^║ lab-vm101' | cut -d: -f1)" ] 2>/dev/null; then
     ok "relacje: rekord 'removed' jest widoczny i stoi na koncu listy"
 else
     bad "relacje: rekord removed" "$S"
@@ -127,7 +127,7 @@ else
     bad "relacje: pary z rekordu" "$S"
 fi
 S4="$(screen relacje down,down,down,down --width 200 --height 40)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +24 \* \* \* \*   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
+if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +co godzinę \(:24\)   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
     ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; transfer nazwany wg KIERUNKU (Pobranie, nie Wysylka -- tester R4)"
 else
     bad "relacje: kursor i nastepny bieg" "$S4"
@@ -137,7 +137,7 @@ if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if hasE "$S4" 'Lokalny prune 44 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' && hasE "$S4" 'Zdalny prune +3 \* \* \* \*   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.   drabina' \
+if hasE "$S4" 'Lokalny prune co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Zdalny prune +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
    && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
     ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
 else
@@ -764,7 +764,7 @@ fi
 # progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA SAMA
 # regula co werdykt (monitors_for_job); R3-3 laczy straznik+progi w JEDNA
 # linie. Z fikstur pve10: lab-vm101 ma monitor "*/15 * * * *", warn 90m, crit 150m.
-if hasE "$ZE" 'strażnik +\*/15 \* \* \* \* +progi 90m / 150m'; then
+if hasE "$ZE" 'strażnik +co 15 min +progi 90m / 150m'; then
     ok "zadania: panel F2 nazywa straznika (harmonogram) i progi na JEDNEJ linii -- to, co dawal usuniety F5"
 else
     bad "zadania: straznik/progi w panelu F2" "$ZE"
@@ -1377,7 +1377,7 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
 Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z2" 'sejf-a +pve10>bkp +replika ' && hasE "$Z2" 'sejf-b +pve10>rpool +replika .*po włożeniu'; then
+if hasE "$Z2" 'sejf-a +pve10 → bkp +replika ' && hasE "$Z2" 'sejf-b +pve10 → rpool +replika .*po włożeniu'; then
     ok "zadania: repliki sa wierszami F2 (zadanie 'replika', nosnik w kierunku, 'po włożeniu' bez godziny)"
 else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
@@ -1401,7 +1401,7 @@ d.setdefault("monitors", []).append({"account": "root", "label": "sejf-a", "patt
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 Z3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$RMN" --replicas "$P10/replicas.json" --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z3" 'sejf-a +pve10>bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10>rpool +replika .*bez monitora'; then
+if hasE "$Z3" 'sejf-a +pve10 → bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10 → rpool +replika .*bez monitora'; then
     ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b)"
 else
     bad "zadania: werdykt repliki z monitora" "$(printf '%s' "$Z3" | grep -E 'sejf')"
@@ -1579,7 +1579,7 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +działa +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +dzia(ł|l)a +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -2495,7 +2495,7 @@ fi
 # 10. DROGA OPERATORA: czasownik, nie plik. zfs-backup.sh new-relation otwiera krok 1.
 rm -f "$NR/wt.log" "$NR/wt.n"; printf '1%s\n' "$T" > "$NR/answers"
 NROUT=$( NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" bash "$REPO/zfs-backup.sh" new-relation 2>&1 ); NRRC=$?
-if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Krok 1/10: Jaka relacja?' "$NR/wt.log"; then
+if [ "$NRRC" -ne 0 ] && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Krok 1: Jaka relacja?' "$NR/wt.log"; then
     ok "new-relation: czasownik zfs-backup.sh new-relation otwiera kreator na kroku 1; Wyjdz = nic nie zmieniono, rc != 0"
 else
     bad "new-relation: czasownik" "rc=$NRRC" "$NROUT" "$(cat "$NR/wt.log" 2>/dev/null)"
