@@ -7272,7 +7272,7 @@ cmd_local_backup() {
     # carry pair_label (so the engine lines carry -L and the pause gate reaches
     # them), each source gets its own landing prune, and a client record with
     # RUX_MODE=local is written after the install. Without it: unchanged.
-    local lb_name="" lb_exfam=""
+    local lb_name="" lb_exfam="" lb_replace=0
     local -a lb_excl=()
     local -a source_flags=()
     for a in "$@"; do
@@ -7284,6 +7284,12 @@ cmd_local_backup() {
             # [dataset:] scope fields (exclude_child_<n> -> -X, exclude_family -> -E).
             --exclude-child=*)  lb_excl+=("${a#*=}") ;;
             --exclude-family=*) lb_exfam="${a#*=}" ;;
+            # --replace (L2, 2026-10-09): the relationship --name EXISTS and this run
+            # describes it anew -- its sections are taken out of the candidate and
+            # composed again (new profile, a source more or less). A source whose
+            # copy already exists is not seeded again. edit-relation, add-source and
+            # remove-source on a local relationship come here.
+            --replace)          lb_replace=1 ;;
             --target=*)  target="${a#*=}"; target_given=1 ;;
             --profile=*) profile="${a#*=}"; flag_profile local-backup "$profile" ;;
             --source-profile=*) SRC_PROFILE_NAME="${a#*=}" ;;
@@ -7542,6 +7548,11 @@ cmd_local_backup() {
     chmod 0644 "$cand" 2>/dev/null || :
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
+        if [ "$lb_replace" -eq 1 ] && [ -n "$lb_name" ]; then
+            local _strip; _strip=$(mktemp) || die "mktemp failed"
+            strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
+            rm -f "$_strip"
+        fi
     else
         assert_config_not_claimed_if_missing "$config"
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
@@ -7691,12 +7702,21 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # next one. atomic (one -r stream) with a target stays unmeasured.
     [ -z "$lb_recursion" ] || [ "$no_copy" -eq 1 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --recursive=atomic is for --target='' (snapshots stay in the source). With a target, use --recursive=flat (each descendant its own send, prune and monitor)."
+    [ "$lb_replace" -eq 0 ] || [ -n "$lb_name" ] || die "local-backup: --replace needs --name -- it re-describes an existing local relationship"
     [ "${#lb_excl[@]}" -eq 0 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --exclude-child needs --recursive=flat -- without it only the named dataset is copied and there is no child to leave out."
     if [ -n "$lb_name" ]; then
         [ "$no_copy" -eq 0 ] || die "local-backup: --name makes a relationship that COPIES; with --target='' nothing is copied, so there is nothing for F3 to show. Drop --name."
         local _lbrec; _lbrec="$(client_conf_path "$lb_name")"
-        if [ -e "$_lbrec" ] && [ "$(record_get "$_lbrec" STATE)" != removed ]; then
+        if [ "$lb_replace" -eq 1 ]; then
+            [ -e "$_lbrec" ] && [ "$(record_get "$_lbrec" STATE)" = active ] && [ "$(record_get "$_lbrec" RUX_MODE)" = local ] \
+                || { rm -f "$cand"; die "local-backup --replace: '$lb_name' is not an active local relationship on this host. Nothing was changed."; }
+            [ "$(record_get "$_lbrec" CLIENT_TARGET)" = "$target" ] \
+                || { rm -f "$cand"; die "local-backup --replace: '$lb_name' copies to '$(record_get "$_lbrec" CLIENT_TARGET)', not '$target' -- a relationship's target is not changed in place. Nothing was changed."; }
+            # The install guard's edit-relation exemption: this relationship's own
+            # lines (-L <name>) are replaced by the regenerated set, not lost.
+            EDIT_RELATION_NAME="$lb_name"
+        elif [ -e "$_lbrec" ] && [ "$(record_get "$_lbrec" STATE)" != removed ]; then
             rm -f "$cand"
             die "local-backup: relationship '$lb_name' already exists on this host (state $(record_get "$_lbrec" STATE)). Choose another --name, or remove it first (zfs-backup.sh delete-relation $lb_name). Nothing was changed."
         fi
@@ -8041,6 +8061,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 warn "  FAILED: $sr (snapshot only)"
                 seed_failed=$((seed_failed + 1))
             fi
+        elif [ "$lb_replace" -eq 1 ] && zfs list -H -o name "$target/$sr" >/dev/null 2>&1; then
+            log "  already copied: $sr -> $target/$sr (no new seed)"
         elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
@@ -8076,7 +8098,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         local _lbc _lbm="" _lbr
         _lbc="$(client_conf_path "$lb_name")"
         mkdir -p "$CLIENTS_DIR" || die "could not create $CLIENTS_DIR -- the cron is installed, but the record of '$lb_name' was NOT written"
-        if [ -e "$_lbc" ]; then
+        local _lbcreated; _lbcreated=$(date '+%Y-%m-%d %H:%M:%S')
+        if [ "$lb_replace" -eq 1 ] && [ -e "$_lbc" ]; then
+            _lbcreated=$(record_get "$_lbc" CREATED_AT "$_lbcreated")
+        elif [ -e "$_lbc" ]; then
             # A removed relationship of the same name: archived, as add-client does.
             mv -f "$_lbc" "${_lbc}.removed-$(date '+%Y%m%d-%H%M%S')" || die "could not archive the old record $_lbc"
         fi
@@ -8098,7 +8123,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             [ -n "$lb_recursion" ] && write_client_field RECURSION "$lb_recursion"
             write_client_field LOCAL_USER         "${local_user:-}"
             write_client_field CRON_CONFIG        "$config"
-            write_client_field CREATED_AT         "$(date '+%Y-%m-%d %H:%M:%S')"
+            write_client_field CREATED_AT         "$_lbcreated"
             write_client_field ACTIVATED_AT       "$(date '+%Y-%m-%d %H:%M:%S')"
         } > "${_lbc}.new" && mv -f "${_lbc}.new" "$_lbc" && chmod 0600 "$_lbc" \
             || die "the cron is installed, but the record of '$lb_name' could not be written ($_lbc) -- F3 will not show it"
@@ -12740,16 +12765,6 @@ cmd_gui() {
 # This is the per-relationship edit the admin asks for by name: the same
 # generation as at creation, through activate-client's own preview, dry-run,
 # grant checks and install guards, with nothing moved on disk.
-# refuse_local_relation <verb> <name> -- the verbs below change a relationship
-# through its peer (pairing, scope, grants). A LOCAL relationship (local-backup
-# --name) has none yet; said here, plainly, instead of dying in the loader on a
-# missing pairing manifest. Its config is changed with edit-config.
-refuse_local_relation() {
-    local cp; cp=$(client_conf_path "$2")
-    [ "$(record_get "$cp" RUX_MODE 2>/dev/null)" = local ] || return 0
-    die "$1: '$2' is a LOCAL relationship (source and copy on this host) -- $1 does not handle those yet. Change its sections with: zfs-backup edit-config $2. Nothing was changed."
-}
-
 cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
@@ -12763,13 +12778,24 @@ cmd_edit_relation() {
     done
     if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows ('e' on the GUI's F3)
         [ -r "$(client_conf_path "$name")" ] || die "edit-relation: no relationship '$name' on this host"
-        refuse_local_relation edit-relation "$name"
         local dlg="$SCRIPT_DIR/tui/edit-relation.sh"
         [ -f "$dlg" ] || die "edit-relation: brak $dlg -- checkout jest niekompletny"
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
         return $?
     fi
-    refuse_local_relation edit-relation "$name"
+    if [ "$(record_get "$(client_conf_path "$name")" RUX_MODE 2>/dev/null)" = local ]; then
+        # A LOCAL relationship: the same local-backup that made it, re-described with
+        # the new profile (L2, 2026-10-09). --plan shows, --yes installs.
+        local how=0 b; local_relation_argv "$name"
+        for b in "$@"; do
+            case "$b" in
+                --plan) how=plan ;; --yes|-y) [ "$how" = plan ] || how=1 ;;
+                --profile=*|--source-profile=*) LRA+=("$b") ;;
+            esac
+        done
+        run_local_relation_change edit-relation "$how" "${LRA[@]}"
+        return $?
+    fi
     cmd_activate_client "$name" --regenerate "$@"
 }
 
@@ -13007,7 +13033,20 @@ cmd_remove_source() {
 
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "remove-source: no relationship '$name' on this host"
-    refuse_local_relation remove-source "$name"
+    if [ "$(record_get "$cpath" RUX_MODE)" = local ]; then
+        local_relation_argv "$name"
+        local _i _left; for _i in "${!LRA[@]}"; do
+            case "${LRA[$_i]}" in --source=*)
+                _left=$(printf '%s' "${LRA[$_i]#--source=}" | tr ',' '\n' | grep -vxF -- "$ds" | paste -sd, -)
+                [ "$_left" != "${LRA[$_i]#--source=}" ] || die "remove-source: '$ds' is not a source of '$name'. Nothing was changed."
+                [ -n "$_left" ] || die "remove-source: '$ds' is the last source of '$name' -- remove the relationship instead: zfs-backup delete-relation $name"
+                LRA[$_i]="--source=$_left" ;;
+            esac
+        done
+        log "remove-source: the copy of '$ds' ($(record_get "$cpath" CLIENT_TARGET)/$ds) stays on this host"
+        run_local_relation_change remove-source "$([ "$yes" -eq 1 ] && echo 1 || echo plan)" "${LRA[@]}"
+        return $?
+    fi
     record_load client "$cpath"
     local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
@@ -13212,7 +13251,17 @@ cmd_add_source() {
     esac
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "add-source: no relationship '$name' on this host"
-    refuse_local_relation add-source "$name"
+    if [ "$(record_get "$cpath" RUX_MODE)" = local ]; then
+        local_relation_argv "$name"
+        local _i; for _i in "${!LRA[@]}"; do
+            case "${LRA[$_i]}" in --source=*)
+                case ",${LRA[$_i]#--source=}," in *",$ds,"*) die "add-source: '$ds' is already in '$name'. Nothing was changed." ;; esac
+                LRA[$_i]="${LRA[$_i]},$ds" ;;
+            esac
+        done
+        run_local_relation_change add-source "$([ "$yes" -eq 1 ] && echo 1 || echo plan)" "${LRA[@]}"
+        return $?
+    fi
     record_load client "$cpath"
     local peer="${PEER_HOST:-}" state="${STATE:-}" port=22
     local label; label=$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')
@@ -16884,6 +16933,73 @@ copy_shell_level() {
     return 1
 }
 
+# strip_local_relation_sections <config> <name> -- the config WITHOUT the sections
+# of local relationship <name> on stdout, how many were dropped on stderr. Its
+# sections are the ones local-backup wrote for it: the `# managed-by: zfs-backup.sh
+# local-backup` marker AND `pair_label = <name>` -- both, so another relationship's
+# section, or a hand-written one that only borrowed the label, stays.
+strip_local_relation_sections() {
+    awk -v lbl="$2" '
+        function flush() {
+            if (n > 0 && !(mk && pl)) for (i = 1; i <= n; i++) print buf[i]
+            if (n > 0 && mk && pl) dropped++
+            n = 0; mk = 0; pl = 0
+        }
+        /^\[/ { flush() }
+        {
+            buf[++n] = $0
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (t ~ /^# managed-by: zfs-backup\.sh local-backup /) mk = 1
+            if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); if (v == lbl) pl = 1 }
+        }
+        END { flush(); print dropped + 0 > "/dev/stderr" }
+    ' "$1"
+}
+
+# local_relation_argv <name> -> LRA[]: the local-backup arguments that describe
+# local relationship <name> as it is installed -- sources and target from the
+# record, the exclusions from its [dataset:] section in the config. edit-relation,
+# add-source and remove-source change one thing in this and run it with --replace.
+local_relation_argv() {
+    local cp; cp=$(client_conf_path "$1")
+    LRA=()
+    local srcs tgt rec lu cfg prof sprof first
+    srcs=$(record_get "$cp" REQUESTED_DATASETS); tgt=$(record_get "$cp" CLIENT_TARGET)
+    rec=$(record_get "$cp" RECURSION); lu=$(record_get "$cp" LOCAL_USER); cfg=$(record_get "$cp" CRON_CONFIG)
+    prof=$(record_get "$cp" PROFILE); sprof=$(record_get "$cp" SOURCE_PROFILE)
+    [ -n "$srcs" ] && [ -n "$tgt" ] || die "the record of '$1' names no sources or no target -- edit it with: zfs-backup edit-config $1"
+    LRA=(--source="$srcs" --target="$tgt" --name="$1")
+    [ -n "$rec" ] && LRA+=(--recursive="$rec")
+    [ -n "$lu" ] && LRA+=(--local-user="$lu")
+    [ -n "$cfg" ] && LRA+=(--config="$cfg")
+    [ -n "$prof" ] && LRA+=(--profile="$prof")
+    [ -n "$sprof" ] && LRA+=(--source-profile="$sprof")
+    first="${srcs%%,*}"
+    if [ -n "$cfg" ] && [ -f "$cfg" ]; then
+        local k v
+        while IFS=$'\t' read -r k v; do
+            case "$k" in
+                exclude_child_*) LRA+=(--exclude-child="$v") ;;
+                exclude_family)  LRA+=(--exclude-family="$v") ;;
+            esac
+        done < <(awk -v want="[dataset:$first]" '
+            $0 == want { f = 1; next } /^\[/ { f = 0 }
+            f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
+                if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family") print k "\t" v }' "$cfg")
+    fi
+}
+
+# run_local_relation_change <verb> <yes 0|1|plan> <local-backup args...> -- the
+# shared tail of edit-relation / add-source / remove-source on a local relationship.
+run_local_relation_change() {
+    local verb="$1" how="$2"; shift 2
+    case "$how" in
+        plan) cmd_local_backup "$@" --replace ;;
+        1)    cmd_local_backup "$@" --replace --install --yes ;;
+        *)    cmd_local_backup "$@" --replace --install ;;
+    esac
+}
+
 # remove_local_relation <name> <record> -- the collector half of a LOCAL
 # relationship (local-backup --name, 2026-10-09). Its sections are the ones
 # local-backup wrote for it: a `# managed-by: zfs-backup.sh local-backup` marker
@@ -16901,21 +17017,7 @@ remove_local_relation() {
     assert_no_foreign_managed_block "$CRON_CONFIG"
     local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $CRON_CONFIG"
     workfile_track "$workfile"
-    awk -v lbl="$name" '
-        function flush() {
-            if (n > 0 && !(mk && pl)) for (i = 1; i <= n; i++) print buf[i]
-            if (n > 0 && mk && pl) dropped++
-            n = 0; mk = 0; pl = 0
-        }
-        /^\[/ { flush() }
-        {
-            buf[++n] = $0
-            t = $0; sub(/^[ \t]+/, "", t)
-            if (t ~ /^# managed-by: zfs-backup\.sh local-backup /) mk = 1
-            if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); if (v == lbl) pl = 1 }
-        }
-        END { flush(); print dropped > "/dev/stderr" }
-    ' "$CRON_CONFIG" > "$workfile" 2>"$workfile.n" || { rm -f "$workfile" "$workfile.n"; die "could not rewrite a working copy of $CRON_CONFIG"; }
+    strip_local_relation_sections "$CRON_CONFIG" "$name" > "$workfile" 2>"$workfile.n" || { rm -f "$workfile" "$workfile.n"; die "could not rewrite a working copy of $CRON_CONFIG"; }
     local dropped; dropped=$(cat "$workfile.n" 2>/dev/null); rm -f "$workfile.n"
     chmod 0644 "$workfile" 2>/dev/null || :
     [ "${dropped:-0}" -gt 0 ] || warn "no section of '$name' found in $CRON_CONFIG -- only the record is closed"

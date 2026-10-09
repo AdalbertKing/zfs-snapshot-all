@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 70588620b2553b72 -->
+<!-- status-covers-digest: 862373258b9fc9b7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,29 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Kopia lokalna jako relacja, L2 — zmiana szablonu i datasetów (2026-10-09, właściciel: „Kontynuuj od najprostszych”).**
+  - **`local-backup --replace`** (tylko z `--name` istniejącej, aktywnej relacji
+    lokalnej o tym samym celu): sekcje tej relacji (marker `local-backup` +
+    `pair_label`) są zdejmowane z kandydata i składane od nowa; źródło, którego kopia
+    już jest, nie dostaje ponownego seeda; rekord przepisany z zachowaniem
+    `CREATED_AT`; strażnik instalacji zalicza linie `-L <nazwa>` do wyjątku
+    edit-relation (zastąpione, nie zgubione).
+  - **Czasowniki:** dla relacji lokalnej `edit-relation NAZWA --profile=P
+    [--source-profile=S] [--plan|--yes]`, `add-source NAZWA DATASET [--yes]`,
+    `remove-source NAZWA DATASET [--yes]` odczytują relację (`local_relation_argv`:
+    źródła i cel z rekordu, wyjątki z jej sekcji `[dataset:]`), zmieniają jedną rzecz
+    i uruchamiają `local-backup --replace`. `add-source`/`remove-source` bez `--yes` = plan; `edit-relation` bez `--plan`/`--yes` pyta o potwierdzenie (jak dla relacji zdalnej). `remove-source` zostawia
+    kopię usuniętego źródła na dysku; ostatniego źródła nie usuwa (to delete-relation).
+    Okno `e` na F3 działa dla relacji lokalnej; „Dodaj dataset” czyta datasety tego
+    hosta.
+  - **Na żywo (pve9b, dane testowe, sprzątnięte):** relacja `lt` (d7h24, wyjątek
+    `skip`) → `edit-relation --profile=d30 --yes` (wyjątek i data utworzenia
+    zachowane, bez nowego seeda) → `add-source hdd/lt-two` (seed tylko nowego) →
+    `remove-source hdd/lt-two` (linie zniknęły, kopia została) → `delete-relation
+    --destroy-copies`; crontab identyczny jak przed testem.
+  - **Testy:** `localbackup` — `local_relation_argv`, co każdy z trzech czasowników
+    przekazuje dalej, odmowy (ostatnie źródło, nie-źródło, już jest, `--replace`
+    bez nazwy / bez relacji).
 - **Przygotowanie nośnika repliki — `prepare-media`, paczka C2 (uwaga 15) (2026-10-09, właściciel: „Kontynuuj od najprostszych”).**
   - **Wsad:** `zfs-backup prepare-media POOL URZĄDZENIE [--base=replica] [--yes]`:
     `zpool create -f -m none -o failmode=continue`, `zfs create POOL/BAZA`, `zpool
@@ -66,15 +89,13 @@
     `local-backup` ORAZ `pair_label = NAZWA`, bez `--unpair`; `--destroy-copies`
     niszczy kopie i puste poziomy pod celem (nigdy sam cel). `migrate-profile` i
     `audit-source-retention` pomijają relację lokalną; `edit-relation`, `add-source`,
-    `remove-source` odmawiają jej wprost (to L2), config zmienia `edit-config`.
+    `remove-source` działają od L2 (wpis wyżej).
   - **Na żywo (pve9b, dane testowe, sprzątnięte):** założenie z `--name`,
     `-R -X -L` w liniach, pauza („SKIPPED: relationship lt is paused”), wznowienie,
     `delete-relation --destroy-copies --yes` — crontab identyczny jak przed testem.
   - **Testy:** `localbackup` (rekord, sekcje, seed, zajęta nazwa, odmowy,
     `remove-client` lokalny, `edit-relation`, poziomy pod celem; testy z instalacją
     wymagają `flock` — tu SKIP, w CI biegną), `tui` (kreator „Lokalnie”, F3).
-  - **Zostaje (L2):** zmiana szablonu (`e`) i dodawanie/usuwanie datasetów dla
-    relacji lokalnej.
 - **Runda GUI, paczka C1 — replika: pasywna (uwaga 20) i harmonogram (16+19) (2026-10-09, właściciel: „rób paczkę C”).**
   - **Replika pasywna:** `[replica:]` przyjmuje `passive = yes` (bez `prefix`; oba naraz
     = odmowa). Silnik: `snapget.sh -e -M` bez `-m` — żadnej własnej migawki, przenosi
