@@ -1264,8 +1264,9 @@ fi
 # zadania) przejmuje panel F2 -- testy nizej (blok F2 i "wyglad") sprawdzaja to.
 # ============================================================================
 Z4W="$(screen zadania)"
-if ! has "$Z4W" 'F5' && ! has "$Z4W" 'Monitor'; then
-    ok "F5: ekran domyslny (F2) nie wspomina juz F5 ani Monitora -- listwa i panel"
+# F5 wrocilo 2026-10-09 jako ekran Szablony (uwaga 24) -- Monitora nadal nie ma.
+if ! has "$Z4W" 'Monitor' && has "$Z4W" 'F5 Szablony'; then
+    ok "F5: ekran domyslny (F2) nie wspomina Monitora; F5 to dzis Szablony"
 else
     bad "F5: pozostalosc na ekranie" "$Z4W"
 fi
@@ -1558,8 +1559,8 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F6 Nośniki F10 Wyjście'; then
-    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 zniesiony)"
+if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Szablony F6 Nośniki F10 Wyjście'; then
+    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
 fi

@@ -1900,6 +1900,24 @@ exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
 
+### E77 — two pinned contracts changed without looking for their pins (2026-10-09, R12)
+
+**Genesis.** PR #494 (F5 "Szablony", owner note 24) changed two contracts on
+purpose: F5 stopped being "refresh" (Ctrl-R only), and a local profile under a
+factory name stopped shadowing the factory one. Only the NEW tests were run (in
+slices). CI went red on five OLD ones that pinned the previous behaviour --
+96A roots (the shadow, and its digest), the F2 screen "no F5", the 80-column key
+bar, and the pty run that pressed F5 to refresh. The pty one was a real
+regression, not a stale pin: with text in the command line Ctrl-R was swallowed
+by line editing (only F-keys passed through), so "refresh" stopped working there.
+
+**Cause.** R12: a slice proves the shapes it ran. When a change REVERSES a
+contract, its old pins are the shapes that matter, and they live in the suites
+already -- `grep` for the old key/word/function before pushing, not after CI.
+
+**Rule (R12, unchanged).** Before reversing a contract, grep the suites for what
+pins it (here: "F5", "Odśwież", "shadow", profile_file) and run those sections.
+
 ### E76 — a passive replica skipped as "already current" and copied nothing (2026-10-08, R12)
 
 **Genesis.** PR #488 (paczka C1, passive replica) taught the media gate `--prefix -`

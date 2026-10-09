@@ -7859,10 +7859,14 @@ sed 's/^\tkeep           = 7$/\tkeep           = 99/' "$REPO/profiles/prod.conf"
 
 pr_file() { ( PROFILE_USER_ROOT="$UR"; profile_file "$1" 2>/dev/null ); }
 
-if [ "$(pr_file prod)" = "$UR/prod.conf" ]; then
-    ok "96A roots: a name present in BOTH resolves to the host's own copy"
+# Owner note 24 (2026-10-09): an own template may NOT carry a factory name -- a
+# local file of that name used to replace the factory profile in silence. The
+# factory name now resolves to the factory file; the local one is ignored
+# (list-profiles shows it as "shadow", save-profile refuses to write one).
+if [ "$(pr_file prod)" = "$REPO/profiles/prod.conf" ]; then
+    ok "96A roots: a name present in BOTH resolves to the FACTORY profile (the local file of that name is ignored)"
 else
-    bad "96A roots: a name present in both resolves to the host's copy" "got '$(pr_file prod)'"
+    bad "96A roots: a name present in both resolves to the factory profile" "got '$(pr_file prod)'"
 fi
 
 # CONTROL: a name the host does NOT override still resolves to the factory one.
@@ -7921,15 +7925,19 @@ else
         "path='$(profile_name_of "$UR/firma.conf")' bare='$(profile_name_of firma)'"
 fi
 
-# ...and the digest follows the resolution, or an override would be invisible to
-# migrate-profile -- the whole point of today's F2b.
+# ...and the digest follows the resolution: with a local file under the factory
+# name present, the digest is still the FACTORY one (nothing changed under the
+# relationships built from it). A local profile under its OWN name still
+# resolves to the local file -- the control that the user root is still read.
 d_fac="$( ( PROFILE_USER_ROOT="$WORK/nonexistent"; PROFILE_ACTIVE=prod; profile_digest ) )"
 d_loc="$( ( PROFILE_USER_ROOT="$UR";              PROFILE_ACTIVE=prod; profile_digest ) )"
-if [ -n "$d_fac" ] && [ "$d_fac" != "$d_loc" ]; then
-    ok "96A roots: the digest follows the resolved directory, so an override is not silent"
+cp "$UR/prod.conf" "$UR/prod-moj.conf"
+if [ -n "$d_fac" ] && [ "$d_fac" = "$d_loc" ] && [ "$(pr_file prod-moj)" = "$UR/prod-moj.conf" ]; then
+    ok "96A roots: a local file under a factory name does not change the factory digest; an own name still resolves locally"
 else
-    bad "96A roots: the digest follows the resolved directory" "factory='$d_fac' local='$d_loc'"
+    bad "96A roots: digest and own-name resolution" "factory='$d_fac' local='$d_loc'" "own='$(pr_file prod-moj)'"
 fi
+rm -f "$UR/prod-moj.conf"
 
 
 # ===========================================================================

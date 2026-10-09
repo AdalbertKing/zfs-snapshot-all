@@ -4281,8 +4281,9 @@ class UI(object):
             self.cmd += raw
             self.hist_pos = None
             return "stay"
-        # Klawisz F dziala takze przy tekscie w linii -- nie jest tekstem.
-        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10")
+        # Klawisz F dziala takze przy tekscie w linii -- nie jest tekstem. Ctrl-R
+        # (odswiez, od 2026-10-09 jedyny -- F5 to Szablony) tez: przy F5 dzialalo.
+        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "ctrl-r")
         if self.cmd and k not in FKEYS:
             if k == "bs":
                 self.cmd = self.cmd[:-1]
