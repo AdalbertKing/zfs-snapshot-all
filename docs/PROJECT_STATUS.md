@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c6a1fdd0fcd574dc -->
+<!-- status-covers-digest: 37697064f58024a7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,11 +28,12 @@
     komunikat „not one of the disks”); zaimportowanej obcej puli nie używa i nie
     eksportuje. `list-replicas` pokazuje taki dysk jako `wrong_medium` („NIE TEN
     DYSK”). Bez listy brama działa jak dotąd (nazwa puli + baza). Mirror jest jedną
-    pulą = jedno ID; `zpool replace` go nie zmienia. Tylko nośnik wymienny (generator
+    pulą = jedno ID (wymiana dysku w mirrorze to wg dokumentacji ZFS ta sama pula; tu
+    nie mierzone). Tylko nośnik wymienny (generator
     odmawia `media_guids` przy stałym).
   - **Kreator repliki (`tui/replica.sh`):** najpierw rodzaj nośnika (4/6), potem nośnik
     (5/6) — tylko podłączony: pule zaimportowane i w slocie, bez „Wpisz nazwę puli”
-    i bez okna bazy (baza zawsze `replica`). Nowa replika: „Sformatuj nowy nośnik”
+    i bez okna bazy (nowy nośnik: baza `replica`; kolejny dysk: baza repliki). Nowa replika: „Sformatuj nowy nośnik”
     (pula `<host>-<replika>` bez pytania, przycisk „Sformatuj (KASUJE dysk)”,
     domyślnie Wstecz). Zmiana wymiennej: „Dodaj kolejny dysk do tej repliki” (ta sama
     pula i baza, ID dopisane — żaden dysk nie jest wyłączany); zmiana stałej: bez
