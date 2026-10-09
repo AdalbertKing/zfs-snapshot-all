@@ -632,10 +632,14 @@ printf '%s' "$out" | grep -q "relationship 'lok' already exists on this host" \
     && ok "local relationship: a second --name=lok is refused while the first is live" \
     || bad "local relationship: name taken" "$(printf '%s' "$out" | tail -3)"
 fi   # flock present
+# Each refusal below on a fresh config: the install above left lok's sections in
+# $CFG, and an overlap refusal would hide the one these cases are about.
+rm -f "$WORK/crontab-store"; seed_cfg
 out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --source=rpool/data --target='' --recursive=flat --name=x --config="$CFG")"
 printf '%s' "$out" | grep -q -- '--name makes a relationship that COPIES' \
     && ok "local relationship: --name with --target='' (nothing copied) is refused" \
     || bad "local relationship: --name without a target" "$(printf '%s' "$out" | tail -3)"
+rm -f "$WORK/crontab-store"; seed_cfg
 out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --exclude-child='^x$' --config="$CFG")"
 printf '%s' "$out" | grep -q -- '--exclude-child needs --recursive=flat' \
     && ok "local relationship: --exclude-child without --recursive=flat is refused" \
@@ -1520,11 +1524,13 @@ else
     bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=flat --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive is for --target=''"; then
-    ok "A': --recursive with a target is refused, with the reason"
+        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
+# flat WITH a target is allowed since 2026-10-09 (measured on pve9b, see the
+# local relationship cases); atomic with a target stays refused.
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive=atomic is for --target=''"; then
+    ok "A': --recursive=atomic with a target is refused, with the reason"
 else
-    bad "A': --recursive with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
+    bad "A': --recursive=atomic with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
         bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?

@@ -16788,6 +16788,10 @@ copy_shell_level() {
 # no --unpair. The copies stay (delete-relation --destroy-copies takes them).
 remove_local_relation() {
     local name="$1" cpath="$2"
+    # Aimed like every other writer (63g): the config named by the record,
+    # through the one decision layer, before anything is written.
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    CRON_CONFIG="$CRON_CTX_FILE"
     [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ] || die "remove-client: the record of '$name' names no readable config ('${CRON_CONFIG:-}') -- nothing was changed"
     assert_cron_config_matches_installed "$CRON_CONFIG"
     assert_no_foreign_managed_block "$CRON_CONFIG"
