@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 853058c4db3d9987 -->
+<!-- status-covers-digest: bef63fd710c9bdab -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Sposób liczenia w oknie szablonu: (*) GFS ( ) WIEK (age) ( ) PŁASKI (flat) (2026-10-09, właściciel: „brakuje w oknie wyboru (*) GFS () AGE () FLAT — z wyjaśnieniem różnicy”).**
+  - **Okno (F5 → Ins / Enter + `e`):** nad tabelą wybór sposobu dla całego szablonu,
+    pod nim dwie linie objaśnienia wybranego: GFS — jedna migawka na okres, N okresów
+    wstecz; WIEK — kasuje starsze niż N okresów, po przestoju zostaje mniej; PŁASKI —
+    N najnowszych, seria migawek wypycha starsze. Liczby zostają, zmienia się tylko
+    jednostka przy nich (WIEK: godz. / dni / tyg. / mies. / lat). W drabinie na
+    jednej rodzinie wybór stoi na GFS, a trzecia linia mówi dlaczego.
+  - **`save-profile --method=gfs|age|flat`:** przelicza każdy liczący szczebel
+    szablonu „rodzina na szczebel” z tą samą liczbą: GFS = `gfs = yes` + `keep`,
+    PŁASKI = `keep`, WIEK = `retain = -<litera szczebla><liczba>`. Szczebel dodany
+    w tym samym wywołaniu (`--add-tier`) liczy się już nowym sposobem. Drabina na
+    jednej rodzinie: `gfs` bez zmian, `age` / `flat` = odmowa (kilka takich
+    liczników na tych samych migawkach to tylko największy z nich).
+  - **Na żywo (pve9b, kopia w /tmp):** okno bez terminala na d30h24-gfs → WIEK +
+    tygodniowy → `save-profile` przyjęty przez bramki: `-h24`, `-d30`, `-w4`; pliki
+    testowe usunięte.
+  - **Testy:** `zfsbackup` saveprof (WIEK z dodanym szczeblem, GFS, drabina);
+    `tui` (wybór z objaśnieniem → `--method=age` i `--retain`, drabina zablokowana).
 
 - **Tabela szablonu jest kompletna: zawsze pięć szczebli (2026-10-09, właściciel: „okno powinno być kompletne i pokazywać również miesięczne, roczne, tygodniowe po prostu nie pozaznaczane”).**
   - **Okno (F5 → Ins / Enter + `e`):** szczeble trzymania godzinowe, dobowe,

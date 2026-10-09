@@ -46,7 +46,8 @@ for p in d.get("profiles", []):
         me.write("\t".join([f(p.get("source")), f(p.get("used_by")), f(p.get("description"))]) + "\n")
         for t in p.get("tiers") or []:
             tiers.write("\t".join([f(t.get("name")), f(t.get("keep")), f(t.get("retain")),
-                                   f(t.get("quiesce")), f(t.get("send_schedule")), f(t.get("pattern"))]) + "\n")
+                                   f(t.get("quiesce")), f(t.get("send_schedule")), f(t.get("pattern")),
+                                   f(t.get("mechanism"))]) + "\n")
 PYEOF
 
 SRC=""; USED=0; BDESC=""
@@ -139,13 +140,13 @@ CANON = [("hourly", "h", "24", False), ("daily", "d", "7", True), ("weekly", "w"
 rows = []
 for line in open(tiers, encoding="utf-8"):
     f = [x[1:] if x.startswith("#") else x for x in line.rstrip("\n").split("\t")]
-    f += [""] * (6 - len(f))
-    tn, keep, retain, q, sched, pat = f[:6]
+    f += [""] * (7 - len(f))
+    tn, keep, retain, q, sched, pat, mech = f[:7]
     if not tn:
         continue
     lab, glab = words(tn)
     row = {"key": tn, "label": lab, "glabel": glab, "on": True, "family": pat or None,
-           "q": (bool(q) if sched else None), "base_q": bool(q)}
+           "q": (bool(q) if sched else None), "base_q": bool(q), "mech": mech}
     if keep:
         row.update({"value": keep, "unit": "", "base": keep, "mode": "keep"})
     elif len(retain) > 2 and retain[0] == "-" and retain[1].isalpha() and retain[2:].isdigit():
@@ -183,6 +184,26 @@ for t, letter, dflt, dq in CANON:
     ordered.append(row)
 ordered += [r for r in count if r not in ordered]
 rows = ordered
+# SPOSÓB LICZENIA (właściciel 2026-10-09: "brakuje w oknie wyboru (*) GFS () AGE () FLAT
+# -- z wyjaśnieniem różnicy"): jeden wybór dla całego szablonu, liczby zostają;
+# zapis = save-profile --method. Drabina na jednej rodzinie liczy tylko GFS.
+LETTER = {"hourly": "h", "daily": "d", "weekly": "w", "monthly": "m", "yearly": "y", "annual": "y"}
+for r in rows:
+    if r["mode"] in ("keep", "retain"):
+        r["letter"] = r.get("letter") or next((l for suf, l in LETTER.items() if r["key"].endswith(suf)), "")
+        r["units"] = {"age": UNIT.get(r["letter"].lower(), "")}
+base_m = "gfs" if ladder else (next((r.get("mech") for r in count if r.get("mech")), None) or ("age" if age else "flat"))
+choice = {"key": "method", "label": u"Sposób", "value": base_m, "base": base_m,
+          "options": [{"key": "gfs", "label": u"GFS",
+                       "help": [u"Jedna migawka na okres (godzinę, dobę, tydzień...), N okresów wstecz.",
+                                u"Seria migawek w jednej godzinie zostawia z niej jedną."]},
+                      {"key": "age", "label": u"WIEK (age)",
+                       "help": [u"Kasuje migawki starsze niż N okresów (dobowe 7 = 7 dni).",
+                                u"Po przestoju zostaje mniej: stare migawki dalej się starzeją."]},
+                      {"key": "flat", "label": u"PŁASKI (flat)",
+                       "help": [u"Trzyma N najnowszych migawek szczebla, bez względu na ich wiek.",
+                                u"Seria migawek w krótkim czasie wypycha starsze."]}],
+          "locked": (u"Drabina na jednej rodzinie migawek liczy tylko GFS." if ladder else None)}
 title = (u"Zmiana szablonu %s" % name) if action == "edit" else (u"Nowy szablon na podstawie %s" % name)
 s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
      "fields": ([] if action == "edit" else [{"key": "name", "label": u"Nazwa", "value": new}]),
@@ -190,7 +211,8 @@ s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)
      "note": [u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.",
               u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny."],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
-     "name_key": ("" if action == "edit" else "name"), "auto_desc": ("" if action == "edit" else "desc")}
+     "name_key": ("" if action == "edit" else "name"), "auto_desc": ("" if action == "edit" else "desc"),
+     "choice": choice}
 json.dump(s, open(spec, "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
 
@@ -207,6 +229,15 @@ spec, out, action, tmpd = sys.argv[1:5]
 s = json.load(open(spec, encoding="utf-8")); o = json.load(open(out, encoding="utf-8"))
 by = {r["key"]: r for r in o["rows"]}
 args, plan = [], []
+meth = o["fields"].get("method") or s["choice"]["base"]
+MNAME = {o_["key"]: o_["label"] for o_ in s["choice"]["options"]}
+if meth != s["choice"]["base"]:
+    args.append("--method=%s" % meth)
+    plan.append(u"  sposób: %s -> %s (liczby zostają)" % (MNAME[s["choice"]["base"]], MNAME[meth]))
+def unit(r):
+    return (r.get("units") or {}).get(meth, "")
+def field(r, v):
+    return ("--retain=-%s%s" % (r["letter"], v)) if meth == "age" else ("--keep=%s" % v)
 for r in s["rows"]:
     g = by.get(r["key"], {})
     lab = r["label"]
@@ -217,11 +248,11 @@ for r in s["rows"]:
         v = g.get("value") or r["base"]
         args.append("--add-tier=%s" % r["key"])
         if v != r["base"]:
-            args.append(("--keep=%s" % v) if r["mode"] == "keep" else ("--retain=-%s%s" % (r["letter"], v)))
+            args.append(field(r, v))
         q = r.get("q") is not None and bool(g.get("q"))
         if r.get("q") is not None and q != r["base_q"]:
             args.append("--quiesce=%s" % ("auto,degrade" if q else ""))
-        plan.append(u"  %s: dodany, %s%s" % (lab, (u"%s %s" % (v, r.get("unit") or "")).strip(),
+        plan.append(u"  %s: dodany, %s%s" % (lab, (u"%s %s" % (v, unit(r))).strip(),
                     (u", zamrażany" if q else u", bez zamrażania") if r.get("q") is not None else ""))
         continue
     if r.get("can_off", True) and not g.get("on", True):
@@ -230,11 +261,10 @@ for r in s["rows"]:
     if r.get("mode") in ("keep", "retain"):
         v = g.get("value") or r["base"]
         if v != r["base"]:
-            val = ("--keep=%s" % v) if r["mode"] == "keep" else ("--retain=-%s%s" % (r["letter"], v))
-            args += ["--tier=%s" % r["key"], val]
-            plan.append(u"  %s: %s -> %s %s" % (lab, r["base"], v, r.get("unit") or ""))
+            args += ["--tier=%s" % r["key"], field(r, v)]
+            plan.append(u"  %s: %s -> %s %s" % (lab, r["base"], v, unit(r)))
         else:
-            plan.append(u"  %s: %s %s (bez zmian)" % (lab, v, r.get("unit") or ""))
+            plan.append(u"  %s: %s %s (bez zmian)" % (lab, v, unit(r)))
     if r.get("q") is not None and bool(g.get("q")) != r["base_q"]:
         args += ["--tier=%s" % r["key"], "--quiesce=%s" % ("auto,degrade" if g.get("q") else "")]
         plan.append(u"  zamrażanie %s: %s -> %s" % (lab, "tak" if r["base_q"] else "nie", "tak" if g.get("q") else "nie"))
@@ -244,6 +274,7 @@ for r in s["rows"]:
     r["on"] = g.get("on", True); r["value"] = g.get("value", r.get("value")); r["q"] = g.get("q", r.get("q"))
 for f in s["fields"] + s["after"]:
     f["value"] = o["fields"].get(f["key"], f["value"])
+s["choice"]["value"] = meth
 json.dump(s, open(spec, "w", encoding="utf-8"), ensure_ascii=False)
 with open(tmpd + "/targs.txt", "w", encoding="utf-8") as f:
     f.write("\n".join(args) + ("\n" if args else ""))

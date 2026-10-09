@@ -14642,6 +14642,55 @@ cmd_list_jobs() {
 # directory. The mismatch is reported as a warning instead, computed from the
 # same rendered flags the suite compares -- said, not enforced.
 
+# save_profile_set_method <work file> <gfs|age|flat>
+# --method (owner, 2026-10-09: "brakuje w oknie wyboru (*) GFS () AGE () FLAT").
+# Re-counts every tier of a one-family-per-tier template the chosen way, keeping
+# its number: gfs = `gfs = yes` + `keep = N` (one snapshot per period, N periods
+# back), flat = `keep = N` (the N newest), age = `retain = -<letter>N` (younger
+# than N periods; the letter is the tier's own: hourly h, daily d, weekly w,
+# monthly m, yearly/annual y). A ladder on one family counts only GFS: several
+# flat or age counters on the same snapshots would mean just the largest one --
+# refused, except --method=gfs, which there is what it already is.
+save_profile_set_method() {
+    local work="$1" m="$2" dlist plist x sec n letter
+    case "$m" in gfs|age|flat) ;; *) echo "'$m' is not a method -- one of: gfs age flat"; return 1 ;; esac
+    plist=$(cron_config_section "$work" "[prune]" | sed -n -E 's/^[[:space:]]*use_template[[:space:]]*=[[:space:]]*//p' | head -1)
+    if [ -n "$plist" ]; then
+        [ "$m" = gfs ] && return 0
+        echo "this template is a ladder on ONE family of snapshots -- it counts only GFS (several '$m' counters on the same snapshots would mean just the largest one)"
+        return 1
+    fi
+    dlist=$(cron_config_section "$work" "[dataset]" | sed -n -E 's/^[[:space:]]*use_template[[:space:]]*=[[:space:]]*//p' | head -1)
+    local -a names=()
+    IFS=',' read -r -a names <<<"$dlist"
+    for x in "${names[@]}"; do
+        x="${x//[[:space:]]/}"; [ -n "$x" ] || continue
+        sec=$(cron_config_section "$work" "[template:$x]")
+        n=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*keep[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' | head -1)
+        [ -n "$n" ] || n=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*-[A-Za-z]([0-9]+).*/\1/p' | head -1)
+        [ -n "$n" ] || continue
+        case "$x" in
+            *hourly) letter=h ;; *daily) letter=d ;; *weekly) letter=w ;; *monthly) letter=m ;; *yearly|*annual) letter=y ;;
+            *) letter=$(printf '%s\n' "$sec" | sed -n -E 's/^[[:space:]]*retain[[:space:]]*=[[:space:]]*-([A-Za-z]).*/\1/p' | head -1) ;;
+        esac
+        if [ "$m" = age ] && [ -z "$letter" ]; then
+            echo "tier '$x' has no period in its name (hourly/daily/weekly/monthly/yearly) -- cannot say what $n means as an age"; return 1
+        fi
+        case "$m" in
+            gfs)  set_or_remove_section_field "$work" "[template:$x]" retain "" \
+                  && set_or_remove_section_field "$work" "[template:$x]" gfs yes \
+                  && set_or_remove_section_field "$work" "[template:$x]" keep "$n" ;;
+            flat) set_or_remove_section_field "$work" "[template:$x]" retain "" \
+                  && set_or_remove_section_field "$work" "[template:$x]" gfs "" \
+                  && set_or_remove_section_field "$work" "[template:$x]" keep "$n" ;;
+            age)  set_or_remove_section_field "$work" "[template:$x]" keep "" \
+                  && set_or_remove_section_field "$work" "[template:$x]" gfs "" \
+                  && set_or_remove_section_field "$work" "[template:$x]" retain "-$letter$n" ;;
+        esac || { echo "could not rewrite tier '$x'"; return 1; }
+    done
+    return 0
+}
+
 # save_profile_add_tier <work file> <hourly|daily|weekly|monthly|yearly>
 # --add-tier (owner, 2026-10-09: "okno powinno być kompletne i pokazywać również
 # miesięczne, roczne, tygodniowe po prostu nie pozaznaczane"). Adds a tier the
@@ -14788,7 +14837,7 @@ cmd_save_profile() {
         [ -n "$_af" ] || die "save-profile --ask needs --from=NAME (a new template based on it) or --edit=NAME"
         template_dialog new "$_af"; return $?
     fi
-    local from="" as="" tier="" desc="" force=0 a
+    local from="" as="" tier="" desc="" method="" force=0 a
     # ftier: the tier each field belongs to -- the --tier= given LAST before it.
     # One call can change several tiers (owner note 24: the F5 dialog asks every
     # tier in turn); a single --tier= reads exactly as before.
@@ -14800,6 +14849,7 @@ cmd_save_profile() {
             --tier=*)        tier="${a#*=}" ;;
             --drop-tier=*)   drop+=("${a#*=}") ;;
             --add-tier=*)    add+=("${a#*=}"); tier="${a#*=}" ;;
+            --method=*)      method="${a#*=}" ;;
             --description=*) desc="${a#*=}" ;;
             --force)         force=1 ;;
             --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
@@ -14854,6 +14904,11 @@ cmd_save_profile() {
     # (a ladder rung is not called by the tier word -- amap says what it is).
     local -A amap=()
     local _a _sec
+    # --method before --add-tier: an added tier copies the counting of the others.
+    if [ -n "$method" ]; then
+        _sec=$(save_profile_set_method "$work" "$method") \
+            || { rm -rf "$workdir"; die "save-profile: --method=$method refused: $_sec. Nothing was written."; }
+    fi
     for _a in ${add[@]+"${add[@]}"}; do
         _sec=$(save_profile_add_tier "$work" "$_a") \
             || { rm -rf "$workdir"; die "save-profile: --add-tier=$_a refused: $_sec. Nothing was written."; }

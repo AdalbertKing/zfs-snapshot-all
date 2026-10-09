@@ -11596,6 +11596,28 @@ if ! pf_run --from=d7h24 --as=at3 --add-tier=daily && grep -q "already has the t
 else
     bad "saveprof: --add-tier existing" "$(cat "$WORK/pf.err")"
 fi
+# --method (owner, 2026-10-09: "(*) GFS () AGE () FLAT"): every counting tier is
+# re-counted the chosen way with its number kept; an --add-tier after it follows
+# the new way; a ladder on one family counts only GFS (age/flat refused, gfs a no-op).
+if pf_run --from=d7h24 --as=mt1 --method=age --add-tier=weekly \
+   && pf_sec mt1 hourly | grep -qE 'retain += -h24$' && pf_sec mt1 daily | grep -qE 'retain += -d7$' \
+   && pf_sec mt1 weekly | grep -qE 'retain += -w4$' && ! grep -qE '^[[:space:]]*(keep|gfs)[[:space:]]*=' <(pf_sec mt1 hourly; pf_sec mt1 daily; pf_sec mt1 weekly); then
+    ok "saveprof: --method=age -- each tier keeps its number as an age in its own period, an added tier follows"
+else
+    bad "saveprof: --method=age" "$(cat "$WORK/pf.err")" "$(pf_sec mt1 hourly; pf_sec mt1 daily; pf_sec mt1 weekly)"
+fi
+if pf_run --from=d7h24 --as=mt2 --method=gfs && pf_sec mt2 daily | grep -qE 'gfs += yes$' && pf_sec mt2 daily | grep -qE 'keep += 7$'; then
+    ok "saveprof: --method=gfs -- flat keep becomes a GFS ladder per family, same number"
+else
+    bad "saveprof: --method=gfs" "$(cat "$WORK/pf.err")" "$(pf_sec mt2 daily)"
+fi
+if ! pf_run --from=default --as=mt3 --method=flat && grep -q 'counts only GFS' "$WORK/pf.err" && [ ! -f "$PF/user/mt3.conf" ] \
+   && pf_run --from=default --as=mt4 --method=gfs; then
+    ok "saveprof: --method on a one-family ladder -- flat refused (nothing written), gfs accepted as it is"
+else
+    bad "saveprof: --method ladder" "$(cat "$WORK/pf.err")"
+fi
+rm -f "$PF/user/mt1.conf" "$PF/user/mt2.conf" "$PF/user/mt4.conf"
 rm -f "$PF/user/at1.conf" "$PF/user/at2.conf" "$PF/pkg/default.conf"
 
 # ---------------------------------------------------------------------------

@@ -15,8 +15,12 @@ SPEC: {"title", "hint", "note": [linie], "head": [3 naglowki kolumn],
        "after":  [{"key","label","value","edit":bool}],   -- pod tabela (opis)
        "rows": [{"key","label","glabel","on":bool,"can_off":bool,"value":"24",
                  "unit":"godz.","ref":"24 godz."|null,"q":bool|null,"family":"..."}],
-       "taken": [nazwy zajete], "name_key": "name", "auto_desc": "desc"|null}
+       "taken": [nazwy zajete], "name_key": "name", "auto_desc": "desc"|null,
+       "choice": {"key","label","value","options":[{"key","label","help":[linie]}],
+                  "locked": "dlaczego nie da sie zmienic"|null}}   -- (*) wybor nad tabela
+      wiersz moze miec "units": {opcja: jednostka} -- jednostka liczby zalezy od wyboru.
 OUT:  {"action":"next"|"back", "fields":{key: value}, "rows":[{"key","on","value","q"}]}
+      (wybor jest w "fields" pod swoim kluczem)
 
 --keys: bez terminala -- nazwy klawiszy (up, down, left, right, tab, btab, space,
 enter, esc, bs, albo jeden znak), potem wydruk ekranu; tak to sprawdzaja testy.
@@ -38,6 +42,8 @@ class Grid(object):
         self.rows = [dict(r) for r in spec.get("rows", [])]
         for r in self.rows:
             r["value"] = str(r.get("value") or "")
+        self.choice = dict(spec["choice"]) if spec.get("choice") else None
+        self._units()
         self.desc_key = spec.get("auto_desc")
         self.desc_touched = False
         self.msg = ""
@@ -47,10 +53,18 @@ class Grid(object):
         self.cur = 0
         # kursor startuje na pierwszej rzeczy do zmiany w tabeli (albo na nazwie)
         for i, it in enumerate(self.items):
-            if it[0] in ("field",) or it[0] in ("val", "on", "q"):
+            if it[0] in ("field", "opt") or it[0] in ("val", "on", "q"):
                 self.cur = i
                 break
         self._auto_desc()
+
+    # jednostka liczby wynika z wyboru (np. WIEK: "dni", GFS/PŁASKI: bez jednostki)
+    def _units(self):
+        if not self.choice:
+            return
+        for r in self.rows:
+            if "units" in r:
+                r["unit"] = r["units"].get(self.choice["value"], "")
 
     # -- elementy, po ktorych chodzi kursor: (rodzaj, indeks, linia)
     def _items(self):
@@ -58,6 +72,9 @@ class Grid(object):
         for i, f in enumerate(self.fields):
             if f.get("edit", True):
                 out.append(("field", i, "f%d" % i))
+        if self.choice:
+            for j, _o in enumerate(self.choice["options"]):
+                out.append(("opt", j, "c"))
         for i, r in enumerate(self.rows):
             if r.get("can_off", True):
                 out.append(("on", i, "r%d" % i))
@@ -118,6 +135,14 @@ class Grid(object):
                 self.done = "back"
             elif self.validate():
                 self.done = "next"
+            return
+        if k == "space" and kind == "opt":
+            if self.choice.get("locked"):
+                self.msg = self.choice["locked"]
+            else:
+                self.choice["value"] = self.choice["options"][idx]["key"]
+                self._units()
+                self._auto_desc()
             return
         if k == "space":
             if kind == "on":
@@ -209,6 +234,8 @@ class Grid(object):
         fields = {}
         for f in self.fields + self.after:
             fields[f["key"]] = f["value"]
+        if self.choice:
+            fields[self.choice["key"]] = self.choice["value"]
         return {"action": self.done or "back", "fields": fields,
                 "rows": [{"key": r["key"], "on": bool(r.get("on")), "value": r.get("value"),
                           "q": r.get("q")} for r in self.rows]}
@@ -233,6 +260,21 @@ class Grid(object):
             add(lab + (val + u"_" * max(0, 30 - len(val))) if f.get("edit", True) else lab + val,
                 segs=[(("field", i), len(lab), len(lab) + max(30, len(val)))] if f.get("edit", True) else None)
         if self.fields:
+            add(u"")
+        if self.choice:
+            ch = self.choice
+            lab = u" %-7s " % (ch["label"] + ":")
+            text, segs = lab, []
+            for j, o in enumerate(ch["options"]):
+                mark = u"(*)" if o["key"] == ch["value"] else u"( )"
+                segs.append((("opt", j), len(text), len(text) + 3))
+                text += u"%s %s   " % (mark, o["label"])
+            add(text.rstrip(), segs=segs)
+            sel = [o for o in ch["options"] if o["key"] == ch["value"]]
+            for hl in (sel[0].get("help") or []) if sel else []:
+                add(u"   " + hl)
+            if ch.get("locked"):
+                add(u"   " + ch["locked"])
             add(u"")
         head = self.spec.get("head") or [u"SZCZEBEL", u"TRZYMA", u""]
         add(u"      %-16s %-14s %s" % tuple((head + [u"", u"", u""])[:3]))
