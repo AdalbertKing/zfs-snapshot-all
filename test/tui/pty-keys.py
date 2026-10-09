@@ -28,7 +28,8 @@ except ImportError:
     sys.exit(2)
 
 SEQ = {"F1": "\x1bOP", "F2": "\x1bOQ", "F3": "\x1bOR", "F4": "\x1bOS", "F5": "\x1b[15~", "F6": "\x1b[17~",
-       "F7": "\x1b[18~", "F8": "\x1b[19~", "F9": "\x1b[20~", "F10": "\x1b[21~", "esc": "\x1b", "enter": "\r"}
+       "F7": "\x1b[18~", "F8": "\x1b[19~", "F9": "\x1b[20~", "F10": "\x1b[21~", "esc": "\x1b", "enter": "\r",
+       "ctrl-r": "\x12"}
 ANSI = re.compile(r"\x1b(\[[0-9;?]*[A-Za-z@]|\][^\x07]*\x07|[()][0-9A-B]|[=>78]|O.)")
 
 

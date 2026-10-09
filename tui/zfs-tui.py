@@ -125,7 +125,7 @@ ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
 # F3/F2; to, co F5 pokazywal WIECEJ (harmonogram straznika, progi, straznik bez
 # zadania), przenioslo sie do panelu F2 (rel_detail_pairs, build_jobs).
 SCREENS = [("zadania", "F2", "Zadania"), ("relacje", "F3", "Relacje"), ("transfery", "F4", "Transfery"),
-           ("nosniki", "F6", u"Nośniki")]
+           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Nośniki")]
 
 
 def home_dir():
@@ -1695,8 +1695,8 @@ def key_bar(active, width, extra=""):
         line = line[1:]
     if extra and width >= len(line) + len(extra) + 1:
         line += " " + extra
-    if width >= len(line) + 12:
-        line += u" F5 Odśwież"
+    if width >= len(line) + 16:
+        line += u" Ctrl-R Odśwież"
     return fit(line, width)
 
 
@@ -3146,6 +3146,91 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
     return scr
 
 
+# --- F5 Szablony (uwaga 24, 2026-10-09) ------------------------------------
+TEMPLATE_KIND = {"package": u"fabryczny", "user": u"własny", "shadow": u"POMIJANY"}
+
+
+def template_detail_pairs(p):
+    """Panel szablonu: rodzaj, opis, sposob, ile relacji, i szczeble (kiedy, ile trzyma)."""
+    w = profile_words(p)
+    pairs = [("Rodzaj", TEMPLATE_KIND.get(p.get("source"), p.get("source") or "?")
+              + (u"   -- ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku" if p.get("source") == "shadow" else "")),
+             ("Opis", p.get("description") or "-"),
+             (u"Sposób", "%s, %s" % (w["mech"], w["shape"])),
+             ("Trzyma", w["retention"].replace(u"trzyma ", "", 1)),
+             (u"Użyty", u"%d relacji na tym hoście" % int(p.get("used_by") or 0))]
+    for t in p.get("tiers", []):
+        keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or u"wg drabiny"
+        pairs.append((u"Szczebel", u"%s   %s   trzyma %s%s" % (
+            tier_unit(t.get("name", "")), cron_words(t["send_schedule"]) if t.get("send_schedule") else u"bez własnych migawek",
+            keep, (u"   zamraża" if t.get("quiesce") else ""))))
+    if p.get("error"):
+        pairs.append((u"Błąd", p["error"]))
+    pairs.append(("Plik", p.get("file") or "?"))
+    return pairs
+
+
+def render_szablony(data, cursor, width, height, now, ch, message=""):
+    scr = Screen()
+    top = top_bar(data, width, now, ch.ascii, len(data.errors))
+    profs = list(data.profiles or [])
+    if data.failed("profiles") and not profs:
+        scr.lines = [top] + box(ch, "Szablony", source_error_body(ch, "profiles", data, "list-profiles"), width)
+    else:
+        beside = width >= 150
+        lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
+        inner = lbw - 4
+        nw = max(8, min(30, max([len(x.get("name") or "?") for x in profs] + [8])))
+        kw, mw, uw = 10, 13, 5
+        rw = inner - (nw + kw + mw + uw + 4)
+        hdr = "%s %s %s %s %s" % (fit("Nazwa", nw), fit("Rodzaj", kw), fit(u"Sposób", mw), fit("Trzyma", rw), fit(u"Użyty", uw))
+        panel_h = 0 if beside else 10
+        list_h = max(3, height - 2 - 2 - panel_h - 2)
+        body = [hdr, ch.dash * inner]
+        top_i = max(0, cursor - list_h + 1)
+        cur_y = None
+        for i, x in enumerate(profs[top_i:top_i + list_h], start=top_i):
+            w = profile_words(x)
+            if i == cursor:
+                cur_y = len(body)
+            body.append("%s %s %s %s %s" % (fit(x.get("name"), nw, ch), fit(TEMPLATE_KIND.get(x.get("source"), x.get("source") or "?"), kw, ch),
+                                            fit(w["mech"], mw, ch), fit(w["retention"].replace(u"trzyma ", ""), rw, ch),
+                                            fit(str(int(x.get("used_by") or 0)), uw, ch)))
+        if not profs:
+            body.append(u"Brak szablonów (list-profiles).")
+        while len(body) < list_h + 2:
+            body.append("")
+        lb = box(ch, u"Szablony retencji (%d)" % len(profs), body, lbw,
+                 footer=u"Ins nowy na podstawie zaznaczonego   Enter szczegóły (e zmienia własny)   Del usuń własny")
+        if cur_y is not None:
+            scr.cursor_y = 2 + cur_y
+        panel = []
+        if profs and 0 <= cursor < len(profs):
+            pw_ = (width - max(MIN_WIDTH, int(width * 0.6))) if beside else width
+            pl = detail_kv(ch, template_detail_pairs(profs[cursor]), pw_ - 4)
+            lim = (len(lb) - 2) if beside else (panel_h - 2)
+            pl = pl[:lim]
+            while len(pl) < lim:
+                pl.append("")
+            panel = box(ch, u"%s -- szczegóły" % profs[cursor].get("name"), pl, pw_, double=False)
+        if beside and panel:
+            scr.lines = [top] + side_by_side(lb, panel, width, ch)
+        else:
+            scr.lines = [top] + lb + panel
+        scr.titles.update({1, len(lb)})
+        if panel and not beside:
+            scr.titles.update({len(lb) + 1, len(lb) + len(panel)})
+    scr.bars.add(0)
+    if message:
+        scr.lines.append(fit(" " + message, width))
+    while len(scr.lines) < height - 1:
+        scr.lines.append(fit("", width))
+    scr.lines = scr.lines[:height - 1]
+    scr.lines.append(key_bar("szablony", width))
+    scr.bars.add(len(scr.lines) - 1)
+    return scr
+
+
 # --- Pomoc -----------------------------------------------------------------
 HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
@@ -3195,7 +3280,7 @@ HELP = [
     u"  F7 F8 F9          akcje BIEŻĄCEGO okna, podpisane w listwie i w ramce",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
-    u"  F5 / Ctrl-R       odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
+    u"  Ctrl-R            odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
     u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
     u"  F10               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
     "",
@@ -3230,7 +3315,7 @@ class UI(object):
         self.now_fixed = now
         self.exec_log = exec_log   # testy: zamiast uruchamiac, zapisz komende tutaj
         self.screen = "zadania"
-        self.cursor = {"zadania": 0, "relacje": 0, "transfery": 0, "monitor": 0, "nosniki": 0}
+        self.cursor = {"zadania": 0, "relacje": 0, "transfery": 0, "monitor": 0, "szablony": 0, "nosniki": 0}
         self.window = None        # ("relacja", row) | ("pomoc", None) | ("prompt"|"confirm"|"output", dict)
         self.scroll = 0
         self.message = ""
@@ -3414,6 +3499,8 @@ class UI(object):
             return len(r) + len(d)
         if screen == "monitor":
             return len(monitor_rows(self.data))
+        if screen == "szablony":
+            return len(self.data.profiles or [])
         return len((self.data.replicas or {}).get("replicas", []))
 
     # ------------------------------------------------------------------
@@ -3532,6 +3619,33 @@ class UI(object):
         else:
             out.append(u"--- zakończone, rc=%s -- czasownik ODMÓWIŁ albo padł; przeczytaj powyżej" % rc + (u"   (dziennik: %s)" % obj["path"] if obj.get("path") else ""))
         return out
+
+    def ensure_profiles(self):
+        """Szablony czytane NA ZADANIE (list-profiles --no-render: ~1 s), nie przy kazdym
+        odswiezeniu -- ten sam leniwy czytelnik, ktory ma kreator."""
+        if self.data.profiles is None:
+            load_profiles(self.repo, self.files, self.data)
+
+    def run_template_dialog(self, argv):
+        res = self.run_dialog(argv)
+        self.data.profiles = None
+        self.ensure_profiles()
+        self.cursor["szablony"] = min(self.cursor["szablony"], max(0, self.count("szablony") - 1))
+        return res
+
+    def template_action(self, k):
+        """Ins na F5: nowy szablon NA PODSTAWIE zaznaczonego; Del: usun wlasny (okna
+        whiptail, tui/template.sh). Logika -- save-profile / delete-profile."""
+        profs = self.data.profiles or []
+        c = self.cursor["szablony"]
+        if not profs or not (0 <= c < len(profs)):
+            self.message = u"brak szablonów (list-profiles nie odpowiedział?)"
+            return
+        n = profs[c].get("name")
+        if k == "ins":
+            return self.run_template_dialog([self.zb(), "save-profile", "--ask", "--from=%s" % n])
+        if k == "del":
+            return self.run_template_dialog([self.zb(), "delete-profile", n, "--ask"])
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -4102,6 +4216,11 @@ class UI(object):
         if self.window:
             if k in ("esc", "q", "enter"):
                 self.window, self.scroll = None, 0
+            elif k == "e" and self.window[0] == "panel" and self.window[1].get("template"):
+                # ZMIANA SZABLONU (uwaga 24): okna whiptail; fabryczny -- okno mowi, ze Ins robi kopie.
+                n = self.window[1]["template"]
+                self.window, self.scroll = None, 0
+                return self.run_template_dialog([self.zb(), "save-profile", "--ask", "--edit=%s" % n]) or "stay"
             elif k == "e" and self.window[0] == "panel" and self.window[1].get("replica"):
                 # ZMIANA REPLIKI: te same okna co Ins na F6, wypelnione.
                 n = self.window[1]["replica"]
@@ -4226,7 +4345,7 @@ class UI(object):
                 res = self.action(k)
                 if res:
                     return res
-            elif k in ("F5", "ctrl-r"):
+            elif k == "ctrl-r":
                 self.ask_refresh()
             else:
                 for key, fk, _label in SCREENS:
@@ -4239,6 +4358,8 @@ class UI(object):
         for key, fk, _label in SCREENS:
             if k == fk:
                 self.screen = key
+                if key == "szablony":
+                    self.ensure_profiles()
                 return "stay"
         n = self.count(self.screen)
         c = self.cursor[self.screen]
@@ -4254,8 +4375,13 @@ class UI(object):
             c = 0
         elif k == "end":
             c = max(0, n - 1)
-        elif k in ("F5", "ctrl-r"):
+        elif k == "ctrl-r":
+            if self.screen == "szablony":
+                self.data.profiles = None
+                self.ensure_profiles()
             self.ask_refresh()
+        elif k in ("del", "ins") and self.screen == "szablony":
+            return self.template_action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
         elif k in ("F7", "del", "ins") and self.screen == "nosniki":
@@ -4290,6 +4416,10 @@ class UI(object):
         if self.screen == "monitor":
             m = monitor_rows(self.data)[c]
             return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
+        if self.screen == "szablony":
+            pr = (self.data.profiles or [])[c]
+            return {"kind": "panel", "name": u"szablon %s" % pr.get("name"), "pairs": template_detail_pairs(pr),
+                    "template": pr.get("name")}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
         return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"),
                 "pairs": replica_detail_pairs(rp, ch, replica_stats_row(self.data, rp.get("name")), self.data.failed("stats")),
@@ -4319,6 +4449,8 @@ def _ui_render(self, width, height):
                                 hide_gone=self.hide_transfers_gone)
     elif self.screen == "monitor":
         base = render_monitor(self.data, self.cursor["monitor"], width, sh, now, self.ch, self.message)
+    elif self.screen == "szablony":
+        base = render_szablony(self.data, self.cursor["szablony"], width, sh, now, self.ch, self.message)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message)
     if not self.window:
@@ -4371,6 +4503,8 @@ def _ui_render(self, width, height):
             foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("replica"):
                 foot = u"e zmień replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+            if obj.get("template"):
+                foot = u"e zmień szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień relację   Esc zamyka   strzałki/PgUp/PgDn przewijają"
@@ -4702,6 +4836,8 @@ def main(argv):
     ui = UI(repo, files, ch, a.now, a.exec_log)
     if a.render_once:
         ui.screen = a.screen
+        if ui.screen == "szablony":
+            ui.ensure_profiles()
         for k in [x for x in a.keys.split(",") if x]:
             name = live_key_name(ui, k)
             if name and ui.key(name, a.height) == "quit":

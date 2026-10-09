@@ -538,6 +538,10 @@ Inspection / teardown:
                                     with the reason in words, never skipped and never
                                     OK. Exit status follows the engine: 0/1/2/3.
   zfs-backup.sh list-profiles [--json]
+  zfs-backup.sh delete-profile NAZWA [--yes|--ask]
+                                    Delete an OWN template (factory ones are not
+                                    deleted). Relationships built from it keep running;
+                                    the plan says how many there are. Plans without --yes.
   zfs-backup.sh list-jobs [--json]
   zfs-backup.sh job-stats --json [--days=N]
                                     The daily mail's numbers as a contract: per cron
@@ -664,7 +668,13 @@ Inspection / teardown:
                                     one level -- section, tier template, [defaults] --
                                     and show-config remains the byte-exact authority.
   zfs-backup.sh save-profile --from=NAZWA --as=NAZWA2
-                                    [--tier=SZCZEBEL --pole=wartosc ...]
+                                    [--tier=SZCZEBEL --pole=wartosc ...]...
+                                    (several --tier= in one call: each field goes to
+                                    the --tier= before it; NAZWA2 may not be the name
+                                    of a factory template)
+  zfs-backup.sh save-profile --ask --from=NAZWA | --ask --edit=NAZWA
+                                    The same as windows (F5 in the GUI: Ins = a new
+                                    template based on NAZWA, Enter + 'e' = change an own one).
                                     [--description=TEKST] [--force]
                                     Open an existing template, change it, save it as
                                     your own -- into /etc/zfs-snapshot-all/profiles,
@@ -1704,14 +1714,19 @@ profile_file() {   # <file name or path> -> the profile file to use
     # `.conf` to it, so `--profile=firma.conf` went looking for firma.conf.conf
     # and only the extension-less shorthand worked -- the opposite of the
     # instruction, which was that a profile is a file and you may name it.
-    for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+    # PACKAGE FIRST (owner note 24, 2026-10-09: an own template may not carry a
+    # factory name). It used to be the other way round, and a file of the same
+    # name in $PROFILE_USER_ROOT silently replaced the factory profile for every
+    # relationship built afterwards. save-profile now refuses such a name, and
+    # list-profiles shows a file that has one anyway as "shadow" -- ignored here.
+    for d in "$PROFILE_ROOT" "$PROFILE_USER_ROOT"; do
         [ -f "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }
     done
     # The shorthand survives as a compatible alias, because `--profile=default`
     # is what every existing record, test and habit already says.
     case "$n" in
         *.conf) : ;;
-        *) for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+        *) for d in "$PROFILE_ROOT" "$PROFILE_USER_ROOT"; do
                [ -f "$d/$n.conf" ] && { printf '%s' "$d/$n.conf"; return 0; }
            done ;;
     esac
@@ -14639,9 +14654,31 @@ save_profile_name_shape() {   # <name> -> normalised letter+count shape, or empt
         | grep -oE '[dhwmy][0-9]+' | sort | tr -d '\n'
 }
 
+# template_dialog <new|edit|delete> <name> -- the F5 windows (tui/template.sh). They only
+# ask and show the plan; the answer comes back as an ordinary save-profile/delete-profile.
+template_dialog() {
+    local dlg="$SCRIPT_DIR/tui/template.sh"
+    [ -f "$dlg" ] || die "brak $dlg -- checkout jest niekompletny"
+    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$1" "$2"
+}
+
 cmd_save_profile() {
+    # --ask (owner note 24, 2026-10-09): Ins on F5 = --ask --from=NAME (a new
+    # template based on it), 'e' = --ask --edit=NAME (change an own one).
+    local _aa _ask=0 _af="" _ae=""
+    for _aa in "$@"; do
+        case "$_aa" in --ask) _ask=1 ;; --from=*) _af="${_aa#*=}" ;; --edit=*) _ae="${_aa#*=}" ;; esac
+    done
+    if [ "$_ask" -eq 1 ]; then
+        if [ -n "$_ae" ]; then template_dialog edit "$_ae"; return $?; fi
+        [ -n "$_af" ] || die "save-profile --ask needs --from=NAME (a new template based on it) or --edit=NAME"
+        template_dialog new "$_af"; return $?
+    fi
     local from="" as="" tier="" desc="" force=0 a
-    local -a fname=() fvalue=() drop=()
+    # ftier: the tier each field belongs to -- the --tier= given LAST before it.
+    # One call can change several tiers (owner note 24: the F5 dialog asks every
+    # tier in turn); a single --tier= reads exactly as before.
+    local -a fname=() fvalue=() ftier=() drop=()
     for a in "$@"; do
         case "$a" in
             --from=*)        from="${a#*=}" ;;
@@ -14651,7 +14688,7 @@ cmd_save_profile() {
             --description=*) desc="${a#*=}" ;;
             --force)         force=1 ;;
             --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
-                             fvalue+=("${a#*=}") ;;
+                             fvalue+=("${a#*=}"); ftier+=("$tier") ;;
             -*)              die "save-profile: unknown option '$a'" ;;
             *)               die "save-profile: takes no positional arguments (use --from= and --as=)" ;;
         esac
@@ -14662,6 +14699,9 @@ cmd_save_profile() {
         */*) die "save-profile: --as must be a NAME, not a path: the copy always lands in $PROFILE_USER_ROOT" ;;
     esac
     profile_name_ok "${as%.conf}" || die "save-profile: '$as' is not a usable profile name: ${PROFILE_ERR:-refused}"
+    # Owner note 24 (2026-10-09): an own template may not carry a factory name.
+    [ -f "$PROFILE_ROOT/${as%.conf}.conf" ] \
+        && die "save-profile: '${as%.conf}' is the name of a FACTORY template -- an own one needs a name of its own (e.g. ${as%.conf}-moj). Nothing was written."
 
     local src; src=$(profile_file "$from")
     [ -f "$src" ] || die "save-profile: no profile '$from' (looked in $PROFILE_USER_ROOT and $PROFILE_ROOT). Nothing was written."
@@ -14695,14 +14735,14 @@ cmd_save_profile() {
     cp -p "$src" "$work" || { rm -rf "$workdir"; die "save-profile: could not copy $src"; }
     chmod 0644 "$work" 2>/dev/null || :
 
-    if [ -n "$tier" ]; then
-        cron_config_section "$work" "[template:$tier]" | grep -q . \
-            || { rm -rf "$workdir"; die "save-profile: '$from' has no tier '$tier'. It has: $(sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$src" | tr '\n' ' '). Nothing was written."; }
-    fi
-    local i=0
+    local i=0 _t
     while [ "$i" -lt "$fields_given" ]; do
-        set_or_remove_section_field "$work" "[template:$tier]" "${fname[$i]}" "${fvalue[$i]}" \
-            || { rm -rf "$workdir"; die "save-profile: could not write '${fname[$i]}' into [template:$tier] -- nothing was written"; }
+        _t="${ftier[$i]}"
+        [ -n "$_t" ] || { rm -rf "$workdir"; die "save-profile: --${fname[$i]} comes before any --tier= -- say which tier it changes. Nothing was written."; }
+        cron_config_section "$work" "[template:$_t]" | grep -q . \
+            || { rm -rf "$workdir"; die "save-profile: '$from' has no tier '$_t'. It has: $(sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$src" | tr '\n' ' '). Nothing was written."; }
+        set_or_remove_section_field "$work" "[template:$_t]" "${fname[$i]}" "${fvalue[$i]}" \
+            || { rm -rf "$workdir"; die "save-profile: could not write '${fname[$i]}' into [template:$_t] -- nothing was written"; }
         i=$((i + 1))
     done
     # --drop-tier=NAME (2026-09-24, owner: "szczebel = 0 to po prostu brak
@@ -15504,6 +15544,57 @@ profile_meta_field() {   # <profile file> <field> -> the [profile] section's val
         | sed -n -E "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" | head -1
 }
 
+# profile_usage_load -> PROFILE_USED_BY[name] = relationships built from it
+declare -gA PROFILE_USED_BY=()
+profile_usage_load() {
+    PROFILE_USED_BY=()
+    local f p sp
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        [ "$(record_get "$f" STATE)" = removed ] && continue
+        p=$(record_get "$f" PROFILE); sp=$(record_get "$f" SOURCE_PROFILE)
+        [ -n "$p" ] && PROFILE_USED_BY[$p]=$(( ${PROFILE_USED_BY[$p]:-0} + 1 ))
+        [ -n "$sp" ] && [ "$sp" != "$p" ] && PROFILE_USED_BY[$sp]=$(( ${PROFILE_USED_BY[$sp]:-0} + 1 ))
+    done
+    return 0
+}
+
+# delete-profile NAME [--yes] (owner note 24, 2026-10-09) -- an OWN template only.
+# Relationships built from it are untouched (a profile is create-time
+# provenance); what they lose is a later "refresh from the template", so the
+# plan says how many there are.
+cmd_delete_profile() {
+    local name="" yes=0 ask=0 a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            --ask)    ask=1 ;;
+            -*) die "delete-profile: unknown option '$a'" ;;
+            *)  [ -z "$name" ] || die "delete-profile: takes one NAME"; name="${a%.conf}" ;;
+        esac
+    done
+    [ -n "$name" ] || die "usage: delete-profile NAME [--yes|--ask]"
+    if [ "$ask" -eq 1 ]; then template_dialog delete "$name"; return $?; fi
+    case "$name" in */*) die "delete-profile: a NAME, not a path" ;; esac
+    [ -f "$PROFILE_ROOT/$name.conf" ] && [ ! -f "$PROFILE_USER_ROOT/$name.conf" ] \
+        && die "delete-profile: '$name' is a FACTORY template (in $PROFILE_ROOT) -- it is not deleted. Nothing was changed."
+    local f="$PROFILE_USER_ROOT/$name.conf"
+    [ -f "$f" ] || die "delete-profile: no own template '$name' in $PROFILE_USER_ROOT. Nothing was changed."
+    profile_usage_load
+    local n="${PROFILE_USED_BY[$name]:-0}"
+    echo "PLAN (delete-profile):"
+    echo "  delete: $f"
+    if [ "$n" -gt 0 ]; then
+        echo "  built from it: $n relationship(s) on this host -- they keep running as built;"
+        echo "                 a later change of their template will have to pick another one"
+    else
+        echo "  built from it: no relationship on this host"
+    fi
+    if [ "$yes" -ne 1 ]; then echo ">>> plan only. Re-run with --yes to do it."; return 0; fi
+    rm -f "$f" || die "delete-profile: could not delete $f"
+    log "delete-profile: '$name' deleted ($f)."
+}
+
 cmd_list_profiles() {
     local as_json=0 render=1 a
     for a in "$@"; do
@@ -15518,17 +15609,27 @@ cmd_list_profiles() {
     local -A seen=()
     local -a files=() sources=()
     local d f nm
-    for d in "$PROFILE_USER_ROOT" "$PROFILE_ROOT"; do
+    # Package first: a factory name is the factory profile (profile_file). An own
+    # file under a factory name is listed as source "shadow" -- the package
+    # ignores it, and the GUI says so instead of it vanishing from the list.
+    for d in "$PROFILE_ROOT" "$PROFILE_USER_ROOT"; do
         [ -d "$d" ] || continue
         for f in "$d"/*.conf; do
             [ -f "$f" ] || continue
             nm=$(profile_name_of "$f")
-            [ -n "${seen[$nm]:-}" ] && continue
+            if [ -n "${seen[$nm]:-}" ]; then
+                [ "$d" = "$PROFILE_USER_ROOT" ] && { files+=("$f"); sources+=(shadow); }
+                continue
+            fi
             seen[$nm]=1
             files+=("$f")
             [ "$d" = "$PROFILE_USER_ROOT" ] && sources+=(user) || sources+=(package)
         done
     done
+    # used_by: how many relationships on this host were built from the profile
+    # (PROFILE or SOURCE_PROFILE of a record that is not removed). The F5 screen
+    # shows it; delete-profile says it before deleting.
+    profile_usage_load
 
     if [ "$as_json" -eq 0 ]; then
         list_profiles_text
@@ -15581,6 +15682,7 @@ list_profiles_render() {   # <profile file> <package|user> [render 0|1] -> one J
     printf '{"name":"%s"' "$(json_escape "$nm")"
     jsonw_field file        "$file"
     jsonw_field source      "$src"
+    printf ',"used_by":%s' "${PROFILE_USED_BY[$nm]:-0}"
     jsonw_field description "$desc"
     jsonw_field version     "$ver"
 
@@ -18339,6 +18441,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         export-relation)  shift; cmd_export_relation "$@" ;;
         import-relation)  shift; cmd_import_relation "$@" ;;
         list-profiles)    shift; cmd_list_profiles "$@" ;;
+        delete-profile)   shift; cmd_delete_profile "$@" ;;
         save-profile)     shift; cmd_save_profile "$@" ;;
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
