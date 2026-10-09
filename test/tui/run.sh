@@ -1765,7 +1765,11 @@ chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
     rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd
     printf '%s' "$1" > "$NR/answers"; shift
-    ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"; bash "$NRS" ) 2>"$NR/err" </dev/null
+    ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
+      # Tabela retencji zrodla (tui/grid.py, curses) bez terminala: klawisze z NR_GRID_KEYS,
+      # domyslnie Enter = Dalej bez zmian (zrodlo jak cel).
+      export ZFS_GRID="$PY $REPO/tui/grid.py --keys ${NR_GRID_KEYS:-enter}"
+      bash "$NRS" ) 2>"$NR/err" </dev/null
     local rc=$?
     grep -- ' --install --yes$' "$NR/zb.log" 2>/dev/null | sed 's/^/CMD: /; s/$/ /'
     return "$rc"
@@ -1779,13 +1783,11 @@ NRT="0${T}hdd/backups
 0${T}grant|skip
 0${T}
 0${T}
-0${T}
 "
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-0${T}
 0${T}
 0${T}
 "
@@ -1930,7 +1932,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}grant|quies|skip
 0${T}
 0${T}
-0${T}
 ")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
@@ -1999,18 +2000,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-1${T}
-0${T}24
-0${T}3
-0${T}0
-0${T}12
 0${T}
 0${T}
-")
+" NR_GRID_KEYS=down,right,bs,3,down,left,space,enter)
 NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
 if grep -qF 'save-profile --from=default --force --tier=keep_daily --keep=3 --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
    && [ "$(grep -c '^save-profile' "$NR/zb.log")" = 1 ] \
-   && grep -F 'Retencja u źródła' "$NR/wt.log" | head -1 | grep -qF 'Źródło trzyma tyle samo co tutaj?' \
+   && printf '%s' "$NROUT" | grep -qF 'TUTAJ (cel)' && printf '%s' "$NROUT" | grep -qF 'U ŹRÓDŁA' \
    && has "$NROUT" '--source-profile=default-src-H24D3M12'; then
     ok "new-relation: retencja zrodla to LICZBY szczebli celu -> profil pochodny przez save-profile, 0 = --drop-tier (wlasciciel, uwaga 19)"
 else
@@ -2029,13 +2025,10 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-1${T}
-0${T}12
-0${T}3
 0${T}
 0${T}
-")
-if grep -qF 'tutaj: 24 godz.' "$NR/wt.log" && grep -qF 'tutaj: 7 dni' "$NR/wt.log" \
+" NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter)
+if printf '%s' "$NROUT" | grep -qE '\[X\] godzinowe +24 godz\.' && printf '%s' "$NROUT" | grep -qE '\[X\] dobowe +7 dni' \
    && grep -qF 'save-profile --from=d7h24-age --force --tier=hourly --retain=-h12 --tier=daily --retain=-d3 --as=d7h24-age-src-H12D3' "$NR/zb.log" \
    && ! grep -q -- '--keep=' "$NR/zb.log" \
    && has "$NROUT" '--source-profile=d7h24-age-src-H12D3'; then
@@ -2061,16 +2054,10 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-1${T}
-0${T}0
-0${T}30
-0${T}
-0${T}grant|skip
 0${T}
 0${T}
-0${T}
-")
-if grep -qF 'Tego szczebla nie da się wyłączyć' "$NR/wt.log" && ! grep -q '^save-profile' "$NR/zb.log"; then
+" NR_GRID_KEYS=space,enter)
+if printf '%s' "$NROUT" | grep -qF 'Tego szczebla nie da się wyłączyć' && ! grep -q '^save-profile' "$NR/zb.log"; then
     ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
 else
     bad "new-relation: T2 odmowa wylaczenia jedynego szczebla" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
@@ -2087,14 +2074,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-1${T}
-0${T}24
-0${T}7
-0${T}4
-0${T}12
 0${T}
 0${T}
-")
+" NR_GRID_KEYS=enter)
 if ! grep -q '^save-profile' "$NR/zb.log" && ! has "$NROUT" '--source-profile='; then
     ok "new-relation: retencja zrodla bez zmian = bez osobnego profilu"
 else
@@ -2115,13 +2097,11 @@ NROUT=$(nr_run "0${T}backup
 0${T}root
 0${T}grant|skip
 0${T}
-0${T}
 0${T}pasywnie
 0${T}passive
 0${T}pve9b
 0${T}root
 0${T}grant|skip
-0${T}
 0${T}
 0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
@@ -2160,7 +2140,6 @@ NROUT=$(nr_run "0${T}local
 0${T}skip
 0${T}
 0${T}
-0${T}
 "); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
    && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
@@ -2186,7 +2165,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.99
 0${T}root
 0${T}grant|skip
-0${T}
 0${T}
 0${T}
 ")
@@ -2276,7 +2254,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}grant|skip
 0${T}
 0${T}
-0${T}
 " NR_FLAT=1)
 if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
    && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
@@ -2296,7 +2273,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}skip
-0${T}
 0${T}
 0${T}
 "); NRRC=$?
@@ -2342,7 +2318,6 @@ NROUT=$(nr_run "0${T}backup
 0${T}__replicate_|__migration__|__add__
 0${T}_tmp
 0${T}__replicate_|__migration__|_tmp
-0${T}
 0${T}
 0${T}
 ")
@@ -2652,7 +2627,7 @@ cat > "$TP/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":"","quiesce":"","send_schedule":"1 * * * *"},{"name":"daily","keep":"7","retain":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *"}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
+    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":"","quiesce":"","send_schedule":"1 * * * *","pattern":"automated_hourly"},{"name":"daily","keep":"7","retain":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","pattern":"automated_daily"}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
     save-profile) echo ">>> atrapa: zapisano" ;;
     delete-profile) case " $* " in *" --yes "*) echo ">>> atrapa: usunieto" ;; *) echo "PLAN (delete-profile):"; echo "  built from it: 2 relationship(s)" ;; esac ;;
     *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
@@ -2662,38 +2637,44 @@ chmod +x "$TP/bin/zb"
 tp_run() {   # <akcja> <nazwa> <odpowiedzi> -> stdout okien; dzienniki w $TP
     rm -f "$TP/wt.log" "$TP/wt.n" "$TP/zb.log"
     printf '%s' "$3" > "$TP/answers"
-    ( export NR_DIR="$TP" WHIPTAIL="$TP/bin/whiptail" ZFS_BACKUP="$TP/bin/zb" PYTHON="$PY"; bash "$REPO/tui/template.sh" "$1" "$2" ) 2>"$TP/err" </dev/null
+    ( export NR_DIR="$TP" WHIPTAIL="$TP/bin/whiptail" ZFS_BACKUP="$TP/bin/zb" PYTHON="$PY"
+      [ -n "${ZFS_GRID_KEYS:-}" ] && export ZFS_GRID="$PY $REPO/tui/grid.py --keys $ZFS_GRID_KEYS"
+      bash "$REPO/tui/template.sh" "$1" "$2" ) 2>"$TP/err" </dev/null
 }
-TPOUT=$(tp_run new d7h24 "0${T}moj7
-0${T}48
-0${T}7
-0${T}1
-0${T}7 dobowych + 48 godzinowe
-0${T}
+# Okno-tabela (tui/grid.py, curses) jedzie PRAWDZIWYM kodem w trybie --keys; ZFS_GRID
+# podstawia klawisze zamiast terminala. Whiptail zostaje na plan i komunikaty.
+tp_grid() {   # <klawisze> <akcja> <nazwa> <odpowiedzi whiptail> -> jak tp_run
+    local keys="$1"; shift
+    ZFS_GRID_KEYS="$keys" tp_run "$@"
+}
+# 1. NOWY w jednym oknie: nazwa (pole na gorze), godzinowe 24 -> 48 w tabeli, opis z
+#    wyborow (dobowe w bazowym zamraza), plan, WYKONAJ.
+TPOUT=$(tp_grid "bs,bs,bs,bs,bs,bs,bs,bs,bs,m,o,j,7,down,right,bs,bs,4,8,enter" new d7h24 "0${T}
 "); TPRC=$?
-if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hourly --keep=48 --description=7 dobowych + 48 godzinowe' "$TP/zb.log" \
-   && grep -F 'godzinowych' "$TP/wt.log" | grep -qF '(w bazowym: 24)' && grep -qF 'dobowych: 7 (bez zmian)' "$TP/wt.log"; then
-    ok "template: nowy -- pyta o kazdy szczebel po kolei (w bazowym: N), podaje tylko zmienione, plan i --as"
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hourly --keep=48 --description=48 godzinowych + 7 dobowych; zamraża: dobowych' "$TP/zb.log" \
+   && grep -qF 'godzinowe: 24 -> 48' "$TP/wt.log" && grep -qF 'dobowe: 7  (bez zmian)' "$TP/wt.log"; then
+    ok "template: nowy w JEDNYM oknie-tabeli -- nazwa, liczby, opis z wyborow; plan podaje tylko zmienione"
 else
-    bad "template: nowy szablon" "rc=$TPRC" "$TPOUT" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-250)" "$(cat "$TP/err")"
+    bad "template: nowy szablon (tabela)" "rc=$TPRC" "$TPOUT" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-250)" "$(cat "$TP/err")"
 fi
-# ZAMRAZANIE TO KRATKA (wlasciciel 2026-10-09: "koherentne powinien byc checkbox"):
-# szczeble robiace migawki na liscie, zaznaczone jak w bazowym; odznaczenie dobowego
-# daje --tier=daily --quiesce= (pole zdjete), a podpowiedz opisu sklada sie z wyborow.
-TPOUT=$(tp_run new d7h24 "0${T}moj8
-0${T}24
-0${T}14
-0${T}
-0${T}24 godzinowych + 14 dobowych; bez zamrażania
-0${T}
+# 2. ZAMRAZANIE TO KRATKA w tabeli (wlasciciel 2026-10-09): odznaczenie dobowego daje
+#    --tier=daily --quiesce= (pole zdjete), opis "bez zamrazania".
+TPOUT=$(tp_grid "down,down,right,right,space,enter" new d7h24 "0${T}
 "); TPRC=$?
-if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj8 --tier=daily --keep=14 --tier=daily --quiesce= --description=24 godzinowych + 14 dobowych; bez zamrażania' "$TP/zb.log" \
-   && grep -F -- '-- opis ~' "$TP/wt.log" | grep -qF ' ~ 24 godzinowych + 14 dobowych; bez zamrażania ~ ' \
-   && grep -F 'zamrażanie gości' "$TP/wt.log" | grep -qF ' ~ 1 ~ dobowych  (w bazowym: tak) ~ ON ~ ' \
-   && grep -qF 'zamrażanie dobowych: tak -> nie' "$TP/wt.log"; then
-    ok "template: zamrazanie to kratka na szczebel (jak w bazowym), odznaczenie = --quiesce=, opis z wyborow"
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=d7h24-moj --tier=daily --quiesce= --description=24 godzinowych + 7 dobowych; bez zamrażania' "$TP/zb.log" \
+   && grep -qF 'zamrażanie dobowe: tak -> nie' "$TP/wt.log"; then
+    ok "template: kratka zamrazania w tabeli -- odznaczenie = --quiesce=, opis z wyborow"
 else
-    bad "template: zamrazanie" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(grep -F 'zamra' "$TP/wt.log" | cut -c1-300)"
+    bad "template: zamrazanie (tabela)" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-300)" "$(cat "$TP/err")"
+fi
+# 3. Szczebla, ktory jako jedyny sprzata swoja rodzine, nie da sie wylaczyc -- okno mowi
+#    o tym i zostaje; Esc = Wstecz, nic nie zapisane.
+TPOUT=$(tp_grid "down,space" new d7h24 ""); TPRC=$?
+GRIDSCR=$(printf '%s' "$TPOUT")
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Tego szczebla nie da się wyłączyć'; then
+    ok "template: jedynego szczebla rodziny nie da sie wylaczyc; okno mowi i niczego nie zapisuje"
+else
+    bad "template: wylaczenie jedynego szczebla" "rc=$TPRC" "$GRIDSCR" "$(cat "$TP/zb.log")"
 fi
 TPOUT=$(tp_run edit d7h24 "0${T}
 "); TPRC=$?

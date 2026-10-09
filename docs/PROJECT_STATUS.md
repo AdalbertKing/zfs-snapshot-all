@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 94f9a420289f35d5 -->
+<!-- status-covers-digest: b741d29ac3fcdc4d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,43 +21,41 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Okna szablonu (F5): zamrażanie jako kratka, opis z wyborów (2026-10-09, właściciel przy teście: „Koherentne powinien być checkbox”).**
-  - Nowy krok przed opisem: „Które szczeble zamrażają gości przed migawką (spójne
-    migawki)?” — lista szczebli, które robią migawki, zaznaczona jak w bazowym.
-    Zmiana daje `--tier=T --quiesce=auto,degrade` (włączenie) albo `--quiesce=`
-    (pole zdjęte); plan wymienia „zamrażanie <szczebel>: tak -> nie”.
-  - Podpowiedź opisu składa się z wyborów („24 godzinowych + 14 dobowych; bez
-    zamrażania”) zamiast tekstu bazowego, który po zmianie liczb przestawał być prawdą;
-    przy zmianie własnego zostaje jego opis.
-  - Etykiety szczebli rozpoznają też `keep_daily` / `standard_hourly` (szablony GFS).
+- **Okno-tabela szczebli (curses, `tui/grid.py`): szablon na F5 i retencja u źródła (2026-10-09, właściciel: „tak, rób w curses, oba okna … podobne do … qnap czy synology”, „Uprośćmy tworzenie szablonów”).**
+  - **Wyjątek od zasady „formularze w whiptail”:** whiptail nie ma wiersza z polem
+    liczby i dwiema kratkami. `tui/grid.py` rysuje tabelę szczebel × liczba × kratka;
+    kreatory whiptail wołają ją w jednym miejscu (`ZFS_GRID` podstawia ją w testach).
+    Klawisze: ↑↓ wiersz, ←→ pole, spacja kratka, cyfry liczba, Enter = Dalej,
+    Esc = Wstecz. Szczebla nie da się wyłączyć (kratka przy jego nazwie), gdy jego
+    migawek (rodziny) nie sprząta żaden inny — okno to mówi i zostaje.
+  - **Szablon (F5 → Ins / Enter + `e`):** jedno okno zamiast ciągu okien — tabela
+    SZCZEBEL | TRZYMA | KOHERENTNE (kratka zamrażania, tylko przy szczeblach, które
+    robią migawki) i opis; przy Ins także nazwa, a opis składa się z wyborów (dopóki
+    nie zmienisz go ręcznie); przy `e` zostaje opis własnego szablonu. Potem plan
+    i WYKONAJ jak dotąd; wynik to jedno `save-profile` (`--tier=… --keep|--retain=…`,
+    `--quiesce=auto,degrade` / `--quiesce=`, `--drop-tier=…`). Wstecz z planu wraca do
+    tabeli z wyborami.
+  - **Retencja u źródła (kreator relacji, krok 9, uwaga 2):** po liście ustawień okno
+    SZCZEBEL | TUTAJ (cel) | U ŹRÓDŁA zamiast menu szczebli z „Gotowe” (OK robiło
+    podświetloną pozycję, „Dalej” nie szło dalej). Dalej bez zmian = źródło jak cel;
+    inaczej szablon `<cel>-src-<litery i liczby>` jednym `save-profile`. Nie pyta przy
+    kopiowaniu atomowym.
   - **Na żywo (pve9b):** `save-profile --tier=daily --quiesce= --tier=hourly
-    --quiesce=auto,degrade` — przyjęte przez bramki, plik testowy usunięty.
-  - **Testy:** `tui` — okna szablonu 4/4 (nowy test: odznaczenie zamrażania dobowego
-    i podpowiedź opisu).
-
-- **Kreator relacji: retencja u źródła jednym pytaniem (uwaga 2) (2026-10-09, właściciel: „1 tak”).**
-  - Pozycja „Inna retencja u źródła” zniknęła z listy ustawień (krok 9) razem z menu
-    szczebli i pozycją „Gotowe” (OK robiło podświetloną pozycję, więc „Dalej” nie szło
-    dalej). Po liście ustawień pada pytanie „Źródło trzyma tyle samo co tutaj?”
-    z liczbami szczebli celu w treści — [Tak, dalej] albo [Zmień] (gdy szablon ma
-    szczeble z liczbą); po „Zmień” każdy
-    szczebel po kolei (Dalej = następny, Wstecz = poprzedni), 0 = bez szczebla (tylko
-    gdy rodzinę sprząta inny szczebel). Nie pyta przy kopiowaniu atomowym.
-  - Szablon źródła `<cel>-src-<litery i liczby>` zapisuje się JEDNYM wywołaniem
-    `save-profile` (kilka `--tier=` i `--drop-tier=`), a nie serią zapisów.
-  - **Testy:** `tui` — cztery testy retencji źródła na nową kolejność (zmiana liczby
-    i wyłączenie szczebla, szablon wieku, odmowa wyłączenia jedynego szczebla, „Zmień”
-    bez zmian), a pozostałe przejścia kreatora odpowiadają „Tak, dalej”.
+    --quiesce=auto,degrade` przyjęte przez bramki (plik testowy usunięty).
+  - **Testy:** `tui` — okna szablonu przez prawdziwy `grid.py --keys` (nowy w jednym
+    oknie, kratka zamrażania, odmowa wyłączenia jedynego szczebla, `e` na fabrycznym,
+    Del); kreator relacji — retencja źródła przez tabelę (zmiana liczby i wyłączenie
+    szczebla, szablon wieku, odmowa, bez zmian).
 
 - **Ekran F5 „Szablony” — własne szablony retencji z GUI (uwaga 24) (2026-10-09, właściciel: „rób uwagę 24”).**
   - **Ekran:** F5 = „Szablony” (odświeżanie tylko pod Ctrl-R). Tabela: Nazwa | Rodzaj
     (fabryczny / własny / POMIJANY) | Sposób | Trzyma | Użyty (ile relacji); panel:
     opis, sposób, szczeble (kiedy, ile trzyma, zamrażanie), plik. Lista czytana na
     żądanie (`list-profiles --json --no-render`), nie przy każdym odświeżeniu.
-  - **Akcje (okna `tui/template.sh`):** Ins = nowy NA PODSTAWIE zaznaczonego —
-    nazwa, potem każdy szczebel po kolei („Ile dobowych trzymać? (w bazowym: 7)”),
-    opis, plan, WYKONAJ; harmonogramów nie pyta (sposób i układ szczebli z bazowego).
-    Enter + `e` na własnym = te same okna; na fabrycznym okno mówi, że Ins robi kopię.
+  - **Akcje (okna `tui/template.sh`):** Ins = nowy NA PODSTAWIE zaznaczonego — jedno
+    okno-tabela (nazwa, szczeble, zamrażanie, opis; wpis wyżej), plan, WYKONAJ;
+    harmonogramów nie pyta (sposób i układ szczebli z bazowego). Enter + `e` na
+    własnym = ta sama tabela; na fabrycznym okno mówi, że Ins robi kopię.
     Del na własnym = plan z liczbą relacji (zostają, ale ich późniejsza zmiana
     szablonu nie będzie miała z czego odświeżyć), domyślnie Wstecz.
   - **Wsad:** `save-profile` przyjmuje kilka `--tier=` w jednym wywołaniu (pole idzie do
