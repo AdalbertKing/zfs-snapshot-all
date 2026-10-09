@@ -13650,6 +13650,28 @@ else
     bad "addreplica: list-replicas passive" "$lr"
 fi
 rm -rf "$PV"
+# add-replica --exclude-child (owner note 13, 2026-10-09): the replica wizard uses
+# the relationship basket, exceptions included. They are -X in the section's flags,
+# read back as list-replicas' exclude_child; without recursion they are refused.
+RX="$WORK/replicaexcl"; rm -rf "$RX"; mkdir -p "$RX"
+printf '[defaults]\n\thost_label = h\n' > "$RX/c.conf"
+( source "$ZFSBACKUP"; replica_section_upsert "$RX/c.conf" rx "hdd/data" "repl/replica" "0 22 * * *" "replica_" 1 removable "" "" "" "" 0 '-X ^hdd/data/mail$ -X ^hdd/data/mail/' ) 2>&1
+lr=$( ( source "$ZFSBACKUP"; zfs() { return 1; }; zpool() { return 1; }; cmd_list_replicas --json --config="$RX/c.conf" ) 2>&1 )
+if grep -q "^$(printf '\t')flags     = -X ^hdd/data/mail\$ -X ^hdd/data/mail/\$" "$RX/c.conf" \
+   && printf '%s' "$lr" | grep -qF '"exclude_child":["^hdd/data/mail$","^hdd/data/mail/"]'; then
+    ok "addreplica: --exclude-child is -X in the section's flags, and list-replicas reads it back as exclude_child"
+else
+    bad "addreplica: exclusions" "$(cat "$RX/c.conf")" "$lr"
+fi
+out=$(bash "$ZFSBACKUP" add-replica rx --source=hdd/data --dst=repl/replica --recursive=no --exclude-child='^hdd/data/mail$' 2>&1); rc=$?
+out2=$(bash "$ZFSBACKUP" add-replica rx --source=hdd/data --dst=repl/replica --exclude-child='^a b$' 2>&1); rc2=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q -- '--exclude-child needs --recursive=yes' \
+   && [ "$rc2" -ne 0 ] && printf '%s' "$out2" | grep -q 'a pattern without spaces or quotes'; then
+    ok "addreplica: --exclude-child without recursion, or with a space in the pattern, is refused"
+else
+    bad "addreplica: exclusion refusals" "$out" "$out2"
+fi
+rm -rf "$RX"
 # prepare-media (owner note 15, 2026-10-08): refused only when the disk is IN USE.
 # media_disk_in_use over stubbed lsblk / zpool / readlink: a mounted partition, a
 # partition of an imported pool's vdev, and a free disk carrying an EXPORTED pool.

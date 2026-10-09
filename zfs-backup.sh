@@ -374,6 +374,8 @@ front end never edits the config file:
                                     on-insert = no time, only when the disk is
                                     plugged in (needs install-media-trigger).
                                     [--recursive=yes|no] [--fixed|--removable]
+                                    [--exclude-child=REGEX]... children of a source left
+                                    out (-X in the section's flags; needs recursion)
                                     [--history=all|newest|auto:N]
                                     [--notify=TEXT] [--plan|--install] [--yes]
                                     [--monitor-warn=9d --monitor-crit=14d] -- by default
@@ -6371,7 +6373,7 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
 # other people's sections and comments somebody wrote by hand.
 replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit] [passive 0|1]
     local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
-    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}"
+    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}" xflags="${14:-}"
     local tmp; tmp=$(mktemp) || return 1
     awk -v want="[replica:$name]" '
         $0 == want { skip=1; next }
@@ -6393,6 +6395,7 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
         # would put a field in the file that changes nothing.
         [ -n "$history" ] && [ "$history" != "all" ] && printf '\thistory   = %s\n' "$history"
         [ -n "$notify" ] && printf '\tnotify    = %s\n' "$notify"
+        [ -n "$xflags" ] && printf '\tflags     = %s\n' "$xflags"
         [ -n "$mwarn" ] && printf '\tmonitor_warn = %s\n' "$mwarn"
         [ -n "$mcrit" ] && printf '\tmonitor_crit = %s\n' "$mcrit"
         :
@@ -6675,6 +6678,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
     local mon_warn="" mon_crit="" passive=0 _prefset=0
+    local -a xchild=()
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
     # send either shape. One medium often holds more than one thing worth
@@ -6694,6 +6698,10 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             # carries what is already there. For a replica of a relationship's
             # copies, whose next pull would discard any replica_ snapshot.
             --passive)     passive=1 ;;
+            # Children of a source left out (owner note 13, 2026-10-09: the replica
+            # wizard uses the same basket as the relationship wizard, exceptions
+            # included). Written as -X in the section's flags; needs recursion.
+            --exclude-child=*) xchild+=("${a#*=}") ;;
             --notify=*)    notify="${a#*=}" ;;
             # Staleness thresholds (2026-10-08). Without them gen-cron derives
             # them from the schedule; an on-insert replica is watched only with them.
@@ -6732,6 +6740,12 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         [ "$_prefset" -eq 0 ] || die "add-replica: --passive takes no snapshots of its own, so --prefix=$pref names nothing -- say one of them"
         pref=""
     fi
+    local xflags="" _xc
+    for _xc in ${xchild[@]+"${xchild[@]}"}; do
+        case "$_xc" in ''|*[[:space:]]*|*\'*|*\"*) die "add-replica: --exclude-child='$_xc' -- a pattern without spaces or quotes (it becomes -X in the cron line)" ;; esac
+        xflags="$xflags${xflags:+ }-X $_xc"
+    done
+    [ -z "$xflags" ] || [ "$rec" -eq 1 ] || die "add-replica: --exclude-child needs --recursive=yes -- without children there is nothing to leave out"
     local _i _j
     for ((_i=0; _i<${#sources[@]}; _i++)); do
         for ((_j=_i+1; _j<${#sources[@]}; _j++)); do
@@ -6826,7 +6840,7 @@ REPEOF
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
-    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" "$passive" \
+    replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" "$passive" "$xflags" \
         || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
 
     show_activation_proposal "$config" "$cand" || {
@@ -6862,6 +6876,17 @@ REPEOF
 # one piece that knows the difference between "the pool is not imported" and
 # "the pool is imported but this is the WRONG disk". A listing that flattened
 # those two into a boolean would hide the only dangerous one.
+# replica_section_excludes <config> <name> -- the -X patterns in [replica:<name>]'s
+# flags, one per line. They are written there by add-replica --exclude-child.
+replica_section_excludes() {
+    awk -v want="[replica:$2]" '
+        $0 == want { f = 1; next } /^\[/ { f = 0 }
+        f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k)
+            if (k != "flags") next
+            v = t; sub(/^[^=]*=[ \t]*/, "", v); n = split(v, a, /[ \t]+/)
+            for (i = 1; i < n; i++) if (a[i] == "-X") print a[i + 1] }' "$1"
+}
+
 cmd_list_replicas() {
     local as_json=0 config="" a
     for a in "$@"; do
@@ -6969,8 +6994,16 @@ $(printf '%s' "$src" | tr ',' '\n')
 JSRC
             # monitor_warn/crit: only what the SECTION says (empty = derived from
             # the schedule by gen-cron, or none for on-insert).
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc"
+            # exclude_child (2026-10-09, owner note 13): the -X patterns of the
+            # section's flags, one array element each -- the GUI's basket reads the
+            # replica's exceptions back from here.
+            local _xarr="" _x
+            while IFS= read -r _x; do
+                [ -n "$_x" ] || continue
+                _xarr="$_xarr${_xarr:+,}\"$(json_escape "$_x")\""
+            done < <(replica_section_excludes "$config" "$name")
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s]}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
