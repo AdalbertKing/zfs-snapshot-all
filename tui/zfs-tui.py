@@ -177,7 +177,7 @@ def direction_of(host, peer, dirs, mode=None):
     # Relacja lokalna (local-backup --name, 2026-10-09): zrodlo i kopia na tym
     # hoscie -- ta sama strzalka co zadania lokalne na F2.
     if mode == "local":
-        return u"%s → tutaj" % host
+        return u"lokalnie"
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
@@ -682,6 +682,8 @@ def cron_words(spec):
     if len(f) != 5:
         return spec or "?"
     mi, ho, dom, mon, dow = f
+    if mi.startswith("*/") and mi[2:].isdigit() and ho == "*" and dom == "*" and mon == "*" and dow == "*":
+        return u"co %s min" % mi[2:]
     if not mi.isdigit():
         return spec
     if ho == "*" and dom == "*" and mon == "*" and dow == "*":
@@ -947,8 +949,32 @@ def transfer_word(t, now):
     return TRANSFER_STATES.get(st, (st or "?", 0))[0], ""
 
 
+STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"pierwsza kopia",
+            "seed_complete": u"po pierwszej kopii", "endpoint_verified": u"sprawdzona"}
+
+
+def pl_relacje(n):
+    """1 relacja, 2-4 relacje, 5+ relacji (12-14 relacji)."""
+    if n == 1:
+        return u"1 relacja"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return u"%d relacje" % n
+    return u"%d relacji" % n
+
+
+def profile_word(name, rel_name=None):
+    """Szablon relacji słowami: ukryty szablon relacji (relacja-<NAZWA>, P4) to
+    'własne ustawienia (tabela)', nie nazwa pliku."""
+    if not name:
+        return "?"
+    if rel_name and name == "relacja-%s" % rel_name:
+        return u"własne ustawienia relacji (tabela szczebli)"
+    return name
+
+
 def state_word(rel):
     s = rel.get("state", "?")
+    s = STATE_PL.get(s, s)
     if rel.get("paused_local"):
         s += " PAUZA"
     return s
@@ -975,7 +1001,8 @@ def verbs_for(rel):
             out.insert(0, "zfs-backup.sh resume-client %s" % n)
         else:
             out.insert(0, "zfs-backup.sh pause-client %s [--reason=TEKST]" % n)
-        out.append("zfs-backup.sh set-bandwidth --peer=%s --bandwidth=RATE" % (rel.get("peer_host") or "HOST"))
+        if rel.get("peer_host"):
+            out.append("zfs-backup.sh set-bandwidth --peer=%s --bandwidth=RATE" % rel["peer_host"])
         if rel.get("endpoint_diverged"):
             out.insert(0, "zfs-backup.sh verify-endpoint %s ; activate-client %s" % (n, n))
     elif s in ("pending_enroll", "seeding", "seed_complete", "endpoint_verified"):
@@ -1353,7 +1380,7 @@ def build_jobs(data, now):
         items.append({
             "kind": "replica", "name": rname, "rel": None, "replica": rp,
             "clabel": u"replica copy (%s)" % rname, "srow": srow, "vol": None, "czas": czas, "gb": "-",
-            "dir": u"%s>%s" % (host, (rp.get("dst") or "?").split("/")[0]),
+            "dir": u"%s → %s" % (host, (rp.get("dst") or "?").split("/")[0]),
             "mode": None, "task": u"replika", "pref": rp.get("prefix") or "-", "keep": "-",
             "cnt": len(rp.get("sources") or []) or 1, "tier": "", "scope": rp.get("source") or "",
             # "po włożeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
@@ -1428,8 +1455,11 @@ def build_jobs(data, now):
     for j in (data.jobs or {}).get("jobs", []):
         for m in monitors_for_job(j, monitors):
             matched.add(id(m))
+    # Strażnik REPLIKI ma etykietę repliki, a jej zadanie przychodzi z list-replicas,
+    # nie z list-jobs -- bez tego wiersz "? strażnik bez zadania" (kampania 2026-10-09, K1).
+    _repnames = {r.get("name") for r in (data.replicas or {}).get("replicas", []) if r.get("name")}
     for m in monitors:
-        if id(m) in matched:
+        if id(m) in matched or (m.get("label") or "") in _repnames:
             continue
         v = m.get("verdict", "UNKNOWN")
         rel = rels_by_name.get(m.get("label") or "")
@@ -1821,7 +1851,7 @@ def rel_detail_pairs(row, data, now, ch):
             src, dst = job_src_dst(j)
             zakres = u"%s %s %s" % (src, ch.right, dst)
         pairs = [(u"zakres", zakres), ("", ""),
-                 ("harmonogram", "%s  (%s)" % (j.get("schedule", "?"), row["next"]))]
+                 ("harmonogram", "%s  (%s)" % (cron_words(j.get("schedule", "?")), row["next"]))]
         st = data.stats or {}
         win = st.get("window_days", "?")
         srow = row.get("srow")
@@ -1881,7 +1911,7 @@ def rel_detail_pairs(row, data, now, ch):
                     mons.append(m)
         if mons:
             m0 = mons[0]
-            pairs.append((u"strażnik", u"%s   progi %s / %s" % (m0.get("schedule") or "?", m0.get("warn") or "?", m0.get("crit") or "?")))
+            pairs.append((u"strażnik", u"%s   progi %s / %s" % (cron_words(m0.get("schedule") or "?"), m0.get("warn") or "?", m0.get("crit") or "?")))
         pairs.append(("", ""))
         pairs.append(("konto", "%s   config %s" % (j.get("account", "?"), j.get("config", "?"))))
         return pairs
@@ -2061,9 +2091,9 @@ def rel_panel_pairs(row, data, now, ch):
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
     pairs.append(("Konto", rel.get("local_user") or ", ".join(accts) or "?"))
-    pairs.append(("Profil", (rel.get("profile") or "?") + ((u"   u źródła: %s" % rel["source_profile"]) if rel.get("source_profile") else "")))
+    pairs.append(("Szablon", profile_word(rel.get("profile"), rel.get("name")) + ((u"   u źródła: %s" % rel["source_profile"]) if rel.get("source_profile") else "")))
     if rel.get("recursion"):
-        pairs.append(("Rekursja", rel["recursion"]))
+        pairs.append((u"Sposób", {"flat": u"każdy dataset osobno", "atomic": u"cała gałąź atomowo"}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append(("Tryb", "pasywny"))
     if rel.get("bandwidth"):
@@ -2071,7 +2101,7 @@ def rel_panel_pairs(row, data, now, ch):
     sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
     prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
     if sends:
-        scheds = sorted({j.get("schedule", "") for j in sends if j.get("schedule")})
+        scheds = sorted({cron_words(j.get("schedule", "")) for j in sends if j.get("schedule")})
         fams = sorted({family_of(j) for j in sends if family_of(j)})
         # Slowo wg KIERUNKU, jak na F2 ("Wysylka" w relacji, w ktorej ten host
         # pobiera, bylo nieprawda -- test testera rundy 4, pve10).
@@ -2084,7 +2114,7 @@ def rel_panel_pairs(row, data, now, ch):
 
         def line_of(js):
             ret = keep_cell(" ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x))
-            sch = sorted({j.get("schedule", "") for j in js if j.get("schedule")})
+            sch = sorted({cron_words(j.get("schedule", "")) for j in js if j.get("schedule")})
             return "%s   trzyma %s%s" % (", ".join(sch) or "?", ret, "   drabina GFS" if any(j.get("gfs") for j in js) else "")
         pairs.append((u"Lokalny prune" if here else u"Zdalny prune", line_of(here or prunes)))
         if here and there:
@@ -2102,7 +2132,7 @@ def rel_panel_pairs(row, data, now, ch):
             txt += "   " + note
         pairs.append(("Ostatni", txt))
     else:
-        pairs.append(("Ostatni", u"brak zapisu w historii (nie wiadomo, nie 'OK')"))
+        pairs.append(("Ostatni", u"brak wpisu w historii transferów (to nie znaczy 'OK')"))
     if row["next_epoch"]:
         pairs.append((u"Następny", "%s   (wg crontaba)" % fmt_full(row["next_epoch"])))
     else:
@@ -2392,15 +2422,15 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.extend(detail_kv(ch, pairs, w))
     out.append("")
     out.append(u"jak długo trzyma")
-    pairs = [("Profil", rel.get("profile") or "?")]
+    pairs = [("Szablon", profile_word(rel.get("profile"), rel.get("name")))]
     if rel.get("source_profile"):
-        pairs.append((u"Profil źródła", rel["source_profile"]))
+        pairs.append((u"Szablon źródła", rel["source_profile"]))
     elif rel.get("passive") == "1" or rel.get("mode") == "sync":
-        pairs.append((u"Profil źródła", u"bez prune (źródło nie kasuje)"))
+        pairs.append((u"Szablon źródła", u"bez sprzątania (źródło nie kasuje)"))
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
         pairs.append((u"Cel", u"lustro źródła: trzyma to, co źródło (bez własnej retencji)"))
     if rel.get("recursion"):
-        pairs.append(("Rekursja", rel["recursion"]))
+        pairs.append((u"Sposób", {"flat": u"każdy dataset osobno", "atomic": u"cała gałąź atomowo"}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
         pairs.append(("Tryb", "pasywny"))
     if rel.get("bandwidth"):
@@ -2436,7 +2466,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
                     pref = f.get("prefix") or t.get("prefix") or "?"
                     _ret = f.get("retain") or f.get("keep") or t.get("retain") or t.get("keep") or ""
-                    key = (_w, u"co: %s   stempel %s%s" % (sched, pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
+                    key = (_w, u"co: %s   stempel %s%s" % (cron_words(sched), pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
@@ -2447,7 +2477,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     t = tmpl.get(u, {})
                     r = t.get("retain") or t.get("keep") or ""
                     sched = _tf("prune_schedule", u) or f.get("prune_schedule") or t.get("prune_schedule") or "?"
-                    key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", sched,
+                    key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", cron_words(sched),
                                                            "   drabina GFS" if (t.get("gfs") or f.get("gfs")) == "yes" else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
@@ -2462,7 +2492,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     ret.append(f["retain"])
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
                 _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
-                key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(" ".join(ret)) if ret else "?", sched,
+                key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(" ".join(ret)) if ret else "?", cron_words(sched),
                                                        "   drabina GFS" if f.get("gfs") == "yes" else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
                 if key not in order:
@@ -2637,7 +2667,7 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
     out.extend(_relation_config_lines(row, data, ch, w, repo, files))
     out.extend(["", section_header(ch, "CRON", w)])
     out.extend(_relation_cron_lines(row, ch, w))
-    out.extend(["", u"tylko do odczytu -- zmiana relacji: usuń i załóż / import z pliku"])
+    out.extend(["", u"tylko do odczytu -- zmiana relacji: F3, Enter na relacji, potem 'e' (Zmień relację)"])
     return out
 
 
@@ -3108,7 +3138,9 @@ def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     if stats_failed:
         pairs.append((u"Ost. bieg", u"? (job-stats nie odpowiedział)"))
     elif srow:
-        pairs.append((u"Ost. bieg", u"%s   rc=%s   %s s" % (srow.get("last_at") or "?", srow.get("last_rc"), srow.get("last_s"))))
+        _rc = srow.get("last_rc")
+        pairs.append((u"Ost. bieg", u"%s   %s   %s s" % (srow.get("last_at") or "?",
+                                                         u"OK" if str(_rc) == "0" else u"BŁĄD (rc=%s)" % _rc, srow.get("last_s"))))
         pairs.append((u"Biegi", u"%s w oknie statystyk, błędów %s, czas śr./maks. %s/%s s" % (
             srow.get("runs"), srow.get("failures"), srow.get("avg_s"), srow.get("max_s"))))
     else:
@@ -3202,7 +3234,7 @@ def template_detail_pairs(p):
              ("Opis", p.get("description") or "-"),
              (u"Sposób", "%s, %s" % (w["mech"], w["shape"])),
              ("Trzyma", w["retention"].replace(u"trzyma ", "", 1)),
-             (u"Użyty", u"%d relacji na tym hoście" % int(p.get("used_by") or 0))]
+             (u"Użyty", u"%s na tym hoście" % pl_relacje(int(p.get("used_by") or 0)))]
     for t in p.get("tiers", []):
         keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or u"wg drabiny"
         pairs.append((u"Szczebel", u"%s   %s   trzyma %s%s" % (
@@ -3287,7 +3319,8 @@ HELP = [
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
-    u"                 zmienia relację: szablon, plan), F7 pauza/wznów, Del usuń,",
+    u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
+    u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
     u"                 F8 eksport do pliku (Enter zapisuje, domyślnie w",
     u"                 /etc/zfs-snapshot-all/relations), F9 import: lista plików",
     u"                 eksportu z tego katalogu, potem werdykt",

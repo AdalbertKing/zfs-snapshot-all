@@ -1628,6 +1628,26 @@ for _p in default y5m12d31h24-gfs; do
     fi
 done
 
+# K21 (owner campaign 2026-10-09): a local relationship's SOURCE retention is the
+# --source-profile's, not the target's. Measured on pve9b: d30 + d30-src-D7 pruned the
+# source with -D30 -- the source profile was prepared and never read for a flat
+# profile. Flat: the [dataset:] tiers are the source family (-D7 on the source line,
+# -D30 on the target's); control without --source-profile: both -D30.
+K21P="$WORK/k21prof"; rm -rf "$K21P"; mkdir -p "$K21P"
+sed -E 's/^([[:space:]]*keep[[:space:]]*=[[:space:]]*)30[[:space:]]*$/\17/' "$REPO/profiles/d30.conf" > "$K21P/d30-src-D7.conf"
+k21_flags() {   # <output> <scope> -> the -D flag on that scope's delsnaps line
+    printf '%s\n' "$1" | grep 'delsnaps' | grep -F "\"$2\" \"automated_daily\"" | grep -oE -- '-D[0-9]+' | head -1
+}
+k21o="$(PROFILE_USER_ROOT="$K21P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --source-profile=d30-src-D7 --name=k21 --config="$WORK/k21.conf")"
+k21c="$(PROFILE_USER_ROOT="$K21P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=k21c --config="$WORK/k21c.conf")"
+if [ "$(k21_flags "$k21o" rpool/data)" = -D7 ] && [ "$(k21_flags "$k21o" hdd/backups/rpool/data)" = -D30 ] \
+   && [ "$(k21_flags "$k21c" rpool/data)" = -D30 ]; then
+    ok "K21: local relationship -- the source is pruned by --source-profile (-D7), the target by the profile (-D30); control without it: -D30"
+else
+    bad "K21: source retention of a local relationship" "with: src=$(k21_flags "$k21o" rpool/data) tgt=$(k21_flags "$k21o" hdd/backups/rpool/data)" "without: src=$(k21_flags "$k21c" rpool/data)" "$(printf '%s\n' "$k21o" | grep -E 'FATAL|error' | head -3)"
+fi
+rm -rf "$K21P"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

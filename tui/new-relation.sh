@@ -41,6 +41,9 @@ MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
 
 # --- okna -------------------------------------------------------------------
 title() {
+    # Okno 1 nie zna jeszcze liczby kroków (lokalna ma 8, reszta 10) -- bez "/10",
+    # które w następnym oknie zmieniało się na "/8" (kampania 2026-10-09, K30).
+    if [ "$1" = 1 ]; then printf 'Krok 1: %s' "$2"; return; fi
     if [ "$MODE" = local ]; then
         local n="$1"; [ "$n" -gt 3 ] && n=$((n - 2))
         printf 'Krok %s/8: %s' "$n" "$2"
@@ -479,7 +482,7 @@ step_profile() {
     in_list "$def" "${items[@]}" || def="${items[2]}"
     geom
     wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-       --menu "${lead}Wszystkie szablony retencji. [zamraża] = zamraża gościa przed migawkami\ndobowymi i rzadszymi (zgoda źródła -- krok 9). [drabina] = JEDNA drabina GFS\ndla jednej rodziny, w osobnej sekcji; pozostałe trzymają retencję w każdym\nszczeblu. [drabina] nie wejdzie na konto, na którym już działa szablon z retencją\nw szczeblach (sprawdzane po wyborze konta w kroku 8). Szablon da się zmienić później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
+       --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w ustawieniach dodatkowych).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane po wyborze konta). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     if [ "$WT_OUT" = __manual__ ]; then
         step_manual || { step_profile; return $?; }
@@ -534,7 +537,7 @@ step_account() {
         case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
         geom
         wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --radiolist "Konto na TYM hoście, z którego cron będzie pobierał kopie.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
+           --radiolist "Konto na TYM hoście, na którym cron będzie uruchamiał zadania tej relacji.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
            root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
            zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
            other     "inne konto…  (podasz nazwę)" "$o" || return 1

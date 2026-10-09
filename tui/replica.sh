@@ -164,7 +164,7 @@ while :; do
     1)  # nazwa
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
         wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
-           --inputbox "Nazwa repliki (litery, cyfry, . _ -). Nazywa nośnik i stan jego bramy,\nnp. usb1 albo sejf-a." 10 "$W" "$NAME" \
+           --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
            || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
         case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;; esac
@@ -212,15 +212,21 @@ while :; do
         zpool list -H -o name 2>/dev/null >"$TMPD/pools.here"
         zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
         cur="${DST%%/*}"; items=(); seen=""
+        # Dysk INNEJ repliki nie jest do wyboru (jeden nośnik = jedna replika; czasownik
+        # odmawiał dopiero w planie -- kampania 2026-10-09, K45).
+        others="$(awk -F'\t' -v n="$NAME" '$1!=n && $3!="-" {split($3,a,"/"); printf "|%s|", a[1]}' "$TMPD/rep.tsv")"
+        busy=""
         while IFS= read -r p; do
             [ -n "$p" ] || continue
             case ",$SRCS," in *",$p,"*|*",$p/"*) continue ;; esac   # pula źródła nie jest nośnikiem
+            case "$others" in *"|$p|"*) busy="$busy $p"; continue ;; esac
             items+=("$p" "$p  dysk podłączony$([ "$p" = "$cur" ] && echo ' (obecny)')"); seen="$seen|$p|"
         done <"$TMPD/pools.here"
         # Stały nośnik jest zawsze zaimportowany; dyski w slocie tylko dla wymiennego.
         if [ "$MEDIA" = removable ]; then
             while IFS= read -r p; do
                 [ -n "$p" ] || continue; case "$seen" in *"|$p|"*) continue ;; esac
+                case "$others" in *"|$p|"*) busy="$busy $p"; continue ;; esac
                 items+=("$p" "$p  dysk w slocie$([ "$p" = "$cur" ] && echo ' (obecny)')"); seen="$seen|$p|"
             done < <(sort -u "$TMPD/pools.slot")
         fi
@@ -238,7 +244,7 @@ while :; do
         fi
         def="${cur:-__prep__}"
         wt --title "Replika $NAME -- 5/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "Nośnik musi być podłączony. Kopia ląduje pod  <pula>/replica/<dataset źródła>." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
+           --menu "Nośnik musi być podłączony. Kopia ląduje pod  <pula>/replica/<dataset źródła>.$([ -n "$busy" ] && printf '\nDyski innych replik (nie do wyboru):%s' "$busy")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || { step=3; continue; }
         pool="$WT_OUT"
         if [ "$pool" = __prep__ ]; then
@@ -279,7 +285,7 @@ while :; do
         def="$SCHED"; case "$SCHED" in "0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
         [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def="0 22 * * *"
         wt --title "Replika $NAME -- 6/6 kiedy kopiować?" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "Każdy bieg otwiera nośnik, więc rzadziej = bezpieczniej. Nośnika, którego nie ma,\nbieg nie rusza (cicho). Obecny: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
+           --menu "Nośnik wymienny jest podłączany tylko na czas kopii; gdy go nie ma w maszynie,\nbieg po cichu nic nie robi.$([ "$EDIT" -eq 1 ] && printf '%s' " Teraz: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
             wt --title "Replika $NAME -- własny harmonogram" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$([ "$SCHED" = on-insert ] || echo "$SCHED")" || continue

@@ -57,12 +57,12 @@ S120="$(screen relacje "" --width 120)"
 S200="$(screen relacje "" --width 200)"
 # F3 W TRZECH PANELACH (szkic wlasciciela, 2026-09-11): lista jest WASKA, wiec
 # kolumny Kopie i Nastepny dochodza z szerokoscia; przy 80 sa trzy.
-if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +6.1M +[0-9]{2}:30 +║'; then
+if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +6.1M +[0-9]{2}:30 +║'; then
     ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), TYP, stan z rekordu, kopie z monitora, GB calej relacji, nastepny bieg (200 kolumn; wlasciciel 2026-09-12: typ i GB w liscie)"
 else
     bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S200"
 fi
-if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +active +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +active +aktualne +║│'; then
+if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +działa +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +║│'; then
     ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Typ i Kopie -- panel stoi obok od 80"
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
@@ -116,7 +116,7 @@ else
 fi
 # Panel OBOK listy (prawy): pierwszy wiersz (duplikat) ma focus; zrodla i cel
 # NIE sa w panelu -- sa w dolnym panelu par (wlasciciel 2026-09-11).
-if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak zapisu w historii (nie wiadomo, nie 'OK')"; then
+if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak wpisu w historii transferów (to nie znaczy 'OK')"; then
     ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma"
 else
     bad "relacje: panel szczegolow" "$S" "$S200"
@@ -422,7 +422,7 @@ fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
 SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 200 2>&1)"
-if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +active PAUZA +aktualne +0B +-- pauza -- +║'; then
+if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +działa PAUZA +aktualne +0B +-- pauza -- +║'; then
     ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
@@ -1063,8 +1063,8 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
 rm -f "$TCFG"
-if has "$WT" 'co: 56 * * * *   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: 6 2 * * *   stempel automated_daily_   trzyma 7' \
-   && has "$WT" 'trzyma 12   co: 36 * * * *' && has "$WT" 'trzyma 3   co: 46 2 * * *' && ! has "$WT" 'co: 1 * * * *'; then
+if has "$WT" 'co: co godzinę (:56)   stempel automated_hourly_   trzyma 24' && has "$WT" 'co: co dobę 02:06   stempel automated_daily_   trzyma 7' \
+   && has "$WT" 'trzyma 12   co: co godzinę (:36)' && has "$WT" 'trzyma 3   co: co dobę 02:46' && ! has "$WT" 'co: co godzinę (:01)'; then
     ok "okno: rytm i retencja KAZDEGO szczebla, z polami szczebla sekcji (send_/prune_schedule_<szablon>) przed szablonem"
 else
     bad "okno: rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
@@ -1328,7 +1328,7 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +pve10 → tutaj +lokalna +active ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
+if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
    && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
     ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
 else
@@ -1383,7 +1383,7 @@ else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
-if has "$N2" 'Ost. bieg   2026-09-08 02:30   rc=1   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
+if has "$N2" 'Ost. bieg   2026-09-08 02:30   BŁĄD (rc=1)   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
     ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc, czas) i biegi/bledy z job-stats"
 else
     bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Biegi')"
@@ -1579,7 +1579,7 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +active +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +działa +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
