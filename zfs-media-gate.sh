@@ -84,6 +84,15 @@ SOURCE=""; PREFIX=""; ENGINE_RC=""; AGE_WARN=""; AGE_CRIT=""
 # family is known even though it has no name.
 PREFIX_ANY=0
 has_family() { [ -n "$PREFIX" ] || [ "$PREFIX_ANY" = 1 ]; }
+# --guids G1,G2: THE DISKS OF THIS REPLICA, by pool GUID (owner 2026-10-09: "replika
+# powinna jednoznacznie rozpoznawac dyski po ID, a nie po samej nazwie puli. Co sie
+# stanie, gdy pomyle dysk z innej firmy i tez bedzie mial repl?"). A pool name is a
+# convention, and another site using this package names its media the same way. With
+# the list given, a disk whose pool merely has the right NAME is refused before it is
+# imported -- read from the import scan, which needs no import. Without it the gate
+# behaves as before (name + base dataset), so replicas configured earlier keep working.
+ALLOWED_GUIDS=""
+guid_ok() { [ -z "$ALLOWED_GUIDS" ] && return 0; case ",$ALLOWED_GUIDS," in *",$1,"*) return 0 ;; esac; return 1; }
 # --source is REPEATABLE. One replica job may copy several datasets onto the
 # same medium, and it must do so inside ONE import/export window: the window is
 # the exposure, so a job with three sources that bracketed each one separately
@@ -125,6 +134,8 @@ while [ "$#" -gt 0 ]; do
         --source=*)   _msrc_add "${1#--source=}"; shift ;;
         --engine-rc)   ENGINE_RC="${2:-}"; shift 2 ;;
         --engine-rc=*) ENGINE_RC="${1#--engine-rc=}"; shift ;;
+        --guids)      ALLOWED_GUIDS="${2:-}"; shift 2 ;;
+        --guids=*)    ALLOWED_GUIDS="${1#--guids=}"; shift ;;
         --prefix)     PREFIX="${2:-}"; shift 2 ;;
         --prefix=*)   PREFIX="${1#--prefix=}"; shift ;;
         --warn)       AGE_WARN="${2:-}"; shift 2 ;;
@@ -151,6 +162,7 @@ case "$VERB" in attach|detach|status|age) ;; *) echo "unknown verb: $VERB" >&2; 
 # wrote, and from udev with whatever the rule passed.
 case "$LABEL" in *[!A-Za-z0-9._-]*) echo "zfs-media-gate: '$LABEL' is not a valid label" >&2; exit 2 ;; esac
 case "$POOL"  in *[!A-Za-z0-9._:-]*|''|-*) echo "zfs-media-gate: '$POOL' is not a valid pool name" >&2; exit 2 ;; esac
+case "$ALLOWED_GUIDS" in *[!0-9,]*) echo "zfs-media-gate: --guids '$ALLOWED_GUIDS' -- pool GUIDs (digits), comma-separated" >&2; exit 2 ;; esac
 
 command -v zfs   >/dev/null || { echo "zfs-media-gate: 'zfs' not found in PATH" >&2; exit 2; }
 command -v zpool >/dev/null || { echo "zfs-media-gate: 'zpool' not found in PATH" >&2; exit 2; }
@@ -363,6 +375,10 @@ status)
     # Since no software here can make a surprise removal safe, the useful thing
     # is to make the WINDOW visible. The bracket already keeps it to the length
     # of one run; this says, in words, which side of it you are on.
+    if imported && [ -n "$ALLOWED_GUIDS" ] && ! guid_ok "$(pool_guid)"; then
+        say "medium '$POOL' is imported, but it is not a disk of '$LABEL' (guid $(pool_guid); this replica's: $ALLOWED_GUIDS)."
+        emit foreign_medium; exit 2
+    fi
     if imported; then
         check_dataset || exit $?
         say "medium '$POOL' for '$LABEL' is present -- DO NOT UNPLUG: the pool is imported and pulling it now can hang this host until it is reset."
@@ -448,6 +464,16 @@ attach)
         say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
         emit ambiguous; exit 2
     fi
+    # A FOREIGN DISK IS NEVER IMPORTED (--guids). The scan gives the GUID of the disk
+    # in the slot without importing it; one that is not this replica's is left alone
+    # and the run fails loudly, so the operator learns the wrong disk is in the slot.
+    if [ -n "$ALLOWED_GUIDS" ] && [ "$cand" -eq 1 ] && ! imported; then
+        _slot_guid="$(scan_guid)"
+        if [ -n "$_slot_guid" ] && ! guid_ok "$_slot_guid"; then
+            say "REFUSING: the disk in the slot carries a pool named '$POOL' (guid $_slot_guid), but it is not one of the disks of '$LABEL' (guids $ALLOWED_GUIDS). Not importing it -- a disk from elsewhere with the same pool name must never receive this copy. Add it to the replica in the GUI (F6, 'e') if it IS yours."
+            emit foreign_medium; exit 2
+        fi
+    fi
 
     # WITH SEVERAL SOURCES EVERY ONE OF THEM HAS TO BE QUIET AND PROVED.
     # The job copies all of them in one window, so one source with work to do
@@ -522,6 +548,10 @@ EOF
         fi
     fi
 
+    if imported && [ -n "$ALLOWED_GUIDS" ] && ! guid_ok "$(pool_guid)"; then
+        say "REFUSING: '$POOL' is imported, but its guid ($(pool_guid)) is not one of the disks of '$LABEL' (guids $ALLOWED_GUIDS). Not using it and not exporting it -- it is not this replica's disk."
+        emit foreign_medium; exit 2
+    fi
     if imported; then
         marker_is_ours; _own=$?
         case "$_own" in

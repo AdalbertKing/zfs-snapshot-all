@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 585281e33961ebf6 -->
+<!-- status-covers-digest: c6a1fdd0fcd574dc -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,39 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Runda uwag 2026-10-09, paczka P5: replika rozpoznaje dyski po ID, nośnik tylko podłączony, „po włożeniu” per replika (uwagi 6, 7, 8; właściciel: „tak, po ID”).**
+  - **Dysk po ID puli (`media_guids`):** sekcja `[replica:]` może wymienić ID pul
+    (pool GUID) swoich dysków; `zfs-media-gate.sh attach --guids` odczytuje ID dysku
+    w slocie ze skanu importu (bez importu) i dysku spoza listy NIE importuje (rc 2,
+    komunikat „not one of the disks”); zaimportowanej obcej puli nie używa i nie
+    eksportuje. `list-replicas` pokazuje taki dysk jako `wrong_medium` („NIE TEN
+    DYSK”). Bez listy brama działa jak dotąd (nazwa puli + baza). Mirror jest jedną
+    pulą = jedno ID; `zpool replace` go nie zmienia. Tylko nośnik wymienny (generator
+    odmawia `media_guids` przy stałym).
+  - **Kreator repliki (`tui/replica.sh`):** najpierw rodzaj nośnika (4/6), potem nośnik
+    (5/6) — tylko podłączony: pule zaimportowane i w slocie, bez „Wpisz nazwę puli”
+    i bez okna bazy (baza zawsze `replica`). Nowa replika: „Sformatuj nowy nośnik”
+    (pula `<host>-<replika>` bez pytania, przycisk „Sformatuj (KASUJE dysk)”,
+    domyślnie Wstecz). Zmiana wymiennej: „Dodaj kolejny dysk do tej repliki” (ta sama
+    pula i baza, ID dopisane — żaden dysk nie jest wyłączany); zmiana stałej: bez
+    formatowania. ID dysku idzie do `add-replica --media-guid` (z `prepare-media`,
+    które je teraz wypisuje, albo z puli wybranej z listy); replika sprzed P5 dostaje
+    ID obecnego dysku przy pierwszej zmianie.
+  - **„Po włożeniu” per replika (`on_insert`):** okno „także po włożeniu?” zawsze dla
+    wymiennego z harmonogramem. Reguła udev woła `run-replicas --on-insert`, które
+    uruchamia tylko linie `#on-insert` (repliki „tylko po włożeniu” i harmonogramowe
+    z `on_insert = yes`, które dostają taką drugą linię); ręczne `run-replicas`
+    uruchamia każdą replikę raz. Reguła sprzed P5 (bez `--on-insert`) jest w planie
+    kreatora odnawiana, gdy replika ma ruszać po włożeniu; do tego czasu działa jak
+    dawniej (uruchamia wszystkie).
+  - **F6:** harmonogram „… + po włożeniu”, w szczegółach wiersz „Dyski” (ile, po ID).
+  - **Na żywo (pve9b, dysk usb1 w slocie, kopia programu w /tmp):** obce ID — odmowa
+    bez importu (rc 2); właściwe — import i eksport w `detach`; `list-replicas` z obcym
+    ID — `wrong_medium`. Etykieta testowa usunięta, konfiguracja hosta nietknięta.
+  - **Testy:** `mediagate` L8r; `cron` PRG1–6; `zfsbackup` runreplicas (`--on-insert`,
+    reguła), addreplica (`media_guids`, `on_insert`, walidacja); `tui` kreator repliki
+    (rodzaj → nośnik, ID, okno B, odnowienie reguły, formatowanie, kolejny dysk).
 
 - **Runda uwag 2026-10-09, paczka P4: relacja z szablonu albo ręcznie, jedno okno retencji źródła (uwagi 5, 9, 10).**
   - **„Zmień relację” (`tui/edit-relation.sh`), sześć pozycji:** Dodaj do kopii dataset ze

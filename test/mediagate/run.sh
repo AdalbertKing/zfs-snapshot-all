@@ -807,6 +807,37 @@ else
 fi
 POOLS="hdd rotpool"; IMPORTABLE=""; g detach rotpool rep >/dev/null 2>&1
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
+# L8r. THE DISKS OF A REPLICA BY GUID (P5, owner 2026-10-09: "replika powinna
+#      jednoznacznie rozpoznawac dyski po ID ... dysk z innej firmy tez bedzie mial
+#      repl"). --guids: a disk in the slot whose pool has the right NAME but another
+#      GUID is never imported (rc 2, loud); one on the list imports as before; an
+#      imported foreign pool is neither used nor exported. Control: without --guids
+#      the same foreign disk imports (name + base, as before P5).
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"
+out_f="$(POOL_GUID=99999 g attach rotpool rep --dataset rotpool/replica --guids 11111111,22222222)"; rc_f=$?
+imp_f="$(cat "$IMPORTED_LOG")"
+: > "$IMPORTED_LOG"
+POOL_GUID=22222222 g attach rotpool rep --dataset rotpool/replica --guids 11111111,22222222 >/dev/null 2>&1; rc_a=$?
+imp_a="$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""; POOL_GUID=22222222 g detach rotpool rep >/dev/null 2>&1
+rm -f "$STATE/rep.imported-by-us"; : > "$EXPORTED_LOG"
+POOLS="hdd rotpool"; IMPORTABLE=""
+out_i="$(POOL_GUID=99999 g attach rotpool rep --dataset rotpool/replica --guids 11111111)"; rc_i=$?
+exp_i="$(cat "$EXPORTED_LOG")"
+POOLS="hdd"; IMPORTABLE="rotpool"; : > "$IMPORTED_LOG"
+POOL_GUID=99999 g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1; rc_c=$?
+imp_c="$(cat "$IMPORTED_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""; POOL_GUID=99999 g detach rotpool rep >/dev/null 2>&1
+rm -f "$STATE/rep.imported-by-us" "$SYNCFILE"
+if [ "$rc_f" = 2 ] && [ -z "$imp_f" ] && has "not one of the disks" "$out_f" \
+   && [ "$rc_a" = 0 ] && [ "$imp_a" = rotpool ] \
+   && [ "$rc_i" = 2 ] && [ -z "$exp_i" ] && has "not one of the disks" "$out_i" \
+   && [ "$rc_c" = 0 ] && [ "$imp_c" = rotpool ]; then
+    ok "L8r: --guids -- a foreign disk with the replica's pool name is not imported (nor used/exported when imported); a listed one imports; control: no --guids imports by name"
+else
+    bad "L8r: --guids" "foreign rc=$rc_f imp=[$imp_f]; allowed rc=$rc_a imp=[$imp_a]; imported-foreign rc=$rc_i exp=[$exp_i]; control rc=$rc_c imp=[$imp_c]" "$out_f $out_i"
+fi
+DATASETS="hdd"
 
 # ---------------------------------------------------------------------------
 # M. SEVERAL SOURCES, ONE MEDIUM, ONE WINDOW

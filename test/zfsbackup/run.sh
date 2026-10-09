@@ -13753,6 +13753,57 @@ else
     bad "runreplicas: --name unknown" "rc=$rr_rc" "$rr_out"
 fi
 
+# --on-insert (P5, owner 2026-10-09, note 6): the udev rule runs only the replicas
+# that want it -- the '#on-insert' lines. A scheduled replica with on_insert = yes has
+# a commented copy of its line; a manual run takes its scheduled line once and skips
+# the copy; --on-insert takes only the copies and on-insert-only replicas.
+cat > "$RR/block2" <<EOF
+# BEGIN zfs-backup-managed
+30 2 * * * echo a-sched >> $RR/ran # zfs-job.sh "h replica copy (a)" --log=x
+#on-insert echo a-insert >> $RR/ran # zfs-job.sh "h replica copy (a)" --log=x
+#on-insert echo b-insert >> $RR/ran # zfs-job.sh "h replica copy (b)" --log=x
+30 3 * * * echo c-sched >> $RR/ran # zfs-job.sh "h replica copy (c)" --log=x
+# END zfs-backup-managed
+EOF
+: > "$RR/ran"
+bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf'" >/dev/null 2>&1
+rr_manual="$(sort "$RR/ran" | tr '\n' ' ')"
+: > "$RR/ran"
+bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf' --on-insert" >/dev/null 2>&1
+rr_insert="$(sort "$RR/ran" | tr '\n' ' ')"
+if [ "$rr_manual" = "a-sched b-insert c-sched " ] && [ "$rr_insert" = "a-insert b-insert " ]; then
+    ok "runreplicas: manual run = each replica once (scheduled line, not its on-insert copy); --on-insert = only the replicas that want it"
+else
+    bad "runreplicas: --on-insert" "manual=[$rr_manual] (want a-sched b-insert c-sched)" "insert=[$rr_insert] (want a-insert b-insert)"
+fi
+if grep -q 'run-replicas --on-insert --config=' "$ZFSBACKUP"; then
+    ok "runreplicas: the udev rule written by install-media-trigger calls run-replicas --on-insert"
+else
+    bad "runreplicas: udev rule without --on-insert"
+fi
+
+# add-replica --media-guid / --on-insert (P5): media_guids and on_insert in the section,
+# read back by list-replicas; on an on-insert-only replica on_insert is not written.
+MG="$WORK/replicaguids"; rm -rf "$MG"; mkdir -p "$MG"
+printf '[defaults]\n\thost_label = h\n' > "$MG/c.conf"
+( source "$ZFSBACKUP"; replica_section_upsert "$MG/c.conf" mg "hdd/data" "repl/replica" "0 22 * * *" "replica_" 1 removable "" "" "" "" 0 "" "4242,777" yes
+  replica_section_upsert "$MG/c.conf" mi "hdd/data2" "repl2/replica" "on-insert" "replica_" 1 removable "" "" "" "" 0 "" "5" yes ) 2>&1
+lr=$( ( source "$ZFSBACKUP"; zfs() { return 1; }; zpool() { return 1; }; cmd_list_replicas --json --config="$MG/c.conf" ) 2>&1 )
+if grep -q "^$(printf '\t')media_guids = 4242,777\$" "$MG/c.conf" && [ "$(grep -c 'on_insert = yes' "$MG/c.conf")" = 1 ] \
+   && printf '%s' "$lr" | grep -qE '"name":"mg"[^}]*"media_guids":"4242,777","on_insert":"yes"' \
+   && printf '%s' "$lr" | grep -qE '"name":"mi"[^}]*"media_guids":"5","on_insert":"no"'; then
+    ok "addreplica: media_guids and on_insert in the section, read back by list-replicas (on-insert-only: no on_insert line)"
+else
+    bad "addreplica: guids / on_insert" "$(cat "$MG/c.conf")" "$lr"
+fi
+out=$(bash "$ZFSBACKUP" add-replica mg --source=hdd/data --dst=repl/replica --media-guid=12x 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'a pool GUID is digits'; then
+    ok "addreplica: --media-guid that is not digits is refused"
+else
+    bad "addreplica: --media-guid validation" "rc=$rc" "$out"
+fi
+rm -rf "$MG"
+
 # add-replica --passive (owner note 20, 2026-10-08): the section says passive = yes
 # and carries no prefix; --passive with --prefix is a refusal; list-replicas shows a
 # passive replica's prefix as '-' (the GUI says "bez wlasnych migawek").

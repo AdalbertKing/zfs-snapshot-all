@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor
+_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2971,7 +2971,24 @@ build_replica_section() {
         esac
     fi
 
-    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}")
+    # THE DISKS OF THIS REPLICA BY GUID (owner 2026-10-09, P5: "po ID"). Handed to
+    # the gate's attach, which refuses a disk whose pool merely has the right name.
+    # Empty = the gate decides by name and base dataset, as before.
+    local guids; guids="$(resolve_field media_guids "$sec" "" "")" || guids=""
+    guids="${guids// /}"
+    case "$guids" in
+        '') ;;
+        *[!0-9,]*|,*|*,|*,,*) die "[replica:$name]: media_guids='$guids' -- pool GUIDs (digits), comma-separated, e.g. 1234567890123456789,987654321" ;;
+    esac
+    [ -z "$guids" ] || [ "$media" = removable ] || die "[replica:$name]: media_guids only means something for a REMOVABLE medium (the gate that reads it brackets only those)"
+    # ON INSERT, PER REPLICA (owner 2026-10-09, note 6). The udev rule runs
+    # `run-replicas --on-insert`, which runs the '#on-insert' lines only: a replica
+    # that runs ONLY on insertion has one already; on_insert = yes gives a scheduled
+    # replica a second, commented copy of its line as well. Default no -- a
+    # scheduled replica no longer runs on every insertion of any disk.
+    local on_insert; resolve_bool_field on_insert "$sec" "" "[replica:$name]" 0; on_insert="$BOOL_FIELD"
+
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}${SEP}${guids}${SEP}${on_insert}")
 }
 
 build_bookmark_prune_section() {
@@ -3491,8 +3508,8 @@ emit_send() {
 # The pool is the first component of the target path -- that is what gets
 # imported, and the full path is passed as --dataset so the gate can tell an
 # absent disk from the WRONG disk in the slot.
-media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status]
-    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}"
+media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status] [guids]
+    local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}" guids="${8:-}"
     [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
     [ -n "$target" ] || { printf '%s' "$cmd"; return 0; }
     local pool="${target%%/*}"
@@ -3512,6 +3529,11 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # for nothing. The gate splits on commas; a ZFS name cannot contain one.
     local srcopt=""
     [ -n "$src" ] && [ -n "$pref" ] && srcopt=" --source $src --prefix $pref"
+    # The replica's disks by GUID go to ATTACH only -- that is where a disk is let in;
+    # detach acts on what attach imported. Not repeated on detach: the line is
+    # measured against cron's 1000 bytes.
+    local attopt="$srcopt"
+    [ -n "$guids" ] && attopt="$attopt --guids $guids"
     # The caller may already have captured the engine status into $m -- a
     # replica with several sources folds N statuses into one, and only it knows
     # how. Everything else hands over a plain command and this adds the capture.
@@ -3537,7 +3559,7 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
     # ever stops being true.
     local _body
     _body=$(printf '( %s attach %s %s --dataset %s%s; a=$?; if [ $a -eq 0 ]; then %s%s; elif [ $a -eq 1 ]; then m=0; else m=$a; fi; %s detach %s %s%s --engine-rc $m; d=$?; [ $m -ne 0 ] && exit $m; exit $d )' \
-        "$gate" "$pool" "${label:-media}" "$target" "$srcopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt")
+        "$gate" "$pool" "${label:-media}" "$target" "$attopt" "$cmd" "$capture" "$gate" "$pool" "${label:-media}" "$srcopt")
     case "$_body" in
         *"'"*) die "media_bracket: the bracket generated for this job contains a single quote, which cannot be quoted for sh -c. Something reached it that the name validation should have refused: $_body" ;;
     esac
@@ -3837,7 +3859,7 @@ emit_replicas() {
     local mwarn mcrit mnotify mwarntext mbroken mcmd mtargets passive fam
     local -a srcs=(); local s one
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken passive <<< "$e"
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken passive guids on_insert <<< "$e"
         # What the gate and the monitor look for: the replica's own family, or
         # with passive = yes any snapshot ("-", as check-snap-age and the gate read it).
         fam="$prefix"; [ "$passive" = 1 ] && fam="-"
@@ -3867,7 +3889,7 @@ emit_replicas() {
             if [ "$media" = removable ]; then
                 cmd="$cmd; m=\$?"
             fi
-            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1)"
+            cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
         else
             # A LOOP, not the engine call repeated. Same reason as the comma
             # list above: cron refuses a command over 1000 bytes, and repeating
@@ -3884,7 +3906,7 @@ emit_replicas() {
             one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst" "$passive")"
             cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
             if [ "$media" = removable ]; then
-                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1)"
+                cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
             else
                 # NO BRACKET, so nothing else would carry the folded status out:
                 # the line's rc would be that of the last `[ $m -eq 0 ]` test,
@@ -3898,6 +3920,7 @@ emit_replicas() {
             JOB_LINES+=("$(job_cron_line "#on-insert" "$cmd" "$notify")")
         else
             JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+            [ "$on_insert" = 1 ] && JOB_LINES+=("$(job_cron_line "#on-insert" "$cmd" "$notify")")
         fi
         # THE STALENESS MONITOR, in the same shape as every other monitor line
         # (rc 1 warn, 2 crit, >=3 broken), so `monitor`, the queue and the daily
