@@ -592,6 +592,110 @@ out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --targe
     && ok "slice2: two sources seed twice and install once" \
     || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 
+# ---- LOCAL RELATIONSHIP: --name (owner, 2026-10-09) --------------------------
+# A copy on this host as a relationship like any other: sections carry
+# pair_label (-L, the pause gate), each source has its own landing prune at
+# <target>/<source>, the tree is copied with -R and the exclusion, the seed does
+# the same, and a record with RUX_MODE=local names the COPIES as managed.
+LC="$WORK/lclients"; rm -rf "$LC"
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --recursive=flat --exclude-child='^rpool/data/vm-9$' --name=lok --config="$CFG")"
+rec="$LC/lok.conf"
+# The record and the installed sections need the install, and the install needs
+# flock (the crontab writer). Same rule as the uninstall cases below.
+if ! command -v flock >/dev/null 2>&1; then
+    echo "SKIP local relationship: record / sections / name taken (no flock on this machine -- the install needs it)"
+else
+if [ -f "$rec" ] && grep -qx 'RUX_MODE=local' "$rec" && grep -qx 'STATE=active' "$rec" \
+   && grep -qx 'MANAGED_DATASETS=hdd/backups/rpool/data' "$rec" && grep -qx 'REQUESTED_DATASETS=rpool/data' "$rec" \
+   && grep -qx 'CLIENT_TARGET=hdd/backups' "$rec" && ! grep -q '^PEER_HOST' "$rec"; then
+    ok "local relationship: --name writes a record -- mode local, the COPY as managed, no peer"
+else
+    bad "local relationship: record" "$(cat "$rec" 2>/dev/null)" "$(printf '%s' "$out" | tail -4)"
+fi
+sec_ds="$(awk '/^\[dataset:rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$CFG")"
+sec_pr="$(awk '/^\[prune:hdd\/backups\/rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$CFG")"
+if printf '%s' "$sec_ds" | grep -qE '^\s*pair_label\s*=\s*lok$' && printf '%s' "$sec_ds" | grep -qE '^\s*recursive\s*=\s*flat$' \
+   && printf '%s' "$sec_ds" | grep -qF 'exclude_child_1 = ^rpool/data/vm-9$' \
+   && printf '%s' "$sec_pr" | grep -qE '^\s*pair_label\s*=\s*lok$' && ! grep -qxF '[prune:hdd/backups]' "$CFG"; then
+    ok "local relationship: the sections carry pair_label, -R and the exclusion; the landing prune is <target>/<source>, not the whole target"
+else
+    bad "local relationship: sections" "$sec_ds" "$sec_pr"
+fi
+if grep -qE -- '-m automated_hourly_ .*-R -X \^rpool/data/vm-9\$ rpool/data hdd/backups$' "$WORK/seed-calls" 2>/dev/null; then
+    ok "local relationship: the seed copies the tree with the same -R and -X as the installed line"
+else
+    bad "local relationship: seed" "$(cat "$WORK/seed-calls" 2>/dev/null)"
+fi
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/db --target=hdd/backups --name=lok --config="$CFG")"
+printf '%s' "$out" | grep -q "relationship 'lok' already exists on this host" \
+    && ok "local relationship: a second --name=lok is refused while the first is live" \
+    || bad "local relationship: name taken" "$(printf '%s' "$out" | tail -3)"
+fi   # flock present
+# Each refusal below on a fresh config: the install above left lok's sections in
+# $CFG, and an overlap refusal would hide the one these cases are about.
+rm -f "$WORK/crontab-store"; seed_cfg
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --source=rpool/data --target='' --recursive=flat --name=x --config="$CFG")"
+printf '%s' "$out" | grep -q -- '--name makes a relationship that COPIES' \
+    && ok "local relationship: --name with --target='' (nothing copied) is refused" \
+    || bad "local relationship: --name without a target" "$(printf '%s' "$out" | tail -3)"
+rm -f "$WORK/crontab-store"; seed_cfg
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --exclude-child='^x$' --config="$CFG")"
+printf '%s' "$out" | grep -q -- '--exclude-child needs --recursive=flat' \
+    && ok "local relationship: --exclude-child without --recursive=flat is refused" \
+    || bad "local relationship: exclusion without recursion" "$(printf '%s' "$out" | tail -3)"
+
+# remove_local_relation: only sections with BOTH the local-backup marker and
+# pair_label = <name> go; another local relationship's and a hand-written one
+# that merely borrows the label stay. The record is closed, the copies stay.
+RL="$WORK/rmlocal"; rm -rf "$RL"; mkdir -p "$RL/clients"
+cat > "$RL/c.conf" <<'EOF'
+[defaults]
+	host_label = t
+[dataset:rpool/data]
+	# managed-by: zfs-backup.sh local-backup source=rpool/data
+	dst = hdd/backups
+	pair_label   = lok
+[prune:hdd/backups/rpool/data]
+	# managed-by: zfs-backup.sh local-backup target=hdd/backups/rpool/data
+	pair_label   = lok
+[dataset:rpool/db]
+	# managed-by: zfs-backup.sh local-backup source=rpool/db
+	dst = hdd/backups
+	pair_label   = other
+[dataset:tank/hand]
+	dst = hdd/backups
+	pair_label = lok
+EOF
+printf 'CLIENT_NAME=lok\nRUX_MODE=local\nSTATE=active\nMANAGED_DATASETS=hdd/backups/rpool/data\nCRON_CONFIG=%s\n' "$RL/c.conf" > "$RL/clients/lok.conf"
+out="$( ( CLIENTS_DIR="$RL/clients" RELATIONSHIPS_DIR="$RL/rel"
+          assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+          gencron_as_target() { :; }; atomic_replace_and_install() { cp "$2" "$1"; }
+          cmd_remove_client lok ) 2>&1 )"
+if ! grep -qxF '[dataset:rpool/data]' "$RL/c.conf" && ! grep -qxF '[prune:hdd/backups/rpool/data]' "$RL/c.conf" \
+   && grep -qxF '[dataset:rpool/db]' "$RL/c.conf" && grep -qxF '[dataset:tank/hand]' "$RL/c.conf" \
+   && grep -qx 'STATE=removed' "$RL/clients/lok.conf" && ! printf '%s' "$out" | grep -q 'unpair'; then
+    ok "local relationship: remove-client takes only its own marked + labelled sections, closes the record, never unpairs"
+else
+    bad "local relationship: remove-client" "$out" "$(cat "$RL/c.conf")"
+fi
+# Captured first, then matched: under pipefail a `die | grep -q` pipeline reports
+# the die's exit status even when grep found the line.
+printf 'CLIENT_NAME=l2\nRUX_MODE=local\nSTATE=active\n' > "$RL/clients/l2.conf"
+out="$( ( CLIENTS_DIR="$RL/clients"; cmd_edit_relation l2 --profile=d30 ) 2>&1 )"
+if grep -q "is a LOCAL relationship" <<< "$out"; then
+    ok "local relationship: edit-relation says plainly it does not handle a local one yet, instead of dying in the loader"
+else
+    bad "local relationship: edit-relation refusal" "$out"
+fi
+csl=""; for c in "hdd/backups/rpool:hdd/backups::local:0" "hdd/backups:hdd/backups::local:1" "hdd:hdd/backups::local:1" \
+                 "t/p/x:t:p::0" "t/q:t:p::1"; do
+    IFS=: read -r up tg pr md want <<< "$c"; copy_shell_level "$up" "$tg" "$pr" "$md"; got=$?
+    [ "$got" = "$want" ] || csl="$csl $c(got $got)"
+done
+[ -z "$csl" ] && ok "local relationship: delete-relation climbs empty shells strictly below <target> for a local copy, below <target>/<peer> for a remote one" \
+              || bad "local relationship: copy_shell_level" "$csl"
+
 # ---- REV-20260812-112 F1: the Usage text must advertise the install verb -----
 # The delivered command grew --install/--yes while the top-level Usage still
 # described it as plan/preview only. Help that contradicts the tool is a defect
@@ -1420,11 +1524,13 @@ else
     bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=flat --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive is for --target=''"; then
-    ok "A': --recursive with a target is refused, with the reason"
+        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
+# flat WITH a target is allowed since 2026-10-09 (measured on pve9b, see the
+# local relationship cases); atomic with a target stays refused.
+if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive=atomic is for --target=''"; then
+    ok "A': --recursive=atomic with a target is refused, with the reason"
 else
-    bad "A': --recursive with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
+    bad "A': --recursive=atomic with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
         bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?

@@ -174,6 +174,10 @@ def direction_of(host, peer, dirs, mode=None):
     sciezka), wiec heurystyka z samych `dirs` widziala tylko "pull" i rysowala
     `<`, nie `<>` (owner brief, runda 2 ekranow)."""
     dirs = set(dirs)
+    # Relacja lokalna (local-backup --name, 2026-10-09): zrodlo i kopia na tym
+    # hoscie -- ta sama strzalka co zadania lokalne na F2.
+    if mode == "local":
+        return u"%s → tutaj" % host
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
@@ -1001,7 +1005,7 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return "lustro" if mode == "sync" else mode
+        return {"sync": "lustro", "local": "lokalna"}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "lustro"
@@ -2017,9 +2021,14 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Uwaga", w_))
     pairs.append(("Typ", row.get("typ") or "?"))
     pairs.append(("Kierunek", row.get("dir") or "?"))
-    pairs.append(("Peer", rel.get("peer_host") or "?"))
-    pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
-                  + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
+    if rel.get("mode") == "local":
+        # Kopia lokalna nie ma drugiego hosta: zamiast Peer/Endpoint -- skad i dokad.
+        pairs.append((u"Źródło", ", ".join(rel.get("sources") or []) or "?"))
+        pairs.append(("Cel", rel.get("client_target") or "?"))
+    else:
+        pairs.append(("Peer", rel.get("peer_host") or "?"))
+        pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
+                      + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
     pairs.append(("Konto", rel.get("local_user") or ", ".join(accts) or "?"))
     pairs.append(("Profil", (rel.get("profile") or "?") + ((u"   u źródła: %s" % rel["source_profile"]) if rel.get("source_profile") else "")))
@@ -2328,6 +2337,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.extend(detail_kv(ch, [
         ("Stan", state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
         ("Kierunek", row.get("dir") or "?"),
+        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or "?"))
+        if rel.get("mode") == "local" else
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         ("Historia", "  ".join(x for x in [
@@ -3154,7 +3165,7 @@ HELP = [
     u"                 eksportu z tego katalogu, potem werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
-    u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach",
+    u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach (kopia lokalna: 8)",
     u"                 (typ -> host -> diagnoza; brak pakietu = Zainstaluj ->",
     u"                 miejsca do kopiowania -> dokąd -> szablon -> nazwa ->",
     u"                 konto -> ustawienia -> podsumowanie i WYKONAJ), Del to",

@@ -6469,7 +6469,12 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # cron_context_resolve record; without, cron_context_resolve adopt -- the file
 # this account's crontab was installed from -- then
 # assert_cron_config_matches_installed and atomic_replace_and_install.
-if [ "$writers" -eq 11 ] && [ "$resolvers" -eq 16 ]; then
+# 12/17 since 2026-10-09: remove_local_relation, the collector half of a LOCAL
+# relationship (local-backup --name). A WRITER (it drops that relationship's
+# sections and installs the result), aimed like the others: cron_context_resolve
+# record from its record, then assert_cron_config_matches_installed and
+# atomic_replace_and_install.
+if [ "$writers" -eq 12 ] && [ "$resolvers" -eq 17 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
