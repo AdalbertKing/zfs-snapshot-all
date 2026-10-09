@@ -11569,6 +11569,35 @@ else
 fi
 rm -rf "$PF/clients"
 
+# --add-tier (owner, 2026-10-09: the F5 table shows all five tiers, an absent one
+# unchecked -- checking it adds the tier). Family-per-tier base: a new
+# [template:<tier>] on its own family, counted like the others, listed in
+# [dataset]. Ladder base: a new rung on the ladder's family, listed in [prune],
+# and the --keep after --add-tier lands in that rung. An existing tier is refused.
+cp "$REPO/profiles/default.conf" "$PF/pkg/default.conf"
+pf_sec() { awk -v h="[template:$2]" '$0 == h {f=1; next} /^\[/ {f=0} f' "$PF/user/$1.conf" 2>/dev/null; }
+if pf_run --from=d7h24 --as=at1 --add-tier=weekly \
+   && pf_sec at1 weekly | grep -qE 'send_schedule += 21 2 \* \* 0' && pf_sec at1 weekly | grep -qE 'pattern += automated_weekly$' \
+   && pf_sec at1 weekly | grep -qE 'keep += 4$' && pf_sec at1 weekly | grep -qE 'quiesce += auto,degrade$' \
+   && grep -qE 'use_template = hourly,daily,weekly$' "$PF/user/at1.conf"; then
+    ok "saveprof: --add-tier on a family-per-tier base -- own family, shipped schedule, default keep, listed in [dataset]"
+else
+    bad "saveprof: --add-tier family-per-tier" "$(cat "$WORK/pf.err")" "$(pf_sec at1 weekly)"
+fi
+if pf_run --from=default --as=at2 --add-tier=yearly --keep=3 \
+   && pf_sec at2 keep_yearly | grep -qE 'pattern += automated_hourly$' && pf_sec at2 keep_yearly | grep -qE 'keep += 3$' \
+   && grep -qE 'use_template = keep_hourly,keep_daily,keep_weekly,keep_monthly,keep_yearly$' "$PF/user/at2.conf"; then
+    ok "saveprof: --add-tier on a ladder -- a rung on the ladder's family, --keep after it lands there"
+else
+    bad "saveprof: --add-tier ladder" "$(cat "$WORK/pf.err")" "$(pf_sec at2 keep_yearly)"
+fi
+if ! pf_run --from=d7h24 --as=at3 --add-tier=daily && grep -q "already has the tier 'daily'" "$WORK/pf.err" && [ ! -f "$PF/user/at3.conf" ]; then
+    ok "saveprof: --add-tier of a tier the base already has is refused, nothing written"
+else
+    bad "saveprof: --add-tier existing" "$(cat "$WORK/pf.err")"
+fi
+rm -f "$PF/user/at1.conf" "$PF/user/at2.conf" "$PF/pkg/default.conf"
+
 # ---------------------------------------------------------------------------
 # THE HAPPY PATH, first, because it is the one the first implementation broke.
 # ---------------------------------------------------------------------------

@@ -1837,6 +1837,13 @@ not check -- what is in the index.
 `--verify`. And read the whole `--verify` output, not `tail -3`: the summary
 line named the wrong gate.
 
+**Repeat, 2026-10-09 (#498).** The rule was not applied. `--refresh-status`
+ran while `zfs-backup.sh`, `tui/template.sh`, `tui/grid.py` and both suites were
+still unstaged, so the local `--verify` passed against the old index. The code
+went into the index only at the commit. CI then said STALE / `GRAPH DRIFT`
+(recorded `b741d29a`, current `853058c4`). The fix was a second commit: refresh
+on the committed tree, then stage the status file.
+
 ### E63 — `cmd_seed ... || die "resumable"` was unreachable for two weeks (2026-09-23, R1)
 
 **Genesis.** import-relation (2026-09-09) ran its follow-up verbs as

@@ -132,6 +132,10 @@ def words(t):
         if t.endswith(suf):
             return a, b
     return t, t
+# Kolejność i wartości domyślne szczebla, którego bazowy nie ma (te same co w
+# save-profile --add-tier): litera wieku, ile trzymać, czy zamrażany.
+CANON = [("hourly", "h", "24", False), ("daily", "d", "7", True), ("weekly", "w", "4", True),
+         ("monthly", "m", "12", True), ("yearly", "y", "5", True)]
 rows = []
 for line in open(tiers, encoding="utf-8"):
     f = [x[1:] if x.startswith("#") else x for x in line.rstrip("\n").split("\t")]
@@ -152,7 +156,33 @@ for line in open(tiers, encoding="utf-8"):
         row.update({"value": "-", "editable": False, "can_off": False, "mode": "none"})
     else:
         continue
+    row["sched"] = bool(sched)
     rows.append(row)
+# OKNO KOMPLETNE (właściciel 2026-10-09: "pokazywać również miesięczne, roczne,
+# tygodniowe po prostu nie pozaznaczane"): zawsze pięć szczebli po kolei; tych,
+# których bazowy nie ma, nie zaznaczono -- kratka dodaje je (save-profile --add-tier).
+make = [r for r in rows if r["mode"] == "none"]
+count = [r for r in rows if r["mode"] != "none"]
+ladder = any(not r["sched"] for r in count)
+age = next((r["letter"] for r in count if r["mode"] == "retain"), None) is not None
+fam = next((r["family"] for r in count), None)
+ordered = list(make)
+for t, letter, dflt, dq in CANON:
+    have = [r for r in count if r["key"].endswith(t) or (t == "yearly" and r["key"].endswith("annual"))]
+    if have:
+        ordered += have
+        continue
+    lab, glab = words(t)
+    row = {"key": t, "label": lab, "glabel": glab, "on": False, "add": True, "value": dflt, "base": dflt,
+           "family": (fam if ladder else "automated_" + t),
+           "q": (None if ladder else dq), "base_q": dq}
+    if age:
+        row.update({"mode": "retain", "letter": letter, "unit": UNIT[letter]})
+    else:
+        row.update({"mode": "keep", "unit": ""})
+    ordered.append(row)
+ordered += [r for r in count if r not in ordered]
+rows = ordered
 title = (u"Zmiana szablonu %s" % name) if action == "edit" else (u"Nowy szablon na podstawie %s" % name)
 s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
      "fields": ([] if action == "edit" else [{"key": "name", "label": u"Nazwa", "value": new}]),
@@ -180,6 +210,20 @@ args, plan = [], []
 for r in s["rows"]:
     g = by.get(r["key"], {})
     lab = r["label"]
+    if r.get("add"):
+        # szczebel, którego bazowy nie ma: zaznaczony = dodać (pola po --add-tier idą do niego)
+        if not g.get("on"):
+            continue
+        v = g.get("value") or r["base"]
+        args.append("--add-tier=%s" % r["key"])
+        if v != r["base"]:
+            args.append(("--keep=%s" % v) if r["mode"] == "keep" else ("--retain=-%s%s" % (r["letter"], v)))
+        q = r.get("q") is not None and bool(g.get("q"))
+        if r.get("q") is not None and q != r["base_q"]:
+            args.append("--quiesce=%s" % ("auto,degrade" if q else ""))
+        plan.append(u"  %s: dodany, %s%s" % (lab, (u"%s %s" % (v, r.get("unit") or "")).strip(),
+                    (u", zamrażany" if q else u", bez zamrażania") if r.get("q") is not None else ""))
+        continue
     if r.get("can_off", True) and not g.get("on", True):
         args.append("--drop-tier=%s" % r["key"]); plan.append(u"  %s: wyłączony (było %s)" % (lab, r.get("base", "-")))
         continue

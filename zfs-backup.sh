@@ -14642,6 +14642,120 @@ cmd_list_jobs() {
 # directory. The mismatch is reported as a warning instead, computed from the
 # same rendered flags the suite compares -- said, not enforced.
 
+# save_profile_add_tier <work file> <hourly|daily|weekly|monthly|yearly>
+# --add-tier (owner, 2026-10-09: "okno powinno być kompletne i pokazywać również
+# miesięczne, roczne, tygodniowe po prostu nie pozaznaczane"). Adds a tier the
+# base template does not have, in the base's own SHAPE and MECHANISM:
+#  - a ladder (a [prune] section with rungs on one family): a new rung, named like
+#    the existing ones with the tier word swapped (keep_daily -> keep_weekly),
+#    copying their prune_schedule / pattern / notify_word;
+#  - one family per tier: a new [template:<tier>] with its own family
+#    automated_<tier>_ and the schedules the shipped templates use for that tier,
+#    counted the way the other tiers are (gfs / flat keep / age retain).
+# A send/prune minute that an existing tier already uses moves 5 minutes later,
+# so two tiers never start in the same minute. Prints the section name it made;
+# on refusal prints the reason and returns 1. The three save-profile gates judge
+# the result like any other change.
+save_profile_add_tier() {
+    local work="$1" t="$2" send prune keep warn crit q letter
+    case "$t" in
+        hourly)  send="1 * * * *";  prune="21 * * * *"; keep=24; warn=90m;  crit=150m; q="";            letter=h ;;
+        daily)   send="11 1 * * *"; prune="31 1 * * *"; keep=7;  warn=30h;  crit=48h;  q=auto,degrade; letter=d ;;
+        weekly)  send="21 2 * * 0"; prune="41 2 * * 0"; keep=4;  warn=8d;   crit=10d;  q=auto,degrade; letter=w ;;
+        monthly) send="31 3 1 * *"; prune="51 3 1 * *"; keep=12; warn=35d;  crit=40d;  q=auto,degrade; letter=m ;;
+        yearly)  send="31 3 1 1 *"; prune="51 3 1 1 *"; keep=5;  warn=400d; crit=430d; q=auto,degrade; letter=y ;;
+        *) echo "'$t' is not a tier -- one of: hourly daily weekly monthly yearly"; return 1 ;;
+    esac
+    local field_of; field_of() { sed -n -E "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" | head -1 | sed -E 's/[[:space:]]+$//'; }
+    local dlist plist x
+    dlist=$(cron_config_section "$work" "[dataset]" | field_of use_template)
+    plist=$(cron_config_section "$work" "[prune]" | field_of use_template)
+    local -a names=()
+    IFS=',' read -r -a names <<<"$dlist,$plist"
+    for x in "${names[@]}"; do
+        x="${x//[[:space:]]/}"
+        case "$x" in *"$t") echo "it already has the tier '$t' ($x)"; return 1 ;; esac
+        case "$t:$x" in yearly:*annual) echo "it already has the tier '$t' ($x)"; return 1 ;; esac
+    done
+    if [ -n "$plist" ]; then
+        # LADDER: a rung on the family the other rungs prune.
+        local first="${plist%%,*}" rung
+        first="${first//[[:space:]]/}"
+        case "$first" in
+            *hourly|*daily|*weekly|*monthly|*yearly) rung="${first%_*}_$t" ;;
+            *) echo "cannot name a new rung after '$first'"; return 1 ;;
+        esac
+        local sec; sec=$(cron_config_section "$work" "[template:$first]")
+        {
+            printf '\n[template:%s]\n' "$rung"
+            printf '\tprune_schedule = %s\n' "$(printf '%s\n' "$sec" | field_of prune_schedule)"
+            printf '\tpattern        = %s\n' "$(printf '%s\n' "$sec" | field_of pattern)"
+            printf '\tkeep           = %s\n' "$keep"
+            printf '\tnotify_word    = %s\n' "$(printf '%s\n' "$sec" | field_of notify_word)"
+        } >"$work.rung" || return 1
+        save_profile_insert_before "$work" "[dataset]" "$work.rung" || { echo "could not write the rung"; return 1; }
+        set_or_remove_section_field "$work" "[prune]" use_template "$plist,$rung" || { echo "could not extend [prune] use_template"; return 1; }
+        echo "$rung"; return 0
+    fi
+    # ONE FAMILY PER TIER: the counting of the first tier that counts.
+    local mode="" gfs="" sec
+    for x in "${names[@]}"; do
+        x="${x//[[:space:]]/}"; [ -n "$x" ] || continue
+        sec=$(cron_config_section "$work" "[template:$x]")
+        if [ -n "$(printf '%s\n' "$sec" | field_of retain)" ]; then mode=retain; break; fi
+        if [ -n "$(printf '%s\n' "$sec" | field_of keep)" ]; then
+            mode=keep; gfs=$(printf '%s\n' "$sec" | field_of gfs); break
+        fi
+    done
+    [ -n "$mode" ] || { echo "no tier here says how many to keep -- nothing to copy the counting from"; return 1; }
+    local taken; taken=$(sed -n -E 's/^[[:space:]]*(send|prune)_schedule[[:space:]]*=[[:space:]]*([^ ]+)[[:space:]]+([^ ]+).*/\2 \3/p' "$work")
+    send=$(save_profile_free_minute "$send" "$taken")
+    taken=$(printf '%s\n' "$taken"; printf '%s\n' "$send" | awk '{print $1, $2}')
+    prune=$(save_profile_free_minute "$prune" "$taken")
+    {
+        printf '\n[template:%s]\n' "$t"
+        printf '\tsend_schedule  = %s\n' "$send"
+        printf '\tprefix         = automated_%s_\n' "$t"
+        printf '\tnotify_word    = snapshot\n'
+        printf '\tprune_schedule = %s\n' "$prune"
+        printf '\tpattern        = automated_%s\n' "$t"
+        if [ "$mode" = retain ]; then
+            printf '\tretain         = -%s%s\n' "$letter" "$keep"
+        else
+            [ "$gfs" = yes ] && printf '\tgfs            = yes\n'
+            printf '\tkeep           = %s\n' "$keep"
+        fi
+        [ -n "$q" ] && printf '\tquiesce        = %s\n' "$q"
+        printf '\tmonitor_warn   = %s\n' "$warn"
+        printf '\tmonitor_crit   = %s\n' "$crit"
+    } >"$work.tier" || return 1
+    save_profile_insert_before "$work" "[dataset]" "$work.tier" || { echo "could not write the tier"; return 1; }
+    set_or_remove_section_field "$work" "[dataset]" use_template "${dlist:+$dlist,}$t" || { echo "could not extend [dataset] use_template"; return 1; }
+    echo "$t"
+}
+
+# <cron line> <"min hour" lines taken> -> the line, its minute moved on by 5
+# until no taken pair matches.
+save_profile_free_minute() {
+    local line="$1" taken="$2" m h rest n=0
+    read -r m h rest <<<"$line"
+    while printf '%s\n' "$taken" | grep -qxF "$m $h" && [ "$n" -lt 12 ]; do
+        m=$(( (m + 5) % 60 )); n=$((n + 1))
+    done
+    echo "$m $h $rest"
+}
+
+# <file> <header> <snippet file>: the snippet goes in front of the header (the
+# end of the file when there is none); the snippet file is removed.
+save_profile_insert_before() {
+    local file="$1" hdr="$2" snip="$3"
+    awk -v hdr="$hdr" -v snip="$snip" '
+        $0 == hdr && !done { while ((getline l < snip) > 0) print l; print ""; done = 1 }
+        { print }
+        END { if (!done) while ((getline l < snip) > 0) print l }' "$file" >"$file.ins" \
+        && mv -f "$file.ins" "$file" && rm -f "$snip"
+}
+
 save_profile_dest() {   # <name> -> the path this verb would write
     printf '%s/%s.conf' "$PROFILE_USER_ROOT" "${1%.conf}"
 }
@@ -14678,13 +14792,14 @@ cmd_save_profile() {
     # ftier: the tier each field belongs to -- the --tier= given LAST before it.
     # One call can change several tiers (owner note 24: the F5 dialog asks every
     # tier in turn); a single --tier= reads exactly as before.
-    local -a fname=() fvalue=() ftier=() drop=()
+    local -a fname=() fvalue=() ftier=() drop=() add=()
     for a in "$@"; do
         case "$a" in
             --from=*)        from="${a#*=}" ;;
             --as=*)          as="${a#*=}" ;;
             --tier=*)        tier="${a#*=}" ;;
             --drop-tier=*)   drop+=("${a#*=}") ;;
+            --add-tier=*)    add+=("${a#*=}"); tier="${a#*=}" ;;
             --description=*) desc="${a#*=}" ;;
             --force)         force=1 ;;
             --*=*)           fname+=("${a%%=*}"); fname[${#fname[@]}-1]="${fname[${#fname[@]}-1]#--}"
@@ -14735,10 +14850,20 @@ cmd_save_profile() {
     cp -p "$src" "$work" || { rm -rf "$workdir"; die "save-profile: could not copy $src"; }
     chmod 0644 "$work" 2>/dev/null || :
 
+    # --add-tier first: the fields after it then land in the section it made
+    # (a ladder rung is not called by the tier word -- amap says what it is).
+    local -A amap=()
+    local _a _sec
+    for _a in ${add[@]+"${add[@]}"}; do
+        _sec=$(save_profile_add_tier "$work" "$_a") \
+            || { rm -rf "$workdir"; die "save-profile: --add-tier=$_a refused: $_sec. Nothing was written."; }
+        amap[$_a]="$_sec"
+    done
     local i=0 _t
     while [ "$i" -lt "$fields_given" ]; do
         _t="${ftier[$i]}"
         [ -n "$_t" ] || { rm -rf "$workdir"; die "save-profile: --${fname[$i]} comes before any --tier= -- say which tier it changes. Nothing was written."; }
+        [ -n "${amap[$_t]+x}" ] && _t="${amap[$_t]}"
         cron_config_section "$work" "[template:$_t]" | grep -q . \
             || { rm -rf "$workdir"; die "save-profile: '$from' has no tier '$_t'. It has: $(sed -n -E 's/^\[template:([^]]*)\]$/\1/p' "$src" | tr '\n' ' '). Nothing was written."; }
         set_or_remove_section_field "$work" "[template:$_t]" "${fname[$i]}" "${fvalue[$i]}" \
