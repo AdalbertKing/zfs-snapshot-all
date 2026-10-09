@@ -606,10 +606,9 @@ age_unit() {   # <litera jednostki retain> -> słowo
 }
 source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = wstecz
     # UWAGA 2 (właściciel, 2026-10-09): bez menu szczebli z pozycją "Gotowe" (OK robiło
-    # podświetloną pozycję, więc "Dalej" nie szło dalej). Teraz: jedno pytanie, a po
-    # "Zmień" każdy szczebel po kolei (Dalej = następny, Wstecz = poprzedni).
+    # podświetloną pozycję, więc "Dalej" nie szło dalej). Teraz jedno okno-tabela.
     local -a tn=() tp=() tk=() sk=() tm=()
-    local t p k m i n v ok name out u q rc here="" defno=""
+    local t p k m i n v name out u
     while IFS=$'\t' read -r n t p k m; do
         [ "$n" = "$PROFILE" ] || continue
         k="${k%$'\r'}"; m="${m%$'\r'}"
@@ -618,45 +617,35 @@ source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = ws
     [ "${#tn[@]}" -gt 0 ] || { SRCPROF=""; return 0; }
     # poprzednie liczby tego samego szablonu (powrót do okna)
     if [ -n "$SRCKEEP" ] && [ "${SRCKEEP%%:*}" = "$PROFILE" ]; then read -r -a sk <<<"${SRCKEEP#*:}"; fi
+    # OKNO-TABELA (właściciel 2026-10-09, jak w menedżerach migawek QNAP/Synology):
+    # szczebel | tutaj (cel) | u źródła, kratka = szczebel u źródła w ogóle. tui/grid.py
+    # (curses -- wyjątek od whiptail); Dalej bez zmian = źródło jak cel.
+    : >"$TMPD/srcrows.tsv"
     for i in "${!tn[@]}"; do
-        u=""; case "${tm[$i]}" in retain:*) u=" $(age_unit "${tm[$i]#retain:}")" ;; esac
-        here="$here${here:+, }${tk[$i]}$u $(tier_word "${tn[$i]}")"
+        u=""; case "${tm[$i]}" in retain:*) u="$(age_unit "${tm[$i]#retain:}")" ;; esac
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(tier_word "${tn[$i]}")" "${tk[$i]}" "${sk[$i]}" "$u" "${tp[$i]}" >>"$TMPD/srcrows.tsv"
     done
-    [ -n "$SRCPROF" ] && defno="--defaultno"
-    geom
-    wt --title "$(title 9 "Retencja u źródła ($HOST)")" --yes-button "Tak, dalej" --no-button "Zmień" $defno \
-       --yesno "Źródło trzyma tyle samo co tutaj?\n\nTutaj ($PROFILE): $here." 10 "$W"
-    rc=$?
-    case "$rc" in
-        0) SRCPROF=""; SRCKEEP=""; return 0 ;;
-        1) ;;
-        *) return 1 ;;
-    esac
-    i=0
-    while [ "$i" -lt "${#tn[@]}" ]; do
-        case "${tm[$i]}" in
-            retain:*) u="$(age_unit "${tm[$i]#retain:}")"
-                      q="Jak długo trzymać $(tier_word "${tn[$i]}") na $HOST, w: $u?\n(tutaj: ${tk[$i]} $u; 0 = bez tego szczebla)" ;;
-            *)        q="Ile $(tier_word "${tn[$i]}") trzymać na $HOST?\n(tutaj: ${tk[$i]}; 0 = bez tego szczebla)" ;;
-        esac
-        wt --title "$(title 9 "Retencja u źródła -- $(tier_word "${tn[$i]}") ($((i + 1))/${#tn[@]})")" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "$q" 10 "$W" "${sk[$i]}" || { [ "$i" -eq 0 ] && return 1; i=$((i - 1)); continue; }
-        v="${WT_OUT// /}"
-        case "$v" in ''|*[!0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą, 0 albo więcej." 8 "$W"; continue ;; esac
-        sk[$i]=$((10#$v)); i=$((i + 1))
-    done
-    # 0 = bez szczebla: tylko gdy rodzinę sprząta inny szczebel -- inaczej źródło
-    # trzymałoby te migawki w nieskończoność.
-    for i in "${!tn[@]}"; do
-        [ "${sk[$i]}" = 0 ] || continue
-        ok=0
-        for n in "${!tn[@]}"; do [ "$n" != "$i" ] && [ "${tp[$n]}" = "${tp[$i]}" ] && [ "${sk[$n]}" != 0 ] && ok=1; done
-        if [ "$ok" -eq 0 ]; then
-            wt --title "Tego szczebla nie da się wyłączyć" --msgbox "Rodziny ${tp[$i]} ($(tier_word "${tn[$i]}")) nie sprząta żaden inny szczebel -- bez niego\nźródło trzymałoby te migawki w nieskończoność. Zostaw co najmniej 1." 9 "$W"
-            SRCKEEP="$PROFILE:${sk[*]}"
-            return 1
-        fi
-    done
+    "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "$(title 9 "Jak długo trzymać u źródła ($HOST)?")" <<'PYEOF'
+import json, sys
+rows = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    i, lab, here, src, unit, fam = (line.rstrip("\n").split("\t") + [""] * 6)[:6]
+    rows.append({"key": i, "label": lab, "on": src != "0", "value": (here if src == "0" else src), "unit": unit,
+                 "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None})
+json.dump({"title": sys.argv[3], "head": [u"SZCZEBEL", u"TUTAJ (cel)", u"U ŹRÓDŁA"], "rows": rows,
+           "note": [u"Źródło sprząta te same migawki co cel, tylko trzyma ich mniej albo więcej.",
+                    u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle."]},
+          open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYEOF
+    clear 2>/dev/null
+    # shellcheck disable=SC2086
+    ${ZFS_GRID:-$PY $HERE/tui/grid.py} --spec "$TMPD/srcspec.json" --out "$TMPD/srcout.json" || return 1
+    while IFS=$'\t' read -r i v; do
+        [ -n "$i" ] && sk[$i]="$v"
+    done < <("$PY" -c '
+import json, sys
+for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
+    print("%s\t%s" % (r["key"], r["value"] if r["on"] else "0"))' "$TMPD/srcout.json" | tr -d '\r')
     SRCKEEP="$PROFILE:${sk[*]}"
     # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
     [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }

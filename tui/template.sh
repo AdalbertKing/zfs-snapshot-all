@@ -46,7 +46,7 @@ for p in d.get("profiles", []):
         me.write("\t".join([f(p.get("source")), f(p.get("used_by")), f(p.get("description"))]) + "\n")
         for t in p.get("tiers") or []:
             tiers.write("\t".join([f(t.get("name")), f(t.get("keep")), f(t.get("retain")),
-                                   f(t.get("quiesce")), f(t.get("send_schedule"))]) + "\n")
+                                   f(t.get("quiesce")), f(t.get("send_schedule")), f(t.get("pattern"))]) + "\n")
 PYEOF
 
 SRC=""; USED=0; BDESC=""
@@ -60,14 +60,6 @@ fi
 case "$USED" in ''|*[!0-9]*) USED=0 ;; esac
 
 SHADOW_MSG="Plik szablonu '$NAME' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku."
-
-label_of() {   # nazwa szczebla -> przymiotnik do pytania
-    # Także keep_daily / standard_hourly (szablony z drabiną GFS).
-    case "$1" in
-        *hourly) echo "godzinowych" ;; *daily) echo "dobowych" ;; *weekly) echo "tygodniowych" ;;
-        *monthly) echo "miesięcznych" ;; *yearly|*annual) echo "rocznych" ;; *) echo "$1" ;;
-    esac
-}
 
 # Wspólny ogon wykonania: <komunikat sukcesu> <polecenie...>
 run_cmd() {
@@ -123,141 +115,102 @@ else
     TITLE="Nowy szablon na podstawie $NAME"
 fi
 
-# Szczeble: TN/TK/TR; pytane (keep albo retain -Litera+liczba): ASK = indeksy.
-# ZAMRAŻANIE (właściciel 2026-10-09: "koherentne powinien być checkbox"): TQ = quiesce
-# szczebla w bazowym, QON = wybór; pytane są szczeble, które ROBIĄ migawki (mają
-# send_schedule) -- tylko tam zamrożenie gościa ma sens.
-TN=(); TK=(); TR=(); ASK=(); BASE=(); LET=(); NEWV=(); TQ=(); QON=(); QCAN=()
-while IFS=$'\t' read -r _n _k _r _q _s; do
-    _n="${_n#\#}"; _k="${_k#\#}"; _r="${_r#\#}"; _q="${_q#\#}"; _s="${_s#\#}"
-    [ -n "$_n" ] || continue
-    _i=${#TN[@]}
-    TN+=("$_n"); TK+=("$_k"); TR+=("$_r"); BASE+=(""); LET+=(""); NEWV+=("")
-    TQ+=("$_q"); QON+=("$([ -n "$_q" ] && echo 1 || echo 0)")
-    [ -n "$_s" ] && QCAN+=("$_i")
-    if [ -n "$_k" ]; then
-        BASE[_i]="$_k"; NEWV[_i]="$_k"; ASK+=("$_i")
-    elif [[ "$_r" =~ ^-([A-Za-z])([0-9]+)$ ]]; then
-        LET[_i]="${BASH_REMATCH[1]}"; BASE[_i]="${BASH_REMATCH[2]}"; NEWV[_i]="${BASH_REMATCH[2]}"; ASK+=("$_i")
-    fi
-done <"$TMPD/tiers.tsv"
-NASK=${#ASK[@]}
-DESC="$BDESC"; DESC_TOUCHED=0; [ "$ACTION" = edit ] && DESC_TOUCHED=1
-
-# Opis z wyborów: liczby i zamrażanie, zamiast tekstu bazowego, który po zmianie
-# liczb kłamie ("30 dobowych..." przy 14).
-auto_desc() {
-    local i d="" lbl q=""
-    for i in "${ASK[@]}"; do
-        lbl="$(label_of "${TN[$i]}")"
-        d="$d${d:+ + }${NEWV[$i]}${LET[$i]:+ (wiek)} $lbl"
-    done
-    for i in ${QCAN[@]+"${QCAN[@]}"}; do [ "${QON[$i]}" = 1 ] && q="$q${q:+, }$(label_of "${TN[$i]}")"; done
-    printf '%s; %s' "${d:-bez zmian w liczbach}" "$([ -n "$q" ] && echo "zamraża: $q" || echo "bez zamrażania")"
-}
-
-# kroki: 0 = nazwa (tylko new), 1..NASK = szczeble, NASK+1 = zamrażanie (gdy jest co
-# zamrażać), NASK+2 = opis, NASK+3 = plan
-step=0; [ "$ACTION" = edit ] && step=1
-QSTEP=$((NASK + 1)); DESCSTEP=$((NASK + 2)); PLANSTEP=$((NASK + 3))
-ARGV=(); TARGS=()
+# JEDNO OKNO-TABELA (właściciel 2026-10-09: "Uprośćmy tworzenie szablonów" -- jak w
+# menedżerach migawek QNAP/Synology): nazwa, szczeble (włącz / ile trzyma / zamrażanie)
+# i opis w tui/grid.py (curses -- wyjątek od whiptail, whiptail nie ma takiego wiersza).
+# Potem plan i WYKONAJ jak dotąd. Zapis robi save-profile; okno niczego nie zapisuje.
+GRID_CMD="${ZFS_GRID:-$PY $HERE/tui/grid.py}"
+SPEC="$TMPD/spec.json"; OUTJ="$TMPD/grid.json"
+"$PY" - "$TMPD/tiers.tsv" "$TMPD/names.txt" "$ACTION" "$NAME" "$NEW" "$BDESC" "$SPEC" <<'PYEOF'
+import json, sys
+tiers, names, action, name, new, bdesc, spec = sys.argv[1:8]
+WORD = [("hourly", u"godzinowe", u"godzinowych"), ("daily", u"dobowe", u"dobowych"), ("weekly", u"tygodniowe", u"tygodniowych"),
+        ("monthly", u"miesięczne", u"miesięcznych"), ("yearly", u"roczne", u"rocznych"), ("annual", u"roczne", u"rocznych")]
+UNIT = {"h": u"godz.", "d": u"dni", "w": u"tyg.", "m": u"mies.", "y": u"lat"}
+def words(t):
+    for suf, a, b in WORD:
+        if t.endswith(suf):
+            return a, b
+    return t, t
+rows = []
+for line in open(tiers, encoding="utf-8"):
+    f = [x[1:] if x.startswith("#") else x for x in line.rstrip("\n").split("\t")]
+    f += [""] * (6 - len(f))
+    tn, keep, retain, q, sched, pat = f[:6]
+    if not tn:
+        continue
+    lab, glab = words(tn)
+    row = {"key": tn, "label": lab, "glabel": glab, "on": True, "family": pat or None,
+           "q": (bool(q) if sched else None), "base_q": bool(q)}
+    if keep:
+        row.update({"value": keep, "unit": "", "base": keep, "mode": "keep"})
+    elif len(retain) > 2 and retain[0] == "-" and retain[1].isalpha() and retain[2:].isdigit():
+        row.update({"value": retain[2:], "unit": UNIT.get(retain[1].lower(), retain[1]), "base": retain[2:],
+                    "mode": "retain", "letter": retain[1]})
+    elif sched:
+        # szczebel tylko TWORZY migawki (drabina GFS je sprząta): bez liczby, ale z zamrażaniem
+        row.update({"value": "-", "editable": False, "can_off": False, "mode": "none"})
+    else:
+        continue
+    rows.append(row)
+title = (u"Zmiana szablonu %s" % name) if action == "edit" else (u"Nowy szablon na podstawie %s" % name)
+s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
+     "fields": ([] if action == "edit" else [{"key": "name", "label": u"Nazwa", "value": new}]),
+     "after": [{"key": "desc", "label": u"Opis", "value": bdesc if action == "edit" else ""}],
+     "note": [u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.",
+              u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny."],
+     "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
+     "name_key": ("" if action == "edit" else "name"), "auto_desc": ("" if action == "edit" else "desc")}
+json.dump(s, open(spec, "w", encoding="utf-8"), ensure_ascii=False)
+PYEOF
 
 while :; do
-    geom
-    if [ "$step" -eq 0 ]; then
-        wt --title "$TITLE" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "Nazwa nowego szablonu (litery, cyfry, . _ -). Nie może być nazwą fabrycznego." 9 "$W" "$NEW" \
-           || { clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1; }
-        n="${WT_OUT// /}"
-        case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;; esac
-        if grep -qxF -- "$n" "$TMPD/names.txt"; then
-            wt --title "Nazwa zajęta" --msgbox "Szablon '$n' już jest." 8 "$W"; NEW="$n"; continue
-        fi
-        NEW="$n"; step=1
-        continue
+    clear 2>/dev/null
+    # shellcheck disable=SC2086
+    if ! $GRID_CMD --spec "$SPEC" --out "$OUTJ"; then
+        clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
     fi
-
-    if [ "$step" -ge 1 ] && [ "$step" -le "$NASK" ]; then
-        i="${ASK[$((step - 1))]}"
-        lbl="$(label_of "${TN[$i]}")"
-        lead=""; [ "$step" -eq 1 ] && lead="Harmonogram i sposób trzymania są z szablonu bazowego.\n\n"
-        if wt --title "$TITLE -- $lbl" --ok-button "Dalej" --cancel-button "Wstecz" \
-              --inputbox "${lead}Ile $lbl trzymać? (w bazowym: ${BASE[$i]})" "$([ "$step" -eq 1 ] && echo 11 || echo 9)" "$W" "${NEWV[$i]}"; then
-            v="${WT_OUT// /}"
-            case "$v" in
-                ''|*[!0-9]*|0|0[0-9]*) wt --title "To nie liczba" --msgbox "Podaj liczbę całkowitą większą od zera." 8 "$W"; continue ;;
-            esac
-            NEWV[i]="$v"; step=$((step + 1))
-        else
-            if [ "$step" -eq 1 ]; then
-                if [ "$ACTION" = edit ]; then clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1; fi
-                step=0
-            else
-                step=$((step - 1))
-            fi
-        fi
+    # Wynik -> argumenty save-profile i linie planu (python, bo to JSON; wartości to dane).
+    "$PY" - "$SPEC" "$OUTJ" "$ACTION" "$TMPD" <<'PYEOF'
+import json, sys
+spec, out, action, tmpd = sys.argv[1:5]
+s = json.load(open(spec, encoding="utf-8")); o = json.load(open(out, encoding="utf-8"))
+by = {r["key"]: r for r in o["rows"]}
+args, plan = [], []
+for r in s["rows"]:
+    g = by.get(r["key"], {})
+    lab = r["label"]
+    if r.get("can_off", True) and not g.get("on", True):
+        args.append("--drop-tier=%s" % r["key"]); plan.append(u"  %s: wyłączony (było %s)" % (lab, r.get("base", "-")))
         continue
-    fi
-
-    if [ "$step" -eq "$QSTEP" ]; then
-        if [ "${#QCAN[@]}" -eq 0 ]; then step=$DESCSTEP; continue; fi
-        items=()
-        for i in "${QCAN[@]}"; do
-            items+=("$i" "$(label_of "${TN[$i]}")  (w bazowym: $([ -n "${TQ[$i]}" ] && echo tak || echo nie))" "$([ "${QON[$i]}" = 1 ] && echo ON || echo OFF)")
-        done
-        if wt --title "$TITLE -- zamrażanie gości" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-              --checklist "Które szczeble zamrażają gości przed migawką (spójne migawki)?\nSPACJA zaznacza, ENTER = Dalej. Zamrażanie potrzebuje zgody źródła." \
-              "$(fit $((${#QCAN[@]} + 8)))" "$W" "${#QCAN[@]}" "${items[@]}"; then
-            for i in "${QCAN[@]}"; do QON[i]=0; done
-            while IFS= read -r i; do [ -n "$i" ] && QON[i]=1; done <<<"$WT_OUT"
-            [ "$DESC_TOUCHED" -eq 1 ] || DESC="$(auto_desc)"
-            step=$DESCSTEP
-        else
-            if [ "$NASK" -ge 1 ]; then step=$NASK
-            elif [ "$ACTION" = edit ]; then clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
-            else step=0; fi
-        fi
-        continue
-    fi
-
-    if [ "$step" -eq "$DESCSTEP" ]; then
-        [ "${#QCAN[@]}" -eq 0 ] && [ "$DESC_TOUCHED" -eq 0 ] && DESC="$(auto_desc)"
-        if wt --title "$TITLE -- opis" --ok-button "Dalej" --cancel-button "Wstecz" \
-              --inputbox "Opis szablonu (podpowiedź z Twoich wyborów -- możesz zmienić)" 8 "$W" "$DESC"; then
-            [ "$WT_OUT" != "$DESC" ] && DESC_TOUCHED=1
-            DESC="$WT_OUT"; step=$PLANSTEP
-        else
-            if [ "${#QCAN[@]}" -gt 0 ]; then step=$QSTEP
-            elif [ "$NASK" -ge 1 ]; then step=$NASK
-            elif [ "$ACTION" = edit ]; then clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
-            else step=0; fi
-        fi
-        continue
-    fi
-
-    # plan
-    TARGS=(); PL=()
-    for i in "${!TN[@]}"; do
-        lbl="$(label_of "${TN[$i]}")"
-        if [ -z "${BASE[$i]}" ]; then continue; fi
-        if [ -n "${LET[$i]}" ]; then old="-${LET[$i]}${BASE[$i]}"; new="-${LET[$i]}${NEWV[$i]}"; else old="${BASE[$i]}"; new="${NEWV[$i]}"; fi
-        if [ "${NEWV[$i]}" = "${BASE[$i]}" ]; then
-            PL+=("  $lbl: $old (bez zmian)")
-        else
-            PL+=("  $lbl: $old -> $new")
-            if [ -n "${LET[$i]}" ]; then TARGS+=("--tier=${TN[$i]}" "--retain=$new"); else TARGS+=("--tier=${TN[$i]}" "--keep=$new"); fi
-        fi
-    done
-    for i in ${QCAN[@]+"${QCAN[@]}"}; do
-        lbl="$(label_of "${TN[$i]}")"
-        if [ "${QON[$i]}" = 1 ] && [ -z "${TQ[$i]}" ]; then
-            PL+=("  zamrażanie $lbl: nie -> tak"); TARGS+=("--tier=${TN[$i]}" "--quiesce=auto,degrade")
-        elif [ "${QON[$i]}" = 0 ] && [ -n "${TQ[$i]}" ]; then
-            PL+=("  zamrażanie $lbl: tak -> nie"); TARGS+=("--tier=${TN[$i]}" "--quiesce=")
-        else
-            PL+=("  zamrażanie $lbl: $([ -n "${TQ[$i]}" ] && echo tak || echo nie) (bez zmian)")
-        fi
-    done
+    if r.get("mode") in ("keep", "retain"):
+        v = g.get("value") or r["base"]
+        if v != r["base"]:
+            val = ("--keep=%s" % v) if r["mode"] == "keep" else ("--retain=-%s%s" % (r["letter"], v))
+            args += ["--tier=%s" % r["key"], val]
+            plan.append(u"  %s: %s -> %s %s" % (lab, r["base"], v, r.get("unit") or ""))
+        else:
+            plan.append(u"  %s: %s %s (bez zmian)" % (lab, v, r.get("unit") or ""))
+    if r.get("q") is not None and bool(g.get("q")) != r["base_q"]:
+        args += ["--tier=%s" % r["key"], "--quiesce=%s" % ("auto,degrade" if g.get("q") else "")]
+        plan.append(u"  zamrażanie %s: %s -> %s" % (lab, "tak" if r["base_q"] else "nie", "tak" if g.get("q") else "nie"))
+# Wstecz z planu wraca do tabeli z tym, co wybrano (nie od nowa).
+for r in s["rows"]:
+    g = by.get(r["key"], {})
+    r["on"] = g.get("on", True); r["value"] = g.get("value", r.get("value")); r["q"] = g.get("q", r.get("q"))
+for f in s["fields"] + s["after"]:
+    f["value"] = o["fields"].get(f["key"], f["value"])
+json.dump(s, open(spec, "w", encoding="utf-8"), ensure_ascii=False)
+with open(tmpd + "/targs.txt", "w", encoding="utf-8") as f:
+    f.write("\n".join(args) + ("\n" if args else ""))
+with open(tmpd + "/plan.lines", "w", encoding="utf-8") as f:
+    f.write("\n".join(plan) + ("\n" if plan else ""))
+with open(tmpd + "/vals.txt", "w", encoding="utf-8") as f:
+    f.write(o["fields"].get("name", "") + "\n" + o["fields"].get("desc", "") + "\n")
+PYEOF
+    mapfile -t TARGS <"$TMPD/targs.txt"
+    { IFS= read -r GNAME; IFS= read -r DESC; } <"$TMPD/vals.txt"
+    [ "$ACTION" = new ] && NEW="$GNAME"
     DARGS=(); [ -n "$DESC" ] && DARGS=("--description=$DESC")
     if [ "$ACTION" = edit ]; then
         [ "$DESC" = "$BDESC" ] && DARGS=()
@@ -274,7 +227,7 @@ while :; do
         echo "PLAN -- nic jeszcze nie zostało zapisane:"
         echo
         if [ "$ACTION" = edit ]; then echo "Zmiana szablonu: $NAME"; else echo "Nowy szablon: $NEW (na podstawie $NAME)"; fi
-        if [ "${#PL[@]}" -gt 0 ]; then printf '%s\n' "${PL[@]}"; fi
+        cat "$TMPD/plan.lines"
         echo "Opis: ${DESC:-(brak)}"
         if [ "$ACTION" = edit ]; then echo "Zbudowano z niego relacji: $USED -- one zostają, jak są."; fi
         echo
@@ -282,8 +235,7 @@ while :; do
         echo
         printf 'Komenda:  '; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; echo
     } >"$TMPD/plan.txt"
-    if ! yesno_text "$TMPD/plan.txt" "$TITLE -- plan" "WYKONAJ" "Wstecz" --defaultno; then
-        step=$DESCSTEP; continue
+    if yesno_text "$TMPD/plan.txt" "$TITLE -- plan" "WYKONAJ" "Wstecz" --defaultno; then
+        run_cmd "szablon '$NEW' zapisany" "${ARGV[@]}"
     fi
-    run_cmd "szablon '$NEW' zapisany" "${ARGV[@]}"
 done
