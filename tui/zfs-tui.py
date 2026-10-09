@@ -3072,16 +3072,36 @@ def replica_stats_row(data, name):
     return None
 
 
+def replica_when(r, long=False):
+    """Harmonogram repliki słowami; '+ po włożeniu', gdy replika rusza też po włożeniu
+    dysku (on_insert, P5 2026-10-09)."""
+    s = r.get("schedule") or "?"
+    if s == "on-insert":
+        return u"po włożeniu nośnika" if long else u"po włożeniu"
+    return s + (u" + po włożeniu" if r.get("on_insert") == "yes" else "")
+
+
+def replica_disks_words(r):
+    """Dyski repliki po ID puli (P5): ile, albo że rozpoznawane tylko po nazwie."""
+    if r.get("media") != "removable":
+        return u"stały nośnik (pula w maszynie)"
+    g = [x for x in (r.get("media_guids") or "").split(",") if x]
+    if not g:
+        return u"po nazwie puli -- ID nieznane (Enter, 'e': dopisze ID włożonego dysku)"
+    return u"%d po ID puli: %s" % (len(g), ", ".join(g))
+
+
 def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
     pairs = [(u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
              ("Cel", "%s %s   (pula %s)" % (ch.right, r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
              ("Harmonogram", "%s   %s%s%s" % (
-                 {"on-insert": u"po włożeniu nośnika"}.get(r.get("schedule"), r.get("schedule") or "?"),
+                 replica_when(r, long=True),
                  u"bez własnych migawek (przenosi istniejące)" if r.get("prefix") == "-"
                  else u"stempel %s" % (r.get("prefix") or "?"), "   rekursywnie" if r.get("recursive") == "yes" else "",
                  "   historia: %s" % r["history"] if r.get("history") and r["history"] != "all" else "")),
              (u"Nośnik", media_state_line(r, st)),
+             (u"Dyski", replica_disks_words(r)),
              ("Ostatnio", r.get("last_seen") or u"nigdy nie widziany (brak pliku last-seen bramy)")]
     # BIEGI REPLIKI (2026-10-08, wlasciciel: "czy widzimy gdzies statystyki zadan
     # repliki?"). job-stats je liczyl, ale zaden ekran ich nie pokazywal.
@@ -3121,7 +3141,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
             if i == cursor:
                 cur_y = len(body)
             body.append("%s %s %s %s %s" % (fit(r.get("name"), nw, ch), fit(sd, dw, ch),
-                                            fit({"on-insert": u"po włożeniu"}.get(r.get("schedule"), r.get("schedule") or "?"), sw, ch),
+                                            fit(replica_when(r), sw, ch),
                                             fit(st[0], mw, ch), fit((r.get("last_current") or "brak")[:10], lw, ch)))
         if not reps:
             body += [u"Brak sekcji [replica:] w configu tego kolektora.",

@@ -1346,6 +1346,29 @@ fo=$(for_run)
 check "PRV6 control: a replica with a prefix still stamps its own family (-m \"replica_\" -M)" "1" \
       "$(printf '%s\n' "$fo" | grep 'replica copy (usb1)' | grep -c 'snapget\.sh -m "replica_" -M')"
 
+# DISKS BY GUID AND ON-INSERT PER REPLICA (P5, owner 2026-10-09). media_guids goes to
+# the gate's ATTACH only (--guids), never to detach (cron's 1000 bytes); on_insert =
+# yes on a scheduled replica adds a commented '#on-insert' copy of its line for
+# run-replicas --on-insert; bad GUIDs and GUIDs on a fixed medium are refused.
+pv_conf "	media    = removable" "	media_guids = 111,222
+	on_insert = yes"
+fo=$(for_run); frc=$?
+check "PRG1 media_guids + on_insert render, rc=0" "0" "$frc"
+check "PRG2 ...attach is told --guids 111,222, detach is not" "1:0" \
+      "$(printf '%s\n' "$fo" | grep -v '^#on-insert' | grep 'replica copy (pv)' | grep -o 'attach [^;]*' | grep -c -- '--guids 111,222'):$(printf '%s\n' "$fo" | grep -v '^#on-insert' | grep 'replica copy (pv)' | grep -o 'detach [^;]*' | grep -c -- '--guids')"
+check "PRG3 ...the scheduled line stays and a '#on-insert' copy is added" "1:1" \
+      "$(printf '%s\n' "$fo" | grep -c '^30 2 \* \* \* .*replica copy (pv)'):$(printf '%s\n' "$fo" | grep -c '^#on-insert .*replica copy (pv)')"
+pv_conf "	media    = removable" ""
+fo=$(for_run)
+check "PRG4 control: without on_insert there is no '#on-insert' copy, without media_guids no --guids" "0:0" \
+      "$(printf '%s\n' "$fo" | grep -c '^#on-insert .*replica copy (pv)'):$(printf '%s\n' "$fo" | grep -c -- '--guids')"
+pv_conf "	media    = removable" "	media_guids = 11x"
+fo=$(for_run); frc=$?
+check "PRG5 media_guids that is not digits is refused" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+pv_conf "" "	media_guids = 111"
+fo=$(for_run); frc=$?
+check "PRG6 media_guids on a FIXED replica is refused (no gate reads it)" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #

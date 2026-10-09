@@ -2513,16 +2513,14 @@ else
 fi
 
 # ============================================================================
-# replica: KREATOR REPLIKI NA WHIPTAILU (uwagi 20 i 16+19, 2026-10-08)
+# replica: KREATOR REPLIKI NA WHIPTAILU (uwagi 20 i 16+19, 2026-10-08; P5 2026-10-09)
 #
 # Ta sama atrapa whiptaila co kreator relacji; zb, zpool i zfs to atrapy, ktore tylko
-# odpowiadaja i zapisuja wywolania. Sprawdzane: (1) zrodlo obejmujace kopie relacji
-# -> domyslnie BEZ wlasnych migawek, --passive w komendzie; (2) okno A z nowymi
-# harmonogramami i okno B "takze po wlozeniu?", gdy reguly udev nie ma -- Tak =
-# regula w planie jako krok i install-media-trigger po instalacji; (3) "tylko po
-# wlozeniu" nie pyta B, regula i tak w planie; (4) gdy regula JUZ jest, B sie nie pojawia;
-# (5) przygotowanie nowego nosnika; (6) koszyk z wyjatkiem; (7) zmiana repliki -- koszyk
-# startuje z jej zrodel i wyjatkow. Krok 2 to wspolny koszyk (tui/basket-lib.sh).
+# odpowiadaja i zapisuja wywolania. P5: najpierw RODZAJ nosnika (4/6), potem NOSNIK
+# (5/6, tylko podlaczony); dysk pamietany po ID puli (--media-guid); "po wlozeniu" to
+# ustawienie repliki (--on-insert), okno B zawsze dla wymiennego z harmonogramem;
+# formatowanie: "Sformatuj nowy nosnik" (nowa) / "Dodaj kolejny dysk" (zmiana).
+# Krok 2 to wspolny koszyk (tui/basket-lib.sh).
 # ============================================================================
 RP="$(mktemp -d)"; mkdir -p "$RP/bin"
 cp "$NR/bin/whiptail" "$RP/bin/whiptail"
@@ -2541,13 +2539,13 @@ case "$1" in
     prepare-media) case " $* " in
             *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
 ' ;;
-            *" --yes "*)  echo ">>> prepare-media: medium ready" ;;
+            *" --yes "*)  echo ">>> prepare-media: medium ready"; echo "guid=777" ;;
             *)            echo "PLAN (prepare-media):"; echo "  1. zpool create ... EVERYTHING on the disk is erased" ;;
         esac ;;
     *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
-printf '#!/bin/sh\ncase "$1" in list) echo hdd ;; import) printf "   pool: repl\\n" ;; esac\nexit 0\n' > "$RP/bin/zpool"
+printf '#!/bin/sh\ncase "$1" in list) echo hdd ;; import) printf "   pool: repl\\n     id: 4242\\n" ;; esac\nexit 0\n' > "$RP/bin/zpool"
 printf '#!/bin/sh\necho "zfs $*" >> "$NR_DIR/zb.log"\ncase "$*" in *"-t filesystem,volume"*) printf "hdd\\nhdd/backups\\nhdd/backups/192.168.28.96\\nhdd/backups/192.168.28.96/hdd/vm\\nhdd/data\\n" ;; esac\nexit 0\n' > "$RP/bin/zfs"
 chmod +x "$RP/bin/"*
 rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
@@ -2557,42 +2555,43 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
              ZFS_REPLICA_RULES="$RP/rules" "$@"; bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
 rm -f "$RP/rules"
-# (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak
+# (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
+#          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
 0${T}hdd/backups
 0${T}next
 0${T}passive
-0${T}repl
-0${T}repl/replica
 0${T}removable
+0${T}repl
 0${T}0 22 * * 5
 0${T}
 0${T}
 "); RPRC=$?
-if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --install --yes$' "$RP/zb.log" \
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
+   && grep -F '4/6 rodzaj' "$RP/wt.log" | grep -q . && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'repl  dysk w slocie' \
+   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Wpisz nazwę puli' \
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
    && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \
-   && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" \
+   && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
    && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku, wg harmonogramu albo teraz: F7 na F6'; then
-    ok "replica: zrodlo z kopiami relacji -> domyslnie bez wlasnych migawek (--passive); okno A tydzien, okno B Tak -> regula jako krok planu i install-media-trigger"
+    ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
 fi
-# (3): zrodlo bez kopii relacji -> domyslnie wlasne; "tylko po wlozeniu" -> bez okna B
+# (3): "tylko po wlozeniu" nie pyta o B, regula i tak zakladana; bez --on-insert w komendzie
 RPOUT=$(rp_run "0${T}usb3
 0${T}hdd/data
 0${T}next
 0${T}own
-0${T}repl
-0${T}repl/replica
 0${T}removable
+0${T}repl
 0${T}on-insert
 0${T}
 0${T}
 "); RPRC=$?
-if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --install --yes$' "$RP/zb.log" \
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
    && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku albo teraz: F7 na F6'; then
@@ -2600,51 +2599,68 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/
 else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
 fi
-# (4): regula juz jest -> okna B nie ma, plan mowi, ze kopia rusza po wlozeniu
-echo '# Managed by zfs-backup.sh install-media-trigger' > "$RP/rules"
+# (4): regula (z --on-insert) juz jest -> okno B JEST (to ustawienie repliki); Nie =
+#      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu".
+printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --on-insert --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
 0${T}next
 0${T}own
-0${T}repl
-0${T}repl/replica
 0${T}removable
+0${T}repl
 0${T}0 22 * * *
+1${T}
 0${T}
 "); RPRC=$?
-if [ "$RPRC" -eq 0 ] && ! grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
-   && grep -qF 'kopia rusza od razu (reguła udev jest na hoście)' "$RP/wt.log"; then
-    ok "replica: gdy regula udev juz jest, okna B nie ma (regula i tak uruchamia przy wlozeniu), plan to mowi"
+if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
+   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log"; then
+    ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no, regula nie ruszana"
 else
-    bad "replica: kreator, regula juz jest" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+    bad "replica: kreator, B przy istniejacej regule" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
-# (5) "Przygotuj nowy nosnik..." (uwaga 15): lista wolnych dyskow z prepare-media --list,
-#     nazwa puli i baza, plan wsadu z --defaultno, wykonanie z --yes, i replika dostaje
-#     --dst=<pula>/<baza> bez pytania o baze drugi raz.
+# (4b): regula sprzed P5 (run-replicas BEZ --on-insert uruchamiala wszystkie) -> przy Tak
+#       plan ja ODNAWIA i install-media-trigger idzie po instalacji.
+printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --config=y"\n' > "$RP/rules"
+RPOUT=$(rp_run "0${T}usb4
+0${T}hdd/data
+0${T}next
+0${T}own
+0${T}removable
+0${T}repl
+0${T}0 22 * * *
+0${T}
+0${T}
+"); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log"; then
+    ok "replica: stara regula (bez --on-insert) jest odnawiana, gdy replika ma ruszac po wlozeniu"
+else
+    bad "replica: odnowienie reguly" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
+fi
+# (5) "Sformatuj nowy nosnik" (uwaga 7): bez pytan o nazwe i baze -- pula <host>-<replika>,
+#     baza replica; plan z przyciskiem "Sformatuj (KASUJE dysk)" i --defaultno; ID z
+#     prepare-media trafia do --media-guid.
 rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb5
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}removable
 0${T}__prep__
 0${T}/dev/disk/by-id/usb-C
-0${T}sejf
-0${T}replica
 0${T}
-0${T}removable
 0${T}0 22 * * *
 1${T}
 0${T}
 "); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
-   && grep -q '^prepare-media sejf /dev/disk/by-id/usb-C --base=replica$' "$RP/zb.log" \
-   && grep -q '^prepare-media sejf /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
-   && grep -q '^add-replica usb5 --source=hdd/data --dst=sejf/replica .* --install --yes$' "$RP/zb.log" \
-   && grep -F 'przygotowanie nośnika' "$RP/wt.log" | grep -qF -- '--defaultno' \
-   && grep -F 'który dysk' "$RP/wt.log" | grep -qF '2G  QEMU  USB-C  (pusty)'; then
-    ok "replica: 'Przygotuj nowy nosnik' -- wolne dyski z prepare-media --list, plan z --defaultno, --yes, dst = pula/baza"
+   && grep -qE '^prepare-media [A-Za-z0-9._-]+-usb5 /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
+   && grep -qE '^add-replica usb5 --source=hdd/data --dst=[A-Za-z0-9._-]+-usb5/replica .* --media-guid=777 --on-insert=no --install --yes$' "$RP/zb.log" \
+   && grep -F 'formatowanie nośnika' "$RP/wt.log" | grep -qF 'Sformatuj (KASUJE dysk)' \
+   && grep -F 'formatowanie nośnika' "$RP/wt.log" | grep -qF -- '--defaultno' \
+   && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && ! grep -qF 'baza na nośniku' "$RP/wt.log"; then
+    ok "replica: 'Sformatuj nowy nosnik' -- bez pytan o nazwe/baze (<host>-<replika>/replica), plan --defaultno, ID do --media-guid"
 else
-    bad "replica: przygotowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
+    bad "replica: formatowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
 fi
 # (6) WYJATKI (uwaga 13): ten sam koszyk co w relacji -- "Wyjatki..." przy hdd/data,
 #     odznaczone mail -> --exclude-child=^hdd/data/mail$ w komendzie i "Pomijane" w planie;
@@ -2656,14 +2672,13 @@ RPOUT=$(rp_run "0${T}usb6
 0${T}hdd/data/docs
 0${T}next
 0${T}own
-0${T}repl
-0${T}repl/replica
 0${T}removable
+0${T}repl
 0${T}0 22 * * *
 1${T}
 0${T}
 "); RPRC=$?
-if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/replica .*--recursive=yes --exclude-child=^hdd/data/mail\$ --install --yes$' "$RP/zb.log" \
+if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/replica .*--recursive=yes --exclude-child=^hdd/data/mail\$ .*--install --yes$' "$RP/zb.log" \
    && grep -qF 'Pomijane:   hdd/data/mail' "$RP/wt.log" \
    && grep -F 'Co kopiować z' "$RP/wt.log" | head -1 | grep -qF 'Replika usb6 -- 2/6' \
    && ! grep -F 'Co kopiować z' "$RP/wt.log" | grep -qF 'Sposób:'; then
@@ -2671,21 +2686,40 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/
 else
     bad "replica: koszyk z wyjatkiem" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(grep -F 'Co kopiować' "$RP/wt.log" | cut -c1-250)"
 fi
-# (7) ZMIANA repliki: koszyk startuje ze zrodel i wyjatkow, ktore replika juz ma
-#     (list-replicas: sources + exclude_child), "Dalej" bez zmian oddaje je z powrotem.
+# (7) ZMIANA repliki sprzed P5 (bez ID): koszyk z jej zrodel i wyjatkow; obecny dysk
+#     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
 RPOUT=$(rp_run "0${T}next
 0${T}own
-0${T}repl
-0${T}repl/replica
 0${T}removable
+0${T}repl
 0${T}0 22 * * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"]}]}' RP_NAME=usb7)
-if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ --install --yes$' "$RP/zb.log"; then
-    ok "replica: zmiana repliki -- koszyk startuje z jej zrodel i wyjatkow (list-replicas exclude_child) i oddaje je bez zmian"
+" 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
+if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
+   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj kolejny dysk do tej repliki'; then
+    ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
-    bad "replica: zmiana -- koszyk z istniejacej repliki" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+    bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (8) "Dodaj kolejny dysk do tej repliki": formatuje z TA SAMA pula i baza, bez pytan;
+#     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}removable
+0${T}__add__
+0${T}/dev/disk/by-id/usb-C
+0${T}
+0${T}
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb8","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb8)
+if grep -q '^prepare-media repl /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
+   && grep -q '^add-replica usb8 --source=hdd/data --dst=repl/replica .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log"; then
+    ok "replica: 'Dodaj kolejny dysk' -- ta sama pula i baza bez pytan, ID dopisane (4242,777), obecny dysk zostaje"
+else
+    bad "replica: dodaj kolejny dysk" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 
