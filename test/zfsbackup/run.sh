@@ -7859,10 +7859,14 @@ sed 's/^\tkeep           = 7$/\tkeep           = 99/' "$REPO/profiles/prod.conf"
 
 pr_file() { ( PROFILE_USER_ROOT="$UR"; profile_file "$1" 2>/dev/null ); }
 
-if [ "$(pr_file prod)" = "$UR/prod.conf" ]; then
-    ok "96A roots: a name present in BOTH resolves to the host's own copy"
+# Owner note 24 (2026-10-09): an own template may NOT carry a factory name -- a
+# local file of that name used to replace the factory profile in silence. The
+# factory name now resolves to the factory file; the local one is ignored
+# (list-profiles shows it as "shadow", save-profile refuses to write one).
+if [ "$(pr_file prod)" = "$REPO/profiles/prod.conf" ]; then
+    ok "96A roots: a name present in BOTH resolves to the FACTORY profile (the local file of that name is ignored)"
 else
-    bad "96A roots: a name present in both resolves to the host's copy" "got '$(pr_file prod)'"
+    bad "96A roots: a name present in both resolves to the factory profile" "got '$(pr_file prod)'"
 fi
 
 # CONTROL: a name the host does NOT override still resolves to the factory one.
@@ -7921,15 +7925,19 @@ else
         "path='$(profile_name_of "$UR/firma.conf")' bare='$(profile_name_of firma)'"
 fi
 
-# ...and the digest follows the resolution, or an override would be invisible to
-# migrate-profile -- the whole point of today's F2b.
+# ...and the digest follows the resolution: with a local file under the factory
+# name present, the digest is still the FACTORY one (nothing changed under the
+# relationships built from it). A local profile under its OWN name still
+# resolves to the local file -- the control that the user root is still read.
 d_fac="$( ( PROFILE_USER_ROOT="$WORK/nonexistent"; PROFILE_ACTIVE=prod; profile_digest ) )"
 d_loc="$( ( PROFILE_USER_ROOT="$UR";              PROFILE_ACTIVE=prod; profile_digest ) )"
-if [ -n "$d_fac" ] && [ "$d_fac" != "$d_loc" ]; then
-    ok "96A roots: the digest follows the resolved directory, so an override is not silent"
+cp "$UR/prod.conf" "$UR/prod-moj.conf"
+if [ -n "$d_fac" ] && [ "$d_fac" = "$d_loc" ] && [ "$(pr_file prod-moj)" = "$UR/prod-moj.conf" ]; then
+    ok "96A roots: a local file under a factory name does not change the factory digest; an own name still resolves locally"
 else
-    bad "96A roots: the digest follows the resolved directory" "factory='$d_fac' local='$d_loc'"
+    bad "96A roots: digest and own-name resolution" "factory='$d_fac' local='$d_loc'" "own='$(pr_file prod-moj)'"
 fi
+rm -f "$UR/prod-moj.conf"
 
 
 # ===========================================================================
@@ -10273,12 +10281,14 @@ lp_got="$(cat "$WORK/lp.out")"
 # POPULATION CONTROL FIRST. Every assertion below is about the CONTENT of rows;
 # none of them notices a row that is missing, and a catalogue that quietly lost
 # the broken profiles would pass all of them.
-lp_files=$(ls "$LP/pkg"/*.conf | wc -l)
+# Every FILE is a row since 2026-10-09 (owner note 24): the operator's t-flat no
+# longer replaces the package one -- it is a row of its own, source "shadow".
+lp_files=$(ls "$LP/pkg"/*.conf "$LP/user"/*.conf | wc -l)
 lp_rows=$(printf '%s' "$lp_got" | grep -o '"valid":' | wc -l)
-if [ "$lp_rows" -eq "$lp_files" ] && [ "$lp_rows" -eq 5 ]; then
-    ok "listprofiles: one row per profile file, broken ones included (5 files, 5 rows)"
+if [ "$lp_rows" -eq "$lp_files" ] && [ "$lp_rows" -eq 6 ]; then
+    ok "listprofiles: one row per profile file, broken ones and the shadow included (6 files, 6 rows)"
 else
-    bad "listprofiles: one row per profile file, broken ones included (5 files, 5 rows)" \
+    bad "listprofiles: one row per profile file, broken ones and the shadow included (6 files, 6 rows)" \
         "files=$lp_files rows=$lp_rows" "$lp_got"
 fi
 
@@ -10354,10 +10364,15 @@ lp_has() {   # <fragment> <assertion name>
         *)      bad "$2" "missing: $1" "$lp_got" ;;
     esac
 }
-lp_has '"name":"t-flat","file":"'"$LP/user"'/t-flat.conf","source":"user"' \
-       "listprofiles: the operator's copy shadows the package one, as profile_file resolves it"
+# Owner note 24 (2026-10-09): a factory name IS the factory profile. The operator's
+# file of the same name no longer shadows it; it is listed as "shadow" so the GUI
+# can say it is ignored (profile_file resolves the package first, too).
+lp_has '"name":"t-flat","file":"'"$LP/pkg"'/t-flat.conf","source":"package"' \
+       "listprofiles: a factory name is the factory profile, as profile_file resolves it"
+lp_has '"name":"t-flat","file":"'"$LP/user"'/t-flat.conf","source":"shadow"' \
+       "listprofiles: the operator's file of that name is listed as shadow (ignored), not hidden"
 lp_has '"description":"fixture: the OPERATOR copy"' \
-       "listprofiles: and it is the operator's file that is read, not the package's"
+       "listprofiles: the shadow row still carries its own description (so the GUI can show which file it is)"
 lp_has '"mechanism":"flat","shape":"family-per-tier"' \
        "listprofiles: two families counted in pieces read as flat / family-per-tier"
 lp_has '"name":"t-age"' "listprofiles: the age fixture is listed"
@@ -10441,7 +10456,7 @@ fi
 # do it -- that is what makes it the cheap form.
 lp_run
 if [ "$(grep -c . "$WORK/lp.out")" -ge 5 ] \
-   && grep -q '^t-flat *user' "$WORK/lp.out" \
+   && grep -q '^t-flat *package' "$WORK/lp.out" && grep -q '^t-flat *shadow' "$WORK/lp.out" \
    && grep -q '^t-badkeep *package' "$WORK/lp.out"; then
     ok "listprofiles: the text form lists every profile with the source it resolves from"
 else
@@ -11518,6 +11533,41 @@ pf_run() {   # <args...> -> $WORK/pf.out / $WORK/pf.err, returns rc
       bash "$ZFSBACKUP" save-profile "$@" ) >"$WORK/pf.out" 2>"$WORK/pf.err"
 }
 pf_files() { ls "$PF/user" 2>/dev/null | tr '\n' ' '; }
+
+# ---------------------------------------------------------------------------
+# Owner note 24 (2026-10-09): an own template may not carry a factory name, one
+# call may change several tiers (each field goes to the --tier= before it), and
+# delete-profile removes own templates only, saying how many relationships use it.
+# ---------------------------------------------------------------------------
+if ! pf_run --from=d7h24 --as=d7h24 --tier=hourly --keep=4 && grep -q 'is the name of a FACTORY template' "$WORK/pf.err" && [ -z "$(pf_files)" ]; then
+    ok "saveprof: an own template under a factory name is refused, nothing written"
+else
+    bad "saveprof: factory name" "$(cat "$WORK/pf.err")" "$(pf_files)"
+fi
+if pf_run --from=d7h24 --as=d14h48 --tier=hourly --keep=48 --tier=daily --keep=14 \
+   && [ "$(awk '/^\[template:hourly\]/{f=1;next} /^\[/{f=0} f && /keep/{gsub(/[^0-9]/,"");print}' "$PF/user/d14h48.conf")" = 48 ] \
+   && [ "$(awk '/^\[template:daily\]/{f=1;next} /^\[/{f=0} f && /keep/{gsub(/[^0-9]/,"");print}' "$PF/user/d14h48.conf")" = 14 ]; then
+    ok "saveprof: two --tier= in one call -- each field lands in the tier named before it"
+else
+    bad "saveprof: several tiers" "$(cat "$WORK/pf.err")" "$(grep -n 'template\|keep' "$PF/user/d14h48.conf" 2>&1)"
+fi
+if ! pf_run --from=d7h24 --as=x1 --keep=4 && grep -q 'comes before any --tier=' "$WORK/pf.err" \
+   || ! pf_run --from=d7h24 --as=x1 --keep=4 && grep -q -- '--tier=NAME is required' "$WORK/pf.err"; then
+    ok "saveprof: a field with no --tier= before it is refused"
+else
+    bad "saveprof: field without tier" "$(cat "$WORK/pf.err")"
+fi
+dp_run() { ( export PROFILE_USER_ROOT="$PF/user" PROFILE_ROOT="$PF/pkg" CLIENTS_DIR="$PF/clients"
+             bash "$ZFSBACKUP" delete-profile "$@" ) 2>&1; }
+mkdir -p "$PF/clients"; printf 'CLIENT_NAME=r1\nSTATE=active\nPROFILE=d14h48\n' > "$PF/clients/r1.conf"
+o1=$(dp_run d7h24); o2=$(dp_run d14h48); o3=$(dp_run d14h48 --yes)
+if printf '%s' "$o1" | grep -q 'is a FACTORY template' && printf '%s' "$o2" | grep -q 'built from it: 1 relationship' \
+   && printf '%s' "$o2" | grep -q 'plan only' && printf '%s' "$o3" | grep -q 'deleted' && [ ! -f "$PF/user/d14h48.conf" ]; then
+    ok "saveprof: delete-profile -- a factory one is refused, an own one is planned (with its 1 relationship) and deleted on --yes"
+else
+    bad "saveprof: delete-profile" "$o1" "$o2" "$o3"
+fi
+rm -rf "$PF/clients"
 
 # ---------------------------------------------------------------------------
 # THE HAPPY PATH, first, because it is the one the first implementation broke.

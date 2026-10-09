@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bd00a3bf7197a684 -->
+<!-- status-covers-digest: 120ea98271e42678 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,31 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Ekran F5 „Szablony” — własne szablony retencji z GUI (uwaga 24) (2026-10-09, właściciel: „rób uwagę 24”).**
+  - **Ekran:** F5 = „Szablony” (odświeżanie tylko pod Ctrl-R). Tabela: Nazwa | Rodzaj
+    (fabryczny / własny / POMIJANY) | Sposób | Trzyma | Użyty (ile relacji); panel:
+    opis, sposób, szczeble (kiedy, ile trzyma, zamrażanie), plik. Lista czytana na
+    żądanie (`list-profiles --json --no-render`), nie przy każdym odświeżeniu.
+  - **Akcje (okna `tui/template.sh`):** Ins = nowy NA PODSTAWIE zaznaczonego —
+    nazwa, potem każdy szczebel po kolei („Ile dobowych trzymać? (w bazowym: 7)”),
+    opis, plan, WYKONAJ; harmonogramów nie pyta (sposób i układ szczebli z bazowego).
+    Enter + `e` na własnym = te same okna; na fabrycznym okno mówi, że Ins robi kopię.
+    Del na własnym = plan z liczbą relacji (zostają, ale ich późniejsza zmiana
+    szablonu nie będzie miała z czego odświeżyć), domyślnie Wstecz.
+  - **Wsad:** `save-profile` przyjmuje kilka `--tier=` w jednym wywołaniu (pole idzie do
+    `--tier=` przed nim) i odmawia nazwy szablonu fabrycznego; `save-profile --ask
+    --from=X | --edit=X` i `delete-profile NAZWA [--yes|--ask]` (nowy; tylko własne);
+    `list-profiles --json` ma `used_by`. Nazwa fabryczna zawsze oznacza fabryczny
+    (`profile_file` szuka najpierw w pakiecie), a plik w `/etc/zfs-snapshot-all/profiles`
+    o takiej nazwie jest na liście jako `shadow` (pomijany) — na hostach labu żadnego
+    takiego pliku nie było.
+  - **Na żywo (pve9b):** odmowa nazwy `d7h24`; `--tier=hourly --keep=48 --tier=daily
+    --keep=14` w jednym zapisie; `used_by` d7h24 = 1; `delete-profile` fabrycznego
+    odmówione, własny — plan, potem usunięty.
+  - **Testy:** `tui` (ekran F5, Ins/e/Del → czasowniki `--ask`, okna szablonu: nowy,
+    `e` na fabrycznym, Del na własnym; Ctrl-R w pomocy, listwie i przez pty),
+    `zfsbackup` (`saveprof`: nazwa fabryczna, kilka szczebli, pole bez `--tier=`,
+    `delete-profile`; `listprofiles`: pakiet przed `/etc`, wiersz `shadow`).
 - **Replika: ten sam koszyk datasetów co w relacji, paczka C3 (uwaga 13) (2026-10-09, właściciel: „rób C3”).**
   - **Wspólny plik `tui/basket-lib.sh`:** koszyk miejsc wydzielony z kreatora
     relacji bez zmiany zachowania (drzewo z `list-datasets --json`, dodaj miejsce,

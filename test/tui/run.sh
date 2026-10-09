@@ -205,10 +205,11 @@ if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && 
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
 fi
-# R4-2: pomoc mowi, ze F7-F9 to akcje okna, F5 odswieza, a litery NIGDY nie sa skrotami.
+# R4-2: pomoc mowi, ze F7-F9 to akcje okna, Ctrl-R odswieza, a litery NIGDY nie sa skrotami.
+# F5 od 2026-10-09 to ekran Szablony (uwaga 24), odswiezanie zostaje pod Ctrl-R.
 if has "$H1" "F7 chowa/pokazuje transfery" && has "$H1" "F7 F8 F9          akcje BIEŻĄCEGO okna" \
-   && has "$H1" "F5 / Ctrl-R" && ! has "$H1" "wyjątek: 'u'" && ! has "$H1" "F9 / Ctrl-R"; then
-    ok "pomoc: F7-F9 = akcje okna, F5 odswieza, bez wyjatku dla liter (R4-2)"
+   && has "$H1" "Ctrl-R            odśwież" && ! has "$H1" "F5 / Ctrl-R" && ! has "$H1" "wyjątek: 'u'" && ! has "$H1" "F9 / Ctrl-R"; then
+    ok "pomoc: F7-F9 = akcje okna, Ctrl-R odswieza, bez wyjatku dla liter (R4-2)"
 else
     bad "pomoc: klawisze R4-2" "$H1"
 fi
@@ -1192,23 +1193,44 @@ fi
 # R4-1/R4-2 PRZEZ PRAWDZIWA PETLE CURSES (pty), nie przez --keys: runda 3
 # miala 'u' i 's' zielone tutaj i martwe na zywo. Klawisze ida jako bajty
 # terminala (ESC [ 18 ~ = F7); kazdy blok to to, co program narysowal po nim.
-PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7,F5' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
+PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7,ctrl-r' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
 pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; on = ($0 == k && i == n) ; next } on'; }
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
 elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F7 3)" 'oś czasu' \
      && has "$(pkb F4 5)" 'W toku' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
-     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb F5 8)" 'odświeżam'; then
+     && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb ctrl-r 8)" 'odświeżam'; then
     ok "pty: 's' i 'u' to tekst linii, F7 sortuje F2 i chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
 fi
-# R4-2: Odswiez przeszlo z F9 na F5 (F9 = trzecia akcja okna, na F3 import).
-TR="$(screen zadania F5 --width 140)"
-if has "$TR" 'odświeżono' && has "$TR" 'F5 Odśwież' && ! has "$TR" 'F9 Odśwież'; then
-    ok "listwa: F5 odswieza i tak jest podpisane (F9 zwolnione na akcje okna)"
+# Odswiez: F9 -> F5 (R4-2) -> Ctrl-R (2026-10-09: F5 to ekran Szablony, uwaga 24).
+TR="$(screen zadania ctrl-r --width 140)"
+if has "$TR" 'odświeżono' && has "$TR" 'Ctrl-R Odśwież' && ! has "$TR" 'F5 Odśwież' && has "$TR" 'F5 Szablony'; then
+    ok "listwa: Ctrl-R odswieza i tak jest podpisane; F5 to Szablony"
 else
-    bad "listwa: F5 odswiez" "$TR"
+    bad "listwa: Ctrl-R odswiez" "$TR"
+fi
+# F5 SZABLONY (uwaga 24): tabela Nazwa | Rodzaj | Sposob | Trzyma | Uzyty, panel ze
+# szczeblami; Ins = nowy NA PODSTAWIE zaznaczonego, Enter+'e' = zmiana, Del = usun --
+# kazde oddaje terminal oknom tui/template.sh przez czasownik --ask.
+SZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen szablony --width 160 --height 30 2>&1)"
+if hasE "$SZ" '║ d7h24 +fabryczny +N najnowszych +24 godz., 7 dni +0 ' && has "$SZ" 'Szablony retencji (17)' \
+   && has "$SZ" 'Rodzaj   fabryczny' && has "$SZ" 'Szczebel' && has "$SZ" 'Ins nowy na podstawie zaznaczonego' && has "$SZ" '[F5 Szablony]'; then
+    ok "szablony: F5 -- tabela (nazwa, rodzaj, sposob, trzyma, uzyty), panel ze szczeblami, stopka z Ins/e/Del"
+else
+    bad "szablony: ekran F5" "$SZ"
+fi
+sact() {   # <keys> -> ekran F5; dziennik komend w $XL (wyzerowany)
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --exec-log "$XL" --screen szablony --keys "$1" 2>&1
+}
+A1=$(sact down,ins >/dev/null; cat "$XL"); B1=$(sact down,enter,e >/dev/null; cat "$XL"); C1=$(sact down,del >/dev/null; cat "$XL")
+if printf '%s' "$A1" | grep -Eq "save-profile --ask '?--from=d30'?\$" && printf '%s' "$B1" | grep -Eq "save-profile --ask '?--edit=d30'?\$" \
+   && printf '%s' "$C1" | grep -Eq "delete-profile d30 --ask\$"; then
+    ok "szablony: Ins = save-profile --ask --from=ZAZNACZONY, Enter+'e' = --edit=ZAZNACZONY, Del = delete-profile ZAZNACZONY --ask"
+else
+    bad "szablony: akcje" "ins: $A1" "e: $B1" "del: $C1"
 fi
 TF="$(screen zadania F4)"
 if has "$TF" '╔═ Zakończone' && has "$TF" '[F4 Transfery]'; then
@@ -1242,8 +1264,9 @@ fi
 # zadania) przejmuje panel F2 -- testy nizej (blok F2 i "wyglad") sprawdzaja to.
 # ============================================================================
 Z4W="$(screen zadania)"
-if ! has "$Z4W" 'F5' && ! has "$Z4W" 'Monitor'; then
-    ok "F5: ekran domyslny (F2) nie wspomina juz F5 ani Monitora -- listwa i panel"
+# F5 wrocilo 2026-10-09 jako ekran Szablony (uwaga 24) -- Monitora nadal nie ma.
+if ! has "$Z4W" 'Monitor' && has "$Z4W" 'F5 Szablony'; then
+    ok "F5: ekran domyslny (F2) nie wspomina Monitora; F5 to dzis Szablony"
 else
     bad "F5: pozostalosc na ekranie" "$Z4W"
 fi
@@ -1536,8 +1559,8 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F6 Nośniki F10 Wyjście'; then
-    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 zniesiony)"
+if has "$S" 'F1 Pomoc F2 Zadania [F3 Relacje] F4 Transfery F5 Szablony F6 Nośniki F10 Wyjście'; then
+    ok "wyglad: listwa F-klawiszy miesci sie w 80 kolumnach i podswietla aktywny ekran (F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
 fi
@@ -2602,6 +2625,59 @@ else
     bad "replica: zmiana -- koszyk z istniejacej repliki" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
+
+# ============================================================================
+# template: OKNA SZABLONU (F5, uwaga 24, 2026-10-09). Ta sama atrapa whiptaila; zb
+# odpowiada list-profiles i zapisuje save-profile/delete-profile. Sprawdzane: nowy
+# szablon pyta o kazdy szczebel po kolei i podaje tylko ZMIENIONE (--tier= --keep=);
+# 'e' na fabrycznym nie zapisuje nic; Del na wlasnym: plan czasownika, potem --yes.
+# ============================================================================
+TP="$(mktemp -d)"; mkdir -p "$TP/bin"
+cp "$NR/bin/whiptail" "$TP/bin/whiptail"
+cat > "$TP/bin/zb" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
+case "$1" in
+    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":""},{"name":"daily","keep":"7","retain":""}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
+    save-profile) echo ">>> atrapa: zapisano" ;;
+    delete-profile) case " $* " in *" --yes "*) echo ">>> atrapa: usunieto" ;; *) echo "PLAN (delete-profile):"; echo "  built from it: 2 relationship(s)" ;; esac ;;
+    *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$TP/bin/zb"
+tp_run() {   # <akcja> <nazwa> <odpowiedzi> -> stdout okien; dzienniki w $TP
+    rm -f "$TP/wt.log" "$TP/wt.n" "$TP/zb.log"
+    printf '%s' "$3" > "$TP/answers"
+    ( export NR_DIR="$TP" WHIPTAIL="$TP/bin/whiptail" ZFS_BACKUP="$TP/bin/zb" PYTHON="$PY"; bash "$REPO/tui/template.sh" "$1" "$2" ) 2>"$TP/err" </dev/null
+}
+TPOUT=$(tp_run new d7h24 "0${T}moj7
+0${T}48
+0${T}7
+0${T}7 dobowych + 48 godzinowe
+0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hourly --keep=48 --description=7 dobowych + 48 godzinowe' "$TP/zb.log" \
+   && grep -F 'godzinowych' "$TP/wt.log" | grep -qF '(w bazowym: 24)' && grep -qF 'dobowych: 7 (bez zmian)' "$TP/wt.log"; then
+    ok "template: nowy -- pyta o kazdy szczebel po kolei (w bazowym: N), podaje tylko zmienione, plan i --as"
+else
+    bad "template: nowy szablon" "rc=$TPRC" "$TPOUT" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-250)" "$(cat "$TP/err")"
+fi
+TPOUT=$(tp_run edit d7h24 "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && grep -qF 'nie zmienisz' "$TP/wt.log"; then
+    ok "template: 'e' na fabrycznym -- okno mowi, ze Ins robi kopie; nic nie zapisuje"
+else
+    bad "template: zmiana fabrycznego" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(cat "$TP/wt.log" | cut -c1-200)"
+fi
+TPOUT=$(tp_run delete moj "0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -qx 'delete-profile moj' "$TP/zb.log" && grep -qx 'delete-profile moj --yes' "$TP/zb.log" \
+   && grep -F 'Usunięcie szablonu moj' "$TP/wt.log" | grep -qF -- '--defaultno' && grep -qF 'nie będzie miało z czego odświeżyć' "$TP/wt.log"; then
+    ok "template: Del na wlasnym -- plan czasownika (2 relacje: zostaja, ale bez szablonu do odswiezenia), domyslnie Wstecz, potem --yes"
+else
+    bad "template: usuwanie" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(tail -3 "$TP/wt.log" | cut -c1-250)"
+fi
+rm -rf "$TP"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
