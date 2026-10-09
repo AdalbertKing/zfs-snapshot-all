@@ -2652,7 +2652,7 @@ cat > "$TP/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":""},{"name":"daily","keep":"7","retain":""}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
+    list-profiles) echo '{"profiles":[{"name":"d7h24","source":"package","used_by":0,"description":"7 dobowych + 24 godzinowe","tiers":[{"name":"hourly","keep":"24","retain":"","quiesce":"","send_schedule":"1 * * * *"},{"name":"daily","keep":"7","retain":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *"}]},{"name":"moj","source":"user","used_by":2,"description":"","tiers":[{"name":"daily","keep":"14","retain":""}]}]}' ;;
     save-profile) echo ">>> atrapa: zapisano" ;;
     delete-profile) case " $* " in *" --yes "*) echo ">>> atrapa: usunieto" ;; *) echo "PLAN (delete-profile):"; echo "  built from it: 2 relationship(s)" ;; esac ;;
     *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
@@ -2667,6 +2667,7 @@ tp_run() {   # <akcja> <nazwa> <odpowiedzi> -> stdout okien; dzienniki w $TP
 TPOUT=$(tp_run new d7h24 "0${T}moj7
 0${T}48
 0${T}7
+0${T}1
 0${T}7 dobowych + 48 godzinowe
 0${T}
 "); TPRC=$?
@@ -2675,6 +2676,24 @@ if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj7 --tier=hou
     ok "template: nowy -- pyta o kazdy szczebel po kolei (w bazowym: N), podaje tylko zmienione, plan i --as"
 else
     bad "template: nowy szablon" "rc=$TPRC" "$TPOUT" "$(cat "$TP/zb.log")" "$(tail -5 "$TP/wt.log" | cut -c1-250)" "$(cat "$TP/err")"
+fi
+# ZAMRAZANIE TO KRATKA (wlasciciel 2026-10-09: "koherentne powinien byc checkbox"):
+# szczeble robiace migawki na liscie, zaznaczone jak w bazowym; odznaczenie dobowego
+# daje --tier=daily --quiesce= (pole zdjete), a podpowiedz opisu sklada sie z wyborow.
+TPOUT=$(tp_run new d7h24 "0${T}moj8
+0${T}24
+0${T}14
+0${T}
+0${T}24 godzinowych + 14 dobowych; bez zamrażania
+0${T}
+"); TPRC=$?
+if [ "$TPRC" -eq 0 ] && grep -qx 'save-profile --from=d7h24 --as=moj8 --tier=daily --keep=14 --tier=daily --quiesce= --description=24 godzinowych + 14 dobowych; bez zamrażania' "$TP/zb.log" \
+   && grep -F -- '-- opis ~' "$TP/wt.log" | grep -qF ' ~ 24 godzinowych + 14 dobowych; bez zamrażania ~ ' \
+   && grep -F 'zamrażanie gości' "$TP/wt.log" | grep -qF ' ~ 1 ~ dobowych  (w bazowym: tak) ~ ON ~ ' \
+   && grep -qF 'zamrażanie dobowych: tak -> nie' "$TP/wt.log"; then
+    ok "template: zamrazanie to kratka na szczebel (jak w bazowym), odznaczenie = --quiesce=, opis z wyborow"
+else
+    bad "template: zamrazanie" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(grep -F 'zamra' "$TP/wt.log" | cut -c1-300)"
 fi
 TPOUT=$(tp_run edit d7h24 "0${T}
 "); TPRC=$?

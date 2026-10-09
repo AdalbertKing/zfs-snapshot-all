@@ -45,7 +45,8 @@ for p in d.get("profiles", []):
     if p.get("name") == name:
         me.write("\t".join([f(p.get("source")), f(p.get("used_by")), f(p.get("description"))]) + "\n")
         for t in p.get("tiers") or []:
-            tiers.write("\t".join([f(t.get("name")), f(t.get("keep")), f(t.get("retain"))]) + "\n")
+            tiers.write("\t".join([f(t.get("name")), f(t.get("keep")), f(t.get("retain")),
+                                   f(t.get("quiesce")), f(t.get("send_schedule"))]) + "\n")
 PYEOF
 
 SRC=""; USED=0; BDESC=""
@@ -61,9 +62,10 @@ case "$USED" in ''|*[!0-9]*) USED=0 ;; esac
 SHADOW_MSG="Plik szablonu '$NAME' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku."
 
 label_of() {   # nazwa szczebla -> przymiotnik do pytania
+    # Także keep_daily / standard_hourly (szablony z drabiną GFS).
     case "$1" in
-        hourly) echo "godzinowych" ;; daily) echo "dobowych" ;; weekly) echo "tygodniowych" ;;
-        monthly) echo "miesięcznych" ;; yearly) echo "rocznych" ;; *) echo "$1" ;;
+        *hourly) echo "godzinowych" ;; *daily) echo "dobowych" ;; *weekly) echo "tygodniowych" ;;
+        *monthly) echo "miesięcznych" ;; *yearly|*annual) echo "rocznych" ;; *) echo "$1" ;;
     esac
 }
 
@@ -122,12 +124,17 @@ else
 fi
 
 # Szczeble: TN/TK/TR; pytane (keep albo retain -Litera+liczba): ASK = indeksy.
-TN=(); TK=(); TR=(); ASK=(); BASE=(); LET=(); NEWV=()
-while IFS=$'\t' read -r _n _k _r; do
-    _n="${_n#\#}"; _k="${_k#\#}"; _r="${_r#\#}"
+# ZAMRAŻANIE (właściciel 2026-10-09: "koherentne powinien być checkbox"): TQ = quiesce
+# szczebla w bazowym, QON = wybór; pytane są szczeble, które ROBIĄ migawki (mają
+# send_schedule) -- tylko tam zamrożenie gościa ma sens.
+TN=(); TK=(); TR=(); ASK=(); BASE=(); LET=(); NEWV=(); TQ=(); QON=(); QCAN=()
+while IFS=$'\t' read -r _n _k _r _q _s; do
+    _n="${_n#\#}"; _k="${_k#\#}"; _r="${_r#\#}"; _q="${_q#\#}"; _s="${_s#\#}"
     [ -n "$_n" ] || continue
     _i=${#TN[@]}
     TN+=("$_n"); TK+=("$_k"); TR+=("$_r"); BASE+=(""); LET+=(""); NEWV+=("")
+    TQ+=("$_q"); QON+=("$([ -n "$_q" ] && echo 1 || echo 0)")
+    [ -n "$_s" ] && QCAN+=("$_i")
     if [ -n "$_k" ]; then
         BASE[_i]="$_k"; NEWV[_i]="$_k"; ASK+=("$_i")
     elif [[ "$_r" =~ ^-([A-Za-z])([0-9]+)$ ]]; then
@@ -135,11 +142,24 @@ while IFS=$'\t' read -r _n _k _r; do
     fi
 done <"$TMPD/tiers.tsv"
 NASK=${#ASK[@]}
-DESC="$BDESC"
+DESC="$BDESC"; DESC_TOUCHED=0; [ "$ACTION" = edit ] && DESC_TOUCHED=1
 
-# kroki: 0 = nazwa (tylko new), 1..NASK = szczeble, NASK+1 = opis, NASK+2 = plan
+# Opis z wyborów: liczby i zamrażanie, zamiast tekstu bazowego, który po zmianie
+# liczb kłamie ("30 dobowych..." przy 14).
+auto_desc() {
+    local i d="" lbl q=""
+    for i in "${ASK[@]}"; do
+        lbl="$(label_of "${TN[$i]}")"
+        d="$d${d:+ + }${NEWV[$i]}${LET[$i]:+ (wiek)} $lbl"
+    done
+    for i in ${QCAN[@]+"${QCAN[@]}"}; do [ "${QON[$i]}" = 1 ] && q="$q${q:+, }$(label_of "${TN[$i]}")"; done
+    printf '%s; %s' "${d:-bez zmian w liczbach}" "$([ -n "$q" ] && echo "zamraża: $q" || echo "bez zamrażania")"
+}
+
+# kroki: 0 = nazwa (tylko new), 1..NASK = szczeble, NASK+1 = zamrażanie (gdy jest co
+# zamrażać), NASK+2 = opis, NASK+3 = plan
 step=0; [ "$ACTION" = edit ] && step=1
-DESCSTEP=$((NASK + 1)); PLANSTEP=$((NASK + 2))
+QSTEP=$((NASK + 1)); DESCSTEP=$((NASK + 2)); PLANSTEP=$((NASK + 3))
 ARGV=(); TARGS=()
 
 while :; do
@@ -179,12 +199,36 @@ while :; do
         continue
     fi
 
-    if [ "$step" -eq "$DESCSTEP" ]; then
-        if wt --title "$TITLE -- opis" --ok-button "Dalej" --cancel-button "Wstecz" \
-              --inputbox "Opis szablonu" 8 "$W" "$DESC"; then
-            DESC="$WT_OUT"; step=$PLANSTEP
+    if [ "$step" -eq "$QSTEP" ]; then
+        if [ "${#QCAN[@]}" -eq 0 ]; then step=$DESCSTEP; continue; fi
+        items=()
+        for i in "${QCAN[@]}"; do
+            items+=("$i" "$(label_of "${TN[$i]}")  (w bazowym: $([ -n "${TQ[$i]}" ] && echo tak || echo nie))" "$([ "${QON[$i]}" = 1 ] && echo ON || echo OFF)")
+        done
+        if wt --title "$TITLE -- zamrażanie gości" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
+              --checklist "Które szczeble zamrażają gości przed migawką (spójne migawki)?\nSPACJA zaznacza, ENTER = Dalej. Zamrażanie potrzebuje zgody źródła." \
+              "$(fit $((${#QCAN[@]} + 8)))" "$W" "${#QCAN[@]}" "${items[@]}"; then
+            for i in "${QCAN[@]}"; do QON[i]=0; done
+            while IFS= read -r i; do [ -n "$i" ] && QON[i]=1; done <<<"$WT_OUT"
+            [ "$DESC_TOUCHED" -eq 1 ] || DESC="$(auto_desc)"
+            step=$DESCSTEP
         else
             if [ "$NASK" -ge 1 ]; then step=$NASK
+            elif [ "$ACTION" = edit ]; then clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
+            else step=0; fi
+        fi
+        continue
+    fi
+
+    if [ "$step" -eq "$DESCSTEP" ]; then
+        [ "${#QCAN[@]}" -eq 0 ] && [ "$DESC_TOUCHED" -eq 0 ] && DESC="$(auto_desc)"
+        if wt --title "$TITLE -- opis" --ok-button "Dalej" --cancel-button "Wstecz" \
+              --inputbox "Opis szablonu (podpowiedź z Twoich wyborów -- możesz zmienić)" 8 "$W" "$DESC"; then
+            [ "$WT_OUT" != "$DESC" ] && DESC_TOUCHED=1
+            DESC="$WT_OUT"; step=$PLANSTEP
+        else
+            if [ "${#QCAN[@]}" -gt 0 ]; then step=$QSTEP
+            elif [ "$NASK" -ge 1 ]; then step=$NASK
             elif [ "$ACTION" = edit ]; then clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
             else step=0; fi
         fi
@@ -202,6 +246,16 @@ while :; do
         else
             PL+=("  $lbl: $old -> $new")
             if [ -n "${LET[$i]}" ]; then TARGS+=("--tier=${TN[$i]}" "--retain=$new"); else TARGS+=("--tier=${TN[$i]}" "--keep=$new"); fi
+        fi
+    done
+    for i in ${QCAN[@]+"${QCAN[@]}"}; do
+        lbl="$(label_of "${TN[$i]}")"
+        if [ "${QON[$i]}" = 1 ] && [ -z "${TQ[$i]}" ]; then
+            PL+=("  zamrażanie $lbl: nie -> tak"); TARGS+=("--tier=${TN[$i]}" "--quiesce=auto,degrade")
+        elif [ "${QON[$i]}" = 0 ] && [ -n "${TQ[$i]}" ]; then
+            PL+=("  zamrażanie $lbl: tak -> nie"); TARGS+=("--tier=${TN[$i]}" "--quiesce=")
+        else
+            PL+=("  zamrażanie $lbl: $([ -n "${TQ[$i]}" ] && echo tak || echo nie) (bez zmian)")
         fi
     done
     DARGS=(); [ -n "$DESC" ] && DARGS=("--description=$DESC")
