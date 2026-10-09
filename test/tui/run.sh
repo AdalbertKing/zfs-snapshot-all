@@ -1779,11 +1779,13 @@ NRT="0${T}hdd/backups
 0${T}grant|skip
 0${T}
 0${T}
+0${T}
 "
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
 0${T}grant|skip
+0${T}
 0${T}
 0${T}
 "
@@ -1928,6 +1930,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}grant|quies|skip
 0${T}
 0${T}
+0${T}
 ")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
@@ -1995,18 +1998,19 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|srcp|skip
-0${T}1
+0${T}grant|skip
+1${T}
+0${T}24
 0${T}3
-0${T}2
 0${T}0
-0${T}ok
+0${T}12
 0${T}
 0${T}
 ")
 NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
-if grep -qF 'save-profile --from=default --force --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
-   && grep -qF 'save-profile --from=default-src-H24D3M12 --as=default-src-H24D3M12 --force --tier=keep_daily --keep=3' "$NR/zb.log" \
+if grep -qF 'save-profile --from=default --force --tier=keep_daily --keep=3 --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
+   && [ "$(grep -c '^save-profile' "$NR/zb.log")" = 1 ] \
+   && grep -F 'Retencja u źródła' "$NR/wt.log" | head -1 | grep -qF 'Źródło trzyma tyle samo co tutaj?' \
    && has "$NROUT" '--source-profile=default-src-H24D3M12'; then
     ok "new-relation: retencja zrodla to LICZBY szczebli celu -> profil pochodny przez save-profile, 0 = --drop-tier (wlasciciel, uwaga 19)"
 else
@@ -2024,18 +2028,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}d7h24-age
 0${T}pve9b
 0${T}root
-0${T}grant|srcp|skip
-0${T}0
+0${T}grant|skip
+1${T}
 0${T}12
-0${T}1
 0${T}3
-0${T}ok
 0${T}
 0${T}
 ")
-if grep -qF 'cel 24 godz.' "$NR/wt.log" && grep -qF 'cel 7 dni' "$NR/wt.log" \
-   && grep -qF 'save-profile --from=d7h24-age-src-H12D3 --as=d7h24-age-src-H12D3 --force --tier=hourly --retain=-h12' "$NR/zb.log" \
-   && grep -qF 'save-profile --from=d7h24-age-src-H12D3 --as=d7h24-age-src-H12D3 --force --tier=daily --retain=-d3' "$NR/zb.log" \
+if grep -qF 'tutaj: 24 godz.' "$NR/wt.log" && grep -qF 'tutaj: 7 dni' "$NR/wt.log" \
+   && grep -qF 'save-profile --from=d7h24-age --force --tier=hourly --retain=-h12 --tier=daily --retain=-d3 --as=d7h24-age-src-H12D3' "$NR/zb.log" \
    && ! grep -q -- '--keep=' "$NR/zb.log" \
    && has "$NROUT" '--source-profile=d7h24-age-src-H12D3'; then
     ok "new-relation: retencja zrodla dla szablonu WIEKU -- szczeble z jednostka, zapis przez --retain, nie --keep (K1)"
@@ -2059,11 +2060,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30h24
 0${T}pve9b
 0${T}root
-0${T}grant|srcp|skip
+0${T}grant|skip
+1${T}
 0${T}0
-0${T}0
+0${T}30
 0${T}
-0${T}ok
+0${T}grant|skip
+0${T}
 0${T}
 0${T}
 ")
@@ -2072,8 +2075,8 @@ if grep -qF 'Tego szczebla nie da się wyłączyć' "$NR/wt.log" && ! grep -q '^
 else
     bad "new-relation: T2 odmowa wylaczenia jedynego szczebla" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
 fi
-# T3: otwarcie edytora i 'Gotowe' bez zmian = SRCPROF zostaje pusty, bez osobnego
-#     profilu i bez wywolania save-profile.
+# T3: "Zmien" i te same liczby co tutaj = SRCPROF zostaje pusty, bez osobnego
+#     profilu i bez wywolania save-profile (uwaga 2: "Tak, dalej" robi to samo krocej).
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -2083,8 +2086,12 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|srcp|skip
-0${T}ok
+0${T}grant|skip
+1${T}
+0${T}24
+0${T}7
+0${T}4
+0${T}12
 0${T}
 0${T}
 ")
@@ -2108,11 +2115,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}root
 0${T}grant|skip
 0${T}
+0${T}
 0${T}pasywnie
 0${T}passive
 0${T}pve9b
 0${T}root
 0${T}grant|skip
+0${T}
 0${T}
 0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
@@ -2151,6 +2160,7 @@ NROUT=$(nr_run "0${T}local
 0${T}skip
 0${T}
 0${T}
+0${T}
 "); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
    && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
@@ -2176,6 +2186,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.99
 0${T}root
 0${T}grant|skip
+0${T}
 0${T}
 0${T}
 ")
@@ -2265,6 +2276,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}grant|skip
 0${T}
 0${T}
+0${T}
 " NR_FLAT=1)
 if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
    && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
@@ -2284,6 +2296,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}pve9b
 0${T}root
 0${T}skip
+0${T}
 0${T}
 0${T}
 "); NRRC=$?
@@ -2329,6 +2342,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__replicate_|__migration__|__add__
 0${T}_tmp
 0${T}__replicate_|__migration__|_tmp
+0${T}
 0${T}
 0${T}
 ")

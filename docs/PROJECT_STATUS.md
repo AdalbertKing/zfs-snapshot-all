@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 120ea98271e42678 -->
+<!-- status-covers-digest: 00eaaada6a6af955 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Kreator relacji: retencja u źródła jednym pytaniem (uwaga 2) (2026-10-09, właściciel: „1 tak”).**
+  - Pozycja „Inna retencja u źródła” zniknęła z listy ustawień (krok 9) razem z menu
+    szczebli i pozycją „Gotowe” (OK robiło podświetloną pozycję, więc „Dalej” nie szło
+    dalej). Po liście ustawień pada pytanie „Źródło trzyma tyle samo co tutaj?”
+    z liczbami szczebli celu w treści — [Tak, dalej] albo [Zmień] (gdy szablon ma
+    szczeble z liczbą); po „Zmień” każdy
+    szczebel po kolei (Dalej = następny, Wstecz = poprzedni), 0 = bez szczebla (tylko
+    gdy rodzinę sprząta inny szczebel). Nie pyta przy kopiowaniu atomowym.
+  - Szablon źródła `<cel>-src-<litery i liczby>` zapisuje się JEDNYM wywołaniem
+    `save-profile` (kilka `--tier=` i `--drop-tier=`), a nie serią zapisów.
+  - **Testy:** `tui` — cztery testy retencji źródła na nową kolejność (zmiana liczby
+    i wyłączenie szczebla, szablon wieku, odmowa wyłączenia jedynego szczebla, „Zmień”
+    bez zmian), a pozostałe przejścia kreatora odpowiadają „Tak, dalej”.
 
 - **Ekran F5 „Szablony” — własne szablony retencji z GUI (uwaga 24) (2026-10-09, właściciel: „rób uwagę 24”).**
   - **Ekran:** F5 = „Szablony” (odświeżanie tylko pod Ctrl-R). Tabela: Nazwa | Rodzaj
