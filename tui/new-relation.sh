@@ -573,10 +573,10 @@ step_extra() {
     # przyciski: OK i Cancel -- nie ma trzeciego, więc ekran, który jednocześnie
     # EDYTUJE pozycje i ma Dalej, jest w tym narzędziu niewykonalny. Stąd checklista:
     # spacja przełącza, Enter = Dalej, Esc/Wstecz = krok w tył. Pozycje, które
-    # potrzebują wartości (własne maski, inna retencja u źródła), pytają o nią
-    # w NASTĘPNYM oknie -- każde z nich ma już normalne Dalej/Wstecz.
+    # potrzebują wartości (inna retencja u źródła), pytają o nią w NASTĘPNYM
+    # oknie -- każde z nich ma już normalne Dalej/Wstecz. Pomijane prefiksy to
+    # zawsze osobne okno po tej liście (właściciel, 2026-10-11).
     local items=() on_grant=OFF on_q=OFF on_man=OFF
-    local want_masks=0 defmask="__replicate_,vzdump,__migration__"
     while :; do
         geom
         [ "$GRANT" -eq 1 ] && on_grant=ON || on_grant=OFF
@@ -592,45 +592,32 @@ step_extra() {
         if [ "$MODE" != local ] && [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ]; then
             items+=(quies "Nadaj też zgodę na zamrażanie gości" "$on_q")
         fi
-        # POMIJANE MIGAWKI: jedna pozycja, nie dwie. Dopóki lista jest domyślna,
-        # "skip" pokazuje ją wprost i "masks" tylko otwiera edytor (odznaczone).
-        # Gdy lista już się różni od domyślnej (bo operator ją zmienił), pozycja
-        # "skip" znika -- jest już czym modyfikować, nie czym się zgadzać -- a
-        # "masks" mówi wprost, co jest pomijane, i jest zaznaczona (właściciel,
-        # uwagi 10+13: zgubiona przecinkiem maska w polu tekstowym -> edytor
-        # zamiast wpisywania z palca, lista pokazuje aktualny stan).
-        if [ "$EXFAM" = "$defmask" ]; then
-            items+=(skip "Pomijaj migawki Proxmoxa: $EXFAM" ON)
-            items+=(masks "Zmień listę pomijanych migawek" OFF)
-        else
-            items+=(masks "Pomijane: ${EXFAM:-żadne, kopiowane wszystkie} (zmień)" ON)
-        fi
         [ "$MODE" = local ] || items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
         local _i
         for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
         local _xh="Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła."
         [ "$MODE" = local ] && _xh="Domyślne są dobre. SPACJA przełącza, ENTER = Dalej."
-        wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
-           "${items[@]}" || return 1
-        GRANT=0; GQUIESCE=0; MANUAL=0; want_masks=0
-        local keep_skip=0 x
-        while IFS= read -r x; do
-            case "$x" in
-                grant) GRANT=1 ;;
-                quies) GQUIESCE=1 ;;
-                skip)  keep_skip=1 ;;
-                masks) want_masks=1 ;;
-                man)   MANUAL=1 ;;
-            esac
-        done <<<"$WT_OUT"
+        # Relacja lokalna nie ma tu żadnej pozycji -- pustego okna nie pokazujemy.
+        if [ "${#items[@]}" -gt 0 ]; then
+            wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
+               --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
+               "${items[@]}" || return 1
+            GRANT=0; GQUIESCE=0; MANUAL=0
+            local x
+            while IFS= read -r x; do
+                case "$x" in
+                    grant) GRANT=1 ;;
+                    quies) GQUIESCE=1 ;;
+                    man)   MANUAL=1 ;;
+                esac
+            done <<<"$WT_OUT"
+        fi
         # Zgoda na zamrażanie ma sens tylko razem z nadaniem praw stąd; gdy pozycji
         # nie było na liście, nie wolno jej cichcem zostawić włączonej.
         [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ] || GQUIESCE=0
-        if [ "$EXFAM" = "$defmask" ] && [ "$keep_skip" -eq 0 ] && [ "$want_masks" -eq 0 ]; then
-            EXFAM=""
-        elif [ "$want_masks" -eq 1 ]; then
-            prefix_editor || continue
+        if ! prefix_editor; then
+            [ "${#items[@]}" -gt 0 ] && continue
+            return 1
         fi
         # Retencja źródła: zawsze jedno pytanie "tyle samo co tutaj?" (uwaga 2,
         # 2026-10-09) zamiast pozycji na liście i menu szczebli z "Gotowe".
@@ -652,39 +639,46 @@ step_extra() {
 # dozwolone tylko, gdy rodzinę sprząta inny szczebel -- inaczej źródło trzymałoby ją
 # w nieskończoność. Nazwa deterministyczna: <cel>-src-<litery i liczby>; te same liczby
 # = ten sam profil, nadpisywany identyczną treścią.
-# EDYTOR POMIJANYCH MIGAWEK (właściciel, uwagi 10+13). Wcześniej to było jedno
-# pole tekstowe -- łatwo było zgubić przecinek ("__migration___tmp" zamiast
-# "__migration__,_tmp"). Checklista pokazuje, co jest pomijane, ODZNACZ, żeby
-# przestać; "Dodaj nowy prefiks…" otwiera pole na kolejny -- bez ryzyka
-# przepisywania całej listy z pamięci.
-prefix_editor() {   # edytuje EXFAM; 0 = zapisano (może być pusta), 1 = Wstecz (bez zmian)
-    local base items=() p new kept=() want_add=0 x
-    base="$EXFAM"; [ -n "$base" ] || base="$defmask"
+# POMIJANE PREFIKSY (właściciel, 2026-10-11): jedno okno-lista, wszystko Enterem.
+# Wcześniej checklista z pozycją "Dodaj nowy prefiks…": Enter na niej zatwierdzał
+# okno BEZ zaznaczenia (zaznacza tylko spacja), więc kreator szedł dalej i nic nie
+# dodawał. Teraz menu: Enter na prefiksie = usuń go (z potwierdzeniem), "+ Dodaj
+# prefiks…" = pole, "Gotowe" = dalej (kursor startuje na nim). Prefiksy Proxmoxa są
+# tylko wartością początkową -- usuwa się je jak każdy inny.
+prefix_editor() {   # edytuje EXFAM; 0 = Gotowe (lista może być pusta), 1 = Wstecz (bez zmian)
+    local list=() items=() p new x txt
+    local IFS=,; for p in $EXFAM; do [ -n "$p" ] && list+=("$p"); done; unset IFS
     while :; do
-        items=()
-        local IFS=,; for p in $base; do [ -n "$p" ] && items+=("$p" "$p" ON); done; unset IFS
-        items+=(__add__ "Dodaj nowy prefiks…" OFF)
         geom
-        wt --title "Pomijane migawki -- prefiksy" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-           --checklist "Zaznaczone prefiksy są pomijane. ODZNACZ, żeby przestać pomijać.\n'Dodaj nowy prefiks…' otwiera pole na kolejny." "$(fit $((${#items[@]} / 3 + 4)))" "$W" "$((${#items[@]} / 3))" \
+        items=()
+        for p in "${list[@]}"; do items+=("x:$p" "$p"); done
+        items+=(__add__ "+ Dodaj prefiks…" __done__ "Gotowe")
+        txt="Migawki, których nazwa zaczyna się od prefiksu z listy, NIE są kopiowane.\nEnter na prefiksie = usuń go z listy."
+        [ "${#list[@]}" -gt 0 ] || txt="$txt\n\n(lista pusta -- kopiowane są wszystkie migawki)"
+        wt --title "$(title 9 'Pomijane prefiksy')" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
+           --default-item __done__ --menu "$txt" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
-        want_add=0; kept=()
-        while IFS= read -r x; do
-            case "$x" in __add__) want_add=1 ;; '') ;; *) kept+=("$x") ;; esac
-        done <<<"$WT_OUT"
-        if [ "$want_add" -eq 1 ]; then
-            while :; do
-                wt --title "Nowy prefiks" --ok-button "Dalej" --cancel-button "Wstecz" \
-                   --inputbox "Nowy prefiks (bez spacji i przecinków):" 9 "$W" "" || break
-                new="$WT_OUT"
-                case "$new" in ''|*' '*|*,*) wt --title "Zły prefiks" --msgbox "'$WT_OUT' -- bez spacji i przecinków, nie może być puste." 8 "$W"; continue ;; esac
-                kept+=("$new"); break
-            done
-            local IFS=,; base="${kept[*]}"; unset IFS
-            continue
-        fi
-        local IFS=,; EXFAM="${kept[*]}"; unset IFS
-        return 0
+        case "$WT_OUT" in
+            __done__)
+                local IFS=,; EXFAM="${list[*]}"; unset IFS
+                return 0 ;;
+            __add__)
+                while :; do
+                    wt --title "Nowy prefiks" --ok-button "Dodaj" --cancel-button "Wstecz" \
+                       --inputbox "Prefiks migawek do pominięcia (bez spacji i przecinków):" 9 "$W" "" || break
+                    new="$WT_OUT"
+                    case "$new" in ''|*' '*|*,*) wt --title "Zły prefiks" --msgbox "'$new' -- bez spacji i przecinków, nie może być puste." 8 "$W"; continue ;; esac
+                    for x in "${list[@]}"; do [ "$x" = "$new" ] && break 2; done
+                    list+=("$new"); break
+                done ;;
+            x:*)
+                p="${WT_OUT#x:}"
+                wt --title "Pomijane prefiksy" --yes-button "Usuń" --no-button "Zostaw" \
+                   --yesno "Usunąć '$p' z listy? Migawki z tym prefiksem będą kopiowane." 8 "$W" || continue
+                local keep=()
+                for x in "${list[@]}"; do [ "$x" = "$p" ] || keep+=("$x"); done
+                list=("${keep[@]}") ;;
+        esac
     done
 }
 

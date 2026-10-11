@@ -1854,14 +1854,16 @@ NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
@@ -2003,7 +2005,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
-0${T}grant|quies|skip
+0${T}grant|quies
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2073,7 +2076,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=down,right,bs,3,down,left,space,enter)
@@ -2098,7 +2102,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d7h24-age
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter)
@@ -2127,7 +2132,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30h24
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=space,enter)
@@ -2147,7 +2153,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=enter)
@@ -2169,13 +2176,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}pasywnie
 0${T}passive
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
@@ -2211,7 +2220,7 @@ NROUT=$(nr_run "0${T}local
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
-0${T}skip
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2238,7 +2247,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}192.168.28.99
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2325,7 +2335,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}root
 0${T}
 0${T}zfsbackup
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_FLAT=1)
@@ -2346,7 +2357,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}skip
+0${T}
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2376,9 +2388,9 @@ else
     bad "new-relation: 'active' jako cel w kroku 5" "$NROUT" "$NRTGT"
 fi
 
-# D. POMIJANE MIGAWKI PO PREFIKSACH (wlasciciel, uwagi 10+13): zamiast pola tekstowego
-#    (latwo zgubic przecinek -- "__migration___tmp") edytor-checklista; dodanie nowego
-#    prefiksu i odznaczenie istniejacego w JEDNYM przebiegu.
+# D. POMIJANE PREFIKSY (wlasciciel, 2026-10-11): jedno okno-menu, wszystko Enterem --
+#    usuniecie vzdump (z potwierdzeniem) i dodanie _tmp w JEDNYM przebiegu. Poprzednio
+#    checklista: Enter na "Dodaj nowy prefiks" zatwierdzal okno bez dodania.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -2388,24 +2400,26 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}masks
-0${T}__replicate_|__migration__|__add__
+0${T}
+0${T}x:vzdump
+0${T}
+0${T}__add__
 0${T}_tmp
-0${T}__replicate_|__migration__|_tmp
+0${T}__done__
 0${T}
 0${T}
 ")
-if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane migawki -- prefiksy' "$NR/wt.log" \
-   && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
-    ok "new-relation: edytor prefiksow -- 'Dodaj nowy prefiks' dopisuje _tmp, odznaczenie vzdump usuwa go z --exclude-family"
+if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
+   && grep -qF 'Nowy prefiks' "$NR/wt.log" && grep -qF "Usunąć 'vzdump' z listy?" "$NR/wt.log"; then
+    ok "new-relation: okno prefiksow -- Enter na vzdump usuwa go (po potwierdzeniu), '+ Dodaj prefiks' dopisuje _tmp, Gotowe idzie dalej"
 else
     bad "new-relation: edytor pomijanych migawek" "$NROUT" "$(grep -F 'prefiks' "$NR/wt.log" | cut -c1-300)"
 fi
 # R2-1 (wlasciciel, 2026-09-24): okno pokazywalo PUSTE wiersze -- znacznik (schowany przez
 # --notags) byl prefiksem, a opis pusty. Test wyzej sprawdzal tylko WYNIK; ten sprawdza,
 # co WIDZI operator: kazdy prefiks ma niepusty opis w oknie edytora.
-NRPFX="$(grep -F 'Pomijane migawki -- prefiksy' "$NR/wt.log" | head -1)"
-if has "$NRPFX" ' ~ vzdump ~ vzdump ~ ON ~ ' && has "$NRPFX" ' ~ __replicate_ ~ __replicate_ ~ ON ~ '; then
+NRPFX="$(grep -F 'Pomijane prefiksy ~' "$NR/wt.log" | head -1)"
+if has "$NRPFX" ' ~ x:vzdump ~ vzdump ~ ' && has "$NRPFX" ' ~ x:__replicate_ ~ __replicate_ ~ ' && has "$NRPFX" ' ~ --default-item ~ __done__ ~ '; then
     ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow (R2-1: puste wiersze na pve11)"
 else
     bad "new-relation: edytor prefiksow -- puste wiersze" "$(printf '%s' "$NRPFX" | cut -c1-400)"
@@ -2879,7 +2893,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2898,7 +2913,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}inna
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
