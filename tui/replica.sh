@@ -35,13 +35,13 @@ for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
-                     r.get("media_guids") or "-", r.get("on_insert") or "no"]))
+                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-"]))
 PYEOF
 SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
-GUIDS=""; ONINS=no; CURGUIDS=""
+GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
@@ -50,6 +50,7 @@ if [ "$EDIT" -eq 1 ]; then
     [ "${CURPFX:-}" = - ] && PASSIVE=yes || PASSIVE=no
     [ "${CURGUIDS:-}" = - ] && CURGUIDS=""; GUIDS="$CURGUIDS"
     [ "${ONINS:-}" = yes ] || ONINS=no
+    [ "${KEEP:-}" = - ] && KEEP=""
 fi
 # Reguła udev sprzed P5 (run-replicas bez --on-insert) uruchamiała przy włożeniu WSZYSTKIE
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
@@ -202,11 +203,29 @@ while :; do
            passive "Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca" \
            own "Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca" || { step=2; continue; }
         [ "$WT_OUT" = passive ] && PASSIVE=yes || PASSIVE=no
+        [ "$PASSIVE" = yes ] && { KEEP=""; step=3; continue; }
+        step=26 ;;
+    26) # NA DYSKU: odbicie kolektora czy własne N (W18, właściciel 2026-10-11 -- dysk
+        # wkładany raz w miesiącu, 12 stanów wstecz). Tylko przy własnych migawkach.
+        def=mirror; [ -n "$KEEP" ] && def=keep
+        wt --title "Replika $NAME -- 3/6 na dysku" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+           --menu "Co ma zostawać na dysku repliki?" 11 "$W" 2 \
+           mirror "Odbicie kolektora -- dysk trzyma to, co kolektor" \
+           keep "Trzymaj N ostatnich kopii -- własna historia dysku, niezależna od kolektora" || { step=25; continue; }
+        if [ "$WT_OUT" = mirror ]; then KEEP=""; step=3; continue; fi
+        while :; do
+            wt --title "Replika $NAME -- ile kopii na dysku" --ok-button "Dalej" --cancel-button "Wstecz" \
+               --inputbox "Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?\nNp. 12 = rok przy dysku wkładanym raz w miesiącu." 10 "$W" "${KEEP:-12}" || { WT_OUT=""; break; }
+            case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba całkowita większa od 0." 8 "$W"; continue ;; esac
+            break
+        done
+        [ -n "$WT_OUT" ] || continue
+        KEEP="$WT_OUT"
         step=3 ;;
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
         wt --title "Replika $NAME -- 4/6 rodzaj nośnika" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$MEDIA" \
            --menu "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można wyjąć).\nStały: pula jest zawsze w maszynie (np. osobna pula w mirrorze), bez importu/eksportu." 12 "$W" 2 \
-           removable "wymienny (USB, dysk do sejfu)" fixed "stały (inna pula w tej maszynie)" || { step=25; continue; }
+           removable "wymienny (USB, dysk do sejfu)" fixed "stały (inna pula w tej maszynie)" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
         MEDIA="$WT_OUT"; [ "$MEDIA" = fixed ] && GUIDS=""
         step=4 ;;
     4)  # nośnik -- tylko PODŁĄCZONY (uwaga 7: "wykluczamy definicje ad-hoc")
@@ -357,6 +376,7 @@ while :; do
         [ "$REC" = yes ] && ARGV+=(--recursive=yes) || ARGV+=(--recursive=no)
         ARGV+=(${XARGS[@]+"${XARGS[@]}"})
         [ "$PASSIVE" = yes ] && ARGV+=(--passive)
+        [ -n "$KEEP" ] && ARGV+=("--keep=$KEEP")
         if [ "$MEDIA" = removable ]; then
             [ -n "$GUIDS" ] && ARGV+=("--media-guid=$GUIDS")
             [ "$SCHED" != on-insert ] && ARGV+=("--on-insert=$ONINS")
@@ -377,7 +397,8 @@ while :; do
             for _i in "${!B_ROOT[@]}"; do
                 [ -n "${B_EXCL[$_i]}" ] && echo "Pomijane:   $(printf '%s' "${B_EXCL[$_i]}" | paste -sd, - | sed 's/,/, /g')"
             done
-            echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "istniejące -- bez własnych" || echo "własne, przedrostek replica_")"
+            echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące, bez własnych)" || echo "stan na chwilę kopii (własne, replica_)")"
+            [ "$PASSIVE" = yes ] || echo "Na dysku:   $([ -n "$KEEP" ] && echo "$KEEP ostatnich kopii, niezależnie od kolektora" || echo "odbicie kolektora")"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             if [ "$MEDIA" = removable ]; then
                 if [ -n "$GUIDS" ]; then echo "Dyski:      $(printf '%s' "$GUIDS" | tr ',' '\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty"

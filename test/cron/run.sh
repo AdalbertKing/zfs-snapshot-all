@@ -1399,6 +1399,62 @@ fo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L 
 check "PRL4 --replica-full with --install is refused" "1:1" \
       "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c -- '--replica-full cannot be combined with --install')"
 
+# W18 (owner 2026-10-11): keep = N -- the medium keeps its own N newest replica_
+# snapshots (delsnaps after a good copy), and the engine runs WITHOUT the mirror -M.
+cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:mies]
+	source   = tank/a
+	dst      = usb/rep
+	schedule = on-insert
+	prefix   = replica_
+	media    = removable
+	recursive = yes
+	keep     = 12
+EOF
+fo=$(for_run); frc=$?
+_l=$(printf '%s\n' "$fo" | grep 'replica copy (mies)')
+check "PRK1 keep = 12 renders rc=0: snapget without -M and with -i (only its own snapshot travels), then delsnaps -R usb/rep/tank/a replica_ -M12 only after a good copy" "0:1:0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -R -i "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c '\[ \$m -eq 0 \] && { /R/delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12; m=\$?; }')"
+sed -i 's/^\tkeep     = 12$//' "$FOR/c.conf"
+fo=$(for_run)
+check "PRK2 control: without keep the engine mirrors (-M) and nothing prunes the medium" "1:0" \
+      "$(printf '%s\n' "$fo" | grep 'replica copy (mies)' | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s\n' "$fo" | grep 'replica copy (mies)' | grep -c delsnaps)"
+printf '[defaults]\n\thost_label = f\n[replica:pk]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tkeep = 3\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "PRK3 keep with passive = yes is refused (nothing of its own to keep)" "1:1" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'nothing of its own to keep')"
+# A FIXED replica with several sources (found 2026-10-12 testing W18 on pve9b): its
+# subshell sat bare after zfs-job's "--" -- a syntax error in cron and in run-replicas.
+# The command part of every replica line must parse as shell.
+printf '[defaults]\n\thost_label = f\n[replica:fx]\n\tsource = tank/a,tank/b\n\tdst = disk/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n[replica:fk]\n\tsource = tank/c\n\tdst = disk/rep\n\tschedule = 0 2 * * *\n\tprefix = replica_\n\tkeep = 4\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_bad=0
+while IFS= read -r _ln; do
+    sh -n -c "$(printf '%s' "$_ln" | sed -E 's/^([^ ]+ ){5}//')" 2>/dev/null || _bad=$((_bad + 1))
+done < <(printf '%s\n' "$fo" | grep -E 'replica copy \((fx|fk)\)')
+check "PRK4 FIXED replicas (several sources; keep with one source) render as lines that parse as shell" "0:0:2" \
+      "$frc:$_bad:$(printf '%s\n' "$fo" | grep -cE "replica copy \((fx|fk)\).* -- /bin/sh -c '\( ")"
+# W16 (owner 2026-10-11): history in a relationship's [dataset:] -- all (default, -I),
+# newest -> -i, auto:N -> -T N, on every send line of the section; a second answer
+# in flags is refused.
+for_conf "	history = newest" ""
+fo=$(for_run); frc=$?
+check "PDH1 history = newest renders -i on both send lines of the section, rc=0" "0:2" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -v delsnaps | grep -c ' -i ')"
+for_conf "	history = auto:3" ""
+fo=$(for_run)
+check "PDH2 history = auto:3 renders -T 3" "2" "$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -c ' -T 3 ')"
+for_conf "	history = newest
+	flags = -i" ""
+fo=$(for_run); frc=$?
+check "PDH3 history together with -i in flags is refused" "1:1" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'both decide how much of the gap travels')"
+for_conf "" ""
+fo=$(for_run)
+check "PDH4 control: without history neither -i nor -T" "0" "$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -cE ' -i | -T ')"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #

@@ -2625,6 +2625,7 @@ RPOUT=$(rp_run "0${T}usb3
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}on-insert
@@ -2646,6 +2647,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2665,6 +2667,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2684,6 +2687,7 @@ RPOUT=$(rp_run "0${T}usb5
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__prep__
 0${T}/dev/disk/by-id/usb-C
@@ -2714,6 +2718,7 @@ RPOUT=$(rp_run "0${T}usb6
 0${T}__done__
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2732,6 +2737,7 @@ fi
 #     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2748,6 +2754,7 @@ fi
 #     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
@@ -2767,6 +2774,7 @@ fi
 #     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__del__
 0${T}777
@@ -2785,6 +2793,7 @@ fi
 #      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
@@ -2799,6 +2808,23 @@ if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install 
     ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
 else
     bad "replica: dodaj dysk bez ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (11) W18: "Tylko stan na chwile kopii" + "Trzymaj N ostatnich" = --keep=12 (wlasna
+#      historia dysku, bez lustra); plan mowi "12 ostatnich kopii".
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}keep
+0${T}12
+0${T}removable
+0${T}repl
+0${T}0 22 1 * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb11","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 1 * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb11)
+if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && grep -qF '12 ostatnich kopii' "$RP/wt.log"; then
+    ok "replica: W18 'Trzymaj N ostatnich kopii' -> --keep=12, plan mowi o wlasnej historii dysku"
+else
+    bad "replica: keep N (W18)" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 
@@ -3003,7 +3029,11 @@ case "$1" in
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
     edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo ;; esac ;;
-    *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+    list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
+    add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
+    show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"}}]}' ;;
+    set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
 # Kazde okno-tabela bierze KOLEJNA linie klawiszy z $ER/gridkeys (brak linii = Esc):
@@ -3024,12 +3054,53 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
       export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
       bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
 }
+# W4 (wlasciciel 2026-10-11): "Datasety" = okno koszyka z kreatora, z obecnymi datasetami
+# relacji; dwie zmiany (dodaj hdd/iso, usun hdd/data), JEDEN plan roznic (DOJDA / ODPADNA),
+# po WYKONAJ add-source i remove-source z --yes. Bez "Sposob" i bez "Wyjatki".
+EROUT=$(er_run "0${T}dane
+0${T}add
+0${T}hdd/iso
+0${T}del
+0${T}0
+0${T}next
+0${T}
+"); ERRC=$?
+ERB="$(grep -F 'Co kopiować z' "$ER/wt.log" | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && grep -qx 'remove-source r1 hdd/data --yes' "$ER/zb.log" \
+   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'hdd/data' \
+   && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
+    ok "edit-relation: Datasety -- koszyk z obecnymi datasetami, kilka zmian, jeden plan DOJDA/ODPADNA, add-source + remove-source --yes; bez Sposob/Wyjatki"
+else
+    bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
+fi
+# W16: "Ustawienia silnika" -- obecne wartosci z show-config (kompresja none = "nie", bez
+# "(fabryczne)"), zmiana historii -> set-transfer --plan, po WYKONAJ ten sam z --yes.
+EROUT=$(er_run "0${T}silnik
+0${T}hist
+0${T}newest
+0${T}__done__
+0${T}
+"); ERRC=$?
+ERS="$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/zb.log" && grep -qx 'set-transfer r1 --history=newest --yes' "$ER/zb.log" \
+   && has "$ERS" 'Kompresja        nie ~ ' && ! has "$ERS" 'Kompresja        nie (fabryczne)' \
+   && has "$ERS" 'Szyfr SSH'; then
+    ok "edit-relation: Ustawienia silnika (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po WYKONAJ --yes"
+else
+    bad "edit-relation: Ustawienia silnika (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
+fi
+# W1: okno "Zmien relacje" czyta szablony BEZ renderowania (16,6 s -> 1,8 s na pve9b).
+if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-profiles --json' "$ER/zb.log"; then
+    ok "edit-relation: list-profiles --no-render (W1: 16,6 s z renderowaniem na pve9b)"
+else
+    bad "edit-relation: list-profiles bez --no-render" "$(grep list-profiles "$ER/zb.log")"
+fi
 EROUT=$(er_run "0${T}harm
 0${T}
 "); ERRC=$?
 if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden --force --description=' "$ER/zb.log" \
    && grep -q '^edit-relation r1 --profile=relacja-r1 --source-profile= --yes' "$ER/zb.log" && ! grep -q '^delete-profile' "$ER/zb.log" \
-   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Dodaj do kopii dataset ze źródła' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Datasety -- co kopiować' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
     ok "edit-relation: menu 6 pozycji; Harmonogram kopii i retencja -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
 else
     bad "edit-relation: harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"

@@ -6474,7 +6474,12 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # sections and installs the result), aimed like the others: cron_context_resolve
 # record from its record, then assert_cron_config_matches_installed and
 # atomic_replace_and_install.
-if [ "$writers" -eq 12 ] && [ "$resolvers" -eq 17 ]; then
+# 13/18 since 2026-10-12: set-transfer (W16), the engine settings of ONE
+# relationship. A WRITER (it sets fields in that relationship's [dataset:]
+# sections and installs the result), aimed like the others: cron_context_resolve
+# record from its record, assert_cron_config_matches_installed, then
+# atomic_replace_and_install.
+if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 18 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -13700,6 +13705,16 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'edit-relation: unknown optio
     ok "editrel: edit-relation refuses an option it does not edit"
 else
     bad "editrel: edit-relation accepted --target" "rc=$rc" "$out"
+fi
+# W16: set-transfer refuses a value it does not know and a call that sets nothing,
+# before anything is read.
+o1=$(bash "$ZFSBACKUP" set-transfer x --history=bad 2>&1); r1=$?
+o2=$(bash "$ZFSBACKUP" set-transfer x 2>&1); r2=$?
+o3=$(bash "$ZFSBACKUP" set-transfer x --compression=lz4 2>&1); r3=$?
+if [ "$r1" -ne 0 ] && printf '%s' "$o1" | grep -q "history='bad' -- all, newest, auto:N or default"    && [ "$r2" -ne 0 ] && printf '%s' "$o2" | grep -q 'nothing to set'    && [ "$r3" -ne 0 ] && printf '%s' "$o3" | grep -q "compression='lz4'"; then
+    ok "settransfer: unknown values and an empty call are refused before anything is read"
+else
+    bad "settransfer: refusals" "$o1" "$o2" "$o3"
 fi
 
 fi   # --- koniec sekcji editrel ---

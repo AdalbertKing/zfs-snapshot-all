@@ -316,7 +316,9 @@ in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0
 # --- krok 6: szablon ----------------------------------------------------------
 load_profiles() {   # -> $TMPD/prof.tsv: nazwa <TAB> zdanie ; słowa z tui/zfs-tui.py (jedno źródło słów)
     [ -s "$TMPD/prof.tsv" ] && return 0
-    "$ZB" list-profiles --json >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
+    # --no-render (W1, 2026-10-12): z renderowaniem list-profiles trwal na pve9b 16,6 s,
+    # bez niego 1,8 s; valid/families nie sa potrzebne do wyboru (sprawdza je czasownik).
+    "$ZB" list-profiles --json --no-render >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
     "$PY" - "$TMPD/prof.json" "$HERE/tui/zfs-tui.py" <<'PYEOF' | tr -d '\r' >"$TMPD/prof.tsv"
 import sys, json, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[2])

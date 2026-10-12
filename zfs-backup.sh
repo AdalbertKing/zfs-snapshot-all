@@ -382,6 +382,9 @@ front end never edits the config file:
                                     [--on-insert=yes|no] a scheduled replica also runs
                                     right after its disk is plugged in (the udev rule of
                                     install-media-trigger; default no)
+                                    [--keep=N] the medium keeps its OWN N newest
+                                    snapshots of the replica's family instead of
+                                    mirroring the collector (no -M); own family only
                                     [--exclude-child=REGEX]... children of a source left
                                     out (-X in the section's flags; needs recursion)
                                     [--history=all|newest|auto:N]
@@ -521,6 +524,12 @@ Client state control:
 
 Config maintenance:
   zfs-backup.sh migrate-profile [--profile=NAZWA] [--yes]
+  zfs-backup.sh set-transfer NAME [--history=all|newest|auto:N]
+                                    [--compression=zstd|gzip|none|default]
+                                    [--cipher=SPEC|default] [--autotune=yes|no] [--yes]
+                                    How ONE relationship's copies travel (its own
+                                    [dataset:] sections); 'default' = factory value.
+                                    Without --yes: the plan only.
   zfs-backup.sh set-bandwidth --peer=HOST --bandwidth=RATE [--yes]
                                     Change the PAIR's link cap and apply it to every
                                     ACTIVE relationship across that link, as ONE
@@ -6417,7 +6426,7 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
 # other people's sections and comments somebody wrote by hand.
 replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit] [passive 0|1]
     local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
-    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}" xflags="${14:-}" guids="${15:-}" oninsert="${16:-}"
+    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}" xflags="${14:-}" guids="${15:-}" oninsert="${16:-}" keep="${17:-}"
     local tmp; tmp=$(mktemp) || return 1
     awk -v want="[replica:$name]" '
         $0 == want { skip=1; next }
@@ -6444,6 +6453,7 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
         [ -n "$mcrit" ] && printf '\tmonitor_crit = %s\n' "$mcrit"
         [ -n "$guids" ] && printf '\tmedia_guids = %s\n' "$guids"
         [ "$sched" != on-insert ] && [ "$oninsert" = yes ] && printf '\ton_insert = yes\n'
+        [ -n "$keep" ] && printf '\tkeep      = %s\n' "$keep"
         :
     } >> "$tmp" || { rm -f "$tmp"; return 1; }
     mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
@@ -6540,6 +6550,100 @@ EOF
     fi
     [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
     return "$rc"
+}
+
+# set-transfer NAME -- HOW a relationship's copies travel (W16, owner 2026-10-11:
+# "okno ustawienia silnika", per relationship, with a factory set). Fields of the
+# relationship's own [dataset:] sections (those whose pair_label is NAME), each
+# rendered by gen-cron into the engine's flags:
+#   --history=all|newest|auto:N   -I / -i / -T N        (factory: all)
+#   --compression=zstd|gzip|none|default                (factory: default = the engine's
+#                                                         choice: zstd remote, none local)
+#   --cipher=SPEC|default         ssh -c                (factory: ssh's own)
+#   --autotune=yes|no             -A on a remote link   (factory: yes)
+# "default" (or an empty value) REMOVES the field, so the relationship is back on the
+# factory value. The link cap is NOT here: it belongs to a pair (set-bandwidth).
+# Without --yes it shows the plan and installs nothing.
+cmd_set_transfer() {
+    local name="" yes=0 plan=0 a k v
+    local -a fk=() fv=()
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            --plan)   plan=1 ;;
+            --history=*|--compression=*|--cipher=*|--autotune=*)
+                k="${a%%=*}"; k="${k#--}"; v="${a#*=}"
+                [ "$v" = default ] && v=""
+                case "$k:$v" in
+                    history:|history:all|history:newest) ;;
+                    history:auto:[1-9]|history:auto:[1-9][0-9]|history:auto:[1-9][0-9][0-9]) ;;
+                    history:*) die "set-transfer: --history='$v' -- all, newest, auto:N or default" ;;
+                    compression:|compression:zstd|compression:gzip|compression:none) ;;
+                    compression:*) die "set-transfer: --compression='$v' -- zstd, gzip, none or default" ;;
+                    cipher:) ;;
+                    cipher:-*|cipher:*[!A-Za-z0-9,@.=_-]*) die "set-transfer: --cipher='$v' -- a cipher name for SSH -c (or a comma-separated list), or default" ;;
+                    autotune:|autotune:yes|autotune:no) ;;
+                    autotune:*) die "set-transfer: --autotune='$v' -- yes, no or default" ;;
+                esac
+                [ "$k:$v" = "history:all" ] && v=""
+                [ "$k:$v" = "autotune:yes" ] && v=""
+                fk+=("$k"); fv+=("$v") ;;
+            -*) die "set-transfer: unknown option '$a' (known: --history --compression --cipher --autotune --plan --yes)" ;;
+            *)  [ -z "$name" ] || die "set-transfer: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh set-transfer NAZWA [--history=all|newest|auto:N] [--compression=zstd|gzip|none|default] [--cipher=SPEC|default] [--autotune=yes|no] [--plan|--yes]"
+    [ "${#fk[@]}" -gt 0 ] || die "set-transfer: nothing to set -- name at least one of --history --compression --cipher --autotune"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "set-transfer: no relationship '$name' on this host"
+    record_load client "$cpath"
+    [ "${STATE:-}" = active ] || die "set-transfer: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
+    if [ "${RUX_MODE:-}" = local ]; then
+        local _i; for _i in "${!fk[@]}"; do
+            case "${fk[$_i]}" in cipher|autotune) [ -z "${fv[$_i]}" ] || die "set-transfer: '$name' is a LOCAL copy -- there is no link, so --${fk[$_i]} has nothing to act on" ;; esac
+        done
+    fi
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "set-transfer: no config $cronfile for '$name'"
+    # Aimed like every other writer: the file this account's crontab was installed from.
+    assert_cron_config_matches_installed "$cronfile"
+
+    # The relationship's own [dataset:] sections, by their pair_label.
+    local -a secs=()
+    mapfile -t secs < <(awk -v want="$name" '
+        /^\[dataset:/ { sec=$0; next }
+        /^\[/ { sec=""; next }
+        sec != "" { t=$0; sub(/^[ \t]+/, "", t)
+                    if (t ~ /^pair_label[ \t]*=/) { v=t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v)
+                                                    if (v == want) print sec } }' "$cronfile" | sort -u)
+    [ "${#secs[@]}" -gt 0 ] || die "set-transfer: $cronfile has no [dataset:] section of '$name' (pair_label = $name) -- nothing to change"
+
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    local sec i
+    for sec in "${secs[@]}"; do
+        for i in "${!fk[@]}"; do
+            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "${fv[$i]}" \
+                || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in $sec -- nothing was changed"; }
+        done
+    done
+    log "validating the changed config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
+    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(sekcji: ${#secs[@]})"
+    if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
+        rm -f "$workfile"
+        echo "plan only -- nothing installed (add --yes to install)"
+        return 0
+    fi
+    EDIT_RELATION_NAME="$name"
+    atomic_replace_and_install "$cronfile" "$workfile"
 }
 
 # install-media-trigger -- fire the replicas when a disk appears.
@@ -6764,7 +6868,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         return $?
     fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
-    local mon_warn="" mon_crit="" passive=0 _prefset=0 on_insert=""
+    local mon_warn="" mon_crit="" passive=0 _prefset=0 on_insert="" keep=""
     local -a xchild=() mguids=()
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
@@ -6798,6 +6902,9 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
                            done ;;
             # Also run right after the disk is plugged in (note 6), per replica.
             --on-insert=*) case "${a#*=}" in yes|1|true) on_insert=yes ;; no|0|false) on_insert="" ;; *) die "add-replica: --on-insert takes yes or no" ;; esac ;;
+            # W18 (owner 2026-10-11): its own retention on the medium, no mirror.
+            --keep=*)      keep="${a#*=}"
+                           case "$keep" in ''|*[!0-9]*|0*) die "add-replica: --keep='$keep' -- how many of the replica's own snapshots the medium keeps, a whole number above 0" ;; esac ;;
             --notify=*)    notify="${a#*=}" ;;
             # Staleness thresholds (2026-10-08). Without them gen-cron derives
             # them from the schedule; an on-insert replica is watched only with them.
@@ -6937,7 +7044,7 @@ REPEOF
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
     replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" "$passive" "$xflags" \
-        "$(IFS=,; printf '%s' "${mguids[*]}")" "$on_insert" \
+        "$(IFS=,; printf '%s' "${mguids[*]}")" "$on_insert" "$keep" \
         || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
 
     show_activation_proposal "$config" "$cand" || {
@@ -7002,11 +7109,11 @@ cmd_list_replicas() {
     # Parsed with awk rather than sourced: a config is data, never a program.
     local rows; rows=$(awk '
         /^\[replica:/ {
-            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi
+            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp
             name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
-            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; mw=""; mc=""; mg=""; oi=""; next
+            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; mw=""; mc=""; mg=""; oi=""; kp=""; next
         }
-        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi; name="" } next }
+        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp; name="" } next }
         name != "" {
             line=$0; sub(/^[ \t]+/,"",line)
             k=line; sub(/[ \t]*=.*$/,"",k)
@@ -7023,8 +7130,9 @@ cmd_list_replicas() {
             else if (k=="monitor_crit") mc=v
             else if (k=="media_guids") mg=v
             else if (k=="on_insert" && v ~ /^(yes|1|true)$/) oi="yes"
+            else if (k=="keep") kp=v
         }
-        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi }
+        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp }
     ' "$config")
 
     local gate="$SCRIPT_DIR/zfs-media-gate.sh"
@@ -7040,7 +7148,7 @@ cmd_list_replicas() {
     # in the recursive slot: every field after the empty one shifted left.
     # Measured 2026-09-09 on pve9 with a temporary config. `|` cannot occur in a
     # dataset name, a cron schedule or a prefix.
-    while IFS='|' read -r name src dst sched pref media rec hist mw mc mg oi; do
+    while IFS='|' read -r name src dst sched pref media rec hist mw mc mg oi kp; do
         [ -n "$name" ] || continue
         pool="${dst%%/*}"
         present="unknown"; last=""
@@ -7106,8 +7214,8 @@ JSRC
                 [ -n "$_x" ] || continue
                 _xarr="$_xarr${_xarr:+,}\"$(json_escape "$_x")\""
             done < <(replica_section_excludes "$config" "$name")
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"
@@ -18784,6 +18892,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
+        set-transfer)     shift; cmd_set_transfer "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         move-to-client)   shift; cmd_move_to_client "$@" ;;

@@ -2,13 +2,14 @@
 # edit-relation.sh NAZWA -- zmiana zainstalowanej relacji w oknach whiptail ('e' na F3).
 #
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
-#   1. Dodaj do kopii dataset ze źródła          (add-source)
-#   2. Usuń z kopii dataset                      (remove-source)
-#   3. Szablon -- gotowy szablon dla celu        (edit-relation --profile)
-#   4. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
+#   1. Datasety -- co kopiować (dodaj / usuń)    (add-source / remove-source; W4)
+#   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
+#   3. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
+#   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
+#      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
 #   6. Zapisz ustawienia relacji jako szablon    (save-profile, zwykły szablon na F5)
-# Po 3 i 4 retencję ŹRÓDŁA ustawia to samo okno-tabela co w kreatorze relacji
+# Po 2 i 3 retencję ŹRÓDŁA ustawia to samo okno-tabela co w kreatorze relacji
 # (tui/retention-lib.sh; uwaga 10: dla źródła nigdy druga lista szablonów).
 #
 # Okno NIE ma własnej logiki: pokazuje PLAN czasownika (--plan: generacja, gen-cron,
@@ -27,6 +28,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "użycie: edit-relation.sh NAZWA" >&2; exit 2; }
 WT_BACKTITLE="Zmiana relacji $NAME -- kolektor $(hostname)"
@@ -47,7 +49,9 @@ trap 'restore_hidden; rm -rf "$TMPD"' EXIT
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
 # hfile.txt: plik ukrytego szablonu tej relacji (jeśli jest).
 load_lists() {
-    "$ZB" list-profiles --json >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
+    # --no-render (W1, 2026-10-12): z renderowaniem list-profiles trwal na pve9b 16,6 s,
+    # bez niego 1,8 s; valid/families nie sa potrzebne do wyboru (sprawdza je czasownik).
+    "$ZB" list-profiles --json --no-render >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
     "$PY" - "$TMPD/st.json" "$TMPD/prof.json" "$HERE/tui/zfs-tui.py" "$TMPD" "$HNAME" <<'PYEOF'
 import sys, json, re, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[3])
@@ -106,31 +110,11 @@ if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
     exit 1
 fi
+# Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
+RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
+title() { printf 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "własne ustawienia relacji (tabela szczebli)"; else echo "${CUR_P:-<nie zapisany>}"; fi
-}
-
-# Plan czasownika, okno z planem, WYKONAJ -- wspólne dla dodania i usunięcia datasetu.
-run_verb_with_plan() {   # <tytuł> <argv...> (bez --yes)
-    local title="$1"; shift
-    info "$title" "Liczę plan..."
-    if ! "$@" >"$TMPD/vplan.txt" 2>&1; then
-        tail -6 "$TMPD/vplan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
-        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
-        return 1
-    fi
-    { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/vplan.txt"; echo
-      echo "Komenda:  $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/vplan2.txt"
-    yesno_text "$TMPD/vplan2.txt" "$title -- plan" "WYKONAJ" "Wstecz" --defaultno || return 1
-    clear 2>/dev/null
-    echo "\$ $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-    "$@" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-    if [ -n "${ZFS_TUI_LOG:-}" ]; then { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :; fi
-    echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: $title (rc=$RC). Enter = dalej"
-    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
-    exit "$RC"
 }
 
 # Liczby źródła do okna: obecny szablon źródła, dopasowany po nazwie szczebla do szablonu
@@ -147,6 +131,154 @@ src_prefill() {
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
 
+# USTAWIENIA SILNIKA (W16, właściciel 2026-10-11): historia, kompresja, szyfr SSH i autodobór
+# łącza jednej relacji. Obecne wartości z show-config; zmiany czekają w zmiennych p_*,
+# dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
+eng_hist_words() {
+    case "$1" in
+        default|all) echo "wszystkie migawki pomiędzy" ;;
+        newest)      echo "tylko różnica do najnowszej" ;;
+        auto:*)      echo "auto (po ${1#auto:} odstępach tylko różnica)" ;;
+        *)           echo "$1" ;;
+    esac
+}
+eng_comp_words() {
+    case "$1" in
+        default) if [ "$PEER" = - ]; then echo "nie (kopia lokalna)"; else echo "tak (zstd)"; fi ;;
+        zstd)    echo "zstd" ;;
+        gzip)    echo "gzip (pigz)" ;;
+        none)    echo "nie" ;;
+        *)       echo "$1" ;;
+    esac
+}
+eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w WT_OUT; rc 1 = Wstecz
+    local t="$1" x="$2" d="$3"; shift 3
+    geom
+    wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
+       --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
+}
+engine_settings() {
+    local c_h c_c c_x c_a p_h p_c p_x p_a items n d v N out
+    info "Ustawienia silnika" "Czytam ustawienia relacji..."
+    if ! "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>"$TMPD/sc.err"; then
+        wt --title "Ustawienia silnika" --msgbox "show-config nie odpowiedział:\n$(tail -3 "$TMPD/sc.err")" 12 "$W"
+        return 0
+    fi
+    # Brak pola = ustawienie fabryczne ("default"); pierwsza sekcja dataset tej relacji.
+    IFS=$'\t' read -r c_h c_c c_x c_a < <("$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF'
+import sys, json
+out = ["default"] * 4
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    for s in d.get("sections") or []:
+        f = s.get("fields") or {}
+        if s.get("kind") == "dataset" and f.get("pair_label") == sys.argv[2]:
+            for i, k in enumerate(("history", "compression", "cipher", "autotune")):
+                v = str(f.get(k) if f.get(k) is not None else "").strip()
+                if k == "autotune":
+                    v = {"no": "no", "false": "no", "0": "no", "off": "no",
+                         "yes": "yes", "true": "yes", "1": "yes", "on": "yes"}.get(v.lower(), v)
+                if v:
+                    out[i] = v.replace("\t", " ")
+            break
+except Exception:
+    pass
+print("\t".join(out))
+PYEOF
+)
+    [ -n "${c_h:-}" ] || { c_h=default; c_c=default; c_x=default; c_a=default; }
+    p_h="$c_h"; p_c="$c_c"; p_x="$c_x"; p_a="$c_a"
+    while :; do
+        geom
+        items=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')"
+               comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')")
+        if [ "$PEER" != - ]; then
+            v="domyślny SSH"; [ "$p_x" = default ] || v="$p_x"
+            items+=(ciph "Szyfr SSH        $v$([ "$p_x" = default ] && echo ' (fabryczne)')")
+            v="tak"; case "$p_a" in no) v="nie" ;; esac
+            items+=(auto "Autodobór łącza  $v$([ "$p_a" = default ] && echo ' (fabryczne)')")
+        fi
+        items+=(__reset__ "Przywróć fabryczne" __done__ "Gotowe")
+        wt --title "Ustawienia silnika: $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+           --menu "Jak przesyłane są kopie tej relacji." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
+        case "$WT_OUT" in
+            hist)
+                d="${p_h%%:*}"; [ "$d" = default ] && d=all
+                eng_pick "Historia" "Co przesyłać, gdy w celu brakuje kilku migawek." "$d" \
+                    all    "Wszystkie migawki pomiędzy -- pełna historia w celu" \
+                    newest "Tylko różnica do najnowszej -- mniej miejsca, bez historii pośredniej" \
+                    auto   "Auto -- wszystkie, a przy dużej zaległości tylko różnica" || continue
+                case "$WT_OUT" in
+                    auto)
+                        N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
+                        while :; do
+                            wt --title "Historia: auto" --ok-button "Dalej" --cancel-button "Wstecz" \
+                               --inputbox "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?" 9 "$W" "$N" || continue 2
+                            v="${WT_OUT// /}"
+                            case "$v" in ''|*[!0-9]*) ;; *) [ "${#v}" -le 3 ] && [ "$((10#$v))" -ge 1 ] && { p_h="auto:$((10#$v))"; break; } ;; esac
+                            wt --title "Zła liczba" --msgbox "'$WT_OUT' -- podaj liczbę całkowitą od 1 do 999." 8 "$W"
+                        done ;;
+                    *) p_h="$WT_OUT" ;;
+                esac ;;
+            comp)
+                eng_pick "Kompresja" "Czy kompresować strumień kopii." "$p_c" \
+                    default "Fabryczna -- zdalnie zstd, lokalnie nic" \
+                    zstd    "zstd" \
+                    gzip    "gzip (pigz)" \
+                    none    "Bez kompresji" || continue
+                p_c="$WT_OUT" ;;
+            ciph)
+                eng_pick "Szyfr SSH" "Jakim szyfrem SSH idą kopie." "$p_x" \
+                    default                       "Domyślny SSH" \
+                    aes128-gcm@openssh.com        "aes128-gcm (szybki na procesorach z AES-NI)" \
+                    chacha20-poly1305@openssh.com "chacha20 (szybki bez AES-NI)" || continue
+                p_x="$WT_OUT" ;;
+            auto)
+                d="$p_a"; [ "$d" = default ] && d=yes
+                eng_pick "Autodobór łącza" "Czy silnik ma sam mierzyć łącze." "$d" \
+                    yes "Tak -- mierzy łącze i sam decyduje o kompresji" \
+                    no  "Nie" || continue
+                p_a="$WT_OUT" ;;
+            __reset__) p_h=default; p_c=default; p_x=default; p_a=default ;;
+            __done__)
+                ARGV=("$ZB" set-transfer "$NAME")
+                [ "$p_h" = "$c_h" ] || ARGV+=("--history=$p_h")
+                [ "$p_c" = "$c_c" ] || ARGV+=("--compression=$p_c")
+                if [ "$PEER" != - ]; then
+                    [ "$p_x" = "$c_x" ] || ARGV+=("--cipher=$p_x")
+                    [ "$p_a" = "$c_a" ] || ARGV+=("--autotune=$p_a")
+                fi
+                [ "${#ARGV[@]}" -gt 3 ] || return 0
+                info "Ustawienia silnika" "Liczę plan..."
+                if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
+                    out="$(grep -E '^FATAL' "$TMPD/stplan.txt" | tail -1 | sed 's/^FATAL: //')"
+                    [ -n "$out" ] || out="$(tail -3 "$TMPD/stplan.txt")"
+                    wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
+                    continue
+                fi
+                {
+                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
+                    echo
+                    grep "^Relacja '" "$TMPD/stplan.txt"
+                    echo
+                    echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+                } >"$TMPD/stplan2.txt"
+                yesno_text "$TMPD/stplan2.txt" "Ustawienia silnika: $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
+                clear 2>/dev/null
+                echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
+                "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                if [ -n "${ZFS_TUI_LOG:-}" ]; then
+                    { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
+                fi
+                echo
+                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: ustawienia silnika relacji '$NAME' zmienione (rc=0). Enter = dalej"
+                else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
+                [ -t 0 ] && read -r _
+                exit "$RC" ;;
+        esac
+    done
+}
+
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
 while :; do
@@ -154,16 +286,17 @@ ACTION=""
 while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
-       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 16 "$W" 6 \
-       dodaj   "Dodaj do kopii dataset ze źródła" \
-       usun    "Usuń z kopii dataset (kopie zostają)" \
+       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 17 "$W" 7 \
+       dane    "Datasety -- co kopiować (dodaj / usuń)…" \
        szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
        harm    "Harmonogram kopii i retencja -- tabela szczebli" \
-       config  "Ręczna edycja konfigu (jak crontab -e)" \
+       silnik  "Ustawienia silnika -- jak przesyłane są kopie…" \
+       config "Ręczna edycja konfigu (jak crontab -e)" \
        zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
         szablon|harm) break ;;
+        silnik) engine_settings; continue ;;
         config)
             # edit-config (2026-10-08): edytor dostaje caly terminal, jak crontab -e;
             # czasownik sam pyta o instalacje i pokazuje, co zrobi na zrodle.
@@ -193,38 +326,64 @@ while :; do
                 wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
             fi
             continue ;;
-        dodaj)
-            info "Dodaj dataset" "Czytam datasety z $SRCHOST..."
-            if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then
+        dane)
+            # DATASETY = TO SAMO OKNO CO W KREATORZE (W4, właściciel 2026-10-11): koszyk
+            # z obecnymi datasetami relacji, dowolnie wiele dodań i usunięć, potem JEDEN
+            # plan różnic i WYKONAJ. Bez "Sposób" (to inna relacja) i bez "Wyjątków":
+            # add-source bierze cały dataset, wyjątków istniejącej relacji nie zmienia.
+            info "Datasety" "Czytam datasety z $SRCHOST..."
+            if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" \
+               || ! basket_tree_from_json "$TMPD/ds.json"; then
                 wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $SRCHOST nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
-            "$PY" - "$TMPD/ds.json" "$SRCS" >"$TMPD/ds.tsv" <<'PYEOF'
-import sys, json
-have = [x for x in sys.argv[2].split(",") if x and x != "-"]
-for d in json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []:
-    n = d.get("name") or ""
-    if "/" not in n or any(n == h or n.startswith(h + "/") for h in have):
-        continue    # pula sama w sobie i to, co relacja już ma (z dziećmi) -- nie do dodania
-    print("%s\t%s" % (n, d.get("type") or ""))
-PYEOF
-            items=()
-            while IFS=$'\t' read -r n t; do [ -n "$n" ] && items+=("$n" "$(clip_label "$n  ($t)" $((W - 10)))"); done <"$TMPD/ds.tsv"
-            [ "${#items[@]}" -gt 0 ] || { wt --title "Nie ma czego dodać" --msgbox "Na $SRCHOST nie ma datasetu spoza tej relacji." 8 "$W"; continue; }
-            wt --title "Dodaj do kopii dataset ze źródła" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --menu "Dataset ze źródła $SRCHOST. Wchodzi z dziećmi; pierwsza (pełna) kopia idzie od razu,\nresztą zajmuje się cron. Pozostałe datasety relacji zostają nietknięte." \
-               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" || continue
-            run_verb_with_plan "Dodaj $WT_OUT do $NAME" "$ZB" add-source "$NAME" "$WT_OUT" || continue ;;
-        usun)
-            items=()
-            for n in ${SRCS//,/ }; do [ "$n" != - ] && items+=("$n" "$n"); done
-            [ "${#items[@]}" -gt 0 ] || { wt --title "Brak datasetów" --msgbox "Relacja nie ma datasetów do usunięcia." 8 "$W"; continue; }
-            if [ "${#items[@]}" -eq 2 ]; then
-                wt --title "Ostatni dataset" --msgbox "To jedyny dataset relacji. Relację bez datasetów usuwa się w całości: Del na F3." 9 "$W"; continue
-            fi
-            wt --title "Usuń z kopii dataset" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --menu "Dataset przestaje być kopiowany: źródło odbiera prawa, tu znikają jego zadania.\nKopie, które już są na tym hoście, ZOSTAJĄ." \
-               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || continue
-            run_verb_with_plan "Usuń $WT_OUT z $NAME" "$ZB" remove-source "$NAME" "$WT_OUT" || continue ;;
+            B_ROOT=(); B_EXCL=()
+            for n in ${SRCS//,/ }; do [ "$n" != - ] && { B_ROOT+=("$n"); B_EXCL+=(""); }; done
+            OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
+            while :; do
+                basket_step || continue 2
+                NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
+                ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                if [ -z "$ADDED$REMOVED" ]; then continue 2; fi
+                {
+                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
+                    echo
+                    if [ -n "$ADDED" ]; then
+                        echo "DOJDĄ (pierwsza pełna kopia idzie od razu):"
+                        printf '%s\n' "$ADDED" | sed 's/^/  /'
+                    fi
+                    if [ -n "$REMOVED" ]; then
+                        echo "ODPADNĄ (kopie na tym hoście ZOSTAJĄ):"
+                        printf '%s\n' "$REMOVED" | sed 's/^/  /'
+                    fi
+                    echo
+                    echo "Komendy:"
+                    for n in $ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
+                    for n in $REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
+                } >"$TMPD/dsplan.txt"
+                yesno_text "$TMPD/dsplan.txt" "Zmień relację $NAME -- datasety" "WYKONAJ" "Wstecz" --defaultno || continue
+                clear 2>/dev/null
+                RC=0
+                : >"$TMPD/run.log"
+                for n in $ADDED; do
+                    echo "\$ $ZB add-source $NAME $n --yes"; echo
+                    "$ZB" add-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                    [ "$RC" -eq 0 ] || break
+                done
+                if [ "$RC" -eq 0 ]; then
+                    for n in $REMOVED; do
+                        echo "\$ $ZB remove-source $NAME $n --yes"; echo
+                        "$ZB" remove-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                        [ "$RC" -eq 0 ] || break
+                    done
+                fi
+                [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+                echo
+                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: datasety relacji '$NAME' zmienione (rc=0). Enter = dalej"
+                else echo "=== ZATRZYMANE (rc=$RC) -- to, co wyżej się udało, zostało; powód w linii FATAL powyżej. Enter = dalej"; fi
+                [ -t 0 ] && read -r _
+                exit "$RC"
+            done ;;
     esac
 done
 

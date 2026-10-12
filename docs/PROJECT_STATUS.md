@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d76549ce16c7fe26 -->
+<!-- status-covers-digest: 9eb7e3eb093067d7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,39 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Testy GUI właściciela 2026-10-11, paczka 2.**
+  - **W1: „Zmień relację” otwierało się ~17 s.** Zmierzone na pve9b: `list-profiles
+    --json` renderuje każdy szablon przez gen-cron (16,6 s); bez renderowania 1,8 s.
+    Kreator i „Zmień relację” wołają `--no-render` (pola valid/families nie są potrzebne
+    do wyboru). Test `tui` W1.
+  - **W4: „Datasety – co kopiować” w „Zmień relację”** zamiast „Dodaj…” / „Usuń…”: okno
+    koszyka z kreatora z obecnymi datasetami relacji, wiele zmian, potem jeden plan
+    DOJDĄ / ODPADNĄ i `add-source` / `remove-source --yes` (stop na pierwszym błędzie).
+    Bez „Sposób” i „Wyjątki” (`BASKET_NO_EXC`). Test `tui` W4.
+  - **W16: ustawienia silnika jednej relacji.** Nowy czasownik `set-transfer NAZWA
+    [--history=all|newest|auto:N] [--compression=…] [--cipher=…] [--autotune=yes|no]`
+    zmienia pola sekcji `[dataset:]` relacji (`pair_label`); `default` = wartość
+    fabryczna (pole usunięte); bez `--yes` tylko plan. Nowe pole `history` w `[dataset:]`
+    (gen-cron: `-i` / `-T N`, konflikt z `flags` = odmowa). Okno „Ustawienia silnika” w
+    „Zmień relację”: obecne wartości z `show-config` z dopiskiem „(fabryczne)”, wybór z
+    opisem, „Przywróć fabryczne”, plan → WYKONAJ; w relacji lokalnej tylko historia i
+    kompresja. Limit łącza zostaje przy parze (`set-bandwidth`). Na pve9b: `--history=newest`
+    → `-i` na obu liniach kopii, powrót `default` → crontab jak przed. Testy `cron`
+    PDH1–PDH4, `zfsbackup` settransfer, `tui` W16.
+  - **W18: replika z własną retencją na dysku.** `[replica:] keep = N` (`add-replica
+    --keep=N`, `list-replicas` pole `keep`): silnik bez lustra `-M` i z `-i` (przenosi
+    tylko własną migawkę), po udanej kopii `delsnaps` zostawia N najnowszych `replica_`
+    pod `<dst>/<źródło>`; `passive` + `keep` = odmowa. Kreator: przy „Tylko stan na
+    chwilę kopii” pytanie „Odbicie kolektora / Trzymaj N ostatnich kopii”. Na pve9b
+    (pule plikowe, keep = 2, 4 biegi, źródło przycinane): na dysku zawsze 2 `replica_`,
+    przyrosty. Testy `cron` PRK1–PRK3, `tui` replika (11).
+  - **Błąd: stała replika z kilkoma źródłami nie biegła wcale.** Jej podpowłoka
+    `( m=0; for … )` stała goło po `--` zfs-job (który wykonuje `"$@"`) — błąd składni w
+    cronie i w `run-replicas`, choć render przechodził. Znalezione przy teście W18 na
+    pve9b. Teraz `/bin/sh -c '( … )'` jak w nawiasie nośnika wymiennego. Test `cron` PRK4.
+  - **Jeszcze nie:** W17 (wysyłka zaszyfrowana dla zaszyfrowanego źródła); W14 cichy wpis
+    o zdjęciu `replica_` i W19 kopia na zaszyfrowany nośnik — zmiany w zamrożonych silnikach.
 
 - **Testy GUI właściciela 2026-10-11, paczka 1 (uwagi W1–W19 w notatkach rundy, poza repozytorium).**
   - **Błąd (W7): „Harmonogram” relacji dawał się zmienić tylko raz.** Ukryty szablon

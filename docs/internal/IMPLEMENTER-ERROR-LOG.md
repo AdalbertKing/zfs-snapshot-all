@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57, E67, E72.*
+*Evidence: E13, E22, E57, E67, E72, E78, E79.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1906,6 +1906,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E79 — a fixed replica with several sources never ran (found 2026-10-12, R12)
+
+**Genesis.** Multi-source replicas (one bracket, a loop over the sources) wrapped
+the loop for a FIXED medium as `( m=0; for s in ...; exit $m )` and put it after
+zfs-job's `--`. zfs-job runs `"$@"`, so in cron -- and in `run-replicas`, which
+runs the same line through `bash -c` -- the bare `(` is a syntax error: the
+replica never copied anything. The removable form had been handed to `sh -c` on
+purpose (the comment in media_bracket says why); the fixed form took the other
+branch and nobody ran it. Found 2026-10-12 while testing W18 live on pve9b with
+file-backed pools; my own W11 live check the same morning had executed only the
+part after `--`, and so walked straight past it.
+
+**Cause.** R12: the cron suite asserted the TEXT of the rendered line (engine
+call present, sources listed) and the render's rc, never that the line is a
+command a shell accepts. A rendered line is proved only by running it the way
+cron does -- or at least parsing it as cron's shell would.
+
+**Rule (R12).** For a generated cron line, the test parses the command part as
+shell (`sh -n -c`), not only greps it -- now PRK4 in the cron suite.
 
 ### E78 — a local relationship's source retention was never applied (found 2026-10-09, R12)
 
