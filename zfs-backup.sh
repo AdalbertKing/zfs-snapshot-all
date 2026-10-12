@@ -17664,7 +17664,7 @@ remove_local_relation() {
     chmod 0644 "$workfile" 2>/dev/null || :
     [ "${dropped:-0}" -gt 0 ] || warn "no section of '$name' found in $CRON_CONFIG -- only the record is closed"
     log "removing $dropped section(s) of the local relationship '$name' from $CRON_CONFIG"
-    if grep -qE '^\[(dataset|prune|replica):' "$workfile"; then
+    if config_has_job_sections "$workfile"; then
         if ! gencron_as_target -c "$workfile" >/dev/null; then
             rm -f "$workfile"
             die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched"
@@ -17760,7 +17760,11 @@ cmd_remove_client() {
         # endpoint switch, so the ownership rule is unchanged: marker-verified,
         # and a hand-written or foreign remote prune is left alone.
         remove_client_remote_source_prunes "$workfile" "$name"
-        if grep -qE '^\[(dataset|prune):' "$workfile"; then
+        # ANY job section keeps the block, a replica included (2026-10-12, pve9b: the
+        # last relationship of root's config was removed and the block went with it,
+        # taking the owner's replica's cron lines and monitor along -- this test
+        # looked for [dataset:]/[prune:] only).
+        if config_has_job_sections "$workfile"; then
             if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
                 rm -f "$workfile"
                 die "gen-cron.sh rejected the config after removing '$name' -- $CRON_CONFIG was NOT touched. Investigate by hand before retrying."
