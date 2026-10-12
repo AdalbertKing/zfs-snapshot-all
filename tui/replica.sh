@@ -227,10 +227,30 @@ if [ "$EDIT" -eq 1 ]; then
     while :; do
         geom
         wt --title "Zmień replikę $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
-           --menu "Co zmienić?" 10 "$W" 2 \
+           --menu "Co zmienić?" 11 "$W" 3 \
            kreator "Źródła, nośnik i harmonogram…" \
-           silnik "Ustawienia silnika -- migawki, historia, na dysku…" || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+           silnik "Ustawienia silnika -- migawki, historia, na dysku…" \
+           restart "Zacznij od nowa na tym dysku (pełna kopia)…" || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         [ "$WT_OUT" = kreator ] && break
+        if [ "$WT_OUT" = restart ]; then
+            # W18 (właściciel 2026-10-12): gdy łańcuch repliki się zerwał (relację usunięto
+            # i założono od nowa), jedyna droga to pełna kopia. Nowa obok starej, stara znika
+            # dopiero po udanej nowej -- plan i WYKONAJ, jak każda zmiana.
+            info "Replika $NAME" "Liczę plan..."
+            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/rs.txt" | tail -1 | sed 's/^FATAL: //')" 10 "$W"; continue; }
+            { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/rs.txt"; echo
+              echo "Komenda:  $(shq "$ZB") replica-restart $NAME --yes"; } >"$TMPD/rs2.txt"
+            yesno_text "$TMPD/rs2.txt" "Replika $NAME -- zacznij od nowa" "WYKONAJ" "Wstecz" --defaultno || continue
+            clear 2>/dev/null
+            echo "\$ $ZB replica-restart $NAME --yes"; echo
+            "$ZB" replica-restart "$NAME" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+            echo
+            if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' zaczęła od nowa (rc=0). Enter = dalej"
+            else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- stara kopia na dysku została; powód wyżej. Enter = dalej"; fi
+            [ -t 0 ] && read -r _
+            exit "$RC"
+        fi
         replica_engine || continue
         # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
         info "Replika $NAME" "Czytam datasety tego hosta..."

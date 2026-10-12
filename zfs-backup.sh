@@ -431,6 +431,11 @@ front end never edits the config file:
   zfs-backup.sh remove-media-trigger [--install]
                                     Take that opt-in back. Removes only the rule
                                     this tool wrote; cron entries are untouched.
+  zfs-backup.sh replica-restart NAME [--yes]
+                                    A replica whose chain broke (the relationship it
+                                    reads was deleted and created again) starts again
+                                    on the same disk: a full copy NEXT to the old one,
+                                    which is destroyed only after the new one succeeded.
   zfs-backup.sh remove-replica NAME [--install] [--yes]
                                     Stops the job. The copy on that medium is left
                                     alone -- it is still a copy. Removing the LAST
@@ -7288,6 +7293,112 @@ config_has_job_sections() {   # <file>
 # swapped first and the cron removal then failed, the config would describe
 # zero jobs while the real cron lines survived, with nothing left recording
 # what they were.
+# replica-restart NAME -- a replica whose chain broke starts again ON THE SAME DISK
+# (owner 2026-10-12, W18). A replica with snapshots of its own (replica_*) continues
+# from its bookmark on the relationship's copy; when that relationship is deleted and
+# created again, the copy and the bookmark are new and the replica refuses ("shares
+# no common snapshot"). Measured the same day: an anchor kept on the disk does not
+# save the history either (continuing from it rolls the disk back over every later
+# replica_), so there is no clever way round it -- the replica starts again.
+# Per source: the full copy goes NEXT to the old one (<target>-restart), and only
+# after it succeeded is the old copy destroyed and the new one renamed into place.
+# The disk needs room for both for a while; if the copy fails, the old one is
+# untouched. The engine options are the replica's own, read from its rendered line.
+# The new bookmark is found by GUID on the next run, so the rename does not break it.
+cmd_replica_restart() {
+    local name="" yes=0 config="" a
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y)   yes=1 ;;
+            --config=*) config="${a#*=}" ;;
+            -*)         die "replica-restart: unknown option '$a' (only --yes, --config=)" ;;
+            *)          [ -z "$name" ] || die "replica-restart: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh replica-restart NAZWA [--yes]"
+    local resolver_user; resolver_user="$(cron_target_user)"
+    cron_context_resolve adopt "$config" "$resolver_user" "" ""
+    config="$CRON_CTX_FILE"
+    grep -qxF "[replica:$name]" "$config" 2>/dev/null || die "replica-restart: there is no [replica:$name] in $config"
+    local src dst media guids
+    src=$(awk -v w="[replica:$name]" '$0==w{f=1;next} /^\[/{f=0} f&&/^[ \t]*source[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print;exit}' "$config")
+    dst=$(awk -v w="[replica:$name]" '$0==w{f=1;next} /^\[/{f=0} f&&/^[ \t]*dst[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print;exit}' "$config")
+    media=$(awk -v w="[replica:$name]" '$0==w{f=1;next} /^\[/{f=0} f&&/^[ \t]*media[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print;exit}' "$config")
+    guids=$(awk -v w="[replica:$name]" '$0==w{f=1;next} /^\[/{f=0} f&&/^[ \t]*media_guids[ \t]*=/{sub(/^[^=]*=[ \t]*/,"");print;exit}' "$config")
+    [ -n "$src" ] && [ -n "$dst" ] || die "replica-restart: [replica:$name] names no source or no dst"
+    # The engine options exactly as the replica runs them: its full rendered line,
+    # the words between 'snapget.sh ' and the first quoted argument.
+    local line opts
+    line=$(gencron_as_target -c "$config" --replica-full 2>/dev/null | grep -F "replica copy ($name)" | grep -v '^#on-insert' | head -1)
+    [ -n "$line" ] || line=$(gencron_as_target -c "$config" --replica-full 2>/dev/null | grep -F "replica copy ($name)" | head -1)
+    # The engine call is 'snapget.sh <options> "<source>" "<dst>"'; the two quoted
+    # arguments at the end are dropped. An option's quoted value (the prefix) holds
+    # no space -- names are validated to [A-Za-z0-9._-] -- so the quotes just go.
+    opts=$(printf '%s' "$line" | grep -oE 'snapget\.sh [^;]*' | head -1 | sed -E 's/^snapget\.sh //; s/ "[^"]*" "[^"]*" *$//')
+    opts="${opts//\"/}"
+    [ -n "$line" ] || die "replica-restart: the replica '$name' renders no line -- nothing to restart"
+    local pool="${dst%%/*}" s
+    echo "replica-restart '$name' -- pelna kopia od nowa NA TYM SAMYM DYSKU ($dst):"
+    for s in ${src//,/ }; do
+        echo "  $s:"
+        echo "     1. snapget.sh $opts -t \"$s\" \"$dst/$s-restart\"   -- pelna kopia OBOK starej"
+        echo "     2. zfs destroy -r $dst/$s   -- stara kopia, dopiero po udanym kroku 1"
+        echo "     3. zfs rename $dst/$s-restart $dst/$s"
+    done
+    [ "$media" = removable ] && echo "  nosnik wymienny: podlaczany bramka (zfs-media-gate.sh attach/detach), jak w biegu z crona"
+    echo "  Na dysku musi sie zmiescic chwilowo stara i nowa kopia. Gdy krok 1 sie nie uda, stara zostaje nietknieta."
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+    local gate="$SCRIPT_DIR/zfs-media-gate.sh" rc=0 a_rc=0
+    if [ "$media" = removable ]; then
+        bash "$gate" attach "$pool" "$name" --dataset "$dst" ${guids:+--guids "$guids"}; a_rc=$?
+        [ "$a_rc" -eq 0 ] || die "replica-restart: the medium '$pool' of '$name' could not be attached (gate rc=$a_rc) -- nothing was changed"
+    fi
+    for s in ${src//,/ }; do
+        local tgt="$dst/$s" tmp="$dst/$s-restart"
+        zfs list -H "$tmp" >/dev/null 2>&1 && { zfs destroy -r "$tmp" || { rc=1; break; }; }
+        # shellcheck disable=SC2086
+        if ! bash "$SCRIPT_DIR/snapget.sh" $opts -t "$s" "$tmp"; then
+            warn "replica-restart: the full copy of $s failed -- the old copy $tgt is untouched"
+            zfs destroy -r "$tmp" 2>/dev/null; rc=1; break
+        fi
+        if zfs list -H "$tgt" >/dev/null 2>&1; then
+            zfs destroy -r "$tgt" || { warn "replica-restart: the new copy is at $tmp, but the old $tgt could not be destroyed"; rc=1; break; }
+        fi
+        zfs rename "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; break; }
+        log "replica-restart: $tgt -- started again (full copy)"
+    done
+    if [ "$media" = removable ]; then
+        bash "$gate" detach "$pool" "$name" --engine-rc "$rc" || :
+    fi
+    return "$rc"
+}
+
+# A replica that takes snapshots of its own and reads one of these copies starts
+# again after the relationship is deleted and created anew (W18). Said in the plan.
+replica_restart_warning() {   # <copies, space-separated>
+    local cfg cp rs n src p own
+    cfg="$(default_cron_config 2>/dev/null)"
+    [ -r "$cfg" ] || return 0
+    awk '/^\[replica:/{ if (n!="" && own) print n "\t" src
+                       n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); src=""; own=1; next}
+         /^\[/{ if (n!="" && own) print n "\t" src; n=""; next }
+         n!="" && /^[ \t]*source[ \t]*=/ { s=$0; sub(/^[^=]*=[ \t]*/,"",s); src=s }
+         n!="" && /^[ \t]*passive[ \t]*=[ \t]*(yes|1|true)/ { own=0 }
+         END { if (n!="" && own) print n "\t" src }' "$cfg" | while IFS=$'\t' read -r rs src; do
+        for p in ${src//,/ }; do
+            for cp in $1; do
+                case "$cp" in "$p"|"$p"/*)
+                    echo "  !  replika '$rs' (wlasne migawki) czyta z tej kopii -- po ponownym zalozeniu relacji zacznie od PELNEJ kopii (F6 -> e -> Zacznij od nowa na tym dysku)"
+                    continue 3 ;;
+                esac
+            done
+        done
+    done
+}
+
 cmd_remove_replica() {
     local name="" config="" do_install=0 assume_yes=0 ask=0 a _ans
     for a in "$@"; do
@@ -13229,6 +13340,7 @@ cmd_delete_relation() {
     else
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
+    replica_restart_warning "$copies"
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
@@ -18817,6 +18929,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;
         remove-replica)   shift; cmd_remove_replica "$@" ;;
+        replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
         install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
