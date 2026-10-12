@@ -1854,14 +1854,16 @@ NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
@@ -1876,7 +1878,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/data
 0${T}exc
-0${T}hdd/data/docs|hdd/data/photos
+0${T}__add__
+0${T}hdd/data/mail
+0${T}__done__
 0${T}add
 0${T}hdd/test-kreator
 0${T}next
@@ -1906,11 +1910,11 @@ if has "$NRB" 'POMIJANE: mail' && has "$NRB" 'dziś pod nim: docs, photos' && ha
 else
     bad "new-relation: okno koszyka" "$NRB"
 fi
-if grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF ' ~ ON ~ ' \
-   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/ct'; then
-    ok "new-relation: wyjatki = lista TYLKO tego, co pod wybranym miejscem, wszystko zaznaczone (kopiowane) na starcie"
+if grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF '(nic – kopiowane jest wszystko pod hdd/data)' \
+   && ! grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/ct' && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF -- '--checklist'; then
+    ok "new-relation: wyjatki = list_editor (menu, nie checklista); okno 'Dodaj' oferuje TYLKO to, co pod wybranym miejscem; pusta lista mowi, ze kopiowane jest wszystko"
 else
-    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
+    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
 fi
 # 2. puste miejsce samo: akcji 'Wyjatki' NIE MA (przyszlego nie da sie wskazac), synchro z portem
 NROUT=$(nr_run "0${T}sync
@@ -1931,16 +1935,22 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/ct
 0${T}exc
-0${T}hdd/ct/subvol-301-disk-0
+0${T}__add__
+0${T}hdd/ct/subvol-302-disk-0
+0${T}__done__
 0${T}exc
+0${T}__add__
+1${T}
 1${T}
 0${T}next
 ${NRT}")
-if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-302-disk-0 ~ [^~]* ~ OFF' \
-   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-301-disk-0 ~ [^~]* ~ ON'; then
-    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany = odznaczony); Wstecz niczego nie zmienia"
+if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
+   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~' \
+   && grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-301-disk-0 ~' \
+   && ! grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~'; then
+    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany na liscie, a okno 'Dodaj' go juz NIE oferuje); Wstecz z 'Dodaj' i z listy niczego nie zmienia"
 else
-    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
+    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
 fi
 # 3b. miejsce dodane PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
 NROUT=$(nr_run "0${T}backup
@@ -1963,11 +1973,17 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd
 0${T}exc
-0${T}hdd/ct/subvol-301-disk-0|hdd/ct/subvol-302-disk-0|hdd/data|hdd/data/docs|hdd/data/mail|hdd/data/photos|hdd/db|hdd/db/postgres|hdd/home|hdd/home/adam|hdd/home/ewa|hdd/test-kreator|hdd/vm-disks|hdd/vm-disks/vm-201-disk-0|hdd/vm-disks/vm-202-disk-0
+0${T}__add__
+0${T}hdd/ct/subvol-301-disk-0
+0${T}__add__
+0${T}hdd/ct
+0${T}__done__
 0${T}next
 ${NRT}")
-if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
-    ok "new-relation: odznaczony dataset z dziecmi = ^nazwa\$ i ^nazwa/ (jego dzieci nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ] \
+   && ! has "$NROUT" "subvol-301-disk-0" && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct ~' \
+   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'subvol-301-disk-0'; then
+    ok "new-relation: wyjatek z dziecmi = ^nazwa\$ i ^nazwa/; dodanie przodka zdejmuje z listy wczesniej dodanego potomka (jego dzieci nie dostaja wlasnych wzorcow)"
 else
     bad "new-relation: pominiety z dziecmi" "$NROUT"
 fi
@@ -2003,7 +2019,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
-0${T}grant|quies|skip
+0${T}grant|quies
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2073,7 +2090,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=down,right,bs,3,down,left,space,enter)
@@ -2098,7 +2116,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d7h24-age
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter)
@@ -2127,7 +2146,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30h24
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=space,enter)
@@ -2147,7 +2167,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=enter)
@@ -2169,13 +2190,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}pasywnie
 0${T}passive
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
@@ -2211,7 +2234,7 @@ NROUT=$(nr_run "0${T}local
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
-0${T}skip
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2238,7 +2261,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}192.168.28.99
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2325,7 +2349,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}root
 0${T}
 0${T}zfsbackup
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_FLAT=1)
@@ -2346,7 +2371,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}skip
+0${T}
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2377,8 +2403,8 @@ else
 fi
 
 # D. POMIJANE MIGAWKI PO PREFIKSACH (wlasciciel, uwagi 10+13): zamiast pola tekstowego
-#    (latwo zgubic przecinek -- "__migration___tmp") edytor-checklista; dodanie nowego
-#    prefiksu i odznaczenie istniejacego w JEDNYM przebiegu.
+#    (latwo zgubic przecinek -- "__migration___tmp") edytor list_editor (decyzja 2026-10-11:
+#    zadnych checklist do dodawania/usuwania); usuniecie vzdump i dodanie _tmp w JEDNYM przebiegu.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -2388,25 +2414,28 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}masks
-0${T}__replicate_|__migration__|__add__
+0${T}
+0${T}__del__
+0${T}i:1
+0${T}__add__
 0${T}_tmp
-0${T}__replicate_|__migration__|_tmp
+0${T}__done__
 0${T}
 0${T}
 ")
-if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane migawki -- prefiksy' "$NR/wt.log" \
+if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
    && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
-    ok "new-relation: edytor prefiksow -- 'Dodaj nowy prefiks' dopisuje _tmp, odznaczenie vzdump usuwa go z --exclude-family"
+    ok "new-relation: edytor prefiksow -- 'Usun prefiks' zdejmuje vzdump, 'Dodaj prefiks' dopisuje _tmp, wynik w --exclude-family"
 else
     bad "new-relation: edytor pomijanych migawek" "$NROUT" "$(grep -F 'prefiks' "$NR/wt.log" | cut -c1-300)"
 fi
 # R2-1 (wlasciciel, 2026-09-24): okno pokazywalo PUSTE wiersze -- znacznik (schowany przez
 # --notags) byl prefiksem, a opis pusty. Test wyzej sprawdzal tylko WYNIK; ten sprawdza,
-# co WIDZI operator: kazdy prefiks ma niepusty opis w oknie edytora.
-NRPFX="$(grep -F 'Pomijane migawki -- prefiksy' "$NR/wt.log" | head -1)"
-if has "$NRPFX" ' ~ vzdump ~ vzdump ~ ON ~ ' && has "$NRPFX" ' ~ __replicate_ ~ __replicate_ ~ ON ~ '; then
-    ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow (R2-1: puste wiersze na pve11)"
+# co WIDZI operator: kazdy prefiks stoi w tekscie okna, a kursor startuje na 'Gotowe'.
+NRPFX="$(grep -F 'Pomijane prefiksy' "$NR/wt.log" | head -1)"
+if has "$NRPFX" '  vzdump' && has "$NRPFX" '  __replicate_' && has "$NRPFX" '  __migration__' && has "$NRPFX" '--default-item ~ __done__ ~' \
+   && ! has "$NRPFX" '--checklist'; then
+    ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow w tekscie, kursor na 'Gotowe' (R2-1: puste wiersze na pve11)"
 else
     bad "new-relation: edytor prefiksow -- puste wiersze" "$(printf '%s' "$NRPFX" | cut -c1-400)"
 fi
@@ -2669,7 +2698,9 @@ rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb6
 0${T}hdd/data
 0${T}exc
-0${T}hdd/data/docs
+0${T}__add__
+0${T}hdd/data/mail
+0${T}__done__
 0${T}next
 0${T}own
 0${T}removable
@@ -2879,7 +2910,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2898,7 +2930,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}inna
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
