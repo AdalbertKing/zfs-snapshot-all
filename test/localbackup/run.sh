@@ -1648,6 +1648,32 @@ else
 fi
 rm -rf "$K21P"
 
+# W7 (owner GUI test, 2026-10-11): the SECOND edit of a relationship's own template.
+# The GUI keeps it under one name (relacja-<NAME>) and rewrites its content; the config
+# still carries the previous content under that name, and the create-time collision
+# guard refused every second edit ("already exists ... different effective policy").
+# An edit (--replace) now replaces the relationship's own template sections. Control:
+# a template of the same shape under ANOTHER relationship's name is still guarded.
+W7P="$WORK/w7prof"; W7C="$WORK/w7clients"; rm -rf "$W7P" "$W7C"; mkdir -p "$W7P" "$W7C"
+sed -E 's/^([[:space:]]*keep[[:space:]]*=[[:space:]]*)30[[:space:]]*$/\17/' "$REPO/profiles/d30.conf" > "$W7P/relacja-w7.conf"
+cp "$W7P/relacja-w7.conf" "$W7P/relacja-w7x.conf"
+printf 'CLIENT_NAME=w7\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/data\nCRON_CONFIG=%s\n' "$WORK/w7.conf" > "$W7C/w7.conf"
+w7_seed() {   # <template-owner name> -> a config holding that owner's template with the OLD count (30)
+    printf '[defaults]\n\thost_label = %s\n\n[template:profile__relacja-%s__daily]\n' "$(hostname)" "$1" > "$WORK/w7.conf"
+    sed -n '/^\[template:daily\]/,/^$/p' "$REPO/profiles/d30.conf" | sed 1d >> "$WORK/w7.conf"
+}
+w7_seed w7
+w7o="$(CLIENTS_DIR="$W7C" PROFILE_USER_ROOT="$W7P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=relacja-w7 --name=w7 --replace --config="$WORK/w7.conf")"
+w7_seed w7x
+w7c="$(CLIENTS_DIR="$W7C" PROFILE_USER_ROOT="$W7P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=relacja-w7x --name=w7 --replace --config="$WORK/w7.conf")"
+if ! printf '%s' "$w7o" | grep -q 'different effective policy' && [ "$(k21_flags "$w7o" hdd/backups/rpool/data)" = -D7 ] \
+   && printf '%s' "$w7c" | grep -q 'different effective policy'; then
+    ok "W7: edit of a relationship's own template (relacja-w7) replaces its old sections -- target -D7, no collision; another relationship's template is still guarded"
+else
+    bad "W7: second edit of an own template" "own: $(printf '%s\n' "$w7o" | grep -E 'FATAL|different' | head -2) tgt=$(k21_flags "$w7o" hdd/backups/rpool/data)" "other: $(printf '%s\n' "$w7c" | grep -E 'FATAL|different' | head -1)"
+fi
+rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
