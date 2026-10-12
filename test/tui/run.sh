@@ -137,7 +137,7 @@ if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if hasE "$S4" 'Lokalny prune co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Zdalny prune +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
+if hasE "$S4" 'Prune lokalny co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Prune zdalny +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
    && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
     ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
 else
@@ -1590,7 +1590,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Nośniki7Pauza8Eksport9Import10Wyjście'; then
+if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Replika7Pauza8Eksport9Import10Wyjście'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F (zapis skrocony, cyfra = F; F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
@@ -1608,7 +1608,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
             zadania) _acts="Sortuj" ;; relacje) _acts="Pauza Eksport Import" ;; transfery) _acts="usunięte" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
-        for _a in Pomoc Zadania Relacje Transfery Szablony Nośniki Wyjście $_acts; do
+        for _a in Pomoc Zadania Relacje Transfery Szablony Replika Wyjście $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
