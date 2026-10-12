@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 49c155b87d6db0b2 -->
+<!-- status-covers-digest: d76549ce16c7fe26 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,55 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Testy GUI właściciela 2026-10-11, paczka 1 (uwagi W1–W19 w notatkach rundy, poza repozytorium).**
+  - **Błąd (W7): „Harmonogram” relacji dawał się zmienić tylko raz.** Ukryty szablon
+    `relacja-<NAZWA>` ma stałą nazwę i nową treść, a strażnik kolizji przy tworzeniu
+    odmawiał każdej drugiej edycji (zmierzone: pve9b lokalna, pve10 zdalna). Edycja
+    (`edit-relation`, lokalna `--replace`) zdejmuje teraz z kopii roboczej sekcje
+    `[template:profile__relacja-<NAZWA>__*]` i `[template:profile__relacja-<NAZWA>-src-*]`, a edycja lokalna
+    sprząta też szablony, do których nic już się nie odwołuje (jak zdalna). Na pve9b:
+    dwie kolejne edycje `-H20`, `-H16` przechodzą, powrót na zwykły szablon zostawia
+    zero sekcji `relacja-*`. Test `localbackup` W7 (kontrola: szablon innej relacji
+    nadal pilnowany; na starym kodzie czerwony).
+  - **Błąd (W11): replika z wieloma źródłami nie mieściła się w linii crona.** Dziesięć
+    źródeł = komenda 1029 B (limit crona 1000 B liczony bez pól harmonogramu, tak jak
+    mierzy go `lib-cron.sh`), instalacja się wycofała. Linia ponad limit woła
+    `zfs-backup.sh run-replicas --name=NAZWA --inner`; ten renderuje config z nową
+    opcją gen-cron `--replica-full` i uruchamia pełną komendę w tej samej etykiecie
+    zfs-job (log, F2, F6 bez zmian). Linia, która się mieści, zostaje bajt w bajt.
+    `--replica-full` z `--install` = odmowa. Na pve9b: 24 źródła, linia 184 B, 24/24
+    datasetów na nośniku. Test `cron` PRL1–PRL4.
+  - **W11b: bramka nośnika po ID.** Z `--guids` bramka zawęża pule o nazwie repliki do
+    jej dysków: jeden → `zpool import <id>`, żaden → obcy dysk (odmowa), dwa własne naraz
+    → odmowa. Bez `--guids` jak dotąd. Test `mediagate` L8s.
+  - **Okna dodaj/usuń jednym wzorem (W3, W13, W10):** `list_editor` w `tui/wt-lib.sh`
+    — lista w tekście, „+ Dodaj…”, „− Usuń…”, „Gotowe” (kursor na nim), przycisk
+    „Wybierz”. Używają go pomijane prefiksy (zawsze krok kreatora, bez pozycji w
+    „Ustawieniach dodatkowych”) i wyjątki w koszyku (nie da się już odznaczyć rodzica
+    przy zaznaczonych dzieciach). „Usuń pozycję” w koszyku i przycisk koszyka
+    („Wybierz” zamiast drugiego „Dalej”) — tak samo.
+  - **Zmień relację (W5, W6):** Wstecz z okna szablonów i z tabeli szczebli wraca do
+    menu; „Użyj szablonu”; tytuły tabel „Harmonogram i retencja: W CELU KOPII – host” i
+    „Retencja: W ŹRÓDLE KOPII – host” (także w kreatorze); `grid.py` ucina za długi tytuł.
+  - **Replika (W12, W14, W19):** usunięcie repliki nie kasuje danych na dyskach (opcja
+    znikła z okna; `purge-replica-copy` zostaje w CLI); zmiana repliki wymiennej: „Dodaj
+    dysk” / „Usuń dysk z repliki” (nie dla ostatniego); replika bez zapisanych ID przy
+    „Dodaj dysk” najpierw dopisuje ID obecnego dysku, gdy jest w maszynie (gdy go nie
+    ma — okno ostrzega, że stary dysk trzeba będzie dodać po włożeniu). Wybór migawek opisany wprost:
+    „Cała historia” / „Tylko stan na chwilę kopii”. `prepare-media` formatuje z
+    `compression=zstd` (sprawdzone na pve9b, urządzenie loop).
+  - **Ekrany (W2, W8, W9):** F6 = „Replika”, tytuł „Repliki backupu kolektora”; stopki
+    list bez klawiszy, które tam nie działają; „Esc wróć” zamiast „Esc anuluj”; panel F3:
+    „Prune lokalny” / „Prune zdalny”, a w relacji lokalnej także „Prune źródła”.
+  - **F2 (W15):** F8 „Uruchom teraz” — okno z komendą (dokładnie linia z crona, konto,
+    ostrzeżenie przy prune), `t` uruchamia; zadanie konta przez `runuser`. F7 zostaje „Sortuj”.
+  - **Jeszcze nie:** W4 (datasety w „Zmień relację” oknem koszyka), W16 (ustawienia silnika), W17 (raw dla zaszyfrowanego źródła), W18
+    (replika z własną retencją), W1 (czas otwarcia „Zmień relację”). Z W14 i W19 zostają
+    dwie części, które wymagają zmian w zamrożonych silnikach: cichy wpis relacji o
+    zdjęciu migawek `replica_` (W14) i kopia na zaszyfrowany nośnik (W19 — silnik
+    zakłada pusty dataset docelowy, którego ZFS nie pozwala nadpisać pod zaszyfrowanym
+    rodzicem; zmierzone na pve9b).
 
 - **Kampania testów GUI 2026-10-09 („patrz jak człowiek”), paczka 1: błędy i słowa.** Ekrany F2–F6 i kreatory przechodzone na pve9b na żywych danych (kreatory przez nagrywający whiptail, do planu, bez WYKONAJ); lista znalezisk K1–K48 w notatkach kampanii (poza repozytorium); numery K przy poprawkach w kodzie.
   - **Błąd (E78): relacja lokalna pomijała retencję źródła.** `local-backup
