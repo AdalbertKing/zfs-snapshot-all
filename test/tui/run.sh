@@ -2793,7 +2793,8 @@ else
 fi
 # (7) ZMIANA repliki sprzed P5 (bez ID): koszyk z jej zrodel i wyjatkow; obecny dysk
 #     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
-RPOUT=$(rp_run "0${T}next
+RPOUT=$(rp_run "0${T}kreator
+0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2810,7 +2811,8 @@ else
 fi
 # (8) "Dodaj kolejny dysk do tej repliki": formatuje z TA SAMA pula i baza, bez pytan;
 #     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
-RPOUT=$(rp_run "0${T}next
+RPOUT=$(rp_run "0${T}kreator
+0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2830,7 +2832,8 @@ else
 fi
 # (9) W12 "Usuń dysk z repliki": dysk 777 wypada z listy (--media-guid=4242), dane
 #     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
-RPOUT=$(rp_run "0${T}next
+RPOUT=$(rp_run "0${T}kreator
+0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2849,7 +2852,8 @@ else
 fi
 # (10) W11 (pve9b 2026-10-11): replika sprzed zapisu ID (pusta lista) + "Dodaj dysk":
 #      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
-RPOUT=$(rp_run "0${T}next
+RPOUT=$(rp_run "0${T}kreator
+0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2869,7 +2873,8 @@ else
 fi
 # (11) W18: "Tylko stan na chwile kopii" + "Trzymaj N ostatnich" = --keep=12 (wlasna
 #      historia dysku, bez lustra); plan mowi "12 ostatnich kopii".
-RPOUT=$(rp_run "0${T}next
+RPOUT=$(rp_run "0${T}kreator
+0${T}next
 0${T}own
 0${T}keep
 0${T}12
@@ -2883,6 +2888,25 @@ if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && g
     ok "replica: W18 'Trzymaj N ostatnich kopii' -> --keep=12, plan mowi o wlasnej historii dysku"
 else
     bad "replica: keep N (W18)" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (12) Ustawienia silnika repliki (wlasciciel 2026-10-12): "Zmien replike" -> "Ustawienia
+#      silnika" -> Historia: tylko roznica, Na dysku: 6 ostatnich -> plan -> WYKONAJ; reszta
+#      repliki (zrodla, nosnik, harmonogram, ID dysku) bez zmian. Kontrola: wczesniej zapisana
+#      history przechodzi tez przez zwykly kreator (nie ginie).
+RPOUT=$(rp_run "0${T}silnik
+0${T}hist
+0${T}newest
+0${T}disk
+0${T}keep
+0${T}6
+0${T}__done__
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb12","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"4242","on_insert":"no","history":"all"}]}' RP_NAME=usb12)
+RP12="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --history=newest --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja' && grep -qF 'Historia:   tylko różnica do najnowszej' "$RP/wt.log"; then
+    ok "replica: Ustawienia silnika -- historia i 'na dysku' zmienione, reszta repliki bez zmian; bez kompresji/szyfru (kopia lokalna)"
+else
+    bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
 fi
 rm -rf "$RP"
 
