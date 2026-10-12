@@ -47,6 +47,13 @@
 # script's job precisely so that cron does not also mail -- exiting with the
 # command's status here would add a second, unrate-limited mail per failure,
 # which is the flood notify-fail.sh's cooldown exists to prevent.
+#
+# ...EXCEPT WHEN A HUMAN STARTED IT (2026-10-12, live campaign on pve9b):
+# `run-replicas` (F7 on F6, the udev trigger) and F8 on F2 run the very same line
+# and read ITS status -- and saw 0 for a replica whose copy had failed ("dataset
+# key must be loaded", END rc=1 in the log). ZFS_JOB_PROPAGATE_RC=1 makes the
+# wrapper exit with the command's status; cron never sets it, so cron's contract
+# above is unchanged.
 # ------------------------------------------------------------------------------
 set -u
 
@@ -131,4 +138,5 @@ elif [ "$rc" -ne 0 ] && [ -x "$NOTIFY" ]; then
 fi
 
 rm -f "$e"
+[ "${ZFS_JOB_PROPAGATE_RC:-0}" = 1 ] && exit "$rc"
 exit 0
