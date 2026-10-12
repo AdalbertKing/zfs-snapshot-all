@@ -35,13 +35,13 @@ for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
-                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no"]))
+                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no", r.get("history") or "all"]))
 PYEOF
 SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
-GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no
+GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no; HIST=all; ENGINE_ONLY=0
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP RAW < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP RAW HIST < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
@@ -52,6 +52,7 @@ if [ "$EDIT" -eq 1 ]; then
     [ "${ONINS:-}" = yes ] || ONINS=no
     [ "${KEEP:-}" = - ] && KEEP=""
     [ "${RAW:-}" = yes ] || RAW=no
+    case "${HIST:-}" in ''|-) HIST=all ;; esac
 fi
 # Reguła udev sprzed P5 (run-replicas bez --on-insert) uruchamiała przy włożeniu WSZYSTKIE
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
@@ -159,7 +160,88 @@ add_guid() {   # <id> -> GUIDS bez powtórzeń
     [ -n "$1" ] || return 0
     case ",$GUIDS," in *",$1,"*) ;; *) GUIDS="${GUIDS:+$GUIDS,}$1" ;; esac
 }
+# USTAWIENIA SILNIKA REPLIKI (właściciel 2026-10-12, "tak, rób okno ustawień silnika dla
+# repliki"): to samo okno co dla relacji (W16), trzy wiersze, które dla repliki mają sens --
+# kopia jest lokalna, więc bez kompresji, szyfru i limitu łącza. Zmiana idzie tym samym
+# add-replica co cały kreator (plan, potem WYKONAJ), z pozostałymi ustawieniami bez zmian.
+eng_hist_words() { case "$1" in all) echo "wszystkie migawki pomiędzy" ;; newest) echo "tylko różnica do najnowszej" ;; auto:*) echo "auto (po ${1#auto:} odstępach tylko różnica)" ;; *) echo "$1" ;; esac; }
+replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez zmian
+    local p_pas="$PASSIVE" p_keep="$KEEP" p_h="$HIST" items v N
+    while :; do
+        geom
+        items=(mig "Migawki          $([ "$p_pas" = yes ] && echo "cała historia (istniejące)" || echo "tylko stan na chwilę kopii (własne replica_)")")
+        items+=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = all ] && echo ' (fabryczne)')")
+        [ "$p_pas" = yes ] || items+=(disk "Na dysku         $([ -n "$p_keep" ] && echo "$p_keep ostatnich kopii" || echo "odbicie kolektora (fabryczne)")")
+        [ "$RAW" = yes ] && items+=(raw "Szyfrowane       wysyłka zaszyfrowana (raw)")
+        items+=(__done__ "Gotowe")
+        wt --title "Ustawienia silnika: replika $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+           --menu "Jak replika przenosi kopie na dysk." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || return 1
+        case "$WT_OUT" in
+            mig)
+                wt --title "Migawki" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$([ "$p_pas" = yes ] && echo passive || echo own)" \
+                   --menu "Jakie migawki ma przenosić replika?" 10 "$W" 2 \
+                   passive "Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca" \
+                   own "Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca" || continue
+                [ "$WT_OUT" = passive ] && { p_pas=yes; p_keep=""; } || p_pas=no ;;
+            hist)
+                wt --title "Historia" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${p_h%%:*}" \
+                   --menu "Co przenosić, gdy na dysku brakuje kilku migawek." 11 "$W" 3 \
+                   all    "Wszystkie migawki pomiędzy -- pełna historia na dysku" \
+                   newest "Tylko różnica do najnowszej -- mniej miejsca, bez historii pośredniej" \
+                   auto   "Auto -- wszystkie, a przy dużej zaległości tylko różnica" || continue
+                if [ "$WT_OUT" = auto ]; then
+                    N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
+                    wt --title "Historia: auto" --ok-button "Dalej" --cancel-button "Wstecz" \
+                       --inputbox "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?" 9 "$W" "$N" || continue
+                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba od 1 do 999." 8 "$W"; continue ;; esac
+                    [ "${#WT_OUT}" -le 3 ] || { wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba od 1 do 999." 8 "$W"; continue; }
+                    p_h="auto:$WT_OUT"
+                else
+                    p_h="$WT_OUT"
+                fi ;;
+            disk)
+                wt --title "Na dysku" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$([ -n "$p_keep" ] && echo keep || echo mirror)" \
+                   --menu "Co ma zostawać na dysku repliki?" 10 "$W" 2 \
+                   mirror "Odbicie kolektora -- dysk trzyma to, co kolektor" \
+                   keep "Trzymaj N ostatnich kopii -- własna historia dysku, niezależna od kolektora" || continue
+                if [ "$WT_OUT" = keep ]; then
+                    wt --title "Ile kopii na dysku" --ok-button "Dalej" --cancel-button "Wstecz" \
+                       --inputbox "Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?" 9 "$W" "${p_keep:-12}" || continue
+                    case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba całkowita większa od 0." 8 "$W"; continue ;; esac
+                    p_keep="$WT_OUT"
+                else
+                    p_keep=""
+                fi ;;
+            raw)
+                wt --title "Wysyłka zaszyfrowana" --msgbox "Źródło repliki jest zaszyfrowane i kopie idą zaszyfrowane (raw).\nTego nie zmienia się w działającej replice -- zmiana to nowa kopia od zera." 10 "$W"
+                continue ;;
+            __done__)
+                [ "$p_pas" = "$PASSIVE" ] && [ "$p_keep" = "$KEEP" ] && [ "$p_h" = "$HIST" ] && return 1
+                PASSIVE="$p_pas"; KEEP="$p_keep"; HIST="$p_h"
+                return 0 ;;
+        esac
+    done
+}
 step=1
+if [ "$EDIT" -eq 1 ]; then
+    while :; do
+        geom
+        wt --title "Zmień replikę $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
+           --menu "Co zmienić?" 10 "$W" 2 \
+           kreator "Źródła, nośnik i harmonogram…" \
+           silnik "Ustawienia silnika -- migawki, historia, na dysku…" || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+        [ "$WT_OUT" = kreator ] && break
+        replica_engine || continue
+        # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
+        info "Replika $NAME" "Czytam datasety tego hosta..."
+        if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+            wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
+            clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+        fi
+        basket_from_replica; basket_xargs
+        ENGINE_ONLY=1; step=6; break
+    done
+fi
 while :; do
     geom
     case "$step" in
@@ -398,6 +480,7 @@ PYEOF
         [ "$PASSIVE" = yes ] && ARGV+=(--passive)
         [ -n "$KEEP" ] && ARGV+=("--keep=$KEEP")
         [ "$RAW" = yes ] && ARGV+=(--raw)
+        [ "$HIST" != all ] && ARGV+=("--history=$HIST")
         if [ "$MEDIA" = removable ]; then
             [ -n "$GUIDS" ] && ARGV+=("--media-guid=$GUIDS")
             [ "$SCHED" != on-insert ] && ARGV+=("--on-insert=$ONINS")
@@ -421,6 +504,7 @@ PYEOF
             echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące, bez własnych)" || echo "stan na chwilę kopii (własne, replica_)")"
             [ "$PASSIVE" = yes ] || echo "Na dysku:   $([ -n "$KEEP" ] && echo "$KEEP ostatnich kopii, niezależnie od kolektora" || echo "odbicie kolektora")"
             [ "$RAW" = yes ] && echo "Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza"
+            echo "Historia:   $(eng_hist_words "$HIST")"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             if [ "$MEDIA" = removable ]; then
                 if [ -n "$GUIDS" ]; then echo "Dyski:      $(printf '%s' "$GUIDS" | tr ',' '\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty"
@@ -454,7 +538,13 @@ PYEOF
             echo
             echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"
         } >"$TMPD/plan2.txt"
-        yesno_text "$TMPD/plan2.txt" "Replika $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=5; continue; }
+        if ! yesno_text "$TMPD/plan2.txt" "Replika $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno; then
+            if [ "$ENGINE_ONLY" -eq 1 ]; then
+                replica_engine && continue
+                clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+            fi
+            step=5; continue
+        fi
         clear 2>/dev/null
         echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"; echo
         "${ARGV[@]}" --install --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
