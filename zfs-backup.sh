@@ -7164,8 +7164,9 @@ cmd_remove_replica() {
         esac
     done
     [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
-    # --ask: the GUI's windows (Del on F6) -- the same two verbs, remove-replica
-    # and, only if asked, purge-replica-copy, shown as a plan before anything runs.
+    # --ask: the GUI's windows (Del on F6) -- remove-replica, shown as a plan before
+    # anything runs. The data on the disks stays (owner, W12 2026-10-11); the
+    # purge-replica-copy verb is for the command line only.
     if [ "$ask" -eq 1 ]; then
         local dlg="$SCRIPT_DIR/tui/replica-delete.sh"
         [ -f "$dlg" ] || die "remove-replica: brak $dlg -- checkout jest niekompletny"

@@ -3757,8 +3757,8 @@ class UI(object):
             self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         if k == "del":
-            # Okna whiptail (remove-replica --ask): pytaja tez, czy skasowac KOPIE
-            # na nosniku (domyslnie nie), i pokazuja plan obu czasownikow.
+            # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
+            # dyskach zostaja (W12).
             return self.run_dialog([self.zb(), "remove-replica", n, "--ask"])
 
     def action(self, k):

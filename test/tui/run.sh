@@ -2728,7 +2728,7 @@ RPOUT=$(rp_run "0${T}next
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
-   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj kolejny dysk do tej repliki'; then
+   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
     bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
@@ -2751,6 +2751,43 @@ if grep -q '^prepare-media repl /dev/disk/by-id/usb-C --base=replica --yes$' "$R
     ok "replica: 'Dodaj kolejny dysk' -- ta sama pula i baza bez pytan, ID dopisane (4242,777), obecny dysk zostaje"
 else
     bad "replica: dodaj kolejny dysk" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (9) W12 "Usuń dysk z repliki": dysk 777 wypada z listy (--media-guid=4242), dane
+#     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}removable
+0${T}__del__
+0${T}777
+0${T}repl
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
+RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb9 .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" && has "$RP9" 'Usuń dysk z repliki'; then
+    ok "replica: W12 'Usuń dysk z repliki' -- 777 wypada (--media-guid=4242), dane zostaja"
+else
+    bad "replica: usun dysk" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (10) W11 (pve9b 2026-10-11): replika sprzed zapisu ID (pusta lista) + "Dodaj dysk":
+#      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}removable
+0${T}__add__
+0${T}/dev/disk/by-id/usb-C
+0${T}
+0${T}
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
+RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log" && ! has "$RP10" 'Usuń dysk z repliki'; then
+    ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
+else
+    bad "replica: dodaj dysk bez ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 

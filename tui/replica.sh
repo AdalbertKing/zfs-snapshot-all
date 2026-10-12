@@ -240,7 +240,11 @@ while :; do
         if [ "$EDIT" -eq 0 ]; then
             items+=(__prep__ "Sformatuj nowy nośnik (dysk zostanie wyczyszczony)")
         elif [ "$MEDIA" = removable ] && [ -n "$cur" ]; then
-            items+=(__add__ "Dodaj kolejny dysk do tej repliki (zostanie sformatowany)")
+            # W12 (właściciel 2026-10-11): dwie pozycje i nic więcej. Zepsuty dysk =
+            # Usuń dysk, potem Dodaj dysk (dodanie i tak formatuje).
+            items+=(__add__ "Dodaj dysk (włożony zostanie sformatowany)")
+            # Ostatniego dysku się nie usuwa -- replika bez dysku to "Usuń replikę".
+            case "$GUIDS" in *,*) items+=(__del__ "Usuń dysk z repliki (dane na nim zostają)") ;; esac
         fi
         def="${cur:-__prep__}"
         wt --title "Replika $NAME -- 5/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
@@ -252,7 +256,31 @@ while :; do
             prep_media "$np" replica || continue
             DST="$PREP_DST"; GUIDS=""; add_guid "$PREP_GUID"; step=5; continue
         fi
+        if [ "$pool" = __del__ ]; then
+            LE_ITEMS=(); g=""
+            for g in ${GUIDS//,/ }; do LE_ITEMS+=("$g"); done
+            menu=()
+            for g in "${LE_ITEMS[@]}"; do
+                menu+=("$g" "dysk ID $g$([ "$g" = "$(guid_of_pool "$cur")" ] && echo '  (teraz w slocie)')")
+            done
+            wt --title "Replika $NAME -- usuń dysk" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
+               --menu "Który dysk przestaje należeć do repliki? Dane na nim ZOSTAJĄ;\nwłożony później będzie odrzucony jako obcy." "$(fit $((${#menu[@]} / 2 + 4)))" "$W" "$((${#menu[@]} / 2))" \
+               "${menu[@]}" || continue
+            g="$WT_OUT"; GUIDS="$(printf '%s' ",$GUIDS," | sed "s/,$g,/,/; s/^,//; s/,\$//")"
+            continue
+        fi
         if [ "$pool" = __add__ ]; then
+            # Replika sprzed zapisu ID (P5) ma pustą listę: dopisane byłoby TYLKO nowe ID,
+            # a jej stary dysk zostałby odrzucony jako obcy (W11, pve9b 2026-10-11).
+            if [ -z "$GUIDS" ]; then
+                g="$(guid_of_pool "$cur")"
+                if [ -n "$g" ]; then
+                    add_guid "$g"
+                else
+                    wt --title "Obecny dysk nie jest zapisany" --yes-button "Dalej" --no-button "Wstecz" \
+                       --yesno "Replika '$NAME' nie ma jeszcze zapisanych ID dysków, a jej obecnego dysku nie ma w maszynie.\nPo dodaniu nowego dysku stary będzie odrzucany jako obcy -- dodasz go, gdy go włożysz\n(zmiana repliki, nośnik, wybór obecnego dysku)." 11 "$W" || continue
+                fi
+            fi
             prep_media "$cur" "${DST#*/}" || continue
             add_guid "$PREP_GUID"
             wt --title "Kolejny dysk gotowy" --msgbox "Dysk dopisany do repliki '$NAME' (ID puli $PREP_GUID).\nDyski są równorzędne: replika kopiuje na ten, który jest włożony.\nDo slotu wkładaj JEDEN naraz. Zapisze się po WYKONAJ w planie." 11 "$W"
