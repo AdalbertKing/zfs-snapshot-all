@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e1da2c65d43dd53b -->
+<!-- status-covers-digest: aa5582495bb93d77 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,17 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Błąd (E80): relacja lokalna i zdalna z tym samym szablonem w jednym configu się
+  wykluczały.** Znalezione przez kampanię szyfrowania na pve9b (2026-10-12): obie pisały
+  rodzinę szablonów źródła pod nazwami `profile__<P>__src_*`, ale z inną treścią —
+  lokalna zachowuje progi monitora (i przy szablonie płaskim `send_schedule`/`prefix`),
+  zdalnej gen-cron progów na zdalnym zakresie zabrania. Szablon dopisuje się tylko przy
+  braku nazwy, więc pierwsza wygrywała, a instalacja drugiej padała („monitor_warn/
+  monitor_crit set on a REMOTE scope”). `local-backup` pisze teraz `profile__<P>__lsrc_*`
+  (`SRC_ID_TAG`). Istniejąca relacja lokalna przechodzi na nowe nazwy przy najbliższej
+  zmianie relacji (stare zdejmuje sprzątanie osieroconych szablonów, W7). Test
+  `localbackup` (nazwy `__lsrc_`, żadnych `__src_`).
 
 - **Replika zaszyfrowanego źródła wysyła zaszyfrowane (2026-10-12, pytanie właściciela
   o trzy układy szyfrowania).** Relacja pobrana „raw” (W17) zostawia kopię na kolektorze
