@@ -1429,7 +1429,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive media \
-                        bandwidth compression cipher \
+                        bandwidth compression cipher history \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
@@ -2331,6 +2331,23 @@ build_dataset() {
                 lint_link_cipher "$link_ciph" "$flags" "[dataset:$ds_path] tier=$tier" "$remote_spec"
             else link_ciph=""; fi
             flags="$(add_link_flags "$flags" "$link_bw" "$link_comp" "$link_ciph")"
+            # HOW MUCH OF THE GAP TRAVELS (W16, owner 2026-10-11), the replica's own
+            # 'history' field on a relationship: all (-I, every snapshot in between,
+            # the default), newest (-i, only the diff to the newest -- fewer bytes and
+            # no intermediate history on the target), auto:N (-T N, the engine
+            # switches when the target is N of this dataset's intervals behind).
+            local link_hist=""
+            if link_hist="$(resolve_field history "$ds" "" "")"; then
+                case " $flags " in
+                    *" -i "*|*" -T "*) die "[dataset:$ds_path] tier=$tier: history='$link_hist' and 'flags' both decide how much of the gap travels ('$flags'). Say it once -- keep 'history' and drop -i/-T from flags." ;;
+                esac
+                case "$link_hist" in
+                    all) ;;
+                    newest) flags="${flags:+$flags }-i" ;;
+                    auto:[1-9]|auto:[1-9][0-9]|auto:[1-9][0-9][0-9]) flags="${flags:+$flags }-T ${link_hist#auto:}" ;;
+                    *) die "[dataset:$ds_path] tier=$tier: history='$link_hist' -- expected all (every snapshot in between, the default), newest (only the diff to the newest) or auto:N" ;;
+                esac
+            fi
             local autotune
             autotune="$(resolve_field autotune "$ds" "$tmpl" defaults)" || autotune=""
             lint_autotune "$autotune" "[dataset:$ds_path] tier=$tier"

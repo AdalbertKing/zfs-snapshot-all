@@ -524,6 +524,12 @@ Client state control:
 
 Config maintenance:
   zfs-backup.sh migrate-profile [--profile=NAZWA] [--yes]
+  zfs-backup.sh set-transfer NAME [--history=all|newest|auto:N]
+                                    [--compression=zstd|gzip|none|default]
+                                    [--cipher=SPEC|default] [--autotune=yes|no] [--yes]
+                                    How ONE relationship's copies travel (its own
+                                    [dataset:] sections); 'default' = factory value.
+                                    Without --yes: the plan only.
   zfs-backup.sh set-bandwidth --peer=HOST --bandwidth=RATE [--yes]
                                     Change the PAIR's link cap and apply it to every
                                     ACTIVE relationship across that link, as ONE
@@ -6544,6 +6550,98 @@ EOF
     fi
     [ "$n" -gt 0 ] || log "run-replicas: no [replica:] sections in $config -- nothing to run"
     return "$rc"
+}
+
+# set-transfer NAME -- HOW a relationship's copies travel (W16, owner 2026-10-11:
+# "okno ustawienia silnika", per relationship, with a factory set). Fields of the
+# relationship's own [dataset:] sections (those whose pair_label is NAME), each
+# rendered by gen-cron into the engine's flags:
+#   --history=all|newest|auto:N   -I / -i / -T N        (factory: all)
+#   --compression=zstd|gzip|none|default                (factory: default = the engine's
+#                                                         choice: zstd remote, none local)
+#   --cipher=SPEC|default         ssh -c                (factory: ssh's own)
+#   --autotune=yes|no             -A on a remote link   (factory: yes)
+# "default" (or an empty value) REMOVES the field, so the relationship is back on the
+# factory value. The link cap is NOT here: it belongs to a pair (set-bandwidth).
+# Without --yes it shows the plan and installs nothing.
+cmd_set_transfer() {
+    local name="" yes=0 plan=0 a k v
+    local -a fk=() fv=()
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            --plan)   plan=1 ;;
+            --history=*|--compression=*|--cipher=*|--autotune=*)
+                k="${a%%=*}"; k="${k#--}"; v="${a#*=}"
+                [ "$v" = default ] && v=""
+                case "$k:$v" in
+                    history:|history:all|history:newest) ;;
+                    history:auto:[1-9]|history:auto:[1-9][0-9]|history:auto:[1-9][0-9][0-9]) ;;
+                    history:*) die "set-transfer: --history='$v' -- all, newest, auto:N or default" ;;
+                    compression:|compression:zstd|compression:gzip|compression:none) ;;
+                    compression:*) die "set-transfer: --compression='$v' -- zstd, gzip, none or default" ;;
+                    cipher:) ;;
+                    cipher:-*|cipher:*[!A-Za-z0-9,@.=_-]*) die "set-transfer: --cipher='$v' -- an ssh cipher name (or a comma-separated list), or default" ;;
+                    autotune:|autotune:yes|autotune:no) ;;
+                    autotune:*) die "set-transfer: --autotune='$v' -- yes, no or default" ;;
+                esac
+                [ "$k:$v" = "history:all" ] && v=""
+                [ "$k:$v" = "autotune:yes" ] && v=""
+                fk+=("$k"); fv+=("$v") ;;
+            -*) die "set-transfer: unknown option '$a' (known: --history --compression --cipher --autotune --plan --yes)" ;;
+            *)  [ -z "$name" ] || die "set-transfer: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "uzycie: zfs-backup.sh set-transfer NAZWA [--history=all|newest|auto:N] [--compression=zstd|gzip|none|default] [--cipher=SPEC|default] [--autotune=yes|no] [--plan|--yes]"
+    [ "${#fk[@]}" -gt 0 ] || die "set-transfer: nothing to set -- name at least one of --history --compression --cipher --autotune"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "set-transfer: no relationship '$name' on this host"
+    record_load client "$cpath"
+    [ "${STATE:-}" = active ] || die "set-transfer: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
+    if [ "${RUX_MODE:-}" = local ]; then
+        local _i; for _i in "${!fk[@]}"; do
+            case "${fk[$_i]}" in cipher|autotune) [ -z "${fv[$_i]}" ] || die "set-transfer: '$name' is a LOCAL copy -- there is no link, so --${fk[$_i]} has nothing to act on" ;; esac
+        done
+    fi
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "set-transfer: no config $cronfile for '$name'"
+
+    # The relationship's own [dataset:] sections, by their pair_label.
+    local -a secs=()
+    mapfile -t secs < <(awk -v want="$name" '
+        /^\[dataset:/ { sec=$0; next }
+        /^\[/ { sec=""; next }
+        sec != "" { t=$0; sub(/^[ \t]+/, "", t)
+                    if (t ~ /^pair_label[ \t]*=/) { v=t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v)
+                                                    if (v == want) print sec } }' "$cronfile" | sort -u)
+    [ "${#secs[@]}" -gt 0 ] || die "set-transfer: $cronfile has no [dataset:] section of '$name' (pair_label = $name) -- nothing to change"
+
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    local sec i
+    for sec in "${secs[@]}"; do
+        for i in "${!fk[@]}"; do
+            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "${fv[$i]}" \
+                || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in $sec -- nothing was changed"; }
+        done
+    done
+    log "validating the changed config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
+    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(sekcji: ${#secs[@]})"
+    if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
+        rm -f "$workfile"
+        echo "plan only -- nothing installed (add --yes to install)"
+        return 0
+    fi
+    EDIT_RELATION_NAME="$name"
+    atomic_replace_and_install "$cronfile" "$workfile"
 }
 
 # install-media-trigger -- fire the replicas when a disk appears.
@@ -18792,6 +18890,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         activate-client)  shift; cmd_activate_client "$@" ;;
         migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
+        set-transfer)     shift; cmd_set_transfer "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;
         pause-client)     shift; cmd_pause_client "$@" ;;
         move-to-client)   shift; cmd_move_to_client "$@" ;;
