@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1dca0607e16bd406 -->
+<!-- status-covers-digest: 5387f3567247cb94 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,12 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Błąd: ręczne uruchomienie repliki pokazywało sukces mimo błędu kopii** (kampania na
+  pve9b, 2026-10-12: kopia bez `--raw` z kopii zaszyfrowanej padła, w logu `END rc=1`, a
+  `run-replicas` zwrócił 0). zfs-job dla crona zawsze kończy 0 (błąd zgłasza powiadomienie);
+  `run-replicas` (F7 na F6, reguła udev) i F8 na F2 ustawiają `ZFS_JOB_PROPAGATE_RC=1` i
+  dostają prawdziwy kod. Cron bez zmian. Test `cron` X10.
 
 - **Błąd (E80): relacja lokalna i zdalna z tym samym szablonem w jednym configu się
   wykluczały.** Znalezione przez kampanię szyfrowania na pve9b (2026-10-12): obie pisały
