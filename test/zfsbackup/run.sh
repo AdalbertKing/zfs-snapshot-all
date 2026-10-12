@@ -5405,6 +5405,24 @@ if [ -n "$src_hourly" ] && ! printf '%s' "$src_hourly" | grep -q 'monitor_'; the
 else
     bad "56 step3: the SOURCE template family drops monitor_ fields" "src_hourly=[$src_hourly]"
 fi
+# 2026-10-12 (pve9b): an ORPHANED [template:profile__prof__src_keep_hourly] left by an
+# older local relationship (with monitor fields, referenced by nothing) is REPLACED,
+# not inherited -- every remote install with that profile died on it. Control: the
+# same template REFERENCED by a section is left as it is.
+S3o="$WORK/step3o.conf"
+printf '[template:profile__prof__src_keep_hourly]\n\tprune_schedule = 21 * * * *\n\tpattern = automated_hourly\n\tretain = -H24\n\tmonitor_warn = 90m\n\tmonitor_crit = 150m\n' > "$S3o"
+emit_src3 "$S3o" s3o 10.7.7.3 1 >/dev/null 2>&1
+o_tpl="$(awk '/^\[template:profile__prof__src_keep_hourly\]/{f=1;next} /^\[/{f=0} f' "$S3o")"
+S3k="$WORK/step3k.conf"
+printf '[template:profile__prof__src_keep_hourly]\n\tprune_schedule = 21 * * * *\n\tpattern = automated_hourly\n\tretain = -H24\n\tmonitor_warn = 90m\n\tmonitor_crit = 150m\n\n[prune:other]\n\tuse_template = profile__prof__src_keep_hourly\n' > "$S3k"
+emit_src3 "$S3k" s3k 10.7.7.4 1 >/dev/null 2>&1
+k_tpl="$(awk '/^\[template:profile__prof__src_keep_hourly\]/{f=1;next} /^\[/{f=0} f' "$S3k")"
+if [ "$(grep -c '^\[template:profile__prof__src_keep_hourly\]' "$S3o")" -eq 1 ] && ! printf '%s' "$o_tpl" | grep -q 'monitor_' \
+   && printf '%s' "$k_tpl" | grep -q 'monitor_warn = 90m'; then
+    ok "56 step3: an orphaned src_ template (monitors, used by nothing) is replaced; a referenced one is left as it is"
+else
+    bad "56 step3: orphaned src_ template" "orphan=[$o_tpl]" "kept=[$k_tpl]"
+fi
 # the COMPLETE config -- [defaults], the profile's rendered target templates, and
 # the emitted stanzas (which already carry the src_ templates + the source prune) --
 # is accepted by the REAL gen-cron.sh AND renders a delsnaps line against the remote
