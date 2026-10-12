@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62, E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1843,6 +1843,13 @@ still unstaged, so the local `--verify` passed against the old index. The code
 went into the index only at the commit. CI then said STALE / `GRAPH DRIFT`
 (recorded `b741d29a`, current `853058c4`). The fix was a second commit: refresh
 on the committed tree, then stage the status file.
+
+**Repeat, 2026-10-12 (PR 508, commit db60a57b).** A CI fix to `zfs-backup.sh`
+(set-transfer, for the 63g and ssh tests) was committed and pushed WITHOUT
+running `--refresh-status` at all. CI said STALE / `GRAPH DRIFT` (recorded
+`b0b1ea0f`, current `9eb7e3eb`); the fix was commit 79ad514f. Every commit that
+touches a file under the project-status obligation needs the gate again,
+follow-ups included.
 
 ### E63 — `cmd_seed ... || die "resumable"` was unreachable for two weeks (2026-09-23, R1)
 

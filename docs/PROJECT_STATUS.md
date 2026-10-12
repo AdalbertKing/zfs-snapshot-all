@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9eb7e3eb093067d7 -->
+<!-- status-covers-digest: 2a91b8e3af37fef4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,22 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Testy GUI właściciela 2026-10-11, paczka 3 (W17): zaszyfrowane źródło wysyłane zaszyfrowane.**
+  - `list-datasets --json` podaje `encryption` każdego datasetu. Kreator, gdy coś w
+    koszyku ma `encryption` inne niż `off`, pokazuje w „Ustawieniach dodatkowych”
+    pozycję „Wyślij zaszyfrowane” ZAZNACZONĄ domyślnie; komenda dostaje `--raw`.
+  - `add-client --raw` (także w formie jednokomendowej) zapisuje w rekordzie `RAW_SEND=1`
+    (nowe dozwolone pole w `lib-record.sh`); sekcje `[dataset:]` relacji dostają
+    `raw = yes`, a pierwsza kopia idzie z `-w` (ona decyduje, czy cel jest „raw” —
+    silniki odmawiają mieszania trybów, zmierzone 2026-07-22). `local-backup --raw` tak
+    samo, a edycja relacji lokalnej zachowuje `--raw`.
+  - gen-cron: pole `raw` w `[dataset:]` → `-w`; `raw` razem z `-w` w `flags` = odmowa.
+  - „Ustawienia silnika” pokazują tryb tylko do wglądu: zmiana to nowa kopia od zera.
+  - Testy: `cron` PRW1–PRW3, `localbackup` W17, `tui` W17 (z kontrolą: zwykłe źródło —
+    bez pozycji, odznaczona — bez `--raw`). Na labie nie ma zaszyfrowanych datasetów
+    (sprawdzone 2026-10-11 na pve9, pve9b, pve10, pve11); przejście całej relacji z
+    zaszyfrowanym źródłem na żywo jeszcze nie zrobione.
 
 - **Testy GUI właściciela 2026-10-11, paczka 2.**
   - **W1: „Zmień relację” otwierało się ~17 s.** Zmierzone na pve9b: `list-profiles
@@ -51,8 +67,8 @@
     `( m=0; for … )` stała goło po `--` zfs-job (który wykonuje `"$@"`) — błąd składni w
     cronie i w `run-replicas`, choć render przechodził. Znalezione przy teście W18 na
     pve9b. Teraz `/bin/sh -c '( … )'` jak w nawiasie nośnika wymiennego. Test `cron` PRK4.
-  - **Jeszcze nie:** W17 (wysyłka zaszyfrowana dla zaszyfrowanego źródła); W14 cichy wpis
-    o zdjęciu `replica_` i W19 kopia na zaszyfrowany nośnik — zmiany w zamrożonych silnikach.
+  - **Jeszcze nie:** W14 cichy wpis o zdjęciu `replica_` i W19 kopia na zaszyfrowany
+    nośnik — zmiany w zamrożonych silnikach (W17 zrobione w paczce 3).
 
 - **Testy GUI właściciela 2026-10-11, paczka 1 (uwagi W1–W19 w notatkach rundy, poza repozytorium).**
   - **Błąd (W7): „Harmonogram” relacji dawał się zmienić tylko raz.** Ukryty szablon
@@ -96,8 +112,7 @@
     „Prune lokalny” / „Prune zdalny”, a w relacji lokalnej także „Prune źródła”.
   - **F2 (W15):** F8 „Uruchom teraz” — okno z komendą (dokładnie linia z crona, konto,
     ostrzeżenie przy prune), `t` uruchamia; zadanie konta przez `runuser`. F7 zostaje „Sortuj”.
-  - **Jeszcze nie:** W4 (datasety w „Zmień relację” oknem koszyka), W16 (ustawienia silnika), W17 (raw dla zaszyfrowanego źródła), W18
-    (replika z własną retencją), W1 (czas otwarcia „Zmień relację”). Z W14 i W19 zostają
+  - **Później:** W1, W4, W16, W18 zrobione w paczce 2, W17 w paczce 3. Z W14 i W19 zostają
     dwie części, które wymagają zmian w zamrożonych silnikach: cichy wpis relacji o
     zdjęciu migawek `replica_` (W14) i kopia na zaszyfrowany nośnik (W19 — silnik
     zakłada pusty dataset docelowy, którego ZFS nie pozwala nadpisać pod zaszyfrowanym
