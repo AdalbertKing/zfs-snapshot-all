@@ -6463,7 +6463,7 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
 # on its own -- that is the gate's whole contract -- so this can fire on every
 # insertion without knowing which disk arrived.
 cmd_run_replicas() {
-    local config="" only="" oninsert=0 a
+    local config="" only="" oninsert=0 inner=0 a
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
@@ -6472,6 +6472,10 @@ cmd_run_replicas() {
             --on-insert) oninsert=1 ;;
             # One replica by name (owner note 18, 2026-10-08: F7 on F6 runs the SELECTED one).
             --name=*)   only="${a#*=}" ;;
+            # W11: called FROM a replica's cron line that was over cron's limit.
+            # The outer zfs-job already logs and notifies, so run only the
+            # command inside the wrapper and hand back its rc.
+            --inner)    inner=1 ;;
             -*)         die "run-replicas: unknown option '$a'" ;;
             *)          die "run-replicas: takes no positional arguments" ;;
         esac
@@ -6481,8 +6485,11 @@ cmd_run_replicas() {
     config="$CRON_CTX_FILE"
     [ -r "$config" ] || die "run-replicas: no readable config at $config"
 
+    [ "$inner" -eq 0 ] || [ -n "$only" ] || die "run-replicas: --inner needs --name"
     local block rc=0 n=0
-    block="$(gencron_as_target -c "$config")" \
+    # --replica-full: the full commands, never the short `run-replicas --inner`
+    # form a long line gets in the crontab (W11) -- that would call itself.
+    block="$(gencron_as_target -c "$config" --replica-full)" \
         || die "run-replicas: the config could not be rendered -- nothing was run"
     # The replica lines and only those: a bracketed job is a replica by
     # construction, because media_bracket is the only thing that emits one.
@@ -6511,6 +6518,13 @@ EOF
             *)              [ "$oninsert" -eq 1 ] && continue ;;
         esac
         n=$((n+1))
+        if [ "$inner" -eq 1 ]; then
+            local _c="$line"
+            case "$_c" in "#on-insert "*) _c="${_c#"#on-insert "}" ;; *) _c="$(printf '%s' "$_c" | sed -E 's/^([^ ]+ ){5}//')" ;; esac
+            case "$_c" in *" -- "*) _c="${_c#* -- }" ;; *) die "run-replicas --inner: the line of '$only' has no zfs-job wrapper -- nothing was run" ;; esac
+            bash -c "$_c"
+            return $?
+        fi
         # Strip the five schedule fields; what is left is what cron runs. An
         # on-insert replica carries the marker '#on-insert' in their place
         # (cron never fires it; this verb, called by the udev rule, does).

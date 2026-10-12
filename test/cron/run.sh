@@ -1369,6 +1369,36 @@ pv_conf "" "	media_guids = 111"
 fo=$(for_run); frc=$?
 check "PRG6 media_guids on a FIXED replica is refused (no gate reads it)" "1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0)"
 
+# W11 (owner GUI test, pve9b 2026-10-11): ten sources made a replica line of 1029
+# bytes and the install rolled back -- the source list rides in it three times. A
+# line over cron's limit now names the replica (run-replicas --name --inner), and
+# --replica-full (what run-replicas renders) still gives the full command.
+_pl=""; for _i in $(seq 1 14); do _pl="${_pl:+$_pl,}tank/backups/192.168.28.96/hdd/dataset-$_i"; done
+cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:pl]
+	source   = $_pl
+	dst      = usb/rep
+	schedule = 30 2 * * *
+	passive  = yes
+	media    = removable
+	on_insert = yes
+EOF
+fo=$(for_run); frc=$?
+_l=$(printf '%s\n' "$fo" | grep '^30 2 \* \* \* .*replica copy (pl)' | sed -E 's/^([^ ]+ ){5}//')
+check "PRL1 a replica over cron's limit renders rc=0 as 'run-replicas --name=pl --inner', under 1000 bytes, label kept" "0:1:0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c -- '-- /R/zfs-backup.sh run-replicas --name=pl --inner$'):$(printf '%s' "$_l" | grep -c snapget):$([ "$(printf '%s' "$_l" | LC_ALL=C wc -c)" -le 1000 ] && echo 1 || echo 0)"
+check "PRL2 ...its '#on-insert' copy names it the same way" "1" \
+      "$(printf '%s\n' "$fo" | grep '^#on-insert .*replica copy (pl)' | grep -c -- 'run-replicas --name=pl --inner$')"
+fo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$FOR/c.conf" --replica-full 2>&1)
+_l=$(printf '%s\n' "$fo" | grep '^30 2 \* \* \* .*replica copy (pl)' | sed -E 's/^([^ ]+ ){5}//')
+check "PRL3 control: --replica-full renders the full command (snapget, over 1000 bytes)" "1:1" \
+      "$(printf '%s' "$_l" | grep -c 'snapget.sh'):$([ "$(printf '%s' "$_l" | LC_ALL=C wc -c)" -gt 1000 ] && echo 1 || echo 0)"
+fo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L "$GEN" -c "$FOR/c.conf" --replica-full --install 2>&1); frc=$?
+check "PRL4 --replica-full with --install is refused" "1:1" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c -- '--replica-full cannot be combined with --install')"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
