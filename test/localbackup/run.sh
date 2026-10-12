@@ -1674,6 +1674,17 @@ else
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
 
+# W17: local-backup --raw -- an encrypted source copied encrypted (-w on the send line,
+# raw = yes in its section); control without --raw: no -w.
+w17o="$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --raw --name=w17 --config="$WORK/w17.conf")"
+w17c="$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=w17c --config="$WORK/w17c.conf")"
+if printf '%s\n' "$w17o" | grep 'snapsend' | grep -q ' -w ' && printf '%s' "$w17o" | grep -q 'raw          = yes' \
+   && ! printf '%s\n' "$w17c" | grep 'snapsend' | grep -q ' -w '; then
+    ok "W17: local-backup --raw -- raw = yes in the section, -w on the send line; control without it: no -w"
+else
+    bad "W17: local-backup --raw" "$(printf '%s\n' "$w17o" | grep -E 'snapsend|raw|FATAL' | head -4)" "$(printf '%s\n' "$w17c" | grep snapsend | head -1)"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

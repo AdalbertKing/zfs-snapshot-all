@@ -1870,6 +1870,42 @@ NRT="0${T}hdd/backups
 0${T}
 0${T}
 "
+# W17 (wlasciciel 2026-10-11): zrodlo ZASZYFROWANE -> w "Ustawieniach dodatkowych" pozycja
+# "Wyslij zaszyfrowane" ZAZNACZONA domyslnie, komenda z --raw; odznaczona -> bez --raw;
+# kontrola: zrodlo niezaszyfrowane -> pozycji nie ma.
+NRE="$(mktemp -d)"; cp "$P10"/*.json "$NRE/"
+"$PY" - "$NRE/list-datasets-pve9b.json" <<'PYEOF'
+import sys, json
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+for x in d["datasets"]:
+    x["encryption"] = "aes-256-gcm" if x["name"] == "hdd/test-kreator" else "off"
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+w17_ans() {   # <odpowiedz checklisty kroku 9>
+    printf '%s' "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/test-kreator
+0${T}next
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}root
+0${T}$1
+0${T}__done__
+0${T}
+0${T}
+"; }
+W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE")
+W17C=$(nr_run "$(w17_ans 'grant')"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+if has "$W17A" " --raw " && has "$W17L1" ' ~ raw ~ ' && hasE "$W17L1" 'raw ~ [^~]* ~ ON' \
+   && ! has "$W17B" " --raw " && has "$W17B" "CMD: " && ! has "$W17L3" ' ~ raw ~ ' && ! has "$W17C" " --raw "; then
+    ok "new-relation: W17 zaszyfrowane zrodlo -- 'Wyslij zaszyfrowane' zaznaczone domyslnie, --raw w komendzie; odznaczone = bez --raw; zwykle zrodlo = bez pozycji"
+else
+    bad "new-relation: W17 raw" "$W17A" "$W17L1" "$W17B" "$W17L3"
+fi
+rm -rf "$NRE"
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
