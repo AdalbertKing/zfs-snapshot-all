@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4b780f3e437f3bf2 -->
+<!-- status-covers-digest: 2db6c51152abaa25 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Replika po zerwaniu łańcucha (W18, właściciel 2026-10-12).** Replika z własnymi
+  migawkami ciągnie przyrosty od zakładki na kopii relacji; po usunięciu i ponownym
+  założeniu relacji zakładki nie ma i replika odmawia (nic nie kasuje). Zmierzone tego dnia:
+  „kotwica” (migawka relacji trzymana na dysku) historii nie ocala — kontynuacja od niej
+  cofa dysk przez wszystkie późniejsze `replica_` — więc jej nie ma. Nowe: `replica-restart
+  NAZWA [--yes]` — pełna kopia OBOK starej (`<cel>-restart`, opcje silnika z linii tej
+  repliki), stara kasowana dopiero po udanej nowej, potem `rename`; zakładka jest szukana po
+  GUID, więc następny bieg jedzie przyrostowo (na pve9b: keep = 2, zerwanie, odmowa rc 1,
+  restart, kolejny bieg — 2 migawki). GUI: „Zmień replikę” → „Zacznij od nowa na tym
+  dysku” (plan, WYKONAJ). Plan `delete-relation` ostrzega, gdy replika z własnymi
+  migawkami czyta z usuwanej kopii. Test `zfsbackup` runreplicas.
 
 - **Replika: okno „Ustawienia silnika” (właściciel 2026-10-12).** „Zmień replikę” zaczyna
   się od wyboru: kreator (źródła, nośnik, harmonogram) albo ustawienia silnika. Okno jak dla
