@@ -6497,7 +6497,10 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # sections and installs the result), aimed like the others: cron_context_resolve
 # record from its record, assert_cron_config_matches_installed, then
 # atomic_replace_and_install.
-if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 18 ]; then
+# 13/19 since 2026-10-12: replica-restart (W18) joined the READER set -- it resolves
+# the config to find the replica and renders its line for the engine options, and
+# never writes the config (it rewrites the copy on the MEDIUM). Writer count unchanged.
+if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 19 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
