@@ -1328,7 +1328,7 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
+if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' && hasE "$LOK" 'Prune źródła +trzyma' \
    && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
     ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
 else

@@ -193,11 +193,14 @@ while :; do
         # źródłem). Dla nich domyślnie: bez własnych migawek.
         def=own; covers_landing && def=passive
         [ "$PASSIVE" = yes ] && def=passive; [ "$PASSIVE" = no ] && def=own
-        lead=""; covers_landing && lead="Źródło obejmuje kopie relacji tego kolektora -- dla nich polecane\n'istniejące': migawka replica_ zniknęłaby przy następnym pobraniu relacji.\n\n"
+        # W14 (zmierzone pve9b 2026-10-11): na kopiach relacji "własne" działa (przyrost od
+        # zakładki), ale na dysku zostaje zawsze JEDNA migawka -- stan z chwili kopii.
+        # Właściciel: to też potrzebny tryb ("najmniej miejsca"), więc oba zostają, opisane wprost.
+        lead=""; covers_landing && lead="Źródło obejmuje kopie relacji tego kolektora.\n\n"
         wt --title "Replika $NAME -- 3/6 migawki" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "${lead}Jakie migawki ma przenosić replika?" "$(fit 9)" "$W" 2 \
-           passive "Istniejące -- bez własnych migawek (kopiuje to, co już jest)" \
-           own "Własne -- przy każdym biegu migawka z przedrostkiem replica_" || { step=2; continue; }
+           passive "Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca" \
+           own "Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca" || { step=2; continue; }
         [ "$WT_OUT" = passive ] && PASSIVE=yes || PASSIVE=no
         step=3 ;;
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
