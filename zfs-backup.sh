@@ -7331,8 +7331,11 @@ cmd_replica_restart() {
     local line opts
     line=$(gencron_as_target -c "$config" --replica-full 2>/dev/null | grep -F "replica copy ($name)" | grep -v '^#on-insert' | head -1)
     [ -n "$line" ] || line=$(gencron_as_target -c "$config" --replica-full 2>/dev/null | grep -F "replica copy ($name)" | head -1)
-    opts=$(printf '%s' "$line" | sed -n 's/.*snapget\.sh \([^"]*\)".*/\1/p' | head -1)
-    opts="${opts% }"
+    # The engine call is 'snapget.sh <options> "<source>" "<dst>"'; the two quoted
+    # arguments at the end are dropped. An option's quoted value (the prefix) holds
+    # no space -- names are validated to [A-Za-z0-9._-] -- so the quotes just go.
+    opts=$(printf '%s' "$line" | grep -oE 'snapget\.sh [^;]*' | head -1 | sed -E 's/^snapget\.sh //; s/ "[^"]*" "[^"]*" *$//')
+    opts="${opts//\"/}"
     [ -n "$line" ] || die "replica-restart: the replica '$name' renders no line -- nothing to restart"
     local pool="${dst%%/*}" s
     echo "replica-restart '$name' -- pelna kopia od nowa NA TYM SAMYM DYSKU ($dst):"
