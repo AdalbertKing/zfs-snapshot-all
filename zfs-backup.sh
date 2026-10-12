@@ -7382,7 +7382,8 @@ replica_restart_warning() {   # <copies, space-separated>
     local cfg cp rs n src p own
     cfg="$(default_cron_config 2>/dev/null)"
     [ -r "$cfg" ] || return 0
-    awk '/^\[replica:/{n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); src=""; own=1; next}
+    awk '/^\[replica:/{ if (n!="" && own) print n "\t" src
+                       n=$0; sub(/^\[replica:/,"",n); sub(/\]$/,"",n); src=""; own=1; next}
          /^\[/{ if (n!="" && own) print n "\t" src; n=""; next }
          n!="" && /^[ \t]*source[ \t]*=/ { s=$0; sub(/^[^=]*=[ \t]*/,"",s); src=s }
          n!="" && /^[ \t]*passive[ \t]*=[ \t]*(yes|1|true)/ { own=0 }
