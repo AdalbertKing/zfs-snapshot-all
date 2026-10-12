@@ -435,7 +435,7 @@ step_manual() {
     awk -F'\t' -v n="$base" '$1==n {f=1} END{exit !f}' "$TMPD/prof.tsv" || base="$(awk -F'\t' '$7!=1{print $1; exit}' "$TMPD/prof.tsv")"
     hn="relacja-$(rname_default)"
     clear 2>/dev/null
-    ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/margs" "$(title 6 'Ręcznie: jak długo trzymać w celu')" || return 1
+    ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/margs" "$(title 6 "Retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)")" || return 1
     local -a margs=(); mapfile -t margs <"$TMPD/margs"
     info "$(title 6 'Ręcznie')" "Zapisuję ustawienia relacji..."
     out=$("$ZB" save-profile "--from=$base" "--as=$hn" --hidden --force ${margs[@]+"${margs[@]}"} "--description=Własne ustawienia relacji (kreator)" 2>&1) \
@@ -622,7 +622,7 @@ step_extra() {
         # Retencja źródła: zawsze jedno pytanie "tyle samo co tutaj?" (uwaga 2,
         # 2026-10-09) zamiast pozycji na liście i menu szczebli z "Gotowe".
         if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
-            SRC_TITLE="$(title 9 "Jak długo trzymać u źródła ($HOST)?")"
+            SRC_TITLE="$(title 9 "Retencja: W ŹRÓDLE KOPII – $HOST")"
             source_retention_editor || continue
         else
             SRCPROF=""
