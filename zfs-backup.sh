@@ -6581,7 +6581,7 @@ cmd_set_transfer() {
                     compression:|compression:zstd|compression:gzip|compression:none) ;;
                     compression:*) die "set-transfer: --compression='$v' -- zstd, gzip, none or default" ;;
                     cipher:) ;;
-                    cipher:-*|cipher:*[!A-Za-z0-9,@.=_-]*) die "set-transfer: --cipher='$v' -- an ssh cipher name (or a comma-separated list), or default" ;;
+                    cipher:-*|cipher:*[!A-Za-z0-9,@.=_-]*) die "set-transfer: --cipher='$v' -- a cipher name for SSH -c (or a comma-separated list), or default" ;;
                     autotune:|autotune:yes|autotune:no) ;;
                     autotune:*) die "set-transfer: --autotune='$v' -- yes, no or default" ;;
                 esac
@@ -6606,6 +6606,8 @@ cmd_set_transfer() {
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "set-transfer: no config $cronfile for '$name'"
+    # Aimed like every other writer: the file this account's crontab was installed from.
+    assert_cron_config_matches_installed "$cronfile"
 
     # The relationship's own [dataset:] sections, by their pair_label.
     local -a secs=()

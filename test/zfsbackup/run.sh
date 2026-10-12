@@ -6474,7 +6474,12 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # sections and installs the result), aimed like the others: cron_context_resolve
 # record from its record, then assert_cron_config_matches_installed and
 # atomic_replace_and_install.
-if [ "$writers" -eq 12 ] && [ "$resolvers" -eq 17 ]; then
+# 13/18 since 2026-10-12: set-transfer (W16), the engine settings of ONE
+# relationship. A WRITER (it sets fields in that relationship's [dataset:]
+# sections and installs the result), aimed like the others: cron_context_resolve
+# record from its record, assert_cron_config_matches_installed, then
+# atomic_replace_and_install.
+if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 18 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
