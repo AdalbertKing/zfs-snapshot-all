@@ -1464,6 +1464,14 @@ fo=$(for_run); frc=$?
 check "PRW2 raw together with -w in flags is refused" "1:1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'say it once, keep')"
 for_conf "" ""
 check "PRW3 control: without raw no -w" "0" "$(for_run | grep 'snapget.sh' | grep -c ' -w ')"
+# Replica raw (owner 2026-10-12): a relationship pulled raw leaves its copy without the
+# key; the replica of it must send raw too.
+printf '[defaults]\n\thost_label = f\n[replica:rr]\n\tsource = tank/b\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tmedia = removable\n\traw = yes\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "PRW4 [replica:] raw = yes -> snapget -w inside the bracket, rc=0" "0:1" "$frc:$(printf '%s\n' "$fo" | grep 'replica copy (rr)' | grep -c 'snapget.sh -e -M -w ')"
+sed -i 's/^\traw = yes$/\traw = yes\n\tflags = -w/' "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "PRW5 replica raw together with -w in flags is refused" "1:1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'say it once, keep')"
 
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME

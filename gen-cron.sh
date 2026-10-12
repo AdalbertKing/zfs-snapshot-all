@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert keep
+_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert keep raw
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -3037,6 +3037,20 @@ build_replica_section() {
     # nothing there ever pruned them (measured on pve9b, 2026-10-12: keep = 2 left
     # 2 replica_ plus every automated_hourly of the gap). An explicit history wins.
     [ -n "$keep" ] && [ -z "$history" ] && [ -z "$hist_flags" ] && hist_flags="-i"
+    # AN ENCRYPTED SOURCE SENT ENCRYPTED (owner 2026-10-12, asked "wszystko
+    # zaszyfrowane" / "zrodlo zaszyfrowane, kolektor nie"): a relationship that
+    # pulls raw (W17) leaves its copy on the collector WITHOUT its key, and a plain
+    # send of that copy fails ("dataset key must be loaded") -- the replica has to
+    # send it raw too. raw = yes is the engine's -w; the wizard sets it when the
+    # source is encrypted. Raw onto an encrypted medium works (measured W19, D).
+    local rraw; rraw="$(resolve_field raw "$sec" "" "")" || rraw=""
+    case "$rraw" in
+        yes|1|true)
+            case " $flags " in *" -w "*) die "[replica:$name]: raw = yes and -w in 'flags' -- say it once, keep 'raw'." ;; esac
+            flags="${flags:+$flags }-w" ;;
+        ''|no|0|false) ;;
+        *) die "[replica:$name]: raw='$rraw' -- expected yes or no" ;;
+    esac
 
     REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}${SEP}${guids}${SEP}${on_insert}${SEP}${keep}")
 }

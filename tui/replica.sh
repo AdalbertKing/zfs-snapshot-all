@@ -35,13 +35,13 @@ for r in d.get("replicas", []):
     print("\t".join([r.get("name") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-",
                      r.get("dst") or "-", r.get("schedule") or "-", r.get("media") or "-", r.get("recursive") or "-",
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
-                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-"]))
+                     r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no"]))
 PYEOF
 SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
-GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""
+GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
-    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
+    if ! IFS=$'\t' read -r _n SRCS DST SCHED MEDIA REC CURWARN CURPFX CURX CURGUIDS ONINS KEEP RAW < <(awk -F'\t' -v n="$NAME" '$1==n' "$TMPD/rep.tsv"); then
         wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME].\n(list-replicas: $(tail -1 "$TMPD/rep.err" 2>/dev/null))" 10 "$W"
         exit 1
     fi
@@ -51,6 +51,7 @@ if [ "$EDIT" -eq 1 ]; then
     [ "${CURGUIDS:-}" = - ] && CURGUIDS=""; GUIDS="$CURGUIDS"
     [ "${ONINS:-}" = yes ] || ONINS=no
     [ "${KEEP:-}" = - ] && KEEP=""
+    [ "${RAW:-}" = yes ] || RAW=no
 fi
 # Reguła udev sprzed P5 (run-replicas bez --on-insert) uruchamiała przy włożeniu WSZYSTKIE
 # repliki; plan ją wtedy odnawia (install-media-trigger --install), jak brakującą.
@@ -187,6 +188,25 @@ while :; do
             step=1; continue
         fi
         SRCS="$(IFS=,; printf '%s' "${B_ROOT[*]}")"; REC=yes; basket_xargs
+        # ZASZYFROWANE ŹRÓDŁO = WYSYŁKA ZASZYFROWANA (właściciel 2026-10-12): kopia relacji
+        # pobrana "raw" leży na kolektorze BEZ klucza i zwykła kopia jej nie odczyta.
+        # Tylko dla NOWEJ repliki -- w istniejącej tryb zostaje (zmiana = nowa kopia od zera).
+        if [ "$EDIT" -eq 0 ]; then
+            RAW=no
+            "$PY" - "$TMPD/ds.json" "${B_ROOT[@]}" <<'PYEOF' && RAW=yes
+import sys, json
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+roots = sys.argv[2:]
+for x in d.get("datasets") or []:
+    n, e = x.get("name") or "", (x.get("encryption") or "-")
+    if e not in ("off", "-", "") and any(n == r or n.startswith(r + "/") for r in roots):
+        sys.exit(0)
+sys.exit(1)
+PYEOF
+        fi
         step=25 ;;
     25) # migawki: własne czy istniejące (uwaga 20, 2026-10-08)
         # Kopie relacji na tym kolektorze dostają migawki od swojego źródła; migawka
@@ -377,6 +397,7 @@ while :; do
         ARGV+=(${XARGS[@]+"${XARGS[@]}"})
         [ "$PASSIVE" = yes ] && ARGV+=(--passive)
         [ -n "$KEEP" ] && ARGV+=("--keep=$KEEP")
+        [ "$RAW" = yes ] && ARGV+=(--raw)
         if [ "$MEDIA" = removable ]; then
             [ -n "$GUIDS" ] && ARGV+=("--media-guid=$GUIDS")
             [ "$SCHED" != on-insert ] && ARGV+=("--on-insert=$ONINS")
@@ -399,6 +420,7 @@ while :; do
             done
             echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące, bez własnych)" || echo "stan na chwilę kopii (własne, replica_)")"
             [ "$PASSIVE" = yes ] || echo "Na dysku:   $([ -n "$KEEP" ] && echo "$KEEP ostatnich kopii, niezależnie od kolektora" || echo "odbicie kolektora")"
+            [ "$RAW" = yes ] && echo "Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza"
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             if [ "$MEDIA" = removable ]; then
                 if [ -n "$GUIDS" ]; then echo "Dyski:      $(printf '%s' "$GUIDS" | tr ',' '\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty"
