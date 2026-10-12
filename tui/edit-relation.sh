@@ -2,9 +2,8 @@
 # edit-relation.sh NAZWA -- zmiana zainstalowanej relacji w oknach whiptail ('e' na F3).
 #
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
-#   1. Dodaj do kopii dataset ze źródła          (add-source)
-#   2. Usuń z kopii dataset                      (remove-source)
-#   3. Szablon -- gotowy szablon dla celu        (edit-relation --profile)
+#   1. Datasety -- co kopiować (dodaj / usuń)    (add-source / remove-source; W4)
+#   3. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
 #   4. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
 #   5. Ręczna edycja konfigu                     (edit-config)
 #   6. Zapisz ustawienia relacji jako szablon    (save-profile, zwykły szablon na F5)
@@ -27,6 +26,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "edit-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 . "$HERE/tui/retention-lib.sh" || { echo "edit-relation: brak $HERE/tui/retention-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
+. "$HERE/tui/basket-lib.sh" || { echo "edit-relation: brak $HERE/tui/basket-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "użycie: edit-relation.sh NAZWA" >&2; exit 2; }
 WT_BACKTITLE="Zmiana relacji $NAME -- kolektor $(hostname)"
@@ -106,31 +106,11 @@ if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
     exit 1
 fi
+# Koszyk (basket-lib.sh) w "Datasety": nagłówek okien, bez "Sposób" i bez "Wyjątków".
+RECURSION=flat; BASKET_NO_MODE=1; BASKET_NO_EXC=1
+title() { printf 'Zmień relację %s -- %s' "$NAME" "$2"; }
 cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "własne ustawienia relacji (tabela szczebli)"; else echo "${CUR_P:-<nie zapisany>}"; fi
-}
-
-# Plan czasownika, okno z planem, WYKONAJ -- wspólne dla dodania i usunięcia datasetu.
-run_verb_with_plan() {   # <tytuł> <argv...> (bez --yes)
-    local title="$1"; shift
-    info "$title" "Liczę plan..."
-    if ! "$@" >"$TMPD/vplan.txt" 2>&1; then
-        tail -6 "$TMPD/vplan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
-        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
-        return 1
-    fi
-    { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/vplan.txt"; echo
-      echo "Komenda:  $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/vplan2.txt"
-    yesno_text "$TMPD/vplan2.txt" "$title -- plan" "WYKONAJ" "Wstecz" --defaultno || return 1
-    clear 2>/dev/null
-    echo "\$ $(for a in "$@"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-    "$@" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-    if [ -n "${ZFS_TUI_LOG:-}" ]; then { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :; fi
-    echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: $title (rc=$RC). Enter = dalej"
-    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
-    exit "$RC"
 }
 
 # Liczby źródła do okna: obecny szablon źródła, dopasowany po nazwie szczebla do szablonu
@@ -155,8 +135,7 @@ while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
        --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 16 "$W" 6 \
-       dodaj   "Dodaj do kopii dataset ze źródła" \
-       usun    "Usuń z kopii dataset (kopie zostają)" \
+       dane    "Datasety -- co kopiować (dodaj / usuń)…" \
        szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
        harm    "Harmonogram kopii i retencja -- tabela szczebli" \
        config  "Ręczna edycja konfigu (jak crontab -e)" \
@@ -193,38 +172,64 @@ while :; do
                 wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(printf '%s' "$out" | tail -6 | fold -s -w $((W - 6)))" 14 "$W"
             fi
             continue ;;
-        dodaj)
-            info "Dodaj dataset" "Czytam datasety z $SRCHOST..."
-            if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json >"$TMPD/ds.json" 2>"$TMPD/ds.err"; then
+        dane)
+            # DATASETY = TO SAMO OKNO CO W KREATORZE (W4, właściciel 2026-10-11): koszyk
+            # z obecnymi datasetami relacji, dowolnie wiele dodań i usunięć, potem JEDEN
+            # plan różnic i WYKONAJ. Bez "Sposób" (to inna relacja) i bez "Wyjątków":
+            # add-source bierze cały dataset, wyjątków istniejącej relacji nie zmienia.
+            info "Datasety" "Czytam datasety z $SRCHOST..."
+            if ! "$ZB" list-datasets ${LDS_ARGS[@]+"${LDS_ARGS[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" \
+               || ! basket_tree_from_json "$TMPD/ds.json"; then
                 wt --title "Lista datasetów niedostępna" --msgbox "list-datasets $SRCHOST nie odpowiedział:\n$(tail -3 "$TMPD/ds.err")" 12 "$W"; continue
             fi
-            "$PY" - "$TMPD/ds.json" "$SRCS" >"$TMPD/ds.tsv" <<'PYEOF'
-import sys, json
-have = [x for x in sys.argv[2].split(",") if x and x != "-"]
-for d in json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []:
-    n = d.get("name") or ""
-    if "/" not in n or any(n == h or n.startswith(h + "/") for h in have):
-        continue    # pula sama w sobie i to, co relacja już ma (z dziećmi) -- nie do dodania
-    print("%s\t%s" % (n, d.get("type") or ""))
-PYEOF
-            items=()
-            while IFS=$'\t' read -r n t; do [ -n "$n" ] && items+=("$n" "$(clip_label "$n  ($t)" $((W - 10)))"); done <"$TMPD/ds.tsv"
-            [ "${#items[@]}" -gt 0 ] || { wt --title "Nie ma czego dodać" --msgbox "Na $SRCHOST nie ma datasetu spoza tej relacji." 8 "$W"; continue; }
-            wt --title "Dodaj do kopii dataset ze źródła" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --menu "Dataset ze źródła $SRCHOST. Wchodzi z dziećmi; pierwsza (pełna) kopia idzie od razu,\nresztą zajmuje się cron. Pozostałe datasety relacji zostają nietknięte." \
-               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$(lhfit $((${#items[@]} / 2)) 3)" "${items[@]}" || continue
-            run_verb_with_plan "Dodaj $WT_OUT do $NAME" "$ZB" add-source "$NAME" "$WT_OUT" || continue ;;
-        usun)
-            items=()
-            for n in ${SRCS//,/ }; do [ "$n" != - ] && items+=("$n" "$n"); done
-            [ "${#items[@]}" -gt 0 ] || { wt --title "Brak datasetów" --msgbox "Relacja nie ma datasetów do usunięcia." 8 "$W"; continue; }
-            if [ "${#items[@]}" -eq 2 ]; then
-                wt --title "Ostatni dataset" --msgbox "To jedyny dataset relacji. Relację bez datasetów usuwa się w całości: Del na F3." 9 "$W"; continue
-            fi
-            wt --title "Usuń z kopii dataset" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --menu "Dataset przestaje być kopiowany: źródło odbiera prawa, tu znikają jego zadania.\nKopie, które już są na tym hoście, ZOSTAJĄ." \
-               "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || continue
-            run_verb_with_plan "Usuń $WT_OUT z $NAME" "$ZB" remove-source "$NAME" "$WT_OUT" || continue ;;
+            B_ROOT=(); B_EXCL=()
+            for n in ${SRCS//,/ }; do [ "$n" != - ] && { B_ROOT+=("$n"); B_EXCL+=(""); }; done
+            OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
+            while :; do
+                basket_step || continue 2
+                NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
+                ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
+                if [ -z "$ADDED$REMOVED" ]; then continue 2; fi
+                {
+                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
+                    echo
+                    if [ -n "$ADDED" ]; then
+                        echo "DOJDĄ (pierwsza pełna kopia idzie od razu):"
+                        printf '%s\n' "$ADDED" | sed 's/^/  /'
+                    fi
+                    if [ -n "$REMOVED" ]; then
+                        echo "ODPADNĄ (kopie na tym hoście ZOSTAJĄ):"
+                        printf '%s\n' "$REMOVED" | sed 's/^/  /'
+                    fi
+                    echo
+                    echo "Komendy:"
+                    for n in $ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
+                    for n in $REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
+                } >"$TMPD/dsplan.txt"
+                yesno_text "$TMPD/dsplan.txt" "Zmień relację $NAME -- datasety" "WYKONAJ" "Wstecz" --defaultno || continue
+                clear 2>/dev/null
+                RC=0
+                : >"$TMPD/run.log"
+                for n in $ADDED; do
+                    echo "\$ $ZB add-source $NAME $n --yes"; echo
+                    "$ZB" add-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                    [ "$RC" -eq 0 ] || break
+                done
+                if [ "$RC" -eq 0 ]; then
+                    for n in $REMOVED; do
+                        echo "\$ $ZB remove-source $NAME $n --yes"; echo
+                        "$ZB" remove-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                        [ "$RC" -eq 0 ] || break
+                    done
+                fi
+                [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+                echo
+                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: datasety relacji '$NAME' zmienione (rc=0). Enter = dalej"
+                else echo "=== ZATRZYMANE (rc=$RC) -- to, co wyżej się udało, zostało; powód w linii FATAL powyżej. Enter = dalej"; fi
+                [ -t 0 ] && read -r _
+                exit "$RC"
+            done ;;
     esac
 done
 

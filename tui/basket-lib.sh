@@ -11,6 +11,7 @@
 # Wołający daje: wt-lib.sh (wt, geom, fit, info, clip_label; H W LH), TMPD, PY,
 # title <nr> <tekst> (nagłówek okna; koszyk pyta o krok 4), HOST (nazwa w tekstach),
 # RECURSION (flat|atomic). BASKET_NO_MODE=1 chowa pozycję "Sposób" (zawsze -R).
+# BASKET_NO_EXC=1 chowa "Wyjątki" (Zmień relację: add-source bierze cały dataset).
 # Stan: T_NAME/T_KIDS/T_LABEL (drzewo), B_ROOT/B_EXCL (koszyk; pominięte po jednym w linii).
 T_NAME=(); T_KIDS=(); T_LABEL=()
 B_ROOT=(); B_EXCL=()
@@ -224,7 +225,7 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
     done
     with_kids
     menu=(add "Dodaj miejsce…")
-    [ "${#WK[@]}" -gt 0 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
+    [ "${#WK[@]}" -gt 0 ] && [ "${BASKET_NO_EXC:-0}" != 1 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
     [ "${MODE:-}" = local ] || [ "${BASKET_NO_MODE:-0}" = 1 ] || menu+=(mode "Sposób: $(mode_words) -- zmień…")
     menu+=(del "Usuń pozycję…" next "Dalej")
     wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \

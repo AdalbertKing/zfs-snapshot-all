@@ -3003,6 +3003,8 @@ case "$1" in
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
     edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo ;; esac ;;
+    list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
+    add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -3024,12 +3026,31 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
       export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
       bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
 }
+# W4 (wlasciciel 2026-10-11): "Datasety" = okno koszyka z kreatora, z obecnymi datasetami
+# relacji; dwie zmiany (dodaj hdd/iso, usun hdd/data), JEDEN plan roznic (DOJDA / ODPADNA),
+# po WYKONAJ add-source i remove-source z --yes. Bez "Sposob" i bez "Wyjatki".
+EROUT=$(er_run "0${T}dane
+0${T}add
+0${T}hdd/iso
+0${T}del
+0${T}0
+0${T}next
+0${T}
+"); ERRC=$?
+ERB="$(grep -F 'Co kopiować z' "$ER/wt.log" | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && grep -qx 'remove-source r1 hdd/data --yes' "$ER/zb.log" \
+   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'hdd/data' \
+   && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
+    ok "edit-relation: Datasety -- koszyk z obecnymi datasetami, kilka zmian, jeden plan DOJDA/ODPADNA, add-source + remove-source --yes; bez Sposob/Wyjatki"
+else
+    bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
+fi
 EROUT=$(er_run "0${T}harm
 0${T}
 "); ERRC=$?
 if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden --force --description=' "$ER/zb.log" \
    && grep -q '^edit-relation r1 --profile=relacja-r1 --source-profile= --yes' "$ER/zb.log" && ! grep -q '^delete-profile' "$ER/zb.log" \
-   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Dodaj do kopii dataset ze źródła' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Datasety -- co kopiować' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
     ok "edit-relation: menu 6 pozycji; Harmonogram kopii i retencja -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
 else
     bad "edit-relation: harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
