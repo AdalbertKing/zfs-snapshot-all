@@ -125,7 +125,7 @@ ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
 # F3/F2; to, co F5 pokazywal WIECEJ (harmonogram straznika, progi, straznik bez
 # zadania), przenioslo sie do panelu F2 (rel_detail_pairs, build_jobs).
 SCREENS = [("zadania", "F2", "Zadania"), ("relacje", "F3", "Relacje"), ("transfery", "F4", "Transfery"),
-           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Nośniki")]
+           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Replika")]
 
 
 def home_dir():
@@ -1704,7 +1704,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     Na F3 podpis F7 mowi, co klawisz ZROBI z zaznaczona relacja: na
     wstrzymanej -- Wznow (tester R4, B6: listwa mowila Pauza, a F7 wznawial)."""
     if active == "zadania":
-        return [("F7", u"Sortuj")]
+        return [("F7", u"Sortuj"), ("F8", u"Uruchom teraz")]
     if active == "relacje":
         return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
     if active == "transfery":
@@ -2116,9 +2116,15 @@ def rel_panel_pairs(row, data, now, ch):
             ret = keep_cell(" ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in js] if x))
             sch = sorted({cron_words(j.get("schedule", "")) for j in js if j.get("schedule")})
             return "%s   trzyma %s%s" % (", ".join(sch) or "?", ret, "   drabina GFS" if any(j.get("gfs") for j in js) else "")
-        pairs.append((u"Lokalny prune" if here else u"Zdalny prune", line_of(here or prunes)))
+        pairs.append((u"Prune lokalny" if here else u"Prune zdalny", line_of(here or prunes)))
         if here and there:
-            pairs.append((u"Zdalny prune", line_of(there)))
+            pairs.append((u"Prune zdalny", line_of(there)))
+    # W2 (właściciel 2026-10-11): w relacji lokalnej prune ŹRÓDŁA jest w sekcji [dataset:]
+    # (retain na zadaniach kopii) -- panel pokazywał tylko prune celu.
+    if rel.get("mode") == "local":
+        _sr = keep_cell(" ".join(x for x in [(j.get("retain") or j.get("keep") or "") for j in sends] if x))
+        if _sr.strip() and _sr.strip() != "?":
+            pairs.append((u"Prune źródła", u"trzyma %s" % _sr))
     last = row["last"]
     if last:
         w, note = transfer_word(last, now)
@@ -3152,7 +3158,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
     scr = Screen()
     top = top_bar(data, width, now, ch.ascii, len(data.errors))
     if data.failed("replicas"):
-        scr.lines = [top] + box(ch, u"Nośniki", source_error_body(ch, "replicas", data, "list-replicas"), width)
+        scr.lines = [top] + box(ch, u"Replika", source_error_body(ch, "replicas", data, "list-replicas"), width)
     else:
         reps = list((data.replicas or {}).get("replicas", []))
         # PROG 150, nie 120 -- ten sam prog co F2/F4 (R3-4, punkt 3, wlasciciel 2026-09-24).
@@ -3181,8 +3187,8 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
                      u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
         while len(body) < list_h + 2:
             body.append("")
-        lb = box(ch, u"Repliki na nośnikach wymiennych (%d)" % len(reps), body,
-                 lbw, footer=u"Enter szczegóły (e zmienia)   Ins nowa   Del usuń" if reps else u"Ins nowa replika")
+        lb = box(ch, u"Repliki backupu kolektora (%d)" % len(reps), body,
+                 lbw, footer=u"Enter szczegóły   Ins nowa   Del usuń" if reps else u"Ins nowa replika")
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -3277,7 +3283,7 @@ def render_szablony(data, cursor, width, height, now, ch, message=""):
         while len(body) < list_h + 2:
             body.append("")
         lb = box(ch, u"Szablony retencji (%d)" % len(profs), body, lbw,
-                 footer=u"Ins nowy na podstawie zaznaczonego   Enter szczegóły (e zmienia własny)   Del usuń własny")
+                 footer=u"Ins nowy na podstawie zaznaczonego   Enter szczegóły   Del usuń własny")
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -3318,6 +3324,8 @@ HELP = [
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
+    u"                 F8 uruchamia zaznaczone zadanie teraz: dokładnie jego linię",
+    u"                 z crona, jako konto z crontaba (najpierw okno z komendą).",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
     u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
@@ -3337,7 +3345,7 @@ HELP = [
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
-    u"  F6  Nośniki    repliki i 4 stany nośnika; Ins/Del/F7 uruchom, Enter+'e' zmiana",
+    u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -3625,7 +3633,7 @@ class UI(object):
         lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
-        lines += [u"t = wykonaj      e = do linii poleceń (popraw i Enter)      Esc / inny klawisz = anuluj"]
+        lines += [u"t = wykonaj      e = do linii poleceń (popraw i Enter)      Esc / inny klawisz = wróć"]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
                                    "shell": line, "on_yes": on_yes})
         self.scroll = 0
@@ -3734,6 +3742,44 @@ class UI(object):
         if k == "del":
             return self.run_template_dialog([self.zb(), "delete-profile", n, "--ask"])
 
+    def run_job_now(self):
+        """F8 na F2 (W15, wlasciciel 2026-10-11): zaznaczone zadanie TERAZ -- dokladnie
+        jego linia (linie) z crona, z tym samym kontem, logiem i powiadomieniem, wiec
+        bieg jest taki jak nocny. Najpierw okno z komenda (prune kasuje). Gdy to samo
+        zadanie wlasnie biegnie z crona, silnik odmowi blokada -- widac to w oknie wyniku."""
+        rows = self.jobrows or []
+        c = self.cursor["zadania"]
+        if not rows or not (0 <= c < len(rows)):
+            self.message = u"brak zadań -- nie ma czego uruchomić"
+            return
+        r = rows[c]
+        j = r.get("job") or {}
+        sched = (r.get("schedule") or "").split()
+        lines = [l for l in (j.get("cron_lines") or []) if sched and l.split()[:5] == sched]
+        if not lines:
+            self.message = u"ten wiersz nie ma linii w cronie (strażnik albo wiersz bez zadania) -- nie ma czego uruchomić"
+            return
+        acct = j.get("account") or "root"
+        script = "; ".join(re.sub(r"^(\S+\s+){5}", "", l) for l in lines)
+        try:
+            import pwd
+            me = pwd.getpwuid(os.geteuid()).pw_name
+        except (ImportError, KeyError, AttributeError):
+            me = os.environ.get("USER", "")
+        if self.exec_log:
+            me = "root"      # atrapa nic nie uruchamia; GUI na hostach chodzi jako root
+        if acct in ("", me):
+            argv = ["/bin/sh", "-c", script]
+        elif me == "root":
+            argv = ["runuser", "-u", acct, "--", "/bin/sh", "-c", script]
+        else:
+            self.message = u"zadanie konta %s -- uruchomić je może root albo samo konto" % acct
+            return
+        note = [u"Konto: %s" % acct]
+        if any(re.search(r"\bprune\b|delsnaps", l) for l in lines):
+            note.append(u"Uwaga: prune kasuje migawki wg retencji.")
+        self.confirm(u"Uruchomić teraz? %s" % (r.get("name") or ""), argv, note_lines=note)
+
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
         F7 uruchom zaznaczona teraz (bez pytania). Logika jest w czasownikach."""
@@ -3751,8 +3797,8 @@ class UI(object):
             self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         if k == "del":
-            # Okna whiptail (remove-replica --ask): pytaja tez, czy skasowac KOPIE
-            # na nosniku (domyslnie nie), i pokazuja plan obu czasownikow.
+            # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
+            # dyskach zostaja (W12).
             return self.run_dialog([self.zb(), "remove-replica", n, "--ask"])
 
     def action(self, k):
@@ -3788,8 +3834,8 @@ class UI(object):
             return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
         elif k == "F8":
             default = os.path.join(relations_dir(), "%s.export.json" % n)
-            self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = anuluj):", default,
-                        lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc anuluj")
+            self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = wróć):", default,
+                        lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc wróć")
 
     def export_to(self, n, path):
         """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
@@ -3801,7 +3847,7 @@ class UI(object):
             try:
                 os.makedirs(d, exist_ok=True)
             except OSError as e:
-                self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, Esc = anuluj):", path, lambda p: self.export_to(n, p),
+                self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, Esc = wróć):", path, lambda p: self.export_to(n, p),
                             u"nie da się utworzyć katalogu %s: %s" % (d, e.strerror or e))
                 return
         self.run_detached(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"], redirect=path)
@@ -4016,7 +4062,7 @@ class UI(object):
             out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
         else:
             out.append(fit(u" szablonów do wyboru: %d (Enter na polu Szablon)" % len(obj.get("profiles") or []), width - 4))
-        out.append(fit(u" strzałki = pole, pisz = wartość, Backspace, spacja = przełącz, Enter na [ PLAN ], Esc = anuluj", width - 4))
+        out.append(fit(u" strzałki = pole, pisz = wartość, Backspace, spacja = przełącz, Enter na [ PLAN ], Esc = wróć", width - 4))
         if self.message:
             out += ["", fit(u" ! " + self.message, width - 4)]
         return out
@@ -4099,7 +4145,7 @@ class UI(object):
 
     def import_ask_file(self, value, error=None):
         """Krok -1 importu: sciezka do pliku eksportu."""
-        self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = anuluj):", value, self.import_name, error)
+        self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = wróć):", value, self.import_name, error)
 
     def import_name(self, path):
         """Krok 1 importu: plik istnieje? Pole jest podpowiedziane z "/root/", a
@@ -4107,7 +4153,7 @@ class UI(object):
         czasownika i tam dostawala "cannot read" (pve10, 2026-09-23) -- zla
         sciezka zostaje w polu pliku."""
         if not os.path.isfile(path):
-            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę (Esc = anuluj)" % path)
+            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę (Esc = wróć)" % path)
             return
         self.import_preview(path)
 
@@ -4346,6 +4392,9 @@ class UI(object):
             return "stay"
         # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
         # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
+        if k == "F8" and self.screen == "zadania":
+            self.run_job_now()
+            return "stay"
         if k == "F7" and self.screen == "zadania":
             cur_row = self.jobrows[self.cursor["zadania"]] if self.jobrows and 0 <= self.cursor["zadania"] < len(self.jobrows) else None
             self.zad_sort = (self.zad_sort + 1) % 3
@@ -4554,12 +4603,12 @@ def _ui_render(self, width, height):
             lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), ""]
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
                 lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
-            lines.append(u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc anuluje.")
+            lines.append(u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc wraca.")
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
-                                             footer=obj.get("footer") or u"Enter dalej   Esc anuluj")
+                                             footer=obj.get("footer") or u"Enter dalej   Esc wróć")
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
-                                             footer=u"t wykonaj   e do linii poleceń   Esc anuluj")
+                                             footer=u"t wykonaj   e do linii poleceń   Esc wróć")
         elif kind == "form":
             lines = self.form_lines(obj, width)
             # Dlugi formularz (nowy szablon) przewija sie za kursorem.
@@ -4570,7 +4619,7 @@ def _ui_render(self, width, height):
         elif kind == "files":
             top_ = max(0, obj["cur"] - (height - 7))
             scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
-                                             footer=u"Enter = wejdź / importuj   Esc = anuluj   strzałki")
+                                             footer=u"Enter = wejdź / importuj   Esc = wróć   strzałki")
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")

@@ -106,8 +106,34 @@ with_kids() {   # -> WK[] indeksy pozycji koszyka, pod którymi dziś coś leży
     for i in "${!B_ROOT[@]}"; do [ "$(kids_count "${B_ROOT[$i]}")" -gt 0 ] && WK+=("$i"); done
     return 0
 }
-except_flow() { # wyjątki dla jednej pozycji; stan obecny wraca jako odznaczone
-    local idx items=() i n x st name ex=() all=()
+except_add_cb() {   # wołane przez list_editor: wybór jednego datasetu pod $EXC_NAME; 0 = LE_NEW, 1 = wstecz
+    # Nie oferuje tego, co już jest wyjątkiem albo leży pod wyjątkiem. Dodany przodek
+    # wyjątków zdejmuje z LE_ITEMS potomków, których już obejmuje.
+    local items=() i n x skip keep=()
+    for i in "${!T_NAME[@]}"; do
+        n="${T_NAME[$i]}"
+        case "$n" in "$EXC_NAME"/*) ;; *) continue ;; esac
+        skip=0
+        for x in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do case "$n" in "$x"|"$x"/*) skip=1 ;; esac; done
+        [ "$skip" -eq 1 ] || items+=("$n" "${T_LABEL[$i]}")
+    done
+    geom
+    if [ "${#items[@]}" -eq 0 ]; then
+        wt --title "Nie ma czego dodać" --msgbox "Wszystko pod $EXC_NAME jest już pomijane." 8 "$W"; return 1
+    fi
+    wt --title "$(title 4 "$EXC_NAME -- co pominąć?")" --ok-button "Dodaj" --cancel-button "Wstecz" --notags \
+       --menu "Wybierz dataset, który ma być pomijany (razem z tym, co pod nim)." "$H" "$W" "$LH" \
+       "${items[@]}" || return 1
+    [ -n "$WT_OUT" ] || return 1
+    LE_NEW="$WT_OUT"
+    for x in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do
+        case "$x" in "$LE_NEW"/*) ;; *) keep+=("$x") ;; esac
+    done
+    LE_ITEMS=(${keep[@]+"${keep[@]}"})
+    return 0
+}
+except_flow() { # wyjątki dla jednej pozycji (list_editor: lista pomijanych, Dodaj / Usuń / Gotowe)
+    local idx items=() i n x name ex=()
     with_kids
     if [ "${#WK[@]}" -eq 1 ]; then idx="${WK[0]}"
     else
@@ -118,34 +144,26 @@ except_flow() { # wyjątki dla jednej pozycji; stan obecny wraca jako odznaczone
            "${items[@]}" || return 0
         idx="$WT_OUT"
     fi
-    name="${B_ROOT[$idx]}"; items=()
-    for i in "${!T_NAME[@]}"; do
-        n="${T_NAME[$i]}"
-        case "$n" in "$name"/*) ;; *) continue ;; esac
-        st=ON
-        while IFS= read -r x; do [ -n "$x" ] && case "$n" in "$x"|"$x"/*) st=OFF ;; esac; done <<<"${B_EXCL[$idx]}"
-        items+=("$n" "${T_LABEL[$i]}" "$st"); all+=("$n")
-    done
-    geom
-    wt --title "$(title 4 "$name -- czego NIE kopiować?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "Zaznaczone = kopiowane. ODZNACZ spacją to, co ma być pomijane\n(razem z tym, co pod nim). Przyszłych datasetów pominąć się nie da." "$H" "$W" "$LH" \
-       "${items[@]}" || return 0
-    for n in "${all[@]}"; do
-        printf '%s\n' "$WT_OUT" | grep -qxF -- "$n" && continue
-        st=0; for i in ${ex[@]+"${ex[@]}"}; do case "$n" in "$i"/*) st=1 ;; esac; done
-        [ "$st" -eq 1 ] || ex+=("$n")       # pominięty przodek już obejmuje potomka
-    done
+    name="${B_ROOT[$idx]}"; EXC_NAME="$name"
+    LE_ITEMS=()
+    while IFS= read -r x; do [ -n "$x" ] && LE_ITEMS+=("$x"); done <<<"${B_EXCL[$idx]}"
+    list_editor "$(title 4 "$name -- czego NIE kopiować?")" \
+        "Pomijane (razem z tym, co pod nimi):" \
+        "(nic – kopiowane jest wszystko pod $name)" \
+        "Dodaj wyjątek…" "Usuń wyjątek…" except_add_cb || return 0
+    for n in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do ex+=("$n"); done
     B_EXCL[$idx]="$(printf '%s\n' ${ex[@]+"${ex[@]}"})"
     return 0
 }
-remove_flow() {
-    local items=() i n
-    for i in "${!B_ROOT[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")" OFF); done
+remove_flow() {   # jedna pozycja na przejście; po usunięciu wraca okno koszyka
+    local items=() i
+    for i in "${!B_ROOT[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")"); done
     geom
-    wt --title "$(title 4 'Usuń z koszyka')" --ok-button "Usuń zaznaczone" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "Zaznacz spacją pozycje do usunięcia." "$(fit $((${#B_ROOT[@]} + 3)))" "$W" "${#B_ROOT[@]}" \
+    wt --title "$(title 4 'Usuń z koszyka')" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
+       --menu "Którą pozycję usunąć z koszyka?" "$(fit $((${#B_ROOT[@]} + 3)))" "$W" "${#B_ROOT[@]}" \
        "${items[@]}" || return 0
-    for n in $(printf '%s\n' "$WT_OUT" | sort -rn); do basket_del "$n"; done
+    [ -n "$WT_OUT" ] && basket_del "$WT_OUT"
+    return 0
 }
 is_excluded() { # <indeks> <nazwa> -> 0, gdy nazwa jest pomijana (sama albo przez przodka)
     local x
@@ -209,7 +227,7 @@ basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
     [ "${#WK[@]}" -gt 0 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
     [ "${MODE:-}" = local ] || [ "${BASKET_NO_MODE:-0}" = 1 ] || menu+=(mode "Sposób: $(mode_words) -- zmień…")
     menu+=(del "Usuń pozycję…" next "Dalej")
-    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item next \
+    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \
        --menu "Kopiowane będzie:\n\n$txt" "$(fit $((lines + 8)))" "$W" "$((${#menu[@]} / 2))" \
        "${menu[@]}" || return 1
     ACT="$WT_OUT"

@@ -137,7 +137,7 @@ if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if hasE "$S4" 'Lokalny prune co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Zdalny prune +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
+if hasE "$S4" 'Prune lokalny co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Prune zdalny +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
    && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
     ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
 else
@@ -1328,7 +1328,7 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && has "$LOK" 'Źródło    rpool/data' && has "$LOK" 'Cel       hdd/kopie' \
+if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' && hasE "$LOK" 'Prune źródła +trzyma' \
    && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
     ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
 else
@@ -1409,6 +1409,17 @@ fi
 rm -f "$RMN"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
+# W15 (wlasciciel 2026-10-11): F8 na F2 = zaznaczone zadanie teraz -- najpierw okno z
+# komenda, 't' uruchamia DOKLADNIE linie z crona (bez pola harmonogramu); Esc nic nie robi.
+: > "$XL"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8 2>&1)"
+A2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8,t 2>&1)"
+if has "$A" 'Uruchomić teraz?' && has "$A" 'Wykona się DOKŁADNIE to:' && has "$A" 'Konto: ' \
+   && grep -q "/bin/sh -c .*zfs-job.sh" "$XL" && ! grep -Eq "sh -c '?[0-9*/,-]+ [0-9*/,-]+ " "$XL"; then
+    ok "zadania: F8 -> okno 'Uruchomić teraz?' z komenda i kontem, 't' uruchamia linie z crona bez pola harmonogramu"
+else
+    bad "zadania: F8 uruchom teraz" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|Wykona|Konto' | head -3)"
+fi
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
     : > "$XL"
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys "$1" 2>&1
@@ -1590,7 +1601,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Nośniki7Pauza8Eksport9Import10Wyjście'; then
+if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Replika7Pauza8Eksport9Import10Wyjście'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F (zapis skrocony, cyfra = F; F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
@@ -1608,7 +1619,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
             zadania) _acts="Sortuj" ;; relacje) _acts="Pauza Eksport Import" ;; transfery) _acts="usunięte" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
-        for _a in Pomoc Zadania Relacje Transfery Szablony Nośniki Wyjście $_acts; do
+        for _a in Pomoc Zadania Relacje Transfery Szablony Replika Wyjście $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
@@ -1854,14 +1865,16 @@ NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
 NRTS="0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "
@@ -1876,7 +1889,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/data
 0${T}exc
-0${T}hdd/data/docs|hdd/data/photos
+0${T}__add__
+0${T}hdd/data/mail
+0${T}__done__
 0${T}add
 0${T}hdd/test-kreator
 0${T}next
@@ -1906,11 +1921,11 @@ if has "$NRB" 'POMIJANE: mail' && has "$NRB" 'dziś pod nim: docs, photos' && ha
 else
     bad "new-relation: okno koszyka" "$NRB"
 fi
-if grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF ' ~ ON ~ ' \
-   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF 'hdd/ct'; then
-    ok "new-relation: wyjatki = lista TYLKO tego, co pod wybranym miejscem, wszystko zaznaczone (kopiowane) na starcie"
+if grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF '(nic – kopiowane jest wszystko pod hdd/data)' \
+   && ! grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/ct' && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF -- '--checklist'; then
+    ok "new-relation: wyjatki = list_editor (menu, nie checklista); okno 'Dodaj' oferuje TYLKO to, co pod wybranym miejscem; pusta lista mowi, ze kopiowane jest wszystko"
 else
-    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
+    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
 fi
 # 2. puste miejsce samo: akcji 'Wyjatki' NIE MA (przyszlego nie da sie wskazac), synchro z portem
 NROUT=$(nr_run "0${T}sync
@@ -1931,16 +1946,22 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd/ct
 0${T}exc
-0${T}hdd/ct/subvol-301-disk-0
+0${T}__add__
+0${T}hdd/ct/subvol-302-disk-0
+0${T}__done__
 0${T}exc
+0${T}__add__
+1${T}
 1${T}
 0${T}next
 ${NRT}")
-if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-302-disk-0 ~ [^~]* ~ OFF' \
-   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qE 'hdd/ct/subvol-301-disk-0 ~ [^~]* ~ ON'; then
-    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany = odznaczony); Wstecz niczego nie zmienia"
+if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
+   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~' \
+   && grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-301-disk-0 ~' \
+   && ! grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~'; then
+    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany na liscie, a okno 'Dodaj' go juz NIE oferuje); Wstecz z 'Dodaj' i z listy niczego nie zmienia"
 else
-    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")"
+    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
 fi
 # 3b. miejsce dodane PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
 NROUT=$(nr_run "0${T}backup
@@ -1963,11 +1984,17 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}hdd
 0${T}exc
-0${T}hdd/ct/subvol-301-disk-0|hdd/ct/subvol-302-disk-0|hdd/data|hdd/data/docs|hdd/data/mail|hdd/data/photos|hdd/db|hdd/db/postgres|hdd/home|hdd/home/adam|hdd/home/ewa|hdd/test-kreator|hdd/vm-disks|hdd/vm-disks/vm-201-disk-0|hdd/vm-disks/vm-202-disk-0
+0${T}__add__
+0${T}hdd/ct/subvol-301-disk-0
+0${T}__add__
+0${T}hdd/ct
+0${T}__done__
 0${T}next
 ${NRT}")
-if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ]; then
-    ok "new-relation: odznaczony dataset z dziecmi = ^nazwa\$ i ^nazwa/ (jego dzieci nie dostaja wlasnych wzorcow, choc zostaly zaznaczone)"
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ] \
+   && ! has "$NROUT" "subvol-301-disk-0" && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct ~' \
+   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'subvol-301-disk-0'; then
+    ok "new-relation: wyjatek z dziecmi = ^nazwa\$ i ^nazwa/; dodanie przodka zdejmuje z listy wczesniej dodanego potomka (jego dzieci nie dostaja wlasnych wzorcow)"
 else
     bad "new-relation: pominiety z dziecmi" "$NROUT"
 fi
@@ -2003,7 +2030,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30
 0${T}pve9b
 0${T}zfsbackup
-0${T}grant|quies|skip
+0${T}grant|quies
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2073,7 +2101,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=down,right,bs,3,down,left,space,enter)
@@ -2098,7 +2127,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d7h24-age
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter)
@@ -2127,7 +2157,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}d30h24
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=space,enter)
@@ -2147,7 +2178,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_GRID_KEYS=enter)
@@ -2169,13 +2201,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}pasywnie
 0${T}passive
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
@@ -2211,7 +2245,7 @@ NROUT=$(nr_run "0${T}local
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
-0${T}skip
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2238,7 +2272,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}192.168.28.99
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 ")
@@ -2325,7 +2360,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}root
 0${T}
 0${T}zfsbackup
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 " NR_FLAT=1)
@@ -2346,7 +2382,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}skip
+0${T}
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2377,8 +2414,8 @@ else
 fi
 
 # D. POMIJANE MIGAWKI PO PREFIKSACH (wlasciciel, uwagi 10+13): zamiast pola tekstowego
-#    (latwo zgubic przecinek -- "__migration___tmp") edytor-checklista; dodanie nowego
-#    prefiksu i odznaczenie istniejacego w JEDNYM przebiegu.
+#    (latwo zgubic przecinek -- "__migration___tmp") edytor list_editor (decyzja 2026-10-11:
+#    zadnych checklist do dodawania/usuwania); usuniecie vzdump i dodanie _tmp w JEDNYM przebiegu.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
@@ -2388,25 +2425,28 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}pve9b
 0${T}root
-0${T}masks
-0${T}__replicate_|__migration__|__add__
+0${T}
+0${T}__del__
+0${T}i:1
+0${T}__add__
 0${T}_tmp
-0${T}__replicate_|__migration__|_tmp
+0${T}__done__
 0${T}
 0${T}
 ")
-if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane migawki -- prefiksy' "$NR/wt.log" \
+if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
    && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
-    ok "new-relation: edytor prefiksow -- 'Dodaj nowy prefiks' dopisuje _tmp, odznaczenie vzdump usuwa go z --exclude-family"
+    ok "new-relation: edytor prefiksow -- 'Usun prefiks' zdejmuje vzdump, 'Dodaj prefiks' dopisuje _tmp, wynik w --exclude-family"
 else
     bad "new-relation: edytor pomijanych migawek" "$NROUT" "$(grep -F 'prefiks' "$NR/wt.log" | cut -c1-300)"
 fi
 # R2-1 (wlasciciel, 2026-09-24): okno pokazywalo PUSTE wiersze -- znacznik (schowany przez
 # --notags) byl prefiksem, a opis pusty. Test wyzej sprawdzal tylko WYNIK; ten sprawdza,
-# co WIDZI operator: kazdy prefiks ma niepusty opis w oknie edytora.
-NRPFX="$(grep -F 'Pomijane migawki -- prefiksy' "$NR/wt.log" | head -1)"
-if has "$NRPFX" ' ~ vzdump ~ vzdump ~ ON ~ ' && has "$NRPFX" ' ~ __replicate_ ~ __replicate_ ~ ON ~ '; then
-    ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow (R2-1: puste wiersze na pve11)"
+# co WIDZI operator: kazdy prefiks stoi w tekscie okna, a kursor startuje na 'Gotowe'.
+NRPFX="$(grep -F 'Pomijane prefiksy' "$NR/wt.log" | head -1)"
+if has "$NRPFX" '  vzdump' && has "$NRPFX" '  __replicate_' && has "$NRPFX" '  __migration__' && has "$NRPFX" '--default-item ~ __done__ ~' \
+   && ! has "$NRPFX" '--checklist'; then
+    ok "new-relation: edytor prefiksow POKAZUJE nazwy prefiksow w tekscie, kursor na 'Gotowe' (R2-1: puste wiersze na pve11)"
 else
     bad "new-relation: edytor prefiksow -- puste wiersze" "$(printf '%s' "$NRPFX" | cut -c1-400)"
 fi
@@ -2669,7 +2709,9 @@ rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb6
 0${T}hdd/data
 0${T}exc
-0${T}hdd/data/docs
+0${T}__add__
+0${T}hdd/data/mail
+0${T}__done__
 0${T}next
 0${T}own
 0${T}removable
@@ -2697,7 +2739,7 @@ RPOUT=$(rp_run "0${T}next
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
-   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj kolejny dysk do tej repliki'; then
+   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
     bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
@@ -2720,6 +2762,43 @@ if grep -q '^prepare-media repl /dev/disk/by-id/usb-C --base=replica --yes$' "$R
     ok "replica: 'Dodaj kolejny dysk' -- ta sama pula i baza bez pytan, ID dopisane (4242,777), obecny dysk zostaje"
 else
     bad "replica: dodaj kolejny dysk" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (9) W12 "Usuń dysk z repliki": dysk 777 wypada z listy (--media-guid=4242), dane
+#     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}removable
+0${T}__del__
+0${T}777
+0${T}repl
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
+RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb9 .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" && has "$RP9" 'Usuń dysk z repliki'; then
+    ok "replica: W12 'Usuń dysk z repliki' -- 777 wypada (--media-guid=4242), dane zostaja"
+else
+    bad "replica: usun dysk" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (10) W11 (pve9b 2026-10-11): replika sprzed zapisu ID (pusta lista) + "Dodaj dysk":
+#      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}removable
+0${T}__add__
+0${T}/dev/disk/by-id/usb-C
+0${T}
+0${T}
+0${T}0 22 * * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
+RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log" && ! has "$RP10" 'Usuń dysk z repliki'; then
+    ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
+else
+    bad "replica: dodaj dysk bez ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 
@@ -2879,7 +2958,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}pve9b
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?
@@ -2898,7 +2978,8 @@ NROUT=$(nr_run "0${T}backup
 0${T}__manual__
 0${T}inna
 0${T}root
-0${T}grant|skip
+0${T}grant
+0${T}__done__
 0${T}
 0${T}
 "); NRRC=$?

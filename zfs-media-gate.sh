@@ -459,20 +459,32 @@ attach)
     # `zpool import` sees two candidates. Picking one would mean writing this
     # replica onto whichever disk ZFS happened to list first -- and the operator
     # would have no way to know which.
-    cand="$(zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '$1=="pool:" && $2==p {n++} END{print n+0}')"
-    if [ "$cand" -gt 1 ]; then
-        say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
-        emit ambiguous; exit 2
-    fi
-    # A FOREIGN DISK IS NEVER IMPORTED (--guids). The scan gives the GUID of the disk
-    # in the slot without importing it; one that is not this replica's is left alone
-    # and the run fails loudly, so the operator learns the wrong disk is in the slot.
-    if [ -n "$ALLOWED_GUIDS" ] && [ "$cand" -eq 1 ] && ! imported; then
-        _slot_guid="$(scan_guid)"
-        if [ -n "$_slot_guid" ] && ! guid_ok "$_slot_guid"; then
-            say "REFUSING: the disk in the slot carries a pool named '$POOL' (guid $_slot_guid), but it is not one of the disks of '$LABEL' (guids $ALLOWED_GUIDS). Not importing it -- a disk from elsewhere with the same pool name must never receive this copy. Add it to the replica in the GUI (F6, 'e') if it IS yours."
+    # BY ID WHEN THE REPLICA KNOWS ITS DISKS (W11b, pve9b 2026-10-11: a newly
+    # formatted disk and the old one, both pool 'repl', in at once). With --guids
+    # the candidates are narrowed to this replica's disks: exactly one of them is
+    # imported BY ITS ID whatever else shares the name; none is a foreign disk
+    # (refused, never imported); two of its own disks at once is still ambiguous.
+    # Without --guids a shared name stays a refusal, as before.
+    IMPORT_ID=""
+    _cands="$(zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} 2>/dev/null | awk -v p="$POOL" '
+        $1=="pool:" { inpool = ($2==p) }
+        inpool && $1=="id:" { print $2; inpool = 0 }')"
+    cand=$(printf '%s\n' "$_cands" | grep -c '[0-9]')
+    if [ -n "$ALLOWED_GUIDS" ] && [ "$cand" -ge 1 ] && ! imported; then
+        _ours=""; _n_ours=0
+        for _g in $_cands; do guid_ok "$_g" && { _ours="$_g"; _n_ours=$((_n_ours + 1)); }; done
+        if [ "$_n_ours" -eq 0 ]; then
+            say "REFUSING: the disk in the slot carries a pool named '$POOL' (guid $(printf '%s' "$_cands" | tr '\n' ' ')), but it is not one of the disks of '$LABEL' (guids $ALLOWED_GUIDS). Not importing it -- a disk from elsewhere with the same pool name must never receive this copy. Add it to the replica in the GUI (F6, 'e') if it IS yours."
             emit foreign_medium; exit 2
         fi
+        if [ "$_n_ours" -gt 1 ]; then
+            say "REFUSING: $_n_ours disks of '$LABEL' are in at once (pool '$POOL'). Unplug one and re-run -- this will not choose for you."
+            emit ambiguous; exit 2
+        fi
+        IMPORT_ID="$_ours"
+    elif [ "$cand" -gt 1 ]; then
+        say "REFUSING: $cand pools named '$POOL' are available to import. Rotated media often share a name, so this is two disks in at once. Unplug one, or import the one you mean by its id and re-run -- this will not choose for you."
+        emit ambiguous; exit 2
     fi
 
     # WITH SEVERAL SOURCES EVERY ONE OF THEM HAS TO BE QUIET AND PROVED.
@@ -515,7 +527,7 @@ EOF
                 say "'$SOURCE' is quiet, but there is no record of what '$POOL' last received, so this run cannot tell a current medium from a rotated stale one. Importing to let the engine decide."
             else
                 _rec_guid="$(sed -n 's/^guid=//p' "$SYNCED" 2>/dev/null | head -1)"
-                _now_guid="$(scan_guid)"
+                _now_guid="${IMPORT_ID:-$(scan_guid)}"
                 if [ -z "$_rec_guid" ]; then
                     say "the record of what '$POOL' last received is unreadable, so it proves nothing. Importing to let the engine decide."
                 elif [ -z "$_now_guid" ]; then
@@ -572,7 +584,7 @@ EOF
     fi
 
 
-    if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "$POOL" 2>/dev/null; then
+    if ! zpool import ${IMPORT_DIRS[@]+"${IMPORT_DIRS[@]}"} "${IMPORT_ID:-$POOL}" 2>/dev/null; then
         last="never"; [ -r "$SEEN" ] && last="$(cat "$SEEN" 2>/dev/null)"
         say "SKIPPED: medium '$POOL' for '$LABEL' is not here (last seen: $last). Nothing was run and nothing is wrong -- plug it in and the next run catches up."
         emit skipped_absent; exit 1

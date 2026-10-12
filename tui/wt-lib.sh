@@ -63,6 +63,58 @@ yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijani
         wt --title "$t  [strzałki = przewijaj, Tab = przyciski]" --yes-button "$y" --no-button "$n" $extra --scrolltext --yesno "$(cat "$f")" "$H" "$W"
     fi
 }
+# EDYTOR LISTY -- jeden wzór okna dla każdego "dodaj / usuń pozycje" (decyzja właściciela
+# 2026-10-11, W3/W13/W10). Checklisty są do tego zakazane: Enter potwierdza okno bez
+# przełączania (przełącza tylko spacja), a rodzic daje się odznaczyć przy zaznaczonych dzieciach.
+# Wołający wypełnia globalną tablicę LE_ITEMS przed wywołaniem i czyta ją po nim.
+# Wywołanie zwrotne <addcb>: rc 0 + LE_NEW = nowa pozycja, rc 1 = wstecz (nic nie dodano).
+# rc funkcji: 0 = Gotowe, 1 = Wstecz (LE_ITEMS wraca do stanu z wejścia).
+list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykieta usuń> <addcb>
+    local ttl="$1" intro="$2" empty="$3" addl="$4" dell="$5" addcb="$6"
+    local saved=() it text menu=() n i il choice keep=() dup
+    for it in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do saved+=("$it"); done
+    while :; do
+        geom
+        n=${#LE_ITEMS[@]}
+        il=$(( ${#intro} / (W - 8) + 3 ))
+        if [ "$n" -eq 0 ]; then
+            text="$intro\n\n$empty"; il=$((il + 1))
+        else
+            text="$intro\n"
+            for it in "${LE_ITEMS[@]}"; do text+="\n  $(clip_label "$it" $((W - 10)))"; done
+            il=$((il + n))
+        fi
+        menu=(__add__ "+ $(clip_label "$addl" $((W - 14)))")
+        [ "$n" -gt 0 ] && menu+=(__del__ "− $(clip_label "$dell" $((W - 14)))")
+        menu+=(__done__ "Gotowe")
+        wt --title "$ttl" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+           --menu "$text" "$(fit $((il + ${#menu[@]} / 2 + 1)))" "$W" "$(lhfit $((${#menu[@]} / 2)) "$il")" \
+           "${menu[@]}" || { LE_ITEMS=(${saved[@]+"${saved[@]}"}); return 1; }
+        choice="$WT_OUT"
+        case "$choice" in
+            __done__) return 0 ;;
+            __add__)
+                LE_NEW=""
+                "$addcb" || continue
+                dup=0
+                for it in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do [ "$it" = "$LE_NEW" ] && dup=1; done
+                [ "$dup" -eq 0 ] && LE_ITEMS+=("$LE_NEW")
+                ;;
+            __del__)
+                geom
+                menu=()
+                for i in "${!LE_ITEMS[@]}"; do menu+=("i:$i" "$(clip_label "${LE_ITEMS[i]}" $((W - 14)))"); done
+                wt --title "$ttl" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
+                   --menu "Który usunąć?" "$(fit $((${#menu[@]} / 2 + 3)))" "$W" "$(lhfit $((${#menu[@]} / 2)) 3)" \
+                   "${menu[@]}" || continue
+                choice="${WT_OUT#i:}"
+                keep=()
+                for i in "${!LE_ITEMS[@]}"; do [ "$i" = "$choice" ] || keep+=("${LE_ITEMS[i]}"); done
+                LE_ITEMS=(${keep[@]+"${keep[@]}"})
+                ;;
+        esac
+    done
+}
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }

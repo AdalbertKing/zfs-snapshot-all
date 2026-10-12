@@ -410,7 +410,7 @@ front end never edits the config file:
                                     fire on any insertion.
   zfs-backup.sh prepare-media POOL DEVICE [--base=replica] [--yes]  |  prepare-media --list
                                     Prepare a disk as a replica medium: zpool create
-                                    -m none -o failmode=continue, zfs create POOL/BASE,
+                                    -m none -o failmode=continue -O compression=zstd, zfs create POOL/BASE,
                                     zpool export. ERASES the disk. Refused only when it
                                     is in use (in an imported pool, or mounted). A
                                     second disk of the same replica takes the same
@@ -6463,7 +6463,7 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
 # on its own -- that is the gate's whole contract -- so this can fire on every
 # insertion without knowing which disk arrived.
 cmd_run_replicas() {
-    local config="" only="" oninsert=0 a
+    local config="" only="" oninsert=0 inner=0 a
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
@@ -6472,6 +6472,10 @@ cmd_run_replicas() {
             --on-insert) oninsert=1 ;;
             # One replica by name (owner note 18, 2026-10-08: F7 on F6 runs the SELECTED one).
             --name=*)   only="${a#*=}" ;;
+            # W11: called FROM a replica's cron line that was over cron's limit.
+            # The outer zfs-job already logs and notifies, so run only the
+            # command inside the wrapper and hand back its rc.
+            --inner)    inner=1 ;;
             -*)         die "run-replicas: unknown option '$a'" ;;
             *)          die "run-replicas: takes no positional arguments" ;;
         esac
@@ -6481,8 +6485,11 @@ cmd_run_replicas() {
     config="$CRON_CTX_FILE"
     [ -r "$config" ] || die "run-replicas: no readable config at $config"
 
+    [ "$inner" -eq 0 ] || [ -n "$only" ] || die "run-replicas: --inner needs --name"
     local block rc=0 n=0
-    block="$(gencron_as_target -c "$config")" \
+    # --replica-full: the full commands, never the short `run-replicas --inner`
+    # form a long line gets in the crontab (W11) -- that would call itself.
+    block="$(gencron_as_target -c "$config" --replica-full)" \
         || die "run-replicas: the config could not be rendered -- nothing was run"
     # The replica lines and only those: a bracketed job is a replica by
     # construction, because media_bracket is the only thing that emits one.
@@ -6511,6 +6518,13 @@ EOF
             *)              [ "$oninsert" -eq 1 ] && continue ;;
         esac
         n=$((n+1))
+        if [ "$inner" -eq 1 ]; then
+            local _c="$line"
+            case "$_c" in "#on-insert "*) _c="${_c#"#on-insert "}" ;; *) _c="$(printf '%s' "$_c" | sed -E 's/^([^ ]+ ){5}//')" ;; esac
+            case "$_c" in *" -- "*) _c="${_c#* -- }" ;; *) die "run-replicas --inner: the line of '$only' has no zfs-job wrapper -- nothing was run" ;; esac
+            bash -c "$_c"
+            return $?
+        fi
         # Strip the five schedule fields; what is left is what cron runs. An
         # on-insert replica carries the marker '#on-insert' in their place
         # (cron never fires it; this verb, called by the udev rule, does).
@@ -6536,7 +6550,7 @@ EOF
 # Owner note 15 (2026-10-08): "Prepare the medium once, by hand" was the one step
 # of a replica the package could not do, from batch or from the GUI. This is it:
 #
-#   zpool create -m none -o failmode=continue POOL DEVICE
+#   zpool create -m none -o failmode=continue -O compression=zstd POOL DEVICE
 #   zfs create POOL/BASE           -- the dataset that tells the gate it is THIS disk
 #   zpool export POOL              -- the disk can go to the safe
 #
@@ -6610,7 +6624,7 @@ cmd_prepare_media() {
     echo "PLAN (prepare-media):"
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
-    echo "  1. zpool create -f -m none -o failmode=continue $pool $dev   -- EVERYTHING on the disk is erased"
+    echo "  1. zpool create -f -m none -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
     echo "  2. zfs create $pool/$base   -- marks it as this replica's medium"
     echo "  3. zpool export $pool       -- the disk can be unplugged"
     if zpool import 2>/dev/null | awk -v p="$pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; then
@@ -6620,13 +6634,16 @@ cmd_prepare_media() {
         echo ">>> plan only. Re-run with --yes to do it."
         return 0
     fi
-    zpool create -f -m none -o failmode=continue "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
+    # compression=zstd (W19, owner 2026-10-11): what the replica receives with zfs send -c
+    # keeps its own compression; this is for everything written there otherwise, and so
+    # the pool says plainly what it is.
+    zpool create -f -m none -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
     zfs create "$pool/$base" || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
     # P5: the pool GUID is what the replica will know this disk by (add-replica
     # --media-guid). Readable only while imported, so it is printed here.
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
     zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it by hand before unplugging"
-    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, exported. Use it as --dst=$pool/$base."
+    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
 # OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the
@@ -7150,8 +7167,9 @@ cmd_remove_replica() {
         esac
     done
     [ -n "$name" ] || die "uzycie: zfs-backup.sh remove-replica NAZWA [--install]"
-    # --ask: the GUI's windows (Del on F6) -- the same two verbs, remove-replica
-    # and, only if asked, purge-replica-copy, shown as a plan before anything runs.
+    # --ask: the GUI's windows (Del on F6) -- remove-replica, shown as a plan before
+    # anything runs. The data on the disks stays (owner, W12 2026-10-11); the
+    # purge-replica-copy verb is for the command line only.
     if [ "$ask" -eq 1 ]; then
         local dlg="$SCRIPT_DIR/tui/replica-delete.sh"
         [ -f "$dlg" ] || die "remove-replica: brak $dlg -- checkout jest niekompletny"
@@ -7672,6 +7690,7 @@ cmd_local_backup() {
             local _strip; _strip=$(mktemp) || die "mktemp failed"
             strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
             rm -f "$_strip"
+            drop_own_relation_templates "$cand" "$lb_name"
         fi
     else
         assert_config_not_claimed_if_missing "$config"
@@ -7988,6 +8007,12 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             fi
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
+    # An edit (--replace) sweeps the templates it left unreferenced, as the
+    # remote edit does -- W7: switching a local relationship from its own
+    # template to another left [template:profile__relacja-*] behind in the config.
+    if [ "$lb_replace" -eq 1 ] && [ -f "$config" ]; then
+        remove_templates_orphaned_by "$cand" "$(config_referenced_templates "$config")"
+    fi
 
     # Rendered through gencron_as_target, not `bash $GENCRON`, so the preview is
     # produced by the SAME identity and the same checkout that the install will
@@ -10686,6 +10711,7 @@ cmd_activate_client() {
         PROFILE_LOADED=""
         client_section_plan "$workfile" "$name" "$is_new_relationship"
     fi
+    [ "$regen" -eq 1 ] && drop_own_relation_templates "$workfile" "$name"
     ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
 
     # First activation generates the sections from the profile. A re-activation
@@ -12002,6 +12028,24 @@ remove_templates_orphaned_by() {   # <file> <templates referenced before, newlin
         remove_template_section "$file" "$t"
         log "removed [template:$t] -- the edit left nothing referencing it"
     done <<< "$before"
+}
+
+# W7 (owner's GUI test, 2026-10-11): a relationship's OWN template -- the hidden
+# relacja-<NAME> written by the GUI's "Harmonogram kopii i retencja", and its
+# source companions relacja-<NAME>-src-<numbers> -- keeps ONE name across edits
+# while its content changes. ensure_cron_config compares a present name against
+# the profile and refuses a difference (the create-time collision guard), so the
+# second edit of the same relationship was always refused: measured on pve9b
+# (local) and pve10 (remote). Those templates belong to this relationship alone,
+# by construction of their name, so an edit replaces them instead: drop them
+# from the working copy and let ensure_cron_config append the current content.
+drop_own_relation_templates() {   # <file> <relationship name>
+    local file="$1" rel="$2" t
+    for t in $(sed -n 's/^\[template:\(profile__relacja-[^]]*\)\]$/\1/p' "$file"); do
+        case "$t" in
+            "profile__relacja-${rel}__"*|"profile__relacja-${rel}-src-"*) remove_template_section "$file" "$t" ;;
+        esac
+    done
 }
 
 remove_template_section() {   # <file> <template name>

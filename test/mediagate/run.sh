@@ -59,9 +59,15 @@ case "$1" in
   import)
       # The real scan prints `id: <guid>` under each pool, which is how a
       # medium is identified WITHOUT importing it.
-      [ -z "${2:-}" ] && { for p in $IMPORTABLE; do echo "  pool: $p"; echo "    id: ${POOL_GUID:-11111111}"; done; exit 0; }
+      # An IMPORTABLE entry may be NAME:GUID -- two disks of one name, told apart by
+      # id (W11b). An import names either the pool or its id; the log keeps the
+      # NAME, and IMPORT_ARG_LOG what the gate actually asked for.
+      [ -z "${2:-}" ] && { for p in $IMPORTABLE; do g="${p#*:}"; [ "$g" = "$p" ] && g="${POOL_GUID:-11111111}"; echo "  pool: ${p%%:*}"; echo "    id: $g"; done; exit 0; }
       for p in $IMPORTABLE; do
-          if [ "$p" = "$2" ]; then echo "$2" >> "$IMPORTED_LOG"; exit 0; fi
+          g="${p#*:}"; [ "$g" = "$p" ] && g="${POOL_GUID:-11111111}"
+          if [ "${p%%:*}" = "$2" ] || [ "$g" = "$2" ]; then
+              echo "${p%%:*}" >> "$IMPORTED_LOG"; [ -n "${IMPORT_ARG_LOG:-}" ] && echo "$2" >> "$IMPORT_ARG_LOG"; exit 0
+          fi
       done
       exit 1 ;;
   export)
@@ -837,6 +843,30 @@ if [ "$rc_f" = 2 ] && [ -z "$imp_f" ] && has "not one of the disks" "$out_f" \
 else
     bad "L8r: --guids" "foreign rc=$rc_f imp=[$imp_f]; allowed rc=$rc_a imp=[$imp_a]; imported-foreign rc=$rc_i exp=[$exp_i]; control rc=$rc_c imp=[$imp_c]" "$out_f $out_i"
 fi
+# L8s. TWO DISKS OF ONE NAME, ONE OF THEM THIS REPLICA'S (W11b, pve9b 2026-10-11:
+#      the old usb1 disk and a newly formatted one, both pool 'repl'). With --guids
+#      the gate imports ITS disk by id; two of its own at once is still refused;
+#      control: without --guids the shared name is refused as before.
+export IMPORT_ARG_LOG="$TMPD/import-args"
+POOLS="hdd"; IMPORTABLE="rotpool:99999999 rotpool:22222222"; DATASETS="hdd rotpool/replica"; : > "$IMPORTED_LOG"; : > "$IMPORT_ARG_LOG"
+POOL_GUID=22222222 g attach rotpool rep --dataset rotpool/replica --guids 22222222 >/dev/null 2>&1; rc_o=$?
+arg_o="$(cat "$IMPORT_ARG_LOG")"
+POOLS="hdd rotpool"; IMPORTABLE=""; POOL_GUID=22222222 g detach rotpool rep >/dev/null 2>&1
+rm -f "$STATE/rep.imported-by-us" "$SYNCFILE"
+POOLS="hdd"; IMPORTABLE="rotpool:11111111 rotpool:22222222"; : > "$IMPORT_ARG_LOG"
+out_2="$(g attach rotpool rep --dataset rotpool/replica --guids 11111111,22222222)"; rc_2=$?
+arg_2="$(cat "$IMPORT_ARG_LOG")"
+IMPORTABLE="rotpool:99999999 rotpool:22222222"; : > "$IMPORT_ARG_LOG"
+out_c="$(g attach rotpool rep --dataset rotpool/replica)"; rc_c=$?
+arg_c="$(cat "$IMPORT_ARG_LOG")"
+if [ "$rc_o" = 0 ] && [ "$arg_o" = 22222222 ] && [ "$rc_2" = 2 ] && [ -z "$arg_2" ] && has "disks of 'rep' are in at once" "$out_2" \
+   && [ "$rc_c" = 2 ] && [ -z "$arg_c" ] && has "will not choose for you" "$out_c"; then
+    ok "L8s: two disks named rotpool -- with --guids the replica's own one is imported BY ID; two of its own refused; control: no --guids refuses the shared name"
+else
+    bad "L8s: by id" "own rc=$rc_o arg=[$arg_o]; two own rc=$rc_2 arg=[$arg_2]; control rc=$rc_c arg=[$arg_c]" "$out_2 / $out_c"
+fi
+unset IMPORT_ARG_LOG
+IMPORTABLE=""
 DATASETS="hdd"
 
 # ---------------------------------------------------------------------------

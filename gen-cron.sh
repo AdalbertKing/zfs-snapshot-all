@@ -3915,6 +3915,21 @@ emit_replicas() {
                 cmd="( $cmd; exit \$m )"
             fi
         fi
+        # OVER CRON'S LIMIT: THE LINE NAMES THE REPLICA, NOT ITS COMMAND (W11).
+        # The source list rides in a replica's line three times (attach, the
+        # loop, detach), so its length grows with the sources: ten of them on
+        # pve9b, 2026-10-11, made 1029 bytes and the install rolled back. Such a
+        # line calls `zfs-backup.sh run-replicas --name=NAME --inner`, which
+        # renders this same config with --replica-full and runs the full command
+        # -- one source of truth, no limit, the label (and so the log, F2, F6)
+        # unchanged. A line that fits stays byte-identical to what hosts carry.
+        if [ "$REPLICA_FULL" -eq 0 ]; then
+            local _full; _full="$(job_cron_line "* * * * *" "$cmd" "$notify")"
+            _full="${_full#"* * * * * "}"
+            if [ "$(printf '%s' "$_full" | LC_ALL=C wc -c)" -gt 1000 ]; then
+                cmd="$REPO_DIR/zfs-backup.sh run-replicas --name=$name --inner"
+            fi
+        fi
         if [ "$schedule" = on-insert ]; then
             # A comment: cron skips it, run-replicas strips the marker and runs it.
             JOB_LINES+=("$(job_cron_line "#on-insert" "$cmd" "$notify")")
@@ -4456,6 +4471,7 @@ CONFIG=""
 INSTALL=0
 UNINSTALL=0
 MIGRATE=0
+REPLICA_FULL=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -4464,6 +4480,10 @@ while [ $# -gt 0 ]; do
         --uninstall) UNINSTALL=1; shift ;;
         --migrate-recursion) MIGRATE=1; shift ;;
         --reconcile) RECONCILE=1; shift ;;
+        # The full replica commands even when a line is over cron's limit --
+        # what `zfs-backup.sh run-replicas` renders to find the command it runs
+        # (W11, see emit_replicas). Never with --install: refused below.
+        --replica-full) REPLICA_FULL=1; shift ;;
         # Undocumented, and deliberately so: it renders a PRE-v4.27 config as
         # the baseline --migrate-recursion compares against. Refused together
         # with --install below, so it can only ever reach stdout.
@@ -4494,6 +4514,8 @@ done
 
 [ "$MIGRATE_LEGACY" -eq 1 ] && [ "$INSTALL" -eq 1 ] \
     && die "--internal-legacy-render cannot be combined with --install: it renders a config shape this version refuses, and must never reach a crontab"
+[ "$REPLICA_FULL" -eq 1 ] && [ "$INSTALL" -eq 1 ] \
+    && die "--replica-full cannot be combined with --install: its replica lines may be over cron's 1000-byte limit -- it is what run-replicas reads, never a crontab"
 [ "$MIGRATE" -eq 1 ] && [ "$INSTALL" -eq 1 ] \
     && die "--migrate-recursion migrates the CONFIG only and never installs -- run --install separately if you actually want to reinstall"
 

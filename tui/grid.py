@@ -357,6 +357,8 @@ class Grid(object):
         else:
             add(u"")
         title = u" %s " % (self.spec.get("title") or u"Szczeble")
+        if len(title) > w - 4:      # W6: dlugi tytul wychodzil poza ramke -- ucinamy z '…'
+            title = title[:max(1, w - 6)] + u"… "
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + (l[:w - 2]).ljust(w - 2) + u"│" for l in lines] + [bot]

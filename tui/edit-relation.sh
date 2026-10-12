@@ -99,7 +99,8 @@ load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie o
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
 SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
-if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; fi
+SRCNAME="$PEER"
+if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
 if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
@@ -146,14 +147,17 @@ src_prefill() {
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
 
+# WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
+# menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
+while :; do
 ACTION=""
 while :; do
     geom
-    wt --title "Zmień relację $NAME" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item harm \
+    wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
        --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 16 "$W" 6 \
        dodaj   "Dodaj do kopii dataset ze źródła" \
        usun    "Usuń z kopii dataset (kopie zostają)" \
-       szablon "Szablon -- gotowy szablon dla celu, potem retencja źródła" \
+       szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
        harm    "Harmonogram kopii i retencja -- tabela szczebli" \
        config  "Ręczna edycja konfigu (jak crontab -e)" \
        zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
@@ -236,9 +240,9 @@ while :; do
             items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
         def="$PROFILE"; awk -F'\t' -v n="$def" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv" || def="${items[0]}"
-        wt --title "Zmień relację $NAME -- szablon celu" --ok-button "Dalej" --cancel-button "Anuluj" --notags --default-item "$def" \
+        wt --title "Zmień relację $NAME -- użyj szablonu" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Obecny szablon: $(cur_words)\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel)." \
-           "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+           "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || continue 2
         PROFILE="$WT_OUT"; step=2; continue
     fi
     if [ "$step" -eq 1 ] && [ "$ACTION" = harm ]; then
@@ -246,8 +250,8 @@ while :; do
         # startuje z obecnego szablonu relacji; wynik = ukryty szablon relacja-<NAZWA>.
         base="${CUR_P:-default}"
         clear 2>/dev/null
-        ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "Harmonogram kopii i retencja -- $NAME" \
-            || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+        ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
+            || continue 2
         mapfile -t RARGS <"$TMPD/rargs"
         if [ "${#RARGS[@]}" -eq 0 ] && [ "$base" = "$HNAME" ]; then
             PROFILE="$HNAME"          # nic nie zmienione w tabeli -- szablon relacji zostaje
@@ -271,7 +275,7 @@ while :; do
     if [ "$step" -eq 2 ]; then
         # RETENCJA ŹRÓDŁA: to samo okno-tabela co w kreatorze (uwaga 10).
         src_prefill
-        SRC_TITLE="Zmień relację $NAME -- jak długo trzymać u źródła ($HOST)?"
+        SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
         source_retention_editor || { step=1; continue; }
     fi
     ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF")
@@ -349,4 +353,5 @@ PYEOF
     else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
     [ -t 0 ] && read -r _
     exit "$RC"
+done
 done
