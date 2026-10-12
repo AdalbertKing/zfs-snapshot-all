@@ -131,7 +131,7 @@ src_prefill() {
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
 
-# USTAWIENIA SILNIKA (W16, właściciel 2026-10-12): historia, kompresja, szyfr SSH i autodobór
+# USTAWIENIA SILNIKA (W16, właściciel 2026-10-11): historia, kompresja, szyfr SSH i autodobór
 # łącza jednej relacji. Obecne wartości z show-config; zmiany czekają w zmiennych p_*,
 # dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
 eng_hist_words() {
