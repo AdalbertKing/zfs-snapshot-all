@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8826b9d922001352 -->
+<!-- status-covers-digest: e1da2c65d43dd53b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Replika zaszyfrowanego źródła wysyła zaszyfrowane (2026-10-12, pytanie właściciela
+  o trzy układy szyfrowania).** Relacja pobrana „raw” (W17) zostawia kopię na kolektorze
+  BEZ klucza; zwykła kopia repliki jej nie odczyta („dataset key must be loaded”).
+  `[replica:] raw = yes` → `-w` (z `-w` w `flags` = odmowa), `add-replica --raw`,
+  `list-replicas` pole `raw`. Kreator NOWEJ repliki ustawia `--raw`, gdy pod źródłem jest
+  coś zaszyfrowanego, i mówi o tym w planie; w istniejącej replice tryb zostaje (zmiana =
+  nowa kopia od zera). Testy `cron` PRW4–PRW5, `tui` replika (1e).
 
 - **Testy GUI właściciela 2026-10-11, paczka 4: silniki (odmrożone przez właściciela 2026-10-12).**
   snapget v2.74, snapsend v2.76, `lib-zfs-snap.sh`; wpis w `docs/project/ENGINE-FREEZE.md`,

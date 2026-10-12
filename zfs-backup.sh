@@ -382,6 +382,7 @@ front end never edits the config file:
                                     [--on-insert=yes|no] a scheduled replica also runs
                                     right after its disk is plugged in (the udev rule of
                                     install-media-trigger; default no)
+                                    [--raw] an encrypted source is sent encrypted (-w)
                                     [--keep=N] the medium keeps its OWN N newest
                                     snapshots of the replica's family instead of
                                     mirroring the collector (no -M); own family only
@@ -6427,7 +6428,7 @@ floor_rank() {   # <keep value> -> comparable integer on stdout
 # other people's sections and comments somebody wrote by hand.
 replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> <recursive 0|1> <media> <notify> <history> [warn] [crit] [passive 0|1]
     local file="$1" name="$2" source="$3" dst="$4" sched="$5" pref="$6" rec="$7" media="$8" notify="$9"
-    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}" xflags="${14:-}" guids="${15:-}" oninsert="${16:-}" keep="${17:-}"
+    local history="${10:-}" mwarn="${11:-}" mcrit="${12:-}" passive="${13:-0}" xflags="${14:-}" guids="${15:-}" oninsert="${16:-}" keep="${17:-}" rraw="${18:-0}"
     local tmp; tmp=$(mktemp) || return 1
     awk -v want="[replica:$name]" '
         $0 == want { skip=1; next }
@@ -6455,6 +6456,7 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
         [ -n "$guids" ] && printf '\tmedia_guids = %s\n' "$guids"
         [ "$sched" != on-insert ] && [ "$oninsert" = yes ] && printf '\ton_insert = yes\n'
         [ -n "$keep" ] && printf '\tkeep      = %s\n' "$keep"
+        [ "$rraw" = 1 ] && printf '\traw       = yes\n'
         :
     } >> "$tmp" || { rm -f "$tmp"; return 1; }
     mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
@@ -6869,7 +6871,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         return $?
     fi
     local name="" source="" dst="" sched="" pref="replica_" rec=1 media="removable" notify="" history=""
-    local mon_warn="" mon_crit="" passive=0 _prefset=0 on_insert="" keep=""
+    local mon_warn="" mon_crit="" passive=0 _prefset=0 on_insert="" keep="" rraw=0
     local -a xchild=() mguids=()
     local config="" do_install=0 assume_yes=0 a _ans
     # --source IS REPEATABLE, and also takes a comma list, so a front end can
@@ -6904,6 +6906,8 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
             # Also run right after the disk is plugged in (note 6), per replica.
             --on-insert=*) case "${a#*=}" in yes|1|true) on_insert=yes ;; no|0|false) on_insert="" ;; *) die "add-replica: --on-insert takes yes or no" ;; esac ;;
             # W18 (owner 2026-10-11): its own retention on the medium, no mirror.
+            # An encrypted source sent encrypted (-w); see gen-cron build_replica_section.
+            --raw)         rraw=1 ;;
             --keep=*)      keep="${a#*=}"
                            case "$keep" in ''|*[!0-9]*|0*) die "add-replica: --keep='$keep' -- how many of the replica's own snapshots the medium keeps, a whole number above 0" ;; esac ;;
             --notify=*)    notify="${a#*=}" ;;
@@ -7045,7 +7049,7 @@ REPEOF
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
     replica_section_upsert "$cand" "$name" "$source" "$dst" "$sched" "$pref" "$rec" "$media" "$notify" "$history" "$mon_warn" "$mon_crit" "$passive" "$xflags" \
-        "$(IFS=,; printf '%s' "${mguids[*]}")" "$on_insert" "$keep" \
+        "$(IFS=,; printf '%s' "${mguids[*]}")" "$on_insert" "$keep" "$rraw" \
         || { rm -f "$cand"; die "could not compose the [replica:$name] section"; }
 
     show_activation_proposal "$config" "$cand" || {
@@ -7110,11 +7114,11 @@ cmd_list_replicas() {
     # Parsed with awk rather than sourced: a config is data, never a program.
     local rows; rows=$(awk '
         /^\[replica:/ {
-            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp
+            if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp "|" rw
             name=$0; sub(/^\[replica:/,"",name); sub(/\]$/,"",name)
-            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; mw=""; mc=""; mg=""; oi=""; kp=""; next
+            src=""; dst=""; sched=""; pref=""; media=""; rec="no"; hist=""; mw=""; mc=""; mg=""; oi=""; kp=""; rw=""; next
         }
-        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp; name="" } next }
+        /^\[/ { if (name != "") { print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp "|" rw; name="" } next }
         name != "" {
             line=$0; sub(/^[ \t]+/,"",line)
             k=line; sub(/[ \t]*=.*$/,"",k)
@@ -7132,8 +7136,9 @@ cmd_list_replicas() {
             else if (k=="media_guids") mg=v
             else if (k=="on_insert" && v ~ /^(yes|1|true)$/) oi="yes"
             else if (k=="keep") kp=v
+            else if (k=="raw" && v ~ /^(yes|1|true)$/) rw="yes"
         }
-        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp }
+        END { if (name != "") print name "|" src "|" dst "|" sched "|" pref "|" media "|" rec "|" (hist==""?"all":hist) "|" mw "|" mc "|" mg "|" oi "|" kp "|" rw }
     ' "$config")
 
     local gate="$SCRIPT_DIR/zfs-media-gate.sh"
@@ -7149,7 +7154,7 @@ cmd_list_replicas() {
     # in the recursive slot: every field after the empty one shifted left.
     # Measured 2026-09-09 on pve9 with a temporary config. `|` cannot occur in a
     # dataset name, a cron schedule or a prefix.
-    while IFS='|' read -r name src dst sched pref media rec hist mw mc mg oi kp; do
+    while IFS='|' read -r name src dst sched pref media rec hist mw mc mg oi kp rw; do
         [ -n "$name" ] || continue
         pool="${dst%%/*}"
         present="unknown"; last=""
@@ -7215,8 +7220,8 @@ JSRC
                 [ -n "$_x" ] || continue
                 _xarr="$_xarr${_xarr:+,}\"$(json_escape "$_x")\""
             done < <(replica_section_excludes "$config" "$name")
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp"
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp" "${rw:-no}"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"

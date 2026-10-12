@@ -2606,7 +2606,11 @@ printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
     list-replicas) if [ -n "${RP_REPS:-}" ]; then printf '%s\n' "$RP_REPS"; else echo '{"replicas":[]}'; fi ;;
     status) echo '{"relations":[{"name":"pve11b","state":"active","managed_datasets":["hdd/backups/192.168.28.96/hdd/vm"]}]}' ;;
-    list-datasets) echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}' ;;
+    list-datasets) if [ -n "${RP_ENC:-}" ]; then
+                       echo '{"datasets":[{"name":"hdd","encryption":"off"},{"name":"hdd/backups","encryption":"off"},{"name":"hdd/backups/192.168.28.96","encryption":"off"},{"name":"hdd/backups/192.168.28.96/hdd/vm","encryption":"aes-256-gcm"},{"name":"hdd/data","encryption":"off"},{"name":"hdd/data/mail","encryption":"off"},{"name":"hdd/data/docs","encryption":"off"}]}'
+                   else
+                       echo '{"datasets":[{"name":"hdd"},{"name":"hdd/backups"},{"name":"hdd/backups/192.168.28.96"},{"name":"hdd/backups/192.168.28.96/hdd/vm"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/data/docs"}]}'
+                   fi ;;
     add-replica) case " $* " in
             *" --plan "*) echo "co sie zmieni w crontabie:"; echo "  +0 22 * * 5 /x/zfs-job.sh \"h replica copy ($2)\" -- ..."; exit 0 ;;
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
@@ -2655,6 +2659,24 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
+fi
+# (1e) wlasciciel 2026-10-12: pod zrodlem repliki jest kopia ZASZYFROWANA (relacja
+#      pobrana raw, kolektor nie ma klucza) -> nowa replika z --raw i zdanie w planie;
+#      kontrola (1) wyzej: zrodlo bez szyfrowania -> bez --raw.
+RPOUT=$(rp_run "0${T}usb2e
+0${T}hdd/backups
+0${T}next
+0${T}passive
+0${T}removable
+0${T}repl
+0${T}0 22 * * 5
+0${T}
+0${T}
+" RP_ENC=1)
+if grep -q '^add-replica usb2e .* --passive .*--raw .*--install --yes$' "$RP/zb.log" && grep -qF 'kopia idzie zaszyfrowana (raw)' "$RP/wt.log"; then
+    ok "replica: zaszyfrowane zrodlo -> --raw i 'kopia idzie zaszyfrowana' w planie; zwykle zrodlo (1) -- bez --raw"
+else
+    bad "replica: raw dla zaszyfrowanego zrodla" "$RPOUT" "$(cat "$RP/zb.log")" "$(grep -F 'Szyfrowane' "$RP/wt.log" | head -1 | cut -c1-200)" "$(cat "$RP/err")"
 fi
 # (3): "tylko po wlozeniu" nie pyta o B, regula i tak zakladana; bez --on-insert w komendzie
 RPOUT=$(rp_run "0${T}usb3
