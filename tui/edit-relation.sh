@@ -158,22 +158,22 @@ eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w W
        --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
 }
 engine_settings() {
-    local c_h c_c c_x c_a p_h p_c p_x p_a items n d v N out
+    local c_h c_c c_x c_a c_r p_h p_c p_x p_a items n d v N out
     info "Ustawienia silnika" "Czytam ustawienia relacji..."
     if ! "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>"$TMPD/sc.err"; then
         wt --title "Ustawienia silnika" --msgbox "show-config nie odpowiedział:\n$(tail -3 "$TMPD/sc.err")" 12 "$W"
         return 0
     fi
     # Brak pola = ustawienie fabryczne ("default"); pierwsza sekcja dataset tej relacji.
-    IFS=$'\t' read -r c_h c_c c_x c_a < <("$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF'
+    IFS=$'\t' read -r c_h c_c c_x c_a c_r < <("$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF'
 import sys, json
-out = ["default"] * 4
+out = ["default"] * 5
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
     for s in d.get("sections") or []:
         f = s.get("fields") or {}
         if s.get("kind") == "dataset" and f.get("pair_label") == sys.argv[2]:
-            for i, k in enumerate(("history", "compression", "cipher", "autotune")):
+            for i, k in enumerate(("history", "compression", "cipher", "autotune", "raw")):
                 v = str(f.get(k) if f.get(k) is not None else "").strip()
                 if k == "autotune":
                     v = {"no": "no", "false": "no", "0": "no", "off": "no",
@@ -198,10 +198,16 @@ PYEOF
             v="tak"; case "$p_a" in no) v="nie" ;; esac
             items+=(auto "Autodobór łącza  $v$([ "$p_a" = default ] && echo ' (fabryczne)')")
         fi
+        # W17: wysyłka zaszyfrowana tylko do wglądu -- decyduje o niej pierwsza kopia,
+        # zmiana = nowa kopia od zera (silniki odmawiają mieszania trybów).
+        case "${c_r:-default}" in yes|1|true) items+=(raw "Szyfrowane     wysyłka zaszyfrowana (raw)") ;; esac
         items+=(__reset__ "Przywróć fabryczne" __done__ "Gotowe")
         wt --title "Ustawienia silnika: $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
            --menu "Jak przesyłane są kopie tej relacji." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
         case "$WT_OUT" in
+            raw)
+                wt --title "Wysyłka zaszyfrowana" --msgbox "Źródło jest zaszyfrowane i kopie idą zaszyfrowane (raw): w celu leżą\nzaszyfrowane, ten host nie potrzebuje klucza.\n\nTego nie zmienia się w działającej relacji -- zmiana to nowa kopia od zera\n(usuń relację i załóż ją ponownie)." 12 "$W"
+                continue ;;
             hist)
                 d="${p_h%%:*}"; [ "$d" = default ] && d=all
                 eng_pick "Historia" "Co przesyłać, gdy w celu brakuje kilku migawek." "$d" \

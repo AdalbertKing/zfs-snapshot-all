@@ -1454,6 +1454,16 @@ check "PDH3 history together with -i in flags is refused" "1:1" \
 for_conf "" ""
 fo=$(for_run)
 check "PDH4 control: without history neither -i nor -T" "0" "$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -cE ' -i | -T ')"
+# W17 (owner 2026-10-11): raw = yes in a relationship's [dataset:] -- the engines' -w.
+for_conf "	raw = yes" ""
+fo=$(for_run); frc=$?
+check "PRW1 raw = yes renders -w on both send lines, rc=0" "0:2" "$frc:$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -c ' -w ')"
+for_conf "	raw = yes
+	flags = -w" ""
+fo=$(for_run); frc=$?
+check "PRW2 raw together with -w in flags is refused" "1:1" "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'say it once, keep')"
+for_conf "" ""
+check "PRW3 control: without raw no -w" "0" "$(for_run | grep 'snapget.sh' | grep -c ' -w ')"
 
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME

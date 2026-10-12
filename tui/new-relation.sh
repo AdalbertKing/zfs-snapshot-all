@@ -207,7 +207,7 @@ step_datasets() {
 # Lekcja ze starego kreatora: lista pokazywała cudze lądowiska i podgląd jeździł za
 # kursorem. Tu kandydatów jest mało i każdy ma POWÓD; reszta to "inna ścieżka".
 TARGET=""; PROFILE=""; RNAME=""; ACCT="root"; ACCT_OTHER=""; SRCKEEP=""
-EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""
+EXFAM="__replicate_,vzdump,__migration__"; GRANT=1; MANUAL=0; SRCPROF=""; RAW=0
 # Zamrażanie ma DWIE połowy (zmierzone pve10 <- pve9b, 2026-09-20): szablon, który każe
 # zamrażać, ORAZ zgoda źródła, żeby konto kolektora mogło zamrażać jego gości. Bez zgody
 # każda "zamrażana" migawka wychodzi jako automated_<szczebel>_crash_<czas>.
@@ -562,6 +562,25 @@ step_account() {
         return 0
     done
 }
+# ZASZYFROWANE ŹRÓDŁO (W17, właściciel 2026-10-11): czy coś w koszyku (miejsce albo coś pod
+# nim) ma encryption inne niż off. Wtedy domyślnie wysyłka zaszyfrowana (-w): kopia leży
+# w celu zaszyfrowana, a kolektor nie potrzebuje klucza. list-datasets podaje "encryption".
+basket_encrypted() {   # 0 = coś w koszyku jest zaszyfrowane
+    [ -s "$TMPD/ds.json" ] || return 1
+    "$PY" - "$TMPD/ds.json" "${B_ROOT[@]}" <<'PYEOF'
+import sys, json
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+roots = sys.argv[2:]
+for x in d.get("datasets") or []:
+    n, e = x.get("name") or "", (x.get("encryption") or "-")
+    if e not in ("off", "-", "") and any(n == r or n.startswith(r + "/") for r in roots):
+        sys.exit(0)
+sys.exit(1)
+PYEOF
+}
 account_name() { case "$ACCT" in zfsbackup) echo zfsbackup ;; other) echo "$ACCT_OTHER" ;; *) echo "" ;; esac; }
 
 # --- krok 9: ustawienia dodatkowe ---------------------------------------------
@@ -597,20 +616,31 @@ step_extra() {
             items+=(quies "Nadaj też zgodę na zamrażanie gości" "$on_q")
         fi
         [ "$MODE" = local ] || items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
+        local enc=0 on_raw=OFF
+        if basket_encrypted; then
+            enc=1
+            [ "${RAW_SEEN:-0}" = 1 ] || { RAW=1; RAW_SEEN=1; }
+            [ "$RAW" -eq 1 ] && on_raw=ON
+            items+=(raw "Wyślij zaszyfrowane (źródło jest zaszyfrowane)" "$on_raw")
+        else
+            RAW=0
+        fi
         if [ "${#items[@]}" -gt 0 ]; then
             local _i
             for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
             local _xh="Domyślne są dobre dla zwykłej relacji. SPACJA przełącza, ENTER = Dalej.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '_crash_'.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła."
+            [ "$enc" -eq 1 ] && _xh="$_xh\nZaszyfrowane: kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.\n  Zmiana po pierwszej kopii = nowa kopia od zera."
             wt --title "$(title 9 'Ustawienia dodatkowe')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
                --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \
                "${items[@]}" || return 1
-            GRANT=0; GQUIESCE=0; MANUAL=0
+            GRANT=0; GQUIESCE=0; MANUAL=0; [ "$enc" -eq 1 ] && RAW=0
             local x
             while IFS= read -r x; do
                 case "$x" in
                     grant) GRANT=1 ;;
                     quies) GQUIESCE=1 ;;
                     man)   MANUAL=1 ;;
+                    raw)   RAW=1 ;;
                 esac
             done <<<"$WT_OUT"
             # Zgoda na zamrażanie ma sens tylko razem z nadaniem praw stąd; gdy pozycji
@@ -695,6 +725,7 @@ build_argv() {   # [install] -> ARGV[]
         done <<<"${B_EXCL[$i]}"
     done
     [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
+    [ "$RAW" -eq 1 ] && ARGV+=("--raw")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
@@ -721,6 +752,7 @@ summary_text() {
     if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
     else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
+    [ "$RAW" -eq 1 ] && echo "Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza."
     if [ "$MODE" = local ]; then
         [ "$FREEZE" -eq 1 ] && echo "Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi."
         echo

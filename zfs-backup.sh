@@ -4729,6 +4729,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
             # the pull brought (-I) are pruned like this host's own -- see
             # gen-cron apply_foreign_prune. Not for sync: that is a mirror.
             [ "$sync_mode" -eq 0 ] && echo "	prune_foreign = yes"
+            [ "${RAW_SEND:-0}" = 1 ] && echo "	raw          = yes"
             echo "	pair_label   = $name"
             echo "	notify       = ${name}-$(basename "$ds")"
         } >> "$workfile" || return 1
@@ -7518,7 +7519,7 @@ cmd_local_backup() {
     # carry pair_label (so the engine lines carry -L and the pause gate reaches
     # them), each source gets its own landing prune, and a client record with
     # RUX_MODE=local is written after the install. Without it: unchanged.
-    local lb_name="" lb_exfam="" lb_replace=0
+    local lb_name="" lb_exfam="" lb_replace=0 lb_raw=0
     local -a lb_excl=()
     local -a source_flags=()
     for a in "$@"; do
@@ -7530,6 +7531,8 @@ cmd_local_backup() {
             # [dataset:] scope fields (exclude_child_<n> -> -X, exclude_family -> -E).
             --exclude-child=*)  lb_excl+=("${a#*=}") ;;
             --exclude-family=*) lb_exfam="${a#*=}" ;;
+            # W17: an encrypted source copied encrypted (-w), first copy included.
+            --raw)       lb_raw=1 ;;
             # --replace (L2, 2026-10-09): the relationship --name EXISTS and this run
             # describes it anew -- its sections are taken out of the candidate and
             # composed again (new profile, a source more or less). A source whose
@@ -7999,6 +8002,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 for _x in "${lb_excl[@]}"; do _xi=$((_xi + 1)); echo "	exclude_child_$_xi = $_x"; done
             fi
             [ -n "$lb_exfam" ] && echo "	exclude_family = $lb_exfam"
+            [ "$lb_raw" -eq 1 ] && echo "	raw          = yes"
             echo "	notify       = local-$(basename "$r")"
         done
         # Retention, not shape -- the same F1 correction as the remote path. A
@@ -8331,7 +8335,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             log "  already copied: $sr -> $target/$sr (no new seed)"
         # -L: the relationship's name, as on its cron line -- without it the first copy
         # stood on F4 as "(bez rel.)" (owner campaign 2026-10-09, K10).
-        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
+        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
             warn "  FAILED: $sr -> $target"
@@ -8425,7 +8429,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_family=""
+    local recursion="" passive=0 exclude_family="" raw_send=0
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -8447,6 +8451,7 @@ cmd_add_client() {
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
+            --raw)         raw_send=1 ;;
             --exclude-family=*) exclude_family="${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
@@ -8948,6 +8953,10 @@ cmd_add_client() {
         # sniffed from snapshot names -- the sync-chain probe taught us where
         # name-sniffing ends.
         write_client_field PASSIVE           "$passive"
+        # W17: an encrypted source sent encrypted (-w). A CREATE-time decision:
+        # the first copy decides whether the target is raw, and the engines refuse
+        # to mix the two afterwards.
+        [ "$raw_send" -eq 1 ] && write_client_field RAW_SEND 1
         if [ -n "$exclude_family" ]; then
             local _esi=1 _esp
             for _esp in ${exclude_family//,/ }; do
@@ -9932,6 +9941,8 @@ cmd_seed() {
             local _sx
             for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
         fi
+        # W17: the first copy is raw when the relationship is -- it decides the target.
+        [ "${RAW_SEND:-0}" = 1 ] && seed_flags+=(-w)
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
@@ -10103,6 +10114,8 @@ cmd_final_catchup() {
             local _sx
             for _sx in $(client_exclude_flags); do seed_flags+=("$_sx"); done
         fi
+        # W17: the first copy is raw when the relationship is -- it decides the target.
+        [ "${RAW_SEND:-0}" = 1 ] && seed_flags+=(-w)
         if bash "$SNAPGET" "${seed_flags[@]}" $LOAD_FLAGS$LOAD_BW_FLAG "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" "$base"; then
             log "  OK: $ds"
         else
@@ -12779,9 +12792,9 @@ cmd_list_datasets() {
     local rows rc=0 errf
     errf=$(mktemp) || die "list-datasets: mktemp failed"
     if [ -z "$host" ]; then
-        rows=$(zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name 2>"$errf") || rc=$?
+        rows=$(zfs list -H -p -o name,type,used,avail,encryption -t filesystem,volume -s name 2>"$errf") || rc=$?
     else
-        rows=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,type,used,avail -t filesystem,volume -s name" 2>"$errf") || rc=$?
+        rows=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,type,used,avail,encryption -t filesystem,volume -s name" 2>"$errf") || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
         tail -3 "$errf" >&2; rm -f "$errf"
@@ -12818,13 +12831,15 @@ SN
     rm -f "$errf"
     printf '{"host":"%s","port":%s,"account":"%s","datasets":[' \
         "$(json_escape "${host:-local}")" "${port:-22}" "$([ -n "$host" ] && echo root || id -un)"
-    local first=1 _n _t _u _av
-    while IFS=$'\t' read -r _n _t _u _av; do
+    local first=1 _n _t _u _av _enc
+    while IFS=$'\t' read -r _n _t _u _av _enc; do
         [ -n "$_n" ] || continue
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
         [ "$own" -eq 1 ] && printf ',"own_snapshots":%s' "${own_n[$_n]:-0}"
+        # W17: an encrypted source is offered the raw send (-w) by the wizard.
+        printf ',"encryption":"%s"' "$(json_escape "${_enc:--}")"
         printf '}'
     done <<DS
 $rows
@@ -17579,11 +17594,12 @@ local_relation_argv() {
             case "$k" in
                 exclude_child_*) LRA+=(--exclude-child="$v") ;;
                 exclude_family)  LRA+=(--exclude-family="$v") ;;
+                raw)             case "$v" in yes|1|true) LRA+=(--raw) ;; esac ;;
             esac
         done < <(awk -v want="[dataset:$first]" '
             $0 == want { f = 1; next } /^\[/ { f = 0 }
             f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
-                if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family") print k "\t" v }' "$cfg")
+                if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family" || k == "raw") print k "\t" v }' "$cfg")
     fi
 }
 
@@ -18565,6 +18581,7 @@ rux_remote_install() {
         [ -n "$source_profile" ] && add_args+=(--source-profile="$source_profile")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
+        [ "${rux_raw:-0}" -eq 1 ] && add_args+=(--raw)
         [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude-child="$_x"); done
         [ -n "$local_user" ] && add_args+=(--local-user="$local_user")
@@ -18670,7 +18687,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion="" passive=0 exclude_family=""
+    local recursion="" passive=0 exclude_family="" rux_raw=0
     # THE SOURCE PRESET REACHES THIS ENTRY POINT TOO, and it is a pure
     # passthrough: cmd_add_client already parses, validates and records it
     # (--profile's own treatment here is the same shape). Its absence was not a
@@ -18691,6 +18708,7 @@ rux_entry() {
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
+            --raw)         rux_raw=1 ;;
             --exclude-family=*) exclude_family="${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}"; flag_profile rux "$profile" ;;

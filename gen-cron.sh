@@ -1429,7 +1429,7 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
 _allow_fields dataset   use_template pair_label recursive media \
-                        bandwidth compression cipher history \
+                        bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
 _allow_fields prune     use_template recursive clear_cut prune ssh_flags \
@@ -2346,6 +2346,21 @@ build_dataset() {
                     newest) flags="${flags:+$flags }-i" ;;
                     auto:[1-9]|auto:[1-9][0-9]|auto:[1-9][0-9][0-9]) flags="${flags:+$flags }-T ${link_hist#auto:}" ;;
                     *) die "[dataset:$ds_path] tier=$tier: history='$link_hist' -- expected all (every snapshot in between, the default), newest (only the diff to the newest) or auto:N" ;;
+                esac
+            fi
+            # ENCRYPTED SOURCE, SENT ENCRYPTED (W17, owner 2026-10-11): raw = yes is the
+            # engines' -w -- the copy lands still encrypted and the collector never
+            # needs the key. Set at creation (the wizard sees an encrypted source);
+            # switching it on an existing copy needs a new full copy (measured
+            # 2026-07-22: a raw stream onto a plain copy, or the reverse, is refused).
+            local link_raw=""
+            if link_raw="$(resolve_field raw "$ds" "" "")"; then
+                case "$link_raw" in
+                    yes|1|true)
+                        case " $flags " in *" -w "*) die "[dataset:$ds_path] tier=$tier: raw = yes and -w in 'flags' -- say it once, keep 'raw'." ;; esac
+                        flags="${flags:+$flags }-w" ;;
+                    no|0|false|"") ;;
+                    *) die "[dataset:$ds_path] tier=$tier: raw='$link_raw' -- expected yes or no" ;;
                 esac
             fi
             local autotune
