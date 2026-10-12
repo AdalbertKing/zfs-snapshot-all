@@ -3000,6 +3000,11 @@ build_replica_section() {
         *[!0-9]*|0*) die "[replica:$name]: keep='$keep' -- how many of the replica's own snapshots the medium keeps, a whole number above 0" ;;
     esac
     [ -z "$keep" ] || [ "$passive" != 1 ] || die "[replica:$name]: keep = $keep with passive = yes -- a passive replica takes no snapshots of its own, so there is nothing of its own to keep. Use prefix (its own family) or drop keep."
+    # ...and only the replica's own snapshot travels (-i, "history = newest"): with -I
+    # the snapshots the relationship stamped in between landed on the medium too and
+    # nothing there ever pruned them (measured on pve9b, 2026-10-12: keep = 2 left
+    # 2 replica_ plus every automated_hourly of the gap). An explicit history wins.
+    [ -n "$keep" ] && [ -z "$history" ] && [ -z "$hist_flags" ] && hist_flags="-i"
 
     REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}${SEP}${guids}${SEP}${on_insert}${SEP}${keep}")
 }

@@ -1415,8 +1415,8 @@ cat > "$FOR/c.conf" <<EOF
 EOF
 fo=$(for_run); frc=$?
 _l=$(printf '%s\n' "$fo" | grep 'replica copy (mies)')
-check "PRK1 keep = 12 renders rc=0: snapget without -M, then delsnaps -R usb/rep/tank/a replica_ -M12 only after a good copy" "0:1:0:1" \
-      "$frc:$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -R "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c '\[ \$m -eq 0 \] && { /R/delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12; m=\$?; }')"
+check "PRK1 keep = 12 renders rc=0: snapget without -M and with -i (only its own snapshot travels), then delsnaps -R usb/rep/tank/a replica_ -M12 only after a good copy" "0:1:0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -R -i "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c '\[ \$m -eq 0 \] && { /R/delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12; m=\$?; }')"
 sed -i 's/^\tkeep     = 12$//' "$FOR/c.conf"
 fo=$(for_run)
 check "PRK2 control: without keep the engine mirrors (-M) and nothing prunes the medium" "1:0" \
