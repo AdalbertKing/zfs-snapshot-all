@@ -13234,8 +13234,8 @@ chmod +x "$LD/bin/zfs" "$LD/bin/ssh"
 ld_run() { ( PATH="$LD/bin:$PATH" LD_ARGS="$LD" bash "$ZFSBACKUP" list-datasets "$@" ) 2>"$LD/err"; }
 LDOUT=$(ld_run --json)
 got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print(d["host"], [x["name"] for x in d["datasets"]], d["datasets"][2]["type"], d["datasets"][1]["used"])' 2>/dev/null)
-if [ "$got" = "local ['tank', 'tank/data', 'tank/vm-1'] volume 500" ] && grep -q -- '-H -p -o name,type,used,avail -t filesystem,volume' "$LD/zfs.argv" && [ ! -e "$LD/ssh.argv" ]; then
-    ok "listdatasets: no HOST = this host's zfs list (name, type, used, avail; filesystems and volumes), no ssh at all"
+if [ "$got" = "local ['tank', 'tank/data', 'tank/vm-1'] volume 500" ] && grep -q -- '-H -p -o name,type,used,avail,encryption -t filesystem,volume' "$LD/zfs.argv" && [ ! -e "$LD/ssh.argv" ]    && printf '%s' "$LDOUT" | grep -q '"encryption":"-"'; then
+    ok "listdatasets: no HOST = this host's zfs list (name, type, used, avail, encryption -- W17; filesystems and volumes), no ssh at all"
 else
     bad "listdatasets: local" "$LDOUT" "$(cat "$LD/zfs.argv" 2>/dev/null)" "$(cat "$LD/err")"
 fi
