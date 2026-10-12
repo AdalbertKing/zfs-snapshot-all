@@ -410,7 +410,7 @@ front end never edits the config file:
                                     fire on any insertion.
   zfs-backup.sh prepare-media POOL DEVICE [--base=replica] [--yes]  |  prepare-media --list
                                     Prepare a disk as a replica medium: zpool create
-                                    -m none -o failmode=continue, zfs create POOL/BASE,
+                                    -m none -o failmode=continue -O compression=zstd, zfs create POOL/BASE,
                                     zpool export. ERASES the disk. Refused only when it
                                     is in use (in an imported pool, or mounted). A
                                     second disk of the same replica takes the same
@@ -6550,7 +6550,7 @@ EOF
 # Owner note 15 (2026-10-08): "Prepare the medium once, by hand" was the one step
 # of a replica the package could not do, from batch or from the GUI. This is it:
 #
-#   zpool create -m none -o failmode=continue POOL DEVICE
+#   zpool create -m none -o failmode=continue -O compression=zstd POOL DEVICE
 #   zfs create POOL/BASE           -- the dataset that tells the gate it is THIS disk
 #   zpool export POOL              -- the disk can go to the safe
 #
@@ -6624,7 +6624,7 @@ cmd_prepare_media() {
     echo "PLAN (prepare-media):"
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
-    echo "  1. zpool create -f -m none -o failmode=continue $pool $dev   -- EVERYTHING on the disk is erased"
+    echo "  1. zpool create -f -m none -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
     echo "  2. zfs create $pool/$base   -- marks it as this replica's medium"
     echo "  3. zpool export $pool       -- the disk can be unplugged"
     if zpool import 2>/dev/null | awk -v p="$pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; then
@@ -6634,13 +6634,16 @@ cmd_prepare_media() {
         echo ">>> plan only. Re-run with --yes to do it."
         return 0
     fi
-    zpool create -f -m none -o failmode=continue "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
+    # compression=zstd (W19, owner 2026-10-11): what the replica receives with zfs send -c
+    # keeps its own compression; this is for everything written there otherwise, and so
+    # the pool says plainly what it is.
+    zpool create -f -m none -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
     zfs create "$pool/$base" || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
     # P5: the pool GUID is what the replica will know this disk by (add-replica
     # --media-guid). Readable only while imported, so it is printed here.
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
     zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it by hand before unplugging"
-    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, exported. Use it as --dst=$pool/$base."
+    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
 # OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the

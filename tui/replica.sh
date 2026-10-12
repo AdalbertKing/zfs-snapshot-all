@@ -109,7 +109,7 @@ basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x m
 XARGS=()
 
 # PRZYGOTOWANIE NOŚNIKA (uwaga 15, 2026-10-08): pusty dysk -> pula repliki, przez wsad
-# prepare-media (zpool create -m none -o failmode=continue, zfs create POOL/BAZA, export).
+# prepare-media (zpool create -m none -o failmode=continue -O compression=zstd, zfs create POOL/BAZA, export).
 # Dwie drogi, jeden czasownik: nowy nośnik (pula i baza do wpisania) albo kolejny dysk
 # TEJ repliki (rotacja: ta sama pula i baza, brama rozróżnia dyski po GUID).
 # 0 = przygotowano (PREP_DST), 1 = wstecz.
