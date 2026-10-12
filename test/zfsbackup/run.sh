@@ -13761,6 +13761,23 @@ fi
 fi   # --- koniec sekcji editrel ---
 
 if want runreplicas; then
+# W18 (owner 2026-10-12): replica-restart -- the plan names the replica's OWN engine
+# options (prefix included: the first cut stopped at the first quote and lost it,
+# measured on pve9b), -t onto <target>-restart, and destroys the old copy only after
+# the new one. And delete-relation's plan warns when a replica with snapshots of its
+# own reads a copy being removed; a passive one is not named.
+RS="$WORK/rsrestart"; rm -rf "$RS"; mkdir -p "$RS"
+printf '[defaults]\n\thost_label = h\n[replica:own]\n\tsource = tank/b/x\n\tdst = disk/rep\n\tschedule = 0 3 1 * *\n\tprefix = replica_\n\tkeep = 2\n[replica:pas]\n\tsource = tank/b\n\tdst = disk2/rep\n\tschedule = 0 4 * * *\n\tpassive = yes\n' > "$RS/c.conf"
+rs_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RS/c.conf'; }; cmd_replica_restart own --config='$RS/c.conf'" 2>&1); rs_rc=$?
+rw_out=$(bash -c "source '$ZFSBACKUP'; default_cron_config() { echo '$RS/c.conf'; }; replica_restart_warning 'tank/b/x/sub tank/b/y'" 2>&1)
+if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i -t "tank/b/x" "disk/rep/tank/b/x-restart"' \
+   && printf '%s' "$rs_out" | grep -qF 'zfs destroy -r disk/rep/tank/b/x   -- stara kopia, dopiero po udanym kroku 1' \
+   && printf '%s' "$rs_out" | grep -q '^plan only' \
+   && printf '%s' "$rw_out" | grep -qF "replika 'own'" && ! printf '%s' "$rw_out" | grep -qF "replika 'pas'"; then
+    ok "runreplicas: replica-restart plan = the replica's own options + -t onto <target>-restart, old copy destroyed only after; delete-relation warns for a replica with its own snapshots, not a passive one"
+else
+    bad "runreplicas: replica-restart / warning" "rc=$rs_rc" "$rs_out" "$rw_out"
+fi
 # ============================================================================
 # run-replicas (2026-10-07): what F7 on F6 and the udev rule run. It used to
 # take only lines carrying the media bracket, so a FIXED replica (no bracket)
