@@ -13428,6 +13428,29 @@ if want delrel; then
 # -> create again under the same name), not by this section.
 # ============================================================================
 DR="$WORK/delrel"; rm -rf "$DR"; mkdir -p "$DR/clients"
+# 2026-10-12 (pve9b): removing the LAST relationship of a config that still holds a
+# REPLICA took the whole cron block, the replica's lines and monitor with it -- the
+# remote delete path asked for [dataset:]/[prune:] only. Both delete paths now ask
+# config_has_job_sections, which counts a replica; pinned on the helper and on the
+# call site of each path (the paths themselves need a live host -- done on pve9b).
+printf '[defaults]
+	host_label = x
+[replica:r]
+	source = tank/a
+' > "$DR/onlyrep.conf"
+printf '[defaults]
+	host_label = x
+[template:t]
+	keep = 1
+' > "$DR/norep.conf"
+_h1=$( ( . "$ZFSBACKUP" >/dev/null 2>&1; config_has_job_sections "$DR/onlyrep.conf" && echo y || echo n ) )
+_h2=$( ( . "$ZFSBACKUP" >/dev/null 2>&1; config_has_job_sections "$DR/norep.conf" && echo y || echo n ) )
+_cs=$(awk '/^cmd_remove_client\(\)|^remove_local_relation\(\)/{f=1} f&&/config_has_job_sections "\$workfile"/{n++} END{print n+0}' "$ZFSBACKUP")
+if [ "$_h1:$_h2" = "y:n" ] && [ "$_cs" -ge 2 ] && ! grep -qF "grep -qE '^\\[(dataset|prune):' \"\$workfile\"" "$ZFSBACKUP"; then
+    ok "delrel: a config left with only a REPLICA still has jobs -- both delete paths keep the cron block (no [dataset|prune]-only test left)"
+else
+    bad "delrel: replica keeps the block" "helper=$_h1:$_h2 call-sites=$_cs"
+fi
 printf 'CLIENT_NAME=a\nSTATE=active\nPEER_HOST=10.0.0.5\nACTIVE_ENDPOINT=10.0.0.5:22\nCLIENT_TARGET=tank/b\nMANAGED_DATASETS=tank/b/10.0.0.5/p/x\n' > "$DR/clients/a.conf"
 printf 'CLIENT_NAME=b\nSTATE=active\nPEER_HOST=10.0.0.5\n' > "$DR/clients/b.conf"
 printf 'CLIENT_NAME=c\nSTATE=removed\nPEER_HOST=10.0.0.9\nACTIVE_ENDPOINT=10.0.0.9:2222\n' > "$DR/clients/c.conf"

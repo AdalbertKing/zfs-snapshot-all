@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5387f3567247cb94 -->
+<!-- status-covers-digest: 4d5d98970eee71d9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Błąd: usunięcie ostatniej relacji zdejmowało też replikę z crona.** Kampania
+  szyfrowania na pve9b (2026-10-12): po usunięciu ostatniej relacji roota zniknął cały
+  blok crona, a z nim linie i strażnik repliki właściciela `repl` (config ją nadal
+  opisywał). Ścieżka zdalna `delete-relation` sprawdzała tylko `[dataset:]`/`[prune:]`.
+  Obie ścieżki usuwania pytają teraz `config_has_job_sections` (liczy też replikę). Blok
+  na pve9b przywrócony z configu tego samego dnia (`repl`: kopia 22:00, po włożeniu,
+  strażnik). Test `zfsbackup` delrel.
 
 - **Błąd: ręczne uruchomienie repliki pokazywało sukces mimo błędu kopii** (kampania na
   pve9b, 2026-10-12: kopia bez `--raw` z kopii zaszyfrowanej padła, w logu `END rc=1`, a
