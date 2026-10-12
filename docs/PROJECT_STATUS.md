@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2a91b8e3af37fef4 -->
+<!-- status-covers-digest: 8826b9d922001352 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Testy GUI właściciela 2026-10-11, paczka 4: silniki (odmrożone przez właściciela 2026-10-12).**
+  snapget v2.74, snapsend v2.76, `lib-zfs-snap.sh`; wpis w `docs/project/ENGINE-FREEZE.md`,
+  baza zamrożenia odświeżona.
+  - **W19: cel pod zaszyfrowanym datasetem** (zaszyfrowany nośnik repliki, relacja do
+    zaszyfrowanej puli). Silnik zakładał liść celu przed pierwszą kopią; liść dziedziczył
+    szyfrowanie rodzica i pierwsza pełna kopia nie mogła go zastąpić („zfs receive -F
+    cannot be used to destroy an encrypted filesystem”) — każdy tryb repliki na
+    zaszyfrowany nośnik padał (zmierzone na pve9b). Teraz liść tworzy odbiór, jak przy
+    `-w`: `leaf_by_recv` = `-w` albo `target_parent_encrypted` (szyfrowanie najbliższego
+    istniejącego przodka; gdy nie da się go odczytać — jak dotąd). Testy `snapsend` W19
+    (push: pierwsza kopia, przyrost, `encryptionroot` = rodzic, `canmount=noauto`; pull:
+    pierwsza kopia); na silnikach z main 3 z nich czerwone.
+  - **W14: cichy wpis o zdjęciu migawek repliki.** Gdy kopia relacji zdejmuje wyłącznie
+    migawki `replica_*` i nic na niej nie zapisano, wpis „follows its source --
+    discarding …” idzie na poziomie 2 z „the replica continues from its bookmark”; każdy
+    inny rozjazd dalej na poziomie 0 tymi samymi słowami. Testy `snapsend` W14
+    (`only_replica_snaps`, z kontrolami).
+  - Na pve9b z klona: `snapsend` 267/0.
 
 - **Testy GUI właściciela 2026-10-11, paczka 3 (W17): zaszyfrowane źródło wysyłane zaszyfrowane.**
   - `list-datasets --json` podaje `encryption` każdego datasetu. Kreator, gdy coś w
@@ -67,8 +86,8 @@
     `( m=0; for … )` stała goło po `--` zfs-job (który wykonuje `"$@"`) — błąd składni w
     cronie i w `run-replicas`, choć render przechodził. Znalezione przy teście W18 na
     pve9b. Teraz `/bin/sh -c '( … )'` jak w nawiasie nośnika wymiennego. Test `cron` PRK4.
-  - **Jeszcze nie:** W14 cichy wpis o zdjęciu `replica_` i W19 kopia na zaszyfrowany
-    nośnik — zmiany w zamrożonych silnikach (W17 zrobione w paczce 3).
+  - **Później:** W17 w paczce 3; W14 cichy wpis i W19 kopia na zaszyfrowany nośnik
+    (silniki) w paczce 4.
 
 - **Testy GUI właściciela 2026-10-11, paczka 1 (uwagi W1–W19 w notatkach rundy, poza repozytorium).**
   - **Błąd (W7): „Harmonogram” relacji dawał się zmienić tylko raz.** Ukryty szablon
@@ -112,7 +131,8 @@
     „Prune lokalny” / „Prune zdalny”, a w relacji lokalnej także „Prune źródła”.
   - **F2 (W15):** F8 „Uruchom teraz” — okno z komendą (dokładnie linia z crona, konto,
     ostrzeżenie przy prune), `t` uruchamia; zadanie konta przez `runuser`. F7 zostaje „Sortuj”.
-  - **Później:** W1, W4, W16, W18 zrobione w paczce 2, W17 w paczce 3. Z W14 i W19 zostają
+  - **Później:** W1, W4, W16, W18 zrobione w paczce 2, W17 w paczce 3, części silnikowe
+    W14 i W19 w paczce 4. Wcześniej z W14 i W19 zostawały
     dwie części, które wymagają zmian w zamrożonych silnikach: cichy wpis relacji o
     zdjęciu migawek `replica_` (W14) i kopia na zaszyfrowany nośnik (W19 — silnik
     zakłada pusty dataset docelowy, którego ZFS nie pozwala nadpisać pod zaszyfrowanym
