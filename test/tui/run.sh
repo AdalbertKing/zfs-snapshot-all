@@ -3031,7 +3031,9 @@ case "$1" in
     edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo ;; esac ;;
     list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
     add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
-    *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+    show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"}}]}' ;;
+    set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
 # Kazde okno-tabela bierze KOLEJNA linie klawiszy z $ER/gridkeys (brak linii = Esc):
@@ -3070,6 +3072,22 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
     ok "edit-relation: Datasety -- koszyk z obecnymi datasetami, kilka zmian, jeden plan DOJDA/ODPADNA, add-source + remove-source --yes; bez Sposob/Wyjatki"
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
+fi
+# W16: "Ustawienia silnika" -- obecne wartosci z show-config (kompresja none = "nie", bez
+# "(fabryczne)"), zmiana historii -> set-transfer --plan, po WYKONAJ ten sam z --yes.
+EROUT=$(er_run "0${T}silnik
+0${T}hist
+0${T}newest
+0${T}__done__
+0${T}
+"); ERRC=$?
+ERS="$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/zb.log" && grep -qx 'set-transfer r1 --history=newest --yes' "$ER/zb.log" \
+   && has "$ERS" 'Kompresja        nie ~ ' && ! has "$ERS" 'Kompresja        nie (fabryczne)' \
+   && has "$ERS" 'Szyfr SSH'; then
+    ok "edit-relation: Ustawienia silnika (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po WYKONAJ --yes"
+else
+    bad "edit-relation: Ustawienia silnika (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
 fi
 # W1: okno "Zmien relacje" czyta szablony BEZ renderowania (16,6 s -> 1,8 s na pve9b).
 if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-profiles --json' "$ER/zb.log"; then

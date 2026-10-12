@@ -3,11 +3,13 @@
 #
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
 #   1. Datasety -- co kopiować (dodaj / usuń)    (add-source / remove-source; W4)
-#   3. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
-#   4. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
+#   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
+#   3. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
+#   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
+#      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
 #   6. Zapisz ustawienia relacji jako szablon    (save-profile, zwykły szablon na F5)
-# Po 3 i 4 retencję ŹRÓDŁA ustawia to samo okno-tabela co w kreatorze relacji
+# Po 2 i 3 retencję ŹRÓDŁA ustawia to samo okno-tabela co w kreatorze relacji
 # (tui/retention-lib.sh; uwaga 10: dla źródła nigdy druga lista szablonów).
 #
 # Okno NIE ma własnej logiki: pokazuje PLAN czasownika (--plan: generacja, gen-cron,
@@ -129,6 +131,154 @@ src_prefill() {
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
 
+# USTAWIENIA SILNIKA (W16, właściciel 2026-10-12): historia, kompresja, szyfr SSH i autodobór
+# łącza jednej relacji. Obecne wartości z show-config; zmiany czekają w zmiennych p_*,
+# dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
+eng_hist_words() {
+    case "$1" in
+        default|all) echo "wszystkie migawki pomiędzy" ;;
+        newest)      echo "tylko różnica do najnowszej" ;;
+        auto:*)      echo "auto (po ${1#auto:} odstępach tylko różnica)" ;;
+        *)           echo "$1" ;;
+    esac
+}
+eng_comp_words() {
+    case "$1" in
+        default) if [ "$PEER" = - ]; then echo "nie (kopia lokalna)"; else echo "tak (zstd)"; fi ;;
+        zstd)    echo "zstd" ;;
+        gzip)    echo "gzip (pigz)" ;;
+        none)    echo "nie" ;;
+        *)       echo "$1" ;;
+    esac
+}
+eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w WT_OUT; rc 1 = Wstecz
+    local t="$1" x="$2" d="$3"; shift 3
+    geom
+    wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
+       --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
+}
+engine_settings() {
+    local c_h c_c c_x c_a p_h p_c p_x p_a items n d v N out
+    info "Ustawienia silnika" "Czytam ustawienia relacji..."
+    if ! "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>"$TMPD/sc.err"; then
+        wt --title "Ustawienia silnika" --msgbox "show-config nie odpowiedział:\n$(tail -3 "$TMPD/sc.err")" 12 "$W"
+        return 0
+    fi
+    # Brak pola = ustawienie fabryczne ("default"); pierwsza sekcja dataset tej relacji.
+    IFS=$'\t' read -r c_h c_c c_x c_a < <("$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF'
+import sys, json
+out = ["default"] * 4
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    for s in d.get("sections") or []:
+        f = s.get("fields") or {}
+        if s.get("kind") == "dataset" and f.get("pair_label") == sys.argv[2]:
+            for i, k in enumerate(("history", "compression", "cipher", "autotune")):
+                v = str(f.get(k) if f.get(k) is not None else "").strip()
+                if k == "autotune":
+                    v = {"no": "no", "false": "no", "0": "no", "off": "no",
+                         "yes": "yes", "true": "yes", "1": "yes", "on": "yes"}.get(v.lower(), v)
+                if v:
+                    out[i] = v.replace("\t", " ")
+            break
+except Exception:
+    pass
+print("\t".join(out))
+PYEOF
+)
+    [ -n "${c_h:-}" ] || { c_h=default; c_c=default; c_x=default; c_a=default; }
+    p_h="$c_h"; p_c="$c_c"; p_x="$c_x"; p_a="$c_a"
+    while :; do
+        geom
+        items=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')"
+               comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')")
+        if [ "$PEER" != - ]; then
+            v="domyślny SSH"; [ "$p_x" = default ] || v="$p_x"
+            items+=(ciph "Szyfr SSH        $v$([ "$p_x" = default ] && echo ' (fabryczne)')")
+            v="tak"; case "$p_a" in no) v="nie" ;; esac
+            items+=(auto "Autodobór łącza  $v$([ "$p_a" = default ] && echo ' (fabryczne)')")
+        fi
+        items+=(__reset__ "Przywróć fabryczne" __done__ "Gotowe")
+        wt --title "Ustawienia silnika: $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+           --menu "Jak przesyłane są kopie tej relacji." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
+        case "$WT_OUT" in
+            hist)
+                d="${p_h%%:*}"; [ "$d" = default ] && d=all
+                eng_pick "Historia" "Co przesyłać, gdy w celu brakuje kilku migawek." "$d" \
+                    all    "Wszystkie migawki pomiędzy -- pełna historia w celu" \
+                    newest "Tylko różnica do najnowszej -- mniej miejsca, bez historii pośredniej" \
+                    auto   "Auto -- wszystkie, a przy dużej zaległości tylko różnica" || continue
+                case "$WT_OUT" in
+                    auto)
+                        N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
+                        while :; do
+                            wt --title "Historia: auto" --ok-button "Dalej" --cancel-button "Wstecz" \
+                               --inputbox "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?" 9 "$W" "$N" || continue 2
+                            v="${WT_OUT// /}"
+                            case "$v" in ''|*[!0-9]*) ;; *) [ "${#v}" -le 3 ] && [ "$((10#$v))" -ge 1 ] && { p_h="auto:$((10#$v))"; break; } ;; esac
+                            wt --title "Zła liczba" --msgbox "'$WT_OUT' -- podaj liczbę całkowitą od 1 do 999." 8 "$W"
+                        done ;;
+                    *) p_h="$WT_OUT" ;;
+                esac ;;
+            comp)
+                eng_pick "Kompresja" "Czy kompresować strumień kopii." "$p_c" \
+                    default "Fabryczna -- zdalnie zstd, lokalnie nic" \
+                    zstd    "zstd" \
+                    gzip    "gzip (pigz)" \
+                    none    "Bez kompresji" || continue
+                p_c="$WT_OUT" ;;
+            ciph)
+                eng_pick "Szyfr SSH" "Jakim szyfrem SSH idą kopie." "$p_x" \
+                    default                       "Domyślny SSH" \
+                    aes128-gcm@openssh.com        "aes128-gcm (szybki na procesorach z AES-NI)" \
+                    chacha20-poly1305@openssh.com "chacha20 (szybki bez AES-NI)" || continue
+                p_x="$WT_OUT" ;;
+            auto)
+                d="$p_a"; [ "$d" = default ] && d=yes
+                eng_pick "Autodobór łącza" "Czy silnik ma sam mierzyć łącze." "$d" \
+                    yes "Tak -- mierzy łącze i sam decyduje o kompresji" \
+                    no  "Nie" || continue
+                p_a="$WT_OUT" ;;
+            __reset__) p_h=default; p_c=default; p_x=default; p_a=default ;;
+            __done__)
+                ARGV=("$ZB" set-transfer "$NAME")
+                [ "$p_h" = "$c_h" ] || ARGV+=("--history=$p_h")
+                [ "$p_c" = "$c_c" ] || ARGV+=("--compression=$p_c")
+                if [ "$PEER" != - ]; then
+                    [ "$p_x" = "$c_x" ] || ARGV+=("--cipher=$p_x")
+                    [ "$p_a" = "$c_a" ] || ARGV+=("--autotune=$p_a")
+                fi
+                [ "${#ARGV[@]}" -gt 3 ] || return 0
+                info "Ustawienia silnika" "Liczę plan..."
+                if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
+                    out="$(grep -E '^FATAL' "$TMPD/stplan.txt" | tail -1 | sed 's/^FATAL: //')"
+                    [ -n "$out" ] || out="$(tail -3 "$TMPD/stplan.txt")"
+                    wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
+                    continue
+                fi
+                {
+                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
+                    echo
+                    grep "^Relacja '" "$TMPD/stplan.txt"
+                    echo
+                    echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+                } >"$TMPD/stplan2.txt"
+                yesno_text "$TMPD/stplan2.txt" "Ustawienia silnika: $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
+                clear 2>/dev/null
+                echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
+                "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+                if [ -n "${ZFS_TUI_LOG:-}" ]; then
+                    { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
+                fi
+                echo
+                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: ustawienia silnika relacji '$NAME' zmienione (rc=0). Enter = dalej"
+                else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
+                [ -t 0 ] && read -r _
+                exit "$RC" ;;
+        esac
+    done
+}
+
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
 while :; do
@@ -136,15 +286,17 @@ ACTION=""
 while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
-       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 16 "$W" 6 \
+       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 17 "$W" 7 \
        dane    "Datasety -- co kopiować (dodaj / usuń)…" \
        szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
        harm    "Harmonogram kopii i retencja -- tabela szczebli" \
-       config  "Ręczna edycja konfigu (jak crontab -e)" \
+       silnik  "Ustawienia silnika -- jak przesyłane są kopie…" \
+       config "Ręczna edycja konfigu (jak crontab -e)" \
        zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
         szablon|harm) break ;;
+        silnik) engine_settings; continue ;;
         config)
             # edit-config (2026-10-08): edytor dostaje caly terminal, jak crontab -e;
             # czasownik sam pyta o instalacje i pokazuje, co zrobi na zrodle.
