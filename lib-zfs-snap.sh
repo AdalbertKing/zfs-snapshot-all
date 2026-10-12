@@ -642,6 +642,24 @@ divergence_summary() {
     fi
 }
 
+# W14 (owner 2026-10-11, measured on pve9b): a replica that takes its OWN snapshots
+# off a relationship's copy leaves one replica_ snapshot there after every run, and
+# the next pull of the relationship discards it -- correctly, the copy follows its
+# source, and the replica carries on from its bookmark. Logged at level 0 that was
+# "the copy diverged" every hour for nothing. When EVERY snapshot being discarded
+# is a replica's (prefix replica_, the one the GUI's replica uses) and nothing was
+# written on the copy, it is the normal work of a replica: said at level 2. Any
+# other divergence is still said at level 0.
+only_replica_snaps() {   # <written after base> <snapshot names...> -> 0 = only replica_, nothing written
+    local written="$1" s n=0; shift
+    case "$written" in ''|0) ;; *) return 1 ;; esac
+    for s in "$@"; do
+        [ -n "$s" ] || continue
+        case "$s" in replica_*) n=$((n + 1)) ;; *) return 1 ;; esac
+    done
+    [ "$n" -gt 0 ]
+}
+
 # snaps_after <base> <snapshots, oldest first...> -- the names after <base>,
 # one per line. A snapshot taken on the copy with nothing written before it
 # adds no bytes, so `written@<base>` stays 0 and only this list shows that the
@@ -843,6 +861,31 @@ target_exists() {
     local remote_user="${2:-}"
     local remote_host="${3:-}"
     probe_dataset "$dataset" "$remote_user" "$remote_host" "target dataset"
+}
+
+# W19 (owner 2026-10-11, measured on pve9b with file-backed pools): a target that
+# sits under an ENCRYPTED dataset -- a replica medium formatted with encryption, a
+# relationship landing in an encrypted pool -- cannot be pre-created. The leaf
+# would inherit the parent's encryption, and the first FULL receive refuses to
+# replace it: "zfs receive -F cannot be used to destroy an encrypted filesystem".
+# Exactly the -w case, for the same reason, so it gets the -w treatment: the leaf
+# is left for recv, which creates it under the parent and it inherits the key.
+# Answers for the NEAREST EXISTING ancestor of <target>, because on a first send
+# the parent may not exist yet and is about to be created under it. Fail-open:
+# anything it cannot read (a pair gate that does not allow `zfs get`, an old ZFS
+# without the property) answers "not encrypted" -- the old behaviour.
+target_parent_encrypted() {   # <target> [remote_user] [remote_host] -> 0 = encrypted
+    local target="$1" remote_user="${2:-}" remote_host="${3:-}" d enc
+    d="${target%/*}"
+    [ "$d" = "$target" ] && return 1
+    local cmd="d='$d'; while :; do e=\$(zfs get -H -o value encryption \"\$d\" 2>/dev/null) && { echo \"\$e\"; exit 0; }; case \"\$d\" in */*) d=\"\${d%/*}\" ;; *) exit 1 ;; esac; done"
+    if [ -n "$remote_host" ]; then
+        enc=$(ssh -n "${SSH_OPTS[@]}" "$remote_user@$remote_host" "$cmd" 2>/dev/null) || return 1
+    else
+        enc=$(sh -c "$cmd" 2>/dev/null) || return 1
+    fi
+    case "$enc" in ''|off|-) return 1 ;; esac
+    return 0
 }
 
 # Warn when a dataset is only a container for its children and neither -r nor

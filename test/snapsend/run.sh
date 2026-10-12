@@ -732,6 +732,41 @@ else
     echo "SKIP -w raw send tests: this ZFS build cannot create encrypted datasets"
 fi
 
+# --- W19: a plain stream into a target under an ENCRYPTED parent --------------
+# Owner 2026-10-11 (encrypted replica medium), measured on pve9b: every mode
+# failed, "zfs receive -F cannot be used to destroy an encrypted filesystem", because
+# the engine pre-created the leaf, the leaf inherited the parent's encryption and
+# the first FULL receive could not replace it. The receive now creates the leaf
+# (it inherits the key), in both engines. Old code: rc 1 on the first send.
+if mkenc "$POOL/encdst" 2>/dev/null; then
+    zfs create "$POOL/w19src" && zfs snapshot "$POOL/w19src@auto_1"
+    run_send -e -m "auto_" "$POOL/w19src" "$POOL/encdst"
+    T19="$POOL/encdst/$POOL/w19src"
+    check "W19: push, plain stream into an encrypted parent -- first send exits 0" "0" "$RC"
+    check "W19: ...the target inherits the parent's encryption" "$POOL/encdst" \
+          "$(zfs get -H -o value encryptionroot "$T19" 2>/dev/null)"
+    check "W19: ...canmount=noauto restored on the recv-created leaf" "noauto" \
+          "$(zfs get -H -o value canmount "$T19" 2>/dev/null)"
+    tick; zfs snapshot "$POOL/w19src@auto_2"
+    run_send -e -m "auto_" "$POOL/w19src" "$POOL/encdst"
+    check "W19: push, incremental into the encrypted parent" "0:auto_1 auto_2" "$RC:$(snaps_of "$T19")"
+    zfs create "$POOL/w19g" && zfs snapshot "$POOL/w19g@auto_1"
+    run_get -e -m "auto_" "$POOL/w19g" "$POOL/encdst"
+    check "W19: pull, plain stream into an encrypted parent -- first pull exits 0" "0:$POOL/encdst" \
+          "$RC:$(zfs get -H -o value encryptionroot "$POOL/encdst/$POOL/w19g" 2>/dev/null)"
+else
+    echo "SKIP W19 encrypted-parent tests: this ZFS build cannot create encrypted datasets"
+fi
+
+# --- W14: a copy that discards only a replica's own snapshots ----------------
+# only_replica_snaps decides whether "follows its source -- discarding" is said at
+# level 2 (a replica's work) or level 0 (a real divergence).
+w14() { ( . "$REPO/lib-zfs-snap.sh" >/dev/null 2>&1; only_replica_snaps "$@" ) && echo y || echo n; }
+check "W14: only replica_ snapshots, nothing written -> quiet" "y" "$(w14 0 replica_2026-10-11_20-44-51 replica_2026-10-11_21-00-00)"
+check "W14: a foreign snapshot among them -> loud" "n" "$(w14 0 replica_a manual_b)"
+check "W14: bytes written on the copy -> loud" "n" "$(w14 4096 replica_a)"
+check "W14: nothing to discard -> not the replica case" "n" "$(w14 0)"
+
 # --- compression: -z (pigz) vs -Z (zstd) ------------------------------------
 # Both compressors sit in the same pipeline slot: send | COMPRESS | mbuffer |
 # DECOMPRESS | recv -- but ONLY for a remote target. Since v2.32 a local send

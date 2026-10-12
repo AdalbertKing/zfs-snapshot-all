@@ -1,10 +1,10 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 f9ea013845ab15a8fe5e9eb50c6a56253f5f64b3 -->
-<!-- frozen: snapget.sh 100755 c460ff118c58b3eb52f36013d9f9fd9ae07efd89 -->
+<!-- frozen: snapsend.sh 100755 8a6707101db9b99a17a155e4cd6ba940bdba0997 -->
+<!-- frozen: snapget.sh 100755 0f92c9aea65a882c26cbe2ad4d9ef0d89a85846c -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
-<!-- frozen: lib-zfs-snap.sh 100644 77eadee355d879ffb2faad2786f5ff6e8927f7f0 -->
+<!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
 **Machine markers above. Written by `./test/impact.sh --refreeze`, checked by
@@ -958,6 +958,32 @@ Owner-authorized refreezes:
   subvol-N-disk-M); a dataset named otherwise is never treated as a guest.
   -t and a bare sync pull without -M still refuse.
   twin: NOT ported -- -M is snapget's alone; snapsend has no mirror.
+
+- 2026-10-12 (snapget.sh, snapsend.sh, lib-zfs-snap.sh): **W19 -- a target under
+  an encrypted dataset is created by the receive; W14 -- a copy that discards only
+  a replica's own snapshots says so at level 2.**
+  Owner direction, verbatim, before the change: "Odmrazaj. Poprawiaj. Testuj."
+  (the two items had been approved as engine work on 2026-10-11 and parked for
+  that word). snapget v2.73 -> v2.74, snapsend v2.75 -> v2.76.
+  W19: measured on pve9b with file-backed pools: a replica onto an ENCRYPTED
+  medium failed in every mode ("zfs receive -F cannot be used to destroy an
+  encrypted filesystem or overwrite an unencrypted one with an encrypted one"),
+  because the engine pre-creates the leaf, the leaf inherits the parent's
+  encryption, and the first full receive may not replace it. The -w path already
+  left the leaf to recv for the same reason; `leaf_by_recv` now covers both:
+  -w, or `target_parent_encrypted` (new in lib-zfs-snap.sh: the encryption of the
+  nearest EXISTING ancestor of the target; fail-open to "not encrypted" when it
+  cannot be read, e.g. a pair gate that refuses `zfs get`). Every former
+  RAW_SEND site about the leaf (create, -f recreate, first-send listing, canmount
+  after the transfer) reads leaf_by_recv; the -w flag itself still reads RAW_SEND.
+  W14: measured on pve9b: a replica taking its own replica_ snapshots off a
+  relationship's copy leaves one there per run, and every pull of that
+  relationship logged "follows its source -- discarding ..." at level 0.
+  `only_replica_snaps` (lib-zfs-snap.sh): when every discarded snapshot is
+  replica_* and nothing was written on the copy, the same line is logged at
+  level 2 with "the replica continues from its bookmark". Anything else is still
+  level 0, word for word.
+  twin: ported in BOTH engines in the same change, same wording, same helpers.
 
 ## How it is enforced
 

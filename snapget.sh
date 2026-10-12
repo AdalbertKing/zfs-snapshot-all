@@ -400,7 +400,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.73'
+VERSION='v2.74'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1467,6 +1467,14 @@ process_dataset() {
     hold_snapshot "$snapshot" "$remote_user" "$remote_host"
     record_inflight_snap "$tgt_dataset" "$src_dataset" "$snapshot"
 
+    # THE LEAF IS LEFT TO RECV under -w AND under an encrypted parent (W19, see
+    # target_parent_encrypted in lib-zfs-snap.sh): a pre-created leaf would carry
+    # the parent's encryption and the first full receive could not replace it.
+    local leaf_by_recv=$RAW_SEND
+    if [ $leaf_by_recv -eq 0 ] && target_parent_encrypted "$tgt_dataset"; then
+        leaf_by_recv=1
+        log 2 "Target $tgt_dataset sits under an encrypted dataset -- the receive creates it (it inherits that key)"
+    fi
     if [ $FORCE_FULL_SEND -ne 1 ]; then
         # SAY WHAT HAPPENED, NOT WHAT MIGHT. This used to log "Creating target
         # dataset: $tgt_dataset" here, unconditionally, and it was wrong three
@@ -1502,7 +1510,7 @@ process_dataset() {
         # non-root receive) and the leaf is left to recv. canmount=noauto is
         # reapplied after a successful transfer instead of at create time.
         local create_target="$tgt_dataset"
-        [ $RAW_SEND -eq 1 ] && create_target="${tgt_dataset%/*}"
+        [ $leaf_by_recv -eq 1 ] && create_target="${tgt_dataset%/*}"
         # Ancestors first, each explicitly canmount=noauto -- `zfs create -p`
         # would give them canmount=on and a non-root receive dies mounting them.
         # The target is always local here, so this never goes over ssh.
@@ -1548,8 +1556,8 @@ process_dataset() {
         # turning every -f -w run into a guaranteed failure. The destroy above
         # already removed the leaf; ancestors survive it, so recv has what it
         # needs.
-        if [ $RAW_SEND -eq 1 ]; then
-            log 2 "Not recreating target dataset (-w: raw receive creates it)"
+        if [ $leaf_by_recv -eq 1 ]; then
+            log 2 "Not recreating target dataset (-w or an encrypted parent: the receive creates it)"
         else
         log 2 "Recreating target dataset"
         ensure_target_ancestors "$tgt_dataset" "" "" || {
@@ -1573,8 +1581,8 @@ process_dataset() {
     # mode still pre-creates the target, so a failure there remains a real one
     # and is still reported. Target is always local in snapget.sh.
     local tgt_snaps
-    if [ $RAW_SEND -eq 1 ] && ! target_exists "$tgt_dataset"; then
-        log 2 "Target does not exist yet -- raw receive will create it"
+    if [ $leaf_by_recv -eq 1 ] && ! target_exists "$tgt_dataset"; then
+        log 2 "Target does not exist yet -- the receive will create it"
         tgt_snaps=()
     else
         tgt_snaps=($(get_sorted_snapshots "$tgt_dataset")) || {
@@ -1749,7 +1757,12 @@ process_dataset() {
                 # it through: the path is no running guest's disk.
                 local p0_what="Backup copy"
                 [ "$MIRROR" -eq 1 ] && p0_what="Mirror copy (no running guest on that path)"
-                log 0 "$p0_what '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$written" "${tgt_snaps[@]}") (zfs recv -F)"
+                # shellcheck disable=SC2086
+                if only_replica_snaps "$written" $p0_ahead; then
+                    log 2 "$p0_what '$tgt_dataset' follows its source -- discarding only a replica's own snapshot(s):$(printf ' %s' $p0_ahead) (zfs recv -F; the replica continues from its bookmark)"
+                else
+                    log 0 "$p0_what '$tgt_dataset' follows its source -- discarding $(divergence_summary "$recv_base" "$written" "${tgt_snaps[@]}") (zfs recv -F)"
+                fi
             elif [ "$written" != "0" ]; then
                 if [ -z "$written" ]; then
                     log 0 "Refusing: could not determine how much '$tgt_dataset' has diverged from '@${recv_base}' (written@ query failed) -- not assuming it is safe for -F to roll back."
@@ -1935,7 +1948,7 @@ process_dataset() {
     # receive possible. Best-effort -- an encrypted target is already unmounted
     # (keystatus=unavailable), so failing here costs nothing immediate. Target
     # is always local in snapget.sh.
-    if [ $RAW_SEND -eq 1 ]; then
+    if [ $leaf_by_recv -eq 1 ]; then
         zfs set canmount=$TARGET_CANMOUNT "$tgt_dataset" 2>/dev/null \
             || log 2 "Could not set canmount=$TARGET_CANMOUNT on $tgt_dataset (needs delegated 'canmount')"
     fi
