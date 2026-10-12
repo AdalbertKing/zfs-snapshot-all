@@ -1704,7 +1704,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     Na F3 podpis F7 mowi, co klawisz ZROBI z zaznaczona relacja: na
     wstrzymanej -- Wznow (tester R4, B6: listwa mowila Pauza, a F7 wznawial)."""
     if active == "zadania":
-        return [("F7", u"Sortuj")]
+        return [("F7", u"Sortuj"), ("F8", u"Uruchom teraz")]
     if active == "relacje":
         return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
     if active == "transfery":
@@ -3324,6 +3324,8 @@ HELP = [
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
     u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
+    u"                 F8 uruchamia zaznaczone zadanie teraz: dokładnie jego linię",
+    u"                 z crona, jako konto z crontaba (najpierw okno z komendą).",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
     u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
@@ -3739,6 +3741,44 @@ class UI(object):
             return self.run_template_dialog([self.zb(), "save-profile", "--ask", "--from=%s" % n])
         if k == "del":
             return self.run_template_dialog([self.zb(), "delete-profile", n, "--ask"])
+
+    def run_job_now(self):
+        """F8 na F2 (W15, wlasciciel 2026-10-11): zaznaczone zadanie TERAZ -- dokladnie
+        jego linia (linie) z crona, z tym samym kontem, logiem i powiadomieniem, wiec
+        bieg jest taki jak nocny. Najpierw okno z komenda (prune kasuje). Gdy to samo
+        zadanie wlasnie biegnie z crona, silnik odmowi blokada -- widac to w oknie wyniku."""
+        rows = self.jobrows or []
+        c = self.cursor["zadania"]
+        if not rows or not (0 <= c < len(rows)):
+            self.message = u"brak zadań -- nie ma czego uruchomić"
+            return
+        r = rows[c]
+        j = r.get("job") or {}
+        sched = (r.get("schedule") or "").split()
+        lines = [l for l in (j.get("cron_lines") or []) if sched and l.split()[:5] == sched]
+        if not lines:
+            self.message = u"ten wiersz nie ma linii w cronie (strażnik albo wiersz bez zadania) -- nie ma czego uruchomić"
+            return
+        acct = j.get("account") or "root"
+        script = "; ".join(re.sub(r"^(\S+\s+){5}", "", l) for l in lines)
+        try:
+            import pwd
+            me = pwd.getpwuid(os.geteuid()).pw_name
+        except (ImportError, KeyError, AttributeError):
+            me = os.environ.get("USER", "")
+        if self.exec_log:
+            me = "root"      # atrapa nic nie uruchamia; GUI na hostach chodzi jako root
+        if acct in ("", me):
+            argv = ["/bin/sh", "-c", script]
+        elif me == "root":
+            argv = ["runuser", "-u", acct, "--", "/bin/sh", "-c", script]
+        else:
+            self.message = u"zadanie konta %s -- uruchomić je może root albo samo konto" % acct
+            return
+        note = [u"Konto: %s" % acct]
+        if any(re.search(r"\bprune\b|delsnaps", l) for l in lines):
+            note.append(u"Uwaga: prune kasuje migawki wg retencji.")
+        self.confirm(u"Uruchomić teraz? %s" % (r.get("name") or ""), argv, note_lines=note)
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -4352,6 +4392,9 @@ class UI(object):
             return "stay"
         # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
         # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
+        if k == "F8" and self.screen == "zadania":
+            self.run_job_now()
+            return "stay"
         if k == "F7" and self.screen == "zadania":
             cur_row = self.jobrows[self.cursor["zadania"]] if self.jobrows and 0 <= self.cursor["zadania"] < len(self.jobrows) else None
             self.zad_sort = (self.zad_sort + 1) % 3

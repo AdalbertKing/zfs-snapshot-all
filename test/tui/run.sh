@@ -1409,6 +1409,17 @@ fi
 rm -f "$RMN"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
+# W15 (wlasciciel 2026-10-11): F8 na F2 = zaznaczone zadanie teraz -- najpierw okno z
+# komenda, 't' uruchamia DOKLADNIE linie z crona (bez pola harmonogramu); Esc nic nie robi.
+: > "$XL"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8 2>&1)"
+A2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8,t 2>&1)"
+if has "$A" 'Uruchomić teraz?' && has "$A" 'Wykona się DOKŁADNIE to:' && has "$A" 'Konto: ' \
+   && grep -q "/bin/sh -c .*zfs-job.sh" "$XL" && ! grep -Eq "sh -c '?[0-9*/,-]+ [0-9*/,-]+ " "$XL"; then
+    ok "zadania: F8 -> okno 'Uruchomić teraz?' z komenda i kontem, 't' uruchamia linie z crona bez pola harmonogramu"
+else
+    bad "zadania: F8 uruchom teraz" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|Wykona|Konto' | head -3)"
+fi
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
     : > "$XL"
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys "$1" 2>&1
