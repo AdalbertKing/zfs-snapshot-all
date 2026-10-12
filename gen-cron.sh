@@ -3521,6 +3521,17 @@ emit_send() {
 # The pool is the first component of the target path -- that is what gets
 # imported, and the full path is passed as --dataset so the gate can tell an
 # absent disk from the WRONG disk in the slot.
+# A FIXED replica's subshell, handed to a shell the same way media_bracket hands the
+# removable one. Found 2026-10-12 testing W18 on pve9b: the multi-source FIXED form
+# put a bare "( m=0; for ... )" after zfs-job's "--", which execs "$@" -- a syntax
+# error, so such a replica never ran from cron or run-replicas (the render passed).
+sh_subshell() {   # <body without the parentheses> -> /bin/sh -c '( body )'
+    case "$1" in
+        *"'"*) die "sh_subshell: the command generated for a replica contains a single quote, which cannot be quoted for sh -c: $1" ;;
+    esac
+    printf "/bin/sh -c '( %s )'" "$1"
+}
+
 media_bracket() {   # <media field> <target path> <label> <command> [source[,source...]] [prefix] [cmd_captures_status] [guids]
     local media="$1" target="$2" label="$3" cmd="$4" src="${5:-}" pref="${6:-}" caps="${7:-0}" guids="${8:-}"
     [ "$media" = removable ] || { printf '%s' "$cmd"; return 0; }
@@ -3908,7 +3919,7 @@ emit_replicas() {
             if [ -n "$keep" ]; then
                 # shellcheck disable=SC2059
                 cmd="$cmd; m=\$?; [ \$m -eq 0 ] && { $(printf "$_keepcmd" "$source"); m=\$?; }"
-                [ "$media" = removable ] || cmd="( $cmd; exit \$m )"
+                [ "$media" = removable ] || cmd="$(sh_subshell "$cmd; exit \$m")"
             elif [ "$media" = removable ]; then
                 cmd="$cmd; m=\$?"
             fi
@@ -3941,7 +3952,7 @@ emit_replicas() {
                 # the line's rc would be that of the last `[ $m -eq 0 ]` test,
                 # which is not the engines' verdict. A subshell that exits $m is
                 # the whole of what the bracket contributes here.
-                cmd="( $cmd; exit \$m )"
+                cmd="$(sh_subshell "$cmd; exit \$m")"
             fi
         fi
         # OVER CRON'S LIMIT: THE LINE NAMES THE REPLICA, NOT ITS COMMAND (W11).

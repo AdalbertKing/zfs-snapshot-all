@@ -1425,6 +1425,17 @@ printf '[defaults]\n\thost_label = f\n[replica:pk]\n\tsource = tank/a\n\tdst = u
 fo=$(for_run); frc=$?
 check "PRK3 keep with passive = yes is refused (nothing of its own to keep)" "1:1" \
       "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'nothing of its own to keep')"
+# A FIXED replica with several sources (found 2026-10-12 testing W18 on pve9b): its
+# subshell sat bare after zfs-job's "--" -- a syntax error in cron and in run-replicas.
+# The command part of every replica line must parse as shell.
+printf '[defaults]\n\thost_label = f\n[replica:fx]\n\tsource = tank/a,tank/b\n\tdst = disk/rep\n\tschedule = 0 1 * * *\n\tprefix = replica_\n[replica:fk]\n\tsource = tank/c\n\tdst = disk/rep\n\tschedule = 0 2 * * *\n\tprefix = replica_\n\tkeep = 4\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+_bad=0
+while IFS= read -r _ln; do
+    sh -n -c "$(printf '%s' "$_ln" | sed -E 's/^([^ ]+ ){5}//')" 2>/dev/null || _bad=$((_bad + 1))
+done < <(printf '%s\n' "$fo" | grep -E 'replica copy \((fx|fk)\)')
+check "PRK4 FIXED replicas (several sources; keep with one source) render as lines that parse as shell" "0:0:2" \
+      "$frc:$_bad:$(printf '%s\n' "$fo" | grep -cE "replica copy \((fx|fk)\).* -- /bin/sh -c '\( ")"
 
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
