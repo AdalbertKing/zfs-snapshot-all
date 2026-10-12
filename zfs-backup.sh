@@ -2252,7 +2252,16 @@ append_source_templates_if_missing() {   # <workfile> <rendered prune fragment>
     while IFS= read -r id; do
         [ -n "$id" ] || continue
         src="$(profile_to_src_id "$id")"
-        grep -q "^\[template:$src\]" "$wf" 2>/dev/null && continue
+        if grep -q "^\[template:$src\]" "$wf" 2>/dev/null; then
+            # Present AND used by a section: an installed policy, left as it is.
+            # Present and used by NOTHING: an orphan -- e.g. the source family an
+            # older local relationship wrote under these names, with its monitor
+            # fields (measured on pve9b, 2026-10-12: it outlived its relationship
+            # and every later remote install with that profile died on it). It is
+            # nobody's policy, so it is replaced, not inherited.
+            config_referenced_templates "$wf" | grep -qxF "$src" && continue
+            remove_template_section "$wf" "$src"
+        fi
         sec="$(profile_template_section "$id" "${SRC_PROFILE_TPL_FILE:-$PROFILE_TPL_FILE}")"
         [ -n "$sec" ] || die "remote source-retention: profile '$PROFILE_ACTIVE' references prune template '$id' but no rendered [template:$id] exists -- refusing to emit a SOURCE prune that would silently reuse the TARGET's template authority (REV-20260811-106)"
         # Drop monitor_warn/monitor_crit: this template drives a REMOTE prune scope,
