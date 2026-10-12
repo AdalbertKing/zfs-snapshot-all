@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: aa5582495bb93d77 -->
+<!-- status-covers-digest: 1dca0607e16bd406 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -30,7 +30,11 @@
   monitor_crit set on a REMOTE scope”). `local-backup` pisze teraz `profile__<P>__lsrc_*`
   (`SRC_ID_TAG`). Istniejąca relacja lokalna przechodzi na nowe nazwy przy najbliższej
   zmianie relacji (stare zdejmuje sprzątanie osieroconych szablonów, W7). Test
-  `localbackup` (nazwy `__lsrc_`, żadnych `__src_`).
+  `localbackup` (nazwy `__lsrc_`, żadnych `__src_`). Druga połowa, znaleziona przy
+  powtórce kampanii: osierocony szablon `__src_` (po usuniętej relacji lokalnej, nikt go
+  nie używa) był dalej dziedziczony przez relację zdalną. Szablon źródła, którego żadna
+  sekcja nie używa, jest teraz zastępowany świeżym; używany zostaje bez zmian. Test
+  `zfsbackup` 56 step3 (z kontrolą).
 
 - **Replika zaszyfrowanego źródła wysyła zaszyfrowane (2026-10-12, pytanie właściciela
   o trzy układy szyfrowania).** Relacja pobrana „raw” (W17) zostawia kopię na kolektorze
