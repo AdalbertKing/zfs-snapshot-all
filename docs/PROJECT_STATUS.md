@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4d5d98970eee71d9 -->
+<!-- status-covers-digest: 4b780f3e437f3bf2 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Replika: okno „Ustawienia silnika” (właściciel 2026-10-12).** „Zmień replikę” zaczyna
+  się od wyboru: kreator (źródła, nośnik, harmonogram) albo ustawienia silnika. Okno jak dla
+  relacji (W16): Migawki (cała historia / stan na chwilę kopii), Historia (wszystkie /
+  różnica / auto:N), Na dysku (odbicie kolektora / N ostatnich), Szyfrowane tylko do wglądu;
+  bez kompresji, szyfru i limitu łącza (kopia lokalna). Zmiana idzie tym samym `add-replica`
+  z planem, reszta repliki bez zmian. Przy okazji: kreator nie gubi już zapisanej `history`
+  repliki (przekazuje `--history`). Test `tui` replika (12).
 
 - **Błąd: usunięcie ostatniej relacji zdejmowało też replikę z crona.** Kampania
   szyfrowania na pve9b (2026-10-12): po usunięciu ostatniej relacji roota zniknął cały
