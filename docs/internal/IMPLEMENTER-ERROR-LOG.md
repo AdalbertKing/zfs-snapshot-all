@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57, E67, E72, E78, E79.*
+*Evidence: E13, E22, E57, E67, E72, E78, E79, E80.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1913,6 +1913,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E80 — a local and a remote relationship could not share one config (found 2026-10-12, R12)
+
+**Genesis.** L1/L2 (2026-10-09) made a local copy a relationship and reused the
+remote source-retention emitter's naming: both wrote the source family as
+`profile__<P>__src_*`. Their contents differ by design -- the local family keeps
+monitor fields (a local scope can be monitored) and, for a flat profile, the
+creation fields; the remote one must not carry monitors (gen-cron refuses them
+on a remote prune scope). Templates are appended only when the NAME is absent,
+so in one config the first relationship's version won and the second one's
+install died. Found by the live encryption campaign: a local relationship (E1)
+and then a remote one (E3), both on `default`, both root's, on pve9b.
+
+**Cause.** R12: every suite built ONE relationship per config -- local in
+localbackup, remote in zfsbackup. The shape "two kinds in one file" was never
+run, and the name collision is invisible until it is.
+
+**Rule (R12).** When two emitters write into one shared namespace, a test puts
+both into one file. Now: the local family has its own names (`__lsrc_`), and the
+localbackup test asserts it carries none of the remote names.
 
 ### E79 — a fixed replica with several sources never ran (found 2026-10-12, R12)
 

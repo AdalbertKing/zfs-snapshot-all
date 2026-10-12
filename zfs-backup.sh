@@ -1922,6 +1922,16 @@ profile_downstream_candidate() {   # <outfile> -> 0; needs the profile loaded
 # the built-in default (profile__default__keep_hourly) stays
 # profile__default__src_keep_hourly -- unchanged from the accepted REV-104 output --
 # while a custom profile__P__ret_hourly becomes profile__P__src_ret_hourly.
+#
+# A LOCAL relationship writes its source family as `__lsrc_` (2026-10-12). Found
+# by the live encryption campaign on pve9b: a local relationship and a remote one
+# with the same profile in ONE config shared the `__src_` names, but not the
+# content -- the local family keeps monitor_warn/monitor_crit (and, for a flat
+# profile, send_schedule/prefix: it creates snapshots), the remote one may not
+# (gen-cron refuses monitors on a remote prune scope). Templates are appended only
+# when the name is absent, so whichever came first won and the other's install
+# died ("monitor_warn/monitor_crit set on a REMOTE scope"). Separate names, no
+# shared authority. SRC_ID_TAG is set (local) by cmd_local_backup only.
 
 # The template identities a rendered prune fragment references via use_template.
 profile_prune_ref_ids() {   # <rendered prune fragment>
@@ -2096,7 +2106,7 @@ profile_fragment_patterns() {   # <rendered prune fragment> <templates file>
 }
 
 profile_to_src_id() {   # <template identity>
-    printf '%s' "$1" | sed 's/\(.*\)__/\1__src_/'
+    printf '%s' "$1" | sed "s/\(.*\)__/\1__${SRC_ID_TAG:-src}_/"
 }
 
 # The SOURCE template family: every template the prune fragment references, copied
@@ -7500,6 +7510,8 @@ PRCEOF
 
 
 cmd_local_backup() {
+    # The source family of a LOCAL relationship has its own names (see profile_to_src_id).
+    local SRC_ID_TAG=lsrc
     # target_given separates "the operator did not say" from "the operator said
     # NOTHING GOES ANYWHERE". Both leave $target empty and they mean opposite
     # things: omitted asks this tool to PROPOSE a destination, `--target=''` declares

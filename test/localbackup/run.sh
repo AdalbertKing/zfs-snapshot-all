@@ -235,11 +235,11 @@ fi
 # CONFIG from the plan, then prove independent editing.
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ind.conf")"
 printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/ind-cand.conf"
-# distinct template identities: a source family (__src_keep_*) AND a target family
+# distinct template identities: a source family (__lsrc_keep_*) AND a target family
 # (__keep_*), both present.
-if grep -q '^\[template:profile__default__src_keep_hourly\]' "$WORK/ind-cand.conf" \
+if grep -q '^\[template:profile__default__lsrc_keep_hourly\]' "$WORK/ind-cand.conf" \
         && grep -q '^\[template:profile__default__keep_hourly\]' "$WORK/ind-cand.conf" \
-        && grep -q 'use_template = profile__default__src_keep_' "$WORK/ind-cand.conf" \
+        && grep -q 'use_template = profile__default__lsrc_keep_' "$WORK/ind-cand.conf" \
         && grep -q 'use_template = profile__default__keep_' "$WORK/ind-cand.conf"; then
     ok "104 F1/source and target reference DISTINCT prune-template identities"
 else
@@ -253,7 +253,7 @@ lb_render_retain() {  # <config> <scope> -> the -M value on that scope's prune l
 }
 GEN="$REPO/gen-cron.sh"
 # mutate ONLY the source family's monthly retain -M12 -> -M36
-awk '/\[template:profile__default__src_keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-src.conf"
+awk '/\[template:profile__default__lsrc_keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-src.conf"
 if [ "$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data')" = "M36" ] \
         && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups')" = "M12" ]; then
     ok "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged"
@@ -272,10 +272,10 @@ else
 fi
 # negative control: prove the distinctness is load-bearing -- if BOTH scopes shared
 # one template family (the 49d547ae shape), the src mutation above would also move
-# the target. Build a valid shared-shape config: drop the __src_keep_ template
+# the target. Build a valid shared-shape config: drop the __lsrc_keep_ template
 # definitions and point the source prune at the target's __keep_ family.
-awk '/^\[template:profile__default__src_keep_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/ind-cand.conf" \
-    | sed '/^\tuse_template/ s/__src_keep_/__keep_/g' > "$WORK/shared.conf"
+awk '/^\[template:profile__default__lsrc_keep_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/ind-cand.conf" \
+    | sed '/^\tuse_template/ s/__lsrc_keep_/__keep_/g' > "$WORK/shared.conf"
 awk '/\[template:profile__default__keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/shared.conf" > "$WORK/shared-mut.conf"
 if [ "$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data')" = "M36" ] \
         && [ "$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')" = "M36" ]; then
@@ -303,10 +303,10 @@ printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' |
     && ok "106/custom ret_* profile plans successfully" \
     || bad "106/custom ret_* profile plans successfully" "rc=$rc $(printf '%s' "$out"|tail -1)"
 # distinct identities for a name that does NOT contain keep_: a SOURCE family
-# (__src_ret_*) exists AND the source prune points at it, not at the target's __ret_*.
-if grep -q '^\[template:profile__custret__src_ret_hourly\]' "$WORK/cust-cand.conf" \
+# (__lsrc_ret_*) exists AND the source prune points at it, not at the target's __ret_*.
+if grep -q '^\[template:profile__custret__lsrc_ret_hourly\]' "$WORK/cust-cand.conf" \
         && grep -q '^\[template:profile__custret__ret_hourly\]' "$WORK/cust-cand.conf" \
-        && grep -q 'use_template = profile__custret__src_ret_' "$WORK/cust-cand.conf" \
+        && grep -q 'use_template = profile__custret__lsrc_ret_' "$WORK/cust-cand.conf" \
         && grep -q 'use_template = profile__custret__ret_' "$WORK/cust-cand.conf"; then
     ok "106 F1/custom profile gets DISTINCT source vs target template identities"
 else
@@ -322,7 +322,7 @@ else
         "src=$(lb_render_retain "$WORK/cust-cand.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-cand.conf" 'hdd/backups')"
 fi
 # mutate ONLY the source family -> only the source cron line moves
-awk '/\[template:profile__custret__src_ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
+awk '/\[template:profile__custret__lsrc_ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
     "$WORK/cust-cand.conf" > "$WORK/cust-mut-src.conf"
 if [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'rpool/data')" = "M36" ] \
         && [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'hdd/backups')" = "M12" ]; then
@@ -345,9 +345,9 @@ fi
 # so under 799bd0d the custom SOURCE would have shared the TARGET's family. Prove
 # the coupling directly: point the source prune back at the target family (what the
 # no-op rewrite leaves) and show one edit moves BOTH sides.
-awk '/^\[template:profile__custret__src_ret_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/cust-cand.conf" \
-    | sed '/use_template/ s/__src_ret_/__ret_/g' > "$WORK/cust-shared.conf"
-old_noop="$(printf 'use_template = profile__custret__ret_hourly\n' | sed 's/__keep_/__src_keep_/g')"
+awk '/^\[template:profile__custret__lsrc_ret_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/cust-cand.conf" \
+    | sed '/use_template/ s/__lsrc_ret_/__ret_/g' > "$WORK/cust-shared.conf"
+old_noop="$(printf 'use_template = profile__custret__ret_hourly\n' | sed 's/__keep_/__lsrc_keep_/g')"
 [ "$old_noop" = 'use_template = profile__custret__ret_hourly' ] \
     && ok "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" \
     || bad "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" "$old_noop"
@@ -1317,10 +1317,10 @@ out="$(runi snapsend-ok "" --source=rpool/other --target=hdd/backups --config="$
 # copy is a duplicate section gen-cron refuses, and it would discard whatever
 # the operator had edited into the first.
 { [ "$(grep -cxF '[prune:hdd/backups]' "$CFG")" -eq 1 ] \
-  && [ "$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")" -eq 1 ]; } \
+  && [ "$(grep -cE '^\[template:profile__default__lsrc_keep_hourly\]' "$CFG")" -eq 1 ]; } \
     && ok "krok5/blocker2: the target prune and the source template family stay single" \
     || bad "krok5/blocker2: the target prune and the source template family stay single" \
-           "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__src_keep_hourly\]' "$CFG")"
+           "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__lsrc_keep_hourly\]' "$CFG")"
 # The mixed request -- what an operator actually types when adding one source to
 # a set: name them all, and let the tool work out which is new. The installed
 # one must be reported as left alone rather than counted as seeded, and it must
@@ -1673,6 +1673,19 @@ else
     bad "W7: second edit of an own template" "own: $(printf '%s\n' "$w7o" | grep -E 'FATAL|different' | head -2) tgt=$(k21_flags "$w7o" hdd/backups/rpool/data)" "other: $(printf '%s\n' "$w7c" | grep -E 'FATAL|different' | head -1)"
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
+
+# 2026-10-12, live encryption campaign on pve9b: a local and a remote relationship
+# with the same profile in ONE config shared the `__src_` template names but not their
+# content (the local family keeps monitors; the remote one may not), and the second
+# install died. A local relationship's source family is `__lsrc_` now: the candidate
+# carries it and none of the remote `__src_` names. Old code: `__src_` here.
+w12o="$(run --source=rpool/data --target=hdd/backups --profile=default --name=ns --config="$WORK/ns.conf")"
+if printf '%s' "$w12o" | grep -q 'profile__default__lsrc_keep_hourly' && ! printf '%s' "$w12o" | grep -q 'profile__default__src_keep_'; then
+    ok "local relationship: its source family is __lsrc_ (never the remote __src_ names it would collide with)"
+else
+    bad "local relationship: source template namespace" "$(printf '%s
+' "$w12o" | grep -oE 'profile__default__[a-z_]+' | sort -u | head -8)"
+fi
 
 # W17: local-backup --raw -- an encrypted source copied encrypted (-w on the send line,
 # raw = yes in its section); control without --raw: no -w.
