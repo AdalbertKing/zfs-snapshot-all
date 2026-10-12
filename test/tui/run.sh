@@ -2625,6 +2625,7 @@ RPOUT=$(rp_run "0${T}usb3
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}on-insert
@@ -2646,6 +2647,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2665,6 +2667,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2684,6 +2687,7 @@ RPOUT=$(rp_run "0${T}usb5
 0${T}hdd/data
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__prep__
 0${T}/dev/disk/by-id/usb-C
@@ -2714,6 +2718,7 @@ RPOUT=$(rp_run "0${T}usb6
 0${T}__done__
 0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2732,6 +2737,7 @@ fi
 #     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}repl
 0${T}0 22 * * *
@@ -2748,6 +2754,7 @@ fi
 #     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
@@ -2767,6 +2774,7 @@ fi
 #     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__del__
 0${T}777
@@ -2785,6 +2793,7 @@ fi
 #      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
 RPOUT=$(rp_run "0${T}next
 0${T}own
+0${T}mirror
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
@@ -2799,6 +2808,23 @@ if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install 
     ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
 else
     bad "replica: dodaj dysk bez ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
+fi
+# (11) W18: "Tylko stan na chwile kopii" + "Trzymaj N ostatnich" = --keep=12 (wlasna
+#      historia dysku, bez lustra); plan mowi "12 ostatnich kopii".
+RPOUT=$(rp_run "0${T}next
+0${T}own
+0${T}keep
+0${T}12
+0${T}removable
+0${T}repl
+0${T}0 22 1 * *
+1${T}
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb11","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 1 * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb11)
+if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && grep -qF '12 ostatnich kopii' "$RP/wt.log"; then
+    ok "replica: W18 'Trzymaj N ostatnich kopii' -> --keep=12, plan mowi o wlasnej historii dysku"
+else
+    bad "replica: keep N (W18)" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
 fi
 rm -rf "$RP"
 

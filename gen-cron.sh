@@ -1461,7 +1461,7 @@ _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pa
 #   * and there are N of them, which is the whole point.
 #
 # The name in the header is just a label -- it names the medium, not a dataset.
-_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert
+_allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert keep
 _allow_fields excluded  keep
 
 # The single most useful thing to say about a rejected field is "you put it in
@@ -2987,8 +2987,21 @@ build_replica_section() {
     # replica a second, commented copy of its line as well. Default no -- a
     # scheduled replica no longer runs on every insertion of any disk.
     local on_insert; resolve_bool_field on_insert "$sec" "" "[replica:$name]" 0; on_insert="$BOOL_FIELD"
+    # ITS OWN RETENTION ON THE MEDIUM (W18, owner 2026-10-11: a disk put in once a
+    # month that keeps 12 states of its own, not a mirror of the collector). keep = N:
+    # NO mirror (-M would drop what the collector pruned), and after each copy the
+    # medium keeps the N newest snapshots of the replica's own family. Measured on
+    # pve9b the same day: without -M every run adds one snapshot, sent as an
+    # increment from the collector's bookmark. Own family only -- a passive replica
+    # carries the relationship's snapshots, which are not this replica's to count.
+    local keep; keep="$(resolve_field keep "$sec" "" "")" || keep=""
+    case "$keep" in
+        '') ;;
+        *[!0-9]*|0*) die "[replica:$name]: keep='$keep' -- how many of the replica's own snapshots the medium keeps, a whole number above 0" ;;
+    esac
+    [ -z "$keep" ] || [ "$passive" != 1 ] || die "[replica:$name]: keep = $keep with passive = yes -- a passive replica takes no snapshots of its own, so there is nothing of its own to keep. Use prefix (its own family) or drop keep."
 
-    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}${SEP}${guids}${SEP}${on_insert}")
+    REPLICA_ENTITIES+=("${name}${SEP}${source}${SEP}${dst}${SEP}${schedule}${SEP}${prefix}${SEP}${notify}${SEP}${media}${SEP}${recursive}${SEP}${hist_flags}${SEP}${flags}${SEP}${mwarn}${SEP}${mcrit}${SEP}${mnotify}${SEP}${mwarntext}${SEP}${mbroken}${SEP}${passive}${SEP}${guids}${SEP}${on_insert}${SEP}${keep}")
 }
 
 build_bookmark_prune_section() {
@@ -3859,7 +3872,7 @@ emit_replicas() {
     local mwarn mcrit mnotify mwarntext mbroken mcmd mtargets passive fam
     local -a srcs=(); local s one
     for e in "${REPLICA_ENTITIES[@]+"${REPLICA_ENTITIES[@]}"}"; do
-        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken passive guids on_insert <<< "$e"
+        IFS="$SEP" read -r name source dst schedule prefix notify media recursive hist flags mwarn mcrit mnotify mwarntext mbroken passive guids on_insert keep <<< "$e"
         # What the gate and the monitor look for: the replica's own family, or
         # with passive = yes any snapshot ("-", as check-snap-age and the gate read it).
         fam="$prefix"; [ "$passive" = 1 ] && fam="-"
@@ -3884,9 +3897,19 @@ emit_replicas() {
         # Every source is still attempted even after one fails -- the same
         # reason a flat -R send does not abort its siblings.
         cmd=""
+        # keep = N (W18): after a successful copy the medium keeps the N newest of the
+        # replica's family under <dst>/<source>; its rc folds into the copy's.
+        local _keepcmd=""
+        if [ -n "$keep" ]; then
+            _keepcmd="$REPO_DIR/delsnaps.sh$([ "$recursive" = 1 ] && printf ' -R') \"$dst/%s\" \"$prefix\" -M$keep"
+        fi
         if [ "${#srcs[@]}" -le 1 ]; then
-            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst" "$passive")"
-            if [ "$media" = removable ]; then
+            cmd="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" "$source" "$dst" "$passive" "$keep")"
+            if [ -n "$keep" ]; then
+                # shellcheck disable=SC2059
+                cmd="$cmd; m=\$?; [ \$m -eq 0 ] && { $(printf "$_keepcmd" "$source"); m=\$?; }"
+                [ "$media" = removable ] || cmd="( $cmd; exit \$m )"
+            elif [ "$media" = removable ]; then
                 cmd="$cmd; m=\$?"
             fi
             cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
@@ -3903,8 +3926,14 @@ emit_replicas() {
             # replica_engine_cmd quotes its source argument, so passing the
             # literal $s yields "$s" in the emitted line -- expanded by the
             # shell cron runs it in, and quoted there, which is what we want.
-            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst" "$passive")"
-            cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
+            one="$(replica_engine_cmd "$prefix" "$recursive" "$hist" "$flags" '$s' "$dst" "$passive" "$keep")"
+            if [ -n "$keep" ]; then
+                # shellcheck disable=SC2059
+                one="$one; r=\$?; [ \$r -eq 0 ] && { $(printf "$_keepcmd" '$s'); r=\$?; }"
+                cmd="m=0; for s in${quoted}; do $one; [ \$m -eq 0 ] && m=\$r; done"
+            else
+                cmd="m=0; for s in${quoted}; do $one; r=\$?; [ \$m -eq 0 ] && m=\$r; done"
+            fi
             if [ "$media" = removable ]; then
                 cmd="$(media_bracket "$media" "$dst" "$name" "$cmd" "$source" "$fam" 1 "$guids")"
             else
@@ -3971,10 +4000,12 @@ emit_replicas() {
 #       overwrote it.
 # The #tgt- anchor bookmark is the same one: both engines tag it with
 # md5(target, -j), and neither sets -j here.
-replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst> [passive]
-    local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" passive="${7:-0}" c
+replica_engine_cmd() {   # <prefix> <recursive> <hist> <flags> <source> <dst> [passive] [keep]
+    local prefix="$1" recursive="$2" hist="$3" flags="$4" src="$5" dst="$6" passive="${7:-0}" keep="${8:-}" c
     # passive: -e, no -m -- the newest snapshot already there, whatever family.
+    # keep (W18): no -M -- the medium keeps its own N, not the collector's set.
     if [ "$passive" = 1 ]; then c="$REPO_DIR/snapget.sh -e -M"
+    elif [ -n "$keep" ]; then c="$REPO_DIR/snapget.sh -m \"$prefix\""
     else c="$REPO_DIR/snapget.sh -m \"$prefix\" -M"; fi
     [ "$recursive" = "1" ] && c="$c -R"
     [ -n "$hist" ] && c="$c $hist"

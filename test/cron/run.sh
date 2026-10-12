@@ -1399,6 +1399,33 @@ fo=$(REPO_DIR=/R NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=none CRON_LOG=/L 
 check "PRL4 --replica-full with --install is refused" "1:1" \
       "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c -- '--replica-full cannot be combined with --install')"
 
+# W18 (owner 2026-10-11): keep = N -- the medium keeps its own N newest replica_
+# snapshots (delsnaps after a good copy), and the engine runs WITHOUT the mirror -M.
+cat > "$FOR/c.conf" <<EOF
+[defaults]
+	host_label = f
+[replica:mies]
+	source   = tank/a
+	dst      = usb/rep
+	schedule = on-insert
+	prefix   = replica_
+	media    = removable
+	recursive = yes
+	keep     = 12
+EOF
+fo=$(for_run); frc=$?
+_l=$(printf '%s\n' "$fo" | grep 'replica copy (mies)')
+check "PRK1 keep = 12 renders rc=0: snapget without -M, then delsnaps -R usb/rep/tank/a replica_ -M12 only after a good copy" "0:1:0:1" \
+      "$frc:$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -R "tank/a"'):$(printf '%s' "$_l" | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s' "$_l" | grep -c '\[ \$m -eq 0 \] && { /R/delsnaps.sh -R "usb/rep/tank/a" "replica_" -M12; m=\$?; }')"
+sed -i 's/^\tkeep     = 12$//' "$FOR/c.conf"
+fo=$(for_run)
+check "PRK2 control: without keep the engine mirrors (-M) and nothing prunes the medium" "1:0" \
+      "$(printf '%s\n' "$fo" | grep 'replica copy (mies)' | grep -c 'snapget.sh -m "replica_" -M'):$(printf '%s\n' "$fo" | grep 'replica copy (mies)' | grep -c delsnaps)"
+printf '[defaults]\n\thost_label = f\n[replica:pk]\n\tsource = tank/a\n\tdst = usb/rep\n\tschedule = 0 1 * * *\n\tpassive = yes\n\tkeep = 3\n' > "$FOR/c.conf"
+fo=$(for_run); frc=$?
+check "PRK3 keep with passive = yes is refused (nothing of its own to keep)" "1:1" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'nothing of its own to keep')"
+
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
 #
