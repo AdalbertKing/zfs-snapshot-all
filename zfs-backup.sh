@@ -7672,6 +7672,7 @@ cmd_local_backup() {
             local _strip; _strip=$(mktemp) || die "mktemp failed"
             strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
             rm -f "$_strip"
+            drop_own_relation_templates "$cand" "$lb_name"
         fi
     else
         assert_config_not_claimed_if_missing "$config"
@@ -7988,6 +7989,12 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             fi
         fi
     } >> "$cand" || { rm -f "$cand"; die "could not write the candidate config" ; }
+    # An edit (--replace) sweeps the templates it left unreferenced, as the
+    # remote edit does -- W7: switching a local relationship from its own
+    # template to another left [template:profile__relacja-*] behind in the config.
+    if [ "$lb_replace" -eq 1 ] && [ -f "$config" ]; then
+        remove_templates_orphaned_by "$cand" "$(config_referenced_templates "$config")"
+    fi
 
     # Rendered through gencron_as_target, not `bash $GENCRON`, so the preview is
     # produced by the SAME identity and the same checkout that the install will
@@ -10686,6 +10693,7 @@ cmd_activate_client() {
         PROFILE_LOADED=""
         client_section_plan "$workfile" "$name" "$is_new_relationship"
     fi
+    [ "$regen" -eq 1 ] && drop_own_relation_templates "$workfile" "$name"
     ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
 
     # First activation generates the sections from the profile. A re-activation
@@ -12002,6 +12010,24 @@ remove_templates_orphaned_by() {   # <file> <templates referenced before, newlin
         remove_template_section "$file" "$t"
         log "removed [template:$t] -- the edit left nothing referencing it"
     done <<< "$before"
+}
+
+# W7 (owner's GUI test, 2026-10-11): a relationship's OWN template -- the hidden
+# relacja-<NAME> written by the GUI's "Harmonogram kopii i retencja", and its
+# source companions relacja-<NAME>-src-<numbers> -- keeps ONE name across edits
+# while its content changes. ensure_cron_config compares a present name against
+# the profile and refuses a difference (the create-time collision guard), so the
+# second edit of the same relationship was always refused: measured on pve9b
+# (local) and pve10 (remote). Those templates belong to this relationship alone,
+# by construction of their name, so an edit replaces them instead: drop them
+# from the working copy and let ensure_cron_config append the current content.
+drop_own_relation_templates() {   # <file> <relationship name>
+    local file="$1" rel="$2" t
+    for t in $(sed -n 's/^\[template:\(profile__relacja-[^]]*\)\]$/\1/p' "$file"); do
+        case "$t" in
+            "profile__relacja-${rel}__"*|"profile__relacja-${rel}-src-"*) remove_template_section "$file" "$t" ;;
+        esac
+    done
 }
 
 remove_template_section() {   # <file> <template name>
