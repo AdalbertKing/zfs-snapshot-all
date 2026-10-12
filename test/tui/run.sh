@@ -3071,6 +3071,12 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
+# W1: okno "Zmien relacje" czyta szablony BEZ renderowania (16,6 s -> 1,8 s na pve9b).
+if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-profiles --json' "$ER/zb.log"; then
+    ok "edit-relation: list-profiles --no-render (W1: 16,6 s z renderowaniem na pve9b)"
+else
+    bad "edit-relation: list-profiles bez --no-render" "$(grep list-profiles "$ER/zb.log")"
+fi
 EROUT=$(er_run "0${T}harm
 0${T}
 "); ERRC=$?

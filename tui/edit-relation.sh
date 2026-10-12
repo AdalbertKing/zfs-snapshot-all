@@ -47,7 +47,9 @@ trap 'restore_hidden; rm -rf "$TMPD"' EXIT
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
 # hfile.txt: plik ukrytego szablonu tej relacji (jeśli jest).
 load_lists() {
-    "$ZB" list-profiles --json >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
+    # --no-render (W1, 2026-10-12): z renderowaniem list-profiles trwal na pve9b 16,6 s,
+    # bez niego 1,8 s; valid/families nie sa potrzebne do wyboru (sprawdza je czasownik).
+    "$ZB" list-profiles --json --no-render >"$TMPD/prof.json" 2>"$TMPD/prof.err" || return 1
     "$PY" - "$TMPD/st.json" "$TMPD/prof.json" "$HERE/tui/zfs-tui.py" "$TMPD" "$HNAME" <<'PYEOF'
 import sys, json, re, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[3])
