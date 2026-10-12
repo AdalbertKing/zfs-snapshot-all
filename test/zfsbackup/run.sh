@@ -13701,6 +13701,16 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'edit-relation: unknown optio
 else
     bad "editrel: edit-relation accepted --target" "rc=$rc" "$out"
 fi
+# W16: set-transfer refuses a value it does not know and a call that sets nothing,
+# before anything is read.
+o1=$(bash "$ZFSBACKUP" set-transfer x --history=bad 2>&1); r1=$?
+o2=$(bash "$ZFSBACKUP" set-transfer x 2>&1); r2=$?
+o3=$(bash "$ZFSBACKUP" set-transfer x --compression=lz4 2>&1); r3=$?
+if [ "$r1" -ne 0 ] && printf '%s' "$o1" | grep -q "history='bad' -- all, newest, auto:N or default"    && [ "$r2" -ne 0 ] && printf '%s' "$o2" | grep -q 'nothing to set'    && [ "$r3" -ne 0 ] && printf '%s' "$o3" | grep -q "compression='lz4'"; then
+    ok "settransfer: unknown values and an empty call are refused before anything is read"
+else
+    bad "settransfer: refusals" "$o1" "$o2" "$o3"
+fi
 
 fi   # --- koniec sekcji editrel ---
 

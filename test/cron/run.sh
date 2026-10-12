@@ -1436,6 +1436,24 @@ while IFS= read -r _ln; do
 done < <(printf '%s\n' "$fo" | grep -E 'replica copy \((fx|fk)\)')
 check "PRK4 FIXED replicas (several sources; keep with one source) render as lines that parse as shell" "0:0:2" \
       "$frc:$_bad:$(printf '%s\n' "$fo" | grep -cE "replica copy \((fx|fk)\).* -- /bin/sh -c '\( ")"
+# W16 (owner 2026-10-11): history in a relationship's [dataset:] -- all (default, -I),
+# newest -> -i, auto:N -> -T N, on every send line of the section; a second answer
+# in flags is refused.
+for_conf "	history = newest" ""
+fo=$(for_run); frc=$?
+check "PDH1 history = newest renders -i on both send lines of the section, rc=0" "0:2" \
+      "$frc:$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -v delsnaps | grep -c ' -i ')"
+for_conf "	history = auto:3" ""
+fo=$(for_run)
+check "PDH2 history = auto:3 renders -T 3" "2" "$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -c ' -T 3 ')"
+for_conf "	history = newest
+	flags = -i" ""
+fo=$(for_run); frc=$?
+check "PDH3 history together with -i in flags is refused" "1:1" \
+      "$([ "$frc" -ne 0 ] && echo 1 || echo 0):$(printf '%s' "$fo" | grep -c 'both decide how much of the gap travels')"
+for_conf "" ""
+fo=$(for_run)
+check "PDH4 control: without history neither -i nor -T" "0" "$(printf '%s\n' "$fo" | grep 'snapget.sh' | grep -cE ' -i | -T ')"
 
 # ===========================================================================
 # Y. A MERGED PRUNE LINE MUST NOT BORROW SOMEBODY ELSE'S NAME
