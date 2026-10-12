@@ -6560,9 +6560,11 @@ EOF
         # Strip the five schedule fields; what is left is what cron runs. An
         # on-insert replica carries the marker '#on-insert' in their place
         # (cron never fires it; this verb, called by the udev rule, does).
+        # ZFS_JOB_PROPAGATE_RC: the line's zfs-job hands back the copy's real status
+        # (it exits 0 for cron, which alerts through the notify script instead).
         case "$line" in
-            "#on-insert "*) bash -c "${line#"#on-insert "}" || rc=1 ;;
-            *)              bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1 ;;
+            "#on-insert "*) ZFS_JOB_PROPAGATE_RC=1 bash -c "${line#"#on-insert "}" || rc=1 ;;
+            *)              ZFS_JOB_PROPAGATE_RC=1 bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1 ;;
         esac
     done <<EOF
 $lines

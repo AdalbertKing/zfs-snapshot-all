@@ -3760,7 +3760,9 @@ class UI(object):
             self.message = u"ten wiersz nie ma linii w cronie (strażnik albo wiersz bez zadania) -- nie ma czego uruchomić"
             return
         acct = j.get("account") or "root"
-        script = "; ".join(re.sub(r"^(\S+\s+){5}", "", l) for l in lines)
+        # ZFS_JOB_PROPAGATE_RC: okno wyniku pokazuje prawdziwy kod zadania (zfs-job dla
+        # crona zawsze konczy 0 i zglasza blad powiadomieniem).
+        script = "; ".join("ZFS_JOB_PROPAGATE_RC=1 " + re.sub(r"^(\S+\s+){5}", "", l) for l in lines)
         try:
             import pwd
             me = pwd.getpwuid(os.geteuid()).pw_name
