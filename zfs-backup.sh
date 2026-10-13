@@ -6629,7 +6629,10 @@ cmd_set_transfer() {
     [ "${STATE:-}" = active ] || die "set-transfer: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
     if [ "${RUX_MODE:-}" = local ]; then
         local _i; for _i in "${!fk[@]}"; do
-            case "${fk[$_i]}" in cipher|autotune) [ -z "${fv[$_i]}" ] || die "set-transfer: '$name' is a LOCAL copy -- there is no link, so --${fk[$_i]} has nothing to act on" ;; esac
+            # X2 (owner 2026-10-12): compression too -- the engine drops it for a local
+            # target ("Compression ignored: target is local", measured on pve9b).
+            # 'default' (empty) stays allowed: it clears a value set before.
+            case "${fk[$_i]}" in cipher|autotune|compression) [ -z "${fv[$_i]}" ] || die "set-transfer: '$name' is a LOCAL copy -- there is no link, so --${fk[$_i]} has nothing to act on" ;; esac
         done
     fi
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
@@ -13486,6 +13489,7 @@ cmd_remove_source() {
             esac
         done
         log "remove-source: the copy of '$ds' ($(record_get "$cpath" CLIENT_TARGET)/$ds) stays on this host"
+        lra_drop_orphan_excludes
         run_local_relation_change remove-source "$([ "$yes" -eq 1 ] && echo 1 || echo plan)" "${LRA[@]}"
         return $?
     fi
@@ -17741,6 +17745,36 @@ local_relation_argv() {
             f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
                 if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family" || k == "raw") print k "\t" v }' "$cfg")
     fi
+    # X3: an exception left behind by a source removed earlier goes with the next change.
+    lra_drop_orphan_excludes
+}
+
+# lra_drop_orphan_excludes -- X3 (owner 2026-10-12): an exception of a local
+# relationship belongs to one of its sources. When a source leaves (remove-source),
+# or left earlier and its exception stayed behind (pve9b: ^hdd/vms/vm3$ after hdd/vms
+# was removed), the exception is dropped. Only the exact-path form the windows write
+# is judged -- ^PATH$ or ^PATH(/|$) -- a pattern with any other regex in it is kept,
+# because its reach cannot be read off it.
+lra_drop_orphan_excludes() {
+    local a srcs="" lit s keep
+    for a in "${LRA[@]}"; do case "$a" in --source=*) srcs="${a#--source=}" ;; esac; done
+    local -a out=()
+    for a in "${LRA[@]}"; do
+        case "$a" in --exclude-child=^*)
+            lit="${a#--exclude-child=^}"
+            case "$lit" in *'(/|$)') lit="${lit%'(/|$)'}" ;; *'$') lit="${lit%'$'}" ;; *) lit="" ;; esac
+            lit="${lit//\\./.}"
+            case "$lit" in ''|*[!A-Za-z0-9_./:-]*) out+=("$a"); continue ;; esac
+            keep=0
+            for s in ${srcs//,/ }; do case "$lit" in "$s"|"$s"/*) keep=1 ;; esac; done
+            if [ "$keep" -eq 0 ]; then
+                log "exception '${a#--exclude-child=}' dropped -- no source of the relationship covers $lit any more"
+                continue
+            fi ;;
+        esac
+        out+=("$a")
+    done
+    LRA=("${out[@]}")
 }
 
 # run_local_relation_change <verb> <yes 0|1|plan> <local-backup args...> -- the

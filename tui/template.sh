@@ -8,7 +8,7 @@
 # pyta tylko o to, ile czego trzymać. Szablon fabryczny jest nie do zmiany ani usunięcia.
 #
 # template.sh relation BAZA PLIK [TYTUŁ] -- ta sama tabela dla RELACJI (P4, właściciel
-# 2026-10-09: "Harmonogram kopii i retencja" w "Zmień relację" i "Ręcznie" w kreatorze):
+# 2026-10-09: "Harmonogram i retencja kopii w celu i źródle" w "Zmień relację" i "Ręcznie" w kreatorze):
 # bez nazwy i opisu, bez planu i zapisu -- argumenty save-profile idą do PLIK (jeden na
 # linię), linie planu do PLIK.plan; zapis ukrytego szablonu relacji robi wołający.
 #
@@ -111,7 +111,7 @@ fi
 
 # ---------------------------------------------------------------- new / edit
 if [ "$ACTION" = relation ]; then
-    NEW="${RTITLE:-Harmonogram kopii i retencja}"
+    NEW="${RTITLE:-Harmonogram i retencja kopii w celu i źródle}"
     TITLE="$NEW"
 elif [ "$ACTION" = edit ]; then
     case "$SRC" in

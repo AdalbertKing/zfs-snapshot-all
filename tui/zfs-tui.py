@@ -831,7 +831,7 @@ def load_profiles(repo, files, data):
     else:
         doc, err = run_verb(repo, ["list-profiles", "--json", "--no-render"])
     # Ukryty szablon relacji (relacja-<NAZWA>, P4 2026-10-09) nie jest szablonem do wyboru:
-    # F5 go nie pokazuje (zmienia go "Zmien relacje -> Harmonogram kopii i retencja").
+    # F5 go nie pokazuje (zmienia go "Zmien relacje -> Harmonogram i retencja kopii w celu i źródle").
     data.profiles = [p for p in (doc or {}).get("profiles", []) if not p.get("hidden")]
     if err:
         data.errors["profiles"] = err
@@ -1704,7 +1704,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     Na F3 podpis F7 mowi, co klawisz ZROBI z zaznaczona relacja: na
     wstrzymanej -- Wznow (tester R4, B6: listwa mowila Pauza, a F7 wznawial)."""
     if active == "zadania":
-        return [("F7", u"Sortuj"), ("F8", u"Uruchom teraz")]
+        return [("F7", u"Uruchom teraz"), ("F8", u"Sortuj")]
     if active == "relacje":
         return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
     if active == "transfery":
@@ -3127,9 +3127,58 @@ def replica_disks_words(r):
     return u"%d po ID puli: %s" % (len(g), ", ".join(g))
 
 
+def replica_keep_n(r):
+    """Ile wlasnych zdjec trzyma dysk: keep albo 2 (kolektor trzyma 2 najnowsze replica_,
+    a dysk bez keep jest jego odbiciem)."""
+    try:
+        return int(str(r.get("keep") or "").strip())
+    except ValueError:
+        return 2
+
+
+def replica_kind(r, ascii_=False):
+    """X11 (wlasciciel 2026-10-12): kluczowe rozroznienie repliki = CO TRAFIA NA DYSK.
+    (krotko do kolumny, pelnymi slowami do panelu)"""
+    if r.get("prefix") == "-":
+        return u"historia", u"historia kolektora -- dysk dostaje migawki, które już tam są"
+    n = replica_keep_n(r)
+    return (u"zdjęcia %s%d" % ("x" if ascii_ else u"×", n),
+            u"własne zdjęcia -- replika przy każdym biegu robi zdjęcie %s" % (r.get("prefix") or "replica_"))
+
+
+def replica_disk_words(r):
+    """X11: co jest na dysku, na przykladzie (ile czasu wstecz)."""
+    if r.get("prefix") == "-":
+        if r.get("history") and r["history"] not in ("all",):
+            return u"tylko najnowsza migawka kolektora (historia: tylko różnica -- pośrednie nie trafiają)"
+        return u"to samo co kolektor: wszystkie jego migawki, z pośrednimi"
+    n = replica_keep_n(r)
+    f = (r.get("schedule") or "").split()
+    span = u""
+    if r.get("schedule") == "on-insert":
+        span = u" -- tyle włożeń dysku wstecz"
+    elif len(f) == 5:
+        if f[2] != "*":
+            span = u" = ok. %d mies. wstecz" % n
+        elif f[4] != "*":
+            span = u" = ok. %d tyg. wstecz" % n
+        elif f[1] != "*" and "/" not in f[1] and "," not in f[1]:
+            span = u" = ok. %d dni wstecz" % n
+    if n == 1:
+        words = u"ostatnie zdjęcie"
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        words = u"ostatnie zdjęcia"
+    else:
+        words = u"ostatnich zdjęć"
+    return u"%d %s%s%s" % (n, words, span, u" (jak kolektor)" if not str(r.get("keep") or "").strip() else u"")
+
+
 def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
-    pairs = [(u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
+    pairs = [(u"Rodzaj", replica_kind(r)[1]),
+             (u"Na dysku", replica_disk_words(r)),
+             (u"Szyfrowane", u"tak -- kopie idą zaszyfrowane (raw), klucz zostaje u źródła" if str(r.get("raw") or "").lower() in ("yes", "1", "true") else u"nie"),
+             (u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
              ("Cel", "%s %s   (pula %s)" % (ch.right, r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
              ("Harmonogram", "%s   %s%s%s" % (
                  replica_when(r, long=True),
@@ -3166,10 +3215,10 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
         nw = max(8, min(16, max([len(r.get("name") or "?") for r in reps] + [8])))
-        sw, mw, lw = 12, 13, 10
-        dw = inner - (nw + sw + mw + lw + 4)
-        hdr = "%s %s %s %s %s" % (fit("Replika", nw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Kopia z", lw))
-        panel_h = 0 if beside else 9
+        sw, mw, lw, kw = 11, 12, 10, 10    # X11: na miare "po włożeniu", "NIE TEN DYSK", "zdjęcia ×12"
+        dw = inner - (nw + kw + sw + mw + lw + 5)
+        hdr = "%s %s %s %s %s %s" % (fit("Replika", nw), fit("Rodzaj", kw), fit(u"Źródło %s cel" % ch.right, dw), fit("Harmonogram", sw), fit(u"Nośnik", mw), fit("Kopia z", lw))
+        panel_h = 0 if beside else 12    # X11: Rodzaj, Na dysku, Szyfrowane na gorze panelu
         list_h = max(3, height - 2 - 2 - panel_h - 2)
         body = [hdr, ch.dash * inner]
         cur_y = None
@@ -3178,7 +3227,7 @@ def render_nosniki(data, cursor, width, height, now, ch, message=""):
             sd = "%s %s %s" % (r.get("source") or "?", ch.right, r.get("dst") or "?")
             if i == cursor:
                 cur_y = len(body)
-            body.append("%s %s %s %s %s" % (fit(r.get("name"), nw, ch), fit(sd, dw, ch),
+            body.append("%s %s %s %s %s %s" % (fit(r.get("name"), nw, ch), fit(replica_kind(r, ch.ascii)[0], kw, ch), fit(sd, dw, ch),
                                             fit(replica_when(r), sw, ch),
                                             fit(st[0], mw, ch), fit((r.get("last_current") or "brak")[:10], lw, ch)))
         if not reps:
@@ -3322,10 +3371,10 @@ HELP = [
     u"                 czasy i GB jak w mailu (ostatni/średni/maks,",
     u"                 okno digestu), kopie; panel szczegółów dodaje strażnika",
     u"                 (harmonogram, konto, progi), a strażnik bez zadania (nic do",
-    u"                 pilnowania) jest własnym wierszem. F7 przełącza sortowanie",
+    u"                 pilnowania) jest własnym wierszem. F7 uruchamia zaznaczone",
+    u"                 zadanie teraz, bez pytania: dokładnie jego linię z crona,",
+    u"                 jako konto z crontaba; wynik w oknie. F8 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
-    u"                 F8 uruchamia zaznaczone zadanie teraz: dokładnie jego linię",
-    u"                 z crona, jako konto z crontaba (najpierw okno z komendą).",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
     u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
@@ -3743,9 +3792,9 @@ class UI(object):
             return self.run_template_dialog([self.zb(), "delete-profile", n, "--ask"])
 
     def run_job_now(self):
-        """F8 na F2 (W15, wlasciciel 2026-10-11): zaznaczone zadanie TERAZ -- dokladnie
+        """F7 na F2 (W15 2026-10-11, X9 2026-10-12): zaznaczone zadanie TERAZ -- dokladnie
         jego linia (linie) z crona, z tym samym kontem, logiem i powiadomieniem, wiec
-        bieg jest taki jak nocny. Najpierw okno z komenda (prune kasuje). Gdy to samo
+        bieg jest taki jak nocny. Bez okna potwierdzenia (X9). Gdy to samo
         zadanie wlasnie biegnie z crona, silnik odmowi blokada -- widac to w oknie wyniku."""
         rows = self.jobrows or []
         c = self.cursor["zadania"]
@@ -3757,7 +3806,7 @@ class UI(object):
         sched = (r.get("schedule") or "").split()
         lines = [l for l in (j.get("cron_lines") or []) if sched and l.split()[:5] == sched]
         if not lines:
-            self.message = u"ten wiersz nie ma linii w cronie (strażnik albo wiersz bez zadania) -- nie ma czego uruchomić"
+            self.message = u"ten wiersz nie ma linii w cronie (strażnik albo replika, bez harmonogramu, lub osierocony wpis) -- nie ma czego uruchomić"
             return
         acct = j.get("account") or "root"
         # ZFS_JOB_PROPAGATE_RC: okno wyniku pokazuje prawdziwy kod zadania (zfs-job dla
@@ -3777,10 +3826,9 @@ class UI(object):
         else:
             self.message = u"zadanie konta %s -- uruchomić je może root albo samo konto" % acct
             return
-        note = [u"Konto: %s" % acct]
-        if any(re.search(r"\bprune\b|delsnaps", l) for l in lines):
-            note.append(u"Uwaga: prune kasuje migawki wg retencji.")
-        self.confirm(u"Uruchomić teraz? %s" % (r.get("name") or ""), argv, note_lines=note)
+        # X9 (wlasciciel 2026-10-12): bez okna potwierdzenia, jak F7 na replice -- bieg
+        # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
+        self.run_detached(u"Zadanie %s -- bieg teraz (konto %s)" % (r.get("name") or "", acct), argv, logname="zadanie")
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -4394,10 +4442,10 @@ class UI(object):
             return "stay"
         # Kursor zostaje na TYM SAMYM WIERSZU (ten sam obiekt), nie na tym samym
         # numerze -- inaczej przelaczenie widoku przenosiloby operatora na cudze zadanie.
-        if k == "F8" and self.screen == "zadania":
+        if k == "F7" and self.screen == "zadania":
             self.run_job_now()
             return "stay"
-        if k == "F7" and self.screen == "zadania":
+        if k == "F8" and self.screen == "zadania":
             cur_row = self.jobrows[self.cursor["zadania"]] if self.jobrows and 0 <= self.cursor["zadania"] < len(self.jobrows) else None
             self.zad_sort = (self.zad_sort + 1) % 3
             self.jobrows = sort_zad_rows(self.jobrows, self.zad_sort, self.data)

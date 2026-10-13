@@ -564,31 +564,31 @@ else
     bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
 fi
 
-# SORTOWANIE F2 (test c, R3-4; R4-2: F7, nie 's'): F7 cykluje trzy widoki, tytul mowi ktory.
+# SORTOWANIE F2 (test c, R3-4; R4-2: F8, nie 's'): F8 (X9: bylo F7) cykluje trzy widoki, tytul mowi ktory.
 # jobs.json (fixture hostA) ma zadanie GODZINOWE "wysyłka hourly" (schedule
 # "5 * * * *" -- nastepny bieg w ciagu godziny od NOW) i zadanie DOBOWE
 # "kopia daily" (schedule "21 0 * * *" -- NOW jest "środek dnia", 00:21 juz
 # minelo, nastepny bieg dopiero jutro) -- kolejnosc miedzy nimi w widoku "os
 # czasu" jest wiec DETERMINISTYCZNA niezaleznie od dokladnej minuty NOW.
 ZJARGS="--jobs $FIX/jobs.json --monitors $FIX/monitors.json"
-ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7 --width 200 2>&1)"
+ZSORT1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8 --width 200 2>&1)"
 if has "$ZSORT1" 'sort: oś czasu'; then
-    ok "zadania: F7 raz -- tytul mowi 'oś czasu'"
+    ok "zadania: F8 raz -- tytul mowi 'oś czasu'"
 else
-    bad "zadania: F7 raz -- tytul" "$ZSORT1"
+    bad "zadania: F8 raz -- tytul" "$ZSORT1"
 fi
 L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka ' | head -1 | cut -d: -f1)
 L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia ' | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
-    ok "zadania: F7 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
+    ok "zadania: F8 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
 else
-    bad "zadania: F7 raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
+    bad "zadania: F8 raz -- kolejnosc wierszy" "L1=$L1 L2=$L2" "$ZSORT1"
 fi
-ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7,F7 --width 200 2>&1)"
+ZSORT2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8 --width 200 2>&1)"
 if has "$ZSORT2" 'sort: ostatni bieg'; then
-    ok "zadania: F7 dwa razy -- tytul mowi 'sort: ostatni bieg'"
+    ok "zadania: F8 dwa razy -- tytul mowi 'sort: ostatni bieg'"
 else
-    bad "zadania: F7 dwa razy -- tytul" "$ZSORT2"
+    bad "zadania: F8 dwa razy -- tytul" "$ZSORT2"
 fi
 ZSORTS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys s --width 200 2>&1)"
 if has "$ZSORTS" 'sort: relacje' && has "$ZSORTS" '$ s_ '; then
@@ -596,11 +596,11 @@ if has "$ZSORTS" 'sort: relacje' && has "$ZSORTS" '$ s_ '; then
 else
     bad "zadania: 's' jako tekst" "$ZSORTS"
 fi
-ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F7,F7,F7 --width 200 2>&1)"
+ZSORT3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ZJARGS --screen zadania --keys F8,F8,F8 --width 200 2>&1)"
 if has "$ZSORT3" 'sort: relacje' && ! has "$ZSORT3" 'oś czasu' && ! has "$ZSORT3" 'ostatni bieg'; then
-    ok "zadania: F7 trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
+    ok "zadania: F8 trzy razy -- wraca do domyslnego widoku (relacje, w srodku wg nastepnego)"
 else
-    bad "zadania: F7 trzy razy -- powrot" "$ZSORT3"
+    bad "zadania: F8 trzy razy -- powrot" "$ZSORT3"
 fi
 
 # ============================================================================
@@ -1223,15 +1223,15 @@ else
 fi
 # R4-1/R4-2 PRZEZ PRAWDZIWA PETLE CURSES (pty), nie przez --keys: runda 3
 # miala 'u' i 's' zielone tutaj i martwe na zywo. Klawisze ida jako bajty
-# terminala (ESC [ 18 ~ = F7); kazdy blok to to, co program narysowal po nim.
-PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F7,F3,F4,u,F7,ctrl-r' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
+# terminala (ESC [ 18 ~ = F7, ESC [ 19 ~ = F8); kazdy blok to to, co program narysowal po nim.
+PK="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 's,F8,F3,F4,u,F7,ctrl-r' -- --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" 2>&1)"; PKRC=$?
 pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; on = ($0 == k && i == n) ; next } on'; }
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
-elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F7 3)" 'oś czasu' \
+elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F8 3)" 'oś czasu' \
      && has "$(pkb F4 5)" 'W toku' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
      && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb ctrl-r 8)" 'odświeżam'; then
-    ok "pty: 's' i 'u' to tekst linii, F7 sortuje F2 i chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
+    ok "pty: 's' i 'u' to tekst linii, F8 sortuje F2 (X9), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
 fi
@@ -1340,7 +1340,8 @@ rm -rf "$LOKD"
 # NOSNIKI
 # ============================================================================
 N="$(screen nosniki)"
-if hasE "$N" '^║ sejf-a +hdd/lab → bkp/sejf-a +30 2 \* \* \* +W SEJFIE +brak +║' && hasE "$N" '^║ sejf-b +hdd/lab,hdd/backups → rpool/… +po włożeniu +W SEJFIE'; then
+# X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
+if hasE "$N" '^║ sejf-a +zdjęcia ×2 +hdd/lab → bkp/sejf-a +30 2 \* \* \* +W SEJFIE +brak +║' && hasE "$N" '^║ sejf-b +zdjęcia ×2 +hdd/lab,hdd/backups… +po włożeniu +W SEJFIE'; then
     ok "nosniki: wiersz = replika, zrodlo -> cel, harmonogram (on-insert po polsku), stan nosnika SLOWEM, kiedy ostatnia aktualna kopia (Kopia z)"
 else
     bad "nosniki: wiersze" "$N"
@@ -1409,16 +1410,34 @@ fi
 rm -f "$RMN"
 # REPLIKI Z GUI (2026-10-07): Ins nowa i Enter+'e' zmiana oddaja terminal oknom
 # add-replica --ask; Del i F7 przez okno potwierdzenia, jak pauza na F3.
-# W15 (wlasciciel 2026-10-11): F8 na F2 = zaznaczone zadanie teraz -- najpierw okno z
-# komenda, 't' uruchamia DOKLADNIE linie z crona (bez pola harmonogramu); Esc nic nie robi.
+# W15 (wlasciciel 2026-10-11) + X9 (2026-10-12): F7 na F2 = zaznaczone zadanie TERAZ, bez
+# okna potwierdzenia (jak F7 na replice) -- od razu DOKLADNIE linia z crona (bez pola
+# harmonogramu), wynik w oknie. Sortowanie przeszlo na F8.
 : > "$XL"
-A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8 2>&1)"
-A2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F8,t 2>&1)"
-if has "$A" 'Uruchomić teraz?' && has "$A" 'Wykona się DOKŁADNIE to:' && has "$A" 'Konto: ' \
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen zadania --keys F7 2>&1)"
+if ! has "$A" 'Uruchomić teraz?' && has "$A" 'bieg teraz' \
    && grep -q "/bin/sh -c .*zfs-job.sh" "$XL" && ! grep -Eq "sh -c '?[0-9*/,-]+ [0-9*/,-]+ " "$XL"; then
-    ok "zadania: F8 -> okno 'Uruchomić teraz?' z komenda i kontem, 't' uruchamia linie z crona bez pola harmonogramu"
+    ok "zadania: F7 uruchamia zaznaczone zadanie od razu (bez 't'), linia z crona bez pola harmonogramu"
 else
-    bad "zadania: F8 uruchom teraz" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|Wykona|Konto' | head -3)"
+    bad "zadania: F7 uruchom teraz (X9)" "$(cat "$XL")" "$(printf '%s' "$A" | grep -E 'Uruchom|bieg teraz|F7|F8' | head -4)"
+fi
+# X14: wiersz bez linii w cronie (strażnik, replika tylko po włożeniu) -- komunikat nazywa
+# wszystkie trzy przypadki. Wiersz "bez monitora" repliki sejf-b nie ma linii w cronie.
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --keys F7 --width 200 2>&1)"
+if has "$A" 'strażnik albo replika, bez harmonogramu, lub osierocony wpis' && has "$A" 'F7 Uruchom teraz F8 Sortuj'; then
+    ok "zadania: X14 -- komunikat nazywa strażnika, replikę bez harmonogramu i osierocony wpis; listwa F7 Uruchom teraz / F8 Sortuj (X9)"
+else
+    bad "zadania: X14 komunikat" "$(printf '%s' "$A" | tail -4)"
+fi
+# X11 (wlasciciel 2026-10-12): replika na liscie i w panelu mowi, CO TRAFIA NA DYSK --
+# kolumna Rodzaj (historia / zdjecia xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
+F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
+if hasE "$F6R" '║ Replika +Rodzaj +Źródło → cel +Harmonogram' && hasE "$F6R" 'sejf-a +zdjęcia ×2 +hdd/lab' \
+   && has "$F6R" 'Rodzaj      własne zdjęcia' && has "$F6R" 'Na dysku    2 ostatnie zdjęcia = ok. 2 dni wstecz' \
+   && has "$F6R" 'Szyfrowane  nie'; then
+    ok "nosniki: X11 -- kolumna Rodzaj (zdjęcia ×2), panel: Rodzaj, Na dysku z przykladem, Szyfrowane"
+else
+    bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,8p)"
 fi
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
     : > "$XL"
@@ -3050,6 +3069,15 @@ if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$
 else
     bad "template: drabina, sposob" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(printf '%s' "$TPOUT" | head -14)"
 fi
+# X1 (wlasciciel 2026-10-12): szczebel WYLACZONY ma "koherentne" odznaczone -- takze ten,
+# ktorego szablon nie ma (tygodniowe, roczne); wlaczony dostaje zamrazanie z szablonu.
+TPOUT=$(tp_grid "none" new d7h24 ""); TPRC=$?
+TPON=$(tp_grid "down,down,down,down,space" new d7h24 "")
+if printf '%s' "$TPOUT" | grep -qE '\[ \] tygodniowe +— +\[ \]' && printf '%s' "$TPOUT" | grep -qE '\[ \] roczne +— +\[ \]'    && printf '%s' "$TPOUT" | grep -qE '\[X\] dobowe +7 +\[X\]' && printf '%s' "$TPON" | grep -qE '\[X\] tygodniowe +[0-9]+ +\[X\]'; then
+    ok "template: X1 -- wylaczony szczebel ma koherentne odznaczone; wlaczony dostaje zamrazanie z szablonu"
+else
+    bad "template: X1 koherentne przy wylaczonym szczeblu" "$(printf '%s' "$TPOUT" | grep -E 'SZCZEBEL|\] ')" "$(printf '%s' "$TPON" | grep -E '\] ')"
+fi
 rm -rf "$TP"
 
 # ============================================================================
@@ -3098,7 +3126,7 @@ else
     bad "new-relation: Recznie + zmiana nazwy" "rc=$NRRC" "$(cat "$NR/zb.log")"
 fi
 
-# Zmien relacje (tui/edit-relation.sh): menu 6 pozycji; "Harmonogram kopii i retencja" =
+# Zmien relacje (tui/edit-relation.sh): menu 6 pozycji; "Harmonogram i retencja kopii w celu i źródle" =
 # tabela (template.sh relation) -> ukryty szablon -> okno retencji zrodla -> plan.
 ER="$(mktemp -d)"; mkdir -p "$ER/bin"
 cp "$NR/bin/whiptail" "$ER/bin/whiptail"
@@ -3183,7 +3211,7 @@ EROUT=$(er_run "0${T}harm
 if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden --force --description=' "$ER/zb.log" \
    && grep -q '^edit-relation r1 --profile=relacja-r1 --source-profile= --yes' "$ER/zb.log" && ! grep -q '^delete-profile' "$ER/zb.log" \
    && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Datasety -- co kopiować' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
-    ok "edit-relation: menu 6 pozycji; Harmonogram kopii i retencja -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
+    ok "edit-relation: menu 6 pozycji; Harmonogram i retencja kopii w celu i źródle -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
 else
     bad "edit-relation: harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
@@ -3195,6 +3223,20 @@ if [ "$ERRC" -ne 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hi
     ok "edit-relation: plan nie wykonany -- ukryty szablon relacji cofniety (nie bylo go wczesniej = usuniety)"
 else
     bad "edit-relation: cofniecie ukrytego szablonu" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# X5 (wlasciciel 2026-10-12): Wstecz z PLANU = jeden krok -- wraca do okna retencji
+# ZRODLA, nie do wyboru szablonu. Szablon d30h24 ma szczeble, wiec okno zrodla jest:
+# po Wstecz z planu pokazuje sie DRUGI raz (przed poprawka -- raz, bo plan wracal do
+# listy szablonow). Esc tam = dopiero teraz wstecz do listy.
+EROUT=$(er_run "0${T}szablon
+0${T}d30h24
+1${T}
+" "enter\nesc"); ERRC=$?
+ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
+if [ "$ERT" = 'Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|' ] && [ "$(grep -c '^edit-relation r1 .* --plan' "$ER/zb.log")" = 1 ]; then
+    ok "edit-relation: X5 -- Wstecz z planu wraca do okna retencji zrodla (drugi raz to samo okno), nie do listy szablonow"
+else
+    bad "edit-relation: X5 Wstecz z planu" "kolejnosc okien: $ERT" "$(cat "$ER/zb.log")"
 fi
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24

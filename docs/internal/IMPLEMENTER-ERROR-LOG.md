@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20, E33.*
+*Evidence: E11, E20, E33, E81.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -111,7 +111,7 @@ cost data rather than an argument:
 
 - **R9** — run locally only a suite you edited; everything else goes to CI.
 - **R10** — verify a suite's targeted mode works before paying for the full run.
-- **R11** — never edit a suite that is running, or run one you are still editing. *(E11, E61)*
+- **R11** — never edit a suite that is running, or run one you are still editing. *(E11, E61, E81)*
 
 ---
 
@@ -1913,6 +1913,24 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E81 — edited the code and a suite file while those suites were running (2026-10-13, R11, twice in one hour)
+
+**Genesis.** X-round, small package. `test/tui/run.sh` and `test/localbackup/run.sh`
+were started in the background together. While they ran: (1) `tui/zfs-tui.py` was
+changed to fix the F6 layout that the running tui suite had just reported red, so
+the rest of that run tested a different program than its first half; (2) the X2
+test block in `test/localbackup/run.sh` was rewritten after its FAIL line arrived,
+while that suite was still running -- bash reads a script as it executes it.
+
+**Cause.** A red line arriving mid-run read as "the run is over for that part".
+It is not: the process is still reading the files. The monitor reported the FAIL
+before the end line, and the reflex was to fix at once.
+
+**Rule.** R11 / R5, unchanged -- this is evidence that it was not applied. A FAIL
+from a running suite is noted, not fixed: no file the suite reads (the suite, the
+code it runs) is touched until its end line (`rc=`) is in. Both runs were thrown
+away and repeated clean.
 
 ### E80 — a local and a remote relationship could not share one config (found 2026-10-12, R12)
 
