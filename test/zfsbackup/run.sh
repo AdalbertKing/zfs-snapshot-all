@@ -6503,7 +6503,12 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 13/20 since 2026-10-13: sync_relation_profiles ("config wins") joined the READER
 # set -- it resolves the relationship's config (cron_context_resolve record) to
 # bring the HIDDEN PROFILE in line with it, and never writes the config.
-if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 20 ]; then
+# 14/22 since 2026-10-13: set-tiers ("config jako jedyne zrodlo prawdy", etap A), the
+# tiers of ONE relationship changed in its config. A WRITER, aimed like the others:
+# cron_context_resolve record, assert_cron_config_matches_installed, then
+# atomic_replace_and_install. show-tiers joined the READER set (cron_context_resolve
+# record, never writes).
+if [ "$writers" -eq 14 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
