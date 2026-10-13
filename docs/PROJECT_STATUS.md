@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 757812002a50c399 -->
+<!-- status-covers-digest: c6d754df29ba96c7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -30,7 +30,10 @@
   obie operacje przebudowywały całą relację z szablonu z rekordu — szczeble zmienione przez
   `set-tiers` albo ręcznie przepadały. Odmowy przed zapisem: nie-źródło, już jest, nie istnieje,
   ostatnie źródło, nakładanie na cel albo na dowolny `[dataset:]` configu. Rekord
-  (`REQUESTED_DATASETS`, `MANAGED_DATASETS`) idzie za configiem po udanej instalacji.
+  (`REQUESTED_DATASETS`, `MANAGED_DATASETS`) idzie za configiem po udanej instalacji;
+  `MANAGED_DATASETS` rozdzielone spacją, jak je piszą i czytają pozostałe czasowniki (pierwsza
+  wersja pisała przecinki -- `delete-relation --destroy-copies` wziąłby listę za jedną nazwę;
+  znalezione na żywo na pve9b, rekord przywrócony z kopii, poprawione w następnym PR).
   „Użyj szablonu” w „Zmień relację” nie zapisuje już pochodnego szablonu źródła
   (`<szablon>-src-…`): krok 1 to szablon ze źródłem jak cel (`edit-relation --source-profile=`),
   krok 2 — tylko gdy w oknie źródła coś zmieniono — `set-tiers --src-tier…`; plan pokazuje oba,
