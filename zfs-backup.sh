@@ -6811,8 +6811,15 @@ cmd_set_tiers() {
         printf '%s: own copy %s (the template was shared)\n' "$(tiers_key_of "$t")" "$own" >> "$workfile.notes"
         printf '%s' "$own"
     }
-    local op v side="" key="" hf tpl
-    for op in "${ops[@]}"; do
+    local op v side="" key="" hf tpl oi=0
+    # A TIER LIVES ON BOTH SIDES: the source makes (and prunes) the snapshots, the
+    # target prunes its copies. Adding a tier only to the target would prune a
+    # family nobody makes; dropping it only there would leave the copies growing.
+    # So --add-tier / --drop-tier act on both sides -- queued as the source step
+    # right after -- and --src-tier counts are set separately (the source window).
+    queue_after() { ops=("${ops[@]:0:$oi}" "$@" "${ops[@]:$oi}"); }
+    while [ "$oi" -lt "${#ops[@]}" ]; do
+        op="${ops[$oi]}"; oi=$((oi + 1))
         v="${op#*=}"
         case "$op" in
             --tier=*)     side=T; key="$v"; hf="$hfT" ;;
@@ -6830,6 +6837,7 @@ cmd_set_tiers() {
                 done < "$hf"
                 [ -z "$(tiers_refs "$workfile" "$tpl")" ] && remove_template_section "$workfile" "$tpl"
                 changes+=("$v: dropped$([ "$hf" = "$hfS" ] && echo ' (source)')")
+                [ "$hf" = "$hfT" ] && [ -s "$hfS" ] && [ -n "$(side_tpl "$hfS" "$v")" ] && queue_after "--drop-src-tier=$v"
                 key="" ;;
             --add-tier=*|--add-src-tier=*)
                 case "$op" in --add-src-tier=*) hf="$hfS"; side=S ;; *) hf="$hfT"; side=T ;; esac
@@ -6886,6 +6894,7 @@ cmd_set_tiers() {
                     [ -n "$ovs" ] && { set_or_remove_section_field "$workfile" "$h" "prune_schedule_$new" "$prune" || fail "could not schedule '$v' in $h"; }
                 done < "$hf"
                 changes+=("$v: added ($new, keeps $keepn)$([ "$hf" = "$hfS" ] && echo ' (source)')")
+                [ "$hf" = "$hfT" ] && [ -s "$hfS" ] && [ -z "$(side_tpl "$hfS" "$v")" ] && queue_after "--add-src-tier=$v" "--tier=$v"
                 key="$v" ;;
             --method=*)
                 case "$v" in gfs|flat|age) ;; *) fail "--method='$v' -- gfs, flat or age" ;; esac
