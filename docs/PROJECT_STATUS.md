@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 96580f677aacbc90 -->
+<!-- status-covers-digest: 96ecfa217bb7e781 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,28 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Szczeble relacji wprost w configu: `show-tiers` i `set-tiers` (właściciel 2026-10-13,
+  „config jako jedyne źródło prawdy”, etap A; model z ukrytym szablonem jako pośrednikiem
+  odrzucony: „Ctrl+C w złym momencie i mamy stan nieustalony”).** `show-tiers NAZWA --json`
+  czyta szczeble relacji z jej sekcji w configu (strona celu i źródła; lokalna: `[prune:]` /
+  `[dataset:]`, zdalna: `[dataset:]` / `[prune:user@host:…]`) w kształcie szczebli z
+  `list-profiles`. `set-tiers NAZWA` zmienia je w kopii configu: `--tier=T`/`--src-tier=T` z
+  `--keep`, `--retain`, `--quiesce`, `--send-schedule`, `--prune-schedule`; `--add-tier` i
+  `--drop-tier` działają na OBU stronach (źródło robi rodzinę, cel ją sprząta; ostatni szczebel
+  strony odmówiony); `--method=gfs|flat|age`. Szablon nazwany po profilu (`profile__d7h24__…`)
+  jest przy pierwszej zmianie kopiowany dla relacji (`profile__relacja-NAZWA__…`) — następna
+  relacja z tym profilem nie dziedziczy zmiany; godzina nadpisana w sekcji (rozrzut minut
+  relacji zdalnej) zmienia się w sekcji. Cały config przez generator, jedna atomowa podmiana
+  (wzór `set-transfer`); odrzucony config = plik nietknięty, bez kopii roboczej. Okno
+  „Harmonogram i retencja kopii w celu i źródle” czyta szczeble z `show-tiers` (tabela celu i
+  okno źródła jak dotąd) i zapisuje jednym `set-tiers` — bez `save-profile`, ukrytego szablonu i
+  `edit-relation`. Na żywo (tylko plany): pve9b `lokalna-hdd-vms` — liczba, godzina, sposób,
+  dodanie tygodniowego (migawka w źródle 2:21 w niedzielę, sprzątanie po obu stronach), usunięcie
+  godzinowego, odmowa ostatniego; pve10 relacja zdalna `pve9b` na wspólnym `m31w4d7h24` — kopia
+  `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
+  51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
+  drogą (etap B).
 
 - **Config wygrywa z ukrytym szablonem relacji (właściciel 2026-10-13, „config jako jedyne
   źródło prawdy”, krok 1).** Ustawienia relacji zmienianej w GUI żyły w trzech miejscach:
