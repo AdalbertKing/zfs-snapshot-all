@@ -6511,7 +6511,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 15/23 since 2026-10-13 (stage B): local_source_change -- add-source / remove-source of a
 # LOCAL relationship change only that source's sections IN the config. A WRITER, aimed
 # like the others (cron_context_resolve record, assert, atomic_replace_and_install).
-if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 23 ]; then
+# 15/22 since 2026-10-13 (stage C): sync_relation_profiles is gone -- the tiers live in
+# the config (set-tiers, local_source_change), so no hidden profile is brought in line.
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

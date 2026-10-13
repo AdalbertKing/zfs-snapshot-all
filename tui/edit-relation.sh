@@ -98,9 +98,6 @@ PYEOF
 
 geom
 info "Zmień relację $NAME" "Czytam relację i szablony..."
-# CONFIG WINS (właściciel 2026-10-13): ukryty szablon relacji bierze wartości z configu
-# ZANIM okno je pokaże -- tabela szczebli startuje od tego, co jest w configu.
-"$ZB" sync-relation-profile "$NAME" >/dev/null 2>&1 || :
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
 load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
 IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }

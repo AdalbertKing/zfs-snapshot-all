@@ -13621,145 +13621,6 @@ cmd_gui() {
 # This is the per-relationship edit the admin asks for by name: the same
 # generation as at creation, through activate-client's own preview, dry-run,
 # grant checks and install guards, with nothing moved on disk.
-# ------------------------------------------------------------------------------
-# CONFIG WINS (owner 2026-10-13, "Zgoda" to "config jako jedyne zrodlo prawdy").
-# A relationship edited in the GUI owns a hidden profile, relacja-<NAME> (and a
-# source one, relacja-<NAME>-src...), and every change regenerates its config
-# sections FROM that profile -- so a hand edit of the config (a prune minute moved
-# from 31 to 29, measured on pve9b) was silently undone. The config is what the
-# operator reads and edits, like a crontab; the profile is only the renderer's
-# input. So before anything regenerates the sections, the hidden profiles are
-# brought in line WITH the config: every field of a tier that the config's
-# template also carries takes the config's value (retain -D4 back to keep = 4
-# where the profile counts with keep), and a quiesce removed by hand is removed.
-# The structure of the profile (its tiers, fragments, floors) is not touched.
-# Shared profiles (d7h24, ...) are never rewritten: their templates are not
-# dropped on regeneration, so a hand edit there already survives.
-sync_relation_profiles() {   # <relationship name> -> 0; logs what it changed
-    local name="$1" cp prof sprof mode cfg pfile
-    cp=$(client_conf_path "$name")
-    [ -r "$cp" ] || return 0
-    prof=$(record_get "$cp" PROFILE); sprof=$(record_get "$cp" SOURCE_PROFILE); mode=$(record_get "$cp" RUX_MODE)
-    cfg=$(
-        record_load client "$cp" >/dev/null 2>&1
-        cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}" >/dev/null 2>&1
-        printf '%s' "${CRON_CTX_FILE:-}"
-    )
-    [ -n "$cfg" ] && [ -r "$cfg" ] || return 0
-    case "$prof" in
-        "relacja-$name")
-            pfile="$PROFILE_USER_ROOT/$prof.conf"
-            [ -f "$pfile" ] && sync_profile_tiers_from_config "$pfile" "$cfg" "profile__${prof}__" "" ;;
-    esac
-    case "$sprof" in
-        "relacja-$name-src"*)
-            pfile="$PROFILE_USER_ROOT/$sprof.conf"
-            # The SOURCE family is named after the TARGET profile (profile_to_src_id):
-            # lsrc_<tier> for a local relationship, src_<tier> for a remote one.
-            [ -f "$pfile" ] && sync_profile_tiers_from_config "$pfile" "$cfg" "profile__${prof}__" "$([ "$mode" = local ] && echo lsrc_ || echo src_)" ;;
-    esac
-    return 0
-}
-
-sync_profile_tiers_from_config() {   # <profile file> <config> <template name prefix> <tier prefix: "", lsrc_ or src_>
-    # Three passes over two files: the CONFIG (its tier templates of this
-    # relationship), the PROFILE once to learn its tiers, the PROFILE again to
-    # rewrite it. A tier whose template the operator DELETED from the config
-    # (owner 2026-10-13: "z configu mozna usunac cala sekcje") is deleted from the
-    # profile too, and from its use_template lists -- otherwise the next change
-    # would bring it back. Never the last tier: a profile with none is refused
-    # by the renderer, and that edit is not something to guess about.
-    local pfile="$1" cfg="$2" tp="$3" sp="$4" tmp
-    tmp=$(mktemp "$(dirname "$pfile")/.sync.XXXXXX") || return 0
-    awk -v tp="$tp" -v sp="$sp" '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        FNR == 1 { pass++ }
-        pass == 1 {                       # the CONFIG: tier -> field -> value
-            if ($0 ~ /^\[/) {
-                cur = ""; h = $0; sub(/^\[/, "", h); sub(/\]$/, "", h)
-                if (index(h, "template:" tp sp) == 1) { cur = substr(h, length("template:" tp sp) + 1); if (cur ~ /__/) cur = ""; if (cur != "") { have[cur] = 1; nhave++ } }
-                next
-            }
-            if (cur == "" || $0 !~ /=/ || $0 ~ /^[ \t]*#/) next
-            k = trim(substr($0, 1, index($0, "=") - 1)); v = trim(substr($0, index($0, "=") + 1))
-            val[cur, k] = v; next
-        }
-        pass == 2 {                       # the PROFILE, once: which tiers it has
-            if ($0 ~ /^\[template:/) { h = $0; sub(/^\[template:/, "", h); sub(/\]$/, "", h); ptier[h] = 1; np++ }
-            next
-        }
-        pass == 3 && FNR == 1 {
-            # Removed = in the profile, gone from the config -- judged only when the
-            # config still carries SOME template of this relationship.
-            if (nhave > 0) for (t in ptier) if (!(t in have)) { gone[t] = 1; ng++ }
-            if (ng > 0 && ng >= np) { delete gone; ng = 0; note = note "(nie usuwam: w configu nie zostal zaden szczebel tego profilu) " }
-            for (t in gone) note = note sprintf("%s: szczebel usuniety z configu; ", t)
-            if (ng) changes++
-        }
-        function flush_add() {            # a quiesce added by hand in the config
-            if (sec != "" && (sec in have) && !sawq[sec] && ((sec, "quiesce") in val)) {
-                printf "\tquiesce        = %s\n", val[sec, "quiesce"]; changes++
-                note = note sprintf("%s.quiesce: (brak) -> %s; ", sec, val[sec, "quiesce"])
-            }
-        }
-        /^\[/ {
-            flush_add()
-            sec = ""; drop = 0; h = $0; sub(/^\[/, "", h); sub(/\]$/, "", h)
-            if (h ~ /^template:/) { sec = substr(h, 10); if (sec in gone) { drop = 1; next } }
-            print; next
-        }
-        drop { next }
-        $0 ~ /^[ \t]*use_template[ \t]*=/ && ng > 0 {
-            v = trim(substr($0, index($0, "=") + 1)); n = split(v, a, /[ \t]*,[ \t]*/); out = ""
-            for (x = 1; x <= n; x++) if (!(a[x] in gone)) out = out (out == "" ? "" : ",") a[x]
-            sub(/=.*/, "= " out); print; next
-        }
-        sec != "" && (sec in have) && $0 ~ /=/ && $0 !~ /^[ \t]*#/ {
-            k = trim(substr($0, 1, index($0, "=") - 1)); v = trim(substr($0, index($0, "=") + 1))
-            if (k == "quiesce") { sawq[sec] = 1; if (!((sec, "quiesce") in val)) { changes++; note = note sprintf("%s.quiesce: %s -> (brak); ", sec, v); next } }
-            nv = ""
-            if (k == "keep" && ((sec, "retain") in val)) { nv = val[sec, "retain"]; sub(/^-[A-Za-z]/, "", nv) }
-            else if ((sec, k) in val) nv = val[sec, k]
-            if (nv != "" && nv != v) {
-                sub(/=.*/, "= " nv); changes++
-                note = note sprintf("%s.%s: %s -> %s; ", sec, k, v, nv)
-            }
-            print; next
-        }
-        { print }
-        END {
-            flush_add()
-            if (changes) print "SYNC: " note > "/dev/stderr"
-        }' "$cfg" "$pfile" "$pfile" > "$tmp" 2>"$tmp.log" || { rm -f "$tmp" "$tmp.log"; return 0; }
-    if [ -s "$tmp.log" ] && ! cmp -s "$tmp" "$pfile"; then
-        mv_preserving_mode "$tmp" "$pfile" && log "config wins: $(basename "$pfile") brought in line with the config -- $(sed 's/^SYNC: //' "$tmp.log")"
-    fi
-    rm -f "$tmp" "$tmp.log"
-}
-
-# The old naming gave a hidden SOURCE profile a new file for every set of numbers
-# (relacja-X-src-H24D1, -H24D2, -H24D7W1, ...); five of them for one relationship on
-# pve9b, one in use. Now the name is fixed (relacja-<NAME>-src) and the ones no record
-# uses any more are removed after a successful change.
-sweep_relation_src_variants() {   # <relationship name>
-    local name="$1" keep f used
-    keep=$(record_get "$(client_conf_path "$name")" SOURCE_PROFILE)
-    for f in "$PROFILE_USER_ROOT/relacja-$name-src"*.conf; do
-        [ -f "$f" ] || continue
-        [ "$(basename "$f" .conf)" = "$keep" ] && continue
-        used=$(grep -lsx "SOURCE_PROFILE=$(basename "$f" .conf)" "$CLIENTS_DIR"/*.conf 2>/dev/null | head -1)
-        [ -n "$used" ] && continue
-        rm -f "$f" && log "removed unused hidden source profile $(basename "$f" .conf)"
-    done
-}
-
-cmd_sync_relation_profile() {   # sync-relation-profile NAME -- the GUI calls it before it reads the profile
-    local name="${1:-}"
-    [ -n "$name" ] || die "usage: sync-relation-profile NAME"
-    [ -r "$(client_conf_path "$name")" ] || die "sync-relation-profile: no relationship '$name' on this host"
-    sync_relation_profiles "$name"
-}
-
 cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
@@ -13778,8 +13639,6 @@ cmd_edit_relation() {
         ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg" "$name"
         return $?
     fi
-    # CONFIG WINS: the hidden profiles take the config's values before they are rendered.
-    sync_relation_profiles "$name"
     if [ "$(record_get "$(client_conf_path "$name")" RUX_MODE 2>/dev/null)" = local ]; then
         # A LOCAL relationship: the same local-backup that made it, re-described with
         # the new profile (L2, 2026-10-09). --plan shows, --yes installs.
@@ -13790,13 +13649,10 @@ cmd_edit_relation() {
                 --profile=*|--source-profile=*) LRA+=("$b") ;;
             esac
         done
-        run_local_relation_change edit-relation "$how" "${LRA[@]}" || return $?
-        [ "$how" = 1 ] && sweep_relation_src_variants "$name"
-        return 0
+        run_local_relation_change edit-relation "$how" "${LRA[@]}"
+        return $?
     fi
-    cmd_activate_client "$name" --regenerate "$@" || return $?
-    case " $* " in *" --yes "*|*" -y "*) sweep_relation_src_variants "$name" ;; esac
-    return 0
+    cmd_activate_client "$name" --regenerate "$@"
 }
 
 # record_is_removed_name_live_as_source <name> -- true when the collector record
@@ -19640,7 +19496,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;
         remove-replica)   shift; cmd_remove_replica "$@" ;;
-        sync-relation-profile) shift; cmd_sync_relation_profile "$@" ;;
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
         replica-restart)  shift; cmd_replica_restart "$@" ;;
