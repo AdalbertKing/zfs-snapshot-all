@@ -94,8 +94,8 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
     local from="$PROFILE" own=0
     # CONFIG WINS (właściciel 2026-10-13): szablon źródła WŁASNEJ relacji (relacja-<NAZWA>)
     # ma STAŁĄ nazwę -- dawniej każda zmiana liczb dawała nowy plik (pve9b: pięć wariantów
-    # jednej relacji). Budowany z obecnego szablonu źródła tej relacji, gdy jest (CUR_S,
-    # zgodny z configiem po sync-relation-profile), żeby ręczne zmiany źródła zostały;
+    # jednej relacji). Budowany z obecnego szablonu źródła tej relacji, gdy jest (CUR_S),
+    # żeby jego wartości zostały;
     # wtedy liczby idą WSZYSTKIE, bo baza ma własne.
     case "$PROFILE" in
         relacja-*)

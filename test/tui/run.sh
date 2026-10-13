@@ -3171,7 +3171,6 @@ case "$1" in
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"24","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    sync-relation-profile) : ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
