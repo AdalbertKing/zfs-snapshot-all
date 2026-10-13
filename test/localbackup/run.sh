@@ -679,6 +679,42 @@ if ! grep -qxF '[dataset:rpool/data]' "$RL/c.conf" && ! grep -qxF '[prune:hdd/ba
 else
     bad "local relationship: remove-client" "$out" "$(cat "$RL/c.conf")"
 fi
+# X2 (owner 2026-10-12): set-transfer refuses --compression for a LOCAL relationship,
+# as it refuses --cipher -- the engine drops compression when the target is local.
+# Control: --history is not refused for that reason.
+printf 'CLIENT_NAME=x2\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\n' > "$RL/clients/x2.conf"
+x2c=$( ( CLIENTS_DIR="$RL/clients"; cmd_set_transfer x2 --compression=zstd ) 2>&1 ); x2r=$?
+x2h=$( ( CLIENTS_DIR="$RL/clients"; cmd_set_transfer x2 --history=newest ) 2>&1 )
+if [ "$x2r" -ne 0 ] && printf '%s' "$x2c" | grep -qF "'x2' is a LOCAL copy -- there is no link, so --compression has nothing to act on"    && ! printf '%s' "$x2h" | grep -qF 'is a LOCAL copy'; then
+    ok "local relationship: set-transfer refuses --compression (X2), --history is not refused for it"
+else
+    bad "local relationship: set-transfer --compression on a local copy" "rc=$x2r" "$x2c" "$x2h"
+fi
+# X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
+# source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
+# read back; an exception of a source still there, and a pattern that is not an exact
+# path, are kept. remove-source drops the exceptions of the source it removes.
+printf 'CLIENT_NAME=x3\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nCRON_CONFIG=%s\n' "$RL/x3.conf" > "$RL/clients/x3.conf"
+cat > "$RL/x3.conf" <<'EOF'
+[dataset:rpool/a]
+	# managed-by: zfs-backup.sh local-backup source=rpool/a
+	pair_label   = x3
+	exclude_child_1 = ^rpool/a/tmp$
+	exclude_child_2 = ^rpool/gone/vm3$
+	exclude_child_3 = ^rpool/b/x(/|$)
+	exclude_child_4 = ^rpool/z.*
+EOF
+x3a=$( ( CLIENTS_DIR="$RL/clients"; local_relation_argv x3 >/dev/null 2>&1; printf '%s\n' "${LRA[@]}" | grep -- '--exclude-child' ) )
+x3b=$( ( CLIENTS_DIR="$RL/clients"; local_relation_argv x3 >/dev/null 2>&1
+         LRA=(--source=rpool/a "${LRA[@]:1}"); lra_drop_orphan_excludes >/dev/null 2>&1; printf '%s\n' "${LRA[@]}" | grep -- '--exclude-child' ) )
+if [ "$x3a" = '--exclude-child=^rpool/a/tmp$
+--exclude-child=^rpool/b/x(/|$)
+--exclude-child=^rpool/z.*' ] && [ "$x3b" = '--exclude-child=^rpool/a/tmp$
+--exclude-child=^rpool/z.*' ]; then
+    ok "local relationship: X3 -- an exception whose source is gone is dropped; one of a source still there and a non-path pattern stay"
+else
+    bad "local relationship: X3 orphaned exceptions" "read back: $x3a" "after removing rpool/b: $x3b"
+fi
 # L2 (2026-10-09): a local relationship is CHANGED by describing it again --
 # local_relation_argv reads it back (sources/target from the record, exclusions
 # from its [dataset:] section), the verb changes one thing, and local-backup runs
