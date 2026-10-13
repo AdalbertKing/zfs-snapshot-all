@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4cb7ad1555906a5e -->
+<!-- status-covers-digest: 651bfc594c6d8f91 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Ręczna zmiana configu relacji jest nazwana, zanim przepadnie (X6, właściciel 2026-10-12).**
+  „Zmień relację” generuje sekcje relacji od nowa z jej szablonu, więc ręczna zmiana configu
+  (np. minuta sprzątania 31 → 29) przepadała bez słowa. Teraz okno liczy drugi plan, z
+  OBECNYMI ustawieniami relacji (nic nie zmienione w oknie); każda różnica w configu takiego
+  planu to ręczna zmiana i stoi na górze planu przed WYKONAJ („UWAGA: config tej relacji był
+  zmieniany ręcznie. WYKONAJ nadpisze …”). `tui/hand-edits.py` czyta obie postacie planu:
+  zdalną (diff `--- proponowany config`) i lokalną (pełny kandydat + `Config docelowy`,
+  porównany z plikiem sekcja po sekcji); wyjątek zdjęty przez czasownik (X3) nie jest ręczną
+  zmianą. Zmierzone na żywo na pve9b (`lokalna-hdd-vms`): wypisane obie ręczne minuty 29 → 31
+  (cel i źródło), nic więcej. Komentarza w configu przy sekcjach relacji (druga część X6)
+  nie ma: sekcje szablonów pisze kilka miejsc, a właściciel 2026-10-13 rozważa model „config
+  jako jedyne źródło prawdy”, w którym ten problem znika.
 
 - **Zaszyfrowany nośnik repliki (W19b, właściciel 2026-10-11, „ma być proste” 2026-10-13).**
   `prepare-media POOL DEVICE --encrypt` zakłada znacznik nośnika `POOL/BAZA` z
