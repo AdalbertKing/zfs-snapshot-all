@@ -1439,6 +1439,25 @@ if hasE "$F6R" '║ Replika +Rodzaj +Źródło → cel +Harmonogram' && hasE "$F
 else
     bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,8p)"
 fi
+# W19b (wlasciciel 2026-10-11/13): zaszyfrowany nosnik -- panel mowi "nośnik zaszyfrowany
+# (klucz: F8)", F8 pokazuje klucz z pliku; replika bez klucza: komunikat, bez okna.
+RMK="$(mktemp)"; KF="$(mktemp)"; printf 'ab12cd34ef56' > "$KF"
+"$PY" - "$P10/replicas.json" "$RMK" "$KF" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["replicas"][0]["media_key"] = sys.argv[3]
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+K1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --width 200 --height 40 2>&1)"
+K2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --keys F8 --width 200 --height 40 2>&1)"
+K3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --keys down,F8 --width 200 --height 40 2>&1)"
+if has "$K1" 'Szyfrowane  nośnik zaszyfrowany (klucz: F8)' && has "$K1" 'F8 Klucz' && has "$K2" 'Klucz nośnika repliki sejf-a' && has "$K2" 'ab12cd34ef56' \
+   && ! has "$K3" 'Klucz nośnika' && has "$K3" 'replika sejf-b nie ma zaszyfrowanego nośnika'; then
+    ok "nosniki: W19b -- panel mowi o zaszyfrowanym nosniku, F8 pokazuje klucz z pliku; replika bez klucza dostaje komunikat"
+else
+    bad "nosniki: W19b klucz" "$(printf '%s' "$K1" | grep -E 'Szyfrowane|F8')" "$(printf '%s' "$K2" | grep -E 'Klucz|ab12' | head -2)" "$(printf '%s' "$K3" | tail -3)"
+fi
+rm -f "$RMK" "$KF"
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
     : > "$XL"
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys "$1" 2>&1
@@ -2769,17 +2788,19 @@ RPOUT=$(rp_run "0${T}usb5
 0${T}__prep__
 0${T}/dev/disk/by-id/usb-C
 0${T}
+0${T}
 0${T}0 22 * * *
 1${T}
 0${T}
 "); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
-   && grep -qE '^prepare-media [A-Za-z0-9._-]+-usb5 /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
+   && grep -qE '^prepare-media [A-Za-z0-9._-]+-usb5 /dev/disk/by-id/usb-C --base=replica --encrypt --yes$' "$RP/zb.log" \
+   && grep -F 'szyfrowanie' "$RP/wt.log" | grep -qF 'Szyfrować nośnik?' \
    && grep -qE '^add-replica usb5 --source=hdd/data --dst=[A-Za-z0-9._-]+-usb5/replica .* --media-guid=777 --on-insert=no --install --yes$' "$RP/zb.log" \
    && grep -F 'formatowanie nośnika' "$RP/wt.log" | grep -qF 'Sformatuj (KASUJE dysk)' \
    && grep -F 'formatowanie nośnika' "$RP/wt.log" | grep -qF -- '--defaultno' \
    && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && ! grep -qF 'baza na nośniku' "$RP/wt.log"; then
-    ok "replica: 'Sformatuj nowy nosnik' -- bez pytan o nazwe/baze (<host>-<replika>/replica), plan --defaultno, ID do --media-guid"
+    ok "replica: 'Sformatuj nowy nosnik' -- bez pytan o nazwe/baze (<host>-<replika>/replica), pytanie o szyfrowanie (Tak = --encrypt, W19b), plan --defaultno, ID do --media-guid"
 else
     bad "replica: formatowanie nosnika" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -6 "$RP/wt.log" | cut -c1-250)"
 fi
@@ -2837,6 +2858,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
+1${T}
 0${T}
 0${T}
 0${T}0 22 * * *
@@ -2878,6 +2900,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
+1${T}
 0${T}
 0${T}
 0${T}0 22 * * *

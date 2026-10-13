@@ -1710,7 +1710,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     if active == "nosniki":
-        return [("F7", u"Uruchom teraz")]
+        return [("F7", u"Uruchom teraz"), ("F8", u"Klucz")]
     return []
 
 
@@ -3173,11 +3173,22 @@ def replica_disk_words(r):
     return u"%d %s%s%s" % (n, words, span, u" (jak kolektor)" if not str(r.get("keep") or "").strip() else u"")
 
 
+def replica_crypt_words(r):
+    """W19b + W17: nosnik zaszyfrowany kluczem z pliku i/lub kopie wysylane raw."""
+    raw = str(r.get("raw") or "").lower() in ("yes", "1", "true")
+    words = []
+    if r.get("media_key"):
+        words.append(u"nośnik zaszyfrowany (klucz: F8)")
+    if raw:
+        words.append(u"kopie idą zaszyfrowane (raw), klucz zostaje u źródła")
+    return u"; ".join(words) if words else u"nie"
+
+
 def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
     pairs = [(u"Rodzaj", replica_kind(r)[1]),
              (u"Na dysku", replica_disk_words(r)),
-             (u"Szyfrowane", u"tak -- kopie idą zaszyfrowane (raw), klucz zostaje u źródła" if str(r.get("raw") or "").lower() in ("yes", "1", "true") else u"nie"),
+             (u"Szyfrowane", replica_crypt_words(r)),
              (u"Źródła (%d)" % len(r.get("sources", [])), ",  ".join(r.get("sources", [])) or r.get("source") or "?"),
              ("Cel", "%s %s   (pula %s)" % (ch.right, r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
              ("Harmonogram", "%s   %s%s%s" % (
@@ -3394,7 +3405,7 @@ HELP = [
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
-    u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom, Enter+'e' zmiana",
+    u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -3832,7 +3843,8 @@ class UI(object):
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
-        F7 uruchom zaznaczona teraz (bez pytania). Logika jest w czasownikach."""
+        F7 uruchom zaznaczona teraz (bez pytania), F8 pokaz klucz nosnika (W19b).
+        Logika jest w czasownikach."""
         if k == "ins":
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
@@ -3850,6 +3862,25 @@ class UI(object):
             # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
             # dyskach zostaja (W12).
             return self.run_dialog([self.zb(), "remove-replica", n, "--ask"])
+        if k == "F8":
+            # W19b (wlasciciel 2026-10-11): klucz zaszyfrowanego nosnika da sie pokazac
+            # znowu -- to jedyna kopia, ktora moze opuscic ten serwer.
+            kf = reps[c].get("media_key") or ""
+            if not kf:
+                self.message = u"replika %s nie ma zaszyfrowanego nośnika -- nie ma klucza do pokazania" % n
+                return
+            try:
+                with open(kf, encoding="utf-8") as fh:
+                    key = fh.read().strip()
+            except OSError as e:
+                self.message = u"nie da się przeczytać klucza %s: %s" % (kf, e)
+                return
+            self.window = ("output", {"title": u"Klucz nośnika repliki %s" % n, "path": None, "proc": None, "shell": "",
+                                      "lines": [u"Klucz (64 znaki hex):", u"", u"  " + key, u"",
+                                                u"Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera",
+                                                u"kopii z dysku nie odczytasz.", u"Plik: " + kf], "rc": 0})
+            self.scroll = 0
+            return
 
     def action(self, k):
         """Klawisz akcji na F3 -> okno potwierdzenia albo komunikat."""
@@ -4568,7 +4599,7 @@ class UI(object):
             return self.template_action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
-        elif k in ("F7", "del", "ins") and self.screen == "nosniki":
+        elif k in ("F7", "F8", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":

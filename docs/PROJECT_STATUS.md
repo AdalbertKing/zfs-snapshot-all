@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 999467a9dd5d10cc -->
+<!-- status-covers-digest: 4cb7ad1555906a5e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,26 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zaszyfrowany nośnik repliki (W19b, właściciel 2026-10-11, „ma być proste” 2026-10-13).**
+  `prepare-media POOL DEVICE --encrypt` zakłada znacznik nośnika `POOL/BAZA` z
+  `encryption=aes-256-gcm`, `keyformat=hex` i kluczem w PLIKU
+  `/etc/zfs-snapshot-all/keys/<pula>.key` (0600, zapisany przez wołającego, w praktyce root), nie hasłem — hasło zablokowałoby bieg
+  nocny i bieg po włożeniu. Jeden klucz na nazwę puli: kolejny dysk tej samej puli (rotacja)
+  dostaje ten sam klucz, plan to mówi. Po formatowaniu czasownik drukuje klucz (`key=`), a
+  okno kreatora repliki pokazuje go z poleceniem zapisania poza serwerem; kreator pyta o
+  szyfrowanie jednym Tak/Nie (domyślnie Tak), a dla puli, która ma już klucz, nie pyta.
+  `zfs-media-gate.sh attach` po imporcie ładuje klucz korzenia szyfrowania (`zfs load-key`,
+  z jego `keylocation`); klucza nie da się załadować → odmowa słowami, `key_unavailable`, rc 2;
+  pulę zaimportowaną przez ten bieg bramka eksportuje, cudzy import zostawia jak zastała. `list-replicas --json` ma pole `media_key` (plik klucza, gdy
+  istnieje); F6: „Szyfrowane: nośnik zaszyfrowany (klucz: F8)”, F8 pokazuje klucz.
+  Zmierzone na żywo na pve9b 2026-10-13 (pule plikowe, klucze poza `/etc`): formatowanie z
+  kluczem 64 hex 0600, bieg zwykłego źródła na zaszyfrowany nośnik i przyrost, źródło
+  zaszyfrowane w trybie raw na zaszyfrowany nośnik, dane po odszyfrowaniu zgodne (md5),
+  bez klucza odmowa rc 2 i pula wyeksportowana; bramka z `main` importowała i zostawiała
+  klucz niezaładowany. Nie sprawdzone na żywo: okno kreatora (whiptail) na prawdziwym dysku
+  USB i bieg po włożeniu. Szyfrowanie dotyczy tylko nośnika przygotowanego przez `prepare-media`
+  (wymiennego); nośnik stały to istniejąca pula, której pakiet nie formatuje. ZFS ukrywa dane, nie nazwy datasetów i rozmiary.
 
 - **Runda uwag X (właściciel 2026-10-12, paczka drobna, 2026-10-13).**
   Tabela szczebli: szczebel wyłączony ma „koherentne” odznaczone, także taki, którego

@@ -88,6 +88,9 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 DEPLOY="$SCRIPT_DIR/deploy.sh"
 SNAPGET="$SCRIPT_DIR/snapget.sh"
 SNAPSEND="$SCRIPT_DIR/snapsend.sh"
+# W19(b): key files of encrypted replica media, one per pool name (prepare-media
+# --encrypt writes them, zfs-media-gate.sh loads them on attach, F6 shows them).
+MEDIA_KEY_DIR="${ZFS_MEDIA_KEY_DIR:-/etc/zfs-snapshot-all/keys}"
 GENCRON="$SCRIPT_DIR/gen-cron.sh"
 # The staleness monitor. Named here beside the other engines because the new
 # `monitor` verb RUNS it -- as this checkout's copy, never the path an installed
@@ -6720,10 +6723,11 @@ media_disk_in_use() {   # <device> -> reason on stdout, rc 0 = in use
 }
 
 cmd_prepare_media() {
-    local pool="" dev="" base="replica" yes=0 list=0 a
+    local pool="" dev="" base="replica" yes=0 list=0 enc=0 a
     for a in "$@"; do
         case "$a" in
             --list)   list=1 ;;
+            --encrypt) enc=1 ;;
             --base=*) base="${a#*=}" ;;
             --yes|-y) yes=1 ;;
             -*)       die "prepare-media: unknown option '$a'" ;;
@@ -6746,7 +6750,7 @@ cmd_prepare_media() {
         done < <(lsblk -dn -o NAME,SIZE,TYPE 2>/dev/null | awk '$3 == "disk" && $1 !~ /^zd/ {print $1, $2}')   # zd* = zvols, not disks
         return 0
     fi
-    [ -n "$pool" ] && [ -n "$dev" ] || die "usage: prepare-media POOL DEVICE [--base=BASE] [--yes]   (prepare-media --list shows the free disks)"
+    [ -n "$pool" ] && [ -n "$dev" ] || die "usage: prepare-media POOL DEVICE [--base=BASE] [--encrypt] [--yes]   (prepare-media --list shows the free disks)"
     case "$pool" in *[!A-Za-z0-9._-]*|[!A-Za-z]*) die "prepare-media: pool name '$pool' -- a letter first, then letters, digits, . _ -" ;; esac
     case "$base" in ''|/*|*/|*[!A-Za-z0-9._/-]*) die "prepare-media: --base='$base' -- a dataset path under the pool, e.g. replica" ;; esac
     [ -b "$(readlink -f "$dev" 2>/dev/null)" ] || die "prepare-media: '$dev' is not a block device on this host"
@@ -6761,7 +6765,20 @@ cmd_prepare_media() {
     echo "  disk:     $dev  ($real, $(lsblk -dn -o SIZE,MODEL "$real" 2>/dev/null | sed 's/  */ /g'))"
     lsblk -nr -o NAME,FSTYPE,LABEL "$real" 2>/dev/null | awk 'NF > 1 {print "  WIPED:    " $1 " holds " $2 (NF > 2 ? " (" $3 ")" : "")}'
     echo "  1. zpool create -f -m none -o failmode=continue -O compression=zstd $pool $dev   -- EVERYTHING on the disk is erased"
-    echo "  2. zfs create $pool/$base   -- marks it as this replica's medium"
+    # W19(b) (owner 2026-10-11, "ma byc proste" 2026-10-13): the medium encrypted with a
+    # KEY FILE on this host, never a passphrase -- a passphrase would stop the nightly and
+    # the on-insert runs. One key per pool name, so the disks of a rotation pair (same
+    # pool name, told apart by GUID) share it. The gate loads it on attach.
+    local keyfile="$MEDIA_KEY_DIR/$pool.key" keynew=1
+    [ -s "$keyfile" ] && keynew=0
+    if [ "$enc" -eq 1 ]; then
+        echo "  2. zfs create -o encryption=aes-256-gcm -o keyformat=hex -o keylocation=file://$keyfile $pool/$base"
+        echo "              -- ENCRYPTED: without the key nobody reads the disk; marks it as this replica's medium"
+        if [ "$keynew" -eq 1 ]; then echo "     key:     NEW, $keyfile (0600 root) -- shown once after formatting: write it down OFF this host"
+        else echo "     key:     EXISTING $keyfile (the other disk of this pool uses it too)"; fi
+    else
+        echo "  2. zfs create $pool/$base   -- marks it as this replica's medium (NOT encrypted)"
+    fi
     echo "  3. zpool export $pool       -- the disk can be unplugged"
     if zpool import 2>/dev/null | awk -v p="$pool" '$1 == "pool:" && $2 == p {f=1} END {exit !f}'; then
         echo "  note:     another disk with a pool '$pool' is in the slot (not imported) -- a rotation pair, told apart by GUID"
@@ -6774,12 +6791,24 @@ cmd_prepare_media() {
     # keeps its own compression; this is for everything written there otherwise, and so
     # the pool says plainly what it is.
     zpool create -f -m none -o failmode=continue -O compression=zstd "$pool" "$dev" || die "prepare-media: zpool create failed (see above). Nothing else was done."
-    zfs create "$pool/$base" || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
+    if [ "$enc" -eq 1 ]; then
+        if [ "$keynew" -eq 1 ]; then
+            ( umask 077; mkdir -p "$MEDIA_KEY_DIR" && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$keyfile" ) \
+                || { zpool export "$pool" 2>/dev/null; die "prepare-media: could not write the key $keyfile -- the pool exists, unencrypted and empty; re-run after zpool destroy $pool"; }
+            chmod 600 "$keyfile" 2>/dev/null || :
+        fi
+        zfs create -o encryption=aes-256-gcm -o keyformat=hex -o "keylocation=file://$keyfile" "$pool/$base" \
+            || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create (encrypted) $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
+    else
+        zfs create "$pool/$base" || { zpool export "$pool" 2>/dev/null; die "prepare-media: zfs create $pool/$base failed -- the pool exists without its marker dataset; re-run prepare-media after zpool destroy $pool"; }
+    fi
     # P5: the pool GUID is what the replica will know this disk by (add-replica
     # --media-guid). Readable only while imported, so it is printed here.
     echo "guid=$(zpool get -H -o value guid "$pool" 2>/dev/null)"
+    # The window shows the key once; it is the only copy that can leave this host.
+    [ "$enc" -eq 1 ] && echo "key=$(cat "$keyfile" 2>/dev/null)" && echo "keyfile=$keyfile"
     zpool export "$pool" || die "prepare-media: the medium is ready, but zpool export $pool failed -- export it by hand before unplugging"
-    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base, failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
+    log "prepare-media: medium ready -- pool '$pool', marker $pool/$base$([ "$enc" -eq 1 ] && echo " ENCRYPTED (key $keyfile)"), failmode=continue, compression=zstd, exported. Use it as --dst=$pool/$base."
 }
 
 # OPTIONAL, AND NOT IMPLIED BY ANYTHING. Owner's direction, 2026-08-29: the
@@ -7249,8 +7278,11 @@ JSRC
                 [ -n "$_x" ] || continue
                 _xarr="$_xarr${_xarr:+,}\"$(json_escape "$_x")\""
             done < <(replica_section_excludes "$config" "$name")
-            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s"}' \
-                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp" "${rw:-no}"
+            # media_key (W19b): the key file of an encrypted medium, by the pool name of
+            # dst -- known without the disk in the slot.
+            local _mk="$MEDIA_KEY_DIR/${dst%%/*}.key"; [ -s "$_mk" ] || _mk=""
+            printf '{"name":"%s","source":"%s","sources":[%s],"dst":"%s","schedule":"%s","prefix":"%s","media":"%s","recursive":"%s","history":"%s","present":"%s","last_seen":"%s","last_current":"%s","monitor_warn":"%s","monitor_crit":"%s","exclude_child":[%s],"media_guids":"%s","on_insert":"%s","keep":"%s","raw":"%s","media_key":"%s"}' \
+                "$name" "$src" "$_jarr" "$dst" "$sched" "$pref" "${media:-fixed}" "$rec" "$hist" "$present" "$last" "$lcur" "$mw" "$mc" "$_xarr" "$mg" "${oi:-no}" "$kp" "${rw:-no}" "$_mk"
         else
             printf '%-14s %-28s -> %-24s %-14s %-11s %s\n' "$name" "$src" "$dst" "$sched" "$hist" "$present"
             [ -n "$last" ] && printf '%-14s   ostatnio widziany: %s\n' "" "$last"

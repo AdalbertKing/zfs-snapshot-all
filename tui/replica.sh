@@ -136,19 +136,33 @@ prep_media() {   # <pula> <baza> -> PREP_DST, PREP_GUID ; 0 = sformatowany, 1 = 
        --menu "Dyski, których nic nie używa. Wybrany zostanie WYCZYSZCZONY." "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
        "${items[@]}" || return 1
     dev="$WT_OUT"
-    "$ZB" prepare-media "$pool" "$dev" --base="$base" >"$TMPD/prep.plan" 2>&1
+    # W19(b) (właściciel 2026-10-11, "ma być proste"): jedno pytanie, domyślnie Tak.
+    # Kolejny dysk puli, która ma już klucz, jest szyfrowany tym samym kluczem bez pytania
+    # -- dyski jednej repliki muszą dać się czytać tak samo.
+    local enc=() kf="${ZFS_MEDIA_KEY_DIR:-/etc/zfs-snapshot-all/keys}/$pool.key"
+    if [ -s "$kf" ]; then
+        enc=(--encrypt)
+    elif wt --title "Replika $NAME -- szyfrowanie" --yes-button "Tak" --no-button "Nie" \
+           --yesno "Szyfrować nośnik?\n\nGdy dysk zginie albo zostanie skradziony, nikt nie odczyta kopii.\nKlucz zostaje na tym serwerze; kopie robią się same, bez hasła.\nPo formatowaniu pokażę klucz -- zapisz go poza tym serwerem." 12 "$W"; then
+        enc=(--encrypt)
+    fi
+    "$ZB" prepare-media "$pool" "$dev" --base="$base" "${enc[@]}" >"$TMPD/prep.plan" 2>&1
     if ! grep -q '^PLAN' "$TMPD/prep.plan"; then
         wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E 'FATAL' "$TMPD/prep.plan" | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
         return 1
     fi
     yesno_text "$TMPD/prep.plan" "Replika $NAME -- formatowanie nośnika" "Sformatuj (KASUJE dysk)" "Wstecz" --defaultno || return 1
     info "Replika $NAME -- nośnik" "Formatuję $dev..."
-    if ! "$ZB" prepare-media "$pool" "$dev" --base="$base" --yes >"$TMPD/prep.log" 2>&1; then
+    if ! "$ZB" prepare-media "$pool" "$dev" --base="$base" "${enc[@]}" --yes >"$TMPD/prep.log" 2>&1; then
         wt --title "Formatowanie nie wyszło" --msgbox "$(tail -4 "$TMPD/prep.log" | fold -s -w $((W - 6)))" 12 "$W"
         return 1
     fi
     PREP_DST="$pool/$base"
     PREP_GUID="$(sed -n 's/^guid=//p' "$TMPD/prep.log" | tr -dc '0-9' | head -c 40)"
+    local key; key="$(sed -n 's/^key=//p' "$TMPD/prep.log" | head -1)"
+    if [ -n "$key" ]; then
+        wt --title "Klucz nośnika $pool -- ZAPISZ GO" --msgbox "Nośnik jest zaszyfrowany. Klucz:\n\n  $key\n\nZapisz go POZA tym serwerem (np. w sejfie haseł). Bez klucza i bez tego\nserwera kopii z dysku nie odczytasz. Na F6 pokażesz go znowu (F8).\nPlik na serwerze: $(sed -n 's/^keyfile=//p' "$TMPD/prep.log" | head -1)" 14 "$W"
+    fi
     return 0
 }
 guid_of_pool() {   # <pula> -> ID puli: zaimportowanej z zpool get, w slocie ze skanu importu
