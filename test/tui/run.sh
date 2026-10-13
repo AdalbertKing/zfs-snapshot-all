@@ -3169,6 +3169,9 @@ case "$1" in
     add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"24","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
+    set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
+    sync-relation-profile) : ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
@@ -3231,24 +3234,31 @@ if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-
 else
     bad "edit-relation: list-profiles bez --no-render" "$(grep list-profiles "$ER/zb.log")"
 fi
+# CONFIG JAKO JEDYNE ZRODLO (wlasciciel 2026-10-13): "Harmonogram i retencja" czyta szczeble z
+# configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego save-profile,
+# delete-profile ani edit-relation). Zrodlo hourly 24 -> 12 w oknie zrodla = --src-tier.
 EROUT=$(er_run "0${T}harm
 0${T}
-"); ERRC=$?
-if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden --force --description=' "$ER/zb.log" \
-   && grep -q '^edit-relation r1 --profile=relacja-r1 --source-profile= --yes' "$ER/zb.log" && ! grep -q '^delete-profile' "$ER/zb.log" \
+" "enter\nright,bs,bs,1,2,enter"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
+   && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --yes' "$ER/zb.log" \
+   && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log" \
    && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Datasety -- co kopiować' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
-    ok "edit-relation: menu 6 pozycji; Harmonogram i retencja kopii w celu i źródle -> ukryty szablon relacja-r1 -> plan -> WYKONAJ"
+    ok "edit-relation: Harmonogram i retencja -- szczeble z configu (show-tiers), jeden set-tiers --plan, WYKONAJ = --yes; bez ukrytego szablonu"
 else
-    bad "edit-relation: harmonogram" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
+    bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
 fi
+# Wstecz z planu = okno zrodla (trzecia tabela), Wstecz tam = tabela celu (czwarta), Esc = menu;
+# nic nie zainstalowane, zadnego pliku szablonu.
 EROUT=$(er_run "0${T}harm
 1${T}
-" "enter\nenter\nesc"); ERRC=$?
-if [ "$ERRC" -ne 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-r1 --hidden' "$ER/zb.log" \
-   && grep -q '^delete-profile relacja-r1 --yes' "$ER/zb.log" && ! grep -q -- '--yes$' <(grep '^edit-relation' "$ER/zb.log"); then
-    ok "edit-relation: plan nie wykonany -- ukryty szablon relacji cofniety (nie bylo go wczesniej = usuniety)"
+" "enter\nright,bs,bs,1,2,enter\nesc\nesc"); ERRC=$?
+ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
+if [ "$ERRC" -ne 0 ] && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
+   && [ "$ERT" = 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|Harmonogram i retencja: W CELU KOPII|' ]; then
+    ok "edit-relation: plan nie wykonany -- Wstecz o jeden krok (zrodlo, potem cel), nic nie zainstalowane, zaden szablon nie zapisany"
 else
-    bad "edit-relation: cofniecie ukrytego szablonu" "rc=$ERRC" "$(cat "$ER/zb.log")"
+    bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"
 fi
 # X5 (wlasciciel 2026-10-12): Wstecz z PLANU = jeden krok -- wraca do okna retencji
 # ZRODLA, nie do wyboru szablonu. Szablon d30h24 ma szczeble, wiec okno zrodla jest:
@@ -3287,13 +3297,15 @@ else
 fi
 # X6 (wlasciciel 2026-10-12): reczna zmiana configu relacji -- plan mowi to na GORZE,
 # zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
-EROUT=$(ER_HAND=1 er_run "0${T}harm
+EROUT=$(ER_HAND=1 er_run "0${T}szablon
+0${T}d30h24
 1${T}
-" "enter\nenter\nesc"); ERRC=$?
+" "enter\nesc"); ERRC=$?
 ERP=$(cat "$ER/wt.log")
-EROUT=$(er_run "0${T}harm
+EROUT=$(er_run "0${T}szablon
+0${T}d30h24
 1${T}
-" "enter\nenter\nesc")
+" "enter\nesc")
 ERP0=$(cat "$ER/wt.log")
 if has "$ERP" 'UWAGA: config tej relacji był zmieniany ręcznie.' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
    && has "$ERP" 'Wstecz i nie zmieniaj tej relacji w GUI' && ! has "$ERP0" 'zmieniany ręcznie'; then

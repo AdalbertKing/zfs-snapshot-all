@@ -134,6 +134,83 @@ src_prefill() {
     [ "${#v[@]}" -gt 0 ] && SRCKEEP="$PROFILE:${v[*]}"
 }
 
+# HARMONOGRAM I RETENCJA -- wprost w CONFIGU (właściciel 2026-10-13: "config jako jedyne źródło
+# prawdy"; pośrednik w postaci ukrytego szablonu odrzucony: "Ctrl+C w złym momencie i mamy stan
+# nieustalony"). Szczeble czyta show-tiers z configu, ta sama tabela celu i to samo okno źródła
+# co dotąd, a zapis to JEDNO wywołanie set-tiers: kopia configu, zmiana, cały config przez
+# generator, jedna atomowa podmiana. Wstecz = jeden krok (tabela <- źródło <- plan <- menu).
+harm_flow() {
+    local hs=1 rc
+    info "Harmonogram i retencja" "Czytam szczeble relacji z configu..."
+    if ! "$ZB" show-tiers "$NAME" --json >"$TMPD/rt.json" 2>"$TMPD/rt.err"; then
+        wt --title "Nie da się odczytać szczebli" --msgbox "$(grep -E 'FATAL' "$TMPD/rt.err" | tail -1 | sed 's/^FATAL: //')" 10 "$W"
+        return 0
+    fi
+    # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i okno źródła.
+    "$PY" - "$TMPD/rt.json" "$TMPD/rt-prof.json" "$TMPD/prof.json.tiers" <<'PYEOF'
+import json, re, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+json.dump({"profiles": [{"name": "@rel", "source": "user", "used_by": 0, "description": "", "tiers": d.get("target", [])}]},
+          open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+with open(sys.argv[3], "a", encoding="utf-8", newline="\n") as tf:
+    for n, side in (("@rel", "target"), ("@rel-src", "source")):
+        for t in d.get(side, []):
+            if t.get("keep"):
+                tf.write("%s\t%s\t%s\t%s\tkeep\n" % (n, t.get("name", "-"), t.get("pattern") or "-", t["keep"]))
+            elif t.get("retain"):
+                m = re.match(r"^-([hdwmy])([0-9]+)$", t["retain"])
+                if m:
+                    tf.write("%s\t%s\t%s\t%s\tretain:%s\n" % (n, t.get("name", "-"), t.get("pattern") or "-", m.group(2), m.group(1)))
+PYEOF
+    local SAVE_P="${PROFILE:-}" SAVE_S="${CUR_S:-}"
+    PROFILE="@rel"; CUR_S="@rel-src"; SRCKEEP=""
+    local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
+    while :; do
+        if [ "$hs" -eq 1 ]; then
+            clear 2>/dev/null
+            TEMPLATE_JSON="$TMPD/rt-prof.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
+                || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
+            mapfile -t RARGS <"$TMPD/rargs"
+            hs=2; SRCKEEP=""
+            [ "$nsrc" -gt 0 ] && SRCKEEP="@rel:$(awk -F'\t' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'\t' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
+        fi
+        : >"$TMPD/srcargs"
+        if [ "$hs" -eq 2 ] && [ "$nsrc" -gt 0 ]; then
+            SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
+            SRC_ARGS_OUT="$TMPD/srcargs" source_retention_editor || { hs=1; continue; }
+        fi
+        local -a SARGS=(); mapfile -t SARGS <"$TMPD/srcargs"
+        if [ "${#RARGS[@]}" -eq 0 ] && [ "${#SARGS[@]}" -eq 0 ]; then
+            wt --title "Harmonogram i retencja" --msgbox "Nic nie zmieniono -- relacja zostaje, jak jest." 8 "$W"
+            PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
+        fi
+        ARGV=("$ZB" set-tiers "$NAME" ${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"})
+        info "Zmień relację $NAME" "Liczę plan (cały config przez generator)..."
+        if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
+            wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
+            [ "$nsrc" -gt 0 ] && hs=2 || hs=1; continue
+        fi
+        { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo
+          sed -n '/^Relacja .* -- szczeble:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
+          echo
+          grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|; s/profile__[^ ]*__//' | head -40
+          echo
+          echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/plan2.txt"
+        if ! yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno; then
+            [ "$nsrc" -gt 0 ] && hs=2 || hs=1; continue
+        fi
+        clear 2>/dev/null
+        echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
+        "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; rc=${PIPESTATUS[0]}
+        [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+        echo
+        if [ "$rc" -eq 0 ]; then echo "=== GOTOWE: szczeble relacji '$NAME' zmienione w configu (rc=0). Enter = dalej"
+        else echo "=== NIE UDAŁO SIĘ (rc=$rc) -- config i cron bez zmian; powód w linii FATAL powyżej. Enter = dalej"; fi
+        [ -t 0 ] && read -r _
+        exit "$rc"
+    done
+}
+
 # USTAWIENIA SILNIKA (W16, właściciel 2026-10-11): historia, kompresja, szyfr SSH i autodobór
 # łącza jednej relacji. Obecne wartości z show-config; zmiany czekają w zmiennych p_*,
 # dopiero "Gotowe" składa set-transfer (--plan, potem WYKONAJ = --yes). Wstecz = bez zmian.
@@ -306,7 +383,8 @@ while :; do
        zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
-        szablon|harm) break ;;
+        harm) harm_flow; continue ;;
+        szablon) break ;;
         silnik) engine_settings; continue ;;
         config)
             # edit-config (2026-10-08): edytor dostaje caly terminal, jak crontab -e;
