@@ -6508,7 +6508,10 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # cron_context_resolve record, assert_cron_config_matches_installed, then
 # atomic_replace_and_install. show-tiers joined the READER set (cron_context_resolve
 # record, never writes).
-if [ "$writers" -eq 14 ] && [ "$resolvers" -eq 22 ]; then
+# 15/23 since 2026-10-13 (stage B): local_source_change -- add-source / remove-source of a
+# LOCAL relationship change only that source's sections IN the config. A WRITER, aimed
+# like the others (cron_context_resolve record, assert, atomic_replace_and_install).
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 23 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

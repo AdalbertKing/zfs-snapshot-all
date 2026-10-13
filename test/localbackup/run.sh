@@ -913,20 +913,109 @@ if printf '%s\n' "$got" | grep -qx -- '--profile=d30' && printf '%s\n' "$got" | 
 else
     bad "local relationship: edit-relation on a local one" "$got"
 fi
-got=$(lb_spy cmd_add_source l2 rpool/c --yes)
-printf '%s\n' "$got" | grep -qx -- '--source=rpool/a,rpool/b,rpool/c' && printf '%s\n' "$got" | grep -qx -- '--install' && printf '%s\n' "$got" | grep -qx -- '--yes' \
-    && ok "local relationship: add-source --yes = the same relationship with one source more, installed" \
-    || bad "local relationship: add-source" "$got"
-got=$(lb_spy cmd_remove_source l2 rpool/a)
-printf '%s\n' "$got" | grep -qx -- '--source=rpool/b' && ! printf '%s\n' "$got" | grep -qx -- '--install' \
-    && ok "local relationship: remove-source (no --yes) = a plan without that source" \
-    || bad "local relationship: remove-source" "$got"
-printf 'CLIENT_NAME=l3\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\nCRON_CONFIG=%s\n' "$RL/l2.conf" > "$RL/clients/l3.conf"
-g1=$(lb_spy cmd_remove_source l3 rpool/a); g2=$(lb_spy cmd_remove_source l3 rpool/zz); g3=$(lb_spy cmd_add_source l3 rpool/a)
-if printf '%s' "$g1" | grep -q 'is the last source' && printf '%s' "$g2" | grep -q 'is not a source' && printf '%s' "$g3" | grep -q 'is already in'; then
-    ok "local relationship: removing the last source, a non-source, or adding one already there is refused before anything runs"
+# STAGE B (owner 2026-10-13, "config jako jedyne zrodlo prawdy"): add-source / remove-source
+# of a LOCAL relationship change only THAT source's sections in the config -- no rebuild of
+# the rest from the profile in the record (which lost tiers set with set-tiers or by hand).
+# add: [dataset:] and [prune:] cloned from a sibling, its exceptions left behind; remove:
+# both sections go; refusals before anything is written; a plan writes nothing; the
+# record's source list and copies follow the config.
+LS="$RL/ls"; mkdir -p "$LS/clients"
+ls_rec() { printf 'CLIENT_NAME=ls\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nMANAGED_DATASETS=hdd/backups/rpool/a\\,hdd/backups/rpool/b\nCRON_CONFIG=%s\n' "$LS/c.conf" > "$LS/clients/ls.conf"; }
+ls_conf() { cat > "$LS/c.conf" <<'EOF'
+[template:profile__relacja-ls__daily]
+	prune_schedule = 29 1 * * *
+	retain         = -D5
+[template:profile__relacja-ls__lsrc_daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	prune_schedule = 29 1 * * *
+	pattern        = automated_daily
+	retain         = -D1
+
+[dataset:rpool/a]
+	# managed-by: zfs-backup.sh local-backup source=rpool/a
+	use_template = profile__relacja-ls__lsrc_daily
+	dst          = hdd/backups
+	recursive    = flat
+	pair_label   = ls
+	exclude_child_1 = ^rpool/a/tmp$
+	exclude_family = vzdump
+	notify       = local-a
+
+[dataset:rpool/b]
+	# managed-by: zfs-backup.sh local-backup source=rpool/b
+	use_template = profile__relacja-ls__lsrc_daily
+	dst          = hdd/backups
+	recursive    = flat
+	pair_label   = ls
+	exclude_family = vzdump
+	notify       = local-b
+
+[prune:hdd/backups/rpool/a]
+	# managed-by: zfs-backup.sh local-backup target=hdd/backups/rpool/a
+	use_template = profile__relacja-ls__daily
+	recursive    = yes
+	pair_label   = ls
+	notify       = local-a
+
+[prune:hdd/backups/rpool/b]
+	# managed-by: zfs-backup.sh local-backup target=hdd/backups/rpool/b
+	use_template = profile__relacja-ls__daily
+	recursive    = yes
+	pair_label   = ls
+	notify       = local-b
+
+[dataset:rpool/other]
+	dst          = hdd/backups
+	pair_label   = other
+EOF
+}
+ls_run() {   # <verb> <args...>
+    ( CLIENTS_DIR="$LS/clients"
+      cron_context_resolve() { CRON_CTX_FILE="$LS/c.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { return 0; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      zfs() { case "$*" in *"list -H -o name -- rpool/c"|*"list -H -o name -- rpool/a/sub"|*"list -H -o name -- rpool/other/x") return 0 ;; esac; return 1; }
+      "$@" ) 2>&1
+}
+ls_sec() { awk -v h="[$1]" '$0==h{f=1;print;next} /^\[/{f=0} f' "$LS/c.conf"; }
+ls_rec; ls_conf; cp "$LS/c.conf" "$LS/before"
+ap=$(ls_run cmd_add_source ls rpool/c); ap_same=$(cmp -s "$LS/c.conf" "$LS/before" && echo yes)
+ao=$(ls_run cmd_add_source ls rpool/c --yes)
+nd=$(ls_sec dataset:rpool/c); np=$(ls_sec prune:hdd/backups/rpool/c)
+keep_a=$(ls_sec dataset:rpool/a); keep_t=$(ls_sec template:profile__relacja-ls__daily)
+if [ "$ap_same" = yes ] && printf '%s' "$nd" | grep -q 'use_template = profile__relacja-ls__lsrc_daily' && printf '%s' "$nd" | grep -q 'source=rpool/c' \
+   && ! printf '%s' "$nd" | grep -q 'exclude_child' && printf '%s' "$nd" | grep -q 'exclude_family = vzdump' && printf '%s' "$nd" | grep -q 'notify       = local-c' \
+   && printf '%s' "$np" | grep -q 'target=hdd/backups/rpool/c' && printf '%s' "$np" | grep -q 'use_template = profile__relacja-ls__daily' \
+   && printf '%s' "$keep_a" | grep -q 'exclude_child_1 = ^rpool/a/tmp\$' && printf '%s' "$keep_t" | grep -q 'retain         = -D5' \
+   && grep -q 'REQUESTED_DATASETS=rpool/a\\,rpool/b\\,rpool/c' "$LS/clients/ls.conf" && grep -q 'hdd/backups/rpool/c' "$LS/clients/ls.conf"; then
+    ok "local relationship: add-source clones a sibling's two sections for the new source (its exceptions left behind); the tiers stay as set (-D5); a plan writes nothing; the record follows"
 else
-    bad "local relationship: source refusals" "$g1" "$g2" "$g3"
+    bad "local relationship: add-source in the config" "plan same=$ap_same" "$ao" "$nd" "$np" "$(cat "$LS/clients/ls.conf")"
+fi
+ls_rec; ls_conf
+ro=$(ls_run cmd_remove_source ls rpool/a --yes)
+if ! grep -qxF '[dataset:rpool/a]' "$LS/c.conf" && ! grep -qxF '[prune:hdd/backups/rpool/a]' "$LS/c.conf" && ! grep -q 'rpool/a/tmp' "$LS/c.conf" \
+   && grep -qxF '[dataset:rpool/b]' "$LS/c.conf" && grep -qxF '[dataset:rpool/other]' "$LS/c.conf" && grep -q 'retain         = -D5' "$LS/c.conf" \
+   && grep -qx 'REQUESTED_DATASETS=rpool/b' "$LS/clients/ls.conf" && grep -qx 'MANAGED_DATASETS=hdd/backups/rpool/b' "$LS/clients/ls.conf" \
+   && printf '%s' "$ro" | grep -q 'stays on this host'; then
+    ok "local relationship: remove-source drops that source's two sections (and its exception) and nothing else; the copy stays; the record follows"
+else
+    bad "local relationship: remove-source in the config" "$ro" "$(cat "$LS/c.conf")" "$(cat "$LS/clients/ls.conf")"
+fi
+ls_rec; ls_conf; cp "$LS/c.conf" "$LS/before"
+g1=$(ls_run cmd_remove_source ls rpool/zz); g2=$(ls_run cmd_add_source ls rpool/b); g3=$(ls_run cmd_add_source ls rpool/a/sub)
+g4=$(ls_run cmd_add_source ls rpool/other/x); g5=$(ls_run cmd_add_source ls rpool/none)
+ls_run cmd_remove_source ls rpool/a --yes >/dev/null; g6=$(ls_run cmd_remove_source ls rpool/b)
+ls_conf
+if printf '%s' "$g1" | grep -q 'is not a source' && printf '%s' "$g2" | grep -q 'is already in' && printf '%s' "$g3" | grep -q 'overlaps' \
+   && printf '%s' "$g4" | grep -q "overlaps 'rpool/other'" && printf '%s' "$g5" | grep -q 'does not exist' && printf '%s' "$g6" | grep -q 'is the last source' \
+   && cmp -s "$LS/c.conf" "$LS/before"; then
+    ok "local relationship: a non-source, one already there, one inside a source or another relationship's dataset, a missing one, and the last one -- refused before anything is written"
+else
+    bad "local relationship: source refusals (config)" "$g1" "$g2" "$g3" "$g4" "$g5" "$g6"
 fi
 rm -f "$WORK/crontab-store"; seed_cfg
 out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --replace --config="$CFG")"

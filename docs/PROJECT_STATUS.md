@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 96ecfa217bb7e781 -->
+<!-- status-covers-digest: 757812002a50c399 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Źródła relacji lokalnej i „Użyj szablonu” bez przebudowy z szablonu (etap B, właściciel
+  2026-10-13).** `add-source` / `remove-source` relacji LOKALNEJ zmieniają w configu tylko
+  sekcje tego jednego źródła, jedną transakcją (kopia configu, zmiana, cały config przez
+  generator, atomowa podmiana): dodanie klonuje `[dataset:]` i `[prune:CEL/…]` istniejącego
+  źródła tej relacji (te same szablony, rekursja i pomijane rodziny; jego wyjątki zostają przy
+  nim), usunięcie kasuje obie sekcje źródła z jego wyjątkami; kopia zostaje na hoście. Wcześniej
+  obie operacje przebudowywały całą relację z szablonu z rekordu — szczeble zmienione przez
+  `set-tiers` albo ręcznie przepadały. Odmowy przed zapisem: nie-źródło, już jest, nie istnieje,
+  ostatnie źródło, nakładanie na cel albo na dowolny `[dataset:]` configu. Rekord
+  (`REQUESTED_DATASETS`, `MANAGED_DATASETS`) idzie za configiem po udanej instalacji.
+  „Użyj szablonu” w „Zmień relację” nie zapisuje już pochodnego szablonu źródła
+  (`<szablon>-src-…`): krok 1 to szablon ze źródłem jak cel (`edit-relation --source-profile=`),
+  krok 2 — tylko gdy w oknie źródła coś zmieniono — `set-tiers --src-tier…`; plan pokazuje oba,
+  każdy jest jedną atomową podmianą, a stan po kroku 1 jest pełny i poprawny. Na żywo (plany)
+  na pve9b: dodanie `hdd/vms` do `lokalna-hdd-vms` (tylko jego zadania, ręczne 29 zachowane),
+  usunięcie `hdd/test-kreator`, odmowa `hdd/ct/subvol-301-disk-0` (wewnątrz źródła). Zostaje
+  na etap C: kreator NOWEJ relacji dalej zapisuje pochodne szablony źródła i ukryty szablon
+  „Ręcznie”; uzgadnianie z #521 i ostrzeżenie X6 jeszcze w kodzie.
 
 - **Szczeble relacji wprost w configu: `show-tiers` i `set-tiers` (właściciel 2026-10-13,
   „config jako jedyne źródło prawdy”, etap A; model z ukrytym szablonem jako pośrednikiem
@@ -106,8 +125,8 @@
   powrót do fabrycznej, przechodzi) — silnik i tak kompresję pomija (X2).
   Wyjątek należy do źródła: wyjątek dokładnej ścieżki (`^ŚCIEŻKA$`, `^ŚCIEŻKA(/|$)`), której
   żadne źródło relacji lokalnej już nie obejmuje, znika przy kolejnej zmianie relacji
-  lokalnej przez `edit-relation`, `add-source` lub `remove-source`; wzorzec, który nie jest
-  dokładną ścieżką, zostaje (X3).
+  lokalnej przez `edit-relation`; `remove-source` usuwa sekcje źródła razem z jego wyjątkami
+  (etap B); wzorzec, który nie jest dokładną ścieżką, zostaje (X3).
   „Zmień relację”: pozycja nazywa się „Harmonogram i retencja kopii w celu i źródle” (X4);
   Wstecz z planu i po odmowie czasownika wraca do okna retencji źródła, gdy było
   pokazane (X5). F2 Zadania: F7 uruchamia zaznaczone zadanie od razu, bez okna

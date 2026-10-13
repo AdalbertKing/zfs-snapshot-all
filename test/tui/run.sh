@@ -3278,10 +3278,13 @@ EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
 " "right,bs,bs,1,2,enter"); ERRC=$?
-if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d30h24 --force --tier=hourly --keep=12 --as=d30h24-src-H12D30 ' "$ER/zb.log" \
-   && grep -q '^edit-relation r1 --profile=d30h24 --source-profile=d30h24-src-H12D30 --yes' "$ER/zb.log" \
-   && ! grep -qF '2/2 retencja na źródle' "$ER/wt.log"; then
-    ok "edit-relation: Szablon -> gotowy szablon celu, retencja zrodla w TYM SAMYM oknie-tabeli co kreator (bez drugiej listy szablonow)"
+# Etap B (wlasciciel 2026-10-13): BEZ pochodnego szablonu zrodla -- szablon idzie ze zrodlem
+# jak cel (edit-relation --source-profile=), roznica zrodla to drugi krok: set-tiers --src-tier.
+if [ "$ERRC" -eq 0 ] && ! grep -q '^save-profile' "$ER/zb.log" \
+   && grep -q '^edit-relation r1 --profile=d30h24 --source-profile= --yes' "$ER/zb.log" \
+   && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --yes' "$ER/zb.log" \
+   && grep -qF 'Krok 2 -- liczby u źródła' "$ER/wt.log" && ! grep -qF '2/2 retencja na źródle' "$ER/wt.log"; then
+    ok "edit-relation: Uzyj szablonu -> szablon ze zrodlem jak cel, liczby zrodla drugim krokiem set-tiers (bez pochodnego szablonu); to samo okno-tabela zrodla"
 else
     bad "edit-relation: szablon + retencja zrodla" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
 fi
