@@ -14113,8 +14113,13 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     # this host but is no longer this relationship's to destroy.
     local now man="${MANAGED_DATASETS:-}" m out=""
     now=$(tiers_side_sections "$cronfile" "$name" local source | sed -n 's/^\[dataset:\(.*\)\]$/\1/p' | paste -sd, -)
-    if [ "$how" = add ]; then out="${man:+$man,}$target/$ds"
-    else for m in ${man//,/ }; do [ "$m" = "$target/$ds" ] || out="${out:+$out,}$m"; done; fi
+    # SPACE-separated, as local-backup writes it and every reader splits it
+    # (`for x in ${MANAGED_DATASETS}`) -- a comma would make the list one word.
+    for m in ${man//,/ }; do
+        [ "$how" = remove ] && [ "$m" = "$target/$ds" ] && continue
+        out="${out:+$out }$m"
+    done
+    [ "$how" = add ] && out="${out:+$out }$target/$ds"
     record_replace_fields "$cpath" REQUESTED_DATASETS "$now" MANAGED_DATASETS "$out" \
         || warn "$how-source: the config is installed, but the record $cpath could not be updated -- its source list is stale (the config decides)"
     return 0

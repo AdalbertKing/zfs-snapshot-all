@@ -920,7 +920,7 @@ fi
 # both sections go; refusals before anything is written; a plan writes nothing; the
 # record's source list and copies follow the config.
 LS="$RL/ls"; mkdir -p "$LS/clients"
-ls_rec() { printf 'CLIENT_NAME=ls\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nMANAGED_DATASETS=hdd/backups/rpool/a\\,hdd/backups/rpool/b\nCRON_CONFIG=%s\n' "$LS/c.conf" > "$LS/clients/ls.conf"; }
+ls_rec() { printf 'CLIENT_NAME=ls\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nMANAGED_DATASETS=hdd/backups/rpool/a\\ hdd/backups/rpool/b\nCRON_CONFIG=%s\n' "$LS/c.conf" > "$LS/clients/ls.conf"; }
 ls_conf() { cat > "$LS/c.conf" <<'EOF'
 [template:profile__relacja-ls__daily]
 	prune_schedule = 29 1 * * *
@@ -990,7 +990,8 @@ if [ "$ap_same" = yes ] && printf '%s' "$nd" | grep -q 'use_template = profile__
    && ! printf '%s' "$nd" | grep -q 'exclude_child' && printf '%s' "$nd" | grep -q 'exclude_family = vzdump' && printf '%s' "$nd" | grep -q 'notify       = local-c' \
    && printf '%s' "$np" | grep -q 'target=hdd/backups/rpool/c' && printf '%s' "$np" | grep -q 'use_template = profile__relacja-ls__daily' \
    && printf '%s' "$keep_a" | grep -q 'exclude_child_1 = ^rpool/a/tmp\$' && printf '%s' "$keep_t" | grep -q 'retain         = -D5' \
-   && grep -q 'REQUESTED_DATASETS=rpool/a\\,rpool/b\\,rpool/c' "$LS/clients/ls.conf" && grep -q 'hdd/backups/rpool/c' "$LS/clients/ls.conf"; then
+   && grep -q 'REQUESTED_DATASETS=rpool/a\\,rpool/b\\,rpool/c' "$LS/clients/ls.conf" \
+   && grep -qx 'MANAGED_DATASETS=hdd/backups/rpool/a\\ hdd/backups/rpool/b\\ hdd/backups/rpool/c' "$LS/clients/ls.conf"; then
     ok "local relationship: add-source clones a sibling's two sections for the new source (its exceptions left behind); the tiers stay as set (-D5); a plan writes nothing; the record follows"
 else
     bad "local relationship: add-source in the config" "plan same=$ap_same" "$ao" "$nd" "$np" "$(cat "$LS/clients/ls.conf")"
