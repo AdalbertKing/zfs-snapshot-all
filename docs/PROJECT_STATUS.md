@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2db6c51152abaa25 -->
+<!-- status-covers-digest: 999467a9dd5d10cc -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Runda uwag X (właściciel 2026-10-12, paczka drobna, 2026-10-13).**
+  Tabela szczebli: szczebel wyłączony ma „koherentne” odznaczone, także taki, którego
+  szablon nie ma (tygodniowe, roczne; drabina GFS tej kolumny nie ma); po włączeniu wraca
+  zamrażanie, które szczebel miał przed wyłączeniem, a dodany — domyślne (X1).
+  Ustawienia silnika relacji LOKALNEJ nie pokazują kompresji, a `set-transfer` odmawia
+  wartości `--compression` dla kopii lokalnej, jak `--cipher` (pusta wartość, czyli
+  powrót do fabrycznej, przechodzi) — silnik i tak kompresję pomija (X2).
+  Wyjątek należy do źródła: wyjątek dokładnej ścieżki (`^ŚCIEŻKA$`, `^ŚCIEŻKA(/|$)`), której
+  żadne źródło relacji lokalnej już nie obejmuje, znika przy kolejnej zmianie relacji
+  lokalnej przez `edit-relation`, `add-source` lub `remove-source`; wzorzec, który nie jest
+  dokładną ścieżką, zostaje (X3).
+  „Zmień relację”: pozycja nazywa się „Harmonogram i retencja kopii w celu i źródle” (X4);
+  Wstecz z planu i po odmowie czasownika wraca do okna retencji źródła, gdy było
+  pokazane (X5). F2 Zadania: F7 uruchamia zaznaczone zadanie od razu, bez okna
+  potwierdzenia (jak F7 na replice), F8 sortuje (X9); wiersz bez linii w cronie mówi
+  „strażnik albo replika, bez harmonogramu, lub osierocony wpis” (X14). F6 Repliki:
+  kolumna „Rodzaj” (historia / zdjęcia ×N), a panel zaczyna od Rodzaju, „Na dysku” z
+  przykładem (np. „12 ostatnich zdjęć = ok. 12 mies. wstecz”) i „Szyfrowane” (X11).
+  X8 (podpis wiersza hosta na liście „co kopiować”) nie jest w tej paczce: zrobię go w
+  drzewie z kratkami (X12), które zastąpi tę listę.
 
 - **Replika po zerwaniu łańcucha (W18, właściciel 2026-10-12).** Replika z własnymi
   migawkami ciągnie przyrosty od zakładki na kopii relacji; po usunięciu i ponownym
