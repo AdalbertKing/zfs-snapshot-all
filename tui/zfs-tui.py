@@ -1710,7 +1710,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     if active == "nosniki":
-        return [("F7", u"Uruchom teraz"), ("F8", u"Pokaż klucz")]
+        return [("F7", u"Uruchom teraz"), ("F8", u"Klucz")]
     return []
 
 

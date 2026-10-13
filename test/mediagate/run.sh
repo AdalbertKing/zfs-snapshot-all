@@ -106,6 +106,19 @@ case "$*" in
       v=$(printf '%s' "$last" | tr -c 'A-Za-z0-9' '_')
       eval "w=\${SRC_WRITTEN_$v-__u__}"; [ "$w" = "__u__" ] && w="${SRC_WRITTEN:-0}"
       echo "$w"; exit 0 ;;
+  # W19b: an encrypted medium. KEYSTATUS is what the dataset reports before
+  # load-key (unset = not encrypted, "-"); KEY_LOADS=1 makes load-key succeed,
+  # after which keystatus reads "available" from $KEY_STATE.
+  *"get -H -o value keystatus"*)
+      if [ -n "${KEY_STATE:-}" ] && [ -s "$KEY_STATE" ]; then cat "$KEY_STATE"; else echo "${KEYSTATUS:--}"; fi; exit 0 ;;
+  *"get -H -o value encryptionroot"*)
+      echo "${ENCROOT:--}"; exit 0 ;;
+  *"get -H -o value keylocation"*)
+      echo "file:///etc/zfs-snapshot-all/keys/test.key"; exit 0 ;;
+  "load-key "*)
+      echo "$last" >> "${LOADKEY_LOG:-/dev/null}"
+      [ "${KEY_LOADS:-0}" = 1 ] && [ -n "${KEY_STATE:-}" ] && { echo available > "$KEY_STATE"; exit 0; }
+      exit 1 ;;
   *"list -H -o name"*)
       for d in $DATASETS; do [ "$d" = "$last" ] && exit 0; done; exit 1 ;;
 esac
@@ -843,6 +856,35 @@ if [ "$rc_f" = 2 ] && [ -z "$imp_f" ] && has "not one of the disks" "$out_f" \
 else
     bad "L8r: --guids" "foreign rc=$rc_f imp=[$imp_f]; allowed rc=$rc_a imp=[$imp_a]; imported-foreign rc=$rc_i exp=[$exp_i]; control rc=$rc_c imp=[$imp_c]" "$out_f $out_i"
 fi
+# L9e. AN ENCRYPTED MEDIUM (W19b, owner 2026-10-11/13). Import does not load keys:
+#      attach loads the key of the dataset's encryption root and goes on; a key that
+#      cannot be loaded is refused in words and the pool goes back out. Control: a
+#      medium that is not encrypted never calls load-key. Measured live on pve9b the
+#      same day (file pools): key loaded, data md5 equal; key moved away -> rc 2,
+#      exported; the gate on main imported and left the key unloaded.
+export KEY_STATE="$TMPD/keystate" LOADKEY_LOG="$TMPD/loadkey"
+POOLS="hdd"; IMPORTABLE="encp"; DATASETS="hdd encp/replica"; : > "$IMPORTED_LOG"; : > "$EXPORTED_LOG"; : > "$LOADKEY_LOG"; rm -f "$KEY_STATE"
+out_k="$(KEYSTATUS=unavailable ENCROOT=encp/replica KEY_LOADS=1 g attach encp rep --dataset encp/replica)"; rc_k=$?
+lk_k="$(cat "$LOADKEY_LOG")"
+POOLS="hdd encp"; IMPORTABLE=""; g detach encp rep >/dev/null 2>&1
+rm -f "$STATE/rep.imported-by-us" "$SYNCFILE" "$KEY_STATE"
+POOLS="hdd"; IMPORTABLE="encp"; : > "$EXPORTED_LOG"; : > "$LOADKEY_LOG"
+out_n="$(KEYSTATUS=unavailable ENCROOT=encp/replica KEY_LOADS=0 g attach encp rep --dataset encp/replica)"; rc_n=$?
+ex_n="$(cat "$EXPORTED_LOG")"
+rm -f "$STATE/rep.imported-by-us" "$SYNCFILE"
+POOLS="hdd"; IMPORTABLE="encp"; : > "$LOADKEY_LOG"
+g attach encp rep --dataset encp/replica >/dev/null 2>&1; rc_c=$?
+lk_c="$(cat "$LOADKEY_LOG")"
+POOLS="hdd encp"; IMPORTABLE=""; g detach encp rep >/dev/null 2>&1; rm -f "$STATE/rep.imported-by-us" "$SYNCFILE"
+if [ "$rc_k" = 0 ] && [ "$lk_k" = encp/replica ] && has "key of encp/replica loaded" "$out_k" \
+   && [ "$rc_n" = 2 ] && has "is encrypted and its key could not be loaded" "$out_n" && [ "$ex_n" = encp ] \
+   && [ "$rc_c" = 0 ] && [ -z "$lk_c" ]; then
+    ok "L9e: encrypted medium -- attach loads the key of its encryption root; an unloadable key is refused in words and the pool exported; control: unencrypted never calls load-key"
+else
+    bad "L9e: encrypted medium" "key rc=$rc_k load=[$lk_k]; no key rc=$rc_n exported=[$ex_n]; control rc=$rc_c load=[$lk_c]" "$out_k / $out_n"
+fi
+unset KEY_STATE LOADKEY_LOG
+
 # L8s. TWO DISKS OF ONE NAME, ONE OF THEM THIS REPLICA'S (W11b, pve9b 2026-10-11:
 #      the old usb1 disk and a newly formatted one, both pool 'repl'). With --guids
 #      the gate imports ITS disk by id; two of its own at once is still refused;
