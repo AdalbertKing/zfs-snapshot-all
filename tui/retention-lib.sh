@@ -67,17 +67,36 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
     # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
     [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
     name="$PROFILE-src-"
-    local -a args=(--from="$PROFILE" --force)
+    local from="$PROFILE" own=0
+    # CONFIG WINS (właściciel 2026-10-13): szablon źródła WŁASNEJ relacji (relacja-<NAZWA>)
+    # ma STAŁĄ nazwę -- dawniej każda zmiana liczb dawała nowy plik (pve9b: pięć wariantów
+    # jednej relacji). Budowany z obecnego szablonu źródła tej relacji, gdy jest (CUR_S,
+    # zgodny z configiem po sync-relation-profile), żeby ręczne zmiany źródła zostały;
+    # wtedy liczby idą WSZYSTKIE, bo baza ma własne.
+    case "$PROFILE" in
+        relacja-*)
+            own=1
+            case "${CUR_S:-}" in "$PROFILE-src"*) from="$CUR_S" ;; esac ;;
+    esac
+    # Baza źródła musi mieć te same szczeble co cel; inaczej (szczebel dodany w celu)
+    # jak dawniej -- z szablonu celu.
+    if [ "$from" != "$PROFILE" ]; then
+        for i in "${!tn[@]}"; do
+            awk -F'\t' -v p="$from" -v t="${tn[$i]}" '$1==p && $2==t {f=1} END {exit !f}' "$TMPD/prof.json.tiers" || { from="$PROFILE"; break; }
+        done
+    fi
+    local -a args=(--from="$from" --force)
     for i in "${!tn[@]}"; do
         if [ "${sk[$i]}" = 0 ]; then args+=(--drop-tier="${tn[$i]}"); continue; fi
         name="$name$(tier_letter "${tn[$i]}")${sk[$i]}"
-        [ "${sk[$i]}" = "${tk[$i]}" ] && continue
+        [ "$from" = "$PROFILE" ] && [ "${sk[$i]}" = "${tk[$i]}" ] && continue
         # Ten sam tryb co w szablonie celu: licznik zostaje licznikiem, wiek wiekiem.
         case "${tm[$i]}" in
             retain:*) args+=(--tier="${tn[$i]}" "--retain=-${tm[$i]#retain:}${sk[$i]}") ;;
             *)        args+=(--tier="${tn[$i]}" "--keep=${sk[$i]}") ;;
         esac
     done
+    [ "$own" -eq 1 ] && name="$PROFILE-src"
     info "${SRC_TITLE:-Retencja źródła}" "Zapisuję szablon źródła $name..."
     out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
         || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }

@@ -6500,7 +6500,10 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 13/19 since 2026-10-12: replica-restart (W18) joined the READER set -- it resolves
 # the config to find the replica and renders its line for the engine options, and
 # never writes the config (it rewrites the copy on the MEDIUM). Writer count unchanged.
-if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 19 ]; then
+# 13/20 since 2026-10-13: sync_relation_profiles ("config wins") joined the READER
+# set -- it resolves the relationship's config (cron_context_resolve record) to
+# bring the HIDDEN PROFILE in line with it, and never writes the config.
+if [ "$writers" -eq 13 ] && [ "$resolvers" -eq 20 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

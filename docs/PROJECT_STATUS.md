@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 651bfc594c6d8f91 -->
+<!-- status-covers-digest: 96580f677aacbc90 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Config wygrywa z ukrytym szablonem relacji (właściciel 2026-10-13, „config jako jedyne
+  źródło prawdy”, krok 1).** Ustawienia relacji zmienianej w GUI żyły w trzech miejscach:
+  rekord (`PROFILE=`/`SOURCE_PROFILE=`), ukryte szablony `relacja-<NAZWA>` i pochodne źródła,
+  sekcje configu; każda zmiana generowała sekcje od nowa z szablonu, więc ręczna zmiana
+  configu przepadała. Teraz przed każdą zmianą (`edit-relation`, także `--plan`; `add-source` i
+  `remove-source` relacji lokalnej; start okna „Zmień relację” przez nowy czasownik
+  `sync-relation-profile NAZWA`) ukryte szablony relacji biorą wartości z configu: każde pole
+  szczebla, które ma też szablon w configu (`retain -D4` wraca jako `keep = 4`), `quiesce`
+  usunięty albo dodany ręcznie, a szczebel, którego szablon usunięto z configu, znika z
+  szablonu relacji i z jego list `use_template` (nigdy ostatni). Struktura szablonu (fragmenty,
+  podłogi `[excluded:]`) i szablony wspólne (`d7h24`, …) nie są przepisywane. Szablon źródła
+  własnej relacji ma stałą nazwę `relacja-<NAZWA>-src` (dawniej nowy plik przy każdej zmianie
+  liczb — na pve9b pięć wariantów jednej relacji) i jest budowany z obecnego szablonu źródła;
+  po udanej zmianie warianty, których żaden rekord nie używa, są usuwane. Zmierzone na żywo
+  na pve9b (`lokalna-hdd-vms`, kopia katalogu szablonów w `/root/profiles-backup-20261013`): oba
+  ukryte szablony wzięły z configu 29 zamiast 31, drugie uruchomienie nic nie zmienia, plan
+  zmiany relacji z tymi samymi ustawieniami zostawia 29 we wszystkich sekcjach i ostrzeżenie
+  X6 jest puste. Ręczna edycja configu z GUI (`edit-config`) już wcześniej składała cały config
+  generatorem i przy błędzie niczego nie instalowała. Nie zrobione (krok 2): GUI pisze dalej
+  przez ukryty szablon, nie wprost do configu.
 
 - **Ręczna zmiana configu relacji jest nazwana, zanim przepadnie (X6, właściciel 2026-10-12).**
   „Zmień relację” generuje sekcje relacji od nowa z jej szablonu, więc ręczna zmiana configu
