@@ -14011,6 +14011,136 @@ cmd_delete_relation() {
 # where it is; a relationship shrinking is not a reason to delete a backup, and
 # the operator who wants it gone can say so with `zfs destroy` after reading what
 # this prints. That is the same rule --unpair follows for received data.
+# ------------------------------------------------------------------------------
+# A LOCAL relationship's sources, changed IN its config (owner 2026-10-13, "config
+# jako jedyne zrodlo prawdy", stage B). add-source / remove-source used to describe
+# the relationship again to local-backup --replace, which REBUILT every section
+# from the profile named in the record -- so tiers changed with set-tiers (or by
+# hand) were lost the moment a source came or went. Now only the source's own
+# two sections change, in one transaction like set-tiers: a working copy of the
+# config, the change, the whole config through the generator, one atomic replace.
+#   add:    [dataset:NEW] and [prune:TARGET/NEW] cloned from a sibling of the same
+#           relationship (its templates, recursion, families), the sibling's
+#           exceptions left behind -- they belong to the sibling's source.
+#   remove: [dataset:SRC] and [prune:TARGET/SRC] go (their exceptions with them).
+# The record's source list follows the config after a successful install; the copy
+# of a removed source stays on this host.
+local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
+    local how="$1" name="$2" ds="$3" yes="$4" cpath
+    cpath=$(client_conf_path "$name")
+    record_load client "$cpath"
+    [ "${STATE:-}" = active ] || die "$how-source: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "$how-source: no config $cronfile for '$name'"
+    assert_cron_config_matches_installed "$cronfile"
+    local target="${CLIENT_TARGET:-}"
+    [ -n "$target" ] || die "$how-source: the record of '$name' names no target"
+    local -a srcs=()
+    mapfile -t srcs < <(tiers_side_sections "$cronfile" "$name" local source | sed -n 's/^\[dataset:\(.*\)\]$/\1/p')
+    [ "${#srcs[@]}" -gt 0 ] || die "$how-source: $cronfile has no [dataset:] section of '$name'"
+    local s
+    if [ "$how" = remove ]; then
+        printf '%s\n' "${srcs[@]}" | grep -qxF -- "$ds" || die "remove-source: '$ds' is not a source of '$name'. Nothing was changed."
+        [ "${#srcs[@]}" -gt 1 ] || die "remove-source: '$ds' is the last source of '$name' -- remove the relationship instead: zfs-backup delete-relation $name"
+    else
+        printf '%s\n' "${srcs[@]}" | grep -qxF -- "$ds" && die "add-source: '$ds' is already in '$name'. Nothing was changed."
+        case "$ds" in *:*) die "add-source: '$ds' names a remote host -- '$name' is a LOCAL copy" ;; esac
+        zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
+            || die "add-source: source '$ds' does not exist on this host (zfs list found nothing). Nothing was changed."
+        local_backup_overlap "$ds" "$target" \
+            && die "add-source: target '$target' overlaps '$ds' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up."
+        # Every [dataset:] of the config, this relationship's and the others': no
+        # parent/child pair -- the guard local-backup applies within one request,
+        # applied to the whole file the source joins.
+        local other
+        while IFS= read -r other; do
+            [ -n "$other" ] || continue
+            local_backup_overlap "$ds" "$other" \
+                && die "add-source: '$ds' overlaps '$other', already in $(basename "$cronfile") (equal or parent/child) -- refusing; nothing was changed."
+        done < <(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cronfile")
+    fi
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    local base; base=$(basename "$ds")
+    if [ "$how" = remove ]; then
+        remove_config_section "$workfile" "[dataset:$ds]" || { rm -f "$workfile"; die "remove-source: could not drop [dataset:$ds]"; }
+        grep -qxF "[prune:$target/$ds]" "$workfile" && { remove_config_section "$workfile" "[prune:$target/$ds]" || { rm -f "$workfile"; die "remove-source: could not drop [prune:$target/$ds]"; }; }
+        log "remove-source: the copy of '$ds' ($target/$ds) stays on this host"
+    else
+        local sib="${srcs[0]}" sibbase; sibbase=$(basename "$sib")
+        {
+            printf '\n'
+            cron_config_section "$workfile" "[dataset:$sib]" | awk -v ds="$ds" -v nb="local-$base" '
+                NR == 1 { print "[dataset:" ds "]"; next }
+                { t = $0; sub(/^[ \t]+/, "", t) }
+                t ~ /^# managed-by: zfs-backup\.sh local-backup source=/ { print "\t# managed-by: zfs-backup.sh local-backup source=" ds; next }
+                t ~ /^exclude_child_[0-9]+[ \t]*=/ { next }
+                t ~ /^notify[ \t]*=/ { print "\tnotify       = " nb; next }
+                /^[ \t]*$/ { next }
+                { print }'
+            if grep -qxF "[prune:$target/$sib]" "$workfile"; then
+                printf '\n'
+                cron_config_section "$workfile" "[prune:$target/$sib]" | awk -v h="[prune:$target/$ds]" -v m="target=$target/$ds" -v nb="local-$base" '
+                    NR == 1 { print h; next }
+                    { t = $0; sub(/^[ \t]+/, "", t) }
+                    t ~ /^# managed-by: zfs-backup\.sh local-backup target=/ { print "\t# managed-by: zfs-backup.sh local-backup " m; next }
+                    t ~ /^notify[ \t]*=/ { print "\tnotify       = " nb; next }
+                    /^[ \t]*$/ { next }
+                    { print }'
+            fi
+        } >> "$workfile" || { rm -f "$workfile"; die "add-source: could not write the sections of '$ds'"; }
+        log "add-source: '$ds' takes the tiers of '$sib' (same templates, recursion and skipped families); its first run copies it in full"
+    fi
+    log "validating the changed config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
+    echo "Relacja '$name': $([ "$how" = add ] && echo "dochodzi zrodlo $ds" || echo "odpada zrodlo $ds") (pozostale sekcje bez zmian)"
+    if [ "$yes" -ne 1 ]; then
+        rm -f "$workfile"
+        echo "plan only -- nothing installed (add --yes to install)"
+        return 0
+    fi
+    EDIT_RELATION_NAME="$name"
+    atomic_replace_and_install "$cronfile" "$workfile" || return $?
+    # The record follows the config: its source list, and its COPIES (MANAGED_DATASETS,
+    # what delete-relation --destroy-copies destroys) -- a removed source's copy stays on
+    # this host but is no longer this relationship's to destroy.
+    local now man="${MANAGED_DATASETS:-}" m out=""
+    now=$(tiers_side_sections "$cronfile" "$name" local source | sed -n 's/^\[dataset:\(.*\)\]$/\1/p' | paste -sd, -)
+    if [ "$how" = add ]; then out="${man:+$man,}$target/$ds"
+    else for m in ${man//,/ }; do [ "$m" = "$target/$ds" ] || out="${out:+$out,}$m"; done; fi
+    record_replace_fields "$cpath" REQUESTED_DATASETS "$now" MANAGED_DATASETS "$out" \
+        || warn "$how-source: the config is installed, but the record $cpath could not be updated -- its source list is stale (the config decides)"
+    return 0
+}
+
+record_replace_fields() {   # <record> <FIELD> <value> [<FIELD> <value>]... -- one atomic rewrite
+    local f="$1" tmp k v; shift
+    tmp=$(mktemp "$(dirname "$f")/.rec.XXXXXX") || return 1
+    cp -p "$f" "$tmp" || { rm -f "$tmp"; return 1; }
+    while [ "$#" -ge 2 ]; do
+        k="$1"; v="$2"; shift 2
+        { grep -v "^$k=" "$tmp"; printf '%s=%q\n' "$k" "$v"; } > "$tmp.n" && mv "$tmp.n" "$tmp" || { rm -f "$tmp" "$tmp.n"; return 1; }
+    done
+    mv_preserving_mode "$tmp" "$f"
+}
+
+remove_config_section() {   # <file> <exact header> -- the section and its lines, nothing else
+    local file="$1" want="$2" tmp
+    tmp=$(mktemp) || return 1
+    awk -v want="$want" '
+        $0 == want { skip = 1; next }
+        skip && /^\[/ { skip = 0 }
+        !skip { print }' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv_preserving_mode "$tmp" "$file"
+}
+
 cmd_remove_source() {
     local name="" ds="" yes=0 source_only=0 a
     for a in "$@"; do
@@ -14035,19 +14165,9 @@ cmd_remove_source() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "remove-source: no relationship '$name' on this host"
     if [ "$(record_get "$cpath" RUX_MODE)" = local ]; then
-        sync_relation_profiles "$name"     # CONFIG WINS, before the sections are rebuilt
-        local_relation_argv "$name"
-        local _i _left; for _i in "${!LRA[@]}"; do
-            case "${LRA[$_i]}" in --source=*)
-                _left=$(printf '%s' "${LRA[$_i]#--source=}" | tr ',' '\n' | grep -vxF -- "$ds" | paste -sd, -)
-                [ "$_left" != "${LRA[$_i]#--source=}" ] || die "remove-source: '$ds' is not a source of '$name'. Nothing was changed."
-                [ -n "$_left" ] || die "remove-source: '$ds' is the last source of '$name' -- remove the relationship instead: zfs-backup delete-relation $name"
-                LRA[$_i]="--source=$_left" ;;
-            esac
-        done
-        log "remove-source: the copy of '$ds' ($(record_get "$cpath" CLIENT_TARGET)/$ds) stays on this host"
-        lra_drop_orphan_excludes
-        run_local_relation_change remove-source "$([ "$yes" -eq 1 ] && echo 1 || echo plan)" "${LRA[@]}"
+        # Only this source's sections change, in the config (stage B): the rest of the
+        # relationship -- tiers set with set-tiers or by hand -- is not rebuilt.
+        local_source_change remove "$name" "$ds" "$yes"
         return $?
     fi
     record_load client "$cpath"
@@ -14255,15 +14375,9 @@ cmd_add_source() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "add-source: no relationship '$name' on this host"
     if [ "$(record_get "$cpath" RUX_MODE)" = local ]; then
-        sync_relation_profiles "$name"     # CONFIG WINS, before the sections are rebuilt
-        local_relation_argv "$name"
-        local _i; for _i in "${!LRA[@]}"; do
-            case "${LRA[$_i]}" in --source=*)
-                case ",${LRA[$_i]#--source=}," in *",$ds,"*) die "add-source: '$ds' is already in '$name'. Nothing was changed." ;; esac
-                LRA[$_i]="${LRA[$_i]},$ds" ;;
-            esac
-        done
-        run_local_relation_change add-source "$([ "$yes" -eq 1 ] && echo 1 || echo plan)" "${LRA[@]}"
+        # Only this source's sections change, in the config (stage B): the rest of the
+        # relationship -- tiers set with set-tiers or by hand -- is not rebuilt.
+        local_source_change add "$name" "$ds" "$yes"
         return $?
     fi
     record_load client "$cpath"
