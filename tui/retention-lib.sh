@@ -64,6 +64,27 @@ import json, sys
 for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
     print("%s\t%s" % (r["key"], r["value"] if r["on"] else "0"))' "$TMPD/srcout.json" | tr -d '\r')
     SRCKEEP="$PROFILE:${sk[*]}"
+    # CONFIG JAKO JEDYNE ŹRÓDŁO (właściciel 2026-10-13): w "Zmień relację" okno nie zapisuje
+    # szablonu -- oddaje argumenty set-tiers (--src-tier ...) w pliku SRC_ARGS_OUT, liczone
+    # względem OBECNEGO źródła relacji (CUR_S w prof.json.tiers), nie względem celu.
+    if [ -n "${SRC_ARGS_OUT:-}" ]; then
+        : >"$SRC_ARGS_OUT"
+        local cur
+        for i in "${!tn[@]}"; do
+            cur=$(awk -F'\t' -v s="${CUR_S:-}" -v t="${tn[$i]}" '$1==s && $2==t {print $4; exit}' "$TMPD/prof.json.tiers")
+            cur="${cur:-0}"
+            [ "${sk[$i]}" = "$cur" ] && continue
+            if [ "${sk[$i]}" = 0 ]; then echo "--drop-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"; continue; fi
+            [ "$cur" = 0 ] && echo "--add-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
+            echo "--src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
+            case "${tm[$i]}" in
+                retain:*) echo "--retain=-${tm[$i]#retain:}${sk[$i]}" >>"$SRC_ARGS_OUT" ;;
+                *)        echo "--keep=${sk[$i]}" >>"$SRC_ARGS_OUT" ;;
+            esac
+        done
+        SRCPROF=""
+        return 0
+    fi
     # nic nie zmienione -> źródło jak cel (bez osobnego profilu)
     [ "${sk[*]}" != "${tk[*]}" ] || { SRCPROF=""; return 0; }
     name="$PROFILE-src-"

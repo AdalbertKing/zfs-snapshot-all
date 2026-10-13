@@ -30,7 +30,10 @@ trap 'rm -rf "$TMPD"' EXIT
 
 geom
 info "Szablony" "Czytam szablony..."
-"$ZB" list-profiles --json --no-render >"$TMPD/p.json" 2>"$TMPD/p.err" || echo '{"profiles":[]}' >"$TMPD/p.json"
+# TEMPLATE_JSON (relacja, właściciel 2026-10-13): szczeble relacji z jej CONFIGU (show-tiers),
+# podane przez wołającego w kształcie list-profiles -- bez ukrytego szablonu po drodze.
+if [ -n "${TEMPLATE_JSON:-}" ] && [ -r "$TEMPLATE_JSON" ]; then cp "$TEMPLATE_JSON" "$TMPD/p.json"
+else "$ZB" list-profiles --json --no-render >"$TMPD/p.json" 2>"$TMPD/p.err" || echo '{"profiles":[]}' >"$TMPD/p.json"; fi
 # me.tsv: źródło, used_by, opis; tiers.tsv: szczebel, keep, retain; names.txt: wszystkie nazwy.
 # Każde pole z przedrostkiem '#' (puste pola zlałyby się przy IFS=tab); przedrostek zdejmuje czytający.
 "$PY" - "$TMPD/p.json" "$NAME" "$TMPD" <<'PYEOF'

@@ -785,6 +785,101 @@ if [ -f "$SY/profiles/relacja-sy-src.conf" ] && [ -f "$SY/profiles/relacja-sy-sr
 else
     bad "config wins: sweep of source variants" "$(ls "$SY/profiles")"
 fi
+# SET-TIERS (owner 2026-10-13: "config jako jedyne zrodlo prawdy"). The tiers of ONE
+# relationship are changed IN its config: a count, a template another relationship
+# shares (copied for this one, the neighbour untouched), a tier added on BOTH sides
+# (the source makes the family, the target prunes it), a tier dropped on both, the
+# last one refused, a per-section schedule override changed where it runs, and a
+# config the generator rejects leaves the file as it was. Installed by one replace.
+ST="$RL/st"; mkdir -p "$ST/clients"
+printf 'CLIENT_NAME=sl\nRUX_MODE=local\nSTATE=active\nCRON_CONFIG=%s\n' "$ST/c.conf" > "$ST/clients/sl.conf"
+st_conf() { cat > "$ST/c.conf" <<'EOF'
+[template:profile__relacja-sl__hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	gfs            = yes
+	retain         = -H24
+[template:profile__d7h24__daily]
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	gfs            = yes
+	retain         = -D7
+[template:profile__relacja-sl__lsrc_hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	gfs            = yes
+	retain         = -H24
+[template:profile__relacja-sl__lsrc_daily]
+	send_schedule  = 11 1 * * *
+	prefix         = automated_daily_
+	prune_schedule = 31 1 * * *
+	pattern        = automated_daily
+	gfs            = yes
+	retain         = -D1
+	quiesce        = auto,degrade
+
+[dataset:rpool/a]
+	use_template = profile__relacja-sl__lsrc_hourly,profile__relacja-sl__lsrc_daily
+	dst          = hdd/backups
+	pair_label   = sl
+[prune:hdd/backups/rpool/a]
+	use_template = profile__relacja-sl__hourly,profile__d7h24__daily
+	pair_label   = sl
+[prune:hdd/backups/other]
+	use_template = profile__d7h24__daily
+	pair_label   = other
+EOF
+}
+st_run() {   # <args...> -> output; config in $ST/c.conf
+    ( CLIENTS_DIR="$ST/clients"
+      cron_context_resolve() { CRON_CTX_FILE="$ST/c.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; return 0; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      cmd_set_tiers sl "$@" ) 2>&1
+}
+st_f() { awk -v h="[$1]" -v k="$2" '$0==h{f=1;next} /^\[/{f=0} f{t=$0; sub(/^[ \t]+/,"",t); if (index(t,k" ")==1||index(t,k"=")==1){sub(/^[^=]*=[ \t]*/,"",t); print t; exit}}' "$ST/c.conf"; }
+st_conf; o1=$(st_run --tier=hourly --keep=48 --yes)
+r1a=$(st_f template:profile__relacja-sl__hourly retain); r1b=$(st_f template:profile__relacja-sl__lsrc_hourly retain)
+st_conf; o2=$(st_run --tier=daily --keep=9 --yes)
+r2own=$(st_f template:profile__relacja-sl__daily retain); r2shared=$(st_f template:profile__d7h24__daily retain)
+r2l=$(st_f prune:hdd/backups/rpool/a use_template); r2o=$(st_f prune:hdd/backups/other use_template)
+if [ "$r1a" = -H48 ] && [ "$r1b" = -H24 ] && [ "$r2own" = -D9 ] && [ "$r2shared" = -D7 ] \
+   && [ "$r2l" = "profile__relacja-sl__hourly,profile__relacja-sl__daily" ] && [ "$r2o" = profile__d7h24__daily ]; then
+    ok "set-tiers: a count changes the relationship's own template, one side only; a SHARED template is copied for it and the neighbour keeps the original"
+else
+    bad "set-tiers: count / copy-on-write" "hourly $r1a/$r1b daily own=$r2own shared=$r2shared lists [$r2l] [$r2o]" "$o1" "$o2"
+fi
+st_conf; o3=$(st_run --add-tier=weekly --keep=6 --yes)
+w_t=$(st_f template:profile__relacja-sl__weekly retain); w_s=$(st_f template:profile__relacja-sl__lsrc_weekly retain)
+w_sq=$(st_f template:profile__relacja-sl__lsrc_weekly quiesce); w_sp=$(st_f template:profile__relacja-sl__lsrc_weekly prefix)
+w_ds=$(st_f dataset:rpool/a use_template); w_pr=$(st_f prune:hdd/backups/rpool/a use_template)
+st_conf; o4=$(st_run --drop-tier=hourly --yes)
+d_ds=$(st_f dataset:rpool/a use_template); d_pr=$(st_f prune:hdd/backups/rpool/a use_template)
+d_gone=$(grep -c '^\[template:profile__relacja-sl__hourly\]' "$ST/c.conf")
+st_conf; o5=$(st_run --drop-tier=hourly --drop-tier=daily --yes); r5=$?
+if [ "$w_t" = -W6 ] && [ "$w_s" = -W4 ] && [ "$w_sq" = auto,degrade ] && [ "$w_sp" = automated_weekly_ ] \
+   && [ "${w_ds##*,}" = profile__relacja-sl__lsrc_weekly ] && [ "${w_pr##*,}" = profile__relacja-sl__weekly ] \
+   && [ "$d_ds" = profile__relacja-sl__lsrc_daily ] && [ "$d_pr" = profile__d7h24__daily ] && [ "$d_gone" = 0 ] \
+   && printf '%s' "$o5" | grep -q 'is the last tier of that side' && grep -q 'lsrc_daily' "$ST/c.conf"; then
+    ok "set-tiers: --add-tier on BOTH sides (source makes and freezes the family, target prunes), --drop-tier on both, the last tier refused"
+else
+    bad "set-tiers: add / drop" "weekly t=$w_t s=$w_s q=$w_sq pre=$w_sp lists [$w_ds] [$w_pr]" "drop [$d_ds] [$d_pr] gone=$d_gone" "$o3" "$o5"
+fi
+st_conf
+awk '/^\[dataset:rpool\/a\]/{print; print "\tprune_schedule_profile__relacja-sl__lsrc_daily = 51 1 * * *"; next} {print}' "$ST/c.conf" > "$ST/c2" && mv "$ST/c2" "$ST/c.conf"
+o6=$(st_run --src-tier=daily --prune-schedule='52 1 * * *' --yes)
+ov=$(st_f dataset:rpool/a prune_schedule_profile__relacja-sl__lsrc_daily); tp=$(st_f template:profile__relacja-sl__lsrc_daily prune_schedule)
+st_conf; cp "$ST/c.conf" "$ST/before"; o7=$(ST_GEN_FAILS=1 st_run --tier=hourly --keep=3 --yes); r7=$?
+if [ "$ov" = "52 1 * * *" ] && [ "$tp" = "31 1 * * *" ] && [ "$r7" -ne 0 ] && cmp -s "$ST/c.conf" "$ST/before" \
+   && printf '%s' "$o7" | grep -q 'gen-cron.sh rejected the changed config' && ! ls "$ST"/.zfsbackup-work.* >/dev/null 2>&1; then
+    ok "set-tiers: a schedule overridden per section is changed there (the template stays); a config the generator rejects leaves the file untouched and no working copy behind"
+else
+    bad "set-tiers: override / rejected config" "override=[$ov] template=[$tp] rc7=$r7" "$o6" "$o7" "$(ls -a "$ST")"
+fi
 # L2 (2026-10-09): a local relationship is CHANGED by describing it again --
 # local_relation_argv reads it back (sources/target from the record, exclusions
 # from its [dataset:] section), the verb changes one thing, and local-backup runs
