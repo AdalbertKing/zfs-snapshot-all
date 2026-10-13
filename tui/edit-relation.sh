@@ -136,6 +136,68 @@ src_prefill() {
 # nieustalony"). Szczeble czyta show-tiers z configu, ta sama tabela celu i to samo okno źródła
 # co dotąd, a zapis to JEDNO wywołanie set-tiers: kopia configu, zmiana, cały config przez
 # generator, jedna atomowa podmiana. Wstecz = jeden krok (tabela <- źródło <- plan <- menu).
+# Wiersze "@rel" (cel) i "@rel-src" (źródło) w prof.json.tiers: szczeble z configu (rt.json) z
+# NAŁOŻONYMI argumentami tabeli celu ($TMPD/rargs). Szczebel dodany w celu dostaje u źródła
+# liczbę celu i trafia do $TMPD/newtiers (set-tiers sam go doda po obu stronach -- okno
+# źródła ustawia mu tylko liczbę).
+rel_tiers() {
+    "$PY" - "$TMPD/rt.json" "$TMPD/rargs" "$TMPD/prof.json.tiers" "$TMPD/newtiers" <<'PYEOF'
+import json, re, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+args = [l.rstrip("\r\n") for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+DEF = {"hourly": 24, "daily": 7, "weekly": 4, "monthly": 12, "yearly": 5}
+LET = {"hourly": "h", "daily": "d", "weekly": "w", "monthly": "m", "yearly": "y"}
+def rows(side):
+    out = []
+    for t in d.get(side, []):
+        if t.get("keep"):
+            out.append([t.get("name", "-"), t.get("pattern") or "-", t["keep"], "keep"])
+        elif t.get("retain"):
+            m = re.match(r"^-([hdwmy])([0-9]+)$", t["retain"])
+            if m:
+                out.append([t.get("name", "-"), t.get("pattern") or "-", m.group(2), "retain:" + m.group(1)])
+    return out
+tgt, src = rows("target"), rows("source")
+def find(lst, n):
+    for r in lst:
+        if r[0] == n:
+            return r
+new, cur = [], None
+for a in args:
+    k, _, v = a.partition("=")
+    if k == "--tier":
+        cur = find(tgt, v)
+    elif k == "--add-tier":
+        mode = "keep"
+        if tgt and tgt[0][3].startswith("retain:"):
+            mode = "retain:" + LET.get(v, "d")
+        cur = [v, "automated_" + v, str(DEF.get(v, 1)), mode]
+        tgt.append(cur); new.append(v)
+    elif k == "--drop-tier":
+        tgt = [r for r in tgt if r[0] != v]; src = [r for r in src if r[0] != v]; cur = None
+    elif k == "--keep" and cur:
+        cur[2] = v
+    elif k == "--retain" and cur:
+        m = re.match(r"^-([A-Za-z])([0-9]+)$", v)
+        if m:
+            cur[2] = m.group(2); cur[3] = "retain:" + m.group(1).lower()
+    elif k == "--method":
+        for r in tgt + src:
+            r[3] = ("retain:" + LET.get(r[0].split("_")[-1], "d")) if v == "age" else "keep"
+for n in new:
+    t = find(tgt, n)
+    if t and not find(src, n):
+        src.append(list(t))
+lines = [l for l in open(sys.argv[3], encoding="utf-8") if not l.startswith(("@rel\t", "@rel-src\t"))]
+with open(sys.argv[3], "w", encoding="utf-8", newline="\n") as f:
+    f.writelines(lines)
+    for name, lst in (("@rel", tgt), ("@rel-src", src)):
+        for r in lst:
+            f.write("%s\t%s\t%s\t%s\t%s\n" % (name, r[0], r[1], r[2], r[3]))
+open(sys.argv[4], "w", encoding="utf-8").write(" ".join(new))
+PYEOF
+}
+
 harm_flow() {
     local hs=1 rc
     info "Harmonogram i retencja" "Czytam szczeble relacji z configu..."
@@ -144,21 +206,13 @@ harm_flow() {
         return 0
     fi
     # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i okno źródła.
-    "$PY" - "$TMPD/rt.json" "$TMPD/rt-prof.json" "$TMPD/prof.json.tiers" <<'PYEOF'
-import json, re, sys
+    "$PY" - "$TMPD/rt.json" "$TMPD/rt-prof.json" <<'PYEOF'
+import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 json.dump({"profiles": [{"name": "@rel", "source": "user", "used_by": 0, "description": "", "tiers": d.get("target", [])}]},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
-with open(sys.argv[3], "a", encoding="utf-8", newline="\n") as tf:
-    for n, side in (("@rel", "target"), ("@rel-src", "source")):
-        for t in d.get(side, []):
-            if t.get("keep"):
-                tf.write("%s\t%s\t%s\t%s\tkeep\n" % (n, t.get("name", "-"), t.get("pattern") or "-", t["keep"]))
-            elif t.get("retain"):
-                m = re.match(r"^-([hdwmy])([0-9]+)$", t["retain"])
-                if m:
-                    tf.write("%s\t%s\t%s\t%s\tretain:%s\n" % (n, t.get("name", "-"), t.get("pattern") or "-", m.group(2), m.group(1)))
 PYEOF
+    : >"$TMPD/rargs"; rel_tiers
     local SAVE_P="${PROFILE:-}" SAVE_S="${CUR_S:-}"
     PROFILE="@rel"; CUR_S="@rel-src"; SRCKEEP=""
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
@@ -168,13 +222,16 @@ PYEOF
             TEMPLATE_JSON="$TMPD/rt-prof.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
             mapfile -t RARGS <"$TMPD/rargs"
+            # X15 (właściciel 2026-10-13): okno źródła widzi szczeble PO zmianach w tabeli celu --
+            # dodany szczebel jest (z liczbą jak w celu), usunięty znika, liczby celu aktualne.
+            rel_tiers
             hs=2; SRCKEEP=""
             [ "$nsrc" -gt 0 ] && SRCKEEP="@rel:$(awk -F'\t' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'\t' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
         fi
         : >"$TMPD/srcargs"
         if [ "$hs" -eq 2 ] && [ "$nsrc" -gt 0 ]; then
             SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
-            SRC_ARGS_OUT="$TMPD/srcargs" source_retention_editor || { hs=1; continue; }
+            SRC_ARGS_OUT="$TMPD/srcargs" SRC_NEW_TIERS="$(cat "$TMPD/newtiers" 2>/dev/null)" source_retention_editor || { hs=1; continue; }
         fi
         local -a SARGS=(); mapfile -t SARGS <"$TMPD/srcargs"
         if [ "${#RARGS[@]}" -eq 0 ] && [ "${#SARGS[@]}" -eq 0 ]; then

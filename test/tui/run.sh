@@ -3247,6 +3247,19 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
 fi
+# X15 (wlasciciel 2026-10-13): szczebel DODANY w tabeli celu jest w oknie zrodla (z liczba
+# jak w celu) -- okno zrodla widzi szczeble po zmianach w celu. set-tiers dostaje dodanie
+# i liczbe zrodla tego szczebla, bez drugiego dodawania.
+EROUT=$(er_run "0${T}harm
+0${T}
+" "down,down,down,space,enter\nenter"); ERRC=$?
+ERSRC=$(printf '%s' "$EROUT" | sed -n '/Retencja: W ŹRÓDLE KOPII/,$p')
+if [ "$ERRC" -eq 0 ] && printf '%s' "$ERSRC" | grep -q 'tygodniowe' \
+   && grep -qx 'set-tiers r1 --add-tier=weekly --src-tier=weekly --keep=4 --yes' "$ER/zb.log" && ! grep -q -- '--add-src-tier' "$ER/zb.log"; then
+    ok "edit-relation: X15 -- szczebel dodany w celu (tygodniowe) jest w oknie zrodla; set-tiers --add-tier + --src-tier, bez podwojnego dodania"
+else
+    bad "edit-relation: X15 nowy szczebel w oknie zrodla" "rc=$ERRC" "$(grep '^set-tiers' "$ER/zb.log")" "$(printf '%s' "$ERSRC" | grep -E 'godzin|dobow|tygod')"
+fi
 # Wstecz z planu = okno zrodla (trzecia tabela), Wstecz tam = tabela celu (czwarta), Esc = menu;
 # nic nie zainstalowane, zadnego pliku szablonu.
 EROUT=$(er_run "0${T}harm
