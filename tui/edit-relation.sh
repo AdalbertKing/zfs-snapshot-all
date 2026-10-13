@@ -508,6 +508,18 @@ PYEOF
     if [ -s "$TMPD/rargs.plan" ] && [ "$PROFILE" = "$HNAME" ]; then
         { echo; echo "Zmiany w tabeli szczebli:"; cat "$TMPD/rargs.plan"; } >>"$TMPD/plan2.txt"
     fi
+    # X6 (właściciel 2026-10-12): RĘCZNA ZMIANA CONFIGU przepadała bez słowa -- sekcje
+    # relacji powstają od nowa z jej szablonu. Plan z OBECNYMI ustawieniami relacji (nic
+    # nie zmienione w oknie) powinien nie zmieniać crona; to, co zmienia, to ręczne zmiany
+    # w configu, które WYKONAJ nadpisze. Mówimy to na górze planu, przed WYKONAJ.
+    # (2.0: GUI czyta config i aktualizuje szablon relacji -- w obie strony.)
+    : >"$TMPD/hand.txt"
+    if "$ZB" edit-relation "$NAME" "--profile=$CUR_P" "--source-profile=${CUR_S#-}" --plan >"$TMPD/base.txt" 2>&1; then
+        "$PY" "$HERE/tui/hand-edits.py" "$TMPD/base.txt" "$NAME" >"$TMPD/hand.txt" 2>/dev/null || : >"$TMPD/hand.txt"
+    fi
+    if [ -s "$TMPD/hand.txt" ]; then
+        { head -1 "$TMPD/plan2.txt"; echo; cat "$TMPD/hand.txt"; tail -n +2 "$TMPD/plan2.txt"; } >"$TMPD/plan3.txt" && mv "$TMPD/plan3.txt" "$TMPD/plan2.txt"
+    fi
     echo >>"$TMPD/plan2.txt"
     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes" >>"$TMPD/plan2.txt"
     yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=$back; continue; }

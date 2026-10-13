@@ -3161,7 +3161,10 @@ case "$1" in
     list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
-    edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo ;; esac ;;
+    edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
+                        # X6: ER_HAND = config zmieniony recznie (minuta 29), plan wpisze 31.
+                        [ -n "${ER_HAND:-}" ] && printf -- '--- proponowany config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
+                    esac ;;
     list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
     add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"}}]}' ;;
@@ -3256,7 +3259,7 @@ EROUT=$(er_run "0${T}szablon
 1${T}
 " "enter\nesc"); ERRC=$?
 ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
-if [ "$ERT" = 'Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|' ] && [ "$(grep -c '^edit-relation r1 .* --plan' "$ER/zb.log")" = 1 ]; then
+if [ "$ERT" = 'Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|' ] && [ "$(grep -c '^edit-relation r1 --profile=d30h24 .* --plan' "$ER/zb.log")" = 1 ]; then
     ok "edit-relation: X5 -- Wstecz z planu wraca do okna retencji zrodla (drugi raz to samo okno), nie do listy szablonow"
 else
     bad "edit-relation: X5 Wstecz z planu" "kolejnosc okien: $ERT" "$(cat "$ER/zb.log")"
@@ -3282,6 +3285,41 @@ if grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia 
 else
     bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
 fi
+# X6 (wlasciciel 2026-10-12): reczna zmiana configu relacji -- plan mowi to na GORZE,
+# zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
+EROUT=$(ER_HAND=1 er_run "0${T}harm
+1${T}
+" "enter\nenter\nesc"); ERRC=$?
+ERP=$(cat "$ER/wt.log")
+EROUT=$(er_run "0${T}harm
+1${T}
+" "enter\nenter\nesc")
+ERP0=$(cat "$ER/wt.log")
+if has "$ERP" 'UWAGA: config tej relacji był zmieniany ręcznie.' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
+   && has "$ERP" 'Wstecz i nie zmieniaj tej relacji w GUI' && ! has "$ERP0" 'zmieniany ręcznie'; then
+    ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed WYKONAJ; bez recznych zmian -- bez ostrzezenia"
+else
+    bad "edit-relation: X6 ostrzezenie o recznej zmianie" "$(printf '%s' "$ERP" | cut -c1-400)" "$(printf '%s' "$ERP0" | cut -c1-200)"
+fi
+# hand-edits.py wprost, postac LOKALNA (pelny kandydat + plik configu): zmienione pole
+# zgloszone; wyjatek, ktory czasownik sam zdjal (">>> exception ... dropped"), nie jest
+# reczna zmiana; sekcja spoza planu (inna relacja) pominieta; brak roznic = pusto.
+HE="$(mktemp -d)"
+printf '[template:profile__relacja-r1__lsrc_daily]\n\tprune_schedule = 29 1 * * *\n[dataset:hdd/ct]\n\texclude_child_1 = ^hdd/vms/vm3$\n\tpair_label = r1\n[dataset:other]\n\tpair_label = r2\n' > "$HE/c.conf"
+{ echo ">>> exception '^hdd/vms/vm3\$' dropped -- no source of the relationship covers hdd/vms/vm3 any more"
+  echo "  Config docelowy:  $(cygpath -m "$HE/c.conf" 2>/dev/null || echo "$HE/c.conf") (istnieje)"
+  echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
+  printf '[template:profile__relacja-r1__lsrc_daily]\n\tprune_schedule = 31 1 * * *\n[dataset:hdd/ct]\n\tpair_label = r1\n'
+  echo "--- wygenerowany blok crona ---"; } > "$HE/plan.txt"
+HE1="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
+sed -i 's/29 1/31 1/' "$HE/c.conf"; sed -i '/vm3/d' "$HE/c.conf"
+HE2="$("$PY" "$REPO/tui/hand-edits.py" "$HE/plan.txt" r1)"
+if has "$HE1" 'źródło, dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' && ! has "$HE1" 'wyjątek' && ! has "$HE1" 'other' && [ -z "$HE2" ]; then
+    ok "hand-edits.py: postac lokalna -- zmienione pole zgloszone, wyjatek zdjety przez czasownik pominiety, inne relacje pominiete; bez roznic pusto"
+else
+    bad "hand-edits.py: postac lokalna" "$HE1" "po wyrownaniu: [$HE2]"
+fi
+rm -rf "$HE"
 rm -rf "$ER"
 
 echo "--------------------------------------------"
