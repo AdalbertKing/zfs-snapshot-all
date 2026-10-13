@@ -352,9 +352,33 @@ marker_is_ours() {
 # events and only the first is normal -- the second is the wrong medium, or a
 # rename, or a destroy. An operator handed one message for both learns to treat
 # the dangerous one as routine.
+# AN ENCRYPTED MEDIUM (W19b, owner 2026-10-11/13). prepare-media --encrypt gives the
+# marker dataset a key FILE on this host (keylocation=file://...), never a passphrase,
+# so a nightly or an on-insert run can open it alone. Import does not load keys: on
+# attach the key is loaded here, from the encryption root's own keylocation. A key
+# that cannot be loaded is refused in words -- the engine would otherwise fail later
+# with "dataset key must be loaded". Export unloads it again.
+media_key_ready() {
+    local ks root
+    ks=$(zfs get -H -o value keystatus "$DATASET" 2>/dev/null)
+    [ "$ks" = unavailable ] || return 0
+    root=$(zfs get -H -o value encryptionroot "$DATASET" 2>/dev/null)
+    [ -n "$root" ] && [ "$root" != - ] || root="$DATASET"
+    zfs load-key "$root" >/dev/null 2>&1 || :
+    ks=$(zfs get -H -o value keystatus "$DATASET" 2>/dev/null)
+    [ "$ks" = available ] && { say "medium '$POOL': key of $root loaded."; return 0; }
+    say "REFUSING: '$DATASET' is encrypted and its key could not be loaded ($(zfs get -H -o value keylocation "$root" 2>/dev/null)). The key file belongs on this host, written by prepare-media --encrypt; without it nothing on this disk can be read or written."
+    emit key_unavailable
+    return 2
+}
+
 check_dataset() {
     [ -n "$DATASET" ] || return 0
-    zfs list -H -o name "$DATASET" >/dev/null 2>&1 && return 0
+    if zfs list -H -o name "$DATASET" >/dev/null 2>&1; then
+        [ "$VERB" = attach ] || return 0
+        media_key_ready
+        return $?
+    fi
     say "REFUSING: pool '$POOL' is imported but '$DATASET' is not on it. That is not an absent medium -- it is the wrong one, or the dataset was renamed or destroyed. A human is needed."
     emit wrong_medium
     return 2
