@@ -6792,7 +6792,13 @@ cmd_set_tiers() {
     # Make TEMPLATE this side's own; prints the (possibly new) name.
     own_tpl() {
         local hf="$1" t="$2" own h k
-        if tiers_owned "$workfile" "$t" "$hf"; then printf '%s' "$t"; return 0; fi
+        # OWNED = named for this relationship AND used by nobody else. A template
+        # named after a profile (profile__d7h24__daily) is copied even when only this
+        # relationship uses it today: the next relationship made with that profile
+        # reuses the section by name and would silently inherit this change.
+        case "$t" in
+            "profile__relacja-${name}__"*) tiers_owned "$workfile" "$t" "$hf" && { printf '%s' "$t"; return 0; } ;;
+        esac
         own="profile__relacja-${name}__${t##*__}"
         if grep -qxF "[template:$own]" "$workfile"; then
             tiers_owned "$workfile" "$own" "$hf" || return 1
