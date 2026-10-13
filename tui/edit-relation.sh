@@ -4,7 +4,7 @@
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
 #   1. Datasety -- co kopiować (dodaj / usuń)    (add-source / remove-source; W4)
 #   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
-#   3. Harmonogram kopii i retencja -- tabela    (ukryty szablon relacji, edit-relation)
+#   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (ukryty szablon relacji, edit-relation)
 #   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
 #      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
@@ -16,7 +16,7 @@
 # próba pobrania, sprawdzenie praw -- bez zmian) i po "WYKONAJ" uruchamia go z --yes.
 # Czego czasownik odmawia, odmawia tu tak samo, tymi samymi słowami.
 #
-# UKRYTY SZABLON RELACJI (P4): "Harmonogram kopii i retencja" zapisuje wybory z tabeli
+# UKRYTY SZABLON RELACJI (P4): "Harmonogram i retencja kopii w celu i źródle" zapisuje wybory z tabeli
 # jako relacja-<NAZWA> (save-profile --hidden; F5 go nie pokazuje). Gdy plan nie
 # zostanie wykonany, poprzednia treść tego pliku wraca (albo plik znika, jeśli go nie
 # było) -- przerwana zmiana nie zostawia szablonu, który mówi co innego niż relacja.
@@ -190,9 +190,11 @@ PYEOF
     p_h="$c_h"; p_c="$c_c"; p_x="$c_x"; p_a="$c_a"
     while :; do
         geom
-        items=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')"
-               comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')")
+        items=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')")
+        # X2 (właściciel 2026-10-12): kopia LOKALNA nie ma łącza -- kompresji, szyfru SSH
+        # ani autodoboru nie ma tu czego ustawiać (silnik i tak je pomija).
         if [ "$PEER" != - ]; then
+            items+=(comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')")
             v="domyślny SSH"; [ "$p_x" = default ] || v="$p_x"
             items+=(ciph "Szyfr SSH        $v$([ "$p_x" = default ] && echo ' (fabryczne)')")
             v="tak"; case "$p_a" in no) v="nie" ;; esac
@@ -295,7 +297,7 @@ while :; do
        --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 17 "$W" 7 \
        dane    "Datasety -- co kopiować (dodaj / usuń)…" \
        szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
-       harm    "Harmonogram kopii i retencja -- tabela szczebli" \
+       harm    "Harmonogram i retencja kopii w celu i źródle" \
        silnik  "Ustawienia silnika -- jak przesyłane są kopie…" \
        config "Ręczna edycja konfigu (jak crontab -e)" \
        zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
@@ -425,7 +427,7 @@ while :; do
             if [ -n "$HFILE" ] && [ -z "$HBACKUP" ] && [ -f "$HFILE" ]; then
                 HBACKUP="$TMPD/hidden.bak"; cp -p "$HFILE" "$HBACKUP"
             fi
-            info "Harmonogram kopii i retencja" "Zapisuję ustawienia relacji..."
+            info "Harmonogram i retencja kopii w celu i źródle" "Zapisuję ustawienia relacji..."
             if ! out=$("$ZB" save-profile "--from=$base" "--as=$HNAME" --hidden --force ${RARGS[@]+"${RARGS[@]}"} "--description=Własne ustawienia relacji $NAME" 2>&1); then
                 wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"
                 continue
@@ -443,13 +445,16 @@ while :; do
         SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
         source_retention_editor || { step=1; continue; }
     fi
+    # X5 (wlasciciel 2026-10-12): Wstecz = JEDEN krok -- z planu (i po odmowie czasownika)
+    # wraca do okna retencji zrodla, gdy bylo pokazane; inaczej do tabeli celu.
+    back=1; [ "$step" -eq 2 ] && [ "${SRC_SHOWN:-0}" = 1 ] && back=2
     ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF")
     info "Zmień relację $NAME" "Liczę plan (generacja, próba pobrania, prawa na źródle)..."
     if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
         grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
         [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
         wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
-        step=1; continue
+        step=$back; continue
     fi
     # Plan w skrócie: podsumowanie czasownika + linie crona TEJ relacji (-/+), każda jako
     # "minuta godzina ... | etykieta | retencja". Pełny diff jest w dzienniku.
@@ -505,7 +510,7 @@ PYEOF
     fi
     echo >>"$TMPD/plan2.txt"
     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes" >>"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=1; continue; }
+    yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=$back; continue; }
     clear 2>/dev/null
     echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
     "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}

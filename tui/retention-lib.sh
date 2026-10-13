@@ -24,12 +24,14 @@ source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = ws
     # podświetloną pozycję, więc "Dalej" nie szło dalej). Teraz jedno okno-tabela.
     local -a tn=() tp=() tk=() sk=() tm=()
     local t p k m i n v name out u
+    SRC_SHOWN=0     # X5: 1 = okno bylo pokazane (Wstecz z planu wraca do niego)
     while IFS=$'\t' read -r n t p k m; do
         [ "$n" = "$PROFILE" ] || continue
         k="${k%$'\r'}"; m="${m%$'\r'}"
         tn+=("$t"); tp+=("$p"); tk+=("$k"); sk+=("$k"); tm+=("${m:-keep}")
     done <"$TMPD/prof.json.tiers"
     [ "${#tn[@]}" -gt 0 ] || { SRCPROF=""; return 0; }
+    SRC_SHOWN=1
     # poprzednie liczby tego samego szablonu (powrót do okna)
     if [ -n "$SRCKEEP" ] && [ "${SRCKEEP%%:*}" = "$PROFILE" ]; then read -r -a sk <<<"${SRCKEEP#*:}"; fi
     # OKNO-TABELA (właściciel 2026-10-09, jak w menedżerach migawek QNAP/Synology):

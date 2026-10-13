@@ -44,6 +44,11 @@ class Grid(object):
         self.rows = [dict(r) for r in spec.get("rows", [])]
         for r in self.rows:
             r["value"] = str(r.get("value") or "")
+            # X1 (wlasciciel 2026-10-12): szczebel wylaczony ma "koherentne" ODZNACZONE.
+            # Wartosc z szablonu czeka w _q i wraca, gdy szczebel zostanie wlaczony.
+            if r.get("q") is not None and not r.get("on"):
+                r["_q"] = bool(r.get("base_q", r["q"]))
+                r["q"] = False
         self.choice = dict(spec["choice"]) if spec.get("choice") else None
         self._units()
         self.desc_key = spec.get("auto_desc")
@@ -232,10 +237,13 @@ class Grid(object):
                 self.msg = u"Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny." % fam
                 return
             r["on"] = False
-            if r.get("q"):
+            if r.get("q") is not None:
+                r["_q"] = bool(r["q"])
                 r["q"] = False
         else:
             r["on"] = True
+            if r.get("q") is not None:
+                r["q"] = bool(r.get("_q", r.get("base_q", False)))
         self._auto_desc()
 
     def validate(self):
