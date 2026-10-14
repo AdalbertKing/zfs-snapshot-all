@@ -8940,7 +8940,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     [ "${#lb_excl[@]}" -eq 0 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --exclude-child needs --recursive=flat -- without it only the named dataset is copied and there is no child to leave out."
     if [ -n "$lb_name" ]; then
-        [ "$no_copy" -eq 0 ] || die "local-backup: --name makes a relationship that COPIES; with --target='' nothing is copied, so there is nothing for F3 to show. Drop --name."
+        # X27 (owner 2026-10-14, "nazwij lab-migawki"): every relationship has a name now,
+        # snapshots-only (--target='') included -- its block has a source side only.
         local _lbrec; _lbrec="$(client_conf_path "$lb_name")"
         if [ "$lb_replace" -eq 1 ]; then
             [ -e "$_lbrec" ] && [ "$(record_get "$_lbrec" STATE)" = active ] && [ "$(record_get "$_lbrec" RUX_MODE)" = local ] \
@@ -9078,7 +9079,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # A NAMED relationship owns its landings, one prune per source at
             # <target>/<source> -- where the engine puts the copy -- so pausing
             # or deleting it touches nothing another relationship keeps there.
-            if [ -n "$lb_name" ]; then
+            if [ -n "$lb_name" ] && [ "$no_copy" -eq 0 ]; then
                 for r in "${roots[@]}"; do
                     echo
                     echo "[prune:$target/$r]"
@@ -9377,7 +9378,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # A removed relationship of the same name: archived, as add-client does.
             mv -f "$_lbc" "${_lbc}.removed-$(date '+%Y%m%d-%H%M%S')" || die "could not archive the old record $_lbc"
         fi
-        for _lbr in "${roots[@]}"; do _lbm="$_lbm${_lbm:+ }$target/$_lbr"; done
+        [ "$no_copy" -eq 1 ] || for _lbr in "${roots[@]}"; do _lbm="$_lbm${_lbm:+ }$target/$_lbr"; done
         {
             echo "# zfs-backup.sh client record -- a LOCAL relationship (local-backup --name): source and copy on this host"
             echo "# Every value is %q-quoted on write: this file is sourced as root."

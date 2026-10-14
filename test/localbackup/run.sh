@@ -1963,6 +1963,20 @@ else
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
 
+# X27 (owner 2026-10-14, "nazwij lab-migawki"): a snapshots-only copy (--target='') is a
+# named relationship too -- its block has a source side only; the cron makes and prunes
+# snapshots in the source and sends nothing.
+smo=$(run --source=rpool/data --target= --recursive=flat --profile=default --name=lab-migawki --config="$WORK/smo.conf")
+smc=$(printf '%s\n' "$smo" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+if printf '%s' "$smc" | grep -qxF '[relation:lab-migawki]' && printf '%s' "$smc" | grep -q 'side         = source' \
+   && ! printf '%s' "$smc" | grep -q 'side         = target' && ! printf '%s' "$smc" | grep -q '^\[template:' \
+   && printf '%s\n' "$smo" | grep -q 'snapsend.sh -m "automated_hourly_" -R .*"rpool/data"$' \
+   && printf '%s\n' "$smo" | grep -q 'delsnaps.sh .*"rpool/data" "automated_daily"' && ! printf '%s\n' "$smo" | grep -q 'FATAL'; then
+    ok "X27: a named snapshots-only relationship (--target='') -- one block, source side only, snapshots made and pruned in the source"
+else
+    bad "X27: named snapshots-only relationship" "$smc" "$(printf '%s\n' "$smo" | grep -E 'FATAL|snapsend|delsnaps' | head -6)"
+fi
+rm -f "$WORK/smo.conf"
 # X22 / X27 (owner 2026-10-14): "Uzyj szablonu" on an existing relationship writes the
 # profile's numbers into the relationship's OWN block -- nothing shared with another
 # relationship, so a hand-changed section elsewhere cannot block it; the plan writes nothing.
