@@ -810,6 +810,39 @@ if [ "$ov" = "52 1 * * *" ] && [ "$tp" = "31 1 * * *" ] && [ "$r7" -ne 0 ] && cm
 else
     bad "set-tiers: override / rejected config" "override=[$ov] template=[$tp] rc7=$r7" "$o6" "$o7" "$(ls -a "$ST")"
 fi
+# X22 follow-up (owner's T6, 2026-10-14): after "Uzyj szablonu" with no source profile,
+# BOTH sides of a local relationship use ONE own section (profile__relacja-sl__hourly);
+# set-tiers --src-tier copied it under the name it already had and refused ("could not
+# take '' over"). The source now gets its own lsrc_ copy, the target keeps the original
+# -- for a source change and for a target change alike.
+st_shared() { cat > "$ST/c.conf" <<'EOF'
+[template:profile__relacja-sl__hourly]
+	send_schedule  = 1 * * * *
+	prefix         = automated_hourly_
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
+
+[dataset:rpool/a]
+	use_template = profile__relacja-sl__hourly
+	dst          = hdd/backups
+	pair_label   = sl
+[prune:hdd/backups/rpool/a]
+	use_template = profile__relacja-sl__hourly
+	pair_label   = sl
+EOF
+}
+st_shared; sh1=$(st_run --src-tier=hourly --keep=12 --yes); sh1rc=$?
+sh1d=$(st_f dataset:rpool/a use_template); sh1p=$(st_f prune:hdd/backups/rpool/a use_template)
+sh1s=$(st_f template:profile__relacja-sl__lsrc_hourly retain); sh1t=$(st_f template:profile__relacja-sl__hourly retain)
+st_shared; sh2=$(st_run --tier=hourly --keep=48 --yes); sh2rc=$?
+sh2d=$(st_f dataset:rpool/a use_template); sh2s=$(st_f template:profile__relacja-sl__lsrc_hourly retain); sh2t=$(st_f template:profile__relacja-sl__hourly retain)
+if [ "$sh1rc" = 0 ] && [ "$sh1d" = profile__relacja-sl__lsrc_hourly ] && [ "$sh1p" = profile__relacja-sl__hourly ] && [ "$sh1s" = -H12 ] && [ "$sh1t" = -H24 ] \
+   && [ "$sh2rc" = 0 ] && [ "$sh2d" = profile__relacja-sl__lsrc_hourly ] && [ "$sh2s" = -H24 ] && [ "$sh2t" = -H48 ]; then
+    ok "set-tiers: one own section used by BOTH sides is split -- source gets lsrc_ (-H12 there, target -H24); a target change leaves the source at -H24"
+else
+    bad "set-tiers: section shared by both sides" "src change rc=$sh1rc ds=[$sh1d] pr=[$sh1p] src=$sh1s tgt=$sh1t" "tgt change rc=$sh2rc ds=[$sh2d] src=$sh2s tgt=$sh2t" "$sh1" "$sh2"
+fi
 # X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
 # uses (profile__* left by profiles applied earlier); a used one and a hand-named one
 # stay; without --yes the file is untouched; nothing unused = nothing to do.
