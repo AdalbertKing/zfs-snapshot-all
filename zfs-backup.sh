@@ -1474,6 +1474,7 @@ EDIT_DROPPED_FAMILIES=""
 # ...and the one relationship whose own job lines the anti-deletion guard
 # lets the regenerated block replace (its eighth exemption).
 EDIT_RELATION_NAME=""
+EDIT_TIER_OPS=()
 # The peer-root ladder scope this run migrated OFF, if any (2026-09-08). Set by
 # emit_client_sections when it actually removes one, read by
 # assert_target_block_not_clobbered -- which is otherwise right to refuse the
@@ -2551,7 +2552,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] [-
     # (assert_source_prune_grant) runs in the FLOW, before the workfile is
     # published, so the two callers gate the INSTALL and this stays unit-testable
     # without a live host.
-    [ -n "$retfrag" ] && append_source_templates_if_missing "$workfile" "$retfrag"
+    [ -n "$retfrag" ] && [ "${ENSURE_NO_TEMPLATES:-0}" -eq 0 ] && append_source_templates_if_missing "$workfile" "$retfrag"
     # The source scope embeds the endpoint (account@host) in its SECTION HEADER, so
     # the scope is topology-derived like the [dataset:] `src` field and cannot be
     # refreshed in place -- the section must be rebuilt to move it. But the POLICY
@@ -6874,6 +6875,48 @@ relblock_fragment() {   # <rendered fragment> <name> <target|source>
     printf '\trelation     = %s\n\tside         = %s\n' "$2" "$3"
 }
 
+# X27 S2, a REMOTE relationship: the sections emit_client_sections has just written
+# for it point at the profile's tiers by use_template; here they get relation + side
+# instead -- the side is what THIS emitter wrote: the pull [dataset:] and a local
+# ladder [prune:] are the target, a [prune:user@host:path] is the source. Per-section
+# schedule overrides are renamed to the tier as the block names it. Then, for a new
+# relationship or a new profile, the block itself.
+relblock_adopt_remote() {   # <workfile> <name> <rebuild 0|1>
+    local wf="$1" name="$2" rebuild="$3" tmp
+    tmp=$(mktemp) || return 1
+    awk -v want="$name" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function flush(   i, l, k, v, side, t) {
+            if (nl == 0) return
+            if (hdr ~ /^\[(dataset|prune):/ && pl == want && hasut) {
+                side = (hdr ~ /^\[prune:[^]]*@[^]]*:/) ? "source" : "target"
+                for (i = 1; i <= nl; i++) {
+                    l = buf[i]; t = trim(l)
+                    if (t ~ /^use_template[ \t]*=/) { printf "\trelation     = %s\n\tside         = %s\n", want, side; continue }
+                    if (t ~ /^(send_schedule|prune_schedule|flags)_profile__/) {
+                        k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
+                        f = k; sub(/_profile__.*$/, "", f); tr = k; sub(/^.*__/, "", tr); sub(/^(lsrc_|src_)/, "", tr)
+                        printf "\t%s_%s = %s\n", f, tr, v; continue
+                    }
+                    print l
+                }
+            } else for (i = 1; i <= nl; i++) print buf[i]
+            nl = 0
+        }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { flush(); hdr = trim(l); pl = ""; hasut = 0 }
+        { t = trim(l); if (t ~ /^pair_label[ \t]*=/) { pl = t; sub(/^pair_label[ \t]*=[ \t]*/, "", pl) }
+          if (t ~ /^use_template[ \t]*=/) hasut = 1
+          buf[++nl] = l }
+        END { flush() }' "$wf" > "$tmp" && cat "$tmp" > "$wf" || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+    [ "$rebuild" -eq 1 ] || return 0
+    remove_config_section "$wf" "[relation:$name]" 2>/dev/null || :
+    local hasS=0; [ -n "$(relblock_sections "$wf" "$name" source)" ] && hasS=1
+    local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+    { echo; relblock_from_profile "$name" 1 "$hasS"; } >> "$wf"
+}
+
 relblock_require() {   # <config> <name> <verb>
     relblock_has "$1" "$2" && return 0
     die "$3: '$2' is still in the OLD config shape (template sections, use_template) -- move it to its [relation:$2] block first: zfs-backup.sh migrate-config. Nothing was changed."
@@ -8913,6 +8956,11 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     fi
     [ -n "$lb_recursion" ] && echo "  Rekursja:         $lb_recursion -- migawki, prune i straznik obejmuja tez dzieci (obecne i przyszle)"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
+    if [ "${#EDIT_TIER_OPS[@]}" -gt 0 ] && [ -n "$lb_name" ]; then
+        local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+        tiers_apply_ops "$cand" "$lb_name" "${EDIT_TIER_OPS[@]}"
+        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"
+    fi
     echo
     echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
     cat "$cand"
@@ -11582,6 +11630,10 @@ cmd_activate_client() {
         client_section_plan "$workfile" "$name" "$is_new_relationship"
     fi
     [ "$regen" -eq 1 ] && drop_own_relation_templates "$workfile" "$name"
+    # X27 S2: the relationship is its [relation:] block -- an existing one must already
+    # be in that shape (migrate-config moves it), and no template section is written.
+    [ "$is_new_relationship" -eq 1 ] || relblock_require "$workfile" "$name" activate-client
+    ENSURE_NO_TEMPLATES=1
     ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
 
     # First activation generates the sections from the profile. A re-activation
@@ -11602,6 +11654,14 @@ cmd_activate_client() {
         remove_client_prune_sections "$workfile" "$name"
     fi
     emit_client_sections "$workfile" "$name" "$is_new_relationship" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
+    local _rebuild=0; { [ "$is_new_relationship" -eq 1 ] || [ "$regen" -eq 1 ]; } && _rebuild=1
+    relblock_adopt_remote "$workfile" "$name" "$_rebuild" || { rm -f "$workfile"; die "could not write the [relation:$name] block into the working copy"; }
+    # "Uzyj szablonu" + the source numbers (edit-relation's set-tiers words): ONE replace.
+    if [ "$regen" -eq 1 ] && [ "${#EDIT_TIER_OPS[@]}" -gt 0 ]; then
+        local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+        tiers_apply_ops "$workfile" "$name" "${EDIT_TIER_OPS[@]}"
+        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"; echo
+    fi
     if [ "$regen" -eq 1 ]; then
         # THE FAMILY STAYS. A profile stamping another prefix is a different
         # relationship: the snapshots already on both sides would be nobody's,
@@ -12856,6 +12916,23 @@ remove_orphan_profile_templates() {   # <file> [why, for the log line]
 # `prefix` of every template it uses, sorted, one per line. An empty prefix is
 # a passive pickup and stamps nothing.
 section_stamped_families() {   # <file> <dataset path>
+    # X27: a section of a [relation:] block stamps the prefixes of the block's tiers on
+    # its side (plus a prefix of its own, if it carries one).
+    local _rel _sd
+    _rel=$(tiers_sec_field "$1" "[dataset:$2]" relation 2>/dev/null)
+    if [ -n "$_rel" ]; then
+        _sd=$(tiers_sec_field "$1" "[dataset:$2]" side 2>/dev/null)
+        {
+            tiers_sec_field "$1" "[dataset:$2]" prefix
+            local -a RB_TIERS=() RB_KEYS=(); local -A RB=(); local _t _p
+            relblock_load "$1" "$_rel"
+            for _t in "${RB_TIERS[@]}"; do
+                [ "${RB[$_t.$_sd]:-}" = no ] && continue
+                _p=$(rb_get "$_t" "${_sd:-target}" prefix 2>/dev/null) && printf '%s\n' "$_p"
+            done
+        } | grep -v '^$' | sort -u
+        return 0
+    fi
     awk -v hdr="[dataset:$2]" '
         function val(l) { sub(/^[^=]*=[ \t]*/, "", l); sub(/[ \t]+$/, "", l); return l }
         FNR == NR {
@@ -13820,13 +13897,19 @@ cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
     local a ask=0
+    local -a pass=()
+    EDIT_TIER_OPS=()
     for a in "$@"; do
         case "$a" in
-            --yes|-y|--verbose|--plan|--profile=*|--source-profile=*) ;;
+            --yes|-y|--verbose|--plan|--profile=*|--source-profile=*) pass+=("$a") ;;
             --ask) ask=1 ;;
+            # X27: set-tiers words, applied in the SAME working copy after the profile --
+            # "Uzyj szablonu" with the source numbers is one replace (one GUI call).
+            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*) EDIT_TIER_OPS+=("$a") ;;
             *) die "edit-relation: unknown option $a" ;;
         esac
     done
+    set -- "${pass[@]+"${pass[@]}"}"
     # X22: the chosen profile becomes THIS relationship's own sections (see PROFILE_NS_AS).
     for a in "$@"; do
         case "$a" in
