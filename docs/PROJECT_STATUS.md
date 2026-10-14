@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8f88a07cac424c76 -->
+<!-- status-covers-digest: 6ffd78f3a29603e4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,20 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **„Użyj szablonu” we własne sekcje relacji + sprzątanie configu (X22, 2026-10-14).**
+  `edit-relation NAZWA --profile=P` wstawia szczeble P jako WŁASNE sekcje relacji
+  (`profile__relacja-NAZWA__*`), a nie pod nazwą szablonu (`profile__P__*`), dzieloną z
+  każdą inną relacją z P. Wcześniej nieużywana sekcja `profile__d30h24__daily`, zmieniona
+  ręcznie w configu, blokowała „Użyj szablonu d30h24” (strażnik kolizji, test T6 właściciela).
+  Rekord dalej mówi „Powstała z: P”; szablon źródła (`--source-profile`) zostaje pod swoją
+  nazwą. Nowy czasownik `clean-templates [--local-user=U] [--plan|--yes|--ask]` usuwa z
+  configu sekcje szablonów, których nic nie używa (generowane: `profile__*`, zamrożone
+  `standard_hourly/daily/weekly/monthly`; nazwane ręcznie zostają), jedną podmianą po sprawdzeniu przez gen-cron. Bez
+  `--yes` to tylko plan. W GUI: F7 na F5 „Sprzątnij config” — plan po polsku dla każdego konta z
+  relacjami, potem WYKONAJ. 63g 16/23. Testy: `localbackup` +2 (X22 z kontrolą bez edit-relation;
+  ręcznie na silniku z `main` ten test daje tę samą odmowę co w T6; `clean-templates`), `tui` 279/0 (+2). Droga zdalna
+  (`--regenerate`) bez testu w suicie — do sprawdzenia planem na labie po wdrożeniu.
 
 - **Uwagi z testów właściciela, paczka 1 (2026-10-13/14).** „Harmonogram i retencja”: okno
   źródła widzi szczeble PO zmianach w tabeli celu — dodany szczebel z liczbą celu, usunięty

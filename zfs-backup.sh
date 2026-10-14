@@ -440,6 +440,9 @@ front end never edits the config file:
                                 --send-schedule=..|--prune-schedule=..] [--drop-tier=T]
                                 [--add-tier=T] [--method=gfs|flat|age] [--plan|--yes]
                                     Change them IN the config, in one atomic replace.
+  zfs-backup.sh clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
+                                    Remove the template sections nothing uses any more
+                                    (left by profiles applied earlier), in one atomic replace.
   zfs-backup.sh replica-restart NAME [--yes]
                                     A replica whose chain broke (the relationship it
                                     reads was deleted and created again) starts again
@@ -1426,6 +1429,22 @@ propose_backup_sources() {   # <target> <installed config or ""> -> candidates, 
 # process, not re-rendered per call: rendering twice is two chances to disagree,
 # and the section names it produces end up in a config we then compare against.
 PROFILE_LOADED=""
+# X22 (owner's GUI test, 2026-10-14): "Uzyj szablonu P" on an EXISTING relationship
+# rendered P under P's own name (profile__P__*), so the relationship shared those
+# sections with every other user of P -- and a hand edit of an unused one made the
+# create-time collision guard refuse the change. edit-relation --profile=P now
+# renders P under the relationship's own name (profile__relacja-<NAME>__*): the
+# sections are this relationship's copy of P, replaced on every edit (W7), never
+# shared. The record still says P -- that is where the relationship came from.
+# Applies to the TARGET profile only: a --source-profile keeps its own namespace,
+# source_template_section looks it up there by tier.
+PROFILE_NS_AS=""
+PROFILE_NS_FOR=""
+profile_active_ns() {   # -> the namespace the active profile renders under
+    local n; n="$(profile_name_of "$PROFILE_ACTIVE")"
+    if [ -n "${PROFILE_NS_AS:-}" ] && [ "$n" = "${PROFILE_NS_FOR:-}" ]; then n="$PROFILE_NS_AS"; fi
+    printf '%s' "$n"
+}
 PROFILE_TPL_FILE=""
 PROFILE_EXCL_FILE=""
 PROFILE_LETTERS_FILE=""
@@ -1645,10 +1664,10 @@ load_active_profile() {
         || die "profile '$PROFILE_ACTIVE': could not read the tier-letter table from gen-cron.sh -- refusing to translate a retention against a table this run cannot see"
     profile_split_one_file "$dir" "$_psplit_t" "$_psplit_d" "$_psplit_p" "$PROFILE_EXCL_FILE" \
         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_templates "$_psplit_t" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_TPL_FILE" "" "$PROFILE_LETTERS_FILE" \
+    profile_render_templates "$_psplit_t" "$(profile_active_ns)" "$PROFILE_TPL_FILE" "" "$PROFILE_LETTERS_FILE" \
         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$_psplit_d" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
-    profile_render_fragment "$_psplit_p" "$(profile_name_of "$PROFILE_ACTIVE")" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_d" "$(profile_active_ns)" "$PROFILE_DS_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
+    profile_render_fragment "$_psplit_p" "$(profile_active_ns)" "$PROFILE_PRUNE_FILE"         || die "profile '$PROFILE_ACTIVE': $PROFILE_ERR"
     # The split halves were scaffolding for this function alone: they never
     # leave it, so they are removed here rather than joining the release list,
     # which exists for the artifacts the REST of the run reads.
@@ -5352,7 +5371,7 @@ schedule_tier_exprs() {   # <send|prune> -> "<tier>\t<cron expression>" per tier
         # the renderer and the migration removal loop derive it.
         case "$one" in
             profile__*) sect="$one" ;;
-            *)          sect="profile__$(profile_name_of "$PROFILE_ACTIVE")__${one}" ;;
+            *)          sect="profile__$(profile_active_ns)__${one}" ;;
         esac
         expr=$(profile_template_section "$sect" 2>/dev/null | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
         [ -n "$expr" ] || continue
@@ -5398,7 +5417,7 @@ schedule_template_expr() {   # <send|prune> -> the tier's cron expression, or no
         # the renderer and the migration removal loop derive it.
         case "$one" in
             profile__*) sect="$one" ;;
-            *)          sect="profile__$(profile_name_of "$PROFILE_ACTIVE")__${one}" ;;
+            *)          sect="profile__$(profile_active_ns)__${one}" ;;
         esac
         expr=$(profile_template_section "$sect" 2>/dev/null           | awk -F= -v f="$field" '$0 ~ "^[[:space:]]*"f"[[:space:]]*=" {sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}')
         # A tier that does not declare the field at all does not constrain it.
@@ -6973,6 +6992,67 @@ cmd_set_tiers() {
         return 0
     fi
     EDIT_RELATION_NAME="$name"
+    atomic_replace_and_install "$cronfile" "$workfile"
+}
+
+# clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
+# X22 (owner's GUI test, 2026-10-14): template sections NOTHING uses any more stay
+# in the config for ever -- every profile ever applied left its profile__P__*, and
+# a hand edit of one of those later blocked "Uzyj szablonu P" (create-time collision
+# guard). This removes every generated template (profile__*, the frozen standard_*)
+# that no use_template names, in the set-tiers transaction: a working copy, the
+# whole config validated by gen-cron, ONE atomic replace; without --yes a plan only.
+# A template referenced by anything stays; so does every hand-named one.
+cmd_clean_templates() {
+    local yes=0 ask=0 a config_arg="" local_user_arg=""
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            --plan)   ;;
+            --ask)    ask=1 ;;
+            --config=*)     config_arg="${a#*=}" ;;
+            --local-user=*) local_user_arg="${a#*=}"; flag_local_user clean-templates "$local_user_arg" ;;
+            *) die "clean-templates: unknown option '$a' (known: --config --local-user --plan --yes --ask)" ;;
+        esac
+    done
+    if [ "$ask" -eq 1 ]; then     # plan and WYKONAJ as whiptail windows (F7 on the GUI's F5)
+        local dlg="$SCRIPT_DIR/tui/clean-templates.sh"
+        [ -f "$dlg" ] || die "clean-templates: brak $dlg -- checkout jest niekompletny"
+        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg"
+        return $?
+    fi
+    read_server_conf
+    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "clean-templates: no config at $cronfile -- nothing to clean"
+    assert_cron_config_matches_installed "$cronfile"
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    local before after gone
+    before=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
+    remove_orphan_profile_templates "$workfile" 2>/dev/null
+    after=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
+    gone=$(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^\[template://; s/\]$//')
+    if [ -z "$gone" ]; then
+        rm -f "$workfile"
+        echo "Config $cronfile: nieużywanych szablonów brak -- nic do zrobienia."
+        return 0
+    fi
+    log "validating the changed config (working copy only, nothing real touched yet)..."
+    if ! gencron_as_target -c "$workfile" >/dev/null; then
+        rm -f "$workfile"
+        die "gen-cron.sh rejected the cleaned config -- $cronfile was NOT touched (see output above)"
+    fi
+    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
+    echo "Config $cronfile -- szablony, których nic nie używa ($(printf '%s\n' "$gone" | grep -c .)):"
+    printf '  %s\n' $gone
+    if [ "$yes" -ne 1 ]; then
+        rm -f "$workfile"
+        echo "plan only -- nothing installed (add --yes to install)"
+        return 0
+    fi
     atomic_replace_and_install "$cronfile" "$workfile"
 }
 
@@ -13632,6 +13712,14 @@ cmd_edit_relation() {
             *) die "edit-relation: unknown option $a" ;;
         esac
     done
+    # X22: the chosen profile becomes THIS relationship's own sections (see PROFILE_NS_AS).
+    for a in "$@"; do
+        case "$a" in
+            --profile=?*)
+                PROFILE_NS_FOR="$(profile_name_of "${a#*=}")"; PROFILE_NS_AS="relacja-$name"
+                profile_name_ok "$PROFILE_NS_AS" || die "edit-relation: '$name' cannot name its own template sections: $PROFILE_ERR" ;;
+        esac
+    done
     if [ "$ask" -eq 1 ]; then     # the same questions, as whiptail windows ('e' on the GUI's F3)
         [ -r "$(client_conf_path "$name")" ] || die "edit-relation: no relationship '$name' on this host"
         local dlg="$SCRIPT_DIR/tui/edit-relation.sh"
@@ -19498,6 +19586,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         remove-replica)   shift; cmd_remove_replica "$@" ;;
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
+        clean-templates)  shift; cmd_clean_templates "$@" ;;
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;

@@ -810,6 +810,44 @@ if [ "$ov" = "52 1 * * *" ] && [ "$tp" = "31 1 * * *" ] && [ "$r7" -ne 0 ] && cm
 else
     bad "set-tiers: override / rejected config" "override=[$ov] template=[$tp] rc7=$r7" "$o6" "$o7" "$(ls -a "$ST")"
 fi
+# X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
+# uses (profile__* left by profiles applied earlier); a used one and a hand-named one
+# stay; without --yes the file is untouched; nothing unused = nothing to do.
+ct_run() {   # <args...> -> output; config in $ST/ct.conf
+    ( cron_context_resolve() { CRON_CTX_FILE="$ST/ct.conf"; }
+      read_server_conf() { :; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { return 0; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      cmd_clean_templates "$@" ) 2>&1
+}
+cat > "$ST/ct.conf" <<'EOF'
+[template:profile__relacja-sl__hourly]
+	retain = -H24
+
+[template:profile__d30h24__daily]
+	retain = -D30
+
+[template:mine]
+	retain = -D3
+
+[dataset:rpool/a]
+	pair_label   = sl
+	use_template = profile__relacja-sl__hourly
+EOF
+cp "$ST/ct.conf" "$ST/ct.before"
+ctp=$(ct_run); ct_same=0; cmp -s "$ST/ct.conf" "$ST/ct.before" && ct_same=1
+cty=$(ct_run --yes)
+ct_gone=$(grep -c '^\[template:profile__d30h24__daily\]' "$ST/ct.conf"); ct_used=$(grep -c '^\[template:profile__relacja-sl__hourly\]' "$ST/ct.conf"); ct_mine=$(grep -c '^\[template:mine\]' "$ST/ct.conf")
+ctn=$(ct_run --yes)
+if [ "$ct_same" = 1 ] && printf '%s' "$ctp" | grep -q 'profile__d30h24__daily' && ! printf '%s' "$ctp" | grep -q '  mine$' \
+   && [ "$ct_gone" = 0 ] && [ "$ct_used" = 1 ] && [ "$ct_mine" = 1 ] && printf '%s' "$ctn" | grep -q 'nic do zrobienia'; then
+    ok "clean-templates (X22): the unused profile__d30h24__daily is removed, a used one and a hand-named one stay; the plan writes nothing; a clean config has nothing to do"
+else
+    bad "clean-templates" "plan untouched=$ct_same gone=$ct_gone used=$ct_used mine=$ct_mine" "$ctp" "$cty" "$ctn"
+fi
+rm -f "$ST/ct.conf" "$ST/ct.before"
 # L2 (2026-10-09): a local relationship is CHANGED by describing it again --
 # local_relation_argv reads it back (sources/target from the record, exclusions
 # from its [dataset:] section), the verb changes one thing, and local-backup runs
@@ -1894,6 +1932,28 @@ else
     bad "W7: second edit of an own template" "own: $(printf '%s\n' "$w7o" | grep -E 'FATAL|different' | head -2) tgt=$(k21_flags "$w7o" hdd/backups/rpool/data)" "other: $(printf '%s\n' "$w7c" | grep -E 'FATAL|different' | head -1)"
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
+
+# X22 (owner GUI test T6, 2026-10-14): "Uzyj szablonu d30h24" on an existing relationship
+# was refused -- the config carried an UNUSED profile__d30h24__daily changed by hand,
+# and edit-relation --profile=P inserts P under P's own name, so the create-time
+# collision guard compared against it. edit-relation now renders P under the
+# relationship's own name (profile__relacja-<NAME>__*). Control: local-backup with the
+# same profile and no edit-relation still meets the hand-changed shared section.
+X22C="$WORK/x22clients"; rm -rf "$X22C"; mkdir -p "$X22C"
+printf 'CLIENT_NAME=x22\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/data\nRECURSION=flat\nPROFILE=d7h24\nCRON_CONFIG=%s\n' "$WORK/x22.conf" > "$X22C/x22.conf"
+{ printf '[defaults]\n\thost_label = %s\n\n[template:profile__d30__daily]\n' "$(hostname)"
+  sed -n '/^\[template:daily\]/,/^$/p' "$REPO/profiles/d30.conf" | sed 1d | sed 's/^\(\s*prune_schedule\s*=\s*\)31 /\129 /;s/^\(\s*keep\s*=\s*\)30/\tretain         = -D30/'; } > "$WORK/x22.conf"
+cp "$WORK/x22.conf" "$WORK/x22.before"
+x22o=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cmd_edit_relation x22 --profile=d30 --plan ) 2>&1 )
+x22c=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=x22 --replace --config="$WORK/x22.conf")
+if ! printf '%s' "$x22o" | grep -q 'different effective policy' && printf '%s' "$x22o" | grep -qF '[template:profile__relacja-x22__daily]' \
+   && [ "$(k21_flags "$x22o" hdd/backups/rpool/data)" = -D30 ] && cmp -s "$WORK/x22.conf" "$WORK/x22.before" \
+   && printf '%s' "$x22c" | grep -q 'different effective policy'; then
+    ok "X22: edit-relation --profile=d30 renders it as the relationship's own sections (profile__relacja-x22__*) -- no collision with a hand-changed shared profile__d30__daily, plan writes nothing; control without edit-relation: refused"
+else
+    bad "X22: Uzyj szablonu into own sections" "edit: $(printf '%s\n' "$x22o" | grep -E 'FATAL|different|template:profile__' | head -4) tgt=$(k21_flags "$x22o" hdd/backups/rpool/data)" "control: $(printf '%s\n' "$x22c" | grep -E 'FATAL|different' | head -1)"
+fi
+rm -rf "$X22C" "$WORK/x22.conf" "$WORK/x22.before"
 
 # 2026-10-12, live encryption campaign on pve9b: a local and a remote relationship
 # with the same profile in ONE config shared the `__src_` template names but not their
