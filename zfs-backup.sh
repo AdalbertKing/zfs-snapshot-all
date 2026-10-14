@@ -6808,17 +6808,9 @@ cmd_set_tiers() {
         for t in "${tl[@]}"; do t="${t//[[:space:]]/}"; [ "$(tiers_key_of "$t")" = "$2" ] && { printf '%s' "$t"; return 0; }; done
         return 0
     }
-    # Make TEMPLATE this side's own; prints the (possibly new) name.
-    own_tpl() {
-        local hf="$1" t="$2" own h k
-        # OWNED = named for this relationship AND used by nobody else. A template
-        # named after a profile (profile__d7h24__daily) is copied even when only this
-        # relationship uses it today: the next relationship made with that profile
-        # reuses the section by name and would silently inherit this change.
-        case "$t" in
-            "profile__relacja-${name}__"*) tiers_owned "$workfile" "$t" "$hf" && { printf '%s' "$t"; return 0; } ;;
-        esac
-        own="profile__relacja-${name}__${t##*__}"
+    # Copy TEMPLATE as NEW for the sections in HEADERS-FILE (an existing NEW must be theirs).
+    copy_tpl_for() {   # <template> <new name> <headers file>
+        local t="$1" own="$2" hf="$3" h k
         if grep -qxF "[template:$own]" "$workfile"; then
             tiers_owned "$workfile" "$own" "$hf" || return 1
             remove_template_section "$workfile" "$own"
@@ -6833,6 +6825,37 @@ cmd_set_tiers() {
                 set_or_remove_section_field "$workfile" "$h" "${k}_$t" "" && set_or_remove_section_field "$workfile" "$h" "${k}_$own" "$ov" || return 1
             done
         done < "$hf"
+    }
+    # Make TEMPLATE this side's own; prints the (possibly new) name.
+    own_tpl() {
+        local hf="$1" t="$2" own
+        # OWNED = named for this relationship AND used by nobody else. A template
+        # named after a profile (profile__d7h24__daily) is copied even when only this
+        # relationship uses it today: the next relationship made with that profile
+        # reuses the section by name and would silently inherit this change.
+        case "$t" in
+            "profile__relacja-${name}__"*)
+                tiers_owned "$workfile" "$t" "$hf" && { printf '%s' "$t"; return 0; }
+                # X22 follow-up (owner's T6, 2026-10-14): "Uzyj szablonu" renders the
+                # profile as this relationship's own sections, and with no source
+                # profile BOTH sides use them -- the copy below would take the very
+                # name it copies from ("could not take '' over"). Shared by the two
+                # sides of THIS relationship only: the SOURCE gets its own copy under
+                # the source stem (lsrc_ local, src_ remote), the target keeps it.
+                cat "$hfT" "$hfS" > "$workfile.both"
+                if tiers_owned "$workfile" "$t" "$workfile.both"; then
+                    rm -f "$workfile.both"
+                    local stem=lsrc_; [ "$mode" = remote ] && stem=src_
+                    own="profile__relacja-${name}__${stem}${t##*__}"
+                    copy_tpl_for "$t" "$own" "$hfS" || return 1
+                    printf '%s: own source copy %s (both sides used one section)\n' "$(tiers_key_of "$t")" "$own" >> "$workfile.notes"
+                    if [ "$hf" = "$hfS" ]; then printf '%s' "$own"; else printf '%s' "$t"; fi
+                    return 0
+                fi
+                rm -f "$workfile.both" ;;
+        esac
+        own="profile__relacja-${name}__${t##*__}"
+        copy_tpl_for "$t" "$own" "$hf" || return 1
         printf '%s: own copy %s (the template was shared)\n' "$(tiers_key_of "$t")" "$own" >> "$workfile.notes"
         printf '%s' "$own"
     }
@@ -6961,7 +6984,7 @@ cmd_set_tiers() {
                         continue
                     fi
                 fi
-                tpl=$(own_tpl "$hf" "$tpl") || fail "could not take '$tpl' over for '$name'"
+                local was="$tpl"; tpl=$(own_tpl "$hf" "$tpl") || fail "could not take '$was' over for '$name'"
                 case "$op" in
                     --keep=*)
                         local r; r=$(tiers_sec_field "$workfile" "[template:$tpl]" retain)
