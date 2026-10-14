@@ -6442,7 +6442,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 17/24 since 2026-10-14 (X27 S3): migrate-config -- the config's relationships moved once
 # into their [relation:] blocks. A WRITER, aimed like migrate-profile (cron_context_resolve
 # aim, assert_cron_config_matches_installed, then atomic_replace_and_install).
-if [ "$writers" -eq 17 ] && [ "$resolvers" -eq 24 ]; then
+# 16/23 since 2026-10-14 (X27 S4): clean-templates is gone -- no package writer leaves
+# template sections behind any more, so there is nothing for it to sweep.
+if [ "$writers" -eq 16 ] && [ "$resolvers" -eq 23 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

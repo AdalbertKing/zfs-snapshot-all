@@ -66,9 +66,18 @@ chmod +x "$WORK/bin/zfs" "$WORK/bin/crontab"
 # shellcheck disable=SC1090
 source "$ZB"
 
+# X27 (owner 2026-10-14): every local copy is a named relationship -- a call that names
+# none gets --name=lb here, and its record (if it installs) goes to a fresh directory
+# unless the caller set CLIENTS_DIR, so a rerun is not "the name is taken".
+lb_args() {   # args... -> LB_ARGS with --name=lb when none was given
+    LB_ARGS=("$@")
+    case " $* " in *" --name="*) ;; *) LB_ARGS+=(--name=lb) ;; esac
+}
 run() {   # cmd_local_backup args... ; stubbed PATH, no server.conf, real profiles
+    lb_args "$@"
     ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      cmd_local_backup "$@" ) 2>&1
+      CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
 # ---- accepted: overlap self-reference refuses, all three directions ----
@@ -506,9 +515,10 @@ chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
 
 runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
+    lb_args "$@"
     ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/$stub" \
-      cmd_local_backup "$@" ) <<< "$answer" 2>&1
+      SNAPSEND="$WORK/seedbin/$stub" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      cmd_local_backup "${LB_ARGS[@]}" ) <<< "$answer" 2>&1
 }
 
 # The crontab stub claims $WORK/claimed.conf, so that is the only config path an
@@ -809,44 +819,6 @@ if [ "$ov" = "27 * * * *" ] && [ "$bp" = "21 * * * *" ] && [ "$r7" -ne 0 ] && [ 
 else
     bad "set-tiers: override / rejected / old shape" "override=[$ov] block=[$bp] rc7=$r7 rc8=$r8" "$o6" "$o7" "$o8"
 fi
-# X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
-# uses (profile__* left by profiles applied earlier); a used one and a hand-named one
-# stay; without --yes the file is untouched; nothing unused = nothing to do.
-ct_run() {   # <args...> -> output; config in $ST/ct.conf
-    ( cron_context_resolve() { CRON_CTX_FILE="$ST/ct.conf"; }
-      read_server_conf() { :; }
-      assert_cron_config_matches_installed() { :; }
-      gencron_as_target() { return 0; }
-      show_activation_proposal() { :; }
-      atomic_replace_and_install() { cp "$2" "$1"; }
-      cmd_clean_templates "$@" ) 2>&1
-}
-cat > "$ST/ct.conf" <<'EOF'
-[template:profile__relacja-sl__hourly]
-	retain = -H24
-
-[template:profile__d30h24__daily]
-	retain = -D30
-
-[template:mine]
-	retain = -D3
-
-[dataset:rpool/a]
-	pair_label   = sl
-	use_template = profile__relacja-sl__hourly
-EOF
-cp "$ST/ct.conf" "$ST/ct.before"
-ctp=$(ct_run); ct_same=0; cmp -s "$ST/ct.conf" "$ST/ct.before" && ct_same=1
-cty=$(ct_run --yes)
-ct_gone=$(grep -c '^\[template:profile__d30h24__daily\]' "$ST/ct.conf"); ct_used=$(grep -c '^\[template:profile__relacja-sl__hourly\]' "$ST/ct.conf"); ct_mine=$(grep -c '^\[template:mine\]' "$ST/ct.conf")
-ctn=$(ct_run --yes)
-if [ "$ct_same" = 1 ] && printf '%s' "$ctp" | grep -q 'profile__d30h24__daily' && ! printf '%s' "$ctp" | grep -q '  mine$' \
-   && [ "$ct_gone" = 0 ] && [ "$ct_used" = 1 ] && [ "$ct_mine" = 1 ] && printf '%s' "$ctn" | grep -q 'nic do zrobienia'; then
-    ok "clean-templates (X22): the unused profile__d30h24__daily is removed, a used one and a hand-named one stay; the plan writes nothing; a clean config has nothing to do"
-else
-    bad "clean-templates" "plan untouched=$ct_same gone=$ct_gone used=$ct_used mine=$ct_mine" "$ctp" "$cty" "$ctn"
-fi
-rm -f "$ST/ct.conf" "$ST/ct.before"
 # L2 (2026-10-09): a local relationship is CHANGED by describing it again --
 # local_relation_argv reads it back (sources/target from the record, exclusions
 # from its [dataset:] section), the verb changes one thing, and local-backup runs

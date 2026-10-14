@@ -443,9 +443,6 @@ front end never edits the config file:
   zfs-backup.sh migrate-config [--config=PATH] [--local-user=NAME] [--plan|--yes]
                                     Move the config's relationships, once, from template
                                     sections to their [relation:NAME] blocks (same crontab).
-  zfs-backup.sh clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
-                                    Remove the template sections nothing uses any more
-                                    (left by profiles applied earlier), in one atomic replace.
   zfs-backup.sh replica-restart NAME [--yes]
                                     A replica whose chain broke (the relationship it
                                     reads was deleted and created again) starts again
@@ -7338,67 +7335,6 @@ cmd_set_tiers() {
 
 
 
-# clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
-# X22 (owner's GUI test, 2026-10-14): template sections NOTHING uses any more stay
-# in the config for ever -- every profile ever applied left its profile__P__*, and
-# a hand edit of one of those later blocked "Uzyj szablonu P" (create-time collision
-# guard). This removes every generated template (profile__*, the frozen standard_*)
-# that no use_template names, in the set-tiers transaction: a working copy, the
-# whole config validated by gen-cron, ONE atomic replace; without --yes a plan only.
-# A template referenced by anything stays; so does every hand-named one.
-cmd_clean_templates() {
-    local yes=0 ask=0 a config_arg="" local_user_arg=""
-    for a in "$@"; do
-        case "$a" in
-            --yes|-y) yes=1 ;;
-            --plan)   ;;
-            --ask)    ask=1 ;;
-            --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"; flag_local_user clean-templates "$local_user_arg" ;;
-            *) die "clean-templates: unknown option '$a' (known: --config --local-user --plan --yes --ask)" ;;
-        esac
-    done
-    if [ "$ask" -eq 1 ]; then     # plan and WYKONAJ as whiptail windows (F7 on the GUI's F5)
-        local dlg="$SCRIPT_DIR/tui/clean-templates.sh"
-        [ -f "$dlg" ] || die "clean-templates: brak $dlg -- checkout jest niekompletny"
-        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg"
-        return $?
-    fi
-    read_server_conf
-    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
-    local cronfile="$CRON_CTX_FILE"
-    [ -f "$cronfile" ] || die "clean-templates: no config at $cronfile -- nothing to clean"
-    assert_cron_config_matches_installed "$cronfile"
-    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
-    workfile_track "$workfile"
-    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
-    chmod 0644 "$workfile" 2>/dev/null || :
-    local before after gone
-    before=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
-    # X26: "after the migration" belonged to migrate-profile; here nothing uses it at all.
-    remove_orphan_profile_templates "$workfile" "any more (unused)" 2>/dev/null
-    after=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
-    gone=$(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^\[template://; s/\]$//')
-    if [ -z "$gone" ]; then
-        rm -f "$workfile"
-        echo "Config $cronfile: nieużywanych szablonów brak -- nic do zrobienia."
-        return 0
-    fi
-    log "validating the changed config (working copy only, nothing real touched yet)..."
-    if ! gencron_as_target -c "$workfile" >/dev/null; then
-        rm -f "$workfile"
-        die "gen-cron.sh rejected the cleaned config -- $cronfile was NOT touched (see output above)"
-    fi
-    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Config $cronfile -- szablony, których nic nie używa ($(printf '%s\n' "$gone" | grep -c .)):"
-    printf '  %s\n' $gone
-    if [ "$yes" -ne 1 ]; then
-        rm -f "$workfile"
-        echo "plan only -- nothing installed (add --yes to install)"
-        return 0
-    fi
-    atomic_replace_and_install "$cronfile" "$workfile"
-}
 
 cmd_set_transfer() {
     local name="" yes=0 plan=0 a k v
@@ -8937,6 +8873,9 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     [ -z "$lb_recursion" ] || [ "$no_copy" -eq 1 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --recursive=atomic is for --target='' (snapshots stay in the source). With a target, use --recursive=flat (each descendant its own send, prune and monitor)."
     [ "$lb_replace" -eq 0 ] || [ -n "$lb_name" ] || die "local-backup: --replace needs --name -- it re-describes an existing local relationship"
+    # X27 (owner 2026-10-14): every copy is a relationship with a name -- its numbers live in
+    # its [relation:NAME] block; an unnamed copy would have to write template sections.
+    [ -n "$lb_name" ] || die "local-backup: --name=NAME is required -- every local copy is a relationship (its [relation:NAME] block holds its tiers). Nothing was changed."
     [ "${#lb_excl[@]}" -eq 0 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --exclude-child needs --recursive=flat -- without it only the named dataset is copied and there is no child to leave out."
     if [ -n "$lb_name" ]; then
@@ -20097,7 +20036,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
         migrate-config)   shift; cmd_migrate_config "$@" ;;
-        clean-templates)  shift; cmd_clean_templates "$@" ;;
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
