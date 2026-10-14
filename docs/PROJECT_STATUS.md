@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 02565ecc1c9937a3 -->
+<!-- status-covers-digest: 316e9f4e10272e39 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -71,7 +71,10 @@
   `show-tiers`, z szablonem), a plan powtarza to, gdy w oknie źródła nic nie zmieniono (X24).
   „Sprzątnij config” sprawdza zawsze config roota, także na hoście bez relacji roota (X25 —
   pve9b: 21 nieużywanych szablonów). `clean-templates` loguje „nothing references it any more
-  (unused)” zamiast „after the migration” (X26). Testy: `tui` 279/0 (+1).
+  (unused)” zamiast „after the migration” (X26). F7 na F5 nazywa się „Usuń nieużywane kopie
+  szablonów” (przy 80 kolumnach skrót „Usuń nieuż. kopie”); okno mówi „Szablony na liście F5
+  zostają”. Testy: `tui` 279/0 (+1). Projekt X27 (config bez kopii szablonów) zatwierdzony:
+  `docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md`.
 
 - **„Użyj szablonu” we własne sekcje relacji + sprzątanie configu (X22, 2026-10-14).**
   `edit-relation NAZWA --profile=P` wstawia szczeble P jako WŁASNE sekcje relacji
