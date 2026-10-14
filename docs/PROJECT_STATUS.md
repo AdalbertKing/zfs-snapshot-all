@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 316e9f4e10272e39 -->
+<!-- status-covers-digest: d8be6d35f9cfbc10 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,19 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **X27 etap A: generator czyta blok `[relation:NAZWA]` (2026-10-14).** Projekt
+  `docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md`, zatwierdzony przez właściciela. Relacja może
+  trzymać całą politykę w jednym bloku `[relation:NAZWA]` (`tiers`, `<szczebel>.<pole>` dla
+  obu stron, `<szczebel>.target_<pole>` / `.source_<pole>` dla jednej, `<szczebel>.monitor = W
+  C`); jej sekcje mają `relation = NAZWA` zamiast `use_template`. gen-cron rozwija blok w
+  pamięci do zwykłych szczebli o nazwach jak dotąd (`profile__relacja-NAZWA__…`, `__lsrc_`/`__src_`
+  dla źródła; strona z kształtu sekcji), więc crontab i opisy zadań się nie zmieniają. Stary
+  zapis (`[template:]` + `use_template`) działa bez zmian. Odmowy: brak bloku, blok bez sekcji,
+  `relation` razem z `use_template`, cudzy `pair_label`, nieznane pole, szczebel spoza `tiers`,
+  brak `tiers`, kolizja z `[template:]`. Nic jeszcze nie PISZE bloków (etap B). Testy:
+  `test/run.sh` 110/0 (pary relacji lokalnej i zdalnej w obu zapisach z tym samym crontabem +
+  test równoważności, 8 negatywów).
 
 - **Uwagi X24–X26 po T6 (2026-10-14).** „Użyj szablonu” bierze liczby źródła z szablonu
   (decyzja właściciela: „szablon nadpisuje zmiany -- to logiczne”), ale przed oknem źródła
