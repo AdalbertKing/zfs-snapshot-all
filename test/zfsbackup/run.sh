@@ -4813,7 +4813,7 @@ fi
 
 # --- F2 (pre-GFS configs) removed with X27 (owner 2026-10-14: no backward
 # compatibility): a relationship is a [relation:] block; the old shapes are moved by
-# migrate-config, never reactivated in place.
+# nothing (refused, X27), never reactivated in place.
 
 # --- 52. REV-20260810-092: additive CREATE must not mutate installed global policy
 #
@@ -6440,7 +6440,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # template sections behind any more, so there is nothing for it to sweep.
 # 15/22 since 2026-10-14 (X27 S4): migrate-profile is gone (owner: "Usunac") -- a whole
 # collector moved to a profile is "Uzyj szablonu" on each relationship now.
-if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
+# 14/21 since 2026-10-14 (X27 S4): migrate-config is gone -- every lab config is in
+# blocks; the old shape is refused, never converted.
+if [ "$writers" -eq 14 ] && [ "$resolvers" -eq 21 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -6468,7 +6470,6 @@ while read -r fn want; do
 done <<'POLICIES'
 cmd_local_backup adopt
 cmd_activate_client adopt
-cmd_migrate_config aim
 cmd_audit_source_retention aim
 cmd_remove_client record
 cmd_edit_config record
@@ -6532,7 +6533,7 @@ fi
 
 # 64b3. And the parsers must not blank it before the resolver ever sees it --
 #       source-grep, because that is where the defect lived, not in the resolver.
-for fn in cmd_migrate_config cmd_audit_source_retention; do
+for fn in cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
     if ! printf '%s\n' "$body" | grep -q 'local_user_arg="" ;;'; then
         ok "64b3: $fn passes an explicit root through instead of blanking it"
@@ -6589,7 +6590,7 @@ fi
 
 # 64g. both orphan commands now take the two flags. Source-grep, because
 #      reaching their parsers needs a config, a crontab and a peer.
-for fn in cmd_migrate_config cmd_audit_source_retention; do
+for fn in cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
     if printf '%s\n' "$body" | grep -q -- '--config=\*)' \
        && printf '%s\n' "$body" | grep -q -- '--local-user=\*)'; then
@@ -8291,7 +8292,6 @@ setup-server|setup-server --local-user=BadName --target=tank/b
 local-backup|local-backup --local-user=BadName --source=tank/x --target=tank/b
 add-client|add-client flagtest --local-user=BadName --host=10.0.0.1 --datasets=tank/x
 set-bandwidth|set-bandwidth --local-user=BadName --peer=10.0.0.1 --bandwidth=2M
-migrate-config|migrate-config --local-user=BadName
 audit-source-retention|audit-source-retention --local-user=BadName
 rux|--source=10.0.0.1:tank/x --local-user=BadName --target=tank/b
 EOF
