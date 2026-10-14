@@ -58,7 +58,17 @@
       "Bash(./test/gh-api.sh PATCH git/refs/heads/main*)",
       "Bash(./test/gh-api.sh PUT contents/*)",
       "Bash(./test/gh-api.sh POST merges*)",
-      "Bash(./test/gh-api.sh * branches/main*)"
+      "Bash(./test/gh-api.sh * branches/main*)",
+      "Bash(crontab *)",
+      "Bash(sudo crontab *)",
+      "Bash(zpool *)",
+      "Bash(zfs destroy *)",
+      "Bash(*plink* crontab *)",
+      "Bash(*plink* zpool *)",
+      "Bash(*plink* zfs destroy *)",
+      "Bash(ssh * crontab *)",
+      "Bash(ssh * zpool *)",
+      "Bash(ssh * zfs destroy *)"
     ]
   }
 }
