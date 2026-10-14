@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2c9a7733a71418c5 -->
+<!-- status-covers-digest: 02565ecc1c9937a3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,14 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **Uwagi X24–X26 po T6 (2026-10-14).** „Użyj szablonu” bierze liczby źródła z szablonu
+  (decyzja właściciela: „szablon nadpisuje zmiany -- to logiczne”), ale przed oknem źródła
+  ostrzega, co nadpisze („dobowe: źródło trzyma 7, szablon da 30” — porównanie configu relacji,
+  `show-tiers`, z szablonem), a plan powtarza to, gdy w oknie źródła nic nie zmieniono (X24).
+  „Sprzątnij config” sprawdza zawsze config roota, także na hoście bez relacji roota (X25 —
+  pve9b: 21 nieużywanych szablonów). `clean-templates` loguje „nothing references it any more
+  (unused)” zamiast „after the migration” (X26). Testy: `tui` 279/0 (+1).
 
 - **„Użyj szablonu” we własne sekcje relacji + sprzątanie configu (X22, 2026-10-14).**
   `edit-relation NAZWA --profile=P` wstawia szczeble P jako WŁASNE sekcje relacji
