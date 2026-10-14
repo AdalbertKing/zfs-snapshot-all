@@ -144,3 +144,25 @@ Kilka rund pracy.
 2. **Stary zapis zostaje czytany** (produkcja, configi pisane ręcznie), pakiet pisze tylko
    nowy — zgoda?
 3. **Kolejność etapów A–E** jak w tabeli — zgoda?
+
+## Zmiana planu (właściciel, 2026-10-14): bez zgodności wstecz
+
+> Wywalmy więc tę zgodność. Pakiet wciąż jest w laboratorium. (...) Zredukujmy tę choinkę do
+> minimum. Potem host po hoście przepiszesz configi i resztę do nowego standardu.
+
+Zmierzone przed decyzją: produkcja (pve1-metro, pve2-metro) ma blok crona wygenerowany kiedyś z
+`jobs.*.v4.conf`; samoaktualizacja (`deploy.sh`) crona NIE regeneruje, więc kopie chodzą dalej.
+Nowym generatorem tych configów już się nie wyrenderuje — produkcja przechodzi na relacje przez
+wyczyszczenie i założenie od nowa (decyzja 2026-10-08).
+
+Każda sekcja relacji mówi, którą stroną jest: `side = target` (kopie) / `side = source`
+(oryginały). Zgadywanie z kształtu sekcji było błędne (relacja lokalna: sprzątanie źródła to
+`[prune:<źródło>]` bez `@`).
+
+| krok | co |
+|---|---|
+| S1 | generator: `side` wprost (zrobione) |
+| S2 | czasowniki wprost na bloku: tworzenie, „Użyj szablonu” jednym zapisem, set-tiers/show-tiers, źródła, usuwanie, relacja → szablon, eksport, czytelnicy |
+| S3 | `migrate-config` (strony z rekordu relacji) + lab host po hoście: plan, „tak”, ten sam crontab |
+| S4 | generator bez `[template:]`/`use_template` z pliku; kasacja: rozkładanie/składanie, własne kopie i podział `lsrc_`/`src_`, przemianowanie sekcji, strażnik kolizji, `clean-templates`/F7; testy na bloki |
+| S5 | dokumentacja |

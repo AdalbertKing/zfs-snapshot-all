@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d8be6d35f9cfbc10 -->
+<!-- status-covers-digest: 4717fb70b5c2926d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,15 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **X27 S1: sekcja relacji podaje stronę wprost (2026-10-14).** Właściciel: bez zgodności
+  wstecz, „zredukujmy tę choinkę do minimum”. Etap B (rozkładanie/składanie w czasownikach, PR
+  #532) zamknięty bez merge: zgadywanie strony z kształtu sekcji było błędne dla relacji lokalnej
+  z drabiną (`[prune:<źródło>]` bez `@` to ŹRÓDŁO). Teraz każda sekcja z `relation = NAZWA` ma
+  `side = target` (kopie) albo `side = source` (oryginały); brak albo inna wartość = odmowa.
+  Dalej (plan S2–S5 w `docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md`): czasowniki wprost na
+  bloku, przepisanie labu host po hoście, generator bez `[template:]` z pliku, sprzątanie kodu.
+  Testy: `test/run.sh` +2 negatywy.
 
 - **X27 etap A: generator czyta blok `[relation:NAZWA]` (2026-10-14).** Projekt
   `docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md`, zatwierdzony przez właściciela. Relacja może
