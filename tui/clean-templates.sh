@@ -12,12 +12,12 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "clean-templates: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-WT_BACKTITLE="Sprzątanie configu -- $(hostname)"
+WT_BACKTITLE="Nieużywane kopie szablonów -- $(hostname)"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
 geom
-info "Sprzątanie configu" "Sprawdzam, których szablonów nic nie używa (nic nie zmieniam)..."
+info "Nieużywane kopie szablonów" "Sprawdzam, których kopii szablonów nic nie używa (nic nie zmieniam)..."
 # Konta: root zawsze (X25) i każde konto z relacjami -- każde ma swój config.
 "$ZB" status --json >"$TMPD/st.json" 2>/dev/null || :
 mapfile -t USERS < <("$PY" - "$TMPD/st.json" <<'PYEOF'
@@ -72,17 +72,18 @@ for u in "${USERS[@]}"; do
     TODO+=("$u")
 done
 if [ -s "$TMPD/why.txt" ]; then
-    wt --title "Sprzątanie configu -- odmowa" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/why.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/why.txt" | grep -c '')")" "$W"
+    wt --title "Nieużywane kopie szablonów -- odmowa" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/why.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/why.txt" | grep -c '')")" "$W"
 fi
 if [ "${#TODO[@]}" -eq 0 ]; then
-    [ -s "$TMPD/why.txt" ] || wt --title "Sprzątanie configu" --msgbox "Nie ma szablonów, których nic nie używa -- nic do zrobienia." 8 "$W"
+    [ -s "$TMPD/why.txt" ] || wt --title "Nieużywane kopie szablonów" --msgbox "Nie ma nieużywanych kopii szablonów -- nic do zrobienia." 8 "$W"
     exit 0
 fi
 { echo "PLAN -- nic jeszcze nie zostało zmienione."
-  echo "Te szablony są w configu, ale żadna relacja ich nie używa. Zadania w cronie"
-  echo "się nie zmienią. Relacje zakładane później dostają szablon od nowa."
+  echo "To kopie szablonów zostawione w configu przez dawne relacje i zmiany szablonu;"
+  echo "żadna relacja ich już nie używa. Szablony na liście F5 zostają, zadania w cronie"
+  echo "się nie zmienią."
   echo; cat "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"
-yesno_text "$TMPD/plan2.txt" "Sprzątanie configu -- plan" "WYKONAJ" "Wstecz" --defaultno || exit 0
+yesno_text "$TMPD/plan2.txt" "Nieużywane kopie szablonów -- plan" "WYKONAJ" "Wstecz" --defaultno || exit 0
 clear 2>/dev/null
 RC=0
 for u in "${TODO[@]}"; do
@@ -94,7 +95,7 @@ if [ -n "${ZFS_TUI_LOG:-}" ]; then
     { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
 fi
 echo
-if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: config posprzątany. Enter = dalej"
+if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: nieużywane kopie szablonów usunięte. Enter = dalej"
 else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- ten config nie został zmieniony; powód w linii FATAL powyżej. Enter = dalej"; fi
 [ -t 0 ] && read -r _
 exit "$RC"
