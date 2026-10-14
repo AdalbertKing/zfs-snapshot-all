@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 97345a238b877ed0 -->
+<!-- status-covers-digest: e76c9b5ff8a59aef -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,10 +21,12 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **X27 S4: cięcie starego zapisu (2026-10-14, w toku, gałąź `feat/x27-s4`).** Właściciel:
+- **X27 S4: cięcie starego zapisu (2026-10-14; #535 + `feat/x27-s4b`).** Właściciel:
   „Wywalmy więc tę zgodność… Zredukujmy tę choinkę do minimum”, szablony niosą tylko szczeble.
-  Usunięte: `clean-templates` (czasownik, okno, F7 na F5), `migrate-profile` (z `profile_digest`)
-  i `cron2conf.sh` (z suitem i umową `cron-line-shape`). Fabryczny `default` ma kształt (a):
+  Usunięte: `clean-templates` (czasownik, okno, F7 na F5), `migrate-profile` (z `profile_digest`),
+  `cron2conf.sh` (z suitem i umową `cron-line-shape`) i — po przeniesieniu labu — `migrate-config`
+  (z `remove_orphan_profile_templates`); relacja w starym zapisie dostaje odmowę „odtwórz ją z
+  szablonu” (`delete-relation` i utworzenie od nowa). Fabryczny `default` ma kształt (a):
   każdy szczebel robi i liczy własne migawki (`automated_hourly_` …, jak `m12w4d7h24-gfs`);
   `passive.conf` i `Y5M12D31H24.conf` usunięte, `add-client --passive` bierze `passive-flat`.
   Dawne drabiny na jednej rodzinie leżą w `test/fixtures/profiles-ladder/` — tylko dla testów
@@ -35,11 +37,21 @@
   `edit-relation NAZWA --profile=P`. Relacja: wszystkie źródła jednej relacji idą jedną linią
   `snapsend` na szczebel; drugie źródło = `add-source`, inna relacja = inny blok. Testy
   `localbackup` i `zfsbackup` przepisane na kształt bloku (stare przypadki bez nazwy, drabiny
-  `default`, `migrate-profile` 96/122 i „mieszane żądanie” usunięte, z komentarzem dlaczego). 63g 15/22.
+  `default`, `migrate-profile` 96/122 i „mieszane żądanie” usunięte, z komentarzem dlaczego). 63g 14/21.
   Zastępuje opisy z 10-13 („Szczeble relacji wprost w configu”, „Źródła relacji lokalnej…”):
   kopie szablonu `profile__relacja-NAZWA__…` i uzgadnianie przez szablony już nie istnieją.
-  Zostaje: `lab-migawki` na pve9 (4 zadania `hdd/lab/*` jako nazwana relacja „same migawki”),
-  potem usunięcie `migrate-config`, S5 (dokumentacja).
+  Lab (wszędzie f47c7a79): na pve9 (konto zfsbackup) 4 zadania bez nazwy na `hdd/lab/*` zastąpione
+  relacją `lab-migawki` (tylko migawki, `default`, `-R`, 4 szczeble po własnej rodzinie; zgoda
+  właściciela, że pierwsze sprzątanie zdejmie ok. 29 z 395 starych migawek, także w lustrze pve10).
+  Kopie przed zmianą: `/root/*.before-lab-migawki` na pve9. Wszystkie configi labu są w blokach.
+  GUI: kreator „Nowa relacja” ma czwarty typ „Same migawki” (właściciel: „A relacja robiąca
+  tylko migawki w źródle? Wsad? GUI?”) — kopia lokalna bez celu, 6 kroków (bez „Dokąd” i
+  ustawień dodatkowych), jedno polecenie `local-backup --name=… --target= --recursive=flat …
+  --install` bez `--yes` (pusty cel czasownik potwierdza wzrokiem, więc pyta w terminalu po
+  WYKONAJ, jak przy wsadzie). Test `tui` 3i; na żywo jeszcze nie sprawdzone.
+  Dalej S5 (dokumentacja, ~60 nieaktualnych komentarzy o `migrate-profile`, `show-tiers` bez
+  `--local-user`) i luka: propozycja źródeł z inwentarza może podać dziecko pod relacją-rodzicem,
+  którą instalacja potem odrzuca (prune lądowania rodzica jest rekurencyjny).
 
 - **X27 S2+S3: czasowniki wprost na bloku `[relation:]`, `migrate-config` (2026-10-14).** Bez
   tłumacza (etap B odrzucony): czasowniki czytają i piszą blok relacji bezpośrednio.

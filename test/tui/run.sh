@@ -2343,6 +2343,32 @@ else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Krok' "$NR/wt.log" | cut -c1-200 | head -12)"
 fi
 
+# 3i. SAME MIGAWKI (X27 S4, wlasciciel 2026-10-14: "A relacja robiaca tylko migawki w
+#     zrodle? Wsad? GUI?"): czwarta pozycja w kroku 1. Kopia lokalna BEZ celu -- bez okna
+#     "Dokad", bez ustawien dodatkowych, kroki x/6, komenda = wsad local-backup z --target=
+#     (pustym) i --install BEZ --yes: czasownik pusty cel potwierdza wzrokiem, wiec pyta
+#     sam w terminalu po WYKONAJ, jak przy wsadzie.
+NROUT=$(nr_run "0${T}snap
+0${T}hdd/backups/192.168.28.99/hdd/lab
+0${T}next
+0${T}default
+0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
+0${T}root
+0${T}
+0${T}
+"); NRRC=$?
+NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --install$' "$NR/zb.log")"
+if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
+   && printf '%s' "$NRSI" | grep -qF -- ' --name=migawki-hdd-backups-192.168.28.99-hdd-lab ' \
+   && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' && ! printf '%s' "$NRSI" | grep -qF -- '--yes' \
+   && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
+   && grep -qF 'Krok 2/6: Co kopiować z' "$NR/wt.log" && grep -qF 'Krok 3/6: Jak długo trzymać migawki?' "$NR/wt.log" \
+   && grep -qF 'Krok 6/6: Podsumowanie' "$NR/wt.log" && grep -qF 'SAME MIGAWKI' "$NR/wt.log"; then
+    ok "new-relation: same migawki -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= z --install bez --yes"
+else
+    bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -F 'Krok' "$NR/wt.log" | cut -c1-160 | head -10)" "$(cat "$NR/err" | tail -5)"
+fi
+
 # 3g. nazwa trzymana przez rekord `removed` jest WOLNA (uwaga 11, 2026-10-08): add-client
 #     archiwizuje stary rekord, plan to mowi. Dawniej kreator kazal ja "zwolnic" przez
 #     delete-relation, co na pve9b nie przechodzilo. Teraz: bez pytania, bez delete-relation.

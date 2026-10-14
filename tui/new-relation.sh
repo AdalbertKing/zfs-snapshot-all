@@ -16,6 +16,8 @@
 #
 # Stan: 10 kroków -- typ, host, diagnoza, co kopiować (koszyk miejsc), dokąd, szablon,
 # nazwa, konto, ustawienia dodatkowe, podsumowanie -> plan -> wykonanie.
+# "Same migawki" (X27 S4, właściciel 2026-10-14) to kopia lokalna BEZ celu: 6 kroków
+# (typ, co, szablon, nazwa, konto, podsumowanie), komenda local-backup --target=''.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u
@@ -37,14 +39,17 @@ drop_manual_draft() {
 trap 'drop_manual_draft; rm -rf "$TMPD"' EXIT
 
 # --- odpowiedzi -------------------------------------------------------------
-MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"
+MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"; NOCOPY=0
 
 # --- okna -------------------------------------------------------------------
 title() {
     # Okno 1 nie zna jeszcze liczby kroków (lokalna ma 8, reszta 10) -- bez "/10",
     # które w następnym oknie zmieniało się na "/8" (kampania 2026-10-09, K30).
     if [ "$1" = 1 ]; then printf 'Krok 1: %s' "$2"; return; fi
-    if [ "$MODE" = local ]; then
+    if [ "$NOCOPY" -eq 1 ]; then
+        local n; case "$1" in 4) n=2 ;; 6) n=3 ;; 7) n=4 ;; 8) n=5 ;; *) n=6 ;; esac
+        printf 'Krok %s/6: %s' "$n" "$2"
+    elif [ "$MODE" = local ]; then
         local n="$1"; [ "$n" -gt 3 ] && n=$((n - 2))
         printf 'Krok %s/8: %s' "$n" "$2"
     else
@@ -57,13 +62,17 @@ hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" |
 # --- krok 1: typ ------------------------------------------------------------
 step_mode() {
     geom
-    local b=OFF s=OFF l=OFF
-    case "$MODE" in sync) s=ON ;; local) l=ON ;; *) b=ON ;; esac
+    local b=OFF s=OFF l=OFF n=OFF cur="$MODE"
+    [ "$NOCOPY" -eq 1 ] && cur=snap
+    case "$cur" in sync) s=ON ;; local) l=ON ;; snap) n=ON ;; *) b=ON ;; esac
     wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nLokalnie: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 8)" "$W" 3 \
+       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nLokalnie: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nSame migawki: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 9)" "$W" 4 \
        backup "Backup    (ten host pobiera ze źródła)" "$b" \
        sync   "Lustro    (to samo po obu stronach)" "$s" \
-       local  "Lokalnie  (kopia na tym hoście)" "$l" || return 1
+       local  "Lokalnie  (kopia na tym hoście)" "$l" \
+       snap   "Same migawki  (na tym hoście, bez kopii)" "$n" || return 1
+    # "Same migawki" = kopia lokalna bez celu: te same kroki co Lokalnie, bez "Dokąd".
+    if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
         # Inna droga = inne źródło: koszyk z poprzedniej nie należy do tej.
         B_ROOT=(); B_EXCL=(); TREE_FOR="-"
@@ -423,6 +432,7 @@ REC_PROFILE=passive-flat
 # Domyślna nazwa relacji (krok 7 proponuje to samo) -- od niej nazwa szkicu "Ręcznie".
 rname_default() {
     if [ -n "$RNAME" ]; then echo "$RNAME"
+    elif [ "$NOCOPY" -eq 1 ]; then echo "migawki-$(printf '%s' "${B_ROOT[0]:-zrodlo}" | tr '/' '-')"
     elif [ "$MODE" = local ]; then echo "lokalna-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
     else echo "${HOSTNAME_R:-$HOST}"; fi
 }
@@ -483,7 +493,9 @@ step_profile() {
     [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ] && def=__manual__
     in_list "$def" "${items[@]}" || def="${items[2]}"
     geom
-    wt --title "$(title 6 'Jak długo trzymać w celu (na tym hoście)?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+    local q6='Jak długo trzymać w celu (na tym hoście)?'
+    [ "$NOCOPY" -eq 1 ] && q6='Jak długo trzymać migawki?'
+    wt --title "$(title 6 "$q6")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
        --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w ustawieniach dodatkowych).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane po wyborze konta). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     if [ "$WT_OUT" = __manual__ ]; then
@@ -501,7 +513,7 @@ step_profile() {
 step_name() {
     local n
     if [ -z "$RNAME" ] && [ "$MODE" = local ]; then
-        RNAME="lokalna-$(printf '%s' "${B_ROOT[0]:-kopia}" | tr '/' '-')"
+        RNAME="$(rname_default)"
     fi
     [ -n "$RNAME" ] || RNAME="${HOSTNAME_R:-$HOST}"
     while :; do
@@ -730,7 +742,11 @@ build_argv() {   # [install] -> ARGV[]
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
     [ "$MANUAL" -eq 1 ] && ARGV+=("--manual-join")
-    [ "${1:-}" = install ] && ARGV+=("--install" "--yes")
+    # Pusty cel nie instaluje się z --yes (czasownik: "confirmed by eye") -- przy "Same
+    # migawki" czasownik pyta sam w terminalu, po WYKONAJ, jak przy wsadzie.
+    if [ "${1:-}" = install ]; then
+        if [ "$NOCOPY" -eq 1 ]; then ARGV+=("--install"); else ARGV+=("--install" "--yes"); fi
+    fi
     return 0
 }
 cmd_lines() { local a; printf '  %s \\\n' "${ARGV[0]}"; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
@@ -739,7 +755,9 @@ cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; d
 # --- krok 10: podsumowanie -> plan -> wykonanie ---------------------------------
 summary_text() {
     local i a; a="$(account_name)"
-    if [ "$MODE" = local ]; then
+    if [ "$NOCOPY" -eq 1 ]; then
+        echo "SAME MIGAWKI: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:"
+    elif [ "$MODE" = local ]; then
         echo "LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:"
     elif [ "$MODE" = sync ]; then
         echo "LUSTRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
@@ -755,6 +773,7 @@ summary_text() {
     [ "$RAW" -eq 1 ] && echo "Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza."
     if [ "$MODE" = local ]; then
         [ "$FREEZE" -eq 1 ] && echo "Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi."
+        [ "$NOCOPY" -eq 1 ] && echo "Po WYKONAJ czasownik pokaże zmiany w cronie i zapyta o potwierdzenie (t)."
         echo
         echo "Komenda (to samo wpisałbyś z palca):"
         cmd_oneline; echo
@@ -821,7 +840,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         { echo "Po WYKONAJ uruchomi się DOKŁADNIE:"
           build_argv install; cmd_oneline; echo; build_argv
           echo
-          echo "Cel: ${TARGET:-(lustro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."
+          if [ "$NOCOPY" -eq 1 ]; then echo "Cel: brak (same migawki).  Szablon: $PROFILE."
+          else echo "Cel: ${TARGET:-(lustro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."; fi
           if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
           else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
           echo "Konto: $(a="$(account_name)"; echo "${a:-root}")."
@@ -871,14 +891,16 @@ while :; do
                  else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
         host)    if step_host;     then step=diag;    else step=mode; fi ;;
         diag)    if step_diag;     then step=ds;      else step=host; fi ;;
-        ds)      if step_datasets; then step=target;  else [ "$MODE" = local ] && step=mode || step=host; fi ;;
+        ds)      if step_datasets; then [ "$NOCOPY" -eq 1 ] && step=profile || step=target
+                 else [ "$MODE" = local ] && step=mode || step=host; fi ;;
         target)  if step_target;   then step=profile; else step=ds; fi ;;
-        profile) if step_profile;  then step=name;    else [ "$MODE" = sync ] && step=ds || step=target; fi ;;
+        profile) if step_profile;  then step=name
+                 else { [ "$MODE" = sync ] || [ "$NOCOPY" -eq 1 ]; } && step=ds || step=target; fi ;;
         name)    if step_name;     then step=acct;    else step=profile; fi ;;
-        acct)    if step_account;  then step=extra;   else step=name; fi ;;
+        acct)    if step_account;  then [ "$NOCOPY" -eq 1 ] && step=summary || step=extra; else step=name; fi ;;
         extra)   if step_extra;    then step=summary; else step=acct; fi ;;
         summary) step_summary
-                 case $? in 0) break ;; 2) step=ds ;; 3) step=profile ;; *) step=extra ;; esac ;;
+                 case $? in 0) break ;; 2) step=ds ;; 3) step=profile ;; *) [ "$NOCOPY" -eq 1 ] && step=acct || step=extra ;; esac ;;
     esac
 done
 exit "$RC_RUN"

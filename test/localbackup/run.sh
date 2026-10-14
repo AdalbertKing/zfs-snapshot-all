@@ -722,8 +722,8 @@ printf '[defaults]\n\thost_label = t\n[template:x]\n\tretain = -H1\n[dataset:rpo
 o8=$(st_run --tier=x --keep=2 --yes); r8=$?
 if [ "$ov" = "27 * * * *" ] && [ "$bp" = "21 * * * *" ] && [ "$r7" -ne 0 ] && [ "$r7same" = 1 ] \
    && printf '%s' "$o7" | grep -q 'gen-cron.sh rejected the changed config' && ! ls "$ST"/.zfsbackup-work.* >/dev/null 2>&1 \
-   && [ "$r8" -ne 0 ] && printf '%s' "$o8" | grep -q 'still in the OLD config shape.*migrate-config'; then
-    ok "set-tiers: a per-section override is changed where it runs (the block keeps 21); a rejected config leaves no working copy; the old shape is refused with migrate-config"
+   && [ "$r8" -ne 0 ] && printf '%s' "$o8" | grep -q 'still in the OLD config shape.*recreate it from a profile'; then
+    ok "set-tiers: a per-section override is changed where it runs (the block keeps 21); a rejected config leaves no working copy; the old shape is refused, naming the way out"
 else
     bad "set-tiers: override / rejected / old shape" "override=[$ov] block=[$bp] rc7=$r7 rc8=$r8" "$o6" "$o7" "$o8"
 fi

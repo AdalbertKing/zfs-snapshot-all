@@ -440,7 +440,6 @@ front end never edits the config file:
                                 --send-schedule=..|--prune-schedule=..] [--drop-tier=T]
                                 [--add-tier=T] [--method=gfs|flat|age] [--plan|--yes]
                                     Change them IN the config, in one atomic replace.
-  zfs-backup.sh migrate-config [--config=PATH] [--local-user=NAME] [--plan|--yes]
                                     Move the config's relationships, once, from template
                                     sections to their [relation:NAME] blocks (same crontab).
   zfs-backup.sh replica-restart NAME [--yes]
@@ -6639,7 +6638,7 @@ tiers_letter() {      # <tier key> -> H D W M Y (or "" for a key with no cadence
 # Each section of the relationship says relation = NAME and side = target|source.
 #   <tier>.<field>          both sides          <tier>.target_<field> / .source_<field>  one side
 #   <tier>.monitor = W C    warn + crit         <tier>.source = no   the tier does not run there
-# A relationship still in the old shape is refused with the way out (migrate-config).
+# A relationship still in the old shape is refused (X27: recreate it from a profile).
 # ==============================================================================
 
 relblock_has() { grep -qxF "[relation:$2]" "$1" 2>/dev/null; }
@@ -6849,229 +6848,9 @@ relblock_adopt_remote() {   # <workfile> <name> <rebuild 0|1>
     { echo; relblock_from_profile "$name" 1 "$hasS" remote; } >> "$wf"
 }
 
-# ------------------------------------------------------------------------------
-# X27 S3: migrate-config -- the config's relationships moved, ONE TIME, from template
-# sections + use_template to their [relation:NAME] blocks (owner 2026-10-14: "host po
-# hoscie przepiszesz configi ... do nowego standardu"). The side of every section comes
-# from the relationship's RECORD, never from its shape:
-#   local  -- [dataset:<src>] and [prune:<src>] (a source ladder) = source, other [prune:] = target
-#   remote -- [dataset:] (the pull) and a local [prune:] = target, [prune:user@host:...] = source
-# Every template a relationship's sections use becomes that relationship's tiers (a
-# template shared by several relationships is copied into each block); templates
-# nothing uses any more are removed. Refused, nothing changed: two different templates
-# for one tier on one side, a relationship whose sections run different tier sets on
-# one side (the old GFS ladder), a crontab that would not run the same commands.
-relblock_fold_one() {   # <file> <name> <side map file: header TAB side> -- in place
-    local tmp; tmp=$(mktemp) || return 1
-    awk -v R="$2" -v mapf="$3" '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        BEGIN { while ((getline l < mapf) > 0) { split(l, a, "\t"); SIDE[a[1]] = a[2] } }
-        FNR == 1 { pass++ }
-        /^[ \t]*\[.*\][ \t]*$/ { hdr = trim($0); if (pass == 1) { order[++nh] = hdr; present[hdr] = 1 } }
-        pass == 1 && hdr != "" && !/^[ \t]*\[/ {
-            t = $0; sub(/^[ \t]*#.*$/, "", t); t = trim(t)
-            if (t == "" || index(t, "=") == 0) next
-            k = trim(substr(t, 1, index(t, "=") - 1)); v = trim(substr(t, index(t, "=") + 1))
-            if (!((hdr, k) in F)) { nf[hdr]++; fk[hdr, nf[hdr]] = k }
-            F[hdr, k] = v; next
-        }
-        pass == 1 { next }
-        FNR == 1 && pass == 2 { decide() }
-        /^[ \t]*\[.*\][ \t]*$/ {
-            cur = trim($0)
-            if (!emitted && cur == firstsec) { emit_block(); emitted = 1 }
-            if ((cur in drop)) { skip = 1; next }
-            skip = 0; print; next
-        }
-        skip { next }
-        {
-            t = $0; sub(/^[ \t]+/, "", t)
-            if ((cur in mine) && t ~ /^use_template[ \t]*=/) { printf "\trelation     = %s\n\tside         = %s\n", R, SIDE[cur]; next }
-            if ((cur in mine) && t ~ /^(send_schedule|prune_schedule|flags)_/) {
-                k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
-                f = k; sub(/_.*$/, "", f)
-                if (k ~ /^send_schedule_/) { f = "send_schedule"; nm = substr(k, 15) }
-                else if (k ~ /^prune_schedule_/) { f = "prune_schedule"; nm = substr(k, 16) }
-                else { f = "flags"; nm = substr(k, 7) }
-                if (nm in tierof) { printf "\t%s_%s = %s\n", f, tierof[nm], v; next }
-            }
-            print
-        }
-        function tier_of(nm,   r) { r = nm; sub(/^.*__/, "", r); sub(/^(lsrc_|src_)/, "", r); return r }
-        function decide(   j, h, n, a, i, nm, T, sd, lst) {
-            for (j = 1; j <= nh; j++) { h = order[j]
-                if (h !~ /^\[(dataset|prune):/ || F[h, "pair_label"] != R || !((h, "use_template") in F)) continue
-                if (!(h in SIDE)) { err = "no side known for " h; exit 3 }
-                mine[h] = 1; if (firstsec == "") firstsec = h
-                sd = SIDE[h]; lst = ""
-                n = split(F[h, "use_template"], a, /[ \t]*,[ \t]*/)
-                for (i = 1; i <= n; i++) { nm = trim(a[i]); if (nm == "") continue
-                    if (!(("[template:" nm "]") in present)) { err = "[template:" nm "] used by " h " is missing"; exit 3 }
-                    T = tier_of(nm); tierof[nm] = T; lst = lst " " T
-                    if ((sd, T) in tpl && tpl[sd, T] != nm && !same("[template:" tpl[sd, T] "]", "[template:" nm "]")) { err = "two different templates for the " sd " tier " T " (" tpl[sd, T] ", " nm ")"; exit 3 }
-                    tpl[sd, T] = nm; hasside[sd] = 1
-                    if (!(T in seenT)) { seenT[T] = 1; tiers[++nt] = T }
-                }
-                if ((sd in setof) && setof[sd] != lst) { err = "its " sd " sections run different tier sets (" setof[sd] " /" lst ") -- the old GFS ladder shape; rewrite its profile first"; exit 3 }
-                setof[sd] = lst
-            }
-            if (firstsec == "") { err = "no section of " R " uses a template -- already a block, or nothing to move"; exit 4 }
-        }
-        function same(a, b,   i, k) {
-            if (nf[a] != nf[b]) return 0
-            for (i = 1; i <= nf[a]; i++) { k = fk[a, i]; if (!((b, k) in F) || F[b, k] != F[a, k]) return 0 }
-            return 1
-        }
-        function emit_block(   i, T, ht, hs, both, j, k, u, no, x, ord) {
-            printf "[relation:%s]\n", R
-            u = ""; for (i = 1; i <= nt; i++) u = u (u == "" ? "" : ", ") tiers[i]
-            printf "\ttiers = %s\n", u
-            for (i = 1; i <= nt; i++) { T = tiers[i]
-                ht = (("target", T) in tpl) ? "[template:" tpl["target", T] "]" : ""
-                hs = (("source", T) in tpl) ? "[template:" tpl["source", T] "]" : ""
-                if (hasside["target"] && ht == "") printf "\t%s.target = no\n", T
-                if (hasside["source"] && hs == "") printf "\t%s.source = no\n", T
-                both = (ht != "" && hs != "")
-                no = 0; delete isk
-                if (ht != "") for (j = 1; j <= nf[ht]; j++) { k = fk[ht, j]; if (!(k in isk)) { isk[k] = 1; ord[++no] = k } }
-                if (hs != "") for (j = 1; j <= nf[hs]; j++) { k = fk[hs, j]; if (!(k in isk)) { isk[k] = 1; ord[++no] = k } }
-                for (j = 1; j <= no; j++) { k = ord[j]
-                    if (!both) { x = (ht != "") ? ht : hs; out(T, "", k, F[x, k]); continue }
-                    if ((ht, k) in F && (hs, k) in F && F[ht, k] == F[hs, k]) { out(T, "", k, F[ht, k]); continue }
-                    if ((ht, k) in F) out(T, "target_", k, F[ht, k])
-                    if ((hs, k) in F) out(T, "source_", k, F[hs, k])
-                }
-                flushmon(T)
-            }
-            print ""
-        }
-        function out(T, sp, k, v) {
-            if (k == "monitor_warn") { mon[T, sp, "w"] = v; return }
-            if (k == "monitor_crit") { mon[T, sp, "c"] = v; return }
-            if (k == "keep") { k = "retain"; v = v }   # never reached: rendered profiles carry retain
-            printf "\t%s.%s%s = %s\n", T, sp, k, v
-        }
-        function flushmon(T,   s, sp) {
-            for (s = 1; s <= 3; s++) { sp = (s == 1) ? "" : (s == 2 ? "target_" : "source_")
-                if (((T, sp, "w") in mon) && ((T, sp, "c") in mon)) printf "\t%s.%smonitor = %s %s\n", T, sp, mon[T, sp, "w"], mon[T, sp, "c"]
-                else { if ((T, sp, "w") in mon) printf "\t%s.%smonitor_warn = %s\n", T, sp, mon[T, sp, "w"]; if ((T, sp, "c") in mon) printf "\t%s.%smonitor_crit = %s\n", T, sp, mon[T, sp, "c"] }
-                delete mon[T, sp, "w"]; delete mon[T, sp, "c"] }
-        }
-        END { if (err != "") print err > "/dev/stderr" }
-    ' "$1" "$1" > "$tmp"
-    local rc=$?
-    if [ "$rc" -ne 0 ]; then rm -f "$tmp"; return "$rc"; fi
-    cat "$tmp" > "$1"; rm -f "$tmp"
-}
-
-# The side of each section of NAME, from its record -> "header<TAB>side" lines.
-relblock_side_map() {   # <config> <name>
-    local cfg="$1" name="$2" cp mode h p
-    cp=$(client_conf_path "$name")
-    mode=$(record_get "$cp" RUX_MODE 2>/dev/null)
-    local -a srcs=()
-    mapfile -t srcs < <(awk -v want="$name" '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        /^\[/ { h = trim($0); next }
-        h ~ /^\[dataset:/ { t = trim($0); if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); if (v == want) { d = h; sub(/^\[dataset:/, "", d); sub(/\]$/, "", d); print d } } }' "$cfg")
-    while IFS= read -r h; do
-        [ -n "$h" ] || continue
-        p="${h#\[*:}"; p="${p%\]}"
-        case "$mode:$h" in
-            local:"[dataset:"*) printf '%s\tsource\n' "$h" ;;
-            local:"[prune:"*)
-                if printf '%s\n' "${srcs[@]}" | grep -qxF -- "$p"; then printf '%s\tsource\n' "$h"; else printf '%s\ttarget\n' "$h"; fi ;;
-            *:"[dataset:"*) printf '%s\ttarget\n' "$h" ;;
-            *:"[prune:"*@*:*) printf '%s\tsource\n' "$h" ;;
-            *) printf '%s\ttarget\n' "$h" ;;
-        esac
-    done < <(awk -v want="$name" '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        /^\[/ { h = trim($0); next }
-        h ~ /^\[(dataset|prune):/ { t = trim($0); if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); if (v == want) print h } }' "$cfg" | awk '!s[$0]++')
-}
-
-# The crontab a config renders, with the job DESCRIPTIONS masked -- what must stay the
-# same across migrate-config (the names of the tiers in the descriptions may change).
-relblock_cron_shape() {   # <config> -> sorted, masked lines
-    gencron_as_target -c "$1" 2>/dev/null | grep -v '^# Source:' \
-        | sed -E 's/zfs-job\.sh "[^"]*"/zfs-job.sh "<opis>"/; s/((notify-(warn|fail)\.sh|\/WARN|\/NOTIFY)) "[^"]*"/\1 "<opis>"/g' | sort
-}
-
-cmd_migrate_config() {
-    local yes=0 a config_arg="" local_user_arg=""
-    for a in "$@"; do
-        case "$a" in
-            --yes|-y) yes=1 ;;
-            --plan)   ;;
-            --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"; flag_local_user migrate-config "$local_user_arg" ;;
-            *) die "migrate-config: unknown option '$a' (known: --config --local-user --plan --yes)" ;;
-        esac
-    done
-    read_server_conf
-    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
-    local cronfile="$CRON_CTX_FILE"
-    [ -f "$cronfile" ] || die "migrate-config: no config at $cronfile"
-    assert_cron_config_matches_installed "$cronfile"
-    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
-    workfile_track "$workfile"
-    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
-    chmod 0644 "$workfile" 2>/dev/null || :
-    # the relationships: a label with a record and a section that still uses a template
-    local -a names=(); local n
-    while IFS= read -r n; do
-        [ -n "$n" ] || continue
-        [ -r "$(client_conf_path "$n")" ] || continue
-        relblock_has "$workfile" "$n" && continue
-        names+=("$n")
-    done < <(awk '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        /^\[/ { h = trim($0); next }
-        h ~ /^\[(dataset|prune):/ { t = trim($0); if (t ~ /^pair_label[ \t]*=/) { v = t; sub(/^pair_label[ \t]*=[ \t]*/, "", v); print v } }' "$workfile" | awk '!s[$0]++')
-    if [ "${#names[@]}" -eq 0 ]; then
-        rm -f "$workfile"
-        echo "Config $cronfile: wszystkie relacje są już blokami [relation:] -- nic do zrobienia."
-        return 0
-    fi
-    local map rc moved=()
-    map=$(mktemp) || { rm -f "$workfile"; die "mktemp failed"; }
-    for n in "${names[@]}"; do
-        relblock_side_map "$workfile" "$n" > "$map"
-        relblock_fold_one "$workfile" "$n" "$map" 2>"$map.err"; rc=$?
-        if [ "$rc" -ne 0 ]; then
-            local why; why=$(cat "$map.err"); rm -f "$map" "$map.err" "$workfile"
-            die "migrate-config: '$n' cannot be moved: ${why:-rc=$rc}. Nothing was changed."
-        fi
-        moved+=("$n")
-    done
-    rm -f "$map" "$map.err"
-    remove_orphan_profile_templates "$workfile" "any more (moved into [relation:] blocks)" 2>/dev/null
-    log "validating the moved config (working copy only, nothing real touched yet)..."
-    if ! gencron_as_target -c "$workfile" >/dev/null; then
-        rm -f "$workfile"
-        die "gen-cron.sh rejected the moved config -- $cronfile was NOT touched (see output above)"
-    fi
-    if ! cmp -s <(relblock_cron_shape "$cronfile") <(relblock_cron_shape "$workfile"); then
-        echo "--- crontab: co by sie zmienilo (poza opisami zadan) ---"
-        diff <(relblock_cron_shape "$cronfile") <(relblock_cron_shape "$workfile") | sed 's/^/  /'
-        rm -f "$workfile"
-        die "migrate-config: the moved config would run DIFFERENT commands (above) -- refusing; $cronfile was NOT touched."
-    fi
-    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Config $cronfile -- relacje przeniesione do bloków [relation:] (${#moved[@]}): ${moved[*]}"
-    echo "Crontab: te same godziny i komendy (zmieniają się najwyżej opisy zadań)."
-    if [ "$yes" -ne 1 ]; then
-        rm -f "$workfile"
-        echo "plan only -- nothing installed (add --yes to install)"
-        return 0
-    fi
-    atomic_replace_and_install "$cronfile" "$workfile"
-}
-
 relblock_require() {   # <config> <name> <verb>
     relblock_has "$1" "$2" && return 0
-    die "$3: '$2' is still in the OLD config shape (template sections, use_template) -- move it to its [relation:$2] block first: zfs-backup.sh migrate-config. Nothing was changed."
+    die "$3: '$2' is still in the OLD config shape (template sections, use_template), which is no longer supported (X27) -- recreate it from a profile: zfs-backup.sh delete-relation $2, then create it again. Nothing was changed."
 }
 
 relblock_mech() {   # <tier> <side> -> gfs|age|flat|""
@@ -11730,7 +11509,7 @@ cmd_activate_client() {
     fi
     [ "$regen" -eq 1 ] && drop_own_relation_templates "$workfile" "$name"
     # X27 S2: the relationship is its [relation:] block -- an existing one must already
-    # be in that shape (migrate-config moves it), and no template section is written.
+    # be in that shape (the old one is refused), and no template section is written.
     [ "$is_new_relationship" -eq 1 ] || relblock_require "$workfile" "$name" activate-client
     ENSURE_NO_TEMPLATES=1
     ensure_cron_config "$workfile" "$is_new_relationship" "$PLAN_NEEDS_PROFILE"
@@ -12644,37 +12423,6 @@ remove_client_prune_sections() {   # <file> <client name>
     mv_preserving_mode "$tmp" "$file" || die "could not update $file"
 }
 
-# A template nobody references is dead weight, and leaving it behind is what
-# makes a migration an APPEND instead. The previous version removed four
-# hardcoded legacy names; this asks the file instead, so it works for any
-# profile. gen-cron only allows use_template on [dataset:]/[prune:]
-# (POLICY_FIELDS carries no use_template), so templates cannot nest and one
-# pass over the file is a complete reference count.
-#
-# DELIBERATELY NARROW: only templates this tool generates are candidates --
-# namespaced `profile__*` sections, plus the four legacy names the hardcoded
-# version removed. An operator's own unreferenced template is left alone; a
-# migration is not a housekeeping sweep of somebody else's file.
-remove_orphan_profile_templates() {   # <file> [why, for the log line]
-    local file="$1" why="${2:-after the migration}" t refs
-    refs=$(awk -F= '
-        /^[ \t]*use_template[ \t]*=/ {
-            gsub(/[[:space:]]/, "", $2)
-            n = split($2, a, ",")
-            for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
-        }' "$file" | sort -u)
-    while IFS= read -r t; do
-        [ -n "$t" ] || continue
-        case "$t" in
-            profile__*|standard_hourly|standard_daily|standard_weekly|standard_monthly) ;;
-            *) continue ;;
-        esac
-        printf '%s\n' "$refs" | grep -qxF "$t" && continue
-        remove_template_section "$file" "$t"
-        log "removed orphaned [template:$t] -- nothing references it $why"
-    done < <(grep -oE '^\[template:[^]]+\]' "$file" | sed 's/^\[template://; s/\]$//')
-}
-
 # The snapshot families a [dataset:] section stamps: its own `prefix` and the
 # `prefix` of every template it uses, sorted, one per line. An empty prefix is
 # a passive pickup and stamps nothing.
@@ -12724,7 +12472,7 @@ config_referenced_templates() {   # <file>
         }' "$1" | sort -u
 }
 
-# edit-relation's sweep, NARROWER than remove_orphan_profile_templates: only a
+# edit-relation's sweep, deliberately narrow: only a
 # generated template that was referenced BEFORE the edit and is referenced by
 # nothing after it. An orphan somebody else left behind is not this edit's.
 remove_templates_orphaned_by() {   # <file> <templates referenced before, newline-separated>
@@ -19655,7 +19403,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         remove-replica)   shift; cmd_remove_replica "$@" ;;
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
-        migrate-config)   shift; cmd_migrate_config "$@" ;;
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
