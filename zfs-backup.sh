@@ -7055,7 +7055,8 @@ cmd_clean_templates() {
     chmod 0644 "$workfile" 2>/dev/null || :
     local before after gone
     before=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
-    remove_orphan_profile_templates "$workfile" 2>/dev/null
+    # X26: "after the migration" belonged to migrate-profile; here nothing uses it at all.
+    remove_orphan_profile_templates "$workfile" "any more (unused)" 2>/dev/null
     after=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
     gone=$(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^\[template://; s/\]$//')
     if [ -z "$gone" ]; then
@@ -12740,8 +12741,8 @@ remove_client_prune_sections() {   # <file> <client name>
 # namespaced `profile__*` sections, plus the four legacy names the hardcoded
 # version removed. An operator's own unreferenced template is left alone; a
 # migration is not a housekeeping sweep of somebody else's file.
-remove_orphan_profile_templates() {   # <file>
-    local file="$1" t refs
+remove_orphan_profile_templates() {   # <file> [why, for the log line]
+    local file="$1" why="${2:-after the migration}" t refs
     refs=$(awk -F= '
         /^[ \t]*use_template[ \t]*=/ {
             gsub(/[[:space:]]/, "", $2)
@@ -12756,7 +12757,7 @@ remove_orphan_profile_templates() {   # <file>
         esac
         printf '%s\n' "$refs" | grep -qxF "$t" && continue
         remove_template_section "$file" "$t"
-        log "removed orphaned [template:$t] -- nothing references it after the migration"
+        log "removed orphaned [template:$t] -- nothing references it $why"
     done < <(grep -oE '^\[template:[^]]+\]' "$file" | sed 's/^\[template://; s/\]$//')
 }
 

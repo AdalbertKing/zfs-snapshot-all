@@ -18,7 +18,7 @@ trap 'rm -rf "$TMPD"' EXIT
 
 geom
 info "Sprzątanie configu" "Sprawdzam, których szablonów nic nie używa (nic nie zmieniam)..."
-# Konta, na których są relacje (root, gdy pole puste) -- każde ma swój config.
+# Konta: root zawsze (X25) i każde konto z relacjami -- każde ma swój config.
 "$ZB" status --json >"$TMPD/st.json" 2>/dev/null || :
 mapfile -t USERS < <("$PY" - "$TMPD/st.json" <<'PYEOF'
 import sys, json
@@ -26,14 +26,16 @@ try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
     d = {}
-seen = []
+# X25 (wlasciciel 2026-10-14): config ROOTA zawsze -- na hoscie bez relacji roota zostaja
+# w nim szablony po dawnych relacjach (pve9b: 21), a repliki mieszkaja w nim tez.
+seen = ["root"]
 for r in d.get("relations") or []:
     if r.get("state") == "removed":
         continue
     u = r.get("local_user") or "root"
     if u not in seen:
         seen.append(u)
-print("\n".join(seen or ["root"]))
+print("\n".join(seen))
 PYEOF
 )
 cr=$'\r'; USERS=("${USERS[@]%"$cr"}")   # Python na Windows konczy linie CRLF
