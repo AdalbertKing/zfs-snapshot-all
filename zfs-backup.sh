@@ -17312,7 +17312,95 @@ list_profiles_text() {
 # precisely because nothing enumerated empty sections). `@managed_by` carries the
 # ownership marker, which is a COMMENT and would otherwise be dropped with the
 # other comments.
+relblock_view_unfold() {   # <file> -- in place, for READERS only (show-config, list-jobs): blocks shown as tiers
+    grep -q '^\[relation:' "$1" 2>/dev/null || return 0
+    local tmp; tmp=$(mktemp) || return 1
+    awk '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function side_of(h, isrc) {   # -> stem, from the side = field of the section
+            if (F[h, "side"] != "source") return ""
+            return (h ~ /^\[prune:[^]]*@[^]]*:/) ? "src_" : "lsrc_"
+        }
+        FNR == 1 { pass++ }
+        /^[ \t]*\[.*\][ \t]*$/ { hdr = trim($0)
+            if (pass == 1) { order[++nh] = hdr; isrel = (hdr ~ /^\[relation:/) ; if (isrel) { r = hdr; sub(/^\[relation:/, "", r); sub(/\]$/, "", r); rn[hdr] = r } }
+        }
+        pass == 1 && hdr != "" && !/^[ \t]*\[/ {
+            t = $0; sub(/[ \t]#.*$/, "", t); sub(/^[ \t]*#.*$/, "", t); t = trim(t)
+            if (t == "" || index(t, "=") == 0) next
+            k = trim(substr(t, 1, index(t, "=") - 1)); v = trim(substr(t, index(t, "=") + 1))
+            if (hdr ~ /^\[relation:/) {
+                R = rn[hdr]
+                if (k == "tiers") tiers[R] = v
+                else if (k == "gfs") rgfs[R] = v
+                else if (k ~ /\.(target|source)$/) { if (v == "no") off[R, k] = 1 }
+                else { nk[R]++; rk[R, nk[R]] = k; rv[R, nk[R]] = v }
+            } else {
+                F[hdr, k] = v; if (k == "src") hassrc[hdr] = 1
+                if (k == "relation") secrel[hdr] = v
+            }
+        }
+        pass == 1 { next }
+        END { if (pending_pl != "") printf "\tpair_label   = %s\n", pending_pl }
+        # pass 2: print, replacing blocks and relation lines
+        /^[ \t]*\[.*\][ \t]*$/ {
+            if (pending_pl != "") { printf "\tpair_label   = %s\n", pending_pl; pending_pl = "" }
+            cur = trim($0)
+            if (cur ~ /^\[relation:/) { skip = 1; emit_block(rn[cur]); next }
+            skip = 0; print; next
+        }
+        skip { next }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (cur in secrel && t ~ /^relation[ \t]*=/) {
+                R = secrel[cur]; stem = side_of(cur, (cur in hassrc))
+                n = split(tiers[R], ts, /[ \t]*,[ \t]*/); list = ""
+                sd = (stem == "") ? "target" : "source"
+                for (i = 1; i <= n; i++) { x = trim(ts[i]); if (x == "" || off[R, x "." sd]) continue; list = list (list == "" ? "" : ",") "profile__relacja-" R "__" stem x }
+                printf "\tuse_template = %s\n", list
+                if (!((cur, "pair_label") in F)) pending_pl = R
+                next
+            }
+            print
+        }
+        function emit_block(R,   h, stem, n, ts, i, x, side, pass2, j, k, f, v, w, c) {
+            # every stem a section of R needs, in section order
+            delete need
+            for (j = 1; j <= nh; j++) { h = order[j]; if (secrel[h] == R) need[side_of(h, (h in hassrc))] = 1 }
+            n = split(tiers[R], ts, /[ \t]*,[ \t]*/)
+            for (stem in need) for (i = 1; i <= n; i++) {
+                x = trim(ts[i]); if (x == "") continue
+                side = (stem == "") ? "target" : "source"
+                if (off[R, x "." side]) continue
+                printf "[template:profile__relacja-%s__%s%s]\n", R, stem, x
+                if (R in rgfs) printf "\tgfs            = %s\n", rgfs[R]
+                for (pass2 = 1; pass2 <= 2; pass2++) for (j = 1; j <= nk[R]; j++) {
+                    k = rk[R, j]
+                    if (index(k, x ".") != 1) continue
+                    f = substr(k, length(x) + 2)
+                    if (pass2 == 1 && (f ~ /^target_/ || f ~ /^source_/)) continue
+                    if (pass2 == 2) { if (index(f, side "_") != 1) continue; f = substr(f, length(side) + 2) }
+                    v = rv[R, j]
+                    if (f == "monitor") { split(v, w, /[ \t]+/); printf "\tmonitor_warn   = %s\n\tmonitor_crit   = %s\n", w[1], w[2]; continue }
+                    printf "\t%-14s = %s\n", f, v
+                }
+                print ""
+            }
+        }
+    ' "$1" "$1" > "$tmp" && cat "$tmp" > "$1"
+    local rc=$?; rm -f "$tmp"; return "$rc"
+}
+
 config_section_dump() {   # <config file> -> idx SOH kind SOH name SOH key SOH value
+    # X27: a [relation:] block is shown to readers as the tiers it renders to.
+    if grep -q '^\[relation:' "$1" 2>/dev/null; then
+        local _v; _v=$(mktemp) || return 1
+        cp "$1" "$_v" && relblock_view_unfold "$_v" && _config_section_dump_raw "$_v"
+        local rc=$?; rm -f "$_v"; return "$rc"
+    fi
+    _config_section_dump_raw "$1"
+}
+_config_section_dump_raw() {
     awk '
         { line=$0; sub(/\r$/,"",line); t=line; sub(/^[ \t]+/,"",t); sub(/[ \t]+$/,"",t) }
         t ~ /^\[/ {
@@ -18625,6 +18713,8 @@ remove_local_relation() {
     local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $CRON_CONFIG"
     workfile_track "$workfile"
     strip_local_relation_sections "$CRON_CONFIG" "$name" > "$workfile" 2>"$workfile.n" || { rm -f "$workfile" "$workfile.n"; die "could not rewrite a working copy of $CRON_CONFIG"; }
+    # X27: the relationship's [relation:] block goes with its sections.
+    remove_config_section "$workfile" "[relation:$name]" 2>/dev/null || :
     local dropped; dropped=$(cat "$workfile.n" 2>/dev/null); rm -f "$workfile.n"
     chmod 0644 "$workfile" 2>/dev/null || :
     [ "${dropped:-0}" -gt 0 ] || warn "no section of '$name' found in $CRON_CONFIG -- only the record is closed"
@@ -18725,6 +18815,8 @@ cmd_remove_client() {
         # endpoint switch, so the ownership rule is unchanged: marker-verified,
         # and a hand-written or foreign remote prune is left alone.
         remove_client_remote_source_prunes "$workfile" "$name"
+        # X27: the relationship's [relation:] block goes with its sections.
+        remove_config_section "$workfile" "[relation:$name]" 2>/dev/null || :
         # ANY job section keeps the block, a replica included (2026-10-12, pve9b: the
         # last relationship of root's config was removed and the block went with it,
         # taking the owner's replica's cron lines and monitor along -- this test
