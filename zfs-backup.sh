@@ -2852,6 +2852,13 @@ detect_profile_gfs() {   # <file> [all] -> sets PROFILE_GFS, PROFILE_GFS_WHY
     PROFILE_GFS=1
     PROFILE_GFS_WHY=""
     [ -r "$1" ] || return 0
+    # X27: a [relation:] block is read as the tiers it renders to.
+    if grep -q '^\[relation:' "$1" 2>/dev/null; then
+        local _v; _v=$(mktemp) || return 0
+        cp "$1" "$_v" && relblock_view_unfold "$_v" && detect_profile_gfs "$_v" "${2:-}"
+        rm -f "$_v"
+        return 0
+    fi
     local hit
     hit=$(awk -v all="${2:-}" '
         # pass 1: which templates does a live section actually use
@@ -3068,6 +3075,9 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # no longer need must not have it silently restored as a side effect of
     # maintenance. The collision flag only decided whether a PRESENT name was
     # compared; it never decided whether an ABSENT one was written.
+    # X27: the profile is still LOADED for a relationship block (its floors, its
+    # numbers, and the refusal order); only the template sections are not appended.
+    [ "$needs_profile" -eq 1 ] && load_active_profile
     if [ "$needs_profile" -eq 1 ] && [ "${ENSURE_NO_TEMPLATES:-0}" -eq 0 ]; then
     load_active_profile
 
@@ -6804,8 +6814,8 @@ relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block fr
 # A profile whose snapshot tiers and pruning tiers differ (the old GFS "ladder":
 # standard_hourly makes, keep_* prune) has no block shape -- owner 2026-10-14 (a):
 # every tier makes and counts its own -- and is refused until it is rewritten.
-relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> -> block on stdout
-    local name="$1" hasT="$2" hasS="$3" id t line k v sd frag ds_ids pr_ids
+relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> [remote] -> block on stdout
+    local name="$1" hasT="$2" hasS="$3" remote="${4:-}" id t line k v sd frag ds_ids pr_ids
     ds_ids=$(profile_prune_ref_ids "$PROFILE_DS_FILE" | sed 's/.*__//' | tr '\n' ' ')
     if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then
         pr_ids=$(profile_prune_ref_ids "$PROFILE_PRUNE_FILE" | sed 's/.*__//' | tr '\n' ' ')
@@ -6825,6 +6835,11 @@ relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> -> block 
                 line="${line%$'\r'}"; line="${line#"${line%%[![:space:]]*}"}"
                 case "$line" in ''|'#'*|'['*) continue ;; esac
                 k="${line%%=*}"; k="${k%"${k##*[![:space:]]}"}"; v="${line#*=}"; v="${v#"${v%%[![:space:]]*}"}"
+                # A REMOTE source side is only a prune scope (append_source_templates_if_missing
+                # drops the same four): check-snap-age is local-only, nothing is sent there.
+                if [ "$sd" = source ] && [ "$remote" = remote ]; then
+                    case "$k" in monitor_warn|monitor_crit|send_schedule|prefix) continue ;; esac
+                fi
                 rb_set "$t" "$sd" "$k" "$v"
             done <<<"$frag"
         done
@@ -6878,7 +6893,7 @@ relblock_adopt_remote() {   # <workfile> <name> <rebuild 0|1>
     remove_config_section "$wf" "[relation:$name]" 2>/dev/null || :
     local hasS=0; [ -n "$(relblock_sections "$wf" "$name" source)" ] && hasS=1
     local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
-    { echo; relblock_from_profile "$name" 1 "$hasS"; } >> "$wf"
+    { echo; relblock_from_profile "$name" 1 "$hasS" remote; } >> "$wf"
 }
 
 # ------------------------------------------------------------------------------
