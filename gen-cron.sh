@@ -1310,9 +1310,9 @@ ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
 #   [dataset:] with `src` (a pull) -> target    [dataset:] without (local push) -> source
 #   [prune:] whose scope is user@host:path -> source        any other [prune:] -> target
 #
-# Expanded HERE into ordinary in-memory templates, named exactly as the hidden
-# per-relationship templates were (relacja-<name>__<tier>, __src_<tier> for a
-# remote source, __lsrc_<tier> for a local one), so every rule below -- tiers,
+# Expanded HERE into ordinary in-memory templates, named exactly as the
+# relationship's own templates were (profile__relacja-<name>__<tier>, __src_<tier> for
+# a remote source, __lsrc_<tier> for a local one), so every rule below -- tiers,
 # GFS ladder, monitors, schedules, per-section overrides <field>_<tier> -- runs
 # unchanged and a migrated config renders the SAME crontab. Nothing is written.
 # Refused: a block nothing points at, a section pointing at a block it does not
@@ -1345,7 +1345,7 @@ expand_relations() {
         local -a ts=(); IFS=',' read -ra ts <<< "$tl"
         for one in "${ts[@]}"; do
             one="$(trim "$one")"; [ -n "$one" ] || continue
-            local tpl="relacja-${rel}__${stem}${one}"
+            local tpl="profile__relacja-${rel}__${stem}${one}"
             if [ -z "${used[$tpl]+x}" ]; then
                 [ -z "${SEEN_SECTION[template:$tpl]+x}" ] || die "[relation:$rel] would define the tier '$tpl', but the config already has a [template:$tpl] section -- one of the two has to go"
                 used[$tpl]=1
