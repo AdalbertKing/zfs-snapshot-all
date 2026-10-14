@@ -1676,49 +1676,6 @@ load_active_profile() {
     return 0
 }
 
-# WHAT THIS RELATIONSHIP WAS GENERATED FROM, as one comparable value.
-#
-# REV F2. `migrate-profile --profile=prod` decided "already there" from the
-# record's PROFILE string alone, so the file's own promise -- "an operator
-# changes a retention here and nowhere else" -- was false for the case that
-# matters most: edit `keep = 7` to `keep = 10` in profiles/prod/profile.conf,
-# re-run the command, and it answers "nothing to migrate" while the installed
-# cron still carries -D7. A name is not a version.
-#
-# TWO INPUTS, because either one alone would lie:
-#
-#   profile.conf   what the operator edits. Catches every retention, schedule,
-#                  quiesce, monitor and version change.
-#   the tier-letter table (gen-cron --dump-tier-letters)
-#                  the RENDERER's contribution. `keep = 24` becomes `-H24`
-#                  through that table, so a table change alters the installed
-#                  policy without touching a byte of the profile. A digest over
-#                  the operator's file alone would call that "unchanged".
-#   PROFILE_RENDER_SCHEMA (lib-profile.sh)
-#                  the renderer's own version. REV F2b: the first two inputs
-#                  still miss a change to HOW a profile is rendered -- the
-#                  namespacing, the fragment split, the keep translation. Same
-#                  file, same table, different installed CONFIG, identical
-#                  digest, and migrate-profile answering "nothing to migrate".
-#                  A number a human bumps rather than a hash of the library,
-#                  because only a human knows whether the OUTPUT changed; a
-#                  hash would move on a comment edit and migrate the fleet for
-#                  nothing.
-#
-# Not a security hash and not trying to be: md5 is what this tree already uses
-# for the same job (delsnaps' lock key, clean-relationships' crontab
-# comparison). It answers "is this still the thing I generated from".
-profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
-    local dir="$(profile_file "$PROFILE_ACTIVE")"
-    [ -r "$dir" ] || return 1
-    local letters
-    letters="$(bash "$GENCRON" --dump-tier-letters 2>/dev/null)" || return 1
-    { cat "$dir"
-      printf '%s' "$letters"
-      printf 'render-schema=%s' "${PROFILE_RENDER_SCHEMA:-0}"
-    } | md5sum | cut -d' ' -f1
-}
-
 # A PROFILE IS A FILE, and you may say which one.
 #
 #   --profile=prod                 a NAME. Looked up as <name>.conf, first in
@@ -2541,7 +2498,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] [-
     # answered that by accident, because a legacy config reads as flat. The
     # question is about the NAME, and config_is_frozen_legacy already asks it.
     if config_is_frozen_legacy "$workfile"; then
-        log "source retention NOT generated for '$name': $workfile carries the frozen pre-GFS family, whose policy this run must not extend. Migrate the host deliberately (zfs-backup.sh migrate-profile) if its source should be bounded."
+        log "source retention NOT generated for '$name': $workfile carries the frozen pre-GFS family, whose policy this run must not extend. Move each relationship onto a profile deliberately (zfs-backup.sh edit-relation NAME --profile=P) if its source should be bounded."
         return 0
     fi
     local retfrag=""
@@ -3061,7 +3018,7 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # `prod`. The hazard is stacking the standard ladder on a family that
     # already self-prunes, and that family is the bare standard_* one.
     if [ "$needs_profile" -eq 1 ] && config_is_frozen_legacy "$file"; then
-        die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
+        die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Move each relationship onto a profile first, previewed: zfs-backup.sh edit-relation NAME --profile=P"
     fi
 
     # REV-20260810-090 F2: the whole template block below is additive -- it
@@ -4422,7 +4379,7 @@ This host reads as FLAT$([ -n "${PROFILE_GFS_WHY:-}" ] && printf " -- [template:
 
 Three ways out, and this command picks none of them for you:
   * create this relationship with a FLAT profile, matching the host (--profile=NAME);
-  * migrate the host to the ladder shape first, in one previewed transaction: zfs-backup.sh migrate-profile;
+  * move the host's relationships to the ladder shape first, each previewed: zfs-backup.sh edit-relation NAME --profile=P;
   * if the flat template is a leftover from a relationship that no longer exists, remove it from the config -- an orphan template no longer decides this, but a REFERENCED one does.
 
 Nothing was changed."
