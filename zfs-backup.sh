@@ -3064,7 +3064,7 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # no longer need must not have it silently restored as a side effect of
     # maintenance. The collision flag only decided whether a PRESENT name was
     # compared; it never decided whether an ABSENT one was written.
-    if [ "$needs_profile" -eq 1 ]; then
+    if [ "$needs_profile" -eq 1 ] && [ "${ENSURE_NO_TEMPLATES:-0}" -eq 0 ]; then
     load_active_profile
 
     # Name by name, exactly as before (REV-20260809-079 F2): what suppresses an
@@ -6772,10 +6772,22 @@ rb_set() {   # <tier> <target|source|""> <field> <value, "" = remove> -- normali
     RB[$key]="$4"
 }
 relblock_write() {   # <config> <name> -- the model back into the file, normalised, in place of the old block
-    local cfg="$1" name="$2" t f b tv sv hasT=0 hasS=0 out
+    local cfg="$1" name="$2" hasT=0 hasS=0 out
     [ -n "$(relblock_sections "$cfg" "$name" target)" ] && hasT=1
     [ -n "$(relblock_sections "$cfg" "$name" source)" ] && hasS=1
     out=$(mktemp) || return 1
+    relblock_render "$name" "$hasT" "$hasS" > "$out.blk" || { rm -f "$out" "$out.blk"; return 1; }
+    awk -v h="[relation:$name]" -v blk="$out.blk" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { if (trim(l) == h) { while ((getline x < blk) > 0) print x; skip = 1; next } skip = 0 }
+        skip { next }
+        { print }' "$cfg" > "$out" && cat "$out" > "$cfg"
+    local rc=$?; rm -f "$out" "$out.blk"; return "$rc"
+}
+
+relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block from the model, normalised
+    local name="$1" hasT="$2" hasS="$3" t f b tv sv v
     {
         printf '[relation:%s]\n' "$name"
         local IFS_=","; printf '\ttiers = %s\n' "$(IFS=,; echo "${RB_TIERS[*]}" | sed 's/,/, /g')"
@@ -6793,9 +6805,17 @@ relblock_write() {   # <config> <name> -- the model back into the file, normalis
             done
             for b in "${bases[@]}"; do
                 [ "$b" = gfs ] && [ -n "${RB[gfs]:-}" ] && [ -z "${RB[$t.gfs]+x}${RB[$t.target_gfs]+x}${RB[$t.source_gfs]+x}" ] && continue
-                tv=$(rb_get "$t" target "$b" 2>/dev/null) || tv=""
-                sv=$(rb_get "$t" source "$b" 2>/dev/null) || sv=""
-                case "$b" in monitor_warn|monitor_crit) [ -n "${RB[$t.$b]+x}${RB[$t.target_$b]+x}${RB[$t.source_$b]+x}" ] || continue ;; esac
+                # monitor_warn + monitor_crit are written as ONE field, monitor = W C
+                case "$b" in monitor_warn|monitor_crit) continue ;; esac
+                if [ "$b" = monitor ]; then
+                    local tw tc sw sc
+                    tw=$(rb_get "$t" target monitor_warn 2>/dev/null) || tw=""; tc=$(rb_get "$t" target monitor_crit 2>/dev/null) || tc=""
+                    sw=$(rb_get "$t" source monitor_warn 2>/dev/null) || sw=""; sc=$(rb_get "$t" source monitor_crit 2>/dev/null) || sc=""
+                    tv=""; sv=""; [ -n "$tw" ] && [ -n "$tc" ] && tv="$tw $tc"; [ -n "$sw" ] && [ -n "$sc" ] && sv="$sw $sc"
+                else
+                    tv=$(rb_get "$t" target "$b" 2>/dev/null) || tv=""
+                    sv=$(rb_get "$t" source "$b" 2>/dev/null) || sv=""
+                fi
                 [ "$b" = gfs ] && [ -z "${RB[$t.gfs]+x}${RB[$t.target_gfs]+x}${RB[$t.source_gfs]+x}" ] && continue
                 if [ "$hasT" -eq 1 ] && [ "$hasS" -eq 1 ]; then
                     if [ "$tv" = "$sv" ]; then [ -n "$tv" ] && printf '\t%s.%s = %s\n' "$t" "$b" "$tv"
@@ -6810,14 +6830,48 @@ relblock_write() {   # <config> <name> -- the model back into the file, normalis
             done
         done
         printf '\n'
-    } > "$out.blk" || { rm -f "$out" "$out.blk"; return 1; }
-    awk -v h="[relation:$name]" -v blk="$out.blk" '
-        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        { l = $0; sub(/\r$/, "", l) }
-        l ~ /^[ \t]*\[/ { if (trim(l) == h) { while ((getline x < blk) > 0) print x; skip = 1; next } skip = 0 }
-        skip { next }
-        { print }' "$cfg" > "$out" && cat "$out" > "$cfg"
-    local rc=$?; rm -f "$out" "$out.blk"; return "$rc"
+    }
+}
+
+# X27 S2: a PROFILE rendered into a relationship's block. Target numbers from the
+# profile, source numbers from the source profile (or the same one) -- the model is
+# filled per side and relblock_render writes a field once when both sides agree.
+# A profile whose snapshot tiers and pruning tiers differ (the old GFS "ladder":
+# standard_hourly makes, keep_* prune) has no block shape -- owner 2026-10-14 (a):
+# every tier makes and counts its own -- and is refused until it is rewritten.
+relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> -> block on stdout
+    local name="$1" hasT="$2" hasS="$3" id t line k v sd frag ds_ids pr_ids
+    ds_ids=$(profile_prune_ref_ids "$PROFILE_DS_FILE" | sed 's/.*__//' | tr '\n' ' ')
+    if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then
+        pr_ids=$(profile_prune_ref_ids "$PROFILE_PRUNE_FILE" | sed 's/.*__//' | tr '\n' ' ')
+        [ "$ds_ids" = "$pr_ids" ] || die "profile '$PROFILE_ACTIVE' makes snapshots with [$ds_ids] but prunes with [$pr_ids] -- the old GFS ladder shape, which a relationship block cannot hold (owner 2026-10-14: every tier makes and counts its own). Choose another profile, or rewrite this one."
+    fi
+    RB_TIERS=(); RB_KEYS=(); RB=()
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        t="${id##*__}"
+        RB_TIERS+=("$t")
+        for sd in target source; do
+            [ "$sd" = target ] && [ "$hasT" -eq 0 ] && continue
+            [ "$sd" = source ] && [ "$hasS" -eq 0 ] && continue
+            if [ "$sd" = target ]; then frag=$(profile_template_section "$id"); else frag=$(source_template_section "$id"); fi
+            [ -n "$frag" ] || die "profile '$PROFILE_ACTIVE': no rendered [template:$id] for the $sd side"
+            while IFS= read -r line; do
+                line="${line%$'\r'}"; line="${line#"${line%%[![:space:]]*}"}"
+                case "$line" in ''|'#'*|'['*) continue ;; esac
+                k="${line%%=*}"; k="${k%"${k##*[![:space:]]}"}"; v="${line#*=}"; v="${v#"${v%%[![:space:]]*}"}"
+                rb_set "$t" "$sd" "$k" "$v"
+            done <<<"$frag"
+        done
+    done < <(profile_prune_ref_ids "$PROFILE_DS_FILE")
+    relblock_render "$name" "$hasT" "$hasS"
+}
+
+# A rendered section fragment for a relationship's section: its fields as they are,
+# except use_template, which becomes `relation = NAME` + `side = SIDE`.
+relblock_fragment() {   # <rendered fragment> <name> <target|source>
+    profile_emit "$1" | grep -v '^[[:space:]]*use_template[[:space:]]*=' || :
+    printf '\trelation     = %s\n\tside         = %s\n' "$2" "$3"
 }
 
 relblock_require() {   # <config> <name> <verb>
@@ -8484,12 +8538,14 @@ cmd_local_backup() {
             strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
             rm -f "$_strip"
             drop_own_relation_templates "$cand" "$lb_name"
+            remove_config_section "$cand" "[relation:$lb_name]" 2>/dev/null || :
         fi
     else
         assert_config_not_claimed_if_missing "$config"
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
             || { rm -f "$cand"; die "could not create the candidate config"; }
     fi
+    [ -n "$lb_name" ] && ENSURE_NO_TEMPLATES=1
     ensure_cron_config "$cand" 1 1
 
     # WHOSE coverage is already there -- the question the overlap check never
@@ -8659,13 +8715,24 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # retention in a [prune:] of its own, below.
     local lb_src_inline=0
     [ -n "${SRC_PROFILE_TPL_FILE:-}" ] && [ "$no_copy" -eq 0 ] && ! [ -s "${PROFILE_PRUNE_FILE:-}" ] && lb_src_inline=1
+    # X27 S2: a NAMED relationship is written as ITS [relation:NAME] block -- the profile's
+    # numbers copied in, the sections saying relation + side; no template section.
+    local lb_block=0; [ -n "$lb_name" ] && lb_block=1
     {
-        [ "$lb_src_inline" -eq 1 ] && emit_source_template_family "$PROFILE_DS_FILE" "$cand"
+        if [ "$lb_block" -eq 1 ]; then
+            local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+            echo
+            relblock_from_profile "$lb_name" "$([ "$no_copy" -eq 0 ] && echo 1 || echo 0)" 1
+        else
+            [ "$lb_src_inline" -eq 1 ] && emit_source_template_family "$PROFILE_DS_FILE" "$cand"
+        fi
         for r in "${roots[@]}"; do
             echo
             echo "[dataset:$r]"
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
-            if [ "$lb_src_inline" -eq 1 ]; then
+            if [ "$lb_block" -eq 1 ]; then
+                relblock_fragment "$PROFILE_DS_FILE" "$lb_name" source
+            elif [ "$lb_src_inline" -eq 1 ]; then
                 emit_source_prune_fragment "$PROFILE_DS_FILE"
             else
                 profile_emit "$PROFILE_DS_FILE"
@@ -8734,7 +8801,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # retain only the target. REV-20260811-106 F1: the family is derived from
             # the templates the profile's prune fragment ACTUALLY references, not
             # from a `keep_*` naming convention, and fails closed if one is missing.
-            emit_source_template_family "$LB_RETFRAG" "$cand"
+            [ "$lb_block" -eq 1 ] || emit_source_template_family "$LB_RETFRAG" "$cand"
             for r in "${roots[@]}"; do
                 echo
                 echo "[prune:$r]"
@@ -8745,7 +8812,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # up. REV-104 F1 / REV-106 F1: point use_template at the SOURCE
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
-                emit_source_prune_fragment "$LB_RETFRAG"
+                if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" source; else emit_source_prune_fragment "$LB_RETFRAG"; fi
                 # --recursive (luka A'): the source prune walks the same subtree
                 # the snapshot does, or every child's family grows unbounded.
                 [ -n "$lb_recursion" ] && echo "	recursive    = yes"
@@ -8770,7 +8837,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                     echo
                     echo "[prune:$target/$r]"
                     echo "	# managed-by: zfs-backup.sh local-backup target=$target/$r"
-                    profile_emit "$LB_RETFRAG"
+                    if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" target; else profile_emit "$LB_RETFRAG"; fi
                     echo "	recursive    = yes"
                     echo "	pair_label   = $lb_name"
                     echo "	notify       = local-$(basename "$r")"
