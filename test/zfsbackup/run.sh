@@ -5054,7 +5054,7 @@ run_pc() {   # <client> <neuter 0|1> -> leaves the captured candidate in $PC/cap
 run_pc apalt 0
 if [ -f "$PC/cap/workfile" ] \
         && grep -qxF '[relation:apalt]' "$PC/cap/workfile" \
-        && grep -qE 'hourly\.send_schedule[[:space:]]+= 7 \* \* \* \*' "$PC/cap/workfile" \
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 7 \* \* \* \*' "$PC/cap/workfile" \
         && grep -qE 'relation[[:space:]]+= apalt' "$PC/cap/workfile" \
         && ! grep -q '^\[template:' "$PC/cap/workfile"; then
     ok "95: a stored PROFILE=alt drives the real first activation's candidate CONFIG"
@@ -5093,7 +5093,7 @@ fi
 run_pc apdef 0
 if [ -f "$PC/cap/workfile" ] \
         && grep -qxF '[relation:apdef]' "$PC/cap/workfile" \
-        && grep -qE 'hourly\.send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
         && ! grep -qE '= 7 \* \* \* \*' "$PC/cap/workfile"; then
     ok "95: the default (omitted-choice) profile still yields the default semantics"
 else
@@ -5108,7 +5108,7 @@ fi
 # would be proving nothing.
 run_pc apalt 1
 if [ -f "$PC/cap/workfile" ] \
-        && grep -qE 'hourly\.send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
         && ! grep -qE '= 7 \* \* \* \*' "$PC/cap/workfile"; then
     ok "95 control: with the wiring bypassed, the stored PROFILE has no effect"
 else
