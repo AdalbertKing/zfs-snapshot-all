@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6ffd78f3a29603e4 -->
+<!-- status-covers-digest: 2c9a7733a71418c5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -77,7 +77,11 @@
   `--yes` to tylko plan. W GUI: F7 na F5 „Sprzątnij config” — plan po polsku dla każdego konta z
   relacjami, potem WYKONAJ. 63g 16/23. Testy: `localbackup` +2 (X22 z kontrolą bez edit-relation;
   ręcznie na silniku z `main` ten test daje tę samą odmowę co w T6; `clean-templates`), `tui` 279/0 (+2). Droga zdalna
-  (`--regenerate`) bez testu w suicie — do sprawdzenia planem na labie po wdrożeniu.
+  (`--regenerate`) bez testu w suicie — sprawdzona planem na labie (pve10). Poprawka po T6
+  na żywo: bez szablonu źródła obie strony relacji lokalnej używały jednej własnej sekcji, a
+  `set-tiers --src-tier` kopiował ją pod nazwę, którą już miała („could not take '' over”);
+  teraz źródło dostaje własną kopię (`…__lsrc_…`, zdalnie `…__src_…`), cel zostaje na
+  oryginale (`localbackup` +1, kontrola na silniku z `main`: ten sam błąd co w T6).
 
 - **Uwagi z testów właściciela, paczka 1 (2026-10-13/14).** „Harmonogram i retencja”: okno
   źródła widzi szczeble PO zmianach w tabeli celu — dodany szczebel z liczbą celu, usunięty
