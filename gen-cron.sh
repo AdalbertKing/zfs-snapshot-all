@@ -1397,6 +1397,13 @@ expand_relations() {
             list="${list:+$list,}$tpl"
         done
         INI["${sec}${SEP}use_template"]="$list"
+        if [ "$kind" = dataset ]; then
+            for f in $RELATION_ENGINE_FIELDS; do
+                ini_has "relation:$rel" "$f" || continue
+                ini_has "$sec" "$f" && die "[$sec]: '$f' is set here AND in [relation:$rel] -- an engine setting lives in the block only"
+                INI["${sec}${SEP}${f}"]="$(ini_get "relation:$rel" "$f")"
+            done
+        fi
         used["block:$rel"]=1
     done
     # The block itself: every key is a known shape, every tier named is listed,
@@ -1409,7 +1416,7 @@ expand_relations() {
         for key in "${!INI[@]}"; do
             [ "${key%%${SEP}*}" = "$hdr" ] || continue
             f="${key#*${SEP}}"
-            case "$f" in tiers|gfs) continue ;; esac
+            case " tiers gfs $RELATION_ENGINE_FIELDS " in *" $f "*) continue ;; esac
             t="${f%%.*}"; [ "$t" != "$f" ] || die "[$hdr] field '$f' -- expected tiers, gfs or <tier>.<field> (e.g. hourly.target_retain)"
             case "$tl" in *" $t "*) ;; *) die "[$hdr] field '$f' names the tier '$t', which is not in tiers =$tl" ;; esac
             f="${f#*.}"
@@ -1570,9 +1577,13 @@ _allow_fields dataset   use_template relation side pair_label recursive media \
 _allow_fields prune     use_template relation side recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label prune_foreign $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
-# [relation:<name>] (X27): its own two fields; the <tier>.<field> keys are checked by
-# expand_relations against the [template:] list (they become template fields).
-_allow_fields relation  tiers gfs
+# [relation:<name>] (X27): its own fields; the <tier>.<field> keys are checked by
+# expand_relations against the [template:] list (they become template fields). The
+# ENGINE settings live in the block too (owner 2026-10-14: a template is only tiers;
+# how the copies travel belongs to the relationship) -- every [dataset:] section of
+# the relationship reads them from here.
+RELATION_ENGINE_FIELDS="history compression cipher autotune raw"
+_allow_fields relation  tiers gfs $RELATION_ENGINE_FIELDS
 
 # [replica:<name>] -- ANOTHER COPY OF WHAT THIS HOST ALREADY HOLDS.
 #

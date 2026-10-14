@@ -7462,11 +7462,15 @@ cmd_set_transfer() {
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
+    # X27: the engine settings live in the relationship's [relation:] block -- one place;
+    # a copy left in a section by an older install is removed in the same replace.
+    relblock_require "$workfile" "$name" set-transfer
     local sec i
-    for sec in "${secs[@]}"; do
-        for i in "${!fk[@]}"; do
-            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "${fv[$i]}" \
-                || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in $sec -- nothing was changed"; }
+    for i in "${!fk[@]}"; do
+        set_or_remove_section_field "$workfile" "[relation:$name]" "${fk[$i]}" "${fv[$i]}" \
+            || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in [relation:$name] -- nothing was changed"; }
+        for sec in "${secs[@]}"; do
+            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "" || :
         done
     done
     log "validating the changed config (working copy only, nothing real touched yet)..."
@@ -7475,7 +7479,7 @@ cmd_set_transfer() {
         die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(sekcji: ${#secs[@]})"
+    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(blok [relation:$name])"
     if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
         echo "plan only -- nothing installed (add --yes to install)"
@@ -9578,7 +9582,7 @@ cmd_add_client() {
     # templates are prefixless and its monitors run in any-mode -- the only
     # shape that matches the declaration. An explicit --profile= still wins.
     if [ "$passive" -eq 1 ] && [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; then
-        profile=passive
+        profile=passive-flat
     fi
 
     local cpath; cpath=$(client_conf_path "$name")
@@ -17571,6 +17575,8 @@ relblock_view_unfold() {   # <file> -- in place, for READERS only (show-config, 
                 sd = (stem == "") ? "target" : "source"
                 for (i = 1; i <= n; i++) { x = trim(ts[i]); if (x == "" || off[R, x "." sd]) continue; list = list (list == "" ? "" : ",") "profile__relacja-" R "__" stem x }
                 printf "\tuse_template = %s\n", list
+                # the engine settings of the block, shown on every [dataset:] of the relationship
+                if (cur ~ /^\[dataset:/) for (j = 1; j <= nk[R]; j++) if (index(rk[R, j], ".") == 0 && !((cur, rk[R, j]) in F)) printf "\t%s = %s\n", rk[R, j], rv[R, j]
                 if (!((cur, "pair_label") in F)) pending_pl = R
                 next
             }
@@ -19809,7 +19815,7 @@ rux_remote_install() {
     # only shape that matches the declaration. An explicit --profile= still
     # wins -- the operator may have a customised passive variant.
     if [ "$passive" -eq 1 ] && { [ -z "$profile" ] || [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; }; then
-        profile=passive
+        profile=passive-flat
     fi
 
     local cpath; cpath=$(client_conf_path "$name")
