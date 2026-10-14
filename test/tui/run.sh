@@ -1266,8 +1266,9 @@ fi
 # X22 (wlasciciel 2026-10-14): F7 na F5 = sprzatanie configu z szablonow, ktorych nic nie
 # uzywa (okna: clean-templates --ask); pasek klawiszy mowi o tym.
 D1=$(sact F7); D1L=$(cat "$XL")
-if printf '%s' "$D1L" | grep -Eq "clean-templates --ask\$" && has "$D1" 'Sprzątnij config'; then
-    ok "szablony: X22 -- F7 = clean-templates --ask, pasek: 'F7 Sprzątnij config'"
+D1W="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen szablony --width 160 2>&1)"
+if printf '%s' "$D1L" | grep -Eq "clean-templates --ask\$" && has "$D1" '7Usuń nieuż. kopie10Wyjście' && has "$D1W" 'F7 Usuń nieużywane kopie szablonów'; then
+    ok "szablony: X22 -- F7 = clean-templates --ask, pasek: 'F7 Usuń nieużywane kopie szablonów' (80 kol.: skrot 'Usuń nieuż. kopie', F10 zostaje)"
 else
     bad "szablony: X22 F7" "$D1L" "$(printf '%s' "$D1" | tail -3)"
 fi
