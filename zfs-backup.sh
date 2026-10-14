@@ -6704,8 +6704,137 @@ tiers_letter() {      # <tier key> -> H D W M Y (or "" for a key with no cadence
     esac
 }
 
-# show-tiers NAME [--json] -- the tiers of ONE relationship, read from its config,
-# in the shape list-profiles gives a profile's tiers (so the GUI table reads both).
+# ==============================================================================
+# X27 S2 (owner 2026-10-14): THE RELATIONSHIP IS ITS [relation:NAME] BLOCK. show-tiers
+# reads it, set-tiers changes it -- in a working copy of the config, validated whole
+# by gen-cron, ONE atomic replace. No template sections, no copies, no translation.
+# Each section of the relationship says relation = NAME and side = target|source.
+#   <tier>.<field>          both sides          <tier>.target_<field> / .source_<field>  one side
+#   <tier>.monitor = W C    warn + crit         <tier>.source = no   the tier does not run there
+# A relationship still in the old shape is refused with the way out (migrate-config).
+# ==============================================================================
+
+relblock_has() { grep -qxF "[relation:$2]" "$1" 2>/dev/null; }
+
+relblock_dump() {   # <config> <name> -> "key<TAB>value" lines, file order
+    awk -v h="[relation:$2]" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { inb = (trim(l) == h); next }
+        inb { t = l; sub(/^[ \t]*#.*$/, "", t); t = trim(t)
+              if (t == "" || index(t, "=") == 0) next
+              printf "%s\t%s\n", trim(substr(t, 1, index(t, "=") - 1)), trim(substr(t, index(t, "=") + 1)) }' "$1"
+}
+
+relblock_sections() {   # <config> <name> <target|source> -> headers of that side's sections
+    awk -v want="$2" -v side="$3" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function flush() { if (h != "" && r == want && sd == side) print h }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { flush(); h = trim(l); r = ""; sd = ""; if (h !~ /^\[(dataset|prune):/) h = ""; next }
+        h != "" { t = trim(l)
+            if (t ~ /^relation[ \t]*=/) { r = t; sub(/^relation[ \t]*=[ \t]*/, "", r) }
+            if (t ~ /^side[ \t]*=/)     { sd = t; sub(/^side[ \t]*=[ \t]*/, "", sd) } }
+        END { flush() }' "$1"
+}
+
+# The block as a MODEL in the caller's scope: RB_TIERS (array), RB_KEYS (order),
+# RB (assoc key -> value). Load, change, write back.
+relblock_load() {   # <config> <name>
+    RB_TIERS=(); RB_KEYS=(); RB=()
+    local k v
+    while IFS=$'\t' read -r k v; do
+        [ -n "$k" ] || continue
+        if [ "$k" = tiers ]; then
+            local x; local -a xs=(); IFS=',' read -r -a xs <<<"$v"
+            for x in "${xs[@]}"; do x="${x//[[:space:]]/}"; [ -n "$x" ] && RB_TIERS+=("$x"); done
+            continue
+        fi
+        [ -n "${RB[$k]+x}" ] || RB_KEYS+=("$k")
+        RB[$k]="$v"
+    done < <(relblock_dump "$1" "$2")
+}
+rb_get() {   # <tier> <target|source> <field> -> the value that runs on that side (rc 1: none)
+    local t="$1" sd="$2" f="$3" v
+    if [ -n "${RB[$t.${sd}_$f]+x}" ]; then printf '%s' "${RB[$t.${sd}_$f]}"; return 0; fi
+    if [ -n "${RB[$t.$f]+x}" ]; then printf '%s' "${RB[$t.$f]}"; return 0; fi
+    case "$f" in
+        monitor_warn|monitor_crit)
+            v="${RB[$t.${sd}_monitor]-${RB[$t.monitor]-}}"; [ -n "$v" ] || return 1
+            set -- $v; [ "$f" = monitor_warn ] && printf '%s' "$1" || printf '%s' "${2:-}"; return 0 ;;
+        gfs) [ -n "${RB[gfs]+x}" ] && { printf '%s' "${RB[gfs]}"; return 0; } ;;
+    esac
+    return 1
+}
+rb_set() {   # <tier> <target|source|""> <field> <value, "" = remove> -- normalised by relblock_write
+    local key="$1.${2:+${2}_}$3"
+    [ -n "${RB[$key]+x}" ] || RB_KEYS+=("$key")
+    RB[$key]="$4"
+}
+relblock_write() {   # <config> <name> -- the model back into the file, normalised, in place of the old block
+    local cfg="$1" name="$2" t f b tv sv hasT=0 hasS=0 out
+    [ -n "$(relblock_sections "$cfg" "$name" target)" ] && hasT=1
+    [ -n "$(relblock_sections "$cfg" "$name" source)" ] && hasS=1
+    out=$(mktemp) || return 1
+    {
+        printf '[relation:%s]\n' "$name"
+        local IFS_=","; printf '\ttiers = %s\n' "$(IFS=,; echo "${RB_TIERS[*]}" | sed 's/,/, /g')"
+        [ -n "${RB[gfs]:-}" ] && printf '\tgfs = %s\n' "${RB[gfs]}"
+        for t in "${RB_TIERS[@]}"; do
+            for b in target source; do [ "${RB[$t.$b]:-}" = no ] && printf '\t%s.%s = no\n' "$t" "$b"; done
+            # every base field this tier mentions, canonical order first
+            local -a bases=() ; local seen=" "
+            for b in send_schedule prefix notify_word tier_label prune_schedule pattern retain keep gfs quiesce monitor monitor_warn monitor_crit monitor_schedule; do bases+=("$b"); done
+            for f in "${RB_KEYS[@]}"; do
+                case "$f" in "$t".*) ;; *) continue ;; esac
+                b="${f#"$t".}"; b="${b#target_}"; b="${b#source_}"
+                case "$b" in target|source) continue ;; esac
+                case " ${bases[*]} " in *" $b "*) ;; *) bases+=("$b") ;; esac
+            done
+            for b in "${bases[@]}"; do
+                [ "$b" = gfs ] && [ -n "${RB[gfs]:-}" ] && [ -z "${RB[$t.gfs]+x}${RB[$t.target_gfs]+x}${RB[$t.source_gfs]+x}" ] && continue
+                tv=$(rb_get "$t" target "$b" 2>/dev/null) || tv=""
+                sv=$(rb_get "$t" source "$b" 2>/dev/null) || sv=""
+                case "$b" in monitor_warn|monitor_crit) [ -n "${RB[$t.$b]+x}${RB[$t.target_$b]+x}${RB[$t.source_$b]+x}" ] || continue ;; esac
+                [ "$b" = gfs ] && [ -z "${RB[$t.gfs]+x}${RB[$t.target_gfs]+x}${RB[$t.source_gfs]+x}" ] && continue
+                if [ "$hasT" -eq 1 ] && [ "$hasS" -eq 1 ]; then
+                    if [ "$tv" = "$sv" ]; then [ -n "$tv" ] && printf '\t%s.%s = %s\n' "$t" "$b" "$tv"
+                    else
+                        [ -n "$tv" ] && printf '\t%s.target_%s = %s\n' "$t" "$b" "$tv"
+                        [ -n "$sv" ] && printf '\t%s.source_%s = %s\n' "$t" "$b" "$sv"
+                    fi
+                else
+                    [ "$hasT" -eq 1 ] && v="$tv" || v="$sv"
+                    [ -n "$v" ] && printf '\t%s.%s = %s\n' "$t" "$b" "$v"
+                fi
+            done
+        done
+        printf '\n'
+    } > "$out.blk" || { rm -f "$out" "$out.blk"; return 1; }
+    awk -v h="[relation:$name]" -v blk="$out.blk" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { if (trim(l) == h) { while ((getline x < blk) > 0) print x; skip = 1; next } skip = 0 }
+        skip { next }
+        { print }' "$cfg" > "$out" && cat "$out" > "$cfg"
+    local rc=$?; rm -f "$out" "$out.blk"; return "$rc"
+}
+
+relblock_require() {   # <config> <name> <verb>
+    relblock_has "$1" "$2" && return 0
+    die "$3: '$2' is still in the OLD config shape (template sections, use_template) -- move it to its [relation:$2] block first: zfs-backup.sh migrate-config. Nothing was changed."
+}
+
+relblock_mech() {   # <tier> <side> -> gfs|age|flat|""
+    local r g; r=$(rb_get "$1" "$2" retain 2>/dev/null) || r=""
+    g=$(rb_get "$1" "$2" gfs 2>/dev/null) || g=""
+    [ -n "$r" ] || { printf ''; return 0; }
+    case "$g" in yes|true|1) printf gfs; return 0 ;; esac
+    case "$r" in -[hdwmy]*) printf age ;; *) printf flat ;; esac
+}
+
+# show-tiers NAME [--json] -- the tiers of ONE relationship, read from its block, in the
+# shape list-profiles gives a profile's tiers (so the GUI table reads both).
 cmd_show_tiers() {
     local name="" json=0 a
     for a in "$@"; do
@@ -6719,34 +6848,24 @@ cmd_show_tiers() {
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
     local cfg="$CRON_CTX_FILE"
     [ -r "$cfg" ] || die "show-tiers: no config $cfg for '$name'"
-    local side out="" first sec tpls t key f_gfs f_ret f_q f_send f_prune f_pat f_pre f_w f_c mech keep retain secgfs
+    relblock_require "$cfg" "$name" show-tiers
+    local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+    relblock_load "$cfg" "$name"
+    local side out="" t arr tf h0 mech keep retain send prune w c
     for side in target source; do
-        local -a hs=(); mapfile -t hs < <(tiers_side_sections "$cfg" "$name" "$mode" "$side")
-        local arr="" tf=1
-        if [ "${#hs[@]}" -gt 0 ]; then
-            sec="${hs[0]}"
-            secgfs=$(tiers_sec_field "$cfg" "$sec" gfs)
-            tpls=$(tiers_sec_field "$cfg" "$sec" use_template)
-            local -a tl=(); IFS=',' read -r -a tl <<<"$tpls"
-            for t in "${tl[@]}"; do
-                t="${t//[[:space:]]/}"; [ -n "$t" ] || continue
-                key=$(tiers_key_of "$t")
-                f_gfs=$(tiers_sec_field "$cfg" "[template:$t]" gfs); f_ret=$(tiers_sec_field "$cfg" "[template:$t]" retain)
-                f_q=$(tiers_sec_field "$cfg" "[template:$t]" quiesce)
-                f_send=$(tiers_sec_field "$cfg" "[template:$t]" send_schedule); f_prune=$(tiers_sec_field "$cfg" "[template:$t]" prune_schedule)
-                # A per-section override (remote stagger) is what actually runs.
-                local ov; ov=$(tiers_sec_field "$cfg" "$sec" "prune_schedule_$t"); [ -n "$ov" ] && f_prune="$ov"
-                ov=$(tiers_sec_field "$cfg" "$sec" "send_schedule_$t"); [ -n "$ov" ] && f_send="$ov"
-                f_pat=$(tiers_sec_field "$cfg" "[template:$t]" pattern); f_pre=$(tiers_sec_field "$cfg" "[template:$t]" prefix)
-                f_w=$(tiers_sec_field "$cfg" "[template:$t]" monitor_warn); f_c=$(tiers_sec_field "$cfg" "[template:$t]" monitor_crit)
-                mech=""; keep=""; retain=""
-                if [ -n "$f_ret" ]; then
-                    case "${f_gfs:-$secgfs}" in yes|true|1) mech=gfs ;; esac
-                    if [ -z "$mech" ]; then case "$f_ret" in -[hdwmy]*) mech=age ;; *) mech=flat ;; esac; fi
-                    if [ "$mech" = age ]; then retain="$f_ret"; else keep="${f_ret#-?}"; fi
-                fi
+        arr=""; tf=1
+        h0=$(relblock_sections "$cfg" "$name" "$side" | head -1)
+        if [ -n "$h0" ]; then
+            for t in "${RB_TIERS[@]}"; do
+                [ "${RB[$t.$side]:-}" = no ] && continue
+                mech=$(relblock_mech "$t" "$side"); keep=""; retain=""
+                local r; r=$(rb_get "$t" "$side" retain 2>/dev/null) || r=""
+                if [ "$mech" = age ]; then retain="$r"; elif [ -n "$r" ]; then keep="${r#-?}"; fi
+                send=$(tiers_sec_field "$cfg" "$h0" "send_schedule_$t"); [ -n "$send" ] || send=$(rb_get "$t" "$side" send_schedule 2>/dev/null) || send=""
+                prune=$(tiers_sec_field "$cfg" "$h0" "prune_schedule_$t"); [ -n "$prune" ] || prune=$(rb_get "$t" "$side" prune_schedule 2>/dev/null) || prune=""
+                w=$(rb_get "$t" "$side" monitor_warn 2>/dev/null) || w=""; c=$(rb_get "$t" "$side" monitor_crit 2>/dev/null) || c=""
                 [ "$tf" -eq 1 ] || arr="$arr,"; tf=0
-                arr="$arr{\"name\":\"$(json_escape "$key")\",\"template\":\"$(json_escape "$t")\",\"mechanism\":\"$mech\",\"pattern\":\"$(json_escape "$f_pat")\",\"prefix\":\"$(json_escape "$f_pre")\",\"keep\":\"$keep\",\"retain\":\"$(json_escape "$retain")\",\"gfs\":\"$(json_escape "$f_gfs")\",\"quiesce\":\"$(json_escape "$f_q")\",\"send_schedule\":\"$(json_escape "$f_send")\",\"prune_schedule\":\"$(json_escape "$f_prune")\",\"monitor_warn\":\"$(json_escape "$f_w")\",\"monitor_crit\":\"$(json_escape "$f_c")\"}"
+                arr="$arr{\"name\":\"$(json_escape "$t")\",\"template\":\"\",\"mechanism\":\"$mech\",\"pattern\":\"$(json_escape "$(rb_get "$t" "$side" pattern 2>/dev/null)")\",\"prefix\":\"$(json_escape "$(rb_get "$t" "$side" prefix 2>/dev/null)")\",\"keep\":\"$keep\",\"retain\":\"$(json_escape "$retain")\",\"gfs\":\"$(json_escape "$(rb_get "$t" "$side" gfs 2>/dev/null)")\",\"quiesce\":\"$(json_escape "$(rb_get "$t" "$side" quiesce 2>/dev/null)")\",\"send_schedule\":\"$(json_escape "$send")\",\"prune_schedule\":\"$(json_escape "$prune")\",\"monitor_warn\":\"$(json_escape "$w")\",\"monitor_crit\":\"$(json_escape "$c")\"}"
             done
         fi
         out="$out${out:+,}\"$side\":[$arr]"
@@ -6761,10 +6880,119 @@ cmd_show_tiers() {
 # set-tiers NAME [ops...] [--plan|--yes]
 #   --tier=T | --src-tier=T            the tier the next fields change (target / source)
 #   --keep=N  --retain=-XN  --quiesce=V (empty = none)  --send-schedule='m h d M w'  --prune-schedule='...'
-#   --drop-tier=T | --drop-src-tier=T  the tier leaves this relationship (never the last of a side)
-#   --add-tier=T  | --add-src-tier=T   a tier it does not have, shaped like its others
+#   --drop-tier=T   the tier leaves the relationship (never the last)
+#   --add-tier=T    a tier it does not have, shaped like its others
+#   --drop-src-tier=T / --add-src-tier=T   the tier stops / starts running on the source side
 #   --method=gfs|flat|age              how every tier of BOTH sides counts
-# The same words save-profile takes from the GUI table, so the table hands them over unchanged.
+tiers_cadence_rank() { case "$1" in *hourly) echo 1 ;; *daily) echo 2 ;; *weekly) echo 3 ;; *monthly) echo 4 ;; *yearly|*annual) echo 5 ;; *) echo 9 ;; esac; }
+tiers_apply_ops() {   # <config working copy> <name> <ops...> -> TIERS_CHANGES; dies (working copy removed) on a refusal
+    local wf="$1" name="$2"; shift 2
+    local -a ops=("$@")
+    fail() { rm -f "$wf"; die "set-tiers: $* -- nothing was changed"; }
+    relblock_load "$wf" "$name"
+    local hasS=0; [ -n "$(relblock_sections "$wf" "$name" source)" ] && hasS=1
+    [ -n "$(relblock_sections "$wf" "$name" target)$(relblock_sections "$wf" "$name" source)" ] \
+        || fail "no section of '$name' says relation = $name"
+    TIERS_CHANGES=()
+    local op v side="" key="" t f r h fld
+    for op in "${ops[@]}"; do
+        v="${op#*=}"
+        case "$op" in
+            --tier=*|--src-tier=*)
+                case "$op" in --src-tier=*) side=source ;; *) side=target ;; esac
+                key="$v"
+                case " ${RB_TIERS[*]} " in *" $key "*) ;; *) fail "no tier '$key' (tiers: ${RB_TIERS[*]})" ;; esac
+                [ "$side" = source ] && [ "$hasS" -eq 0 ] && fail "'$name' has no source side to set '$key' on" ;;
+            --keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*)
+                [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T (or --src-tier=T) before it"
+                case "$op" in
+                    --keep=*)
+                        case "$v" in ''|*[!0-9]*|0*) fail "--keep='$v' -- a whole number above 0" ;; esac
+                        r=$(rb_get "$key" "$side" retain 2>/dev/null) || fail "tier '$key' counts nothing on the $side side -- nothing to set a number on"
+                        rb_set "$key" "$side" retain "-${r:1:1}$v" ;;
+                    --retain=*)
+                        case "$v" in -[HDWMYhdwmy][0-9]*) ;; *) fail "--retain='$v' -- like -D7 (count) or -d14 (age)" ;; esac
+                        rb_set "$key" "$side" retain "$v" ;;
+                    --quiesce=*) rb_set "$key" "$side" quiesce "$v" ;;
+                    --send-schedule=*|--prune-schedule=*)
+                        [ "$(printf '%s' "$v" | wc -w)" -eq 5 ] || fail "'$op' -- five cron fields"
+                        fld="${op%%=*}"; fld="${fld#--}"; fld="${fld//-/_}"
+                        local overridden=0
+                        while IFS= read -r h; do
+                            [ -n "$h" ] || continue
+                            if [ -n "$(tiers_sec_field "$wf" "$h" "${fld}_$key")" ]; then
+                                set_or_remove_section_field "$wf" "$h" "${fld}_$key" "$v" || fail "could not set $fld in $h"; overridden=1
+                            fi
+                        done < <(relblock_sections "$wf" "$name" "$side")
+                        [ "$overridden" -eq 1 ] || rb_set "$key" "$side" "$fld" "$v" ;;
+                esac
+                TIERS_CHANGES+=("$key: ${op#--}$([ "$side" = source ] && echo ' (source)')") ;;
+            --drop-tier=*)
+                case " ${RB_TIERS[*]} " in *" $v "*) ;; *) fail "no tier '$v' to drop" ;; esac
+                [ "${#RB_TIERS[@]}" -gt 1 ] || fail "'$v' is the last tier -- delete the relationship instead"
+                local -a keep_t=(); for t in "${RB_TIERS[@]}"; do [ "$t" = "$v" ] || keep_t+=("$t"); done; RB_TIERS=("${keep_t[@]}")
+                for f in "${RB_KEYS[@]}"; do case "$f" in "$v".*) RB[$f]="" ;; esac; done
+                for side in target source; do
+                    while IFS= read -r h; do
+                        [ -n "$h" ] || continue
+                        for fld in send_schedule prune_schedule flags; do set_or_remove_section_field "$wf" "$h" "${fld}_$v" "" || :; done
+                    done < <(relblock_sections "$wf" "$name" "$side")
+                done
+                TIERS_CHANGES+=("$v: dropped"); key="" ;;
+            --add-tier=*)
+                case " ${RB_TIERS[*]} " in *" $v "*) fail "it already has the tier '$v'" ;; esac
+                local L; L=$(tiers_letter "$v"); [ -n "$L" ] || fail "'$v' is not a tier -- hourly daily weekly monthly yearly"
+                local sib="${RB_TIERS[0]}" send prune keepn warn crit q
+                case "$v" in
+                    hourly)  send="1 * * * *";  prune="21 * * * *"; keepn=24; warn=90m;  crit=150m; q="" ;;
+                    daily)   send="11 1 * * *"; prune="31 1 * * *"; keepn=7;  warn=30h;  crit=48h;  q=auto,degrade ;;
+                    weekly)  send="21 2 * * 0"; prune="41 2 * * 0"; keepn=4;  warn=8d;   crit=10d;  q=auto,degrade ;;
+                    monthly) send="31 3 1 * *"; prune="51 3 1 * *"; keepn=12; warn=35d;  crit=40d;  q=auto,degrade ;;
+                    yearly)  send="31 3 1 1 *"; prune="51 3 1 1 *"; keepn=5;  warn=400d; crit=430d; q=auto,degrade ;;
+                esac
+                local mech; mech=$(relblock_mech "$sib" target); [ -n "$mech" ] || mech=$(relblock_mech "$sib" source)
+                local lc="$L"; [ "$mech" = age ] && lc=$(printf '%s' "$L" | tr 'A-Z' 'a-z')
+                rb_set "$v" "" send_schedule "$send"; rb_set "$v" "" prefix "automated_${v}_"
+                local nw; nw=$(rb_get "$sib" target notify_word 2>/dev/null || rb_get "$sib" source notify_word 2>/dev/null) && [ -n "$nw" ] && rb_set "$v" "" notify_word "$nw"
+                rb_set "$v" "" prune_schedule "$prune"; rb_set "$v" "" pattern "automated_$v"
+                rb_set "$v" "" retain "-$lc$keepn"
+                [ "$mech" = gfs ] && [ -z "${RB[gfs]:-}" ] && rb_set "$v" "" gfs yes
+                [ -n "$q" ] && rb_set "$v" "" quiesce "$q"
+                rb_set "$v" "" monitor "$warn $crit"
+                # in cadence order (finest first), as gen-cron and the GUI table expect
+                local -a nt=(); local done_=0 rk; rk=$(tiers_cadence_rank "$v")
+                for t in "${RB_TIERS[@]}"; do
+                    if [ "$done_" -eq 0 ] && [ "$(tiers_cadence_rank "$t")" -gt "$rk" ]; then nt+=("$v"); done_=1; fi
+                    nt+=("$t")
+                done
+                [ "$done_" -eq 1 ] || nt+=("$v"); RB_TIERS=("${nt[@]}")
+                TIERS_CHANGES+=("$v: added (keeps $keepn)"); key="$v"; side=target ;;
+            --drop-src-tier=*|--add-src-tier=*)
+                case " ${RB_TIERS[*]} " in *" $v "*) ;; *) fail "no tier '$v'" ;; esac
+                [ "$hasS" -eq 1 ] || fail "'$name' has no source side"
+                if [ "${op%%=*}" = --drop-src-tier ]; then rb_set "$v" "" source no; TIERS_CHANGES+=("$v: off on the source")
+                else RB[$v.source]=""; TIERS_CHANGES+=("$v: on on the source"); fi
+                key="$v"; side=source ;;
+            --method=*)
+                case "$v" in gfs|flat|age) ;; *) fail "--method='$v' -- gfs, flat or age" ;; esac
+                local sd
+                RB[gfs]=""
+                for t in "${RB_TIERS[@]}"; do
+                    for sd in target source; do
+                        r=$(rb_get "$t" "$sd" retain 2>/dev/null) || continue
+                        case "$v" in age) r="-$(printf '%s' "${r:1:1}" | tr 'A-Z' 'a-z')${r:2}" ;; *) r="-$(printf '%s' "${r:1:1}" | tr 'a-z' 'A-Z')${r:2}" ;; esac
+                        rb_set "$t" "$sd" retain "$r"
+                    done
+                    RB[$t.gfs]=""; RB[$t.target_gfs]=""; RB[$t.source_gfs]=""
+                    [ "$v" = gfs ] && rb_set "$t" "" gfs yes
+                done
+                TIERS_CHANGES+=("method: $v") ;;
+            *) fail "unknown change '$op'" ;;
+        esac
+    done
+    relblock_write "$wf" "$name" || fail "could not write the [relation:$name] block"
+}
+
 cmd_set_tiers() {
     local name="" yes=0 plan=0 a
     local -a ops=()
@@ -6784,223 +7012,17 @@ cmd_set_tiers() {
     [ -r "$cpath" ] || die "set-tiers: no relationship '$name' on this host"
     record_load client "$cpath"
     [ "${STATE:-}" = active ] || die "set-tiers: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
-    local mode=remote; [ "${RUX_MODE:-}" = local ] && mode=local
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "set-tiers: no config $cronfile for '$name'"
     assert_cron_config_matches_installed "$cronfile"
-
+    relblock_require "$cronfile" "$name" set-tiers
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
-    local hfT="$workfile.hT" hfS="$workfile.hS"
-    tiers_side_sections "$workfile" "$name" "$mode" target > "$hfT"
-    tiers_side_sections "$workfile" "$name" "$mode" source > "$hfS"
-    fail() { rm -f "$workfile" "$hfT" "$hfS"; die "set-tiers: $* -- nothing was changed"; }
-    [ -s "$hfT" ] || [ -s "$hfS" ] || fail "$cronfile has no section of '$name' (pair_label = $name)"
-
-    local -a changes=()
-    # The template of tier KEY on SIDE (headers file), "" when the side has none.
-    side_tpl() {
-        local h t; h=$(head -1 "$1"); [ -n "$h" ] || return 0
-        local -a tl=(); IFS=',' read -r -a tl <<<"$(tiers_sec_field "$workfile" "$h" use_template)"
-        for t in "${tl[@]}"; do t="${t//[[:space:]]/}"; [ "$(tiers_key_of "$t")" = "$2" ] && { printf '%s' "$t"; return 0; }; done
-        return 0
-    }
-    # Copy TEMPLATE as NEW for the sections in HEADERS-FILE (an existing NEW must be theirs).
-    copy_tpl_for() {   # <template> <new name> <headers file>
-        local t="$1" own="$2" hf="$3" h k
-        if grep -qxF "[template:$own]" "$workfile"; then
-            tiers_owned "$workfile" "$own" "$hf" || return 1
-            remove_template_section "$workfile" "$own"
-        fi
-        { printf '\n'; cron_config_section "$workfile" "[template:$t]" | sed "1s|.*|[template:$own]|"; } >> "$workfile" || return 1
-        while IFS= read -r h; do
-            [ -n "$h" ] || continue
-            tiers_replace_in_list "$workfile" "$h" "$t" "$own" || return 1
-            for k in send_schedule prune_schedule flags; do
-                local ov; ov=$(tiers_sec_field "$workfile" "$h" "${k}_$t")
-                [ -n "$ov" ] || continue
-                set_or_remove_section_field "$workfile" "$h" "${k}_$t" "" && set_or_remove_section_field "$workfile" "$h" "${k}_$own" "$ov" || return 1
-            done
-        done < "$hf"
-    }
-    # Make TEMPLATE this side's own; prints the (possibly new) name.
-    own_tpl() {
-        local hf="$1" t="$2" own
-        # OWNED = named for this relationship AND used by nobody else. A template
-        # named after a profile (profile__d7h24__daily) is copied even when only this
-        # relationship uses it today: the next relationship made with that profile
-        # reuses the section by name and would silently inherit this change.
-        case "$t" in
-            "profile__relacja-${name}__"*)
-                tiers_owned "$workfile" "$t" "$hf" && { printf '%s' "$t"; return 0; }
-                # X22 follow-up (owner's T6, 2026-10-14): "Uzyj szablonu" renders the
-                # profile as this relationship's own sections, and with no source
-                # profile BOTH sides use them -- the copy below would take the very
-                # name it copies from ("could not take '' over"). Shared by the two
-                # sides of THIS relationship only: the SOURCE gets its own copy under
-                # the source stem (lsrc_ local, src_ remote), the target keeps it.
-                cat "$hfT" "$hfS" > "$workfile.both"
-                if tiers_owned "$workfile" "$t" "$workfile.both"; then
-                    rm -f "$workfile.both"
-                    local stem=lsrc_; [ "$mode" = remote ] && stem=src_
-                    own="profile__relacja-${name}__${stem}${t##*__}"
-                    copy_tpl_for "$t" "$own" "$hfS" || return 1
-                    printf '%s: own source copy %s (both sides used one section)\n' "$(tiers_key_of "$t")" "$own" >> "$workfile.notes"
-                    if [ "$hf" = "$hfS" ]; then printf '%s' "$own"; else printf '%s' "$t"; fi
-                    return 0
-                fi
-                rm -f "$workfile.both" ;;
-        esac
-        own="profile__relacja-${name}__${t##*__}"
-        copy_tpl_for "$t" "$own" "$hf" || return 1
-        printf '%s: own copy %s (the template was shared)\n' "$(tiers_key_of "$t")" "$own" >> "$workfile.notes"
-        printf '%s' "$own"
-    }
-    local op v side="" key="" hf tpl oi=0
-    # A TIER LIVES ON BOTH SIDES: the source makes (and prunes) the snapshots, the
-    # target prunes its copies. Adding a tier only to the target would prune a
-    # family nobody makes; dropping it only there would leave the copies growing.
-    # So --add-tier / --drop-tier act on both sides -- queued as the source step
-    # right after -- and --src-tier counts are set separately (the source window).
-    queue_after() { ops=("${ops[@]:0:$oi}" "$@" "${ops[@]:$oi}"); }
-    while [ "$oi" -lt "${#ops[@]}" ]; do
-        op="${ops[$oi]}"; oi=$((oi + 1))
-        v="${op#*=}"
-        case "$op" in
-            --tier=*)     side=T; key="$v"; hf="$hfT" ;;
-            --src-tier=*) side=S; key="$v"; hf="$hfS" ;;
-            --drop-tier=*|--drop-src-tier=*)
-                case "$op" in --drop-src-tier=*) hf="$hfS" ;; *) hf="$hfT" ;; esac
-                tpl=$(side_tpl "$hf" "$v"); [ -n "$tpl" ] || fail "no tier '$v' to drop"
-                local cnt; cnt=$(tr ',' '\n' <<<"$(tiers_sec_field "$workfile" "$(head -1 "$hf")" use_template)" | grep -c .)
-                [ "$cnt" -gt 1 ] || fail "'$v' is the last tier of that side -- delete the relationship instead"
-                local h k
-                while IFS= read -r h; do
-                    [ -n "$h" ] || continue
-                    tiers_replace_in_list "$workfile" "$h" "$tpl" "" || fail "could not drop '$v' from $h"
-                    for k in send_schedule prune_schedule flags; do set_or_remove_section_field "$workfile" "$h" "${k}_$tpl" "" || :; done
-                done < "$hf"
-                [ -z "$(tiers_refs "$workfile" "$tpl")" ] && remove_template_section "$workfile" "$tpl"
-                changes+=("$v: dropped$([ "$hf" = "$hfS" ] && echo ' (source)')")
-                [ "$hf" = "$hfT" ] && [ -s "$hfS" ] && [ -n "$(side_tpl "$hfS" "$v")" ] && queue_after "--drop-src-tier=$v"
-                key="" ;;
-            --add-tier=*|--add-src-tier=*)
-                case "$op" in --add-src-tier=*) hf="$hfS"; side=S ;; *) hf="$hfT"; side=T ;; esac
-                [ -z "$(side_tpl "$hf" "$v")" ] || fail "it already has the tier '$v'"
-                local sib; sib=$(tiers_sec_field "$workfile" "$(head -1 "$hf")" use_template); sib="${sib%%,*}"; sib="${sib//[[:space:]]/}"
-                [ -n "$sib" ] || fail "no tier on that side to shape '$v' after"
-                local L; L=$(tiers_letter "$v"); [ -n "$L" ] || fail "'$v' is not a tier -- hourly daily weekly monthly yearly"
-                local sk; sk=$(tiers_key_of "$sib"); local stem="${sib##*__}"; stem="${stem%$sk}"   # lsrc_ / src_ / ""
-                local sw="${sk%_*}"; if [ "$sw" = "$sk" ]; then sw=""; else sw="${sw}_"; fi            # keep_ (ladder rung)
-                local new="profile__relacja-${name}__${stem}${sw}${v}"
-                grep -qxF "[template:$new]" "$workfile" && remove_template_section "$workfile" "$new"
-                local send prune keepn warn crit q
-                case "$v" in
-                    hourly)  send="1 * * * *";  prune="21 * * * *"; keepn=24; warn=90m;  crit=150m; q="" ;;
-                    daily)   send="11 1 * * *"; prune="31 1 * * *"; keepn=7;  warn=30h;  crit=48h;  q=auto,degrade ;;
-                    weekly)  send="21 2 * * 0"; prune="41 2 * * 0"; keepn=4;  warn=8d;   crit=10d;  q=auto,degrade ;;
-                    monthly) send="31 3 1 * *"; prune="51 3 1 * *"; keepn=12; warn=35d;  crit=40d;  q=auto,degrade ;;
-                    yearly)  send="31 3 1 1 *"; prune="51 3 1 1 *"; keepn=5;  warn=400d; crit=430d; q=auto,degrade ;;
-                esac
-                local body; body=$(cron_config_section "$workfile" "[template:$sib]" | tail -n +2)
-                local sret; sret=$(tiers_sec_field "$workfile" "[template:$sib]" retain)
-                local spat; spat=$(tiers_sec_field "$workfile" "[template:$sib]" pattern)
-                local sfam="automated_${sk#*_}"; [ "$sw" = "" ] && sfam="automated_$sk"
-                local newpat="$spat"; [ -z "$sw" ] && [ "$spat" = "$sfam" ] && newpat="automated_$v"   # own family per tier; a ladder rung keeps the ladder's one family
-                if [ -n "$sw" ]; then   # a rung prunes with the ladder, on the ladder's minute
-                    prune=$(tiers_sec_field "$workfile" "[template:$sib]" prune_schedule)
-                fi
-                local addq=0; [ -n "$(tiers_sec_field "$workfile" "[template:$sib]" send_schedule)" ] && addq=1
-                local lc="$L"; case "$sret" in -[hdwmy]*) lc=$(printf '%s' "$L" | tr 'A-Z' 'a-z') ;; esac
-                {
-                    printf '\n[template:%s]\n' "$new"
-                    printf '%s\n' "$body" | awk -v addq="$addq" -v send="$send" -v prune="$prune" -v pat="$newpat" -v ret="-$lc$keepn" -v pre="automated_${v}_" -v q="$q" -v w="$warn" -v c="$crit" '
-                        function key(l,  t) { t = l; sub(/^[ \t]+/, "", t); sub(/[ \t]*=.*$/, "", t); return t }
-                        /^[ \t]*$/ { next }
-                        { k = key($0) }
-                        k == "send_schedule"  { sub(/=.*/, "= " send) }
-                        k == "prune_schedule" { sub(/=.*/, "= " prune) }
-                        k == "pattern"        { sub(/=.*/, "= " pat) }
-                        k == "retain"         { sub(/=.*/, "= " ret) }
-                        k == "prefix"         { sub(/=.*/, "= " pre) }
-                        k == "monitor_warn"   { sub(/=.*/, "= " w) }
-                        k == "monitor_crit"   { sub(/=.*/, "= " c) }
-                        k == "quiesce"        { sawq = 1; if (q == "") next; sub(/=.*/, "= " q) }
-                        { print }
-                        END { if (!sawq && q != "" && addq == 1) printf "\tquiesce        = %s\n", q }'
-                } > "$workfile.add"
-                cat "$workfile.add" >> "$workfile" && rm -f "$workfile.add" || fail "could not write tier '$v'"
-                local h
-                while IFS= read -r h; do
-                    [ -n "$h" ] || continue
-                    local cur; cur=$(tiers_sec_field "$workfile" "$h" use_template)
-                    set_or_remove_section_field "$workfile" "$h" use_template "$cur,$new" || fail "could not add '$v' to $h"
-                    local ovs; ovs=$(tiers_sec_field "$workfile" "$h" "prune_schedule_$sib")
-                    [ -n "$ovs" ] && { set_or_remove_section_field "$workfile" "$h" "prune_schedule_$new" "$prune" || fail "could not schedule '$v' in $h"; }
-                done < "$hf"
-                changes+=("$v: added ($new, keeps $keepn)$([ "$hf" = "$hfS" ] && echo ' (source)')")
-                [ "$hf" = "$hfT" ] && [ -s "$hfS" ] && [ -z "$(side_tpl "$hfS" "$v")" ] && queue_after "--add-src-tier=$v" "--tier=$v"
-                key="$v" ;;
-            --method=*)
-                case "$v" in gfs|flat|age) ;; *) fail "--method='$v' -- gfs, flat or age" ;; esac
-                local hh t2 r2 n2 L2
-                for hh in "$hfT" "$hfS"; do
-                    [ -s "$hh" ] || continue
-                    local -a tl2=(); IFS=',' read -r -a tl2 <<<"$(tiers_sec_field "$workfile" "$(head -1 "$hh")" use_template)"
-                    for t2 in "${tl2[@]}"; do
-                        t2="${t2//[[:space:]]/}"; [ -n "$t2" ] || continue
-                        r2=$(tiers_sec_field "$workfile" "[template:$t2]" retain); [ -n "$r2" ] || continue
-                        t2=$(own_tpl "$hh" "$t2") || fail "could not take '$t2' over for '$name'"
-                        n2="${r2#-?}"; L2="${r2:1:1}"
-                        case "$v" in
-                            age)  L2=$(printf '%s' "$L2" | tr 'A-Z' 'a-z'); set_or_remove_section_field "$workfile" "[template:$t2]" gfs "" ;;
-                            flat) L2=$(printf '%s' "$L2" | tr 'a-z' 'A-Z'); set_or_remove_section_field "$workfile" "[template:$t2]" gfs "" ;;
-                            gfs)  L2=$(printf '%s' "$L2" | tr 'a-z' 'A-Z'); set_or_remove_section_field "$workfile" "[template:$t2]" gfs yes ;;
-                        esac
-                        set_or_remove_section_field "$workfile" "[template:$t2]" retain "-$L2$n2" || fail "could not set the method on $t2"
-                    done
-                done
-                changes+=("method: $v") ;;
-            --keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*)
-                [ -n "$key" ] || fail "'$op' names no tier -- put --tier=T (or --src-tier=T) before it"
-                tpl=$(side_tpl "$hf" "$key"); [ -n "$tpl" ] || fail "no tier '$key'$([ "$hf" = "$hfS" ] && echo ' on the source side')"
-                local fld
-                case "$op" in
-                    --keep=*) case "$v" in ''|*[!0-9]*|0*) fail "--keep='$v' -- a whole number above 0" ;; esac ;;
-                    --retain=*) case "$v" in -[HDWMYhdwmy][0-9]*) ;; *) fail "--retain='$v' -- like -D7 (count) or -d14 (age)" ;; esac ;;
-                    --send-schedule=*|--prune-schedule=*) [ "$(printf '%s' "$v" | wc -w)" -eq 5 ] || fail "'$op' -- five cron fields" ;;
-                esac
-                if [ "$op" = "--send-schedule=$v" ] || [ "$op" = "--prune-schedule=$v" ]; then
-                    # A per-section override (remote stagger) wins over the template; change what runs.
-                    fld="${op%%=*}"; fld="${fld#--}"; fld="${fld//-/_}"
-                    local h0; h0=$(head -1 "$hf")
-                    if [ -n "$(tiers_sec_field "$workfile" "$h0" "${fld}_$tpl")" ]; then
-                        local h
-                        while IFS= read -r h; do [ -n "$h" ] && { set_or_remove_section_field "$workfile" "$h" "${fld}_$tpl" "$v" || fail "could not set $fld in $h"; }; done < "$hf"
-                        changes+=("$key: $fld $v$([ "$hf" = "$hfS" ] && echo ' (source)')")
-                        continue
-                    fi
-                fi
-                local was="$tpl"; tpl=$(own_tpl "$hf" "$tpl") || fail "could not take '$was' over for '$name'"
-                case "$op" in
-                    --keep=*)
-                        local r; r=$(tiers_sec_field "$workfile" "[template:$tpl]" retain)
-                        [ -n "$r" ] || fail "tier '$key' counts nothing (no retain) -- nothing to set a number on"
-                        set_or_remove_section_field "$workfile" "[template:$tpl]" retain "-${r:1:1}$v" || fail "could not set keep on $tpl" ;;
-                    --retain=*) set_or_remove_section_field "$workfile" "[template:$tpl]" retain "$v" || fail "could not set retain on $tpl" ;;
-                    --quiesce=*) set_or_remove_section_field "$workfile" "[template:$tpl]" quiesce "$v" || fail "could not set quiesce on $tpl" ;;
-                    --send-schedule=*) set_or_remove_section_field "$workfile" "[template:$tpl]" send_schedule "$v" || fail "could not set send_schedule on $tpl" ;;
-                    --prune-schedule=*) set_or_remove_section_field "$workfile" "[template:$tpl]" prune_schedule "$v" || fail "could not set prune_schedule on $tpl" ;;
-                esac
-                changes+=("$key: ${op#--}$([ "$hf" = "$hfS" ] && echo ' (source)')") ;;
-        esac
-    done
-    rm -f "$hfT" "$hfS"
-    if [ -s "$workfile.notes" ]; then mapfile -t -O "${#changes[@]}" changes < "$workfile.notes"; fi
-    rm -f "$workfile.notes"
+    local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
+    tiers_apply_ops "$workfile" "$name" "${ops[@]}"
     log "validating the changed config (working copy only, nothing real touched yet)..."
     if ! gencron_as_target -c "$workfile" >/dev/null; then
         rm -f "$workfile"
@@ -7008,7 +7030,7 @@ cmd_set_tiers() {
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
     echo "Relacja '$name' -- szczeble:"
-    printf '  %s\n' "${changes[@]}"
+    printf '  %s\n' "${TIERS_CHANGES[@]}"
     if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
         echo "plan only -- nothing installed (add --yes to install)"
@@ -7017,6 +7039,8 @@ cmd_set_tiers() {
     EDIT_RELATION_NAME="$name"
     atomic_replace_and_install "$cronfile" "$workfile"
 }
+
+
 
 # clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
 # X22 (owner's GUI test, 2026-10-14): template sections NOTHING uses any more stay
