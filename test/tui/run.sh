@@ -1458,6 +1458,15 @@ else
     bad "nosniki: W19b klucz" "$(printf '%s' "$K1" | grep -E 'Szyfrowane|F8')" "$(printf '%s' "$K2" | grep -E 'Klucz|ab12' | head -2)" "$(printf '%s' "$K3" | tail -3)"
 fi
 rm -f "$RMK" "$KF"
+# X23 (wlasciciel 2026-10-14): F7 na wierszu REPLIKI na F2 uruchamia replike (jak F7 na F6),
+# zamiast "nie ma linii w cronie" -- wiersz repliki powstaje z list-replicas, bez linii crona.
+: > "$XL"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --replicas "$P10/replicas.json" --exec-log "$XL" --screen zadania --keys F7 --width 160 2>&1)"
+if has "$A" 'Replika sejf-a -- bieg teraz' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
+    ok "zadania: X23 -- F7 na wierszu repliki uruchamia run-replicas --name (jak F6)"
+else
+    bad "zadania: X23 F7 na replice" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
 nact() {   # <keys> -> ekran F6; dziennik komend w $XL (wyzerowany)
     : > "$XL"
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys "$1" 2>&1
@@ -2945,8 +2954,11 @@ RPOUT=$(rp_run "0${T}silnik
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb12","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"4242","on_insert":"no","history":"all"}]}' RP_NAME=usb12)
 RP12="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | head -1)"
-if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --history=newest --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja' && grep -qF 'Historia:   tylko różnica do najnowszej' "$RP/wt.log"; then
-    ok "replica: Ustawienia silnika -- historia i 'na dysku' zmienione, reszta repliki bez zmian; bez kompresji/szyfru (kopia lokalna)"
+# X10 (2026-10-14): wybor "6 ostatnich" kasuje wczesniejsze "tylko roznica" (sprzeczne) --
+# do add-replica nie idzie --history, wiersz Historia znika, plan mowi, co naprawde idzie.
+RPLAST="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | tail -1)"
+if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich zdjęć replica_' && grep -qF 'Historia:   tylko najnowsze zdjęcie replica_' "$RP/wt.log"; then
+    ok "replica: Ustawienia silnika -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
 else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
 fi
@@ -3157,7 +3169,7 @@ cat > "$ER/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    status)         echo '{"relations":[{"name":"r1","state":"active","profile":"d7h24","source_profile":"","peer_host":"192.168.28.99","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
+    status)         echo '{"relations":[{"name":"r1","state":"active","profile":"d7h24","source_profile":"","peer_host":"192.168.28.99","passive":"'"${ER_MIRROR:-0}"'","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
     list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
@@ -3166,8 +3178,11 @@ case "$1" in
                         [ -n "${ER_HAND:-}" ] && printf -- '--- proponowany config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
                     esac ;;
     list-datasets)  echo '{"datasets":[{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/data/mail"},{"name":"hdd/iso"},{"name":"hdd/vm"}]}' ;;
-    add-source|remove-source) echo ">>> atrapa: $1 $2 $3" ;;
-    show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"}}]}' ;;
+    add-source|remove-source)
+                    # X21: hdd/vm "lezy w celu" -- plan (bez --yes) odmawia, jak prawdziwy czasownik.
+                    if [ "$3" = hdd/vm ]; then echo "FATAL: add-source: target 'hdd/backups' overlaps 'hdd/vm' (atrapa)"; exit 1; fi
+                    echo ">>> atrapa: $1 $2 $3" ;;
+    show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"24","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
@@ -3211,6 +3226,19 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && g
 else
     bad "edit-relation: Datasety (W4)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Co kopiować|DOJD|ODPAD' "$ER/wt.log" | cut -c1-250)" "$(tail -3 "$ER/err")"
 fi
+# X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED WYKONAJ -- odmowa czasownika
+# (plan bez --yes) pokazana od razu, zadnego --yes, powrot do listy.
+EROUT=$(er_run "0${T}dane
+0${T}add
+0${T}hdd/vm
+0${T}next
+0${T}
+"); ERRC=$?
+if grep -qx 'add-source r1 hdd/vm' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^(add|remove)-source' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'DOJDĄ' "$ER/wt.log"; then
+    ok "edit-relation: X21 -- Datasety: odmowa czasownika pokazana PRZED WYKONAJ, nic nie wykonane"
+else
+    bad "edit-relation: X21 Datasety sprawdzane przed WYKONAJ" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -E 'Tej zmiany|DOJD' "$ER/wt.log" | cut -c1-200)"
+fi
 # W16: "Ustawienia silnika" -- obecne wartosci z show-config (kompresja none = "nie", bez
 # "(fabryczne)"), zmiana historii -> set-transfer --plan, po WYKONAJ ten sam z --yes.
 EROUT=$(er_run "0${T}silnik
@@ -3226,6 +3254,22 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/
     ok "edit-relation: Ustawienia silnika (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po WYKONAJ --yes"
 else
     bad "edit-relation: Ustawienia silnika (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
+fi
+# X10 (wlasciciel 2026-10-14): sprzecznych ustawien nie da sie wybrac -- wysylka zaszyfrowana
+# (raw) bez wiersza Kompresja, lustro (passive) bez wiersza Historia; kontrola: zwykla relacja ma oba.
+EROUT=$(ER_RAW=1 er_run "0${T}silnik
+1${T}
+"); ERW=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+EROUT=$(ER_MIRROR=1 er_run "0${T}silnik
+1${T}
+"); ERM=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+EROUT=$(er_run "0${T}silnik
+1${T}
+"); ERN=$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)
+if has "$ERW" 'Szyfrowane' && ! has "$ERW" 'Kompresja' && ! has "$ERM" 'Historia ' && has "$ERM" 'Kompresja'    && has "$ERN" 'Historia ' && has "$ERN" 'Kompresja'; then
+    ok "edit-relation: X10 -- raw bez Kompresji, lustro bez Historii; zwykla relacja ma oba"
+else
+    bad "edit-relation: X10 okno silnika" "raw: $(printf '%s' "$ERW" | cut -c1-250)" "lustro: $(printf '%s' "$ERM" | cut -c1-250)" "zwykla: $(printf '%s' "$ERN" | cut -c1-250)"
 fi
 # W1: okno "Zmien relacje" czyta szablony BEZ renderowania (16,6 s -> 1,8 s na pve9b).
 if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-profiles --json' "$ER/zb.log"; then
@@ -3246,6 +3290,31 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
     ok "edit-relation: Harmonogram i retencja -- szczeble z configu (show-tiers), jeden set-tiers --plan, WYKONAJ = --yes; bez ukrytego szablonu"
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+fi
+# X20 (wlasciciel 2026-10-14): Wstecz z okna zrodla wraca do tabeli celu, ktora pokazuje
+# WPISANA zmiane (dobowe 5), nie znow wartosc z configu (7); zmiana idzie do set-tiers raz.
+EROUT=$(er_run "0${T}harm
+1${T}
+0${T}
+" "down,down,right,bs,5,enter\nenter\nesc\nenter\nenter"); ERRC=$?
+ERT2=$(printf '%s' "$EROUT" | awk '/Harmonogram i retencja: W CELU KOPII/{n++} n==2' | grep -E '\] dobowe')
+if [ "$ERRC" -eq 0 ] && printf '%s' "$ERT2" | grep -qE '\[X\] dobowe +5 ' && grep -qx 'set-tiers r1 --tier=daily --keep=5 --yes' "$ER/zb.log"; then
+    ok "edit-relation: X20 -- po Wstecz tabela celu pamieta wpisana zmiane (dobowe 5), set-tiers dostaje ja raz"
+else
+    bad "edit-relation: X20 zmiana w tabeli celu po Wstecz" "rc=$ERRC" "druga tabela: $ERT2" "$(grep '^set-tiers' "$ER/zb.log")"
+fi
+# X15 (wlasciciel 2026-10-13): szczebel DODANY w tabeli celu jest w oknie zrodla (z liczba
+# jak w celu) -- okno zrodla widzi szczeble po zmianach w celu. set-tiers dostaje dodanie
+# i liczbe zrodla tego szczebla, bez drugiego dodawania.
+EROUT=$(er_run "0${T}harm
+0${T}
+" "down,down,down,space,enter\nenter"); ERRC=$?
+ERSRC=$(printf '%s' "$EROUT" | sed -n '/Retencja: W ŹRÓDLE KOPII/,$p')
+if [ "$ERRC" -eq 0 ] && printf '%s' "$ERSRC" | grep -q 'tygodniowe' \
+   && grep -qx 'set-tiers r1 --add-tier=weekly --src-tier=weekly --keep=4 --yes' "$ER/zb.log" && ! grep -q -- '--add-src-tier' "$ER/zb.log"; then
+    ok "edit-relation: X15 -- szczebel dodany w celu (tygodniowe) jest w oknie zrodla; set-tiers --add-tier + --src-tier, bez podwojnego dodania"
+else
+    bad "edit-relation: X15 nowy szczebel w oknie zrodla" "rc=$ERRC" "$(grep '^set-tiers' "$ER/zb.log")" "$(printf '%s' "$ERSRC" | grep -E 'godzin|dobow|tygod')"
 fi
 # Wstecz z planu = okno zrodla (trzecia tabela), Wstecz tam = tabela celu (czwarta), Esc = menu;
 # nic nie zainstalowane, zadnego pliku szablonu.

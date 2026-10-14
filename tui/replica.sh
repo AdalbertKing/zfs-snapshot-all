@@ -184,8 +184,12 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
     while :; do
         geom
         items=(mig "Migawki          $([ "$p_pas" = yes ] && echo "cała historia (istniejące)" || echo "tylko stan na chwilę kopii (własne replica_)")")
-        items+=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = all ] && echo ' (fabryczne)')")
-        [ "$p_pas" = yes ] || items+=(disk "Na dysku         $([ -n "$p_keep" ] && echo "$p_keep ostatnich kopii" || echo "odbicie kolektora (fabryczne)")")
+        # X10 (właściciel 2026-10-12/14): sprzecznych ustawień nie da się wybrać. "Cała historia"
+        # przenosi wszystkie istniejące migawki, a "N ostatnich zdjęć" -- tylko zdjęcia replica_
+        # (silnik wysyła wtedy samo najnowsze: pośrednie trafiałyby na dysk bez sprzątania).
+        # W obu wiersz Historia nie ma czego wybierać.
+        [ "$p_pas" != yes ] && [ -z "$p_keep" ] && items+=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = all ] && echo ' (fabryczne)')")
+        [ "$p_pas" = yes ] || items+=(disk "Na dysku         $([ -n "$p_keep" ] && echo "$p_keep ostatnich zdjęć replica_ (pośrednie nie trafiają)" || echo "odbicie kolektora (fabryczne)")")
         [ "$RAW" = yes ] && items+=(raw "Szyfrowane       wysyłka zaszyfrowana (raw)")
         items+=(__done__ "Gotowe")
         wt --title "Ustawienia silnika: replika $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
@@ -196,7 +200,7 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
                    --menu "Jakie migawki ma przenosić replika?" 10 "$W" 2 \
                    passive "Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca" \
                    own "Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca" || continue
-                [ "$WT_OUT" = passive ] && { p_pas=yes; p_keep=""; } || p_pas=no ;;
+                [ "$WT_OUT" = passive ] && { p_pas=yes; p_keep=""; p_h=all; } || p_pas=no ;;
             hist)
                 wt --title "Historia" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${p_h%%:*}" \
                    --menu "Co przenosić, gdy na dysku brakuje kilku migawek." 11 "$W" 3 \
@@ -222,7 +226,7 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
                     wt --title "Ile kopii na dysku" --ok-button "Dalej" --cancel-button "Wstecz" \
                        --inputbox "Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?" 9 "$W" "${p_keep:-12}" || continue
                     case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba całkowita większa od 0." 8 "$W"; continue ;; esac
-                    p_keep="$WT_OUT"
+                    p_keep="$WT_OUT"; p_h=all
                 else
                     p_keep=""
                 fi ;;
@@ -538,7 +542,11 @@ PYEOF
             echo "Migawki:    $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące, bez własnych)" || echo "stan na chwilę kopii (własne, replica_)")"
             [ "$PASSIVE" = yes ] || echo "Na dysku:   $([ -n "$KEEP" ] && echo "$KEEP ostatnich kopii, niezależnie od kolektora" || echo "odbicie kolektora")"
             [ "$RAW" = yes ] && echo "Szyfrowane: źródło jest zaszyfrowane -- kopia idzie zaszyfrowana (raw), kolektor nie potrzebuje klucza"
-            echo "Historia:   $(eng_hist_words "$HIST")"
+            # X10: przy "cała historia" i przy "N ostatnich" Historia nie jest wyborem -- plan mówi,
+            # co naprawdę idzie, a nie wartość, której silnik nie użyje.
+            if [ "$PASSIVE" = yes ]; then echo "Historia:   wszystkie istniejące migawki (lustro kolektora)"
+            elif [ -n "$KEEP" ]; then echo "Historia:   tylko najnowsze zdjęcie replica_ (pośrednie nie trafiają)"
+            else echo "Historia:   $(eng_hist_words "$HIST")"; fi
             echo "Nośnik:     $DST  ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
             if [ "$MEDIA" = removable ]; then
                 if [ -n "$GUIDS" ]; then echo "Dyski:      $(printf '%s' "$GUIDS" | tr ',' '\n' | grep -c .) (po ID puli: ${GUIDS//,/, }) -- inny dysk z tą nazwą puli nie zostanie użyty"

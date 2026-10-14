@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fc70d7ad5440fc55 -->
+<!-- status-covers-digest: 8f88a07cac424c76 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,21 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **Uwagi z testów właściciela, paczka 1 (2026-10-13/14).** „Harmonogram i retencja”: okno
+  źródła widzi szczeble PO zmianach w tabeli celu — dodany szczebel z liczbą celu, usunięty
+  znika (X15); zmiany tabeli celu się sumują i po Wstecz z okna źródła tabela pokazuje
+  wpisaną zmianę zamiast znów wartości z configu (X20). F2: F7 na wierszu repliki uruchamia
+  `run-replicas --name` jak na F6 — wiersz repliki nie niesie linii crona, więc wcześniej F7
+  zawsze odmawiał (X23). Szczegóły relacji mówią „Powstała z: …” (ukryty szablon = „własne
+  ustawienia relacji”) zamiast „Szablon / Szablon źródła”, a tabela relacji „Liczby i sposób są z
+  configu tej relacji” (X19). Sprzecznych ustawień nie da się wybrać (X10): replika „cała
+  historia” i replika „N ostatnich zdjęć” nie pokazują wiersza Historia (wybór N kasuje
+  wcześniejsze „tylko różnica”; plan mówi, co naprawdę idzie), lustro (synchro) nie pokazuje
+  Historii, wysyłka zaszyfrowana (raw) nie pokazuje Kompresji. „Datasety” w „Zmień relację”
+  pyta czasownik o każdą zmianę (`add-source`/`remove-source` bez `--yes`) PRZED WYKONAJ —
+  odmowa (np. dataset w celu kopii) wraca do listy, zamiast przyjść po WYKONAJ (X21); komend
+  w oknie planu już nie ma. Testy: `tui` 276/0 (+5: X15, X20, X21, X23, X10).
 
 - **Pośrednik „ukryty szablon uzgadniany z configiem” usunięty (etap C, właściciel 2026-10-13).**
   Krok 1 tego dnia (`sync-relation-profile`, uzgadnianie ukrytych szablonów relacji z configiem

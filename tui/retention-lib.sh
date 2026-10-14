@@ -76,9 +76,12 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
             if [ "${SRC_ARGS_BASE:-}" = target ]; then cur="${tk[$i]}"
             else cur=$(awk -F'\t' -v s="${CUR_S:-}" -v t="${tn[$i]}" '$1==s && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); fi
             cur="${cur:-0}"
-            [ "${sk[$i]}" = "$cur" ] && continue
+            # X15: szczebel dodany w tabeli celu -- set-tiers doda go po obu stronach; tu tylko
+            # jego liczba u źródła, zawsze (dodany dostaje inaczej liczbę domyślną).
+            local isnew=0; case " ${SRC_NEW_TIERS:-} " in *" ${tn[$i]} "*) isnew=1 ;; esac
+            [ "$isnew" -eq 0 ] && [ "${sk[$i]}" = "$cur" ] && continue
             if [ "${sk[$i]}" = 0 ]; then echo "--drop-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"; continue; fi
-            [ "$cur" = 0 ] && echo "--add-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
+            [ "$isnew" -eq 0 ] && [ "$cur" = 0 ] && echo "--add-src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
             echo "--src-tier=${tn[$i]}" >>"$SRC_ARGS_OUT"
             case "${tm[$i]}" in
                 retain:*) echo "--retain=-${tm[$i]#retain:}${sk[$i]}" >>"$SRC_ARGS_OUT" ;;
