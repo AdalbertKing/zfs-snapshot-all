@@ -66,9 +66,18 @@ chmod +x "$WORK/bin/zfs" "$WORK/bin/crontab"
 # shellcheck disable=SC1090
 source "$ZB"
 
+# X27 (owner 2026-10-14): every local copy is a named relationship -- a call that names
+# none gets --name=lb here, and its record (if it installs) goes to a fresh directory
+# unless the caller set CLIENTS_DIR, so a rerun is not "the name is taken".
+lb_args() {   # args... -> LB_ARGS with --name=lb when none was given
+    LB_ARGS=("$@")
+    case " $* " in *" --name="*) ;; *) LB_ARGS+=(--name=lb) ;; esac
+}
 run() {   # cmd_local_backup args... ; stubbed PATH, no server.conf, real profiles
+    lb_args "$@"
     ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      cmd_local_backup "$@" ) 2>&1
+      CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
 # ---- accepted: overlap self-reference refuses, all three directions ----
@@ -117,29 +126,22 @@ out="$(run --source=rpool/db --target=hdd/backups --profile=default --config="$W
 # two independent entries, both reaching the cron -- is unchanged and is what
 # is asserted; the single-line shape was incidental to it.
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mc.conf")"; rc=$?
-mc_data="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/data" "hdd/backups"')"
-mc_vm="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" "rpool/vmstore" "hdd/backups"')"
+# X27 (2026-10-14): both sources are ONE relationship (one [relation:] block), so
+# they ride one send line per tier -- the comma list is snapsend's own argument.
+mc_both="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" -L lb "rpool/data,rpool/vmstore" "hdd/backups"')"
 if [ "$rc" -eq 0 ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]' \
-        && [ "$mc_data" -ge 1 ] && [ "$mc_vm" -ge 1 ]; then
+        && [ "$mc_both" -eq 1 ]; then
     ok "101/comma-list: two independent source entries, both in the rendered cron"
 else
     bad "101/comma-list: two independent source entries, both in the rendered cron" \
         "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snapsend' | head)"
 fi
-# ...and on DIFFERENT minutes, which is what keeps each line's identity stable
-# when a third source joins later.
-# Taken from the ENGINE call, not from the envelope: the envelope moved to
-# zfs-job.sh on 2026-08-30 and a pattern anchored on its `echo ... ZFS-JOB
-# BEGIN` counted zero, which reads as 'both sends on one minute' -- the exact
-# failure this case exists to catch, reported for a reason that had nothing to
-# do with the stagger. The minute and the engine call are what the claim is
-# about; how the line is wrapped is not.
-mc_min="$(printf '%s\n' "$out" | grep -E 'snapsend[.]sh -m \"automated_hourly_\"' | awk '{print $1}' | sort -u | grep -c .)"
-[ "${mc_min:-0}" -ge 2 ] \
-    && ok "101/comma-list: the two sends land on different minutes (no merge, stable identities)" \
-    || bad "101/comma-list: the two sends land on different minutes" "distinct minutes: ${mc_min:-0}"
+# The KROK 5 stagger (each local source on its own minute) is gone with X27: it
+# kept one source's line stable when a SECOND, unnamed run added another. Now a
+# source joins a relationship through add-source, which rewrites that
+# relationship's own line on purpose, and another relationship is another block.
 # one missing member in a 3-root request -> hard refuse, NO partial candidate.
 out="$(run --source=rpool/data,rpool/nope,hdd/dokumenty --target=hdd/backups --config="$WORK/m3.conf")"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'does not exist' \
@@ -173,12 +175,14 @@ fi
 # per root; target retention = a [prune:<target>]. Both initialized from the same
 # GFS ladder but rendered as separate, independent sections.
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ret.conf")"; rc=$?
+# X27: the source side is the [dataset:] section itself (its tiers prune the source,
+# family per tier), the target side is the landing [prune:<target>/<source>].
 if [ "$rc" -eq 0 ] \
-        && printf '%s\n' "$out" | grep -q '^\[prune:rpool/data\]' \
-        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups\]'; then
-    ok "102/candidate carries BOTH a source [prune:root] and a target [prune:target]"
+        && printf '%s\n' "$out" | sed -n '/^\[dataset:rpool\/data\]/,/^\[/p' | grep -qE '^\s*side\s*=\s*source$' \
+        && printf '%s\n' "$out" | sed -n '/^\[prune:hdd\/backups\/rpool\/data\]/,/^\[/p' | grep -qE '^\s*side\s*=\s*target$'; then
+    ok "102/candidate carries BOTH a source side ([dataset:root]) and a target side ([prune:target/root])"
 else
-    bad "102/candidate carries BOTH a source [prune:root] and a target [prune:target]" \
+    bad "102/candidate carries BOTH a source side and a target side" \
         "rc=$rc $(printf '%s\n' "$out" | grep -E '^\[prune:' | head)"
 fi
 # the rendered cron has two INDEPENDENT delsnaps prune lines -- one on the source
@@ -189,10 +193,11 @@ fi
 # recursive source prune (-R) would walk into children like rpool/data/vm-101 and
 # could destroy automated_ snapshots owned by another/manual policy that this
 # relationship never backs up. The target prune stays recursive over the store.
-src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -P .*"rpool/data" "automated_" -H24 -D7 -W4 -M12')"
-src_recursive="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"rpool/data" "automated_"')"
-tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -R .*"hdd/backups" "automated_" -H24 -D7 -W4 -M12')"
-if [ "$src_prune" -ge 1 ] && [ "$tgt_prune" -ge 1 ]; then
+# X27: one prune line per tier and side, each on its own family.
+src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -L lb .*"rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M12)')"
+src_recursive="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data" "automated_' | grep -c -- ' -R ')"
+tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -R -L lb .*"hdd/backups/rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M12)')"
+if [ "$src_prune" -eq 4 ] && [ "$tgt_prune" -eq 4 ]; then
     ok "102/rendered cron prunes source AND target independently, same ladder"
 else
     bad "102/rendered cron prunes source AND target independently, same ladder" "src=$src_prune tgt=$tgt_prune"
@@ -208,7 +213,7 @@ else
 fi
 # only the tool-owned pattern is matched -> manual/foreign snapshots survive
 # (the source prune's delsnaps pattern is "automated_", never "*").
-if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G -P .*"rpool/data" "automated_"' \
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/data" "automated_hourly"' \
         && ! printf '%s\n' "$out" | grep -qE 'delsnaps\.sh[^\n]*"rpool/data" "\*"'; then
     ok "102/source prune is bounded to automated_ -- manual snapshots survive"
 else
@@ -216,176 +221,89 @@ else
 fi
 # each root gets its OWN source prune (multi-source), plus one target prune.
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/retm.conf")"
-if printf '%s\n' "$out" | grep -q '^\[prune:rpool/data\]' \
-        && printf '%s\n' "$out" | grep -q '^\[prune:rpool/vmstore\]' \
-        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups\]'; then
-    ok "102/each root gets its own source prune, plus one target prune"
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/data" "automated_hourly"' \
+        && printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/vmstore" "automated_hourly"' \
+        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups/rpool/data\]' \
+        && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups/rpool/vmstore\]'; then
+    ok "102/each root gets its own source prune, and its own landing prune on the target"
 else
     bad "102/each root gets its own source prune, plus one target prune" \
         "$(printf '%s\n' "$out" | grep -E '^\[prune:' | tr '\n' ' ')"
 fi
-# negative control: the source [prune:root] is the NEW behaviour. The reviewed
-# base (5423518) emitted only [prune:target]; asserting [prune:rpool/data] is
-# present is therefore discriminating -- an old generator would fail it. (An
-# out-of-band ZB=<old checkout> run confirms the base omits the source prune.)
 
 # ---- REV-20260811-104 F1: source and target retention are INDEPENDENT policies ----
-# Two [prune:] scopes are not enough; they must reference DISTINCT prune-template
-# identities so editing one side does not change the other. Extract the candidate
-# CONFIG from the plan, then prove independent editing.
+# X27: one [relation:] block holds both sides. A value common to both is one field
+# (`monthly.retain`); a side-specific one is `monthly.source_retain` /
+# `monthly.target_retain`. Editing one side must move that side only.
+# (REV-106, "the split must not depend on keep_* template names", is moot: the
+# block names its sides explicitly, nothing is derived from a template name.)
 out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/ind.conf")"
 printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/ind-cand.conf"
-# distinct template identities: a source family (__lsrc_keep_*) AND a target family
-# (__keep_*), both present.
-if grep -q '^\[template:profile__default__lsrc_keep_hourly\]' "$WORK/ind-cand.conf" \
-        && grep -q '^\[template:profile__default__keep_hourly\]' "$WORK/ind-cand.conf" \
-        && grep -q 'use_template = profile__default__lsrc_keep_' "$WORK/ind-cand.conf" \
-        && grep -q 'use_template = profile__default__keep_' "$WORK/ind-cand.conf"; then
-    ok "104 F1/source and target reference DISTINCT prune-template identities"
-else
-    bad "104 F1/source and target reference DISTINCT prune-template identities" \
-        "$(grep -E '^\[template:|use_template' "$WORK/ind-cand.conf" | head)"
-fi
-# render helper: retain shown on the source (rpool/data) vs target (hdd/backups) line.
-lb_render_retain() {  # <config> <scope> -> the -M value on that scope's prune line
+lb_render_retain() {  # <config> <scope> -> the -M value on that scope's monthly prune line
     env -u REPO_DIR -u NOTIFY_SCRIPT -u WARN_SCRIPT -u DIGEST_SCRIPT -u CRON_LOG -u DIGEST_SCHEDULE \
-        bash "$GEN" -c "$1" 2>/dev/null | grep -oE "\"$2\" \"automated_\" -H24 -D7 -W4 -M[0-9]+" | grep -oE 'M[0-9]+' | head -1
+        bash "$GEN" -c "$1" 2>/dev/null | grep -oE "\"$2\" \"automated_monthly\" -M[0-9]+" | grep -oE 'M[0-9]+' | head -1
 }
 GEN="$REPO/gen-cron.sh"
-# mutate ONLY the source family's monthly retain -M12 -> -M36
-awk '/\[template:profile__default__lsrc_keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-src.conf"
+if grep -qE '^\s*monthly\.retain\s*=\s*-M12$' "$WORK/ind-cand.conf" \
+   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'rpool/data')" = "M12" ] \
+   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'hdd/backups/rpool/data')" = "M12" ]; then
+    ok "104 F1/both sides start from the profile's retention, as one common field"
+else
+    bad "104 F1/both sides start from the profile's retention" \
+        "$(grep -E 'monthly\.' "$WORK/ind-cand.conf")"
+fi
+lb_side_retain() {  # <side> <value> -> the candidate with monthly split, that side at <value>
+    local other; [ "$1" = source ] && other=target || other=source
+    sed -E "s/^(\s*)monthly\.retain(\s*)=.*/\1monthly.$1_retain = $2\n\1monthly.${other}_retain = -M12/" "$WORK/ind-cand.conf"
+}
+lb_side_retain source -M36 > "$WORK/mut-src.conf"
 if [ "$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data')" = "M36" ] \
-        && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups')" = "M12" ]; then
+        && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups/rpool/data')" = "M12" ]; then
     ok "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged"
 else
     bad "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged" \
-        "src=$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups')"
+        "src=$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups/rpool/data')"
 fi
-# mutate ONLY the target family's monthly retain -> the converse
-awk '/\[template:profile__default__keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M60");f=0} {print}' "$WORK/ind-cand.conf" > "$WORK/mut-tgt.conf"
-if [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups')" = "M60" ] \
+lb_side_retain target -M60 > "$WORK/mut-tgt.conf"
+if [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups/rpool/data')" = "M60" ] \
         && [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')" = "M12" ]; then
     ok "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged"
 else
     bad "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged" \
-        "tgt=$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups') src=$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')"
+        "tgt=$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups/rpool/data') src=$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')"
 fi
-# negative control: prove the distinctness is load-bearing -- if BOTH scopes shared
-# one template family (the 49d547ae shape), the src mutation above would also move
-# the target. Build a valid shared-shape config: drop the __lsrc_keep_ template
-# definitions and point the source prune at the target's __keep_ family.
-awk '/^\[template:profile__default__lsrc_keep_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/ind-cand.conf" \
-    | sed '/^\tuse_template/ s/__lsrc_keep_/__keep_/g' > "$WORK/shared.conf"
-awk '/\[template:profile__default__keep_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' "$WORK/shared.conf" > "$WORK/shared-mut.conf"
+# negative control: the COMMON field is what couples them -- edit it and both move.
+sed -E 's/^(\s*monthly\.retain\s*=\s*)-M12$/\1-M36/' "$WORK/ind-cand.conf" > "$WORK/shared-mut.conf"
 if [ "$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data')" = "M36" ] \
-        && [ "$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')" = "M36" ]; then
-    ok "104 F1/negctl: a SHARED template family couples both sides (why distinct identities matter)"
+        && [ "$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups/rpool/data')" = "M36" ]; then
+    ok "104 F1/negctl: the common field couples both sides (why the split fields matter)"
 else
-    bad "104 F1/negctl: a SHARED template family couples both sides" \
-        "src=$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups')"
-fi
-
-# ---- REV-20260811-106 F1: the source/target split is profile-agnostic ----
-# The split must not depend on a `keep_*` naming convention. Build a VALID custom
-# profile whose prune templates are named ret_* (no `keep_`), by copying the
-# built-in default and renaming keep_ -> ret_ (preserves structure and tabs), then
-# prove the SOURCE family is still derived and distinct.
-mkdir -p "$WORK/profiles/custret"
-sed 's/keep_/ret_/g' "$REPO/profiles/default.conf" > "$WORK/profiles/custret.conf"
-run_custret() {  # like run(), but PROFILE_ROOT points at the temp custom profile
-    ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$WORK/profiles" \
-      cmd_local_backup "$@" ) 2>&1
-}
-out="$(run_custret --source=rpool/data --target=hdd/backups --profile=custret --config="$WORK/cust.conf")"; rc=$?
-printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/cust-cand.conf"
-# it must actually have planned (a ret_* profile is valid input)
-{ [ "$rc" -eq 0 ] && grep -q '^\[dataset:rpool/data\]' "$WORK/cust-cand.conf"; } \
-    && ok "106/custom ret_* profile plans successfully" \
-    || bad "106/custom ret_* profile plans successfully" "rc=$rc $(printf '%s' "$out"|tail -1)"
-# distinct identities for a name that does NOT contain keep_: a SOURCE family
-# (__lsrc_ret_*) exists AND the source prune points at it, not at the target's __ret_*.
-if grep -q '^\[template:profile__custret__lsrc_ret_hourly\]' "$WORK/cust-cand.conf" \
-        && grep -q '^\[template:profile__custret__ret_hourly\]' "$WORK/cust-cand.conf" \
-        && grep -q 'use_template = profile__custret__lsrc_ret_' "$WORK/cust-cand.conf" \
-        && grep -q 'use_template = profile__custret__ret_' "$WORK/cust-cand.conf"; then
-    ok "106 F1/custom profile gets DISTINCT source vs target template identities"
-else
-    bad "106 F1/custom profile gets DISTINCT source vs target template identities" \
-        "$(grep -E '^\[template:|use_template' "$WORK/cust-cand.conf" | head)"
-fi
-# equal INITIAL retention on both sides (copied from the profile's actual policy)
-if [ "$(lb_render_retain "$WORK/cust-cand.conf" 'rpool/data')" = "M12" ] \
-        && [ "$(lb_render_retain "$WORK/cust-cand.conf" 'hdd/backups')" = "M12" ]; then
-    ok "106 F1/custom profile: SOURCE and TARGET start from EQUAL retention"
-else
-    bad "106 F1/custom profile: SOURCE and TARGET start from EQUAL retention" \
-        "src=$(lb_render_retain "$WORK/cust-cand.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-cand.conf" 'hdd/backups')"
-fi
-# mutate ONLY the source family -> only the source cron line moves
-awk '/\[template:profile__custret__lsrc_ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
-    "$WORK/cust-cand.conf" > "$WORK/cust-mut-src.conf"
-if [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'rpool/data')" = "M36" ] \
-        && [ "$(lb_render_retain "$WORK/cust-mut-src.conf" 'hdd/backups')" = "M12" ]; then
-    ok "106 F1/custom: editing only SOURCE changes SOURCE, TARGET unchanged"
-else
-    bad "106 F1/custom: editing only SOURCE changes SOURCE, TARGET unchanged" \
-        "src=$(lb_render_retain "$WORK/cust-mut-src.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-mut-src.conf" 'hdd/backups')"
-fi
-# mutate ONLY the target family -> the converse
-awk '/\[template:profile__custret__ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M60");f=0} {print}' \
-    "$WORK/cust-cand.conf" > "$WORK/cust-mut-tgt.conf"
-if [ "$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'hdd/backups')" = "M60" ] \
-        && [ "$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'rpool/data')" = "M12" ]; then
-    ok "106 F1/custom: editing only TARGET changes TARGET, SOURCE unchanged"
-else
-    bad "106 F1/custom: editing only TARGET changes TARGET, SOURCE unchanged" \
-        "tgt=$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'hdd/backups') src=$(lb_render_retain "$WORK/cust-mut-tgt.conf" 'rpool/data')"
-fi
-# negative control: the retired `__keep_` textual rewrite is a NO-OP on ret_* names,
-# so under 799bd0d the custom SOURCE would have shared the TARGET's family. Prove
-# the coupling directly: point the source prune back at the target family (what the
-# no-op rewrite leaves) and show one edit moves BOTH sides.
-awk '/^\[template:profile__custret__lsrc_ret_/{skip=1;next} /^\[/{skip=0} !skip' "$WORK/cust-cand.conf" \
-    | sed '/use_template/ s/__lsrc_ret_/__ret_/g' > "$WORK/cust-shared.conf"
-old_noop="$(printf 'use_template = profile__custret__ret_hourly\n' | sed 's/__keep_/__lsrc_keep_/g')"
-[ "$old_noop" = 'use_template = profile__custret__ret_hourly' ] \
-    && ok "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" \
-    || bad "106 negctl/the old __keep_ rewrite is a no-op on a ret_* profile" "$old_noop"
-awk '/\[template:profile__custret__ret_monthly\]/{f=1} f&&/retain/{sub(/-M12/,"-M36");f=0} {print}' \
-    "$WORK/cust-shared.conf" > "$WORK/cust-shared-mut.conf"
-if [ "$(lb_render_retain "$WORK/cust-shared-mut.conf" 'rpool/data')" = "M36" ] \
-        && [ "$(lb_render_retain "$WORK/cust-shared-mut.conf" 'hdd/backups')" = "M36" ]; then
-    ok "106 negctl/a shared family couples both sides (why the profile-agnostic split matters)"
-else
-    bad "106 negctl/a shared family couples both sides" \
-        "src=$(lb_render_retain "$WORK/cust-shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/cust-shared-mut.conf" 'hdd/backups')"
+    bad "104 F1/negctl: the common field couples both sides" \
+        "src=$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data') tgt=$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups/rpool/data')"
 fi
 
 # ---- F2: additive composition over an existing config ----
-cat > "$WORK/existing.conf" <<'EOF'
-[defaults]
-	host_label = h
-[dataset:rpool/other]
-	# managed-by: zfs-backup.sh local-backup source=rpool/other
-	use_template = profile__default__standard_hourly
-	dst          = hdd/backups/other
-	notify       = local-other
-EOF
-a_before="$(sed -n '/\[dataset:rpool\/other\]/,/notify       = local-other/p' "$WORK/existing.conf")"
+# The existing relationship A is a real one, planned by this command (X27: a hand-
+# written section would need a block, and copying the block shape here would be a
+# second author of it).
+out="$(run --name=inna --source=rpool/other --target=hdd/backups/other --profile=d7h24 --config="$WORK/existing-src.conf")"
+printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/existing.conf"
+cp "$WORK/existing.conf" "$WORK/existing.orig"
+a_before="$(sed -n '/^\[relation:inna\]/,$p' "$WORK/existing.conf")"
 out="$(run --source=rpool/data --target=hdd/store --config="$WORK/existing.conf")"; rc=$?
-a_after="$(printf '%s\n' "$out" | sed -n '/\[dataset:rpool\/other\]/,/notify       = local-other/p')"
-if [ "$rc" -eq 0 ] && [ "$a_before" = "$a_after" ] \
+a_after="$(printf '%s\n' "$out" | sed -n '/^--- kandydat CONFIG v4/,/^--- wygenerowany/p' | sed -n '/^\[relation:inna\]/,/^\[relation:lb\]/p' | sed '$d')"
+if [ "$rc" -eq 0 ] && [ -n "$a_before" ] && [ "$(printf '%s' "$a_before" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" = "$(printf '%s' "$a_after" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; then
     ok "F2/additive: existing A is byte-unchanged and B is added"
 else
-    bad "F2/additive: existing A is byte-unchanged and B is added" "rc=$rc"
+    bad "F2/additive: existing A is byte-unchanged and B is added" "rc=$rc" "$(diff <(printf '%s\n' "$a_before") <(printf '%s\n' "$a_after") | head -6)"
 fi
 # the rendered cron carries BOTH jobs (add B, do not lose A)
-sends="$(printf '%s\n' "$out" | grep -oE 'snapsend\.sh -m "automated_hourly_" "rpool/(other|data)"' | sort -u | wc -l)"
+sends="$(printf '%s\n' "$out" | grep -oE 'snapsend\.sh -m "automated_hourly_" -L (inna|lb) "rpool/(other|data)"' | sort -u | wc -l)"
 [ "$sends" -eq 2 ] && ok "F2/rendered cron carries both A and B send lines" \
     || bad "F2/rendered cron carries both A and B send lines" "distinct sends=$sends"
 # the real target CONFIG on disk was not touched
-[ "$(cat "$WORK/existing.conf")" = "$(printf '[defaults]\n\thost_label = h\n[dataset:rpool/other]\n\t# managed-by: zfs-backup.sh local-backup source=rpool/other\n\tuse_template = profile__default__standard_hourly\n\tdst          = hdd/backups/other\n\tnotify       = local-other')" ] \
+cmp -s "$WORK/existing.conf" "$WORK/existing.orig" \
     && ok "F2/the real target config file is not mutated by planning" \
     || bad "F2/the real target config file is not mutated by planning" ""
 
@@ -399,11 +317,13 @@ out="$(run --source=rpool/other --target=hdd/fresh --config="$WORK/existing.conf
 cat > "$WORK/multi.conf" <<'EOF'
 [defaults]
 	host_label = h
+[template:multi_hourly]
+	prune_schedule = 21 * * * *
+	pattern        = automated_hourly
+	retain         = -H24
 [prune:rpool/other,rpool/data]
 	# managed-by: zfs-backup.sh local-backup source=multi
-	use_template = profile__default__keep_hourly,profile__default__keep_daily,profile__default__keep_weekly,profile__default__keep_monthly
-	gfs          = yes
-	gfs_pattern  = automated_
+	use_template = multi_hourly
 	recursive    = yes
 	notify       = local-multi
 EOF
@@ -432,12 +352,12 @@ out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/brandnew.con
 
 # ---- F3: the bare public entrypoint reaches the same planning logic ----
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target=hdd/backups --config="$WORK/bare.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --name=lb --config="$WORK/bare.conf" 2>&1 )"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; } \
     && ok "F3/bare --source/--target reaches the planning logic" || bad "F3/bare --source/--target reaches the planning logic" "rc=$rc"
 # the alias still works too
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" local-backup --source=rpool/data --target=hdd/backups --config="$WORK/alias.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" local-backup --name=lb --source=rpool/data --target=hdd/backups --config="$WORK/alias.conf" 2>&1 )"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; } \
     && ok "F3/local-backup alias still reaches the same logic" || bad "F3/local-backup alias still reaches the same logic" "rc=$rc"
 
@@ -506,9 +426,10 @@ chmod +x "$WORK/seedbin/snapsend-ok" "$WORK/seedbin/snapsend-fail"
 
 runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
+    lb_args "$@"
     ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/$stub" \
-      cmd_local_backup "$@" ) <<< "$answer" 2>&1
+      SNAPSEND="$WORK/seedbin/$stub" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      cmd_local_backup "${LB_ARGS[@]}" ) <<< "$answer" 2>&1
 }
 
 # The crontab stub claims $WORK/claimed.conf, so that is the only config path an
@@ -636,11 +557,8 @@ printf '%s' "$out" | grep -q "relationship 'lok' already exists on this host" \
 fi   # flock present
 # Each refusal below on a fresh config: the install above left lok's sections in
 # $CFG, and an overlap refusal would hide the one these cases are about.
-rm -f "$WORK/crontab-store"; seed_cfg
-out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --source=rpool/data --target='' --recursive=flat --name=x --config="$CFG")"
-printf '%s' "$out" | grep -q -- '--name makes a relationship that COPIES' \
-    && ok "local relationship: --name with --target='' (nothing copied) is refused" \
-    || bad "local relationship: --name without a target" "$(printf '%s' "$out" | tail -3)"
+# (--name with --target='' was refused until X27; a named snapshots-only
+# relationship is the normal shape now -- see "named snapshots-only" below.)
 rm -f "$WORK/crontab-store"; seed_cfg
 out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --exclude-child='^x$' --config="$CFG")"
 printf '%s' "$out" | grep -q -- '--exclude-child needs --recursive=flat' \
@@ -809,44 +727,6 @@ if [ "$ov" = "27 * * * *" ] && [ "$bp" = "21 * * * *" ] && [ "$r7" -ne 0 ] && [ 
 else
     bad "set-tiers: override / rejected / old shape" "override=[$ov] block=[$bp] rc7=$r7 rc8=$r8" "$o6" "$o7" "$o8"
 fi
-# X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
-# uses (profile__* left by profiles applied earlier); a used one and a hand-named one
-# stay; without --yes the file is untouched; nothing unused = nothing to do.
-ct_run() {   # <args...> -> output; config in $ST/ct.conf
-    ( cron_context_resolve() { CRON_CTX_FILE="$ST/ct.conf"; }
-      read_server_conf() { :; }
-      assert_cron_config_matches_installed() { :; }
-      gencron_as_target() { return 0; }
-      show_activation_proposal() { :; }
-      atomic_replace_and_install() { cp "$2" "$1"; }
-      cmd_clean_templates "$@" ) 2>&1
-}
-cat > "$ST/ct.conf" <<'EOF'
-[template:profile__relacja-sl__hourly]
-	retain = -H24
-
-[template:profile__d30h24__daily]
-	retain = -D30
-
-[template:mine]
-	retain = -D3
-
-[dataset:rpool/a]
-	pair_label   = sl
-	use_template = profile__relacja-sl__hourly
-EOF
-cp "$ST/ct.conf" "$ST/ct.before"
-ctp=$(ct_run); ct_same=0; cmp -s "$ST/ct.conf" "$ST/ct.before" && ct_same=1
-cty=$(ct_run --yes)
-ct_gone=$(grep -c '^\[template:profile__d30h24__daily\]' "$ST/ct.conf"); ct_used=$(grep -c '^\[template:profile__relacja-sl__hourly\]' "$ST/ct.conf"); ct_mine=$(grep -c '^\[template:mine\]' "$ST/ct.conf")
-ctn=$(ct_run --yes)
-if [ "$ct_same" = 1 ] && printf '%s' "$ctp" | grep -q 'profile__d30h24__daily' && ! printf '%s' "$ctp" | grep -q '  mine$' \
-   && [ "$ct_gone" = 0 ] && [ "$ct_used" = 1 ] && [ "$ct_mine" = 1 ] && printf '%s' "$ctn" | grep -q 'nic do zrobienia'; then
-    ok "clean-templates (X22): the unused profile__d30h24__daily is removed, a used one and a hand-named one stay; the plan writes nothing; a clean config has nothing to do"
-else
-    bad "clean-templates" "plan untouched=$ct_same gone=$ct_gone used=$ct_used mine=$ct_mine" "$ctp" "$cty" "$ctn"
-fi
-rm -f "$ST/ct.conf" "$ST/ct.before"
 # L2 (2026-10-09): a local relationship is CHANGED by describing it again --
 # local_relation_argv reads it back (sources/target from the record, exclusions
 # from its [dataset:] section), the verb changes one thing, and local-backup runs
@@ -986,9 +866,10 @@ else
     bad "local relationship: source refusals (config)" "$g1" "$g2" "$g3" "$g4" "$g5" "$g6"
 fi
 rm -f "$WORK/crontab-store"; seed_cfg
-out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --replace --config="$CFG")"
+out="$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$LC"
+          cmd_local_backup --source=rpool/data --target=hdd/backups --replace --config="$CFG" ) 2>&1 )"
 out2="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --source=rpool/data --target=hdd/backups --name=nosuch --replace --config="$CFG")"
-if printf '%s' "$out" | grep -q -- '--replace needs --name' && printf '%s' "$out2" | grep -q "'nosuch' is not an active local relationship"; then
+if printf '%s' "$out" | grep -qE -- '--replace needs --name|--name=NAME is required' && printf '%s' "$out2" | grep -q "'nosuch' is not an active local relationship"; then
     ok "local relationship: --replace without --name, or for a relationship that does not exist, is refused"
 else
     bad "local relationship: --replace refusals" "$(printf '%s' "$out" | tail -2)" "$(printf '%s' "$out2" | tail -2)"
@@ -1035,7 +916,7 @@ cp "$WORK/bin/zfs" "$WORK/bin2/zfs" 2>/dev/null || :
 rund() {   # <server.conf or -> <POOLS> args... ; discovery runs, no install
     local sc="$1" pools="$2"; shift 2
     ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$sc" POOLS="$pools" \
-      PROFILE_ROOT="$REPO/profiles" cmd_local_backup "$@" ) 2>&1
+      PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$(mktemp -d)" cmd_local_backup --name=lb "$@" ) 2>&1
 }
 
 printf 'DEFAULT_TARGET=hdd/store\nCRON_CONFIG=%s/d.conf\n' "$WORK" > "$WORK/server.conf"
@@ -1066,7 +947,7 @@ out="$(rund "$WORK/none.conf" "rpool hdd tank" --source=rpool/data --config="$WO
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/none.conf" POOLS="rpool hdd" \
           PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
-          cmd_local_backup --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
+          CLIENTS_DIR="$(mktemp -d)" cmd_local_backup --name=lb --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
 { printf '%s' "$out" | grep -qi 'cannot confirm a target this run GUESSED' && [ ! -e "$WORK/order" ]; } \
     && ok "slice3: --yes refuses a guessed target and installs nothing" \
     || bad "slice3: --yes refuses a guessed target and installs nothing" "order=$(cat "$WORK/order" 2>/dev/null)"
@@ -1078,7 +959,7 @@ rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-sto
 printf 'DEFAULT_TARGET=hdd/backups\n' > "$WORK/server2.conf"
 out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/server2.conf" POOLS="rpool hdd" \
           PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
-          cmd_local_backup --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
+          CLIENTS_DIR="$(mktemp -d)" cmd_local_backup --name=lb --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
 { [ "$(tr -d ' \n' < "$WORK/order" 2>/dev/null)" = "SEEDINSTALL" ]; } \
     && ok "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" \
     || bad "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" "order=[$(tr '\n' ',' < "$WORK/order" 2>/dev/null)] $(printf '%s' "$out"|tail -2)"
@@ -1298,12 +1179,6 @@ gencron_callers=$(awk '
 # a second copy of what -W means. Same class as lib-profile.sh asking for
 # --dump-fields, and the same reason: one schema authority.
 #
-# profile_digest joins on the same ticket (2026-08-26). It asks for the SAME
-# table, and for a reason that makes the rule's own point: `keep = 24` becomes
-# `-H24` through that table, so the table is part of what a relationship was
-# generated FROM. A digest that ignored it would call an installed policy
-# unchanged after the thing that renders it had changed.
-#
 # cmd_save_profile joins on the FIRST ticket (2026-09-07, REV-20260907-137 F1):
 # it renders a config for VALIDATION under the identity it already is -- a
 # candidate built from the profile, judged by the real generator, thrown away.
@@ -1315,11 +1190,9 @@ gencron_callers=$(awk '
 gencron_allowed="gencron_as_target
 cmd_activate_client
 cmd_audit_source_retention
-cmd_migrate_profile
 cmd_remove_client
 cmd_save_profile
-load_active_profile
-profile_digest"
+load_active_profile"
 gencron_unexpected=$(comm -23 <(printf '%s
 ' "$gencron_callers") <(printf '%s
 ' "$gencron_allowed" | sort))
@@ -1381,9 +1254,10 @@ runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
     # passed it straight through, the stub answered with one dataset named '-',
     # and eight assertions failed against perfectly good code.
     [ "$inv" = "-" ] && inv=""
+    lb_args "$@"
     ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
       INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/snapsend-ok" cmd_local_backup "$@" ) 2>&1
+      SNAPSEND="$WORK/seedbin/snapsend-ok" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}"       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
 # ---- the proposal happens at all, and reaches the plan ----------------------
@@ -1541,6 +1415,9 @@ printf '%s' "$out6" | grep -q 'cannot confirm a source set this run PROPOSED' \
 # same path.
 # ==============================================================================
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+# X27: every run is a named relationship, so the series shares one record directory
+# -- "the identical command again" has to find the relationship it made.
+K5C="$WORK/k5clients"; rm -rf "$K5C"; mkdir -p "$K5C"; CLIENTS_DIR="$K5C"
 
 # ---- first install, so there is something to repeat and to extend ----------
 out="$(runi snapsend-ok "" --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"
@@ -1566,34 +1443,21 @@ cfg_after="$(md5sum < "$CFG")"
     || bad "krok5/blocker1: the no-op changes nothing" \
            "seeds $seeds_before->$seeds_after writes $writes_before->$writes_after cfg $([ "$cfg_after" = "$cfg_before" ] && echo same || echo CHANGED)"
 
-# ---- BLOCKER 2: a second source may join the same tool-managed target ------
-out="$(runi snapsend-ok "" --source=rpool/other --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+# ---- BLOCKER 2: a second relationship may land on the same target ----------
+out="$(runi snapsend-ok "" --name=lb2 --source=rpool/other --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
 { [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/data]' "$CFG" && grep -qxF '[dataset:rpool/other]' "$CFG"; } \
-    && ok "krok5/blocker2: a second source joins the same managed target, the first one surviving" \
-    || bad "krok5/blocker2: a second source joins the same managed target" "rc=$rc $(printf '%s' "$out"|tail -4)"
-# The target's retention is emitted once per TARGET, not once per run: a second
-# copy is a duplicate section gen-cron refuses, and it would discard whatever
-# the operator had edited into the first.
-{ [ "$(grep -cxF '[prune:hdd/backups]' "$CFG")" -eq 1 ] \
-  && [ "$(grep -cE '^\[template:profile__default__lsrc_keep_hourly\]' "$CFG")" -eq 1 ]; } \
-    && ok "krok5/blocker2: the target prune and the source template family stay single" \
-    || bad "krok5/blocker2: the target prune and the source template family stay single" \
-           "prune=$(grep -cxF '[prune:hdd/backups]' "$CFG") tmpl=$(grep -cE '^\[template:profile__default__lsrc_keep_hourly\]' "$CFG")"
-# The mixed request -- what an operator actually types when adding one source to
-# a set: name them all, and let the tool work out which is new. The installed
-# one must be reported as left alone rather than counted as seeded, and it must
-# not be seeded again.
-seeds_before="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
-out="$(runi snapsend-ok "" --source=rpool/data,rpool/other,rpool/vmstore --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
-seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
-{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'Juz bylo' \
-  && printf '%s' "$out" | grep -q 'rpool/data'; } \
-    && ok "krok5/blocker2: a mixed request names the sources it left alone instead of claiming it seeded them" \
-    || bad "krok5/blocker2: a mixed request names the sources it left alone" "rc=$rc $(printf '%s' "$out"|tail -6)"
-# Exactly ONE new seed (rpool/vmstore); the two already installed are untouched.
-[ "$((seeds_after - seeds_before))" -eq 1 ] \
-    && ok "krok5/blocker2: only the genuinely new source is seeded, the installed ones are not" \
-    || bad "krok5/blocker2: only the genuinely new source is seeded" "seeds $seeds_before -> $seeds_after"
+    && ok "krok5/blocker2: a second relationship lands on the same target, the first one surviving" \
+    || bad "krok5/blocker2: a second relationship lands on the same target" "rc=$rc $(printf '%s' "$out"|tail -4)"
+# Each relationship has its own block and its own landing prune; nothing is
+# duplicated, and nothing of the first is rewritten.
+{ [ "$(grep -cxF '[prune:hdd/backups/rpool/data]' "$CFG")" -eq 1 ] && [ "$(grep -cxF '[prune:hdd/backups/rpool/other]' "$CFG")" -eq 1 ] \
+  && [ "$(grep -cxF '[relation:lb]' "$CFG")" -eq 1 ] && [ "$(grep -cxF '[relation:lb2]' "$CFG")" -eq 1 ]; } \
+    && ok "krok5/blocker2: each relationship keeps one block and one landing prune" \
+    || bad "krok5/blocker2: each relationship keeps one block and one landing prune" "$(grep '^\[' "$CFG" | tr '\n' ' ')"
+# (The "mixed request" cases -- name every source, let the run work out which is
+# new -- went with X27: adding a source to a relationship is add-source.)
+
+unset CLIENTS_DIR   # the cases below are one-shot, each with a fresh record directory
 
 # ---- F3: flat parent/child, END TO END ------------------------------------
 # Teaching only the PROPOSAL that a flat job covers exactly its own dataset
@@ -1604,24 +1468,26 @@ seeds_after="$(wc -l < "$WORK/seed-calls" 2>/dev/null || echo 0)"
 # job present, and the cron actually covering both -- not the absence of a
 # phrase.
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
-out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"
-out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
-    && ok "krok5/F3: a new CHILD joins an installed flat parent as its own job" \
-    || bad "krok5/F3: a new child joins an installed flat parent" "rc=$rc $(printf '%s' "$out"|tail -4)"
-blk="$(cat "$WORK/crontab-store" 2>/dev/null)"
-{ printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a"' \
-  && printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a/child"'; } \
-    && ok "krok5/F3: the installed cron covers BOTH the parent and the child" \
-    || bad "krok5/F3: the installed cron covers both" "$(printf '%s' "$blk" | grep -oE 'snapsend\.sh[^;]*' | head -3)"
+# X27: parent and child as TWO relationships collide on the TARGET side. Each
+# relationship's landing prune <target>/<source> is recursive, so the child's copy
+# (hdd/backups/rpool/a/child) would lie under the parent's landing prune and be
+# pruned by two policies. Refused in both arrangements, naming the section; the
+# way to copy a parent with its children is ONE relationship with --recursive=flat.
+out="$(runi snapsend-ok "" --name=lbp --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --name=lbc --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF '[prune:hdd/backups/rpool/a] (hdd/backups/rpool/a, recursive=yes) covers requested hdd/backups/rpool/a/child' \
+  && grep -qxF '[dataset:rpool/a]' "$CFG" && ! grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a CHILD relationship under an installed parent's landing prune is refused, the parent intact" \
+    || bad "krok5/F3: a child relationship under the parent's landing prune is refused" "rc=$rc $(printf '%s' "$out"|tail -4)"
 
-# The mirror arrangement: installed child, parent discovered later.
+# The mirror arrangement: installed child, parent requested later.
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
-out="$(runi snapsend-ok "" --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"
-out="$(runi snapsend-ok "" --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
-    && ok "krok5/F3: a new PARENT joins an installed flat child as its own job" \
-    || bad "krok5/F3: a new parent joins an installed flat child" "rc=$rc $(printf '%s' "$out"|tail -4)"
+out="$(runi snapsend-ok "" --name=lbc2 --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"
+out="$(runi snapsend-ok "" --name=lbp2 --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF '[prune:hdd/backups/rpool/a/child] (hdd/backups/rpool/a/child) lies under requested hdd/backups/rpool/a' \
+  && grep -qxF '[dataset:rpool/a/child]' "$CFG" && ! grep -qxF '[dataset:rpool/a]' "$CFG"; } \
+    && ok "krok5/F3: a PARENT relationship over an installed child's copy is refused, the child intact" \
+    || bad "krok5/F3: a parent relationship over an installed child's copy is refused" "rc=$rc $(printf '%s' "$out"|tail -4)"
 
 # And the refusal that must survive it: an installed section that really IS
 # recursive does reach its descendants, so a child under it still collides.
@@ -1781,13 +1647,13 @@ fi
 # a dst nor any target-side job -- a plan that creates snapshots and schedules
 # nothing to remove them is an unbounded pool, quietly.
 #
-# Both profiles are checked because the retention lives in different places and
-# suppressing the wrong one produced exactly that unbounded shape: `default`
-# carries a [prune] fragment and its send tiers have no prune_schedule, while
-# y5m12d31h24-gfs has no [prune] fragment and its tiers prune themselves.
+# Two profiles are checked because the retention once lived in different places
+# and suppressing the wrong one produced exactly that unbounded shape (the old
+# ladder `default` carried a [prune] fragment; y5m12d31h24-gfs prunes from its
+# tiers). Since X27 both are "every tier its own family", the check stays.
 for _p in default y5m12d31h24-gfs; do
     out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-            bash "$ZB" --source=rpool/data --target='' --profile="$_p" --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
+            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile="$_p" --name=lb --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
     _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data"$')"
     _prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
     if [ "$rc" -eq 0 ] && [ "$_snap" -ge 1 ] && [ "$_prune" -ge 1 ]; then
@@ -1813,8 +1679,8 @@ done
 # children ran rc=0 hourly and moved nothing (pve10 <> pve9, dead since
 # 2026-09-20). One `recursive =` on the section scopes send and prune alike.
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
-_snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R "rpool/data"$')"
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --name=lb --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
+_snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R .*"rpool/data"$')"
 _pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .* -R .*"rpool/data"')"
 _pruneN="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data"' | grep -cv -- ' -R ')"
 if [ "$rc" -eq 0 ] && [ "$_snapR" -ge 1 ] && [ "$_pruneR" -ge 1 ] && [ "$_pruneN" -eq 0 ]; then
@@ -1829,7 +1695,7 @@ else
     bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --name=lb --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
 # flat WITH a target is allowed since 2026-10-09 (measured on pve9b, see the
 # local relationship cases); atomic with a target stays refused.
 if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive=atomic is for --target=''"; then
@@ -1838,7 +1704,7 @@ else
     bad "A': --recursive=atomic with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --name=lb --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q "got 'ture'"; then
     ok "A': an unknown --recursive value is fatal, not falsy"
 else
@@ -1868,10 +1734,10 @@ fi
 # against 4 source prunes.
 for _p in default y5m12d31h24-gfs; do
     out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-            bash "$ZB" --source=rpool/data --target=hdd/backups --profile="$_p" --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
+            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile="$_p" --name=lb --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
     _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data" "hdd/backups"')"
     _src="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
-    _tgt="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"hdd/backups"')"
+    _tgt="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"hdd/backups/rpool/data"')"
     if [ "$rc" -eq 0 ] && [ "$_tgt" -ge 1 ]; then
         ok "target/$_p: a local relationship with a target renders, and bounds the store"
     else
@@ -1963,6 +1829,20 @@ else
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
 
+# X27 (owner 2026-10-14, "nazwij lab-migawki"): a snapshots-only copy (--target='') is a
+# named relationship too -- its block has a source side only; the cron makes and prunes
+# snapshots in the source and sends nothing.
+smo=$(run --source=rpool/data --target= --recursive=flat --profile=default --name=lab-migawki --config="$WORK/smo.conf")
+smc=$(printf '%s\n' "$smo" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+if printf '%s' "$smc" | grep -qxF '[relation:lab-migawki]' && printf '%s' "$smc" | grep -q 'side         = source' \
+   && ! printf '%s' "$smc" | grep -q 'side         = target' && ! printf '%s' "$smc" | grep -q '^\[template:' \
+   && printf '%s\n' "$smo" | grep -q 'snapsend.sh -m "automated_hourly_" -R .*"rpool/data"$' \
+   && printf '%s\n' "$smo" | grep -q 'delsnaps.sh .*"rpool/data" "automated_daily"' && ! printf '%s\n' "$smo" | grep -q 'FATAL'; then
+    ok "X27: a named snapshots-only relationship (--target='') -- one block, source side only, snapshots made and pruned in the source"
+else
+    bad "X27: named snapshots-only relationship" "$smc" "$(printf '%s\n' "$smo" | grep -E 'FATAL|snapsend|delsnaps' | head -6)"
+fi
+rm -f "$WORK/smo.conf"
 # X22 / X27 (owner 2026-10-14): "Uzyj szablonu" on an existing relationship writes the
 # profile's numbers into the relationship's OWN block -- nothing shared with another
 # relationship, so a hand-changed section elsewhere cannot block it; the plan writes nothing.

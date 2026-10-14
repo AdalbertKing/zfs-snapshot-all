@@ -3,7 +3,9 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GEN="$ROOT/gen-cron.sh"
-PROFILE="$ROOT/profiles/default.conf"
+# X27 (owner 2026-10-14): the shipped `default` is "every tier its own family" now; the
+# ladder MACHINERY tested below runs on the old ladder, kept as a test fixture.
+PROFILE="$ROOT/test/fixtures/profiles-ladder/default.conf"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -13,7 +15,7 @@ ok() { echo "PASS: $*"; pass=$((pass+1)); }
 bad() { echo "FAIL: $*" >&2; fail=$((fail+1)); }
 
 # A profile is ONE file since 2026-08-25. This used to check three.
-if [ -r "$PROFILE" ]; then ok "default.conf exists"; else bad "default.conf missing"; fi
+if [ -r "$ROOT/profiles/default.conf" ]; then ok "default.conf exists"; else bad "default.conf missing"; fi
 for f in templates.conf dataset.inc prune.inc; do
     if [ -e "$PROFILE/$f" ]; then bad "default/$f still shipped -- the three-file layout was replaced, not doubled"; else ok "default/$f is gone (one file now)"; fi
 done
@@ -54,7 +56,7 @@ psplit() {   # <profile file> -> echoes "<tpl> <ds> <prune> <excl>" of temp file
     printf '%s %s %s %s' "$t" "$x" "$p2" "$e"
 }
 LETTERS="$(mktemp)"; bash "$GEN" --dump-tier-letters > "$LETTERS"
-PSPLIT_DEFAULT=($(psplit "$ROOT/profiles/default.conf"))
+PSPLIT_DEFAULT=($(psplit "$PROFILE"))
 TPL_DEFAULT="${PSPLIT_DEFAULT[0]}"
 DS_DEFAULT="${PSPLIT_DEFAULT[1]}"
 PR_DEFAULT="${PSPLIT_DEFAULT[2]}"
@@ -797,7 +799,7 @@ fi
 FLOOR="$TMP/floors"; rm -rf "$FLOOR"; mkdir -p "$FLOOR/p" "$FLOOR/bin"
 printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$FLOOR/bin/crontab"
 chmod +x "$FLOOR/bin/crontab"
-sed 's/^\tkeep = 2$/\tkeep = 9/' "$ROOT/profiles/default.conf" > "$FLOOR/p/nine.conf"
+sed 's/^\tkeep = 2$/\tkeep = 9/' "$PROFILE" > "$FLOOR/p/nine.conf"
 
 floor_run() {   # <config file> [profile] -> "rc|<phrase hits>"
     local out rc
@@ -903,7 +905,7 @@ fi
 #    end: an operator reading profile B sees a policy in force nowhere. The code
 #    could not tell A's floor from a hand-made one because the section carried
 #    no signature. Now it does.
-sed 's/^\tkeep = 2$/\tkeep = 2/' "$ROOT/profiles/default.conf" > "$FLOOR/p/two.conf"
+sed 's/^\tkeep = 2$/\tkeep = 2/' "$PROFILE" > "$FLOOR/p/two.conf"
 
 # The config as profile 'nine' (keep = 9) would have left it: signed.
 printf '[defaults]\n\thost_label = t\n\n[excluded:vzdump]\n\t# managed-by: zfs-backup.sh profile=nine\n\tkeep = 9\n' > "$FLOOR/owned.conf"
@@ -938,7 +940,7 @@ fi
 
 # 5. A profile that contradicts ITSELF is refused earlier and more cheaply, and
 #    the message names the profile file rather than a composed temporary.
-{ cat "$ROOT/profiles/default.conf"; printf '\n[excluded:vzdump]\n\tkeep = 5\n'; } > "$FLOOR/p/selfdup.conf"
+{ cat "$PROFILE"; printf '\n[excluded:vzdump]\n\tkeep = 5\n'; } > "$FLOOR/p/selfdup.conf"
 if profile_validate_file "$FLOOR/p/selfdup.conf" "$GEN"; then
     bad "floors: a profile fencing one family twice is refused"
 else

@@ -1713,9 +1713,6 @@ def screen_actions(active, hide_gone=False, paused=False):
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     if active == "nosniki":
         return [("F7", u"Uruchom teraz"), ("F8", u"Klucz")]
-    if active == "szablony":
-        # Pelny podpis (wlasciciel 2026-10-14); skrot tylko, gdy pasek sie nie miesci (80 kol.).
-        return [("F7", u"Usuń nieużywane kopie szablonów", u"Usuń nieuż. kopie")]
     return []
 
 
@@ -3412,8 +3409,7 @@ HELP = [
     u"  F4  Transfery  co leci teraz i co skończyło się ostatnio (progress);",
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
-    u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny,",
-    u"                 F7 usuwa nieużywane kopie szablonów (lista F5 zostaje)",
+    u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
@@ -3800,10 +3796,6 @@ class UI(object):
     def template_action(self, k):
         """Ins na F5: nowy szablon NA PODSTAWIE zaznaczonego; Del: usun wlasny (okna
         whiptail, tui/template.sh). Logika -- save-profile / delete-profile."""
-        if k == "F7":
-            # X22 (wlasciciel 2026-10-14): szablony, ktorych nic w configu nie uzywa --
-            # plan i WYKONAJ w oknie (tui/clean-templates.sh, czasownik clean-templates).
-            return self.run_template_dialog([self.zb(), "clean-templates", "--ask"])
         profs = self.data.profiles or []
         c = self.cursor["szablony"]
         if not profs or not (0 <= c < len(profs)):
@@ -4614,7 +4606,7 @@ class UI(object):
             c = max(0, n - 1)
         elif k == "ctrl-r":
             self.ask_refresh()
-        elif k in ("F7", "del", "ins") and self.screen == "szablony":
+        elif k in ("del", "ins") and self.screen == "szablony":
             return self.template_action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"

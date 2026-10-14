@@ -387,7 +387,7 @@ FREEZE=1
 # drabiny". Podział jest dobry (retencja w szczeblach -- N najnowszych, wg wieku
 # albo GFS per rodzina -- kontra JEDNA drabina dla jednej rodziny w osobnej
 # sekcji prune), więc zostaje; znacznik idzie na tę stronę, która ma
-# ograniczenie: [drabina] (default, Y5M12D31H24, passive).
+# ograniczenie: [drabina] (od X27 zadnego szablonu fabrycznego w tym ksztalcie).
 account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCIE używa szablonu płaskiego
     local want="$1" n p t st pr lu fp
     [ "$want" != root ] || want=""

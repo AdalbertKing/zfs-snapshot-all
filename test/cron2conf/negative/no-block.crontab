@@ -1,2 +1,0 @@
-MAILTO=""
-0 8 * * * /REPO/check-pool-capacity.sh 2>>/LOG

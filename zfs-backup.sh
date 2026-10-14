@@ -443,9 +443,6 @@ front end never edits the config file:
   zfs-backup.sh migrate-config [--config=PATH] [--local-user=NAME] [--plan|--yes]
                                     Move the config's relationships, once, from template
                                     sections to their [relation:NAME] blocks (same crontab).
-  zfs-backup.sh clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
-                                    Remove the template sections nothing uses any more
-                                    (left by profiles applied earlier), in one atomic replace.
   zfs-backup.sh replica-restart NAME [--yes]
                                     A replica whose chain broke (the relationship it
                                     reads was deleted and created again) starts again
@@ -544,7 +541,6 @@ Client state control:
   zfs-backup.sh enable-client NAME
 
 Config maintenance:
-  zfs-backup.sh migrate-profile [--profile=NAZWA] [--yes]
   zfs-backup.sh set-transfer NAME [--history=all|newest|auto:N]
                                     [--compression=zstd|gzip|none|default]
                                     [--cipher=SPEC|default] [--autotune=yes|no] [--yes]
@@ -1680,49 +1676,6 @@ load_active_profile() {
     return 0
 }
 
-# WHAT THIS RELATIONSHIP WAS GENERATED FROM, as one comparable value.
-#
-# REV F2. `migrate-profile --profile=prod` decided "already there" from the
-# record's PROFILE string alone, so the file's own promise -- "an operator
-# changes a retention here and nowhere else" -- was false for the case that
-# matters most: edit `keep = 7` to `keep = 10` in profiles/prod/profile.conf,
-# re-run the command, and it answers "nothing to migrate" while the installed
-# cron still carries -D7. A name is not a version.
-#
-# TWO INPUTS, because either one alone would lie:
-#
-#   profile.conf   what the operator edits. Catches every retention, schedule,
-#                  quiesce, monitor and version change.
-#   the tier-letter table (gen-cron --dump-tier-letters)
-#                  the RENDERER's contribution. `keep = 24` becomes `-H24`
-#                  through that table, so a table change alters the installed
-#                  policy without touching a byte of the profile. A digest over
-#                  the operator's file alone would call that "unchanged".
-#   PROFILE_RENDER_SCHEMA (lib-profile.sh)
-#                  the renderer's own version. REV F2b: the first two inputs
-#                  still miss a change to HOW a profile is rendered -- the
-#                  namespacing, the fragment split, the keep translation. Same
-#                  file, same table, different installed CONFIG, identical
-#                  digest, and migrate-profile answering "nothing to migrate".
-#                  A number a human bumps rather than a hash of the library,
-#                  because only a human knows whether the OUTPUT changed; a
-#                  hash would move on a comment edit and migrate the fleet for
-#                  nothing.
-#
-# Not a security hash and not trying to be: md5 is what this tree already uses
-# for the same job (delsnaps' lock key, clean-relationships' crontab
-# comparison). It answers "is this still the thing I generated from".
-profile_digest() {   # -> a comparable digest of the ACTIVE profile, or rc 1
-    local dir="$(profile_file "$PROFILE_ACTIVE")"
-    [ -r "$dir" ] || return 1
-    local letters
-    letters="$(bash "$GENCRON" --dump-tier-letters 2>/dev/null)" || return 1
-    { cat "$dir"
-      printf '%s' "$letters"
-      printf 'render-schema=%s' "${PROFILE_RENDER_SCHEMA:-0}"
-    } | md5sum | cut -d' ' -f1
-}
-
 # A PROFILE IS A FILE, and you may say which one.
 #
 #   --profile=prod                 a NAME. Looked up as <name>.conf, first in
@@ -2545,7 +2498,7 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] [-
     # answered that by accident, because a legacy config reads as flat. The
     # question is about the NAME, and config_is_frozen_legacy already asks it.
     if config_is_frozen_legacy "$workfile"; then
-        log "source retention NOT generated for '$name': $workfile carries the frozen pre-GFS family, whose policy this run must not extend. Migrate the host deliberately (zfs-backup.sh migrate-profile) if its source should be bounded."
+        log "source retention NOT generated for '$name': $workfile carries the frozen pre-GFS family, whose policy this run must not extend. Move each relationship onto a profile deliberately (zfs-backup.sh edit-relation NAME --profile=P) if its source should be bounded."
         return 0
     fi
     local retfrag=""
@@ -3065,7 +3018,7 @@ ensure_cron_config() {   # <file> [check_new_template_collision=0] [needs_profil
     # `prod`. The hazard is stacking the standard ladder on a family that
     # already self-prunes, and that family is the bare standard_* one.
     if [ "$needs_profile" -eq 1 ] && config_is_frozen_legacy "$file"; then
-        die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Migrate the host first, in one previewed transaction: zfs-backup.sh migrate-profile"
+        die "$file uses the pre-GFS profile (standard_* still carries prune_schedule), which is frozen. Adding the standard policy on top would prune the same snapshots twice on the same schedule. Move each relationship onto a profile first, previewed: zfs-backup.sh edit-relation NAME --profile=P"
     fi
 
     # REV-20260810-090 F2: the whole template block below is additive -- it
@@ -4426,7 +4379,7 @@ This host reads as FLAT$([ -n "${PROFILE_GFS_WHY:-}" ] && printf " -- [template:
 
 Three ways out, and this command picks none of them for you:
   * create this relationship with a FLAT profile, matching the host (--profile=NAME);
-  * migrate the host to the ladder shape first, in one previewed transaction: zfs-backup.sh migrate-profile;
+  * move the host's relationships to the ladder shape first, each previewed: zfs-backup.sh edit-relation NAME --profile=P;
   * if the flat template is a leftover from a relationship that no longer exists, remove it from the config -- an orphan template no longer decides this, but a REFERENCED one does.
 
 Nothing was changed."
@@ -7338,67 +7291,6 @@ cmd_set_tiers() {
 
 
 
-# clean-templates [--config=PATH] [--local-user=NAME] [--plan|--yes]
-# X22 (owner's GUI test, 2026-10-14): template sections NOTHING uses any more stay
-# in the config for ever -- every profile ever applied left its profile__P__*, and
-# a hand edit of one of those later blocked "Uzyj szablonu P" (create-time collision
-# guard). This removes every generated template (profile__*, the frozen standard_*)
-# that no use_template names, in the set-tiers transaction: a working copy, the
-# whole config validated by gen-cron, ONE atomic replace; without --yes a plan only.
-# A template referenced by anything stays; so does every hand-named one.
-cmd_clean_templates() {
-    local yes=0 ask=0 a config_arg="" local_user_arg=""
-    for a in "$@"; do
-        case "$a" in
-            --yes|-y) yes=1 ;;
-            --plan)   ;;
-            --ask)    ask=1 ;;
-            --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"; flag_local_user clean-templates "$local_user_arg" ;;
-            *) die "clean-templates: unknown option '$a' (known: --config --local-user --plan --yes --ask)" ;;
-        esac
-    done
-    if [ "$ask" -eq 1 ]; then     # plan and WYKONAJ as whiptail windows (F7 on the GUI's F5)
-        local dlg="$SCRIPT_DIR/tui/clean-templates.sh"
-        [ -f "$dlg" ] || die "clean-templates: brak $dlg -- checkout jest niekompletny"
-        ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg"
-        return $?
-    fi
-    read_server_conf
-    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
-    local cronfile="$CRON_CTX_FILE"
-    [ -f "$cronfile" ] || die "clean-templates: no config at $cronfile -- nothing to clean"
-    assert_cron_config_matches_installed "$cronfile"
-    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
-    workfile_track "$workfile"
-    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
-    chmod 0644 "$workfile" 2>/dev/null || :
-    local before after gone
-    before=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
-    # X26: "after the migration" belonged to migrate-profile; here nothing uses it at all.
-    remove_orphan_profile_templates "$workfile" "any more (unused)" 2>/dev/null
-    after=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
-    gone=$(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^\[template://; s/\]$//')
-    if [ -z "$gone" ]; then
-        rm -f "$workfile"
-        echo "Config $cronfile: nieużywanych szablonów brak -- nic do zrobienia."
-        return 0
-    fi
-    log "validating the changed config (working copy only, nothing real touched yet)..."
-    if ! gencron_as_target -c "$workfile" >/dev/null; then
-        rm -f "$workfile"
-        die "gen-cron.sh rejected the cleaned config -- $cronfile was NOT touched (see output above)"
-    fi
-    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Config $cronfile -- szablony, których nic nie używa ($(printf '%s\n' "$gone" | grep -c .)):"
-    printf '  %s\n' $gone
-    if [ "$yes" -ne 1 ]; then
-        rm -f "$workfile"
-        echo "plan only -- nothing installed (add --yes to install)"
-        return 0
-    fi
-    atomic_replace_and_install "$cronfile" "$workfile"
-}
 
 cmd_set_transfer() {
     local name="" yes=0 plan=0 a k v
@@ -7462,11 +7354,15 @@ cmd_set_transfer() {
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
     chmod 0644 "$workfile" 2>/dev/null || :
+    # X27: the engine settings live in the relationship's [relation:] block -- one place;
+    # a copy left in a section by an older install is removed in the same replace.
+    relblock_require "$workfile" "$name" set-transfer
     local sec i
-    for sec in "${secs[@]}"; do
-        for i in "${!fk[@]}"; do
-            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "${fv[$i]}" \
-                || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in $sec -- nothing was changed"; }
+    for i in "${!fk[@]}"; do
+        set_or_remove_section_field "$workfile" "[relation:$name]" "${fk[$i]}" "${fv[$i]}" \
+            || { rm -f "$workfile"; die "set-transfer: could not set ${fk[$i]} in [relation:$name] -- nothing was changed"; }
+        for sec in "${secs[@]}"; do
+            set_or_remove_section_field "$workfile" "$sec" "${fk[$i]}" "" || :
         done
     done
     log "validating the changed config (working copy only, nothing real touched yet)..."
@@ -7475,7 +7371,7 @@ cmd_set_transfer() {
         die "gen-cron.sh rejected the changed config -- $cronfile was NOT touched (see output above)"
     fi
     show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not render the preview -- nothing was touched"; }
-    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(sekcji: ${#secs[@]})"
+    echo "Relacja '$name': $(for i in "${!fk[@]}"; do printf '%s=%s ' "${fk[$i]}" "${fv[$i]:-<fabryczne>}"; done)(blok [relation:$name])"
     if [ "$plan" -eq 1 ] || [ "$yes" -ne 1 ]; then
         rm -f "$workfile"
         echo "plan only -- nothing installed (add --yes to install)"
@@ -8933,10 +8829,14 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     [ -z "$lb_recursion" ] || [ "$no_copy" -eq 1 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --recursive=atomic is for --target='' (snapshots stay in the source). With a target, use --recursive=flat (each descendant its own send, prune and monitor)."
     [ "$lb_replace" -eq 0 ] || [ -n "$lb_name" ] || die "local-backup: --replace needs --name -- it re-describes an existing local relationship"
+    # X27 (owner 2026-10-14): every copy is a relationship with a name -- its numbers live in
+    # its [relation:NAME] block; an unnamed copy would have to write template sections.
+    [ -n "$lb_name" ] || die "local-backup: --name=NAME is required -- every local copy is a relationship (its [relation:NAME] block holds its tiers). Nothing was changed."
     [ "${#lb_excl[@]}" -eq 0 ] || [ "$lb_recursion" = flat ] \
         || die "local-backup: --exclude-child needs --recursive=flat -- without it only the named dataset is copied and there is no child to leave out."
     if [ -n "$lb_name" ]; then
-        [ "$no_copy" -eq 0 ] || die "local-backup: --name makes a relationship that COPIES; with --target='' nothing is copied, so there is nothing for F3 to show. Drop --name."
+        # X27 (owner 2026-10-14, "nazwij lab-migawki"): every relationship has a name now,
+        # snapshots-only (--target='') included -- its block has a source side only.
         local _lbrec; _lbrec="$(client_conf_path "$lb_name")"
         if [ "$lb_replace" -eq 1 ]; then
             [ -e "$_lbrec" ] && [ "$(record_get "$_lbrec" STATE)" = active ] && [ "$(record_get "$_lbrec" RUX_MODE)" = local ] \
@@ -9074,7 +8974,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # A NAMED relationship owns its landings, one prune per source at
             # <target>/<source> -- where the engine puts the copy -- so pausing
             # or deleting it touches nothing another relationship keeps there.
-            if [ -n "$lb_name" ]; then
+            if [ -n "$lb_name" ] && [ "$no_copy" -eq 0 ]; then
                 for r in "${roots[@]}"; do
                     echo
                     echo "[prune:$target/$r]"
@@ -9373,7 +9273,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             # A removed relationship of the same name: archived, as add-client does.
             mv -f "$_lbc" "${_lbc}.removed-$(date '+%Y%m%d-%H%M%S')" || die "could not archive the old record $_lbc"
         fi
-        for _lbr in "${roots[@]}"; do _lbm="$_lbm${_lbm:+ }$target/$_lbr"; done
+        [ "$no_copy" -eq 1 ] || for _lbr in "${roots[@]}"; do _lbm="$_lbm${_lbm:+ }$target/$_lbr"; done
         {
             echo "# zfs-backup.sh client record -- a LOCAL relationship (local-backup --name): source and copy on this host"
             echo "# Every value is %q-quoted on write: this file is sourced as root."
@@ -9578,7 +9478,7 @@ cmd_add_client() {
     # templates are prefixless and its monitors run in any-mode -- the only
     # shape that matches the declaration. An explicit --profile= still wins.
     if [ "$passive" -eq 1 ] && [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; then
-        profile=passive
+        profile=passive-flat
     fi
 
     local cpath; cpath=$(client_conf_path "$name")
@@ -12474,343 +12374,7 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
     log "link cap for '$peer' is now '${rate:-<none>}' -- ${#tgt_name[@]} relationship(s) rewritten and installed in one transaction."
 }
 
-#
-# THE DESTINATION WAS HARDCODED until 2026-08-25: legacy flat-per-tier -> the
-# standard GFS ladder, because that was the only migration in existence. With
-# `default`, `passive` and `prod` as real profiles, "put this host on profile
-# X" became an ordinary operation with no command behind it -- an operator's
-# only route was editing the config by hand, which is exactly what this
-# function was written to spare them. --profile=NAME is that command; omitting
-# it still means `default`, so the original migration is unchanged.
-#
-# Generalising it needed three things the hardcoded version could skip:
-#
-#   1. PROFILE_GFS is DERIVED from the destination's shape, not asserted. It
-#      decides whether a GFS ladder is emitted at all.
-#   2. The client's [prune:] sections are swept by MARKER before regeneration.
-#      A ladder sits at the PARENT of the datasets, so the path-driven
-#      remove_managed_sections cannot reach it -- and the whole ladder-emitting
-#      branch is inside `if PROFILE_GFS`, so migrating to a FLAT profile would
-#      never have run the removal either. GFS -> flat would have left the old
-#      ladder next to the new per-tier prune: two pruners, same snapshots.
-#   3. Orphaned templates are found by reference-counting, not by name.
-# Reading several client records in ONE shell is how this command works, and
-# until 2026-09-03 a record was a `.`-sourced file: a field a record does NOT
-# carry kept whatever the previous record left behind.
-#
-# REV F3. Record A carries PROFILE=prod, record B is older and has no PROFILE
-# field at all -- after `. A` then `. B`, B still reads prod. In the precheck
-# that is a false "already on profile"; in the post-install loop it is a record
-# that silently never gets its PROFILE written. Exactly the class of defect this
-# tree just fixed for BANDWIDTH, whose comment in load_client_and_connection
-# names migrate-profile as one of the callers that needs the reset -- and these
-# loops were written without it.
-#
-# The `( : )` line beside each source is a shellcheck no-op. It isolates
-# NOTHING; anyone reading it as a subshell (I did) will make this mistake again.
-#
-# The reset used to live here, as a list of every field any record had assigned
-# -- NOT a hand-picked list, because the first version was one and the lab found
-# what that misses within the hour (EXCLUDE_1 from an old, REMOVED record leaked
-# into an active one). That mechanism is now record_load in lib-backup-common.sh,
-# shared by every reader in both programs; this name stays so the three loops
-# below still say what they are doing.
-migrate_read_record() {   # <path> -- read it with no field left over from the last one
-    record_load client "$1"
-}
 
-cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME] [--yes]
-    local yes=0 a config_arg="" local_user_arg="" target_profile=""
-    for a in "$@"; do
-        case "$a" in
-            --yes|-y) yes=1 ;;
-            # The destination used to be hardcoded: legacy flat-per-tier ->
-            # the standard GFS ladder, and nothing else. That was the only
-            # migration that existed when it was written. With `default`,
-            # `passive` and `prod` as real profiles, "move this host onto
-            # profile X" is an ordinary operation and had no command at all --
-            # an operator's only route was editing the config by hand.
-            --profile=*)    target_profile="${a#*=}"; flag_profile migrate-profile "$target_profile" ;;
-            --config=*)     config_arg="${a#*=}" ;;
-            --local-user=*) local_user_arg="${a#*=}"; flag_local_user migrate-profile "$local_user_arg"
-                # NOT blanked to "" here. The resolver has to tell an explicit
-                # "root" from "nothing said", and blanking made them identical
-                # -- so --local-user=root, the remedy the refusal itself
-                # prints, landed straight back in the refusal. Found live on
-                # pve2 and pve1, 2026-08-21.
-                ;;
-            *) die "migrate-profile: unknown option $a" ;;
-        esac
-    done
-
-    read_server_conf
-    # P10: this used to have no way to be aimed. It resolved server.conf, then
-    # the host default -- a name, on a host where a config belongs to a
-    # relationship -- and rewrote whatever it landed on. The two flags above are
-    # what make the refusal below an answerable question rather than a wall.
-    cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
-    local cronfile="$CRON_CTX_FILE"
-    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to migrate (run setup-server first)"
-
-    # Same zero-choice default and the same validation as add-client: an
-    # operator who never heard of profiles gets exactly the behaviour this
-    # command had before the flag existed, and a typo fails HERE rather than
-    # halfway through rewriting a config.
-    [ -n "$target_profile" ] || target_profile="$PROFILE_DEFAULT_NAME"
-    profile_validate_file "$(profile_file "$target_profile")" "$GENCRON" \
-        || die "migrate-profile: --profile='$target_profile': $PROFILE_ERR"
-    # Point the loader at the DESTINATION before anything reads the profile.
-    # emit_client_sections loads lazily and caches on PROFILE_LOADED, so the
-    # first thing to render must already see the target -- otherwise the whole
-    # migration would quietly run on whatever profile happened to be active.
-    if [ "$PROFILE_ACTIVE" != "$target_profile" ]; then
-        profile_release_tmp
-        PROFILE_LOADED=""
-        PROFILE_ACTIVE="$target_profile"
-    fi
-    load_active_profile
-
-    # ALREADY THERE? Ask the client RECORDS, not the config's shape.
-    #
-    # The old test was a grep for a flat [template:standard_hourly] -- a fine
-    # question when there was exactly one destination, and meaningless now:
-    # `prod` IS flat per tier, so that grep would call an already-migrated prod
-    # host "not migrated yet" and re-run forever. Each record carries the
-    # profile it was created from (write_client_field PROFILE), which is the
-    # fact this question is actually about. Records predating the field hold
-    # "", which correctly reads as "not on the target".
-    # A NAME IS NOT A VERSION (REV F2). Matching PROFILE alone made an edited
-    # profile unappliable: change `keep = 7` to `keep = 10` in the one file the
-    # operator is told to edit, re-run this command, and it answered "nothing to
-    # migrate" while the installed cron still carried -D7. The digest is what
-    # makes "already on profile X" a statement about the policy rather than
-    # about a string.
-    #
-    # A record predating the field holds "" and therefore never matches, so an
-    # old relationship migrates once and gains its digest -- no special case.
-    local _f _on_target=1 _actives=0 _want_digest
-    _want_digest="$(profile_digest)" || _want_digest=""
-    for _f in "$CLIENTS_DIR"/*.conf; do
-        [ -e "$_f" ] || continue
-        [ "$(record_get "$_f" RUX_MODE)" = local ] && continue   # a local relationship: not migrated, its record untouched
-        migrate_read_record "$_f"
-        [ "${STATE:-}" = active ] || continue
-        _actives=$((_actives + 1))
-        [ "${PROFILE:-}" = "$target_profile" ] || _on_target=0
-        [ -n "$_want_digest" ] && [ "${PROFILE_DIGEST_RECORDED:-}" != "$_want_digest" ] && _on_target=0
-    done
-    # A legacy config can hold records that already SAY `default` while the
-    # sections are still flat per tier -- that is the original migration this
-    # command was written for, and it must still be detected.
-    local _legacy=0
-    sed -n '/^\[template:standard_hourly\]/,/^\[/p' "$cronfile" | grep -q "prune_schedule" && _legacy=1
-    if [ "$_on_target" -eq 1 ] && [ "$_actives" -gt 0 ] && [ "$_legacy" -eq 0 ]; then
-        log "$cronfile is already on profile '$target_profile' ($_actives active client(s), profile unchanged since they were generated) -- nothing to migrate."
-        return 0
-    fi
-
-    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX")         || die "mktemp failed next to $cronfile"
-    workfile_track "$workfile"
-    # mktemp makes 0600. The preview and the install both read this file AS the
-    # collector account, so it has to be readable by it -- and the mode has to
-    # be right BEFORE either of them runs, not after the swap.
-    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
-    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
-    chmod 0644 "$workfile" 2>/dev/null || :
-
-    # The LEGACY flat family goes before ensure_cron_config, and this is not
-    # housekeeping -- it is what lets the call succeed at all. ensure_cron_config
-    # refuses to add current policy on top of a pre-GFS config (the two would
-    # prune the same snapshots on the same schedule), and that refusal reads the
-    # very templates being replaced here. A no-op on any host that is not legacy.
-    local t
-    for t in standard_hourly standard_daily standard_weekly standard_monthly; do
-        remove_template_section "$workfile" "$t"
-    done
-    # AND THE DESTINATION'S OWN TEMPLATES, which is what makes an EDITED profile
-    # appliable rather than merely detectable (REV F2).
-    #
-    # ensure_cron_config's template block is additive by design: "what suppresses
-    # an append is THAT name already being present". Right for an endpoint
-    # refresh, and wrong here -- migrating from `prod` to `prod` after the
-    # operator changed keep = 7 to keep = 10 found profile__prod__daily already
-    # in the file, appended nothing, and left `retain = -D7` installed. The
-    # ONE identity for the templates, derived the way the RENDERER derives it.
-    #
-    # REV-20260827-122 F1: this loop interpolated $target_profile raw. Given a
-    # profile by path -- `--profile=/tmp/mine.conf`, which the same function
-    # accepts a few lines above -- it searched for
-    #     [template:profile__/tmp/mine.conf__...]
-    # while profile_render_templates had written
-    #     [template:profile__mine__...]
-    # so nothing matched and no old template was removed. ensure_cron_config is
-    # ADDITIVE, so the already-present old templates then suppressed the append
-    # of the edited policy, the candidate installed cleanly carrying the OLD
-    # retention, and the record was stamped with the NEW digest afterwards. The
-    # next run reads that digest and takes the "nothing to migrate" path. Silent
-    # divergence between what the records claim and what the crontab enforces,
-    # in RETENTION, which is the one number a backup is judged by.
-    #
-    # profile_name_of is the same helper the renderer uses, and its own comment
-    # says the name "has to survive being given as a path and must never carry a
-    # '/'" -- the rule existed; this site did not apply it.
-    local _tpl_ns; _tpl_ns="$(profile_name_of "$target_profile")"
-
-    # digest made the run HAPPEN; this makes it MEAN something. Measured: the
-    # assertion failed with before='-D7' after='-D7' until this loop existed.
-    #
-    # Safe because migrate-profile is the one verb where the profile is meant to
-    # win: the sections referencing these names are regenerated a few lines
-    # below, and the whole candidate is validated by the real gen-cron before
-    # anything is published.
-    while IFS= read -r t; do
-        # Trimmed in bash rather than through sed: the header is bracketed on
-        # both sides, and every layer of quoting between here and a sed script
-        # is another place for a backslash to go missing.
-        t="${t#\[template:}"; t="${t%\]}"
-        [ -n "$t" ] || continue
-        remove_template_section "$workfile" "$t"
-    done < <(grep -oE "^\[template:profile__${_tpl_ns}__[^]]+\]" "$workfile" 2>/dev/null)
-    # Everything ELSE orphaned is swept after the clients are rewritten, when it
-    # is finally known what still references what -- see
-    # remove_orphan_profile_templates.
-
-    # REV-20260810-092: 'always'. This is the explicit-migration boundary the
-    # review carves out -- a previewed, confirmed transaction that shows the
-    # exact config and cron diff first, and the one command that installs the
-    # broad GFS ladder the reserved-prefix floors exist to fence.
-    ensure_cron_config "$workfile" 0 1 always
-
-    # PROFILE_GFS DESCRIBES THE INSTALLED CONFIG, NOT A PROFILE. detect_profile_gfs
-    # reads the FILE (see its call in ensure_cron_config, and the note above
-    # client_section_plan), which during a migration is still the shape being
-    # migrated AWAY from. The hardcoded version got away with asserting
-    # PROFILE_GFS=1 because its destination was always the ladder; asserting the
-    # source's shape for an arbitrary destination is how `--profile=prod` came
-    # out carrying an empty GFS [prune:] section -- the ladder branch ran, and a
-    # flat profile has no [prune] fragment to fill it with. Measured, not
-    # reasoned: gen-cron rejected the candidate with "[prune:...] has no
-    # use_template", which is the same emptiness the source-prune emitters
-    # already gate on.
-    #
-    # So ask the DESTINATION, with the same detector, pointed at the profile's
-    # own rendered templates: a tier carrying both send_schedule and
-    # prune_schedule is flat, anything else is a ladder. One rule, one
-    # implementation, two inputs.
-    detect_profile_gfs "$PROFILE_TPL_FILE" all
-
-    local f name migrated=0
-    local -a managed=(); local prune_scope=""
-    for f in "$CLIENTS_DIR"/*.conf; do
-        [ -e "$f" ] || continue
-        [ "$(record_get "$f" RUX_MODE)" = local ] && { log "skipping '$(record_get "$f" CLIENT_NAME)' -- a local relationship; migrate-profile moves relationships with a peer"; continue; }
-        migrate_read_record "$f"
-        [ "${STATE:-}" = active ] || { log "skipping client '${CLIENT_NAME:-$f}' (state=${STATE:-unknown}) -- only active clients have cron sections to rewrite"; continue; }
-        name="$CLIENT_NAME"
-        load_client_and_connection "$f"
-        # REV-20260809-089: full generation, deliberately. Every other caller
-        # must NOT re-derive installed policy from the active profile -- but
-        # re-deriving it is the entire purpose of migrate-profile, which exists
-        # precisely to move a host off the legacy profile in one decision. This
-        # is the one call site where the profile is meant to win.
-        # The client's own [prune:] sections go first, all of them. With
-        # is_new=1 every dataset regenerates, so emit_client_sections re-emits
-        # exactly what the NEW profile calls for -- and only a marker-driven
-        # sweep can reach a GFS ladder parked at the parent path when the
-        # destination profile has no ladder at all.
-        remove_client_prune_sections "$workfile" "$name"
-        emit_client_sections "$workfile" "$name" 1 || { rm -f "$workfile"; die "could not rewrite sections for '$name'"; }
-        # REV-20260811-102 step 3: same fail-closed source-prune grant gate as
-        # activate-client, per client -- never migrate a config that installs a
-        # remote source prune the delegated account cannot actually run.
-        if [ "${#SOURCE_PRUNE_EMITTED_DS[@]}" -gt 0 ]; then
-            # REV-20260812-111 B, same gate as activate-client, per client.
-            local -a atomic_paths=(); local ads
-            for ads in ${PEER_SAVED_DATASETS:-}; do atomic_paths+=("$(client_local_path "$ads")"); done
-            if [ "${#atomic_paths[@]}" -gt 0 ]; then
-                ( assert_no_atomic_with_source_retention "$workfile" "${atomic_paths[@]}" ) \
-                    || { rm -f "$workfile"; die "atomic-recursion guard refused for '$name' -- nothing migrated or installed."; }
-            fi
-            ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
-                  "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
-                || { rm -f "$workfile"; die "source-prune grant check failed for '$name' -- nothing migrated or installed."; }
-        fi
-        migrated=$((migrated + 1))
-    done
-    [ "$migrated" -gt 0 ] || log "no active clients -- migrating the templates only"
-
-    # Now, and not before: what a template is worth is decided by what still
-    # references it, and that is only settled once every client has been
-    # rewritten onto the destination profile.
-    remove_orphan_profile_templates "$workfile"
-
-    log "validating the migrated config (working copy only, nothing real touched yet)..."
-    if ! bash "$GENCRON" -c "$workfile" >/dev/null; then
-        rm -f "$workfile"
-        die "gen-cron.sh rejected the migrated config -- $cronfile was NOT touched (see output above)"
-    fi
-
-    show_activation_proposal "$cronfile" "$workfile" || {
-        rm -f "$workfile"
-        die "could not render the migration preview -- nothing was touched"
-    }
-
-    local _shape="drabina GFS"
-    [ "${PROFILE_GFS:-1}" -eq 1 ] || _shape="plaska retencja per tier"
-    echo "Migracja profilu:  ->  '$target_profile'  ($_shape)"
-    echo "Klientow do przepisania: $migrated"
-    echo
-    if [ "$yes" -ne 1 ]; then
-        read -rp "Zmigrowac ten host na profil '$target_profile'? [t/N] " ans
-        case "$ans" in
-            t|T|tak|TAK|y|Y|yes|YES) ;;
-            *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;;
-        esac
-    fi
-
-    assert_cron_config_matches_installed "$cronfile"
-    assert_no_foreign_managed_block "$workfile"
-    assert_target_block_not_clobbered "$workfile"
-    assert_config_readable_by_target "$cronfile"
-    atomic_replace_and_install "$cronfile" "$workfile"
-
-    # THE RECORDS FOLLOW THE CONFIG, and only once the config is really
-    # installed. PROFILE is create-time provenance that seed_profile_context
-    # still reads: leaving it saying `default` on a host now running `prod`
-    # would make the next seed ask about the wrong family root -- a silent lie
-    # of exactly the kind a migration is supposed to end. It is also what makes
-    # a second run of this command a no-op instead of an endless "not migrated
-    # yet".
-    #
-    # After the swap, not before: a failed swap must never leave records ahead
-    # of the file they describe. A failure HERE is the one direction that
-    # cannot be made atomic, so it is named per record instead of swallowed.
-    local _rf _stale=""
-    for _rf in "$CLIENTS_DIR"/*.conf; do
-        [ -e "$_rf" ] || continue
-        [ "$(record_get "$_rf" RUX_MODE)" = local ] && continue   # a local relationship: not migrated, its record untouched
-        migrate_read_record "$_rf"
-        [ "${STATE:-}" = active ] || continue
-        # The digest moves with the name, or the next run would think the edit
-        # had not been applied and migrate the same host forever.
-        [ "${PROFILE:-}" = "$target_profile" ] \
-            && [ -n "$_want_digest" ] && [ "${PROFILE_DIGEST_RECORDED:-}" = "$_want_digest" ] && continue
-        # Same idiom as activate-client: the record is `.`-sourced, so an
-        # appended assignment is the update -- last one wins.
-        if { cat "$_rf"; write_client_field PROFILE "$target_profile"
-             [ -n "$_want_digest" ] && write_client_field PROFILE_DIGEST_RECORDED "$_want_digest"
-             : ; } > "${_rf}.new" \
-             && mv -f "${_rf}.new" "$_rf"; then
-            chmod 0600 "$_rf" 2>/dev/null || :
-        else
-            rm -f "${_rf}.new"
-            _stale="$_stale ${CLIENT_NAME:-$_rf}"
-        fi
-    done
-    [ -n "$_stale" ] && warn "the config is now on profile '$target_profile', but these client records still name the old one:$_stale -- seed and catch-up read that field, so set PROFILE=$target_profile in them by hand before the next seed"
-
-    log "host migrated to profile '$target_profile' ($migrated client(s) rewritten)."
-}
 
 # REV-20260811-102 step 5: add SOURCE retention to relationships installed BEFORE
 # step 3, WITHOUT silent repair. Changing the preset only fixes new CREATE; an
@@ -17571,6 +17135,8 @@ relblock_view_unfold() {   # <file> -- in place, for READERS only (show-config, 
                 sd = (stem == "") ? "target" : "source"
                 for (i = 1; i <= n; i++) { x = trim(ts[i]); if (x == "" || off[R, x "." sd]) continue; list = list (list == "" ? "" : ",") "profile__relacja-" R "__" stem x }
                 printf "\tuse_template = %s\n", list
+                # the engine settings of the block, shown on every [dataset:] of the relationship
+                if (cur ~ /^\[dataset:/) for (j = 1; j <= nk[R]; j++) if (index(rk[R, j], ".") == 0 && !((cur, rk[R, j]) in F)) printf "\t%s = %s\n", rk[R, j], rv[R, j]
                 if (!((cur, "pair_label") in F)) pending_pl = R
                 next
             }
@@ -19809,7 +19375,7 @@ rux_remote_install() {
     # only shape that matches the declaration. An explicit --profile= still
     # wins -- the operator may have a customised passive variant.
     if [ "$passive" -eq 1 ] && { [ -z "$profile" ] || [ "$profile" = "$PROFILE_DEFAULT_NAME" ]; }; then
-        profile=passive
+        profile=passive-flat
     fi
 
     local cpath; cpath=$(client_conf_path "$name")
@@ -20090,7 +19656,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         show-tiers)       shift; cmd_show_tiers "$@" ;;
         set-tiers)        shift; cmd_set_tiers "$@" ;;
         migrate-config)   shift; cmd_migrate_config "$@" ;;
-        clean-templates)  shift; cmd_clean_templates "$@" ;;
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
@@ -20215,7 +19780,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         set-endpoint)     shift; cmd_set_endpoint "$@" ;;
         verify-endpoint)  shift; cmd_verify_endpoint "$@" ;;
         activate-client)  shift; cmd_activate_client "$@" ;;
-        migrate-profile)  shift; cmd_migrate_profile "$@" ;;
         set-bandwidth)    shift; cmd_set_bandwidth "$@" ;;
         set-transfer)     shift; cmd_set_transfer "$@" ;;
         audit-source-retention) shift; cmd_audit_source_retention "$@" ;;

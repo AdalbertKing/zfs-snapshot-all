@@ -36,6 +36,12 @@ PASS=0; FAIL=0
 ok()  { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 
+# X27 (owner 2026-10-14): the shipped profiles no longer carry the one-family ladder
+# (passive, the old default); case 30 is about that shape, so this suite runs on the
+# shipped profiles plus the old ladder ones from test/fixtures/profiles-ladder.
+export PROFILE_ROOT="$WORK/profiles"
+mkdir -p "$PROFILE_ROOT"
+cp "$REPO"/profiles/*.conf "$REPO"/test/fixtures/profiles-ladder/*.conf "$PROFILE_ROOT"/
 # shellcheck disable=SC1090
 source "$ZB"
 

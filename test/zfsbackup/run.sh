@@ -53,6 +53,16 @@ bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 # Source, not exec: guarded by the same BASH_SOURCE==$0 idiom update-control.sh
 # uses, so this reaches the helper functions without running the dispatch.
 # shellcheck disable=SC1090
+# X27 (owner 2026-10-14): the shipped profiles no longer include the one-family GFS
+# LADDER shape (default became "every tier its own family"). The ladder MACHINERY --
+# profile rendering, ensure_cron_config, gen-cron -G -- is still here and still tested,
+# so this suite runs on the shipped profiles PLUS the old ladder ones from
+# test/fixtures/profiles-ladder (where `default` is the ladder). Tests about what is
+# SHIPPED read $REPO/profiles directly.
+export PROFILE_ROOT="$WORK/profiles"
+mkdir -p "$PROFILE_ROOT"
+cp "$REPO"/profiles/*.conf "$PROFILE_ROOT"/
+cp "$REPO"/test/fixtures/profiles-ladder/*.conf "$PROFILE_ROOT"/
 source "$ZFSBACKUP"
 
 # REV-20260811-109 L0 targeted execution. `--section <id>` runs ONLY the named focused
@@ -65,8 +75,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|122|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | 122 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -77,14 +87,14 @@ want() {   # <section name> -> 0 when this section should run
     [ -z "$ONLY_SECTION" ] && return 0
     [ "$ONLY_SECTION" = "$1" ] && return 0
     # THE NUMBERED NAMES ARE ALIASES, and saying so is the fix for the second
-    # half of the same defect. 57/58/59/102/108/110/122 are REV ids of cases
+    # half of the same defect. 57/58/59/102/108/110 are REV ids of cases
     # that live INSIDE the retention block; the usage line offered them, the
     # case statement accepted them, and nothing keyed on them -- so
     # `--section 57` ran the whole suite before, and nothing at all after the
     # sections were gated. Caught by test/realshape, which asserts that every
     # name this file offers actually selects something.
     case "$1:$ONLY_SECTION" in
-        retention:57|retention:58|retention:59|retention:102|retention:108|retention:110|retention:122)
+        retention:57|retention:58|retention:59|retention:102|retention:108|retention:110)
             return 0 ;;
     esac
     return 1
@@ -102,7 +112,7 @@ want() {   # <section name> -> 0 when this section should run
 
 mkprof_copy() {   # <target profile, without the .conf>
     mkdir -p "$(dirname "$1")"
-    cp "$REPO/profiles/default.conf" "$1.conf"
+    cp "$PROFILE_ROOT/default.conf" "$1.conf"
 }
 mkprof_add() {    # <target profile dir> <section header> <line>
     awk -v want="$2" -v add="$3" '
@@ -1453,8 +1463,8 @@ else
 fi
 # A frozen profile with no stated way out is just a wall.
 case "$legacy_out" in
-    *migrate-profile*) ok "profile: the pre-GFS refusal names migrate-profile as the way out" ;;
-    *) bad "profile: the pre-GFS refusal names migrate-profile as the way out" "$legacy_out" ;;
+    *"edit-relation NAME --profile="*) ok "profile: the pre-GFS refusal names edit-relation --profile as the way out" ;;
+    *) bad "profile: the pre-GFS refusal names edit-relation --profile as the way out" "$legacy_out" ;;
 esac
 if ! grep -q "^\[template:profile__default__keep_" "$PROF/legacy.conf"; then
     ok "profile: no ladder is injected into a pre-GFS config"
@@ -4946,7 +4956,7 @@ fi
 # 3. A second, real, DIFFERENT profile name is validated and stored correctly
 # -- not just "default" happening to work.
 mkdir -p "$P53/profiles"
-cp "$REPO/profiles/default.conf" "$P53/profiles/altprofile.conf"
+cp "$PROFILE_ROOT/default.conf" "$P53/profiles/altprofile.conf"
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   PROFILE_ROOT="$P53/profiles" \
   cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
@@ -5899,37 +5909,21 @@ else
 fi
 
 # 6. A real EXECUTED invocation, not a sourced function: the process lifetime a
-#    host actually sees, ending the way most of this script's failures end --
-#    in die().
-#
-#    migrate-profile on a LEGACY config (standard_hourly still carrying
-#    prune_schedule) is the cheap one: it loads the profile, and with stdin at
-#    /dev/null the confirmation prompt reads EOF and it dies, well before
-#    anything installs. No --yes, so it cannot reach a crontab.
+#    host actually sees. Until 2026-10-14 this was migrate-profile dying at its
+#    prompt; that verb is gone (X27). list-profiles --json is the executed path
+#    that loads and RENDERS a profile (the mktemp-heavy part) with no zfs and no
+#    root -- the die() path itself is pinned by case 5 above.
 mkdir -p "$LK/clients"
-cat > "$LK/legacy.conf" <<'EOF'
-[defaults]
-	host_label = lktest
-
-[template:standard_hourly]
-	send_schedule  = 1 * * * *
-	prefix         = automated_hourly_
-	notify_word    = backup
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -H24
-EOF
 rm -rf "$LK/tmp/exec"; mkdir -p "$LK/tmp/exec"
 xout="$(TMPDIR="$LK/tmp/exec" PROFILE_ROOT="$LK/root" PROFILE_ACTIVE=prof \
-        CRON_CONFIG="$LK/legacy.conf" CLIENTS_DIR="$LK/clients" SERVER_CONF="$LK/no-such.conf" \
-        bash "$ZFSBACKUP" migrate-profile </dev/null 2>&1)"
+        CRON_CONFIG="$LK/no-such-jobs.conf" CLIENTS_DIR="$LK/clients" SERVER_CONF="$LK/no-such.conf" \
+        bash "$ZFSBACKUP" list-profiles --json </dev/null 2>&1)"
 n="$(find "$LK/tmp/exec" -mindepth 1 | wc -l | tr -d ' ')"
-# the discriminator: it must have ENTERED the migration, not returned early on
-# "already on the standard GFS profile" with no profile ever loaded.
-if [ "$n" = 0 ] && ! printf '%s' "$xout" | grep -q 'already on the standard GFS profile'; then
-    ok "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR"
+# the discriminator: it must have RENDERED a profile, not returned before loading one.
+if [ "$n" = 0 ] && printf '%s' "$xout" | grep -q '"valid":true'; then
+    ok "60: an executed zfs-backup.sh invocation that renders a profile leaves nothing in TMPDIR"
 else
-    bad "60: an executed zfs-backup.sh invocation that dies leaves nothing in TMPDIR" \
+    bad "60: an executed zfs-backup.sh invocation that renders a profile leaves nothing in TMPDIR" \
         "$n entr(ies) left: $(ls -1 "$LK/tmp/exec" | tr '\n' ' ')" "out=$xout"
 fi
 
@@ -6442,7 +6436,11 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 17/24 since 2026-10-14 (X27 S3): migrate-config -- the config's relationships moved once
 # into their [relation:] blocks. A WRITER, aimed like migrate-profile (cron_context_resolve
 # aim, assert_cron_config_matches_installed, then atomic_replace_and_install).
-if [ "$writers" -eq 17 ] && [ "$resolvers" -eq 24 ]; then
+# 16/23 since 2026-10-14 (X27 S4): clean-templates is gone -- no package writer leaves
+# template sections behind any more, so there is nothing for it to sweep.
+# 15/22 since 2026-10-14 (X27 S4): migrate-profile is gone (owner: "Usunac") -- a whole
+# collector moved to a profile is "Uzyj szablonu" on each relationship now.
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -6470,7 +6468,7 @@ while read -r fn want; do
 done <<'POLICIES'
 cmd_local_backup adopt
 cmd_activate_client adopt
-cmd_migrate_profile aim
+cmd_migrate_config aim
 cmd_audit_source_retention aim
 cmd_remove_client record
 cmd_edit_config record
@@ -6534,7 +6532,7 @@ fi
 
 # 64b3. And the parsers must not blank it before the resolver ever sees it --
 #       source-grep, because that is where the defect lived, not in the resolver.
-for fn in cmd_migrate_profile cmd_audit_source_retention; do
+for fn in cmd_migrate_config cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
     if ! printf '%s\n' "$body" | grep -q 'local_user_arg="" ;;'; then
         ok "64b3: $fn passes an explicit root through instead of blanking it"
@@ -6591,7 +6589,7 @@ fi
 
 # 64g. both orphan commands now take the two flags. Source-grep, because
 #      reaching their parsers needs a config, a crontab and a peer.
-for fn in cmd_migrate_profile cmd_audit_source_retention; do
+for fn in cmd_migrate_config cmd_audit_source_retention; do
     body=$(awk -v F="$fn" 'index($0, F "() {")==1{f=1} f{print} f&&/^\}$/{exit}' "$ZFSBACKUP")
     if printf '%s\n' "$body" | grep -q -- '--config=\*)' \
        && printf '%s\n' "$body" | grep -q -- '--local-user=\*)'; then
@@ -7151,657 +7149,8 @@ else
     bad "ssh: the stdin-carrier variant exists and does NOT pass -n"         "$(product_fn "$ZFSBACKUP" rux_root_ssh_in | grep 'ssh ' | head -1)"
 fi
 
-# ===========================================================================
-# 96. migrate-profile takes a DESTINATION (2026-08-25)
-#
-# The destination used to be hardcoded: legacy flat-per-tier -> the standard
-# GFS ladder. With `default`, `passive` and `prod` as real profiles, "put this
-# host on profile X" was an ordinary operation with no command behind it.
-#
-# The sharp edge is GFS -> FLAT. A GFS ladder sits at the PARENT of the
-# datasets, so the path-driven remove_managed_sections cannot reach it -- and
-# the entire ladder branch lives inside `if PROFILE_GFS`, so migrating TO a
-# flat profile would never have run the removal either. The old ladder would
-# have survived next to the new per-tier prune: two pruners, same snapshots,
-# same host. That is the property these assertions exist for.
-#
-# The fixture is built BY the tool: migrate to `default` first (which creates
-# the ladder), then to `prod` (which must remove it). Hand-writing the "already
-# on default" config would have been writing my own expectation into the input.
-# ===========================================================================
-MP="$WORK/migrateprofile"
-rm -rf "$MP"; mkdir -p "$MP/clients" "$MP/peerstate" "$MP/keys" "$MP/dir" \
-                       "$MP/root" "$MP/bin"
-cp "$REPO/profiles/default.conf" "$MP/root/default.conf"
-cp "$REPO/profiles/prod.conf"    "$MP/root/prod.conf"
-printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$MP/bin/crontab"
-chmod +x "$MP/bin/crontab"
-for h in 10.9.9.8 10.9.9.9; do
-    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$MP/keys/${h}_known_hosts"
-done
-cat > "$MP/peerstate/10.9.9.8.conf" <<EOF
-PEER_SAVED_ACCOUNT=zfsbackup
-PEER_SAVED_TARGET=tank/backups
-PEER_SAVED_MODE=backup
-PEER_SAVED_DATASETS="rpool/data"
-EOF
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$MP" > "$MP/server.conf"
-printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/jobs.conf"
-# NO PROFILE line: a record predating the field, which is exactly the legacy
-# host this command was written for -- and the honest starting point, since a
-# record already naming the destination is (correctly) a no-op.
-{ printf 'CLIENT_NAME=mpc\nPEER_HOST=10.9.9.8\nSTATE=active\n'
-  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
-  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
-  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$MP"
-} > "$MP/clients/mpc.conf"
-
-# The stubs are the transport and the crontab, never the shape under test:
-# atomic_replace_and_install still PUBLISHES (so the record update and the
-# second-run no-op are exercised for real), and the gen-cron validation of the
-# migrated config inside cmd_migrate_profile is left completely alone.
-# assert_source_prune_grant opens SSH to a peer that does not exist here; it has
-# its own coverage under REV-102 and says nothing about which profile won.
-mp_run() {   # <args...> -> rc, and the migrated config lands in $MP/dir/jobs.conf
-    ( PATH="$MP/bin:$PATH"
-      atomic_replace_and_install() { cp -f "$2" "$1"; }
-      assert_cron_config_matches_installed() { :; }
-      assert_no_foreign_managed_block() { :; }
-      assert_target_block_not_clobbered() { :; }
-      assert_config_readable_by_target() { :; }
-      assert_source_prune_grant() { :; }
-      assert_no_atomic_with_source_retention() { :; }
-      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
-      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
-      PROFILE_ACTIVE=default PROFILE_LOADED="" \
-      cmd_migrate_profile --config="$MP/dir/jobs.conf" --yes "$@" ) 2>&1
-}
-mp_ladder() { grep -cE '^\[prune:tank/backups' "$MP/dir/jobs.conf"; }
-
-# --- step 1: onto `default`. This is the ORIGINAL migration, unchanged, and
-#     it is also how the fixture for step 2 gets built.
-mp_out="$(mp_run --profile=default)"; mp_rc=$?
-if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -ge 1 ] \
-   && grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf"; then
-    ok "96a: migrate-profile --profile=default installs the GFS ladder (original behaviour)"
-else
-    bad "96a: migrate-profile --profile=default installs the GFS ladder" \
-        "rc=$mp_rc ladder=$(mp_ladder)
-$(printf '%s' "$mp_out" | tail -3)"
-fi
-
-# --- step 2: onto `prod`, which is FLAT. The ladder must GO.
-mp_out="$(mp_run --profile=prod)"; mp_rc=$?
-if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -eq 0 ]; then
-    ok "96b: GFS -> flat REMOVES the old ladder (it sits at the parent path, out of reach of a path sweep)"
-else
-    bad "96b: GFS -> flat removes the old ladder" \
-        "rc=$mp_rc ladder=$(mp_ladder)
-$(grep -nE '^\[prune:' "$MP/dir/jobs.conf" || echo 'no prune sections at all')"
-fi
-
-# ...and the destination's own templates arrived, while the source profile's
-# are gone. An orphan [template:] is not cosmetic: it is a schedule definition
-# sitting in a live config that nothing references, which is exactly what the
-# hardcoded four-name removal existed to prevent for the one case it knew.
-if grep -qE '^\[template:profile__prod__' "$MP/dir/jobs.conf" \
-   && ! grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf"; then
-    ok "96c: the destination's templates arrive and the source profile's orphans are swept"
-else
-    bad "96c: the destination's templates arrive and the source profile's orphans are swept" \
-        "$(grep -E '^\[template:' "$MP/dir/jobs.conf" | tr '\n' ' ')"
-fi
-
-# ...and the result is a config the REAL gen-cron accepts. "The text looks
-# right" is the appearance this project keeps mistaking for the property.
-if bash "$REPO/gen-cron.sh" -c "$MP/dir/jobs.conf" >/dev/null 2>&1; then
-    ok "96d: the migrated config renders through the real gen-cron.sh"
-else
-    bad "96d: the migrated config renders through the real gen-cron.sh" \
-        "$(bash "$REPO/gen-cron.sh" -c "$MP/dir/jobs.conf" 2>&1 | tail -3)"
-fi
-
-# --- the record follows the config. PROFILE is create-time provenance that
-#     seed_profile_context still reads: a record left saying `default` on a
-#     host now running `prod` sends the next seed at the wrong family root.
-# The LAST assignment of that field, which is what a `.`-sourced record actually
-# means -- not the last LINE of the file. The digest is appended after PROFILE,
-# so the literal tail check started failing for a reason unrelated to what this
-# assertion is about.
-if [ "$(grep '^PROFILE=' "$MP/clients/mpc.conf" | tail -1)" = "PROFILE=prod" ]; then
-    ok "96e: the client record is moved to the destination profile, last-assignment-wins"
-else
-    bad "96e: the client record is moved to the destination profile" \
-        "$(grep '^PROFILE=' "$MP/clients/mpc.conf" | tr '\n' ' ')"
-fi
-
-# --- running it again is a NO-OP, and this is why the record had to move: the
-#     old "is standard_hourly flat?" test would call an already-migrated prod
-#     host un-migrated and rewrite it on every run, forever.
-mp_before="$(md5sum < "$MP/dir/jobs.conf")"
-mp_out="$(mp_run --profile=prod)"; mp_rc=$?
-if [ "$mp_rc" -eq 0 ] && [ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] \
-   && printf '%s' "$mp_out" | grep -q "already on profile 'prod'"; then
-    ok "96f: a second migration to the same profile is a no-op that says so"
-else
-    bad "96f: a second migration to the same profile is a no-op that says so" \
-        "rc=$mp_rc changed=$([ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] && echo no || echo YES)
-$(printf '%s' "$mp_out" | tail -2)"
-fi
-
-# --- CONTROL: a profile that does not exist is refused BEFORE anything moves.
-#     Without this, every assertion above would also pass against a build that
-#     silently ignored --profile and always did `default`.
-mp_before="$(md5sum < "$MP/dir/jobs.conf")"
-mp_out="$(mp_run --profile=nosuchprofile)"; mp_rc=$?
-if [ "$mp_rc" -ne 0 ] && [ "$(md5sum < "$MP/dir/jobs.conf")" = "$mp_before" ] \
-   && printf '%s' "$mp_out" | grep -q "nosuchprofile"; then
-    ok "96g control: an unknown --profile is refused by name, with nothing touched"
-else
-    bad "96g control: an unknown --profile is refused by name, with nothing touched" \
-        "rc=$mp_rc: $(printf '%s' "$mp_out" | tail -2)"
-fi
-
-# --- THE CANDIDATE CONFIG DOES NOT SURVIVE A REFUSAL.
-#
-# Every transactional command removes its own working copy on each of its OWN
-# failure paths. None of them can reach a die() raised inside a function they
-# called -- the shell exits from under the caller, and .zfsbackup-work.XXXXXX
-# stays next to the live config at mode 0644. Same leak class as the 1824
-# rendered profile copies found in pve0's /tmp, and it lands in exactly the
-# directory an operator opens when something has just gone wrong.
-#
-# Forced with today's other change: a config fencing a family MORE WEAKLY than
-# the profile requires is refused from inside ensure_cron_config. That is a real
-# refusal on a real path, not a stub raised to make a point.
-# A LEGACY config, deliberately: standard_hourly still carries prune_schedule.
-# That shape reaches the working-copy stage on the PRE-CHANGE build too, so the
-# negative control for this assertion fails because the file was left behind and
-# not because an option was not recognised. Measured on HEAD: 1 leftover.
-# It also fences vzdump MORE WEAKLY than the profile requires.
-{ printf '[defaults]\n\thost_label = mptest\n\n'
-  printf '[template:standard_hourly]\n\tsend_schedule = 1 * * * *\n\tprune_schedule = 21 * * * *\n\tkeep = 24\n\n'
-  printf '[excluded:vzdump]\n\tkeep = 1\n'
-} > "$MP/dir/leak.conf"
-mp_leak_out="$( ( PATH="$MP/bin:$PATH"
-      atomic_replace_and_install() { cp -f "$2" "$1"; }
-      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
-      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
-      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
-      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
-      PROFILE_ACTIVE=default PROFILE_LOADED="" \
-      cmd_migrate_profile --config="$MP/dir/leak.conf" --yes ) 2>&1 )"
-mp_leak_rc=$?
-mp_left="$(find "$MP/dir" -maxdepth 1 -name '.zfsbackup-work.*' 2>/dev/null | wc -l)"
-if [ "$mp_leak_rc" -ne 0 ] && [ "$mp_left" -eq 0 ] \
-   && printf '%s' "$mp_leak_out" | grep -q 'protects it LESS'; then
-    ok "96k: a die() from inside a callee does not leave the candidate config behind"
-else
-    bad "96k: a die() from inside a callee does not leave the candidate config behind" \
-        "rc=$mp_leak_rc leftovers=$mp_left" "$(printf '%s' "$mp_leak_out" | tail -1)"
-fi
-
-# CONTROL: the net must not eat a candidate that was PUBLISHED. Releasing a path
-# that has become the live config would be a disaster dressed as a cleanup, so
-# the successful migration above has to have left a readable config behind.
-if [ -s "$MP/dir/jobs.conf" ] && grep -q '^\[defaults\]' "$MP/dir/jobs.conf"; then
-    ok "96l control: a published config is not swept by the same net"
-else
-    bad "96l control: a published config is not swept by the same net" \
-        "$(ls -l "$MP/dir/jobs.conf" 2>&1)"
-fi
-
-# --- A FLAT PROFILE IS NOT THE FROZEN ONE.
-#
-# Found by 96h, not by reading: migrating back out of `prod` was refused with
-# "uses the pre-GFS profile (standard_* still carries prune_schedule)" -- naming
-# a family the file does not contain. detect_profile_gfs answers a SHAPE
-# question ("do the tiers prune themselves?"), and that is true of the frozen
-# pre-GFS family AND of any modern flat profile. The refusal that read it is
-# about a NAME: the bare standard_* family written before profiles were
-# namespaced.
-#
-# The consequence was not limited to migration. Probed directly: a config
-# generated from `prod` accepts its FIRST client and REFUSES the second, so
-# `prod` was a one-relationship-per-host profile -- which would have surfaced on
-# a live collector, on the second relationship, months from now.
-FZ="$WORK/frozenshape"; rm -rf "$FZ"; mkdir -p "$FZ/root" "$FZ/bin"
-cp "$REPO/profiles/prod.conf" "$FZ/root/prod.conf"; cp "$REPO/profiles/default.conf" "$FZ/root/default.conf"
-printf '#!/bin/sh\nexit 0\n' > "$FZ/bin/crontab"; chmod +x "$FZ/bin/crontab"
-fz_gen() {   # <config> <profile> -> rc
-    ( PATH="$FZ/bin:$PATH"; PROFILE_ROOT="$FZ/root"; PROFILE_ACTIVE="$2"; PROFILE_LOADED=""
-      ensure_cron_config "$1" 0 1 always ) >/dev/null 2>&1
-}
-printf '[defaults]\n\thost_label = fz\n' > "$FZ/jobs.conf"
-fz_gen "$FZ/jobs.conf" prod
-fz_first=$(grep -cE '^\[template:profile__prod__' "$FZ/jobs.conf")
-fz_gen "$FZ/jobs.conf" prod; fz_rc2=$?
-if [ "$fz_first" -ge 1 ] && [ "$fz_rc2" -eq 0 ]; then
-    ok "96i: a host already on a FLAT profile accepts a second relationship"
-else
-    bad "96i: a host already on a FLAT profile accepts a second relationship" \
-        "first generation wrote $fz_first template(s); second returned $fz_rc2"
-fi
-
-# CONTROL, and the reason 96i is not simply the guard switched off: the GENUINE
-# frozen family must still be refused. Without this, deleting the check outright
-# would pass 96i.
-printf '[defaults]\n\thost_label = fz\n\n[template:standard_hourly]\n\tsend_schedule = 1 * * * *\n\tprune_schedule = 21 * * * *\n\tkeep = 24\n' > "$FZ/legacy.conf"
-if ! fz_gen "$FZ/legacy.conf" default; then
-    ok "96j control: a GENUINE pre-GFS config is still refused (the guard is narrowed, not removed)"
-else
-    bad "96j control: a genuine pre-GFS config is still refused" "it was accepted"
-fi
-
-# --- CONTROL: --profile really selects. Migrating BACK to default must put the
-#     ladder back; if the flag were ignored, 96b would pass for the wrong reason
-#     on a build that simply never emits a ladder.
-mp_out="$(mp_run --profile=default)"; mp_rc=$?
-if [ "$mp_rc" -eq 0 ] && [ "$(mp_ladder)" -ge 1 ] \
-   && grep -qE '^\[template:profile__default__' "$MP/dir/jobs.conf" \
-   && ! grep -qE '^\[template:profile__prod__' "$MP/dir/jobs.conf"; then
-    ok "96h control: migrating BACK to a GFS profile restores the ladder and sweeps prod's templates"
-else
-    bad "96h control: migrating back to a GFS profile restores the ladder" \
-        "rc=$mp_rc ladder=$(mp_ladder) tpl=$(grep -cE '^\[template:profile__prod__' "$MP/dir/jobs.conf")"
-fi
-
-# --- ONE SHELL, SEVERAL RECORDS: NO FIELD MAY SURVIVE INTO THE NEXT ONE.
-#
-# REV F3. A client record is a `.`-sourced file, so a field a record does NOT
-# carry keeps whatever the previous record left behind. cmd_migrate_profile
-# sources every record in one shell, three times over.
-#
-# Record A carries PROFILE=prod; record B is older and has no PROFILE field at
-# all. After `. A` then `. B`, B still reads prod -- a false "already on
-# profile" in the precheck, and a record that silently never gets its PROFILE
-# written in the post-install loop.
-#
-# This is the same defect the tree fixed for BANDWIDTH, and the comment in
-# load_client_and_connection names migrate-profile as a caller that needs the
-# reset. These loops were written without it. The `( : )` beside each source
-# reads like a subshell and is a shellcheck no-op -- which is how I made the
-# mistake in the first place.
-LK="$WORK/leakrecords"; rm -rf "$LK"; mkdir -p "$LK"
-# EXCLUDE_1 rides along because it is the field that proved the first fix
-# wrong. That fix reset a hand-picked list of names -- the ones I could see --
-# and a NUMBERED field cannot be enumerated ahead of time at all. On pve9 an
-# EXCLUDE_1 from an old, already-REMOVED record reached an active one and the
-# proposed cron line grew a `-X skip` the relationship had never asked for.
-printf 'CLIENT_NAME=a\nSTATE=active\nPROFILE=prod\nEXCLUDE_1=skip\n' > "$LK/a.conf"
-printf 'CLIENT_NAME=b\nSTATE=active\n'                              > "$LK/b.conf"
-
-leak_probe() {   # <reader> [field] -> what b ends up seeing in that field
-    local fld="${2:-PROFILE}"
-    ( PROFILE=""; EXCLUDE_1=""
-      $1 "$LK/a.conf"; $1 "$LK/b.conf"
-      eval "printf '%s' \"\${$fld:-<empty>}\"" )
-}
-if [ "$(leak_probe migrate_read_record)" = "<empty>" ]; then
-    ok "96r: a record without PROFILE does not inherit the previous record's"
-else
-    bad "96r: a record without PROFILE does not inherit the previous record's" \
-        "b saw PROFILE='$(leak_probe migrate_read_record)'"
-fi
-
-if [ "$(leak_probe migrate_read_record EXCLUDE_1)" = "<empty>" ]; then
-    ok "96r2: a NUMBERED field does not survive either -- the reset is not a list of names"
-else
-    bad "96r2: a numbered field does not survive either" \
-        "b saw EXCLUDE_1='$(leak_probe migrate_read_record EXCLUDE_1)'"
-fi
-
-# CONTROL, and the reason 96r is not vacuous: the PLAIN source really does leak.
-# Without this the assertion would pass against any reader at all, including one
-# that never read the field.
-plain_source() { . "$1"; }
-if [ "$(leak_probe plain_source)" = "prod" ]; then
-    ok "96s control: the plain source leaks it, so 96r is testing something"
-else
-    bad "96s control: the plain source leaks it" \
-        "b saw '$(leak_probe plain_source)' -- expected the leak"
-fi
-
-# --- THE DIGEST MUST NOTICE THE RENDERER, NOT ONLY THE FILE.
-#
-# REV F2b. The first digest covered profile.conf and gen-cron's tier-letter
-# table -- the operator's file, and the table that turns `keep = 24` into -H24.
-# Both real, both insufficient: change HOW a profile is rendered (the
-# namespacing, the fragment split, the keep translation) and the installed
-# CONFIG changes while neither input moves. Same digest, different policy, and
-# migrate-profile answering "nothing to migrate".
-#
-# PROFILE_RENDER_SCHEMA is a number a human bumps, not a hash of lib-profile.sh,
-# because only a human knows whether the OUTPUT changed -- a hash would move on
-# a comment edit and migrate the whole fleet for nothing.
-dg_at() {   # <schema value> -> digest
-    ( PROFILE_ROOT="$REPO/profiles"; PROFILE_ACTIVE=prod
-      PROFILE_RENDER_SCHEMA="$1"; profile_digest )
-}
-dg_a="$(dg_at 1)"; dg_b="$(dg_at 1)"; dg_c="$(dg_at 99)"
-if [ -n "$dg_a" ] && [ "$dg_a" = "$dg_b" ] && [ "$dg_a" != "$dg_c" ]; then
-    ok "96y: the digest moves when the RENDERER's version moves, and not otherwise"
-else
-    bad "96y: the digest moves when the renderer's version moves" \
-        "same-input='$dg_a' vs '$dg_b'; bumped='$dg_c'"
-fi
-
-# --- CREATE MUST NOT SUCCEED WITHOUT SOURCE RETENTION.
-#
-# REV F1, second round, and the reviewer was right about the first one. I
-# replaced a die() with a log-and-continue and argued that gen-cron was the
-# backstop -- it validates the candidate and rejects a [prune:] with no
-# use_template. But that branch writes NO SECTION AT ALL, and gen-cron cannot
-# reject a section that was never written. The relationship would have been
-# created, stamped four families on the source, and bounded none of them.
-#
-# The argument was wrong, not the code around it. These two assertions exist so
-# that the argument cannot be made again without failing.
-# A LOADED PROFILE WHOSE ARTIFACTS ARE GONE IS A STALE STATE, NOT A VERDICT.
-#
-# This one cost three attempts. The suite renders profiles inside subshells; a
-# subshell's EXIT trap releases the temps and clears ITS copy of the variables,
-# while the parent keeps PROFILE_LOADED=1 and paths to files that no longer
-# exist. I first read that as "no retention" and skipped silently, then as "no
-# retention" and refused -- both wrong, because the profile is fine and only the
-# rendering is missing. Repair the state: re-render once, non-fatally, and ask
-# again.
-# The verdict is formed INSIDE the subshell, because the re-rendered fragment is
-# a temp owned by that shell and its EXIT trap releases it on the way out. The
-# first version of this assertion returned the PATH and tested -s in the parent,
-# where the file was already gone -- the very phenomenon under test, one level
-# up, catching the test that was written for it.
-st_frag="$( ( PROFILE_ROOT="$REPO/profiles"; PROFILE_ACTIVE=default
-              PROFILE_LOADED=1
-              PROFILE_PRUNE_FILE=/nonexistent-prune
-              PROFILE_DS_FILE=/nonexistent-ds
-              profile_reload_if_stale
-              f="$(profile_retention_fragment)" && [ -s "$f" ] && printf 'RENDERED' ) )"
-if [ "$st_frag" = "RENDERED" ]; then
-    ok "96z: a stale profile state is re-rendered, not mistaken for an empty policy"
-else
-    bad "96z: a stale profile state is re-rendered" "got '${st_frag:-<nothing>}', expected RENDERED"
-fi
-
-# CONTROL: a profile that genuinely cannot be validated must still resolve to
-# nothing, or 96z would be indistinguishable from "always re-render and hope".
-st_none="$( ( PROFILE_ROOT="$WORK/no-such-profile-root"; PROFILE_ACTIVE=ghost
-              PROFILE_LOADED=1
-              PROFILE_PRUNE_FILE=/nonexistent-prune
-              PROFILE_DS_FILE=/nonexistent-ds
-              profile_reload_if_stale
-              f="$(profile_retention_fragment)" && [ -s "$f" ] && printf 'RENDERED' ) 2>/dev/null )"
-if [ -z "$st_none" ]; then
-    ok "96z2 control: an unvalidatable profile still resolves to nothing"
-else
-    bad "96z2 control: an unvalidatable profile still resolves to nothing" "got '$st_none'"
-fi
-
-SR="$WORK/srfailclosed"; rm -rf "$SR"; mkdir -p "$SR"
-printf '[defaults]\n\thost_label = sr\n' > "$SR/jobs.conf"
-sr_before="$(md5sum < "$SR/jobs.conf")"
-
-# A profile that is LOADED but whose rendered artifacts are unreadable -- the
-# stale-temp case that made me soften this in the first place. It must refuse,
-# not carry on: on a create path both readings ("declares nothing" and "cannot
-# see it") are reasons to stop before publishing.
-sr_create="$( ( PROFILE_LOADED=1
-                PROFILE_ACTIVE=srprof
-                PROFILE_PRUNE_FILE="$SR/gone-prune"
-                PROFILE_DS_FILE="$SR/gone-ds"
-                LOAD_HOST=10.4.4.4
-                SOURCE_PRUNE_EMITTED_DS=()
-                emit_remote_source_prune "$SR/jobs.conf" srclient "# managed-by: zfs-backup.sh client=srclient" tank/src
-              ) 2>&1 )"
-sr_rc=$?
-if [ "$sr_rc" -ne 0 ] && [ "$(md5sum < "$SR/jobs.conf")" = "$sr_before" ] \
-   && printf '%s' "$sr_create" | grep -q 'bound none of them'; then
-    ok "96v: CREATE refuses when no retention fragment resolves, and writes nothing"
-else
-    bad "96v: CREATE refuses when no retention fragment resolves" \
-        "rc=$sr_rc changed=$([ "$(md5sum < "$SR/jobs.conf")" = "$sr_before" ] && echo no || echo YES)" \
-        "$(printf '%s' "$sr_create" | tail -1)"
-fi
-
-# The retrofit verb ONLY ever creates, so reporting success while adding nothing
-# is the same fail-open wearing an audit's clothes. It used to `return 0`.
-sr_apply="$( ( PROFILE_LOADED=1
-               PROFILE_ACTIVE=srprof
-               PROFILE_PRUNE_FILE="$SR/gone-prune"
-               PROFILE_DS_FILE="$SR/gone-ds"
-               SOURCE_PRUNE_EMITTED_DS=()
-               emit_missing_source_prune "$SR/jobs.conf" srclient "acct@10.4.4.4:tank/src"
-             ) 2>&1 )"
-sr_arc=$?
-if [ "$sr_arc" -ne 0 ] && printf '%s' "$sr_apply" | grep -q 'Refusing to report success'; then
-    ok "96w: audit --apply refuses rather than reporting success while adding nothing"
-else
-    bad "96w: audit --apply refuses rather than reporting success while adding nothing" \
-        "rc=$sr_arc" "$(printf '%s' "$sr_apply" | tail -1)"
-fi
-
-# CONTROL: with a READABLE fragment the same call must go through, or 96v/96w
-# would pass against a build that refused source retention outright -- which is
-# the defect this whole finding is about, inverted.
-printf '\tuse_template = t1\n' > "$SR/real-ds"
-: > "$SR/real-prune"
-printf '[template:t1]\n\tprune_schedule = 9 * * * *\n\tpattern = automated_\n\tretain = -H24\n' > "$SR/tpl"
-sr_ok="$( ( PROFILE_LOADED=1
-            PROFILE_ACTIVE=srprof
-            PROFILE_TPL_FILE="$SR/tpl"
-            PROFILE_PRUNE_FILE="$SR/real-prune"
-            PROFILE_DS_FILE="$SR/real-ds"
-            LOAD_HOST=10.4.4.4
-            SOURCE_PRUNE_EMITTED_DS=()
-            emit_remote_source_prune "$SR/jobs.conf" srclient "# managed-by: zfs-backup.sh client=srclient" tank/src
-          ) 2>&1 )"
-if [ "$(grep -c '^\[prune:[^]]*@' "$SR/jobs.conf")" -ge 1 ]; then
-    ok "96x control: a readable fragment still produces the source prune section"
-else
-    bad "96x control: a readable fragment still produces the source prune section" \
-        "$(printf '%s' "$sr_ok" | tail -1)"
-fi
-
-# --- A FLAT PROFILE MUST BOUND THE FAMILIES IT CREATES ON THE SOURCE.
-#
-# REV F1, and it was measured on a PRODUCTION host while the lab ran: pve1
-# carried 33 automated_hourly_, 9 automated_daily_, 3 automated_weekly_ and
-# 3 automated_monthly_ snapshots, against ZERO [prune:account@host:...]
-# sections in the collector's config.
-#
-# An active pull CREATES those four families on the source with `snapget -m`.
-# The inline prune from [dataset:] bounds only the collector's COPY. Both remote
-# source emitters were gated on `PROFILE_GFS -eq 1`, false for every flat
-# profile, so `prod` stamped snapshots on a production host and pruned none of
-# them there -- REV-20260811-102's original defect, one profile shape over.
-#
-# The gate asked about SHAPE. What matters is whether the profile has retention
-# to express: a ladder profile keeps it in [prune], a flat one in the tiers its
-# [dataset] references. Both are fragments carrying use_template.
-echo 'PROFILE=default' >> "$MP/clients/mpc.conf"
-printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/src.conf"
-( PATH="$MP/bin:$PATH"
-  atomic_replace_and_install() { cp -f "$2" "$1"; }
-  assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
-  assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-  assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
-  CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
-  SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
-  PROFILE_ACTIVE=default PROFILE_LOADED="" \
-  cmd_migrate_profile --config="$MP/dir/src.conf" --yes --profile=prod ) >/dev/null 2>&1
-
-if [ "$(grep -c '^\[prune:[^]]*@' "$MP/dir/src.conf")" -ge 1 ] \
-   && [ "$(grep -c '^\[template:profile__prod__src_' "$MP/dir/src.conf")" -eq 4 ]; then
-    ok "96o: a FLAT profile emits remote source retention for every family it creates"
-else
-    bad "96o: a FLAT profile emits remote source retention for every family it creates" \
-        "remote prune sections=$(grep -c '^\[prune:[^]]*@' "$MP/dir/src.conf") src templates=$(grep -c '^\[template:profile__prod__src_' "$MP/dir/src.conf")"
-fi
-
-# ...and a SOURCE template must not carry the creation half of its tier. A flat
-# tier is self-contained -- it creates AND prunes -- so copying it verbatim would
-# put send_schedule and prefix into a section whose whole job is a remote prune.
-# A ladder profile's prune tiers never carry them, which is why this could not
-# have been noticed before `prod`.
-if ! sed -n '/^\[template:profile__prod__src_/,/^\[/p' "$MP/dir/src.conf" \
-        | grep -qE '^[[:space:]]*(send_schedule|prefix)[[:space:]]*='; then
-    ok "96p: a derived SOURCE template carries retention only, never creation"
-else
-    bad "96p: a derived SOURCE template carries retention only, never creation" \
-        "$(sed -n '/^\[template:profile__prod__src_/,/^\[/p' "$MP/dir/src.conf" | grep -E 'send_schedule|prefix' | head -2)"
-fi
-
-# CONTROL: the result must still render. "The text looks right" is the
-# appearance this project keeps mistaking for the property, and a source prune
-# built from the wrong fragment is exactly how the empty-ladder defect showed
-# up -- as a gen-cron rejection.
-if bash "$REPO/gen-cron.sh" -c "$MP/dir/src.conf" >/dev/null 2>&1; then
-    ok "96q control: the config carrying flat source retention renders"
-else
-    bad "96q control: the config carrying flat source retention renders" \
-        "$(bash "$REPO/gen-cron.sh" -c "$MP/dir/src.conf" 2>&1 | tail -2)"
-fi
-
-# LAST IN THIS GROUP ON PURPOSE: the two assertions below move the client
-# record's PROFILE, and 96f/96h read it. Placed earlier, they turned 96h into a
-# silent no-op that still reported rc=0 -- a test passing because it did
-# nothing.
-# --- A FLAT PROFILE ON A **FRESH** CONFIG EMITS NO LADDER.
-#
-# FOUND ON LIVE INFRASTRUCTURE, not here: pve9, 2026-08-25, the first `prod`
-# relationship ever created.
-#
-#     gen-cron.sh: error: [prune:hdd/prodlab-k1/192.168.28.9] has no use_template
-#
-# PROFILE_GFS is detect_profile_gfs' answer about the INSTALLED CONFIG. A fresh
-# config says nothing, so it defaults to "ladder", and a flat profile's ladder
-# was planned, emitted, and rejected for having no use_template -- `prod` could
-# not create its FIRST relationship. The assertions above missed it because they
-# exercise ensure_cron_config (templates, the frozen-shape refusal); the ladder
-# is emitted by emit_client_sections, one layer further in.
-#
-# The fix asks the only question that cannot be wrong: does the profile being
-# WRITTEN carry a prune fragment at all. `prod` does not -- its tiers prune
-# their own families -- so there is nothing to put in a ladder and emitting one
-# is a defect by construction.
-# The record's profile is the no-op test (96f), so it has to be set AWAY from
-# the destination or this assertion measures nothing. Last assignment wins.
-printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/fresh.conf"
-echo 'PROFILE=default' >> "$MP/clients/mpc.conf"
-mp_fresh_out="$( ( PATH="$MP/bin:$PATH"
-      atomic_replace_and_install() { cp -f "$2" "$1"; }
-      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
-      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
-      CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
-      SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
-      PROFILE_ACTIVE=default PROFILE_LOADED="" \
-      cmd_migrate_profile --config="$MP/dir/fresh.conf" --yes --profile=prod ) 2>&1 )"
-mp_fresh_rc=$?
-# The LADDER only: a header with no '@' in it. Remote source retention is also a
-# [prune:] section (account@host:dataset), and counting both made this assertion
-# fail the moment F1 gave flat profiles the source prune they owed -- for a
-# reason that had nothing to do with what it tests.
-if [ "$mp_fresh_rc" -eq 0 ] \
-   && [ "$(grep -c '^\[prune:[^]@]*\]' "$MP/dir/fresh.conf")" -eq 0 ] \
-   && bash "$REPO/gen-cron.sh" -c "$MP/dir/fresh.conf" >/dev/null 2>&1; then
-    ok "96m: a FLAT profile on a fresh config emits no ladder and the result renders"
-else
-    bad "96m: a FLAT profile on a fresh config emits no ladder and the result renders" \
-        "rc=$mp_fresh_rc ladder_sections=$(grep -c '^\[prune:[^]@]*\]' "$MP/dir/fresh.conf")" \
-        "$(printf '%s' "$mp_fresh_out" | tail -2)"
-fi
-
-# CONTROL: the same fresh-config path with a LADDER profile must still produce
-# one. Without this, 96m would pass against a build that simply stopped emitting
-# [prune:] sections altogether.
-printf '[defaults]\n\thost_label = mptest\n' > "$MP/dir/freshg.conf"
-echo 'PROFILE=prod' >> "$MP/clients/mpc.conf"
-( PATH="$MP/bin:$PATH"
-  atomic_replace_and_install() { cp -f "$2" "$1"; }
-  assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
-  assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-  assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
-  CLIENTS_DIR="$MP/clients" PEER_STATE_DIR="$MP/peerstate" PEER_KEY_DIR="$MP/keys" \
-  SERVER_CONF="$MP/server.conf" PROFILE_ROOT="$MP/root" \
-  PROFILE_ACTIVE=default PROFILE_LOADED="" \
-  cmd_migrate_profile --config="$MP/dir/freshg.conf" --yes --profile=default ) >/dev/null 2>&1
-if [ "$(grep -c '^\[prune:' "$MP/dir/freshg.conf")" -ge 1 ]; then
-    ok "96n control: a LADDER profile on a fresh config still emits its ladder"
-else
-    bad "96n control: a LADDER profile on a fresh config still emits its ladder" \
-        "$(grep -cE '^\[' "$MP/dir/freshg.conf") sections, none of them prune"
-fi
-
-# --- AN EDITED PROFILE MUST BE APPLIABLE. A NAME IS NOT A VERSION.
-#
-# REV F2. profiles/prod.conf opens with a promise: "an operator changes
-# a retention here and nowhere else". migrate-profile decided "already there"
-# from the record's PROFILE string alone, so the promise was false in exactly
-# the case that matters -- edit keep = 7 to keep = 10, re-run the command, get
-# "nothing to migrate", and the installed cron still carries -D7.
-#
-# The digest covers the operator's file AND the renderer's tier-letter table,
-# because `keep = 24` becomes `-H24` through that table: a table change alters
-# the installed policy without touching a byte of the profile, and a digest over
-# the file alone would call that unchanged.
-ED="$WORK/editedprofile"; rm -rf "$ED"; mkdir -p "$ED/clients" "$ED/peerstate" "$ED/keys" "$ED/dir" "$ED/root" "$ED/bin"
-cp "$REPO/profiles/prod.conf" "$ED/root/prod.conf"
-printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$ED/bin/crontab"
-chmod +x "$ED/bin/crontab"
-for h in 10.9.9.8 10.9.9.9; do
-    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$ED/keys/${h}_known_hosts"
-done
-cat > "$ED/peerstate/10.9.9.8.conf" <<EOF
-PEER_SAVED_ACCOUNT=zfsbackup
-PEER_SAVED_TARGET=tank/backups
-PEER_SAVED_MODE=backup
-PEER_SAVED_DATASETS="rpool/data"
-EOF
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$ED" > "$ED/server.conf"
-printf '[defaults]\n\thost_label = edtest\n' > "$ED/dir/jobs.conf"
-{ printf 'CLIENT_NAME=edc\nPEER_HOST=10.9.9.8\nSTATE=active\n'
-  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
-  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
-  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$ED"
-} > "$ED/clients/edc.conf"
-
-ed_run() {
-    ( PATH="$ED/bin:$PATH"
-      atomic_replace_and_install() { cp -f "$2" "$1"; }
-      assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
-      assert_target_block_not_clobbered() { :; }; assert_config_readable_by_target() { :; }
-      assert_source_prune_grant() { :; }; assert_no_atomic_with_source_retention() { :; }
-      CLIENTS_DIR="$ED/clients" PEER_STATE_DIR="$ED/peerstate" PEER_KEY_DIR="$ED/keys" \
-      SERVER_CONF="$ED/server.conf" PROFILE_ROOT="$ED/root" \
-      PROFILE_ACTIVE=default PROFILE_LOADED="" \
-      cmd_migrate_profile --config="$ED/dir/jobs.conf" --yes --profile=prod ) 2>&1
-}
-ed_daily() { awk '/^\[template:profile__prod__daily\]/{f=1;next} /^\[/{f=0} f&&/retain/{sub(/.*=[ \t]*/,"");print;exit}' "$ED/dir/jobs.conf"; }
-
-ed_run >/dev/null 2>&1
-ed_first="$(ed_daily)"
-
-# The no-op is real and must stay real: an UNCHANGED profile still says so.
-ed_out="$(ed_run)"
-if printf '%s' "$ed_out" | grep -q 'nothing to migrate'; then
-    ok "96t control: an UNCHANGED profile is still a no-op"
-else
-    bad "96t control: an unchanged profile is still a no-op" "$(printf '%s' "$ed_out" | tail -2)"
-fi
-
-# Now the operator edits the one file they are told to edit.
-sed -i 's/^\tkeep           = 7$/\tkeep           = 10/' "$ED/root/prod.conf"
-ed_out="$(ed_run)"
-ed_second="$(ed_daily)"
-if ! printf '%s' "$ed_out" | grep -q 'nothing to migrate' \
-   && [ "$ed_first" = "-D7" ] && [ "$ed_second" = "-D10" ]; then
-    ok "96u: editing a retention in the profile is applied, not answered with 'nothing to migrate'"
-else
-    bad "96u: editing a retention in the profile is applied" \
-        "before='$ed_first' after='$ed_second'" "$(printf '%s' "$ed_out" | tail -2)"
-fi
+# 96 (migrate-profile) removed with the verb, X27 (owner 2026-10-14): a collector moved to
+# a profile is "Uzyj szablonu" on each relationship now.
 
 # ===========================================================================
 # TWO ROOTS: what we ship, and what this host decided.
@@ -7831,7 +7180,7 @@ pr_file() { ( PROFILE_USER_ROOT="$UR"; profile_file "$1" 2>/dev/null ); }
 # local file of that name used to replace the factory profile in silence. The
 # factory name now resolves to the factory file; the local one is ignored
 # (list-profiles shows it as "shadow", save-profile refuses to write one).
-if [ "$(pr_file prod)" = "$REPO/profiles/prod.conf" ]; then
+if [ "$(pr_file prod)" = "$PROFILE_ROOT/prod.conf" ]; then
     ok "96A roots: a name present in BOTH resolves to the FACTORY profile (the local file of that name is ignored)"
 else
     bad "96A roots: a name present in both resolves to the factory profile" "got '$(pr_file prod)'"
@@ -7840,7 +7189,7 @@ fi
 # CONTROL: a name the host does NOT override still resolves to the factory one.
 # Without this, the assertion above would pass against a build that always
 # answered with the user root, override or not.
-if [ "$(pr_file default)" = "$REPO/profiles/default.conf" ]; then
+if [ "$(pr_file default)" = "$PROFILE_ROOT/default.conf" ]; then
     ok "96A roots control: a name the host does not override still comes from the package"
 else
     bad "96A roots control: a name the host does not override comes from the package" "got '$(pr_file default)'"
@@ -7862,7 +7211,7 @@ else
     bad "96B name: a file name from the host's directory resolves to that file" "got '$(nm_case firma.conf)'"
 fi
 
-if [ "$(nm_case default.conf)" = "$REPO/profiles/default.conf" ]; then
+if [ "$(nm_case default.conf)" = "$PROFILE_ROOT/default.conf" ]; then
     ok "96B name: a FILE NAME from the package resolves to that file"
 else
     bad "96B name: a file name from the package resolves to that file" "got '$(nm_case default.conf)'"
@@ -7877,7 +7226,7 @@ fi
 # CONTROL: the extension-less shorthand still works, because every existing
 # client record, test and habit says --profile=default. Without this the three
 # above would pass against a build that simply stopped resolving names.
-if [ "$(nm_case default)" = "$REPO/profiles/default.conf" ]; then
+if [ "$(nm_case default)" = "$PROFILE_ROOT/default.conf" ]; then
     ok "96B control: the extension-less shorthand still resolves"
 else
     bad "96B control: the extension-less shorthand still resolves" "got '$(nm_case default)'"
@@ -7893,17 +7242,14 @@ else
         "path='$(profile_name_of "$UR/firma.conf")' bare='$(profile_name_of firma)'"
 fi
 
-# ...and the digest follows the resolution: with a local file under the factory
-# name present, the digest is still the FACTORY one (nothing changed under the
-# relationships built from it). A local profile under its OWN name still
-# resolves to the local file -- the control that the user root is still read.
-d_fac="$( ( PROFILE_USER_ROOT="$WORK/nonexistent"; PROFILE_ACTIVE=prod; profile_digest ) )"
-d_loc="$( ( PROFILE_USER_ROOT="$UR";              PROFILE_ACTIVE=prod; profile_digest ) )"
+# A local profile under its OWN name resolves to the local file -- the control
+# that the user root is still read. (The digest half of this test went with
+# profile_digest and migrate-profile, X27 2026-10-14.)
 cp "$UR/prod.conf" "$UR/prod-moj.conf"
-if [ -n "$d_fac" ] && [ "$d_fac" = "$d_loc" ] && [ "$(pr_file prod-moj)" = "$UR/prod-moj.conf" ]; then
-    ok "96A roots: a local file under a factory name does not change the factory digest; an own name still resolves locally"
+if [ "$(pr_file prod-moj)" = "$UR/prod-moj.conf" ]; then
+    ok "96A roots: an own name still resolves locally"
 else
-    bad "96A roots: digest and own-name resolution" "factory='$d_fac' local='$d_loc'" "own='$(pr_file prod-moj)'"
+    bad "96A roots: own-name resolution" "own='$(pr_file prod-moj)'"
 fi
 rm -f "$UR/prod-moj.conf"
 
@@ -8120,125 +7466,7 @@ sb_rc=$?
     || bad "pair-tx control: an unpaired peer is refused and the config is untouched" "rc=$sb_rc"
 
 
-# ============================================================================
-# 122. REV-20260827-122 F1 -- a profile given BY PATH must have its own
-#      templates replaced, and the RENDERED retention must change with them.
-#
-# The removal loop interpolated $target_profile raw. Given `--profile=/tmp/x.conf`
-# -- a form the same function accepts a few lines earlier -- it searched for
-#     [template:profile__/tmp/x.conf__...]
-# while the renderer had written
-#     [template:profile__x__...]
-# so no old template was removed. ensure_cron_config is ADDITIVE, so the old
-# templates then suppressed the append of the edited policy: the candidate
-# installed cleanly carrying the OLD retention, and the client record was
-# stamped with the NEW digest afterwards. A second run reads that digest and
-# takes the "nothing to migrate" path forever.
-#
-# So the assertion is the RENDERED cron line, not the config fragment and not
-# the record: the reviewer's criterion 5 says so, and it is the right axis
-# anyway -- the fragment and the record were both already "correct" while the
-# crontab enforced something else. That gap IS the defect.
-#
-# Self-contained (REV-109 4.3): its own fixture, its own profile copy, nothing
-# inherited from the sections above.
-# ============================================================================
-M122="$WORK/rev122"
-rm -rf "$M122"; mkdir -p "$M122/clients" "$M122/peerstate" "$M122/keys" "$M122/dir" \
-                         "$M122/root" "$M122/bin" "$M122/custom"
-# A profile the operator keeps OUTSIDE the package tree and names by full path.
-# d30 is the honest choice: one tier, one counter, so the rendered retention is
-# a single unambiguous flag and a change to it cannot hide behind a ladder.
-cp "$REPO/profiles/d30.conf" "$M122/custom/mine.conf"
-cp "$REPO/profiles/default.conf" "$M122/root/default.conf"
-printf '#!/bin/sh\ncase " $* " in *" -l "*) printf "# BEGIN zfs-backup-managed\n# END zfs-backup-managed\n";; esac\nexit 0\n' > "$M122/bin/crontab"
-chmod +x "$M122/bin/crontab"
-for h in 10.9.9.8 10.9.9.9; do
-    printf '%s ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZha2U\n' "$h" > "$M122/keys/${h}_known_hosts"
-done
-cat > "$M122/peerstate/10.9.9.8.conf" <<EOF
-PEER_SAVED_ACCOUNT=zfsbackup
-PEER_SAVED_TARGET=tank/backups
-PEER_SAVED_MODE=backup
-PEER_SAVED_DATASETS="rpool/data"
-EOF
-printf 'DEFAULT_TARGET=tank/backups\nCRON_CONFIG=%s/dir/jobs.conf\n' "$M122" > "$M122/server.conf"
-printf '[defaults]\n\thost_label = r122\n' > "$M122/dir/jobs.conf"
-{ printf 'CLIENT_NAME=r122c\nPEER_HOST=10.9.9.8\nSTATE=active\n'
-  printf 'ACTIVE_ENDPOINT=10.9.9.9:22\n'
-  printf 'MANAGED_DATASETS=tank/backups/10.9.9.8/rpool/data\n'
-  printf 'CRON_CONFIG=%s/dir/jobs.conf\n' "$M122"
-} > "$M122/clients/r122c.conf"
-
-m122_run() {   # <args...> -> rc; the migrated config lands in $M122/dir/jobs.conf
-    ( PATH="$M122/bin:$PATH"
-      atomic_replace_and_install() { cp -f "$2" "$1"; }
-      assert_cron_config_matches_installed() { :; }
-      assert_no_foreign_managed_block() { :; }
-      assert_target_block_not_clobbered() { :; }
-      assert_config_readable_by_target() { :; }
-      assert_source_prune_grant() { :; }
-      assert_no_atomic_with_source_retention() { :; }
-      CLIENTS_DIR="$M122/clients" PEER_STATE_DIR="$M122/peerstate" PEER_KEY_DIR="$M122/keys" \
-      SERVER_CONF="$M122/server.conf" PROFILE_ROOT="$M122/root" \
-      PROFILE_ACTIVE=default PROFILE_LOADED="" \
-      cmd_migrate_profile --config="$M122/dir/jobs.conf" --yes "$@" ) 2>&1
-}
-# THE RENDERED retention: the installed config driven through the REAL generator,
-# which is what the host would actually run. Not the [template:] fragment.
-m122_retain() {
-    REPO_DIR=/REPO NOTIFY_SCRIPT=/N WARN_SCRIPT=/W DIGEST_SCRIPT=/D CRON_LOG=/L \
-        bash "$REPO/gen-cron.sh" -c "$M122/dir/jobs.conf" 2>/dev/null \
-        | grep -oE ' -D[0-9]+' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//'
-}
-
-# --- step 1: migrate onto the custom profile, BY PATH.
-m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
-_g="$m122_rc"
-if [ "$_g" = "0" ]; then ok "122a: a profile named by absolute path migrates at all"; else bad "122a: a profile named by absolute path migrates at all" "want [0] got [$_g]"; fi
-_g="$(m122_retain)"
-if [ "$_g" = "-D30" ]; then ok "122b: ...and renders the retention that profile declares"; else bad "122b: ...and renders the retention that profile declares" "want [-D30] got [$_g]"; fi
-# The template family carries the CANONICAL name, never the path -- that is the
-# identity the removal in step 2 has to match.
-if grep -qE '^\[template:profile__mine__' "$M122/dir/jobs.conf"; then
-    ok "122c: ...under the canonical namespace 'mine', not the path"
-else
-    bad "122c: ...under the canonical namespace 'mine', not the path" \
-        "$(grep -oE '^\[template:[^]]+\]' "$M122/dir/jobs.conf" | head -3)"
-fi
-
-# --- step 2: EDIT the profile and migrate again with the same path.
-#     This is the whole finding. On b0a3a289b7bfd2a9e89b8de75c5d600e382f6c0d the
-#     rendered retention stays -D30 while the run reports success.
-sed -i 's/^\tkeep           = 30$/\tkeep           = 10/' "$M122/custom/mine.conf"
-grep -q 'keep           = 10' "$M122/custom/mine.conf" \
-    && ok "122d: the fixture edit landed (keep 30 -> 10)" \
-    || bad "122d: the fixture edit landed" "$(grep -n 'keep' "$M122/custom/mine.conf" | head -2)"
-
-m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
-_g="$m122_rc"
-if [ "$_g" = "0" ]; then ok "122e: re-migrating an EDITED profile given by path succeeds"; else bad "122e: re-migrating an EDITED profile given by path succeeds" "want [0] got [$_g]"; fi
-# THE CARRYING ASSERTION.
-_g="$(m122_retain)"
-if [ "$_g" = "-D10" ]; then ok "122f: ...and the RENDERED retention actually changes to the edited value"; else bad "122f: ...and the RENDERED retention actually changes to the edited value" "want [-D10] got [$_g]"; fi
-# ...and the old family is gone rather than sitting beside the new one. An
-# orphan [template:] is a schedule definition in a live config that nothing
-# references -- and here it was the thing suppressing the new policy.
-n122="$(grep -cE '^\[template:profile__mine__daily\]' "$M122/dir/jobs.conf")"
-_g="$n122"
-if [ "$_g" = "1" ]; then ok "122g: ...exactly one 'daily' template, not the old one plus the new"; else bad "122g: ...exactly one 'daily' template, not the old one plus the new" "want [1] got [$_g]"; fi
-
-# --- step 3: criterion 4 -- an unchanged file is the REAL no-op path, and it is
-#     only meaningful because step 2 proved the policy really moved first.
-m122_out="$(m122_run --profile=$M122/custom/mine.conf)"; m122_rc=$?
-_g="$m122_rc"
-if [ "$_g" = "0" ]; then ok "122h: a third run with the unchanged file exits 0"; else bad "122h: a third run with the unchanged file exits 0" "want [0] got [$_g]"; fi
-case "$m122_out" in
-    *"nothing to migrate"*) ok "122i: ...and takes the no-op path by saying so" ;;
-    *) bad "122i: ...and takes the no-op path by saying so" "$(printf '%s' "$m122_out" | tail -2)" ;;
-esac
-_g="$(m122_retain)"
-if [ "$_g" = "-D10" ]; then ok "122j: ...leaving the edited retention in place"; else bad "122j: ...leaving the edited retention in place" "want [-D10] got [$_g]"; fi
+# 122 (migrate-profile by path) removed with the verb, X27 (owner 2026-10-14).
 
 # THE INSTALLED BLOCK'S SOURCE IS CHECKED BEFORE IT IS REPLACED.
 #
@@ -9063,7 +8291,7 @@ setup-server|setup-server --local-user=BadName --target=tank/b
 local-backup|local-backup --local-user=BadName --source=tank/x --target=tank/b
 add-client|add-client flagtest --local-user=BadName --host=10.0.0.1 --datasets=tank/x
 set-bandwidth|set-bandwidth --local-user=BadName --peer=10.0.0.1 --bandwidth=2M
-migrate-profile|migrate-profile --local-user=BadName
+migrate-config|migrate-config --local-user=BadName
 audit-source-retention|audit-source-retention --local-user=BadName
 rux|--source=10.0.0.1:tank/x --local-user=BadName --target=tank/b
 EOF
@@ -9079,7 +8307,6 @@ while IFS='|' read -r cmd args; do
 done <<'EOF'
 local-backup|local-backup --profile=-x --source=tank/x --target=tank/b
 add-client|add-client flagtest --profile=-x --host=10.0.0.1 --datasets=tank/x
-migrate-profile|migrate-profile --profile=-x
 rux|--source=10.0.0.1:tank/x --profile=-x --target=tank/b
 EOF
 # The grammar is the resolver's, not local-backup's old one: a profile FILE
@@ -10394,16 +9621,26 @@ case "$lp_got" in
     *) bad "listprofiles: keep = 24 on an hourly tier reports the rendered flag -H24 beside it" "$lp_got" ;;
 esac
 
-# TWO SHIPPED PROFILES, because the fixture cannot prove the catalogue.
-# Y5M12D31H24 is the one that read as "flat" before the fragment-level gfs was
-# honoured, and default is the other ladder-over-one-family in the tree.
+# REAL FILES, because the fixture cannot prove the catalogue. Since X27
+# (2026-10-14) the shipped default is "every tier its own family"; the old
+# ladder-over-one-family profiles live in test/fixtures/profiles-ladder, and
+# Y5M12D31H24 there is the one that read as "flat" before the fragment-level
+# gfs was honoured.
+_real=$( PROFILE_ROOT="$REPO/profiles"; PROFILE_USER_ROOT="$LP/empty-user"
+         list_profiles_record "$REPO/profiles/default.conf" package 2>/dev/null )
+case "$_real" in
+    *'"mechanism":"gfs","shape":"family-per-tier"'*)
+        ok "listprofiles: the shipped default reads as gfs, every tier its own family" ;;
+    *)  bad "listprofiles: the shipped default reads as gfs, every tier its own family" \
+            "$(printf '%s' "$_real" | cut -c1-400)" ;;
+esac
 for _p in default Y5M12D31H24; do
-    _real=$( PROFILE_ROOT="$REPO/profiles"; PROFILE_USER_ROOT="$LP/empty-user"
-             list_profiles_record "$REPO/profiles/$_p.conf" package 2>/dev/null )
+    _real=$( PROFILE_ROOT="$REPO/test/fixtures/profiles-ladder"; PROFILE_USER_ROOT="$LP/empty-user"
+             list_profiles_record "$REPO/test/fixtures/profiles-ladder/$_p.conf" package 2>/dev/null )
     case "$_real" in
         *'"mechanism":"gfs","shape":"one-family"'*)
-            ok "listprofiles: the shipped $_p reads as gfs over one family, as its own header says" ;;
-        *)  bad "listprofiles: the shipped $_p reads as gfs over one family, as its own header says" \
+            ok "listprofiles: the ladder fixture $_p reads as gfs over one family, as its own header says" ;;
+        *)  bad "listprofiles: the ladder fixture $_p reads as gfs over one family, as its own header says" \
                 "$(printf '%s' "$_real" | cut -c1-400)" ;;
     esac
 done
@@ -11542,7 +10779,7 @@ rm -rf "$PF/clients"
 # [template:<tier>] on its own family, counted like the others, listed in
 # [dataset]. Ladder base: a new rung on the ladder's family, listed in [prune],
 # and the --keep after --add-tier lands in that rung. An existing tier is refused.
-cp "$REPO/profiles/default.conf" "$PF/pkg/default.conf"
+cp "$REPO/test/fixtures/profiles-ladder/default.conf" "$PF/pkg/default.conf"   # the LADDER default (X27: the shipped one is family-per-tier)
 pf_sec() { awk -v h="[template:$2]" '$0 == h {f=1; next} /^\[/ {f=0} f' "$PF/user/$1.conf" 2>/dev/null; }
 if pf_run --from=d7h24 --as=at1 --add-tier=weekly \
    && pf_sec at1 weekly | grep -qE 'send_schedule += 21 2 \* \* 0' && pf_sec at1 weekly | grep -qE 'pattern += automated_weekly$' \
@@ -11840,7 +11077,7 @@ for pf_src in "$REPO"/profiles/*.conf; do
     fi
 done
 pf_n_src=$(ls "$REPO"/profiles/*.conf | wc -l); pf_n_out=$(ls "$PFALL"/*.conf 2>/dev/null | wc -l)
-if [ -z "$pf_all_fail" ] && [ "$pf_n_out" -eq "$pf_n_src" ] && [ "$pf_n_src" -ge 16 ]; then
+if [ -z "$pf_all_fail" ] && [ "$pf_n_out" -eq "$pf_n_src" ] && [ "$pf_n_src" -ge 15 ]; then
     ok "saveprof: every shipped profile ($pf_n_src) passes the generator gate unchanged"
 else
     bad "saveprof: every shipped profile passes the generator gate unchanged" "shipped=$pf_n_src saved=$pf_n_out failed:$pf_all_fail"
@@ -11858,7 +11095,7 @@ fi
 # use_template list; refused when the tier is the only one left pruning its
 # family, and when the tier does not exist.
 # ---------------------------------------------------------------------------
-cp "$REPO/profiles/default.conf" "$PF/pkg/default.conf"
+cp "$REPO/test/fixtures/profiles-ladder/default.conf" "$PF/pkg/default.conf"   # the LADDER default (X27: the shipped one is family-per-tier)
 pf_use_template_prune() {   # <file> -> the [prune] use_template value, whitespace stripped
     awk '/^\[/ { cur = $0 } cur == "[prune]" && /^[[:space:]]*use_template[[:space:]]*=/ {
         v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); print v }' "$1" | tr -d '[:space:]'
@@ -12728,7 +11965,7 @@ if grep -q 'profile__d30h24__hourly' "$WORK/gs.out"; then
 else
     bad "gfsshape: the refusal names the deciding template" "$(cat "$WORK/gs.out")"
 fi
-if grep -q 'migrate-profile' "$WORK/gs.out" && grep -q 'Nothing was changed' "$WORK/gs.out"; then
+if grep -q 'edit-relation NAME --profile=' "$WORK/gs.out" && grep -q 'Nothing was changed' "$WORK/gs.out"; then
     ok "gfsshape: ...names the ways out, and says nothing was changed"
 else
     bad "gfsshape: the refusal names the ways out" "$(cat "$WORK/gs.out")"

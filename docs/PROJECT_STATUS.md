@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a577fd1a5831b07e -->
+<!-- status-covers-digest: 97345a238b877ed0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,49 +21,25 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Źródła relacji lokalnej i „Użyj szablonu” bez przebudowy z szablonu (etap B, właściciel
-  2026-10-13).** `add-source` / `remove-source` relacji LOKALNEJ zmieniają w configu tylko
-  sekcje tego jednego źródła, jedną transakcją (kopia configu, zmiana, cały config przez
-  generator, atomowa podmiana): dodanie klonuje `[dataset:]` i `[prune:CEL/…]` istniejącego
-  źródła tej relacji (te same szablony, rekursja i pomijane rodziny; jego wyjątki zostają przy
-  nim), usunięcie kasuje obie sekcje źródła z jego wyjątkami; kopia zostaje na hoście. Wcześniej
-  obie operacje przebudowywały całą relację z szablonu z rekordu — szczeble zmienione przez
-  `set-tiers` albo ręcznie przepadały. Odmowy przed zapisem: nie-źródło, już jest, nie istnieje,
-  ostatnie źródło, nakładanie na cel albo na dowolny `[dataset:]` configu. Rekord
-  (`REQUESTED_DATASETS`, `MANAGED_DATASETS`) idzie za configiem po udanej instalacji;
-  `MANAGED_DATASETS` rozdzielone spacją, jak je piszą i czytają pozostałe czasowniki (pierwsza
-  wersja pisała przecinki -- `delete-relation --destroy-copies` wziąłby listę za jedną nazwę;
-  znalezione na żywo na pve9b, rekord przywrócony z kopii, poprawione w następnym PR).
-  „Użyj szablonu” w „Zmień relację” nie zapisuje już pochodnego szablonu źródła
-  (`<szablon>-src-…`): krok 1 to szablon ze źródłem jak cel (`edit-relation --source-profile=`),
-  krok 2 — tylko gdy w oknie źródła coś zmieniono — `set-tiers --src-tier…`; plan pokazuje oba,
-  każdy jest jedną atomową podmianą, a stan po kroku 1 jest pełny i poprawny. Na żywo (plany)
-  na pve9b: dodanie `hdd/vms` do `lokalna-hdd-vms` (tylko jego zadania, ręczne 29 zachowane),
-  usunięcie `hdd/test-kreator`, odmowa `hdd/ct/subvol-301-disk-0` (wewnątrz źródła). Zostaje
-  na etap C: kreator NOWEJ relacji dalej zapisuje pochodne szablony źródła i ukryty szablon
-  „Ręcznie”; uzgadnianie z #521 i ostrzeżenie X6 jeszcze w kodzie.
-
-- **Szczeble relacji wprost w configu: `show-tiers` i `set-tiers` (właściciel 2026-10-13,
-  „config jako jedyne źródło prawdy”, etap A; model z ukrytym szablonem jako pośrednikiem
-  odrzucony: „Ctrl+C w złym momencie i mamy stan nieustalony”).** `show-tiers NAZWA --json`
-  czyta szczeble relacji z jej sekcji w configu (strona celu i źródła; lokalna: `[prune:]` /
-  `[dataset:]`, zdalna: `[dataset:]` / `[prune:user@host:…]`) w kształcie szczebli z
-  `list-profiles`. `set-tiers NAZWA` zmienia je w kopii configu: `--tier=T`/`--src-tier=T` z
-  `--keep`, `--retain`, `--quiesce`, `--send-schedule`, `--prune-schedule`; `--add-tier` i
-  `--drop-tier` działają na OBU stronach (źródło robi rodzinę, cel ją sprząta; ostatni szczebel
-  strony odmówiony); `--method=gfs|flat|age`. Szablon nazwany po profilu (`profile__d7h24__…`)
-  jest przy pierwszej zmianie kopiowany dla relacji (`profile__relacja-NAZWA__…`) — następna
-  relacja z tym profilem nie dziedziczy zmiany; godzina nadpisana w sekcji (rozrzut minut
-  relacji zdalnej) zmienia się w sekcji. Cały config przez generator, jedna atomowa podmiana
-  (wzór `set-transfer`); odrzucony config = plik nietknięty, bez kopii roboczej. Okno
-  „Harmonogram i retencja kopii w celu i źródle” czyta szczeble z `show-tiers` (tabela celu i
-  okno źródła jak dotąd) i zapisuje jednym `set-tiers` — bez `save-profile`, ukrytego szablonu i
-  `edit-relation`. Na żywo (tylko plany): pve9b `lokalna-hdd-vms` — liczba, godzina, sposób,
-  dodanie tygodniowego (migawka w źródle 2:21 w niedzielę, sprzątanie po obu stronach), usunięcie
-  godzinowego, odmowa ostatniego; pve10 relacja zdalna `pve9b` na wspólnym `m31w4d7h24` — kopia
-  `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
-  51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
-  drogą (etap B).
+- **X27 S4: cięcie starego zapisu (2026-10-14, w toku, gałąź `feat/x27-s4`).** Właściciel:
+  „Wywalmy więc tę zgodność… Zredukujmy tę choinkę do minimum”, szablony niosą tylko szczeble.
+  Usunięte: `clean-templates` (czasownik, okno, F7 na F5), `migrate-profile` (z `profile_digest`)
+  i `cron2conf.sh` (z suitem i umową `cron-line-shape`). Fabryczny `default` ma kształt (a):
+  każdy szczebel robi i liczy własne migawki (`automated_hourly_` …, jak `m12w4d7h24-gfs`);
+  `passive.conf` i `Y5M12D31H24.conf` usunięte, `add-client --passive` bierze `passive-flat`.
+  Dawne drabiny na jednej rodzinie leżą w `test/fixtures/profiles-ladder/` — tylko dla testów
+  maszynerii drabiny (render, `gen-cron -G`); generator dalej czyta `[template:]` (decyzja 1).
+  Pola silnika (`history compression cipher autotune raw`) są polami bloku, nie szablonu.
+  `local-backup` wymaga `--name` (każda kopia to relacja z blokiem); relacja „same migawki”
+  z nazwą (`--target=''`) jest dozwolona. Odmowy, które wskazywały `migrate-profile`, wskazują
+  `edit-relation NAZWA --profile=P`. Relacja: wszystkie źródła jednej relacji idą jedną linią
+  `snapsend` na szczebel; drugie źródło = `add-source`, inna relacja = inny blok. Testy
+  `localbackup` i `zfsbackup` przepisane na kształt bloku (stare przypadki bez nazwy, drabiny
+  `default`, `migrate-profile` 96/122 i „mieszane żądanie” usunięte, z komentarzem dlaczego). 63g 15/22.
+  Zastępuje opisy z 10-13 („Szczeble relacji wprost w configu”, „Źródła relacji lokalnej…”):
+  kopie szablonu `profile__relacja-NAZWA__…` i uzgadnianie przez szablony już nie istnieją.
+  Zostaje: `lab-migawki` na pve9 (4 zadania `hdd/lab/*` jako nazwana relacja „same migawki”),
+  potem usunięcie `migrate-config`, S5 (dokumentacja).
 
 - **X27 S2+S3: czasowniki wprost na bloku `[relation:]`, `migrate-config` (2026-10-14).** Bez
   tłumacza (etap B odrzucony): czasowniki czytają i piszą blok relacji bezpośrednio.
