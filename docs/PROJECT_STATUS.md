@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d8be6d35f9cfbc10 -->
+<!-- status-covers-digest: 444e7edb76401ce1 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -64,6 +64,26 @@
   `profile__relacja-pve9b__daily`, roczny szczebel z pobieraniem i sprzątaniem, godzina źródła
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
+
+- **X27 etap B: czasowniki zapisują relację jako blok `[relation:NAZWA]` (2026-10-14).**
+  Na dysku relacja ma jeden blok; w jednej zmianie czasownik rozkłada go w kopii roboczej na
+  dotychczasowe własne szczeble relacji (`relation_unfold`), robi swoje i składa z powrotem
+  (`relation_fold`) w podglądzie planu i przy jedynej podmianie (`atomic_replace_and_install`) —
+  nic pośredniego nie ląduje na dysku. Składana jest relacja, której WSZYSTKIE szczeble są jej
+  własne i nikt inny ich nie używa; relacja na wspólnych szczeblach szablonu zostaje w starym
+  zapisie (etap D: `migrate-config`). Nowa relacja (`local-backup --name`, pierwsze
+  `activate-client`) dostaje szablon jako własne szczeble, więc powstaje od razu jako blok.
+  „Użyj szablonu” JEDNYM zapisem: `edit-relation --profile=P --src-tier=… --keep=…` nakłada
+  liczby źródła w tej samej kopii roboczej (`tiers_apply_ops`, wydzielone z `set-tiers`); GUI
+  woła jedno polecenie, bez drugiego kroku `set-tiers`. Czytelnicy (`show-tiers`,
+  `show-config`, `list-jobs`) widzą blok przez rozłożoną kopię tymczasową. Usunięcie relacji
+  lokalnej zabiera jej blok. Sprawdzone na kopiach configów z labu (pve9b, pve10, pve11):
+  pve9b — blok, crontab z tymi samymi komendami (różni się tylko opis źródła: `lsrc_`); pozostałe
+  — bez zmian. Testy: `localbackup` +4 (set-tiers/show-tiers na bloku — ręczna kontrola na kodzie bez
+  etapu B: odmowa „no tier 'hourly' on the source side”; usunięcie; nowa relacja; jeden zapis),
+  test X22 dostosowany, `tui` (jeden zapis). Otwarte: GUI dalej
+  pokazuje szczegóły relacji ze starego kształtu (etap C), wykrywanie ręcznych zmian (X6)
+  czyta jeszcze sekcje szablonów.
 
 - **X27 etap A: generator czyta blok `[relation:NAZWA]` (2026-10-14).** Projekt
   `docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md`, zatwierdzony przez właściciela. Relacja może
