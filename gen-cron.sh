@@ -534,6 +534,9 @@ Usage: gen-cron.sh [-c CONFIG] [--install] [-V]
 Section types (header split on first ':'):
   [defaults]              host_label, optional dst
   [template:<tier>]       a tier's cadence + retention policy
+  [relation:<name>]       ONE relationship's whole policy (tiers, target_/source_
+                          numbers); its sections say `relation = <name>` instead
+                          of use_template. See expand_relations.
   [dataset:<path>]        owned dataset: create+send/pull (dst=push, src=pull)
                           + inline self-prune (own path)
   [prune:<scope>]         standalone additive prune (recursive=/clear_cut= opt-in)
@@ -1261,8 +1264,8 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|prune-bookmarks|replica|excluded) : ;;
-                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded)" ;;
+                    template|dataset|prune|prune-bookmarks|replica|excluded|relation) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded/relation)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
             fi
@@ -1285,6 +1288,118 @@ parse_ini() {
 
 ini_has() { [ -n "${INI[$1${SEP}$2]+x}" ]; }
 ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
+
+# [relation:<name>] -- ONE RELATIONSHIP'S POLICY, IN ONE BLOCK (X27, owner 2026-10-14:
+# "Z szablonow powstaja configi -- jedyne zrodlo prawdy ... Posrednicy to proszenie
+# sie o klopoty"). The relationship's [dataset:]/[prune:] sections say
+# `relation = <name>` instead of use_template, and this block holds every number:
+#
+#   [relation:<name>]
+#       tiers = hourly, daily                # the tiers, finest first
+#       gfs   = yes                          # optional: every tier feeds a GFS ladder
+#       hourly.send_schedule  = 1 * * * *    # <tier>.<field>: BOTH sides
+#       hourly.target_retain  = -H24         # <tier>.target_<field>: the target side
+#       hourly.source_retain  = -H12         # <tier>.source_<field>: the source side
+#       hourly.monitor        = 90m 150m     # = monitor_warn + monitor_crit
+#
+# <field> is any [template:] field (send_schedule prune_schedule prefix pattern
+# keep retain quiesce notify_word tier_label monitor_warn monitor_crit
+# monitor_schedule gfs ...), plus `monitor`. A side-specific spelling wins.
+#
+# WHICH SIDE a section is, from its shape -- the rule set-tiers already uses:
+#   [dataset:] with `src` (a pull) -> target    [dataset:] without (local push) -> source
+#   [prune:] whose scope is user@host:path -> source        any other [prune:] -> target
+#
+# Expanded HERE into ordinary in-memory templates, named exactly as the hidden
+# per-relationship templates were (relacja-<name>__<tier>, __src_<tier> for a
+# remote source, __lsrc_<tier> for a local one), so every rule below -- tiers,
+# GFS ladder, monitors, schedules, per-section overrides <field>_<tier> -- runs
+# unchanged and a migrated config renders the SAME crontab. Nothing is written.
+# Refused: a block nothing points at, a section pointing at a block it does not
+# belong to (pair_label), a section with both `relation` and use_template.
+RELATION_SIDE_FIELDS=""
+expand_relations() {
+    local hdr kind name sec rel side stem t f key val tl gfs n
+    local -A used=()
+    for sec in "${SECTION_ORDER[@]}"; do
+        kind="${SECTION_KIND[$sec]}"
+        { [ "$kind" = dataset ] || [ "$kind" = prune ]; } || continue
+        ini_has "$sec" relation || continue
+        rel="$(ini_get "$sec" relation)"
+        [ -n "$rel" ] || die "[$sec]: 'relation' is blank -- name the [relation:...] block this section belongs to"
+        [ "${SECTION_KIND[relation:$rel]:-}" = relation ] || die "[$sec]: relation = '$rel', but there is no [relation:$rel] block in $CONFIG"
+        ini_has "$sec" use_template && die "[$sec]: has BOTH 'relation = $rel' and 'use_template' -- a section takes its tiers from one place"
+        if ini_has "$sec" pair_label; then
+            [ "$(ini_get "$sec" pair_label)" = "$rel" ] || die "[$sec]: relation = '$rel' but pair_label = '$(ini_get "$sec" pair_label)' -- a relationship's block is read only by its own sections"
+        else
+            INI["${sec}${SEP}pair_label"]="$rel"
+        fi
+        if [ "$kind" = dataset ]; then
+            if ini_has "$sec" src; then side=target; stem=""; else side=source; stem=lsrc_; fi
+        else
+            case "${SECTION_NAME[$sec]}" in *@*:*) side=source; stem=src_ ;; *) side=target; stem="" ;; esac
+        fi
+        tl=""; ini_has "relation:$rel" tiers && tl="$(ini_get "relation:$rel" tiers)"
+        [ -n "$tl" ] || die "[relation:$rel] has no 'tiers' -- list the tiers it runs (e.g. tiers = hourly, daily)"
+        local list="" one
+        local -a ts=(); IFS=',' read -ra ts <<< "$tl"
+        for one in "${ts[@]}"; do
+            one="$(trim "$one")"; [ -n "$one" ] || continue
+            local tpl="relacja-${rel}__${stem}${one}"
+            if [ -z "${used[$tpl]+x}" ]; then
+                [ -z "${SEEN_SECTION[template:$tpl]+x}" ] || die "[relation:$rel] would define the tier '$tpl', but the config already has a [template:$tpl] section -- one of the two has to go"
+                used[$tpl]=1
+                SEEN_SECTION["template:$tpl"]=1
+                SECTION_ORDER+=("template:$tpl")
+                SECTION_KIND["template:$tpl"]=template
+                SECTION_NAME["template:$tpl"]="$tpl"
+                gfs=""; ini_has "relation:$rel" gfs && gfs="$(ini_get "relation:$rel" gfs)"
+                [ -n "$gfs" ] && INI["template:${tpl}${SEP}gfs"]="$gfs"
+                # common fields first, then the side's own -- the side wins
+                local pass pre
+                for pass in common "$side"; do
+                    pre="${one}."; [ "$pass" = common ] || pre="${one}.${pass}_"
+                    for key in "${!INI[@]}"; do
+                        [ "${key%%${SEP}*}" = "relation:$rel" ] || continue
+                        f="${key#*${SEP}}"
+                        case "$f" in "$pre"*) ;; *) continue ;; esac
+                        f="${f#"$pre"}"
+                        case "$f" in target_*|source_*) [ "$pass" = common ] && continue ;; esac
+                        val="${INI[$key]}"
+                        if [ "$f" = monitor ]; then
+                            read -r n val <<< "$val"
+                            [ -n "$n" ] && [ -n "$val" ] || die "[relation:$rel] ${key#*${SEP}} = '${INI[$key]}' -- two durations, warn then crit (e.g. 90m 150m)"
+                            INI["template:${tpl}${SEP}monitor_warn"]="$n"; INI["template:${tpl}${SEP}monitor_crit"]="$val"
+                            continue
+                        fi
+                        INI["template:${tpl}${SEP}${f}"]="$val"
+                    done
+                done
+            fi
+            list="${list:+$list,}$tpl"
+        done
+        INI["${sec}${SEP}use_template"]="$list"
+        used["block:$rel"]=1
+    done
+    # The block itself: every key is a known shape, every tier named is listed,
+    # and something points at it.
+    for hdr in "${SECTION_ORDER[@]}"; do
+        [ "${SECTION_KIND[$hdr]}" = relation ] || continue
+        rel="${SECTION_NAME[$hdr]}"
+        [ -n "${used[block:$rel]+x}" ] || die "[relation:$rel] -- no [dataset:]/[prune:] section says 'relation = $rel'. Delete the block, or point the relationship's sections at it"
+        tl=" $(ini_get "$hdr" tiers | tr ',' ' ' | tr -s ' ') "
+        for key in "${!INI[@]}"; do
+            [ "${key%%${SEP}*}" = "$hdr" ] || continue
+            f="${key#*${SEP}}"
+            case "$f" in tiers|gfs) continue ;; esac
+            t="${f%%.*}"; [ "$t" != "$f" ] || die "[$hdr] field '$f' -- expected tiers, gfs or <tier>.<field> (e.g. hourly.target_retain)"
+            case "$tl" in *" $t "*) ;; *) die "[$hdr] field '$f' names the tier '$t', which is not in tiers =$tl" ;; esac
+            f="${f#*.}"; f="${f#target_}"; f="${f#source_}"
+            [ "$f" = monitor ] && continue
+            [ -n "${FIELD_OK[template${SEP}${f}]+x}" ] || die "[$hdr] field '${key#*${SEP}}' -- '$f' is not a tier field (see [template:] in the header of gen-cron.sh)"
+        done
+    done
+}
 
 # ---------------------------------------------------------------------------
 # Which field names each section kind actually READS.
@@ -1428,13 +1543,16 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template pair_label recursive media \
+_allow_fields dataset   use_template relation pair_label recursive media \
                         bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
-_allow_fields prune     use_template recursive clear_cut prune ssh_flags \
+_allow_fields prune     use_template relation recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label prune_foreign $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
+# [relation:<name>] (X27): its own two fields; the <tier>.<field> keys are checked by
+# expand_relations against the [template:] list (they become template fields).
+_allow_fields relation  tiers gfs
 
 # [replica:<name>] -- ANOTHER COPY OF WHAT THIS HOST ALREADY HOLDS.
 #
@@ -1528,6 +1646,7 @@ validate_field_names() {
         field="${key#*${SEP}}"
         kind="${SECTION_KIND[$hdr]:-}"
         [ -n "$kind" ] || continue
+        [ "$kind" = relation ] && continue     # checked by expand_relations
         [ -n "${FIELD_OK[${kind}${SEP}${field}]+x}" ] && continue
         # flags_<tier>, send_schedule_<tier>, prune_schedule_<tier>: per-tier
         # overrides whose tier part cannot be enumerated ahead of time. The two
@@ -5000,6 +5119,7 @@ fi
 
 parse_ini "$CONFIG"
 [ "${#SECTION_ORDER[@]}" -gt 0 ] || die "no sections found in $CONFIG"
+expand_relations
 validate_field_names
 apply_path_settings
 

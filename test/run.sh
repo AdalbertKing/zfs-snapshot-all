@@ -56,6 +56,19 @@ done
 
 [ "$BLESS" -eq 1 ] && exit 0
 
+# X27 (owner 2026-10-14): a relationship written as ONE [relation:] block renders the SAME
+# crontab as the old [template:] + use_template form -- pinned pair by pair, so a --bless
+# that drifted one of them apart is caught here and not waved through.
+for old in "$DIR"/fixtures/relation-*-old.expected; do
+    [ -e "$old" ] || continue
+    new="${old%-old.expected}.expected"
+    if cmp -s "$old" "$new"; then
+        echo "PASS relation-equivalence/$(basename "$new" .expected)"; pass=$((pass+1))
+    else
+        echo "FAIL relation-equivalence/$(basename "$new" .expected): the [relation:] form renders a different crontab"; diff "$old" "$new"; fail=$((fail+1))
+    fi
+done
+
 # ---- negative ----
 for cfg in "$DIR"/negative/*.conf; do
     [ -e "$cfg" ] || continue
