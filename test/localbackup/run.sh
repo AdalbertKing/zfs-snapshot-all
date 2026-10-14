@@ -1680,7 +1680,7 @@ done
 # 2026-09-20). One `recursive =` on the section scopes send and prune alike.
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
         CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --name=lb --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
-_snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R "rpool/data"$')"
+_snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R .*"rpool/data"$')"
 _pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .* -R .*"rpool/data"')"
 _pruneN="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data"' | grep -cv -- ' -R ')"
 if [ "$rc" -eq 0 ] && [ "$_snapR" -ge 1 ] && [ "$_pruneR" -ge 1 ] && [ "$_pruneN" -eq 0 ]; then
