@@ -1714,7 +1714,8 @@ def screen_actions(active, hide_gone=False, paused=False):
     if active == "nosniki":
         return [("F7", u"Uruchom teraz"), ("F8", u"Klucz")]
     if active == "szablony":
-        return [("F7", u"Sprzątnij config")]
+        # Pelny podpis (wlasciciel 2026-10-14); skrot tylko, gdy pasek sie nie miesci (80 kol.).
+        return [("F7", u"Usuń nieużywane kopie szablonów", u"Usuń nieuż. kopie")]
     return []
 
 
@@ -1730,11 +1731,14 @@ def key_bar_parts(active, width, actions=()):
     items = [("F1", u"Pomoc", None)]
     for key, fk, label in SCREENS:
         items.append((fk, label, key))
-    items += [(k, lab, None) for k, lab in actions]
+    items += [(a[0], a[1], None) for a in actions]
     items.append(("F10", u"Wyjście", None))
-    for compact, sep in ((False, u" "), (True, u" "), (True, u"")):
+    short = dict((a[0], a[2]) for a in actions if len(a) > 2)
+    for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True)):
         line, marks = u" ", []
         for fk, label, key in items:
+            if brief and fk in short:
+                label = short[fk]
             if line.strip():
                 line += sep
             start = len(line)
@@ -3409,7 +3413,7 @@ HELP = [
     u"                 F7 chowa/pokazuje transfery relacji, których już nie ma",
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny,",
-    u"                 F7 sprząta config z szablonów, których nic nie używa",
+    u"                 F7 usuwa nieużywane kopie szablonów (lista F5 zostaje)",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
