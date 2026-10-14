@@ -3287,7 +3287,7 @@ cat > "$CT/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    status) echo '{"relations":[{"name":"a","state":"active","local_user":""},{"name":"b","state":"active","local_user":"zfsbackup"},{"name":"c","state":"removed","local_user":"inny"}]}' ;;
+    status) echo '{"relations":[{"name":"a","state":"active","local_user":"zfsbackup"},{"name":"b","state":"active","local_user":"zfsbackup"},{"name":"c","state":"removed","local_user":"inny"}]}' ;;
     clean-templates)
         case " $* " in
             *" --local-user=zfsbackup "*) echo "Config /etc/z.conf: nieużywanych szablonów brak -- nic do zrobienia." ;;
@@ -3304,7 +3304,7 @@ CTP="$(cat "$CT/wt.log")"
 if [ "$CTRC" -eq 0 ] && has "$CTP" 'szablon d30h24 -- dobowe' && has "$CTP" 'własne ustawienia relacji x -- godzinowe (źródło)' \
    && has "$CTP" 'Konto root, config /etc/r.conf -- zniknie 2' && ! has "$CTP" 'zfsbackup' \
    && grep -qx 'clean-templates --local-user=root --yes' "$CT/zb.log" && ! grep -q 'local-user=zfsbackup --yes' "$CT/zb.log" && ! grep -q 'local-user=inny' "$CT/zb.log"; then
-    ok "clean-templates (X22): plan po polsku dla kont z relacjami, WYKONAJ = --yes tylko tam, gdzie jest co sprzatac"
+    ok "clean-templates (X22, X25): plan po polsku -- config roota ZAWSZE (tu bez relacji roota) i konta z relacjami; WYKONAJ = --yes tylko tam, gdzie jest co sprzatac"
 else
     bad "clean-templates: okno" "rc=$CTRC" "$(cat "$CT/zb.log")" "$(printf '%s' "$CTP" | cut -c1-400)" "$(tail -3 "$CT/err")"
 fi
@@ -3372,6 +3372,7 @@ fi
 # listy szablonow). Esc tam = dopiero teraz wstecz do listy.
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
+0${T}
 1${T}
 " "enter\nesc"); ERRC=$?
 ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
@@ -3383,6 +3384,7 @@ fi
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
+0${T}
 " "right,bs,bs,1,2,enter"); ERRC=$?
 # Etap B (wlasciciel 2026-10-13): BEZ pochodnego szablonu zrodla -- szablon idzie ze zrodlem
 # jak cel (edit-relation --source-profile=), roznica zrodla to drugi krok: set-tiers --src-tier.
@@ -3393,6 +3395,21 @@ if [ "$ERRC" -eq 0 ] && ! grep -q '^save-profile' "$ER/zb.log" \
     ok "edit-relation: Uzyj szablonu -> szablon ze zrodlem jak cel, liczby zrodla drugim krokiem set-tiers (bez pochodnego szablonu); to samo okno-tabela zrodla"
 else
     bad "edit-relation: szablon + retencja zrodla" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(tail -3 "$ER/err")"
+fi
+# X24 (wlasciciel 2026-10-14): szablon NADPISUJE liczby zrodla -- przed oknem zrodla okno
+# ostrzezenia z roznica (zrodlo w configu: dobowe 7, d30h24 da 30; godzinowe 24 = 24, bez
+# wiersza), a plan powtarza ostrzezenie, gdy w oknie zrodla nic nie zmieniono.
+EROUT=$(er_run "0${T}szablon
+0${T}d30h24
+0${T}
+1${T}
+" "enter\nesc"); ERRC=$?
+ERW=$(cat "$ER/wt.log")
+if has "$ERW" 'Uwaga: szablon nadpisze liczby w źródle' && has "$ERW" 'dobowe      źródło trzyma 7, szablon da 30' \
+   && ! has "$ERW" 'godzinowe   źródło trzyma' && has "$ERW" 'UWAGA -- źródło dostanie liczby szablonu'; then
+    ok "edit-relation: X24 -- Uzyj szablonu ostrzega, ze nadpisze liczby zrodla (dobowe 7 -> 30), plan to powtarza"
+else
+    bad "edit-relation: X24 ostrzezenie" "rc=$ERRC" "$(grep -F 'nadpisze' "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
 EROUT=$(er_run "0${T}zapisz
 0${T}r1-szablon
@@ -3408,11 +3425,13 @@ fi
 # zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
 EROUT=$(ER_HAND=1 er_run "0${T}szablon
 0${T}d30h24
+0${T}
 1${T}
 " "enter\nesc"); ERRC=$?
 ERP=$(cat "$ER/wt.log")
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
+0${T}
 1${T}
 " "enter\nesc")
 ERP0=$(cat "$ER/wt.log")

@@ -118,6 +118,45 @@ cur_words() {   # słowa o obecnym szablonie celu
     if [ "$CUR_P" = "$HNAME" ]; then echo "własne ustawienia relacji (tabela szczebli)"; else echo "${CUR_P:-<nie zapisany>}"; fi
 }
 
+# X24 (właściciel 2026-10-14): "szablon nadpisuje zmiany -- to logiczne. Brać liczby z
+# szablonu, ale ostrzegać, że należy zmienić relację ręcznie w źródle." Porównuje to, co
+# źródło relacji trzyma TERAZ (config, show-tiers), z liczbami szablonu PROFILE; różnice
+# idą do $TMPD/srcwarn.txt (puste = nic się w źródle nie zmieni).
+src_override_warning() {
+    : >"$TMPD/srcwarn.txt"
+    "$ZB" show-tiers "$NAME" --json >"$TMPD/stw.json" 2>/dev/null || return 0
+    "$PY" - "$TMPD/stw.json" "$TMPD/prof.json.tiers" "$PROFILE" <<'PYEOF' | tr -d '\r' >"$TMPD/srcwarn.txt"
+import sys, json
+W = {"hourly": "godzinowe", "daily": "dobowe", "weekly": "tygodniowe", "monthly": "miesięczne", "yearly": "roczne"}
+U = {"h": "godz.", "d": "dni", "w": "tyg.", "m": "mies.", "y": "lat"}
+key = lambda n: (n or "").split("_")[-1]
+try:
+    src = json.load(open(sys.argv[1], encoding="utf-8")).get("source") or []
+except Exception:
+    sys.exit(0)
+def cur(t):
+    if t.get("mechanism") == "age" and t.get("retain"):
+        r = t["retain"]; return "%s %s" % (r[2:], U.get(r[1:2], r[1:2]))
+    return t.get("keep") or ""
+tpl = {}
+for l in open(sys.argv[2], encoding="utf-8"):
+    f = l.rstrip("\r\n").split("\t")
+    if len(f) >= 5 and f[0] == sys.argv[3]:
+        tpl[key(f[1])] = f[3] if f[4] == "keep" else "%s %s" % (f[3], U.get(f[4][-1:], f[4][-1:]))
+seen = []
+for t in src:
+    k = key(t.get("name")); c = cur(t)
+    if not c or k in seen:
+        continue
+    seen.append(k)
+    w = W.get(k, k)
+    if k not in tpl:
+        print("  %-11s źródło trzyma %s, szablon nie ma tego szczebla" % (w, c))
+    elif tpl[k] != c:
+        print("  %-11s źródło trzyma %s, szablon da %s" % (w, c, tpl[k]))
+PYEOF
+}
+
 # Liczby źródła do okna: obecny szablon źródła, dopasowany po nazwie szczebla do szablonu
 # celu (szczebel, którego źródło nie ma = 0). Tylko gdy cel się nie zmienił.
 src_prefill() {
@@ -619,6 +658,15 @@ while :; do
         step=2; continue
     fi
     if [ "$step" -eq 2 ]; then
+        if [ "$ACTION" = szablon ]; then
+            src_override_warning
+            if [ -s "$TMPD/srcwarn.txt" ]; then
+                { echo "Szablon $PROFILE ustawi liczby w ŹRÓDLE tak jak w szablonie:"; echo; cat "$TMPD/srcwarn.txt"; echo
+                  echo "Jeśli źródło ma trzymać inaczej, zmień liczby w następnym oknie"
+                  echo "(retencja źródła) albo później w 'Harmonogram i retencja'."; } >"$TMPD/srcwarn2.txt"
+                wt --title "Uwaga: szablon nadpisze liczby w źródle" --ok-button "Dalej" --msgbox "$(cat "$TMPD/srcwarn2.txt")" "$(fit "$(grep -c '' "$TMPD/srcwarn2.txt")")" "$W"
+            fi
+        fi
         # RETENCJA ŹRÓDŁA: to samo okno-tabela co w kreatorze (uwaga 10).
         src_prefill
         SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
@@ -690,6 +738,9 @@ if new or gone:
 else:
     print("\nZadania w cronie: bez zmian.")
 PYEOF
+    if [ "$ACTION" = szablon ] && [ -s "$TMPD/srcwarn.txt" ] && [ "${#SARGS[@]}" -eq 0 ]; then
+        { echo; echo "UWAGA -- źródło dostanie liczby szablonu (w oknie źródła nic nie zmieniono):"; cat "$TMPD/srcwarn.txt"; } >>"$TMPD/plan2.txt"
+    fi
     if [ -s "$TMPD/rargs.plan" ] && [ "$PROFILE" = "$HNAME" ]; then
         { echo; echo "Zmiany w tabeli szczebli:"; cat "$TMPD/rargs.plan"; } >>"$TMPD/plan2.txt"
     fi
