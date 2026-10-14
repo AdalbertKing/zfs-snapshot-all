@@ -63,10 +63,11 @@ try:
 except Exception:
     st = {}
 with open(tmpd + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
-    f.write("%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
+    f.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
                                         st.get("peer_host") or "-",
                                         # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
-                                        ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-"))
+                                        ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-",
+                                        "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0"))
 d = json.load(open(sys.argv[2], encoding="utf-8"))
 rows = []
 with open(tmpd + "/prof.json.tiers", "w", encoding="utf-8", newline="\n") as tf, \
@@ -100,7 +101,7 @@ geom
 info "Zmień relację $NAME" "Czytam relację i szablony..."
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
 load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
-IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; }
+IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; }
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
 SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
 SRCNAME="$PEER"
@@ -141,60 +142,88 @@ src_prefill() {
 # liczbę celu i trafia do $TMPD/newtiers (set-tiers sam go doda po obu stronach -- okno
 # źródła ustawia mu tylko liczbę).
 rel_tiers() {
-    "$PY" - "$TMPD/rt.json" "$TMPD/rargs" "$TMPD/prof.json.tiers" "$TMPD/newtiers" <<'PYEOF'
-import json, re, sys
+    # X20 (właściciel 2026-10-14): argumenty tabeli celu się SUMUJĄ ($TMPD/rargs.acc) i
+    # tabela przy powrocie (Wstecz z okna źródła) startuje od nich ($TMPD/rt-work.json), a
+    # nie znów od configu -- wpisana zmiana nie ulatuje. set-tiers wykonuje argumenty po
+    # kolei, więc późniejsze poprawiają wcześniejsze.
+    "$PY" - "$TMPD/rt.json" "$TMPD/rargs.acc" "$TMPD/prof.json.tiers" "$TMPD/newtiers" "$TMPD/rt-work.json" <<'PYEOF'
+import copy, json, re, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
-args = [l.rstrip("\r\n") for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+try:
+    args = [l.rstrip("\r\n") for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+except OSError:
+    args = []
 DEF = {"hourly": 24, "daily": 7, "weekly": 4, "monthly": 12, "yearly": 5}
 LET = {"hourly": "h", "daily": "d", "weekly": "w", "monthly": "m", "yearly": "y"}
-def rows(side):
-    out = []
-    for t in d.get(side, []):
-        if t.get("keep"):
-            out.append([t.get("name", "-"), t.get("pattern") or "-", t["keep"], "keep"])
-        elif t.get("retain"):
-            m = re.match(r"^-([hdwmy])([0-9]+)$", t["retain"])
-            if m:
-                out.append([t.get("name", "-"), t.get("pattern") or "-", m.group(2), "retain:" + m.group(1)])
-    return out
-tgt, src = rows("target"), rows("source")
+SEND = {"hourly": "1 * * * *", "daily": "11 1 * * *", "weekly": "21 2 * * 0", "monthly": "31 3 1 * *", "yearly": "31 3 1 1 *"}
+tgt = [copy.deepcopy(t) for t in d.get("target", [])]
+src = [copy.deepcopy(t) for t in d.get("source", [])]
 def find(lst, n):
-    for r in lst:
-        if r[0] == n:
-            return r
+    for t in lst:
+        if t.get("name") == n:
+            return t
+def word(n):
+    return n.split("_")[-1]
 new, cur = [], None
 for a in args:
     k, _, v = a.partition("=")
     if k == "--tier":
         cur = find(tgt, v)
     elif k == "--add-tier":
-        mode = "keep"
-        if tgt and tgt[0][3].startswith("retain:"):
-            mode = "retain:" + LET.get(v, "d")
-        cur = [v, "automated_" + v, str(DEF.get(v, 1)), mode]
-        tgt.append(cur); new.append(v)
+        first = tgt[0] if tgt else {}
+        cur = {"name": v, "pattern": "automated_" + v, "prefix": "automated_" + v + "_",
+               "mechanism": first.get("mechanism", "flat"), "gfs": first.get("gfs", ""),
+               "keep": "", "retain": "", "quiesce": "" if v == "hourly" else "auto,degrade",
+               "send_schedule": SEND.get(v, ""), "prune_schedule": ""}
+        if cur["mechanism"] == "age":
+            cur["retain"] = "-%s%d" % (LET.get(v, "d"), DEF.get(v, 1))
+        else:
+            cur["keep"] = str(DEF.get(v, 1))
+        tgt.append(cur)
+        if v not in new:
+            new.append(v)
     elif k == "--drop-tier":
-        tgt = [r for r in tgt if r[0] != v]; src = [r for r in src if r[0] != v]; cur = None
-    elif k == "--keep" and cur:
-        cur[2] = v
-    elif k == "--retain" and cur:
-        m = re.match(r"^-([A-Za-z])([0-9]+)$", v)
-        if m:
-            cur[2] = m.group(2); cur[3] = "retain:" + m.group(1).lower()
+        tgt = [t for t in tgt if t.get("name") != v]
+        src = [t for t in src if t.get("name") != v]
+        if v in new:
+            new.remove(v)
+        cur = None
+    elif k == "--keep" and cur is not None:
+        cur["keep"] = v; cur["retain"] = ""
+    elif k == "--retain" and cur is not None:
+        cur["retain"] = v; cur["keep"] = ""
+    elif k == "--quiesce" and cur is not None:
+        cur["quiesce"] = v
     elif k == "--method":
-        for r in tgt + src:
-            r[3] = ("retain:" + LET.get(r[0].split("_")[-1], "d")) if v == "age" else "keep"
+        for t in tgt + src:
+            n = t.get("keep") or re.sub(r"^-[A-Za-z]", "", t.get("retain") or "")
+            t["mechanism"] = v
+            t["gfs"] = "yes" if v == "gfs" else ""
+            if v == "age":
+                t["retain"] = "-%s%s" % (LET.get(word(t.get("name", "")), "d"), n); t["keep"] = ""
+            else:
+                t["keep"] = n; t["retain"] = ""
 for n in new:
     t = find(tgt, n)
-    if t and not find(src, n):
-        src.append(list(t))
+    if t is not None and find(src, n) is None:
+        src.append(copy.deepcopy(t))
+def line(name, t):
+    if t.get("keep"):
+        return "%s\t%s\t%s\t%s\tkeep\n" % (name, t.get("name", "-"), t.get("pattern") or "-", t["keep"])
+    m = re.match(r"^-([hdwmy])([0-9]+)$", t.get("retain") or "")
+    if m:
+        return "%s\t%s\t%s\t%s\tretain:%s\n" % (name, t.get("name", "-"), t.get("pattern") or "-", m.group(2), m.group(1))
+    return ""
 lines = [l for l in open(sys.argv[3], encoding="utf-8") if not l.startswith(("@rel\t", "@rel-src\t"))]
 with open(sys.argv[3], "w", encoding="utf-8", newline="\n") as f:
     f.writelines(lines)
-    for name, lst in (("@rel", tgt), ("@rel-src", src)):
-        for r in lst:
-            f.write("%s\t%s\t%s\t%s\t%s\n" % (name, r[0], r[1], r[2], r[3]))
+    for t in tgt:
+        f.write(line("@rel", t))
+    for t in src:
+        f.write(line("@rel-src", t))
 open(sys.argv[4], "w", encoding="utf-8").write(" ".join(new))
+json.dump({"profiles": [{"name": "@rel", "source": "user", "used_by": 0, "description": "", "tiers": tgt}]},
+          open(sys.argv[5], "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
 }
 
@@ -205,23 +234,19 @@ harm_flow() {
         wt --title "Nie da się odczytać szczebli" --msgbox "$(grep -E 'FATAL' "$TMPD/rt.err" | tail -1 | sed 's/^FATAL: //')" 10 "$W"
         return 0
     fi
-    # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i okno źródła.
-    "$PY" - "$TMPD/rt.json" "$TMPD/rt-prof.json" <<'PYEOF'
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-json.dump({"profiles": [{"name": "@rel", "source": "user", "used_by": 0, "description": "", "tiers": d.get("target", [])}]},
-          open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
-PYEOF
-    : >"$TMPD/rargs"; rel_tiers
+    # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i
+    # okno źródła: rel_tiers pisze je z configu (rt.json) i zsumowanych zmian tabeli.
+    : >"$TMPD/rargs"; : >"$TMPD/rargs.acc"; rel_tiers
     local SAVE_P="${PROFILE:-}" SAVE_S="${CUR_S:-}"
     PROFILE="@rel"; CUR_S="@rel-src"; SRCKEEP=""
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
     while :; do
         if [ "$hs" -eq 1 ]; then
             clear 2>/dev/null
-            TEMPLATE_JSON="$TMPD/rt-prof.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
+            TEMPLATE_JSON="$TMPD/rt-work.json" ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "@rel" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
-            mapfile -t RARGS <"$TMPD/rargs"
+            cat "$TMPD/rargs" >>"$TMPD/rargs.acc"
+            mapfile -t RARGS <"$TMPD/rargs.acc"
             # X15 (właściciel 2026-10-13): okno źródła widzi szczeble PO zmianach w tabeli celu --
             # dodany szczebel jest (z liczbą jak w celu), usunięty znika, liczby celu aktualne.
             rel_tiers
@@ -321,14 +346,20 @@ print("\t".join(out))
 PYEOF
 )
     [ -n "${c_h:-}" ] || { c_h=default; c_c=default; c_x=default; c_a=default; }
+    c_r="${c_r%$'\r'}"   # ostatnie pole: Python na Windows konczy linie CRLF
     p_h="$c_h"; p_c="$c_c"; p_x="$c_x"; p_a="$c_a"
     while :; do
         geom
-        items=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')")
+        # X10 (właściciel 2026-10-14): lustro (synchro) ma to samo co źródło -- "tylko różnica"
+        # by temu przeczyła, więc w lustrze wiersza Historia nie ma.
+        items=()
+        [ "${MIRROR:-0}" = 1 ] || items+=(hist "Historia         $(eng_hist_words "$p_h")$([ "$p_h" = default ] && echo ' (fabryczne)')")
         # X2 (właściciel 2026-10-12): kopia LOKALNA nie ma łącza -- kompresji, szyfru SSH
         # ani autodoboru nie ma tu czego ustawiać (silnik i tak je pomija).
         if [ "$PEER" != - ]; then
-            items+=(comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')")
+            # X10: wysyłka zaszyfrowana (raw) -- szyfrowanych danych nie da się skompresować.
+            case "${c_r:-default}" in yes|1|true) ;; *)
+                items+=(comp "Kompresja        $(eng_comp_words "$p_c")$([ "$p_c" = default ] && echo ' (fabryczne)')") ;; esac
             v="domyślny SSH"; [ "$p_x" = default ] || v="$p_x"
             items+=(ciph "Szyfr SSH        $v$([ "$p_x" = default ] && echo ' (fabryczne)')")
             v="tak"; case "$p_a" in no) v="nie" ;; esac
@@ -336,7 +367,7 @@ PYEOF
         fi
         # W17: wysyłka zaszyfrowana tylko do wglądu -- decyduje o niej pierwsza kopia,
         # zmiana = nowa kopia od zera (silniki odmawiają mieszania trybów).
-        case "${c_r:-default}" in yes|1|true) items+=(raw "Szyfrowane     wysyłka zaszyfrowana (raw)") ;; esac
+        case "${c_r:-default}" in yes|1|true) items+=(raw "Szyfrowane       wysyłka zaszyfrowana (raw)") ;; esac
         items+=(__reset__ "Przywróć fabryczne" __done__ "Gotowe")
         wt --title "Ustawienia silnika: $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
            --menu "Jak przesyłane są kopie tej relacji." "$(fit $((${#items[@]} / 2 + 2)))" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" || return 0
@@ -488,6 +519,23 @@ while :; do
                 ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
                 REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
                 if [ -z "$ADDED$REMOVED" ]; then continue 2; fi
+                # X21 (właściciel 2026-10-14): każda zmiana sprawdzona PRZED WYKONAJ -- czasownik
+                # bez --yes daje plan albo odmawia (np. dataset wewnątrz celu kopii); odmowa
+                # wraca do listy, zamiast przyjść po WYKONAJ z "to, co wyżej się udało, zostało".
+                info "Datasety" "Sprawdzam zmiany (plan czasownika, nic nie zmienia)..."
+                : >"$TMPD/dswhy.txt"
+                for n in $ADDED; do
+                    "$ZB" add-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
+                        || printf '%s -- nie dodam:\n  %s\n' "$n" "$(grep -E '^FATAL' "$TMPD/dschk.txt" | tail -1 | sed 's/^FATAL: //')" >>"$TMPD/dswhy.txt"
+                done
+                for n in $REMOVED; do
+                    "$ZB" remove-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
+                        || printf '%s -- nie usunę:\n  %s\n' "$n" "$(grep -E '^FATAL' "$TMPD/dschk.txt" | tail -1 | sed 's/^FATAL: //')" >>"$TMPD/dswhy.txt"
+                done
+                if [ -s "$TMPD/dswhy.txt" ]; then
+                    wt --title "Tej zmiany nie da się zrobić -- nic nie zmieniono" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
+                    continue
+                fi
                 {
                     echo "PLAN -- nic jeszcze nie zostało zmienione:"
                     echo
@@ -499,10 +547,6 @@ while :; do
                         echo "ODPADNĄ (kopie na tym hoście ZOSTAJĄ):"
                         printf '%s\n' "$REMOVED" | sed 's/^/  /'
                     fi
-                    echo
-                    echo "Komendy:"
-                    for n in $ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
-                    for n in $REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
                 } >"$TMPD/dsplan.txt"
                 yesno_text "$TMPD/dsplan.txt" "Zmień relację $NAME -- datasety" "WYKONAJ" "Wstecz" --defaultno || continue
                 clear 2>/dev/null

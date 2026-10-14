@@ -967,8 +967,10 @@ def profile_word(name, rel_name=None):
     'własne ustawienia (tabela)', nie nazwa pliku."""
     if not name:
         return "?"
-    if rel_name and name == "relacja-%s" % rel_name:
-        return u"własne ustawienia relacji (tabela szczebli)"
+    # X19 (wlasciciel 2026-10-14): szczeble zyja w CONFIGU relacji; nazwa szablonu mowi
+    # tylko, z czego relacja POWSTALA -- ukryty szablon relacji to "wlasne ustawienia".
+    if rel_name and name.startswith("relacja-%s" % rel_name):
+        return u"własne ustawienia relacji"
     return name
 
 
@@ -2091,7 +2093,7 @@ def rel_panel_pairs(row, data, now, ch):
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
     pairs.append(("Konto", rel.get("local_user") or ", ".join(accts) or "?"))
-    pairs.append(("Szablon", profile_word(rel.get("profile"), rel.get("name")) + ((u"   u źródła: %s" % rel["source_profile"]) if rel.get("source_profile") else "")))
+    pairs.append((u"Powstała z", profile_word(rel.get("profile"), rel.get("name"))))
     if rel.get("recursion"):
         pairs.append((u"Sposób", {"flat": u"każdy dataset osobno", "atomic": u"cała gałąź atomowo"}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
@@ -2428,11 +2430,11 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.extend(detail_kv(ch, pairs, w))
     out.append("")
     out.append(u"jak długo trzyma")
-    pairs = [("Szablon", profile_word(rel.get("profile"), rel.get("name")))]
-    if rel.get("source_profile"):
-        pairs.append((u"Szablon źródła", rel["source_profile"]))
-    elif rel.get("passive") == "1" or rel.get("mode") == "sync":
-        pairs.append((u"Szablon źródła", u"bez sprzątania (źródło nie kasuje)"))
+    # X19: liczby i godziny są niżej (wiersze kopii i sprzątania, z configu); szablon to
+    # tylko informacja, z czego relacja powstała.
+    pairs = [(u"Powstała z", profile_word(rel.get("profile"), rel.get("name")))]
+    if not rel.get("source_profile") and (rel.get("passive") == "1" or rel.get("mode") == "sync"):
+        pairs.append((u"Źródło", u"bez sprzątania (źródło nie kasuje)"))
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
         pairs.append((u"Cel", u"lustro źródła: trzyma to, co źródło (bez własnej retencji)"))
     if rel.get("recursion"):
@@ -3813,6 +3815,12 @@ class UI(object):
             self.message = u"brak zadań -- nie ma czego uruchomić"
             return
         r = rows[c]
+        # X23 (wlasciciel 2026-10-14): wiersz REPLIKI nie niesie linii crona (powstaje z
+        # list-replicas, list-jobs replik nie zwraca) -- F7 robi to samo co F7 na F6.
+        if r.get("kind") == "replica":
+            n = (r.get("replica") or {}).get("name") or r.get("name")
+            self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            return
         j = r.get("job") or {}
         sched = (r.get("schedule") or "").split()
         lines = [l for l in (j.get("cron_lines") or []) if sched and l.split()[:5] == sched]

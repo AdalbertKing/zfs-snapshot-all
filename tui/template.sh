@@ -228,7 +228,9 @@ if action == "relation":
 s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
      "fields": ([] if action in ("edit", "relation") else [{"key": "name", "label": u"Nazwa", "value": new}]),
      "after": ([] if action == "relation" else [{"key": "desc", "label": u"Opis", "value": bdesc if action == "edit" else ""}]),
-     "note": [u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.",
+     # X19: w relacji szczeble sa z jej CONFIGU, nie z "bazowego" szablonu.
+     "note": [(u"Liczby i sposób są z configu tej relacji; godziny zostają, jak są." if action == "relation"
+               else u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego."),
               u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny."],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
      "name_key": ("" if action in ("edit", "relation") else "name"), "auto_desc": ("" if action in ("edit", "relation") else "desc"),
