@@ -16856,6 +16856,20 @@ EXF
     else
         printf '{"config":"","config_readable":false,"sections":[]}'
     fi
+    # X27: the relationship's own block -- every number it runs with, as written.
+    printf ',"relation":'
+    if [ -n "$cfg" ] && [ -r "$cfg" ] && relblock_has "$cfg" "$name"; then
+        local _rk _rv _rf=1
+        printf '{'
+        while IFS=$'\t' read -r _rk _rv; do
+            [ -n "$_rk" ] || continue
+            [ "$_rf" -eq 1 ] || printf ','; _rf=0
+            printf '"%s":"%s"' "$(json_escape "$_rk")" "$(json_escape "$_rv")"
+        done < <(relblock_dump "$cfg" "$name")
+        printf '}'
+    else
+        printf 'null'
+    fi
     printf '}\n'
 }
 
