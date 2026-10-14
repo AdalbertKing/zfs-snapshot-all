@@ -1306,9 +1306,9 @@ ini_get() { printf '%s' "${INI[$1${SEP}$2]}"; }
 # keep retain quiesce notify_word tier_label monitor_warn monitor_crit
 # monitor_schedule gfs ...), plus `monitor`. A side-specific spelling wins.
 #
-# WHICH SIDE a section is, from its shape -- the rule set-tiers already uses:
-#   [dataset:] with `src` (a pull) -> target    [dataset:] without (local push) -> source
-#   [prune:] whose scope is user@host:path -> source        any other [prune:] -> target
+# WHICH SIDE a section is, it SAYS: `side = target` (the copies) or `side = source`
+# (the originals). Never guessed from the shape: a local relationship's source
+# retention is a [prune:<source path>] -- no '@', and still the source.
 #
 # Expanded HERE into ordinary in-memory templates, named exactly as the
 # relationship's own templates were (profile__relacja-<name>__<tier>, __src_<tier> for
@@ -1334,11 +1334,16 @@ expand_relations() {
         else
             INI["${sec}${SEP}pair_label"]="$rel"
         fi
-        if [ "$kind" = dataset ]; then
-            if ini_has "$sec" src; then side=target; stem=""; else side=source; stem=lsrc_; fi
-        else
-            case "${SECTION_NAME[$sec]}" in *@*:*) side=source; stem=src_ ;; *) side=target; stem="" ;; esac
-        fi
+        # THE SIDE IS SAID, never guessed (owner 2026-10-14): a local relationship's
+        # source retention is a [prune:<source>] with no '@' -- the shape rule took it
+        # for the target and mixed the two sides (CI, X27 B).
+        ini_has "$sec" side || die "[$sec]: relation = '$rel' but no 'side' -- say side = target (the copies) or side = source (the originals)"
+        side="$(ini_get "$sec" side)"
+        case "$side" in
+            target) stem="" ;;
+            source) if [ "$kind" = prune ]; then case "${SECTION_NAME[$sec]}" in *@*:*) stem=src_ ;; *) stem=lsrc_ ;; esac; else stem=lsrc_; fi ;;
+            *) die "[$sec]: side = '$side' -- target (the copies) or source (the originals)" ;;
+        esac
         tl=""; ini_has "relation:$rel" tiers && tl="$(ini_get "relation:$rel" tiers)"
         [ -n "$tl" ] || die "[relation:$rel] has no 'tiers' -- list the tiers it runs (e.g. tiers = hourly, daily)"
         local list="" one
@@ -1543,11 +1548,11 @@ PRUNE_POLICY_FIELDS="prune_schedule pattern keep retain
 # which no layer above the section knows. exclude_child_<n> is numbered and therefore
 # not listable here; validate_field_names carries its pattern.
 # shellcheck disable=SC2086
-_allow_fields dataset   use_template relation pair_label recursive media \
+_allow_fields dataset   use_template relation side pair_label recursive media \
                         bandwidth compression cipher history raw \
                         passive exclude_family prune_foreign $DATASET_POLICY_FIELDS
 # shellcheck disable=SC2086
-_allow_fields prune     use_template relation recursive clear_cut prune ssh_flags \
+_allow_fields prune     use_template relation side recursive clear_cut prune ssh_flags \
                         gfs gfs_pattern pair_label prune_foreign $PRUNE_POLICY_FIELDS
 _allow_fields prune-bookmarks schedule age pattern recursive ssh_flags notify pair_label
 # [relation:<name>] (X27): its own two fields; the <tier>.<field> keys are checked by
