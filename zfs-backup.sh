@@ -1442,7 +1442,7 @@ PROFILE_NS_AS=""
 PROFILE_NS_FOR=""
 profile_active_ns() {   # -> the namespace the active profile renders under
     local n; n="$(profile_name_of "$PROFILE_ACTIVE")"
-    if [ -n "$PROFILE_NS_AS" ] && [ "$n" = "$PROFILE_NS_FOR" ]; then n="$PROFILE_NS_AS"; fi
+    if [ -n "${PROFILE_NS_AS:-}" ] && [ "$n" = "${PROFILE_NS_FOR:-}" ]; then n="$PROFILE_NS_AS"; fi
     printf '%s' "$n"
 }
 PROFILE_TPL_FILE=""

@@ -156,6 +156,7 @@ expr_for() {   # <use_template value> -> the cadence found, or nothing
       echo 'PROFILE_LOADED=1'
       echo 'PROFILE_ACTIVE=p'
       awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      awk -v want="profile_active_ns() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       lift schedule_template_expr
       echo 'schedule_template_expr send'; } > "$t"
@@ -197,6 +198,7 @@ expr_for_active() {   # <PROFILE_ACTIVE> <use_template form> -> the cadence
       echo 'PROFILE_LOADED=1'
       printf 'PROFILE_ACTIVE=%q\n' "$1"
       awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      awk -v want="profile_active_ns() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       lift schedule_template_expr
       echo 'schedule_template_expr send'; } > "$t"
@@ -235,6 +237,7 @@ two_tier_expr() {   # -> what schedule_template_expr returns when tiers disagree
       echo 'PROFILE_LOADED=1'
       echo 'PROFILE_ACTIVE=p'
       awk -v want="profile_name_of() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
+      awk -v want="profile_active_ns() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       awk -v want="profile_template_section() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$REPO/zfs-backup.sh"
       lift schedule_template_expr
       echo 'schedule_template_expr send'; } > "$t"
