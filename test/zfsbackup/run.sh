@@ -53,6 +53,16 @@ bad() { echo "FAIL $1"; shift; printf '  %s\n' "$@"; FAIL=$((FAIL+1)); }
 # Source, not exec: guarded by the same BASH_SOURCE==$0 idiom update-control.sh
 # uses, so this reaches the helper functions without running the dispatch.
 # shellcheck disable=SC1090
+# X27 (owner 2026-10-14): the shipped profiles no longer include the one-family GFS
+# LADDER shape (default became "every tier its own family"). The ladder MACHINERY --
+# profile rendering, ensure_cron_config, gen-cron -G -- is still here and still tested,
+# so this suite runs on the shipped profiles PLUS the old ladder ones from
+# test/fixtures/profiles-ladder (where `default` is the ladder). Tests about what is
+# SHIPPED read $REPO/profiles directly.
+export PROFILE_ROOT="$WORK/profiles"
+mkdir -p "$PROFILE_ROOT"
+cp "$REPO"/profiles/*.conf "$PROFILE_ROOT"/
+cp "$REPO"/test/fixtures/profiles-ladder/*.conf "$PROFILE_ROOT"/
 source "$ZFSBACKUP"
 
 # REV-20260811-109 L0 targeted execution. `--section <id>` runs ONLY the named focused
@@ -102,7 +112,7 @@ want() {   # <section name> -> 0 when this section should run
 
 mkprof_copy() {   # <target profile, without the .conf>
     mkdir -p "$(dirname "$1")"
-    cp "$REPO/profiles/default.conf" "$1.conf"
+    cp "$PROFILE_ROOT/default.conf" "$1.conf"
 }
 mkprof_add() {    # <target profile dir> <section header> <line>
     awk -v want="$2" -v add="$3" '
@@ -4946,7 +4956,7 @@ fi
 # 3. A second, real, DIFFERENT profile name is validated and stored correctly
 # -- not just "default" happening to work.
 mkdir -p "$P53/profiles"
-cp "$REPO/profiles/default.conf" "$P53/profiles/altprofile.conf"
+cp "$PROFILE_ROOT/default.conf" "$P53/profiles/altprofile.conf"
 ( SERVER_CONF="$P53/server.conf" CLIENTS_DIR="$P53/clients" DEPLOY="$P53/deploy_marker.sh" \
   PROFILE_ROOT="$P53/profiles" \
   cmd_add_client "proftest3" --lan=10.0.0.1 --datasets="tank/x" --profile=altprofile ) >/dev/null 2>&1
@@ -6444,7 +6454,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # aim, assert_cron_config_matches_installed, then atomic_replace_and_install).
 # 16/23 since 2026-10-14 (X27 S4): clean-templates is gone -- no package writer leaves
 # template sections behind any more, so there is nothing for it to sweep.
-if [ "$writers" -eq 16 ] && [ "$resolvers" -eq 23 ]; then
+# 15/22 since 2026-10-14 (X27 S4): migrate-profile is gone (owner: "Usunac") -- a whole
+# collector moved to a profile is "Uzyj szablonu" on each relationship now.
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
