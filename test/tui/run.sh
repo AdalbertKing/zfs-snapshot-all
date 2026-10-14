@@ -3300,7 +3300,7 @@ EOF
 chmod +x "$CT/bin/zb"
 printf '0\t\n' > "$CT/answers"
 ( export NR_DIR="$CT" WHIPTAIL="$CT/bin/whiptail" ZFS_BACKUP="$CT/bin/zb" PYTHON="$PY"; bash "$REPO/tui/clean-templates.sh" ) >"$CT/out" 2>"$CT/err" </dev/null; CTRC=$?
-CTP="$(grep -F 'Sprzątanie configu -- plan' "$CT/wt.log" | head -1)"
+CTP="$(cat "$CT/wt.log")"
 if [ "$CTRC" -eq 0 ] && has "$CTP" 'szablon d30h24 -- dobowe' && has "$CTP" 'własne ustawienia relacji x -- godzinowe (źródło)' \
    && has "$CTP" 'Konto root, config /etc/r.conf -- zniknie 2' && ! has "$CTP" 'zfsbackup' \
    && grep -qx 'clean-templates --local-user=root --yes' "$CT/zb.log" && ! grep -q 'local-user=zfsbackup --yes' "$CT/zb.log" && ! grep -q 'local-user=inny' "$CT/zb.log"; then
