@@ -679,6 +679,63 @@ if ! grep -qxF '[dataset:rpool/data]' "$RL/c.conf" && ! grep -qxF '[prune:hdd/ba
 else
     bad "local relationship: remove-client" "$out" "$(cat "$RL/c.conf")"
 fi
+# X27 stage B: removing a local relationship stored as a [relation:] block takes the
+# block with its sections -- nothing of it is left for gen-cron to refuse ("no section
+# says relation = ..."); another relationship's block stays.
+cat > "$RL/c.conf" <<'EOF'
+[defaults]
+	host_label = t
+[relation:lok]
+	tiers = daily
+	daily.send_schedule = 11 1 * * *
+	daily.prefix = automated_daily_
+	daily.pattern = automated_daily
+	daily.prune_schedule = 31 1 * * *
+	daily.retain = -D7
+[relation:other]
+	tiers = daily
+	daily.send_schedule = 12 1 * * *
+	daily.prefix = automated_daily_
+	daily.pattern = automated_daily
+	daily.prune_schedule = 32 1 * * *
+	daily.retain = -D3
+[dataset:rpool/data]
+	# managed-by: zfs-backup.sh local-backup source=rpool/data
+	relation     = lok
+	dst = hdd/backups
+	pair_label   = lok
+[prune:hdd/backups/rpool/data]
+	# managed-by: zfs-backup.sh local-backup target=hdd/backups/rpool/data
+	relation     = lok
+	pair_label   = lok
+[dataset:rpool/db]
+	# managed-by: zfs-backup.sh local-backup source=rpool/db
+	relation     = other
+	dst = hdd/backups
+	pair_label   = other
+EOF
+printf 'CLIENT_NAME=lok\nRUX_MODE=local\nSTATE=active\nMANAGED_DATASETS=hdd/backups/rpool/data\nCRON_CONFIG=%s\n' "$RL/c.conf" > "$RL/clients/lok.conf"
+out="$( ( CLIENTS_DIR="$RL/clients" RELATIONSHIPS_DIR="$RL/rel"
+          assert_cron_config_matches_installed() { :; }; assert_no_foreign_managed_block() { :; }
+          gencron_as_target() { :; }; atomic_replace_and_install() { relation_fold "$2" && cp "$2" "$1"; }
+          cmd_remove_client lok ) 2>&1 )"
+if ! grep -qxF '[relation:lok]' "$RL/c.conf" && ! grep -q '^\[template:' "$RL/c.conf" && ! grep -qxF '[dataset:rpool/data]' "$RL/c.conf" \
+   && grep -qxF '[relation:other]' "$RL/c.conf" && grep -qxF '[dataset:rpool/db]' "$RL/c.conf" \
+   && [ "$(sed -n '/^\[dataset:rpool\/db\]/,/^\[/p' "$RL/c.conf" | grep -c 'relation *= *other')" = 1 ]; then
+    ok "X27 B: remove-client of a local relationship in a [relation:] block takes the block with its sections; the other relationship's block stays"
+else
+    bad "X27 B: remove-client with [relation:] blocks" "$out" "$(cat "$RL/c.conf")"
+fi
+# X27 stage B: a NEW named local relationship is written as ONE [relation:] block.
+x27c=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=x27c --config="$WORK/x27c.conf")
+x27cand=$(printf '%s\n' "$x27c" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+if printf '%s' "$x27cand" | grep -qxF '[relation:x27c]' && ! printf '%s' "$x27cand" | grep -q '^\[template:' \
+   && [ "$(printf '%s' "$x27cand" | grep -c 'relation     = x27c')" = 2 ] && printf '%s' "$x27cand" | grep -qF 'daily.retain = -D30' \
+   && printf '%s\n' "$x27c" | grep -qF '"automated_daily" -D30'; then
+    ok "X27 B: local-backup --name writes the new relationship as one [relation:x27c] block (no [template:]), -D30 in the cron"
+else
+    bad "X27 B: new local relationship as a block" "$x27cand" "$(printf '%s\n' "$x27c" | grep -E 'FATAL' | head -2)"
+fi
 # X2 (owner 2026-10-12): set-transfer refuses --compression for a LOCAL relationship,
 # as it refuses --cipher -- the engine drops compression when the target is local.
 # Control: --history is not refused for that reason.
@@ -842,6 +899,48 @@ if [ "$sh1rc" = 0 ] && [ "$sh1d" = profile__relacja-sl__lsrc_hourly ] && [ "$sh1
     ok "set-tiers: one own section used by BOTH sides is split -- source gets lsrc_ (-H12 there, target -H24); a target change leaves the source at -H24"
 else
     bad "set-tiers: section shared by both sides" "src change rc=$sh1rc ds=[$sh1d] pr=[$sh1p] src=$sh1s tgt=$sh1t" "tgt change rc=$sh2rc ds=[$sh2d] src=$sh2s tgt=$sh2t" "$sh1" "$sh2"
+fi
+# X27 stage B (owner 2026-10-14, "Z szablonow powstaja configi -- jedyne zrodlo prawdy"):
+# a relationship ON DISK as one [relation:] block. set-tiers works on it (unfolded in its
+# working copy, folded back before the one replace -- the stub install folds like the
+# real atomic_replace_and_install), and show-tiers reads it exactly like the old form.
+st_relblock() { cat > "$ST/c.conf" <<'EOF'
+[relation:sl]
+	tiers = hourly
+	hourly.send_schedule = 1 * * * *
+	hourly.prefix = automated_hourly_
+	hourly.prune_schedule = 21 * * * *
+	hourly.pattern = automated_hourly
+	hourly.retain = -H24
+
+[dataset:rpool/a]
+	relation     = sl
+	dst          = hdd/backups
+	pair_label   = sl
+[prune:hdd/backups/rpool/a]
+	relation     = sl
+	pair_label   = sl
+EOF
+}
+st_run_fold() {   # set-tiers whose install folds, like atomic_replace_and_install
+    ( CLIENTS_DIR="$ST/clients"
+      cron_context_resolve() { CRON_CTX_FILE="$ST/c.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { return 0; }
+      show_activation_proposal() { relation_fold "$2"; }
+      atomic_replace_and_install() { relation_fold "$2" && cp "$2" "$1"; }
+      cmd_set_tiers sl "$@" ) 2>&1
+}
+st_relblock; rb1=$(st_run_fold --src-tier=hourly --keep=12 --yes); rb1rc=$?
+rbs=$(st_f relation:sl hourly.source_retain); rbt=$(st_f relation:sl hourly.target_retain); rbu=$(st_f dataset:rpool/a relation)
+rbtpl=$(grep -c '^\[template:' "$ST/c.conf")
+st_relblock; rbj=$( (CLIENTS_DIR="$ST/clients"; cron_context_resolve() { CRON_CTX_FILE="$ST/c.conf"; }; cmd_show_tiers sl --json) 2>&1)
+if [ "$rb1rc" = 0 ] && [ "$rbs" = -H12 ] && [ "$rbt" = -H24 ] && [ "$rbu" = sl ] && [ "$rbtpl" = 0 ] \
+   && printf '%s' "$rbj" | grep -q '"target":\[{"name":"hourly".*"keep":"24"' && printf '%s' "$rbj" | grep -q '"source":\[{"name":"hourly".*"keep":"24"' \
+   && printf '%s' "$rbj" | grep -qF "\"config\":\"$ST/c.conf\""; then
+    ok "X27 B: set-tiers on a [relation:] block -- source -H12, target -H24, written back as ONE block (no [template:]); show-tiers reads the block like the old form"
+else
+    bad "X27 B: set-tiers / show-tiers on a [relation:] block" "rc=$rb1rc src=[$rbs] tgt=[$rbt] relation=[$rbu] templates=$rbtpl" "$rb1" "$rbj" "$(cat "$ST/c.conf")"
 fi
 # X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
 # uses (profile__* left by profiles applied earlier); a used one and a hand-named one
@@ -1978,13 +2077,27 @@ printf 'CLIENT_NAME=x22\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups
   sed -n '/^\[template:daily\]/,/^$/p' "$REPO/profiles/d30.conf" | sed 1d | sed 's/^\(\s*prune_schedule\s*=\s*\)31 /\129 /;s/^\(\s*keep\s*=\s*\)30/\tretain         = -D30/'; } > "$WORK/x22.conf"
 cp "$WORK/x22.conf" "$WORK/x22.before"
 x22o=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cmd_edit_relation x22 --profile=d30 --plan ) 2>&1 )
-x22c=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=x22 --replace --config="$WORK/x22.conf")
-if ! printf '%s' "$x22o" | grep -q 'different effective policy' && printf '%s' "$x22o" | grep -qF '[template:profile__relacja-x22__daily]' \
+# Control: a local-backup WITHOUT a relationship name still renders the profile under its
+# shared name -- and meets the hand-changed section. (Since X27 B a NAMED one never does.)
+x22c=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --config="$WORK/x22.conf")
+if ! printf '%s' "$x22o" | grep -q 'different effective policy' && printf '%s' "$x22o" | grep -qxF '[relation:x22]' \
    && [ "$(k21_flags "$x22o" hdd/backups/rpool/data)" = -D30 ] && cmp -s "$WORK/x22.conf" "$WORK/x22.before" \
    && printf '%s' "$x22c" | grep -q 'different effective policy'; then
-    ok "X22: edit-relation --profile=d30 renders it as the relationship's own sections (profile__relacja-x22__*) -- no collision with a hand-changed shared profile__d30__daily, plan writes nothing; control without edit-relation: refused"
+    ok "X22: edit-relation --profile=d30 renders it as the relationship's own sections (since X27 B: its [relation:x22] block) -- no collision with a hand-changed shared profile__d30__daily, plan writes nothing; control (unnamed local-backup): refused"
 else
     bad "X22: Uzyj szablonu into own sections" "edit: $(printf '%s\n' "$x22o" | grep -E 'FATAL|different|template:profile__' | head -4) tgt=$(k21_flags "$x22o" hdd/backups/rpool/data)" "control: $(printf '%s\n' "$x22c" | grep -E 'FATAL|different' | head -1)"
+fi
+# X27 stage B: "Uzyj szablonu" WITH the source numbers is ONE write -- edit-relation takes
+# set-tiers words and applies them in the same working copy. Plan: one [relation:x22]
+# block, target -D30 (the profile), source -D7 (the number given), no second step.
+x27e=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cp "$WORK/x22.before" "$WORK/x22.conf"; cmd_edit_relation x22 --profile=d30 --source-profile= --src-tier=daily --keep=7 --plan ) 2>&1 )
+x27ec=$(printf '%s\n' "$x27e" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+if printf '%s' "$x27ec" | grep -qxF '[relation:x22]' && printf '%s' "$x27ec" | grep -qF 'daily.target_retain = -D30' \
+   && printf '%s' "$x27ec" | grep -qF 'daily.source_retain = -D7' && printf '%s' "$x27e" | grep -qF 'Szczeble po zmianie (ta sama podmiana configu)' \
+   && [ "$(k21_flags "$x27e" rpool/data)" = -D7 ] && [ "$(k21_flags "$x27e" hdd/backups/rpool/data)" = -D30 ]; then
+    ok "X27 B: Uzyj szablonu + source numbers in ONE edit-relation -- one [relation:] block, target -D30, source -D7"
+else
+    bad "X27 B: edit-relation --profile with --src-tier" "$x27ec" "src=$(k21_flags "$x27e" rpool/data) tgt=$(k21_flags "$x27e" hdd/backups/rpool/data)" "$(printf '%s\n' "$x27e" | grep -E 'FATAL' | head -2)"
 fi
 rm -rf "$X22C" "$WORK/x22.conf" "$WORK/x22.before"
 

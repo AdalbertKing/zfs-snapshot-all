@@ -1474,6 +1474,7 @@ EDIT_DROPPED_FAMILIES=""
 # ...and the one relationship whose own job lines the anti-deletion guard
 # lets the regenerated block replace (its eighth exemption).
 EDIT_RELATION_NAME=""
+EDIT_TIER_OPS=()
 # The peer-root ladder scope this run migrated OFF, if any (2026-09-08). Set by
 # emit_client_sections when it actually removes one, read by
 # assert_target_block_not_clobbered -- which is otherwise right to refuse the
@@ -5913,6 +5914,8 @@ warn_if_block_has_other_source() {   # <config about to be installed>
 }
 
 show_activation_proposal() {   # <current config> <proposed config>
+    # X27: the plan shows the config as it will be written -- relationships in [relation:] blocks.
+    relation_fold "$2" || return 1
     local cronfile="$1" workfile="$2" before after rc=0
     before=$(mktemp) || return 1
     after=$(mktemp)  || { rm -f "$before"; return 1; }
@@ -6022,6 +6025,8 @@ atomic_replace_and_install() {
     # than in each caller, because this is the one door they all go through.
     warn_if_block_has_other_source "${1:-}"
     local realfile="$1" workfile="$2"
+    # X27: what goes to disk is the [relation:] form (idempotent; the crontab is the same).
+    relation_fold "$workfile" || { rm -f "$workfile"; die "could not write the [relation:] blocks into the working copy -- nothing was touched"; }
     # From here the candidate is THIS function's: every path below either moves
     # it into place or removes it explicitly, so the exit-time net must let go
     # of it now. Releasing a path that has become the live config would be a
@@ -6638,6 +6643,203 @@ EOF
 # A template another relationship also uses is COPIED for this one on first change
 # (profile__relacja-<NAME>__<suffix>), so a change never reaches a neighbour.
 
+# ------------------------------------------------------------------------------
+# X27 (owner 2026-10-14, "Z szablonow powstaja configi -- jedyne zrodlo prawdy"):
+# ON DISK a relationship keeps its whole policy in ONE block [relation:NAME]; its
+# sections say `relation = NAME`. gen-cron reads that block (expand_relations) and
+# renders the same crontab as the old per-relationship templates.
+#
+# Inside ONE change the verbs below still work on the old shape they were tested
+# on: relation_unfold turns every block into the relationship's own templates
+# (profile__relacja-NAME__<tier>, __lsrc_ local source, __src_ remote source --
+# the names gen-cron gives them in memory) in the WORKING COPY, the verb does its
+# work, relation_fold turns them back into the block before the one atomic
+# replace. Nothing intermediate is ever on disk: interrupted before the replace,
+# nothing changed; after it, the config holds the block.
+#
+# fold takes a relationship only when every template its sections use is named
+# for it AND used by nobody else; a relationship still on shared profile
+# templates (profile__d7h24__daily) stays as it is.
+
+relation_unfold() {   # <file> -- in place; no block = no change
+    grep -q '^\[relation:' "$1" 2>/dev/null || return 0
+    local tmp; tmp=$(mktemp) || return 1
+    awk '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function side_of(h, isrc) {   # -> stem
+            if (h ~ /^\[dataset:/) return isrc ? "" : "lsrc_"
+            return (h ~ /^\[prune:[^]]*@[^]]*:/) ? "src_" : ""
+        }
+        FNR == 1 { pass++ }
+        /^[ \t]*\[.*\][ \t]*$/ { hdr = trim($0)
+            if (pass == 1) { order[++nh] = hdr; isrel = (hdr ~ /^\[relation:/) ; if (isrel) { r = hdr; sub(/^\[relation:/, "", r); sub(/\]$/, "", r); rn[hdr] = r } }
+        }
+        pass == 1 && hdr != "" && !/^[ \t]*\[/ {
+            t = $0; sub(/[ \t]#.*$/, "", t); sub(/^[ \t]*#.*$/, "", t); t = trim(t)
+            if (t == "" || index(t, "=") == 0) next
+            k = trim(substr(t, 1, index(t, "=") - 1)); v = trim(substr(t, index(t, "=") + 1))
+            if (hdr ~ /^\[relation:/) {
+                R = rn[hdr]
+                if (k == "tiers") tiers[R] = v
+                else if (k == "gfs") rgfs[R] = v
+                else { nk[R]++; rk[R, nk[R]] = k; rv[R, nk[R]] = v }
+            } else {
+                F[hdr, k] = v; if (k == "src") hassrc[hdr] = 1
+                if (k == "relation") secrel[hdr] = v
+            }
+        }
+        pass == 1 { next }
+        END { if (pending_pl != "") printf "\tpair_label   = %s\n", pending_pl }
+        # pass 2: print, replacing blocks and relation lines
+        /^[ \t]*\[.*\][ \t]*$/ {
+            if (pending_pl != "") { printf "\tpair_label   = %s\n", pending_pl; pending_pl = "" }
+            cur = trim($0)
+            if (cur ~ /^\[relation:/) { skip = 1; emit_block(rn[cur]); next }
+            skip = 0; print; next
+        }
+        skip { next }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (cur in secrel && t ~ /^relation[ \t]*=/) {
+                R = secrel[cur]; stem = side_of(cur, (cur in hassrc))
+                n = split(tiers[R], ts, /[ \t]*,[ \t]*/); list = ""
+                for (i = 1; i <= n; i++) { x = trim(ts[i]); if (x == "") continue; list = list (list == "" ? "" : ",") "profile__relacja-" R "__" stem x }
+                printf "\tuse_template = %s\n", list
+                if (!((cur, "pair_label") in F)) pending_pl = R
+                next
+            }
+            print
+        }
+        function emit_block(R,   h, stem, n, ts, i, x, side, pass2, j, k, f, v, w, c) {
+            # every stem a section of R needs, in section order
+            delete need
+            for (j = 1; j <= nh; j++) { h = order[j]; if (secrel[h] == R) need[side_of(h, (h in hassrc))] = 1 }
+            n = split(tiers[R], ts, /[ \t]*,[ \t]*/)
+            for (stem in need) for (i = 1; i <= n; i++) {
+                x = trim(ts[i]); if (x == "") continue
+                side = (stem == "") ? "target" : "source"
+                printf "[template:profile__relacja-%s__%s%s]\n", R, stem, x
+                if (R in rgfs) printf "\tgfs            = %s\n", rgfs[R]
+                for (pass2 = 1; pass2 <= 2; pass2++) for (j = 1; j <= nk[R]; j++) {
+                    k = rk[R, j]
+                    if (index(k, x ".") != 1) continue
+                    f = substr(k, length(x) + 2)
+                    if (pass2 == 1 && (f ~ /^target_/ || f ~ /^source_/)) continue
+                    if (pass2 == 2) { if (index(f, side "_") != 1) continue; f = substr(f, length(side) + 2) }
+                    v = rv[R, j]
+                    if (f == "monitor") { split(v, w, /[ \t]+/); printf "\tmonitor_warn   = %s\n\tmonitor_crit   = %s\n", w[1], w[2]; continue }
+                    printf "\t%-14s = %s\n", f, v
+                }
+                print ""
+            }
+        }
+    ' "$1" "$1" > "$tmp" && cat "$tmp" > "$1"
+    local rc=$?; rm -f "$tmp"; return "$rc"
+}
+
+relation_fold() {   # <file> -- in place; only relationships wholly on their own templates
+    local tmp; tmp=$(mktemp) || return 1
+    awk '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function side_of(h) {
+            if (h ~ /^\[dataset:/) return ((h, "src") in F) ? "target" : "source"
+            return (h ~ /^\[prune:[^]]*@[^]]*:/) ? "source" : "target"
+        }
+        FNR == 1 { pass++ }
+        /^[ \t]*\[.*\][ \t]*$/ { hdr = trim($0); if (pass == 1) { order[++nh] = hdr; present[hdr] = 1 } }
+        pass == 1 && hdr != "" && !/^[ \t]*\[/ {
+            t = $0; sub(/^[ \t]*#.*$/, "", t); t = trim(t)
+            if (t == "" || index(t, "=") == 0) next
+            k = trim(substr(t, 1, index(t, "=") - 1)); v = trim(substr(t, index(t, "=") + 1))
+            if (!((hdr, k) in F)) { nf[hdr]++; fk[hdr, nf[hdr]] = k }
+            F[hdr, k] = v
+            next
+        }
+        pass == 1 { next }
+        # ---- decide, once, before the first line of pass 2 ----
+        FNR == 1 && pass == 2 { decide() }
+        /^[ \t]*\[.*\][ \t]*$/ {
+            cur = trim($0)
+            if (cur in dropt) { skip = 1; if (dropt[cur] in blockat && blockat[dropt[cur]] == cur) emit_block(dropt[cur]); next }
+            skip = 0; print; next
+        }
+        skip { next }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (t ~ /^use_template[ \t]*=/ && (cur in secof)) { printf "\trelation     = %s\n", secof[cur]; next }
+            print
+        }
+        function decide(   j, h, R, n, a, i, nm, pre, rest, stem, T, sd, ok, x) {
+            # who references each template
+            for (j = 1; j <= nh; j++) { h = order[j]
+                if (!((h, "use_template") in F)) continue
+                n = split(F[h, "use_template"], a, /[ \t]*,[ \t]*/)
+                for (i = 1; i <= n; i++) { nm = trim(a[i]); if (nm == "") continue
+                    if ((nm in refby) && refby[nm] != F[h, "pair_label"]) refby[nm] = "\001"
+                    else if (!(nm in refby)) refby[nm] = F[h, "pair_label"] } }
+            # candidate relationships: every section with use_template + pair_label
+            for (j = 1; j <= nh; j++) { h = order[j]
+                if (h !~ /^\[(dataset|prune):/ || !((h, "use_template") in F) || !((h, "pair_label") in F)) continue
+                R = F[h, "pair_label"]; if (R in bad) continue
+                rel[R] = 1; pre = "profile__relacja-" R "__"
+                n = split(F[h, "use_template"], a, /[ \t]*,[ \t]*/); sd = side_of(h)
+                for (i = 1; i <= n; i++) { nm = trim(a[i]); if (nm == "") continue
+                    if (index(nm, pre) != 1 || refby[nm] != R || !(("[template:" nm "]") in present)) { bad[R] = 1; break }
+                    rest = substr(nm, length(pre) + 1); stem = ""
+                    if (rest ~ /^lsrc_/) { stem = "lsrc_"; rest = substr(rest, 6) } else if (rest ~ /^src_/) { stem = "src_"; rest = substr(rest, 5) }
+                    T = rest
+                    if ((R, sd, T) in tpl && tpl[R, sd, T] != nm && !same("[template:" tpl[R, sd, T] "]", "[template:" nm "]")) { bad[R] = 1; break }
+                    tpl[R, sd, T] = nm; hasside[R, sd] = 1
+                    if (!((R, T) in seen)) { seen[R, T] = 1; nt[R]++; tier[R, nt[R]] = T }
+                    used[R, nm] = 1
+                }
+            }
+            for (R in rel) { if (R in bad) continue
+                for (j = 1; j <= nh; j++) { h = order[j]
+                    if (h ~ /^\[template:/) { nm = substr(h, 11, length(h) - 11); if ((R, nm) in used) { dropt[h] = R; if (!(R in blockat)) blockat[R] = h } }
+                    else if (h ~ /^\[(dataset|prune):/ && ((h, "use_template") in F) && F[h, "pair_label"] == R) secof[h] = R } }
+        }
+        function same(a, b,   i, k) {
+            if (nf[a] != nf[b]) return 0
+            for (i = 1; i <= nf[a]; i++) { k = fk[a, i]; if (!((b, k) in F) || F[b, k] != F[a, k]) return 0 }
+            return 1
+        }
+        function emit_block(R,   i, T, ht, hs, both, j, k, u, ord, no, x, mw, mc) {
+            printf "[relation:%s]\n", R
+            u = ""; for (i = 1; i <= nt[R]; i++) u = u (u == "" ? "" : ", ") tier[R, i]
+            printf "\ttiers = %s\n", u
+            for (i = 1; i <= nt[R]; i++) { T = tier[R, i]
+                ht = ((R, "target", T) in tpl) ? "[template:" tpl[R, "target", T] "]" : ""
+                hs = ((R, "source", T) in tpl) ? "[template:" tpl[R, "source", T] "]" : ""
+                both = (ht != "" && hs != "")
+                no = 0; delete isk
+                if (ht != "") for (j = 1; j <= nf[ht]; j++) { k = fk[ht, j]; if (!(k in isk)) { isk[k] = 1; ord[++no] = k } }
+                if (hs != "") for (j = 1; j <= nf[hs]; j++) { k = fk[hs, j]; if (!(k in isk)) { isk[k] = 1; ord[++no] = k } }
+                for (j = 1; j <= no; j++) { k = ord[j]
+                    if (!both) { x = (ht != "") ? ht : hs; out(T, "", k, F[x, k]); continue }
+                    if ((ht, k) in F && (hs, k) in F && F[ht, k] == F[hs, k]) { out(T, "", k, F[ht, k]); continue }
+                    if ((ht, k) in F) out(T, "target_", k, F[ht, k])
+                    if ((hs, k) in F) out(T, "source_", k, F[hs, k])
+                }
+                flushmon(T)
+            }
+            print ""
+        }
+        function out(T, sp, k, v) {
+            if (k == "monitor_warn") { mon[T, sp, "w"] = v; return }
+            if (k == "monitor_crit") { mon[T, sp, "c"] = v; return }
+            printf "\t%s.%s%s = %s\n", T, sp, k, v
+        }
+        function flushmon(T,   s, sp) {
+            for (s = 1; s <= 3; s++) { sp = (s == 1) ? "" : (s == 2 ? "target_" : "source_")
+                if (((T, sp, "w") in mon) && ((T, sp, "c") in mon)) printf "\t%s.%smonitor = %s %s\n", T, sp, mon[T, sp, "w"], mon[T, sp, "c"]
+                else { if ((T, sp, "w") in mon) printf "\t%s.%smonitor_warn = %s\n", T, sp, mon[T, sp, "w"]; if ((T, sp, "c") in mon) printf "\t%s.%smonitor_crit = %s\n", T, sp, mon[T, sp, "c"] }
+                delete mon[T, sp, "w"]; delete mon[T, sp, "c"] }
+        }
+    ' "$1" "$1" > "$tmp" || { rm -f "$tmp"; return 1; }
+    cat "$tmp" > "$1"; rm -f "$tmp"
+}
+
 tiers_side_sections() {   # <config> <name> <local|remote> <target|source> -> headers
     awk -v want="$2" -v mode="$3" -v side="$4" '
         /^\[/ { hdr = $0; next }
@@ -6717,8 +6919,9 @@ cmd_show_tiers() {
     record_load client "$cpath"
     local mode=remote; [ "${RUX_MODE:-}" = local ] && mode=local
     cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
-    local cfg="$CRON_CTX_FILE"
+    local cfg="$CRON_CTX_FILE" cfgshown
     [ -r "$cfg" ] || die "show-tiers: no config $cfg for '$name'"
+    cfgshown="$cfg"; cfg=$(relation_view "$cfg") || die "show-tiers: could not read the [relation:] block of $cfgshown"
     local side out="" first sec tpls t key f_gfs f_ret f_q f_send f_prune f_pat f_pre f_w f_c mech keep retain secgfs
     for side in target source; do
         local -a hs=(); mapfile -t hs < <(tiers_side_sections "$cfg" "$name" "$mode" "$side")
@@ -6752,10 +6955,11 @@ cmd_show_tiers() {
         out="$out${out:+,}\"$side\":[$arr]"
     done
     if [ "$json" -eq 1 ]; then
-        printf '{"name":"%s","mode":"%s","config":"%s",%s}\n' "$(json_escape "$name")" "$mode" "$(json_escape "$cfg")" "$out"
+        printf '{"name":"%s","mode":"%s","config":"%s",%s}\n' "$(json_escape "$name")" "$mode" "$(json_escape "$cfgshown")" "$out"
     else
         printf '%s\n' "$out"
     fi
+    [ "$cfg" = "$cfgshown" ] || rm -f "$cfg"
 }
 
 # set-tiers NAME [ops...] [--plan|--yes]
@@ -6765,35 +6969,13 @@ cmd_show_tiers() {
 #   --add-tier=T  | --add-src-tier=T   a tier it does not have, shaped like its others
 #   --method=gfs|flat|age              how every tier of BOTH sides counts
 # The same words save-profile takes from the GUI table, so the table hands them over unchanged.
-cmd_set_tiers() {
-    local name="" yes=0 plan=0 a
-    local -a ops=()
-    for a in "$@"; do
-        case "$a" in
-            --yes|-y) yes=1 ;;
-            --plan)   plan=1 ;;
-            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*) ops+=("$a") ;;
-            --as=*|--from=*|--force|--hidden|--description=*) ;;   # profile words the table may still carry
-            -*) die "set-tiers: unknown option '$a'" ;;
-            *)  [ -z "$name" ] || die "set-tiers: takes exactly one NAME"; name="$a" ;;
-        esac
-    done
-    [ -n "$name" ] || die "usage: zfs-backup.sh set-tiers NAME [--tier=T --keep=N ...] [--plan|--yes]"
-    [ "${#ops[@]}" -gt 0 ] || die "set-tiers: nothing to change"
-    local cpath; cpath=$(client_conf_path "$name")
-    [ -r "$cpath" ] || die "set-tiers: no relationship '$name' on this host"
-    record_load client "$cpath"
-    [ "${STATE:-}" = active ] || die "set-tiers: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
-    local mode=remote; [ "${RUX_MODE:-}" = local ] && mode=local
-    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
-    local cronfile="$CRON_CTX_FILE"
-    [ -f "$cronfile" ] || die "set-tiers: no config $cronfile for '$name'"
-    assert_cron_config_matches_installed "$cronfile"
-
-    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
-    workfile_track "$workfile"
-    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
-    chmod 0644 "$workfile" 2>/dev/null || :
+# The tier changes of set-tiers, applied to a WORKING COPY -- shared by set-tiers and by
+# edit-relation (X27: "Uzyj szablonu" + the source numbers in ONE replace). Changes
+# are left in TIERS_CHANGES; a refusal removes the working copy and dies.
+TIERS_CHANGES=()
+tiers_apply_ops() {   # <workfile> <name> <local|remote> <config, for messages> <ops...>
+    local workfile="$1" name="$2" mode="$3" cronfile="$4"; shift 4
+    local -a ops=("$@")
     local hfT="$workfile.hT" hfS="$workfile.hS"
     tiers_side_sections "$workfile" "$name" "$mode" target > "$hfT"
     tiers_side_sections "$workfile" "$name" "$mode" source > "$hfS"
@@ -7001,6 +7183,41 @@ cmd_set_tiers() {
     rm -f "$hfT" "$hfS"
     if [ -s "$workfile.notes" ]; then mapfile -t -O "${#changes[@]}" changes < "$workfile.notes"; fi
     rm -f "$workfile.notes"
+    TIERS_CHANGES=("${changes[@]}")
+}
+
+cmd_set_tiers() {
+    local name="" yes=0 plan=0 a
+    local -a ops=()
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            --plan)   plan=1 ;;
+            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*) ops+=("$a") ;;
+            --as=*|--from=*|--force|--hidden|--description=*) ;;   # profile words the table may still carry
+            -*) die "set-tiers: unknown option '$a'" ;;
+            *)  [ -z "$name" ] || die "set-tiers: takes exactly one NAME"; name="$a" ;;
+        esac
+    done
+    [ -n "$name" ] || die "usage: zfs-backup.sh set-tiers NAME [--tier=T --keep=N ...] [--plan|--yes]"
+    [ "${#ops[@]}" -gt 0 ] || die "set-tiers: nothing to change"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "set-tiers: no relationship '$name' on this host"
+    record_load client "$cpath"
+    [ "${STATE:-}" = active ] || die "set-tiers: '$name' is in state '${STATE:-?}' -- only an installed (active) relationship is changed"
+    local mode=remote; [ "${RUX_MODE:-}" = local ] && mode=local
+    cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+    local cronfile="$CRON_CTX_FILE"
+    [ -f "$cronfile" ] || die "set-tiers: no config $cronfile for '$name'"
+    assert_cron_config_matches_installed "$cronfile"
+
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
+    chmod 0644 "$workfile" 2>/dev/null || :
+    tiers_apply_ops "$workfile" "$name" "$mode" "$cronfile" "${ops[@]}"
+    local -a changes=("${TIERS_CHANGES[@]}")
     log "validating the changed config (working copy only, nothing real touched yet)..."
     if ! gencron_as_target -c "$workfile" >/dev/null; then
         rm -f "$workfile"
@@ -7052,6 +7269,7 @@ cmd_clean_templates() {
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     local before after gone
     before=$(grep -oE '^\[template:[^]]+\]' "$workfile" | sort -u)
@@ -7141,6 +7359,7 @@ cmd_set_transfer() {
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     local sec i
     for sec in "${secs[@]}"; do
@@ -7585,6 +7804,7 @@ REPEOF
     chmod 0644 "$cand" 2>/dev/null || :
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read $config to plan against it"; }
+        relation_unfold "$cand" || { rm -f "$cand"; die "could not read the [relation:] blocks of the config (X27)"; }
     else
         assert_config_not_claimed_if_missing "$config"
         printf '[defaults]\n\thost_label = %s\n' "$COLLECTOR_LABEL" > "$cand" \
@@ -8431,6 +8651,13 @@ cmd_local_backup() {
     # refuses a profile carrying any relationship-owned field before it can reach
     # a config, and dies with the profile named if it does not exist.
     PROFILE_ACTIVE="$profile"
+    # X27: a NAMED relationship gets the preset as its OWN sections (profile__relacja-
+    # <NAME>__*), which the install folds into its [relation:] block. edit-relation has
+    # set this already; a first local-backup --name sets it here.
+    if [ -n "$lb_name" ] && [ -z "$PROFILE_NS_AS" ]; then
+        PROFILE_NS_AS="relacja-$lb_name"; PROFILE_NS_FOR="$(profile_name_of "$profile")"
+        profile_name_ok "$PROFILE_NS_AS" || die "local-backup: '$lb_name' cannot name its own sections: $PROFILE_ERR"
+    fi
     load_active_profile
     # The SOURCE half may be a different preset. Prepared AFTER the target is
     # loaded and it re-loads the target itself, so what is active when this
@@ -8455,6 +8682,7 @@ cmd_local_backup() {
     chmod 0644 "$cand" 2>/dev/null || :
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
+        relation_unfold "$cand" || { rm -f "$cand"; die "could not read the [relation:] blocks of the config (X27)"; }
         if [ "$lb_replace" -eq 1 ] && [ -n "$lb_name" ]; then
             local _strip; _strip=$(mktemp) || die "mktemp failed"
             strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
@@ -8823,6 +9051,13 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     [ -n "$lb_recursion" ] && echo "  Rekursja:         $lb_recursion -- migawki, prune i straznik obejmuja tez dzieci (obecne i przyszle)"
     echo "  Config docelowy:  $config$([ -f "$config" ] && echo ' (istnieje -- plan jest ADDYTYWNY: stare joby zachowane)' || echo ' (nowy)')"
     echo
+    if [ "${#EDIT_TIER_OPS[@]}" -gt 0 ] && [ -n "$lb_name" ]; then
+        tiers_apply_ops "$cand" "$lb_name" local "$config" "${EDIT_TIER_OPS[@]}"
+        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"; echo
+    fi
+    # X27: the candidate as it will be written -- relationships in [relation:] blocks
+    # (a NEW config never passes show_activation_proposal, which folds the others).
+    relation_fold "$cand" || { rm -f "$cand"; die "local-backup: could not write the [relation:] block into the candidate"; }
     echo "--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---"
     cat "$cand"
     echo
@@ -11379,6 +11614,12 @@ cmd_activate_client() {
             || die "edit-relation: --profile='$PROFILE': $PROFILE_ERR"
     fi
     apply_client_profile_choice "$is_new_relationship" "${PROFILE:-}"
+    # X27: a NEW relationship gets its preset as its OWN sections, folded by the install
+    # into its [relation:] block (edit-relation --profile set this already).
+    if [ "$is_new_relationship" -eq 1 ] && [ -z "$PROFILE_NS_AS" ] && [ -n "${PROFILE_ACTIVE:-}" ]; then
+        PROFILE_NS_AS="relacja-$name"; PROFILE_NS_FOR="$(profile_name_of "$PROFILE_ACTIVE")"
+        profile_name_ok "$PROFILE_NS_AS" || die "activate-client: '$name' cannot name its own sections: $PROFILE_ERR"
+    fi
 
     read_server_conf
     # Both halves in one call, and HERE rather than at the cronfile line below,
@@ -11452,6 +11693,7 @@ cmd_activate_client() {
         workfile_track "$workfile"
     if [ -f "$cronfile" ]; then
         cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile to a working copy"; }
+        relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     else
         # A collector with no config yet -- the ordinary first enrolment. This
         # used to leave the working copy EMPTY, and because mktemp had already
@@ -11535,6 +11777,12 @@ cmd_activate_client() {
             done
         done
         remove_templates_orphaned_by "$workfile" "$tpl_before"
+    fi
+    # X27: "Uzyj szablonu" with the source numbers -- set-tiers words from edit-relation,
+    # applied in THIS working copy, so the profile and the numbers are one replace.
+    if [ "$regen" -eq 1 ] && [ "${#EDIT_TIER_OPS[@]}" -gt 0 ]; then
+        tiers_apply_ops "$workfile" "$name" remote "$cronfile" "${EDIT_TIER_OPS[@]}"
+        echo "Szczeble po zmianie (ta sama podmiana configu):"; printf '  %s\n' "${TIERS_CHANGES[@]}"; echo
     fi
 
     log "cron config (working copy): ${#managed[@]} dataset(s) written for endpoint '$(endpoint_display)'"
@@ -12026,6 +12274,7 @@ cmd_set_bandwidth() {   # --peer=HOST --bandwidth=RATE [--config=PATH] [--local-
         || die "mktemp failed next to $cronfile"
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
 
     local _i cname dslist ds moved=0
@@ -12266,6 +12515,7 @@ cmd_migrate_profile() {   # [--profile=NAME] [--config=PATH] [--local-user=NAME]
     # be right BEFORE either of them runs, not after the swap.
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
 
     # The LEGACY flat family goes before ensure_cron_config, and this is not
@@ -12589,6 +12839,7 @@ $gcerr"
         workfile_track "$workfile"
     chmod 0644 "$workfile" 2>/dev/null || :
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     PROFILE_GFS=1
     # Initialize the missing source retention from the same preset (default profile
@@ -13729,13 +13980,19 @@ cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
     local a ask=0
+    local -a pass=()
+    EDIT_TIER_OPS=()
     for a in "$@"; do
         case "$a" in
-            --yes|-y|--verbose|--plan|--profile=*|--source-profile=*) ;;
+            --yes|-y|--verbose|--plan|--profile=*|--source-profile=*) pass+=("$a") ;;
             --ask) ask=1 ;;
+            # X27: set-tiers words -- applied in the SAME working copy, after the profile,
+            # before the one replace ("Uzyj szablonu" with the source numbers, one write).
+            --tier=*|--src-tier=*|--keep=*|--retain=*|--quiesce=*|--send-schedule=*|--prune-schedule=*|--drop-tier=*|--drop-src-tier=*|--add-tier=*|--add-src-tier=*|--method=*) EDIT_TIER_OPS+=("$a") ;;
             *) die "edit-relation: unknown option $a" ;;
         esac
     done
+    set -- "${pass[@]+"${pass[@]}"}"
     # X22: the chosen profile becomes THIS relationship's own sections (see PROFILE_NS_AS).
     for a in "$@"; do
         case "$a" in
@@ -14031,6 +14288,7 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     chmod 0644 "$workfile" 2>/dev/null || :
     local base; base=$(basename "$ds")
     if [ "$how" = remove ]; then
@@ -14240,6 +14498,7 @@ cmd_remove_source() {
             || die "remove-source: mktemp failed next to $CRON_CONFIG -- the source side is already narrowed; re-run this command"
         workfile_track "$workfile"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "remove-source: could not copy $CRON_CONFIG"; }
+        relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
         chmod 0644 "$workfile" 2>/dev/null || :
         # The SOURCE's prune goes too. It sits under its own header,
         # [prune:account@host:dataset] -- the landing's `src` -- so dropping the
@@ -17138,7 +17397,22 @@ list_profiles_text() {
 # precisely because nothing enumerated empty sections). `@managed_by` carries the
 # ownership marker, which is a COMMENT and would otherwise be dropped with the
 # other comments.
+# X27: readers see a [relation:] block the way the verbs work on it -- as the
+# relationship's own templates (relation_unfold on a temporary copy; the file is
+# not touched).
+relation_view() {   # <config> -> path to read (the file itself, or an unfolded copy the caller removes)
+    grep -q '^\[relation:' "$1" 2>/dev/null || { printf '%s' "$1"; return 0; }
+    local v; v=$(mktemp) || return 1
+    cp "$1" "$v" && relation_unfold "$v" || { rm -f "$v"; return 1; }
+    printf '%s' "$v"
+}
+
 config_section_dump() {   # <config file> -> idx SOH kind SOH name SOH key SOH value
+    local _v; _v=$(relation_view "$1") || return 1
+    _config_section_dump_raw "$_v"
+    local rc=$?; [ "$_v" = "$1" ] || rm -f "$_v"; return "$rc"
+}
+_config_section_dump_raw() {
     awk '
         { line=$0; sub(/\r$/,"",line); t=line; sub(/^[ \t]+/,"",t); sub(/[ \t]+$/,"",t) }
         t ~ /^\[/ {
@@ -18170,6 +18444,7 @@ then run this again."
         || die "move-to-client: mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cat "$cronfile" > "$workfile" || die "move-to-client: could not copy $cronfile"
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
 
     local hdr newsrc newflags rc
     for ds in $mds; do
@@ -18451,6 +18726,7 @@ remove_local_relation() {
     local workfile; workfile=$(mktemp "$(dirname "$CRON_CONFIG")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $CRON_CONFIG"
     workfile_track "$workfile"
     strip_local_relation_sections "$CRON_CONFIG" "$name" > "$workfile" 2>"$workfile.n" || { rm -f "$workfile" "$workfile.n"; die "could not rewrite a working copy of $CRON_CONFIG"; }
+    relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
     local dropped; dropped=$(cat "$workfile.n" 2>/dev/null); rm -f "$workfile.n"
     chmod 0644 "$workfile" 2>/dev/null || :
     [ "${dropped:-0}" -gt 0 ] || warn "no section of '$name' found in $CRON_CONFIG -- only the record is closed"
@@ -18531,6 +18807,7 @@ cmd_remove_client() {
             || die "mktemp failed next to $CRON_CONFIG"
             workfile_track "$workfile"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
+        relation_unfold "$workfile" || { rm -f "$workfile"; die "could not read the [relation:] blocks of the config (X27)"; }
         chmod 0644 "$workfile" 2>/dev/null || :
         # shellcheck disable=SC2086
         remove_managed_sections "$workfile" "$name" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
