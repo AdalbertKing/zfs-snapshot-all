@@ -4609,6 +4609,8 @@ fi
 AP="$WORK/profilegone"
 mkdir -p "$AP/clients" "$AP/peerstate" "$AP/keys" "$AP/dir" "$AP/root" "$AP/cap"
 mkprof_copy "$AP/root/prof"
+# X27: a relationship is a [relation:] block; the ladder `default` has no block shape.
+cp "$REPO/profiles/d7h24.conf" "$AP/root/prof.conf"
 # An extra template nothing references: the "otherwise-unused generated template
 # the operator removed" of the review's proof step 4. A referenced one could not
 # tell F2 apart from gen-cron simply rejecting a dangling use_template.
@@ -4633,13 +4635,14 @@ printf '[defaults]\n\thost_label = aptest\n' > "$APC"
 ( PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
   PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
   LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
-  PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  PEER_SAVED_DATASETS="rpool/data" MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" ENSURE_NO_TEMPLATES=1 \
   ensure_cron_config "$APC" 1 1 >/dev/null 2>&1
   PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
   PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
   LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
-  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
-  emit_client_sections "$APC" apx 1 ) >/dev/null 2>&1
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" ENSURE_NO_TEMPLATES=1 \
+  emit_client_sections "$APC" apx 1
+  relblock_adopt_remote "$APC" apx 1 ) >/dev/null 2>&1
 # A per-relationship customization an operator might reasonably make.
 sed -i '/^\tsrc          = zfsbackup@10.7.7.8/i\\trecursive    = flat' "$APC"
 
@@ -4693,7 +4696,7 @@ fi
 if [ -f "$AP/cap/workfile" ] \
         && grep -q "src *= *zfsbackup@10.7.7.9:rpool/data" "$AP/cap/workfile" \
         && grep -q 'recursive    = flat' "$AP/cap/workfile" \
-        && grep -q 'gfs_pattern' "$AP/cap/workfile"; then
+        && grep -qxF '[relation:apx]' "$AP/cap/workfile" && grep -q 'relation     = apx' "$AP/cap/workfile"; then
     ok "90 F1: with no profile at all it still refreshes src and preserves installed policy"
 else
     bad "90 F1: with no profile at all it still refreshes src and preserves installed policy" \
@@ -4715,26 +4718,24 @@ fi
 sed -i '/^	src = zfsbackup@nope:x$/d' "$AP/root/prof.conf"
 
 # --- F2: a removed, otherwise-unused generated template stays removed. ---
-if grep -q "^\[template:profile__prof__extra_unused\]" "$APC"; then
-    ok "90 F2 precondition: the unused namespaced template was installed at CREATE"
+# X27: no template sections any more. What a reactivation must not do now is REBUILD
+# the relationship's block from the profile -- a hand change in the block (hourly
+# keeps 11, the profile says 24) is the relationship, and it survives.
+if grep -qxF '[relation:apx]' "$APC" && ! grep -q '^\[template:' "$APC"; then
+    ok "90 F2 precondition: the first activation wrote the relationship as its [relation:apx] block, no template section"
 else
-    bad "90 F2 precondition: the unused namespaced template was installed at CREATE" "$(grep -c '^\[template:' "$APC") template(s) in the fixture"
+    bad "90 F2 precondition: the first activation wrote a [relation:apx] block" "$(cat "$APC")"
 fi
-awk '/^\[template:profile__prof__extra_unused\]/{skip=1;next} skip&&/^\[/{skip=0} !skip' "$APC" > "$APC.tmp" && mv "$APC.tmp" "$APC"
+sed -i 's/^\(\s*hourly\.retain\s*=\s*\)-H24$/\1-H11/' "$APC"
 out=$(run_ap "$AP/root")
-if [ -f "$AP/cap/workfile" ] \
-        && ! grep -q "^\[template:profile__prof__extra_unused\]" "$AP/cap/workfile" \
-        && case "$out" in *"added missing profile template"*) false ;; *) true ;; esac; then
-    ok "90 F2: ordinary reactivation does not re-append a deliberately removed template"
+if [ -f "$AP/cap/workfile" ] && grep -qE '^\s*hourly\.retain\s*=\s*-H11$' "$AP/cap/workfile" \
+        && ! grep -q '^\[template:' "$AP/cap/workfile"; then
+    ok "90 F2: an ordinary reactivation keeps the block as it is -- a hand change (-H11) survives, nothing from the profile comes back"
 else
-    bad "90 F2: ordinary reactivation does not re-append a deliberately removed template" \
-        "out=$(printf '%s' "$out" | grep -i template) workfile=$([ -f "$AP/cap/workfile" ] && grep -c '^\[template:' "$AP/cap/workfile" || echo none)"
+    bad "90 F2: an ordinary reactivation keeps the block" \
+        "out=$(printf '%s' "$out" | tail -3) workfile=$([ -f "$AP/cap/workfile" ] && sed -n '/^\[relation:apx\]/,/^$/p' "$AP/cap/workfile" || echo none)"
 fi
 
-# The dependency is not removed, only moved to the boundary that genuinely needs
-# it: a relationship that must GENERATE a section still loads the profile, and
-# still fails clearly when it cannot. Otherwise F1's fix would have turned a
-# loud failure into a silently policy-less CREATE.
 cat > "$AP/clients/apnew.conf" <<EOF
 CLIENT_NAME=apnew
 PEER_HOST=10.7.7.8
@@ -4800,90 +4801,9 @@ else
     bad "91 F1: a policy-creating call still installs the reserved-prefix floors" "$(cat "$AP/dir/floor.conf")"
 fi
 
-# --- F2: a valid pre-GFS CONFIG is refreshed, not forced through migration. ---
-PG="$WORK/pregfs"; mkdir -p "$PG/dir" "$PG/cap"
-PGC="$PG/dir/jobs.conf"
-cat > "$PGC" <<EOF
-[defaults]
-	host_label = pgtest
-
-[template:standard_hourly]
-	send_schedule  = 1 * * * *
-	prefix         = automated_hourly_
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly_
-	retain         = -H24
-
-[dataset:tank/backups/10.7.7.8/rpool/data]
-	# managed-by: zfs-backup.sh client=apx
-	use_template = standard_hourly
-	src          = zfsbackup@10.7.7.8:rpool/data
-	flags        = -K /dev/null
-	pair_label   = apx
-	notify       = apx-data
-EOF
-# The fixture must be a config the real consumer accepts, or "reactivation got
-# further" would prove nothing about the pre-GFS path specifically.
-if bash "$REPO/gen-cron.sh" -c "$PGC" >/dev/null 2>&1; then
-    ok "91 F2 precondition: the legacy pre-GFS fixture is a config real gen-cron.sh accepts"
-else
-    bad "91 F2 precondition: the legacy pre-GFS fixture is a config real gen-cron.sh accepts" "$(bash "$REPO/gen-cron.sh" -c "$PGC" 2>&1 | tail -3)"
-fi
-# Its OWN clients dir: the section-50 relationship 'apx' already owns this exact
-# path, and the coverage-overlap guard (REV-083/085) would refuse a second
-# relationship claiming it -- correctly, and long before the pre-GFS path this
-# case is about.
-mkdir -p "$PG/clients"
-cat > "$PG/clients/apleg.conf" <<EOF
-CLIENT_NAME=apleg
-PEER_HOST=10.7.7.8
-STATE=active
-ACTIVE_ENDPOINT=lan
-ENDPOINT_LAN_HOST=10.7.7.9
-ENDPOINT_LAN_PORT=22
-MANAGED_DATASETS=tank/backups/10.7.7.8/rpool/data
-CRON_CONFIG=$PGC
-EOF
-# That section's marker names client 'apx', not 'apleg' -- rename it, so this
-# relationship genuinely OWNS what it is about to preserve rather than relying
-# on the MANAGED_DATASETS fallback alone.
-sed -i 's|# managed-by: zfs-backup.sh client=apx|# managed-by: zfs-backup.sh client=apleg|' "$PGC"
-cat > "$PG/snapget-capture.sh" <<EOF
-#!/usr/bin/env bash
-cp -f "$PG/dir"/.zfsbackup-work.* "$PG/cap/workfile" 2>/dev/null
-exit 0
-EOF
-chmod +x "$PG/snapget-capture.sh"
-rm -f "$PG/cap/workfile" "$PG/dir"/.zfsbackup-work.*
-out=$( ( CLIENTS_DIR="$PG/clients" PEER_STATE_DIR="$AP/peerstate" PEER_KEY_DIR="$AP/keys" \
-         SERVER_CONF="$AP/no-such-server.conf" SNAPGET="$PG/snapget-capture.sh" \
-         PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
-         cmd_activate_client apleg --yes ) 2>&1 )
-if [ -f "$PG/cap/workfile" ] && case "$out" in *"pre-GFS profile"*) false ;; *) true ;; esac; then
-    ok "91 F2: endpoint-only reactivation of a pre-GFS config is not refused"
-else
-    bad "91 F2: endpoint-only reactivation of a pre-GFS config is not refused" \
-        "captured=$([ -f "$PG/cap/workfile" ] && echo yes || echo NO) out=$(printf '%s' "$out" | tail -5)"
-fi
-if [ -f "$PG/cap/workfile" ] \
-        && grep -q "src *= *zfsbackup@10.7.7.9:rpool/data" "$PG/cap/workfile" \
-        && grep -q "prune_schedule = 21 \* \* \* \*" "$PG/cap/workfile" \
-        && ! grep -q "profile__" "$PG/cap/workfile"; then
-    ok "91 F2: it refreshes src and leaves the legacy flat-retention policy untouched"
-else
-    bad "91 F2: it refreshes src and leaves the legacy flat-retention policy untouched" \
-        "$([ -f "$PG/cap/workfile" ] && cat "$PG/cap/workfile" || echo '(no workfile captured)')"
-fi
-# The refusal is retained where the hazard is real: a pre-GFS config that must
-# GENERATE a section would be given the GFS ladder on top of its own flat
-# retention -- the double-prune race -- so that path must still refuse.
-out=$( ( PROFILE_ROOT="$AP/root" PROFILE_ACTIVE=prof PROFILE_LOADED="" \
-         ensure_cron_config "$PGC" 0 1 ) 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && case "$out" in *"pre-GFS profile"*) true ;; *) false ;; esac; then
-    ok "91 F2: a policy-generating call on a pre-GFS config still refuses"
-else
-    bad "91 F2: a policy-generating call on a pre-GFS config still refuses" "rc=$rc out=$(printf '%s' "$out" | tail -3)"
-fi
+# --- F2 (pre-GFS configs) removed with X27 (owner 2026-10-14: no backward
+# compatibility): a relationship is a [relation:] block; the old shapes are moved by
+# migrate-config, never reactivated in place.
 
 # --- 52. REV-20260810-092: additive CREATE must not mutate installed global policy
 #
@@ -5084,8 +5004,10 @@ fi
 # the wiring under test.
 PC="$WORK/profilechoice"
 mkdir -p "$PC/clients" "$PC/peerstate" "$PC/keys" "$PC/dir" "$PC/cap" "$PC/root"
+# X27: a relationship is a [relation:] block; the ladder `default` has no block shape,
+# so both profiles here are copies of the flat d7h24 (alt differs in the send minute).
 for p in default alt; do
-    cp "$REPO/profiles/default.conf" "$PC/root/$p.conf"
+    cp "$REPO/profiles/d7h24.conf" "$PC/root/$p.conf"
 done
 # ALT's only difference is an observable, safe-to-render marker: the hourly
 # send cadence. If the candidate carries minute 7 it came from ALT's content,
@@ -5131,10 +5053,10 @@ run_pc() {   # <client> <neuter 0|1> -> leaves the captured candidate in $PC/cap
 # 1. First activation with PROFILE=alt: the candidate CONFIG is sourced from ALT.
 run_pc apalt 0
 if [ -f "$PC/cap/workfile" ] \
-        && grep -qE '^\[template:profile__alt__standard_hourly\]' "$PC/cap/workfile" \
-        && grep -qE 'send_schedule[[:space:]]+= 7 \* \* \* \*' "$PC/cap/workfile" \
-        && grep -qE 'use_template = profile__alt__' "$PC/cap/workfile" \
-        && ! grep -qE 'profile__default__' "$PC/cap/workfile"; then
+        && grep -qxF '[relation:apalt]' "$PC/cap/workfile" \
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 7 \* \* \* \*' "$PC/cap/workfile" \
+        && grep -qE 'relation[[:space:]]+= apalt' "$PC/cap/workfile" \
+        && ! grep -q '^\[template:' "$PC/cap/workfile"; then
     ok "95: a stored PROFILE=alt drives the real first activation's candidate CONFIG"
 else
     bad "95: a stored PROFILE=alt drives the real first activation's candidate CONFIG" \
@@ -5170,9 +5092,9 @@ fi
 # to the existing default semantics -- minute 1, default namespace, no ALT leak.
 run_pc apdef 0
 if [ -f "$PC/cap/workfile" ] \
-        && grep -qE '^\[template:profile__default__standard_hourly\]' "$PC/cap/workfile" \
-        && grep -qE 'send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
-        && ! grep -qE 'profile__alt__|= 7 \* \* \* \*' "$PC/cap/workfile"; then
+        && grep -qxF '[relation:apdef]' "$PC/cap/workfile" \
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
+        && ! grep -qE '= 7 \* \* \* \*' "$PC/cap/workfile"; then
     ok "95: the default (omitted-choice) profile still yields the default semantics"
 else
     bad "95: the default (omitted-choice) profile still yields the default semantics" \
@@ -5186,12 +5108,12 @@ fi
 # would be proving nothing.
 run_pc apalt 1
 if [ -f "$PC/cap/workfile" ] \
-        && grep -qE 'profile__default__' "$PC/cap/workfile" \
-        && ! grep -qE 'profile__alt__|= 7 \* \* \* \*' "$PC/cap/workfile"; then
+        && grep -qE 'hourly.(target_)?send_schedule[[:space:]]+= 1 \* \* \* \*' "$PC/cap/workfile" \
+        && ! grep -qE '= 7 \* \* \* \*' "$PC/cap/workfile"; then
     ok "95 control: with the wiring bypassed, the stored PROFILE has no effect"
 else
     bad "95 control: with the wiring bypassed, the stored PROFILE has no effect" \
-        "the neutered run still carried ALT -- the positive assertions are not discriminating: $([ -f "$PC/cap/workfile" ] && grep -c profile__alt__ "$PC/cap/workfile")"
+        "the neutered run still carried ALT -- the positive assertions are not discriminating: $([ -f "$PC/cap/workfile" ] && grep -c '= 7 \* \* \* \*' "$PC/cap/workfile")"
 fi
 
 # 4. Re-activation must still ignore the stored profile even now that the caller
@@ -5206,13 +5128,14 @@ printf '[defaults]\n\thost_label = pctest\n' > "$PRE"
 ( PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
   PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
   LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
-  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" ENSURE_NO_TEMPLATES=1 \
   ensure_cron_config "$PRE" 1 1 >/dev/null 2>&1
   PROFILE_ROOT="$PC/root" PROFILE_ACTIVE=default PROFILE_LOADED="" \
   PEER_SAVED_MODE=backup PEER_SAVED_TARGET="tank/backups" LOAD_LABEL=10.7.7.8 \
   LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.7.7.8 LOAD_FLAGS="-K /dev/null" \
-  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" \
-  emit_client_sections "$PRE" apre 1 ) >/dev/null 2>&1
+  PEER_SAVED_DATASETS="rpool/data" PROFILE_GFS=1 MANAGED_DATASETS="" MANAGED_PRUNE_SCOPE="" ENSURE_NO_TEMPLATES=1 \
+  emit_client_sections "$PRE" apre 1
+  relblock_adopt_remote "$PRE" apre 1 ) >/dev/null 2>&1
 sed -i "s#^CRON_CONFIG=.*#CRON_CONFIG=$PRE#; s#^ENDPOINT_LAN_HOST=.*#ENDPOINT_LAN_HOST=10.7.7.9#" "$PC/clients/apre.conf"
 printf 'MANAGED_DATASETS=tank/backups/10.7.7.8/rpool/data\nMANAGED_PRUNE_SCOPE=tank/backups/10.7.7.8\n' >> "$PC/clients/apre.conf"
 rm -f "$PC/cap/workfile" "$PC/dir"/.zfsbackup-work.*
@@ -6516,7 +6439,10 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # 16/23 since 2026-10-14 (X22): clean-templates -- the template sections nothing uses
 # removed from the config. A WRITER, aimed like migrate-profile (cron_context_resolve
 # aim, assert_cron_config_matches_installed, then atomic_replace_and_install).
-if [ "$writers" -eq 16 ] && [ "$resolvers" -eq 23 ]; then
+# 17/24 since 2026-10-14 (X27 S3): migrate-config -- the config's relationships moved once
+# into their [relation:] blocks. A WRITER, aimed like migrate-profile (cron_context_resolve
+# aim, assert_cron_config_matches_installed, then atomic_replace_and_install).
+if [ "$writers" -eq 17 ] && [ "$resolvers" -eq 24 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \

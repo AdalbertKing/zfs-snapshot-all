@@ -1350,7 +1350,20 @@ expand_relations() {
         local -a ts=(); IFS=',' read -ra ts <<< "$tl"
         for one in "${ts[@]}"; do
             one="$(trim "$one")"; [ -n "$one" ] || continue
+            # <tier>.<side> = no -- the tier does not run on that side at all.
+            if ini_has "relation:$rel" "${one}.${side}"; then
+                case "$(ini_get "relation:$rel" "${one}.${side}")" in
+                    no) continue ;; yes) ;;
+                    *) die "[relation:$rel] ${one}.${side} = '$(ini_get "relation:$rel" "${one}.${side}")' -- yes or no" ;;
+                esac
+            fi
             local tpl="profile__relacja-${rel}__${stem}${one}"
+            # A per-section override names the tier as the block does (prune_schedule_hourly);
+            # the rules below look it up under the in-memory name.
+            local ovf
+            for ovf in send_schedule prune_schedule flags; do
+                ini_has "$sec" "${ovf}_${one}" && INI["${sec}${SEP}${ovf}_${tpl}"]="$(ini_get "$sec" "${ovf}_${one}")"
+            done
             if [ -z "${used[$tpl]+x}" ]; then
                 [ -z "${SEEN_SECTION[template:$tpl]+x}" ] || die "[relation:$rel] would define the tier '$tpl', but the config already has a [template:$tpl] section -- one of the two has to go"
                 used[$tpl]=1
@@ -1369,7 +1382,7 @@ expand_relations() {
                         f="${key#*${SEP}}"
                         case "$f" in "$pre"*) ;; *) continue ;; esac
                         f="${f#"$pre"}"
-                        case "$f" in target_*|source_*) [ "$pass" = common ] && continue ;; esac
+                        case "$f" in target|source) continue ;; target_*|source_*) [ "$pass" = common ] && continue ;; esac
                         val="${INI[$key]}"
                         if [ "$f" = monitor ]; then
                             read -r n val <<< "$val"
@@ -1399,7 +1412,9 @@ expand_relations() {
             case "$f" in tiers|gfs) continue ;; esac
             t="${f%%.*}"; [ "$t" != "$f" ] || die "[$hdr] field '$f' -- expected tiers, gfs or <tier>.<field> (e.g. hourly.target_retain)"
             case "$tl" in *" $t "*) ;; *) die "[$hdr] field '$f' names the tier '$t', which is not in tiers =$tl" ;; esac
-            f="${f#*.}"; f="${f#target_}"; f="${f#source_}"
+            f="${f#*.}"
+            case "$f" in target|source) continue ;; esac     # yes/no, checked where it is read
+            f="${f#target_}"; f="${f#source_}"
             [ "$f" = monitor ] && continue
             [ -n "${FIELD_OK[template${SEP}${f}]+x}" ] || die "[$hdr] field '${key#*${SEP}}' -- '$f' is not a tier field (see [template:] in the header of gen-cron.sh)"
         done

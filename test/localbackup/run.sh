@@ -599,7 +599,9 @@ out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --targe
 # the same, and a record with RUX_MODE=local names the COPIES as managed.
 LC="$WORK/lclients"; rm -rf "$LC"
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
-out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --recursive=flat --exclude-child='^rpool/data/vm-9$' --name=lok --config="$CFG")"
+# X27: a named relationship is a [relation:] block; the ladder `default` has no block
+# shape (owner 2026-10-14: every tier makes and counts its own), so a flat profile here.
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --recursive=flat --exclude-child='^rpool/data/vm-9$' --name=lok --profile=d7h24 --config="$CFG")"
 rec="$LC/lok.conf"
 # The record and the installed sections need the install, and the install needs
 # flock (the crontab writer). Same rule as the uninstall cases below.
@@ -627,7 +629,7 @@ if grep -qE -- '-m automated_hourly_ .*-R -X \^rpool/data/vm-9\$ rpool/data hdd/
 else
     bad "local relationship: seed" "$(cat "$WORK/seed-calls" 2>/dev/null)"
 fi
-out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/db --target=hdd/backups --name=lok --config="$CFG")"
+out="$(CLIENTS_DIR="$LC" runi snapsend-ok "t" --install --yes --source=rpool/db --target=hdd/backups --name=lok --profile=d7h24 --config="$CFG")"
 printf '%s' "$out" | grep -q "relationship 'lok' already exists on this host" \
     && ok "local relationship: a second --name=lok is refused while the first is live" \
     || bad "local relationship: name taken" "$(printf '%s' "$out" | tail -3)"
@@ -715,133 +717,97 @@ if [ "$x3a" = '--exclude-child=^rpool/a/tmp$
 else
     bad "local relationship: X3 orphaned exceptions" "read back: $x3a" "after removing rpool/b: $x3b"
 fi
-# SET-TIERS (owner 2026-10-13: "config jako jedyne zrodlo prawdy"). The tiers of ONE
-# relationship are changed IN its config: a count, a template another relationship
-# shares (copied for this one, the neighbour untouched), a tier added on BOTH sides
-# (the source makes the family, the target prunes it), a tier dropped on both, the
-# last one refused, a per-section schedule override changed where it runs, and a
-# config the generator rejects leaves the file as it was. Installed by one replace.
+# SET-TIERS on the relationship's [relation:] BLOCK (X27, owner 2026-10-14: "Z szablonow
+# powstaja configi -- jedyne zrodlo prawdy"). A count on one side splits the field into
+# target_/source_; a count back to equal folds it again; a tier added in cadence order;
+# a tier dropped with its per-section overrides; the last one refused; a tier switched
+# off on the source (<tier>.source = no); --method on every tier; a per-section schedule
+# override changed where it runs; a config the generator rejects leaves the file as it
+# was; a relationship still in the old shape refused with the way out. One replace.
 ST="$RL/st"; mkdir -p "$ST/clients"
 printf 'CLIENT_NAME=sl\nRUX_MODE=local\nSTATE=active\nCRON_CONFIG=%s\n' "$ST/c.conf" > "$ST/clients/sl.conf"
 st_conf() { cat > "$ST/c.conf" <<'EOF'
-[template:profile__relacja-sl__hourly]
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	gfs            = yes
-	retain         = -H24
-[template:profile__d7h24__daily]
-	prune_schedule = 31 1 * * *
-	pattern        = automated_daily
-	gfs            = yes
-	retain         = -D7
-[template:profile__relacja-sl__lsrc_hourly]
-	send_schedule  = 1 * * * *
-	prefix         = automated_hourly_
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	gfs            = yes
-	retain         = -H24
-[template:profile__relacja-sl__lsrc_daily]
-	send_schedule  = 11 1 * * *
-	prefix         = automated_daily_
-	prune_schedule = 31 1 * * *
-	pattern        = automated_daily
-	gfs            = yes
-	retain         = -D1
-	quiesce        = auto,degrade
+[defaults]
+	host_label = t
+
+[relation:sl]
+	tiers = hourly, daily
+	hourly.send_schedule = 1 * * * *
+	hourly.prefix = automated_hourly_
+	hourly.prune_schedule = 21 * * * *
+	hourly.pattern = automated_hourly
+	hourly.retain = -H24
+	hourly.monitor = 90m 150m
+	daily.send_schedule = 11 1 * * *
+	daily.prefix = automated_daily_
+	daily.prune_schedule = 31 1 * * *
+	daily.pattern = automated_daily
+	daily.retain = -D7
+	daily.quiesce = auto,degrade
 
 [dataset:rpool/a]
-	use_template = profile__relacja-sl__lsrc_hourly,profile__relacja-sl__lsrc_daily
+	relation     = sl
+	side         = source
 	dst          = hdd/backups
 	pair_label   = sl
 [prune:hdd/backups/rpool/a]
-	use_template = profile__relacja-sl__hourly,profile__d7h24__daily
+	relation     = sl
+	side         = target
 	pair_label   = sl
-[prune:hdd/backups/other]
-	use_template = profile__d7h24__daily
-	pair_label   = other
 EOF
 }
 st_run() {   # <args...> -> output; config in $ST/c.conf
     ( CLIENTS_DIR="$ST/clients"
       cron_context_resolve() { CRON_CTX_FILE="$ST/c.conf"; }
       assert_cron_config_matches_installed() { :; }
-      gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; return 0; }
+      gencron_as_target() { [ -n "${ST_GEN_FAILS:-}" ] && return 1; bash "$REPO/gen-cron.sh" "$@" >/dev/null 2>&1; }
       show_activation_proposal() { :; }
       atomic_replace_and_install() { cp "$2" "$1"; }
       cmd_set_tiers sl "$@" ) 2>&1
 }
 st_f() { awk -v h="[$1]" -v k="$2" '$0==h{f=1;next} /^\[/{f=0} f{t=$0; sub(/^[ \t]+/,"",t); if (index(t,k" ")==1||index(t,k"=")==1){sub(/^[^=]*=[ \t]*/,"",t); print t; exit}}' "$ST/c.conf"; }
-st_conf; o1=$(st_run --tier=hourly --keep=48 --yes)
-r1a=$(st_f template:profile__relacja-sl__hourly retain); r1b=$(st_f template:profile__relacja-sl__lsrc_hourly retain)
-st_conf; o2=$(st_run --tier=daily --keep=9 --yes)
-r2own=$(st_f template:profile__relacja-sl__daily retain); r2shared=$(st_f template:profile__d7h24__daily retain)
-r2l=$(st_f prune:hdd/backups/rpool/a use_template); r2o=$(st_f prune:hdd/backups/other use_template)
-if [ "$r1a" = -H48 ] && [ "$r1b" = -H24 ] && [ "$r2own" = -D9 ] && [ "$r2shared" = -D7 ] \
-   && [ "$r2l" = "profile__relacja-sl__hourly,profile__relacja-sl__daily" ] && [ "$r2o" = profile__d7h24__daily ]; then
-    ok "set-tiers: a count changes the relationship's own template, one side only; a SHARED template is copied for it and the neighbour keeps the original"
+st_conf; o1=$(st_run --src-tier=hourly --keep=12 --yes)
+r1t=$(st_f relation:sl hourly.target_retain); r1s=$(st_f relation:sl hourly.source_retain); r1c=$(st_f relation:sl hourly.retain)
+o1b=$(st_run --src-tier=hourly --keep=24 --yes)
+r1f=$(st_f relation:sl hourly.retain); r1g=$(st_f relation:sl hourly.source_retain)
+if [ "$r1t" = -H24 ] && [ "$r1s" = -H12 ] && [ -z "$r1c" ] && [ "$r1f" = -H24 ] && [ -z "$r1g" ] && ! grep -q '^\[template:' "$ST/c.conf"; then
+    ok "set-tiers: a count on the source splits the field (target -H24 / source -H12); equal again, it folds back to one -- all in the block, no template section"
 else
-    bad "set-tiers: count / copy-on-write" "hourly $r1a/$r1b daily own=$r2own shared=$r2shared lists [$r2l] [$r2o]" "$o1" "$o2"
+    bad "set-tiers: count on one side" "split t=[$r1t] s=[$r1s] common=[$r1c]" "folded=[$r1f] left=[$r1g]" "$o1" "$o1b"
 fi
-st_conf; o3=$(st_run --add-tier=weekly --keep=6 --yes)
-w_t=$(st_f template:profile__relacja-sl__weekly retain); w_s=$(st_f template:profile__relacja-sl__lsrc_weekly retain)
-w_sq=$(st_f template:profile__relacja-sl__lsrc_weekly quiesce); w_sp=$(st_f template:profile__relacja-sl__lsrc_weekly prefix)
-w_ds=$(st_f dataset:rpool/a use_template); w_pr=$(st_f prune:hdd/backups/rpool/a use_template)
-st_conf; o4=$(st_run --drop-tier=hourly --yes)
-d_ds=$(st_f dataset:rpool/a use_template); d_pr=$(st_f prune:hdd/backups/rpool/a use_template)
-d_gone=$(grep -c '^\[template:profile__relacja-sl__hourly\]' "$ST/c.conf")
-st_conf; o5=$(st_run --drop-tier=hourly --drop-tier=daily --yes); r5=$?
-if [ "$w_t" = -W6 ] && [ "$w_s" = -W4 ] && [ "$w_sq" = auto,degrade ] && [ "$w_sp" = automated_weekly_ ] \
-   && [ "${w_ds##*,}" = profile__relacja-sl__lsrc_weekly ] && [ "${w_pr##*,}" = profile__relacja-sl__weekly ] \
-   && [ "$d_ds" = profile__relacja-sl__lsrc_daily ] && [ "$d_pr" = profile__d7h24__daily ] && [ "$d_gone" = 0 ] \
-   && printf '%s' "$o5" | grep -q 'is the last tier of that side' && grep -q 'lsrc_daily' "$ST/c.conf"; then
-    ok "set-tiers: --add-tier on BOTH sides (source makes and freezes the family, target prunes), --drop-tier on both, the last tier refused"
+st_conf; o2=$(st_run --add-tier=weekly --yes)
+w_tiers=$(st_f relation:sl tiers); w_ret=$(st_f relation:sl weekly.retain); w_pre=$(st_f relation:sl weekly.prefix); w_mon=$(st_f relation:sl weekly.monitor)
+o3=$(st_run --drop-tier=hourly --yes); d_tiers=$(st_f relation:sl tiers); d_left=$(grep -c '^	hourly\.' "$ST/c.conf")
+st_conf; o4=$(st_run --drop-tier=hourly --drop-tier=daily --yes); r4=$?
+if [ "$w_tiers" = "hourly, daily, weekly" ] && [ "$w_ret" = -W4 ] && [ "$w_pre" = automated_weekly_ ] && [ "$w_mon" = "8d 10d" ] \
+   && [ "$d_tiers" = "daily, weekly" ] && [ "$d_left" = 0 ] && [ "$r4" -ne 0 ] && printf '%s' "$o4" | grep -q 'is the last tier'; then
+    ok "set-tiers: --add-tier in cadence order (weekly -W4, its own family and monitor), --drop-tier takes every field of the tier, the last tier refused"
 else
-    bad "set-tiers: add / drop" "weekly t=$w_t s=$w_s q=$w_sq pre=$w_sp lists [$w_ds] [$w_pr]" "drop [$d_ds] [$d_pr] gone=$d_gone" "$o3" "$o5"
+    bad "set-tiers: add / drop" "add: tiers=[$w_tiers] ret=$w_ret pre=$w_pre mon=[$w_mon]" "drop: tiers=[$d_tiers] left=$d_left rc4=$r4" "$o2" "$o3" "$o4"
+fi
+st_conf; o5=$(st_run --drop-src-tier=daily --method=age --yes)
+r5off=$(st_f relation:sl daily.source); r5h=$(st_f relation:sl hourly.retain); r5d=$(st_f relation:sl daily.retain)
+r5cron=$(bash "$REPO/gen-cron.sh" -c "$ST/c.conf" 2>&1)
+if [ "$r5off" = no ] && [ "$r5h" = -h24 ] && [ "$r5d" = -d7 ] \
+   && ! printf '%s' "$r5cron" | grep -q 'lsrc_daily' && printf '%s' "$r5cron" | grep -q 'profile__relacja-sl__daily prune'; then
+    ok "set-tiers: --drop-src-tier writes daily.source = no (the source runs no daily, the target still prunes it); --method=age turns every count into an age"
+else
+    bad "set-tiers: source off / method" "off=[$r5off] hourly=$r5h daily=$r5d" "$o5" "$(printf '%s' "$r5cron" | grep -E 'daily' | head -4)"
 fi
 st_conf
-awk '/^\[dataset:rpool\/a\]/{print; print "\tprune_schedule_profile__relacja-sl__lsrc_daily = 51 1 * * *"; next} {print}' "$ST/c.conf" > "$ST/c2" && mv "$ST/c2" "$ST/c.conf"
-o6=$(st_run --src-tier=daily --prune-schedule='52 1 * * *' --yes)
-ov=$(st_f dataset:rpool/a prune_schedule_profile__relacja-sl__lsrc_daily); tp=$(st_f template:profile__relacja-sl__lsrc_daily prune_schedule)
+awk '/^\[dataset:rpool\/a\]/{print; print "\tprune_schedule_hourly = 26 * * * *"; next} {print}' "$ST/c.conf" > "$ST/c2" && mv "$ST/c2" "$ST/c.conf"
+o6=$(st_run --src-tier=hourly --prune-schedule='27 * * * *' --yes)
+ov=$(st_f dataset:rpool/a prune_schedule_hourly); bp=$(st_f relation:sl hourly.prune_schedule)
 st_conf; cp "$ST/c.conf" "$ST/before"; o7=$(ST_GEN_FAILS=1 st_run --tier=hourly --keep=3 --yes); r7=$?
-if [ "$ov" = "52 1 * * *" ] && [ "$tp" = "31 1 * * *" ] && [ "$r7" -ne 0 ] && cmp -s "$ST/c.conf" "$ST/before" \
-   && printf '%s' "$o7" | grep -q 'gen-cron.sh rejected the changed config' && ! ls "$ST"/.zfsbackup-work.* >/dev/null 2>&1; then
-    ok "set-tiers: a schedule overridden per section is changed there (the template stays); a config the generator rejects leaves the file untouched and no working copy behind"
+r7same=0; cmp -s "$ST/c.conf" "$ST/before" && r7same=1
+printf '[defaults]\n\thost_label = t\n[template:x]\n\tretain = -H1\n[dataset:rpool/a]\n\tuse_template = x\n\tpair_label = sl\n' > "$ST/c.conf"
+o8=$(st_run --tier=x --keep=2 --yes); r8=$?
+if [ "$ov" = "27 * * * *" ] && [ "$bp" = "21 * * * *" ] && [ "$r7" -ne 0 ] && [ "$r7same" = 1 ] \
+   && printf '%s' "$o7" | grep -q 'gen-cron.sh rejected the changed config' && ! ls "$ST"/.zfsbackup-work.* >/dev/null 2>&1 \
+   && [ "$r8" -ne 0 ] && printf '%s' "$o8" | grep -q 'still in the OLD config shape.*migrate-config'; then
+    ok "set-tiers: a per-section override is changed where it runs (the block keeps 21); a rejected config leaves no working copy; the old shape is refused with migrate-config"
 else
-    bad "set-tiers: override / rejected config" "override=[$ov] template=[$tp] rc7=$r7" "$o6" "$o7" "$(ls -a "$ST")"
-fi
-# X22 follow-up (owner's T6, 2026-10-14): after "Uzyj szablonu" with no source profile,
-# BOTH sides of a local relationship use ONE own section (profile__relacja-sl__hourly);
-# set-tiers --src-tier copied it under the name it already had and refused ("could not
-# take '' over"). The source now gets its own lsrc_ copy, the target keeps the original
-# -- for a source change and for a target change alike.
-st_shared() { cat > "$ST/c.conf" <<'EOF'
-[template:profile__relacja-sl__hourly]
-	send_schedule  = 1 * * * *
-	prefix         = automated_hourly_
-	prune_schedule = 21 * * * *
-	pattern        = automated_hourly
-	retain         = -H24
-
-[dataset:rpool/a]
-	use_template = profile__relacja-sl__hourly
-	dst          = hdd/backups
-	pair_label   = sl
-[prune:hdd/backups/rpool/a]
-	use_template = profile__relacja-sl__hourly
-	pair_label   = sl
-EOF
-}
-st_shared; sh1=$(st_run --src-tier=hourly --keep=12 --yes); sh1rc=$?
-sh1d=$(st_f dataset:rpool/a use_template); sh1p=$(st_f prune:hdd/backups/rpool/a use_template)
-sh1s=$(st_f template:profile__relacja-sl__lsrc_hourly retain); sh1t=$(st_f template:profile__relacja-sl__hourly retain)
-st_shared; sh2=$(st_run --tier=hourly --keep=48 --yes); sh2rc=$?
-sh2d=$(st_f dataset:rpool/a use_template); sh2s=$(st_f template:profile__relacja-sl__lsrc_hourly retain); sh2t=$(st_f template:profile__relacja-sl__hourly retain)
-if [ "$sh1rc" = 0 ] && [ "$sh1d" = profile__relacja-sl__lsrc_hourly ] && [ "$sh1p" = profile__relacja-sl__hourly ] && [ "$sh1s" = -H12 ] && [ "$sh1t" = -H24 ] \
-   && [ "$sh2rc" = 0 ] && [ "$sh2d" = profile__relacja-sl__lsrc_hourly ] && [ "$sh2s" = -H24 ] && [ "$sh2t" = -H48 ]; then
-    ok "set-tiers: one own section used by BOTH sides is split -- source gets lsrc_ (-H12 there, target -H24); a target change leaves the source at -H24"
-else
-    bad "set-tiers: section shared by both sides" "src change rc=$sh1rc ds=[$sh1d] pr=[$sh1p] src=$sh1s tgt=$sh1t" "tgt change rc=$sh2rc ds=[$sh2d] src=$sh2s tgt=$sh2t" "$sh1" "$sh2"
+    bad "set-tiers: override / rejected / old shape" "override=[$ov] block=[$bp] rc7=$r7 rc8=$r8" "$o6" "$o7" "$o8"
 fi
 # X22 (owner 2026-10-14): clean-templates removes the generated template sections nothing
 # uses (profile__* left by profiles applied earlier); a used one and a hand-named one
@@ -1940,51 +1906,79 @@ else
 fi
 rm -rf "$K21P"
 
-# W7 (owner GUI test, 2026-10-11): the SECOND edit of a relationship's own template.
-# The GUI keeps it under one name (relacja-<NAME>) and rewrites its content; the config
-# still carries the previous content under that name, and the create-time collision
-# guard refused every second edit ("already exists ... different effective policy").
-# An edit (--replace) now replaces the relationship's own template sections. Control:
-# a template of the same shape under ANOTHER relationship's name is still guarded.
+# W7 (owner GUI test, 2026-10-11), X27: the SECOND edit of a relationship replaces its
+# [relation:] block -- the old numbers (-D30) are gone, the new ones (-D7) in, ONE block;
+# another relationship's block in the same config is not touched.
 W7P="$WORK/w7prof"; W7C="$WORK/w7clients"; rm -rf "$W7P" "$W7C"; mkdir -p "$W7P" "$W7C"
 sed -E 's/^([[:space:]]*keep[[:space:]]*=[[:space:]]*)30[[:space:]]*$/\17/' "$REPO/profiles/d30.conf" > "$W7P/relacja-w7.conf"
-cp "$W7P/relacja-w7.conf" "$W7P/relacja-w7x.conf"
 printf 'CLIENT_NAME=w7\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/data\nCRON_CONFIG=%s\n' "$WORK/w7.conf" > "$W7C/w7.conf"
-w7_seed() {   # <template-owner name> -> a config holding that owner's template with the OLD count (30)
-    printf '[defaults]\n\thost_label = %s\n\n[template:profile__relacja-%s__daily]\n' "$(hostname)" "$1" > "$WORK/w7.conf"
-    sed -n '/^\[template:daily\]/,/^$/p' "$REPO/profiles/d30.conf" | sed 1d >> "$WORK/w7.conf"
-}
-w7_seed w7
+cat > "$WORK/w7.conf" <<'EOF'
+[defaults]
+	host_label = t
+
+[relation:w7]
+	tiers = daily
+	daily.send_schedule = 11 1 * * *
+	daily.prefix = automated_daily_
+	daily.prune_schedule = 31 1 * * *
+	daily.pattern = automated_daily
+	daily.retain = -D30
+
+[relation:w7x]
+	tiers = daily
+	daily.send_schedule = 12 1 * * *
+	daily.prefix = automated_daily_
+	daily.prune_schedule = 32 1 * * *
+	daily.pattern = automated_daily
+	daily.retain = -D30
+
+[dataset:rpool/data]
+	# managed-by: zfs-backup.sh local-backup source=rpool/data
+	relation     = w7
+	side         = source
+	dst          = hdd/backups
+	recursive    = flat
+	pair_label   = w7
+[prune:hdd/backups/rpool/data]
+	# managed-by: zfs-backup.sh local-backup target=hdd/backups/rpool/data
+	relation     = w7
+	side         = target
+	recursive    = yes
+	pair_label   = w7
+[dataset:rpool/other]
+	relation     = w7x
+	side         = source
+	dst          = hdd/backups
+	pair_label   = w7x
+EOF
 w7o="$(CLIENTS_DIR="$W7C" PROFILE_USER_ROOT="$W7P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=relacja-w7 --name=w7 --replace --config="$WORK/w7.conf")"
-w7_seed w7x
-w7c="$(CLIENTS_DIR="$W7C" PROFILE_USER_ROOT="$W7P" run --source=rpool/data --target=hdd/backups --recursive=flat --profile=relacja-w7x --name=w7 --replace --config="$WORK/w7.conf")"
-if ! printf '%s' "$w7o" | grep -q 'different effective policy' && [ "$(k21_flags "$w7o" hdd/backups/rpool/data)" = -D7 ] \
-   && printf '%s' "$w7c" | grep -q 'different effective policy'; then
-    ok "W7: edit of a relationship's own template (relacja-w7) replaces its old sections -- target -D7, no collision; another relationship's template is still guarded"
+w7cand=$(printf '%s\n' "$w7o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+w7x=$(printf '%s\n' "$w7cand" | sed -n '/^\[relation:w7x\]/,/^$/p')
+if [ "$(printf '%s' "$w7cand" | grep -c '^\[relation:w7\]')" = 1 ] && printf '%s' "$w7cand" | sed -n '/^\[relation:w7\]/,/^$/p' | grep -qF 'daily.retain = -D7' \
+   && ! printf '%s' "$w7cand" | sed -n '/^\[relation:w7\]/,/^$/p' | grep -qF -- '-D30' && printf '%s' "$w7x" | grep -qF 'daily.retain = -D30' \
+   && [ "$(k21_flags "$w7o" hdd/backups/rpool/data)" = -D7 ] && ! printf '%s' "$w7o" | grep -q 'FATAL'; then
+    ok "W7/X27: a second edit replaces the relationship's [relation:w7] block (-D30 gone, -D7 in, one block); the neighbour's [relation:w7x] is untouched"
 else
-    bad "W7: second edit of an own template" "own: $(printf '%s\n' "$w7o" | grep -E 'FATAL|different' | head -2) tgt=$(k21_flags "$w7o" hdd/backups/rpool/data)" "other: $(printf '%s\n' "$w7c" | grep -E 'FATAL|different' | head -1)"
+    bad "W7/X27: second edit of a relationship" "$w7cand" "$(printf '%s\n' "$w7o" | grep -E 'FATAL' | head -2)"
 fi
 rm -rf "$W7P" "$W7C" "$WORK/w7.conf"
 
-# X22 (owner GUI test T6, 2026-10-14): "Uzyj szablonu d30h24" on an existing relationship
-# was refused -- the config carried an UNUSED profile__d30h24__daily changed by hand,
-# and edit-relation --profile=P inserts P under P's own name, so the create-time
-# collision guard compared against it. edit-relation now renders P under the
-# relationship's own name (profile__relacja-<NAME>__*). Control: local-backup with the
-# same profile and no edit-relation still meets the hand-changed shared section.
+# X22 / X27 (owner 2026-10-14): "Uzyj szablonu" on an existing relationship writes the
+# profile's numbers into the relationship's OWN block -- nothing shared with another
+# relationship, so a hand-changed section elsewhere cannot block it; the plan writes nothing.
 X22C="$WORK/x22clients"; rm -rf "$X22C"; mkdir -p "$X22C"
 printf 'CLIENT_NAME=x22\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/data\nRECURSION=flat\nPROFILE=d7h24\nCRON_CONFIG=%s\n' "$WORK/x22.conf" > "$X22C/x22.conf"
-{ printf '[defaults]\n\thost_label = %s\n\n[template:profile__d30__daily]\n' "$(hostname)"
-  sed -n '/^\[template:daily\]/,/^$/p' "$REPO/profiles/d30.conf" | sed 1d | sed 's/^\(\s*prune_schedule\s*=\s*\)31 /\129 /;s/^\(\s*keep\s*=\s*\)30/\tretain         = -D30/'; } > "$WORK/x22.conf"
+x22n=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d7h24 --name=x22 --config="$WORK/x22.conf")
+printf '%s\n' "$x22n" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' | sed '1d;$d' > "$WORK/x22.conf"
 cp "$WORK/x22.conf" "$WORK/x22.before"
-x22o=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cmd_edit_relation x22 --profile=d30 --plan ) 2>&1 )
-x22c=$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=x22 --replace --config="$WORK/x22.conf")
-if ! printf '%s' "$x22o" | grep -q 'different effective policy' && printf '%s' "$x22o" | grep -qF '[template:profile__relacja-x22__daily]' \
-   && [ "$(k21_flags "$x22o" hdd/backups/rpool/data)" = -D30 ] && cmp -s "$WORK/x22.conf" "$WORK/x22.before" \
-   && printf '%s' "$x22c" | grep -q 'different effective policy'; then
-    ok "X22: edit-relation --profile=d30 renders it as the relationship's own sections (profile__relacja-x22__*) -- no collision with a hand-changed shared profile__d30__daily, plan writes nothing; control without edit-relation: refused"
+x22o=$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$X22C"; cmd_edit_relation x22 --profile=d30h24 --source-profile= --plan ) 2>&1 )
+x22b=$(printf '%s\n' "$x22o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p')
+if grep -qxF '[relation:x22]' "$WORK/x22.before" && printf '%s' "$x22b" | grep -qxF '[relation:x22]' && [ "$(printf '%s' "$x22b" | grep -c '^\[relation:x22\]')" = 1 ] \
+   && printf '%s' "$x22b" | grep -qF 'daily.retain = -D30' && ! printf '%s' "$x22b" | grep -q '^\[template:' \
+   && [ "$(k21_flags "$x22o" hdd/backups/rpool/data)" = -D30 ] && cmp -s "$WORK/x22.conf" "$WORK/x22.before"; then
+    ok "X22/X27: edit-relation --profile=d30h24 rewrites the relationship's own [relation:x22] block (-D30, one block, no template section); the plan writes nothing"
 else
-    bad "X22: Uzyj szablonu into own sections" "edit: $(printf '%s\n' "$x22o" | grep -E 'FATAL|different|template:profile__' | head -4) tgt=$(k21_flags "$x22o" hdd/backups/rpool/data)" "control: $(printf '%s\n' "$x22c" | grep -E 'FATAL|different' | head -1)"
+    bad "X22/X27: Uzyj szablonu into the block" "$x22b" "tgt=$(k21_flags "$x22o" hdd/backups/rpool/data)" "$(printf '%s\n' "$x22o" | grep -E 'FATAL' | head -2)" "$(head -20 "$WORK/x22.before")"
 fi
 rm -rf "$X22C" "$WORK/x22.conf" "$WORK/x22.before"
 
@@ -1993,12 +1987,15 @@ rm -rf "$X22C" "$WORK/x22.conf" "$WORK/x22.before"
 # content (the local family keeps monitors; the remote one may not), and the second
 # install died. A local relationship's source family is `__lsrc_` now: the candidate
 # carries it and none of the remote `__src_` names. Old code: `__src_` here.
-w12o="$(run --source=rpool/data --target=hdd/backups --profile=default --name=ns --config="$WORK/ns.conf")"
-if printf '%s' "$w12o" | grep -q 'profile__default__lsrc_keep_hourly' && ! printf '%s' "$w12o" | grep -q 'profile__default__src_keep_'; then
-    ok "local relationship: its source family is __lsrc_ (never the remote __src_ names it would collide with)"
+# X27: no template sections any more -- the names live only in the cron descriptions,
+# where a local source still reads __lsrc_ and never the remote __src_.
+w12o="$(run --source=rpool/data --target=hdd/backups --profile=d7h24 --name=ns --config="$WORK/ns.conf")"
+if printf '%s' "$w12o" | grep -q 'profile__relacja-ns__lsrc_hourly snapshot' && ! printf '%s' "$w12o" | grep -q 'profile__relacja-ns__src_' \
+   && ! printf '%s' "$w12o" | sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' | grep -q '^\[template:'; then
+    ok "local relationship: its source tiers are __lsrc_ in the cron (never the remote __src_), and the config holds no template section"
 else
     bad "local relationship: source template namespace" "$(printf '%s
-' "$w12o" | grep -oE 'profile__default__[a-z_]+' | sort -u | head -8)"
+' "$w12o" | grep -oE 'profile__relacja-ns__[a-z_]+' | sort -u | head -8)"
 fi
 
 # W17: local-backup --raw -- an encrypted source copied encrypted (-w on the send line,

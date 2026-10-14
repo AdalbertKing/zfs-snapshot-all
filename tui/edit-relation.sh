@@ -670,9 +670,9 @@ while :; do
         # RETENCJA ŹRÓDŁA: to samo okno-tabela co w kreatorze (uwaga 10).
         src_prefill
         SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
-        # CONFIG JAKO JEDYNE ŹRÓDŁO (etap B): bez pochodnego szablonu źródła (<P>-src-...).
-        # Szablon idzie na relację ze źródłem jak cel, a różnice źródła to drugi krok:
-        # set-tiers --src-tier... -- każdy krok jedną atomową podmianą configu.
+        # CONFIG JAKO JEDYNE ŹRÓDŁO: bez pochodnego szablonu źródła (<P>-src-...). Szablon
+        # idzie na relację ze źródłem jak cel, a różnice źródła (--src-tier...) jadą w TYM
+        # SAMYM wywołaniu edit-relation -- jedna podmiana configu (X27 etap B).
         : >"$TMPD/srcargs"
         SRC_ARGS_OUT="$TMPD/srcargs" SRC_ARGS_BASE=target source_retention_editor || { step=1; continue; }
         SRCPROF=""
@@ -681,7 +681,9 @@ while :; do
     # X5 (wlasciciel 2026-10-12): Wstecz = JEDEN krok -- z planu (i po odmowie czasownika)
     # wraca do okna retencji zrodla, gdy bylo pokazane; inaczej do tabeli celu.
     back=1; [ "$step" -eq 2 ] && [ "${SRC_SHOWN:-0}" = 1 ] && back=2
-    ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF")
+    # X27 (właściciel 2026-10-14): szablon i liczby źródła JEDNYM zapisem -- edit-relation
+    # przyjmuje słowa set-tiers i nakłada je w tej samej kopii roboczej configu.
+    ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF" ${SARGS[@]+"${SARGS[@]}"})
     info "Zmień relację $NAME" "Liczę plan (generacja, próba pobrania, prawa na źródle)..."
     if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
         grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
@@ -758,20 +760,10 @@ PYEOF
     fi
     echo >>"$TMPD/plan2.txt"
     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes" >>"$TMPD/plan2.txt"
-    if [ "${#SARGS[@]}" -gt 0 ]; then
-        { echo; echo "Krok 2 -- liczby u źródła (po zastosowaniu szablonu):"
-          echo "  $(printf '%s ' "${SARGS[@]}")"
-          echo "Komenda:  $(shq "$ZB") set-tiers $(shq "$NAME") $(for a in "${SARGS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >>"$TMPD/plan2.txt"
-    fi
     yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=$back; continue; }
     clear 2>/dev/null
     echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
     "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-    if [ "$RC" -eq 0 ] && [ "${#SARGS[@]}" -gt 0 ]; then
-        echo; echo "\$ $ZB set-tiers $NAME $(printf '%s ' "${SARGS[@]}")--yes"; echo
-        "$ZB" set-tiers "$NAME" "${SARGS[@]}" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-        [ "$RC" -eq 0 ] || echo "=== Szablon ZASTOSOWANY, ale liczby źródła nie (rc=$RC): źródło trzyma jak cel. Popraw je w 'Harmonogram i retencja'."
-    fi
     if [ -n "${ZFS_TUI_LOG:-}" ]; then
         { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
     fi
