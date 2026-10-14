@@ -1263,6 +1263,14 @@ if printf '%s' "$A1" | grep -Eq "save-profile --ask '?--from=d30'?\$" && printf 
 else
     bad "szablony: akcje" "ins: $A1" "e: $B1" "del: $C1"
 fi
+# X22 (wlasciciel 2026-10-14): F7 na F5 = sprzatanie configu z szablonow, ktorych nic nie
+# uzywa (okna: clean-templates --ask); pasek klawiszy mowi o tym.
+D1=$(sact F7); D1L=$(cat "$XL")
+if printf '%s' "$D1L" | grep -Eq "clean-templates --ask\$" && has "$D1" 'Sprzątnij config'; then
+    ok "szablony: X22 -- F7 = clean-templates --ask, pasek: 'F7 Sprzątnij config'"
+else
+    bad "szablony: X22 F7" "$D1L" "$(printf '%s' "$D1" | tail -3)"
+fi
 TF="$(screen zadania F4)"
 if has "$TF" '╔═ Zakończone' && ! has "$TF" '[F4'; then
     ok "transfery: F4 z innego ekranu przelacza (aktywne okno na pasku kolorem, bez nawiasow)"
@@ -3271,6 +3279,36 @@ if has "$ERW" 'Szyfrowane' && ! has "$ERW" 'Kompresja' && ! has "$ERM" 'Historia
 else
     bad "edit-relation: X10 okno silnika" "raw: $(printf '%s' "$ERW" | cut -c1-250)" "lustro: $(printf '%s' "$ERM" | cut -c1-250)" "zwykla: $(printf '%s' "$ERN" | cut -c1-250)"
 fi
+# X22 (wlasciciel 2026-10-14): okno sprzatania configu (tui/clean-templates.sh). Konta z
+# relacji (root i zfsbackup); plan po polsku (szablon d30h24 -- dobowe, wlasne ustawienia
+# relacji), po WYKONAJ --yes TYLKO dla konta, ktore ma co sprzatac.
+CT="$(mktemp -d)"; mkdir -p "$CT/bin"; cp "$NR/bin/whiptail" "$CT/bin/whiptail"
+cat > "$CT/bin/zb" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
+case "$1" in
+    status) echo '{"relations":[{"name":"a","state":"active","local_user":""},{"name":"b","state":"active","local_user":"zfsbackup"},{"name":"c","state":"removed","local_user":"inny"}]}' ;;
+    clean-templates)
+        case " $* " in
+            *" --local-user=zfsbackup "*) echo "Config /etc/z.conf: nieużywanych szablonów brak -- nic do zrobienia." ;;
+            *" --yes "*) echo ">>> atrapa: posprzatano" ;;
+            *) echo "Config /etc/r.conf -- szablony, których nic nie używa (2):"; echo "  profile__d30h24__daily"; echo "  profile__relacja-x__lsrc_hourly"; echo "plan only -- nothing installed (add --yes to install)" ;;
+        esac ;;
+    *) echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$CT/bin/zb"
+printf '0\t\n' > "$CT/answers"
+( export NR_DIR="$CT" WHIPTAIL="$CT/bin/whiptail" ZFS_BACKUP="$CT/bin/zb" PYTHON="$PY"; bash "$REPO/tui/clean-templates.sh" ) >"$CT/out" 2>"$CT/err" </dev/null; CTRC=$?
+CTP="$(grep -F 'Sprzątanie configu -- plan' "$CT/wt.log" | head -1)"
+if [ "$CTRC" -eq 0 ] && has "$CTP" 'szablon d30h24 -- dobowe' && has "$CTP" 'własne ustawienia relacji x -- godzinowe (źródło)' \
+   && has "$CTP" 'Konto root, config /etc/r.conf -- zniknie 2' && ! has "$CTP" 'zfsbackup' \
+   && grep -qx 'clean-templates --local-user=root --yes' "$CT/zb.log" && ! grep -q 'local-user=zfsbackup --yes' "$CT/zb.log" && ! grep -q 'local-user=inny' "$CT/zb.log"; then
+    ok "clean-templates (X22): plan po polsku dla kont z relacjami, WYKONAJ = --yes tylko tam, gdzie jest co sprzatac"
+else
+    bad "clean-templates: okno" "rc=$CTRC" "$(cat "$CT/zb.log")" "$(printf '%s' "$CTP" | cut -c1-400)" "$(tail -3 "$CT/err")"
+fi
+rm -rf "$CT"
 # W1: okno "Zmien relacje" czyta szablony BEZ renderowania (16,6 s -> 1,8 s na pve9b).
 if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-profiles --json' "$ER/zb.log"; then
     ok "edit-relation: list-profiles --no-render (W1: 16,6 s z renderowaniem na pve9b)"
