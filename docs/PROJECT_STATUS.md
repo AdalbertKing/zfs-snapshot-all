@@ -65,6 +65,26 @@
   51 → 52 w nadpisaniu sekcji. „Użyj szablonu”, dodanie i usunięcie źródła idą jeszcze starą
   drogą (etap B).
 
+- **X27 S2+S3: czasowniki wprost na bloku `[relation:]`, `migrate-config` (2026-10-14).** Bez
+  tłumacza (etap B odrzucony): czasowniki czytają i piszą blok relacji bezpośrednio.
+  `show-tiers`/`set-tiers` na bloku (`tiers_apply_ops`; jedna strona = `target_`/`source_`, równe
+  = jedno pole, `<szczebel>.source = no`, nowy szczebel w kolejności, `--method`). Nowa relacja
+  (`local-backup --name`, pierwsze `activate-client`) powstaje od razu jako blok, bez sekcji
+  szablonu (`relblock_from_profile`; źródło zdalne bez monitora/`send_schedule`/`prefix`, jak dawne
+  `src_`). „Użyj szablonu” + liczby źródła = jedno `edit-relation --profile=P --src-tier=…`; GUI woła
+  jedno polecenie. Ponowne uruchomienie relacji zdalnej nie przebudowuje bloku (ręczna zmiana
+  przetrwa); relacja w starym zapisie dostaje odmowę z `migrate-config`. Usunięcie relacji zabiera
+  blok. Eksport zawiera blok. Czytelnicy (`show-config`, `list-jobs`, rozpoznanie GFS) widzą blok
+  jako szczeble (widok tylko do odczytu). Szablon-drabina (`default`, `passive`, `Y5M12D31H24`)
+  nie ma kształtu bloku — odmowa (przeróbka w S4, decyzja (a)). `migrate-config [--config|--local-user]
+  [--plan|--yes]`: relacje configu przeniesione raz do bloków, strony z rekordu (lokalna:
+  `[prune:<źródło>]` = źródło), wspólne szablony kopiowane do każdego bloku, nieużywane usunięte;
+  odmowa, gdy crontab miałby inne komendy (różnić mogą się tylko opisy). Na kopiach configów labu
+  (pve9, pve9b, pve10, pve11; 8 configów): wszystkie relacje → bloki, te same komendy; na pve9
+  (konto zfsbackup) zostają 4 zadania „same migawki” bez nazwy (`hdd/lab/*`, drabina `default`) —
+  źródło lustra pve9-synchro, do nazwania. 63g 17/24. Testy: `localbackup`, `zfsbackup`, `tui`
+  przepisane na bloki (set-tiers, W7, X22, 90/91/95; 91 F2 sprzed GFS usunięty).
+
 - **X27 S1: sekcja relacji podaje stronę wprost (2026-10-14).** Właściciel: bez zgodności
   wstecz, „zredukujmy tę choinkę do minimum”. Etap B (rozkładanie/składanie w czasownikach, PR
   #532) zamknięty bez merge: zgadywanie strony z kształtu sekcji było błędne dla relacji lokalnej
