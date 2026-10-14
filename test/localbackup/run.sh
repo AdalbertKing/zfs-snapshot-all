@@ -352,7 +352,7 @@ out="$(run --source=rpool/data --target=hdd/backups --config="$WORK/brandnew.con
 
 # ---- F3: the bare public entrypoint reaches the same planning logic ----
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target=hdd/backups --config="$WORK/bare.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --name=lb --config="$WORK/bare.conf" 2>&1 )"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]'; } \
     && ok "F3/bare --source/--target reaches the planning logic" || bad "F3/bare --source/--target reaches the planning logic" "rc=$rc"
 # the alias still works too
@@ -1468,24 +1468,26 @@ unset CLIENTS_DIR   # the cases below are one-shot, each with a fresh record dir
 # job present, and the cron actually covering both -- not the absence of a
 # phrase.
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+# X27: parent and child as TWO relationships collide on the TARGET side. Each
+# relationship's landing prune <target>/<source> is recursive, so the child's copy
+# (hdd/backups/rpool/a/child) would lie under the parent's landing prune and be
+# pruned by two policies. Refused in both arrangements, naming the section; the
+# way to copy a parent with its children is ONE relationship with --recursive=flat.
 out="$(runi snapsend-ok "" --name=lbp --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"
 out="$(runi snapsend-ok "" --name=lbc --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
-    && ok "krok5/F3: a new CHILD joins an installed flat parent as its own job" \
-    || bad "krok5/F3: a new child joins an installed flat parent" "rc=$rc $(printf '%s' "$out"|tail -4)"
-blk="$(cat "$WORK/crontab-store" 2>/dev/null)"
-{ printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a"' \
-  && printf '%s' "$blk" | grep -qE 'snapsend\.sh[^;]*"rpool/a/child"'; } \
-    && ok "krok5/F3: the installed cron covers BOTH the parent and the child" \
-    || bad "krok5/F3: the installed cron covers both" "$(printf '%s' "$blk" | grep -oE 'snapsend\.sh[^;]*' | head -3)"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF '[prune:hdd/backups/rpool/a] (hdd/backups/rpool/a, recursive=yes) covers requested hdd/backups/rpool/a/child' \
+  && grep -qxF '[dataset:rpool/a]' "$CFG" && ! grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
+    && ok "krok5/F3: a CHILD relationship under an installed parent's landing prune is refused, the parent intact" \
+    || bad "krok5/F3: a child relationship under the parent's landing prune is refused" "rc=$rc $(printf '%s' "$out"|tail -4)"
 
-# The mirror arrangement: installed child, parent discovered later.
+# The mirror arrangement: installed child, parent requested later.
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$(runi snapsend-ok "" --name=lbc2 --source=rpool/a/child --target=hdd/backups --config="$CFG" --install --yes)"
 out="$(runi snapsend-ok "" --name=lbp2 --source=rpool/a --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
-{ [ "$rc" -eq 0 ] && grep -qxF '[dataset:rpool/a]' "$CFG" && grep -qxF '[dataset:rpool/a/child]' "$CFG"; } \
-    && ok "krok5/F3: a new PARENT joins an installed flat child as its own job" \
-    || bad "krok5/F3: a new parent joins an installed flat child" "rc=$rc $(printf '%s' "$out"|tail -4)"
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF '[prune:hdd/backups/rpool/a/child] (hdd/backups/rpool/a/child) lies under requested hdd/backups/rpool/a' \
+  && grep -qxF '[dataset:rpool/a/child]' "$CFG" && ! grep -qxF '[dataset:rpool/a]' "$CFG"; } \
+    && ok "krok5/F3: a PARENT relationship over an installed child's copy is refused, the child intact" \
+    || bad "krok5/F3: a parent relationship over an installed child's copy is refused" "rc=$rc $(printf '%s' "$out"|tail -4)"
 
 # And the refusal that must survive it: an installed section that really IS
 # recursive does reach its descendants, so a child under it still collides.
@@ -1651,7 +1653,7 @@ fi
 # tiers). Since X27 both are "every tier its own family", the check stays.
 for _p in default y5m12d31h24-gfs; do
     out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target='' --profile="$_p" --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
+            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile="$_p" --name=lb --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
     _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data"$')"
     _prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
     if [ "$rc" -eq 0 ] && [ "$_snap" -ge 1 ] && [ "$_prune" -ge 1 ]; then
@@ -1677,7 +1679,7 @@ done
 # children ran rc=0 hourly and moved nothing (pve10 <> pve9, dead since
 # 2026-09-20). One `recursive =` on the section scopes send and prune alike.
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target='' --profile=default --recursive=flat --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --name=lb --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
 _snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R "rpool/data"$')"
 _pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .* -R .*"rpool/data"')"
 _pruneN="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data"' | grep -cv -- ' -R ')"
@@ -1693,7 +1695,7 @@ else
     bad "A'/132-3: with no target the plan prints no target retention" "$(printf '%s\n' "$out" | grep 'Retencja')"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile=default --recursive=atomic --name=lb --config="$WORK/tgt-rec.conf" 2>&1 )"; rc=$?
 # flat WITH a target is allowed since 2026-10-09 (measured on pve9b, see the
 # local relationship cases); atomic with a target stays refused.
 if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q -- "--recursive=atomic is for --target=''"; then
@@ -1702,7 +1704,7 @@ else
     bad "A': --recursive=atomic with a target is refused, with the reason" "rc=$rc $(printf '%s\n' "$out" | tail -2)"
 fi
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target='' --profile=default --recursive=ture --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?
+        CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=ture --name=lb --config="$WORK/nocopy-bad.conf" 2>&1 )"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q "got 'ture'"; then
     ok "A': an unknown --recursive value is fatal, not falsy"
 else
@@ -1732,7 +1734,7 @@ fi
 # against 4 source prunes.
 for _p in default y5m12d31h24-gfs; do
     out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --name=lb --source=rpool/data --target=hdd/backups --profile="$_p" --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
+            CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile="$_p" --name=lb --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
     _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data" "hdd/backups"')"
     _src="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
     _tgt="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"hdd/backups/rpool/data"')"
