@@ -6663,45 +6663,6 @@ tiers_sec_field() {   # <config> <header> <field> -> value
     cron_config_section "$1" "$2" | sed -n -E "s/^[[:space:]]*$3[[:space:]]*=[[:space:]]*//p" | head -1 | sed -E 's/[[:space:]]+$//'
 }
 
-tiers_key_of() {      # <template name> -> tier key
-    local s="${1##*__}"
-    s="${s#lsrc_}"; s="${s#src_}"
-    printf '%s' "$s"
-}
-
-tiers_refs() {        # <config> <template> -> headers whose use_template names it
-    awk -v t="$2" '
-        /^\[/ { hdr = $0; next }
-        hdr != "" {
-            l = $0; sub(/^[ \t]+/, "", l)
-            if (l ~ /^use_template[ \t]*=/) {
-                v = l; sub(/^use_template[ \t]*=[ \t]*/, "", v)
-                n = split(v, a, /[ \t]*,[ \t]*/)
-                for (i = 1; i <= n; i++) if (a[i] == t) { print hdr; break }
-            }
-        }' "$1" | awk '!seen[$0]++'
-}
-
-tiers_replace_in_list() {   # <config> <header> <old template> <new template or ""> -- edit use_template
-    local cur new="" x
-    cur=$(tiers_sec_field "$1" "$2" use_template)
-    local -a arr=(); IFS=',' read -r -a arr <<<"$cur"
-    for x in "${arr[@]}"; do
-        x="${x//[[:space:]]/}"; [ -n "$x" ] || continue
-        if [ "$x" = "$3" ]; then [ -n "$4" ] && new="${new:+$new,}$4"; else new="${new:+$new,}$x"; fi
-    done
-    set_or_remove_section_field "$1" "$2" use_template "$new"
-}
-
-tiers_owned() {       # <config> <template> <side headers file> -> 0 when only this side uses it
-    local r
-    while IFS= read -r r; do
-        [ -n "$r" ] || continue
-        grep -qxF -- "$r" "$3" || return 1
-    done < <(tiers_refs "$1" "$2")
-    return 0
-}
-
 tiers_letter() {      # <tier key> -> H D W M Y (or "" for a key with no cadence word)
     case "$1" in
         *hourly) echo H ;; *daily) echo D ;; *weekly) echo W ;; *monthly) echo M ;; *yearly|*annual) echo Y ;; *) echo "" ;;
