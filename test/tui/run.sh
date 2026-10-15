@@ -1009,8 +1009,10 @@ else
     bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(act down,enter)"
-if has "$A" 'e zmień relację'; then
-    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień relację')"
+# 'e zmień' (nie 'e zmień relację') od 2026-10-15: z 'p przywróć' pełne słowa nie
+# mieściły się w 80 kolumnach i ucinały licznik przewijania.
+if has "$A" 'e zmień  p przywróć'; then
+    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień  p przywróć')"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
 fi
