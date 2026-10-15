@@ -172,6 +172,37 @@ printf '%s' "$out" | grep -qi 'Nic nie pasuje' \
     && ok "a filter that matches nothing says so instead of printing an empty plan" \
     || bad "a filter that matches nothing says so instead of printing an empty plan" ""
 
+# ---- --plan --json: the recovery points for a program (the GUI's list) --------
+# Same rows and filters as the text plan, parsed by a real JSON parser rather
+# than grepped: a stray comma or an unescaped quote is exactly what a grep misses.
+PYJ=python3; "$PYJ" -c pass >/dev/null 2>&1 || PYJ=python
+printf 'hdd/store/rpool/data@automated_daily_2026-06-14_12-00-00\t%s\t111\nhdd/store/rpool/data@automated_hourly_2026-06-15_12-00-00\t%s\t222\n' \
+    "$(date -d '2026-06-14 12:00:00' +%s)" "$(date -d '2026-06-15 12:00:00' +%s)" > "$WORK/snaps.hdd_store_rpool_data"
+want_pj="1|rpool/data|hdd/store/rpool/data|independent|automated_daily_2026-06-14_12-00-00,$(date -d '2026-06-14 12:00:00' +%s),111;automated_hourly_2026-06-15_12-00-00,$(date -d '2026-06-15 12:00:00' +%s),222"
+got_pj="$(run "$two" --plan --json --dataset=rpool/data | "$PYJ" -c '
+import json, sys
+d = json.load(sys.stdin)
+x = d["datasets"][0]
+print("%d|%s|%s|%s|%s" % (len(d["datasets"]), x["source"], x["copy"], x["consistency"],
+      ";".join("%s,%d,%s" % (s["name"], s["creation"], s["guid"]) for s in x["snapshots"])))' 2>&1)"
+[ "$got_pj" = "$want_pj" ] \
+    && ok "--plan --json: valid JSON, the filtered row, every point with its creation and guid, oldest first" \
+    || bad "--plan --json: valid JSON, the filtered row, every point with its creation and guid, oldest first" "got:  $got_pj" "want: $want_pj"
+got_pj="$(run "$two" --plan --json | "$PYJ" -c '
+import json, sys
+d = json.load(sys.stdin)
+print(";".join("%s=%d" % (x["source"], len(x["snapshots"])) for x in d["datasets"]))' 2>&1)"
+[ "$got_pj" = "rpool/data=2;rpool/other=0" ] \
+    && ok "--plan --json: every relationship, and a copy with no snapshots is an empty list, not a missing row" \
+    || bad "--plan --json: every relationship, and a copy with no snapshots is an empty list, not a missing row" "got: $got_pj"
+out="$(run "$two" --json)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'give both'; } \
+    && ok "--json without --plan refuses" || bad "--json without --plan refuses" "rc=$rc $out"
+out="$(run "$two" --plan --json --at='2026-06-15 12:00')"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'one or the other'; } \
+    && ok "--plan --json with --at refuses" || bad "--plan --json with --at refuses" "rc=$rc $out"
+rm -f "$WORK/snaps.hdd_store_rpool_data"
+
 # ---- READ-ONLY, asserted from the recorded calls ------------------------------
 # Every zfs invocation across every run above must be a `list`. The stub fails any
 # other subcommand, so a write would also have been fatal -- this checks the record
