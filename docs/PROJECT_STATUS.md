@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5655f76db4cb308e -->
+<!-- status-covers-digest: 81dda857142017d9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -30,10 +30,11 @@
   -> co (drzewo X12, domyślnie cała relacja; legenda „odtwarzane” -- nowe pole `legend` w spec drzewa) -> dokąd
   (obok: `restore A A --source=… --onto=<katalog>/<nazwa>…`, domyślnie `<pula>/restore`; na miejsce:
   `restore A [--source=…]`) -> z kiedy (punkty z `--plan --json`, najnowszy domyślnie, inny = `--at`) ->
-  podsumowanie z poleceniem (`Uruchom` / `Wstecz`). Bez kratki „z historią” (`--with-history` działa tylko w
-  `--from-copy`). Wejście „z dysku” (F9 na F6, `--from-copy`) = C2b, jeszcze nie ma.
+  podsumowanie z poleceniem i zgodą do wydania na celu (`--allow-restore=<nazwa tego kolektora>`;
+  `Uruchom` / `Wstecz`). Bez kratki „z historią”: `--with-history` działa tylko w formach lądujących lokalnie
+  (`--from-copy`, `--dataset/--snapshot`); forma relacyjna go przyjmuje i po cichu pomija (luka do zapamiętania). Wejście „z dysku” (F9 na F6, `--from-copy`) = C2b, jeszcze nie ma.
   Testy: `test/tui` -- 10 nowych asercji (polecenie dla obok/na miejsce/całość/wyjątek, wybór configu, Wstecz nic
-  nie uruchamia, brak kopii, `p` w szczegółach i NIE na liście, stopka); na pve9b 292 PASS, 7 FAIL = te same co na
+  nie uruchamia, brak kopii, `p` w szczegółach i NIE na liście, przekazanie `restore --ask`; test stopki zmieniony); na pve9b 292 PASS, 7 FAIL = te same co na
   `main` (środowisko). Okno napisał `simple-coder` ze specyfikacji. Na żywo pve9 (prawdziwy whiptail przez pty):
   przejście w przód i całe „Wstecz” do wyjścia („przerwane, nic nie zmieniono”); potem pełny bieg z `Uruchom` (zgoda
   na pve9b): cała relacja obok -- 4/4 OK w `hdd/restore/data…`, GUID zgodne z kopią, k2-ab zapauzowane na bieg i

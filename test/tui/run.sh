@@ -3638,7 +3638,8 @@ else
     bad "restore: obok, tylko docs" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
 fi
 RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
-if has "$RWSUM" 'Wymaga zgody' && has "$RWSUM" '--defaultno' && has "$RWSUM" 'deploy.sh --allow-restore'; then
+# --allow-restore= Z ETYKIETĄ: deploy.sh nie zna gołego --allow-restore (text-checker, 2026-10-15).
+if has "$RWSUM" 'Wymaga zgody' && has "$RWSUM" '--defaultno' && has "$RWSUM" "deploy.sh --allow-restore=$(hostname -s 2>/dev/null || hostname)"; then
     ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jakiej zgody wymaga"
 else
     bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"

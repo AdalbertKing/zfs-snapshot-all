@@ -64,6 +64,9 @@ case "${ROWS[0]}" in
 esac
 
 SEL=(); ORIG=(); ONTO=(); WHOLE=0; DEST=""; BASE=""; AT=""; CMD=()
+# Etykieta, pod którą cel zna ten kolektor -- to ją przyjmuje deploy.sh --allow-restore=
+# (pve9b zna pve9 jako "pve9"). Okno jej nie sprawdza na celu; mówi, gdzie zajrzeć.
+GRANT_LABEL="$(hostname -s 2>/dev/null || hostname)"
 
 step=1
 while :; do
@@ -255,10 +258,11 @@ PYEOF
             echo "  $CMDTXT"
             echo
             if [ "$DEST" = obok ]; then
-                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore."
+                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL"
             else
-                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore (z --replace, gdy nie ma wspólnego punktu)."
+                echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu)."
             fi
+            echo "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)"
             echo "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze."
         } >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "Przywróć $REL: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
