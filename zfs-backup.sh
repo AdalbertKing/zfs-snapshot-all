@@ -8561,23 +8561,8 @@ cmd_local_backup() {
         fi
     done
 
-    # ON THIS HOST, ACROSS ACCOUNTS (owner 2026-10-15). The section scan below sees
-    # only this account's config. A named relationship's sources and landings are
-    # also checked against every relationship record on the host: their copies,
-    # their prune scopes and -- for a local relationship -- their sources. Measured
-    # on pve9b: a root-account relationship on hdd/ct planned cleanly while the
-    # zfsbackup account's lokalna-hdd-vms already made and pruned automated_* there.
-    if [ -n "$lb_name" ]; then
-        local -a _cov=("${roots[@]}")
-        [ "$no_copy" -eq 1 ] || for r in "${roots[@]}"; do _cov+=("$target/$r"); done
-        local _cov_out _cov_rc=0
-        _cov_out="$(coverage_conflicts "$lb_name" "${_cov[@]}")" || _cov_rc=$?
-        if [ "$_cov_rc" -ne 0 ] || [ -n "$_cov_out" ]; then
-            rm -f "$cand"
-            assert_no_coverage_overlap "$lb_name" "${_cov[@]}"
-        fi
-        warn_remote_collector_scope "${_cov[@]}"
-    fi
+    # Kept for the host-wide collision check below (after the argument checks).
+    local -a _lb_req_roots=("${roots[@]}")
 
     # Refuse when a DISPUTED root, or the target, overlaps a section already
     # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
@@ -8715,6 +8700,25 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             die "local-backup: relationship '$lb_name' already exists on this host (state $(record_get "$_lbrec" STATE)). Choose another --name, or remove it first (zfs-backup.sh delete-relation $lb_name). Nothing was changed."
         fi
     fi
+    # ON THIS HOST, ACROSS ACCOUNTS (owner 2026-10-15). After the argument checks, so a
+    # usage error is reported as such, not as a collision. The section scan below sees
+    # only this account's config. A named relationship's sources and landings are
+    # also checked against every relationship record on the host: their copies,
+    # their prune scopes and -- for a local relationship -- their sources. Measured
+    # on pve9b: a root-account relationship on hdd/ct planned cleanly while the
+    # zfsbackup account's lokalna-hdd-vms already made and pruned automated_* there.
+    if [ -n "$lb_name" ]; then
+        local -a _cov=("${_lb_req_roots[@]}")
+        [ "$no_copy" -eq 1 ] || for r in "${_lb_req_roots[@]}"; do _cov+=("$target/$r"); done
+        local _cov_out _cov_rc=0
+        _cov_out="$(coverage_conflicts "$lb_name" "${_cov[@]}")" || _cov_rc=$?
+        if [ "$_cov_rc" -ne 0 ] || [ -n "$_cov_out" ]; then
+            rm -f "$cand"
+            assert_no_coverage_overlap "$lb_name" "${_cov[@]}"
+        fi
+        warn_remote_collector_scope "${_cov[@]}"
+    fi
+
     # A FLAT profile prunes the source INLINE, in the tiers the [dataset:] section
     # references -- so with --source-profile those tiers must be the SOURCE family
     # (same schedules and families, the source's counts). A ladder keeps its source
