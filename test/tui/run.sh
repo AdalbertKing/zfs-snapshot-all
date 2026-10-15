@@ -995,6 +995,21 @@ if [ ! -s "$XL" ]; then
 else
     bad "akcje: p na liście F3 nie powinno uruchamiać" "$(cat "$XL")"
 fi
+# PRZYWRÓĆ Z DYSKU (C2b): F9 na F6 -> restore --from-copy --ask z celem zaznaczonej
+# repliki jako podpowiedzią źródła; pasek klawiszy przy 80 kolumnach nadal ma F10.
+: > "$XL"
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys F9 2>&1)"
+if grep -Eq "zfs-backup.sh'? restore --from-copy --ask bkp/sejf-a\$" "$XL"; then
+    ok "akcje: F9 na F6 oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask <cel zaznaczonej repliki>)"
+else
+    bad "akcje: F9 na F6 -> restore --from-copy --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 80 2>&1 | grep 'Pomoc' | tail -1)"
+if has "$A" '9Odzysk' && has "$A" '10Wyjście'; then
+    ok "akcje: pasek F6 przy 80 kolumnach -- krótkie '9Odzysk' i F10 dalej widoczne"
+else
+    bad "akcje: pasek F6 przy 80 kolumnach" "$A"
+fi
 if grep -q 'restore)' "$REPO/zfs-backup.sh" && grep -q 'tui/restore.sh' "$REPO/zfs-backup.sh"; then
     ok "akcje: zfs-backup.sh restore NAZWA --ask prowadzi do tui/restore.sh"
 else
@@ -3602,15 +3617,27 @@ exit 9
 EOF
 cat > "$RW/bin/zfs" <<'EOF'
 #!/bin/bash
-if [ "$*" = "list -H -p -o name,used,type -r tank/b/hdd/data" ]; then
-    printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
-    exit 0
-fi
+case "$*" in
+    "list -H -p -o name,used,type -r tank/b/hdd/data")
+        printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
+        exit 0 ;;
+    "list -H -p -o name,used,type")      # tryb --from-copy: wszystkie datasety hosta, bez -r
+        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs hdd hdd/data hdd/foo/bar; do
+            printf '%s\t1000\tfilesystem\n' "$d"
+        done
+        exit 0 ;;
+    "list -H -o name -- "*)              # istnieje: hdd/data i wszystko z usb9
+        case "$6" in hdd/data|usb9*) echo "$6"; exit 0 ;; *) exit 1 ;; esac ;;
+    "list -H -p -t snapshot -o name,creation -s creation -d 1 -- "*)   # od najstarszej; $13 = dataset
+        printf '%s@automated_daily_2026-10-14_01-35-01\t1792020000\n%s@automated_hourly_2026-10-15_17-25-01\t1792081503\n' "${13}" "${13}"
+        exit 0 ;;
+esac
 exit 9
 EOF
 cat > "$RW/bin/tree" <<'EOF'
 #!/bin/bash
-out=""; while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
+out=""; spec=""; while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; [ "$1" = --spec ] && spec="$2"; shift; done
+[ -n "$spec" ] && cp "$spec" "$NR_DIR/last-spec.json"
 cp "$TREE_OUT" "$out"
 EOF
 chmod +x "$RW/bin/zb" "$RW/bin/zfs" "$RW/bin/tree" "$RW/bin/whiptail"
@@ -3693,6 +3720,86 @@ if [ "$RW_RC" -eq 1 ] && [ ! -e "$RW/ran" ] && grep -qF 'Nie ma kopii relacji k2
     ok "restore: relacja bez kopii na tym hoscie -> 'Nie ma kopii relacji k2', exit 1, czasownik nie uruchomiony"
 else
     bad "restore: brak kopii" "rc=$RW_RC" "ran: $(rw_ran)" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+
+# ---- tryb "Przywroc z dysku" (restore.sh --from-copy, C2b) -----------------------------------
+# Jedno polecenie: restore --from-copy=.. --onto=.. [--at=..] [--with-history] [--overwrite];
+# nigdy --yes ani --config. Atrapa zfs odpowiada na liste wszystkich datasetow hosta
+# (usb9/..., hdd, hdd/data, hdd/foo/bar), na "czy cel istnieje" (tylko hdd/data i usb9*) i na migawki.
+RWCP="usb9/backups/192.168.28.98/hdd/data"
+printf '{"action":"next","roots":["%s"],"excl":{},"recursion":"flat"}\n' "$RWCP" > "$RW/t-cp1.json"
+printf '{"action":"next","roots":["hdd/foo/bar"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-bar.json"
+printf '{"action":"next","roots":["%s","hdd/foo/bar"],"excl":{},"recursion":"flat"}\n' "$RWCP" > "$RW/t-cp-two.json"
+rw_copy() {   # <plik drzewa> <argumenty restore.sh...> -- odpowiedzi w $RW/answers; wynik jak rw_run
+    local t="$1"; shift
+    rm -f "$RW/wt.n" "$RW/wt.log" "$RW/ran" "$RW/last-spec.json"
+    ( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" ZFS_BACKUP="$RW/bin/zb" ZFS_TREE="$RW/bin/tree" \
+             ZFS_CONF_DIR="$RW/conf" PYTHON="$PY" PATH="$RW/bin:$PATH" TREE_OUT="$t"
+      bash "$REPO/tui/restore.sh" "$@" ) </dev/null >"$RW/out" 2>"$RW/err"
+    RW_RC=$?
+}
+
+# c1. hdd/data ISTNIEJE -> okno nadpisania ("JUŻ ISTNIEJĄ"); Nadpisz; p0; historia Nie -> --overwrite, bez --at/--with-history
+printf '0\thdd/data\n0\t\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
+C1="restore ~ --from-copy=$RWCP ~ --onto=hdd/data ~ --overwrite"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C1" ] && ! has "$(rw_ran)" '--yes' && ! has "$(rw_ran)" '--config' \
+   && ! has "$(rw_ran)" '--at' && ! has "$(rw_ran)" '--with-history'; then
+    ok "restore --from-copy: cel istnieje, Nadpisz, najnowszy, bez historii -> --from-copy=.. --onto=hdd/data --overwrite (bez --at/--with-history/--yes/--config)"
+else
+    bad "restore --from-copy: nadpisanie" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+if grep -qF "\"roots\": [\"$RWCP\"]" "$RW/last-spec.json" 2>/dev/null && grep -qF '"no_exc": true' "$RW/last-spec.json" 2>/dev/null \
+   && grep -qF 'JUŻ ISTNIEJĄ' "$RW/wt.log"; then
+    ok "restore --from-copy: drzewo dostalo wstepnie zaznaczony korzen (DATASET), a okno nadpisania mowi 'JUŻ ISTNIEJĄ'"
+else
+    bad "restore --from-copy: spec drzewa / okno nadpisania" "spec: $(cut -c1-300 "$RW/last-spec.json" 2>/dev/null)" "wt: $(grep -c 'ISTNIEJ' "$RW/wt.log")"
+fi
+
+# c2. nowa nazwa (nie istnieje -> bez okna nadpisania); starszy punkt p1; historia Tak
+printf '0\thdd/restore/data\n0\tp1\n0\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
+C2="restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data ~ --at=$RWAT ~ --with-history"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C2" ] && ! has "$(rw_ran)" '--overwrite' && ! grep -qF 'ISTNIEJ' "$RW/wt.log"; then
+    ok "restore --from-copy: nowy cel, punkt p1, historia Tak -> --onto=hdd/restore/data --at=<czas p1> --with-history, bez --overwrite i bez okna nadpisania"
+else
+    bad "restore --from-copy: nowy cel + historia" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C2" "err: $(cut -c1-200 "$RW/err")"
+fi
+
+# c3. korzen bez wzorca backups -> podpowiedz <pula>/restore/<ostatni czlon>
+printf '0\thdd/restore/bar\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp-bar.json" --from-copy
+C3="restore ~ --from-copy=hdd/foo/bar ~ --onto=hdd/restore/bar"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C3" ] && grep -qF -- 'hdd/restore/bar ~' "$RW/wt.log"; then
+    ok "restore --from-copy: hdd/foo/bar (bez wzorca backups) -> pole 'dokad' podpowiada hdd/restore/bar, --onto=hdd/restore/bar"
+else
+    bad "restore --from-copy: podpowiedz dla hdd/foo/bar" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C3" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 8 "$RW/wt.log" | cut -c1-300)"
+fi
+# podpowiedz dla wzorca backups: hdd/data (z usb9/backups/<host>/hdd/data) -- widac w dzienniku c1/c2 jako domyslna wartosc pola
+printf '0\thdd/restore/data\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
+if grep -qF -- ' ~ hdd/data ~ ' "$RW/wt.log"; then      # argv okna jest wielowierszowy (tekst ma \n) -- domyslna wartosc to ostatni argument
+    ok "restore --from-copy: usb9/backups/<host>/hdd/data -> podpowiedz 'hdd/data'"
+else
+    bad "restore --from-copy: podpowiedz dla wzorca backups" "$(tail -n 6 "$RW/wt.log" | cut -c1-300)"
+fi
+
+# c4. dwa korzenie -> dwa pola 'dokad', obie listy w kolejnosci drzewa
+printf '0\thdd/restore/data\n0\thdd/restore/bar\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp-two.json" --from-copy
+C4="restore ~ --from-copy=$RWCP,hdd/foo/bar ~ --onto=hdd/restore/data,hdd/restore/bar"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C4" ] && [ "$(grep -c -F inputbox "$RW/wt.log")" -eq 2 ]; then
+    ok "restore --from-copy: dwa korzenie -> dwa pola 'dokad', --from-copy=A,B --onto=a,b w kolejnosci drzewa"
+else
+    bad "restore --from-copy: dwa korzenie" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C4" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+
+# c5. bez argumentow: uzycie, exit 2
+RWU="$( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" PYTHON="$PY" PATH="$RW/bin:$PATH"; bash "$REPO/tui/restore.sh" </dev/null 2>&1 )"; RWURC=$?
+if [ "$RWURC" -eq 2 ] && has "$RWU" 'użycie' && has "$RWU" '--from-copy'; then
+    ok "restore.sh bez argumentow -> 'użycie: ... --from-copy', exit 2"
+else
+    bad "restore.sh bez argumentow" "rc=$RWURC" "out: $RWU"
 fi
 rm -rf "$RW"
 

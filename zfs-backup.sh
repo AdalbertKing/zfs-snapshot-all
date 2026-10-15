@@ -19675,10 +19675,16 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
             # --ask: the GUI's window "Przywróć" ('p' on F3), the same hand-off as
             # remove-replica --ask. The window composes ONE ordinary restore command
             # and runs it; nothing here is a second restore path.
+            # `restore --from-copy --ask [DATASET]` is the same window's "z dysku"
+            # mode (F9 on F6); DATASET pre-selects the source.
             if [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ]; then
                 _rw="$SCRIPT_DIR/tui/restore.sh"
                 [ -f "$_rw" ] || die "restore: brak $_rw -- checkout jest niekompletny"
-                ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" "$2"
+                if [ "$2" = "--from-copy" ]; then
+                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" --from-copy ${4:+"$4"}
+                else
+                    ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" "$2"
+                fi
                 exit $?
             fi
             # THE CONNECTION IS RESOLVED HERE, where the paths are already known.

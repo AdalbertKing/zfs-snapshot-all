@@ -1712,7 +1712,8 @@ def screen_actions(active, hide_gone=False, paused=False):
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     if active == "nosniki":
-        return [("F7", u"Uruchom teraz"), ("F8", u"Klucz")]
+        # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
+        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Klucz"), ("F9", u"Przywróć z dysku", u"Odzysk")]
     return []
 
 
@@ -3412,6 +3413,7 @@ HELP = [
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
+    u"                 F9 przywróć z dysku (--from-copy; także bez replik, np. po ransomware)",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -3855,11 +3857,21 @@ class UI(object):
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
-        F7 uruchom zaznaczona teraz (bez pytania), F8 pokaz klucz nosnika (W19b).
+        F7 uruchom zaznaczona teraz (bez pytania), F8 pokaz klucz nosnika (W19b),
+        F9 przywroc z dysku (restore --from-copy --ask, takze bez replik).
         Logika jest w czasownikach."""
         if k == "ins":
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
+        if k == "F9":
+            # PRZYWRÓĆ Z DYSKU (C2b, właściciel 2026-10-15): restore --from-copy w oknach
+            # whiptail. Działa BEZ replik -- czysty serwer po ransomware, dysk podłączony
+            # ręcznie -- a przy zaznaczonej replice podpowiada jej cel jako źródło.
+            argv = [self.zb(), "restore", "--from-copy", "--ask"]
+            c = self.cursor["nosniki"]
+            if reps and 0 <= c < len(reps) and reps[c].get("dst"):
+                argv.append(reps[c]["dst"])
+            return self.run_dialog(argv)
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
             self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)" if k == "F7" else u"brak replik"
@@ -4619,7 +4631,7 @@ class UI(object):
             return self.template_action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
-        elif k in ("F7", "F8", "del", "ins") and self.screen == "nosniki":
+        elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
