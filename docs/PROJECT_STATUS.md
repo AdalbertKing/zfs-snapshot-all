@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b4e26665ceae5896 -->
+<!-- status-covers-digest: 235d8050e7064c4e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Odzysk OBOK oryginału na maszynie docelowej działa (2026-10-15; `feat/restore-grant-namespace`).**
+  `restore A A --source=… --onto=<pula>/restore/<nazwa>` kończył się „permission denied” (pve9 -> pve9b): konto
+  kolektora ma delegację tylko na zakres relacji. Decyzja właściciela (a): `deploy.sh --allow-restore` tworzy (gdy
+  brak) i deleguje `<pula>/restore` dla każdej puli zakresu (uprawnienia zakresu + `mount`), zapisuje
+  `RESTORE_GRANT_NAMESPACES`; `--deny-restore` odbiera uprawnienie, niczego nie kasuje (odzyskane dane zostają).
+  Przy okazji: raport odzysku porównywał całe adresy, więc odzysk obok na TEJ SAMEJ maszynie nazywał „a DIFFERENT
+  machine” i radził `move-to-client k2-ab k2-ab`; teraz porównuje maszynę. Testy: `restoregrant` sekcja 13 (148/0;
+  `deploy.sh` z `main`: 4 FAIL), `restore` -- przypadek „obok na tej samej maszynie”. Na żywo: zgoda na pve9b
+  zdelegowała `hdd/restore`, `restore k2-ab k2-ab --source=…/docs --onto=hdd/restore/docs-test` z pve9 -- OK, GUID
+  zgodny z kopią, bez komunikatu o innej maszynie; potem dataset testowy skasowany, zgoda cofnięta, hosty na `main`.
+  Bez zmian: odzysk na miejsce oraz stara forma, która odtwarza obok na kolektorze.
 
 - **Punkty odzysku w JSON: `restore --plan --json` (2026-10-15; `feat/restore-points-json`).**
   Pierwszy klocek okna „Przywróć” (decyzje właściciela 2026-10-15: lista punktów do wyboru, pozycja w menu głównym

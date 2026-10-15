@@ -2753,6 +2753,38 @@ restore_grant_delegate() {   # <account> <datasets, space-separated>
     [ -z "$_rg_gone" ] || log "  not here (nothing to delegate on):$_rg_gone -- a dataset under a delegated parent comes back under the parent's delegation when the restore recreates it"
 }
 
+# THE RESTORE NAMESPACE: <pool>/restore on every pool of the scope.
+#
+# A restore "beside" the original (restore A A --onto <pool>/restore/<name>)
+# lands OUTSIDE the delegated scope, and the account may create nothing there:
+# measured 2026-10-15, pve9 -> pve9b, "cannot create 'hdd/restore/docs-test':
+# permission denied". Owner decision the same day (option a): the grant also
+# covers <pool>/restore -- a dataset that holds recoveries only -- and the
+# revocation takes it back with the rest. Created when missing; never destroyed
+# here, because what it holds is recovered data.
+#
+# `mount` on top of the scope's modes: on a dataset the account has no other
+# delegation for, `zfs create` and `zfs receive` of a new child need it.
+RESTORE_NS_PERMS="${RESTORE_NS_PERMS:-$RESTORE_ZFS_PERMS,mount}"
+restore_grant_namespaces() {   # <datasets, space-separated> -> "<pool>/restore" per pool, one per line
+    local _ns_ds
+    for _ns_ds in $1; do printf '%s/restore\n' "${_ns_ds%%/*}"; done | sort -u
+}
+restore_grant_namespace_delegate() {   # <account> <datasets>
+    local account="$1" _ns _ns_failed=0
+    for _ns in $(restore_grant_namespaces "$2"); do
+        if ! zfs list -H -o name -- "$_ns" >/dev/null 2>&1; then
+            zfs create -- "$_ns" 2>/dev/null \
+                || { warn "could not create the restore namespace '$_ns'"; _ns_failed=1; continue; }
+            log "  created:      $_ns (the restore namespace -- recoveries beside the original land here)"
+        fi
+        zfs allow -u "$account" "$RESTORE_NS_PERMS" -- "$_ns" 2>/dev/null \
+            || { warn "could not delegate ($RESTORE_NS_PERMS) to '$account' on '$_ns'"; _ns_failed=1; continue; }
+        log "  delegated:    $RESTORE_NS_PERMS to '$account' on $_ns (restores beside the original)"
+    done
+    [ "$_ns_failed" -eq 0 ] || warn "  a restore BESIDE the original will be refused by ZFS on the namespace named above; in place is not affected"
+}
+
 # restore_grant_pause_writers <label> <datasets> / restore_grant_resume_writers <label>
 #
 # This host's OWN relationships that write into the restore scope are paused
@@ -2762,10 +2794,12 @@ restore_grant_delegate() {   # <account> <datasets, space-separated>
 restore_grant_pause_writers() {
     local label="$1" datasets="$2"
     # shellcheck disable=SC2086  # a space-separated dataset list, one word each
-    bash "$_DEPLOY_DIR/zfs-backup.sh" pause-writers "$label" $datasets         || die "--allow-restore=$label: could not pause this host's relationships that write into the scope -- the grant was NOT written. Nothing may write to a dataset that is being restored onto."
+    bash "$_DEPLOY_DIR/zfs-backup.sh" pause-writers "$label" $datasets \
+        || die "--allow-restore=$label: could not pause this host's relationships that write into the scope -- the grant was NOT written. Nothing may write to a dataset that is being restored onto."
 }
 restore_grant_resume_writers() {
-    bash "$_DEPLOY_DIR/zfs-backup.sh" resume-writers "$1"         || warn "--deny-restore=$1: resuming the relationships this grant paused failed -- check: ls ${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}/*/paused"
+    bash "$_DEPLOY_DIR/zfs-backup.sh" resume-writers "$1" \
+        || warn "--deny-restore=$1: resuming the relationships this grant paused failed -- check: ls ${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}/*/paused"
 }
 
 do_allow_restore() {
@@ -2814,6 +2848,7 @@ do_allow_restore() {
             log "restore grant for '$label' already says exactly this ($want) -- the file is unchanged; re-applying the delegation"
             restore_grant_pause_writers "$label" "$RESTORE_GRANT_DATASETS"
             restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
+            restore_grant_namespace_delegate "$account" "$RESTORE_GRANT_DATASETS"
             return 0
         fi
         die "a restore grant for '$label' already exists and says '${have:-<unreadable>}', not '$want'. Changing what a live grant permits is not a side effect of re-issuing it -- take it back first, deliberately:
@@ -2858,6 +2893,8 @@ do_allow_restore() {
         # So the roots travel with the grant, and the restore refuses that one
         # shape before the engine runs.
         printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
+        # Where a restore BESIDE the original may land (restore_grant_namespaces).
+        printf 'RESTORE_GRANT_NAMESPACES="%s"\n' "$(restore_grant_namespaces "$RESTORE_GRANT_DATASETS" | tr '\n' ' ' | sed 's/ $//')"
     } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
     chown root:root "$tmp" 2>/dev/null || :
     chmod 0644 "$tmp" 2>/dev/null || :
@@ -2868,6 +2905,7 @@ do_allow_restore() {
     # failure here leaves a grant that refuses rather than a capability nobody
     # declared -- the safe order of the two.
     restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
+    restore_grant_namespace_delegate "$account" "$RESTORE_GRANT_DATASETS"
 
     log "restore grant WRITTEN: $gpath"
     log "  relationship: $label"
@@ -2921,6 +2959,17 @@ do_deny_restore() {
             fi
         done
         log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+        # The restore namespace goes back with the rest; the namespace itself and
+        # whatever was recovered into it stay (restore_grant_namespace_delegate).
+        for _rd_ds in $(restore_grant_namespaces "$RESTORE_GRANT_DATASETS"); do
+            zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 || continue
+            if zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_NS_PERMS" -- "$_rd_ds" 2>/dev/null; then
+                log "  revoked:      $RESTORE_NS_PERMS from '$RESTORE_GRANT_ACCOUNT' on $_rd_ds (its contents stay)"
+            else
+                warn "could not revoke ($RESTORE_NS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+                _rd_open=1
+            fi
+        done
     else
         warn "the pairing manifest for '$label' gives no account or datasets, so the delegation could not be revoked here -- check 'zfs allow' on the scope by hand"
         _rd_open=1
