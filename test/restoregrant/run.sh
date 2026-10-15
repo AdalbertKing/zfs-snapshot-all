@@ -24,7 +24,11 @@ GATE="${GATE:-$REPO/zfs-pair-gate.sh}"
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 REL="$TMPD/rel"; GRANTS="$TMPD/grants"; BIN="$TMPD/bin"; PEERS="$TMPD/peers"; ZBIN="$TMPD/zbin"
-mkdir -p "$REL/lab1" "$REL/other" "$GRANTS" "$BIN" "$PEERS" "$ZBIN"
+# The grant now pauses this host's relationships that write into the scope
+# (zfs-backup.sh pause-writers). Their records and pause markers go to a tree
+# of their own here: run as root on a lab host, the defaults are the REAL ones.
+CLI="$TMPD/clients"; PSTATE="$TMPD/pausestate"
+mkdir -p "$REL/lab1" "$REL/other" "$GRANTS" "$BIN" "$PEERS" "$ZBIN" "$CLI" "$PSTATE"
 
 # The peer manifest this host wrote when it was joined. A grant reads WHO and
 # WHAT from it -- the account to delegate to and the datasets the relationship
@@ -68,8 +72,8 @@ bad() { echo "FAIL $1"; [ $# -gt 1 ] && echo "     $2"; FAIL=$((FAIL+1)); }
 check() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1" "want [$2] got [$3]"; fi; }
 has()  { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
-d()  { PATH="$ZBIN:$PATH" PAIR_GATE_STATE_DIR="$REL" PEER_STATE_DIR="$PEERS" RESTORE_GRANT_DIR="$GRANTS" bash "$DEPLOY" "$@" 2>&1; }
-dr() { PATH="$BIN:$ZBIN:$PATH" PAIR_GATE_STATE_DIR="$REL" PEER_STATE_DIR="$PEERS" RESTORE_GRANT_DIR="$GRANTS" bash "$DEPLOY" "$@" 2>&1; }
+d()  { PATH="$ZBIN:$PATH" PAIR_GATE_STATE_DIR="$REL" PEER_STATE_DIR="$PEERS" RESTORE_GRANT_DIR="$GRANTS" CLIENTS_DIR="$CLI" RELATIONSHIPS_DIR="$PSTATE" bash "$DEPLOY" "$@" 2>&1; }
+dr() { PATH="$BIN:$ZBIN:$PATH" PAIR_GATE_STATE_DIR="$REL" PEER_STATE_DIR="$PEERS" RESTORE_GRANT_DIR="$GRANTS" CLIENTS_DIR="$CLI" RELATIONSHIPS_DIR="$PSTATE" bash "$DEPLOY" "$@" 2>&1; }
 gate() {   # <label> -> the PAIR-CONTROL status answer
     RELATIONSHIPS_DIR="$REL" RESTORE_GRANT_DIR="$GRANTS" \
         SSH_ORIGINAL_COMMAND="PAIR-CONTROL status" bash "$GATE" "$1" 2>&1
@@ -863,6 +867,54 @@ r="$( : > "$RONE/ran"
 check "one: a copy with no snapshot at all refuses" "1" "$(rc_of "$r")"
 if [ -z "$(argv_of "$r")" ]; then ok "one: ...without touching the engine"
 else bad "one: ...without touching the engine" "$(argv_of "$r")"; fi
+
+# ---------------------------------------------------------------------------
+# 12. The grant pauses THIS host's own writers into the scope (2026-10-15).
+#
+# pve9, k2-bc restoring onto it: k2-ab's pull and prune on the same datasets
+# kept running, because only the collector paused anything. Owner: nothing may
+# write to a dataset being overwritten. Scope of lab1 = hdd/a hdd/a/child.
+#   puller  -- managed target hdd/a                  -> paused by the grant
+#   snapper -- LOCAL relationship, source hdd/a/child -> paused by the grant
+#   far     -- managed target hdd/zzz                 -> untouched
+#   manual  -- managed target hdd/a, ALREADY paused by the operator
+#              -> left as it is, and the revocation does not resume it
+# ---------------------------------------------------------------------------
+rm -f "$GRANTS"/* 2>/dev/null
+pw_rec() { printf 'CLIENT_NAME=%s\nSTATE=active\n%s\n' "$1" "$2" > "$CLI/$1.conf"; }
+pw_rec puller  'MANAGED_DATASETS=hdd/a'
+pw_rec snapper "RUX_MODE=local
+REQUESTED_DATASETS=hdd/a/child"
+pw_rec far     'MANAGED_DATASETS=hdd/zzz'
+pw_rec manual  'MANAGED_DATASETS=hdd/a'
+mkdir -p "$PSTATE/manual"; printf 'PAUSED_AT="2026-10-15 10:00:00"
+PAUSED_REASON="by hand"
+' > "$PSTATE/manual/paused"
+pw_tag() { sed -n 's/^PAUSED_BY_GRANT="\(.*\)"$/\1/p' "$PSTATE/$1/paused" 2>/dev/null; }
+
+out="$(dr --allow-restore=lab1)"
+check "writers: the grant pauses a relationship whose target is in the scope" "lab1" "$(pw_tag puller)"
+check "writers: ...and a LOCAL relationship whose source is in the scope" "lab1" "$(pw_tag snapper)"
+check "writers: ...and leaves one outside the scope running" "no" "$([ -e "$PSTATE/far/paused" ] && echo yes || echo no)"
+check "writers: an operator's own pause stays, untagged" "|by hand" "$(pw_tag manual)|$(sed -n 's/^PAUSED_REASON="\(.*\)"$/\1/p' "$PSTATE/manual/paused")"
+check "writers: ...and the grant is written" "yes" "$([ -f "$GRANTS/lab1" ] && echo yes)"
+if has "will NOT resume it" "$out"; then ok "writers: the operator is told the hand-made pause is not the grant's to lift"
+else bad "writers: the operator is told the hand-made pause is not the grant's to lift" "$out"; fi
+
+out="$(dr --deny-restore=lab1)"
+check "writers: revoking resumes what the grant paused" "no|no" "$([ -e "$PSTATE/puller/paused" ] && echo yes || echo no)|$([ -e "$PSTATE/snapper/paused" ] && echo yes || echo no)"
+check "writers: ...and NOT the operator's own pause" "yes" "$([ -e "$PSTATE/manual/paused" ] && echo yes || echo no)"
+
+# An unreadable record means the host cannot say who writes -- the grant must
+# not be written over that silence.
+rm -f "$GRANTS"/* 2>/dev/null
+printf 'NOT_A_KEY=1
+' > "$CLI/broken.conf"
+out="$(dr --allow-restore=lab1)"; rc=$?
+check "writers: an unreadable relationship record refuses the grant" "none" "$(ls "$GRANTS" 2>/dev/null | grep -q . && echo some || echo none)"
+if has "could not be read" "$out"; then ok "writers: ...naming why"
+else bad "writers: ...naming why" "$out"; fi
+rm -f "$CLI"/*.conf; rm -rf "$PSTATE"/*
 
 
 echo "--------------------------------------------"

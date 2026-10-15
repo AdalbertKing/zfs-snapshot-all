@@ -2753,6 +2753,21 @@ restore_grant_delegate() {   # <account> <datasets, space-separated>
     [ -z "$_rg_gone" ] || log "  not here (nothing to delegate on):$_rg_gone -- a dataset under a delegated parent comes back under the parent's delegation when the restore recreates it"
 }
 
+# restore_grant_pause_writers <label> <datasets> / restore_grant_resume_writers <label>
+#
+# This host's OWN relationships that write into the restore scope are paused
+# while the grant stands (zfs-backup.sh pause-writers / resume-writers; see
+# there). The collector pauses only its side; without this, a pull or prune
+# here kept writing into the dataset being overwritten (pve9, 2026-10-15).
+restore_grant_pause_writers() {
+    local label="$1" datasets="$2"
+    # shellcheck disable=SC2086  # a space-separated dataset list, one word each
+    bash "$_DEPLOY_DIR/zfs-backup.sh" pause-writers "$label" $datasets         || die "--allow-restore=$label: could not pause this host's relationships that write into the scope -- the grant was NOT written. Nothing may write to a dataset that is being restored onto."
+}
+restore_grant_resume_writers() {
+    bash "$_DEPLOY_DIR/zfs-backup.sh" resume-writers "$1"         || warn "--deny-restore=$1: resuming the relationships this grant paused failed -- check: ls ${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}/*/paused"
+}
+
 do_allow_restore() {
     local label="$ALLOW_RESTORE_LABEL"
     [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
@@ -2797,6 +2812,7 @@ do_allow_restore() {
             # comes back with no delegation while this file still says yes. The
             # re-issue used to answer "nothing changed" and leave it that way.
             log "restore grant for '$label' already says exactly this ($want) -- the file is unchanged; re-applying the delegation"
+            restore_grant_pause_writers "$label" "$RESTORE_GRANT_DATASETS"
             restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
             return 0
         fi
@@ -2804,6 +2820,10 @@ do_allow_restore() {
     $0 --deny-restore=$label
   then grant again with the modes you want."
     fi
+
+    # PAUSE FIRST, then permit: a grant that exists while this host's own jobs
+    # still write into the scope is the half-state the pause is for.
+    restore_grant_pause_writers "$label" "$RESTORE_GRANT_DATASETS"
 
     mkdir -p "$RESTORE_GRANT_DIR" || die "could not create $RESTORE_GRANT_DIR"
     # root:root, and NOT group-writable. See the comment on RESTORE_GRANT_DIR:
@@ -2873,6 +2893,7 @@ do_deny_restore() {
         # `--deny-restore` after a lost acknowledgement reports a failure while
         # the machine is, in fact, exactly as safe as they wanted.
         log "no restore grant for '$label' on this host -- nothing to take back"
+        restore_grant_resume_writers "$label"
         return 0
     fi
     local had; had="$(restore_grant_read_modes "$gpath")" || had=""
@@ -2900,6 +2921,9 @@ do_deny_restore() {
 
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     log "  the collector for '$label' can no longer write onto this machine."
+    # AFTER the revocation: resuming this host's own jobs while the collector
+    # could still write would reopen the overlap the pause closed.
+    restore_grant_resume_writers "$label"
     return 0
 }
 
