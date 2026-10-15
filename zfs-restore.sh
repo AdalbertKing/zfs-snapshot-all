@@ -701,6 +701,18 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
         case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) die "not confirmed -- nothing was created" ;; esac
     fi
 
+    # THE MEDIUM'S KEY (owner 2026-10-15: "wpisz klucz lub wskaż plik"). Measured on
+    # pve9b: the media gate imports an encrypted replica but does not load its key,
+    # so the transfer died on "dataset key must be loaded". Before anything runs.
+    local _ki _kroot
+    RESTORE_KEYS_LOADED=()
+    for (( _ki=0; _ki<${#from[@]}; _ki++ )); do
+        if ! restore_copy_key_ready "${from[$_ki]}"; then
+            for _kroot in ${RESTORE_KEYS_LOADED[@]+"${RESTORE_KEYS_LOADED[@]}"}; do zfs unload-key "$_kroot" 2>/dev/null || :; done
+            die "restore --from-copy: the key of '${from[$_ki]}' is not loaded and could not be (no key file on this host, and none given or the one given did not work) -- nothing was changed. Give it with --key-file=PATH, or answer the question with the key or a key file."
+        fi
+    done
+
     # The landing half is the SAME engine the relationship-addressed safe restore
     # uses. The confirmation is passed as already taken: the one question above
     # covers the whole list, which is the point of taking a list at all.
@@ -723,7 +735,53 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
             restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
         fi
     done
+    # Only the keys THIS run loaded go back; one an operator loaded stays.
+    for _kroot in ${RESTORE_KEYS_LOADED[@]+"${RESTORE_KEYS_LOADED[@]}"}; do
+        zfs unload-key "$_kroot" 2>/dev/null && log 1 "restore: key of $_kroot unloaded again (this run loaded it)"
+    done
     return "$rc"
+}
+
+# restore_copy_key_ready <copy dataset> -> 0 the data can be read (not encrypted,
+# or its key is loaded now), 1 no key. In order: the key file this host keeps for
+# the medium (prepare-media writes it; the dataset's keylocation names it -- what
+# the replica run loads), then --key-file, then a question that takes the key
+# itself or a path to a file holding it.
+RESTORE_KEYS_LOADED=()
+restore_copy_key_ready() {
+    local ds="$1" ks root loc kf ans
+    ks="$(zfs get -H -o value keystatus "$ds" 2>/dev/null)"
+    case "$ks" in available|-|"") return 0 ;; esac
+    root="$(zfs get -H -o value encryptionroot "$ds" 2>/dev/null)"
+    [ -n "$root" ] && [ "$root" != - ] || return 1
+    loc="$(zfs get -H -o value keylocation "$root" 2>/dev/null)"
+    case "$loc" in
+        file://*) kf="${loc#file://}"
+                  if [ -r "$kf" ] && zfs load-key "$root" 2>/dev/null; then
+                      log 0 "restore: key of $root loaded from $kf (the medium's key file on this host)"
+                      RESTORE_KEYS_LOADED+=("$root"); return 0
+                  fi ;;
+    esac
+    if [ -n "${RESTORE_KEY_FILE:-}" ]; then
+        [ -r "$RESTORE_KEY_FILE" ] || { log 0 "restore: --key-file '$RESTORE_KEY_FILE' cannot be read"; return 1; }
+        kf="$RESTORE_KEY_FILE"; case "$kf" in /*) ;; *) kf="$PWD/$kf" ;; esac   # file:// wants an absolute path
+        zfs load-key -L "file://$kf" "$root" || { log 0 "restore: the key in '$RESTORE_KEY_FILE' did not open $root"; return 1; }
+        log 0 "restore: key of $root loaded from --key-file"
+        RESTORE_KEYS_LOADED+=("$root"); return 0
+    fi
+    # -s: a typed key is a secret and is not echoed.
+    read -rsp "Klucz nosnika ($root) nie jest zaladowany. Wpisz klucz albo podaj sciezke pliku z kluczem: " ans || ans=""
+    echo >&2
+    [ -n "$ans" ] || return 1
+    if [ -f "$ans" ]; then
+        case "$ans" in /*) ;; *) ans="$PWD/$ans" ;; esac   # file:// wants an absolute path
+        zfs load-key -L "file://$ans" "$root" || { log 0 "restore: the key file given did not open $root"; return 1; }
+    else
+        printf '%s\n' "$ans" | zfs load-key -L prompt "$root" || { log 0 "restore: the key typed did not open $root"; return 1; }
+    fi
+    log 0 "restore: key of $root loaded"
+    RESTORE_KEYS_LOADED+=("$root")
+    return 0
 }
 
 restore_landing_path() {   # <copy dataset> <original source> -> landing path
@@ -3342,12 +3400,16 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
     #
     # And EVERY bad dataset is named, not the first. An operator who has to fix
     # them one round trip at a time stops trusting the tool.
-    local -a unfit=()
+    local -a unfit=() fitlist=()
     local _pf_rc _pf_i
     for (( _pf_i=0; _pf_i<n; _pf_i++ )); do
         RESTORE_ONE_VERDICT=""
         RESTORE_PREFLIGHT_ONLY=1 restore_one_isolated "${RESTORE_SCOPE_COPY[$_pf_i]}" "${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}"; _pf_rc=$?
-        [ "$_pf_rc" -eq 0 ] || unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+        if [ "$_pf_rc" -eq 0 ]; then
+            fitlist+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}|${RESTORE_ONE_VERDICT:-}")
+        else
+            unfit+=("${RESTORE_SCOPE_DEST[$_pf_i]:-${RESTORE_SCOPE_SRC[$_pf_i]}}   ${RESTORE_ONE_VERDICT:-no reason recorded}")
+        fi
     done
     if [ "${#unfit[@]}" -gt 0 ]; then
         log 0 "restore: REFUSED before anything was touched -- ${#unfit[@]} of $n dataset(s) in scope cannot be restored:"
@@ -3363,6 +3425,29 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         return 2
     fi
 
+    # OVERWRITING ASKS FIRST (owner 2026-10-15: "nadpisanie zawsze z potwierdzeniem,
+    # i w GUI, i we wsadzie, chyba że parametr forsujący"). The grant of a remote
+    # target says the machine ALLOWS it; it is not the operator saying "yes, now",
+    # and a local target has no grant at all -- measured on pve9b, a local rewind
+    # and a full replace ran without a single question. Asked once, for the whole
+    # run, after the pre-flight knows each dataset's mode and before the first
+    # mutation. `create` (nothing there) overwrites nothing and does not ask.
+    # --yes answers in advance; no answer (EOF, a script without --yes) is a no.
+    local -a _ow=(); local _l _ans=""
+    for _l in ${fitlist[@]+"${fitlist[@]}"}; do
+        case "${_l#*|}" in *"by 'rewind'"*|*"by 'replace'"*) _ow+=("$_l") ;; esac
+    done
+    if [ "${#_ow[@]}" -gt 0 ] && [ "${yes:-0}" -ne 1 ]; then
+        log 0 "restore: this run OVERWRITES ${#_ow[@]} dataset(s) -- whatever is newer than the point there is destroyed (the full loss set: the same command with --plan):"
+        for _l in "${_ow[@]}"; do log 0 "restore:   ${_l%%|*}   ${_l#*|}"; done
+        read -rp "Nadpisac? [t/N] " _ans || _ans=""
+        case "$_ans" in
+            t|T|tak|TAK|y|Y|yes|YES) ;;
+            *)  log 0 "restore: not confirmed -- nothing was changed. (--yes confirms in advance.)"
+                restore_pause_release
+                return 1 ;;
+        esac
+    fi
 
     # Printed after the pre-flight passed and before the first dataset runs: a
     # refused run rebases nothing, and saying so would describe work that is not
@@ -4073,7 +4158,11 @@ restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [wha
         remote)
             die "restore (odtworzenie niszczace): zrodlo '$src' jest ZDALNE, a zdalny wykonawca jeszcze nie istnieje. To, czego brakowalo tu wczesniej -- KTO wykonuje zniszczenie po tamtej stronie -- jest juz rozstrzygniete: kolektor zaczyna, a maszyna zagrozona publikuje zgode (deploy.sh --allow-restore). Sprawdzenie tej zgody jest zbudowane i przetestowane (restore_grant_require). Brakuje ostatniego kawalka: samego przeslania i zniszczenia po tamtej stronie. Nic nie zmieniono." ;;
         full-absent|full-live)
-            die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost. Nie istnieje w tym wycinku i nie bedzie udawane przyrostem." ;;
+            # Owner 2026-10-15: the way out is named, in two steps, not left to guess.
+            die "restore (odtworzenie niszczace): nie ma wspolnej bazy dowiedzionej GUID-em, wiec jedyna droga jest PELNE zastapienie -- inny mechanizm i inne ryzyko niz przyrost; nadpisanie przyrostem go nie udaje. Nic nie zmieniono.
+Droga w dwoch krokach:
+  1. usun cel (po upewnieniu sie, ze nic z niego nie jest potrzebne):  zfs destroy -r $src
+  2. odtworz go obok, z kopii:  zfs-backup.sh restore --from-copy $copy --onto $src${point:+ --snapshot=$point}" ;;
         ambiguous)
             die "restore (odtworzenie niszczace): punkt docelowy na kopii '$copy' jest NIEJEDNOZNACZNY (szczegoly wyzej). Ten czasownik cofa zrodlo do jednego punktu, wiec zgadniecie ktorego zniszczyloby stan pod decyzje, ktorej nikt nie podjal. Nic nie zmieniono." ;;
         increment|rollback|discard-live|unproven) ;;
@@ -4349,6 +4438,7 @@ cmd_restore() {
             --config=*)   config="${a#*=}" ;;
             --config)     need_val --config "${2:-}"; config="$2"; shift ;;
             --yes|-y)     yes=1 ;;
+            --key-file=*) RESTORE_KEY_FILE="${a#*=}" ;;
             --*) die "restore: unknown option $a" ;;
             *)
                 # Positional tokens: the public addresses. Resolved AFTER the
