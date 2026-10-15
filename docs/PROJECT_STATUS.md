@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f25ef8ece7f69857 -->
+<!-- status-covers-digest: 543b65b160968ff7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,27 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zgoda na odzysk pauzuje relacje celu, które piszą do zakresu (2026-10-15; `feat/restore-pause-target`).**
+  Do tej pory odzysk pauzował tylko relację na kolektorze (`restore_pause_take`); na maszynie, NA którą się
+  odtwarza, jej własne zadania dalej pisały do tych samych datasetów (pve9: pobranie k2-ab o :25 i prune o :45 w
+  zakresie k2-bc). Decyzja właściciela: nic nie może pisać do datasetu, który jest nadpisywany, a pauzuje je sama zgoda.
+  Teraz `deploy.sh --allow-restore=X` PRZED zapisem zgody woła `zfs-backup.sh pause-writers X <zakres>`: relacje tego
+  hosta z `coverage_conflicts` (cele, zakres prune, źródła relacji lokalnej -- ta sama reguła co straż nakładania)
+  dostają zwykły znacznik pauzy z polem `PAUSED_BY_GRANT=X`. `--deny-restore=X` po cofnięciu delegacji woła
+  `resume-writers X` i wznawia tylko znaczniki z tym polem; pauza założona wcześniej ręcznie zostaje (i komunikat to
+  mówi). Gdy cofnięcie delegacji nie wyszło na istniejącym datasecie albo manifest nie podaje konta/zakresu, pauzy
+  ZOSTAJĄ, bieg kończy się rc 1, a komunikat podaje polecenie wznowienia (dataset, którego nie ma, delegacji nie
+  ma, więc nie blokuje). Bez pliku zgody `--deny-restore` niczego nie cofa, tylko wznawia pauzy z tym polem.
+  Nieczytelny rekord relacji w `clients/` = odmowa zgody. Zadanie bez `-L <etykieta>` jest poza pauzą (jak każda pauza relacji).
+  Przy okazji naprawione: w `coverage_conflicts` `die` z `record_load` (nieznane pole w rekordzie) w podpowłoce
+  zabijał cały program
+  (`die_arm_fatal`), a komunikat ginął w `2>/dev/null` -- odmowa REV-084 z nazwą złego rekordu była nieosiągalna, wywołujący
+  kończył się cicho rc 1 (dotyczyło też straży nakładania); teraz `die_confine_to_subshell` w podpowłoce rekordu.
+  Testy: `test/restoregrant/run.sh` sekcja 12 (142/0; `deploy.sh`+`zfs-backup.sh` z `main`: 5 FAIL -- brak pauz i brak
+  powodu odmowy; mutacja bez straży nieudanego cofnięcia: 2 FAIL). Na żywo pve9 (etykieta zgody = `pve11`): zgoda zapauzowała k2-ab (`PAUSED_BY_GRANT="pve11"`),
+  godzinny bieg k2-ab w czasie pauzy: „SKIPPED: relationship k2-ab is paused”; `--deny-restore` cofnął delegację i
+  wznowił k2-ab; zero znaczników i zgód po teście, host z powrotem na `main`. Pełnego odzysku pod pauzą nie uruchamiano.
 
 - **Kampania odzysku zdalnego A -> B <-> C, poziom kolektor -> źródło (2026-10-15; `fix/restore-root-gone`).**
   Relacja `k2-ab` (pve9 zbiera z pve9b `hdd/data` + 3 dzieci), dalej `k2-bc` (pve11 zbiera z pve9). Po każdym

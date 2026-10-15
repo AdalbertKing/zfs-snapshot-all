@@ -2910,19 +2910,31 @@ do_deny_restore() {
     # Both halves, and the delegation first: while it is still delegated the
     # account CAN act, so removing that is the half that actually closes the
     # window. The file is the declaration; the allow is the capability.
-    local _rd_ds
+    # _rd_open: the delegation may still stand. A dataset that no longer exists
+    # carries no delegation, so its failed unallow does not count.
+    local _rd_ds _rd_open=0
     if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
         for _rd_ds in $RESTORE_GRANT_DATASETS; do
-            zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null \
-                || warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+            if ! zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null; then
+                warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+                zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 && _rd_open=1
+            fi
         done
         log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+    else
+        warn "the pairing manifest for '$label' gives no account or datasets, so the delegation could not be revoked here -- check 'zfs allow' on the scope by hand"
+        _rd_open=1
     fi
 
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
+    # AFTER the revocation, and only when it is known to have happened:
+    # resuming this host's own jobs while the collector could still write
+    # would reopen the overlap the pause closed.
+    if [ "$_rd_open" -eq 1 ]; then
+        warn "the relationships this grant paused STAY PAUSED: the delegation may still stand. Once 'zfs allow' shows it gone, resume them with: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
+        return 1
+    fi
     log "  the collector for '$label' can no longer write onto this machine."
-    # AFTER the revocation: resuming this host's own jobs while the collector
-    # could still write would reopen the overlap the pause closed.
     restore_grant_resume_writers "$label"
     return 0
 }

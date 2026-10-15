@@ -46,9 +46,11 @@ cat > "$ZBIN/zfs" <<'ZFSSTUB'
 #!/bin/sh
 printf '%s
 ' "$*" >> "${ZFS_TRACE:-/dev/null}"
-# ZFS_GONE=<dataset>: that one dataset does not exist (`zfs list` fails on it).
+# ZFS_GONE="<dataset> ...": those datasets do not exist (`zfs list` fails on them).
+# ZFS_FAIL_UNALLOW=1: every `zfs unallow` fails.
+[ "$1" = unallow ] && [ -n "${ZFS_FAIL_UNALLOW:-}" ] && exit 1
 if [ "$1" = list ] && [ -n "${ZFS_GONE:-}" ]; then
-    for a in "$@"; do [ "$a" = "$ZFS_GONE" ] && exit 1; done
+    for a in "$@"; do for g in $ZFS_GONE; do [ "$a" = "$g" ] && exit 1; done; done
 fi
 exit 0
 ZFSSTUB
@@ -904,6 +906,19 @@ else bad "writers: the operator is told the hand-made pause is not the grant's t
 out="$(dr --deny-restore=lab1)"
 check "writers: revoking resumes what the grant paused" "no|no" "$([ -e "$PSTATE/puller/paused" ] && echo yes || echo no)|$([ -e "$PSTATE/snapper/paused" ] && echo yes || echo no)"
 check "writers: ...and NOT the operator's own pause" "yes" "$([ -e "$PSTATE/manual/paused" ] && echo yes || echo no)"
+
+# A revocation that FAILED on a dataset that still exists: the collector may
+# still write, so this host's jobs must not start writing too.
+dr --allow-restore=lab1 >/dev/null
+out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+check "writers: a failed revocation keeps the grant's pauses" "lab1|1" "$(pw_tag puller)|$rc"
+if has "STAY PAUSED" "$out"; then ok "writers: ...and says how to lift them"
+else bad "writers: ...and says how to lift them" "$out"; fi
+# ...but a dataset that is GONE has no delegation left to revoke.
+dr --allow-restore=lab1 >/dev/null
+out="$(ZFS_FAIL_UNALLOW=1 ZFS_GONE="hdd/a hdd/a/child" dr --deny-restore=lab1)"
+check "writers: a failed revocation on a dataset that is gone does not block the resume" "" "$(pw_tag puller)"
+PATH="$BIN:$PATH" CLIENTS_DIR="$CLI" RELATIONSHIPS_DIR="$PSTATE" bash "$(dirname "$DEPLOY")/zfs-backup.sh" resume-writers lab1 >/dev/null 2>&1
 
 # An unreadable record means the host cannot say who writes -- the grant must
 # not be written over that silence.
