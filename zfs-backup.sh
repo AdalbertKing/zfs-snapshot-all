@@ -17461,6 +17461,11 @@ cmd_status() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
     record_load client "$cpath"
+    # A LOCAL relationship has no peer, no endpoint and no gate to ask: the view
+    # below printed "Blokada u peera: NIEZNANA", "Endpoint docelowy: ? (?:?)",
+    # "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)" and
+    # "Zrodla: ?" for one with twelve cron lines (pve9b, 2026-10-15). Its own view.
+    if [ "${RUX_MODE:-}" = local ]; then status_local_view "$name"; return 0; fi
     local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
     [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
@@ -17568,6 +17573,66 @@ cmd_status() {
             if [ "$2" != success ]; then
                 echo "Nastepny krok:     sprawdz $0 test $CLIENT_NAME i log w ${CRON_LOG:-cron.log}"
             fi
+        else
+            echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
+            echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
+        fi
+    fi
+}
+
+# status_local_view <name> -- the text view of a LOCAL relationship (record
+# already loaded by cmd_status). Everything here is on this host: the record, the
+# config it names, the account's crontab. Nothing is asked of a peer.
+status_local_view() {
+    local name="$1" acct="${LOCAL_USER:-root}" ncron="?" _st_prefix _st_last
+    echo "Klient:            $CLIENT_NAME"
+    if [ -n "${CLIENT_TARGET:-}" ]; then
+        echo "Typ:               lokalna -- zrodlo i kopia na tym hoscie"
+    else
+        echo "Typ:               lokalna, tylko migawki -- bez kopii, migawki zostaja w zrodle"
+    fi
+    echo "Stan:              ${STATE:-unknown}"
+    if client_paused "$name"; then
+        local PAUSED_AT="" PAUSED_REASON=""
+        record_load pause "$(pause_marker_path "$name")"
+        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+        echo "                   joby z etykieta '-L $name' sa pomijane. Wznowienie: $0 resume-client $name"
+    fi
+    echo "Zrodla:            $(printf '%s' "${REQUESTED_DATASETS:-?}" | sed 's/,/, /g')"
+    echo "Cel:               ${CLIENT_TARGET:-(brak -- tylko migawki)}"
+    [ -n "${MANAGED_DATASETS:-}" ] && echo "Kopie:             $MANAGED_DATASETS"
+    echo "Konto:             $acct"
+    echo "Config:            ${CRON_CONFIG:-?}"
+    # The account's crontab, read here: the lines of THIS relationship carry
+    # `-L <name>` (snapshot, prune) or name it in the monitor's -L.
+    if [ "$(id -u)" = 0 ] || [ "$(id -un 2>/dev/null)" = "$acct" ]; then
+        ncron="$( { if [ "$(id -un 2>/dev/null)" = "$acct" ]; then crontab -l; else crontab -u "$acct" -l; fi; } 2>/dev/null \
+                  | grep -c -- "-L $name[ \"]")" || ncron=0
+    fi
+    if [ "$ncron" = "?" ]; then
+        echo "Cron:              ? (crontab konta '$acct' czyta tylko root albo to konto)"
+    elif [ "$ncron" -gt 0 ]; then
+        echo "Cron:              $ncron linii w crontabie konta '$acct'"
+    else
+        echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"
+    fi
+    echo "Spojnosc:          $(status_quiesce_from_cron "$CLIENT_NAME")"
+    echo "Utworzono:         ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    _st_prefix="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}"
+    _st_prefix=${_st_prefix%% *}; _st_prefix=${_st_prefix%%,*}
+    if [ -n "$_st_prefix" ]; then
+        echo
+        if status_running_now "$_st_prefix"; then
+            echo "Teraz:             (transfer w toku)"
+        else
+            echo "Teraz:             nic nie biegnie dla tej relacji"
+        fi
+        _st_last=$(status_last_result "$_st_prefix")
+        if [ -n "$_st_last" ]; then
+            set -- $_st_last
+            echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
         else
             echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
             echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
