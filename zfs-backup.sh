@@ -17586,7 +17586,7 @@ cmd_status() {
 # config it names, the account's crontab. Nothing is asked of a peer.
 status_local_view() {
     local name="$1" acct="${LOCAL_USER:-root}" ncron="?" _st_prefix _st_last
-    echo "Klient:            $CLIENT_NAME"
+    echo "Klient:            ${CLIENT_NAME:-$name}"
     if [ -n "${CLIENT_TARGET:-}" ]; then
         echo "Typ:               lokalna -- zrodlo i kopia na tym hoscie"
     else
@@ -17606,12 +17606,22 @@ status_local_view() {
     echo "Config:            ${CRON_CONFIG:-?}"
     # The account's crontab, read here: the lines of THIS relationship carry
     # `-L <name>` (snapshot, prune) or name it in the monitor's -L.
-    if [ "$(id -u)" = 0 ] || [ "$(id -un 2>/dev/null)" = "$acct" ]; then
-        ncron="$( { if [ "$(id -un 2>/dev/null)" = "$acct" ]; then crontab -l; else crontab -u "$acct" -l; fi; } 2>/dev/null \
-                  | grep -c -- "-L $name[ \"]")" || ncron=0
+    # A crontab that cannot be read is "?", never "no lines" (that would read as
+    # "nothing runs"). Fixed-string match on `-L <name>` followed by a space or a
+    # quote, as the engines' lines and the monitor's line spell it.
+    # "no crontab for <user>" is an empty crontab (zero lines), not an unreadable one.
+    local _tab _trc=1
+    if [ "$(id -un 2>/dev/null)" = "$acct" ]; then
+        _tab="$(crontab -l 2>&1)"; _trc=$?
+    elif [ "$(id -u)" = 0 ]; then
+        _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?
     fi
+    if [ "$_trc" -eq 0 ]; then ncron=""
+    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""
+    fi
+    [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
     if [ "$ncron" = "?" ]; then
-        echo "Cron:              ? (crontab konta '$acct' czyta tylko root albo to konto)"
+        echo "Cron:              ? (crontab konta '$acct' nieczytelny -- czyta go tylko root albo to konto)"
     elif [ "$ncron" -gt 0 ]; then
         echo "Cron:              $ncron linii w crontabie konta '$acct'"
     else

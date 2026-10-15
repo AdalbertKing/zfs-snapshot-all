@@ -700,12 +700,15 @@ me_user="$(id -un 2>/dev/null || echo nobody)"
 printf 'CLIENT_NAME=svl\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nLOCAL_USER=%s\nCRON_CONFIG=/etc/x.conf\nCREATED_AT=2026-10-15\n' "$me_user" > "$SV/clients/svl.conf"
 svo=$( ( CLIENTS_DIR="$SV/clients"
          crontab() { printf '1 * * * * /x/zfs-job.sh "h snap" -- /x/snapsend.sh -m auto_ -L svl "rpool/a" ""\n21 * * * * /x/delsnaps.sh -L svl "rpool/a" auto_ -H24\n1 * * * * /x/snapsend.sh -L other "rpool/z"\n'; }
-         cmd_status svl; echo "---"; cmd_status ) 2>&1 )
+         cmd_status svl; echo "---"; cmd_status
+         echo "--- unreadable:"; crontab() { echo "crontab: permission denied" >&2; return 1; }; cmd_status svl ) 2>&1 )
 if printf '%s' "$svo" | grep -qF "lokalna, tylko migawki" && printf '%s' "$svo" | grep -qF "Zrodla:            rpool/a, rpool/b" \
    && printf '%s' "$svo" | grep -qF "Cron:              2 linii" \
    && ! printf '%s' "$svo" | grep -qE "Blokada u peera|Endpoint docelowy|Cron dziala przez" \
-   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(lokalna\)"; then
-    ok "status: a local relationship has its own view (type, sources, its cron lines; no peer, no endpoint)"
+   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(lokalna\)" \
+   && printf '%s' "${svo#*--- unreadable:}" | grep -qF "Cron:              ? (crontab" \
+   && ! printf '%s' "${svo#*--- unreadable:}" | grep -qF "BRAK linii"; then
+    ok "status: a local relationship has its own view (type, sources, its cron lines; no peer, no endpoint; unreadable crontab = ?)"
 else
     bad "status of a local relationship" "$svo"
 fi

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ba3c8b7a33f86db6 -->
+<!-- status-covers-digest: 264f912675f2d3d6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -24,8 +24,8 @@
 - **`status NAZWA` dla relacji lokalnej ma własny widok (2026-10-15; `fix/status-local`).** Wcześniej tekstowy
   `status` pokazywał relację lokalną jak zdalną: „Blokada u peera: NIEZNANA”, „Endpoint docelowy: ? (?:?)”, „Cron
   dziala przez: (jeszcze nie aktywowany -- brak linii cron)”, „Zrodla: ?” przy relacji z 12 liniami w cronie (GUI,
-  które czyta `status --json`, pokazywało ją dobrze). Teraz (`status_local_view`): typ (kopia lokalna / tylko
-  migawki), stan, pauza, źródła, cel, kopie, konto, config, liczba linii tej relacji w crontabie konta, spójność
+  które czyta `status --json`, pokazywało ją dobrze). Teraz (`status_local_view`): typ („lokalna -- zrodlo i kopia na tym hoscie” albo „lokalna, tylko
+  migawki”), stan, pauza, źródła, cel, kopie, konto, config, liczba linii tej relacji w crontabie konta (nieczytelny crontab = „?”, nie „brak linii”), spójność
   (także dla relacji bez kopii), ostatni wynik z dziennika konta po etykiecie (`snapsend.sh`, `"label"`). Na liście
   (`status` bez nazwy) relacja lokalna ma `endpoint=(lokalna)`. Na żywo pve9b: `lokalna-hdd-vms` i `test-migawki`
   pokazują 12 linii crona i ostatni wynik „success”; pve10: widok relacji zdalnych bez zmian. Test w
