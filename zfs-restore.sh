@@ -415,7 +415,7 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
         echo "  Historia:   tylko punkt (bez wczesniejszych snapshotow; --with-history przenosi je tez)"
     fi
     echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
-    echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu robi forma relacyjna: restore <relacja> [--at=...]."
+    echo "  Nadpisane:  nic -- cel byl wolny. Nadpisanie istniejacego: --from-copy ... --overwrite albo restore <relacja>."
 }
 
 cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
@@ -714,7 +714,7 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
         echo "  --overwrite: cele PONIZEJ JUZ ISTNIEJA i zostana nadpisane. Kazdy z nich"
         echo "  dostanie osobny podglad zbioru strat i osobne pytanie, zanim cokolwiek zginie."
     else
-        echo "  Ta forma NIGDY nie nadpisuje: kazdy cel musi byc wolny, inaczej odmowa."
+        echo "  Bez --overwrite nic nie jest nadpisywane: kazdy cel musi byc wolny, inaczej odmowa."
     fi
     for (( i=0; i<${#from[@]}; i++ )); do
         printf '  %s@%s  ->  %s\n' "${from[$i]}" "${snaps[$i]}" "${to[$i]}"
