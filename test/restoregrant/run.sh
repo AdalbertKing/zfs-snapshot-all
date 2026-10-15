@@ -680,6 +680,7 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
       if [ "${STUB_LIVE:-0}" -eq 1 ]; then
           restore_remote_state(){ printf '11111111111111111111'; }
           restore_remote_has_guid(){ return 1; }
+          ssh(){ return 255; }   # no real host is ever asked anything
       fi
       RESTORE_ENGINE="$RONE/eng" ENGINE_RC="${5:-0}" RESTORE_LABEL=lab1 \
       RESTORE_STRATEGY="$1" RESTORE_POINT_NAME="$3" FAKE_REMOTE="${FAKE_REMOTE:-absent}" \
@@ -752,6 +753,19 @@ if has "ROOT of the delegated scope" "$(verd_of "$r")"; then ok "scope: ...and n
 else bad "scope: ...and names it the scope root" "$(verd_of "$r")"; fi
 if [ -z "$(argv_of "$r")" ]; then ok "scope: ...and the engine was never invoked"
 else bad "scope: scope root -- the engine RAN" "$(argv_of "$r")"; fi
+# A CHILD whose parent is in the scope is not a root: recreated, it comes back
+# under the parent's delegation -- the way round the refusal above. It passes
+# the guard and reaches the next check (the mount probe over ssh, which the
+# harness cannot answer: "could not read whether ... is mounted" -> going ahead).
+r="$(STUB_LIVE=1 r1 full-live "$GOODG
+RESTORE_GRANT_DATASETS=rpool/data rpool/data/vm" automated_daily_2026-08-23_18-00-01 zfsbackup@pve1:rpool/data/vm)"
+if has "ROOT of the delegated scope" "$(verd_of "$r")"; then
+    bad "scope: a child whose parent is in the scope is NOT refused as a root" "$(verd_of "$r")"
+else ok "scope: a child whose parent is in the scope is NOT refused as a root"; fi
+r="$(STUB_LIVE=1 r1 full-live "$GOODG
+RESTORE_GRANT_DATASETS=rpool/other rpool/data/vm" automated_daily_2026-08-23_18-00-01 zfsbackup@pve1:rpool/data/vm)"
+if has "ROOT of the delegated scope" "$(verd_of "$r")"; then ok "scope: ...but a child whose parent is NOT in the scope is a root"
+else bad "scope: ...but a child whose parent is NOT in the scope is a root" "$(verd_of "$r")"; fi
 
 # ---- a LOCAL target asks for no grant --------------------------------------
 # The machine at risk is this one, and whoever runs this already has root on it.

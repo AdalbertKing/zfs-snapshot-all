@@ -2372,8 +2372,23 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     log 0 "restore: update the package on '$host' (its gate reports the scope), or recover the CHILDREN, whose parent survives:  restore <from> <onto>:${_tgt_ds}/<child>"
                     return 1
                 fi
+                # A ROOT is a scope dataset whose PARENT is not in the scope. The
+                # gate reports every delegated dataset, children included, and
+                # each grant is `zfs allow -u` without -l -- it reaches the
+                # descendants -- so a child whose parent is in the scope comes
+                # back under the parent's delegation when it is recreated. That
+                # child is the way round this refusal the message below names;
+                # refusing it too would leave no way at all (2026-10-15, pve9).
+                local _p _in_parent
                 for _g in ${RESTORE_GRANT_SCOPE:-}; do
                     [ "$_g" = "$_tgt_ds" ] || continue
+                    _in_parent=0
+                    case "$_tgt_ds" in
+                        */*) for _p in ${RESTORE_GRANT_SCOPE:-}; do
+                                 [ "$_p" = "${_tgt_ds%/*}" ] && _in_parent=1
+                             done ;;
+                    esac
+                    [ "$_in_parent" -eq 0 ] || break
                     RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
                     log 0 "restore: replace destroys the dataset and recreates it, but a 'zfs allow' lives ON the dataset -- destroying it takes the grant away, and recreating it needs permission on the PARENT, which a delegated account does not have and should not."
