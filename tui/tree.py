@@ -15,7 +15,8 @@ SPEC: {"title", "host",
        "roots": [nazwy], "excl": {korzen: [nazwy]},        -- wybor poczatkowy
        "hide": [nazwy],      -- ukryte razem z tym, co pod nimi (cel kopii); nigdy nie widac, nie da sie zaznaczyc
        "no_exc": bool,       -- true = bez wyjatkow, tylko cale miejsca
-       "show_mode": bool, "recursion": "flat"|"atomic"}
+       "show_mode": bool, "recursion": "flat"|"atomic",
+       "legend": tekst       -- opcjonalnie: pierwsza linia (domyslnie legenda kopiowania)}
 OUT:  {"action":"next"|"back", "roots":[w kolejnosci drzewa], "excl":{korzen:[posortowane wg drzewa]},
        "recursion":"flat"|"atomic"}      -- przy "back" roots/excl/recursion takie jak na starcie
 
@@ -333,7 +334,8 @@ class Tree(object):
             self.top = idx
         elif idx >= self.top + lh:
             self.top = idx - lh + 1
-        body = [u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"]
+        # "legend" w SPEC: okno odzysku (tui/restore.sh) nic nie kopiuje -- odtwarza.
+        body = [self.spec.get("legend") or u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"]
         if self.show_mode:
             body.append(u" Sposób: cała gałąź atomowo (-r)   S zmienia" if self.recursion == "atomic"
                         else u" Sposób: każdy dataset osobno (-R)   S zmienia")

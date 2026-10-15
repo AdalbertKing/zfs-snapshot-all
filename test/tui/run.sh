@@ -979,6 +979,27 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
+# OKNO PRZYWRÓĆ (C2a, właściciel 2026-10-15): 'p' w szczegółach relacji (Enter na
+# F3) oddaje terminal oknu restore --ask -- jedno zwykłe polecenie restore, bez
+# własnej logiki odzysku w GUI. NIE na samej liście: tam litera jest tekstem linii
+# poleceń (live_key_name), co ten test złapał przy pierwszym podejściu.
+A="$(act down,enter,p)"
+if grep -Eq "zfs-backup.sh'? restore lab-ct201 --ask\$" "$XL"; then
+    ok "akcje: p w szczegółach relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
+else
+    bad "akcje: p -> restore NAZWA --ask" "$(cat "$XL")" "$A"
+fi
+A="$(act down,p)"
+if [ ! -s "$XL" ]; then
+    ok "akcje: p na samej liście F3 niczego nie uruchamia (litera = tekst linii poleceń)"
+else
+    bad "akcje: p na liście F3 nie powinno uruchamiać" "$(cat "$XL")"
+fi
+if grep -q 'restore)' "$REPO/zfs-backup.sh" && grep -q 'tui/restore.sh' "$REPO/zfs-backup.sh"; then
+    ok "akcje: zfs-backup.sh restore NAZWA --ask prowadzi do tui/restore.sh"
+else
+    bad "akcje: restore --ask -> tui/restore.sh" "brak przekazania w zfs-backup.sh"
+fi
 # ZMIANA RELACJI (2026-10-07): 'e' w oknie szczegolow (Enter na F3) oddaje
 # terminal oknom edit-relation; bez okna 'e' jest tekstem linii polecen.
 A="$(act down,enter,e)"
@@ -988,8 +1009,10 @@ else
     bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(act down,enter)"
-if has "$A" 'e zmień relację'; then
-    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień relację')"
+# 'e zmień' (nie 'e zmień relację') od 2026-10-15: z 'p przywróć' pełne słowa nie
+# mieściły się w 80 kolumnach i ucinały licznik przewijania.
+if has "$A" 'e zmień  p przywróć'; then
+    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień  p przywróć')"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
 fi
@@ -3544,6 +3567,134 @@ else
 fi
 rm -rf "$HE"
 rm -rf "$ER"
+
+# ============================================================================
+# OKNO PRZYWRÓĆ (tui/restore.sh, C2a, 2026-10-15)
+#
+# Okno nie ma logiki odzysku: sklada JEDNO polecenie `zfs-backup.sh restore` z czterech
+# odpowiedzi (co / dokad / z kiedy / sprawdz). Atrapa czasownika (zb) zapisuje argv
+# kazdego wywolania innego niz --plan do RW/ran -- test porownuje dokladnie to, co
+# dostalby prawdziwy czasownik. Atrapa whiptaila = ta sama co w kreatorze (kontrakt
+# sterowania: odpowiedz na stderr, rc, znacznik musi byc na liscie). Drzewo (ZFS_TREE) to
+# atrapa, ktora oddaje gotowy JSON z TREE_OUT; sam tree.py ma osobne testy.
+# ============================================================================
+RW="$(mktemp -d)"; mkdir -p "$RW/bin" "$RW/conf"
+cp "$NR/bin/whiptail" "$RW/bin/whiptail"
+: > "$RW/conf/jobs.h.conf"; : > "$RW/conf/jobs.h.zfsbackup.conf"
+cat > "$RW/plan.json" <<'EOF'
+{"config":"x","datasets":[{"source":"acct@10.0.0.9:hdd/data","relation":"k2","copy":"tank/b/hdd/data","copy_exists":true,"consistency":"ok","snapshots":[{"name":"automated_daily_2026-10-14_01-35-01","creation":1792020000,"guid":"1"},{"name":"automated_hourly_2026-10-15_17-25-01","creation":1792081503,"guid":"2"}]}]}
+EOF
+cat > "$RW/bin/zb" <<'EOF'
+#!/bin/bash
+if [ "$1" = restore ] && [ "$2" = --plan ]; then
+    case " $* " in
+        *" --config=$NR_DIR/conf/jobs.h.zfsbackup.conf "*) cat "$NR_DIR/plan.json" ;;
+        *) echo '{"config":"x","datasets":[]}' ;;
+    esac
+    exit 0
+fi
+if [ "$1" = restore ]; then
+    line=""; for a in "$@"; do line="${line:+$line ~ }$a"; done
+    printf '%s\n' "$line" >> "$NR_DIR/ran"
+    echo "RESTORE-STUB OK"; exit 0
+fi
+exit 9
+EOF
+cat > "$RW/bin/zfs" <<'EOF'
+#!/bin/bash
+if [ "$*" = "list -H -p -o name,used,type -r tank/b/hdd/data" ]; then
+    printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
+    exit 0
+fi
+exit 9
+EOF
+cat > "$RW/bin/tree" <<'EOF'
+#!/bin/bash
+out=""; while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
+cp "$TREE_OUT" "$out"
+EOF
+chmod +x "$RW/bin/zb" "$RW/bin/zfs" "$RW/bin/tree" "$RW/bin/whiptail"
+printf '{"action":"next","roots":["tank/b/hdd/data/docs"],"excl":{},"recursion":"flat"}\n' > "$RW/t-docs.json"
+printf '{"action":"next","roots":["tank/b/hdd/data"],"excl":{},"recursion":"flat"}\n' > "$RW/t-whole.json"
+printf '{"action":"next","roots":["tank/b/hdd/data"],"excl":{"tank/b/hdd/data":["tank/b/hdd/data/mail"]},"recursion":"flat"}\n' > "$RW/t-nomail.json"
+RWCFG="$RW/conf/jobs.h.zfsbackup.conf"
+rw_run() {   # <plik drzewa> -- odpowiedzi w $RW/answers; wynik: $RW/ran, $RW/wt.log, RW_RC
+    rm -f "$RW/wt.n" "$RW/wt.log" "$RW/ran"
+    ( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" ZFS_BACKUP="$RW/bin/zb" ZFS_TREE="$RW/bin/tree" \
+             ZFS_CONF_DIR="$RW/conf" PYTHON="$PY" PATH="$RW/bin:$PATH" TREE_OUT="$1"
+      bash "$REPO/tui/restore.sh" k2 ) </dev/null >"$RW/out" 2>"$RW/err"
+    RW_RC=$?
+}
+rw_ran() { cat "$RW/ran" 2>/dev/null; }
+
+# 1. obok, tylko docs: config = ten, ktory MA wiersze (jobs.h.conf jest pierwszy w kolejnosci i pusty),
+#    onto = baza/basename; bez --at (p0 = najnowszy), bez --yes. Okno podsumowania ma "Wymaga zgody" i --defaultno.
+printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-docs.json"
+W1="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data/docs ~ --onto=hdd/restore/docs ~ --config=$RWCFG"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && ! has "$(rw_ran)" '--at' && ! has "$(rw_ran)" '--yes'; then
+    ok "restore: obok, tylko docs -> restore k2 k2 --source=docs --onto=hdd/restore/docs --config=<ten z wierszami>, bez --at i bez --yes"
+else
+    bad "restore: obok, tylko docs" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
+# --allow-restore= Z ETYKIETĄ: deploy.sh nie zna gołego --allow-restore (text-checker, 2026-10-15).
+if has "$RWSUM" 'Wymaga zgody' && has "$RWSUM" '--defaultno' && has "$RWSUM" "deploy.sh --allow-restore=$(hostname -s 2>/dev/null || hostname)"; then
+    ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jakiej zgody wymaga"
+else
+    bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"
+fi
+
+# 2. miejsce, cala relacja, punkt p1 (starszy): bez --source (WHOLE), bez --onto, z --at
+printf '0\tmiejsce\n0\tp1\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-whole.json"
+RWAT="$(date -d @1792020000 '+%Y-%m-%d %H:%M:%S')"
+W2="restore ~ k2 ~ --at=$RWAT ~ --config=$RWCFG"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W2" ]; then
+    ok "restore: na miejsce, cala relacja, punkt p1 -> restore k2 --at=<czas p1> --config=... (bez --source, bez --onto)"
+else
+    bad "restore: na miejsce, cala relacja" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W2" "err: $(cut -c1-200 "$RW/err")"
+fi
+
+# 3. miejsce z wylaczonym mail: nie cala relacja -> --source z lista (rodzice przed dziecmi)
+printf '0\tmiejsce\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-nomail.json"
+W3="restore ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs ~ --config=$RWCFG"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W3" ]; then
+    ok "restore: na miejsce z wylaczonym mail -> --source=data,data/docs (WHOLE=0 dodaje --source)"
+else
+    bad "restore: na miejsce bez mail" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W3" "err: $(cut -c1-200 "$RW/err")"
+fi
+
+# 4. obok, cala relacja: --source i --onto w tej samej kolejnosci, onto = baza/data/...
+printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-whole.json"
+W4="restore ~ k2 ~ k2 ~ --source=tank/b/hdd/data,tank/b/hdd/data/docs,tank/b/hdd/data/mail ~ --onto=hdd/restore/data,hdd/restore/data/docs,hdd/restore/data/mail ~ --config=$RWCFG"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W4" ]; then
+    ok "restore: obok, cala relacja -> --source=3 datasety, --onto=hdd/restore/data/... w tej samej kolejnosci"
+else
+    bad "restore: obok, cala relacja" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W4" "err: $(cut -c1-200 "$RW/err")"
+fi
+
+# 5. Wstecz z podsumowania wraca do punktow i NIC nie uruchamia: summary rc 1, punkty znowu, summary rc 0 -> JEDNA linia ran
+printf '0\tobok\n0\thdd/restore\n0\tp0\n1\t\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-docs.json"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep -c 'sprawdź' "$RW/wt.log")" -eq 2 ]; then
+    ok "restore: Wstecz z podsumowania nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
+else
+    bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "sprawdz: $(grep -c 'sprawdź' "$RW/wt.log")"
+fi
+
+# 7. brak kopii na tym hoscie (oba configi bez wierszy): komunikat, exit 1, zero wywolan restore
+echo '{"config":"x","datasets":[]}' > "$RW/plan.json"
+printf '0\t\n' > "$RW/answers"
+rw_run "$RW/t-whole.json"
+if [ "$RW_RC" -eq 1 ] && [ ! -e "$RW/ran" ] && grep -qF 'Nie ma kopii relacji k2' "$RW/wt.log"; then
+    ok "restore: relacja bez kopii na tym hoscie -> 'Nie ma kopii relacji k2', exit 1, czasownik nie uruchomiony"
+else
+    bad "restore: brak kopii" "rc=$RW_RC" "ran: $(rw_ran)" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+rm -rf "$RW"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
