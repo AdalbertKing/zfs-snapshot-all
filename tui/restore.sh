@@ -56,12 +56,19 @@ run_cmd() {
 
 # points.tsv (czas utworzenia <TAB> nazwa migawki, najnowsza pierwsza) -> PT_TIME + menu
 # (radiolist p0..pN; p0 = najnowszy, domyślnie ON). Wspólne dla obu trybów.
+#
+# PT_AT = granica --at dla punktu: "tuż przed NASTĘPNYM (nowszym) punktem", nie sekunda
+# tego punktu. Jeden bieg robi migawki datasetów po kolei, sekundy po sobie (pve10, 10-15:
+# home …:03, adam …:05, ewa …:07); --at = sekunda migawki korzenia odcinało dzieci tego
+# samego biegu i cofało je o godzinę dalej (P7, wyłapane w podglądzie testu właściciela).
 build_points() {
-    local cr nm tm tier lbl
-    PT_TIME=(); menu=()
+    local cr nm tm tier lbl prev=""
+    PT_TIME=(); PT_AT=(); menu=()
     while IFS=$'\t' read -r cr nm; do
         [ -n "$cr" ] || continue
         tm=$(date -d "@$cr" '+%Y-%m-%d %H:%M:%S')
+        if [ -n "$prev" ]; then PT_AT+=("$(date -d "@$((prev - 1))" '+%Y-%m-%d %H:%M:%S')"); else PT_AT+=(""); fi
+        prev="$cr"
         case "$nm" in *_*) tier="${nm#*_}"; tier="${tier%%_*}" ;; *) tier="$nm" ;; esac
         lbl="$tm  $tier"
         [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  (najnowszy)"
@@ -208,7 +215,7 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
                --radiolist "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
             idx="${WT_OUT#p}"
-            if [ "$idx" = 0 ]; then AT=""; else AT="${PT_TIME[$idx]}"; fi
+            if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
             geom
             wt --title "Przywróć z dysku: historia" --yes-button "Tak" --no-button "Nie" --defaultno \
                --yesno $'Przenieść też wszystkie starsze migawki (z historią)?\nNie = tylko wybrany punkt.' "$(fit 3)" "$W"
@@ -233,7 +240,7 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
                     echo "  ${FROM[$i]} -> ${ONTO[$i]}"
                     for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  (NADPISUJE)"; break; }; done
                 done
-                echo "Punkt:  ${AT:-najnowszy}${AT:+ ($TZN)}"
+                if [ -n "$AT" ]; then echo "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT"; else echo "Punkt:  najnowszy"; fi
                 if [ "$HIST" -eq 1 ]; then echo "Historia: tak"; else echo "Historia: nie"; fi
                 echo
                 echo "Polecenie:"
@@ -445,7 +452,7 @@ PYEOF
            --radiolist "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
            "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
         idx="${WT_OUT#p}"
-        if [ "$idx" = 0 ]; then AT=""; else AT="${PT_TIME[$idx]}"; fi
+        if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
         step=4 ;;
     4)  # ---- SPRAWDŹ + POLECENIE ---------------------------------------------------------
         CMD=("$ZB" restore "$REL")
@@ -468,7 +475,7 @@ PYEOF
             else
                 echo "Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE"
             fi
-            echo "Punkt:  ${AT:-najnowszy}${AT:+ ($TZN)}"
+            if [ -n "$AT" ]; then echo "Punkt:  bieg z $PT ($TZN) -- każdy dataset: jego ostatnia migawka do $AT"; else echo "Punkt:  najnowszy"; fi
             echo
             echo "Polecenie:"
             echo "  $CMDTXT"
