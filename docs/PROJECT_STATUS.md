@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3d6b1795451c2ff5 -->
+<!-- status-covers-digest: 839545e954a8a419 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,25 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; `feat/x12-tree`).** Właściciel (10-12): okno
+- **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
+  Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
+  --target=hdd/test-kreator --at="2026-10-15 06:30"` zgłaszał „OK … rewind from …” i „all 1 dataset(s) in scope recovered”, a źródło zostawało bez zmian
+  (migawka 07:01, zakładka i zapis po migawce na miejscu). Przyczyna: etap cofnięcia (`zfs rollback -r` każdego
+  datasetu poddrzewa) był tylko dla celu zdalnego; silnik dostawał punkt, który źródło już miało, i kończył się
+  sukcesem („Snapshot already exists in target - skipping”), a kontroli wyniku dla celu lokalnego nie było. Teraz dla
+  celu lokalnego: cofnięcie do wspólnej bazy (`RESTORE_SRC_BASE_SNAP` planisty) przed silnikiem, `unproven`
+  przez cofnięcie zamiast `-f`, cofane tylko datasety z odpowiednikiem w kopii i w głębokości silnika, odmowa, gdy bazy nie da się przypiąć do jednej migawki, kontrola wyniku po tożsamości, w której pusta lista datasetów i nieczytelny GUID kopii to „nie przywrócono” (punkt z GUID-em kopii, nic nowszego,
+  `referenced` równe migawce -- nie `written@`, które po cofnięciu nigdy nie jest 0), komunikat o tym, że kopia
+  ma jeszcze migawki nowsze niż punkt. Na żywo: zapis po migawce zniknął, 07:01 i 08:01 oraz zakładka zdjęte,
+  `referenced` 25088 = 25088; następny bieg relacji: „Backup copy ... follows its source -- discarding 2
+  snapshot(s)”, nowa migawka na obu stronach z tym samym GUID. Przypadek `unproven` (przywrócenie do najnowszego punktu, gdy źródło na nim stoi) na żywo: samo cofnięcie do tej
+  migawki, bez `-f`. Suita `restore` na pve9b 296/1 -- ta sama jedna
+  porażka na `main` (środowisko hosta). Brak stałego testu na prawdziwym ZFS (suita `restore` ma atrapę `zfs`).
+  Silnik: skrót „already exists in target” omija regułę P-0 także dla zwykłej kopii, gdy źródło nie ma nowej
+  migawki -- do recenzenta (silniki zamrożone): `docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`.
+  Drobiazg do sprawdzenia: po samym cofnięciu (bez strumienia) pojawił się komunikat „canmount=noauto travels in the stream”.
+
+- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; #540, wdrożone na pve10 i pve9b).** Właściciel (10-12): okno
   „Co kopiować” (lista + Dodaj miejsce / Wyjątki / Usuń pozycję) było „siermiężne i nieużyteczne”. Teraz jedno
   okno w curses (`tui/tree.py`, drugi wyjątek od whiptail po `grid.py`), jak w eksploratorze: `[x]` miejsce
   (razem z tym, co pod nim powstanie), `[ ]` nie, `[-]` część; Spacja zaznacza/odznacza całą gałąź,
