@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f58bf8786b5354e4 -->
+<!-- status-covers-digest: f6ce3ba6a80ad9cd -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,26 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Zastąpienie (`replace`) zniszczyło korzeń zakresu na pve9 -- naprawione (2026-10-15; #547 + `fix/scope-root-children`).**
+- **Kampania odzysku zdalnego A -> B <-> C, poziom kolektor -> źródło (2026-10-15; `fix/restore-root-gone`).**
+  Relacja `k2-ab` (pve9 zbiera z pve9b `hdd/data` + 3 dzieci), dalej `k2-bc` (pve11 zbiera z pve9). Po każdym
+  wariancie: tożsamość (GUID, `referenced`) i następne biegi k2-ab i k2-bc.
+  | wariant | wynik |
+  |---|---|
+  | wspólny punkt, `--at` | OK, `rewind` (cofnięcie na celu), plik szkody znika; następny k2-ab: kopia „follows its source -- discarding”, C za nią |
+  | bez wspólnego punktu (A obcy) | korzeń `hdd/data`: ODMOWA (korzeń zakresu), A nietknięty; `--target=` dzieci: `replace` 3/3 OK |
+  | pełny (A usunięte) | BŁĄD: 4× „permission denied” z silnika (konto nie utworzy korzenia) -- naprawione tutaj |
+  Łańcuch po każdym wariancie przeszedł (A, B, C na tej samej migawce, ten sam GUID).
+  Poprawki: (1) `create` na nieistniejący korzeń zakresu -- odmowa przed silnikiem z naprawą krok po kroku
+  (`restore_scope_is_root`, `restore_scope_root_repair`); (2) `deploy.sh --allow-restore` przy niezmienionej zgodzie
+  mówił „nothing changed” i NIE nakładał delegacji na korzeń odtworzony przez roota -- naprawa z komunikatu nie
+  działała; teraz nakłada ją ponownie (`restore_grant_delegate`), a datasetu, którego nie ma, nie próbuje i go nazywa;
+  (3) raport po cofnięciu źródła mówił „next backup WILL REFUSE” -- od P-0 kopia idzie za źródłem i usuwa te migawki
+  (zmierzone); tekst mówi prawdę, podaje termin i radzi `send | recv` na bok (klon przypiąłby migawkę i zablokował
+  następny bieg). Na żywo (pve9 i pve9b na gałęzi): A usunięte -> odmowa z naprawą; naprawa wykonana dokładnie wg
+  komunikatu (bez `--deny-restore`) -> 4/4; nowy raport po cofnięciu, następny bieg usunął zapowiedzianą migawkę.
+  Testy w `test/restoregrant/run.sh`; deploy z `main` oblewa oba przypadki ponownego nadania.
+
+- **Zastąpienie (`replace`) zniszczyło korzeń zakresu na pve9 -- naprawione (2026-10-15; #547 + #548).**
   Kampania, wariant „kolektor B obcy -> replace z C” (pve11 -> pve9, relacja `k2-bc`): bieg zniszczył
   `hdd/backups/192.168.28.98/hdd/data` na pve9 i nie odtworzył go (brak prawa `create` na rodzicu) -- delegacja
   zniknęła razem z datasetem. Bezpiecznik „nie zastępuj korzenia zakresu” istniał, ale był martwy: bramka

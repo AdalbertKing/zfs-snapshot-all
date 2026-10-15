@@ -2052,12 +2052,16 @@ restore_scope_is_root() {   # <dataset> -> 0 when it is a root of the scope
 # delegation on an unchanged grant since the same day (before, it answered
 # "nothing changed" and left the root without it).
 restore_scope_root_repair() {   # <host> <root dataset>
-    log 0 "restore: the repair, as root ON $1, then re-run this restore unchanged:"
+    log 0 "restore: the repair, as root ON ${1#*@}, then re-run this restore unchanged:"
     log 0 "restore:     zfs destroy -r $2     (only if it is still there and nothing on it is needed)"
     log 0 "restore:     zfs create -o canmount=noauto $2"
     log 0 "restore:     deploy.sh --commit-scope=<label>                 (the relationship's own delegation)"
     log 0 "restore:     deploy.sh --allow-restore=<label> --replace     (the restore's delegation)"
     log 0 "restore: the restore then lands on the empty root with recv -F (no destroy) and recreates the children under it."
+    # Measured: --commit-scope on the bare root records the scope as that root
+    # alone ("3 already gone"); the children work under its inherited delegation,
+    # but the records say otherwise until the scope is committed again.
+    log 0 "restore: and once it has succeeded, on ${1#*@} once more:  deploy.sh --commit-scope=<label>   -- so the scope records the children again."
 }
 
 restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
@@ -2618,7 +2622,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # there (the copy follows its source -- P-0, snapsend `recv -F`, logged).
         local _lcnewer
         _lcnewer="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" 'seen{print $1} $1==p{seen=1}' | sed 's/.*@//' | tr '\n' ' ')"
-        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% } -- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed (zfs clone / zfs rename on the copy)."
+        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% } -- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed: zfs send <copy>@<snapshot> | zfs recv <elsewhere> -- not a clone, which pins the snapshot so the next run cannot discard it and fails."
     fi
 
     # ---- 6. the engine -----------------------------------------------------
