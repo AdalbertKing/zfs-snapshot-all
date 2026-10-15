@@ -17450,10 +17450,11 @@ cmd_status() {
         local f
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
+            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""; RUX_MODE=""
               record_load client "$f"
               pausemark=""
               client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
+              [ "${RUX_MODE:-}" = local ] && ACTIVE_ENDPOINT="(lokalna)"
               printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
         done
         return 0
@@ -17461,6 +17462,11 @@ cmd_status() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
     record_load client "$cpath"
+    # A LOCAL relationship has no peer, no endpoint and no gate to ask: the view
+    # below printed "Blokada u peera: NIEZNANA", "Endpoint docelowy: ? (?:?)",
+    # "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)" and
+    # "Zrodla: ?" for one with twelve cron lines (pve9b, 2026-10-15). Its own view.
+    if [ "${RUX_MODE:-}" = local ]; then status_local_view "$name"; return 0; fi
     local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
     [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
@@ -17572,6 +17578,84 @@ cmd_status() {
             echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
             echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
         fi
+    fi
+}
+
+# status_local_view <name> -- the text view of a LOCAL relationship (record
+# already loaded by cmd_status). Everything here is on this host: the record, the
+# config it names, the account's crontab. Nothing is asked of a peer.
+status_local_view() {
+    local name="$1" acct="${LOCAL_USER:-root}" ncron="?" _st_prefix _st_last
+    echo "Klient:            ${CLIENT_NAME:-$name}"
+    if [ -n "${CLIENT_TARGET:-}" ]; then
+        echo "Typ:               lokalna -- zrodlo i kopia na tym hoscie"
+    else
+        echo "Typ:               lokalna, tylko migawki -- bez kopii, migawki zostaja w zrodle"
+    fi
+    echo "Stan:              ${STATE:-unknown}"
+    if client_paused "$name"; then
+        local PAUSED_AT="" PAUSED_REASON=""
+        record_load pause "$(pause_marker_path "$name")"
+        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+        echo "                   joby z etykieta '-L $name' sa pomijane. Wznowienie: $0 resume-client $name"
+    fi
+    echo "Zrodla:            $(printf '%s' "${REQUESTED_DATASETS:-?}" | sed 's/,/, /g')"
+    echo "Cel:               ${CLIENT_TARGET:-(brak -- tylko migawki)}"
+    [ -n "${MANAGED_DATASETS:-}" ] && echo "Kopie:             $MANAGED_DATASETS"
+    echo "Konto:             $acct"
+    echo "Config:            ${CRON_CONFIG:-?}"
+    # The account's crontab, read here: the lines of THIS relationship carry
+    # `-L <name>` (snapshot, prune) or name it in the monitor's -L.
+    # A crontab that cannot be read is "?", never "no lines" (that would read as
+    # "nothing runs"). Fixed-string match on `-L <name>` followed by a space or a
+    # quote, as the engines' lines and the monitor's line spell it.
+    # "no crontab for <user>" is an empty crontab (zero lines), not an unreadable one.
+    local _tab _trc=1
+    if [ "$(id -un 2>/dev/null)" = "$acct" ]; then
+        _tab="$(crontab -l 2>&1)"; _trc=$?
+    elif [ "$(id -u)" = 0 ]; then
+        _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?
+    fi
+    if [ "$_trc" -eq 0 ]; then ncron=""
+    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""
+    fi
+    [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
+    if [ "$ncron" = "?" ]; then
+        echo "Cron:              ? (crontab konta '$acct' nieczytelny -- czyta go tylko root albo to konto)"
+    elif [ "$ncron" -gt 0 ]; then
+        echo "Cron:              $ncron linii w crontabie konta '$acct'"
+    else
+        echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"
+    fi
+    # A snapshot-only relationship has neither an endpoint nor copies, which is
+    # what status_quiesce_from_cron reads as "not activated" -- its sources stand in.
+    echo "Spojnosc:          $(MANAGED_DATASETS="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}" status_quiesce_from_cron "$CLIENT_NAME")"
+    echo "Utworzono:         ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    _st_prefix="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}"
+    _st_prefix=${_st_prefix%% *}; _st_prefix=${_st_prefix%%,*}
+    echo
+    if [ -n "$_st_prefix" ] && status_running_now "$_st_prefix"; then
+        echo "Teraz:             (transfer w toku)"
+    else
+        echo "Teraz:             nic nie biegnie dla tej relacji"
+    fi
+    # The ACCOUNT's stats log (the jobs run as that account), and the push
+    # engine's line carries the relationship as "label" -- status_last_result
+    # reads a pull's line from root's log, which a local relationship never writes.
+    local _home _slog
+    _home="$(getent passwd "$acct" 2>/dev/null | cut -d: -f6)"
+    if [ "$acct" != root ] && [ -n "$_home" ]; then _slog="$_home/zfs-snapshot-stats.log"
+    else _slog="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"; fi
+    _st_last="$(grep -F "\"script\":\"snapsend.sh\",\"label\":\"$name\"" "$_slog" 2>/dev/null | tail -1 \
+        | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p')"
+    if [ -n "$_st_last" ]; then
+        set -- $_st_last
+        echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+    else
+        echo "Ostatni wynik:     brak zapisu w historii ($_slog)"
+        echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
     fi
 }
 
