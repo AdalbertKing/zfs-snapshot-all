@@ -1,17 +1,18 @@
 # basket-lib.sh -- KOSZYK MIEJSC: wybór datasetów wspólny dla kreatorów (dołączany
-# przez tui/new-relation.sh i tui/replica.sh; nie uruchamiać samodzielnie).
+# przez tui/new-relation.sh, tui/replica.sh i tui/edit-relation.sh; nie uruchamiać
+# samodzielnie).
 #
 # Model (właściciel 2026-09-18, zmierzony na pve10<-pve11): pozycja koszyka to MIEJSCE
-# -- kopiowane jest ono i wszystko, co pod nim JEST i co POWSTANIE. Dodanie miejsca nie
-# zadaje pytań; wyjątki (tylko dla tego, co już istnieje) to osobna akcja; -R/-r to
-# "jak", nie "co". Wydzielone z new-relation.sh 2026-10-09 (uwaga 13: replika miała
-# własną, płaską listę kratek -- "Masz gotowy ekran wybierający datasety przy tworzeniu
-# relacji. Dlaczego nie zrobisz tego identycznie?").
+# -- kopiowane jest ono i wszystko, co pod nim JEST i co POWSTANIE; wyjątek to dataset
+# pod miejscem, który jest pomijany; -R/-r to "jak", nie "co". Wydzielone z
+# new-relation.sh 2026-10-09 (uwaga 13); od X12 (2026-10-12) wybór to jedno drzewo z
+# kratkami (basket_step -> tui/tree.py).
 #
-# Wołający daje: wt-lib.sh (wt, geom, fit, info, clip_label; H W LH), TMPD, PY,
+# Wołający daje: wt-lib.sh (wt, geom, fit, info, clip_label; H W LH), TMPD, PY, HERE,
 # title <nr> <tekst> (nagłówek okna; koszyk pyta o krok 4), HOST (nazwa w tekstach),
-# RECURSION (flat|atomic). BASKET_NO_MODE=1 chowa pozycję "Sposób" (zawsze -R).
-# BASKET_NO_EXC=1 chowa "Wyjątki" (Zmień relację: add-source bierze cały dataset).
+# RECURSION (flat|atomic). BASKET_NO_MODE=1 chowa "Sposób" (zawsze -R).
+# BASKET_NO_EXC=1 nie pozwala pomijać (Zmień relację: add-source bierze cały dataset).
+# BASKET_HIDE: cel kopii, ukryty w drzewie razem z tym, co pod nim.
 # Stan: T_NAME/T_KIDS/T_LABEL (drzewo), B_ROOT/B_EXCL (koszyk; pominięte po jednym w linii).
 T_NAME=(); T_KIDS=(); T_LABEL=()
 B_ROOT=(); B_EXCL=()
@@ -45,7 +46,7 @@ wl = max([len(r[2]) for r in rows] + [10])
 for n, kids, label, used, typ in rows:
     print("%s\t%d\t%s  %7s  %-4s  %s" % (n, kids, label.ljust(wl), used, typ, kids_words(kids) if kids else ""))
 PYEOF
-    T_NAME=(); T_KIDS=(); T_LABEL=()
+    T_NAME=(); T_KIDS=(); T_LABEL=(); BASKET_DS_JSON="$1"
     local n k l
     while IFS=$'\t' read -r n k l; do
         [ -n "$n" ] || continue
@@ -56,24 +57,6 @@ PYEOF
 }
 
 kids_count() { local i; for i in "${!T_NAME[@]}"; do [ "${T_NAME[$i]}" = "$1" ] && { echo "${T_KIDS[$i]}"; return; }; done; echo 0; }
-covered() {     # <nazwa> -> 0, gdy koszyk już ją obejmuje (jest korzeniem albo leży pod korzeniem)
-    local r; for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do case "$1" in "$r"|"$r"/*) return 0 ;; esac; done; return 1
-}
-basket_del() {  # <indeks>
-    local i nr=() ne=()
-    for i in "${!B_ROOT[@]}"; do [ "$i" = "$1" ] && continue; nr+=("${B_ROOT[$i]}"); ne+=("${B_EXCL[$i]}"); done
-    B_ROOT=(${nr[@]+"${nr[@]}"}); B_EXCL=(${ne[@]+"${ne[@]}"})
-}
-resolve_under() {   # <korzeń> -> 0 = wolno dodać; pozycje POD nim wypadają po zgodzie
-    local i under=() txt=""
-    for i in "${!B_ROOT[@]}"; do case "${B_ROOT[$i]}" in "$1"/*) under+=("$i"); txt="$txt  ${B_ROOT[$i]}\n" ;; esac; done
-    [ "${#under[@]}" -eq 0 ] && return 0
-    geom
-    wt --title "$1 obejmuje to, co już wybrane" --yes-button "Zastąp" --no-button "Zostaw" \
-       --yesno "W koszyku są już pozycje leżące pod $1:\n\n$txt\nCała gałąź $1 je zawiera. Zastąpić je jedną pozycją $1?" "$(fit $((${#under[@]} + 6)))" "$W" || return 1
-    for ((i=${#under[@]}-1; i>=0; i--)); do basket_del "${under[$i]}"; done
-    return 0
-}
 describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     local r="${B_ROOT[$1]}" e="${B_EXCL[$1]}" k short x
     k="$(kids_count "$r")"; short=""
@@ -82,175 +65,46 @@ describe() {    # <indeks> -> jedno zdanie o pozycji koszyka
     elif [ -z "$short" ]; then echo "dziś $k pod nim; nowe skopiują się same"
     else echo "dziś $k pod nim; BEZ: $short"; fi
 }
-
-pick_one() {    # -> PICK ; 1 = wstecz
-    local items=() i
-    for i in "${!T_NAME[@]}"; do
-        covered "${T_NAME[$i]}" && continue
-        items+=("${T_NAME[$i]}" "${T_LABEL[$i]}")
-    done
-    geom
-    if [ "${#items[@]}" -eq 0 ]; then
-        wt --title "Nie ma czego dodać" --msgbox "Koszyk obejmuje już wszystkie datasety z $HOST." 8 "$W"; return 1
-    fi
-    wt --title "$(title 4 "Które miejsce z $HOST kopiować?")" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-       --menu "Wybierz MIEJSCE. Kopiowane będzie ono i wszystko, co pod nim jest\nalbo POWSTANIE (np. rpool/data na czystym Proxmoxie)." "$H" "$W" "$LH" \
-       "${items[@]}" || return 1
-    PICK="$WT_OUT"; [ -n "$PICK" ]
-}
-add_flow() {    # <nazwa> -> 0 = dodano. Żadnych pytań: każde miejsce znaczy to samo.
-    resolve_under "$1" || return 1
-    B_ROOT+=("$1"); B_EXCL+=(""); return 0
-}
-with_kids() {   # -> WK[] indeksy pozycji koszyka, pod którymi dziś coś leży
-    local i; WK=()
-    for i in "${!B_ROOT[@]}"; do [ "$(kids_count "${B_ROOT[$i]}")" -gt 0 ] && WK+=("$i"); done
-    return 0
-}
-except_add_cb() {   # wołane przez list_editor: wybór jednego datasetu pod $EXC_NAME; 0 = LE_NEW, 1 = wstecz
-    # Nie oferuje tego, co już jest wyjątkiem albo leży pod wyjątkiem. Dodany przodek
-    # wyjątków zdejmuje z LE_ITEMS potomków, których już obejmuje.
-    local items=() i n x skip keep=()
-    for i in "${!T_NAME[@]}"; do
-        n="${T_NAME[$i]}"
-        case "$n" in "$EXC_NAME"/*) ;; *) continue ;; esac
-        skip=0
-        for x in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do case "$n" in "$x"|"$x"/*) skip=1 ;; esac; done
-        [ "$skip" -eq 1 ] || items+=("$n" "${T_LABEL[$i]}")
-    done
-    geom
-    if [ "${#items[@]}" -eq 0 ]; then
-        wt --title "Nie ma czego dodać" --msgbox "Wszystko pod $EXC_NAME jest już pomijane." 8 "$W"; return 1
-    fi
-    wt --title "$(title 4 "$EXC_NAME -- co pominąć?")" --ok-button "Dodaj" --cancel-button "Wstecz" --notags \
-       --menu "Wybierz dataset, który ma być pomijany (razem z tym, co pod nim)." "$H" "$W" "$LH" \
-       "${items[@]}" || return 1
-    [ -n "$WT_OUT" ] || return 1
-    LE_NEW="$WT_OUT"
-    for x in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do
-        case "$x" in "$LE_NEW"/*) ;; *) keep+=("$x") ;; esac
-    done
-    LE_ITEMS=(${keep[@]+"${keep[@]}"})
-    return 0
-}
-except_flow() { # wyjątki dla jednej pozycji (list_editor: lista pomijanych, Dodaj / Usuń / Gotowe)
-    local idx items=() i n x name ex=()
-    with_kids
-    if [ "${#WK[@]}" -eq 1 ]; then idx="${WK[0]}"
-    else
-        for i in "${WK[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")"); done
-        geom
-        wt --title "$(title 4 'Wyjątki -- dla którego miejsca?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --menu "Wyjątki można wskazać tylko tam, gdzie pod miejscem coś już leży." "$(fit $((${#WK[@]} + 3)))" "$W" "${#WK[@]}" \
-           "${items[@]}" || return 0
-        idx="$WT_OUT"
-    fi
-    name="${B_ROOT[$idx]}"; EXC_NAME="$name"
-    LE_ITEMS=()
-    while IFS= read -r x; do [ -n "$x" ] && LE_ITEMS+=("$x"); done <<<"${B_EXCL[$idx]}"
-    list_editor "$(title 4 "$name -- czego NIE kopiować?")" \
-        "Pomijane (razem z tym, co pod nimi):" \
-        "(nic – kopiowane jest wszystko pod $name)" \
-        "Dodaj wyjątek…" "Usuń wyjątek…" except_add_cb || return 0
-    for n in ${LE_ITEMS[@]+"${LE_ITEMS[@]}"}; do ex+=("$n"); done
-    B_EXCL[$idx]="$(printf '%s\n' ${ex[@]+"${ex[@]}"})"
-    return 0
-}
-remove_flow() {   # jedna pozycja na przejście; po usunięciu wraca okno koszyka
-    local items=() i
-    for i in "${!B_ROOT[@]}"; do items+=("$i" "${B_ROOT[$i]}  -- $(describe "$i")"); done
-    geom
-    wt --title "$(title 4 'Usuń z koszyka')" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
-       --menu "Którą pozycję usunąć z koszyka?" "$(fit $((${#B_ROOT[@]} + 3)))" "$W" "${#B_ROOT[@]}" \
-       "${items[@]}" || return 0
-    [ -n "$WT_OUT" ] && basket_del "$WT_OUT"
-    return 0
-}
-is_excluded() { # <indeks> <nazwa> -> 0, gdy nazwa jest pomijana (sama albo przez przodka)
-    local x
-    while IFS= read -r x; do [ -n "$x" ] && case "$2" in "$x"|"$x"/*) return 0 ;; esac; done <<<"${B_EXCL[$1]}"
-    return 1
-}
-entry_lines() { # <indeks> <ile nazw kopiowanych pokazać> -> 2-3 wiersze o pozycji koszyka
-    # Zwarty zapis: na terminalu 24-wierszowym lista "po jednym w wierszu" chowała pomijane
-    # pod "... i jeszcze 2". POMIJANE są więc ZAWSZE wypisane w całości; skraca się tylko
-    # listę kopiowanych.
-    local r="${B_ROOT[$1]}" cap="$2" i n kept="" nk=0 more=0 excl=""
-    for i in "${!T_NAME[@]}"; do
-        n="${T_NAME[$i]}"; case "$n" in "$r"/*) ;; *) continue ;; esac
-        if is_excluded "$1" "$n"; then
-            # potomek pominiętego przodka nie wymaga własnej wzmianki
-            [ "${n%/*}" != "$r" ] && is_excluded "$1" "${n%/*}" && continue
-            excl="$excl${excl:+, }${n#"$r"/}"
-        elif [ "$nk" -lt "$cap" ]; then kept="$kept${kept:+, }${n#"$r"/}"; nk=$((nk + 1))
-        else more=$((more + 1)); fi
-    done
-    printf '  %s   (+ wszystko, co pod nim POWSTANIE)\n' "$r"
-    if [ -z "$kept" ] && [ -z "$excl" ]; then printf '      dziś nic pod nim\n'
-    else
-        [ -n "$kept" ] && printf '      dziś pod nim: %s%s\n' "$kept" "$( [ "$more" -gt 0 ] && echo " … i $more innych")"
-        [ -z "$kept" ] && printf '      dziś pod nim: nic, co byłoby kopiowane\n'
-    fi
-    [ -n "$excl" ] && printf '      POMIJANE: %s\n' "$excl"
-    return 0
-}
 mode_words() { [ "$RECURSION" = atomic ] && echo "cała gałąź atomowo (-r)" || echo "każdy dataset osobno (-R)"; }
 any_excl() { local i; for i in "${!B_ROOT[@]}"; do [ -n "${B_EXCL[$i]}" ] && return 0; done; return 1; }
-mode_flow() {   # -R/-r: JEDNO na relację; atomowo wyklucza wyjątki, więc pyta, zanim je zdejmie
-    geom
-    local f=OFF a=OFF i; [ "$RECURSION" = atomic ] && a=ON || f=ON
-    wt --title "$(title 4 'Sposób kopiowania')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-       --radiolist "To ustawienie jest JEDNO na całą relację.\n\nOsobno: każdy dataset ma własne migawki; awaria jednego nie zatrzymuje\nreszty. Atomowo: jedna migawka całej gałęzi w tej samej chwili, ale\nnie da się wtedy nic pominąć ani sprzątać migawek u źródła." "$(fit 10)" "$W" 2 \
-       flat   "Każdy dataset osobno (-R)  -- zalecane" "$f" \
-       atomic "Cała gałąź atomowo (-r)" "$a" || return 0
-    [ -n "$WT_OUT" ] || return 0
-    if [ "$WT_OUT" = atomic ] && any_excl; then
-        wt --title "Atomowo nie pozwala pomijać" --yes-button "Zdejmij wyjątki" --no-button "Wstecz" \
-           --yesno "W koszyku są wyjątki, a przy kopiowaniu atomowym nie da się nic pominąć.\n\nZdjąć wszystkie wyjątki i przejść na atomowo?" 11 "$W" || return 0
-        for i in "${!B_ROOT[@]}"; do B_EXCL[$i]=""; done
-    fi
-    RECURSION="$WT_OUT"
-}
-basket_window() {   # -> ACT = add | exc | mode | del | next ; 1 = wstecz
-    local txt="" i lines=0 avail cap menu=() block n
-    geom
-    avail=$((H - 13)); [ "$avail" -lt 4 ] && avail=4
-    cap=6; [ "${#B_ROOT[@]}" -gt 2 ] && cap=3
-    for i in "${!B_ROOT[@]}"; do
-        block="$(entry_lines "$i" "$cap")"; n=$(printf '%s\n' "$block" | fold -s -w $((W - 4)) | grep -c '')
-        if [ $((lines + n)) -gt "$avail" ] && [ "$lines" -gt 0 ]; then
-            txt="$txt  … i jeszcze miejsc: $((${#B_ROOT[@]} - i))\n"; lines=$((lines + 1)); break
-        fi
-        txt="$txt${block//$'\n'/\\n}\n"; lines=$((lines + n))
-    done
-    with_kids
-    menu=(add "Dodaj miejsce…")
-    [ "${#WK[@]}" -gt 0 ] && [ "${BASKET_NO_EXC:-0}" != 1 ] && menu+=(exc "Wyjątki…   (czego pod miejscem NIE kopiować)")
-    [ "${MODE:-}" = local ] || [ "${BASKET_NO_MODE:-0}" = 1 ] || menu+=(mode "Sposób: $(mode_words) -- zmień…")
-    menu+=(del "Usuń pozycję…" next "Dalej")
-    wt --title "$(title 4 "Co kopiować z $HOST?")" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item next \
-       --menu "Kopiowane będzie:\n\n$txt" "$(fit $((lines + 8)))" "$W" "$((${#menu[@]} / 2))" \
-       "${menu[@]}" || return 1
-    ACT="$WT_OUT"
-}
-# basket_step -> 0 = Dalej z niepustym koszykiem, 1 = Wstecz. Pusty koszyk: od razu lista.
+
+# basket_step -> 0 = Dalej z niepustym wyborem, 1 = Wstecz. X12 (właściciel 2026-10-12): JEDNO
+# okno -- drzewo z kratkami jak w eksploratorze (tui/tree.py, curses: drugi wyjątek od whiptail,
+# po grid.py) -- zamiast listy i trzech okien (Dodaj miejsce / Wyjątki / Usuń pozycję). Wynik
+# ten sam co dawniej: B_ROOT (miejsca), B_EXCL (pominięte pod każdym, po jednym w linii),
+# RECURSION. Zaznaczona gałąź = miejsce; odznaczona pod zaznaczoną = wyjątek. BASKET_HIDE
+# (nazwy po spacji) chowa cel kopii razem z tym, co pod nim -- listy tylko poprawne wybory.
+# ZFS_TREE podmienia program okna (testy: tree.py --keys, jak ZFS_GRID dla grid.py).
 basket_step() {
-    while :; do
-        if [ "${#B_ROOT[@]}" -eq 0 ]; then     # pusty koszyk: od razu lista, bez pustego okna
-            pick_one || return 1
-            add_flow "$PICK"
-            continue
-        fi
-        basket_window || return 1
-        case "$ACT" in
-            add)  if pick_one; then add_flow "$PICK"; fi ;;
-            exc)  if [ "$RECURSION" = atomic ]; then
-                      geom
-                      wt --title "Przy atomowo nie da się pomijać" --msgbox "Sposób kopiowania to teraz: $(mode_words).\nJedna migawka całej gałęzi nie ma gdzie niczego odfiltrować.\n\nŻeby wskazać wyjątki, zmień najpierw Sposób na 'każdy dataset osobno'." 12 "$W"
-                  else except_flow; fi ;;
-            mode) mode_flow ;;
-            del)  remove_flow ;;
-            next) return 0 ;;
+    local mode=1 noexc=0 k a b
+    { [ "${MODE:-}" = local ] || [ "${BASKET_NO_MODE:-0}" = 1 ]; } && mode=0
+    [ "${BASKET_NO_EXC:-0}" = 1 ] && noexc=1
+    "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "Co kopiować z $HOST?")" "$HOST" "$mode" "$noexc" \
+        "${RECURSION:-flat}" "${BASKET_HIDE:-}" "${#B_ROOT[@]}" ${B_ROOT[@]+"${B_ROOT[@]}"} ${B_EXCL[@]+"${B_EXCL[@]}"} <<'PYEOF' || return 1
+import sys, json
+ds = json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []
+n = int(sys.argv[9]); roots = sys.argv[10:10 + n]; ex = sys.argv[10 + n:10 + 2 * n]
+spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": sys.argv[5] == "1", "no_exc": sys.argv[6] == "1",
+        "recursion": sys.argv[7], "hide": sys.argv[8].split(),
+        "datasets": [{"name": d.get("name", ""), "used": d.get("used"), "type": d.get("type")} for d in ds],
+        "roots": roots, "excl": {r: [x for x in e.split("\n") if x] for r, e in zip(roots, ex)}}
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump(spec, f, ensure_ascii=False)
+PYEOF
+    ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || return 1
+    "$PY" - "$TMPD/tree-out.json" <<'PYEOF' | tr -d '\r' >"$TMPD/tree-out.tsv" || return 1
+import sys, json
+o = json.load(open(sys.argv[1], encoding="utf-8"))
+print("R\t" + (o.get("recursion") or "flat"))
+for r in o.get("roots") or []:
+    print("B\t%s\t%s" % (r, "\x1f".join((o.get("excl") or {}).get(r) or [])))
+PYEOF
+    B_ROOT=(); B_EXCL=()
+    while IFS=$'\t' read -r k a b; do
+        case "$k" in
+            R) RECURSION="$a" ;;
+            B) B_ROOT+=("$a"); B_EXCL+=("$(printf '%s' "$b" | tr '\037' '\n')") ;;
         esac
-    done
+    done <"$TMPD/tree-out.tsv"
+    [ "${#B_ROOT[@]}" -gt 0 ]
 }
