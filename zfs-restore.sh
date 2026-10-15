@@ -344,7 +344,27 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
         die "restore: staging dataset '$staging' already exists, which should be impossible for a name unique to this attempt. Refusing rather than reusing it."
     fi
 
-    if ! zfs send "${copy}@${snap}" | zfs recv -u "$staging"; then
+    # --with-history (owner 2026-10-15, point 4): not the point alone but every
+    # snapshot of the copy UP TO it -- the oldest one full, then one -I increment
+    # to the point. Without it, a recovered collector copy starts its history
+    # (and its retention) from zero.
+    local _hist_first="" _hist_n=1
+    if [ "${RESTORE_WITH_HISTORY:-0}" -eq 1 ]; then
+        local _hrows _pc
+        _hrows="$(zfs list -H -p -t snapshot -o name,creation -s creation -d 1 "$copy" 2>/dev/null)"
+        _pc="$(printf '%s\n' "$_hrows" | awk -F'\t' -v p="${copy}@${snap}" '$1 == p { print $2; exit }')"
+        _hist_first="$(printf '%s\n' "$_hrows" | awk -F'\t' -v c="$_pc" '$2 ~ /^[0-9]+$/ && ($2+0) <= (c+0) { sub(/.*@/, "", $1); print $1; exit }')"
+        _hist_n="$(printf '%s\n' "$_hrows" | awk -F'\t' -v c="$_pc" '$2 ~ /^[0-9]+$/ && ($2+0) <= (c+0)' | grep -c .)"
+        [ -n "$_hist_first" ] || failure="could not list the history of '$copy' up to $snap"
+    fi
+    if [ -n "$failure" ]; then :
+    elif [ -n "$_hist_first" ] && [ "$_hist_first" != "$snap" ]; then
+        if ! zfs send "${copy}@${_hist_first}" | zfs recv -u "$staging"; then
+            failure="the send/receive pipeline failed (the oldest snapshot, $_hist_first)"
+        elif ! zfs send -I "${copy}@${_hist_first}" "${copy}@${snap}" | zfs recv -u "$staging"; then
+            failure="the send/receive pipeline failed (the history from $_hist_first to $snap)"
+        fi
+    elif ! zfs send "${copy}@${snap}" | zfs recv -u "$staging"; then
         failure="the send/receive pipeline failed"
     fi
 
@@ -389,6 +409,11 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
     echo "Odtworzenie OK."
     echo "  Powstalo:   $landing"
     echo "  Snapshot:   ${landing}@${snap}"
+    if [ "${RESTORE_WITH_HISTORY:-0}" -eq 1 ]; then
+        echo "  Historia:   $_hist_n snapshot(ow) kopii, od ${_hist_first:-$snap} do $snap (--with-history)"
+    else
+        echo "  Historia:   tylko punkt (bez wczesniejszych snapshotow; --with-history przenosi je tez)"
+    fi
     echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
     echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu robi forma relacyjna: restore <relacja> [--at=...]."
 }
@@ -4439,6 +4464,7 @@ cmd_restore() {
             --config)     need_val --config "${2:-}"; config="$2"; shift ;;
             --yes|-y)     yes=1 ;;
             --key-file=*) RESTORE_KEY_FILE="${a#*=}" ;;
+            --with-history) RESTORE_WITH_HISTORY=1 ;;
             --*) die "restore: unknown option $a" ;;
             *)
                 # Positional tokens: the public addresses. Resolved AFTER the
