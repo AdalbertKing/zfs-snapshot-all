@@ -667,6 +667,28 @@ if printf '%s' "$ek2" | grep -qF "er=[raw"$'\t'"yes"$'\n'"cipher"$'\t' \
 else
     bad "relationship engine fields: raw / remote rebuild" "$ek2"
 fi
+# RESTORE DISPATCH (2026-10-15, measured on pve9b): `zfs-backup.sh restore <local relation>
+# --plan` ended rc=1 WITHOUT A WORD -- the dispatch called load_client_and_connection on the
+# record, which dies on a relationship with no peer, and that die was an exit of the whole
+# script with its output sent to /dev/null. The second record (remote, connection fields
+# missing) dies the same way inside the load. Regression: the public entry says SOMETHING --
+# it reaches zfs-restore.sh, which speaks for itself; silence is the defect.
+RD="$RL/rd"; mkdir -p "$RD/clients"
+printf 'CLIENT_NAME=rdl\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\nCRON_CONFIG=%s\n' "$RD/c.conf" > "$RD/clients/rdl.conf"
+printf 'CLIENT_NAME=rdr\nSTATE=active\n' > "$RD/clients/rdr.conf"
+printf '[dataset:rpool/a]\n\tdst = hdd/backups\n\tpair_label = rdl\n' > "$RD/c.conf"
+rdl=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdl --plan --config="$RD/c.conf" 2>&1)
+rdr=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdr --plan --config="$RD/c.conf" 2>&1)
+# Both must come from zfs-restore.sh: the local one gets its read-only plan (or, where
+# zfs cannot list the copy, zfs-restore.sh's own refusal); the remote one its refusal
+# naming the label. Silence is the defect.
+# NOTE: on Git Bash the fatal-die TERM does not reach the parent, so the remote case
+# only discriminates on Linux (CI) -- measured 2026-10-15.
+if printf '%s' "$rdl" | grep -qE 'Plan odtworzenia|^FATAL: restore:' && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
+    ok "restore dispatch: a local relationship, and one whose connection cannot be loaded, reach zfs-restore.sh -- no silent rc=1"
+else
+    bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact
