@@ -6721,7 +6721,7 @@ relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block fr
         [ -n "${RB[gfs]:-}" ] && printf '\tgfs = %s\n' "${RB[gfs]}"
         # The engine fields (set-transfer's) are not tier fields, but they live in this
         # block too: a rewrite that dropped them undid set-transfer on the next set-tiers.
-        for e in history compression cipher autotune; do [ -n "${RB[$e]:-}" ] && printf '\t%s = %s\n' "$e" "${RB[$e]}"; done
+        for e in history compression cipher autotune raw; do [ -n "${RB[$e]:-}" ] && printf '\t%s = %s\n' "$e" "${RB[$e]}"; done
         for t in "${RB_TIERS[@]}"; do
             for b in target source; do [ "${RB[$t.$b]:-}" = no ] && printf '\t%s.%s = no\n' "$t" "$b"; done
             # every base field this tier mentions, canonical order first
@@ -6770,8 +6770,10 @@ relblock_engine_keep() {   # <config> <name> -> RB_ENGINE_KEEP: "key<TAB>value" 
     local cfg="$1" name="$2" k v
     RB_ENGINE_KEEP=""
     while IFS=$'\t' read -r k v; do
-        case "$k" in history|compression|cipher|autotune) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac
+        case "$k" in history|compression|cipher|autotune|raw) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac
     done < <(relblock_dump "$cfg" "$name")
+    # raw is NOT taken from a section: a local relationship keeps it there on purpose
+    # (local-backup writes it per [dataset:] and local_relation_argv reads it back).
     while IFS=$'\t' read -r k v; do
         case "$k" in history|compression|cipher|autotune) case "$RB_ENGINE_KEEP" in *"$k"$'\t'*) ;; *) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac ;; esac
     done < <(awk -v want="$name" '
@@ -6870,6 +6872,8 @@ relblock_adopt_remote() {   # <workfile> <name> <rebuild 0|1>
         END { flush() }' "$wf" > "$tmp" && cat "$tmp" > "$wf" || { rm -f "$tmp"; return 1; }
     rm -f "$tmp"
     [ "$rebuild" -eq 1 ] || return 0
+    local RB_ENGINE_KEEP=""
+    relblock_engine_keep "$wf" "$name"   # before the old block goes (edit-relation --profile= on a remote one)
     remove_config_section "$wf" "[relation:$name]" 2>/dev/null || :
     local hasS=0; [ -n "$(relblock_sections "$wf" "$name" source)" ] && hasS=1
     local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
