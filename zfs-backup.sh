@@ -4015,7 +4015,7 @@ coverage_conflicts() {   # <this client> <requested path>...
         # LOAD_*/MANAGED_* already loaded, and loading another record here
         # would overwrite them mid-emit.
         (
-            CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""
+            CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""; RUX_MODE=""; REQUESTED_DATASETS=""
             # REV-20260809-084 F1. This was `|| exit 0`, which turned an
             # unreadable or unparseable record into "no conflict" -- fail-OPEN,
             # and it made the refusal path in assert_no_coverage_overlap
@@ -4030,8 +4030,15 @@ coverage_conflicts() {   # <this client> <requested path>...
             [ -n "${CLIENT_NAME:-}" ] || exit 2
             [ "${CLIENT_NAME:-}" = "$me" ] && exit 0
             [ "${STATE:-}" = removed ] && exit 0
-            local owned req
-            for owned in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-}; do
+            local owned req _src_owned=""
+            # A LOCAL relationship also owns its SOURCES: it makes and prunes its
+            # family there (owner 2026-10-15: two relationships making or pruning the
+            # same family on one dataset is the collision; on THIS host it is
+            # refused). Every caller passes paths on this host, so comparing them
+            # with a local relationship's sources is like with like. A remote
+            # relationship's REQUESTED_DATASETS live on another host and stay out.
+            [ "${RUX_MODE:-}" = local ] && _src_owned="${REQUESTED_DATASETS//,/ }"
+            for owned in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-} $_src_owned; do
                 for req in "$@"; do
                     path_overlaps "$owned" "$req" \
                         && printf '%s\t%s\t%s\n' "${CLIENT_NAME:-$f}" "$owned" "$req"
@@ -4095,6 +4102,31 @@ $detail
 
 Two high-level relationships covering the same datasets would send and prune the same snapshots under different policy. Nothing has been changed -- no config, no crontab.
 If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+}
+
+# warn_remote_collector_scope <path>... -- a WARNING, never a refusal (owner
+# 2026-10-15). This host only knows WHICH of its datasets it handed to another
+# collector (peers/<collector>.conf, PEER_JOIN_GRANTED_DATASETS) -- not whether
+# that collector stamps and prunes its own family there or only carries what
+# exists (a passive next hop: the pve1 -> pve2 -> pve3 chain, which is fine). So
+# an overlap is said, with what it means, and the decision stays with the admin.
+warn_remote_collector_scope() {
+    local f peer granted g p seen=""
+    for f in "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}"/*.conf; do
+        [ -r "$f" ] || continue
+        peer="$(basename "$f" .conf)"
+        granted="$(record_get "$f" PEER_JOIN_GRANTED_DATASETS 2>/dev/null)" || continue
+        for p in "$@"; do
+            for g in $granted; do
+                path_overlaps "$g" "$p" || continue
+                case " $seen " in *" $peer:$p "*) continue ;; esac
+                seen="$seen $peer:$p"
+                warn "'$p' overlaps '$g', which this host shares with collector '$peer' (its relationship reads it from here). If that relationship makes or prunes the same snapshot family, each prunes the other's snapshots as well, so the shorter retention decides for both. A passive collector, which only carries existing snapshots, does not collide."
+                break
+            done
+        done
+    done
+    return 0
 }
 
 # REV-20260809-089. The ownership test remove_managed_sections applies, made
@@ -4475,6 +4507,8 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # Fail closed BEFORE the first mutation: remove_managed_sections below is
     # already a write to the working config (REV-20260809-083).
     [ "${#managed[@]}" -gt 0 ] && assert_no_coverage_overlap "$name" "${managed[@]}"
+    # A landing this host also shares onward (pve1 -> pve2 -> pve3): said, not refused.
+    [ "${#managed[@]}" -gt 0 ] && warn_remote_collector_scope "${managed[@]}"
 
     # REV-20260809-089. The old code removed and regenerated EVERY section on
     # EVERY call. That is right exactly once -- at CREATE, when there is nothing
@@ -8527,6 +8561,9 @@ cmd_local_backup() {
         fi
     done
 
+    # Kept for the host-wide collision check below (after the argument checks).
+    local -a _lb_req_roots=("${roots[@]}")
+
     # Refuse when a DISPUTED root, or the target, overlaps a section already
     # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
     # refusal.
@@ -8663,6 +8700,25 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             die "local-backup: relationship '$lb_name' already exists on this host (state $(record_get "$_lbrec" STATE)). Choose another --name, or remove it first (zfs-backup.sh delete-relation $lb_name). Nothing was changed."
         fi
     fi
+    # ON THIS HOST, ACROSS ACCOUNTS (owner 2026-10-15). After the argument checks, so a
+    # usage error is reported as such, not as a collision. The section scan below sees
+    # only this account's config. A named relationship's sources and landings are
+    # also checked against every relationship record on the host: their copies,
+    # their prune scopes and -- for a local relationship -- their sources. Measured
+    # on pve9b: a root-account relationship on hdd/ct planned cleanly while the
+    # zfsbackup account's lokalna-hdd-vms already made and pruned automated_* there.
+    if [ -n "$lb_name" ]; then
+        local -a _cov=("${_lb_req_roots[@]}")
+        [ "$no_copy" -eq 1 ] || for r in "${_lb_req_roots[@]}"; do _cov+=("$target/$r"); done
+        local _cov_out _cov_rc=0
+        _cov_out="$(coverage_conflicts "$lb_name" "${_cov[@]}")" || _cov_rc=$?
+        if [ "$_cov_rc" -ne 0 ] || [ -n "$_cov_out" ]; then
+            rm -f "$cand"
+            assert_no_coverage_overlap "$lb_name" "${_cov[@]}"
+        fi
+        warn_remote_collector_scope "${_cov[@]}"
+    fi
+
     # A FLAT profile prunes the source INLINE, in the tiers the [dataset:] section
     # references -- so with --source-profile those tiers must be the SOURCE family
     # (same schedules and families, the source's counts). A ladder keeps its source
@@ -10535,6 +10591,7 @@ cmd_seed() {
         seed_candidates+=("$(client_local_path "$ds")")
     done
     assert_no_coverage_overlap "$name" "${seed_candidates[@]}"
+    warn_remote_collector_scope "${seed_candidates[@]}"
 
     # STATE=seeding only AFTER the refusals above (2026-09-23). It used to be
     # written before load_client_and_connection, so a seed the coverage guard
@@ -13745,6 +13802,10 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
             local_backup_overlap "$ds" "$other" \
                 && die "add-source: '$ds' overlaps '$other', already in $(basename "$cronfile") (equal or parent/child) -- refusing; nothing was changed."
         done < <(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cronfile")
+        # The same host-wide check local-backup makes (other accounts' relationships;
+        # see coverage_conflicts), and the warning about a remote collector's scope.
+        assert_no_coverage_overlap "$name" "$ds" "$target/$ds"
+        warn_remote_collector_scope "$ds" "$target/$ds"
     fi
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
@@ -17450,10 +17511,11 @@ cmd_status() {
         local f
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
+            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""; RUX_MODE=""
               record_load client "$f"
               pausemark=""
               client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
+              [ "${RUX_MODE:-}" = local ] && ACTIVE_ENDPOINT="(lokalna)"
               printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
         done
         return 0
@@ -17461,6 +17523,11 @@ cmd_status() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
     record_load client "$cpath"
+    # A LOCAL relationship has no peer, no endpoint and no gate to ask: the view
+    # below printed "Blokada u peera: NIEZNANA", "Endpoint docelowy: ? (?:?)",
+    # "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)" and
+    # "Zrodla: ?" for one with twelve cron lines (pve9b, 2026-10-15). Its own view.
+    if [ "${RUX_MODE:-}" = local ]; then status_local_view "$name"; return 0; fi
     local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
     [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
@@ -17572,6 +17639,84 @@ cmd_status() {
             echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
             echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
         fi
+    fi
+}
+
+# status_local_view <name> -- the text view of a LOCAL relationship (record
+# already loaded by cmd_status). Everything here is on this host: the record, the
+# config it names, the account's crontab. Nothing is asked of a peer.
+status_local_view() {
+    local name="$1" acct="${LOCAL_USER:-root}" ncron="?" _st_prefix _st_last
+    echo "Klient:            ${CLIENT_NAME:-$name}"
+    if [ -n "${CLIENT_TARGET:-}" ]; then
+        echo "Typ:               lokalna -- zrodlo i kopia na tym hoscie"
+    else
+        echo "Typ:               lokalna, tylko migawki -- bez kopii, migawki zostaja w zrodle"
+    fi
+    echo "Stan:              ${STATE:-unknown}"
+    if client_paused "$name"; then
+        local PAUSED_AT="" PAUSED_REASON=""
+        record_load pause "$(pause_marker_path "$name")"
+        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+        echo "                   joby z etykieta '-L $name' sa pomijane. Wznowienie: $0 resume-client $name"
+    fi
+    echo "Zrodla:            $(printf '%s' "${REQUESTED_DATASETS:-?}" | sed 's/,/, /g')"
+    echo "Cel:               ${CLIENT_TARGET:-(brak -- tylko migawki)}"
+    [ -n "${MANAGED_DATASETS:-}" ] && echo "Kopie:             $MANAGED_DATASETS"
+    echo "Konto:             $acct"
+    echo "Config:            ${CRON_CONFIG:-?}"
+    # The account's crontab, read here: the lines of THIS relationship carry
+    # `-L <name>` (snapshot, prune) or name it in the monitor's -L.
+    # A crontab that cannot be read is "?", never "no lines" (that would read as
+    # "nothing runs"). Fixed-string match on `-L <name>` followed by a space or a
+    # quote, as the engines' lines and the monitor's line spell it.
+    # "no crontab for <user>" is an empty crontab (zero lines), not an unreadable one.
+    local _tab _trc=1
+    if [ "$(id -un 2>/dev/null)" = "$acct" ]; then
+        _tab="$(crontab -l 2>&1)"; _trc=$?
+    elif [ "$(id -u)" = 0 ]; then
+        _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?
+    fi
+    if [ "$_trc" -eq 0 ]; then ncron=""
+    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""
+    fi
+    [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
+    if [ "$ncron" = "?" ]; then
+        echo "Cron:              ? (crontab konta '$acct' nieczytelny -- czyta go tylko root albo to konto)"
+    elif [ "$ncron" -gt 0 ]; then
+        echo "Cron:              $ncron linii w crontabie konta '$acct'"
+    else
+        echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"
+    fi
+    # A snapshot-only relationship has neither an endpoint nor copies, which is
+    # what status_quiesce_from_cron reads as "not activated" -- its sources stand in.
+    echo "Spojnosc:          $(MANAGED_DATASETS="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}" status_quiesce_from_cron "$CLIENT_NAME")"
+    echo "Utworzono:         ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    _st_prefix="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}"
+    _st_prefix=${_st_prefix%% *}; _st_prefix=${_st_prefix%%,*}
+    echo
+    if [ -n "$_st_prefix" ] && status_running_now "$_st_prefix"; then
+        echo "Teraz:             (transfer w toku)"
+    else
+        echo "Teraz:             nic nie biegnie dla tej relacji"
+    fi
+    # The ACCOUNT's stats log (the jobs run as that account), and the push
+    # engine's line carries the relationship as "label" -- status_last_result
+    # reads a pull's line from root's log, which a local relationship never writes.
+    local _home _slog
+    _home="$(getent passwd "$acct" 2>/dev/null | cut -d: -f6)"
+    if [ "$acct" != root ] && [ -n "$_home" ]; then _slog="$_home/zfs-snapshot-stats.log"
+    else _slog="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"; fi
+    _st_last="$(grep -F "\"script\":\"snapsend.sh\",\"label\":\"$name\"" "$_slog" 2>/dev/null | tail -1 \
+        | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p')"
+    if [ -n "$_st_last" ]; then
+        set -- $_st_last
+        echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+    else
+        echo "Ostatni wynik:     brak zapisu w historii ($_slog)"
+        echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
     fi
 }
 

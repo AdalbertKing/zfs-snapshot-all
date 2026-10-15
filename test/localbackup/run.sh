@@ -689,6 +689,53 @@ if printf '%s' "$rdl" | grep -qE 'Plan odtworzenia|^FATAL: restore:' && printf '
 else
     bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
 fi
+# COLLISION ON ONE DATASET (owner 2026-10-15). On THIS host it is refused: a local
+# relationship owns its SOURCES too (it makes and prunes its family there), across
+# accounts -- measured on pve9b, a root-account relationship on hdd/ct planned
+# cleanly next to zfsbackup's lokalna-hdd-vms. A remote relationship's
+# REQUESTED_DATASETS live on another host and must not count. A dataset this host
+# shares with another collector gets a WARNING only (that collector may be a
+# passive next hop -- the pve1 -> pve2 -> pve3 chain -- which does not collide).
+CV="$RL/cv"; mkdir -p "$CV/clients" "$CV/peers"
+printf 'CLIENT_NAME=loc\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=\nREQUESTED_DATASETS=rpool/ct\\,rpool/kr\nMANAGED_DATASETS=\nCRON_CONFIG=/x\n' > "$CV/clients/loc.conf"
+printf 'CLIENT_NAME=rem\nSTATE=active\nPEER_HOST=10.9.9.9\nREQUESTED_DATASETS=rpool/data\nMANAGED_DATASETS=hdd/backups/10.9.9.9/rpool/data\n' > "$CV/clients/rem.conf"
+printf 'PEER_JOIN_MODE=""\nPEER_JOIN_GRANTED_DATASETS="rpool/sh rpool/sh/a"\n' > "$CV/peers/pve9.conf"
+cv1=$( ( CLIENTS_DIR="$CV/clients"; coverage_conflicts new rpool/ct/sub rpool/data rpool/kr2 ) 2>&1 )
+cv2=$( ( CLIENTS_DIR="$CV/clients"; coverage_conflicts loc rpool/ct ) 2>&1 )
+cv3=$( ( PEER_STATE_DIR="$CV/peers"; warn_remote_collector_scope rpool/sh/a/b rpool/other ) 2>&1 )
+cv4=$( ( PEER_STATE_DIR="$CV/peers"; warn_remote_collector_scope rpool/other ) 2>&1 )
+if printf '%s' "$cv1" | grep -qF "loc"$'\t'"rpool/ct"$'\t'"rpool/ct/sub" \
+   && ! printf '%s' "$cv1" | grep -qF "rpool/data" && ! printf '%s' "$cv1" | grep -qF "rpool/kr2" \
+   && [ -z "$cv2" ] \
+   && printf '%s' "$cv3" | grep -qF "collector 'pve9'" && ! printf '%s' "$cv3" | grep -qF "rpool/other" \
+   && [ -z "$cv4" ]; then
+    ok "collision guard: a local relationship's source counts on this host (not a remote one's, not its own); a shared dataset only warns"
+else
+    bad "collision guard: local sources / remote-collector warning" "cv1=[$cv1]" "cv2=[$cv2] cv3=[$cv3] cv4=[$cv4]"
+fi
+# STATUS OF A LOCAL RELATIONSHIP (2026-10-15, pve9b): the text view printed the
+# remote layout -- "Blokada u peera: NIEZNANA", "Endpoint docelowy: ? (?:?)", "Cron
+# dziala przez: (jeszcze nie aktywowany -- brak linii cron)", "Zrodla: ?" -- for a
+# relationship with twelve cron lines. Its own view: type, sources, target, account,
+# config, the account's cron lines, the last push result by label. The account is the
+# caller here (so its own crontab is read without root); crontab is the stub.
+SV="$RL/sv"; mkdir -p "$SV/clients"
+me_user="$(id -un 2>/dev/null || echo nobody)"
+printf 'CLIENT_NAME=svl\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nLOCAL_USER=%s\nCRON_CONFIG=/etc/x.conf\nCREATED_AT=2026-10-15\n' "$me_user" > "$SV/clients/svl.conf"
+svo=$( ( CLIENTS_DIR="$SV/clients"
+         crontab() { printf '1 * * * * /x/zfs-job.sh "h snap" -- /x/snapsend.sh -m auto_ -L svl "rpool/a" ""\n21 * * * * /x/delsnaps.sh -L svl "rpool/a" auto_ -H24\n1 * * * * /x/snapsend.sh -L other "rpool/z"\n'; }
+         cmd_status svl; echo "---"; cmd_status
+         echo "--- unreadable:"; crontab() { echo "crontab: permission denied" >&2; return 1; }; cmd_status svl ) 2>&1 )
+if printf '%s' "$svo" | grep -qF "lokalna, tylko migawki" && printf '%s' "$svo" | grep -qF "Zrodla:            rpool/a, rpool/b" \
+   && printf '%s' "$svo" | grep -qF "Cron:              2 linii" \
+   && ! printf '%s' "$svo" | grep -qE "Blokada u peera|Endpoint docelowy|Cron dziala przez" \
+   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(lokalna\)" \
+   && printf '%s' "${svo#*--- unreadable:}" | grep -qF "Cron:              ? (crontab" \
+   && ! printf '%s' "${svo#*--- unreadable:}" | grep -qF "BRAK linii"; then
+    ok "status: a local relationship has its own view (type, sources, its cron lines; no peer, no endpoint; unreadable crontab = ?)"
+else
+    bad "status of a local relationship" "$svo"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact

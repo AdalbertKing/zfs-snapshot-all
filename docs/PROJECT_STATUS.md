@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a4f1a6f5a3b6b30e -->
+<!-- status-covers-digest: df212c01d3c79e72 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -43,7 +43,35 @@
   cel i `--onto`); (3) forma relacyjna dla relacji lokalnej nadpisuje bez pytania; (4) odtworzenie „obok” przenosi
   sam punkt, bez historii przed nim.
 
-- **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
+- **Kolizja na jednym datasecie: odmowa w obrębie hosta, ostrzeżenie przy kolektorze zdalnym (2026-10-15; `fix/coverage-local-sources`).**
+  Właściciel: kolizja to dwie relacje, które robią albo przycinają tę samą rodzinę migawek na jednym datasecie;
+  pasywny następny skok (łańcuch pve1 -> pve2 -> pve3) jej nie tworzy. Na labie (pve9b) zmierzone: `hdd/ct`
+  przycina lokalnie `lokalna-hdd-vms` (24 h) i zdalnie relacja `g3-ab` z pve11 (`-H6`), więc zostaje 6 godzinowych; a relacja
+  konta root na `hdd/ct` przechodziła plan obok relacji konta zfsbackup. Teraz: strażnik pokrycia
+  (`coverage_conflicts`) liczy też ŹRÓDŁA relacji lokalnych (`RUX_MODE=local`, `REQUESTED_DATASETS`), a
+  `local-backup` (od X27 S4 zawsze z `--name`) i `add-source` relacji lokalnej wołają go dla źródeł i kopii -- odmowa ponad kontami tego hosta.
+  Pokrycie z datasetami udostępnionymi innemu kolektorowi (`peers/*.conf`, `PEER_JOIN_GRANTED_DATASETS`) daje
+  tylko OSTRZEŻENIE w `local-backup`, `add-source`, seedzie i aktywacji relacji zdalnej: zapis parowania ma tryb
+  (`PEER_JOIN_MODE`: backup/sync), ale nie mówi, czy kolektor robi własne migawki, czy jest pasywny; właściciel:
+  bez dokładania tej informacji przy parowaniu. Na żywo (pve9b, plany): root na `hdd/ct` --
+  odmowa („covered by relationship 'lokalna-hdd-vms'”); druga relacja na `hdd/test-migawki` -- odmowa; „tylko
+  migawki” na `hdd/data` -- ostrzeżenie (kolektor pve9), plan przechodzi; „Użyj szablonu” dla `lokalna-hdd-vms` --
+  przechodzi z ostrzeżeniem dla `hdd/ct` (kolektor pve11). Istniejąca kolizja `hdd/ct` zostaje jako przykład.
+  Test w `localbackup` (strażnik i ostrzeżenie wprost; ścieżki `local-backup`/`add-source` sprawdzone planami na
+  pve9b); kontrola negatywna na `main` daje BAD. Suita `localbackup` na pve9b 126/27, na `main` 125/27, te same
+  porażki (środowisko hosta).
+
+- **`status NAZWA` dla relacji lokalnej ma własny widok (2026-10-15; #543).** Wcześniej tekstowy
+  `status` pokazywał relację lokalną jak zdalną: „Blokada u peera: NIEZNANA”, „Endpoint docelowy: ? (?:?)”, „Cron
+  dziala przez: (jeszcze nie aktywowany -- brak linii cron)”, „Zrodla: ?” przy relacji z 12 liniami w cronie (GUI,
+  które czyta `status --json`, pokazywało ją dobrze). Teraz (`status_local_view`): typ („lokalna -- zrodlo i kopia na tym hoscie” albo „lokalna, tylko
+  migawki”), stan, pauza, źródła, cel, kopie, konto, config, liczba linii tej relacji w crontabie konta (nieczytelny crontab = „?”, nie „brak linii”), spójność
+  (także dla relacji bez kopii), ostatni wynik z dziennika konta po etykiecie (`snapsend.sh`, `"label"`). Na liście
+  (`status` bez nazwy) relacja lokalna ma `endpoint=(lokalna)`. Na żywo pve9b: `lokalna-hdd-vms` i `test-migawki`
+  pokazują 12 linii crona i ostatni wynik „success”; pve10: widok relacji zdalnych bez zmian. Test w
+  `localbackup`, kontrola negatywna na `main` daje BAD.
+
+- **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; #541, wdrożone na pve9b i pve10).**
   Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
   --target=hdd/test-kreator --at="2026-10-15 06:30"` zgłaszał „OK … rewind from …” i „all 1 dataset(s) in scope recovered”, a źródło zostawało bez zmian
   (migawka 07:01, zakładka i zapis po migawce na miejscu). Przyczyna: etap cofnięcia (`zfs rollback -r` każdego
