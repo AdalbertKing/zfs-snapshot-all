@@ -723,8 +723,7 @@ r1local() {   # <strategy> [local newest snapshot] [base on the source] -> "<rc>
                *"-s createtxg"*)      printf '%s\n' "${LOCAL_NEWEST:-hdd/local/target@$P}" ;;
                *"-t snapshot"*)       printf 'hdd/copy@automated_daily_2026-08-22_18-00-04\n'
                                       printf 'hdd/copy@%s\n' "$P" ;;
-               "list -H -o name -d 0 -r hdd/local/target") printf 'hdd/local/target\n' ;;
-               "list -H -o name "*)   printf '%s\n' "${*##* }" ;;
+               "list -H -o name "*)   printf '%s\n' "${@: -1}" ;;
                *" guid "*)            printf '111\n' ;;
                *" referenced "*)      printf '4096\n' ;;
              esac; }
