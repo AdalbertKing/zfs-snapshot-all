@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f6ce3ba6a80ad9cd -->
+<!-- status-covers-digest: f25ef8ece7f69857 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -62,11 +62,21 @@
   `replace` przez konto delegowane OK, GUID zgodny z C; korzeń naprawiony ręcznie jako root (destroy, create, gołe
   `zfs allow` zamiast `deploy.sh --allow-restore … --replace` z komunikatu), potem `restore k2-bc` 4/4; następne biegi k2-ab i k2-bc przeszły, A, B i C na tej samej
   migawce (ten sam GUID).
-  **Luka wdrożenia (otwarta):** bramka działa jako KOPIA w `/usr/local/sbin/zfs-pair-gate`, instalowana tylko przy
-  dołączaniu (`install_pair_gate` w `do_join`, `deploy.sh`); godzinny `git pull` jej nie odświeża. Na labie stała
-  bramka z 6.10/12.10 (poprawka #547 zainstalowana tam ręcznie); na hoście ze starą bramką zakres wielodatasetowy
-  nadal idzie pusty, więc nowy kolektor odmówi każdego zdalnego `replace` (także drogi przez dzieci) -- bezpiecznie,
-  ale bez drogi naprzód, dopóki ktoś nie zainstaluje nowej bramki.
+  **Luka wdrożenia -- naprawiona (`fix/gate-refresh`, decyzja właściciela 2026-10-15: „aktualizacja odświeża sama”).**
+  Bramka działa jako KOPIA w `/usr/local/sbin/zfs-pair-gate`; do tej pory pisał ją tylko `--join`
+  (`install_pair_gate`), a godzinny self-update uruchamia goły `deploy.sh`, więc poprawka #547 dotarła na lab tylko
+  ręcznie, a pve1/pve2 mają starą. Teraz goły `deploy.sh` ma fazę 7a (`refresh_pair_gate`): bramka, która jest i różni
+  się od checkoutu, zostaje zastąpiona -- nowa zapisana obok, uruchomiona z `-V`, dopiero potem `mv` na miejsce;
+  nowa, która się nie uruchamia, zostawia starą. Brak bramki = nic nie tworzy (host bez relacji). `--check-only` nie
+  rusza pliku, tylko zgłasza (audyt kończy się wtedy rc 1). Porażka nie zatrzymuje reszty wdrożenia, ale bieg kończy się rc 1, więc self-update to zgłasza. Testy w
+  `test/pairgate/run.sh` (sekcje 9b/9c; mutacje: bez `-V`, bez straży `--check-only`, tworzenie, gdy bramki brak --
+  każda oblewa swoją asercję; 9c pilnuje tylko kolejności w pliku, rc 1 na końcu nie jest uruchamiane w teście). Na żywo pve9b: bramka sprzed #547 podłożona, goły `deploy.sh` z gałęzi ją wymienił (md5 =
+  checkout), drugi bieg „matches”, `--check-only` „matches”, crontab bez zmian, host wrócił na `main`.
+  Produkcja pve1/pve2 (odczyt 15.10: f0c705e9, bez wstrzymania i bez `no-auto-apply`, stara bramka) dostanie nową
+  pierwszą godzinną aktualizacją, która przesunie rewizję -- czyli po scaleniu.
+  Przy okazji (otwarte, lab): na pve9b goły `deploy.sh` kończy się rc 1 już na `main` -- faza 8 (`git pull` jako
+  konto w `/home/bkp/zfs-snapshot-all`) kończy się FATAL: log mówi, że origin nie zgadza się z GitHubem i pull nie
+  przechodzi; przyczyna nieustalona. Godzinny self-update zgłasza „deploy.sh exited 1”. Faza 7a biegnie przed fazą 8, więc bramkę to nie blokuje. Nie ruszane.
 
 - **Przywracanie: potwierdzenie nadpisania, klucz nośnika, droga „usuń + obok” (2026-10-15; `feat/restore-confirm-key`).**
   Decyzje właściciela po kampanii odzysku: (3) „nadpisanie zawsze z potwierdzeniem, i w GUI, i we wsadzie,
