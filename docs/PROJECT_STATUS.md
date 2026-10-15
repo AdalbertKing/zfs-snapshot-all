@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 81dda857142017d9 -->
+<!-- status-covers-digest: 6831548bf9d6ac45 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,6 +21,23 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Okno GUI „Przywróć z dysku” -- C2b (2026-10-15; `feat/restore-window-c2b`).**
+  F9 na F6 Replika (pasek: „Przywróć z dysku”, przy 80 kolumnach skrót „Odzysk”, żeby F10 się mieścił; pomoc F1) ->
+  `zfs-backup.sh restore --from-copy --ask [CEL ZAZNACZONEJ REPLIKI]` -> `tui/restore.sh --from-copy [DATASET]`.
+  Działa BEZ replik i bez rekordów relacji (czysty serwer po ransomware, dysk zaimportowany ręcznie). Skąd: drzewo
+  wszystkich datasetów hosta (całe gałęzie, bez wyjątków; DATASET wstępnie zaznaczony). Dokąd: nazwa na tym hoście
+  dla każdego źródła, podpowiedź = odcięcie `<…>/backups/<host>/` (kopia z kolektora wraca pod swoją nazwę), inaczej
+  `<pula>/restore/<nazwa>`; cel, który istnieje -> pytanie „Nadpisz” (`--overwrite`). Z kiedy: migawki pierwszego
+  źródła (`--at` dla innego niż najnowszy) + pytanie „z historią” (`--with-history`). Polecenie: `restore
+  --from-copy=… --onto=… [--at] [--with-history] [--overwrite]`, bez `--yes` -- podgląd, „Odtworzyc? [t/N]” i klucz
+  zaszyfrowanej kopii zadaje samo polecenie. Wspólne z C2a: uruchomienie (`run_cmd`) i lista punktów
+  (`build_points`). Testy: `test/tui` +9 asercji (drzewo z podpowiedzią i okno „JUŻ ISTNIEJĄ”, polecenie dla nadpisania / innej nazwy z `--at` i historią /
+  podpowiedź bez wzorca / dwa źródła, podpowiedź z odcięciem, użycie, F9 na F6, pasek przy 80 kolumnach); na pve9b
+  301 PASS, 7 FAIL = te same co na `main`. Tryb napisał `simple-coder` ze specyfikacji. Na żywo pve9 (prawdziwy
+  whiptail przez pty, 120x50): źródło `…/hdd/data/docs` podane jako podpowiedź, cel wpisany ręcznie
+  `hdd/restore/docs-c2b`, polecenie zapytało „Odtworzyc?”, po „t” -- utworzone, GUID zgodny z kopią, „GOTOWE.”;
+  dataset testowy skasowany. Niezmierzone: zaszyfrowana kopia z prawdziwego dysku USB (pytanie o klucz) przez okno.
+
 - **Okno GUI „Przywróć” z relacji -- C2a (2026-10-15; `feat/restore-window-c2a`).**
   `p` w szczegółach relacji (Enter na F3; stopka „e zmień  p przywróć”, pomoc F1) -> `zfs-backup.sh restore NAZWA
   --ask` -> `tui/restore.sh` (whiptail, jak `remove-replica --ask`). NIE na samej liście F3, jak ustalono: tam każda
@@ -32,7 +49,7 @@
   `restore A [--source=…]`) -> z kiedy (punkty z `--plan --json`, najnowszy domyślnie, inny = `--at`) ->
   podsumowanie z poleceniem i zgodą do wydania na celu (`--allow-restore=<nazwa tego kolektora>`;
   `Uruchom` / `Wstecz`). Bez kratki „z historią”: `--with-history` działa tylko w formach lądujących lokalnie
-  (`--from-copy`, `--dataset/--snapshot`); forma relacyjna go przyjmuje i po cichu pomija (luka do zapamiętania). Wejście „z dysku” (F9 na F6, `--from-copy`) = C2b, jeszcze nie ma.
+  (`--from-copy`, `--dataset/--snapshot`); forma relacyjna go przyjmuje i po cichu pomija (luka do zapamiętania). Wejście „z dysku” = C2b (wpis wyżej).
   Testy: `test/tui` -- 10 nowych asercji (polecenie dla obok/na miejsce/całość/wyjątek, wybór configu, Wstecz nic
   nie uruchamia, brak kopii, `p` w szczegółach i NIE na liście, przekazanie `restore --ask`; test stopki zmieniony); na pve9b 292 PASS, 7 FAIL = te same co na
   `main` (środowisko). Okno napisał `simple-coder` ze specyfikacji. Na żywo pve9 (prawdziwy whiptail przez pty):
