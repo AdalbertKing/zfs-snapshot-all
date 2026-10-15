@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 80668590c7120ec0 -->
+<!-- status-covers-digest: d7004391cf2efb10 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -49,8 +49,10 @@
   bez `--yes` -- lista nadpisań i pytanie; „n” = nic nie zmienione, „t” (tak) = wykonane cofnięcie; `--yes` bez terminala --
   bez pytania; replika `usb9` bez załadowanego klucza -- klucz z pliku hosta załadowany, odtworzenie OK (GUID
   zgodny), klucz zdjęty; odmowa z drogą w dwóch krokach. Nie sprawdzone na żywo: `--key-file` i ręczne wpisanie
-  klucza (odmowę bez klucza pokrywa `test/restore/fromcopy.sh`). Otwarte do dyskusji: (4) odtworzenie „obok”
-  przenosi sam punkt, bez historii przed nim.
+  klucza (odmowę bez klucza pokrywa `test/restore/fromcopy.sh`). (4) decyzja właściciela: domyślnie sam punkt, `--with-history`
+  przenosi wszystkie snapshoty kopii do punktu (najstarszy w całości + przyrost `-I`); na żywo z repliki `usb9`:
+  22 snapshoty od 2026-10-14 10:01 do punktu 06:01, GUID punktu zgodny; bez przełącznika -- jeden. Opisane w
+  `docs/ODZYSK-Z-REPLIKI.md` (także klucz nośnika).
 
 - **Kampania odzysku replika -> kolektor -> źródło (2026-10-15, pve9b, zgoda właściciela; #544).**
   Obiekt: `hdd/test-kreator` (relacja lokalna `lokalna-hdd-vms`), kopia `hdd/backups/hdd/test-kreator`, replika
