@@ -42,6 +42,10 @@ cat > "$ZBIN/zfs" <<'ZFSSTUB'
 #!/bin/sh
 printf '%s
 ' "$*" >> "${ZFS_TRACE:-/dev/null}"
+# ZFS_GONE=<dataset>: that one dataset does not exist (`zfs list` fails on it).
+if [ "$1" = list ] && [ -n "${ZFS_GONE:-}" ]; then
+    for a in "$@"; do [ "$a" = "$ZFS_GONE" ] && exit 1; done
+fi
 exit 0
 ZFSSTUB
 chmod +x "$ZBIN/zfs"
@@ -166,6 +170,17 @@ else bad "replace: ...and the refusal names the way to change it" "$out"; fi
 out="$(dr --allow-restore=lab1)"
 if has "already says exactly this" "$out"; then ok "replace: re-issuing the same grant is a no-op success"
 else bad "replace: re-issuing the same grant is a no-op success" "$out"; fi
+# ...but the DELEGATION is re-applied (2026-10-15, pve9b): a scope root destroyed
+# and recreated by root comes back with no `zfs allow`, and the re-issue the
+# collector's repair names used to answer "nothing changed" and leave it so.
+: > "$ZFS_TRACE"
+out="$(ZFS_GONE=hdd/a/child dr --allow-restore=lab1)"
+if grep -q -- "^allow -u zfsbackup-pve9 .* -- hdd/a$" "$ZFS_TRACE"; then
+    ok "replace: ...and re-applies the delegation on the datasets present"
+else bad "replace: ...and re-applies the delegation on the datasets present" "$(cat "$ZFS_TRACE")"; fi
+if ! grep -q -- "^allow .* -- hdd/a/child$" "$ZFS_TRACE" && has "not here (nothing to delegate on): hdd/a/child" "$out"; then
+    ok "replace: ...and names a dataset that is not there instead of failing on it"
+else bad "replace: ...and names a dataset that is not there instead of failing on it" "$out"; fi
 
 # Now the deliberate route, and the loud warning it must carry.
 dr --deny-restore=lab1 >/dev/null
@@ -661,7 +676,7 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
     : > "$RONE/ran"
     ( set -u
       log(){ shift; printf '%s\n' "$*" >&2; }
-      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
       zfs(){ case "$*" in
                *"-t snapshot"*) [ "${NOSNAP:-0}" -eq 1 ] && return 0
                                 printf 'hdd/copy@automated_daily_2026-08-20_18-00-04\n'
@@ -677,6 +692,10 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
       restore_grant_ask(){ printf '%s' "$_r1_grant"; }
       # STUB_LIVE=1: the target answers a head GUID and "no recovery point", which
       # classifies full-live -> replace -- the only way to reach the scope guard.
+      if [ "${STUB_ABSENT:-0}" -eq 1 ]; then
+          restore_remote_state(){ printf 'absent'; }
+          ssh(){ return 255; }
+      fi
       if [ "${STUB_LIVE:-0}" -eq 1 ]; then
           restore_remote_state(){ printf '11111111111111111111'; }
           restore_remote_has_guid(){ return 1; }
@@ -766,6 +785,21 @@ r="$(STUB_LIVE=1 r1 full-live "$GOODG
 RESTORE_GRANT_DATASETS=rpool/other rpool/data/vm" automated_daily_2026-08-23_18-00-01 zfsbackup@pve1:rpool/data/vm)"
 if has "ROOT of the delegated scope" "$(verd_of "$r")"; then ok "scope: ...but a child whose parent is NOT in the scope is a root"
 else bad "scope: ...but a child whose parent is NOT in the scope is a root" "$(verd_of "$r")"; fi
+# CREATE onto a scope root that is GONE (2026-10-15, L2c): the account cannot
+# create it -- no permission on its parent -- and the run used to send four
+# creates into four "permission denied". Refused before the engine, with the
+# repair; a child under a root that is in the scope is not affected.
+r="$(STUB_ABSENT=1 r1 full-absent "$GOODG
+RESTORE_GRANT_DATASETS=rpool/data rpool/data/vm" automated_daily_2026-08-23_18-00-01)"
+check "scope: create onto a scope root that is gone refuses" "1" "$(rc_of "$r")"
+if has "does not exist" "$(verd_of "$r")"; then ok "scope: ...and says the root is gone and why the account cannot make it"
+else bad "scope: ...and says the root is gone and why the account cannot make it" "$(verd_of "$r")"; fi
+if [ -z "$(argv_of "$r")" ]; then ok "scope: ...and the engine was never invoked"
+else bad "scope: absent root -- the engine RAN" "$(argv_of "$r")"; fi
+r="$(STUB_ABSENT=1 r1 full-absent "$GOODG
+RESTORE_GRANT_DATASETS=rpool/data rpool/data/vm" automated_daily_2026-08-23_18-00-01 zfsbackup@pve1:rpool/data/vm)"
+if [ -n "$(argv_of "$r")" ]; then ok "scope: create onto a CHILD of the scope root reaches the engine"
+else bad "scope: create onto a CHILD of the scope root reaches the engine" "$(verd_of "$r")"; fi
 
 # ---- a LOCAL target asks for no grant --------------------------------------
 # The machine at risk is this one, and whoever runs this already has root on it.
@@ -778,7 +812,7 @@ r1local() {   # <strategy> [local newest snapshot] [base on the source] -> "<rc>
     : > "$RONE/ran"
     ( set -u
       log(){ shift; printf '%s\n' "$*" >&2; }
-      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
       P=automated_daily_2026-08-23_18-00-01
       zfs(){ case "$*" in
                "rollback -r "*)       printf 'ROLLBACK %s\n' "$3" >> "$RONE/ran" ;;
@@ -819,7 +853,7 @@ case "$(argv_of "$r")" in "") ok "one: ...and neither a rollback nor the engine 
 r="$( : > "$RONE/ran"
       ( set -u
         log(){ shift; printf '%s\n' "$*" >&2; }
-        for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+        for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_scope_is_root restore_scope_root_repair restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
         zfs(){ :; }
         restore_grant_ask(){ printf '%s' "$GOODG"; }
         RESTORE_ENGINE="$RONE/eng" RESTORE_STRATEGY=increment \

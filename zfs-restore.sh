@@ -2029,6 +2029,41 @@ restore_remote_off_point() {   # <account@host> <target root> <recovery point> [
 # unproven is the live state (written=0 proves nothing, see REV-118). For a
 # LOCAL target that is a rollback to the base; elsewhere it stays `replace`.
 # "No base at all" is `full-live`, and stays `replace`.
+
+# IS THIS DATASET THE ROOT OF THE DELEGATED SCOPE? A root is a scope dataset
+# whose PARENT is not in the scope (RESTORE_GRANT_SCOPE, from the target's gate).
+# The gate reports every delegated dataset, children included, and each grant is
+# `zfs allow -u` without -l -- it reaches the descendants -- so a child whose
+# parent is in the scope comes back under the parent's delegation when it is
+# recreated. Only the root takes the delegation with it (2026-10-15, pve9).
+restore_scope_is_root() {   # <dataset> -> 0 when it is a root of the scope
+    local ds="$1" _g _p _in=0
+    for _g in ${RESTORE_GRANT_SCOPE:-}; do [ "$_g" = "$ds" ] && _in=1; done
+    [ "$_in" -eq 1 ] || return 1
+    case "$ds" in
+        */*) for _p in ${RESTORE_GRANT_SCOPE:-}; do [ "$_p" = "${ds%/*}" ] && return 1; done ;;
+    esac
+    return 0
+}
+
+# THE REPAIR, measured step by step on the lab (2026-10-15, pve9b): a recreated
+# root has neither the relationship's delegation nor the restore's, and both
+# come back only from root on that machine. --allow-restore re-applies its
+# delegation on an unchanged grant since the same day (before, it answered
+# "nothing changed" and left the root without it).
+restore_scope_root_repair() {   # <host> <root dataset>
+    log 0 "restore: the repair, as root ON ${1#*@}, then re-run this restore unchanged:"
+    log 0 "restore:     zfs destroy -r $2     (only if it is still there and nothing on it is needed)"
+    log 0 "restore:     zfs create -o canmount=noauto $2"
+    log 0 "restore:     deploy.sh --commit-scope=<label>                 (the relationship's own delegation)"
+    log 0 "restore:     deploy.sh --allow-restore=<label> --replace     (the restore's delegation)"
+    log 0 "restore: the restore then lands on the empty root with recv -F (no destroy) and recreates the children under it."
+    # Measured: --commit-scope on the bare root records the scope as that root
+    # alone ("3 already gone"); the children work under its inherited delegation,
+    # but the records say otherwise until the scope is committed again.
+    log 0 "restore: and once it has succeeded, on ${1#*@} once more:  deploy.sh --commit-scope=<label>   -- so the scope records the children again."
+}
+
 restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
     local copy="$1" src="$2"
     RESTORE_ONE_VERDICT=""
@@ -2326,6 +2361,24 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # Only on `replace`: the other modes do not destroy the dataset, and paying
     # an ssh round trip on every ordinary recovery to answer a question only
     # this one asks would be a cost for nothing.
+    # ---- 4a. a scope ROOT that is GONE cannot be created by the account -----
+    # 2026-10-15, lab (L2c, k2-ab): with hdd/data destroyed on the source, the
+    # run sent four creates and got four "cannot create 'hdd/data': permission
+    # denied" -- the children fail too, they need the root as their parent. The
+    # account has no `create` on the root's parent by design, so this cannot
+    # succeed from this side; refused here, with the repair, before any engine.
+    if [ "$mode" = create ]; then
+        case "$src" in
+            *:*)
+                if restore_scope_is_root "${src#*:}"; then
+                    RESTORE_ONE_VERDICT="'${src#*:}' is the ROOT of the delegated scope and it does not exist on '$host' -- the delegated account cannot create it (no permission on its parent, by design)"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                    restore_scope_root_repair "$host" "${src#*:}"
+                    return 1
+                fi ;;
+        esac
+    fi
+
     if [ "$mode" = replace ]; then
         case "$src" in
             *:*)
@@ -2372,31 +2425,15 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     log 0 "restore: update the package on '$host' (its gate reports the scope), or recover the CHILDREN, whose parent survives:  restore <from> <onto>:${_tgt_ds}/<child>"
                     return 1
                 fi
-                # A ROOT is a scope dataset whose PARENT is not in the scope. The
-                # gate reports every delegated dataset, children included, and
-                # each grant is `zfs allow -u` without -l -- it reaches the
-                # descendants -- so a child whose parent is in the scope comes
-                # back under the parent's delegation when it is recreated. That
-                # child is the way round this refusal the message below names;
-                # refusing it too would leave no way at all (2026-10-15, pve9).
-                local _p _in_parent
-                for _g in ${RESTORE_GRANT_SCOPE:-}; do
-                    [ "$_g" = "$_tgt_ds" ] || continue
-                    _in_parent=0
-                    case "$_tgt_ds" in
-                        */*) for _p in ${RESTORE_GRANT_SCOPE:-}; do
-                                 [ "$_p" = "${_tgt_ds%/*}" ] && _in_parent=1
-                             done ;;
-                    esac
-                    [ "$_in_parent" -eq 0 ] || break
+                if restore_scope_is_root "$_tgt_ds"; then
                     RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
                     log 0 "restore: replace destroys the dataset and recreates it, but a 'zfs allow' lives ON the dataset -- destroying it takes the grant away, and recreating it needs permission on the PARENT, which a delegated account does not have and should not."
                     log 0 "restore: two ways round it, and both are decisions somebody takes on '$host':"
-                    log 0 "restore:   recover the CHILDREN instead -- their parent survives and carries the delegation:  restore <from> <onto>:${_tgt_ds}/<child>"
-                    log 0 "restore:   or destroy and recreate '$_tgt_ds' there as root, then re-grant: deploy.sh --commit-scope=<label> and deploy.sh --allow-restore=<label> --replace"
+                    log 0 "restore:   recover the CHILDREN instead -- their parent survives and carries the delegation:  restore ${RESTORE_RELATION_LABEL:-<relation>} --target=${_tgt_ds}/<child>[,...]"
+                    restore_scope_root_repair "$host" "$_tgt_ds"
                     return 1
-                done
+                fi
                 fi
                 _ms="$(ssh -n ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "$host" \
                        "zfs list -H -o mounted,type '$_tgt_ds'" 2>/dev/null)"
@@ -2585,7 +2622,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # there (the copy follows its source -- P-0, snapsend `recv -F`, logged).
         local _lcnewer
         _lcnewer="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" 'seen{print $1} $1==p{seen=1}' | sed 's/.*@//' | tr '\n' ' ')"
-        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% } -- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed (zfs clone / zfs rename on the copy)."
+        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% } -- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed: zfs send <copy>@<snapshot> | zfs recv <elsewhere> -- not a clone, which pins the snapshot so the next run cannot discard it and fails."
     fi
 
     # ---- 6. the engine -----------------------------------------------------
@@ -2780,12 +2817,14 @@ restore_report_backup_cost() {
     for d in "${RESTORE_ROLLED_BACK[@]}"; do
         log 0 "restore:   $d"
     done
-    log 0 "restore: the next backup of this relationship WILL REFUSE, naming those snapshots. That refusal is correct: they are the only remaining copy of the period the source rolled away."
-    log 0 "restore: two ways out, and they are not equivalent --"
-    log 0 "restore:   keep them: park the copy (zfs rename) or clone it aside, then let the pull start a fresh lineage. Nothing is lost."
-    log 0 "restore:   discard them: zfs rollback -r <copy>@<the point this restore used>, one per dataset. That drops those snapshots AND returns the copy to the point, which is what the next pull needs -- destroying the snapshots alone leaves the copy's filesystem where they left it and the pull refuses again. No root, nothing re-sent. The period that was rolled away then exists nowhere."
-    log 0 "restore: the refusal names the snapshots and the common point, so no list has to be reconstructed. -f would also clear it, by destroying the copy and re-sending every byte, and -f needs root."
-    log 0 "restore: and BEFORE running that rollback -- it destroys BOOKMARKS on the copy as well as snapshots (measured 2026-08-28; zfs recv -F does not). A bookmark on a copy is the anchor a replica onto removable media comes back to, so losing it turns that disk's next return into a full re-seed. List them first: zfs list -t bookmark -d 1 <copy>."
+    # 2026-10-15 (lab, k2-ab): this used to say the next backup WILL REFUSE. That
+    # stopped being true on 2026-10-08 (P-0): a backup copy follows its source,
+    # and the next pull DISCARDED both snapshots with "follows its source --
+    # discarding 2 snapshot(s)", rc=0. What is left to say is the deadline.
+    log 0 "restore: the next backup of this relationship DISCARDS them -- the copy follows its source (logged as 'follows its source -- discarding'), and whatever replicates from this copy follows it in turn. After that the period the source rolled away exists nowhere."
+    log 0 "restore: to KEEP that period, act before the next scheduled run (this relationship's pause ended with this run):"
+    log 0 "restore:   zfs-backup.sh pause-client ${RESTORE_RELATION_LABEL:-<relation>}   then copy what you need aside -- zfs send <copy>@<snapshot> | zfs recv <elsewhere> -- and resume-client. Not a clone: a clone pins the snapshot, the next run cannot discard it and fails."
+    log 0 "restore: to let it go, do nothing -- the next run clears it without root and without re-sending anything."
 
 }
 

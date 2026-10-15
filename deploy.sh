@@ -2731,6 +2731,28 @@ restore_grant_read_modes() {   # <path> -> the modes it records, or nothing
     sed -n 's/^RESTORE_GRANT_MODES="\(.*\)"$/\1/p' "$1" 2>/dev/null | head -1
 }
 
+restore_grant_delegate() {   # <account> <datasets, space-separated>
+    local account="$1" _rg_ds _rg_failed=0 _rg_gone=""
+    [ -n "${2:-}" ] || return 0
+    for _rg_ds in $2; do
+        # A dataset that is not there cannot carry a delegation, and "could not
+        # delegate" would read as a permission problem. Named as what it is: a
+        # child of a destroyed scope that the restore itself will recreate under
+        # its parent's delegation.
+        if ! zfs list -H -o name -- "$_rg_ds" >/dev/null 2>&1; then
+            _rg_gone="$_rg_gone $_rg_ds"; continue
+        fi
+        zfs allow -u "$account" "$RESTORE_ZFS_PERMS" -- "$_rg_ds" 2>/dev/null \
+            || { warn "could not delegate ($RESTORE_ZFS_PERMS) to '$account' on '$_rg_ds'"; _rg_failed=1; }
+    done
+    if [ "$_rg_failed" -eq 0 ]; then
+        log "  delegated:    $RESTORE_ZFS_PERMS to '$account' on the datasets present"
+    else
+        warn "  the grant FILE is written but the delegation is incomplete -- a restore will be refused by ZFS, not by the grant. Fix the allow above and re-run."
+    fi
+    [ -z "$_rg_gone" ] || log "  not here (nothing to delegate on):$_rg_gone -- a dataset under a delegated parent comes back under the parent's delegation when the restore recreates it"
+}
+
 do_allow_restore() {
     local label="$ALLOW_RESTORE_LABEL"
     [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
@@ -2768,7 +2790,14 @@ do_allow_restore() {
             # Converges on a retry, the same way the gate's own `disable` verb
             # does: re-asserting what is already true is a success, and the
             # ORIGINAL grant time is the useful fact, so it is kept.
-            log "restore grant for '$label' already says exactly this ($want) -- nothing changed"
+            #
+            # THE DELEGATION IS RE-ASSERTED, not assumed (2026-10-15, pve9b). A
+            # `zfs allow` lives on the dataset, so a scope root destroyed and
+            # recreated by root -- the repair the collector's refusal names --
+            # comes back with no delegation while this file still says yes. The
+            # re-issue used to answer "nothing changed" and leave it that way.
+            log "restore grant for '$label' already says exactly this ($want) -- the file is unchanged; re-applying the delegation"
+            restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
             return 0
         fi
         die "a restore grant for '$label' already exists and says '${have:-<unreadable>}', not '$want'. Changing what a live grant permits is not a side effect of re-issuing it -- take it back first, deliberately:
@@ -2818,18 +2847,7 @@ do_allow_restore() {
     # saying yes next to an account that cannot act. Done AFTER the file, so a
     # failure here leaves a grant that refuses rather than a capability nobody
     # declared -- the safe order of the two.
-    local _rg_ds _rg_failed=0
-    if [ -n "${RESTORE_GRANT_DATASETS:-}" ]; then
-        for _rg_ds in $RESTORE_GRANT_DATASETS; do
-            zfs allow -u "$account" "$RESTORE_ZFS_PERMS" -- "$_rg_ds" 2>/dev/null \
-                || { warn "could not delegate ($RESTORE_ZFS_PERMS) to '$account' on '$_rg_ds'"; _rg_failed=1; }
-        done
-        if [ "$_rg_failed" -eq 0 ]; then
-            log "  delegated:    $RESTORE_ZFS_PERMS to '$account' on: $RESTORE_GRANT_DATASETS"
-        else
-            warn "  the grant FILE is written but the delegation is incomplete -- a restore will be refused by ZFS, not by the grant. Fix the allow above and re-run."
-        fi
-    fi
+    restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
 
     log "restore grant WRITTEN: $gpath"
     log "  relationship: $label"
