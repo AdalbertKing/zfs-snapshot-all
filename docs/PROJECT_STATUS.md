@@ -39,7 +39,7 @@
   migawki -- do recenzenta (silniki zamrożone): `docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`.
   Drobiazg do sprawdzenia: po samym cofnięciu (bez strumienia) pojawił się komunikat „canmount=noauto travels in the stream”.
 
-- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; `feat/x12-tree`).** Właściciel (10-12): okno
+- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; #540, wdrożone na pve10 i pve9b).** Właściciel (10-12): okno
   „Co kopiować” (lista + Dodaj miejsce / Wyjątki / Usuń pozycję) było „siermiężne i nieużyteczne”. Teraz jedno
   okno w curses (`tui/tree.py`, drugi wyjątek od whiptail po `grid.py`), jak w eksploratorze: `[x]` miejsce
   (razem z tym, co pod nim powstanie), `[ ]` nie, `[-]` część; Spacja zaznacza/odznacza całą gałąź,
