@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e76c9b5ff8a59aef -->
+<!-- status-covers-digest: 517d2f8cf503f3f5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **X27 poprawka: pola silnika relacji przeżywają przebudowę (2026-10-15; `fix/relation-keep-engine-fields`).**
+  „Uzyj szablonu” (`edit-relation --profile=`) na pve9b skasował `history = newest`: `relblock_render`
+  nie pisał pól silnika do bloku `[relation:]`, a `local-backup --replace` kasował stary blok i sekcje
+  bez ich odczytania. Teraz `relblock_engine_keep` zbiera `history compression cipher autotune` przed
+  usunięciem (blok wygrywa, legacy sekcja tego samego `pair_label` tylko dla brakującego pola),
+  `relblock_from_profile` je przywraca, `relblock_render` zapisuje. Test regresji w `localbackup`
+  (X27): kontrola negatywna na starym kodzie daje BAD. Na żywo pve9b jeszcze nie przywrócone
+  (`set-transfer lokalna-hdd-vms --history=newest` po zielonym CI i zgodzie właściciela).
 
 - **X27 S4: cięcie starego zapisu (2026-10-14; #535 + `feat/x27-s4b`).** Właściciel:
   „Wywalmy więc tę zgodność… Zredukujmy tę choinkę do minimum”, szablony niosą tylko szczeble.
