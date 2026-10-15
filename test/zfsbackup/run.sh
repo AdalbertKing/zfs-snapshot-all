@@ -8142,8 +8142,9 @@ if grep -q '^record_field_allowed()' "$RECLIB"; then
         [ "$got" = "$want" ] || fg_rt_bad="$fg_rt_bad $set"
     done
     # The floors are the 2026-09-04 measurement; a list may only grow.
+    # pause: 2 -> 3 on 2026-10-15 (PAUSED_BY_GRANT, written by pause-writers).
     fg_n() { printf '%s\n' "$fg_counts" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-    if [ -z "$fg_rt_bad" ] && [ "$(fg_n client)" -ge 43 ] && [ "$(fg_n manifest)" -ge 30 ] && [ "$(fg_n pause)" = 2 ] && [ "$(fg_n server)" = 3 ]; then
+    if [ -z "$fg_rt_bad" ] && [ "$(fg_n client)" -ge 43 ] && [ "$(fg_n manifest)" -ge 30 ] && [ "$(fg_n pause)" = 3 ] && [ "$(fg_n server)" = 3 ]; then
         ok "field gate: every name each set lists round-trips through record_load ($fg_counts)"
     else
         bad "field gate: every name each set lists round-trips through record_load ($fg_counts)" "mismatched sets:${fg_rt_bad:-none}"
