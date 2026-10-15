@@ -707,10 +707,52 @@ done
 
 # ---- a LOCAL target asks for no grant --------------------------------------
 # The machine at risk is this one, and whoever runs this already has root on it.
-r="$(r1 increment "" "" hdd/local/target)"
+# 2026-10-15: a local target is rolled back to the planner's base before the
+# engine, and the result is measured by identity afterwards -- so the harness
+# hands it the base (RESTORE_SRC_BASE_SNAP, what the planner sets) and a zfs
+# that answers the rollback and the identity questions. LOCAL_NEWEST is what the
+# source's newest snapshot reads as after the run.
+r1local() {   # <strategy> [local newest snapshot] [base on the source] -> "<rc>|<verdict>|<argv>"
+    : > "$RONE/ran"
+    ( set -u
+      log(){ shift; printf '%s\n' "$*" >&2; }
+      for _fn in restore_point_unique restore_engine_argv restore_grant_parse restore_grant_require restore_one; do eval "$(product_fn "$RESTORE" "$_fn")"; done
+      P=automated_daily_2026-08-23_18-00-01
+      zfs(){ case "$*" in
+               "rollback -r "*)       printf 'ROLLBACK %s\n' "$3" >> "$RONE/ran" ;;
+               *"-s createtxg"*)      printf '%s\n' "${LOCAL_NEWEST:-hdd/local/target@$P}" ;;
+               *"-t snapshot"*)       printf 'hdd/copy@automated_daily_2026-08-22_18-00-04\n'
+                                      printf 'hdd/copy@%s\n' "$P" ;;
+               "list -H -o name -d 0 -r hdd/local/target") printf 'hdd/local/target\n' ;;
+               "list -H -o name "*)   printf '%s\n' "${*##* }" ;;
+               *" guid "*)            printf '111\n' ;;
+               *" referenced "*)      printf '4096\n' ;;
+             esac; }
+      restore_grant_ask(){ printf '%s' "$2"; }
+      RESTORE_ENGINE="$RONE/eng" ENGINE_RC=0 RESTORE_LABEL=lab1 \
+      RESTORE_STRATEGY="$1" RESTORE_POINT_NAME="" LOCAL_NEWEST="${2:-}" \
+      RESTORE_SRC_BASE_SNAP="${3-hdd/local/target@automated_daily_2026-08-22_18-00-04}" \
+      restore_one hdd/copy hdd/local/target >/dev/null 2>&1
+      printf '%s|%s' "$?" "$RESTORE_ONE_VERDICT" ) > "$RONE/res"
+    printf '%s|%s' "$(cat "$RONE/res")" "$(tr -d '\n' < "$RONE/ran")"
+}
+r="$(r1local increment)"
 check "one: a local target needs no grant" "0" "$(rc_of "$r")"
 case "$(argv_of "$r")" in *hdd/local/target*) ok "one: ...and still reaches the engine" ;;
                           *) bad "one: ...and still reaches the engine" "$(argv_of "$r")" ;; esac
+case "$(argv_of "$r")" in *"ROLLBACK hdd/local/target@automated_daily_2026-08-22_18-00-04"*) ok "one: a local target is rolled back to the base before the engine" ;;
+                          *) bad "one: a local target is rolled back to the base before the engine" "$(argv_of "$r")" ;; esac
+# THE 2026-10-15 DEFECT: the engine exits 0 but a newer snapshot still stands on
+# the point (nothing was rolled back). That must read NOT recovered, not success.
+r="$(r1local rollback hdd/local/target@automated_daily_2026-08-24_18-00-00)"
+check "one: local -- engine rc 0 but a newer snapshot remains is NOT recovered (2 = changed, unfinished)" "2" "$(rc_of "$r")"
+case "$(verd_of "$r")" in *"NOT at"*) ok "one: ...and the verdict says the source is NOT at the point" ;;
+                          *) bad "one: ...and the verdict says the source is NOT at the point" "$(verd_of "$r")" ;; esac
+# No base the planner could pin: refused before anything runs.
+r="$(r1local increment "" "")"
+check "one: local -- no pinned base refuses" "1" "$(rc_of "$r")"
+case "$(argv_of "$r")" in "") ok "one: ...and neither a rollback nor the engine ran" ;;
+                          *) bad "one: ...and neither a rollback nor the engine ran" "$(argv_of "$r")" ;; esac
 
 # ---- a copy with nothing on it ---------------------------------------------
 r="$( : > "$RONE/ran"
