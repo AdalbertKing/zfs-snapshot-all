@@ -231,6 +231,23 @@ else bad "gate: PAIR-CONTROL status reports the grant" "$out"; fi
 out="$(gate other)"
 if has "RESTORE_GRANT=none" "$out"; then ok "gate: ...and reports none where there is none"
 else bad "gate: ...and reports none where there is none" "$out"; fi
+# THE SCOPE, AS A LIST (2026-10-15, pve9): the whitelist was written `:-\ `, a
+# range from ':' down to ' ', so a space failed it and every scope of MORE THAN
+# ONE dataset went out as RESTORE_GRANT_DATASETS= -- which left the collector's
+# replace-on-scope-root refusal with nothing to compare. A scope with a character
+# outside the whitelist is still reported empty.
+mkdir -p "$REL/multi" "$REL/junk"
+printf 'RESTORE_GRANT_MODES="create rewind replace"\nRESTORE_GRANT_DATASETS="hdd/b/x hdd/b/x/docs hdd/b/x/mail"\n' > "$GRANTS/multi"
+printf 'RESTORE_GRANT_MODES="create rewind replace"\nRESTORE_GRANT_DATASETS="hdd/b/x;rm -rf /"\n' > "$GRANTS/junk"
+out="$(gate multi)"
+if has "RESTORE_GRANT_DATASETS=hdd/b/x hdd/b/x/docs hdd/b/x/mail" "$out"; then
+    ok "gate: a scope of several datasets is reported whole (space-separated list)"
+else bad "gate: a scope of several datasets is reported whole (space-separated list)" "$out"; fi
+out="$(gate junk)"
+if printf '%s\n' "$out" | grep -qx "RESTORE_GRANT_DATASETS="; then
+    ok "gate: ...and a scope with a character outside the whitelist is reported empty"
+else bad "gate: ...and a scope with a character outside the whitelist is reported empty" "$out"; fi
+rm -f "$GRANTS/multi" "$GRANTS/junk"
 
 # A disabled relationship still answers, because a hard pause and a standing
 # grant are different facts and an operator needs both.
@@ -651,15 +668,27 @@ r1() {   # <strategy> <grant answer> <point> <src> [engine rc] -> "<rc>|<verdict
                                 printf 'hdd/copy@automated_daily_2026-08-22_18-00-04\n'
                                 printf 'hdd/copy@automated_daily_2026-08-23_18-00-01\n' ;;
              esac; }
-      restore_grant_ask(){ printf '%s' "$2"; }
+      # The answer comes from r1's OWN second argument. It used to be
+      # `printf '%s' "$2"` inside the stub -- the stub's second argument, which
+      # restore_one never passes (it calls `restore_grant_ask "$host"`) -- so
+      # every case here ran with NO grant at all and the refusals below passed
+      # for that reason, not their own (found 2026-10-15).
+      _r1_grant="$2"
+      restore_grant_ask(){ printf '%s' "$_r1_grant"; }
+      # STUB_LIVE=1: the target answers a head GUID and "no recovery point", which
+      # classifies full-live -> replace -- the only way to reach the scope guard.
+      if [ "${STUB_LIVE:-0}" -eq 1 ]; then
+          restore_remote_state(){ printf '11111111111111111111'; }
+          restore_remote_has_guid(){ return 1; }
+      fi
       RESTORE_ENGINE="$RONE/eng" ENGINE_RC="${5:-0}" RESTORE_LABEL=lab1 \
       RESTORE_STRATEGY="$1" RESTORE_POINT_NAME="$3" FAKE_REMOTE="${FAKE_REMOTE:-absent}" \
       restore_one hdd/copy "${4:-zfsbackup@pve1:rpool/data}" >/dev/null 2>&1
       printf '%s|%s' "$?" "$RESTORE_ONE_VERDICT" ) > "$RONE/res"
     printf '%s|%s' "$(cat "$RONE/res")" "$(tr -d '\n' < "$RONE/ran")"
 }
-# restore_grant_ask is stubbed to echo its SECOND argument, so the harness can
-# hand a different answer per case without a file. The real one takes one.
+# restore_grant_ask is stubbed to answer r1's second argument, so the harness
+# can hand a different answer per case without a file.
 r1x() { r1 "$1" "$2" "$3" "${4:-}" "${5:-0}"; }
 GOODG="PAIR_LABEL=lab1
 RESTORE_GRANT=present
@@ -704,6 +733,25 @@ do
     if [ -z "$(argv_of "$r")" ]; then ok "one: ...and the engine was never invoked"
     else bad "one: $d -- the engine RAN despite the refusal" "$(argv_of "$r")"; fi
 done
+
+# ---- replace on the ROOT of the scope, and on a scope nobody reported --------
+# 2026-10-15, pve9: an empty RESTORE_GRANT_SCOPE made this guard inert, and the
+# gate reported every multi-dataset scope as empty -- so a replace from the
+# mirror destroyed the scope root. Now an unreported scope refuses, and a root
+# found in a LIST of several is still recognised. Neither may reach the engine.
+r="$(STUB_LIVE=1 r1 full-live "$GOODG" automated_daily_2026-08-23_18-00-01)"
+check "scope: replace with NO scope reported refuses" "1" "$(rc_of "$r")"
+if has "did not report the scope" "$(verd_of "$r")"; then ok "scope: ...and says the scope was not reported"
+else bad "scope: ...and says the scope was not reported" "$(verd_of "$r")"; fi
+if [ -z "$(argv_of "$r")" ]; then ok "scope: ...and the engine was never invoked"
+else bad "scope: unreported scope -- the engine RAN" "$(argv_of "$r")"; fi
+r="$(STUB_LIVE=1 r1 full-live "$GOODG
+RESTORE_GRANT_DATASETS=rpool/other rpool/data rpool/data/vm" automated_daily_2026-08-23_18-00-01)"
+check "scope: replace on a root named in a LIST of several refuses" "1" "$(rc_of "$r")"
+if has "ROOT of the delegated scope" "$(verd_of "$r")"; then ok "scope: ...and names it the scope root"
+else bad "scope: ...and names it the scope root" "$(verd_of "$r")"; fi
+if [ -z "$(argv_of "$r")" ]; then ok "scope: ...and the engine was never invoked"
+else bad "scope: scope root -- the engine RAN" "$(argv_of "$r")"; fi
 
 # ---- a LOCAL target asks for no grant --------------------------------------
 # The machine at risk is this one, and whoever runs this already has root on it.
