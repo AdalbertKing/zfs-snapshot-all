@@ -3275,8 +3275,12 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
 # holds what before they decide anything.
 restore_report_handover() {
     local n="${#RESTORE_SCOPE_DEST[@]}" i moved=0
+    # THE MACHINE, not the path. `--onto` on the SAME machine (a restore beside
+    # the original, <pool>/restore/...) changes only the path; there is nothing
+    # to hand over. Comparing whole addresses called that "a DIFFERENT machine"
+    # and advised `move-to-client k2-ab k2-ab` (measured on pve9, 2026-10-15).
     for (( i=0; i<n; i++ )); do
-        [ "${RESTORE_SCOPE_DEST[$i]}" = "${RESTORE_SCOPE_SRC[$i]:-}" ] || moved=1
+        [ "${RESTORE_SCOPE_DEST[$i]%%:*}" = "${RESTORE_SCOPE_SRC[$i]%%:*}" ] || moved=1
     done
     [ "$moved" -eq 1 ] || return 0
     log 0 "restore: ---- this recovery went to a DIFFERENT machine ----"

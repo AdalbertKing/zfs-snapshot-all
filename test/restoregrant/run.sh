@@ -916,7 +916,7 @@ if has "STAY PAUSED" "$out"; then ok "writers: ...and says how to lift them"
 else bad "writers: ...and says how to lift them" "$out"; fi
 # ...but a dataset that is GONE has no delegation left to revoke.
 dr --allow-restore=lab1 >/dev/null
-out="$(ZFS_FAIL_UNALLOW=1 ZFS_GONE="hdd/a hdd/a/child" dr --deny-restore=lab1)"
+out="$(ZFS_FAIL_UNALLOW=1 ZFS_GONE="hdd/a hdd/a/child hdd/restore" dr --deny-restore=lab1)"
 check "writers: a failed revocation on a dataset that is gone does not block the resume" "" "$(pw_tag puller)"
 PATH="$BIN:$PATH" CLIENTS_DIR="$CLI" RELATIONSHIPS_DIR="$PSTATE" bash "$(dirname "$DEPLOY")/zfs-backup.sh" resume-writers lab1 >/dev/null 2>&1
 
@@ -930,6 +930,37 @@ check "writers: an unreadable relationship record refuses the grant" "none" "$(l
 if has "could not be read" "$out"; then ok "writers: ...naming why"
 else bad "writers: ...naming why" "$out"; fi
 rm -f "$CLI"/*.conf; rm -rf "$PSTATE"/*
+
+# ---------------------------------------------------------------------------
+# 13. The restore namespace <pool>/restore (owner decision a, 2026-10-15).
+#
+# pve9 -> pve9b, `--onto hdd/restore/docs-test`: "permission denied" -- the
+# account may create nothing outside the relationship's scope. The grant now
+# also covers <pool>/restore, creates it when missing, records it, and the
+# revocation takes the permission back without destroying anything.
+# ---------------------------------------------------------------------------
+rm -f "$GRANTS"/* 2>/dev/null; : > "$ZFS_TRACE"
+out="$(ZFS_GONE=hdd/restore dr --allow-restore=lab1)"
+trace="$(cat "$ZFS_TRACE")"
+if has "create -- hdd/restore" "$trace"; then ok "namespace: a missing hdd/restore is created by the grant"
+else bad "namespace: a missing hdd/restore is created by the grant" "$trace"; fi
+if has "allow -u zfsbackup-pve9 receive,rollback,create,canmount,mountpoint,mount -- hdd/restore" "$trace"; then
+    ok "namespace: ...and delegated to the relationship's account, mount included"
+else bad "namespace: ...and delegated to the relationship's account, mount included" "$trace"; fi
+check "namespace: the grant file records it" "hdd/restore" \
+    "$(sed -n 's/^RESTORE_GRANT_NAMESPACES="\(.*\)"$/\1/p' "$GRANTS/lab1")"
+: > "$ZFS_TRACE"
+out="$(dr --allow-restore=lab1)"
+if has "create -- hdd/restore" "$(cat "$ZFS_TRACE")"; then bad "namespace: an existing hdd/restore is not created again" "$(cat "$ZFS_TRACE")"
+else ok "namespace: an existing hdd/restore is not created again"; fi
+: > "$ZFS_TRACE"
+out="$(dr --deny-restore=lab1)"
+trace="$(cat "$ZFS_TRACE")"
+if has "unallow -u zfsbackup-pve9 receive,rollback,create,canmount,mountpoint,mount -- hdd/restore" "$trace"; then
+    ok "namespace: revoking takes the permission back"
+else bad "namespace: revoking takes the permission back" "$trace"; fi
+if has "destroy" "$trace"; then bad "namespace: ...and destroys nothing -- recovered data stays" "$trace"
+else ok "namespace: ...and destroys nothing -- recovered data stays"; fi
 
 
 echo "--------------------------------------------"

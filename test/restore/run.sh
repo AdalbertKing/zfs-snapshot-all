@@ -2244,6 +2244,21 @@ ho_same="$(
 )"
 if [ -z "$ho_same" ]; then ok "xhost: ...and says nothing when the destination is the same machine"
 else bad "xhost: ...and says nothing when the destination is the same machine" "$ho_same"; fi
+# BESIDE the original on the same machine (--onto <pool>/restore/...): only the
+# path differs. Measured on pve9, 2026-10-15: whole-address comparison called it
+# "a DIFFERENT machine" and advised `move-to-client k2-ab k2-ab`.
+ho_beside="$(
+    log() { shift; printf '%s\n' "$*"; }
+    RESTORE_SOURCE_LABEL=k2-ab
+    RESTORE_RELATION_LABEL=k2-ab
+    RESTORE_SCOPE_SRC=("zfsbackup-pve9@192.168.28.98:hdd/data/docs")
+    RESTORE_SCOPE_DEST=("zfsbackup-pve9@192.168.28.98:hdd/restore/docs")
+    RESTORE_LANDED=("zfsbackup-pve9@192.168.28.98:hdd/restore/docs")
+    eval "$(awk 'index($0, "restore_report_handover() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    restore_report_handover
+)"
+if [ -z "$ho_beside" ]; then ok "xhost: a restore BESIDE the original on the same machine is not a hand-over"
+else bad "xhost: a restore BESIDE the original on the same machine is not a hand-over" "$ho_beside"; fi
 
 # ---- NOTHING LANDED: the block still prints, the first sentence changes -------
 # It is printed on failed runs on purpose -- a partial recovery leaves the same
