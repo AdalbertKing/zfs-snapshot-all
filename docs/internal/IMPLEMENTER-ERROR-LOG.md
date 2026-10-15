@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -103,6 +103,14 @@ wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
 *Evidence: E13, E22, E57, E67, E72, E78, E79, E80.*
+
+### R13 — Stage files by name, never by directory
+
+`git add <dir>/` and `git add .` take every untracked file under it. Before a
+commit: `git status --short`, then `git add <each intended file>`, then
+`git diff --cached --stat` read against what the change is supposed to touch.
+
+*Evidence: E82.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1913,6 +1921,42 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E83 — a test passed on Git Bash only because the fatal-die signal does not work there (2026-10-15, R2)
+
+**Genesis.** Restore-dispatch fix (#539). The first version probed
+`load_client_and_connection` in a plain `( ... )` subshell. Its regression test
+passed on the Windows box. `text-checker` pointed out, from the code, that the
+main program arms `die_arm_fatal`, so a `die` in a subshell sends TERM to the
+main shell and the script still ends silently. Measured: on Git Bash the TERM
+does not reach the parent, so the test was green by accident; on pve9b (Linux)
+the same probe killed the script. The fix is `die_confine_to_subshell`, the
+opt-out `cmd_status` already uses.
+
+**Cause.** The test was run on one side of the Windows/Linux boundary and its
+green carried across. Signal delivery is exactly the kind of fact that differs.
+
+**Rule.** R2, unchanged. A test about process/signal/exit behaviour is evidence
+only from Linux (a lab host or CI); on this box it is a draft. The test now says
+so in its own comment.
+
+### E82 — `git add tui/ test/` committed two stray sync-conflict files (2026-10-15, R13)
+
+**Genesis.** X12 branch. Staging the status entry with `git add tui/ test/ docs/...`
+swept in two untracked files that were in the tree before the session started:
+`test/zfsbackup/run (# Edit conflict 2026-10-12 ...).sh` (14 222 lines) and
+`tui/replica (# Edit conflict 2026-10-08 ...).sh`. `impact.sh --verify` failed
+with UNDECLARED for both; the first reading blamed the untracked files on disk,
+and they were moved aside for a rerun that failed the same way -- the check reads
+`git ls-files`, so they were tracked.
+
+**Cause.** Directory-wide staging in a tree that `git status` had shown with `??`
+entries since the start. The rule existed in the workspace CLAUDE.md ("before
+`git add .` check `git status`") and in memory ("git add docs/ sweeps
+untracked"), neither of which is section 1.
+
+**Rule.** R13. Removed from the index (`git rm --cached`), kept on disk, branch
+not yet pushed -- nothing reached GitHub.
 
 ### E81 — edited the code and a suite file while those suites were running (2026-10-13, R11, twice in one hour)
 
