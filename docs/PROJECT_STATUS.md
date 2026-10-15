@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9a01f075a10def09 -->
+<!-- status-covers-digest: c452619d170eb62f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; `feat/x12-tree`).** Właściciel (10-12): okno
+  „Co kopiować” (lista + Dodaj miejsce / Wyjątki / Usuń pozycję) było „śmiertelnie siermiężne”. Teraz jedno
+  okno w curses (`tui/tree.py`, drugi wyjątek od whiptail po `grid.py`), jak w eksploratorze: `[x]` miejsce
+  (razem z tym, co pod nim powstanie), `[ ]` nie, `[-]` część; Spacja zaznacza/odznacza całą gałąź,
+  →/+ rozwija, ←/- zwija, Enter Dalej, Esc Wstecz; kolumna rozmiaru, zvol podpisany. Odznaczenie pod
+  zaznaczonym miejscem = wyjątek (bez osobnego okna). Kontrakt czasowników bez zmian: `basket_step`
+  (`tui/basket-lib.sh`) oddaje te same `B_ROOT`/`B_EXCL`/`RECURSION`; w trzech miejscach naraz: kreator
+  relacji (krok „Co kopiować”), kreator repliki (krok 2) i „Zmień relację → Datasety”. Sprzecznych wyborów
+  nie da się zrobić (X10): przy „tylko całe miejsca” (Zmień relację) i przy kopiowaniu atomowym (-r)
+  odznaczenie części gałęzi jest odmawiane z komunikatem, a S (zmiana sposobu) odmawia przy wyjątkach.
+  Cel relacji lokalnej jest w „Zmień relację” ukryty razem z tym, co pod nim (X21: kopie nie są źródłem);
+  miejsce nad celem dostaje cel jako wyjątek automatycznie. Usunięte okna i funkcje koszyka (lista,
+  wyjątki, usuwanie, sposób) -- `basket-lib.sh` 256 -> ~110 linii. Testy: `tui` przechodzi przez
+  prawdziwe `tree.py` w trybie `--keys` (`ZFS_TREE`, klawisz testowy `goto:NAZWA`), 38 przebiegów kreatorów
+  przepisanych z odpowiedzi whiptaila na klawisze drzewa, nowa sekcja drzewa (9 reguł) i jeden przebieg przez
+  prawdziwą pętlę curses (`test/tui/pty-keys.py` zna teraz strzałki: w trybie aplikacyjnym to `ESC O A..D`).
+  Na pve9b (Linux): `tui` 283 PASS / 6 FAIL -- te same 6 („linia”) pada tam na `main` (273/6), środowisko.
+  Na żywo w GUI (PuTTY) jeszcze nie oglądane przez właściciela.
 
 - **X27 poprawka: pola silnika relacji przeżywają przebudowę (2026-10-15; #537 + `fix/relation-engine-remote`).**
   „Użyj szablonu” (`edit-relation --profile=`) na pve9b skasował `history = newest`: `relblock_render`
