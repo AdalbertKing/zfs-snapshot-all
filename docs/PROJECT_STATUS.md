@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b32c0e3746e658fb -->
+<!-- status-covers-digest: 839545e954a8a419 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -39,7 +39,27 @@
   migawki -- do recenzenta (silniki zamrożone): `docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`.
   Drobiazg do sprawdzenia: po samym cofnięciu (bez strumienia) pojawił się komunikat „canmount=noauto travels in the stream”.
 
-- **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; `fix/restore-local-dispatch`).**
+- **X12: wybór datasetów = drzewo z kratkami (2026-10-15; `feat/x12-tree`).** Właściciel (10-12): okno
+  „Co kopiować” (lista + Dodaj miejsce / Wyjątki / Usuń pozycję) było „siermiężne i nieużyteczne”. Teraz jedno
+  okno w curses (`tui/tree.py`, drugi wyjątek od whiptail po `grid.py`), jak w eksploratorze: `[x]` miejsce
+  (razem z tym, co pod nim powstanie), `[ ]` nie, `[-]` część; Spacja zaznacza/odznacza całą gałąź,
+  →/+ rozwija, ←/- zwija, Enter Dalej, Esc Wstecz; kolumna rozmiaru, zvol podpisany. Odznaczenie pod
+  zaznaczonym miejscem = wyjątek (bez osobnego okna). Kontrakt czasowników bez zmian: `basket_step`
+  (`tui/basket-lib.sh`) oddaje te same `B_ROOT`/`B_EXCL`/`RECURSION`; w trzech miejscach naraz: kreator
+  relacji (krok „Co kopiować”), kreator repliki (krok 2) i „Zmień relację → Datasety”. Sprzecznych wyborów
+  nie da się zrobić (X10): przy „tylko całe miejsca” (Zmień relację) i przy kopiowaniu atomowym (-r)
+  odznaczenie części gałęzi jest odmawiane z komunikatem, a S (zmiana sposobu) odmawia przy wyjątkach.
+  Cel relacji lokalnej jest w „Zmień relację” ukryty razem z tym, co pod nim (X21: lista nie pokazuje celu ani tego, co pod nim);
+  miejsce nad celem dostaje cel jako wyjątek automatycznie. Usunięte okna i funkcje koszyka (lista,
+  wyjątki, usuwanie, sposób) -- `basket-lib.sh` 256 -> ~110 linii. Testy: `tui` przechodzi przez
+  prawdziwe `tree.py` w trybie `--keys` (`ZFS_TREE`, klawisz testowy `goto:NAZWA`), 40 wywołań kreatorów (26 relacji,
+  12 repliki, 2 „Zmień relację”) przepisanych z odpowiedzi whiptaila na klawisze drzewa, nowa sekcja drzewa (9 reguł) i jeden przebieg przez
+  prawdziwą pętlę curses (`test/tui/pty-keys.py` zna teraz strzałki: w trybie aplikacyjnym to `ESC O A..D`).
+  Na pve9b (Linux): `tui` 283 PASS / 6 FAIL na `026dc05b` -- te same 6 („linia”) pada tam na `feae5be5`
+  (273/6), środowisko.
+  Na żywo w GUI (PuTTY) jeszcze nie oglądane przez właściciela.
+
+- **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; #539, wdrożone na pve9b: `restore lokalna-hdd-vms --plan` daje plan).**
   Kampania przywracania na labie (pve9b, konto zfsbackup): `restore --plan --config=…` i tryb bezpieczny
   (`--dataset=<kopia> --snapshot=…`, lądowanie w `hdd/restore/…`, GUID zgodny) działają na prawdziwym ZFS.
   Ale `zfs-backup.sh restore lokalna-hdd-vms --plan` kończył się rc=1 bez słowa: dyspozytor woła
@@ -244,8 +264,8 @@
   „strażnik albo replika, bez harmonogramu, lub osierocony wpis” (X14). F6 Repliki:
   kolumna „Rodzaj” (historia / zdjęcia ×N), a panel zaczyna od Rodzaju, „Na dysku” z
   przykładem (np. „12 ostatnich zdjęć = ok. 12 mies. wstecz”) i „Szyfrowane” (X11).
-  X8 (podpis wiersza hosta na liście „co kopiować”) nie jest w tej paczce: zrobię go w
-  drzewie z kratkami (X12), które zastąpi tę listę.
+  X8 (podpis wiersza hosta na liście „co kopiować”) nie jest w tej paczce i nie wszedł też do
+  drzewa z kratkami (X12, 2026-10-15): drzewo pokazuje nazwy datasetów, podpis hosta zostaje otwarty.
 
 - **Replika po zerwaniu łańcucha (W18, właściciel 2026-10-12).** Replika z własnymi
   migawkami ciągnie przyrosty od zakładki na kopii relacji; po usunięciu i ponownym
