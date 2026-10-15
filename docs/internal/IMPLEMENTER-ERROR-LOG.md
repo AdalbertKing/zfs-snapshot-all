@@ -1955,8 +1955,9 @@ entries since the start. The rule existed in the workspace CLAUDE.md ("before
 `git add .` check `git status`") and in memory ("git add docs/ sweeps
 untracked"), neither of which is section 1.
 
-**Rule.** R13. Removed from the index (`git rm --cached`), kept on disk, branch
-not yet pushed -- nothing reached GitHub.
+**Rule.** R13. Removed from the index (`git rm --cached`, `bcd412f2`), kept on disk. The
+branch had already been pushed with that history, so both files sit in the branch's history on
+GitHub (not in its final tree); history is not rewritten. They are copies of repo scripts, no secrets.
 
 ### E81 — edited the code and a suite file while those suites were running (2026-10-13, R11, twice in one hour)
 

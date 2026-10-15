@@ -31,13 +31,14 @@
   relacji (krok „Co kopiować”), kreator repliki (krok 2) i „Zmień relację → Datasety”. Sprzecznych wyborów
   nie da się zrobić (X10): przy „tylko całe miejsca” (Zmień relację) i przy kopiowaniu atomowym (-r)
   odznaczenie części gałęzi jest odmawiane z komunikatem, a S (zmiana sposobu) odmawia przy wyjątkach.
-  Cel relacji lokalnej jest w „Zmień relację” ukryty razem z tym, co pod nim (X21: kopie nie są źródłem);
+  Cel relacji lokalnej jest w „Zmień relację” ukryty razem z tym, co pod nim (X21: lista nie pokazuje celu ani tego, co pod nim);
   miejsce nad celem dostaje cel jako wyjątek automatycznie. Usunięte okna i funkcje koszyka (lista,
   wyjątki, usuwanie, sposób) -- `basket-lib.sh` 256 -> ~110 linii. Testy: `tui` przechodzi przez
   prawdziwe `tree.py` w trybie `--keys` (`ZFS_TREE`, klawisz testowy `goto:NAZWA`), 40 wywołań kreatorów (26 relacji,
   12 repliki, 2 „Zmień relację”) przepisanych z odpowiedzi whiptaila na klawisze drzewa, nowa sekcja drzewa (9 reguł) i jeden przebieg przez
   prawdziwą pętlę curses (`test/tui/pty-keys.py` zna teraz strzałki: w trybie aplikacyjnym to `ESC O A..D`).
-  Na pve9b (Linux): `tui` 283 PASS / 6 FAIL -- te same 6 („linia”) pada tam na `main` (273/6), środowisko.
+  Na pve9b (Linux): `tui` 283 PASS / 6 FAIL na `026dc05b` -- te same 6 („linia”) pada tam na `feae5be5`
+  (273/6), środowisko.
   Na żywo w GUI (PuTTY) jeszcze nie oglądane przez właściciela.
 
 - **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; #539, wdrożone na pve9b: `restore lokalna-hdd-vms --plan` daje plan).**
@@ -245,8 +246,8 @@
   „strażnik albo replika, bez harmonogramu, lub osierocony wpis” (X14). F6 Repliki:
   kolumna „Rodzaj” (historia / zdjęcia ×N), a panel zaczyna od Rodzaju, „Na dysku” z
   przykładem (np. „12 ostatnich zdjęć = ok. 12 mies. wstecz”) i „Szyfrowane” (X11).
-  X8 (podpis wiersza hosta na liście „co kopiować”) nie jest w tej paczce: zrobię go w
-  drzewie z kratkami (X12), które zastąpi tę listę.
+  X8 (podpis wiersza hosta na liście „co kopiować”) nie jest w tej paczce i nie wszedł też do
+  drzewa z kratkami (X12, 2026-10-15): drzewo pokazuje nazwy datasetów, podpis hosta zostaje otwarty.
 
 - **Replika po zerwaniu łańcucha (W18, właściciel 2026-10-12).** Replika z własnymi
   migawkami ciągnie przyrosty od zakładki na kopii relacji; po usunięciu i ponownym
