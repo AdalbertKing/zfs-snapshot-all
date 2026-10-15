@@ -26,8 +26,8 @@
   nie pisał pól silnika do bloku `[relation:]`, a przebudowa (`local-backup --replace` dla relacji
   lokalnej, `relblock_adopt_remote` dla zdalnej) kasowała stary blok bez ich odczytania. Teraz
   `relblock_engine_keep` zbiera `history compression cipher autotune raw` z bloku przed usunięciem
-  (pierwsze cztery także z legacy sekcji tego samego `pair_label`, gdy bloku brak; `raw` relacji
-  lokalnej zostaje w jej sekcji), `relblock_from_profile` je przywraca, `relblock_render` zapisuje.
+  (pierwsze cztery także z legacy sekcji tego samego `pair_label` -- dla pola, którego blok nie ma;
+  `raw` relacji lokalnej zostaje w jej sekcji), `relblock_from_profile` je przywraca, `relblock_render` zapisuje.
   Testy regresji w `localbackup` (X27), kontrola negatywna na starym kodzie daje BAD. Na żywo pve9b
   (`lokalna-hdd-vms`): `set-transfer --history=newest`, potem „Użyj szablonu” d30h24-age z CLI --
   `history` zostaje, crontab ma `-i`, okno Transfery pokazuje tryb przyrostowy.
