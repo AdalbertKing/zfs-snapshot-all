@@ -134,8 +134,12 @@ restore_grant_line() {   # <label>
     # which is the safe way to be wrong.
     local sc
     sc=$(sed -n 's/^RESTORE_GRANT_DATASETS=\"\(.*\)\"$/\1/p' "$f" 2>/dev/null | head -1)
+    # The '-' goes LAST in the bracket. Written `:-\ ` it was a RANGE from ':'
+    # down to ' ' -- an empty range -- so a space did not match the whitelist and
+    # every scope of more than one dataset was reported EMPTY (measured on pve9,
+    # 2026-10-15: four granted datasets, RESTORE_GRANT_DATASETS= on the wire).
     case "$sc" in
-        *[!A-Za-z0-9/_.:-\ ]*) sc="" ;;
+        *[!A-Za-z0-9/_.:\ -]*) sc="" ;;
     esac
     printf 'RESTORE_GRANT_DATASETS=%s\n' "$sc"
     return 0

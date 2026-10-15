@@ -81,8 +81,8 @@ RESTORE_ONTO_TO=()
 # destination and this one is where the data came from.
 RESTORE_SOURCE_LABEL=""
 # The datasets the target machine granted, as its gate reported them. Empty when
-# it reported none, which makes the replace-on-scope-root refusal below inert --
-# the safe way to be wrong about a shape that only matters when it is present.
+# it reported none -- and an empty scope now REFUSES a remote replace (it is not
+# known whether the target is the scope root); see restore_one, step 4b.
 RESTORE_GRANT_SCOPE=""
 # The relationship this run is recovering, when the address named one. Used to
 # pause its scheduled jobs for the duration.
@@ -2358,6 +2358,20 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # waiting.
                 local _g
                 if [ "${RESTORE_STRATEGY:-}" != full-bare ]; then
+                # AN UNKNOWN SCOPE REFUSES (2026-10-15). It used to make this check
+                # inert -- "the safe way to be wrong" -- while the gate, from its
+                # side, reported an unparseable scope as EMPTY because "an empty
+                # scope makes the collector refuse". Each side counted on the
+                # other; together they destroyed the scope root on pve9 (a
+                # four-dataset scope the gate could not parse, a replace from the
+                # mirror, permission denied on the re-create). Not knowing whether
+                # this is the root is a reason not to destroy it.
+                if [ -z "${RESTORE_GRANT_SCOPE:-}" ]; then
+                    RESTORE_ONE_VERDICT="'$host' did not report the scope of its grant, so this run cannot tell whether '$_tgt_ds' is the ROOT of the delegated scope -- and 'replace' would destroy the delegation with it"
+                    log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Nothing was changed."
+                    log 0 "restore: update the package on '$host' (its gate reports the scope), or recover the CHILDREN, whose parent survives:  restore <from> <onto>:${_tgt_ds}/<child>"
+                    return 1
+                fi
                 for _g in ${RESTORE_GRANT_SCOPE:-}; do
                     [ "$_g" = "$_tgt_ds" ] || continue
                     RESTORE_ONE_VERDICT="'$_tgt_ds' is the ROOT of the delegated scope, and 'replace' would destroy the delegation with it"

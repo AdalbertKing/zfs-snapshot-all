@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8b7344b914ad0cc0 -->
+<!-- status-covers-digest: d7004391cf2efb10 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,22 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Zastąpienie (`replace`) zniszczyło korzeń zakresu na pve9 -- naprawione (2026-10-15; `fix/gate-scope-replace-guard`).**
+  Kampania, wariant „kolektor B obcy -> replace z C” (pve11 -> pve9, relacja `k2-bc`): bieg zniszczył
+  `hdd/backups/192.168.28.98/hdd/data` na pve9 i nie odtworzył go (brak prawa `create` na rodzicu) -- delegacja
+  zniknęła razem z datasetem. Bezpiecznik „nie zastępuj korzenia zakresu” istniał, ale był martwy: bramka
+  (`zfs-pair-gate.sh`) sprawdzała zakres białą listą z zakresem znaków `:-\ ` (od „:” w dół do spacji), więc spacja
+  nie przechodziła i każdy zakres z więcej niż jednym datasetem szedł jako pusty `RESTORE_GRANT_DATASETS=`; a pusty
+  zakres po stronie kolektora wyłączał sprawdzenie. Każda strona liczyła na drugą. Teraz: bramka przepuszcza listę
+  rozdzieloną spacjami (znaki spoza listy nadal = pusty zakres), a `restore_one` przy pustym zakresie ODMAWIA
+  zdalnego `replace` (nie wie, czy cel jest korzeniem). `full-bare` (pusty dataset, `recv -F`, nic nie niszczy) bez
+  zmian. Testy w `test/restoregrant/run.sh`: zakres z wielu datasetów zgłaszany w całości (bramka z `main`: FAIL),
+  replace przy braku zakresu odmawia bez uruchamiania silnika (`zfs-restore.sh` z `main`: silnik ruszył z `-f`),
+  korzeń wymieniony na liście kilku -- odmowa. Przy okazji: atrapa zgody w tej suicie zwracała zły argument, więc
+  wszystkie przypadki „odmowa nie uruchamia silnika” biegły BEZ zgody; poprawione, nadal przechodzą. Lab naprawiony
+  ręcznie (pusty korzeń, `zfs allow` dla `zfsbackup-pve11`, pełny odzysk z C). Otwarte: po zniszczeniu korzenia
+  zakresu odzysk wymaga ponownej delegacji -- komunikat ma to mówić.
 
 - **Przywracanie: potwierdzenie nadpisania, klucz nośnika, droga „usuń + obok” (2026-10-15; `feat/restore-confirm-key`).**
   Decyzje właściciela po kampanii odzysku: (3) „nadpisanie zawsze z potwierdzeniem, i w GUI, i we wsadzie,
