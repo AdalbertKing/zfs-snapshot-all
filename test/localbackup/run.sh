@@ -653,7 +653,11 @@ printf 'CLIENT_NAME=rdr\nSTATE=active\n' > "$RD/clients/rdr.conf"
 printf '[dataset:rpool/a]\n\tdst = hdd/backups\n\tpair_label = rdl\n' > "$RD/c.conf"
 rdl=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdl --plan --config="$RD/c.conf" 2>&1)
 rdr=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdr --plan --config="$RD/c.conf" 2>&1)
-if [ -n "$rdl" ] && [ -n "$rdr" ]; then
+# Both must come from zfs-restore.sh: its refusal names the label in the given config
+# (the copy-side datasets are not there). Silence, or anything else, is the defect.
+# NOTE: on Git Bash the fatal-die TERM does not reach the parent, so the remote case
+# only discriminates on Linux (CI) -- measured 2026-10-15.
+if printf '%s' "$rdl" | grep -qF "restore:" && printf '%s' "$rdr" | grep -qF "'rdr' is not a relation label"; then
     ok "restore dispatch: a local relationship, and one whose connection cannot be loaded, reach zfs-restore.sh -- no silent rc=1"
 else
     bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
