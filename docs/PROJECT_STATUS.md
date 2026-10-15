@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 839545e954a8a419 -->
+<!-- status-covers-digest: ba3c8b7a33f86db6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`status NAZWA` dla relacji lokalnej ma własny widok (2026-10-15; `fix/status-local`).** Wcześniej tekstowy
+  `status` pokazywał relację lokalną jak zdalną: „Blokada u peera: NIEZNANA”, „Endpoint docelowy: ? (?:?)”, „Cron
+  dziala przez: (jeszcze nie aktywowany -- brak linii cron)”, „Zrodla: ?” przy relacji z 12 liniami w cronie (GUI,
+  które czyta `status --json`, pokazywało ją dobrze). Teraz (`status_local_view`): typ (kopia lokalna / tylko
+  migawki), stan, pauza, źródła, cel, kopie, konto, config, liczba linii tej relacji w crontabie konta, spójność
+  (także dla relacji bez kopii), ostatni wynik z dziennika konta po etykiecie (`snapsend.sh`, `"label"`). Na liście
+  (`status` bez nazwy) relacja lokalna ma `endpoint=(lokalna)`. Na żywo pve9b: `lokalna-hdd-vms` i `test-migawki`
+  pokazują 12 linii crona i ostatni wynik „success”; pve10: widok relacji zdalnych bez zmian. Test w
+  `localbackup`, kontrola negatywna na `main` daje BAD.
 
 - **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
   Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
