@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d976caf724fecf3d -->
+<!-- status-covers-digest: b32c0e3746e658fb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,10 +32,12 @@
   `referenced` równe migawce -- nie `written@`, które po cofnięciu nigdy nie jest 0), komunikat o tym, że kopia
   ma jeszcze migawki nowsze niż punkt. Na żywo: zapis po migawce zniknął, 07:01 i 08:01 oraz zakładka zdjęte,
   `referenced` 25088 = 25088; następny bieg relacji: „Backup copy ... follows its source -- discarding 2
-  snapshot(s)”, nowa migawka na obu stronach z tym samym GUID. Suita `restore` na pve9b 296/1 -- ta sama jedna
+  snapshot(s)”, nowa migawka na obu stronach z tym samym GUID. Przypadek `unproven` (przywrócenie do najnowszego punktu, gdy źródło na nim stoi) na żywo: samo cofnięcie do tej
+  migawki, bez `-f`. Suita `restore` na pve9b 296/1 -- ta sama jedna
   porażka na `main` (środowisko hosta). Brak stałego testu na prawdziwym ZFS (suita `restore` ma atrapę `zfs`).
   Silnik: skrót „already exists in target” omija regułę P-0 także dla zwykłej kopii, gdy źródło nie ma nowej
-  migawki -- do recenzenta (silniki zamrożone).
+  migawki -- do recenzenta (silniki zamrożone): `docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`.
+  Drobiazg: komunikat „canmount=noauto travels in the stream” pada także wtedy, gdy strumienia nie było.
 
 - **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; `fix/restore-local-dispatch`).**
   Kampania przywracania na labie (pve9b, konto zfsbackup): `restore --plan --config=…` i tryb bezpieczny
