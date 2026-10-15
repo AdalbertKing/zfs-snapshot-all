@@ -9,7 +9,8 @@ co program narysowal PO KAZDYM klawiszu.
 
   pty-keys.py <tui> <klawisze> -- <argumenty tui...>
 
-<klawisze> po przecinku: F2..F10 albo pojedynczy znak. Wypisuje jeden blok
+<klawisze> po przecinku: F2..F10, up/down/left/right, space, pgup/pgdn, esc, enter,
+ctrl-r albo pojedynczy znak. Wypisuje jeden blok
 na klawisz: '=== <klawisz>' i tekst narysowany po nim (bez sekwencji ESC).
 Kod wyjscia 2 = brak pty (np. Windows) -- suita to pomija i MOWI o tym.
 """
@@ -29,7 +30,11 @@ except ImportError:
 
 SEQ = {"F1": "\x1bOP", "F2": "\x1bOQ", "F3": "\x1bOR", "F4": "\x1bOS", "F5": "\x1b[15~", "F6": "\x1b[17~",
        "F7": "\x1b[18~", "F8": "\x1b[19~", "F9": "\x1b[20~", "F10": "\x1b[21~", "esc": "\x1b", "enter": "\r",
-       "ctrl-r": "\x12"}
+       "ctrl-r": "\x12",
+       # X12 (drzewo z kratkami): strzalki w trybie aplikacyjnym (curses keypad wlacza smkx,
+       # wiec xterm wysyla ESC O A..D, nie ESC [ A..D -- to drugie curses czyta jako Esc + znaki)
+       "up": "\x1bOA", "down": "\x1bOB", "right": "\x1bOC", "left": "\x1bOD", "space": " ",
+       "pgup": "\x1b[5~", "pgdn": "\x1b[6~"}
 ANSI = re.compile(r"\x1b(\[[0-9;?]*[A-Za-z@]|\][^\x07]*\x07|[()][0-9A-B]|[=>78]|O.)")
 
 

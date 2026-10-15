@@ -1893,11 +1893,30 @@ case "$1" in
     *)              echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
 EOF
-chmod +x "$NR/bin/whiptail" "$NR/bin/zb"
+# Okno-drzewo wyboru datasetow (tui/tree.py, curses; X12) bez terminala -- jak $ER/bin/grid
+# dla tabel, tylko wspolne dla kreatorow nr/rp/er (rp i er dostaja kopie; stan trzyma
+# $NR_DIR danego kreatora): kazde wywolanie okna bierze KOLEJNA linie klawiszy z
+# $NR_DIR/treekeys (brak linii = Esc), jedzie PRAWDZIWYM tree.py w trybie --keys, a jego ekran
+# z liniami MSG dopisuje do $NR_DIR/tree.log (stdout kreatora zostaje czysty). Kod wyjscia =
+# kod tree.py (0 Dalej, 1 Wstecz); linia "RC:" w dzienniku mowi to samo czytajacemu sam dziennik.
+cat > "$NR/bin/tree" <<'EOF'
+#!/bin/bash
+n=$(cat "$NR_DIR/tree.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/tree.n"
+k=$(sed -n "${n}p" "$NR_DIR/treekeys" 2>/dev/null); [ -n "$k" ] || k=esc
+"$TREE_PY" "$TREE_REPO/tui/tree.py" --keys "$k" "$@" >> "$NR_DIR/tree.log"
+rc=$?
+echo "RC: $rc" >> "$NR_DIR/tree.log"
+exit "$rc"
+EOF
+chmod +x "$NR/bin/whiptail" "$NR/bin/zb" "$NR/bin/tree"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
+      # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
+      # na wywolanie okna, linie rozdzielone '|' (jak odpowiedzi); brak linii = Esc.
+      printf '%s\n' "${NR_TREE:-}" | tr '|' '\n' > "$NR/treekeys"
+      export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$NR/bin/tree"
       # Tabela retencji zrodla (tui/grid.py, curses) bez terminala: klawisze z NR_GRID_KEYS,
       # domyslnie Enter = Dalej bez zmian (zrodlo jak cel).
       export ZFS_GRID="$PY $REPO/tui/grid.py --keys ${NR_GRID_KEYS:-enter}"
@@ -1917,6 +1936,10 @@ NRT="0${T}hdd/backups
 0${T}
 0${T}
 "
+# Krok 4 to od X12 jedno okno-drzewo (tui/tree.py), nie lista whiptaila: w odpowiedziach
+# whiptaila nie ma po nim zadnej linii, a klawisze drzewa ida w NR_TREE (wywolania rozdziela '|').
+# NRTK = dawne "wybierz hdd/test-kreator, next": goto: ustawia kursor, Spacja zaznacza, Enter = Dalej.
+NRTK='goto:hdd/test-kreator,space,enter'
 # W17 (wlasciciel 2026-10-11): zrodlo ZASZYFROWANE -> w "Ustawieniach dodatkowych" pozycja
 # "Wyslij zaszyfrowane" ZAZNACZONA domyslnie, komenda z --raw; odznaczona -> bez --raw;
 # kontrola: zrodlo niezaszyfrowane -> pozycji nie ma.
@@ -1932,8 +1955,6 @@ w17_ans() {   # <odpowiedz checklisty kroku 9>
     printf '%s' "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -1943,9 +1964,9 @@ w17_ans() {   # <odpowiedz checklisty kroku 9>
 0${T}
 0${T}
 "; }
-W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
-W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE")
-W17C=$(nr_run "$(w17_ans 'grant')"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE" NR_TREE="$NRTK"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE" NR_TREE="$NRTK")
+W17C=$(nr_run "$(w17_ans 'grant')" NR_TREE="$NRTK"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 if has "$W17A" " --raw " && has "$W17L1" ' ~ raw ~ ' && hasE "$W17L1" 'raw ~ [^~]* ~ ON' \
    && ! has "$W17B" " --raw " && has "$W17B" "CMD: " && ! has "$W17L3" ' ~ raw ~ ' && ! has "$W17C" " --raw "; then
     ok "new-relation: W17 zaszyfrowane zrodlo -- 'Wyslij zaszyfrowane' zaznaczone domyslnie, --raw w komendzie; odznaczone = bez --raw; zwykle zrodlo = bez pozycji"
@@ -1967,135 +1988,124 @@ NRTS="0${T}default
 # Zmierzone na pve10<-pve11: dataset zalozony pod zrodlem PO relacji kopiuje sie sam,
 # w -R i w -r. Pozycja = MIEJSCE; dodanie nie zadaje pytan; wyjatki to akcja koszyka.
 # 1. miejsce z dziecmi + wyjatek + puste miejsce
+# X12: koszyk to jedno drzewo (tui/tree.py); dawne "wybierz hdd/data, exc, mail, add,
+# hdd/test-kreator, next" to klawisze: Spacja na hdd/data (miejsce), Spacja na mail (pod
+# miejscem = wyjatek), Spacja na hdd/test-kreator (drugie miejsce), Enter. Ostatni goto tylko
+# stawia kursor na zvolu, zeby ekran (tree.log) pokazal wiersz z zvolem; nic nie zaznacza.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/data
-0${T}exc
-0${T}__add__
-0${T}hdd/data/mail
-0${T}__done__
-0${T}add
-0${T}hdd/test-kreator
-0${T}next
-${NRT}"); NRRC=$?
+${NRT}" NR_TREE='goto:hdd/data,space,goto:hdd/data/mail,space,goto:hdd/test-kreator,space,goto:hdd/vm-disks/vm-201-disk-0,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=192.168.28.98:hdd/data,hdd/test-kreator --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/data/mail\$ --exclude-family=__replicate_,vzdump,__migration__ --grant-remotely --install --yes " && ! has "$NROUT" "--recursive" && ! hasE "$NROUT" 'exclude-child=[^ ]*[(|]'; then
     ok "new-relation: koszyk -- miejsca w JEDNYM --source po przecinku, odznaczone dziecko jako --exclude-child=^nazwa\$ (zakotwiczone, bez ( | -- wzorzec jedzie nieocytowany do crona)"
 else
     bad "new-relation: koszyk, droga glowna" "rc=$NRRC" "$NROUT" "$(cat "$NR/err")" "$(cat "$NR/wt.log")"
 fi
-if ! grep -qF -- '--radiolist' <(grep -F 'Krok 4/10' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log"; then
+NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
+if ! grep -qF -- '--radiolist' <(grep -F 'Krok 4/10' "$NR/wt.log") && ! grep -qF 'Jak kopiować' "$NR/wt.log" && ! has "$NRTL" 'Jak kopiować'; then
     ok "new-relation: dodanie miejsca NIE zadaje pytan -- w kroku 4 nie ma ani 'co kopiowac?', ani -R/-r (to 'jak', nie 'co')"
 else
-    bad "new-relation: pytanie w kroku 4" "$(grep -F -- '--radiolist' "$NR/wt.log")"
+    bad "new-relation: pytanie w kroku 4" "$(grep -F -- '--radiolist' "$NR/wt.log")" "$NRTL"
 fi
-NRMENU2="$(grep -F -- 'Które miejsce z' "$NR/wt.log" | sed -n 2p)"
-if [ -n "$NRMENU2" ] && ! has "$NRMENU2" "hdd/data ~" && ! has "$NRMENU2" "hdd/data/docs ~" && has "$NRMENU2" "hdd/ct ~" \
-   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qE 'hdd/data ~   data +[0-9.]+[KMG] +3 pod nim ~' \
-   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qE 'vm-201-disk-0 +[0-9.]+[KMGB] +zvol' \
-   && grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1 | grep -qF 'albo POWSTANIE'; then
-    ok "new-relation: lista miejsc = drzewo (wciecie, rozmiar, zvol, 'N pod nim') i mowi wprost 'albo POWSTANIE'; tego, co koszyk juz obejmuje, druga lista NIE pokazuje"
+# Dawna "lista miejsc" (whiptail) to teraz ekran drzewa w tree.log: tytul kroku, wciecie,
+# rozmiar, zvol i legenda "POWSTANIE". Dawne "druga lista nie oferuje tego, co koszyk juz
+# obejmuje" nie ma odpowiednika -- w drzewie to, co obejmuje miejsce, stoi w tym samym oknie jako [x].
+if has "$NRTL" 'Krok 4/10: Co kopiować z 192.168.28.98?' && has "$NRTL" 'POWSTANIE' \
+   && hasE "$NRTL" '- \[-\] data +[0-9.]+[KMG] ' && hasE "$NRTL" 'vm-201-disk-0 +zvol [0-9.]+[KMGB] ' \
+   && hasE "$NRTL" '\[x\] docs' && hasE "$NRTL" '\[x\] photos'; then
+    ok "new-relation: lista miejsc = drzewo z kratkami (tytul kroku, wciecie, rozmiar, zvol) i mowi wprost 'POWSTANIE'; to, co obejmuje miejsce, stoi w tym samym oknie jako [x]"
 else
-    bad "new-relation: lista miejsc" "$NRMENU2" "$(grep -F -- 'Które miejsce z' "$NR/wt.log" | head -1)"
+    bad "new-relation: drzewo miejsc" "$NRTL"
 fi
-NRB="$(grep -F -- 'Co kopiować z' "$NR/wt.log" | tail -1)"
-if has "$NRB" 'POMIJANE: mail' && has "$NRB" 'dziś pod nim: docs, photos' && has "$NRB" 'dziś nic pod nim' && [ "$(printf '%s' "$NRB" | grep -o 'wszystko, co pod nim POWSTANIE' | wc -l)" -eq 2 ]    && has "$NRB" 'Sposób: każdy dataset osobno (-R) -- zmień'; then
-    ok "new-relation: okno koszyka POKAZUJE, co dzis lezy pod miejscem, pomijane ZAWSZE w calosci ('POMIJANE: mail', takze na 24 wierszach), o pustym mowi 'dzis nic pod nim', przy kazdym '+ wszystko, co pod nim POWSTANIE'; -R/-r jako akcja koszyka"
+if has "$NRTL" '[ ] mail' && has "$NRTL" 'pominięte: 1' && hasE "$NRTL" '\[x\] test-kreator' && has "$NRTL" 'Sposób: każdy dataset osobno (-R)' \
+   && has "$NRTL" 'Wybrane miejsca: 2'; then
+    ok "new-relation: okno koszyka POKAZUJE, co dzis lezy pod miejscem i co jest pomijane (odznaczona 'mail', 'pominięte: 1'), puste miejsce jako [x] bez dzieci, 'Sposób: każdy dataset osobno (-R)' jako akcja okna (S)"
 else
-    bad "new-relation: okno koszyka" "$NRB"
+    bad "new-relation: okno koszyka" "$NRTL"
 fi
-if grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/data/docs ~' && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF '(nic – kopiowane jest wszystko pod hdd/data)' \
-   && ! grep -F -- 'co pominąć' "$NR/wt.log" | grep -qF 'hdd/ct' && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | grep -qF -- '--checklist'; then
-    ok "new-relation: wyjatki = list_editor (menu, nie checklista); okno 'Dodaj' oferuje TYLKO to, co pod wybranym miejscem; pusta lista mowi, ze kopiowane jest wszystko"
+# Dawne okna wyjatkow (list_editor: 'co pominąć' / 'czego NIE kopiować', 'Dodaj' oferujace tylko to, co pod
+# miejscem) nie istnieja -- wyjatek to odznaczona kratka pod zaznaczonym miejscem, wiec "oferuje tylko to,
+# co pod miejscem" wynika z drzewa. Zostaje to, co liczy sie dla czasownika: komenda niesie DOKLADNIE
+# jeden --exclude-child (dla mail) i nic z hdd/ct.
+if has "$NROUT" " --exclude-child=^hdd/data/mail\$ " && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 1 ] \
+   && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" 'hdd/ct' && has "$NROUT" "--source=192.168.28.98:hdd/data,hdd/test-kreator "; then
+    ok "new-relation: wyjatek = odznaczony dataset pod miejscem; w komendzie dokladnie jeden --exclude-child (mail), nic z hdd/ct, miejsca w jednym --source"
 else
-    bad "new-relation: lista wyjatkow" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
+    bad "new-relation: wyjatki w komendzie" "$(printf '%s' "$NROUT" | grep '^CMD: ')" "$NRTL"
 fi
 # 2. puste miejsce samo: akcji 'Wyjatki' NIE MA (przyszlego nie da sie wskazac), synchro z portem
 NROUT=$(nr_run "0${T}sync
 0${T}192.168.28.98:2222
 0${T}
-0${T}hdd/test-kreator
-0${T}next
-${NRTS}")
+${NRTS}" NR_TREE="$NRTK")
+# Dawne "bez akcji 'Wyjatki'" = w drzewie nic nie jest pominiete: ekran nie ma 'pominięte: 1'.
 if has "$NROUT" "CMD: --source=192.168.28.98:2222:hdd/test-kreator --mode=sync --profile=default --name=pve9b --exclude-family=" && ! has "$NROUT" "--target" && ! has "$NROUT" "exclude-child" && grep -q '^check-source 192.168.28.98:2222 --json$' "$NR/zb.log" \
-   && ! grep -F -- 'Co kopiować z' "$NR/wt.log" | grep -qF ' ~ exc ~ '; then
+   && has "$(cat "$NR/tree.log")" 'pominięte: 0' && ! has "$(cat "$NR/tree.log")" 'pominięte: 1'; then
     ok "new-relation: miejsce, pod ktorym dzis nic nie ma -> koszyk BEZ akcji 'Wyjatki'; synchro = --mode=sync, port w adresie"
 else
     bad "new-relation: puste miejsce / synchro" "$NROUT" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
 fi
 # 3. wyjatki otwarte drugi raz pamietaja stan (odznaczone wraca odznaczone)
+# X12: dawne okna wyjatkow zniknely. "Otwarte drugi raz" to teraz powrot do kroku 4: Wstecz z kroku 5
+# (menu "Dokad", odpowiedz `1`) wraca do drzewa, ktore dostaje z koszyka ten sam wybor -- wiec drugi ekran
+# w tree.log ma subvol-302 znow odznaczony, a 301 zaznaczony. Dwa wywolania okna = dwie linie NR_TREE.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/ct
-0${T}exc
-0${T}__add__
-0${T}hdd/ct/subvol-302-disk-0
-0${T}__done__
-0${T}exc
-0${T}__add__
 1${T}
-1${T}
-0${T}next
-${NRT}")
+${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter')
+NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
-   && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~' \
-   && grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-301-disk-0 ~' \
-   && ! grep -F -- 'co pominąć' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct/subvol-302-disk-0 ~'; then
-    ok "new-relation: ponowne 'Wyjatki' pokazuja stan (pomijany na liscie, a okno 'Dodaj' go juz NIE oferuje); Wstecz z 'Dodaj' i z listy niczego nie zmienia"
+   && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
+   && [ "$(grep -cF '[x] subvol-301-disk-0' "$NR/tree.log")" -eq 2 ] && ! has "$NRTL" '[ ] subvol-301-disk-0'; then
+    ok "new-relation: drzewo otwarte drugi raz (Wstecz z kroku 5) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
 else
-    bad "new-relation: stan wyjatkow" "$NROUT" "$(grep -F -- 'czego NIE kopiować' "$NR/wt.log")" "$(grep -F -- 'co pominąć' "$NR/wt.log")"
+    bad "new-relation: stan wyjatkow" "$NROUT" "$NRTL"
 fi
 # 3b. miejsce dodane PO swoim dziecku: pytanie o zastapienie, bez sprzecznosci w komendzie
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/data/docs
-0${T}add
-0${T}hdd/data
-0${T}
-0${T}next
-${NRT}")
-if has "$NROUT" "CMD: --source=192.168.28.98:hdd/data --target" && ! has "$NROUT" "hdd/data/docs" && grep -F -- '--yesno' "$NR/wt.log" | grep -F 'obejmuje to, co już wybrane' | grep -qF 'hdd/data/docs'; then
-    ok "new-relation: miejsce dodane po wlasnym dziecku -> pytanie 'Zastap' z NAZWA dziecka; w komendzie zostaje samo miejsce"
+${NRT}" NR_TREE='goto:hdd/data/docs,space,goto:hdd/data,space,enter')
+# X12: pytania 'Zastap' (okno 'obejmuje to, co już wybrane') juz nie ma -- rodzic po prostu wchlania
+# dziecko. Zostaje to, co liczy sie dla komendy (--source = samo miejsce, bez dziecka); ekran mowi
+# to samo: jedno wybrane miejsce, nic pominietego.
+if has "$NROUT" "CMD: --source=192.168.28.98:hdd/data --target" && ! has "$NROUT" "hdd/data/docs" \
+   && has "$(cat "$NR/tree.log")" 'Wybrane miejsca: 1   pominięte: 0'; then
+    ok "new-relation: miejsce dodane po wlasnym dziecku -> rodzic wchlania dziecko bez pytania; w komendzie zostaje samo miejsce"
 else
-    bad "new-relation: zastapienie dziecka miejscem" "$NROUT" "$(grep -F -- '--yesno' "$NR/wt.log")"
+    bad "new-relation: zastapienie dziecka miejscem" "$NROUT" "$(cat "$NR/tree.log")"
 fi
 # 3c. pominiety dataset Z WLASNYMI dziecmi = dwa wzorce: ^nazwa$ i ^nazwa/
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd
-0${T}exc
-0${T}__add__
-0${T}hdd/ct/subvol-301-disk-0
-0${T}__add__
-0${T}hdd/ct
-0${T}__done__
-0${T}next
-${NRT}")
+${NRT}" NR_TREE='goto:hdd,space,goto:hdd/ct/subvol-301-disk-0,space,goto:hdd/ct,space,enter')
+NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
+# Ekran: wyjatek hdd/ct (odznaczony) wchlonal wczesniejszy wyjatek 301 -- 'pominięte: 1', nie 2.
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd --target=hdd/backups --profile=default --name=pve9b --exclude-child=^hdd/ct\$ --exclude-child=^hdd/ct/ --exclude-family" && [ "$(printf '%s' "$NROUT" | grep '^CMD: ' | grep -o 'exclude-child' | wc -l)" -eq 2 ] \
-   && ! has "$NROUT" "subvol-301-disk-0" && grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'hdd/ct ~' \
-   && ! grep -F -- 'czego NIE kopiować' "$NR/wt.log" | tail -1 | grep -qF 'subvol-301-disk-0'; then
-    ok "new-relation: wyjatek z dziecmi = ^nazwa\$ i ^nazwa/; dodanie przodka zdejmuje z listy wczesniej dodanego potomka (jego dzieci nie dostaja wlasnych wzorcow)"
+   && ! has "$NROUT" "subvol-301-disk-0" && has "$NRTL" '[ ] ct' && has "$NRTL" 'pominięte: 1' && ! has "$NRTL" 'pominięte: 2'; then
+    ok "new-relation: wyjatek z dziecmi = ^nazwa\$ i ^nazwa/; odznaczenie przodka zdejmuje wczesniej odznaczonego potomka (jego dzieci nie dostaja wlasnych wzorcow)"
 else
-    bad "new-relation: pominiety z dziecmi" "$NROUT"
+    bad "new-relation: pominiety z dziecmi" "$NROUT" "$NRTL"
 fi
-# 3d. usuniecie jedynej pozycji -> znow lista miejsc; Wstecz x3 = wyjscie
+# 3d. zaznacz i odznacz jedyne miejsce -> Enter odmawia, Esc = Wstecz; Wstecz x3 = wyjscie
+# X12: dawne "Usun pozycje -> znow lista miejsc" to Spacja na zaznaczonym miejscu (znika) i Esc.
+# Z trzech `1` dawnych odpowiedzi koszyk zjadal pierwsza (Wstecz z listy miejsc); zostaja dwie:
+# pole hosta (Wstecz -> krok 1) i krok 1 (Wyjdz). Okno drzewa wola sie RAZ.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}del
-0${T}0
 1${T}
 1${T}
-1${T}
-"); NRRC=$?
-if [ "$NRRC" -eq 1 ] && [ "$(grep -cF -- 'Które miejsce z' "$NR/wt.log")" -eq 2 ] && grep -F -- 'Które miejsce z' "$NR/wt.log" | tail -1 | grep -qF 'hdd/test-kreator ~'; then
-    ok "new-relation: 'Usun pozycje' oproznia koszyk -> wraca lista miejsc Z usunietym datasetem; Wstecz prowadzi do hosta i wyjscia"
+" NR_TREE='goto:hdd/test-kreator,space,goto:hdd/test-kreator,space,esc'); NRRC=$?
+# Dawne "lista miejsc pojawia sie drugi raz" -- okna listy juz nie ma. Zostaje: kreator konczy sie
+# rc=1, drzewo bylo wolane dokladnie raz (jeden ekran w tree.log) i skonczylo sie Wstecz (rc=1 tree.py).
+if [ "$NRRC" -eq 1 ] && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 1 ] && [ "$(grep -c '^RC: 1$' "$NR/tree.log")" -eq 1 ] \
+   && ! grep -q '^RC: 0$' "$NR/tree.log" && has "$(cat "$NR/tree.log")" 'Wybrane miejsca: 0'; then
+    ok "new-relation: zdjecie jedynego miejsca i Esc w drzewie = Wstecz (jedno wywolanie okna, rc=1); Wstecz prowadzi do hosta i wyjscia"
 else
-    bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/wt.log")"
+    bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/tree.log" 2>/dev/null)" "$(cat "$NR/wt.log")"
 fi
 # 3e. kroki 5-10: nazwa zajeta -> odmowa i powrot do pola; Wstecz z nazwy do
 #     kroku 6 (bez pytania o spojnosc -- usunieta, patrz "krok 6, lista szablonow"
@@ -2103,8 +2113,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}lab-ct201
@@ -2117,7 +2125,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-")
+" NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
     ok "new-relation: kroki 5-10 -- zajeta nazwa odmowiona, Wstecz z nazwy do szablonu zmienia wybor (d30), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
@@ -2178,8 +2186,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2188,7 +2194,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_GRID_KEYS=down,right,bs,3,down,left,space,enter)
+" NR_GRID_KEYS=down,right,bs,3,down,left,space,enter NR_TREE="$NRTK")
 NRL6SRC="$(grep -F 'Jak długo trzymać w celu' "$NR/wt.log" | head -1)"
 if grep -qF 'save-profile --from=default --force --tier=keep_daily --keep=3 --drop-tier=keep_weekly --as=default-src-H24D3M12' "$NR/zb.log" \
    && [ "$(grep -c '^save-profile' "$NR/zb.log")" = 1 ] \
@@ -2204,8 +2210,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}d7h24-age
 0${T}pve9b
@@ -2214,7 +2218,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter)
+" NR_GRID_KEYS=right,bs,bs,1,2,down,bs,3,enter NR_TREE="$NRTK")
 if printf '%s' "$NROUT" | grep -qE '\[X\] godzinowe +24 godz\.' && printf '%s' "$NROUT" | grep -qE '\[X\] dobowe +7 dni' \
    && grep -qF 'save-profile --from=d7h24-age --force --tier=hourly --retain=-h12 --tier=daily --retain=-d3 --as=d7h24-age-src-H12D3' "$NR/zb.log" \
    && ! grep -q -- '--keep=' "$NR/zb.log" \
@@ -2234,8 +2238,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}d30h24
 0${T}pve9b
@@ -2244,7 +2246,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_GRID_KEYS=space,enter)
+" NR_GRID_KEYS=space,enter NR_TREE="$NRTK")
 if printf '%s' "$NROUT" | grep -qF 'Tego szczebla nie da się wyłączyć' && ! grep -q '^save-profile' "$NR/zb.log"; then
     ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
 else
@@ -2255,8 +2257,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2265,7 +2265,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_GRID_KEYS=enter)
+" NR_GRID_KEYS=enter NR_TREE="$NRTK")
 if ! grep -q '^save-profile' "$NR/zb.log" && ! has "$NROUT" '--source-profile='; then
     ok "new-relation: retencja zrodla bez zmian = bez osobnego profilu"
 else
@@ -2278,8 +2278,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2295,7 +2293,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n'); NRRC=$?
+" NR_PRUNERS='hdd/test-kreator\tzfsbackup-pve10\n' NR_TREE="$NRTK"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && has "$NROUT" " --profile=passive " && grep -q '^source-pruners 192.168.28.98 hdd/test-kreator$' "$NR/zb.log" \
    && [ "$(grep -c '^source-pruners' "$NR/zb.log")" = 1 ] \
    && grep -F 'Inny kolektor już przycina' "$NR/wt.log" | grep -qF 'hdd/test-kreator  -- zfsbackup-pve10'; then
@@ -2307,9 +2305,7 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
-${NRT}"); NRRC=$?
+${NRT}" NR_TREE="$NRTK"); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^source-pruners ' "$NR/zb.log" && ! grep -qF 'Inny kolektor' "$NR/wt.log" && has "$NROUT" " --profile=default "; then
     ok "new-relation: bez cudzego kolektora sprawdzenie przechodzi bez okna"
 else
@@ -2321,8 +2317,6 @@ fi
 #     (zawsze -R), w ustawieniach bez praw/zamrazania/parowania, kroki numerowane x/8,
 #     komenda = wsad local-backup z --name. Bez okna "Pobieram z hosta".
 NROUT=$(nr_run "0${T}local
-0${T}hdd/backups/192.168.28.99/hdd/lab
-0${T}next
 0${T}__other__
 0${T}hdd/kopie
 0${T}default
@@ -2331,10 +2325,11 @@ NROUT=$(nr_run "0${T}local
 0${T}__done__
 0${T}
 0${T}
-"); NRRC=$?
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+# Tytul i brak 'Sposób:' sprawdza ekran drzewa (tree.log), nie dziennik whiptaila.
 if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie --recursive=flat --profile=default --name=lokalna-hdd-backups-192.168.28.99-hdd-lab --exclude-family=__replicate_,vzdump,__migration__ --install --yes " \
    && grep -q '^list-datasets --json --own-snapshots$' "$NR/zb.log" && ! grep -q '^check-source' "$NR/zb.log" \
-   && grep -qF 'Krok 2/8: Co kopiować z' "$NR/wt.log" && ! grep -F 'Krok 2/8: Co kopiować z' "$NR/wt.log" | grep -qF 'Sposób:' \
+   && grep -qF 'Krok 2/8: Co kopiować z' "$NR/tree.log" && ! grep -qF 'Sposób:' "$NR/tree.log" \
    && ! grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | grep -qE ' ~ (grant|quies|man) ~ ' \
    && grep -F 'Dokąd na tym hoście' "$NR/wt.log" | head -1 | grep -qF 'Kopie wylądują pod:  <wybrane>/<dataset źródła>' \
    && grep -F 'Nazwa relacji' "$NR/wt.log" | grep -qF ' ~ lokalna-hdd-backups-192.168.28.99-hdd-lab ~ '; then
@@ -2349,20 +2344,18 @@ fi
 #     (pustym) i --install BEZ --yes: czasownik pusty cel potwierdza wzrokiem, wiec pyta
 #     sam w terminalu po WYKONAJ, jak przy wsadzie.
 NROUT=$(nr_run "0${T}snap
-0${T}hdd/backups/192.168.28.99/hdd/lab
-0${T}next
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
 0${T}root
 0${T}
 0${T}
-"); NRRC=$?
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
 NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --install$' "$NR/zb.log")"
 if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --name=migawki-hdd-backups-192.168.28.99-hdd-lab ' \
    && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' && ! printf '%s' "$NRSI" | grep -qF -- '--yes' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
-   && grep -qF 'Krok 2/6: Co kopiować z' "$NR/wt.log" && grep -qF 'Krok 3/6: Jak długo trzymać migawki?' "$NR/wt.log" \
+   && grep -qF 'Krok 2/6: Co kopiować z' "$NR/tree.log" && grep -qF 'Krok 3/6: Jak długo trzymać migawki?' "$NR/wt.log" \
    && grep -qF 'Krok 6/6: Podsumowanie' "$NR/wt.log" && grep -qF 'SAME MIGAWKI' "$NR/wt.log"; then
     ok "new-relation: same migawki -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= z --install bez --yes"
 else
@@ -2375,8 +2368,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}192.168.28.99
@@ -2385,7 +2376,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-")
+" NR_TREE="$NRTK")
 if has "$NROUT" " --name=192.168.28.99 " && ! grep -q '^delete-relation' "$NR/zb.log" && ! grep -qF "USUNIĘTA relacja" "$NR/wt.log"; then
     ok "new-relation: nazwa relacji 'removed' jest wolna -- kreator jej uzywa bez pytania i bez delete-relation (add-client archiwizuje stary rekord)"
 else
@@ -2461,8 +2452,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2473,7 +2462,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-" NR_FLAT=1)
+" NR_FLAT=1 NR_TREE="$NRTK")
 if has "$NROUT" " --profile=default " && has "$NROUT" " --local-user=zfsbackup " \
    && grep -qF 'Szablon nie pasuje do konta' "$NR/wt.log" && [ "$(grep -cF 'Szablon nie pasuje do konta' "$NR/wt.log")" -eq 1 ] \
    && [ "$(grep -cF -- 'Na jakim koncie mają chodzić zadania' "$NR/wt.log")" -eq 2 ]; then
@@ -2485,8 +2474,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2495,7 +2482,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-"); NRRC=$?
+" NR_TREE="$NRTK"); NRRC=$?
 if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NROUT" "deploy.sh --commit-scope=pve10" && ! has "$NROUT" "NIE UDAŁO SIĘ" \
    && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
     ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
@@ -2512,9 +2499,7 @@ EOF
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
-${NRT}" NR_STATUS="$NR/status-empty-target.json"); NRRC=$?
+${NRT}" NR_STATUS="$NR/status-empty-target.json" NR_TREE="$NRTK"); NRRC=$?
 NRTGT="$(grep -F -- 'Dokąd na tym hoście' "$NR/wt.log" | head -1)"
 if [ "$NRRC" -eq 0 ] && ! hasE "$NRTGT" ' ~ active ~ '; then
     ok "new-relation: relacja synchro z PUSTYM client_target nie wypycha 'active' na liste celow w kroku 5 (owner note 11: puste pole staje sie '-', nie zlepia sie z nastepnym)"
@@ -2528,8 +2513,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/test-kreator
-0${T}next
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
@@ -2542,7 +2525,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-")
+" NR_TREE="$NRTK")
 if has "$NROUT" " --exclude-family=__replicate_,__migration__,_tmp " && grep -qF 'Pomijane prefiksy' "$NR/wt.log" \
    && grep -qF 'Nowy prefiks' "$NR/wt.log"; then
     ok "new-relation: edytor prefiksow -- 'Usun prefiks' zdejmuje vzdump, 'Dodaj prefiks' dopisuje _tmp, wynik w --exclude-family"
@@ -2589,9 +2572,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 0${T}
-0${T}hdd/test-kreator
-0${T}next
-${NRT}" NR_CHECK=check-source.json)
+${NRT}" NR_CHECK=check-source.json NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target" && grep -q '^prepare-source 192.168.28.98 --yes$' "$NR/zb.log" \
    && [ "$(grep -c '^check-source' "$NR/zb.log")" -eq 2 ] && grep -F -- '--yesno' "$NR/wt.log" | grep -qF 'Brak pakietu na źródle' && grep -qF 'Źródło gotowe' "$NR/wt.log"; then
     ok "new-relation: brak pakietu -> pytanie wprost -> prepare-source --yes -> DRUGA sonda pokazuje 'Zrodlo gotowe' -> datasety"
@@ -2673,6 +2654,7 @@ fi
 # ============================================================================
 RP="$(mktemp -d)"; mkdir -p "$RP/bin"
 cp "$NR/bin/whiptail" "$RP/bin/whiptail"
+cp "$NR/bin/tree" "$RP/bin/tree"    # okno-drzewo (patrz $NR/bin/tree): stan w $NR_DIR = $RP
 cat > "$RP/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
@@ -2702,24 +2684,27 @@ printf '#!/bin/sh\ncase "$1" in list) echo hdd ;; import) printf "   pool: repl\
 printf '#!/bin/sh\necho "zfs $*" >> "$NR_DIR/zb.log"\ncase "$*" in *"-t filesystem,volume"*) printf "hdd\\nhdd/backups\\nhdd/backups/192.168.28.96\\nhdd/backups/192.168.28.96/hdd/vm\\nhdd/data\\n" ;; esac\nexit 0\n' > "$RP/bin/zfs"
 chmod +x "$RP/bin/"*
 rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
-    rm -f "$RP/wt.log" "$RP/wt.n" "$RP/zb.log"
+    rm -f "$RP/wt.log" "$RP/wt.n" "$RP/zb.log" "$RP/tree.n" "$RP/tree.log" "$RP/treekeys"
     printf '%s' "$1" > "$RP/answers"; shift
     ( export NR_DIR="$RP" WHIPTAIL="$RP/bin/whiptail" ZFS_BACKUP="$RP/bin/zb" PYTHON="$PY" PATH="$RP/bin:$PATH" \
-             ZFS_REPLICA_RULES="$RP/rules" "$@"; bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
+             ZFS_REPLICA_RULES="$RP/rules" "$@"
+      # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z RP_TREE, jedna linia
+      # na wywolanie okna, linie rozdzielone '|' (jak odpowiedzi); brak linii = Esc.
+      printf '%s\n' "${RP_TREE:-}" | tr '|' '\n' > "$RP/treekeys"
+      export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$RP/bin/tree"
+      bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
 rm -f "$RP/rules"
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
 #          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
-0${T}hdd/backups
-0${T}next
 0${T}passive
 0${T}removable
 0${T}repl
 0${T}0 22 * * 5
 0${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=repl/replica --schedule=0 22 \* \* 5 --removable --recursive=yes --passive --media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
@@ -2737,15 +2722,13 @@ fi
 #      pobrana raw, kolektor nie ma klucza) -> nowa replika z --raw i zdanie w planie;
 #      kontrola (1) wyzej: zrodlo bez szyfrowania -> bez --raw.
 RPOUT=$(rp_run "0${T}usb2e
-0${T}hdd/backups
-0${T}next
 0${T}passive
 0${T}removable
 0${T}repl
 0${T}0 22 * * 5
 0${T}
 0${T}
-" RP_ENC=1)
+" RP_ENC=1 RP_TREE='goto:hdd/backups,space,enter')
 if grep -q '^add-replica usb2e .* --passive .*--raw .*--install --yes$' "$RP/zb.log" && grep -qF 'kopia idzie zaszyfrowana (raw)' "$RP/wt.log"; then
     ok "replica: zaszyfrowane zrodlo -> --raw i 'kopia idzie zaszyfrowana' w planie; zwykle zrodlo (1) -- bez --raw"
 else
@@ -2753,8 +2736,6 @@ else
 fi
 # (3): "tylko po wlozeniu" nie pyta o B, regula i tak zakladana; bez --on-insert w komendzie
 RPOUT=$(rp_run "0${T}usb3
-0${T}hdd/data
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2762,7 +2743,7 @@ RPOUT=$(rp_run "0${T}usb3
 0${T}on-insert
 0${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
    && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
@@ -2775,8 +2756,6 @@ fi
 #      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu".
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --on-insert --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
-0${T}hdd/data
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2784,7 +2763,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}0 22 * * *
 1${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
    && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log"; then
     ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no, regula nie ruszana"
@@ -2795,8 +2774,6 @@ fi
 #       plan ja ODNAWIA i install-media-trigger idzie po instalacji.
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
-0${T}hdd/data
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2804,7 +2781,7 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}0 22 * * *
 0${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -qF 'reguła udev ZOSTANIE ODNOWIONA' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log"; then
     ok "replica: stara regula (bez --on-insert) jest odnawiana, gdy replika ma ruszac po wlozeniu"
 else
@@ -2815,8 +2792,6 @@ fi
 #     prepare-media trafia do --media-guid.
 rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb5
-0${T}hdd/data
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2827,7 +2802,7 @@ RPOUT=$(rp_run "0${T}usb5
 0${T}0 22 * * *
 1${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -q '^prepare-media --list$' "$RP/zb.log" \
    && grep -qE '^prepare-media [A-Za-z0-9._-]+-usb5 /dev/disk/by-id/usb-C --base=replica --encrypt --yes$' "$RP/zb.log" \
    && grep -F 'szyfrowanie' "$RP/wt.log" | grep -qF 'Szyfrować nośnik?' \
@@ -2844,12 +2819,6 @@ fi
 #     w koszyku repliki nie ma pozycji "Sposob" (zawsze -R).
 rm -f "$RP/rules"
 RPOUT=$(rp_run "0${T}usb6
-0${T}hdd/data
-0${T}exc
-0${T}__add__
-0${T}hdd/data/mail
-0${T}__done__
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2857,19 +2826,19 @@ RPOUT=$(rp_run "0${T}usb6
 0${T}0 22 * * *
 1${T}
 0${T}
-"); RPRC=$?
+" RP_TREE='goto:hdd/data,space,goto:hdd/data/mail,space,enter'); RPRC=$?
+# X12: koszyk to drzewo (tree.log): tytul kroku 2/6 i brak 'Sposób:' sprawdza jego ekran, nie whiptail.
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb6 --source=hdd/data --dst=repl/replica .*--recursive=yes --exclude-child=^hdd/data/mail\$ .*--install --yes$' "$RP/zb.log" \
    && grep -qF 'Pomijane:   hdd/data/mail' "$RP/wt.log" \
-   && grep -F 'Co kopiować z' "$RP/wt.log" | head -1 | grep -qF 'Replika usb6 -- 2/6' \
-   && ! grep -F 'Co kopiować z' "$RP/wt.log" | grep -qF 'Sposób:'; then
+   && grep -F 'Co kopiować z' "$RP/tree.log" | head -1 | grep -qF 'Replika usb6 -- 2/6' \
+   && ! grep -qF 'Sposób:' "$RP/tree.log" && grep -qF '[ ] mail' "$RP/tree.log"; then
     ok "replica: koszyk jak w relacji -- wyjatek (odznaczony mail) daje --exclude-child=^hdd/data/mail\$, plan go wymienia, bez pozycji 'Sposob'"
 else
-    bad "replica: koszyk z wyjatkiem" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(grep -F 'Co kopiować' "$RP/wt.log" | cut -c1-250)"
+    bad "replica: koszyk z wyjatkiem" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(cat "$RP/tree.log" 2>/dev/null)"
 fi
 # (7) ZMIANA repliki sprzed P5 (bez ID): koszyk z jej zrodel i wyjatkow; obecny dysk
 #     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
 RPOUT=$(rp_run "0${T}kreator
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2877,7 +2846,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}0 22 * * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
+" RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
    && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
@@ -2887,7 +2856,6 @@ fi
 # (8) "Dodaj kolejny dysk do tej repliki": formatuje z TA SAMA pula i baza, bez pytan;
 #     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
 RPOUT=$(rp_run "0${T}kreator
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2899,7 +2867,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}0 22 * * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb8","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb8)
+" RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb8","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb8)
 if grep -q '^prepare-media repl /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
    && grep -q '^add-replica usb8 --source=hdd/data --dst=repl/replica .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log"; then
     ok "replica: 'Dodaj kolejny dysk' -- ta sama pula i baza bez pytan, ID dopisane (4242,777), obecny dysk zostaje"
@@ -2909,7 +2877,6 @@ fi
 # (9) W12 "Usuń dysk z repliki": dysk 777 wypada z listy (--media-guid=4242), dane
 #     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
 RPOUT=$(rp_run "0${T}kreator
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2919,7 +2886,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}0 22 * * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
+" RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
 RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb9 .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" && has "$RP9" 'Usuń dysk z repliki'; then
     ok "replica: W12 'Usuń dysk z repliki' -- 777 wypada (--media-guid=4242), dane zostaja"
@@ -2929,7 +2896,6 @@ fi
 # (10) W11 (pve9b 2026-10-11): replika sprzed zapisu ID (pusta lista) + "Dodaj dysk":
 #      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
 RPOUT=$(rp_run "0${T}kreator
-0${T}next
 0${T}own
 0${T}mirror
 0${T}removable
@@ -2941,7 +2907,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}0 22 * * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
+" RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
 RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log" && ! has "$RP10" 'Usuń dysk z repliki'; then
     ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
@@ -2951,7 +2917,6 @@ fi
 # (11) W18: "Tylko stan na chwile kopii" + "Trzymaj N ostatnich" = --keep=12 (wlasna
 #      historia dysku, bez lustra); plan mowi "12 ostatnich kopii".
 RPOUT=$(rp_run "0${T}kreator
-0${T}next
 0${T}own
 0${T}keep
 0${T}12
@@ -2960,7 +2925,7 @@ RPOUT=$(rp_run "0${T}kreator
 0${T}0 22 1 * *
 1${T}
 0${T}
-" 'RP_REPS={"replicas":[{"name":"usb11","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 1 * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb11)
+" RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb11","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 1 * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb11)
 if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && grep -qF '12 ostatnich kopii' "$RP/wt.log"; then
     ok "replica: W18 'Trzymaj N ostatnich kopii' -> --keep=12, plan mowi o wlasnej historii dysku"
 else
@@ -2989,6 +2954,139 @@ else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
 fi
 rm -rf "$RP"
+
+# ============================================================================
+# X12 drzewo z kratkami (tui/tree.py): okno wyboru datasetow zastapilo koszyk (lista + Dodaj
+# miejsce / Wyjatki / Usun). Tu jedzie PRAWDZIWYM kodem w trybie --keys (ten sam render, co
+# w curses) na pliku spec, ktory piszemy sami; sprawdzany jest wynik (--out) i ekran z liniami
+# MSG. Wartosci oczekiwane zmierzone na tree.py. Kreatory (nr/rp/er) jada to samo okno wyzej
+# przez $NR/bin/tree; petla curses (klawisze jako bajty terminala) -- na koncu, przez pty.
+# ============================================================================
+TRD="$(mktemp -d)"
+mkspec() {   # <wariant> <plik>: spec okna; a (bazowy), noexc, excl, atomic, old, many
+    "$PY" - "$1" "$2" <<'PYEOF'
+import sys, json
+v, out = sys.argv[1], sys.argv[2]
+fs = [("hdd", 170000000), ("hdd/backups", 17000000), ("hdd/backups/hdd", 17000000), ("hdd/ct", 9600000),
+      ("hdd/ct/subvol-301-disk-0", 5000000), ("hdd/ct/subvol-302-disk-0", 4500000), ("hdd/data", 12000000),
+      ("hdd/data/docs", 5900000), ("hdd/data/mail", 3000000)]
+TITLE = "Co kopiowa" + chr(263) + " z pve9b?"     # chr(), nie literal: stdin pythona na Windows nie musi byc UTF-8
+spec = {"title": TITLE, "host": "pve9b", "show_mode": True, "no_exc": False, "recursion": "flat",
+        "hide": ["hdd/backups"],
+        "datasets": [{"name": n, "used": u, "type": "filesystem"} for n, u in fs]
+                    + [{"name": "hdd/vm-101-disk-0", "used": 1500000000, "type": "volume"}],
+        "roots": ["hdd/ct"], "excl": {"hdd/ct": []}}
+if v == "noexc":
+    spec["no_exc"] = True; spec["show_mode"] = False
+elif v == "excl":
+    spec["excl"] = {"hdd/ct": ["hdd/ct/subvol-301-disk-0"]}
+elif v == "atomic":
+    spec["recursion"] = "atomic"
+elif v == "old":
+    spec["datasets"].append({"name": "hdd/data/docs/old", "used": 1000000, "type": "filesystem"})
+    spec["roots"] = ["hdd/data"]; spec["excl"] = {"hdd/data": ["hdd/data/docs"]}
+elif v == "many":
+    # 61 wierszy (tank + 60 dzieci), nic zaznaczonego, bez wiersza "Sposob" -- okno musi przewijac
+    spec = {"title": TITLE,
+            "datasets": [{"name": "tank", "used": 1000000, "type": "filesystem"}]
+                        + [{"name": "tank/vm-%03d" % i, "used": 1000000, "type": "filesystem"} for i in range(60)],
+            "roots": [], "excl": {}}
+with open(out, "w", encoding="utf-8") as f:
+    json.dump(spec, f, ensure_ascii=False)
+PYEOF
+}
+trun() {   # <spec> <klawisze> -> ekran + linie MSG na stdout; wynik w $TRD/out.json; rc = rc tree.py (0 Dalej, 1 Wstecz)
+    "$PY" "$REPO/tui/tree.py" --spec "$1" --out "$TRD/out.json" --keys "$2" --height 24
+}
+tjq() {   # <plik out> <klucz> [podklucz...] -> ta wartosc jako zwarty JSON (pusty, gdy brak pliku/klucza)
+    "$PY" -c 'import sys, json
+o = json.load(open(sys.argv[1], encoding="utf-8"))
+for k in sys.argv[2:]:
+    o = o[k]
+print(json.dumps(o, separators=(",", ":")))' "$@" 2>/dev/null | tr -d '\r'
+}
+mkspec a "$TRD/a.json"; mkspec noexc "$TRD/noexc.json"; mkspec excl "$TRD/excl.json"
+mkspec atomic "$TRD/atomic.json"; mkspec old "$TRD/old.json"; mkspec many "$TRD/many.json"
+# a) w zaznaczonym miejscu Spacja na dziecku = wyjatek, Enter = Dalej; cel kopii (hide) w ogole nie widac
+TRA=$(trun "$TRD/a.json" 'right,down,space,enter'); TRARC=$?
+if [ "$TRARC" -eq 0 ] && [ "$(tjq "$TRD/out.json" action)" = '"next"' ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd/ct"]' ] \
+   && [ "$(tjq "$TRD/out.json" excl hdd/ct)" = '["hdd/ct/subvol-301-disk-0"]' ] && has "$TRA" 'pominięte: 1'; then
+    ok "tree: Spacja na dziecku zaznaczonego miejsca = wyjatek (excl hdd/ct = [subvol-301]), Enter = next, ekran mowi 'pominięte: 1'"
+else
+    bad "tree: wyjatek pod miejscem" "rc=$TRARC" "$TRA" "$(cat "$TRD/out.json" 2>/dev/null)"
+fi
+TR0=$(trun "$TRD/a.json" '')
+if ! has "$TR0" 'backups' && has "$TR0" 'zvol 1.4G'; then
+    ok "tree: cel kopii (hide) niewidoczny na ekranie startowym, zvol z rozmiarem ('zvol 1.4G')"
+else
+    bad "tree: ekran startowy (hide, zvol)" "$TR0"
+fi
+# b) zaznaczenie rodzica, pod ktorym lezy cel kopii: cel pomijany sam, z komunikatem
+TRB=$(trun "$TRD/a.json" 'up,space,enter'); TRBRC=$?
+if [ "$TRBRC" -eq 0 ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd"]' ] && [ "$(tjq "$TRD/out.json" excl hdd)" = '["hdd/backups"]' ] \
+   && has "$TRB" 'MSG: Cel kopii hdd/backups pominięty automatycznie.'; then
+    ok "tree: miejsce nad celem kopii (hdd) -> cel dopisany do wyjatkow sam (excl hdd = [hdd/backups]), komunikat o tym"
+else
+    bad "tree: cel kopii pod nowym miejscem" "rc=$TRBRC" "$TRB" "$(cat "$TRD/out.json" 2>/dev/null)"
+fi
+# c) Enter bez zadnego miejsca odmawia (zostaje w oknie); bez Enter/Esc koniec to Wstecz (rc 1)
+TRC=$(trun "$TRD/a.json" 'space,enter'); TRCRC=$?
+if [ "$TRCRC" -eq 1 ] && [ "$(tjq "$TRD/out.json" action)" = '"back"' ] && has "$TRC" 'MSG: Zaznacz co najmniej jedno miejsce (Spacja).'; then
+    ok "tree: zdjecie jedynego miejsca i Enter = odmowa 'Zaznacz co najmniej jedno miejsce', wynik action=back, rc=1"
+else
+    bad "tree: Enter bez miejsca" "rc=$TRCRC" "$TRC" "$(cat "$TRD/out.json" 2>/dev/null)"
+fi
+# d) no_exc (Zmien relacje: add-source bierze cale miejsce): wyjatku nie ma, a miejsce nad celem kopii odmowa
+TRD1=$(trun "$TRD/noexc.json" 'right,down,space')
+TRD2=$(trun "$TRD/noexc.json" 'up,space')
+if has "$TRD1" 'MSG: Tu wybiera się całe miejsca' && has "$TRD2" 'MSG: Pod hdd leży cel kopii (hdd/backups). Zaznacz węższe miejsce.'; then
+    ok "tree: no_exc -- Spacja na dziecku miejsca odmawia ('Tu wybiera się całe miejsca'), miejsce nad celem kopii tez ('Zaznacz węższe miejsce')"
+else
+    bad "tree: no_exc" "$TRD1" "$TRD2"
+fi
+# e) tryb atomowy (klawisz S) nie wlacza sie przy wyjatkach; zdjecie wyjatku Spacja na odznaczonym
+TRE1=$(trun "$TRD/excl.json" 's,enter'); TRE1RC=$?
+TRE1R="$(tjq "$TRD/out.json" recursion)"
+TRE2=$(trun "$TRD/excl.json" 'right,space,enter'); TRE2RC=$?
+if [ "$TRE1RC" -eq 0 ] && [ "$TRE1R" = '"flat"' ] \
+   && has "$TRE1" 'MSG: Kopiowanie atomowe (-r) nie pozwala pomijać. Zdejmij najpierw pominięte (odznaczone) datasety.' \
+   && [ "$TRE2RC" -eq 0 ] && [ "$(tjq "$TRD/out.json" excl hdd/ct)" = '[]' ]; then
+    ok "tree: S przy wyjatkach odmawia i zostaje -R (recursion=flat); Spacja na odznaczonym zdejmuje wyjatek (excl hdd/ct = [])"
+else
+    bad "tree: S przy wyjatkach / zdjecie wyjatku" "rc=$TRE1RC" "$TRE1R" "$TRE1" "rc=$TRE2RC" "$(cat "$TRD/out.json" 2>/dev/null)"
+fi
+# f) tryb atomowy (-r) nie pozwala pomijac czesci galezi
+TRF=$(trun "$TRD/atomic.json" 'right,down,space')
+if has "$TRF" 'MSG: Przy kopiowaniu atomowym (-r) nie da się pominąć części gałęzi.'; then
+    ok "tree: tryb atomowy -- Spacja na dziecku miejsca odmawia ('nie da się pominąć części gałęzi')"
+else
+    bad "tree: wyjatek w trybie atomowym" "$TRF"
+fi
+# g) dataset pod pominietym: komunikat wskazuje, co zaznaczyc najpierw
+TRG=$(trun "$TRD/old.json" 'goto:hdd/data/docs/old,space')
+if has "$TRG" 'MSG: hdd/data/docs/old jest pomijany razem z hdd/data/docs. Zaznacz najpierw hdd/data/docs.'; then
+    ok "tree: dataset pod pominietym (docs/old) nie da sie zaznaczyc osobno -- komunikat 'Zaznacz najpierw hdd/data/docs'"
+else
+    bad "tree: dataset pod pominietym" "$TRG"
+fi
+# h) 60 dzieci przy 24 wierszach: okno przewija, obie strzalki "więcej", zaznaczony wiersz widoczny
+TRH=$(trun "$TRD/many.json" 'pgdn,pgdn,down,space')
+if has "$TRH" '↑ więcej' && has "$TRH" '↓ więcej' && has "$TRH" '[x] vm-030'; then
+    ok "tree: 60 dzieci na 24 wierszach -- PgDn przewija, '↑ więcej' i '↓ więcej', zaznaczony vm-030 widoczny"
+else
+    bad "tree: przewijanie dlugiej listy" "$TRH"
+fi
+# i) PRAWDZIWA petla curses przez pty (klawisze jako bajty terminala, jak pty-keys wyzej)
+TRPO="$TRD/out-pty.json"; rm -f "$TRPO"
+TRPT="$("$PY" "$REPO/test/tui/pty-keys.py" "$REPO/tui/tree.py" 'right,down,space,enter' -- --spec "$TRD/a.json" --out "$TRPO" 2>&1)"; TRPTRC=$?
+if [ "$TRPTRC" -eq 2 ]; then
+    echo "SKIP pty drzewo: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
+elif [ "$(tjq "$TRPO" excl hdd/ct)" = '["hdd/ct/subvol-301-disk-0"]' ]; then
+    ok "tree: pty -- strzalki, Spacja i Enter przez prawdziwa petle curses daja ten sam wynik co --keys (excl hdd/ct = [subvol-301])"
+else
+    bad "tree: pty (petla curses)" "rc=$TRPTRC" "$TRPT" "$(cat "$TRPO" 2>/dev/null)"
+fi
+rm -rf "$TRD"
 
 # ============================================================================
 # template: OKNA SZABLONU (F5, uwaga 24, 2026-10-09). Ta sama atrapa whiptaila; zb
@@ -3149,8 +3247,6 @@ rm -rf "$TP"
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/data
-0${T}next
 0${T}hdd/backups
 0${T}__manual__
 0${T}pve9b
@@ -3159,7 +3255,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-"); NRRC=$?
+" NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=relacja-pve9b --hidden --force --description=' "$NR/zb.log" \
    && has "$NROUT" "--profile=relacja-pve9b " && ! grep -q '^delete-profile' "$NR/zb.log"; then
     ok "new-relation: Recznie -- tabela szczebli, ukryty szablon relacja-<nazwa> (--hidden), relacja z --profile=relacja-<nazwa>"
@@ -3169,8 +3265,6 @@ fi
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
-0${T}hdd/data
-0${T}next
 0${T}hdd/backups
 0${T}__manual__
 0${T}inna
@@ -3179,7 +3273,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}__done__
 0${T}
 0${T}
-"); NRRC=$?
+" NR_TREE='goto:hdd/data,space,enter'); NRRC=$?
 if [ "$NRRC" -eq 0 ] && grep -q '^save-profile --from=relacja-pve9b --as=relacja-inna --hidden --force' "$NR/zb.log" \
    && grep -q '^delete-profile relacja-pve9b --yes' "$NR/zb.log" && has "$NROUT" "--profile=relacja-inna "; then
     ok "new-relation: Recznie + inna nazwa w kroku 7 -- szkic przeniesiony na relacja-<nowa nazwa>, stary usuniety"
@@ -3191,6 +3285,7 @@ fi
 # tabela (template.sh relation) -> ukryty szablon -> okno retencji zrodla -> plan.
 ER="$(mktemp -d)"; mkdir -p "$ER/bin"
 cp "$NR/bin/whiptail" "$ER/bin/whiptail"
+cp "$NR/bin/tree" "$ER/bin/tree"    # okno-drzewo (patrz $NR/bin/tree): stan w $NR_DIR = $ER
 cat > "$ER/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
@@ -3224,29 +3319,31 @@ n=$(cat "$NR_DIR/grid.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DI
 k=$(sed -n "${n}p" "$NR_DIR/gridkeys"); [ -n "$k" ] || k=esc
 exec $GRID_PY "$GRID_REPO/tui/grid.py" --keys "$k" "$@"
 EOF
-chmod +x "$ER/bin/zb" "$ER/bin/grid"
+chmod +x "$ER/bin/zb" "$ER/bin/grid" "$ER/bin/tree"
 er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki w $ER
-    rm -f "$ER/wt.log" "$ER/wt.n" "$ER/zb.log" "$ER/grid.n"
+    # Drzewo wyboru datasetow (Datasety): klawisze z ER_TREE (env przed wywolaniem), jedna linia
+    # na wywolanie okna, linie rozdzielone '|'; brak linii = Esc.
+    rm -f "$ER/wt.log" "$ER/wt.n" "$ER/zb.log" "$ER/grid.n" "$ER/tree.n" "$ER/tree.log" "$ER/treekeys"
     printf '%s' "$1" > "$ER/answers"
     printf '%b\n' "${2:-enter\nenter}" > "$ER/gridkeys"
+    printf '%s\n' "${ER_TREE:-}" | tr '|' '\n' > "$ER/treekeys"
     ( export NR_DIR="$ER" NR_FIX="$P10" WHIPTAIL="$ER/bin/whiptail" ZFS_BACKUP="$ER/bin/zb" PYTHON="$PY"
       export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
+      export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$ER/bin/tree"
       bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
 }
 # W4 (wlasciciel 2026-10-11): "Datasety" = okno koszyka z kreatora, z obecnymi datasetami
 # relacji; dwie zmiany (dodaj hdd/iso, usun hdd/data), JEDEN plan roznic (DOJDA / ODPADNA),
 # po WYKONAJ add-source i remove-source z --yes. Bez "Sposob" i bez "Wyjatki".
-EROUT=$(er_run "0${T}dane
-0${T}add
-0${T}hdd/iso
-0${T}del
-0${T}0
-0${T}next
+# X12: okno koszyka to drzewo (tui/tree.py); dawne "add hdd/iso, del 0, next" to Spacja na hdd/iso
+# (nowe miejsce), Spacja na hdd/data (obecne miejsce znika), Enter. Wstepne zaznaczenie hdd/data
+# dowodzi remove-source: Spacja na NIE zaznaczonym hdd/data zrobilaby z niego miejsce, nie usuniecie.
+EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,enter' er_run "0${T}dane
 0${T}
 "); ERRC=$?
-ERB="$(grep -F 'Co kopiować z' "$ER/wt.log" | head -1)"
+ERB="$(cat "$ER/tree.log" 2>/dev/null)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'add-source r1 hdd/iso --yes' "$ER/zb.log" && grep -qx 'remove-source r1 hdd/data --yes' "$ER/zb.log" \
-   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'hdd/data' \
+   && grep -qF 'DOJDĄ' "$ER/wt.log" && grep -qF 'ODPADNĄ' "$ER/wt.log" && has "$ERB" 'Co kopiować z' && has "$ERB" '[ ] data' && has "$ERB" '[x] iso' \
    && ! has "$ERB" 'Wyjątki' && ! has "$ERB" 'Sposób'; then
     ok "edit-relation: Datasety -- koszyk z obecnymi datasetami, kilka zmian, jeden plan DOJDA/ODPADNA, add-source + remove-source --yes; bez Sposob/Wyjatki"
 else
@@ -3254,10 +3351,8 @@ else
 fi
 # X21 (wlasciciel 2026-10-14): zmiana datasetow sprawdzona PRZED WYKONAJ -- odmowa czasownika
 # (plan bez --yes) pokazana od razu, zadnego --yes, powrot do listy.
-EROUT=$(er_run "0${T}dane
-0${T}add
-0${T}hdd/vm
-0${T}next
+# X12: drzewo woli sie dwa razy (po odmowie wraca lista); druga linia ER_TREE brak = Esc.
+EROUT=$(ER_TREE='goto:hdd/vm,space,enter' er_run "0${T}dane
 0${T}
 "); ERRC=$?
 if grep -qx 'add-source r1 hdd/vm' "$ER/zb.log" && ! grep -q -- '--yes' <(grep -E '^(add|remove)-source' "$ER/zb.log")    && grep -qF 'Tej zmiany nie da się zrobić' "$ER/wt.log" && grep -qF "overlaps 'hdd/vm'" "$ER/wt.log" && ! grep -qF 'DOJDĄ' "$ER/wt.log"; then

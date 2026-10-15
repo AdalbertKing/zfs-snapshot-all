@@ -45,7 +45,7 @@ restore_hidden() {
 }
 trap 'restore_hidden; rm -rf "$TMPD"' EXIT
 
-# st.tsv: stan, profil, profil źródła, peer, datasety; prof.tsv: nazwa <TAB> opis (bez
+# st.tsv: stan, profil, profil źródła, peer, datasety, lustro, cel; prof.tsv: nazwa <TAB> opis (bez
 # ukrytych i pochodnych -src-); prof.json.tiers: szczeble do okna retencji źródła;
 # hfile.txt: plik ukrytego szablonu tej relacji (jeśli jest).
 load_lists() {
@@ -63,11 +63,12 @@ try:
 except Exception:
     st = {}
 with open(tmpd + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
-    f.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
+    f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
                                         st.get("peer_host") or "-",
                                         # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
                                         ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-",
-                                        "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0"))
+                                        "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0",
+                                        st.get("client_target") or "-"))
 d = json.load(open(sys.argv[2], encoding="utf-8"))
 rows = []
 with open(tmpd + "/prof.json.tiers", "w", encoding="utf-8", newline="\n") as tf, \
@@ -101,7 +102,7 @@ geom
 info "Zmień relację $NAME" "Czytam relację i szablony..."
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
 load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
-IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; }
+IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; }
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
 SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
 SRCNAME="$PEER"
@@ -551,6 +552,8 @@ while :; do
             fi
             B_ROOT=(); B_EXCL=()
             for n in ${SRCS//,/ }; do [ "$n" != - ] && { B_ROOT+=("$n"); B_EXCL+=(""); }; done
+            # X12: relacja lokalna widzi w drzewie własny cel -- kopie nie są źródłem (X21).
+            BASKET_HIDE=""; [ "$PEER" = - ] && [ "${TGT:--}" != - ] && BASKET_HIDE="$TGT"
             OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
             while :; do
                 basket_step || continue 2
