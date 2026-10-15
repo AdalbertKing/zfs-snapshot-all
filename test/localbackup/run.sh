@@ -641,6 +641,23 @@ if printf '%s' "$ek_out" | grep -qF "el=[history"$'\t'"newest"$'\n]' \
 else
     bad "relationship engine fields survive a rewrite" "$ek_out"
 fi
+# RESTORE DISPATCH (2026-10-15, measured on pve9b): `zfs-backup.sh restore <local relation>
+# --plan` ended rc=1 WITHOUT A WORD -- the dispatch called load_client_and_connection on the
+# record, which dies on a relationship with no peer, and that die was an exit of the whole
+# script with its output sent to /dev/null. The second record (remote, connection fields
+# missing) dies the same way inside the load. Regression: the public entry says SOMETHING --
+# it reaches zfs-restore.sh, which speaks for itself; silence is the defect.
+RD="$RL/rd"; mkdir -p "$RD/clients"
+printf 'CLIENT_NAME=rdl\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=hdd/backups\nREQUESTED_DATASETS=rpool/a\nCRON_CONFIG=%s\n' "$RD/c.conf" > "$RD/clients/rdl.conf"
+printf 'CLIENT_NAME=rdr\nSTATE=active\n' > "$RD/clients/rdr.conf"
+printf '[dataset:rpool/a]\n\tdst = hdd/backups\n\tpair_label = rdl\n' > "$RD/c.conf"
+rdl=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdl --plan --config="$RD/c.conf" 2>&1)
+rdr=$(CLIENTS_DIR="$RD/clients" bash "$ZB" restore rdr --plan --config="$RD/c.conf" 2>&1)
+if [ -n "$rdl" ] && [ -n "$rdr" ]; then
+    ok "restore dispatch: a local relationship, and one whose connection cannot be loaded, reach zfs-restore.sh -- no silent rc=1"
+else
+    bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact

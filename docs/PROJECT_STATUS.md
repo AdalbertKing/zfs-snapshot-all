@@ -21,6 +21,19 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; `fix/restore-local-dispatch`).**
+  Kampania przywracania na labie (pve9b, konto zfsbackup): `restore --plan --config=…` i tryb bezpieczny
+  (`--dataset=<kopia> --snapshot=…`, lądowanie w `hdd/restore/…`, GUID zgodny) działają na prawdziwym ZFS.
+  Ale `zfs-backup.sh restore lokalna-hdd-vms --plan` kończył się rc=1 bez słowa: dyspozytor woła
+  `load_client_and_connection` na rekordzie, a ta funkcja kończy skrypt (`die`) na relacji bez peera, z
+  wyjściem wyciszonym. Bezpośrednio `zfs-restore.sh lokalna-hdd-vms --plan` daje poprawny plan. Poprawka:
+  relacja lokalna (`RUX_MODE=local`) nie potrzebuje połączenia i jest pomijana; dla pozostałych wczytanie
+  jest najpierw sprawdzane w podpowłoce. Test w `localbackup` (relacja lokalna i zdalna bez danych
+  połączenia), kontrola negatywna na starym kodzie daje BAD. Znane z inwentarza, do decyzji przed GUI
+  „Przywróć”: forma relacyjna nadpisująca relacji lokalnej nie pyta o nic (zgodą jest grant, którego
+  lokalna nie ma); brak czasownika z listą punktów w JSON; relacja „tylko migawki” nie ma przywracania
+  (to rollback na miejscu); `--from-copy` nie podłącza nośnika i nie ładuje klucza.
+
 - **X27 poprawka: pola silnika relacji przeżywają przebudowę (2026-10-15; `fix/relation-keep-engine-fields`).**
   „Uzyj szablonu” (`edit-relation --profile=`) na pve9b skasował `history = newest`: `relblock_render`
   nie pisał pól silnika do bloku `[relation:]`, a `local-backup --replace` kasował stary blok i sekcje
