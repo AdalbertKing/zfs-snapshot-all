@@ -1926,8 +1926,9 @@ the merge, or the merge does not run.
 
 **Genesis.** PR #542 (collision guard) went red on `localbackup`; the fix moved the
 guard in `zfs-backup.sh` and was committed and pushed straight away -- without
-`--refresh-status`. CI went red a second time, on `dependency graph matches the tree`,
-"STALE ... Changed since docs/PROJECT_STATUS.md was last touched: zfs-backup.sh".
+`--refresh-status`. CI went red a second time, on the job running `./test/impact.sh --verify`:
+"STALE. The STAGED docs/PROJECT_STATUS.md does not describe what the next commit would record",
+naming `zfs-backup.sh` as changed since the status was last touched.
 
 **Cause.** E39 exactly: the "we are red, push the fix" commit. Under that pressure
 the three gate commands felt like ceremony.

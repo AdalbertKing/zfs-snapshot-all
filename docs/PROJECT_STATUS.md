@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f0a4975c6428fe07 -->
+<!-- status-covers-digest: 812eb6fad2666fc7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -24,13 +24,13 @@
 - **Przywracanie: potwierdzenie nadpisania, klucz nośnika, droga „usuń + obok” (2026-10-15; `feat/restore-confirm-key`).**
   Decyzje właściciela po kampanii odzysku: (3) „nadpisanie zawsze z potwierdzeniem, i w GUI, i we wsadzie,
   chyba że parametr forsujący” -- forma relacyjna `restore <relacja>` pyta raz za cały bieg, po kontroli
-  wstępnej, gdy któryś dataset będzie nadpisany (`rewind`/`replace`); `create` nie pyta; `--yes` odpowiada z góry,
+  wstępnej, gdy któryś dataset będzie nadpisany (`rewind`/`replace`); `create` nie pyta (w formie relacyjnej; `--from-copy` ma swoje pytanie „Odtworzyć?” dla każdej formy); `--yes` odpowiada z góry,
   brak odpowiedzi (skrypt bez `--yes`) = odmowa. (1) „wpisz klucz lub wskaż plik” -- `--from-copy` przed
   czymkolwiek sprawdza klucz kopii: plik klucza nośnika na tym hoście (`keylocation`), potem `--key-file=PATH`,
-  potem pytanie (klucz albo ścieżka); klucz załadowany przez bieg jest na końcu zdejmowany. (2) brak wspólnego
+  potem pytanie (klucz albo ścieżka); klucz załadowany przez bieg jest na końcu zdejmowany (także przy odmowie z braku klucza dla kolejnej kopii); wpisywany klucz nie jest wyświetlany. (2) brak wspólnego
   punktu przy `--from-copy --overwrite`: odmowa podaje drogę w dwóch krokach (`zfs destroy -r <cel>`, potem
-  `--from-copy … --onto <cel>`); w GUI zaproponuje ją okno „Przywróć”. Na żywo (pve9b): forma relacyjna `--at`
-  bez `--yes` -- lista nadpisań i pytanie; „n” = nic nie zmienione, „t” = cofnięcie; `--yes` bez terminala --
+  `--from-copy … --onto <cel>`); w GUI ma ją zaproponować przyszłe okno „Przywróć” (jeszcze nie zbudowane). Na żywo (pve9b): forma relacyjna `--at`
+  bez `--yes` -- lista nadpisań i pytanie; „n” = nic nie zmienione, „t” (tak) = wykonane cofnięcie; `--yes` bez terminala --
   bez pytania; replika `usb9` bez załadowanego klucza -- klucz z pliku hosta załadowany, odtworzenie OK (GUID
   zgodny), klucz zdjęty; odmowa z drogą w dwóch krokach. Nie sprawdzone na żywo: `--key-file` i ręczne wpisanie
   klucza (odmowę bez klucza pokrywa `test/restore/fromcopy.sh`). Otwarte do dyskusji: (4) odtworzenie „obok”

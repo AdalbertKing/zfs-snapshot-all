@@ -707,8 +707,10 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
     local _ki _kroot
     RESTORE_KEYS_LOADED=()
     for (( _ki=0; _ki<${#from[@]}; _ki++ )); do
-        restore_copy_key_ready "${from[$_ki]}" \
-            || die "restore --from-copy: the key of '${from[$_ki]}' is not loaded and none was given -- nothing was changed. Give it with --key-file=PATH, or answer the question with the key or a key file."
+        if ! restore_copy_key_ready "${from[$_ki]}"; then
+            for _kroot in ${RESTORE_KEYS_LOADED[@]+"${RESTORE_KEYS_LOADED[@]}"}; do zfs unload-key "$_kroot" 2>/dev/null || :; done
+            die "restore --from-copy: the key of '${from[$_ki]}' is not loaded and could not be (no key file on this host, and none given or the one given did not work) -- nothing was changed. Give it with --key-file=PATH, or answer the question with the key or a key file."
+        fi
     done
 
     # The landing half is the SAME engine the relationship-addressed safe restore
@@ -762,16 +764,20 @@ restore_copy_key_ready() {
     esac
     if [ -n "${RESTORE_KEY_FILE:-}" ]; then
         [ -r "$RESTORE_KEY_FILE" ] || { log 0 "restore: --key-file '$RESTORE_KEY_FILE' cannot be read"; return 1; }
-        zfs load-key -L "file://$RESTORE_KEY_FILE" "$root" || return 1
+        kf="$RESTORE_KEY_FILE"; case "$kf" in /*) ;; *) kf="$PWD/$kf" ;; esac   # file:// wants an absolute path
+        zfs load-key -L "file://$kf" "$root" || { log 0 "restore: the key in '$RESTORE_KEY_FILE' did not open $root"; return 1; }
         log 0 "restore: key of $root loaded from --key-file"
         RESTORE_KEYS_LOADED+=("$root"); return 0
     fi
-    read -rp "Klucz nosnika ($root) nie jest zaladowany. Wpisz klucz albo podaj sciezke pliku z kluczem: " ans || ans=""
+    # -s: a typed key is a secret and is not echoed.
+    read -rsp "Klucz nosnika ($root) nie jest zaladowany. Wpisz klucz albo podaj sciezke pliku z kluczem: " ans || ans=""
+    echo >&2
     [ -n "$ans" ] || return 1
     if [ -f "$ans" ]; then
-        zfs load-key -L "file://$ans" "$root" || return 1
+        case "$ans" in /*) ;; *) ans="$PWD/$ans" ;; esac   # file:// wants an absolute path
+        zfs load-key -L "file://$ans" "$root" || { log 0 "restore: the key file given did not open $root"; return 1; }
     else
-        printf '%s\n' "$ans" | zfs load-key -L prompt "$root" || return 1
+        printf '%s\n' "$ans" | zfs load-key -L prompt "$root" || { log 0 "restore: the key typed did not open $root"; return 1; }
     fi
     log 0 "restore: key of $root loaded"
     RESTORE_KEYS_LOADED+=("$root")
