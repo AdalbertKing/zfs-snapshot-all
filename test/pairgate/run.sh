@@ -736,6 +736,96 @@ eval "$(product_fn "$DEPLOY_SRC" install_pair_gate)"
     fi
 }
 
+# 9b. refresh_pair_gate: the hourly self-update runs a bare deploy.sh, and
+#     until 2026-10-15 only --join wrote the gate, so a fixed gate never
+#     reached a joined host. Refresh what is there, never create, and never
+#     swap in a gate that does not run.
+eval "$(product_fn "$DEPLOY_SRC" refresh_pair_gate)"
+{
+    RPG="$WORK/rpg"; mkdir -p "$RPG/good" "$RPG/broken" "$RPG/bin"
+    cp "$REPO/zfs-pair-gate.sh" "$RPG/good/zfs-pair-gate.sh"
+    printf '#!/bin/bash\nexit 7\n' > "$RPG/broken/zfs-pair-gate.sh"
+    OLD_GATE='#!/bin/bash
+# old gate
+exit 0'
+    # `install -o root -g root` needs root; the ownership is the only part
+    # dropped, the copy and the mode are the real tool's.
+    rpg_install() { local -a a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done; command install "${a[@]}"; }
+    rpg_run() {   # <checkout dir> <check-only 0|1> -> rc; output in $RPG/out
+        ( install() { rpg_install "$@"; }
+          log()  { echo "LOG $*"; }
+          warn() { echo "WARN $*"; }
+          _DEPLOY_DIR="$1"; CHECK_ONLY="$2"; PAIR_GATE_PATH="$RPG/bin/zfs-pair-gate"
+          refresh_pair_gate ) >"$RPG/out" 2>&1
+    }
+    G="$RPG/bin/zfs-pair-gate"
+
+    rm -f "$G"; rpg_run "$RPG/good" 0; rc=$?
+    if [ "$rc" -eq 0 ] && [ ! -e "$G" ]; then
+        ok "refresh_pair_gate: no gate on the host -> none is created, rc 0"
+    else
+        bad "refresh_pair_gate: no gate on the host -> none is created, rc 0" "rc=$rc exists=$([ -e "$G" ] && echo yes)" "$(cat "$RPG/out")"
+    fi
+
+    printf '%s\n' "$OLD_GATE" > "$G"; chmod 0755 "$G"
+    rpg_run "$RPG/good" 0; rc=$?
+    if [ "$rc" -eq 0 ] && cmp -s "$G" "$REPO/zfs-pair-gate.sh" && [ -x "$G" ] && ! ls "$G".new.* >/dev/null 2>&1; then
+        ok "refresh_pair_gate: an old gate is replaced by the checkout's, executable, no temp left"
+    else
+        bad "refresh_pair_gate: an old gate is replaced by the checkout's, executable, no temp left" "rc=$rc" "$(cat "$RPG/out")"
+    fi
+
+    touch -d '2001-01-01 00:00:00' "$G"; m0=$(stat -c %Y "$G")
+    rpg_run "$RPG/good" 0; rc=$?
+    if [ "$rc" -eq 0 ] && [ "$(stat -c %Y "$G")" = "$m0" ] && grep -q "matches this checkout" "$RPG/out"; then
+        ok "refresh_pair_gate: a current gate is left alone"
+    else
+        bad "refresh_pair_gate: a current gate is left alone" "rc=$rc mtime $m0 -> $(stat -c %Y "$G")" "$(cat "$RPG/out")"
+    fi
+
+    printf '%s\n' "$OLD_GATE" > "$G"; chmod 0755 "$G"
+    rpg_run "$RPG/broken" 0; rc=$?
+    if [ "$rc" -eq 1 ] && [ "$(cat "$G")" = "$OLD_GATE" ] && ! ls "$G".new.* >/dev/null 2>&1 && grep -q "does not run" "$RPG/out"; then
+        ok "refresh_pair_gate: a new gate that does not run -> old one kept, rc 1, no temp left"
+    else
+        bad "refresh_pair_gate: a new gate that does not run -> old one kept, rc 1, no temp left" "rc=$rc" "$(cat "$G")" "$(cat "$RPG/out")"
+    fi
+
+    rpg_run "$RPG/good" 1; rc=$?
+    if [ "$rc" -eq 0 ] && [ "$(cat "$G")" = "$OLD_GATE" ] && grep -q "^WARN .*differs from this checkout" "$RPG/out"; then
+        ok "refresh_pair_gate: --check-only reports a stale gate and does not touch it"
+    else
+        bad "refresh_pair_gate: --check-only reports a stale gate and does not touch it" "rc=$rc" "$(cat "$G")" "$(cat "$RPG/out")"
+    fi
+
+    rm -f "$G"; printf '%s\n' "$OLD_GATE" > "$RPG/target"; ln -s "$RPG/target" "$G" 2>/dev/null
+    if [ -L "$G" ]; then
+        rpg_run "$RPG/good" 0; rc=$?
+        if [ "$rc" -eq 1 ] && [ "$(cat "$RPG/target")" = "$OLD_GATE" ]; then
+            ok "refresh_pair_gate: refuses to write through a symlink"
+        else
+            bad "refresh_pair_gate: refuses to write through a symlink" "rc=$rc" "$(cat "$RPG/out")"
+        fi
+    else
+        echo "SKIP refresh_pair_gate symlink case: this filesystem made no symlink"
+    fi
+    rm -f "$G"
+}
+
+# 9c. The bare run -- what the hourly self-update executes -- calls the
+#     refresh after the mode dispatch (a --join run installs it itself) and
+#     ends non-zero when it failed.
+rpg_call=$(grep -n '^refresh_pair_gate || GATE_REFRESH_FAILED=1$' "$DEPLOY_SRC" | cut -d: -f1)
+rpg_draft=$(grep -n '^if \[ "\$DRAFT_SCOPE_MODE" -eq 1 \]; then$' "$DEPLOY_SRC" | cut -d: -f1)
+rpg_p8=$(grep -n '^log "Phase 8: delegated non-root account"$' "$DEPLOY_SRC" | cut -d: -f1)
+rpg_exit=$(grep -n '^if \[ "\$GATE_REFRESH_FAILED" -eq 1 \]; then$' "$DEPLOY_SRC" | cut -d: -f1)
+if [ -n "$rpg_call" ] && [ -n "$rpg_draft" ] && [ -n "$rpg_p8" ] && [ -n "$rpg_exit" ] \
+   && [ "$rpg_draft" -lt "$rpg_call" ] && [ "$rpg_call" -lt "$rpg_p8" ] && [ "$rpg_p8" -lt "$rpg_exit" ]; then
+    ok "install: a bare deploy.sh refreshes the gate between the mode dispatch and Phase 8, and exits non-zero on failure"
+else
+    bad "install: a bare deploy.sh refreshes the gate between the mode dispatch and Phase 8, and exits non-zero on failure" "draft=$rpg_draft call=$rpg_call phase8=$rpg_p8 exit=$rpg_exit"
+fi
+
 # 10. Structural pin: do_join must install the gate BEFORE writing the key
 #    line, or a working key would briefly point at a gate that is not there.
 jorder=$(grep -n 'install_pair_gate "\$label"\|write_gated_key_line "\$ak"' "$DEPLOY_SRC" | cut -d: -f1 | tr '\n' ' ')
