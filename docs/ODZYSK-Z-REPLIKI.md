@@ -32,6 +32,14 @@ jest błąd**, `2` coś jest nie tak i potrzebny człowiek.
 zfs list -H -o name -r repl/replica | head -30
 ```
 
+## 3a. Klucz nośnika zaszyfrowanego
+
+`zfs-media-gate.sh attach` importuje pulę, ale **nie ładuje klucza**. `restore --from-copy`
+robi to sam przed czymkolwiek: najpierw z pliku klucza nośnika na tym hoście (ten, który
+zapisał `prepare-media`), potem z `--key-file=ŚCIEŻKA`, a gdy nie ma żadnego -- pyta o klucz
+(wpisywany bez wyświetlania) albo o ścieżkę pliku. Klucz załadowany przez odzysk jest na końcu
+zdejmowany.
+
 ## 4a. Odzysk NA DATASET KOPII — ten dla dużych danych
 
 ```
@@ -61,6 +69,10 @@ zfs-backup.sh restore \
 
 Cel **musi być wolny**; ta forma nigdy nie nadpisuje. Dzieci jadą razem, każde na
 swojej pozycji względnej.
+
+Domyślnie ląduje **sam punkt** (jeden snapshot). `--with-history` przenosi wszystkie
+snapshoty kopii do tego punktu (najstarszy w całości, potem przyrost) -- odtworzona kopia
+kolektora ma wtedy historię i retencja nie zaczyna się od zera.
 
 ## 5. Odłącz
 
