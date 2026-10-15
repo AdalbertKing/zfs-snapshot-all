@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: df212c01d3c79e72 -->
+<!-- status-covers-digest: f0a4975c6428fe07 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,22 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Kampania odzysku replika -> kolektor -> źródło (2026-10-15, pve9b, zgoda właściciela; `fix/restore-fromcopy-at`).**
+- **Przywracanie: potwierdzenie nadpisania, klucz nośnika, droga „usuń + obok” (2026-10-15; `feat/restore-confirm-key`).**
+  Decyzje właściciela po kampanii odzysku: (3) „nadpisanie zawsze z potwierdzeniem, i w GUI, i we wsadzie,
+  chyba że parametr forsujący” -- forma relacyjna `restore <relacja>` pyta raz za cały bieg, po kontroli
+  wstępnej, gdy któryś dataset będzie nadpisany (`rewind`/`replace`); `create` nie pyta; `--yes` odpowiada z góry,
+  brak odpowiedzi (skrypt bez `--yes`) = odmowa. (1) „wpisz klucz lub wskaż plik” -- `--from-copy` przed
+  czymkolwiek sprawdza klucz kopii: plik klucza nośnika na tym hoście (`keylocation`), potem `--key-file=PATH`,
+  potem pytanie (klucz albo ścieżka); klucz załadowany przez bieg jest na końcu zdejmowany. (2) brak wspólnego
+  punktu przy `--from-copy --overwrite`: odmowa podaje drogę w dwóch krokach (`zfs destroy -r <cel>`, potem
+  `--from-copy … --onto <cel>`); w GUI zaproponuje ją okno „Przywróć”. Na żywo (pve9b): forma relacyjna `--at`
+  bez `--yes` -- lista nadpisań i pytanie; „n” = nic nie zmienione, „t” = cofnięcie; `--yes` bez terminala --
+  bez pytania; replika `usb9` bez załadowanego klucza -- klucz z pliku hosta załadowany, odtworzenie OK (GUID
+  zgodny), klucz zdjęty; odmowa z drogą w dwóch krokach. Nie sprawdzone na żywo: `--key-file` i ręczne wpisanie
+  klucza (odmowę bez klucza pokrywa `test/restore/fromcopy.sh`). Otwarte do dyskusji: (4) odtworzenie „obok”
+  przenosi sam punkt, bez historii przed nim.
+
+- **Kampania odzysku replika -> kolektor -> źródło (2026-10-15, pve9b, zgoda właściciela; #544).**
   Obiekt: `hdd/test-kreator` (relacja lokalna `lokalna-hdd-vms`), kopia `hdd/backups/hdd/test-kreator`, replika
   dyskowa `usb9` (zaszyfrowana, „cała historia”). Po każdym kroku: tożsamość (GUID, `referenced`), czy program
   powiedział prawdę, i bieg relacji (czy łańcuch idzie dalej).

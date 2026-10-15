@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1921,6 +1921,20 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E84 — the status gate skipped again after a code change pushed to fix red CI (2026-10-15, R4, third time after E39)
+
+**Genesis.** PR #542 (collision guard) went red on `localbackup`; the fix moved the
+guard in `zfs-backup.sh` and was committed and pushed straight away -- without
+`--refresh-status`. CI went red a second time, on `dependency graph matches the tree`,
+"STALE ... Changed since docs/PROJECT_STATUS.md was last touched: zfs-backup.sh".
+
+**Cause.** E39 exactly: the "we are red, push the fix" commit. Under that pressure
+the three gate commands felt like ceremony.
+
+**Rule.** R4, unchanged -- evidence that it was not applied. Every commit that
+touches a file declaring `project-status` ends with `--refresh-status`, `git add
+docs/PROJECT_STATUS.md`, `--verify`, then push; the red-CI fix is not an exception.
 
 ### E83 — a test passed on Git Bash only because the fatal-die signal does not work there (2026-10-15, R2)
 
