@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d7004391cf2efb10 -->
+<!-- status-covers-digest: f58bf8786b5354e4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,7 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Zastąpienie (`replace`) zniszczyło korzeń zakresu na pve9 -- naprawione (2026-10-15; `fix/gate-scope-replace-guard`).**
+- **Zastąpienie (`replace`) zniszczyło korzeń zakresu na pve9 -- naprawione (2026-10-15; #547 + `fix/scope-root-children`).**
   Kampania, wariant „kolektor B obcy -> replace z C” (pve11 -> pve9, relacja `k2-bc`): bieg zniszczył
   `hdd/backups/192.168.28.98/hdd/data` na pve9 i nie odtworzył go (brak prawa `create` na rodzicu) -- delegacja
   zniknęła razem z datasetem. Bezpiecznik „nie zastępuj korzenia zakresu” istniał, ale był martwy: bramka
@@ -34,8 +34,20 @@
   replace przy braku zakresu odmawia bez uruchamiania silnika (`zfs-restore.sh` z `main`: silnik ruszył z `-f`),
   korzeń wymieniony na liście kilku -- odmowa. Przy okazji: atrapa zgody w tej suicie zwracała zły argument, więc
   wszystkie przypadki „odmowa nie uruchamia silnika” biegły BEZ zgody; poprawione, nadal przechodzą. Lab naprawiony
-  ręcznie (pusty korzeń, `zfs allow` dla `zfsbackup-pve11`, pełny odzysk z C). Otwarte: po zniszczeniu korzenia
-  zakresu odzysk wymaga ponownej delegacji -- komunikat ma to mówić.
+  ręcznie (pusty korzeń, `zfs allow` dla `zfsbackup-pve11`, pełny odzysk z C).
+  Druga poprawka (`fix/scope-root-children`): bramka zgłasza KAŻDY delegowany dataset, dzieci też, więc bezpiecznik
+  odmawiał także dzieciom -- a komunikat odsyła właśnie do nich. Korzeń = dataset z zakresu, którego rodzica w
+  zakresie nie ma; dziecko z rodzicem w zakresie po odtworzeniu wraca pod delegacją rodzica (`zfs allow -u` bez `-l`).
+  Na żywo (pve11 na gałęzi, pve9 z nową bramką, k2-ab zapauzowane na czas testu): B obcy -> `restore k2-bc` --
+  ODMOWA „ROOT of the delegated scope”, UNFIT 1 z 4, B nietknięty z migawkami i delegacją; `--target=.../docs` --
+  `replace` przez konto delegowane OK, GUID zgodny z C; korzeń naprawiony ręcznie jako root (destroy, create, gołe
+  `zfs allow` zamiast `deploy.sh --allow-restore … --replace` z komunikatu), potem `restore k2-bc` 4/4; następne biegi k2-ab i k2-bc przeszły, A, B i C na tej samej
+  migawce (ten sam GUID).
+  **Luka wdrożenia (otwarta):** bramka działa jako KOPIA w `/usr/local/sbin/zfs-pair-gate`, instalowana tylko przy
+  dołączaniu (`install_pair_gate` w `do_join`, `deploy.sh`); godzinny `git pull` jej nie odświeża. Na labie stała
+  bramka z 6.10/12.10 (poprawka #547 zainstalowana tam ręcznie); na hoście ze starą bramką zakres wielodatasetowy
+  nadal idzie pusty, więc nowy kolektor odmówi każdego zdalnego `replace` (także drogi przez dzieci) -- bezpiecznie,
+  ale bez drogi naprzód, dopóki ktoś nie zainstaluje nowej bramki.
 
 - **Przywracanie: potwierdzenie nadpisania, klucz nośnika, droga „usuń + obok” (2026-10-15; `feat/restore-confirm-key`).**
   Decyzje właściciela po kampanii odzysku: (3) „nadpisanie zawsze z potwierdzeniem, i w GUI, i we wsadzie,
