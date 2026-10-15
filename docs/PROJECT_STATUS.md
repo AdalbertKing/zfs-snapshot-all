@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9a01f075a10def09 -->
+<!-- status-covers-digest: 4cbcc32314d7ffbb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; `fix/restore-local-dispatch`).**
+  Kampania przywracania na labie (pve9b, konto zfsbackup): `restore --plan --config=…` i tryb bezpieczny
+  (`--dataset=<kopia> --snapshot=…`, lądowanie w `hdd/restore/…`, GUID zgodny) działają na prawdziwym ZFS.
+  Ale `zfs-backup.sh restore lokalna-hdd-vms --plan` kończył się rc=1 bez słowa: dyspozytor woła
+  `load_client_and_connection` na rekordzie, a ta funkcja kończy skrypt (`die`) na relacji bez peera, z
+  wyjściem wyciszonym. Bezpośrednio `zfs-restore.sh lokalna-hdd-vms --plan` daje poprawny plan. Poprawka:
+  relacja lokalna (`RUX_MODE=local`) nie potrzebuje połączenia i jest pomijana; dla pozostałych wczytanie
+  jest najpierw sprawdzane w podpowłoce z `die_confine_to_subshell`. Test w `localbackup` (relacja lokalna i zdalna bez danych
+  połączenia), kontrola negatywna na starym kodzie daje BAD. Znane z inwentarza, do decyzji przed GUI
+  „Przywróć”: forma relacyjna nadpisująca relację lokalną nie pyta o nic (zgodą jest grant, którego
+  lokalna nie ma); brak czasownika z listą punktów w JSON; relacja „tylko migawki” nie ma przywracania
+  (czasownik ją pomija; prawdopodobnie potrzebny rollback na miejscu -- do zaprojektowania); `--from-copy` nie podłącza nośnika i nie ładuje klucza.
 
 - **X27 poprawka: pola silnika relacji przeżywają przebudowę (2026-10-15; #537 + `fix/relation-engine-remote`).**
   „Użyj szablonu” (`edit-relation --profile=`) na pve9b skasował `history = newest`: `relblock_render`

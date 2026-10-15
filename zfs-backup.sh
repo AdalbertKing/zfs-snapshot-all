@@ -19501,7 +19501,18 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                 esac
                 [ -r "$CLIENTS_DIR/${_rc_a%%:*}.conf" ] && _rc_conn="$_rc_a"
             done
-            if [ -n "$_rc_conn" ]; then
+            # A LOCAL relationship (RUX_MODE=local) has no peer and needs no
+            # connection -- and load_client_and_connection DIES on it. That die is
+            # an exit in THIS shell with its output thrown away below, so
+            # `restore <local relation> --plan` ended rc=1 without a word (measured
+            # on pve9b, 2026-10-15). Local ones are skipped; for the rest the load
+            # is probed first in a subshell with die_confine_to_subshell (the same
+            # opt-out cmd_status uses: with die_arm_fatal a plain subshell die
+            # still TERMs this shell), so a refusal inside it can no longer end
+            # the dispatch silently -- zfs-restore.sh then speaks for itself.
+            if [ -n "$_rc_conn" ] \
+               && [ "$(record_get "$CLIENTS_DIR/${_rc_conn%%:*}.conf" RUX_MODE 2>/dev/null)" != local ] \
+               && ( die_confine_to_subshell; load_client_and_connection "$CLIENTS_DIR/${_rc_conn%%:*}.conf" ) >/dev/null 2>&1; then
                 if load_client_and_connection "$CLIENTS_DIR/${_rc_conn%%:*}.conf" >/dev/null 2>&1; then
                     # The same pinning the engines get, spelled as raw ssh
                     # flags because zfs-restore.sh calls ssh directly rather than
