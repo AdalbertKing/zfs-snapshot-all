@@ -6714,11 +6714,14 @@ relblock_write() {   # <config> <name> -- the model back into the file, normalis
 }
 
 relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block from the model, normalised
-    local name="$1" hasT="$2" hasS="$3" t f b tv sv v
+    local name="$1" hasT="$2" hasS="$3" t f b tv sv v e
     {
         printf '[relation:%s]\n' "$name"
         local IFS_=","; printf '\ttiers = %s\n' "$(IFS=,; echo "${RB_TIERS[*]}" | sed 's/,/, /g')"
         [ -n "${RB[gfs]:-}" ] && printf '\tgfs = %s\n' "${RB[gfs]}"
+        # The engine fields (set-transfer's) are not tier fields, but they live in this
+        # block too: a rewrite that dropped them undid set-transfer on the next set-tiers.
+        for e in history compression cipher autotune; do [ -n "${RB[$e]:-}" ] && printf '\t%s = %s\n' "$e" "${RB[$e]}"; done
         for t in "${RB_TIERS[@]}"; do
             for b in target source; do [ "${RB[$t.$b]:-}" = no ] && printf '\t%s.%s = no\n' "$t" "$b"; done
             # every base field this tier mentions, canonical order first
@@ -6760,6 +6763,29 @@ relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block fr
     }
 }
 
+relblock_engine_keep() {   # <config> <name> -> RB_ENGINE_KEEP: "key<TAB>value" lines of the engine fields a relationship has
+    # Read BEFORE a rewrite strips the old block and sections (local-backup --replace).
+    # The block wins; a legacy [dataset:] section of the same pair_label (an older
+    # set-transfer put the field there) is taken only for a field the block lacks.
+    local cfg="$1" name="$2" k v
+    RB_ENGINE_KEEP=""
+    while IFS=$'\t' read -r k v; do
+        case "$k" in history|compression|cipher|autotune) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac
+    done < <(relblock_dump "$cfg" "$name")
+    while IFS=$'\t' read -r k v; do
+        case "$k" in history|compression|cipher|autotune) case "$RB_ENGINE_KEEP" in *"$k"$'\t'*) ;; *) RB_ENGINE_KEEP+="$k"$'\t'"$v"$'\n' ;; esac ;; esac
+    done < <(awk -v want="$name" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function flush() { if (insec && pl == want) for (i = 1; i <= n; i++) print buf[i]; n = 0 }
+        { l = $0; sub(/\r$/, "", l) }
+        l ~ /^[ \t]*\[/ { flush(); insec = (trim(l) ~ /^\[dataset:/); pl = ""; n = 0; next }
+        insec { t = trim(l); if (index(t, "=") == 0 || t ~ /^#/) next
+                k = trim(substr(t, 1, index(t, "=") - 1)); v = trim(substr(t, index(t, "=") + 1))
+                if (k == "pair_label") pl = v
+                if (k ~ /^(history|compression|cipher|autotune)$/) buf[++n] = k "\t" v }
+        END { flush() }' "$cfg")
+}
+
 # X27 S2: a PROFILE rendered into a relationship's block. Target numbers from the
 # profile, source numbers from the source profile (or the same one) -- the model is
 # filled per side and relblock_render writes a field once when both sides agree.
@@ -6767,13 +6793,15 @@ relblock_render() {   # <name> <has target 0|1> <has source 0|1> -> the block fr
 # standard_hourly makes, keep_* prune) has no block shape -- owner 2026-10-14 (a):
 # every tier makes and counts its own -- and is refused until it is rewritten.
 relblock_from_profile() {   # <name> <has target 0|1> <has source 0|1> [remote] -> block on stdout
-    local name="$1" hasT="$2" hasS="$3" remote="${4:-}" id t line k v sd frag ds_ids pr_ids
+    local name="$1" hasT="$2" hasS="$3" remote="${4:-}" id t line k v sd frag ds_ids pr_ids ek ev
     ds_ids=$(profile_prune_ref_ids "$PROFILE_DS_FILE" | sed 's/.*__//' | tr '\n' ' ')
     if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then
         pr_ids=$(profile_prune_ref_ids "$PROFILE_PRUNE_FILE" | sed 's/.*__//' | tr '\n' ' ')
         [ "$ds_ids" = "$pr_ids" ] || die "profile '$PROFILE_ACTIVE' makes snapshots with [$ds_ids] but prunes with [$pr_ids] -- the old GFS ladder shape, which a relationship block cannot hold (owner 2026-10-14: every tier makes and counts its own). Choose another profile, or rewrite this one."
     fi
     RB_TIERS=(); RB_KEYS=(); RB=()
+    # The engine fields survive a profile change: a profile carries the tiers, not the transfer.
+    while IFS=$'\t' read -r ek ev; do [ -n "$ek" ] && { RB_KEYS+=("$ek"); RB[$ek]="$ev"; }; done <<<"${RB_ENGINE_KEEP:-}"
     while IFS= read -r id; do
         [ -n "$id" ] || continue
         t="${id##*__}"
@@ -8172,7 +8200,7 @@ cmd_local_backup() {
     # carry pair_label (so the engine lines carry -L and the pause gate reaches
     # them), each source gets its own landing prune, and a client record with
     # RUX_MODE=local is written after the install. Without it: unchanged.
-    local lb_name="" lb_exfam="" lb_replace=0 lb_raw=0
+    local lb_name="" lb_exfam="" lb_replace=0 lb_raw=0 RB_ENGINE_KEEP=""
     local -a lb_excl=()
     local -a source_flags=()
     for a in "$@"; do
@@ -8451,6 +8479,7 @@ cmd_local_backup() {
     if [ -f "$config" ]; then
         cp -p "$config" "$cand" || { rm -f "$cand"; die "could not read the existing config $config to plan against it"; }
         if [ "$lb_replace" -eq 1 ] && [ -n "$lb_name" ]; then
+            relblock_engine_keep "$cand" "$lb_name"   # before the old block and sections go
             local _strip; _strip=$(mktemp) || die "mktemp failed"
             strip_local_relation_sections "$cand" "$lb_name" > "$_strip" 2>/dev/null && cat "$_strip" > "$cand"
             rm -f "$_strip"

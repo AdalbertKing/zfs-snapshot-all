@@ -610,6 +610,37 @@ if [ "$x2r" -ne 0 ] && printf '%s' "$x2c" | grep -qF "'x2' is a LOCAL copy -- th
 else
     bad "local relationship: set-transfer --compression on a local copy" "rc=$x2r" "$x2c" "$x2h"
 fi
+# X27 (owner 2026-10-15, "Uzyj szablonu" on pve9b): set-transfer's history = newest vanished
+# when the relationship was rewritten -- set-tiers rendered the block without its engine
+# fields, and local-backup --replace stripped a legacy [dataset:] section that held one.
+# Regression: the engine fields are read back from the block, and from a legacy section of
+# the same pair_label (block wins); a relationship without them keeps none (control).
+EK="$RL/engine-keep.conf"
+cat > "$EK" <<'EOF'
+[relation:ek]
+	tiers = d30h24
+	history = newest
+	d30h24.send_schedule = 0 0 * * *
+[relation:el]
+	tiers = d30h24
+[dataset:rpool/x]
+	pair_label   = el
+	history = newest
+[dataset:rpool/y]
+	pair_label   = none
+	history = all
+EOF
+ek_out=$( ( declare -A RB=(); RB_TIERS=(); RB_KEYS=()
+            relblock_engine_keep "$EK" el; printf 'el=[%s]\n' "$RB_ENGINE_KEEP"
+            relblock_engine_keep "$EK" zz; printf 'zz=[%s]\n' "$RB_ENGINE_KEEP"
+            relblock_load "$EK" ek; relblock_render ek 1 0 ) 2>&1 )
+if printf '%s' "$ek_out" | grep -qF "el=[history"$'\t'"newest"$'\n]' \
+   && printf '%s' "$ek_out" | grep -qF 'zz=[]' \
+   && printf '%s' "$ek_out" | grep -qxF $'\thistory = newest'; then
+    ok "relationship engine fields (history) survive a rewrite: read from the block and from a legacy section; render keeps them"
+else
+    bad "relationship engine fields survive a rewrite" "$ek_out"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact
