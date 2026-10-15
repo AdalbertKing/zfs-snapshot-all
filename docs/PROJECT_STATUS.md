@@ -31,7 +31,7 @@
   `deploy.sh` z `main`: 4 FAIL), `restore` -- przypadek „obok na tej samej maszynie”. Na żywo: zgoda na pve9b
   zdelegowała `hdd/restore`, `restore k2-ab k2-ab --source=…/docs --onto=hdd/restore/docs-test` z pve9 -- OK, GUID
   zgodny z kopią, bez komunikatu o innej maszynie; potem dataset testowy skasowany, zgoda cofnięta, hosty na `main`.
-  Odzysk na kolektor („obok” w starej formie) i na miejsce -- bez zmian.
+  Bez zmian: odzysk na miejsce oraz stara forma, która odtwarza obok na kolektorze.
 
 - **Punkty odzysku w JSON: `restore --plan --json` (2026-10-15; `feat/restore-points-json`).**
   Pierwszy klocek okna „Przywróć” (decyzje właściciela 2026-10-15: lista punktów do wyboru, pozycja w menu głównym
