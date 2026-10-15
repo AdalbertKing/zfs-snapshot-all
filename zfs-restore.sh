@@ -4476,12 +4476,55 @@ Droga w dwoch krokach:
     return 3
 }
 
+# restore_plan_json <config> <dataset filter> <address filter>
+#
+# `restore --plan --json`: the rows the text plan prints -- source, relation,
+# copy, consistency and every snapshot of the copy (name, creation epoch, guid,
+# oldest first) -- for the GUI's recovery-point list. Read-only, the same
+# restore_relations rows and the same filters as the text plan; no strategy,
+# which needs the source host and stays in the text plan and the run itself.
+restore_plan_json() {
+    local config="$1" dataset="$2" addr_filter="$3"
+    local a b c d sname screat sguid first=1 sfirst snaps
+    printf '{"config":"%s","datasets":[' "$(json_escape "$config")"
+    while IFS=$'\t' read -r a b c d; do
+        [ -n "$a" ] || continue
+        if [ -n "$dataset" ]; then
+            [ "$a" = "$dataset" ] || [ "$b" = "$dataset" ] || continue
+        fi
+        if [ -n "$addr_filter" ]; then
+            printf '%s\n' "$addr_filter" | grep -qxF -- "$a" || continue
+        fi
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        # copy_exists: a copy that is not there and a copy with no snapshots
+        # are different answers -- the text plan says "BRAK -- ta kopia nie
+        # istnieje" for the first -- and both would otherwise be an empty list.
+        local exists=true
+        snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$b" 2>/dev/null) \
+            || { snaps=""; exists=false; }
+        printf '{"source":"%s","relation":"%s","copy":"%s","copy_exists":%s,"consistency":"%s","snapshots":[' \
+            "$(json_escape "$a")" "$(json_escape "$c")" "$(json_escape "$b")" "$exists" \
+            "$( [ "$d" = atomic ] && echo atomic || echo independent )"
+        sfirst=1
+        while IFS=$'\t' read -r sname screat sguid; do
+            [ -n "$sname" ] || continue
+            [ "$sfirst" -eq 1 ] || printf ','
+            sfirst=0
+            printf '{"name":"%s","creation":%s,"guid":"%s"}' \
+                "$(json_escape "${sname#*@}")" "${screat:-0}" "$(json_escape "${sguid:-}")"
+        done <<< "$snaps"
+        printf ']}'
+    done <<< "$(restore_relations "$config")"
+    printf ']}\n'
+}
+
 cmd_restore() {
     # Before the options are even read: a host whose relationship records do not
     # identify one relationship each cannot answer "which relationship is X",
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
-    local plan=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
+    local plan=0 json=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
     local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy="" overwrite=0
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
@@ -4500,6 +4543,7 @@ cmd_restore() {
         a="$1"
         case "$a" in
             --plan)       plan=1 ;;
+            --json)       json=1 ;;
             --dataset=*)  dataset="${a#*=}" ;;
             --dataset)    need_val --dataset "${2:-}"; dataset="$2"; shift ;;
             # Wall-clock, not a snapshot name (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13).
@@ -4575,6 +4619,10 @@ cmd_restore() {
     # --onto says WHERE on the destination machine, so without a destination
     # there is nothing for it to mean. Refusing beats silently keeping the source
     # paths: the operator who typed it wanted the data somewhere else.
+    # --json is the plan's recovery points for a program (the GUI's "z kiedy?"
+    # list), not a second planner: same resolver, same filters, same listing.
+    [ "$json" -eq 0 ] || [ "$plan" -eq 1 ] || die "restore: --json is the machine-readable form of --plan -- give both"
+    [ "$json" -eq 0 ] || [ -z "$at_raw" ] || die "restore: --plan --json lists every recovery point; --at picks one of them. Give one or the other."
     [ "$overwrite" -eq 0 ] || [ -n "$from_copy" ]         || die "restore: --overwrite says a destination that already exists may be written onto, and only --from-copy takes such a destination. A relationship-addressed recovery decides that from the target's grant instead."
     if [ -n "$onto_list" ] && [ -z "$dest_addr" ] && [ -z "$from_copy" ]; then
         die "restore: --onto names where the recovery lands on ANOTHER machine, and no destination relationship was given. Say: restore <from> <onto-relation> --onto <dataset>[,<dataset>...]"
@@ -4839,6 +4887,11 @@ cmd_restore() {
         src+=("$a"); copy+=("$b"); kind+=("$c"); cons+=("$d")
     done <<< "$(restore_relations "$config")"
     [ "${#src[@]}" -gt 0 ] && [ -n "${src[0]:-}" ] || die "restore --plan: $config describes no backup relationship, so there is nothing to restore from"
+
+    if [ "$json" -eq 1 ]; then
+        restore_plan_json "$config" "$dataset" "$addr_filter"
+        return $?
+    fi
 
     local at_missing=0 at_ambig=0 at_row_ok=""
     echo
