@@ -799,13 +799,29 @@ def collect(repo, files, only=None):
     plan = [("status", ["status", "--json"]), ("jobs", ["list-jobs", "--json"]),
             ("monitors", ["monitor", "--json"]), ("progress", ["progress", "--json"]),
             ("replicas", ["list-replicas", "--json"]), ("stats", ["job-stats", "--json"])]
-    for key, args in plan:
-        if only and key != only:
-            continue
+    # RÓWNOLEGLE (P2, właściciel 2026-10-15: powrót z okna do GUI > 5 s). Pełne odświeżenie
+    # zostaje (decyzja 2026-10-09: powrót zawsze odświeża), ale sześć czasowników tylko do
+    # odczytu szło PO KOLEI -- zmierzone na pve10: list-jobs 6,0 s + monitor 5,6 s +
+    # job-stats 2,6 s + reszta < 0,5 s. Razem trwa tyle, co najwolniejszy.
+    want = [(key, args) for key, args in plan if not only or key == only]
+    live = [(key, args) for key, args in want if not files.get(key) and not files.get("offline")]
+    got = {}
+    if len(live) > 1:
+        import threading
+        def _one(k, a):
+            got[k] = run_verb(repo, a)
+        ths = [threading.Thread(target=_one, args=(k, a)) for k, a in live]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join()
+    for key, args in want:
         if files.get(key):
             doc, err = load_file(files[key])
         elif files.get("offline"):
             doc, err = None, None
+        elif key in got:
+            doc, err = got[key]
         else:
             doc, err = run_verb(repo, args)
         setattr(data, key, doc)

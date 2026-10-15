@@ -3640,7 +3640,18 @@ out=""; spec=""; while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; [ "$1" = -
 [ -n "$spec" ] && cp "$spec" "$NR_DIR/last-spec.json"
 cp "$TREE_OUT" "$out"
 EOF
-chmod +x "$RW/bin/zb" "$RW/bin/zfs" "$RW/bin/tree" "$RW/bin/whiptail"
+# zpool: P5 -- okno z dysku sprawdza, czy cel zaczyna sie od puli TEGO hosta (tu: hdd, usb9).
+cat > "$RW/bin/zpool" <<'EOF'
+#!/bin/bash
+[ "$1" = list ] || exit 9
+last="${!#}"
+case "$last" in
+    name) printf '%s\n' hdd usb9 ;;
+    hdd|usb9) echo "$last" ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$RW/bin/zb" "$RW/bin/zfs" "$RW/bin/tree" "$RW/bin/whiptail" "$RW/bin/zpool"
 printf '{"action":"next","roots":["tank/b/hdd/data/docs"],"excl":{},"recursion":"flat"}\n' > "$RW/t-docs.json"
 printf '{"action":"next","roots":["tank/b/hdd/data"],"excl":{},"recursion":"flat"}\n' > "$RW/t-whole.json"
 printf '{"action":"next","roots":["tank/b/hdd/data"],"excl":{"tank/b/hdd/data":["tank/b/hdd/data/mail"]},"recursion":"flat"}\n' > "$RW/t-nomail.json"
@@ -3792,6 +3803,23 @@ if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$C4" ] && [ "$(grep -c -F inputbox "$R
     ok "restore --from-copy: dwa korzenie -> dwa pola 'dokad', --from-copy=A,B --onto=a,b w kolejnosci drzewa"
 else
     bad "restore --from-copy: dwa korzenie" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $C4" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
+fi
+
+# c6 (P5, wlasciciel 10-15): cel BEZ puli ("restore/home" -- jeden Backspace za duzo) nie
+# przechodzi do polecenia: okno "zla nazwa" i to samo pole jeszcze raz; potem poprawna nazwa.
+printf '0\trestore/home\n0\t\n0\thdd/restore/data\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp1.json" --from-copy "$RWCP"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "restore ~ --from-copy=$RWCP ~ --onto=hdd/restore/data" ] \
+   && grep -q 'zła nazwa' "$RW/wt.log" && ! grep -q 'onto=restore/home' "$RW/ran"; then
+    ok "restore --from-copy: cel bez puli ('restore/home') -> okno 'zła nazwa' i to samo pole, polecenie dopiero z poprawna nazwa (P5)"
+else
+    bad "restore --from-copy: cel bez puli (P5)" "rc=$RW_RC ran=$(rw_ran)" "$(grep -c 'zła nazwa' "$RW/wt.log")"
+fi
+# P1: po biegu napis o Enterze jest NA EKRANIE (stdout), nie schowany w stderr.
+if grep -q '=== GOTOWE (rc=0). Enter = powrót do GUI' "$RW/out"; then
+    ok "restore: po biegu na ekranie '=== GOTOWE (rc=0). Enter = powrót do GUI' (P1)"
+else
+    bad "restore: napis Enter po biegu (P1)" "$(tail -3 "$RW/out")"
 fi
 
 # c5. bez argumentow: uzycie, exit 2

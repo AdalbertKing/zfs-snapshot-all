@@ -34,6 +34,10 @@ trap 'rm -rf "$TMPD"' EXIT
 
 abort() { clear 2>/dev/null; echo "restore: przerwane, nic nie zmieniono"; exit 1; }
 join_by_comma() { local IFS=,; echo "$*"; }
+# P3 (właściciel 10-15): godziny punktów są w strefie HOSTA (lab: UTC), a nie operatora --
+# 20:01 na ekranie to 22:01 w Polsce latem. Strefy operatora przez SSH nie znamy; okno
+# mówi, w jakiej strefie jest czas, zamiast udawać, że to jego.
+TZN="$(date +%Z 2>/dev/null)"
 
 # ---- URUCHOM: CMD (tablica) + CMDTXT (do pokazania); kończy skrypt kodem polecenia ----------
 run_cmd() {
@@ -42,9 +46,11 @@ run_cmd() {
     "${CMD[@]}" 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
     echo
-    if [ "$RC" -eq 0 ]; then echo "GOTOWE."
-    else echo "NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej."; fi
-    read -r -p "Enter = powrót do GUI " _ </dev/tty 2>/dev/null || true
+    # Napis zwykłym echo, jak w delete-relation.sh: podpowiedź `read -p` idzie na stderr,
+    # a `2>/dev/null` ją chowało -- okno czekało na Enter bez słowa (właściciel, P1 10-15).
+    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE (rc=0). Enter = powrót do GUI"
+    else echo "=== NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej. Enter = powrót do GUI"; fi
+    read -r _ </dev/tty 2>/dev/null || true
     exit "$RC"
 }
 
@@ -74,6 +80,10 @@ if [ "$REL" = --from-copy ]; then
     sug() {
         if [[ "$1" =~ $SUG_RE ]]; then printf '%s' "${BASH_REMATCH[2]}"
         else printf '%s/restore/%s' "${1%%/*}" "${1##*/}"; fi
+    }
+    pool_ok() {   # <nazwa> -> 0 gdy ma postać <pula>/<coś> i ta pula jest na tym hoście
+        case "$1" in */?*) ;; *) return 1 ;; esac
+        zpool list -H -o name -- "${1%%/*}" >/dev/null 2>&1
     }
     FROM=(); ANS=(); ONTO=(); EXIST=(); AT=""; HIST=0; OVERWRITE=0; CMD=()
     step=1
@@ -140,6 +150,18 @@ PYEOF
                 if wt --title "Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})" --ok-button "Dalej" --cancel-button "Wstecz" \
                       --inputbox "$txt" "$(fit 6)" "$W" "$def"; then
                     [ -n "$WT_OUT" ] || continue
+                    # P5 (właściciel 10-15): nazwa bez puli ("restore/home") przechodziła
+                    # i dopiero polecenie odmawiało. Pula musi istnieć NA TYM hoście.
+                    if ! pool_ok "$WT_OUT"; then
+                        ANS[$i]="$WT_OUT"
+                        geom
+                        wt --title "Przywróć z dysku: zła nazwa" \
+                           --msgbox "'$WT_OUT' nie zaczyna się od puli tego hosta.
+
+Nazwa ma mieć postać <pula>/<ścieżka>, np. $(sug "${FROM[$i]}").
+Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
+                        continue
+                    fi
                     ANS[$i]="$WT_OUT"; i=$((i + 1))
                 else
                     [ "$i" -eq 0 ] && { GOBACK=1; break; }
@@ -183,7 +205,7 @@ PYEOF
                 exit 1
             fi
             wt --title "Przywróć z dysku: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --radiolist "Punkt odzysku (czas utworzenia migawki na dysku). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+               --radiolist "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; else AT="${PT_TIME[$idx]}"; fi
@@ -211,7 +233,7 @@ PYEOF
                     echo "  ${FROM[$i]} -> ${ONTO[$i]}"
                     for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  (NADPISUJE)"; break; }; done
                 done
-                echo "Punkt:  ${AT:-najnowszy}"
+                echo "Punkt:  ${AT:-najnowszy}${AT:+ ($TZN)}"
                 if [ "$HIST" -eq 1 ]; then echo "Historia: tak"; else echo "Historia: nie"; fi
                 echo
                 echo "Polecenie:"
@@ -355,7 +377,14 @@ PYEOF
                 geom
                 wt --title "Przywróć $REL: obok -- gdzie?" --ok-button "Dalej" --cancel-button "Wstecz" \
                    --inputbox "$txt" "$(fit $((${#txt} / (W - 8) + 3)))" "$W" "$BASE" || { BASE=""; break; }
-                [ -n "$WT_OUT" ] && { BASE="$WT_OUT"; break; }
+                # P5: bez "<pula>/" polecenie odmówi dopiero na celu; tu sprawdzamy postać
+                # (pula leży na $TARGET, więc jej istnienia stąd nie widać).
+                case "$WT_OUT" in
+                    */?*) BASE="$WT_OUT"; break ;;
+                    "") ;;
+                    *) BASE="$WT_OUT"; geom
+                       wt --title "Przywróć $REL: zła nazwa" --msgbox "'$WT_OUT' nie ma postaci <pula>/<katalog>, np. ${ORIG[0]%%/*}/restore." 8 "$W" ;;
+                esac
             done
             [ -n "$BASE" ] || continue            # Wstecz z pola -> znów wybór "dokąd"
             # onto.txt: ONTO(D) w kolejności SEL; kod 3 = dwa korzenie o tej samej nazwie (nazwa na stdout)
@@ -413,7 +442,7 @@ PYEOF
         fi
         geom
         wt --title "Przywróć $REL: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --radiolist "Punkt odzysku (czas utworzenia kopii). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+           --radiolist "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
            "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; else AT="${PT_TIME[$idx]}"; fi
@@ -439,7 +468,7 @@ PYEOF
             else
                 echo "Dokąd:  NA MIEJSCE na $TARGET -- NADPISUJE"
             fi
-            echo "Punkt:  ${AT:-najnowszy}"
+            echo "Punkt:  ${AT:-najnowszy}${AT:+ ($TZN)}"
             echo
             echo "Polecenie:"
             echo "  $CMDTXT"
