@@ -28,11 +28,11 @@
   `load_client_and_connection` na rekordzie, a ta funkcja kończy skrypt (`die`) na relacji bez peera, z
   wyjściem wyciszonym. Bezpośrednio `zfs-restore.sh lokalna-hdd-vms --plan` daje poprawny plan. Poprawka:
   relacja lokalna (`RUX_MODE=local`) nie potrzebuje połączenia i jest pomijana; dla pozostałych wczytanie
-  jest najpierw sprawdzane w podpowłoce. Test w `localbackup` (relacja lokalna i zdalna bez danych
+  jest najpierw sprawdzane w podpowłoce z `die_confine_to_subshell`. Test w `localbackup` (relacja lokalna i zdalna bez danych
   połączenia), kontrola negatywna na starym kodzie daje BAD. Znane z inwentarza, do decyzji przed GUI
-  „Przywróć”: forma relacyjna nadpisująca relacji lokalnej nie pyta o nic (zgodą jest grant, którego
+  „Przywróć”: forma relacyjna nadpisująca relację lokalną nie pyta o nic (zgodą jest grant, którego
   lokalna nie ma); brak czasownika z listą punktów w JSON; relacja „tylko migawki” nie ma przywracania
-  (to rollback na miejscu); `--from-copy` nie podłącza nośnika i nie ładuje klucza.
+  (czasownik ją pomija; prawdopodobnie potrzebny rollback na miejscu -- do zaprojektowania); `--from-copy` nie podłącza nośnika i nie ładuje klucza.
 
 - **X27 poprawka: pola silnika relacji przeżywają przebudowę (2026-10-15; `fix/relation-keep-engine-fields`).**
   „Uzyj szablonu” (`edit-relation --profile=`) na pve9b skasował `history = newest`: `relblock_render`
