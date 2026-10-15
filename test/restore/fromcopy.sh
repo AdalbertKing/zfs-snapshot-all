@@ -42,6 +42,14 @@ fc_run() {   # <copy list> <onto list> <snapshot> <at epoch> -> output; LANDED h
         echo 'log() { shift; printf "%s\n" "$*" >&2; }'
         cat <<'STUB'
 zfs() {
+    # An ENCRYPTED copy whose key is not loaded: the names in $FC/locked. No key
+    # file (keylocation=prompt) and load-key fails -- what a medium looks like
+    # after the gate imported it without its key (pve9b, 2026-10-15).
+    if [ "$1" = get ] && [ -r "$FC/locked" ] && grep -qFx -- "${!#}" "$FC/locked"; then
+        case "$*" in *keystatus*) echo unavailable ;; *encryptionroot*) echo "${!#}" ;; *keylocation*) echo prompt ;; esac
+        return 0
+    fi
+    [ "$1" = load-key ] && return 1
     case "$1 $2" in
         "list -H")
             case "$*" in
@@ -79,6 +87,7 @@ restore_relations() { :; }
 STUB
         awk -v want="restore_at_pick() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         awk -v want="cmd_restore_from_copy() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
+        awk -v want="restore_copy_key_ready() {" 'index($0, want)==1 {f=1} f{print} f&&/^\}$/{exit}' "$ZB"
         printf 'cmd_restore_from_copy %q %q %q %q 1 %q ""
 ' "$copies" "$ontos" "$snap" "$at" "$ow"
     } > "$t"
@@ -354,6 +363,21 @@ case "$out" in
     *"PAIR overwrite=hdd/taken from=hdd/copyA point=automated_2026-06-15_12-00-00"*)
         ok "overwrite: without --at the newest point BY CREATION reaches the engine" ;;
     *) bad "overwrite: without --at the newest point BY CREATION reaches the engine" "$out" ;;
+esac
+# THE MEDIUM'S KEY (owner 2026-10-15): an encrypted copy whose key is not loaded,
+# with no key file and no answer, is refused BEFORE anything lands -- not left to
+# die mid-transfer on "dataset key must be loaded".
+printf 'hdd/copyA\n' > "$FC/locked"
+out="$(fc_run 'hdd/copyA' 'hdd/wolne' '' '' </dev/null)"; rc=$?
+rm -f "$FC/locked"
+case "$rc|$out" in
+    0*) bad "key: a locked copy with no key is refused" "rc=$rc" "$out" ;;
+    *"key of 'hdd/copyA' is not loaded"*) ok "key: a locked copy with no key is refused, naming --key-file" ;;
+    *) bad "key: a locked copy with no key is refused, naming --key-file" "$out" ;;
+esac
+case "$out" in
+    *"LAND "*) bad "key: ...and nothing landed" "$out" ;;
+    *) ok "key: ...and nothing landed" ;;
 esac
 
 # A destination that is NOT there means the operator meant the other mode.
