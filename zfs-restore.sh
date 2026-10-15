@@ -713,7 +713,12 @@ cmd_restore_from_copy() {   # <copy list> <onto list> <snapshot> <at epoch> <yes
             # --from-copy is the source. Named rather than trusted to memory,
             # because getting it backwards here destroys the replica instead of
             # restoring from it.
-            restore_replace_pair "${to[$i]}" "${from[$i]}" "$yes"                 "replika -> kopia (dwa datasety podane wprost)" || rc=1
+            # The point chosen above (--snapshot, --at, or the newest) goes WITH the
+            # pair: without it restore_replace_pair re-planned over every snapshot
+            # and took the newest -- `--at 06:30` restored to 09:01, previewed a
+            # 0 B loss and reported success (lab, pve9b usb9 replica, 2026-10-15).
+            restore_replace_pair "${to[$i]}" "${from[$i]}" "$yes" \
+                "replika -> kopia (dwa datasety podane wprost)" "${snaps[$i]}" || rc=1
         else
             restore_safe_land "${from[$i]}" "${snaps[$i]}" "${to[$i]}" "${from[$i]}" 1 || rc=1
         fi
@@ -4035,8 +4040,8 @@ restore_execute() {   # <src> <copy> <this run's own technical snapshots, full n
 # `cons` is passed rather than looked up: the atomic refusal belongs to whoever
 # knows which relation these datasets belong to, and for the replica address
 # that is the DESTINATION side. See cmd_restore_overwrite.
-restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [what to call the pairing]
-    local src="$1" copy="$2" yes="$3" kind="${4:-}"
+restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [what to call the pairing] [point]
+    local src="$1" copy="$2" yes="$3" kind="${4:-}" point="${5:-}"
     # The preview prints this. With a relation it is the relation's kind; with
     # two paths handed in there is no relation, and saying so is better than an
     # empty field where an operator expects one.
@@ -4044,13 +4049,24 @@ restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [wha
     local snaps
     snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$copy" 2>/dev/null) || snaps=""
     [ -n "$snaps" ] || die "restore (odtworzenie niszczace): kopia '$copy' nie ma ani jednego snapshota, wiec nie ma z czego odtwarzac"
+    # A CHOSEN POINT bounds the listing the planner sees -- the same filter the
+    # read-only `--plan --at` uses: creation <= the point's, so the planner's own
+    # "newest" IS the point and every older base candidate stays.
+    if [ -n "$point" ]; then
+        local _pc
+        _pc="$(printf '%s\n' "$snaps" | awk -F'\t' -v p="${copy}@${point}" '$1 == p { print $2; exit }')"
+        [ -n "$_pc" ] || die "restore (odtworzenie niszczace): punkt '$point' nie istnieje na kopii '$copy'. Nic nie zmieniono."
+        snaps="$(printf '%s\n' "$snaps" | awk -F'\t' -v c="$_pc" 'NF>=3 && $2 ~ /^[0-9]+$/ && ($2+0) <= (c+0)')"
+        echo
+        echo "  PUNKT:      $point (wybrany na kopii; nowsze snapshoty kopii nie sa ani celem, ani baza)"
+    fi
 
     echo
     echo "ODTWORZENIE NISZCZACE -- podglad. Nic nie zostalo jeszcze zmienione."
     echo "  Zrodlo:     $src   (CEL odtworzenia: to jego stan zostanie zmieniony)"
     echo "  Kopia:      $copy  (zrodlo danych)"
     echo "  Relacja:    $kind"
-    restore_plan_strategy "$copy" "$src" "$snaps"
+    restore_plan_strategy "$copy" "$src" "$snaps" ${point:+"punkt wybrany (--at / --snapshot) -> ten cel"}
     echo
 
     case "$RESTORE_STRATEGY" in
