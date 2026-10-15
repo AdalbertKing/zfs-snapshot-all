@@ -2753,6 +2753,21 @@ restore_grant_delegate() {   # <account> <datasets, space-separated>
     [ -z "$_rg_gone" ] || log "  not here (nothing to delegate on):$_rg_gone -- a dataset under a delegated parent comes back under the parent's delegation when the restore recreates it"
 }
 
+# restore_grant_pause_writers <label> <datasets> / restore_grant_resume_writers <label>
+#
+# This host's OWN relationships that write into the restore scope are paused
+# while the grant stands (zfs-backup.sh pause-writers / resume-writers; see
+# there). The collector pauses only its side; without this, a pull or prune
+# here kept writing into the dataset being overwritten (pve9, 2026-10-15).
+restore_grant_pause_writers() {
+    local label="$1" datasets="$2"
+    # shellcheck disable=SC2086  # a space-separated dataset list, one word each
+    bash "$_DEPLOY_DIR/zfs-backup.sh" pause-writers "$label" $datasets         || die "--allow-restore=$label: could not pause this host's relationships that write into the scope -- the grant was NOT written. Nothing may write to a dataset that is being restored onto."
+}
+restore_grant_resume_writers() {
+    bash "$_DEPLOY_DIR/zfs-backup.sh" resume-writers "$1"         || warn "--deny-restore=$1: resuming the relationships this grant paused failed -- check: ls ${RELATIONSHIPS_DIR:-/var/lib/zfs-snapshot-all/relationships}/*/paused"
+}
+
 do_allow_restore() {
     local label="$ALLOW_RESTORE_LABEL"
     [ "$(id -u)" -eq 0 ] || die "--allow-restore must run as root ON THIS MACHINE. The point of the grant is that the machine at risk issues it locally; a grant that could be created any other way would not be one."
@@ -2797,6 +2812,7 @@ do_allow_restore() {
             # comes back with no delegation while this file still says yes. The
             # re-issue used to answer "nothing changed" and leave it that way.
             log "restore grant for '$label' already says exactly this ($want) -- the file is unchanged; re-applying the delegation"
+            restore_grant_pause_writers "$label" "$RESTORE_GRANT_DATASETS"
             restore_grant_delegate "$account" "$RESTORE_GRANT_DATASETS"
             return 0
         fi
@@ -2804,6 +2820,10 @@ do_allow_restore() {
     $0 --deny-restore=$label
   then grant again with the modes you want."
     fi
+
+    # PAUSE FIRST, then permit: a grant that exists while this host's own jobs
+    # still write into the scope is the half-state the pause is for.
+    restore_grant_pause_writers "$label" "$RESTORE_GRANT_DATASETS"
 
     mkdir -p "$RESTORE_GRANT_DIR" || die "could not create $RESTORE_GRANT_DIR"
     # root:root, and NOT group-writable. See the comment on RESTORE_GRANT_DIR:
@@ -2873,6 +2893,7 @@ do_deny_restore() {
         # `--deny-restore` after a lost acknowledgement reports a failure while
         # the machine is, in fact, exactly as safe as they wanted.
         log "no restore grant for '$label' on this host -- nothing to take back"
+        restore_grant_resume_writers "$label"
         return 0
     fi
     local had; had="$(restore_grant_read_modes "$gpath")" || had=""
@@ -2889,17 +2910,32 @@ do_deny_restore() {
     # Both halves, and the delegation first: while it is still delegated the
     # account CAN act, so removing that is the half that actually closes the
     # window. The file is the declaration; the allow is the capability.
-    local _rd_ds
+    # _rd_open: the delegation may still stand. A dataset that no longer exists
+    # carries no delegation, so its failed unallow does not count.
+    local _rd_ds _rd_open=0
     if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
         for _rd_ds in $RESTORE_GRANT_DATASETS; do
-            zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null \
-                || warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+            if ! zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null; then
+                warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
+                zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 && _rd_open=1
+            fi
         done
         log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+    else
+        warn "the pairing manifest for '$label' gives no account or datasets, so the delegation could not be revoked here -- check 'zfs allow' on the scope by hand"
+        _rd_open=1
     fi
 
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
+    # AFTER the revocation, and only when it is known to have happened:
+    # resuming this host's own jobs while the collector could still write
+    # would reopen the overlap the pause closed.
+    if [ "$_rd_open" -eq 1 ]; then
+        warn "the relationships this grant paused STAY PAUSED: the delegation may still stand. Once 'zfs allow' shows it gone, resume them with: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
+        return 1
+    fi
     log "  the collector for '$label' can no longer write onto this machine."
+    restore_grant_resume_writers "$label"
     return 0
 }
 

@@ -4015,6 +4015,13 @@ coverage_conflicts() {   # <this client> <requested path>...
         # LOAD_*/MANAGED_* already loaded, and loading another record here
         # would overwrite them mid-emit.
         (
+            # record_load DIES on an unparseable record, and since die_arm_fatal
+            # a die in a subshell kills the whole program -- its message lost to
+            # the 2>/dev/null below. The REV-084 refusal naming the bad record
+            # was unreachable that way: the caller ended silently with rc 1
+            # (measured 2026-10-15 through pause-writers). Confined, the die
+            # ends this record's subshell and the '!' line below reports it.
+            die_confine_to_subshell
             CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""; RUX_MODE=""; REQUESTED_DATASETS=""
             # REV-20260809-084 F1. This was `|| exit 0`, which turned an
             # unreadable or unparseable record into "no conflict" -- fail-OPEN,
@@ -12616,10 +12623,14 @@ remove_template_section() {   # <file> <template name>
 # the ONLY mutation is the marker under $RELATIONSHIPS_DIR. Both idempotent.
 cmd_pause_client() {
     local name="${1:-}"; shift || :
-    local reason="" a
+    local reason="" by_grant="" a
     for a in "$@"; do
         case "$a" in
             --reason=*) reason="${a#*=}" ;;
+            # Internal, from pause-writers: names the restore grant that took
+            # this pause, so --deny-restore resumes it and nothing else.
+            --by-grant=*) by_grant="${a#*=}"
+                client_name_valid "$by_grant" || die "pause-client: invalid --by-grant label '$by_grant'" ;;
             *) die "pause-client: unknown option $a (only --reason=TEXT)" ;;
         esac
     done
@@ -12645,6 +12656,7 @@ cmd_pause_client() {
     {
         printf 'PAUSED_AT="%s"\n' "$(date '+%Y-%m-%d %H:%M:%S')"
         [ -n "$reason" ] && printf 'PAUSED_REASON="%s"\n' "$reason"
+        [ -n "$by_grant" ] && printf 'PAUSED_BY_GRANT="%s"\n' "$by_grant"
         :
     } > "$marker.new" || { rm -f "$marker.new"; die "could not write $marker.new"; }
     chmod 0644 "$marker.new" || { rm -f "$marker.new"; die "could not chmod $marker.new"; }
@@ -12703,6 +12715,74 @@ cmd_resume_client() {
 # second trust path to the peer, and inventing one (root-to-root ssh) would
 # undo the pairing model. The gate accepts three exact literal verbs and
 # nothing else; see zfs-pair-gate.sh for why they take no arguments.
+# pause-writers <grant label> <dataset>...   /   resume-writers <grant label>
+#
+# Called by deploy.sh --allow-restore / --deny-restore on the machine a restore
+# will WRITE ONTO. The collector pauses only its own relationship
+# (restore_pause_take); this host's own jobs on the same datasets kept running
+# -- measured 2026-10-15 on pve9: k2-ab's pull (:25) and prune (:45) write into
+# the very scope k2-bc restores onto. Owner decision the same day: nothing may
+# write to a dataset that is being overwritten, and the grant itself pauses it.
+#
+# WHO WRITES is coverage_conflicts' answer -- the rule the overlap guard already
+# uses (managed targets, prune scope, a local relationship's sources), not a
+# second reading of the crontab. A pause that already stands is left alone and
+# NOT tagged, so revoking the grant never resumes what an operator paused.
+# A job without '-L <label>' is outside every relationship pause by construction.
+cmd_pause_writers() {
+    local grant="${1:-}"; shift || :
+    { [ -n "$grant" ] && client_name_valid "$grant"; } || die "pause-writers: needs the restore grant's relationship label"
+    [ "$#" -gt 0 ] || die "pause-writers: no datasets given -- there is no scope to pause by"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    local out rc=0 tag name owned marker
+    local -a names=()
+    out="$(coverage_conflicts "" "$@")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        while IFS=$'\t' read -r tag name owned; do
+            [ "$tag" = "!" ] && warn "  $name: $owned"
+        done <<< "$out"
+        die "pause-writers: a relationship record could not be read -- refusing to say that nothing writes to the restore scope"
+    fi
+    while IFS=$'\t' read -r name owned _; do
+        [ -n "$name" ] || continue
+        case " ${names[*]-} " in *" $name "*) continue ;; esac
+        names+=("$name")
+        marker=$(pause_marker_path "$name")
+        if [ -f "$marker" ]; then
+            local PAUSED_AT="" PAUSED_REASON="" PAUSED_BY_GRANT=""
+            record_load pause "$marker" 2>/dev/null || :
+            if [ "$PAUSED_BY_GRANT" = "$grant" ]; then
+                log "relationship '$name' (writes to $owned) is already paused by this grant"
+            else
+                log "relationship '$name' (writes to $owned) was already paused -- left as it is; --deny-restore=$grant will NOT resume it"
+            fi
+            continue
+        fi
+        log "relationship '$name' writes to $owned -- pausing it for the restore"
+        cmd_pause_client "$name" --reason="restore grant $grant" --by-grant="$grant"
+    done <<< "$out"
+    [ "${#names[@]}" -gt 0 ] || log "no relationship on this host writes to the restore scope -- nothing to pause"
+    return 0
+}
+
+cmd_resume_writers() {
+    local grant="${1:-}"
+    { [ -n "$grant" ] && client_name_valid "$grant"; } || die "resume-writers: needs the restore grant's relationship label"
+    [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
+    local m name n=0
+    for m in "$RELATIONSHIPS_DIR"/*/paused; do
+        [ -f "$m" ] || continue
+        local PAUSED_AT="" PAUSED_REASON="" PAUSED_BY_GRANT=""
+        record_load pause "$m" 2>/dev/null || { warn "could not read $m -- left in place"; continue; }
+        [ "$PAUSED_BY_GRANT" = "$grant" ] || continue
+        name=$(basename "$(dirname "$m")")
+        cmd_resume_client "$name"
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || log "nothing on this host was paused by the restore grant '$grant'"
+    return 0
+}
+
 pair_control() {   # <verb> -> prints the gate's reply, non-zero on failure
     local verb="$1"
     local -a ssh_opts; load_ssh_opts; ssh_opts=("${LOAD_SSH_OPTS[@]}")
@@ -19722,6 +19802,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         pause-client)     shift; cmd_pause_client "$@" ;;
         move-to-client)   shift; cmd_move_to_client "$@" ;;
         resume-client)    shift; cmd_resume_client "$@" ;;
+        pause-writers)    shift; cmd_pause_writers "$@" ;;
+        resume-writers)   shift; cmd_resume_writers "$@" ;;
         disable-client)   shift; cmd_disable_client "$@" ;;
         enable-client)    shift; cmd_enable_client "$@" ;;
         status)           shift; cmd_status "$@" ;;
