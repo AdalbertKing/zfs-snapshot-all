@@ -19672,6 +19672,15 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # onto production, so it is not this file's code. Both spellings work
         # and behave identically; exec so exit codes pass through untouched.
         restore)
+            # --ask: the GUI's window "Przywróć" ('p' on F3), the same hand-off as
+            # remove-replica --ask. The window composes ONE ordinary restore command
+            # and runs it; nothing here is a second restore path.
+            if [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ]; then
+                _rw="$SCRIPT_DIR/tui/restore.sh"
+                [ -f "$_rw" ] || die "restore: brak $_rw -- checkout jest niekompletny"
+                ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_rw" "$2"
+                exit $?
+            fi
             # THE CONNECTION IS RESOLVED HERE, where the paths are already known.
             #
             # A restore under push writes onto the machine being recovered, so it
