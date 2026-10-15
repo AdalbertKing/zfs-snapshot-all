@@ -641,6 +641,32 @@ if printf '%s' "$ek_out" | grep -qF "el=[history"$'\t'"newest"$'\n]' \
 else
     bad "relationship engine fields survive a rewrite" "$ek_out"
 fi
+# ...raw too (gen-cron RELATION_ENGINE_FIELDS), but only from the block: a local
+# relationship's raw lives in its [dataset:] section on purpose and stays there.
+# And a REMOTE rewrite (relblock_adopt_remote, rebuild) has the fields in hand when it
+# renders the new block -- the renderer is replaced here, the flow around it is real.
+cat > "$EK" <<'EOF'
+[relation:er]
+	tiers = d30h24
+	raw = yes
+	cipher = aes128-gcm@openssh.com
+[relation:es]
+	tiers = d30h24
+[dataset:rpool/s]
+	pair_label   = es
+	raw          = yes
+EOF
+ek2=$( ( relblock_engine_keep "$EK" er; printf 'er=[%s]\n' "$RB_ENGINE_KEEP"
+         relblock_engine_keep "$EK" es; printf 'es=[%s]\n' "$RB_ENGINE_KEEP"
+         relblock_from_profile() { printf 'RENDER KEEP=[%s]\n' "$RB_ENGINE_KEEP"; }
+         cp "$EK" "$EK.wf"; relblock_adopt_remote "$EK.wf" er 1; grep -F 'RENDER KEEP' "$EK.wf" ) 2>&1 )
+if printf '%s' "$ek2" | grep -qF "er=[raw"$'\t'"yes"$'\n'"cipher"$'\t' \
+   && printf '%s' "$ek2" | grep -qF 'es=[]' \
+   && printf '%s' "$ek2" | grep -qF "RENDER KEEP=[raw"$'\t'"yes"; then
+    ok "relationship engine fields: raw kept from the block (not from a local section); a remote rebuild renders with them"
+else
+    bad "relationship engine fields: raw / remote rebuild" "$ek2"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact
