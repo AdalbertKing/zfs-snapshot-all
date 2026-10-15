@@ -3686,7 +3686,9 @@ fi
 # 2. miejsce, cala relacja, punkt p1 (starszy): bez --source (WHOLE), bez --onto, z --at
 printf '0\tmiejsce\n0\tp1\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-whole.json"
-RWAT="$(date -d @1792020000 '+%Y-%m-%d %H:%M:%S')"
+# --at dla punktu p1 = sekunda PRZED nowszym punktem p0 (P7, 2026-10-15): jeden bieg robi migawki
+# datasetow sekundy po sobie, wiec sekunda migawki korzenia odcinala dzieci tego samego biegu.
+RWAT="$(date -d @$((1792081503 - 1)) '+%Y-%m-%d %H:%M:%S')"
 W2="restore ~ k2 ~ --at=$RWAT ~ --config=$RWCFG"
 if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W2" ]; then
     ok "restore: na miejsce, cala relacja, punkt p1 -> restore k2 --at=<czas p1> --config=... (bez --source, bez --onto)"
