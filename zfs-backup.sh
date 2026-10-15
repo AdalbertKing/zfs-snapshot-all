@@ -17616,27 +17616,35 @@ status_local_view() {
     else
         echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"
     fi
-    echo "Spojnosc:          $(status_quiesce_from_cron "$CLIENT_NAME")"
+    # A snapshot-only relationship has neither an endpoint nor copies, which is
+    # what status_quiesce_from_cron reads as "not activated" -- its sources stand in.
+    echo "Spojnosc:          $(MANAGED_DATASETS="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}" status_quiesce_from_cron "$CLIENT_NAME")"
     echo "Utworzono:         ${CREATED_AT:-?}"
     [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
     [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
     _st_prefix="${MANAGED_DATASETS:-${REQUESTED_DATASETS:-}}"
     _st_prefix=${_st_prefix%% *}; _st_prefix=${_st_prefix%%,*}
-    if [ -n "$_st_prefix" ]; then
-        echo
-        if status_running_now "$_st_prefix"; then
-            echo "Teraz:             (transfer w toku)"
-        else
-            echo "Teraz:             nic nie biegnie dla tej relacji"
-        fi
-        _st_last=$(status_last_result "$_st_prefix")
-        if [ -n "$_st_last" ]; then
-            set -- $_st_last
-            echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
-        else
-            echo "Ostatni wynik:     brak zapisu w historii (${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log})"
-            echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
-        fi
+    echo
+    if [ -n "$_st_prefix" ] && status_running_now "$_st_prefix"; then
+        echo "Teraz:             (transfer w toku)"
+    else
+        echo "Teraz:             nic nie biegnie dla tej relacji"
+    fi
+    # The ACCOUNT's stats log (the jobs run as that account), and the push
+    # engine's line carries the relationship as "label" -- status_last_result
+    # reads a pull's line from root's log, which a local relationship never writes.
+    local _home _slog
+    _home="$(getent passwd "$acct" 2>/dev/null | cut -d: -f6)"
+    if [ "$acct" != root ] && [ -n "$_home" ]; then _slog="$_home/zfs-snapshot-stats.log"
+    else _slog="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"; fi
+    _st_last="$(grep -F "\"script\":\"snapsend.sh\",\"label\":\"$name\"" "$_slog" 2>/dev/null | tail -1 \
+        | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p')"
+    if [ -n "$_st_last" ]; then
+        set -- $_st_last
+        echo "Ostatni wynik:     $2 ($1, trwal ${3}s)"
+    else
+        echo "Ostatni wynik:     brak zapisu w historii ($_slog)"
+        echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
     fi
 }
 
