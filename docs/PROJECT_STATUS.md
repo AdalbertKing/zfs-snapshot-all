@@ -28,7 +28,7 @@
   datasetu poddrzewa) był tylko dla celu zdalnego; silnik dostawał punkt, który źródło już miało, i kończył się
   sukcesem („Snapshot already exists in target - skipping”), a kontroli wyniku dla celu lokalnego nie było. Teraz dla
   celu lokalnego: cofnięcie do wspólnej bazy (`RESTORE_SRC_BASE_SNAP` planisty) przed silnikiem, `unproven`
-  przez cofnięcie zamiast `-f`, odmowa, gdy bazy nie da się przypiąć do jednej migawki, kontrola wyniku po tożsamości, w której nieudany odczyt to „nie przywrócono” (punkt z GUID-em kopii, nic nowszego,
+  przez cofnięcie zamiast `-f`, cofane tylko datasety z odpowiednikiem w kopii i w głębokości silnika, odmowa, gdy bazy nie da się przypiąć do jednej migawki, kontrola wyniku po tożsamości, w której pusta lista datasetów i nieczytelny GUID kopii to „nie przywrócono” (punkt z GUID-em kopii, nic nowszego,
   `referenced` równe migawce -- nie `written@`, które po cofnięciu nigdy nie jest 0), komunikat o tym, że kopia
   ma jeszcze migawki nowsze niż punkt. Na żywo: zapis po migawce zniknął, 07:01 i 08:01 oraz zakładka zdjęte,
   `referenced` 25088 = 25088; następny bieg relacji: „Backup copy ... follows its source -- discarding 2
@@ -37,7 +37,7 @@
   porażka na `main` (środowisko hosta). Brak stałego testu na prawdziwym ZFS (suita `restore` ma atrapę `zfs`).
   Silnik: skrót „already exists in target” omija regułę P-0 także dla zwykłej kopii, gdy źródło nie ma nowej
   migawki -- do recenzenta (silniki zamrożone): `docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`.
-  Drobiazg: komunikat „canmount=noauto travels in the stream” pada także wtedy, gdy strumienia nie było.
+  Drobiazg do sprawdzenia: po samym cofnięciu (bez strumienia) pojawił się komunikat „canmount=noauto travels in the stream”.
 
 - **Przywracanie: `restore <relacja lokalna>` milczał z rc=1 (2026-10-15; `fix/restore-local-dispatch`).**
   Kampania przywracania na labie (pve9b, konto zfsbackup): `restore --plan --config=…` i tryb bezpieczny

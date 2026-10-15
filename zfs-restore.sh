@@ -1929,6 +1929,7 @@ restore_remote_off_point() {   # <account@host> <target root> <recovery point> [
 #   full-absent                          -> create    nothing there to lose
 #   increment | rollback | discard-live   -> rewind    a GUID-proven base exists
 #   unproven, LOCAL target with a base    -> rewind    rolled back to that base (2026-10-15)
+#   local rewind strategies, base NOT pinned to one source snapshot -> refuse
 #   full-live | full-bare | unproven      -> replace   no valid base; full overwrite
 #   ambiguous | remote | anything else    -> refuse
 #
@@ -2428,7 +2429,12 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
     # at risk is the one running this (see section 4).
     if [ -n "${RESTORE_LOCAL_ROLLBACK_TO:-}" ] && [ "${RESTORE_DRY_RUN:-0}" -ne 1 ]; then
         local _lds _llist _lfailed=0 _ldepth="" _lerr
-        if [ "${RESTORE_SCOPE_EXPANDED:-0}" -eq 1 ]; then _ldepth="-d 0"; fi
+        # The SAME depth the engine sends and the result check measures: the subtree
+        # only when the engine recurses (-r), else this dataset alone. And below, a
+        # dataset with no counterpart on the copy is not rolled back -- it is not
+        # part of this recovery (text-checker 2026-10-15: `-r` with no depth would
+        # have rolled back a source child the plan never named).
+        [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _ldepth="-d 0"
         log 0 "restore: $src -- rolling it back to $RESTORE_LOCAL_ROLLBACK_TO (the common base with the copy) to reach $point. Whatever came after it on the source is destroyed."
         _llist="$(zfs list -H -o name $_ldepth -r "$src" 2>/dev/null)"
         if [ -z "$_llist" ]; then
@@ -2438,6 +2444,10 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         fi
         while IFS= read -r _lds; do
             [ -n "$_lds" ] || continue
+            if ! zfs list -H -o name "${copy}${_lds#"$src"}" >/dev/null 2>&1; then
+                log 1 "restore:   $_lds has no counterpart on the copy -- not part of this recovery, left alone"
+                continue
+            fi
             if _lerr="$(zfs rollback -r "${_lds}@${RESTORE_LOCAL_ROLLBACK_TO}" 2>&1)"; then
                 log 1 "restore:   $_lds rolled back to $RESTORE_LOCAL_ROLLBACK_TO"
                 RESTORE_ONE_CHANGED=1

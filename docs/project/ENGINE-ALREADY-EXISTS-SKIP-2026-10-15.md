@@ -15,8 +15,9 @@ Oba silniki mają na początku decyzji o wysyłce ten sam skrót:
 Skrót działa **przed** regułą P-0 (właściciel 2026-10-08, wariant D3, testy P5-P10 w `test/snapsend`):
 
 - lądowanie kopii (`BACKUP_LANDING=1`): nadmiar na celu po wspólnej migawce -> `zfs recv -F`, z logiem;
-- cel dokładny / ścieżka źródła (`-t`, sync): zapis po wspólnej migawce -> odmowa (push); pull orze,
-  gdy to nie jest dysk działającego gościa.
+- cel dokładny / ścieżka źródła (`-t`, sync): zapis po wspólnej migawce -> odmowa (push); same puste
+  migawki po niej, bez zapisu -> przyjęcie BEZ `-F`, migawki zostają (P10); pull orze, gdy to nie jest dysk
+  działającego gościa.
 
 Skrót nie patrzy, czy na celu jest coś **nowszego** niż ta migawka, ani czy po niej coś zapisano.
 Gdy wysyłany punkt już jest na celu, P-0 się nie wykonuje.
@@ -37,26 +38,30 @@ nic nowego do wysłania:
 
 ## Proponowana zmiana (w obu silnikach identycznie)
 
-Skrót „already exists” tylko wtedy, gdy na celu ta migawka jest **najnowsza** (brak migawek po niej
-na celu) **i** `written@<ta migawka>` na celu jest 0 (dla lądowania kopii; na celu dokładnym
-`written@` także). W każdym innym przypadku przejście do istniejącej ścieżki P-0 z `common_snapshot`
-= ta migawka:
+Zawężona po uwadze przeglądu: **lądowanie kopii bez zmian.** Usunięcie nadmiaru na kopii bez transferu
+wymagałoby `zfs rollback -r`, a to niszczy także ZAKŁADKI nowsze niż migawka -- w tym zakładkę, od której
+replika ciągnie przyrosty (zmierzone, `ENGINE-FREEZE.md`; `recv -F` zakładek nie rusza, dlatego P-0 go
+używa). Na kopii nadmiar znika przy pierwszym biegu z nową migawką (P8), więc skrót kosztuje tam tylko
+opóźnienie.
 
-- lądowanie: odrzucenie nadmiaru (`zfs recv -F` bez strumienia nie istnieje, więc potrzebna jest
-  operacja bez transferu: `zfs rollback -r <cel>@<migawka>` z tym samym logiem
-  „follows its source -- discarding …”), albo
-- cel dokładny: odmowa z istniejącym komunikatem P-0 (push), pull: jak P-0.
+Zmiana dotyczy **celu dokładnego** (`-t` / sync, `BACKUP_LANDING=0`): skrót „already exists” tylko wtedy,
+gdy ta migawka jest na celu najnowsza i po niej nic nie zapisano. W przeciwnym razie odpowiedź P-0:
+
+- zapis po migawce -> istniejąca odmowa P-0 (push), cel nietknięty;
+- same puste migawki po niej, bez zapisu -> bez zmiany zachowania (jak P10: nic nie jest niszczone);
+- pull: istniejąca reguła gościa P-0.
+
+Efekt: silnik, wołany wprost na punkt, który cel ma, nie zgłasza sukcesu nad zmienionym celem.
 
 Uwaga do recenzji: `written@` po wcześniejszym `rollback` nigdy nie jest 0 (stała reszta metadanych,
-zmierzone 2026-08-31) -- dla celu, który był kiedyś cofany, warunek „zapis po migawce” musi to
-uwzględnić albo zostać zastąpiony porównaniem `referenced`. To jest pytanie projektowe dla recenzenta.
+zmierzone 2026-08-31) -- warunek „zapis po migawce” dla celu kiedyś cofanego musi to uwzględnić albo
+porównać `referenced` (tak robi kontrola wyniku w `zfs-restore.sh`). Pytanie projektowe dla recenzenta.
 
 ## Testy (do dopisania przy implementacji)
 
 `test/snapsend` (prawdziwy ZFS, root), w sekcji P obok P6-P10, oba silniki:
 
-- P11: kopia ma nadmiar (ręczna migawka po najnowszej migawce źródła), źródło BEZ nowej migawki,
-  `-e`: kopia podąża za źródłem (nadmiar zdjęty, komunikat P-0), rc=0.
-- P12: to samo z zapisem na kopii.
-- P13: `-t`, punkt już na celu, zapis po nim: odmowa (push), cel nietknięty.
-- Kontrola negatywna: na obecnych silnikach P11-P13 dają „already exists -- skipping” i rc=0.
+- P11: `-t`, punkt już na celu, zapis po nim: odmowa (push), cel nietknięty; pull wg reguły gościa.
+- P12: `-t`, punkt już na celu, tylko pusta migawka po nim: rc=0, migawka zostaje (jak P10).
+- P13: lądowanie kopii, nadmiar, brak nowej migawki: bez zmiany (skip), a po nowej migawce -- P8.
+- Kontrola negatywna: na obecnych silnikach P11 daje „Snapshot already exists in target - skipping” i rc=0.
