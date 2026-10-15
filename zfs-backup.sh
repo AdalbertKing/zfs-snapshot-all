@@ -4121,7 +4121,7 @@ warn_remote_collector_scope() {
                 path_overlaps "$g" "$p" || continue
                 case " $seen " in *" $peer:$p "*) continue ;; esac
                 seen="$seen $peer:$p"
-                warn "'$p' overlaps '$g', which this host shares with collector '$peer' (its relationship reads it from here). If that relationship makes or prunes the same snapshot family, the two retentions stack (the shorter one wins on both). A passive collector, which only carries existing snapshots, does not collide."
+                warn "'$p' overlaps '$g', which this host shares with collector '$peer' (its relationship reads it from here). If that relationship makes or prunes the same snapshot family, each prunes the other's snapshots as well, so the shorter retention decides for both. A passive collector, which only carries existing snapshots, does not collide."
                 break
             done
         done
@@ -10587,6 +10587,7 @@ cmd_seed() {
         seed_candidates+=("$(client_local_path "$ds")")
     done
     assert_no_coverage_overlap "$name" "${seed_candidates[@]}"
+    warn_remote_collector_scope "${seed_candidates[@]}"
 
     # STATE=seeding only AFTER the refusals above (2026-09-23). It used to be
     # written before load_client_and_connection, so a seed the coverage guard
