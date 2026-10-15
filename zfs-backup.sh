@@ -4015,7 +4015,7 @@ coverage_conflicts() {   # <this client> <requested path>...
         # LOAD_*/MANAGED_* already loaded, and loading another record here
         # would overwrite them mid-emit.
         (
-            CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""
+            CLIENT_NAME=""; STATE=""; MANAGED_DATASETS=""; MANAGED_PRUNE_SCOPE=""; RUX_MODE=""; REQUESTED_DATASETS=""
             # REV-20260809-084 F1. This was `|| exit 0`, which turned an
             # unreadable or unparseable record into "no conflict" -- fail-OPEN,
             # and it made the refusal path in assert_no_coverage_overlap
@@ -4030,8 +4030,15 @@ coverage_conflicts() {   # <this client> <requested path>...
             [ -n "${CLIENT_NAME:-}" ] || exit 2
             [ "${CLIENT_NAME:-}" = "$me" ] && exit 0
             [ "${STATE:-}" = removed ] && exit 0
-            local owned req
-            for owned in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-}; do
+            local owned req _src_owned=""
+            # A LOCAL relationship also owns its SOURCES: it makes and prunes its
+            # family there (owner 2026-10-15: two relationships making or pruning the
+            # same family on one dataset is the collision; on THIS host it is
+            # refused). Every caller passes paths on this host, so comparing them
+            # with a local relationship's sources is like with like. A remote
+            # relationship's REQUESTED_DATASETS live on another host and stay out.
+            [ "${RUX_MODE:-}" = local ] && _src_owned="${REQUESTED_DATASETS//,/ }"
+            for owned in ${MANAGED_DATASETS:-} ${MANAGED_PRUNE_SCOPE:-} $_src_owned; do
                 for req in "$@"; do
                     path_overlaps "$owned" "$req" \
                         && printf '%s\t%s\t%s\n' "${CLIENT_NAME:-$f}" "$owned" "$req"
@@ -4095,6 +4102,31 @@ $detail
 
 Two high-level relationships covering the same datasets would send and prune the same snapshots under different policy. Nothing has been changed -- no config, no crontab.
 If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+}
+
+# warn_remote_collector_scope <path>... -- a WARNING, never a refusal (owner
+# 2026-10-15). This host only knows WHICH of its datasets it handed to another
+# collector (peers/<collector>.conf, PEER_JOIN_GRANTED_DATASETS) -- not whether
+# that collector stamps and prunes its own family there or only carries what
+# exists (a passive next hop: the pve1 -> pve2 -> pve3 chain, which is fine). So
+# an overlap is said, with what it means, and the decision stays with the admin.
+warn_remote_collector_scope() {
+    local f peer granted g p seen=""
+    for f in "${PEER_STATE_DIR:-/etc/zfs-snapshot-all/peers}"/*.conf; do
+        [ -r "$f" ] || continue
+        peer="$(basename "$f" .conf)"
+        granted="$(record_get "$f" PEER_JOIN_GRANTED_DATASETS 2>/dev/null)" || continue
+        for p in "$@"; do
+            for g in $granted; do
+                path_overlaps "$g" "$p" || continue
+                case " $seen " in *" $peer:$p "*) continue ;; esac
+                seen="$seen $peer:$p"
+                warn "'$p' overlaps '$g', which this host shares with collector '$peer' (its relationship reads it from here). If that relationship makes or prunes the same snapshot family, the two retentions stack (the shorter one wins on both). A passive collector, which only carries existing snapshots, does not collide."
+                break
+            done
+        done
+    done
+    return 0
 }
 
 # REV-20260809-089. The ownership test remove_managed_sections applies, made
@@ -4475,6 +4507,8 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # Fail closed BEFORE the first mutation: remove_managed_sections below is
     # already a write to the working config (REV-20260809-083).
     [ "${#managed[@]}" -gt 0 ] && assert_no_coverage_overlap "$name" "${managed[@]}"
+    # A landing this host also shares onward (pve1 -> pve2 -> pve3): said, not refused.
+    [ "${#managed[@]}" -gt 0 ] && warn_remote_collector_scope "${managed[@]}"
 
     # REV-20260809-089. The old code removed and regenerated EVERY section on
     # EVERY call. That is right exactly once -- at CREATE, when there is nothing
@@ -8526,6 +8560,24 @@ cmd_local_backup() {
             scan+=("$r")
         fi
     done
+
+    # ON THIS HOST, ACROSS ACCOUNTS (owner 2026-10-15). The section scan below sees
+    # only this account's config. A named relationship's sources and landings are
+    # also checked against every relationship record on the host: their copies,
+    # their prune scopes and -- for a local relationship -- their sources. Measured
+    # on pve9b: a root-account relationship on hdd/ct planned cleanly while the
+    # zfsbackup account's lokalna-hdd-vms already made and pruned automated_* there.
+    if [ -n "$lb_name" ]; then
+        local -a _cov=("${roots[@]}")
+        [ "$no_copy" -eq 1 ] || for r in "${roots[@]}"; do _cov+=("$target/$r"); done
+        local _cov_out _cov_rc=0
+        _cov_out="$(coverage_conflicts "$lb_name" "${_cov[@]}")" || _cov_rc=$?
+        if [ "$_cov_rc" -ne 0 ] || [ -n "$_cov_out" ]; then
+            rm -f "$cand"
+            assert_no_coverage_overlap "$lb_name" "${_cov[@]}"
+        fi
+        warn_remote_collector_scope "${_cov[@]}"
+    fi
 
     # Refuse when a DISPUTED root, or the target, overlaps a section already
     # installed -- "add B, do not mutate A" (Gate 2). Nothing is written on
@@ -13745,6 +13797,10 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
             local_backup_overlap "$ds" "$other" \
                 && die "add-source: '$ds' overlaps '$other', already in $(basename "$cronfile") (equal or parent/child) -- refusing; nothing was changed."
         done < <(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cronfile")
+        # The same host-wide check local-backup makes (other accounts' relationships;
+        # see coverage_conflicts), and the warning about a remote collector's scope.
+        assert_no_coverage_overlap "$name" "$ds" "$target/$ds"
+        warn_remote_collector_scope "$ds" "$target/$ds"
     fi
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
