@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6831548bf9d6ac45 -->
+<!-- status-covers-digest: 9bf2ea5c409c0622 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Okna „Przywróć” po pierwszych testach właściciela -- P1-P6 (2026-10-15 wieczór; `fix/restore-window-notes`).**
+  Testy właściciela w PuTTY (pve10): 1 -- z relacji pve9b, `home` obok na pve9b: OK (GUID zgodne, rc=0); 2 -- z
+  dysku, `home` -> `hdd/restore/home` na pve10: OK; 3 -- „cel istnieje” nie doszedł do okna, bo w polu zostało
+  `restore/home` (bez puli) i polecenie odmówiło (nic nie powstało). Poprawki: P1 napis „=== GOTOWE (rc=0). Enter =
+  powrót do GUI” na ekranie (`read -p` pisało na stderr schowany przez `2>/dev/null`); P2 GUI czyta sześć czasowników
+  `--json` równolegle po każdym oknie (pve10: po kolei ~15 s -- list-jobs 6,0, monitor 5,6, job-stats 2,6 -- równolegle
+  7,6 s; wyniki zgodne, `monitor` różni się tylko `checked_epoch`, jak przy dwóch biegach po kolei); P3 okno mówi, w
+  jakiej strefie są godziny punktów (lab: UTC; strefy operatora przez SSH nie widać); P4/P6 nieaktualne zdania
+  „NIGDY nie nadpisuje” / „zastąpienie robi forma relacyjna” w `--from-copy` poprawione; P5 cel bez puli albo z pulą,
+  której nie ma na tym hoście, odrzucany w oknie „z dysku” (okno „zła nazwa”, to samo pole); w oknie relacji -- sama
+  postać `<pula>/…` (pula leży na celu). Testy: `tui` +2 (P5, P1; atrapa `zpool`), na pve9b 303 PASS / 7 FAIL jak
+  `main`; `restore` 306 PASS / 1 FAIL (stała porażka środowiskowa pve9b). Dlaczego sam `list-jobs` trwa 6 s -- otwarte.
 
 - **Okno GUI „Przywróć z dysku” -- C2b (2026-10-15; `feat/restore-window-c2b`).**
   F9 na F6 Replika (pasek: „Przywróć z dysku”, przy 80 kolumnach skrót „Odzysk”, żeby F10 się mieścił; pomoc F1) ->
