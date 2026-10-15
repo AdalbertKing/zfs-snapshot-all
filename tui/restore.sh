@@ -12,6 +12,12 @@
 #   3 Z kiedy? punkt odzysku = migawka kopii (najnowszy albo wcześniejszy)
 #   4 Sprawdź  podsumowanie + polecenie; "Uruchom" odpala je
 #
+# restore.sh --from-copy [DATASET] -- drugi tryb "Przywróć z dysku": kopia leży na tym hoście
+# (np. zaimportowana pula z dysku USB), bez relacji i bez configu. Kroki: skąd (drzewo
+# wszystkich datasetów hosta; DATASET = wstępnie zaznaczony), dokąd (nazwa na tym hoście),
+# z kiedy (+ historia), sprawdź. Składa `restore --from-copy=.. --onto=.. [--at=..]
+# [--with-history] [--overwrite]`; podgląd i pytanie "Odtworzyc? [t/N]" robi samo polecenie.
+#
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka, ZFS_TREE =
 # program drzewa (jak w basket_step), ZFS_CONF_DIR (domyślnie /etc/zfs-snapshot-all), PYTHON.
 set -u
@@ -20,7 +26,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "restore: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
-[ -n "$REL" ] || { echo "użycie: restore.sh RELACJA" >&2; exit 2; }
+[ -n "$REL" ] || { echo "użycie: restore.sh RELACJA | restore.sh --from-copy [DATASET]" >&2; exit 2; }
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 WT_BACKTITLE="Przywracanie z relacji $REL -- $(hostname)"
 TMPD="$(mktemp -d)" || exit 1
@@ -28,6 +34,196 @@ trap 'rm -rf "$TMPD"' EXIT
 
 abort() { clear 2>/dev/null; echo "restore: przerwane, nic nie zmieniono"; exit 1; }
 join_by_comma() { local IFS=,; echo "$*"; }
+
+# ---- URUCHOM: CMD (tablica) + CMDTXT (do pokazania); kończy skrypt kodem polecenia ----------
+run_cmd() {
+    clear 2>/dev/null
+    echo "\$ $CMDTXT"; echo
+    "${CMD[@]}" 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+    echo
+    if [ "$RC" -eq 0 ]; then echo "GOTOWE."
+    else echo "NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej."; fi
+    read -r -p "Enter = powrót do GUI " _ </dev/tty 2>/dev/null || true
+    exit "$RC"
+}
+
+# points.tsv (czas utworzenia <TAB> nazwa migawki, najnowsza pierwsza) -> PT_TIME + menu
+# (radiolist p0..pN; p0 = najnowszy, domyślnie ON). Wspólne dla obu trybów.
+build_points() {
+    local cr nm tm tier lbl
+    PT_TIME=(); menu=()
+    while IFS=$'\t' read -r cr nm; do
+        [ -n "$cr" ] || continue
+        tm=$(date -d "@$cr" '+%Y-%m-%d %H:%M:%S')
+        case "$nm" in *_*) tier="${nm#*_}"; tier="${tier%%_*}" ;; *) tier="$nm" ;; esac
+        lbl="$tm  $tier"
+        [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  (najnowszy)"
+        menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))" "$([ "${#PT_TIME[@]}" -eq 0 ] && echo ON || echo OFF)")
+        PT_TIME+=("$tm")
+    done <"$TMPD/points.tsv"
+}
+
+# ================= TRYB "PRZYWRÓĆ Z DYSKU" (--from-copy) ====================================
+if [ "$REL" = --from-copy ]; then
+    PRE="${2:-}"
+    WT_BACKTITLE="Przywracanie z dysku -- $(hostname)"
+    # podpowiedź nazwy: kopia z kolektora (<pula>/.../backups/<host>/<ścieżka>) -> <ścieżka>;
+    # inaczej <pula>/restore/<ostatni człon>
+    SUG_RE='^[^/]+/(.*/)?backups/[^/]+/(.+)$'
+    sug() {
+        if [[ "$1" =~ $SUG_RE ]]; then printf '%s' "${BASH_REMATCH[2]}"
+        else printf '%s/restore/%s' "${1%%/*}" "${1##*/}"; fi
+    }
+    FROM=(); ANS=(); ONTO=(); EXIST=(); AT=""; HIST=0; OVERWRITE=0; CMD=()
+    step=1
+    while :; do
+        case $step in
+        1)  # ---- SKĄD? ---------------------------------------------------------------------
+            zfs list -H -p -o name,used,type 2>/dev/null >"$TMPD/ds.tsv"
+            if ! [ -s "$TMPD/ds.tsv" ]; then
+                geom
+                wt --title "Przywróć z dysku" \
+                   --msgbox "Na tym hoście nie widać żadnego datasetu. Podłącz dysk i zaimportuj pulę (zpool import <pula>), potem spróbuj jeszcze raz." 9 "$W"
+                exit 1
+            fi
+            "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "Przywróć z dysku: skąd?" "$(hostname)" "$PRE" <<'PYEOF' || exit 1
+import sys, json
+seen = set(); ds = []
+for ln in open(sys.argv[1], encoding="utf-8"):
+    p = ln.rstrip("\r\n").split("\t")
+    if len(p) < 3 or p[0] in seen:
+        continue
+    seen.add(p[0])
+    try:
+        used = int(p[1])
+    except ValueError:
+        used = None
+    ds.append({"name": p[0], "used": used, "type": p[2]})
+roots = [sys.argv[5]] if sys.argv[5] and sys.argv[5] in seen else []
+spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": True,
+        "legend": u" [x] odtwarzane razem z tym, co pod nim   dysku nie ma? zpool import",
+        "recursion": "flat", "hide": [], "datasets": ds, "roots": roots, "excl": {}}
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    json.dump(spec, f, ensure_ascii=False)
+PYEOF
+            rm -f "$TMPD/tree-out.json"
+            ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || abort
+            [ -s "$TMPD/tree-out.json" ] || abort
+            # roots.txt: zaznaczone korzenie w kolejności drzewa; stdout: BACK | OK
+            FLAG=$("$PY" - "$TMPD/tree-out.json" "$TMPD/roots.txt" <<'PYEOF' | tr -d '\r'
+import sys, json
+o = json.load(open(sys.argv[1], encoding="utf-8"))
+if o.get("action") == "back":
+    print("BACK"); sys.exit(0)
+with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as f:
+    for r in o.get("roots") or []:
+        f.write("%s\n" % r)
+print("OK")
+PYEOF
+            ) || abort
+            [ "$FLAG" = OK ] || abort
+            FROM=(); ANS=()
+            while IFS= read -r r; do [ -n "$r" ] && FROM+=("$r"); done <"$TMPD/roots.txt"
+            if [ "${#FROM[@]}" -eq 0 ]; then
+                geom
+                wt --title "Przywróć z dysku" --msgbox "Nic nie zaznaczono." 7 "$W"
+                continue
+            fi
+            step=2 ;;
+        2)  # ---- DOKĄD? --------------------------------------------------------------------
+            i=0; GOBACK=0
+            while [ "$i" -lt "${#FROM[@]}" ]; do
+                def="${ANS[$i]:-$(sug "${FROM[$i]}")}"
+                txt=$'Pod jaką nazwą odtworzyć na tym hoście:\n  '"${FROM[$i]}"$'\n(datasety pod nim przyjdą razem z nim)'
+                geom
+                if wt --title "Przywróć z dysku: dokąd? ($((i + 1))/${#FROM[@]})" --ok-button "Dalej" --cancel-button "Wstecz" \
+                      --inputbox "$txt" "$(fit 6)" "$W" "$def"; then
+                    [ -n "$WT_OUT" ] || continue
+                    ANS[$i]="$WT_OUT"; i=$((i + 1))
+                else
+                    [ "$i" -eq 0 ] && { GOBACK=1; break; }
+                    i=$((i - 1))
+                fi
+            done
+            [ "$GOBACK" -eq 1 ] && { step=1; continue; }
+            ONTO=("${ANS[@]}")
+            DUP=""
+            for ((i = 0; i < ${#ONTO[@]}; i++)); do
+                for ((j = i + 1; j < ${#ONTO[@]}; j++)); do
+                    [ "${ONTO[$i]}" = "${ONTO[$j]}" ] && DUP="${ONTO[$i]}"
+                done
+            done
+            if [ -n "$DUP" ]; then
+                geom
+                wt --title "Przywróć z dysku" --msgbox "Dwa źródła mają ten sam cel ($DUP) -- podaj różne nazwy." 8 "$W"
+                continue
+            fi
+            EXIST=()
+            for o in "${ONTO[@]}"; do zfs list -H -o name -- "$o" >/dev/null 2>&1 && EXIST+=("$o"); done
+            OVERWRITE=0
+            if [ "${#EXIST[@]}" -gt 0 ]; then
+                txt="Te cele JUŻ ISTNIEJĄ na tym hoście:"
+                for o in "${EXIST[@]}"; do txt+=$'\n'"  $o"; done
+                txt+=$'\n\nNadpisać je (--overwrite)? To, co tam jest, zostanie zastąpione kopią z dysku.'
+                geom
+                wt --title "Przywróć z dysku: cel istnieje" --yes-button "Nadpisz" --no-button "Wstecz" --defaultno \
+                   --yesno "$txt" "$(fit $((${#EXIST[@]} + 5)))" "$W" || continue
+                OVERWRITE=1
+            fi
+            step=3 ;;
+        3)  # ---- Z KIEDY? ------------------------------------------------------------------
+            # punkty: migawki pierwszego źródła; najnowsza pierwsza, max 50
+            zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "${FROM[0]}" 2>/dev/null \
+                | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"
+            geom
+            build_points
+            if [ "${#PT_TIME[@]}" -eq 0 ]; then
+                wt --title "Przywróć z dysku" --msgbox "${FROM[0]} nie ma żadnej migawki -- nie ma z czego odtworzyć." 8 "$W"
+                exit 1
+            fi
+            wt --title "Przywróć z dysku: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
+               --radiolist "Punkt odzysku (czas utworzenia migawki na dysku). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+               "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
+            idx="${WT_OUT#p}"
+            if [ "$idx" = 0 ]; then AT=""; else AT="${PT_TIME[$idx]}"; fi
+            geom
+            wt --title "Przywróć z dysku: historia" --yes-button "Tak" --no-button "Nie" --defaultno \
+               --yesno $'Przenieść też wszystkie starsze migawki (z historią)?\nNie = tylko wybrany punkt.' "$(fit 3)" "$W"
+            hrc=$?
+            case $hrc in
+                0) HIST=1 ;;
+                1) HIST=0 ;;
+                *) continue ;;           # Esc itp. -> znów lista punktów
+            esac
+            step=4 ;;
+        4)  # ---- SPRAWDŹ + POLECENIE -------------------------------------------------------
+            CMD=("$ZB" restore "--from-copy=$(join_by_comma "${FROM[@]}")" "--onto=$(join_by_comma "${ONTO[@]}")")
+            [ -n "$AT" ] && CMD+=("--at=$AT")
+            [ "$HIST" -eq 1 ] && CMD+=("--with-history")
+            [ "$OVERWRITE" -eq 1 ] && CMD+=("--overwrite")
+            CMDTXT=""
+            for w in "${CMD[@]}"; do CMDTXT+="${CMDTXT:+ }$(shq "$w")"; done
+            {
+                echo "Skąd:   dysk / inny dataset na tym hoście"
+                echo "Co -> dokąd:"
+                for ((i = 0; i < ${#FROM[@]}; i++)); do
+                    echo "  ${FROM[$i]} -> ${ONTO[$i]}"
+                    for o in ${EXIST[@]+"${EXIST[@]}"}; do [ "$o" = "${ONTO[$i]}" ] && { echo "  (NADPISUJE)"; break; }; done
+                done
+                echo "Punkt:  ${AT:-najnowszy}"
+                if [ "$HIST" -eq 1 ]; then echo "Historia: tak"; else echo "Historia: nie"; fi
+                echo
+                echo "Polecenie:"
+                echo "  $CMDTXT"
+                echo
+                echo "Po <Uruchom> polecenie pokaże podgląd i samo zapyta; zaszyfrowana kopia -- zapyta o klucz albo plik klucza."
+            } >"$TMPD/summary.txt"
+            yesno_text "$TMPD/summary.txt" "Przywróć z dysku: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
+            run_cmd ;;
+        esac
+    done
+fi
 
 # ---- KROK 0: który config trzyma kopie tej relacji + jej punkty odzysku --------------------
 geom
@@ -209,16 +405,7 @@ for r in d.get("datasets") or []:
 for sn in list(reversed((best or {}).get("snapshots") or []))[:50]:
     print("%s\t%s" % (sn.get("creation"), sn.get("name")))
 PYEOF
-        PT_TIME=(); menu=()
-        while IFS=$'\t' read -r cr nm; do
-            [ -n "$cr" ] || continue
-            tm=$(date -d "@$cr" '+%Y-%m-%d %H:%M:%S')
-            case "$nm" in *_*) tier="${nm#*_}"; tier="${tier%%_*}" ;; *) tier="$nm" ;; esac
-            lbl="$tm  $tier"
-            [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  (najnowszy)"
-            menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))" "$([ "${#PT_TIME[@]}" -eq 0 ] && echo ON || echo OFF)")
-            PT_TIME+=("$tm")
-        done <"$TMPD/points.tsv"
+        build_points
         if [ "${#PT_TIME[@]}" -eq 0 ]; then
             geom
             wt --title "Przywróć $REL" --msgbox "Kopia nie ma żadnego punktu odzysku." 7 "$W"
@@ -266,15 +453,6 @@ PYEOF
             echo "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze."
         } >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "Przywróć $REL: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
-        # ---- URUCHOM ---------------------------------------------------------------------
-        clear 2>/dev/null
-        echo "\$ $CMDTXT"; echo
-        "${CMD[@]}" 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-        [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-        echo
-        if [ "$RC" -eq 0 ]; then echo "GOTOWE."
-        else echo "NIE WYSZŁO (rc=$RC) -- komunikat polecenia powyżej."; fi
-        read -r -p "Enter = powrót do GUI " _ </dev/tty 2>/dev/null || true
-        exit "$RC" ;;
+        run_cmd ;;
     esac
 done
