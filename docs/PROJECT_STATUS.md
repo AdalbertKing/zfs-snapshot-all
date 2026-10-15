@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 839545e954a8a419 -->
+<!-- status-covers-digest: 459a679fd20f8cc5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,22 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
+- **Kolizja na jednym datasecie: odmowa w obrębie hosta, ostrzeżenie przy kolektorze zdalnym (2026-10-15; `fix/coverage-local-sources`).**
+  Właściciel: kolizja to dwie relacje, które robią albo przycinają tę samą rodzinę migawek na jednym datasecie;
+  pasywny następny skok (łańcuch pve1 -> pve2 -> pve3) jej nie tworzy. Na labie (pve9b) zmierzone: `hdd/ct`
+  przycina lokalnie `lokalna-hdd-vms` (24 h) i zdalnie relacja `g3-ab` z pve11 (`-H6`), więc zostaje 6; a relacja
+  konta root na `hdd/ct` przechodziła plan obok relacji konta zfsbackup. Teraz: strażnik pokrycia
+  (`coverage_conflicts`) liczy też ŹRÓDŁA relacji lokalnych (`RUX_MODE=local`, `REQUESTED_DATASETS`), a
+  `local-backup` i `add-source` relacji lokalnej wołają go dla źródeł i kopii -- odmowa ponad kontami tego hosta.
+  Pokrycie z datasetami udostępnionymi innemu kolektorowi (`peers/*.conf`, `PEER_JOIN_GRANTED_DATASETS`) daje
+  tylko OSTRZEŻENIE w `local-backup`, `add-source` i aktywacji relacji zdalnej (źródło nie wie, czy kolektor jest
+  pasywny; właściciel: bez zapisywania trybu kolektora przy parowaniu). Na żywo (pve9b, plany): root na `hdd/ct` --
+  odmowa („covered by relationship 'lokalna-hdd-vms'”); druga relacja na `hdd/test-migawki` -- odmowa; „tylko
+  migawki” na `hdd/data` -- ostrzeżenie (kolektor pve9), plan przechodzi; „Użyj szablonu” dla `lokalna-hdd-vms` --
+  przechodzi z ostrzeżeniem dla `hdd/ct` (kolektor pve11). Istniejąca kolizja `hdd/ct` zostaje jako przykład.
+  Test w `localbackup`; kontrola negatywna na `main` daje BAD.
+
+- **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; #541, wdrożone na pve9b i pve10).**
   Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
   --target=hdd/test-kreator --at="2026-10-15 06:30"` zgłaszał „OK … rewind from …” i „all 1 dataset(s) in scope recovered”, a źródło zostawało bez zmian
   (migawka 07:01, zakładka i zapis po migawce na miejscu). Przyczyna: etap cofnięcia (`zfs rollback -r` każdego
