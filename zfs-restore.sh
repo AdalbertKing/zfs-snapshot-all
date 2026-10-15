@@ -2444,7 +2444,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # there (the copy follows its source -- P-0, snapsend `recv -F`, logged).
         local _lcnewer
         _lcnewer="$(printf '%s\n' "$rows" | awk -F'\t' -v p="${copy}@${point}" 'seen{print $1} $1==p{seen=1}' | sed 's/.*@//' | tr '\n' ' ')"
-        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% }-- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed (zfs clone / zfs rename on the copy)."
+        [ -n "${_lcnewer// /}" ] && log 0 "restore: $copy still holds snapshot(s) newer than $point: ${_lcnewer% } -- the next run of this relationship discards them on the copy (it follows its source). Keep them first if they are needed (zfs clone / zfs rename on the copy)."
     fi
 
     # ---- 6. the engine -----------------------------------------------------
