@@ -6110,6 +6110,61 @@ install_pair_gate() {
     return 0
 }
 
+# refresh_pair_gate -> 0 current, refreshed or absent | 1 could not refresh
+#
+# The gate is a COPY outside the checkout and only --join wrote it, while the
+# hourly self-update runs a bare deploy.sh. So a fixed gate reached a host only
+# when someone re-ran --join by hand. Measured 2026-10-15: #547's scope fix
+# sat in the checkout on every lab host while the installed gate still dropped
+# a multi-dataset scope, until it was copied by hand; metropolis pve1/pve2
+# kept the old one. Owner decision the same evening: the update refreshes it.
+#
+# REFRESH, NEVER CREATE. No gate on the host means no relationship was ever
+# joined here, and putting one in place would be a new trust surface, not an
+# update.
+#
+# Written NEXT TO the live file, run with -V, and only then renamed over it:
+# sshd starts the gate on every connection, the rename is atomic, and a new
+# gate that does not run leaves the old one where it was.
+refresh_pair_gate() {
+    local src="$_DEPLOY_DIR/zfs-pair-gate.sh" tmp
+    if [ -L "$PAIR_GATE_PATH" ]; then
+        warn "$PAIR_GATE_PATH is a symlink -- refusing to refresh the pair gate through it"
+        return 1
+    fi
+    if [ ! -e "$PAIR_GATE_PATH" ]; then
+        log "no pair gate at $PAIR_GATE_PATH (no relationship joined here) -- nothing to refresh"
+        return 0
+    fi
+    [ -r "$src" ] || { warn "$src is missing from this checkout -- the pair gate at $PAIR_GATE_PATH was NOT refreshed"; return 1; }
+    if cmp -s "$src" "$PAIR_GATE_PATH"; then
+        log "pair gate at $PAIR_GATE_PATH matches this checkout"
+        return 0
+    fi
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        warn "pair gate at $PAIR_GATE_PATH differs from this checkout -- a plain run replaces it"
+        return 0
+    fi
+    tmp="$PAIR_GATE_PATH.new.$$"
+    if ! install -m 0755 -o root -g root "$src" "$tmp"; then
+        rm -f "$tmp"
+        warn "could not write $tmp -- the pair gate at $PAIR_GATE_PATH was NOT refreshed"
+        return 1
+    fi
+    if ! "$tmp" -V >/dev/null 2>&1; then
+        rm -f "$tmp"
+        warn "the new pair gate does not run -- the old one stays at $PAIR_GATE_PATH"
+        return 1
+    fi
+    if ! mv -f "$tmp" "$PAIR_GATE_PATH"; then
+        rm -f "$tmp"
+        warn "could not move the new pair gate over $PAIR_GATE_PATH -- the old one stays"
+        return 1
+    fi
+    log "pair gate at $PAIR_GATE_PATH refreshed from this checkout"
+    return 0
+}
+
 # write_gated_key_line <authorized_keys> <pubkey line> <label>
 #
 # Replaces THIS relationship's line and nothing else. Not append-only any
@@ -7128,6 +7183,15 @@ if [ "$DRAFT_SCOPE_MODE" -eq 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------
+log "Phase 7a: pair gate refresh"
+# ------------------------------------------------------------------------------
+# A failure here does not stop the rest of the deployment, but the run ends
+# non-zero (see the end of this file), so the hourly self-update reports it
+# instead of logging "applied" over a host still running the old gate.
+GATE_REFRESH_FAILED=0
+refresh_pair_gate || GATE_REFRESH_FAILED=1
+
+# ------------------------------------------------------------------------------
 log "Phase 8: delegated non-root account"
 # ------------------------------------------------------------------------------
 # BACKUP_USER is about CREATION. Maintenance is automatic: if it is empty we
@@ -7490,3 +7554,8 @@ cat <<'EOF'
      above.
 
 EOF
+
+if [ "$GATE_REFRESH_FAILED" -eq 1 ]; then
+    warn "the pair gate at $PAIR_GATE_PATH was NOT refreshed (Phase 7a above) -- this host still runs the old one. Exiting 1 so the self-update reports it."
+    exit 1
+fi
