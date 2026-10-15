@@ -390,7 +390,7 @@ restore_safe_land() {   # <copy> <snapshot> <landing> <what the source WAS> <yes
     echo "  Powstalo:   $landing"
     echo "  Snapshot:   ${landing}@${snap}"
     echo "  GUID:       $src_guid (zgodny ze zrodlem -- zweryfikowany, nie zalozony)"
-    echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu robi forma relacyjna: restore <relacja> [--target=...] [--at=...]."
+    echo "  Produkcja:  nietknieta. Zastapienie zywego datasetu robi forma relacyjna: restore <relacja> [--at=...]."
 }
 
 cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
@@ -1005,7 +1005,7 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
     fi
     if [ -n "$blockers" ] || [ -n "$bookmarks" ]; then
         echo "  To jest operacja NISZCZACA dla powyzszych obiektow zrodla i wymaga jawnego"
-        echo "  potwierdzenia. Wykonuje ja forma relacyjna: restore <relacja> [--target=...] [--at=...]."
+        echo "  potwierdzenia. Wykonuje ja forma relacyjna: restore <relacja> [--at=...]."
     fi
     if [ "$setstate" != ok ]; then
         echo "  ZBIOR STRAT NIEDOWIEDZIONY: nie udalo sie ustalic pelnej listy snapshotow i"
@@ -1928,15 +1928,18 @@ restore_remote_off_point() {   # <account@host> <target root> <recovery point> [
 #
 #   full-absent                          -> create    nothing there to lose
 #   increment | rollback | discard-live   -> rewind    a GUID-proven base exists
-#   full-live | unproven                  -> replace   no valid base; full overwrite
+#   unproven, LOCAL target with a base    -> rewind    rolled back to that base (2026-10-15)
+#   full-live | full-bare | unproven      -> replace   no valid base; full overwrite
 #   ambiguous | remote | anything else    -> refuse
 #
 # `rollback` and `discard-live` remove divergent state, which is destructive in
 # the ordinary sense -- but they are `rewind` here because a proven common base
 # is what makes them a rewind rather than an overwrite, and that distinction is
-# the one owner decision 4 draws. `unproven` lands in `replace` deliberately:
-# unproven means the base could not be established, and sending an increment
-# from a base nobody proved is the one failure that corrupts instead of refusing.
+# the one owner decision 4 draws. The planner's `unproven` is NOT "no base": the
+# base IS GUID-proven and the source sits on it with nothing newer -- what is
+# unproven is the live state (written=0 proves nothing, see REV-118). For a
+# LOCAL target that is a rollback to the base; elsewhere it stays `replace`.
+# "No base at all" is `full-live`, and stays `replace`.
 restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
     local copy="$1" src="$2"
     RESTORE_ONE_VERDICT=""
@@ -2162,7 +2165,18 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         *:*) ;;
         *)  case "${RESTORE_STRATEGY:-}" in
                 rollback|discard-live|unproven|increment)
-                    [ -n "${RESTORE_SRC_BASE_SNAP:-}" ] && RESTORE_LOCAL_ROLLBACK_TO="${RESTORE_SRC_BASE_SNAP#*@}" ;;
+                    [ -n "${RESTORE_SRC_BASE_SNAP:-}" ] && RESTORE_LOCAL_ROLLBACK_TO="${RESTORE_SRC_BASE_SNAP#*@}"
+                    # No base the planner could pin to ONE source snapshot (a duplicate
+                    # guid, or the source changing between its reads): there is no point
+                    # to roll back to, and the old fallbacks -- `unproven` -> -f, an
+                    # increment onto an unrolled source -- are a destroy or a refusal
+                    # nobody chose. Refused here instead. A pinned strategy (tests) is
+                    # left to its own path.
+                    if [ -z "$RESTORE_LOCAL_ROLLBACK_TO" ] && [ -z "${RESTORE_STRATEGY_PINNED:-}" ]; then
+                        RESTORE_ONE_VERDICT="the common base with the copy could not be pinned to one snapshot on '$src'"
+                        log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}. Refusing: there is no point to roll back to. Nothing was changed."
+                        return 1
+                    fi ;;
             esac ;;
     esac
     case "${RESTORE_STRATEGY:-}" in
@@ -2475,8 +2489,9 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
         # of them is a measurement of the result.
         #
         # So the result is measured. Every dataset of the subtree must be AT the
-        # recovery point: written@<point> exactly 0. Anything else is named, and
-        # the dataset is reported NOT recovered, which is what it is.
+        # recovery point -- by identity (the point with the copy's guid, nothing
+        # newer on it), not by written@, which a rollback never leaves at 0.
+        # Anything else is named, and the dataset is reported NOT recovered.
         #
         # A LOCAL target is measured below the remote one, by identity (2026-10-15).
         case "$src" in
@@ -2544,13 +2559,22 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # point is there with the copy's guid, nothing newer stands on it,
                 # and `referenced` is back at the snapshot's -- the last one catches
                 # live writes a skipped rollback would have left behind.
-                local _loff="" _lvd="" _lds _lrel _lexp _lg _lnew _lrd _lrs
+                local _loff="" _lvd="" _lds _lrel _lexp _lg _lnew _lrd _lrs _llist2
                 [ "${RESTORE_ENGINE_RECURSED:-0}" -eq 1 ] || _lvd="-d 0"
+                # "Could not check" is not "fine": an unreadable source list, or a
+                # copy-side point that exists but whose guid cannot be read, is OFF.
+                _llist2="$(zfs list -H -o name $_lvd -r "$src" 2>/dev/null)"
+                [ -n "$_llist2" ] || _loff="${src}: could not list it to verify the result"$'\n'
                 while IFS= read -r _lds; do
                     [ -n "$_lds" ] || continue
                     _lrel="${_lds#"$src"}"
+                    # Not part of this recovery only when the copy has no such point there.
+                    zfs list -H -o name "${copy}${_lrel}@${point}" >/dev/null 2>&1 || continue
                     _lexp="$(zfs get -H -p -o value guid "${copy}${_lrel}@${point}" 2>/dev/null)"
-                    [ -n "$_lexp" ] || continue     # not part of this recovery
+                    if [ -z "$_lexp" ]; then
+                        _loff="${_loff}${_lds}: the copy's guid of ${point} could not be read"$'\n'
+                        continue
+                    fi
                     _lg="$(zfs get -H -p -o value guid "${_lds}@${point}" 2>/dev/null)"
                     _lnew="$(zfs list -H -t snapshot -o name -s createtxg -d 1 "$_lds" 2>/dev/null | tail -1)"
                     _lrd="$(zfs get -H -p -o value referenced "$_lds" 2>/dev/null)"
@@ -2562,7 +2586,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                     elif [ -z "$_lrd" ] || [ "$_lrd" != "$_lrs" ]; then
                         _loff="${_loff}${_lds}: live data differs from ${point} (referenced ${_lrd:-?} vs ${_lrs:-?})"$'\n'
                     fi
-                done < <(zfs list -H -o name $_lvd -r "$src" 2>/dev/null)
+                done <<< "$_llist2"
                 if [ -n "$_loff" ]; then
                     RESTORE_ONE_VERDICT="the engine reported success but the source is NOT at $point"
                     log 0 "restore: $src -- ${RESTORE_ONE_VERDICT}:"

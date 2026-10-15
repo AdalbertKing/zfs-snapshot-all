@@ -23,12 +23,12 @@
 
 - **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
   Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
-  --target=hdd/test-kreator --at="2026-10-15 06:30"` zgłaszał „OK, recovered”, a źródło zostawało bez zmian
+  --target=hdd/test-kreator --at="2026-10-15 06:30"` zgłaszał „OK … rewind from …” i „all 1 dataset(s) in scope recovered”, a źródło zostawało bez zmian
   (migawka 07:01, zakładka i zapis po migawce na miejscu). Przyczyna: etap cofnięcia (`zfs rollback -r` każdego
   datasetu poddrzewa) był tylko dla celu zdalnego; silnik dostawał punkt, który źródło już miało, i kończył się
-  sukcesem („already exists in target -- skipping”), a kontroli wyniku dla celu lokalnego nie było. Teraz dla
+  sukcesem („Snapshot already exists in target - skipping”), a kontroli wyniku dla celu lokalnego nie było. Teraz dla
   celu lokalnego: cofnięcie do wspólnej bazy (`RESTORE_SRC_BASE_SNAP` planisty) przed silnikiem, `unproven`
-  przez cofnięcie zamiast `-f`, kontrola wyniku po tożsamości (punkt z GUID-em kopii, nic nowszego,
+  przez cofnięcie zamiast `-f`, odmowa, gdy bazy nie da się przypiąć do jednej migawki, kontrola wyniku po tożsamości, w której nieudany odczyt to „nie przywrócono” (punkt z GUID-em kopii, nic nowszego,
   `referenced` równe migawce -- nie `written@`, które po cofnięciu nigdy nie jest 0), komunikat o tym, że kopia
   ma jeszcze migawki nowsze niż punkt. Na żywo: zapis po migawce zniknął, 07:01 i 08:01 oraz zakładka zdjęte,
   `referenced` 25088 = 25088; następny bieg relacji: „Backup copy ... follows its source -- discarding 2
