@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9bf2ea5c409c0622 -->
+<!-- status-covers-digest: da6ebbf04a84a089 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Okno „Przywróć”: granica punktu (P7) i martwa kontrola GUID po odzysku (P8) (2026-10-15 noc; `fix/restore-window-at-cutoff`).**
+  Test właściciela „na miejsce” (relacja pve9b, `home`, punkt 20:01 UTC): podgląd pokazał `home` z 20:01, a `adam` i
+  `ewa` z 19:01. P7: jeden bieg robi migawki datasetów sekundy po sobie (pve10: `home` :03, `adam` :05, `ewa` :07),
+  a okno dawało `--at` = sekunda migawki korzenia, więc dzieci tego samego biegu wypadały. Teraz `--at` = sekunda
+  przed NOWSZYM punktem (podsumowanie: „bieg z … -- każdy dataset: jego ostatnia migawka do …”). Właściciel zdążył
+  wykonać rundę „t” na starej wersji: `home` -> 20:01, `adam`/`ewa` -> 19:01 (lab; datasety odmontowane przez odzysk,
+  zamontowane z powrotem przez sesję). W tym biegu: P8 -- `awk: runaway string constant` ×3. Program awk mapy GUID w
+  `restore_one` miał dosłowny znak nowej linii w napisie `printf` (edycja 2026-08-31, REV-129): mapa wychodziła pusta,
+  a `restore_remote_off_point` z pustą mapą sprawdza tylko NAZWĘ migawki -- kontrola GUID z REV-129 nie działała od
+  dnia napisania (odzyski i tak były poprawne, GUID sprawdzane osobno na labie). Wydzielone do `restore_guid_map` z
+  testem (`test/restore` 308 PASS / 1 FAIL środowiskowy na pve9b; na `main` suita z nowym testem pada -- brak funkcji).
+  Otwarte: P9 -- raport „recovered, and not mounted” wypisuje dzieci dwa razy; P10 (decyzja właściciela) -- odzysk na
+  miejsce zostawia źródło odmontowane do ręcznego `zfs mount`.
 
 - **Okna „Przywróć” po pierwszych testach właściciela -- P1-P6 (2026-10-15 wieczór; `fix/restore-window-notes`).**
   Testy właściciela w PuTTY (pve10): 1 -- z relacji pve9b, `home` obok na pve9b: OK (GUID zgodne, rc=0); 2 -- z
