@@ -2361,7 +2361,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     if wide and pairs:
         pass   # R5-4: nazwy kolumn stoja nad kolumnami, nie w tytule
     # Bez klawiszy F: te sa na pasku (uwaga 4, bez dubli).
-    bfoot = u"Enter szczegóły  Ins nowa  Del usuń  p przywróć  Tab pary" if rows else u"Ins nowa relacja"
+    bfoot = u"Enter szczegóły  Ins nowa  Del usuń  Tab pary" if rows else u"Ins nowa relacja"
     if focus == "pairs":
         bfoot = u"Enter szczegóły pary (config, cron)   Tab wraca do relacji   strzałki"
     bottom = box(ch, btitle, plines, width, footer=bfoot)
@@ -3394,7 +3394,7 @@ HELP = [
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
     u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
-    u"                 p przywróć z tej relacji (co / dokąd / z kiedy, potem polecenie),",
+    u"                 w szczegółach 'p' = Przywróć z tej relacji (okna whiptail),",
     u"                 F8 eksport do pliku (Enter zapisuje, domyślnie w",
     u"                 /etc/zfs-snapshot-all/relations), F9 import: lista plików",
     u"                 eksportu z tego katalogu, potem werdykt",
@@ -3925,11 +3925,6 @@ class UI(object):
             # "usun i zaloz od nowa" -- jedyna dzis droga zmiany relacji -- nie dzialalo
             # (zmierzone na pve10, 2026-09-20).
             return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
-        elif k == "p":
-            # Okno "Przywróć" (C2a, właściciel 2026-10-15): skąd = ta relacja, potem
-            # co / dokąd / z kiedy / polecenie -- jedno zwykłe `restore`, uruchomione
-            # w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie.
-            return self.run_dialog([self.zb(), "restore", n, "--ask"])
         elif k == "F8":
             default = os.path.join(relations_dir(), "%s.export.json" % n)
             self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = wróć):", default,
@@ -4464,6 +4459,14 @@ class UI(object):
                 n = self.window[1]["name"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
+            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+                # OKNO "PRZYWRÓĆ" (C2a, właściciel 2026-10-15): skąd = ta relacja, potem
+                # co / dokąd / z kiedy / polecenie -- jedno zwykłe `restore`, uruchomione
+                # w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie.
+                # Tu, obok 'e', a nie na liście F3: tam litera jest tekstem linii poleceń.
+                n = self.window[1]["name"]
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "restore", n, "--ask"]) or "stay"
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -4614,7 +4617,7 @@ class UI(object):
             self.ask_refresh()
         elif k in ("del", "ins") and self.screen == "szablony":
             return self.template_action(k) or "stay"
-        elif k in ("F7", "F8", "F9", "del", "ins", "p") and self.screen == "relacje":
+        elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "relacje":
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
@@ -4739,7 +4742,7 @@ def _ui_render(self, width, height):
                 foot = u"e zmień szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
-                foot = u"e zmień relację   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmień relację   p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
@@ -4783,7 +4786,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("p"): "p",
                ord("?"): "F1", ord("h"): "F1"}
 
 

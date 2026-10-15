@@ -979,14 +979,21 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
-# OKNO PRZYWRÓĆ (C2a, właściciel 2026-10-15): 'p' na F3 oddaje terminal oknu
-# restore --ask dla ZAZNACZONEJ relacji -- jedno zwykłe polecenie restore, bez
-# własnej logiki odzysku w GUI.
-A="$(act down,p)"
+# OKNO PRZYWRÓĆ (C2a, właściciel 2026-10-15): 'p' w szczegółach relacji (Enter na
+# F3) oddaje terminal oknu restore --ask -- jedno zwykłe polecenie restore, bez
+# własnej logiki odzysku w GUI. NIE na samej liście: tam litera jest tekstem linii
+# poleceń (live_key_name), co ten test złapał przy pierwszym podejściu.
+A="$(act down,enter,p)"
 if grep -Eq "zfs-backup.sh'? restore lab-ct201 --ask\$" "$XL"; then
-    ok "akcje: p na F3 oddaje terminal oknu 'Przywróć' (restore NAZWA --ask) dla zaznaczonej relacji"
+    ok "akcje: p w szczegółach relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
 else
     bad "akcje: p -> restore NAZWA --ask" "$(cat "$XL")" "$A"
+fi
+A="$(act down,p)"
+if [ ! -s "$XL" ]; then
+    ok "akcje: p na samej liście F3 niczego nie uruchamia (litera = tekst linii poleceń)"
+else
+    bad "akcje: p na liście F3 nie powinno uruchamiać" "$(cat "$XL")"
 fi
 if grep -q 'restore)' "$REPO/zfs-backup.sh" && grep -q 'tui/restore.sh' "$REPO/zfs-backup.sh"; then
     ok "akcje: zfs-backup.sh restore NAZWA --ask prowadzi do tui/restore.sh"
