@@ -2,7 +2,7 @@
 # edit-relation.sh NAZWA -- zmiana zainstalowanej relacji w oknach whiptail ('e' na F3).
 #
 # Pierwsze okno: CO zmienić (właściciel 2026-10-09, uwaga 5):
-#   1. Datasety -- co kopiować (dodaj / usuń)    (add-source / remove-source; W4)
+#   1. Datasety -- co kopiować (drzewo z kratkami, X12)    (add-source / remove-source; W4)
 #   2. Użyj szablonu -- gotowy szablon dla celu  (edit-relation --profile)
 #   3. Harmonogram i retencja kopii w celu i źródle -- tabela    (ukryty szablon relacji, edit-relation)
 #   4. Ustawienia silnika -- jak przesyłane są kopie (set-transfer; W16: historia,
@@ -500,7 +500,7 @@ while :; do
     geom
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
        --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 17 "$W" 7 \
-       dane    "Datasety -- co kopiować (dodaj / usuń)…" \
+       dane    "Datasety -- co kopiować…" \
        szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
        harm    "Harmonogram i retencja kopii w celu i źródle" \
        silnik  "Ustawienia silnika -- jak przesyłane są kopie…" \
