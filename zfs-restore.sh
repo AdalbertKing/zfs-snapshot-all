@@ -4066,7 +4066,7 @@ restore_replace_pair() {   # <src: overwritten> <copy: restored from> <yes> [wha
     echo "  Zrodlo:     $src   (CEL odtworzenia: to jego stan zostanie zmieniony)"
     echo "  Kopia:      $copy  (zrodlo danych)"
     echo "  Relacja:    $kind"
-    restore_plan_strategy "$copy" "$src" "$snaps"
+    restore_plan_strategy "$copy" "$src" "$snaps" ${point:+"punkt wybrany (--at / --snapshot) -> ten cel"}
     echo
 
     case "$RESTORE_STRATEGY" in

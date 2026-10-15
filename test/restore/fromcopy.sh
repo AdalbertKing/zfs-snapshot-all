@@ -70,8 +70,8 @@ restore_safe_land() { printf 'LAND %s@%s -> %s\n' "$1" "$2" "$3"; return 0; }
 # The destructive half, recorded the same way. Its first argument is what gets
 # OVERWRITTEN and its second is what the data comes FROM -- the opposite way
 # round from --from-copy's own reading, which is exactly why it is asserted.
-restore_replace_pair() { printf 'PAIR overwrite=%s from=%s
-' "$1" "$2"; return 0; }
+restore_replace_pair() { printf 'PAIR overwrite=%s from=%s point=%s
+' "$1" "$2" "${5:-}"; return 0; }
 restore_pause_take() { printf 'pause: take %s
 ' "${1:-}" >&2; return 0; }
 restore_pause_release() { :; }
@@ -337,6 +337,23 @@ esac
 case "$out" in
     *"LAND "*) bad "overwrite: ...and the free-space lander is NOT used" "$out" ;;
     *) ok "overwrite: ...and the free-space lander is NOT used" ;;
+esac
+# THE POINT GOES WITH THE PAIR (2026-10-15, lab pve9b, usb9 replica): `--overwrite
+# --at 06:30` restored to the NEWEST point (09:01), previewed a 0 B loss and reported
+# success, because the engine was handed the pair and not the point it was asked for.
+# copyA's rows are 1000/3000/2000 by creation, deliberately unsorted: --at 2500 picks
+# the 2000 one; no --at picks the newest by creation (3000), not the last row.
+out="$(fc_run 'hdd/copyA' 'hdd/taken' '' '2500' 1)"
+case "$out" in
+    *"PAIR overwrite=hdd/taken from=hdd/copyA point=automated_2026-09-09_09-09-09"*)
+        ok "overwrite: --at reaches the engine as THE point (not the newest)" ;;
+    *) bad "overwrite: --at reaches the engine as THE point (not the newest)" "$out" ;;
+esac
+out="$(fc_run 'hdd/copyA' 'hdd/taken' '' '' 1)"
+case "$out" in
+    *"PAIR overwrite=hdd/taken from=hdd/copyA point=automated_2026-06-15_12-00-00"*)
+        ok "overwrite: without --at the newest point BY CREATION reaches the engine" ;;
+    *) bad "overwrite: without --at the newest point BY CREATION reaches the engine" "$out" ;;
 esac
 
 # A destination that is NOT there means the operator meant the other mode.
