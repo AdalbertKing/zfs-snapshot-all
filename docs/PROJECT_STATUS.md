@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 235d8050e7064c4e -->
+<!-- status-covers-digest: 5655f76db4cb308e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,25 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Okno GUI „Przywróć” z relacji -- C2a (2026-10-15; `feat/restore-window-c2a`).**
+  `p` w szczegółach relacji (Enter na F3; stopka „e zmień  p przywróć”, pomoc F1) -> `zfs-backup.sh restore NAZWA
+  --ask` -> `tui/restore.sh` (whiptail, jak `remove-replica --ask`). NIE na samej liście F3, jak ustalono: tam każda
+  litera jest tekstem linii poleceń (test to złapał). Okno NIE ma własnej logiki odzysku: składa jedno zwykłe
+  polecenie `restore` i uruchamia je w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie (bez
+  `--yes`). Kroki: config (pierwszy `jobs.*.conf`, dla którego `restore --plan NAZWA --json` daje istniejącą kopię)
+  -> co (drzewo X12, domyślnie cała relacja; legenda „odtwarzane” -- nowe pole `legend` w spec drzewa) -> dokąd
+  (obok: `restore A A --source=… --onto=<katalog>/<nazwa>…`, domyślnie `<pula>/restore`; na miejsce:
+  `restore A [--source=…]`) -> z kiedy (punkty z `--plan --json`, najnowszy domyślnie, inny = `--at`) ->
+  podsumowanie z poleceniem (`Uruchom` / `Wstecz`). Bez kratki „z historią” (`--with-history` działa tylko w
+  `--from-copy`). Wejście „z dysku” (F9 na F6, `--from-copy`) = C2b, jeszcze nie ma.
+  Testy: `test/tui` -- 10 nowych asercji (polecenie dla obok/na miejsce/całość/wyjątek, wybór configu, Wstecz nic
+  nie uruchamia, brak kopii, `p` w szczegółach i NIE na liście, stopka); na pve9b 292 PASS, 7 FAIL = te same co na
+  `main` (środowisko). Okno napisał `simple-coder` ze specyfikacji. Na żywo pve9 (prawdziwy whiptail przez pty):
+  przejście w przód i całe „Wstecz” do wyjścia („przerwane, nic nie zmieniono”); potem pełny bieg z `Uruchom` (zgoda
+  na pve9b): cała relacja obok -- 4/4 OK w `hdd/restore/data…`, GUID zgodne z kopią, k2-ab zapauzowane na bieg i
+  wznowione; dataset testowy skasowany, zgoda cofnięta. Niezmierzone: wybór przycisku `Uruchom` strzałką przy 80x25
+  (podsumowanie przewijane) -- mój sterownik pty nie przesuwał fokusu strzałką; przy 120x50 Tab działa.
 
 - **Odzysk OBOK oryginału na maszynie docelowej działa (2026-10-15; `feat/restore-grant-namespace`).**
   `restore A A --source=… --onto=<pula>/restore/<nazwa>` kończył się „permission denied” (pve9 -> pve9b): konto
