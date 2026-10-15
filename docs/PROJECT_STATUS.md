@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 839545e954a8a419 -->
+<!-- status-covers-digest: a4f1a6f5a3b6b30e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,28 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Kampania odzysku replika -> kolektor -> źródło (2026-10-15, pve9b, zgoda właściciela; `fix/restore-fromcopy-at`).**
+  Obiekt: `hdd/test-kreator` (relacja lokalna `lokalna-hdd-vms`), kopia `hdd/backups/hdd/test-kreator`, replika
+  dyskowa `usb9` (zaszyfrowana, „cała historia”). Po każdym kroku: tożsamość (GUID, `referenced`), czy program
+  powiedział prawdę, i bieg relacji (czy łańcuch idzie dalej).
+  | poziom | wariant | wynik |
+  |---|---|---|
+  | replika -> kolektor | wspólny punkt, `--overwrite --at` | BŁĄD: `--at` ignorowane (cofnięcie do najnowszego, podgląd „0 B”, sukces) -- naprawione tutaj, potem OK |
+  | replika -> kolektor | pełny (kopii nie ma), `--onto` | bez klucza: uczciwy błąd ZFS „dataset key must be loaded”; po `zfs load-key` OK (ląduje sam punkt, bez wcześniejszej historii) |
+  | replika -> kolektor | bez wspólnego punktu, `--overwrite` | odmowa („pełne zastąpienie nie istnieje w tym wycinku”), cel nietknięty |
+  | kolektor -> źródło | wspólny punkt, forma relacyjna `--at` | OK (cofnięcie, #541) |
+  | kolektor -> źródło | pełny (źródła nie ma) | OK (`create`, dane na miejscu, `canmount=noauto`) |
+  | kolektor -> źródło | bez wspólnego punktu | OK (`replace`, `snapsend -f`) -- bez pytania (relacja lokalna, znane) |
+  Po każdym wariancie następny bieg relacji przeszedł (kopia podąża za źródłem, ten sam GUID po obu stronach).
+  Poprawka: `cmd_restore_from_copy` przekazuje wybrany punkt (`--at`/`--snapshot`/najnowszy) do
+  `restore_replace_pair`, który przycina listę migawek kopii do tego punktu (jak `--plan --at`) -- podgląd strat i
+  wykonanie dotyczą punktu, o który proszono. Test w `test/restore/fromcopy.sh`; kontrola negatywna na `main` daje
+  BAD. Suita `restore` na pve9b 298/1 (ta sama jedna porażka środowiskowa co na `main`).
+  Otwarte, do decyzji: (1) bramka nośnika (`zfs-media-gate.sh attach`) nie ładuje klucza -- odzysk z zaszyfrowanej
+  repliki wymaga ręcznego `zfs load-key`; (2) `--from-copy --overwrite` nie umie pełnego zastąpienia (obejście: usunąć
+  cel i `--onto`); (3) forma relacyjna dla relacji lokalnej nadpisuje bez pytania; (4) odtworzenie „obok” przenosi
+  sam punkt, bez historii przed nim.
 
 - **Przywracanie relacji lokalnej do wcześniejszego punktu cofa źródło naprawdę (2026-10-15; `fix/restore-local-rewind`).**
   Test na labie (pve9b, `lokalna-hdd-vms`, `hdd/test-kreator`, zgoda właściciela): `restore lokalna-hdd-vms
