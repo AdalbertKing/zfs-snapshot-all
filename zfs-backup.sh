@@ -17450,10 +17450,11 @@ cmd_status() {
         local f
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -e "$f" ] || continue
-            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""
+            ( CLIENT_NAME=""; STATE=""; ACTIVE_ENDPOINT=""; RUX_MODE=""
               record_load client "$f"
               pausemark=""
               client_paused "$CLIENT_NAME" && pausemark="  PAUSED_LOCAL"
+              [ "${RUX_MODE:-}" = local ] && ACTIVE_ENDPOINT="(lokalna)"
               printf '%-20s state=%-18s endpoint=%s%s\n' "$CLIENT_NAME" "$STATE" "$ACTIVE_ENDPOINT" "$pausemark" )
         done
         return 0

@@ -689,6 +689,26 @@ if printf '%s' "$rdl" | grep -qE 'Plan odtworzenia|^FATAL: restore:' && printf '
 else
     bad "restore dispatch: silent exit" "local: [$rdl]" "remote, no connection: [$rdr]"
 fi
+# STATUS OF A LOCAL RELATIONSHIP (2026-10-15, pve9b): the text view printed the
+# remote layout -- "Blokada u peera: NIEZNANA", "Endpoint docelowy: ? (?:?)", "Cron
+# dziala przez: (jeszcze nie aktywowany -- brak linii cron)", "Zrodla: ?" -- for a
+# relationship with twelve cron lines. Its own view: type, sources, target, account,
+# config, the account's cron lines, the last push result by label. The account is the
+# caller here (so its own crontab is read without root); crontab is the stub.
+SV="$RL/sv"; mkdir -p "$SV/clients"
+me_user="$(id -un 2>/dev/null || echo nobody)"
+printf 'CLIENT_NAME=svl\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nLOCAL_USER=%s\nCRON_CONFIG=/etc/x.conf\nCREATED_AT=2026-10-15\n' "$me_user" > "$SV/clients/svl.conf"
+svo=$( ( CLIENTS_DIR="$SV/clients"
+         crontab() { printf '1 * * * * /x/zfs-job.sh "h snap" -- /x/snapsend.sh -m auto_ -L svl "rpool/a" ""\n21 * * * * /x/delsnaps.sh -L svl "rpool/a" auto_ -H24\n1 * * * * /x/snapsend.sh -L other "rpool/z"\n'; }
+         cmd_status svl; echo "---"; cmd_status ) 2>&1 )
+if printf '%s' "$svo" | grep -qF "lokalna, tylko migawki" && printf '%s' "$svo" | grep -qF "Zrodla:            rpool/a, rpool/b" \
+   && printf '%s' "$svo" | grep -qF "Cron:              2 linii" \
+   && ! printf '%s' "$svo" | grep -qE "Blokada u peera|Endpoint docelowy|Cron dziala przez" \
+   && printf '%s' "$svo" | grep -qE "^svl +state=active +endpoint=\(lokalna\)"; then
+    ok "status: a local relationship has its own view (type, sources, its cron lines; no peer, no endpoint)"
+else
+    bad "status of a local relationship" "$svo"
+fi
 # X3 (owner 2026-10-12): an exception belongs to a source. One left behind by a
 # source removed earlier (pve9b: ^hdd/vms/vm3$) is dropped when the relationship is
 # read back; an exception of a source still there, and a pattern that is not an exact
