@@ -2064,6 +2064,33 @@ restore_scope_root_repair() {   # <host> <root dataset>
     log 0 "restore: and once it has succeeded, on ${1#*@} once more:  deploy.sh --commit-scope=<label>   -- so the scope records the children again."
 }
 
+# restore_guid_map <copy root> <point> -> "<relative path><TAB><guid>" per dataset of the copy
+# subtree that has <point>; the relative path is the dataset's position UNDER the copy root
+# ("" for the root), so the far side can match it to its position under the target root.
+#
+# A FUNCTION, and tested as one, since 2026-10-15: the same awk lived inline in restore_one
+# with a literal line break inside its printf string (left by an edit on 2026-08-31,
+# REV-129). awk rejected the whole program ("runaway string constant", printed three
+# times in the owner's GUI run on pve10), the map came out EMPTY, and
+# restore_remote_off_point with an empty map checks only the snapshot NAME -- the guid
+# check REV-129 added had silently not run since the day it was written (P8).
+restore_guid_map() {
+    local copy="$1" point="$2"
+    zfs list -H -p -t snapshot -o name,guid -r "$copy" 2>/dev/null \
+        | awk -F'\t' -v c="$copy" -v pt="@${point}" '
+            index($1, c) == 1 {
+                n = $1
+                if (substr(n, length(n) - length(pt) + 1) != pt) next
+                ds = substr(n, 1, length(n) - length(pt))
+                rel = substr(ds, length(c) + 1)
+                # AT A NAME BOUNDARY. `index()==1` also matches a dataset that merely
+                # STARTS with the copy name -- hdd/copyOTHER under hdd/copy -- which
+                # would enter the table under a nonsense relative path.
+                if (rel != "" && substr(rel, 1, 1) != "/") next
+                printf "%s\t%s\n", rel, $2
+            }'
+}
+
 restore_one() {   # <copy dataset> <original source, account@host:dataset or local>
     local copy="$1" src="$2"
     RESTORE_ONE_VERDICT=""
@@ -2682,22 +2709,7 @@ restore_one() {   # <copy dataset> <original source, account@host:dataset or loc
                 # REV-20260831-129: a single guid applied to a whole subtree
                 # reported every valid child as a different snapshot.
                 local _vmap
-                _vmap="$(zfs list -H -p -t snapshot -o name,guid -r "$copy" 2>/dev/null                     | awk -F'	' -v c="$copy" -v pt="@${point}" '
-                        index($1, c) == 1 {
-                            n = $1
-                            if (substr(n, length(n) - length(pt) + 1) != pt) next
-                            ds = substr(n, 1, length(n) - length(pt))
-                            rel = substr(ds, length(c) + 1)
-                            # AT A NAME BOUNDARY. `index()==1` also matches a
-                            # dataset that merely STARTS with the copy is name --
-                            # hdd/copyOTHER under hdd/copy -- which would enter
-                            # the table under a nonsense relative path. `zfs list
-                            # -r` would not return one, but a table keyed by
-                            # position must not depend on that.
-                            if (rel != "" && substr(rel, 1, 1) != "/") next
-                            printf "%s	%s
-", rel, $2
-                        }')"
+                _vmap="$(restore_guid_map "$copy" "$point")"
                 _off="$(restore_remote_off_point "${src%%:*}" "${src#*:}" "$point" "$_vdepth" "$_vmap")"; _orc=$?
                 if [ "$_orc" -ne 0 ]; then
                     # Same rule on the way out. "I could not check" is not

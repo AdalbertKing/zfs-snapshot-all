@@ -2704,6 +2704,27 @@ esac
 
 . "$DIR/relpolicy.sh"
 
+# ---- P8: the guid map behind the recursive identity check ----------------------
+# Inline in restore_one until 2026-10-15, with a literal line break inside the awk
+# printf string: awk rejected the program ("runaway string constant", three times in
+# the owner's GUI run on pve10), the map was EMPTY, and restore_remote_off_point then
+# checked snapshot NAMES only -- REV-129's guid check had not run since 2026-08-31.
+GM="$WORK/gm"; mkdir -p "$GM"
+printf '#!/bin/sh\nprintf "hdd/c@p1\\t11\\nhdd/c/a@p1\\t22\\nhdd/c/a@p0\\t99\\nhdd/cOTHER@p1\\t33\\nhdd/c/b/x@p1\\t44\\n"\n' > "$GM/zfs"
+chmod +x "$GM/zfs"
+gm_out="$( eval "$(product_fn "$ZB" restore_guid_map)"; PATH="$GM:$PATH" restore_guid_map hdd/c p1 2>&1 )"
+gm_want="$(printf '\t11\n/a\t22\n/b/x\t44')"
+if [ "$gm_out" = "$gm_want" ]; then
+    ok "guid map: every dataset of the copy subtree at the point, by position under the root; another point and a name-prefix sibling left out (P8)"
+else
+    bad "guid map: by position under the copy root (P8)" "got: $(printf '%s' "$gm_out" | tr '\t\n' '|;')" "want: $(printf '%s' "$gm_want" | tr '\t\n' '|;')"
+fi
+if grep -q '_vmap="$(restore_guid_map "$copy" "$point")"' "$ZB"; then
+    ok "guid map: restore_one builds its verification map with restore_guid_map, not an inline copy"
+else
+    bad "guid map: restore_one uses restore_guid_map" "the call is not there"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
