@@ -4742,7 +4742,7 @@ def _ui_render(self, width, height):
                 foot = u"e zmień szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
-                foot = u"e zmień relację   p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
