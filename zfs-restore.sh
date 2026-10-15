@@ -4497,10 +4497,15 @@ restore_plan_json() {
         fi
         [ "$first" -eq 1 ] || printf ','
         first=0
-        printf '{"source":"%s","relation":"%s","copy":"%s","consistency":"%s","snapshots":[' \
-            "$(json_escape "$a")" "$(json_escape "$c")" "$(json_escape "$b")" \
+        # copy_exists: a copy that is not there and a copy with no snapshots
+        # are different answers -- the text plan says "BRAK -- ta kopia nie
+        # istnieje" for the first -- and both would otherwise be an empty list.
+        local exists=true
+        snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$b" 2>/dev/null) \
+            || { snaps=""; exists=false; }
+        printf '{"source":"%s","relation":"%s","copy":"%s","copy_exists":%s,"consistency":"%s","snapshots":[' \
+            "$(json_escape "$a")" "$(json_escape "$c")" "$(json_escape "$b")" "$exists" \
             "$( [ "$d" = atomic ] && echo atomic || echo independent )"
-        snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "$b" 2>/dev/null) || snaps=""
         sfirst=1
         while IFS=$'\t' read -r sname screat sguid; do
             [ -n "$sname" ] || continue

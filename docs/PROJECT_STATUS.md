@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 075c747de00132d9 -->
+<!-- status-covers-digest: b4e26665ceae5896 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -25,8 +25,9 @@
   Pierwszy klocek okna „Przywróć” (decyzje właściciela 2026-10-15: lista punktów do wyboru, pozycja w menu głównym
   + skrót z okna relacji, „obok” na celu z podpowiedzią `<pula>/restore/<nazwa>`; okna jeszcze nie ma). Te same
   wiersze i filtry co tekstowy plan (`restore_relations`, `--dataset`, adres relacji): źródło, relacja, kopia,
-  spójność i wszystkie migawki kopii (nazwa, `creation` w sekundach, guid, od najstarszej); bez strategii (wymaga
-  hosta źródła). `--json` bez `--plan` i `--json` z `--at` = odmowa. Testy w `test/restore/run.sh` (JSON parsowany
+  spójność, `copy_exists` (kopii nie ma ≠ kopia bez migawek -- plan tekstowy mówi wtedy „BRAK”) i wszystkie
+  migawki kopii (nazwa, `creation` w sekundach, guid; kolejność od najstarszej robi `zfs list -s creation`, atrapa w
+  teście jej nie sprawdza); bez strategii (wymaga hosta źródła). `--json` bez `--plan` i `--json` z `--at` = odmowa. Testy w `test/restore/run.sh` (JSON parsowany
   przez Pythona, nie grepowany). Na żywo pve9 (tylko odczyt): `restore --plan k2-ab --config=… --json` -- 4 punkty
   z guid zgodnymi z planem tekstowym. Uwaga dla okna: na hoście z dwoma configami (root i konto) `restore` wymaga
   `--config`, więc okno musi go brać z rekordu relacji.

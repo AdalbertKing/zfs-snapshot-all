@@ -188,13 +188,22 @@ print("%d|%s|%s|%s|%s" % (len(d["datasets"]), x["source"], x["copy"], x["consist
 [ "$got_pj" = "$want_pj" ] \
     && ok "--plan --json: valid JSON, the filtered row, every point with its creation and guid, oldest first" \
     || bad "--plan --json: valid JSON, the filtered row, every point with its creation and guid, oldest first" "got:  $got_pj" "want: $want_pj"
-got_pj="$(run "$two" --plan --json | "$PYJ" -c '
+pj_rows() {
+    run "$two" --plan --json | "$PYJ" -c '
 import json, sys
 d = json.load(sys.stdin)
-print(";".join("%s=%d" % (x["source"], len(x["snapshots"])) for x in d["datasets"]))' 2>&1)"
-[ "$got_pj" = "rpool/data=2;rpool/other=0" ] \
-    && ok "--plan --json: every relationship, and a copy with no snapshots is an empty list, not a missing row" \
-    || bad "--plan --json: every relationship, and a copy with no snapshots is an empty list, not a missing row" "got: $got_pj"
+print(";".join("%s=%d/%s" % (x["source"], len(x["snapshots"]), x["copy_exists"]) for x in d["datasets"]))' 2>&1
+}
+got_pj="$(pj_rows)"
+[ "$got_pj" = "rpool/data=2/True;rpool/other=0/False" ] \
+    && ok "--plan --json: every relationship, and a copy that is NOT THERE is a row with copy_exists false" \
+    || bad "--plan --json: every relationship, and a copy that is NOT THERE is a row with copy_exists false" "got: $got_pj"
+: > "$WORK/snaps.hdd_store_rpool_other"
+got_pj="$(pj_rows)"
+[ "$got_pj" = "rpool/data=2/True;rpool/other=0/True" ] \
+    && ok "--plan --json: a copy that exists with no snapshots is an empty list with copy_exists true" \
+    || bad "--plan --json: a copy that exists with no snapshots is an empty list with copy_exists true" "got: $got_pj"
+rm -f "$WORK/snaps.hdd_store_rpool_other"
 out="$(run "$two" --json)"; rc=$?
 { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'give both'; } \
     && ok "--json without --plan refuses" || bad "--json without --plan refuses" "rc=$rc $out"
