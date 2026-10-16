@@ -24,12 +24,13 @@
 - **Odzysk na miejsce: ponowne montowanie przy cofnięciu zgody (P10) i raport bez dubli (P9) (2026-10-16; `fix/restore-remount-p10`).**
   P10 (decyzja właściciela, wariant a): odzysk NA MIEJSCE z odbiorem strumienia zostawia datasety celu odmontowane
   (test właściciela 10-15: `hdd/home*` na pve9b), a konto delegowane nie może montować (zmierzone na pve9b: „Insufficient
-  privileges”). Teraz `deploy.sh --allow-restore` zapisuje w pliku zgody `RESTORE_GRANT_MOUNTED` (zamontowane datasety
-  zakresu), a `--deny-restore` -- jako root na celu -- montuje z powrotem te z listy, które są odmontowane (rodzic przed
-  dzieckiem); tego, co nie było zamontowane, nie rusza. Raport odzysku na cel zdalny podaje to polecenie. P9: raport
+  privileges”). Teraz `deploy.sh --allow-restore` zapisuje w pliku zgody `RESTORE_GRANT_MOUNTED` (te z datasetów zakresu
+  wymienionych w manifeście parowania, które są zamontowane; dziecka spoza listy manifestu nie obejmuje), a `--deny-restore` -- jako root na celu -- montuje z powrotem te z listy, które są odmontowane (rodzic przed
+  dzieckiem); tego, co nie było zamontowane, nie rusza. Zgoda wydana przed tą zmianą (bez tej linii) niczego nie montuje.
+  Raport odzysku na cel zdalny mówi, że zamontuje to `--deny-restore=<nazwa tego kolektora na celu>`. P9: raport
   „recovered, and not mounted” wypisywał dzieci dwa razy (korzeń i dziecko w `RESTORE_LANDED`, każde z `-r`) -- teraz
   każdy dataset raz. Testy: `restoregrant` sekcja 14 (zapis listy, montowanie po kolei, zamontowane i niezamontowane
-  zostawione), `restore` -- raport (3 linie zamiast 9; funkcja z `main`: 9). Na żywo pve9 -> pve9b: odzysk `docs` do
+  zostawione), `restore` -- raport (3 linie; ta sama atrapa na funkcji z `main` -- zmierzone lokalnie: 9). Na żywo pve9 -> pve9b: odzysk `docs` do
   wcześniejszego punktu był samym cofnięciem (bez odbioru) i NIE odmontował niczego -- ścieżki montowania nie
   wywołał; ścieżkę sprawdzono osobno: zgoda z `hdd/data` i `docs` zamontowanymi, `docs` odmontowane ręcznie (zamiast
   odbioru), `--deny-restore` -> „mounted again: hdd/data/docs”. Odzysku z odbiorem pod tą wersją nie powtarzano.
