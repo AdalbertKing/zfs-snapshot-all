@@ -241,6 +241,34 @@ set -o pipefail
 #                    family, and nothing at all when the source list cannot be
 #                    read or comes back empty. Per dataset, so with -R every
 #                    expanded child mirrors its own source. Not with -r.
+#   -s               Snapshot-only, no transfer (REV-20261016-148). Takes the
+#                    source snapshot(s) where the source lives -- over ssh for
+#                    [user@]host:dataset, locally for a bare dataset -- and
+#                    stops there: nothing is sent, received, held, bookmarked,
+#                    mirrored or probed on this host, and nothing is created
+#                    here. For a dataset that another mechanism already copies
+#                    (pvesr inside a Proxmox cluster) and that only needs this
+#                    relation's own snapshot family.
+#
+#                    Exactly ONE positional argument: the source list. A second
+#                    (target) argument is refused, and so is every flag that
+#                    only shapes a transfer: -e -t -M -f -F (contradictions),
+#                    and -z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E (they
+#                    would have nothing to act on). All refused before any ssh,
+#                    quiesce or snapshot. Kept as they are: -m -j -v -n -r -R
+#                    -X -S -q -Q -L -p -k -K -O -c.
+#
+#                    Needs neither mbuffer nor a compressor. -n prints one
+#                    `PLAN=SNAPSHOT-ONLY src=<dataset>` line per selected
+#                    dataset after a read-only check that the source exists;
+#                    it creates nothing. -q quiesces exactly as on a pull: a
+#                    clean window's snapshots ARE the run's snapshots (no
+#                    second one); a ,degrade fallback takes the crash-labelled
+#                    set and exits 8; anything else refuses, rc 1. Stats
+#                    status per dataset: snapshot_only / snapshot_only_failed,
+#                    target field empty -- never "success", which means a copy.
+#                    Without -r/-R only the named dataset is snapshotted; the
+#                    pull's "children are not sent" warning is not printed.
 #   -F               Reconcile before pulling (recursively, under -r): if a
 #                    CHILD dataset has a snapshot named like the incremental
 #                    base but under a DIFFERENT GUID (independently created,
@@ -400,7 +428,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.74'
+VERSION='v2.75'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -588,6 +616,11 @@ declare -a EXTRA_SSH_OPTS=()
 RECONCILE=0
 # -M: mirror the source's snapshot set after a successful pull (mirror_target).
 MIRROR=0
+# -s: source snapshots only, no transfer (REV-20261016-148). The letters seen
+# that only shape a transfer are collected while parsing, so the refusal can
+# quote what was actually typed.
+SNAPSHOT_ONLY=0
+declare -a SO_TRANSFER_FLAGS=()
 declare -a CONFLICT_SNAPSHOTS=()
 # Used only by -F -- see find_recursive_name_collisions.
 declare -a NAME_COLLISIONS=()
@@ -975,6 +1008,42 @@ create_snapshot() {
         zfs snapshot $recursive_flag "$snapshot_name" || return 1
     fi
     echo "$snapshot_name"
+}
+
+# -s, one selected source dataset (REV-20261016-148). Source work ONLY: the
+# loopback guard, the source pool, the source probe, then the snapshot -- no
+# target probe, no legacy state adoption (it is keyed on a target), no resume
+# token, hold, stream, bookmark, mirror or progress watcher. Deliberately NOT a
+# branch inside process_dataset: that function's first statements already
+# touch target state, and a branch further down is how "returns early" turns
+# into "but mirror_target still ran" (the review's observation 1).
+#
+# Under -n: everything up to the probe, which is read-only, then the PLAN line.
+# After a clean quiesce window the snapshot already exists (QUIESCE_SNAPPED),
+# so nothing is created twice.
+snapshot_only_dataset() {
+    local src_dataset="$1" remote_user="$2" remote_host="$3" snapshot
+    validate_remote_host "$remote_user" "$remote_host"
+    check_pool_health "$src_dataset" "$remote_user" "$remote_host"
+    probe_dataset "$src_dataset" "$remote_user" "$remote_host" "source dataset"
+    case $? in
+        1) log 0 "Snapshot-only: source dataset not found on ${remote_host:-this host}: $src_dataset"; return 1 ;;
+        2) return 1 ;;
+    esac
+    if [ $DRY_RUN -eq 1 ]; then
+        printf 'PLAN=SNAPSHOT-ONLY src=%s\n' "$src_dataset"
+        return 0
+    fi
+    if [ $QUIESCE_SNAPPED -eq 1 ]; then
+        log 1 "Snapshot-only: ${src_dataset}@${SNAP_MESSAGE}${RUN_SUFFIX} was taken inside the quiesce window -- no second snapshot"
+        return 0
+    fi
+    if ! snapshot=$(create_snapshot "$src_dataset" "$remote_user" "$remote_host"); then
+        log 0 "Snapshot-only: FAILED to create ${src_dataset}@${SNAP_MESSAGE}${RUN_SUFFIX} on ${remote_host:-this host}"
+        return 1
+    fi
+    log 1 "Snapshot-only: created $snapshot on ${remote_host:-this host} -- nothing transferred, no copy on this host"
+    return 0
 }
 ###############################################################################
 #END 3B
@@ -2020,7 +2089,7 @@ PAIR_LABEL=""
 # than being rewritten to -r/-R. If they emitted short flags, getopts would
 # count a second declaration for the same one the user wrote, and the refusal
 # would quote a spelling that never appeared on the command line.
-OPTSTRING="m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FMX:SK:O:q:Q:L:E:"
+OPTSTRING="m:ezZgNl:v:rRtniHj:uUfwVp:k:AT:o:x:c:b:FMX:SK:O:q:Q:L:E:s"
 
 opt_takes_arg() {   # <letter>
     case "$OPTSTRING" in *"$1:"*) return 0 ;; *) return 1 ;; esac
@@ -2106,6 +2175,10 @@ fi
 # disagreed about -E and -t. See the comment above the assignment.
 while getopts "$OPTSTRING" opt; do
     case $opt in
+        e|t|M|f|F|z|Z|g|N|l|A|b|H|i|T|w|o|x|u|U|E) SO_TRANSFER_FLAGS+=("-$opt");;
+    esac
+    case $opt in
+        s) SNAPSHOT_ONLY=1;;
         m) MESSAGE="$OPTARG";;
         j) IDENTIFIER="$OPTARG";;
         A) AUTOTUNE=1;;
@@ -2146,7 +2219,7 @@ while getopts "$OPTSTRING" opt; do
         V) echo "$VERSION"; exit 0;;
         *)
             echo "Błąd: Nieznana opcja -$OPTARG" >&2
-            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -j -o -x -c -b -K -O -U -F -M -L -V" >&2
+            echo "Dozwolone opcje: -m -e -z -Z -g -N -l -v -r -R -X -S -n -H -i -T -u -f -w -p -k -A -j -o -x -c -b -K -O -U -F -M -L -s -V" >&2
             exit 1
             ;;
     esac
@@ -2257,6 +2330,20 @@ esac
 
 [ $# -ge 1 ] || { echo "Użycie: $0 [opcje] REMOTE_DATASETS [LOCAL_BASE]" >&2; exit 1; }
 
+# -s takes the source and nothing else (REV-20261016-148). Refused here, before
+# -L, the lock, ssh, quiesce or any snapshot: a contradictory command must fail
+# the same way whether or not its relationship happens to be paused.
+if [ $SNAPSHOT_ONLY -eq 1 ]; then
+    if [ $# -gt 1 ]; then
+        echo "Error: -s (snapshot-only) takes exactly one argument, the source -- got a second one ('$2'). Nothing is written on this host, so there is no target to name." >&2
+        exit 1
+    fi
+    if [ ${#SO_TRANSFER_FLAGS[@]} -gt 0 ]; then
+        echo "Error: -s (snapshot-only) transfers nothing, so ${SO_TRANSFER_FLAGS[*]} cannot apply -- refused rather than ignored. -s keeps only -m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c." >&2
+        exit 1
+    fi
+fi
+
 # REV-20260804-045 (logical pause): -L names the backup relationship this
 # invocation belongs to (the zfs-backup.sh client). If that relationship is
 # paused (pause-client wrote the marker), exit HERE -- before the lock, any
@@ -2311,7 +2398,8 @@ if [ $COMPRESSION -eq 1 ] && ! command -v "$COMPRESSOR" >/dev/null; then
     log 0 "Compression requested but $COMPRESSOR is not installed."
     exit 1
 fi
-if ! command -v mbuffer >/dev/null; then
+# Not under -s: no stream, so nothing to buffer (REV-20261016-148).
+if [ $SNAPSHOT_ONLY -eq 0 ] && ! command -v mbuffer >/dev/null; then
     log 0 "Required command 'mbuffer' not found. Install mbuffer to proceed."
     exit 1
 fi
@@ -2533,7 +2621,7 @@ fi
 # about it -- mirrors snapsend.sh section 5B (same reasoning: a plain
 # invocation over ssh is the common case this most helps). An explicit
 # -z/-Z/-g still wins outright; -N opts back out to the old default.
-if [ -n "$REMOTE_HOST" ] && [ $COMPRESSION_SET -eq 0 ] && [ $NO_COMPRESS -eq 0 ]; then
+if [ $SNAPSHOT_ONLY -eq 0 ] && [ -n "$REMOTE_HOST" ] && [ $COMPRESSION_SET -eq 0 ] && [ $NO_COMPRESS -eq 0 ]; then
     COMPRESSION=1
     log 1 "Compression: zstd -$COMPRESSION_LEVEL (default for a remote source -- pass -N to disable, -g for pigz, -A to auto-decide per dataset)"
 fi
@@ -2566,7 +2654,11 @@ trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 # args and rides the multiplexer opened just above (hence the placement after
 # tune_ssh_enable, not next to the -R block). No re-prefixing needed any
 # more -- $ds IS the full source-side name now.
-if [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
+# Not under -s: the warning says the children are "not sent", and -s sends
+# nothing at all, so its wording would claim a transfer (REV-20261016-148
+# requirement 7, found on the live proof). -s without -r/-R snapshots the named
+# dataset only, as the header says.
+if [ $SNAPSHOT_ONLY -eq 0 ] && [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
     for ds in "${DATASETS[@]}"; do
         warn_if_unrecursed_children "$ds" "$REMOTE_USER" "$REMOTE_HOST"
     done
@@ -2655,6 +2747,44 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
            log 0 "Quiesce: refusing to continue with unquiesced snapshots"
            exit 1 ;;
     esac
+fi
+
+# -s ends here, before the -t checks, the target mapping and the pull loop
+# (REV-20261016-148). Its own loop, its own stats status, its own verdict: the
+# pull loop's "success" would claim a copy and would still reach mirror_target.
+if [ $SNAPSHOT_ONLY -eq 1 ]; then
+    # The quiesce block above refuses a local source only on a real run; a
+    # dry run must not plan what the real one would refuse.
+    if [ "$QUIESCE" != "no" ] && [ -z "$REMOTE_HOST" ]; then
+        log 0 "Quiesce: -q needs a REMOTE source (the guest has to be frozen where it runs). For a local source use snapsend.sh -q."
+        exit 1
+    fi
+    declare -a FAILED_DATASETS=()
+    for src_path in "${DATASETS[@]}"; do
+        log 1 "Snapshot-only: ${REMOTE_HOST:-local}:$src_path"
+        if [ $DRY_RUN -eq 1 ]; then
+            snapshot_only_dataset "$src_path" "$REMOTE_USER" "$REMOTE_HOST" || FAILED_DATASETS+=("$src_path")
+            continue
+        fi
+        stats_start=$(date +%s)
+        if snapshot_only_dataset "$src_path" "$REMOTE_USER" "$REMOTE_HOST"; then
+            emit_stats "$src_path" "" "snapshot_only" "$(( $(date +%s) - stats_start ))"
+        else
+            emit_stats "$src_path" "" "snapshot_only_failed" "$(( $(date +%s) - stats_start ))"
+            FAILED_DATASETS+=("$src_path")
+        fi
+    done
+    if [ ${#FAILED_DATASETS[@]} -gt 0 ]; then
+        printf "%s\n" "${FAILED_DATASETS[@]}" >&2
+        exit 1
+    fi
+    [ $DRY_RUN -eq 1 ] && exit 0
+    echo "Snapshot-only: ${#DATASETS[@]} source dataset(s) snapshotted on ${REMOTE_HOST:-this host}, nothing transferred" >&2
+    if [ "${QUIESCE_DEGRADED:-0}" -eq 1 ]; then
+        log 0 "Quiesce: the snapshots were taken, but this run was DEGRADED -- they are crash-consistent, not application-consistent, and are named '${SNAP_MESSAGE}${RUN_SUFFIX}'. Exiting 8 so this is reported rather than filed as clean."
+        exit 8
+    fi
+    exit 0
 fi
 
 # -t REFUSES what it cannot mean. All three are decided before anything is sent,
