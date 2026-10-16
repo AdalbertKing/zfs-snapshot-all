@@ -920,6 +920,8 @@ out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
 check "writers: a failed revocation keeps the grant's pauses" "lab1|1" "$(pw_tag puller)|$rc"
 if has "STAY PAUSED" "$out"; then ok "writers: ...and says how to lift them"
 else bad "writers: ...and says how to lift them" "$out"; fi
+# The failed revocation above is pending (REV-20261016-147): finish it before the next grant.
+dr --deny-restore=lab1 >/dev/null
 # ...but a dataset that is GONE has no delegation left to revoke.
 dr --allow-restore=lab1 >/dev/null
 out="$(ZFS_FAIL_UNALLOW=1 ZFS_GONE="hdd/a hdd/a/child hdd/restore" dr --deny-restore=lab1)"
@@ -990,6 +992,63 @@ check "mount: what is still mounted is left alone" "" "$(grep '^mount -- ' "$ZFS
 out="$(ZFS_MOUNTED="" dr --allow-restore=lab1)"; : > "$ZFS_TRACE"
 out="$(ZFS_MOUNTED="" dr --deny-restore=lab1)"
 check "mount: what was NOT mounted when the grant was issued is not mounted by the revocation" "" "$(grep '^mount -- ' "$ZFS_TRACE")"
+
+
+# ---------------------------------------------------------------------------
+# 15. REV-20261016-147: a failed revocation is RETRIED, not forgotten.
+#
+# The grant used to be unlinked before `zfs unallow`; a failed unallow left no
+# record, so the next --deny-restore said "nothing to take back", resumed this
+# host's writers and returned 0 while the account kept its delegation. Sequence:
+# allow -> unallow fails -> fails again -> succeeds. At every step: exit status,
+# unallow calls attempted, grant-owned pause, operator pause, revocation record.
+# ---------------------------------------------------------------------------
+REVD="$GRANTS.revoking"
+rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD" "$PSTATE"/*
+pw_rec puller 'MANAGED_DATASETS=hdd/a'
+pw_rec manual 'MANAGED_DATASETS=hdd/a/child'
+mkdir -p "$PSTATE/manual"; printf 'PAUSED_AT="2026-10-16 10:00:00"\nPAUSED_REASON="by hand"\n' > "$PSTATE/manual/paused"
+rv_state() {   # <rc> -> "rc|unallow calls|puller paused|manual paused|grant|record"
+    printf '%s|%s|%s|%s|%s|%s' "$1" "$(grep -c '^unallow ' "$ZFS_TRACE")" \
+        "$(pw_tag puller)" "$([ -e "$PSTATE/manual/paused" ] && echo manual || echo -)" \
+        "$([ -e "$GRANTS/lab1" ] && echo grant || echo -)" "$([ -e "$REVD/lab1" ] && echo record || echo -)"
+}
+: > "$ZFS_TRACE"
+dr --allow-restore=lab1 >/dev/null; rc=$?
+check "retry: allow pauses the writer and writes the grant" "0|0|lab1|manual|grant|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out1="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+# 3 unallows: hdd/a, hdd/a/child, hdd/restore -- all exist in the stub.
+check "retry: a failed revocation -- rc 1, pauses kept, declaration gone, record kept" "1|3|lab1|manual|-|record" "$(rv_state $rc)"
+if has "revoked:      receive" "$out1"; then bad "retry: ...and never claims the scope was revoked" "$out1"
+else ok "retry: ...and never claims the scope was revoked"; fi
+out="$(dr --allow-restore=lab1)"; rc=$?
+if [ "$rc" -ne 0 ] && has "has not finished revoking" "$out" && [ ! -e "$GRANTS/lab1" ]; then
+    ok "retry: a new grant is refused while the revocation is pending"
+else bad "retry: a new grant is refused while the revocation is pending" "rc=$rc $out"; fi
+: > "$ZFS_TRACE"
+out2="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+check "retry: a second failure RETRIES the revocation and stays fail-closed" "1|3|lab1|manual|-|record" "$(rv_state $rc)"
+if has "nothing to take back" "$out2"; then bad "retry: ...without the 'nothing to take back' no-op" "$out2"
+else ok "retry: ...without the 'nothing to take back' no-op"; fi
+: > "$ZFS_TRACE"
+out3="$(dr --deny-restore=lab1)"; rc=$?
+check "retry: a successful retry revokes, then resumes only the grant's pause, and clears the record" "0|3||manual|-|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out4="$(dr --deny-restore=lab1)"; rc=$?
+check "retry: a repeated denial after success is a harmless no-op" "0|0||manual|-|-" "$(rv_state $rc)"
+
+# THE ALREADY-PUBLISHED PARTIAL STATE (criterion 4): grant file gone, no record --
+# what the old code left after a failed revocation -- and the grant's pause still
+# there. Absence of the file is not proof: revoke from the manifest first.
+mkdir -p "$PSTATE/puller"; printf 'PAUSED_AT="x"\nPAUSED_REASON="restore grant lab1"\nPAUSED_BY_GRANT="lab1"\n' > "$PSTATE/puller/paused"
+: > "$ZFS_TRACE"
+out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+check "legacy: orphaned grant pause + failed revocation -> rc 1, pause kept, revocation attempted" "1|3|lab1|manual|-|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out="$(dr --deny-restore=lab1)"; rc=$?
+check "legacy: ...and once the revocation works, the pause is resumed" "0|3||manual|-|-" "$(rv_state $rc)"
+rm -f "$CLI"/*.conf; rm -rf "$PSTATE"/* "$REVD"
 
 
 echo "--------------------------------------------"

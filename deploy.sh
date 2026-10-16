@@ -2721,6 +2721,27 @@ restore_grant_path() {   # <label>
     printf '%s/%s' "$RESTORE_GRANT_DIR" "$1"
 }
 
+# A REVOCATION IN PROGRESS (REV-20261016-147). `--deny-restore` used to unlink the
+# grant BEFORE revoking the ZFS delegation, so a failed revocation left no record:
+# the next `--deny-restore` saw "no grant", resumed this host's writers and said 0
+# while the collector's account could still receive/rollback/create in the scope.
+# Now the grant is MOVED here first -- the declaration is gone at once (the gate
+# reads only RESTORE_GRANT_DIR/<label>), the facts are kept -- and the record is
+# removed only after the revocation is proven. A sibling directory, not a name in
+# RESTORE_GRANT_DIR: a label may contain dots, so no suffix can be told from a label.
+RESTORE_REVOKE_DIR="${RESTORE_REVOKE_DIR:-${RESTORE_GRANT_DIR}.revoking}"
+restore_revoke_path() {   # <label>
+    printf '%s/%s' "$RESTORE_REVOKE_DIR" "$1"
+}
+# Pause markers this grant took (zfs-backup.sh pause-writers tags PAUSED_BY_GRANT).
+restore_grant_owned_pauses() {   # <label> -> one marker path per line
+    local _op_m
+    for _op_m in "${RELATIONSHIPS_DIR:-$PAIR_GATE_STATE_DIR}"/*/paused; do
+        [ -f "$_op_m" ] || continue
+        grep -qxF "PAUSED_BY_GRANT=\"$1\"" "$_op_m" 2>/dev/null && printf '%s\n' "$_op_m"
+    done
+}
+
 # The modes a grant permits, as a stable, comparable string.
 restore_grant_modes() {   # <replace 0|1>
     if [ "${1:-0}" -eq 1 ]; then printf 'create rewind replace'; else printf 'create rewind'; fi
@@ -2863,6 +2884,11 @@ do_allow_restore() {
     local want; want="$(restore_grant_modes "$ALLOW_RESTORE_REPLACE")"
     local gpath; gpath="$(restore_grant_path "$label")"
 
+    # A revocation that did not finish is not a clean slate to grant onto: its record
+    # holds what the retry still has to undo (REV-20261016-147).
+    [ ! -e "$(restore_revoke_path "$label")" ] \
+        || die "--allow-restore=$label: a previous --deny-restore=$label has not finished revoking the delegation ($(restore_revoke_path "$label")). Finish it first: $0 --deny-restore=$label"
+
     if [ -f "$gpath" ]; then
         local have; have="$(restore_grant_read_modes "$gpath")" || have=""
         if [ "$have" = "$want" ]; then
@@ -2957,16 +2983,34 @@ do_deny_restore() {
     restore_grant_label_ok "$label" \
         || die "--deny-restore='$label' is not a valid relationship label"
     local gpath; gpath="$(restore_grant_path "$label")"
-    if [ ! -f "$gpath" ]; then
+    local rpath; rpath="$(restore_revoke_path "$label")"
+    if [ -f "$gpath" ]; then
+        # THE DECLARATION GOES FIRST, THE FACTS STAY (REV-20261016-147): moved, not
+        # unlinked, so the gate stops saying yes at once and a failed revocation can
+        # be retried from the same record. Same filesystem, so the rename is atomic.
+        mkdir -p "$RESTORE_REVOKE_DIR" || die "could not create $RESTORE_REVOKE_DIR"
+        chown root:root "$RESTORE_REVOKE_DIR" 2>/dev/null || :
+        chmod 0700 "$RESTORE_REVOKE_DIR" 2>/dev/null || :
+        mv -f "$gpath" "$rpath" || die "could not move $gpath to $rpath -- nothing was revoked, the grant still stands"
+    elif [ -f "$rpath" ]; then
+        log "a previous --deny-restore=$label did not finish revoking the delegation -- retrying from its record ($rpath)"
+    elif [ -n "$(restore_grant_owned_pauses "$label")" ]; then
+        # THE ALREADY-PUBLISHED PARTIAL STATE: before this record existed, a failed
+        # revocation unlinked the grant and kept this grant's pauses. Their presence
+        # says a revocation was attempted and not proven; the absence of the file
+        # proves nothing. Retry from the manifest -- the same facts the grant came from.
+        warn "no restore grant for '$label', but relationships paused by it are still paused -- an earlier --deny-restore did not prove the revocation. Revoking again from the pairing manifest before anything is resumed."
+    else
         # A no-op success, deliberately: the state the operator asked for is the
         # state that exists. Making this an error would mean a second
         # `--deny-restore` after a lost acknowledgement reports a failure while
-        # the machine is, in fact, exactly as safe as they wanted.
+        # the machine is, in fact, exactly as safe as they wanted. Nothing paused
+        # by this grant remains, so there is nothing to resume either.
         log "no restore grant for '$label' on this host -- nothing to take back"
-        restore_grant_resume_writers "$label"
         return 0
     fi
-    local had; had="$(restore_grant_read_modes "$gpath")" || had=""
+    local had=""
+    [ -f "$rpath" ] && { had="$(restore_grant_read_modes "$rpath")" || had=""; }
     # The same two facts, from the same file and the same reader, so the revoke
     # undoes exactly what the grant did rather than a set typed a second time.
     local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
@@ -2976,24 +3020,25 @@ do_deny_restore() {
         RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
         RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
     fi
-    # P10: what was mounted when the grant was issued -- read before the file goes.
-    local _rd_mounted
-    _rd_mounted="$(sed -n 's/^RESTORE_GRANT_MOUNTED="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
-    rm -f "$gpath" || die "could not remove $gpath"
+    # P10: what was mounted when the grant was issued -- from the revocation record.
+    local _rd_mounted=""
+    [ -f "$rpath" ] && _rd_mounted="$(sed -n 's/^RESTORE_GRANT_MOUNTED="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
     # Both halves, and the delegation first: while it is still delegated the
     # account CAN act, so removing that is the half that actually closes the
     # window. The file is the declaration; the allow is the capability.
     # _rd_open: the delegation may still stand. A dataset that no longer exists
     # carries no delegation, so its failed unallow does not count.
-    local _rd_ds _rd_open=0
+    local _rd_ds _rd_open=0 _rd_scope_open=0
     if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
         for _rd_ds in $RESTORE_GRANT_DATASETS; do
             if ! zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null; then
                 warn "could not revoke ($RESTORE_ZFS_PERMS) from '$RESTORE_GRANT_ACCOUNT' on '$_rd_ds' -- check 'zfs allow $_rd_ds'"
-                zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 && _rd_open=1
+                zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 && { _rd_open=1; _rd_scope_open=1; }
             fi
         done
-        log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
+        # Said only when it is true: a success line next to a failed unallow would
+        # tell the operator the capability is gone (REV-20261016-147, criterion 2).
+        [ "$_rd_scope_open" -eq 1 ] || log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
         # The restore namespace goes back with the rest; the namespace itself and
         # whatever was recovered into it stay (restore_grant_namespace_delegate).
         for _rd_ds in $(restore_grant_namespaces "$RESTORE_GRANT_DATASETS"); do
@@ -3013,15 +3058,17 @@ do_deny_restore() {
     # Mounting needs root, not the collector's delegation, so it does not wait on the
     # revocation's outcome: the data is the operator's either way.
     [ -z "$_rd_mounted" ] || restore_grant_remount "$_rd_mounted"
-    log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     # AFTER the revocation, and only when it is known to have happened:
     # resuming this host's own jobs while the collector could still write
     # would reopen the overlap the pause closed.
     if [ "$_rd_open" -eq 1 ]; then
-        warn "the relationships this grant paused STAY PAUSED: the delegation may still stand. Once 'zfs allow' shows it gone, resume them with: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
+        log "restore grant for '$label' WITHDRAWN -- the collector is refused new restores (it permitted: ${had:-<unreadable>})"
+        warn "the delegation is NOT proven revoked, so the relationships this grant paused STAY PAUSED and the revocation stays pending. Fix what the lines above name, then run the same command again: $0 --deny-restore=$label"
         return 1
     fi
+    log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     log "  the collector for '$label' can no longer write onto this machine."
+    rm -f "$rpath" || warn "could not remove the revocation record $rpath -- it is finished; remove it by hand"
     restore_grant_resume_writers "$label"
     return 0
 }
