@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: da6ebbf04a84a089 -->
+<!-- status-covers-digest: c4c3e7232adf9742 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,33 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-20261016-147: nieudane cofnięcie zgody na odzysk jest ponawiane, nie zapominane (2026-10-16; `fix/rev147-revoke-retry`).**
+  Recenzent: `--deny-restore` usuwał plik zgody PRZED `zfs unallow`, więc po nieudanym cofnięciu kolejne
+  `--deny-restore` mówiło „nothing to take back”, wznawiało zadania celu i zwracało 0, a konto kolektora zachowywało
+  delegację (wada z #551). Teraz zgoda jest przenoszona do `RESTORE_GRANT_DIR.revoking/<etykieta>` (bramka przestaje
+  ją widzieć od razu; zapis niesie zakres i konto); ponowienie cofa z tego zapisu (manifest tylko uzupełnia braki), a zapis znika i pauzy zgody są wznawiane dopiero
+  po udowodnionym cofnięciu. Stan po starej wersji (brak zgody i zapisu, ale pauzy z `PAUSED_BY_GRANT`) -> cofanie z
+  manifestu, bez wznowienia przy porażce; bez żadnych faktów -- odmowa z drogą ręczną. `--allow-restore` odmawia przy
+  niedokończonym cofaniu; linia „revoked:” zakresu tylko przy jego sukcesie. Testy: `restoregrant` sekcja 15 -- 168/0,
+  na kodzie sprzed poprawki 11 FAIL; skrypt recenzenta: ponowienie
+  rc 1, pauza zostaje, `unallow` ponowiony (2 -> 4). Zmierzone na pve9b: `zfs unallow` zwraca 0 także dla już
+  cofniętych uprawnień, więc ponowienie po częściowym sukcesie się domyka. Odpowiedź:
+  `docs/internal/reviews/responses/REV-20261016-147.md`.
+
+- **Odzysk na miejsce: ponowne montowanie przy cofnięciu zgody (P10) i raport bez dubli (P9) (2026-10-16; `fix/restore-remount-p10`).**
+  P10 (decyzja właściciela, wariant a): odzysk NA MIEJSCE z odbiorem strumienia zostawia datasety celu odmontowane
+  (test właściciela 10-15: `hdd/home*` na pve9b), a konto delegowane nie może montować (zmierzone na pve9b: „Insufficient
+  privileges”). Teraz `deploy.sh --allow-restore` zapisuje w pliku zgody `RESTORE_GRANT_MOUNTED` (te z datasetów zakresu
+  wymienionych w manifeście parowania, które są zamontowane; dziecka spoza listy manifestu nie obejmuje), a `--deny-restore` -- jako root na celu -- montuje z powrotem te z listy, które są odmontowane (rodzic przed
+  dzieckiem); tego, co nie było zamontowane, nie rusza. Zgoda wydana przed tą zmianą (bez tej linii) niczego nie montuje.
+  Raport odzysku na cel zdalny mówi, że zamontuje to `--deny-restore=<nazwa tego kolektora na celu>`. P9: raport
+  „recovered, and not mounted” wypisywał dzieci dwa razy (korzeń i dziecko w `RESTORE_LANDED`, każde z `-r`) -- teraz
+  każdy dataset raz. Testy: `restoregrant` sekcja 14 (zapis listy, montowanie po kolei, zamontowane i niezamontowane
+  zostawione), `restore` -- raport (3 linie; ta sama atrapa na funkcji z `main` -- zmierzone lokalnie: 9). Na żywo pve9 -> pve9b: odzysk `docs` do
+  wcześniejszego punktu był samym cofnięciem (bez odbioru) i NIE odmontował niczego -- ścieżki montowania nie
+  wywołał; ścieżkę sprawdzono osobno: zgoda z `hdd/data` i `docs` zamontowanymi, `docs` odmontowane ręcznie (zamiast
+  odbioru), `--deny-restore` -> „mounted again: hdd/data/docs”. Odzysku z odbiorem pod tą wersją nie powtarzano.
 
 - **Jeden kolektor dla klastra z replikacją Proxmoxa -- projekt, lab na Metropolis, zgłoszenie silnika (2026-10-16).**
   Pomysł właściciela: B (pve2) jako jedyny kolektor -- relacja B<->A z migawkami na A bez kopiowania + kopia replik

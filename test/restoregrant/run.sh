@@ -49,6 +49,12 @@ printf '%s
 # ZFS_GONE="<dataset> ...": those datasets do not exist (`zfs list` fails on them).
 # ZFS_FAIL_UNALLOW=1: every `zfs unallow` fails.
 [ "$1" = unallow ] && [ -n "${ZFS_FAIL_UNALLOW:-}" ] && exit 1
+# ZFS_MOUNTED="<dataset> ...": `zfs get -H -o value mounted -- X` says yes for those, no otherwise.
+if [ "$1" = get ] && [ "${5:-}" = mounted ]; then
+    for a in "$@"; do last="$a"; done
+    for m in ${ZFS_MOUNTED:-}; do [ "$last" = "$m" ] && { echo yes; exit 0; }; done
+    echo no; exit 0
+fi
 if [ "$1" = list ] && [ -n "${ZFS_GONE:-}" ]; then
     for a in "$@"; do for g in $ZFS_GONE; do [ "$a" = "$g" ] && exit 1; done; done
 fi
@@ -914,6 +920,8 @@ out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
 check "writers: a failed revocation keeps the grant's pauses" "lab1|1" "$(pw_tag puller)|$rc"
 if has "STAY PAUSED" "$out"; then ok "writers: ...and says how to lift them"
 else bad "writers: ...and says how to lift them" "$out"; fi
+# The failed revocation above is pending (REV-20261016-147): finish it before the next grant.
+out="$(dr --deny-restore=lab1)"; check "writers: ...and its retry, once unallow works, returns 0" "0" "$?"
 # ...but a dataset that is GONE has no delegation left to revoke.
 dr --allow-restore=lab1 >/dev/null
 out="$(ZFS_FAIL_UNALLOW=1 ZFS_GONE="hdd/a hdd/a/child hdd/restore" dr --deny-restore=lab1)"
@@ -961,6 +969,109 @@ if has "unallow -u zfsbackup-pve9 receive,rollback,create,canmount,mountpoint,mo
 else bad "namespace: revoking takes the permission back" "$trace"; fi
 if has "destroy" "$trace"; then bad "namespace: ...and destroys nothing -- recovered data stays" "$trace"
 else ok "namespace: ...and destroys nothing -- recovered data stays"; fi
+
+# ---------------------------------------------------------------------------
+# 14. P10 (owner 2026-10-15): what was mounted at grant time is mounted again on
+# --deny-restore. A restore IN PLACE leaves the target unmounted and the delegated
+# account cannot mount ("Insufficient privileges", pve9b); root does it here.
+# ---------------------------------------------------------------------------
+rm -f "$GRANTS"/* 2>/dev/null
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --allow-restore=lab1)"
+check "mount: the grant records what is mounted in the scope" "hdd/a hdd/a/child" \
+    "$(sed -n 's/^RESTORE_GRANT_MOUNTED="\(.*\)"$/\1/p' "$GRANTS/lab1")"
+: > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="" dr --deny-restore=lab1)"
+mt="$(grep '^mount -- ' "$ZFS_TRACE" | tr '\n' '|')"
+check "mount: revoking mounts again what the restore left unmounted, parent first" "mount -- hdd/a|mount -- hdd/a/child|" "$mt"
+if has "mounted again: hdd/a" "$out"; then ok "mount: ...and says so"
+else bad "mount: ...and says so" "$out"; fi
+# Still mounted -> nothing to do; not mounted at grant time -> never mounted by the revocation.
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --allow-restore=lab1)"; : > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --deny-restore=lab1)"
+check "mount: what is still mounted is left alone" "" "$(grep '^mount -- ' "$ZFS_TRACE")"
+out="$(ZFS_MOUNTED="" dr --allow-restore=lab1)"; : > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="" dr --deny-restore=lab1)"
+check "mount: what was NOT mounted when the grant was issued is not mounted by the revocation" "" "$(grep '^mount -- ' "$ZFS_TRACE")"
+
+
+# ---------------------------------------------------------------------------
+# 15. REV-20261016-147: a failed revocation is RETRIED, not forgotten.
+#
+# The grant used to be unlinked before `zfs unallow`; a failed unallow left no
+# record, so the next --deny-restore said "nothing to take back", resumed this
+# host's writers and returned 0 while the account kept its delegation. Sequence:
+# allow -> unallow fails -> fails again -> succeeds. At every step: exit status,
+# unallow calls attempted, grant-owned pause, operator pause, revocation record.
+# ---------------------------------------------------------------------------
+REVD="$GRANTS.revoking"
+rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD" "$PSTATE"/*
+pw_rec puller 'MANAGED_DATASETS=hdd/a'
+pw_rec manual 'MANAGED_DATASETS=hdd/a/child'
+mkdir -p "$PSTATE/manual"; printf 'PAUSED_AT="2026-10-16 10:00:00"\nPAUSED_REASON="by hand"\n' > "$PSTATE/manual/paused"
+rv_state() {   # <rc> -> "rc|unallow calls|puller paused|manual paused|grant|record"
+    printf '%s|%s|%s|%s|%s|%s' "$1" "$(grep -c '^unallow ' "$ZFS_TRACE")" \
+        "$(pw_tag puller)" "$([ -e "$PSTATE/manual/paused" ] && echo manual || echo -)" \
+        "$([ -e "$GRANTS/lab1" ] && echo grant || echo -)" "$([ -e "$REVD/lab1" ] && echo record || echo -)"
+}
+: > "$ZFS_TRACE"
+dr --allow-restore=lab1 >/dev/null; rc=$?
+check "retry: allow pauses the writer and writes the grant" "0|0|lab1|manual|grant|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out1="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+# 3 unallows: hdd/a, hdd/a/child, hdd/restore -- all exist in the stub.
+check "retry: a failed revocation -- rc 1, pauses kept, declaration gone, record kept" "1|3|lab1|manual|-|record" "$(rv_state $rc)"
+if has "revoked:      receive" "$out1"; then bad "retry: ...and never claims the scope was revoked" "$out1"
+else ok "retry: ...and never claims the scope was revoked"; fi
+out="$(dr --allow-restore=lab1)"; rc=$?
+if [ "$rc" -ne 0 ] && has "has not finished revoking" "$out" && [ ! -e "$GRANTS/lab1" ]; then
+    ok "retry: a new grant is refused while the revocation is pending"
+else bad "retry: a new grant is refused while the revocation is pending" "rc=$rc $out"; fi
+: > "$ZFS_TRACE"
+out2="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+check "retry: a second failure RETRIES the revocation and stays fail-closed" "1|3|lab1|manual|-|record" "$(rv_state $rc)"
+if has "nothing to take back" "$out2"; then bad "retry: ...without the 'nothing to take back' no-op" "$out2"
+else ok "retry: ...without the 'nothing to take back' no-op"; fi
+: > "$ZFS_TRACE"
+out3="$(dr --deny-restore=lab1)"; rc=$?
+check "retry: a successful retry revokes, then resumes only the grant's pause, and clears the record" "0|3||manual|-|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out4="$(dr --deny-restore=lab1)"; rc=$?
+check "retry: a repeated denial after success is a harmless no-op" "0|0||manual|-|-" "$(rv_state $rc)"
+
+# THE ALREADY-PUBLISHED PARTIAL STATE (criterion 4): grant file gone, no record --
+# what the old code left after a failed revocation -- and the grant's pause still
+# there. Absence of the file is not proof: revoke from the manifest first.
+mkdir -p "$PSTATE/puller"; printf 'PAUSED_AT="x"\nPAUSED_REASON="restore grant lab1"\nPAUSED_BY_GRANT="lab1"\n' > "$PSTATE/puller/paused"
+: > "$ZFS_TRACE"
+out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"; rc=$?
+check "legacy: orphaned grant pause + failed revocation -> rc 1, pause kept, revocation attempted" "1|3|lab1|manual|-|-" "$(rv_state $rc)"
+: > "$ZFS_TRACE"
+out="$(dr --deny-restore=lab1)"; rc=$?
+check "legacy: ...and once the revocation works, the pause is resumed" "0|3||manual|-|-" "$(rv_state $rc)"
+
+# THE RECORD CARRIES WHAT WAS DELEGATED (criterion 1): the account is written into it
+# at withdrawal, so a retry still revokes the right account on the right scope when
+# the pairing manifest has gone away in between.
+rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD"
+dr --allow-restore=lab1 >/dev/null
+out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"
+check "record: the withdrawal writes the account into the revocation record" "zfsbackup-pve9" \
+    "$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)"
+mv "$PEERS/lab1.conf" "$PEERS/lab1.conf.away"; : > "$ZFS_TRACE"
+out="$(dr --deny-restore=lab1)"; rc=$?
+check "record: with the manifest gone, the retry revokes from the record -- same account, same scope" \
+    "0|unallow -u zfsbackup-pve9 receive,rollback,create,canmount,mountpoint -- hdd/a" \
+    "$rc|$(grep '^unallow ' "$ZFS_TRACE" | head -1)"
+# NO FACTS AT ALL (legacy state, manifest gone): refuse, keep the pause, say the manual way.
+mkdir -p "$PSTATE/puller"; printf 'PAUSED_BY_GRANT="lab1"\n' > "$PSTATE/puller/paused"; : > "$ZFS_TRACE"
+out="$(dr --deny-restore=lab1)"; rc=$?
+check "nofacts: no record and no manifest -> rc 1, nothing revoked, pause kept" "1|0|lab1" \
+    "$rc|$(grep -c '^unallow ' "$ZFS_TRACE")|$(pw_tag puller)"
+if has "remove the delegation by hand" "$out" && ! has "run the same command again" "$out"; then
+    ok "nofacts: ...names the manual way, not a retry that cannot work"
+else bad "nofacts: ...names the manual way, not a retry that cannot work" "$out"; fi
+mv "$PEERS/lab1.conf.away" "$PEERS/lab1.conf"
+rm -f "$CLI"/*.conf; rm -rf "$PSTATE"/* "$REVD"
 
 
 echo "--------------------------------------------"
