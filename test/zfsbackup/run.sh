@@ -75,8 +75,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig|pairctl) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig | pairctl)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13416,6 +13416,109 @@ else
 fi
 
 fi   # --- koniec sekcji replicamonitor ---
+
+if want pairctl; then
+# ============================================================================
+# THE CONTROL VERBS GO THROUGH A DISABLED GATE (2026-10-16, lab pve10 -> pve9b).
+#
+# After `disable-client pve9b`, `enable-client pve9b` died with "cannot reach
+# ... signed a scope" BEFORE it sent `PAIR-CONTROL enable`: the loader asked
+# the source for its committed scope over the DATA plane, and a DISABLED gate
+# refuses every data-plane command with rc 93. Section 43 never saw it because
+# it stubs load_client_and_connection whole. Here the loader is the REAL one
+# and only ssh is replaced -- by a gate with the same rule as
+# zfs-pair-gate.sh: PAIR-CONTROL status/enable/disable always answer, anything
+# else exits 93 while disabled. Both dataset shapes that query the source are
+# covered: an explicit list (has_committed_scope) and a mode-based
+# relationship with no list (fetch_committed_scope).
+# ============================================================================
+PC="$WORK/pairctl"
+pc_setup() {   # <shape: explicit|mode>
+    rm -rf "$PC"; mkdir -p "$PC/clients" "$PC/peers" "$PC/keys" "$PC/rel/pc"
+    printf 'CLIENT_NAME=pc\nSTATE=active\nPEER_HOST=10.9.9.7\nACTIVE_ENDPOINT=10.9.9.7:22\n' > "$PC/clients/pc.conf"
+    if [ "$1" = mode ]; then
+        printf 'PEER_SAVED_ACCOUNT=zfsbackup\nPEER_SAVED_TARGET=tank/backups\nPEER_SAVED_MODE=sync\n' > "$PC/peers/10.9.9.7.conf"
+    else
+        printf 'PEER_SAVED_ACCOUNT=zfsbackup\nPEER_SAVED_TARGET=tank/backups\nPEER_SAVED_DATASETS="tank/a"\n' > "$PC/peers/10.9.9.7.conf"
+    fi
+    printf 'PAUSED_AT="x"\n' > "$PC/rel/pc/paused"
+    : > "$PC/disabled"; : > "$PC/calls"
+}
+pc_run() {   # <shell code to run against the fixture> -> stdout+stderr, rc
+    ( set +e
+      id() { echo 0; }
+      ensure_alias_known_hosts() { echo /dev/null; }
+      CLIENTS_DIR="$PC/clients"; PEER_STATE_DIR="$PC/peers"; PEER_KEY_DIR="$PC/keys"
+      RELATIONSHIPS_DIR="$PC/rel"
+      ssh() {
+          local c="${*: -1}"
+          printf '%s\n' "$c" >> "$PC/calls"
+          case "$c" in
+              "PAIR-CONTROL status")
+                  if [ -f "$PC/disabled" ]; then printf 'PAIR_STATE=DISABLED\nPAIR_LABEL=pc\n'
+                  else printf 'PAIR_STATE=ACTIVE\nPAIR_LABEL=pc\n'; fi; return 0 ;;
+              "PAIR-CONTROL enable")  rm -f "$PC/disabled"; printf 'PAIR_STATE=ACTIVE\n'; return 0 ;;
+              "PAIR-CONTROL disable") : > "$PC/disabled"; printf 'PAIR_STATE=DISABLED\n'; return 0 ;;
+          esac
+          if [ -f "$PC/disabled" ]; then
+              echo "PAIR_DISABLED: relationship pc is disabled by administrator" >&2
+              return 93
+          fi
+          return 1
+      }
+      eval "$1" ) 2>&1
+}
+pc_dataplane() { grep -v '^PAIR-CONTROL ' "$PC/calls" | tr '\n' ';'; }
+
+for pc_shape in explicit mode; do
+    # 1. enable-client lifts a disable: the peer is enabled, the local pause
+    #    goes, and the gate never saw a data-plane command.
+    pc_setup "$pc_shape"
+    out=$(pc_run 'cmd_enable_client pc'); rc=$?
+    if [ "$rc" -eq 0 ] && [ ! -f "$PC/disabled" ] && [ ! -e "$PC/rel/pc/paused" ] \
+       && [ -z "$(pc_dataplane)" ] && grep -qx 'PAIR-CONTROL enable' "$PC/calls"; then
+        ok "pairctl[$pc_shape]: enable-client lifts a DISABLED peer without a data-plane command"
+    else
+        bad "pairctl[$pc_shape]: enable-client lifts a DISABLED peer without a data-plane command" \
+            "rc=$rc disabled=$([ -f "$PC/disabled" ] && echo STILL || echo gone) paused=$([ -e "$PC/rel/pc/paused" ] && echo STILL || echo gone)" \
+            "calls=$(tr '\n' ';' < "$PC/calls")" "$out"
+    fi
+
+    # 2. disable-client re-run against a peer already DISABLED (the documented
+    #    safe retry) succeeds instead of dying on the scope query.
+    pc_setup "$pc_shape"
+    out=$(pc_run 'cmd_disable_client pc'); rc=$?
+    if [ "$rc" -eq 0 ] && [ -f "$PC/disabled" ] && [ -z "$(pc_dataplane)" ] && printf '%s' "$out" | grep -q "is DISABLED"; then
+        ok "pairctl[$pc_shape]: disable-client retried against a DISABLED peer confirms it"
+    else
+        bad "pairctl[$pc_shape]: disable-client retried against a DISABLED peer confirms it" \
+            "rc=$rc calls=$(tr '\n' ';' < "$PC/calls")" "$out"
+    fi
+
+    # 3. the status reader reports the peer as DISABLED -- the moment it
+    #    matters most -- not UNKNOWN.
+    pc_setup "$pc_shape"
+    out=$(pc_run 'status_json_record "$CLIENTS_DIR/pc.conf" 1')
+    if printf '%s' "$out" | grep -q '"peer_pair_state":"DISABLED"'; then
+        ok "pairctl[$pc_shape]: status --json reads a DISABLED peer as DISABLED, not UNKNOWN"
+    else
+        bad "pairctl[$pc_shape]: status --json reads a DISABLED peer as DISABLED, not UNKNOWN" "$out"
+    fi
+
+    # 4. POSITIVE CONTROL -- the refusal #101 put on anything that ACTS on
+    #    datasets still stands: the plain loader, unflagged, refuses a source
+    #    it cannot ask. Without this the three passes above would also be
+    #    produced by deleting the refusal.
+    pc_setup "$pc_shape"
+    out=$(pc_run 'load_client_and_connection "$CLIENTS_DIR/pc.conf"; echo LOADED'); rc=$?
+    if ! printf '%s' "$out" | grep -q '^LOADED$' && [ -n "$(pc_dataplane)" ]; then
+        ok "pairctl[$pc_shape]: the data-plane loader still refuses a source whose scope it cannot ask"
+    else
+        bad "pairctl[$pc_shape]: the data-plane loader still refuses a source whose scope it cannot ask" \
+            "calls=$(tr '\n' ';' < "$PC/calls")" "$out"
+    fi
+done
+fi   # --- koniec sekcji pairctl ---
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

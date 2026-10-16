@@ -10188,6 +10188,20 @@ resolve_mode_datasets() {
     # Boundary, stated honestly: the list is resolved at seed/activate time.
     # A child dataset created on the source LATER joins at the next
     # re-activation, not automatically at the next cron tick.
+    #
+    # PAIR_CONTROL_ONLY: the caller talks to the peer's gate and to nothing
+    # else -- disable-client, enable-client, and the two status views that read
+    # PAIR-CONTROL status. None of them acts on a dataset, so the list is not
+    # theirs to resolve, and asking the source for its scope is a DATA-PLANE
+    # command, which the gate refuses (rc 93) while the relationship is
+    # DISABLED. Measured on lab pve10 -> pve9b, 2026-10-16: enable-client died
+    # below with "cannot reach ... signed a scope" before it ever sent
+    # `PAIR-CONTROL enable` -- a disable could not be lifted from the collector,
+    # and status reported the peer's state as unknown exactly while it was
+    # DISABLED. The recorded list is left as it is and those callers never read
+    # it; every caller that ACTS on datasets leaves the flag unset and keeps
+    # the #101 refusal below.
+    [ "${PAIR_CONTROL_ONLY:-0}" -eq 1 ] && return 0
     if [ -n "${PEER_SAVED_MODE:-}" ]; then
         [ -z "${PEER_SAVED_DATASETS:-}" ] || return 0
     else
@@ -12819,7 +12833,9 @@ cmd_disable_client() {
     [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    load_client_and_connection "$cpath"
+    # Control plane only: a retry against a peer that is already DISABLED must
+    # not die on the scope query the gate refuses.
+    PAIR_CONTROL_ONLY=1 load_client_and_connection "$cpath"
 
     # ORDER (ADR-0012): local pause FIRST, so no scheduled job can start a
     # transfer in the window between deciding to disable and the peer knowing
@@ -12862,7 +12878,10 @@ cmd_enable_client() {
     [ "$(id -u)" = 0 ] || die "pause state lives under $RELATIONSHIPS_DIR -- run as root"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
-    load_client_and_connection "$cpath"
+    # Control plane only (see PAIR_CONTROL_ONLY in resolve_mode_datasets): the
+    # scope query is a data-plane command, and while the peer is DISABLED it is
+    # refused -- this verb used to die there, before sending the enable.
+    PAIR_CONTROL_ONLY=1 load_client_and_connection "$cpath"
 
     # ORDER (ADR-0012), the mirror image: the REMOTE block goes first and is
     # verified, and only then does the local pause lift. Clearing the local
@@ -17478,7 +17497,7 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
         # copy of this probe: the loader dies on a record without a manifest,
         # and here that is the UNKNOWN this view reports, not a reason to abort.
         peerstate=$( die_confine_to_subshell
-                     load_client_and_connection "$1" >/dev/null 2>&1 \
+                     PAIR_CONTROL_ONLY=1 load_client_and_connection "$1" >/dev/null 2>&1 \
                      && peer_pair_state >/dev/null 2>&1 \
                      && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
         [ -n "$peerstate" ] || peerstate="UNKNOWN"
@@ -17634,7 +17653,7 @@ cmd_status() {
     # end the substitution and nothing else.
     local peerstate
     peerstate=$( die_confine_to_subshell
-                 load_client_and_connection "$cpath" >/dev/null 2>&1 \
+                 PAIR_CONTROL_ONLY=1 load_client_and_connection "$cpath" >/dev/null 2>&1 \
                  && peer_pair_state >/dev/null 2>&1 \
                  && printf '%s' "$PEER_PAIR_STATE" ) || peerstate=""
 
