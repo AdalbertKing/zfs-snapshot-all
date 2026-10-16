@@ -2704,6 +2704,28 @@ esac
 
 . "$DIR/relpolicy.sh"
 
+# ---- P9: the "not mounted" report names each dataset once -----------------------
+# RESTORE_LANDED holds the root and each child; every entry is listed with -r, so the
+# owner's run on pve10 (2026-10-15) printed adam and ewa twice.
+MR="$WORK/mr"; mkdir -p "$MR"
+printf '#!/bin/sh\nprintf "hdd/home\\tfilesystem\\ton\\tno\\nhdd/home/adam\\tfilesystem\\ton\\tno\\nhdd/home/ewa\\tfilesystem\\ton\\tno\\n"\n' > "$MR/ssh"
+chmod +x "$MR/ssh"
+mr_out="$( log() { shift; printf '%s\n' "$*"; }
+           eval "$(product_fn "$ZB" restore_report_mount_state)"
+           RESTORE_LANDED=("acct@10.0.0.9:hdd/home" "acct@10.0.0.9:hdd/home/adam" "acct@10.0.0.9:hdd/home/ewa")
+           PATH="$MR:$PATH" restore_report_mount_state 2>&1 )"
+mr_n="$(printf '%s\n' "$mr_out" | grep -c 'the data is there')"
+if [ "$mr_n" = 3 ] && [ "$(printf '%s\n' "$mr_out" | grep -c 'hdd/home/adam (canmount')" = 1 ]; then
+    ok "mount report: root and two children, each named once (P9)"
+else
+    bad "mount report: each dataset once (P9)" "lines=$mr_n" "$mr_out"
+fi
+if printf '%s' "$mr_out" | grep -q 'deploy.sh --deny-restore='; then
+    ok "mount report: for a remote target it names the remount -- the grant's revocation (P10)"
+else
+    bad "mount report: names the remount on --deny-restore (P10)" "$mr_out"
+fi
+
 # ---- P8: the guid map behind the recursive identity check ----------------------
 # Inline in restore_one until 2026-10-15, with a literal line break inside the awk
 # printf string: awk rejected the program ("runaway string constant", three times in

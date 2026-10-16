@@ -49,6 +49,12 @@ printf '%s
 # ZFS_GONE="<dataset> ...": those datasets do not exist (`zfs list` fails on them).
 # ZFS_FAIL_UNALLOW=1: every `zfs unallow` fails.
 [ "$1" = unallow ] && [ -n "${ZFS_FAIL_UNALLOW:-}" ] && exit 1
+# ZFS_MOUNTED="<dataset> ...": `zfs get -H -o value mounted -- X` says yes for those, no otherwise.
+if [ "$1" = get ] && [ "${5:-}" = mounted ]; then
+    for a in "$@"; do last="$a"; done
+    for m in ${ZFS_MOUNTED:-}; do [ "$last" = "$m" ] && { echo yes; exit 0; }; done
+    echo no; exit 0
+fi
 if [ "$1" = list ] && [ -n "${ZFS_GONE:-}" ]; then
     for a in "$@"; do for g in $ZFS_GONE; do [ "$a" = "$g" ] && exit 1; done; done
 fi
@@ -961,6 +967,29 @@ if has "unallow -u zfsbackup-pve9 receive,rollback,create,canmount,mountpoint,mo
 else bad "namespace: revoking takes the permission back" "$trace"; fi
 if has "destroy" "$trace"; then bad "namespace: ...and destroys nothing -- recovered data stays" "$trace"
 else ok "namespace: ...and destroys nothing -- recovered data stays"; fi
+
+# ---------------------------------------------------------------------------
+# 14. P10 (owner 2026-10-15): what was mounted at grant time is mounted again on
+# --deny-restore. A restore IN PLACE leaves the target unmounted and the delegated
+# account cannot mount ("Insufficient privileges", pve9b); root does it here.
+# ---------------------------------------------------------------------------
+rm -f "$GRANTS"/* 2>/dev/null
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --allow-restore=lab1)"
+check "mount: the grant records what is mounted in the scope" "hdd/a hdd/a/child" \
+    "$(sed -n 's/^RESTORE_GRANT_MOUNTED="\(.*\)"$/\1/p' "$GRANTS/lab1")"
+: > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="" dr --deny-restore=lab1)"
+mt="$(grep '^mount -- ' "$ZFS_TRACE" | tr '\n' '|')"
+check "mount: revoking mounts again what the restore left unmounted, parent first" "mount -- hdd/a|mount -- hdd/a/child|" "$mt"
+if has "mounted again: hdd/a" "$out"; then ok "mount: ...and says so"
+else bad "mount: ...and says so" "$out"; fi
+# Still mounted -> nothing to do; not mounted at grant time -> never mounted by the revocation.
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --allow-restore=lab1)"; : > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="hdd/a hdd/a/child" dr --deny-restore=lab1)"
+check "mount: what is still mounted is left alone" "" "$(grep '^mount -- ' "$ZFS_TRACE")"
+out="$(ZFS_MOUNTED="" dr --allow-restore=lab1)"; : > "$ZFS_TRACE"
+out="$(ZFS_MOUNTED="" dr --deny-restore=lab1)"
+check "mount: what was NOT mounted when the grant was issued is not mounted by the revocation" "" "$(grep '^mount -- ' "$ZFS_TRACE")"
 
 
 echo "--------------------------------------------"

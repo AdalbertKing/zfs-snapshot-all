@@ -2766,6 +2766,36 @@ restore_grant_delegate() {   # <account> <datasets, space-separated>
 # `mount` on top of the scope's modes: on a dataset the account has no other
 # delegation for, `zfs create` and `zfs receive` of a new child need it.
 RESTORE_NS_PERMS="${RESTORE_NS_PERMS:-$RESTORE_ZFS_PERMS,mount}"
+# WHAT WAS MOUNTED WHEN THE GRANT WAS ISSUED (P10, owner 2026-10-15). A restore IN PLACE
+# leaves the target's datasets unmounted (the stream carries canmount=noauto; the
+# rewind/replace unmounts), and the delegated account cannot mount them back -- measured
+# on pve9b: "Insufficient privileges". Root on this machine can, and root comes back
+# here anyway to take the grant back. So the grant records the mounted ones and
+# --deny-restore mounts again those the restore left unmounted. Nothing else is mounted:
+# what was not mounted before stays as the recovery left it.
+restore_grant_mounted_now() {   # <datasets, space-separated> -> the mounted filesystems among them
+    local _m_ds _m
+    for _m_ds in $1; do
+        _m="$(zfs get -H -o value mounted -- "$_m_ds" 2>/dev/null)"
+        [ "$_m" = yes ] && printf '%s\n' "$_m_ds"
+    done | tr '\n' ' ' | sed 's/ $//'
+}
+restore_grant_remount() {   # <datasets recorded as mounted>
+    local _r_ds _r
+    # Parents before children: a child mounts under its parent's mountpoint.
+    for _r_ds in $(printf '%s\n' $1 | awk -F/ '{ print NF "\t" $0 }' | sort -n | cut -f2); do
+        zfs list -H -o name -- "$_r_ds" >/dev/null 2>&1 \
+            || { warn "  was mounted at grant time, now gone: $_r_ds -- nothing to mount"; continue; }
+        _r="$(zfs get -H -o value mounted -- "$_r_ds" 2>/dev/null)"
+        [ "$_r" = no ] || continue
+        if zfs mount -- "$_r_ds" 2>/dev/null; then
+            log "  mounted again: $_r_ds (it was mounted when the grant was issued)"
+        else
+            warn "  could not mount $_r_ds again -- check: zfs get canmount,mountpoint $_r_ds"
+        fi
+    done
+}
+
 restore_grant_namespaces() {   # <datasets, space-separated> -> "<pool>/restore" per pool, one per line
     local _ns_ds
     for _ns_ds in $1; do printf '%s/restore\n' "${_ns_ds%%/*}"; done | sort -u
@@ -2895,6 +2925,8 @@ do_allow_restore() {
         printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
         # Where a restore BESIDE the original may land (restore_grant_namespaces).
         printf 'RESTORE_GRANT_NAMESPACES="%s"\n' "$(restore_grant_namespaces "$RESTORE_GRANT_DATASETS" | tr '\n' ' ' | sed 's/ $//')"
+        # What --deny-restore mounts again (restore_grant_mounted_now).
+        printf 'RESTORE_GRANT_MOUNTED="%s"\n' "$(restore_grant_mounted_now "$RESTORE_GRANT_DATASETS")"
     } > "$tmp" || { rm -f "$tmp"; die "could not write the grant"; }
     chown root:root "$tmp" 2>/dev/null || :
     chmod 0644 "$tmp" 2>/dev/null || :
@@ -2944,6 +2976,9 @@ do_deny_restore() {
         RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
         RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
     fi
+    # P10: what was mounted when the grant was issued -- read before the file goes.
+    local _rd_mounted
+    _rd_mounted="$(sed -n 's/^RESTORE_GRANT_MOUNTED="\(.*\)"$/\1/p' "$gpath" 2>/dev/null | head -1)"
     rm -f "$gpath" || die "could not remove $gpath"
     # Both halves, and the delegation first: while it is still delegated the
     # account CAN act, so removing that is the half that actually closes the
@@ -2975,6 +3010,9 @@ do_deny_restore() {
         _rd_open=1
     fi
 
+    # Mounting needs root, not the collector's delegation, so it does not wait on the
+    # revocation's outcome: the data is the operator's either way.
+    [ -z "$_rd_mounted" ] || restore_grant_remount "$_rd_mounted"
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
     # AFTER the revocation, and only when it is known to have happened:
     # resuming this host's own jobs while the collector could still write

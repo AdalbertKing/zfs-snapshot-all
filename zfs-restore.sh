@@ -2863,7 +2863,9 @@ restore_report_backup_cost() {
 # ZVOLs are skipped -- they have no mountpoint and nothing to say.
 restore_report_mount_state() {
     [ "${#RESTORE_LANDED[@]}" -gt 0 ] || return 0
-    local d peer ds line name typ cm mnt said=0
+    local d peer ds line name typ cm mnt said=0 any_peer="" seen=" "
+    # ONCE PER DATASET (P9, owner 2026-10-15): RESTORE_LANDED holds the root and each
+    # child on its own, and every entry is listed with -r, so children came out twice.
     for d in "${RESTORE_LANDED[@]}"; do
         case "$d" in
             *:*) peer="${d%%:*}"; ds="${d#*:}" ;;
@@ -2884,6 +2886,9 @@ restore_report_mount_state() {
         while IFS=$'\t' read -r name typ cm mnt; do
             [ "$typ" = filesystem ] || continue
             [ "$mnt" = no ] || continue
+            case "$seen" in *" ${peer}:${name} "*) continue ;; esac
+            seen="$seen${peer}:${name} "
+            [ -n "$peer" ] && any_peer="$peer"
             if [ "$said" -eq 0 ]; then
                 log 0 "restore: ---- recovered, and not mounted ----"
                 said=1
@@ -2895,6 +2900,10 @@ restore_report_mount_state() {
     log 0 "restore: canmount=noauto travels in the stream from the copy, where it is correct -- a collector must not mount twenty machines' filesystems over each other. On the machine being recovered it is usually not what you want."
     log 0 "restore: mount one now with:  zfs mount <dataset>    and to have it come back at boot:  zfs set canmount=on <dataset>"
     log 0 "restore: not done for you on purpose: a recovery is not the moment to mount something without being asked."
+    # P10 (owner 2026-10-15): the machine recovered ONTO remounts, as root, what was
+    # mounted when it issued the grant -- when the grant is taken back. The delegated
+    # account cannot mount (measured on pve9b: "Insufficient privileges").
+    [ -z "$any_peer" ] || log 0 "restore: on ${any_peer#*@}, what was mounted before the grant is mounted again when the grant is taken back:  deploy.sh --deny-restore=<the name this collector has there, usually $(hostname -s 2>/dev/null || hostname)>"
 }
 
 # THE SCHEDULE KEEPS RUNNING WHILE A RECOVERY IS IN PROGRESS.
