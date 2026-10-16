@@ -268,7 +268,7 @@ reset_world
 mkdir -p "$WORK/rel/clu"; printf 'PAUSED_AT=x\n' > "$WORK/rel/clu/paused"
 run -- -s -M -L clu -m lab_ root@pve1:tank/vm-100-disk-0
 check "-s -M on a PAUSED label: still refused (rc 1), not a quiet SKIPPED" \
-    bash -c "[ $rc -eq 1 ] && ! printf '%s' \"\$1\" | grep -q SKIPPED && printf '%s' \"\$1\" | grep -q -- '-M cannot apply'" _ "$out"
+    bash -c "[ $rc -eq 1 ] && [ ! -s '$TRACE' ] && ! printf '%s' \"\$1\" | grep -q SKIPPED && printf '%s' \"\$1\" | grep -q -- '-M cannot apply'" _ "$out"
 rm -rf "$WORK/rel/clu"
 
 # ---- 11. no mbuffer, no compressor anywhere on PATH --------------------------

@@ -1004,12 +1004,14 @@ Owner-authorized refreezes:
   no schema change. Quiesce unchanged: clean window = the snapshots
   (QUIESCE_SNAPPED, no second one); ,degrade = crash set and exit 8; strict =
   rc 1; a local source with -q refused, now also under -n.
-  Without -s nothing moves: the only edits outside the new paths are
-  guards (`SNAPSHOT_ONLY -eq 0`) on the mbuffer check and the remote
-  compression default, one `case` before the getopts dispatch that only
-  records letters, and `SNAPSHOT_ONLY -eq 0` on the unrecursed-children warning. Suite: test/snaponly (64 assertions; 2 PASS / 62 FAIL against
-  v2.74). Under -s the pull's "children are not sent" warning is skipped:
-  its wording claims a transfer (found on the live proof).
+  Without -s nothing moves. The edits outside the new paths: `s` in
+  OPTSTRING and in the usage list, the VERSION bump, one `case` inside the
+  getopts loop (before the dispatch `case`) that only records letters, and
+  `SNAPSHOT_ONLY -eq 0` guards on the mbuffer check, the remote compression
+  default and the unrecursed-children warning. That warning is skipped under
+  -s because its wording ("children are NOT sent") claims a transfer -- found
+  on the live proof. Suite: test/snaponly (64 assertions; 2 PASS / 62 FAIL
+  against v2.74).
   twin: NOT ported, deliberately (the review: "Leaving `snapsend.sh` unchanged
   is justified"). snapsend's existing no-target mode already snapshots a LOCAL
   source; a remote source is the pull engine's job. No twinned function moved,
