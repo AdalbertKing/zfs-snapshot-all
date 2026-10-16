@@ -2716,11 +2716,30 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # because `zfs snapshot -r parent@snap` covers the tree atomically by
         # itself. Mirrors quiesce_scope()'s local reasoning.
         if [ $RECURSIVE -eq 1 ]; then
-            while IFS= read -r _qds; do
-                [ -n "$_qds" ] && QSCOPE+=("$_qds")
-            done < <(remote_list "$REMOTE_USER" "$REMOTE_HOST" \
+            # The listing's status is KEPT (REV-20261016-148 F2). This used to
+            # be `done < <(remote_list ...)`, and a process substitution drops
+            # its exit status: a failed listing became an EMPTY scope, the
+            # remote window then froze nothing and still took
+            # `zfs snapshot -r parent@...` under the normal name, rc 0 -- an
+            # unquiesced set reported as quiesced, even under ,strict. A
+            # failure (also one after partial output) and an empty answer
+            # (a recursive listing always names the root itself) both refuse
+            # here, before the window and before any snapshot. Applies to the
+            # ordinary pull as well as to -s: same block, same lie.
+            _qlist=$(remote_list "$REMOTE_USER" "$REMOTE_HOST" \
                         "expanding '$src_path' to find the guests to quiesce" \
-                        "zfs list -H -o name -r '$src_path'")
+                        "zfs list -H -o name -r '$src_path'") || {
+                log 0 "Quiesce: the guests under '$src_path' could not be listed on $REMOTE_HOST (reason above) -- refusing: nothing frozen, no snapshot taken."
+                exit 1
+            }
+            _qn=0
+            while IFS= read -r _qds; do
+                [ -n "$_qds" ] && { QSCOPE+=("$_qds"); _qn=$((_qn + 1)); }
+            done <<< "$_qlist"
+            if [ "$_qn" -eq 0 ]; then
+                log 0 "Quiesce: listing '$src_path' on $REMOTE_HOST returned nothing (not even the dataset itself) -- refusing: nothing frozen, no snapshot taken."
+                exit 1
+            fi
         else
             QSCOPE+=("$src_path")
         fi

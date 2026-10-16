@@ -56,6 +56,11 @@ case "$1" in
         case " $* " in
             *" -r "*)
                 [ "${ZFS_LIST_FAIL:-0}" = 1 ] && { echo "listing failed" >&2; exit 2; }
+                # A failure AFTER partial output: the first line, then rc 2.
+                if [ "${ZFS_LIST_FAIL:-0}" = partial ]; then
+                    awk -v d="$last" '$0 == d || index($0, d "/") == 1' "$ZFS_DATASETS" | head -n 1
+                    echo "listing failed half-way" >&2; exit 2
+                fi
                 awk -v d="$last" '$0 == d || index($0, d "/") == 1' "$ZFS_DATASETS"
                 exit 0 ;;
         esac
@@ -93,18 +98,35 @@ echo "SSH $dest $cmd" >> "$TRACE"
 [ "${SSH_UNREACH:-0}" = 1 ] && { echo "ssh: connect to host: Connection timed out" >&2; exit 255; }
 case "$cmd" in
     "bash -s --"*)
-        cat >/dev/null
         echo "QUIESCE-WINDOW $cmd" >> "$TRACE"
+        # SSH_RUN_PAYLOAD=1 runs the ACTUAL streamed quiesce script (stdin)
+        # against the zfs/qm stubs, instead of choosing its return code.
+        [ "${SSH_RUN_PAYLOAD:-0}" = 1 ] && exec env REMOTE_SIDE=1 bash -c "$cmd"
+        cat >/dev/null
         exit "${SSH_QUIESCE_RC:-0}" ;;
     *machine-id*) echo "remote-machine-id"; exit 0 ;;
     "hostname -f") echo "remote.example"; exit 0 ;;
 esac
 REMOTE_SIDE=1 bash -c "$cmd"
 EOF
+# The real quiesce payload refuses a non-root account; the fake SOURCE host
+# runs as root, this host keeps its real id(1).
+_real_id="$(command -v id)"
+printf '#!/bin/bash
+if [ -n "${REMOTE_SIDE:-}" ] && [ "${1:-}" = -u ] && [ $# -eq 1 ]; then echo 0; exit 0; fi
+exec "%s" "$@"
+' "$_real_id" > "$STUB/id"
+# qm for the real quiesce payload: no guests on this fake host.
+printf '#!/bin/bash
+echo "QM $*" >> "$TRACE"
+exit 0
+' > "$STUB/qm"
 for _t in mbuffer zstd pigz; do
     printf '#!/bin/bash\necho "%s $*" >> "$TRACE"\ncat\n' "${_t^^}" > "$STUB/$_t"
 done
 command -v flock >/dev/null 2>&1 || printf '#!/bin/bash\nexit 0\n' > "$STUB/flock"
+# The real quiesce payload detaches its deadman with setsid(1); Git Bash has none.
+command -v setsid >/dev/null 2>&1 || printf '#!/bin/bash\nexec "$@"\n' > "$STUB/setsid"
 chmod +x "$STUB"/*
 
 # A PATH with NO mbuffer/zstd/pigz anywhere, for the "does not need them" case.
@@ -308,6 +330,24 @@ reset_world
 run -- -n -s -q agent -m lab_ tank/vm-100-disk-0
 check "-n -s -q on a LOCAL source: refused too, no plan" \
     bash -c "[ $rc -eq 1 ] && ! printf '%s' \"\$1\" | grep -q 'PLAN='" _ "$out"
+
+# ---- 12b. -r quiesce scope: a failed listing must not become an empty scope
+# (REV-20261016-148 F2). The ssh stub RUNS the real streamed quiesce payload
+# here (SSH_RUN_PAYLOAD=1), so a success below is the script's own verdict.
+reset_world
+run SSH_RUN_PAYLOAD=1 -- -s -r -q agent,strict -m lab_ root@pve1:tank
+check "control: -s -r -q, listing OK: rc 0, the real payload gets all 5 scope members and 1 snapshot root"     bash -c "[ $rc -eq 0 ] && grep -q '^QUIESCE-WINDOW bash -s -- agent 120 -r 5 5 tank ' '$TRACE' && [ \"\$(grep -c '^RZFS snapshot' '$TRACE')\" -eq 1 ] && grep -q '^RZFS snapshot -r tank@lab_' '$TRACE' && grep -q '\"status\":\"snapshot_only\"' '$WORK/stats.log'"
+for _lf in 1 partial; do
+    reset_world
+    run SSH_RUN_PAYLOAD=1 ZFS_LIST_FAIL=$_lf -- -s -r -q agent,strict -m lab_ root@pve1:tank
+    check "-s -r -q, scope listing fails ($_lf): rc 1, no quiesce payload, no snapshot, no success stat"         bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && ! grep -q '\"status\":\"snapshot_only\"' '$WORK/stats.log' 2>/dev/null && printf '%s' \"\$1\" | grep -q 'could not be listed'" _ "$out"
+done
+reset_world
+run SSH_RUN_PAYLOAD=1 -- -s -r -q agent,strict -m lab_ root@pve1:tank/nope
+check "-s -r -q, scope listing answers EMPTY: rc 1, no quiesce payload, no snapshot"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && printf '%s' \"\$1\" | grep -q 'returned nothing'" _ "$out"
+reset_world
+run SSH_RUN_PAYLOAD=1 ZFS_LIST_FAIL=1 -- -r -q agent,strict -m lab_ root@pve1:tank backup
+check "ordinary pull -r -q, scope listing fails: refused the same way (rc 1, no payload, no snapshot, the listing named)"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && printf '%s' \"\$1\" | grep -q 'could not be listed'" _ "$out"
 
 # ---- 13. the ordinary pull is untouched ---------------------------------------
 reset_world
