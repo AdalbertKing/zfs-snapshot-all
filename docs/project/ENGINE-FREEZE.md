@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 984647aae4e9ceb01ed77970f9a37e611c3875cf -->
-<!-- frozen: snapget.sh 100755 8d8f6ad92c021503e22ecd6f708f18299a111f62 -->
+<!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1063,7 +1063,8 @@ Owner-authorized refreezes:
   reproduction; the comment above BACKUP_LANDING claimed the guard "runs
   first in process_dataset"). Now mirror_target calls guest_disk_is_live
   first: running or unknown status -> return 1 with "Mirror (-M) ...:
-  refused ... NOTHING deleted" (the run fails through the existing
+  refused -- the live-guest check did not clear this target ... NOTHING
+  deleted" (the run fails through the existing
   "(mirror)" entry); stopped guest and a dataset that names no guest go on
   unchanged. The early return, receive, P-0 and the mirror policy are
   untouched; the comment is corrected. New suite test/mirrorguest: 9/0;

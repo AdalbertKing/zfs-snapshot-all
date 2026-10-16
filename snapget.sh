@@ -1243,7 +1243,7 @@ mirror_target() {
     # refuses (guest_disk_is_live says why), a stopped guest and a dataset
     # that names no guest go on as before.
     if guest_disk_is_live "$tgt"; then
-        log 0 "Mirror (-M) on '$tgt': refused -- the guest check above did not clear this target, NOTHING deleted"
+        log 0 "Mirror (-M) on '$tgt': refused -- the live-guest check did not clear this target (its reason is the log line before this one), NOTHING deleted"
         return 1
     fi
     src_list=$(get_sorted_snapshots "$src" "$ruser" "$rhost") || {
