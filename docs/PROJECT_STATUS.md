@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: da6ebbf04a84a089 -->
+<!-- status-covers-digest: 1387e89d7f8fe98b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Odzysk na miejsce: ponowne montowanie przy cofnięciu zgody (P10) i raport bez dubli (P9) (2026-10-16; `fix/restore-remount-p10`).**
+  P10 (decyzja właściciela, wariant a): odzysk NA MIEJSCE z odbiorem strumienia zostawia datasety celu odmontowane
+  (test właściciela 10-15: `hdd/home*` na pve9b), a konto delegowane nie może montować (zmierzone na pve9b: „Insufficient
+  privileges”). Teraz `deploy.sh --allow-restore` zapisuje w pliku zgody `RESTORE_GRANT_MOUNTED` (zamontowane datasety
+  zakresu), a `--deny-restore` -- jako root na celu -- montuje z powrotem te z listy, które są odmontowane (rodzic przed
+  dzieckiem); tego, co nie było zamontowane, nie rusza. Raport odzysku na cel zdalny podaje to polecenie. P9: raport
+  „recovered, and not mounted” wypisywał dzieci dwa razy (korzeń i dziecko w `RESTORE_LANDED`, każde z `-r`) -- teraz
+  każdy dataset raz. Testy: `restoregrant` sekcja 14 (zapis listy, montowanie po kolei, zamontowane i niezamontowane
+  zostawione), `restore` -- raport (3 linie zamiast 9; funkcja z `main`: 9). Na żywo pve9 -> pve9b: odzysk `docs` do
+  wcześniejszego punktu był samym cofnięciem (bez odbioru) i NIE odmontował niczego -- ścieżki montowania nie
+  wywołał; ścieżkę sprawdzono osobno: zgoda z `hdd/data` i `docs` zamontowanymi, `docs` odmontowane ręcznie (zamiast
+  odbioru), `--deny-restore` -> „mounted again: hdd/data/docs”. Odzysku z odbiorem pod tą wersją nie powtarzano.
 
 - **Jeden kolektor dla klastra z replikacją Proxmoxa -- projekt, lab na Metropolis, zgłoszenie silnika (2026-10-16).**
   Pomysł właściciela: B (pve2) jako jedyny kolektor -- relacja B<->A z migawkami na A bez kopiowania + kopia replik
