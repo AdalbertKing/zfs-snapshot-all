@@ -21,6 +21,18 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Jeden kolektor dla klastra z replikacją Proxmoxa -- projekt, lab na Metropolis, zgłoszenie silnika (2026-10-16).**
+  Pomysł właściciela: B (pve2) jako jedyny kolektor -- relacja B<->A z migawkami na A bez kopiowania + kopia replik
+  `pvesr` na B. Projekt: `docs/project/DESIGN-JEDEN-KOLEKTOR-PVESR-2026-10-16.md` (decyzje: brak migawek na A, gdy B
+  leży = do przyjęcia; gość na B -> relacja stop + alarm, sposób wykrywania jeszcze do ustalenia). **Lab NA PRODUKCYJNYM klastrze Metropolis, za zgodą
+  właściciela, tylko testowy gość:** CT 990 `zfslab-pvesr` na pve1 (bez sieci), replikacja `990-0` co 15 min, linie
+  `# ZSA-LAB-PVESR` w crontabie konta `zfsbackup` na pve1 i pve2 (prefiks `zsalab_`), plan i dziennik:
+  `docs/project/LAB-METROPOLIS-PVESR-PLAN-2026-10-16.md`. Zmierzone: blokady nie psują `pvesr` (silnik ich nie
+  zakłada na replice), opóźnienie kopii = 1 cykl `pvesr`, prune na A przechodzi na replikę; po przeniesieniu gościa
+  na B nasze migawki na celu odwróconej replikacji są kasowane przez `recv -F`, a dziennik mówi „sukces” (stąd wymóg
+  stop + alarm). Brakująca funkcja -- migawka na źródle zdalnym bez przesyłania -- wymaga zmiany zamrożonego
+  `snapget.sh` (opcja `-s`): `docs/project/ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md`, czeka na recenzenta.
+
 - **Okno „Przywróć”: granica punktu (P7) i martwa kontrola GUID po odzysku (P8) (2026-10-15 noc; `fix/restore-window-at-cutoff`).**
   Test właściciela „na miejsce” (relacja pve9b, `home`, punkt 20:01 UTC): podgląd pokazał `home` z 20:01, a `adam` i
   `ewa` z 19:01. P7: jeden bieg robi migawki datasetów sekundy po sobie (pve10: `home` :03, `adam` :05, `ewa` :07),
