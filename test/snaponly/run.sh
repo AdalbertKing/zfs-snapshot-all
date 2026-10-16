@@ -347,7 +347,7 @@ run SSH_RUN_PAYLOAD=1 -- -s -r -q agent,strict -m lab_ root@pve1:tank/nope
 check "-s -r -q, scope listing answers EMPTY: rc 1, no quiesce payload, no snapshot"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && printf '%s' \"\$1\" | grep -q 'returned nothing'" _ "$out"
 reset_world
 run SSH_RUN_PAYLOAD=1 ZFS_LIST_FAIL=1 -- -r -q agent,strict -m lab_ root@pve1:tank backup
-check "ordinary pull -r -q, scope listing fails: refused the same way (rc 1, no payload, no snapshot)"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE'"
+check "ordinary pull -r -q, scope listing fails: refused the same way (rc 1, no payload, no snapshot, the listing named)"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && printf '%s' \"\$1\" | grep -q 'could not be listed'" _ "$out"
 
 # ---- 13. the ordinary pull is untouched ---------------------------------------
 reset_world
