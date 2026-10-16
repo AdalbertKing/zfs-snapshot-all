@@ -1232,6 +1232,20 @@ guest_disk_is_live() {   # <dataset> -> 0 if it IS a live guest disk, 1 otherwis
 mirror_target() {
     local src="$1" tgt="$2" ruser="$3" rhost="$4"
     local src_list tgt_list base s
+    # The live-guest gate, HERE, before anything can be destroyed
+    # (REV-20261017-150 F1, P0). The caller reaches this function after ANY
+    # successful process_dataset, and process_dataset returns success early
+    # when the newest source snapshot is already on the target -- before its
+    # own guest_disk_is_live call. So "the guard runs first in process_dataset"
+    # was false for that path: a retry with -M destroyed target-only snapshots
+    # under a RUNNING guest, rc 0. Checked again here rather than moved, so
+    # every route into the mirror passes it: running or unknown status
+    # refuses (guest_disk_is_live says why), a stopped guest and a dataset
+    # that names no guest go on as before.
+    if guest_disk_is_live "$tgt"; then
+        log 0 "Mirror (-M) on '$tgt': refused -- the live-guest check did not clear this target (its reason is the log line before this one), NOTHING deleted"
+        return 1
+    fi
     src_list=$(get_sorted_snapshots "$src" "$ruser" "$rhost") || {
         log 0 "Mirror (-M) on '$tgt': the source list of '$src' could not be read -- NOTHING deleted"
         return 1
@@ -2830,8 +2844,10 @@ BACKUP_LANDING=0
 [ -n "$LOCAL_BASE" ] && [ "$TARGET_EXACT" -eq 0 ] && BACKUP_LANDING=1
 # The MIRROR (-M, the GUI's "lustro") follows its source the same way, at the
 # source's own path (owner, 2026-10-08: "tak, orz gdy gość nie działa"). Safe to
-# do here because guest_disk_is_live runs first in process_dataset and refuses
-# when that path is the disk of a guest RUNNING on this node, or when this
+# do here because guest_disk_is_live refuses -- in process_dataset before a
+# receive, and again at the top of mirror_target before any destroy, since an
+# already-present snapshot returns from process_dataset before its check
+# (REV-20261017-150) -- when that path is the disk of a guest RUNNING on this node, or when this
 # account cannot query the guest's state. A guest configured on another node
 # counts as not running here -- correct for a node-local ZFS disk, which only a
 # guest on this node can use. Not with -t.

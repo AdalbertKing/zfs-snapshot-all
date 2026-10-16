@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 984647aae4e9ceb01ed77970f9a37e611c3875cf -->
-<!-- frozen: snapget.sh 100755 46ab6655284bfde3aea194938edc191c50992746 -->
+<!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1052,6 +1052,24 @@ Owner-authorized refreezes:
   twin: this IS the port of snapget's 148 F2; the two engines now refuse a
   failed or empty -r quiesce scope listing alike (pull exit 1, push exit 3,
   each its engine's quiesce-refusal code). No twinned function moved.
+
+- 2026-10-17 (snapget.sh): **REV-20261017-150 (P0) -- -M passes the live-guest
+  gate before any destroy, also when the snapshot is already present.**
+  Reviewer authorisation `authorizes-frozen: snapget.sh`; snapget stays v2.75.
+  process_dataset returns success early when the newest source snapshot is
+  already on the target with the same GUID -- before its guest_disk_is_live
+  call -- and the main loop then ran mirror_target, which destroyed
+  target-only snapshots under a RUNNING guest, rc 0 (reviewer's actual-CLI
+  reproduction; the comment above BACKUP_LANDING claimed the guard "runs
+  first in process_dataset"). Now mirror_target calls guest_disk_is_live
+  first: running or unknown status -> return 1 with "Mirror (-M) ...:
+  refused -- the live-guest check did not clear this target ... NOTHING
+  deleted" (the run fails through the existing
+  "(mirror)" entry); stopped guest and a dataset that names no guest go on
+  unchanged. The early return, receive, P-0 and the mirror policy are
+  untouched; the comment is corrected. New suite test/mirrorguest: 9/0;
+  against the pre-fix engine 2/7.
+  twin: NOT ported -- mirror_target and -M exist only in snapget.
 
 ## How it is enforced
 
