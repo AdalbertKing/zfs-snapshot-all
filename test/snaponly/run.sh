@@ -358,14 +358,16 @@ check "ordinary pull -r -q, scope listing fails: refused the same way (rc 1, no 
 # FAKE_ROOT=1 so the local root check passes). Both the no-target route (local
 # snapshots only) and a push job that would send.
 SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
+SEND_RUN=0
 run_send() {
     local -a envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     LAST_HAS_S=0
-    mkdir -p "$WORK/lock/send$$"
+    SEND_RUN=$((SEND_RUN + 1))      # a lock directory of its own per call
+    mkdir -p "$WORK/lock/send$SEND_RUN"
     out=$(env "${envs[@]+"${envs[@]}"}" FAKE_ROOT=1 PATH="$STUB:$PATH" \
-          RELATIONSHIPS_DIR="$WORK/rel" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK/lock/send$$" \
+          RELATIONSHIPS_DIR="$WORK/rel" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK/lock/send$SEND_RUN" \
           NOTIFY_SCRIPT=/bin/true HOME="$WORK" \
           bash "$SNAPSEND" "$@" 2>&1); rc=$?
 }
