@@ -1,6 +1,6 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 8a6707101db9b99a17a155e4cd6ba940bdba0997 -->
+<!-- frozen: snapsend.sh 100755 984647aae4e9ceb01ed77970f9a37e611c3875cf -->
 <!-- frozen: snapget.sh 100755 46ab6655284bfde3aea194938edc191c50992746 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
@@ -1036,6 +1036,22 @@ Owner-authorized refreezes:
   LOCAL listing there would quiesce no guest and still snapshot the parent
   recursively. Reported to the reviewer for a decision; neither file is
   touched here.
+
+- 2026-10-16 (snapsend.sh): **REV-20261016-149 -- the push twin of 148 F2: a
+  failed -r LOCAL quiesce scope listing no longer becomes an empty scope.**
+  Reviewer authorisation `authorizes-frozen: snapsend.sh`, opened on the twin
+  finding above; snapsend stays v2.76. The scope loop read
+  `done < <(quiesce_scope ...)`; the status is now kept at the call site
+  (`quiesce_scope` already returns `zfs list`'s status, so lib-zfs-snap.sh is
+  NOT touched). A failure (also after partial output) or an empty answer
+  refuses with exit 3 -- the code every other push quiesce refusal uses -- so
+  the EXIT trap (`quiesce_thaw_all`) undoes what earlier roots prepared.
+  Successful listings unchanged. test/snaponly section 14 (real snapsend CLI,
+  real local quiesce code): 77/0 on the branch; against main 71/6 (the six
+  refusals fail, both controls pass).
+  twin: this IS the port of snapget's 148 F2; the two engines now refuse a
+  failed or empty -r quiesce scope listing alike (pull exit 1, push exit 3,
+  each its engine's quiesce-refusal code). No twinned function moved.
 
 ## How it is enforced
 

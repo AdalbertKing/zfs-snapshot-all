@@ -61,6 +61,8 @@ case "$1" in
                     awk -v d="$last" '$0 == d || index($0, d "/") == 1' "$ZFS_DATASETS" | head -n 1
                     echo "listing failed half-way" >&2; exit 2
                 fi
+                # A listing that SUCCEEDS with nothing in it.
+                [ "${ZFS_LIST_FAIL:-0}" = empty ] && exit 0
                 awk -v d="$last" '$0 == d || index($0, d "/") == 1' "$ZFS_DATASETS"
                 exit 0 ;;
         esac
@@ -109,13 +111,15 @@ case "$cmd" in
 esac
 REMOTE_SIDE=1 bash -c "$cmd"
 EOF
-# The real quiesce payload refuses a non-root account; the fake SOURCE host
-# runs as root, this host keeps its real id(1).
+# Real quiesce code refuses a non-root account. The fake SOURCE host runs as
+# root; this host keeps its real id(1) unless FAKE_ROOT=1 (the local push
+# quiesce of section 14, which runs here).
 _real_id="$(command -v id)"
-printf '#!/bin/bash
-if [ -n "${REMOTE_SIDE:-}" ] && [ "${1:-}" = -u ] && [ $# -eq 1 ]; then echo 0; exit 0; fi
-exec "%s" "$@"
-' "$_real_id" > "$STUB/id"
+cat > "$STUB/id" <<EOF
+#!/bin/bash
+if { [ -n "\${REMOTE_SIDE:-}" ] || [ "\${FAKE_ROOT:-0}" = 1 ]; } && [ "\${1:-}" = -u ] && [ \$# -eq 1 ]; then echo 0; exit 0; fi
+exec "$_real_id" "\$@"
+EOF
 # qm for the real quiesce payload: no guests on this fake host.
 printf '#!/bin/bash
 echo "QM $*" >> "$TRACE"
@@ -348,6 +352,43 @@ check "-s -r -q, scope listing answers EMPTY: rc 1, no quiesce payload, no snaps
 reset_world
 run SSH_RUN_PAYLOAD=1 ZFS_LIST_FAIL=1 -- -r -q agent,strict -m lab_ root@pve1:tank backup
 check "ordinary pull -r -q, scope listing fails: refused the same way (rc 1, no payload, no snapshot, the listing named)"     bash -c "[ $rc -eq 1 ] && ! grep -q '^QUIESCE-WINDOW' '$TRACE' && ! grep -q 'ZFS snapshot' '$TRACE' && printf '%s' \"\$1\" | grep -q 'could not be listed'" _ "$out"
+
+# ---- 14. push twin: snapsend -r -q, LOCAL quiesce scope (REV-20261016-149) ----
+# The real snapsend.sh and its real local quiesce code (qm stub: no guests;
+# FAKE_ROOT=1 so the local root check passes). Both the no-target route (local
+# snapshots only) and a push job that would send.
+SNAPSEND="${SNAPSEND:-$REPO/snapsend.sh}"
+run_send() {
+    local -a envs=()
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+    shift
+    LAST_HAS_S=0
+    mkdir -p "$WORK/lock/send$$"
+    out=$(env "${envs[@]+"${envs[@]}"}" FAKE_ROOT=1 PATH="$STUB:$PATH" \
+          RELATIONSHIPS_DIR="$WORK/rel" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK/lock/send$$" \
+          NOTIFY_SCRIPT=/bin/true HOME="$WORK" \
+          bash "$SNAPSEND" "$@" 2>&1); rc=$?
+}
+reset_world
+run_send -- -r -q agent,strict -m lab_ tank
+check "push control, no target, listing OK: rc 0, listed, exactly one 'zfs snapshot -r tank@'" \
+    bash -c "[ $rc -eq 0 ] && grep -q '^ZFS list -H -o name -r tank' '$TRACE' && [ \"\$(grep -c '^ZFS snapshot' '$TRACE')\" -eq 1 ] && grep -q '^ZFS snapshot -r tank@lab_' '$TRACE'"
+reset_world
+run_send -- -r -q agent,strict -m lab_ tank root@pve2:backup
+# The stub zfs lists no snapshots, so this run stops later ("No source
+# snapshots found") -- the control is that it got PAST the quiesce scope into
+# the transfer stage: one recursive snapshot, then ssh to the target.
+check "push control, job with a target, listing OK: one recursive snapshot, then on to the target (transfer stage)" \
+    bash -c "s=\$(grep -n '^ZFS snapshot -r tank@lab_' '$TRACE' | cut -d: -f1); t=\$(grep -n '^SSH root@pve2' '$TRACE' | head -1 | cut -d: -f1); [ \"\$(grep -c '^ZFS snapshot' '$TRACE')\" -eq 1 ] && [ -n \"\$s\" ] && [ -n \"\$t\" ] && [ \"\$t\" -gt \"\$s\" ]"
+for _lf in 1 partial empty; do
+    for _tgt in "" "root@pve2:backup"; do
+        reset_world
+        # shellcheck disable=SC2086
+        run_send ZFS_LIST_FAIL=$_lf -- -r -q agent,strict -m lab_ tank $_tgt
+        check "push -r -q, scope listing $_lf${_tgt:+ (job with a target)}: nonzero, no snapshot, no send, no ssh, no success stat, named" \
+            bash -c "[ $rc -ne 0 ] && ! grep -q 'ZFS snapshot' '$TRACE' && ! grep -q 'ZFS send' '$TRACE' && ! grep -q '^SSH' '$TRACE' && ! grep -q '\"status\":\"success\"' '$WORK/stats.log' 2>/dev/null && printf '%s' \"\$1\" | grep -Eq 'could not be listed|returned nothing'" _ "$out"
+    done
+done
 
 # ---- 13. the ordinary pull is untouched ---------------------------------------
 reset_world
