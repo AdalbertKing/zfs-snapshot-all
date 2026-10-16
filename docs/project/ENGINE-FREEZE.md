@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 8a6707101db9b99a17a155e4cd6ba940bdba0997 -->
-<!-- frozen: snapget.sh 100755 0f92c9aea65a882c26cbe2ad4d9ef0d89a85846c -->
+<!-- frozen: snapget.sh 100755 cddab230656fb90cc2a5eb6d7d805fd7ceaccc28 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -984,6 +984,38 @@ Owner-authorized refreezes:
   level 2 with "the replica continues from its bookmark". Anything else is still
   level 0, word for word.
   twin: ported in BOTH engines in the same change, same wording, same helpers.
+
+- 2026-10-16 (snapget.sh): **-s, source snapshots with no transfer
+  (REV-20261016-148).** Owner direction, verbatim: "Relacja zdalna z migawkami
+  bez kopiowania do kolektora -- tego potrzebowaliśmy", then "Moja zgoda" to
+  the engine request. Reviewer pre-review REV-20261016-148 with
+  `authorizes-frozen: snapget.sh` and nothing else. snapget v2.74 -> v2.75.
+  A new mode, not a change to an existing one: `-s [user@]host:dataset` (or a
+  local dataset) takes the source snapshot(s) and stops. Its own function
+  (`snapshot_only_dataset`: loopback guard, source pool, source probe,
+  snapshot) and its own loop and verdict in 5B, placed after the quiesce
+  window and before the -t checks and the pull loop, so it never reaches
+  `process_dataset` (adopt_legacy_state, target probe, resume, hold, stream,
+  bookmark) or `mirror_target`. Refused before -L, the lock and any ssh: a
+  second argument, and every transfer-only flag (-e -t -M -f -F -z -Z -g -N -l
+  -A -b -H -i -T -w -o -x -u -U -E), collected while parsing. Not required
+  under -s: mbuffer; the remote compression default is not applied. Stats:
+  `snapshot_only` / `snapshot_only_failed`, empty target -- new status values,
+  no schema change. Quiesce unchanged: clean window = the snapshots
+  (QUIESCE_SNAPPED, no second one); ,degrade = crash set and exit 8; strict =
+  rc 1; a local source with -q refused, now also under -n.
+  Without -s nothing moves. The edits outside the new paths: `s` in
+  OPTSTRING and in the usage list, the VERSION bump, one `case` inside the
+  getopts loop (before the dispatch `case`) that only records letters, and
+  `SNAPSHOT_ONLY -eq 0` guards on the mbuffer check, the remote compression
+  default and the unrecursed-children warning. That warning is skipped under
+  -s because its wording ("children are NOT sent") claims a transfer -- found
+  on the live proof. Suite: test/snaponly (64 assertions; 2 PASS / 62 FAIL
+  against v2.74).
+  twin: NOT ported, deliberately (the review: "Leaving `snapsend.sh` unchanged
+  is justified"). snapsend's existing no-target mode already snapshots a LOCAL
+  source; a remote source is the pull engine's job. No twinned function moved,
+  so test/twins needed no bless.
 
 ## How it is enforced
 
