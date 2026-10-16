@@ -2605,10 +2605,27 @@ if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 
         # Under -r the guests live in the CHILDREN, not in the named parent --
         # see quiesce_scope. The snapshot list still names the parent, because
         # `zfs snapshot -r parent@snap` covers the tree atomically by itself.
+        # The listing's status is KEPT (REV-20261016-149). This used to read
+        # `done < <(quiesce_scope ...)`, and a process substitution drops the
+        # exit status: a failed `zfs list -r` became an empty (or, after
+        # partial output, short) scope, no guest under it was checked or
+        # frozen, and the parent was still snapshotted recursively under the
+        # normal name, rc 0, even with ,strict. A failure and an empty answer
+        # (a recursive listing always names the root itself) both refuse
+        # here, exit 3 like every other quiesce refusal, so the EXIT trap
+        # above undoes whatever earlier roots already prepared.
+        if ! quiesce_list=$(quiesce_scope "$dataset" "$RECURSIVE"); then
+            log 0 "Quiesce: the guests under '$dataset' could not be listed on this host (zfs list -r failed) -- refusing: no snapshot taken, nothing sent."
+            exit 3
+        fi
+        if [ -z "$quiesce_list" ]; then
+            log 0 "Quiesce: listing '$dataset' on this host returned nothing (not even the dataset itself) -- refusing: no snapshot taken, nothing sent."
+            exit 3
+        fi
         while IFS= read -r quiesce_ds; do
             [ -n "$quiesce_ds" ] && quiesce_prepare "$quiesce_ds" "$QUIESCE"
             [ "$QUIESCE_DEGRADED" -eq 1 ] && break
-        done < <(quiesce_scope "$dataset" "$RECURSIVE")
+        done <<< "$quiesce_list"
         # Before the append, not after: a degraded run must not leave a
         # half-built list of quiesced names behind for the pool loop to use.
         [ "$QUIESCE_DEGRADED" -eq 1 ] && break
