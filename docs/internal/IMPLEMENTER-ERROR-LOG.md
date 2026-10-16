@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1921,6 +1921,28 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E85 — a fixture that runs the real quiesce payload left a deadman holding the next case's lock (2026-10-16, R2)
+
+**Genesis.** REV-148 F2 (#572) added `test/snaponly` section 12b, which runs
+the REAL streamed quiesce script through the ssh stub, on the test host. All
+cases shared one `LOCKDIR`. The payload's `setsid` deadman inherits the
+engine's `flock` fd and keeps it for up to one poll (5 s). On Linux the next
+case therefore met the lock and exited 75 before testing anything: two FAILs
+in CI on `main` after #572 and on PR #576. #572's own CI was 48/48 green
+(timing), and the Windows box has no `setsid`, so the stub ran it in the
+foreground and the lock was always free. The reviewer's REV-148 snippet had
+already used one lock directory per case "to avoid fixture process
+inheritance" -- I read it and did not apply it to the suite.
+
+**Cause.** A process-lifetime fact (who holds an fd, and for how long) was
+measured only on Git Bash, where the stub changed the very process shape that
+mattered. One green CI run was taken as proof of a timing-dependent property.
+
+**Rule.** R2, unchanged (second time in two days after E83): a fixture that
+spawns real background processes is evidence only from Linux, and a shared
+resource between cases (lock, state dir) is a defect until each case has its
+own. Fixed in the same suite: one lock directory per `run()` call.
 
 ### E84 — the status gate skipped again after a code change pushed to fix red CI (2026-10-15, R4, third time after E39)
 

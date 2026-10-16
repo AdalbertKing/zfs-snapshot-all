@@ -163,14 +163,22 @@ reset_world() {
 }
 
 # run [ENV=...] -- <snapget args...>; sets rc and out.
+RUN_N=0
 run() {
     local -a envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
     LAST_HAS_S=0
     case " $* " in *" -s "*|*" -n -s "*) LAST_HAS_S=1 ;; esac
+    # A lock directory of its own per call. Section 12b runs the REAL quiesce
+    # payload through the ssh stub, on this host: its setsid'd deadman
+    # inherits the engine's flock fd and keeps it for up to one poll (5 s), so
+    # the NEXT case found the lock held and exited 75 before testing anything
+    # (CI, PR #576 and main after #572). Real ssh passes no fds to the remote
+    # side; this is the fixture's artifact, not the engine's.
+    RUN_N=$((RUN_N + 1)); mkdir -p "$WORK/lock/run$RUN_N"
     out=$(env "${envs[@]+"${envs[@]}"}" PATH="${RUN_PATH:-$STUB:$PATH}" \
-          RELATIONSHIPS_DIR="$WORK/rel" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK/lock" \
+          RELATIONSHIPS_DIR="$WORK/rel" STATS_LOG="$WORK/stats.log" LOCKDIR="$WORK/lock/run$RUN_N" \
           NOTIFY_SCRIPT=/bin/true HOME="$WORK" \
           bash "$SNAPGET" "$@" 2>&1); rc=$?
 }
