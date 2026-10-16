@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 8a6707101db9b99a17a155e4cd6ba940bdba0997 -->
-<!-- frozen: snapget.sh 100755 cddab230656fb90cc2a5eb6d7d805fd7ceaccc28 -->
+<!-- frozen: snapget.sh 100755 46ab6655284bfde3aea194938edc191c50992746 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1016,6 +1016,26 @@ Owner-authorized refreezes:
   is justified"). snapsend's existing no-target mode already snapshots a LOCAL
   source; a remote source is the pull engine's job. No twinned function moved,
   so test/twins needed no bless.
+
+- 2026-10-16 (snapget.sh): **REV-20261016-148 F2 -- a failed -r quiesce scope
+  listing no longer becomes an empty scope.** Same REV, same
+  `authorizes-frozen: snapget.sh`; snapget stays v2.75. The remote quiesce
+  block read its `-r` scope through `done < <(remote_list ...)`, which drops
+  the exit status: a failed listing froze nothing and still took
+  `zfs snapshot -r parent@<normal name>`, rc 0, even under `,strict`
+  (reviewer's reproduction, executing the real payload). Now the listing's
+  status is kept; a failure (also after partial output) or an empty answer
+  refuses with rc 1 before the window and before any snapshot. One call site
+  in the main body; the ordinary pull gets the same refusal (it had the same
+  path). Successful listings are unchanged. test/snaponly section 12b runs
+  the real payload: 69/0; against the pre-F2 engine 65/4 (the four new
+  refusals fail, the successful-listing control passes).
+  twin: NOT ported -- NOT authorised. snapsend.sh:2611 has the same shape
+  (`done < <(quiesce_scope ...)`, and `quiesce_scope` in lib-zfs-snap.sh
+  discards `zfs list`'s status with `2>/dev/null` and no check). A failing
+  LOCAL listing there would quiesce no guest and still snapshot the parent
+  recursively. Reported to the reviewer for a decision; neither file is
+  touched here.
 
 ## How it is enforced
 
