@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 8a6707101db9b99a17a155e4cd6ba940bdba0997 -->
-<!-- frozen: snapget.sh 100755 f3eab0306049ddf6b79a11204f6fe08e71d0933c -->
+<!-- frozen: snapget.sh 100755 cddab230656fb90cc2a5eb6d7d805fd7ceaccc28 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1004,11 +1004,12 @@ Owner-authorized refreezes:
   no schema change. Quiesce unchanged: clean window = the snapshots
   (QUIESCE_SNAPPED, no second one); ,degrade = crash set and exit 8; strict =
   rc 1; a local source with -q refused, now also under -n.
-  Without -s nothing moves: the only edits outside the new paths are three
+  Without -s nothing moves: the only edits outside the new paths are
   guards (`SNAPSHOT_ONLY -eq 0`) on the mbuffer check and the remote
-  compression default, and one `case` before the getopts dispatch that only
-  records letters. Suite: test/snaponly (63 assertions; 2 PASS / 61 FAIL against
-  v2.74).
+  compression default, one `case` before the getopts dispatch that only
+  records letters, and `SNAPSHOT_ONLY -eq 0` on the unrecursed-children warning. Suite: test/snaponly (64 assertions; 2 PASS / 62 FAIL against
+  v2.74). Under -s the pull's "children are not sent" warning is skipped:
+  its wording claims a transfer (found on the live proof).
   twin: NOT ported, deliberately (the review: "Leaving `snapsend.sh` unchanged
   is justified"). snapsend's existing no-target mode already snapshots a LOCAL
   source; a remote source is the pull engine's job. No twinned function moved,

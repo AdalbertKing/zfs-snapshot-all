@@ -267,6 +267,8 @@ set -o pipefail
 #                    set and exits 8; anything else refuses, rc 1. Stats
 #                    status per dataset: snapshot_only / snapshot_only_failed,
 #                    target field empty -- never "success", which means a copy.
+#                    Without -r/-R only the named dataset is snapshotted; the
+#                    pull's "children are not sent" warning is not printed.
 #   -F               Reconcile before pulling (recursively, under -r): if a
 #                    CHILD dataset has a snapshot named like the incremental
 #                    base but under a DIFFERENT GUID (independently created,
@@ -2652,7 +2654,11 @@ trap 'tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
 # args and rides the multiplexer opened just above (hence the placement after
 # tune_ssh_enable, not next to the -R block). No re-prefixing needed any
 # more -- $ds IS the full source-side name now.
-if [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
+# Not under -s: the warning says the children are "not sent", and -s sends
+# nothing at all, so its wording would claim a transfer (REV-20261016-148
+# requirement 7, found on the live proof). -s without -r/-R snapshots the named
+# dataset only, as the header says.
+if [ $SNAPSHOT_ONLY -eq 0 ] && [ $RECURSIVE -eq 0 ] && [ $FLAT_RECURSE -eq 0 ]; then
     for ds in "${DATASETS[@]}"; do
         warn_if_unrecursed_children "$ds" "$REMOTE_USER" "$REMOTE_HOST"
     done

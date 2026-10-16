@@ -166,6 +166,12 @@ check "remote -s: stats say snapshot_only with no target, never success" \
     bash -c "grep -q '\"status\":\"snapshot_only\"' '$WORK/stats.log' && grep -q '\"target\":\"\"' '$WORK/stats.log' && ! grep -q '\"status\":\"success\"' '$WORK/stats.log'"
 check "remote -s: the log says nothing was transferred" \
     bash -c "printf '%s' \"\$1\" | grep -q 'nothing transferred'" _ "$out"
+# tank/vm-100-disk-0 has no children here, so use one that has: the pull's
+# warning says the children "are NOT" sent, a transfer claim (live proof).
+reset_world
+run -- -s -m lab_ root@pve1:tank/vm-101-disk-0
+check "remote -s on a dataset with children: rc 0, no 'being sent' warning" \
+    bash -c "[ $rc -eq 0 ] && ! printf '%s' \"\$1\" | grep -q 'being sent'" _ "$out"
 
 # ---- 2. local source -----------------------------------------------------
 reset_world
