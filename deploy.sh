@@ -2992,6 +2992,15 @@ do_deny_restore() {
         chown root:root "$RESTORE_REVOKE_DIR" 2>/dev/null || :
         chmod 0700 "$RESTORE_REVOKE_DIR" 2>/dev/null || :
         mv -f "$gpath" "$rpath" || die "could not move $gpath to $rpath -- nothing was revoked, the grant still stands"
+        # The ACCOUNT the delegation was given to, written into the record now: the grant
+        # file names the scope but not the account, and a retry must undo what was
+        # delegated even if the pairing manifest is gone or changed by then.
+        local _rv_pm; _rv_pm="$(peer_manifest_path "$label")"
+        if [ -r "$_rv_pm" ]; then
+            ( record_load manifest "$_rv_pm"
+              [ -z "${PEER_JOIN_ACCOUNT:-}" ] || printf 'RESTORE_REVOKE_ACCOUNT="%s"\n' "$PEER_JOIN_ACCOUNT" ) >> "$rpath" \
+                || warn "could not write the account into $rpath -- a retry will rely on the pairing manifest"
+        fi
     elif [ -f "$rpath" ]; then
         log "a previous --deny-restore=$label did not finish revoking the delegation -- retrying from its record ($rpath)"
     elif [ -n "$(restore_grant_owned_pauses "$label")" ]; then
@@ -3014,11 +3023,18 @@ do_deny_restore() {
     # The same two facts, from the same file and the same reader, so the revoke
     # undoes exactly what the grant did rather than a set typed a second time.
     local RESTORE_GRANT_ACCOUNT="" RESTORE_GRANT_DATASETS=""
+    # THE RECORD FIRST: it says what was actually delegated (the scope written at grant
+    # time, the account written at withdrawal). The manifest fills only what the record
+    # does not carry -- a record from before the account line, or the legacy state.
+    if [ -f "$rpath" ]; then
+        RESTORE_GRANT_ACCOUNT="$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
+        RESTORE_GRANT_DATASETS="$(sed -n 's/^RESTORE_GRANT_DATASETS="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
+    fi
     local _pm; _pm="$(peer_manifest_path "$label")"
-    if [ -r "$_pm" ]; then
+    if [ -r "$_pm" ] && { [ -z "$RESTORE_GRANT_ACCOUNT" ] || [ -z "$RESTORE_GRANT_DATASETS" ]; }; then
         record_load manifest "$_pm"
-        RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
-        RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
+        [ -n "$RESTORE_GRANT_ACCOUNT" ] || RESTORE_GRANT_ACCOUNT="${PEER_JOIN_ACCOUNT:-}"
+        [ -n "$RESTORE_GRANT_DATASETS" ] || RESTORE_GRANT_DATASETS="${PEER_JOIN_GRANTED_DATASETS:-}"
     fi
     # P10: what was mounted when the grant was issued -- from the revocation record.
     local _rd_mounted=""
@@ -3028,7 +3044,7 @@ do_deny_restore() {
     # window. The file is the declaration; the allow is the capability.
     # _rd_open: the delegation may still stand. A dataset that no longer exists
     # carries no delegation, so its failed unallow does not count.
-    local _rd_ds _rd_open=0 _rd_scope_open=0
+    local _rd_ds _rd_open=0 _rd_scope_open=0 _rd_nofacts=0
     if [ -n "${RESTORE_GRANT_DATASETS:-}" ] && [ -n "${RESTORE_GRANT_ACCOUNT:-}" ]; then
         for _rd_ds in $RESTORE_GRANT_DATASETS; do
             if ! zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_ZFS_PERMS" -- "$_rd_ds" 2>/dev/null; then
@@ -3051,8 +3067,9 @@ do_deny_restore() {
             fi
         done
     else
-        warn "the pairing manifest for '$label' gives no account or datasets, so the delegation could not be revoked here -- check 'zfs allow' on the scope by hand"
+        warn "neither the revocation record nor the pairing manifest for '$label' says which account and datasets were delegated, so nothing could be revoked here. See 'zfs allow' on the relationship's datasets, remove the delegation by hand (zfs unallow -u <account> ...), then resume what this grant paused: bash $_DEPLOY_DIR/zfs-backup.sh resume-writers $label"
         _rd_open=1
+        _rd_nofacts=1
     fi
 
     # Mounting needs root, not the collector's delegation, so it does not wait on the
@@ -3063,7 +3080,10 @@ do_deny_restore() {
     # would reopen the overlap the pause closed.
     if [ "$_rd_open" -eq 1 ]; then
         log "restore grant for '$label' WITHDRAWN -- the collector is refused new restores (it permitted: ${had:-<unreadable>})"
-        warn "the delegation is NOT proven revoked, so the relationships this grant paused STAY PAUSED and the revocation stays pending. Fix what the lines above name, then run the same command again: $0 --deny-restore=$label"
+        # With no facts at all a retry cannot succeed; the line above names the manual
+        # way. Otherwise the same command is the way, once the cause is fixed.
+        [ "$_rd_nofacts" -eq 1 ] \
+            || warn "the delegation is NOT proven revoked, so the relationships this grant paused STAY PAUSED and the revocation stays pending. Fix what the lines above name, then run the same command again: $0 --deny-restore=$label"
         return 1
     fi
     log "restore grant for '$label' TAKEN BACK (it permitted: ${had:-<unreadable>})"
