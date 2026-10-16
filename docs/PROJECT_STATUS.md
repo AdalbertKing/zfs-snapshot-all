@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c4c3e7232adf9742 -->
+<!-- status-covers-digest: e4590d052c492567 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,24 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-20261016-148: `snapget -s` -- migawki na źródle bez przesyłania (2026-10-16; `feat/rev148-snapget-snapshot-only`).**
+  Właściciel: „Relacja zdalna z migawkami bez kopiowania do kolektora -- tego potrzebowaliśmy”; recenzent: kontrakt
+  wstępny z `authorizes-frozen: snapget.sh`. snapget v2.74 -> v2.75. `snapget.sh -s [user@]host:dataset` robi
+  migawkę tam, gdzie leży źródło (ssh; lokalnie dla gołej nazwy) i kończy: nic nie jest wysyłane, odbierane,
+  blokowane holdem, zakładkowane, lustrzane, na kolektorze nie ma żadnego wywołania `zfs`/`zpool` (tylko znacznik `-L` i blokada), nic tu nie powstaje; mbuffer i kompresor
+  niepotrzebne. Odmowa (przed `-L`, blokadą i ssh): drugi argument i każda flaga tylko transferowa (`-e -t -M -f -F
+  -z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-n -s` drukuje `PLAN=SNAPSHOT-ONLY src=...` po odczycie
+  źródła. Quiesce jak w pullu (czyste okno = te migawki; `,degrade` = zestaw `_crash_` i rc 8; strict = rc 1; lokalne
+  źródło z `-q` -- odmowa). Statystyki `snapshot_only` / `snapshot_only_failed`, pusty cel. Suita `test/snaponly`
+  (64/0; na v2.74 2/62). snapsend bez zmian (świadomie). Generator i GUI jeszcze nie wybierają `-s` -- to osobny krok
+  z wymogiem strażnika własności gościa (stop + alarm po migracji). Znalezisko z labu Metropolis: linia samych
+  migawek w tej samej minucie co `pvesr` może mu zabrać jeden cykl (18:30 CEST, `got timeout`, sam wrócił o 18:35)
+  -- harmonogram takiej linii musi omijać minuty `pvesr`. Dowód live (lab pve10 -> pve9b, konto `zfsbackup`, klucz
+  parowania i bramka): migawka na źródle, zero nowych datasetów na kolektorze, odmowa przy wyłączonej bramce.
+  **Wada znaleziona przy okazji, NIE naprawiona:** `zfs-backup.sh enable-client` nie zdejmuje wyłączenia -- przed
+  `PAIR-CONTROL enable` pyta źródło kanałem danych o podpisany zakres, a wyłączona bramka tego odmawia (pve10,
+  2026-10-16). Obejście: `PAIR-CONTROL enable` kluczem relacji, potem `resume-client`.
 
 - **REV-20261016-147: nieudane cofnięcie zgody na odzysk jest ponawiane, nie zapominane (2026-10-16; `fix/rev147-revoke-retry`).**
   Recenzent: `--deny-restore` usuwał plik zgody PRZED `zfs unallow`, więc po nieudanym cofnięciu kolejne
@@ -58,7 +76,7 @@
   zakłada na replice), opóźnienie kopii = 1 cykl `pvesr`, prune na A przechodzi na replikę; po przeniesieniu gościa
   na B nasze migawki na celu odwróconej replikacji są kasowane przez `recv -F`, a dziennik mówi „sukces” (stąd wymóg
   stop + alarm). Brakująca funkcja -- migawka na źródle zdalnym bez przesyłania -- wymaga zmiany zamrożonego
-  `snapget.sh` (opcja `-s`): `docs/project/ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md`, czeka na recenzenta.
+  `snapget.sh` (opcja `-s`): `docs/project/ENGINE-REMOTE-SNAPSHOT-ONLY-2026-10-16.md` -- zrobione w REV-20261016-148 (wpis wyżej).
 
 - **Okno „Przywróć”: granica punktu (P7) i martwa kontrola GUID po odzysku (P8) (2026-10-15 noc; `fix/restore-window-at-cutoff`).**
   Test właściciela „na miejsce” (relacja pve9b, `home`, punkt 20:01 UTC): podgląd pokazał `home` z 20:01, a `adam` i
