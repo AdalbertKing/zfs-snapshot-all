@@ -95,3 +95,16 @@ wrócę z pomiarami i z decyzją, co piszemy.
   - **wniosek:** wymóg właściciela „gość przeszedł -> relacja stop + alarm” jest konieczny; przy okazji zmierzone,
     że `recv -F` replikacji kasuje na celu nasze migawki (punkt 1 dyskusji „migawki tylko na B”).
 - 2026-10-16 15:56 CEST -- `pct migrate 990 pve1`: 7 s, replikacja wróciła do pve1->pve2 sama, FailCount 0.
+- 2026-10-16 18:30 CEST -- **pierwsza porażka `pvesr` 990-0** (alert do właściciela, FailCount 1): `command 'zfs snapshot
+  hdd/vm-disks/subvol-990-disk-0@__replicate_990-0_1792168202__' failed: got timeout`. Przyczyna: nasza linia
+  `snapsend.sh -m zsalab_` (`*/15`) i `pvesr` (`*/15`) zrobiły `zfs snapshot` tego samego datasetu w tej samej
+  sekundzie (18:30:01); pula obciążona po replikacjach z 18:00 (load 6.5), więc nasza migawka trwała 11 s
+  (18:30:01 -> 18:30:12) i `pvesr` przekroczył swój limit (18:30:15). Samo wróciło o 18:35 (FailCount 0);
+  produkcyjne zadania 101/102/106/107 bez zmian. Wcześniejsze 19 cykli w tych samych minutach przeszło, bo pula
+  była wolna.
+  - **wniosek dla generatora:** linia samych migawek obok `pvesr` musi stać w minutach, w których `pvesr` nie
+    rusza; silnik (`snapget -s`, REV-20261016-148) tego nie wymusi.
+- 2026-10-16 19:29 CEST -- **[ZMIANA] (zgoda właściciela)** linia `# ZSA-LAB-PVESR` snapsend na **pve1** przesunięta
+  z `*/15` na `2,17,32,47`; tylko ta jedna linia (diff 1 linia, crontab 28 linii przed i po). Kopia przed zmianą:
+  `/root/zfsbackup-crontab.before-minute-shift-20261016` na pve1. Pierwszy bieg 19:32 -- migawka w 1 s; `pvesr`
+  990-0 o 19:30 OK, FailCount 0. Linie na **pve2 nie ruszane** (używane tylko, gdy gość jest na pve2).
