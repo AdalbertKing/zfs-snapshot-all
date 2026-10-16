@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e4590d052c492567 -->
+<!-- status-covers-digest: ebcf6e760e18d805 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **`enable-client` zdejmuje blokadę z kolektora (2026-10-16; `fix/enable-client-control-plane`).**
+  Zmierzone na labie pve10 -> pve9b: po `disable-client pve9b` polecenie `enable-client pve9b` padało z
+  „FATAL: cannot reach ... signed a scope”, zanim wysłało `PAIR-CONTROL enable`. Ładowanie połączenia pytało źródło
+  o podpisany zakres kanałem danych, a brama wyłączonej relacji odmawia mu (rc 93) -- blokady nie dało się zdjąć
+  z kolektora. Ta sama ścieżka wywracała ponowione `disable-client`, a `status NAZWA` (tekst i `--json`) pokazywał
+  stan peera jako NIEZNANY dokładnie wtedy, gdy był DISABLED. Teraz `disable-client`, `enable-client` i oba odczyty
+  stanu ładują połączenie z `PAIR_CONTROL_ONLY=1` (bez pytania o zakres); wszystko, co działa na datasetach,
+  zachowuje odmowę z #101. Test: `test/zfsbackup --section pairctl` -- 8/0 (prawdziwy loader, ssh zastąpione bramą
+  zwracającą 93 poza PAIR-CONTROL; lista jawna i relacja trybowa), na `main` 6 FAIL, 2 PASS (kontrole dodatnie).
+  Na żywo (pve10, gałąź z osobnej kopii, 17:32 UTC): `main` -- enable FATAL rc 1, status NIEZNANA/UNKNOWN; gałąź --
+  status DISABLED, ponowione disable rc 0, enable rc 0, peer ACTIVE, pauza lokalna zdjęta, crontab bez zmian (39 linii).
+  Relacja pve9b zostawiona ACTIVE.
 
 - **REV-20261016-148: `snapget -s` -- migawki na źródle bez przesyłania (2026-10-16; `feat/rev148-snapget-snapshot-only`).**
   Właściciel: „Relacja zdalna z migawkami bez kopiowania do kolektora -- tego potrzebowaliśmy”; recenzent: kontrakt
