@@ -60,9 +60,32 @@ jeden wątek do podjęcia; kolejność wg wagi ustalonej w rozmowie.
 - **F7-refaktor**: pasywność jako `profiles/mirror` zamiast inline-emisji —
   czysty adres tej samej polityki, bez zmiany zachowania.
 
+- **„Przeglądaj kopię” — podgląd migawki tylko do odczytu i kopiowanie plików w `mc`**
+  (pomysł właściciela po awarii w Metropolis, zapisane 2026-10-17 „na razie do todo”).
+  Montowanie tam, gdzie działa GUI (dla relacji jednohostowej to źródło). W GUI obok
+  „Przywróć”: wybór punktu -> montaż -> `mc` w tym katalogu -> wyjście odmontowuje.
+  - LXC/dataset plikowy: `mount -t zfs pula/ds@migawka /mnt/...` (z natury tylko do
+    odczytu, bez klona). Runda 1.
+  - VM/zvol: `snapdev=visible` daje `/dev/zvol/...@migawka-partN` bez klona; ext4
+    `ro,noload`, xfs `ro,norecovery`, NTFS `ntfs3 -o ro` (jądro) albo `ntfs-3g -o ro`.
+    LVM w środku (kolizja nazwy grupy z hostem, np. `pve`), dyski dynamiczne -> tylko
+    przez `guestmount --ro` (libguestfs, maszyna pomocnicza, bez kolizji). BitLocker,
+    ReFS, Storage Spaces -> odmowa z komunikatem. Runda 2, po pomiarach.
+  - Pilnować: zamontowana migawka blokuje przycinanie i `recv -F` następnego pobrania
+    („busy”) -> sesja ma koniec (Zakończ / limit czasu), przycinanie pomija ją z
+    komunikatem; zapis „co zamontowano” + sprzątanie po przerwanym PuTTY.
+  - Zmierzone 2026-10-17 (bez instalacji): pve10 (PVE 8.4, jądro 6.8-pve) ma moduł
+    `ntfs3`, nie ma `ntfs-3g`/`guestmount`/KVM; `libguestfs-tools` = 60 pakietów,
+    ~106 MB (z rekomendowanymi 91 / ~196 MB), **ciągnie `mdadm`** (initramfs, usługa
+    skanująca macierze -- nie domyślnie na produkcji). pve9b (jądro Debian 6.1-cloud)
+    nie ma `ntfs3`. Następny krok, gdy wrócimy: zgoda na instalację na pve10 i test
+    `guestmount` na `vm-201`/`vm-202` (kopie na pve10).
+
 ## Laboratorium (stan)
 
 - pve9 (VM 109 na pve2, 192.168.28.99) — zostaje jako stały drugi kolektor
   labu; strefa czasowa UTC celowo (eksponat F6).
 - Łańcuch finałowy: ogniwo A na etapie aktywacji (za PR #35), ogniwo B do
   ponowienia po A; dane źródłowe `hdd/lab3/src/dane.bin` md5 `ab0c4933…`.
+- **pve9b (192.168.28.98): `/` zapełniony w 100 % (23 MB wolne)** -- zmierzone 2026-10-17;
+  do posprzątania (por. `infra_lab_disks_full_and_pve10_no_github`).
