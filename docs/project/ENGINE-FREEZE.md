@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 6ba0e82b15467638437f8527e04badcb08c1ac6a -->
 <!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
-<!-- frozen: check-snap-age.sh 100755 dc27a12b3cdd5df89570cfc39db122cd71d44a30 -->
+<!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1111,6 +1111,22 @@ Owner-authorized refreezes:
   twin: none (check-snap-age.sh has no twin). gen-cron.sh (not frozen) now
   emits a remote monitor with the section's ssh_flags; ssh identity and host
   are in the monitor group key.
+
+- 2026-10-17 (check-snap-age.sh): **REV-20261017-152 F4.1/F4.2 -- read-back
+  names and walk completeness.** Same reviewer authorisation
+  (`authorizes-frozen: check-snap-age.sh`, kept for these fixes in the
+  re-review). v2.4 -> v2.5. F4.1: a snapshot or descendant name read back from
+  zfs was checked only for its `<ds>@` / `<ds>/` prefix, then single-quoted into
+  the next remote read -- a quote in it ran on the far shell. Now every
+  read-back name must be a well-formed ZFS name component (letters, digits,
+  `_ - : .`, space) before any follow-up read, else UNKNOWN; and `zread` escapes
+  an embedded quote POSIX-style (`'\''`) as a second wall -- for valid names the
+  command text is byte-identical. F4.2: an rc-0 `-R` walk that does not contain
+  the root (empty, or children only) is UNKNOWN, not a silent pass. test/monitor
+  97/0 (was 69); against v2.4 the new cases give 82 PASS / 15 FAIL. Live (pve10
+  -> pve9b, delegated account, pair gate): OK, -R with children, CRITICAL,
+  absent dataset -- unchanged.
+  twin: none.
 
 ## How it is enforced
 
