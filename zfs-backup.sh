@@ -12080,6 +12080,19 @@ cmd_activate() {
 
     STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT=""
     record_load client "$cpath"
+    # An EXPLICIT --host is the operator's answer, and is not overruled quietly
+    # (owner 2026-10-17, measured on pve10 the same day). verify-endpoint falls
+    # back to a previously known address when the current one does not answer --
+    # right for its own job (pick whichever address works), wrong here: the run
+    # asked for 10.99.0.10, got 192.168.28.98 back and reported success, and the
+    # GUI would have said "works over 10.99.0.10". Stop before installing: the
+    # address asked for did not answer.
+    if [ -n "$requested_host" ]; then
+        read -r current_host current_port <<< "$(active_endpoint_host_port)"
+        if [ "$current_host:$current_port" != "$requested_endpoint" ]; then
+            die "activate: '$requested_endpoint' did not answer -- verify-endpoint fell back to '$current_host:$current_port', a previously known address. Nothing installed: the cron still runs over '${INSTALLED_ENDPOINT:-?}'. Check the new address (route, VPN, sshd), then run again: $resume"
+        fi
+    fi
     if [ "${STATE:-}" != active ]; then
         local -a install=(activate-client "$name")
         [ "$yes" -eq 1 ] && install+=(--yes)

@@ -306,6 +306,9 @@ simple_flow_activate() {   # <client-file> <requested-host?>
                     for arg in "$@"; do case "$arg" in --host=*) new="${arg#*=}" ;; esac; done
                     printf 'ACTIVE_ENDPOINT=%s\nSTATE=seed_complete\n' "$new" >> "$record" ;;
                 verify-endpoint)
+                    # SF_FALLBACK: the real verify-endpoint's failover -- the current
+                    # address did not answer, a previously known one did and is promoted.
+                    [ -n "${SF_FALLBACK:-}" ] && { ACTIVE_ENDPOINT="$SF_FALLBACK"; printf 'ACTIVE_ENDPOINT=%s\n' "$SF_FALLBACK" >> "$record"; }
                     printf 'STATE=endpoint_verified\nENDPOINT_VERIFIED_FOR=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
                 activate-client)
                     printf 'STATE=active\nINSTALLED_ENDPOINT=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
@@ -381,6 +384,27 @@ if [ "$rc" -eq 0 ] && [ "$got" = "$want" ] && grep -q '^INSTALLED_ENDPOINT=10.99
     ok "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up"
 else
     bad "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up" "rc=$rc got=[$got] out=$out"
+fi
+
+# Measured on pve10 2026-10-17: the requested address did not answer, verify-endpoint
+# promoted the OLD known one, and activate installed it and reported success -- the
+# operator asked for one address and silently got another. An explicit --host now
+# stops before installing.
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+INSTALLED_ENDPOINT=192.168.28.8:22
+STATE=active
+EOF
+: > "$SF/activate-fallback.log"
+out="$(SF_EXTRA=--skip-final-catchup SF_FALLBACK=192.168.28.8:22 simple_flow_activate "$SF/clients/pve2.conf" 10.99.0.8 "$SF/activate-fallback.log" 2>&1)"; rc=$?
+got="$(cat "$SF/activate-fallback.log")"
+if [ "$rc" -ne 0 ] && ! grep -q '^activate-client' "$SF/activate-fallback.log" \
+   && case "$out" in *"'10.99.0.8:22' did not answer"*"Nothing installed"*) true ;; *) false ;; esac; then
+    ok "simple flow: activate --host= whose address did not answer stops (verify fell back to the old one) -- nothing installed"
+else
+    bad "simple flow: activate --host= whose address did not answer stops (verify fell back to the old one) -- nothing installed" "rc=$rc got=[$got] out=$out"
 fi
 
 if activation_is_new_relationship endpoint_verified "" \
