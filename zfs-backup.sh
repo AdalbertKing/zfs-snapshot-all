@@ -9463,7 +9463,7 @@ cmd_add_client() {
             fi
             if [ "$_same" -eq 1 ]; then
                 log "client '$name' already exists (state '$_prev_state') and this call asks for the same host/target/account -- nothing to create, continuing"
-                if [ "$snaponly" -eq 1 ]; then log "next: ./zfs-backup.sh verify-endpoint $name    (snaponly: no seed)"; else log "next: ./zfs-backup.sh seed $name    (or activate $name, if the seed already completed)"; fi
+                if [ "${snaponly:-0}" -eq 1 ]; then log "next: ./zfs-backup.sh verify-endpoint $name    (snaponly: no seed)"; else log "next: ./zfs-backup.sh seed $name    (or activate $name, if the seed already completed)"; fi
                 return 0
             fi
             die "client '$name' already exists ($cpath), state '$_prev_state', and this call asks for a DIFFERENT host/target/account than the one recorded (recorded: ${_prev_host}/${_prev_target}/${_prev_user:-root}; requested: ${_want_host}/${target:-<same>}/${local_user:-root}). Refusing to redefine a live relationship from a creation command -- use remove-client first, or correct the arguments."
@@ -9794,7 +9794,7 @@ cmd_add_client() {
     else
         log "next: copy the package above to $lan_host and run there:  ./deploy.sh --join=<package>"
     fi
-    if [ "$snaponly" -eq 1 ]; then log "then here:  $0 verify-endpoint $name   (snaponly: no seed -- nothing is copied)"; else log "then here:  $0 seed $name"; fi
+    if [ "${snaponly:-0}" -eq 1 ]; then log "then here:  $0 verify-endpoint $name   (snaponly: no seed -- nothing is copied)"; else log "then here:  $0 seed $name"; fi
 }
 
 # REV-20260802-033 slice 6 (fetch/digest/generate): for a MODE-based client

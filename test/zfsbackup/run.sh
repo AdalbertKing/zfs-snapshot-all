@@ -6502,7 +6502,11 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # collector moved to a profile is "Uzyj szablonu" on each relationship now.
 # 14/21 since 2026-10-14 (X27 S4): migrate-config is gone -- every lab config is in
 # blocks; the old shape is refused, never converted.
-if [ "$writers" -eq 14 ] && [ "$resolvers" -eq 21 ]; then
+# 15/22 since 2026-10-17 (REV-20261017-152 round 1): activate_snaponly -- the
+# activation of a snaponly relationship. A WRITER, aimed like activate-client
+# (cron_context_resolve adopt, assert_cron_config_matches_installed, then
+# atomic_replace_and_install).
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
