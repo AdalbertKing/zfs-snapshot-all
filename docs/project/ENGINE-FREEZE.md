@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 6ba0e82b15467638437f8527e04badcb08c1ac6a -->
 <!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
-<!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
+<!-- frozen: check-snap-age.sh 100755 0823aa4a5a3d4de4eea8f8827d61bd3ff71da9de -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1087,6 +1087,28 @@ Owner-authorized refreezes:
   still true). test/twins section M also gains a `guest_disk_is_live` stub:
   REV-20261017-150 made mirror_target call it first, and the extracted copy
   printed "command not found" (harmless, the target names no guest).
+
+- 2026-10-17 (check-snap-age.sh): **REV-20261017-152 round 2 -- remote
+  datasets, every read checked.** Reviewer authorisation `authorizes-frozen:
+  check-snap-age.sh` (bounded, F4). v2.3 -> v2.4. A dataset entry may be
+  `[user@]host:dataset` (delsnaps.sh's parse_remote, the same -p/-k/-c/-K/-O;
+  ssh `-n`, BatchMode=yes, ConnectTimeout=15, ServerAlive 15x4; -K/-O at the
+  front). All four reads -- existence, snapshot list, creation, -R walk -- go
+  through one `zread` on the entry's own host (never a local fallback), `zfs
+  list`/`zfs get` only. Each read's status and output shape are checked before
+  use, local and remote alike: the snapshot list and the -R walk used to be
+  `done < <(zfs ...)`, so a failed list after a good probe fell back to the
+  DATASET's age and a failed walk checked no children, silently. Now UNKNOWN,
+  with the reason (ssh 255, pair gate 93, zfs rc). Remote names/hosts/users are
+  validated before any ssh (no quote reaches the far shell). Thresholds, pause
+  wording, -x, the no-match dataset-age rule after a SUCCESSFUL read and the
+  severity order are unchanged. test/monitor 66/0 (was 24); against v2.3 40/26.
+  Live (pve10 -> pve9b, delegated account, pairing key, pair gate): OK, -R,
+  CRITICAL, absent dataset, wrong key (255) and a disabled gate (93) -- each
+  the expected rc and wording.
+  twin: none (check-snap-age.sh has no twin). gen-cron.sh (not frozen) now
+  emits a remote monitor with the section's ssh_flags; ssh identity and host
+  are in the monitor group key.
 
 ## How it is enforced
 

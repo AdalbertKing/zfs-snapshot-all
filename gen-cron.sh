@@ -311,12 +311,12 @@ set -o pipefail
 #     were compared against the literal "yes", so 'ture' -- or a blank value --
 #     silently meant no: a declared subtree sweep became a single dataset, and a
 #     declared cascading ladder became flat per-tier lines, both at rc=0.
-#     monitor_warn/monitor_crit are REJECTED on a remote (host:dataset) scope --
-#     check-snap-age.sh is local-only by design (see its own header), so a monitor
-#     riding a remote scope would run `zfs list` locally against a string like
-#     "user@host:tank/data" and report a permanent false UNKNOWN. Run
-#     check-snap-age.sh in ITS OWN cron line on the host that actually owns the
-#     dataset instead.
+#     monitor_warn/monitor_crit on a remote (host:dataset) scope are monitored
+#     OVER SSH since REV-20261017-152 (round 2): check-snap-age.sh reads a
+#     "[user@]host:dataset" entry on that host, with this section's ssh_flags --
+#     the same five options and the same pinned identity as its prune line. A
+#     read that fails (link, key, disabled pair gate) is the monitor's UNKNOWN
+#     ("monitor BROKEN"), never a quiet OK.
 #
 #   [prune-bookmarks:<scope>]             # standalone prune of ORPHANED bookmarks
 #       schedule     = <5-field cron>      # required
@@ -2858,21 +2858,21 @@ build_prune_section() {
 
         # ---- monitor (rides this same pattern, same scope/recursive as the prune) ----
         if resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier"; then
-            # check-snap-age.sh is local-only by design (its own header explains
-            # why: a monitor is meant to run on the host that owns the schedule).
-            # A remote scope handed to it would run `zfs list` locally against a
-            # literal string like "user@host:tank/data" -- not a real dataset --
-            # and report UNKNOWN forever, on the monitor's own schedule (as often
-            # as */15). Rejected here rather than left to become that flood.
-            case "$scope" in
-                *:*) die "[prune:$scope] tier=$tier: monitor_warn/monitor_crit set on a REMOTE scope -- check-snap-age.sh is local-only and would report false UNKNOWN forever. Run check-snap-age.sh in its own cron line on the host that owns '$scope' instead." ;;
-            esac
+            # A REMOTE scope is read over ssh by check-snap-age.sh itself
+            # (REV-20261017-152, round 2), with THIS section's ssh_flags -- the
+            # pinned key and host alias its prune line already uses. It used to be
+            # refused here: the monitor was local-only and ran `zfs list` against
+            # the literal "user@host:tank/data", an UNKNOWN forever. A local scope
+            # carries no ssh_flags (they are refused there), so its line is
+            # byte-identical to before.
+            local mssh=""
+            case "$scope" in *:*) mssh="$ssh_flags" ;; esac
             local mnotify mbroken mwarntext
             mnotify="$(notify_text "$host_label" "$ntier" "stale" "$plabel")"
             mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$plabel")"
             mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$plabel")"
             local mexcl; mexcl="$(resolve_field_or_omit monitor_exclude "$sec" "$tmpl" "")" || mexcl=""
-            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}")
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${recursive}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${mexcl}${SEP}${mssh}")
         fi
     done
 
@@ -3364,14 +3364,20 @@ group_monitor() {
     declare -ga MONITOR_GROUP_ORDER=()
     local e scope pattern warn crit schedule recursive notify broken warntext pairlbl key
     for e in "${MONITOR_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl <<< "$e"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh <<< "$e"
         # pair_label is IN the key (REV-045): two relationships sharing a
         # threshold shape must not merge into one check-snap-age line --
         # pausing one would silence the staleness alarm of the other.
         # mexcl is part of the key: two monitors that differ only in what they
         # must NOT see cannot share one line -- merging them would silently
         # apply one relation's blind spots to the other.
-        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}${SEP}${mexcl}"
+        # ssh identity and the remote endpoint are IN the key too (REV-20261017-152
+        # F4): one check-snap-age line carries ONE set of ssh options, so two
+        # remote scopes with a different key, port or host alias must not merge
+        # -- the second would be read with the first one's identity. The host
+        # (the scope's part before ':') is in the key for the same reason.
+        local mhost=""; case "$scope" in *:*) mhost="${scope%%:*}" ;; esac
+        key="${schedule}${SEP}${pattern}${SEP}${warn}${SEP}${crit}${SEP}${recursive}${SEP}${pairlbl}${SEP}${mexcl}${SEP}${mssh}${SEP}${mhost}"
         [ -z "${MONITOR_GROUPS[$key]+x}" ] && MONITOR_GROUP_ORDER+=("$key")
         MONITOR_GROUPS["$key"]+="${e}${LSEP}"
     done
@@ -4035,7 +4041,7 @@ emit_monitor() {
         list="${MONITOR_GROUPS[$key]}"
         local -a members=()
         IFS="$LSEP" read -ra members <<< "${list%${LSEP}}"
-        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl <<< "${members[0]}"
+        IFS="$SEP" read -r scope pattern warn crit schedule recursive notify broken warntext pairlbl mexcl mssh <<< "${members[0]}"
 
         local -a targets=()
         local m mscope mpat mwarn mcrit msch mrec mnot mbrk mwtxt mplbl
@@ -4060,7 +4066,10 @@ emit_monitor() {
         if [ -n "${mexcl:-}" ]; then
             for _mx in ${mexcl//,/ }; do xflags+="-x $_mx "; done
         fi
-        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}\"$joined\" \"$pattern\" $warn $crit"
+        # ssh options (a remote scope only, REV-20261017-152): the section's
+        # ssh_flags, already linted to the five options check-snap-age.sh accepts.
+        local sflags=""; [ -n "${mssh:-}" ] && sflags="$mssh "
+        local cmd="$REPO_DIR/check-snap-age.sh ${flag}${lflag}${xflags}${sflags}\"$joined\" \"$pattern\" $warn $crit"
         # The verdict is CAPTURED and handed to the notify script, not just
         # appended to the log. check-snap-age.sh already prints the dataset, the
         # pattern, the newest snapshot, its real age and both thresholds -- all

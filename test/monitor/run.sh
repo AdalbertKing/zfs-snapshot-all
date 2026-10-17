@@ -30,6 +30,11 @@ cat > "$TMPD/bin/zfs" <<'STUB'
 # names, oldest first), $Z/epoch.<mangled thing> (a creation value, or the
 # literal MISSING to make the read fail).
 Z="$ZSTUB_DIR"
+# Every call is traced (F: the remote mode must only list/get). Knobs for the
+# F4 failure shapes: ZSTUB_SNAP_RC = exit status of the snapshot list AFTER it
+# printed its lines (partial output + failure); ZSTUB_WALK_RC = the same for the
+# -R walk; ZSTUB_JUNK = a line that is not a snapshot of the dataset.
+[ -n "${ZSTUB_TRACE:-}" ] && echo "${REMOTE_HOST:+$REMOTE_HOST:}zfs $*" >> "$ZSTUB_TRACE"
 mangle() { printf '%s' "$1" | tr '/@' '__'; }
 mode=""; recurse=0; target=""; prop=""
 while [ $# -gt 0 ]; do
@@ -49,6 +54,7 @@ case "$mode" in
     list)
         if [ "$recurse" = 1 ]; then
             grep -E "^${target}(/|$)" "$Z/datasets" 2>/dev/null
+            exit "${ZSTUB_WALK_RC:-0}"
         else
             grep -qxF "$target" "$Z/datasets" 2>/dev/null || exit 1
             printf '%s\n' "$target"
@@ -56,7 +62,8 @@ case "$mode" in
     listsnap)
         f="$Z/snaps.$(mangle "$target")"
         [ -f "$f" ] && sed "s|^|${target}@|" "$f"
-        exit 0 ;;
+        [ -n "${ZSTUB_JUNK:-}" ] && echo "$ZSTUB_JUNK"
+        exit "${ZSTUB_SNAP_RC:-0}" ;;
     get)
         f="$Z/epoch.$(mangle "$target")"
         [ -f "$f" ] || exit 1
@@ -172,6 +179,117 @@ add_ds tank/quiet 0
 add_snap tank/quiet "vzdump-1" 0
 out="$(run tank/quiet automated_ 2h 4h)"
 check "E1 below-warn is silent without -v" "" "$out"
+
+# ---- F. REV-20261017-152 round 2: remote datasets, every read checked ------
+# An ssh stub on PATH: records its argv, can fail like ssh (255) or like the
+# pair gate (93), optionally only from its N-th call on (a probe that succeeds,
+# then a read that does not), and otherwise runs the remote command against the
+# same zfs stub -- with the host's OWN data dir when $ZSTUB_ROOT/<host> exists,
+# so two endpoints can answer differently. REMOTE_HOST marks remote calls in
+# the zfs trace.
+cat > "$TMPD/bin/ssh" <<'SSH'
+#!/bin/bash
+echo "SSH $*" >> "$SSH_LOG"
+n=$(($(cat "$SSH_LOG.n" 2>/dev/null || echo 0) + 1)); echo "$n" > "$SSH_LOG.n"
+while [ $# -gt 0 ]; do
+    case "$1" in -n) shift ;; -o|-p|-i|-c) shift 2 ;; -*) shift ;; *) break ;; esac
+done
+dest="$1"; shift; host="${dest#*@}"
+if [ -n "${SSH_RC:-}" ] && [ "$n" -ge "${SSH_FROM:-1}" ]; then
+    [ "$SSH_RC" = 93 ] && echo "PAIR_DISABLED: relationship disabled" >&2
+    exit "$SSH_RC"
+fi
+d="$ZSTUB_DIR"; [ -d "$ZSTUB_ROOT/$host" ] && d="$ZSTUB_ROOT/$host"
+REMOTE_HOST="$host" ZSTUB_DIR="$d" bash -c "$*"
+SSH
+chmod +x "$TMPD/bin/ssh"
+export SSH_LOG="$TMPD/ssh.log" ZSTUB_TRACE="$TMPD/ztrace" ZSTUB_ROOT="$TMPD/hosts"
+fresh_trace() { : > "$SSH_LOG"; rm -f "$SSH_LOG.n"; : > "$ZSTUB_TRACE"; }
+only_reads() { ! grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE" | grep -q .; }
+
+# F1 the ordinary verdicts, read over ssh: OK, stale, no-match (dataset age).
+reset_world; fresh_trace
+add_ds tank/vm 0; add_snap tank/vm "zsalab_1" $((1 * H))
+check "F1 remote fresh snapshot -> OK" "0" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+case "$(grep -c '^srcA:zfs' "$ZSTUB_TRACE")" in 0) bad "F1 the reads ran on the remote host" "$(cat "$ZSTUB_TRACE")" ;; *) ok "F1 the reads ran on the remote host" ;; esac
+grep -q '^zfs ' "$ZSTUB_TRACE" && bad "F1 nothing was read locally" "$(cat "$ZSTUB_TRACE")" || ok "F1 nothing was read locally"
+reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" $((5 * H))
+check "F1 remote stale snapshot -> CRITICAL" "2" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+reset_world; add_ds tank/vm $((3 * H)); add_snap tank/vm "__replicate_1__" 0
+check "F1 remote no-match -> dataset age (WARNING)" "1" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+
+# F2 ssh options: the same five as delsnaps, plus non-interactive and bounded.
+reset_world; fresh_trace; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+rc_of -p 2222 -k /kh -c aes128-ctr -K /key -O HostKeyAlias=zfs-client-a zbk@srcA:tank/vm zsalab_ 2h 4h >/dev/null
+L="$(head -1 "$SSH_LOG")"
+case "$L" in
+  "SSH -n -o IdentitiesOnly=yes -i /key -o HostKeyAlias=zfs-client-a -o StrictHostKeyChecking=yes "*) ok "F2 -K/-O at the front, before the built options (OpenSSH keeps the first value)" ;;
+  *) bad "F2 -K/-O at the front" "$L" ;;
+esac
+for want in "-n" "StrictHostKeyChecking=yes" "UserKnownHostsFile=/kh" "-p 2222" "-c aes128-ctr" "BatchMode=yes" "ConnectTimeout=15" "ServerAliveInterval=15" "zbk@srcA"; do
+    case "$L" in *"$want"*) ok "F2 ssh carries $want" ;; *) bad "F2 ssh carries $want" "$L" ;; esac
+done
+
+# F3 failures to ASK are UNKNOWN and say which -- never OK, never a dataset age.
+for t in "255:could not reach srcA over ssh" "93:pair gate refuses"; do
+    code="${t%%:*}"; why="${t#*:}"
+    reset_world; fresh_trace; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+    check "F3 ssh exit $code on the probe -> UNKNOWN" "3" "$(SSH_RC=$code rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+    out="$(SSH_RC=$code run root@srcA:tank/vm zsalab_ 2h 4h)"
+    case "$out" in *"$why"*) ok "F3 exit $code says: $why" ;; *) bad "F3 exit $code says: $why" "$out" ;; esac
+done
+# probe succeeds, the snapshot list then fails (dropped link): UNKNOWN, not dataset age
+reset_world; fresh_trace; add_ds tank/vm $((9 * H))
+check "F3 probe OK, snapshot list fails over ssh -> UNKNOWN (not dataset-age CRITICAL)" "3" \
+      "$(SSH_RC=255 SSH_FROM=2 rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+
+# F4 failure AFTER partial output, local and remote: the lines printed before the
+# failure are not trusted -- the fresh snapshot among them must not paint it OK.
+for where in "tank/vm" "root@srcA:tank/vm"; do
+    reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+    check "F4 snapshot list prints, then fails ($where) -> UNKNOWN" "3" "$(ZSTUB_SNAP_RC=1 rc_of "$where" zsalab_ 2h 4h)"
+    out="$(ZSTUB_SNAP_RC=1 run "$where" zsalab_ 2h 4h)"
+    case "$out" in *"snapshot list could not be read"*) ok "F4 ($where) says why" ;; *) bad "F4 ($where) says why" "$out" ;; esac
+done
+reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+check "F4 a snapshot-list line that is not this dataset's -> UNKNOWN" "3" "$(ZSTUB_JUNK='other/ds@zsalab_9' rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+
+# F5 -R walk: its failure is UNKNOWN (it used to check no children, silently).
+for where in "tank/p" "root@srcA:tank/p"; do
+    reset_world; add_ds tank/p 0; add_ds tank/p/a 0; add_snap tank/p/a "zsalab_1" 0
+    check "F5 -R walk fails ($where) -> UNKNOWN" "3" "$(ZSTUB_WALK_RC=1 rc_of -R "$where" zsalab_ 2h 4h)"
+    out="$(ZSTUB_WALK_RC=1 run -R "$where" zsalab_ 2h 4h)"
+    case "$out" in *"descendants could not be listed"*) ok "F5 ($where) says why" ;; *) bad "F5 ($where) says why" "$out" ;; esac
+    check "F5 -R walk OK ($where) -> OK" "0" "$(rc_of -R "$where" zsalab_ 2h 4h)"
+done
+
+# F6 malformed epoch over ssh, absent remote dataset: UNKNOWN.
+reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0; break_epoch "tank/vm@zsalab_1"
+check "F6 remote unreadable snapshot creation -> UNKNOWN" "3" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+reset_world
+check "F6 remote dataset absent -> UNKNOWN" "3" "$(rc_of root@srcA:tank/gone zsalab_ 2h 4h)"
+case "$(run root@srcA:tank/gone zsalab_ 2h 4h)" in *"does not exist"*) ok "F6 says it does not exist" ;; *) bad "F6 says it does not exist" "$(run root@srcA:tank/gone zsalab_ 2h 4h)" ;; esac
+
+# F7 two endpoints in one run, each answering for itself; mixed verdicts keep every UNKNOWN.
+reset_world; fresh_trace
+mkdir -p "$ZSTUB_ROOT/srcA" "$ZSTUB_ROOT/srcB"
+( ZSTUB_DIR="$ZSTUB_ROOT/srcA"; : > "$ZSTUB_DIR/datasets"; echo tank/vm >> "$ZSTUB_DIR/datasets"; echo "$NOW" > "$ZSTUB_DIR/epoch.tank_vm"
+  echo zsalab_1 > "$ZSTUB_DIR/snaps.tank_vm"; echo "$((NOW - 9 * H))" > "$ZSTUB_DIR/epoch.tank_vm_zsalab_1" )
+( ZSTUB_DIR="$ZSTUB_ROOT/srcB"; : > "$ZSTUB_DIR/datasets" )
+out="$(run root@srcA:tank/vm,root@srcB:tank/vm zsalab_ 2h 4h)"; rc=$(rc_of root@srcA:tank/vm,root@srcB:tank/vm zsalab_ 2h 4h)
+check "F7 CRITICAL on A + UNKNOWN on B -> rc CRITICAL" "2" "$rc"
+case "$out" in *"CRITICAL dataset=root@srcA:tank/vm"*"UNKNOWN dataset=root@srcB:tank/vm"*) ok "F7 both findings are reported, each with its host" ;; *) bad "F7 both findings are reported, each with its host" "$out" ;; esac
+rm -rf "$ZSTUB_ROOT"
+
+# F8 names that would be shell syntax on the far side are refused before any ssh.
+reset_world; fresh_trace
+for e in "root@srcA:tank/vm';id;'" 'root@srcA:tank/$(id)' 'root;id@srcA:tank/vm' 'root@-oProxyCommand=x:tank/vm'; do
+    check "F8 refused before any ssh: $e" "3" "$(rc_of "$e" zsalab_ 2h 4h)"
+done
+[ -s "$SSH_LOG" ] && bad "F8 no ssh was started" "$(cat "$SSH_LOG")" || ok "F8 no ssh was started"
+
+# F9 read-only: across every remote case above the zfs trace holds list/get only.
+only_reads && ok "F9 the remote mode only ever ran 'zfs list' and 'zfs get'" || bad "F9 only list/get" "$(grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE")"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
