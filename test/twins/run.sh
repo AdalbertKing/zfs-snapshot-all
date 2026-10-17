@@ -750,6 +750,9 @@ mt_run() {   # <src list|FAIL> <tgt list> <base|NONE> [stuck name] -> "rc|destro
           fi
       }
       find_common_snapshot() { [ "$MT_BASE" = NONE ] && { echo -n null; return 0; }; echo -n "$MT_BASE"; }
+      # REV-20261017-150: mirror_target asks this first. 't/x' names no guest,
+      # so the shipped function would answer "not live" too.
+      guest_disk_is_live() { return 1; }
       zfs() {
           [ "$1" = destroy ] || return 0
           [ -n "$MT_STUCK" ] && [ "$2" = "t/x@$MT_STUCK" ] && return 1
@@ -794,6 +797,7 @@ mt_lvl() {   # <src> <tgt> <base> [stuck] -> the level of the summary line
       MT_SRC="$1" MT_TGT="$2" MT_BASE="$3" MT_STUCK="${4:-}"
       get_sorted_snapshots() { if [ -n "${2:-}" ]; then printf '%s' "$MT_SRC" | tr ' ' '\n'; else printf '%s' "$MT_TGT" | tr ' ' '\n'; fi; }
       find_common_snapshot() { echo -n "$MT_BASE"; }
+      guest_disk_is_live() { return 1; }
       zfs() { [ -n "$MT_STUCK" ] && [ "$2" = "t/x@$MT_STUCK" ] && return 1; return 0; }
       : > "$MT/lvl"; . "$MT/fn.sh"; mirror_target "s/x" "t/x" u h >/dev/null 2>&1
       tr '\n' ' ' < "$MT/lvl" )
