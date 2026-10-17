@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e45e58ab25fc4b73 -->
+<!-- status-covers-digest: 16cd0a5b6d0ad945 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -33,6 +33,17 @@
   Na żywo (pve10, gałąź z osobnej kopii, 17:32 UTC): `main` -- enable FATAL rc 1, status NIEZNANA/UNKNOWN; gałąź --
   status DISABLED, ponowione disable rc 0, enable rc 0, peer ACTIVE, pauza lokalna zdjęta, crontab bez zmian (39 linii).
   Relacja pve9b zostawiona ACTIVE.
+
+- **REV-20261017-152 runda 2: monitor wieku migawek czyta zdalne datasety (2026-10-17; `feat/rev152-remote-monitor`).**
+  Recenzent przyjął projekt „kopia nigdzie” (`snaponly`): runda 1 z warunkami F1–F3, runda 2 z zgodą na zamrożony
+  `check-snap-age.sh`. Zrobiona runda 2: `check-snap-age.sh` v2.4 przyjmuje `[user@]host:dataset` (jak `delsnaps.sh`,
+  te same `-p -k -c -K -O`; ssh bez interakcji, z limitami i `timeout`), czyta tylko `zfs list`/`zfs get`, a status
+  KAŻDEGO odczytu jest sprawdzany -- także lokalnie: dawna nieudana lista migawek przechodziła po cichu na wiek
+  datasetu, a nieudany spacer `-R` nie sprawdzał dzieci; teraz UNKNOWN z powodem (ssh, bramka, timeout, brak zfs).
+  `gen-cron.sh`: monitor na zdalnym `[prune:]` zamiast odmowy, z `ssh_flags` sekcji; tożsamość ssh i host w kluczu
+  grupy. Na żywo pve10 -> pve9b (konto `zfsbackup`, klucz parowania, bramka): OK, `-R`, CRITICAL, brak datasetu,
+  zły klucz, wyłączona bramka -- każdy właściwy kod. Runda 1 (rekord `snaponly`, `add-client`, generator,
+  przycinanie źródła) i dowód produkcyjny F5 -- następne.
 
 - **REV-20261017-151 (P0): `snapsend -H` nie omija już odmowy przy braku wspólnej bazy (2026-10-17; `fix/rev151-push-H-no-common-base`).**
   Odmowa P-0 (istniejący cel z migawkami, brak wspólnej migawki po GUID i brak zakładki) miała w pushu wyjątek dla
