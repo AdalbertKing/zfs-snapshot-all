@@ -1724,7 +1724,11 @@ def screen_actions(active, hide_gone=False, paused=False):
     if active == "zadania":
         return [("F7", u"Uruchom teraz"), ("F8", u"Sortuj")]
     if active == "relacje":
-        return [("F7", u"Wznów" if paused else u"Pauza"), ("F8", u"Eksport"), ("F9", u"Import")]
+        # JEDNOLICIE (wlasciciel 2026-10-17): F7 to wszedzie "Uruchom teraz" -- na F3
+        # kopia kazdego datasetu relacji jej najdrobniejszym zadaniem (run-relation).
+        # Pauza przeszla na F8, Eksport i Import dziela F9 (okienko wyboru).
+        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Wznów" if paused else u"Pauza"),
+                ("F9", u"Eksport/Import", u"Plik")]
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
     if active == "nosniki":
@@ -3410,10 +3414,13 @@ HELP = [
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
-    u"                 źródła, konfig, zapis jako szablon), F7 pauza/wznów, Del usuń,",
+    u"                 źródła, konfig, zapis jako szablon, adres hosta po",
+    u"                 przeniesieniu kolektora), Del usuń,",
     u"                 w szczegółach 'p' = Przywróć z tej relacji (okna whiptail),",
-    u"                 F8 eksport do pliku (Enter zapisuje, domyślnie w",
-    u"                 /etc/zfs-snapshot-all/relations), F9 import: lista plików",
+    u"                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
+    u"                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
+    u"                 F9 eksport/import: eksport do pliku (Enter zapisuje, domyślnie",
+    u"                 w /etc/zfs-snapshot-all/relations) albo import: lista plików",
     u"                 eksportu z tego katalogu, potem werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
@@ -3927,36 +3934,51 @@ class UI(object):
         # Import i nowa relacja NIE potrzebuja istniejacej relacji: na pustym
         # kolektorze -- dokladnie tam, gdzie sie importuje -- import i Ins milczaly,
         # bo ponizej najpierw szukamy zaznaczonej relacji (pve11, 2026-09-23).
-        if k == "F9":
-            d = relations_dir()
-            return self.import_files(d if os.path.isdir(d) else home_dir())
         if k == "ins":
             return self.run_wizard()
         # Del dziala takze na rekordzie `removed`: tam znaczy "zwolnij nazwe / posprzataj reszte".
         r, why = self.current_relation(allow_removed=(k == "del"))
+        if k == "F9":
+            # F9 = Eksport/Import (2026-10-17). Bez zaznaczonej relacji -- pusty kolektor,
+            # dokladnie tam, gdzie sie importuje -- od razu import, jak dawniej.
+            if r is None:
+                d = relations_dir()
+                return self.import_files(d if os.path.isdir(d) else home_dir())
+            self.window = ("choice", {"title": u"Relacja %s -- eksport / import" % r["name"], "cur": 0, "rel": r["name"],
+                                      "items": [("eksport", u"Eksport relacji %s do pliku" % r["name"]),
+                                                ("import", u"Import relacji z pliku")]})
+            self.scroll = 0
+            return
         if r is None:
             self.message = why
             return
         n = r["name"]
         rel = r["rel"]
         if k == "F7":
+            # UROCHOM TERAZ, jak F7 na F2 i F6: bez okna potwierdzenia (kopia niczego nie
+            # niszczy), wynik w oknie wyjscia. Czasownik bierze z zainstalowanego crona
+            # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
+            self.run_detached(u"Relacja %s -- kopia teraz" % n, [self.zb(), "run-relation", n], logname="relacja")
+        elif k == "F8":
             if rel.get("paused_local"):
                 self.confirm(u"Wznów relację %s" % n, [self.zb(), "resume-client", n],
                              [u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo."])
             else:
                 self.confirm(u"Wstrzymaj relację %s" % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                              [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
-                              u"monitor mówi OK z pauzy. Odwrotność: F7 na tej relacji jeszcze raz (resume-client)."])
+                              u"monitor mówi OK z pauzy. Odwrotność: F8 na tej relacji jeszcze raz (resume-client)."])
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
             # samo remove-client zostawialo rekord `removed`, ktory trzymal NAZWE, wiec
             # "usun i zaloz od nowa" -- jedyna dzis droga zmiany relacji -- nie dzialalo
             # (zmierzone na pve10, 2026-09-20).
             return self.run_dialog([self.zb(), "delete-relation", n, "--ask"])
-        elif k == "F8":
-            default = os.path.join(relations_dir(), "%s.export.json" % n)
-            self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = wróć):", default,
-                        lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc wróć")
+
+    def export_prompt(self, n):
+        """Eksport relacji: pole sciezki (F9 -> Eksport)."""
+        default = os.path.join(relations_dir(), "%s.export.json" % n)
+        self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = wróć):", default,
+                    lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc wróć")
 
     def export_to(self, n, path):
         """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
@@ -4354,6 +4376,26 @@ class UI(object):
                     self.window = None
                     self.import_name(it["path"])
             return "stay"
+        if self.window and self.window[0] == "choice":
+            # Okienko wyboru (F9 na F3: Eksport / Import): strzalki, Enter, Esc.
+            obj = self.window[1]
+            if k in ("esc", "q"):
+                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+            elif k in ("down", "j"):
+                obj["cur"] = min(obj["cur"] + 1, len(obj["items"]) - 1)
+            elif k in ("up", "k"):
+                obj["cur"] = max(0, obj["cur"] - 1)
+            elif k == "enter":
+                tag = obj["items"][obj["cur"]][0]
+                self.window = None
+                if tag == "eksport":
+                    self.export_prompt(obj["rel"])
+                else:
+                    d = relations_dir()
+                    res = self.import_files(d if os.path.isdir(d) else home_dir())
+                    if res:
+                        return res
+            return "stay"
         if self.window and self.window[0] == "pick":
             obj = self.window[1]
             if k == "esc":
@@ -4620,7 +4662,7 @@ class UI(object):
             self.pair_cursor = c
             return "stay"
         # F2-F6 ZAWSZE przelaczaja okno (R4-1: F4 na F3 bylo pauza i przechwytywalo
-        # Transfery). Pauza jest teraz na F7.
+        # Transfery). Pauza jest teraz na F8 (F7 = Uruchom teraz, jednolicie, 2026-10-17).
         for key, fk, _label in SCREENS:
             if k == fk:
                 self.screen = key
@@ -4749,6 +4791,10 @@ def _ui_render(self, width, height):
             top_ = max(0, obj["cur"] - (height - 7))
             scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
                                              footer=u"Enter = wejdź / importuj   Esc = wróć   strzałki")
+        elif kind == "choice":
+            lines = [fit("%s %s" % (">" if i == obj["cur"] else " ", label), width - 4) for i, (_t, label) in enumerate(obj["items"])]
+            scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
+                                             footer=u"Enter wybiera   Esc wraca   strzałki")
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
                                              footer=u"Enter wybiera   Esc wraca bez zmiany")
