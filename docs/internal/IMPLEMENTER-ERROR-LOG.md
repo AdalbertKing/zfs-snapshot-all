@@ -110,7 +110,7 @@ attached.
 commit: `git status --short`, then `git add <each intended file>`, then
 `git diff --cached --stat` read against what the change is supposed to touch.
 
-*Evidence: E82.*
+*Evidence: E82, E87.*
 
 ### R9, R10, R11 — on running suites
 
@@ -1921,6 +1921,23 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E87 — `git add docs` staged an untracked runbook directory again (2026-10-17, R13, repeat of E82)
+**2026-10-17, REV-20261017-152 round-1 re-review response.**
+
+*Genesis.* After regenerating the ledger I staged with `git add docs`. The
+untracked `docs/runbooks/wymiana-dysku-zfs-mirror/` (another task's HTML, PDF
+and build script) went into the index. Seen in the `git status` before the
+commit and unstaged with `git restore --staged`; nothing of it was committed.
+The same round also left an earlier commit (`a9f5d498`, described as "test
+cases") carrying staged documentation with it, for the same reason.
+
+*Cause.* The same as E82: a directory add, typed because the files to stage
+(response, ledger, open threads, status) all lived under `docs/`. R13 existed
+and was not applied.
+
+*Rule.* R13, unchanged. The repeat is the signal: stage the generated views by
+name too, and read `git diff --cached --stat` before every commit.
 
 ### E86 — `gen-cron.sh --install` run by hand as the account rewrote its log paths (2026-10-17, R8)
 **2026-10-17, REV-20261017-152 F1.1 live proof on pve9.**
