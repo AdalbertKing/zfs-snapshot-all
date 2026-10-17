@@ -1192,6 +1192,36 @@ Two collectors pruning the same snapshot family on one source, each under its ow
 Nothing was installed."
 }
 
+# snaponly's answer to assert_no_foreign_source_pruner (REV-20261017-152 round 1
+# review: the owner allows independent collectors on one source). That guard
+# exists because two collectors pruning the SAME family delete each other's
+# bases. A snaponly family is `<label>_<prefix>`: the label is unique per source
+# (--join refuses a second machine under it) and holds no '_', so no other
+# collector's snaponly family can match it, and an ordinary family pattern
+# (automated_hourly, ...) does not match a name that starts with a collector
+# label. Disjoint by construction -- so another account holding `destroy` here is
+# SAID, not refused. Not knowing is still a refusal: a failed `zfs allow` read
+# stops the activation. What this cannot see is another collector's PATTERN: a
+# prefixless ladder there, or one that starts with this label, would reach this
+# family too; the message says so. Backup relationships keep the refusal.
+snaponly_note_foreign_pruners() {   # <account> <host> <port> <keyfile> <alias> <alias_kh> <source-dataset>...
+    local account="$1" host="$2" port="$3" keyfile="$4" alias="$5" alias_kh="$6"; shift 6
+    local -a opts; load_ssh_opts "$keyfile" "$alias" "$alias_kh" "$port"; opts=("${LOAD_SSH_OPTS[@]}")
+    local ds out rc others="" o tag
+    tag="$(snaponly_collector_tag)"
+    for ds in "$@"; do
+        out=$(ssh -n "${opts[@]}" "${account}@${host}" "zfs allow -- '$ds'" 2>&1); rc=$?
+        [ "$rc" -eq 0 ] || die "foreign-pruner check: 'zfs allow $ds' on $host as $account failed (ssh/zfs exit $rc) -- refusing to install a source prune without knowing who else prunes there. Output: $(printf '%s' "$out" | tail -2)"
+        o=$(printf '%s\n' "$out" | foreign_pruners_from_allow "$account" | tr '\n' ' ')
+        [ -n "$o" ] && others="$others
+  $ds: ${o% }"
+    done
+    [ -z "$others" ] && return 0
+    warn "other collectors can also delete snapshots on these source datasets on $host:$others
+  This relationship prunes ONLY its own family (${tag}_*), which no other collector's family can match. It is NOT protected from a pruner there whose pattern is empty (prefixless) or starts with '${tag}_' -- check those relationships if you are not sure."
+    return 0
+}
+
 assert_no_atomic_with_source_retention() {   # <configfile> <local dataset path>...
     local cfg="$1"; shift
     local lp rec
@@ -11518,13 +11548,35 @@ snaponly_refuse() {   # <verb> <relationship name>
 }
 
 # The collector's tag in this relationship's snapshot names. F3: separate
-# collectors' families must be DISJOINT, prefix matching included -- so the tag
-# is followed by '_' and cannot be a prefix of another tag's family
-# ("pve1_..." never matches "pve10_...").
+# collectors' families on one source must be DISJOINT, prefix matching included.
+#
+# The tag IS THE PAIRING LABEL the source knows this collector by (deploy.sh
+# --pair: `hostname -s`, the same sanitising, case kept). Its uniqueness is
+# enforced where it matters -- on the source: --join refuses a second machine
+# under a label it already pairs (PEER_CONF_INITIATOR_ID, REV-20261017-152 round 1
+# review). The first version lower-cased the name, so two labels the source
+# keeps apart ("PVE9", "pve9") collapsed into one family.
+#
+# '_' separates the tag from the prefix, so a label holding '_' could make one
+# family a prefix of another ("a" + "_b_x" vs "a_b" + "_x"): refused, not
+# rewritten. A hostname cannot carry '_' anyway (RFC 1123).
+#
+# Read from the PAIRING when it says (the peer account is zfsbackup-<label>),
+# not from today's hostname: a host renamed after pairing would otherwise move
+# its family and leave the old one unpruned. A root pairing has no label in its
+# account; there the label is the hostname, as --pair takes it.
 snaponly_collector_tag() {
-    local t; t="$(hostname -s 2>/dev/null || hostname)"
-    t="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
-    printf '%s' "${t:-collector}"
+    local t
+    case "${LOAD_ACCOUNT:-}" in
+        zfsbackup-?*) t="${LOAD_ACCOUNT#zfsbackup-}" ;;
+        *) t="$(hostname -s 2>/dev/null || hostname)" ;;
+    esac
+    t="$(printf '%s' "$t" | tr -c 'A-Za-z0-9._-' '-')"
+    [ -n "$t" ] || die "snaponly: this host has no short hostname -- the snapshot family needs the collector's pairing label"
+    case "$t" in
+        *_*) die "snaponly: this collector's label '$t' contains '_' -- the family is '<label>_<prefix>', so the label must not hold the separator. Rename the host (its short hostname is the label). Nothing was changed." ;;
+    esac
+    printf '%s' "$t"
 }
 
 # A minute that is not a multiple of five (F5): pvesr and most hand-made
@@ -11788,9 +11840,9 @@ $PROBE_DETAIL"
     ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
           "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
         || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
-    ( assert_no_foreign_source_pruner "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+    ( snaponly_note_foreign_pruners "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
           "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
-        || { rm -f "$workfile"; die "another collector already prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
+        || { rm -f "$workfile"; die "could not find out who else prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
 
     echo
     echo "Klient:              $name"

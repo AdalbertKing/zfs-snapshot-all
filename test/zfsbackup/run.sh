@@ -13637,7 +13637,7 @@ if want snaponly; then
 SO="$WORK/snaponly"; rm -rf "$SO"; mkdir -p "$SO/clients"
 so_emit() {   # <profile> <relationship> <config> -> messages; rc of the emitter
     ( hostname() { echo PVE10; }
-      LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
+      LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
       PEER_SAVED_DATASETS="hdd/so/a hdd/so/b" PEER_SAVED_RECURSIVE_ROOTS="hdd/so/b" RECURSION=""
       PROFILE="$1" SOURCE_PROFILE=""
       emit_snaponly_sections "$3" "$2" ) 2>&1
@@ -13649,18 +13649,18 @@ so_emit m12w4d7h24-age rel1 "$SO/c.conf" >> "$SO/emit.out" || rc=1     # a re-re
 bash "$REPO/gen-cron.sh" -c "$SO/c.conf" > "$SO/cron" 2> "$SO/cron.err" || rc=1
 so_snap=$(grep -c '/snapget.sh -s -m "pve10_automated_' "$SO/cron")
 so_bad=$(grep '/snapget.sh' "$SO/cron" | grep -vc 'snapget.sh -s ')
-so_prune=$(grep '/delsnaps.sh' "$SO/cron" | grep -c '"zfsbackup@10.0.0.9:hdd/so/[ab]" "pve10_automated_')
+so_prune=$(grep '/delsnaps.sh' "$SO/cron" | grep -c '"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "pve10_automated_')
 so_prune_all=$(grep -c '/delsnaps.sh' "$SO/cron")
-so_mon=$(grep -c 'check-snap-age.sh .*"zfsbackup@10.0.0.9:hdd/so/[ab]" "pve10_automated_' "$SO/cron")
+so_mon=$(grep -c 'check-snap-age.sh .*"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "pve10_automated_' "$SO/cron")
 if [ "$rc" -eq 0 ] && [ "$so_snap" = 8 ] && [ "$so_bad" = 0 ] && [ "$so_prune" = 8 ] && [ "$so_prune_all" = 8 ] && [ "$so_mon" = 8 ] \
-   && ! grep '/snapget.sh' "$SO/cron" | grep -q '"zfsbackup@10.0.0.9:hdd/so/[ab]" "'; then
+   && ! grep '/snapget.sh' "$SO/cron" | grep -q '"zfsbackup-pve10@10.0.0.9:hdd/so/[ab]" "'; then
     ok "snaponly: 2 datasets x 4 tiers -> snapget -s with the collector's own family (pve10_*), no destination argument; source prune and remote monitor of that family only; a re-render does not duplicate"
 else
     bad "snaponly: emitted sections through gen-cron" "rc=$rc snap=$so_snap bad=$so_bad prune=$so_prune/$so_prune_all mon=$so_mon" "$(cat "$SO/emit.out" "$SO/cron.err")" "$(head -5 "$SO/cron")"
 fi
 # The recursive root takes -R on all three (snapshot, prune, monitor); the plain one none.
-if ! grep -q '"zfsbackup@10.0.0.9:hdd/so/b"' "$SO/cron"    || grep '"zfsbackup@10.0.0.9:hdd/so/b"' "$SO/cron" | grep -v -- ' -R ' | grep -q . \
-   || grep '"zfsbackup@10.0.0.9:hdd/so/a"' "$SO/cron" | grep -q -- ' -R '; then
+if ! grep -q '"zfsbackup-pve10@10.0.0.9:hdd/so/b"' "$SO/cron"    || grep '"zfsbackup-pve10@10.0.0.9:hdd/so/b"' "$SO/cron" | grep -v -- ' -R ' | grep -q . \
+   || grep '"zfsbackup-pve10@10.0.0.9:hdd/so/a"' "$SO/cron" | grep -q -- ' -R '; then
     bad "snaponly: recursion follows the source's recursive roots" "$(grep -n 'hdd/so' "$SO/cron" | cut -c1-160)"
 else
     ok "snaponly: a recursive source root snapshots, prunes and monitors with -R; a plain one without"
@@ -13792,6 +13792,46 @@ snaponly_first_snapshots so1" 2>&1)
         bad "snaponly: first snapshot failure verdict" "$out"
     fi
 done
+
+# The family tag is the PAIRING LABEL the source knows (round 1 review): read
+# from the peer account zfsbackup-<label>, not from today's hostname, case kept
+# (the source keeps "PVE9" and "pve9" apart, so must the family); a root
+# pairing falls back to the hostname; a label holding the '_' separator is
+# refused, never rewritten.
+t1=$( ( hostname() { echo renamed-host; }; LOAD_ACCOUNT=zfsbackup-pve10; snaponly_collector_tag ) 2>&1 )
+t2=$( ( hostname() { echo PVE10; }; LOAD_ACCOUNT=root; snaponly_collector_tag ) 2>&1 )
+t3=$( ( hostname() { echo x; }; LOAD_ACCOUNT=zfsbackup-a_b; snaponly_collector_tag; echo PASSED ) 2>&1 )
+if [ "$t1" = pve10 ] && [ "$t2" = PVE10 ] && printf '%s' "$t3" | grep -q "contains '_'" && ! printf '%s' "$t3" | grep -q PASSED; then
+    ok "snaponly: the family tag is the pairing label (account wins over a renamed host), case kept; a label with '_' is refused"
+else
+    bad "snaponly: family tag" "account: $t1" "root: $t2" "underscore: $t3"
+fi
+
+# Two collectors on one source (owner decision, round 1 review): another
+# account holding destroy there is SAID for snaponly, not refused -- its family
+# is disjoint by construction. Not knowing (the zfs allow read fails) is still a
+# refusal. POSITIVE CONTROL: a backup relationship's guard, fed the same answer,
+# still refuses -- the ordinary family safety is unchanged.
+so_allow='---- Permissions on hdd/solab ----
+Local+Descendent permissions:
+	user zfsbackup-pve11 bookmark,destroy,hold,mount,release,send,snapshot
+	user zfsbackup-pve9 bookmark,destroy,hold,mount,release,send,snapshot'
+so_fp() {   # <function> <ssh rc> -> messages; rc in $so_rc
+    out=$( ( ssh() { [ "$SO_SSH_RC" = 0 ] && printf '%s\n' "$so_allow"; return "$SO_SSH_RC"; }
+             SO_SSH_RC="$2"; LOAD_ACCOUNT=zfsbackup-pve9
+             "$1" zfsbackup-pve9 10.0.0.9 22 /k a /kh hdd/solab; echo "RC=$?" ) 2>&1 )
+    printf '%s' "$out"
+}
+o_so=$(so_fp snaponly_note_foreign_pruners 0)
+o_bk=$(so_fp assert_no_foreign_source_pruner 0)
+o_er=$(so_fp snaponly_note_foreign_pruners 255)
+if printf '%s' "$o_so" | grep -q 'RC=0' && printf '%s' "$o_so" | grep -q 'zfsbackup-pve11' && printf '%s' "$o_so" | grep -q 'ONLY its own family (pve9_\*)' \
+   && ! printf '%s' "$o_bk" | grep -q 'RC=0' && printf '%s' "$o_bk" | grep -q 'another collector can already DELETE' \
+   && ! printf '%s' "$o_er" | grep -q 'RC=0' && printf '%s' "$o_er" | grep -q 'failed (ssh/zfs exit 255)'; then
+    ok "snaponly: another pruner on the source is named and allowed (disjoint family); a backup relationship still refuses it; an unreadable zfs allow still refuses"
+else
+    bad "snaponly: foreign pruner" "snaponly: $o_so" "backup: $o_bk" "ssh 255: $o_er"
+fi
 fi   # --- koniec sekcji snaponly ---
 
 

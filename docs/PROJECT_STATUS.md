@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8fd9583d8fb5ed82 -->
+<!-- status-covers-digest: 0d46a324f6a561bf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -22,9 +22,20 @@
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
 - **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; #592 na `main`, nie zgłoszona recenzentowi).**
-  Recenzent (przegląd rundy 2) zostawił do niej dwie uwagi, otwarte: `assert_no_foreign_source_pruner` odrzuca drugi
-  kolektor na tym samym źródle także przy rozłącznych rodzinach (sprzeczne z decyzją właściciela), a znacznik kolektora
-  to skrócona nazwa hosta -- dwa kolektory o tej samej krótkiej nazwie dostałyby tę samą rodzinę.
+  Dwie uwagi recenzenta (przegląd rundy 2) zrobione (`feat/rev152-r1-collectors`): (1) drugi kolektor na tym samym
+  źródle nie jest już odrzucany dla `snaponly` -- inne konto z `destroy` jest NAZWANE w ostrzeżeniu (rodzina
+  `<etykieta>_<prefiks>` jest rozłączna z każdą rodziną z prefiksem), nieczytelne `zfs allow` nadal odmawia, relacje
+  backup zachowują odmowę; (2) znacznik rodziny to etykieta pary (z konta `zfsbackup-<etykieta>`, wielkość liter
+  zachowana, etykieta z `_` jest odrzucana), a jej unikalność na źródle wymusza `deploy.sh --join`: paczka niesie tożsamość
+  maszyny (16 hex z sha256 `/etc/machine-id`), join odmawia innej maszyny pod znaną etykietą i paczki bez tożsamości,
+  gdy manifest ją zna. Wcześniej druga maszyna o tej samej krótkiej nazwie była brana za rotację klucza i dzieliła
+  konto, zakres i rodzinę (to cecha parowania, więc każdego rodzaju relacji, nie tylko `snaponly`). Testy: `test/zfsbackup --section snaponly` 16/0 (na
+  `main` 14/2), `test/join` 91/0. Na żywo: pve9 i pve11 -> pve10 `hdd/solab`, oba aktywne; pve11 nazwał
+  `zfsbackup-pve9` i ruszył; przycinanie `-H1` z każdego skasowało tylko własną rodzinę (przetrwały `pve1_*`,
+  `pve11x_*`, `pve99_*`, `__replicate_*`, `vzdump`, `automated_*`, ręczna); monitory rc 0; podrobiona paczka `pve9` z
+  inną tożsamością i paczka bez tożsamości -- odmowa, `authorized_keys` bez zmian; prawdziwa paczka -- przyjęta.
+  Zgodność: `--join` sprzed tej zmiany odrzuca nowe pole jako nieznane (głośno, nic nie zmienia) -- źródło musi być
+  zaktualizowane, jak przy każdym godzinnym pullu.
   `add-client --snaponly --host=… --datasets=…` (i fasada `--source=HOST:DS --mode=snaponly`) zapisuje w rekordzie
   `RUX_MODE=snaponly`; nic nie wnioskuje trybu z pustego celu. Cykl: `add-client` -> `--join` na źródle ->
   `verify-endpoint` (`snapget -n -s`, tylko odczyt) -> `activate-client` (`--plan` pokazuje podgląd); bez seeda.

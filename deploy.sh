@@ -939,6 +939,20 @@ pubkey_fingerprint() {
     ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'
 }
 
+# WHICH MACHINE a pairing comes from (REV-20261017-152, round 1 review). The
+# label is `hostname -s`, and two collectors with the same short name produced
+# the same label, the same peer account on the source -- and the second --join
+# was taken for a key ROTATION of the first ("adding alongside"): two machines
+# behind one account, one scope, one snapshot family. The package now carries a
+# stable machine identity -- 16 hex of sha256(/etc/machine-id), nothing secret --
+# and --join refuses a different one under a label it already knows. Empty when
+# the host has no machine-id: then nothing is claimed and nothing is checked.
+collector_identity() {
+    local m; m=$(cat /etc/machine-id 2>/dev/null) || m=""
+    [ -n "$m" ] || return 0
+    printf '%s' "$m" | sha256sum 2>/dev/null | cut -c1-16
+}
+
 # ============================================================================
 # The wsad package is UNTRUSTED STRUCTURED DATA, not code.
 #
@@ -1093,7 +1107,7 @@ parse_peer_conf() {
         case "$key" in
             PEER_CONF_ROLE|PEER_CONF_DATASETS|PEER_CONF_TARGET|PEER_CONF_AS|\
             PEER_CONF_MODE|PEER_CONF_ACCOUNT|PEER_CONF_PORT|PEER_CONF_INITIATOR_LABEL|\
-            PEER_CONF_REMOTE_JOIN|PEER_CONF_REQUESTED) ;;
+            PEER_CONF_REMOTE_JOIN|PEER_CONF_REQUESTED|PEER_CONF_INITIATOR_ID) ;;
             *) die "peer.conf line $n has unknown key '$key' -- a wsad has a fixed set of keys and anything else means the package was not produced by --pair" ;;
         esac
         [ -z "${PC[$key]+x}" ] || die "peer.conf has '$key' twice (line $n) -- refusing to guess which one was meant"
@@ -1180,6 +1194,11 @@ validate_peer_conf() {
         || die "peer.conf PEER_CONF_ACCOUNT='${PC[PEER_CONF_ACCOUNT]}' is not a valid account name (this string is passed to useradd)"
     pc_is_label "${PC[PEER_CONF_INITIATOR_LABEL]}" \
         || die "peer.conf PEER_CONF_INITIATOR_LABEL='${PC[PEER_CONF_INITIATOR_LABEL]}' is not a valid label (it becomes a path component)"
+    case "${PC[PEER_CONF_INITIATOR_ID]-unset}" in
+        unset) ;;
+        *) [[ "${PC[PEER_CONF_INITIATOR_ID]}" =~ ^[0-9a-f]{16}$ ]] \
+               || die "peer.conf PEER_CONF_INITIATOR_ID='${PC[PEER_CONF_INITIATOR_ID]}' is not 16 lowercase hex digits" ;;
+    esac
     # REV-20260802-033 slice 9 / U10: present only when --pair --join-remotely
     # wrote this package -- a fixed literal, not a free-form claim, since all
     # it needs to say is "yes". A package that predates this slice has no such
@@ -5974,6 +5993,11 @@ PEER_CONF_ACCOUNT=$proposed_account
 PEER_CONF_PORT=$PEER_PORT
 PEER_CONF_INITIATOR_LABEL=$my_label
 EOF
+    # Written only when there is an identity. COMPATIBILITY: a --join older
+    # than this key refuses it as unknown (loudly, nothing changed) -- the
+    # source updates through the same hourly pull as the collector.
+    local _my_id; _my_id=$(collector_identity)
+    [ -n "$_my_id" ] && echo "PEER_CONF_INITIATOR_ID=$_my_id" >> "$workdir/peer.conf"
     # Only ever written when there IS a request to carry. An absent key reads
     # exactly like every package produced before this change, so an older
     # collector's wsad still joins and still gets the whole-estate draft it
@@ -6534,6 +6558,7 @@ do_join() {
     local PEER_CONF_MODE="${PC[PEER_CONF_MODE]:-}"
     local PEER_CONF_INITIATOR_LABEL="${PC[PEER_CONF_INITIATOR_LABEL]}"
     local PEER_CONF_REMOTE_JOIN="${PC[PEER_CONF_REMOTE_JOIN]:-}"
+    local PEER_CONF_INITIATOR_ID="${PC[PEER_CONF_INITIATOR_ID]:-}"
 
     # pc_is_label already refused anything this would have had to rewrite, so
     # the old sanitising tr is gone: a label that needed sanitising is now a
@@ -6551,9 +6576,21 @@ do_join() {
     # the same label, not a rotation. Refuse rather than guess. A matching
     # account/target with a different key is treated as a legitimate rotation
     # driven by --rotate on the other side. ----
-    local prior_granted_datasets=""
+    local prior_granted_datasets="" prior_id=""
     if [ -r "$mpath" ]; then
+        PEER_JOIN_INITIATOR_ID=""
         record_load manifest "$mpath"
+        prior_id="${PEER_JOIN_INITIATOR_ID:-}"
+        # ONE LABEL, ONE MACHINE. A different identity under a known label is a
+        # second collector with the same short hostname, not a rotation: refused
+        # before any account, key or grant is touched. A manifest from before
+        # the identity existed takes the first one it is shown.
+        if [ -n "$prior_id" ]; then
+            [ -n "$PEER_CONF_INITIATOR_ID" ] \
+                || die "join: '$label' is already paired here from machine $prior_id, and this package names no machine -- it was made by an older deploy.sh, or by a different collector with the same short name. Update the collector and re-run --pair there; nothing was changed."
+            [ "$PEER_CONF_INITIATOR_ID" = "$prior_id" ] \
+                || die "join: '$label' is already paired here from ANOTHER machine ($prior_id; this package: $PEER_CONF_INITIATOR_ID) -- two collectors with the same short hostname would share one account, one scope and one snapshot family. Rename one of them (its hostname is the label), or remove the old pairing first (deploy.sh --leave=$label). Nothing was changed."
+        fi
         # A guided --join rerun may arrive after scope commit. Preserve the
         # relationship-owned grant inventory when republishing the manifest;
         # otherwise the byte-identical scope/hash would correctly skip a
@@ -6696,6 +6733,7 @@ PEER_JOIN_ACCOUNT="$account"
 PEER_JOIN_ACCOUNT_UID="$account_uid"
 PEER_JOIN_FINGERPRINT="$new_fp"
 PEER_JOIN_GRANTED_DATASETS="$prior_granted_datasets"
+PEER_JOIN_INITIATOR_ID="${PEER_CONF_INITIATOR_ID:-$prior_id}"
 $remote_fields
 EOF
     then
