@@ -2704,6 +2704,10 @@ esac
 
 . "$DIR/relpolicy.sh"
 
+# Local relation beside itself, and a push relation -- the
+# shapes the 2026-10-17 lab campaign found wrong. Its header says which.
+. "$DIR/localdest.sh"
+
 # ---- P9: the "not mounted" report names each dataset once -----------------------
 # RESTORE_LANDED holds the root and each child; every entry is listed with -r, so the
 # owner's run on pve10 (2026-10-15) printed adam and ewa twice.
