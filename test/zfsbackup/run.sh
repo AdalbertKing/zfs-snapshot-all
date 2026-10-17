@@ -8198,8 +8198,11 @@ if grep -q '^record_field_allowed()' "$RECLIB"; then
     for set in client manifest pause server; do
         names=$(fg_names "$set"); n=$(printf '%s\n' "$names" | grep -c .)
         fg_counts="$fg_counts $set=$n"
-        printf '%s\n' "$names" | awk '{ printf "%s=v-%s\n", $1, $1 }' > "$RG/all-$set.conf"
-        want=$(printf '%s\n' "$names" | awk '{ printf "%s=v-%s\n", $1, $1 }')
+        # RUX_MODE is a VALUE-checked field since REV-20261017-152 F1.2 (record_load
+        # refuses a kind this package does not write), so it round-trips with a
+        # legal kind; every other field keeps its marker value.
+        printf '%s\n' "$names" | awk '{ v = ($1 == "RUX_MODE") ? "sync" : "v-" $1; printf "%s=%s\n", $1, v }' > "$RG/all-$set.conf"
+        want=$(printf '%s\n' "$names" | awk '{ v = ($1 == "RUX_MODE") ? "sync" : "v-" $1; printf "%s=%s\n", $1, v }')
         got=$( . "$REPO/lib-backup-common.sh"; die() { echo "DIE: $*"; exit 9; }
                record_load "$set" "$RG/all-$set.conf" || echo "record_load rc=$?"
                for k in $names; do printf '%s=%s\n' "$k" "${!k-<unset>}"; done )
