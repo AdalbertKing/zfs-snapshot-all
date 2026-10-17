@@ -114,7 +114,7 @@ if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostn
 # innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
 # --skip-final-catchup --yes`: zapis adresu, sprawdzenie, że odpowiada TEN SAM host
 # (klucz przypięty do aliasu, wspólna migawka), przestawienie crona. Domknięcie kopii
-# starym adresem jest wcześniejszym krokiem admina (F2, Uruchom teraz) -- okno za niego
+# starym adresem jest wcześniejszym krokiem admina (F3, F7 Uruchom teraz) -- okno za niego
 # nie myśli. Literówkę w adresie poprawia się tym samym oknem: relacja zostaje wtedy
 # w stanie endpoint_change_pending, a cron dalej idzie starym adresem.
 address_flow() {

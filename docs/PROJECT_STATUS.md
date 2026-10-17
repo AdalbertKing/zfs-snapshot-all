@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 01dc30ad11c26006 -->
+<!-- status-covers-digest: 5ec4ddfbc5e57478 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -39,7 +39,7 @@
   miało jak tego zmienić (zostawały komendy wsadowe). Teraz `e` na relacji -> „Adres hosta -- po przeniesieniu
   kolektora”: jedno pole (zapisany adres), jedno WYKONAJ, potem `activate NAZWA --host=NOWY --skip-final-catchup
   --yes` (zapis adresu, `verify-endpoint`: ten sam host i wspólna migawka, przestawienie crona). Domknięcie kopii
-  starym adresem to wcześniejszy krok admina (F2, Uruchom teraz). Zmiany w `zfs-backup.sh`: `activate
+  starym adresem to wcześniejszy krok admina (F3, F7 Uruchom teraz). Zmiany w `zfs-backup.sh`: `activate
   --skip-final-catchup`; `set-endpoint` przyjmuje stan `endpoint_change_pending` (poprawka literówki); **jawny
   `--host`, który nie odpowiedział, zatrzymuje `activate` przed instalacją** -- zmierzone na pve10: żądany
   10.99.0.10 nie odpowiadał, `verify-endpoint` awansował stary 192.168.28.98, a `activate` zgłaszał sukces.
@@ -48,7 +48,8 @@
   kopii bez zmian (`hdd/backups/192.168.28.98`, bez nowego seeda); powrót -- crontab identyczny jak przed testem.
   **F3 jednolicie z F2/F6 (właściciel: „Jednolicie ma być”):** F7 = Uruchom teraz -- nowy czasownik `run-relation
   NAZWA`: z zainstalowanego crona najdrobniejsze zadanie kopii każdego datasetu relacji (godzinowe przed dziennym),
-  jako konto relacji, po kolei, werdykt z END rc w logu zadania; szczeble dzienne i wyższe nie są uruchamiane;
+  jako konto relacji, po kolei, werdykt z END rc w logu zadania; dataset z zadaniem godzinowym nie dostaje
+  biegu dziennego ani wyższego (dataset tylko z dziennym -- jego dzienne);
   wstrzymana relacja -- odmowa. F8 = Pauza/Wznów, F9 = Eksport/Import (okienko wyboru; skrót „Plik” przy 80
   kolumnach). Na żywo pve10 -> pve9b: 4 datasety, 4 „done”, rc 0; na pauzie odmowa, nic nie uruchomione.
 
