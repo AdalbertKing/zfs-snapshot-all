@@ -3328,7 +3328,8 @@ cat > "$ER/bin/zb" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "${NR_DIR:?}/zb.log"
 case "$1" in
-    status)         echo '{"relations":[{"name":"r1","state":"active","profile":"d7h24","source_profile":"","peer_host":"192.168.28.99","passive":"'"${ER_MIRROR:-0}"'","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
+    status)         echo '{"relations":[{"name":"r1","state":"'"${ER_STATE:-active}"'","profile":"d7h24","source_profile":"","peer_host":"'"${ER_PEER-192.168.28.99}"'","active_endpoint":"'"${ER_EP:-192.168.28.99:22}"'","installed_endpoint":"192.168.28.99:22","passive":"'"${ER_MIRROR:-0}"'","sources":["root@192.168.28.99:hdd/data"]}]}' ;;
+    activate)       echo ">>> atrapa: activate" ;;
     list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
@@ -3435,6 +3436,67 @@ if grep -qx 'list-profiles --json --no-render' "$ER/zb.log" && ! grep -qx 'list-
     ok "edit-relation: list-profiles --no-render (W1: 16,6 s z renderowaniem na pve9b)"
 else
     bad "edit-relation: list-profiles bez --no-render" "$(grep list-profiles "$ER/zb.log")"
+fi
+# ADRES HOSTA (wlasciciel 2026-10-17): kolektor wyniesiony za VPN -- w menu "Adres hosta",
+# jedno pole (wypelnione zapisanym adresem), jedno WYKONAJ, potem JEDNO
+# `activate r1 --host=NOWY --skip-final-catchup --yes`. Bez domkniecia kopii starym adresem.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+0${T}
+"); ERRC=$?
+ERA="$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
+   && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
+   && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' \
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Adres hosta -- po przeniesieniu kolektora'; then
+    ok "edit-relation: Adres hosta -- pole z zapisanym adresem, WYKONAJ = jedno activate --host= --skip-final-catchup --yes"
+else
+    bad "edit-relation: Adres hosta" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERA" | cut -c1-300)" "$(tail -3 "$ER/err")"
+fi
+# Wstecz z potwierdzenia wraca do pola, Wstecz z pola do menu, Wstecz z menu = nic nie zrobione.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+1${T}
+1${T}
+1${T}
+"); ERRC=$?
+if ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -cF -e '--inputbox')" -eq 2 ]; then
+    ok "edit-relation: Adres hosta -- Wstecz z WYKONAJ wraca do pola, potem do menu; bez WYKONAJ nic nie uruchomione"
+else
+    bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# Zly znak w adresie: komunikat, zadnego activate.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9;id
+0${T}
+1${T}
+1${T}
+"); ERRC=$?
+if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'Zły adres' "$ER/wt.log"; then
+    ok "edit-relation: Adres hosta -- adres ze zlym znakiem odrzucony, nic nie uruchomione"
+else
+    bad "edit-relation: Adres hosta -- zly znak" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# Zmiana adresu w toku (literowka, verify-endpoint odmowil): okno otwiera sie prosto na polu,
+# z zapisanym (niesprawdzonym) adresem -- poprawka tym samym oknem.
+EROUT=$(ER_STATE=endpoint_change_pending ER_EP=10.99.0.99:22 er_run "0${T}10.99.0.9
+0${T}
+"); ERRC=$?
+ERA="$(head -2 "$ER/wt.log" | grep -F -e '--inputbox' | head -1)"
+if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
+   && has "$ERA" 'Zapisany: 10.99.0.99:22' && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then
+    ok "edit-relation: zmiana adresu w toku -- okno prosto na polu adresu, poprawka tym samym activate"
+else
+    bad "edit-relation: zmiana adresu w toku" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -3 "$ER/wt.log" | cut -c1-250)"
+fi
+# Relacja lokalna (bez peera): w menu NIE ma "Adres hosta".
+EROUT=$(ER_PEER= er_run "1${T}
+"); ERRC=$?
+if grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Ręczna edycja konfigu' \
+   && ! grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Adres hosta'; then
+    ok "edit-relation: relacja lokalna -- bez pozycji Adres hosta"
+else
+    bad "edit-relation: relacja lokalna bez Adres hosta" "$(grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | cut -c1-400)"
 fi
 # CONFIG JAKO JEDYNE ZRODLO (wlasciciel 2026-10-13): "Harmonogram i retencja" czyta szczeble z
 # configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego save-profile,

@@ -9,6 +9,8 @@
 #      kompresja, szyfr SSH, autodobór łącza)
 #   5. Ręczna edycja konfigu                     (edit-config)
 #   6. Zapisz ustawienia relacji jako szablon    (save-profile, zwykły szablon na F5)
+#   7. Adres hosta -- po przeniesieniu kolektora (activate --host= --skip-final-catchup;
+#      tylko relacja ze zdalnym źródłem; właściciel 2026-10-17)
 # Po 2 i 3 retencję ŹRÓDŁA ustawia to samo okno-tabela co w kreatorze relacji
 # (tui/retention-lib.sh; uwaga 10: dla źródła nigdy druga lista szablonów).
 #
@@ -108,6 +110,50 @@ SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
 SRCNAME="$PEER"
 if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostname))"; LDS_ARGS=(); HOST="$SRCHOST"; SRCNAME="$(hostname -s 2>/dev/null || hostname)"; fi
 [ "$CUR_P" = - ] && CUR_P=""; [ "$CUR_S" = - ] && CUR_S=""
+# ADRES HOSTA (właściciel 2026-10-17): kolektor wyniesiony za VPN, źródło widać pod
+# innym IP. Jedno pole, jedno WYKONAJ, potem zwykłe `activate --host=NOWY
+# --skip-final-catchup --yes`: zapis adresu, sprawdzenie, że odpowiada TEN SAM host
+# (klucz przypięty do aliasu, wspólna migawka), przestawienie crona. Domknięcie kopii
+# starym adresem jest wcześniejszym krokiem admina (F2, Uruchom teraz) -- okno za niego
+# nie myśli. Literówkę w adresie poprawia się tym samym oknem: relacja zostaje wtedy
+# w stanie endpoint_change_pending, a cron dalej idzie starym adresem.
+address_flow() {
+    local cur inst new rc
+    cur=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("active_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
+    inst=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("installed_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
+    case "$cur" in *:*) ;; *) cur="$PEER" ;; esac
+    while :; do
+        geom
+        wt --title "Adres hosta: $NAME" --ok-button "Dalej" --cancel-button "Wstecz" \
+           --inputbox "Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\nIP albo nazwa, opcjonalnie :port.\n\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\n\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada." 14 "$W" "$cur" || return 0
+        new="${WT_OUT// /}"
+        [ -n "$new" ] || continue
+        case "$new" in
+            *[!A-Za-z0-9.:_-]*) wt --title "Zły adres" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie i :port." 8 "$W"; continue ;;
+        esac
+        wt --title "Adres hosta: $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" --defaultno \
+           --yesno "Przełączyć relację $NAME na adres $new?\n\nZapiszę nowy adres, sprawdzę, że odpowiada pod nim ten sam host\n(klucz i wspólna migawka), i przestawię crona. Stary adres zostaje\nzapamiętany jako zapasowy.\n\nPierwsza kopia przez nowe łącze przeniesie zmiany od ostatniej kopii." 15 "$W" || continue
+        clear 2>/dev/null
+        echo "=== zfs-backup.sh activate $NAME --host=$new --skip-final-catchup --yes"
+        "$ZB" activate "$NAME" "--host=$new" --skip-final-catchup --yes; rc=$?
+        echo
+        if [ "$rc" -eq 0 ]; then
+            echo "=== Gotowe: relacja $NAME działa przez $new."
+        else
+            echo "=== Przerwane (rc=$rc) -- przyczyna wyżej. Cron dalej idzie starym adresem."
+            echo "    Popraw adres i spróbuj jeszcze raz: e na relacji -> Adres hosta."
+        fi
+        echo "Enter = dalej"
+        [ -t 0 ] && read -r _
+        exit "$rc"
+    done
+}
+# Zmiana adresu w toku (np. literówka, verify-endpoint odmówił): jedyne, co tu ma sens,
+# to poprawić adres -- prosto do tego okna.
+if [ "$STATE" = endpoint_change_pending ] && [ "$PEER" != - ]; then
+    address_flow
+    exit 0
+fi
 if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
     exit 1
@@ -498,17 +544,21 @@ while :; do
 ACTION=""
 while :; do
     geom
+    MENU=(dane    "Datasety -- co kopiować…"
+          szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła"
+          harm    "Harmonogram i retencja kopii w celu i źródle"
+          silnik  "Ustawienia silnika -- jak przesyłane są kopie…"
+          config  "Ręczna edycja konfigu (jak crontab -e)"
+          zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    # Adres hosta tylko przy zdalnym źródle: relacja lokalna nie ma adresu.
+    [ "$PEER" != - ] && MENU+=(adres "Adres hosta -- po przeniesieniu kolektora…")
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
-       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 17 "$W" 7 \
-       dane    "Datasety -- co kopiować…" \
-       szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła" \
-       harm    "Harmonogram i retencja kopii w celu i źródle" \
-       silnik  "Ustawienia silnika -- jak przesyłane są kopie…" \
-       config "Ręczna edycja konfigu (jak crontab -e)" \
-       zapisz  "Zapisz ustawienia relacji jako szablon (F5)" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 18 "$W" $((${#MENU[@]} / 2)) \
+       "${MENU[@]}" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
         harm) harm_flow; continue ;;
+        adres) address_flow; continue ;;
         szablon) break ;;
         silnik) engine_settings; continue ;;
         config)

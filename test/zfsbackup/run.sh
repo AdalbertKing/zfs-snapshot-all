@@ -313,7 +313,7 @@ simple_flow_activate() {   # <client-file> <requested-host?>
             esac
         }
         if [ -n "$host" ]; then
-            cmd_activate pve2 --host="$host" --yes
+            cmd_activate pve2 --host="$host" --yes ${SF_EXTRA:-}
         else
             cmd_activate pve2 --yes
         fi
@@ -361,6 +361,26 @@ if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
     ok "simple flow: same-endpoint activate skips catch-up/switch and completes"
 else
     bad "simple flow: same-endpoint activate skips catch-up/switch and completes" "rc=$rc got=[$got] out=$out"
+fi
+
+# GUI "Adres hosta" (owner 2026-10-17): the collector is ALREADY moved, the old
+# address is gone. activate --skip-final-catchup must not try a catch-up over it:
+# switch (passing the flag on), verify, install -- from an ACTIVE relationship.
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+INSTALLED_ENDPOINT=192.168.28.8:22
+STATE=active
+EOF
+: > "$SF/activate-moved.log"
+out="$(SF_EXTRA=--skip-final-catchup simple_flow_activate "$SF/clients/pve2.conf" 10.99.0.8 "$SF/activate-moved.log" 2>&1)"; rc=$?
+got="$(cat "$SF/activate-moved.log")"
+want=$'set-endpoint pve2 --host=10.99.0.8:22 --skip-final-catchup\nverify-endpoint pve2\nactivate-client pve2 --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ] && grep -q '^INSTALLED_ENDPOINT=10.99.0.8:22$' "$SF/clients/pve2.conf"; then
+    ok "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up"
+else
+    bad "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up" "rc=$rc got=[$got] out=$out"
 fi
 
 if activation_is_new_relationship endpoint_verified "" \
@@ -1218,6 +1238,20 @@ if case "$known7" in *"10.0.0.9:22"*"10.9.9.5:1194"*) true ;; *"10.9.9.5:1194"*"
     ok "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too"
 else
     bad "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too" "$known7"
+fi
+
+# GUI "Adres hosta" (owner 2026-10-17): a mistyped address leaves the relationship
+# endpoint_change_pending (verify-endpoint refused). set-endpoint used to refuse that
+# state, so the typo could not be corrected. Now it re-points the pending switch and
+# the state STAYS pending -- the installed cron is still on its old endpoint.
+mk_client c8 'STATE=endpoint_change_pending' 'ACTIVE_ENDPOINT=10.0.0.99:22'
+out=$(gate_run c8 --host=10.0.0.50 --skip-final-catchup); r=$?
+st8=$(grep '^STATE=' "$GATE/c8.conf" | tail -1); ep8=$(grep '^ACTIVE_ENDPOINT=' "$GATE/c8.conf" | tail -1)
+if [ "$r" = 0 ] && [ "$st8" = STATE=endpoint_change_pending ] && [ "$ep8" = ACTIVE_ENDPOINT=10.0.0.50:22 ] \
+   && case "$out" in *"INSTALLED cron still runs over"*) true ;; *) false ;; esac; then
+    ok "set-endpoint corrects a pending (unverified) switch and keeps it pending"
+else
+    bad "set-endpoint corrects a pending (unverified) switch and keeps it pending" "rc=$r $st8 $ep8 out=$out"
 fi
 
 # --- catch-up freshness (REV-20260731-008 F1, simplified under U9) ----------

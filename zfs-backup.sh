@@ -512,10 +512,13 @@ Explicit two-host lifecycle (the one-command --source= forms above wrap this):
                                     drops SNAPSHOT NAMES and takes a comma list, because a
                                     snapshot name cannot contain a comma and a regex can.
   zfs-backup.sh seed NAME [--yes]   Real initial transfer; installs nothing to cron.
-  zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--yes] [--verbose]
+  zfs-backup.sh activate NAME [--host=HOST[:PORT]] [--skip-final-catchup] [--yes] [--verbose]
                                     Finish the relationship in one command: optional final
                                     catch-up and endpoint switch, endpoint verification,
                                     config/cron preview and transactional installation.
+                                    --skip-final-catchup: the collector is ALREADY moved
+                                    and the old address is gone -- switch without a
+                                    catch-up over it (the GUI's "Adres hosta").
 
   Steps 'activate' runs for you -- invoke directly only to recover a stuck
   activation. 'activate' is idempotent and resumable, so prefer re-running it:
@@ -10955,7 +10958,12 @@ cmd_set_endpoint() {
     [ -r "$cpath" ] || die "no client '$name'"
     record_load client "$cpath"
     case "${STATE:-}" in
-        seed_complete|endpoint_verified|active) ;;
+        # endpoint_change_pending: a switch was recorded and not yet verified --
+        # e.g. a mistyped address whose verify-endpoint failed. Pointing it
+        # somewhere else must be possible (owner 2026-10-17, GUI "Adres hosta");
+        # the installed cron is still on its old endpoint, so the state stays
+        # pending below.
+        seed_complete|endpoint_verified|endpoint_change_pending|active) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- set-endpoint needs seed_complete or later (seed must finish first)" ;;
     esac
 
@@ -11063,7 +11071,7 @@ cmd_set_endpoint() {
         # cron actually uses (INSTALLED_ENDPOINT, written by activate-client)
         # are separate fields, and a pending change gets its own state rather
         # than being flattened into an earlier one.
-        if [ "${STATE:-}" = "active" ]; then
+        if [ "${STATE:-}" = "active" ] || [ "${STATE:-}" = "endpoint_change_pending" ]; then
             write_client_field STATE endpoint_change_pending
         elif [ "${STATE:-}" != "seed_complete" ]; then
             write_client_field STATE seed_complete
@@ -11071,7 +11079,7 @@ cmd_set_endpoint() {
     } >> "$out"
     mv -f "$out" "$cpath"
     chmod 0600 "$cpath"
-    if [ "${STATE:-}" = "active" ]; then
+    if [ "${STATE:-}" = "active" ] || [ "${STATE:-}" = "endpoint_change_pending" ]; then
         warn "endpoint changed to '$new_endpoint', but the INSTALLED cron still runs over '${INSTALLED_ENDPOINT:-?}'. Backups keep working over the old endpoint until: verify-endpoint $name, then activate-client $name."
     fi
     log "client '$name' desired endpoint is now '$new_endpoint' ('$leaving_endpoint' kept as a known candidate)"
@@ -11969,12 +11977,18 @@ activation_step() {   # <resume-command> <low-level command...>
 cmd_activate() {
     local name="${1:-}"; shift || true
     client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
-    local requested_host="" yes=0 verbose=0 a
+    local requested_host="" yes=0 verbose=0 skip_catchup=0 a
     for a in "$@"; do
         case "$a" in
             --host=*) requested_host="${a#*=}" ;;
             --yes|-y) yes=1 ;;
             --verbose) verbose=1 ;;
+            # The collector has ALREADY been moved and the old address is gone
+            # (owner 2026-10-17: the GUI's "Adres hosta" is used after the move;
+            # closing the relationship over the fast link beforehand is the
+            # admin's own step). Passed through to set-endpoint, which then says
+            # out loud what the first transfer over the new link will carry.
+            --skip-final-catchup) skip_catchup=1 ;;
             *) die "activate: unknown option $a" ;;
         esac
     done
@@ -11986,6 +12000,7 @@ cmd_activate() {
     [ -n "$requested_host" ] && resume="$resume --host=$requested_host"
     [ "$yes" -eq 1 ] && resume="$resume --yes"
     [ "$verbose" -eq 1 ] && resume="$resume --verbose"
+    [ "$skip_catchup" -eq 1 ] && resume="$resume --skip-final-catchup"
 
     local STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
     local FINAL_CATCHUP_ENDPOINT="" FINAL_CATCHUP_EPOCH="" PEER_HOST=""
@@ -12029,14 +12044,18 @@ cmd_activate() {
                     && catchup_fresh=1
                 ;;
         esac
-        if [ "$catchup_fresh" -eq 1 ]; then
-            log "reusing the fresh final catch-up already recorded for '$current_endpoint'"
+        if [ "$skip_catchup" -eq 1 ]; then
+            activation_step "$resume" set-endpoint "$name" --host="$requested_endpoint" --skip-final-catchup
         else
-            local -a catchup=(final-catchup "$name")
-            [ "$yes" -eq 1 ] && catchup+=(--yes)
-            activation_step "$resume" "${catchup[@]}"
+            if [ "$catchup_fresh" -eq 1 ]; then
+                log "reusing the fresh final catch-up already recorded for '$current_endpoint'"
+            else
+                local -a catchup=(final-catchup "$name")
+                [ "$yes" -eq 1 ] && catchup+=(--yes)
+                activation_step "$resume" "${catchup[@]}"
+            fi
+            activation_step "$resume" set-endpoint "$name" --host="$requested_endpoint"
         fi
-        activation_step "$resume" set-endpoint "$name" --host="$requested_endpoint"
     fi
 
     # Reload after any catch-up/switch; the file is the state machine's source
