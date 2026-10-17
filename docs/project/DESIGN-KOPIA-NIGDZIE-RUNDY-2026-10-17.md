@@ -120,13 +120,26 @@ progu.
 2. GUI dopiero po rundzie 1 (potrzebuje `--mode=snaponly`).
 3. Produkcja (Metropolis) dopiero po rundzie 2, bo bez monitora nie ma alarmu po migracji.
 
-## Do decyzji właściciela
+## Decyzje właściciela (2026-10-17)
 
-1. **Nazwa trybu** w CLI i rekordzie: `snaponly`? (W GUI po polsku osobno.)
-2. **Reguła minut:** „nigdy na wielokrotności 5” jako domyślna. Czy wystarczy?
-3. **Wspólne źródło:** czy zwykła relacja backupowa i „kopia nigdzie” mogą obejmować ten sam
-   dataset tego samego źródła (różne prefiksy migawek)? Propozycja: **nie**. Jedna relacja na
-   dataset źródła; prościej i bez dwóch harmonogramów na jednym dysku gościa.
+1. **Nazwa trybu** w CLI i rekordzie: `snaponly`. Zgoda.
+2. **Reguła minut:** domyślnie nigdy na wielokrotności 5, admin może nadpisać. Zgoda.
+3. **Jedna relacja na dataset źródła, w obrębie jednego kolektora.** Strażnik pokrycia
+   widzi tylko rekordy własnego hosta. Relacje innych kolektorów do tego samego źródła są
+   dozwolone jak dziś (a<b i a<c to niezależne relacje: różne prefiksy, każda przycina tylko
+   swoje).
+
+## Łańcuchy (a<b<c, a<b<>c)
+
+Gdy pierwszym ogniwem jest „kopia nigdzie”, na b nie ma kopii, z której c mógłby pobierać:
+
+- **c pobiera wprost z a**: osobny kolektor, dozwolone (decyzja 3), działa dziś;
+- **w klastrze z pvesr c pobiera pasywnie (`-e`) z repliki pvesr na b**: pvesr przenosi na b
+  wszystkie migawki z a, także nasze. c nie może zakładać na replice własnych migawek ani
+  holdów, bo zepsułyby pvesr (silnik już nie zakłada holdów na datasetach pvesr). Lustro
+  b<>c na replice pvesr nie może niczego kasować na b, więc w grę wchodzi tylko pasywne
+  pobieranie b→c. **Do zmierzenia na labie przed obietnicą**, w tym zachowanie c po migracji
+  gościa na b. Osobny punkt, poza trzema rundami.
 
 ## Poza zakresem
 
