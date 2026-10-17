@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 253b106be2f2930c -->
+<!-- status-covers-digest: 7701553ffd35f13e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,45 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Odzysk -- kampania wariantów relacji na labie (2026-10-17; `fix/restore-local-beside-push`).**
+  REV-20261017-153 (recenzent zablokował #601): źródło zdalne zapisane bez konta (`host:dataset`) było brane za
+  lokalne -- odzysk „obok” dostawał ścieżkę kolektora, a kopia push `host:base` była „lokalna” i doszła do pauzy.
+  Poprawione: jedna klasyfikacja adresu wg reguły silników (`[user@]host:dataset`, gołe `user@host` sync) w wyborze
+  celu, planerze, odmowie push przed pauzą i raporcie przekazania (porównuje host). `test/restore/localdest.sh`
+  19/0 (na `14ea8006` 15/5), `test/restore` 330/0.
+  Kod hostów: `main` 963d7baf; poprawki sprawdzane z kopii gałęzi na pve9b/pve9. Każdy bieg: najpierw „n” (nic się nie
+  zmieniło), potem „t”; po każdym kroku niszczącym sprawdzony ocalały (ostatnia migawka, GUID, montowanie, marker).
+  | wariant | polecenie (kolektor) | wynik |
+  |---|---|---|
+  | backup pull, obok | pve10: `restore pve9b pve9b --source=hdd/backups/192.168.28.98/hdd/home --onto=hdd/restore/home-v1` | rc 0, 3/3 GUID = kopia (canmount=noauto, niezamontowane -- raport to mówi) |
+  | backup pull, na miejsce, starszy punkt | pve10: `restore pve9b --source=…/hdd/home --at="2026-10-17 15:30"` | rc 0, cofnięcie, 3/3 GUID = kopia@15:01, marker zniknął, zamontowane |
+  | lustro (`pve9-synchro`, passive-flat) na miejsce | pve10 (root): `restore pve9-synchro --source=hdd/lab/srv-a --at=…` | bez zgody: odmowa przed czymkolwiek; po `--allow-restore=pve10` na pve9: rc 0, GUID = kopia@16:01 |
+  | lustro obok | `restore pve9-synchro pve9-synchro --source=hdd/lab/srv-a --onto=hdd/restore/srv-a-v4` | rc 0, GUID = kopia |
+  | lokalna na miejsce | pve9b: `restore lokalna-hdd-vms --source=hdd/backups/hdd/test-kreator --at=…` | rc 0, bez pytania o zgodę (ten sam host), GUID = kopia@16:01, zamontowane |
+  | lokalna obok (forma okna) | `restore lokalna-hdd-vms lokalna-hdd-vms --source=… --onto=hdd/restore/test-kreator-v5` | na `main` FATAL „not one this host records”; na gałęzi rc 0, GUID = kopia |
+  | push (`dst = konto@host:baza`) | config testowy na pve9b | na `main` plan „local push”, kopia „BRAK” (fałsz: jest na pve10), bieg do pauzy; na gałęzi „remote push”, plan i bieg (przed pauzą) wskazują `--from-copy` na hoście kopii |
+  | snaponly | `restore solab [--ask]` | odmowa przed czymkolwiek |
+  Nie powtarzane dziś: `--from-copy` (zaliczone 10-15, test 2) i łańcuchy a<b<c (zaliczone 10-15 jako L1c/L2: C->B
+  i B->A relacjami). Odzysk C->A z pominięciem B nie ma osobnej formy -- tylko `restore <relacja C> <relacja A>`, gdy
+  C ma też relację z A -- to pytanie projektowe do właściciela, nic nie kodowane.
+  Poprawki (gałąź): `restore_dest_peer` rozpoznaje relację lokalną, `restore_scope_dest` przyjmuje ją jako cel tylko
+  dla jej własnych kopii (inna relacja -> odmowa ze wskazaniem `--from-copy`); raport przekazania nie mówi już „a
+  DIFFERENT machine” dla odzysku lokalnego obok (ta sama klasa co poprawka k2-ab z 10-15); relacja push -> „remote
+  push”, odmowa przed pauzą; okno „Przywróć” dla relacji lokalnej nie każe wydawać zgody. Testy:
+  `test/restore/localdest.sh` 9/0 (na `main` 5 FAIL, 4 kontrole PASS; po REV-153 19/0), `test/restore` na pve9 319 PASS / 1 FAIL (ten
+  sam środowiskowy co na `main`: 310/1), `test/tui` na pve9 314/6 (6 „linia” -- środowiskowe, te same na `main`;
+  nowy test na `main` FAIL).
+  Otwarte, nie zmienione: (1) odmowa w preflight („nothing was changed”) kończy się rc 2, a rc 2 to też „CHANGED AND
+  UNFINISHED” -- przypięte przez `relpolicy.sh` D1 i REV-127 („Keep the established D pre-flight behavior”), pytanie do
+  recenzenta; (2) lustro po odzysku na miejsce: raport mówi „the next backup of this relationship DISCARDS them”, a bieg lustra 18:31
+  (źródło bez nowej migawki -- `lab-migawki` stało w pauzie zgody) zostawił na kopii nowszą migawkę 17:01, której
+  źródło już nie ma; dopiero bieg po nowej migawce źródła (ręczny `run-relation`, 18:47) ją odrzucił („follows its
+  source -- discarding”) i kopia doszła do źródła (GUID zgodny). To skrót silnika „Snapshot already exists in target - skipping”
+  zgłoszony recenzentowi 10-15 (`docs/project/ENGINE-ALREADY-EXISTS-SKIP-2026-10-15.md`); raport odzysku mówi
+  „następny bieg”, a prawda to „następny bieg z nową migawką źródła”; (3) `hdd/test-kreator` na pve9b zastałem odmontowany po testach 10-15 (P10).
+  Sprzątanie: `hdd/restore/*` z testów 10-15 i dzisiejszych usunięte na pve9, pve9b, pve10; zgody `pve10` cofnięte na
+  pve9b i pve9 (`lab-migawki` wznowione).
 
 - **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; na `main` przez #592 i #596; zgłoszona, przegląd rundy 1 poprawiony).**
   Przegląd rundy 1 (CHANGES REQUIRED, F1.1/F1.2/F2.1) poprawiony (`fix/rev152-r1-rereview`): ponowna aktywacja

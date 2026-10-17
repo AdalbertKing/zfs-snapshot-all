@@ -1131,6 +1131,29 @@ restore_plan_strategy() {   # <copy dataset> <original source> <copy snapshot ro
 # this and the destructive path resolves a single dataset through it; a second copy of the
 # derivation would be a second idea of where a backup lives, and the destructive
 # verb is the last place that should disagree with the preview.
+# THE MACHINE OF A TRANSPORT ADDRESS, by the engines' own rule (REV-20261017-153).
+# The supported forms are `[user@]host:dataset` -- the user is OPTIONAL (gen-cron
+# src/dst, snapsend's dst, delsnaps/snapget parse_remote: remote when there is a
+# ':' and nothing before it looks like a path) -- and snapsend's sync dst, a bare
+# `user@host` with no path. The first version of the local/remote branches below
+# tested `*@*:*` only, so `src = pve9:hdd/home` read as LOCAL and a beside-restore
+# was given a collector path. One classifier, used everywhere a copy, a source or
+# a destination is told local from remote.
+#
+# restore_addr_machine <address> -> prints `[user@]host`, rc 0 when remote; rc 1 local.
+# restore_addr_host <address>    -> prints the HOST only (the account dropped, so
+#                                   `pve9` and `root@pve9` are one machine); rc 1 local.
+restore_addr_machine() {
+    local a="$1" m="${1%%:*}"
+    if [[ "$a" == *:* && -n "$m" && "$m" != */* ]]; then printf '%s' "$m"; return 0; fi
+    if [[ "$a" == *@* && "$a" != *:* && "$a" != */* ]]; then printf '%s' "$a"; return 0; fi
+    return 1
+}
+restore_addr_host() {
+    local m; m="$(restore_addr_machine "$1")" || return 1
+    printf '%s' "${m#*@}"
+}
+
 restore_relations() {   # <config>
     local config="$1" ds d s rec
     for ds in $(sed -n -E 's/^\[dataset:(.+)\]$/\1/p' "$config" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'); do
@@ -1147,7 +1170,18 @@ restore_relations() {   # <config>
         rec="$(printf '%s' "$rec" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         [ "$rec" = atomic ] && rec=atomic || rec=independent
         if [ -n "$d" ]; then
-            printf '%s\t%s\t%s\t%s\n' "$ds" "${d}/${ds}" "local push -> $d" "$rec"
+            # dst = [user@]host:base -- this host SENDS; the copy is over there.
+            # dst = user@host (snapsend's sync form) -- the copy keeps the SAME
+            # path on that host.
+            if restore_addr_machine "$d" >/dev/null; then
+                if [[ "$d" == *:* ]]; then
+                    printf '%s\t%s\t%s\t%s\n' "$ds" "${d}/${ds}" "remote push -> $d" "$rec"
+                else
+                    printf '%s\t%s\t%s\t%s\n' "$ds" "${d}:${ds}" "remote push -> $d" "$rec"
+                fi
+            else
+                printf '%s\t%s\t%s\t%s\n' "$ds" "${d}/${ds}" "local push -> $d" "$rec"
+            fi
         elif [ -n "$s" ]; then
             printf '%s\t%s\t%s\t%s\n' "$s" "$ds" "remote pull <- $s" "$rec"
         fi
@@ -3060,12 +3094,20 @@ fi
 # Taken from B's first recorded section, which is where every other reader in
 # this file gets a relationship's transport. A relation that records nothing has
 # no machine to name, and that is a refusal rather than a default.
-restore_dest_peer() {   # <config> <destination label> -> account@host
+restore_dest_peer() {   # <config> <destination label> -> account@host; 1 unknown, 3 a LOCAL relation
     local config="$1" label="$2" rows first
     rows="$(restore_resolve_try "$config" "$label" "" orig)" || return 1
     first="$(printf '%s\n' "$rows" | head -1 | cut -f1)"
+    # Any supported remote spelling names the machine -- `host:ds` as much as
+    # `user@host:ds` (REV-20261017-153: the host-only form fell through to the
+    # LOCAL answer below and a beside-restore landed on the collector's path).
+    if restore_addr_machine "$first"; then return 0; fi
     case "$first" in
-        *@*:*) printf '%s' "${first%%:*}" ;;
+        # A LOCAL relation's sources are paths on this host. The host DOES record
+        # it, so "not one this host records" is false -- and that is what the
+        # window's "obok" said for every local relation (lab, 2026-10-17). The
+        # caller decides what a local destination may mean.
+        ?*) return 3 ;;
         *) return 1 ;;
     esac
 }
@@ -3217,8 +3259,22 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
     # config but whose record the dispatch could not read.
     local peer="${RESTORE_DEST_PEER:-}"
     if [ -z "$peer" ]; then
-        peer="$(restore_dest_peer "$config" "${onto%%:*}")" || \
+        local _dp_rc=0
+        peer="$(restore_dest_peer "$config" "${onto%%:*}")" || _dp_rc=$?
+        if [ "$_dp_rc" -eq 3 ] && [ "${onto%%:*}" = "${from%%:*}" ]; then
+            # THE LOCAL RELATION, BESIDE ITSELF: `restore L L --onto <path>`, the
+            # form the window composes for "obok". Source, copy and destination
+            # are all on this host, so the destination is a local path and
+            # nothing is reached over ssh -- restore_one treats a path without a
+            # host as local and asks no grant for it. Only the relation's OWN
+            # label is accepted: a local destination for another relation's copy
+            # is a cross-relation recovery nobody decided.
+            peer=""
+        elif [ "$_dp_rc" -eq 3 ]; then
+            die "restore: the destination relationship '${onto%%:*}' is LOCAL to this host and '${from%%:*}' is a different relationship. A local relation is a destination only for its own copies: restore ${onto%%:*} ${onto%%:*} --onto <dataset>. Another relationship's copy goes onto this pool with: restore --from-copy <copy> --onto <dataset>. Nothing was changed."
+        elif [ "$_dp_rc" -ne 0 ]; then
             die "restore: the destination relationship '${onto%%:*}' is not one this host records, so there is no machine to recover onto. Pair it first -- a destination is a relationship this collector already holds a key for, not a hostname, and it is NOT read as one: guessing is how a recovery lands on the wrong machine."
+        fi
     fi
 
     # THE REBASE PAIRS. `--onto` fills them (restore_onto_plan); the retired
@@ -3256,7 +3312,7 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
         srcpath="${RESTORE_SCOPE_SRC[$i]}"
         srcpath="${srcpath#*@}"; srcpath="${srcpath#*:}"
         if [ "${#of[@]}" -eq 0 ]; then
-            RESTORE_SCOPE_DEST+=("${peer}:${srcpath}")
+            RESTORE_SCOPE_DEST+=("${peer:+${peer}:}${srcpath}")
             continue
         fi
         # LONGEST MATCH, not first match. A selection may legally name both a
@@ -3274,7 +3330,7 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
         [ "$hit" -eq 1 ] || die "restore: '${RESTORE_SCOPE_SRC[$i]}' is not under any of the paths --onto rebases (${of[*]}), so there is no position to give it. Refusing rather than inventing one."
         rel=""
         [ "$srcpath" = "$best" ] || rel="${srcpath#"$best"}"
-        RESTORE_SCOPE_DEST+=("${peer}:${ot[$best_i]}${rel}")
+        RESTORE_SCOPE_DEST+=("${peer:+${peer}:}${ot[$best_i]}${rel}")
     done
     return 0
 }
@@ -3295,13 +3351,22 @@ restore_scope_dest() {   # <config> <source address> <destination address or "">
 # recovery leaves the same split, and the operator needs to know which machine
 # holds what before they decide anything.
 restore_report_handover() {
-    local n="${#RESTORE_SCOPE_DEST[@]}" i moved=0
+    local n="${#RESTORE_SCOPE_DEST[@]}" i moved=0 dh sh
     # THE MACHINE, not the path. `--onto` on the SAME machine (a restore beside
     # the original, <pool>/restore/...) changes only the path; there is nothing
     # to hand over. Comparing whole addresses called that "a DIFFERENT machine"
     # and advised `move-to-client k2-ab k2-ab` (measured on pve9, 2026-10-15).
+    # A LOCAL path has no machine part at all, and `%%:*` of it is the whole
+    # path -- so the same sentence came back for a local relation restored
+    # beside itself (pve9b, 2026-10-17). Only an account@host prefix counts.
     for (( i=0; i<n; i++ )); do
-        [ "${RESTORE_SCOPE_DEST[$i]%%:*}" = "${RESTORE_SCOPE_SRC[$i]%%:*}" ] || moved=1
+        dh=""; sh=""
+        # By HOST, through the same classifier: a missing account does not erase
+        # the machine (`pve9:` and `root@pve9:` are one host), and a local path
+        # has none (REV-20261017-153).
+        dh="$(restore_addr_host "${RESTORE_SCOPE_DEST[$i]}")" || dh=""
+        sh="$(restore_addr_host "${RESTORE_SCOPE_SRC[$i]}")"  || sh=""
+        [ "$dh" = "$sh" ] || moved=1
     done
     [ "$moved" -eq 1 ] || return 0
     log 0 "restore: ---- this recovery went to a DIFFERENT machine ----"
@@ -3479,6 +3544,21 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         log 0 "restore: the per-dataset step is not built yet, so this cannot recover anything. Nothing was changed. (restore_one, the next slice.)"
         return 1
     fi
+
+    # A PUSH RELATIONSHIP'S COPY IS ON THE OTHER MACHINE. `dst = acct@host:base`
+    # in this host's config means this host SENDS, and the copy lives there --
+    # nothing here can list it, so restore_one answered "the copy has no
+    # snapshot to restore from", which is false (lab, 2026-10-17: the copy sat on
+    # pve10 with 30 snapshots). Refused before the pause, with the way that does
+    # work: on the host that holds the copy, from the copy location.
+    for (( i=0; i<n; i++ )); do
+        # Every supported remote spelling of the copy (REV-20261017-153).
+        case "$(restore_addr_machine "${RESTORE_SCOPE_COPY[$i]}" >/dev/null && echo remote)" in
+            remote)
+                log 0 "restore: '${RESTORE_SCOPE_SRC[$i]}' is backed up by PUSH -- its copy is ${RESTORE_SCOPE_COPY[$i]}, on the other machine, and this host cannot read it. A relationship-addressed restore needs the copy here. On ${RESTORE_SCOPE_COPY[$i]%%:*}'s host: zfs-backup.sh restore --from-copy ${RESTORE_SCOPE_COPY[$i]#*:} --onto <dataset> (lands on THAT pool). Nothing was changed."
+                return 1 ;;
+        esac
+    done
 
     # LAST OF THE PRECONDITIONS, AND AFTER THE STRUCTURAL ONES ON PURPOSE.
     #
@@ -4957,6 +5037,12 @@ cmd_restore() {
         # guid rides the SAME list call rather than a `zfs get` per snapshot --
         # verified live on zfs-2.1.9: name,creation,guid returns three tab-separated
         # fields, rc=0. One process per dataset instead of one per recovery point.
+        case "$(restore_addr_machine "${copy[$i]}" >/dev/null && echo remote)" in
+            remote)
+                echo "  Snapshoty:  kopia lezy na INNYM hoscie (${copy[$i]%%:*}) -- relacja PUSH, ten host jej nie czyta."
+                echo "              Odtworzenie z niej: na tamtym hoscie, zfs-backup.sh restore --from-copy ${copy[$i]#*:} --onto <dataset>"
+                continue ;;
+        esac
         snaps=$(zfs list -H -p -t snapshot -o name,creation,guid -s creation -d 1 "${copy[$i]}" 2>/dev/null) || snaps=""
         if [ -z "$snaps" ]; then
             echo "  Snapshoty:  BRAK -- ta kopia nie istnieje albo nie ma snapshotow. Nie ma z czego odtwarzac."
