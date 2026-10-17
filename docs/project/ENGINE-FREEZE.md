@@ -3,7 +3,7 @@
 <!-- frozen: snapsend.sh 100755 6ba0e82b15467638437f8527e04badcb08c1ac6a -->
 <!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
-<!-- frozen: check-snap-age.sh 100755 0fdaea5447c6996e53468938c79faf765b30a133 -->
+<!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
 <!-- unfreeze: - -->
 
@@ -1120,10 +1120,10 @@ Owner-authorized refreezes:
   the next remote read -- a quote in it ran on the far shell. Now every
   read-back name must be a well-formed ZFS name component (letters, digits,
   `_ - : .`, space) before any follow-up read, else UNKNOWN; and `zread` escapes
-  an embedded quote POSIX-style (`'''`) as a second wall -- for valid names the
+  an embedded quote POSIX-style (`'\''`) as a second wall -- for valid names the
   command text is byte-identical. F4.2: an rc-0 `-R` walk that does not contain
   the root (empty, or children only) is UNKNOWN, not a silent pass. test/monitor
-  92/0 (was 69); against v2.4 the new cases give 82 PASS / 10 FAIL. Live (pve10
+  97/0 (was 69); against v2.4 the new cases give 82 PASS / 15 FAIL. Live (pve10
   -> pve9b, delegated account, pair gate): OK, -R with children, CRITICAL,
   absent dataset -- unchanged.
   twin: none.

@@ -323,10 +323,12 @@ for inj in "zsalab_'; touch $MARK; #" 'zsalab_$(touch '"$MARK"')' "zsalab_x;touc
         if [ "$rc" = 3 ] && [ ! -e "$MARK" ]; then ok "F11 snapshot '$inj' ($where) -> UNKNOWN, nothing executed"
         else bad "F11 snapshot '$inj' ($where) -> UNKNOWN, nothing executed" "rc=$rc marker=$([ -e "$MARK" ] && echo yes || echo no)"; fi
     done
+    for where in "root@srcA:tank/p" "tank/p"; do
     reset_world; rm -f "$MARK"; add_ds tank/p 0; add_snap tank/p "zsalab_1" 0
-    out="$(ZSTUB_WALK_JUNK="tank/p/$inj" run -R root@srcA:tank/p zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_JUNK="tank/p/$inj" rc_of -R root@srcA:tank/p zsalab_ 2h 4h)
-    if [ "$rc" = 3 ] && [ ! -e "$MARK" ] && printf '%s' "$out" | grep -q 'not a well-formed dataset under it'; then ok "F11 descendant 'tank/p/$inj' -> UNKNOWN, not checked, nothing executed"
-    else bad "F11 descendant 'tank/p/$inj' -> UNKNOWN, nothing executed" "rc=$rc marker=$([ -e "$MARK" ] && echo yes || echo no) $out"; fi
+    out="$(ZSTUB_WALK_JUNK="tank/p/$inj" run -R "$where" zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_JUNK="tank/p/$inj" rc_of -R "$where" zsalab_ 2h 4h)
+    if [ "$rc" = 3 ] && [ ! -e "$MARK" ] && printf '%s' "$out" | grep -q 'not a well-formed dataset under it'; then ok "F11 descendant 'tank/p/$inj' ($where) -> UNKNOWN, not checked, nothing executed"
+    else bad "F11 descendant 'tank/p/$inj' ($where) -> UNKNOWN, nothing executed" "rc=$rc marker=$([ -e "$MARK" ] && echo yes || echo no) $out"; fi
+    done
 done
 reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_with space" 0
 check "F11 control: a snapshot name with a space (legal in OpenZFS) reads normally -> OK" "0" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
@@ -349,10 +351,12 @@ for where in "root@srcA:tank/root" "tank/root"; do
     reset_world; add_ds tank/root 0; add_ds tank/root/a 0; add_snap tank/root/a "zsalab_1" $((9 * H))
     check "F12 control: valid walk, stale child ($where) -> CRITICAL" "2" "$(rc_of -R "$where" zsalab_ 2h 4h)"
 done
+for pre in "root@srcA:" ""; do
 reset_world; add_ds tank/root 0; add_ds tank/crit 0; add_snap tank/crit "zsalab_1" $((9 * H))
-out="$(ZSTUB_WALK_EMPTY=1 run -R root@srcA:tank/root,root@srcA:tank/crit zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_EMPTY=1 rc_of -R root@srcA:tank/root,root@srcA:tank/crit zsalab_ 2h 4h)
-if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'UNKNOWN dataset=root@srcA:tank/root'; then ok "F12 mixed: CRITICAL wins the exit code and the UNKNOWN walk is still printed"
-else bad "F12 mixed CRITICAL/UNKNOWN" "rc=$rc $out"; fi
+out="$(ZSTUB_WALK_EMPTY=1 run -R ${pre}tank/root,${pre}tank/crit zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_EMPTY=1 rc_of -R ${pre}tank/root,${pre}tank/crit zsalab_ 2h 4h)
+if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q "UNKNOWN dataset=${pre}tank/root"; then ok "F12 mixed (${pre:-local}): CRITICAL wins the exit code and the UNKNOWN walk is still printed"
+else bad "F12 mixed CRITICAL/UNKNOWN (${pre:-local})" "rc=$rc $out"; fi
+done
 
 # F9 read-only: across every remote case above the zfs trace holds list/get only.
 only_reads && ok "F9 the remote mode only ever ran 'zfs list' and 'zfs get'" || bad "F9 only list/get" "$(grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE")"

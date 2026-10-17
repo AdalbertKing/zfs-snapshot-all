@@ -336,7 +336,7 @@ SAW_UNKNOWN=0 # tracked separately: UNKNOWN is not "worse CRITICAL", it is a
 # would. `--` goes before the final argument (the dataset/snapshot name), as in
 # delsnaps.sh's run_zfs: a name starting with '-' is data, not a zfs flag.
 # Remote arguments are single-quoted for the far shell, and an embedded quote
-# is closed, escaped and reopened (''') -- POSIX, so whatever shell the account
+# is closed, escaped and reopened ('\'') -- POSIX, so whatever shell the account
 # has reads it as one literal word. Every name that reaches here was validated
 # first (the CLI entries above, read-back names by name_from_zfs_ok), so for a
 # valid name the command text is exactly what it was; the escape is the second

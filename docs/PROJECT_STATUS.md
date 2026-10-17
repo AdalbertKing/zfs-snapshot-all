@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 550b8fdd83ee7d47 -->
+<!-- status-covers-digest: 8fd9583d8fb5ed82 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -76,8 +76,8 @@
   zły klucz, wyłączona bramka -- każdy właściwy kod. Przegląd: CHANGES REQUIRED (F4.1, F4.2), poprawione w v2.5
   (`fix/rev152-f4-output-validation`): nazwa migawki albo potomka odczytana ze źródła musi być poprawną nazwą ZFS,
   zanim pójdzie do kolejnego odczytu (wcześniej apostrof w niej wykonywał się w zdalnej powłoce), a `zread` dodatkowo
-  escapuje apostrof; spacer `-R` z rc 0 bez samego korzenia to UNKNOWN (wcześniej cichy OK). `test/monitor` 92/0, na
-  v2.4 82/10; na żywo pve10 -> pve9b bez zmian w wynikach. Dowód produkcyjny F5 -- później.
+  escapuje apostrof; spacer `-R` z rc 0 bez samego korzenia to UNKNOWN (wcześniej cichy OK). `test/monitor` 97/0, na
+  v2.4 82/15; na żywo pve10 -> pve9b bez zmian w wynikach. Dowód produkcyjny F5 -- później.
 
 - **GUI: „Adres hosta” po przeniesieniu kolektora (2026-10-17; `feat/gui-set-endpoint`).**
   Właściciel: kolektor po pierwszej pełnej kopii jest wynoszony za VPN i widzi źródło pod innym IP, a GUI nie
