@@ -5388,8 +5388,10 @@ if awk '/^\[prune:zfsbackup@10.7.7.1:rpool\/data\]/{f=1;next} /^\[/{f=0} f' "$S3
 else
     bad "56 step3: the source prune references the INDEPENDENT src_ template family" "$(grep -E '^\[template:|use_template' "$S3")"
 fi
-# the SOURCE templates carry NO monitor_ fields (remote scope: check-snap-age is
-# local-only and gen-cron would reject monitor on a remote scope)
+# the SOURCE templates carry NO monitor_ fields: source-age monitoring of an
+# ordinary backup relationship is the source host's business. (Since REV-152
+# round 2 a remote-scope monitor IS possible over ssh; using it for a snaponly
+# relationship's source is round 1, not this ordinary source retention.)
 src_hourly="$(awk '/^\[template:profile__prof__src_keep_hourly\]/{f=1;next} /^\[/{f=0} f' "$S3")"
 if [ -n "$src_hourly" ] && ! printf '%s' "$src_hourly" | grep -q 'monitor_'; then
     ok "56 step3: the SOURCE template family drops monitor_ fields (valid on a remote scope)"

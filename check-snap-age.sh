@@ -14,11 +14,25 @@ set -o pipefail
 # "did this land recently enough" instead of "did the transfer succeed".
 #
 # This does NOT create, send, or destroy anything -- read-only, no lock needed.
-# Datasets are always local (the host running the cron line); unlike
-# delsnaps.sh/snapsend.sh there is no remote/ssh mode, since a monitor check is
-# meant to run on the same host that owns the schedule being verified.
 #
-# Usage: check-snap-age.sh [-R|--recursive] [-v] [-L LABEL] <comma-separated datasets> <pattern> <warn> <crit>
+# REMOTE DATASETS (REV-20261017-152, round 2). A dataset entry may be
+# "[user@]host:dataset", exactly as in delsnaps.sh (same parse, same -p/-k/-c/
+# -K/-O meanings), and is then read over ssh on that host. The monitor still
+# runs on the host that owns the SCHEDULE: for a snaponly relationship that is
+# the collector, whose cron takes the snapshots on the source -- so the source
+# is where the snapshots are, and the collector is where they are checked.
+# Read-only means `zfs list` and `zfs get` and nothing else; the ssh is
+# non-interactive and time-bounded, with stdin detached.
+#
+# EVERY READ IS CHECKED (REV-20261017-152 F4) -- remote and local alike. The
+# snapshot list and the -R walk used to be read through `done < <(zfs ...)`,
+# whose exit status is lost: a failed snapshot list after a successful
+# existence probe fell back to the DATASET's age, and a failed walk silently
+# checked no children. Over ssh both are ordinary events (a dropped link, a
+# disabled pair gate). Now each command's status and output shape are checked
+# before use; a failure is UNKNOWN, never an empty success.
+#
+# Usage: check-snap-age.sh [-R|--recursive] [-v] [-L LABEL] [-x PREFIX]... [-p PORT] [-k KNOWN_HOSTS] [-c CIPHER] [-K KEY] [-O OPTION]... <comma-separated datasets> <pattern> <warn> <crit>
 #
 # -R, --recursive : also check every descendant dataset (filesystem/volume) under
 #                 each entry, evaluated independently against the SAME
@@ -32,6 +46,10 @@ set -o pipefail
 #                 EXPECTED state of a deliberately stopped backup, not a page
 #                 (REV-20260804-045). resume-client restores normal thresholds.
 # -V, --version : print version and exit.
+# -p/-k/-c/-K/-O: ssh port, pinned known_hosts file (StrictHostKeyChecking=yes;
+#                 without -k accept-new), cipher, identity file, extra -o
+#                 option -- the same five as delsnaps.sh/snapsend.sh/snapget.sh,
+#                 used only for "[user@]host:dataset" entries.
 #
 # <warn>/<crit> : duration strings, <N><unit> with unit m(inutes)/h(ours)/d(ays)
 #                 -- e.g. 90m, 3h, 9d. crit must be >= warn.
@@ -74,7 +92,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.3'
+VERSION='v2.4'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -90,17 +108,20 @@ fi
 # point no snapshot has been examined, so any answer about staleness would be
 # fabricated.
 usage() {
-    echo "Usage: $0 [-R] [-v] [-L LABEL] <comma-separated list of datasets> <pattern> <warn> <crit>" >&2
+    echo "Usage: $0 [-R] [-v] [-L LABEL] [-x PREFIX]... [-p PORT] [-k KNOWN_HOSTS] [-c CIPHER] [-K KEY] [-O OPTION]... <comma-separated list of [user@host:]datasets> <pattern> <warn> <crit>" >&2
     echo "   warn/crit are durations like 90m, 3h, 9d" >&2
     exit "$EXIT_UNKNOWN"
 }
-
-command -v zfs >/dev/null || { echo "UNKNOWN -- 'zfs' command not found in PATH" >&2; exit "$EXIT_UNKNOWN"; }
 
 VERBOSE=false
 RECURSE=false
 PAIR_LABEL=""
 declare -a EXCLUDES=()
+PORT=22
+KNOWN_HOSTS_FILE=""
+SSH_CIPHER=""
+SSH_KEY=""
+declare -a EXTRA_SSH_OPTS=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         # --recursive is the long spelling of -R (Stage 2.3). Unlike the
@@ -117,9 +138,20 @@ while [ "$#" -gt 0 ]; do
         # that must not count -- an aging excluded family must not page, and a
         # fresh excluded family must not paint a stale relation green.
         -x) EXCLUDES+=("${2:?-x requires a prefix}"); shift 2 ;;
+        # ssh options for "[user@]host:dataset" entries -- delsnaps.sh's spellings.
+        -p) PORT="${2:-}"; shift 2 ;;
+        -p*) PORT="${1#-p}"; shift ;;
+        -k) KNOWN_HOSTS_FILE="${2:-}"; shift 2 ;;
+        -k*) KNOWN_HOSTS_FILE="${1#-k}"; shift ;;
+        -c) SSH_CIPHER="${2:-}"; shift 2 ;;
+        -c*) SSH_CIPHER="${1#-c}"; shift ;;
+        -K) SSH_KEY="${2:-}"; shift 2 ;;
+        -K*) SSH_KEY="${1#-K}"; shift ;;
+        -O) EXTRA_SSH_OPTS+=("${2:?-O requires an ssh option}"); shift 2 ;;
         *) break ;;
     esac
 done
+case "$PORT" in ''|*[!0-9]*) echo "UNKNOWN -- -p '$PORT' is not a port number" >&2; exit "$EXIT_UNKNOWN" ;; esac
 case "$PAIR_LABEL" in
     *[!A-Za-z0-9._-]*) echo "UNKNOWN -- -L '$PAIR_LABEL' is not a valid relationship label (letters, digits, dot, dash, underscore only)" >&2; exit "$EXIT_UNKNOWN" ;;
 esac
@@ -129,6 +161,67 @@ DATASETS_LIST="$1"
 PATTERN="$2"
 WARN_ARG="$3"
 CRIT_ARG="$4"
+
+# Split a datasets-list entry into remote user/host/dataset -- delsnaps.sh's
+# parse_remote, the same rule: remote only when there is a ':' AND nothing
+# before it looks like a path (a local name may legally carry a ':' after its
+# pool/child '/'). Results in R_USER/R_HOST/R_DS; an empty R_HOST = local.
+parse_remote() {
+    local elem="$1" remote_part
+    remote_part="${elem%%:*}"
+    if [[ "$elem" == *:* && "$remote_part" != */* ]]; then
+        R_DS="${elem#*:}"
+        if [[ "$remote_part" == *@* ]]; then
+            R_USER="${remote_part%%@*}"
+            R_HOST="${remote_part#*@}"
+        else
+            R_USER="root"
+            R_HOST="$remote_part"
+        fi
+    else
+        R_USER=""; R_HOST=""; R_DS="$elem"
+    fi
+}
+
+# Every entry is parsed and validated BEFORE anything is read. A remote name is
+# handed to the far shell inside single quotes, so a quote (or any character a
+# ZFS name cannot carry) is refused here rather than quoted around; host and
+# user are data too, never a place for ssh options or shell syntax.
+IFS=',' read -r -a DATASETS <<< "$DATASETS_LIST"
+NEED_ZFS=false; NEED_SSH=false
+for _e in "${DATASETS[@]}"; do
+    parse_remote "$_e"
+    if [ -n "$R_HOST" ]; then
+        NEED_SSH=true
+        [[ "$R_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "$R_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+            || { echo "UNKNOWN -- '$_e': the user/host part is not a plain account and host name" >&2; exit "$EXIT_UNKNOWN"; }
+        [[ "$R_DS" =~ ^[A-Za-z0-9][A-Za-z0-9_.:/-]*$ ]] \
+            || { echo "UNKNOWN -- '$_e': '$R_DS' is not a dataset name this monitor will send to a remote shell" >&2; exit "$EXIT_UNKNOWN"; }
+    else
+        NEED_ZFS=true
+    fi
+done
+[ "$NEED_ZFS" = false ] || command -v zfs >/dev/null || { echo "UNKNOWN -- 'zfs' command not found in PATH" >&2; exit "$EXIT_UNKNOWN"; }
+[ "$NEED_SSH" = false ] || command -v ssh >/dev/null || { echo "UNKNOWN -- a dataset is remote, but 'ssh' is not found in PATH" >&2; exit "$EXIT_UNKNOWN"; }
+
+# ssh for remote entries, built like delsnaps.sh's: -k pins (StrictHostKeyChecking
+# =yes), otherwise accept-new; -c cipher; -K/-O at the FRONT so they out-rank
+# everything after them (OpenSSH keeps the first value). Non-interactive and
+# bounded: a monitor that hangs on a password prompt or a dead link never
+# reports, which looks exactly like a monitor that says everything is fine.
+if [ -n "$KNOWN_HOSTS_FILE" ]; then
+    SSH_OPTS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS_FILE" -p "$PORT")
+else
+    SSH_OPTS=(-o StrictHostKeyChecking=accept-new -p "$PORT")
+fi
+[ -n "$SSH_CIPHER" ] && SSH_OPTS+=(-c "$SSH_CIPHER")
+SSH_OPTS+=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+if [ -n "$SSH_KEY" ] || [ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]; then
+    declare -a _front_ssh_opts=()
+    [ -n "$SSH_KEY" ] && _front_ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_KEY")
+    for _o in "${EXTRA_SSH_OPTS[@]}"; do _front_ssh_opts+=(-o "$_o"); done
+    SSH_OPTS=("${_front_ssh_opts[@]}" "${SSH_OPTS[@]}")
+fi
 
 # An EMPTY pattern is refused (2026-08-20). The match below is
 # `[[ "$snapname" == "${PATTERN}"* ]]`, so an empty pattern matches every
@@ -237,9 +330,59 @@ SAW_UNKNOWN=0 # tracked separately: UNKNOWN is not "worse CRITICAL", it is a
 # fabricated number. Fail-closed, but a measurement nobody made.
 #
 # Echoes a validated epoch, or returns 1 and echoes nothing.
-creation_epoch() {   # <dataset or snapshot>
+# zread <user> <host> <zfs args...> -- one READ, on the host the entry names:
+# locally for an empty host, over ssh otherwise. Never falls back from one to
+# the other. stdout and the exit status propagate exactly as a local `zfs` call
+# would. `--` goes before the final argument (the dataset/snapshot name), as in
+# delsnaps.sh's run_zfs: a name starting with '-' is data, not a zfs flag.
+# Remote arguments are single-quoted for the far shell; the names were
+# validated above, so no quote can be inside them.
+zread() {
+    local ru="$1" rh="$2"; shift 2
+    local -a a=("$@")
+    local last=$(( ${#a[@]} - 1 ))
+    local tgt="${a[$last]}"
+    unset 'a[last]'
+    if [ -n "$rh" ]; then
+        local cmd="zfs" x
+        for x in "${a[@]}"; do cmd+=" '$x'"; done
+        cmd+=" -- '$tgt'"
+        # A WALL-CLOCK bound too: ServerAlive only notices a dead link -- sshd
+        # keeps answering it while a zfs on the far side hangs (an import, a
+        # suspended pool). timeout(1) turns that into exit 124 (UNKNOWN, "timed
+        # out") instead of a monitor that never reports. CSA_SSH_TIMEOUT
+        # (seconds) is for tests; the default leaves room for a large -R list.
+        if command -v timeout >/dev/null 2>&1; then
+            timeout -k 10 "${CSA_SSH_TIMEOUT:-120}" ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "$cmd"
+        else
+            ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "$cmd"
+        fi
+    else
+        zfs "${a[@]}" -- "$tgt"
+    fi
+}
+
+# Why a read failed, in words: over ssh the status says whether we were even
+# let in. 255 = ssh itself (connection, authentication, host key); 93 = the
+# relationship's pair gate refuses (disabled). Anything else = zfs answered
+# with an error.
+read_failure() {   # <host> <rc>
+    if [ -n "$1" ] && [ "$2" = 255 ]; then
+        printf 'could not reach %s over ssh (exit 255: connection, authentication or host key)' "$1"
+    elif [ -n "$1" ] && [ "$2" = 93 ]; then
+        printf "%s's pair gate refuses this relationship (disabled)" "$1"
+    elif [ -n "$1" ] && { [ "$2" = 124 ] || [ "$2" = 137 ]; }; then
+        printf 'the read on %s timed out (exit %s)' "$1" "$2"
+    elif [ "$2" = 127 ]; then
+        printf "'zfs' was not found%s (exit 127)" "${1:+ on $1}"
+    else
+        printf 'zfs failed (exit %s)' "$2"
+    fi
+}
+
+creation_epoch() {   # <user> <host> <dataset or snapshot>
     local v
-    v="$(zfs get -H -p -o value creation "$1" 2>/dev/null)" || return 1
+    v="$(zread "$1" "$2" get -H -p -o value creation "$3" 2>/dev/null)" || return 1
     case "$v" in
         ''|*[!0-9]*) return 1 ;;
     esac
@@ -247,21 +390,48 @@ creation_epoch() {   # <dataset or snapshot>
 }
 
 check_one() {
-    local ds="$1" explicit="$2"
-    local newest="" newest_epoch="" line snapname any_snap=false
+    local ru="$1" rh="$2" ds="$3" explicit="$4"
+    local shown="${rh:+$ru@$rh:}$ds"
+    local newest="" newest_epoch="" line snapname any_snap=false out rc
 
     # A dataset that does not exist is UNKNOWN, not CRITICAL: "you asked about
     # something that isn't here" is a config/typo problem, and reporting it as
     # a stale snapshot would send a mail describing a backup failure that never
-    # happened.
-    if ! zfs list -H -o name -t filesystem,volume "$ds" >/dev/null 2>&1; then
-        echo "UNKNOWN dataset=$ds -- does not exist (typo, or removed since the config was written)" >&2
+    # happened. Over ssh a failure to ASK is UNKNOWN too, and says which.
+    out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume "$ds" 2>/dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # zfs answers "does not exist" with exit 1; every other status means
+        # the question was never answered, and says why (255/93/124/127/...).
+        if [ "$rc" = 1 ]; then
+            echo "UNKNOWN dataset=$shown -- does not exist (typo, or removed since the config was written)" >&2
+        else
+            echo "UNKNOWN dataset=$shown -- $(read_failure "$rh" "$rc"); nothing was checked" >&2
+        fi
+        SAW_UNKNOWN=1
+        return
+    fi
+    if [ "$out" != "$ds" ]; then
+        echo "UNKNOWN dataset=$shown -- the existence check answered something other than the dataset name; not trusted" >&2
         SAW_UNKNOWN=1
         return
     fi
 
+    # The snapshot list is read WHOLE and its status checked before a line is
+    # used (F4): a failure here -- also one after partial output -- must not
+    # fall through to "no matching snapshot", which measures the dataset's age.
+    out="$(zread "$ru" "$rh" list -H -o name -s creation -t snapshot "$ds" 2>/dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "UNKNOWN dataset=$shown -- its snapshot list could not be read: $(read_failure "$rh" "$rc")" >&2
+        SAW_UNKNOWN=1
+        return
+    fi
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        if [[ "$line" != "$ds@"* ]]; then
+            echo "UNKNOWN dataset=$shown -- the snapshot list holds '$line', which is not a snapshot of this dataset; not trusted" >&2
+            SAW_UNKNOWN=1
+            return
+        fi
         any_snap=true
         snapname="${line#*@}"
         local _ex _skip=false
@@ -270,12 +440,12 @@ check_one() {
         done
         [ "$_skip" = true ] && continue
         [[ "$snapname" == "${PATTERN}"* ]] && newest="$line"
-    done < <(zfs list -H -o name -s creation -t snapshot "$ds" 2>/dev/null)
+    done <<< "$out"
 
     local from_creation=false detail
     if [ -z "$newest" ]; then
         if [ "$any_snap" = false ] && [ "$explicit" != true ]; then
-            [ "$VERBOSE" = true ] && echo "SKIP dataset=$ds -- no snapshots at all (not an explicit target, likely a container node)" >&2
+            [ "$VERBOSE" = true ] && echo "SKIP dataset=$shown -- no snapshots at all (not an explicit target, likely a container node)" >&2
             return
         fi
         # REV-20260807-056: a dataset cannot be late before it exists. This used
@@ -285,15 +455,15 @@ check_one() {
         # chance to have one. Measuring from the dataset's own creation puts the
         # alarm where the promise is actually broken, and gives this case the
         # WARNING band it never had.
-        if ! newest_epoch="$(creation_epoch "$ds")"; then
-            echo "UNKNOWN dataset=$ds -- no snapshot matches pattern=${PATTERN:-(any)} and the dataset's creation time could not be read, so its age is unknown" >&2
+        if ! newest_epoch="$(creation_epoch "$ru" "$rh" "$ds")"; then
+            echo "UNKNOWN dataset=$shown -- no snapshot matches pattern=${PATTERN:-(any)} and the dataset's creation time could not be read, so its age is unknown" >&2
             SAW_UNKNOWN=1
             return
         fi
         from_creation=true
     else
-        if ! newest_epoch="$(creation_epoch "$newest")"; then
-            echo "UNKNOWN dataset=$ds -- the creation time of ${newest#*@} could not be read, so its age is unknown" >&2
+        if ! newest_epoch="$(creation_epoch "$ru" "$rh" "$newest")"; then
+            echo "UNKNOWN dataset=$shown -- the creation time of ${newest#*@} could not be read, so its age is unknown" >&2
             SAW_UNKNOWN=1
             return
         fi
@@ -327,7 +497,7 @@ check_one() {
         # contradiction. Under two hours the minutes ARE the signal.
         local age_disp="${age_h}h"
         [ "$age" -lt 7200 ] && age_disp="$(( age / 60 ))m"
-echo "$label dataset=$ds $detail age=${age_disp} (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
+echo "$label dataset=$shown $detail age=${age_disp} (warn=$(fmt_duration "$WARN_SEC") crit=$(fmt_duration "$CRIT_SEC"))" >&2
     fi
 }
 
@@ -335,16 +505,32 @@ echo "$label dataset=$ds $detail age=${age_disp} (warn=$(fmt_duration "$WARN_SEC
 # should hold matching snapshots itself (that's the whole point of -R: check
 # whatever real leaves live under it) -- so it gets the same "empty container"
 # leniency as its discovered descendants, not the explicit/mandatory check.
-IFS=',' read -r -a DATASETS <<< "$DATASETS_LIST"
-for ds in "${DATASETS[@]}"; do
+#
+# The -R walk is read WHOLE and its status checked (F4): a failed walk used to
+# check no children at all and say nothing. Each line must be the root or a
+# child of it; anything else is not trusted.
+for entry in "${DATASETS[@]}"; do
+    parse_remote "$entry"
+    ru="$R_USER"; rh="$R_HOST"; ds="$R_DS"
     if [ "$RECURSE" = true ]; then
-        check_one "$ds" false
+        check_one "$ru" "$rh" "$ds" false
+        out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)"; rc=$?
+        if [ "$rc" -ne 0 ]; then
+            echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- its descendants could not be listed ($(read_failure "$rh" "$rc")); none of them was checked" >&2
+            SAW_UNKNOWN=1
+            continue
+        fi
         while IFS= read -r child; do
             [ -z "$child" ] || [ "$child" = "$ds" ] && continue
-            check_one "$child" false
-        done < <(zfs list -H -o name -t filesystem,volume -r "$ds" 2>/dev/null)
+            if [[ "$child" != "$ds/"* ]]; then
+                echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- the descendant list holds '$child', which is not under it; not trusted" >&2
+                SAW_UNKNOWN=1
+                continue
+            fi
+            check_one "$ru" "$rh" "$child" false
+        done <<< "$out"
     else
-        check_one "$ds" true
+        check_one "$ru" "$rh" "$ds" true
     fi
 done
 
