@@ -1,6 +1,6 @@
 # Engine freeze
 
-<!-- frozen: snapsend.sh 100755 984647aae4e9ceb01ed77970f9a37e611c3875cf -->
+<!-- frozen: snapsend.sh 100755 6ba0e82b15467638437f8527e04badcb08c1ac6a -->
 <!-- frozen: snapget.sh 100755 b1ef2569b4d8e9c0f91ff24c0315f5f3f855c139 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 34faf6d1665c24bdc9d33f539e59f47d218d7816 -->
@@ -1070,6 +1070,23 @@ Owner-authorized refreezes:
   untouched; the comment is corrected. New suite test/mirrorguest: 9/0;
   against the pre-fix engine 2/7.
   twin: NOT ported -- mirror_target and -M exist only in snapget.
+
+- 2026-10-17 (snapsend.sh): **REV-20261017-151 (P0) -- -H no longer bypasses
+  the no-common-base refusal.** Reviewer authorisation `authorizes-frozen:
+  snapsend.sh`; snapsend stays v2.76. The P-0 refusal (existing target with
+  snapshots, no common snapshot by GUID, no bookmark) carried
+  `[ "$FULL_HISTORY_SEND" -ne 1 ]`, so -H skipped it and went on to
+  `zfs send -R` into `zfs recv -F` -- destructive on an unrelated target,
+  without the explicit -f the refusal names. The condition is removed; the
+  rest of process_dataset is untouched. -H onto an absent target and the
+  common-base D3 landing are unchanged. New suite test/pushhistory: 7/0;
+  against the pre-fix push 5/2.
+  twin: pull never had the exception (snapget -H refuses the same fixture),
+  so this moves push to pull's behaviour. test/twins blessed for
+  process_dataset (snapsend hash only; the direction reason is unchanged and
+  still true). test/twins section M also gains a `guest_disk_is_live` stub:
+  REV-20261017-150 made mirror_target call it first, and the extracted copy
+  printed "command not found" (harmless, the target names no guest).
 
 ## How it is enforced
 

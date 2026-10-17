@@ -1750,7 +1750,15 @@ process_dataset() {
     # No common snapshot and no bookmark, onto a target that has snapshots (case
     # E): ZFS refuses a full stream there even with -F. Say it in snapget's
     # words, before sending a byte, instead of leaving it to zfs recv's error.
-    if [ $FORCE_FULL_SEND -ne 1 ] && [ "$FULL_HISTORY_SEND" -ne 1 ] && [[ "$common_snapshot" == "null" ]] \
+    #
+    # -H is NOT an exception (REV-20261017-151, P0). It used to be: -H skipped
+    # this refusal and the run went on to `zfs send -R` into `zfs recv -F`,
+    # and a replication stream received with -F destroys target snapshots the
+    # source does not have -- an unrelated existing target replaced without
+    # the explicit -f this message names. -H chooses what a full stream
+    # CARRIES; only -f decides that an existing target may be replaced. Pull
+    # never had the exception.
+    if [ $FORCE_FULL_SEND -ne 1 ] && [[ "$common_snapshot" == "null" ]] \
        && [ -z "$bookmark_base" ] && [ "${#tgt_snaps[@]}" -gt 0 ]; then
         log 0 "Refusing: '$tgt_dataset' already exists and shares no common snapshot (by GUID) with '$src_dataset' -- a full resend needs '-f', which destroys and recreates the target. That is a decision for a human to make explicitly, not this run's default."
         abort_held_snapshot "$snapshot" "$tgt_dataset"
