@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c627922e7c666441 -->
+<!-- status-covers-digest: 7701553ffd35f13e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -22,6 +22,11 @@
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
 - **Odzysk -- kampania wariantów relacji na labie (2026-10-17; `fix/restore-local-beside-push`).**
+  REV-20261017-153 (recenzent zablokował #601): źródło zdalne zapisane bez konta (`host:dataset`) było brane za
+  lokalne -- odzysk „obok” dostawał ścieżkę kolektora, a kopia push `host:base` była „lokalna” i doszła do pauzy.
+  Poprawione: jedna klasyfikacja adresu wg reguły silników (`[user@]host:dataset`, gołe `user@host` sync) w wyborze
+  celu, planerze, odmowie push przed pauzą i raporcie przekazania (porównuje host). `test/restore/localdest.sh`
+  19/0 (na `14ea8006` 15/5), `test/restore` 330/0.
   Kod hostów: `main` 963d7baf; poprawki sprawdzane z kopii gałęzi na pve9b/pve9. Każdy bieg: najpierw „n” (nic się nie
   zmieniło), potem „t”; po każdym kroku niszczącym sprawdzony ocalały (ostatnia migawka, GUID, montowanie, marker).
   | wariant | polecenie (kolektor) | wynik |
@@ -41,7 +46,7 @@
   dla jej własnych kopii (inna relacja -> odmowa ze wskazaniem `--from-copy`); raport przekazania nie mówi już „a
   DIFFERENT machine” dla odzysku lokalnego obok (ta sama klasa co poprawka k2-ab z 10-15); relacja push -> „remote
   push”, odmowa przed pauzą; okno „Przywróć” dla relacji lokalnej nie każe wydawać zgody. Testy:
-  `test/restore/localdest.sh` 9/0 (na `main` 5 FAIL, 4 kontrole PASS), `test/restore` na pve9 319 PASS / 1 FAIL (ten
+  `test/restore/localdest.sh` 9/0 (na `main` 5 FAIL, 4 kontrole PASS; po REV-153 19/0), `test/restore` na pve9 319 PASS / 1 FAIL (ten
   sam środowiskowy co na `main`: 310/1), `test/tui` na pve9 314/6 (6 „linia” -- środowiskowe, te same na `main`;
   nowy test na `main` FAIL).
   Otwarte, nie zmienione: (1) odmowa w preflight („nothing was changed”) kończy się rc 2, a rc 2 to też „CHANGED AND
