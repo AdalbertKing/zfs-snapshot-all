@@ -119,8 +119,9 @@ if [ "$PEER" = - ]; then SRCHOST="tego hosta ($(hostname -s 2>/dev/null || hostn
 # w stanie endpoint_change_pending, a cron dalej idzie starym adresem.
 address_flow() {
     local cur inst new rc
-    cur=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("active_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
-    inst=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("installed_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
+    # status NAZWA --json = {"relations":[{...}]} -- pola relacji są w relations[0].
+    cur=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("relations") or [{}])[0]; print(r.get("active_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
+    inst=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("relations") or [{}])[0]; print(r.get("installed_endpoint") or "")' "$TMPD/st.json" 2>/dev/null)
     case "$cur" in *:*) ;; *) cur="$PEER" ;; esac
     while :; do
         geom
@@ -148,9 +149,12 @@ address_flow() {
         exit "$rc"
     done
 }
-# Zmiana adresu w toku (np. literówka, verify-endpoint odmówił): jedyne, co tu ma sens,
-# to poprawić adres -- prosto do tego okna.
-if [ "$STATE" = endpoint_change_pending ] && [ "$PEER" != - ]; then
+# Zmiana adresu w toku: jedyne, co tu ma sens, to poprawić adres -- prosto do tego okna.
+#   endpoint_change_pending -- nowy adres zapisany, niesprawdzony (np. literówka);
+#   endpoint_verified       -- nowy adres nie odpowiedział, verify-endpoint wrócił do
+#                              starego, activate zatrzymał się przed instalacją
+#                              (zmierzone na pve10, 2026-10-17).
+if { [ "$STATE" = endpoint_change_pending ] || [ "$STATE" = endpoint_verified ]; } && [ "$PEER" != - ]; then
     address_flow
     exit 0
 fi

@@ -3489,6 +3489,17 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catc
 else
     bad "edit-relation: zmiana adresu w toku" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -3 "$ER/wt.log" | cut -c1-250)"
 fi
+# Nowy adres nie odpowiedzial: verify wrocil do starego, activate stanal przed instalacja
+# -- relacja jest endpoint_verified (zmierzone na pve10, 2026-10-17). Okno tez prosto na polu.
+EROUT=$(ER_STATE=endpoint_verified er_run "0${T}10.99.0.9
+0${T}
+"); ERRC=$?
+if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
+   && ! grep -qF 'Co zmienić?' "$ER/wt.log" && ! grep -qF 'Nie da się zmienić' "$ER/wt.log"; then
+    ok "edit-relation: po nieudanej zmianie adresu (endpoint_verified) okno prosto na polu adresu"
+else
+    bad "edit-relation: endpoint_verified -> pole adresu" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -3 "$ER/wt.log" | cut -c1-250)"
+fi
 # Relacja lokalna (bez peera): w menu NIE ma "Adres hosta".
 EROUT=$(ER_PEER= er_run "1${T}
 "); ERRC=$?
