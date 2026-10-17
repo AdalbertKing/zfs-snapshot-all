@@ -13892,6 +13892,16 @@ for rk in "RUX_MODE='snaponyl'|bad" "RUX_MODE='Snaponly'|bad" "RUX_MODE='snaponl
     fi
 done
 [ "$rk_ok" -eq 1 ] && ok "snaponly F1.2: unknown mode, wrong case and snaponly-with-target are refused at load (target before or after the mode); legacy and every written kind load"
+# The target-path helper on such a record: the load stops first, so no
+# collector path is ever computed from it (before, snapget_local_base answered
+# '' -- the sync meaning -- for a 'snaponyl' record with a sync-shaped pairing).
+printf "CLIENT_NAME='k'\nSTATE='active'\nPEER_HOST='10.0.0.9'\nRUX_MODE='snaponyl'\nCLIENT_TARGET=''\n" > "$SO/kind.conf"
+out=$( ( PEER_SAVED_MODE=sync; record_load client "$SO/kind.conf"; printf 'BASE=[%s]' "$(snapget_local_base)" ) 2>&1 )
+if printf '%s' "$out" | grep -q 'is not a relationship kind' && ! printf '%s' "$out" | grep -q 'BASE='; then
+    ok "snaponly F1.2: snapget_local_base is never reached for a 'snaponyl' record with a sync-shaped pairing"
+else
+    bad "snaponly F1.2: snapget_local_base on an unknown-mode record" "$out"
+fi
 mkdir -p "$SO/kclients"; printf "CLIENT_NAME='bk'\nSTATE='endpoint_verified'\nPEER_HOST='10.0.0.9'\nRUX_MODE='snaponyl'\nCLIENT_TARGET=''\n" > "$SO/kclients/bk.conf"
 cp "$SO/kclients/bk.conf" "$SO/kclients/bk.orig"
 : > "$SO/k.calls"
@@ -13938,6 +13948,11 @@ fr_case "control: local relationship" "STATE='active'\nRUX_MODE='local'\nREQUEST
 fr_case "control: disjoint dataset" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/other'" FREE || fr_ok=0
 fr_case "control: another peer" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.7'\nREQUESTED_DATASETS='hdd/so'" FREE || fr_ok=0
 fr_case "control: legacy record without RUX_MODE, disjoint manifest" "STATE='active'\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" FREE "PEER_SAVED_DATASETS='hdd/x'" || fr_ok=0
+fr_case "malformed STATE (unclosed quote)" "STATE='active\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'" REFUSE || fr_ok=0
+fr_case "malformed PEER_HOST (unclosed quote)" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9\nREQUESTED_DATASETS='hdd/so'" REFUSE || fr_ok=0
+fr_case "snaponly with REQUESTED_DATASETS=''" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS=''" REFUSE || fr_ok=0
+fr_case "a field this package does not write" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'\nEVIL_FIELD='x'" REFUSE || fr_ok=0
+fr_case "control: rux-written RUX_MODE='' (default backup), disjoint manifest" "STATE='active'\nRUX_MODE=''\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" FREE "PEER_SAVED_DATASETS='hdd/x'" || fr_ok=0
 [ "$fr_ok" -eq 1 ] && ok "snaponly F2.1: malformed, state-less, kind-less, host-less and scope-less records and a malformed manifest are refusals; removed/local/disjoint/other-peer/legacy keep their behaviour"
 fi   # --- koniec sekcji snaponly ---
 

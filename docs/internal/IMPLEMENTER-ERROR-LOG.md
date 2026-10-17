@@ -85,7 +85,7 @@ Before adding a flag, a parser or a knob: grep for one. Before using a test
 helper, confirm the suite defines it. Before writing a resolver, check what the
 renderer already uses.
 
-*Evidence: E7, E3, E12, E29, E32, E34, E40, E55.*
+*Evidence: E7, E3, E12, E29, E32, E34, E40, E55, E86.*
 
 ### R12 — A pass proves the shapes it ran, and the report must name them
 
@@ -1921,6 +1921,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E86 — `gen-cron.sh --install` run by hand as the account rewrote its log paths (2026-10-17, R8)
+**2026-10-17, REV-20261017-152 F1.1 live proof on pve9.**
+
+*Genesis.* To install an edited retain before re-running `activate-client`, I
+ran `su zfsbackup -c "./gen-cron.sh -c <config> --install"`. The account's whole
+managed block was reinstalled with `--log=/root/scripts/cron.log` and root's
+notify paths -- every relationship of that account, not only the one under
+test. The `activate-client --plan` that followed showed 64 changed cron lines;
+`--yes` put the account's own paths back (crontab compared line-for-line with
+the pre-test copy afterwards: identical). Lab only, a few minutes.
+
+*Cause.* The package's own install path (`gencron_as_target`, used by
+activate/edit-config) supplies the account's paths; a bare gen-cron does not.
+The rule was already in memory ("NIGDY nie wolaj gen-cron wprost") and not
+applied, because the step felt like test setup rather than an install.
+
+*Rule.* R8: install through the package's own verb (`edit-config`, or let the
+activation under test install), never a bare `gen-cron.sh --install`, also
+for test setup.
 
 ### E85 — a fixture that runs the real quiesce payload left a deadman holding the next case's lock (2026-10-16, R2)
 
