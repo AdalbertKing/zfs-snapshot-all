@@ -75,8 +75,8 @@ source "$ZFSBACKUP"
 ONLY_SECTION=""
 if [ "${1:-}" = "--section" ]; then ONLY_SECTION="${2:-}"; fi
 case "$ONLY_SECTION" in
-    ""|retention|57|58|59|102|108|110|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig|pairctl) ;;
-    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig | pairctl)" >&2; exit 2 ;;
+    ""|retention|57|58|59|102|108|110|records|fataldie|invocation|flags|noeval|statusjson|showconfig|listprofiles|monitorjson|rev136|exportrel|saveprof|listjobs|showscope|gfsshape|jobstats|listdatasets|preparesource|delrel|passivepick|probehistory|mirrorguard|k4grant|editrel|runreplicas|statusquiesce|addsource|replicamonitor|editconfig|pairctl|snaponly) ;;
+    *) echo "unknown --section '$ONLY_SECTION' (known: retention | 57 | 58 | 59 | 102 | 108 | 110 | records | fataldie | invocation | flags | noeval | statusjson | showconfig | listprofiles | monitorjson | rev136 | exportrel | saveprof | listjobs | showscope | gfsshape | jobstats | listdatasets | preparesource | delrel | passivepick | probehistory | mirrorguard | k4grant | editrel | runreplicas | statusquiesce | addsource | replicamonitor | editconfig | pairctl | snaponly)" >&2; exit 2 ;;
 esac
 
 # THE SELECTOR HAS TO SELECT. Measured 2026-09-08: the only guard in this file
@@ -13623,6 +13623,133 @@ for pc_shape in explicit mode; do
     fi
 done
 fi   # --- koniec sekcji pairctl ---
+
+if want snaponly; then
+# ============================================================================
+# snaponly (REV-20261017-152 round 1, F1-F3): a pull relationship that copies
+# NOTHING. The sections it writes are run through the REAL gen-cron.sh -- the
+# assertions are on the cron lines that would be installed, not on the config.
+# ============================================================================
+SO="$WORK/snaponly"; rm -rf "$SO"; mkdir -p "$SO/clients"
+so_emit() {   # <profile> <relationship> <config> -> messages; rc of the emitter
+    ( hostname() { echo PVE10; }
+      LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
+      PEER_SAVED_DATASETS="hdd/so/a hdd/so/b" PEER_SAVED_RECURSIVE_ROOTS="hdd/so/b" RECURSION=""
+      PROFILE="$1" SOURCE_PROFILE=""
+      emit_snaponly_sections "$3" "$2" ) 2>&1
+}
+printf '[defaults]\n\thost_label = pve10\n\tmonitor_schedule = 7 * * * *\n' > "$SO/c.conf"
+# m12w4d7h24-age: four tiers, count retention (the suite's own default.conf is a ladder fixture).
+so_emit m12w4d7h24-age rel1 "$SO/c.conf" > "$SO/emit.out"; rc=$?
+so_emit m12w4d7h24-age rel1 "$SO/c.conf" >> "$SO/emit.out" || rc=1     # a re-render replaces, never duplicates
+bash "$REPO/gen-cron.sh" -c "$SO/c.conf" > "$SO/cron" 2> "$SO/cron.err" || rc=1
+so_snap=$(grep -c '/snapget.sh -s -m "pve10_automated_' "$SO/cron")
+so_bad=$(grep '/snapget.sh' "$SO/cron" | grep -vc 'snapget.sh -s ')
+so_prune=$(grep '/delsnaps.sh' "$SO/cron" | grep -c '"zfsbackup@10.0.0.9:hdd/so/[ab]" "pve10_automated_')
+so_prune_all=$(grep -c '/delsnaps.sh' "$SO/cron")
+so_mon=$(grep -c 'check-snap-age.sh .*"zfsbackup@10.0.0.9:hdd/so/[ab]" "pve10_automated_' "$SO/cron")
+if [ "$rc" -eq 0 ] && [ "$so_snap" = 8 ] && [ "$so_bad" = 0 ] && [ "$so_prune" = 8 ] && [ "$so_prune_all" = 8 ] && [ "$so_mon" = 8 ] \
+   && ! grep '/snapget.sh' "$SO/cron" | grep -q '"zfsbackup@10.0.0.9:hdd/so/[ab]" "'; then
+    ok "snaponly: 2 datasets x 4 tiers -> snapget -s with the collector's own family (pve10_*), no destination argument; source prune and remote monitor of that family only; a re-render does not duplicate"
+else
+    bad "snaponly: emitted sections through gen-cron" "rc=$rc snap=$so_snap bad=$so_bad prune=$so_prune/$so_prune_all mon=$so_mon" "$(cat "$SO/emit.out" "$SO/cron.err")" "$(head -5 "$SO/cron")"
+fi
+# The recursive root takes -R on all three (snapshot, prune, monitor); the plain one none.
+if ! grep -q '"zfsbackup@10.0.0.9:hdd/so/b"' "$SO/cron"    || grep '"zfsbackup@10.0.0.9:hdd/so/b"' "$SO/cron" | grep -v -- ' -R ' | grep -q . \
+   || grep '"zfsbackup@10.0.0.9:hdd/so/a"' "$SO/cron" | grep -q -- ' -R '; then
+    bad "snaponly: recursion follows the source's recursive roots" "$(grep -n 'hdd/so' "$SO/cron" | cut -c1-160)"
+else
+    ok "snaponly: a recursive source root snapshots, prunes and monitors with -R; a plain one without"
+fi
+# F5: no job of the relationship starts on a multiple of five (pvesr's minutes).
+so_min=$(grep -E '/(snapget|delsnaps)\.sh' "$SO/cron" | awk '{print $1}' | sort -u | tr '\n' ' ')
+so_five=$(grep -E '/(snapget|delsnaps)\.sh' "$SO/cron" | awk '$1 % 5 == 0' | wc -l)
+if [ "$so_five" -eq 0 ] && [ -n "$so_min" ]; then
+    ok "snaponly: no snapshot or prune minute is a multiple of five (minutes: $so_min)"
+else
+    bad "snaponly: minutes off the multiples of five" "minutes: $so_min"
+fi
+for m in 0 4 5 55 59 60; do
+    r=$(snaponly_minute "$m")
+    [ $(( r % 5 )) -ne 0 ] && [ "$r" -ge 0 ] && [ "$r" -le 59 ] || bad "snaponly_minute $m" "-> $r"
+done
+ok "snaponly_minute: 0 4 5 55 59 60 all land on a minute 0-59 that is not a multiple of five"
+
+# strip: only THIS relationship's sections go; another snaponly relationship and
+# unrelated sections stay, and what is left is still a config gen-cron accepts.
+so_emit m12w4d7h24-age rel2 "$SO/c.conf" >/dev/null 2>&1 || true
+# rel2 targets the same fake datasets -- fine for the strip test, it is never installed.
+printf '\n[template:keepme]\n\tsend_schedule = 1 * * * *\n' >> "$SO/c.conf"
+cp "$SO/c.conf" "$SO/s.conf"
+snaponly_strip "$SO/s.conf" rel1
+if ! grep -q 'client=rel1$' "$SO/s.conf" && ! grep -q '__rel1__' "$SO/s.conf" \
+   && grep -q 'client=rel2$' "$SO/s.conf" && grep -q '^\[template:keepme\]' "$SO/s.conf" \
+   && grep -q '^\[defaults\]' "$SO/s.conf"; then
+    ok "snaponly_strip: removes the relationship's own [snaponly:]/[prune:] sections and templates; another relationship's and foreign sections stay"
+else
+    bad "snaponly_strip" "$(grep -n '^\[\|managed-by' "$SO/s.conf")"
+fi
+
+# F3: a GFS ladder (one family, several tiers) and a prefixless profile are refused.
+printf '[defaults]\n\thost_label = pve10\n' > "$SO/g.conf"
+out=$(so_emit d7h24-gfs rel1 "$SO/g.conf"); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'keeps a GFS ladder (gfs = yes)'; then
+    ok "snaponly: a per-tier GFS profile is refused -- a source [prune:] cannot carry it and a flat count would change the policy"
+else
+    bad "snaponly: GFS profile refused" "rc=$rc" "$out"
+fi
+out=$(so_emit passive-flat rel1 "$SO/g.conf"); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'no prefix'; then
+    ok "snaponly: a prefixless profile is refused -- the relationship needs a family of its own"
+else
+    bad "snaponly: prefixless profile refused" "rc=$rc" "$out"
+fi
+
+# F2: one relationship per SOURCE dataset on this collector (peer + dataset,
+# parent/child included). Another source host with the same path is allowed.
+printf "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'\n" > "$SO/clients/other.conf"
+so_free() { ( CLIENTS_DIR="$SO/clients"; snaponly_assert_source_free "$@" && echo FREE ) 2>&1; }
+out=$(so_free new 10.0.0.9 hdd/so/a)
+o2=$(so_free new 10.0.0.9 hdd)
+o3=$(so_free new 10.0.0.7 hdd/so/a)
+o4=$(so_free new 10.0.0.9 hdd/other)
+if printf '%s' "$out" | grep -q "overlaps 'hdd/so' of relationship 'other'" && printf '%s' "$o2" | grep -q overlaps \
+   && [ "$(printf '%s' "$o3" | tail -1)" = FREE ] && [ "$(printf '%s' "$o4" | tail -1)" = FREE ]; then
+    ok "snaponly: a child or parent of another relationship's source dataset on the same peer is refused; another peer or a disjoint dataset is not"
+else
+    bad "snaponly: source-free check" "child: $out" "parent: $o2" "other peer: $o3" "disjoint: $o4"
+fi
+
+# F1: nothing builds a collector path for it, and copy-only / in-place verbs refuse it by name.
+out=$( ( RUX_MODE=snaponly CLIENT_NAME=x; snapget_local_base ) 2>&1 ); rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'has no collector path'; then
+    ok "snaponly: snapget_local_base refuses instead of fabricating '<target>/<label>' from an empty target"
+else
+    bad "snaponly: snapget_local_base guard" "rc=$rc" "$out"
+fi
+printf "STATE='pending_enroll'\nRUX_MODE='snaponly'\n" > "$SO/clients/so1.conf"
+printf "STATE='active'\n" > "$SO/clients/cp1.conf"
+so_ref_ok=1
+for v in restore edit-relation add-source export-relation set-tiers; do
+    out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" so1; echo PASSED ) 2>&1 )
+    printf '%s' "$out" | grep -q "'so1' is a snaponly relationship" && ! printf '%s' "$out" | grep -q PASSED || { so_ref_ok=0; bad "snaponly_refuse $v" "$out"; }
+    out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" cp1; echo PASSED ) 2>&1 )
+    [ "$(printf '%s' "$out" | tail -1)" = PASSED ] || { so_ref_ok=0; bad "snaponly_refuse $v passes a copy relationship" "$out"; }
+done
+[ "$so_ref_ok" -eq 1 ] && ok "snaponly_refuse: restore/edit-relation/add-source/export-relation/set-tiers refuse a snaponly relationship and let a copy relationship through"
+
+# add-client --snaponly: a target (even an empty one) and a copy mode are refused at the command line.
+out=$( ( CLIENTS_DIR="$SO/clients"; cmd_add_client sx --host=10.0.0.9 --snaponly --target= --datasets=hdd/so/a ) 2>&1 ); rc=$?
+o2=$( ( CLIENTS_DIR="$SO/clients"; cmd_add_client sx --host=10.0.0.9 --snaponly --mode=sync --datasets=hdd/so/a ) 2>&1 )
+o3=$( ( CLIENTS_DIR="$SO/clients"; cmd_add_client sx --host=10.0.0.9 --snaponly ) 2>&1 )
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'takes no --target' && printf '%s' "$o2" | grep -q 'different relationship kinds' \
+   && printf '%s' "$o3" | grep -q 'needs --datasets' && [ ! -e "$SO/clients/sx.conf" ]; then
+    ok "add-client --snaponly: --target (even empty), --mode and a missing --datasets are refused before any record exists"
+else
+    bad "add-client --snaponly refusals" "target: $out" "mode: $o2" "datasets: $o3"
+fi
+fi   # --- koniec sekcji snaponly ---
+
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

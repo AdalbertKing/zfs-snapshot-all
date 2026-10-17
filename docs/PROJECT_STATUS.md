@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8849e16d04c0be87 -->
+<!-- status-covers-digest: bfec904294aa3dbe -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,20 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; `feat/rev152-snaponly-round1`, W TOKU).**
+  `add-client --snaponly --host=… --datasets=…` (i fasada `--source=HOST:DS --mode=snaponly`) zapisuje w rekordzie
+  `RUX_MODE=snaponly`; nic nie wnioskuje trybu z pustego celu. Cykl: `add-client` -> `verify-endpoint` (`snapget -n -s`,
+  tylko odczyt) -> `activate-client`; bez seeda. `gen-cron.sh` ma sekcję `[snaponly:<konto@host:ds>]`, która emituje
+  `snapget.sh -s` i odmawia wszystkiego, co kształtuje transfer albo cel (dst/src/flags/autotune/retencja celu nazwane wprost;
+  kompresja, szyfr, pasmo -- spoza listy pól sekcji).
+  Rodzina migawek to `<kolektor>_<prefiks>` (np. `pve10_automated_hourly_`), więc rodziny różnych kolektorów są
+  rozłączne; retencja źródła to osobny `[prune:]` z tą rodziną, przypięty kluczem relacji. Minuty, które pisze
+  `zfs-backup.sh`, nie są wielokrotnością 5 (ręczna sekcja w `gen-cron.sh` nie jest tu sprawdzana). Odmowy: profil bez prefiksu, profil z drabiną GFS na szczeblu (zmieniłby politykę),
+  przy aktywacji -- zakres nakładający się na źródło innej relacji tego kolektora, `seed`/`restore`/`edit-relation`/`add-source`/
+  `remove-source`/`set-tiers`/`export-relation`/`delete-relation --destroy-copies`. `remove-client` usuwa jej sekcje po
+  znaczniku. Test: `test/zfsbackup --section snaponly` 11/0 (sekcje przez prawdziwy `gen-cron.sh`); mutant bez czterech strażników (odmowa
+  w `snapget_local_base`, odmowa GFS, `snaponly_strip` przed emisją, odmowa `--target`): 5 PASS, 6 FAIL. Dowód na żywo pve10 -> pve9b -- jeszcze nie zrobiony.
 
 - **`enable-client` zdejmuje blokadę z kolektora (2026-10-16; `fix/enable-client-control-plane`).**
   Zmierzone na labie pve10 -> pve9b: po `disable-client pve9b` polecenie `enable-client pve9b` padało z

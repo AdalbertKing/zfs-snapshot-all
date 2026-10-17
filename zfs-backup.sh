@@ -4968,6 +4968,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
 # test, emit_client_sections) goes through these two rather than branching on
 # PEER_SAVED_MODE itself, so the mapping is decided in exactly one place.
 snapget_local_base() {
+    # A snaponly relationship has NO collector path (REV-20261017-152 F1): any
+    # caller that gets here with one has mistaken it for a copy. Loud, never a
+    # fabricated "<target>/<label>" built from an empty target.
+    snaponly_is && die "internal: snapget_local_base called for snaponly relationship '${CLIENT_NAME:-?}' -- it has no collector path"
     [ "${PEER_SAVED_MODE:-}" = sync ] && { printf ''; return 0; }
     printf '%s' "$PEER_SAVED_TARGET/$LOAD_LABEL"
 }
@@ -7115,6 +7119,7 @@ cmd_set_tiers() {
             *)  [ -z "$name" ] || die "set-tiers: takes exactly one NAME"; name="$a" ;;
         esac
     done
+    [ -n "$name" ] && snaponly_refuse set-tiers "$name"
     [ -n "$name" ] || die "usage: zfs-backup.sh set-tiers NAME [--tier=T --keep=N ...] [--plan|--yes]"
     [ "${#ops[@]}" -gt 0 ] || die "set-tiers: nothing to change"
     local cpath; cpath=$(client_conf_path "$name")
@@ -9208,7 +9213,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_family="" raw_send=0
+    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -9234,7 +9239,8 @@ cmd_add_client() {
             --exclude-family=*) exclude_family="${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
-            --target=*)    target="${a#*=}" ;;
+            --target=*)    target="${a#*=}"; target_given=1 ;;
+            --snaponly)    snaponly=1 ;;
             --bandwidth=*) bandwidth="${a#*=}" ;;
             --profile=*)   profile="${a#*=}"; flag_profile add-client "$profile" ;;
             --source-profile=*) SRC_PROFILE_NAME="${a#*=}" ;;
@@ -9243,6 +9249,19 @@ cmd_add_client() {
             *) die "add-client: unknown option $a" ;;
         esac
     done
+    # SNAPONLY (REV-20261017-152 F1): snapshots on the source, NO copy. Everything
+    # that describes a copy is refused here, before any pairing or key exchange:
+    # a --target (an EMPTY one too -- that spelling means a local no-copy
+    # relationship elsewhere, and an unset variable expands to it), a --mode
+    # (backup/sync are copy kinds), passive adoption, raw sends, a bandwidth cap,
+    # exclusions (not carried by the snaponly lines yet).
+    if [ "$snaponly" -eq 1 ]; then
+        [ "$target_given" -eq 0 ] || die "add-client --snaponly copies nothing, so it takes no --target (not even an empty one). Nothing was changed."
+        [ -z "$mode" ] || die "add-client --snaponly and --mode=$mode are different relationship kinds -- pick one. Nothing was changed."
+        [ -n "$datasets" ] || die "add-client --snaponly needs --datasets=DS[,DS...] -- the source datasets to snapshot. Nothing was changed."
+        [ "$passive" -eq 0 ] && [ "$raw_send" -eq 0 ] && [ -z "$bandwidth" ] && [ -z "$exclude_family" ] && [ "${#excludes[@]}" -eq 0 ] \
+            || die "add-client --snaponly: --passive/--raw/--bandwidth/--exclude-* shape a copy, and snaponly copies nothing. Nothing was changed."
+    fi
     # Phase 4: CREATE-time choice only. Validated now, at enrolment, so a
     # typo'd/nonexistent profile fails before any pairing or key exchange
     # happens, not silently at the first activate-client. Zero-choice default
@@ -9550,7 +9569,7 @@ cmd_add_client() {
         local_user=""
         log "add-client: no --local-user -- '$name' jobs will run as root; pass --local-user=NAME to delegate them to an account"
     fi
-    if [ "$mode" != sync ]; then
+    if [ "$mode" != sync ] && [ "$snaponly" -eq 0 ]; then
         if [ -z "$target" ]; then
             target="$DEFAULT_TARGET"
             [ -n "$target" ] || die "no --target given and no default set -- run setup-server first, or pass --target=POOL/PATH"
@@ -9719,6 +9738,9 @@ cmd_add_client() {
         # lets this field override the manifest's; empty (sync mode) and
         # absent (older records) keep the manifest value, zero migration.
         write_client_field CLIENT_TARGET     "$target"
+        # The relationship's KIND, explicit (F1): nothing downstream infers
+        # snaponly from the empty target above.
+        [ "$snaponly" -eq 1 ] && write_client_field RUX_MODE snaponly
         # On the RECORD, so re-activation regenerates the same shape. A hand
         # edited config lost its 'recursive = atomic' the moment anything
         # regenerated the section; the record is the only place a decision
@@ -10561,6 +10583,7 @@ cmd_seed() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name' -- run add-client first"
     record_load client "$cpath"
+    snaponly_is && die "seed: '$name' is a snaponly relationship -- nothing is copied, so there is nothing to seed. Next: zfs-backup.sh activate $name"
     case "${STATE:-}" in
         pending_enroll|seeding) ;;
         # IDEMPOTENT RERUN, same contract as add-client above: a seed whose
@@ -11345,6 +11368,27 @@ cmd_verify_endpoint() {
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no client '$name'"
     record_load client "$cpath"
+    # snaponly (REV-20261017-152 F1): no seed precedes it, and what is verified is
+    # the snapshot-only rehearsal (snapget -n -s), not an incremental base.
+    if snaponly_is; then
+        case "${STATE:-}" in
+            pending_enroll|seed_complete|endpoint_verified|endpoint_change_pending) ;;
+            *) die "client '$name' (snaponly) is in state '${STATE:-unknown}' -- verify-endpoint needs pending_enroll or later" ;;
+        esac
+        ENDPOINT_PROBE=1 load_client_and_connection "$cpath"
+        log "verifying endpoint '$LOAD_HOST:$LOAD_PORT' for snaponly '$name' (snapget -n -s, read-only)..."
+        snaponly_probe || die "the snapshot-only rehearsal failed for '$name':
+$PROBE_DETAIL
+Nothing was recorded."
+        {
+            cat "$cpath"
+            write_client_field STATE                endpoint_verified
+            write_client_field ENDPOINT_VERIFIED_AT "$(date '+%Y-%m-%d %H:%M:%S')"
+            write_client_field ENDPOINT_VERIFIED_FOR "$LOAD_HOST:$LOAD_PORT"
+        } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+        log "client '$name': endpoint '$LOAD_HOST:$LOAD_PORT' verified -- every dataset answered PLAN=SNAPSHOT-ONLY. Ready for activate-client."
+        return 0
+    fi
     case "${STATE:-}" in
         seed_complete|endpoint_verified|endpoint_change_pending) ;;
         *) die "client '$name' is in state '${STATE:-unknown}' -- verify-endpoint needs seed_complete, endpoint_change_pending, or endpoint_verified (to re-check)" ;;
@@ -11432,6 +11476,353 @@ If the peer has a genuinely new address, record it: $0 set-endpoint $name --host
 }
 
 # ------------------------------------------------------------------------------
+# ==============================================================================
+# SNAPONLY RELATIONSHIPS (REV-20261017-152 round 1, F1-F3)
+#
+# A pull relationship that copies NOTHING: this collector's cron takes snapshots
+# on the remote source (`snapget.sh -s`) and prunes them there; no dataset is
+# ever created here. The mode is EXPLICIT in the record (RUX_MODE=snaponly) and
+# in the config ([snaponly:<account@host:dataset>]); nothing infers it from an
+# empty CLIENT_TARGET, and every collector-path helper refuses it (see
+# snapget_local_base) rather than fabricate a local base.
+#
+# Lifecycle: add-client --snaponly -> verify-endpoint (snapget -n -s, read-only)
+# -> activate-client (activate_snaponly below). No seed: there is nothing to
+# copy. edit-relation and add-source/remove-source are refused for now -- the
+# relationship is deleted and created again to change it.
+# ==============================================================================
+snaponly_is() { [ "${RUX_MODE:-}" = snaponly ]; }
+# Verbs that only make sense for a COPY, or that change a relationship in place,
+# refuse a snaponly one by name (F1: "refuse or be inapplicable", never act as if
+# a collector-side copy existed).
+snaponly_refuse() {   # <verb> <relationship name>
+    local f; f="$(client_conf_path "$2" 2>/dev/null)" || return 0
+    [ -r "$f" ] || return 0
+    [ "$(record_get "$f" RUX_MODE 2>/dev/null)" = snaponly ] || return 0
+    case "$1" in
+        restore) die "restore: '$2' is a snaponly relationship -- nothing of it is copied to this host, so there is nothing here to restore from. Its snapshots live on the source; rolling back there is the source admin's own 'zfs rollback'. Nothing was changed." ;;
+        export-relation) die "export-relation: '$2' is a snaponly relationship -- its export/import replay is not supported yet (round 1). Recreate it on the other collector with add-client --snaponly. Nothing was changed." ;;
+        *)       die "$1: '$2' is a snaponly relationship -- changing it in place is not supported yet. Delete it and create it again. Nothing was changed." ;;
+    esac
+}
+
+# The collector's tag in this relationship's snapshot names. F3: separate
+# collectors' families must be DISJOINT, prefix matching included -- so the tag
+# is followed by '_' and cannot be a prefix of another tag's family
+# ("pve1_..." never matches "pve10_...").
+snaponly_collector_tag() {
+    local t; t="$(hostname -s 2>/dev/null || hostname)"
+    t="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+    printf '%s' "${t:-collector}"
+}
+
+# A minute that is not a multiple of five (F5): pvesr and most hand-made
+# schedules start on those, and a snapshot of the same dataset in the same second
+# made pvesr miss a cycle (measured on Metropolis, 2026-10-16 18:30).
+snaponly_minute() {   # <minute 0-59> -> the same, moved off a multiple of 5
+    local m=$(( $1 % 60 ))
+    [ $(( m % 5 )) -eq 0 ] && m=$(( (m + 1) % 60 ))
+    printf '%s' "$m"
+}
+
+# Re-time one cron expression: its minute becomes (minute + offset) moved off a
+# multiple of five; everything else is kept. Only a plain numeric minute is
+# accepted -- a list or a step has no single minute to move.
+snaponly_retime() {   # <cron expr> <offset> -> the expression, or rc 1
+    local expr="$1" off="$2" m rest
+    m="${expr%% *}"; rest="${expr#* }"
+    case "$m" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s %s' "$(snaponly_minute $(( m + off )))" "$rest"
+}
+
+# Retention letter for a profile tier, for gen-cron's retain flag.
+snaponly_tier_letter() {
+    case "$1" in
+        hourly) echo H ;; daily) echo D ;; weekly) echo W ;; monthly) echo M ;; yearly) echo Y ;;
+        *) return 1 ;;
+    esac
+}
+
+# Remove this relationship's snaponly sections and templates from a workfile (a
+# re-activation renders them again from the record and the profile).
+snaponly_strip() {   # <workfile> <name>
+    local wf="$1" name="$2"
+    awk -v mk="# managed-by: zfs-backup.sh client=$name" -v tp="[template:snaponly__${name}__" -v ts="[template:snaponly_src__${name}__" '
+        function flush() { if (buf != "" && !drop) printf "%s", buf; buf = ""; drop = 0 }
+        /^\[/ { flush(); hdr = $0; if (index(hdr, tp) == 1 || index(hdr, ts) == 1) drop = 1 }
+        { buf = buf $0 "\n"; t = $0; sub(/^[ \t]+/, "", t); if (t == mk && (hdr ~ /^\[snaponly:/ || hdr ~ /^\[prune:/)) drop = 1 }
+        END { flush() }' "$wf" > "$wf.so" && mv -f "$wf.so" "$wf"
+}
+
+# F2: one relationship per source dataset ON THIS COLLECTOR, by SOURCE identity:
+# the enrolled peer (its label) plus the dataset, parent/child overlap included.
+# Different source hosts may carry identical paths; other collectors are not
+# visible here and stay allowed. A record or manifest that cannot be read is a
+# refusal, never "no overlap".
+snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
+    local name="$1" plabel="$2"; shift 2
+    local f other ostate omode opeer ods man d o
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [ -e "$f" ] || continue
+        other="$(basename "$f" .conf)"
+        [ "$other" = "$name" ] && continue
+        ostate="$(record_get "$f" STATE)" || die "snaponly: the record $f cannot be read -- refusing rather than assuming it covers nothing"
+        case "$ostate" in removed|'') continue ;; esac
+        omode="$(record_get "$f" RUX_MODE)"
+        [ "$omode" = local ] && continue
+        opeer="$(peer_label "$(record_get "$f" PEER_HOST)")"
+        [ "$opeer" = "$plabel" ] || continue
+        if [ "$omode" = snaponly ]; then
+            ods="$(record_get "$f" REQUESTED_DATASETS)"; ods="${ods//,/ }"
+        else
+            man="$(peer_manifest_path "$opeer")"
+            [ -r "$man" ] || die "snaponly: '$other' is a relationship with the same source ($plabel), and its manifest $man cannot be read -- refusing rather than assuming no overlap"
+            ods="$(record_get "$man" PEER_SAVED_DATASETS)"
+            [ -n "$ods" ] || ods="$(record_get "$f" REQUESTED_DATASETS)"; ods="${ods//,/ }"
+        fi
+        for d in "$@"; do
+            for o in $ods; do
+                if [ "$d" = "$o" ] || [[ "$d" == "$o/"* ]] || [[ "$o" == "$d/"* ]]; then
+                    die "snaponly: '$plabel:$d' overlaps '$o' of relationship '$other' (mode ${omode:-backup}) on this collector -- one relationship per source dataset here. Nothing was changed."
+                fi
+            done
+        done
+    done
+}
+
+# Write the snaponly sections for the relationship into a workfile:
+#   [template:snaponly__<name>__<tier>]      the snapshot tier (schedule, own family, quiesce, monitor)
+#   [template:snaponly_src__<name>__<tier>]  its source retention (same family as the pattern)
+#   [snaponly:<account@host:ds>]             per source dataset
+#   [prune:<account@host:ds>]                its source retention, ssh-pinned like every remote prune
+# Needs: record + connection loaded (PEER_SAVED_DATASETS, LOAD_*), PROFILE.
+emit_snaponly_sections() {   # <workfile> <name>
+    local wf="$1" name="$2"
+    local marker="# managed-by: zfs-backup.sh client=$name"
+    local tag; tag="$(snaponly_collector_tag)"
+    local pf; pf="$(profile_file "${PROFILE:-$PROFILE_DEFAULT_NAME}")"
+    [ -r "$pf" ] || die "snaponly: profile '${PROFILE:-$PROFILE_DEFAULT_NAME}' not found ($pf)"
+    local spf="$pf"
+    [ -n "${SOURCE_PROFILE:-}" ] && { spf="$(profile_file "$SOURCE_PROFILE")"; [ -r "$spf" ] || die "snaponly: source profile '$SOURCE_PROFILE' not found ($spf)"; }
+
+    profile_fields_load "$spf"
+    local -A SRC_KEEP=() SRC_RETAIN=() SRC_GFS=()
+    local t
+    for t in $PROF_TIERS; do
+        SRC_KEEP[$t]="${PROF_F[template:$t|keep]:-}"
+        SRC_RETAIN[$t]="${PROF_F[template:$t|retain]:-}"
+        SRC_GFS[$t]="${PROF_F[template:$t|gfs]:-no}"
+    done
+    profile_fields_load "$pf"
+    [ -n "$PROF_TIERS" ] || die "snaponly: profile $pf declares no tier"
+
+    local base; base="$(schedule_pick_minute "$name")"
+    local -a send_ids=() prune_ids=()
+    local prefix fam sched psched letter keep retain q mw mc
+    snaponly_strip "$wf" "$name"
+    for t in $PROF_TIERS; do
+        sched="${PROF_F[template:$t|send_schedule]:-}"
+        [ -n "$sched" ] || continue          # a tier that only prunes upstream copies: nothing to snapshot
+        prefix="${PROF_F[template:$t|prefix]:-}"
+        [ -n "$prefix" ] || die "snaponly: profile tier '$t' has no prefix -- a snaponly relationship needs a family of its own on the source (a prefixless/passive profile cannot be used)"
+        # A GFS ladder is not a count: `keep = 24` there means one per hour
+        # bucket, and a source [prune:] carries ONE section-level ladder, not one
+        # per tier. Turning it into a flat retain would silently change the
+        # policy (F2) -- refused instead.
+        case "$(printf '%s' "${SRC_GFS[$t]:-no}" | tr '[:upper:]' '[:lower:]')" in
+            yes) die "snaponly: tier '$t' of $spf keeps a GFS ladder (gfs = yes) -- a source [prune:] cannot carry a per-tier ladder, and a flat count would be a different policy. Use a profile with count retention (e.g. d7h24). Nothing was changed." ;;
+        esac
+        fam="${tag}_${prefix}"
+        sched="$(snaponly_retime "$sched" "$base")" \
+            || die "snaponly: tier '$t' has send_schedule '${PROF_F[template:$t|send_schedule]}' -- its minute must be a single number to be moved off the multiples of five"
+        q="${PROF_F[template:$t|quiesce]:-}"
+        mw="${PROF_F[template:$t|monitor_warn]:-}"; mc="${PROF_F[template:$t|monitor_crit]:-}"
+        {
+            echo
+            echo "[template:snaponly__${name}__$t]"
+            echo "	$marker"
+            echo "	send_schedule = $sched"
+            echo "	prefix        = $fam"
+            echo "	pattern       = $fam"
+            echo "	tier_label    = $t"
+            echo "	notify_word   = snapshot"
+            [ -n "$q" ] && echo "	quiesce       = $q"
+            if [ -n "$mw" ] && [ -n "$mc" ]; then
+                echo "	monitor_warn  = $mw"
+                echo "	monitor_crit  = $mc"
+            fi
+        } >> "$wf"
+        send_ids+=("snaponly__${name}__$t")
+        keep="${SRC_KEEP[$t]:-}"; retain="${SRC_RETAIN[$t]:-}"
+        if [ -z "$keep" ] && [ -z "$retain" ]; then
+            die "snaponly: tier '$t' has no source retention (keep/retain) in $spf -- a family that is never pruned fills the source pool. Use a (source) profile that bounds it."
+        fi
+        if [ -z "$retain" ]; then
+            letter="$(snaponly_tier_letter "$t")" || die "snaponly: tier '$t' keeps a count ($keep) but has no known retention letter -- give it 'retain' in the profile"
+            retain="-${letter}${keep}"
+        fi
+        psched="${PROF_F[template:$t|prune_schedule]:-${PROF_F[template:$t|send_schedule]}}"
+        psched="$(snaponly_retime "$psched" $(( base + 20 )))" \
+            || die "snaponly: tier '$t' prune_schedule minute must be a single number"
+        {
+            echo
+            echo "[template:snaponly_src__${name}__$t]"
+            echo "	$marker"
+            echo "	prune_schedule = $psched"
+            echo "	pattern        = $fam"
+            echo "	retain         = $retain"
+        } >> "$wf"
+        prune_ids+=("snaponly_src__${name}__$t")
+    done
+    [ "${#send_ids[@]}" -gt 0 ] || die "snaponly: profile '$pf' has no tier with a send_schedule -- nothing would be snapshotted"
+
+    local sflags; sflags="$(source_prune_sflags)"
+    local ds scope rec prec
+    SOURCE_PRUNE_EMITTED_DS=()
+    for ds in $PEER_SAVED_DATASETS; do
+        scope="${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"
+        rec=no; prec=no
+        if is_recursive_root "$ds"; then
+            rec="${RECURSION:-flat}"; [ "$rec" = atomic ] || rec=flat; prec=yes
+        fi
+        {
+            echo
+            echo "[snaponly:$scope]"
+            echo "	$marker"
+            echo "	use_template = $(IFS=,; echo "${send_ids[*]}")"
+            echo "	recursive    = $rec"
+            echo "	ssh_flags    = $sflags"
+            echo "	pair_label   = $name"
+            echo "	notify       = ${name}-$(basename "$ds")"
+            echo
+            echo "[prune:$scope]"
+            echo "	$marker"
+            echo "	use_template = $(IFS=,; echo "${prune_ids[*]}")"
+            echo "	recursive    = $prec"
+            echo "	ssh_flags    = $sflags"
+            echo "	pair_label   = $name"
+            echo "	notify       = ${name}-src-$(basename "$ds")"
+        } >> "$wf"
+        SOURCE_PRUNE_EMITTED_DS+=("$ds")
+    done
+}
+
+# Read-only rehearsal of exactly what will run: `snapget.sh -n -s` per source
+# dataset with the relationship's own key and pinned host. Used by
+# verify-endpoint and by activation. Prints the PLAN lines; rc 1 on any failure.
+snaponly_probe() {   # [host] [port]
+    local phost="${1:-$LOAD_HOST}" pport="${2:-${LOAD_PORT:-22}}"
+    local pflags="-K $LOAD_KEYFILE -k $LOAD_ALIAS_KH -O HostKeyAlias=$LOAD_ALIAS -O GlobalKnownHostsFile=/dev/null -O CheckHostIP=no"
+    [ "$pport" != 22 ] && pflags="$pflags -p $pport"
+    local ds out rc failed=0
+    PROBE_DETAIL=""
+    for ds in $PEER_SAVED_DATASETS; do
+        client_recursive_args "$ds"
+        out=$(bash "$SNAPGET" -n -s ${REC_ARGS[@]+"${REC_ARGS[@]}"} $pflags "${LOAD_ACCOUNT}@${phost}:${ds}" 2>&1); rc=$?
+        if [ "$rc" -ne 0 ] || ! printf '%s\n' "$out" | grep -q '^PLAN=SNAPSHOT-ONLY src='; then
+            failed=$((failed + 1))
+            PROBE_DETAIL="${PROBE_DETAIL}  FAILED (rc=$rc): $ds"$'\n'"$(printf '%s\n' "$out" | tail -4 | sed 's/^/    /')"$'\n'
+            continue
+        fi
+        printf '%s\n' "$out" | grep '^PLAN=SNAPSHOT-ONLY src=' | sed 's/^/  /'
+    done
+    [ "$failed" -eq 0 ]
+}
+
+# activate-client for a snaponly relationship. Same gates as the pull path where
+# they apply (source grants, foreign pruner, the atomic install and its
+# read-backs); none of the target-side steps (no local receive delegation, no
+# landing, no incremental rehearsal).
+activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
+    local name="$1" yes="$2" plan_only="$3" verbose="$4"
+    local cpath; cpath=$(client_conf_path "$name")
+    record_load client "$cpath"
+    local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
+    case "${STATE:-}" in
+        endpoint_verified|active) ;;
+        *) die "client '$name' (snaponly) is in state '${STATE:-unknown}' -- activate-client requires endpoint_verified (run verify-endpoint first). No cron entry exists before this gate." ;;
+    esac
+    [ -z "${CLIENT_TARGET:-}" ] || die "client '$name' is snaponly but its record names a target ('$CLIENT_TARGET') -- inconsistent record, refusing"
+    load_client_and_connection "$cpath"
+    [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
+    snaponly_assert_source_free "$name" "$LOAD_LABEL" $PEER_SAVED_DATASETS
+    apply_client_profile_choice 1 "${PROFILE:-}"
+    read_server_conf
+    cron_context_resolve adopt "" "" "$recorded_cron_config" "$recorded_local_user"
+    log "activate: jobs run as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER)"
+    LOCAL_USER="$CRON_CTX_USER"
+    local cronfile="$CRON_CTX_FILE"
+    log "activate: config $cronfile ($CRON_CTX_WHY_FILE)"
+    local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+    workfile_track "$workfile"
+    if [ -f "$cronfile" ]; then
+        cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile to a working copy"; }
+    else
+        write_fresh_config_defaults "$workfile" || { rm -f "$workfile"; die "could not create working copy $workfile"; }
+    fi
+    chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
+    emit_snaponly_sections "$workfile" "$name"
+
+    log "dry-run of each source dataset (snapget.sh -n -s, read-only)..."
+    if ! snaponly_probe; then
+        rm -f "$workfile"
+        die "the snapshot-only rehearsal failed -- not installing, $cronfile was NOT touched:
+$PROBE_DETAIL"
+    fi
+    log "zfs allow check on $LOAD_HOST (categorized -- see REV-20260730-004 F5):"
+    local ds
+    for ds in $PEER_SAVED_DATASETS; do
+        check_inherited_grants "$ds" "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" "$LOAD_KEYFILE" "$LOAD_ALIAS_KH" "$LOAD_ALIAS" "$verbose"
+    done
+    ( assert_source_prune_grant "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+          "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+        || { rm -f "$workfile"; die "source-prune grant check failed -- $cronfile was NOT touched, nothing installed."; }
+    ( assert_no_foreign_source_pruner "$LOAD_ACCOUNT" "$LOAD_HOST" "$LOAD_PORT" \
+          "$LOAD_KEYFILE" "$LOAD_ALIAS" "$LOAD_ALIAS_KH" "${SOURCE_PRUNE_EMITTED_DS[@]}" ) \
+        || { rm -f "$workfile"; die "another collector already prunes these source datasets -- $cronfile was NOT touched, nothing installed."; }
+
+    echo
+    echo "Klient:              $name"
+    echo "Tryb:                snaponly -- migawki na zrodle, BEZ kopii (nic nie powstaje na tym hoscie)"
+    echo "Peer:                $PEER_HOST"
+    echo "Endpoint aktywny:    $(endpoint_display)"
+    echo "Zrodla:              $PEER_SAVED_DATASETS"
+    echo "Rodzina:             $(snaponly_collector_tag)_<prefiks szczebla> -- tylko ten kolektor ja tworzy i przycina"
+    echo "Profil:              ${PROFILE:-${PROFILE_ACTIVE:-?}}${SOURCE_PROFILE:+, retencja zrodla: $SOURCE_PROFILE}"
+    echo "Uwaga:               gdy ten kolektor nie dziala, na zrodle nie powstaja migawki"
+    echo "                     ani nie sa przycinane; monitor wieku alarmuje z tego hosta."
+    echo
+    show_activation_proposal "$cronfile" "$workfile" || { rm -f "$workfile"; die "gen-cron.sh could not render the proposed config -- nothing was touched"; }
+    if [ "$plan_only" -eq 1 ]; then
+        rm -f "$workfile"; echo "plan only -- nothing was changed (run again with --yes to apply)"; return 0
+    fi
+    if [ "$yes" -ne 1 ]; then
+        read -rp "Aktywowac migawki na zrodle? [t/N] " ans
+        case "$ans" in t|T|tak|TAK|y|Y|yes|YES) ;; *) rm -f "$workfile"; die "not confirmed -- $cronfile was NOT touched, nothing installed" ;; esac
+    fi
+    assert_cron_config_matches_installed "$cronfile"
+    assert_no_foreign_managed_block "$workfile"
+    assert_target_block_not_clobbered "$workfile"
+    assert_config_readable_by_target "$cronfile"
+    atomic_replace_and_install "$cronfile" "$workfile"
+    local srcs="" d
+    for d in $PEER_SAVED_DATASETS; do srcs="${srcs:+$srcs }${LOAD_LABEL}:$d"; done
+    {
+        cat "$cpath"
+        write_client_field STATE              active
+        write_client_field ACTIVATED_AT       "$(date '+%Y-%m-%d %H:%M:%S')"
+        write_client_field MANAGED_DATASETS   ""
+        write_client_field MANAGED_PRUNE_SCOPE ""
+        write_client_field MANAGED_SOURCES    "$srcs"
+        write_client_field CRON_CONFIG        "$cronfile"
+        write_client_field INSTALLED_ENDPOINT "$ACTIVE_ENDPOINT"
+        write_client_field LOCAL_USER         "${LOCAL_USER:-}"
+    } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
+    chmod 0600 "$cpath"
+    log "client '$name' active (snaponly: snapshots on $LOAD_HOST, nothing copied)."
+    activate_first_copies "$name"
+}
+
 activation_is_new_relationship() {   # <state> <installed-endpoint>
     [ "$1" = endpoint_verified ] && [ -z "$2" ]
 }
@@ -11468,6 +11859,13 @@ cmd_activate_client() {
     # write its next managed sections into the WRONG file, leaving the actually
     # installed crontab/config orphaned with no record of where it lives.
     # Captured here, before that reset, and restored after it.
+    # snaponly has its own activation: no target, no landing, no receive
+    # delegation, no incremental rehearsal (REV-20261017-152 F1).
+    if snaponly_is; then
+        [ "$regen" -eq 0 ] || die "edit-relation: '$name' is a snaponly relationship -- changing it in place is not supported yet; delete it and create it again. Nothing was changed."
+        activate_snaponly "$name" "$yes" "$plan_only" "$verbose"
+        return $?
+    fi
     local recorded_cron_config="${CRON_CONFIG:-}"
     local recorded_local_user="${LOCAL_USER:-}"
     # REV-20260809-088 F1: STATE here is still whatever it was BEFORE this
@@ -12010,6 +12408,13 @@ cmd_activate() {
     local STATE="" ACTIVE_ENDPOINT="" INSTALLED_ENDPOINT="" ENDPOINT_VERIFIED_FOR=""
     local FINAL_CATCHUP_ENDPOINT="" FINAL_CATCHUP_EPOCH="" PEER_HOST=""
     record_load client "$cpath"
+    # snaponly has no seed: from pending_enroll it goes straight to the
+    # snapshot-only verification and activation (REV-20261017-152 F1).
+    if [ "${RUX_MODE:-}" = snaponly ] && [ "${STATE:-}" = pending_enroll ]; then
+        [ -z "$requested_host" ] || die "activate: '$name' is a new snaponly relationship -- create it at the right address; --host is for moving an active one"
+        activation_step "$resume" verify-endpoint "$name"
+        STATE="" ; record_load client "$cpath"
+    fi
     case "${STATE:-}" in
         pending_enroll|seeding)
             die "client '$name' is not seeded yet. Run: ./zfs-backup.sh seed $name" ;;
@@ -13633,6 +14038,7 @@ cmd_gui() {
 cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
+    snaponly_refuse edit-relation "$name"
     local a ask=0
     local -a pass=()
     EDIT_TIER_OPS=()
@@ -13729,7 +14135,13 @@ cmd_delete_relation() {
     # into the steps below, and only those that EXIST here are listed. A dataset
     # under another listed one is dropped: `destroy -r` of the root takes it.
     local copies_from="the record"
-    if [ -z "$copies" ] && [ "$state" != removed ]; then
+    # snaponly: there are no copies on this host, by definition -- and deriving
+    # "copies" from the pairing would build collector paths it never had.
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        [ "$destroy" -eq 0 ] || die "delete-relation: '$name' is a snaponly relationship -- nothing of it is copied to this host, so --destroy-copies has nothing to destroy (and its snapshots on the SOURCE are not this verb's to destroy). Nothing was changed."
+        copies=""
+    fi
+    if [ -z "$copies" ] && [ "$state" != removed ] && [ "${RUX_MODE:-}" != snaponly ]; then
         local _derived
         _derived=$( load_client_and_connection "$cpath" >/dev/null 2>&1 || exit 0
                     for _ds in ${PEER_SAVED_DATASETS:-}; do
@@ -14042,6 +14454,7 @@ cmd_remove_source() {
         esac
     done
     [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh remove-source NAZWA DATASET [--yes]"
+    snaponly_refuse remove-source "$name"
     case "$ds" in
         */*) : ;;
         *)   die "remove-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -14253,6 +14666,7 @@ cmd_add_source() {
         esac
     done
     [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh add-source NAZWA DATASET [--yes]"
+    snaponly_refuse add-source "$name"
     case "$ds" in
         */*) : ;;
         *)   die "add-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -16383,6 +16797,7 @@ Nothing was changed. A relationship is changed by removing it and importing the 
     for x in ${argv[@]+"${argv[@]}"}; do
         case "$x" in --host=*) peer_host="${x#--host=}" ;; --mode=*) peer_mode="${x#--mode=}" ;; esac
     done
+    [ "$peer_mode" != snaponly ] || die "import-relation: $file declares a snaponly relationship -- its replay is not supported yet (round 1); create it with add-client --snaponly. Nothing was changed."
     if [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -f "$f" ] || continue
@@ -16509,6 +16924,7 @@ cmd_export_relation() {
         esac
     done
     [ -n "$name" ] || die "export-relation requires a relationship name"
+    snaponly_refuse export-relation "$name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no relationship '$name' (no record at $cpath)"
     # The same gate REV-20260907-136 put on every reader: a record the parser
@@ -17727,6 +18143,7 @@ cmd_status() {
     # "Cron dziala przez: (jeszcze nie aktywowany -- brak linii cron)" and
     # "Zrodla: ?" for one with twelve cron lines (pve9b, 2026-10-15). Its own view.
     if [ "${RUX_MODE:-}" = local ]; then status_local_view "$name"; return 0; fi
+    if [ "${RUX_MODE:-}" = snaponly ]; then status_snaponly_view "$name"; return 0; fi
     local mpath; mpath=$(peer_manifest_path "$(peer_label "${PEER_HOST:-}")")
     [ -r "$mpath" ] && record_load manifest "$mpath"
     local host port; read -r host port <<< "$(active_endpoint_host_port 2>/dev/null || echo "? ?")"
@@ -17839,6 +18256,39 @@ cmd_status() {
             echo "                   -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"
         fi
     fi
+}
+
+# status_snaponly_view <name> -- the text view of a snaponly relationship (record
+# already loaded by cmd_status, REV-20261017-152 F1). No copy and no target: the
+# remote view would print an empty "Kopie" and a never-seen endpoint as missing.
+# The cron lines are counted the way status_local_view counts them.
+status_snaponly_view() {
+    local name="$1" acct="${LOCAL_USER:-root}" _tab _trc=1 ncron="?"
+    echo "Klient:            ${CLIENT_NAME:-$name}"
+    echo "Typ:               zdalna, tylko migawki -- bez kopii; migawki i ich retencja na zrodle"
+    echo "Stan:              ${STATE:-unknown}"
+    if client_paused "$name"; then
+        local PAUSED_AT="" PAUSED_REASON=""
+        record_load pause "$(pause_marker_path "$name")"
+        echo "Pauza:             PAUSED_LOCAL od ${PAUSED_AT:-?}${PAUSED_REASON:+ (powod: $PAUSED_REASON)}"
+    fi
+    echo "Zrodlo:            ${PEER_HOST:-?}"
+    echo "Datasety:          $(printf '%s' "${MANAGED_SOURCES:-${REQUESTED_DATASETS:-?}}" | sed 's/[ ,]\{1,\}/, /g')"
+    echo "Endpoint:          ${INSTALLED_ENDPOINT:-(jeszcze nie aktywowany)}"
+    echo "Konto:             $acct"
+    echo "Config:            ${CRON_CONFIG:-?}"
+    if [ "$(id -un 2>/dev/null)" = "$acct" ]; then _tab="$(crontab -l 2>&1)"; _trc=$?
+    elif [ "$(id -u)" = 0 ]; then _tab="$(crontab -u "$acct" -l 2>&1)"; _trc=$?; fi
+    if [ "$_trc" -eq 0 ]; then ncron=""
+    elif printf '%s' "${_tab:-}" | grep -q "^no crontab for"; then _tab=""; ncron=""; fi
+    [ "$ncron" = "?" ] || ncron="$(printf '%s\n' "$_tab" | grep -cF -e "-L $name " -e "-L $name\"")" || ncron=0
+    if [ "$ncron" = "?" ]; then echo "Cron:              ? (crontab konta '$acct' nieczytelny)"
+    elif [ "$ncron" -gt 0 ]; then echo "Cron:              $ncron linii w crontabie konta '$acct'"
+    else echo "Cron:              BRAK linii tej relacji w crontabie konta '$acct' -- nic nie chodzi"; fi
+    echo "Utworzono:         ${CREATED_AT:-?}"
+    [ -n "${ACTIVATED_AT:-}" ] && echo "Aktywowano:        $ACTIVATED_AT"
+    [ -n "${REMOVED_AT:-}" ]   && echo "Usunieto:          $REMOVED_AT"
+    return 0
 }
 
 # status_local_view <name> -- the text view of a LOCAL relationship (record
@@ -18691,7 +19141,9 @@ cmd_remove_client() {
         return $?
     fi
 
-    if [ -n "${MANAGED_DATASETS:-}" ] && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
+    # snaponly records no MANAGED_DATASETS (nothing lands here) -- its sections
+    # are found by their marker instead (REV-20261017-152 F1).
+    if { [ -n "${MANAGED_DATASETS:-}" ] || [ "${RUX_MODE:-}" = snaponly ]; } && [ -n "${CRON_CONFIG:-}" ] && [ -f "$CRON_CONFIG" ]; then
         assert_cron_config_matches_installed "$CRON_CONFIG"
         assert_no_foreign_managed_block "$CRON_CONFIG"
         log "removing this client's [dataset:] sections from a working copy of $CRON_CONFIG"
@@ -18700,8 +19152,12 @@ cmd_remove_client() {
             workfile_track "$workfile"
         cp -p "$CRON_CONFIG" "$workfile" || { rm -f "$workfile"; die "could not copy $CRON_CONFIG"; }
         chmod 0644 "$workfile" 2>/dev/null || :
+        if [ "${RUX_MODE:-}" = snaponly ]; then
+            snaponly_strip "$workfile" "$name"
+        else
         # shellcheck disable=SC2086
         remove_managed_sections "$workfile" "$name" $MANAGED_DATASETS ${MANAGED_PRUNE_SCOPE:-}
+        fi
         # The REMOTE source prune too. It is a [prune:<account@host:ds>] section
         # this client wrote, and it is not in MANAGED_DATASETS or
         # MANAGED_PRUNE_SCOPE -- both of those record TARGET paths, and the source
@@ -18852,7 +19308,11 @@ deploy_continue_lifecycle() {
     local cpath; cpath=$(client_conf_path "$name")
     local state; state=$(record_get "$cpath" STATE)
 
+    if [ "$(record_get "$cpath" RUX_MODE)" = snaponly ]; then
+        state=snaponly   # no seed: nothing is copied (REV-20261017-152 F1)
+    fi
     case "$state" in
+        snaponly) ;;
         pending_enroll|seeding)
             log "deploy: seeding '$name'"
             local -a seed_args=("$name")
@@ -19077,6 +19537,8 @@ rux_remote_plan() {
     fi
     if [ "$mode" = sync ]; then
         echo "  mode:                          sync (identity-preserving -- lands at '$dataset' on this host)"
+    elif [ "$mode" = snaponly ]; then
+        echo "  mode:                          snaponly (snapshots and their retention on the source; NOTHING is copied here)"
     else
         echo "  mode:                          backup"
         if [ -z "$dataset" ]; then
@@ -19111,9 +19573,11 @@ rux_remote_plan() {
         echo "  Uwaga:                         profil '$profile' tnie BEZPREFIKSOWO -- drabina obejmuje KAZDY snapshot na '$_lp', wliczajac baze replikacji. Snapshot zrobiony tam recznie moze wygrac kubelek, wypchnac baze i zatrzymac relacje az do decyzji czlowieka (to fakt, nie zakaz)"
     fi
     echo "  current lifecycle position:    $state"
+    # snaponly has no seed: there is nothing to copy (verify-endpoint, then activate).
+    local _sd="seed -> "; [ "$mode" = snaponly ] && _sd="verify-endpoint -> "
     case "$state" in
         "(none -- fresh relationship)")
-            echo "  stages that would run:         add-client (enrol + attempt remote join) -> seed -> activate"
+            echo "  stages that would run:         add-client (enrol + attempt remote join) -> ${_sd}activate"
             echo "  remote join:                    attempted automatically over SSH from this host; on failure, one manual join command is printed and re-running this SAME command resumes"
             ;;
         pending_enroll)
@@ -19123,12 +19587,12 @@ rux_remote_plan() {
             # the scope fetch. Saying "seed -> activate" here promised a
             # continuation that cannot happen while the peer has not accepted
             # the package. Measured on metropolis 2026-08-20.
-            echo "  stages that would run:         seed -> activate, BUT ONLY once the join is complete on the peer"
+            echo "  stages that would run:         ${_sd}activate, BUT ONLY once the join is complete on the peer"
             echo "  note:                          re-running this command does NOT retry the join. If it fell back to"
             echo "                                 manual, finish it on the peer first (deploy.sh --join=<the .tgz>)."
             ;;
         seeding)
-            echo "  stages that would run:         seed -> activate"
+            echo "  stages that would run:         ${_sd}activate"
             ;;
         removed)
             # `removed` is terminal: nothing revives that record. But the NAME is
@@ -19136,7 +19600,7 @@ rux_remote_plan() {
             # and add-client archives it as <name>.conf.removed-<time>. The plan used
             # to answer "NONE -- cannot be revived" while --install went ahead, so the
             # wizard made the admin delete the old record first (owner note 11, 2026-10-08).
-            echo "  stages that would run:         add-client (enrol + attempt remote join) -> seed -> activate"
+            echo "  stages that would run:         add-client (enrol + attempt remote join) -> ${_sd}activate"
             echo "  old record:                    a REMOVED relationship of this name -- add-client keeps it as"
             echo "                                 $(basename "$cpath").removed-<time> and reuses the name; the copies on disk stay"
             ;;
@@ -19562,6 +20026,8 @@ rux_remote_install() {
             # relationship replicates is still whatever the source COMMITS --
             # this only makes the draft it commits from start at what was asked.
             [ -n "$dataset" ] && add_args+=(--requested="$dataset")
+        elif [ "$mode" = snaponly ]; then
+            add_args+=(--snaponly --datasets="$dataset")
         else
             # Deferred scope (empty dataset): pass NO --datasets, so add-client
             # leaves the dataset selection to the source's own scope draft at
@@ -19671,7 +20137,7 @@ rux_entry() {
         return $?
     fi
 
-    local target="" mode="" profile="" port="" name="" local_user=""
+    local target="" mode="" profile="" port="" name="" local_user="" rux_target_given=0
     local do_install=0 assume_yes=0 verbose=0 grant_remotely=0 manual_join=0
     # The transfer SHAPE for a solid scope root. Same vocabulary the engines
     # already use for --recursive, deliberately: flat = per-dataset -R (the
@@ -19697,7 +20163,7 @@ rux_entry() {
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
-            --target=*)  target="${a#*=}" ;;
+            --target=*)  target="${a#*=}"; rux_target_given=1 ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
@@ -19731,8 +20197,16 @@ rux_entry() {
 
     rux_refuse_self_source "$host" "$source"
 
-    if [ -n "$mode" ] && [ "$mode" != sync ]; then
-        die "rux: --mode must be 'sync' for a remote source (the ordinary backup case needs no --mode at all)"
+    if [ -n "$mode" ] && [ "$mode" != sync ] && [ "$mode" != snaponly ]; then
+        die "rux: --mode must be 'sync' or 'snaponly' for a remote source (the ordinary backup case needs no --mode at all)"
+    fi
+    # snaponly (REV-20261017-152 F1): snapshots on the source, no copy -- so no
+    # target at all (an empty --target='' too), a named dataset, and nothing
+    # that shapes a copy.
+    if [ "$mode" = snaponly ]; then
+        [ "$rux_target_given" -eq 0 ] || die "rux: --mode=snaponly copies nothing, so it takes no --target (not even an empty one). Nothing was changed."
+        [ "$deferred" -eq 0 ] || die "rux: --mode=snaponly needs the dataset named: --source=HOST:DATASET. Nothing was changed."
+        [ "$passive" -eq 0 ] && [ "$rux_raw" -eq 0 ] && [ -z "$exclude_family" ] && [ "${#excludes[@]}" -eq 0 ]             || die "rux: --mode=snaponly: --passive/--raw/--exclude-* shape a copy, and snaponly copies nothing. Nothing was changed."
     fi
     if [ "$deferred" -eq 1 ] && [ "$mode" = sync ]; then
         die "rux: --source=HOST: (deferred scope) is backup-mode only -- name the dataset as --source=HOST:DATASET for a sync relationship"
@@ -19742,7 +20216,7 @@ rux_entry() {
     fi
     # --target is required only for an EXPLICIT backup dataset. Deferred scope
     # leaves it optional (proposed at pick time), like the local backup form.
-    if [ "$mode" != sync ] && [ "$deferred" -eq 0 ] && [ -z "$target" ]; then
+    if [ "$mode" != sync ] && [ "$mode" != snaponly ] && [ "$deferred" -eq 0 ] && [ -z "$target" ]; then
         die "rux: --target=DATASET is required for a backup-mode remote source (or pass --mode=sync to reproduce the source path)"
     fi
 
@@ -19792,6 +20266,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # onto production, so it is not this file's code. Both spellings work
         # and behave identically; exec so exit codes pass through untouched.
         restore)
+            [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
             # --ask: the GUI's window "Przywróć" ('p' on F3), the same hand-off as
             # remove-replica --ask. The window composes ONE ordinary restore command
             # and runs it; nothing here is a second restore path.
