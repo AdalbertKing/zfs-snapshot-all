@@ -60,6 +60,13 @@
   Sprzątanie: `hdd/restore/*` z testów 10-15 i dzisiejszych usunięte na pve9, pve9b, pve10; zgody `pve10` cofnięte na
   pve9b i pve9 (`lab-migawki` wznowione).
 
+- **REV-20261017-152 F5: alarm i migracja zmierzone (2026-10-17; dziennik w `docs/project/LAB-METROPOLIS-PVESR-PLAN-2026-10-16.md`, etap 4).**
+  Lab pve9 -> pve10: blokada bramki -> „monitor BROKEN”; zabrane prawo migawek -> WARNING po 90 min i CRITICAL po
+  150 min z prawdziwego crona, w liście dziennego podsumowania. Metropolis (zgoda właściciela, tylko CT 990): relacja
+  `snaponly` pve2 <- pve1, migracja CT 990 na pve2 -> nasze migawki na pve1 (teraz cel replikacji) powstają z rc 0 i
+  znikają przy `recv -F`; WARNING 22:00, CRITICAL 23:00 CEST w kolejce pve2. Ograniczenie zmierzone: przy `pvesr`
+  co 3 h alarm po migracji może przyjść do jednego cyklu `pvesr` + próg później. Wszystko posprzątane, crontaby jak przed.
+
 - **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; na `main` przez #592 i #596; zgłoszona, przegląd rundy 1 poprawiony).**
   Przegląd rundy 1 (CHANGES REQUIRED, F1.1/F1.2/F2.1) poprawiony (`fix/rev152-r1-rereview`): ponowna aktywacja
   zachowuje zainstalowane sekcje co do bajtu (retencja, harmonogramy, monitory) i nie czyta już profilu -- profil
