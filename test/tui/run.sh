@@ -3776,6 +3776,20 @@ if has "$RWSUM" 'Wymaga zgody' && has "$RWSUM" '--defaultno' && has "$RWSUM" "de
 else
     bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"
 fi
+# 1b. RELACJA LOKALNA (zrodlo bez konto@host): to samo polecenie obok -- zfs-restore.sh przyjmuje je od
+#     2026-10-17 (wczesniej FATAL "not one this host records") -- ale podsumowanie NIE kaze wydawac zgody:
+#     restore jej dla celu na tym samym hoscie nie pyta. Kontrola: wariant zdalny wyzej ma "Wymaga zgody".
+cp "$RW/plan.json" "$RW/plan.remote.json"
+sed 's|"source":"acct@10.0.0.9:hdd/data"|"source":"hdd/data"|' "$RW/plan.remote.json" > "$RW/plan.json"
+printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-docs.json"
+RWSUM_L="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_L" 'Relacja lokalna' && ! has "$RWSUM_L" 'Wymaga zgody'; then
+    ok "restore: relacja lokalna obok -> to samo polecenie, podsumowanie bez zadania zgody"
+else
+    bad "restore: relacja lokalna obok" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "sum: $(printf '%s' "$RWSUM_L" | grep -i -E 'zgod|lokaln' | cut -c1-200)"
+fi
+cp "$RW/plan.remote.json" "$RW/plan.json"
 
 # 2. miejsce, cala relacja, punkt p1 (starszy): bez --source (WHOLE), bez --onto, z --at
 printf '0\tmiejsce\n0\tp1\n0\t\n' > "$RW/answers"

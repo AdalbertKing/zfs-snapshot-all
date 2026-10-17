@@ -480,12 +480,15 @@ PYEOF
             echo "Polecenie:"
             echo "  $CMDTXT"
             echo
-            if [ "$DEST" = obok ]; then
+            if [ "$TARGET" = "ten host" ]; then
+                # relacja lokalna: zrodlo, kopia i cel na tym hoscie -- restore nie pyta o zgode
+                echo "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna."
+            elif [ "$DEST" = obok ]; then
                 echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL"
             else
                 echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL (z --replace, gdy nie ma wspólnego punktu)."
             fi
-            echo "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)"
+            [ "$TARGET" = "ten host" ] || echo "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)"
             echo "Po <Uruchom> polecenie pokaże plan i samo zapyta, zanim cokolwiek nadpisze."
         } >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "Przywróć $REL: sprawdź" "Uruchom" "Wstecz" --defaultno || { step=3; continue; }
