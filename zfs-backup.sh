@@ -11620,29 +11620,49 @@ snaponly_strip() {   # <workfile> <name>
 # F2: one relationship per source dataset ON THIS COLLECTOR, by SOURCE identity:
 # the enrolled peer (its label) plus the dataset, parent/child overlap included.
 # Different source hosts may carry identical paths; other collectors are not
-# visible here and stay allowed. A record or manifest that cannot be read is a
-# refusal, never "no overlap".
+# visible here and stay allowed.
+#
+# EVERY OTHER RECORD IS READ WHOLE AND CHECKED (F2.1): record_load validates the
+# file (a bad line, an unclosed quote, an unknown field or kind ends it), and the
+# fields this judgement rests on must be there. The first version read single
+# fields with record_get and checked only STATE's status, so an unterminated
+# REQUESTED_DATASETS quote, or a record with no STATE, read as "no overlap".
+# Unreadable, malformed or incomplete -- a refusal, never free scope. A removed
+# record and a LOCAL relationship (no peer) are legitimately skipped.
 snaponly_assert_source_free() {   # <name> <peer label> <dataset...>
     local name="$1" plabel="$2"; shift 2
-    local f other ostate omode opeer ods man d o
+    local f other info ostate omode ohost opeer oreq ods man d o rc
     for f in "$CLIENTS_DIR"/*.conf; do
         [ -e "$f" ] || continue
         other="$(basename "$f" .conf)"
         [ "$other" = "$name" ] && continue
-        ostate="$(record_get "$f" STATE)" || die "snaponly: the record $f cannot be read -- refusing rather than assuming it covers nothing"
-        case "$ostate" in removed|'') continue ;; esac
-        omode="$(record_get "$f" RUX_MODE)"
+        info=$( die_confine_to_subshell
+                STATE="" RUX_MODE="" PEER_HOST="" REQUESTED_DATASETS="" CLIENT_TARGET=""
+                record_load client "$f" >/dev/null 2>&1 || exit 2
+                printf '%s\x1f%s\x1f%s\x1f%s' "$STATE" "$RUX_MODE" "$PEER_HOST" "$REQUESTED_DATASETS" ); rc=$?
+        [ "$rc" -eq 0 ] || die "snaponly: the record of '$other' ($f) cannot be read or is not a valid record -- refusing rather than assuming it covers nothing. Nothing was changed."
+        # \x1f, not a tab: a tab is IFS whitespace, so an empty field (a legacy
+        # record's RUX_MODE) would collapse and shift PEER_HOST into the mode.
+        IFS=$'\x1f' read -r ostate omode ohost oreq <<< "$info"
+        [ -n "$ostate" ] || die "snaponly: the record of '$other' ($f) has no STATE -- refusing rather than assuming it covers nothing. Nothing was changed."
+        [ "$ostate" = removed ] && continue
         [ "$omode" = local ] && continue
-        opeer="$(peer_label "$(record_get "$f" PEER_HOST)")"
+        [ -n "$ohost" ] || die "snaponly: the record of '$other' ($f) names no PEER_HOST -- its source cannot be compared, so it is not treated as free. Nothing was changed."
+        opeer="$(peer_label "$ohost")"
         [ "$opeer" = "$plabel" ] || continue
         if [ "$omode" = snaponly ]; then
-            ods="$(record_get "$f" REQUESTED_DATASETS)"; ods="${ods//,/ }"
+            ods="$oreq"
         else
             man="$(peer_manifest_path "$opeer")"
-            [ -r "$man" ] || die "snaponly: '$other' is a relationship with the same source ($plabel), and its manifest $man cannot be read -- refusing rather than assuming no overlap"
-            ods="$(record_get "$man" PEER_SAVED_DATASETS)"
-            [ -n "$ods" ] || ods="$(record_get "$f" REQUESTED_DATASETS)"; ods="${ods//,/ }"
+            ods=$( die_confine_to_subshell
+                   PEER_SAVED_DATASETS=""
+                   record_load manifest "$man" >/dev/null 2>&1 || exit 2
+                   printf '%s' "$PEER_SAVED_DATASETS" ); rc=$?
+            [ "$rc" -eq 0 ] || die "snaponly: '$other' is a relationship with the same source ($plabel), and its manifest $man cannot be read or is not a valid record -- refusing rather than assuming no overlap. Nothing was changed."
+            [ -n "$ods" ] || ods="$oreq"
         fi
+        ods="${ods//,/ }"
+        [ -n "${ods// /}" ] || die "snaponly: '$other' is a relationship with the same source ($plabel) and neither its record nor its manifest names its datasets -- refusing rather than assuming no overlap. Nothing was changed."
         for d in "$@"; do
             for o in $ods; do
                 if [ "$d" = "$o" ] || [[ "$d" == "$o/"* ]] || [[ "$o" == "$d/"* ]]; then
@@ -11796,6 +11816,52 @@ snaponly_probe() {   # [host] [port]
 # they apply (source grants, foreign pruner, the atomic install and its
 # read-backs); none of the target-side steps (no local receive delegation, no
 # landing, no incremental rehearsal).
+# The datasets of the [snaponly:<account@host:ds>] sections this relationship
+# already has in a config (its marker inside the section), one per line.
+snaponly_installed_scopes() {   # <config> <name>
+    awk -v mk="# managed-by: zfs-backup.sh client=$2" '
+        /^\[/ { if (sec != "" && mine) print sec; sec = ""; mine = 0
+                if ($0 ~ /^\[snaponly:.*\]$/) { sec = substr($0, 11, length($0) - 11) } next }
+        { t = $0; sub(/^[ \t]+/, "", t); if (sec != "" && t == mk) mine = 1 }
+        END { if (sec != "" && mine) print sec }' "$1"
+}
+
+# CREATE FROM A PROFILE ONCE (REV-20261017-152 F1.1). A relationship whose
+# sections are already in the config keeps them exactly: the config is where its
+# policy lives from creation on -- an edited retain, schedule or monitor value is
+# the administrator's decision, and a profile renamed or deleted since is not a
+# reason to refuse it. The first version stripped and re-rendered from PROFILE
+# on every activation, so re-running activate-client on an active relationship
+# put -H240 back to -H24 and scheduled the deletion of what was kept on purpose.
+#
+# A changed ENDPOINT would have to rewrite the section names (the host is in the
+# scope); that is not supported for snaponly yet and is refused, not guessed.
+#
+# Sets SNAPONLY_REUSED (1 = installed sections kept) and SOURCE_PRUNE_EMITTED_DS
+# (the datasets the grant checks and the probe run on).
+snaponly_prepare_workfile() {   # <workfile> <name>
+    local wf="$1" name="$2" sc ds
+    local -a scopes=()
+    SNAPONLY_REUSED=0
+    while IFS= read -r sc; do [ -n "$sc" ] && scopes+=("$sc"); done < <(snaponly_installed_scopes "$wf" "$name")
+    if [ "${#scopes[@]}" -eq 0 ]; then
+        apply_client_profile_choice 1 "${PROFILE:-}"
+        emit_snaponly_sections "$wf" "$name"
+        return 0
+    fi
+    SNAPONLY_REUSED=1
+    SOURCE_PRUNE_EMITTED_DS=()
+    for sc in "${scopes[@]}"; do
+        [ "${sc%%:*}" = "${LOAD_ACCOUNT}@${LOAD_HOST}" ] \
+            || die "snaponly: '$name' is installed for '${sc%%:*}', and this activation would address '${LOAD_ACCOUNT}@${LOAD_HOST}' -- changing a snaponly relationship's endpoint is not supported yet (delete and create it again). Nothing was changed."
+        ds="${sc#*:}"
+        SOURCE_PRUNE_EMITTED_DS+=("$ds")
+    done
+    # The probe, the grant checks and MANAGED_SOURCES follow what is installed.
+    PEER_SAVED_DATASETS="${SOURCE_PRUNE_EMITTED_DS[*]}"
+    log "activate: '$name' already has its sections in the config -- they are kept as installed (retention, schedules, monitors); the profile is not read again"
+}
+
 activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
     local name="$1" yes="$2" plan_only="$3" verbose="$4"
     local cpath; cpath=$(client_conf_path "$name")
@@ -11809,7 +11875,6 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
     load_client_and_connection "$cpath"
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
     snaponly_assert_source_free "$name" "$LOAD_LABEL" $PEER_SAVED_DATASETS
-    apply_client_profile_choice 1 "${PROFILE:-}"
     read_server_conf
     cron_context_resolve adopt "" "" "$recorded_cron_config" "$recorded_local_user"
     log "activate: jobs run as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER)"
@@ -11824,7 +11889,7 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
         write_fresh_config_defaults "$workfile" || { rm -f "$workfile"; die "could not create working copy $workfile"; }
     fi
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
-    emit_snaponly_sections "$workfile" "$name"
+    snaponly_prepare_workfile "$workfile" "$name"
 
     log "dry-run of each source dataset (snapget.sh -n -s, read-only)..."
     if ! snaponly_probe; then

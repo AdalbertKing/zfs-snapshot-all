@@ -13832,6 +13832,113 @@ if printf '%s' "$o_so" | grep -q 'RC=0' && printf '%s' "$o_so" | grep -q 'zfsbac
 else
     bad "snaponly: foreign pruner" "snaponly: $o_so" "backup: $o_bk" "ssh 255: $o_er"
 fi
+
+# F1.1 (round 1 re-review): RE-activation keeps the installed policy. The real
+# emitter renders the relationship once; the administrator then edits its
+# source retention, a schedule and a monitor threshold in the CONFIG; the
+# profile is deleted. snaponly_prepare_workfile -- the step activation and its
+# --plan preview run -- must leave every byte as installed and never read the
+# profile again (apply_client_profile_choice is a tripwire here).
+RR="$SO/reactivate"; mkdir -p "$RR"
+printf '[defaults]\n\thost_label = pve10\n\tmonitor_schedule = 7 * * * *\n' > "$RR/c.conf"
+so_emit m12w4d7h24-age rr "$RR/c.conf" > "$RR/emit.out" 2>&1 || bad "snaponly F1.1: first render failed" "$(cat "$RR/emit.out")"
+sed -i -e '/^\[template:snaponly_src__rr__hourly\]/,/^\[/ s/retain *= *-[A-Za-z]*[0-9]*/retain         = -H240/' \
+       -e '/^\[template:snaponly__rr__daily\]/,/^\[/ s/send_schedule *= .*/send_schedule  = 43 4 * * */' \
+       -e '/^\[template:snaponly__rr__hourly\]/,/^\[/ s/monitor_warn *= .*/monitor_warn  = 100m/' "$RR/c.conf"
+cp "$RR/c.conf" "$RR/edited.conf"
+out=$( ( apply_client_profile_choice() { echo "TRIPWIRE profile read"; exit 9; }
+         LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 PROFILE=no-such-profile SOURCE_PROFILE=no-such-profile
+         snaponly_prepare_workfile "$RR/c.conf" rr; echo "REUSED=$SNAPONLY_REUSED DS=${SOURCE_PRUNE_EMITTED_DS[*]} PSD=$PEER_SAVED_DATASETS" ) 2>&1 ); rc=$?
+bash "$REPO/gen-cron.sh" -c "$RR/c.conf" > "$RR/cron" 2>&1
+if [ "$rc" -eq 0 ] && cmp -s "$RR/c.conf" "$RR/edited.conf" && printf '%s' "$out" | grep -q 'REUSED=1 DS=hdd/so/a hdd/so/b PSD=hdd/so/a hdd/so/b' \
+   && ! printf '%s' "$out" | grep -q TRIPWIRE && grep -q 'pve10_automated_hourly_" -H240$' "$RR/cron" \
+   && grep -q '^43 4 \* \* \* .*snapget.sh -s -m "pve10_automated_daily_"' "$RR/cron" && grep -q '"pve10_automated_hourly_" 100m ' "$RR/cron"; then
+    ok "snaponly F1.1: re-activation keeps the edited retain (-H240), schedule and monitor byte-for-byte, with the profile deleted and never read"
+else
+    bad "snaponly F1.1: re-activation preserves installed policy" "rc=$rc $out" "$(diff "$RR/edited.conf" "$RR/c.conf" | head -5)" "$(grep -c . "$RR/cron") cron lines"
+fi
+out=$( ( apply_client_profile_choice() { :; }; LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.77
+         snaponly_prepare_workfile "$RR/c.conf" rr; echo PASSED ) 2>&1 )
+if printf '%s' "$out" | grep -q "changing a snaponly relationship's endpoint is not supported" && ! printf '%s' "$out" | grep -q PASSED && cmp -s "$RR/c.conf" "$RR/edited.conf"; then
+    ok "snaponly F1.1: an activation that would address another host is refused, the installed sections untouched"
+else
+    bad "snaponly F1.1: endpoint change" "$out"
+fi
+printf '[defaults]\n\thost_label = pve10\n' > "$RR/fresh.conf"
+out=$( ( hostname() { echo PVE10; }; apply_client_profile_choice() { echo "PROFILE-APPLIED"; }
+         LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=a
+         PEER_SAVED_DATASETS="hdd/so/a" PEER_SAVED_RECURSIVE_ROOTS="" RECURSION="" PROFILE=m12w4d7h24-age SOURCE_PROFILE=""
+         snaponly_prepare_workfile "$RR/fresh.conf" rr; echo "REUSED=$SNAPONLY_REUSED" ) 2>&1 )
+if printf '%s' "$out" | grep -q PROFILE-APPLIED && printf '%s' "$out" | grep -q 'REUSED=0' && grep -q '^\[snaponly:zfsbackup-pve10@10.0.0.9:hdd/so/a\]' "$RR/fresh.conf"; then
+    ok "snaponly F1.1: the FIRST activation (no sections yet) renders from the profile"
+else
+    bad "snaponly F1.1: first activation renders" "$out"
+fi
+
+# F1.2: the record's kind is validated where it is loaded. An unknown or blank-
+# but-present-garbage mode, or snaponly naming a target, ends the load; legacy
+# (absent) and every kind this package writes still load. And a lifecycle verb
+# on such a record stops at the load -- no ssh, no zfs, no record change.
+rk_ok=1
+for rk in "RUX_MODE='snaponyl'|bad" "RUX_MODE='Snaponly'|bad" "RUX_MODE='snaponly'\nCLIENT_TARGET='hdd/x'|bad" "CLIENT_TARGET='hdd/x'\nRUX_MODE='snaponly'|bad" \
+          "RUX_MODE='snaponly'\nCLIENT_TARGET=''|good" "RUX_MODE=''|good" "RUX_MODE='backup'|good" "RUX_MODE='sync'|good" "RUX_MODE='local'|good" "CLIENT_TARGET='hdd/b'|good"; do
+    body="${rk%|*}"; want="${rk##*|}"
+    printf "CLIENT_NAME='k'\nSTATE='active'\nPEER_HOST='10.0.0.9'\n$body\n" > "$SO/kind.conf"
+    out=$( ( record_load client "$SO/kind.conf"; echo LOADED ) 2>&1 )
+    if [ "$want" = bad ]; then
+        printf '%s' "$out" | grep -q 'is not a relationship kind this package writes' && ! printf '%s' "$out" | grep -q LOADED || { rk_ok=0; bad "snaponly F1.2: record kind '$body' must be refused" "$out"; }
+    else
+        printf '%s' "$out" | grep -q LOADED || { rk_ok=0; bad "snaponly F1.2: record kind '$body' must load" "$out"; }
+    fi
+done
+[ "$rk_ok" -eq 1 ] && ok "snaponly F1.2: unknown mode, wrong case and snaponly-with-target are refused at load (target before or after the mode); legacy and every written kind load"
+mkdir -p "$SO/kclients"; printf "CLIENT_NAME='bk'\nSTATE='endpoint_verified'\nPEER_HOST='10.0.0.9'\nRUX_MODE='snaponyl'\nCLIENT_TARGET=''\n" > "$SO/kclients/bk.conf"
+cp "$SO/kclients/bk.conf" "$SO/kclients/bk.orig"
+: > "$SO/k.calls"
+for verb in seed activate-client remove-client status delete-relation; do
+    out=$( ( CLIENTS_DIR="$SO/kclients"; ssh() { echo "ssh $*" >> "$SO/k.calls"; return 255; }; zfs() { echo "zfs $*" >> "$SO/k.calls"; return 1; }
+             case "$verb" in
+                 seed) cmd_seed bk ;; activate-client) cmd_activate_client bk --yes ;; remove-client) cmd_remove_client bk ;;
+                 status) cmd_status bk ;; delete-relation) cmd_delete_relation bk --yes ;;
+             esac; echo "RC=$?" ) 2>&1 )
+    if ! printf '%s' "$out" | grep -q 'is not a relationship kind this package writes'; then rk_ok=0; bad "snaponly F1.2: '$verb' on an unknown-mode record stops at the load" "$(printf '%s' "$out" | tail -3)"; fi
+done
+if [ ! -s "$SO/k.calls" ] && cmp -s "$SO/kclients/bk.conf" "$SO/kclients/bk.orig" && [ "$rk_ok" -eq 1 ]; then
+    ok "snaponly F1.2: seed, activate-client, remove-client, status and delete-relation on a 'snaponyl' record stop at the load -- no ssh, no zfs, record unchanged"
+else
+    bad "snaponly F1.2: lifecycle on unknown mode" "calls: $(cat "$SO/k.calls")" "$(diff "$SO/kclients/bk.orig" "$SO/kclients/bk.conf")"
+fi
+
+# F2.1: the overlap check reads every OTHER record whole. Malformed, kind-less,
+# state-less, host-less or scope-less records of this collector are refusals;
+# so is a same-peer backup relationship whose manifest is malformed. Controls:
+# removed, local, disjoint and other-peer records keep their behaviour.
+FR="$SO/free"; mkdir -p "$FR/clients" "$FR/peers"
+fr_case() {   # <label> <record body> <want: REFUSE|FREE> [manifest body]
+    rm -f "$FR/clients/"*.conf "$FR/peers/"*
+    printf "$2\n" > "$FR/clients/other.conf"
+    [ -n "${4:-}" ] && printf "$4\n" > "$FR/peers/10.0.0.9.conf"
+    out=$( ( CLIENTS_DIR="$FR/clients"; peer_manifest_path() { echo "$FR/peers/$1.conf"; }
+             snaponly_assert_source_free new 10.0.0.9 hdd/so/a && echo FREE ) 2>&1 )
+    if [ "$3" = FREE ]; then [ "$(printf '%s' "$out" | tail -1)" = FREE ] || { bad "snaponly F2.1: $1 -> free" "$out"; return 1; }
+    else ! printf '%s' "$out" | grep -q '^FREE$' && printf '%s' "$out" | grep -q 'Nothing was changed' || { bad "snaponly F2.1: $1 -> refused" "$out"; return 1; }; fi
+    return 0
+}
+fr_ok=1
+fr_case "unterminated REQUESTED_DATASETS quote" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so" REFUSE || fr_ok=0
+fr_case "no STATE" "RUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'" REFUSE || fr_ok=0
+fr_case "unknown mode" "STATE='active'\nRUX_MODE='snaponyl'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'" REFUSE || fr_ok=0
+fr_case "no PEER_HOST" "STATE='active'\nRUX_MODE='snaponly'\nREQUESTED_DATASETS='hdd/so'" REFUSE || fr_ok=0
+fr_case "snaponly with no datasets" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'" REFUSE || fr_ok=0
+fr_case "a line that is not a record" "STATE='active'\nthis is not a record\nPEER_HOST='10.0.0.9'" REFUSE || fr_ok=0
+fr_case "same-peer backup, malformed manifest" "STATE='active'\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" REFUSE "PEER_SAVED_DATASETS='hdd/so" || fr_ok=0
+fr_case "same-peer backup, manifest overlaps" "STATE='active'\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" REFUSE "PEER_SAVED_DATASETS='hdd/so'" || fr_ok=0
+fr_case "control: removed record" "STATE='removed'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'" FREE || fr_ok=0
+fr_case "control: local relationship" "STATE='active'\nRUX_MODE='local'\nREQUESTED_DATASETS='hdd/so'" FREE || fr_ok=0
+fr_case "control: disjoint dataset" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/other'" FREE || fr_ok=0
+fr_case "control: another peer" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.7'\nREQUESTED_DATASETS='hdd/so'" FREE || fr_ok=0
+fr_case "control: legacy record without RUX_MODE, disjoint manifest" "STATE='active'\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" FREE "PEER_SAVED_DATASETS='hdd/x'" || fr_ok=0
+[ "$fr_ok" -eq 1 ] && ok "snaponly F2.1: malformed, state-less, kind-less, host-less and scope-less records and a malformed manifest are refusals; removed/local/disjoint/other-peer/legacy keep their behaviour"
 fi   # --- koniec sekcji snaponly ---
 
 
