@@ -401,6 +401,22 @@ new_case mode-sync-minimal
 mkpkg "$D"
 expect_accept "mode/sync with no target and no datasets is accepted" "$D/wsad.tgz"
 
+# REV-20261017-152 round 1 review: the package names the MACHINE it comes from
+# (16 hex of sha256(/etc/machine-id)), so --join can tell a second collector with
+# the same short hostname from a key rotation. Optional (absent = an older
+# collector); when present it must be exactly that shape -- the value lands in a
+# manifest and in a refusal message.
+new_case initiator-id-good
+{ good_conf; echo 'PEER_CONF_INITIATOR_ID=0123456789abcdef'; } > "$D/peer.conf"
+mkpkg "$D"
+expect_accept "initiator id/16 lowercase hex is accepted" "$D/wsad.tgz"
+for bad_id in '0123456789ABCDEF' '0123456789abcde' '0123456789abcdef0' 'zzzzzzzzzzzzzzzz' ''; do
+    new_case "initiator-id-bad"
+    { good_conf; echo "PEER_CONF_INITIATOR_ID=$bad_id"; } > "$D/peer.conf"
+    mkpkg "$D"
+    expect_reject "initiator id/'$bad_id' is refused" "is not 16 lowercase hex digits"
+done
+
 new_case mode-sync-with-target
 { good_conf | grep -vE '^PEER_CONF_DATASETS='; echo 'PEER_CONF_MODE=sync'; } > "$D/peer.conf"
 mkpkg "$D"
