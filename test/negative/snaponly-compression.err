@@ -1,0 +1,1 @@
+has 'compression', which gen-cron.sh does not read in a [snaponly:] section

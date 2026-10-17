@@ -1264,8 +1264,8 @@ parse_ini() {
                 kind="$(trim "${hdr%%:*}")"
                 name="$(trim "${hdr#*:}")"
                 case "$kind" in
-                    template|dataset|prune|prune-bookmarks|replica|excluded|relation) : ;;
-                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded/relation)" ;;
+                    template|dataset|prune|prune-bookmarks|replica|excluded|relation|snaponly) : ;;
+                    *) die "unknown section type '$kind' in '[$hdr]' (expected template/dataset/prune/prune-bookmarks/excluded/relation/snaponly)" ;;
                 esac
                 [ -n "$name" ] || die "section '[$hdr]' has an empty name after '$kind:'"
             fi
@@ -1612,13 +1612,22 @@ _allow_fields relation  tiers gfs $RELATION_ENGINE_FIELDS
 # The name in the header is just a label -- it names the medium, not a dataset.
 _allow_fields replica  source dst schedule prefix passive notify media recursive flags history monitor_warn monitor_crit monitor media_guids on_insert keep raw
 _allow_fields excluded  keep
+# [snaponly:<[user@]host:dataset>] (REV-20261017-152 round 1): snapshots on a
+# REMOTE source, taken from here by `snapget.sh -s`, with NO copy anywhere. The
+# section NAME is the source -- there is no local path, so the mode is explicit
+# in the section kind and never inferred from a missing dst/src. Its tiers come
+# from use_template like a [dataset:]'s (send_schedule, prefix, quiesce,
+# tier_label, notify_word, monitor_*). ssh_flags: the same five options as
+# [prune:]. Retention of the source lives in its own [prune:<scope>]
+# (side = source), as for any remote source; this section never prunes.
+_allow_fields snaponly  use_template pair_label recursive notify notify_raw ssh_flags
 
 # The single most useful thing to say about a rejected field is "you put it in
 # the wrong kind of section", which is a different mistake from "you misspelled
 # it" and needs a different fix.
 field_valid_elsewhere() {
     local field="$1" k out=""
-    for k in defaults template dataset prune prune-bookmarks replica excluded; do
+    for k in defaults template dataset prune prune-bookmarks replica excluded snaponly; do
         [ -n "${FIELD_OK[${k}${SEP}${field}]+x}" ] && out="$out [$k:]"
     done
     printf '%s' "$out"
@@ -1694,8 +1703,10 @@ validate_field_names() {
         # 2026-10-06): zfs-backup.sh spreads a multi-cadence SOURCE prune tier
         # by tier there, the way it spreads the dataset's own tiers.
         case "$field" in
-            flags_*|send_schedule_*)
+            flags_*)
                 [ "$kind" = "dataset" ] && continue ;;
+            send_schedule_*)
+                { [ "$kind" = "dataset" ] || [ "$kind" = "snaponly" ]; } && continue ;;
             prune_schedule_*)
                 { [ "$kind" = "dataset" ] || [ "$kind" = "prune" ]; } && continue ;;
             exclude_child_*)
@@ -2225,6 +2236,7 @@ build_entities() {
     declare -ga BOOKMARK_PRUNE_ENTITIES=()
     declare -ga REPLICA_ENTITIES=()
     declare -ga MONITOR_ENTITIES=()
+    declare -ga SNAPONLY_ENTITIES=()
     declare -gA FOREIGN_SCOPES=()   # scope -> 1 when its section says prune_foreign = yes
     declare -ga SCOPE_PATTERNS=()   # "scope<SEP>pattern" per resolved prune op, for overlap check
 
@@ -2247,6 +2259,7 @@ build_entities() {
             prune)            build_prune_section "$section" "$name" "$host_label" ;;
             prune-bookmarks)  build_bookmark_prune_section "$section" "$name" "$host_label" ;;
             replica)          build_replica_section "$section" "$name" "$host_label" ;;
+            snaponly)         build_snaponly_section "$section" "$name" "$host_label" ;;
         esac
     done
 }
@@ -2690,6 +2703,134 @@ build_dataset() {
 }
 
 # build_prune_section SECTION_HEADER SCOPE HOST_LABEL
+# build_snaponly_section SECTION SCOPE HOST_LABEL (REV-20261017-152 round 1, F2/F3)
+# One `snapget.sh -s` line per tier that has a send_schedule, never grouped with
+# anything (no destination exists to group by, and a pull must never coalesce
+# with it); a monitor per tier that sets monitor_warn/crit, read over ssh.
+#
+# EVERYTHING THAT WOULD SHAPE A TRANSFER OR A TARGET IS REFUSED, not dropped
+# (F2: "reject incompatible policy rather than silently discarding it"): a dst
+# or src, engine flags, autotune, and a TARGET prune (prune_schedule/keep/
+# retain/gfs) on a tier, because there is no target. The link fields
+# (compression, cipher, history, raw, bandwidth), passive and media are not
+# in this section's allow-list at all, so they are refused by name. The
+# source's retention is a [prune:<scope>] section of its own (side = source),
+# the path every remote source already uses.
+build_snaponly_section() {
+    local sec="$1" scope="$2" host_label="$3"
+    local ctx="[snaponly:$scope]"
+    # The NAME is the source: [user@]host:dataset, checked the way the engine
+    # and check-snap-age.sh will read it -- no shell syntax, nothing that is not
+    # a plain host, account and dataset name.
+    local rhost_part="${scope%%:*}" rds="${scope#*:}" ruser rhost
+    case "$scope" in *:*) ;; *) die "$ctx: the section name must be the REMOTE source, [user@]host:dataset -- a snaponly relationship snapshots a dataset on another host" ;; esac
+    [[ "$rhost_part" != */* ]] || die "$ctx: '$rhost_part' is a path, not a host -- the name must be [user@]host:dataset"
+    if [[ "$rhost_part" == *@* ]]; then ruser="${rhost_part%%@*}"; rhost="${rhost_part#*@}"; else ruser=root; rhost="$rhost_part"; fi
+    [[ "$rhost" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "$ruser" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+        || die "$ctx: '$rhost_part' is not a plain account@host"
+    [[ "$rds" =~ ^[A-Za-z0-9][A-Za-z0-9_.:/-]*$ ]] || die "$ctx: '$rds' is not a dataset name"
+
+    local pair_label
+    pair_label="$(resolve_field pair_label "$sec" "" "")" || pair_label=""
+    [ -n "$pair_label" ] || die "$ctx: pair_label is required -- it is the relationship's pause (-L) and the label its pair gate knows"
+    case "$pair_label" in
+        *[!A-Za-z0-9._-]*) die "$ctx: pair_label='$pair_label' -- letters, digits, dot, dash, underscore only" ;;
+    esac
+
+    local tier_list
+    tier_list="$(resolve_field use_template "$sec" "" "")" || die "$ctx has no use_template"
+
+    local rec_raw rec_flag="" rec_scope=0
+    if rec_raw="$(resolve_field recursive "$sec" "" "")"; then
+        case "$(trim "$rec_raw" | tr '[:upper:]' '[:lower:]')" in
+            no)     ;;
+            flat)   rec_flag="-R"; rec_scope=1 ;;
+            atomic) rec_flag="-r"; rec_scope=1 ;;
+            '')     die "$ctx: 'recursive' is blank -- say no, flat or atomic" ;;
+            *)      die "$ctx: recursive = '$rec_raw' -- expected no, flat or atomic" ;;
+        esac
+    fi
+
+    local ssh_flags
+    ssh_flags="$(resolve_field ssh_flags "$sec" "" "")" || ssh_flags=""
+    lint_ssh_flags "$ssh_flags" "$ctx" "$scope"
+
+    local -a tiers=()
+    IFS=',' read -ra tiers <<< "$tier_list"
+    local tier tmpl f v emitted=0
+    for tier in "${tiers[@]}"; do
+        tier="$(trim "$tier")"
+        tmpl="template:${tier}"
+        [ "${SECTION_KIND[$tmpl]:-}" = "template" ] || die "$ctx references unknown template '$tier'"
+        local tctx="$ctx tier=$tier"
+        for f in dst src flags autotune prune_schedule keep retain gfs; do
+            if v="$(resolve_field "$f" "$sec" "$tmpl" "")" && [ -n "$v" ]; then
+                die "$tctx: '$f = $v' -- a snaponly relationship transfers nothing and has no target; '$f' cannot apply, so it is refused rather than ignored. The source's retention is a [prune:$scope] section (side = source)."
+            fi
+        done
+        if v="$(resolve_field_tiered flags "$tier" "$sec" "$tmpl" "")" && [ -n "$v" ]; then
+            die "$tctx: flags '$v' -- snaponly takes no engine flags (recursion, quiesce and ssh have their own fields)"
+        fi
+        local ntier
+        ntier="$(resolve_field tier_label "$sec" "$tmpl" "")" || ntier="$tier"
+
+        local send_schedule="" prefix=""
+        if send_schedule="$(resolve_field_tiered send_schedule "$tier" "$sec" "$tmpl" defaults)"; then
+            lint_cron_schedule "$send_schedule" "$tctx" send_schedule
+            # F3: the family is this relationship's own and never empty: an empty
+            # prefix makes a bare-timestamp family no retention pattern can own,
+            # and a Proxmox-reserved one would be pruned or monitored as someone
+            # else's (pvesr's __replicate_*, vzdump's own).
+            prefix="$(resolve_field prefix "$sec" "$tmpl" defaults)" || prefix=""
+            [ -n "$prefix" ] || die "$tctx: 'prefix' is required and must not be blank -- the snapshots are this relationship's own family"
+            case "$prefix" in
+                __*|vzdump*) die "$tctx: prefix='$prefix' starts like a Proxmox-reserved family (__replicate_*, vzdump) -- pick this relationship's own" ;;
+                *[!A-Za-z0-9._-]*) die "$tctx: prefix='$prefix' -- letters, digits, dot, dash, underscore only" ;;
+            esac
+            local quiesce
+            quiesce="$(resolve_field quiesce "$sec" "$tmpl" defaults)" || quiesce=""
+            [ -n "$quiesce" ] || quiesce="$(settings_get quiesce "")"
+            lint_quiesce "$quiesce" "$tctx" pull
+            local flags=""
+            [ -n "$rec_flag" ] && flags="$rec_flag"
+            flags="$(maybe_add_quiesce "$flags" "$quiesce")"
+            [ -n "$ssh_flags" ] && flags="${flags:+$flags }$ssh_flags"
+            flags="${flags:+$flags }-L $pair_label"
+            local label raw_notify word notify
+            label="$(resolve_field notify "$sec" "" "")" || label=""
+            raw_notify="$(resolve_field notify_raw "$sec" "$tmpl" "")" || raw_notify=""
+            word="$(resolve_field notify_word "" "$tmpl" "")" || word="snapshot"
+            if [ -n "$raw_notify" ]; then notify="$raw_notify"; else notify="$(notify_text "$host_label" "$ntier" "$word" "$label")"; fi
+            SNAPONLY_ENTITIES+=("${scope}${SEP}${tier}${SEP}${send_schedule}${SEP}${prefix}${SEP}${flags}${SEP}${notify}")
+            emitted=1
+        fi
+
+        if resolve_monitor "$sec" "$tmpl" "$tctx"; then
+            local pattern
+            pattern="$(resolve_field pattern "$sec" "$tmpl" defaults)" || pattern="$prefix"
+            [ -n "$pattern" ] || die "$tctx: the monitor needs this relationship's family (pattern or prefix)"
+            [ -z "$prefix" ] || [ "${prefix:0:${#pattern}}" = "$pattern" ] \
+                || die "$tctx: the monitor watches '$pattern' but this tier creates '$prefix...' -- it would judge someone else's family"
+            if [ -n "$send_schedule" ]; then
+                local gap_min warn_sec
+                gap_min="$(cron_max_gap_minutes "$send_schedule")"
+                if [ -n "$gap_min" ]; then
+                    warn_sec="$(duration_seconds "$MONITOR_WARN" "$tctx: monitor_warn")"
+                    [ "$warn_sec" -gt "$((gap_min * 60))" ] || die "$tctx: monitor_warn ($MONITOR_WARN) is not longer than this tier's own longest gap between runs (${gap_min}m, from send_schedule '$send_schedule') -- it would alert on every healthy cycle"
+                fi
+            fi
+            local mlabel mnotify mbroken mwarntext
+            mlabel="$(resolve_field notify "$sec" "" "")" || mlabel=""
+            mnotify="$(notify_text "$host_label" "$ntier" "stale" "$mlabel")"
+            mbroken="$(notify_text "$host_label" "$ntier" "monitor BROKEN" "$mlabel")"
+            mwarntext="$(notify_text "$host_label" "$ntier" "getting stale" "$mlabel")"
+            MONITOR_ENTITIES+=("${scope}${SEP}${pattern}${SEP}${MONITOR_WARN}${SEP}${MONITOR_CRIT}${SEP}${MONITOR_SCHEDULE}${SEP}${rec_scope}${SEP}${mnotify}${SEP}${mbroken}${SEP}${mwarntext}${SEP}${pair_label}${SEP}${SEP}${ssh_flags}")
+            emitted=1
+        fi
+    done
+    [ "$emitted" -eq 1 ] || die "$ctx: no tier has a send_schedule or a monitor -- the section would emit nothing"
+}
+
 build_prune_section() {
     local sec="$1" scope="$2" host_label="$3"
 
@@ -3820,6 +3961,20 @@ media_bracket() {   # <media field> <target path> <label> <command> [source[,sou
 # The command goes after `--` and is NOT quoted as a unit: zfs-job.sh execs
 # "$@", so the words the generator emitted are the words that run, with no
 # second round of shell parsing to get wrong.
+# snaponly: one `snapget.sh -s` line per entity, never grouped (see
+# build_snaponly_section). No destination argument and no transfer flag -- the
+# engine refuses both, and the generator does not even emit them.
+emit_snaponly() {
+    local e scope tier schedule prefix flags notify cmd
+    for e in "${SNAPONLY_ENTITIES[@]+"${SNAPONLY_ENTITIES[@]}"}"; do
+        IFS="$SEP" read -r scope tier schedule prefix flags notify <<< "$e"
+        cmd="$REPO_DIR/snapget.sh -s -m \"$prefix\""
+        [ -n "$flags" ] && cmd="$cmd $flags"
+        cmd="$cmd \"$scope\""
+        JOB_LINES+=("$(job_cron_line "$schedule" "$cmd" "$notify")")
+    done
+}
+
 job_cron_line() {
     local schedule="$1" cmd="$2" notify="$3"
     printf '%s %s/zfs-job.sh "%s" --log=%s --notify=%s --detail=%s -- %s'         "$schedule" "$REPO_DIR" "$notify" "$CRON_LOG" "$NOTIFY_SCRIPT"         "$DETAIL_LINES" "$cmd"
@@ -5179,6 +5334,7 @@ if [ "${RECONCILE:-0}" -eq 1 ]; then
 fi
 
 emit_send
+emit_snaponly
 emit_inline_prune
 emit_prune_sections
 emit_gfs_prune_sections
