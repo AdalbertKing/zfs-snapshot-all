@@ -13320,6 +13320,50 @@ if [ "$(grep -c 'ZFS-JOB END' "$AS/job.log")" = 2 ] \
 else
     bad "addsource: activation first copies" "$out" "$(cat "$AS/job.log")"
 fi
+# run-relation (owner 2026-10-17, F7 "Uruchom teraz" on F3): every dataset of the
+# relationship once, by its FINEST installed job (hour '*'); a dataset with only a
+# daily job runs that one; never a prune line, never another relationship's job,
+# never the daily of a dataset that has an hourly. Paused = refused, nothing run.
+rr_fn=$(sed -n '/^cmd_run_relation() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$rr_fn" ] || bad "addsource: could not lift cmd_run_relation -- anchor changed"
+cat > "$AS/rrtab" <<TAB
+# BEGIN zfs-backup-managed
+11 1 * * * $AS/zfs-job.sh "h daily backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
+31 * * * * $AS/zfs-job.sh "h hourly backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
+11 1 * * * $AS/zfs-job.sh "h daily backup (r-b)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/b" "b"
+45 * * * * $AS/zfs-job.sh "h prune (r-a)" --log=$AS/job.log -- /x/delsnaps.sh -L rel "hdd/lab/a" "h_"
+31 * * * * $AS/zfs-job.sh "h hourly backup (o-c)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L other "u@10.0.0.2:hdd/lab/c" "b"
+# END zfs-backup-managed
+TAB
+rr_run() {   # <engine rc> <paused 0/1> -> messages; rc in $rr_rc
+    : > "$AS/job.log"
+    out=$(ZJ_RC="$1" RR_PAUSED="$2" bash -c "crontab_for_target() { cat '$AS/rrtab'; }; cron_target_user() { echo root; }
+client_name_valid() { :; }; client_conf_path() { echo '$AS/rrtab'; }; record_load() { :; }
+client_paused() { [ \"\$RR_PAUSED\" = 1 ]; }
+log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; die() { echo \"DIE \$*\"; exit 1; }
+$rr_fn
+cmd_run_relation rel" 2>&1); rr_rc=$?
+    printf '%s' "$out"
+}
+rr_run 0 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+ran=$(sed -nE 's/.* ZFS-JOB END (.*) rc=.*/\1/p' "$AS/job.log" | tr '\n' '|')
+if [ "$ran" = "h hourly backup (r-a)|h daily backup (r-b)|" ] && printf '%s' "$out" | grep -q "LOG run-relation 'rel': 2 done, 0 not done"; then
+    ok "run-relation: each dataset once by its finest job (hourly over daily; a daily-only dataset runs its daily); no prune, no other relationship"
+else
+    bad "run-relation: finest job per dataset" "ran=[$ran]" "$out"
+fi
+rr_run 1 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   did NOT finish (rc=1)" && printf '%s' "$out" | grep -q "0 done, 2 not done"; then
+    ok "run-relation: a job whose END rc is not 0 is reported as not done, and the verb fails"
+else
+    bad "run-relation: failure verdict" "rc=$rc" "$out"
+fi
+rr_run 0 1 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DIE run-relation: 'rel' is paused" && [ ! -s "$AS/job.log" ]; then
+    ok "run-relation: a paused relationship is refused, nothing run"
+else
+    bad "run-relation: paused" "rc=$rc" "$out" "$(cat "$AS/job.log")"
+fi
 as_run() {   # <scope text> <target> -> stdout new file, stderr verdict; rc
     printf '%b' "$1" > "$AS/in"
     awk -v target="$2" "$as_awk" "$AS/in" > "$AS/out" 2> "$AS/err"

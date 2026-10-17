@@ -145,14 +145,14 @@ else
 fi
 # TESTER R4 (2026-09-25): B1 listwa F3 z akcjami, B3 Szczeble bez 'x',
 # B5 panel F2 z retencja z jednostka jak kolumna Trzyma.
-if has "$S4" 'F7 Pauza F8 Eksport F9 Import' && ! hasE "$S4" '║.* x[0-9]+ +[0-9/]+s' && ! hasE "$S4" 'aktualne +x[0-9]'; then
-    ok "relacje: listwa F3 podpisuje akcje okna (F7 Pauza F8 Eksport F9 Import); kolumna Szczeble bez 'x' (tester R4: B1, B3)"
+if has "$S4" 'F7 Uruchom teraz F8 Pauza F9 Eksport/Import' && ! hasE "$S4" '║.* x[0-9]+ +[0-9/]+s' && ! hasE "$S4" 'aktualne +x[0-9]'; then
+    ok "relacje: listwa F3 podpisuje akcje okna (F7 Uruchom teraz F8 Pauza F9 Eksport/Import, jednolicie z F2/F6); kolumna Szczeble bez 'x' (tester R4: B1, B3)"
 else
     bad "relacje: listwa F3 / Szczeble" "$S4"
 fi
 SPW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 130 2>&1)"
-if has "$SPW" 'F7 Wznów F8 Eksport' && ! has "$SPW" 'F7 wznów' && ! has "$SPW" 'F7 Pauza'; then
-    ok "relacje: na WSTRZYMANEJ relacji pasek mowi 'F7 Wznow', nie 'Pauza' (tester R4: B6); ramka bez F (uwaga 4)"
+if has "$SPW" 'F8 Wznów F9 Eksport/Import' && ! has "$SPW" 'F8 wznów' && ! has "$SPW" 'F8 Pauza'; then
+    ok "relacje: na WSTRZYMANEJ relacji pasek mowi 'F8 Wznow', nie 'Pauza' (tester R4: B6); ramka bez F (uwaga 4)"
 else
     bad "relacje: podpis F7 na pauzie" "$SPW"
 fi
@@ -798,10 +798,10 @@ act() {   # <keys> [extra] -> ekran; dziennik komend w $XL (wyzerowany)
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen relacje --keys "$1" "${@:2}" 2>&1
 }
 ZB="$(cd "$REPO" && pwd)/zfs-backup.sh"
-A="$(act down,F7)"
+A="$(act down,F8)"
 if has "$A" '╔═ POTWIERDZENIE: Wstrzymaj relację lab-ct201 ═' && has "$A" 'Wykona się DOKŁADNIE to:' \
         && has "$A" 'pause-client'; then   # the shell line WRAPS on a long checkout path (CI: /home/runner/work/...), so the verb and the name may sit on different lines
-    ok "akcje: F7 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
+    ok "akcje: F8 na relacji aktywnej pokazuje komende pause-client PRZED wykonaniem"
 else
     bad "akcje: F7 podglad pauzy" "$A"
 fi
@@ -810,28 +810,28 @@ if [ ! -s "$XL" ]; then
 else
     bad "akcje: podglad nie uruchamia" "$(cat "$XL")"
 fi
-A="$(act down,F7,t)"
+A="$(act down,F8,t)"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[atrapa]'; then
     ok "akcje: 't' wykonuje DOKLADNIE pokazana komende (pause-client NAME --reason=...) i otwiera okno wyjscia"
 else
     bad "akcje: t wykonuje" "$(cat "$XL")" "$A"
 fi
-A="$(act down,F7,esc)"
+A="$(act down,F8,esc)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano'; then
     ok "akcje: Esc w potwierdzeniu anuluje i mowi to; dziennik pusty"
 else
     bad "akcje: Esc anuluje" "$(cat "$XL")" "$A"
 fi
-A="$(act down,F7,q)"
+A="$(act down,F8,q)"
 if [ ! -s "$XL" ] && has "$A" 'anulowano'; then
     ok "akcje: KAZDY klawisz poza 't' anuluje (tu: q) -- nie ma przypadkowego wykonania"
 else
     bad "akcje: inny klawisz anuluje" "$(cat "$XL")" "$A"
 fi
 # pauza -> wznowienie: ta sama litera, przeciwny czasownik, decyduje REKORD
-AP="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --exec-log "$XL" --screen relacje --keys down,down,down,F7,t 2>&1)"
+AP="$(: > "$XL"; "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --exec-log "$XL" --screen relacje --keys down,down,down,F8,t 2>&1)"
 if grep -q "resume-client lab-srv-b$" "$XL" && has "$AP" 'WYJŚCIE: Wznów relację lab-srv-b'; then
-    ok "akcje: F7 na relacji WSTRZYMANEJ wola resume-client (decyduje paused_local z rekordu)"
+    ok "akcje: F8 na relacji WSTRZYMANEJ wola resume-client (decyduje paused_local z rekordu)"
 else
     bad "akcje: F7 = resume na pauzie" "$(cat "$XL")" "$AP"
 fi
@@ -843,29 +843,50 @@ if has "$A" '╔═ Zakończone' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]
 else
     bad "akcje: F4 na F3" "$A"
 fi
+# F7 = URUCHOM TERAZ (wlasciciel 2026-10-17, jednolicie z F2/F6): bez potwierdzenia,
+# run-relation NAZWA, okno wyjscia.
+A="$(act down,F7)"
+if grep -q "run-relation lab-ct201$" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Relacja lab-ct201 -- kopia teraz'; then
+    ok "akcje: F7 na relacji = Uruchom teraz -- run-relation NAZWA od razu, bez potwierdzenia, okno wyjscia"
+else
+    bad "akcje: F7 Uruchom teraz" "$(cat "$XL")" "$A"
+fi
+# F9 = okienko Eksport/Import; Esc wraca, nic nie wykonane.
+A="$(act down,F9)"
+if has "$A" 'Relacja lab-ct201 -- eksport / import' && has "$A" '> Eksport relacji lab-ct201 do pliku' && has "$A" 'Import relacji z pliku' && [ ! -s "$XL" ]; then
+    ok "akcje: F9 na relacji = okienko wyboru Eksport / Import (kursor na Eksporcie), nic nie wykonane"
+else
+    bad "akcje: F9 okienko" "$A"
+fi
+A="$(act down,F9,esc)"
+if [ ! -s "$XL" ] && has "$A" 'anulowano -- nic nie wykonano' && ! has "$A" 'eksport / import'; then
+    ok "akcje: Esc w okienku F9 wraca i mowi 'anulowano'"
+else
+    bad "akcje: F9 Esc" "$A"
+fi
 # EKSPORT (R4-8, R4-10): domyslnie w katalogu relacji (/etc/zfs-snapshot-all/relations,
 # w testach ZFS_TUI_RELATIONS_DIR), Enter ZAPISUJE -- bez drugiego 't'.
 RD="$(mktemp -d)"; RDP="$RD"; command -v cygpath >/dev/null 2>&1 && RDP="$(cygpath -m "$RD")"
 export ZFS_TUI_RELATIONS_DIR="$RDP"
-A="$(act down,F8)"
+A="$(act down,F9,enter)"
 if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'    && has "$A" 'Enter zapisz' && ! has "$A" 'Enter dalej'; then
     ok "akcje: F8 podpowiada sciezke w katalogu relacji (<dir>/<relacja>.export.json) i mowi, ze istniejacy plik bedzie nadpisany"
 else
     bad "akcje: F8 podpowiedz" "$A"
 fi
-A="$(act down,F8,enter)"
+A="$(act down,F9,enter,enter)"
 if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.json'\?$" "$XL" && ! has "$A" 'POTWIERDZENIE' && has "$A" 'WYJŚCIE: Eksport relacji lab-ct201'; then
     ok "akcje: Enter w polu sciezki od razu wykonuje eksport DO tego pliku -- bez potwierdzenia 't' (R4-8)"
 else
     bad "akcje: F8 Enter zapisuje" "$(cat "$XL")" "$A"
 fi
-A="$(act down,F8,bs,bs,bs,bs,text:yaml,enter)"
+A="$(act down,F9,enter,bs,bs,bs,bs,text:yaml,enter)"
 if grep -q "export-relation lab-ct201 --json > .*lab-ct201.export.yaml'\?$" "$XL"; then
     ok "akcje: ...Backspace i wpisany tekst zmieniaja sciezke, a eksport idzie do NIEJ"
 else
     bad "akcje: F8 edycja sciezki" "$(cat "$XL")" "$A"
 fi
-ZFS_TUI_RELATIONS_DIR="$RDP/nowy" act down,F8,enter >/dev/null
+ZFS_TUI_RELATIONS_DIR="$RDP/nowy" act down,F9,enter,enter >/dev/null
 if [ -d "$RD/nowy" ] && grep -q "nowy.lab-ct201.export.json" "$XL"; then
     ok "akcje: eksport do katalogu, ktorego nie ma -- katalog jest tworzony (pierwszy eksport na hoscie)"
 else
@@ -876,20 +897,20 @@ fi
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$RD/pve9-synchro.export.json"
 printf '{"x":1}' > "$RD/cos-innego.json"
 mkdir -p "$RD/archiwum"
-A="$(act down,F9)"
+A="$(act down,F9,down,enter)"
 if has "$A" '╔═ Import relacji z pliku' && has "$A" '> pve9-synchro.export.json' && has "$A" 'relacja pve9-synchro' \
    && has "$A" 'archiwum/' && has "$A" '..' && has "$A" '[ wpisz ścieżkę ręcznie ]' && ! has "$A" 'cos-innego.json'; then
     ok "akcje: F9 = lista plikow katalogu relacji: '..', katalogi, TYLKO pliki eksportu (z nazwa relacji), kursor na eksporcie, na koncu 'wpisz recznie' (R4-9)"
 else
     bad "akcje: F9 lista plikow" "$A"
 fi
-A="$(act down,F9,enter)"
+A="$(act down,F9,down,enter,enter)"
 if has "$A" 'POTWIERDZENIE: Import relacji z pve9-synchro.export.json' && has "$A" '[atrapa] podgląd:'; then
     ok "akcje: Enter na pliku z listy = werdykt/plan importu tego pliku"
 else
     bad "akcje: F9 Enter na pliku" "$A"
 fi
-A="$(act down,F9,up,enter)"
+A="$(act down,F9,down,enter,up,enter)"
 if has "$A" '╔═ Import relacji z pliku' && has "$A" '  ..' && has "$A" '> [ wpisz' && ! has "$A" 'pve9-synchro.export.json'; then
     ok "akcje: Enter na katalogu wchodzi do niego (archiwum: pusty, sam '..' i 'wpisz recznie')"
 else
@@ -901,13 +922,13 @@ IMPF="$(mktemp)"
 printf '{"schema":"zfs-backup/relation-export/1","name":"pve9-synchro"}' > "$IMPF"
 IMPP="$IMPF"; command -v cygpath >/dev/null 2>&1 && IMPP="$(cygpath -m "$IMPF")"   # Git Bash: Python spod Windows nie zna /tmp
 CLR="$(printf 'bs,%.0s' $(seq 60))"; CLR="${CLR%,}"   # zdejmuje podpowiedz katalogu domowego -- sciezka wpisana ZA nia bylaby /root//tmp/...; 60, bo Git Bash robi z HOME=/root dluga sciezke pod Program Files
-A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,down,enter,end,enter,$CLR,text:$IMPP,enter")"
 if has "$A" "POTWIERDZENIE: Import relacji z $(basename "$IMPF")" && has "$A" 'import-relation' && hasE "$A" "$(basename "$IMPF")'? --yes" && has "$A" '[atrapa] podgląd:'; then
     ok "akcje: F9 -> 'wpisz recznie' -> plik: PODGLAD czasownika (bez --yes) i komenda z --yes do potwierdzenia"
 else
     bad "akcje: F9" "$A"
 fi
-A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter,t")"
+A="$(HOME=/root act "down,F9,down,enter,end,enter,$CLR,text:$IMPP,enter,t")"
 if grep -q "import-relation .*$(basename "$IMPF")'\? --yes$" "$XL"; then
     ok "akcje: ...i 't' wola import-relation PLIK --yes"
 else
@@ -916,7 +937,7 @@ fi
 # F9 z nieistniejaca sciezka: podpowiedz "/root/" + dopisana wzgledna sciezka
 # skladala sie w /root/tmp/f8.json, ktorej nie ma -- czasownik odmawial "cannot
 # read", operator dowiadywal sie o tym po nazwie relacji (pve10, 2026-09-23).
-A="$(HOME=/root act "down,F9,end,enter,text:tmp/nie-ma-takiego.json,enter")"
+A="$(HOME=/root act "down,F9,down,enter,end,enter,text:tmp/nie-ma-takiego.json,enter")"
 if has "$A" 'Import relacji z pliku' && has "$A" 'nie ma takiego pliku' && [ ! -s "$XL" ]; then
     ok "akcje: F9 z nieistniejaca sciezka zostaje w polu pliku, mowi 'nie ma takiego pliku' i nic nie uruchamia (pve10: /root/ + tmp/f8.json)"
 else
@@ -926,7 +947,7 @@ fi
 # (juz jest i identyczna / rozni sie / plan), --name zostaje w CLI. Routing
 # werdyktu na PRAWDZIWYM czasowniku jest dowiedziony na pve10 -- w trybie
 # atrapy czasownik sie nie wykonuje, wiec tu jest tylko brak kroku z nazwa.
-A="$(HOME=/root act "down,F9,end,enter,$CLR,text:$IMPP,enter")"
+A="$(HOME=/root act "down,F9,down,enter,end,enter,$CLR,text:$IMPP,enter")"
 if ! has "$A" 'Nazwa relacji' && has "$A" 'POTWIERDZENIE: Import relacji'; then
     ok "akcje: F9 po pliku idzie prosto do werdyktu/planu -- bez pola nazwy"
 else
@@ -942,7 +963,7 @@ act_empty() {   # <keys> -> ekran; dziennik komend w $XL (wyzerowany)
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --exec-log "$XL" --screen relacje --keys "$1" 2>&1
 }
 E="$(act_empty "")"
-if has "$E" 'Ins nowa relacja' && ! has "$E" 'F9 import z pliku' && hasE "$E" '9Import|F9 Import'; then
+if has "$E" 'Ins nowa relacja' && ! has "$E" 'F9 import z pliku' && hasE "$E" '9Plik|F9 Eksport/Import'; then
     ok "akcje: pusty kolektor -- ramka podpowiada Ins nowa relacja, F9 Import jest na pasku (pve11 2026-09-23; uwaga 4)"
 else
     bad "akcje: pusty kolektor stopka" "$E"
@@ -1610,13 +1631,13 @@ else
     bad "linia: strzalki przy tekscie" "$C"
 fi
 # 'e' w potwierdzeniu: komenda akcji laduje w linii do poprawki, nic nie rusza.
-C="$(: > "$XL"; screen relacje "down,F7,e" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "down,F8,e" --exec-log "$XL")"
 if has "$C" "pause-client lab-ct201 '--reason=z TUI" && ! has "$C" 'POTWIERDZENIE' && [ ! -s "$XL" ] && has "$C" 'komenda w linii poleceń -- popraw i Enter'; then
     ok "linia: 'e' w potwierdzeniu wrzuca pokazana komende do linii polecen (podglad + edycja), dziennik pusty"
 else
     bad "linia: e w potwierdzeniu" "$C" "$(cat "$XL")"
 fi
-C="$(: > "$XL"; screen relacje "down,F7,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "down,F8,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ]; then
     ok "linia: ...poprawiona (6 x Backspace) i Enter wykonuje TO, co w linii"
 else
@@ -1686,7 +1707,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Replika7Pauza8Eksport9Import10Wyjście'; then
+if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Replika7Uruchom8Pauza9Plik10Wyjście'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F (zapis skrocony, cyfra = F; F5 = Szablony)"
 else
     bad "wyglad: listwa F" "$S"
@@ -1701,7 +1722,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
         _body="$(printf '%s\n' "$_o" | sed '$d')"; _bar="$(printf '%s\n' "$_o" | tail -1)"
         printf '%s' "$_body" | grep -qE '(^|[^A-Za-z0-9])F([1-9]|10)([^0-9]|$)' && NODUP="$NODUP $_sc/$_w:F-w-oknie"
         case "$_sc" in
-            zadania) _acts="Sortuj" ;; relacje) _acts="Pauza Eksport Import" ;; transfery) _acts="usunięte" ;;
+            zadania) _acts="Sortuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="usunięte" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
         for _a in Pomoc Zadania Relacje Transfery Szablony Replika Wyjście $_acts; do

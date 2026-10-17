@@ -415,6 +415,11 @@ front end never edits the config file:
                                     Run every replica job now. A medium that is
                                     not here skips quietly, so this is safe to
                                     fire on any insertion.
+  zfs-backup.sh run-relation NAME
+                                    One copy now of every dataset of the relationship,
+                                    by its FINEST installed job (the cron line itself,
+                                    as its account); daily and higher tiers are not run.
+                                    Refused while the relationship is paused. F7 on F3.
   zfs-backup.sh prepare-media POOL DEVICE [--base=replica] [--yes]  |  prepare-media --list
                                     Prepare a disk as a replica medium: zpool create
                                     -m none -o failmode=continue -O compression=zstd, zfs create POOL/BASE,
@@ -14404,6 +14409,69 @@ relation_copy_sources() {
 # job once, now: one whose hour field is `*` (it runs every hour) if there is one,
 # else the first -- not merely the first line found. [verb] only names the caller
 # in its messages (add-source, activate-client).
+# run-relation NAME (owner 2026-10-17: F7 on the GUI's F3 is "Uruchom teraz", the
+# same key and meaning as on F2 and F6). One run, now, of every source dataset's
+# FINEST copy job of this relationship: the very lines cron runs (read from the
+# installed crontab, not re-rendered), as the relationship's account, one after
+# another, each result said. Daily/weekly/monthly tiers are deliberately NOT run --
+# an off-schedule "monthly" snapshot would shift which point survives as monthly.
+# The admin's use: closing a relationship over the fast link before the collector
+# is moved, before maintenance, after a link outage. A paused relationship is
+# refused: its jobs would only print SKIPPED and this would read as done.
+cmd_run_relation() {
+    local name="${1:-}"
+    [ -n "$name" ] && [ "$#" -eq 1 ] || die "usage: run-relation NAME"
+    client_name_valid "$name" || die "invalid relationship name '$name'"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "no relationship '$name' on this host"
+    record_load client "$cpath"
+    if client_paused "$name"; then
+        die "run-relation: '$name' is paused -- resume it first (resume-client $name). Nothing was run."
+    fi
+    local tab; tab=$(crontab_for_target) || die "run-relation: cannot read the crontab of '$(cron_target_user)'"
+    local line label key hour
+    local -A fine=() first=()
+    local -a order=()
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        label=$(printf '%s' "$line" | sed -nE 's/.*zfs-job\.sh "([^"]+)".*/\1/p')
+        # The job label ends in "(<notify id>)", one per dataset of the relationship.
+        key=$(printf '%s' "$label" | sed -nE 's/.*\(([^)]+)\)$/\1/p')
+        [ -n "$key" ] || key="${label:-$line}"
+        if [ -z "${first[$key]+x}" ]; then first[$key]="$line"; order+=("$key"); fi
+        hour=$(printf '%s' "$line" | awk '{print $2}')
+        # hour '*' = runs every hour = the finest tier of this dataset
+        if [ "$hour" = "*" ] && [ -z "${fine[$key]+x}" ]; then fine[$key]="$line"; fi
+    done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+                 | grep -F -- " -L $name " | grep -E 'snap(get|send)\.sh')
+    [ "${#order[@]}" -gt 0 ] \
+        || die "run-relation: no copy job of '$name' in the installed cron of '$(cron_target_user)' -- nothing to run"
+    local cmd logf rc done_n=0 fail_n=0
+    for key in "${order[@]}"; do
+        line="${fine[$key]:-${first[$key]}}"
+        cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
+        label=$(printf '%s' "$cmd" | sed -nE 's/.*zfs-job\.sh "([^"]+)".*/\1/p')
+        logf=$(printf '%s' "$cmd" | sed -nE 's/.* --log=([^ ]+).*/\1/p')
+        log "run-relation: $label"
+        if [ "$(cron_target_user)" = root ]; then
+            bash -c "$cmd" </dev/null
+        else
+            su -s /bin/bash "$(cron_target_user)" -c "$cmd" </dev/null
+        fi
+        rc=""
+        if [ -n "$label" ] && [ -n "$logf" ]; then
+            rc=$(grep -aF -- "ZFS-JOB END $label rc=" "$logf" 2>/dev/null | tail -1 | sed -E 's/.* rc=//')
+        fi
+        if [ "$rc" = 0 ]; then
+            done_n=$((done_n + 1)); log "run-relation:   done"
+        else
+            fail_n=$((fail_n + 1)); warn "run-relation:   did NOT finish (rc=${rc:-unknown}) -- see ${logf:-the job log}"
+        fi
+    done
+    log "run-relation '$name': $done_n done, $fail_n not done"
+    [ "$fail_n" -eq 0 ]
+}
+
 add_source_first_copy() {
     local name="$1" ds="$2" verb="${3:-add-source}" tab line cmd n=0
     tab=$(crontab_for_target 2>/dev/null) || tab=""
@@ -19715,6 +19783,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         purge-replica-copy) shift; cmd_purge_replica_copy "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
+        run-relation)     shift; cmd_run_relation "$@" ;;
         install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
         prepare-media)    shift; cmd_prepare_media "$@" ;;
         remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;
