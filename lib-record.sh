@@ -252,7 +252,7 @@ record_get() {   # <file> <FIELD> [default]  -> stdout. Last assignment wins; de
 # also what `.` left behind when it stopped at a parse error; a caller that
 # treats "cannot read" as "must refuse" (coverage_conflicts) checks the status.
 record_load() {   # <set> <file> -> assigns every field; clears what the last load into <set> assigned
-    local _rl_set="$1" _rl_file="$2" _rl_line _rl_key _rl_f
+    local _rl_set="$1" _rl_file="$2" _rl_line _rl_key _rl_f _rl_mode="" _rl_target=""
     local _rl_seen="RECORD_FIELDS_$1"
     [ -r "$_rl_file" ] || return 1
     for _rl_f in ${!_rl_seen-}; do printf -v "$_rl_f" ''; done
@@ -270,9 +270,30 @@ record_load() {   # <set> <file> -> assigns every field; clears what the last lo
             || die "$_rl_file: '$_rl_key' is not a field name this package writes in a $_rl_set record -- refusing to read the file as a record"
         record_unquote "${_rl_line#*=}" || return 2
         printf -v "$_rl_key" '%s' "$REPLY"
+        case "$_rl_key" in RUX_MODE) _rl_mode="$REPLY" ;; CLIENT_TARGET) _rl_target="$REPLY" ;; esac
         case " ${!_rl_seen-} " in
             *" $_rl_key "*) ;;
             *) printf -v "$_rl_seen" '%s' "${!_rl_seen-}${!_rl_seen:+ }$_rl_key" ;;
         esac
     done < "$_rl_file"
+    # THE RELATIONSHIP'S KIND IS VALIDATED HERE, before any reader dispatches on
+    # it (REV-20261017-152 F1.2). An unknown value used to load cleanly and fall
+    # through to the copy meaning -- `snaponyl` with an empty target read as a
+    # sync relationship. Absent stays the legacy meaning; anything present must
+    # be a kind this package writes, and snaponly never names a target.
+    if [ "$_rl_set" = client ]; then
+        record_client_mode_ok "$_rl_mode" "$_rl_target" \
+            || die "$_rl_file: RUX_MODE='$_rl_mode' with CLIENT_TARGET='$_rl_target' is not a relationship kind this package writes (backup, sync, local, snaponly; snaponly has no target) -- refusing to act on it"
+    fi
+}
+
+# record_client_mode_ok <RUX_MODE> <CLIENT_TARGET> -> 0 when the pair is legal.
+# Shared by record_load and by readers that use record_get on OTHER records
+# (snaponly_assert_source_free), so both judge a record the same way.
+record_client_mode_ok() {
+    case "$1" in
+        ''|backup|sync|local) return 0 ;;
+        snaponly) [ -z "$2" ] ;;
+        *) return 1 ;;
+    esac
 }

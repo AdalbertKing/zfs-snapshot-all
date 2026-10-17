@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0d46a324f6a561bf -->
+<!-- status-covers-digest: 253b106be2f2930c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,14 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; #592 na `main`, nie zgłoszona recenzentowi).**
+- **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; na `main` przez #592 i #596; zgłoszona, przegląd rundy 1 poprawiony).**
+  Przegląd rundy 1 (CHANGES REQUIRED, F1.1/F1.2/F2.1) poprawiony (`fix/rev152-r1-rereview`): ponowna aktywacja
+  zachowuje zainstalowane sekcje co do bajtu (retencja, harmonogramy, monitory) i nie czyta już profilu -- profil
+  działa tylko przy pierwszej aktywacji, zmiana adresu źródła jest odrzucana; rodzaj relacji (`RUX_MODE`) jest
+  sprawdzany przy wczytaniu rekordu (nieznany albo `snaponly` z celem = zatrzymanie, zanim cokolwiek się wykona);
+  kontrola zakresu wczytuje inne rekordy w całości i odmawia przy uszkodzonym, bez STATE, bez hosta albo bez listy
+  datasetów. `--section snaponly` 23/0, na `677ea72b` 16/24; na żywo pve9 -> pve10: retencja `-H240` i usunięty profil
+  -- plan „bez zmian”, aktywacja rc 0, config co do bajtu.
   Dwie uwagi recenzenta (przegląd rundy 2) zrobione (`feat/rev152-r1-collectors`): (1) drugi kolektor na tym samym
   źródle nie jest już odrzucany dla `snaponly` -- inne konto z `destroy` jest NAZWANE w ostrzeżeniu (rodzina
   `<etykieta>_<prefiks>` jest rozłączna z każdą rodziną z prefiksem), nieczytelne `zfs allow` nadal odmawia, relacje
