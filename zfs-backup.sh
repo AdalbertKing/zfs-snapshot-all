@@ -9619,6 +9619,7 @@ cmd_add_client() {
         pair_args+=(--peer-datasets="$datasets")
     fi
     [ -n "$target" ] && pair_args+=(--target="$target")
+    [ "$snaponly" -eq 1 ] && pair_args+=(--no-target)
     [ "$lan_port" != "22" ] && pair_args+=(--port="$lan_port")
     # The cap travels to the PAIRING, because the link does. Passed through
     # rather than stored here, so there is one home for it and not two that can

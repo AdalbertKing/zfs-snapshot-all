@@ -380,6 +380,7 @@ PEER_DATASETS=""
 # printed next step being "run --commit-scope on the source".
 PEER_REQUESTED=""
 PEER_TARGET=""
+PEER_NO_TARGET=0
 # Empty means "no cap on this link", which is also what every pairing made
 # before this field existed says by saying nothing.
 PEER_BANDWIDTH=""
@@ -511,6 +512,12 @@ while [ "$#" -gt 0 ]; do
         --mode)         PEER_MODE="${2:-}"; shift 2 ;;
         --target=*)     PEER_TARGET="${1#*=}"; shift ;;
         --target)       PEER_TARGET="${2:-}"; shift 2 ;;
+        # A pull pairing that copies NOTHING (zfs-backup.sh add-client
+        # --snaponly, REV-20261017-152): the collector only takes and prunes
+        # snapshots on the peer. Explicit, so a forgotten --target is still the
+        # refusal it always was; the manifest then records an empty target, the
+        # shape sync pairings already have.
+        --no-target)    PEER_NO_TARGET=1; shift ;;
         # The LINK cap, and it belongs to the PAIR of hosts rather than to any
         # one relationship: two relationships to the same peer over the same
         # wire have the same wire. Kept on the relationship record it had to be
@@ -585,6 +592,8 @@ Peer pairing -- two hosts with NO prior trust (see PAIRING-DESIGN.md):
                             choose and grant what it actually has.
     --target=DATASET        where snapshots land -- local dataset for pull,
                             remote dataset (on the peer) for push
+    --no-target             pull with --peer-datasets that copies nothing
+                            (snapshots on the peer only); refuses --target
     --as=root|delegated     delegated (default): isolated per-peer account on
                             the peer. root: parity with today's clustered
                             hosts -- no isolation, use only when the hosts
@@ -5843,7 +5852,12 @@ do_pair() {
                 :
             else
                 [ -n "$PEER_DATASETS" ] || die "--pair requires --peer-datasets=\"...\" (or --mode=backup|sync for a high-level relationship that defers dataset selection to the peer)"
-                [ -n "$PEER_TARGET" ] || die "--pair requires --target=DATASET"
+                if [ "$PEER_NO_TARGET" -eq 1 ]; then
+                    [ -z "$PEER_TARGET" ] || die "--no-target and --target=$PEER_TARGET contradict each other"
+                    [ "$PEER_ROLE" = pull ] || die "--no-target applies only to --role=pull"
+                else
+                    [ -n "$PEER_TARGET" ] || die "--pair requires --target=DATASET"
+                fi
             fi
         fi
     fi
