@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e45e58ab25fc4b73 -->
+<!-- status-covers-digest: 5ec4ddfbc5e57478 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -33,6 +33,25 @@
   Na żywo (pve10, gałąź z osobnej kopii, 17:32 UTC): `main` -- enable FATAL rc 1, status NIEZNANA/UNKNOWN; gałąź --
   status DISABLED, ponowione disable rc 0, enable rc 0, peer ACTIVE, pauza lokalna zdjęta, crontab bez zmian (39 linii).
   Relacja pve9b zostawiona ACTIVE.
+
+- **GUI: „Adres hosta” po przeniesieniu kolektora (2026-10-17; `feat/gui-set-endpoint`).**
+  Właściciel: kolektor po pierwszej pełnej kopii jest wynoszony za VPN i widzi źródło pod innym IP, a GUI nie
+  miało jak tego zmienić (zostawały komendy wsadowe). Teraz `e` na relacji -> „Adres hosta -- po przeniesieniu
+  kolektora”: jedno pole (zapisany adres), jedno WYKONAJ, potem `activate NAZWA --host=NOWY --skip-final-catchup
+  --yes` (zapis adresu, `verify-endpoint`: ten sam host i wspólna migawka, przestawienie crona). Domknięcie kopii
+  starym adresem to wcześniejszy krok admina (F3, F7 Uruchom teraz). Zmiany w `zfs-backup.sh`: `activate
+  --skip-final-catchup`; `set-endpoint` przyjmuje stan `endpoint_change_pending` (poprawka literówki); **jawny
+  `--host`, który nie odpowiedział, zatrzymuje `activate` przed instalacją** -- zmierzone na pve10: żądany
+  10.99.0.10 nie odpowiadał, `verify-endpoint` awansował stary 192.168.28.98, a `activate` zgłaszał sukces.
+  Po takim zatrzymaniu (stan `endpoint_verified` / `endpoint_change_pending`) okno otwiera się prosto na polu
+  adresu. Na żywo (pve10 -> pve9b): przełączenie na drugi adres tego samego hosta -- cron przez nowy adres, cel
+  kopii bez zmian (`hdd/backups/192.168.28.98`, bez nowego seeda); powrót -- crontab identyczny jak przed testem.
+  **F3 jednolicie z F2/F6 (właściciel: „Jednolicie ma być”):** F7 = Uruchom teraz -- nowy czasownik `run-relation
+  NAZWA`: z zainstalowanego crona najdrobniejsze zadanie kopii każdego datasetu relacji (godzinowe przed dziennym),
+  jako konto relacji, po kolei, werdykt z END rc w logu zadania; dataset z zadaniem godzinowym nie dostaje
+  biegu dziennego ani wyższego (dataset tylko z dziennym -- jego dzienne);
+  wstrzymana relacja -- odmowa. F8 = Pauza/Wznów, F9 = Eksport/Import (okienko wyboru; skrót „Plik” przy 80
+  kolumnach). Na żywo pve10 -> pve9b: 4 datasety, 4 „done”, rc 0; na pauzie odmowa, nic nie uruchomione.
 
 - **REV-20261017-151 (P0): `snapsend -H` nie omija już odmowy przy braku wspólnej bazy (2026-10-17; `fix/rev151-push-H-no-common-base`).**
   Odmowa P-0 (istniejący cel z migawkami, brak wspólnej migawki po GUID i brak zakładki) miała w pushu wyjątek dla

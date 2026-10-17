@@ -306,6 +306,9 @@ simple_flow_activate() {   # <client-file> <requested-host?>
                     for arg in "$@"; do case "$arg" in --host=*) new="${arg#*=}" ;; esac; done
                     printf 'ACTIVE_ENDPOINT=%s\nSTATE=seed_complete\n' "$new" >> "$record" ;;
                 verify-endpoint)
+                    # SF_FALLBACK: the real verify-endpoint's failover -- the current
+                    # address did not answer, a previously known one did and is promoted.
+                    [ -n "${SF_FALLBACK:-}" ] && { ACTIVE_ENDPOINT="$SF_FALLBACK"; printf 'ACTIVE_ENDPOINT=%s\n' "$SF_FALLBACK" >> "$record"; }
                     printf 'STATE=endpoint_verified\nENDPOINT_VERIFIED_FOR=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
                 activate-client)
                     printf 'STATE=active\nINSTALLED_ENDPOINT=%s\n' "$ACTIVE_ENDPOINT" >> "$record" ;;
@@ -313,7 +316,7 @@ simple_flow_activate() {   # <client-file> <requested-host?>
             esac
         }
         if [ -n "$host" ]; then
-            cmd_activate pve2 --host="$host" --yes
+            cmd_activate pve2 --host="$host" --yes ${SF_EXTRA:-}
         else
             cmd_activate pve2 --yes
         fi
@@ -361,6 +364,47 @@ if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
     ok "simple flow: same-endpoint activate skips catch-up/switch and completes"
 else
     bad "simple flow: same-endpoint activate skips catch-up/switch and completes" "rc=$rc got=[$got] out=$out"
+fi
+
+# GUI "Adres hosta" (owner 2026-10-17): the collector is ALREADY moved, the old
+# address is gone. activate --skip-final-catchup must not try a catch-up over it:
+# switch (passing the flag on), verify, install -- from an ACTIVE relationship.
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+INSTALLED_ENDPOINT=192.168.28.8:22
+STATE=active
+EOF
+: > "$SF/activate-moved.log"
+out="$(SF_EXTRA=--skip-final-catchup simple_flow_activate "$SF/clients/pve2.conf" 10.99.0.8 "$SF/activate-moved.log" 2>&1)"; rc=$?
+got="$(cat "$SF/activate-moved.log")"
+want=$'set-endpoint pve2 --host=10.99.0.8:22 --skip-final-catchup\nverify-endpoint pve2\nactivate-client pve2 --yes'
+if [ "$rc" -eq 0 ] && [ "$got" = "$want" ] && grep -q '^INSTALLED_ENDPOINT=10.99.0.8:22$' "$SF/clients/pve2.conf"; then
+    ok "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up"
+else
+    bad "simple flow: activate --skip-final-catchup (collector already moved) switches, verifies and installs with no catch-up" "rc=$rc got=[$got] out=$out"
+fi
+
+# Measured on pve10 2026-10-17: the requested address did not answer, verify-endpoint
+# promoted the OLD known one, and activate installed it and reported success -- the
+# operator asked for one address and silently got another. An explicit --host now
+# stops before installing.
+cat > "$SF/clients/pve2.conf" <<'EOF'
+CLIENT_NAME=pve2
+PEER_HOST=192.168.28.8
+ACTIVE_ENDPOINT=192.168.28.8:22
+INSTALLED_ENDPOINT=192.168.28.8:22
+STATE=active
+EOF
+: > "$SF/activate-fallback.log"
+out="$(SF_EXTRA=--skip-final-catchup SF_FALLBACK=192.168.28.8:22 simple_flow_activate "$SF/clients/pve2.conf" 10.99.0.8 "$SF/activate-fallback.log" 2>&1)"; rc=$?
+got="$(cat "$SF/activate-fallback.log")"
+if [ "$rc" -ne 0 ] && ! grep -q '^activate-client' "$SF/activate-fallback.log" \
+   && case "$out" in *"'10.99.0.8:22' did not answer"*"Nothing installed"*) true ;; *) false ;; esac; then
+    ok "simple flow: activate --host= whose address did not answer stops (verify fell back to the old one) -- nothing installed"
+else
+    bad "simple flow: activate --host= whose address did not answer stops (verify fell back to the old one) -- nothing installed" "rc=$rc got=[$got] out=$out"
 fi
 
 if activation_is_new_relationship endpoint_verified "" \
@@ -1218,6 +1262,20 @@ if case "$known7" in *"10.0.0.9:22"*"10.9.9.5:1194"*) true ;; *"10.9.9.5:1194"*"
     ok "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too"
 else
     bad "set-endpoint migrating a legacy record folds its dormant slot into ENDPOINT_KNOWN too" "$known7"
+fi
+
+# GUI "Adres hosta" (owner 2026-10-17): a mistyped address leaves the relationship
+# endpoint_change_pending (verify-endpoint refused). set-endpoint used to refuse that
+# state, so the typo could not be corrected. Now it re-points the pending switch and
+# the state STAYS pending -- the installed cron is still on its old endpoint.
+mk_client c8 'STATE=endpoint_change_pending' 'ACTIVE_ENDPOINT=10.0.0.99:22'
+out=$(gate_run c8 --host=10.0.0.50 --skip-final-catchup); r=$?
+st8=$(grep '^STATE=' "$GATE/c8.conf" | tail -1); ep8=$(grep '^ACTIVE_ENDPOINT=' "$GATE/c8.conf" | tail -1)
+if [ "$r" = 0 ] && [ "$st8" = STATE=endpoint_change_pending ] && [ "$ep8" = ACTIVE_ENDPOINT=10.0.0.50:22 ] \
+   && case "$out" in *"INSTALLED cron still runs over"*) true ;; *) false ;; esac; then
+    ok "set-endpoint corrects a pending (unverified) switch and keeps it pending"
+else
+    bad "set-endpoint corrects a pending (unverified) switch and keeps it pending" "rc=$r $st8 $ep8 out=$out"
 fi
 
 # --- catch-up freshness (REV-20260731-008 F1, simplified under U9) ----------
@@ -13261,6 +13319,50 @@ if [ "$(grep -c 'ZFS-JOB END' "$AS/job.log")" = 2 ] \
     ok "addsource: activate-client runs the first copy of each of the relationship's sources once, and only theirs"
 else
     bad "addsource: activation first copies" "$out" "$(cat "$AS/job.log")"
+fi
+# run-relation (owner 2026-10-17, F7 "Uruchom teraz" on F3): every dataset of the
+# relationship once, by its FINEST installed job (hour '*'); a dataset with only a
+# daily job runs that one; never a prune line, never another relationship's job,
+# never the daily of a dataset that has an hourly. Paused = refused, nothing run.
+rr_fn=$(sed -n '/^cmd_run_relation() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$rr_fn" ] || bad "addsource: could not lift cmd_run_relation -- anchor changed"
+cat > "$AS/rrtab" <<TAB
+# BEGIN zfs-backup-managed
+11 1 * * * $AS/zfs-job.sh "h daily backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
+31 * * * * $AS/zfs-job.sh "h hourly backup (r-a)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L rel "u@10.0.0.1:hdd/lab/a" "b"
+11 1 * * * $AS/zfs-job.sh "h daily backup (r-b)" --log=$AS/job.log -- /x/snapget.sh -m "d_" -L rel "u@10.0.0.1:hdd/lab/b" "b"
+45 * * * * $AS/zfs-job.sh "h prune (r-a)" --log=$AS/job.log -- /x/delsnaps.sh -L rel "hdd/lab/a" "h_"
+31 * * * * $AS/zfs-job.sh "h hourly backup (o-c)" --log=$AS/job.log -- /x/snapget.sh -m "h_" -L other "u@10.0.0.2:hdd/lab/c" "b"
+# END zfs-backup-managed
+TAB
+rr_run() {   # <engine rc> <paused 0/1> -> messages; rc in $rr_rc
+    : > "$AS/job.log"
+    out=$(ZJ_RC="$1" RR_PAUSED="$2" bash -c "crontab_for_target() { cat '$AS/rrtab'; }; cron_target_user() { echo root; }
+client_name_valid() { :; }; client_conf_path() { echo '$AS/rrtab'; }; record_load() { :; }
+client_paused() { [ \"\$RR_PAUSED\" = 1 ]; }
+log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; die() { echo \"DIE \$*\"; exit 1; }
+$rr_fn
+cmd_run_relation rel" 2>&1); rr_rc=$?
+    printf '%s' "$out"
+}
+rr_run 0 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+ran=$(sed -nE 's/.* ZFS-JOB END (.*) rc=.*/\1/p' "$AS/job.log" | tr '\n' '|')
+if [ "$ran" = "h hourly backup (r-a)|h daily backup (r-b)|" ] && printf '%s' "$out" | grep -q "LOG run-relation 'rel': 2 done, 0 not done"; then
+    ok "run-relation: each dataset once by its finest job (hourly over daily; a daily-only dataset runs its daily); no prune, no other relationship"
+else
+    bad "run-relation: finest job per dataset" "ran=[$ran]" "$out"
+fi
+rr_run 1 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   did NOT finish (rc=1)" && printf '%s' "$out" | grep -q "0 done, 2 not done"; then
+    ok "run-relation: a job whose END rc is not 0 is reported as not done, and the verb fails"
+else
+    bad "run-relation: failure verdict" "rc=$rc" "$out"
+fi
+rr_run 0 1 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DIE run-relation: 'rel' is paused" && [ ! -s "$AS/job.log" ]; then
+    ok "run-relation: a paused relationship is refused, nothing run"
+else
+    bad "run-relation: paused" "rc=$rc" "$out" "$(cat "$AS/job.log")"
 fi
 as_run() {   # <scope text> <target> -> stdout new file, stderr verdict; rc
     printf '%b' "$1" > "$AS/in"
