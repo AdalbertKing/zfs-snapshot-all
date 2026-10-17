@@ -54,6 +54,49 @@ produkcja: `snapsend -m automated_hourly_ …` co 15 min plus prune. Kopię na B
 Dalsze kroki (relacja „kopia: nigdzie”, `local-backup --passive`, odmowa prune na replice) wymagają kodu. Po etapie 2
 wrócę z pomiarami i z decyzją, co piszemy.
 
+## Etap 4 -- REV-20261017-152 F5: relacja `snaponly` przy prawdziwej migracji (plan do zgody, 2026-10-17)
+
+Czego chce recenzent (F5): prawdziwa migracja z zamierzonymi harmonogramami monitora i `pvesr`, obserwacja alarmu i
+zmierzone okno czasowe -- łącznie z przypadkiem, w którym monitor trafia na świeżą migawkę na starym węźle, zanim
+`pvesr` ją skasuje (bez obietnicy, że każdy układ czasów wykryje migrację). Alarmy przy braku migawek i przy awarii
+bramki zrobione w labie pve9 -> pve10 (dziennik niżej); tu zostaje sama migracja.
+
+Gość jak w etapach 1–3: tylko **CT 990** `zfslab-pvesr` (bez sieci, replikacja 990-0 pve1->pve2 co 15 min).
+
+11. **[ODCZYT]** wersja pakietu na pve1 i pve2 (oba checkouty: root i `zfsbackup`) = obecny `main`; stan 990-0;
+    crontab konta `zfsbackup` na pve2 -- kopia `/root/zfsbackup-crontab.before-f5-20261017`.
+12. **[ZMIANA] pve2 <-> pve1:** relacja `snaponly` **na kolektorze pve2**, źródło `pve1:hdd/vm-disks/subvol-990-disk-0`:
+    `zfs-backup.sh --source=192.168.28.9:hdd/vm-disks/subvol-990-disk-0 --mode=snaponly --name=lab990
+    --local-user=zfsbackup --profile=d7h24 --install`. Na pve1 powstaje konto `zfsbackup-pve2` z bramką i delegacją
+    **tylko na ten dataset** (zgoda zakresu na pve1). Prawdziwe konto `zfsbackup` na pve1 i jego zadania -- nietknięte.
+    To pierwsze parowanie pakietu między węzłami produkcji (był w planie jako krok 10).
+13. **[ODCZYT] przed aktywacją:** `activate-client lab990 --plan` -- pokazuję ci pełny diff crontaba pve2 (konto
+    `zfsbackup`). Oczekiwane: dochodzi 6 linii `lab990` (2 migawki, 2 przycinania na pve1, 2 monitory), reszta bez
+    zmian. Każda inna różnica = stop, wracam z nią.
+14. **[ZMIANA]** `activate-client lab990 --yes` (jeśli diff z 13 jest czysty). Minuty migawek poza wielokrotnościami 5,
+    `pvesr` 990-0 chodzi `*/15`.
+15. **[ODCZYT]** 2–3 cykle: migawki `pve2_automated_hourly_*` na pve1, monitory OK, `pvesr` 990-0 FailCount 0,
+    linie `# ZSA-LAB-PVESR` dalej działają (osobna rodzina `zsalab_`).
+16. **[ZMIANA] migracja:** `pct migrate 990 pve2` (zatrzymany CT). Replikacja odwraca się sama (zmierzone 10-16).
+    Mierzę co 5 min przez **~3 h** (próg ostrzeżenia szczebla godzinowego 90 min, krytyczny 150 min, monitor co
+    15 min):
+    - kiedy nasza migawka na pve1 (teraz celu replikacji) powstaje i kiedy `recv -F` ją kasuje;
+    - co widzi monitor w każdym ticku (świeża migawka przed skasowaniem = OK -- przypadek z F5);
+    - kiedy pierwszy WARNING i CRITICAL trafiają do kolejki alarmów pve2 i do maila.
+    **Uwaga: to jest prawdziwy alarm z pve2 do ciebie** (tryb alarmów pve2 sprawdzę w kroku 11; przy `daily` przyjdzie
+    w podsumowaniu, przy `immediate` od razu).
+17. **[ZMIANA] powrót:** `pct migrate 990 pve1`; replikacja wraca; po następnej migawce monitor znów OK.
+18. **[ZMIANA] sprzątanie etapu 4:** `delete-relation lab990` na pve2 (crontab pve2 porównany z kopią z kroku 11 co
+    do linii), `deploy.sh --leave=pve2` na pve1 (konto `zfsbackup-pve2` i jego delegacja znikają). Migawki
+    `pve2_*` na `subvol-990` usuwam ręcznie (to dataset testowy).
+
+Ryzyka etapu 4:
+- **crontab produkcyjnego konta `zfsbackup` na pve2:** aktywacja instaluje cały zarządzany blok z configu pve2.
+  Dlatego krok 13 (diff) przed 14; po 18 porównanie z kopią.
+- **obciążenie i `pvesr`:** migawka CT 990 to kilobajty; minuty poza `*/15`. Zderzenie z 18:30 (10-16) było przy
+  tych samych minutach -- tu ich nie ma.
+- **alarm do ciebie** w kroku 16 -- zamierzony, to jest dowód.
+
 ## Sprzątanie (na koniec albo przy dowolnym problemie)
 
 - usunąć linie `# ZSA-LAB-PVESR` z crona pve1 i pve2;
@@ -108,3 +151,27 @@ wrócę z pomiarami i z decyzją, co piszemy.
   z `*/15` na `2,17,32,47`; tylko ta jedna linia (diff 1 linia, crontab 28 linii przed i po). Kopia przed zmianą:
   `/root/zfsbackup-crontab.before-minute-shift-20261016` na pve1. Pierwszy bieg 19:32 -- migawka w 1 s; `pvesr`
   990-0 o 19:30 OK, FailCount 0. Linie na **pve2 nie ruszane** (używane tylko, gdy gość jest na pve2).
+- 2026-10-17 -- **etap 4 (F5), zgoda właściciela na kroki 11–18.** Pakiet na pve1 i pve2: `main` `963d7baf`
+  (godzinny self-update o 20:15 CEST); kopie crontabów root i `zfsbackup` na obu: `/root/*-crontab.before-f5-20261017`.
+  - 20:13 -- `add-client lab990 --snaponly` na pve2 (osobne czasowniki, nie fasada z `--yes`, żeby diff był przed
+    aktywacją); `--join` na pve1 ręcznie, zgoda zakresu: 1 dataset `hdd/vm-disks/subvol-990-disk-0`; konto
+    `zfsbackup-pve2` z prawami tylko na nim.
+  - 20:16 -- `activate-client --plan`: dochodzi dokładnie 6 linii (migawki :28 i 1:38, przycinanie :08 i 1:18, dwa
+    monitory `*/15`), nic nie znika; `--yes` rc 0. Pierwsza migawka dzienna awaryjna (rc 8: konto nie ma prawa
+    zamrażać gości) -- poprawny alarm w kolejce pve2.
+  - 20:28, 20:30, 20:45 -- migawka `pve2_automated_hourly_…` na pve1, monitor OK, `pvesr` 990-0 FailCount 0, linie
+    `# ZSA-LAB-PVESR` (`zsalab_`) bez zmian.
+  - 20:47 -- `pct migrate 990 pve2` (5 s, rc 0); replikacja odwróciła się sama: pve2 -> pve1.
+  - 21:28 i 22:28 -- nasza migawka na pve1 (teraz CEL replikacji): zadanie rc 0, „created”; o 21:30 / 22:30
+    synchronizacja `recv -F` ją kasuje. Najnowsza widoczna zostaje `…20-28-01` (jest na obu węzłach, więc przetrwała).
+  - monitor co 15 min: OK do 21:53 (85 min), **WARNING od 21:58 (90 min)** -- do kolejki alarmów pve2 o 22:00,
+    22:15, …; **CRITICAL o 23:00** (`hourly stale`, 150 min). Alarmy przyjdą w dziennym podsumowaniu pve2 (tryb
+    `daily`) na adres właściciela.
+  - przypadek z F5 (monitor trafia na świeżą migawkę na starym węźle, zanim `pvesr` ją skasuje): przy tym
+    rozkładzie NIE wystąpił -- migawka żyła ~2 min (:28 -> :30), tick monitora o :30 zbiegał się z synchronizacją.
+    Przy `pvesr` co 3 h (produkcja) migawka może przetrwać na starym węźle do 3 h, a monitor mówi wtedy OK;
+    opóźnienie wykrycia = do jednego cyklu `pvesr` + próg ostrzeżenia. Nic tego nie wykrywa szybciej (bez
+    wykrywania położenia gościa -- decyzja właściciela).
+  - 23:01 -- `pct migrate 990 pve1` (6 s), replikacja wróciła pve1 -> pve2, FailCount 0.
+  - sprzątanie: `delete-relation lab990` (rc 0, razem ze stroną źródła), konto `zfsbackup-pve2` usunięte, migawki
+    `pve2_*` na `subvol-990` usunięte; crontaby root i `zfsbackup` na pve1 i pve2 identyczne z kopiami.
