@@ -53,7 +53,12 @@ done
 case "$mode" in
     list)
         if [ "$recurse" = 1 ]; then
-            grep -E "^${target}(/|$)" "$Z/datasets" 2>/dev/null
+            # F4.2 shapes of an rc-0 walk that is not complete: EMPTY prints
+            # nothing, NOROOT drops the root's own line. WALK_JUNK appends a line.
+            if [ -n "${ZSTUB_WALK_EMPTY:-}" ]; then :
+            elif [ -n "${ZSTUB_WALK_NOROOT:-}" ]; then grep -E "^${target}/" "$Z/datasets" 2>/dev/null
+            else grep -E "^${target}(/|$)" "$Z/datasets" 2>/dev/null; fi
+            [ -n "${ZSTUB_WALK_JUNK:-}" ] && echo "$ZSTUB_WALK_JUNK"
             exit "${ZSTUB_WALK_RC:-0}"
         else
             grep -qxF "$target" "$Z/datasets" 2>/dev/null || exit 1
@@ -303,6 +308,51 @@ fi
 reset_world
 out="$(SSH_RC=127 run root@srcA:tank/vm zsalab_ 2h 4h)"
 case "$out" in *"'zfs' was not found on srcA"*) ok "F10 remote exit 127 says zfs was not found, not 'does not exist'" ;; *) bad "F10 remote exit 127" "$out" ;; esac
+
+# F11 REV-20261017-152 F4.1: a name READ BACK from the far side is data. A
+# snapshot or a descendant that passes the old prefix check but carries a quote,
+# a command separator or a command substitution must be UNKNOWN and must never
+# reach a follow-up read: the ssh stub runs the command text in a real shell, so
+# an injection leaves a marker. The valid controls (a snapshot name with a space,
+# an ordinary child) still read normally.
+MARK="$TMPD/injected"
+for inj in "zsalab_'; touch $MARK; #" 'zsalab_$(touch '"$MARK"')' "zsalab_x;touch $MARK" "zsalab_\`touch $MARK\`"; do
+    for where in "root@srcA:tank/vm" "tank/vm"; do
+        reset_world; rm -f "$MARK"; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+        rc=$(ZSTUB_JUNK="tank/vm@$inj" rc_of -v "$where" zsalab_ 2h 4h)
+        if [ "$rc" = 3 ] && [ ! -e "$MARK" ]; then ok "F11 snapshot '$inj' ($where) -> UNKNOWN, nothing executed"
+        else bad "F11 snapshot '$inj' ($where) -> UNKNOWN, nothing executed" "rc=$rc marker=$([ -e "$MARK" ] && echo yes || echo no)"; fi
+    done
+    reset_world; rm -f "$MARK"; add_ds tank/p 0; add_snap tank/p "zsalab_1" 0
+    out="$(ZSTUB_WALK_JUNK="tank/p/$inj" run -R root@srcA:tank/p zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_JUNK="tank/p/$inj" rc_of -R root@srcA:tank/p zsalab_ 2h 4h)
+    if [ "$rc" = 3 ] && [ ! -e "$MARK" ] && printf '%s' "$out" | grep -q 'not a well-formed dataset under it'; then ok "F11 descendant 'tank/p/$inj' -> UNKNOWN, not checked, nothing executed"
+    else bad "F11 descendant 'tank/p/$inj' -> UNKNOWN, nothing executed" "rc=$rc marker=$([ -e "$MARK" ] && echo yes || echo no) $out"; fi
+done
+reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_with space" 0
+check "F11 control: a snapshot name with a space (legal in OpenZFS) reads normally -> OK" "0" "$(rc_of root@srcA:tank/vm zsalab_ 2h 4h)"
+reset_world; add_ds tank/p 0; add_ds tank/p/a 0; add_snap tank/p/a "zsalab_1" $((9 * H))
+check "F11 control: an ordinary stale child is still read -> CRITICAL" "2" "$(rc_of -R root@srcA:tank/p zsalab_ 2h 4h)"
+
+# F12 REV-20261017-152 F4.2: a COMPLETE -R walk names its root. An rc-0 answer
+# that is empty or lacks the root is UNKNOWN -- it used to check no child and
+# exit 0. The valid shapes stay as they were: a root-only container is OK, a
+# stale child under a valid walk is CRITICAL, and CRITICAL outranks UNKNOWN.
+for where in "root@srcA:tank/root" "tank/root"; do
+    reset_world; add_ds tank/root 0; add_ds tank/root/a 0; add_snap tank/root/a "zsalab_1" $((9 * H))
+    out="$(ZSTUB_WALK_EMPTY=1 run -R -v "$where" zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_EMPTY=1 rc_of -R "$where" zsalab_ 2h 4h)
+    if [ "$rc" = 3 ] && printf '%s' "$out" | grep -q 'does not contain the root itself'; then ok "F12 empty rc-0 walk ($where) -> UNKNOWN"
+    else bad "F12 empty rc-0 walk ($where) -> UNKNOWN" "rc=$rc $out"; fi
+    rc=$(ZSTUB_WALK_NOROOT=1 rc_of -R "$where" zsalab_ 2h 4h)
+    check "F12 walk without its root ($where) -> UNKNOWN, even though the child it lists is stale" "3" "$rc"
+    reset_world; add_ds tank/root 0
+    check "F12 control: valid root-only container walk ($where) -> OK" "0" "$(rc_of -R "$where" zsalab_ 2h 4h)"
+    reset_world; add_ds tank/root 0; add_ds tank/root/a 0; add_snap tank/root/a "zsalab_1" $((9 * H))
+    check "F12 control: valid walk, stale child ($where) -> CRITICAL" "2" "$(rc_of -R "$where" zsalab_ 2h 4h)"
+done
+reset_world; add_ds tank/root 0; add_ds tank/crit 0; add_snap tank/crit "zsalab_1" $((9 * H))
+out="$(ZSTUB_WALK_EMPTY=1 run -R root@srcA:tank/root,root@srcA:tank/crit zsalab_ 2h 4h)"; rc=$(ZSTUB_WALK_EMPTY=1 rc_of -R root@srcA:tank/root,root@srcA:tank/crit zsalab_ 2h 4h)
+if [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'UNKNOWN dataset=root@srcA:tank/root'; then ok "F12 mixed: CRITICAL wins the exit code and the UNKNOWN walk is still printed"
+else bad "F12 mixed CRITICAL/UNKNOWN" "rc=$rc $out"; fi
 
 # F9 read-only: across every remote case above the zfs trace holds list/get only.
 only_reads && ok "F9 the remote mode only ever ran 'zfs list' and 'zfs get'" || bad "F9 only list/get" "$(grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE")"

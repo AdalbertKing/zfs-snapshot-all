@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 666168319d7de967 -->
+<!-- status-covers-digest: 550b8fdd83ee7d47 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -21,7 +21,10 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
-- **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; `feat/rev152-snaponly-round1`, PR, nie zgłoszona recenzentowi -- runda 2 czeka na werdykt).**
+- **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; #592 na `main`, nie zgłoszona recenzentowi).**
+  Recenzent (przegląd rundy 2) zostawił do niej dwie uwagi, otwarte: `assert_no_foreign_source_pruner` odrzuca drugi
+  kolektor na tym samym źródle także przy rozłącznych rodzinach (sprzeczne z decyzją właściciela), a znacznik kolektora
+  to skrócona nazwa hosta -- dwa kolektory o tej samej krótkiej nazwie dostałyby tę samą rodzinę.
   `add-client --snaponly --host=… --datasets=…` (i fasada `--source=HOST:DS --mode=snaponly`) zapisuje w rekordzie
   `RUX_MODE=snaponly`; nic nie wnioskuje trybu z pustego celu. Cykl: `add-client` -> `--join` na źródle ->
   `verify-endpoint` (`snapget -n -s`, tylko odczyt) -> `activate-client` (`--plan` pokazuje podgląd); bez seeda.
@@ -70,8 +73,11 @@
   datasetu, a nieudany spacer `-R` nie sprawdzał dzieci; teraz UNKNOWN z powodem (ssh, bramka, timeout, brak zfs).
   `gen-cron.sh`: monitor na zdalnym `[prune:]` zamiast odmowy, z `ssh_flags` sekcji; tożsamość ssh i host w kluczu
   grupy. Na żywo pve10 -> pve9b (konto `zfsbackup`, klucz parowania, bramka): OK, `-R`, CRITICAL, brak datasetu,
-  zły klucz, wyłączona bramka -- każdy właściwy kod. Runda 1 (rekord `snaponly`, `add-client`, generator,
-  przycinanie źródła) i dowód produkcyjny F5 -- następne.
+  zły klucz, wyłączona bramka -- każdy właściwy kod. Przegląd: CHANGES REQUIRED (F4.1, F4.2), poprawione w v2.5
+  (`fix/rev152-f4-output-validation`): nazwa migawki albo potomka odczytana ze źródła musi być poprawną nazwą ZFS,
+  zanim pójdzie do kolejnego odczytu (wcześniej apostrof w niej wykonywał się w zdalnej powłoce), a `zread` dodatkowo
+  escapuje apostrof; spacer `-R` z rc 0 bez samego korzenia to UNKNOWN (wcześniej cichy OK). `test/monitor` 92/0, na
+  v2.4 82/10; na żywo pve10 -> pve9b bez zmian w wynikach. Dowód produkcyjny F5 -- później.
 
 - **GUI: „Adres hosta” po przeniesieniu kolektora (2026-10-17; `feat/gui-set-endpoint`).**
   Właściciel: kolektor po pierwszej pełnej kopii jest wynoszony za VPN i widzi źródło pod innym IP, a GUI nie

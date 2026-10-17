@@ -92,7 +92,7 @@ set -o pipefail
 #   ./check-snap-age.sh "rpool/data/vm-106-disk-0" "automated_hourly" 90m 3h
 #   ./check-snap-age.sh -R "hdd/backups/pve1" "automated_daily" 30h 48h
 
-VERSION='v2.4'
+VERSION='v2.5'
 
 EXIT_OK=0
 EXIT_WARNING=1
@@ -335,8 +335,12 @@ SAW_UNKNOWN=0 # tracked separately: UNKNOWN is not "worse CRITICAL", it is a
 # the other. stdout and the exit status propagate exactly as a local `zfs` call
 # would. `--` goes before the final argument (the dataset/snapshot name), as in
 # delsnaps.sh's run_zfs: a name starting with '-' is data, not a zfs flag.
-# Remote arguments are single-quoted for the far shell; the names were
-# validated above, so no quote can be inside them.
+# Remote arguments are single-quoted for the far shell, and an embedded quote
+# is closed, escaped and reopened (''') -- POSIX, so whatever shell the account
+# has reads it as one literal word. Every name that reaches here was validated
+# first (the CLI entries above, read-back names by name_from_zfs_ok), so for a
+# valid name the command text is exactly what it was; the escape is the second
+# wall, not the first (REV-20261017-152 F4.1).
 zread() {
     local ru="$1" rh="$2"; shift 2
     local -a a=("$@")
@@ -344,9 +348,9 @@ zread() {
     local tgt="${a[$last]}"
     unset 'a[last]'
     if [ -n "$rh" ]; then
-        local cmd="zfs" x
-        for x in "${a[@]}"; do cmd+=" '$x'"; done
-        cmd+=" -- '$tgt'"
+        local cmd="zfs" x q="'" e="'\\''"
+        for x in "${a[@]}"; do cmd+=" '${x//"$q"/"$e"}'"; done
+        cmd+=" -- '${tgt//"$q"/"$e"}'"
         # A WALL-CLOCK bound too: ServerAlive only notices a dead link -- sshd
         # keeps answering it while a zfs on the far side hangs (an import, a
         # suspended pool). timeout(1) turns that into exit 124 (UNKNOWN, "timed
@@ -378,6 +382,24 @@ read_failure() {   # <host> <rc>
     else
         printf 'zfs failed (exit %s)' "$2"
     fi
+}
+
+# A NAME READ BACK FROM zfs is data from the far side, not a name this script
+# chose: a snapshot `<ds>@<snap>` or a descendant `<ds>/...`, checked BEFORE it
+# is used in any follow-up read (F4.1). The prefix check alone let
+# `tank/vm@automated_'; printf x > f; #` through to the creation read, where the
+# far shell ran it. Allowed: what a ZFS name component carries -- letters,
+# digits, _ - : . and space (OpenZFS accepts space; it is quoted). A quote, a
+# shell metacharacter, a newline: UNKNOWN, never used.
+name_from_zfs_ok() {   # <kind: snapshot|child> <name> <root dataset>
+    local kind="$1" n="$2" root="$3" rest
+    case "$kind" in
+        snapshot) [[ "$n" == "$root@"* ]] || return 1; rest="${n#"$root@"}"
+                  [[ "$rest" =~ ^[A-Za-z0-9_.:\ -]+$ ]] ;;
+        child)    [[ "$n" == "$root/"* ]] || return 1; rest="${n#"$root/"}"
+                  [[ "$rest" =~ ^[A-Za-z0-9_.:\ -][A-Za-z0-9_.:/\ -]*$ ]] && [[ "$rest" != */ ]] && [[ "$rest" != *//* ]] ;;
+        *) return 1 ;;
+    esac
 }
 
 creation_epoch() {   # <user> <host> <dataset or snapshot>
@@ -427,8 +449,8 @@ check_one() {
     fi
     while IFS= read -r line; do
         [ -z "$line" ] && continue
-        if [[ "$line" != "$ds@"* ]]; then
-            echo "UNKNOWN dataset=$shown -- the snapshot list holds '$line', which is not a snapshot of this dataset; not trusted" >&2
+        if ! name_from_zfs_ok snapshot "$line" "$ds"; then
+            echo "UNKNOWN dataset=$shown -- the snapshot list holds '$line', which is not a well-formed snapshot of this dataset; not trusted, nothing read with it" >&2
             SAW_UNKNOWN=1
             return
         fi
@@ -520,10 +542,19 @@ for entry in "${DATASETS[@]}"; do
             SAW_UNKNOWN=1
             continue
         fi
+        # A COMPLETE walk names its root: `zfs list -r <root>` always prints it,
+        # and the root was just found to exist. An rc-0 answer without it (empty,
+        # or children only) is not a walk this script can trust -- it used to
+        # check no child and say nothing (F4.2). UNKNOWN, and nothing under it.
+        if ! printf '%s\n' "$out" | grep -qxF -- "$ds"; then
+            echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- the descendant list does not contain the root itself, so it is not a complete walk; none of the descendants was checked" >&2
+            SAW_UNKNOWN=1
+            continue
+        fi
         while IFS= read -r child; do
             [ -z "$child" ] || [ "$child" = "$ds" ] && continue
-            if [[ "$child" != "$ds/"* ]]; then
-                echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- the descendant list holds '$child', which is not under it; not trusted" >&2
+            if ! name_from_zfs_ok child "$child" "$ds"; then
+                echo "UNKNOWN dataset=${rh:+$ru@$rh:}$ds -- the descendant list holds '$child', which is not a well-formed dataset under it; not trusted, not checked" >&2
                 SAW_UNKNOWN=1
                 continue
             fi
