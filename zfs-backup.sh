@@ -11831,7 +11831,37 @@ $PROBE_DETAIL"
     } > "${cpath}.new" && mv -f "${cpath}.new" "$cpath"
     chmod 0600 "$cpath"
     log "client '$name' active (snaponly: snapshots on $LOAD_HOST, nothing copied)."
-    activate_first_copies "$name"
+    snaponly_first_snapshots "$name"
+}
+
+# The first snapshot of EVERY tier, once, at activation. activate_first_copies
+# runs only the finest job per dataset, which is enough when the coarser tiers
+# share a seeded base; here each tier is its own family on the source, and an
+# old dataset with no daily snapshot yet reads CRITICAL ("no snapshot -- age
+# from dataset creation") until the first daily tick (measured pve9 -> pve10,
+# 2026-10-17). The engine's rc is the job's END line, as in add_source_first_copy.
+snaponly_first_snapshots() {   # <name>
+    local name="$1" tab line cmd label logf rc ok=0 failed=0
+    tab=$(crontab_for_target 2>/dev/null) || tab=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
+        label=$(printf '%s' "$cmd" | sed -nE 's/.*zfs-job\.sh "([^"]+)".*/\1/p')
+        logf=$(printf '%s' "$cmd" | sed -nE 's/.* --log=([^ ]+).*/\1/p')
+        if [ "$(cron_target_user)" = root ]; then bash -c "$cmd" </dev/null
+        else su -s /bin/bash "$(cron_target_user)" -c "$cmd" </dev/null; fi
+        rc=""
+        [ -n "$label" ] && [ -n "$logf" ] && rc=$(grep -aF -- "ZFS-JOB END $label rc=" "$logf" 2>/dev/null | tail -1 | sed -E 's/.* rc=//')
+        case "$rc" in
+            0) ok=$((ok + 1)) ;;
+            # rc 8: quiesce degraded -- the snapshot EXISTS, crash-consistent
+            # (named <prefix>crash_..., inside the tier's family). Done, said so.
+            8) ok=$((ok + 1)); warn "activate-client: first snapshot '$label' taken crash-consistent (quiesce degraded, rc=8)" ;;
+            *) failed=$((failed + 1)); warn "activate-client: first snapshot '$label' did not finish (rc=${rc:-?}) -- cron runs it again at its next tick" ;;
+        esac
+    done < <(printf '%s\n' "$tab" | sed -n '/^# BEGIN zfs-backup-managed/,/^# END zfs-backup-managed/p' \
+                 | grep -F -- " -L $name " | grep -F 'snapget.sh -s ')
+    log "activate-client: first snapshot of each tier: $ok done, $failed not done"
 }
 
 activation_is_new_relationship() {   # <state> <installed-endpoint>
@@ -11855,7 +11885,12 @@ cmd_activate_client() {
             *) die "activate-client: unknown option $a" ;;
         esac
     done
-    if [ "$regen" -eq 0 ] && { [ "$edit_profile_given" -eq 1 ] || [ "$edit_src_given" -eq 1 ] || [ "$plan_only" -eq 1 ]; }; then
+    # snaponly's own activation has a plan mode (activate_snaponly): --plan
+    # alone is its preview, not an edit.
+    local _so_plan=0
+    [ "$plan_only" -eq 1 ] && [ "$regen" -eq 0 ] && [ "$edit_profile_given" -eq 0 ] && [ "$edit_src_given" -eq 0 ] \
+        && [ "$(record_get "$(client_conf_path "$name")" RUX_MODE 2>/dev/null)" = snaponly ] && _so_plan=1
+    if [ "$regen" -eq 0 ] && [ "$_so_plan" -eq 0 ] && { [ "$edit_profile_given" -eq 1 ] || [ "$edit_src_given" -eq 1 ] || [ "$plan_only" -eq 1 ]; }; then
         die "activate-client: --profile/--source-profile change an installed relationship -- that is edit-relation NAME"
     fi
     local cpath; cpath=$(client_conf_path "$name")
@@ -14194,7 +14229,9 @@ cmd_delete_relation() {
         echo "  3. record    : archived as $(basename "$(client_conf_path "$name")").removed-<time> -- '$name' is also this host's live SOURCE identity (account zfsbackup-$name), which is not touched"
     elif [ "$do_record" -eq 1 ]; then echo "  3. record    : clean-relationships.sh --purge=$name  -- frees the NAME (it refuses anything still LIVE)"
     else echo "  3. record    : kept (--keep-record) -- the name '$name' stays taken"; fi
-    if [ "$destroy" -eq 1 ]; then
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        echo "  4. copies    : none -- a snaponly relationship copies nothing here; its snapshots on the source are NOT destroyed"
+    elif [ "$destroy" -eq 1 ]; then
         echo "  4. COPIES    : zfs destroy -r, on THIS host, of (from $copies_from):"
         local d; for d in $copies; do echo "                   $d"; done
         [ -n "$copies" ] || echo "                   (the record lists none)"

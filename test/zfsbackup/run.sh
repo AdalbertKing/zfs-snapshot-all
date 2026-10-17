@@ -13748,6 +13748,46 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'takes no --target' && printf
 else
     bad "add-client --snaponly refusals" "target: $out" "mode: $o2" "datasets: $o3"
 fi
+# Activation takes the first snapshot of EVERY tier of THIS relationship once
+# (each tier is its own family on the source; the finest-only first copy left an
+# old dataset's daily monitor CRITICAL until the first daily tick). Never a prune
+# line, never another relationship's job; a job whose END rc is not 0 is "not done".
+printf '#!/bin/sh\nprintf "%%s ZFS-JOB END %%s rc=%%s\n" now "$1" "$ZJ_RC" >> "%s"\nexit 0\n' "$SO/job.log" > "$SO/zfs-job.sh"
+chmod +x "$SO/zfs-job.sh"
+cat > "$SO/tab" <<TAB
+# BEGIN zfs-backup-managed
+16 * * * * $SO/zfs-job.sh "h hourly snapshot (so)" --log=$SO/job.log -- /x/snapget.sh -s -m "h_" -L so1 "u@h:hdd/a"
+26 1 * * * $SO/zfs-job.sh "h daily snapshot (so)" --log=$SO/job.log -- /x/snapget.sh -s -m "d_" -L so1 "u@h:hdd/a"
+56 * * * * $SO/zfs-job.sh "h prune (so)" --log=$SO/job.log -- /x/delsnaps.sh -L so1 "u@h:hdd/a" "h_" -H24
+16 * * * * $SO/zfs-job.sh "h hourly snapshot (other)" --log=$SO/job.log -- /x/snapget.sh -s -m "h_" -L so10 "u@h:hdd/b"
+# END zfs-backup-managed
+TAB
+sf_fn=$(sed -n '/^snaponly_first_snapshots() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$sf_fn" ] || bad "snaponly: could not lift snaponly_first_snapshots -- anchor changed"
+for zr in 0 1 8; do
+    : > "$SO/job.log"
+    out=$(ZJ_RC=$zr bash -c "crontab_for_target() { cat '$SO/tab'; }; cron_target_user() { echo root; }
+log() { echo \"LOG \$*\"; }; warn() { echo \"WARN \$*\"; }; $sf_fn
+snaponly_first_snapshots so1" 2>&1)
+    ran=$(sed -nE 's/.* ZFS-JOB END (.*) rc=.*/\1/p' "$SO/job.log" | tr '\n' '|')
+    if [ "$zr" = 0 ]; then
+        if [ "$ran" = "h hourly snapshot (so)|h daily snapshot (so)|" ] && printf '%s' "$out" | grep -q 'LOG activate-client: first snapshot of each tier: 2 done, 0 not done'; then
+            ok "snaponly: activation snapshots every tier of THIS relationship once -- no prune line, not '-L so10'"
+        else
+            bad "snaponly: first snapshot of each tier" "ran=[$ran]" "$out"
+        fi
+    elif [ "$zr" = 8 ]; then
+        if printf '%s' "$out" | grep -q '2 done, 0 not done' && printf '%s' "$out" | grep -q 'crash-consistent (quiesce degraded, rc=8)'; then
+            ok "snaponly: rc 8 (quiesce degraded) counts as a first snapshot taken, and says it is crash-consistent"
+        else
+            bad "snaponly: rc 8 verdict" "$out"
+        fi
+    elif printf '%s' "$out" | grep -q '0 done, 2 not done' && printf '%s' "$out" | grep -q "WARN activate-client: first snapshot 'h daily snapshot (so)' did not finish (rc=1)"; then
+        ok "snaponly: a first snapshot whose END rc is not 0 is reported as not done"
+    else
+        bad "snaponly: first snapshot failure verdict" "$out"
+    fi
+done
 fi   # --- koniec sekcji snaponly ---
 
 
