@@ -195,6 +195,7 @@ while [ $# -gt 0 ]; do
     case "$1" in -n) shift ;; -o|-p|-i|-c) shift 2 ;; -*) shift ;; *) break ;; esac
 done
 dest="$1"; shift; host="${dest#*@}"
+[ -n "${SSH_HANG:-}" ] && exec sleep 30
 if [ -n "${SSH_RC:-}" ] && [ "$n" -ge "${SSH_FROM:-1}" ]; then
     [ "$SSH_RC" = 93 ] && echo "PAIR_DISABLED: relationship disabled" >&2
     exit "$SSH_RC"
@@ -287,6 +288,21 @@ for e in "root@srcA:tank/vm';id;'" 'root@srcA:tank/$(id)' 'root;id@srcA:tank/vm'
     check "F8 refused before any ssh: $e" "3" "$(rc_of "$e" zsalab_ 2h 4h)"
 done
 [ -s "$SSH_LOG" ] && bad "F8 no ssh was started" "$(cat "$SSH_LOG")" || ok "F8 no ssh was started"
+
+# F10 a remote zfs that HANGS (sshd still answers keepalives) is bounded by a
+# wall clock: UNKNOWN "timed out", not a monitor that never reports. And a
+# remote host without zfs (exit 127) says so, it is not "does not exist".
+if command -v timeout >/dev/null 2>&1; then
+    reset_world; add_ds tank/vm 0; add_snap tank/vm "zsalab_1" 0
+    out="$(SSH_HANG=1 CSA_SSH_TIMEOUT=2 run root@srcA:tank/vm zsalab_ 2h 4h)"; rc=$(SSH_HANG=1 CSA_SSH_TIMEOUT=2 rc_of root@srcA:tank/vm zsalab_ 2h 4h)
+    check "F10 hanging remote read -> UNKNOWN" "3" "$rc"
+    case "$out" in *"timed out"*) ok "F10 says it timed out" ;; *) bad "F10 says it timed out" "$out" ;; esac
+else
+    ok "F10 SKIP: no timeout(1) on this host (the script then relies on ssh keepalive alone)"
+fi
+reset_world
+out="$(SSH_RC=127 run root@srcA:tank/vm zsalab_ 2h 4h)"
+case "$out" in *"'zfs' was not found on srcA"*) ok "F10 remote exit 127 says zfs was not found, not 'does not exist'" ;; *) bad "F10 remote exit 127" "$out" ;; esac
 
 # F9 read-only: across every remote case above the zfs trace holds list/get only.
 only_reads && ok "F9 the remote mode only ever ran 'zfs list' and 'zfs get'" || bad "F9 only list/get" "$(grep -vE '^([^ ]+:)?zfs (list|get) ' "$ZSTUB_TRACE")"

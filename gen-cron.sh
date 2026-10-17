@@ -2862,9 +2862,9 @@ build_prune_section() {
             # (REV-20261017-152, round 2), with THIS section's ssh_flags -- the
             # pinned key and host alias its prune line already uses. It used to be
             # refused here: the monitor was local-only and ran `zfs list` against
-            # the literal "user@host:tank/data", an UNKNOWN forever. A local scope
-            # carries no ssh_flags (they are refused there), so its line is
-            # byte-identical to before.
+            # the literal "user@host:tank/data", an UNKNOWN forever. A local
+            # scope's ssh_flags only draw a warning (lint_ssh_flags) and are NOT
+            # passed to its monitor, so a local line is byte-identical to before.
             local mssh=""
             case "$scope" in *:*) mssh="$ssh_flags" ;; esac
             local mnotify mbroken mwarntext

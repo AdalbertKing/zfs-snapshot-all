@@ -347,7 +347,16 @@ zread() {
         local cmd="zfs" x
         for x in "${a[@]}"; do cmd+=" '$x'"; done
         cmd+=" -- '$tgt'"
-        ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "$cmd"
+        # A WALL-CLOCK bound too: ServerAlive only notices a dead link -- sshd
+        # keeps answering it while a zfs on the far side hangs (an import, a
+        # suspended pool). timeout(1) turns that into exit 124 (UNKNOWN, "timed
+        # out") instead of a monitor that never reports. CSA_SSH_TIMEOUT
+        # (seconds) is for tests; the default leaves room for a large -R list.
+        if command -v timeout >/dev/null 2>&1; then
+            timeout -k 10 "${CSA_SSH_TIMEOUT:-120}" ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "$cmd"
+        else
+            ssh -n "${SSH_OPTS[@]}" "$ru@$rh" "$cmd"
+        fi
     else
         zfs "${a[@]}" -- "$tgt"
     fi
@@ -362,6 +371,10 @@ read_failure() {   # <host> <rc>
         printf 'could not reach %s over ssh (exit 255: connection, authentication or host key)' "$1"
     elif [ -n "$1" ] && [ "$2" = 93 ]; then
         printf "%s's pair gate refuses this relationship (disabled)" "$1"
+    elif [ -n "$1" ] && { [ "$2" = 124 ] || [ "$2" = 137 ]; }; then
+        printf 'the read on %s timed out (exit %s)' "$1" "$2"
+    elif [ "$2" = 127 ]; then
+        printf "'zfs' was not found%s (exit 127)" "${1:+ on $1}"
     else
         printf 'zfs failed (exit %s)' "$2"
     fi
@@ -387,10 +400,12 @@ check_one() {
     # happened. Over ssh a failure to ASK is UNKNOWN too, and says which.
     out="$(zread "$ru" "$rh" list -H -o name -t filesystem,volume "$ds" 2>/dev/null)"; rc=$?
     if [ "$rc" -ne 0 ]; then
-        if [ -n "$rh" ] && { [ "$rc" = 255 ] || [ "$rc" = 93 ]; }; then
-            echo "UNKNOWN dataset=$shown -- $(read_failure "$rh" "$rc"); nothing was checked" >&2
-        else
+        # zfs answers "does not exist" with exit 1; every other status means
+        # the question was never answered, and says why (255/93/124/127/...).
+        if [ "$rc" = 1 ]; then
             echo "UNKNOWN dataset=$shown -- does not exist (typo, or removed since the config was written)" >&2
+        else
+            echo "UNKNOWN dataset=$shown -- $(read_failure "$rh" "$rc"); nothing was checked" >&2
         fi
         SAW_UNKNOWN=1
         return
