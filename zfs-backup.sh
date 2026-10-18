@@ -11578,7 +11578,6 @@ snaponly_refuse() {   # <verb> <relationship name>
     [ "$(record_get "$f" RUX_MODE 2>/dev/null)" = snaponly ] || return 0
     case "$1" in
         restore) die "restore: '$2' is a snaponly relationship -- nothing of it is copied to this host, so there is nothing here to restore from. Its snapshots live on the source; rolling back there is the source admin's own 'zfs rollback'. Nothing was changed." ;;
-        export-relation) die "export-relation: '$2' is a snaponly relationship -- its export/import replay is not supported yet (round 1). Recreate it on the other collector with add-client --snaponly. Nothing was changed." ;;
         *)       die "$1: '$2' is a snaponly relationship -- changing it in place is not supported yet. Delete it and create it again. Nothing was changed." ;;
     esac
 }
@@ -17328,7 +17327,6 @@ cmd_export_relation() {
         esac
     done
     [ -n "$name" ] || die "export-relation requires a relationship name"
-    snaponly_refuse export-relation "$name"
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || die "no relationship '$name' (no record at $cpath)"
     # The same gate REV-20260907-136 put on every reader: a record the parser
@@ -17404,6 +17402,19 @@ EXF
         argv=("${lbargv[@]}")
         rverb=local-backup rthen=""
     fi
+    # MIGAWKI ZDALNE (snaponly): add-client --snaponly with the host and the source
+    # datasets, no target and no seed (nothing is copied), then activate -- the
+    # lifecycle add-client --snaponly documents. The map above would have written
+    # --mode=snaponly, which add-client refuses beside --snaponly, and the dataset
+    # list never (it rides after CLIENT_TARGET, and there is none).
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        local -a soargv=("--host=${PEER_HOST:-}" --snaponly "--datasets=${REQUESTED_DATASETS:-}")
+        for x in ${argv[@]+"${argv[@]}"}; do
+            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--bandwidth=*|--passive|--exclude-*) ;; *) soargv+=("$x") ;; esac
+        done
+        argv=("${soargv[@]}")
+        rthen='"activate"'
+    fi
 
     # --- what is true and cannot be replayed --------------------------------
     local unrep_json="" ufirst=1
@@ -17427,7 +17438,11 @@ EXF
         else
             printf '  zfs-backup.sh add-client %s' "$name"
             for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
-            printf '\n  zfs-backup.sh seed %s\n  zfs-backup.sh activate %s\n' "$name" "$name"
+            if [ "${RUX_MODE:-}" = snaponly ]; then
+                printf '\n  zfs-backup.sh activate %s\n' "$name"
+            else
+                printf '\n  zfs-backup.sh seed %s\n  zfs-backup.sh activate %s\n' "$name" "$name"
+            fi
         fi
         if [ -n "$unrep_json" ]; then
             echo

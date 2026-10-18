@@ -13787,13 +13787,13 @@ fi
 printf "STATE='pending_enroll'\nRUX_MODE='snaponly'\n" > "$SO/clients/so1.conf"
 printf "STATE='active'\n" > "$SO/clients/cp1.conf"
 so_ref_ok=1
-for v in restore export-relation set-tiers; do
+for v in restore set-tiers; do
     out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" so1; echo PASSED ) 2>&1 )
     printf '%s' "$out" | grep -q "'so1' is a snaponly relationship" && ! printf '%s' "$out" | grep -q PASSED || { so_ref_ok=0; bad "snaponly_refuse $v" "$out"; }
     out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" cp1; echo PASSED ) 2>&1 )
     [ "$(printf '%s' "$out" | tail -1)" = PASSED ] || { so_ref_ok=0; bad "snaponly_refuse $v passes a copy relationship" "$out"; }
 done
-[ "$so_ref_ok" -eq 1 ] && ok "snaponly_refuse: restore/export-relation/set-tiers refuse a snaponly relationship and let a copy relationship through"
+[ "$so_ref_ok" -eq 1 ] && ok "snaponly_refuse: restore/set-tiers refuse a snaponly relationship and let a copy relationship through"
 
 # add-client --snaponly: a target (even an empty one) and a copy mode are refused at the command line.
 out=$( ( CLIENTS_DIR="$SO/clients"; cmd_add_client sx --host=10.0.0.9 --snaponly --target= --datasets=hdd/so/a ) 2>&1 ); rc=$?
@@ -14121,6 +14121,27 @@ if printf '%s' "$out" | grep -q '"kind":"snaponly","name":"zfsbackup-pve10@10.0.
     ok "snaponly show-config: the relation's [snaponly:] sections and their templates are shown beside [prune:]"
 else
     bad "snaponly show-config" "$out"
+fi
+# EXPORT / IMPORT (owner campaign 2026-10-18: export refused "not supported yet").
+# The replay is add-client --snaponly with the host and the source datasets, then
+# activate -- never --mode=snaponly (add-client refuses it beside --snaponly), never
+# a seed (nothing is copied).
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nPEER_HOST=10.0.0.9\nREQUESTED_DATASETS=hdd/so/a,hdd/so/b\nPROFILE=d7h24\nLOCAL_USER=zfsbackup\nCLIENT_TARGET=\nCRON_CONFIG=%s\n' "$RR/edited.conf" > "$ED/clients/rr.conf"
+out=$( ( CLIENTS_DIR="$ED/clients"; SERVER_CONF="$ED/no-such-server-conf"; cmd_export_relation rr --json ) 2>&1 ); rc=$?
+printf '%s' "$out" > "$ED/rr.json"
+if [ "$rc" -eq 0 ] && grep -qF '"replay":{"verb":"add-client","name":"rr","argv":["--host=10.0.0.9","--snaponly","--datasets=hdd/so/a,hdd/so/b","--profile=d7h24","--local-user=zfsbackup"],"then":["activate"]}' "$ED/rr.json"; then
+    ok "snaponly export: replay = add-client --snaponly --host --datasets (+ profile, account), then activate; no --mode, no seed"
+else
+    bad "snaponly export" "rc=$rc" "$(grep -o '"replay":{[^}]*}' "$ED/rr.json")" "$(printf '%s' "$out" | tail -3)"
+fi
+out=$( ( export CLIENTS_DIR="$ED/imclients" SERVER_CONF="$ED/no-such-server-conf"; mkdir -p "$CLIENTS_DIR"
+         cmd_add_client() { printf 'add-client'; printf '|%s' "$@"; printf '\n'; } ; cmd_seed() { echo "seed|$*"; } ; cmd_activate() { echo "activate|$*"; }
+         cmd_import_relation "$ED/rr.json" --yes ) 2>&1 ); rc=$?
+if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -qx 'add-client|rr|--host=10.0.0.9|--snaponly|--datasets=hdd/so/a,hdd/so/b|--profile=d7h24|--local-user=zfsbackup' \
+   && printf '%s\n' "$out" | grep -qx 'activate|rr --yes' && ! printf '%s\n' "$out" | grep -q '^seed|'; then
+    ok "snaponly import: the file's add-client --snaponly argv verbatim, then activate; no seed"
+else
+    bad "snaponly import" "rc=$rc" "$out"
 fi
 fi   # --- koniec sekcji snaponly ---
 
