@@ -28,7 +28,7 @@ CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 MC="${BROWSE_MC:-mc}"
 BROOT="${BROWSE_ROOT:-/run/zfs-browse}"
 TMPD="$(mktemp -d)" || exit 1
-MNT=""; MAPPED=""; SNAPDEV_DS=""; SNAPDEV_WAS=""; SNAPDEV_SRC=""
+MNT=""; MAPPED=""; SNAPDEV_DS=""
 
 unmount_all() {
     if [ -n "$MNT" ]; then
@@ -41,12 +41,44 @@ unmount_all() {
         MAPPED=""
     fi
 }
+# DWA PRZEGLĄDANIA TEGO SAMEGO DYSKU (pve10, 2026-10-18: pierwsze, które skończyło, przywróciło
+# snapdev i drugiemu zniknęło /dev/zd..p1 w trakcie podawania klucza). Każde przeglądanie zostawia
+# znacznik hold.<pid>.<dataset>; snapdev wraca dopiero, gdy nie ma innego ŻYWEGO znacznika tego
+# datasetu, a wartość sprzed przeglądania zapisuje tylko pierwszy (orig.<dataset>).
+hold_key() { printf '%s' "$1" | tr '/@' '__'; }
+other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dataset
+    local k f p; k="$(hold_key "$1")"
+    for f in "$BROOT"/hold.*."$k"; do
+        [ -e "$f" ] || continue
+        p="${f#"$BROOT"/hold.}"; p="${p%%.*}"
+        [ "$p" = "$$" ] && continue
+        kill -0 "$p" 2>/dev/null && return 0
+        rm -f "$f"
+    done
+    return 1
+}
+expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
+    local ds="$1" k; k="$(hold_key "$ds")"
+    mkdir -p "$BROOT" || return 1
+    if ! other_holders "$ds" || ! [ -s "$BROOT/orig.$k" ]; then
+        printf '%s\t%s\n' "$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" "$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" >"$BROOT/orig.$k"
+    fi
+    : >"$BROOT/hold.$$.$k"
+    SNAPDEV_DS="$ds"
+    zfs set snapdev=visible "$ds"
+}
 restore_snapdev() {
     [ -n "$SNAPDEV_DS" ] || return 0
-    case "$SNAPDEV_SRC" in
-        local) zfs set snapdev="$SNAPDEV_WAS" "$SNAPDEV_DS" 2>/dev/null ;;
-        *)     zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null ;;
-    esac
+    local k was src; k="$(hold_key "$SNAPDEV_DS")"
+    rm -f "$BROOT/hold.$$.$k"
+    if ! other_holders "$SNAPDEV_DS"; then
+        IFS=$'\t' read -r was src <"$BROOT/orig.$k" 2>/dev/null || { was=""; src=""; }
+        case "$src" in
+            local) zfs set snapdev="$was" "$SNAPDEV_DS" 2>/dev/null ;;
+            *)     zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null ;;
+        esac
+        rm -f "$BROOT/orig.$k"
+    fi
     SNAPDEV_DS=""
 }
 cleanup() { unmount_all; restore_snapdev; rm -rf "$TMPD"; }
@@ -176,13 +208,12 @@ while :; do
         if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;
     3)  # ---- DYSK VM: urządzenie migawki, partycja, klucz ---------------------------------
         restore_snapdev
-        SNAPDEV_WAS="$(zfs get -H -o value snapdev "$DS" 2>/dev/null)"; SNAPDEV_SRC="$(zfs get -H -o source snapdev "$DS" 2>/dev/null)"
         info "$TITLE" "Wystawiam migawkę dysku jako urządzenie tylko do odczytu..."
-        if ! zfs set snapdev=visible "$DS" 2>"$TMPD/sd.err"; then
+        if ! expose_snapdev "$DS" 2>"$TMPD/sd.err"; then
+            restore_snapdev
             wt --title "$TITLE" --msgbox "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\n$(head -2 "$TMPD/sd.err")" 10 "$W"
             step=2; continue
         fi
-        SNAPDEV_DS="$DS"
         DEV="/dev/zvol/$DS@$SNAP"
         for _w in 1 2 3 4 5 6 7 8 9 10; do
             command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
@@ -193,11 +224,24 @@ while :; do
             restore_snapdev; step=2; continue
         fi
         sleep 1; command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
-        # parts.tsv: urządzenie <TAB> system plików <TAB> rozmiar <TAB> etykieta
-        lsblk -nrpo NAME,FSTYPE,SIZE,LABEL "$(readlink -f "$DEV")" 2>/dev/null | tr -d '\r' \
-            | awk '{ l = $4; gsub(/\\x20/, " ", l); print $1 "\t" $2 "\t" $3 "\t" l }' >"$TMPD/parts.tsv"
+        # parts.tsv: urządzenie, system plików, rozmiar, etykieta -- rozdzielone \001, NIE tabulatorem:
+        # tab to biały znak IFS i dwa pod rząd (puste pole) zlewają się w jeden. Z JSON, nie z
+        # `lsblk -r`: puste pole (sam dysk bez systemu plików) przesuwało tam kolumny i rozmiar
+        # "96M" stawał się "systemem plików" -- dysk trafiał do menu i montaż padał (właściciel,
+        # pve10 2026-10-18).
+        lsblk -J -p -o NAME,FSTYPE,SIZE,LABEL "$(readlink -f "$DEV")" 2>/dev/null | "$PY" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+def walk(ds):
+    for x in ds or []:
+        print("\x01".join([x.get("name") or "", x.get("fstype") or "", x.get("size") or "", x.get("label") or ""]))
+        walk(x.get("children"))
+walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
         menu=(); i=0
-        while IFS=$'\t' read -r pd pf ps pl; do
+        while IFS=$'\001' read -r pd pf ps pl; do
             [ -n "$pf" ] || continue
             case "$pf" in swap|LVM2_member|linux_raid_member|zfs_member) continue ;; esac
             lbl="$pd  $pf  $ps${pl:+  $pl}"
