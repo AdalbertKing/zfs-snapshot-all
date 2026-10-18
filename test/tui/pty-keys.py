@@ -29,7 +29,8 @@ except ImportError:
     sys.exit(2)
 
 SEQ = {"F1": "\x1bOP", "F2": "\x1bOQ", "F3": "\x1bOR", "F4": "\x1bOS", "F5": "\x1b[15~", "F6": "\x1b[17~",
-       "F7": "\x1b[18~", "F8": "\x1b[19~", "F9": "\x1b[20~", "F10": "\x1b[21~", "esc": "\x1b", "enter": "\r",
+       "F7": "\x1b[18~", "F8": "\x1b[19~", "F9": "\x1b[20~", "F10": "\x1b[21~", "F11": "\x1b[23~", "F12": "\x1b[24~",
+       "tab": "\t", "esc": "\x1b", "enter": "\r",
        "ctrl-r": "\x12",
        # X12 (drzewo z kratkami): strzalki w trybie aplikacyjnym (curses keypad wlacza smkx,
        # wiec xterm wysyla ESC O A..D, nie ESC [ A..D -- to drugie curses czyta jako Esc + znaki)
@@ -71,8 +72,17 @@ def main():
         os.write(fd, SEQ.get(k, k).encode("utf-8"))
         print("=== %s" % k)
         print(drain(fd))
-    os.write(fd, SEQ["F10"].encode())
-    drain(fd, quiet=0.3, limit=3)
+    # Czy program sam sie skonczyl (np. ostatnim klawiszem bylo F12)? rc tego
+    # skryptu jest zawsze 0, wiec mowi to linia '=== exited' / '=== running'.
+    time.sleep(0.3)
+    try:
+        done = os.waitpid(pid, os.WNOHANG)[0] != 0
+    except ChildProcessError:
+        done = True
+    print("=== exited" if done else "=== running")
+    if not done:
+        os.write(fd, SEQ["F12"].encode())   # F12 = wyjscie (2026-10-18; F10 jest wolne)
+        drain(fd, quiet=0.3, limit=3)
     try:
         os.kill(pid, 9)
     except OSError:
