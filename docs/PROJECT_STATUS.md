@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4c889ccb7b35841c -->
+<!-- status-covers-digest: 23a9b4b7c8d6699f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ: Wyłącz/Włącz w F8, reguła udev zdejmowana w oknach (2026-10-18; `finisz/A2-D2`).**
+  F8 na aktywnej relacji ze źródłem: okno pauzy ma `w` = Wyłącz (`disable-client`): pauza tutaj i zamek na źródle,
+  z wyjaśnieniem w oknie (kiedy, co znaczy, granica zamka, droga powrotu). `disable-client` po potwierdzeniu przez
+  źródło dopisuje do znacznika pauzy `PAUSED_DISABLED`; `status --json` ma pole `disabled`. Wyłączona relacja:
+  stan „WYŁĄCZONA”, pasek „F8 Włącz”, F8 = `enable-client` (nie `resume-client`, który zostawiłby zamek).
+  Reguła udev „po włożeniu”: okno zmiany repliki i okno usuwania repliki zdejmują ją (`remove-media-trigger
+  --install`) w planie, gdy po zmianie żadna replika nie rusza po włożeniu -- wcześniej GUI tylko ją zakładało.
+  Na żywo pve9: plan usunięcia `usb1` mówi „reguła ZOSTANIE ZDJĘTA”, Esc -- reguła i replika nietknięte.
+  Testy: `test/tui` +3 (Wyłącz, wykonanie, Włącz), `test/zfsbackup --section statusjson` 18/0 (+1).
 
 - **FINISZ: `purge-replica-copy` usunięty (2026-10-18; `finisz/bez-purge`).** Właściciel: „nie chcemy tego”
   -- kopii na nośniku pakiet nie kasuje, dysk czyści się formatowaniem (zmiana repliki -> „Dodaj dysk”). Usunięte:
