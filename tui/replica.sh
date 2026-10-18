@@ -575,7 +575,7 @@ PYEOF
                 | sed -E 's/^\s+\+//' | awk '{w=($1=="#on-insert")?"po włożeniu":$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):"?"; print "  + " w "   " l}' | head -6
             if [ "$EDIT" -eq 1 ]; then
                 echo
-                echo "Źródło usunięte z listy zostawia swoją kopię na nośniku (purge-replica-copy ją usuwa)."
+                echo "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie)."
             fi
             echo
             echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"
