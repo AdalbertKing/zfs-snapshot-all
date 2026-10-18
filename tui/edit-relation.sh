@@ -65,12 +65,12 @@ try:
 except Exception:
     st = {}
 with open(tmpd + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
-    f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
+    f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
                                         st.get("peer_host") or "-",
                                         # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
                                         ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-",
                                         "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0",
-                                        st.get("client_target") or "-"))
+                                        st.get("client_target") or "-", st.get("mode") or "-"))
 d = json.load(open(sys.argv[2], encoding="utf-8"))
 rows = []
 with open(tmpd + "/prof.json.tiers", "w", encoding="utf-8", newline="\n") as tf, \
@@ -104,7 +104,12 @@ geom
 info "Zmień relację $NAME" "Czytam relację i szablony..."
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
 load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
-IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; }
+IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT RMODE <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; RMODE=-; }
+# MIGAWKI ZDALNIE (snaponly, REV-20261017-152 runda 3; właściciel 2026-10-18: ta sama
+# ścieżka 'e' co każda relacja). Szablon JEST tu retencją źródła (celu nie ma), więc
+# po szablonie nie ma drugiego okna "w źródle kopii", a "Ustawienia silnika" (łącze,
+# kompresja, szyfr) nie dotyczą -- nic nie jest przesyłane.
+SNAPONLY=0; [ "${RMODE:-}" = snaponly ] && SNAPONLY=1
 # Relacja lokalna (bez peera): źródłem jest ten host -- lista datasetów bez adresu.
 SRCHOST="$PEER"; LDS_ARGS=("$PEER"); HOST="$PEER"
 SRCNAME="$PEER"
@@ -548,12 +553,20 @@ while :; do
 ACTION=""
 while :; do
     geom
+    if [ "$SNAPONLY" -eq 1 ]; then
+    MENU=(dane    "Datasety -- na których robić migawki…"
+          szablon "Użyj szablonu -- harmonogram i retencja migawek na źródle"
+          harm    "Harmonogram i retencja migawek na źródle"
+          config  "Ręczna edycja konfigu (jak crontab -e)"
+          zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    else
     MENU=(dane    "Datasety -- co kopiować…"
           szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła"
           harm    "Harmonogram i retencja kopii w celu i źródle"
           silnik  "Ustawienia silnika -- jak przesyłane są kopie…"
           config  "Ręczna edycja konfigu (jak crontab -e)"
           zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    fi
     # Adres hosta tylko przy zdalnym źródle: relacja lokalna nie ma adresu.
     [ "$PEER" != - ] && MENU+=(adres "Adres hosta -- po przeniesieniu kolektora…")
     wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
@@ -561,7 +574,9 @@ while :; do
        "${MENU[@]}" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"
     case "$ACTION" in
-        harm) harm_flow; continue ;;
+        # snaponly: tabela -> ukryty szablon relacji -> edit-relation --profile= (blok
+        # "harm" w pętli kroków niżej); harm_flow czyta/zapisuje szczeble KOPII (set-tiers).
+        harm) [ "$SNAPONLY" -eq 1 ] && break; harm_flow; continue ;;
         adres) address_flow; continue ;;
         szablon) break ;;
         silnik) engine_settings; continue ;;
@@ -692,7 +707,9 @@ while :; do
         # startuje z obecnego szablonu relacji; wynik = ukryty szablon relacja-<NAZWA>.
         base="${CUR_P:-default}"
         clear 2>/dev/null
-        ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)" \
+        _ttl="Harmonogram i retencja: W CELU KOPII – $(hostname -s 2>/dev/null || hostname)"
+        [ "$SNAPONLY" -eq 1 ] && _ttl="Harmonogram i retencja: MIGAWKI NA ŹRÓDLE – $SRCNAME"
+        ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/rargs" "$_ttl" \
             || continue 2
         mapfile -t RARGS <"$TMPD/rargs"
         if [ "${#RARGS[@]}" -eq 0 ] && [ "$base" = "$HNAME" ]; then
@@ -714,7 +731,10 @@ while :; do
         fi
         step=2; continue
     fi
-    if [ "$step" -eq 2 ]; then
+    if [ "$step" -eq 2 ] && [ "$SNAPONLY" -eq 1 ]; then
+        # Bez okna "w źródle kopii": szablon relacji snaponly sam jest retencją źródła.
+        : >"$TMPD/srcargs"; SRCPROF=""
+    elif [ "$step" -eq 2 ]; then
         if [ "$ACTION" = szablon ]; then
             src_override_warning
             if [ -s "$TMPD/srcwarn.txt" ]; then

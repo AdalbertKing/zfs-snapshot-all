@@ -11065,7 +11065,9 @@ cmd_set_endpoint() {
     # Skippable, because the reviewer's case is real: sometimes the collector
     # is already unplugged and there is nothing left to catch up over. Then it
     # is a deliberate, logged decision rather than an accident.
-    if [ "$skip_catchup" -eq 1 ]; then
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        log "client '$name' (snaponly): nothing is copied, so there is no final catch-up to run over '$leaving_endpoint'"
+    elif [ "$skip_catchup" -eq 1 ]; then
         warn "SKIPPING the final catch-up over '$leaving_endpoint' at your request. The first transfer over '$new_endpoint' will carry everything since $( [ -n "${FINAL_CATCHUP_AT:-}" ] && echo "$FINAL_CATCHUP_AT" || echo "the seed (${SEED_COMPLETED_AT:-unknown})" ) -- over the slow link, unattended. Only correct if the collector is already disconnected from '$leaving_endpoint'."
     else
         local why=""
@@ -11826,6 +11828,47 @@ snaponly_installed_scopes() {   # <config> <name>
         END { if (sec != "" && mine) print sec }' "$1"
 }
 
+# A field of one of this relationship's own sections (marker inside), or rc 1.
+snaponly_section_field() {   # <config> <name> <snaponly|prune> <scope> <field>
+    awk -v mk="# managed-by: zfs-backup.sh client=$2" -v want="[$3:$4]" -v f="$5" '
+        /^\[/ { if (insec && mine && val != "") { print val; found = 1; exit }
+                insec = ($0 == want); mine = 0; val = ""; next }
+        insec { t = $0; sub(/^[ \t]+/, "", t)
+                if (t == mk) mine = 1
+                k = t; sub(/[ \t]*=.*/, "", k)
+                if (k == f) { v = t; sub(/^[^=]*=[ \t]*/, "", v); val = v } }
+        END { if (!found && insec && mine && val != "") print val }' "$1"
+}
+
+# THE ENDPOINT A SNAPONLY RELATIONSHIP IS INSTALLED FOR follows its record. The
+# host is part of every section NAME ([snaponly:acct@host:ds], [prune:...]) and
+# of their ssh_flags (-p), so a set-endpoint (the GUI's "Adres hosta", after the
+# collector moved) rewrites exactly those: the header's account@host and the
+# ssh_flags line. Everything else -- templates, retention, schedules -- stays
+# byte-for-byte (F1.1). Only sections that carry this relationship's marker.
+snaponly_reaim() {   # <workfile> <name> <account@host> <ssh_flags>
+    local wf="$1" name="$2" to="$3" sf="$4"
+    awk -v mk="# managed-by: zfs-backup.sh client=$name" -v to="$to" -v sf="$sf" '
+        function flush(   n, i, l, h) {
+            if (buf == "") return
+            if (mine && (kind == "snaponly" || kind == "prune")) {
+                n = split(buf, L, "\n")
+                h = L[1]; sub(/^\[(snaponly|prune):[^:]*:/, "[" kind ":" to ":", h); L[1] = h
+                for (i = 2; i <= n; i++) {
+                    l = L[i]; t = l; sub(/^[ \t]+/, "", t)
+                    if (t ~ /^ssh_flags[ \t]*=/) L[i] = "\tssh_flags    = " sf
+                }
+                out = L[1]; for (i = 2; i <= n; i++) out = out "\n" L[i]
+                printf "%s", out
+            } else printf "%s", buf
+            buf = ""; mine = 0; kind = ""
+        }
+        /^\[/ { flush(); kind = ""
+                if ($0 ~ /^\[snaponly:/) kind = "snaponly"; else if ($0 ~ /^\[prune:/) kind = "prune" }
+        { buf = buf $0 "\n"; t = $0; sub(/^[ \t]+/, "", t); if (t == mk) mine = 1 }
+        END { flush() }' "$wf" > "$wf.ra" && mv -f "$wf.ra" "$wf"
+}
+
 # CREATE FROM A PROFILE ONCE (REV-20261017-152 F1.1). A relationship whose
 # sections are already in the config keeps them exactly: the config is where its
 # policy lives from creation on -- an edited retain, schedule or monitor value is
@@ -11834,38 +11877,106 @@ snaponly_installed_scopes() {   # <config> <name>
 # on every activation, so re-running activate-client on an active relationship
 # put -H240 back to -H24 and scheduled the deletion of what was kept on purpose.
 #
-# A changed ENDPOINT would have to rewrite the section names (the host is in the
-# scope); that is not supported for snaponly yet and is refused, not guessed.
+# THE SAME LIFECYCLE AS EVERY OTHER RELATIONSHIP (owner 2026-10-18: one GUI path,
+# 'e' included). On an installed relationship the activation therefore:
+#   * follows the record's endpoint (set-endpoint after a move): snaponly_reaim;
+#   * ADDS sections for a dataset the record requests and the config does not
+#     carry yet (add-source), with the SAME templates as the installed ones --
+#     activation is additive, as for a backup relationship; a removal is the
+#     explicit remove-source;
+#   * re-renders from the profile ONLY when asked (edit-relation --profile=,
+#     the GUI's "Użyj szablonu" / "Harmonogram i retencja"): rerender=1.
 #
 # Sets SNAPONLY_REUSED (1 = installed sections kept) and SOURCE_PRUNE_EMITTED_DS
 # (the datasets the grant checks and the probe run on).
-snaponly_prepare_workfile() {   # <workfile> <name>
-    local wf="$1" name="$2" sc ds
+snaponly_prepare_workfile() {   # <workfile> <name> [rerender 0|1]
+    local wf="$1" name="$2" rerender="${3:-0}" sc ds want have
     local -a scopes=()
     SNAPONLY_REUSED=0
     while IFS= read -r sc; do [ -n "$sc" ] && scopes+=("$sc"); done < <(snaponly_installed_scopes "$wf" "$name")
-    if [ "${#scopes[@]}" -eq 0 ]; then
+    if [ "${#scopes[@]}" -eq 0 ] || [ "$rerender" -eq 1 ]; then
         apply_client_profile_choice 1 "${PROFILE:-}"
         emit_snaponly_sections "$wf" "$name"
         return 0
     fi
     SNAPONLY_REUSED=1
+    local sflags; sflags="$(source_prune_sflags)"
+    if [ "${scopes[0]%%:*}" != "${LOAD_ACCOUNT}@${LOAD_HOST}" ]; then
+        log "activate: '$name' moves from '${scopes[0]%%:*}' to '${LOAD_ACCOUNT}@${LOAD_HOST}' (the record's endpoint) -- section names and ssh options follow, the policy stays"
+    fi
+    # Rewritten only when something moved: an unchanged relationship keeps its
+    # config byte-for-byte (F1.1), and the comparison is the installed section's own.
+    local cur_sflags; cur_sflags="$(snaponly_section_field "$wf" "$name" snaponly "${scopes[0]}" ssh_flags)"
+    if [ "${scopes[0]%%:*}" != "${LOAD_ACCOUNT}@${LOAD_HOST}" ] || [ "$cur_sflags" != "$sflags" ]; then
+        snaponly_reaim "$wf" "$name" "${LOAD_ACCOUNT}@${LOAD_HOST}" "$sflags"
+    fi
+    local snap_tpl prune_tpl first_ds="${scopes[0]#*:}"
+    snap_tpl="$(snaponly_section_field "$wf" "$name" snaponly "${LOAD_ACCOUNT}@${LOAD_HOST}:$first_ds" use_template)"
+    prune_tpl="$(snaponly_section_field "$wf" "$name" prune "${LOAD_ACCOUNT}@${LOAD_HOST}:$first_ds" use_template)"
+    [ -n "$snap_tpl" ] && [ -n "$prune_tpl" ] \
+        || die "snaponly: the installed sections of '$name' name no templates (use_template) -- refusing to guess what a new dataset should get. Nothing was changed."
     SOURCE_PRUNE_EMITTED_DS=()
-    for sc in "${scopes[@]}"; do
-        [ "${sc%%:*}" = "${LOAD_ACCOUNT}@${LOAD_HOST}" ] \
-            || die "snaponly: '$name' is installed for '${sc%%:*}', and this activation would address '${LOAD_ACCOUNT}@${LOAD_HOST}' -- changing a snaponly relationship's endpoint is not supported yet (delete and create it again). Nothing was changed."
-        ds="${sc#*:}"
-        SOURCE_PRUNE_EMITTED_DS+=("$ds")
+    for sc in "${scopes[@]}"; do SOURCE_PRUNE_EMITTED_DS+=("${sc#*:}"); done
+    local marker="# managed-by: zfs-backup.sh client=$name" scope rec prec
+    for want in $PEER_SAVED_DATASETS; do
+        have=0
+        for ds in "${SOURCE_PRUNE_EMITTED_DS[@]}"; do [ "$ds" = "$want" ] && have=1; done
+        [ "$have" -eq 1 ] && continue
+        scope="${LOAD_ACCOUNT}@${LOAD_HOST}:${want}"
+        rec=no; prec=no
+        if is_recursive_root "$want"; then
+            rec="${RECURSION:-flat}"; [ "$rec" = atomic ] || rec=flat; prec=yes
+        fi
+        {
+            echo
+            echo "[snaponly:$scope]"
+            echo "	$marker"
+            echo "	use_template = $snap_tpl"
+            echo "	recursive    = $rec"
+            echo "	ssh_flags    = $sflags"
+            echo "	pair_label   = $name"
+            echo "	notify       = ${name}-$(basename "$want")"
+            echo
+            echo "[prune:$scope]"
+            echo "	$marker"
+            echo "	use_template = $prune_tpl"
+            echo "	recursive    = $prec"
+            echo "	ssh_flags    = $sflags"
+            echo "	pair_label   = $name"
+            echo "	notify       = ${name}-src-$(basename "$want")"
+        } >> "$wf"
+        SOURCE_PRUNE_EMITTED_DS+=("$want")
+        log "activate: '$want' joins '$name' with the installed templates ($snap_tpl)"
     done
     # The probe, the grant checks and MANAGED_SOURCES follow what is installed.
     PEER_SAVED_DATASETS="${SOURCE_PRUNE_EMITTED_DS[*]}"
-    log "activate: '$name' already has its sections in the config -- they are kept as installed (retention, schedules, monitors); the profile is not read again"
+    log "activate: '$name' keeps its installed sections (retention, schedules, monitors); the profile is not read again"
 }
 
-activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
-    local name="$1" yes="$2" plan_only="$3" verbose="$4"
+# One source dataset out of a snaponly relationship (remove-source): its own
+# [snaponly:<x>:<ds>] and [prune:<x>:<ds>] sections, marker-checked. Templates
+# stay (the other datasets use them).
+snaponly_strip_dataset() {   # <workfile> <name> <dataset>
+    local wf="$1" name="$2" ds="$3"
+    awk -v mk="# managed-by: zfs-backup.sh client=$name" -v ds="$ds" '
+        function flush() { if (buf != "" && !(mine && hit)) printf "%s", buf; buf = ""; mine = 0; hit = 0 }
+        /^\[/ { flush(); h = $0
+                if (h ~ /^\[(snaponly|prune):/) { s = h; sub(/^\[(snaponly|prune):[^:]*:/, "", s); sub(/\]$/, "", s); hit = (s == ds) } }
+        { buf = buf $0 "\n"; t = $0; sub(/^[ \t]+/, "", t); if (t == mk) mine = 1 }
+        END { flush() }' "$wf" > "$wf.sd" && mv -f "$wf.sd" "$wf"
+}
+
+activate_snaponly() {   # <name> <yes> <plan_only> <verbose> [rerender 0|1]
+    local name="$1" yes="$2" plan_only="$3" verbose="$4" rerender="${5:-0}"
     local cpath; cpath=$(client_conf_path "$name")
     record_load client "$cpath"
+    # edit-relation --profile=/--source-profile= (the GUI's "Użyj szablonu" and
+    # "Harmonogram i retencja"): the NEW choice drives this render and is written
+    # to the record only after the install succeeded.
+    if [ "$rerender" -eq 1 ]; then
+        [ "${SNAPONLY_NEW_PROFILE_GIVEN:-0}" = 1 ] && PROFILE="${SNAPONLY_NEW_PROFILE:-}"
+        [ "${SNAPONLY_NEW_SRC_GIVEN:-0}" = 1 ] && SOURCE_PROFILE="${SNAPONLY_NEW_SRC:-}"
+    fi
     local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
     case "${STATE:-}" in
         endpoint_verified|active) ;;
@@ -11889,7 +12000,7 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose>
         write_fresh_config_defaults "$workfile" || { rm -f "$workfile"; die "could not create working copy $workfile"; }
     fi
     chmod 0644 "$workfile" || { rm -f "$workfile"; die "could not set the mode on $workfile"; }
-    snaponly_prepare_workfile "$workfile" "$name"
+    snaponly_prepare_workfile "$workfile" "$name" "$rerender"
 
     log "dry-run of each source dataset (snapget.sh -n -s, read-only)..."
     if ! snaponly_probe; then
@@ -11942,6 +12053,10 @@ $PROBE_DETAIL"
         write_client_field MANAGED_DATASETS   ""
         write_client_field MANAGED_PRUNE_SCOPE ""
         write_client_field MANAGED_SOURCES    "$srcs"
+        if [ "$rerender" -eq 1 ]; then
+            write_client_field PROFILE        "${PROFILE:-}"
+            write_client_field SOURCE_PROFILE "${SOURCE_PROFILE:-}"
+        fi
         write_client_field CRON_CONFIG        "$cronfile"
         write_client_field INSTALLED_ENDPOINT "$ACTIVE_ENDPOINT"
         write_client_field LOCAL_USER         "${LOCAL_USER:-}"
@@ -12025,7 +12140,19 @@ cmd_activate_client() {
     # snaponly has its own activation: no target, no landing, no receive
     # delegation, no incremental rehearsal (REV-20261017-152 F1).
     if snaponly_is; then
-        [ "$regen" -eq 0 ] || die "edit-relation: '$name' is a snaponly relationship -- changing it in place is not supported yet; delete it and create it again. Nothing was changed."
+        # edit-relation on a snaponly relationship (owner 2026-10-18: the same 'e'
+        # as every relationship): --profile=/--source-profile= re-render its
+        # sections. Per-tier source words describe a COPY's source next to its
+        # target; here the profile IS the source retention, so they are refused.
+        if [ "$regen" -eq 1 ]; then
+            local _so_ops=0; [ -n "${EDIT_TIER_OPS+x}" ] && _so_ops=${#EDIT_TIER_OPS[@]}
+            [ "$_so_ops" -eq 0 ] \
+                || die "edit-relation: '$name' is a snaponly relationship -- its profile IS the source retention, so per-tier words (${EDIT_TIER_OPS[*]}) do not apply. Change the template (--profile=) or edit the config (edit-config $name). Nothing was changed."
+            SNAPONLY_NEW_PROFILE="$edit_profile" SNAPONLY_NEW_PROFILE_GIVEN="$edit_profile_given" \
+            SNAPONLY_NEW_SRC="$edit_src" SNAPONLY_NEW_SRC_GIVEN="$edit_src_given" \
+                activate_snaponly "$name" "$yes" "$plan_only" "$verbose" 1
+            return $?
+        fi
         activate_snaponly "$name" "$yes" "$plan_only" "$verbose"
         return $?
     fi
@@ -12617,7 +12744,8 @@ cmd_activate() {
                     && catchup_fresh=1
                 ;;
         esac
-        if [ "$skip_catchup" -eq 1 ]; then
+        # snaponly copies nothing, so there is no catch-up to run over the old link.
+        if [ "$skip_catchup" -eq 1 ] || [ "${RUX_MODE:-}" = snaponly ]; then
             activation_step "$resume" set-endpoint "$name" --host="$requested_endpoint" --skip-final-catchup
         else
             if [ "$catchup_fresh" -eq 1 ]; then
@@ -14210,7 +14338,6 @@ cmd_gui() {
 cmd_edit_relation() {
     local name="${1:-}"; shift || true
     [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: edit-relation NAME [--profile=P] [--source-profile=S] [--plan|--yes|--ask]"
-    snaponly_refuse edit-relation "$name"
     local a ask=0
     local -a pass=()
     EDIT_TIER_OPS=()
@@ -14628,7 +14755,6 @@ cmd_remove_source() {
         esac
     done
     [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh remove-source NAZWA DATASET [--yes]"
-    snaponly_refuse remove-source "$name"
     case "$ds" in
         */*) : ;;
         *)   die "remove-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -14657,8 +14783,13 @@ cmd_remove_source() {
     echo "remove-source '$ds' from '$name' (peer $peer, port $port):"
     echo "  1. source    : $sfile -- the dataset is taken out of the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- revokes its zfs grant and narrows the freeze whitelist"
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        echo "  3. collector : its [snaponly:]/[prune:] sections are dropped from the config here -- its snapshots stop being taken and pruned"
+        echo "  4. snapshots : the ones already on the source STAY there; this verb never destroys data"
+    else
     echo "  3. collector : its [dataset:]/[prune:] sections are dropped from the config here (activation only ADDS, so a removal has to say so itself)"
     echo "  4. copies    : KEPT on this host. This verb never destroys data; remove it yourself if you want it gone."
+    fi
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0
@@ -14749,8 +14880,13 @@ cmd_remove_source() {
         # the relationship, and a later add-source replayed that old policy as
         # "installed" (measured on pve10, 2026-10-08). Same ownership check:
         # remove_managed_sections refuses a section it did not write.
+        if [ "${RUX_MODE:-}" = snaponly ]; then
+            # snaponly: no landing -- the dataset's own [snaponly:]/[prune:] go.
+            snaponly_strip_dataset "$workfile" "$name" "$ds"
+        else
         local srcscope; srcscope=$(installed_dataset_field "$workfile" "$landing" src)
         remove_managed_sections "$workfile" "$name" "$landing" ${srcscope:+"$srcscope"}
+        fi
         # THROUGH THE WRAPPER, not `bash $GENCRON` -- the generated block bakes
         # the running copy's paths into every line, so a relationship whose jobs
         # run as a delegated account must be validated by THAT account's
@@ -14786,8 +14922,14 @@ cmd_remove_source() {
             [ "$_m" = "$landing" ] && continue
             _mkeep="${_mkeep:+$_mkeep }$_m"
         done
+        local _s _skeep=""
+        for _s in ${MANAGED_SOURCES:-}; do
+            [ "${_s#*:}" = "$ds" ] && continue
+            _skeep="${_skeep:+$_skeep }$_s"
+        done
         if { cat "$cpath"
              [ -n "${REQUESTED_DATASETS:-}" ] && write_client_field REQUESTED_DATASETS "$_keep"
+             [ -n "${MANAGED_SOURCES:-}" ] && write_client_field MANAGED_SOURCES "$_skeep"
              write_client_field MANAGED_DATASETS "$_mkeep"; } > "${cpath}.new" \
            && mv -f "${cpath}.new" "$cpath"; then
             chmod 0600 "$cpath" 2>/dev/null || :
@@ -14840,7 +14982,6 @@ cmd_add_source() {
         esac
     done
     [ -n "$name" ] && [ -n "$ds" ] || die "uzycie: zfs-backup.sh add-source NAZWA DATASET [--yes]"
-    snaponly_refuse add-source "$name"
     case "$ds" in
         */*) : ;;
         *)   die "add-source: '$ds' does not look like a dataset (pool/path)" ;;
@@ -14868,7 +15009,11 @@ cmd_add_source() {
     echo "  1. source    : $sfile -- the dataset joins the scope this relationship grants from"
     echo "  2. source    : deploy.sh --commit-scope=$label  -- grants it to this relationship's account"
     echo "  3. collector : activate-client $name -- sections for the new dataset only; the installed policy of the rest stays"
+    if [ "${RUX_MODE:-}" = snaponly ]; then
+        echo "  4. first snapshot: the new dataset's finest snapshot job runs once now on the source; cron keeps it from then on"
+    else
     echo "  4. first copy: the new dataset's finest copy job runs once now (a full send); cron keeps it from then on"
+    fi
     if [ "$yes" -ne 1 ]; then
         echo "plan only. Re-run with --yes to do it. Nothing was changed."
         return 0

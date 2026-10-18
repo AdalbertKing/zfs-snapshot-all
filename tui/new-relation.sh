@@ -70,12 +70,12 @@ step_mode() {
     [ "$NOCOPY" -eq 1 ] && cur=snap
     case "$cur" in sync) s=ON ;; local) l=ON ;; snap) n=ON ;; snaponly) r=ON ;; *) b=ON ;; esac
     wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nLokalnie: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nSame migawki: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalnie: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
+       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
        backup "Backup    (ten host pobiera ze źródła)" "$b" \
        sync   "Lustro    (to samo po obu stronach)" "$s" \
-       local  "Lokalnie  (kopia na tym hoście)" "$l" \
-       snap   "Same migawki  (na tym hoście, bez kopii)" "$n" \
-       snaponly "Migawki zdalnie  (na źródle, bez kopii)" "$r" || return 1
+       local  "Kopia lokalna  (na tym hoście)" "$l" \
+       snap   "Migawki lokalne  (na tym hoście, bez kopii)" "$n" \
+       snaponly "Migawki zdalne  (na innym hoście, bez kopii)" "$r" || return 1
     # "Same migawki" = kopia lokalna bez celu: te same kroki co Lokalnie, bez "Dokąd".
     if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
@@ -504,7 +504,7 @@ step_profile() {
         # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
         # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
         q6='Jak długo trzymać migawki na źródle?'
-        lead="${lead}Migawki zdalnie: szablon z drabiną GFS na szczeblu (np. default) zostanie\nodrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n"
+        lead="${lead}Migawki zdalne: szablon z drabiną GFS na szczeblu (np. default) zostanie\nodrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n"
         tl=$((tl + 3))
         [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
     fi
@@ -774,13 +774,13 @@ cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; d
 summary_text() {
     local i a; a="$(account_name)"
     if [ "$NOCOPY" -eq 1 ]; then
-        echo "SAME MIGAWKI: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:"
+        echo "MIGAWKI LOKALNE: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:"
     elif [ "$MODE" = local ]; then
         echo "LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:"
     elif [ "$MODE" = sync ]; then
         echo "LUSTRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
     elif [ "$MODE" = snaponly ]; then
-        echo "MIGAWKI ZDALNIE: $(hostname) będzie robić i sprzątać migawki NA $HOST${HOSTNAME_R:+ ($HOSTNAME_R)}, nic nie kopiuje:"
+        echo "MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST${HOSTNAME_R:+ ($HOSTNAME_R)}, nic nie kopiuje:"
     else
         echo "BACKUP: $(hostname) będzie POBIERAĆ z $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} do $TARGET/$HOST/..."
     fi
@@ -845,7 +845,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
     while :; do
         geom
         if [ "$MODE" = snaponly ] && any_excl; then
-            wt --title "Wyjątki w drzewie" --msgbox "Migawki zdalnie nie obsługują wyjątków w drzewie (odznaczonych dzieci).\nWybierz całe gałęzie albo pojedyncze datasety bez wyjątków." 9 "$W"
+            wt --title "Wyjątki w drzewie" --msgbox "Migawki zdalne nie obsługują wyjątków w drzewie (odznaczonych dzieci).\nWybierz całe gałęzie albo pojedyncze datasety bez wyjątków." 9 "$W"
             return 2
         fi
         build_argv install

@@ -181,7 +181,7 @@ def direction_of(host, peer, dirs, mode=None):
     # snaponly: migawki robione STAD na zrodle; nic tu nie przychodzi, wiec nie
     # strzalka pobrania (REV-20261017-152 runda 3).
     if mode == "snaponly" or (dirs and set(dirs) == {"snaponly"}):
-        return u"migawki na %s" % (peer or "?")
+        return u"→ %s" % (peer or "?")
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
@@ -1049,7 +1049,7 @@ def ch_arrow(job):
     return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
 
 
-def rel_type(peer, dirs, mode=None):
+def rel_type(peer, dirs, mode=None, target=None):
     """backup (jedna strona), lustro (obie), lokalna, other.
 
     "lustro", nie "synchro" (wlasciciel 2026-10-08: "zmien synchro na lustro w
@@ -1065,16 +1065,20 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return {"sync": "lustro", "local": "lokalna", "snaponly": "migawki"}.get(mode, mode)
+        # NAZWY (wlasciciel 2026-10-18): typ mowi CO, kierunek GDZIE. "Same migawki"
+        # to relacja lokalna bez celu, wiec "lokalna" nie odroznialo jej od kopii.
+        if mode == "local":
+            return u"kopia lokalna" if target else u"migawki lokalne"
+        return {"sync": "lustro", "snaponly": u"migawki zdalne"}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "lustro"
     if "pull" in dirs or "push" in dirs:
         return "backup"
     if "local" in dirs:
-        return "lokalna"
+        return u"kopia lokalna"
     if "snaponly" in dirs:
-        return "migawki"
+        return u"migawki zdalne"
     return "backup" if peer and not dirs else "other"
 
 
@@ -1168,7 +1172,7 @@ def build_relations(data, now):
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel.get("peer_host") or "", dirs, rel.get("mode")),
-            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode")), "stats": st,
+            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode"), rel.get("client_target")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
             "last": last, "last_txt": last_txt.strip(), "transfers": trs,
@@ -2132,7 +2136,6 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Peer", rel.get("peer_host") or "?"))
         if rel.get("mode") == "snaponly":
             pairs.append(("Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
-            pairs.append(("Zmiana", u"Del na liście F3 usuwa relację, Ins zakłada nową (wybierz „Migawki zdalnie”)"))
         pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
@@ -2285,7 +2288,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     nw = max(8, min(24, max([len(r["name"]) for r in rows] + [8])))
     dw = max(8, min(24, max([len(r.get("dir", "")) for r in rows] + [8])))
     sw = max(7, min(20, max([len(r["state"]) for r in rows] + [7])))
-    tw = max(7, min(8, max([len(r_.get("typ", "")) for r_ in rows] + [7])))
+    tw = max(7, min(15, max([len(r_.get("typ", "")) for r_ in rows] + [7])))
     cols = [("Relacja", nw, "name"), ("Kierunek", dw, "dir"), ("Stan", sw, "state")]
     used = nw + dw + sw + 2
     if inner - used >= tw + 1:
@@ -4542,7 +4545,7 @@ class UI(object):
                 n = self.window[1]["replica"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "add-replica", n, "--ask"]) or "stay"
-            elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation"                     and (self.window[1].get("rel") or {}).get("mode") != "snaponly":
+            elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
                 # jest tekstem linii polecen), stad 'e' w oknie szczegolow.
@@ -4837,12 +4840,11 @@ def _ui_render(self, width, height):
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
-                # snaponly (REV-20261017-152 runda 3): zmiana w miejscu i odzysk nie
-                # istnieja (nic tu nie ma do odzyskania), wiec ich klawiszy nie ma --
-                # stopka jak w zwyklym oknie; jak to zmienic, mowi wiersz "Zmiana"
-                # w panelu (wlasciciel 2026-10-18: zdanie w stopce bylo nielogiczne).
+                # snaponly (REV-20261017-152 runda 3): 'e' jak w kazdej relacji
+                # (wlasciciel 2026-10-18: ta sama sciezka); odzysku nie ma -- kopii
+                # tu nie ma -- wiec nie ma 'p'.
                 if (obj.get("rel") or {}).get("mode") == "snaponly":
-                    foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                    foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:

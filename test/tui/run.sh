@@ -1387,11 +1387,26 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +lokalnie +lokalna +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' && hasE "$LOK" 'Prune źródła +trzyma' \
+if hasE "$LOK" '^║ lok +lokalnie +kopia lokalna +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' && hasE "$LOK" 'Prune źródła +trzyma' \
    && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
-    ok "relacje: relacja lokalna -- '<host> → tutaj', typ 'lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
+    ok "relacje: relacja lokalna -- 'lokalnie', typ 'kopia lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
 else
     bad "relacje: relacja lokalna" "$LOK"
+fi
+# MIGAWKI LOKALNE (nazwy wlasciciela 2026-10-18): ta sama relacja lokalna BEZ celu to
+# "migawki lokalne", nie "kopia lokalna" -- typ mowi CO, kierunek GDZIE.
+"$PY" - "$LOKD" <<'PYEOF2'
+import json, sys
+d = sys.argv[1]
+st = json.load(open(d + "/status.json", encoding="utf-8"))
+st["relations"][0]["client_target"] = ""
+json.dump(st, open(d + "/status.json", "w", encoding="utf-8"))
+PYEOF2
+LOKN="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
+if hasE "$LOKN" '^║ lok +lokalnie +migawki lokalne +działa '; then
+    ok "relacje: relacja lokalna bez celu -- typ 'migawki lokalne' (nie 'kopia lokalna')"
+else
+    bad "relacje: migawki lokalne" "$LOKN"
 fi
 rm -rf "$LOKD"
 
@@ -1432,10 +1447,10 @@ json.dump(m, open(d + "/monitor.json", "w", encoding="utf-8"))
 PYEOF
 SOA="--status $SOD/status.json --jobs $SOD/list-jobs.json --monitors $SOD/monitor.json"
 SO3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 2>&1)"
-if hasE "$SO3" '^║ som +migawki na 10\.0\.0\.9 +migawki +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
+if hasE "$SO3" '^║ som +→ 10\.0\.0\.9 +migawki zdalne +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
    && hasE "$SO3" 'Migawki +co dobę 01:49, co godzinę' && hasE "$SO3" 'pve10_automated_daily' \
    && ! printf '%s\n' "$SO3" | grep -E '^║ som .*(pve10<|←)' | grep -q .; then
-    ok "relacje: relacja snaponly -- 'migawki na <peer>', typ 'migawki', w panelu 'Kopia: brak' i harmonogram migawek z rodzina"
+    ok "relacje: relacja snaponly -- '→ <peer>', typ 'migawki zdalne', w panelu 'Kopia: brak' i harmonogram migawek z rodzina"
 else
     bad "relacje: relacja snaponly" "$SO3"
 fi
@@ -1445,21 +1460,21 @@ else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
 SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
-if hasE "$SOE" 'Zmiana +Del na liście F3 usuwa relację, Ins zakłada' && ! has "$SOE" 'e zmień  p przywróć' && has "$SOE" 'Esc zamyka   strzałki/PgUp/PgDn przewijają'; then
-    ok "relacje: okno relacji snaponly -- stopka bez 'e zmień'/'p przywróć' (tylko klawisze), w panelu wiersz 'Zmiana'"
+if has "$SOE" 'e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
+    ok "relacje: okno relacji snaponly -- 'e zmień' jak w kazdej relacji, bez 'p przywróć' (nie ma kopii)"
 else
     bad "relacje: stopka okna snaponly" "$SOE"
 fi
 SOL="$(mktemp)"
 "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter,e,p --exec-log "$SOL" >/dev/null 2>&1
-if ! grep -q 'edit-relation\|restore' "$SOL" 2>/dev/null; then
-    ok "relacje: 'e' i 'p' w oknie relacji snaponly niczego nie uruchamiaja"
+if grep -Eq "zfs-backup.sh'? edit-relation som --ask\$" "$SOL" 2>/dev/null && ! grep -q 'restore' "$SOL"; then
+    ok "relacje: 'e' na relacji snaponly otwiera to samo okno zmiany (edit-relation --ask); 'p' nic nie uruchamia"
 else
     bad "relacje: e/p na snaponly" "$(cat "$SOL")"
 fi
 SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 160 --height 50 2>&1)"
-if [ "$(printf '%s\n' "$SO2" | grep -cE 'som +migawki na 10\.0\.0\.9 +migawka .*aktualne')" = 2 ]; then
-    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina i kierunkiem 'migawki na <peer>'"
+if [ "$(printf '%s\n' "$SO2" | grep -cE 'som +→ 10\.0\.0\.9 +migawka .*aktualne')" = 2 ]; then
+    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina i kierunkiem '→ <peer>'"
 else
     bad "zadania: zadania snaponly" "$SO2"
 fi
