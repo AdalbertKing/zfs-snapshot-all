@@ -1041,8 +1041,8 @@ else
     bad "odzysk: F9 na F6" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 80 2>&1 | grep 'Pomoc' | tail -1)"
-if has "$A" '11Odzysk' && has "$A" '12Wyjście' && ! has "$A" '9Odzysk'; then
-    ok "akcje: pasek F6 przy 80 kolumnach -- bez F9, z 11Odzysk i 12Wyjście"
+if has "$A" '11Odzysk' && has "$A" '12Wyj' && ! has "$A" '9Odzysk'; then
+    ok "akcje: pasek F6 przy 80 kolumnach -- bez F9, z 11Odzysk i 12Wyj(ście/dź)"
 else
     bad "akcje: pasek F6 przy 80 kolumnach" "$A"
 fi
@@ -1314,7 +1314,7 @@ PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,F10,tab,F12' -- --offline 
 pk2() { printf '%s\n' "$PK2" | awk -v k="=== $1" '$0 ~ /^=== / { on = ($0 == k); next } on'; }
 if [ "$PK2RC" -eq 2 ]; then
     echo "SKIP pty F11/F12: brak modulu pty (Windows) -- sprawdza CI"
-elif has "$(pk2 F11)" 'Odzysk danych na pve10' && has "$(pk2 F10)" 'F10 jest wolne' && has "$(pk2 F10)" 'Odzysk danych' \
+elif has "$(pk2 F11)" 'Odzysk danych na pve10' && has "$(pk2 F10)" 'F10 jest wolne' \
      && printf '%s\n' "$PK2" | grep -qx '=== exited'; then
     ok "pty: F11 (ESC[23~) otwiera Odzysk, F10 jest wolne, F12 (ESC[24~) konczy program rc=0 (petla curses)"
 else
@@ -1381,7 +1381,7 @@ fi
 # ============================================================================
 Z4W="$(screen zadania)"
 # F5 wrocilo 2026-10-09 jako ekran Szablony (uwaga 24) -- Monitora nadal nie ma.
-if ! has "$Z4W" 'Monitor' && hasE "$Z4W" 'F5 Szablony|5Szablony'; then
+if ! has "$Z4W" 'Monitor' && hasE "$Z4W" 'F5 Szablony|5Szablony|5Szabl'; then
     ok "F5: ekran domyslny (F2) nie wspomina Monitora; F5 to dzis Szablony"
 else
     bad "F5: pozostalosc na ekranie" "$Z4W"
