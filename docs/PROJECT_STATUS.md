@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f27e2d69540dae4e -->
+<!-- status-covers-digest: 61508fa690b146e8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ, paczka C: `[prune:]` czyta `gfs` szczebla z szablonu (2026-10-18; `finisz/C-gfs-prune`).**
+  Wada: `gen-cron.sh` brał `gfs` dla `[prune:]` tylko z sekcji, więc szablon szczebla z `gfs = yes` (profile GFS)
+  dawał płaskie liczby zamiast drabiny -- źródłowe przycinanie relacji GFS było płaskie (zmierzone pve11 -> pve10,
+  10-17). Teraz, gdy sekcja nie mówi o `gfs`, szczebel z `gfs = yes` w szablonie dostaje własną linię `delsnaps.sh -G`
+  (jak w `[dataset:]`); sekcyjne `gfs = yes` (jedna wspólna drabina) i `gfs = no` (płasko) bez zmian. Przez tę wadę
+  migawki zdalne odrzucały profile GFS -- teraz je przyjmują (`gfs = yes` w szablonie przycinania źródła).
+  Skutek na hostach: konfig, którego szablony `[prune:]` mają `gfs = yes`, dostanie `-G` przy najbliższym
+  wygenerowaniu crona (aktywacja/zmiana relacji); obecne wzorce `gencron` bez zmian (121/0). Testy: nowy wzorzec
+  `test/fixtures/prune-tier-gfs` (na `main` bez `-G`), `test/zfsbackup --section snaponly` 31/0.
 
 - **FINISZ, paczka A: „d dokończ” w oknie relacji (2026-10-18; `finisz/A-dokoncz`).**
   Tryb pracy od 2026-10-18: uwagi właściciela -> `docs/project/FINISZ-BACKLOG.md`, paczki, jeden PR na paczkę,

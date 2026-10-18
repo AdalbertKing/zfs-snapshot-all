@@ -2984,9 +2984,20 @@ build_prune_section() {
             lint_cron_schedule "$prune_schedule" "[prune:$scope] tier=$tier" prune_schedule
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
+            # PER-TIER LADDER, as in [dataset:] (build_dataset): with no section-level
+            # gfs, a tier whose TEMPLATE says `gfs = yes` gets its own -G line. Read
+            # with the section only before, so a profile's gfs never reached a
+            # [prune:] -- a GFS relationship's source prune ran as flat counts
+            # (measured pve11 -> pve10, 2026-10-17). The section still wins: an
+            # explicit `gfs = no` in [prune:] keeps the tier flat.
+            resolve_bool_field gfs "$sec" "$tmpl" "[prune:$scope] tier=$tier" 0
+            local tier_gfs="$BOOL_FIELD"
+            if [ "$tier_gfs" -eq 1 ] && ! [[ "$retain_flag" =~ ^-[HDWMY][0-9]+$ ]]; then
+                die "[prune:$scope] tier=$tier: gfs=yes needs a single count-based retain flag (-H/-D/-W/-M/-Y followed by a number), got '$retain_flag'"
+            fi
             praw="$(resolve_field notify_raw_prune "$sec" "$tmpl" "")" || praw=""
             if [ -n "$praw" ]; then pnotify="$praw"; else pnotify="$(notify_text "$host_label" "$ntier" "prune" "$plabel")"; fi
-            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}")
+            PRUNE_SEC_ENTITIES+=("${scope}${SEP}${tier}${SEP}${pattern}${SEP}${retain_flag}${SEP}${prune_schedule}${SEP}${pnotify}${SEP}${recursive}${SEP}${clearcut}${SEP}${ssh_flags}${SEP}${pair_label}${SEP}${tier_gfs}")
             SCOPE_PATTERNS+=("${scope}${SEP}${pattern}")
         elif ! resolve_monitor "$sec" "$tmpl" "[prune:$scope] tier=$tier" 2>/dev/null; then
             # Per tier this is only "this tier emits nothing" -- normal on a
@@ -4123,11 +4134,12 @@ emit_inline_prune() {
 # Prune sections: one standalone delsnaps line per tier. recursive -> -R,
 # clear_cut -> -F. Additive; no cross-check against inline prune (B semantics).
 emit_prune_sections() {
-    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl fprot
+    local e scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl tgfs fprot
     for e in "${PRUNE_SEC_ENTITIES[@]}"; do
-        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl fprot <<< "$e"
+        IFS="$SEP" read -r scope tier pattern retain schedule notify recursive clearcut sshflags pairlbl tgfs fprot <<< "$e"
         local flag="" fflag="" sflag="" lflag=""
-        [ "$recursive" = "1" ] && flag="-R "
+        [ "$tgfs" = "1" ] && flag="-G "
+        [ "$recursive" = "1" ] && flag="${flag}-R "
         [ "$clearcut" = "1" ] && fflag="-F "
         [ -n "$sshflags" ] && sflag="$sshflags "
         [ -n "$pairlbl" ] && lflag="-L $pairlbl "

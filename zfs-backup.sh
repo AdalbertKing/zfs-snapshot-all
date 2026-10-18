@@ -11743,13 +11743,12 @@ emit_snaponly_sections() {   # <workfile> <name>
         [ -n "$sched" ] || continue          # a tier that only prunes upstream copies: nothing to snapshot
         prefix="${PROF_F[template:$t|prefix]:-}"
         [ -n "$prefix" ] || die "snaponly: profile tier '$t' has no prefix -- a snaponly relationship needs a family of its own on the source (a prefixless/passive profile cannot be used)"
-        # A GFS ladder is not a count: `keep = 24` there means one per hour
-        # bucket, and a source [prune:] carries ONE section-level ladder, not one
-        # per tier. Turning it into a flat retain would silently change the
-        # policy (F2) -- refused instead.
-        case "$(printf '%s' "${SRC_GFS[$t]:-no}" | tr '[:upper:]' '[:lower:]')" in
-            yes) die "snaponly: tier '$t' of $spf keeps a GFS ladder (gfs = yes) -- a source [prune:] cannot carry a per-tier ladder, and a flat count would be a different policy. Use a profile with count retention (e.g. d7h24). Nothing was changed." ;;
-        esac
+        # A GFS ladder is not a count: `keep = 24` there means one per hour bucket.
+        # The source template carries `gfs = yes` and gen-cron renders that tier's
+        # [prune:] line with -G (per-tier ladder, as [dataset:] does) -- refused
+        # here until gen-cron read a tier's gfs in [prune:] (2026-10-18).
+        local sgfs=0
+        case "$(printf '%s' "${SRC_GFS[$t]:-no}" | tr '[:upper:]' '[:lower:]')" in yes) sgfs=1 ;; esac
         fam="${tag}_${prefix}"
         sched="$(snaponly_retime "$sched" "$base")" \
             || die "snaponly: tier '$t' has send_schedule '${PROF_F[template:$t|send_schedule]}' -- its minute must be a single number to be moved off the multiples of five"
@@ -11789,6 +11788,7 @@ emit_snaponly_sections() {   # <workfile> <name>
             echo "	prune_schedule = $psched"
             echo "	pattern        = $fam"
             echo "	retain         = $retain"
+            [ "$sgfs" -eq 1 ] && echo "	gfs            = yes"
         } >> "$wf"
         prune_ids+=("snaponly_src__${name}__$t")
     done

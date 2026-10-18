@@ -11,9 +11,9 @@ Cel: każda funkcjonalność pakietu dostępna z GUI, z chudym odzyskiem.
 
 | # | paczka | zawartość | stan |
 |---|---|---|---|
-| A | Cykl relacji w GUI | relacja nie-aktywna (1. kopia, czeka na źródło, zmiana adresu w toku): w oknie relacji jeden klawisz „dokończ” = następny krok (`seed` / `verify-endpoint` / `activate`), zamiast komendy do przepisania -- ZROBIONE (`d dokończ`); wyłącz/włącz (`disable-client`/`enable-client`) -- czeka na decyzję: F8 Pauza już zatrzymuje relację | w toku |
+| A | Cykl relacji w GUI | relacja nie-aktywna (1. kopia, czeka na źródło, zmiana adresu w toku): w oknie relacji jeden klawisz „dokończ” = następny krok (`seed` / `verify-endpoint` / `activate`), zamiast komendy do przepisania -- ZROBIONE (`d dokończ`, #609); wyłącz/włącz (`disable-client`/`enable-client`) -- czeka na decyzję: F8 Pauza już zatrzymuje relację | w toku |
 | B | Chudy odzysk | F11 (zrobione #608) + luki odzysku: lustro, łańcuch a<b<>c; „Przeglądaj kopię” runda 1 (migawka RO zamontowana, `mc`, odmontowanie) jako wiersz/klawisz F11 | do zrobienia |
-| C | Retencja | wada `[prune:]` gubi `gfs=yes`; podgląd retencji źródła (`audit-source-retention`) w oknie relacji | do zrobienia |
+| C | Retencja | wada `[prune:]` gubi `gfs=yes` -- ZROBIONE (drabina `-G` na szczebel; migawki zdalne przyjmują profil GFS); podgląd retencji źródła (`audit-source-retention`) w oknie relacji | w toku |
 | D | Replika | `purge-replica-copy`, `remove-media-trigger` z okna repliki | do zrobienia |
 | E | Suity | `test/tui` z selektorem sekcji; przegląd duplikatów w `zfsbackup`/`localbackup` (165 s i 143 s w CI); zmiana klawisza/ekranu nie ciągnie całego drzewa | do zrobienia |
 | F | Uwagi z obserwacji | wpisy U1.. poniżej, zbierane do najbliższej paczki | otwarte |
