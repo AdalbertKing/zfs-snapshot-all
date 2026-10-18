@@ -8431,7 +8431,12 @@ cmd_local_backup() {
         # argv, and the difference between "I meant no copy" and "my variable
         # was empty" is not visible from here -- so the preview is where it has
         # to be seen.
-        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ]             && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
+        # import-relation sets LB_TARGET_FROM_FILE (a function-local of its own, never
+        # exported): there the blank came out of a record local-backup itself wrote,
+        # and the operator confirmed it on import's own preview -- no shell variable
+        # was involved (pve9, 2026-10-18: lab-migawki round trip).
+        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ] && [ "${LB_TARGET_FROM_FILE:-0}" != 1 ] \
+            && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
     elif [ -z "$target" ]; then
         read_server_conf
         local proposal
@@ -17064,7 +17069,7 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
     local replay; replay=$(json_value_of "$doc" replay)
     [ -n "$replay" ] || die "import-relation: '$file' has no 'replay' block -- nothing to reproduce"
     local verb; verb=$(json_unquote "$(json_value_of "$replay" verb)")
-    [ "$verb" = "add-client" ] || die "import-relation: replay verb '$verb' is not one this build reproduces (only add-client)"
+    case "$verb" in add-client|local-backup) ;; *) die "import-relation: replay verb '$verb' is not one this build reproduces (only add-client and local-backup)" ;; esac
     local name; name=$(json_unquote "$(json_value_of "$replay" name)")
     [ -n "$newname" ] && name="$newname"
     client_name_valid "$name" || die "import-relation: invalid relationship name '$name'"
@@ -17180,6 +17185,36 @@ SCOPE
         export RUX_EXACT_SCOPE
         rux_entry "${rux_args[@]}"
         log "import-relation: '$name' reproduced from $file on a new collector, scope granted on $peer_host as exported"
+        return 0
+    fi
+
+    # A LOCAL relationship: one local-backup run creates, installs and records it
+    # (no peer, no seed, no activate). --name=NEW renames it like add-client's name.
+    if [ "$verb" = local-backup ]; then
+        local -a lb_args=()
+        for x in "${argv[@]}"; do
+            case "$x" in --name=*) lb_args+=("--name=$name") ;; *) lb_args+=("$x") ;; esac
+        done
+        lb_args+=(--install --yes)
+        echo "Import relacji '$name' z $file -- RELACJA LOKALNA"
+        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+        echo
+        echo "Wykona sie DOKLADNIE to (jedno polecenie: sekcje, cron, rekord):"
+        printf '  zfs-backup.sh local-backup'
+        for x in "${lb_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        printf '\n'
+        case " ${lb_args[*]} " in *" --target= "*)
+            echo "  --target= jest PUSTY z pliku: same migawki na zrodlach, nic nie jest kopiowane." ;;
+        esac
+        if [ "$yes" -ne 1 ]; then
+            echo
+            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            return 0
+        fi
+        echo
+        local LB_TARGET_FROM_FILE=1
+        cmd_local_backup "${lb_args[@]}"
+        log "import-relation: '$name' reproduced from $file (local relationship)"
         return 0
     fi
 
@@ -17317,6 +17352,22 @@ EXC
 $(export_relation_numbered EXCLUDE_FAMILY)
 EXF
 
+    # A LOCAL relationship (RUX_MODE=local: a copy on this host, or snapshots with
+    # no copy at all) is created by local-backup, not add-client -- there is no
+    # peer and add-client refuses without --host. Replayed as the one command the
+    # wizard runs: sources, the target (blank = none), and the same create flags.
+    # The source list rode only after CLIENT_TARGET above, so snapshots-only lost
+    # it (owner, pve9 2026-10-18: lab-migawki exported, deleted, import refused).
+    local rverb=add-client rthen='"seed","activate"'
+    if [ "${RUX_MODE:-}" = local ]; then
+        local -a lbargv=("--name=$name" "--source=${REQUESTED_DATASETS:-}" "--target=${CLIENT_TARGET:-}")
+        for x in ${argv[@]+"${argv[@]}"}; do
+            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--bandwidth=*) ;; *) lbargv+=("$x") ;; esac
+        done
+        argv=("${lbargv[@]}")
+        rverb=local-backup rthen=""
+    fi
+
     # --- what is true and cannot be replayed --------------------------------
     local unrep_json="" ufirst=1
     for fld in $EXPORT_RELATION_UNREPLAYABLE; do
@@ -17332,9 +17383,15 @@ EXF
         echo "Wyeksportowano z:  $(hostname 2>/dev/null || echo '?')  $(date -Is 2>/dev/null)"
         echo
         echo "Odtworzenie (te argumenty, ta kolejnosc):"
-        printf '  zfs-backup.sh add-client %s' "$name"
-        for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
-        printf '\n  zfs-backup.sh seed %s\n  zfs-backup.sh activate %s\n' "$name" "$name"
+        if [ "$rverb" = local-backup ]; then
+            printf '  zfs-backup.sh local-backup'
+            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
+            printf ' \\\n      --install\n'
+        else
+            printf '  zfs-backup.sh add-client %s' "$name"
+            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
+            printf '\n  zfs-backup.sh seed %s\n  zfs-backup.sh activate %s\n' "$name" "$name"
+        fi
         if [ -n "$unrep_json" ]; then
             echo
             echo "NIE odtwarza sie z tego pliku (kreator o to nie pyta):"
@@ -17363,8 +17420,8 @@ EXF
     # "then" is the documented lifecycle after add-client: seed, then activate.
     # The first version wrote ["activate"] alone, and activate refuses an
     # unseeded record -- measured 2026-09-09 when import-relation replayed it.
-    printf ',"replay":{"verb":"add-client","name":"%s","argv":[%s],"then":["seed","activate"]}' \
-        "$(json_escape "$name")" "$argv_json"
+    printf ',"replay":{"verb":"%s","name":"%s","argv":[%s],"then":[%s]}' \
+        "$rverb" "$(json_escape "$name")" "$argv_json" "$rthen"
     printf ',"not_replayable":[%s]' "$unrep_json"
     # THE SCOPE (2026-09-23). A mode-based relationship's dataset set is not in
     # its record: it is the scope the SOURCE committed for this collector
