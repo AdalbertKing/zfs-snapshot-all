@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f592d323d98ba07c -->
+<!-- status-covers-digest: 9248fd14e07bb3ae -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Eksport/import relacji lokalnej (2026-10-18; `fix/import-local-relation`).**
+  `export-relation` zapisywał każdą relację jako `add-client …` + `seed` + `activate`; relacja lokalna (kopia lokalna
+  i migawki lokalne, `RUX_MODE=local`) powstaje przez `local-backup` i nie ma hosta, więc import padał na „add-client
+  requires --host”. Migawki lokalne traciły do tego listę źródeł (dopisywana tylko za celem, a celu nie ma). Teraz
+  eksport relacji lokalnej daje `replay.verb = local-backup` z `--name`, `--source=` (z rekordu), `--target=` (pusty =
+  same migawki) i tymi samymi flagami tworzenia; import pokazuje i wykonuje jedno `local-backup … --install --yes`
+  (`--name=NOWA` działa). Ograniczenie wspólne z relacjami zdalnymi: odtwarzany jest szablon (`--profile`), nie ręczne
+  zmiany szczebli. Testy: `test/zfsbackup --section exportrel` 47/0 (na `main` 44/3).
 
 - **GUI dla relacji `snaponly` -- runda 3 REV-20261017-152 (2026-10-18; `feat/gui-snaponly`).**
   Czytelniki, z których korzysta GUI, nie znały `snaponly`: `list-jobs` pomijał sekcje `[snaponly:]` (relacja miała tylko

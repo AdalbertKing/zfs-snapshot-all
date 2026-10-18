@@ -10777,6 +10777,46 @@ else
     bad "exportrel: an unknown relationship is refused by name" "$(cat "$WORK/ex.out" "$WORK/ex.err")"
 fi
 
+# LOCAL RELATIONSHIPS ROUND-TRIP (owner, pve9 2026-10-18): lab-migawki (snapshots,
+# no copy) exported as `add-client --mode=local` with NO sources and no --host;
+# the import then died in add-client. A local relationship is local-backup's.
+{
+  echo "CLIENT_NAME=migi"; echo "STATE=active"; echo "RUX_MODE=local"; echo "CLIENT_TARGET="
+  echo "REQUESTED_DATASETS=hdd/lab/a,hdd/lab/b"; echo "PROFILE=default"; echo "RECURSION=flat"
+  echo "LOCAL_USER=zfsbackup"; echo "CRON_CONFIG=$EX/cron.conf"
+} > "$EX/clients/migi.conf"
+{ grep -v '^CLIENT_TARGET=\|^CLIENT_NAME=' "$EX/clients/migi.conf"; echo "CLIENT_NAME=kopl"; echo "CLIENT_TARGET=hdd/kopie"; } > "$EX/clients/kopl.conf"
+ex_run export-relation migi --json; cp "$WORK/ex.out" "$EX/migi.json"
+ex_run export-relation kopl --json; cp "$WORK/ex.out" "$EX/kopl.json"
+if grep -qF '"replay":{"verb":"local-backup","name":"migi","argv":["--name=migi","--source=hdd/lab/a,hdd/lab/b","--target=","--recursive=flat","--profile=default","--local-user=zfsbackup"],"then":[]}' "$EX/migi.json" \
+   && grep -qF '"argv":["--name=kopl","--source=hdd/lab/a,hdd/lab/b","--target=hdd/kopie",' "$EX/kopl.json" \
+   && ! grep -q -- '--mode=local' "$EX/migi.json" "$EX/kopl.json"; then
+    ok "exportrel: a local relationship replays as local-backup with its sources and target (blank target = snapshots only)"
+else
+    bad "exportrel: local relationship replay" "$(grep -o '"replay":{[^}]*}' "$EX/migi.json" "$EX/kopl.json")"
+fi
+lb_im_run() {   # <args...> with local-backup/add-client STUBBED to record argv
+    ( export CLIENTS_DIR="$EX/imclients" SERVER_CONF="$EX/no-server-conf" IM_LOG="$EX/lbcalls.log"
+      mkdir -p "$CLIENTS_DIR"; : > "$IM_LOG"
+      bash -c '
+        source "$1"; shift
+        cmd_local_backup() { printf "local-backup"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_add_client()   { printf "add-client|%s\n" "$*"; } >> "$IM_LOG"
+        cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
+}
+lb_im_run "$EX/migi.json"; lb_rc=$?
+if [ "$lb_rc" -eq 0 ] && grep -q 'RELACJA LOKALNA' "$WORK/im.out" && grep -q 'nie zostalo zmienione' "$WORK/im.out" && [ ! -s "$EX/lbcalls.log" ]; then
+    ok "importrel: a local relationship without --yes shows the local-backup command and calls nothing"
+else
+    bad "importrel: local preview" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
+fi
+lb_im_run "$EX/migi.json" --name=migi2 --yes; lb_rc=$?
+if [ "$lb_rc" -eq 0 ] && [ "$(cat "$EX/lbcalls.log")" = 'local-backup|--name=migi2|--source=hdd/lab/a,hdd/lab/b|--target=|--recursive=flat|--profile=default|--local-user=zfsbackup|--install|--yes' ]; then
+    ok "importrel: a local relationship is reproduced by ONE local-backup call, --name=NEW applied, no add-client/seed/activate"
+else
+    bad "importrel: local reproduce" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
+fi
+
 
 fi   # --- koniec sekcji exportrel ---
 if want saveprof; then
