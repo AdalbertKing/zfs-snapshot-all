@@ -6,7 +6,8 @@
 # W12, 2026-10-11): opcja "skasuj kopię na nośniku" znikła -- nośnik wymienny zwykle
 # leży poza maszyną, więc i tak się nie udawała, a kasowanie kopii zapasowej przy
 # okazji usuwania definicji to za łatwa strata. Kto chce wyczyścić dysk, formatuje go
-# (zmiana repliki -> "Dodaj dysk"). Czasownik purge-replica-copy zostaje dla CLI.
+# (zmiana repliki -> "Dodaj dysk"). Czasownika do kasowania kopii na nośniku nie ma
+# (właściciel 2026-10-18: "nie chcemy tego").
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u

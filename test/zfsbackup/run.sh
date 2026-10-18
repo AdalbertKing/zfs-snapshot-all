@@ -6506,7 +6506,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # activation of a snaponly relationship. A WRITER, aimed like activate-client
 # (cron_context_resolve adopt, assert_cron_config_matches_installed, then
 # atomic_replace_and_install).
-if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 22 ]; then
+# 15/21 since 2026-10-18: purge-replica-copy is gone (owner: "nie chcemy tego" -- a
+# disk is cleared by formatting it), and with it one READER of the config.
+if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 21 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -7617,144 +7619,6 @@ case "$out" in
     *) ok "control: a record with no exclusions passes the guard" ;;
 esac
 
-
-
-# --- purge-replica-copy: the OTHER half of remove-replica --------------------
-#
-# remove-replica ends by saying the copy on the medium was not touched, and for
-# a long time nothing in the package could touch it. Measured 2026-09-02 during
-# a lab teardown: 645M of replica sat on a disk with no verb able to name it.
-#
-# What is asserted here is DECISION LOGIC -- zfs and zpool are stubbed, as they
-# are for the gate's own suite. That ZFS destroys what it is told belongs on a
-# host with a real disk.
-PRC="$WORK/purgereplica"; mkdir -p "$PRC/bin"
-# Set HERE, not only in prc_run's env: prc_gate writes the gate stub with an
-# unquoted heredoc, so these expand at WRITE time. Left unset they tripped
-# set -u, the stub was never written, and the wrong-medium case silently
-# exercised the previous stub instead -- a test that passed the wrong thing.
-PRC_LOG="$PRC/calls.log"; PRC_GONE_A="$PRC/gone_a"; PRC_GONE_B="$PRC/gone_b"
-export PRC_LOG PRC_GONE_A PRC_GONE_B
-cat > "$PRC/bin/zpool" <<'EOF'
-#!/bin/bash
-[ "$1" = "import" ] && { printf '   pool: repl\n     id: 1\n  state: ONLINE\n'; exit 0; }
-exit 0
-EOF
-chmod +x "$PRC/bin/zpool"
-# The medium holds two children under the marker dataset, plus the marker.
-cat > "$PRC/bin/zfs" <<'EOF'
-#!/bin/bash
-case "$*" in
-  *"list -H -o name -d 1 repl/replica"*)
-      printf 'repl/replica\nrepl/replica/tank/a\nrepl/replica/tank/b\n'; exit 0 ;;
-  *"list -H -o used"*)      printf '10M\n'; exit 0 ;;
-  *"list -H -t snapshot"*)  printf 'x@1\nx@2\n'; exit 0 ;;
-  *"list -H -o name repl/replica/tank/a"*) [ -f "$PRC_GONE_A" ] && exit 1; printf 'repl/replica/tank/a\n'; exit 0 ;;
-  *"list -H -o name repl/replica/tank/b"*) [ -f "$PRC_GONE_B" ] && exit 1; printf 'repl/replica/tank/b\n'; exit 0 ;;
-  *"destroy -r repl/replica/tank/a"*) : > "$PRC_GONE_A"; echo "$*" >> "$PRC_LOG"; exit 0 ;;
-  *"destroy -r repl/replica/tank/b"*) : > "$PRC_GONE_B"; echo "$*" >> "$PRC_LOG"; exit 0 ;;
-  *destroy*)                echo "$*" >> "$PRC_LOG"; exit 0 ;;
-esac
-exit 0
-EOF
-chmod +x "$PRC/bin/zfs"
-prc_gate() {   # <status-rc>
-    cat > "$PRC/bin/zfs-media-gate.sh" <<EOF
-#!/bin/bash
-echo "\$*" >> "$PRC_LOG"
-[ "\$1" = "status" ] && exit $1
-exit 0
-EOF
-    chmod +x "$PRC/bin/zfs-media-gate.sh"
-}
-prc_run() {   # <config> <args...>
-    local cfg="$1"; shift
-    PATH="$PRC/bin:$PATH" bash -c "
-        source '$ZFSBACKUP'
-        SCRIPT_DIR='$PRC/bin'
-        cron_target_user() { echo root; }
-        cron_context_resolve() { CRON_CTX_FILE='$cfg'; }
-        cmd_purge_replica_copy $*
-    " 2>&1
-}
-: > "$PRC/calls.log"; rm -f "$PRC/gone_a" "$PRC/gone_b"
-cat > "$PRC/jobs.conf" <<'EOF'
-[replica:weekly]
-	source    = tank/a,tank/b
-	dst       = repl/replica
-	prefix    = replica_
-EOF
-
-# 1. WITHOUT --yes IT DESTROYS NOTHING, and says what it would take.
-prc_gate 0
-out=$(prc_run "$PRC/jobs.conf" weekly); rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'repl/replica/tank/a' \
-   && printf '%s' "$out" | grep -q 'plan only' \
-   && ! grep -q 'destroy' "$PRC/calls.log"; then
-    ok "purge-replica-copy: without --yes it lists the victims and destroys nothing"
-else
-    bad "purge-replica-copy: without --yes it lists the victims and destroys nothing" "rc=$rc" "$out"
-fi
-
-# 2. THE MARKER DATASET SURVIVES. It is what the gate identifies the disk by;
-#    taking it would leave a medium nothing can recognise -- a worse state than
-#    the one being cleaned up.
-if printf '%s' "$out" | grep -q 'repl/replica itself is KEPT' \
-   && ! printf '%s' "$out" | grep -qE '^>>>   repl/replica  '; then
-    ok "purge-replica-copy: the marker dataset is named as kept, not listed as a victim"
-else
-    bad "purge-replica-copy: the marker dataset is named as kept, not listed as a victim" "$out"
-fi
-
-# 3. A WRONG MEDIUM IS REFUSED. This is the one mistake that cannot be taken
-#    back, and the gate is the only thing that can tell "not imported" from
-#    "imported, but this is somebody else's disk".
-: > "$PRC/calls.log"
-prc_gate 2
-out=$(prc_run "$PRC/jobs.conf" weekly --yes); rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'WRONG medium' \
-   && ! grep -q 'destroy' "$PRC/calls.log"; then
-    ok "purge-replica-copy: a wrong medium is refused and nothing is destroyed"
-else
-    bad "purge-replica-copy: a wrong medium is refused and nothing is destroyed" "rc=$rc" "$out"
-fi
-
-# 4. WITH --yes IT DESTROYS THE CHILDREN, and only them.
-: > "$PRC/calls.log"; rm -f "$PRC/gone_a" "$PRC/gone_b"
-prc_gate 0
-out=$(prc_run "$PRC/jobs.conf" weekly --yes); rc=$?
-if [ "$rc" -eq 0 ] \
-   && grep -q 'destroy -r repl/replica/tank/a' "$PRC/calls.log" \
-   && grep -q 'destroy -r repl/replica/tank/b' "$PRC/calls.log" \
-   && ! grep -qE 'destroy -r repl/replica$' "$PRC/calls.log"; then
-    ok "purge-replica-copy: --yes destroys the per-source children and not the marker"
-else
-    bad "purge-replica-copy: --yes destroys the per-source children and not the marker" "rc=$rc" "$(cat "$PRC/calls.log")"
-fi
-
-# 5. NO SECTION AND NO --dst IS A REFUSAL, NOT A GUESS.
-#    This is the order that actually happens: the job is removed first and the
-#    copy is noticed later, by which time nothing records the destination. A
-#    command that guessed which dataset on the disk was ours would eventually
-#    guess wrong on a disk holding more than one thing.
-: > "$PRC/calls.log"
-printf '[defaults]\n' > "$PRC/empty.conf"
-out=$(prc_run "$PRC/empty.conf" weekly --yes); rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'will not guess' \
-   && ! grep -q 'destroy' "$PRC/calls.log"; then
-    ok "purge-replica-copy: with no section and no --dst it refuses rather than guessing"
-else
-    bad "purge-replica-copy: with no section and no --dst it refuses rather than guessing" "rc=$rc" "$out"
-fi
-
-# 6. ...and --dst alone is enough to work without the config.
-: > "$PRC/calls.log"; rm -f "$PRC/gone_a" "$PRC/gone_b"
-out=$(prc_run "$PRC/empty.conf" weekly --dst=repl/replica --yes); rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'destroy -r repl/replica/tank/a' "$PRC/calls.log"; then
-    ok "purge-replica-copy: --dst alone works when the section is already gone"
-else
-    bad "purge-replica-copy: --dst alone works when the section is already gone" "rc=$rc" "$(cat "$PRC/calls.log")"
-fi
 
 
 # --- --source-profile: asymmetric retention ---------------------------------
