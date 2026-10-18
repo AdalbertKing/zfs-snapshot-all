@@ -2132,6 +2132,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Peer", rel.get("peer_host") or "?"))
         if rel.get("mode") == "snaponly":
             pairs.append(("Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
+            pairs.append(("Zmiana", u"usuń relację i załóż ją od nowa (bez edycji w miejscu)"))
         pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
@@ -4837,9 +4838,11 @@ def _ui_render(self, width, height):
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
                 # snaponly (REV-20261017-152 runda 3): zmiana w miejscu i odzysk nie
-                # istnieja (nic tu nie ma do odzyskania), wiec ich klawiszy nie ma.
+                # istnieja (nic tu nie ma do odzyskania), wiec ich klawiszy nie ma --
+                # stopka jak w zwyklym oknie; jak to zmienic, mowi wiersz "Zmiana"
+                # w panelu (wlasciciel 2026-10-18: zdanie w stopce bylo nielogiczne).
                 if (obj.get("rel") or {}).get("mode") == "snaponly":
-                    foot = u"tylko migawki: zmiana = usuń i załóż od nowa   Esc zamyka   strzałki przewijają"
+                    foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
