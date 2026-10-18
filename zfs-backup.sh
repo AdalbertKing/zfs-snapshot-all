@@ -11970,13 +11970,6 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose> [rerender 0|1]
     local name="$1" yes="$2" plan_only="$3" verbose="$4" rerender="${5:-0}"
     local cpath; cpath=$(client_conf_path "$name")
     record_load client "$cpath"
-    # edit-relation --profile=/--source-profile= (the GUI's "Użyj szablonu" and
-    # "Harmonogram i retencja"): the NEW choice drives this render and is written
-    # to the record only after the install succeeded.
-    if [ "$rerender" -eq 1 ]; then
-        [ "${SNAPONLY_NEW_PROFILE_GIVEN:-0}" = 1 ] && PROFILE="${SNAPONLY_NEW_PROFILE:-}"
-        [ "${SNAPONLY_NEW_SRC_GIVEN:-0}" = 1 ] && SOURCE_PROFILE="${SNAPONLY_NEW_SRC:-}"
-    fi
     local recorded_cron_config="${CRON_CONFIG:-}" recorded_local_user="${LOCAL_USER:-}"
     case "${STATE:-}" in
         endpoint_verified|active) ;;
@@ -11984,6 +11977,19 @@ activate_snaponly() {   # <name> <yes> <plan_only> <verbose> [rerender 0|1]
     esac
     [ -z "${CLIENT_TARGET:-}" ] || die "client '$name' is snaponly but its record names a target ('$CLIENT_TARGET') -- inconsistent record, refusing"
     load_client_and_connection "$cpath"
+    # edit-relation --profile=/--source-profile= (the GUI's "Użyj szablonu" and
+    # "Harmonogram i retencja"): the NEW choice drives this render and is written
+    # to the record only after the install succeeded. AFTER the loader: it reads
+    # the record again, and set before it the new choice was silently replaced by
+    # the recorded one (pve9 'solab', d7h24 -> d30, 2026-10-18).
+    if [ "$rerender" -eq 1 ]; then
+        [ "${SNAPONLY_NEW_PROFILE_GIVEN:-0}" = 1 ] && PROFILE="${SNAPONLY_NEW_PROFILE:-}"
+        [ "${SNAPONLY_NEW_SRC_GIVEN:-0}" = 1 ] && SOURCE_PROFILE="${SNAPONLY_NEW_SRC:-}"
+        # The same allowance the regular edit path gives (EDIT_RELATION_NAME): a
+        # tier the new profile drops takes its own lines with it; foreign lines
+        # stay guarded by assert_target_block_not_clobbered.
+        EDIT_RELATION_NAME="$name"
+    fi
     [ -n "${PEER_SAVED_DATASETS:-}" ] || die "manifest for '$PEER_HOST' has no dataset list -- something is wrong with the pairing"
     snaponly_assert_source_free "$name" "$LOAD_LABEL" $PEER_SAVED_DATASETS
     read_server_conf
