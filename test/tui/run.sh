@@ -3000,6 +3000,7 @@ case "$1" in
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
         esac ;;
     install-media-trigger) echo ">>> atrapa: regula"; exit 0 ;;
+    remove-media-trigger) echo ">>> atrapa: regula zdjeta"; exit 0 ;;
     prepare-media) case " $* " in
             *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
 ' ;;
@@ -3082,7 +3083,9 @@ else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
 fi
 # (4): regula (z --on-insert) juz jest -> okno B JEST (to ustawienie repliki); Nie =
-#      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu".
+#      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu". Zadna
+#      replika nie rusza juz po wlozeniu -> plan ZDEJMUJE regule (wlasciciel 2026-10-18:
+#      "skoro mozemy wlaczac, chcemy moc wylaczyc").
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --on-insert --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}own
@@ -3094,8 +3097,9 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}
 " RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
-   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log"; then
-    ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no, regula nie ruszana"
+   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log" \
+   && grep -qF 'ZOSTANIE ZDJĘTA' "$RP/wt.log" && grep -q '^remove-media-trigger --install$' "$RP/zb.log"; then
+    ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no; zadna replika nie rusza po wlozeniu -> plan zdejmuje regule"
 else
     bad "replica: kreator, B przy istniejacej regule" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
