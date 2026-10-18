@@ -10800,7 +10800,7 @@ lb_im_run() {   # <args...> with local-backup/add-client STUBBED to record argv
       mkdir -p "$CLIENTS_DIR"; : > "$IM_LOG"
       bash -c '
         source "$1"; shift
-        cmd_local_backup() { printf "local-backup"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        cmd_local_backup() { printf "local-backup[%s]" "${LB_TARGET_FROM_FILE:-0}"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_add_client()   { printf "add-client|%s\n" "$*"; } >> "$IM_LOG"
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
@@ -10811,10 +10811,20 @@ else
     bad "importrel: local preview" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
 fi
 lb_im_run "$EX/migi.json" --name=migi2 --yes; lb_rc=$?
-if [ "$lb_rc" -eq 0 ] && [ "$(cat "$EX/lbcalls.log")" = 'local-backup|--name=migi2|--source=hdd/lab/a,hdd/lab/b|--target=|--recursive=flat|--profile=default|--local-user=zfsbackup|--install|--yes' ]; then
-    ok "importrel: a local relationship is reproduced by ONE local-backup call, --name=NEW applied, no add-client/seed/activate"
+if [ "$lb_rc" -eq 0 ] && [ "$(cat "$EX/lbcalls.log")" = 'local-backup[1]|--name=migi2|--source=hdd/lab/a,hdd/lab/b|--target=|--recursive=flat|--profile=default|--local-user=zfsbackup|--install|--yes' ] \
+   && grep -q 'PUSTY z pliku' "$WORK/im.out"; then
+    ok "importrel: a local relationship is reproduced by ONE local-backup call, --name=NEW applied, the file's blank target confirmed by import, no add-client/seed/activate"
 else
     bad "importrel: local reproduce" "rc=$lb_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$EX/lbcalls.log")"
+fi
+# ...and the guard import relaxes stays whole for everyone else: a typed
+# `--target=''` (or an unset "$VAR") never installs under --yes.
+lb_g=$( ( export CLIENTS_DIR="$EX/imclients" SERVER_CONF="$EX/no-server-conf"
+          bash "$ZFSBACKUP" local-backup --name=g --source=hdd/lab/a --target= --install --yes ) 2>&1 ); lb_grc=$?
+if [ "$lb_grc" -ne 0 ] && printf '%s' "$lb_g" | grep -q "will not install under --yes"; then
+    ok "localbackup: --target='' --install --yes is still refused outside import (confirmed by eye)"
+else
+    bad "localbackup: blank-target --yes guard" "rc=$lb_grc" "$lb_g"
 fi
 
 

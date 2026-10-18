@@ -8431,7 +8431,12 @@ cmd_local_backup() {
         # argv, and the difference between "I meant no copy" and "my variable
         # was empty" is not visible from here -- so the preview is where it has
         # to be seen.
-        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ]             && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
+        # import-relation sets LB_TARGET_FROM_FILE (a function-local of its own, never
+        # exported): there the blank came out of a record local-backup itself wrote,
+        # and the operator confirmed it on import's own preview -- no shell variable
+        # was involved (pve9, 2026-10-18: lab-migawki round trip).
+        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ] && [ "${LB_TARGET_FROM_FILE:-0}" != 1 ] \
+            && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
     elif [ -z "$target" ]; then
         read_server_conf
         local proposal
@@ -17198,12 +17203,16 @@ SCOPE
         printf '  zfs-backup.sh local-backup'
         for x in "${lb_args[@]}"; do printf ' \\\n      %s' "$x"; done
         printf '\n'
+        case " ${lb_args[*]} " in *" --target= "*)
+            echo "  --target= jest PUSTY z pliku: same migawki na zrodlach, nic nie jest kopiowane." ;;
+        esac
         if [ "$yes" -ne 1 ]; then
             echo
             echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
             return 0
         fi
         echo
+        local LB_TARGET_FROM_FILE=1
         cmd_local_backup "${lb_args[@]}"
         log "import-relation: '$name' reproduced from $file (local relationship)"
         return 0
