@@ -2985,13 +2985,22 @@ build_prune_section() {
             resolve_keep_retain "$sec" "$tmpl" "$tier" || die "[prune:$scope] tier=$tier: ${KEEP_RETAIN_ERROR:-prune_schedule is set but neither 'keep' nor 'retain' resolved}"
             retain_flag="$RESOLVED_RETAIN"
             # PER-TIER LADDER, as in [dataset:] (build_dataset): with no section-level
-            # gfs, a tier whose TEMPLATE says `gfs = yes` gets its own -G line. Read
+            # gfs, a SOURCE-side tier whose TEMPLATE says `gfs = yes` gets its own -G line. Read
             # with the section only before, so a profile's gfs never reached a
             # [prune:] -- a GFS relationship's source prune ran as flat counts
             # (measured pve11 -> pve10, 2026-10-17). The section still wins: an
             # explicit `gfs = no` in [prune:] keeps the tier flat.
-            resolve_bool_field gfs "$sec" "$tmpl" "[prune:$scope] tier=$tier" 0
-            local tier_gfs="$BOOL_FIELD"
+            # ONLY ON THE SOURCE SIDE (`side = source`). A landing ([prune:<target>],
+            # side = target or unmarked) stays a flat count: a per-tier ladder empties
+            # a family whose newest snapshot left its range -- measured 2026-09-04,
+            # -G -D7 after 8 days without a new copy keeps 0 -- and a landing is the
+            # backup itself. The collectors' landings were flat all along; this does
+            # not change them.
+            local tier_gfs=0
+            if ini_has "$sec" side && [ "$(trim "$(ini_get "$sec" side)")" = source ]; then
+                resolve_bool_field gfs "$sec" "$tmpl" "[prune:$scope] tier=$tier" 0
+                tier_gfs="$BOOL_FIELD"
+            fi
             if [ "$tier_gfs" -eq 1 ] && ! [[ "$retain_flag" =~ ^-[HDWMY][0-9]+$ ]]; then
                 die "[prune:$scope] tier=$tier: gfs=yes needs a single count-based retain flag (-H/-D/-W/-M/-Y followed by a number), got '$retain_flag'"
             fi

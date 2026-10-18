@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 61508fa690b146e8 -->
+<!-- status-covers-digest: 7d759d63137018cf -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -23,13 +23,14 @@
 
 - **FINISZ, paczka C: `[prune:]` czyta `gfs` szczebla z szablonu (2026-10-18; `finisz/C-gfs-prune`).**
   Wada: `gen-cron.sh` brał `gfs` dla `[prune:]` tylko z sekcji, więc szablon szczebla z `gfs = yes` (profile GFS)
-  dawał płaskie liczby zamiast drabiny -- źródłowe przycinanie relacji GFS było płaskie (zmierzone pve11 -> pve10,
-  10-17). Teraz, gdy sekcja nie mówi o `gfs`, szczebel z `gfs = yes` w szablonie dostaje własną linię `delsnaps.sh -G`
-  (jak w `[dataset:]`); sekcyjne `gfs = yes` (jedna wspólna drabina) i `gfs = no` (płasko) bez zmian. Przez tę wadę
-  migawki zdalne odrzucały profile GFS -- teraz je przyjmują (`gfs = yes` w szablonie przycinania źródła).
-  Skutek na hostach: konfig, którego szablony `[prune:]` mają `gfs = yes`, dostanie `-G` przy najbliższym
-  wygenerowaniu crona (aktywacja/zmiana relacji); obecne wzorce `gencron` bez zmian (121/0). Testy: nowy wzorzec
-  `test/fixtures/prune-tier-gfs` (na `main` bez `-G`), `test/zfsbackup --section snaponly` 31/0.
+  dawał płaskie liczby zamiast drabiny. Teraz w `[prune:]` ze `side = source` i bez sekcyjnego `gfs` szczebel z
+  `gfs = yes` w szablonie dostaje własną linię `delsnaps.sh -G` (jak w `[dataset:]`). LĄDOWISKA (`side = target` albo
+  bez `side`) zostają płaskie, jak były: drabina na szczebel opróżnia rodzinę po przestoju (zmierzone 09-04: `-G -D7`
+  po 8 dniach bez nowej kopii -- 0 migawek, rc 0), a lądowisko to sama kopia -- CI wykrył, że pierwsza wersja zmieniała
+  je na kolektorach (`localbackup` 102). Sekcyjne `gfs = yes`/`no` bez zmian. Migawki zdalne przyjmują teraz profile
+  GFS: szablon przycinania źródła ma `gfs = yes`, sekcja `side = source` (istniejące relacje -- po zmianie szablonu).
+  Testy: wzorzec `test/fixtures/prune-tier-gfs` (źródło `-G`, lądowisko i `gfs = no` płasko; na `main` bez `-G`),
+  `gencron` 122/0, `test/zfsbackup --section snaponly` 31/0 (GFS przez prawdziwy gen-cron).
 
 - **FINISZ, paczka A: „d dokończ” w oknie relacji (2026-10-18; `finisz/A-dokoncz`).**
   Tryb pracy od 2026-10-18: uwagi właściciela -> `docs/project/FINISZ-BACKLOG.md`, paczki, jeden PR na paczkę,
