@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3eb21f8891d27111 -->
+<!-- status-covers-digest: 26c98fae0b38fb64 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,17 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Migawki zdalne -- eksport i import (2026-10-18; `feat/snaponly-export-import`).**
+  `export-relation` odmawiał relacji `snaponly` („jeszcze nieobsługiwane”), a gdyby nie odmawiał, zapisałby
+  `--mode=snaponly` (które `add-client` odrzuca obok `--snaponly`) i zgubił listę datasetów (dopisywana tylko za celem).
+  Teraz odtworzenie to `add-client --snaponly --host=… --datasets=…` (+ szablon, konto), potem `activate` -- bez celu
+  i bez seeda; import wykonuje to dosłownie. Odmowa `snaponly` zostaje dla `restore` i `set-tiers`. Niedokończony
+  import mówi „activate” (wcześniej kazał zrobić seed, którego tu nie ma). Na żywo pve9 (`solab` -> pve10): eksport,
+  `delete-relation --keep-source`, import -> rekord, aktywacja stanęła na kluczu (usunięcie zabiera klucz parowania
+  kolektora, import robi nowy -- tak samo przy każdej relacji zdalnej, komunikat każe zrobić `--join`), `deploy.sh
+  --join` na pve10, `activate` -> 6 linii crona IDENTYCZNE z oryginałem, F7 1/0, drugi import „nic do zrobienia”.
+  Testy: `test/zfsbackup --section snaponly` 31/0 (na `main` 22/9).
 
 - **Migawki lokalne -- cykl życia relacji, kampania na pve9 (2026-10-18; `fix/local-snapshots-lifecycle`).**
   Właściciel: „zrób sam testy zakładania, modyfikowania, eksportu, importu, uruchamiania, pauzowania”. Kampania na
@@ -36,7 +47,7 @@
   `--tier -H12` w 4 liniach, import pod drugą nazwą odmówiony; linie innych relacji bez zmian w każdym kroku.
   Testy: `test/localbackup` +5 (na pve9 131/28, `main` 127/27 -- 27 to środowisko hosta, rozstrzyga CI).
   Migawki zdalne (`solab`): F7, pauza/wznowienie, zmiana szablonu d30 <-> d7h24, zmiana adresu -- działają;
-  eksport/import są odmówione („jeszcze nieobsługiwane”) -- luka, następny krok.
+  eksport/import -- zrobione w następnym wpisie.
 
 - **Eksport/import relacji lokalnej (2026-10-18; `fix/import-local-relation`).**
   `export-relation` zapisywał każdą relację jako `add-client …` + `seed` + `activate`; relacja lokalna (kopia lokalna
