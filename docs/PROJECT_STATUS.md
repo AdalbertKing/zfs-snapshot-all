@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 26c98fae0b38fb64 -->
+<!-- status-covers-digest: 55705e034380d69e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI: F11 Odzysk danych, F12 wyjście, Tab do linii poleceń (2026-10-18; `feat/gui-f11-odzysk`).**
+  Decyzje właściciela: odzysk to osobny ekran główny (F11) -- relacje z kopią i wiersz „z dysku”; Enter otwiera te
+  same okna „Przywróć” (`restore NAZWA --ask`, `restore --from-copy --ask`). Z okna relacji zniknęło `p`, z Repliki F9.
+  F12 = wyjście, F10 wolne. Litery w oknie to tylko jego czynności; Tab: lista -> (pary na F3) -> linia poleceń;
+  w potwierdzeniu Tab (nie `e`) wrzuca komendę do linii. Okna kończą się nad linią poleceń i paskiem F, potwierdzenie
+  pokazuje w linii swoją komendę. Pasek przy 80 kolumnach: najciaśniej Transf/Szabl/Wyjdź, F12 zawsze widoczne.
+  Testy: `test/tui` na pve9 (klon gałęzi) 337/0, w tym pętla curses przez pty (F11, F10, F12).
 
 - **Migawki zdalne -- eksport i import (2026-10-18; `feat/snaponly-export-import`).**
   `export-relation` odmawiał relacji `snaponly` („jeszcze nieobsługiwane”), a gdyby nie odmawiał, zapisałby
