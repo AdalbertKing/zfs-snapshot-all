@@ -178,6 +178,10 @@ def direction_of(host, peer, dirs, mode=None):
     # hoscie -- ta sama strzalka co zadania lokalne na F2.
     if mode == "local":
         return u"lokalnie"
+    # snaponly: migawki robione STAD na zrodle; nic tu nie przychodzi, wiec nie
+    # strzalka pobrania (REV-20261017-152 runda 3).
+    if mode == "snaponly" or (dirs and set(dirs) == {"snaponly"}):
+        return u"migawki na %s" % (peer or "?")
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
@@ -906,6 +910,12 @@ def load_config(repo, files, data, name):
 # ---------------------------------------------------------------------------
 # MODEL: co znacza rekordy
 # ---------------------------------------------------------------------------
+# RODZAJE ZADAN, KTORE "ROBIA" RELACJE: transfer z sekcji [dataset:] i migawki
+# relacji `snaponly` (sekcja [snaponly:], REV-20261017-152 runda 3). Te drugie
+# niczego nie kopiuja, ale to one wyznaczaja nastepny bieg, bledy biegu i rodzine.
+SEND_KINDS = ("dataset", "snaponly")
+
+
 def family_of(job):
     """Transfer stempluje `prefix` (`automated_daily_`), prune dopasowuje
     `pattern` (`automated_daily`) -- ta sama rodzina. Jedna pisownia: bez konca."""
@@ -1052,7 +1062,7 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return {"sync": "lustro", "local": "lokalna"}.get(mode, mode)
+        return {"sync": "lustro", "local": "lokalna", "snaponly": "tylko migawki"}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "lustro"
@@ -1060,12 +1070,14 @@ def rel_type(peer, dirs, mode=None):
         return "backup"
     if "local" in dirs:
         return "lokalna"
+    if "snaponly" in dirs:
+        return "tylko migawki"
     return "backup" if peer and not dirs else "other"
 
 
 def rel_stats(data, jobs):
     """Suma po zadaniach wysylki: biegi, bledy, czas o/s/m, wolumen (job-stats)."""
-    sends = [j for j in jobs if j.get("section_kind") == "dataset"]
+    sends = [j for j in jobs if j.get("section_kind") in SEND_KINDS]
     out = {"runs": 0, "fails": 0, "last": -1, "avg": -1, "max": -1, "vol": None, "sends": len(sends)}
     if data.failed("stats") or not sends:
         return out
@@ -1121,7 +1133,7 @@ def build_relations(data, now):
         else:
             last_txt = "brak zapisu"
         my_jobs = [j for j in jobs if j.get("label", "") == name]
-        sends = [j for j in my_jobs if j.get("section_kind") == "dataset"]
+        sends = [j for j in my_jobs if j.get("section_kind") in SEND_KINDS]
         nxt_epoch = None
         for j in sends:
             e = cron_next(j.get("schedule", ""), now)
@@ -1138,7 +1150,7 @@ def build_relations(data, now):
         else:
             nxt = "?"
         host = (data.jobs or {}).get("host") or "?"
-        dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") == "dataset"]
+        dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") in SEND_KINDS]
         st = rel_stats(data, my_jobs)
         # Relacja, w ktorej ostatni bieg ktoregos zadania sie nie udal, nie jest
         # "aktualne" (2026-10-08) -- ten sam fakt, co wiersz "błąd biegu" na F2.
@@ -1214,6 +1226,8 @@ def job_src_dst(j):
         return scope, other or "?"
     if d == "prune":
         return "-", scope
+    if d == "snaponly":
+        return scope, u"bez kopii"
     return scope, other or "-"
 
 
@@ -1292,7 +1306,7 @@ def build_jobs(data, now):
             # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
-            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia"}.get(_d, u"transfer")
+            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia", "snaponly": u"migawka"}.get(_d, u"transfer")
             if _d == "pull" and job_is_mirror(j):
                 keep = u"lustro"
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
@@ -1970,7 +1984,7 @@ def rel_detail_pairs(row, data, now, ch):
         pairs.append(("Ostatni bieg", u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"))
     if row["next_epoch"]:
         pairs.append((u"Następny", "%s  (wg crontaba, %s)" % (
-            fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") == "dataset"})))))
+            fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") in SEND_KINDS})))))
     else:
         pairs.append((u"Następny", row["next"]))
     mon = row["vword"]
@@ -2004,7 +2018,7 @@ def rel_detail_pairs(row, data, now, ch):
                 warns.append(w)
     if warns:
         pairs.append(("Uwaga", "  |  ".join(warns)))
-    pairs.append(("Kopie", mon))
+    pairs.append((u"Migawki" if row.get("mode") == "snaponly" else "Kopie", mon))
     return pairs
 
 
@@ -2017,7 +2031,7 @@ def rel_pairs(row, data, now, ch):
     policzone z rekordu i JEST TO NAPISANE w tytule panelu."""
     monitors = (data.monitors or {}).get("monitors", [])
     out = []
-    jobs = [j for j in row.get("jobs", []) if j.get("section_kind") == "dataset"]
+    jobs = [j for j in row.get("jobs", []) if j.get("section_kind") in SEND_KINDS]
     if jobs:
         for j in jobs:
             src, dst = job_src_dst(j)
@@ -2113,6 +2127,8 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Cel", rel.get("client_target") or "?"))
     else:
         pairs.append(("Peer", rel.get("peer_host") or "?"))
+        if rel.get("mode") == "snaponly":
+            pairs.append(("Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
         pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
@@ -2124,7 +2140,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Tryb", "pasywny"))
     if rel.get("bandwidth"):
         pairs.append((u"Łącze", rel["bandwidth"]))
-    sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
+    sends = [j for j in row["jobs"] if j.get("section_kind") in SEND_KINDS]
     prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
     if sends:
         scheds = sorted({cron_words(j.get("schedule", "")) for j in sends if j.get("schedule")})
@@ -2132,7 +2148,7 @@ def rel_panel_pairs(row, data, now, ch):
         # Slowo wg KIERUNKU, jak na F2 ("Wysylka" w relacji, w ktorej ten host
         # pobiera, bylo nieprawda -- test testera rundy 4, pve10).
         _ds = {j.get("direction", "") for j in sends}
-        _tw = {"pull": u"Pobranie", "push": u"Wysyłka", "local": u"Kopia"}.get(_ds.pop(), u"Transfer") if len(_ds) == 1 else u"Transfer"
+        _tw = {"pull": u"Pobranie", "push": u"Wysyłka", "local": u"Kopia", "snaponly": u"Migawki"}.get(_ds.pop(), u"Transfer") if len(_ds) == 1 else u"Transfer"
         pairs.append((_tw, "%s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
     if prunes:
         here = [j for j in prunes if j.get("direction") == "prune"]
@@ -2177,7 +2193,7 @@ def rel_panel_pairs(row, data, now, ch):
         mon += "   " + row["reasons"][0].splitlines()[0]
     elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
         mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
-    pairs.append(("Kopie", mon))
+    pairs.append((u"Migawki" if rel.get("mode") == "snaponly" else "Kopie", mon))
     # STATYSTYKA Z OKNA DIGESTU (job-stats): trzy wiersze, nie jedno zdanie.
     stt = row.get("stats") or {}
     days = (data.stats or {}).get("window_days") or 7
@@ -2752,7 +2768,7 @@ def cron_lines_of(jobs, w, ch):
         hit = [(i, _matches(g, elems, fams)) for i, g in enumerate(groups)]
         hit = [(i, h) for i, h in hit if h]
         if "snapget.sh" in eng or "snapsend.sh" in eng:
-            hit = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "dataset"]
+            hit = [(i, h) for i, h in hit if groups[i][0].get("section_kind") in SEND_KINDS]
         else:
             pr = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "prune"]
             hit = pr or hit
@@ -4522,14 +4538,14 @@ class UI(object):
                 n = self.window[1]["replica"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "add-replica", n, "--ask"]) or "stay"
-            elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+            elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation"                     and (self.window[1].get("rel") or {}).get("mode") != "snaponly":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
                 # jest tekstem linii polecen), stad 'e' w oknie szczegolow.
                 n = self.window[1]["name"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
-            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation"                     and (self.window[1].get("rel") or {}).get("mode") != "snaponly":
                 # OKNO "PRZYWRÓĆ" (C2a, właściciel 2026-10-15): skąd = ta relacja, potem
                 # co / dokąd / z kiedy / polecenie -- jedno zwykłe `restore`, uruchomione
                 # w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie.
@@ -4817,6 +4833,10 @@ def _ui_render(self, width, height):
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                # snaponly (REV-20261017-152 runda 3): zmiana w miejscu i odzysk nie
+                # istnieja (nic tu nie ma do odzyskania), wiec ich klawiszy nie ma.
+                if (obj.get("rel") or {}).get("mode") == "snaponly":
+                    foot = u"tylko migawki: zmiana = usuń i załóż od nowa   Esc zamyka   strzałki przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
