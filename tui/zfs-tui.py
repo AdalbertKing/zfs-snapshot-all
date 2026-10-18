@@ -1021,6 +1021,19 @@ def next_step(rel):
             "removed": "--"}.get(s, "")
 
 
+def finish_argv(rel):
+    """Nastepny krok relacji, ktora nie jest aktywna (bez sciezki do programu):
+    '1. kopia' (seeding) -> seed, reszta cyklu -> activate (wznawialne, samo
+    sprawdza zrodlo i instaluje). Aktywna albo usunieta -- nic."""
+    n = rel.get("name")
+    s = rel.get("state", "")
+    if not n or s in ("active", "removed", ""):
+        return []
+    if s == "seeding":
+        return ["seed", n, "--yes"]
+    return ["activate", n, "--yes"]
+
+
 def verbs_for(rel):
     """Komendy CLI, ktore maja sens w tym stanie. NAZWANE, nie wykonywane.
     Zasada 4 dokumentu decyzji: widok pokazuje te akcje, ktore CLI dopuszcza."""
@@ -4681,6 +4694,16 @@ class UI(object):
                 n = self.window[1]["replica"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "add-replica", n, "--ask"]) or "stay"
+            elif k == "d" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation" \
+                    and finish_argv(self.window[1].get("rel") or {}):
+                # DOKONCZ (paczka A finiszu, 2026-10-18): relacja, ktora nie jest aktywna,
+                # dostaje NASTEPNY KROK cyklu jako zwykle potwierdzenie (t wykonuje) --
+                # zamiast komendy do przepisania z panelu. Kroki wznawialne, jak w CLI.
+                rel = self.window[1]["rel"]
+                self.window, self.scroll = None, 0
+                self.confirm(u"Dokończ relację %s" % rel.get("name"), [self.zb()] + finish_argv(rel),
+                             note_lines=[u"Stan: %s -- następny krok cyklu relacji (można powtórzyć)." % state_word(rel)])
+                return "stay"
             elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
@@ -5002,11 +5025,8 @@ def _ui_render(self, width, height):
                 title = u"Relacja %s" % obj["name"]
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
                 foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
-                # snaponly (REV-20261017-152 runda 3): 'e' jak w kazdej relacji
-                # (wlasciciel 2026-10-18: ta sama sciezka); odzysku nie ma -- kopii
-                # tu nie ma -- wiec nie ma 'p'.
-                if (obj.get("rel") or {}).get("mode") == "snaponly":
-                    foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                if finish_argv(obj.get("rel") or {}):
+                    foot = u"d dokończ   e zmień   Esc zamyka   strzałki przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
@@ -5050,7 +5070,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d",
                ord("?"): "F1", ord("h"): "F1"}
 
 

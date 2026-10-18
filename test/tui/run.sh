@@ -1066,6 +1066,27 @@ if has "$A" 'e zmień   Esc zamyka'; then
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
 fi
+# DOKOŃCZ (paczka A finiszu, 2026-10-18): relacja nie-aktywna dostaje w oknie 'd' =
+# następny krok cyklu jako zwykłe potwierdzenie; 't' go wykonuje. Aktywna -- nic.
+A="$(act enter)"
+B="$(act enter,d)"
+if has "$A" 'd dokończ   e zmień' && has "$B" 'POTWIERDZENIE: Dokończ relację duplikat' && has "$B" 'seed duplikat --yes' && [ ! -s "$XL" ]; then
+    ok "akcje: okno relacji w stanie '1. kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
+else
+    bad "akcje: d dokończ (podgląd)" "$(printf '%s' "$A" | tail -3)" "$B"
+fi
+A="$(act enter,d,t)"
+if grep -Eq "zfs-backup.sh'? seed duplikat --yes\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "akcje: ...'t' wykonuje dokładnie ten krok (seed duplikat --yes)"
+else
+    bad "akcje: d dokończ + t" "$(cat "$XL")"
+fi
+A="$(act down,enter,d)"
+if [ ! -s "$XL" ] && ! has "$A" 'POTWIERDZENIE' && ! has "$A" 'd dokończ'; then
+    ok "akcje: na relacji AKTYWNEJ 'd' nic nie robi i stopka o nim nie mówi"
+else
+    bad "akcje: d na aktywnej" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
 A="$(act down,e)"
 if [ ! -s "$XL" ]; then
     ok "akcje: ...bez okna 'e' jest tekstem linii polecen i niczego nie uruchamia"
