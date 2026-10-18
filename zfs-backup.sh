@@ -17149,6 +17149,9 @@ THEN
             || die "import-relation: a relationship named '$name' exists here but could not be exported for comparison -- nothing was changed. Check it with: zfs-backup.sh show-config $name"
         here_argv=$(json_array_strings "$(json_value_of "$(json_value_of "$here_doc" replay)" argv)")
         file_argv=$(printf '%s\n' ${argv[@]+"${argv[@]}"})
+        if [ "$here_argv" = "$file_argv" ] && [ "$(record_get "$ecpath" STATE)" != active ] && [ "$(record_get "$ecpath" RUX_MODE)" = snaponly ]; then
+            die "import-relation: relationship '$name' is here, identical to $file, but NOT finished (state '$(record_get "$ecpath" STATE)'). Finish it instead of importing again: zfs-backup.sh activate $name (snaponly: no seed; a source that does not know this collector's key first needs deploy.sh --join there) -- or remove it (zfs-backup.sh delete-relation $name) and import again. Nothing was changed."
+        fi
         if [ "$here_argv" = "$file_argv" ] && [ "$(record_get "$ecpath" STATE)" != active ]; then
             die "import-relation: relationship '$name' is here, identical to $file, but NOT finished (state '$(record_get "$ecpath" STATE)'). Finish it instead of importing again: zfs-backup.sh seed $name, then zfs-backup.sh activate $name -- or remove it (zfs-backup.sh delete-relation $name) and import again. Nothing was changed."
         fi
