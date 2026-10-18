@@ -7165,7 +7165,9 @@ cmd_set_tiers() {
     # only side, so a copy-side tier op means the source one. Left as it was, --tier
     # changed a target side no line is rendered from -- rc 0, "hourly: keep=12" in
     # the report, and the cron untouched (owner campaign, pve9 2026-10-18).
-    if [ "${RUX_MODE:-}" = local ] && [ -z "${CLIENT_TARGET:-}" ]; then
+    # Read off the CONFIG, not the record: the relationship has no target side when
+    # none of its sections is one (an old record may simply lack CLIENT_TARGET).
+    if [ "${RUX_MODE:-}" = local ] && [ -z "$(tiers_side_sections "$cronfile" "$name" local target)" ]; then
         local _i
         for _i in "${!ops[@]}"; do
             case "${ops[$_i]}" in
