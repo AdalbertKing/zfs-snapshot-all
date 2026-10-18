@@ -224,7 +224,9 @@ record_field_allowed() {   # <set> <name>
             GRANTED_REMOTELY_BY) return 0 ;;
         esac ;;
     pause)
-        case "$2" in PAUSED_AT|PAUSED_REASON|PAUSED_BY_GRANT) return 0 ;; esac ;;
+        # PAUSED_DISABLED (2026-10-18): disable-client marks ITS pause, so a reader that
+        # does not ask the peer can offer enable-client instead of a plain resume.
+        case "$2" in PAUSED_AT|PAUSED_REASON|PAUSED_BY_GRANT|PAUSED_DISABLED) return 0 ;; esac ;;
     server)
         case "$2" in DEFAULT_TARGET|CRON_CONFIG|LOCAL_USER) return 0 ;; esac ;;
     *)  die "record_load: '$1' is not a record set this package reads (client, manifest, pause, server)" ;;

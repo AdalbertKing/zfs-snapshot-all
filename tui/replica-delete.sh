@@ -35,6 +35,21 @@ for r in d.get("replicas", []):
     if r.get("name") == sys.argv[2]:
         print("\t".join([r.get("dst") or "-", ",".join(r.get("sources") or [r.get("source") or ""]) or "-", r.get("present") or "unknown"]))
 PYEOF
+# Czy po usunięciu TEJ repliki jakakolwiek inna rusza po włożeniu dysku? Jeśli nie, a reguła
+# udev jest na hoście, plan ją zdejmuje (właściciel 2026-10-18: wyłączyć to, co się włączyło).
+OTHERS_ON=$("$PY" - "$TMPD/rep.json" "$NAME" <<'PYEOF'
+import sys, json
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+print("yes" if any(r.get("name") != sys.argv[2] and (r.get("schedule") == "on-insert" or r.get("on_insert") == "yes")
+                   for r in d.get("replicas", [])) else "no")
+PYEOF
+)
+RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
+UNTRIG=no
+[ "$OTHERS_ON" = no ] && grep -qs 'Managed by zfs-backup.sh install-media-trigger' "$RULES" && UNTRIG=yes
 if ! IFS=$'\t' read -r DST SRCS PRESENT <"$TMPD/rep.tsv"; then
     wt --title "Nie ma repliki '$NAME'" --msgbox "W configu tego kolektora nie ma [replica:$NAME]." 8 "$W"
     exit 1
@@ -50,13 +65,22 @@ while :; do
         echo
         echo "Replika $NAME: sekcja i zadanie z crona znikają; dane na dyskach ZOSTAJĄ."
         echo
+        if [ "$UNTRIG" = yes ]; then
+            echo "Reguła udev \"po włożeniu\" ZOSTANIE ZDJĘTA -- żadna inna replika z niej nie korzysta."
+            echo
+        fi
         echo "Komenda:"
         echo "  $(shq "$ZB") remove-replica $NAME --install --yes"
+        [ "$UNTRIG" = yes ] && echo "  $(shq "$ZB") remove-media-trigger --install"
     } >"$TMPD/plan.txt"
     yesno_text "$TMPD/plan.txt" "Usuń replikę $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
     clear 2>/dev/null
     echo "\$ $ZB remove-replica $NAME --install --yes"; echo
     "$ZB" remove-replica "$NAME" --install --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    if [ "$RC" -eq 0 ] && [ "$UNTRIG" = yes ]; then
+        echo; echo "\$ $ZB remove-media-trigger --install"
+        "$ZB" remove-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    fi
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
     echo
     if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' usunięta, dane na dyskach zostały (rc=0). Enter = dalej"

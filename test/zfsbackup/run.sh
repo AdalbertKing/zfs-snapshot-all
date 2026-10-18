@@ -8074,8 +8074,9 @@ if grep -q '^record_field_allowed()' "$RECLIB"; then
     done
     # The floors are the 2026-09-04 measurement; a list may only grow.
     # pause: 2 -> 3 on 2026-10-15 (PAUSED_BY_GRANT, written by pause-writers).
+    # pause: 3 -> 4 on 2026-10-18 (PAUSED_DISABLED, written by disable-client).
     fg_n() { printf '%s\n' "$fg_counts" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-    if [ -z "$fg_rt_bad" ] && [ "$(fg_n client)" -ge 43 ] && [ "$(fg_n manifest)" -ge 30 ] && [ "$(fg_n pause)" = 3 ] && [ "$(fg_n server)" = 3 ]; then
+    if [ -z "$fg_rt_bad" ] && [ "$(fg_n client)" -ge 43 ] && [ "$(fg_n manifest)" -ge 30 ] && [ "$(fg_n pause)" = 4 ] && [ "$(fg_n server)" = 3 ]; then
         ok "field gate: every name each set lists round-trips through record_load ($fg_counts)"
     else
         bad "field gate: every name each set lists round-trips through record_load ($fg_counts)" "mismatched sets:${fg_rt_bad:-none}"
@@ -8887,8 +8888,8 @@ sj_run() {   # <status args...> -- output to $WORK/sj.out, returns cmd_status's 
 }
 sj_show() { sed 's/},{/},\n  {/g' "$WORK/sj.out"; }
 
-sj_alpha='{"name":"alpha","state":"active","pair_label":"alpha-renamed","peer_host":"pve9.example","active_endpoint":"10.0.0.1:22","installed_endpoint":"10.0.0.9:22","endpoint_diverged":true,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"default","source_profile":"d7h24-gfs","client_target":"tank/backup/alpha","mode":"backup","local_user":"zfsbackup","bandwidth":"20M","recursion":"atomic","passive":"","created_at":"2026-09-01T10:00:00Z","activated_at":"2026-09-01T11:00:00Z","seed_completed_at":"","removed_at":"","sources":["root@10.0.0.1:rpool/data/vm-100"],"managed_datasets":["tank/backup/alpha/vm-100","tank/backup/alpha/vm-101"],"managed_prune_scope":["tank/backup/alpha"]}'
-sj_beta='{"name":"beta","state":"seed_complete","pair_label":"beta","peer_host":"","active_endpoint":"10.0.0.2:22","installed_endpoint":"","endpoint_diverged":false,"paused_local":false,"peer_pair_state":"NOT_ASKED","profile":"","source_profile":"","client_target":"tank/a\"b\\c","mode":"backup","local_user":"","bandwidth":"","recursion":"","passive":"","created_at":"","activated_at":"","seed_completed_at":"","removed_at":"","sources":[],"managed_datasets":["*"],"managed_prune_scope":[]}'
+sj_alpha='{"name":"alpha","state":"active","pair_label":"alpha-renamed","peer_host":"pve9.example","active_endpoint":"10.0.0.1:22","installed_endpoint":"10.0.0.9:22","endpoint_diverged":true,"paused_local":false,"disabled":false,"peer_pair_state":"NOT_ASKED","profile":"default","source_profile":"d7h24-gfs","client_target":"tank/backup/alpha","mode":"backup","local_user":"zfsbackup","bandwidth":"20M","recursion":"atomic","passive":"","created_at":"2026-09-01T10:00:00Z","activated_at":"2026-09-01T11:00:00Z","seed_completed_at":"","removed_at":"","sources":["root@10.0.0.1:rpool/data/vm-100"],"managed_datasets":["tank/backup/alpha/vm-100","tank/backup/alpha/vm-101"],"managed_prune_scope":["tank/backup/alpha"]}'
+sj_beta='{"name":"beta","state":"seed_complete","pair_label":"beta","peer_host":"","active_endpoint":"10.0.0.2:22","installed_endpoint":"","endpoint_diverged":false,"paused_local":false,"disabled":false,"peer_pair_state":"NOT_ASKED","profile":"","source_profile":"","client_target":"tank/a\"b\\c","mode":"backup","local_user":"","bandwidth":"","recursion":"","passive":"","created_at":"","activated_at":"","seed_completed_at":"","removed_at":"","sources":[],"managed_datasets":["*"],"managed_prune_scope":[]}'
 
 # TRYB RELACJI JEST W KONTRAKCIE (2026-09-21). GUI nie mialo skad go wziac i
 # kazda relacje rysowalo jako "backup" -- lacznie z synchro, ktora nie ma celu.
@@ -8983,6 +8984,20 @@ if grep -q '"name":"alpha".*"paused_local":true' "$WORK/sj.out" \
     ok "statusjson: paused_local is true for the paused relationship and false for the other"
 else
     bad "statusjson: paused_local is true for the paused relationship and false for the other" "$(sj_show)"
+fi
+# WYŁĄCZONA (2026-10-18): disable-client marks its pause PAUSED_DISABLED, and the list
+# form says so without asking the peer -- the GUI's F8 then offers enable-client.
+if grep -q '"name":"alpha".*"paused_local":true,"disabled":false' "$WORK/sj.out"; then
+    printf 'PAUSED_DISABLED="1"\n' >> "$SJ/rel/alpha/paused"
+    sj_run --json
+    if grep -q '"name":"alpha".*"paused_local":true,"disabled":true' "$WORK/sj.out" \
+       && grep -q '"name":"beta".*"disabled":false' "$WORK/sj.out"; then
+        ok "statusjson: disabled is true for a pause disable-client marked, false otherwise"
+    else
+        bad "statusjson: disabled flag" "$(sj_show)"
+    fi
+else
+    bad "statusjson: a plain pause is not disabled" "$(sj_show)"
 fi
 rm -rf "$SJ/rel/alpha"
 

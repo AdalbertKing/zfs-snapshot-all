@@ -810,6 +810,40 @@ if [ ! -s "$XL" ]; then
 else
     bad "akcje: podglad nie uruchamia" "$(cat "$XL")"
 fi
+# WYŁĄCZ (właściciel 2026-10-18): w oknie pauzy 'w' = wariant "wyłącz także na źródle",
+# z wyjaśnieniem, co to znaczy i jak włączyć z powrotem; 't' wykonuje disable-client.
+A="$(act down,F8)"
+B="$(act down,F8,w --height 50)"
+if has "$A" 'w = zamiast pauzy WYŁĄCZ także na źródle' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
+   && has "$B" 'disable-client' && has "$B" 'zamek na źródle' && has "$B" 'F8 na tej relacji -> Włącz (enable-client).' && [ ! -s "$XL" ]; then
+    ok "akcje: F8 -> 'w' pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
+else
+    bad "akcje: F8 -> w (wyłącz)" "$A" "$B"
+fi
+A="$(act down,F8,w,t)"
+if grep -q "disable-client lab-ct201 '--reason=wyłączona z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ]; then
+    ok "akcje: ...'t' wykonuje disable-client NAZWA --reason=..."
+else
+    bad "akcje: F8 -> w -> t" "$(cat "$XL")"
+fi
+DISD="$(mktemp -d)"; "$PY" - "$P10/status-paused.json" "$DISD/status.json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+for r in d.get("relations", []):
+    if r.get("paused_local"):
+        r["disabled"] = True
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+DIS="--status $DISD/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor-paused.json --progress $P10/progress.json --replicas $P10/replicas.json"
+: > "$XL"
+SDW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $DIS --exec-log "$XL" --screen relacje --keys down,down,down --width 160 2>&1)"
+SDT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $DIS --exec-log "$XL" --screen relacje --keys down,down,down,F8,t --width 160 2>&1)"
+if has "$SDW" 'F8 Włącz' && has "$SDW" 'WYŁĄCZONA' && grep -q "enable-client lab-srv-b\$\|enable-client lab-srv-b'\?\$" "$XL"; then
+    ok "akcje: relacja WYŁĄCZONA -- stan 'WYŁĄCZONA', pasek 'F8 Włącz', F8 + t = enable-client (nie resume, który zostawiłby zamek na źródle)"
+else
+    bad "akcje: F8 na wyłączonej" "$(printf '%s' "$SDW" | grep -E 'F8|WYŁĄ' | head -3)" "$(cat "$XL")"
+fi
+rm -rf "$DISD"
 A="$(act down,F8,t)"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[atrapa]'; then
     ok "akcje: 't' wykonuje DOKLADNIE pokazana komende (pause-client NAME --reason=...) i otwiera okno wyjscia"
@@ -2966,6 +3000,7 @@ case "$1" in
             *) echo ">>> atrapa: zainstalowano"; exit 0 ;;
         esac ;;
     install-media-trigger) echo ">>> atrapa: regula"; exit 0 ;;
+    remove-media-trigger) echo ">>> atrapa: regula zdjeta"; exit 0 ;;
     prepare-media) case " $* " in
             *" --list "*) printf '/dev/disk/by-id/usb-C	2G	QEMU	USB-C	-
 ' ;;
@@ -3048,7 +3083,9 @@ else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
 fi
 # (4): regula (z --on-insert) juz jest -> okno B JEST (to ustawienie repliki); Nie =
-#      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu".
+#      --on-insert=no, bez zakladania reguly, plan mowi "tylko wg harmonogramu". Zadna
+#      replika nie rusza juz po wlozeniu -> plan ZDEJMUJE regule (wlasciciel 2026-10-18:
+#      "skoro mozemy wlaczac, chcemy moc wylaczyc").
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --on-insert --config=y"\n' > "$RP/rules"
 RPOUT=$(rp_run "0${T}usb4
 0${T}own
@@ -3060,8 +3097,9 @@ RPOUT=$(rp_run "0${T}usb4
 0${T}
 " RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
 if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -q '^install-media-trigger' "$RP/zb.log" \
-   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log"; then
-    ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no, regula nie ruszana"
+   && grep -q -- '--on-insert=no --install --yes$' "$RP/zb.log" && grep -qF 'Po włożeniu: nic -- kopia tylko wg harmonogramu' "$RP/wt.log" \
+   && grep -qF 'ZOSTANIE ZDJĘTA' "$RP/wt.log" && grep -q '^remove-media-trigger --install$' "$RP/zb.log"; then
+    ok "replica: okno B zawsze (ustawienie repliki, nie hosta) -- Nie = --on-insert=no; zadna replika nie rusza po wlozeniu -> plan zdejmuje regule"
 else
     bad "replica: kreator, B przy istniejacej regule" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi

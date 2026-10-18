@@ -13483,6 +13483,12 @@ cmd_disable_client() {
     if [ "$PEER_PAIR_STATE" != "DISABLED" ]; then
         die "STATE: TRANSITION_INCOMPLETE -- the peer reports '$PEER_PAIR_STATE' after a disable it accepted. Do not assume this relationship is blocked; investigate the gate on the peer before relying on it"
     fi
+    # The local marker remembers WHICH pause this is, so a reader that does not ask the
+    # peer (status --json list form, the GUI's F8) can offer enable-client, not a
+    # resume that would leave the source's gate shut (owner 2026-10-18: Wyłącz in GUI).
+    local _pm; _pm=$(pause_marker_path "$name")
+    grep -q '^PAUSED_DISABLED=' "$_pm" 2>/dev/null || printf 'PAUSED_DISABLED="1"\n' >> "$_pm" \
+        || warn "could not mark $_pm as disabled -- the GUI will show a plain pause"
     log "client '$name' is DISABLED: the peer refuses this relationship's data-plane commands, including manual ones that carry no -L."
     log "LIMIT: the relationship's own key can lift this itself ($0 enable-client $name, or PAIR-CONTROL enable over the same key). Every lift is logged on the peer."
 }
@@ -18317,6 +18323,9 @@ status_json_record() {   # <client record path> <ask the peer: 0|1>
     jsonw_field installed_endpoint "${INSTALLED_ENDPOINT:-}"
     printf ',"endpoint_diverged":%s' "$diverged"
     printf ',"paused_local":%s' "$paused"
+    local _dis=false
+    grep -qs '^PAUSED_DISABLED=' "$(pause_marker_path "${CLIENT_NAME:-}")" && _dis=true
+    printf ',"disabled":%s' "$_dis"
     jsonw_field peer_pair_state    "$peerstate"
     jsonw_field profile            "${PROFILE:-}"
     jsonw_field source_profile     "${SOURCE_PROFILE:-}"

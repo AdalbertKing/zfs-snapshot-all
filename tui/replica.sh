@@ -37,7 +37,7 @@ for r in d.get("replicas", []):
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
                      r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no", r.get("history") or "all"]))
 PYEOF
-SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; MONDAYS=""; PASSIVE=""
+SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; UNTRIG=no; MONDAYS=""; PASSIVE=""
 GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no; HIST=all; ENGINE_ONLY=0
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
@@ -509,6 +509,15 @@ PYEOF
             fi
             { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; } && [ "$RULE_HERE" != yes ] && TRIG=yes
         fi
+        # W DRUGĄ STRONĘ (właściciel 2026-10-18: "skoro możemy włączać, chcemy móc
+        # wyłączyć"): reguła jest jedna na host, więc schodzi, gdy po tej zmianie
+        # ŻADNA replika -- ta ani inne -- nie rusza po włożeniu dysku.
+        UNTRIG=no
+        if [ "$RULE_HERE" != no ] && [ "$TRIG" = no ] \
+           && ! { [ "$MEDIA" = removable ] && { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; }; } \
+           && ! awk -F'\t' -v n="$NAME" '$1 != n && ($4 == "on-insert" || $11 == "yes") { f = 1 } END { exit !f }' "$TMPD/rep.tsv"; then
+            UNTRIG=yes
+        fi
         step=6 ;;
     6)  # plan
         ARGV=("$ZB" add-replica "$NAME" "--source=$SRCS" "--dst=$DST" "--schedule=$SCHED")
@@ -568,6 +577,10 @@ PYEOF
                     echo "Po włożeniu: nic -- kopia tylko wg harmonogramu"
                 fi
             fi
+            if [ "$UNTRIG" = yes ]; then
+                echo "Reguła udev \"po włożeniu\" ZOSTANIE ZDJĘTA -- żadna replika z niej nie korzysta"
+                echo "             (remove-media-trigger --install; jedna na host)"
+            fi
             grep -E '^(!!!|WARNING|>>> )' "$TMPD/plan.txt" | grep -iv 'plan' | sed 's/^/  /' | head -4
             echo
             echo "Zadanie w cronie:"
@@ -593,6 +606,10 @@ PYEOF
         if [ "$RC" -eq 0 ] && [ "$TRIG" = yes ]; then
             echo; echo "\$ $(shq "$ZB") install-media-trigger --install"
             "$ZB" install-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+        fi
+        if [ "$RC" -eq 0 ] && [ "${UNTRIG:-no}" = yes ]; then
+            echo; echo "\$ $(shq "$ZB") remove-media-trigger --install"
+            "$ZB" remove-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
         fi
         if [ -n "${ZFS_TUI_LOG:-}" ]; then
             { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :

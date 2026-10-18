@@ -1006,7 +1006,9 @@ def profile_word(name, rel_name=None):
 def state_word(rel):
     s = rel.get("state", "?")
     s = STATE_PL.get(s, s)
-    if rel.get("paused_local"):
+    if rel.get("disabled"):
+        s += u" WYŁĄCZONA"
+    elif rel.get("paused_local"):
         s += " PAUZA"
     return s
 
@@ -1019,6 +1021,31 @@ def next_step(rel):
     return {"pending_enroll": "activate NAME", "seeding": "seed NAME",
             "seed_complete": "activate NAME", "endpoint_verified": "activate-client NAME",
             "removed": "--"}.get(s, "")
+
+
+# WYŁĄCZ / WŁĄCZ (właściciel 2026-10-18: "tak, ale z wyjaśnieniem, co to implikuje i
+# jakie kroki admin musi zrobić, żeby włączyć z powrotem").
+def disable_note(rel):
+    peer = rel.get("peer_host") or "?"
+    return [u"WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:" % peer,
+            u"  źródło odmawia kluczowi tego kolektora, także ręcznym komendom.",
+            u"  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach",
+            u"  ZOSTAJĄ.",
+            u"Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do",
+            u"  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t).",
+            "",
+            u"Włączenie z powrotem: F8 na tej relacji -> Włącz (enable-client).",
+            u"  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie",
+            u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny bieg",
+            u"  dogania przyrostowo.",
+            u"Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)",
+            u"  -- to zamek na przypadek i zapomniany klucz, nie na intruza."]
+
+
+ENABLE_NOTE = [u"Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.",
+               u"Włącz zdejmuje zamek na źródle (musi być osiągalne), potem pauzę",
+               u"tutaj; następny bieg z crona dogania przyrostowo. Gdy źródło jest",
+               u"niedostępne, nic się nie zmienia i można bezpiecznie powtórzyć."]
 
 
 def finish_argv(rel):
@@ -1761,7 +1788,7 @@ def screen_actions(active, hide_gone=False, paused=False):
         # JEDNOLICIE (wlasciciel 2026-10-17): F7 to wszedzie "Uruchom teraz" -- na F3
         # kopia kazdego datasetu relacji jej najdrobniejszym zadaniem (run-relation).
         # Pauza przeszla na F8, Eksport i Import dziela F9 (okienko wyboru).
-        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Wznów" if paused else u"Pauza"),
+        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Włącz" if paused == "disabled" else (u"Wznów" if paused else u"Pauza")),
                 ("F9", u"Eksport/Import", u"Plik")]
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte", u"Usunięte")]
@@ -2277,7 +2304,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     relacji (lewo) i szczegoly (prawo), na dole pary zrodlo -> cel."""
     scr = Screen()
     host = (data.jobs or {}).get("host") or (data.status or {}).get("host") or "?"
-    _paused = bool(rows and 0 <= cursor < len(rows) and ((rows[cursor].get("rel") or {}).get("paused_local")))
+    _crel = (rows[cursor].get("rel") or {}) if rows and 0 <= cursor < len(rows) else {}
+    _paused = "disabled" if _crel.get("disabled") else bool(_crel.get("paused_local"))
     _acts = screen_actions("relacje", paused=_paused)
     if data.failed("status"):
         body = source_error_body(ch, "status", data, "status")
@@ -3894,14 +3922,14 @@ class UI(object):
             return None, u"relacja '%s' jest już usunięta (removed_at %s)" % (r["name"], r["rel"].get("removed_at") or "?")
         return r, ""
 
-    def confirm(self, title, argv, note_lines=None, redirect=None, on_yes=None):
+    def confirm(self, title, argv, note_lines=None, redirect=None, on_yes=None, alt=None):
         line = self.shell_line(argv, redirect)
         lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
-        lines += [u"t = wykonaj      Tab = do linii poleceń (popraw i Enter)      Esc / inny klawisz = wróć"]
+        lines += [u"t = wykonaj    Tab = do linii poleceń (popraw, Enter)    Esc = wróć"]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
-                                   "shell": line, "on_yes": on_yes})
+                                   "shell": line, "on_yes": on_yes, "alt": alt})
         self.scroll = 0
 
     def prompt(self, title, label, value, on_enter, error=None, footer=None):
@@ -4145,13 +4173,22 @@ class UI(object):
             # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
             self.run_detached(u"Relacja %s -- kopia teraz" % n, [self.zb(), "run-relation", n], logname="relacja")
         elif k == "F8":
-            if rel.get("paused_local"):
+            if rel.get("disabled"):
+                self.confirm(u"Włącz relację %s" % n, [self.zb(), "enable-client", n], ENABLE_NOTE)
+            elif rel.get("paused_local"):
                 self.confirm(u"Wznów relację %s" % n, [self.zb(), "resume-client", n],
                              [u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo."])
             else:
+                note = [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
+                        u"monitor mówi OK z pauzy. Odwrotność: F8 na tej relacji jeszcze raz (resume-client)."]
+                alt = None
+                if rel.get("peer_host") and rel.get("mode") != "local":
+                    note += ["", u"w = zamiast pauzy WYŁĄCZ także na źródle (zamek; wyjaśni okno)"]
+                    alt = ("w", lambda: self.confirm(u"Wyłącz relację %s" % n, [self.zb(), "disable-client", n,
+                                                     "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                                                     disable_note(rel)))
                 self.confirm(u"Wstrzymaj relację %s" % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
-                             [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
-                              u"monitor mówi OK z pauzy. Odwrotność: F8 na tej relacji jeszcze raz (resume-client)."])
+                             note, alt=alt)
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
             # samo remove-client zostawialo rekord `removed`, ktory trzymal NAZWE, wiec
@@ -4657,6 +4694,10 @@ class UI(object):
                     obj["on_yes"]()
                 else:
                     self.run_detached(obj["title"], obj["argv"], obj.get("redirect"))
+            elif obj.get("alt") and k == obj["alt"][0]:
+                # Drugi wariant tego samego klawisza (F8: Wstrzymaj -> Wyłącz także na źródle).
+                self.window = None
+                obj["alt"][1]()
             elif k == "tab":
                 # Komenda do linii polecen: widac ja, mozna poprawic, Enter wykona
                 # na pierwszym planie. Nic nie rusza samo. Tab jak do kolejnego
@@ -5087,7 +5128,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d", ord("w"): "w",
                ord("?"): "F1", ord("h"): "F1"}
 
 
