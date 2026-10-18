@@ -1395,6 +1395,76 @@ else
 fi
 rm -rf "$LOKD"
 
+# RELACJA SNAPONLY na F3/F2 (REV-20261017-152 runda 3): rekord mode=snaponly, zadania
+# z list-jobs o section_kind/direction "snaponly" (jak pisze je czytelnik od rundy
+# 3) i zdalny monitor z wzorcem z koncowym '_'. Wiersz: "migawki na <peer>", typ
+# "migawki"; panel: "Kopia: brak", "Migawki" (harmonogram, rodzina) i werdykt
+# monitora jako "Migawki" zamiast "Kopie"; okno relacji bez 'e'/'p'.
+SOD="$(mktemp -d)"
+"$PY" - "$P10" "$SOD" <<'PYEOF'
+import json, sys
+p, d = sys.argv[1], sys.argv[2]
+st = json.load(open(p + "/status.json", encoding="utf-8"))
+r = dict(st["relations"][0])
+r.update({"name": "som", "state": "active", "mode": "snaponly", "peer_host": "10.0.0.9", "pair_label": "som",
+          "client_target": "", "active_endpoint": "10.0.0.9:22", "installed_endpoint": "10.0.0.9:22",
+          "profile": "d7h24", "source_profile": "", "paused_local": False})
+st["relations"] = [r] + st["relations"]
+json.dump(st, open(d + "/status.json", "w", encoding="utf-8"))
+j = json.load(open(p + "/list-jobs.json", encoding="utf-8"))
+base = dict([x for x in j["jobs"] if x.get("section_kind") == "dataset"][0])
+for tier, pref, sch in (("snaponly__som__hourly", "pve10_automated_hourly_", "39 * * * *"),
+                        ("snaponly__som__daily", "pve10_automated_daily_", "49 1 * * *")):
+    n = dict(base)
+    n.update({"label": "som", "section_kind": "snaponly", "direction": "snaponly", "peer": "10.0.0.9",
+              "scope": "zfsbackup-pve10@10.0.0.9:hdd/solab", "other_end": "", "tier": tier,
+              "prefix": pref, "pattern": "", "schedule": sch, "cron_lines": []})
+    j["jobs"].append(n)
+json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
+m = json.load(open(p + "/monitor.json", encoding="utf-8"))
+mm = dict(m["monitors"][0])
+mm.update({"label": "som", "datasets": ["zfsbackup-pve10@10.0.0.9:hdd/solab"], "pattern": "pve10_automated_hourly_",
+           "warn": "90m", "crit": "150m", "verdict": "OK", "rc": 0, "reason": "", "parsed": True, "recursive": False})
+m["monitors"].append(mm)
+md = dict(mm); md.update({"pattern": "pve10_automated_daily_", "warn": "30h", "crit": "48h"})
+m["monitors"].append(md)
+json.dump(m, open(d + "/monitor.json", "w", encoding="utf-8"))
+PYEOF
+SOA="--status $SOD/status.json --jobs $SOD/list-jobs.json --monitors $SOD/monitor.json"
+SO3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 2>&1)"
+if hasE "$SO3" '^║ som +migawki na 10\.0\.0\.9 +migawki +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
+   && hasE "$SO3" 'Migawki +co dobę 01:49, co godzinę' && hasE "$SO3" 'pve10_automated_daily' \
+   && ! printf '%s\n' "$SO3" | grep -E '^║ som .*(pve10<|←)' | grep -q .; then
+    ok "relacje: relacja snaponly -- 'migawki na <peer>', typ 'migawki', w panelu 'Kopia: brak' i harmonogram migawek z rodzina"
+else
+    bad "relacje: relacja snaponly" "$SO3"
+fi
+if hasE "$SO3" 'hdd/solab → bez kopii +aktualne'; then
+    ok "relacje: para snaponly ma swoj monitor (wzorzec z koncowym '_' pasuje do rodziny) -- 'aktualne', nie 'bez monitora'"
+else
+    bad "relacje: monitor pary snaponly" "$SO3"
+fi
+SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
+if has "$SOE" 'tylko migawki: zmiana = usuń i załóż od nowa' && ! has "$SOE" 'e zmień  p przywróć'; then
+    ok "relacje: okno relacji snaponly -- bez 'e zmień'/'p przywróć', stopka mowi dlaczego"
+else
+    bad "relacje: stopka okna snaponly" "$SOE"
+fi
+SOL="$(mktemp)"
+"$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter,e,p --exec-log "$SOL" >/dev/null 2>&1
+if ! grep -q 'edit-relation\|restore' "$SOL" 2>/dev/null; then
+    ok "relacje: 'e' i 'p' w oknie relacji snaponly niczego nie uruchamiaja"
+else
+    bad "relacje: e/p na snaponly" "$(cat "$SOL")"
+fi
+SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 160 --height 50 2>&1)"
+if [ "$(printf '%s\n' "$SO2" | grep -cE 'som +migawki na 10\.0\.0\.9 +migawka .*aktualne')" = 2 ]; then
+    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina i kierunkiem 'migawki na <peer>'"
+else
+    bad "zadania: zadania snaponly" "$SO2"
+fi
+rm -rf "$SOD" "$SOL"
+
 # ============================================================================
 # NOSNIKI
 # ============================================================================
@@ -2033,6 +2103,30 @@ else
     bad "new-relation: W17 raw" "$W17A" "$W17L1" "$W17B" "$W17L3"
 fi
 rm -rf "$NRE"
+
+# MIGAWKI ZDALNIE (REV-20261017-152 runda 3): ten sam przebieg co backup, bez kroku
+# "Dokąd", bez edytora pomijanych prefiksów i retencji "w źródle kopii" (szablon JEST
+# retencją źródła). Domyślny szablon d7h24 (default ma drabinę GFS na szczeblu i jest
+# odrzucany przy aktywacji). Komenda: --mode=snaponly, bez --target.
+SOW="0${T}snaponly
+0${T}192.168.28.98
+0${T}
+0${T}d7h24
+0${T}pve9b
+0${T}root
+0${T}grant
+0${T}
+0${T}
+"
+SOWO=$(nr_run "$SOW" NR_TREE="$NRTK")
+SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1)"
+if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
+   && has "$SOWP" '--default-item ~ d7h24' && ! grep -q 'Dokąd\|Pomijane prefiksy\|W ŹRÓDLE KOPII' "$NR/wt.log" \
+   && grep -q 'Krok 5/9: Jak długo' "$NR/wt.log"; then
+    ok "new-relation: Migawki zdalnie -- --mode=snaponly bez --target, bez kroku Dokąd/prefiksów/retencji źródła kopii, domyślny szablon d7h24, 9 kroków"
+else
+    bad "new-relation: Migawki zdalnie" "$SOWO" "$SOWP" "$(grep -o 'Krok [0-9/]*: [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
+fi
 NRTS="0${T}default
 0${T}pve9b
 0${T}root

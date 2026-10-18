@@ -934,28 +934,31 @@ def verdict_for_job(job, monitors):
     (monitor pilnuje lokalnego CELU, a zakres pull to zdalne ZRODLO)."""
     scope, fam = job.get("scope", ""), family_of(job)
     for m in monitors:
-        if scope in m.get("datasets", []) and m.get("pattern", "") == fam:
+        if scope in m.get("datasets", []) and m.get("pattern", "").rstrip("_") == fam:
             return m.get("verdict", "UNKNOWN"), m.get("reason", "")
     label = job.get("label", "")
     if label:
         for m in monitors:
-            if m.get("label", "") == label and m.get("pattern", "") == fam:
+            if m.get("label", "") == label and m.get("pattern", "").rstrip("_") == fam:
                 return m.get("verdict", "UNKNOWN"), m.get("reason", "")
     return "BEZ MONITORA", ""
 
 
+# RODZINA PO OBU STRONACH BEZ KONCOWEGO '_' (family_of tak ja zapisuje): monitor
+# relacji snaponly ma wzorzec z '_' (pve9_automated_hourly_), wiec dokladne
+# porownanie dawalo "bez monitora" przy dzialajacym monitorze (pve9, 2026-10-18).
 def monitors_for_job(job, monitors):
     """Jak verdict_for_job(), ale odzyskuje SAME LINIE monitora (nie tylko
     werdykt) -- panel F2 potrzebuje straznika (harmonogram, konto) i progow, a
     nie tylko slowa. Ta sama reguła dopasowania: zakres+rodzina, a dla
     pobrania (zakres zdalny) etykieta+rodzina."""
     scope, fam = job.get("scope", ""), family_of(job)
-    out = [m for m in monitors if scope in m.get("datasets", []) and m.get("pattern", "") == fam]
+    out = [m for m in monitors if scope in m.get("datasets", []) and m.get("pattern", "").rstrip("_") == fam]
     if out:
         return out
     label = job.get("label", "")
     if label:
-        return [m for m in monitors if m.get("label", "") == label and m.get("pattern", "") == fam]
+        return [m for m in monitors if m.get("label", "") == label and m.get("pattern", "").rstrip("_") == fam]
     return []
 
 
@@ -1062,7 +1065,7 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return {"sync": "lustro", "local": "lokalna", "snaponly": "tylko migawki"}.get(mode, mode)
+        return {"sync": "lustro", "local": "lokalna", "snaponly": "migawki"}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "lustro"
@@ -1071,7 +1074,7 @@ def rel_type(peer, dirs, mode=None):
     if "local" in dirs:
         return "lokalna"
     if "snaponly" in dirs:
-        return "tylko migawki"
+        return "migawki"
     return "backup" if peer and not dirs else "other"
 
 

@@ -13957,6 +13957,55 @@ fr_case "snaponly with REQUESTED_DATASETS=''" "STATE='active'\nRUX_MODE='snaponl
 fr_case "a field this package does not write" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'\nEVIL_FIELD='x'" REFUSE || fr_ok=0
 fr_case "control: rux-written RUX_MODE='' (default backup), disjoint manifest" "STATE='active'\nRUX_MODE=''\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" FREE "PEER_SAVED_DATASETS='hdd/x'" || fr_ok=0
 [ "$fr_ok" -eq 1 ] && ok "snaponly F2.1: malformed, state-less, kind-less, host-less and scope-less records and a malformed manifest are refusals; removed/local/disjoint/other-peer/legacy keep their behaviour"
+
+# THE GUI'S READERS on a real snaponly block (round 3). The crontab is the REAL
+# gen-cron.sh output of the relation rendered above ($RR/cron, whose Source
+# header names $RR/c.conf).
+#   list-jobs: [snaponly:] sections are rows -- section_kind and direction
+#     `snaponly` (never "pull": nothing comes here) -- not only its source prunes;
+#   monitor --json: the remote line's ssh options (-K -k -O ...) are options, not
+#     positionals, and the re-run carries them (before: parsed=false, the key file
+#     read as the "dataset", verdict UNKNOWN -- pve9 'solab', 2026-10-18).
+SR="$SO/readers"; mkdir -p "$SR/bin" "$SR/spool"
+: > "$SR/spool/root"
+cp "$RR/cron" "$SR/crontab.root"
+cat > "$SR/bin/crontab" <<'SREOF'
+#!/bin/sh
+who=root
+[ "$1" = "-u" ] && who="$2"
+if [ -f "$SRX/crontab.$who" ]; then cat "$SRX/crontab.$who"; else echo "no crontab for $who" >&2; exit 1; fi
+SREOF
+chmod +x "$SR/bin/crontab"
+out=$( ( export PATH="$SR/bin:$PATH" SRX="$SR"; CLIENTS_DIR="$SR/clients"; RELATIONSHIPS_DIR="$SR/rel"; PEER_STATE_DIR="$SR/peers"
+         CRON_SPOOL_DIRS=("$SR/spool"); cmd_list_jobs --json ) 2>&1 )
+sr_rows=$(printf '%s' "$out" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+r=[j for j in d.get('jobs',[]) if j.get('label')=='rr']
+print(sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='snaponly'),
+      sum(1 for j in r if j.get('section_kind')=='prune'),
+      sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='pull'),
+      sorted({j.get('prefix') for j in r if j.get('section_kind')=='snaponly'}) == ['pve10_automated_daily_','pve10_automated_hourly_','pve10_automated_monthly_','pve10_automated_weekly_'])" 2>&1)
+if [ "$sr_rows" = "8 8 0 True" ]; then
+    ok "snaponly GUI readers: list-jobs gives the 8 snapshot jobs (kind and direction 'snaponly', the four owned families) beside the 8 source prunes"
+else
+    bad "snaponly GUI readers: list-jobs rows" "got: $sr_rows" "$(printf '%s' "$out" | head -3)"
+fi
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s"\necho "OK stub"\nexit 0\n' "$SR/csa.argv" > "$SR/csa.sh"; chmod +x "$SR/csa.sh"
+out=$( ( cron_known_accounts() { echo root; }; cron_read() { cp "$SR/crontab.root" "$2"; }
+         CHECKSNAPAGE="$SR/csa.sh"; cmd_monitor --json ) 2>&1 )
+sr_mon=$(printf '%s' "$out" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+m=[x for x in d.get('monitors',[]) if x.get('label')=='rr' and x.get('pattern')=='pve10_automated_hourly_' and not x.get('recursive')]
+x=m[0] if m else {}
+print(len(m), x.get('parsed'), x.get('datasets'), x.get('warn'), x.get('crit'), x.get('verdict'))" 2>&1)
+sr_argv=$(tr '\n' ' ' < "$SR/csa.argv" 2>/dev/null)
+case "$sr_mon|$sr_argv" in
+    "1 True ['zfsbackup-pve10@10.0.0.9:hdd/so/a'] 100m 150m OK|"*"-K /k -k /kh -O HostKeyAlias=pve9b"*"zfsbackup-pve10@10.0.0.9:hdd/so/"*)
+        ok "snaponly GUI readers: monitor --json reads the remote line (dataset, family, thresholds) and the re-run carries -K/-k/-O" ;;
+    *) bad "snaponly GUI readers: monitor --json on a remote line" "monitor: $sr_mon" "argv: $sr_argv" ;;
+esac
 fi   # --- koniec sekcji snaponly ---
 
 

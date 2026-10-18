@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7701553ffd35f13e -->
+<!-- status-covers-digest: d8389f323d289b82 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **GUI dla relacji `snaponly` -- runda 3 REV-20261017-152 (2026-10-18; `feat/gui-snaponly`).**
+  Czytelniki, z których korzysta GUI, nie znały `snaponly`: `list-jobs` pomijał sekcje `[snaponly:]` (relacja miała tylko
+  przycinanie źródła), a `monitor --json` nie znał opcji ssh zdalnego monitora (`-p -k -c -K -O`) -- plik klucza był
+  „datasetem”, werdykt UNKNOWN (dotyczyło każdego zdalnego monitora z rundy 2). Teraz `list-jobs` daje wiersze o rodzaju
+  i kierunku `snaponly`, monitor czyta linię i ponawia odczyt z tymi opcjami. GUI: F3 -- kierunek „migawki na <host>”, typ
+  „migawki”; panel: „Kopia: brak”, wiersz „Migawki” (harmonogram, rodziny), werdykt monitora pod „Migawki”; okno
+  relacji bez `e`/`p` (stopka mówi dlaczego); F2 -- zadania „migawka”. Monitor pasuje do rodziny bez względu na końcowe
+  `_`. Kreator „Nowa relacja”: wariant „Migawki zdalnie” -- bez kroku „Dokąd”, prefiksów i retencji „w źródle kopii”
+  (szablon jest retencją źródła), domyślny `d7h24`, komenda `--mode=snaponly`. Testy: `test/zfsbackup --section
+  snaponly` 25/0 (na `main` 23/2), `test/tui` (F3, F2, okno, kreator). Na żywo pve9 (`solab` -> pve10): F3/F2 jak wyżej,
+  monitor „aktualne”. Test właściciela przez PuTTY -- czeka.
 
 - **Odzysk -- kampania wariantów relacji na labie (2026-10-17; `fix/restore-local-beside-push`).**
   REV-20261017-153 (recenzent zablokował #601): źródło zdalne zapisane bez konta (`host:dataset`) było brane za
