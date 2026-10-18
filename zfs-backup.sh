@@ -13764,7 +13764,7 @@ cmd_monitor() {
                 local -a argv=()
                 local tok
                 while IFS= read -r tok; do argv+=("$tok"); done < <(monitor_split_args "$region")
-                local -a pos=()
+                local -a pos=() sshargs=()
                 local j=0 nargs=${#argv[@]}
                 while [ "$j" -lt "$nargs" ]; do
                     case "${argv[$j]}" in
@@ -13772,6 +13772,14 @@ cmd_monitor() {
                         -v|--verbose)   : ;;
                         -L) j=$((j + 1)); label="${argv[$j]:-}" ;;
                         -x) j=$((j + 1)); excl="$excl${excl:+,}${argv[$j]:-}" ;;
+                        # The REMOTE monitor's ssh options (check-snap-age.sh
+                        # v2.4, REV-20261017-152 F4): each takes a value, and the
+                        # re-run below must carry them, or it reads nothing on
+                        # the source. Unknown before, so a remote monitor line
+                        # was UNKNOWN with the key file as its "dataset" (pve9,
+                        # snaponly 'solab', 2026-10-18).
+                        -p|-k|-c|-K|-O)
+                            sshargs+=("${argv[$j]}" "${argv[$((j + 1))]:-}"); j=$((j + 1)) ;;
                         # A lone '-' is not a flag: it is CONFIG v4's "no
                         # pattern" (any snapshot), which check-snap-age.sh
                         # takes as its PATTERN positional. Every passive
@@ -13803,6 +13811,7 @@ cmd_monitor() {
                 [ -n "$label" ] && runargs+=(-L "$label")
                 local _x
                 for _x in ${excl//,/ }; do [ -n "$_x" ] && runargs+=(-x "$_x"); done
+                runargs+=(${sshargs[@]+"${sshargs[@]}"})
                 runargs+=("$ds" "$pat" "$warn" "$crit")
                 outtxt=$(bash "$CHECKSNAPAGE" "${runargs[@]}" 2>&1); rc=$?
                 verdict=$(monitor_verdict_word "$rc")
@@ -16072,7 +16081,10 @@ cmd_list_jobs() {
             case "$key" in
                 @section)
                     case "$kind" in
-                        dataset|prune) secs+=("$name"); kinds+=("$kind") ;;
+                        # snaponly (REV-20261017-152): its snapget -s lines are jobs
+                        # too -- without it list-jobs showed only the relationship's
+                        # source prune, and the GUI had no snapshot job to draw.
+                        dataset|prune|snaponly) secs+=("$name"); kinds+=("$kind") ;;
                     esac
                     continue ;;
                 @managed_by) continue ;;
@@ -16108,6 +16120,9 @@ cmd_list_jobs() {
                 # A PULL section names the remote in its own header, so the
                 # scope path is not the whole story -- report both.
                 case "$sec" in *:*) [ "$dir" = pull ] || { peer="${sec%%:*}"; peer="${peer##*@}"; dir=pull; other="$sec"; } ;; esac
+                # A snaponly section is named by its remote source like a pull,
+                # but nothing comes here: its own direction word, never "pull".
+                [ "$sk" = snaponly ] && dir=snaponly
                 local sched
                 if [ "$sk" = prune ]; then
                     sched=$(jobs_field "$sk" "$sec" "$tier" prune_schedule)
