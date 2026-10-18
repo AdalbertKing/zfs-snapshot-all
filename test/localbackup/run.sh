@@ -991,6 +991,77 @@ if printf '%s' "$g1" | grep -q 'is not a source' && printf '%s' "$g2" | grep -q 
 else
     bad "local relationship: source refusals (config)" "$g1" "$g2" "$g3" "$g4" "$g5" "$g6"
 fi
+# MIGAWKI LOKALNE -- the same verbs on a relationship with a BLANK target (snapshots,
+# no copy). Its only section per source is [dataset:SRC] (side = source); all four
+# verbs refused or did nothing before (owner campaign, pve9 2026-10-18):
+# add-/remove-source "names no target", edit-relation "no sources or no target",
+# set-tiers --tier rc 0 with the cron unchanged.
+LN="$RL/ln"; mkdir -p "$LN/clients"
+ln_rec() { printf 'CLIENT_NAME=ln\nRUX_MODE=local\nSTATE=active\nCLIENT_TARGET=\nREQUESTED_DATASETS=rpool/a\\,rpool/b\nRECURSION=flat\nPROFILE=default\nCRON_CONFIG=%s\n' "$LN/c.conf" > "$LN/clients/ln.conf"; }
+ln_conf() { cat > "$LN/c.conf" <<'EOF'
+[dataset:rpool/a]
+	# managed-by: zfs-backup.sh local-backup source=rpool/a
+	relation     = ln
+	side         = source
+	recursive    = flat
+	pair_label   = ln
+	notify       = local-a
+
+[dataset:rpool/b]
+	# managed-by: zfs-backup.sh local-backup source=rpool/b
+	relation     = ln
+	side         = source
+	recursive    = flat
+	pair_label   = ln
+	notify       = local-b
+EOF
+}
+ln_run() {   # <verb> <args...>
+    ( CLIENTS_DIR="$LN/clients"
+      cron_context_resolve() { CRON_CTX_FILE="$LN/c.conf"; }
+      assert_cron_config_matches_installed() { :; }
+      gencron_as_target() { return 0; }
+      show_activation_proposal() { :; }
+      atomic_replace_and_install() { cp "$2" "$1"; }
+      zfs() { case "$*" in *"list -H -o name -- rpool/c") return 0 ;; esac; return 1; }
+      "$@" ) 2>&1
+}
+ln_rec; ln_conf
+lna=$(ln_run cmd_add_source ln rpool/c --yes)
+lnd=$(awk '$0=="[dataset:rpool/c]"{f=1;print;next} /^\[/{f=0} f' "$LN/c.conf")
+if printf '%s' "$lnd" | grep -q 'source=rpool/c' && printf '%s' "$lnd" | grep -q 'side         = source' && printf '%s' "$lnd" | grep -q 'notify       = local-c' \
+   && ! grep -q '^\[prune:' "$LN/c.conf" && grep -q 'REQUESTED_DATASETS=rpool/a\\,rpool/b\\,rpool/c' "$LN/clients/ln.conf" \
+   && ! grep -q '^MANAGED_DATASETS=.*/rpool/c' "$LN/clients/ln.conf"; then
+    ok "migawki lokalne: add-source clones the sibling's [dataset:] for the new source, no [prune:] and no copy recorded"
+else
+    bad "migawki lokalne: add-source" "$lna" "$(cat "$LN/c.conf")" "$(cat "$LN/clients/ln.conf")"
+fi
+ln_rec; ln_conf
+lnr=$(ln_run cmd_remove_source ln rpool/a --yes)
+if ! grep -qxF '[dataset:rpool/a]' "$LN/c.conf" && grep -qxF '[dataset:rpool/b]' "$LN/c.conf" && grep -qx 'REQUESTED_DATASETS=rpool/b' "$LN/clients/ln.conf" \
+   && printf '%s' "$lnr" | grep -q 'no copy: they are the data'; then
+    ok "migawki lokalne: remove-source drops that source's section only; its snapshots stay (they are the data)"
+else
+    bad "migawki lokalne: remove-source" "$lnr" "$(cat "$LN/c.conf")"
+fi
+ln_rec; ln_conf
+got=$( ( CLIENTS_DIR="$LN/clients"; cmd_local_backup() { echo "FROMFILE=${LB_TARGET_FROM_FILE:-0}"; printf '%s\n' "$@"; }; log() { :; }
+         cmd_edit_relation ln --profile=d7h24 --yes ) 2>&1 )
+if printf '%s\n' "$got" | grep -qx -- '--target=' && printf '%s\n' "$got" | grep -qx -- '--profile=d7h24' && printf '%s\n' "$got" | grep -qx 'FROMFILE=1' \
+   && printf '%s\n' "$got" | grep -qx -- '--install' && printf '%s\n' "$got" | grep -qx -- '--yes'; then
+    ok "migawki lokalne: edit-relation --profile hands local-backup the record's blank --target= (confirmed as the record's own) with the new profile"
+else
+    bad "migawki lokalne: edit-relation --profile" "$got"
+fi
+got=$( ( CLIENTS_DIR="$LN/clients"
+         cron_context_resolve() { CRON_CTX_FILE="$LN/c.conf"; }; assert_cron_config_matches_installed() { :; }; relblock_require() { :; }
+         tiers_apply_ops() { shift 2; printf 'OP %s\n' "$@"; exit 0; }
+         cmd_set_tiers ln --tier=hourly --retain=-H12 --drop-tier=weekly --add-tier=daily --src-tier=monthly --yes ) 2>&1 )
+if [ "$(printf '%s\n' "$got" | grep '^OP ' | tr '\n' ' ')" = 'OP --src-tier=hourly OP --retain=-H12 OP --drop-src-tier=weekly OP --add-src-tier=daily OP --src-tier=monthly ' ]; then
+    ok "migawki lokalne: set-tiers --tier/--drop-tier/--add-tier mean the source side (its only side); --src-tier and values pass unchanged"
+else
+    bad "migawki lokalne: set-tiers side" "$got"
+fi
 rm -f "$WORK/crontab-store"; seed_cfg
 out="$( ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" CLIENTS_DIR="$LC"
           cmd_local_backup --source=rpool/data --target=hdd/backups --replace --config="$CFG" ) 2>&1 )"
@@ -1568,6 +1639,15 @@ cfg_after="$(md5sum < "$CFG")"
     && ok "krok5/blocker1: the no-op seeds nothing, writes no crontab and leaves the config byte-identical" \
     || bad "krok5/blocker1: the no-op changes nothing" \
            "seeds $seeds_before->$seeds_after writes $writes_before->$writes_after cfg $([ "$cfg_after" = "$cfg_before" ] && echo same || echo CHANGED)"
+
+# The same sources under ANOTHER name are not "already active": they belong to
+# 'lb'. import-relation --name=NEW reported success with no record (pve9 2026-10-18).
+cfg_before="$(md5sum < "$CFG")"
+out="$(runi snapsend-ok "" --name=lbx --source=rpool/data --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "already belong to another relationship" && printf '%s' "$out" | grep -q 'rpool/data (lb)' \
+  && ! printf '%s' "$out" | grep -q 'JUZ AKTYWNY' && [ "$(md5sum < "$CFG")" = "$cfg_before" ] && [ ! -e "$K5C/lbx.conf" ]; } \
+    && ok "krok5/blocker1: the same sources under another --name are refused by the owning relationship's name, nothing written" \
+    || bad "krok5/blocker1: another --name over installed sources" "rc=$rc $(printf '%s' "$out"|tail -3)"
 
 # ---- BLOCKER 2: a second relationship may land on the same target ----------
 out="$(runi snapsend-ok "" --name=lb2 --source=rpool/other --target=hdd/backups --config="$CFG" --install --yes)"; rc=$?
