@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7d759d63137018cf -->
+<!-- status-covers-digest: 0ff3aff381de8065 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ, paczka B: „Przeglądaj kopię” -- chudy odzysk (2026-10-18; `finisz/B-przegladaj`).**
+  Decyzja właściciela: chudy odzysk = przeglądanie kopii; migawka zamontowana tylko do odczytu, `mc` do skopiowania
+  plików, potem odmontowanie; na razie datasety plikowe (LXC), zvole później. F11 -> F7 „Przeglądaj” na relacji
+  (`browse NAZWA --ask`: kopie relacji na tym hoście) albo na wierszu „z dysku” (`browse --any --ask`: dowolny
+  dataset hosta). `tui/browse.sh`: wybór datasetu (z migawkami) i migawki, `mount -t zfs -o ro DS@SNAP` w
+  `/run/zfs-browse/browse.XXXXXX`, `mc <kopia> <HOME>` (bez `mc` -- powłoka w katalogu kopii), odmontowanie
+  i usunięcie katalogu także przy przerwaniu (`trap EXIT`). Zvol -- odmowa z wyjaśnieniem; wymaga roota. Na żywo
+  pve9 (`k2-ab`, atrapa `mc`): menu datasetów i migawek, montaż `ro`, zapis odrzucony, po wyjściu 0 montaży
+  i pusty `/run/zfs-browse`. Na pve9 zainstalowany `mc`. Testy: `test/tui` +4 (F7 -> `browse`, pasek, przekazanie).
 
 - **FINISZ, paczka C: `[prune:]` czyta `gfs` szczebla z szablonu (2026-10-18; `finisz/C-gfs-prune`).**
   Wada: `gen-cron.sh` brał `gfs` dla `[prune:]` tylko z sekcji, więc szablon szczebla z `gfs = yes` (profile GFS)

@@ -1765,6 +1765,9 @@ def screen_actions(active, hide_gone=False, paused=False):
                 ("F9", u"Eksport/Import", u"Plik")]
     if active == "transfery":
         return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte", u"Usunięte")]
+    if active == "odzysk":
+        # CHUDY ODZYSK (właściciel 2026-10-18): pliki z kopii -- migawka RO + mc.
+        return [("F7", u"Przeglądaj kopię", u"Przeglądaj")]
     if active == "nosniki":
         # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
         # "Przywróć z dysku" przeszedł na F11 Odzysk (właściciel 2026-10-18).
@@ -3509,9 +3512,11 @@ def odzysk_detail(row):
     if row.get("kind") == "disk":
         return [(u"Skąd", u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii"),
                 (u"Kiedy", u"także bez relacji i bez replik, np. czysty serwer po ransomware"),
-                (u"Enter", u"okna Przywróć z dysku: źródło, co, dokąd, z kiedy, plan, WYKONAJ")]
+                (u"Enter", u"okna Przywróć z dysku: źródło, co, dokąd, z kiedy, plan, WYKONAJ"),
+                (u"F7", u"przeglądaj pliki: dowolny dataset tego hosta, migawka tylko do odczytu, mc")]
     return [(u"Skąd", u"kopie relacji %s (%s, %s)" % (row["name"], row["typ"], row["dir"])),
             (u"Enter", u"okna Przywróć: dataset, dokąd, migawka, plan, WYKONAJ"),
+            (u"F7", u"przeglądaj pliki kopii: migawka tylko do odczytu, mc, potem odmontowanie"),
             (u"Uwaga", u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ")]
 
 
@@ -3525,7 +3530,7 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message=""):
     sw = 10
     dw = max(8, inner - nw - tw - sw - 3)
     hdr = "%s %s %s %s" % (fit("Relacja", nw), fit("Typ", tw), fit("Kierunek", dw), fit("Stan", sw))
-    panel_h = 7
+    panel_h = 8
     list_h = max(3, height - 2 - 2 - panel_h - 2)
     body = [hdr, ch.dash * inner]
     top_i = max(0, cursor - list_h + 1)
@@ -3599,6 +3604,8 @@ HELP = [
     u"  F11 Odzysk     odzysk danych: relacja z kopią albo 'z dysku' (nośnik, także",
     u"                 bez replik, np. po ransomware); Enter otwiera okna Przywróć --",
     u"                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj.",
+    u"                 F7 przeglądaj kopię: migawka zamontowana tylko do odczytu, mc",
+    u"                 do skopiowania plików, po wyjściu odmontowanie (datasety plikowe).",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -4054,6 +4061,13 @@ class UI(object):
         if row.get("kind") == "disk":
             return self.run_dialog([self.zb(), "restore", "--from-copy", "--ask"])
         return self.run_dialog([self.zb(), "restore", row["name"], "--ask"])
+
+    def browse_action(self, row):
+        """F7 NA F11 -- "Przeglądaj kopię" (chudy odzysk): okna tui/browse.sh przez
+        `browse --ask`; migawka zamontowana tylko do odczytu, mc, odmontowanie."""
+        if row.get("kind") == "disk":
+            return self.run_dialog([self.zb(), "browse", "--any", "--ask"])
+        return self.run_dialog([self.zb(), "browse", row["name"], "--ask"])
 
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
@@ -4884,6 +4898,9 @@ class UI(object):
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
+        elif k == "F7" and n and self.screen == "odzysk":
+            self.cursor["odzysk"] = c
+            return self.browse_action(odzysk_rows(self.rows)[c]) or "stay"
         elif k == "enter" and n and self.screen == "odzysk":
             self.cursor["odzysk"] = c
             return self.restore_action(odzysk_rows(self.rows)[c]) or "stay"
