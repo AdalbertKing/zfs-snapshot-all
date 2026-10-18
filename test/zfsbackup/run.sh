@@ -13737,13 +13737,13 @@ fi
 printf "STATE='pending_enroll'\nRUX_MODE='snaponly'\n" > "$SO/clients/so1.conf"
 printf "STATE='active'\n" > "$SO/clients/cp1.conf"
 so_ref_ok=1
-for v in restore edit-relation add-source export-relation set-tiers; do
+for v in restore export-relation set-tiers; do
     out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" so1; echo PASSED ) 2>&1 )
     printf '%s' "$out" | grep -q "'so1' is a snaponly relationship" && ! printf '%s' "$out" | grep -q PASSED || { so_ref_ok=0; bad "snaponly_refuse $v" "$out"; }
     out=$( ( CLIENTS_DIR="$SO/clients"; snaponly_refuse "$v" cp1; echo PASSED ) 2>&1 )
     [ "$(printf '%s' "$out" | tail -1)" = PASSED ] || { so_ref_ok=0; bad "snaponly_refuse $v passes a copy relationship" "$out"; }
 done
-[ "$so_ref_ok" -eq 1 ] && ok "snaponly_refuse: restore/edit-relation/add-source/export-relation/set-tiers refuse a snaponly relationship and let a copy relationship through"
+[ "$so_ref_ok" -eq 1 ] && ok "snaponly_refuse: restore/export-relation/set-tiers refuse a snaponly relationship and let a copy relationship through"
 
 # add-client --snaponly: a target (even an empty one) and a copy mode are refused at the command line.
 out=$( ( CLIENTS_DIR="$SO/clients"; cmd_add_client sx --host=10.0.0.9 --snaponly --target= --datasets=hdd/so/a ) 2>&1 ); rc=$?
@@ -13850,7 +13850,9 @@ sed -i -e '/^\[template:snaponly_src__rr__hourly\]/,/^\[/ s/retain *= *-[A-Za-z]
        -e '/^\[template:snaponly__rr__hourly\]/,/^\[/ s/monitor_warn *= .*/monitor_warn  = 100m/' "$RR/c.conf"
 cp "$RR/c.conf" "$RR/edited.conf"
 out=$( ( apply_client_profile_choice() { echo "TRIPWIRE profile read"; exit 9; }
-         LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 PROFILE=no-such-profile SOURCE_PROFILE=no-such-profile
+         LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
+         PEER_SAVED_DATASETS="hdd/so/a hdd/so/b" PEER_SAVED_RECURSIVE_ROOTS="hdd/so/b" RECURSION=""
+         PROFILE=no-such-profile SOURCE_PROFILE=no-such-profile
          snaponly_prepare_workfile "$RR/c.conf" rr; echo "REUSED=$SNAPONLY_REUSED DS=${SOURCE_PRUNE_EMITTED_DS[*]} PSD=$PEER_SAVED_DATASETS" ) 2>&1 ); rc=$?
 bash "$REPO/gen-cron.sh" -c "$RR/c.conf" > "$RR/cron" 2>&1
 if [ "$rc" -eq 0 ] && cmp -s "$RR/c.conf" "$RR/edited.conf" && printf '%s' "$out" | grep -q 'REUSED=1 DS=hdd/so/a hdd/so/b PSD=hdd/so/a hdd/so/b' \
@@ -13860,13 +13862,8 @@ if [ "$rc" -eq 0 ] && cmp -s "$RR/c.conf" "$RR/edited.conf" && printf '%s' "$out
 else
     bad "snaponly F1.1: re-activation preserves installed policy" "rc=$rc $out" "$(diff "$RR/edited.conf" "$RR/c.conf" | head -5)" "$(grep -c . "$RR/cron") cron lines"
 fi
-out=$( ( apply_client_profile_choice() { :; }; LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.77
-         snaponly_prepare_workfile "$RR/c.conf" rr; echo PASSED ) 2>&1 )
-if printf '%s' "$out" | grep -q "changing a snaponly relationship's endpoint is not supported" && ! printf '%s' "$out" | grep -q PASSED && cmp -s "$RR/c.conf" "$RR/edited.conf"; then
-    ok "snaponly F1.1: an activation that would address another host is refused, the installed sections untouched"
-else
-    bad "snaponly F1.1: endpoint change" "$out"
-fi
+# (An activation for another host is no longer refused: since 2026-10-18 it follows the
+# record's endpoint -- see "snaponly edit: set-endpoint" below.)
 printf '[defaults]\n\thost_label = pve10\n' > "$RR/fresh.conf"
 out=$( ( hostname() { echo PVE10; }; apply_client_profile_choice() { echo "PROFILE-APPLIED"; }
          LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=a
@@ -13957,6 +13954,124 @@ fr_case "snaponly with REQUESTED_DATASETS=''" "STATE='active'\nRUX_MODE='snaponl
 fr_case "a field this package does not write" "STATE='active'\nRUX_MODE='snaponly'\nPEER_HOST='10.0.0.9'\nREQUESTED_DATASETS='hdd/so'\nEVIL_FIELD='x'" REFUSE || fr_ok=0
 fr_case "control: rux-written RUX_MODE='' (default backup), disjoint manifest" "STATE='active'\nRUX_MODE=''\nPEER_HOST='10.0.0.9'\nCLIENT_TARGET='hdd/b'" FREE "PEER_SAVED_DATASETS='hdd/x'" || fr_ok=0
 [ "$fr_ok" -eq 1 ] && ok "snaponly F2.1: malformed, state-less, kind-less, host-less and scope-less records and a malformed manifest are refusals; removed/local/disjoint/other-peer/legacy keep their behaviour"
+
+# THE GUI'S READERS on a real snaponly block (round 3). The crontab is the REAL
+# gen-cron.sh output of the relation rendered above ($RR/cron, whose Source
+# header names $RR/c.conf).
+#   list-jobs: [snaponly:] sections are rows -- section_kind and direction
+#     `snaponly` (never "pull": nothing comes here) -- not only its source prunes;
+#   monitor --json: the remote line's ssh options (-K -k -O ...) are options, not
+#     positionals, and the re-run carries them (before: parsed=false, the key file
+#     read as the "dataset", verdict UNKNOWN -- pve9 'solab', 2026-10-18).
+SR="$SO/readers"; mkdir -p "$SR/bin" "$SR/spool"
+: > "$SR/spool/root"
+cp "$RR/cron" "$SR/crontab.root"
+cat > "$SR/bin/crontab" <<'SREOF'
+#!/bin/sh
+who=root
+[ "$1" = "-u" ] && who="$2"
+if [ -f "$SRX/crontab.$who" ]; then cat "$SRX/crontab.$who"; else echo "no crontab for $who" >&2; exit 1; fi
+SREOF
+chmod +x "$SR/bin/crontab"
+out=$( ( export PATH="$SR/bin:$PATH" SRX="$SR"; CLIENTS_DIR="$SR/clients"; RELATIONSHIPS_DIR="$SR/rel"; PEER_STATE_DIR="$SR/peers"
+         CRON_SPOOL_DIRS=("$SR/spool"); cmd_list_jobs --json ) 2>&1 )
+sr_rows=$(printf '%s' "$out" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+r=[j for j in d.get('jobs',[]) if j.get('label')=='rr']
+print(sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='snaponly'),
+      sum(1 for j in r if j.get('section_kind')=='prune'),
+      sum(1 for j in r if j.get('section_kind')=='snaponly' and j.get('direction')=='pull'),
+      sorted({j.get('prefix') for j in r if j.get('section_kind')=='snaponly'}) == ['pve10_automated_daily_','pve10_automated_hourly_','pve10_automated_monthly_','pve10_automated_weekly_'])" 2>&1)
+if [ "$sr_rows" = "8 8 0 True" ]; then
+    ok "snaponly GUI readers: list-jobs gives the 8 snapshot jobs (kind and direction 'snaponly', the four owned families) beside the 8 source prunes"
+else
+    bad "snaponly GUI readers: list-jobs rows" "got: $sr_rows" "$(printf '%s' "$out" | head -3)"
+fi
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s"\necho "OK stub"\nexit 0\n' "$SR/csa.argv" > "$SR/csa.sh"; chmod +x "$SR/csa.sh"
+out=$( ( cron_known_accounts() { echo root; }; cron_read() { cp "$SR/crontab.root" "$2"; }
+         CHECKSNAPAGE="$SR/csa.sh"; cmd_monitor --json ) 2>&1 )
+sr_mon=$(printf '%s' "$out" | python -c "
+import json,sys
+d=json.load(sys.stdin)
+m=[x for x in d.get('monitors',[]) if x.get('label')=='rr' and x.get('pattern')=='pve10_automated_hourly_' and not x.get('recursive')]
+x=m[0] if m else {}
+print(len(m), x.get('parsed'), x.get('datasets'), x.get('warn'), x.get('crit'), x.get('verdict'))" 2>&1)
+sr_argv=$(tr '\n' ' ' < "$SR/csa.argv" 2>/dev/null)
+case "$sr_mon|$sr_argv" in
+    "1 True ['zfsbackup-pve10@10.0.0.9:hdd/so/a'] 100m 150m OK|"*"-K /k -k /kh -O HostKeyAlias=pve9b"*"zfsbackup-pve10@10.0.0.9:hdd/so/"*)
+        ok "snaponly GUI readers: monitor --json reads the remote line (dataset, family, thresholds) and the re-run carries -K/-k/-O" ;;
+    *) bad "snaponly GUI readers: monitor --json on a remote line" "monitor: $sr_mon" "argv: $sr_argv" ;;
+esac
+
+# THE SAME LIFECYCLE AS EVERY RELATIONSHIP (owner 2026-10-18: one GUI path, 'e'
+# included). On the installed relation rendered above ($RR/edited.conf, with its
+# hand-edited -H240 / schedule / threshold):
+#   add-source  -> the record requests one more dataset: activation APPENDS its
+#                  [snaponly:]/[prune:] with the installed templates, the rest
+#                  stays byte-for-byte;
+#   set-endpoint -> the record's host changed: section names and ssh_flags follow,
+#                  templates and policy do not move;
+#   edit-relation --profile= -> rerender=1 renders from the (new) profile;
+#   remove-source -> one dataset's own sections go, its siblings and the templates stay.
+ED="$SO/edit"; mkdir -p "$ED"
+ed_prep() {   # <config> <host> <datasets> <rerender> <profile>
+    ( hostname() { echo PVE10; }; apply_client_profile_choice() { :; }; log() { echo "LOG $*"; }
+      LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST="$2" LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
+      PEER_SAVED_DATASETS="$3" PEER_SAVED_RECURSIVE_ROOTS="hdd/so/b" RECURSION="" PROFILE="$5" SOURCE_PROFILE=""
+      snaponly_prepare_workfile "$1" rr "$4"; echo "DS=$PEER_SAVED_DATASETS" ) 2>&1
+}
+cp "$RR/edited.conf" "$ED/add.conf"
+out=$(ed_prep "$ED/add.conf" 10.0.0.9 "hdd/so/a hdd/so/b hdd/so/c" 0 no-such-profile)
+if printf '%s' "$out" | grep -q "LOG activate: 'hdd/so/c' joins 'rr'" && printf '%s' "$out" | grep -q 'DS=hdd/so/a hdd/so/b hdd/so/c' \
+   && grep -q '^\[snaponly:zfsbackup-pve10@10.0.0.9:hdd/so/c\]' "$ED/add.conf" \
+   && [ "$(snaponly_section_field "$ED/add.conf" rr snaponly zfsbackup-pve10@10.0.0.9:hdd/so/c use_template)" = "$(snaponly_section_field "$ED/add.conf" rr snaponly zfsbackup-pve10@10.0.0.9:hdd/so/a use_template)" ]; then
+    ok "snaponly edit: add-source -- the new dataset gets [snaponly:]/[prune:] with the INSTALLED templates, never the profile"
+else
+    bad "snaponly edit: add-source" "$out" "$(grep -n '^\[' "$ED/add.conf")"
+fi
+cp "$ED/add.conf" "$ED/add2.conf"; snaponly_strip_dataset "$ED/add2.conf" rr hdd/so/c
+# The guard makes the diff mean something: without hdd/so/c in add.conf (no append)
+# the "strip" has nothing to strip and the diff would pass on an empty operation.
+if grep -q 'hdd/so/c' "$ED/add.conf" && ! grep -q 'hdd/so/c' "$ED/add2.conf" \
+   && diff <(tr -s '\n' < "$ED/add2.conf") <(tr -s '\n' < "$RR/edited.conf") >/dev/null; then
+    ok "snaponly edit: remove-source -- only that dataset's two sections go; the rest is the config as it was (blank lines aside)"
+else
+    bad "snaponly edit: remove-source strip" "$(diff <(tr -s '\n' < "$ED/add2.conf") <(tr -s '\n' < "$RR/edited.conf") | head -8)"
+fi
+cp "$RR/edited.conf" "$ED/move.conf"
+out=$(ed_prep "$ED/move.conf" 10.0.0.77 "hdd/so/a hdd/so/b" 0 no-such-profile)
+ed_tpl_before=$(awk '/^\[template:/,/^$/' "$RR/edited.conf"); ed_tpl_after=$(awk '/^\[template:/,/^$/' "$ED/move.conf")
+if printf '%s' "$out" | grep -q "moves from 'zfsbackup-pve10@10.0.0.9' to 'zfsbackup-pve10@10.0.0.77'" \
+   && grep -q '^\[snaponly:zfsbackup-pve10@10.0.0.77:hdd/so/a\]' "$ED/move.conf" && grep -q '^\[prune:zfsbackup-pve10@10.0.0.77:hdd/so/b\]' "$ED/move.conf" \
+   && ! grep -q '10\.0\.0\.9' "$ED/move.conf" && [ "$ed_tpl_before" = "$ed_tpl_after" ] && grep -q 'retain *= -H240' "$ED/move.conf"; then
+    ok "snaponly edit: set-endpoint -- section names follow the record's host, the templates (-H240 kept) do not move"
+else
+    bad "snaponly edit: re-aim" "$out" "$(grep -n '^\[\|ssh_flags' "$ED/move.conf" | head -12)"
+fi
+cp "$RR/edited.conf" "$ED/rr.conf"
+out=$( ( hostname() { echo PVE10; }; apply_client_profile_choice() { echo "PROFILE-APPLIED $2"; }; log() { :; }
+         LOAD_ACCOUNT=zfsbackup-pve10 LOAD_HOST=10.0.0.9 LOAD_PORT=22 LOAD_KEYFILE=/k LOAD_ALIAS_KH=/kh LOAD_ALIAS=pve9b
+         PEER_SAVED_DATASETS="hdd/so/a hdd/so/b" PEER_SAVED_RECURSIVE_ROOTS="hdd/so/b" RECURSION="" PROFILE=d7h24 SOURCE_PROFILE=""
+         snaponly_prepare_workfile "$ED/rr.conf" rr 1; echo "REUSED=$SNAPONLY_REUSED" ) 2>&1 )
+if printf '%s' "$out" | grep -q 'PROFILE-APPLIED d7h24' && printf '%s' "$out" | grep -q 'REUSED=0' \
+   && ! grep -q -- '-H240' "$ED/rr.conf" && ! grep -q '__rr__weekly' "$ED/rr.conf" && grep -q '__rr__daily' "$ED/rr.conf"; then
+    ok "snaponly edit: edit-relation --profile= re-renders from the chosen profile (d7h24: two tiers, the hand edit replaced on request)"
+else
+    bad "snaponly edit: rerender" "$out" "$(grep -n '^\[template' "$ED/rr.conf")"
+fi
+# show-config is what the GUI relation window reads. It listed the [prune:] and
+# never the [snaponly:] that takes the snapshots (pve9 solab, 2026-10-18).
+mkdir -p "$ED/clients"
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nCRON_CONFIG=%s\n' "$RR/edited.conf" > "$ED/clients/rr.conf"
+out=$( ( CLIENTS_DIR="$ED/clients"; SERVER_CONF="$ED/no-such-server-conf"; cmd_show_config rr --json ) 2>&1 )
+if printf '%s' "$out" | grep -q '"kind":"snaponly","name":"zfsbackup-pve10@10.0.0.9:hdd/so/a"' \
+   && printf '%s' "$out" | grep -q '"kind":"prune","name":"zfsbackup-pve10@10.0.0.9:hdd/so/a"' \
+   && printf '%s' "$out" | grep -q '"name":"snaponly__rr__'; then
+    ok "snaponly show-config: the relation's [snaponly:] sections and their templates are shown beside [prune:]"
+else
+    bad "snaponly show-config" "$out"
+fi
 fi   # --- koniec sekcji snaponly ---
 
 

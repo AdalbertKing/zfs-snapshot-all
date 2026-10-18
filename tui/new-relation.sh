@@ -52,6 +52,10 @@ title() {
     elif [ "$MODE" = local ]; then
         local n="$1"; [ "$n" -gt 3 ] && n=$((n - 2))
         printf 'Krok %s/8: %s' "$n" "$2"
+    elif [ "$MODE" = snaponly ]; then
+        # Bez kroku "Dokąd" (5): numeracja od 6 w górę przesuwa się o jeden.
+        local n="$1"; [ "$n" -gt 5 ] && n=$((n - 1))
+        printf 'Krok %s/9: %s' "$n" "$2"
     else
         printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"
     fi
@@ -62,15 +66,16 @@ hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" |
 # --- krok 1: typ ------------------------------------------------------------
 step_mode() {
     geom
-    local b=OFF s=OFF l=OFF n=OFF cur="$MODE"
+    local b=OFF s=OFF l=OFF n=OFF r=OFF cur="$MODE"
     [ "$NOCOPY" -eq 1 ] && cur=snap
-    case "$cur" in sync) s=ON ;; local) l=ON ;; snap) n=ON ;; *) b=ON ;; esac
+    case "$cur" in sync) s=ON ;; local) l=ON ;; snap) n=ON ;; snaponly) r=ON ;; *) b=ON ;; esac
     wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nLokalnie: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nSame migawki: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 9)" "$W" 4 \
+       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
        backup "Backup    (ten host pobiera ze źródła)" "$b" \
        sync   "Lustro    (to samo po obu stronach)" "$s" \
-       local  "Lokalnie  (kopia na tym hoście)" "$l" \
-       snap   "Same migawki  (na tym hoście, bez kopii)" "$n" || return 1
+       local  "Kopia lokalna  (na tym hoście)" "$l" \
+       snap   "Migawki lokalne  (na tym hoście, bez kopii)" "$n" \
+       snaponly "Migawki zdalne  (na innym hoście, bez kopii)" "$r" || return 1
     # "Same migawki" = kopia lokalna bez celu: te same kroki co Lokalnie, bez "Dokąd".
     if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
@@ -495,6 +500,14 @@ step_profile() {
     geom
     local q6='Jak długo trzymać w celu (na tym hoście)?'
     [ "$NOCOPY" -eq 1 ] && q6='Jak długo trzymać migawki?'
+    if [ "$MODE" = snaponly ]; then
+        # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
+        # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
+        q6='Jak długo trzymać migawki na źródle?'
+        lead="${lead}Migawki zdalne: szablon z drabiną GFS na szczeblu (np. default) zostanie\nodrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n"
+        tl=$((tl + 3))
+        [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
+    fi
     wt --title "$(title 6 "$q6")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
        --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w ustawieniach dodatkowych).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane po wyborze konta). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
@@ -629,7 +642,7 @@ step_extra() {
         fi
         [ "$MODE" = local ] || items+=(man "Parowanie ręczne: paczka do przeniesienia" "$on_man")
         local enc=0 on_raw=OFF
-        if basket_encrypted; then
+        if [ "$MODE" != snaponly ] && basket_encrypted; then
             enc=1
             [ "${RAW_SEEN:-0}" = 1 ] || { RAW=1; RAW_SEEN=1; }
             [ "$RAW" -eq 1 ] && on_raw=ON
@@ -659,6 +672,9 @@ step_extra() {
             # nie było na liście, nie wolno jej cichcem zostawić włączonej.
             [ "$FREEZE" -eq 1 ] && [ "$GRANT" -eq 1 ] || GQUIESCE=0
         fi
+        # Migawki zdalnie nic nie kopiują: pomijane prefiksy i retencja "w źródle
+        # kopii" nie mają czego dotyczyć (szablon jest retencją źródła).
+        if [ "$MODE" = snaponly ]; then EXFAM=""; SRCPROF=""; return 0; fi
         if ! prefix_editor; then
             [ "${#items[@]}" -gt 0 ] || return 1
             continue
@@ -724,7 +740,9 @@ build_argv() {   # [install] -> ARGV[]
     else
         ARGV=("$ZB" "--source=$(hostport):${B_ROOT[*]}")
     fi
-    if [ "$MODE" = sync ]; then ARGV+=("--mode=sync"); elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET"); fi
+    if [ "$MODE" = sync ]; then ARGV+=("--mode=sync")
+    elif [ "$MODE" = snaponly ]; then ARGV+=("--mode=snaponly")
+    elif [ "$MODE" != local ]; then ARGV+=("--target=$TARGET"); fi
     [ -n "$PROFILE" ] && ARGV+=("--profile=$PROFILE")
     [ -n "$SRCPROF" ] && ARGV+=("--source-profile=$SRCPROF")
     [ -n "$RNAME" ] && ARGV+=("--name=$RNAME")
@@ -756,11 +774,13 @@ cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; d
 summary_text() {
     local i a; a="$(account_name)"
     if [ "$NOCOPY" -eq 1 ]; then
-        echo "SAME MIGAWKI: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:"
+        echo "MIGAWKI LOKALNE: $(hostname) robi i sprząta migawki u siebie, nic nie kopiuje:"
     elif [ "$MODE" = local ]; then
         echo "LOKALNIE: $(hostname) kopiuje u siebie do $TARGET/<źródło>:"
     elif [ "$MODE" = sync ]; then
         echo "LUSTRO: $(hostname) i $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} będą trzymać to samo pod tą samą ścieżką:"
+    elif [ "$MODE" = snaponly ]; then
+        echo "MIGAWKI ZDALNE: $(hostname) będzie robić i sprzątać migawki NA $HOST${HOSTNAME_R:+ ($HOSTNAME_R)}, nic nie kopiuje:"
     else
         echo "BACKUP: $(hostname) będzie POBIERAĆ z $HOST${HOSTNAME_R:+ ($HOSTNAME_R)} do $TARGET/$HOST/..."
     fi
@@ -824,6 +844,10 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
     local rc
     while :; do
         geom
+        if [ "$MODE" = snaponly ] && any_excl; then
+            wt --title "Wyjątki w drzewie" --msgbox "Migawki zdalne nie obsługują wyjątków w drzewie (odznaczonych dzieci).\nWybierz całe gałęzie albo pojedyncze datasety bez wyjątków." 9 "$W"
+            return 2
+        fi
         build_argv install
         summary_text >"$TMPD/summary.txt"
         yesno_text "$TMPD/summary.txt" "$(title 10 'Podsumowanie')" "Pokaż plan" "Wstecz" || return 1
@@ -891,11 +915,11 @@ while :; do
                  else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
         host)    if step_host;     then step=diag;    else step=mode; fi ;;
         diag)    if step_diag;     then step=ds;      else step=host; fi ;;
-        ds)      if step_datasets; then [ "$NOCOPY" -eq 1 ] && step=profile || step=target
+        ds)      if step_datasets; then { [ "$NOCOPY" -eq 1 ] || [ "$MODE" = snaponly ]; } && step=profile || step=target
                  else [ "$MODE" = local ] && step=mode || step=host; fi ;;
         target)  if step_target;   then step=profile; else step=ds; fi ;;
         profile) if step_profile;  then step=name
-                 else { [ "$MODE" = sync ] || [ "$NOCOPY" -eq 1 ]; } && step=ds || step=target; fi ;;
+                 else { [ "$MODE" = sync ] || [ "$NOCOPY" -eq 1 ] || [ "$MODE" = snaponly ]; } && step=ds || step=target; fi ;;
         name)    if step_name;     then step=acct;    else step=profile; fi ;;
         acct)    if step_account;  then [ "$NOCOPY" -eq 1 ] && step=summary || step=extra; else step=name; fi ;;
         extra)   if step_extra;    then step=summary; else step=acct; fi ;;

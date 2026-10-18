@@ -178,6 +178,10 @@ def direction_of(host, peer, dirs, mode=None):
     # hoscie -- ta sama strzalka co zadania lokalne na F2.
     if mode == "local":
         return u"lokalnie"
+    # snaponly: migawki robione STAD na zrodle; nic tu nie przychodzi, wiec nie
+    # strzalka pobrania (REV-20261017-152 runda 3).
+    if mode == "snaponly" or (dirs and set(dirs) == {"snaponly"}):
+        return u"→ %s" % (peer or "?")
     if "local" in dirs or not peer:
         return "local" if dirs else "?"
     if mode == "sync":
@@ -906,6 +910,12 @@ def load_config(repo, files, data, name):
 # ---------------------------------------------------------------------------
 # MODEL: co znacza rekordy
 # ---------------------------------------------------------------------------
+# RODZAJE ZADAN, KTORE "ROBIA" RELACJE: transfer z sekcji [dataset:] i migawki
+# relacji `snaponly` (sekcja [snaponly:], REV-20261017-152 runda 3). Te drugie
+# niczego nie kopiuja, ale to one wyznaczaja nastepny bieg, bledy biegu i rodzine.
+SEND_KINDS = ("dataset", "snaponly")
+
+
 def family_of(job):
     """Transfer stempluje `prefix` (`automated_daily_`), prune dopasowuje
     `pattern` (`automated_daily`) -- ta sama rodzina. Jedna pisownia: bez konca."""
@@ -924,28 +934,31 @@ def verdict_for_job(job, monitors):
     (monitor pilnuje lokalnego CELU, a zakres pull to zdalne ZRODLO)."""
     scope, fam = job.get("scope", ""), family_of(job)
     for m in monitors:
-        if scope in m.get("datasets", []) and m.get("pattern", "") == fam:
+        if scope in m.get("datasets", []) and m.get("pattern", "").rstrip("_") == fam:
             return m.get("verdict", "UNKNOWN"), m.get("reason", "")
     label = job.get("label", "")
     if label:
         for m in monitors:
-            if m.get("label", "") == label and m.get("pattern", "") == fam:
+            if m.get("label", "") == label and m.get("pattern", "").rstrip("_") == fam:
                 return m.get("verdict", "UNKNOWN"), m.get("reason", "")
     return "BEZ MONITORA", ""
 
 
+# RODZINA PO OBU STRONACH BEZ KONCOWEGO '_' (family_of tak ja zapisuje): monitor
+# relacji snaponly ma wzorzec z '_' (pve9_automated_hourly_), wiec dokladne
+# porownanie dawalo "bez monitora" przy dzialajacym monitorze (pve9, 2026-10-18).
 def monitors_for_job(job, monitors):
     """Jak verdict_for_job(), ale odzyskuje SAME LINIE monitora (nie tylko
     werdykt) -- panel F2 potrzebuje straznika (harmonogram, konto) i progow, a
     nie tylko slowa. Ta sama reguła dopasowania: zakres+rodzina, a dla
     pobrania (zakres zdalny) etykieta+rodzina."""
     scope, fam = job.get("scope", ""), family_of(job)
-    out = [m for m in monitors if scope in m.get("datasets", []) and m.get("pattern", "") == fam]
+    out = [m for m in monitors if scope in m.get("datasets", []) and m.get("pattern", "").rstrip("_") == fam]
     if out:
         return out
     label = job.get("label", "")
     if label:
-        return [m for m in monitors if m.get("label", "") == label and m.get("pattern", "") == fam]
+        return [m for m in monitors if m.get("label", "") == label and m.get("pattern", "").rstrip("_") == fam]
     return []
 
 
@@ -1036,7 +1049,7 @@ def ch_arrow(job):
     return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
 
 
-def rel_type(peer, dirs, mode=None):
+def rel_type(peer, dirs, mode=None, target=None):
     """backup (jedna strona), lustro (obie), lokalna, other.
 
     "lustro", nie "synchro" (wlasciciel 2026-10-08: "zmien synchro na lustro w
@@ -1052,20 +1065,26 @@ def rel_type(peer, dirs, mode=None):
     teraz podaje; heurystyka zostaje dla ZADAN, ktore rekordu nie maja.
     """
     if mode:
-        return {"sync": "lustro", "local": "lokalna"}.get(mode, mode)
+        # NAZWY (wlasciciel 2026-10-18): typ mowi CO, kierunek GDZIE. "Same migawki"
+        # to relacja lokalna bez celu, wiec "lokalna" nie odroznialo jej od kopii.
+        if mode == "local":
+            return u"kopia lokalna" if target else u"migawki lokalne"
+        return {"sync": "lustro", "snaponly": u"migawki zdalne"}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
         return "lustro"
     if "pull" in dirs or "push" in dirs:
         return "backup"
     if "local" in dirs:
-        return "lokalna"
+        return u"kopia lokalna"
+    if "snaponly" in dirs:
+        return u"migawki zdalne"
     return "backup" if peer and not dirs else "other"
 
 
 def rel_stats(data, jobs):
     """Suma po zadaniach wysylki: biegi, bledy, czas o/s/m, wolumen (job-stats)."""
-    sends = [j for j in jobs if j.get("section_kind") == "dataset"]
+    sends = [j for j in jobs if j.get("section_kind") in SEND_KINDS]
     out = {"runs": 0, "fails": 0, "last": -1, "avg": -1, "max": -1, "vol": None, "sends": len(sends)}
     if data.failed("stats") or not sends:
         return out
@@ -1121,7 +1140,7 @@ def build_relations(data, now):
         else:
             last_txt = "brak zapisu"
         my_jobs = [j for j in jobs if j.get("label", "") == name]
-        sends = [j for j in my_jobs if j.get("section_kind") == "dataset"]
+        sends = [j for j in my_jobs if j.get("section_kind") in SEND_KINDS]
         nxt_epoch = None
         for j in sends:
             e = cron_next(j.get("schedule", ""), now)
@@ -1138,7 +1157,7 @@ def build_relations(data, now):
         else:
             nxt = "?"
         host = (data.jobs or {}).get("host") or "?"
-        dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") == "dataset"]
+        dirs = [x.get("direction", "") for x in my_jobs if x.get("section_kind") in SEND_KINDS]
         st = rel_stats(data, my_jobs)
         # Relacja, w ktorej ostatni bieg ktoregos zadania sie nie udal, nie jest
         # "aktualne" (2026-10-08) -- ten sam fakt, co wiersz "błąd biegu" na F2.
@@ -1153,7 +1172,7 @@ def build_relations(data, now):
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
             "dir": direction_of(host, rel.get("peer_host") or "", dirs, rel.get("mode")),
-            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode")), "stats": st,
+            "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode"), rel.get("client_target")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
             "last": last, "last_txt": last_txt.strip(), "transfers": trs,
@@ -1214,6 +1233,8 @@ def job_src_dst(j):
         return scope, other or "?"
     if d == "prune":
         return "-", scope
+    if d == "snaponly":
+        return scope, u"bez kopii"
     return scope, other or "-"
 
 
@@ -1292,7 +1313,7 @@ def build_jobs(data, now):
             # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
-            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia"}.get(_d, u"transfer")
+            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia", "snaponly": u"migawka"}.get(_d, u"transfer")
             if _d == "pull" and job_is_mirror(j):
                 keep = u"lustro"
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
@@ -1970,7 +1991,7 @@ def rel_detail_pairs(row, data, now, ch):
         pairs.append(("Ostatni bieg", u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"))
     if row["next_epoch"]:
         pairs.append((u"Następny", "%s  (wg crontaba, %s)" % (
-            fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") == "dataset"})))))
+            fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") in SEND_KINDS})))))
     else:
         pairs.append((u"Następny", row["next"]))
     mon = row["vword"]
@@ -2004,7 +2025,7 @@ def rel_detail_pairs(row, data, now, ch):
                 warns.append(w)
     if warns:
         pairs.append(("Uwaga", "  |  ".join(warns)))
-    pairs.append(("Kopie", mon))
+    pairs.append((u"Migawki" if row.get("mode") == "snaponly" else "Kopie", mon))
     return pairs
 
 
@@ -2017,10 +2038,20 @@ def rel_pairs(row, data, now, ch):
     policzone z rekordu i JEST TO NAPISANE w tytule panelu."""
     monitors = (data.monitors or {}).get("monitors", [])
     out = []
-    jobs = [j for j in row.get("jobs", []) if j.get("section_kind") == "dataset"]
+    jobs = [j for j in row.get("jobs", []) if j.get("section_kind") in SEND_KINDS]
     if jobs:
         for j in jobs:
             src, dst = job_src_dst(j)
+            # MIGAWKI (wlasciciel 2026-10-18, "nie rozumiem tej listy"): bez kopii nie ma
+            # celu, wiec wiersz to sam dataset; przy migawkach zdalnych zakres crona
+            # "konto@host:dataset" rozbity na dataset i host, jak mowi czlowiek.
+            if j.get("direction") == "snaponly":
+                _sc = j.get("scope", "") or "?"
+                _h = _sc.rsplit(":", 1)[0].split("@", 1)[-1] if ":" in _sc else ""
+                src = _sc.rsplit(":", 1)[-1] + ((u"   na %s" % _h) if _h else "")
+                dst = None
+            elif dst == "-":
+                dst = None
             v, _reason = verdict_for_job(j, monitors)
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
@@ -2064,9 +2095,25 @@ def rel_pairs(row, data, now, ch):
     tgt = rel.get("client_target") or "?"
     for src in rel.get("sources", []):
         bare = src.split(":", 1)[1] if ":" in src else src
+        if rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+            out.append({"src": bare + ((u"   na %s" % peer) if rel.get("mode") == "snaponly" else ""), "dst": None,
+                        "job": None, "vword": "--", "czas": "-", "gb": "-"})
+            continue
         out.append({"src": src if ":" in src else "%s:%s" % (peer, src), "dst": "%s/%s/%s" % (tgt, peer, bare),
                     "job": None, "vword": "--", "czas": "-", "gb": "-"})
     return out, "wg rekordu, nie crona"
+
+
+# Cel relacji BEZ KOPII (wlasciciel 2026-10-18: "celem migawek jest ten sam dataset");
+# "?" albo "brak" mylily -- cel jest, to zrodlo.
+SNAP_TARGET = u"ten sam dataset (migawki, bez kopii)"
+
+
+def pair_one(pr, ch):
+    """Wiersz dolnego panelu F3: `zrodlo -> cel`, a bez kopii (migawki) sam dataset."""
+    if pr.get("dst") is None:
+        return pr["src"]
+    return u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
 
 
 def rel_panel_pairs(row, data, now, ch):
@@ -2110,9 +2157,11 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("mode") == "local":
         # Kopia lokalna nie ma drugiego hosta: zamiast Peer/Endpoint -- skad i dokad.
         pairs.append((u"Źródło", ", ".join(rel.get("sources") or []) or "?"))
-        pairs.append(("Cel", rel.get("client_target") or "?"))
+        pairs.append(("Cel", rel.get("client_target") or SNAP_TARGET))
     else:
         pairs.append(("Peer", rel.get("peer_host") or "?"))
+        if rel.get("mode") == "snaponly":
+            pairs.append(("Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
         pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
@@ -2124,7 +2173,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Tryb", "pasywny"))
     if rel.get("bandwidth"):
         pairs.append((u"Łącze", rel["bandwidth"]))
-    sends = [j for j in row["jobs"] if j.get("section_kind") == "dataset"]
+    sends = [j for j in row["jobs"] if j.get("section_kind") in SEND_KINDS]
     prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
     if sends:
         scheds = sorted({cron_words(j.get("schedule", "")) for j in sends if j.get("schedule")})
@@ -2132,7 +2181,7 @@ def rel_panel_pairs(row, data, now, ch):
         # Slowo wg KIERUNKU, jak na F2 ("Wysylka" w relacji, w ktorej ten host
         # pobiera, bylo nieprawda -- test testera rundy 4, pve10).
         _ds = {j.get("direction", "") for j in sends}
-        _tw = {"pull": u"Pobranie", "push": u"Wysyłka", "local": u"Kopia"}.get(_ds.pop(), u"Transfer") if len(_ds) == 1 else u"Transfer"
+        _tw = {"pull": u"Pobranie", "push": u"Wysyłka", "local": u"Kopia", "snaponly": u"Migawki"}.get(_ds.pop(), u"Transfer") if len(_ds) == 1 else u"Transfer"
         pairs.append((_tw, "%s   rodzina %s" % (", ".join(scheds) or "?", ", ".join(fams) or "?")))
     if prunes:
         here = [j for j in prunes if j.get("direction") == "prune"]
@@ -2177,7 +2226,7 @@ def rel_panel_pairs(row, data, now, ch):
         mon += "   " + row["reasons"][0].splitlines()[0]
     elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
         mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
-    pairs.append(("Kopie", mon))
+    pairs.append((u"Migawki" if rel.get("mode") == "snaponly" else "Kopie", mon))
     # STATYSTYKA Z OKNA DIGESTU (job-stats): trzy wiersze, nie jedno zdanie.
     stt = row.get("stats") or {}
     days = (data.stats or {}).get("window_days") or 7
@@ -2218,6 +2267,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     title = "Relacje na kolektorze %s (%d)" % (host, len(live))
     r = rows[cursor] if rows and 0 <= cursor < len(rows) else None
     pairs, how = rel_pairs(r, data, now, ch) if r is not None else ([], "")
+    snaps_only = bool(pairs) and all(p_.get("dst") is None for p_ in pairs)
+    src_head = u"Dataset" if snaps_only else u"Źródło %s cel" % ch.right
     binner = width - 4
     wide = width >= 100
     # R5-4 (wlasciciel 2026-09-25): kolumny z PRAWDZIWYM naglowkiem nad nimi,
@@ -2230,19 +2281,19 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         _tw = len(u"Szczeble")
         _cw = max([len(u"Czas o/ś/m")] + [len(p_["czas"]) for p_ in pairs])
         _gw = max([len(u"GB")] + [len(p_["gb"]) for p_ in pairs])
-        _ones = [u"%s %s %s" % (p_["src"], ch.right, p_["dst"]) for p_ in pairs]
+        _ones = [pair_one(p_, ch) for p_ in pairs]
         _tail = _kw + _tw + _cw + _gw + 4 * 2
-        _sw = min(max([len(u"Źródło → cel")] + [len(x) for x in _ones]), max(20, binner - _tail))
+        _sw = min(max([len(src_head)] + [len(x) for x in _ones]), max(20, binner - _tail))
         _gap = max(2, min(6, (binner - _sw - _kw - _tw - _cw - _gw) // 4))
         pcol = (_sw, _kw, _tw, _cw, _gw, _gap)
     plines_of = []
     for pr in pairs:
-        one = u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
+        one = pair_one(pr, ch)
         if pcol is None:
             fits = len(one) <= binner
         else:
             fits = len(one) <= pcol[0]
-        if fits:
+        if fits or pr.get("dst") is None:
             plines_of.append([one])
         else:
             plines_of.append([pr["src"], u"  %s %s" % (ch.right, pr["dst"])])
@@ -2265,7 +2316,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     nw = max(8, min(24, max([len(r["name"]) for r in rows] + [8])))
     dw = max(8, min(24, max([len(r.get("dir", "")) for r in rows] + [8])))
     sw = max(7, min(20, max([len(r["state"]) for r in rows] + [7])))
-    tw = max(7, min(8, max([len(r_.get("typ", "")) for r_ in rows] + [7])))
+    tw = max(7, min(15, max([len(r_.get("typ", "")) for r_ in rows] + [7])))
     cols = [("Relacja", nw, "name"), ("Kierunek", dw, "dir"), ("Stan", sw, "state")]
     used = nw + dw + sw + 2
     if inner - used >= tw + 1:
@@ -2331,7 +2382,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     if pcol:
         _sw, _kw, _tw, _cw, _gw, _gap = pcol
         _g = " " * _gap
-        plines.append(_g.join([fit(u"Źródło %s cel" % ch.right, _sw), fit(u"Kopie", _kw), fit(u"Szczeble", _tw),
+        plines.append(_g.join([fit(src_head, _sw), fit(u"Migawki" if snaps_only else u"Kopie", _kw), fit(u"Szczeble", _tw),
                                fit(u"Czas o/ś/m", _cw), fit(u"GB", _gw)]))
         plines.append(ch.dash * min(binner, _sw + _kw + _tw + _cw + _gw + 4 * _gap))
     # Przewijanie parami: pierwsza widoczna para tak, zeby kursor byl w oknie.
@@ -2375,7 +2426,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     _tiers = sum(p.get("tiers", 1) for p in pairs)
     btitle = "Datasety"
     if r is not None:
-        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "para", "pary", "par"))
+        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "dataset", "datasety", "datasetów") if snaps_only
+                                                else plural(len(pairs), "para", "pary", "par"))
         if _tiers > len(pairs):
             btitle += u" w %s crona" % plural(_tiers, "linii", "liniach", "liniach")
         btitle += u", %s" % how
@@ -2426,7 +2478,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.extend(detail_kv(ch, [
         ("Stan", state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
         ("Kierunek", row.get("dir") or "?"),
-        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or "?"))
+        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or SNAP_TARGET))
         if rel.get("mode") == "local" else
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
@@ -2437,7 +2489,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
-    out.append(u"co kopiuje")
+    # "co obejmuje" (wlasciciel 2026-10-18): to samo slowo dla kopii i dla migawek.
+    out.append(u"co obejmuje")
     pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
     # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
     # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
@@ -2445,6 +2498,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     _sync = u"   (ta sama ścieżka -- lustro)" if rel.get("mode") == "sync" else ""
     if rel.get("managed_datasets"):
         pairs.append((u"Cele (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
+    elif rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+        pairs.append(("Cel", SNAP_TARGET))
     else:
         pairs.append(("Cel", (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
@@ -2490,9 +2545,12 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             # 03:16 i 04:26 (pve10, 2026-10-07).
             def _tf(field, u):
                 return f.get(field + "_" + u) if u else None
-            if sec.get("kind") == "dataset":
+            if sec.get("kind") in ("dataset", "snaponly"):
                 _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
+                # Bez kopii (wlasciciel 2026-10-18): wiersz robienia migawek to "migawki".
+                if sec.get("kind") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+                    _w = u"migawki"
                 for u in (used or [""]):
                     t = tmpl.get(u, {}) if u else {}
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
@@ -2752,7 +2810,7 @@ def cron_lines_of(jobs, w, ch):
         hit = [(i, _matches(g, elems, fams)) for i, g in enumerate(groups)]
         hit = [(i, h) for i, h in hit if h]
         if "snapget.sh" in eng or "snapsend.sh" in eng:
-            hit = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "dataset"]
+            hit = [(i, h) for i, h in hit if groups[i][0].get("section_kind") in SEND_KINDS]
         else:
             pr = [(i, h) for i, h in hit if groups[i][0].get("section_kind") == "prune"]
             hit = pr or hit
@@ -4529,7 +4587,7 @@ class UI(object):
                 n = self.window[1]["name"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
-            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation"                     and (self.window[1].get("rel") or {}).get("mode") != "snaponly":
                 # OKNO "PRZYWRÓĆ" (C2a, właściciel 2026-10-15): skąd = ta relacja, potem
                 # co / dokąd / z kiedy / polecenie -- jedno zwykłe `restore`, uruchomione
                 # w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie.
@@ -4817,6 +4875,11 @@ def _ui_render(self, width, height):
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                # snaponly (REV-20261017-152 runda 3): 'e' jak w kazdej relacji
+                # (wlasciciel 2026-10-18: ta sama sciezka); odzysku nie ma -- kopii
+                # tu nie ma -- wiec nie ma 'p'.
+                if (obj.get("rel") or {}).get("mode") == "snaponly":
+                    foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
