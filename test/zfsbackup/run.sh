@@ -14031,7 +14031,10 @@ else
     bad "snaponly edit: add-source" "$out" "$(grep -n '^\[' "$ED/add.conf")"
 fi
 cp "$ED/add.conf" "$ED/add2.conf"; snaponly_strip_dataset "$ED/add2.conf" rr hdd/so/c
-if diff <(tr -s '\n' < "$ED/add2.conf") <(tr -s '\n' < "$RR/edited.conf") >/dev/null; then
+# The guard makes the diff mean something: without hdd/so/c in add.conf (no append)
+# the "strip" has nothing to strip and the diff would pass on an empty operation.
+if grep -q 'hdd/so/c' "$ED/add.conf" && ! grep -q 'hdd/so/c' "$ED/add2.conf" \
+   && diff <(tr -s '\n' < "$ED/add2.conf") <(tr -s '\n' < "$RR/edited.conf") >/dev/null; then
     ok "snaponly edit: remove-source -- only that dataset's two sections go; the rest is the config as it was (blank lines aside)"
 else
     bad "snaponly edit: remove-source strip" "$(diff <(tr -s '\n' < "$ED/add2.conf") <(tr -s '\n' < "$RR/edited.conf") | head -8)"
@@ -14056,6 +14059,18 @@ if printf '%s' "$out" | grep -q 'PROFILE-APPLIED d7h24' && printf '%s' "$out" | 
     ok "snaponly edit: edit-relation --profile= re-renders from the chosen profile (d7h24: two tiers, the hand edit replaced on request)"
 else
     bad "snaponly edit: rerender" "$out" "$(grep -n '^\[template' "$ED/rr.conf")"
+fi
+# show-config is what the GUI relation window reads. It listed the [prune:] and
+# never the [snaponly:] that takes the snapshots (pve9 solab, 2026-10-18).
+mkdir -p "$ED/clients"
+printf 'CLIENT_NAME=rr\nSTATE=active\nRUX_MODE=snaponly\nCRON_CONFIG=%s\n' "$RR/edited.conf" > "$ED/clients/rr.conf"
+out=$( ( CLIENTS_DIR="$ED/clients"; SERVER_CONF="$ED/no-such-server-conf"; cmd_show_config rr --json ) 2>&1 )
+if printf '%s' "$out" | grep -q '"kind":"snaponly","name":"zfsbackup-pve10@10.0.0.9:hdd/so/a"' \
+   && printf '%s' "$out" | grep -q '"kind":"prune","name":"zfsbackup-pve10@10.0.0.9:hdd/so/a"' \
+   && printf '%s' "$out" | grep -q '"name":"snaponly__rr__'; then
+    ok "snaponly show-config: the relation's [snaponly:] sections and their templates are shown beside [prune:]"
+else
+    bad "snaponly show-config" "$out"
 fi
 fi   # --- koniec sekcji snaponly ---
 

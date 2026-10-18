@@ -1135,7 +1135,7 @@ else
     bad "okno: otwarcie" "$W"
 fi
 if hasE "$W" 'Cele [(]1[)] +hdd/backups/192.168.28.99/hdd/lab/ct-201' && ! has "$W" 'Lądowisk' && ! hasE "$W" '║ Cel  ' && hasE "$W" 'Źródła [(]1[)] +zfsbackup-pve10@192.168.28.99:hdd/lab/ct-201' \
-        && has "$W" 'co kopiuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
+        && has "$W" 'co obejmuje' && has "$W" 'jak długo trzyma' && has "$W" 'czy działa' && has "$W" 'komendy' \
         && ! has "$W" 'W CRONIE' && ! has "$W" '[ Opis ]'; then
     ok "okno: szczegoly -- zrodla z rekordu, JEDEN wiersz 'Cele (N)' (R5-3, MANAGED_DATASETS), grupy pytaniami operatora, bez zakladek (R4-7)"
 else
@@ -1403,8 +1403,8 @@ st["relations"][0]["client_target"] = ""
 json.dump(st, open(d + "/status.json", "w", encoding="utf-8"))
 PYEOF2
 LOKN="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOKN" '^║ lok +lokalnie +migawki lokalne +działa '; then
-    ok "relacje: relacja lokalna bez celu -- typ 'migawki lokalne' (nie 'kopia lokalna')"
+if hasE "$LOKN" '^║ lok +lokalnie +migawki lokalne +działa ' && hasE "$LOKN" 'Cel +ten sam dataset \(migawki'; then
+    ok "relacje: relacja lokalna bez celu -- typ 'migawki lokalne' (nie 'kopia lokalna'), Cel 'ten sam dataset (migawki, bez kopii)' zamiast '?'"
 else
     bad "relacje: migawki lokalne" "$LOKN"
 fi
@@ -1454,8 +1454,11 @@ if hasE "$SO3" '^║ som +→ 10\.0\.0\.9 +migawki zdalne +działa ' && hasE "$S
 else
     bad "relacje: relacja snaponly" "$SO3"
 fi
-if hasE "$SO3" 'hdd/solab → bez kopii +aktualne'; then
-    ok "relacje: para snaponly ma swoj monitor (wzorzec z koncowym '_' pasuje do rodziny) -- 'aktualne', nie 'bez monitora'"
+# Dolny panel (wlasciciel 2026-10-18, "nie rozumiem tej listy"): bez kopii wiersz to
+# sam dataset i host, nie surowy zakres "konto@host:ds -> bez kopii".
+if hasE "$SO3" '^║ hdd/solab   na 10\.0\.0\.9 +aktualne' && hasE "$SO3" 'Datasety relacji som: 1 dataset ' \
+   && hasE "$SO3" '^║ Dataset +Migawki +Szczeble' && ! printf '%s\n' "$SO3" | grep -qE 'zfsbackup-pve10@|bez kopii +aktualne'; then
+    ok "relacje: para snaponly -- wiersz 'dataset   na <host>' z monitorem 'aktualne', kolumny Dataset/Migawki, tytul liczy datasety"
 else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
@@ -1464,6 +1467,14 @@ if has "$SOE" 'e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają' && ! has
     ok "relacje: okno relacji snaponly -- 'e zmień' jak w kazdej relacji, bez 'p przywróć' (nie ma kopii)"
 else
     bad "relacje: stopka okna snaponly" "$SOE"
+fi
+# Wlasciciel 2026-10-18: "co kopiuje" nie pasowalo do migawek, a "Cel ?" mylil --
+# celem migawek jest ten sam dataset.
+if has "$SOE" 'co obejmuje' && ! has "$SOE" 'co kopiuje' && hasE "$SOE" 'Cel +ten sam dataset \(migawki, bez kopii\)' \
+   && ! hasE "$SOE" 'Cel +\?'; then
+    ok "relacje: okno relacji snaponly -- naglowek 'co obejmuje', Cel 'ten sam dataset (migawki, bez kopii)', nie '?'"
+else
+    bad "relacje: okno snaponly -- co obejmuje / Cel" "$SOE"
 fi
 SOL="$(mktemp)"
 "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter,e,p --exec-log "$SOL" >/dev/null 2>&1
@@ -2524,8 +2535,8 @@ if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' && ! printf '%s' "$NRSI" | grep -qF -- '--yes' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
    && grep -qF 'Krok 2/6: Co kopiować z' "$NR/tree.log" && grep -qF 'Krok 3/6: Jak długo trzymać migawki?' "$NR/wt.log" \
-   && grep -qF 'Krok 6/6: Podsumowanie' "$NR/wt.log" && grep -qF 'SAME MIGAWKI' "$NR/wt.log"; then
-    ok "new-relation: same migawki -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= z --install bez --yes"
+   && grep -qF 'Krok 6/6: Podsumowanie' "$NR/wt.log" && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
+    ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= z --install bez --yes"
 else
     bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -F 'Krok' "$NR/wt.log" | cut -c1-160 | head -10)" "$(cat "$NR/err" | tail -5)"
 fi

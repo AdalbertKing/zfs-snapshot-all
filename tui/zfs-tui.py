@@ -2042,6 +2042,16 @@ def rel_pairs(row, data, now, ch):
     if jobs:
         for j in jobs:
             src, dst = job_src_dst(j)
+            # MIGAWKI (wlasciciel 2026-10-18, "nie rozumiem tej listy"): bez kopii nie ma
+            # celu, wiec wiersz to sam dataset; przy migawkach zdalnych zakres crona
+            # "konto@host:dataset" rozbity na dataset i host, jak mowi czlowiek.
+            if j.get("direction") == "snaponly":
+                _sc = j.get("scope", "") or "?"
+                _h = _sc.rsplit(":", 1)[0].split("@", 1)[-1] if ":" in _sc else ""
+                src = _sc.rsplit(":", 1)[-1] + ((u"   na %s" % _h) if _h else "")
+                dst = None
+            elif dst == "-":
+                dst = None
             v, _reason = verdict_for_job(j, monitors)
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
@@ -2085,9 +2095,25 @@ def rel_pairs(row, data, now, ch):
     tgt = rel.get("client_target") or "?"
     for src in rel.get("sources", []):
         bare = src.split(":", 1)[1] if ":" in src else src
+        if rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+            out.append({"src": bare + ((u"   na %s" % peer) if rel.get("mode") == "snaponly" else ""), "dst": None,
+                        "job": None, "vword": "--", "czas": "-", "gb": "-"})
+            continue
         out.append({"src": src if ":" in src else "%s:%s" % (peer, src), "dst": "%s/%s/%s" % (tgt, peer, bare),
                     "job": None, "vword": "--", "czas": "-", "gb": "-"})
     return out, "wg rekordu, nie crona"
+
+
+# Cel relacji BEZ KOPII (wlasciciel 2026-10-18: "celem migawek jest ten sam dataset");
+# "?" albo "brak" mylily -- cel jest, to zrodlo.
+SNAP_TARGET = u"ten sam dataset (migawki, bez kopii)"
+
+
+def pair_one(pr, ch):
+    """Wiersz dolnego panelu F3: `zrodlo -> cel`, a bez kopii (migawki) sam dataset."""
+    if pr.get("dst") is None:
+        return pr["src"]
+    return u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
 
 
 def rel_panel_pairs(row, data, now, ch):
@@ -2131,7 +2157,7 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("mode") == "local":
         # Kopia lokalna nie ma drugiego hosta: zamiast Peer/Endpoint -- skad i dokad.
         pairs.append((u"Źródło", ", ".join(rel.get("sources") or []) or "?"))
-        pairs.append(("Cel", rel.get("client_target") or "?"))
+        pairs.append(("Cel", rel.get("client_target") or SNAP_TARGET))
     else:
         pairs.append(("Peer", rel.get("peer_host") or "?"))
         if rel.get("mode") == "snaponly":
@@ -2241,6 +2267,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     title = "Relacje na kolektorze %s (%d)" % (host, len(live))
     r = rows[cursor] if rows and 0 <= cursor < len(rows) else None
     pairs, how = rel_pairs(r, data, now, ch) if r is not None else ([], "")
+    snaps_only = bool(pairs) and all(p_.get("dst") is None for p_ in pairs)
+    src_head = u"Dataset" if snaps_only else u"Źródło %s cel" % ch.right
     binner = width - 4
     wide = width >= 100
     # R5-4 (wlasciciel 2026-09-25): kolumny z PRAWDZIWYM naglowkiem nad nimi,
@@ -2253,19 +2281,19 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         _tw = len(u"Szczeble")
         _cw = max([len(u"Czas o/ś/m")] + [len(p_["czas"]) for p_ in pairs])
         _gw = max([len(u"GB")] + [len(p_["gb"]) for p_ in pairs])
-        _ones = [u"%s %s %s" % (p_["src"], ch.right, p_["dst"]) for p_ in pairs]
+        _ones = [pair_one(p_, ch) for p_ in pairs]
         _tail = _kw + _tw + _cw + _gw + 4 * 2
-        _sw = min(max([len(u"Źródło → cel")] + [len(x) for x in _ones]), max(20, binner - _tail))
+        _sw = min(max([len(src_head)] + [len(x) for x in _ones]), max(20, binner - _tail))
         _gap = max(2, min(6, (binner - _sw - _kw - _tw - _cw - _gw) // 4))
         pcol = (_sw, _kw, _tw, _cw, _gw, _gap)
     plines_of = []
     for pr in pairs:
-        one = u"%s %s %s" % (pr["src"], ch.right, pr["dst"])
+        one = pair_one(pr, ch)
         if pcol is None:
             fits = len(one) <= binner
         else:
             fits = len(one) <= pcol[0]
-        if fits:
+        if fits or pr.get("dst") is None:
             plines_of.append([one])
         else:
             plines_of.append([pr["src"], u"  %s %s" % (ch.right, pr["dst"])])
@@ -2354,7 +2382,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     if pcol:
         _sw, _kw, _tw, _cw, _gw, _gap = pcol
         _g = " " * _gap
-        plines.append(_g.join([fit(u"Źródło %s cel" % ch.right, _sw), fit(u"Kopie", _kw), fit(u"Szczeble", _tw),
+        plines.append(_g.join([fit(src_head, _sw), fit(u"Migawki" if snaps_only else u"Kopie", _kw), fit(u"Szczeble", _tw),
                                fit(u"Czas o/ś/m", _cw), fit(u"GB", _gw)]))
         plines.append(ch.dash * min(binner, _sw + _kw + _tw + _cw + _gw + 4 * _gap))
     # Przewijanie parami: pierwsza widoczna para tak, zeby kursor byl w oknie.
@@ -2398,7 +2426,8 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     _tiers = sum(p.get("tiers", 1) for p in pairs)
     btitle = "Datasety"
     if r is not None:
-        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "para", "pary", "par"))
+        btitle = u"Datasety relacji %s: %s" % (r["name"], plural(len(pairs), "dataset", "datasety", "datasetów") if snaps_only
+                                                else plural(len(pairs), "para", "pary", "par"))
         if _tiers > len(pairs):
             btitle += u" w %s crona" % plural(_tiers, "linii", "liniach", "liniach")
         btitle += u", %s" % how
@@ -2449,7 +2478,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     out.extend(detail_kv(ch, [
         ("Stan", state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
         ("Kierunek", row.get("dir") or "?"),
-        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or "?"))
+        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or SNAP_TARGET))
         if rel.get("mode") == "local" else
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
@@ -2460,7 +2489,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
-    out.append(u"co kopiuje")
+    # "co obejmuje" (wlasciciel 2026-10-18): to samo slowo dla kopii i dla migawek.
+    out.append(u"co obejmuje")
     pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
     # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
     # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
@@ -2468,6 +2498,8 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     _sync = u"   (ta sama ścieżka -- lustro)" if rel.get("mode") == "sync" else ""
     if rel.get("managed_datasets"):
         pairs.append((u"Cele (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
+    elif rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+        pairs.append(("Cel", SNAP_TARGET))
     else:
         pairs.append(("Cel", (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
@@ -2513,9 +2545,12 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             # 03:16 i 04:26 (pve10, 2026-10-07).
             def _tf(field, u):
                 return f.get(field + "_" + u) if u else None
-            if sec.get("kind") == "dataset":
+            if sec.get("kind") in ("dataset", "snaponly"):
                 _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
+                # Bez kopii (wlasciciel 2026-10-18): wiersz robienia migawek to "migawki".
+                if sec.get("kind") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
+                    _w = u"migawki"
                 for u in (used or [""]):
                     t = tmpl.get(u, {}) if u else {}
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"

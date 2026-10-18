@@ -11531,8 +11531,9 @@ If the peer has a genuinely new address, record it: $0 set-endpoint $name --host
 #
 # Lifecycle: add-client --snaponly -> verify-endpoint (snapget -n -s, read-only)
 # -> activate-client (activate_snaponly below). No seed: there is nothing to
-# copy. edit-relation and add-source/remove-source are refused for now -- the
-# relationship is deleted and created again to change it.
+# copy. Changes walk the same verbs as every relationship (owner 2026-10-18):
+# add-source/remove-source touch one dataset's sections, set-endpoint re-aims
+# them, edit-relation --profile= re-renders (snaponly_prepare_workfile).
 # ==============================================================================
 snaponly_is() { [ "${RUX_MODE:-}" = snaponly ]; }
 # Verbs that only make sense for a COPY, or that change a relationship in place,
@@ -18076,7 +18077,9 @@ SCDUMP
         # makes this screen show exactly the set teardown would remove. A second
         # copy written here would have been a second answer to "is this mine",
         # and the one on the screen would be the unverified one.
-        case "${_sc_kind[$i]}" in dataset|prune|prune-bookmarks) ;; *) continue ;; esac
+        # snaponly: [snaponly:] is the relationship's own snapshot job (GUI round 3,
+        # 2026-10-18 -- the window showed the prune and never what takes the snapshots).
+        case "${_sc_kind[$i]}" in dataset|prune|prune-bookmarks|snaponly) ;; *) continue ;; esac
         # A LOCAL relationship is torn down by strip_local_relation_sections (the
         # local-backup marker AND its pair_label), not by section_owned_by -- which
         # knows only the copies (MANAGED_DATASETS) and so hid the SOURCE section:
