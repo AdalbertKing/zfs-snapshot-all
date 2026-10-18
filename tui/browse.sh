@@ -4,10 +4,16 @@
 # Właściciel 2026-10-18: migawka kopii zamontowana TYLKO DO ODCZYTU, `mc` do skopiowania
 # plików, po wyjściu z mc odmontowanie. Nic w kopii się nie zmienia: montaż `-o ro` migawki
 # (migawka i tak jest tylko do odczytu), w katalogu tymczasowym pod /run, sprzątanym zawsze
-# (trap). Na razie datasety PLIKOWE (LXC, katalogi); zvol (VM) -- odmowa z wyjaśnieniem.
+# (trap).
 #
-# Kroki: 1 który dataset (kopie relacji na tym hoście; --any: każdy dataset plikowy z
-# migawkami), 2 która migawka (najnowsza pierwsza), 3 montaż + mc, odmontowanie.
+# DYSK VM (zvol), wersja light (właściciel 2026-10-18): migawka dysku wystawiona jako
+# urządzenie (snapdev=visible na czas przeglądania -- urządzenie migawki jest tylko do
+# odczytu), wybór partycji, montaż ro wg systemu plików (NTFS, ext2/3/4, xfs, vfat, exfat,
+# btrfs); BitLocker i LUKS po podaniu klucza (cryptsetup open --readonly). Po wyjściu:
+# odmontowanie, zamknięcie odblokowanego urządzenia, snapdev z powrotem jak było.
+#
+# Kroki: 1 który dataset, 2 która migawka, 3 (dysk VM) która partycja (+ klucz),
+# 4 montaż + mc, odmontowanie.
 #
 # Środowisko (testy): ZFS_BACKUP, WHIPTAIL, ZFS_CONF_DIR, PYTHON, BROWSE_MC (domyślnie mc),
 # BROWSE_ROOT (domyślnie /run/zfs-browse).
@@ -22,14 +28,28 @@ CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 MC="${BROWSE_MC:-mc}"
 BROOT="${BROWSE_ROOT:-/run/zfs-browse}"
 TMPD="$(mktemp -d)" || exit 1
-MNT=""
-cleanup() {
+MNT=""; MAPPED=""; SNAPDEV_DS=""; SNAPDEV_WAS=""; SNAPDEV_SRC=""
+
+unmount_all() {
     if [ -n "$MNT" ]; then
         umount "$MNT" 2>/dev/null || umount -l "$MNT" 2>/dev/null
         rmdir "$MNT" 2>/dev/null
+        MNT=""
     fi
-    rm -rf "$TMPD"
+    if [ -n "$MAPPED" ]; then
+        cryptsetup close "$MAPPED" 2>/dev/null
+        MAPPED=""
+    fi
 }
+restore_snapdev() {
+    [ -n "$SNAPDEV_DS" ] || return 0
+    case "$SNAPDEV_SRC" in
+        local) zfs set snapdev="$SNAPDEV_WAS" "$SNAPDEV_DS" 2>/dev/null ;;
+        *)     zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null ;;
+    esac
+    SNAPDEV_DS=""
+}
+cleanup() { unmount_all; restore_snapdev; rm -rf "$TMPD"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
@@ -73,7 +93,6 @@ if ! [ -s "$TMPD/roots" ]; then
     exit 1
 fi
 # każdy korzeń z dziećmi; tylko te, które mają choć jedną migawkę
-: >"$TMPD/cand.tsv"
 sort -u "$TMPD/roots" | while IFS= read -r r; do
     [ -n "$r" ] || continue
     zfs list -H -o name,type -r -- "$r" 2>/dev/null | tr -d '\r'
@@ -86,22 +105,61 @@ if ! [ -s "$TMPD/cand.tsv" ]; then
     exit 1
 fi
 
+# ---- montaż ro wg systemu plików: <urządzenie> <typ> -> 0, MNT ustawiony ---------------
+mount_ro() {
+    local dev="$1" fs="$2" opts="ro"
+    mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/browse.XXXXXX")" || { MNT=""; echo "nie mogę utworzyć katalogu w $BROOT" >"$TMPD/mount.err"; return 1; }
+    case "$fs" in
+        ntfs)
+            if modinfo ntfs3 >/dev/null 2>&1 || grep -qw ntfs3 /proc/filesystems; then
+                mount -t ntfs3 -o ro "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0
+            fi
+            if command -v ntfs-3g >/dev/null 2>&1; then
+                ntfs-3g -o ro "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0
+            fi
+            echo "brak sterownika NTFS (moduł ntfs3 albo pakiet ntfs-3g)" >>"$TMPD/mount.err" ;;
+        ext2|ext3|ext4) mount -t "$fs" -o ro,noload "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
+        xfs)            mount -t xfs -o ro,norecovery,nouuid "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
+        zfs)            mount -t zfs -o ro "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
+        *)              mount -o "$opts" "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
+    esac
+    rmdir "$MNT" 2>/dev/null; MNT=""
+    return 1
+}
+
+# ---- mc w zamontowanym katalogu, potem sprzątanie ---------------------------------------
+browse_and_exit() {
+    local what="$1"
+    clear 2>/dev/null
+    echo "Zamontowane TYLKO DO ODCZYTU: $what"
+    echo "  w $MNT -- skopiuj pliki w mc (lewy panel = kopia), F10 w mc kończy i odmontowuje."
+    if command -v "$MC" >/dev/null 2>&1; then
+        "$MC" "$MNT" "${HOME:-/root}" </dev/tty >/dev/tty 2>&1
+    else
+        echo
+        echo "Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje."
+        ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
+    fi
+    unmount_all
+    restore_snapdev
+    echo
+    echo "=== Odmontowane. Enter = powrót do GUI"
+    read -r _ </dev/tty 2>/dev/null || true
+    exit 0
+}
+
 step=1
 while :; do
     case $step in
     1)  menu=(); i=0
         while IFS=$'\t' read -r n t; do
-            lbl="$n"; [ "$t" = volume ] && lbl="$n  (dysk VM -- jeszcze nie)"
+            lbl="$n"; [ "$t" = volume ] && lbl="$n  (dysk VM)"
             menu+=("d$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
         done <"$TMPD/cand.tsv"
         geom
         wt --title "$TITLE: który dataset?" --menu "Kopia zostanie zamontowana TYLKO DO ODCZYTU." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || exit 0
         k="${WT_OUT#d}"
         DS="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f1)"; TYP="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f2)"
-        if [ "$TYP" = volume ]; then
-            wt --title "$TITLE" --msgbox "$DS to dysk maszyny wirtualnej (zvol). Przeglądanie plików wewnątrz dysku VM będzie w następnej rundzie -- na razie tylko datasety plikowe (LXC, katalogi)." 10 "$W"
-            continue
-        fi
         step=2 ;;
     2)  zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "$DS" 2>/dev/null \
             | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"
@@ -115,28 +173,76 @@ while :; do
         wt --title "$TITLE: z kiedy?" --menu "$DS -- migawka do przejrzenia (czas hosta, $(date +%Z))." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { step=1; continue; }
         k="${WT_OUT#p}"
         SNAP="$(sed -n "$((k + 1))p" "$TMPD/points.tsv" | cut -f2)"
-        step=3 ;;
-    3)  mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/browse.XXXXXX")" || { MNT=""; wt --title "$TITLE" --msgbox "Nie mogę utworzyć katalogu w $BROOT." 8 "$W"; exit 1; }
-        if ! mount -t zfs -o ro "$DS@$SNAP" "$MNT" 2>"$TMPD/mount.err"; then
-            wt --title "$TITLE" --msgbox "Nie udało się zamontować $DS@$SNAP:\n$(head -3 "$TMPD/mount.err")" 10 "$W"
-            rmdir "$MNT" 2>/dev/null; MNT=""
+        if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;
+    3)  # ---- DYSK VM: urządzenie migawki, partycja, klucz ---------------------------------
+        restore_snapdev
+        SNAPDEV_WAS="$(zfs get -H -o value snapdev "$DS" 2>/dev/null)"; SNAPDEV_SRC="$(zfs get -H -o source snapdev "$DS" 2>/dev/null)"
+        info "$TITLE" "Wystawiam migawkę dysku jako urządzenie tylko do odczytu..."
+        if ! zfs set snapdev=visible "$DS" 2>"$TMPD/sd.err"; then
+            wt --title "$TITLE" --msgbox "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\n$(head -2 "$TMPD/sd.err")" 10 "$W"
             step=2; continue
         fi
-        clear 2>/dev/null
-        echo "Zamontowane TYLKO DO ODCZYTU: $DS@$SNAP"
-        echo "  w $MNT -- skopiuj pliki w mc (lewy panel = kopia), F10 w mc kończy i odmontowuje."
-        if command -v "$MC" >/dev/null 2>&1; then
-            "$MC" "$MNT" "${HOME:-/root}" </dev/tty >/dev/tty 2>&1
-        else
-            echo
-            echo "Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje."
-            ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
+        SNAPDEV_DS="$DS"
+        DEV="/dev/zvol/$DS@$SNAP"
+        for _w in 1 2 3 4 5 6 7 8 9 10; do
+            command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
+            [ -e "$DEV" ] && break; sleep 1
+        done
+        if ! [ -e "$DEV" ]; then
+            wt --title "$TITLE" --msgbox "Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii." 9 "$W"
+            restore_snapdev; step=2; continue
         fi
-        umount "$MNT" 2>/dev/null || umount -l "$MNT" 2>/dev/null
-        rmdir "$MNT" 2>/dev/null; MNT=""
-        echo
-        echo "=== Odmontowane. Enter = powrót do GUI"
-        read -r _ </dev/tty 2>/dev/null || true
-        exit 0 ;;
+        sleep 1; command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
+        # parts.tsv: urządzenie <TAB> system plików <TAB> rozmiar <TAB> etykieta
+        lsblk -nrpo NAME,FSTYPE,SIZE,LABEL "$(readlink -f "$DEV")" 2>/dev/null | tr -d '\r' \
+            | awk '{ l = $4; gsub(/\\x20/, " ", l); print $1 "\t" $2 "\t" $3 "\t" l }' >"$TMPD/parts.tsv"
+        menu=(); i=0
+        while IFS=$'\t' read -r pd pf ps pl; do
+            [ -n "$pf" ] || continue
+            case "$pf" in swap|LVM2_member|linux_raid_member|zfs_member) continue ;; esac
+            lbl="$pd  $pf  $ps${pl:+  $pl}"
+            case "$pf" in BitLocker|crypto_LUKS) lbl="$lbl  (zaszyfrowana -- klucz)" ;; esac
+            menu+=("q$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
+            printf '%s\t%s\n' "$pd" "$pf" >>"$TMPD/pick.tsv"
+        done <"$TMPD/parts.tsv"
+        if [ "$i" -eq 0 ]; then
+            wt --title "$TITLE" --msgbox "Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie." 10 "$W"
+            restore_snapdev; step=2; continue
+        fi
+        wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; restore_snapdev; step=2; continue; }
+        k="${WT_OUT#q}"
+        PDEV="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f1)"; PFS="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f2)"
+        rm -f "$TMPD/pick.tsv"
+        case "$PFS" in
+            BitLocker|crypto_LUKS)
+                command -v cryptsetup >/dev/null 2>&1 || { wt --title "$TITLE" --msgbox "Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin)." 9 "$W"; restore_snapdev; step=2; continue; }
+                _ty=luks; _hint="hasło LUKS"
+                [ "$PFS" = BitLocker ] && { _ty=bitlk; _hint="hasło BitLocker albo 48-cyfrowy klucz odzyskiwania (z myślnikami)"; }
+                _name="zbrowse-$$"
+                _ok=0
+                while :; do
+                    wt --title "$TITLE: klucz" --passwordbox "$PDEV jest zaszyfrowana ($PFS).\nPodaj $_hint.\nKlucz nie jest nigdzie zapisywany." 12 "$W" || break
+                    if printf '%s' "$WT_OUT" | cryptsetup open --readonly --type "$_ty" --key-file=- "$PDEV" "$_name" 2>"$TMPD/cs.err"; then
+                        _ok=1; break
+                    fi
+                    wt --title "$TITLE" --msgbox "Nie udało się odblokować:\n$(head -2 "$TMPD/cs.err")\nSpróbuj jeszcze raz albo Anuluj." 11 "$W"
+                done
+                WT_OUT=""
+                [ "$_ok" -eq 1 ] || { restore_snapdev; step=2; continue; }
+                MAPPED="$_name"
+                PDEV="/dev/mapper/$_name"
+                PFS="$(blkid -o value -s TYPE "$PDEV" 2>/dev/null)"
+                [ -n "$PFS" ] || PFS=unknown ;;
+        esac
+        if ! mount_ro "$PDEV" "$PFS"; then
+            wt --title "$TITLE" --msgbox "Nie udało się zamontować $PDEV ($PFS) tylko do odczytu:\n$(head -3 "$TMPD/mount.err")" 11 "$W"
+            unmount_all; restore_snapdev; step=2; continue
+        fi
+        browse_and_exit "$DS@$SNAP, $PDEV ($PFS)" ;;
+    4)  if ! mount_ro "$DS@$SNAP" zfs; then
+            wt --title "$TITLE" --msgbox "Nie udało się zamontować $DS@$SNAP:\n$(head -3 "$TMPD/mount.err")" 10 "$W"
+            step=2; continue
+        fi
+        browse_and_exit "$DS@$SNAP" ;;
     esac
 done
