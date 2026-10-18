@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fba9cc2a453c53dd -->
+<!-- status-covers-digest: 3eb21f8891d27111 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,23 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **Migawki lokalne -- cykl życia relacji, kampania na pve9 (2026-10-18; `fix/local-snapshots-lifecycle`).**
+  Właściciel: „zrób sam testy zakładania, modyfikowania, eksportu, importu, uruchamiania, pauzowania”. Kampania na
+  `lab-migawki` (4 datasety, `--target=`) tymi czasownikami, które woła GUI. Działało: F7 (`run-relation`), pauza i
+  wznowienie (w pauzie F7 odmawia), eksport, usunięcie, import (24 linie crona identyczne). Wady, wszystkie
+  poprawione i powtórzone na żywo:
+  `add-source`/`remove-source` odmawiały („rekord nie ma celu”) -- teraz dokłada/zdejmuje sam `[dataset:SRC]`;
+  `edit-relation --profile=` (Użyj szablonu) odmawiał („brak źródeł albo celu”) -- pusty cel z rekordu idzie do
+  `local-backup --replace` jako `--target=` (odmowa `--target='' --yes` zwolniona tylko dla wartości z rekordu);
+  `set-tiers --tier=` przy relacji bez celu dawał rc 0, raport „keep=12” i cron bez zmian -- bez strony celu (z configu)
+  `--tier/--drop-tier/--add-tier` znaczą stronę źródła; `local-backup --name=INNA` na źródłach już zainstalowanych
+  w innej relacji mówił „nic do zrobienia” (import pod drugą nazwą: fałszywy sukces bez rekordu) -- teraz odmowa
+  z nazwą właściciela. Na żywo po poprawce: remove/add-source 24 -> 20 -> 24, d7h24 24 -> 12 i z powrotem,
+  `--tier -H12` w 4 liniach, import pod drugą nazwą odmówiony; linie innych relacji bez zmian w każdym kroku.
+  Testy: `test/localbackup` +5 (na pve9 131/28, `main` 127/27 -- 27 to środowisko hosta, rozstrzyga CI).
+  Migawki zdalne (`solab`): F7, pauza/wznowienie, zmiana szablonu d30 <-> d7h24, zmiana adresu -- działają;
+  eksport/import są odmówione („jeszcze nieobsługiwane”) -- luka, następny krok.
 
 - **Eksport/import relacji lokalnej (2026-10-18; `fix/import-local-relation`).**
   `export-relation` zapisywał każdą relację jako `add-client …` + `seed` + `activate`; relacja lokalna (kopia lokalna
