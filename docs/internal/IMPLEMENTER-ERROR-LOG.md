@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73, E74.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73, E74, E88.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1921,6 +1921,25 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E88 — window keys written into the window body instead of its bottom frame (2026-10-18, R3)
+**2026-10-18, finish package A2 (F8 Wyłącz/Włącz), #614.**
+
+*Genesis.* The F8 pause confirmation got a second variant. I announced its key in the
+window BODY ("w = zamiast pauzy WYŁĄCZ także na źródle ...") and left the older body
+line "t = wykonaj  Tab = do linii poleceń ...  Esc = wróć", which repeats the footer.
+Owner, the same evening: "te klawisze powinny być na ramce na dole koło wykonaj, a nie
+w treści okna -- chaos znowu. Nie uczysz się."
+
+*Cause.* The rule exists and is written down: owner remark 4 of 2026-10-09 -- F keys
+only on the blue bar, every other key of a window only on that window's bottom frame,
+no duplicates (the comment above `key_bar_parts` in tui/zfs-tui.py says it). I added a
+key without checking where the window's keys live, and did not read my own screen as
+the owner reads it.
+
+*Rule.* R3. Before adding or moving a key in any window: the key goes on the window's
+bottom frame, next to the action it belongs to, and the body carries no key list; grep
+the body texts of the touched window for "= " key lists and remove them.
 
 ### E87 — `git add docs` staged an untracked runbook directory again (2026-10-17, R13, repeat of E82)
 **2026-10-17, REV-20261017-152 round-1 re-review response.**
