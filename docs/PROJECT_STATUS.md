@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 55705e034380d69e -->
+<!-- status-covers-digest: f27e2d69540dae4e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,12 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ, paczka A: „d dokończ” w oknie relacji (2026-10-18; `finisz/A-dokoncz`).**
+  Tryb pracy od 2026-10-18: uwagi właściciela -> `docs/project/FINISZ-BACKLOG.md`, paczki, jeden PR na paczkę,
+  bez suit lokalnie. Relacja, która nie jest aktywna, ma w oknie (Enter na F3) klawisz `d` = następny krok cyklu
+  jako zwykłe potwierdzenie (`t` wykonuje): „1. kopia” -> `seed NAZWA --yes`, pozostałe stany -> `activate NAZWA
+  --yes` (wznawialne). Aktywna -- nic. Wcześniej panel podawał tylko komendę do przepisania. Testy: `test/tui` +3.
 
 - **GUI: F11 Odzysk danych, F12 wyjście, Tab do linii poleceń (2026-10-18; `feat/gui-f11-odzysk`).**
   Decyzje właściciela: odzysk to osobny ekran główny (F11) -- relacje z kopią i wiersz „z dysku”; Enter otwiera te
