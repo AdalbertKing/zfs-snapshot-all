@@ -11903,7 +11903,7 @@ snaponly_prepare_workfile() {   # <workfile> <name> [rerender 0|1]
     SNAPONLY_REUSED=1
     local sflags; sflags="$(source_prune_sflags)"
     if [ "${scopes[0]%%:*}" != "${LOAD_ACCOUNT}@${LOAD_HOST}" ]; then
-        log "activate: '$name' moves from '${scopes[0]%%:*}' to '${LOAD_ACCOUNT}@${LOAD_HOST}' (the record's endpoint) -- section names and ssh options follow, the policy stays"
+        log "activate: '$name' moves from '${scopes[0]%%:*}' to '${LOAD_ACCOUNT}@${LOAD_HOST}' (the record's endpoint) -- section names and ssh_flags follow, the policy stays"
     fi
     # Rewritten only when something moved: an unchanged relationship keeps its
     # config byte-for-byte (F1.1), and the comparison is the installed section's own.
