@@ -343,6 +343,11 @@ Usage:
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
                                     this host (no --target -- the mapping is the identity).
                                     Same lifecycle and resumability as remote backup above.
+  zfs-backup.sh browse NAME --ask | browse --any --ask
+                                    "Przegladaj kopie" (lean restore, GUI F11 F7): a copy's
+                                    snapshot mounted READ-ONLY in a temporary directory,
+                                    mc to copy files out, unmounted on exit. Filesystem
+                                    datasets only for now (a zvol is refused). Root.
   zfs-backup.sh restore --plan [--dataset=DATASET] [--config=FILE]
                                     READ-ONLY. What could be restored, from where, and when
                                     each snapshot was REALLY taken -- ZFS 'creation', never
@@ -20718,6 +20723,15 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # 2026-08-17 split -- it is the one operation whose active side writes
         # onto production, so it is not this file's code. Both spellings work
         # and behave identically; exec so exit codes pass through untouched.
+        browse)
+            # "Przegladaj kopie" (owner 2026-10-18): windows only, like restore --ask --
+            # nothing here but the hand-off; the mount/mc/umount lives in tui/browse.sh.
+            [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ] || die "usage: zfs-backup.sh browse NAME --ask | browse --any --ask"
+            [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
+            _bw="$SCRIPT_DIR/tui/browse.sh"
+            [ -f "$_bw" ] || die "browse: brak $_bw -- checkout jest niekompletny"
+            ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$_bw" "$2"
+            exit $? ;;
         restore)
             [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
             # --ask: the GUI's window "Przywróć" (F11 Odzysk on the GUI), the same hand-off as

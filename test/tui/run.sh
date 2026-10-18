@@ -1027,6 +1027,32 @@ if grep -Eq "zfs-backup.sh'? restore --from-copy --ask\$" "$XL"; then
 else
     bad "odzysk: Enter na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
+# CHUDY ODZYSK (2026-10-18): F7 na F11 = "Przeglądaj kopię" -- okna browse --ask
+# (migawka RO + mc); na wierszu 'z dysku' -- browse --any --ask.
+A="$(od F7)"
+if grep -Eq "zfs-backup.sh'? browse [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: F7 na relacji oddaje terminal oknu 'Przeglądaj kopię' (browse NAZWA --ask)"
+else
+    bad "odzysk: F7 na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(od end,F7)"
+if grep -Eq "zfs-backup.sh'? browse --any --ask\$" "$XL"; then
+    ok "odzysk: F7 na 'z dysku' -- browse --any --ask (dowolny dataset tego hosta)"
+else
+    bad "odzysk: F7 na z dysku" "$(cat "$XL")"
+fi
+A="$(od "" | tail -1)"
+if has "$A" 'Przeglądaj'; then
+    ok "odzysk: pasek F11 podpisuje F7 Przeglądaj"
+else
+    bad "odzysk: pasek F11" "$A"
+fi
+if grep -q '^        browse)$' "$REPO/zfs-backup.sh" && grep -q 'tui/browse.sh' "$REPO/zfs-backup.sh" && bash -n "$REPO/tui/browse.sh" \
+   && grep -q 'mount -t zfs -o ro' "$REPO/tui/browse.sh" && grep -q 'trap cleanup EXIT' "$REPO/tui/browse.sh"; then
+    ok "odzysk: browse --ask prowadzi do tui/browse.sh; montaż -o ro, sprzątanie w trap EXIT"
+else
+    bad "odzysk: browse -> tui/browse.sh" "brak przekazania albo montażu ro"
+fi
 A="$(act down,enter,p)"
 if [ ! -s "$XL" ] && ! has "$A" 'p przywróć'; then
     ok "odzysk: 'p' w oknie relacji niczego nie uruchamia i stopka o nim nie mówi (odzysk jest na F11)"
