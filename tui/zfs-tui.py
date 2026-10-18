@@ -125,7 +125,7 @@ ARROWS_ASCII = {"local": "-> tutaj", "push": "-> {peer}", "pull": "<- {peer}",
 # F3/F2; to, co F5 pokazywal WIECEJ (harmonogram straznika, progi, straznik bez
 # zadania), przenioslo sie do panelu F2 (rel_detail_pairs, build_jobs).
 SCREENS = [("zadania", "F2", "Zadania"), ("relacje", "F3", "Relacje"), ("transfery", "F4", "Transfery"),
-           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Replika")]
+           ("szablony", "F5", "Szablony"), ("nosniki", "F6", u"Replika"), ("odzysk", "F11", u"Odzysk")]
 
 
 def home_dir():
@@ -1732,7 +1732,7 @@ def top_bar(data, width, now, ascii_only, err_count):
     return fit(line, width)
 
 
-# KLAWISZE F (R4-1/R4-2, wlasciciel 2026-09-24): F1-F6 to GLOWNE OKNA, F10
+# KLAWISZE F (R4-1/R4-2, wlasciciel 2026-09-24): F1-F6 i F11 to GLOWNE OKNA, F12
 # wyjscie, a F7/F8/F9 to AKCJE BIEZACEGO OKNA, podpisane w listwie (styl mc).
 # Litery NIE sa skrotami: kazdy drukowalny znak idzie do linii polecen (bash)
 # -- 'u' na F4 i 's' na F2 z rundy 3 byly martwe w prawdziwym GUI, bo petla
@@ -1743,7 +1743,7 @@ def screen_actions(active, hide_gone=False, paused=False):
     Na F3 podpis F7 mowi, co klawisz ZROBI z zaznaczona relacja: na
     wstrzymanej -- Wznow (tester R4, B6: listwa mowila Pauza, a F7 wznawial)."""
     if active == "zadania":
-        return [("F7", u"Uruchom teraz"), ("F8", u"Sortuj")]
+        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Sortuj")]
     if active == "relacje":
         # JEDNOLICIE (wlasciciel 2026-10-17): F7 to wszedzie "Uruchom teraz" -- na F3
         # kopia kazdego datasetu relacji jej najdrobniejszym zadaniem (run-relation).
@@ -1751,10 +1751,11 @@ def screen_actions(active, hide_gone=False, paused=False):
         return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Wznów" if paused else u"Pauza"),
                 ("F9", u"Eksport/Import", u"Plik")]
     if active == "transfery":
-        return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte")]
+        return [("F7", u"Pokaż usunięte" if hide_gone else u"Ukryj usunięte", u"Usunięte")]
     if active == "nosniki":
         # Krótkie (3. pole) tylko, gdy pasek się nie mieści: przy 80 kolumnach F9 wypychał F10.
-        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Klucz"), ("F9", u"Przywróć z dysku", u"Odzysk")]
+        # "Przywróć z dysku" przeszedł na F11 Odzysk (właściciel 2026-10-18).
+        return [("F7", u"Uruchom teraz", u"Uruchom"), ("F8", u"Klucz")]
     return []
 
 
@@ -1762,7 +1763,7 @@ def key_bar_parts(active, width, actions=()):
     """Pasek klawiszy F (wlasciciel 2026-10-09, uwaga 4: "wszystkie informacje o
     klawiszach F w calym pakiecie na niebieskim pasku, a na dolnej ramce jedynie
     unikalne dla okna inne niz F"; "trzeba to zrobic poprawnie bez dubli").
-    JEDYNE miejsce, gdzie ekran mowi o F: F1, okna F2-F6, akcje okna F7-F9 i F10 --
+    JEDYNE miejsce, gdzie ekran mowi o F: F1, okna F2-F6, akcje okna F7-F9, F11 Odzysk i F12 --
     zawsze wszystkie, przy kazdej szerokosci. Aktywne okno bez [nawiasow]: zaznacza
     je kolor (marks). Gdy pelny zapis sie nie miesci, zapis skrocony jak w Norton
     Commanderze: cyfra (w kolorze) + nazwa, bez litery F.
@@ -1771,13 +1772,21 @@ def key_bar_parts(active, width, actions=()):
     for key, fk, label in SCREENS:
         items.append((fk, label, key))
     items += [(a[0], a[1], None) for a in actions]
-    items.append(("F10", u"Wyjście", None))
+    # F11 Odzysk, F12 Wyjście (właściciel 2026-10-18); F10 wolne. Kolejność numerów.
+    items.append(("F12", u"Wyjście", None))
+    items.sort(key=lambda it: int(it[0][1:]))
     short = dict((a[0], a[2]) for a in actions if len(a) > 2)
-    for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True)):
+    # Najciasniej (80 kolumn, F3 z trzema akcjami i F11): skroty okien i wyjscia --
+    # tylko gdy nic innego sie nie miesci, zeby F12 nigdy nie wypadlo z paska.
+    tight = {"F4": u"Transf", "F5": u"Szabl", "F12": u"Wyjdź"}
+    for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
+                                (True, u"", "tight")):
         line, marks = u" ", []
         for fk, label, key in items:
             if brief and fk in short:
                 label = short[fk]
+            if brief == "tight" and fk in tight:
+                label = tight[fk]
             if line.strip():
                 line += sep
             start = len(line)
@@ -2866,7 +2875,9 @@ def cron_lines_of(jobs, w, ch):
 def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc zamyka   strzałki/PgUp/PgDn przewijają"):
     """Okno na wierzchu ekranu: ramka podwojna, tresc przewijana."""
     scr = Screen()
-    inner_h = height - 3
+    # Pod oknem zostaje linia polecen i listwa klawiszy (wlasciciel 2026-10-18).
+    keep = base.lines[-2:] if getattr(base, "cmd_y", None) is not None and len(base.lines) >= 3 else []
+    inner_h = height - 3 - len(keep)
     if scroll > max(0, len(lines) - inner_h):
         scroll = max(0, len(lines) - inner_h)
     body = lines[scroll:scroll + inner_h]
@@ -2876,8 +2887,10 @@ def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc za
     if len(lines) > inner_h:
         pos = "%d-%d z %d" % (scroll + 1, min(len(lines), scroll + inner_h), len(lines))
     bx = box(ch, title, body, width, footer=footer + ("   " + pos if pos else ""))
-    scr.lines = [base.lines[0]] + bx
+    scr.lines = [base.lines[0]] + bx + keep
     scr.bars.add(0)
+    if keep:
+        scr.bars.add(len(scr.lines) - 1)
     scr.titles.add(1)
     scr.titles.add(len(scr.lines) - 1)
     return scr, scroll
@@ -3456,6 +3469,83 @@ def render_szablony(data, cursor, width, height, now, ch, message=""):
     return scr
 
 
+# --- Odzysk (F11) ----------------------------------------------------------
+# WLASCICIEL 2026-10-18: odzysk to osobny ekran glowny, nie litera 'p' obok "e
+# zmien" w oknie relacji ani F9 na Replice -- "ktos moze sie machnac". Jedna droga:
+# relacja (albo dysk) -> te same okna "Przywroc" co wczesniej (dataset, migawka,
+# plan, WYKONAJ). Logika jest w `restore --ask`; ten ekran tylko wybiera skad.
+def odzysk_rows(rows):
+    """Relacje, z ktorych jest co odzyskac (maja kopie), plus wiersz "z dysku".
+    Migawki lokalne i zdalne nie maja kopii -- nie ma ich na liscie."""
+    out = []
+    for r in rows or []:
+        if r.get("kind") != "relation":
+            continue
+        rel = r.get("rel") or {}
+        if rel.get("state") == "removed" or rel.get("mode") == "snaponly":
+            continue
+        if rel.get("mode") == "local" and not rel.get("client_target"):
+            continue
+        out.append({"kind": "relation", "name": r["name"], "typ": r.get("typ") or "?", "dir": r.get("dir") or "?",
+                    "stan": state_word(rel)})
+    out.append({"kind": "disk", "name": u"z dysku", "typ": u"nośnik", "dir": u"dysk podłączony do tego hosta", "stan": ""})
+    return out
+
+
+def odzysk_detail(row):
+    if row.get("kind") == "disk":
+        return [(u"Skąd", u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii"),
+                (u"Kiedy", u"także bez relacji i bez replik, np. czysty serwer po ransomware"),
+                (u"Enter", u"okna Przywróć z dysku: źródło, co, dokąd, z kiedy, plan, WYKONAJ")]
+    return [(u"Skąd", u"kopie relacji %s (%s, %s)" % (row["name"], row["typ"], row["dir"])),
+            (u"Enter", u"okna Przywróć: dataset, dokąd, migawka, plan, WYKONAJ"),
+            (u"Uwaga", u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ")]
+
+
+def render_odzysk(data, rows, cursor, width, height, now, ch, message=""):
+    scr = Screen()
+    top = top_bar(data, width, now, ch.ascii, len(data.errors))
+    items = odzysk_rows(rows)
+    inner = width - 4
+    nw = max(7, min(20, max([len(x["name"]) for x in items] + [7])))
+    tw = max(3, min(15, max([len(x["typ"]) for x in items] + [3])))
+    sw = 10
+    dw = max(8, inner - nw - tw - sw - 3)
+    hdr = "%s %s %s %s" % (fit("Relacja", nw), fit("Typ", tw), fit("Kierunek", dw), fit("Stan", sw))
+    panel_h = 7
+    list_h = max(3, height - 2 - 2 - panel_h - 2)
+    body = [hdr, ch.dash * inner]
+    top_i = max(0, cursor - list_h + 1)
+    cur_y = None
+    for i, x in enumerate(items[top_i:top_i + list_h], start=top_i):
+        if i == cursor:
+            cur_y = len(body)
+        body.append("%s %s %s %s" % (fit(x["name"], nw, ch), fit(x["typ"], tw, ch), fit(x["dir"], dw, ch), fit(x["stan"], sw, ch)))
+    while len(body) < list_h + 2:
+        body.append("")
+    host = (data.jobs or {}).get("host") or ""
+    lb = box(ch, (u"Odzysk danych na %s" % host).strip(), body, width, footer=u"Enter odzyskaj z zaznaczonego")
+    if cur_y is not None:
+        scr.cursor_y = 2 + cur_y
+    pl = []
+    if items and 0 <= cursor < len(items):
+        pl = detail_kv(ch, odzysk_detail(items[cursor]), width - 4)
+    pl = pl[:panel_h - 2]
+    while len(pl) < panel_h - 2:
+        pl.append("")
+    panel = box(ch, u"Co się stanie", pl, width, double=False)
+    scr.lines = [top] + lb + panel
+    scr.titles.update({1, len(lb), len(lb) + 1, len(lb) + len(panel)})
+    scr.bars.add(0)
+    if message:
+        scr.lines.append(fit(" " + message, width))
+    while len(scr.lines) < height - 1:
+        scr.lines.append(fit("", width))
+    scr.lines = scr.lines[:height - 1]
+    push_key_bar(scr, "odzysk", width, screen_actions("odzysk"))
+    return scr
+
+
 # --- Pomoc -----------------------------------------------------------------
 HELP = [
     u"Okna nad zfs-snapshot-all. Akcje wołają czasowniki CLI, nic więcej.",
@@ -3474,7 +3564,6 @@ HELP = [
     u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
     u"                 źródła, konfig, zapis jako szablon, adres hosta po",
     u"                 przeniesieniu kolektora), Del usuń,",
-    u"                 w szczegółach 'p' = Przywróć z tej relacji (okna whiptail),",
     u"                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
     u"                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
     u"                 F9 eksport/import: eksport do pliku (Enter zapisuje, domyślnie",
@@ -3494,31 +3583,37 @@ HELP = [
     u"  F5  Szablony   szablony retencji: Ins nowy na podstawie zaznaczonego,",
     u"                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
     u"  F6  Replika    repliki i 4 stany nośnika; Ins/Del/F7 uruchom/F8 klucz, Enter+'e' zmiana",
-    u"                 F9 przywróć z dysku (--from-copy; także bez replik, np. po ransomware)",
+    u"  F11 Odzysk     odzysk danych: relacja z kopią albo 'z dysku' (nośnik, także",
+    u"                 bez replik, np. po ransomware); Enter otwiera okna Przywróć --",
+    u"                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj.",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
     u"  F3 w trzech panelach: lista relacji, szczegóły, a na dole pary",
     u"                 źródło → cel podświetlonej relacji (z linii crona; relacja",
     u"                 bez crona ma pary z rekordu i tytuł to mówi). Tab przenosi",
-    u"                 kursor na pary; Enter na parze pokazuje jej config i cron.",
+    u"                 kursor na pary, kolejny Tab do linii poleceń; Enter na parze",
+    u"                 pokazuje jej config i cron.",
     "",
     u"  LINIA POLECEŃ nad listwą klawiszy (jak w mc): pisz, Enter wykonuje na",
     u"                 pierwszym planie w katalogu repo, po komendzie Enter wraca.",
-    u"                 Strzałki przy niepustej linii = historia, Esc/Ctrl-U czyści.",
-    u"                 W potwierdzeniu akcji 'e' wrzuca pokazaną komendę do linii,",
-    u"                 żeby ją poprawić przed wykonaniem. Cyfry i litery NIGDY",
+    u"                 Tab przechodzi do linii (i z powrotem do listy); w linii",
+    u"                 strzałki = historia, Esc/Ctrl-U czyści. Linia jest widoczna",
+    u"                 także pod oknem: potwierdzenie pokazuje w niej swoją komendę,",
+    u"                 a Tab przenosi ją do linii, żeby ją poprawić przed",
+    u"                 wykonaniem. Cyfry i litery NIGDY",
     u"                 nie są skrótami na ekranach -- wszystko, co piszesz, idzie",
     u"                 do linii.",
     "",
-    u"  F1-F6             główne okna; F10 wyjście",
+    u"  F1-F6, F11        główne okna (F11 Odzysk danych); F12 wyjście",
     u"  F7 F8 F9          akcje BIEŻĄCEGO okna -- podpisane TYLKO na pasku na dole",
     u"                    (wąski terminal: zapis skrócony, cyfra = klawisz F)",
     "",
     u"  strzałki          ruch po liście     PgUp PgDn Home End   szybciej",
     u"  Ctrl-R            odśwież źródła (monitor liczy na żywo, to chwilę trwa)",
     u"  Esc               zamknij okno na wierzchu (w oknie także q; j k przewijają)",
-    u"  F10               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
+    u"  Tab               następny obiekt: lista, pary (F3), linia poleceń",
+    u"  F12               wyjście (litery idą do linii poleceń, więc q nie wychodzi)",
     "",
     u"Słowa w kolumnie 'Kopie':",
     u"  aktualne       najnowsza migawka mieści się w progu ostrzegawczym",
@@ -3551,7 +3646,7 @@ class UI(object):
         self.now_fixed = now
         self.exec_log = exec_log   # testy: zamiast uruchamiac, zapisz komende tutaj
         self.screen = "zadania"
-        self.cursor = {"zadania": 0, "relacje": 0, "transfery": 0, "monitor": 0, "szablony": 0, "nosniki": 0}
+        self.cursor = {"zadania": 0, "relacje": 0, "transfery": 0, "monitor": 0, "szablony": 0, "nosniki": 0, "odzysk": 0}
         self.window = None        # ("relacja", row) | ("pomoc", None) | ("prompt"|"confirm"|"output", dict)
         self.scroll = 0
         self.message = ""
@@ -3747,6 +3842,8 @@ class UI(object):
             return len(monitor_rows(self.data))
         if screen == "szablony":
             return len(self.data.profiles or [])
+        if screen == "odzysk":
+            return len(odzysk_rows(self.rows))
         return len((self.data.replicas or {}).get("replicas", []))
 
     # ------------------------------------------------------------------
@@ -3782,7 +3879,7 @@ class UI(object):
         lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
-        lines += [u"t = wykonaj      e = do linii poleceń (popraw i Enter)      Esc / inny klawisz = wróć"]
+        lines += [u"t = wykonaj      Tab = do linii poleceń (popraw i Enter)      Esc / inny klawisz = wróć"]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
                                    "shell": line, "on_yes": on_yes})
         self.scroll = 0
@@ -3936,6 +4033,15 @@ class UI(object):
         # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
         self.run_detached(u"Zadanie %s -- bieg teraz (konto %s)" % (r.get("name") or "", acct), argv, logname="zadanie")
 
+    def restore_action(self, row):
+        """F11 ODZYSK DANYCH (właściciel 2026-10-18: odzysk nie siedzi w zmianie
+        relacji ani przy zadaniach -- "ktoś może się machnąć"). Te same okna
+        whiptail co wcześniej 'p' w oknie relacji i F9 na Replice; plan i pytanie
+        przed nadpisaniem zadaje samo polecenie `restore`."""
+        if row.get("kind") == "disk":
+            return self.run_dialog([self.zb(), "restore", "--from-copy", "--ask"])
+        return self.run_dialog([self.zb(), "restore", row["name"], "--ask"])
+
     def replica_action(self, k):
         """Klawisz akcji na F6 (repliki): Ins nowa (okna whiptail), Del usun,
         F7 uruchom zaznaczona teraz (bez pytania), F8 pokaz klucz nosnika (W19b),
@@ -3945,14 +4051,8 @@ class UI(object):
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
         if k == "F9":
-            # PRZYWRÓĆ Z DYSKU (C2b, właściciel 2026-10-15): restore --from-copy w oknach
-            # whiptail. Działa BEZ replik -- czysty serwer po ransomware, dysk podłączony
-            # ręcznie -- a przy zaznaczonej replice podpowiada jej cel jako źródło.
-            argv = [self.zb(), "restore", "--from-copy", "--ask"]
-            c = self.cursor["nosniki"]
-            if reps and 0 <= c < len(reps) and reps[c].get("dst"):
-                argv.append(reps[c]["dst"])
-            return self.run_dialog(argv)
+            self.message = u"przywracanie z dysku jest teraz na F11 Odzysk"
+            return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
             self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)" if k == "F7" else u"brak replik"
@@ -4530,10 +4630,11 @@ class UI(object):
                     obj["on_yes"]()
                 else:
                     self.run_detached(obj["title"], obj["argv"], obj.get("redirect"))
-            elif k in ("e", "text:e"):
+            elif k == "tab":
                 # Komenda do linii polecen: widac ja, mozna poprawic, Enter wykona
-                # na pierwszym planie. Nic nie rusza samo.
-                self.window, self.cmd, self.hist_pos = None, obj["shell"], None
+                # na pierwszym planie. Nic nie rusza samo. Tab jak do kolejnego
+                # obiektu na ekranie (wlasciciel 2026-10-18), nie litera 'e'.
+                self.window, self.cmd, self.hist_pos, self.focus = None, obj["shell"], None, "cmd"
                 self.message = u"komenda w linii poleceń -- popraw i Enter wykona (Esc czyści)"
             elif k in ("down", "j"):
                 self.scroll += 1
@@ -4587,14 +4688,6 @@ class UI(object):
                 n = self.window[1]["name"]
                 self.window, self.scroll = None, 0
                 return self.run_dialog([self.zb(), "edit-relation", n, "--ask"]) or "stay"
-            elif k == "p" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation"                     and (self.window[1].get("rel") or {}).get("mode") != "snaponly":
-                # OKNO "PRZYWRÓĆ" (C2a, właściciel 2026-10-15): skąd = ta relacja, potem
-                # co / dokąd / z kiedy / polecenie -- jedno zwykłe `restore`, uruchomione
-                # w terminalu; plan i pytanie przed nadpisaniem zadaje samo polecenie.
-                # Tu, obok 'e', a nie na liście F3: tam litera jest tekstem linii poleceń.
-                n = self.window[1]["name"]
-                self.window, self.scroll = None, 0
-                return self.run_dialog([self.zb(), "restore", n, "--ask"]) or "stay"
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -4648,13 +4741,24 @@ class UI(object):
             return "stay"
         # Klawisz F dziala takze przy tekscie w linii -- nie jest tekstem. Ctrl-R
         # (odswiez, od 2026-10-09 jedyny -- F5 to Szablony) tez: przy F5 dzialalo.
-        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "ctrl-r")
+        FKEYS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "ctrl-r")
+        if self.focus == "cmd" and not self.cmd and k not in FKEYS:
+            if k in ("esc", "tab"):
+                self.focus = "list"
+            elif k == "up" and self.cmd_hist:
+                self.hist_pos = len(self.cmd_hist) - 1
+                self.cmd = self.cmd_hist[self.hist_pos]
+            return "stay"
         if self.cmd and k not in FKEYS:
+            if k == "tab":
+                self.focus = "list"
+                return "stay"
             if k == "bs":
                 self.cmd = self.cmd[:-1]
             elif k in ("esc", "ctrl-u"):
                 self.cmd, self.hist_pos = "", None
             elif k == "enter":
+                self.focus = "list"
                 return self.run_cmd(self.cmd)
             elif k == "up" and self.cmd_hist:
                 self.hist_pos = len(self.cmd_hist) - 1 if self.hist_pos is None else max(0, self.hist_pos - 1)
@@ -4666,13 +4770,21 @@ class UI(object):
                 else:
                     self.cmd = self.cmd_hist[self.hist_pos]
             return "stay"
-        if k in ("q", "F10"):
+        if k in ("q", "F12"):
             return "quit"
+        if k == "F10":
+            self.message = u"F10 jest wolne -- wyjście to F12"
+            return "stay"
         if k == "F1":
             self.window, self.scroll = ("pomoc", None), 0
             return "stay"
-        if k == "tab" and self.screen == "relacje":
-            self.focus = "pairs" if self.focus == "list" else "list"
+        # TAB = KOLEJNY OBIEKT NA EKRANIE (wlasciciel 2026-10-18): lista -> (pary na
+        # F3) -> linia polecen -> lista. W linii strzalki to historia takze przy
+        # pustej linii, Enter wykonuje, Esc albo Tab wraca do listy.
+        if k == "tab":
+            order = ["list", "pairs", "cmd"] if self.screen == "relacje" else ["list", "cmd"]
+            cur = self.focus if self.focus in order else "list"
+            self.focus = order[(order.index(cur) + 1) % len(order)]
             return "stay"
         if self.screen == "relacje" and self.focus == "pairs" and self.rows:
             row = self.rows[self.cursor["relacje"]]
@@ -4749,6 +4861,9 @@ class UI(object):
             return self.action(k) or "stay"
         elif k in ("F7", "F8", "F9", "del", "ins") and self.screen == "nosniki":
             return self.replica_action(k) or "stay"
+        elif k == "enter" and n and self.screen == "odzysk":
+            self.cursor["odzysk"] = c
+            return self.restore_action(odzysk_rows(self.rows)[c]) or "stay"
         elif k == "enter" and n:
             if self.screen == "relacje":
                 self.window, self.scroll = ("relacja", self.rows[c]), 0
@@ -4814,16 +4929,27 @@ def _ui_render(self, width, height):
         base = render_monitor(self.data, self.cursor["monitor"], width, sh, now, self.ch, self.message)
     elif self.screen == "szablony":
         base = render_szablony(self.data, self.cursor["szablony"], width, sh, now, self.ch, self.message)
+    elif self.screen == "odzysk":
+        base = render_odzysk(self.data, self.rows, self.cursor["odzysk"], width, sh, now, self.ch, self.message)
     else:
         base = render_nosniki(self.data, self.cursor["nosniki"], width, sh, now, self.ch, self.message)
-    if not self.window:
+    # LINIA POLECEN ZAWSZE NA DOLE, takze pod oknem (wlasciciel 2026-10-18: okna
+    # nie na caly ekran, na dole widac bash i polecenie zlozone przez okno). Okno
+    # potwierdzenia pokazuje w niej swoje polecenie; Tab przenosi je do edycji.
+    if self.window and self.window[0] == "confirm":
+        cl = self.prompt_text() + self.window[1].get("shell", "")
+    elif self.window:
+        cl = self.prompt_text() + self.cmd
+    else:
         cl = self.prompt_text() + self.cmd + "_"
-        if len(cl) > width:
-            # Dluga komenda: widac jej KONIEC (tam sie pisze), poczatek za ellipsa.
-            cl = self.ch.ell + cl[len(cl) - width + 1:]
-        base.lines.insert(len(base.lines) - 1, fit(cl, width))
-        base.bars = {0, len(base.lines) - 1}
-        base.cmd_y = len(base.lines) - 2
+    if len(cl) > width:
+        # Dluga komenda: widac jej KONIEC (tam sie pisze), poczatek za ellipsa.
+        cl = self.ch.ell + cl[len(cl) - width + 1:]
+    base.lines.insert(len(base.lines) - 1, fit(cl, width))
+    base.bars = {0, len(base.lines) - 1}
+    base.cmd_y = len(base.lines) - 2
+    if not self.window and self.focus == "cmd":
+        base.cursor_y = base.cmd_y
     if self.window:
         kind, obj = self.window
         if kind == "pomoc":
@@ -4837,7 +4963,7 @@ def _ui_render(self, width, height):
                                              footer=obj.get("footer") or u"Enter dalej   Esc wróć")
         elif kind == "confirm":
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
-                                             footer=u"t wykonaj   e do linii poleceń   Esc wróć")
+                                             footer=u"t wykonaj   Tab do linii poleceń   Esc wróć")
         elif kind == "form":
             lines = self.form_lines(obj, width)
             # Dlugi formularz (nowy szablon) przewija sie za kursorem.
@@ -4874,7 +5000,8 @@ def _ui_render(self, width, height):
                 foot = u"e zmień szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
-                foot = u"e zmień  p przywróć   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
+                foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
                 # snaponly (REV-20261017-152 runda 3): 'e' jak w kazdej relacji
                 # (wlasciciel 2026-10-18: ta sama sciezka); odzysku nie ma -- kopii
                 # tu nie ma -- wiec nie ma 'p'.
@@ -4923,7 +5050,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("p"): "p",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e",
                ord("?"): "F1", ord("h"): "F1"}
 
 
@@ -5012,7 +5139,7 @@ def curses_loop(ui):
                        curses.KEY_F3: "F3", curses.KEY_F4: "F4", curses.KEY_F5: "F5", curses.KEY_F6: "F6",
                        curses.KEY_F7: "F7", curses.KEY_F8: "F8", curses.KEY_IC: "ins", curses.KEY_DC: "del",
                        curses.KEY_BACKSPACE: "bs", 127: "bs", 8: "bs", curses.KEY_ENTER: "enter",
-                       10: "enter", 13: "enter", 27: "esc", curses.KEY_F10: "F10", curses.KEY_F9: "F9", 9: "tab",
+                       10: "enter", 13: "enter", 27: "esc", curses.KEY_F10: "F10", curses.KEY_F9: "F9", curses.KEY_F11: "F11", curses.KEY_F12: "F12", 9: "tab",
                        21: "ctrl-u", 18: "ctrl-r"})
         stdscr.keypad(True)
         # OBA DIALEKTY STRZALEK I F-KLAWISZY, CZYTANE WPROST. keypad() wlacza w
@@ -5032,7 +5159,7 @@ def curses_loop(ui):
         SEQ = {"[A": "up", "[B": "down", "OA": "up", "OB": "down", "[H": "home", "[F": "end", "OH": "home", "OF": "end",
                "[1~": "home", "[4~": "end", "[5~": "pgup", "[6~": "pgdn", "[2~": "ins", "[3~": "del",
                "OP": "F1", "OQ": "F2", "OR": "F3", "OS": "F4", "[11~": "F1", "[12~": "F2", "[13~": "F3", "[14~": "F4",
-               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[20~": "F9", "[21~": "F10", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
+               "[15~": "F5", "[17~": "F6", "[18~": "F7", "[19~": "F8", "[20~": "F9", "[21~": "F10", "[23~": "F11", "[24~": "F12", "[[A": "F1", "[[B": "F2", "[[C": "F3", "[[D": "F4", "[[E": "F5"}
 
         def wch():
             """(kod, czy_znak): get_wch odroznia znak od klawisza; -1 = nic."""

@@ -150,7 +150,7 @@ if has "$S4" 'F7 Uruchom teraz F8 Pauza F9 Eksport/Import' && ! hasE "$S4" '║.
 else
     bad "relacje: listwa F3 / Szczeble" "$S4"
 fi
-SPW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 130 2>&1)"
+SPW="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 160 2>&1)"
 if has "$SPW" 'F8 Wznów F9 Eksport/Import' && ! has "$SPW" 'F8 wznów' && ! has "$SPW" 'F8 Pauza'; then
     ok "relacje: na WSTRZYMANEJ relacji pasek mowi 'F8 Wznow', nie 'Pauza' (tester R4: B6); ramka bez F (uwaga 4)"
 else
@@ -1000,34 +1000,49 @@ if grep -Eq "zfs-backup.sh'? delete-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: Del -> delete-relation --ask" "$(cat "$XL")"
 fi
-# OKNO PRZYWRÓĆ (C2a, właściciel 2026-10-15): 'p' w szczegółach relacji (Enter na
-# F3) oddaje terminal oknu restore --ask -- jedno zwykłe polecenie restore, bez
-# własnej logiki odzysku w GUI. NIE na samej liście: tam litera jest tekstem linii
-# poleceń (live_key_name), co ten test złapał przy pierwszym podejściu.
+# F11 ODZYSK DANYCH (właściciel 2026-10-18): odzysk to osobny ekran główny -- nie 'p'
+# obok 'e zmień' w oknie relacji ani F9 na Replice ("ktoś może się machnąć").
+# Enter na relacji -> restore NAZWA --ask, na wierszu 'z dysku' -> restore --from-copy --ask
+# (te same okna whiptail co wcześniej). 'p' w oknie relacji niczego już nie robi.
+od() {   # <keys> -> ekran F11; dziennik w $XL
+    : > "$XL"
+    "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen odzysk --keys "$1" 2>&1
+}
+A="$(od "")"
+if has "$A" '╔═ Odzysk danych na pve10' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z dysku +nośnik' && has "$A" 'Co się stanie' \
+   && has "$A" '11Odzysk' && has "$A" '12Wyjście' && ! has "$A" '10Wyjście' && ! has "$A" 'F10'; then
+    ok "odzysk: F11 to ekran glowny -- relacje z kopia i wiersz 'z dysku', panel 'Co się stanie'; na pasku 11Odzysk i 12Wyjście, bez F10"
+else
+    bad "odzysk: ekran F11" "$A"
+fi
+A="$(od enter)"
+if grep -Eq "zfs-backup.sh'? restore [a-z0-9-]+ --ask\$" "$XL" && [ "$(grep -c . "$XL")" = 1 ]; then
+    ok "odzysk: Enter na relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
+else
+    bad "odzysk: Enter na relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
+A="$(od end,enter)"
+if grep -Eq "zfs-backup.sh'? restore --from-copy --ask\$" "$XL"; then
+    ok "odzysk: Enter na 'z dysku' oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask)"
+else
+    bad "odzysk: Enter na z dysku" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+fi
 A="$(act down,enter,p)"
-if grep -Eq "zfs-backup.sh'? restore lab-ct201 --ask\$" "$XL"; then
-    ok "akcje: p w szczegółach relacji oddaje terminal oknu 'Przywróć' (restore NAZWA --ask)"
+if [ ! -s "$XL" ] && ! has "$A" 'p przywróć'; then
+    ok "odzysk: 'p' w oknie relacji niczego nie uruchamia i stopka o nim nie mówi (odzysk jest na F11)"
 else
-    bad "akcje: p -> restore NAZWA --ask" "$(cat "$XL")" "$A"
+    bad "odzysk: p w oknie relacji" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
-A="$(act down,p)"
-if [ ! -s "$XL" ]; then
-    ok "akcje: p na samej liście F3 niczego nie uruchamia (litera = tekst linii poleceń)"
-else
-    bad "akcje: p na liście F3 nie powinno uruchamiać" "$(cat "$XL")"
-fi
-# PRZYWRÓĆ Z DYSKU (C2b): F9 na F6 -> restore --from-copy --ask z celem zaznaczonej
-# repliki jako podpowiedzią źródła; pasek klawiszy przy 80 kolumnach nadal ma F10.
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen nosniki --keys F9 2>&1)"
-if grep -Eq "zfs-backup.sh'? restore --from-copy --ask bkp/sejf-a\$" "$XL"; then
-    ok "akcje: F9 na F6 oddaje terminal oknu 'Przywróć z dysku' (restore --from-copy --ask <cel zaznaczonej repliki>)"
+if [ ! -s "$XL" ] && has "$A" 'przywracanie z dysku jest teraz na F11 Odzysk'; then
+    ok "odzysk: F9 na F6 niczego nie uruchamia, mowi gdzie jest odzysk (F11)"
 else
-    bad "akcje: F9 na F6 -> restore --from-copy --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
+    bad "odzysk: F9 na F6" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 80 2>&1 | grep 'Pomoc' | tail -1)"
-if has "$A" '9Odzysk' && has "$A" '10Wyjście'; then
-    ok "akcje: pasek F6 przy 80 kolumnach -- krótkie '9Odzysk' i F10 dalej widoczne"
+if has "$A" '11Odzysk' && has "$A" '12Wyjście' && ! has "$A" '9Odzysk'; then
+    ok "akcje: pasek F6 przy 80 kolumnach -- bez F9, z 11Odzysk i 12Wyjście"
 else
     bad "akcje: pasek F6 przy 80 kolumnach" "$A"
 fi
@@ -1045,10 +1060,9 @@ else
     bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(act down,enter)"
-# 'e zmień' (nie 'e zmień relację') od 2026-10-15: z 'p przywróć' pełne słowa nie
-# mieściły się w 80 kolumnach i ucinały licznik przewijania.
-if has "$A" 'e zmień  p przywróć'; then
-    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień  p przywróć')"
+# Odzysk przeszedł na F11 (2026-10-18): w stopce tylko 'e zmień'.
+if has "$A" 'e zmień   Esc zamyka'; then
+    ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień'), bez 'p przywróć'"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
 fi
@@ -1293,6 +1307,18 @@ elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F8 3)
     ok "pty: 's' i 'u' to tekst linii, F8 sortuje F2 (X9), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
     bad "pty: klawisze przez petle curses" "$PK"
+fi
+# F11 / F12 / Tab PRZEZ PETLE CURSES (2026-10-18): ESC [ 23 ~ otwiera Odzysk, Tab
+# przenosi do linii polecen (strzalka w gore = historia), ESC [ 24 ~ konczy program.
+PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,F10,tab,F12' -- --offline --utf8 --now "$NOW" $ALL 2>&1)"; PK2RC=$?
+pk2() { printf '%s\n' "$PK2" | awk -v k="=== $1" '$0 ~ /^=== / { on = ($0 == k); next } on'; }
+if [ "$PK2RC" -eq 2 ]; then
+    echo "SKIP pty F11/F12: brak modulu pty (Windows) -- sprawdza CI"
+elif has "$(pk2 F11)" 'Odzysk danych na pve10' && has "$(pk2 F10)" 'F10 jest wolne' && has "$(pk2 F10)" 'Odzysk danych' \
+     && printf '%s\n' "$PK2" | grep -qx '=== exited'; then
+    ok "pty: F11 (ESC[23~) otwiera Odzysk, F10 jest wolne, F12 (ESC[24~) konczy program rc=0 (petla curses)"
+else
+    bad "pty: F11/F12 przez petle curses" "rc=$PK2RC" "$PK2"
 fi
 # Odswiez: F9 -> F5 (R4-2) -> Ctrl-R (2026-10-09: F5 to ekran Szablony, uwaga 24).
 TR="$(screen zadania ctrl-r --width 140)"
@@ -1726,18 +1752,54 @@ if hasE "$C" '@pve10:zfs-snapshot-all\$ abc_ *$' && has "$C" 'duplikat -- szczeg
 else
     bad "linia: strzalki przy tekscie" "$C"
 fi
-# 'e' w potwierdzeniu: komenda akcji laduje w linii do poprawki, nic nie rusza.
-C="$(: > "$XL"; screen relacje "down,F8,e" --exec-log "$XL")"
+# Tab w potwierdzeniu (właściciel 2026-10-18; wcześniej litera 'e'): komenda akcji
+# laduje w linii do poprawki, nic nie rusza. 'e' nic juz tu nie robi.
+C="$(: > "$XL"; screen relacje "down,F8,tab" --exec-log "$XL")"
 if has "$C" "pause-client lab-ct201 '--reason=z TUI" && ! has "$C" 'POTWIERDZENIE' && [ ! -s "$XL" ] && has "$C" 'komenda w linii poleceń -- popraw i Enter'; then
-    ok "linia: 'e' w potwierdzeniu wrzuca pokazana komende do linii polecen (podglad + edycja), dziennik pusty"
+    ok "linia: Tab w potwierdzeniu wrzuca pokazana komende do linii polecen (podglad + edycja), dziennik pusty"
+else
+    bad "linia: Tab w potwierdzeniu" "$C" "$(cat "$XL")"
+fi
+C="$(: > "$XL"; screen relacje "down,F8,e" --exec-log "$XL")"
+if ! has "$C" 'POTWIERDZENIE' && ! hasE "$C" 'pause-client lab-ct201.*_ *$' && [ ! -s "$XL" ]; then
+    ok "linia: 'e' w potwierdzeniu to juz zaden skrot -- jak kazdy inny klawisz wraca, nic nie wrzuca do linii i nic nie uruchamia"
 else
     bad "linia: e w potwierdzeniu" "$C" "$(cat "$XL")"
 fi
-C="$(: > "$XL"; screen relacje "down,F8,e,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "down,F8" --exec-log "$XL")"
+# POD OKNEM WIDAC LINIE POLECEN z komenda zlozona przez okno, i pasek F.
+# (Dluga komenda jest ucieta od poczatku -- widac jej koniec, jak przy pisaniu.)
+if printf '%s\n' "$C" | tail -2 | head -1 | grep -q "pause-client lab-ct201 '--reason=z TUI" \
+   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" 't wykonaj   Tab do linii poleceń   Esc wróć'; then
+    ok "linia: pod oknem potwierdzenia zostaje linia polecen z jego komenda i pasek klawiszy; stopka 't wykonaj   Tab do linii poleceń'"
+else
+    bad "linia: linia polecen pod oknem" "$(printf '%s\n' "$C" | tail -3)"
+fi
+C="$(: > "$XL"; screen relacje "down,F8,tab,bs,bs,bs,bs,bs,bs,enter" --exec-log "$XL")"
 if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ]; then
     ok "linia: ...poprawiona (6 x Backspace) i Enter wykonuje TO, co w linii"
 else
-    bad "linia: e + edycja + Enter" "$(cat "$XL")" "$C"
+    bad "linia: Tab + edycja + Enter" "$(cat "$XL")" "$C"
+fi
+# TAB = kolejny obiekt: lista -> linia polecen -> lista; w linii strzalka w gore to
+# historia takze przy pustej linii, Esc wraca do listy.
+C="$(: > "$XL"; screen zadania "text:ls -l,enter,tab,up" --exec-log "$XL")"
+if hasE "$C" '@pve10:zfs-snapshot-all\$ ls -l_ *$'; then
+    ok "linia: Tab przenosi do linii polecen, strzalka w gore przy pustej linii = historia"
+else
+    bad "linia: Tab + historia" "$C"
+fi
+C1="$(screen zadania "down" | sed 1d)"; C2="$(screen zadania "tab,down" | sed 1d)"; C3="$(screen zadania "tab,tab,down" | sed 1d)"; C4="$(screen zadania "tab,esc,down" | sed 1d)"
+if [ "$C2" != "$C1" ] && [ "$C3" = "$C1" ] && [ "$C4" = "$C1" ]; then
+    ok "linia: w linii polecen strzalki nie ruszaja listy; Tab albo Esc wraca do listy"
+else
+    bad "linia: fokus Tab" "$(printf '%s\n' "$C2" | head -8)"
+fi
+C1="$(screen relacje "down" | sed 1d)"; C2="$(screen relacje "tab,tab,tab,down" | sed 1d)"
+if [ "$C2" = "$C1" ]; then
+    ok "linia: na F3 Tab krazy lista -> pary -> linia -> lista"
+else
+    bad "linia: Tab na F3" "$(printf '%s\n' "$C2" | head -8)"
 fi
 C="$(: > "$XL"; screen relacje "q,text:uit" --exec-log "$XL")"
 if hasE "$C" '@pve10:zfs-snapshot-all\$ quit_ *$' && has "$C" 'Relacje na kolektorze'; then
@@ -1745,11 +1807,17 @@ if hasE "$C" '@pve10:zfs-snapshot-all\$ quit_ *$' && has "$C" 'Relacje na kolekt
 else
     bad "linia: q jest tekstem" "$C"
 fi
-C="$(: > "$XL"; screen relacje "text:zfs list,F10" --exec-log "$XL")"
+C="$(: > "$XL"; screen relacje "text:zfs list,F12" --exec-log "$XL")"
 if [ ! -s "$XL" ]; then
-    ok "linia: F10 wychodzi takze z tekstem w linii, nic nie uruchamiajac"
+    ok "linia: F12 wychodzi takze z tekstem w linii, nic nie uruchamiajac"
 else
-    bad "linia: F10" "$(cat "$XL")"
+    bad "linia: F12" "$(cat "$XL")"
+fi
+C="$(: > "$XL"; screen relacje "F10" --exec-log "$XL")"
+if has "$C" 'F10 jest wolne -- wyjście to F12' && has "$C" 'Relacje na kolektorze' && [ ! -s "$XL" ]; then
+    ok "linia: F10 jest wolne -- nie wychodzi, mowi ze wyjscie to F12"
+else
+    bad "linia: F10 wolne" "$C"
 fi
 rm -f "$XL"
 
@@ -1797,14 +1865,14 @@ if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +dzia(ł|l)a +\|' && has "$A" '
 else
     bad "wyglad: slowa w ASCII" "$A"
 fi
-HLP="$(screen relacje F1 --height 72)"
+HLP="$(screen relacje F1 --height 90)"
 if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' && has "$HLP" 'NAJPIERW komenda bash'; then
     ok "pomoc: F1 otwiera pomoc ze slownikiem kolumny Kopie"
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Transfery5Szablony6Replika7Uruchom8Pauza9Plik10Wyjście'; then
-    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F (zapis skrocony, cyfra = F; F5 = Szablony)"
+if has "$S" '1Pomoc2Zadania3Relacje4Transf5Szabl6Replika7Uruchom8Pauza9Plik11Odzysk12Wyjdź'; then
+    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Transf/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
 fi
@@ -1816,12 +1884,13 @@ for _sc in zadania relacje transfery szablony nosniki; do
     for _w in 80 120 200; do
         _o="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen "$_sc" --width "$_w" --height 30 2>&1)"
         _body="$(printf '%s\n' "$_o" | sed '$d')"; _bar="$(printf '%s\n' "$_o" | tail -1)"
-        printf '%s' "$_body" | grep -qE '(^|[^A-Za-z0-9])F([1-9]|10)([^0-9]|$)' && NODUP="$NODUP $_sc/$_w:F-w-oknie"
+        printf '%s' "$_body" | grep -qE '(^|[^A-Za-z0-9])F([1-9]|1[0-2])([^0-9]|$)' && NODUP="$NODUP $_sc/$_w:F-w-oknie"
         case "$_sc" in
-            zadania) _acts="Sortuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="usunięte" ;;
+            zadania) _acts="Sortuj" ;; relacje) _acts="Uruchom Pauza" ;; transfery) _acts="sunięte" ;;
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
-        for _a in Pomoc Zadania Relacje Transfery Szablony Replika Wyjście $_acts; do
+        # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
+        for _a in Pomoc Zadania Relacje Transf Szabl Replika Odzysk Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done

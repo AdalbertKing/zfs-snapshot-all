@@ -20718,11 +20718,11 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # and behave identically; exec so exit codes pass through untouched.
         restore)
             [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && snaponly_refuse restore "$2"
-            # --ask: the GUI's window "Przywróć" ('p' on F3), the same hand-off as
+            # --ask: the GUI's window "Przywróć" (F11 Odzysk on the GUI), the same hand-off as
             # remove-replica --ask. The window composes ONE ordinary restore command
             # and runs it; nothing here is a second restore path.
             # `restore --from-copy --ask [DATASET]` is the same window's "z dysku"
-            # mode (F9 on F6); DATASET pre-selects the source.
+            # mode (the 'z dysku' row of F11); DATASET pre-selects the source.
             if [ "${3:-}" = "--ask" ] && [ -n "${2:-}" ]; then
                 _rw="$SCRIPT_DIR/tui/restore.sh"
                 [ -f "$_rw" ] || die "restore: brak $_rw -- checkout jest niekompletny"
