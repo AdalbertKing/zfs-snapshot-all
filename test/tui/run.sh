@@ -1445,7 +1445,7 @@ else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
 SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
-if hasE "$SOE" 'Zmiana +usuń relację i załóż ją od nowa' && ! has "$SOE" 'e zmień  p przywróć' && has "$SOE" 'Esc zamyka   strzałki/PgUp/PgDn przewijają'; then
+if hasE "$SOE" 'Zmiana +Del na liście F3 usuwa relację, Ins zakłada' && ! has "$SOE" 'e zmień  p przywróć' && has "$SOE" 'Esc zamyka   strzałki/PgUp/PgDn przewijają'; then
     ok "relacje: okno relacji snaponly -- stopka bez 'e zmień'/'p przywróć' (tylko klawisze), w panelu wiersz 'Zmiana'"
 else
     bad "relacje: stopka okna snaponly" "$SOE"

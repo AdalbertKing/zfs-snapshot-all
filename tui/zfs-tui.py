@@ -2132,7 +2132,7 @@ def rel_panel_pairs(row, data, now, ch):
         pairs.append(("Peer", rel.get("peer_host") or "?"))
         if rel.get("mode") == "snaponly":
             pairs.append(("Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
-            pairs.append(("Zmiana", u"usuń relację i załóż ją od nowa (bez edycji w miejscu)"))
+            pairs.append(("Zmiana", u"Del na liście F3 usuwa relację, Ins zakłada nową (wybierz „Migawki zdalnie”)"))
         pairs.append(("Endpoint", (rel.get("active_endpoint") or "?")
                       + (("   w cronie: %s" % rel["installed_endpoint"]) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
