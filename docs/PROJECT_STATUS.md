@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b7660dec5fcce3d7 -->
+<!-- status-covers-digest: 02c3776813553598 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -33,6 +33,10 @@
   0 odblokowanych urządzeń, `snapdev` z powrotem `hidden/default`; zły klucz LUKS -> „No key available”, ponowne
   pytanie. BitLocker -- bez testu na żywo (nie da się go utworzyć pod Linuksem). Na pve10 doinstalowane:
   `cryptsetup-bin`, `ntfs-3g`, `parted`, `mc`. Wymagania na hoście: `cryptsetup-bin` (szyfrowane), `ntfs3` albo `ntfs-3g`.
+  Poprawki po teście właściciela (U9, U10): menu partycji z `lsblk -J` i separatorem \001 (puste pole przesuwało
+  kolumny, sam dysk trafiał do menu jako „96M”); dwa przeglądania jednego dysku -- znaczniki `hold.<pid>.<dataset>`
+  w `/run/zfs-browse`, `snapdev` wraca dopiero po ostatnim, wartość sprzed zapisuje pierwszy. Test na pve10:
+  pierwsze kończy się, gdy drugie czeka na klucz -- na `main` „Device … does not exist”, po poprawce oba OK.
 
 - **FINISZ: Wyłącz/Włącz w F8, reguła udev zdejmowana w oknach (2026-10-18; `finisz/A2-D2`).**
   F8 na aktywnej relacji ze źródłem: okno pauzy ma `w` = Wyłącz (`disable-client`): pauza tutaj i zamek na źródle,

@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20, E33, E81.*
+*Evidence: E11, E20, E33, E81, E89.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -1921,6 +1921,21 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E89 — a live test ran on the zvol the owner was browsing at that moment (2026-10-18, R5)
+**2026-10-18, Przeglądaj kopię for zvols, pve10.**
+
+*Genesis.* The owner was testing "Przeglądaj kopię" on `hdd/restore/v-luks` on pve10. I ran my
+own pty test of the same dataset at the same time; its cleanup put `snapdev` back, and the
+owner's `/dev/zd96p1` vanished while he typed the LUKS key ("Device /dev/zd96p1 does not exist
+or access denied").
+
+*Cause.* I did not ask where the owner was testing before using the same host and dataset.
+It also exposed a real defect: two browses of one zvol restored `snapdev` independently, so the
+first to finish hid the device of the other (now reference-counted, hold files per dataset).
+
+*Rule.* R5. While the owner tests on a host, my live tests use their OWN datasets on it (or
+another host); say which before running.
 
 ### E88 — window keys written into the window body instead of its bottom frame (2026-10-18, R3)
 **2026-10-18, finish package A2 (F8 Wyłącz/Włącz), #614.**
