@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 21068727b7550402 -->
+<!-- status-covers-digest: b7660dec5fcce3d7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,19 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ: Przeglądaj kopię -- dyski VM (zvol), wersja light (2026-10-18; `finisz/B2-zvol`).**
+  Właściciel: NTFS, ext4 i inne znane systemy; BitLocker i LUKS -- po podaniu klucza. `tui/browse.sh` dla zvola:
+  `snapdev=visible` na czas przeglądania (urządzenie migawki jest tylko do odczytu), wybór partycji (`lsblk`),
+  montaż `ro` wg systemu plików (NTFS: `ntfs3`, inaczej `ntfs-3g`; ext2/3/4 `ro,noload`; xfs `ro,norecovery`;
+  vfat/exfat/btrfs `ro`), zaszyfrowane: `cryptsetup open --readonly --type luks|bitlk` z kluczem z okna (hasło,
+  dla BitLockera też 48-cyfrowy klucz odzyskiwania; nigdzie nie zapisywany), potem `mc`. Po wyjściu i przy
+  przerwaniu: odmontowanie, `cryptsetup close`, `snapdev` jak było (`inherit` albo dawna wartość). LVM, RAID, swap
+  -- pomijane. Na żywo pve10 (testowe zvole `hdd/labbrowse/v-ext4|v-ntfs|v-luks`, prawdziwe zfs/mount/cryptsetup,
+  okna z atrapy odpowiedzi, przez pty): każdy plik odczytany, montaż `ro`, zapis odrzucony, po wyjściu 0 montaży,
+  0 odblokowanych urządzeń, `snapdev` z powrotem `hidden/default`; zły klucz LUKS -> „No key available”, ponowne
+  pytanie. BitLocker -- bez testu na żywo (nie da się go utworzyć pod Linuksem). Na pve10 doinstalowane:
+  `cryptsetup-bin`, `ntfs-3g`, `parted`, `mc`. Wymagania na hoście: `cryptsetup-bin` (szyfrowane), `ntfs3` albo `ntfs-3g`.
 
 - **FINISZ: Wyłącz/Włącz w F8, reguła udev zdejmowana w oknach (2026-10-18; `finisz/A2-D2`).**
   F8 na aktywnej relacji ze źródłem: okno pauzy ma `w` = Wyłącz (`disable-client`): pauza tutaj i zamek na źródle,
