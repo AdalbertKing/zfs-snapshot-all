@@ -13747,13 +13747,18 @@ else
     bad "snaponly_strip" "$(grep -n '^\[\|managed-by' "$SO/s.conf")"
 fi
 
-# F3: a GFS ladder (one family, several tiers) and a prefixless profile are refused.
+# F3 (2026-10-18): a GFS profile is ACCEPTED -- its source templates carry `gfs = yes`
+# and gen-cron renders each such tier's [prune:] line with -G (it used to be refused,
+# because [prune:] read gfs from the section only). A prefixless profile is refused.
 printf '[defaults]\n\thost_label = pve10\n' > "$SO/g.conf"
 out=$(so_emit d7h24-gfs rel1 "$SO/g.conf"); rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'keeps a GFS ladder (gfs = yes)'; then
-    ok "snaponly: a per-tier GFS profile is refused -- a source [prune:] cannot carry it and a flat count would change the policy"
+so_gfs=$(awk '/^\[template:snaponly_src__rel1__/{f=1} /^\[/{if(!/snaponly_src__rel1__/)f=0} f' "$SO/g.conf" | grep -c 'gfs            = yes')
+# ...and through the REAL gen-cron the source prune lines carry -G (side = source).
+so_g=$(bash "$REPO/gen-cron.sh" -c "$SO/g.conf" 2>&1 | grep -c 'delsnaps\.sh -G .*zfsbackup-pve10@10\.0\.0\.9:hdd/so/')
+if [ "$rc" -eq 0 ] && [ "$so_gfs" -ge 1 ] && [ "$so_g" -ge 1 ] && ! printf '%s' "$out" | grep -q 'keeps a GFS ladder'; then
+    ok "snaponly: a per-tier GFS profile is accepted -- its source templates carry 'gfs = yes' ($so_gfs), which gen-cron renders as -G"
 else
-    bad "snaponly: GFS profile refused" "rc=$rc" "$out"
+    bad "snaponly: GFS profile" "rc=$rc gfs-lines=$so_gfs -G-lines=$so_g" "$out" "$(grep -n 'snaponly_src\|gfs' "$SO/g.conf")"
 fi
 out=$(so_emit passive-flat rel1 "$SO/g.conf"); rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'no prefix'; then
