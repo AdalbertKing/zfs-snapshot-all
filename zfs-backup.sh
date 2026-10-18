@@ -7161,6 +7161,20 @@ cmd_set_tiers() {
     [ -f "$cronfile" ] || die "set-tiers: no config $cronfile for '$name'"
     assert_cron_config_matches_installed "$cronfile"
     relblock_require "$cronfile" "$name" set-tiers
+    # MIGAWKI LOKALNE (a local relationship with a blank target): the source is its
+    # only side, so a copy-side tier op means the source one. Left as it was, --tier
+    # changed a target side no line is rendered from -- rc 0, "hourly: keep=12" in
+    # the report, and the cron untouched (owner campaign, pve9 2026-10-18).
+    if [ "${RUX_MODE:-}" = local ] && [ -z "${CLIENT_TARGET:-}" ]; then
+        local _i
+        for _i in "${!ops[@]}"; do
+            case "${ops[$_i]}" in
+                --tier=*)      ops[$_i]="--src-tier=${ops[$_i]#--tier=}" ;;
+                --drop-tier=*) ops[$_i]="--drop-src-tier=${ops[$_i]#--drop-tier=}" ;;
+                --add-tier=*)  ops[$_i]="--add-src-tier=${ops[$_i]#--add-tier=}" ;;
+            esac
+        done
+    fi
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
     cp -p "$cronfile" "$workfile" || { rm -f "$workfile"; die "could not copy $cronfile"; }
@@ -8661,6 +8675,18 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # remote path was given in KROK 3: a completed step repeats as a clean no-op.
     if [ "${#new_roots[@]}" -eq 0 ]; then
         rm -f "$cand"
+        # ...for THIS relationship. Installed under another name, "nothing to do"
+        # was a false success: import-relation --name=NEW reported the relationship
+        # reproduced, and no record existed (owner campaign, pve9 2026-10-18).
+        if [ -n "$lb_name" ] && [ "$lb_replace" -eq 0 ]; then
+            local _r _pl _own=""
+            for _r in "${roots[@]}"; do
+                _pl=$(cron_config_section "$config" "[dataset:$_r]" 2>/dev/null \
+                      | sed -n 's/^[[:space:]]*pair_label[[:space:]]*=[[:space:]]*//p' | head -1)
+                [ -n "$_pl" ] && [ "$_pl" != "$lb_name" ] && _own="${_own:+$_own, }$_r ($_pl)"
+            done
+            [ -z "$_own" ] || die "local-backup: --name=$lb_name -- these sources already belong to another relationship in $config: $_own. A dataset is in one relationship; change or delete that one instead. Nothing was changed."
+        fi
         log "local-backup: zrodla ${roots[*]} sa juz zainstalowane w $config dla celu '$target' -- nic do zrobienia."
         echo
         echo "Backup lokalny JUZ AKTYWNY (bez zmian)."
@@ -14638,8 +14664,11 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     local cronfile="$CRON_CTX_FILE"
     [ -f "$cronfile" ] || die "$how-source: no config $cronfile for '$name'"
     assert_cron_config_matches_installed "$cronfile"
+    # A blank target is a relationship of its own kind -- "migawki lokalne": each
+    # source snapshots and prunes in place, its only section is [dataset:SRC]
+    # (side = source; the tiers live in [relation:NAME]). Then there is no copy to
+    # overlap, land or keep (owner campaign, pve9 2026-10-18: Datasety refused).
     local target="${CLIENT_TARGET:-}"
-    [ -n "$target" ] || die "$how-source: the record of '$name' names no target"
     local -a srcs=()
     mapfile -t srcs < <(tiers_side_sections "$cronfile" "$name" local source | sed -n 's/^\[dataset:\(.*\)\]$/\1/p')
     [ "${#srcs[@]}" -gt 0 ] || die "$how-source: $cronfile has no [dataset:] section of '$name'"
@@ -14652,7 +14681,7 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
         case "$ds" in *:*) die "add-source: '$ds' names a remote host -- '$name' is a LOCAL copy" ;; esac
         zfs list -H -o name -- "$ds" >/dev/null 2>&1 \
             || die "add-source: source '$ds' does not exist on this host (zfs list found nothing). Nothing was changed."
-        local_backup_overlap "$ds" "$target" \
+        [ -n "$target" ] && local_backup_overlap "$ds" "$target" \
             && die "add-source: target '$target' overlaps '$ds' (equal, or one nested in the other) -- a backup cannot land inside the thing it backs up."
         # Every [dataset:] of the config, this relationship's and the others': no
         # parent/child pair -- the guard local-backup applies within one request,
@@ -14665,8 +14694,13 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
         done < <(sed -n 's/^\[dataset:\(.*\)\]$/\1/p' "$cronfile")
         # The same host-wide check local-backup makes (other accounts' relationships;
         # see coverage_conflicts), and the warning about a remote collector's scope.
-        assert_no_coverage_overlap "$name" "$ds" "$target/$ds"
-        warn_remote_collector_scope "$ds" "$target/$ds"
+        if [ -n "$target" ]; then
+            assert_no_coverage_overlap "$name" "$ds" "$target/$ds"
+            warn_remote_collector_scope "$ds" "$target/$ds"
+        else
+            assert_no_coverage_overlap "$name" "$ds"
+            warn_remote_collector_scope "$ds"
+        fi
     fi
     local workfile; workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
     workfile_track "$workfile"
@@ -14675,8 +14709,9 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
     local base; base=$(basename "$ds")
     if [ "$how" = remove ]; then
         remove_config_section "$workfile" "[dataset:$ds]" || { rm -f "$workfile"; die "remove-source: could not drop [dataset:$ds]"; }
-        grep -qxF "[prune:$target/$ds]" "$workfile" && { remove_config_section "$workfile" "[prune:$target/$ds]" || { rm -f "$workfile"; die "remove-source: could not drop [prune:$target/$ds]"; }; }
-        log "remove-source: the copy of '$ds' ($target/$ds) stays on this host"
+        [ -n "$target" ] && grep -qxF "[prune:$target/$ds]" "$workfile" && { remove_config_section "$workfile" "[prune:$target/$ds]" || { rm -f "$workfile"; die "remove-source: could not drop [prune:$target/$ds]"; }; }
+        if [ -n "$target" ]; then log "remove-source: the copy of '$ds' ($target/$ds) stays on this host"
+        else log "remove-source: the snapshots of '$ds' stay on it (no copy: they are the data)"; fi
     else
         local sib="${srcs[0]}" sibbase; sibbase=$(basename "$sib")
         {
@@ -14689,7 +14724,7 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
                 t ~ /^notify[ \t]*=/ { print "\tnotify       = " nb; next }
                 /^[ \t]*$/ { next }
                 { print }'
-            if grep -qxF "[prune:$target/$sib]" "$workfile"; then
+            if [ -n "$target" ] && grep -qxF "[prune:$target/$sib]" "$workfile"; then
                 printf '\n'
                 cron_config_section "$workfile" "[prune:$target/$sib]" | awk -v h="[prune:$target/$ds]" -v m="target=$target/$ds" -v nb="local-$base" '
                     NR == 1 { print h; next }
@@ -14727,7 +14762,7 @@ local_source_change() {   # <add|remove> <name> <dataset> <yes 0|1>
         [ "$how" = remove ] && [ "$m" = "$target/$ds" ] && continue
         out="${out:+$out }$m"
     done
-    [ "$how" = add ] && out="${out:+$out }$target/$ds"
+    [ "$how" = add ] && [ -n "$target" ] && out="${out:+$out }$target/$ds"
     record_replace_fields "$cpath" REQUESTED_DATASETS "$now" MANAGED_DATASETS "$out" \
         || warn "$how-source: the config is installed, but the record $cpath could not be updated -- its source list is stale (the config decides)"
     return 0
@@ -19376,7 +19411,9 @@ local_relation_argv() {
     srcs=$(record_get "$cp" REQUESTED_DATASETS); tgt=$(record_get "$cp" CLIENT_TARGET)
     rec=$(record_get "$cp" RECURSION); lu=$(record_get "$cp" LOCAL_USER); cfg=$(record_get "$cp" CRON_CONFIG)
     prof=$(record_get "$cp" PROFILE); sprof=$(record_get "$cp" SOURCE_PROFILE)
-    [ -n "$srcs" ] && [ -n "$tgt" ] || die "the record of '$1' names no sources or no target -- edit it with: zfs-backup edit-config $1"
+    # A blank target is "migawki lokalne" (snapshots, no copy) -- the record says so
+    # by CLIENT_TARGET= ; it is replayed as --target='' (owner campaign 2026-10-18).
+    [ -n "$srcs" ] || die "the record of '$1' names no sources -- edit it with: zfs-backup edit-config $1"
     LRA=(--source="$srcs" --target="$tgt" --name="$1")
     [ -n "$rec" ] && LRA+=(--recursive="$rec")
     [ -n "$lu" ] && LRA+=(--local-user="$lu")
@@ -19433,6 +19470,9 @@ lra_drop_orphan_excludes() {
 # shared tail of edit-relation / add-source / remove-source on a local relationship.
 run_local_relation_change() {
     local verb="$1" how="$2"; shift 2
+    # The arguments are the record's own (local_relation_argv): a blank --target= here
+    # was written by local-backup, not typed or expanded from an unset variable.
+    local LB_TARGET_FROM_FILE=1
     case "$how" in
         plan) cmd_local_backup "$@" --replace ;;
         1)    cmd_local_backup "$@" --replace --install --yes ;;
