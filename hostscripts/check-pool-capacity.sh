@@ -1,5 +1,5 @@
 #!/bin/bash
-# check-pool-capacity.sh v7 -- warns before a zpool, or a dataset with a refquota,
+# check-pool-capacity.sh v8 -- warns before a zpool, or a dataset with a refquota,
 # fills up. Catches slow exhaustion BEFORE it turns into a failed job.
 #
 # It reports through notify-fail.sh rather than mailing directly. Sending its
@@ -8,7 +8,13 @@
 # filtering. Going through the queue also means the finding arrives with its
 # numbers attached, in the same digest as everything else.
 # Usage in cron: 0 8 * * * /root/scripts/check-pool-capacity.sh
-THRESHOLD=90
+# The threshold is the host setting [capacity] threshold (settings.ini, F10 in the
+# GUI; env ZFS_CAPACITY_THRESHOLD wins) -- read through alert-env.sh beside this
+# script. It was a constant here, so changing it meant an edit the next update undid.
+# shellcheck disable=SC1091
+. "$(dirname "$0")/alert-env.sh" 2>/dev/null || :
+THRESHOLD="${ZFS_CAPACITY_THRESHOLD:-90}"
+case "$THRESHOLD" in ''|*[!0-9]*) THRESHOLD=90 ;; esac
 HOST=$(hostname -f 2>/dev/null || hostname)
 NOTIFY="${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 

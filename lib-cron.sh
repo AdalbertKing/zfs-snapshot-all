@@ -777,18 +777,24 @@ cron_replace_all_impl() {
 # environment wins because that is what the suites use to pin a value, and a
 # host file that could override a test would make the test a liar.
 #
-# Format: flat `key = value`, '#' starts a comment. No sections until something
-# needs one -- CONFIG v4 has sections because it describes many datasets; this
-# describes one host.
+# Format: `key = value`, '#' starts a comment, and SECTIONS since 2026-10-19
+# (owner: "nowy plik ustawień z sekcjami" -- alerts, capacity, monitor, GUI and
+# update cadence joined the engine defaults, and one flat namespace of them all
+# would be a list nobody reads). A key is named `section.key`; a bare key is the
+# [engine] section, which is also where every line before the first [section]
+# header belongs -- so the flat files written since 2026-08-26 read unchanged.
 SETTINGS_FILE="${SETTINGS_FILE:-/etc/zfs-snapshot-all/settings.ini}"
-settings_get() {   # <key> <built-in default> -> value
-    local key="$1" fallback="$2" v
+settings_get() {   # <[section.]key> <built-in default> -> value
+    local key="$1" fallback="$2" v sec="engine"
+    case "$key" in *.*) sec="${key%%.*}"; key="${key#*.}" ;; esac
     [ -r "$SETTINGS_FILE" ] || { printf '%s' "$fallback"; return 0; }
-    v="$(awk -F= -v k="$key" '
+    v="$(awk -F= -v k="$key" -v s="$sec" '
+        BEGIN { cur = "engine" }
         { sub(/#.*/, "") }
+        /^[ \t]*\[[A-Za-z0-9_]+\][ \t]*$/ { cur = $0; gsub(/[][ \t]/, "", cur); next }
         {
             key=$1; sub(/^[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
-            if (key == k && NF > 1) {
+            if (cur == s && key == k && NF > 1) {
                 val=$0; sub(/^[^=]*=/, "", val)
                 sub(/^[ \t]+/, "", val); sub(/[ \t]+$/, "", val)
                 print val; exit
@@ -800,6 +806,67 @@ settings_get() {   # <key> <built-in default> -> value
     # applies to blank fields.
     [ -n "$v" ] || v="$fallback"
     printf '%s' "$v"
+}
+
+# settings_set <section.key> <value> [file] -- writes ONE key into its section,
+# atomically, keeping every other line (comments included). An existing live
+# line of that key in that section is replaced in place; otherwise the line goes
+# at the end of the section, and a missing section is appended. A commented
+# `#key = ...` example is left alone -- the live line goes after it.
+settings_set() {
+    local key="$1" val="$2" path="${3:-$SETTINGS_FILE}" sec="engine" dir tmp
+    case "$key" in *.*) sec="${key%%.*}"; key="${key#*.}" ;; esac
+    case "$val" in *$'\n'*|*'#'*) return 1 ;; esac
+    dir="$(dirname "$path")"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    tmp="$(mktemp "$dir/.settings.XXXXXX")" || return 1
+    { [ -r "$path" ] && cat "$path"; } | awk -v s="$sec" -v k="$key" -v v="$val" '
+        function emit() { print k " = " v; done = 1 }
+        BEGIN { cur = "engine"; done = 0 }
+        /^[ \t]*\[[A-Za-z0-9_]+\][ \t]*$/ {
+            if (cur == s && !done) emit()
+            cur = $0; gsub(/[][ \t]/, "", cur); print; next
+        }
+        {
+            line = $0; sub(/#.*/, "", line)
+            kk = line; sub(/=.*/, "", kk); gsub(/^[ \t]+|[ \t]+$/, "", kk)
+            if (cur == s && !done && kk == k && index(line, "=") > 0) { emit(); next }
+            print
+        }
+        END {
+            if (!done) {
+                if (cur != s) { print ""; print "[" s "]" }
+                emit()
+            }
+        }' > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod 0644 "$tmp" 2>/dev/null
+    mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
+}
+
+# HH:MM -> the five cron fields of "every day at that time"; :MM -> "every hour
+# at that minute". Anything else: rc 1 and nothing printed.
+settings_time_to_cron() {
+    case "$1" in
+        :[0-5][0-9])               printf '%d * * * *' "$((10#${1#:}))" ;;
+        [0-9]:[0-5][0-9]|[01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9])
+                                   printf '%d %d * * *' "$((10#${1#*:}))" "$((10#${1%%:*}))" ;;
+        *) return 1 ;;
+    esac
+}
+
+# 15m / 2h -> the cron fields of "every N minutes/hours". Minutes must divide an
+# hour (a */25 runs at :00, :25, :50 and :00 again -- not every 25 minutes).
+settings_interval_to_cron() {
+    local n="${1%[mh]}"
+    case "$n" in ''|*[!0-9]*) return 1 ;; esac
+    n=$((10#$n))
+    case "$1" in
+        *m) [ "$n" -ge 1 ] && [ "$n" -le 60 ] && [ $((60 % n)) -eq 0 ] || return 1
+            if [ "$n" -eq 60 ]; then printf '0 * * * *'; else printf '*/%d * * * *' "$n"; fi ;;
+        *h) [ "$n" -ge 1 ] && [ "$n" -le 24 ] && [ $((24 % n)) -eq 0 ] || return 1
+            if [ "$n" -eq 24 ]; then printf '0 0 * * *'; else printf '0 */%d * * *' "$n"; fi ;;
+        *) return 1 ;;
+    esac
 }
 
 # The file settings_get reads, written once so a host HAS one to edit.
@@ -825,9 +892,9 @@ settings_write_default() {   # <path> -> 0 written, 1 already there
 # ============================================================================
 # THIS HOST'S ENGINE DEFAULTS
 #
-# Flat `key = value`. '#' starts a comment. No sections: this file describes ONE
-# HOST, unlike a CONFIG v4 file, which describes many datasets and therefore has
-# them.
+# `key = value` in [sections]. '#' starts a comment. Lines before the first
+# [section] are the [engine] section (the flat files of 2026-08-26 read as-is).
+# The GUI edits this file with F10 (Settings); by hand: zfs-backup.sh settings.
 #
 # Read by gen-cron.sh and zfs-backup.sh through settings_get (lib-cron.sh).
 #
@@ -884,6 +951,39 @@ settings_write_default() {   # <path> -> 0 written, 1 already there
 # A property of this host and its link, which is why it lives here.
 #
 #catchup_max_age = 1800
+
+
+# ============================================================================
+# The sections below (2026-10-19). Every key commented = built-in default.
+# `zfs-backup.sh settings` prints the effective value of each and where it
+# came from; `zfs-backup.sh settings set section.key=value --yes` writes one
+# and applies it (cron lines regenerated where the key is a schedule).
+# ============================================================================
+[gui]
+#language = en                 # en | pl
+
+[alerts]
+#email = root                  # who gets the mail
+#errors = daily                # daily (one digest) | immediate
+#warnings = daily              # daily | immediate
+#repeat_after = 4h             # immediate mode: the same alert again after this
+#digest_time = 07:00           # when the daily digest goes out
+#all_ok_mail = mon             # mon..sun | daily | monthly | off -- mail with nothing to report
+#stats_days = 7                # days of run statistics in the digest
+#output_lines = 8              # lines of a failed job's output in the alert
+
+[capacity]
+#threshold = 90                # % of a pool or a refquota that raises a warning
+#check_time = 08:00
+
+[monitor]
+#interval = 15m               # how often the staleness monitor runs (divides an hour)
+
+[new_relation]
+#template = default            # template of a new relationship
+
+[update]
+#time = :15                    # minute of the hourly self-update (git pull)
 SETTINGS_INI_EOF
     chmod 0644 "$tmp" 2>/dev/null
     if ! mv -f "$tmp" "$path"; then

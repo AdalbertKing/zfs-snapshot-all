@@ -6508,7 +6508,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # atomic_replace_and_install).
 # 15/21 since 2026-10-18: purge-replica-copy is gone (owner: "nie chcemy tego" -- a
 # disk is cleared by formatting it), and with it one READER of the config.
-if [ "$writers" -eq 15 ] && [ "$resolvers" -eq 21 ]; then
+# 16/22 since 2026-10-19 (U23): settings_reinstall_crons -- `settings set` of a cron key
+# re-renders each account's block from its own config. A WRITER, aimed like the others.
+if [ "$writers" -eq 16 ] && [ "$resolvers" -eq 22 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -12679,6 +12681,48 @@ else
     bad "delrel: archive of a removed record named like a live source identity" "$DROUT" "$(ls "$DR/clients" "$DR/peers")"
 fi
 mv "$DR/clients"/c.conf.removed-* "$DR/clients/c.conf" 2>/dev/null; rm -rf "$DR/peers"
+# SETTINGS (owner 2026-10-19: "nowy plik ustawień z sekcjami", F10). The verb reads
+# the registry, validates, plans, and with --yes writes the file and applies: a
+# cron key re-renders the managed blocks, a host key rewrites that host line.
+# The two appliers are stubbed -- what is pinned is WHICH runs for WHICH key.
+ST="$WORK/settings"; rm -rf "$ST"; mkdir -p "$ST"
+st_run() {   # <args...> -> output (+ APPLY lines from the stubs)
+    ( SETTINGS_FILE="$ST/settings.ini" CLIENTS_DIR="$DR/clients"
+      . "$ZFSBACKUP"
+      id() { [ "${1:-}" = -u ] && { echo 0; return 0; }; command id "$@"; }
+      settings_reinstall_crons() { echo "APPLY cron"; }
+      settings_rewrite_host_line() { echo "APPLY host $1 $2"; }
+      cmd_settings "$@" ) 2>&1
+}
+printf '[alerts]\nemail = a@b.pl\n' > "$ST/settings.ini"
+SP1=$(st_run); SP2=$(st_run set alerts.digest_time=06:30 monitor.interval=10m); SP3=$(st_run set alerts.digest_time=25:00)
+SP4=$(st_run set alerts.digest_time=06:30 monitor.interval=10m capacity.threshold=85 --yes)
+SP5=$(st_run set nosuch.key=1); SP6=$(st_run get alerts.digest_time)
+if printf '%s' "$SP1" | grep -qE 'alerts\.email +a@b\.pl +\(plik\)' && printf '%s' "$SP1" | grep -qE 'alerts\.digest_time +07:00 +\(domyślne\)' \
+   && printf '%s' "$SP2" | grep -q 'alerts.digest_time       07:00 -> 06:30' && printf '%s' "$SP2" | grep -q '^plan only' && ! printf '%s' "$SP2" | grep -q APPLY \
+   && printf '%s' "$SP3" | grep -q 'GG:MM' && printf '%s' "$SP5" | grep -q 'nieznany klucz' \
+   && printf '%s' "$SP4" | grep -q '^APPLY cron$' && printf '%s' "$SP4" | grep -q '^APPLY host /alert-digest.sh 30 6 \* \* \*$' \
+   && ! printf '%s' "$SP4" | grep -q 'APPLY host /check-pool' && [ "$SP6" = "06:30" ] \
+   && grep -q '^threshold = 85$' "$ST/settings.ini" && grep -q '^email = a@b.pl$' "$ST/settings.ini"; then
+    ok "settings: list with sources, plan without --yes changes nothing, a bad value and an unknown key refused, --yes writes and applies exactly the cron/host part each key needs"
+else
+    bad "settings verb" "$SP1" "$SP2" "$SP3" "$SP4" "$SP5" "get=$SP6" "$(cat "$ST/settings.ini")"
+fi
+# The alert scripts read the same file (alert-env.sh): [alerts] wins over zfs-alert.conf,
+# the environment over both.
+printf 'ZFS_ALERT_EMAIL=old@x.pl\nZFS_ALERT_MODE=immediate\n' > "$ST/zfs-alert.conf"
+printf '[alerts]\nemail = new@x.pl\nrepeat_after = 2h\n[capacity]\nthreshold = 80\n' > "$ST/s2.ini"
+AE=$( ( unset ZFS_ALERT_EMAIL ZFS_ALERT_MODE ZFS_ALERT_COOLDOWN ZFS_CAPACITY_THRESHOLD
+        ZFS_ALERT_CONF="$ST/zfs-alert.conf" SETTINGS_FILE="$ST/s2.ini"
+        . "$REPO/hostscripts/alert-env.sh"; echo "$ZFS_ALERT_EMAIL $ZFS_ALERT_MODE $ZFS_ALERT_COOLDOWN $ZFS_CAPACITY_THRESHOLD" ) )
+AE2=$( ( ZFS_ALERT_EMAIL=env@x.pl ZFS_ALERT_CONF="$ST/zfs-alert.conf" SETTINGS_FILE="$ST/s2.ini"
+         . "$REPO/hostscripts/alert-env.sh"; echo "$ZFS_ALERT_EMAIL" ) )
+if [ "$AE" = "new@x.pl immediate 7200 80" ] && [ "$AE2" = "env@x.pl" ]; then
+    ok "settings: alert-env.sh -- [alerts]/[capacity] win over zfs-alert.conf (which still fills the rest), the environment wins over both"
+else
+    bad "settings: alert-env.sh precedence" "got: $AE / $AE2"
+fi
+rm -rf "$ST"
 # U20 (owner 2026-10-19, g3-bc): add-source on a MIRROR -- activation measures the
 # committed scope against RUX_SOURCE's dataset list, so the list must follow the scope
 # (REQUESTED_DATASETS is empty on a mirror). The source side and the re-activation are

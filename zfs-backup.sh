@@ -15079,6 +15079,241 @@ relation_copy_sources() {
 # job once, now: one whose hour field is `*` (it runs every hour) if there is one,
 # else the first -- not merely the first line found. [verb] only names the caller
 # in its messages (add-source, activate-client).
+# ---------------------------------------------------------------------------
+# settings -- THE HOST SETTINGS FILE (owner 2026-10-19: "nowy plik ustawień z
+# sekcjami", "ustawienia F10"). /etc/zfs-snapshot-all/settings.ini (SETTINGS_FILE)
+# with [gui] [alerts] [capacity] [monitor] [new_relation] [update] [engine].
+#
+#   settings                     every key: effective value, where it came from
+#   settings --tsv               the same for the GUI window (key, value, source, kind, help)
+#   settings get KEY             the effective value of one key
+#   settings set KEY=VALUE... [--yes]
+#                                validated plan; --yes writes the file and applies:
+#                                a schedule key re-renders what runs on it (the
+#                                managed cron blocks, or the host block's line)
+#   settings test-mail           one mail to the configured address, now
+#   settings --ask               the GUI window (tui/settings.sh)
+#
+# PRECEDENCE, highest first: the environment, this file, /etc/zfs-alert.conf
+# (alerts only -- read for hosts that predate this file), the built-in default.
+# The registry below is the ONE list: the window, the plan and the validation
+# all read it, so a key cannot be settable in one and unknown in another.
+# ---------------------------------------------------------------------------
+# key|built-in default|kind|applies to|help (Polish -- shown in the window)
+SETTINGS_REGISTRY='gui.language|en|enum:en,pl|-|język okien GUI
+alerts.email|root|email|-|kto dostaje maile o kopiach
+alerts.errors|daily|enum:daily,immediate|-|błędy: zbiorczo raz na dobę albo od razu
+alerts.warnings|daily|enum:daily,immediate|-|ostrzeżenia: zbiorczo raz na dobę albo od razu
+alerts.repeat_after|4h|dur|-|tryb "od razu": ten sam alert znowu po tym czasie
+alerts.digest_time|07:00|time|host|o której wychodzi dzienny mail
+alerts.all_ok_mail|mon|enum:mon,tue,wed,thu,fri,sat,sun,daily,monthly,off|-|mail "wszystko OK", gdy nic się nie działo
+alerts.stats_days|7|int:1:90|-|ile dni statystyk biegów w mailu
+alerts.output_lines|8|int:0:200|cron|ile linii wyjścia nieudanego zadania w alercie
+capacity.threshold|90|int:50:99|-|% zajętości puli lub refquota, od którego jest ostrzeżenie
+capacity.check_time|08:00|time|host|o której sprawdzać zajętość pul
+monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
+new_relation.template|default|profile|-|szablon proponowany nowej relacji
+update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'
+
+# The variable of /etc/zfs-alert.conf that said the same thing before this file.
+settings_alert_conf_var() {
+    case "$1" in
+        alerts.email) echo ZFS_ALERT_EMAIL ;; alerts.errors) echo ZFS_ALERT_MODE ;;
+        alerts.warnings) echo ZFS_WARN_MODE ;; alerts.all_ok_mail) echo ZFS_DIGEST_QUIET ;;
+        alerts.stats_days) echo ZFS_DIGEST_DAYS ;; alerts.repeat_after) echo ZFS_ALERT_COOLDOWN ;;
+    esac
+}
+
+settings_row() {   # <key> -> "default|kind|applies|help" or rc 1
+    local k="$1" line
+    while IFS= read -r line; do
+        [ "${line%%|*}" = "$k" ] && { printf '%s' "${line#*|}"; return 0; }
+    done <<< "$SETTINGS_REGISTRY"
+    return 1
+}
+
+# -> "<value>\t<source>" ; source: plik | zfs-alert.conf | domyślne
+settings_effective() {
+    local k="$1" row def v cv
+    row=$(settings_row "$k") || return 1
+    def="${row%%|*}"
+    v=$(settings_get "$k" "")
+    if [ -n "$v" ]; then printf '%s\tplik\n' "$v"; return 0; fi
+    cv=$(settings_alert_conf_var "$k")
+    if [ -n "$cv" ] && [ -r /etc/zfs-alert.conf ]; then
+        v=$( ( . /etc/zfs-alert.conf >/dev/null 2>&1; eval "printf '%s' \"\${$cv:-}\"" ) )
+        if [ -n "$v" ]; then
+            [ "$k" = alerts.repeat_after ] && case "$v" in *[!0-9]*) ;; *) v="$((v / 60))m" ;; esac
+            printf '%s\tzfs-alert.conf\n' "$v"; return 0
+        fi
+    fi
+    printf '%s\tdomyślne\n' "$def"
+}
+
+settings_validate() {   # <key> <value> -> 0, or the reason on stdout and rc 1
+    local k="$1" v="$2" row kind lo hi
+    row=$(settings_row "$k") || { echo "nieznany klucz '$k' (lista: zfs-backup.sh settings)"; return 1; }
+    kind=$(printf '%s' "$row" | cut -d'|' -f2)
+    case "$v" in ''|*[\#\|]*|*' '*) echo "'$v': pusta albo z niedozwolonym znakiem (spacja, #, |)"; return 1 ;; esac
+    case "$kind" in
+        enum:*)
+            case ",${kind#enum:}," in *",$v,"*) return 0 ;; esac
+            echo "'$v' -- dozwolone: ${kind#enum:}"; return 1 ;;
+        email)
+            case "$v" in
+                *@*.*) case "$v" in *@*@*|@*|*@) ;; *) return 0 ;; esac ;;
+                *@*) ;;
+                *) printf '%s' "$v" | grep -Eq '^[a-z_][a-z0-9_-]*$' && return 0 ;;
+            esac
+            echo "'$v' nie wygląda na adres (user@domena albo lokalne konto)"; return 1 ;;
+        time)
+            case "$v" in :*) ;; *) settings_time_to_cron "$v" >/dev/null && return 0 ;; esac
+            echo "'$v' -- godzina w postaci GG:MM, np. 07:00"; return 1 ;;
+        minute)
+            case "$v" in :[0-5][0-9]) return 0 ;; esac
+            echo "'$v' -- minuta w postaci :MM, np. :15"; return 1 ;;
+        dur)
+            case "$v" in *[0-9]h|*[0-9]m) case "${v%[hm]}" in *[!0-9]*) ;; *) [ "${v%[hm]}" -gt 0 ] && return 0 ;; esac ;; esac
+            echo "'$v' -- czas w postaci Nh albo Nm, np. 4h"; return 1 ;;
+        interval)
+            settings_interval_to_cron "$v" >/dev/null && return 0
+            echo "'$v' -- co ile: Nm (dzielnik godziny: 5m, 10m, 15m, 30m, 60m) albo Nh (dzielnik doby)"; return 1 ;;
+        int:*)
+            lo=$(printf '%s' "$kind" | cut -d: -f2); hi=$(printf '%s' "$kind" | cut -d: -f3)
+            case "$v" in *[!0-9]*) ;; *) [ "$v" -ge "$lo" ] && [ "$v" -le "$hi" ] && return 0 ;; esac
+            echo "'$v' -- liczba od $lo do $hi"; return 1 ;;
+        profile)
+            [ -r "$(profile_file "$v")" ] && return 0
+            echo "'$v' -- nie ma takiego szablonu (lista: zfs-backup.sh list-profiles)"; return 1 ;;
+    esac
+    echo "'$k': nieznany rodzaj '$kind'"; return 1
+}
+
+# A cron key changed: every managed block on this host re-rendered from its own
+# config, through the ordinary install door (atomic_replace_and_install), one
+# account at a time, each in a subshell so one refusal cannot take the others.
+settings_reinstall_crons() {
+    local accts acct rc=0
+    accts=$( { echo root; for f in "$CLIENTS_DIR"/*.conf; do [ -f "$f" ] && record_get "$f" LOCAL_USER ""; echo; done; } | grep -v '^$' | sort -u)
+    while IFS= read -r acct; do
+        [ -n "$acct" ] || continue
+        ( LOCAL_USER=""; [ "$acct" = root ] || LOCAL_USER="$acct"
+          cron_context_resolve adopt "" "$acct" "" "" >/dev/null 2>&1
+          cfg="${CRON_CTX_FILE:-}"
+          [ -n "$cfg" ] && [ -f "$cfg" ] || exit 0
+          assert_cron_config_matches_installed "$cfg"
+          tmp=$(mktemp "$(dirname "$cfg")/.zfsbackup-settings.XXXXXX") || exit 1
+          cp -p "$cfg" "$tmp" || exit 1
+          log "settings: konto $acct -- przeliczam blok crona z $cfg"
+          atomic_replace_and_install "$cfg" "$tmp" ) || { rc=1; warn "settings: blok crona konta $acct NIE został przeliczony (powyżej dlaczego)"; }
+    done <<< "$accts"
+    return "$rc"
+}
+
+# A host-block key changed: that one line in root's zfs-backup-host block gets the
+# new schedule; the command part is kept exactly as installed.
+settings_rewrite_host_line() {   # <match> <5-field schedule>
+    local match="$1" sched="$2" cur line
+    cur=$(crontab -l 2>/dev/null | grep -F -- "$match" | grep -v '^#' | head -1)
+    [ -n "$cur" ] || { log "settings: w crontabie roota nie ma linii '$match' -- pierwszy deploy.sh ją założy już z nową godziną"; return 0; }
+    line="$sched $(printf '%s' "$cur" | awk '{ for (i = 6; i <= NF; i++) printf "%s%s", $i, (i < NF ? " " : "") }')"
+    [ "$line" = "$cur" ] && return 0
+    if cron_block_ensure_line root zfs-backup-host "$match" "$line" '(host-level jobs kept by zfs-backup.sh -- do not hand-edit)'; then
+        log "settings: $match -> $sched"
+    else
+        warn "settings: nie przestawiłem '$match': $CRON_ERR"; return 1
+    fi
+}
+
+cmd_settings() {
+    local sub="${1:-}"
+    case "$sub" in
+        --ask)
+            local dlg="$SCRIPT_DIR/tui/settings.sh"
+            [ -f "$dlg" ] || die "settings: brak $dlg -- checkout jest niekompletny"
+            ZFS_BACKUP="${ZFS_BACKUP:-$SCRIPT_DIR/zfs-backup.sh}" bash "$dlg"
+            return $? ;;
+        ""|--tsv)
+            local line k row
+            [ "$sub" = --tsv ] || echo "Ustawienia hosta: $SETTINGS_FILE   (źródło: plik | zfs-alert.conf | domyślne)"
+            while IFS= read -r line; do
+                k="${line%%|*}"; row="${line#*|}"
+                if [ "$sub" = --tsv ]; then
+                    printf '%s\t%s\t%s\t%s\n' "$k" "$(settings_effective "$k")" "$(printf '%s' "$row" | cut -d'|' -f2)" "$(printf '%s' "$row" | cut -d'|' -f4)"
+                else
+                    local ev; ev=$(settings_effective "$k")
+                    printf '  %-24s %-12s %-15s %s\n' "$k" "${ev%%$'\t'*}" "(${ev#*$'\t'})" "$(printf '%s' "$row" | cut -d'|' -f4)"
+                fi
+            done <<< "$SETTINGS_REGISTRY"
+            return 0 ;;
+        get)
+            local ev; ev=$(settings_effective "${2:-}") || die "settings get: nieznany klucz '${2:-}'"
+            printf '%s\n' "${ev%%$'\t'*}"; return 0 ;;
+        test-mail)
+            local to; to=$(settings_effective alerts.email); to="${to%%$'\t'*}"
+            command -v mail >/dev/null 2>&1 || die "settings test-mail: brak polecenia 'mail' na tym hoście -- alerty też nie wyjdą"
+            printf 'Mail próbny zfs-snapshot-all z %s (%s).\nJeśli to czytasz, alerty i dzienny mail dotrą na ten adres.\n' "$(hostname -f 2>/dev/null || hostname)" "$(date '+%F %T %Z')" \
+                | mail -s "[zfs-snapshot-all] mail próbny z $(hostname -s 2>/dev/null || hostname)" "$to" \
+                || die "settings test-mail: 'mail' odmówił wysłania do $to"
+            echo "settings: mail próbny wysłany do $to -- sprawdź skrzynkę (także spam)"
+            return 0 ;;
+        set) shift ;;
+        *) die "usage: zfs-backup.sh settings [--tsv | get KEY | set KEY=VALUE... [--yes] | test-mail | --ask]" ;;
+    esac
+    local yes=0 a k v why
+    local -a keys=() vals=()
+    for a in "$@"; do
+        case "$a" in
+            --yes|-y) yes=1 ;;
+            *=*) k="${a%%=*}"; v="${a#*=}"
+                 why=$(settings_validate "$k" "$v") || die "settings: $k: $why -- nic nie zapisano"
+                 keys+=("$k"); vals+=("$v") ;;
+            *) die "settings set: '$a' -- podaj KLUCZ=WARTOŚĆ" ;;
+        esac
+    done
+    [ "${#keys[@]}" -gt 0 ] || die "settings set: nic do ustawienia -- podaj KLUCZ=WARTOŚĆ"
+    local i ev cron=0 host=0 changed=0 applies
+    echo "settings: $SETTINGS_FILE"
+    for i in "${!keys[@]}"; do
+        ev=$(settings_effective "${keys[$i]}")
+        applies=$(settings_row "${keys[$i]}" | cut -d'|' -f3)
+        if [ "${ev%%$'\t'*}" = "${vals[$i]}" ] && [ "${ev#*$'\t'}" = plik ]; then
+            printf '  %-24s %s (bez zmian)\n' "${keys[$i]}" "${vals[$i]}"
+            continue
+        fi
+        changed=1
+        printf '  %-24s %s -> %s\n' "${keys[$i]}" "${ev%%$'\t'*}" "${vals[$i]}"
+        [ "$applies" = cron ] && cron=1
+        [ "$applies" = host ] && host=1
+    done
+    [ "$cron" -eq 1 ] && echo "  potem: przeliczenie bloków crona kont tego hosta (strażnik / alerty)"
+    [ "$host" -eq 1 ] && echo "  potem: nowa godzina w linii crona roota (blok zfs-backup-host)"
+    if [ "$changed" -eq 0 ]; then echo "settings: bez zmian -- nic do zapisania"; return 0; fi
+    if [ "$yes" -ne 1 ]; then
+        echo "plan only. Re-run with --yes to do it. Nothing was changed."
+        return 0
+    fi
+    [ "$(id -u)" -eq 0 ] || die "settings: zapis pliku ustawień hosta wymaga roota"
+    for i in "${!keys[@]}"; do
+        settings_set "${keys[$i]}" "${vals[$i]}" || die "settings: nie zapisałem ${keys[$i]} do $SETTINGS_FILE"
+    done
+    log "settings: zapisano $SETTINGS_FILE"
+    local rc=0
+    if [ "$cron" -eq 1 ]; then settings_reinstall_crons || rc=1; fi
+    if [ "$host" -eq 1 ]; then
+        local s
+        for i in "${!keys[@]}"; do
+            case "${keys[$i]}" in
+                alerts.digest_time)  s=$(settings_time_to_cron "${vals[$i]}"); settings_rewrite_host_line "/alert-digest.sh" "$s" || rc=1 ;;
+                capacity.check_time) s=$(settings_time_to_cron "${vals[$i]}"); settings_rewrite_host_line "/check-pool-capacity.sh" "$s" || rc=1 ;;
+                update.time)         s=$(settings_time_to_cron "${vals[$i]}"); settings_rewrite_host_line " --self-update " "$s" || rc=1 ;;
+            esac
+        done
+    fi
+    [ "$rc" -eq 0 ] && echo "settings: zapisane i zastosowane." || echo "settings: zapisane; część zastosowania nie wyszła (linie '!!!'/'WARN' wyżej)."
+    return "$rc"
+}
+
 # run-relation NAME (owner 2026-10-17: F7 on the GUI's F3 is "Uruchom teraz", the
 # same key and meaning as on F2 and F6). One run, now, of every source dataset's
 # FINEST copy job of this relationship: the very lines cron runs (read from the
@@ -20600,6 +20835,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         replica-restart)  shift; cmd_replica_restart "$@" ;;
         run-replicas)     shift; cmd_run_replicas "$@" ;;
         run-relation)     shift; cmd_run_relation "$@" ;;
+        settings)         shift; cmd_settings "$@" ;;
         install-media-trigger) shift; cmd_install_media_trigger "$@" ;;
         prepare-media)    shift; cmd_prepare_media "$@" ;;
         remove-media-trigger)  shift; cmd_remove_media_trigger "$@" ;;

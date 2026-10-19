@@ -1659,6 +1659,45 @@ case "$z_text" in
     *)         bad "Z6c ...and says a degraded snapshot is named '_crash_'" "no mention of the marker" ;;
 esac
 
+# Z7 -- SECTIONS (owner 2026-10-19: "nowy plik ustawień z sekcjami"). A bare key is
+# [engine], and so is every line before the first [section] -- the flat files of
+# 2026-08-26 read unchanged. settings_set writes ONE key into its section, keeps
+# comments, replaces a live line in place and never touches a commented example.
+ZS="$ZD/etc/sect.ini"
+printf '# head\ncatchup_max_age = 600\n\n[alerts]\n#digest_time = 07:00   # example\nemail = a@b.pl\n\n[gui]\nlanguage = pl\n' > "$ZS"
+z7() { ( source "$LIB" >/dev/null 2>&1; SETTINGS_FILE="$ZS" settings_get "$@" ); }
+check "Z7 a bare key reads the lines before the first section" "600" "$(z7 catchup_max_age 1800)"
+check "Z7b section.key reads its section" "a@b.pl" "$(z7 alerts.email root)"
+check "Z7c the same key name in another section is not read" "fallback" "$(z7 gui.email fallback)"
+check "Z7d a commented example is not a value" "07:00x" "$(z7 alerts.digest_time 07:00x)"
+( source "$LIB" >/dev/null 2>&1
+  settings_set alerts.digest_time 06:30 "$ZS"; settings_set alerts.email c@d.pl "$ZS"
+  settings_set monitor.interval 10m "$ZS"; settings_set catchup_max_age 900 "$ZS" )
+check "Z7e set: a new key of an existing section" "06:30" "$(z7 alerts.digest_time x)"
+check "Z7f set: a live key replaced in place" "c@d.pl" "$(z7 alerts.email x)"
+check "Z7g set: a missing section is appended" "10m" "$(z7 monitor.interval x)"
+check "Z7h set: a bare key stays in the head" "900" "$(z7 catchup_max_age x)"
+if [ "$(grep -c '^email' "$ZS")" = 1 ] && grep -q '^#digest_time = 07:00' "$ZS" && grep -q '^# head' "$ZS" \
+   && [ "$(grep -c '^\[alerts\]' "$ZS")" = 1 ]; then
+    ok "Z7i set: one live line per key, comments and examples kept, no duplicated section"
+else
+    bad "Z7i set: file shape" "$(cat "$ZS")"
+fi
+check "Z7j HH:MM -> daily cron" "30 6 * * *" "$( source "$LIB" >/dev/null 2>&1; settings_time_to_cron 06:30 )"
+check "Z7k :MM -> hourly cron" "15 * * * *" "$( source "$LIB" >/dev/null 2>&1; settings_time_to_cron :15 )"
+check "Z7l 15m -> */15" "*/15 * * * *" "$( source "$LIB" >/dev/null 2>&1; settings_interval_to_cron 15m )"
+check "Z7m 25m does not divide an hour -> refused" "NO" "$( source "$LIB" >/dev/null 2>&1; settings_interval_to_cron 25m || echo NO )"
+check "Z7n 24:00 -> refused" "NO" "$( source "$LIB" >/dev/null 2>&1; settings_time_to_cron 24:00 || echo NO )"
+# The shipped template carries every section the GUI shows, all commented: a fresh
+# host still behaves as before (Z4), now for the new keys too.
+rm -f "$ZD/fresh2.ini"; ( source "$LIB" >/dev/null 2>&1; settings_write_default "$ZD/fresh2.ini" ) >/dev/null 2>&1
+check "Z7o a fresh template leaves alerts.digest_time at the built-in" "BUILTIN" "$( source "$LIB" >/dev/null 2>&1; SETTINGS_FILE="$ZD/fresh2.ini" settings_get alerts.digest_time BUILTIN )"
+if [ "$(grep -cE '^\[(gui|alerts|capacity|monitor|new_relation|update)\]$' "$ZD/fresh2.ini")" = 6 ]; then
+    ok "Z7p the template has the six sections of the F10 window"
+else
+    bad "Z7p template sections" "$(grep -n '^\[' "$ZD/fresh2.ini")"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

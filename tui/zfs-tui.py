@@ -2311,12 +2311,13 @@ def key_bar_parts(active, width, actions=()):
         items.append((fk, label, key))
     items += [(a[0], a[1], None) for a in actions]
     # F11 Odzysk, F12 Wyjście (właściciel 2026-10-18); F10 wolne. Kolejność numerów.
+    items.append(("F10", u"Ustawienia", None))   # okno ustawień hosta (2026-10-19)
     items.append(("F12", u"Wyjście", None))
     items.sort(key=lambda it: int(it[0][1:]))
     short = dict((a[0], a[2]) for a in actions if len(a) > 2)
     # Najciasniej (80 kolumn, F3 z trzema akcjami i F11): skroty okien i wyjscia --
     # tylko gdy nic innego sie nie miesci, zeby F12 nigdy nie wypadlo z paska.
-    tight = {"F4": u"Hist", "F5": u"Szabl", "F12": u"Wyjdź"}
+    tight = {"F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
                                 (True, u"", "tight")):
         line, marks = u" ", []
@@ -3575,6 +3576,10 @@ HELP = [
     u"                 dataset, dokąd, migawka, plan, WYKONAJ. Tylko tutaj.",
     u"                 F7 przeglądaj kopię: migawka zamontowana tylko do odczytu, mc",
     u"                 do skopiowania plików, po wyjściu odmontowanie (datasety plikowe).",
+    u"  F10 Ustawienia ustawienia hosta (/etc/zfs-snapshot-all/settings.ini): alerty",
+    u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
+    u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; mail",
+    u"                 próbny. Zapis = plan i WYKONAJ (zfs-backup.sh settings set).",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",
@@ -4852,8 +4857,9 @@ class UI(object):
         if k in ("q", "F12"):
             return "quit"
         if k == "F10":
-            self.message = u"F10 jest wolne -- wyjście to F12"
-            return "stay"
+            # USTAWIENIA HOSTA (właściciel 2026-10-19): okna tui/settings.sh przez
+            # `settings --ask`; logika (walidacja, zapis, przeliczenie crona) w czasowniku.
+            return self.run_dialog([self.zb(), "settings", "--ask"]) or "stay"
         if k == "F1":
             self.window, self.scroll = ("pomoc", None), 0
             return "stay"
