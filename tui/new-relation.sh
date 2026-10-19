@@ -488,7 +488,9 @@ step_profile() {
         # [zamraża] [drabina] były szersze niż okno i ucinały jej prawy bok.
         items+=("$n" "$(clip_label "$label" $((W - 10)))")
     done <"$TMPD/prof.tsv"
-    def=default
+    # Szablon domyślny nowej relacji z ustawień hosta ([new_relation] template, F10).
+    def="$("$ZB" settings get new_relation.template 2>/dev/null)"
+    { [ -n "$def" ] && in_list "$def" "${items[@]}"; } || def=default
     if [ "$chain" -eq 1 ] && in_list "$REC_PROFILE" "${items[@]}"; then
         def="$REC_PROFILE"
         lead="Źródło ma już własne migawki (łańcuch): polecany $REC_PROFILE --\nodbiera każdą rodzinę źródła i niczego tam nie tworzy.\n\n"

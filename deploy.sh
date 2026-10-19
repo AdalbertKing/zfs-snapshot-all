@@ -5300,7 +5300,11 @@ host_script_ensure alert-digest.sh "$DIGEST_SCRIPT" 0755 \
 # run's business. This also collapses the other half of the same boundary: pve1
 # carried the line TWICE (a residual copy here from an older deploy plus the
 # generated one), two runs at 07:00 racing for the same queue file.
-DIGEST_LINE="0 7 * * * $DIGEST_SCRIPT 2>>/root/scripts/cron.log"
+# The time comes from the host settings file ([alerts] digest_time, F10 in the GUI);
+# an existing line is still ADOPTED as it stands -- `zfs-backup.sh settings set`
+# is what rewrites it when the setting changes.
+_sched_digest="$(settings_time_to_cron "$(settings_get alerts.digest_time 07:00)" 2>/dev/null)" || _sched_digest="0 7 * * *"
+DIGEST_LINE="${_sched_digest:-0 7 * * *} $DIGEST_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if ! crontab -l 2>/dev/null | grep -qF "$DIGEST_SCRIPT"; then
         warn "digest cron line MISSING -- findings would queue forever and nobody would ever be told"
@@ -5395,10 +5399,13 @@ else
 fi
 [ -x "$DEPLOYED_UPDATE_CONTROL" ] && [ ! -L "$DEPLOYED_UPDATE_CONTROL" ] && UPDATE_CONTROL_DEPLOYED=1
 
+# [update] time in the host settings file (F10 in the GUI): the minute of the hourly pull.
+_sched_pull="$(settings_time_to_cron "$(settings_get update.time :15)" 2>/dev/null)" || _sched_pull="15 * * * *"
+case "$_sched_pull" in *" * * * *") ;; *) _sched_pull="15 * * * *" ;; esac
 if [ "$UPDATE_CONTROL_DEPLOYED" -eq 1 ]; then
-    PULL_LINE="15 * * * * $DEPLOYED_UPDATE_CONTROL --self-update >>/root/scripts/git-pull.log 2>&1"
+    PULL_LINE="$_sched_pull $DEPLOYED_UPDATE_CONTROL --self-update >>/root/scripts/git-pull.log 2>&1"
 else
-    PULL_LINE="15 * * * * $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
+    PULL_LINE="$_sched_pull $REPO_DIR/deploy.sh --self-update >>/root/scripts/git-pull.log 2>&1"
 fi
 # Matches every shape this line has ever had for THIS repo: the original bare
 # `git pull`, the rev-parse-then-pull version from 75bf956, the deploy.sh-direct
@@ -5537,7 +5544,8 @@ host_script_ensure check-pool-capacity.sh "$CAPACITY_SCRIPT" 0755 \
     "no early warning before a pool fills up" \
     "mails on its own instead of joining the daily digest"
 
-CAPACITY_LINE="0 8 * * * $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
+_sched_cap="$(settings_time_to_cron "$(settings_get capacity.check_time 08:00)" 2>/dev/null)" || _sched_cap="0 8 * * *"
+CAPACITY_LINE="${_sched_cap:-0 8 * * *} $CAPACITY_SCRIPT 2>>/root/scripts/cron.log"
 if [ "$CHECK_ONLY" -eq 1 ]; then
     if ! crontab -l 2>/dev/null | grep -qF "$CAPACITY_SCRIPT"; then
         warn "capacity-check cron line MISSING -- no early warning before a pool fills up"

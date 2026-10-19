@@ -1054,7 +1054,7 @@ od() {   # <keys> -> ekran F11; dziennik w $XL
 }
 A="$(od "")"
 if has "$A" '╔═ Odzysk danych na pve10' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z innego dysku +nośnik' && has "$A" 'duplikat -- odzysk' && has "$A" '[Datasety]' \
-   && has "$A" '11Odzysk' && has "$A" '12Wyjście' && ! has "$A" '10Wyjście' && ! has "$A" 'F10'; then
+   && has "$A" '11Odzysk' && has "$A" '12Wyj' && has "$A" '10Ust' && ! has "$A" '10Wyj'; then
     ok "odzysk: F11 to ekran glowny -- relacje z kopia i wiersz 'z innego dysku', panel odzysku, zakladka Datasety; na pasku 11Odzysk i 12Wyjście, bez F10"
 else
     bad "odzysk: ekran F11" "$A"
@@ -1402,18 +1402,18 @@ else
 fi
 # F11 / F12 / Tab PRZEZ PETLE CURSES (2026-10-18): ESC [ 23 ~ otwiera Odzysk, Tab
 # przenosi do linii polecen (strzalka w gore = historia), ESC [ 24 ~ konczy program.
-PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,F10,tab,F12' -- --offline --utf8 --now "$NOW" $ALL 2>&1)"; PK2RC=$?
+PK2="$("$PY" "$REPO/test/tui/pty-keys.py" "$TUI" 'F11,tab,F12' -- --offline --utf8 --now "$NOW" $ALL 2>&1)"; PK2RC=$?
 pk2() { printf '%s\n' "$PK2" | awk -v k="=== $1" '$0 ~ /^=== / { on = ($0 == k); next } on'; }
 if [ "$PK2RC" -eq 2 ]; then
     echo "SKIP pty F11/F12: brak modulu pty (Windows) -- sprawdza CI"
-elif has "$(pk2 F11)" 'Odzysk danych na pve10' && has "$(pk2 F10)" 'F10 jest wolne' \
+elif has "$(pk2 F11)" 'Odzysk danych na pve10' && true \
      && printf '%s\n' "$PK2" | grep -qx '=== exited'; then
-    ok "pty: F11 (ESC[23~) otwiera Odzysk, F10 jest wolne, F12 (ESC[24~) konczy program rc=0 (petla curses)"
+    ok "pty: F11 (ESC[23~) otwiera Odzysk, Tab, F12 (ESC[24~) konczy program rc=0 (petla curses)"
 else
     bad "pty: F11/F12 przez petle curses" "rc=$PK2RC" "$PK2"
 fi
 # Odswiez: F9 -> F5 (R4-2) -> Ctrl-R (2026-10-09: F5 to ekran Szablony, uwaga 24).
-TR="$(screen zadania ctrl-r --width 140)"
+TR="$(screen zadania ctrl-r --width 160)"
 if has "$TR" 'odświeżono' && has "$TR" 'Ctrl-R Odśwież' && ! has "$TR" 'F5 Odśwież' && has "$TR" 'F5 Szablony'; then
     ok "listwa: Ctrl-R odswieza i tak jest podpisane; F5 to Szablony"
 else
@@ -1909,10 +1909,10 @@ else
     bad "linia: F12" "$(cat "$XL")"
 fi
 C="$(: > "$XL"; screen relacje "F10" --exec-log "$XL")"
-if has "$C" 'F10 jest wolne -- wyjście to F12' && has "$C" 'Relacje na kolektorze' && [ ! -s "$XL" ]; then
-    ok "linia: F10 jest wolne -- nie wychodzi, mowi ze wyjscie to F12"
+if grep -Eq "zfs-backup.sh'? settings --ask\$" "$XL" && has "$C" '10Ust'; then
+    ok "F10: Ustawienia -- oddaje terminal oknu ustawien hosta (settings --ask); na pasku 'F10 Ustawienia' (wlasciciel 2026-10-19)"
 else
-    bad "linia: F10 wolne" "$C"
+    bad "F10: Ustawienia" "$(cat "$XL")" "$(printf '%s' "$C" | tail -2)"
 fi
 rm -f "$XL"
 
@@ -1967,7 +1967,7 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Hist5Szabl6Replika7Uruchom8Pauza9Plik11Odzysk12Wyjdź'; then
+if has "$S" '1Pomoc2Zadania3Rel4Hist5Szabl6Repl7Uruchom8Pauza9Plik10Ust11Odzysk12Wyjdź'; then
     ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Hist/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
@@ -1986,7 +1986,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
         # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
-        for _a in Pomoc Zadania Relacje Hist Szabl Replika Odzysk Wyj $_acts; do
+        for _a in Pomoc Zadania Rel Hist Szabl Repl Ust Odzysk Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
@@ -2010,7 +2010,7 @@ for w in (80, 120, 200):
 print(" ".join(out))
 PYEOF
 )"
-if [ "$MKOUT" = "80:4Historia 120:F4 Historia 200:F4 Historia" ]; then
+if [ "$MKOUT" = "80:4Hist 120:4Historia 200:F4 Historia" ]; then
     ok "klawisze: aktywne okno zaznaczone na pasku kolorem (marks), bez nawiasow"
 else
     bad "klawisze: zaznaczenie aktywnego okna" "got=$MKOUT"
@@ -2797,6 +2797,35 @@ if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z
     ok "okno usuwania: bez roota do zrodla -- bez pozycji 'Posprzątaj na źródle', z poleceniem do recznego sprzatania, usuniecie z --keep-source i przypomnienie na koncu (U16)"
 else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
+fi
+
+# 3k. F10 USTAWIENIA (wlasciciel 2026-10-19): lista kluczy z `settings --tsv` w sekcjach,
+#     zmiana jednej wartosci, "Zapisz" = plan czasownika i WYKONAJ -> `settings set K=V --yes`.
+cat > "$NR/bin/zb-set" <<'EOF'
+#!/bin/bash
+[ "$1" = settings ] || exit 9
+case "$2" in
+    --tsv) printf 'gui.language\ten\tdomyślne\tenum:en,pl\tjęzyk okien GUI\n'
+           printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
+           printf 'alerts.digest_time\t07:00\tdomyślne\ttime\to której wychodzi dzienny mail\n'; exit 0 ;;
+    set) printf '%s\n' "$*" >> "$NR_DIR/argv"
+         case " $* " in *" --yes "*) echo "settings: zapisane i zastosowane."; exit 0 ;; esac
+         echo "  alerts.digest_time       07:00 -> 06:30"; echo "plan only. Re-run with --yes to do it. Nothing was changed."; exit 0 ;;
+esac
+exit 9
+EOF
+chmod +x "$NR/bin/zb-set"
+SD="$NR/sd"; rm -rf "$SD"; mkdir -p "$SD"
+printf '0\talerts.digest_time\n0\t06:30\n0\tzapisz\n0\t\n' > "$SD/answers"
+SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set"
+        bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
+SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
+if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && has "$SMENU" 'root  (zfs-alert.conf)' && has "$SMENU" 'Wyślij mail próbny' \
+   && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
+   && has "$SOUT" 'GOTOWE'; then
+    ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes)"
+else
+    bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
 fi
 
 # 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.

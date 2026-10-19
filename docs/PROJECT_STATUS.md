@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fead2cac48f8212a -->
+<!-- status-covers-digest: 94cfbb0f4108a36b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,22 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U23: ustawienia hosta w jednym pliku z sekcjami, okno F10 (2026-10-19; `finisz/ustawienia-f10`).**
+  Właściciel: „nowy plik ustawień z sekcjami”, „ustawienia F10”. `/etc/zfs-snapshot-all/settings.ini` (ten sam plik
+  co `quiesce`/`catchup_max_age`; linie przed pierwszą sekcją = `[engine]`, stare pliki czytają się bez zmian) ma
+  sekcje `[gui]` (language, domyślnie en -- samo tłumaczenie GUI jest następnym krokiem), `[alerts]` (email,
+  errors/warnings daily|immediate, repeat_after, digest_time, all_ok_mail, stats_days, output_lines), `[capacity]`
+  (threshold, check_time), `[monitor]` (interval), `[new_relation]` (template -- kreator proponuje go jako domyślny),
+  `[update]` (time). Kolejność: środowisko > plik > `/etc/zfs-alert.conf` (tylko alerty, dla starych hostów) >
+  wbudowane. Czytają go: skrypty alertów (`alert-env.sh`), `check-pool-capacity.sh` (próg nie jest już stałą),
+  `gen-cron.sh` (godzina maila, linie wyjścia, interwał strażnika -- także strażnika repliki), `deploy.sh` (godzina
+  maila, sprawdzania pojemności i minuta aktualizacji w bloku hosta). Nowy czasownik `zfs-backup.sh settings`
+  (lista ze źródłem wartości, `get`, `set K=V... [--yes]` z walidacją, planem i zastosowaniem: klucz harmonogramu
+  przelicza bloki crona kont albo przestawia swoją linię w bloku `zfs-backup-host`; `test-mail`). GUI: F10 =
+  okno „Ustawienia” (`tui/settings.sh`, lista w sekcjach jak zmiana repliki, Zapisz = plan i WYKONAJ, „Wyślij mail
+  próbny”); pasek klawiszy przy 80 kolumnach mieści F10 (skróty Rel/Repl/Ust). Testy: `test/cron` (sekcje, zapis,
+  przeliczniki czasu), `test/zfsbackup` (czasownik, pierwszeństwo w `alert-env.sh`), `test/tui` (okno F10, klawisz).
 
 - **FINISZ U22: zmiana adresu źródła lustra -- na żywo (2026-10-19).** Właściciel: „a co ze zmianą IP po
   przeniesieniu kolektora za VPN?”. Okno „Adres hosta” (`activate NAZWA --host=NOWY --skip-final-catchup --yes`)

@@ -70,7 +70,7 @@ sourcing, and for a branch a running job has checked out.
 Count the assertions you expect by name and compare against the output. A total
 that only goes up cannot tell you an assertion never ran.
 
-*Evidence: E3, E9, E15, E24, E25, E28, E52.*
+*Evidence: E3, E9, E15, E24, E25, E28, E52, E92.*
 
 ### R7 — Reproduce a fix's absence, not just its presence
 
@@ -1921,6 +1921,19 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E92 — `impact.sh --verify | tail -1` hid a STALE status digest; CI went red (2026-10-19, R6)
+**2026-10-19, U23 settings package, PR #625.**
+
+*Genesis.* The commit line ran `--refresh-status`, `git add`, `--verify 2>&1 | tail -1` and
+committed. The last line said "graph is consistent with the tree"; three lines above it the
+same run said "STALE" for PROJECT_STATUS.md. CI's graph job failed on exactly that.
+
+*Cause.* R6: I read a summary line instead of the verdict lines -- the gate prints its
+findings mid-output and its last line is about a different check.
+
+*Rule.* R6. Read `--verify` by its exit code and grep its findings (`STALE|DRIFT|FAIL`), never
+by its last line; the commit runs only on rc 0.
 
 ### E91 — `git stash` in the suite clone while the suite was running from it (2026-10-19, R5, repeat)
 **2026-10-19, U14/U16/U20 package, pve9 clone /tmp/tt/zfs-snapshot-all.**
