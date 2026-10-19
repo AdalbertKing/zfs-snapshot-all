@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 94cfbb0f4108a36b -->
+<!-- status-covers-digest: 786c32d372bccf52 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -36,6 +36,9 @@
   okno „Ustawienia” (`tui/settings.sh`, lista w sekcjach jak zmiana repliki, Zapisz = plan i WYKONAJ, „Wyślij mail
   próbny”); pasek klawiszy przy 80 kolumnach mieści F10 (skróty Rel/Repl/Ust). Testy: `test/cron` (sekcje, zapis,
   przeliczniki czasu), `test/zfsbackup` (czasownik, pierwszeństwo w `alert-env.sh`), `test/tui` (okno F10, klawisz).
+  Poprawka po teście właściciela (pve10): okno F10 znikało od razu -- nagłówki sekcji miały znaczniki `--alerts`,
+  które prawdziwy whiptail czyta jako opcję („unknown option”); teraz `#alerts`, a test odrzuca znacznik od `-`
+  (kontrola: stare okno ten test oblewa; na pve10 przez pty stare okno nie rysuje listy, nowe rysuje).
 
 - **FINISZ U22: zmiana adresu źródła lustra -- na żywo (2026-10-19).** Właściciel: „a co ze zmianą IP po
   przeniesieniu kolektora za VPN?”. Okno „Adres hosta” (`activate NAZWA --host=NOWY --skip-final-catchup --yes`)

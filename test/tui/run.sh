@@ -1267,8 +1267,8 @@ else
     bad "okno: kolejnosc sekcji" "komendy=$LKOM config=$LCFG cron=$LCRN" "$WCFG"
 fi
 if has "$WCFG" '── CONFIG ' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
-        && has "$WCFG" 'tylko do odczytu'; then
-    ok "okno: sekcja CONFIG -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory, read-only"
+        && ! has "$WCFG" 'tylko do odczytu -- zmiana relacji'; then
+    ok "okno: sekcja CONFIG -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory; bez dopisku o zmianie relacji (wlasciciel 2026-10-19: podglad wystarczy)"
 else
     bad "okno: sekcja CONFIG" "$WCFG"
 fi
@@ -2820,7 +2820,10 @@ printf '0\talerts.digest_time\n0\t06:30\n0\tzapisz\n0\t\n' > "$SD/answers"
 SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set"
         bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
 SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
+# Prawdziwy whiptail odrzuca znacznik pozycji zaczynający się od '-' jako nieznaną opcję i
+# okno znika (pve10, 2026-10-19 -- atrapa tego nie robiła): żaden znacznik nie może tak wyglądać.
 if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && has "$SMENU" 'root  (zfs-alert.conf)' && has "$SMENU" 'Wyślij mail próbny' \
+   && ! printf '%s' "$SMENU" | grep -qE ' ~ -[^ ~]* ~ ── ' \
    && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
    && has "$SOUT" 'GOTOWE'; then
     ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes)"
