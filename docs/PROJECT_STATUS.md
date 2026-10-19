@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e6598de33fa84ad3 -->
+<!-- status-covers-digest: dd9d985c044982ca -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,10 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U11: komunikaty bez skrótów „F7 na F6” (2026-10-19; `finisz/U11-teksty`).** Po zapisie repliki: „Pierwsza
+  kopia ruszy po włożeniu dysku … Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '<nazwa>' i naciśnij F7
+  (Uruchom teraz).” Komunikat importu bez nieaktualnego „F8 na F3” (eksport: ekran Relacje, F9 Plik -> Eksport).
 
 - **FINISZ U8: zmiana repliki = jedna lista z obecnymi wartościami (2026-10-19; `finisz/U8-replika`).** Właściciel:
   „musiałem przejść całą ścieżkę repliki, żeby wybrać »nie« przy »uruchom po włożeniu«”. „Zmień replikę” (Enter + `e`

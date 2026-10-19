@@ -4503,7 +4503,7 @@ class UI(object):
             else:
                 out.append(fit(u"%s %s" % (mark, it["label"]), w))
         if not obj["nfiles"]:
-            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (F8 na F3 zapisuje je w %s)" % relations_dir(), w)]
+            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (eksport: ekran Relacje, F9 Plik -> Eksport; zapisuje je w %s)" % relations_dir(), w)]
         return out
 
     def import_ask_file(self, value, error=None):
