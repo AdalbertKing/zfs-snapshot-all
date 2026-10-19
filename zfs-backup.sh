@@ -17381,6 +17381,47 @@ SCOPE
         return 0
     fi
 
+    # A SOURCE THAT NO LONGER KNOWS THIS COLLECTOR (owner, pve10 2026-10-19: export ->
+    # delete -> import failed). delete-relation now cleans the source half too
+    # (--leave there), so the replayed add-client stopped at "carry this package and
+    # run --join there", and the seed after it died with "Permission denied". When
+    # this host can reach the source as root, the import goes the one-command way
+    # instead -- the wizard's (--source=HOST:DATASETS --install --grant-remotely):
+    # join over that channel and the scope granted EXACTLY as the file's dataset
+    # list, then seed and activate. Without the root channel nothing changes.
+    local _ds_list="" _has_mode=0 _rport=22
+    for x in "${argv[@]}"; do
+        case "$x" in --datasets=*) _ds_list="${x#--datasets=}" ;; --mode=*) _has_mode=1 ;; esac
+    done
+    if [ "$verb" = add-client ] && [ -n "$peer_host" ] && [ -n "$_ds_list" ] && [ "$_has_mode" -eq 0 ] \
+       && rux_root_ssh "$peer_host" "$_rport" "true" >/dev/null 2>&1 \
+       && ! rux_root_ssh "$peer_host" "$_rport" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
+        rux_args=(--source="$peer_host:$_ds_list" --name="$name")
+        for x in "${argv[@]}"; do
+            case "$x" in --host=*|--datasets=*) ;; *) rux_args+=("$x") ;; esac
+        done
+        rux_args+=(--install --yes --grant-remotely)
+        echo "Import relacji '$name' z $file -- ZRODLO NIE ZNA JUZ TEGO KOLEKTORA"
+        echo "  wyeksportowana z: ${from:-?}  ${at:-}"
+        echo "  $peer_host nie ma konta tego kolektora (relacje usunieto razem ze zrodlem), a ten host"
+        echo "  ma do niego dostep roota -- import pojdzie jednym poleceniem: parowanie, zakres (dokladnie"
+        echo "  lista datasetow z pliku), seed, aktywacja."
+        echo
+        echo "Wykona sie DOKLADNIE to:"
+        printf '  zfs-backup.sh'
+        for x in "${rux_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        printf '\n'
+        if [ "$yes" -ne 1 ]; then
+            echo
+            echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+            return 0
+        fi
+        echo
+        rux_entry "${rux_args[@]}"
+        log "import-relation: '$name' reproduced from $file; the source was joined again and granted the file's datasets"
+        return 0
+    fi
+
     echo "Import relacji '$name' z $file"
     echo "  wyeksportowana z: ${from:-?}  ${at:-}"
     echo
