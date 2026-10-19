@@ -2918,7 +2918,8 @@ def relation_window_lines(row, data, now, ch, width, repo=None, files=None):
     out.extend(_relation_config_lines(row, data, ch, w, repo, files))
     out.extend(["", section_header(ch, "CRON", w)])
     out.extend(_relation_cron_lines(row, ch, w))
-    out.extend(["", u"tylko do odczytu -- zmiana relacji: F3, Enter na relacji, potem 'e' (Zmień relację)"])
+    # Bez dopisku "tylko do odczytu -- zmiana relacji: F3, Enter, 'e'" (właściciel 2026-10-19:
+    # "niepotrzebne, podgląd wystarczy").
     return out
 
 

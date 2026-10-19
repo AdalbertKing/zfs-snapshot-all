@@ -1267,8 +1267,8 @@ else
     bad "okno: kolejnosc sekcji" "komendy=$LKOM config=$LCFG cron=$LCRN" "$WCFG"
 fi
 if has "$WCFG" '── CONFIG ' && has "$WCFG" '[dataset:' && has "$WCFG" 'plik: /etc/zfs-snapshot-all/jobs.pve10.conf' \
-        && has "$WCFG" 'tylko do odczytu'; then
-    ok "okno: sekcja CONFIG -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory, read-only"
+        && ! has "$WCFG" 'tylko do odczytu -- zmiana relacji'; then
+    ok "okno: sekcja CONFIG -- sekcje configu werbatim (klucz=wartosc) z show-config, plik u gory; bez dopisku o zmianie relacji (wlasciciel 2026-10-19: podglad wystarczy)"
 else
     bad "okno: sekcja CONFIG" "$WCFG"
 fi
