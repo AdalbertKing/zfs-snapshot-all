@@ -57,18 +57,18 @@ S120="$(screen relacje "" --width 120)"
 S200="$(screen relacje "" --width 200)"
 # F3 W TRZECH PANELACH (szkic wlasciciela, 2026-09-11): lista jest WASKA, wiec
 # kolumny Kopie i Nastepny dochodza z szerokoscia; przy 80 sa trzy.
-if hasE "$S200" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +6.1M +[0-9]{2}:30 +║'; then
-    ok "relacje: jeden wiersz na RELACJE -- nazwa, KIERUNEK (ten host po lewej), TYP, stan z rekordu, kopie z monitora, GB calej relacji, nastepny bieg (200 kolumn; wlasciciel 2026-09-12: typ i GB w liscie)"
+if hasE "$S200" '^║ lab-ct201 +backup +pve10<192.168.28.99 +działa +aktualne +║│'; then
+    ok "relacje: jeden wiersz na RELACJE -- nazwa, typ, KIERUNEK (ten host po lewej), stan z rekordu, kopie z monitora (U21: GB i nastepny bieg w panelu)"
 else
     bad "relacje: wiersz relacji sklejony z czterech czytelnikow" "$S200"
 fi
-if hasE "$S" '^║ lab-ct201 +pve10<192.168.28.99 +działa +║│' && hasE "$S" '^║ Relacja +Kierunek +Stan +║│' && hasE "$S120" '^║ lab-ct201 +pve10<192.168.28.99 +backup +działa +aktualne +║│'; then
-    ok "relacje: przy 80 lista ma trzy kolumny (Relacja, Kierunek, Stan), przy 120 dochodza Typ i Kopie -- panel stoi obok od 80"
+if hasE "$S" '^║ lab-ct201 +działa +aktualne +║│' && hasE "$S" '^║ Relacja +Stan +Kopie +║│' && hasE "$S120" '^║ lab-ct201 +backup +pve10<192.168.28.99 +działa +aktualne +║│'; then
+    ok "relacje: przy 80 lista ma Relacja, Stan, Kopie; przy 120 dochodza Typ i Kierunek -- panel stoi obok od 80"
 else
     bad "relacje: kolumny listy rosna z szerokoscia" "$S" "$S120"
 fi
-if hasE "$S120" 'Ostatni +brak wpisu w'; then
-    ok "relacje: ostatni wynik zszedl do panelu (kolumne zajal kierunek)"
+if hasE "$S120" 'Ostatni bieg +brak wpisu w'; then
+    ok "relacje: ostatni bieg jest w panelu (U21: grupa Teraz)"
 else
     bad "relacje: ostatni wynik w panelu" "$S120"
 fi
@@ -103,8 +103,8 @@ else
     bad "relacje: licznik relacji" "$S"
 fi
 # Relacja w zasiewie: zamiast godziny -- NASTEPNY KROK slowami CLI.
-if hasE "$S200" '^║ duplikat +pve10[?]192.168.28.99 +backup +1\. kopia +-- +- +seed duplikat +║' && hasE "$S120" 'Następny +seed duplikat'; then
-    ok "relacje: relacja nieaktywna pokazuje NASTEPNY KROK CLI (seed duplikat), nie godzine z crona -- w kolumnie (200) i w panelu (120)"
+if hasE "$S200" '^║ duplikat +backup +pve10[?]192.168.28.99 +1\. kopia +-- +║' && hasE "$S120" 'Następny +seed duplikat'; then
+    ok "relacje: relacja nieaktywna pokazuje w panelu NASTEPNY KROK CLI (seed duplikat), nie godzine z crona"
 else
     bad "relacje: nastepny krok dla relacji w zasiewie" "$S200" "$S120"
 fi
@@ -116,32 +116,33 @@ else
 fi
 # Panel OBOK listy (prawy): pierwszy wiersz (duplikat) ma focus; zrodla i cel
 # NIE sa w panelu -- sa w dolnym panelu par (wlasciciel 2026-09-11).
-if has "$S" 'duplikat -- szczegóły' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak wpisu w historii transferów (to nie znaczy 'OK')"; then
-    ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma"
+if has "$S" 'duplikat -- relacja' && ! has "$S" 'Źródła' && ! hasE "$S" '│ Cel ' && has "$S200" "brak wpisu w historii transferów"; then
+    ok "relacje: prawy panel mowi o wierszu z focusem i tlumaczy brak historii; zrodel i celu w nim NIE ma (sa w zakladce Datasety)"
 else
     bad "relacje: panel szczegolow" "$S" "$S200"
 fi
-if has "$S" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$S" '192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
-    ok "relacje: dolny panel -- relacja BEZ crona (seeding) ma pare policzona z rekordu i tytul to MOWI"
+if has "$S" 'duplikat (wg rekordu, nie crona): [Datasety]  Zadania' && has "$S120" '192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+    ok "relacje: dolny panel -- relacja BEZ crona (seeding) ma dataset policzony z rekordu i tytul to MOWI"
 else
-    bad "relacje: pary z rekordu" "$S"
+    bad "relacje: pary z rekordu" "$S" "$S120"
 fi
 S4="$(screen relacje down,down,down,down --width 200 --height 40)"
-if has "$S4" 'lab-vm101 -- szczegóły' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00   \(wg crontaba\)' && hasE "$S4" 'Pobranie +co godzinę \(:24\)   rodzina automated_hourly' && ! has "$S4" 'Wysyłka'; then
-    ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; transfer nazwany wg KIERUNKU (Pobranie, nie Wysylka -- tester R4)"
+S4Z="$(screen relacje down,down,down,down,tab,right --width 200 --height 40)"
+if has "$S4" 'lab-vm101 -- relacja' && hasE "$S4" 'Następny +2026-09-09 [0-9]{2}:24:00' && hasE "$S4Z" 'pobranie +automated_hourly +co godzinę \(:24\)' && ! has "$S4" 'Wysyłka'; then
+    ok "relacje: kursor przesuwa panel; nastepny bieg z harmonogramu; zadanie pobrania w zakladce Zadania (U21)"
 else
-    bad "relacje: kursor i nastepny bieg" "$S4"
+    bad "relacje: kursor i nastepny bieg" "$S4" "$S4Z"
 fi
-if hasE "$S4" 'Kopie +aktualne   progi 90m / 150m'; then
-    ok "relacje: panel nazywa progi monitora przy werdykcie"
+if hasE "$S4" 'Kopie +aktualne   alarm po 150m'; then
+    ok "relacje: panel nazywa prog alarmu przy werdykcie"
 else
     bad "relacje: progi w panelu" "$S4"
 fi
-if hasE "$S4" 'Prune lokalny co godzinę \(:44\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && hasE "$S4" 'Prune zdalny +co godzinę \(:03\)   trzyma 24 godz\. 7 dni 4 tyg\. 12 mies\.' && has "$S4" 'drabina GFS' \
-   && ! has "$S4" 'Porządki' && ! has "$S4" 'U źródła'; then
-    ok "relacje: panel -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram, retencja z jednostka, drabina GFS (z list-jobs, bez show-config)"
+if hasE "$S4Z" 'lokalny prune +automated_hourly +co godzinę \(:44\) +24 godz\.' && hasE "$S4Z" 'zdalny prune +automated_hourly +co godzinę \(:03\) +24 godz\.' \
+   && ! has "$S4Z" 'Porządki' && ! has "$S4Z" 'U źródła'; then
+    ok "relacje: zakladka Zadania -- lokalny i zdalny prune w OSOBNYCH wierszach: harmonogram slowami, retencja z jednostka (U21)"
 else
-    bad "relacje: porzadki w panelu" "$S4"
+    bad "relacje: porzadki w panelu" "$S4Z"
 fi
 # TESTER R4 (2026-09-25): B1 listwa F3 z akcjami, B3 Szczeble bez 'x',
 # B5 panel F2 z retencja z jednostka jak kolumna Trzyma.
@@ -157,13 +158,14 @@ else
     bad "relacje: podpis F7 na pauzie" "$SPW"
 fi
 ZT="$(screen zadania down --width 100 --height 40)"
-if hasE "$ZT" 'trzyma +24 godz\.' && ! hasE "$ZT" 'trzyma +-H24'; then
-    ok "zadania: panel 'trzyma' z jednostka jak kolumna Trzyma, nie surowe -H24 (tester R4: B5)"
+if hasE "$ZT" 'Trzyma +24 godz\.' && ! hasE "$ZT" 'Trzyma +-H24'; then
+    ok "zadania: panel 'Trzyma' z jednostka, nie surowe -H24 (tester R4: B5)"
 else
     bad "zadania: panel trzyma" "$ZT"
 fi
-if hasE "$S4" 'Biegi 7d +[0-9]+ '&& hasE "$S4" 'Czas o/ś/m +[0-9/]+s ' && hasE "$S4" 'Wolumen +[0-9.]+[KMG] ' && hasE "$S4" 'Datasety +1 para   cel 1' && ! has "$S4" 'lądowisk' && hasE "$S4" 'Utworzona +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywowana +2026-09-08'; then
-    ok "relacje: panel jako TABELA -- jeden fakt w wierszu: biegi, czas o/s/m, wolumen, datasety, utworzona/pelna kopia/aktywowana (wlasciciel 2026-09-12: kolumny i wiersze; 'Zasiew' -> 'Pelna kopia' R5-1)"
+if hasE "$S4" 'Wywołania +[0-9]+, błędów [0-9]+' && hasE "$S4" 'Czas +ostatni [0-9]+s / średni' && hasE "$S4" 'Dane +[0-9.]+[KMG]' \
+   && hasE "$S4" 'Powstała +2026-09-08' && hasE "$S4" 'Pełna kopia +2026-09-08' && ! has "$S4" 'Zasiew' && hasE "$S4" 'Aktywna od +2026-09-08'; then
+    ok "relacje: panel jako TABELA -- jeden fakt w wierszu: wywolania, czas ostatni/sredni/maks, dane, powstala/pelna kopia/aktywna od (U21: grupy Teraz, Przebiegi, Ustawienia)"
 else
     bad "relacje: statystyka/historia w panelu" "$S4"
 fi
@@ -172,14 +174,13 @@ fi
 # te same liczby co F2 -- przy ostatniej linii pary.
 # R5-4: nazwy kolumn w WIERSZU NAGLOWKA nad kolumnami, nie w tytule ramki, i
 # wartosc pod swoim naglowkiem (ta sama kolumna tekstu), bez dziury.
-S4H="$(printf '%s\n' "$S4" | grep -E '║ Źródło → cel +Kopie +Szczeble +Czas o/ś/m +GB' | head -1)"
-S4R="$(printf '%s\n' "$S4" | grep -E '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9]+ +[0-9/]+s +[0-9.]+[KMG]' | head -1)"
 # Pozycja w ZNAKACH, nie bajtach ("Zrodlo" ma litery wielobajtowe; wc -m na
 # Git Bash liczy bajty) -- liczy Python.
+S4H="$(printf '%s\n' "$S4" | grep -E '║ Źródło → cel +Kopie +Szczeble +Dane 7 dni' | head -1)"
+S4R="$(printf '%s\n' "$S4" | grep -E '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9]+ +[0-9.]+[KMG]' | head -1)"
 _same=$("$PY" -c 'import sys; h,r=sys.argv[1],sys.argv[2]; print(1 if h and r and h.index("Kopie")==r.index("aktualne") else 0)' "$S4H" "$S4R" 2>/dev/null)
-if has "$S4" 'Datasety relacji lab-vm101: 1 para, wg crona' && ! has "$S4" '[źródło' \
-        && [ -n "$S4H" ] && [ -n "$S4R" ] && [ "$_same" = 1 ]; then
-    ok "relacje: dolny panel przy 200 -- wiersz naglowka nad kolumnami, para w jednej linii, Kopie pod Kopie (R5-4)"
+if has "$S4" 'lab-vm101: [Datasety]  Zadania' && [ -n "$S4H" ] && [ -n "$S4R" ] && [ "$_same" = 1 ]; then
+    ok "relacje: zakladka Datasety przy 200 -- wiersz naglowka nad kolumnami, para w jednej linii, Kopie pod Kopie (R5-4)"
 else
     bad "relacje: pary przy 200" "$S4"
 fi
@@ -222,18 +223,16 @@ fi
 # listy od 150, nie od 120 jak wczesniej (punkt 3) -- 120 zabieral liscie
 # miejsce, ktorego panelowi i tak nie oddawal w calosci.
 Z100="$(screen zadania "" --width 100)"
-if has "$Z100" 'Następny' && has "$Z100" 'Prefiks' && has "$Z100" 'Kopie' && has "$Z100" 'pve10<192.168.28.99' \
-   && ! has "$Z100" 'pve10<192.168.28.…' && ! has "$Z100" '…'; then
-    ok "zadania: przy 100 kolumnach sa Nastepny, Prefiks i Kopie, adres peera CALY, nic nie uciete (R4-4)"
+if has "$Z100" 'Zadanie' && has "$Z100" 'Następny' && has "$Z100" 'Kopie' && ! printf '%s\n' "$Z100" | sed -n '3,6p' | grep -q '…'; then
+    ok "zadania: przy 100 kolumnach lista ma Relacje, Zadanie, Nastepny i Kopie, nic nie uciete (U21: Prefiks spada pierwszy)"
 else
     bad "zadania: kolumny przy 100" "$(printf '%s' "$Z100" | sed -n '3,5p')"
 fi
 # 260: od 150 panel stoi obok i lista ma 60% szerokosci; 11 kolumn R4-4
 Z160="$(screen zadania "" --width 260)"
-if has "$Z160" 'Relacja' && has "$Z160" 'Kierunek' && has "$Z160" 'Zadanie' && has "$Z160" 'Prefiks' \
-   && has "$Z160" 'Trzyma' && has "$Z160" 'szt.' && has "$Z160" 'Harmonogram' \
-   && has "$Z160" 'Następny' && has "$Z160" 'Kopie' && has "$Z160" 'GB' && has "$Z160" 'Czas o/ś/m'; then
-    ok "zadania: przy 260 kolumnach wchodzi wszystkich jedenascie naglowkow"
+if has "$Z160" 'Relacja' && has "$Z160" 'Zadanie' && has "$Z160" 'Prefiks migawek' && has "$Z160" 'Następny' && has "$Z160" 'Kopie' \
+   && ! has "$Z160" 'Harmonogram' && ! has "$Z160" 'Czas o/ś/m' && ! has "$Z160" 'szt.'; then
+    ok "zadania: przy 260 kolumnach piec naglowkow listy (U21: kierunek, harmonogram, retencja, czasy -- w panelu)"
 else
     bad "zadania: naglowki przy 160" "$(printf '%s' "$Z160" | sed -n '3p')"
 fi
@@ -243,8 +242,8 @@ else
     bad "zadania: panel obok przy 160" "$Z160"
 fi
 Z120="$(screen zadania "" --width 120)"
-if [ "$(printf '%s\n' "$Z120" | grep -c '║.*│')" -eq 0 ]; then
-    ok "zadania: przy 120 panel jest POD lista (prog przesuniety na 150)"
+if [ "$(printf '%s\n' "$Z120" | grep -c '║.*│')" -gt 0 ]; then
+    ok "zadania: przy 120 panel stoi OBOK listy (U21: pod spodem sa przebiegi)"
 else
     bad "zadania: panel pod lista przy 120" "$Z120"
 fi
@@ -373,14 +372,14 @@ else
 fi
 
 S4_120="$(screen relacje down,down,down,down --width 120)"
-if has "$S4_120" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && hasE "$S4_120" '^║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 +aktualne +[0-9]+ +[0-9/]+s +[0-9.]+[KMG] +║'; then
-    ok "relacje: przy 120 para, ktora sie nie miesci, to zrodlo i pod nim cel z liczbami -- nic nie uciete"
+if hasE "$S4_120" '^║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 → .* +aktualne +1 +[0-9.]+[KMG] +║'; then
+    ok "relacje: przy 120 dataset w jednym wierszu z liczbami; pelne sciezki w panelu po Tab"
 else
     bad "relacje: pary przy 120" "$S4_120"
 fi
 S4_80="$(screen relacje down,down,down,down)"
-if has "$S4_80" '║ zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101 ' && has "$S4_80" '║   → hdd/backups/192.168.28.99/hdd/lab/vm-101 ' && ! has "$S4_80" 'aktualne      4/3/4s'; then
-    ok "relacje: ...a przy 80 to samo bez liczb"
+if hasE "$S4_80" '^║ zfsbackup-pve10@192.168.28.99:hdd/.* +aktualne +1 +[0-9.]+[KMG] +║'; then
+    ok "relacje: ...a przy 80 to samo, sciezka skrocona"
 else
     bad "relacje: pary przy 80" "$S4_80"
 fi
@@ -394,36 +393,36 @@ else
 fi
 # TAB: kursor na pary; Enter na parze otwiera OKNO tej pary (R4-6), nie skok na F2.
 TP="$(screen relacje down,tab)"
-if has "$TP" 'Enter szczegóły pary (config, cron)   Tab wraca do relacji'; then
-    ok "relacje: Tab przenosi kursor na pary (stopka mowi, co robi Enter)"
+if has "$TP" 'Enter pełne okno   ←→ zakładki   Esc wróć   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
+    ok "relacje: Tab przenosi kursor na datasety, prawy panel pokazuje zaznaczony dataset (U21)"
 else
     bad "relacje: Tab" "$TP"
 fi
 TE="$(screen relacje down,tab,enter --height 60)"
 if ! has "$TE" 'Zadania na pve10' && has "$TE" '╔═ Zadanie: lab-ct201  pobranie  automated_hourly' \
-   && hasE "$TE" 'zakres +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && has "$TE" '── CONFIG ' && has "$TE" '── CRON ' \
+   && hasE "$TE" 'Źródło +zfsbackup-pve10@192\.168\.28\.99:hdd/lab/ct-201' && has "$TE" '── CONFIG ' && has "$TE" '── CRON ' \
    && has "$TE" 'snapget.sh -m'; then
-    ok "relacje: Enter na parze = okno tej pary (szczegoly, CONFIG, CRON) na F3, bez skoku na F2 (R4-6)"
+    ok "relacje: Enter na datasecie = okno jego zadania (szczegoly, CONFIG, CRON) na F3, bez skoku na F2 (R4-6)"
 else
     bad "relacje: Enter na parze" "$TE"
 fi
 TEE="$(screen relacje down,tab,down,enter,esc)"
-if has "$TEE" 'Relacje na kolektorze' && has "$TEE" 'Enter szczegóły pary (config, cron)' && ! has "$TEE" '╔═ Zadanie:'; then
-    ok "relacje: Esc z okna pary wraca na panel par (kursor zostaje na parach)"
+if has "$TEE" 'Relacje na kolektorze' && has "$TEE" 'Enter pełne okno   ←→ zakładki' && ! has "$TEE" '╔═ Zadanie:'; then
+    ok "relacje: Esc z okna datasetu wraca na dolny panel (kursor zostaje na datasetach)"
 else
     bad "relacje: Esc z okna pary" "$TEE"
 fi
 TR="$(screen relacje tab,enter)"
-if has "$TR" 'Relacje na kolektorze' && has "$TR" 'ta para jest z rekordu, nie z crona'; then
-    ok "relacje: Enter na parze z REKORDU mowi, ze nie ma jej linii ani sekcji"
+if has "$TR" 'Relacje na kolektorze' && has "$TR" 'ten dataset jest z rekordu, nie z crona'; then
+    ok "relacje: Enter na datasecie z REKORDU mowi, ze nie ma jego linii ani sekcji"
 else
     bad "relacje: Enter na parze z rekordu" "$TR"
 fi
 
 # --- PAUZA: prawdziwy stan z pause-client na pve10 -------------------------
 SP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $PAUSED --screen relacje --keys down,down,down --width 200 2>&1)"
-if hasE "$SP" '^║ lab-srv-b +pve10<192.168.28.99 +backup +działa PAUZA +aktualne +0B +-- pauza -- +║'; then
-    ok "relacje: relacja wstrzymana ma PAUZA w stanie i '-- pauza --' zamiast nastepnego biegu"
+if hasE "$SP" '^║ lab-srv-b +backup +pve10<192.168.28.99 +działa PAUZA +aktualne +║' && hasE "$SP" 'Następny +-- pauza --'; then
+    ok "relacje: relacja wstrzymana ma PAUZA w stanie, a panel '-- pauza --' zamiast nastepnego biegu"
 else
     bad "relacje: wiersz pauzy" "$SP"
 fi
@@ -481,7 +480,7 @@ fi
 # kolumnach Prefiks spada. Tak samo bywa na hoscie, gdy najblizszy bieg zadania
 # dobowego jest jutro; te testy pinuja tresc wierszy relacji przy 100 kolumnach,
 # wiersze replik maja wlasne testy przy NOSNIKACH.
-Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 100 2>&1)"
+Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --progress "$P10/progress.json" --config "$P10/show-config.json" --stats "$P10/job-stats.json" --screen zadania --width 160 2>&1)"
 if has "$Z" '╔═ Zadania na pve10 (32 zadania, 4 relacje) -- sort'; then
     ok "zadania: F2 liczy zadania z crona i relacje, ktore je maja, tytul nazywa domyslny widok sortowania"
 else
@@ -492,20 +491,22 @@ fi
 # Zadanie a nimi) -- sprawdzamy PREFIKS wiersza (Relacja/Kierunek/Zadanie, ktore
 # sa priorytetem 1-3 i zawsze pierwsze) i ze werdykt gdzies na tym wierszu jest,
 # bez wiazania sie do dokladnej pozycji kolumn koncowych.
-if hasE "$Z" '^║ lab-vm101 +pve10<192\.168\.28\.99 +pobranie +automated_hourly ' && ! has "$Z" 'Zakres'; then
-    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' (ten host po lewej, adres CALY), i ZADNEJ kolumny Zakres"
+if hasE "$Z" '^║ lab-vm101 +pobranie +automated_hourly ' && hasE "$Z" 'Kierunek +pve10<192\.168\.28\.99' && ! has "$Z" 'Zakres'; then
+    ok "zadania: POBRANIE nazywa sie pobraniem (nie 'wysylka'), kierunek 'pve10<peer' w panelu (U21), bez 'Zakres' dla jednego datasetu"
 else
     bad "zadania: wiersz wysylki" "$Z"
 fi
-if hasE "$Z" '^║ lab-vm101 +local +lokalny prune +automated_hourly +24 godz\. '; then
-    ok "zadania: porzadki na ladowisku = 'local', 'lokalny prune', rodzina w Prefiksie i retencja z jednostka w Trzyma (R4-4)"
+ZL="$(screen zadania down --width 120)"
+if hasE "$Z" '^║ lab-vm101 +lokalny prune +automated_hourly ' && hasE "$ZL" 'Kierunek +lokalnie, na tym hoście' && hasE "$ZL" 'Trzyma +24 godz\.'; then
+    ok "zadania: porzadki na ladowisku = 'lokalny prune', rodzina w Prefiksie; w panelu 'lokalnie, na tym hoście' i retencja z jednostka"
 else
-    bad "zadania: wiersz porzadkow" "$Z"
+    bad "zadania: wiersz porzadkow" "$Z" "$ZL"
 fi
-if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +pve10<192[.]168[.]28[.][0-9.…]+ +zdalny prune +automated_hourly +24 godz\. ')" -eq 1 ] && [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +local +lokalny prune +automated_hourly +24 godz\. ')" -eq 1 ]; then
-    ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'local'"
+ZR="$(screen zadania down,down,down,down,down --width 120)"
+if [ "$(printf '%s\n' "$Z" | grep -cE '^║ lab-vm101 +zdalny prune +automated_hourly ')" -ge 1 ] && has "$ZR" 'lab-vm101 -- zdalny prune' && hasE "$ZR" 'Kierunek +pve10<192\.168\.28\.99'; then
+    ok "zadania: porzadki na ZDALNYM zrodle niosa kierunek relacji, nie 'lokalnie'"
 else
-    bad "zadania: zdalne porzadki" "$Z"
+    bad "zadania: zdalne porzadki" "$Z" "$ZR"
 fi
 # CZASY I GB JAK W MAILU (wlasciciel 2026-09-11: "jak w digescie -- spojnie z
 # tym co przychodzi na mailu"). Zrodlo: job-stats --json z pve10, doslownie.
@@ -523,7 +524,7 @@ def h(n):
     for u in "BKMGTP":
         if n < 1024 or u == "P": return ("%dB" % n) if u == "B" else "%.1f%s" % (n, u)
         n /= 1024.0
-print("%d/%d/%ds" % (row["last_s"], row["avg_s"], row["max_s"]), h(vol), row["runs"], row["last_at"])
+print(row["last_s"], row["avg_s"], row["max_s"], h(vol), row["runs"], row["last_at"])
 PYEOF
 )
 set -- $want
@@ -532,15 +533,15 @@ set -- $want
 # priorytet; wartosc jest ta sama niezaleznie od tego, czy kolumna sie zmiesci.
 # R4-4: 11 kolumn -- Czas wchodzi dopiero przy bardzo szerokiej liscie.
 Z200="$(screen zadania "" --width 260)"
-if has "$Z200" " $1 " && has "$Z200" " $2 "; then
-    ok "zadania: czasy ($1) i GB ($2) w wierszu wysylki sa DOKLADNIE tym, co job-stats mowi o jej linii crona i jej ladowisku"
+if hasE "$Z200" "Czas +ostatni ${1}s / średni ${2}s / maks\. ${3}s" && has "$Z200" " $4"; then
+    ok "zadania: czasy (${1}/${2}/${3}s) i dane ($4) w panelu pobrania sa DOKLADNIE tym, co job-stats mowi o jej linii crona i jej ladowisku"
 else
     bad "zadania: czasy/GB z job-stats" "want: $want" "$Z200"
 fi
-if has "$Z" "biegi       $3 w oknie 7 dni" && has "$Z" "ostatni $4 $5 rc=0" && has "$Z" 'czas        ostatni ' && has "$Z" '(jak w mailu)' && has "$Z" 'wolumen     '"$2"' zapisane w migawkach automated_hourly w oknie 7 dni'; then
-    ok "zadania: panel nazywa biegi, ostatni czas/rc, czas ostatni/sredni/maks i wolumen z oknem digestu"
+if hasE "$Z200" "Wywołania +$5, błędów 0" && has "$Z200" "$6 $7   OK" && hasE "$Z200" "Dane +$4"; then
+    ok "zadania: panel nazywa wywolania, ostatni bieg z wynikiem i dane z oknem digestu"
 else
-    bad "zadania: panel czasow" "$Z"
+    bad "zadania: panel czasow" "$Z200"
 fi
 # bez zrodla: '?' w kolumnach i zdanie w panelu, nie zera
 ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --stats "$FIX/nie-ma.json" --screen zadania --width 200 2>&1)"
@@ -549,17 +550,19 @@ ZS="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/st
 # kolejnosci.
 ZS_LINE=$(printf '%s\n' "$ZS" | grep -E '^║ lab-vm101 +pve10<192\.168\.28\.99 ')
 QCOUNT=$(printf '%s' "$ZS_LINE" | grep -o '?' | wc -l | tr -d ' ')
-if [ -n "$ZS_LINE" ] && printf '%s' "$ZS_LINE" | grep -qF 'aktualne' && [ "${QCOUNT:-0}" -ge 2 ] \
-   && has "$ZS" 'job-stats --json nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
-    ok "zadania: zepsute job-stats -> '?' w komorkach (GB, Czas) i zdanie w panelu, nigdy zero udajace pomiar"
+ZS_LINE=$(printf '%s\n' "$ZS" | grep -E '^║ lab-vm101 +pobranie ')
+if [ -n "$ZS_LINE" ] && printf '%s' "$ZS_LINE" | grep -qF 'aktualne' \
+   && has "$ZS" '? -- job-stats nie odpowiedział' && has "$ZS" '! bez odpowiedzi: 1'; then
+    ok "zadania: zepsute job-stats -> '?' i zdanie w panelu, nigdy zero udajace pomiar"
 else
     bad "zadania: zepsute job-stats" "$ZS_LINE" "$ZS"
 fi
 ZH3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --stats "$P10/job-stats.json" --screen zadania --width 200 2>&1)"
 ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly ')
+ZH3_LINE=$(printf '%s\n' "$ZH3" | grep -E '^║ pve9 +wysyłka +automated_hourly ')
 if [ -n "$ZH3_LINE" ] && printf '%s' "$ZH3_LINE" | grep -qF 'spóźnione' \
-   && has "$ZH3" 'brak biegów tego zadania w dzienniku w oknie 7 dni'; then
-    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje werdykt i mowi 'brak biegow' w panelu (a wysylka do peera nie ma wolumenu do zmierzenia tutaj)"
+   && has "$ZH3" 'brak biegów w dzienniku z tego okna'; then
+    ok "zadania: zadanie, ktorego nie ma w dzienniku, pokazuje werdykt i mowi 'brak biegow' w panelu"
 else
     bad "zadania: brak biegow" "$ZH3_LINE" "$ZH3"
 fi
@@ -579,6 +582,8 @@ else
 fi
 L1=$(printf '%s\n' "$ZSORT1" | grep -n 'wysyłka ' | head -1 | cut -d: -f1)
 L2=$(printf '%s\n' "$ZSORT1" | grep -n 'kopia ' | head -1 | cut -d: -f1)
+L1=$(printf '%s\n' "$ZSORT1" | grep -n '^║ .*wysyłka ' | head -1 | cut -d: -f1)
+L2=$(printf '%s\n' "$ZSORT1" | grep -n '^║ .*kopia ' | head -1 | cut -d: -f1)
 if [ -n "$L1" ] && [ -n "$L2" ] && [ "$L1" -lt "$L2" ]; then
     ok "zadania: F8 raz (oś czasu) -- 'wysyłka hourly' (biegnie w ciagu godziny) przed 'kopia daily' (biegnie dopiero jutro)"
 else
@@ -609,8 +614,9 @@ fi
 # z pve11 przy ~190 kolumnach). Fikstura hostA: 11 kolumn, przy 200 lista ma 130.
 R45N="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 100 2>&1 | sed -n 3p)"
 R45W="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 260 2>&1 | sed -n 3p)"
-if printf '%s' "$R45N" | grep -qE 'Kierunek  +Zadanie' && ! printf '%s' "${R45N#║ }" | grep -qE '[^ ] [A-ZŁŚ][a-zęąśłó]' \
-   && printf '%s' "$R45W" | grep -qE 'Kierunek {3,}Zadanie {3,}Prefiks'; then
+_r45="${R45N%%║│*}"
+if printf '%s' "$R45N" | grep -qE 'Relacja  +Zadanie' && ! printf '%s' "${_r45#║ }" | grep -qE '[^ ] [A-ZŁŚ][a-zęąśłó]' \
+   && printf '%s' "$R45W" | grep -qE 'Relacja {3,}Zadanie {3,}Prefiks'; then
     ok "zadania: odstep miedzy kolumnami >= 2 spacje; przy szerokiej liscie zapas rozlozony na odstepy (R4-3, R4-5)"
 else
     bad "zadania: odstepy kolumn" "$R45N" "$R45W"
@@ -621,8 +627,9 @@ fi
 # mial w F2 tylko "pobranie". Porzadki z WLASNEJ linii zadania (tag "(sx-a)"), a linia
 # porzadkow sasiedniego datasetu z tego samego bloku ("(sx-b)", inny harmonogram) nie wchodzi.
 FP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
-if hasE "$FP" '^║ sx +[^ ]+ +lokalny prune +automated +168 godz\. +1 +21 \* \* \* \*' && ! hasE "$FP" 'lokalny prune .* +17 \* \* \* \*' \
-   && [ "$(printf '%s\n' "$FP" | grep -c 'lokalny prune')" -eq 1 ]; then
+FPD="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs-flatprune.json" --monitors "$FIX/monitors-group.json" --screen zadania --width 200 2>&1)"
+if hasE "$FP" '^║ sx +lokalny prune +automated ' && hasE "$FPD" 'Kiedy +co godzinę \(:21\)' && hasE "$FPD" 'Trzyma +168 godz\.' && ! hasE "$FPD" 'Kiedy +co godzinę \(:17\)' \
+   && [ "$(printf '%s\n' "$FP" | grep -c '^║ .*lokalny prune')" -eq 1 ]; then
     ok "zadania: szczebel plaski pokazuje WLASNE porzadki (harmonogram z jego linii delsnaps), bez cudzych z bloku (uwaga 4: pve9-synchro)"
 else
     bad "zadania: porzadki szczebla plaskiego (uwaga 4)" "$FP"
@@ -634,10 +641,9 @@ fi
 GJ="$FIX/jobs-group.json"; GS="$FIX/status-group.json"; GM="$FIX/monitors-group.json"
 G="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 2>&1)"
 GR="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
-if hasE "$G" '^║ sync-test +pve20<>192\.168\.28\.50 +pobranie +automated_hourly +- +3 +5 \* \* \* \*' \
-    && [ "$(printf '%s\n' "$G" | grep -cE '^║ sync-test ')" -eq 2 ] \
-    && hasE "$G" '^║ backup-test +pve20<192\.168\.28\.60 +pobranie +automated_hourly +- +1 '; then
-    ok "zadania: F2 -- synchro rysuje '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz z 'szt.' 3, czwarty (inny harmonogram) NIE laczy sie; backup zostaje na '<'"
+if [ "$(printf '%s\n' "$G" | grep -cE '^║ sync-test ')" -eq 2 ] && hasE "$G" '^║ backup-test +pobranie +automated_hourly ' \
+    && hasE "$G" 'Kierunek +pve20<>192\.168\.28\.50' && hasE "$G" 'Zakres +3 datasetów'; then
+    ok "zadania: F2 -- synchro ma w panelu '<>' mimo ze KAZDA linia crona jest pull; trzy zakresy pod tym samym zadaniem to JEDEN wiersz (Zakres: 3), czwarty (inny harmonogram) NIE laczy sie"
 else
     bad "zadania: F2 grupowanie i symbol synchro" "$G"
 fi
@@ -650,17 +656,18 @@ fi
 # R3-3: przy malym terminalu (30 wierszy) 'harmonogram' MA byc widoczny, mimo
 # ze zakres grupy jest jedna dluga linia -- puste linie miedzy grupami.
 G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
-if has "$G30" '3 datasetów w' && has "$G30" 'harmonogram'; then
-    ok "zadania: panel grupy przy --height 30 -- 'zakres' jedna linia, 'harmonogram' wciaz widoczny (puste linie oddzielaja grupy)"
+if has "$G30" '3 datasetów w' && hasE "$G30" 'Kiedy +co godzinę'; then
+    ok "zadania: panel grupy przy --height 30 -- 'Zakres' jedna linia, 'Kiedy' wciaz widoczne"
 else
     bad "zadania: panel grupy przy malym terminalu" "$G30"
 fi
-if has "$G" 'oba hosty trzymają te same datasety'; then
-    ok "zadania: panel kierunku synchro mowi 'oba hosty trzymaja', nie 'ten host pobiera'"
+GB_="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --keys down,down --width 200 2>&1)"
+if hasE "$GB_" 'Kierunek +pve20<192\.168\.28\.60' && ! hasE "$GB_" 'Kierunek +pve20<>'; then
+    ok "zadania: panel kierunku backupu ma '<', synchro '<>' (rekord wygrywa z linia crona)"
 else
-    bad "zadania: panel kierunku synchro" "$G"
+    bad "zadania: panel kierunku synchro" "$GB_"
 fi
-if hasE "$GR" '^║ sync-test +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ backup-test +pve20<192\.168\.28\.60 '; then
+if hasE "$GR" '^║ sync-test +lustro +pve20<>192\.168\.28\.50 ' && hasE "$GR" '^║ backup-test +backup +pve20<192\.168\.28\.60 '; then
     ok "relacje: F3 tez rysuje '<>' dla synchro (z rekordu, nie z linii crona) i '<' dla backupu"
 else
     bad "relacje: symbol synchro na F3" "$GR"
@@ -702,12 +709,12 @@ if [ "$(printf '%s\n' "$GE" | grep -cE '^║ sync-test .*błąd biegu')" = 1 ] &
 else
     bad "zadania: błąd biegu na F2" "$(printf '%s\n' "$GE" | grep -E '^║ (sync|backup)-test')"
 fi
-if hasE "$GE" 'błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
-   && has "$GE" 'wyrzucono   2026-09-08 12:16  hdd/lab/a: 1 snapshot(s)' \
-   && has "$GE" 'w 3 zadaniach, błędów 1,'; then
+if hasE "$GE" 'Błąd +2026-09-08 13:48 +[^ ]*/lab/b +rc=1' && has "$GE" 'Refusing' \
+   && hasE "$GE" 'Wyrzucono +2026-09-08 12:16  hdd/lab/a: 1 snapshot' \
+   && has "$GE" 'błędów 1   w 3 zadaniach'; then
     ok "zadania: panel wiersza mowi, ktory dataset i dlaczego (blad z dziennika) oraz co bieg wyrzucil z kopii"
 else
-    bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'błąd|wyrzuc')"
+    bad "zadania: panel błąd/wyrzucono" "$(printf '%s\n' "$GE" | grep -E 'Błąd|Wyrzuc|błędów')"
 fi
 GER="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 2>&1)"
 if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-test .*błąd biegu'; then
@@ -727,33 +734,35 @@ fi
 # ZRODLO I CEL W PANELU, W CALOSCI. Wlasciciel, 2026-09-11: "Zmieniamy nazwe
 # Zakres na Cel i dodajemy tez Zrodlo". Dla pobrania zrodlo jest zdalne, cel
 # to ladowisko tutaj; kierunek mowi, ktore jest ktorym.
-if has "$Z" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' && hasE "$Z" 'zakres +zfsbackup'; then
-    ok "zadania: panel pobrania -- 'zakres' = ZRODLO zdalne i CEL lokalny, pelne sciezki, nic nie uciete (R3-3: jedna linia)"
+if has "$Z" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$Z" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' && hasE "$Z" 'Źródło +zfsbackup' && hasE "$Z" 'Cel +hdd/backups'; then
+    ok "zadania: panel pobrania -- ZRODLO zdalne i CEL lokalny w osobnych wierszach, pelne sciezki"
 else
     bad "zadania: zrodlo/cel w panelu" "$Z"
 fi
 ZP="$(screen zadania down)"
-if hasE "$ZP" 'zakres +- ' && has "$ZP" 'hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
-    ok "zadania: porzadki maja tylko CEL (to, co przycinaja), zrodlo '-'"
+ZP="$(screen zadania down --width 160)"
+if hasE "$ZP" 'Cel +hdd/backups/192.168.28.99/hdd/lab/vm-101' && ! hasE "$ZP" 'Źródło +'; then
+    ok "zadania: porzadki maja tylko CEL (to, co przycinaja)"
 else
     bad "zadania: porzadki zrodlo/cel" "$ZP"
 fi
 ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down 2>&1)"
 # down,down: widok domyslny grupuje wiersze relacji -- oba "(bez rel.)" sa pierwsze
-if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'zakres +hdd/vm-disks'; then
+ZH2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --keys down,down --width 160 2>&1)"
+if has "$ZH2" 'hdd/vm-disks/subvol-100-disk-0' && has "$ZH2" 'pve9:hdd/backups' && hasE "$ZH2" 'Źródło +hdd/vm-disks'; then
     ok "zadania: dla WYSYLKI zrodlo jest tutaj, a cel u peera"
 else
     bad "zadania: wysylka zrodlo/cel" "$ZH2"
 fi
 ZH="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/jobs.json" --monitors "$FIX/monitors.json" --screen zadania --width 120 2>&1)"
-if hasE "$ZH" '^║ pve9 +hostA>pve9 +wysyłka +automated_hourly' && hasE "$ZH" '^║ pve1 +hostA<pve1 +pobranie +automated_hourly' && hasE "$ZH" '^║ \(bez rel\.\) +local +kopia +automated_daily'; then
-    ok "zadania: wysylka = 'hostA>pve9', pobranie = 'hostA<pve1', kopia na hoscie = 'local'; zadanie bez etykiety mowi '(bez rel.)'"
+if hasE "$ZH" '^║ pve9 +wysyłka ' && hasE "$ZH" '^║ pve1 +pobranie ' && hasE "$ZH" '^║ \(bez rel\.\) +kopia '; then
+    ok "zadania: wysylka, pobranie i kopia na hoscie w liscie; zadanie bez etykiety mowi '(bez rel.)' (kierunek w panelu, U21)"
 else
     bad "zadania: trzy kierunki na hostA" "$ZH"
 fi
 ZE="$(screen zadania enter --height 80)"
 if has "$ZE" '╔═ Zadanie: lab-vm101 ' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
-        && hasE "$ZE" 'trzyma +- +szczebel standard_hourly \(sekcja dataset\)' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
+        && hasE "$ZE" 'Trzyma +-' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
         && has "$ZE" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$ZE" '[template:profile__default__standard_hourly]' \
         && ! has "$ZE" '[template:profile__default__keep_monthly]'; then
     ok "zadania: Enter = szczegoly + CONFIG (TYLKO sekcja i szablon tego zadania) + CRON z prawdziwa linia (R4-6)"
@@ -764,8 +773,8 @@ fi
 # progi -- wchodzi teraz do panelu F2 (rel_detail_pairs), dopasowane TA SAMA
 # regula co werdykt (monitors_for_job); R3-3 laczy straznik+progi w JEDNA
 # linie. Z fikstur pve10: lab-vm101 ma monitor "*/15 * * * *", warn 90m, crit 150m.
-if hasE "$ZE" 'strażnik +co 15 min +progi 90m / 150m'; then
-    ok "zadania: panel F2 nazywa straznika (harmonogram) i progi na JEDNEJ linii -- to, co dawal usuniety F5"
+if hasE "$ZE" 'Strażnik +ostrzeżenie po 90m, alarm po 150m   sprawdza co 15 min'; then
+    ok "zadania: panel F2 nazywa straznika (progi i harmonogram) w JEDNEJ linii -- to, co dawal usuniety F5"
 else
     bad "zadania: straznik/progi w panelu F2" "$ZE"
 fi
@@ -773,7 +782,7 @@ fi
 # zadania na F2, nie moze zniknac -- watchdog pilnujacy czegos, czego juz nie
 # ma w cronie, jest samodzielnym wierszem "straznik bez zadania".
 ZG="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/monitor-orphan.json" --screen zadania --width 200 2>&1)"
-if hasE "$ZG" '^║ ghost +[?] +strażnik bez zadania' && has "$ZG" 'aktualne'; then
+if hasE "$ZG" '^║ ghost +strażnik bez zadania' && has "$ZG" 'aktualne'; then
     ok "zadania: monitor bez dopasowanego zadania jest WIERSZEM 'straznik bez zadania' (F5 zniesiony, uwaga 3)"
 else
     bad "zadania: straznik bez zadania" "$ZG"
@@ -873,8 +882,8 @@ fi
 # R4-1 (wlasciciel 2026-09-24): F4 na F3 to OKNO Transfery, nie pauza --
 # klawisze F1-F6 sa zawsze glownymi oknami; pauza jest na F7.
 A="$(act F4)"
-if has "$A" '╔═ Zakończone' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
-    ok "akcje: F4 na ekranie Relacje przelacza na Transfery (R4-1), nie wstrzymuje relacji"
+if has "$A" '╔═ Historia transferów' && ! has "$A" 'POTWIERDZENIE' && [ ! -s "$XL" ]; then
+    ok "akcje: F4 na ekranie Relacje przelacza na Historie (R4-1), nie wstrzymuje relacji"
 else
     bad "akcje: F4 na F3" "$A"
 fi
@@ -1044,9 +1053,9 @@ od() {   # <keys> -> ekran F11; dziennik w $XL
     "$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --exec-log "$XL" --screen odzysk --keys "$1" 2>&1
 }
 A="$(od "")"
-if has "$A" '╔═ Odzysk danych na pve10' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z dysku +nośnik' && has "$A" 'Co się stanie' \
+if has "$A" '╔═ Odzysk danych na pve10' && hasE "$A" '^║ lab-ct201 ' && hasE "$A" '^║ z innego dysku +nośnik' && has "$A" 'duplikat -- odzysk' && has "$A" '[Datasety]' \
    && has "$A" '11Odzysk' && has "$A" '12Wyjście' && ! has "$A" '10Wyjście' && ! has "$A" 'F10'; then
-    ok "odzysk: F11 to ekran glowny -- relacje z kopia i wiersz 'z dysku', panel 'Co się stanie'; na pasku 11Odzysk i 12Wyjście, bez F10"
+    ok "odzysk: F11 to ekran glowny -- relacje z kopia i wiersz 'z innego dysku', panel odzysku, zakladka Datasety; na pasku 11Odzysk i 12Wyjście, bez F10"
 else
     bad "odzysk: ekran F11" "$A"
 fi
@@ -1329,18 +1338,19 @@ fi
 # TRANSFERY
 # ============================================================================
 T="$(screen transfery)"
-if has "$T" '╔═ W toku (0) ═' && has "$T" 'nic nie leci teraz' && has "$T" '╔═ Zakończone (14) ═'; then
-    ok "transfery: dwie ramki -- w toku (puste, powiedziane) i zakonczone z licznikiem"
+if has "$T" '╔═ Historia transferów na pve10 (14)   biegnie teraz: 0' && ! has "$T" 'W toku'; then
+    ok "transfery: JEDNA lista (U21) -- tytul liczy wpisy i mowi, ile biegnie teraz"
 else
     bad "transfery: ramki" "$T"
 fi
-if hasE "$T" '^║ lab-srv-b +hdd/lab/srv-b/www +przyrost\. +- +OK +[0-9:]+ 0 s +║'; then
-    ok "transfery: wiersz = relacja, dataset (bez @migawki), tryb, dane, stan, kiedy"
+T120="$(screen transfery "" --width 120)"
+if hasE "$T120" '^║ [0-9:]+ +lab-srv-b +hdd/lab/srv-b/www +przyrost\. +OK +0 s +- +║'; then
+    ok "transfery: wiersz = kiedy, relacja, dataset (bez @migawki), tryb, wynik, czas, dane"
 else
-    bad "transfery: wiersz transferu" "$T"
+    bad "transfery: wiersz transferu" "$T120"
 fi
-if has "$T" 'na łączu: niemierzalne'; then
-    ok "transfery: panel mowi 'niemierzalne', nie zero, gdy wire_bytes=-1"
+if hasE "$T" 'Poprzednia +automated_hourly' && hasE "$T" 'Start / koniec +2026-09-09'; then
+    ok "transfery: panel -- migawka, poprzednia, zrodlo i cel, start/koniec; bez powtorek z listy (U21)"
 else
     bad "transfery: niemierzalne" "$T"
 fi
@@ -1355,13 +1365,13 @@ else
     bad "transfery: domyslny stan F7" "$TW130"
 fi
 TU="$(screen transfery F7 --width 160)"
-if has "$TU" 'Zakończone (8)' && has "$TU" 'bez usuniętych relacji' && ! has "$TU" '(bez rel.)' && has "$TU" 'F7 Pokaż usunięte'; then
+if has "$TU" 'Historia transferów na pve10 (8) -- bez usuniętych relacji' && ! has "$TU" '(bez relacji)' && has "$TU" 'F7 Pokaż usunięte'; then
     ok "transfery: F7 chowa transfery bez zywej relacji (14 -> 8), tytul mowi, listwa odwraca podpis"
 else
     bad "transfery: F7 chowa" "$TU"
 fi
 TUU="$(screen transfery F7,F7 --width 160)"
-if has "$TUU" 'Zakończone (14)' && has "$TUU" '(bez rel.)' && ! has "$TUU" 'bez usuniętych relacji'; then
+if has "$TUU" 'Historia transferów na pve10 (14)' && has "$TUU" '(bez relacji)' && ! has "$TUU" 'bez usuniętych relacji'; then
     ok "transfery: drugie F7 pokazuje je znowu"
 else
     bad "transfery: F7 pokazuje znowu" "$TUU"
@@ -1371,7 +1381,7 @@ fi
 # polecen. --keys idzie teraz ta sama droga (live_key_name), wiec 'u' ma NIC
 # nie schowac i stanac w linii polecen.
 TUL="$(screen transfery u --width 160)"
-if has "$TUL" 'Zakończone (14)' && ! has "$TUL" 'bez usuniętych relacji' && has "$TUL" '$ u_ '; then
+if has "$TUL" 'Historia transferów na pve10 (14)' && ! has "$TUL" 'bez usuniętych relacji' && has "$TUL" '$ u_ '; then
     ok "transfery: 'u' to TEKST linii polecen, nie skrot (R4-2: droga --keys = droga petli curses)"
 else
     bad "transfery: 'u' jako tekst" "$TUL"
@@ -1384,7 +1394,7 @@ pkb() { printf '%s\n' "$PK" | awk -v k="=== $1" -v n="$2" '$0 ~ /^=== / { i++; o
 if [ "$PKRC" -eq 2 ]; then
     echo "SKIP pty: brak modulu pty (Windows) -- klawisze przez petle curses sprawdza CI"
 elif has "$(pkb s 2)" 's_' && ! has "$(pkb s 2)" 'oś czasu' && has "$(pkb F8 3)" 'oś czasu' \
-     && has "$(pkb F4 5)" 'W toku' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
+     && has "$(pkb F4 5)" 'Historia transferów' && ! has "$(pkb F4 5)" 'POTWIERDZENIE' \
      && has "$(pkb u 6)" 'u_' && ! has "$(pkb u 6)" 'bez usuniętych' && has "$(pkb F7 7)" 'bez usuniętych relacji'      && has "$(pkb ctrl-r 8)" 'odświeżam'; then
     ok "pty: 's' i 'u' to tekst linii, F8 sortuje F2 (X9), F7 chowa usuniete na F4, F4 na F3 otwiera Transfery (petla curses, R4-1/R4-2)"
 else
@@ -1414,8 +1424,8 @@ fi
 # kazde oddaje terminal oknom tui/template.sh przez czasownik --ask.
 SZ="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --profiles "$P10/list-profiles.json" --screen szablony --width 160 --height 30 2>&1)"
 if hasE "$SZ" '║ d7h24 +fabryczny +N najnowszych +24 godz., 7 dni +0 ' && has "$SZ" 'Szablony retencji (17)' \
-   && has "$SZ" 'Rodzaj   fabryczny' && has "$SZ" 'Szczebel' && has "$SZ" 'Ins nowy na podstawie zaznaczonego' && has "$SZ" 'F5 Szablony'; then
-    ok "szablony: F5 -- tabela (nazwa, rodzaj, sposob, trzyma, uzyty), panel ze szczeblami, stopka z Ins/e/Del"
+   && hasE "$SZ" 'Jak liczy +' && has "$SZ" '[Szczeble]  Używają' && has "$SZ" 'Ins nowy z zaznaczonego' && has "$SZ" 'F5 Szablony'; then
+    ok "szablony: F5 -- tabela (nazwa, rodzaj, sposob, trzyma, uzyty), panel 'Jak liczy', zakladki Szczeble/Uzywaja, stopka z Ins/Del"
 else
     bad "szablony: ekran F5" "$SZ"
 fi
@@ -1431,13 +1441,13 @@ else
     bad "szablony: akcje" "ins: $A1" "e: $B1" "del: $C1"
 fi
 TF="$(screen zadania F4)"
-if has "$TF" '╔═ Zakończone' && ! has "$TF" '[F4'; then
+if has "$TF" '╔═ Historia transferów' && ! has "$TF" '[F4'; then
     ok "transfery: F4 z innego ekranu przelacza (aktywne okno na pasku kolorem, bez nawiasow)"
 else
     bad "transfery: F4" "$TF"
 fi
 TW="$(screen transfery down,enter)"
-if has "$TW" '╔═ transfer lab-srv-b ═' && has "$TW" 'Migawka  hdd/lab/srv-b/db@automated_hourly'; then
+if has "$TW" '╔═ transfer lab-srv-b ═' && hasE "$TW" 'Migawka +automated_hourly' && hasE "$TW" 'Źródło +192\.168\.28\.99:hdd/lab/srv-b/db'; then
     ok "transfery: Enter otwiera szczegoly wiersza pod kursorem jako okno"
 else
     bad "transfery: Enter" "$TW"
@@ -1448,9 +1458,9 @@ fi
 # starej stalej szerokosci 16 i wychodzil jako "...22:0…" (owner brief, runda 2).
 OLD100="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 100 2>&1)"
 OLD120="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --progress "$FIX/progress-older.json" --screen transfery --width 120 2>&1)"
-if hasE "$OLD100" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} 45 min' && ! has "$OLD100" '…' \
-    && hasE "$OLD120" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} 45 min' && ! has "$OLD120" '…'; then
-    ok "transfery: Kiedy starszego wpisu -- DD.MM HH:MM + czas trwania w calosci, bez wielokropka, przy 100 i 120 kolumnach"
+if hasE "$OLD100" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} ' && has "$OLD100" '45 min' && ! has "$OLD100" '…' \
+    && hasE "$OLD120" '[0-9]{2}\.[0-9]{2} [0-9]{2}:[0-9]{2} ' && has "$OLD120" '45 min' && ! has "$OLD120" '…'; then
+    ok "transfery: Kiedy starszego wpisu -- DD.MM HH:MM i czas trwania w osobnej kolumnie, bez wielokropka, przy 100 i 120 kolumnach"
 else
     bad "transfery: kolumna Kiedy starszego wpisu" "$OLD100" "$OLD120"
 fi
@@ -1495,9 +1505,9 @@ j["jobs"].append(n)
 json.dump(j, open(d + "/list-jobs.json", "w", encoding="utf-8"))
 PYEOF
 LOK="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOK" '^║ lok +lokalnie +kopia lokalna +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' && hasE "$LOK" 'Prune źródła +trzyma' \
-   && ! printf '%s\n' "$LOK" | grep -E 'Peer +\?|Endpoint +\?' | grep -q .; then
-    ok "relacje: relacja lokalna -- 'lokalnie', typ 'kopia lokalna', w panelu zrodlo i cel zamiast Peer/Endpoint"
+if hasE "$LOK" '^║ lok +kopia lokalna +lokalnie +działa ' && hasE "$LOK" 'Źródło +rpool/data' && hasE "$LOK" 'Cel +hdd/kopie' \
+   && ! printf '%s\n' "$LOK" | grep -E 'Drugi host' | grep -q .; then
+    ok "relacje: relacja lokalna -- 'lokalnie', typ 'kopia lokalna', w panelu zrodlo i cel zamiast drugiego hosta"
 else
     bad "relacje: relacja lokalna" "$LOK"
 fi
@@ -1511,7 +1521,7 @@ st["relations"][0]["client_target"] = ""
 json.dump(st, open(d + "/status.json", "w", encoding="utf-8"))
 PYEOF2
 LOKN="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$LOKD/status.json" --jobs "$LOKD/list-jobs.json" --monitors "$P10/monitor.json" --screen relacje --width 120 --height 30 2>&1)"
-if hasE "$LOKN" '^║ lok +lokalnie +migawki lokalne +działa ' && hasE "$LOKN" 'Cel +ten sam dataset \(migawki'; then
+if hasE "$LOKN" '^║ lok +migawki lokalne +lokalnie +działa ' && hasE "$LOKN" 'Cel +ten sam dataset \(migawki'; then
     ok "relacje: relacja lokalna bez celu -- typ 'migawki lokalne' (nie 'kopia lokalna'), Cel 'ten sam dataset (migawki, bez kopii)' zamiast '?'"
 else
     bad "relacje: migawki lokalne" "$LOKN"
@@ -1555,18 +1565,19 @@ json.dump(m, open(d + "/monitor.json", "w", encoding="utf-8"))
 PYEOF
 SOA="--status $SOD/status.json --jobs $SOD/list-jobs.json --monitors $SOD/monitor.json"
 SO3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 2>&1)"
-if hasE "$SO3" '^║ som +→ 10\.0\.0\.9 +migawki zdalne +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
-   && hasE "$SO3" 'Migawki +co dobę 01:49, co godzinę' && hasE "$SO3" 'pve10_automated_daily' \
+SO3Z="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys tab,right 2>&1)"
+if hasE "$SO3" '^║ som +migawki zdalne +→ 10\.0\.0\.9 +działa ' && hasE "$SO3" 'Kopia +brak -- migawki i ich' \
+   && hasE "$SO3Z" 'migawka +pve10_automated_daily +co dobę 01:49' && hasE "$SO3Z" 'migawka +pve10_automated_hourly +co godzinę' \
    && ! printf '%s\n' "$SO3" | grep -E '^║ som .*(pve10<|←)' | grep -q .; then
-    ok "relacje: relacja snaponly -- '→ <peer>', typ 'migawki zdalne', w panelu 'Kopia: brak' i harmonogram migawek z rodzina"
+    ok "relacje: relacja snaponly -- '→ <peer>', typ 'migawki zdalne', w panelu 'Kopia: brak', w zakladce Zadania migawki z rodzina i harmonogramem"
 else
-    bad "relacje: relacja snaponly" "$SO3"
+    bad "relacje: relacja snaponly" "$SO3" "$SO3Z"
 fi
 # Dolny panel (wlasciciel 2026-10-18, "nie rozumiem tej listy"): bez kopii wiersz to
 # sam dataset i host, nie surowy zakres "konto@host:ds -> bez kopii".
-if hasE "$SO3" '^║ hdd/solab   na 10\.0\.0\.9 +aktualne' && hasE "$SO3" 'Datasety relacji som: 1 dataset ' \
+if hasE "$SO3" '^║ hdd/solab   na 10\.0\.0\.9 +aktualne' && has "$SO3" 'som: [Datasety]  Zadania' \
    && hasE "$SO3" '^║ Dataset +Migawki +Szczeble' && ! printf '%s\n' "$SO3" | grep -qE 'zfsbackup-pve10@|bez kopii +aktualne'; then
-    ok "relacje: para snaponly -- wiersz 'dataset   na <host>' z monitorem 'aktualne', kolumny Dataset/Migawki, tytul liczy datasety"
+    ok "relacje: dataset snaponly -- wiersz 'dataset   na <host>' z monitorem 'aktualne', kolumny Dataset/Migawki"
 else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
@@ -1592,8 +1603,8 @@ else
     bad "relacje: e/p na snaponly" "$(cat "$SOL")"
 fi
 SO2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen zadania --width 160 --height 50 2>&1)"
-if [ "$(printf '%s\n' "$SO2" | grep -cE 'som +→ 10\.0\.0\.9 +migawka .*aktualne')" = 2 ]; then
-    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina i kierunkiem '→ <peer>'"
+if [ "$(printf '%s\n' "$SO2" | grep -cE '^║ som +migawka .*aktualne')" = 2 ]; then
+    ok "zadania: zadania snaponly to 'migawka' z wlasna rodzina"
 else
     bad "zadania: zadania snaponly" "$SO2"
 fi
@@ -1604,21 +1615,22 @@ rm -rf "$SOD" "$SOL"
 # ============================================================================
 N="$(screen nosniki)"
 # X11 (2026-10-12): kolumna Rodzaj po nazwie; sciezka sejf-b obcina sie wczesniej.
-if hasE "$N" '^║ sejf-a +zdjęcia ×2 +hdd/lab → bkp/sejf-a +30 2 \* \* \* +W SEJFIE +brak +║' && hasE "$N" '^║ sejf-b +zdjęcia ×2 +hdd/lab,hdd/backups… +po włożeniu +W SEJFIE'; then
-    ok "nosniki: wiersz = replika, zrodlo -> cel, harmonogram (on-insert po polsku), stan nosnika SLOWEM, kiedy ostatnia aktualna kopia (Kopia z)"
+if hasE "$N" '^║ sejf-a +W SEJFIE +brak +co dobę 02:30 +║' && hasE "$N" '^║ sejf-b +W SEJFIE +brak +po włożeniu +║'; then
+    ok "nosniki: wiersz = replika, stan nosnika SLOWEM, kiedy ostatnia aktualna kopia (Kopia z), harmonogram slowami (U21)"
 else
     bad "nosniki: wiersze" "$N"
 fi
 # KONTROLA CZYTELNIKA: sejf-b nie ma linii `media` (--fixed). Stary list-replicas
 # zwracal media="yes", recursive="latest" -- pola przesuniete o jedno przez
 # IFS=tab. Fikstura pochodzi z NAPRAWIONEGO czytelnika i ten ekran to przypina.
-NB="$(screen nosniki down)"
-if has "$NB" 'sejf-b -- szczegóły' && has "$NB" 'Harmonogram po włożeniu nośnika   stempel automated_   rekursywnie' && has "$NB" 'historia: latest'; then
-    ok "nosniki: panel repliki --fixed ma rekursje i historie na SWOICH miejscach (kontrola przesuniecia pol list-replicas)"
+NB="$(screen nosniki down --width 160)"
+NBT="$(screen nosniki down,tab --width 160)"
+if has "$NBT" 'sejf-b -- dataset' && hasE "$NBT" 'Z dziećmi +tak' && hasE "$NBT" 'Historia +latest'; then
+    ok "nosniki: dataset repliki --fixed ma rekursje i historie na SWOICH miejscach (kontrola przesuniecia pol list-replicas)"
 else
-    bad "nosniki: pola repliki --fixed" "$NB"
+    bad "nosniki: pola repliki --fixed" "$NBT"
 fi
-if has "$NB" 'Nośnik      W SEJFIE -- nośnika nie ma w maszynie'; then
+if hasE "$NB" 'Nośnik +W SEJFIE -- nośnika nie ma w maszynie'; then
     ok "nosniki: stan nosnika ma jedno zdanie wyjasnienia"
 else
     bad "nosniki: wyjasnienie stanu" "$NB"
@@ -1641,16 +1653,16 @@ json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 RALL="--status $P10/status.json --jobs $P10/list-jobs.json --monitors $P10/monitor.json --replicas $P10/replicas.json --stats $RST"
 Z2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z2" 'sejf-a +pve10 → bkp +replika ' && hasE "$Z2" 'sejf-b +pve10 → rpool +replika .*po włożeniu'; then
-    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', nosnik w kierunku, 'po włożeniu' bez godziny)"
+if hasE "$Z2" '^║ sejf-a +replika ' && hasE "$Z2" '^║ sejf-b +replika .*po włożeniu'; then
+    ok "zadania: repliki sa wierszami F2 (zadanie 'replika', 'po włożeniu' bez godziny)"
 else
     bad "zadania: wiersze replik" "$(printf '%s' "$Z2" | grep -E 'sejf|replika')"
 fi
 N2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $RALL --screen nosniki --width 200 --height 60 2>&1)"
-if has "$N2" 'Ost. bieg   2026-09-08 02:30   BŁĄD (rc=1)   2 s' && has "$N2" 'Biegi       4 w oknie statystyk, błędów 1'; then
-    ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc, czas) i biegi/bledy z job-stats"
+if hasE "$N2" 'Ostatni bieg +2026-09-08 02:30   BŁĄD \(rc=1\)' && hasE "$N2" 'Wywołania +4, błędów 1' && hasE "$N2" 'Czas +ostatni 2s'; then
+    ok "nosniki: panel repliki pokazuje ostatni bieg (kiedy, rc), czas i wywolania/bledy z job-stats"
 else
-    bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Biegi')"
+    bad "nosniki: biegi repliki" "$(printf '%s' "$N2" | grep -E 'Ostatni|Wywołania|Czas')"
 fi
 rm -f "$RST"
 # WERDYKT REPLIKI Z JEJ MONITORA (2026-10-08): linia bramy (`age`) daje monitor z
@@ -1665,7 +1677,7 @@ d.setdefault("monitors", []).append({"account": "root", "label": "sejf-a", "patt
 json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
 PYEOF
 Z3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$RMN" --replicas "$P10/replicas.json" --screen zadania --width 200 --height 60 2>&1)"
-if hasE "$Z3" 'sejf-a +pve10 → bkp +replika .*spóźnione' && hasE "$Z3" 'sejf-b +pve10 → rpool +replika .*bez monitora'; then
+if hasE "$Z3" '^║ sejf-a +replika .*spóźnione' && hasE "$Z3" '^║ sejf-b +replika .*bez monitora'; then
     ok "zadania: wiersz repliki bierze werdykt z JEJ monitora (sejf-a spóźniona), bez monitora zostaje 'bez monitora' (sejf-b)"
 else
     bad "zadania: werdykt repliki z monitora" "$(printf '%s' "$Z3" | grep -E 'sejf')"
@@ -1695,12 +1707,11 @@ fi
 # X11 (wlasciciel 2026-10-12): replika na liscie i w panelu mowi, CO TRAFIA NA DYSK --
 # kolumna Rodzaj (historia / zdjecia xN), panel: Rodzaj, Na dysku (z przykladem), Szyfrowane.
 F6R="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen nosniki --width 200 --height 40 2>&1)"
-if hasE "$F6R" '║ Replika +Rodzaj +Źródło → cel +Harmonogram' && hasE "$F6R" 'sejf-a +zdjęcia ×2 +hdd/lab' \
-   && has "$F6R" 'Rodzaj      własne zdjęcia' && has "$F6R" 'Na dysku    2 ostatnie zdjęcia = ok. 2 dni wstecz' \
-   && has "$F6R" 'Szyfrowane  nie'; then
-    ok "nosniki: X11 -- kolumna Rodzaj (zdjęcia ×2), panel: Rodzaj, Na dysku z przykladem, Szyfrowane"
+if hasE "$F6R" '║ Replika +Nośnik +Kopia z +Kiedy' && hasE "$F6R" 'Rodzaj +własne zdjęcia' \
+   && hasE "$F6R" 'Na dysku +2 ostatnie zdjęcia = ok\. 2 dni wstecz' && hasE "$F6R" 'Szyfrowane +nie'; then
+    ok "nosniki: X11 -- panel: Rodzaj, Na dysku z przykladem, Szyfrowane (U21: rodzaj w panelu, nie w liscie)"
 else
-    bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,8p)"
+    bad "nosniki: X11 Rodzaj repliki" "$(printf '%s' "$F6R" | sed -n 2,12p)"
 fi
 # W19b (wlasciciel 2026-10-11/13): zaszyfrowany nosnik -- panel mowi "nośnik zaszyfrowany
 # (klucz: F8)", F8 pokazuje klucz z pliku; replika bez klucza: komunikat, bez okna.
@@ -1714,7 +1725,7 @@ PYEOF
 K1="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --width 200 --height 40 2>&1)"
 K2="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --keys F8 --width 200 --height 40 2>&1)"
 K3="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --replicas "$RMK" --screen nosniki --keys down,F8 --width 200 --height 40 2>&1)"
-if has "$K1" 'Szyfrowane  nośnik zaszyfrowany (klucz: F8)' && has "$K1" 'F8 Klucz' && has "$K2" 'Klucz nośnika repliki sejf-a' && has "$K2" 'ab12cd34ef56' \
+if hasE "$K1" 'Szyfrowane +nośnik zaszyfrowany \(klucz: F8\)' && has "$K1" 'F8 Klucz' && has "$K2" 'Klucz nośnika repliki sejf-a' && has "$K2" 'ab12cd34ef56' \
    && ! has "$K3" 'Klucz nośnika' && has "$K3" 'replika sejf-b nie ma zaszyfrowanego nośnika'; then
     ok "nosniki: W19b -- panel mowi o zaszyfrowanym nosniku, F8 pokazuje klucz z pliku; replika bez klucza dostaje komunikat"
 else
@@ -1829,7 +1840,7 @@ else
     bad "linia: Esc" "$C"
 fi
 C="$(: > "$XL"; screen relacje "text:abc,down,down" --exec-log "$XL")"
-if hasE "$C" '@pve10:zfs-snapshot-all\$ abc_ *$' && has "$C" 'duplikat -- szczegóły'; then
+if hasE "$C" '@pve10:zfs-snapshot-all\$ abc_ *$' && has "$C" 'duplikat -- relacja'; then
     ok "linia: z tekstem w linii strzalki NIE ruszaja listy (kursor zostaje na pierwszym wierszu)"
 else
     bad "linia: strzalki przy tekscie" "$C"
@@ -1866,14 +1877,16 @@ fi
 # TAB = kolejny obiekt: lista -> linia polecen -> lista; w linii strzalka w gore to
 # historia takze przy pustej linii, Esc wraca do listy.
 C="$(: > "$XL"; screen zadania "text:ls -l,enter,tab,up" --exec-log "$XL")"
+C="$(: > "$XL"; screen zadania "text:ls -l,enter,tab,tab,up" --exec-log "$XL")"
 if hasE "$C" '@pve10:zfs-snapshot-all\$ ls -l_ *$'; then
-    ok "linia: Tab przenosi do linii polecen, strzalka w gore przy pustej linii = historia"
+    ok "linia: Tab (lista -> przebiegi -> linia) przenosi do linii polecen, strzalka w gore przy pustej linii = historia"
 else
     bad "linia: Tab + historia" "$C"
 fi
 C1="$(screen zadania "down" | sed 1d)"; C2="$(screen zadania "tab,down" | sed 1d)"; C3="$(screen zadania "tab,tab,down" | sed 1d)"; C4="$(screen zadania "tab,esc,down" | sed 1d)"
+C1="$(screen zadania "down" | sed 1d)"; C2="$(screen zadania "tab,tab,down" | sed 1d)"; C3="$(screen zadania "tab,tab,tab,down" | sed 1d)"; C4="$(screen zadania "tab,esc,down" | sed 1d)"
 if [ "$C2" != "$C1" ] && [ "$C3" = "$C1" ] && [ "$C4" = "$C1" ]; then
-    ok "linia: w linii polecen strzalki nie ruszaja listy; Tab albo Esc wraca do listy"
+    ok "linia: w linii polecen strzalki nie ruszaja listy; Tab (lista -> przebiegi -> linia -> lista) albo Esc z dolnego panelu wraca do listy"
 else
     bad "linia: fokus Tab" "$(printf '%s\n' "$C2" | head -8)"
 fi
@@ -1922,8 +1935,8 @@ else
     bad "wyglad: szerokosci linii"
 fi
 if [ "$(printf '%s\n' "$S120" | grep -c '║.*│')" -gt 5 ] && [ "$(printf '%s\n' "$S" | grep -c '║.*│')" -gt 5 ] \
-        && has "$S" '╔═ Datasety relacji' && has "$S120" '╔═ Datasety relacji'; then
-    ok "wyglad: F3 w trzech panelach przy 80 i 120 -- lista, panel obok, pary na dole"
+        && has "$S" '╔═ duplikat (wg rekordu, nie crona): [Datasety]' && has "$S120" '╔═ duplikat (wg rekordu, nie crona): [Datasety]'; then
+    ok "wyglad: F3 w trzech panelach przy 80 i 120 -- lista, panel obok, zakladki na dole"
 else
     bad "wyglad: trzy panele" "$S" "$S120"
 fi
@@ -1942,7 +1955,8 @@ else
     bad "wyglad: tryb ASCII"
 fi
 A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje 2>&1)"
-if hasE "$A" '^\| lab-ct201 +pve10<192.168.28.99 +dzia(ł|l)a +\|' && has "$A" 'Datasety relacji duplikat: 1 para, wg rekordu, nie crona' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
+A="$("$PY" "$TUI" --render-once --offline --ascii --now "$NOW" $ALL --screen relacje --width 120 2>&1)"
+if hasE "$A" '^\| lab-ct201 +backup +pve10<192.168.28.99 +dzia(ł|l)a +aktualne +\|' && has "$A" 'duplikat (wg rekordu, nie crona): [Datasety]' && has "$A" '192.168.28.99:hdd/lab/vm-101 -> hdd/backups/192.168.28.99/hdd/lab/vm-101'; then
     ok "wyglad: w ASCII te same slowa (aktualne, Zrodla) -- werdykt niesie slowo, nie tylko kolor"
 else
     bad "wyglad: slowa w ASCII" "$A"
@@ -1953,8 +1967,8 @@ if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' &&
 else
     bad "pomoc: F1" "$HLP"
 fi
-if has "$S" '1Pomoc2Zadania3Relacje4Transf5Szabl6Replika7Uruchom8Pauza9Plik11Odzysk12Wyjdź'; then
-    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Transf/Szabl/Wyjdz)"
+if has "$S" '1Pomoc2Zadania3Relacje4Hist5Szabl6Replika7Uruchom8Pauza9Plik11Odzysk12Wyjdź'; then
+    ok "wyglad: przy 80 kolumnach pasek miesci WSZYSTKIE klawisze F, z F11 i F12 (zapis skrocony, cyfra = F; najciasniej Hist/Szabl/Wyjdz)"
 else
     bad "wyglad: listwa F" "$S"
 fi
@@ -1972,7 +1986,7 @@ for _sc in zadania relacje transfery szablony nosniki; do
             nosniki) _acts="Uruchom" ;; *) _acts="" ;;
         esac
         # Transf/Szabl/Wyj: pelne slowo albo najciasniejszy skrot (80 kolumn, 2026-10-18).
-        for _a in Pomoc Zadania Relacje Transf Szabl Replika Odzysk Wyj $_acts; do
+        for _a in Pomoc Zadania Relacje Hist Szabl Replika Odzysk Wyj $_acts; do
             [ "$(printf '%s' "$_bar" | grep -o "$_a" | wc -l)" -eq 1 ] || NODUP="$NODUP $_sc/$_w:$_a"
         done
     done
@@ -1996,7 +2010,7 @@ for w in (80, 120, 200):
 print(" ".join(out))
 PYEOF
 )"
-if [ "$MKOUT" = "80:4Transfery 120:F4 Transfery 200:F4 Transfery" ]; then
+if [ "$MKOUT" = "80:4Historia 120:F4 Historia 200:F4 Historia" ]; then
     ok "klawisze: aktywne okno zaznaczone na pasku kolorem (marks), bez nawiasow"
 else
     bad "klawisze: zaznaczenie aktywnego okna" "got=$MKOUT"
