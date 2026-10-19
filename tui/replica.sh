@@ -241,16 +241,69 @@ replica_engine() {   # 0 = coś zmienione (ARGV zbuduje krok 6), 1 = Wstecz bez 
     done
 }
 step=1
-if [ "$EDIT" -eq 1 ]; then
+# ZMIANA REPLIKI = JEDNA LISTA (U8, właściciel 2026-10-18: "musiałem przejść całą ścieżkę
+# repliki, żeby wybrać »nie« przy »uruchom po włożeniu« -- kreator jest do bani"). Lista
+# pokazuje OBECNE wartości; pozycja uruchamia tylko swój krok kreatora i wraca tutaj (ONE),
+# "Po włożeniu dysku" przełącza się od razu, "Zapisz zmiany" = plan i WYKONAJ (krok 6,
+# ta sama komenda add-replica co w kreatorze).
+MENU=0; ONE=""
+trig_calc() {    # TRIG/UNTRIG: czy plan zakłada albo zdejmuje regułę udev "po włożeniu"
+    TRIG=no
+    if [ "$MEDIA" = removable ]; then
+        { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; } && [ "$RULE_HERE" != yes ] && TRIG=yes
+    fi
+    # W DRUGĄ STRONĘ (właściciel 2026-10-18: "skoro możemy włączać, chcemy móc
+    # wyłączyć"): reguła jest jedna na host, więc schodzi, gdy po tej zmianie
+    # ŻADNA replika -- ta ani inne -- nie rusza po włożeniu dysku.
+    UNTRIG=no
+    if [ "$RULE_HERE" != no ] && [ "$TRIG" = no ] \
+       && ! { [ "$MEDIA" = removable ] && { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; }; } \
+       && ! awk -F'\t' -v n="$NAME" '$1 != n && ($4 == "on-insert" || $11 == "yes") { f = 1 } END { exit !f }' "$TMPD/rep.tsv"; then
+        UNTRIG=yes
+    fi
+}
+sched_words() {
+    case "$1" in
+        "0 22 * * *") echo "codziennie 22:00" ;; "0 22 * * 5") echo "co tydzień, piątek 22:00" ;;
+        "0 22 1 * *") echo "co miesiąc, 1. dnia 22:00" ;; on-insert) echo "tylko po włożeniu dysku" ;;
+        *) echo "cron: $1" ;;
+    esac
+}
+one_allows() {   # <krok> -> 0, gdy krok należy do pozycji wybranej z listy
+    case "$ONE:$1" in
+        zrodla:2|dysk:25|dysk:26|nosnik:3|nosnik:4|kiedy:5|zapisz:6) return 0 ;;
+    esac
+    return 1
+}
+edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
+    local items n _src
     while :; do
         geom
-        wt --title "Zmień replikę $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags \
-           --menu "Co zmienić?" 11 "$W" 3 \
-           kreator "Źródła, nośnik i harmonogram…" \
-           silnik "Ustawienia silnika -- migawki, historia, na dysku…" \
-           restart "Zacznij od nowa na tym dysku (pełna kopia)…" || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
-        [ "$WT_OUT" = kreator ] && break
-        if [ "$WT_OUT" = restart ]; then
+        n=$(printf '%s' "$SRCS" | tr ',' '\n' | grep -c .)
+        _src="${SRCS%%,*}"; [ "$n" -gt 1 ] && _src="$_src (+$((n - 1)))"
+        items=(zrodla "Źródła:     $_src"
+               dysk   "Na dysku:   $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące migawki)" || { [ -n "$KEEP" ] && echo "własne, $KEEP ostatnich" || echo "własne, odbicie kolektora"; })"
+               nosnik "Nośnik:     $DST ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
+               kiedy  "Kiedy:      $(sched_words "$SCHED")")
+        if [ "$MEDIA" = removable ] && [ "$SCHED" != on-insert ]; then
+            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia od razu")
+            else items+=(onins "[ ] Po włożeniu dysku: nic, tylko wg harmonogramu"); fi
+        fi
+        items+=(silnik "Ustawienia silnika…" restart "Zacznij od nowa na tym dysku (pełna kopia)…"
+                zapisz "Zapisz zmiany (plan, WYKONAJ)")
+        wt --title "Zmień replikę $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${LAST_ITEM:-zrodla}" \
+           --menu "Co zmienić? Pozycja otwiera tylko swój krok; nic nie jest zapisane przed WYKONAJ." "$(fit $((${#items[@]} / 2 + 1)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" \
+           || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+        LAST_ITEM="$WT_OUT"
+        case "$WT_OUT" in
+            zrodla) ONE=zrodla; step=2; return 0 ;;
+            dysk)   ONE=dysk; step=25; return 0 ;;
+            nosnik) ONE=nosnik; step=3; return 0 ;;
+            kiedy)  ONE=kiedy; step=5; return 0 ;;
+            zapisz) ONE=zapisz; trig_calc; step=6; return 0 ;;
+            onins)  [ "$ONINS" = yes ] && ONINS=no || ONINS=yes ;;
+            silnik) replica_engine || : ;;
+            restart)
             # W18 (właściciel 2026-10-12): gdy łańcuch repliki się zerwał (relację usunięto
             # i założono od nowa), jedyna droga to pełna kopia. Nowa obok starej, stara znika
             # dopiero po udanej nowej -- plan i WYKONAJ, jak każda zmiana.
@@ -267,21 +320,29 @@ if [ "$EDIT" -eq 1 ]; then
             if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' zaczęła od nowa (rc=0). Enter = dalej"
             else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- stara kopia na dysku została; powód wyżej. Enter = dalej"; fi
             [ -t 0 ] && read -r _
-            exit "$RC"
-        fi
-        replica_engine || continue
-        # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
-        info "Replika $NAME" "Czytam datasety tego hosta..."
-        if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
-            wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
-            clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
-        fi
-        basket_from_replica; basket_xargs
-        ENGINE_ONLY=1; step=6; break
+            exit "$RC" ;;
+        esac
     done
+}
+if [ "$EDIT" -eq 1 ]; then
+    MENU=1
+    # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
+    info "Replika $NAME" "Czytam datasety tego hosta..."
+    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+        wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
+        clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+    fi
+    basket_from_replica; basket_xargs
+    # Próg ostrzeżenia repliki "po włożeniu" zostaje, gdy "Kiedy" nie jest ruszane.
+    [ "$SCHED" = on-insert ] && case "${CURWARN:-}" in *d) MONDAYS="${CURWARN%d}" ;; esac
+    edit_menu
 fi
 while :; do
     geom
+    if [ "$MENU" -eq 1 ] && ! one_allows "$step"; then
+        edit_menu
+        continue
+    fi
     case "$step" in
     1)  # nazwa
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
@@ -304,6 +365,7 @@ while :; do
             [ -n "$SRCS" ] && basket_from_replica
         fi
         if ! basket_step; then
+            [ "$MENU" -eq 1 ] && { step=0; continue; }
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
             step=1; continue
         fi
@@ -500,24 +562,14 @@ PYEOF
         # Okno B (P5, uwaga 6): ZAWSZE dla wymiennego z harmonogramem -- "po włożeniu" jest
         # ustawieniem TEJ repliki (on_insert), nie hosta. Reguła udev (jedna na host)
         # zakładana albo odnawiana, gdy potrzebna.
-        TRIG=no
-        if [ "$MEDIA" = removable ]; then
+        if [ "$MEDIA" = removable ] && [ "$MENU" -eq 0 ]; then
             if [ "$SCHED" != on-insert ]; then
                 _dn=""; [ "$ONINS" = yes ] || _dn="--defaultno"
                 if wt --title "Replika $NAME -- także po włożeniu?" --yes-button "Tak" --no-button "Nie" $_dn \
                    --yesno "Uruchamiać kopię także od razu po włożeniu dysku tej repliki?\n\nTak: włożony dysk -- kopia od razu, potem dalej wg harmonogramu.\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje." 11 "$W"; then ONINS=yes; else ONINS=no; fi
             fi
-            { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; } && [ "$RULE_HERE" != yes ] && TRIG=yes
         fi
-        # W DRUGĄ STRONĘ (właściciel 2026-10-18: "skoro możemy włączać, chcemy móc
-        # wyłączyć"): reguła jest jedna na host, więc schodzi, gdy po tej zmianie
-        # ŻADNA replika -- ta ani inne -- nie rusza po włożeniu dysku.
-        UNTRIG=no
-        if [ "$RULE_HERE" != no ] && [ "$TRIG" = no ] \
-           && ! { [ "$MEDIA" = removable ] && { [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; }; } \
-           && ! awk -F'\t' -v n="$NAME" '$1 != n && ($4 == "on-insert" || $11 == "yes") { f = 1 } END { exit !f }' "$TMPD/rep.tsv"; then
-            UNTRIG=yes
-        fi
+        trig_calc
         step=6 ;;
     6)  # plan
         ARGV=("$ZB" add-replica "$NAME" "--source=$SRCS" "--dst=$DST" "--schedule=$SCHED")

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 608745d9351cbc96 -->
+<!-- status-covers-digest: e6598de33fa84ad3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U8: zmiana repliki = jedna lista z obecnymi wartościami (2026-10-19; `finisz/U8-replika`).** Właściciel:
+  „musiałem przejść całą ścieżkę repliki, żeby wybrać »nie« przy »uruchom po włożeniu«”. „Zmień replikę” (Enter + `e`
+  na F6) to lista: Źródła, Na dysku, Nośnik, Kiedy, `[x]/[ ] Po włożeniu dysku` (przełącza od razu, bez okna),
+  Ustawienia silnika, Zacznij od nowa, Zapisz zmiany. Pozycja uruchamia tylko swój krok kreatora i wraca na listę
+  (Wstecz w kroku też); „Zapisz zmiany” = plan i WYKONAJ, ta sama komenda `add-replica`. Reguła udev liczona przy
+  zapisie (zakładana albo zdejmowana jak wcześniej). Nowa replika -- kreator bez zmian. Na żywo pve9 (`usb1`):
+  przełącznik -> plan `--on-insert=yes` i „reguła ZOSTANIE ZAŁOŻONA”, plan odrzucony -> config bez zmian.
+  Testy: `test/tui` na pve9 348/0 (6 testów zmiany przepisanych na listę, 1 nowy).
 
 - **FINISZ U7: klawisze okien tylko na dolnej ramce (2026-10-19; `finisz/U7-klawisze`).** Właściciel (powtórka uwagi 4
   z 10-09): w treści okien GUI nie ma list klawiszy. Potwierdzenie: stopka `t wykonaj  [w wyłącz na źródle]  Tab do
