@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 04c69e8758bd8724 -->
+<!-- status-covers-digest: bb129e7537387d83 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U19: „Zmień relację” = lista zmian, jedno WYKONAJ (2026-10-19; `finisz/zmien-relacje-lista`).**
+  Właściciel: „nie można zmienić wiele ustawień i na końcu zaimplementować, tylko po jednym kroku”. Teraz menu
+  okna pokazuje przy pozycjach obecną albo czekającą wartość, a przy zmienionych znak `[zmiana]`; Datasety,
+  Szablon, Harmonogram i retencja oraz Ustawienia silnika sprawdzają zmianę planem czasownika (odmowa od razu,
+  przed WYKONAJ), Adres hosta tylko zapisuje nowy adres; każde okno wraca do menu. „Zapisz zmiany (N)” pokazuje jeden plan wszystkich zmian i po WYKONAJ uruchamia
+  czasowniki po kolei: `activate --host`, `add-source`/`remove-source`, `edit-relation` albo `set-tiers`,
+  `set-transfer`; pierwszy, który odmówi, zatrzymuje resztę. Wstecz z czekającymi zmianami pyta o porzucenie.
+  Ręczna edycja configu i „Zapisz jako szablon” działają od razu, osobno, jak dotąd. Scalenie okna zmiany
+  z kreatorem (U25) -- następne, po symulacji.
 
 - **FINISZ U24: eksport -> usuń -> import znowu działa; dodanie datasetu i szablon po imporcie (2026-10-19;
   `finisz/import-rejoin`).** Właściciel na pve10 (`pve9b`): import padał „Permission denied”, bo `delete-relation`

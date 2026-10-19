@@ -3761,6 +3761,7 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
 # (nowe miejsce), Spacja na hdd/data (obecne miejsce znika), Enter. Wstepne zaznaczenie hdd/data
 # dowodzi remove-source: Spacja na NIE zaznaczonym hdd/data zrobilaby z niego miejsce, nie usuniecie.
 EROUT=$(ER_TREE='goto:hdd/iso,space,goto:hdd/data,space,enter' er_run "0${T}dane
+0${T}wykonaj
 0${T}
 "); ERRC=$?
 ERB="$(cat "$ER/tree.log" 2>/dev/null)"
@@ -3788,6 +3789,7 @@ EROUT=$(er_run "0${T}silnik
 0${T}hist
 0${T}newest
 0${T}__done__
+0${T}wykonaj
 0${T}
 "); ERRC=$?
 ERS="$(grep -F 'Ustawienia silnika: r1' "$ER/wt.log" | grep -F -e '--menu' | head -1)"
@@ -3797,6 +3799,26 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'set-transfer r1 --history=newest --plan' "$ER/
     ok "edit-relation: Ustawienia silnika (W16) -- obecne wartosci z show-config, zmiana historii -> set-transfer --plan, po WYKONAJ --yes"
 else
     bad "edit-relation: Ustawienia silnika (W16)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$ERS" "$(tail -3 "$ER/err")"
+fi
+# LISTA ZMIAN (wlasciciel 2026-10-19: "nie mozna zmienic wiele ustawien i na koncu
+# zaimplementowac, tylko po jednym kroku"): adres + silnik w jednym oknie, JEDEN plan z oboma,
+# jedno WYKONAJ; czasowniki po kolei (adres pierwszy), nic przed WYKONAJ.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+0${T}silnik
+0${T}hist
+0${T}newest
+0${T}__done__
+0${T}wykonaj
+0${T}
+"); ERRC=$?
+ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
+ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmień relację r1' | sed -n 3p)
+if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
+   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'Zapisz zmiany (2)' && has "$ERM" 'kopie  [zmiana]'; then
+    ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana]), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
+else
+    bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
 fi
 # X10 (wlasciciel 2026-10-14): sprzecznych ustawien nie da sie wybrac -- wysylka zaszyfrowana
 # (raw) bez wiersza Kompresja, lustro (passive) bez wiersza Historia; kontrola: zwykla relacja ma oba.
@@ -3825,26 +3847,33 @@ fi
 # `activate r1 --host=NOWY --skip-final-catchup --yes`. Bez domkniecia kopii starym adresem.
 EROUT=$(er_run "0${T}adres
 0${T}10.99.0.9
+0${T}wykonaj
 0${T}
 "); ERRC=$?
 ERA="$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | head -1)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
    && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
    && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' \
-   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Adres hosta -- po przeniesieniu kolektora'; then
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'po przeniesieniu kolektora'; then
     ok "edit-relation: Adres hosta -- pole z zapisanym adresem, WYKONAJ = jedno activate --host= --skip-final-catchup --yes"
 else
     bad "edit-relation: Adres hosta" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERA" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
-# Wstecz z potwierdzenia wraca do pola, Wstecz z pola do menu, Wstecz z menu = nic nie zrobione.
+# LISTA ZMIAN (wlasciciel 2026-10-19): adres czeka na liscie; Wstecz z menu pyta o porzucenie
+# ("Wroc" = menu, pole adresu otwarte drugi raz ma czekajacy adres), "Porzuc" = nic nie uruchomione.
 EROUT=$(er_run "0${T}adres
 0${T}10.99.0.9
 1${T}
 1${T}
+0${T}adres
 1${T}
+1${T}
+0${T}
 "); ERRC=$?
-if ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -cF -e '--inputbox')" -eq 2 ]; then
-    ok "edit-relation: Adres hosta -- Wstecz z WYKONAJ wraca do pola, potem do menu; bez WYKONAJ nic nie uruchomione"
+if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Porzucić zmiany?' "$ER/wt.log")" -eq 2 ] \
+   && grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | sed -n 2p | grep -qF '~ 10.99.0.9 ~' \
+   && grep -F -e '--menu' "$ER/wt.log" | sed -n 2p | grep -qF 'Adres hosta: 10.99.0.9 [zmiana]'; then
+    ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
 fi
@@ -3896,6 +3925,7 @@ fi
 # configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego save-profile,
 # delete-profile ani edit-relation). Zrodlo hourly 24 -> 12 w oknie zrodla = --src-tier.
 EROUT=$(er_run "0${T}harm
+0${T}wykonaj
 0${T}
 " "enter\nright,bs,bs,1,2,enter"); ERRC=$?
 if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
@@ -3909,9 +3939,9 @@ fi
 # X20 (wlasciciel 2026-10-14): Wstecz z okna zrodla wraca do tabeli celu, ktora pokazuje
 # WPISANA zmiane (dobowe 5), nie znow wartosc z configu (7); zmiana idzie do set-tiers raz.
 EROUT=$(er_run "0${T}harm
-1${T}
+0${T}wykonaj
 0${T}
-" "down,down,right,bs,5,enter\nenter\nesc\nenter\nenter"); ERRC=$?
+" "down,down,right,bs,5,enter\nesc\nenter\nenter"); ERRC=$?
 ERT2=$(printf '%s' "$EROUT" | awk '/Harmonogram i retencja: W CELU KOPII/{n++} n==2' | grep -E '\] dobowe')
 if [ "$ERRC" -eq 0 ] && printf '%s' "$ERT2" | grep -qE '\[X\] dobowe +5 ' && grep -qx 'set-tiers r1 --tier=daily --keep=5 --yes' "$ER/zb.log"; then
     ok "edit-relation: X20 -- po Wstecz tabela celu pamieta wpisana zmiane (dobowe 5), set-tiers dostaje ja raz"
@@ -3922,6 +3952,7 @@ fi
 # jak w celu) -- okno zrodla widzi szczeble po zmianach w celu. set-tiers dostaje dodanie
 # i liczbe zrodla tego szczebla, bez drugiego dodawania.
 EROUT=$(er_run "0${T}harm
+0${T}wykonaj
 0${T}
 " "down,down,down,space,enter\nenter"); ERRC=$?
 ERSRC=$(printf '%s' "$EROUT" | sed -n '/Retencja: W ŹRÓDLE KOPII/,$p')
@@ -3931,15 +3962,19 @@ if [ "$ERRC" -eq 0 ] && printf '%s' "$ERSRC" | grep -q 'tygodniowe' \
 else
     bad "edit-relation: X15 nowy szczebel w oknie zrodla" "rc=$ERRC" "$(grep '^set-tiers' "$ER/zb.log")" "$(printf '%s' "$ERSRC" | grep -E 'godzin|dobow|tygod')"
 fi
-# Wstecz z planu = okno zrodla (trzecia tabela), Wstecz tam = tabela celu (czwarta), Esc = menu;
-# nic nie zainstalowane, zadnego pliku szablonu.
+# Zmiana tabeli sprawdzona planem i czeka na liscie; Wstecz z planu WYKONAJ wraca do menu,
+# Wstecz z menu + Porzuc = nic nie zainstalowane, zadnego pliku szablonu.
 EROUT=$(er_run "0${T}harm
+0${T}wykonaj
 1${T}
-" "enter\nright,bs,bs,1,2,enter\nesc\nesc"); ERRC=$?
-ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
-if [ "$ERRC" -ne 0 ] && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
-   && [ "$ERT" = 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|Harmonogram i retencja: W CELU KOPII|' ]; then
-    ok "edit-relation: plan nie wykonany -- Wstecz o jeden krok (zrodlo, potem cel), nic nie zainstalowane, zaden szablon nie zapisany"
+1${T}
+0${T}
+" "enter\nright,bs,bs,1,2,enter"); ERRC=$?
+ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmień relację r1' | sed -n 2p)
+if [ "$ERRC" -eq 1 ] && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" \
+   && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
+   && has "$ERT" '(tabela)  [zmiana]' && has "$ERT" 'Zapisz zmiany (1)'; then
+    ok "edit-relation: zmiana tabeli czeka na liscie ([zmiana], Zapisz zmiany (1)); Wstecz z planu i Porzuc -- nic nie zainstalowane"
 else
     bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"
 fi
@@ -3951,16 +3986,17 @@ EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
 1${T}
-" "enter\nesc"); ERRC=$?
+" "esc"); ERRC=$?
 ERT=$(printf '%s' "$EROUT" | grep -oE 'Harmonogram i retencja: W CELU KOPII|Retencja: W ŹRÓDLE KOPII' | tr '\n' '|')
-if [ "$ERT" = 'Retencja: W ŹRÓDLE KOPII|Retencja: W ŹRÓDLE KOPII|' ] && [ "$(grep -c '^edit-relation r1 --profile=d30h24 .* --plan' "$ER/zb.log")" = 1 ]; then
-    ok "edit-relation: X5 -- Wstecz z planu wraca do okna retencji zrodla (drugi raz to samo okno), nie do listy szablonow"
+if [ "$ERT" = 'Retencja: W ŹRÓDLE KOPII|' ] && [ "$(grep -cF 'użyj szablonu' "$ER/wt.log")" -eq 2 ] && ! grep -q '^edit-relation r1 --profile=d30h24' "$ER/zb.log"; then
+    ok "edit-relation: X5 -- Wstecz z okna retencji zrodla = jeden krok, do listy szablonow; nic nie liczone"
 else
     bad "edit-relation: X5 Wstecz z planu" "kolejnosc okien: $ERT" "$(cat "$ER/zb.log")"
 fi
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
+0${T}wykonaj
 0${T}
 " "right,bs,bs,1,2,enter"); ERRC=$?
 # X27 etap B (wlasciciel 2026-10-14): szablon i liczby zrodla JEDNYM zapisem -- jedno
@@ -3979,8 +4015,9 @@ fi
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
+0${T}wykonaj
 1${T}
-" "enter\nesc"); ERRC=$?
+" "enter"); ERRC=$?
 ERW=$(cat "$ER/wt.log")
 if has "$ERW" 'Uwaga: szablon nadpisze liczby w źródle' && has "$ERW" 'dobowe      źródło trzyma 7, szablon da 30' \
    && ! has "$ERW" 'godzinowe   źródło trzyma' && has "$ERW" 'UWAGA -- źródło dostanie liczby szablonu'; then
@@ -4003,14 +4040,16 @@ fi
 EROUT=$(ER_HAND=1 er_run "0${T}szablon
 0${T}d30h24
 0${T}
+0${T}wykonaj
 1${T}
-" "enter\nesc"); ERRC=$?
+" "enter"); ERRC=$?
 ERP=$(cat "$ER/wt.log")
 EROUT=$(er_run "0${T}szablon
 0${T}d30h24
 0${T}
+0${T}wykonaj
 1${T}
-" "enter\nesc")
+" "enter")
 ERP0=$(cat "$ER/wt.log")
 if has "$ERP" 'UWAGA: config tej relacji był zmieniany ręcznie.' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
    && has "$ERP" 'Wstecz i nie zmieniaj tej relacji w GUI' && ! has "$ERP0" 'zmieniany ręcznie'; then

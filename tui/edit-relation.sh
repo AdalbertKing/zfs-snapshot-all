@@ -131,28 +131,23 @@ address_flow() {
     while :; do
         geom
         wt --title "Adres hosta: $NAME" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\nIP albo nazwa, opcjonalnie :port.\n\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\n\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada." 14 "$W" "$cur" || return 0
+           --inputbox "Nowy adres źródła $SRCNAME po przeniesieniu kolektora:\nIP albo nazwa, opcjonalnie :port.\n\nZapisany: ${cur:--}   Cron idzie przez: ${inst:--}\n\nUżywaj PO przeniesieniu, gdy nowy adres już odpowiada." 14 "$W" "${P_HOST:-$cur}" || return 0
         new="${WT_OUT// /}"
         [ -n "$new" ] || continue
         case "$new" in
             *[!A-Za-z0-9.:_-]*) wt --title "Zły adres" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie i :port." 8 "$W"; continue ;;
         esac
-        wt --title "Adres hosta: $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" --defaultno \
-           --yesno "Przełączyć relację $NAME na adres $new?\n\nZapiszę nowy adres, sprawdzę, że odpowiada pod nim ten sam host\n(klucz i wspólna migawka), i przestawię crona. Stary adres zostaje\nzapamiętany jako zapasowy.\n\nPierwsza kopia przez nowe łącze przeniesie zmiany od ostatniej kopii." 15 "$W" || continue
-        clear 2>/dev/null
-        echo "=== zfs-backup.sh activate $NAME --host=$new --skip-final-catchup --yes"
-        "$ZB" activate "$NAME" "--host=$new" --skip-final-catchup --yes; rc=$?
-        echo
-        if [ "$rc" -eq 0 ]; then
-            echo "=== Gotowe: relacja $NAME działa przez $new."
-        else
-            echo "=== Przerwane (rc=$rc) -- przyczyna wyżej. Cron dalej idzie starym adresem."
-            echo "    Popraw adres i spróbuj jeszcze raz: e na relacji -> Adres hosta."
-        fi
-        echo "Enter = dalej"
-        [ -t 0 ] && read -r _
-        exit "$rc"
+        # LISTA ZMIAN (właściciel 2026-10-19: "nie można zmienić wiele ustawień i na końcu
+        # zaimplementować, tylko po jednym kroku"): adres czeka na liście, WYKONAJ jest jedno,
+        # w "Zapisz zmiany". Ten sam adres co zapisany = brak zmiany.
+        if [ "$new" = "$cur" ] || [ "$new" = "${cur%:22}" ]; then P_HOST=""; else P_HOST="$new"; fi
+        return 0
     done
+}
+# Wykonanie zmiany adresu (z "Zapisz zmiany"): zapis, sprawdzenie tego samego hosta, cron.
+address_apply() {
+    echo "\$ $ZB activate $NAME --host=$P_HOST --skip-final-catchup --yes"; echo
+    "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes
 }
 # Zmiana adresu w toku: jedyne, co tu ma sens, to poprawić adres -- prosto do tego okna.
 #   endpoint_change_pending -- nowy adres zapisany, niesprawdzony (np. literówka);
@@ -160,8 +155,18 @@ address_flow() {
 #                              starego, activate zatrzymał się przed instalacją
 #                              (zmierzone na pve10, 2026-10-17).
 if { [ "$STATE" = endpoint_change_pending ] || [ "$STATE" = endpoint_verified ]; } && [ "$PEER" != - ]; then
+    P_HOST=""
     address_flow
-    exit 0
+    [ -n "${P_HOST:-}" ] || exit 0
+    wt --title "Adres hosta: $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" --defaultno \
+       --yesno "Relacja $NAME: nowy adres źródła $P_HOST.\nSprawdzenie, że to ten sam host, potem cron przez nowy adres.\n\nKomenda: $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes" 12 "$W" || exit 1
+    clear 2>/dev/null
+    address_apply; rc=$?
+    echo
+    if [ "$rc" -eq 0 ]; then echo "=== Gotowe: relacja $NAME działa przez $P_HOST."
+    else echo "=== Przerwane (rc=$rc) -- przyczyna wyżej. Cron dalej idzie starym adresem. Popraw adres: e na relacji."; fi
+    echo "Enter = dalej"; [ -t 0 ] && read -r _
+    exit "$rc"
 fi
 if [ "$STATE" != active ]; then
     wt --title "Nie da się zmienić '$NAME'" --msgbox "Relacja '$NAME' jest w stanie '${STATE}'.\nZmieniać można tylko relację zainstalowaną (active)." 10 "$W"
@@ -331,7 +336,7 @@ harm_flow() {
     fi
     # Pseudoszablony "@rel" (cel) i "@rel-src" (źródło) w kształcie, który czytają tabela i
     # okno źródła: rel_tiers pisze je z configu (rt.json) i zsumowanych zmian tabeli.
-    : >"$TMPD/rargs"; : >"$TMPD/rargs.acc"; rel_tiers
+    : >"$TMPD/rargs"; printf '%s\n' ${P_RARGS[@]+"${P_RARGS[@]}"} | grep . >"$TMPD/rargs.acc"; rel_tiers
     local SAVE_P="${PROFILE:-}" SAVE_S="${CUR_S:-}"
     PROFILE="@rel"; CUR_S="@rel-src"; SRCKEEP=""
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
@@ -370,18 +375,12 @@ harm_flow() {
           grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|; s/profile__[^ ]*__//' | head -40
           echo
           echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/plan2.txt"
-        if ! yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno; then
-            [ "$nsrc" -gt 0 ] && hs=2 || hs=1; continue
-        fi
-        clear 2>/dev/null
-        echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-        "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; rc=${PIPESTATUS[0]}
-        [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-        echo
-        if [ "$rc" -eq 0 ]; then echo "=== GOTOWE: szczeble relacji '$NAME' zmienione w configu (rc=0). Enter = dalej"
-        else echo "=== NIE UDAŁO SIĘ (rc=$rc) -- config i cron bez zmian; powód w linii FATAL powyżej. Enter = dalej"; fi
-        [ -t 0 ] && read -r _
-        exit "$rc"
+        # Plan przeszedł -- zmiana czeka na liście ("Zapisz zmiany" wykona wszystko razem).
+        P_TIERS=(${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"}); cp "$TMPD/plan2.txt" "$TMPD/p_tiers.txt"
+        P_RARGS=(${RARGS[@]+"${RARGS[@]}"})   # tabela celu otwarta drugi raz startuje od nich
+        P_EDIT=()
+        PROFILE="$SAVE_P"; CUR_S="$SAVE_S"
+        return 0
     done
 }
 
@@ -443,6 +442,11 @@ PYEOF
     [ -n "${c_h:-}" ] || { c_h=default; c_c=default; c_x=default; c_a=default; }
     c_r="${c_r%$'\r'}"   # ostatnie pole: Python na Windows konczy linie CRLF
     p_h="$c_h"; p_c="$c_c"; p_x="$c_x"; p_a="$c_a"
+    # Zmiana czekająca na liście -- okno startuje od niej, nie od zainstalowanej.
+    for v in ${P_TRANSFER[@]+"${P_TRANSFER[@]}"}; do
+        case "$v" in --history=*) p_h="${v#*=}" ;; --compression=*) p_c="${v#*=}" ;;
+                     --cipher=*) p_x="${v#*=}" ;; --autotune=*) p_a="${v#*=}" ;; esac
+    done
     while :; do
         geom
         # X10 (właściciel 2026-10-14): lustro (synchro) ma to samo co źródło -- "tylko różnica"
@@ -516,7 +520,7 @@ PYEOF
                     [ "$p_x" = "$c_x" ] || ARGV+=("--cipher=$p_x")
                     [ "$p_a" = "$c_a" ] || ARGV+=("--autotune=$p_a")
                 fi
-                [ "${#ARGV[@]}" -gt 3 ] || return 0
+                [ "${#ARGV[@]}" -gt 3 ] || { P_TRANSFER=(); return 0; }
                 info "Ustawienia silnika" "Liczę plan..."
                 if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
                     out="$(grep -E '^FATAL' "$TMPD/stplan.txt" | tail -1 | sed 's/^FATAL: //')"
@@ -531,48 +535,107 @@ PYEOF
                     echo
                     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
                 } >"$TMPD/stplan2.txt"
-                yesno_text "$TMPD/stplan2.txt" "Ustawienia silnika: $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
-                clear 2>/dev/null
-                echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-                "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-                if [ -n "${ZFS_TUI_LOG:-}" ]; then
-                    { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
-                fi
-                echo
-                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: ustawienia silnika relacji '$NAME' zmienione (rc=0). Enter = dalej"
-                else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
-                [ -t 0 ] && read -r _
-                exit "$RC" ;;
+                # Plan przeszedł -- na listę zmian.
+                P_TRANSFER=("${ARGV[@]:3}"); cp "$TMPD/stplan2.txt" "$TMPD/p_transfer.txt"
+                return 0 ;;
         esac
     done
 }
 
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
+P_HOST=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_TRANSFER=()
+pending_count() {
+    local n=0
+    [ -n "$P_HOST" ] && n=$((n + 1))
+    [ -n "$P_ADDED$P_REMOVED" ] && n=$((n + 1))
+    [ "${#P_EDIT[@]}" -gt 0 ] && n=$((n + 1))
+    [ "${#P_TIERS[@]}" -gt 0 ] && n=$((n + 1))
+    [ "${#P_TRANSFER[@]}" -gt 0 ] && n=$((n + 1))
+    echo "$n"
+}
+# ZAPISZ ZMIANY: jeden plan wszystkich czekających zmian, jedno WYKONAJ, potem po kolei:
+# adres, datasety, szablon albo tabela szczebli, ustawienia silnika. Każdy krok to zwykły
+# czasownik z --yes; pierwszy, który odmówi, zatrzymuje resztę (to, co przed nim, zostaje).
+save_all() {
+    local n rc=0 a
+    {
+        echo "PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:"
+        echo
+        [ -n "$P_HOST" ] && { echo "1. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)"; echo; }
+        if [ -n "$P_ADDED$P_REMOVED" ]; then
+            echo "2. Datasety:"
+            for n in $P_ADDED; do echo "   DOJDĄ:    $n  (pierwsza pełna kopia od razu)"; done
+            for n in $P_REMOVED; do echo "   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)"; done
+            echo
+        fi
+        if [ "${#P_EDIT[@]}" -gt 0 ]; then echo "3. Szablon: $P_EDIT_WORDS"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TIERS[@]}" -gt 0 ]; then echo "3. Harmonogram i retencja (tabela):"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then echo "4. Ustawienia silnika:"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
+        echo "Komendy:"
+        [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
+        for n in $P_ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
+        for n in $P_REMOVED; do echo "  $(shq "$ZB") remove-source $NAME $n --yes"; done
+        [ "${#P_EDIT[@]}" -gt 0 ] && echo "  $(shq "$ZB") edit-relation $NAME $(for a in "${P_EDIT[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+        [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+        [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+    } >"$TMPD/saveplan.txt"
+    yesno_text "$TMPD/saveplan.txt" "Zmień relację $NAME -- plan wszystkich zmian" "WYKONAJ" "Wstecz" --defaultno || return 1
+    clear 2>/dev/null
+    : >"$TMPD/run.log"
+    run1() { echo "\$ $*"; echo; "$@" 2>&1 | tee -a "$TMPD/run.log"; return "${PIPESTATUS[0]}"; }
+    if [ -n "$P_HOST" ]; then run1 "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes || rc=$?; fi
+    if [ "$rc" -eq 0 ]; then for n in $P_ADDED; do run1 "$ZB" add-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
+    if [ "$rc" -eq 0 ]; then for n in $P_REMOVED; do run1 "$ZB" remove-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
+    if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && DONE=1; fi
+    if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
+    if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi
+    [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
+    echo
+    if [ "$rc" -eq 0 ]; then echo "=== GOTOWE: relacja '$NAME' zmieniona (rc=0). Enter = dalej"
+    else echo "=== ZATRZYMANE (rc=$rc) -- kroki przed tym, który odmówił, zostały; powód w linii FATAL powyżej. Enter = dalej"; fi
+    [ -t 0 ] && read -r _
+    exit "$rc"
+}
 while :; do
 ACTION=""
 while :; do
     geom
+    np=$(pending_count)
+    _ds="$(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')"
+    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  -> +$(printf '%s\n' $P_ADDED | grep -c .) -$(printf '%s\n' $P_REMOVED | grep -c .) [zmiana]"
+    _sz="$(cur_words)"; [ "${#P_EDIT[@]}" -gt 0 ] && _sz="-> $P_EDIT_WORDS [zmiana]"
+    _hm=""; [ "${#P_TIERS[@]}" -gt 0 ] && _hm="  [zmiana]"
+    _en=""; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="  [zmiana]"
     if [ "$SNAPONLY" -eq 1 ]; then
-    MENU=(dane    "Datasety -- na których robić migawki…"
-          szablon "Użyj szablonu -- harmonogram i retencja migawek na źródle"
-          harm    "Harmonogram i retencja migawek na źródle"
-          config  "Ręczna edycja konfigu (jak crontab -e)"
-          zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    MENU=(dane    "$(clip_label "Datasety ($_ds)$_dsp" $((W - 10)))"
+          szablon "$(clip_label "Szablon: $_sz" $((W - 10)))"
+          harm    "Harmonogram i retencja migawek na źródle (tabela)$_hm")
     else
-    MENU=(dane    "Datasety -- co kopiować…"
-          szablon "Użyj szablonu -- gotowy szablon dla celu, potem retencja źródła"
-          harm    "Harmonogram i retencja kopii w celu i źródle"
-          silnik  "Ustawienia silnika -- jak przesyłane są kopie…"
-          config  "Ręczna edycja konfigu (jak crontab -e)"
-          zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    MENU=(dane    "$(clip_label "Datasety -- co kopiować ($_ds)$_dsp" $((W - 10)))"
+          szablon "$(clip_label "Szablon: $_sz" $((W - 10)))"
+          harm    "Harmonogram i retencja kopii w celu i źródle (tabela)$_hm"
+          silnik  "Ustawienia silnika -- jak przesyłane są kopie$_en")
     fi
     # Adres hosta tylko przy zdalnym źródle: relacja lokalna nie ma adresu.
-    [ "$PEER" != - ] && MENU+=(adres "Adres hosta -- po przeniesieniu kolektora…")
-    wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item harm \
-       --menu "Relacja $NAME ze źródła ${SRCHOST}.  Szablon: $(cur_words)\n$(clip_label "Datasety ($(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')): ${SRCS//,/, }" $((W - 6)))\nCo zmienić?" 18 "$W" $((${#MENU[@]} / 2)) \
-       "${MENU[@]}" || { clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
-    ACTION="$WT_OUT"
+    [ "$PEER" != - ] && MENU+=(adres "$(clip_label "Adres hosta: ${P_HOST:+$P_HOST [zmiana]}${P_HOST:-$SRCHOST} -- po przeniesieniu kolektora" $((W - 10)))")
+    MENU+=(wykonaj "Zapisz zmiany ($np) -- plan, WYKONAJ"
+           config  "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno"
+           zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
+    wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${LAST_ACTION:-dane}" \
+       --menu "Relacja $NAME ze źródła ${SRCHOST}. Co zmienić?\nKażda pozycja zmienia jedną rzecz i wraca tutaj -- zapis dopiero w \"Zapisz zmiany\"." 20 "$W" $((${#MENU[@]} / 2)) \
+       "${MENU[@]}" || {
+           if [ "$np" -gt 0 ]; then
+               wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
+                  --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
+               [ $? -eq 1 ] && continue
+           fi
+           clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+    ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
+    [ "$ACTION" = wykonaj ] && {
+        [ "$np" -gt 0 ] || { wt --title "Zapisz zmiany" --msgbox "Nic nie zmieniono -- nie ma czego zapisać." 8 "$W"; continue; }
+        save_all || continue
+    }
     case "$ACTION" in
         # snaponly: tabela -> ukryty szablon relacji -> edit-relation --profile= (blok
         # "harm" w pętli kroków niżej); harm_flow czyta/zapisuje szczeble KOPII (set-tiers).
@@ -624,12 +687,22 @@ while :; do
             # X12: relacja lokalna widzi w drzewie własny cel -- kopie nie są źródłem (X21).
             BASKET_HIDE=""; [ "$PEER" = - ] && [ "${TGT:--}" != - ] && BASKET_HIDE="$TGT"
             OLD_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
+            # Wcześniej wybrane zmiany (czekające na liście) -- koszyk startuje od nich.
+            for n in $P_ADDED; do B_ROOT+=("$n"); B_EXCL+=(""); done
+            if [ -n "$P_REMOVED" ]; then
+                _nb=(); _ne=()
+                for i in "${!B_ROOT[@]}"; do
+                    printf '%s\n' $P_REMOVED | grep -qxF -- "${B_ROOT[$i]}" && continue
+                    _nb+=("${B_ROOT[$i]}"); _ne+=("${B_EXCL[$i]}")
+                done
+                B_ROOT=(${_nb[@]+"${_nb[@]}"}); B_EXCL=(${_ne[@]+"${_ne[@]}"})
+            fi
             while :; do
                 basket_step || continue 2
                 NEW_ROOTS="$(printf '%s\n' "${B_ROOT[@]}" | sort)"
                 ADDED="$(comm -13 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
                 REMOVED="$(comm -23 <(printf '%s\n' "$OLD_ROOTS") <(printf '%s\n' "$NEW_ROOTS") | grep .)"
-                if [ -z "$ADDED$REMOVED" ]; then continue 2; fi
+                if [ -z "$ADDED$REMOVED" ]; then P_ADDED=""; P_REMOVED=""; continue 2; fi
                 # X21 (właściciel 2026-10-14): każda zmiana sprawdzona PRZED WYKONAJ -- czasownik
                 # bez --yes daje plan albo odmawia (np. dataset wewnątrz celu kopii); odmowa
                 # wraca do listy, zamiast przyjść po WYKONAJ z "to, co wyżej się udało, zostało".
@@ -647,40 +720,9 @@ while :; do
                     wt --title "Tej zmiany nie da się zrobić -- nic nie zmieniono" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
                     continue
                 fi
-                {
-                    echo "PLAN -- nic jeszcze nie zostało zmienione:"
-                    echo
-                    if [ -n "$ADDED" ]; then
-                        echo "DOJDĄ (pierwsza pełna kopia idzie od razu):"
-                        printf '%s\n' "$ADDED" | sed 's/^/  /'
-                    fi
-                    if [ -n "$REMOVED" ]; then
-                        echo "ODPADNĄ (kopie na tym hoście ZOSTAJĄ):"
-                        printf '%s\n' "$REMOVED" | sed 's/^/  /'
-                    fi
-                } >"$TMPD/dsplan.txt"
-                yesno_text "$TMPD/dsplan.txt" "Zmień relację $NAME -- datasety" "WYKONAJ" "Wstecz" --defaultno || continue
-                clear 2>/dev/null
-                RC=0
-                : >"$TMPD/run.log"
-                for n in $ADDED; do
-                    echo "\$ $ZB add-source $NAME $n --yes"; echo
-                    "$ZB" add-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-                    [ "$RC" -eq 0 ] || break
-                done
-                if [ "$RC" -eq 0 ]; then
-                    for n in $REMOVED; do
-                        echo "\$ $ZB remove-source $NAME $n --yes"; echo
-                        "$ZB" remove-source "$NAME" "$n" --yes 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-                        [ "$RC" -eq 0 ] || break
-                    done
-                fi
-                [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-                echo
-                if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: datasety relacji '$NAME' zmienione (rc=0). Enter = dalej"
-                else echo "=== ZATRZYMANE (rc=$RC) -- to, co wyżej się udało, zostało; powód w linii FATAL powyżej. Enter = dalej"; fi
-                [ -t 0 ] && read -r _
-                exit "$RC"
+                # Na listę zmian -- wykona je "Zapisz zmiany", razem z resztą (jedno WYKONAJ).
+                P_ADDED="$ADDED"; P_REMOVED="$REMOVED"
+                continue 2
             done ;;
     esac
 done
@@ -837,18 +879,10 @@ PYEOF
     fi
     echo >>"$TMPD/plan2.txt"
     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes" >>"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "Zmień relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || { step=$back; continue; }
-    clear 2>/dev/null
-    echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-    "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
-    if [ -n "${ZFS_TUI_LOG:-}" ]; then
-        { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
-    fi
-    [ "$RC" -eq 0 ] && DONE=1
-    echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: relacja '$NAME' zmieniona (rc=$RC). Enter = dalej"
-    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
-    exit "$RC"
+    # Plan przeszedł -- szablon czeka na liście zmian; "Zapisz zmiany" wykona wszystko razem.
+    # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
+    P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=()
+    P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="własne ustawienia (tabela)"
+    continue 2
 done
 done
