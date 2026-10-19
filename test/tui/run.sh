@@ -653,6 +653,17 @@ if has "$G" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' \
 else
     bad "zadania: panel grupy" "$G"
 fi
+# Kampania 2026-10-19: kolektor za VPN, adres zmieniony (active_endpoint 10.98.0.2) --
+# kolumna Kierunek na F3 pokazywala dalej stary peer_host. Kontrola: bez zmiany adresu -- jak bylo.
+GSV="$(mktemp)"; sed 's/"active_endpoint":"192.168.28.60:22"/"active_endpoint":"10.98.0.2:22"/' "$GS" > "$GSV"
+GRV="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GSV" --jobs "$GJ" --monitors "$GM" --screen relacje --width 200 2>&1)"
+if grep -q '10.98.0.2:22' "$GSV" && hasE "$GRV" '^║ backup-test .*<10\.98\.0\.2 ' && ! hasE "$GRV" '^║ backup-test .*192\.168\.28\.60' \
+   && hasE "$GR" '^║ backup-test .*<192\.168\.28\.60 '; then
+    ok "relacje: Kierunek pokazuje adres, przez ktory relacja chodzi teraz (po zmianie adresu: 10.98.0.2, nie stary peer_host)"
+else
+    bad "relacje: Kierunek po zmianie adresu" "$(printf '%s\n' "$GRV" | grep 'backup-test' | head -2)" "$(printf '%s\n' "$GR" | grep 'backup-test' | head -1)"
+fi
+rm -f "$GSV"
 # R3-3: przy malym terminalu (30 wierszy) 'harmonogram' MA byc widoczny, mimo
 # ze zakres grupy jest jedna dluga linia -- puste linie miedzy grupami.
 G30="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$GM" --screen zadania --width 200 --height 30 2>&1)"
@@ -3125,6 +3136,7 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ passive ~' \
    && grep -F '4/6 rodzaj' "$RP/wt.log" | grep -q . && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'repl  dysk w slocie' \
+   && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF -- '--default-item ~ repl ~' \
    && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Wpisz nazwę puli' \
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
    && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \

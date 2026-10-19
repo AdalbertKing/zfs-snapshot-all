@@ -6638,10 +6638,19 @@ EOF
         # (cron never fires it; this verb, called by the udev rule, does).
         # ZFS_JOB_PROPAGATE_RC: the line's zfs-job hands back the copy's real status
         # (it exits 0 for cron, which alerts through the notify script instead).
+        # The job writes to its --log, not here: F7 showed "zakończone, rc=0" and nothing
+        # else (campaign 2026-10-19). What THIS run appended to that log is printed after.
+        local _logf _pos=0
+        _logf=$(printf '%s' "$line" | sed -n -E 's/.*--log=([^ ]+).*/\1/p')
+        [ -n "$_logf" ] && [ -f "$_logf" ] && _pos=$(wc -c < "$_logf")
         case "$line" in
             "#on-insert "*) ZFS_JOB_PROPAGATE_RC=1 bash -c "${line#"#on-insert "}" || rc=1 ;;
             *)              ZFS_JOB_PROPAGATE_RC=1 bash -c "$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')" || rc=1 ;;
         esac
+        if [ -n "$_logf" ] && [ -f "$_logf" ]; then
+            echo ">>> run-replicas: ${_lbl:-replica} -- this run in $_logf:"
+            tail -c +$((_pos + 1)) "$_logf" | sed 's/^/    /'
+        fi
     done <<EOF
 $lines
 EOF
