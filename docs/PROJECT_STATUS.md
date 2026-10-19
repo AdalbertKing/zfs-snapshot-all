@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: dd9d985c044982ca -->
+<!-- status-covers-digest: 2bc144226e4dc273 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,14 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U12/U13/U15: GUI wraca od razu; fałszywe ostrzeżenie odzysku (2026-10-19; `finisz/U12-tlo`).** Po oknie
+  (whiptail, Esc z okna wyjścia F7) GUI odświeżało wszystko synchronicznie -- ~6 s na pve9 (monitor --json 5,7 s;
+  źródła i tak równoległe od P2). Teraz GUI wraca od razu ze starymi danymi i dopiskiem „odświeżam w tle…”, świeże
+  dane wchodzą, gdy dojdą (pętla curses pyta co 0,3 s); kursor na nowej relacji -- po wejściu danych. Fikstury
+  i testy: odświeżanie od razu, jak było. Odzysk: licznik „prune bez -L” pomija linie repliki (`zfs-media-gate.sh`)
+  i zakomentowane (`#on-insert`) -- na pve9 było fałszywe „2 of 28”, teraz 0 z 24. Testy: `test/tui` 348/0 i
+  `test/restore` 330/1 (1 środowiskowy, jak na `main`) na pve9.
 
 - **FINISZ U11: komunikaty bez skrótów „F7 na F6” (2026-10-19; `finisz/U11-teksty`).** Po zapisie repliki: „Pierwsza
   kopia ruszy po włożeniu dysku … Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '<nazwa>' i naciśnij F7
