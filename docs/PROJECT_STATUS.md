@@ -21,6 +21,13 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **FINISZ U22: zmiana adresu źródła lustra -- na żywo (2026-10-19).** Właściciel: „a co ze zmianą IP po
+  przeniesieniu kolektora za VPN?”. Okno „Adres hosta” (`activate NAZWA --host=NOWY --skip-final-catchup --yes`)
+  na lustrze: pve11 `k2-bc` (pobiera z pve9) przełączone na tymczasowy drugi adres pve9 (192.168.28.199) -- cron
+  przez nowy adres, bieg `run-relation` rc=0, cel bez zmian; powrót na 192.168.28.99 -- crontab konta i roota
+  identyczny jak przed testem (md5), adres tymczasowy zdjęty. Lustro między dwoma kolektorami to dwie relacje
+  (na każdym własna) -- po przeniesieniu każdą przestawia się jej własnym oknem. Wysyłki (push) nie mierzono.
+
 - **FINISZ U14/U16/U20: odmowy mówione na początku; lustro przyjmuje nowy dataset (2026-10-19;
   `finisz/U14-U16-U20`).** U14: okno Przywróć pyta źródło o zgodę na odzysk, zanim zada pierwsze pytanie (nowe
   `restore NAZWA --grant`: tylko odczyt, to samo jedno pytanie PAIR-CONTROL co bieg; `GRANT=<tryby>|none|unreachable|
