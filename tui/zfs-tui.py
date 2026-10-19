@@ -3540,11 +3540,11 @@ def odzysk_detail(row):
     if row.get("kind") == "disk":
         return [(u"Skąd", u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii"),
                 (u"Kiedy", u"także bez relacji i bez replik, np. czysty serwer po ransomware"),
-                (u"Enter", u"okna Przywróć z dysku: źródło, co, dokąd, z kiedy, plan, WYKONAJ"),
-                (u"F7", u"przeglądaj pliki: dowolny dataset tego hosta, migawka tylko do odczytu, mc")]
+                (u"Odzysk", u"okna Przywróć z dysku: źródło, co, dokąd, z kiedy, plan, WYKONAJ"),
+                (u"Przeglądanie", u"pliki dowolnego datasetu tego hosta: migawka tylko do odczytu, mc")]
     return [(u"Skąd", u"kopie relacji %s (%s, %s)" % (row["name"], row["typ"], row["dir"])),
-            (u"Enter", u"okna Przywróć: dataset, dokąd, migawka, plan, WYKONAJ"),
-            (u"F7", u"przeglądaj pliki kopii: migawka tylko do odczytu, mc, potem odmontowanie"),
+            (u"Odzysk", u"okna Przywróć: dataset, dokąd, migawka, plan, WYKONAJ"),
+            (u"Przeglądanie", u"pliki kopii: migawka tylko do odczytu, mc, potem odmontowanie"),
             (u"Uwaga", u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ")]
 
 
@@ -3927,7 +3927,6 @@ class UI(object):
         lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
-        lines += [u"t = wykonaj    Tab = do linii poleceń (popraw, Enter)    Esc = wróć"]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
                                    "shell": line, "on_yes": on_yes, "alt": alt})
         self.scroll = 0
@@ -4180,13 +4179,14 @@ class UI(object):
                              [u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo."])
             else:
                 note = [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
-                        u"monitor mówi OK z pauzy. Odwrotność: F8 na tej relacji jeszcze raz (resume-client)."]
+                        u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client)."]
                 alt = None
                 if rel.get("peer_host") and rel.get("mode") != "local":
-                    note += ["", u"w = zamiast pauzy WYŁĄCZ także na źródle (zamek; wyjaśni okno)"]
+                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek);",
+                             u"wyjaśnienie pokaże następne okno."]
                     alt = ("w", lambda: self.confirm(u"Wyłącz relację %s" % n, [self.zb(), "disable-client", n,
                                                      "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
-                                                     disable_note(rel)))
+                                                     disable_note(rel)), u"wyłącz na źródle")
                 self.confirm(u"Wstrzymaj relację %s" % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                              note, alt=alt)
         elif k == "del":
@@ -4199,7 +4199,7 @@ class UI(object):
     def export_prompt(self, n):
         """Eksport relacji: pole sciezki (F9 -> Eksport)."""
         default = os.path.join(relations_dir(), "%s.export.json" % n)
-        self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, istniejący zostanie nadpisany; Esc = wróć):", default,
+        self.prompt(u"Eksport relacji %s" % n, u"Plik (istniejący zostanie nadpisany):", default,
                     lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc wróć")
 
     def export_to(self, n, path):
@@ -4212,7 +4212,7 @@ class UI(object):
             try:
                 os.makedirs(d, exist_ok=True)
             except OSError as e:
-                self.prompt(u"Eksport relacji %s" % n, u"Plik (Enter = zapisz, Esc = wróć):", path, lambda p: self.export_to(n, p),
+                self.prompt(u"Eksport relacji %s" % n, u"Plik:", path, lambda p: self.export_to(n, p),
                             u"nie da się utworzyć katalogu %s: %s" % (d, e.strerror or e))
                 return
         self.run_detached(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"], redirect=path)
@@ -4234,7 +4234,7 @@ class UI(object):
     def profile_form_fields(self, base):
         fields = [("name", u"Nazwa nowego szablonu", "text", u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- czasownik sprawdzi"),
                   ("desc", u"Opis", "text", u"jedno zdanie, co ten szablon robi (pole description)"),
-                  ("base", u"Na bazie", "pick", u"Enter = lista szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz")]
+                  ("base", u"Na bazie", "pick", u"wybór z listy szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz")]
         for t in base.get("tiers", []):
             tn = t.get("name", "")
             adj = tier_unit(tn, TIER_ADJ)
@@ -4255,7 +4255,7 @@ class UI(object):
             if t.get("monitor_warn") or t.get("monitor_crit"):
                 fields.append(("t|%s|monitor_warn" % tn, u"  monitor: ostrzeż po", "text", u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie"))
                 fields.append(("t|%s|monitor_crit" % tn, u"  monitor: alarm po", "text", u"np. 150m, 48h, 10d -- starsza niż to = alarm"))
-        fields.append(("go", u"[ ZAPISZ ]", "go", u"Enter: komendy save-profile do potwierdzenia (nic nie zapisane przed 't')"))
+        fields.append(("go", u"[ ZAPISZ ]", "go", u"pokazuje komendy save-profile do potwierdzenia (nic nie jest zapisane wcześniej)"))
         return fields
 
     def profile_form_vals(self, base, keep=None):
@@ -4419,7 +4419,6 @@ class UI(object):
         if obj.get("kind") == "profile":
             out.append(fit(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).", width - 4))
             out.append(fit(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.", width - 4))
-            out.append(fit(u" strzałki = pole, pisz = wartość, spacja = przełącz, Enter na [ ZAPISZ ], Esc = wróć", width - 4))
             if self.message:
                 out += ["", fit(u" ! " + self.message, width - 4)]
             return out
@@ -4427,7 +4426,6 @@ class UI(object):
             out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
         else:
             out.append(fit(u" szablonów do wyboru: %d (Enter na polu Szablon)" % len(obj.get("profiles") or []), width - 4))
-        out.append(fit(u" strzałki = pole, pisz = wartość, Backspace, spacja = przełącz, Enter na [ PLAN ], Esc = wróć", width - 4))
         if self.message:
             out += ["", fit(u" ! " + self.message, width - 4)]
         return out
@@ -4510,7 +4508,7 @@ class UI(object):
 
     def import_ask_file(self, value, error=None):
         """Krok -1 importu: sciezka do pliku eksportu."""
-        self.prompt(u"Import relacji z pliku", u"Plik eksportu (Enter = dalej, Esc = wróć):", value, self.import_name, error)
+        self.prompt(u"Import relacji z pliku", u"Plik eksportu:", value, self.import_name, error)
 
     def import_name(self, path):
         """Krok 1 importu: plik istnieje? Pole jest podpowiedziane z "/root/", a
@@ -4518,7 +4516,7 @@ class UI(object):
         czasownika i tam dostawala "cannot read" (pve10, 2026-09-23) -- zla
         sciezka zostaje w polu pliku."""
         if not os.path.isfile(path):
-            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę (Esc = wróć)" % path)
+            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę" % path)
             return
         self.import_preview(path)
 
@@ -5039,23 +5037,27 @@ def _ui_render(self, width, height):
             lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), ""]
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
                 lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
-            lines.append(u" Klawisze: pisz, Backspace kasuje, Enter zatwierdza, Esc wraca.")
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
                                              footer=obj.get("footer") or u"Enter dalej   Esc wróć")
         elif kind == "confirm":
+            # KLAWISZE TYLKO NA RAMCE (właściciel 2026-10-09 uwaga 4, powtórzone 10-18 U7):
+            # wariant okna (F8: w = wyłącz) stoi obok "t wykonaj", nie w treści.
+            _alt = obj.get("alt")
+            _foot = u"t wykonaj   " + (u"%s %s   " % (_alt[0], _alt[2]) if _alt and len(_alt) > 2 else "") \
+                + u"Tab do linii poleceń   Esc wróć"
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
-                                             footer=u"t wykonaj   Tab do linii poleceń   Esc wróć")
+                                             footer=_foot)
         elif kind == "form":
             lines = self.form_lines(obj, width)
             # Dlugi formularz (nowy szablon) przewija sie za kursorem.
             cy = obj.get("_cur_y", 0)
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
-                                             footer=u"Enter na [ ZAPISZ ] = dalej   Esc = wróć")
+                                             footer=u"strzałki pole   spacja przełącza   Enter na [ %s ]   Esc wróć" % (u"ZAPISZ" if obj.get("kind") == "profile" else u"PLAN"))
         elif kind == "files":
             top_ = max(0, obj["cur"] - (height - 7))
             scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
-                                             footer=u"Enter = wejdź / importuj   Esc = wróć   strzałki")
+                                             footer=u"Enter wejdź / importuj   Esc wróć   strzałki")
         elif kind == "choice":
             lines = [fit("%s %s" % (">" if i == obj["cur"] else " ", label), width - 4) for i, (_t, label) in enumerate(obj["items"])]
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,

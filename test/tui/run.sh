@@ -814,9 +814,10 @@ fi
 # z wyjaśnieniem, co to znaczy i jak włączyć z powrotem; 't' wykonuje disable-client.
 A="$(act down,F8)"
 B="$(act down,F8,w --height 50)"
-if has "$A" 'w = zamiast pauzy WYŁĄCZ także na źródle' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
+# U7 (właściciel 10-18): klawisz wariantu na RAMCE obok "t wykonaj", nie w treści okna.
+if has "$A" 't wykonaj   w wyłącz na źródle   Tab do linii poleceń' && ! hasE "$A" '║ *[a-z] = ' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
    && has "$B" 'disable-client' && has "$B" 'zamek na źródle' && has "$B" 'F8 na tej relacji -> Włącz (enable-client).' && [ ! -s "$XL" ]; then
-    ok "akcje: F8 -> 'w' pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
+    ok "akcje: F8 -> 'w' (na ramce, nie w treści) pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
 else
     bad "akcje: F8 -> w (wyłącz)" "$A" "$B"
 fi
@@ -1851,7 +1852,7 @@ C="$(: > "$XL"; screen relacje "down,F8" --exec-log "$XL")"
 # POD OKNEM WIDAC LINIE POLECEN z komenda zlozona przez okno, i pasek F.
 # (Dluga komenda jest ucieta od poczatku -- widac jej koniec, jak przy pisaniu.)
 if printf '%s\n' "$C" | tail -2 | head -1 | grep -q "pause-client lab-ct201 '--reason=z TUI" \
-   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" 't wykonaj   Tab do linii poleceń   Esc wróć'; then
+   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" '═ t wykonaj   ' && has "$C" 'Tab do linii poleceń   Esc wróć'; then
     ok "linia: pod oknem potwierdzenia zostaje linia polecen z jego komenda i pasek klawiszy; stopka 't wykonaj   Tab do linii poleceń'"
 else
     bad "linia: linia polecen pod oknem" "$(printf '%s\n' "$C" | tail -3)"

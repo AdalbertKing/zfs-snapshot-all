@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 02c3776813553598 -->
+<!-- status-covers-digest: 608745d9351cbc96 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,13 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U7: klawisze okien tylko na dolnej ramce (2026-10-19; `finisz/U7-klawisze`).** Właściciel (powtórka uwagi 4
+  z 10-09): w treści okien GUI nie ma list klawiszy. Potwierdzenie: stopka `t wykonaj  [w wyłącz na źródle]  Tab do
+  linii poleceń  Esc wróć`, bez wiersza „t = wykonaj …”; pole tekstowe bez „Klawisze: …”; etykiety eksportu/importu
+  bez „Enter =/Esc =”; formularz bez wierszy klawiszy, stopka nazywa swój przycisk; panel F11 opisuje skutek
+  słowami. Okna whiptail (kreatory) nie mają własnej stopki -- tam podpowiedzi zostają w treści. `test/tui` na pve9
+  346/1 -> poprawiony test stopki.
 
 - **FINISZ: Przeglądaj kopię -- dyski VM (zvol), wersja light (2026-10-18; `finisz/B2-zvol`).**
   Właściciel: NTFS, ext4 i inne znane systemy; BitLocker i LUKS -- po podaniu klucza. `tui/browse.sh` dla zvola:
