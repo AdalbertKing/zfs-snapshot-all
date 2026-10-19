@@ -762,10 +762,11 @@ build_argv() {   # [install] -> ARGV[]
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
     [ "$MANUAL" -eq 1 ] && ARGV+=("--manual-join")
-    # Pusty cel nie instaluje się z --yes (czasownik: "confirmed by eye") -- przy "Same
-    # migawki" czasownik pyta sam w terminalu, po WYKONAJ, jak przy wsadzie.
+    # "Same migawki": pusty cel z --yes czasownik przyjmuje tylko z --no-copy (słowem,
+    # nie pustą zmienną). Bez niego pytał drugi raz w terminalu po WYKONAJ -- właściciel
+    # 2026-10-19: "skoro przeklikaliśmy przez GUI, to oczywiste, że chcemy".
     if [ "${1:-}" = install ]; then
-        if [ "$NOCOPY" -eq 1 ]; then ARGV+=("--install"); else ARGV+=("--install" "--yes"); fi
+        if [ "$NOCOPY" -eq 1 ]; then ARGV+=("--no-copy" "--install" "--yes"); else ARGV+=("--install" "--yes"); fi
     fi
     return 0
 }

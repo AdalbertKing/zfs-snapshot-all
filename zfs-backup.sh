@@ -8138,7 +8138,7 @@ cmd_local_backup() {
     local target="" target_given=0 profile="$PROFILE_DEFAULT_NAME" config=""
     # Slice 2: plan stays the DEFAULT. An operator who ran slice 1's command
     # yesterday gets byte-identical behaviour today; installing is an explicit verb.
-    local do_install=0 assume_yes=0
+    local do_install=0 assume_yes=0 lb_no_copy=0
     local local_user="" local_user_given=0 resolver_user=""
     local lb_recursion=""
     # --name (2026-10-09, owner: a copy on THIS host is a relationship like any
@@ -8173,6 +8173,10 @@ cmd_local_backup() {
             --plan)      do_install=0 ;;   # explicit form of the default
             --install)   do_install=1 ;;
             --yes|-y)    assume_yes=1 ;;
+            # --no-copy: "snapshots only" said IN WORDS, so --target='' is a choice and
+            # not an unset variable -- the GUI wizard sends it after its own WYKONAJ
+            # (owner 2026-10-19: "skoro przeklikalismy przez GUI, to oczywiste, ze chcemy").
+            --no-copy)   lb_no_copy=1 ;;
             # Who runs these jobs. Same flag, same grammar and the same default
             # as add-client, because it is the same question -- a LOCAL backup
             # was the one shape that could not answer it, and only because this
@@ -8281,6 +8285,8 @@ cmd_local_backup() {
     # an omitted --target still asks for a destination to be proposed, and every
     # command written before today keeps meaning what it meant.
     local no_copy=0
+    [ "$lb_no_copy" -eq 0 ] || { [ "$target_given" -eq 1 ] && [ -z "$target" ]; } \
+        || die "local-backup: --no-copy means snapshots only, and '--target=$target' names a copy -- give --target='' with it, or drop --no-copy. Nothing was touched."
     if [ "$target_given" -eq 1 ] && [ -z "$target" ]; then
         no_copy=1
         # Same guard the proposed values carry, extended to a third case rather
@@ -8293,7 +8299,7 @@ cmd_local_backup() {
         # exported): there the blank came out of a record local-backup itself wrote,
         # and the operator confirmed it on import's own preview -- no shell variable
         # was involved (pve9, 2026-10-18: lab-migawki round trip).
-        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ] && [ "${LB_TARGET_FROM_FILE:-0}" != 1 ] \
+        [ "$do_install" -eq 1 ] && [ "$assume_yes" -eq 1 ] && [ "${LB_TARGET_FROM_FILE:-0}" != 1 ] && [ "$lb_no_copy" -eq 0 ] \
             && die "--target='' (no copy: snapshots stay in the source) will not install under --yes. An empty target is also what an unset shell variable expands to, so this one is confirmed by eye: re-run without --yes, or without --install to preview first."
     elif [ -z "$target" ]; then
         read_server_conf
@@ -14841,7 +14847,7 @@ cmd_remove_source() {
         done
         # A mirror's request is RUX_SOURCE's dataset list (U20) -- the inverse of add-source.
         local _rs _rskeep="" _rs_ds; _rs_ds=$(sync_requested_dataset)
-        if [ "${RUX_MODE:-}" = sync ] && [ -n "$_rs_ds" ]; then
+        if [ -n "$_rs_ds" ]; then
             while IFS= read -r _rs; do
                 [ "$_rs" = "$ds" ] && continue
                 _rskeep="${_rskeep:+$_rskeep,}$_rs"
@@ -15021,13 +15027,14 @@ cmd_add_source() {
             log "add-source: '$ds' recorded in the request of '$name'"
         fi
     fi
-    # A MIRROR (sync) keeps its request in RUX_SOURCE's dataset list, not in
-    # REQUESTED_DATASETS, and activation refuses under --yes anything the committed
-    # scope resolves to outside that list (assert_sync_scope_within_request). U20,
-    # owner 2026-10-19 on g3-bc: the new root was granted on pve11, then refused here
-    # as "outside the request" -- the request has to follow the scope here too.
+    # RUX_SOURCE's dataset list is a request too, and activation refuses under --yes
+    # anything the committed scope resolves to outside it (assert_sync_scope_within_
+    # request) -- for EVERY relationship the one-command form created, not only a
+    # mirror. U20, owner 2026-10-19 on g3-bc (mirror) and again on pve9b (a backup
+    # the import re-created the one-command way): the new root was granted on the
+    # source, then refused here as "outside the request". The request follows.
     local _rs_ds; _rs_ds=$(sync_requested_dataset)
-    if [ "${RUX_MODE:-}" = sync ] && [ -n "$_rs_ds" ]; then
+    if [ -n "$_rs_ds" ]; then
         local _rs _rs_in=0
         while IFS= read -r _rs; do
             case "$ds" in "$_rs"|"$_rs"/*) _rs_in=1 ;; esac
@@ -15037,7 +15044,7 @@ cmd_add_source() {
                 && mv -f "${cpath}.new" "$cpath" \
                 || die "add-source: could not record '$ds' in the request of '$name' ($cpath) -- the source already grants it; re-run this command"
             chmod 0600 "$cpath" 2>/dev/null || :
-            log "add-source: '$ds' recorded in the request of mirror '$name'"
+            log "add-source: '$ds' recorded in RUX_SOURCE of '$name'"
         fi
     fi
     # Which of this relationship's sources already have a copy job, BEFORE the
@@ -17392,11 +17399,18 @@ SCOPE
     # instead -- the wizard's (--source=HOST:DATASETS --install --grant-remotely):
     # join over that channel and the scope granted EXACTLY as the file's dataset
     # list, then seed and activate. Without the root channel nothing changes.
-    local _ds_list="" _has_mode=0 _rport=22
+    local _ds_list="" _has_mode=0 _rport=22 _rux_ok=1
     for x in "${argv[@]}"; do
-        case "$x" in --datasets=*) _ds_list="${x#--datasets=}" ;; --mode=*) _has_mode=1 ;; esac
+        case "$x" in
+            --datasets=*) _ds_list="${x#--datasets=}" ;;
+            --mode=*) _has_mode=1 ;;
+            # Only flags the one-command form takes; anything else (e.g. --bandwidth)
+            # keeps the ordinary replay, which says what to do by hand.
+            --host=*|--target=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*) ;;
+            *) _rux_ok=0 ;;
+        esac
     done
-    if [ "$verb" = add-client ] && [ -n "$peer_host" ] && [ -n "$_ds_list" ] && [ "$_has_mode" -eq 0 ] \
+    if [ "$verb" = add-client ] && [ "$_rux_ok" -eq 1 ] && [ -n "$peer_host" ] && [ -n "$_ds_list" ] && [ "$_has_mode" -eq 0 ] \
        && rux_root_ssh "$peer_host" "$_rport" "true" >/dev/null 2>&1 \
        && ! rux_root_ssh "$peer_host" "$_rport" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
         rux_args=(--source="$peer_host:$_ds_list" --name="$name")
