@@ -3172,13 +3172,11 @@ else
 fi
 # (7) ZMIANA repliki sprzed P5 (bez ID): koszyk z jej zrodel i wyjatkow; obecny dysk
 #     w slocie dostaje swoje ID (--media-guid=4242); nie ma "Sformatuj nowy nosnik".
-RPOUT=$(rp_run "0${T}kreator
-0${T}own
-0${T}mirror
+RPOUT=$(rp_run "0${T}zrodla
+0${T}nosnik
 0${T}removable
 0${T}repl
-0${T}0 22 * * *
-1${T}
+0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
@@ -3189,17 +3187,14 @@ else
 fi
 # (8) "Dodaj kolejny dysk do tej repliki": formatuje z TA SAMA pula i baza, bez pytan;
 #     ID nowego dysku dopisane do listy (4242,777) -- zaden dysk nie jest wylaczany.
-RPOUT=$(rp_run "0${T}kreator
-0${T}own
-0${T}mirror
+RPOUT=$(rp_run "0${T}nosnik
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
 1${T}
 0${T}
 0${T}
-0${T}0 22 * * *
-1${T}
+0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb8","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb8)
 if grep -q '^prepare-media repl /dev/disk/by-id/usb-C --base=replica --yes$' "$RP/zb.log" \
@@ -3210,15 +3205,12 @@ else
 fi
 # (9) W12 "Usuń dysk z repliki": dysk 777 wypada z listy (--media-guid=4242), dane
 #     zostaja; ostatniego dysku nie da sie usunac (przy jednym ID pozycji nie ma).
-RPOUT=$(rp_run "0${T}kreator
-0${T}own
-0${T}mirror
+RPOUT=$(rp_run "0${T}nosnik
 0${T}removable
 0${T}__del__
 0${T}777
 0${T}repl
-0${T}0 22 * * *
-1${T}
+0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
 RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
@@ -3229,17 +3221,14 @@ else
 fi
 # (10) W11 (pve9b 2026-10-11): replika sprzed zapisu ID (pusta lista) + "Dodaj dysk":
 #      najpierw ID obecnego dysku (4242), potem nowego (777) -- stary nie staje sie obcy.
-RPOUT=$(rp_run "0${T}kreator
-0${T}own
-0${T}mirror
+RPOUT=$(rp_run "0${T}nosnik
 0${T}removable
 0${T}__add__
 0${T}/dev/disk/by-id/usb-C
 1${T}
 0${T}
 0${T}
-0${T}0 22 * * *
-1${T}
+0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
 RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
@@ -3250,14 +3239,11 @@ else
 fi
 # (11) W18: "Tylko stan na chwile kopii" + "Trzymaj N ostatnich" = --keep=12 (wlasna
 #      historia dysku, bez lustra); plan mowi "12 ostatnich kopii".
-RPOUT=$(rp_run "0${T}kreator
+RPOUT=$(rp_run "0${T}dysk
 0${T}own
 0${T}keep
 0${T}12
-0${T}removable
-0${T}repl
-0${T}0 22 1 * *
-1${T}
+0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb11","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 1 * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb11)
 if grep -q '^add-replica usb11 .*--keep=12 .*--install --yes$' "$RP/zb.log" && grep -qF '12 ostatnich kopii' "$RP/wt.log"; then
@@ -3276,6 +3262,7 @@ RPOUT=$(rp_run "0${T}silnik
 0${T}keep
 0${T}6
 0${T}__done__
+0${T}zapisz
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb12","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"4242","on_insert":"no","history":"all"}]}' RP_NAME=usb12)
 RP12="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | head -1)"
@@ -3286,6 +3273,23 @@ if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0
     ok "replica: Ustawienia silnika -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
 else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
+fi
+# (13) U8 (właściciel 2026-10-18): zmiana repliki = JEDNA LISTA z obecnymi wartościami.
+#      "[ ] Po włożeniu dysku" przełącza się od razu (bez okna), "Zapisz zmiany" = plan i
+#      WYKONAJ -- żadnego innego kroku kreatora. Brak reguły udev -> plan ją zakłada.
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}onins
+0${T}zapisz
+0${T}
+" 'RP_REPS={"replicas":[{"name":"usb13","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb13)
+RP13="$(grep -F 'Zmień replikę usb13' "$RP/wt.log" | head -1)"
+if grep -q '^add-replica usb13 --source=hdd/data --dst=repl/replica .*--media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
+   && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
+   && has "$RP13" '[ ] Po włożeniu dysku' && has "$RP13" 'Kiedy:      codziennie 22:00' && has "$RP13" 'Nośnik:     repl/replica (wymienny)' \
+   && ! grep -qF '6/6 kiedy' "$RP/wt.log" && ! grep -qF '4/6 rodzaj' "$RP/wt.log"; then
+    ok "replica: U8 -- lista z obecnymi wartościami; '[ ] Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
+else
+    bad "replica: U8 lista zmiany" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP13" | cut -c1-400)"
 fi
 rm -rf "$RP"
 
