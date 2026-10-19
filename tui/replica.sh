@@ -668,10 +668,14 @@ PYEOF
         fi
         echo
         if [ "$RC" -eq 0 ]; then
-            if [ "$SCHED" = on-insert ]; then _first="po włożeniu dysku albo teraz: F7 na F6"
-            elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="po włożeniu dysku, wg harmonogramu albo teraz: F7 na F6"
-            else _first="wg harmonogramu albo teraz: F7 na F6"; fi
-            echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC). Pierwsza kopia: $_first. Enter = dalej"
+            # U11 (właściciel 2026-10-19): pełne zdania, bez skrótu "F7 na F6".
+            if [ "$SCHED" = on-insert ]; then _first="ruszy po włożeniu dysku"
+            elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="ruszy po włożeniu dysku albo o czasie z harmonogramu"
+            else _first="ruszy o czasie z harmonogramu"; fi
+            echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
+            echo "    Pierwsza kopia $_first."
+            echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
+            echo "    Enter = powrót do GUI"
         else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
         [ -t 0 ] && read -r _
         exit "$RC" ;;
