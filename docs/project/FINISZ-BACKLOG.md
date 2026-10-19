@@ -16,6 +16,7 @@ Cel: każda funkcjonalność pakietu dostępna z GUI, z chudym odzyskiem.
 | C | Retencja | wada `[prune:]` gubi `gfs=yes` -- ZROBIONE #610 (drabina `-G` na szczebel po stronie źródła; lądowiska płaskie; migawki zdalne przyjmują GFS). Retencję źródła okno relacji już pokazuje; `audit-source-retention` to jednorazowa migracja hosta -- CLI | zrobione |
 | D | Replika | `purge-replica-copy` -- USUNIĘTY z pakietu (właściciel 10-18: „nie chcemy tego”; dysk czyści formatowanie w „Dodaj dysk”); `remove-media-trigger` -- ZROBIONE w oknach (plan zmiany/usuwania repliki zdejmuje regułę, gdy żadna replika nie rusza po włożeniu) | zrobione |
 | E | Suity | `test/tui` z selektorem sekcji; przegląd duplikatów w `zfsbackup`/`localbackup` (165 s i 143 s w CI); zmiana klawisza/ekranu nie ciągnie całego drzewa | do zrobienia |
+| G | Porządek paneli | U21: jedna reguła lista / prawy panel / dolny panel z zakładkami na F2-F6 i F11; F4 jako „Historia”; F11 pokaże zgodę źródła przed oknami (U14) | zrobione; zgoda źródła -- w U14 |
 | F | Uwagi z obserwacji | wpisy U1.. poniżej, zbierane do najbliższej paczki | otwarte |
 
 Tylko CLI (świadomie, bez okna): `setup-server` (instalacja hosta), `move-to-client`,
@@ -45,3 +46,7 @@ Do decyzji właściciela, jeśli któreś ma mieć okno.
 | U16 | 2026-10-19 | usuwanie `solab` z obiema opcjami sprzątania: stop po kolektorze, bo pve9 nie ma roota do pve10; w środku pełny wydruk wdrożenia. Do zrobienia: okno Usuń sprawdza dostęp roota do źródła przed startem i mówi po polsku, co zrobić ręcznie na źródle (albo „tylko kolektor”); wydruk bez faz wdrożenia | A | do zrobienia |
 | U17 | 2026-10-19 | zrzut „Nie da się zmienić 'solab' -- removed” -- stan spójny po U16: kolektor usunięty, rekord czeka; domknięcie: `deploy.sh --leave=pve9` na pve10 i Del jeszcze raz | A | wyjaśnione |
 | U18 | 2026-10-19 | „Dla relacji ciąg: wyeksportuj, usuń, zaimportuj, wykonaj się powiódł” | A | potwierdzone |
+| U19 | 2026-10-19 | Zmień relację `g3-bc`: po wyborze datasetu od razu „wykonaj” -- „do bani to jest i do przebudowy”. Do zrobienia: okno zmiany relacji jako lista pól (wzór U8), symulacja przed kodem | A | do zrobienia |
+| U20 | 2026-10-19 | add-source na lustrze `g3-bc` kończy się porażką: rekord bez `REQUESTED_DATASETS`, źródło (pve11) ma już w zakresie korzeń nadrzędny, activate odmawia nadmiarowych. Do zrobienia: add-source dla lustra aktualizuje rekord i uznaje korzeń nadrzędny już w zakresie | A | do zrobienia |
+| U22 | 2026-10-19 | „A co ze zmianą IP hosta z punktu widzenia kolektora po przeniesieniu kolektora za VPN?” -- jest (okno „Adres hosta”, 10-17), dowód tylko pull pve10 -> pve9b na drugi adres. Do zrobienia: lab dla lustra (druga strona też łączy się z kolektorem) i push | A | do sprawdzenia |
+| U21 | 2026-10-19 | „F2 i F4 -- nie wiem, czym się różnią”, „prawy i dolny panel -- logika i porządek, nie dublować”. Reguła: lista = wybór i stan; prawy panel = fakty o zaznaczonym, których nie ma w liście; dolny = dzieci w zakładkach (F3 Datasety/Zadania), Tab wchodzi, prawy panel idzie za kursorem. Symulacja wszystkich ekranów zaakceptowana, kod jedną paczką | G | zrobione (`finisz/panele`) |

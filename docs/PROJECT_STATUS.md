@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2bc144226e4dc273 -->
+<!-- status-covers-digest: e5efb5667107581d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,23 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U21 (paczka G): jedna reguła paneli na wszystkich ekranach (2026-10-19; `finisz/panele`).** Właściciel:
+  „F2 i F4 -- nie wiem, czym się różnią”, „prawy i dolny panel -- logika i porządek, nie dublować”; symulacja
+  zaakceptowana. Lista = wybór i stan; prawy panel = fakty o zaznaczonym wierszu, których lista nie ma, w grupach
+  (np. F3: Teraz / Przebiegi (7 dni) / Ustawienia; F2: Co / Przebiegi / Uprawnienia), bez dopisków w nawiasach;
+  dolny panel = elementy podrzędne w zakładkach: F2 Przebiegi zadania (z historii transferów; prune ich nie zapisuje),
+  F3 Datasety / Zadania, F5 Szczeble / Używają, F6 Datasety / Przebiegi, F11 Datasety. Tab wchodzi na dół, strzałki
+  lewo/prawo zmieniają zakładkę, prawy panel pokazuje zaznaczony element, Enter jego pełne okno, Esc wraca.
+  Listy: F2 Relacja/Zadanie/Prefiks migawek/Następny/Kopie, F3 Relacja/Typ/Kierunek/Stan/Kopie, F6 Replika/Nośnik/
+  Kopia z/Kiedy (harmonogram słowami), F11 Skąd/Rodzaj/Najnowsza kopia; za wąsko -- najpierw zwęża się jedna kolumna,
+  potem odpadają najmniej ważne. F4 to „Historia”: jedna lista, to co biegnie na górze, kolumny Kiedy/Relacja/Dataset/
+  Tryb/Wynik/Czas/Dane, transfer repliki podpisany „replika NAZWA” zamiast „(bez rel.)”, panel z Migawką i Poprzednią.
+  Panel repliki: jeden „Ostatni bieg” (były dwa z różnymi godzinami). Znane braki: najstarsza migawka i zajętość
+  datasetu nie są zbierane (F3/F11 pokazują najnowszą z historii transferów, kolumna „Dane 7 dni” to wolumen z okna
+  digestu); Enter na datasecie F11 otwiera okna Przywróć całej relacji (bez wstępnego wyboru datasetu); zgody
+  źródła na odzysk F11 jeszcze nie sprawdza (panel mówi tylko, że sprawdza ją okno Przywróć) -- to U14.
+  Testy: `test/tui` 348/0 na pve9 (76 bloków asercji przepisanych na nowy układ).
 
 - **FINISZ U12/U13/U15: GUI wraca od razu; fałszywe ostrzeżenie odzysku (2026-10-19; `finisz/U12-tlo`).** Po oknie
   (whiptail, Esc z okna wyjścia F7) GUI odświeżało wszystko synchronicznie -- ~6 s na pve9 (monitor --json 5,7 s;
