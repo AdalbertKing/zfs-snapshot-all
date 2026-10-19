@@ -6510,7 +6510,9 @@ resolvers=$(grep -c '^\s*cron_context_resolve [a-z]' "$ZFSBACKUP")
 # disk is cleared by formatting it), and with it one READER of the config.
 # 16/22 since 2026-10-19 (U23): settings_reinstall_crons -- `settings set` of a cron key
 # re-renders each account's block from its own config. A WRITER, aimed like the others.
-if [ "$writers" -eq 16 ] && [ "$resolvers" -eq 22 ]; then
+# 17/23 since 2026-10-19 (campaign): import_restore_relblock -- import-relation writes the
+# file's [relation:] block back after the create. A WRITER, aimed like set-tiers.
+if [ "$writers" -eq 17 ] && [ "$resolvers" -eq 23 ]; then
     ok "63g: all six config writers resolve through cron_context_resolve"
 else
     bad "63g: all six config writers resolve through cron_context_resolve" \
@@ -6909,6 +6911,26 @@ got=$(fam_probe tank/mid)
 #      descendant (its children are separate list entries probed on their own).
 got=$(fam_probe "")
 [ "$got" = AKTYWNY ]     && ok "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)"     || bad "67b: an enumerated dataset keeps the -d 1 probe (children probed separately)" "got=$got"
+
+# 67b2. campaign 2026-10-19 (pve11 <- pve10, mirror with d7h24): the wizard's own seed
+#       stamps the first family snapshot, and activate took it for someone else's family
+#       (PASSIVE) -- gen-cron then refused the tiered template. A cutoff (the record's
+#       CREATED_AT) keeps only what was there BEFORE the relationship.
+fam_cut() {   # <cutoff-epoch> -> PASYWNY|AKTYWNY ; the source has one snapshot, created at 1000
+    local SB="$WORK/fam-cut"; mkdir -p "$SB"
+    printf '#!/bin/sh\nprintf "tank/a@automated_daily_x\\t1000\\n"\n' > "$SB/ssh"; chmod +x "$SB/ssh"
+    PATH="$SB:$PATH" CUT="$1" ZB="$ZFSBACKUP" bash -c '
+        source "$ZB"
+        LOAD_KEYFILE=/k LOAD_ALIAS=a LOAD_ALIAS_KH=/kh LOAD_PORT=22 LOAD_ACCOUNT=u LOAD_HOST=h
+        PEER_SAVED_RECURSIVE_ROOTS=""
+        source_family_exists tank/a automated_ "$CUT" && echo PASYWNY || echo AKTYWNY'
+}
+g1=$(fam_cut 900); g2=$(fam_cut 2000); g3=$(fam_cut "")
+if [ "$g1" = AKTYWNY ] && [ "$g2" = PASYWNY ] && [ "$g3" = PASYWNY ]; then
+    ok "67b2: a family snapshot made after the relationship was created is its own seed's, not someone else's family (cutoff); without a cutoff -- as before"
+else
+    bad "67b2: family cutoff" "after=$g1 (want AKTYWNY)" "before=$g2 (want PASYWNY)" "none=$g3 (want PASYWNY)"
+fi
 
 # 67c. every consumer goes through the ONE helper -- copies of this probe drift
 #      exactly like everything else this campaign measured. Source-grep: one
@@ -10332,6 +10354,8 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         # connects). IM_ROOT=fresh: channel up, no account of this collector there.
         rux_root_ssh() { [ -n "${IM_ROOT:-}" ] || return 255; case "$*" in *zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 0 ;; esac; }
         rux_entry()      { printf "rux"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        # The [relation:] restore writes a config -- here only WHEN it is called, to its own log.
+        import_restore_relblock() { [ -n "${3:-}" ] && return 0; printf "restore|%s\n" "$1" >> "$IM_LOG.r"; }
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 im_run "$IM/ksiegowosc.json"; im_rc=$?
@@ -10379,6 +10403,21 @@ if [ "$im_rc1" -eq 0 ] && printf '%s' "$im_c1" | grep -q '^rux|--source=10.0.0.1
     ok "importrel: source without this collector's account + root channel -> one command (join, the file's datasets granted, seed, activate); account still there, or a flag the one-command form lacks -> the ordinary replay (U24)"
 else
     bad "importrel: rejoin path" "rc=$im_rc1" "fresh: $im_c1" "joined: $im_c2" "bandwidth: $im_c3" "$(cat "$WORK/im.err")"
+fi
+# Campaign 2026-10-19 (pve10): export -> delete -> import came back with the template's
+# numbers. The file's [relation:] block is restored AFTER the relationship is created,
+# on every create path; the preview says so. Without a block in the file -- no call.
+sed 's/"relation":null/"relation":{"tiers":"daily","daily.source_retain":"-D5","history":"newest"}/' "$IM/nobw.json" > "$IM/relblk.json"
+rm -f "$IM/calls.log.r"; IM_ROOT=fresh im_run "$IM/relblk.json"; im_p="$(cat "$WORK/im.out")"; im_r0="$(cat "$IM/calls.log.r" 2>/dev/null)"
+IM_ROOT=fresh im_run "$IM/relblk.json" --yes; im_rc=$?; im_r1="$(cat "$IM/calls.log.r" 2>/dev/null)"; rm -f "$IM/calls.log.r"
+im_run "$IM/relblk.json" --yes; im_r2="$(cat "$IM/calls.log.r" 2>/dev/null)"; im_c2="$(cat "$IM/calls.log")"; rm -f "$IM/calls.log.r"
+IM_ROOT=fresh im_run "$IM/nobw.json" --yes; im_r3="$(cat "$IM/calls.log.r" 2>/dev/null)"; rm -f "$IM/calls.log.r"
+if grep -q '"relation":{' "$IM/relblk.json" && [ "$im_rc" -eq 0 ] && printf '%s' "$im_p" | grep -q 'Potem: wlasne ustawienia relacji z pliku' && [ -z "$im_r0" ] \
+   && [ "$im_r1" = 'restore|ksiegowosc' ] && [ "$im_r2" = 'restore|ksiegowosc' ] && printf '%s' "$im_c2" | grep -q '^activate|' \
+   && [ "$im_r3" = 'restore|ksiegowosc' ]; then
+    ok "importrel: the file's [relation:] block is restored after the create (one-command and ordinary path); the preview says so and calls nothing"
+else
+    bad "importrel: [relation:] block restored after create" "rc=$im_rc" "preview restore: $im_r0" "rux: $im_r1" "ordinary: $im_r2" "$(grep -c '"relation":{' "$IM/relblk.json")" "$(cat "$WORK/im.err")"
 fi
 # a name that exists here refuses BEFORE anything is called. This bare record
 # (CLIENT_NAME + STATE only) exports without dying (rc 0, empty argv, since

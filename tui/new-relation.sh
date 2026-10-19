@@ -277,6 +277,17 @@ for x in d.get("datasets", []):
         items+=("$t" "$t   -- istnieje na tym hoście, jeszcze nieużywany"); seen="$seen $t"
         [ -n "$first" ] || first="$t"
     done <"$TMPD/targets.tsv"
+    # Czysty host (kampania 2026-10-19): żadnego celu do wyboru, a okno mówiło "np. hdd/backups"
+    # i kazało go wpisać. Podpowiedź <pula>/backups na każdą pulę -- powstanie przy instalacji.
+    if [ -z "$first" ] && [ "$MODE" != local ]; then
+        while IFS= read -r t; do
+            case "$t" in ''|*/*) continue ;; esac
+            t="$t/backups"
+            case " $seen " in *" $t "*) continue ;; esac
+            items+=("$t" "$t   -- jeszcze nie ma, powstanie przy instalacji"); seen="$seen $t"
+            [ -n "$first" ] || first="$t"
+        done <"$TMPD/fs.all" 2>/dev/null
+    fi
     items+=(__browse__ "Przeglądaj…     (wszystkie datasety tego hosta)")
     items+=(__other__ "Wpisz ścieżkę…  (dataset na tym hoście, może jeszcze nie istnieć)")
     if [ -n "$TARGET" ]; then in_list "$TARGET" "${items[@]}" && first="$TARGET" || first=__other__; fi

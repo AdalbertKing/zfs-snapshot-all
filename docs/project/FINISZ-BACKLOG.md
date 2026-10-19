@@ -54,3 +54,8 @@ Do decyzji właściciela, jeśli któreś ma mieć okno.
 | U25 | 2026-10-19 | „gdy tworzę relację i modyfikuję -- okno ma być to samo i mieć identyczną funkcjonalność. Scal te dwie czynności. Tworzenie nowej relacji jest o niebo lepsze niż potem jej modyfikacja” | A | do zrobienia (symulacja przed kodem) |
 | U26 | 2026-10-19 | zrzut: lustro po F7 dalej „Stare” w kolumnie kopii -- jeden monitor relacji obejmuje 14 datasetów i zgłasza najgorszy (`hdd/lab/subvol-901-disk-0`, źródło bez migawek od 10-08); GUI przykłada ten werdykt do wszystkich par | G | do zrobienia |
 | U27 | 2026-10-19 | „ekran wyskoczył po angielsku” -- linie FATAL czasowników w oknach GUI | G | do zrobienia (z tłumaczeniem GUI) |
+| U28 | 2026-10-19 | kampania a>b<>c: eksport -> usuń -> import wraca z liczbami szablonu (retencja źródła, historia), gubi 2 z 3 wykluczeń | A | zrobione (`finisz/kampania-1`) |
+| U29 | 2026-10-19 | kampania: nowe lustro z szablonem szczebli pada na gen-cron (seed brany za cudzą rodzinę) | A | zrobione (`finisz/kampania-1`) |
+| U30 | 2026-10-19 | kampania: okno zmiany -- Enter na planie = Wstecz, długi plan łapie Enter, `+1 -1` zamiast nazw, fałszywe „zmieniany ręcznie”; kreator bez podpowiedzi celu; pusty F2/F3 straszy | G | zrobione (`finisz/kampania-1`) |
+| U31 | 2026-10-19 | kampania: plany czasowników po angielsku w oknach (delete-relation, kreator, import bez ogonków); ekran wyniku kreatora = cały crontab | G | do zrobienia (z U27) |
+| U32 | 2026-10-19 | kampania: lustro -- krok „Jak długo trzymać w celu” i tabela „u źródła” obok „tutaj” przeczą „bez własnej retencji”; kreator pozwala zrobić lustro z celu kopii (`hdd/backups`) | A | do zrobienia |

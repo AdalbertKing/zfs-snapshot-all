@@ -136,9 +136,9 @@ def main(argv):
                 if o[k] != n.get(k) and not (k.startswith("exclude_child") and o[k] in dropped):
                     rows.append(u"  %s, %s:  %s -> %s" % (label(sec), KEYS.get(re.sub(r"_[0-9]+$", "", k), k), o[k], n.get(k, u"(brak)")))
     if rows:
-        out = [u"UWAGA: config tej relacji był zmieniany ręcznie.",
-               u"WYKONAJ nadpisze te zmiany ustawieniami z GUI:"] + rows + \
-              [u"Chcesz je zachować? Wstecz i nie zmieniaj tej relacji w GUI.", u""]
+        out = [u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu).",
+               u"Szablon zastąpi je swoimi:"] + rows + \
+              [u"Chcesz je zachować? Wstecz -- zmieniaj liczby w 'Harmonogram i retencja', nie szablonem.", u""]
         sys.stdout.write(u"\n".join(out) + u"\n")
     return 0
 

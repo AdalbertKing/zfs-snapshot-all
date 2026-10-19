@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bb129e7537387d83 -->
+<!-- status-covers-digest: 565315dd6a284ca8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,29 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **KAMPANIA a>b<>c z GUI, paczka 1 (2026-10-19; `finisz/kampania-1`).** Lab od nowa: a = pve9b, b = pve10
+  (kolektor), c = pve11. Z GUI na pve10: backup `ab` (pve9b -> pve10) założony, zmieniony w nowym oknie listy
+  zmian (+vms -db, dobowe 10, historia newest -- jedno WYKONAJ), szablon d30h24 z retencją źródła 5,
+  eksport -> usuń -> import, potem kolektor „za VPN” (wg1 pve10 10.98.0.1 <-> pve9b 10.98.0.2, SSH po LAN
+  zablokowany) i Adres hosta 10.98.0.2 -- cron przez VPN, kopie rc=0, ustawienia zostały. Na pve11 lustro `bc`
+  (pve11 <- pve10 `hdd/archive`, d7h24). Naprawione:
+  - **import gubił ustawienia relacji**: wracał z liczbami szablonu (źródło dobowe 5 -> 30, historia newest
+    znikała). Teraz import po utworzeniu przywraca z pliku blok `[relation:NAZWA]` (szczeble, retencja obu stron,
+    silnik) przez tę samą bramkę co set-tiers; podgląd to mówi; ponowny import na relację o tych samych
+    deklaracjach przywraca same ustawienia. Na żywo: 3 wykluczenia, źródło 5, newest -- jak przed usunięciem;
+  - **powtarzane `--exclude-family` liczyło tylko ostatnie** (add-client, kreator jednym poleceniem,
+    local-backup) -- import z pliku tracił `__replicate_` i `vzdump`. Teraz się sumują;
+  - **nowe lustro z szablonem szczebli zawsze padało**: pierwsza migawka z seedu kreatora była brana za „cudzą
+    rodzinę” (tryb pasywny), a gen-cron odrzucał szablon („creates 'automated_...' but prunes 'automated_hourly'”).
+    Teraz przy aktywacji cudza rodzina to tylko migawki starsze niż rekord relacji (`CREATED_AT`); ta sama sonda, bez kopii (seed pyta jak dotąd);
+  - okno „Zmień relację”: Enter = WYKONAJ jak w kreatorze; plan dłuższy niż ekran -- najpierw do przewinięcia,
+    potem krótkie pytanie (okno z przewijaniem łapało Enter); numeracja kroków planu; datasety w menu z nazwami
+    (`+hdd/vms -hdd/db`); `Szablon: d7h24 -> d30h24`; adres `stary -> nowy`; plan tabeli z liczbami (`-D10`);
+    ostrzeżenie „config zmieniany ręcznie” mówiło nieprawdę po zmianach z GUI -- teraz „relacja ma ustawienia inne niż
+    jej szablon (tabela, silnik albo ręcznie w configu)”;
+  - kreator na czystym hoście proponuje `<pula>/backups` (dotąd: „np. hdd/backups” i wpisywanie ręcznie);
+  - pusty ekran F2/F3: zamiast „To NIE znaczy 'host nic nie robi'” -- „Brak relacji ... Ins = nowa relacja”.
 
 - **FINISZ U19: „Zmień relację” = lista zmian, jedno WYKONAJ (2026-10-19; `finisz/zmien-relacje-lista`).**
   Właściciel: „nie można zmienić wiele ustawień i na końcu zaimplementować, tylko po jednym kroku”. Teraz menu

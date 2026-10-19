@@ -2199,9 +2199,8 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
                                else u"brak przebiegów tego zadania w historii transferów")}
         else:
             det = rel_detail_pairs(r, data, now, ch)
-    empty = [u"Zero zadań wyprowadzonych z zainstalowanych bloków.",
-             u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu bloku",
-             u"zfs-backup-managed albo jego config jest nieczytelny."]
+    empty = [u"Brak zadań zfs-backup na tym hoście (nie ma relacji albo jej config jest nieczytelny).",
+             u"Nową relację zakładasz na F3 Relacje: Ins."]
     foot = (u"Enter pełne okno zadania   Tab do przebiegów") if rows else ""
     return render_tabbed(data, width, height, now, ch, "zadania", title,
                          [u"Relacja", u"Zadanie", u"Prefiks migawek", u"Następny", u"Kopie"], cells, cursor, foot,
@@ -2602,9 +2601,9 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         # Dataset policzony z REKORDU (relacja bez crona) -- tytul to mowi.
         child.update({"name": r["name"] + ((u" (%s)" % child["how"]) if child.get("how") not in (None, u"wg crona") else ""),
                       "tabs": tabs, "ti": ti})
-    empty = [u"Zero relacji i zero zadań na tym hoście.",
-             u"To NIE znaczy 'host nic nie robi' -- znaczy, że nie ma tu",
-             u"rekordu relacji ani bloku zfs-backup-managed w crontabie."]
+    empty = [u"Brak relacji zfs-backup na tym hoście.",
+             u"Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane.",
+             u"Ins = nowa relacja (kreator)."]
     foot = (u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów") if rows else u"Ins nowa relacja"
     return render_tabbed(data, width, height, now, ch, "relacje", title,
                          [u"Relacja", u"Typ", u"Kierunek", u"Stan", u"Kopie"], cells, cursor, foot,
