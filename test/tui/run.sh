@@ -3044,7 +3044,7 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
    && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \
    && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku, wg harmonogramu albo teraz: F7 na F6'; then
+   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.'; then
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
@@ -3078,7 +3078,7 @@ RPOUT=$(rp_run "0${T}usb3
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
    && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia: po włożeniu dysku albo teraz: F7 na F6'; then
+   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.'; then
     ok "replica: oryginal -> domyslnie wlasne migawki; 'tylko po wlozeniu' nie pyta o B, regula i tak zakladana"
 else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
