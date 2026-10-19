@@ -372,7 +372,7 @@ harm_flow() {
         { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo
           sed -n '/^Relacja .* -- szczeble:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
           echo
-          grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|; s/profile__[^ ]*__//' | head -40
+          grep -E '^ +[-+][0-9*]' "$TMPD/plan.txt" | grep -v 'check-snap-age' | sed -E 's/profile__[^ ]*__//; s|/[^ ]*/zfs-job\.sh "([^"]*)".* (-[HDWMY][0-9]+) *$|\1  \2|; t; s|/[^ ]*/zfs-job\.sh "([^"]*)".*|\1|' | head -40
           echo
           echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; } >"$TMPD/plan2.txt"
         # Plan przeszedł -- zmiana czeka na liście ("Zapisz zmiany" wykona wszystko razem).
@@ -558,20 +558,20 @@ pending_count() {
 # adres, datasety, szablon albo tabela szczebli, ustawienia silnika. Każdy krok to zwykły
 # czasownik z --yes; pierwszy, który odmówi, zatrzymuje resztę (to, co przed nim, zostaje).
 save_all() {
-    local n rc=0 a
+    local n rc=0 a k=0
     {
         echo "PLAN -- nic jeszcze nie zostało zmienione. Po WYKONAJ, po kolei:"
         echo
-        [ -n "$P_HOST" ] && { echo "1. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)"; echo; }
+        [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)"; echo; }
         if [ -n "$P_ADDED$P_REMOVED" ]; then
-            echo "2. Datasety:"
+            k=$((k + 1)); echo "$k. Datasety:"
             for n in $P_ADDED; do echo "   DOJDĄ:    $n  (pierwsza pełna kopia od razu)"; done
             for n in $P_REMOVED; do echo "   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)"; done
             echo
         fi
-        if [ "${#P_EDIT[@]}" -gt 0 ]; then echo "3. Szablon: $P_EDIT_WORDS"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TIERS[@]}" -gt 0 ]; then echo "3. Harmonogram i retencja (tabela):"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
-        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then echo "4. Ustawienia silnika:"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
+        if [ "${#P_EDIT[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Szablon: $(cur_words) -> $P_EDIT_WORDS"; sed -n '3,$p' "$TMPD/p_edit.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TIERS[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Harmonogram i retencja (tabela):"; sed -n '3,$p' "$TMPD/p_tiers.txt" | grep -v '^Komenda:' | sed 's/^/   /'; echo; fi
+        if [ "${#P_TRANSFER[@]}" -gt 0 ]; then k=$((k + 1)); echo "$k. Ustawienia silnika:"; grep "^Relacja '" "$TMPD/p_transfer.txt" | sed 's/^/   /'; echo; fi
         echo "Komendy:"
         [ -n "$P_HOST" ] && echo "  $(shq "$ZB") activate $NAME --host=$P_HOST --skip-final-catchup --yes"
         for n in $P_ADDED; do echo "  $(shq "$ZB") add-source $NAME $n --yes"; done
@@ -580,7 +580,18 @@ save_all() {
         [ "${#P_TIERS[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-tiers $NAME $(for a in "${P_TIERS[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
         [ "${#P_TRANSFER[@]}" -gt 0 ] && echo "  $(shq "$ZB") set-transfer $NAME $(for a in "${P_TRANSFER[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/saveplan.txt"
-    yesno_text "$TMPD/saveplan.txt" "Zmień relację $NAME -- plan wszystkich zmian" "WYKONAJ" "Wstecz" --defaultno || return 1
+    # Enter = WYKONAJ, jak w kreatorze (U25: jedno zachowanie). Plan dłuższy niż ekran: okno
+    # z przewijaniem trzyma fokus na tekście i Enter nic nie robi (zmierzone na pve10,
+    # 2026-10-19) -- więc najpierw sam plan do przewinięcia (Enter = dalej), potem krótkie pytanie.
+    geom
+    if [ "$(fold -s -w $((W - 4)) "$TMPD/saveplan.txt" | grep -c '')" -gt $((H - 6)) ]; then
+        wt --title "Zmień relację $NAME -- plan wszystkich zmian  [strzałki = przewijaj, Enter = dalej]" --ok-button "Dalej" \
+           --textbox "$TMPD/saveplan.txt" "$H" "$W" || return 1
+        wt --title "Zmień relację $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" \
+           --yesno "Wykonać zmiany z planu ($(pending_count))?\nWstecz = lista zmian, nic nie zmienione." 9 "$W" || return 1
+    else
+        yesno_text "$TMPD/saveplan.txt" "Zmień relację $NAME -- plan wszystkich zmian" "WYKONAJ" "Wstecz" || return 1
+    fi
     clear 2>/dev/null
     : >"$TMPD/run.log"
     run1() { echo "\$ $*"; echo; "$@" 2>&1 | tee -a "$TMPD/run.log"; return "${PIPESTATUS[0]}"; }
@@ -603,8 +614,8 @@ while :; do
     geom
     np=$(pending_count)
     _ds="$(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')"
-    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  -> +$(printf '%s\n' $P_ADDED | grep -c .) -$(printf '%s\n' $P_REMOVED | grep -c .) [zmiana]"
-    _sz="$(cur_words)"; [ "${#P_EDIT[@]}" -gt 0 ] && _sz="-> $P_EDIT_WORDS [zmiana]"
+    _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  [zmiana]$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
+    _sz="$(cur_words)"; [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
     _hm=""; [ "${#P_TIERS[@]}" -gt 0 ] && _hm="  [zmiana]"
     _en=""; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="  [zmiana]"
     if [ "$SNAPONLY" -eq 1 ]; then
@@ -618,7 +629,7 @@ while :; do
           silnik  "Ustawienia silnika -- jak przesyłane są kopie$_en")
     fi
     # Adres hosta tylko przy zdalnym źródle: relacja lokalna nie ma adresu.
-    [ "$PEER" != - ] && MENU+=(adres "$(clip_label "Adres hosta: ${P_HOST:+$P_HOST [zmiana]}${P_HOST:-$SRCHOST} -- po przeniesieniu kolektora" $((W - 10)))")
+    [ "$PEER" != - ] && MENU+=(adres "$(clip_label "Adres hosta: $SRCHOST${P_HOST:+ -> $P_HOST [zmiana]} -- po przeniesieniu kolektora" $((W - 10)))")
     MENU+=(wykonaj "Zapisz zmiany ($np) -- plan, WYKONAJ"
            config  "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno"
            zapisz  "Zapisz ustawienia relacji jako szablon (F5)")

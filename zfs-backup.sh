@@ -4526,8 +4526,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         # detection result feeds nothing -- no section is re-emitted.
         local sync_family_root=automated_
         [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && sync_family_root=$(profile_family_root)
+        local _born=""
+        [ -n "${CREATED_AT:-}" ] && _born=$(date -d "$CREATED_AT" +%s 2>/dev/null)
         for pds in $PEER_SAVED_DATASETS; do
-            source_family_exists "$pds" "$sync_family_root"; pds_rc=$?
+            source_family_exists "$pds" "$sync_family_root" "$_born"; pds_rc=$?
             [ "$pds_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
                 && die_probe_unknown "$pds" "whether this relationship consumes that family passively or stamps its own"
             if [ "$pds_rc" -eq 0 ]; then
@@ -8157,7 +8159,7 @@ cmd_local_backup() {
             # The same exclusions as the remote form, written as the same
             # [dataset:] scope fields (exclude_child_<n> -> -X, exclude_family -> -E).
             --exclude-child=*)  lb_excl+=("${a#*=}") ;;
-            --exclude-family=*) lb_exfam="${a#*=}" ;;
+            --exclude-family=*) lb_exfam="${lb_exfam:+$lb_exfam,}${a#*=}" ;;
             # W17: an encrypted source copied encrypted (-w), first copy included.
             --raw)       lb_raw=1 ;;
             # --replace (L2, 2026-10-09): the relationship --name EXISTS and this run
@@ -9147,7 +9149,7 @@ cmd_add_client() {
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
             --raw)         raw_send=1 ;;
-            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --mode=*)      mode="${a#*=}" ;;
             --target=*)    target="${a#*=}"; target_given=1 ;;
@@ -10015,7 +10017,7 @@ seed_profile_context() {
     load_active_profile
 }
 
-source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 2 = unknown
+source_family_newest() {   # <dataset> [prefix] [before-epoch] -> newest matching snapshot; rc 2 = unknown
     local depth='-d 1'
     is_recursive_root "$1" && depth='-r'
     # The caller's own prefix, because the rehearsal has one (the [dataset:]
@@ -10040,13 +10042,20 @@ source_family_newest() {   # <dataset> [prefix] -> newest matching snapshot; rc 
             "zfs list -H -t snapshot $depth -o name,creation -p -- '$1'" 2>/dev/null)
     rc=$?
     [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
-    printf '%s\n' "$out" | grep "@${pfx}" | sort -k2,2n | tail -1 | cut -f1
+    # A third argument keeps only snapshots created BEFORE that epoch (see below).
+    printf '%s\n' "$out" | grep "@${pfx}" | awk -F'\t' -v e="${3:-}" 'e == "" || $2 + 0 < e + 0' | sort -k2,2n | tail -1 | cut -f1
     return 0
 }
 
-source_family_exists() {   # <dataset> [prefix] -> 0 family, 1 none, 2 could not ask
+# THE FAMILY IS SOMEONE ELSE'S only if it was there BEFORE this relationship (campaign
+# 2026-10-19, pve11 <- pve10 hdd/archive, d7h24): the wizard's own seed stamps the first
+# automated_daily_ on the source, activate then found "a family on the source", took the
+# dataset for a chain (PASSIVE), and gen-cron refused the tiered template ("creates
+# 'automated_...' but prunes 'automated_hourly'") -- every new mirror with a tiered
+# template failed. A snapshot made at or after the record's CREATED_AT is our seed's.
+source_family_exists() {   # <dataset> [prefix] [before-epoch] -> 0 family, 1 none, 2 could not ask
     local out rc
-    out=$(source_family_newest "$1" "${2-automated_}"); rc=$?
+    out=$(source_family_newest "$1" "${2-automated_}" "${3:-}"); rc=$?
     [ "$rc" -ne 0 ] && return "$SOURCE_PROBE_UNKNOWN"
     [ -n "$out" ]
 }
@@ -17219,6 +17228,60 @@ import_relation_undo_record() {   # <name>
     rm -f "$cpath" && log "import-relation: removed the record $cpath"
 }
 
+# IMPORT KEEPS THE RELATIONSHIP'S OWN NUMBERS (owner campaign, pve10 2026-10-19:
+# export -> delete -> import came back with the template's numbers -- source daily
+# 5 became 30, history=newest was gone). The create path replays only the
+# declarations (template, datasets); everything changed after it -- the table of
+# tiers, the source's retention, set-transfer -- lives in the [relation:NAME]
+# block, and the export carries that block verbatim ("relation"). Written back
+# here, after the relationship is active, through the same gate as set-tiers:
+# working copy, gen-cron validation, atomic replace and install.
+import_restore_relblock() {   # <name> <export document> [--check: rc 1 = differs, nothing written]
+    local name="$1" doc="$2" check="${3:-}" rel
+    rel=$(json_value_of "$doc" relation)
+    case "$rel" in ''|null|'{}') return 0 ;; esac
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || return 0
+    ( record_load client "$cpath"
+      [ "${STATE:-}" = active ] || exit 0
+      cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
+      cronfile="$CRON_CTX_FILE"
+      [ -f "$cronfile" ] && relblock_has "$cronfile" "$name" || exit 0
+      assert_cron_config_matches_installed "$cronfile"
+      want=$(printf '%s' "$rel" | awk 'BEGIN { RS = "\001" } {
+          s = $0
+          while (match(s, /"[^"]*":"[^"]*"/)) {
+              t = substr(s, RSTART + 1, RLENGTH - 2); k = t; sub(/":".*$/, "", k); v = t; sub(/^[^"]*":"/, "", v)
+              printf "%s\t%s\n", k, v; s = substr(s, RSTART + RLENGTH) } }')
+      [ -n "$want" ] || exit 0
+      [ "$(relblock_dump "$cronfile" "$name")" = "$want" ] && { [ -n "$check" ] || log "import-relation: [relation:$name] already as in the file"; exit 0; }
+      [ -z "$check" ] || exit 1
+      workfile=$(mktemp "$(dirname "$cronfile")/.zfsbackup-work.XXXXXX") || die "mktemp failed next to $cronfile"
+      workfile_track "$workfile"
+      cp -p "$cronfile" "$workfile" && chmod 0644 "$workfile" 2>/dev/null
+      blk=$(mktemp) || die "mktemp failed"
+      { printf '[relation:%s]\n' "$name"; printf '%s\n' "$want" | awk -F'\t' 'NF { printf "\t%s = %s\n", $1, $2 }'; } > "$blk"
+      awk -v h="[relation:$name]" -v blk="$blk" '
+          function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+          { l = $0; sub(/\r$/, "", l) }
+          l ~ /^[ \t]*\[/ { if (trim(l) == h) { while ((getline x < blk) > 0) print x; skip = 1; next } skip = 0 }
+          skip { next }
+          { print }' "$cronfile" > "$workfile"
+      rm -f "$blk"
+      log "import-relation: restoring the relationship's own settings from the file ([relation:$name]: tiers, retention on both sides, engine)"
+      if ! gencron_as_target -c "$workfile" >/dev/null; then
+          rm -f "$workfile"
+          die "import-relation: '$name' is active with its template's numbers -- the file's [relation:$name] block was refused by gen-cron (above); set them again with set-tiers / set-transfer"
+      fi
+      EDIT_RELATION_NAME="$name"
+      atomic_replace_and_install "$cronfile" "$workfile" )
+}
+
+import_relblock_note() {   # <export document> -- one line for the preview
+    case "$(json_value_of "$1" relation)" in ''|null|'{}') return 0 ;; esac
+    echo "  Potem: wlasne ustawienia relacji z pliku (szczeble, retencja u zrodla, silnik) -- jak w pliku."
+}
+
 cmd_import_relation() {   # FILE [--name=NEW] [--yes]
     local file="" newname="" yes=0 a
     for a in "$@"; do
@@ -17289,6 +17352,19 @@ THEN
         if [ "$here_argv" = "$file_argv" ] && [ "$(record_get "$ecpath" STATE)" != active ]; then
             die "import-relation: relationship '$name' is here, identical to $file, but NOT finished (state '$(record_get "$ecpath" STATE)'). Finish it instead of importing again: zfs-backup.sh seed $name, then zfs-backup.sh activate $name -- or remove it (zfs-backup.sh delete-relation $name) and import again. Nothing was changed."
         fi
+        if [ "$here_argv" = "$file_argv" ] && ! import_restore_relblock "$name" "$doc" --check; then
+            echo "Relacja '$name' JUZ JEST na tym hoscie z tymi samymi deklaracjami co $file,"
+            echo "  ale jej wlasne ustawienia (szczeble, retencja u zrodla, silnik) roznia sie od pliku."
+            echo "Wykona sie: ustawienia relacji z pliku -- jak w pliku (jedna podmiana configu, cron od nowa)."
+            if [ "$yes" -ne 1 ]; then
+                echo
+                echo "To byl podglad. Nic nie zostalo zmienione. Dodaj --yes, zeby wykonac."
+                return 0
+            fi
+            import_restore_relblock "$name" "$doc" || die "import-relation: the settings of '$name' from $file were not restored (above) -- nothing else was changed"
+            log "import-relation: '$name' settings restored from $file"
+            return 0
+        fi
         if [ "$here_argv" = "$file_argv" ]; then
             echo "Relacja '$name' JUZ JEST na tym hoscie i jest identyczna z plikiem $file"
             echo "  (te same deklaracje: $(printf '%s ' ${argv[@]+"${argv[@]}"}))"
@@ -17345,6 +17421,7 @@ SCOPE
         printf '  zfs-backup.sh'
         for x in "${rux_args[@]}"; do printf ' \\\n      %s' "$x"; done
         printf '\n\n'
+        import_relblock_note "$doc"
         echo "Na $peer_host zostanie ZATWIERDZONY dla tego kolektora ten zakres (z pliku, 1:1):"
         printf '    %s\n' "${scope_arr[@]}"
         echo "  't' w GUI / --yes tutaj = zgoda zrodla na ten zakres (decyzja wlasciciela 2026-09-23)."
@@ -17357,6 +17434,7 @@ SCOPE
         RUX_EXACT_SCOPE=$(printf '%s\n' "${scope_arr[@]}")
         export RUX_EXACT_SCOPE
         rux_entry "${rux_args[@]}"
+        import_restore_relblock "$name" "$doc" || die "import-relation: '$name' was created, but its own settings from the file were not restored (above)"
         log "import-relation: '$name' reproduced from $file on a new collector, scope granted on $peer_host as exported"
         return 0
     fi
@@ -17376,6 +17454,7 @@ SCOPE
         printf '  zfs-backup.sh local-backup'
         for x in "${lb_args[@]}"; do printf ' \\\n      %s' "$x"; done
         printf '\n'
+        import_relblock_note "$doc"
         case " ${lb_args[*]} " in *" --target= "*)
             echo "  --target= jest PUSTY z pliku: same migawki na zrodlach, nic nie jest kopiowane." ;;
         esac
@@ -17387,6 +17466,7 @@ SCOPE
         echo
         local LB_TARGET_FROM_FILE=1
         cmd_local_backup "${lb_args[@]}"
+        import_restore_relblock "$name" "$doc" || die "import-relation: '$name' was created, but its own settings from the file were not restored (above)"
         log "import-relation: '$name' reproduced from $file (local relationship)"
         return 0
     fi
@@ -17422,6 +17502,7 @@ SCOPE
         echo "  wyeksportowana z: ${from:-?}  ${at:-}"
         echo "  $peer_host nie ma konta tego kolektora (relacje usunieto razem ze zrodlem), a ten host"
         echo "  ma do niego dostep roota -- import pojdzie jednym poleceniem: parowanie, zakres (dokladnie"
+        import_relblock_note "$doc"
         echo "  lista datasetow z pliku), seed, aktywacja."
         echo
         echo "Wykona sie DOKLADNIE to:"
@@ -17435,6 +17516,7 @@ SCOPE
         fi
         echo
         rux_entry "${rux_args[@]}"
+        import_restore_relblock "$name" "$doc" || die "import-relation: '$name' was created, but its own settings from the file were not restored (above)"
         log "import-relation: '$name' reproduced from $file; the source was joined again and granted the file's datasets"
         return 0
     fi
@@ -17447,6 +17529,7 @@ SCOPE
     for x in "${argv[@]}"; do printf ' \\\n      %s' "$x"; done
     printf '\n'
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do printf '  zfs-backup.sh %s %s --yes\n' "$x" "$name"; done
+    import_relblock_note "$doc"
     local unrep; unrep=$(json_value_of "$doc" not_replayable)
     if [ -n "$unrep" ] && [ "$unrep" != "[]" ]; then
         echo
@@ -17497,6 +17580,7 @@ UNREP
         fi
         die "import-relation: '$x $name' did not complete -- the record exists and the lifecycle is resumable: fix what it named, then re-run 'zfs-backup.sh $x $name' (a NEW peer first needs deploy.sh --join there, as add-client printed)."
     done
+    import_restore_relblock "$name" "$doc" || die "import-relation: '$name' was created, but its own settings from the file were not restored (above)"
     log "import-relation: '$name' reproduced from $file"
 }
 
@@ -20804,7 +20888,7 @@ rux_entry() {
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
             --raw)         rux_raw=1 ;;
-            --exclude-family=*) exclude_family="${a#*=}" ;;
+            --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
             --profile=*) profile="${a#*=}"; flag_profile rux "$profile" ;;
             --source-profile=*) source_profile="${a#*=}" ;;

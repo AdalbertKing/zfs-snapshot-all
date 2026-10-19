@@ -463,7 +463,7 @@ fi
 
 # --- HOST, KTORY NAPRAWDE NIC NIE MA -----------------------------------------
 E="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --screen relacje 2>&1)"
-if has "$E" "To NIE znaczy 'host nic nie robi'"; then
+if has "$E" "Brak relacji zfs-backup na tym hoście" && has "$E" "Ins = nowa relacja"; then
     ok "relacje: pusty host tlumaczy sie (brak rekordu i bloku, nie brak backupow)"
 else
     bad "relacje: pusty host" "$E"
@@ -2147,6 +2147,8 @@ cat > "$NR/bin/whiptail" <<'EOF'
 #!/bin/bash
 # argv w jednej linii dziennika; odpowiedzi kolejno z pliku: "rc<TAB>tekst" (| = nowa linia)
 printf '%s\n' "$(printf '%s ~ ' "$@")" >> "${NR_DIR:?}/wt.log"
+# --textbox pokazuje PLIK: jego tresc do dziennika, jak tekst --yesno (plan dluzszy niz ekran).
+p=""; for a in "$@"; do [ "$p" = "--textbox" ] && cat "$a" >> "$NR_DIR/wt.log"; p="$a"; done
 for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
@@ -3872,7 +3874,7 @@ EROUT=$(er_run "0${T}adres
 "); ERRC=$?
 if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Porzucić zmiany?' "$ER/wt.log")" -eq 2 ] \
    && grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | sed -n 2p | grep -qF '~ 10.99.0.9 ~' \
-   && grep -F -e '--menu' "$ER/wt.log" | sed -n 2p | grep -qF 'Adres hosta: 10.99.0.9 [zmiana]'; then
+   && grep -F -e '--menu' "$ER/wt.log" | sed -n 2p | grep -qF 'Adres hosta: 192.168.28.99 -> 10.99.0.9 [zmiana]'; then
     ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
@@ -4051,8 +4053,8 @@ EROUT=$(er_run "0${T}szablon
 1${T}
 " "enter")
 ERP0=$(cat "$ER/wt.log")
-if has "$ERP" 'UWAGA: config tej relacji był zmieniany ręcznie.' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
-   && has "$ERP" 'Wstecz i nie zmieniaj tej relacji w GUI' && ! has "$ERP0" 'zmieniany ręcznie'; then
+if has "$ERP" 'UWAGA: relacja ma ustawienia inne niż jej szablon' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
+   && has "$ERP" 'nie szablonem' && ! has "$ERP0" 'inne niż jej szablon'; then
     ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed WYKONAJ; bez recznych zmian -- bez ostrzezenia"
 else
     bad "edit-relation: X6 ostrzezenie o recznej zmianie" "$(printf '%s' "$ERP" | cut -c1-400)" "$(printf '%s' "$ERP0" | cut -c1-200)"
