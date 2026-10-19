@@ -80,7 +80,9 @@ while :; do
     items=(); prev=""
     for k in "${KEYS[@]}"; do
         sec="${k%%.*}"
-        if [ "$sec" != "$prev" ]; then items+=("--$sec" "── $(SECT_PL "$sec") ──"); prev="$sec"; fi
+        # Znacznik nagłówka NIE może zaczynać się od '-': whiptail czyta "--alerts" jako swoją
+        # opcję ("unknown option") i okno znika od razu (właściciel, pve10 2026-10-19).
+        if [ "$sec" != "$prev" ]; then items+=("#$sec" "── $(SECT_PL "$sec") ──"); prev="$sec"; fi
         if [ -n "${NEW[$k]+x}" ]; then v="${NEW[$k]}  (było ${VAL[$k]})"; else v="${VAL[$k]}"; [ "${SRC[$k]}" = plik ] || v="$v  (${SRC[$k]})"; fi
         items+=("$k" "$(clip_label "$(printf '%-14s %s' "${k#*.}" "$v")" $((W - 10)))")
     done
@@ -92,7 +94,7 @@ while :; do
        || { clear 2>/dev/null; echo "settings: wyjście, nic nie zapisano"; exit 1; }
     LAST="$WT_OUT"
     case "$WT_OUT" in
-        --*) ;;
+        \#*) ;;
         mail)
             clear 2>/dev/null
             "$ZB" settings test-mail 2>&1; echo; echo "Enter = powrót do ustawień"
