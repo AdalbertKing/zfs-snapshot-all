@@ -10328,6 +10328,10 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         cmd_add_client() { printf "add-client|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_activate()   { printf "activate|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_seed()       { printf "seed|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
+        # U24: no root channel to the source unless IM_ROOT says so (the stub never
+        # connects). IM_ROOT=fresh: channel up, no account of this collector there.
+        rux_root_ssh() { [ -n "${IM_ROOT:-}" ] || return 255; case "$*" in *zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 0 ;; esac; }
+        rux_entry()      { printf "rux"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 im_run "$IM/ksiegowosc.json"; im_rc=$?
@@ -10358,6 +10362,23 @@ if awk -F'|' 'NR==1 { for (i=1;i<=NF;i++) if ($i ~ /^--target=/) t=i; for (i=1;i
     ok "importrel: ...with the remaining create flags present and in the export's order"
 else
     bad "importrel: remaining flags in order" "$(cat "$IM/calls.log")"
+fi
+# U24 (owner, pve10 2026-10-19: export -> delete -> import failed): delete-relation now
+# also leaves the source, so the replayed add-client stopped at "carry the package".
+# With root to the source and no account of this collector there, the import goes the
+# one-command way: --source=HOST:<the file's datasets>, --install --yes --grant-remotely.
+# --bandwidth is not a one-command flag, so that export keeps the ordinary replay.
+sed 's/,"--bandwidth=20M"//' "$IM/ksiegowosc.json" > "$IM/nobw.json"
+IM_ROOT=fresh im_run "$IM/nobw.json" --yes; im_rc1=$?; im_c1="$(cat "$IM/calls.log")"
+IM_ROOT=joined im_run "$IM/nobw.json" --yes; im_c2="$(cat "$IM/calls.log")"
+IM_ROOT=fresh im_run "$IM/ksiegowosc.json" --yes; im_c3="$(cat "$IM/calls.log")"
+if [ "$im_rc1" -eq 0 ] && printf '%s' "$im_c1" | grep -q '^rux|--source=10.0.0.11:rpool/data/vm-101|--name=ksiegowosc|' \
+   && printf '%s' "$im_c1" | grep -q '|--install|--yes|--grant-remotely$' && ! printf '%s' "$im_c1" | grep -q 'add-client\||--host=\||--datasets=' \
+   && printf '%s' "$im_c2" | grep -q '^add-client|ksiegowosc|' && ! printf '%s' "$im_c2" | grep -q '^rux' \
+   && printf '%s' "$im_c3" | grep -q '^add-client|ksiegowosc|' && ! printf '%s' "$im_c3" | grep -q '^rux'; then
+    ok "importrel: source without this collector's account + root channel -> one command (join, the file's datasets granted, seed, activate); account still there, or a flag the one-command form lacks -> the ordinary replay (U24)"
+else
+    bad "importrel: rejoin path" "rc=$im_rc1" "fresh: $im_c1" "joined: $im_c2" "bandwidth: $im_c3" "$(cat "$WORK/im.err")"
 fi
 # a name that exists here refuses BEFORE anything is called. This bare record
 # (CLIENT_NAME + STATE only) exports without dying (rc 0, empty argv, since
@@ -10706,6 +10727,18 @@ if [ "$lb_grc" -ne 0 ] && printf '%s' "$lb_g" | grep -q "will not install under 
     ok "localbackup: --target='' --install --yes is still refused outside import (confirmed by eye)"
 else
     bad "localbackup: blank-target --yes guard" "rc=$lb_grc" "$lb_g"
+fi
+# --no-copy says "snapshots only" in words (the GUI wizard sends it after its own
+# WYKONAJ, owner 2026-10-19): the blank target then passes the guard. With a real
+# target it is a contradiction and refused.
+lb_n=$( ( export CLIENTS_DIR="$EX/imclients" SERVER_CONF="$EX/no-server-conf"
+          bash "$ZFSBACKUP" local-backup --name=g --source=hdd/lab/a --target= --no-copy --install --yes ) 2>&1 )
+lb_c=$( ( export CLIENTS_DIR="$EX/imclients" SERVER_CONF="$EX/no-server-conf"
+          bash "$ZFSBACKUP" local-backup --name=g --source=hdd/lab/a --target=tank/x --no-copy --install --yes ) 2>&1 ); lb_crc=$?
+if ! printf '%s' "$lb_n" | grep -q "will not install under --yes" && [ "$lb_crc" -ne 0 ] && printf '%s' "$lb_c" | grep -q -- "--no-copy means snapshots only"; then
+    ok "localbackup: --no-copy lets the blank target install under --yes (GUI); with a real target it is refused"
+else
+    bad "localbackup: --no-copy" "$lb_n" "rc=$lb_crc" "$lb_c"
 fi
 
 
@@ -12738,13 +12771,30 @@ as_mirror() {   # <dataset> -> RUX_SOURCE the stubbed activate-client saw
       cmd_add_source m "$1" --yes ) 2>&1
 }
 AM1=$(as_mirror p/data); AM2=$(as_mirror p/data/docs)
-if printf '%s' "$AM1" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data' && printf '%s' "$AM1" | grep -q "recorded in the request of mirror 'm'" \
-   && printf '%s' "$AM2" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data$' && ! printf '%s' "$AM2" | grep -q 'recorded in the request'; then
-    ok "addsrc: on a mirror the new dataset joins RUX_SOURCE's list BEFORE the re-activation; a child of a listed root adds nothing (U20)"
+# The same for a BACKUP the one-command form created (pve9b, re-created by import,
+# 2026-10-19): it has RUX_SOURCE's list too, and activation measured the scope by it.
+sed -i 's/^RUX_MODE=sync$/RUX_MODE=/' "$DR/clients/m.conf"
+AM3=$(as_mirror p/db)
+if printf '%s' "$AM1" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data' && printf '%s' "$AM1" | grep -q "recorded in RUX_SOURCE of 'm'" \
+   && printf '%s' "$AM2" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data$' && ! printf '%s' "$AM2" | grep -q 'recorded in RUX_SOURCE' \
+   && printf '%s' "$AM3" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data,p/db$'; then
+    ok "addsrc: the new dataset joins RUX_SOURCE's list BEFORE the re-activation -- mirror and one-command backup alike; a child of a listed root adds nothing (U20)"
 else
-    bad "addsrc: mirror request" "$AM1" "$AM2"
+    bad "addsrc: RUX_SOURCE request" "$AM1" "$AM2" "$AM3"
 fi
 rm -f "$DR/clients/m.conf"
+# A record that never got its join (pending_enroll, no pairing key) -- what a failed
+# import leaves. Loading its connection DIES, and that die ended the whole verb, rc 1
+# and not a word, so the record could not be removed (pve10, 2026-10-19).
+printf 'CLIENT_NAME=pe\nSTATE=pending_enroll\nPEER_HOST=10.0.0.8\nCLIENT_TARGET=tank/b\n' > "$DR/clients/pe.conf"
+DPE=$(dr_run pe); dpe_rc=$?
+if [ "$dpe_rc" -eq 0 ] && printf '%s' "$DPE" | grep -q "^delete-relation 'pe' (state=pending_enroll, peer=10.0.0.8):" \
+   && printf '%s' "$DPE" | grep -q '^plan only'; then
+    ok "delrel: a never-joined record (pending_enroll) gets its plan -- the load that dies is confined, not the verb"
+else
+    bad "delrel: pending_enroll record" "rc=$dpe_rc" "$DPE" "$(cat "$DR/err")"
+fi
+rm -f "$DR/clients/pe.conf"
 # U16 (owner 2026-10-19): --check-source asks the plan whether root ssh to the source
 # works at all. pve9 -> pve10 had none, and the composite stopped half-way. The probe is
 # ONE `true` over the same channel; without the flag the plan opens no connection.

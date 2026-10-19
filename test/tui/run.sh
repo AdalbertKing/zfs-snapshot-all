@@ -2694,14 +2694,14 @@ NROUT=$(nr_run "0${T}snap
 0${T}
 0${T}
 " NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
-NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --install$' "$NR/zb.log")"
+NRSI="$(grep -E -- '^--source=hdd/backups/192.168.28.99/hdd/lab --target= .* --no-copy --install --yes$' "$NR/zb.log")"
 if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --name=migawki-hdd-backups-192.168.28.99-hdd-lab ' \
-   && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' && ! printf '%s' "$NRSI" | grep -qF -- '--yes' \
+   && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
    && grep -qF 'Krok 2/6: Co kopiować z' "$NR/tree.log" && grep -qF 'Krok 3/6: Jak długo trzymać migawki?' "$NR/wt.log" \
    && grep -qF 'Krok 6/6: Podsumowanie' "$NR/wt.log" && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
-    ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= z --install bez --yes"
+    ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, kroki x/6, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po WYKONAJ, wlasciciel 2026-10-19)"
 else
     bad "new-relation: same migawki" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -F 'Krok' "$NR/wt.log" | cut -c1-160 | head -10)" "$(cat "$NR/err" | tail -5)"
 fi
