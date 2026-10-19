@@ -412,6 +412,32 @@ check "peer: indented keys are not the gate speaking"   "NO" "$(parse lab1 "  PA
   RESTORE_GRANT=present
   RESTORE_GRANT_MODES=replace")"
 
+# ---- `restore <relation> --grant` (U14): the GUI asks this before its windows ----
+# The same question, read-only, reported as KEY=VALUE with rc 0/1/2. restore_grant_ask
+# is replaced by a stub returning $ANS -- the report's job is the wording and the rc.
+report() {   # <source address> <answer> -> stdout + "rc=N"
+    ( set -u
+      log(){ :; }
+      eval "$(product_fn "$RESTORE" restore_grant_parse)"
+      eval "$(product_fn "$RESTORE" restore_grant_report)"
+      restore_grant_ask() { printf '%s' "$ANS"; }
+      ANS="$2" restore_grant_report "$1"; printf 'rc=%s' "$?" )
+}
+check "report: granted -> modes, label, rc 0" "HOST=pve1
+LABEL=lab1
+GRANT=create rewind replace
+rc=0" "$(report zfsbackup-pve9@pve1:hdd/a "$GOOD")"
+check "report: answered without a grant -> GRANT=none, rc 1" "HOST=pve1
+LABEL=lab1
+GRANT=none
+rc=1" "$(report zfsbackup-pve9@pve1:hdd/a "PAIR_LABEL=lab1
+RESTORE_GRANT=none")"
+check "report: no answer -> GRANT=unreachable, rc 2" "HOST=pve1
+GRANT=unreachable
+rc=2" "$(report zfsbackup-pve9@pve1:hdd/a "")"
+check "report: a source on THIS host needs no grant -> GRANT=local, rc 0, nothing asked" "GRANT=local
+rc=0" "$(report hdd/a "")"
+
 # ---- and the decision on top of it ----------------------------------------
 check "peer: a full grant authorises replace" "OK" "$(require lab1 "$GOOD" replace)"
 check "peer: ...and rewind"                   "OK" "$(require lab1 "$GOOD" rewind)"
