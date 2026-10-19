@@ -14335,7 +14335,10 @@ cmd_delete_relation() {
     fi
     if [ -z "$copies" ] && [ "$state" != removed ] && [ "${RUX_MODE:-}" != snaponly ]; then
         local _derived
-        _derived=$( load_client_and_connection "$cpath" >/dev/null 2>&1 || exit 0
+        # die_confine_to_subshell: on a record that never got its join (pending_enroll)
+        # the load DIES, and without the confinement that die ended the whole verb,
+        # rc 1 and not a word (pve10, 2026-10-19) -- the record could not be removed.
+        _derived=$( die_confine_to_subshell; load_client_and_connection "$cpath" >/dev/null 2>&1 || exit 0
                     for _ds in ${PEER_SAVED_DATASETS:-}; do
                         _lp=$(client_local_path "$_ds")
                         zfs list -H -o name -- "$_lp" >/dev/null 2>&1 && printf '%s\n' "$_lp"
