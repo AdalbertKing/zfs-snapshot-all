@@ -3042,6 +3042,11 @@ restore_pause_coverage() {   # <relation label>
     for u in root "${SUDO_USER:-}" zfsbackup "zfsbackup-$label"; do
         [ -n "$u" ] || continue
         while IFS= read -r line; do
+            # Not relationship prunes (owner's restore on pve9, 2026-10-19: "2 of 28 ...
+            # carry NO -L" were replica usb1's lines): a commented line runs nothing (the
+            # replica's '#on-insert' template), and a replica job (zfs-media-gate.sh attach)
+            # prunes only its own medium, never a relationship's recovery points.
+            case "$line" in '#'*|*zfs-media-gate.sh*) continue ;; esac
             case "$line" in
                 *delsnaps.sh*)
                     total=$((total + 1))

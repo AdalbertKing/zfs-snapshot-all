@@ -3861,9 +3861,67 @@ class UI(object):
             self.refresh()
             self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
 
+    # ODŚWIEŻANIE W TLE (U12/U13, właściciel 2026-10-19: "powrót do GUI trwa wszędzie
+    # długo", "Esc po F7 długo wraca"). Źródła idą równolegle od P2, ale razem trwają tyle,
+    # co najwolniejsze -- monitor --json, zmierzone na pve9 5,7 s. Po oknie GUI wraca OD
+    # RAZU ze starymi danymi i napisem "odświeżam w tle…"; świeże dane wchodzą, gdy dojdą
+    # (pętla curses pyta co 0,3 s). Fikstury i testy (offline/pliki) -- dalej od razu.
+    BG_NOTE = u"   (odświeżam w tle…)"
+
+    def refresh_bg(self):
+        if self.files.get("offline") or self.exec_log or any(self.files.get(k) for k in ("status", "jobs", "monitors")):
+            self.refresh()
+            return
+        bg = getattr(self, "_bg", None)
+        if bg is not None and bg[0].is_alive():
+            return
+        import threading
+        files2 = dict(self.files)
+        files2["_data"] = Data()
+        box = {}
+
+        def _run():
+            try:
+                box["data"] = collect(self.repo, files2)
+            except Exception as e:   # pokaż, nie wysadzaj GUI
+                box["err"] = str(e)
+        t = threading.Thread(target=_run)
+        t.daemon = True
+        t.start()
+        self._bg = (t, box)
+        if not (self.message or "").endswith(self.BG_NOTE):
+            self.message = (self.message or "") + self.BG_NOTE
+
+    def bg_pending(self):
+        bg = getattr(self, "_bg", None)
+        return bg is not None
+
+    def poll_bg(self):
+        """-> True, gdy dane z tła weszły (trzeba przerysować)."""
+        bg = getattr(self, "_bg", None)
+        if bg is None or bg[0].is_alive():
+            return False
+        self._bg = None
+        if (self.message or "").endswith(self.BG_NOTE):
+            self.message = self.message[:-len(self.BG_NOTE)]
+        data = bg[1].get("data")
+        if data is None:
+            self.message = (self.message or "") + u"   odświeżenie w tle nie wyszło: %s" % bg[1].get("err", "?")
+            return True
+        self.files["_data"] = data
+        self.apply_data(data, full=True)
+        before = getattr(self, "rel_names_before_bg", None)
+        self.rel_names_before_bg = None
+        if before is not None and self.cursor_to_new(before):
+            self.message = (self.message or "") + u"  --  kursor na nowej relacji"
+        return True
+
     def refresh(self, only=None):
-        self.data = collect(self.repo, self.files, only)
-        if only is None:
+        self.apply_data(collect(self.repo, self.files, only), full=(only is None))
+
+    def apply_data(self, data, full=True):
+        self.data = data
+        if full:
             # PELNE odswiezenie czysci tez dane czytane na zadanie (wlasciciel 2026-10-09,
             # uwaga 1: "powrot do okna powinien zawsze wymuszac odswiez -- wszedzie"):
             # szablony (F5) i config relacji (panel na F3). Data jest wspoldzielona miedzy
@@ -4722,7 +4780,7 @@ class UI(object):
                 self.window, self.scroll = None, 0
                 if obj.get("proc") is not None and obj["proc"].poll() is None:
                     self.message = u"proces biegnie dalej (pid %d); wyjście: %s" % (obj["proc"].pid, obj["path"])
-                self.refresh()
+                self.refresh_bg()
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -5299,13 +5357,18 @@ def curses_loop(ui):
             # (to pliki, nie komenda), i curses maluje roznice, nie ekran.
             if ui.window and ui.window[0] == "output" and ui.window[1].get("proc") is not None and ui.window[1]["proc"].poll() is None:
                 stdscr.timeout(500)          # ogon pliku wyjscia zyje
+            elif ui.bg_pending():
+                stdscr.timeout(300)          # dane z tła: przerysuj, gdy dojdą
             else:
                 stdscr.timeout(2000 if ui.screen == "transfery" and not ui.window else -1)
             k, seqname, is_char = read_key()
             if k == -1:
-                if not ui.window:
+                if ui.poll_bg():
+                    continue
+                if not ui.window and ui.screen == "transfery":
                     ui.refresh("progress")
                 continue
+            ui.poll_bg()
             if k == curses.KEY_RESIZE:
                 continue
             name = seqname if k == -2 else KEYMAP.get(k)
@@ -5372,15 +5435,14 @@ def curses_loop(ui):
                         pass
                 stdscr.clear()
                 stdscr.refresh()
-                ui.refresh()
                 ui.message = u"[rc=%s] %s" % (rc, line)
-                before = getattr(ui, "rel_names_before", None)
-                ui.rel_names_before = None
-                if before is not None and ui.cursor_to_new(before):
-                    ui.message = u"[rc=%s] %s  --  kursor na nowej relacji" % (rc, line)
                 log_path, ui.pending_log_path = ui.pending_log_path, None
                 if log_path:
                     ui.message += u"   dziennik: %s" % log_path
+                # Kursor na nowej relacji -- dopiero gdy świeże dane wejdą (poll_bg).
+                ui.rel_names_before_bg = getattr(ui, "rel_names_before", None)
+                ui.rel_names_before = None
+                ui.refresh_bg()
     curses.wrapper(main)
 
 

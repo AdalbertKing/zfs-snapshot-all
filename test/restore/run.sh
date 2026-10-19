@@ -2751,6 +2751,26 @@ else
     bad "guid map: restore_one uses restore_guid_map" "the call is not there"
 fi
 
+# ---- pause coverage counts relationship prunes only (pve9, 2026-10-19) ----------
+# A replica job (zfs-media-gate.sh attach) prunes its own medium, and a '#on-insert'
+# template line runs nothing; counting them told the owner "2 of 28 prune lines carry
+# NO -L" on a crontab where every relationship prune had -L.
+pc_out=$( crontab() {
+              case "$*" in
+                  "-l -u root") printf '%s\n' \
+                      '1 * * * * /x/zfs-job.sh "h prune" -- /x/delsnaps.sh -L rel "hdd/a" "automated_" -H24' \
+                      '0 22 * * 5 /x/zfs-job.sh "h replica copy (usb1)" -- /bin/sh -c '"'"'( /x/zfs-media-gate.sh attach repl usb1; /x/delsnaps.sh "repl/replica" "replica_" -H2 )'"'"'' \
+                      '#on-insert /x/zfs-job.sh "h replica copy (usb1)" -- /bin/sh -c '"'"'( /x/zfs-media-gate.sh attach repl usb1; /x/delsnaps.sh "repl/replica" "replica_" -H2 )'"'"'' ;;
+                  "-l -u zfsbackup") printf '%s\n' '21 * * * * /x/delsnaps.sh "hdd/old" "automated_" -H24' ;;
+              esac; }
+          log() { [ "$1" -le 1 ] && echo "$2"; }
+          SUDO_USER="" restore_pause_coverage rel 2>&1 )
+if printf '%s' "$pc_out" | grep -q 'WARNING -- 1 of 2 prune line(s)'; then
+    ok "pause coverage: counts relationship prunes only -- a replica job and a commented line are not 'prunes without -L'"
+else
+    bad "pause coverage: replica and comment lines counted" "$pc_out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
