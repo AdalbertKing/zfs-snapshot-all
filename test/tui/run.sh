@@ -1852,7 +1852,7 @@ C="$(: > "$XL"; screen relacje "down,F8" --exec-log "$XL")"
 # POD OKNEM WIDAC LINIE POLECEN z komenda zlozona przez okno, i pasek F.
 # (Dluga komenda jest ucieta od poczatku -- widac jej koniec, jak przy pisaniu.)
 if printf '%s\n' "$C" | tail -2 | head -1 | grep -q "pause-client lab-ct201 '--reason=z TUI" \
-   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" 't wykonaj   Tab do linii poleceń   Esc wróć'; then
+   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" '═ t wykonaj   ' && has "$C" 'Tab do linii poleceń   Esc wróć'; then
     ok "linia: pod oknem potwierdzenia zostaje linia polecen z jego komenda i pasek klawiszy; stopka 't wykonaj   Tab do linii poleceń'"
 else
     bad "linia: linia polecen pod oknem" "$(printf '%s\n' "$C" | tail -3)"
