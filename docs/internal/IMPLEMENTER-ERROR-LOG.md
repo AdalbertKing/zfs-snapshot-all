@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63, E93.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -1921,6 +1921,20 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E93 — a test assertion that the defect itself satisfied (2026-10-19, R1)
+**2026-10-19, U19 change list, PR #628.**
+
+*Genesis.* The new menu label for a pending address printed the address twice
+(`Adres hosta: 10.98.0.2 [zmiana]10.98.0.2`). The test asserted the substring
+`Adres hosta: 10.99.0.9 [zmiana]` -- which the broken label contains -- so it passed, and
+the defect surfaced only in the live GUI campaign on pve10.
+
+*Cause.* R1: the assertion was written from the intended output and never run against a
+wrong one. A substring check on a label proves nothing about what follows it.
+
+*Rule.* R1. A label assertion pins the whole changed span (`stary -> nowy [zmiana]`), and is
+checked once against the broken build before it is trusted.
 
 ### E92 — `impact.sh --verify | tail -1` hid a STALE status digest; CI went red (2026-10-19, R6)
 **2026-10-19, U23 settings package, PR #625.**

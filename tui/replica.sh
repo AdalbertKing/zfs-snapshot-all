@@ -470,7 +470,13 @@ PYEOF
             # Ostatniego dysku się nie usuwa -- replika bez dysku to "Usuń replikę".
             case "$GUIDS" in *,*) items+=(__del__ "Usuń dysk z repliki (dane na nim zostają)") ;; esac
         fi
-        def="${cur:-__prep__}"
+        # Domyślnie dysk, który już jest -- nie formatowanie (kampania 2026-10-19: Enter
+        # na tym kroku wybierał "Sformatuj", a następny Enter kasował dysk z pulą).
+        def="$cur"
+        if [ -z "$def" ]; then
+            for ((_k = 0; _k < ${#items[@]}; _k += 2)); do case "${items[$_k]}" in __*) ;; *) def="${items[$_k]}"; break ;; esac; done
+        fi
+        def="${def:-__prep__}"
         wt --title "Replika $NAME -- 5/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Nośnik musi być podłączony. Kopia ląduje pod  <pula>/replica/<dataset źródła>.$([ -n "$busy" ] && printf '\nDyski innych replik (nie do wyboru):%s' "$busy")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || { step=3; continue; }
@@ -637,7 +643,7 @@ PYEOF
             echo
             echo "Zadanie w cronie:"
             sed -n '/co sie zmieni w crontabie/,$p' "$TMPD/plan.txt" | grep -E "^\s+\+\S" | grep -F "replica" \
-                | sed -E 's/^\s+\+//' | awk '{w=($1=="#on-insert")?"po włożeniu":$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):"?"; print "  + " w "   " l}' | head -6
+                | sed -E 's/^\s+\+//' | awk '{w=($1=="#on-insert")?"po włożeniu":$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\.sh age/?"monitor: wiek kopii na nośniku":"?"); print "  + " w "   " l}' | head -6
             if [ "$EDIT" -eq 1 ]; then
                 echo
                 echo "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie)."
@@ -645,7 +651,8 @@ PYEOF
             echo
             echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"
         } >"$TMPD/plan2.txt"
-        if ! yesno_text "$TMPD/plan2.txt" "Replika $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno; then
+        # Enter = WYKONAJ, jak w kreatorze relacji (jedno zachowanie planów).
+        if ! yesno_text "$TMPD/plan2.txt" "Replika $NAME -- plan" "WYKONAJ" "Wstecz"; then
             if [ "$ENGINE_ONLY" -eq 1 ]; then
                 replica_engine && continue
                 clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1

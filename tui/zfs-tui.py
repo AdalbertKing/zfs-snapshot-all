@@ -165,6 +165,14 @@ def export_file_info(path):
     return doc.get("name") or "?", mt
 
 
+def rel_addr(rel):
+    """Adres, przez ktory relacja chodzi TERAZ (active_endpoint bez portu); po zmianie
+    adresu (kolektor za VPN) kolumna Kierunek pokazywala stary peer_host (kampania 2026-10-19)."""
+    ep = (rel or {}).get("active_endpoint") or ""
+    h = ep.rsplit(":", 1)[0] if ":" in ep else ep
+    return h or (rel or {}).get("peer_host") or ""
+
+
 def direction_of(host, peer, dirs, mode=None):
     """`pve10>pve9` wysylam, `pve10<pve9` pobieram, `pve10<>pve9` w obie strony,
     `local` w obrebie hosta. Lewa strona to ZAWSZE ten host.
@@ -1211,7 +1219,7 @@ def build_relations(data, now):
                         (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or u"zobacz cron.log"))
         rows.append({
             "kind": "relation", "name": name, "rel": rel, "state": state_word(rel),
-            "dir": direction_of(host, rel.get("peer_host") or "", dirs, rel.get("mode")),
+            "dir": direction_of(host, rel_addr(rel), dirs, rel.get("mode")),
             "typ": rel_type(rel.get("peer_host"), dirs, rel.get("mode"), rel.get("client_target")), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
             "verdict": verdict, "vword": vword, "reasons": reasons, "monitors": mons,
@@ -1544,7 +1552,7 @@ def build_jobs(data, now):
         rel = rels_by_name.get(m.get("label") or "")
         rows.append({
             "kind": "monitor", "name": m.get("label") or "(bez etykiety)", "rel": None,
-            "dir": direction_of(host, rel.get("peer_host") or "", [], rel.get("mode")) if rel else "?",
+            "dir": direction_of(host, rel_addr(rel), [], rel.get("mode")) if rel else "?",
             "task": u"strażnik bez zadania", "pref": "-", "keep": "-", "cnt": len(m.get("datasets", [])) or "",
             "scope": ",".join(m.get("datasets", [])) or "?",
             "schedule": m.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],

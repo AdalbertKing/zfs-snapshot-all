@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 565315dd6a284ca8 -->
+<!-- status-covers-digest: 726e10dfaee4918e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **KAMPANIA a>b<>c z GUI, paczka 2 (2026-10-19; `finisz/kampania-2`).** Po #629 na main: lustro `cb`
+  (pve10 <- pve11 `hdd/lab`, d7h24) z kreatora za pierwszym razem -- poprawka lustra potwierdzona na żywo;
+  układ a>b<>c stoi (`ab` przez VPN, `bc`, `cb`). Lustro `bc` zmienione oknem listy zmian (+labbrowse,
+  dobowe 14/14, jedno WYKONAJ). Repliki na pve9b (GUI przez VPN): `usbx` na istniejącym dysku `pve9b-usb0`
+  -- dodana, F7 (import, kopia, eksport, rc=0), usunięta (dane na dysku zostają). Naprawione:
+  - krok „nośnik” nowej repliki stał domyślnie na „Sformatuj nowy nośnik” -- dwa Entery od skasowania dysku
+    z pulą. Teraz domyślnie pierwszy dysk, który już jest; plan repliki: Enter = WYKONAJ (jak kreator relacji);
+    linia monitora w planie miała etykietę „?”;
+  - F7 na replice: okno pokazywało tylko „zakończone, rc=0” (bieg pisze do swojego logu). `run-replicas`
+    wypisuje teraz to, co ten bieg dopisał do logu;
+  - F3: kolumna Kierunek po zmianie adresu pokazywała stary adres -- teraz ten, przez który relacja chodzi.
 
 - **KAMPANIA a>b<>c z GUI, paczka 1 (2026-10-19; `finisz/kampania-1`).** Lab od nowa: a = pve9b, b = pve10
   (kolektor), c = pve11. Z GUI na pve10: backup `ab` (pve9b -> pve10) założony, zmieniony w nowym oknie listy
