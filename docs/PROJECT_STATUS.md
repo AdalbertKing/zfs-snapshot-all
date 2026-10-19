@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 786c32d372bccf52 -->
+<!-- status-covers-digest: 04c69e8758bd8724 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U24: eksport -> usuń -> import znowu działa; dodanie datasetu i szablon po imporcie (2026-10-19;
+  `finisz/import-rejoin`).** Właściciel na pve10 (`pve9b`): import padał „Permission denied”, bo `delete-relation`
+  sprząta teraz także źródło (`--leave`), a odtworzone `add-client` kończyło się na „przenieś wsad i zrób --join”.
+  Teraz: gdy źródło nie ma już konta tego kolektora, a ten host ma do niego roota, import idzie jednym poleceniem
+  (`--source=HOST:<datasety z pliku> --install --yes --grant-remotely`: join, zakres = dokładnie lista z pliku, seed,
+  aktywacja); bez roota albo z flagą, której ta forma nie zna (np. `--bandwidth`) -- zwykłe odtworzenie jak dotąd.
+  Na żywo pve10: `pve9b` zaimportowana, stan `active`, pierwsze kopie 4 datasetów. Następnie `add-source pve9b
+  hdd/db` padało „outside the request”: relacja z jednego polecenia ma listę żądania w `RUX_SOURCE` (nie tylko
+  lustro) -- `add-source`/`remove-source` prowadzą ją teraz dla każdego trybu; na żywo `hdd/db` dodane, a zmiana
+  szablonu (`edit-relation --profile=d30`), która odmawiała przez pół-dodany `hdd/db`, daje plan. Do tego:
+  `delete-relation` rekordu bez joinu (`pending_enroll`) nie kończy się już cicho rc=1 (było: rekordu nie dało się
+  usunąć); kreator „Same migawki” podaje `local-backup --no-copy --install --yes` -- bez drugiego pytania „Zainstalować
+  ten backup lokalny? [t/N]” po WYKONAJ (`--no-copy` z prawdziwym celem jest odrzucane). Testy: `test/zfsbackup`
+  (ścieżka importu, RUX_SOURCE dla backupu, rekord bez joinu, `--no-copy`) i `test/tui` na pve9.
 
 - **FINISZ U23: ustawienia hosta w jednym pliku z sekcjami, okno F10 (2026-10-19; `finisz/ustawienia-f10`).**
   Właściciel: „nowy plik ustawień z sekcjami”, „ustawienia F10”. `/etc/zfs-snapshot-all/settings.ini` (ten sam plik
