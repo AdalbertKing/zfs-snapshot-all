@@ -814,9 +814,10 @@ fi
 # z wyjaśnieniem, co to znaczy i jak włączyć z powrotem; 't' wykonuje disable-client.
 A="$(act down,F8)"
 B="$(act down,F8,w --height 50)"
-if has "$A" 'w = zamiast pauzy WYŁĄCZ także na źródle' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
+# U7 (właściciel 10-18): klawisz wariantu na RAMCE obok "t wykonaj", nie w treści okna.
+if has "$A" 't wykonaj   w wyłącz na źródle   Tab do linii poleceń' && ! hasE "$A" '║ *[a-z] = ' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
    && has "$B" 'disable-client' && has "$B" 'zamek na źródle' && has "$B" 'F8 na tej relacji -> Włącz (enable-client).' && [ ! -s "$XL" ]; then
-    ok "akcje: F8 -> 'w' pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
+    ok "akcje: F8 -> 'w' (na ramce, nie w treści) pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
 else
     bad "akcje: F8 -> w (wyłącz)" "$A" "$B"
 fi
