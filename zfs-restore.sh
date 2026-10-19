@@ -3843,6 +3843,33 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
 # and restore_grant_parse then refuses. The diagnosis belongs to the caller,
 # which knows which dataset it was for; a message printed here would arrive
 # without that context and be repeated per dataset.
+# `restore <relation> --grant` (U14, owner 2026-10-19): the GUI's restore window asks
+# THIS before its first step, so a missing grant is said up front, in words, instead
+# of by the run after every window has been walked. Read-only -- the same single
+# PAIR-CONTROL question the run asks, answered the same way. KEY=VALUE lines on
+# stdout; rc 0 = something is granted (or the source is this host), 1 = the target
+# answered without a usable grant, 2 = it did not answer.
+restore_grant_report() {   # <source address of the relation's first dataset>
+    local src="$1" host answer modes
+    case "$src" in
+        *:*) host="${src%%:*}" ;;
+        *)   printf 'GRANT=local\n'; return 0 ;;
+    esac
+    printf 'HOST=%s\n' "${host#*@}"
+    answer="$(restore_grant_ask "$host")" || answer=""
+    if [ -z "$answer" ]; then
+        printf 'GRANT=unreachable\n'
+        return 2
+    fi
+    printf 'LABEL=%s\n' "$(printf '%s\n' "$answer" | sed -n 's/^PAIR_LABEL=//p' | head -1)"
+    if modes="$(restore_grant_parse "" "$answer" 2>/dev/null)" && [ -n "$modes" ]; then
+        printf 'GRANT=%s\n' "$modes"
+        return 0
+    fi
+    printf 'GRANT=none\n'
+    return 1
+}
+
 restore_grant_ask() {   # <account@host> -> the gate's answer, or nothing
     local peer="$1"
     [ -n "$peer" ] || return 1
@@ -4635,7 +4662,7 @@ cmd_restore() {
     # and every path below eventually asks that. Reviewer rule 2, 2026-08-26.
     restore_relations_sane
     local plan=0 json=0 dataset="" config="" snapshot="" yes=0 addr="" addr_filter="" dest_addr=""
-    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy="" overwrite=0
+    local scope_src="" scope_tgt="" scope_ns="" scope_list="" at_raw="" at_epoch="" onto_list="" from_copy="" overwrite=0 grant=0
     # A SHIFTING loop, not `for a in "$@"`, so an option may take its value as the
     # next word. Both recorded contracts spell it that way -- `--target
     # rpool/data/x` -- and an operator typing a recovery at three in the morning
@@ -4654,6 +4681,7 @@ cmd_restore() {
         case "$a" in
             --plan)       plan=1 ;;
             --json)       json=1 ;;
+            --grant)      grant=1 ;;
             --dataset=*)  dataset="${a#*=}" ;;
             --dataset)    need_val --dataset "${2:-}"; dataset="$2"; shift ;;
             # Wall-clock, not a snapshot name (OWNER-RESTORE-CLI-GRAMMAR-2026-08-13).
@@ -4732,6 +4760,10 @@ cmd_restore() {
     # --json is the plan's recovery points for a program (the GUI's "z kiedy?"
     # list), not a second planner: same resolver, same filters, same listing.
     [ "$json" -eq 0 ] || [ "$plan" -eq 1 ] || die "restore: --json is the machine-readable form of --plan -- give both"
+    if [ "$grant" -eq 1 ]; then
+        { [ -n "$addr" ] && [ -z "$dest_addr" ] && [ "$plan" -eq 0 ] && [ -z "$from_copy" ] && [ -z "$onto_list" ]; } \
+            || die "restore: --grant asks ONE relation's source what it permits, and nothing else: restore <relation> --grant [--config=<path>]"
+    fi
     [ "$json" -eq 0 ] || [ -z "$at_raw" ] || die "restore: --plan --json lists every recovery point; --at picks one of them. Give one or the other."
     [ "$overwrite" -eq 0 ] || [ -n "$from_copy" ]         || die "restore: --overwrite says a destination that already exists may be written onto, and only --from-copy takes such a destination. A relationship-addressed recovery decides that from the target's grant instead."
     if [ -n "$onto_list" ] && [ -z "$dest_addr" ] && [ -z "$from_copy" ]; then
@@ -4861,6 +4893,10 @@ cmd_restore() {
         local _rc_sel; _rc_sel=$(restore_resolve_token "$_rc_cfg" "$addr")
         local _rc_n; _rc_n=$(printf '%s
 ' "$_rc_sel" | grep -c .)
+        if [ "$grant" -eq 1 ]; then
+            restore_grant_report "$(printf '%s\n' "$_rc_sel" | head -1 | cut -f1)"
+            return $?
+        fi
         if [ -n "$snapshot" ]; then
             # A destructive-capable form needs exactly one dataset: restoring a
             # WHOLE relation to one snapshot name would revive the false idea

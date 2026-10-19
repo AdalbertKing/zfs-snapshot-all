@@ -12679,6 +12679,47 @@ else
     bad "delrel: archive of a removed record named like a live source identity" "$DROUT" "$(ls "$DR/clients" "$DR/peers")"
 fi
 mv "$DR/clients"/c.conf.removed-* "$DR/clients/c.conf" 2>/dev/null; rm -rf "$DR/peers"
+# U20 (owner 2026-10-19, g3-bc): add-source on a MIRROR -- activation measures the
+# committed scope against RUX_SOURCE's dataset list, so the list must follow the scope
+# (REQUESTED_DATASETS is empty on a mirror). The source side and the re-activation are
+# stubbed; what is pinned is the record the re-activation then reads.
+printf 'CLIENT_NAME=m\nSTATE=active\nPEER_HOST=10.0.0.6\nACTIVE_ENDPOINT=10.0.0.6:22\nRUX_MODE=sync\nRUX_SOURCE=10.0.0.6:p/ct\nREQUESTED_DATASETS=\x27\x27\nMANAGED_DATASETS=p/ct\n' > "$DR/clients/m.conf"
+as_mirror() {   # <dataset> -> RUX_SOURCE the stubbed activate-client saw
+    ( CLIENTS_DIR="$DR/clients" COLLECTOR_LABEL=pve9
+      . "$ZFSBACKUP"
+      rux_root_ssh() { case "$*" in *awk*) echo ALREADY-IN-SCOPE ;; esac; return 0; }
+      bash() { [ "${2:-}" = activate-client ] && echo "ACTIVATE saw $(record_get "$(client_conf_path m)" RUX_SOURCE)"; return 0; }
+      crontab_for_target() { :; }
+      add_source_first_copy() { :; }
+      cmd_add_source m "$1" --yes ) 2>&1
+}
+AM1=$(as_mirror p/data); AM2=$(as_mirror p/data/docs)
+if printf '%s' "$AM1" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data' && printf '%s' "$AM1" | grep -q "recorded in the request of mirror 'm'" \
+   && printf '%s' "$AM2" | grep -q 'ACTIVATE saw 10.0.0.6:p/ct,p/data$' && ! printf '%s' "$AM2" | grep -q 'recorded in the request'; then
+    ok "addsrc: on a mirror the new dataset joins RUX_SOURCE's list BEFORE the re-activation; a child of a listed root adds nothing (U20)"
+else
+    bad "addsrc: mirror request" "$AM1" "$AM2"
+fi
+rm -f "$DR/clients/m.conf"
+# U16 (owner 2026-10-19): --check-source asks the plan whether root ssh to the source
+# works at all. pve9 -> pve10 had none, and the composite stopped half-way. The probe is
+# ONE `true` over the same channel; without the flag the plan opens no connection.
+dr_probe() {   # <rc of the root channel> <args...> -> plan + "CALLS=<n>"
+    local prc="$1"; shift
+    ( CLIENTS_DIR="$DR/clients"
+      . "$ZFSBACKUP"
+      n=0; rux_root_ssh() { n=$((n + 1)); return "$prc"; }
+      cmd_delete_relation "$@"; echo "CALLS=$n" ) 2>&1
+}
+DP_NO=$(dr_probe 255 c --check-source); DP_OK=$(dr_probe 0 c --check-source); DP_PLAIN=$(dr_probe 255 c)
+if printf '%s' "$DP_NO" | grep -q '2\. source    : NO root SSH to 10.0.0.9 (port 2222) from this host -- on 10.0.0.9, as root: cd .* && \./deploy.sh --leave=' \
+   && printf '%s' "$DP_NO" | grep -q 'CALLS=1' \
+   && printf '%s' "$DP_OK" | grep -q '2\. source    : on 10.0.0.9 (port 2222), as root over SSH: deploy.sh --leave=' \
+   && printf '%s' "$DP_PLAIN" | grep -q '2\. source    : on 10.0.0.9' && printf '%s' "$DP_PLAIN" | grep -q 'CALLS=0'; then
+    ok "delrel: --check-source -- no root channel: the plan says so with the manual --leave; channel up: the usual line; without the flag: no connection at all (U16)"
+else
+    bad "delrel: --check-source" "$DP_NO" "$DP_OK" "$DP_PLAIN"
+fi
 DROUT=$(dr_run a --keep-source --keep-record --destroy-copies)
 if printf '%s' "$DROUT" | grep -q '2\. source    : skipped -- --keep-source' && printf '%s' "$DROUT" | grep -q "3\. record    : kept (--keep-record) -- the name 'a' stays taken" \
    && printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host, of (from the record):' && printf '%s' "$DROUT" | grep -q '^ *tank/b/10.0.0.5/p/x$'; then

@@ -2762,6 +2762,43 @@ else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
 fi
 
+# 3j. U16 (wlasciciel 2026-10-19): bez roota do zrodla okno NIE proponuje sprzatania zrodla
+#     (czasownik stanalby w polowie), mowi, co zrobic tam recznie, i usuwa z --keep-source.
+cat > "$NR/bin/zb-del2" <<'EOF'
+#!/bin/bash
+if [ "$1" = delete-relation ]; then
+    printf '%s\n' "$*" >> "$NR_DIR/argv"
+    case " $* " in
+        *" --yes "*) echo "delete-relation: done"; exit 0 ;;
+        *" --keep-source "*) src="  2. source    : skipped -- --keep-source" ;;
+        *" --check-source "*) src="  2. source    : NO root SSH to 10.0.0.9 (port 22) from this host -- on 10.0.0.9, as root: cd /root/scripts/zfs-snapshot-all && ./deploy.sh --leave=pve10  (or run this with --keep-source)" ;;
+        *) src="  2. source    : on 10.0.0.9 (port 22), as root over SSH: deploy.sh --leave=pve10  -- the account and its zfs grants there" ;;
+    esac
+    echo "delete-relation '$2' (state=active, peer=10.0.0.9):"
+    echo "  1. collector : remove-client $2  -- config sections and cron lines of THIS relationship"
+    echo "$src"
+    echo "  3. record    : clean-relationships.sh --purge=$2  -- frees the NAME (it refuses anything still LIVE)"
+    echo "  4. copies    : KEPT on this host (tank/b/x) -- pass --destroy-copies to destroy them too"
+    echo "plan only. Re-run with --yes to do it. Nothing was changed."
+    exit 0
+fi
+exit 9
+EOF
+chmod +x "$NR/bin/zb-del2"
+rm -rf "$DRD"; mkdir -p "$DRD"
+printf '0\trec\n0\t\n' > "$DRD/answers"   # checklist: zostaw 'Zwolnij nazwę'; potem WYKONAJ
+DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del2"
+         bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
+DRCL="$(grep -F -- '--checklist' "$DRD/wt.log" | head -1)"
+if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z tego hosta' \
+   && has "$DRCL" 'cd /root/scripts/zfs-snapshot-all && ./deploy.sh --leave=pve10' \
+   && grep -q -- '--check-source' "$DRD/argv" && grep -q -- 'nazwa --keep-source --yes' "$DRD/argv" \
+   && has "$DROUT" 'Na 10.0.0.9 zostało konto relacji'; then
+    ok "okno usuwania: bez roota do zrodla -- bez pozycji 'Posprzątaj na źródle', z poleceniem do recznego sprzatania, usuniecie z --keep-source i przypomnienie na koncu (U16)"
+else
+    bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
+fi
+
 # 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.
 #
 # Wlasciciel, 2026-09-20, po zobaczeniu ekranu na zywo: "krok 9/10 nie przechodzi
@@ -3995,6 +4032,11 @@ if [ "$1" = restore ] && [ "$2" = --plan ]; then
     esac
     exit 0
 fi
+# U14: `restore NAZWA --grant` -- odpowiedz celu o zgode (domyslnie: jest create rewind).
+if [ "$1" = restore ] && case " $* " in *" --grant "*) true ;; *) false ;; esac; then
+    printf '%b\n' "${STUB_GRANT_OUT:-HOST=10.0.0.9\nLABEL=pve9\nGRANT=create rewind}"
+    exit "${STUB_GRANT_RC:-0}"
+fi
 if [ "$1" = restore ]; then
     line=""; for a in "$@"; do line="${line:+$line ~ }$a"; done
     printf '%s\n' "$line" >> "$NR_DIR/ran"
@@ -4009,7 +4051,7 @@ case "$*" in
         printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
         exit 0 ;;
     "list -H -p -o name,used,type")      # tryb --from-copy: wszystkie datasety hosta, bez -r
-        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs hdd hdd/data hdd/foo/bar; do
+        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs hdd hdd/data hdd/foo/bar tank/b/hdd/data; do
             printf '%s\t1000\tfilesystem\n' "$d"
         done
         exit 0 ;;
@@ -4063,11 +4105,40 @@ else
     bad "restore: obok, tylko docs" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "err: $(cut -c1-200 "$RW/err")" "wt: $(tail -n 3 "$RW/wt.log" | cut -c1-200)"
 fi
 RWSUM="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"   # argv okna to jedna wielowierszowa pozycja dziennika
-# --allow-restore= Z ETYKIETĄ: deploy.sh nie zna gołego --allow-restore (text-checker, 2026-10-15).
-if has "$RWSUM" 'Wymaga zgody' && has "$RWSUM" '--defaultno' && has "$RWSUM" "deploy.sh --allow-restore=$(hostname -s 2>/dev/null || hostname)"; then
-    ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jakiej zgody wymaga"
+# U14: zgoda jest (atrapa: create rewind) -- podsumowanie mowi, jaka, i nie straszy brakiem.
+if has "$RWSUM" 'Zgoda 10.0.0.9: create rewind' && has "$RWSUM" '--defaultno' && ! has "$RWSUM" 'Wymaga zgody' && ! grep -qF 'brak zgody' "$RW/wt.log"; then
+    ok "restore: okno podsumowania ma domyslne 'Nie' (--defaultno) i mowi, jaka zgode wydal cel (U14)"
 else
     bad "restore: okno podsumowania" "$(printf '%s' "$RWSUM" | cut -c1-300)"
+fi
+# U14 (wlasciciel 2026-10-19): BRAK ZGODY mowi PIERWSZE okno, nie odmowa polecenia na koncu.
+# g1: "Odtworz na tym hoscie" -> tryb --from-copy z wstepnie zaznaczona kopia; drzewo atrapy wraca
+#     Wstecz, wiec nic nie uruchomione. g2: "Mimo to dalej" -> zwykle kroki, podsumowanie
+#     "Wymaga zgody" z etykieta podana przez cel (pve9), nie z nazwy tego hosta.
+printf '{"action":"back"}\n' > "$RW/t-back.json"
+printf '0\ttutaj\n' > "$RW/answers"
+STUB_GRANT_OUT='HOST=10.0.0.9\nLABEL=pve9\nGRANT=none' STUB_GRANT_RC=1 rw_run "$RW/t-back.json"
+if grep -qF 'brak zgody na 10.0.0.9' "$RW/wt.log" && grep -qF 'deploy.sh --allow-restore=pve9' "$RW/wt.log" \
+   && grep -qF '"roots": ["tank/b/hdd/data"]' "$RW/last-spec.json" 2>/dev/null && [ ! -e "$RW/ran" ]; then
+    ok "restore: brak zgody celu -> pierwsze okno mowi to po polsku z poleceniem dla celu; 'na tym hoscie' otwiera tryb z kopii z ta kopia zaznaczona (U14)"
+else
+    bad "restore: brak zgody -- okno i 'na tym hoscie'" "rc=$RW_RC" "ran: $(rw_ran)" "wt: $(grep -c 'brak zgody' "$RW/wt.log") allow: $(grep -c 'allow-restore=pve9' "$RW/wt.log")" "roots: $(grep -o '"roots": [^]]*]' "$RW/last-spec.json" 2>/dev/null)" "err: $(cut -c1-200 "$RW/err")"
+fi
+printf '0\tdalej\n0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+STUB_GRANT_OUT='HOST=10.0.0.9\nLABEL=pve9\nGRANT=none' STUB_GRANT_RC=1 rw_run "$RW/t-docs.json"
+RWSUM_N="$(grep -F -A 30 'sprawdź' "$RW/wt.log" | head -40)"
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran)" = "$W1" ] && has "$RWSUM_N" 'Wymaga zgody na 10.0.0.9: deploy.sh --allow-restore=pve9'; then
+    ok "restore: brak zgody + 'mimo to dalej' -> zwykle kroki i to samo polecenie; podsumowanie 'Wymaga zgody' z etykieta celu (U14)"
+else
+    bad "restore: brak zgody -- mimo to dalej" "rc=$RW_RC" "ran: $(rw_ran)" "chce: $W1" "sum: $(printf '%s' "$RWSUM_N" | grep -i zgod | cut -c1-200)"
+fi
+# g3: cel nie odpowiada (rc 2) -- inne zdanie, to samo okno.
+printf '1\t\n' > "$RW/answers"
+STUB_GRANT_OUT='HOST=10.0.0.9\nGRANT=unreachable' STUB_GRANT_RC=2 rw_run "$RW/t-docs.json"
+if [ "$RW_RC" -ne 0 ] && grep -qF '10.0.0.9 nie odpowiedział na pytanie o zgodę' "$RW/wt.log" && [ ! -e "$RW/ran" ]; then
+    ok "restore: cel nie odpowiada na pytanie o zgode -> okno to mowi; Wyjdz niczego nie uruchamia (U14)"
+else
+    bad "restore: cel nie odpowiada" "rc=$RW_RC" "ran: $(rw_ran)" "wt: $(tail -n 2 "$RW/wt.log" | cut -c1-200)"
 fi
 # 1b. RELACJA LOKALNA (zrodlo bez konto@host): to samo polecenie obok -- zfs-restore.sh przyjmuje je od
 #     2026-10-17 (wczesniej FATAL "not one this host records") -- ale podsumowanie NIE kaze wydawac zgody:

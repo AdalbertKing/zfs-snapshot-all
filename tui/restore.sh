@@ -290,8 +290,47 @@ esac
 
 SEL=(); ORIG=(); ONTO=(); WHOLE=0; DEST=""; BASE=""; AT=""; CMD=()
 # Etykieta, pod którą cel zna ten kolektor -- to ją przyjmuje deploy.sh --allow-restore=
-# (pve9b zna pve9 jako "pve9"). Okno jej nie sprawdza na celu; mówi, gdzie zajrzeć.
+# (pve9b zna pve9 jako "pve9"). Gdy cel odpowie na pytanie o zgodę, bierzemy JEGO nazwę.
 GRANT_LABEL="$(hostname -s 2>/dev/null || hostname)"
+
+# ---- ZGODA ŹRÓDŁA, ZANIM CO/DOKĄD/Z KIEDY (U14, właściciel 2026-10-19) -----------------------
+# Odzysk na $TARGET -- na miejsce i obok -- wymaga zgody, którą $TARGET wydaje sam
+# (deploy.sh --allow-restore). Wcześniej odmowę mówiło dopiero polecenie, po angielsku,
+# po przejściu wszystkich kroków. Teraz pytanie idzie od razu (`restore NAZWA --grant`,
+# tylko odczyt), a bez zgody okno proponuje odzysk na TYM hoście (kopia -> nowy dataset).
+GRANT=""; GRANT_RC=0
+if [ "$TARGET" != "ten host" ]; then
+    info "Przywróć $REL" "Pytam $TARGET o zgodę na odzysk..."
+    "$ZB" restore "$REL" --grant --config="$CFG" >"$TMPD/grant.txt" 2>/dev/null; GRANT_RC=$?
+    GRANT="$(sed -n 's/^GRANT=//p' "$TMPD/grant.txt" | head -1)"
+    _gl="$(sed -n 's/^LABEL=//p' "$TMPD/grant.txt" | head -1)"
+    [ -n "$_gl" ] && GRANT_LABEL="$_gl"
+    # Brak zgody = kod != 0 ALBO odpowiedź none/unreachable/pusta -- nie ufamy samemu kodowi.
+    case "$GRANT" in ""|none|unreachable) [ "$GRANT_RC" -ne 0 ] || GRANT_RC=1 ;; esac
+    if [ "$GRANT_RC" -ne 0 ]; then
+        if [ "$GRANT" = none ]; then
+            why="$TARGET nie wydał temu kolektorowi zgody na odzysk."
+        else
+            why="$TARGET nie odpowiedział na pytanie o zgodę (brak połączenia albo pakietu)."
+        fi
+        txt="$why Odzysk na $TARGET -- na miejsce i obok -- zostanie odrzucony.
+
+Żeby go umożliwić, na $TARGET jako root:
+  deploy.sh --allow-restore=$GRANT_LABEL
+  (na miejsce, gdy trzeba nadpisać: z --replace)
+
+Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię)."
+        geom
+        wt --title "Przywróć $REL: brak zgody na $TARGET" --ok-button "Wybierz" --cancel-button "Wyjdź" --notags \
+           --menu "$txt" "$(fit 13)" "$W" 2 \
+           tutaj "Odtwórz kopię na tym hoście (bez zgody źródła)" \
+           dalej "Mimo to dalej -- zgodę wydam przed uruchomieniem" || abort
+        if [ "$WT_OUT" = tutaj ]; then
+            rm -rf "$TMPD"
+            exec bash "$HERE/tui/restore.sh" --from-copy "${ROWC[0]}"
+        fi
+    fi
+fi
 
 step=1
 while :; do
@@ -483,6 +522,8 @@ PYEOF
             if [ "$TARGET" = "ten host" ]; then
                 # relacja lokalna: zrodlo, kopia i cel na tym hoscie -- restore nie pyta o zgode
                 echo "Relacja lokalna: kopia i cel są na tym hoście, zgoda nie jest potrzebna."
+            elif [ "$GRANT_RC" -eq 0 ] && [ -n "$GRANT" ]; then
+                echo "Zgoda $TARGET: $GRANT  (create = obok, rewind = na miejsce ze wspólnym punktem, replace = nadpisanie bez niego)"
             elif [ "$DEST" = obok ]; then
                 echo "Wymaga zgody na $TARGET: deploy.sh --allow-restore=$GRANT_LABEL"
             else

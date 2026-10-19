@@ -14283,7 +14283,7 @@ record_is_removed_name_live_as_source() {
 }
 
 cmd_delete_relation() {
-    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 a
+    local name="" yes=0 keep_source=0 keep_record=0 destroy=0 ask=0 check_source=0 a
     for a in "$@"; do
         case "$a" in
             --yes|-y)          yes=1 ;;
@@ -14291,7 +14291,11 @@ cmd_delete_relation() {
             --keep-record)     keep_record=1 ;;
             --destroy-copies)  destroy=1 ;;
             --ask)             ask=1 ;;
-            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --ask --yes)" ;;
+            # U16 (owner 2026-10-19): the Del window asks the PLAN whether this host can
+            # reach the source as root at all, before offering the source's half -- on
+            # pve9 -> pve10 it could not, and the composite stopped half-way.
+            --check-source)    check_source=1 ;;
+            -*)                die "delete-relation: unknown option '$a' (known: --keep-source --keep-record --destroy-copies --check-source --ask --yes)" ;;
             *)                 [ -z "$name" ] || die "delete-relation: takes exactly one NAME"; name="$a" ;;
         esac
     done
@@ -14365,7 +14369,14 @@ cmd_delete_relation() {
     echo "delete-relation '$name' (state=${state:-?}, peer=${peer:-?}):"
     if [ "$do_collector" -eq 1 ]; then echo "  1. collector : remove-client $name  -- config sections and cron lines of THIS relationship"
     else echo "  1. collector : skipped -- the record already says 'removed'"; fi
-    if [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
+    # --check-source (plan only): one BatchMode `true` as root -- the same channel the
+    # --yes run would use. Read-only; the plan says so instead of the run failing half-way.
+    local no_root=0
+    if [ "$do_source" -eq 1 ] && [ "$check_source" -eq 1 ] && [ "$yes" -ne 1 ]; then
+        rux_root_ssh "$peer" "$port" true >/dev/null 2>&1 || no_root=1
+    fi
+    if [ "$no_root" -eq 1 ]; then echo "  2. source    : NO root SSH to $peer (port $port) from this host -- on $peer, as root: cd $SOURCE_REPO_DIR && ./deploy.sh --leave=$label  (or run this with --keep-source)"
+    elif [ "$do_source" -eq 1 ]; then echo "  2. source    : on $peer (port $port), as root over SSH: deploy.sh --leave=$label  -- the account and its zfs grants there"
     else echo "  2. source    : skipped -- $why_source"; fi
     if [ "$do_record" -eq 1 ] && record_is_removed_name_live_as_source "$name"; then
         echo "  3. record    : archived as $(basename "$(client_conf_path "$name")").removed-<time> -- '$name' is also this host's live SOURCE identity (account zfsbackup-$name), which is not touched"
@@ -14825,7 +14836,16 @@ cmd_remove_source() {
             [ "${_s#*:}" = "$ds" ] && continue
             _skeep="${_skeep:+$_skeep }$_s"
         done
+        # A mirror's request is RUX_SOURCE's dataset list (U20) -- the inverse of add-source.
+        local _rs _rskeep="" _rs_ds; _rs_ds=$(sync_requested_dataset)
+        if [ "${RUX_MODE:-}" = sync ] && [ -n "$_rs_ds" ]; then
+            while IFS= read -r _rs; do
+                [ "$_rs" = "$ds" ] && continue
+                _rskeep="${_rskeep:+$_rskeep,}$_rs"
+            done < <(dataset_list_split "$_rs_ds")
+        fi
         if { cat "$cpath"
+             [ -n "$_rskeep" ] && write_client_field RUX_SOURCE "${RUX_SOURCE%%:*}:$_rskeep"
              [ -n "${REQUESTED_DATASETS:-}" ] && write_client_field REQUESTED_DATASETS "$_keep"
              [ -n "${MANAGED_SOURCES:-}" ] && write_client_field MANAGED_SOURCES "$_skeep"
              write_client_field MANAGED_DATASETS "$_mkeep"; } > "${cpath}.new" \
@@ -14996,6 +15016,25 @@ cmd_add_source() {
                 || die "add-source: could not record '$ds' in the request of '$name' ($cpath) -- the source already grants it; re-run this command"
             chmod 0600 "$cpath" 2>/dev/null || :
             log "add-source: '$ds' recorded in the request of '$name'"
+        fi
+    fi
+    # A MIRROR (sync) keeps its request in RUX_SOURCE's dataset list, not in
+    # REQUESTED_DATASETS, and activation refuses under --yes anything the committed
+    # scope resolves to outside that list (assert_sync_scope_within_request). U20,
+    # owner 2026-10-19 on g3-bc: the new root was granted on pve11, then refused here
+    # as "outside the request" -- the request has to follow the scope here too.
+    local _rs_ds; _rs_ds=$(sync_requested_dataset)
+    if [ "${RUX_MODE:-}" = sync ] && [ -n "$_rs_ds" ]; then
+        local _rs _rs_in=0
+        while IFS= read -r _rs; do
+            case "$ds" in "$_rs"|"$_rs"/*) _rs_in=1 ;; esac
+        done < <(dataset_list_split "$_rs_ds")
+        if [ "$_rs_in" -eq 0 ]; then
+            { cat "$cpath"; write_client_field RUX_SOURCE "${RUX_SOURCE%%:*}:$_rs_ds,$ds"; } > "${cpath}.new" \
+                && mv -f "${cpath}.new" "$cpath" \
+                || die "add-source: could not record '$ds' in the request of '$name' ($cpath) -- the source already grants it; re-run this command"
+            chmod 0600 "$cpath" 2>/dev/null || :
+            log "add-source: '$ds' recorded in the request of mirror '$name'"
         fi
     fi
     # Which of this relationship's sources already have a copy job, BEFORE the

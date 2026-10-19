@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time).*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90.*
 
 ### R5 — Do not modify state something else is reading
 
@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20, E33, E81, E89.*
+*Evidence: E11, E20, E33, E81, E89, E91 (2026-10-19: the same shortcut the day after E89).*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -1921,6 +1921,34 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E91 — `git stash` in the suite clone while the suite was running from it (2026-10-19, R5, repeat)
+**2026-10-19, U14/U16/U20 package, pve9 clone /tmp/tt/zfs-snapshot-all.**
+
+*Genesis.* `test/tui` was running from the clone with my four changed files copied in. I
+wanted the `main` result of three `restoregrant` FAILs and typed `git stash` in the SAME
+clone. For the rest of that run the suite read `main`'s `tui/restore.sh` and its own
+half-old copy; the run was worthless and had to be repeated after `git stash pop`.
+
+*Cause.* R5 exactly: a checkout another process is reading was modified under it. The
+rule was read at the start of the round and not applied at the moment of the shortcut.
+
+*Rule.* R5. A clone running a suite is read-only until the suite ends; a `main` baseline
+goes into a SECOND directory (`git worktree add` or a fresh clone), never into the one in use.
+
+### E90 — the deploy one-liner created `refs/heads/FETCH_HEAD` on pve10 (2026-10-19, R4)
+**2026-10-19, deploying #621 to pve10.**
+
+*Genesis.* My one-liner did `git fetch origin $b && git switch $b` with `$b` meant to hold the
+branch; it was empty, the fetch went to `FETCH_HEAD` and the switch made a local branch named
+`FETCH_HEAD`. The checkout left `main`. Found when reading `git status` there; branch deleted,
+host back on `main`.
+
+*Cause.* R4: a mutation (switch) chained behind a value nobody checked -- an empty variable
+does not make git fail, it makes git do something else.
+
+*Rule.* R4. A deploy line on a host starts with `[ -n "$b" ] || exit 2` for every variable it
+uses, and ends with `git status -sb` printed in the same command.
 
 ### E89 — a live test ran on the zvol the owner was browsing at that moment (2026-10-18, R5)
 **2026-10-18, Przeglądaj kopię for zvols, pve10.**

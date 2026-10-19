@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e5efb5667107581d -->
+<!-- status-covers-digest: fead2cac48f8212a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U14/U16/U20: odmowy mówione na początku; lustro przyjmuje nowy dataset (2026-10-19;
+  `finisz/U14-U16-U20`).** U14: okno Przywróć pyta źródło o zgodę na odzysk, zanim zada pierwsze pytanie (nowe
+  `restore NAZWA --grant`: tylko odczyt, to samo jedno pytanie PAIR-CONTROL co bieg; `GRANT=<tryby>|none|unreachable|
+  local`, rc 0/1/2). Bez zgody okno mówi po polsku, co wpisać na źródle (`deploy.sh --allow-restore=<etykieta podana
+  przez źródło>`), i proponuje odzysk kopii NA TYM hoście (tryb „z dysku” z tą kopią zaznaczoną) albo „mimo to dalej”;
+  ze zgodą podsumowanie podaje jej tryby. Na pve9: `g3-bc` i `k2-ab` odpowiadają `GRANT=none` -- to ta sama odmowa,
+  którą właściciel dostał na końcu okien. U16: okno Usuń pyta plan `delete-relation NAZWA --check-source` (jedno
+  `true` jako root, tym samym kanałem co bieg); bez roota do źródła nie proponuje sprzątania źródła, mówi, co wpisać
+  tam ręcznie (`deploy.sh --leave=`), usuwa z `--keep-source` i przypomina o tym na końcu. U20: `add-source` na
+  lustrze dopisuje dataset do listy żądania `RUX_SOURCE` (lustro nie ma `REQUESTED_DATASETS`; aktywacja mierzy zakres
+  źródła właśnie tą listą i odmawiała „outside the request”); `remove-source` zdejmuje go z niej. Stan labu po
+  porażce: na pve11 zakres `pve9` ma już korzeń `hdd/backups/192.168.28.98/hdd/data`, więc ponowne „Dodaj”
+  `.../hdd/data` na `g3-bc` przejdzie; samo `.../data/docs` dalej zostałoby odrzucone przez rodzeństwo z korzenia
+  `data`. Testy: `test/tui`, `test/restoregrant`, `test/zfsbackup` na pve9 (wyniki w PR).
 
 - **FINISZ U21 (paczka G): jedna reguła paneli na wszystkich ekranach (2026-10-19; `finisz/panele`).** Właściciel:
   „F2 i F4 -- nie wiem, czym się różnią”, „prawy i dolny panel -- logika i porządek, nie dublować”; symulacja
