@@ -1338,6 +1338,18 @@ process_dataset() {
         # full stream, so nothing can drift between the plan and the run.
         # Always exactly one line per dataset, on stdout, prefixed so it can
         # never be confused with logging (which goes to stderr).
+        # U43 (owner 2026-10-20, frozen-engine change authorised: "robimy"): the real
+        # run below falls back to a BOOKMARK when no common snapshot survives; the plan
+        # did not, so verify-endpoint announced a full copy where the run would send an
+        # increment. Same lookup as the run (find_bookmark_base on the target head GUID),
+        # same contract: base=null still means full.
+        if [[ "$common_snapshot" == "null" || -z "$common_snapshot" ]] && [ $RECURSIVE -ne 1 ]; then
+            local _dry_tgt_snaps=() _dry_head="" _dry_bm=""
+            target_exists "$tgt_dataset" && _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset"))
+            [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}")
+            [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head" "$remote_user" "$remote_host")
+            [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"
+        fi
         if [ -n "$common_snapshot" ]; then
             printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"
         else

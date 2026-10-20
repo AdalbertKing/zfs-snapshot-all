@@ -17542,14 +17542,26 @@ SCOPE
         return 0
     fi
 
+    # U45 (owner 2026-10-20: "niech wywoła join -- skoro importuję, chcę tę relację
+    # uruchomić"): the source still has this collector's account (delete-relation
+    # --keep-source, or another relationship), but the import makes a NEW pairing key
+    # it does not know, and seed died "has --join run there yet?" (pve10 2026-09-25).
+    # With root on the source from here, add-client joins it again itself.
+    local -a jr_args=()
+    if [ "$verb" = add-client ] && [ -n "$peer_host" ] \
+       && [ ! -r "$(peer_manifest_path "$(peer_label "$peer_host")")" ] \
+       && rux_root_ssh "$peer_host" 22 "true" >/dev/null 2>&1; then
+        jr_args=(--join-remotely)
+    fi
     echo "Import relacji '$name' z $file"
     echo "  wyeksportowana z: ${from:-?}  ${at:-}"
     echo
     echo "Wykona sie DOKLADNIE to (te argumenty, ta kolejnosc, z pliku):"
     printf '  zfs-backup.sh add-client %s' "$name"
-    for x in "${argv[@]}"; do printf ' \\\n      %s' "$x"; done
+    for x in "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"}; do printf ' \\\n      %s' "$x"; done
     printf '\n'
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do printf '  zfs-backup.sh %s %s --yes\n' "$x" "$name"; done
+    [ "${#jr_args[@]}" -gt 0 ] && echo "  (--join-remotely: ten host ma roota na $peer_host -- zrodlo dolaczy sie samo, bez paczki do przenoszenia)"
     import_relblock_note "$doc"
     local unrep; unrep=$(json_value_of "$doc" not_replayable)
     if [ -n "$unrep" ] && [ "$unrep" != "[]" ]; then
@@ -17581,7 +17593,7 @@ UNREP
     for x in "${argv[@]}"; do case "$x" in --host=*) peer="${x#--host=}" ;; esac; done
     [ -n "$peer" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer")")" ] && prepaired=1
 
-    cmd_add_client "$name" "${argv[@]}" || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
+    cmd_add_client "$name" "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"} || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
         echo
         echo ">>> import-relation: $x $name"

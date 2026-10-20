@@ -1862,6 +1862,15 @@ for _p in default y5m12d31h24-gfs; do
             CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile="$_p" --name=lb --config="$WORK/nocopy-$_p.conf" 2>&1 )"; rc=$?
     _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data"$')"
     _prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
+    # U46 (owner 2026-10-20 "przetestuj, potwierdź i napraw"; gap logged 2026-09-25): the
+    # producer of snapshots needs an AGE GUARD too, or a dead snapshot job is silent.
+    # Measured live on pve10 2026-10-20: the plan carries check-snap-age per tier -- pinned.
+    _mon="$(printf '%s\n' "$out" | grep -cE 'check-snap-age\.sh .*"rpool/data" "automated_')"
+    if [ "$rc" -eq 0 ] && [ "$_mon" -ge 1 ]; then
+        ok "132/$_p: --target='' also plans an age guard (check-snap-age) for its snapshots (U46)"
+    else
+        bad "132/$_p: --target='' plans an age guard (U46)" "rc=$rc check-snap-age lines=$_mon"
+    fi
     if [ "$rc" -eq 0 ] && [ "$_snap" -ge 1 ] && [ "$_prune" -ge 1 ]; then
         ok "132/$_p: --target='' plans a one-argument snapshot AND its retention"
     else

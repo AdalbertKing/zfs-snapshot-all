@@ -572,6 +572,11 @@ check "snapget bookmark: first pull lands @a" "a" "$(snaps_of "$PULLED/$POOL/pul
 zfs destroy "${GSRC}@a"
 tick
 zfs snapshot "${GSRC}@c"
+# U43 (owner 2026-10-20): the DRY RUN plans what the run will do -- the bookmark rescues
+# the increment, so the plan must say INCREMENTAL with the bookmark as base, not FULL.
+run_get_out -n -e "$GSRC" "$LOCALPULL"
+check "snapget bookmark: dry run (-n) plans INCREMENTAL from the bookmark, not FULL (U43)" "1" \
+      "$(printf '%s\n' "$OUT" | grep -cE '^PLAN=INCREMENTAL base=[^ ]*#')"
 run_get -e "$GSRC" "$LOCALPULL"
 check "snapget bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
 check "snapget bookmark: local target keeps @a AND gains @c" "a c" "$(snaps_of "$PULLED/$POOL/pullbm")"

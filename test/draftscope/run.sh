@@ -387,6 +387,45 @@ else
     esac
 fi
 
+# ---- U42 (owner 2026-10-20): a new account starts with NO zfs rights ------
+# ZFS keeps delegations by uid; a removed account's grants pass to the next account
+# with the same uid (measured live on pve11 2026-10-20: "user (unknown: 1003)" became
+# "user u42new" after useradd -u 1003). The SHIPPED guard revokes exactly those.
+eval "$(product_range "$DEPLOY_SRC" '^new_account_drop_inherited_grants\(\) \{' '^do_leave\(\) \{' | sed '$d')"
+if declare -F new_account_drop_inherited_grants >/dev/null; then
+    G42="$TMPD/u42"; mkdir -p "$G42"; : > "$G42/unallow"
+    zfs() {
+        case "$1" in
+            list)    printf 'tank\ntank/a\ntank/b\n' ;;
+            allow)   case "$2" in tank/a) printf -- '---- Permissions on tank/a ----\nLocal+Descendent permissions:\n\tuser newacct destroy,mount,snapshot\n' ;;
+                                  tank/b) printf -- '---- Permissions on tank/b ----\nLocal+Descendent permissions:\n\tuser otheracct destroy\n' ;; esac ;;
+            unallow) echo "$*" >> "$G42/unallow" ;;
+        esac
+    }
+    _g42=$( { warn() { echo "WARN $*"; }; log() { :; }; new_account_drop_inherited_grants newacct; } 2>&1 )
+    unset -f zfs
+    if [ "$(cat "$G42/unallow")" = "unallow -u newacct tank/a" ] && case "$_g42" in *INHERITED*tank/a*) true ;; *) false ;; esac; then
+        check "U42: a new account's inherited delegation (tank/a) is revoked and said; another account's (tank/b) is left alone" "0" "0"
+    else
+        check "U42: inherited delegation revoked" "0" "1: $(cat "$G42/unallow") / $_g42"
+    fi
+else
+    check "U42: could not lift new_account_drop_inherited_grants from deploy.sh -- anchors changed" "0" "1"
+fi
+
+# ---- U47 (owner 2026-10-20): --unpair needs no internet --------------------
+# delete-relation -> remove-client -> deploy.sh --unpair ran Phase 2's `git pull` first;
+# a flaky link stopped the deletion HALFWAY (pve10 2026-09-25). The pull in Phase 2 must
+# sit behind a PEER_UNPAIR guard. Shape check (top-level code, nothing to lift); the
+# behaviour is proved live with github.com unresolvable (PROJECT_STATUS).
+_p2=$(awk '/^log "Phase 2: deploy the repo/{f=1} f&&/git -C "\$REPO_DIR" pull --ff-only origin main/{print; exit} f' "$DEPLOY_SRC")
+if printf '%s\n' "$_p2" | grep -q 'if \[ "\${PEER_UNPAIR:-0}" -eq 1 \]; then' \
+   && [ "$(printf '%s\n' "$_p2" | grep -n 'PEER_UNPAIR:-0' | head -1 | cut -d: -f1)" -lt "$(printf '%s\n' "$_p2" | grep -n 'pull --ff-only origin main' | tail -1 | cut -d: -f1)" ]; then
+    check "unpair: Phase 2 does not pull for --unpair (ending a relationship needs no internet, U47)" "0" "0"
+else
+    check "unpair: Phase 2 does not pull for --unpair (U47)" "0" "1"
+fi
+
 # ---- --unpair with NO MANIFEST: the goal state, not an error (2026-09-20) ----
 #
 # The incident of 2026-09-20 deleted a peer's pairing manifest and keys while the
