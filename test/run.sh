@@ -185,6 +185,39 @@ else
     echo "FAIL fields/looked up but not accepted: $missing"; fail=$((fail+1))
 fi
 
+# ---- engine routing contract (REV-20261020-154) ----
+# The goldens pin text, and U49 re-blessed a wrong line into one of them
+# (push-sync, bare `user@host`, went to snapget). This reads every rendered
+# transfer line of every fixture config and checks the engine against the
+# transport: a remote dst ([user@]host:path or bare user@host) is a push on
+# snapsend; a local dst is a local copy on snapget; no dst is snapshots only
+# on snapsend; a source with a host is a pull on snapget.
+route_bad=""; route_n=0
+for _cfg in "$DIR"/fixtures/*.conf; do
+    _out="$(gen "$_cfg" 2>/dev/null)" || continue
+    while IFS= read -r _l; do
+        _eng="$(printf '%s' "$_l" | grep -oE '/snap(send|get)\.sh' | head -1)"; _eng="${_eng#/}"
+        _args="$(printf '%s' "${_l#*${_eng}}" | sed 's/ 2>.*//' | grep -oE '"[^"]*"' | tr -d '"')"
+        _src="$(printf '%s\n' "$_args" | sed -n '2p')"; _dst="$(printf '%s\n' "$_args" | sed -n '3p')"
+        case "$_src" in
+            *:*) _want=snapget.sh ;;                       # pull
+            *) case "$_dst" in
+                   '') _want=snapsend.sh ;;                # snapshots only
+                   *:*|*@*) _want=snapsend.sh ;;           # remote push
+                   *) _want=snapget.sh ;;                  # local copy
+               esac ;;
+        esac
+        route_n=$((route_n + 1))
+        [ "$_eng" = "$_want" ] || route_bad="$route_bad
+  $(basename "$_cfg"): $_eng, want $_want -- src='$_src' dst='$_dst'"
+    done < <(printf '%s\n' "$_out" | grep -E '/snap(send|get)\.sh -')
+done
+if [ -z "$route_bad" ] && [ "$route_n" -gt 0 ]; then
+    echo "PASS routing/every rendered transfer line uses the engine its transport needs ($route_n lines)"; pass=$((pass+1))
+else
+    echo "FAIL routing/engine does not match the transport ($route_n lines):$route_bad"; fail=$((fail+1))
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]
