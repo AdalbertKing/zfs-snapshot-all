@@ -65,12 +65,12 @@ try:
 except Exception:
     st = {}
 with open(tmpd + "/st.tsv", "w", encoding="utf-8", newline="\n") as f:
-    f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
+    f.write("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" % (st.get("state") or "-", st.get("profile") or "-", st.get("source_profile") or "-",
                                         st.get("peer_host") or "-",
                                         # "konto@host:dataset" -> "dataset": add-/remove-source biorą sam dataset
                                         ",".join(x.rsplit(":", 1)[-1] for x in (st.get("sources") or [])) or "-",
                                         "1" if (str(st.get("passive") or "") == "1" or st.get("mode") == "sync") else "0",
-                                        st.get("client_target") or "-", st.get("mode") or "-"))
+                                        st.get("client_target") or "-", st.get("mode") or "-", st.get("local_user") or "-"))
 d = json.load(open(sys.argv[2], encoding="utf-8"))
 rows = []
 with open(tmpd + "/prof.json.tiers", "w", encoding="utf-8", newline="\n") as tf, \
@@ -104,7 +104,8 @@ geom
 info "Zmień relację $NAME" "Czytam relację i szablony..."
 "$ZB" status "$NAME" --json >"$TMPD/st.json" 2>/dev/null
 load_lists || { wt --title "Szablony niedostępne" --msgbox "list-profiles nie odpowiedział:\n$(tail -3 "$TMPD/prof.err")" 12 "$W"; exit 1; }
-IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT RMODE <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; RMODE=-; }
+IFS=$'\t' read -r STATE CUR_P CUR_S PEER SRCS MIRROR TGT RMODE ACCT_U <"$TMPD/st.tsv" || { STATE=-; CUR_P=-; CUR_S=-; PEER=-; SRCS=-; MIRROR=0; TGT=-; RMODE=-; ACCT_U=-; }
+ACCT_U="${ACCT_U%$'\r'}"
 # MIGAWKI ZDALNIE (snaponly, REV-20261017-152 runda 3; właściciel 2026-10-18: ta sama
 # ścieżka 'e' co każda relacja). Szablon JEST tu retencją źródła (celu nie ma), więc
 # po szablonie nie ma drugiego okna "w źródle kopii", a "Ustawienia silnika" (łącze,
@@ -327,8 +328,11 @@ json.dump({"profiles": [{"name": "@rel", "source": "user", "used_by": 0, "descri
 PYEOF
 }
 
+# U25: dwa pola karty, jak w kreatorze -- "Harmonogram" (tabela celu, bez okna źródła) i
+# "Retencja źródła" (samo okno źródła). harm_flow [src]. Zmiany obu czekają osobno
+# (P_RARGS, P_SARGS) i idą jednym set-tiers.
 harm_flow() {
-    local hs=1 rc
+    local hs=1 rc only_src="${1:-}"
     info "Harmonogram i retencja" "Czytam szczeble relacji z configu..."
     if ! "$ZB" show-tiers "$NAME" --json >"$TMPD/rt.json" 2>"$TMPD/rt.err"; then
         wt --title "Nie da się odczytać szczebli" --msgbox "$(grep -E 'FATAL' "$TMPD/rt.err" | tail -1 | sed 's/^FATAL: //')" 10 "$W"
@@ -340,6 +344,14 @@ harm_flow() {
     local SAVE_P="${PROFILE:-}" SAVE_S="${CUR_S:-}"
     PROFILE="@rel"; CUR_S="@rel-src"; SRCKEEP=""
     local nsrc; nsrc=$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("source",[])))' "$TMPD/rt.json")
+    if [ -n "$only_src" ]; then
+        if [ "$nsrc" -eq 0 ]; then
+            wt --title "Retencja źródła" --msgbox "Źródło tej relacji nie ma własnej retencji (sprząta je tylko cel)." 8 "$W"
+            PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0
+        fi
+        mapfile -t RARGS <"$TMPD/rargs.acc"; hs=2
+        SRCKEEP="@rel:$(awk -F'	' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'	' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
+    fi
     while :; do
         if [ "$hs" -eq 1 ]; then
             clear 2>/dev/null
@@ -353,10 +365,11 @@ harm_flow() {
             hs=2; SRCKEEP=""
             [ "$nsrc" -gt 0 ] && SRCKEEP="@rel:$(awk -F'\t' '$1=="@rel" {print $2}' "$TMPD/prof.json.tiers" | while read -r t; do v=$(awk -F'\t' -v t="$t" '$1=="@rel-src" && $2==t {print $4; exit}' "$TMPD/prof.json.tiers"); printf '%s ' "${v:-0}"; done)"
         fi
-        : >"$TMPD/srcargs"
-        if [ "$hs" -eq 2 ] && [ "$nsrc" -gt 0 ]; then
+        printf '%s\n' ${P_SARGS[@]+"${P_SARGS[@]}"} | grep . >"$TMPD/srcargs"
+        if [ -n "$only_src" ]; then
+            : >"$TMPD/srcargs"
             SRC_TITLE="Retencja: W ŹRÓDLE KOPII – $SRCNAME"
-            SRC_ARGS_OUT="$TMPD/srcargs" SRC_NEW_TIERS="$(cat "$TMPD/newtiers" 2>/dev/null)" source_retention_editor || { hs=1; continue; }
+            SRC_ARGS_OUT="$TMPD/srcargs" SRC_NEW_TIERS="$(cat "$TMPD/newtiers" 2>/dev/null)" source_retention_editor                 || { PROFILE="$SAVE_P"; CUR_S="$SAVE_S"; return 0; }
         fi
         local -a SARGS=(); mapfile -t SARGS <"$TMPD/srcargs"
         if [ "${#RARGS[@]}" -eq 0 ] && [ "${#SARGS[@]}" -eq 0 ]; then
@@ -367,7 +380,7 @@ harm_flow() {
         info "Zmień relację $NAME" "Liczę plan (cały config przez generator)..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
             wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
-            [ "$nsrc" -gt 0 ] && hs=2 || hs=1; continue
+            [ -n "$only_src" ] && hs=2 || hs=1; continue
         fi
         { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo
           sed -n '/^Relacja .* -- szczeble:/,/^plan only/p' "$TMPD/plan.txt" | grep -v '^plan only'
@@ -378,6 +391,7 @@ harm_flow() {
         # Plan przeszedł -- zmiana czeka na liście ("Zapisz zmiany" wykona wszystko razem).
         P_TIERS=(${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"}); cp "$TMPD/plan2.txt" "$TMPD/p_tiers.txt"
         P_RARGS=(${RARGS[@]+"${RARGS[@]}"})   # tabela celu otwarta drugi raz startuje od nich
+        P_SARGS=(${SARGS[@]+"${SARGS[@]}"})
         P_EDIT=()
         PROFILE="$SAVE_P"; CUR_S="$SAVE_S"
         return 0
@@ -544,7 +558,7 @@ PYEOF
 
 # WSTECZ = JEDEN KROK (właściciel, W5, 2026-10-11): z każdego okna po menu Wstecz wraca do
 # menu, nie wyrzuca z procedury. Wstecz w samym menu to krok z powrotem na F3.
-P_HOST=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_TRANSFER=()
+P_HOST=""; P_ADDED=""; P_REMOVED=""; P_EDIT=(); P_EDIT_WORDS=""; P_TIERS=(); P_RARGS=(); P_SARGS=(); P_TRANSFER=()
 pending_count() {
     local n=0
     [ -n "$P_HOST" ] && n=$((n + 1))
@@ -613,29 +627,45 @@ ACTION=""
 while :; do
     geom
     np=$(pending_count)
+    # KARTA RELACJI (U25, właściciel 2026-10-20): ta sama karta co kreator (card_menu w
+    # wt-lib.sh), wypełniona. Stałe -- rodzaj, cel, nazwa, konto, dodatkowe -- są wpisane w
+    # kopie, cron i rekord; ich zmiana to nowa relacja (Enter mówi, jak).
+    _rodzaj="backup"
+    if [ "$SNAPONLY" -eq 1 ]; then _rodzaj="migawki zdalne"
+    elif [ "$PEER" = - ] && { [ "$TGT" = - ] || [ -z "$TGT" ]; }; then _rodzaj="migawki lokalne"
+    elif [ "$PEER" = - ]; then _rodzaj="kopia lokalna"
+    elif [ "${MIRROR:-0}" = 1 ]; then _rodzaj="lustro"; fi
     _ds="$(printf '%s' "$SRCS" | tr ',' '\n' | grep -vc '^-\?$')"
+    # Jak w kreatorze: liczba i nazwy; adres -- ten, przez który relacja chodzi TERAZ.
+    _ds="$_ds: ${SRCS//,/, }"
+    _ep="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); r=(d.get("relations") or [{}])[0]; e=r.get("active_endpoint") or ""; print(e[:-3] if e.endswith(":22") else e)' "$TMPD/st.json" 2>/dev/null | tr -d '\r')"
+    _ep="${_ep:-$SRCHOST}"
     _dsp=""; [ -n "$P_ADDED$P_REMOVED" ] && _dsp="  [zmiana]$(for n in $P_ADDED; do printf ' +%s' "$n"; done)$(for n in $P_REMOVED; do printf ' -%s' "$n"; done)"
-    _sz="$(cur_words)"; [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
-    _hm=""; [ "${#P_TIERS[@]}" -gt 0 ] && _hm="  [zmiana]"
-    _en=""; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="  [zmiana]"
-    if [ "$SNAPONLY" -eq 1 ]; then
-    MENU=(dane    "$(clip_label "Datasety ($_ds)$_dsp" $((W - 10)))"
-          szablon "$(clip_label "Szablon: $_sz" $((W - 10)))"
-          harm    "Harmonogram i retencja migawek na źródle (tabela)$_hm")
-    else
-    MENU=(dane    "$(clip_label "Datasety -- co kopiować ($_ds)$_dsp" $((W - 10)))"
-          szablon "$(clip_label "Szablon: $_sz" $((W - 10)))"
-          harm    "Harmonogram i retencja kopii w celu i źródle (tabela)$_hm"
-          silnik  "Ustawienia silnika -- jak przesyłane są kopie$_en")
+    _sz="$(cur_words)"
+    _pw="$(awk -F'\t' -v n="$CUR_P" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null | sed -e "s/^$CUR_P  *//" -e 's/  */ /g')"
+    [ -n "$_pw" ] && _sz="$_sz -- $_pw"
+    [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
+    [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
+    _sr="jak w configu"; [ "${#P_SARGS[@]}" -gt 0 ] && _sr="[zmiana]"
+    _en="jak w configu"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="[zmiana]"
+    CARD_TAGS=(rodzaj); CARD_NAMES=("Rodzaj"); CARD_VALUES=("$_rodzaj"); CARD_FIXED=(1)
+    if [ "$PEER" != - ]; then
+        CARD_TAGS+=(adres); CARD_NAMES+=("Źródło"); CARD_VALUES+=("$_ep${P_HOST:+ -> $P_HOST [zmiana]}"); CARD_FIXED+=(0)
     fi
-    # Adres hosta tylko przy zdalnym źródle: relacja lokalna nie ma adresu.
-    [ "$PEER" != - ] && MENU+=(adres "$(clip_label "Adres hosta: $SRCHOST${P_HOST:+ -> $P_HOST [zmiana]} -- po przeniesieniu kolektora" $((W - 10)))")
-    MENU+=(wykonaj "Zapisz zmiany ($np) -- plan, WYKONAJ"
-           config  "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno"
-           zapisz  "Zapisz ustawienia relacji jako szablon (F5)")
-    wt --title "Zmień relację $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${LAST_ACTION:-dane}" \
-       --menu "Relacja $NAME ze źródła ${SRCHOST}. Co zmienić?\nKażda pozycja zmienia jedną rzecz i wraca tutaj -- zapis dopiero w \"Zapisz zmiany\"." 20 "$W" $((${#MENU[@]} / 2)) \
-       "${MENU[@]}" || {
+    CARD_TAGS+=(dane); CARD_NAMES+=("Datasety"); CARD_VALUES+=("$_ds$_dsp"); CARD_FIXED+=(0)
+    case "$_rodzaj" in backup|"kopia lokalna")
+        CARD_TAGS+=(cel); CARD_NAMES+=("Cel"); CARD_VALUES+=("$TGT"); CARD_FIXED+=(1) ;; esac
+    CARD_TAGS+=(harmon); CARD_NAMES+=("Harmonogram"); CARD_VALUES+=("$_sz"); CARD_FIXED+=(0)
+    case "$_rodzaj" in backup|"kopia lokalna")
+        CARD_TAGS+=(srcret); CARD_NAMES+=("Retencja źródła"); CARD_VALUES+=("$_sr"); CARD_FIXED+=(0) ;; esac
+    case "$_rodzaj" in "migawki zdalne"|"migawki lokalne") ;; *)
+        CARD_TAGS+=(silnik); CARD_NAMES+=("Silnik"); CARD_VALUES+=("$_en"); CARD_FIXED+=(0) ;; esac
+    CARD_TAGS+=(nazwa konto extra); CARD_NAMES+=("Nazwa" "Konto" "Dodatkowe")
+    CARD_VALUES+=("$NAME" "$([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")" "pomijane prefiksy, prawa na źródle -- jak przy zakładaniu")
+    CARD_FIXED+=(1 1 1)
+    CARD_ACT_TAGS=(wykonaj config zapisz)
+    CARD_ACT_LABELS=("Zapisz zmiany ($np) -- plan, WYKONAJ" "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno" "Zapisz ustawienia relacji jako szablon (F5)")
+    card_menu "Relacja $NAME" "Relacja $NAME ze źródła ${SRCHOST}. Co zmienić?\nKażda pozycja zmienia jedną rzecz i wraca tutaj -- zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
            if [ "$np" -gt 0 ]; then
                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
@@ -643,6 +673,20 @@ while :; do
            fi
            clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
+    case "$ACTION" in
+        __sep__) LAST_ACTION=wykonaj; continue ;;
+        rodzaj|cel|nazwa|konto|extra)
+            wt --title "$(case "$ACTION" in rodzaj) echo Rodzaj ;; cel) echo Cel ;; nazwa) echo Nazwa ;; konto) echo Konto ;; *) echo Dodatkowe ;; esac) -- stałe" \
+               --msgbox "To jest wpisane w kopie, cron i rekord relacji $NAME.\nInna wartość = nowa relacja: F9 Eksport, Del, Ins z nową wartością\n(kopie na tym hoście zostają)." 10 "$W"
+            continue ;;
+        harmon) ACTION=szablon ;;
+        srcret)
+            if [ "${#P_EDIT[@]}" -gt 0 ]; then
+                wt --title "Retencja źródła" --msgbox "Nowy szablon czeka na zapis -- liczby źródła ustawiasz w oknie zaraz po wyborze\nszablonu (Harmonogram). Najpierw zapisz zmiany, potem wróć tutaj." 9 "$W"
+                continue
+            fi
+            harm_flow src; continue ;;
+    esac
     [ "$ACTION" = wykonaj ] && {
         [ "$np" -gt 0 ] || { wt --title "Zapisz zmiany" --msgbox "Nic nie zmieniono -- nie ma czego zapisać." 8 "$W"; continue; }
         save_all || continue
@@ -743,16 +787,23 @@ step=1
 while :; do
     geom
     if [ "$step" -eq 1 ] && [ "$ACTION" = szablon ]; then
-        items=()
+        # U25: "Harmonogram" = jedno pole jak w kreatorze -- na górze "Ręcznie…" (tabela).
+        items=(__manual__ "$(clip_label "$(printf '%-9s%s' '' 'Ręcznie…  tabela szczebli: sposób, szczeble, liczby, zamrażanie')" $((W - 10)))")
         while IFS=$'\t' read -r n t; do
             [ -n "$n" ] || continue
             mark="         "; [ "$n" = "$CUR_P" ] && mark="[obecny] "
             items+=("$n" "$(clip_label "$mark$t" $((W - 10)))")
         done <"$TMPD/prof.tsv"
-        def="$PROFILE"; awk -F'\t' -v n="$def" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv" || def="${items[0]}"
+        def="$PROFILE"; awk -F'\t' -v n="$def" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv" || def="${items[2]:-${items[0]}}"
+        [ "$CUR_P" = "$HNAME" ] && def=__manual__
         wt --title "Zmień relację $NAME -- użyj szablonu" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Obecny szablon: $(cur_words)\nSekcje relacji zostaną wygenerowane od nowa z wybranego szablonu\n(retencja, harmonogramy). Dane nie są przenoszone, seed nie jest potrzebny.\nTen sam szablon = odświeżenie (rozrzut minut, retencja źródła per szczebel)." \
            "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || continue 2
+        if [ "$WT_OUT" = __manual__ ]; then
+            # Ręcznie: tabela szczebli (snaponly -- blok "harm" niżej, ukryty szablon relacji).
+            if [ "$SNAPONLY" -eq 1 ]; then ACTION=harm; step=1; continue; fi
+            harm_flow; continue 2
+        fi
         PROFILE="$WT_OUT"; step=2; continue
     fi
     if [ "$step" -eq 1 ] && [ "$ACTION" = harm ]; then
@@ -892,7 +943,7 @@ PYEOF
     echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes" >>"$TMPD/plan2.txt"
     # Plan przeszedł -- szablon czeka na liście zmian; "Zapisz zmiany" wykona wszystko razem.
     # Szablon i tabela szczebli to dwie drogi do tego samego (sekcje od nowa) -- obowiązuje ostatnia.
-    P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=()
+    P_EDIT=("${ARGV[@]:3}"); cp "$TMPD/plan2.txt" "$TMPD/p_edit.txt"; P_TIERS=(); P_RARGS=(); P_SARGS=()
     P_EDIT_WORDS="$PROFILE"; [ "$PROFILE" = "$HNAME" ] && P_EDIT_WORDS="własne ustawienia (tabela)"
     continue 2
 done
