@@ -128,7 +128,7 @@ out="$(run --source=rpool/db --target=hdd/backups --profile=default --config="$W
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mc.conf")"; rc=$?
 # X27 (2026-10-14): both sources are ONE relationship (one [relation:] block), so
 # they ride one send line per tier -- the comma list is snapsend's own argument.
-mc_both="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh -m "automated_hourly_" -L lb "rpool/data,rpool/vmstore" "hdd/backups"')"
+mc_both="$(printf '%s\n' "$out" | grep -cE 'snapget.sh -m "automated_hourly_" -L lb "rpool/data,rpool/vmstore" "hdd/backups"')"
 if [ "$rc" -eq 0 ] \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/data\]' \
         && printf '%s\n' "$out" | grep -q '^\[dataset:rpool/vmstore\]' \
@@ -136,7 +136,7 @@ if [ "$rc" -eq 0 ] \
     ok "101/comma-list: two independent source entries, both in the rendered cron"
 else
     bad "101/comma-list: two independent source entries, both in the rendered cron" \
-        "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snapsend' | head)"
+        "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snap(send|get)' | head)"
 fi
 # The KROK 5 stagger (each local source on its own minute) is gone with X27: it
 # kept one source's line stable when a SECOND, unnamed run added another. Now a
@@ -299,7 +299,7 @@ else
     bad "F2/additive: existing A is byte-unchanged and B is added" "rc=$rc" "$(diff <(printf '%s\n' "$a_before") <(printf '%s\n' "$a_after") | head -6)"
 fi
 # the rendered cron carries BOTH jobs (add B, do not lose A)
-sends="$(printf '%s\n' "$out" | grep -oE 'snapsend\.sh -m "automated_hourly_" -L (inna|lb) "rpool/(other|data)"' | sort -u | wc -l)"
+sends="$(printf '%s\n' "$out" | grep -oE 'snapget.sh -m "automated_hourly_" -L (inna|lb) "rpool/(other|data)"' | sort -u | wc -l)"
 [ "$sends" -eq 2 ] && ok "F2/rendered cron carries both A and B send lines" \
     || bad "F2/rendered cron carries both A and B send lines" "distinct sends=$sends"
 # the real target CONFIG on disk was not touched
@@ -428,7 +428,7 @@ runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
     lb_args "$@"
     ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/$stub" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      SNAPSEND="$WORK/seedbin/$stub" SNAPGET="$WORK/seedbin/$stub" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
       cmd_local_backup "${LB_ARGS[@]}" ) <<< "$answer" 2>&1
 }
 
@@ -1143,7 +1143,7 @@ out="$(rund "$WORK/none.conf" "rpool hdd tank" --source=rpool/data --config="$WO
 # ---- a GUESSED target must not install under --yes ----
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/none.conf" POOLS="rpool hdd" \
-          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
+          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" SNAPGET="$WORK/seedbin/snapsend-ok" \
           CLIENTS_DIR="$(mktemp -d)" cmd_local_backup --name=lb --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
 { printf '%s' "$out" | grep -qi 'cannot confirm a target this run GUESSED' && [ ! -e "$WORK/order" ]; } \
     && ok "slice3: --yes refuses a guessed target and installs nothing" \
@@ -1155,7 +1155,7 @@ out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/none.conf" POOLS=
 rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
 printf 'DEFAULT_TARGET=hdd/backups\n' > "$WORK/server2.conf"
 out="$( ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/server2.conf" POOLS="rpool hdd" \
-          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" \
+          PROFILE_ROOT="$REPO/profiles" SNAPSEND="$WORK/seedbin/snapsend-ok" SNAPGET="$WORK/seedbin/snapsend-ok" \
           CLIENTS_DIR="$(mktemp -d)" cmd_local_backup --name=lb --source=rpool/data --install --yes --config="$CFG" ) 2>&1 )"
 { [ "$(tr -d ' \n' < "$WORK/order" 2>/dev/null)" = "SEEDINSTALL" ]; } \
     && ok "slice3: an omitted target from server.conf still installs under --yes (provenance, not omission)" \
@@ -1454,7 +1454,7 @@ runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
     lb_args "$@"
     ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
       INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/snapsend-ok" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}"       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
+      SNAPSEND="$WORK/seedbin/snapsend-ok" SNAPGET="$WORK/seedbin/snapsend-ok" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}"       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
 # ---- the proposal happens at all, and reaches the plan ----------------------
@@ -1950,7 +1950,7 @@ fi
 for _p in default y5m12d31h24-gfs; do
     out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
             CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target=hdd/backups --profile="$_p" --name=lb --config="$WORK/tgt-$_p.conf" 2>&1 )"; rc=$?
-    _snap="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .*"rpool/data" "hdd/backups"')"
+    _snap="$(printf '%s\n' "$out" | grep -cE 'snapget.sh .*"rpool/data" "hdd/backups"')"
     _src="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
     _tgt="$(printf '%s\n'  "$out" | grep -cE 'delsnaps\.sh .*"hdd/backups/rpool/data"')"
     if [ "$rc" -eq 0 ] && [ "$_tgt" -ge 1 ]; then
@@ -2097,8 +2097,8 @@ fi
 # raw = yes in its section); control without --raw: no -w.
 w17o="$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --raw --name=w17 --config="$WORK/w17.conf")"
 w17c="$(run --source=rpool/data --target=hdd/backups --recursive=flat --profile=d30 --name=w17c --config="$WORK/w17c.conf")"
-if printf '%s\n' "$w17o" | grep 'snapsend' | grep -q ' -w ' && printf '%s' "$w17o" | grep -q 'raw          = yes' \
-   && ! printf '%s\n' "$w17c" | grep 'snapsend' | grep -q ' -w '; then
+if printf '%s\n' "$w17o" | grep 'snapget' | grep -q ' -w ' && printf '%s' "$w17o" | grep -q 'raw          = yes' \
+   && ! printf '%s\n' "$w17c" | grep 'snapget' | grep -q ' -w '; then
     ok "W17: local-backup --raw -- raw = yes in the section, -w on the send line; control without it: no -w"
 else
     bad "W17: local-backup --raw" "$(printf '%s\n' "$w17o" | grep -E 'snapsend|raw|FATAL' | head -4)" "$(printf '%s\n' "$w17c" | grep snapsend | head -1)"

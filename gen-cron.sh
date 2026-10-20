@@ -1190,7 +1190,7 @@ lint_flags() {
                 case "$dst" in
                     *:*|*@*) ;;   # remote (host:base, or bare user@host sync mode) -- compression is real work there
                     "")  warn "$ctx: flag $tok has no effect -- this job has no 'dst', so it only creates a snapshot and never transfers anything. Drop it." ;;
-                    *)   warn "$ctx: flag $tok has no effect -- dst '$dst' is local, and snapsend.sh (v2.32+) skips compression when both ends are the same host. Drop it, or point dst at a remote target." ;;
+                    *)   warn "$ctx: flag $tok has no effect -- dst '$dst' is local, and a local copy skips compression when both ends are the same host. Drop it, or point dst at a remote target." ;;
                 esac
                 ;;
         esac
@@ -3793,8 +3793,18 @@ emit_send() {
         fi
 
         # Only push reaches here -- pull already emitted and 'continue'd above.
-        local cmd
-        cmd="$REPO_DIR/snapsend.sh -m \"$prefix\""
+        # A LOCAL copy (dst with no ':') runs on snapget.sh's local form since
+        # 2026-10-20 (owner: "Przenies kopie lokalna na snapget przed 1.0 (jak
+        # replike)") -- the same switch replica_engine_cmd made on 2026-10-06:
+        # one engine for every copy that lands on this host, and the pull's
+        # divergence gate on the target. snapget creates the source snapshot
+        # locally when the source has no host. A remote dst (push over ssh)
+        # and no dst at all (snapshots only: snapget with one argument is a
+        # SYNC, not a snapshot) stay on snapsend.sh. -q (freezing guests) works
+        # on a local source in snapget.sh since the same day.
+        local cmd engine=snapsend.sh
+        [ -n "$dst" ] && [[ "$dst" != *:* ]] && engine=snapget.sh
+        cmd="$REPO_DIR/$engine -m \"$prefix\""
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
         [ -n "$dst" ] && cmd="$cmd \"$dst\""

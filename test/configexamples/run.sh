@@ -106,14 +106,14 @@ assert_absent "$r" 'delsnaps\.sh -G|gfs'                                        
 
 # selective-quiesce: per-dataset -q, separated (not merged), plain dataset unchanged.
 r="$(render "$EXAMPLES/selective-quiesce.conf")"
-assert_has "$r" 'snapsend\.sh -m "automated_" -q agent "tank/vm-101-disk-0"'     'selective-quiesce/vm101-agent'
-assert_has "$r" 'snapsend\.sh -m "automated_" -q sync "tank/subvol-102-disk-0"'  'selective-quiesce/ct102-sync'
-assert_has "$r" 'snapsend\.sh -m "automated_" "tank/scratch"'                    'selective-quiesce/scratch-plain-send'
+assert_has "$r" 'snapget.sh -m "automated_" -q agent "tank/vm-101-disk-0"'     'selective-quiesce/vm101-agent'
+assert_has "$r" 'snapget.sh -m "automated_" -q sync "tank/subvol-102-disk-0"'  'selective-quiesce/ct102-sync'
+assert_has "$r" 'snapget.sh -m "automated_" "tank/scratch"'                    'selective-quiesce/scratch-plain-send'
 assert_absent "$r" 'tank/scratch" -q|-q [a-z]+ "tank/scratch'                    'selective-quiesce/scratch-no-quiesce'
 # three distinct send lines: no merge across differing -q
-[ "$(count_matches "$r" 'snapsend\.sh')" -eq 3 ] \
+[ "$(count_matches "$r" 'snap(send|get).sh')" -eq 3 ] \
     && { echo "PASS selective-quiesce/three-separate-sends"; pass=$((pass+1)); } \
-    || { echo "FAIL selective-quiesce/three-separate-sends (want 3 snapsend lines, got $(count_matches "$r" 'snapsend\.sh'))"; fail=$((fail+1)); }
+    || { echo "FAIL selective-quiesce/three-separate-sends (want 3 send lines, got $(count_matches "$r" 'snap(send|get).sh'))"; fail=$((fail+1)); }
 
 # short-local-long-store: short local self-prune vs long store retention.
 r="$(render "$EXAMPLES/short-local-long-store.conf")"
