@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52c7377d92ee0249 -->
+<!-- status-covers-digest: 426a63625b9fb1af -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -25,7 +25,9 @@
   dalej „Stare” w każdym wierszu. Jeden monitor relacji pilnuje wielu datasetów i jego werdykt to najgorszy z nich
   (na pve10 jeden dataset bez migawek źródła od 10-08); GUI przykładał go do każdej pary. Teraz para bierze linię
   SWOJEGO datasetu z wyniku monitora (`CRITICAL dataset=X ...`, przy `-R` także dzieci); wiersz relacji dalej
-  pokazuje najgorszy. Gdy wynik nie ma linii datasetu -- jak dotąd werdykt monitora.
+  pokazuje najgorszy. check-snap-age wypisuje tylko datasety nie-OK, więc dataset bez linii w wyniku z liniami
+  jest OK (poprawka 10-20: #631 zakładał linie OK i na prawdziwym wyniku zostawiał „stare”); wynik bez żadnej
+  linii datasetu -- jak dotąd werdykt monitora.
 
 - **KAMPANIA a>b<>c z GUI, paczka 2 (2026-10-19; `finisz/kampania-2`).** Po #629 na main: lustro `cb`
   (pve10 <- pve11 `hdd/lab`, d7h24) z kreatora za pierwszym razem -- poprawka lustra potwierdzona na żywo;
