@@ -38,7 +38,7 @@ Boundaries in this project: local vs remote host, branch vs `main`, index vs
 working tree, my lab residue vs the estate's real state, this process vs another.
 State the side you measured on. Never carry a conclusion across.
 
-*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85.*
+*Evidence: E4, E5, E6, E10, E17, E23, E26, E31, E34, E35, E38, E42, E45, E53, E54, E55, E57, E60, E64, E69, E83, E85, E94.*
 
 ### R3 — A rule written in a comment is not applied by being written
 
@@ -1921,6 +1921,21 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E94 — a fixture written from the tool's assumed output, not its real one (2026-10-20, R2)
+**2026-10-20, U26, PR #631.**
+
+*Genesis.* The per-pair verdict read the monitor's per-dataset lines. The fixture listed
+an `OK dataset=...` line for every healthy dataset. check-snap-age prints lines only for
+non-OK datasets (OK needs -v). So on real output the healthy pairs found no line, fell back
+to the monitor's CRITICAL, and stayed "stare". #631 went to main with the suite green. The
+defect showed in the live check on pve10 the next morning.
+
+*Cause.* R2: the output shape was assumed on the fixture side and never measured on the
+tool side. One run of check-snap-age on the host would have shown it.
+
+*Rule.* R2. A fixture that stands in for a tool's output is copied from one real run of that
+tool (a run that shows the case being tested), not written from what the parser expects.
 
 ### E93 — a test assertion that the defect itself satisfied (2026-10-19, R1)
 **2026-10-19, U19 change list, PR #628.**

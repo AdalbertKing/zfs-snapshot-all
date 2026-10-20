@@ -655,7 +655,9 @@ else
 fi
 # U26 (wlasciciel 2026-10-19, zrzut: lustro po F7 dalej "stare" w kazdym wierszu): jeden
 # monitor relacji pilnuje 4 datasetow, CRITICAL przez jeden (c). Para bierze linie SWOJEGO
-# datasetu z reason; relacja jako calosc dalej "stare". Kontrola na main: 4 x "stare".
+# datasetu z reason; relacja jako calosc dalej "stare". Reason w PRAWDZIWYM ksztalcie (pve10
+# 2026-10-20): check-snap-age pisze linie tylko dla datasetow nie-OK -- brak linii = OK (E94).
+# Kontrola na #631 (zalozyl linie OK): 4 x "stare".
 GRP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$FIX/monitors-group-perds.json" --screen relacje --width 200 2>&1)"
 if hasE "$GRP" 'hdd/lab/a +aktualne' && hasE "$GRP" 'hdd/lab/b +aktualne' && hasE "$GRP" 'hdd/lab/c +stare' \
    && hasE "$GRP" 'hdd/lab/d +aktualne' && hasE "$GRP" '^║ sync-test .* stare'; then

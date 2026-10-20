@@ -945,17 +945,24 @@ def dataset_verdict(m, names):
     JEDEN monitor relacji pilnuje wielu datasetow, a jego werdykt to najgorszy z nich --
     przylozony do kazdej pary malowal 14 par na "stare" przez jeden dataset bez migawek.
     check-snap-age pisze linie na KAZDY dataset ("CRITICAL dataset=X ..."); para bierze
-    najgorsza z linii swojego datasetu (i jego dzieci przy -R). Brak linii = None."""
+    najgorsza z linii swojego datasetu (i jego dzieci przy -R).
+    check-snap-age pisze linie TYLKO dla datasetow nie-OK (OK -- tylko z -v; zmierzone na
+    pve10 2026-10-20: CRITICAL i jedna linia hdd/db przy trzech datasetach). Wiec: monitor z
+    liniami datasetow, a ten dataset bez linii = OK. Wynik bez zadnej linii datasetu (np.
+    blad polaczenia) = None -- wtedy werdykt calego monitora."""
     order = {v: i for i, v in enumerate(VERDICT_ORDER)}
-    best = None
+    best, any_line = None, False
     for ln in (m.get("reason") or "").splitlines():
         mm = _DS_LINE.match(ln.strip())
         if not mm:
             continue
+        any_line = True
         ds = mm.group(2).split(":", 1)[-1]
         if any(n and (ds == n or ds.startswith(n + "/")) for n in names):
             if best is None or order.get(mm.group(1), 99) < order.get(best[0], 99):
                 best = (mm.group(1), ln.strip())
+    if best is None and any_line:
+        return ("OK", "")
     return best
 
 
