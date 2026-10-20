@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 4da126e45afacfab -->
+<!-- status-covers-digest: 35bc6a9bb2ba644d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -32,6 +32,9 @@
   (pierwsza i przyrostowa), pauza, bierne `-e`, wykluczenie, retencja, rozbiórka. VM z agentem -- bez KVM na
   labie, niezmierzone. Produkcja (pve0, pve2: `dst` lokalny) zmieni linie dopiero przy ponownym
   `gen-cron.sh --install`. Plan i wyniki: `docs/project/PLAN-TESTOW-KOPIA-LOKALNA-SNAPGET.md`.
+  REV-20261020-154 (recenzent): pierwsza wersja dawała snapget także pushowi na gołe `user@host` (push-sync),
+  którego snapget nie przyjmuje -- poprawione (`finisz/REV-154`): snapget tylko dla `dst` bez `:` i bez `@`;
+  nowy test kontraktu silnika w `test/run.sh` sprawdza każdą wygenerowaną linię transferu.
 
 - **FINISZ U22: push = tryb CLI floty; zmiana adresu zmierzona (2026-10-20; `finisz/U22-push`).** Właściciel:
   push zostaje w 1.0 bez okna w kreatorze (GUI tworzy pull, lustro, kopię lokalną, migawki); `snapsend.sh` zostaje

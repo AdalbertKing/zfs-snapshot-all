@@ -3798,12 +3798,13 @@ emit_send() {
         # replike)") -- the same switch replica_engine_cmd made on 2026-10-06:
         # one engine for every copy that lands on this host, and the pull's
         # divergence gate on the target. snapget creates the source snapshot
-        # locally when the source has no host. A remote dst (push over ssh)
+        # locally when the source has no host. A remote dst (push over ssh:
+        # [user@]host:path, or a bare user@host -- push-sync, REV-20261020-154)
         # and no dst at all (snapshots only: snapget with one argument is a
         # SYNC, not a snapshot) stay on snapsend.sh. -q (freezing guests) works
         # on a local source in snapget.sh since the same day.
         local cmd engine=snapsend.sh
-        [ -n "$dst" ] && [[ "$dst" != *:* ]] && engine=snapget.sh
+        [ -n "$dst" ] && [[ "$dst" != *:* ]] && [[ "$dst" != *@* ]] && engine=snapget.sh
         cmd="$REPO_DIR/$engine -m \"$prefix\""
         [ -n "$flags" ] && cmd="$cmd $flags"
         cmd="$cmd \"$src\""
