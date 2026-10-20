@@ -12562,6 +12562,14 @@ if [ "$got" = "[('pool', 0), ('pool/a', 2), ('pool/b', 0)]" ] && [ "$(grep -c . 
 else
     bad "listdatasets: --own-snapshots" "got=$got" "$LDOUT" "$(cat "$LO/err")"
 fi
+# A>B>C (wlasciciel 2026-10-20): kreator backupu pyta o NASZA rodzine osobno -- reczna
+# migawka (pool/a@reczny) to nie lancuch, automated_* tak.
+got=$(printf '%s' "$LDOUT" | "$PY_OR_PYTHON" -c 'import sys,json; d=json.load(sys.stdin); print([(x["name"], x["family_snapshots"]) for x in d["datasets"]])' 2>/dev/null)
+if [ "$got" = "[('pool', 0), ('pool/a', 1), ('pool/b', 0)]" ]; then
+    ok "listdatasets: --own-snapshots podaje tez family_snapshots -- tylko automated_* (pool/a 1 z 2 wlasnych)"
+else
+    bad "listdatasets: family_snapshots" "got=$got" "$LDOUT"
+fi
 rm -f "$LO/ssh.argv"
 LDOUT=$(lo_run peer.example --json)
 if ! printf '%s' "$LDOUT" | grep -q own_snapshots && [ "$(grep -c . "$LO/ssh.argv")" -eq 1 ]; then

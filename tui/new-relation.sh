@@ -419,12 +419,19 @@ account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCI
 # je robi i przycina. Synchro ma wtedy odbierać to, co jest -- każdą rodzinę --
 # i nic na źródle nie tworzyć: to jest passive-flat. Bez własnych migawek szablon
 # bezprefiksowy stemplowałby gołe znaczniki czasu, więc wtedy NIE jest polecany.
-sync_from_chain() {   # -> 0, gdy synchro i któryś korzeń koszyka ma własne migawki
-    [ "$MODE" = sync ] || return 1
-    local r n c
+# A>B>C (właściciel 2026-10-20): to samo dla BACKUPU -- c pobiera z b jego magazyn kopii
+# (hdd/backups, który b dostaje z a), albo drugi kolektor za VPN dubluje pierwszy. Własne
+# migawki c na kopiach b zepsułyby b przyjmowanie kopii z a. Silnik tego sam nie rozstrzyga
+# (nie odróżni łańcucha od resztek tej samej relacji po eksport -> usuń -> import), więc
+# kreator mówi to wprost i poleca passive-flat; decyduje admin.
+sync_from_chain() {   # -> 0, gdy lustro/backup i któryś korzeń koszyka ma już migawki naszej rodziny
+    [ "$MODE" = sync ] || [ "$MODE" = backup ] || return 1
+    local r n c f
     for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
-        while IFS=$'\t' read -r n c; do
+        while IFS=$'\t' read -r n c f; do
             [ "$n" = "$r" ] || continue
+            # Backup: tylko NASZA rodzina (automated_*) -- ręczna migawka to nie łańcuch.
+            [ "$MODE" = backup ] && c="${f:-0}"
             case "$c" in ''|*[!0-9]*) c=0 ;; esac
             [ "$c" -gt 0 ] && return 0
         done <"$TMPD/own.tsv" 2>/dev/null
@@ -491,7 +498,7 @@ step_profile() {
     { [ -n "$def" ] && in_list "$def" "${items[@]}"; } || def=default
     if [ "$chain" -eq 1 ] && in_list "$REC_PROFILE" "${items[@]}"; then
         def="$REC_PROFILE"
-        lead="Źródło ma już własne migawki (łańcuch): polecany $REC_PROFILE --\nodbiera każdą rodzinę źródła i niczego tam nie tworzy.\n\n"
+        lead="Źródło ma już migawki naszej rodziny (łańcuch albo resztki starej relacji): polecany\n$REC_PROFILE -- odbiera to, co jest, i niczego tam nie tworzy.\n\n"
     fi
     local tl=6; [ -n "$lead" ] && tl=9    # trzy linie wstępu więcej nad listą
     in_list "$PROFILE" "${items[@]}" && def="$PROFILE"
@@ -499,6 +506,8 @@ step_profile() {
     in_list "$def" "${items[@]}" || def="${items[2]}"
     geom
     local q6='Jak długo trzymać w celu (na tym hoście)?'
+    # U32: lustro trzyma to samo co źródło -- szablon mówi, kiedy źródło robi migawki i ile trzyma.
+    [ "$MODE" = sync ] && q6='Jak długo trzymać migawki (u źródła; lustro trzyma to samo)?'
     [ "$NOCOPY" -eq 1 ] && q6='Jak długo trzymać migawki?'
     if [ "$MODE" = snaponly ]; then
         # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
@@ -798,6 +807,15 @@ summary_text() {
     if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
     else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
     [ "$RECURSION" = atomic ] && echo "U ŹRÓDŁA migawek nie sprząta nikt (tak działa atomowo) -- trzeba samemu."
+    if sync_from_chain; then
+        if [ "$PROFILE" = "$REC_PROFILE" ]; then
+            echo "ŁAŃCUCH: źródło ma już migawki naszej rodziny -- ta relacja kopiuje je BEZ własnych migawek ($PROFILE)."
+        else
+            echo "UWAGA ŁAŃCUCH: źródło ma już migawki naszej rodziny (kopie innej relacji albo resztki starej)."
+            echo "  Szablon $PROFILE dołoży tam WŁASNE migawki -- na kopiach innego kolektora to psuje jego kopie."
+            echo "  Bez własnych migawek: pole Harmonogram -> $REC_PROFILE."
+        fi
+    fi
     [ "$RAW" -eq 1 ] && echo "Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza."
     if [ "$MODE" = local ]; then
         [ "$FREEZE" -eq 1 ] && echo "Zamrażanie: goście tego hosta, przed migawkami dobowymi i rzadszymi."

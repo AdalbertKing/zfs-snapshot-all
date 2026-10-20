@@ -46,7 +46,7 @@ When a comment states an invariant, grep for every site that should honour it an
 check each. The gap between "the project knows this" and "this line does this" is
 where the defects live.
 
-*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73, E74, E88.*
+*Evidence: E7, E2, E14, E16, E19, E21, E36, E41, E43, E50, E65, E70, E73, E74, E88, E95.*
 
 ### R4 — Never chain a mutation behind a step that can fail silently
 
@@ -1921,6 +1921,20 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E95 — a full copy of the checkout into /tmp filled pve9b's root disk (2026-10-20, R3)
+**2026-10-20, U32 live preview.**
+
+*Genesis.* For a no-WYKONAJ GUI preview I ran `cp -a /root/scripts/zfs-snapshot-all /tmp/u32`
+on pve9b, whose root filesystem is 2.8 GB. The copy (with .git) hit "No space left on device"
+and left `/` at 100 %; `systemctl` reported `degraded`. Twelve older package copies in /tmp
+(earlier test clones, 15 MB each) had already eaten the margin. Removed: 96 %, 115 MB free.
+
+*Cause.* R3: memory already said "lab disks full" (infra note). The fact was known and not
+applied before a write onto that disk.
+
+*Rule.* R3. Before writing a copy onto a lab host: `df -h` the target first, copy only the
+files the preview needs (not .git), and delete the copy in the same command chain.
 
 ### E94 — a fixture written from the tool's assumed output, not its real one (2026-10-20, R2)
 **2026-10-20, U26, PR #631.**

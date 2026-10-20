@@ -2323,6 +2323,44 @@ else
 fi
 rm -rf "$NRE"
 
+# A>B>C (wlasciciel 2026-10-20): backup ze zrodla, ktore ma juz migawki NASZEJ rodziny
+# (magazyn kopii innego kolektora) -- kreator poleca passive-flat i w podsumowaniu pisze
+# UWAGA LANCUCH, gdy wybrano szablon stemplujacy. Kontrola: ta sama jazda bez rodziny na
+# zrodle (tylko reczne migawki) -- ani polecenia, ani ostrzezenia.
+NRC="$(mktemp -d)"; cp "$P10"/*.json "$NRC/"
+"$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
+import sys, json
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+for x in d["datasets"]:
+    x["own_snapshots"] = 5 if x["name"] == "hdd/test-kreator" else 0
+    x["family_snapshots"] = 5 if x["name"] == "hdd/test-kreator" else 0
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+# szablon passive-flat jest na kazdym hoscie (profiles/), w fixture go nie bylo
+"$PY" - "$NRC/list-profiles.json" <<'PYEOF'
+import sys, json, copy
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+if not any(x.get("name") == "passive-flat" for x in d["profiles"]):
+    x = copy.deepcopy(d["profiles"][0]); x["name"] = "passive-flat"; d["profiles"].append(x)
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+NRCA=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
+"$PY" - "$NRC/list-datasets-pve9b.json" <<'PYEOF'
+import sys, json
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+for x in d["datasets"]:
+    x["family_snapshots"] = 0
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+NRCB=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW0="$(cat "$NR/wt.log")"
+if has "$NRCW" '[polecany]' && has "$NRCW" 'resztki starej relacji' && has "$NRCW" 'UWAGA ŁAŃCUCH' && has "$NRCW" 'pole Harmonogram -> passive-flat' \
+   && ! has "$NRCW0" 'ŁAŃCUCH' && ! has "$NRCW0" '[polecany]' && has "$NRCB" 'CMD: '; then
+    ok "new-relation: backup z magazynu kopii (nasza rodzina na zrodle) -- polecany passive-flat, UWAGA LANCUCH w podsumowaniu; reczne migawki -- bez tego"
+else
+    bad "new-relation: lancuch dla backupu" "$(printf '%s' "$NRCW" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)" "$(printf '%s' "$NRCW0" | grep -E 'polecany|ŁAŃCUCH' | cut -c1-200)"
+fi
+rm -rf "$NRC"
+
 # MIGAWKI ZDALNIE (REV-20261017-152 runda 3): ten sam przebieg co backup, bez kroku
 # "Dokąd", bez edytora pomijanych prefiksów i retencji "w źródle kopii" (szablon JEST
 # retencją źródła). Domyślny szablon d7h24 (default ma drabinę GFS na szczeblu i jest
