@@ -427,6 +427,18 @@ Source is always local; the target may be local or remote (`[user@]host:dataset`
 snapshot (or reuses the latest with `-e`), finds the best incremental base (name match → GUID
 match → bookmark match → full send), and transfers it.
 
+**Push relationships in 1.0 are a CLI mode for existing fleets.** The GUI creates pull, mirror,
+local backup and snapshot-only relationships; it has no window for push. snapsend.sh itself stays a
+core engine: local backups and restore-to-place run on it. A remote push is set up by hand:
+`deploy.sh --pair --role=push --peer=COLLECTOR` on the source, `deploy.sh --join=…` on the collector,
+then a `[dataset:]` section with `dst = account@COLLECTOR:target` and
+`flags = -K <pairing key> -k <pinned known_hosts>` in the source's `jobs.<host>.conf`, installed
+with `gen-cron.sh --install`. To move such a relationship to a new collector address, edit `dst`
+and add `-O HostKeyAlias=<old address>` to `flags`, then run `gen-cron.sh --install` again. The
+host key was pinned under the old address, and without the alias ssh refuses the new one
+(measured 2026-10-20, pve9b → pve10 over VPN). Teardown: `deploy.sh --unpair` on the source, then
+on the collector the three commands it prints (`zfs unallow`, `userdel -r`, `rm` of the manifest).
+
 ```
 Usage: snapsend.sh [options] DATASETS [REMOTE]
 ```
