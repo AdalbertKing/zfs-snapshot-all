@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 1448aa48d1c7551d -->
+<!-- status-covers-digest: 5a9de988ed8b0457 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,15 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U22: push = tryb CLI floty; zmiana adresu zmierzona (2026-10-20; `finisz/U22-push`).** Właściciel:
+  push zostaje w 1.0 bez okna w kreatorze (GUI tworzy pull, lustro, kopię lokalną, migawki); `snapsend.sh` zostaje
+  silnikiem kopii lokalnej i odzysku na miejsce. Lab pve9b -> pve10: `deploy.sh --pair --role=push`, `--join`, sekcja
+  `dst =` z `-K`/`-k`, kopia przez LAN rc=0. Zmiana `dst` na 10.98.0.1 (VPN): „Host key verification failed” --
+  klucz przypięty pod 192.168.28.97. Z `-O HostKeyAlias=192.168.28.97` kopia przyrostowa rc=0 przez VPN; powrót
+  (`gen-cron.sh --uninstall`) zostawił crontab identyczny. Przepis (zakładanie, zmiana adresu, rozbiórka) w README,
+  sekcja snapsend.sh; KOMENDY odsyła tam. `deploy.sh --join` dla push mówił, że cron zainstaluje `activate` na
+  kolektorze -- teraz mówi, że cron jest u źródła (tekst nieuruchomiony w suicie; `bash -n`).
 
 - **FINISZ U38: okno migawek pary, jak mc (2026-10-20; `finisz/U38-migawki`).** F3 -> Enter na relacji -> zakładka
   Datasety -> **klawisz `m` na parze** (podpis na ramce): migawki źródła (kontem relacji po SSH) i kopii (lokalnie), wyrównane po GUID, od

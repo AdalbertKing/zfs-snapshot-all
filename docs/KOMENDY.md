@@ -16,7 +16,7 @@ wprost. To nie jest ozdoba: pakiet pisze na cudze dane.
 |---|---|
 | `zfs-backup.sh` | **czasowniki operatora** — cykl życia relacji, sterowanie, odtwarzanie. To jest to, czego dotyka człowiek |
 | `deploy.sh` | **maszyna**: zależności, konto delegowane, parowanie, zgody. Uruchamiane na hoście, którego dotyczy |
-| `snapsend.sh` / `snapget.sh` | **silniki transferu** — push i pull. Wołane przez crona, nie ręcznie |
+| `snapsend.sh` / `snapget.sh` | **silniki transferu** — push i pull. Wołane przez crona (snapsend także przez odzysk na miejsce), nie ręcznie. Relacja push w 1.0 to tryb CLI dla istniejącej floty (GUI jej nie tworzy) -- przepis w README, sekcja snapsend.sh |
 | `delsnaps.sh` | **silnik retencji** — jedyny, który kasuje |
 | `check-snap-age.sh` | **monitor** — czy backup nie zestarzał |
 | `gen-cron.sh` | zamienia config na blok w crontabie |

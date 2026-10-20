@@ -6827,6 +6827,9 @@ EOF
     fi
     if [ "${JOIN_SCOPE_DEFERRED:-0}" = 1 ]; then
         log "Join gotowy. Uprawnienia ZFS nada kolektor zaraz po tym kroku (--grant-remotely); cron pokaze i zainstaluje 'zfs-backup.sh activate' na kolektorze."
+    elif [ "$PEER_CONF_ROLE" = "push" ]; then
+        # U22 (2026-10-20): przy push cron jest u ZRODLA, nie tutaj -- stary tekst odsylal do activate.
+        log "Join i uprawnienia sa gotowe. Cron jest u zrodla ('$label'): sekcja dst = w jego jobs.<host>.conf i gen-cron.sh --install (README, sekcja snapsend.sh)."
     else
         log "Join i uprawnienia sa gotowe. Cron zostanie pokazany i zainstalowany przez 'zfs-backup.sh activate' na kolektorze."
     fi
