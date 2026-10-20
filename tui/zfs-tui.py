@@ -937,18 +937,49 @@ def worst(verdicts):
     return "BEZ MONITORA"
 
 
+_DS_LINE = re.compile(r"^(OK|WARNING|CRITICAL|UNKNOWN) dataset=(\S+)(.*)$")
+
+
+def dataset_verdict(m, names):
+    """U26 (wlasciciel 2026-10-19, zrzut: lustro po F7 dalej "stare" w kazdym wierszu):
+    JEDEN monitor relacji pilnuje wielu datasetow, a jego werdykt to najgorszy z nich --
+    przylozony do kazdej pary malowal 14 par na "stare" przez jeden dataset bez migawek.
+    check-snap-age pisze linie na KAZDY dataset ("CRITICAL dataset=X ..."); para bierze
+    najgorsza z linii swojego datasetu (i jego dzieci przy -R). Brak linii = None."""
+    order = {v: i for i, v in enumerate(VERDICT_ORDER)}
+    best = None
+    for ln in (m.get("reason") or "").splitlines():
+        mm = _DS_LINE.match(ln.strip())
+        if not mm:
+            continue
+        ds = mm.group(2).split(":", 1)[-1]
+        if any(n and (ds == n or ds.startswith(n + "/")) for n in names):
+            if best is None or order.get(mm.group(1), 99) < order.get(best[0], 99):
+                best = (mm.group(1), ln.strip())
+    return best
+
+
 def verdict_for_job(job, monitors):
     """Werdykt dla ZADANIA: po zakresie i rodzinie, a dla pobrania po etykiecie
-    (monitor pilnuje lokalnego CELU, a zakres pull to zdalne ZRODLO)."""
+    (monitor pilnuje lokalnego CELU, a zakres pull to zdalne ZRODLO). Monitor wielu
+    datasetow: werdykt TEGO datasetu z jego linii (dataset_verdict), nie najgorszy."""
     scope, fam = job.get("scope", ""), family_of(job)
+    names = [scope] + [x for x in job_src_dst(job) if x and x not in ("?", "-") and ":" not in x]
+
+    def pick(m):
+        if len(m.get("datasets", [])) > 1 or m.get("recursive"):
+            dv = dataset_verdict(m, names)
+            if dv:
+                return dv
+        return m.get("verdict", "UNKNOWN"), m.get("reason", "")
     for m in monitors:
         if scope in m.get("datasets", []) and m.get("pattern", "").rstrip("_") == fam:
-            return m.get("verdict", "UNKNOWN"), m.get("reason", "")
+            return pick(m)
     label = job.get("label", "")
     if label:
         for m in monitors:
             if m.get("label", "") == label and m.get("pattern", "").rstrip("_") == fam:
-                return m.get("verdict", "UNKNOWN"), m.get("reason", "")
+                return pick(m)
     return "BEZ MONITORA", ""
 
 
