@@ -653,6 +653,16 @@ if has "$G" '3 datasetów w hdd/backups/192.168.28.50/hdd/lab: a, b, c' \
 else
     bad "zadania: panel grupy" "$G"
 fi
+# U26 (wlasciciel 2026-10-19, zrzut: lustro po F7 dalej "stare" w kazdym wierszu): jeden
+# monitor relacji pilnuje 4 datasetow, CRITICAL przez jeden (c). Para bierze linie SWOJEGO
+# datasetu z reason; relacja jako calosc dalej "stare". Kontrola na main: 4 x "stare".
+GRP="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GJ" --monitors "$FIX/monitors-group-perds.json" --screen relacje --width 200 2>&1)"
+if hasE "$GRP" 'hdd/lab/a +aktualne' && hasE "$GRP" 'hdd/lab/b +aktualne' && hasE "$GRP" 'hdd/lab/c +stare' \
+   && hasE "$GRP" 'hdd/lab/d +aktualne' && hasE "$GRP" '^║ sync-test .* stare'; then
+    ok "relacje: U26 -- monitor wielu datasetow: para ma werdykt swojego datasetu (1 stara, 3 aktualne), relacja najgorszy"
+else
+    bad "relacje: U26 werdykt per dataset" "$(printf '%s\n' "$GRP" | grep -E 'hdd/lab/[a-d] |^║ sync-test')"
+fi
 # Kampania 2026-10-19: kolektor za VPN, adres zmieniony (active_endpoint 10.98.0.2) --
 # kolumna Kierunek na F3 pokazywala dalej stary peer_host. Kontrola: bez zmiany adresu -- jak bylo.
 GSV="$(mktemp)"; sed 's/"active_endpoint":"192.168.28.60:22"/"active_endpoint":"10.98.0.2:22"/' "$GS" > "$GSV"
