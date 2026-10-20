@@ -1759,7 +1759,14 @@ process_dataset() {
     # a freshly emptied target is a no-op.
     local recv_force_flag="-F"
     if [ $FORCE_FULL_SEND -ne 1 ] && target_exists "$tgt_dataset"; then
-        if guest_disk_is_live "$tgt_dataset"; then
+        # Remote source only (2026-10-20). The guard reads the guest from the
+        # target's NAME, which is right where the target is the source's own
+        # path on this host (sync) -- but a LOCAL source's target is a copy
+        # nested under the target base, never the disk the guest runs on (that
+        # is the source itself, and src == tgt is refused above). Measured on
+        # pve10: a local copy of running CT 950 was refused here as "the disk
+        # of guest 950" -- every local copy of a running guest would be.
+        if [ -n "$remote_host" ] && guest_disk_is_live "$tgt_dataset"; then
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         fi

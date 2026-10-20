@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5a9de988ed8b0457 -->
+<!-- status-covers-digest: 4da126e45afacfab -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U49: kopia lokalna na snapget; lokalne `-q` w snapget (2026-10-20; `finisz/lokalna-snapget`).**
+  Właściciel: „Przenieś kopię lokalną na snapget przed 1.0 (jak replikę)”, „Przenieś do snapget. Odmroź i pilne
+  testy”. gen-cron: `dst` lokalny -> `snapget.sh` (forma lokalna); `dst` zdalny (push z CLI) i brak `dst` (same
+  migawki) zostają na `snapsend.sh`, tak jak odzysk. `local-backup`: seed kopii na snapget, prefiks i status
+  czytają oba silniki. Silnik snapget (odmrożony za zgodą właściciela): okno zamrożenia dla źródła lokalnego,
+  port 1:1 bloku snapsend (test bliźniaka w `test/quiesce`); osłona „dysk działającego gościa” tylko dla źródła
+  zdalnego -- na pve10 brała kopię CT 950 za jego dysk (test w `test/mirrorguest`). Na żywo pve10: łańcuch
+  założony snapsendem kontynuowany przyrostowo, kopia działającego CT z opróżnieniem i migawką atomową
+  (pierwsza i przyrostowa), pauza, bierne `-e`, wykluczenie, retencja, rozbiórka. VM z agentem -- bez KVM na
+  labie, niezmierzone. Produkcja (pve0, pve2: `dst` lokalny) zmieni linie dopiero przy ponownym
+  `gen-cron.sh --install`. Plan i wyniki: `docs/project/PLAN-TESTOW-KOPIA-LOKALNA-SNAPGET.md`.
 
 - **FINISZ U22: push = tryb CLI floty; zmiana adresu zmierzona (2026-10-20; `finisz/U22-push`).** Właściciel:
   push zostaje w 1.0 bez okna w kreatorze (GUI tworzy pull, lustro, kopię lokalną, migawki); `snapsend.sh` zostaje
