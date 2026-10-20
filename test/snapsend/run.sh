@@ -526,6 +526,10 @@ check "bookmark: first send lands @a on target" "a" "$(snaps_of "$BM1T")"
 zfs destroy "$POOL/bm1@a"
 tick
 zfs snapshot "$POOL/bm1@c"
+# U43: the push dry run plans the bookmark increment too (twin of the snapget check).
+OUT="$("$SNAPSEND" -n -e "$POOL/bm1" "$BK" 2>&1)"
+check "bookmark: push dry run (-n) plans INCREMENTAL from the bookmark, not FULL (U43)" "1" \
+      "$(printf '%s\n' "$OUT" | grep -cE '^PLAN=INCREMENTAL base=[^ ]*#')"
 run_send -e "$POOL/bm1" "$BK"
 check "bookmark: exit 0 even though the common-base snapshot is gone from source" "0" "$RC"
 check "bookmark: target keeps @a AND gains @c (incremental via bookmark, not a forced-rollback full)" "a c" \

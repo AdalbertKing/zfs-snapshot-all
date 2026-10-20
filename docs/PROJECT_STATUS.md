@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 295ad9a17eb0b381 -->
+<!-- status-covers-digest: ee25656d64fd05c3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -33,7 +33,7 @@
     nie może cofnąć. Na żywo pve11: cofnięte.
   - **U43 próba `snapget -n` i zakładka**: plan szukał tylko wspólnej migawki; prawdziwy bieg ratuje się zakładką.
     Teraz plan robi to samo i pisze `PLAN=INCREMENTAL base=<zakładka>` (zamrożony silnik -- zmiana za zgodą
-    właściciela, `--refreeze` w diffie).
+    właściciela, `--refreeze` w diffie). To samo w `snapsend.sh` (pchanie; bliźniak, zatwierdzony w `twins`).
   - **U44, U46**: sprawdzone -- już nieaktualne (patrz „Znane luki”); U46 ma teraz test.
 
 - **FINISZ U32/U34: łańcuch i dublowanie kolektora w kreatorze (2026-10-20; `finisz/U32-lancuch`).** Właściciel:
