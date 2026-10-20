@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 426a63625b9fb1af -->
+<!-- status-covers-digest: 41e0af59f842416e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,18 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U25: jedno okno tworzenia i zmiany relacji -- karta relacji (2026-10-20; `finisz/U25-karta-relacji`).**
+  Właściciel: „gdy tworzę relację i modyfikuję -- okno ma być to samo”. Symulacja
+  `docs/project/SYMULACJA-U25-OKNO-RELACJI.md`, odpowiedzi: pola same po kolei, Harmonogram jednym polem, stałe na
+  szaro. Kreator (Ins) i zmiana (e) rysują tę samą kartę (`card_menu` w `tui/wt-lib.sh`): Rodzaj, Źródło, Datasety,
+  Cel, Harmonogram, Retencja źródła, Silnik, Nazwa, Konto, Dodatkowe. Kreator: pola otwierają się same, Wstecz
+  wraca na kartę, „Utwórz relację” pokazuje, czego brakuje; tytuły bez „Krok n/10”. Zmiana: pola stałe
+  (rodzaj, cel, nazwa, konto, dodatkowe) z dopiskiem „(stałe)” -- whiptail nie koloruje pojedynczych wierszy -- a
+  Enter mówi, że inna wartość = nowa relacja; Harmonogram = lista szablonów z „Ręcznie…” (tabela) na górze;
+  Retencja źródła osobnym polem (oba czekają na liście i idą jednym `set-tiers`); Źródło = adres, przez który
+  relacja chodzi teraz. Lustro i migawki nie mają pola Retencja źródła. W kreatorze Silnik to tylko informacja
+  (ustawia się po założeniu) -- jedyne odstępstwo od symulacji.
 
 - **FINISZ U26: kolumna Kopie per dataset (2026-10-20; `finisz/U26-werdykt-pary`).** Właściciel: lustro po F7
   dalej „Stare” w każdym wierszu. Jeden monitor relacji pilnuje wielu datasetów i jego werdykt to najgorszy z nich

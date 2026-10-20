@@ -14,10 +14,11 @@
 #   - na liście tylko wybory, które mają sens; jeden domyślnie zaznaczony;
 #   - Esc i przycisk "Wstecz" = krok wstecz; w kroku 1 = wyjście.
 #
-# Stan: 10 kroków -- typ, host, diagnoza, co kopiować (koszyk miejsc), dokąd, szablon,
-# nazwa, konto, ustawienia dodatkowe, podsumowanie -> plan -> wykonanie.
-# "Same migawki" (X27 S4, właściciel 2026-10-14) to kopia lokalna BEZ celu: 6 kroków
-# (typ, co, szablon, nazwa, konto, podsumowanie), komenda local-backup --target=''.
+# Stan (U25, 2026-10-20): KARTA RELACJI -- pola rodzaj, źródło (host + diagnoza), datasety
+# (koszyk miejsc), cel, harmonogram, retencja źródła, nazwa, konto, dodatkowe; otwierają
+# się same jedno po drugim, Wstecz wraca na kartę; "Utwórz relację" -> podsumowanie ->
+# plan -> wykonanie. "Same migawki" (X27 S4) to kopia lokalna BEZ celu: bez pól cel,
+# retencja źródła i dodatkowe, komenda local-backup --target=''.
 #
 # Środowisko (testy): ZFS_BACKUP = ścieżka do zfs-backup.sh, WHIPTAIL = binarka.
 set -u
@@ -42,24 +43,10 @@ trap 'drop_manual_draft; rm -rf "$TMPD"' EXIT
 MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"; NOCOPY=0
 
 # --- okna -------------------------------------------------------------------
-title() {
-    # Okno 1 nie zna jeszcze liczby kroków (lokalna ma 8, reszta 10) -- bez "/10",
-    # które w następnym oknie zmieniało się na "/8" (kampania 2026-10-09, K30).
-    if [ "$1" = 1 ]; then printf 'Krok 1: %s' "$2"; return; fi
-    if [ "$NOCOPY" -eq 1 ]; then
-        local n; case "$1" in 4) n=2 ;; 6) n=3 ;; 7) n=4 ;; 8) n=5 ;; *) n=6 ;; esac
-        printf 'Krok %s/6: %s' "$n" "$2"
-    elif [ "$MODE" = local ]; then
-        local n="$1"; [ "$n" -gt 3 ] && n=$((n - 2))
-        printf 'Krok %s/8: %s' "$n" "$2"
-    elif [ "$MODE" = snaponly ]; then
-        # Bez kroku "Dokąd" (5): numeracja od 6 w górę przesuwa się o jeden.
-        local n="$1"; [ "$n" -gt 5 ] && n=$((n - 1))
-        printf 'Krok %s/9: %s' "$n" "$2"
-    else
-        printf 'Krok %s/%s: %s' "$1" "$NSTEP" "$2"
-    fi
-}
+# U25 (właściciel 2026-10-20): kreator to KARTA RELACJI -- wszystkie pola naraz, więc
+# "Krok 4/10" nic nie mówi. Tytuł okna pola = samo pytanie; pierwszy argument (dawny
+# numer kroku) zostaje, żeby wywołania się nie zmieniały.
+title() { printf '%s' "$2"; }
 # Kopia lokalna nie ma drugiego hosta: czytelniki pytamy bez adresu (= ten host).
 hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 
@@ -692,16 +679,23 @@ step_extra() {
             [ "${#items[@]}" -gt 0 ] || return 1
             continue
         fi
-        # Retencja źródła: zawsze jedno pytanie "tyle samo co tutaj?" (uwaga 2,
-        # 2026-10-09) zamiast pozycji na liście i menu szczebli z "Gotowe".
-        if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
-            SRC_TITLE="$(title 9 "Retencja: W ŹRÓDLE KOPII – $HOST")"
-            source_retention_editor || continue
-        else
-            SRCPROF=""
-        fi
         return 0
     done
+}
+# Retencja źródła -- osobne pole karty (U25), to samo okno-tabela co dotąd w kroku 9.
+step_srcret() {
+    if [ -z "$PROFILE" ]; then
+        wt --title "Retencja źródła" --msgbox "Najpierw Harmonogram: retencja źródła to liczby szczebli szablonu." 8 "$W"
+        return 1
+    fi
+    [ -s "$TMPD/prof.json.tiers" ] || load_profiles
+    if [ "$RECURSION" != atomic ] && [ -s "$TMPD/prof.json.tiers" ]; then
+        SRC_TITLE="$(title 9 "Retencja: W ŹRÓDLE KOPII – $HOST")"
+        source_retention_editor || return 1
+    else
+        SRCPROF=""
+    fi
+    return 0
 }
 # RETENCJA ŹRÓDŁA = SAME LICZBY (właściciel, uwaga 19, 2026-09-24). Wcześniej operator
 # wybierał CAŁY profil źródła i dwa razy wybrał taki, który kasuje inną rodzinę niż cel
@@ -920,25 +914,159 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
     done
 }
 
-# --- pętla kroków: 0 = dalej, 1 = wstecz ------------------------------------
+# --- KARTA RELACJI (U25) -------------------------------------------------------
+# Właściciel 2026-10-20 (symulacja docs/project/SYMULACJA-U25-OKNO-RELACJI.md, odpowiedzi
+# 1 tak, 2 tak, 3 na szaro): jedno okno -- lista pól z wartościami -- dla nowej relacji i
+# dla zmiany (tui/edit-relation.sh rysuje tę samą kartę). Pola otwierają się same, jedno
+# po drugim, jak dawny kreator; Wstecz w oknie pola wraca na KARTĘ (nie krok w tył), a z
+# karty dowolne pole poprawia się bez cofania. "Utwórz relację" = podsumowanie, plan,
+# WYKONAJ (step_summary, bez zmian).
 RC_RUN=1
-step=mode
+ORDER=(mode host ds target profile srcret name acct extra)
+VIS=" "
+field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
+    case "$1" in
+        host)   [ "$MODE" != local ] ;;
+        target) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
+        # U32: lustro trzyma to, co źródło -- osobnej retencji "u źródła" nie ma.
+        srcret) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
+        extra)  [ "$NOCOPY" -eq 0 ] ;;
+        *)      return 0 ;;
+    esac
+}
+src_words() {   # SRCPROF <cel>-src-H24D3 -> "godzinowe 24, dobowe 3"
+    local s="${SRCPROF##*-src-}" out="" l n
+    [ -n "$SRCPROF" ] || { echo "jak tutaj (cel)"; return; }
+    while [ -n "$s" ]; do
+        l="${s:0:1}"; s="${s:1}"; n="${s%%[!0-9]*}"; s="${s#"$n"}"
+        case "$l" in H) l=godzinowe ;; D) l=dobowe ;; W) l=tygodniowe ;; M) l=miesięczne ;; Y) l=roczne ;; *) echo "$SRCPROF"; return ;; esac
+        out="${out:+$out, }$l ${n:-?}"
+    done
+    echo "$out"
+}
+field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
+    local a
+    case "$1" in
+        mode)
+            if [ "$NOCOPY" -eq 1 ]; then echo "migawki lokalne -- na tym hoście, bez kopii"; return; fi
+            case "$MODE" in
+                sync) echo "lustro -- to samo po obu stronach" ;;
+                local) echo "kopia lokalna -- na tym hoście" ;;
+                snaponly) echo "migawki zdalne -- na innym hoście, bez kopii" ;;
+                *) echo "backup -- ten host pobiera ze źródła" ;;
+            esac ;;
+        host)   [ -n "$HOST" ] && [ "$DIAG_OK_FOR" = "$(hostport)" ] && echo "$(hostport) (${HOSTNAME_R:-?}) -- SSH, ZFS, pakiet: OK" ;;
+        ds)     [ "${#B_ROOT[@]}" -gt 0 ] && echo "${#B_ROOT[@]}: $(printf '%s, ' "${B_ROOT[@]}" | sed 's/, $//')" ;;
+        target) [ -n "$TARGET" ] && { [ "$MODE" = local ] && echo "$TARGET  -> $TARGET/…" || echo "$TARGET  -> $TARGET/$HOST/…"; } ;;
+        profile)
+            [ -n "$PROFILE" ] || return 0
+            if [ -n "$MANUAL_P" ] && [ "$PROFILE" = "$MANUAL_P" ]; then echo "własne (tabela szczebli)"; return; fi
+            a="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $2; exit}' "$TMPD/prof.tsv" 2>/dev/null)"
+            echo "$PROFILE${a:+ -- $a}" ;;
+        srcret) case "$VIS" in *" srcret "*) src_words ;; esac ;;
+        name)   echo "$RNAME" ;;
+        acct)   a="$(account_name)"; echo "${a:-root}" ;;
+        extra)
+            case "$VIS" in *" extra "*) ;; *) [ "$MODE" = local ] && echo "pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy" || echo "prawa stąd, zgoda na zamrażanie, pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy"; return ;; esac
+            a=""
+            [ "$MODE" != local ] && [ "$GRANT" -eq 1 ] && a="prawa stąd"
+            [ "$GQUIESCE" -eq 1 ] && [ "$GRANT" -eq 1 ] && a="${a:+$a, }zgoda na zamrażanie"
+            [ "$MANUAL" -eq 1 ] && a="${a:+$a, }parowanie ręczne"
+            [ "$RAW" -eq 1 ] && a="${a:+$a, }zaszyfrowane"
+            [ "$MODE" != snaponly ] && a="${a:+$a, }pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy"
+            echo "${a:-bez dodatków}" ;;
+    esac
+}
+missing_fields() {   # -> nazwy pól, bez których relacji nie da się założyć
+    local m=""
+    field_applies host && [ -z "$(field_value host)" ] && m="${m:+$m, }źródło"
+    [ "${#B_ROOT[@]}" -gt 0 ] || m="${m:+$m, }datasety"
+    field_applies target && [ -z "$TARGET" ] && m="${m:+$m, }cel"
+    [ -n "$PROFILE" ] || m="${m:+$m, }harmonogram"
+    [ -n "$RNAME" ] || m="${m:+$m, }nazwa"
+    echo "$m"
+}
+run_field() {   # <pole> -> rc okna pola (0 = ustawione)
+    local before rc
+    case "$1" in
+        mode)    before="$MODE/$NOCOPY"; step_mode; rc=$?
+                 [ "$rc" -eq 0 ] && [ "$before" != "$MODE/$NOCOPY" ] && VIS=" " ;;
+        host)    before="$HOST"
+                 while :; do step_host || { rc=1; break; }; step_diag && { rc=0; break; }; done
+                 [ "$rc" -eq 0 ] && [ "$before" != "$HOST" ] && VIS="${VIS/ ds / }" ;;
+        ds)      step_datasets; rc=$? ;;
+        target)  step_target; rc=$? ;;
+        profile) before="$PROFILE"; step_profile; rc=$?
+                 [ "$rc" -eq 0 ] && [ "$before" != "$PROFILE" ] && { SRCPROF=""; VIS="${VIS/ srcret / }"; } ;;
+        srcret)  step_srcret; rc=$? ;;
+        name)    step_name; rc=$? ;;
+        acct)    step_account; rc=$? ;;
+        extra)   step_extra; rc=$? ;;
+        *)       rc=1 ;;
+    esac
+    [ "$rc" -eq 0 ] && { case "$VIS" in *" $1 "*) ;; *) VIS="$VIS$1 " ;; esac; }
+    return "$rc"
+}
+next_unvisited() {   # -> pierwsze pole w kolejności, którego jeszcze nie otwarto
+    local f
+    for f in "${ORDER[@]}"; do
+        field_applies "$f" || continue
+        case "$VIS" in *" $f "*) ;; *) echo "$f"; return 0 ;; esac
+    done
+    return 1
+}
+CARD_NAMES_OF() {
+    case "$1" in
+        mode) echo "Rodzaj" ;; host) echo "Źródło" ;; ds) echo "Datasety" ;; target) echo "Cel" ;;
+        profile) echo "Harmonogram" ;; srcret) echo "Retencja źródła" ;; silnik) echo "Silnik" ;;
+        name) echo "Nazwa" ;; acct) echo "Konto" ;; extra) echo "Dodatkowe" ;;
+    esac
+}
+
+cur=mode; auto=1
 while :; do
-    case "$step" in
-        mode)    if step_mode;     then [ "$MODE" = local ] && step=ds || step=host
-                 else clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; fi ;;
-        host)    if step_host;     then step=diag;    else step=mode; fi ;;
-        diag)    if step_diag;     then step=ds;      else step=host; fi ;;
-        ds)      if step_datasets; then { [ "$NOCOPY" -eq 1 ] || [ "$MODE" = snaponly ]; } && step=profile || step=target
-                 else [ "$MODE" = local ] && step=mode || step=host; fi ;;
-        target)  if step_target;   then step=profile; else step=ds; fi ;;
-        profile) if step_profile;  then step=name
-                 else { [ "$MODE" = sync ] || [ "$NOCOPY" -eq 1 ] || [ "$MODE" = snaponly ]; } && step=ds || step=target; fi ;;
-        name)    if step_name;     then step=acct;    else step=profile; fi ;;
-        acct)    if step_account;  then [ "$NOCOPY" -eq 1 ] && step=summary || step=extra; else step=name; fi ;;
-        extra)   if step_extra;    then step=summary; else step=acct; fi ;;
-        summary) step_summary
-                 case $? in 0) break ;; 2) step=ds ;; 3) step=profile ;; *) [ "$NOCOPY" -eq 1 ] && step=acct || step=extra ;; esac ;;
+    if [ "$auto" -eq 1 ]; then
+        if run_field "$cur"; then
+            nx="$(next_unvisited)" && { cur="$nx"; continue; }
+            cur=create; auto=0
+        else
+            # Wyjdź w pierwszym oknie (nic jeszcze nie wybrane) = koniec kreatora, jak dotąd.
+            if [ "$cur" = mode ] && [ "$VIS" = " " ]; then
+                clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1
+            fi
+            auto=0
+        fi
+    fi
+    CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
+    for f in mode host ds target profile srcret silnik name acct extra; do
+        [ "$f" = silnik ] || field_applies "$f" || continue
+        [ "$f" = silnik ] && { [ "$NOCOPY" -eq 0 ] && [ "$MODE" != snaponly ] || continue; }
+        CARD_TAGS+=("$f"); CARD_NAMES+=("$(CARD_NAMES_OF "$f")")
+        if [ "$f" = silnik ]; then CARD_VALUES+=("fabryczne -- zmienisz po założeniu (e na relacji)")
+        else CARD_VALUES+=("$(field_value "$f")"); fi
+        CARD_FIXED+=(0)
+    done
+    miss="$(missing_fields)"
+    CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("Utwórz relację -- plan, WYKONAJ${miss:+   (brak: $miss)}")
+    card_menu "Relacja (nowa)" "Każde pole otwiera swoje okno i wraca tutaj. Utwórz relację = plan i WYKONAJ." "$cur" "Wyjdź" \
+        || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
+    cur="$WT_OUT"
+    case "$cur" in
+        __sep__) cur=create; continue ;;
+        silnik)  wt --title "Silnik" --msgbox "Ustawienia silnika (historia, kompresja, szyfr SSH, autodobór łącza)\nzmieniasz po założeniu: F3, Enter na relacji, e -- to samo pole na karcie." 9 "$W"; continue ;;
+        create)
+            if [ -n "$miss" ]; then
+                wt --title "Brakuje pól" --msgbox "Do założenia relacji brakuje: $miss." 8 "$W"
+                cur="$(next_unvisited || echo create)"; continue
+            fi
+            step_summary
+            case $? in
+                0) break ;;
+                2) cur=ds; auto=1 ;;
+                3) cur=profile; auto=1 ;;
+                *) cur=create ;;
+            esac ;;
+        *) auto=1 ;;
     esac
 done
 exit "$RC_RUN"

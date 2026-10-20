@@ -118,3 +118,30 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
 shq() {   # argument tak, jak wpisałby go człowiek: apostrofy tylko tam, gdzie trzeba
     case "$1" in *[!A-Za-z0-9_./:=,@%+-]*) printf "'%s'" "$1" ;; *) printf '%s' "$1" ;; esac
 }
+
+# KARTA RELACJI (U25, właściciel 2026-10-20: "gdy tworzę relację i modyfikuję -- okno
+# ma być to samo"). Jedno okno dla kreatora (Ins) i zmiany (e): lista pól z wartościami,
+# pod kreską akcje. Pole stałe (zmiana relacji: rodzaj, cel, nazwa, konto) ma dopisek
+# "(stałe)" -- whiptail nie koloruje pojedynczych wierszy, więc "na szaro" = ten dopisek.
+# Wejście: CARD_TAGS CARD_NAMES CARD_VALUES CARD_FIXED (1 = stałe), CARD_ACT_TAGS
+# CARD_ACT_LABELS. Wybór w WT_OUT; kreska (__sep__) nic nie robi -- woła ją pętla.
+card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 1 = ten przycisk
+    local t="$1" x="$2" d="$3" c="$4" i v lb w items=()
+    geom
+    w=$((W - 10))
+    for i in "${!CARD_TAGS[@]}"; do
+        v="${CARD_VALUES[$i]:-…}"
+        # Wyrównanie po ZNAKACH (${#}), nie bajtach: printf %-16s liczy bajty i "Źródło"
+        # wypadało z kolumny.
+        lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt 17 ]; do lb="$lb "; done; lb="$lb$v"
+        if [ "${CARD_FIXED[$i]:-0}" = 1 ]; then
+            items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" $((w - 10)))  (stałe)")
+        else
+            items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" "$w")")
+        fi
+    done
+    items+=(__sep__ "──────────────────────────────────────────")
+    for i in "${!CARD_ACT_TAGS[@]}"; do items+=("${CARD_ACT_TAGS[$i]}" "$(clip_label "${CARD_ACT_LABELS[$i]}" "$w")"); done
+    wt --title "$t" --ok-button "Wybierz" --cancel-button "$c" --notags --default-item "$d" \
+       --menu "$x" "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$((${#items[@]} / 2))" "${items[@]}"
+}
