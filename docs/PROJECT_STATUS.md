@@ -437,8 +437,12 @@
   Lab pve9 -> pve10: blokada bramki -> „monitor BROKEN”; zabrane prawo migawek -> WARNING po 90 min i CRITICAL po
   150 min z prawdziwego crona, w liście dziennego podsumowania. Metropolis (zgoda właściciela, tylko CT 990): relacja
   `snaponly` pve2 <- pve1, migracja CT 990 na pve2 -> nasze migawki na pve1 (teraz cel replikacji) powstają z rc 0 i
-  znikają przy `recv -F`; WARNING 22:00, CRITICAL 23:00 CEST w kolejce pve2. Ograniczenie zmierzone: przy `pvesr`
-  co 3 h alarm po migracji może przyjść do jednego cyklu `pvesr` + próg później. Wszystko posprzątane, crontaby jak przed.
+  znikają przy `recv -F`; WARNING 22:00, CRITICAL 23:00 CEST w kolejce pve2. Ograniczenie (poprawione po
+  REV-20261017-152 F5.1): **nie ma skończonej granicy opóźnienia alarmu po migracji** -- stary węzeł dalej robi
+  migawki, więc przy niektórych zbiegach czasów (`pvesr`, migawki, monitor) każdy odczyt widzi świeżą migawkę i
+  alarm przychodzi z przerwami albo wcale; kontrprzykład recenzenta w
+  `docs/internal/reviews/evidence/REV-20261017-152-timing.py`. Monitor mierzy wiek migawek, nie położenie gościa;
+  źródło wybiera admin. Wszystko posprzątane, crontaby jak przed.
 
 - **REV-20261017-152 runda 1: relacja `snaponly` -- migawki na zdalnym źródle bez kopii (2026-10-17; na `main` przez #592 i #596; zgłoszona, przegląd rundy 1 poprawiony).**
   Przegląd rundy 1 (CHANGES REQUIRED, F1.1/F1.2/F2.1) poprawiony (`fix/rev152-r1-rereview`): ponowna aktywacja
