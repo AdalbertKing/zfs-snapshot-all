@@ -672,6 +672,7 @@ Inspection / teardown:
                                     for in a yes/no window. Ins on the GUI's F3 starts
                                     it and returns there. Needs whiptail and python3.
   zfs-backup.sh show-scope DATASET [--pattern=PREFIX]... [--recursive] [--json]
+  zfs-backup.sh pair-snapshots NAME SOURCE_DATASET --json   (GUI: migawki obu stron pary)
                                     What is actually ON THE DISK for one scope:
                                     per family, how many snapshots, from when, and
                                     how many bytes they hold; plus bookmarks and the
@@ -15938,6 +15939,61 @@ scope_age_seconds() {   # <creation epoch>
     printf '%s' "$(( now - $1 ))"
 }
 
+# pair-snapshots NAME SOURCE_DATASET --json (U38, owner 2026-10-20: "coś w stylu mc, z
+# widokiem migawek"). The GUI's two-panel view of ONE pair: every snapshot of the source
+# (over the relationship's own SSH channel, as its account -- the path seed and
+# final-catchup use) and of its copy on this host, each with guid, creation, used and
+# userrefs (a hold = a transfer in flight), plus the source's bookmarks (the fallback
+# base, U43). Read-only: `zfs list` only. Pairing by GUID and the base are the GUI's job.
+cmd_pair_snapshots() {
+    local name="${1:-}" src="${2:-}" a
+    [ -n "$name" ] && [ -n "$src" ] || die "usage: pair-snapshots NAME SOURCE_DATASET --json"
+    for a in "${@:3}"; do case "$a" in --json) ;; *) die "pair-snapshots: unknown option '$a' (only --json)" ;; esac; done
+    client_name_valid "$name" || die "invalid relationship name '$name'"
+    local cpath; cpath=$(client_conf_path "$name")
+    [ -r "$cpath" ] || die "pair-snapshots: no relationship '$name' on this host"
+    record_load client "$cpath"
+    local fields="name,guid,creation,used,userrefs" sout="" serr="" tout="" terr="" bout="" dst="" remote=0
+    case "${RUX_MODE:-}" in local) ;; *) [ -n "${PEER_HOST:-}" ] && remote=1 ;; esac
+    if [ "$remote" -eq 1 ]; then
+        load_client_and_connection "$cpath" >&2   # its >>> lines are not JSON
+        load_ssh_opts
+        sout=$(ssh -n "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -p -t snapshot -d 1 -o $fields -s creation -- '$src'" 2>&1) || { serr="$sout"; sout=""; }
+        bout=$(ssh -n "${LOAD_SSH_OPTS[@]}" "${LOAD_ACCOUNT}@${LOAD_HOST}" "zfs list -H -p -t bookmark -d 1 -o name,guid -- '$src'" 2>/dev/null) || bout=""
+        [ "${RUX_MODE:-}" = snaponly ] || dst=$(client_local_path "$src")
+    else
+        sout=$(zfs list -H -p -t snapshot -d 1 -o $fields -s creation -- "$src" 2>&1) || { serr="$sout"; sout=""; }
+        bout=$(zfs list -H -p -t bookmark -d 1 -o name,guid -- "$src" 2>/dev/null) || bout=""
+        dst="${CLIENT_TARGET:+${CLIENT_TARGET%/}/$src}"
+    fi
+    if [ -n "$dst" ]; then
+        tout=$(zfs list -H -p -t snapshot -d 1 -o $fields -s creation -- "$dst" 2>&1) || { terr="$tout"; tout=""; }
+    fi
+    snaps_json() {   # <zfs list output> -> [{"snap","guid","creation","used","holds"},...]
+        local first=1 n g c u r
+        printf '['
+        while IFS=$'\t' read -r n g c u r; do
+            [ -n "$n" ] || continue
+            [ "$first" -eq 1 ] || printf ','; first=0
+            printf '{"snap":"%s","guid":"%s","creation":%s,"used":%s,"holds":%s}' "$(json_escape "${n#*@}")" "$(json_escape "$g")" "${c:-0}" "${u:-0}" "${r:-0}"
+        done <<< "$1"
+        printf ']'
+    }
+    printf '{"name":"%s","mode":"%s","source":{"dataset":"%s","host":"%s","error":"%s","snapshots":' \
+        "$(json_escape "$name")" "$(json_escape "${RUX_MODE:-backup}")" "$(json_escape "$src")" "$(json_escape "${LOAD_HOST:-}")" "$(json_escape "$(printf '%s' "$serr" | tail -1)")"
+    snaps_json "$sout"
+    printf ',"bookmarks":['
+    local first=1 bn bg
+    while IFS=$'\t' read -r bn bg; do
+        [ -n "$bn" ] || continue
+        [ "$first" -eq 1 ] || printf ','; first=0
+        printf '{"name":"%s","guid":"%s"}' "$(json_escape "${bn#*#}")" "$(json_escape "$bg")"
+    done <<< "$bout"
+    printf ']},"target":{"dataset":"%s","error":"%s","snapshots":' "$(json_escape "$dst")" "$(json_escape "$(printf '%s' "$terr" | tail -1)")"
+    if [ -n "$dst" ]; then snaps_json "$tout"; else printf '[]'; fi
+    printf '}}\n'
+}
+
 cmd_show_scope() {
     local as_json=0 rec=0 ds="" a
     SCOPE_UNAVAIL=""   # filled by scope_unavail; a global because it is set in $( )
@@ -21118,6 +21174,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         monitor)          shift; cmd_monitor "$@" ;;
         list-jobs)        shift; cmd_list_jobs "$@" ;;
         show-scope)       shift; cmd_show_scope "$@" ;;
+        pair-snapshots)   shift; cmd_pair_snapshots "$@" ;;
         job-stats)        shift; cmd_job_stats "$@" ;;
         list-datasets)    shift; cmd_list_datasets "$@" ;;
         check-source)     shift; cmd_check_source "$@" ;;

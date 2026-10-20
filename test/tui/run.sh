@@ -393,8 +393,8 @@ else
 fi
 # TAB: kursor na pary; Enter na parze otwiera OKNO tej pary (R4-6), nie skok na F2.
 TP="$(screen relacje down,tab)"
-if has "$TP" 'Enter pełne okno   ←→ zakładki   Esc wróć   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
-    ok "relacje: Tab przenosi kursor na datasety, prawy panel pokazuje zaznaczony dataset (U21)"
+if has "$TP" 'm migawki   Enter pełne okno   ←→ zakładki   Esc wróć   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
+    ok "relacje: Tab przenosi kursor na datasety, prawy panel pokazuje zaznaczony dataset (U21); na ramce m migawki (U38)"
 else
     bad "relacje: Tab" "$TP"
 fi
@@ -4066,6 +4066,33 @@ if printf '%s\n' "$ERT1" | grep -qx 'run-relation r1' && ! printf '%s\n' "$ERT2"
     ok "edit-relation: karta 'Kopia teraz' = run-relation (jak F7); z czekajacymi zmianami najpierw odmawia"
 else
     bad "edit-relation: karta Kopia teraz (U36)" "bez zmian: $ERT1" "ze zmiana: $ERT2"
+fi
+# U38 (wlasciciel 2026-10-20, "cos w stylu mc, z widokiem migawek"): okno migawek pary.
+# Ksztalt danych jak z prawdziwego pair-snapshots na pve10 (ab, hdd/data): wyrownanie po GUID,
+# baza = NAJNOWSZA wspolna (blad z pierwszej jazdy: brana byla najstarsza), '>' tylko nowsze
+# niz baza (replica_ starsza tylko u zrodla -- bez znaku), dwa panele mieszcza sie w szerokosci,
+# wezej -- jeden panel i Tab.
+U38="$("$PY" - "$TUI" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+S = lambda n, g, c: {"snap": n, "guid": g, "creation": c, "used": 0, "holds": 0}
+d = {"source": {"dataset": "hdd/data", "host": "10.98.0.2", "snapshots": [S("automated_daily_1", "g1", 100), S("replica_x", "gr", 150),
+        S("automated_hourly_2", "g2", 200), S("automated_hourly_3", "g3", 300)], "bookmarks": []},
+     "target": {"dataset": "hdd/backups/h/hdd/data", "snapshots": [S("automated_daily_1", "g1", 100), S("automated_hourly_2", "g2", 200)]}}
+rows = zt.snap_pair_rows(d)
+print("MARKS", "".join(m for m, s, t in rows))
+print("SUM", zt.snap_pair_summary(d, rows))
+wide = zt.snap_pair_lines(d, 160, 0, 400)
+print("WIDE", max(len(l) for l in wide) <= 156, any(u"│" in l for l in wide))
+narrow = zt.snap_pair_lines(d, 100, 1, 400)
+print("NARROW", any(u"KOPIA" in l for l in narrow), not any(u"│" in l for l in narrow))
+PYEOF
+)"
+if has "$U38" 'MARKS = =>' && has "$U38" 'Baza następnej kopii: hourly_2' && has "$U38" 'do skopiowania: 1' \
+   && has "$U38" 'WIDE True True' && has "$U38" 'NARROW True True'; then
+    ok "migawki pary (U38): wyrownanie po GUID, baza = najnowsza wspolna, '>' tylko nowsze niz baza, dwa panele w szerokosci, wezej jeden"
+else
+    bad "migawki pary (U38)" "$U38"
 fi
 # CONFIG JAKO JEDYNE ZRODLO (wlasciciel 2026-10-13): "Retencja zrodla" (tag srcret, U25) czyta
 # szczeble z configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego

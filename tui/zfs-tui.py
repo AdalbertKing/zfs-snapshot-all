@@ -1786,7 +1786,9 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
         while len(cbody) < ch_h:
             cbody.append("")
         many = len(child["tabs"]) > 1
-        cfoot = (u"Enter pełne okno   " + (u"←→ zakładki   " if many else u"") + u"Esc wróć   Tab do linii poleceń") if in_child else ""
+        snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
+        cfoot = ((u"m migawki   " if snaps else u"") + u"Enter pełne okno   " + (u"←→ zakładki   " if many else u"")
+                 + u"Esc wróć   Tab do linii poleceń") if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
             scr.cursor_y = len(out) + 1 + pcur
@@ -1890,7 +1892,8 @@ def rel_children(tab, row, data, jobrows, now, ch):
     for pr in pairs:
         items.append({"cells": [pair_one(pr, ch), pr["vword"], "%d" % pr.get("tiers", 1), pr["gb"]],
                       "pairs": pair_detail_pairs(pr, row, data, now, ch),
-                      "title": u"%s -- dataset %s" % (row["name"], (pr.get("dst") or pr["src"]).split()[0]), "pair": pr})
+                      "title": u"%s -- dataset %s" % (row["name"], (pr.get("dst") or pr["src"]).split()[0]), "pair": pr,
+                      "relname": row.get("name")})
     empty = u"brak datasetów: rekord nie nazywa żadnego źródła, a w cronie nie ma linii kopii tej relacji"
     return {"how": how, "heads": [u"Dataset" if snaps_only else u"Źródło %s cel" % ch.right, u"Migawki" if snaps_only else u"Kopie",
                       u"Szczeble", u"Dane 7 dni"], "items": items, "prio": [0, 1, 3, 2], "empty": empty}
@@ -3067,6 +3070,105 @@ def cron_lines_of(jobs, w, ch):
             _emit(ln)
     if jobs and not any(j.get("cron_lines") for j in jobs):
         out.append(u"  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)")
+    return out
+
+
+def pair_source_dataset(pr):
+    """Dataset zrodla pary: 'konto@host:hdd/data' -> 'hdd/data', 'hdd/data   na pve9b' -> 'hdd/data'."""
+    s = (pr.get("src") or "").split()[0] if pr.get("src") else ""
+    return s.rsplit(":", 1)[-1]
+
+
+def snap_short(n):
+    """automated_hourly_2026-10-20_18-17 -> hourly_2026-10-20_18-17 (przedrostek hosta zostaje)."""
+    return re.sub(r"(^|_)automated_", r"\1", n, count=1)
+
+
+def snap_pair_rows(d):
+    """U38: migawki obu stron wyrownane po GUID, od najstarszej. Wiersz: (znak, src|None, tgt|None).
+    '=' po obu stronach, '>' tylko u zrodla (jeszcze nie skopiowana), ' ' tylko w kopii."""
+    src = (d.get("source") or {}).get("snapshots") or []
+    tgt = (d.get("target") or {}).get("snapshots") or []
+    by = {}
+    for s in src:
+        by.setdefault(s.get("guid"), [None, None])[0] = s
+    for t in tgt:
+        by.setdefault(t.get("guid"), [None, None])[1] = t
+    rows = []
+    for g, (s, t) in by.items():
+        c = min(x.get("creation", 0) for x in (s, t) if x)
+        rows.append((c, "=" if (s and t) else (">" if s else " "), s, t))
+    rows.sort(key=lambda r: r[0])
+    # '>' tylko NOWSZE niz baza (najnowsza wspolna): tylko te pojda nastepna kopia przyrostowa.
+    # Starsza migawka tylko u zrodla (np. replica_ z innej relacji, wykluczona rodzina) nie
+    # zostanie skopiowana -- bez znaku, zeby nie udawala zaleglosci.
+    last_both = max([i for i, r in enumerate(rows) if r[1] == "="] or [-1])
+    out = []
+    for i, (_c, m, s_, t_) in enumerate(rows):
+        if m == ">" and i < last_both:
+            m = " "
+        out.append((m, s_, t_))
+    return out
+
+
+def snap_pair_summary(d, rows):
+    """Stopka tresci: baza nastepnej kopii przyrostowej (najnowsza wspolna, inaczej zakladka)."""
+    both = [r for r in rows if r[0] == "="]
+    has_tgt = bool((d.get("target") or {}).get("dataset"))
+    nsrc = sum(1 for r in rows if r[1]); ntgt = sum(1 for r in rows if r[2])
+    if not has_tgt:
+        return u"Migawki na źródle: %d (ta relacja nie robi kopii)" % nsrc
+    if both:
+        base = u"Baza następnej kopii: %s" % snap_short(both[-1][1]["snap"])
+    else:
+        tg = [r[2] for r in rows if r[2]]
+        bm = [b for b in (d.get("source") or {}).get("bookmarks") or [] if tg and b.get("guid") == tg[-1].get("guid")]
+        base = (u"Baza: zakładka %s (wspólnej migawki brak)" % bm[0]["name"]) if bm else u"Baza: BRAK -- następna kopia od zera"
+    only_src = sum(1 for r in rows if r[0] == ">")
+    return u"%s   Źródło %d / kopia %d   do skopiowania: %d" % (base, nsrc, ntgt, only_src)
+
+
+def snap_cell(s, w, now):
+    if not s:
+        return " " * w
+    age = max(0, now - int(s.get("creation") or 0))
+    a = ("%dd" % (age // 86400)) if age >= 86400 else ("%dh" % (age // 3600)) if age >= 3600 else ("%dm" % (age // 60))
+    t = time.strftime("%m-%d %H:%M", time.localtime(int(s.get("creation") or 0)))
+    tail = "%s %4s %6s%s" % (t, a, hbytes_short(int(s.get("used") or 0)), " [hold]" if int(s.get("holds") or 0) else "")
+    name_w = max(8, w - len(tail) - 1)
+    return fit("%-*s %s" % (name_w, fit(snap_short(s.get("snap", "")), name_w), tail), w)
+
+
+def snap_pair_lines(d, width, side, now):
+    """U38 okno migawek pary: dwa panele obok siebie (zrodlo | kopia) od ~120 kolumn,
+    wezej -- jeden panel naraz (Tab przelacza). Lista od NAJNOWSZEJ (gora = teraz)."""
+    chrono = snap_pair_rows(d)
+    rows = list(reversed(chrono))
+    s_ds = (d.get("source") or {}).get("dataset", "?")
+    t_ds = (d.get("target") or {}).get("dataset") or ""
+    host = (d.get("source") or {}).get("host") or u"ten host"
+    out = [fit(snap_pair_summary(d, chrono), width - 4), ""]
+    for side_name in ("source", "target"):
+        e = (d.get(side_name) or {}).get("error")
+        if e:
+            out.append(fit(u"BŁĄD %s: %s" % (u"źródła" if side_name == "source" else u"kopii", e), width - 4))
+    inner = width - 4
+    two = bool(t_ds) and inner >= 116
+    if two:
+        w = (inner - 7) // 2
+        out.append(fit(u"  %-*s │   %s" % (w, fit(u"ŹRÓDŁO %s  %s" % (host, s_ds), w), u"KOPIA %s" % t_ds), inner))
+        for m, s, t in rows:
+            out.append(u"%s %s │ %s %s" % (m, snap_cell(s, w, now), m if t else " ", snap_cell(t, w, now)))
+    else:
+        show_t = bool(t_ds) and side == 1
+        w = inner - 3
+        out.append(fit(u"  %s" % ((u"KOPIA %s" % t_ds) if show_t else (u"ŹRÓDŁO %s  %s" % (host, s_ds))), inner))
+        for m, s, t in rows:
+            x = t if show_t else s
+            if x:
+                out.append(u"%s %s" % (m, snap_cell(x, w, now)))
+    if not rows:
+        out.append(u"  (brak migawek)")
     return out
 
 
@@ -4767,6 +4869,26 @@ class UI(object):
             else:
                 self.window, self.message = None, u"anulowano -- nic nie wykonano"
             return "stay"
+        if self.window and self.window[0] == "migawki":
+            obj = self.window[1]
+            if k in ("esc", "q"):
+                self.window, self.scroll = None, 0
+            elif k == "tab" and obj.get("dst"):
+                obj["side"] = 1 - obj.get("side", 0)
+                self.scroll = 0
+            elif k == "enter" and obj.get("dst"):
+                # Przeglądaj kopię (montaż tylko do odczytu + mc) -- to samo okno co F11.
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "browse", obj["dst"], "--ask"]) or "stay"
+            elif k in ("down", "j"):
+                self.scroll += 1
+            elif k in ("up", "k"):
+                self.scroll = max(0, self.scroll - 1)
+            elif k == "pgdn":
+                self.scroll += max(1, height - 4)
+            elif k == "pgup":
+                self.scroll = max(0, self.scroll - max(1, height - 4))
+            return "stay"
         if self.window and self.window[0] == "output":
             if k in ("esc", "q", "enter"):
                 obj = self.window[1]
@@ -4948,6 +5070,8 @@ class UI(object):
                     res = self.open_child(items[min(c, n - 1)])
                     if res:
                         return res
+            elif k == "m" and n and items[min(c, n - 1)].get("relname"):
+                self.open_snapshots(items[min(c, n - 1)])
             else:
                 nav = False
             if nav:
@@ -5033,6 +5157,17 @@ class UI(object):
             items = odzysk_rows(self.rows, self.data, now)
             return odz_children(key, items[c], self.rows, self.data, now, ch) if 0 <= c < len(items) else None
         return None
+
+    def open_snapshots(self, it):
+        """U38 (wlasciciel 2026-10-20, "cos w stylu mc, z widokiem migawek"): klawisz m na
+        parze = migawki obu stron wyrownane po GUID. Enter zostaje oknem zadania (R4-6)."""
+        src = pair_source_dataset(it["pair"])
+        d, err = run_verb(self.repo, ["pair-snapshots", it["relname"], src, "--json"])
+        if not isinstance(d, dict):
+            self.message = u"migawki pary nie do odczytania: %s" % (err or u"brak odpowiedzi")
+            return
+        self.window, self.scroll = ("migawki", {"name": it["relname"], "src": src, "data": d, "side": 0,
+                                                "dst": (d.get("target") or {}).get("dataset") or ""}), 0
 
     def open_child(self, it):
         """Enter na dziecku: para relacji -> okno jej zadania (config, cron), zadanie ->
@@ -5167,6 +5302,16 @@ def _ui_render(self, width, height):
             if obj["cur"] * per >= height - 4:
                 scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), obj["cur"] * per - (height - 6), width, height, self.ch,
                                                  footer=u"Enter wybiera   Esc wraca bez zmiany")
+        elif kind == "migawki":
+            lines = snap_pair_lines(obj["data"], width, obj.get("side", 0), int(time.time()))
+            two = bool(obj.get("dst")) and width - 4 >= 116
+            foot = u"Enter przeglądaj kopię   Esc wraca   strzałki/PgUp/PgDn przewijają"
+            if obj.get("dst") and not two:
+                foot = u"Tab źródło/kopia   " + foot
+            if not obj.get("dst"):
+                foot = u"Esc wraca   strzałki/PgUp/PgDn przewijają"
+            scr, self.scroll = render_window(base, u"Migawki: relacja %s, %s" % (obj["name"], obj["src"]), lines,
+                                             self.scroll, width, height, self.ch, footer=foot)
         elif kind == "output":
             lines = self.output_lines(obj, width)
             if self.scroll == 0 and obj.get("proc") is not None and obj["proc"].poll() is None:

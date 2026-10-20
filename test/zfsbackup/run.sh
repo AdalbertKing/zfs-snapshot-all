@@ -10341,6 +10341,16 @@ if [ "$im_rc1" -eq 0 ] && printf '%s' "$im_c1" | grep -q '^rux|--source=10.0.0.1
 else
     bad "importrel: rejoin path" "rc=$im_rc1" "fresh: $im_c1" "joined: $im_c2" "bandwidth: $im_c3" "$(cat "$WORK/im.err")"
 fi
+# U38 pair-snapshots: a reader with a plain contract -- usage, and an unknown relation
+# refused in words, nothing listed (the remote half is proved live on pve10).
+_ps1=$(bash "$ZFSBACKUP" pair-snapshots 2>&1); _r1=$?
+_ps2=$( CLIENTS_DIR="$IM/clients" bash "$ZFSBACKUP" pair-snapshots nieistnieje hdd/x --json 2>&1); _r2=$?
+if [ "$_r1" -ne 0 ] && printf '%s' "$_ps1" | grep -q 'usage: pair-snapshots NAME SOURCE_DATASET' \
+   && [ "$_r2" -ne 0 ] && printf '%s' "$_ps2" | grep -q "no relationship 'nieistnieje'"; then
+    ok "pair-snapshots: usage and an unknown relationship are refused in words (U38)"
+else
+    bad "pair-snapshots refusals (U38)" "rc=$_r1 $_ps1" "rc=$_r2 $_ps2"
+fi
 # U45 (owner 2026-10-20: "niech wywola join"): the ordinary replay (source still has
 # this collector's account) joins the source itself when this host has root there --
 # add-client gets --join-remotely; without root (the first run above) it does not.

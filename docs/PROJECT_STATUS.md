@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a6efff6f14c6a175 -->
+<!-- status-covers-digest: 1448aa48d1c7551d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U38: okno migawek pary, jak mc (2026-10-20; `finisz/U38-migawki`).** F3 -> Enter na relacji -> zakładka
+  Datasety -> **klawisz `m` na parze** (podpis na ramce): migawki źródła (kontem relacji po SSH) i kopii (lokalnie), wyrównane po GUID, od
+  najnowszej; dwa panele obok siebie od ~120 kolumn, węziej jeden panel i Tab. Znak `=` po obu stronach, `>` tylko u
+  źródła i nowsza niż baza (pójdzie następną kopią); nagłówek: baza następnej kopii (najnowsza wspólna, inaczej
+  zakładka, inaczej „od zera”), liczby migawek. Enter = Przeglądaj kopię (montaż RO + mc). Nic nie zmienia. Czytnik
+  `zfs-backup.sh pair-snapshots NAZWA DATASET --json`. Enter na parze zostaje oknem zadania (R4-6); pierwsza wersja dała tam migawki i
+  zabrała to okno -- 3 testy tui to złapały, przeniesione na `m`.
+  Na żywo pve10: `ab` (źródło przez VPN, 27/26) i lustro `cb`. Pierwsza jazda brała bazę z najstarszej
+  wspólnej, ucięty prawy panel i `replica_` liczoną jako zaległość -- poprawione, test to pilnuje.
 
 - **FINISZ U36, U39 (2026-10-20; `finisz/U36-U39`).** U36 „kopia całej relacji teraz” (dawny final-catchup jako
   F7 na relacji): F7 na F3 już to robi (`run-relation` -- najdrobniejsze zadanie każdego datasetu, poza
