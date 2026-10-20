@@ -1609,6 +1609,78 @@ else
 fi
 rm -rf "$hs_dir"
 
+# ---------------------------------------------------------------------------
+# U35 BEZPIECZNIK POJEMNOSCI (hostscripts/capacity-guard.sh, wlasciciel 2026-10-20).
+# Prawdziwy skrypt, zpool/zfs zastapione: kazde zfs destroy obniza zajetosc o GS_STEP.
+# Sprawdza: wylaczony domyslnie (nic), tylko nasze rodziny (nie __replicate_, vzdump,
+# reczne), nie pod hold, N najnowszych w szczeblu zostaje, od najdrobniejszego szczebla
+# i najstarszej, stop ponizej celu; brak czego usunac -> alert "NIE zwolnil", rc 1;
+# --plan nic nie usuwa; wlaczenie przez settings.ini (alert-env), nie tylko env.
+# ---------------------------------------------------------------------------
+gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin"
+cp "$HS/capacity-guard.sh" "$gs_dir/guard.sh"; cp "$HS/alert-env.sh" "$gs_dir/alert-env.sh"
+cat > "$gs_dir/bin/zpool" <<'ST'
+#!/bin/bash
+case "$*" in
+  "list -H -o name") echo tank ;;
+  "list -H -o capacity tank") echo "$(cat "$GS_DIR/cap")%" ;;
+  "sync tank") : ;;
+esac
+ST
+cat > "$gs_dir/bin/zfs" <<'ST'
+#!/bin/bash
+case "$1" in
+  list) cat "$GS_DIR/snaps" ;;
+  destroy) echo "$2" >> "$GS_DIR/destroyed"; echo $(( $(cat "$GS_DIR/cap") - GS_STEP )) > "$GS_DIR/cap" ;;
+esac
+ST
+printf '#!/bin/bash\nprintf "%%s\n%%s\n" "$1" "$2" >> "$GS_DIR/mail"\n' > "$gs_dir/bin/notify"
+chmod +x "$gs_dir/bin/"* "$gs_dir/guard.sh"
+gs_snaps() {
+    printf 'tank/a@automated_hourly_0\t50\t1\n'
+    printf 'tank/a@automated_hourly_1\t100\t0\ntank/a@automated_hourly_2\t200\t0\ntank/a@automated_hourly_3\t300\t0\ntank/a@automated_hourly_4\t400\t0\n'
+    printf 'tank/a@automated_daily_1\t150\t0\ntank/a@automated_daily_2\t250\t0\ntank/a@automated_daily_3\t350\t0\n'
+    printf 'tank/a@__replicate_101_0_1\t10\t0\ntank/a@vzdump\t20\t0\ntank/a@reczna\t5\t0\n'
+    printf 'tank/b@pve9_automated_hourly_1\t60\t0\ntank/b@pve9_automated_hourly_2\t70\t0\ntank/b@pve9_automated_hourly_3\t80\t0\n'
+}
+gs_run() {   # <cap> <step> <settings guard> [args] -> rc; destroyed/mail in $gs_dir
+    rm -f "$gs_dir/destroyed" "$gs_dir/mail"; echo "$1" > "$gs_dir/cap"; gs_snaps > "$gs_dir/snaps"
+    printf '[capacity]\nguard = %s\nguard_at = 89\nguard_target = 85\nguard_min_keep = 2\n' "$3" > "$gs_dir/settings.ini"
+    local cap="$1" step="$2"; shift 3
+    ( unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP
+      PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" GS_STEP="$step" SETTINGS_FILE="$gs_dir/settings.ini" \
+      ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="$gs_dir/lock" bash "$gs_dir/guard.sh" "$@" ) > "$gs_dir/out" 2>&1
+}
+gs_run 95 3 off; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && [ ! -s "$gs_dir/destroyed" ] && [ ! -s "$gs_dir/mail" ]; then
+    ok "capacity-guard: guard = off (domyslnie) -- przy 95% nic nie usuwa i nie wysyla"
+else
+    bad "capacity-guard: off" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/out" 2>/dev/null)"
+fi
+gs_run 92 3 on; gs_rc=$?
+gs_got="$(tr '\n' ' ' < "$gs_dir/destroyed" 2>/dev/null)"
+if [ "$gs_rc" -eq 0 ] && [ "$gs_got" = 'tank/b@pve9_automated_hourly_1 tank/a@automated_hourly_1 tank/a@automated_hourly_2 ' ] \
+   && grep -q 'wyczyścił pulę tank (83%)' "$gs_dir/mail"; then
+    ok "capacity-guard: od najdrobniejszego szczebla i najstarszej, stop ponizej celu (92 -> 83%), mail z lista; hold, __replicate_, vzdump, reczne i 2 najnowsze nietkniete"
+else
+    bad "capacity-guard: kolejnosc i stop" "rc=$gs_rc" "got: $gs_got" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
+fi
+gs_run 99 1 on; gs_rc=$?
+gs_got="$(tr '\n' ' ' < "$gs_dir/destroyed" 2>/dev/null)"
+if [ "$gs_rc" -eq 1 ] && [ "$gs_got" = 'tank/b@pve9_automated_hourly_1 tank/a@automated_hourly_1 tank/a@automated_hourly_2 tank/a@automated_daily_1 ' ] \
+   && grep -q 'NIE zwolnił puli tank' "$gs_dir/mail" && ! grep -qE '__replicate_|vzdump|reczna|@automated_hourly_[034]$|@automated_daily_[23]$|pve9_automated_hourly_[23]$' "$gs_dir/destroyed"; then
+    ok "capacity-guard: nie ma czego bezpiecznie usunac -> 4 kandydatow, alert 'NIE zwolnil', rc 1"
+else
+    bad "capacity-guard: wyczerpanie kandydatow" "rc=$gs_rc" "got: $gs_got" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
+fi
+gs_run 92 3 off --plan; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && [ ! -s "$gs_dir/destroyed" ] && grep -q 'usuwałby' "$gs_dir/out" && grep -q 'tank/a@automated_daily_1' "$gs_dir/out"; then
+    ok "capacity-guard: --plan pokazuje kolejnosc i nic nie usuwa (takze przy guard = off)"
+else
+    bad "capacity-guard: --plan" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/destroyed" 2>/dev/null)"
+fi
+rm -rf "$gs_dir"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

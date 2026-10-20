@@ -31,6 +31,7 @@ if [ -z "$CONF" ]; then
 fi
 # shellcheck disable=SC1090
 [ -n "$CONF" ] && . "$CONF"
+_E_G="${ZFS_GUARD:-}"; _E_GA="${ZFS_GUARD_AT:-}"; _E_GT="${ZFS_GUARD_TARGET:-}"; _E_GK="${ZFS_GUARD_MIN_KEEP:-}"
 _E_COOL="${ZFS_ALERT_COOLDOWN:-}"; _E_CAP="${ZFS_CAPACITY_THRESHOLD:-}"
 # THE HOST SETTINGS FILE (2026-10-19, owner: "nowy plik ustawień z sekcjami", edited
 # with F10 in the GUI). Its [alerts] and [capacity] keys win over zfs-alert.conf --
@@ -54,6 +55,11 @@ _v=$(_zs alerts warnings);     [ -n "$_v" ] && ZFS_WARN_MODE="$_v"
 _v=$(_zs alerts all_ok_mail);  [ -n "$_v" ] && ZFS_DIGEST_QUIET="$_v"
 _v=$(_zs alerts stats_days);   [ -n "$_v" ] && ZFS_DIGEST_DAYS="$_v"
 _v=$(_zs capacity threshold);  [ -n "$_v" ] && ZFS_CAPACITY_THRESHOLD="$_v"
+# U35 bezpiecznik pojemności (capacity-guard.sh)
+_v=$(_zs capacity guard);          [ -n "$_v" ] && ZFS_GUARD="$_v"
+_v=$(_zs capacity guard_at);       [ -n "$_v" ] && ZFS_GUARD_AT="$_v"
+_v=$(_zs capacity guard_target);   [ -n "$_v" ] && ZFS_GUARD_TARGET="$_v"
+_v=$(_zs capacity guard_min_keep); [ -n "$_v" ] && ZFS_GUARD_MIN_KEEP="$_v"
 _v=$(_zs alerts repeat_after)
 case "$_v" in
     *[0-9]h) ZFS_ALERT_COOLDOWN=$(( ${_v%h} * 3600 )) ;;
@@ -64,6 +70,10 @@ unset _v
 _restore_env() {
     [ -n "$_E_COOL" ]  && ZFS_ALERT_COOLDOWN="$_E_COOL"
     [ -n "$_E_CAP" ]   && ZFS_CAPACITY_THRESHOLD="$_E_CAP"
+    [ -n "$_E_G" ]     && ZFS_GUARD="$_E_G"
+    [ -n "$_E_GA" ]    && ZFS_GUARD_AT="$_E_GA"
+    [ -n "$_E_GT" ]    && ZFS_GUARD_TARGET="$_E_GT"
+    [ -n "$_E_GK" ]    && ZFS_GUARD_MIN_KEEP="$_E_GK"
     [ -n "$_E_MODE" ]  && ZFS_ALERT_MODE="$_E_MODE"
     [ -n "$_E_WMODE" ] && ZFS_WARN_MODE="$_E_WMODE"
     [ -n "$_E_QUEUE" ] && ZFS_ALERT_QUEUE="$_E_QUEUE"
