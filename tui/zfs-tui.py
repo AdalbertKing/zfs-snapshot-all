@@ -4224,7 +4224,7 @@ class UI(object):
             # UROCHOM TERAZ, jak F7 na F2 i F6: bez okna potwierdzenia (kopia niczego nie
             # niszczy), wynik w oknie wyjscia. Czasownik bierze z zainstalowanego crona
             # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
-            self.run_detached(u"Relacja %s -- kopia teraz" % n, [self.zb(), "run-relation", n], logname="relacja")
+            self.run_detached(u"Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)" % n, [self.zb(), "run-relation", n], logname="relacja")
         elif k == "F8":
             if rel.get("disabled"):
                 self.confirm(u"Włącz relację %s" % n, [self.zb(), "enable-client", n], ENABLE_NOTE)

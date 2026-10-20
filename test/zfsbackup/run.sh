@@ -6137,69 +6137,8 @@ else
     bad "60: a caller action containing a quote is composed back intact" "out=$out"
 fi
 
-# --- 61. setup-server records no account -- the account is per-relationship --
-#
-# Owner decision (2026-08-19): the account a relationship's jobs run as is stated
-# on the command at add-client/deploy (--local-user, else root) and travels with
-# the relationship. setup-server therefore writes only DEFAULT_TARGET and
-# CRON_CONFIG -- NEVER LOCAL_USER, whatever --local-user it was handed.
-# --local-user here is only a convenience that pre-CREATES a delegated account
-# while bootstrapping the host; it records nothing. This replaced the earlier
-# "setup-server records the host's one account" contract, whose recording is
-# exactly what the account refactor removed.
-SS="$WORK/setupserver"; mkdir -p "$SS/bin" "$SS/etc"
-cat > "$SS/bin/zfs" <<'EOF'
-#!/bin/bash
-exit 0
-EOF
-chmod +x "$SS/bin/zfs"
-cat > "$SS/deploy.sh" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$SS/deploy.log"
-exit 0
-EOF
-chmod +x "$SS/deploy.sh"
-: > "$SS/deploy.log"
-out=$( PATH="$SS/bin:$PATH" bash -c "
-    source '$ZFSBACKUP'
-    SERVER_CONF='$SS/etc/zfs-backup.conf'
-    DEPLOY='$SS/deploy.sh'
-    ensure_cron_config() { :; }
-    assert_config_readable_by_target() { :; }
-    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=root
-" 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact"
-else
-    bad "61a: setup-server writes no LOCAL_USER even with --local-user=root -- the account is a relationship fact" \
-        "rc=$rc out=$out conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
-fi
-if ! grep -q -- '--backup-user' "$SS/deploy.log" 2>/dev/null; then
-    ok "61b: root is a decision, not a delegation -- no account is bootstrapped for it"
-else
-    bad "61b: root is a decision, not a delegation -- no account is bootstrapped for it" \
-        "deploy args: $(cat "$SS/deploy.log" 2>/dev/null)"
-fi
-
-# 61c. --local-user=NAME pre-creates a delegated account (deploy --backup-user)
-#      as a bootstrap convenience, but STILL records no host-wide account -- who
-#      runs a relationship's jobs is that relationship's choice, not a file's.
-rm -f "$SS/etc/zfs-backup.conf"; : > "$SS/deploy.log"
-out=$( PATH="$SS/bin:$PATH" bash -c "
-    source '$ZFSBACKUP'
-    SERVER_CONF='$SS/etc/zfs-backup.conf'
-    DEPLOY='$SS/deploy.sh'
-    ensure_cron_config() { :; }
-    assert_config_readable_by_target() { :; }
-    cmd_setup_server --target=tank/backups --config='$SS/jobs.conf' --local-user=bkp
-" 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && grep -q -- '--backup-user=bkp' "$SS/deploy.log" 2>/dev/null \
-   && ! grep -q '^LOCAL_USER=' "$SS/etc/zfs-backup.conf" 2>/dev/null; then
-    ok "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account"
-else
-    bad "61c: setup-server --local-user=bkp bootstraps the account but records no host-wide account" \
-        "rc=$rc deploy=$(cat "$SS/deploy.log" 2>/dev/null) conf=$(cat "$SS/etc/zfs-backup.conf" 2>/dev/null)"
-fi
+# --- 61. (removed 2026-10-20, U39) setup-server is gone: the wizard and F10 record
+# what it wrote; an existing server.conf is still READ (read_server_conf).
 
 # --- 62. P5: a sync relationship may not quietly take more than was asked -----
 # Campaign finding P5 (docs/LAB5-POPRAWKI.md): one sync enrolment naming ONE
@@ -8120,7 +8059,6 @@ if grep -q '^record_field_allowed()' "$RECLIB"; then
             chk manifest "$n"
         done
         for n in $(grep -oE "printf +'PAUSED_[A-Z_]*=" "$ZFSBACKUP" | grep -oE 'PAUSED_[A-Z_]*' | sort -u); do chk pause "$n"; done
-        for n in $(product_fn "$ZFSBACKUP" cmd_setup_server | grep -oE 'echo "[A-Z][A-Z0-9_]*=' | grep -oE '[A-Z][A-Z0-9_]*' | sort -u); do chk server "$n"; done
         # the stamps zfs-backup.sh appends go to three different files; each must be a field of SOME set
         for n in $(grep -oE "printf +'[A-Z][A-Z0-9_]*=" "$ZFSBACKUP" | grep -oE '[A-Z][A-Z0-9_]*' | sort -u); do
             record_field_allowed client "$n" || record_field_allowed manifest "$n" || record_field_allowed pause "$n" \
@@ -8245,7 +8183,6 @@ while IFS='|' read -r cmd args; do
         bad "flags: $cmd refuses --local-user='BadName' (uppercase) at parse time, naming the command and the grammar" "rc=$rc" "$out"
     fi
 done <<'EOF'
-setup-server|setup-server --local-user=BadName --target=tank/b
 local-backup|local-backup --local-user=BadName --source=tank/x --target=tank/b
 add-client|add-client flagtest --local-user=BadName --host=10.0.0.1 --datasets=tank/x
 set-bandwidth|set-bandwidth --local-user=BadName --peer=10.0.0.1 --bandwidth=2M
@@ -8277,8 +8214,8 @@ else
     bad "flags: local-backup accepts --profile=default.conf at parse time, like every other command" "rc=$rc" "$out"
 fi
 # The grammar's one legal non-account answer survives the move: 'root' is not
-# refused by any of the seven (setup-server treats it as "nothing to create").
-out=$(flag_run setup-server --local-user=root --target=tank/b); rc=$?
+# refused by the commands that take it (U39: setup-server, which once checked this, is gone).
+out=$(flag_run local-backup --local-user=root --source=tank/x --target=tank/b); rc=$?
 if ! printf '%s' "$out" | grep -q 'is not a valid account name'; then
     ok "flags: --local-user=root is still a legal answer at parse time"
 else

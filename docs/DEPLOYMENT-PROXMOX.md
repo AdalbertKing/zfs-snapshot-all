@@ -78,14 +78,15 @@ Every step states **which host** it runs on. The order is not optional.
 
 ```bash
 cd /root/zfs-snapshot-all
-./zfs-backup.sh setup-server --target=rpool/backups --local-user=zfsbackup
+./deploy.sh --backup-user=zfsbackup
 ```
 
-This installs dependencies, creates the delegated `zfsbackup` account, creates
-the `rpool/backups` dataset, writes the job config, and installs the
-self-update cron entry.
+This installs dependencies, creates the delegated `zfsbackup` account and
+installs the self-update cron entry. The dataset for the copies (e.g.
+`rpool/backups`) is chosen when a relationship is created (wizard: field Cel,
+CLI: `--target=`). (`setup-server` was removed 2026-10-20.)
 
-`--local-user=zfsbackup` means **the backup jobs will not run as root.** Worth
+`--backup-user=zfsbackup` means **the backup jobs will not run as root.** Worth
 doing: it bounds the damage if anything goes wrong.
 
 Confirm a clean state:
@@ -517,7 +518,7 @@ On the source (removes this relationship's account, key and ZFS grants):
 
 ```bash
 # --- COLLECTOR pve-backup ---
-./zfs-backup.sh setup-server --target=rpool/backups --local-user=zfsbackup
+./deploy.sh --backup-user=zfsbackup
 ./zfs-backup.sh add-client prod01 --lan=192.168.1.20 --mode=backup
 #   -> move the printed .tgz package to pve-prod
 

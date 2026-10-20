@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ee25656d64fd05c3 -->
+<!-- status-covers-digest: a6efff6f14c6a175 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U36, U39 (2026-10-20; `finisz/U36-U39`).** U36 „kopia całej relacji teraz” (dawny final-catchup jako
+  F7 na relacji): F7 na F3 już to robi (`run-relation` -- najdrobniejsze zadanie każdego datasetu, poza
+  harmonogramem; szczebli rzadszych celowo nie, dodatkowa migawka miesięczna wypchnęłaby najstarszą). Dodane: opis
+  okna F7 („wszystkie datasety poza harmonogramem, np. przed przeniesieniem kolektora”) i akcja „Kopia teraz” na
+  karcie relacji (z czekającymi zmianami najpierw odmawia). U39: `setup-server` usunięty (czasownik, pomoc, testy
+  61a-c); `server.conf` nadal czytany, podpowiedzi „run setup-server” zastąpione; instrukcje wdrożenia
+  (`docs/WDROZENIE-PROXMOX.md`, `docs/DEPLOYMENT-PROXMOX.md`) mówią `./deploy.sh --backup-user=zfsbackup`, a cel
+  wybiera się przy zakładaniu relacji. U38: symulacja widoku migawek pary (dwa panele jak mc) --
+  `docs/project/SYMULACJA-U38-WIDOK-MIGAWEK.md`, czeka na decyzję.
 
 - **FINISZ luki U42–U47 (2026-10-20; `finisz/luki-1`).** Decyzje właściciela: „robimy / popraw / napraw”.
   - **U47 usuwanie relacji bez internetu**: `remove-client` woła `deploy.sh --unpair`, a ten w fazie 2 robił

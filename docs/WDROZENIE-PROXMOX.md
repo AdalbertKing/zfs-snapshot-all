@@ -79,14 +79,15 @@ Kolejność jest obowiązkowa.
 
 ```bash
 cd /root/zfs-snapshot-all
-./zfs-backup.sh setup-server --target=rpool/backups --local-user=zfsbackup
+./deploy.sh --backup-user=zfsbackup
 ```
 
 Co się dzieje: instalują się zależności, powstaje konto delegowane
-`zfsbackup`, zakładany jest dataset `rpool/backups`, powstaje plik konfiguracji
-zadań i wpis crona z automatyczną aktualizacją.
+`zfsbackup` i wpis crona z automatyczną aktualizacją. Dataset na kopie (np.
+`rpool/backups`) wybierasz przy zakładaniu relacji (kreator: pole Cel, CLI: `--target=`).
+(`setup-server` usunięty 2026-10-20.)
 
-`--local-user=zfsbackup` znaczy: **zadania backupu nie będą chodzić z roota.**
+`--backup-user=zfsbackup` znaczy: **zadania backupu nie będą chodzić z roota.**
 Warto — to ogranicza szkody, gdyby cokolwiek poszło nie tak.
 
 Sprawdź, że jest czysto:
@@ -532,7 +533,7 @@ Na źródle (sprząta konto, klucz i uprawnienia ZFS tej relacji):
 
 ```bash
 # --- KOLEKTOR pve-backup ---
-./zfs-backup.sh setup-server --target=rpool/backups --local-user=zfsbackup
+./deploy.sh --backup-user=zfsbackup
 ./zfs-backup.sh add-client prod01 --lan=192.168.1.20 --mode=backup
 #   -> przenieś wypisaną paczkę .tgz na pve-prod
 

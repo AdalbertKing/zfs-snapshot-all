@@ -424,7 +424,7 @@ cmd_restore_safe() {   # <dataset> <snapshot> <config> <yes>
 
     read_server_conf
     [ -n "$config" ] || config="${CRON_CONFIG:-}"
-    [ -n "$config" ] || die "restore: no cron config known -- pass --config=FILE or run setup-server"
+    [ -n "$config" ] || die "restore: no cron config known -- pass --config=FILE"
     [ -r "$config" ] || die "restore: cannot read $config"
 
     # Same derivation as the planner, deliberately: one idea of where copies live.

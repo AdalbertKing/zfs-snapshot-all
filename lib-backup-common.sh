@@ -89,10 +89,11 @@ json_escape() {
 }
 
 # ------------------------------------------------------------------------------
-# The server-side config written by `zfs-backup.sh setup-server` and read by
-# every later command. KEY=VALUE, read as DATA through record_load below (it was
-# `.`-sourced until 2026-09-03, the last reader in these two programs that
-# still executed its file) -- setup-server is the only writer.
+# The server-side config once written by `zfs-backup.sh setup-server` (removed
+# 2026-10-20, U39 -- the wizard and F10 record these facts now) and still READ by
+# every later command, so a host that has one keeps working. KEY=VALUE, read as
+# DATA through record_load below (it was `.`-sourced until 2026-09-03, the last
+# reader in these two programs that still executed its file). No writer is left.
 SERVER_CONF="${SERVER_CONF:-/etc/zfs-snapshot-all/zfs-backup.conf}"
 
 # Resets ONLY the fields this file actually carries, so a stale value from an

@@ -226,7 +226,6 @@ usage() {
 zfs-backup.sh -- simple two-host backup deploy (pve1=appliance, pve2=source)
 
 Usage:
-  zfs-backup.sh setup-server [--target=POOL/PATH] [--config=FILE] [--local-user=NAME]
   zfs-backup.sh [--source=DATASET] [--target=DATASET] [--profile=NAME] [--source-profile=NAME]
                 [--config=FILE]
                                     --source-profile=NAME gives the SOURCE side its own
@@ -6219,75 +6218,6 @@ cmd_progress() {
     [ "$any" -eq 1 ] || echo "  brak transferow w toku"
 }
 
-cmd_setup_server() {
-    local target="" config="" local_user=""
-    for a in "$@"; do
-        case "$a" in
-            --target=*)     target="${a#*=}" ;;
-            --config=*)     config="${a#*=}" ;;
-            --local-user=*) local_user="${a#*=}"; flag_local_user setup-server "$local_user" ;;
-            *) die "setup-server: unknown option $a" ;;
-        esac
-    done
-    # setup-server no longer records a host-wide account: who runs a relationship's
-    # jobs is decided per-relationship at add-client/deploy time (--local-user,
-    # else root) and travels with that relationship. --local-user here is only a
-    # convenience to PRE-CREATE a delegated account while bootstrapping the host;
-    # it writes nothing to server.conf. root names no account to create.
-    local delegate="$local_user"
-    [ "$delegate" = root ] && delegate=""
-
-    if [ -n "$delegate" ]; then
-        bash "$DEPLOY" --backup-user="$delegate" || die "deploy.sh bootstrap failed -- fix that before continuing"
-    else
-        bash "$DEPLOY" || die "deploy.sh bootstrap failed -- fix that before continuing"
-    fi
-
-    read_server_conf
-    if [ -z "$target" ]; then
-        # Slice 3 extracted this into propose_backup_target(); behaviour here is
-        # unchanged, the logic simply now has one home shared with local-backup.
-        #
-        # Captured with `|| die`, NOT piped: the helper's own `die` (multiple
-        # candidate pools) runs inside the command substitution's subshell, so it
-        # cannot terminate this function. Without propagating the status, the
-        # ambiguous-pool refusal would fail OPEN and setup-server would continue
-        # with an empty target -- the exact shape of defect this project has been
-        # bitten by before.
-        local proposal
-        proposal=$(propose_backup_target) || die "could not determine a backup target -- see the reason above"
-        target="${proposal%%$'\t'*}"
-    fi
-    if [ -z "$config" ]; then
-        if [ -n "$CRON_CONFIG" ]; then
-            config="$CRON_CONFIG"
-        else
-            local existing
-            existing=$(crontab_for_target 2>/dev/null | cron_block_source)
-            if [ -n "$existing" ]; then
-                config=$(normalize_cron_source "$existing")
-                log "found an existing managed crontab block from '$existing' (resolved: $config) -- using it as the cron config (pass --config= to override)"
-            else
-                config="$(default_cron_config)"
-            fi
-        fi
-    fi
-
-    zfs create -p "$target" 2>/dev/null || zfs list "$target" >/dev/null 2>&1 || die "could not create or find target dataset $target"
-
-    mkdir -p "$(dirname "$SERVER_CONF")" || die "could not create $(dirname "$SERVER_CONF")"
-    {
-        echo "# zfs-backup.sh server config -- edit by hand if needed, or re-run setup-server"
-        echo "DEFAULT_TARGET=$target"
-        echo "CRON_CONFIG=$config"
-    } > "$SERVER_CONF" || die "could not write $SERVER_CONF"
-    chmod 0644 "$SERVER_CONF"
-
-    ensure_cron_config "$config"
-    assert_config_readable_by_target "$config"
-
-    log "server ready: target=$target, cron config=$config"
-}
 
 # ------------------------------------------------------------------------------
 # Phase 5 slice 1: high-level LOCAL backup, planning/preview only.
@@ -8916,7 +8846,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # --yes; a pool-layout guess has to be looked at by a human.
     if [ "$target_from" = heuristic ] && [ "$assume_yes" -eq 1 ]; then
         rm -f "$cand"
-        die "local-backup: --yes cannot confirm a target this run GUESSED ('$target', from the pool layout). Name it with --target=$target if that is what you meant, or record it once with setup-server. Nothing was touched."
+        die "local-backup: --yes cannot confirm a target this run GUESSED ('$target', from the pool layout). Name it with --target=$target if that is what you meant. Nothing was touched."
     fi
 
     # KROK 5, and the same rule for the same reason: a source set this run
@@ -9499,7 +9429,7 @@ cmd_add_client() {
     if [ "$mode" != sync ] && [ "$snaponly" -eq 0 ]; then
         if [ -z "$target" ]; then
             target="$DEFAULT_TARGET"
-            [ -n "$target" ] || die "no --target given and no default set -- run setup-server first, or pass --target=POOL/PATH"
+            [ -n "$target" ] || die "no --target given and no default set -- pass --target=POOL/PATH"
         fi
     fi
 
@@ -12956,7 +12886,7 @@ cmd_audit_source_retention() {   # [--config=PATH] [--local-user=NAME] [--apply]
     cron_context_resolve aim "$config_arg" "$local_user_arg" "" ""
     local cronfile="$CRON_CTX_FILE"
     log "audit: config $cronfile ($CRON_CTX_WHY_FILE), as ${CRON_CTX_USER:-root} ($CRON_CTX_WHY_USER)"
-    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (run setup-server first)"
+    [ -f "$cronfile" ] || die "no cron config at $cronfile -- nothing to audit (no relationship is installed here yet)"
 
     # F3: render the INSTALLED config once through the real gen-cron.sh. Effective
     # bounded retention is read from this, not from section headers. An installed
@@ -20991,7 +20921,6 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     # and deliberately NOT when a suite sources this file.
     die_arm_fatal
     case "${1:-}" in
-        setup-server)     shift; cmd_setup_server "$@" ;;
         # REV-20260810-097 F3: the canonical public entrypoint is the bare
         # high-level form `zfs-backup.sh --source=X --target=Y` (ACTIVE-WORK-PLAN
         # Phase 5). RUX (docs/project/OWNER-REMOTE-DEPLOY-UX-REDUCTION-2026-08-12.md)
