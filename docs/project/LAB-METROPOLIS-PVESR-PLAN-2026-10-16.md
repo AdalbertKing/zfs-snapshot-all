@@ -169,7 +169,8 @@ Ryzyka etapu 4:
     `daily`) na adres właściciela.
   - przypadek z F5 (monitor trafia na świeżą migawkę na starym węźle, zanim `pvesr` ją skasuje): przy tym
     rozkładzie NIE wystąpił -- migawka żyła ~2 min (:28 -> :30), tick monitora o :30 zbiegał się z synchronizacją.
-    Przy `pvesr` co 3 h (produkcja) migawka może przetrwać na starym węźle do 3 h, a monitor mówi wtedy OK.
+    Przy `pvesr` co 3 h (produkcja) migawka żyje na starym węźle, dopóki `pvesr` jej nie skasuje, a nowsza może
+    ją zastąpić przed kolejnym odczytem monitora -- monitor mówi wtedy OK.
     **Nie ma skończonej granicy opóźnienia alarmu** (poprawka po REV-20261017-152 F5.1, 2026-10-20): stary węzeł
     dalej robi migawki, więc świeża migawka może zastąpić skasowaną przed następnym odczytem monitora i ten
     układ może się powtarzać bez końca -- alarm może przyjść z przerwami albo wcale, zależnie od zbiegu czasów.
