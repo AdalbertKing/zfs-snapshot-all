@@ -1,5 +1,5 @@
 # alert-env.sh -- the alert scripts' shared config/env preamble. Sourced, never
-# executed, by notify-fail.sh, notify-warn.sh, alert-digest.sh and (on its
+# executed, by capacity-guard.sh, notify-fail.sh, notify-warn.sh, alert-digest.sh and (on its
 # fallback path) check-pool-capacity.sh, from the directory each of them is
 # installed in: root's /root/scripts, a delegated account's $HOME. deploy.sh
 # installs it beside them from this file, byte for byte.
@@ -29,10 +29,14 @@ if [ -z "$CONF" ]; then
         [ -r "$c" ] && { CONF="$c"; break; }
     done
 fi
-# shellcheck disable=SC1090
-[ -n "$CONF" ] && . "$CONF"
+# The REAL environment, taken BEFORE the legacy conf is sourced (GitHub #655 P1-C):
+# taken after it, a conf value passed for "environment" and _restore_env put it back
+# over settings.ini -- a legacy ZFS_GUARD=on beat an F10 guard = off. Order of
+# weight: environment > settings.ini > zfs-alert.conf > defaults.
 _E_G="${ZFS_GUARD:-}"; _E_GA="${ZFS_GUARD_AT:-}"; _E_GT="${ZFS_GUARD_TARGET:-}"; _E_GK="${ZFS_GUARD_MIN_KEEP:-}"
 _E_COOL="${ZFS_ALERT_COOLDOWN:-}"; _E_CAP="${ZFS_CAPACITY_THRESHOLD:-}"
+# shellcheck disable=SC1090
+[ -n "$CONF" ] && . "$CONF"
 # THE HOST SETTINGS FILE (2026-10-19, owner: "nowy plik ustawień z sekcjami", edited
 # with F10 in the GUI). Its [alerts] and [capacity] keys win over zfs-alert.conf --
 # the GUI writes only this file, so what the admin set there must be what runs --

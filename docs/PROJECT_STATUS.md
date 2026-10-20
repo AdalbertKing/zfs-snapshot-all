@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 35bc6a9bb2ba644d -->
+<!-- status-covers-digest: 3885518d91521fe3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -90,15 +90,37 @@
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
-- **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`).** Wzór a-tassa (przy 89 % cron
-  kasuje najstarsze migawki). `hostscripts/capacity-guard.sh`, instalowany przez deploy do `/root/scripts`, cron
-  `*/15` w bloku hosta. **Domyślnie wyłączony** -- włącza admin w F10 (`[capacity] guard = on`); progi `guard_at`
-  89, `guard_target` 85, `guard_min_keep` 2. Działa w źródle i w celu, na każdej puli powyżej progu. Kasuje tylko
-  nasze rodziny (`[prefiks_]automated_<szczebel>_`), nigdy pod hold, nigdy N najnowszych w (dataset, szczebel) --
-  tam jest wspólna baza z drugą stroną; od najdrobniejszego szczebla, w nim od najstarszej; po każdym usunięciu
-  pomiar (`zpool sync`), stop poniżej celu. Mail z listą usuniętych; gdy więcej bezpiecznie się nie da -- alert
-  „NIE zwolnił”, rc 1. `--plan` pokazuje kolejność bez usuwania. Na żywo pve11 (pula testowa z pliku): hold i
-  najnowsza zostały, stop przy 29 % przy celu 30 %, druga pula (`hdd`) nietknięta.
+- **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`, fail-closed po GitHub #655:
+  `finisz/U35-fail-closed`).** Wzór a-tassa (przy 89 % cron kasuje najstarsze migawki).
+  `hostscripts/capacity-guard.sh`, instalowany przez deploy do `/root/scripts`, cron `*/15` w bloku hosta.
+  **Domyślnie wyłączony** -- włącza admin w F10 (`[capacity] guard = on`); progi `guard_at` 89, `guard_target` 85,
+  `guard_min_keep` 2. Kolejność ważności ustawień: środowisko > `settings.ini` (F10) > `zfs-alert.conf` > domyślne
+  (wcześniej stary conf z `ZFS_GUARD=on` wygrywał z F10 `off` -- #655 P1-C).
+  **Co wolno usunąć (#655 P1-A, P1-D):** własność wyłącznie z zarządzanych bloków crontabów hosta
+  (`/var/spool/cron/crontabs/*`, blok `zfs-backup-managed`) -- migawka jest nasza, gdy lokalna linia `delsnaps.sh`
+  obejmuje jej dataset (wprost albo dziecko przy `-R`) i nazwa zaczyna się od JAWNEGO wzorca tej linii. Nie dają
+  własności: wzorzec pusty (`""` -- „wszystko poza `-P`”, np. godzinowe rodziny bez prefiksu na kolektorze), linia
+  zdalna (`host:dataset` -- retencja źródła przy pull biegnie z kolektora, więc na samym źródle pull bezpiecznik nic
+  nie usuwa), `-B`, `-n`, linia poza blokiem. Nigdy: pod hold; najnowsza migawka datasetu (po stronie celu silnik
+  bierze za bazę najnowszą wspólną, a przy jej braku u źródła -- zakładkę o GUID głowy celu); migawka wskazana przez
+  dowolną zakładkę `#tgt-*`. Dataset będący ŹRÓDŁEM transferu (lokalna linia snapsend / snapget z celem albo zakres
+  peera `/etc/zfs-snapshot-all/peers/*.scope`, z którego ciągnie zdalny kolektor): każdy cel lokalnej linii musi mieć
+  SWOJĄ zakładkę -- nazwa wyliczana jak w silniku, `tgt-` + md5(cel lądowania, `-j`), więc osierocona zakładka innego
+  celu jej nie zastąpi; u peera -- co najmniej jedna `#tgt-`; transfer atomowy (`-r`) zakładki nie zapisuje. Brak =
+  baza nieznana = dataset zablokowany (wymieniony w alercie i w `--plan`). Chronione wszystko od najstarszej wymaganej
+  zakładki w górę (gdy ostatnie odświeżenie zakładki zawiodło, baza jest nowsza od niej). Do tego N najnowszych w
+  rodzinie. Ryzyko szczątkowe: u peera nie da się wyliczyć nazwy zakładki (cel jest na kolektorze) -- wymagana jest
+  dowolna `#tgt-`, a chronione wszystko od najstarszej z nich. Od najdrobniejszego szczebla, w nim od najstarszej; po każdym usunięciu pomiar
+  (`zpool sync`), stop poniżej celu; „NIE zwolnił” (rc 1), gdy więcej bezpiecznie się nie da.
+  **Fail-closed (#655 P1-B):** błąd odczytu crontabów, `zfs list` migawek albo zakładek (kod wyjścia, nie pusty
+  wynik), zły wiersz (`creation`/`userrefs`/`guid`), linia transferu, której parser nie rozumie, brak jakiejkolwiek
+  własności -- pula nietknięta, alert „NIE zadziałał” z powodem, rc 1. `--plan` pokazuje kolejność, blokady i
+  powody bez usuwania. Testy `test/alertmail` (27 przypadków bezpiecznika; 22 czerwone na kodzie sprzed poprawki).
+  Na żywo pve10 (pula z pliku, osobny katalog crontabów): usunięte dokładnie migawki z planu; hold, najnowsze, baza
+  z prawdziwej zakładki snapget, głowa celu i obce `outsider_automated_*` zostały; następna kopia przyrostowa od
+  zachowanej bazy; bez katalogu crontabów -- 0 usunięć, alert z powodem. Nazwa zakładki wyliczona przez bezpiecznik
+  zgodna z prawdziwą (`tgt-aa5e0492`), `--plan` chroni bazę i nowsze. Ostrzeżenie (próg, plik crontabów nieczytelny
+  przy puli poniżej progu): bezpiecznik działa tylko na puli powyżej progu -- poniżej nie czyta i nie alarmuje.
 
 - **FINISZ U25: jedno okno tworzenia i zmiany relacji -- karta relacji (2026-10-20; `finisz/U25-karta-relacji`).**
   Właściciel: „gdy tworzę relację i modyfikuję -- okno ma być to samo”. Symulacja
