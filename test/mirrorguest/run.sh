@@ -132,6 +132,20 @@ run tank/data QM_STATE=running
 check "control, dataset that names no guest: rc 0, no guest query, exactly @old destroyed" \
     bash -c "[ $rc -eq 0 ] && ! grep -q '^QM ' '$TRACE' && [ \"\$(grep -c '^DESTROYED' '$TRACE')\" -eq 1 ] && grep -qx 'DESTROYED tank/data@old' '$TRACE'"
 
+# LOCAL source (2026-10-20, the local copy on snapget): the target is a copy
+# nested under the target base, so a target NAMED after a running guest is not
+# that guest's disk -- the guest's disk is the source. Measured on pve10: a
+# local copy of running CT 950 was refused as "the disk of guest 950". On main
+# this case refuses; the remote cases above keep refusing.
+N=$((N + 1)); mkdir -p "$WORK/lock$N"; : > "$TRACE"
+printf 'L tank/vm-100-disk-0@base 111\nL tank/vm-100-disk-0@new 333\nL back/tank/vm-100-disk-0@base 111\n' > "$SNAPDB"
+out=$(env QM_STATE=running PATH="$B:$PATH" QUIESCE_PVE_DIR="$WORK/pve" STATS_LOG="$WORK/stats" \
+      LOCKDIR="$WORK/lock$N" NOTIFY_SCRIPT=/bin/true HOME="$WORK" RELATIONSHIPS_DIR="$WORK/rel" \
+      bash "$SNAPGET" -N -e "tank/vm-100-disk-0" "back" 2>&1); rc=$?
+check "local source, target named after a RUNNING guest: not refused as that guest's disk" \
+    bash -c "! printf '%s' \"\$1\" | grep -q 'is the disk of guest'" _ "$out"
+check "local source: the copy is received" bash -c "grep -q '^LZFS recv\|^LZFS receive' '$TRACE'"
+
 echo
 echo "mirrorguest: $PASS PASS / $FAIL FAIL"
 [ "$FAIL" -eq 0 ]

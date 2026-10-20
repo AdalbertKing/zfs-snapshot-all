@@ -429,7 +429,8 @@ match → bookmark match → full send), and transfers it.
 
 **Push relationships in 1.0 are a CLI mode for existing fleets.** The GUI creates pull, mirror,
 local backup and snapshot-only relationships; it has no window for push. snapsend.sh itself stays a
-core engine: local backups and restore-to-place run on it. A remote push is set up by hand:
+core engine: restore-to-place and local snapshot-only jobs run on it (local copies run on
+snapget.sh since 2026-10-20). A remote push is set up by hand:
 `deploy.sh --pair --role=push --peer=COLLECTOR` on the source, `deploy.sh --join=…` on the collector,
 then a `[dataset:]` section with `dst = account@COLLECTOR:target` and
 `flags = -K <pairing key> -k <pinned known_hosts>` in the source's `jobs.<host>.conf`, installed

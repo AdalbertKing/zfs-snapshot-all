@@ -1863,6 +1863,28 @@ for eng in snapsend.sh snapget.sh; do
     fi
 done
 
+# LOCAL -q in snapget.sh (2026-10-20: the local copy moved onto snapget, owner
+# "Przenies do snapget. Odmroz"). Its local window is a port of snapsend.sh's,
+# so the two must make the same library calls in the same order -- freeze
+# after every prepare, atomic snapshot inside, thaw last. Read from each
+# engine's own block; on main snapget had no such block and refused -q.
+qblock() {   # <engine> <extra condition on the opening line> -> quiesce_* calls, in order
+    awk -v extra="$2" '
+        index($0, "if [ \"$QUIESCE\" != \"no\" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]" extra "; then") == 1 { on = 1; next }
+        on && /^fi$/ { exit }
+        on' "$REPO/$1" | grep -v '^[[:space:]]*#' | grep -oE 'quiesce_[a-z_]+' | grep -vE '^quiesce_(snap_suffix|snap_total|snap_failed|list|ds|pool|recursive_flag)$' | tr '\n' ' '
+}
+q_send="$(qblock snapsend.sh '')"
+q_get="$(qblock snapget.sh ' && [ -z "$REMOTE_HOST" ]')"
+if [ -n "$q_send" ] && [ "$q_send" = "$q_get" ]; then
+    check "local-q: snapget.sh's local window makes snapsend.sh's library calls, in the same order" "0" "0"
+else
+    check "local-q: snapget.sh's local window makes snapsend.sh's library calls, in the same order" "0" "1 (send=[$q_send] get=[$q_get])"
+fi
+grep -q 'For a local source use snapsend.sh -q\."' "$REPO/snapget.sh" \
+    && check "local-q: snapget.sh no longer refuses -q for a local source" "0" "1" \
+    || check "local-q: snapget.sh no longer refuses -q for a local source" "0" "0"
+
 # ============================================================================
 # ,degrade ACROSS THE SSH BOUNDARY -- the classifier composed with the mapping.
 #

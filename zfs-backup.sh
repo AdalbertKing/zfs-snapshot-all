@@ -8881,7 +8881,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # fail closed if the line cannot be found, rather than seeding with a guess
     # that would create a snapshot family the installed job never prunes.
     local seed_prefix rendered_send
-    rendered_send="$(gencron_as_target -c "$cand" 2>/dev/null | grep -F 'snapsend.sh' | grep -F -- "$target" | head -1)"
+    rendered_send="$(gencron_as_target -c "$cand" 2>/dev/null | grep -E 'snap(send|get)\.sh' | grep -F -- "$target" | head -1)"
     # `[^"]*` rather than `.*` before -m: sed is greedy, so a leading `.*` would
     # bind to the LAST -m on the line. Refusing to cross a quote anchors this to
     # the send's own -m.
@@ -8899,7 +8899,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # to the send is the first one AFTER the send's own script name) instead of
     # an incidental fact about column order, and keeps the no-crossing-a-quote
     # property that stops it binding to a later -m.
-    seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/^.*snapsend\.sh[^"]*-m[ ]*"\([^"]*\)".*/\1/p')"
+    seed_prefix="$(printf '%s' "$rendered_send" | sed -n 's/^.*snap\(send\|get\)\.sh[^"]*-m[ ]*"\([^"]*\)".*/\2/p')"
     [ -n "$seed_prefix" ] || { rm -f "$cand"; die "could not read the snapshot prefix back out of the rendered cron line -- refusing to seed with a guessed prefix; $config was NOT touched"; }
 
     # DELEGATE BEFORE SEEDING, and delegate BOTH ends. A local backup reads the
@@ -8977,7 +8977,10 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             log "  already copied: $sr -> $target/$sr (no new seed)"
         # -L: the relationship's name, as on its cron line -- without it the first copy
         # stood on F4 as "(bez rel.)" (owner campaign 2026-10-09, K10).
-        elif bash "$SNAPSEND" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
+        # The copy seeds on snapget.sh, like the cron line it establishes
+        # (gen-cron.sh emit_send, 2026-10-20); the snapshot-only seed above stays
+        # on snapsend.sh, as its line does.
+        elif bash "$SNAPGET" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
             warn "  FAILED: $sr -> $target"
@@ -19092,7 +19095,9 @@ status_local_view() {
     _home="$(getent passwd "$acct" 2>/dev/null | cut -d: -f6)"
     if [ "$acct" != root ] && [ -n "$_home" ]; then _slog="$_home/zfs-snapshot-stats.log"
     else _slog="${STATS_LOG:-/root/scripts/zfs-snapshot-stats.log}"; fi
-    _st_last="$(grep -F "\"script\":\"snapsend.sh\",\"label\":\"$name\"" "$_slog" 2>/dev/null | tail -1 \
+    # Both engines: a local copy runs on snapget.sh since 2026-10-20, and the
+    # log still holds the snapsend.sh lines written before the switch.
+    _st_last="$(grep -E "\"script\":\"snap(send|get)\.sh\",\"label\":\"$name\"" "$_slog" 2>/dev/null | tail -1 \
         | sed -n 's/.*"time":"\([^"]*\)".*"status":"\([^"]*\)".*"duration_s":\([0-9]*\).*/\1 \2 \3/p')"
     if [ -n "$_st_last" ]; then
         set -- $_st_last

@@ -338,8 +338,10 @@ set -o pipefail
 #                    the flag was meant to prevent.
 #
 #                    Ignored with -e (nothing is being created to quiesce) and
-#                    with -n. Rejected for a LOCAL source: that is snapsend.sh's
-#                    job, and this script has no local-freeze path.
+#                    with -n. A LOCAL source (no host) freezes the guests on
+#                    this host, exactly as snapsend.sh -q does (since
+#                    2026-10-20, the local copy runs on this engine); with -s
+#                    a local source is still refused.
 #   -Q <SECONDS>     How long the remote deadman waits before thawing
 #                    unconditionally (default 120, minimum 10). Only relevant
 #                    with -q. Raise it for a guest whose agent is unusually slow
@@ -1757,7 +1759,14 @@ process_dataset() {
     # a freshly emptied target is a no-op.
     local recv_force_flag="-F"
     if [ $FORCE_FULL_SEND -ne 1 ] && target_exists "$tgt_dataset"; then
-        if guest_disk_is_live "$tgt_dataset"; then
+        # Remote source only (2026-10-20). The guard reads the guest from the
+        # target's NAME, which is right where the target is the source's own
+        # path on this host (sync) -- but a LOCAL source's target is a copy
+        # nested under the target base, never the disk the guest runs on (that
+        # is the source itself, and src == tgt is refused above). Measured on
+        # pve10: a local copy of running CT 950 was refused here as "the disk
+        # of guest 950" -- every local copy of a running guest would be.
+        if [ -n "$remote_host" ] && guest_disk_is_live "$tgt_dataset"; then
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         fi
@@ -2720,13 +2729,87 @@ fi
 # Afterwards the normal loop runs with USE_EXISTING_SNAPSHOT=1: the snapshots
 # already exist, and -e picks the newest matching -m, which is the one just
 # made.
-if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ]; then
-    if [ -z "$REMOTE_HOST" ]; then
-        # A local source is snapsend.sh's job; snapget.sh has no local-freeze
-        # path and must not pretend the flag did something.
-        log 0 "Quiesce: -q needs a REMOTE source (the guest has to be frozen where it runs). For a local source use snapsend.sh -q."
+#
+# ---- local quiesce window (2026-10-20) ---------------------------------------
+# A LOCAL source -- the local copy, moved onto this engine by the owner
+# ("Przenies do snapget. Odmroz", 2026-10-20) -- freezes the guests on THIS
+# host. Ported 1:1 from snapsend.sh's quiesce block, which it twins: the same
+# library calls in the same order, the same exit codes (3 = refused, 8 =
+# degraded via the checks further down), the same EXIT trap that thaws on an
+# interrupt. Until this date the flag was refused here for a local source.
+if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ] && [ -z "$REMOTE_HOST" ]; then
+    # -s with a local source stays refused, and BEFORE any freeze: the
+    # snapshot-only branch below has no local quiesce handling.
+    if [ $SNAPSHOT_ONLY -eq 1 ]; then
+        log 0 "Quiesce: -q with -s needs a REMOTE source. For local snapshots only use snapsend.sh -q."
         exit 1
     fi
+    trap 'quiesce_thaw_all || :; tune_ssh_close "$REMOTE_USER@$REMOTE_HOST"' EXIT
+    quiesce_init "$QUIESCE" || :
+
+    quiesce_snap_suffix="$RUN_SUFFIX"
+    declare -A QUIESCE_SNAPS_BY_POOL=()
+    quiesce_snap_total=0
+    for dataset in "${DATASETS[@]}"; do
+        [ "$QUIESCE_DEGRADED" -eq 1 ] && break
+        if ! quiesce_list=$(quiesce_scope "$dataset" "$RECURSIVE"); then
+            log 0 "Quiesce: the guests under '$dataset' could not be listed on this host (zfs list -r failed) -- refusing: no snapshot taken, nothing sent."
+            exit 3
+        fi
+        if [ -z "$quiesce_list" ]; then
+            log 0 "Quiesce: listing '$dataset' on this host returned nothing (not even the dataset itself) -- refusing: no snapshot taken, nothing sent."
+            exit 3
+        fi
+        while IFS= read -r quiesce_ds; do
+            [ -n "$quiesce_ds" ] && quiesce_prepare "$quiesce_ds" "$QUIESCE"
+            [ "$QUIESCE_DEGRADED" -eq 1 ] && break
+        done <<< "$quiesce_list"
+        [ "$QUIESCE_DEGRADED" -eq 1 ] && break
+        quiesce_pool="${dataset%%/*}"
+        QUIESCE_SNAPS_BY_POOL[$quiesce_pool]+=" ${dataset}@${SNAP_MESSAGE}${quiesce_snap_suffix}"
+        quiesce_snap_total=$((quiesce_snap_total + 1))
+    done
+
+    quiesce_recursive_flag=""
+    [ $RECURSIVE -eq 1 ] && quiesce_recursive_flag="-r"
+    [ "$QUIESCE_DEGRADED" -eq 1 ] || quiesce_freeze_pending || :
+
+    quiesce_snap_failed=0
+    if [ "$QUIESCE_DEGRADED" -eq 0 ]; then
+        log 1 "Quiesce: taking ${#QUIESCE_SNAPS_BY_POOL[@]} atomic snapshot(s), one per pool, covering $quiesce_snap_total dataset(s)"
+        for quiesce_pool in "${!QUIESCE_SNAPS_BY_POOL[@]}"; do
+            if ! quiesce_still_frozen "pool '$quiesce_pool'"; then
+                log 0 "Quiesce: refusing to snapshot pool '$quiesce_pool' -- the freeze it was supposed to happen inside is not there (reason above)"
+                quiesce_degrade_gate "$quiesce_recursive_flag" "the freeze was already gone at the boundary before pool '$quiesce_pool'" && break
+                quiesce_abandon_set "$quiesce_recursive_flag" 3
+            fi
+            # shellcheck disable=SC2086
+            if ! zfs snapshot $quiesce_recursive_flag ${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]}; then
+                log 0 "Quiesce: the atomic snapshot of pool '$quiesce_pool' failed"
+                quiesce_snap_failed=1
+                break
+            fi
+            # shellcheck disable=SC2206
+            QUIESCE_CREATED+=(${QUIESCE_SNAPS_BY_POOL[$quiesce_pool]})
+        done
+    fi
+
+    if [ "$QUIESCE_DEGRADED" -eq 1 ]; then
+        SNAP_MESSAGE="$(quiesce_crash_message "$MESSAGE")"
+        log 0 "Quiesce: continuing WITHOUT quiesce -- the default since 2026-08-27; name ',strict' on this tier to refuse instead. This run's snapshots will be named '${SNAP_MESSAGE}${RUN_SUFFIX}' -- crash-consistent, still part of the '${MESSAGE}' family for retention and monitoring -- and the run will exit 8 so cron reports it instead of calling it a clean backup."
+    elif [ $quiesce_snap_failed -eq 0 ]; then
+        USE_EXISTING_SNAPSHOT=1
+        QUIESCE_SNAPPED=1
+    else
+        log 0 "Quiesce: the atomic snapshot failed -- refusing to fall back to unquiesced per-dataset snapshots"
+        quiesce_abandon_set "$quiesce_recursive_flag" 1
+    fi
+    if ! quiesce_thaw_all; then
+        log 0 "Quiesce: at least one guest could not be thawed (named above) -- failing the run so this is not reported as a clean backup"
+        exit 3
+    fi
+fi
+if [ "$QUIESCE" != "no" ] && [ $DRY_RUN -ne 1 ] && [ $USE_EXISTING_SNAPSHOT -ne 1 ] && [ -n "$REMOTE_HOST" ]; then
     # RUN_SUFFIX, not a second date(1) call. The note above its definition has
     # always said the quiesce path consumes that value; snapsend.sh did and this
     # did not, so a pull run's quiesced snapshots carried a timestamp seconds
@@ -2801,7 +2884,7 @@ if [ $SNAPSHOT_ONLY -eq 1 ]; then
     # The quiesce block above refuses a local source only on a real run; a
     # dry run must not plan what the real one would refuse.
     if [ "$QUIESCE" != "no" ] && [ -z "$REMOTE_HOST" ]; then
-        log 0 "Quiesce: -q needs a REMOTE source (the guest has to be frozen where it runs). For a local source use snapsend.sh -q."
+        log 0 "Quiesce: -q with -s needs a REMOTE source. For local snapshots only use snapsend.sh -q."
         exit 1
     fi
     declare -a FAILED_DATASETS=()

@@ -297,6 +297,9 @@ cat > "$STUB/snapsend.sh" <<'SE'
 echo "ENGINE-RAN" >&2
 exit "${STUB_ENGINE_RC:-0}"
 SE
+# A local copy onto the medium runs on snapget.sh since 2026-10-20 (gen-cron.sh
+# emit_send) -- the same fake engine under its name.
+cp "$STUB/snapsend.sh" "$STUB/snapget.sh"
 cat > "$STUB/notify.sh" <<'SN'
 #!/bin/bash
 echo "NOTIFIED" >> "$NOTIFY_LOG"
