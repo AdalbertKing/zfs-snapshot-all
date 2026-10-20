@@ -4048,6 +4048,25 @@ if hasE "$ERLST" '--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ __manual__ ~'; the
 else
     bad "edit-relation: karta, lista szablonow bez __manual__ na gorze" "rc=$ERRC" "$(printf '%s' "$ERLST" | cut -c1-500)"
 fi
+# U36 (wlasciciel 2026-10-20: "to w sumie F7 na calej relacji"): akcja karty "Kopia teraz"
+# = run-relation (jak F7 na F3); z czekajacymi zmianami najpierw odmawia (kopia idzie po
+# zainstalowanym cronie).
+EROUT=$(er_run "0${T}teraz
+"); ERRC=$?
+ERT1="$(cat "$ER/zb.log")"
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+0${T}teraz
+0${T}
+1${T}
+0${T}
+"); ERT2="$(cat "$ER/zb.log")"; ERW2="$(cat "$ER/wt.log")"
+if printf '%s\n' "$ERT1" | grep -qx 'run-relation r1' && ! printf '%s\n' "$ERT2" | grep -q '^run-relation' \
+   && has "$ERW2" 'Kopia teraz' && has "$ERW2" 'najpierw Zapisz zmiany'; then
+    ok "edit-relation: karta 'Kopia teraz' = run-relation (jak F7); z czekajacymi zmianami najpierw odmawia"
+else
+    bad "edit-relation: karta Kopia teraz (U36)" "bez zmian: $ERT1" "ze zmiana: $ERT2"
+fi
 # CONFIG JAKO JEDYNE ZRODLO (wlasciciel 2026-10-13): "Retencja zrodla" (tag srcret, U25) czyta
 # szczeble z configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego
 # save-profile, delete-profile ani edit-relation). Zrodlo hourly 24 -> 12 w oknie zrodla =

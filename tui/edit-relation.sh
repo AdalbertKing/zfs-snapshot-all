@@ -663,8 +663,8 @@ while :; do
     CARD_TAGS+=(nazwa konto extra); CARD_NAMES+=("Nazwa" "Konto" "Dodatkowe")
     CARD_VALUES+=("$NAME" "$([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")" "pomijane prefiksy, prawa na źródle -- jak przy zakładaniu")
     CARD_FIXED+=(1 1 1)
-    CARD_ACT_TAGS=(wykonaj config zapisz)
-    CARD_ACT_LABELS=("Zapisz zmiany ($np) -- plan, WYKONAJ" "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno" "Zapisz ustawienia relacji jako szablon (F5)")
+    CARD_ACT_TAGS=(wykonaj teraz config zapisz)
+    CARD_ACT_LABELS=("Zapisz zmiany ($np) -- plan, WYKONAJ" "Kopia teraz -- wszystkie datasety poza harmonogramem (F7; przed przeniesieniem kolektora)" "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno" "Zapisz ustawienia relacji jako szablon (F5)")
     card_menu "Relacja $NAME" "Relacja $NAME ze źródła ${SRCHOST}. Co zmienić?\nKażda pozycja zmienia jedną rzecz i wraca tutaj -- zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
            if [ "$np" -gt 0 ]; then
                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
@@ -680,6 +680,20 @@ while :; do
                --msgbox "To jest wpisane w kopie, cron i rekord relacji $NAME.\nInna wartość = nowa relacja: F9 Eksport, Del, Ins z nową wartością\n(kopie na tym hoście zostają)." 10 "$W"
             continue ;;
         harmon) ACTION=szablon ;;
+        teraz)
+            # U36 (właściciel 2026-10-20: "to w sumie F7 na całej relacji"): ten sam
+            # run-relation co F7 na F3 -- najdrobniejsze zadanie każdego datasetu, teraz.
+            # Czekające zmiany najpierw: kopia idzie po zainstalowanym cronie.
+            if [ "$np" -gt 0 ]; then
+                wt --title "Kopia teraz" --msgbox "Na liście czeka zmian: $np. Kopia idzie wg zainstalowanego crona -- najpierw Zapisz zmiany albo je porzuć." 9 "$W"
+                continue
+            fi
+            clear 2>/dev/null
+            echo "\$ $ZB run-relation $NAME"; echo
+            "$ZB" run-relation "$NAME"; RC=$?
+            echo; echo "=== Kopia teraz zakończona (rc=$RC). Enter = dalej"
+            [ -t 0 ] && read -r _
+            exit "$RC" ;;
         srcret)
             if [ "${#P_EDIT[@]}" -gt 0 ]; then
                 wt --title "Retencja źródła" --msgbox "Nowy szablon czeka na zapis -- liczby źródła ustawiasz w oknie zaraz po wyborze\nszablonu (Harmonogram). Najpierw zapisz zmiany, potem wróć tutaj." 9 "$W"
