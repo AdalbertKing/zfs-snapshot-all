@@ -15081,10 +15081,10 @@ alerts.stats_days|7|int:1:90|-|ile dni statystyk biegów w mailu
 alerts.output_lines|8|int:0:200|cron|ile linii wyjścia nieudanego zadania w alercie
 capacity.threshold|90|int:50:99|-|% zajętości puli lub refquota, od którego jest ostrzeżenie
 capacity.check_time|08:00|time|host|o której sprawdzać zajętość pul
-capacity.guard|off|enum:off,on|-|bezpiecznik: powyżej progu kasuje najstarsze własne migawki
+capacity.guard|off|enum:off,on|-|bezpiecznik: powyżej progu kasuje najstarsze migawki rodzin z jawnego wzorca retencji (nigdy bazy, hold, najnowszej; przy niepewności nic)
 capacity.guard_at|89|int:50:99|-|% zajętości puli, od którego bezpiecznik czyści
 capacity.guard_target|85|int:40:98|-|do ilu % bezpiecznik czyści
-capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek szczebla bezpiecznik zawsze zostawia
+capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek rodziny bezpiecznik zawsze zostawia
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji
 update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'
