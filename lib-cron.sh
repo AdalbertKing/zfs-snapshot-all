@@ -975,6 +975,10 @@ settings_write_default() {   # <path> -> 0 written, 1 already there
 [capacity]
 #threshold = 90                # % of a pool or a refquota that raises a warning
 #check_time = 08:00
+#guard = off                   # on: above guard_at % delete our oldest snapshots (finest tier first)
+#guard_at = 89
+#guard_target = 85             # stop below this %
+#guard_min_keep = 2            # newest snapshots of each tier that always stay
 
 [monitor]
 #interval = 15m               # how often the staleness monitor runs (divides an hour)

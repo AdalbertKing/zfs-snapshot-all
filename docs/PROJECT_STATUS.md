@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 41e0af59f842416e -->
+<!-- status-covers-digest: 6101544aacf92bf7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`).** Wzór a-tassa (przy 89 % cron
+  kasuje najstarsze migawki). `hostscripts/capacity-guard.sh`, instalowany przez deploy do `/root/scripts`, cron
+  `*/15` w bloku hosta. **Domyślnie wyłączony** -- włącza admin w F10 (`[capacity] guard = on`); progi `guard_at`
+  89, `guard_target` 85, `guard_min_keep` 2. Działa w źródle i w celu, na każdej puli powyżej progu. Kasuje tylko
+  nasze rodziny (`[prefiks_]automated_<szczebel>_`), nigdy pod hold, nigdy N najnowszych w (dataset, szczebel) --
+  tam jest wspólna baza z drugą stroną; od najdrobniejszego szczebla, w nim od najstarszej; po każdym usunięciu
+  pomiar (`zpool sync`), stop poniżej celu. Mail z listą usuniętych; gdy więcej bezpiecznie się nie da -- alert
+  „NIE zwolnił”, rc 1. `--plan` pokazuje kolejność bez usuwania. Na żywo pve11 (pula testowa z pliku): hold i
+  najnowsza zostały, stop przy 29 % przy celu 30 %, druga pula (`hdd`) nietknięta.
 
 - **FINISZ U25: jedno okno tworzenia i zmiany relacji -- karta relacji (2026-10-20; `finisz/U25-karta-relacji`).**
   Właściciel: „gdy tworzę relację i modyfikuję -- okno ma być to samo”. Symulacja

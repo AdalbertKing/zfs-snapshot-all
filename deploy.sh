@@ -5570,6 +5570,26 @@ else
     fi
 fi
 
+# U35 (owner 2026-10-20): the CAPACITY GUARD -- above [capacity] guard_at it deletes our
+# oldest snapshots, finest tier first, keeping the newest guard_min_keep of each tier.
+# The line is always installed; the script itself does nothing while [capacity] guard =
+# off (the default -- the admin turns it on in F10), so switching it needs no cron edit.
+GUARD_SCRIPT="/root/scripts/capacity-guard.sh"
+host_script_ensure capacity-guard.sh "$GUARD_SCRIPT" 0755 \
+    "no capacity guard (off by default anyway)" \
+    "cannot prune when a pool fills up, even if turned on in F10"
+GUARD_LINE="*/15 * * * * $GUARD_SCRIPT 2>>/root/scripts/cron.log"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    crontab -l 2>/dev/null | grep -qF "$GUARD_SCRIPT" \
+        && log "capacity-guard cron line present" \
+        || warn "capacity-guard cron line MISSING -- the guard cannot run even when turned on"
+elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GUARD_SCRIPT" "$GUARD_LINE" "$CRON_HOST_TAIL"; then
+    [ "${CRON_CHANGED:-0}" -eq 0 ] && log "capacity-guard cron line already in the '$CRON_HOST_BLOCK' block" \
+        || log "added capacity-guard cron line: $GUARD_LINE"
+else
+    warn "could not install the capacity-guard cron line: $CRON_ERR"
+fi
+
 echo
 log "===================================================================="
 log "Dependency summary"
