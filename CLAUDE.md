@@ -128,6 +128,23 @@ result, not a running commentary on which suite is at which line.
 
 ## Which model -- delegation
 
+**HARD GATE -- every session, every thread (Owner, 2026-10-20: cheaper plan, "konieczność
+optymalnej pracy pod kątem zużywania tokenów").** Before the call, not after:
+
+1. **Reading code**: more than ~150 lines, or more than two files, or "where is X / who
+   calls it" -> `repo-greper` or `Explore` (haiku). The session reads only the excerpt it
+   is about to edit (`Read` with offset/limit), never a whole large file "to get oriented".
+2. **Typing a fully specified change** of ~150 lines or more (test answer sequences,
+   fixtures, docs from notes) -> `simple-coder`, with files, functions, inputs and the
+   expected result in the brief.
+3. **A red CI check** -> `ci-reader`. **Prose before commit** -> `text-checker`.
+4. **Suites** run on the pve9 clone or in CI, with output trimmed (`> file; grep FAIL;
+   tail -1`), never streamed into the session.
+5. The session keeps: design, diagnosis, guards, engines, git, hosts, merge.
+
+Skipping the gate is an error-log entry like any other defect. The end-of-round split
+line (below) shows that the gate was applied.
+
 Owner direction, 2026-09-23, re-cut 2026-10-07: **the session model
 orchestrates; simple work goes to cheaper subagents.** Token cost is a routing
 parameter, not an afterthought. The session decides, briefs, reviews and
