@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6bd26701aea75ee6 -->
+<!-- status-covers-digest: ee25656d64fd05c3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,21 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ luki U42–U47 (2026-10-20; `finisz/luki-1`).** Decyzje właściciela: „robimy / popraw / napraw”.
+  - **U47 usuwanie relacji bez internetu**: `remove-client` woła `deploy.sh --unpair`, a ten w fazie 2 robił
+    `git pull`; przy chwiejnej sieci usuwanie stawało w połowie (pve10 09-25). Teraz `--unpair` nie aktualizuje kodu.
+    Na żywo pve10 z odciętym github.com: main -- FATAL na pull, gałąź -- wypięcie przeszło.
+  - **U45 import sam dołącza źródło**: zwykła ścieżka importu (źródło ma jeszcze konto kolektora) dodaje
+    `--join-remotely`, gdy ten host ma roota na źródle; podgląd to mówi. Bez roota -- jak dotąd ręczny `--join`.
+  - **U42 osierocone prawa po uid**: ZFS trzyma delegację po numerze uid; nowe konto z tym samym uid je
+    przejmowało (na żywo pve11: „user (unknown: 1003)” po `useradd -u 1003` stało się prawami nowego konta).
+    Deploy zaraz po założeniu konta (konto relacji i konto delegowane) wypisuje i cofa takie prawa; odmawia, gdy
+    nie może cofnąć. Na żywo pve11: cofnięte.
+  - **U43 próba `snapget -n` i zakładka**: plan szukał tylko wspólnej migawki; prawdziwy bieg ratuje się zakładką.
+    Teraz plan robi to samo i pisze `PLAN=INCREMENTAL base=<zakładka>` (zamrożony silnik -- zmiana za zgodą
+    właściciela, `--refreeze` w diffie). To samo w `snapsend.sh` (pchanie; bliźniak, zatwierdzony w `twins`).
+  - **U44, U46**: sprawdzone -- już nieaktualne (patrz „Znane luki”); U46 ma teraz test.
 
 - **FINISZ U32/U34: łańcuch i dublowanie kolektora w kreatorze (2026-10-20; `finisz/U32-lancuch`).** Właściciel:
   lustro z magazynu kopii (drugi kolektor za VPN) i a>b>c (c pobiera `hdd/backups` z b) mają być możliwe -- jedyna
@@ -12362,44 +12377,14 @@ stanem recenzji.
 
 ### Znane luki, nie planowane do zamknięcia teraz
 
-- **Osierocone nadania ZFS po uid przechodzą na NOWE konto z tym samym uid** (2026-10-06,
-  odbudowa pve9). `zfs allow` zapisuje nadanie po numerze uid w PULI, a pula przeżywa
-  reinstalację systemu. Na odtworzonym pve9 stara pula `hdd` niosła nadania starego
-  `zfsbackup` (uid 1001: na całe `hdd` z `destroy,receive,rollback` i na 4 korzeniach
-  `hdd/lab`) oraz starego `zfsbackup-pve10` (uid 1005). `deploy.sh --join` założył nowe
-  `zfsbackup-pve10` z uid **1001** -- i to konto od razu widziało całą pulę, szerzej niż jego
-  zakres, ZANIM `--commit-scope` cokolwiek nadał. Zdjęte ręcznie (`zfs unallow -u 1001/1005`)
-  przed zatwierdzeniem zakresu. Właściwie: `deploy.sh` przy zakładaniu konta (i `--check-only`)
-  powinien wykrywać nadania dla uid bez konta oraz dla świeżo nadanego uid i odmawiać.
+- **Domknięte 2026-10-20 (U42–U47; dawne luki z 09-25 i 10-06):** osierocone nadania ZFS po uid -- nowe
+  konto zaraz po `useradd` traci odziedziczone prawa (deploy je wypisuje i cofa, odmawia, gdy nie może); próba
+  `snapget -n` liczy zakładkę jak prawdziwy bieg; import na tym samym kolektorze sam dołącza źródło
+  (`--join-remotely`, gdy ten host ma tam roota); `delete-relation` / `deploy.sh --unpair` nie robi `git pull`
+  -- działa bez internetu. Sprawdzone jako NIEAKTUALNE (bez zmian w kodzie): osierocone sekcje `[template:…]`
+  po usuniętej relacji (od X27 relacja ma blok `[relation:]`; na pve10/pve11 zero sekcji szablonu) i brak
+  strażnika wieku w migawkach lokalnych (plan ma `check-snap-age` na szczebel; test to teraz pilnuje).
 
-- **Tryb próbny `snapget -n` nie zna zapasowej ścieżki przez zakładkę** (2026-10-06, pve10
-  <- pve9). Po przestoju dłuższym niż retencja źródła `PLAN=` mówi `base=null`, a prawdziwy
-  bieg idzie przyrostowo od zakładki `#tgt-…` i kończy rc=0. `verify-endpoint` (i każdy,
-  kto czyta `PLAN=`) uzna wtedy relację za wymagającą pełnej kopii. Obejście: jeden
-  prawdziwy bieg linii crona przed aktywacją. Naprawa w zamrożonym `snapget.sh`.
-- **Usunięta relacja zostawia swoje szablony `[template:profile__…]` w configu kolektora**
-  (2026-10-06). Gdy profil się potem zmieni, ponowne założenie relacji na nim staje na
-  strażniku kolizji szablonów („already exists … with different effective policy”).
-  Zmierzone przy pve9-synchro po zmianie `passive-flat`. Obejście: wyciąć szablon, którego
-  żadna sekcja nie używa. Właściwie: `remove-client` sprząta szablony-sieroty.
-
-- **Import relacji na TYM SAMYM kolektorze nie łączy się ze źródłem** (2026-09-25, pve10:
-  ponowne założenie pve9b i pve11). `delete-relation` (`remove-client`) kasuje klucz parowania,
-  `import-relation` odtwarza relację przez `add-client`, który generuje NOWY klucz -- źródło go
-  nie zna i `seed` pada: „could not list datasets … has --join run there yet?”. Trzeba ręcznie
-  skopiować paczkę `/root/scripts/pairing/<kolektor>-to-<host>.tgz` na źródło, uruchomić tam
-  `deploy.sh --join=…`, potem `seed` i `activate`. Import na NOWYM kolektorze robi to sam
-  (`--grant-remotely`); ta sama ścieżka mogłaby obsłużyć też ten przypadek.
-
-- **Tryb tylko-migawki bez strażnika wieku** (2026-09-25). `local-backup --target=''`
-  generuje migawki i ich prune, ale nie `check-snap-age`: szablony retencji źródła
-  (`src_keep_*`) nie niosą `monitor_warn`/`monitor_crit`. Producent migawek, który
-  przestanie działać, nie da alarmu na swoim hoście (pve9 od #439/#440).
-- **`delete-relation` wymaga GitHuba na kolektorze** (2026-09-25, pve10). `remove-client`
-  woła `deploy.sh --unpair`, a ten robi `git pull`. Chwilowy brak DNS zatrzymał usuwanie
-  W POŁOWIE: sekcje configu i linie crona relacji już usunięte, rekord dalej `active`.
-  Powtórka po powrocie sieci doszła do końca. Ta sama klasa co „dokończ transakcję”:
-  krok, który może paść (sieć), stoi po kroku, który już coś zmienił.
 - **Test odtworzenia vsql2.** Jedyna rzecz, która dowodzi, że snapshot się
   przywraca — `engaged` z `sqlfreeze` mówi tylko, że SQL uczestniczył. Nie
   wykonany; **właściciel wykonuje go ręcznie** (decyzja z 2026-07-31), więc nie

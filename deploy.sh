@@ -4307,6 +4307,29 @@ guided_join_scope() {   # <label>
     done
 }
 
+# U42 (owner 2026-10-20): ZFS keeps a delegation by NUMERIC uid. An account removed
+# while its grants stayed (a --leave stopped halfway, a hand userdel) leaves them on
+# the datasets; the next account created on this host usually gets the same first free
+# uid and silently INHERITS them -- destroy/receive on another relationship's data,
+# the delegated-account isolation broken without a word. A brand-new account has no
+# legitimate grant anywhere, so whatever `zfs allow` shows for it right after useradd
+# is inherited: listed, revoked, and the run refuses if it cannot revoke.
+new_account_drop_inherited_grants() {   # <account just created>
+    local account="$1" ds found=""
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        zfs allow "$ds" 2>/dev/null | grep -qE "^[[:space:]]+user $account " || continue
+        found="$found $ds"
+    done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null)
+    [ -n "$found" ] || return 0
+    warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($(id -u "$account")) on:$found -- revoking them; a new account starts with no rights"
+    for ds in $found; do
+        zfs unallow -u "$account" "$ds" 2>/dev/null \
+            || die "could not revoke the inherited delegation of $account on $ds -- run 'zfs unallow -u $account $ds' by hand and re-run. The account exists; nothing else was changed."
+    done
+    log "revoked inherited delegations of $account on:$found"
+}
+
 do_leave() {
     local label="$1"
     [ -n "$label" ] || die "internal: do_leave needs a label"
@@ -4685,7 +4708,13 @@ if [ -d "$REPO_DIR/.git" ]; then
     # what an operator sets a hold for -- during a lab, a staged rollback, a
     # bisect. Deploying is still allowed (--rollback needs it); moving the
     # revision under the operator is not.
-    if [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
+    # U47 (owner 2026-10-20: "po co pakietowi github poza upgrade? Może działać w sieci
+    # bez internetu"): --unpair ENDS a relationship -- it needs no code update, and a
+    # pull on a flaky link stopped delete-relation HALFWAY (sections and cron already
+    # gone, record still active -- pve10 2026-09-25). The checkout is used as it stands.
+    if [ "${PEER_UNPAIR:-0}" -eq 1 ]; then
+        log "  --unpair: ending a relationship needs no code update -- NOT pulling ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null))"
+    elif [ -e "$UPDATE_HOLD_FILE" ] || [ -L "$UPDATE_HOLD_FILE" ]; then
         warn "automatic updates are HELD ($(read_state_file "$UPDATE_HOLD_FILE" 2>/dev/null || echo 'reason unreadable')) -- NOT pulling"
         log "  deploying $REPO_DIR exactly as it stands ($(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null))"
         log "  lift the hold to follow main again: bash $0 --resume-updates"
@@ -6643,6 +6672,7 @@ do_join() {
             useradd -m -s /bin/bash -c "zfs-snapshot-all peer account for $label" "$account" || die "useradd failed"
             passwd -l "$account" >/dev/null || warn "could not lock password for $account"
             log "created isolated peer account $account"
+            new_account_drop_inherited_grants "$account"
         fi
         home_dir="/home/$account"
         # REV-20260804-040: the durable principal binding --leave needs to
@@ -7504,6 +7534,7 @@ else
             || die "useradd failed"
         passwd -l "$USERNAME" >/dev/null || warn "could not lock password for $USERNAME"
         log "created user $USERNAME (uid $(id -u "$USERNAME")), password locked (SSH key only)"
+        new_account_drop_inherited_grants "$USERNAME"
     fi
 
     # ------------------------------------------------------------------------------

@@ -10404,6 +10404,22 @@ if [ "$im_rc1" -eq 0 ] && printf '%s' "$im_c1" | grep -q '^rux|--source=10.0.0.1
 else
     bad "importrel: rejoin path" "rc=$im_rc1" "fresh: $im_c1" "joined: $im_c2" "bandwidth: $im_c3" "$(cat "$WORK/im.err")"
 fi
+# U45 (owner 2026-10-20: "niech wywola join"): the ordinary replay (source still has
+# this collector's account) joins the source itself when this host has root there --
+# add-client gets --join-remotely; without root (the first run above) it does not.
+im_j0="$(grep '^add-client|' "$IM/calls.log" 2>/dev/null)"
+if printf '%s' "$im_c2" | grep -q '^add-client|ksiegowosc|.*|--join-remotely$' \
+   && printf '%s' "$im_c3" | grep -q '^add-client|ksiegowosc|.*|--join-remotely$'; then
+    ok "importrel: ordinary replay with root on the source -> add-client --join-remotely (U45)"
+else
+    bad "importrel: ordinary replay joins the source (U45)" "joined: $im_c2" "bandwidth: $im_c3"
+fi
+im_run "$IM/ksiegowosc.json" --yes
+if grep -q '^add-client|ksiegowosc|' "$IM/calls.log" && ! grep -q -- '--join-remotely' "$IM/calls.log"; then
+    ok "importrel: no root on the source -> no --join-remotely (manual --join stays the way)"
+else
+    bad "importrel: no root -> no --join-remotely" "$(cat "$IM/calls.log")"
+fi
 # Campaign 2026-10-19 (pve10): export -> delete -> import came back with the template's
 # numbers. The file's [relation:] block is restored AFTER the relationship is created,
 # on every create path; the preview says so. Without a block in the file -- no call.

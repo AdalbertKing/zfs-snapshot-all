@@ -1255,6 +1255,19 @@ process_dataset() {
         # transfer branches on, so the plan cannot drift from the run. Exactly
         # one line per dataset, on stdout; logging goes to stderr. Push lacked
         # it until 2026-09-07, so `seed` had nothing to read.
+        # U43 (owner 2026-10-20, frozen-engine change authorised: "robimy"): the real
+        # run below falls back to a BOOKMARK when no common snapshot survives; the plan
+        # did not, so verify-endpoint announced a full copy where the run would send an
+        # increment. Same lookup as the run (source bookmark vs the REMOTE target head
+        # GUID), same contract: base=null still means full. Twin of snapget.sh's fix.
+        if [[ "$common_snapshot" == "null" || -z "$common_snapshot" ]] && [ $RECURSIVE -ne 1 ]; then
+            local _dry_tgt_snaps=() _dry_head="" _dry_bm=""
+            target_exists "$tgt_dataset" "$remote_user" "$remote_host" \
+                && _dry_tgt_snaps=($(get_sorted_snapshots "$tgt_dataset" "$remote_user" "$remote_host"))
+            [ ${#_dry_tgt_snaps[@]} -gt 0 ] && _dry_head=$(get_snapshot_guid "$tgt_dataset" "${_dry_tgt_snaps[-1]}" "$remote_user" "$remote_host")
+            [ -n "$_dry_head" ] && _dry_bm=$(find_bookmark_base "$src_dataset" "$_dry_head")
+            [ -n "$_dry_bm" ] && common_snapshot="$_dry_bm"
+        fi
         if [ -n "$common_snapshot" ]; then
             printf 'PLAN=INCREMENTAL base=%s src=%s tgt=%s\n' "$common_snapshot" "$src_dataset" "$tgt_dataset"
         else
