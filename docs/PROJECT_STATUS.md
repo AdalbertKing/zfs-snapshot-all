@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6101544aacf92bf7 -->
+<!-- status-covers-digest: 6bd26701aea75ee6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -20,6 +20,16 @@
      czysto, a commit, ktory blogoslawil, ladowal nieswiezy (REV-20260807-068
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
+
+- **FINISZ U32/U34: łańcuch i dublowanie kolektora w kreatorze (2026-10-20; `finisz/U32-lancuch`).** Właściciel:
+  lustro z magazynu kopii (drugi kolektor za VPN) i a>b>c (c pobiera `hdd/backups` z b) mają być możliwe -- jedyna
+  możliwość to kopia BEZ własnych migawek; rejestru „kto jest czyim celem” między hostami nie budujemy, admin ma
+  być świadomy. Kreator (lustro i backup): dataset, który ma już migawki naszej rodziny (`list-datasets
+  --own-snapshots` podaje teraz `family_snapshots` -- tylko `[prefiks_]automated_*`, ręczne się nie liczą), daje
+  polecany passive-flat; podsumowanie pisze „ŁAŃCUCH … bez własnych migawek” albo, przy szablonie stemplującym,
+  „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
+  lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
+  relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
 - **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`).** Wzór a-tassa (przy 89 % cron
   kasuje najstarsze migawki). `hostscripts/capacity-guard.sh`, instalowany przez deploy do `/root/scripts`, cron

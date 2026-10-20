@@ -4517,6 +4517,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         fi
         printf ' -M'
     }
+    # A BACKUP over a chain (a>b>c, owner 2026-10-20) is NOT detected here on purpose:
+    # "the source already has our family" cannot tell a chain from the leftovers of this
+    # same relationship after export -> delete -> import, and an automatic passive there
+    # would refuse the owner's own import. The wizard says it instead and recommends
+    # passive-flat (tui/new-relation.sh, sync_from_chain); the admin decides.
     if [ "$sync_mode" -eq 1 ]; then
         local pds pds_rc
         # Ask about THIS profile's family, not the literal automated_ root.
@@ -13987,7 +13992,7 @@ cmd_list_datasets() {
     # in a chain, and the pickup that takes every family (passive-flat) is what
     # it should be offered first. Opt-in, so the plain listing stays exactly
     # what it was and costs no second zfs call.
-    local -A own_n=()
+    local -A own_n=() own_f=()
     if [ "$own" -eq 1 ]; then
         local snaps _s _d
         rc=0
@@ -14005,6 +14010,9 @@ cmd_list_datasets() {
             _d="${_s%%@*}"
             case "${_s#*@}" in vzdump*|__replicate_*|__migration__*) continue ;; esac
             own_n[$_d]=$(( ${own_n[$_d]:-0} + 1 ))
+            # Our FAMILY alone (the wizard's chain check for a backup, owner 2026-10-20):
+            # a manual snapshot is not a chain, an automated_* one made elsewhere is.
+            [[ "${_s#*@}" =~ ^([A-Za-z0-9.-]+_)?automated_ ]] && own_f[$_d]=$(( ${own_f[$_d]:-0} + 1 ))
         done <<SN
 $snaps
 SN
@@ -14018,7 +14026,7 @@ SN
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
-        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s' "${own_n[$_n]:-0}"
+        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}"
         # W17: an encrypted source is offered the raw send (-w) by the wizard.
         printf ',"encryption":"%s"' "$(json_escape "${_enc:--}")"
         printf '}'
