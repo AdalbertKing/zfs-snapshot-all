@@ -169,9 +169,14 @@ Ryzyka etapu 4:
     `daily`) na adres właściciela.
   - przypadek z F5 (monitor trafia na świeżą migawkę na starym węźle, zanim `pvesr` ją skasuje): przy tym
     rozkładzie NIE wystąpił -- migawka żyła ~2 min (:28 -> :30), tick monitora o :30 zbiegał się z synchronizacją.
-    Przy `pvesr` co 3 h (produkcja) migawka może przetrwać na starym węźle do 3 h, a monitor mówi wtedy OK;
-    opóźnienie wykrycia = do jednego cyklu `pvesr` + próg ostrzeżenia. Nic tego nie wykrywa szybciej (bez
-    wykrywania położenia gościa -- decyzja właściciela).
+    Przy `pvesr` co 3 h (produkcja) migawka może przetrwać na starym węźle do 3 h, a monitor mówi wtedy OK.
+    **Nie ma skończonej granicy opóźnienia alarmu** (poprawka po REV-20261017-152 F5.1, 2026-10-20): stary węzeł
+    dalej robi migawki, więc świeża migawka może zastąpić skasowaną przed następnym odczytem monitora i ten
+    układ może się powtarzać bez końca -- alarm może przyjść z przerwami albo wcale, zależnie od zbiegu czasów.
+    Kontrprzykład recenzenta (migawki co godzinę o :01, monitor co 15 min, `pvesr` co 3 h o :00): każdy odczyt
+    widzi wiek 14-59 min, poniżej progu 90 min -- `docs/internal/reviews/evidence/REV-20261017-152-timing.py`.
+    Monitor mierzy wiek migawek; nie ustala, który węzeł jest aktywny. Zostaje kontrakt: źródło wybiera admin
+    (bez wykrywania położenia gościa -- decyzja właściciela).
   - 23:01 -- `pct migrate 990 pve1` (6 s), replikacja wróciła pve1 -> pve2, FailCount 0.
   - sprzątanie: `delete-relation lab990` (rc 0, razem ze stroną źródła), konto `zfsbackup-pve2` usunięte, migawki
     `pve2_*` na `subvol-990` usunięte; crontaby root i `zfsbackup` na pve1 i pve2 identyczne z kopiami.
