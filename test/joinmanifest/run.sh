@@ -679,6 +679,69 @@ grep -q 'leave_end_account_processes "$account"' "$REPO/deploy.sh" \
     || bad "K6: --leave does not call leave_end_account_processes before userdel and its retry"
 rm -rf "$K6"
 
+# ---------------------------------------------------------------------------
+# REV-20261021-164: --leave on a delegated account must not read a failed zfs read as
+# "gone" or "no grant left" and go on to userdel. The SHIPPED do_leave (with
+# commit_scope_dataset_held and leave_ds_exists) runs over stub account/zfs commands.
+# Datasets: tank/a (granted to uid 1003, account acct) and tank/gone ("dataset does not
+# exist" -- the documented absence). LV_MODE picks the failure; listfail_N fails the Nth
+# plain `zfs list` of tank/a (1 = hold check, 2 = revoke, 3 = verification).
+# ---------------------------------------------------------------------------
+eval "$(product_fn "$DEPLOY_SRC" commit_scope_dataset_held)"
+# leave_ds_exists is absent from a deploy.sh older than REV-164 (the negative control).
+grep -q '^leave_ds_exists() {' "$DEPLOY_SRC" && eval "$(product_fn "$DEPLOY_SRC" leave_ds_exists)"
+eval "$(product_fn "$DEPLOY_SRC" do_leave)"
+L4="$TMPD/rev164"
+lv_run() {   # <mode> -> "rc|userdel|manifest|out" ; manifest = kept|removed
+    rm -rf "$L4"; mkdir -p "$L4"; : > "$L4/m.conf"; : > "$L4/grant"; : > "$L4/userdel"; echo 0 > "$L4/n"
+    local out rc
+    out=$( (
+        LV_MODE="$1"
+        die() { echo "DIE $*"; exit 1; }; warn() { echo "WARN $*"; }; log() { :; }
+        peer_manifest_path() { echo "$L4/m.conf"; }
+        record_load() { PEER_JOIN_ROLE=pull; PEER_JOIN_ACCOUNT=acct; PEER_JOIN_ACCOUNT_UID=1003; PEER_JOIN_GRANTED_DATASETS="tank/a tank/gone"; PEER_JOIN_AS=""; }
+        id() { [ "$1" = -u ] && { echo 1003; return 0; }; return 0; }
+        passwd() { :; }; revoke_quiesce_grant() { :; }; leave_end_account_processes() { :; }
+        userdel() { echo "$*" >> "$L4/userdel"; }
+        peer_scope_path() { echo "$L4/scope"; }; peer_scope_granted_hash_path() { echo "$L4/hash"; }
+        PAIR_GATE_STATE_DIR="$L4/gate"; COMMIT_SCOPE_HOLD_TAG=zfs-commit-hold
+        zfs() {
+            local last="${*: -1}" n
+            case "$1" in
+                list)
+                    [ "$last" = tank/gone ] && { echo "cannot open 'tank/gone': dataset does not exist" >&2; return 1; }
+                    case " $* " in
+                        *" snapshot "*) [ "$LV_MODE" = holdfail ] && { echo "cannot iterate: permission denied" >&2; return 1; }
+                                        echo "tank/a@s1"; return 0 ;;
+                    esac
+                    n=$(( $(cat "$L4/n") + 1 )); echo "$n" > "$L4/n"
+                    [ "$LV_MODE" = "listfail_$n" ] && { echo "cannot open 'tank/a': permission denied" >&2; return 1; }
+                    echo "tank/a" ;;
+                holds)   return 0 ;;
+                unallow) case "$LV_MODE" in unallowfail|unallowallowfail) return 1 ;; esac; rm -f "$L4/grant" ;;
+                allow)   case "$LV_MODE" in *allowfail) [ "$LV_MODE" != unallowfail ] && { echo "permission denied" >&2; return 1; } ;; esac
+                         [ -e "$L4/grant" ] && printf -- '---- Permissions on tank/a ----\nLocal+Descendent permissions:\n\tuser acct snapshot,destroy,mount\n'
+                         return 0 ;;
+            esac
+        }
+        do_leave lbl
+    ) 2>&1 ); rc=$?
+    printf '%s|%s|%s|%s' "$rc" "$(cat "$L4/userdel")" "$([ -e "$L4/m.conf" ] && echo kept || echo removed)" "$out"
+}
+lv_check() {   # <mode> <want rc|userdel|manifest prefix> <want text in output> <name>
+    local r; r="$(lv_run "$1")"
+    case "$r" in "$2"*"$3"*) ok "REV-164 --leave: $4" ;; *) bad "REV-164 --leave: $4" "got: $r" ;; esac
+}
+lv_check clean            "0|-r acct|removed|" ""                                "clean: grant revoked and verified gone, account removed, manifest removed (tank/gone = documented absence)"
+lv_check unallowfail      "1||kept|"           "still show a grant for uid 1003"  "revoke fails, grant still read back -> refused, account/manifest kept"
+lv_check listfail_1       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the hold check -> refused, nothing changed"
+lv_check holdfail         "1||kept|"           "could not read the snapshots or holds of tank/a" "snapshot/hold read fails -> refused, not 'no hold'"
+lv_check listfail_2       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the revoke -> refused, not 'gone'"
+lv_check listfail_3       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the verification -> refused, no userdel"
+lv_check allowfail        "1||kept|"           "could not read the zfs delegations on tank/a" "zfs allow fails at the verification -> refused, no userdel"
+lv_check unallowallowfail "1||kept|"           "could not read the zfs delegations on tank/a" "revoke fails AND the re-read fails -> refused, no userdel"
+rm -rf "$L4"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

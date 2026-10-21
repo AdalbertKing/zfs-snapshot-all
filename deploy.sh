@@ -3903,12 +3903,17 @@ fi
 # Keep this in sync if that tag ever changes.
 COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
 
+# -> 0 held, 1 not held, 2 the snapshots or their holds could not be read (REV-20261021-164:
+# an unreadable hold is not "no hold"). Callers that test it with `if`/`elif` take 2 as held,
+# the conservative reading; --leave tells 2 apart and stops.
 commit_scope_dataset_held() {   # <dataset>
-    local ds="$1" snap
+    local ds="$1" snap snaps h
+    snaps="$(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)" || return 2
     while IFS= read -r snap; do
         [ -n "$snap" ] || continue
-        zfs holds -H -- "$snap" 2>/dev/null | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
-    done < <(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)
+        h="$(zfs holds -H -- "$snap" 2>/dev/null)" || return 2
+        printf '%s\n' "$h" | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+    done <<< "$snaps"
     return 1
 }
 
@@ -4349,6 +4354,17 @@ new_account_abort() {   # <account> <uid> <reason> -- never returns
     die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel -r $1' by hand BEFORE re-running (a re-run would take the existing account as already checked). Nothing else was changed."
 }
 
+# REV-20261021-164: during --leave a dataset is "gone" only on ZFS's own word for it
+# ("dataset does not exist"). Any other failure of the read -- permission, a pool not
+# imported, a broken zfs -- is unknown, and --leave stops with <what-is-left> instead of
+# skipping that dataset's revoke or verification and going on to userdel.
+leave_ds_exists() {   # <label> <dataset> <what-is-left> -> 0 exists, 1 does not exist; dies otherwise
+    local out
+    if out="$(LC_ALL=C zfs list -H -o name -- "$2" 2>&1)"; then return 0; fi
+    case "$out" in *"dataset does not exist"*) return 1 ;; esac
+    die "refusing --leave='$1': could not tell whether $2 exists (zfs list: ${out%%$'\n'*}) -- an unreadable dataset is not a gone one. $3"
+}
+
 do_leave() {
     local label="$1"
     [ -n "$label" ] || die "internal: do_leave needs a label"
@@ -4396,12 +4412,18 @@ do_leave() {
 
         local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
         local -a held=()
-        local ds
+        local ds acl hrc
+        local left_none="Nothing has been changed."
+        local left_some="Grants already revoked where that succeeded; the account, its key and the manifest are left in place -- fix the zfs read and re-run --leave='$label'."
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            if zfs list -H -o name -- "$ds" >/dev/null 2>&1 && commit_scope_dataset_held "$ds"; then
-                held+=("$ds")
-            fi
+            leave_ds_exists "$label" "$ds" "$left_none" || continue
+            hrc=0; commit_scope_dataset_held "$ds" || hrc=$?
+            case "$hrc" in
+                0) held+=("$ds") ;;
+                1) ;;
+                *) die "refusing --leave='$label': could not read the snapshots or holds of $ds -- an unreadable hold is not 'no hold'. $left_none" ;;
+            esac
         done
         if [ "${#held[@]}" -gt 0 ]; then
             die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
@@ -4412,7 +4434,7 @@ do_leave() {
         local perms="snapshot,destroy,mount,send,hold,release,bookmark"
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
+            if ! leave_ds_exists "$label" "$ds" "$left_some"; then
                 log "leave: $ds no longer exists on this host -- nothing to revoke"
                 continue
             fi
@@ -4434,8 +4456,12 @@ do_leave() {
         local -a residual=()
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
-            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
+            leave_ds_exists "$label" "$ds" "$left_some" || continue
+            # REV-20261021-164: the ACL is captured and its read checked -- a failed
+            # `zfs allow` piped into grep read as "no grant left" and opened userdel.
+            acl="$(zfs allow "$ds" 2>&1)" \
+                || die "refusing --leave='$label': could not read the zfs delegations on $ds to verify that uid $uid ($account) has none left (zfs allow: ${acl%%$'\n'*}) -- an unreadable ACL is not an empty one. $left_some"
+            printf '%s\n' "$acl" | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
