@@ -1987,6 +1987,164 @@ else
 fi
 rm -rf "$gs_dir"
 
+# ---------------------------------------------------------------------------
+# U50 STRAZNIK PODEJRZANEGO PRZYROSTU (hostscripts/growth-guard.sh, wlasciciel 2026-10-21).
+# Prawdziwy skrypt, zfs zastapiony: listy datasetow i migawek z plikow, oszacowania
+# `zfs send -nP` / `-nPc` z tabeli rozmiarow. Norma: 100 MiB/h; najnowszy przyrost zmieniany
+# per przypadek. Tylko alarm -- skrypt nigdy nie wola zfs destroy.
+# ---------------------------------------------------------------------------
+gw_dir=$(mktemp -d); mkdir -p "$gw_dir/bin" "$gw_dir/cron" "$gw_dir/state"
+cp "$HS/growth-guard.sh" "$gw_dir/guard.sh"; cp "$HS/alert-env.sh" "$gw_dir/alert-env.sh"
+cat > "$gw_dir/bin/zfs" <<'ST'
+#!/bin/bash
+echo "zfs $*" >> "$GW_DIR/calls"
+case "$1 $2" in
+  "list -H")
+    last="${*: -1}"
+    case "$*" in
+      *"-o name,compression"*)
+        [ -n "${GW_FAIL_DS:-}" ] && { echo "cannot open" >&2; exit 1; }
+        if [[ "$*" == *" -r "* ]]; then awk -F'\t' -v r="$last" '$1 == r || index($1, r "/") == 1' "$GW_DIR/ds"
+        else awk -F'\t' -v r="$last" '$1 == r' "$GW_DIR/ds"; fi ;;
+      *"-t snapshot"*)
+        [ -n "${GW_FAIL_SNAPS:-}" ] && { echo "cannot iterate" >&2; exit 1; }
+        awk -F'\t' -v d="$last" 'index($1, d "@") == 1' "$GW_DIR/snaps" ;;
+    esac ;;
+  "send -nP")
+    shift 2; c=0; [ "$1" = "-c" ] && { c=1; shift; }
+    [ -n "${GW_FAIL_SEND:-}" ] && { echo "cannot estimate" >&2; exit 1; }
+    a="$2"; b="$3"
+    v=$(awk -v a="$a" -v b="$b" -v c="$c" '$1 == a && $2 == b { print (c ? $4 : $3); exit }' "$GW_DIR/sizes")
+    printf 'incremental\t%s\t%s\t%s\nsize\t%s\n' "$a" "$b" "$v" "$v" ;;
+  destroy*) echo "DESTROY $*" >> "$GW_DIR/destroyed" ;;
+esac
+exit 0
+ST
+printf '#!/bin/bash\nprintf "%%s\n%%s\n" "$1" "$2" >> "$GW_DIR/mail"\n' > "$gw_dir/bin/notify"
+chmod +x "$gw_dir/bin/"* "$gw_dir/guard.sh"
+GW_J='/r/zfs-job.sh "h prune" --log=/l --notify=/n --detail=8 --'
+{
+    echo "# BEGIN zfs-backup-managed"
+    echo "21 * * * * $GW_J /r/delsnaps.sh -L x \"tank/d\" \"automated_hourly\" -H24"
+    echo "22 * * * * $GW_J /r/delsnaps.sh -R -L y \"tank/off\" \"automated_hourly\" -H24"
+    echo "# END zfs-backup-managed"
+} > "$gw_dir/cron/root"
+printf 'tank/d\tlz4\ntank/off\toff\ntank/x\tlz4\n' > "$gw_dir/ds"
+GW_M=1048576
+gw_data() {   # <L ostatniego MiB> <C ostatniego MiB> [liczba przyrostow, domyslnie 5]
+    local n="${3:-5}" i
+    : > "$gw_dir/snaps"; : > "$gw_dir/sizes"
+    for ds in tank/d tank/off tank/x; do
+        for i in $(seq 0 "$n"); do printf '%s@s%s\t%s\t%s\n' "$ds" "$i" "$((7000 + i))" "$((i * 3600))" >> "$gw_dir/snaps"; done
+        for i in $(seq 1 "$n"); do
+            if [ "$i" -eq "$n" ]; then L=$(($1 * GW_M)); C=$(($2 * GW_M)); else L=$((100 * GW_M)); C=$((50 * GW_M)); fi
+            printf '%s@s%s %s@s%s %s %s\n' "$ds" "$((i - 1))" "$ds" "$i" "$L" "$C" >> "$gw_dir/sizes"
+        done
+    done
+}
+gw_run() {   # <settings alert> [args] -> rc; mail/out/calls in $gw_dir
+    rm -f "$gw_dir/mail" "$gw_dir/calls" "$gw_dir/destroyed"
+    printf '[growth]\nalert = %s\n' "$1" > "$gw_dir/settings.ini"; shift
+    [ -n "${GW_KEEP_STATE:-}" ] || rm -rf "$gw_dir/state"
+    ( [ -n "${GW_ENV_KEEP:-}" ] || unset ZFS_GROWTH_ALERT ZFS_GROWTH_FACTOR ZFS_GROWTH_MIN_MIB ZFS_GROWTH_MAX_RATIO_PCT ZFS_GROWTH_DAYS
+      PATH="$gw_dir/bin:$PATH" GW_DIR="$gw_dir" SETTINGS_FILE="$gw_dir/settings.ini" ZFS_ALERT_CONF="${GW_CONF:-/dev/null}" \
+      ZFS_GUARD_CRONTABS="$gw_dir/cron" ZFS_GROWTH_STATE="$gw_dir/state" ZFS_NOTIFY_SCRIPT="$gw_dir/bin/notify" \
+      ZFS_GROWTH_LOCK="$gw_dir/lock" bash "$gw_dir/guard.sh" "$@" ) > "$gw_dir/out" 2>&1
+}
+gw_nosend() { ! grep -q '^zfs send' "$gw_dir/calls" 2>/dev/null; }
+
+gw_data 2000 2000
+gw_run off; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/calls" ] && [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: alert = off (domyslnie) -- nic nie liczy, nic nie wysyla"
+else
+    bad "growth-guard: off" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/out" 2>/dev/null)"
+fi
+gw_data 110 55
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/mail" ] && grep -q '^zfs send' "$gw_dir/calls"; then
+    ok "growth-guard: zwykly przyrost (110 MiB/h przy normie 100) -- bez alarmu"
+else
+    bad "growth-guard: zwykly przyrost" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+gw_data 2000 2000
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" && grep -q 'tank/d: najnowszy przyrost 2000 MiB (do tank/d@s5), tempo 20.0x normy, kompresja przyrostu 1.00' "$gw_dir/mail" \
+   && [ ! -s "$gw_dir/destroyed" ]; then
+    ok "growth-guard: skok x20, niekompresowalny, ponad min_mib -- ALARM z datasetem, rozmiarem, tempem, kompresja; nic nie usuniete"
+else
+    bad "growth-guard: skok niekompresowalny" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+GW_KEEP_STATE=1 gw_run on; gw_rc=$?
+if [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: ten sam alarm drugi raz (ta sama migawka) -- bez drugiego maila"
+else
+    bad "growth-guard: powtorka alarmu" "$(cat "$gw_dir/mail")"
+fi
+gw_data 2000 800
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: skok x20, ale kompresja 2.50 (konwersja baz) -- bez alarmu"
+else
+    bad "growth-guard: skok kompresowalny" "rc=$gw_rc" "$(cat "$gw_dir/mail" 2>/dev/null)"
+fi
+gw_data 900 900
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: skok x9 niekompresowalny, ale ponizej min_mib (900 < 1024) -- bez alarmu"
+else
+    bad "growth-guard: ponizej min_mib" "rc=$gw_rc" "$(cat "$gw_dir/mail" 2>/dev/null)"
+fi
+gw_data 2000 2000 3
+gw_run on --plan; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && grep -q 'tank/d: brak normy -- 3 przyrost' "$gw_dir/out" && ! grep -q 'ALARM' "$gw_dir/out"; then
+    ok "growth-guard: za malo historii (3 przyrosty) -- brak normy, bez alarmu, powod w --plan"
+else
+    bad "growth-guard: za malo historii" "rc=$gw_rc" "$(cat "$gw_dir/out" 2>/dev/null)"
+fi
+gw_data 2000 2000
+gw_run off --plan; gw_rc=$?
+if grep -q 'tank/off: pominięty -- compression=off' "$gw_dir/out" && ! grep -q 'tank/x' "$gw_dir/out" && ! grep -q 'tank/x' "$gw_dir/calls" \
+   && grep -q 'tank/d: .* -- ALARM' "$gw_dir/out" && [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: --plan (takze przy off) -- compression=off pominiety z powodem, dataset bez linii retencji nie badany, bez maila"
+else
+    bad "growth-guard: --plan / zakres" "rc=$gw_rc" "$(cat "$gw_dir/out" "$gw_dir/calls" 2>/dev/null)"
+fi
+for gw_f in SEND SNAPS DS; do
+    ( export "GW_FAIL_$gw_f=1"; gw_run on ); gw_rc=$?
+    if [ "$gw_rc" -eq 1 ] && grep -q 'NIE działa w całości' "$gw_dir/mail" && ! grep -q 'w porządku' "$gw_dir/out"; then
+        ok "growth-guard: blad zfs ($gw_f) -- rc 1, alert 'strażnik nie działa', bez cichego 'w porzadku'"
+    else
+        bad "growth-guard: blad zfs ($gw_f)" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+    fi
+done
+gw_data 2000 2000; printf 'tank/d@zle\tabc\t99999\n' >> "$gw_dir/snaps"
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'zły wiersz migawki w tank/d' "$gw_dir/mail"; then
+    ok "growth-guard: zly wiersz migawki -- rc 1, alert"
+else
+    bad "growth-guard: zly wiersz" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+gw_data 2000 2000
+for gw_b in "ZFS_GROWTH_FACTOR=1:factor='1'" "ZFS_GROWTH_MIN_MIB=0:min_mib='0'" "ZFS_GROWTH_MAX_RATIO_PCT=99:max_ratio_pct='99'" \
+            "ZFS_GROWTH_DAYS=1:days='1'" "ZFS_GROWTH_FACTOR=x:factor='x'" "ZFS_GROWTH_ALERT=ON:alert = 'ON'"; do
+    gw_v="${gw_b%%:*}"; gw_t="${gw_b#*:}"
+    ( export GW_ENV_KEEP=1 "$gw_v"; gw_run on ); gw_rc=$?
+    if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -qF "$gw_t" "$gw_dir/mail"; then
+        ok "growth-guard: zle ustawienie ${gw_v} -- nic, rc 1, alert z nazwa"
+    else
+        bad "growth-guard: zle ustawienie ${gw_v}" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+    fi
+done
+printf 'ZFS_GROWTH_ALERT=on\n' > "$gw_dir/legacy-on.conf"
+GW_CONF="$gw_dir/legacy-on.conf" gw_run off; gw_rc=$?
+if [ ! -s "$gw_dir/calls" ]; then ok "growth-guard: zfs-alert.conf on + F10 off -- nic (settings.ini wygrywa)"
+else bad "growth-guard: conf on + F10 off" "$(cat "$gw_dir/calls")"; fi
+( export GW_ENV_KEEP=1 ZFS_GROWTH_ALERT=on; gw_run off ); gw_rc=$?
+if grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" 2>/dev/null; then ok "growth-guard: env on wygrywa z F10 off"
+else bad "growth-guard: env on" "$(cat "$gw_dir/out" 2>/dev/null)"; fi
+rm -rf "$gw_dir"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

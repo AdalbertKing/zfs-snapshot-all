@@ -5619,6 +5619,26 @@ else
     warn "could not install the capacity-guard cron line: $CRON_ERR"
 fi
 
+# U50 (owner 2026-10-21): the GROWTH GUARD -- alarm only, when the newest increment of one
+# of our datasets is many times its norm AND hardly compresses (what encryption by
+# ransomware looks like). Same shape as the capacity guard: the line is always installed,
+# the script does nothing while [growth] alert = off (the default; F10 turns it on).
+GROWTH_SCRIPT="/root/scripts/growth-guard.sh"
+host_script_ensure growth-guard.sh "$GROWTH_SCRIPT" 0755 \
+    "no growth guard (off by default anyway)" \
+    "no alarm on a suspicious incompressible increment, even if turned on in F10"
+GROWTH_LINE="23 * * * * $GROWTH_SCRIPT 2>>/root/scripts/cron.log"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    crontab -l 2>/dev/null | grep -qF "$GROWTH_SCRIPT" \
+        && log "growth-guard cron line present" \
+        || warn "growth-guard cron line MISSING -- the growth alarm cannot run even when turned on"
+elif cron_block_adopt_line root "$CRON_HOST_BLOCK" "$GROWTH_SCRIPT" "$GROWTH_LINE" "$CRON_HOST_TAIL"; then
+    [ "${CRON_CHANGED:-0}" -eq 0 ] && log "growth-guard cron line already in the '$CRON_HOST_BLOCK' block" \
+        || log "added growth-guard cron line: $GROWTH_LINE"
+else
+    warn "could not install the growth-guard cron line: $CRON_ERR"
+fi
+
 echo
 log "===================================================================="
 log "Dependency summary"
