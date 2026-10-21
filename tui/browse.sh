@@ -54,9 +54,18 @@ unmount_all() {   # -> 0 nic nie zostało; 1 coś zostało (opis w RESIDUE, stan
             RESIDUE="$RESIDUE
   kopia wciąż zamontowana: $MNT  (ręcznie: umount $MNT)"
             left=1
-        else
-            rmdir "$MNT" 2>/dev/null
+        elif rmdir "$MNT" 2>/dev/null || ! [ -d "$MNT" ]; then
             MNT=""
+            if [ "$LAZY" -eq 1 ] && [ -z "$MAPPED" ]; then
+                # Odłączenie leniwe: coś jeszcze używało kopii -- zwolni się, gdy ostatni proces skończy.
+                RESIDUE="$RESIDUE
+  kopia była zajęta i została odłączona leniwie (umount -l) -- zwolni się, gdy ostatni proces przestanie jej używać (sprawdź: lsof +D albo fuser -vm)"
+                left=1
+            fi
+        else
+            RESIDUE="$RESIDUE
+  pusty katalog po montażu nie dał się usunąć: $MNT  (ręcznie: rmdir $MNT)"
+            left=1
         fi
     fi
     if [ -n "$MAPPED" ]; then
@@ -100,7 +109,12 @@ other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dat
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
     local ds="$1" k v s; k="$(hold_key "$ds")"
     mkdir -p "$BROOT" || return 1
-    if ! [ -s "$BROOT/orig.$k" ]; then
+    if [ -e "$BROOT/orig.$k" ]; then
+        # Istniejący zapis (inne przeglądanie albo nieudane przywrócenie) -- tylko poprawny.
+        IFS=$'\t' read -r v s <"$BROOT/orig.$k" 2>/dev/null || { echo "zapis $BROOT/orig.$k nieczytelny -- nic nie zmieniam" >&2; return 1; }
+        case "$v" in hidden|visible) ;; *) echo "zapis $BROOT/orig.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
+        case "$s" in local|default|received|"inherited from "*) ;; *) echo "zapis $BROOT/orig.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
+    else
         v="$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać snapdev $ds -- nic nie zmieniam" >&2; return 1; }
         s="$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać źródła snapdev $ds -- nic nie zmieniam" >&2; return 1; }
         case "$v" in hidden|visible) ;; *) echo "snapdev $ds = '$v' -- nieznana wartość, nic nie zmieniam" >&2; return 1 ;; esac
@@ -143,15 +157,18 @@ undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
     if [ -z "$RESIDUE" ]; then
         [ -n "$1" ] && wt --title "$TITLE" --msgbox "$1" 9 "$W"
     else
-        wt --title "$TITLE" --msgbox "Nie wszystko udało się przywrócić:$RESIDUE" 14 "$W"
+        wt --title "$TITLE" --msgbox "Nie wszystko udało się posprzątać:$RESIDUE" 14 "$W"
     fi
     return 0
 }
 cleanup() {
     RESIDUE=""
     unmount_all; restore_snapdev
-    [ -n "$RESIDUE" ] && printf 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
     rm -rf "$TMPD"
+    if [ -n "$RESIDUE" ]; then
+        printf 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
+        exit 1     # w pułapce EXIT: kod wyjścia całego skryptu -- nigdy 0 przy pozostałości
+    fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM

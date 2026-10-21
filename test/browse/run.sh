@@ -159,9 +159,9 @@ new_case "1 filesystem: normalny sukces"
 fs_case; run_script
 rc0; has out "=== Odmontowane"; hasnt out "NIE wszystko"; nomarker; fin
 
-new_case "2 filesystem: zwykle umount pada, lazy przechodzi"
+new_case "2 filesystem: zwykle umount pada, lazy przechodzi -> odlaczona, ale zgloszona (nie 'Odmontowane'), rc!=0"
 fs_case; touch "$D/umount_fail" "$D/lazy_ok"; run_script
-rc0; has out "=== Odmontowane"; nomarker; fin
+rcnz; has out "odłączona leniwie"; hasnt out "=== Odmontowane"; nomarker; fin
 
 new_case "3 filesystem: umount i lazy padaja -> kopia zostaje, ponowna proba przy EXIT"
 fs_case; touch "$D/umount_fail"; run_script
@@ -173,6 +173,7 @@ new_case "4 LUKS: cryptsetup close pada -> mapper zostaje, ostrzezenie"
 vol_case crypto_LUKS; touch "$D/close_fail"; run_script
 rcnz; has out "nie udało się zamknąć"; has out "cryptsetup close"
 compgen -G "$D/mapper/zbrowse-*" >/dev/null || errs+=("mapper zniknal mimo close_fail")
+[ "$(grep -c '^cryptsetup close' "$D/log")" -ge 2 ] || errs+=("brak ponownej proby cryptsetup close przy wyjsciu: $(grep -c '^cryptsetup close' "$D/log")")
 fin
 
 new_case "5 LUKS: close przechodzi -> mapper pusty, snapdev wrocil"
@@ -216,7 +217,7 @@ hasnt out "=== Odmontowane"; nolg '^mount '
 [ "$(cat "$D/snapdev_value")" = hidden ] || errs+=("snapdev=$(cat "$D/snapdev_value")")
 fin
 
-new_case "11 snapdev: brak urzadzenia + nieudane przywrocenie -> nie 'nic nie zmieniono', zapis zostaje"
+new_case "11 snapdev: brak urzadzenia + nieudane przywrocenie -> nie 'Nic nie zostało zmienione', zapis zostaje"
 vol_case ext4; touch "$D/no_device" "$D/fail_restore"; run_script
 hasnt msgs "Nic nie zostało zmienione"
 cat "$D/msgs" "$D/out" | grep -qF "NIE przywrócony" || errs+=("brak 'NIE przywrócony' w msgs/out")
@@ -231,6 +232,16 @@ run_script
 kill "$H" 2>/dev/null; wait "$H" 2>/dev/null
 rc0; nolg '^zfs set snapdev=hidden'; nolg '^zfs inherit'
 [ -e "$D/run/orig.tank_vol" ] || errs+=("orig.tank_vol zniknal mimo drugiego trzymajacego")
+fin
+
+new_case "13 pozostalosc, potem powrot do menu i Anuluj -> kod wyjscia nadal != 0"
+vol_case ext4; touch "$D/no_device" "$D/fail_restore"; run_script
+rcnz; has out "NIE wszystko posprzątane"; fin
+
+new_case "14 zapis orig istnieje, ale jest pusty -> nic nie zmieniam (bez nadpisania)"
+vol_case ext4; mkdir -p "$D/run"; : >"$D/run/orig.tank_vol"; run_script
+grep -q '^zfs set snapdev=visible' "$D/log" && errs+=("snapdev=visible mimo pustego zapisu")
+[ -e "$D/run/orig.tank_vol" ] && ! [ -s "$D/run/orig.tank_vol" ] || errs+=("pusty zapis zostal nadpisany albo usuniety")
 fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
