@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 465ded449e73f38c -->
+<!-- status-covers-digest: 42bee54b4931c496 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -89,6 +89,13 @@
   „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
+
+- **REV-20261021-165: U42 -- wycofanie nowego konta nie kasuje katalogu domowego, którego nie założyło (2026-10-21; `finisz/REV-165`).**
+  `deploy.sh`: oba miejsca zakładania konta sprawdzają katalog domowy PRZED `useradd -m` i przekazują wynik.
+  Przy błędzie odczytu ZFS wycofanie robi `userdel -r` tylko wtedy, gdy katalogu nie było i `getent passwd` podaje
+  dokładnie tę ścieżkę; w każdym innym razie zwykłe `userdel`, katalog zostaje, a komunikat mówi, że nie był nasz.
+  Wcześniej katalog po ręcznym `userdel` (bez `-r`) -- dokładnie przypadek U42 -- zostałby skasowany. Testy
+  `test/draftscope` +7 (prawdziwy katalog z plikiem-strażnikiem).
 
 - **REV-20261021-164: `--leave` -- błąd odczytu ZFS nie znaczy „dataset zniknął” ani „uprawnień już nie ma” (2026-10-21; `finisz/REV-164`, R1 `finisz/REV-164b`).**
   `deploy.sh`, `do_leave`: dataset jest „nieobecny” tylko na słowo ZFS („dataset does not exist”); każdy inny błąd
