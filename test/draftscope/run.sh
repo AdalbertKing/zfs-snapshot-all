@@ -411,12 +411,21 @@ if declare -F new_account_drop_inherited_grants >/dev/null; then
     fi
     # REV-20261021-163: a failed read is not "no grant". Each case in a subshell (die exits);
     # die/userdel/warn/log stubbed; G42_MODE picks the zfs result.
-    g42_run() {   # <mode> -> "rc|unallow calls|userdel calls|output"
+    # REV-20261021-165: <home> = new (useradd -m made it: the run owns it), pre (it was
+    # there before useradd, with a sentinel file), moved (passwd says another path),
+    # prefail (pre + userdel itself fails). userdel -r really deletes the home here, so
+    # a wrong rollback shows up as a missing sentinel. Home state -> $G42/homestate.
+    g42_run() {   # <mode> [home] -> "rc|unallow calls|userdel calls|output"
         : > "$G42/unallow"; : > "$G42/userdel"
-        local out rc
+        local out rc home="$G42/home/newacct" hm="${2:-new}" pre=0
+        rm -rf "$G42/home"; mkdir -p "$home"
+        case "$hm" in pre|prefail) pre=1; echo keep > "$home/SENTINEL" ;; esac
         out=$( (
             die() { echo "DIE $*"; exit 1; }; warn() { echo "WARN $*"; }; log() { :; }
-            userdel() { echo "$*" >> "$G42/userdel"; return 0; }
+            userdel() { echo "$*" >> "$G42/userdel"; [ "$hm" = prefail ] && return 1
+                        [ "$1" = -r ] && rm -rf "$home"; return 0; }
+            getent() { [ "$hm" = moved ] && { echo "newacct:x:1003:1003::/srv/elsewhere:/bin/bash"; return 0; }
+                       echo "newacct:x:1003:1003::$home:/bin/bash"; }
             id() { [ "$1" = -u ] && { echo 1003; return 0; }; command id "$@"; }
             zfs() {
                 case "$1" in
@@ -426,8 +435,10 @@ if declare -F new_account_drop_inherited_grants >/dev/null; then
                     unallow) echo "$*" >> "$G42/unallow"; [ "$G42_MODE" = grantfail ] && return 1; return 0 ;;
                 esac
             }
-            G42_MODE="$1"; new_account_drop_inherited_grants newacct
+            G42_MODE="$1"; new_account_drop_inherited_grants newacct "$home" "$pre"
         ) 2>&1 ); rc=$?
+        if [ -e "$home/SENTINEL" ]; then echo sentinel > "$G42/homestate"
+        elif [ -d "$home" ]; then echo home > "$G42/homestate"; else echo gone > "$G42/homestate"; fi
         printf '%s|%s|%s|%s' "$rc" "$(cat "$G42/unallow")" "$(cat "$G42/userdel")" "$out"
     }
     _r=$(g42_run listfail)
@@ -445,6 +456,31 @@ if declare -F new_account_drop_inherited_grants >/dev/null; then
     _r=$(g42_run grantfail)
     case "$_r" in "1|unallow -u newacct tank/a|-r newacct|"*"DIE new account newacct"*"zfs unallow -u 1003 tank/a"*) check "U42/REV-163: revoke fails -> stop, account removed again, the by-hand command names the uid" "0" "0" ;;
         *) check "U42/REV-163: revoke failure" "0" "1: $_r" ;; esac
+    _hs() { cat "$G42/homestate"; }
+    # REV-20261021-165: a home that existed before useradd survives every rollback.
+    for _m in listfail allowfail grantfail; do
+        _r=$(g42_run "$_m" pre)
+        case "$_r" in 1\|*\|newacct\|*"NOT created by this run"*)
+            if [ "$(_hs)" = sentinel ]; then check "U42/REV-165: $_m with a pre-existing home -> userdel without -r, home and its files kept" "0" "0"
+            else check "U42/REV-165: $_m pre-existing home" "0" "1: home=$(_hs) $_r"; fi ;;
+            *) check "U42/REV-165: $_m pre-existing home" "0" "1: home=$(_hs) $_r" ;; esac
+    done
+    _r=$(g42_run listfail new)
+    case "$_r:$(_hs)" in 1\|\|"-r newacct"\|*:gone) check "U42/REV-165: control -- home created by this run -> userdel -r removes it" "0" "0" ;;
+        *) check "U42/REV-165: home created by this run" "0" "1: $_r home=$(_hs)" ;; esac
+    _r=$(g42_run listfail moved)
+    case "$_r:$(_hs)" in 1\|\|newacct\|*:home) check "U42/REV-165: passwd names another home than the one checked -> not proven ours, no -r" "0" "0" ;;
+        *) check "U42/REV-165: home path mismatch" "0" "1: $_r home=$(_hs)" ;; esac
+    _r=$(g42_run listfail prefail)
+    case "$_r:$(_hs)" in *"run 'userdel newacct' by hand"*:sentinel)
+            case "$_r" in *"userdel -r"*) check "U42/REV-165: rollback fails, pre-existing home -> hand command" "0" "1: says userdel -r: $_r" ;;
+                *) check "U42/REV-165: rollback itself fails with a pre-existing home -> hand command is plain userdel, home kept" "0" "0" ;; esac ;;
+        *) check "U42/REV-165: rollback failure" "0" "1: $_r home=$(_hs)" ;; esac
+    # Both call sites look at the home BEFORE useradd and pass it to the guard.
+    _pre=$(grep -c -E '^[[:space:]]*(local home_pre=0; \[ -e "/home/\$account" \] && home_pre=1|HOME_PREEXISTED=0; \[ -e "\$HOMEDIR" \] && HOME_PREEXISTED=1)' "$DEPLOY_SRC")
+    _pass=$(grep -c -E 'new_account_drop_inherited_grants "\$(account|USERNAME)" "(/home/\$account|\$HOMEDIR)" "\$(home_pre|HOME_PREEXISTED)"' "$DEPLOY_SRC")
+    if [ "$_pre:$_pass" = 2:2 ]; then check "U42/REV-165: both call sites check the home before useradd and pass it" "0" "0"
+    else check "U42/REV-165: call sites" "0" "1: pre=$_pre pass=$_pass"; fi
     # Both call sites: the guard runs right after useradd, before the next mutation.
     _cs=$(grep -n -A1 'log "created isolated peer account\|log "created user \$USERNAME' "$DEPLOY_SRC" | grep -c 'new_account_drop_inherited_grants')
     if [ "$_cs" = 2 ]; then check "U42/REV-163: both post-useradd call sites call the guard on the next line" "0" "0"
