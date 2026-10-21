@@ -34,6 +34,10 @@ ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "użycie: edit-relation.sh NAZWA" >&2; exit 2; }
 WT_BACKTITLE="Zmiana relacji $NAME -- kolektor $(hostname)"
+# U65: 'c' (ręczna edycja) i 's' (zapisz jako szablon) w oknie relacji na F3 otwierają TĘ
+# czynność od razu (EDIT_DO), bez listy zmian; po niej okno się kończy.
+FORCE_ACTION=""; DIRECT=0
+case "${EDIT_DO:-}" in config|zapisz) FORCE_ACTION="$EDIT_DO"; DIRECT=1 ;; esac
 TMPD="$(mktemp -d)" || exit 1
 HNAME="relacja-$NAME"     # ukryty szablon tej relacji
 HIDDEN_DIRTY=0; DONE=0; HBACKUP=""; HFILE=""
@@ -642,6 +646,8 @@ save_all() {
 while :; do
 ACTION=""
 while :; do
+    # U65: czynność otwarta wprost z okna relacji (EDIT_DO) już się odbyła -> koniec.
+    [ "$DIRECT" -eq 1 ] && [ -z "$FORCE_ACTION" ] && { clear 2>/dev/null; exit 0; }
     geom
     np=$(pending_count)
     # KARTA RELACJI (U25, właściciel 2026-10-20): ta sama karta co kreator (card_menu w
@@ -665,52 +671,42 @@ while :; do
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
     _sr="jak w configu"; [ "${#P_SARGS[@]}" -gt 0 ] && _sr="[zmiana]"
     _en="jak w configu"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="[zmiana]"
-    CARD_TAGS=(rodzaj); CARD_NAMES=("Rodzaj"); CARD_VALUES=("$_rodzaj"); CARD_FIXED=(1)
-    if [ "$PEER" != - ]; then
-        CARD_TAGS+=(adres); CARD_NAMES+=("Źródło"); CARD_VALUES+=("$_ep${P_HOST:+ -> $P_HOST [zmiana]}"); CARD_FIXED+=(0)
-    fi
-    CARD_TAGS+=(dane); CARD_NAMES+=("Datasety"); CARD_VALUES+=("$_ds$_dsp"); CARD_FIXED+=(0)
+    # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
+    # da się zmienić (rodzaj, nazwa, konto, cel), stoi w NAGŁÓWKU, nie na liście; na liście tylko
+    # to, co się zmienia, a zmieniona pozycja ma '*' i "[zmiana]". Pod kreską tylko zapis.
+    # Kopia teraz = F7 na F3; ręczna edycja i zapis jako szablon = 'c' i 's' w oknie relacji.
+    CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
+    er_row() {   # <tag> <nazwa> <wartość> <zmieniona 0/1>
+        CARD_TAGS+=("$1"); CARD_VALUES+=("$3"); CARD_FIXED+=(0)
+        if [ "$4" -eq 1 ]; then CARD_NAMES+=("* $2"); else CARD_NAMES+=("  $2"); fi
+    }
+    if [ "$PEER" != - ]; then er_row adres "Źródło" "$_ep${P_HOST:+ -> $P_HOST [zmiana]}" "$([ -n "$P_HOST" ] && echo 1 || echo 0)"; fi
+    er_row dane "Datasety" "$_ds$_dsp" "$([ -n "$_dsp" ] && echo 1 || echo 0)"
+    er_row harmon "Harmonogram" "$_sz" "$([ "${#P_EDIT[@]}" -gt 0 ] || [ "${#P_RARGS[@]}" -gt 0 ] && echo 1 || echo 0)"
     case "$_rodzaj" in backup|"kopia lokalna")
-        CARD_TAGS+=(cel); CARD_NAMES+=("Cel"); CARD_VALUES+=("$TGT"); CARD_FIXED+=(1) ;; esac
-    CARD_TAGS+=(harmon); CARD_NAMES+=("Harmonogram"); CARD_VALUES+=("$_sz"); CARD_FIXED+=(0)
-    case "$_rodzaj" in backup|"kopia lokalna")
-        CARD_TAGS+=(srcret); CARD_NAMES+=("Retencja źródła"); CARD_VALUES+=("$_sr"); CARD_FIXED+=(0) ;; esac
+        er_row srcret "Retencja źródła" "$_sr" "$([ "${#P_SARGS[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
     case "$_rodzaj" in "migawki zdalne"|"migawki lokalne") ;; *)
-        CARD_TAGS+=(silnik); CARD_NAMES+=("Silnik"); CARD_VALUES+=("$_en"); CARD_FIXED+=(0) ;; esac
-    CARD_TAGS+=(nazwa konto extra); CARD_NAMES+=("Nazwa" "Konto" "Dodatkowe")
-    CARD_VALUES+=("$NAME" "$([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")" "pomijane prefiksy, prawa na źródle -- jak przy zakładaniu")
-    CARD_FIXED+=(1 1 1)
-    CARD_ACT_TAGS=(wykonaj teraz config zapisz)
-    CARD_ACT_LABELS=("Zapisz zmiany ($np) -- plan, WYKONAJ" "Kopia teraz -- wszystkie datasety poza harmonogramem (F7; przed przeniesieniem kolektora)" "Ręczna edycja konfigu (jak crontab -e) -- od razu, osobno" "Zapisz ustawienia relacji jako szablon (F5)")
-    card_menu "Relacja $NAME" "Relacja $NAME ze źródła ${SRCHOST}. Co zmienić?\nKażda pozycja zmienia jedną rzecz i wraca tutaj -- zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
+        er_row silnik "Silnik" "$_en" "$([ "${#P_TRANSFER[@]}" -gt 0 ] && echo 1 || echo 0)" ;; esac
+    CARD_ACT_TAGS=(wykonaj)
+    if [ "$np" -gt 0 ]; then CARD_ACT_LABELS=("ZAPISZ ZMIANY ($np) -- najpierw plan do potwierdzenia")
+    else CARD_ACT_LABELS=("Zapisz zmiany (brak zmian)"); fi
+    _hdr="$_rodzaj${SRCHOST:+ z $SRCHOST}   nazwa $NAME   konto $([ "$ACCT_U" = - ] && echo root || echo "$ACCT_U")"
+    case "$_rodzaj" in backup|"kopia lokalna") _hdr="$_hdr   cel $TGT" ;; esac
+    if [ -n "$FORCE_ACTION" ]; then
+        WT_OUT="$FORCE_ACTION"; FORCE_ACTION=""
+    else
+    card_menu "Zmiana relacji $NAME" "$_hdr\nCo zmienić? Tego wyżej się nie zmienia (inaczej: nowa relacja). Zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
            if [ "$np" -gt 0 ]; then
                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
                [ $? -eq 1 ] && continue
            fi
            clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+    fi
     ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
     case "$ACTION" in
         __sep__) LAST_ACTION=wykonaj; continue ;;
-        rodzaj|cel|nazwa|konto|extra)
-            wt --title "$(case "$ACTION" in rodzaj) echo Rodzaj ;; cel) echo Cel ;; nazwa) echo Nazwa ;; konto) echo Konto ;; *) echo Dodatkowe ;; esac) -- stałe" \
-               --msgbox "To jest wpisane w kopie, cron i rekord relacji $NAME.\nInna wartość = nowa relacja: F9 Eksport, Del, Ins z nową wartością\n(kopie na tym hoście zostają)." 10 "$W"
-            continue ;;
         harmon) ACTION=szablon ;;
-        teraz)
-            # U36 (właściciel 2026-10-20: "to w sumie F7 na całej relacji"): ten sam
-            # run-relation co F7 na F3 -- najdrobniejsze zadanie każdego datasetu, teraz.
-            # Czekające zmiany najpierw: kopia idzie po zainstalowanym cronie.
-            if [ "$np" -gt 0 ]; then
-                wt --title "Kopia teraz" --msgbox "Na liście czeka zmian: $np. Kopia idzie wg zainstalowanego crona -- najpierw Zapisz zmiany albo je porzuć." 9 "$W"
-                continue
-            fi
-            clear 2>/dev/null
-            echo "\$ $ZB run-relation $NAME"; echo
-            "$ZB" run-relation "$NAME"; RC=$?
-            echo; echo "=== Kopia teraz zakończona (rc=$RC). Enter = dalej"
-            [ -t 0 ] && read -r _
-            exit "$RC" ;;
         srcret)
             if [ "${#P_EDIT[@]}" -gt 0 ]; then
                 wt --title "Retencja źródła" --msgbox "Nowy szablon czeka na zapis -- liczby źródła ustawiasz w oknie zaraz po wyborze\nszablonu (Harmonogram). Najpierw zapisz zmiany, potem wróć tutaj." 9 "$W"

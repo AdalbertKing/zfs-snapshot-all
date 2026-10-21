@@ -1152,9 +1152,17 @@ if grep -Eq "zfs-backup.sh'? edit-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
+# U65: 's' i 'c' w oknie relacji -- zapis jako szablon i reczna edycja WPROST (EDIT_DO), bez karty zmian.
+A="$(act down,enter,s)"; XS="$(cat "$XL")"
+A="$(act down,enter,c)"; XC="$(cat "$XL")"
+if printf '%s' "$XS" | grep -Eq "^EDIT_DO=zapisz .*zfs-backup.sh'? edit-relation lab-ct201 --ask\$"    && printf '%s' "$XC" | grep -Eq "^EDIT_DO=config .*zfs-backup.sh'? edit-relation lab-ct201 --ask\$"; then
+    ok "akcje: 's'/'c' w oknie relacji -> edit-relation --ask z EDIT_DO=zapisz/config (U65)"
+else
+    bad "akcje: s/c w oknie relacji" "$XS" "$XC"
+fi
 A="$(act down,enter)"
-# Odzysk przeszedł na F11 (2026-10-18): w stopce tylko 'e zmień'.
-if has "$A" 'e zmień   Esc zamyka'; then
+# Odzysk przeszedł na F11 (2026-10-18); U65: w stopce 'e zmień', 's' i 'c'.
+if has "$A" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka'; then
     ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień'), bez 'p przywróć'"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
@@ -1351,7 +1359,7 @@ if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct
 else
     bad "okno: Esc" "$WE"
 fi
-if hasE "$(screen relacje down,enter)" 'Esc zamyka   strzałki/PgUp/PgDn przewijają   [0-9]+-[0-9]+ z [0-9]+'; then
+if hasE "$(screen relacje down,enter)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
     ok "okno: stopka mowi, jak wyjsc i ile jest do przewiniecia"
 else
     bad "okno: stopka" "$W"
@@ -1605,7 +1613,7 @@ else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
 SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
-if has "$SOE" 'e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
+if has "$SOE" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
     ok "relacje: okno relacji snaponly -- 'e zmień' jak w kazdej relacji, bez 'p przywróć' (nie ma kopii)"
 else
     bad "relacje: stopka okna snaponly" "$SOE"
@@ -4035,9 +4043,9 @@ EROUT=$(er_run "0${T}adres
 0${T}
 "); ERRC=$?
 ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
-ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 3p)
+ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
-   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'Zapisz zmiany (2)' \
+   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
    && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +\[zmiana\]'; then
     ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
 else
@@ -4074,7 +4082,7 @@ EROUT=$(er_run "0${T}adres
 0${T}
 "); ERRC=$?
 ERA="$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | head -1)"
-ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | head -1)"
+ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
    && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
    && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' && has "$ERA" 'po przeniesieniu kolektora' \
@@ -4096,7 +4104,7 @@ EROUT=$(er_run "0${T}adres
 "); ERRC=$?
 if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Porzucić zmiany?' "$ER/wt.log")" -eq 2 ] \
    && grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | sed -n 2p | grep -qF '~ 10.99.0.9 ~' \
-   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 2p | grep -qE 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]'; then
+   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p | grep -qE 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]'; then
     ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
@@ -4112,7 +4120,7 @@ EROUT=$(ER_PROBE=false er_run "0${T}adres
 0${T}
 "); ERRC=$?
 if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'nic nie odpowiada' "$ER/wt.log" && grep -qF 'NIE został zmieniony' "$ER/wt.log" \
-   && ! grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | grep -qF '192.168.28.250 [zmiana]'; then
+   && ! grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | grep -qF '192.168.28.250 [zmiana]'; then
     ok "edit-relation: E-2 -- adres bez odpowiedzi: komunikat od razu, nie ma go na liscie zmian, zadnego activate"
 else
     bad "edit-relation: E-2 adres bez odpowiedzi" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -F 'odpowiada' "$ER/wt.log" | cut -c1-200)"
@@ -4155,26 +4163,38 @@ fi
 # Relacja lokalna (bez peera): na karcie NIE ma wiersza "Źródło" (tag adres).
 EROUT=$(ER_PEER= er_run "1${T}
 "); ERRC=$?
-if grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Ręczna edycja konfigu' \
+if grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'nazwa r1   konto root' \
    && ! grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Źródło' \
    && ! grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF ' ~ adres ~ '; then
     ok "edit-relation: relacja lokalna -- karta bez wiersza Źródło (adres)"
 else
     bad "edit-relation: relacja lokalna bez Adres hosta" "$(grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | cut -c1-400)"
 fi
-# U25: wiersze STALE karty (rodzaj, cel, nazwa, konto, dodatkowe) maja dopisek "(stałe)"; Enter na
-# nich otwiera msgbox "<Pole> -- stałe" (nowa relacja), nic nie zmienia i wraca na karte.
-EROUT=$(er_run "0${T}cel
-0${T}
-1${T}
+# U65 (makieta 2026-10-21): to, czego sie nie zmienia (rodzaj, nazwa, konto, cel), stoi w NAGLOWKU
+# karty, nie na liscie; na liscie tylko zmienialne, pod kreska tylko zapis (bez Kopii teraz,
+# recznej edycji i szablonu -- te sa w oknie relacji na F3: F7, 'c', 's').
+EROUT=$(er_run "1${T}
 "); ERRC=$?
-ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | head -1)"
-ERMB="$(grep -F 'Cel -- stałe' "$ER/wt.log" | grep -F -e '--msgbox' | head -1)"
-if [ "$ERRC" -eq 1 ] && hasE "$ERC1" 'Rodzaj +backup +\(stałe\)' && hasE "$ERC1" 'Nazwa +r1 +\(stałe\)' && hasE "$ERC1" 'Konto +root +\(stałe\)' \
-   && has "$ERMB" 'nowa relacja' && ! grep -qE '^(add-source|remove-source|set-tiers|edit-relation|activate|set-transfer|save-profile|delete-profile)' "$ER/zb.log"; then
-    ok "edit-relation: karta -- Rodzaj/Nazwa/Konto z dopiskiem (stałe); Enter na Cel = msgbox 'Cel -- stałe' (nowa relacja), zaden czasownik zmieniajacy nie wolany"
+ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z 192.168.28.99   nazwa r1   konto root   cel ' \
+   && ! has "$ERC1" ' ~ rodzaj ~ ' && ! has "$ERC1" ' ~ cel ~ ' && ! has "$ERC1" ' ~ nazwa ~ ' && ! has "$ERC1" ' ~ konto ~ ' \
+   && ! has "$ERC1" ' ~ teraz ~ ' && ! has "$ERC1" ' ~ config ~ ' && ! has "$ERC1" ' ~ zapisz ~ ' \
+   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'; then
+    ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne, pod kreska tylko Zapisz zmiany"
 else
-    bad "edit-relation: karta, wiersze stale" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-500)" "$(printf '%s' "$ERMB" | cut -c1-300)" "$(cat "$ER/zb.log")"
+    bad "edit-relation: karta U65" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-700)"
+fi
+# Zmieniona pozycja ma '*' (i [zmiana]); niezmieniona -- dwie spacje.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+1${T}
+0${T}
+"); ERRC=$?
+ERC2="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)"
+if has "$ERC2" ' ~ adres ~ * Źródło' && has "$ERC2" ' ~ dane ~   Datasety' && has "$ERC2" 'ZAPISZ ZMIANY (1)'; then
+    ok "edit-relation: karta U65 -- zmieniona pozycja z gwiazdka, licznik w ZAPISZ ZMIANY (1)"
+else
+    bad "edit-relation: gwiazdka przy zmianie" "rc=$ERRC" "$(printf '%s' "$ERC2" | cut -c1-600)"
 fi
 # U25: "Harmonogram" (tag harmon) otwiera liste szablonow, a jej PIERWSZA pozycja to __manual__ (Ręcznie…).
 EROUT=$(er_run "0${T}harmon
@@ -4186,24 +4206,12 @@ if hasE "$ERLST" '--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ __manual__ ~'; the
 else
     bad "edit-relation: karta, lista szablonow bez __manual__ na gorze" "rc=$ERRC" "$(printf '%s' "$ERLST" | cut -c1-500)"
 fi
-# U36 (wlasciciel 2026-10-20: "to w sumie F7 na calej relacji"): akcja karty "Kopia teraz"
-# = run-relation (jak F7 na F3); z czekajacymi zmianami najpierw odmawia (kopia idzie po
-# zainstalowanym cronie).
-EROUT=$(er_run "0${T}teraz
-"); ERRC=$?
-ERT1="$(cat "$ER/zb.log")"
-EROUT=$(er_run "0${T}adres
-0${T}10.99.0.9
-0${T}teraz
-0${T}
-1${T}
-0${T}
-"); ERT2="$(cat "$ER/zb.log")"; ERW2="$(cat "$ER/wt.log")"
-if printf '%s\n' "$ERT1" | grep -qx 'run-relation r1' && ! printf '%s\n' "$ERT2" | grep -q '^run-relation' \
-   && has "$ERW2" 'Kopia teraz' && has "$ERW2" 'najpierw Zapisz zmiany'; then
-    ok "edit-relation: karta 'Kopia teraz' = run-relation (jak F7); z czekajacymi zmianami najpierw odmawia"
+# U65: 'c' w oknie relacji (EDIT_DO=config) = od razu edit-config, bez karty zmian.
+EROUT=$(EDIT_DO=config er_run ""); ERRC=$?
+if grep -qx 'edit-config r1' "$ER/zb.log" && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then
+    ok "edit-relation: EDIT_DO=config -- od razu edit-config, karta zmian sie nie pokazuje (U65, 'c' na F3)"
 else
-    bad "edit-relation: karta Kopia teraz (U36)" "bez zmian: $ERT1" "ze zmiana: $ERT2"
+    bad "edit-relation: EDIT_DO=config" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-200)"
 fi
 # U38 (wlasciciel 2026-10-20, "cos w stylu mc, z widokiem migawek"): okno migawek pary.
 # Ksztalt danych jak z prawdziwego pair-snapshots na pve10 (ab, hdd/data): wyrownanie po GUID,
@@ -4244,7 +4252,7 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
    && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --yes' "$ER/zb.log" \
    && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log" \
    && [ "$(cat "$ER/grid.n")" = 1 ] \
-   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qE 'Datasety +1' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qE 'Datasety +1'; then
     ok "edit-relation: Retencja zrodla (srcret) -- szczeble z configu (show-tiers), jedna tabela (zrodlo), jeden set-tiers --plan, WYKONAJ = --yes; bez ukrytego szablonu"
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "grid.n=$(cat "$ER/grid.n" 2>/dev/null)" "$(tail -3 "$ER/err")"
@@ -4289,10 +4297,10 @@ EROUT=$(er_run "0${T}srcret
 1${T}
 0${T}
 " "right,bs,bs,1,2,enter"); ERRC=$?
-ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 2p)
+ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)
 if [ "$ERRC" -eq 1 ] && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" \
    && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
-   && hasE "$ERT" 'Retencja źródła *\[zmiana\]' && has "$ERT" 'Zapisz zmiany (1)'; then
+   && hasE "$ERT" 'Retencja źródła *\[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
     ok "edit-relation: zmiana retencji zrodla czeka na liscie ([zmiana], Zapisz zmiany (1)); Wstecz z planu i Porzuc -- nic nie zainstalowane"
 else
     bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"
@@ -4344,13 +4352,13 @@ if has "$ERW" 'Uwaga: szablon nadpisze liczby w źródle' && has "$ERW" 'dobowe 
 else
     bad "edit-relation: X24 ostrzezenie" "rc=$ERRC" "$(grep -F 'nadpisze' "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
-EROUT=$(er_run "0${T}zapisz
-0${T}r1-szablon
+# U65: 's' w oknie relacji (EDIT_DO=zapisz) = od razu "Zapisz jako szablon"; po nim koniec, bez karty.
+EROUT=$(EDIT_DO=zapisz er_run "0${T}r1-szablon
 0${T}
-1${T}
 "); ERRC=$?
-if grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia relacji r1$' "$ER/zb.log" && ! grep -q -- '--hidden' "$ER/zb.log"; then
-    ok "edit-relation: Zapisz ustawienia relacji jako szablon -- zwykly szablon (bez --hidden), widoczny na F5"
+if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia relacji r1$' "$ER/zb.log" && ! grep -q -- '--hidden' "$ER/zb.log" \
+   && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then
+    ok "edit-relation: EDIT_DO=zapisz -- zwykly szablon (bez --hidden), widoczny na F5; karta zmian sie nie pokazuje (U65, 's' na F3)"
 else
     bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
 fi
