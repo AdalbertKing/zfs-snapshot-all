@@ -2,8 +2,10 @@
 # growth-guard.sh -- STRAŻNIK PODEJRZANEGO PRZYROSTU (U50, właściciel 2026-10-21; ustalenia
 # 2026-10-15: "ransomware szyfruje, my widzimy po kaskadowym przyroście", "ostrożnie").
 #
-# TYLKO ALARM: nic nie kasuje, nic nie wstrzymuje. Dla każdego naszego datasetu porównuje
-# NAJNOWSZY przyrost (między dwiema ostatnimi migawkami) z normą tego datasetu:
+# TYLKO ALARM: nic nie kasuje, nic nie wstrzymuje. Dla każdego naszego datasetu ocenia KAŻDY
+# przyrost (para kolejnych migawek, wszystkie rodziny razem), którego jeszcze nie ocenił --
+# w godzinę mogą powstać dwie migawki (godzinowa i dobowa), na kolektor przychodzą paczką --
+# względem normy tego datasetu sprzed tej pary:
 #   L = `zfs send -nP -i @a ds@b`  (rozmiar logiczny przyrostu, z metadanych),
 #   C = `zfs send -nPc -i @a ds@b` (te same bloki tak, jak leżą na dysku -- skompresowane);
 #   L/C = kompresowalność samego przyrostu (zmierzone na pve10: tekst 1,22, dane losowe 1,00).
@@ -15,7 +17,8 @@
 # (z -R także dzieci) -- jak w capacity-guard.sh. Na źródle i na kolektorze. Pomijane z
 # powodem w --plan: compression=off (każdy przyrost wygląda na niekompresowalny), za mało
 # historii. Dysk VM szyfrowany w gościu ma zawsze ~1,00 -- tam zostaje sam skok przyrostu.
-# Jeden alarm na migawkę (stan w $STATE); oszacowania zapamiętane po GUID-ach pary.
+# Ocenione pary w $STATE/seen (jeden alarm na parę); pierwszy bieg na datasecie tylko
+# zapamiętuje historię i ocenia najnowszą parę. Oszacowania zapamiętane po GUID-ach pary.
 # Każdy błąd odczytu (crontaby, zfs list, zfs send -nP, zła liczba) = kod 1 i alert
 # "strażnik nie działa" -- nigdy ciche "w porządku".
 #
@@ -90,7 +93,7 @@ esac
 WORK="$(mktemp -d 2>/dev/null)" || start_fail "nie da się utworzyć katalogu tymczasowego (TMPDIR=${TMPDIR:-/tmp})"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$STATE" 2>/dev/null
-touch "$STATE/cache" "$STATE/alerted" 2>/dev/null || { [ "$PLAN" -eq 1 ] || { say "nie da się pisać do $STATE"; exit 1; }; }
+touch "$STATE/cache" "$STATE/seen" 2>/dev/null || { [ "$PLAN" -eq 1 ] || { say "nie da się pisać do $STATE"; exit 1; }; }
 
 errs=""
 err() { errs="$errs
@@ -173,8 +176,10 @@ while IFS=$'\t' read -r ds comp; do
     awk -F'\t' -v lim=$((newest - win)) '$3 + 0 >= lim' "$WORK/s" > "$WORK/w"
     np=$(( $(grep -c . "$WORK/w") - 1 ))
     if [ "$np" -lt 4 ]; then [ "$PLAN" -eq 1 ] && echo "$ds: brak normy -- $np przyrost(y) w ${DAYS} dniach, potrzeba 4 (3 historii + najnowszy)"; continue; fi
-    : > "$WORK/rates"; failed=0; last=""
-    prev=""
+    # Wszystkie pary kolejnych migawek w oknie (wszystkie rodziny razem: godzinowe i dobowe
+    # dają pary o różnych odstępach -- stąd tempo, nie sam rozmiar). Plik: koniec, guid
+    # końca, L, C, tempo.
+    : > "$WORK/p"; failed=0; prev=""
     while IFS=$'\t' read -r n g c; do
         if [ -n "$prev" ]; then
             IFS=$'\t' read -r pn pg pc <<< "$prev"
@@ -187,34 +192,48 @@ while IFS=$'\t' read -r ds comp; do
                 [ "$PLAN" -eq 1 ] || printf '%s\t%s\t%s\n' "$key" "$L" "$C" >> "$STATE/cache"
             fi
             dt=$((c - pc)); [ "$dt" -ge 1 ] || dt=1
-            last="$n	$L	$C	$((L / dt))"
-            printf '%s\n' "$((L / dt))" >> "$WORK/rates"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$g" "$L" "$C" "$((L / dt))" >> "$WORK/p"
         fi
         prev="$n	$g	$c"
     done < "$WORK/w"
     [ "$failed" -eq 0 ] || continue
-    IFS=$'\t' read -r bn L C rate <<< "$last"
-    med="$(head -n -1 "$WORK/rates" | sort -n | awk '{ v[NR] = $1 } END { if (NR == 0) print 0; else if (NR % 2) print v[(NR + 1) / 2]; else print int((v[NR / 2] + v[NR / 2 + 1]) / 2) }')"
-    if [ "$C" -gt 0 ]; then rpct=$((L * 100 / C)); else rpct=999; fi
-    mib=$((L / 1048576))
-    ratio="$(awk -v p="$rpct" 'BEGIN { printf "%.2f", p / 100 }')"
-    if [ "$med" -gt 0 ]; then times="$(awk -v r="$rate" -v m="$med" 'BEGIN { printf "%.1f", r / m }')"; else times="?"; fi
-    hot=0
-    if [ "$L" -ge $((MINMIB * 1048576)) ] && [ "$rpct" -le "$MAXR" ] && { [ "$med" -eq 0 ] && [ "$rate" -gt 0 ] || [ "$rate" -ge $((FACTOR * med)) ]; }; then hot=1; fi
-    line="$ds: najnowszy przyrost ${mib} MiB (do $bn), tempo ${times}x normy, kompresja przyrostu ${ratio}"
-    if [ "$hot" -eq 1 ]; then
-        if [ "$PLAN" -eq 1 ]; then echo "$line -- ALARM"
-        elif ! grep -qxF "$bn" "$STATE/alerted" 2>/dev/null; then
-            alarms="$alarms
-  $line"
-            printf '%s\n' "$bn" >> "$STATE/alerted"
+    # KAŻDA para, której strażnik jeszcze nie ocenił (nie tylko najnowsza): w godzinę mogą
+    # powstać dwie migawki (godzinowa i dobowa), a na kolektor przychodzą paczką -- skok w
+    # parze, która przestała być najnowsza, przepadłby. Pierwszy bieg na datasecie tylko
+    # zapamiętuje historię (bez alarmów za skoki sprzed włączenia), ocenia najnowszą.
+    init=1; grep -qxF "init	$ds" "$STATE/seen" 2>/dev/null || init=0
+    npairs=$(grep -c . "$WORK/p")
+    i=0; shown=0
+    while IFS=$'\t' read -r bn bg L C rate; do
+        i=$((i + 1))
+        [ "$i" -ge 4 ] || continue                                   # potrzeba 3 par historii
+        if [ "$init" -eq 0 ] && [ "$i" -lt "$npairs" ]; then
+            [ "$PLAN" -eq 1 ] || printf '%s\n' "$bg" >> "$STATE/seen"; continue
         fi
-    else
-        [ "$PLAN" -eq 1 ] && echo "$line -- w porządku"
-    fi
+        grep -qxF "$bg" "$STATE/seen" 2>/dev/null && continue
+        med="$(head -n $((i - 1)) "$WORK/p" | cut -f5 | sort -n | awk '{ v[NR] = $1 } END { if (NR % 2) print v[(NR + 1) / 2]; else print int((v[NR / 2] + v[NR / 2 + 1]) / 2) }')"
+        if [ "$C" -gt 0 ]; then rpct=$((L * 100 / C)); else rpct=999; fi
+        mib=$((L / 1048576))
+        ratio="$(awk -v p="$rpct" 'BEGIN { printf "%.2f", p / 100 }')"
+        if [ "$med" -gt 0 ]; then times="$(awk -v r="$rate" -v m="$med" 'BEGIN { printf "%.1f", r / m }')"; else times="?"; fi
+        hot=0
+        if [ "$L" -ge $((MINMIB * 1048576)) ] && [ "$rpct" -le "$MAXR" ] && { [ "$med" -eq 0 ] && [ "$rate" -gt 0 ] || [ "$rate" -ge $((FACTOR * med)) ]; }; then hot=1; fi
+        line="$ds: przyrost ${mib} MiB (do $bn), tempo ${times}x normy, kompresja przyrostu ${ratio}"
+        shown=1
+        if [ "$hot" -eq 1 ]; then
+            if [ "$PLAN" -eq 1 ]; then echo "$line -- ALARM"; else alarms="$alarms
+  $line"; fi
+        else
+            [ "$PLAN" -eq 1 ] && echo "$line -- w porządku"
+        fi
+        [ "$PLAN" -eq 1 ] || printf '%s\n' "$bg" >> "$STATE/seen"
+    done < "$WORK/p"
+    [ "$PLAN" -eq 1 ] || [ "$init" -eq 1 ] || printf 'init\t%s\n' "$ds" >> "$STATE/seen"
+    [ "$PLAN" -eq 1 ] && [ "$shown" -eq 0 ] && echo "$ds: brak nowych przyrostów od ostatniego sprawdzenia"
 done < "$WORK/ds"
 
 [ "$PLAN" -eq 0 ] && tail -n 5000 "$STATE/cache" > "$WORK/c" 2>/dev/null && cat "$WORK/c" > "$STATE/cache"
+[ "$PLAN" -eq 0 ] && { grep "^init" "$STATE/seen"; grep -v "^init" "$STATE/seen" | tail -n 20000; } > "$WORK/sn" 2>/dev/null && cat "$WORK/sn" > "$STATE/seen"
 rc=0
 if [ -n "$alarms" ]; then
     rc=1

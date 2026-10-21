@@ -2101,16 +2101,16 @@ if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/calls" ] && [ ! -s "$gw_dir/mail" ]; th
 else
     bad "growth-guard: off" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/out" 2>/dev/null)"
 fi
-gw_data 110 55
+gw_data 110 110
 gw_run on; gw_rc=$?
 if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/mail" ] && grep -q '^zfs send' "$gw_dir/calls"; then
-    ok "growth-guard: zwykly przyrost (110 MiB/h przy normie 100) -- bez alarmu"
+    ok "growth-guard: zwykly przyrost (110 MiB/h przy normie 100, niekompresowalny) -- bez alarmu (rozstrzyga tempo)"
 else
     bad "growth-guard: zwykly przyrost" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
 gw_data 2000 2000
 gw_run on; gw_rc=$?
-if [ "$gw_rc" -eq 1 ] && grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" && grep -q 'tank/d: najnowszy przyrost 2000 MiB (do tank/d@s5), tempo 20.0x normy, kompresja przyrostu 1.00' "$gw_dir/mail" \
+if [ "$gw_rc" -eq 1 ] && grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" && grep -q 'tank/d: przyrost 2000 MiB (do tank/d@s5), tempo 20.0x normy, kompresja przyrostu 1.00' "$gw_dir/mail" \
    && [ ! -s "$gw_dir/destroyed" ]; then
     ok "growth-guard: skok x20, niekompresowalny, ponad min_mib -- ALARM z datasetem, rozmiarem, tempem, kompresja; nic nie usuniete"
 else
@@ -2184,6 +2184,51 @@ else bad "growth-guard: conf on + F10 off" "$(cat "$gw_dir/calls")"; fi
 ( export GW_ENV_KEEP=1 ZFS_GROWTH_ALERT=on; gw_run off ); gw_rc=$?
 if grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" 2>/dev/null; then ok "growth-guard: env on wygrywa z F10 off"
 else bad "growth-guard: env on" "$(cat "$gw_dir/out" 2>/dev/null)"; fi
+# Godzinowe i dobowe razem: dobowa 600 s po kazdej godzinowej -- pary 600 s i 3000 s,
+# przyrost proporcjonalny do czasu (100 MiB/h) i NIEKOMPRESOWALNY (wynik zalezy tylko od
+# tempa). Tempo rowne mimo roznych odstepow: bez alarmu.
+gw_mixed() {   # <L ostatniej pary MiB> <C ostatniej pary MiB> -- ostatnia para to krotka (dobowa)
+    : > "$gw_dir/snaps"; : > "$gw_dir/sizes"
+    local t=0 k=0 prevn="" n Lm Cm i
+    for i in 0 1 2 3 4 5; do
+        for n in "h$i:$((i * 3600))" "d$i:$((i * 3600 + 600))"; do
+            nm="${n%%:*}"; tt="${n#*:}"; k=$((k + 1))
+            printf 'tank/d@%s\t%s\t%s\n' "$nm" "$((8000 + k))" "$tt" >> "$gw_dir/snaps"
+            if [ -n "$prevn" ]; then
+                Lm=$(( (tt - t) * 100 / 3600 )); Cm=$Lm
+                [ "$nm" = d5 ] && { Lm=$1; Cm=$2; }
+                printf 'tank/d@%s tank/d@%s %s %s\n' "$prevn" "$nm" "$((Lm * GW_M))" "$((Cm * GW_M))" >> "$gw_dir/sizes"
+            fi
+            prevn="$nm"; t="$tt"
+        done
+    done
+}
+gw_mixed 16 16
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 0 ] && [ ! -s "$gw_dir/mail" ]; then
+    ok "growth-guard: godzinowe + dobowe (pary 600 s i 3000 s, niekompresowalne, ten sam przyrost na godzine) -- bez alarmu"
+else
+    bad "growth-guard: godzinowe + dobowe" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+gw_mixed 1500 1500
+gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'tank/d: przyrost 1500 MiB (do tank/d@d5)' "$gw_dir/mail" && grep -q 'kompresja przyrostu 1.00' "$gw_dir/mail"; then
+    ok "growth-guard: skok w krotkiej parze (godzinowa -> dobowa, 600 s) -- ALARM"
+else
+    bad "growth-guard: skok w parze dobowej" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+# Skok w parze, ktora przestala byc najnowsza: pierwszy bieg zapamietuje 5 par, potem
+# przybywaja dwie migawki -- s6 (skok) i s7 (zwykla). Alarm musi byc za s6.
+gw_data 100 50
+gw_run on; gw_rc=$?
+printf 'tank/d@s6\t7006\t21600\ntank/d@s7\t7007\t25200\n' >> "$gw_dir/snaps"
+printf 'tank/d@s5 tank/d@s6 %s %s\ntank/d@s6 tank/d@s7 %s %s\n' $((2000 * GW_M)) $((2000 * GW_M)) $((100 * GW_M)) $((50 * GW_M)) >> "$gw_dir/sizes"
+GW_KEEP_STATE=1 gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'tank/d: przyrost 2000 MiB (do tank/d@s6)' "$gw_dir/mail" && ! grep -q 'do tank/d@s7' "$gw_dir/mail"; then
+    ok "growth-guard: dwie nowe migawki, skok w nie-najnowszej parze (s5->s6) -- ALARM za s6, s7 w porzadku"
+else
+    bad "growth-guard: skok w nie-najnowszej parze" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
 gw_data 2000 2000
 GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?
 if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -q 'strażnik przyrostu NIE działa' "$gw_dir/mail" && grep -q 'nie-ma/g.lock' "$gw_dir/mail"; then

@@ -90,6 +90,22 @@
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
+- **FINISZ U50: strażnik podejrzanego przyrostu (ransomware), tylko alarm (2026-10-21; `finisz/notatki-2`).**
+  Właściciel: „Ochrona przed ransomware. Monitoring przyrostu niekompresowalnych danych pomiędzy migawkami”,
+  „zrób alarm”. `hostscripts/growth-guard.sh`, instalowany przez deploy do `/root/scripts`, cron co godzinę w bloku
+  hosta; **domyślnie wyłączony** (F10, sekcja „Przyrost (ransomware)”: `[growth] alert = on`). Dla każdego naszego
+  datasetu (lokalne linie retencji w zarządzanych blokach, jak U35) KAŻDY nowy przyrost -- para kolejnych migawek,
+  wszystkie rodziny razem (godzinowa i dobowa w tej samej godzinie, paczka na kolektorze): `zfs send -nP` (logiczny)
+  i `-nPc` (bloki jak na dysku) -- ich iloraz to kompresowalność przyrostu. Alarm, gdy tempo >= `factor` (5) x
+  mediana tempa par sprzed niej z `days` (7) dni (tempo = przyrost / czas między migawkami, więc pary 10 min i 50 min
+  liczą się równo), przyrost >= `min_mib` (1024) i kompresja <= `max_ratio_pct` (110 %). Konwersja baz
+  (duży, ale kompresowalny przyrost) nie alarmuje. Nic nie kasuje ani nie wstrzymuje; jeden mail na migawkę;
+  `compression=off` i za mało historii -- pominięte z powodem w `--plan`. Błędy odczytu, złe ustawienia, blokada i
+  `mktemp` -- kod 1 i alert, jak w U35 po REV-155/157. Ograniczenia: dysk VM szyfrowany w gościu i dane już
+  skompresowane przez aplikację wyglądają jak szyfrogram (zostaje sam skok przyrostu); wolne szyfrowanie pod
+  normą nie da skoku. Plan, testy i pomiar: `docs/project/PLAN-U50-STRAZNIK-PRZYROSTU.md` (na żywo pve10: losowe
+  300 MiB -- alarm, kompresowalne 305 MiB -- bez alarmu).
+
 - **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`, fail-closed po GitHub #655:
   `finisz/U35-fail-closed`).** Wzór a-tassa (przy 89 % cron kasuje najstarsze migawki).
   `hostscripts/capacity-guard.sh`, instalowany przez deploy do `/root/scripts`, cron `*/15` w bloku hosta.

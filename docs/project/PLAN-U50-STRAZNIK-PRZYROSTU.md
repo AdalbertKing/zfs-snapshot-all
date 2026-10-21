@@ -65,3 +65,31 @@ instalowany przez deploy.
 | L1 | 5 migawek z małym przyrostem tekstowym, potem 300 MB losowych | alarm na ostatniej |
 | L2 | to samo, ale 300 MB kompresowalnych (tekst) | brak alarmu |
 | L3 | instalacja przez deploy: skrypt w /root/scripts, linia crona w bloku hosta | `--check-only` widzi linię |
+
+## Wyniki (2026-10-21)
+
+Suita `test/alertmail`: 22 przypadki strażnika (T1-T12 i start jak w REV-20261021-157: blokada nie do otwarcia,
+nieudane `mktemp`) -- zielone; z atrapą skryptu (nic nie robi) 15 z pierwszych 20 czerwonych, 5 zielonych to
+przypadki „bez alarmu”. Na żywo pve10 (pula z pliku, `lz4`, osobny katalog crontabów, kroki co 8 s):
+L1 -- 300 MiB losowych przy normie kilku MiB: tempo 26,9x, kompresja 1,00 -- ALARM, jeden mail; L2 -- 305 MiB
+danych w stylu bazy: tempo 147,8x, kompresja 7,60 -- bez alarmu. L3 (instalacja przez deploy) -- po scaleniu,
+z godzinną samoaktualizacją.
+
+Wnioski z prób: (1) `base64` z danych losowych dla `lz4` jest niekompresowalny (lz4 nie koduje entropii) --
+„kompresowalny” test musi mieć powtarzalną treść; (2) tempo liczone z czasu między migawkami -- przy migawkach
+w nierównych odstępach (kilka rodzin) to właściwa miara, w teście trzeba trzymać równe kroki; (3) dane już
+skompresowane przez aplikację (zip, zdjęcia, wideo) wyglądają jak szyfrogram -- alarm mówi o tym wprost.
+
+## Poprawka po pytaniu właściciela (2026-10-21: „To zadziała prawidłowo na godzinowych i dobowych migawkach?”)
+
+Pierwsza wersja oceniała tylko NAJNOWSZĄ parę. Godzinowa o :17 i dobowa o 01:45 dają w jednej godzinie dwie pary;
+szyfrowanie 01:20-01:40 ląduje w parze 01:17->01:45, a o 02:23 najnowsza jest już 01:45->02:17 -- skok przepadał
+(to samo na kolektorze, gdzie migawki przychodzą paczką). Teraz oceniana jest każda para, której strażnik nie
+widział, względem mediany tempa par sprzed niej; pierwszy bieg na datasecie tylko zapamiętuje historię.
+Obliczenia (norma 200 MiB/h): para 60 min = 200 MiB, 28 min = 93 MiB, 32 min = 107 MiB -- tempo równe;
+szyfrowanie 50 GiB w 30 min = 500x normy przy kompresji 1,00 -- alarm; konwersja 60 GB w 3 h = ok. 100x, kompresja ~3
+-- bez alarmu; same dobowe migawki -- alarm do doby po zdarzeniu.
+Nowe testy: godzinowe + dobowe (pary 600 s i 3000 s, niekompresowalne -- rozstrzyga tempo) bez alarmu; skok w
+krótkiej parze godzinowa->dobowa -- alarm; dwie nowe migawki, skok w nie-najnowszej -- alarm za nią (stara wersja:
+FAIL). Test na żywo z prawdziwym cronem na pve10 (pula `gwlive`, 2026-10-21/22): sprawdzenie po godzinie, po
+„szyfrowaniu” (12:07 UTC) i po dobie (dobowa 01:40 UTC, „konwersja” 05:07 UTC).
