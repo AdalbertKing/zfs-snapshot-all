@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63, E93.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63, E93, E96.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -1920,6 +1920,29 @@ passed".
 **Rule.** R4. Before any merge, print and read the conclusion counts for the
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
+
+
+### E96 — a new return code, and a claim about its other caller that was never run (2026-10-21, R1)
+
+**Genesis.** REV-20261021-164 (`--leave` failing open on zfs reads). I made
+`commit_scope_dataset_held` return 2 for an unreadable snapshot list or hold,
+handled 2 in `do_leave`, and wrote into the response and the comment that the
+other caller, `do_commit_scope`, "tests it with `elif` and so reads 2 as held --
+the conservative reading". Merged as #695. The reviewer rejected it: in bash
+`elif cmd` with status 2 is false, so the dataset went to `revoke_clean` and was
+unallowed while its hold could not be read -- the exact fail-open the REV was
+about, introduced one function over.
+
+**Cause.** I changed a function's contract (0/1 to 0/1/2) and reasoned about
+the caller instead of driving it. The test I added covered only the caller I
+edited. The sentence about the other caller was a guess written as a fact, and
+text-checker could not catch it because it reads the tree, not bash semantics.
+
+**Rule.** R1. When a function gains a new status, every caller gets a test that
+feeds it that status -- the guard must be watched firing at each call site, not
+inferred. A claim about how unchanged code reacts is measured before it is
+written. Fixed in R1 of the same REV: both callers handle 0/1/2 explicitly, and
+`test/joinmanifest` drives `do_commit_scope` with the shipped hold check.
 
 
 ### E95 — a full copy of the checkout into /tmp filled pve9b's root disk (2026-10-20, R3)
