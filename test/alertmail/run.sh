@@ -2049,7 +2049,7 @@ gw_run() {   # <settings alert> [args] -> rc; mail/out/calls in $gw_dir
     ( [ -n "${GW_ENV_KEEP:-}" ] || unset ZFS_GROWTH_ALERT ZFS_GROWTH_FACTOR ZFS_GROWTH_MIN_MIB ZFS_GROWTH_MAX_RATIO_PCT ZFS_GROWTH_DAYS
       PATH="$gw_dir/bin:$PATH" GW_DIR="$gw_dir" SETTINGS_FILE="$gw_dir/settings.ini" ZFS_ALERT_CONF="${GW_CONF:-/dev/null}" \
       ZFS_GUARD_CRONTABS="$gw_dir/cron" ZFS_GROWTH_STATE="$gw_dir/state" ZFS_NOTIFY_SCRIPT="$gw_dir/bin/notify" \
-      ZFS_GROWTH_LOCK="$gw_dir/lock" bash "$gw_dir/guard.sh" "$@" ) > "$gw_dir/out" 2>&1
+      ZFS_GROWTH_LOCK="${GW_LOCK:-$gw_dir/lock}" TMPDIR="${GW_TMP:-${TMPDIR:-/tmp}}" bash "$gw_dir/guard.sh" "$@" ) > "$gw_dir/out" 2>&1
 }
 gw_nosend() { ! grep -q '^zfs send' "$gw_dir/calls" 2>/dev/null; }
 
@@ -2143,6 +2143,19 @@ else bad "growth-guard: conf on + F10 off" "$(cat "$gw_dir/calls")"; fi
 ( export GW_ENV_KEEP=1 ZFS_GROWTH_ALERT=on; gw_run off ); gw_rc=$?
 if grep -q 'PODEJRZANY PRZYROST' "$gw_dir/mail" 2>/dev/null; then ok "growth-guard: env on wygrywa z F10 off"
 else bad "growth-guard: env on" "$(cat "$gw_dir/out" 2>/dev/null)"; fi
+gw_data 2000 2000
+GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -q 'strażnik przyrostu NIE działa' "$gw_dir/mail" && grep -q 'nie-ma/g.lock' "$gw_dir/mail"; then
+    ok "growth-guard: pliku blokady nie da sie otworzyc -- rc 1, zero wywolan zfs, alert ze sciezka"
+else
+    bad "growth-guard: blokada" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+GW_TMP="$gw_dir/nie-ma-tmp" gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && [ ! -s "$gw_dir/calls" ] && grep -q 'nie-ma-tmp' "$gw_dir/mail"; then
+    ok "growth-guard: mktemp zawodzi -- rc 1, zero wywolan zfs, alert z TMPDIR"
+else
+    bad "growth-guard: mktemp" "rc=$gw_rc" "$(cat "$gw_dir/calls" "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
 rm -rf "$gw_dir"
 
 echo "--------------------------------------------"

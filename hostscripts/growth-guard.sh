@@ -70,8 +70,24 @@ if [ -n "$bad" ]; then
     exit 1
 fi
 
-exec 9>"${ZFS_GROWTH_LOCK:-/run/lock/zfs-growth-guard.lock}" 2>/dev/null && flock -n 9 2>/dev/null || { [ "$PLAN" -eq 1 ] || exit 0; }
-WORK="$(mktemp -d 2>/dev/null)" || { say "brak katalogu tymczasowego"; exit 1; }
+# Start jak w capacity-guard.sh po REV-20261021-157: pliku blokady nie da się otworzyć albo
+# flock zawodzi = strażnik nie działa (kod 1, alert); blokadę trzyma inny bieg = pominięcie
+# (kod 0, bez alertu; --plan liczy dalej); nieudane mktemp = kod 1, alert.
+LOCKF="${ZFS_GROWTH_LOCK:-/run/lock/zfs-growth-guard.lock}"
+start_fail() {   # <powód>
+    say "$1 -- strażnik nie startuje"
+    alert "$HOST: strażnik przyrostu NIE działa" "Strażnik przyrostu nie wystartował: $1. Żaden dataset nie jest sprawdzany."
+    exit 1
+}
+{ exec 9>"$LOCKF"; } 2>/dev/null || start_fail "nie da się otworzyć pliku blokady $LOCKF"
+flock -n -E 75 9 2>/dev/null; lrc=$?
+case "$lrc" in
+    0) ;;
+    75) if [ "$PLAN" -eq 0 ]; then say "inny bieg strażnika trzyma blokadę -- pomijam"; exit 0; fi
+        echo "(inny bieg strażnika trwa -- plan liczony bez blokady)" ;;
+    *) start_fail "flock $LOCKF zakończył się błędem ($lrc)" ;;
+esac
+WORK="$(mktemp -d 2>/dev/null)" || start_fail "nie da się utworzyć katalogu tymczasowego (TMPDIR=${TMPDIR:-/tmp})"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$STATE" 2>/dev/null
 touch "$STATE/cache" "$STATE/alerted" 2>/dev/null || { [ "$PLAN" -eq 1 ] || { say "nie da się pisać do $STATE"; exit 1; }; }
