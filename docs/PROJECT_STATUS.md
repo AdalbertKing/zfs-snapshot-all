@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 96864be5794d4107 -->
+<!-- status-covers-digest: 64f37b65e1e0f451 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -103,8 +103,9 @@
   i oddaje tylko to, co przeszło. H (replika, cała pula `hdd` na testowy nośnik `replab`): kopia 165 MB z 5
   datasetów działa; poprawione H-1 (Wstecz do drzewa pokazywał pulę jako „część”), H-2 („kopia od razu po
   włożeniu” -- od U52 minuta), H-3 (po kreatorze F7 działał na starej liście, bo dane odświeżały się w tle --
-  czynności na wierszu czekają teraz na świeże dane), H-6 (pusta nazwa). Otwarte: H-4 (replika drzewa z
-  datasetami-kontenerami bez migawek kończy bieg rc=1 -- silnik snapget, wymaga zgody na odmrożenie).
+  po oknie KAŻDY klawisz czeka na świeże dane; drugie przejście na żywo: usunięcie i ponowne założenie `calapula`,
+  Enter, strzałka, F7 od razu -> bieg `calapula`), H-6 (pusta nazwa). H-4 (replika drzewa z datasetami-kontenerami bez migawek kończyła
+  bieg rc=1) -- naprawione w snapget v2.76.
 
 - **FINISZ U67: replika całej puli i okna odmowy z przyczyną (2026-10-21; `finisz/U67`).**
   Właściciel na pve10: replika z zaznaczoną całą pulą `hdd` padła z „gen-cron.sh could not render the proposed
