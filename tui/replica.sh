@@ -102,7 +102,9 @@ basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to p
 # Silnik (gen-cron) bierze datasety, nie korzeń puli, więc pula staje się listą datasetów
 # leżących bezpośrednio pod nią -- każdy z całym drzewem pod sobą (REC=yes). Dataset
 # pominięty w koszyku w całości odpada; pominięcia głębiej idą za swoim datasetem.
-pool_roots_to_children() {   # B_ROOT/B_EXCL -> to samo bez korzeni puli; 1 + POOL_EMPTY, gdy pula pusta
+pool_roots_to_children() {   # B_ROOT/B_EXCL -> SRC_ROOT/SRC_EXCL bez korzeni puli; 1 + POOL_EMPTY, gdy pula pusta
+    # Koszyk (B_ROOT) zostaje taki, jak go zaznaczono: Wstecz do drzewa pokazuje całą pulę
+    # zaznaczoną, nie "[-] część" (H-1, kampania na żywo 2026-10-21).
     local -a nr=() ne=()
     local i r c x e n list
     POOL_NOTE=""; POOL_EMPTY=""
@@ -120,7 +122,7 @@ pool_roots_to_children() {   # B_ROOT/B_EXCL -> to samo bez korzeni puli; 1 + PO
         [ "$n" -gt 0 ] || { POOL_EMPTY="$r"; return 1; }
         POOL_NOTE="${POOL_NOTE}Cała pula $r = $n datasetów bezpośrednio pod nią, każdy razem z tym, co pod nim:\n${list}\nDataset założony później BEZPOŚREDNIO pod pulą $r trzeba dopisać zmianą repliki\n(niżej -- pod tymi datasetami -- dojdzie sam).\n"
     done
-    B_ROOT=(${nr[@]+"${nr[@]}"}); B_EXCL=(${ne[@]+"${ne[@]}"})
+    SRC_ROOT=(${nr[@]+"${nr[@]}"}); SRC_EXCL=(${ne[@]+"${ne[@]}"})
 }
 basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x ma dzieci) -- jak w relacji
     local i x
@@ -310,7 +312,7 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
                nosnik "Nośnik:     $DST ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
                kiedy  "Kiedy:      $(sched_words "$SCHED")")
         if [ "$MEDIA" = removable ] && [ "$SCHED" != on-insert ]; then
-            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia od razu")
+            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia minutę po włożeniu")
             else items+=(onins "[ ] Po włożeniu dysku: nic, tylko wg harmonogramu"); fi
         fi
         items+=(silnik "Ustawienia silnika…" restart "Zacznij od nowa na tym dysku (pełna kopia)…"
@@ -374,7 +376,10 @@ while :; do
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
            || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
-        case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;; esac
+        case "$n" in
+            '') wt --title "Brak nazwy" --msgbox "Wpisz nazwę repliki, np. usb1." 8 "$W"; continue ;;
+            *[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;;
+        esac
         if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rep.tsv"; then
             wt --title "Nazwa zajęta" --msgbox "Replika '$n' już jest. Zmienia się ją z F6: Enter na niej, potem 'e'." 8 "$W"; continue
         fi
@@ -400,7 +405,7 @@ while :; do
         if [ -n "$POOL_NOTE" ]; then
             wt --title "Replika $NAME -- cała pula" --msgbox "$POOL_NOTE" "$(fit "$(printf '%b' "$POOL_NOTE" | grep -c '')")" "$W"
         fi
-        SRCS="$(IFS=,; printf '%s' "${B_ROOT[*]}")"; REC=yes; basket_xargs
+        SRCS="$(IFS=,; printf '%s' "${SRC_ROOT[*]}")"; REC=yes; basket_xargs
         # ZASZYFROWANE ŹRÓDŁO = WYSYŁKA ZASZYFROWANA (właściciel 2026-10-12): kopia relacji
         # pobrana "raw" leży na kolektorze BEZ klucza i zwykła kopia jej nie odczyta.
         # Tylko dla NOWEJ repliki -- w istniejącej tryb zostaje (zmiana = nowa kopia od zera).
@@ -603,7 +608,7 @@ PYEOF
             if [ "$SCHED" != on-insert ]; then
                 _dn=""; [ "$ONINS" = yes ] || _dn="--defaultno"
                 if wt --title "Replika $NAME -- także po włożeniu?" --yes-button "Tak" --no-button "Nie" $_dn \
-                   --yesno "Uruchamiać kopię także od razu po włożeniu dysku tej repliki?\n\nTak: włożony dysk -- kopia od razu, potem dalej wg harmonogramu.\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje." 11 "$W"; then ONINS=yes; else ONINS=no; fi
+                   --yesno "Uruchamiać kopię także po włożeniu dysku tej repliki?\n\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\npotem dalej wg harmonogramu.\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje." 12 "$W"; then ONINS=yes; else ONINS=no; fi
             fi
         fi
         trig_calc

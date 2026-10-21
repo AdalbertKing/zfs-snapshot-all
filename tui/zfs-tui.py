@@ -3990,6 +3990,8 @@ class UI(object):
         if not (self.message or "").endswith(self.BG_NOTE):
             self.message = (self.message or "") + self.BG_NOTE
 
+    ACTION_KEYS = ("F7", "F8", "F9", "enter", "del", "e")
+
     def bg_pending(self):
         bg = getattr(self, "_bg", None)
         return bg is not None
@@ -4710,6 +4712,15 @@ class UI(object):
         """Jeden klawisz -> nowy stan. `k` to nazwa: 'down', 'F2', 'enter', 'q', 'esc'...;
         `raw` to znak (str) dla pola tekstowego."""
         self.message = ""
+        # H-3 (kampania na żywo 2026-10-21): po oknie (kreator repliki) GUI wraca od razu ze
+        # STARYMI danymi i odświeża w tle (~5 s). F7 w tym czasie uruchomił starą zaznaczoną
+        # replikę zamiast nowej. Czynność na wierszu czeka na świeże dane: najpierw je
+        # przyjmuje, potem działa na tym, co już jest na ekranie po odświeżeniu.
+        if not self.window and k in self.ACTION_KEYS:
+            bg = getattr(self, "_bg", None)
+            if bg is not None and bg[0].is_alive():
+                bg[0].join(30)
+                self.poll_bg()
         if self.window and self.window[0] == "prompt":
             obj = self.window[1]
             if k == "esc":
