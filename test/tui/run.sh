@@ -3067,7 +3067,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_TREE="$NRTK"); NRRC=$?
-if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NROUT" "deploy.sh --commit-scope=pve10" && ! has "$NROUT" "NIE UDAŁO SIĘ" \
+# U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
+if [ "$NRRC" -eq 1 ] && grep -qF "ZATRZYMANE ZGODNIE Z WYBOREM" "$NR/wt.log" && grep -qF "deploy.sh --commit-scope=pve10" "$NR/wt.log" \
+   && ! grep -qF "NIE UDAŁO SIĘ" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
    && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
     ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
 else
@@ -4695,6 +4697,29 @@ else
 fi
 rm -rf "$RW"
 
+# ---- U66/U64 (owner 2026-10-21: "czarny ekran ponad 15 sekund"): run_progress / result_box ----
+# The command runs behind an infobox that says how long it has been running and shows the
+# log's last lines; rc comes back; stdin is /dev/null (a prompt fails instead of hanging).
+RP="$(mktemp -d)"; mkdir -p "$RP/bin"
+printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
+chmod +x "$RP/bin/wt"
+cat > "$RP/cmd" <<'EOF'
+#!/bin/bash
+echo "krok 1"; sleep 1.3; echo "!!! zrodlo odmowilo: brak miejsca"; read -r x && echo "STDIN: $x"; echo "FATAL: nic nie zmieniono"; exit 3
+EOF
+chmod +x "$RP/cmd"
+( cd "$RP" && WHIPTAIL="$RP/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; : > "$2/run.log"; rc=0
+    run_progress "Test" "$2/run.log" "$2/cmd" <<<"tak" || rc=$?; echo "RC=$rc"
+    result_box "Wynik" "$rc" "$2/run.log" "" "Nie wyszlo."' x "$REPO" "$RP" ) > "$RP/out" 2>&1
+if grep -qx 'RC=3' "$RP/out" && grep -qF 'krok 1' "$RP/run.log" && grep -qF 'FATAL: nic nie zmieniono' "$RP/run.log" \
+   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '--title ~ Test -- trwa [0-9]* s ~ --infobox ~ ' "$RP/wt.log" && grep -q '^krok 1 ~ ' "$RP/wt.log" \
+   && grep -qF 'Nie wyszlo.  (rc=3)' "$RP/wt.log" && grep -qF 'zrodlo odmowilo: brak miejsca' "$RP/wt.log" \
+   && ! grep -q 'krok 1' "$RP/out"; then
+    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log tail), rc returned, no stdin; result_box shows the reason and the log end"
+else
+    bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
+fi
+rm -rf "$RP"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the

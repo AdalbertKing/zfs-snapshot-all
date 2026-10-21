@@ -934,30 +934,35 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
         fi
         yesno_text "$TMPD/plan2.txt" "$(title 10 'Plan')" "WYKONAJ" "Wstecz" || continue
         build_argv install
-        clear 2>/dev/null
-        echo "\$ $(cmd_oneline)"; echo
-        "${ARGV[@]}" 2>&1 | tee "$TMPD/run.log"; RC_RUN=${PIPESTATUS[0]}
+        # U66 część 2: okno postępu zamiast czarnego ekranu (wtl run_progress), potem okno wyniku.
+        : >"$TMPD/run.log"
+        RC_RUN=0; run_progress "Nowa relacja '$RNAME': zakładam" "$TMPD/run.log" "${ARGV[@]}" || RC_RUN=$?
         # DZIENNIK DLA F3 Ins (owner note 5): TUI ustawia ZFS_TUI_LOG na
-        # sciezke ~/.zfs-tui/new-relation-<stamp>.log przed oddaniem terminala
-        # tu; dopisujemy do niego, zeby wynik biegu nie zniknal w $TMPD.
+        # sciezke ~/.zfs-tui/new-relation-<stamp>.log; dopisujemy do niego, zeby wynik biegu
+        # nie zniknal w $TMPD.
         if [ -n "${ZFS_TUI_LOG:-}" ] && [ -f "$TMPD/run.log" ]; then
             cat "$TMPD/run.log" >>"$ZFS_TUI_LOG" 2>/dev/null
             echo "rc=$RC_RUN" >>"$ZFS_TUI_LOG" 2>/dev/null
         fi
-        echo
         [ "$RC_RUN" -eq 0 ] && NR_DONE=1
-        if [ "$RC_RUN" -eq 0 ]; then echo "=== GOTOWE: relacja '$RNAME' założona (rc=0). Enter = dalej"
+        if [ "$RC_RUN" -eq 0 ]; then
+            result_box "Nowa relacja: GOTOWE" 0 "$TMPD/run.log" "Relacja '$RNAME' założona (rc=0).${ZFS_TUI_LOG:+\n\nDziennik: $ZFS_TUI_LOG}"
         elif [ "$GRANT" -eq 0 ] && grep -q -- '--commit-scope=' "$TMPD/run.log"; then
             # To nie awaria: wybrano "zatwierdzę sam", więc instalacja MA stanąć w tym miejscu.
-            echo "=== ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '$RNAME' czeka na zgodę źródła."
-            echo "    1. Na $HOST, jako root:   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
-            [ "$FREEZE" -eq 1 ] && echo "       (--allow-quiesce: bez tego szablon zamrażający da migawki '_crash_')"
-            echo "    2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
             cmd_oneline >"$HOME/new-relation-$RNAME.cmd" 2>/dev/null; echo >>"$HOME/new-relation-$RNAME.cmd"
-            echo "       $(cmd_oneline)"
-            echo "    Enter = dalej"
-        else echo "=== NIE UDAŁO SIĘ (rc=$RC_RUN) -- przeczytaj powyżej. Enter = dalej"; fi
-        [ -t 0 ] && read -r _
+            { echo "ZATRZYMANE ZGODNIE Z WYBOREM -- relacja '$RNAME' czeka na zgodę źródła."
+              echo
+              echo "1. Na $HOST, jako root:"
+              echo "   cd $C_DIR && ./$(grep -o 'deploy.sh --commit-scope=[^ ]*' "$TMPD/run.log" | tail -1)$( [ "$FREEZE" -eq 1 ] && echo ' --allow-quiesce')"
+              [ "$FREEZE" -eq 1 ] && echo "   (--allow-quiesce: bez tego szablon zamrażający da migawki '_crash_')"
+              echo
+              echo "2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
+              echo "   $(cmd_oneline)"
+            } >"$TMPD/stop.txt"
+            geom; wt --title "Nowa relacja: zatrzymane zgodnie z wyborem" --textbox "$TMPD/stop.txt" "$H" "$W"
+        else
+            result_box "Nowa relacja: NIE UDAŁO SIĘ" "$RC_RUN" "$TMPD/run.log" "" "Relacja '$RNAME' nie została założona."
+        fi
         return 0
     done
 }

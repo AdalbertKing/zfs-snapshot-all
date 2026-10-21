@@ -53,6 +53,43 @@ verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
     grep -E '^!!! |error: |^FATAL: ' "$1" 2>/dev/null \
         | sed -e 's/^!!! //' -e 's/^[[:space:]]*//' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -6
 }
+# OKNO POSTĘPU (U66/U64, właściciel 2026-10-21: "czarny ekran ponad 15 sekund i dopiero powrót"):
+# polecenie biegnie w tle z wyjściem do dziennika, okno co sekundę pokazuje, ile już trwa, i
+# ostatnie linie dziennika. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
+# kończy się odmową, nie zawieszeniem za oknem. Ctrl-C przerywa polecenie.
+run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dziennik dopisywany
+    local t="$1" log="$2" pid rc=0 s0=$SECONDS n i
+    shift 2
+    case "$1" in */*) { printf '$'; printf ' %s' "$@"; printf '\n\n'; } >>"$log" ;; esac   # nagłówek dla programu, nie dla funkcji
+    "$@" >>"$log" 2>&1 </dev/null &
+    pid=$!
+    trap 'kill "$pid" 2>/dev/null' INT
+    while kill -0 "$pid" 2>/dev/null; do
+        geom
+        n=$((H - 8)); [ "$n" -gt 14 ] && n=14; [ "$n" -lt 3 ] && n=3
+        "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t -- trwa $((SECONDS - s0)) s" \
+              --infobox "$(tail -n "$n" "$log" | cut -c1-$((W - 6)))" $((n + 4)) "$W"
+        for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    done
+    wait "$pid" || rc=$?
+    trap - INT
+    return "$rc"
+}
+# Wynik po run_progress: GOTOWE krótko; odmowa = przyczyna (verb_refusal) i koniec dziennika.
+result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
+    local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-Nie udało się.}"
+    geom
+    if [ "$rc" -eq 0 ]; then
+        wt --title "$t" --msgbox "$okt" 9 "$W"
+        return 0
+    fi
+    { printf '%s  (rc=%s)\n\n' "$bad" "$rc"
+      if [ -n "$(verb_refusal "$log")" ]; then printf 'Powód:\n'; verb_refusal "$log" | sed 's/^/  /'; printf '\n'; fi
+      printf 'Koniec dziennika:\n'; tail -n 15 "$log" | sed 's/^/  /'
+    } >"$log.view"
+    wt --title "$t" --textbox "$log.view" "$H" "$W"
+    return 0
+}
 clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
     local t="$1" m="$2"
     [ "$m" -lt 8 ] && m=8
