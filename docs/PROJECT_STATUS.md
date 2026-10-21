@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3885518d91521fe3 -->
+<!-- status-covers-digest: 5487e7b6b9f87551 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -115,7 +115,12 @@
   **Fail-closed (#655 P1-B):** błąd odczytu crontabów, `zfs list` migawek albo zakładek (kod wyjścia, nie pusty
   wynik), zły wiersz (`creation`/`userrefs`/`guid`), linia transferu, której parser nie rozumie, brak jakiejkolwiek
   własności -- pula nietknięta, alert „NIE zadziałał” z powodem, rc 1. `--plan` pokazuje kolejność, blokady i
-  powody bez usuwania. Testy `test/alertmail` (27 przypadków bezpiecznika; 22 czerwone na kodzie sprzed poprawki).
+  powody bez usuwania. **Progi i pomiar (REV-20261021-155):** `guard_at` 50-99, `guard_target` 40-98 i ostro
+  poniżej `guard_at`, `guard_min_keep` 1-100, `guard` tylko on/off -- zła wartość z env, F10 albo starego conf (także
+  nie-liczba) to zero usunięć, kod 1 i alert z nazwą ustawienia, bez cichego zastępowania wartością domyślną;
+  nieudany `zpool sync` albo nieczytelna zajętość po usunięciu kończy cały bieg (żadnego kolejnego `zfs destroy`),
+  alert z listą już usuniętych. Testy `test/alertmail` (43 przypadki bezpiecznika; nowe z REV-155 -- 14 czerwonych
+  na kodzie sprzed poprawki).
   Na żywo pve10 (pula z pliku, osobny katalog crontabów): usunięte dokładnie migawki z planu; hold, najnowsze, baza
   z prawdziwej zakładki snapget, głowa celu i obce `outsider_automated_*` zostały; następna kopia przyrostowa od
   zachowanej bazy; bez katalogu crontabów -- 0 usunięć, alert z powodem. Nazwa zakładki wyliczona przez bezpiecznik

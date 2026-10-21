@@ -1628,8 +1628,8 @@ cat > "$gs_dir/bin/zpool" <<'ST'
 #!/bin/bash
 case "$*" in
   "list -H -o name") echo tank ;;
-  "list -H -o capacity tank") echo "$(cat "$GS_DIR/cap")%" ;;
-  "sync tank") : ;;
+  "list -H -o capacity tank") if [ -n "${GS_BADCAP:-}" ] && [ -s "$GS_DIR/destroyed" ]; then echo "-"; else echo "$(cat "$GS_DIR/cap")%"; fi ;;
+  "sync tank") [ -n "${GS_FAIL_SYNC:-}" ] && exit 1; : ;;
 esac
 ST
 cat > "$gs_dir/bin/zfs" <<'ST'
@@ -1856,6 +1856,64 @@ if grep -q 'czyści od 70% do 60%, zostaje 3 ' "$gs_dir/out"; then
 else
     bad "capacity-guard: progi env > settings" "$(head -2 "$gs_dir/out")"
 fi
+# ---- REV-20261021-155 F1: progi spoza zakresu = 0 usuniec, rc 1, alert z nazwa ----
+gs_badcfg() {   # <nazwa> <oczekiwany tekst> -- po gs_run
+    if [ "$gs_rc" -eq 1 ] && gs_none && ! grep -q '^zfs ' "$gs_dir/calls" 2>/dev/null && grep -qF "$2" "$gs_dir/mail" 2>/dev/null; then
+        ok "capacity-guard: zle ustawienie -- $1: nic nie usuwa, nie wylicza puli, alert z nazwa"
+    else
+        bad "capacity-guard: zle ustawienie -- $1" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/calls" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+    fi
+}
+gs_cron; gs_snaps > "$gs_dir/snaps"; : > "$gs_dir/marks"
+GS_ENV_KEEP=1 ZFS_GUARD_AT=0 ZFS_GUARD_TARGET=0 gs_run 99 1 on; gs_rc=$?;    gs_badcfg "env 0/0" "guard_at='0' (50-99)"
+GS_ENV_KEEP=1 ZFS_GUARD_AT=49 gs_run 99 1 on; gs_rc=$?;                     gs_badcfg "env guard_at=49 (dolna granica-1)" "guard_at='49'"
+GS_ENV_KEEP=1 ZFS_GUARD_AT=100 gs_run 99 1 on; gs_rc=$?;                    gs_badcfg "env guard_at=100 (gorna granica+1)" "guard_at='100'"
+GS_ENV_KEEP=1 ZFS_GUARD_TARGET=39 gs_run 99 1 on; gs_rc=$?;                 gs_badcfg "env guard_target=39" "guard_target='39'"
+GS_ENV_KEEP=1 ZFS_GUARD_AT=85 ZFS_GUARD_TARGET=85 gs_run 99 1 on; gs_rc=$?; gs_badcfg "guard_target == guard_at" "nie jest poniżej guard_at='85'"
+GS_KEEP=0 gs_run 99 1 on; gs_rc=$?;                                         gs_badcfg "settings guard_min_keep=0" "guard_min_keep='0' (1-100)"
+GS_KEEP=101 gs_run 99 1 on; gs_rc=$?;                                       gs_badcfg "settings guard_min_keep=101" "guard_min_keep='101'"
+GS_KEEP=x gs_run 99 1 on; gs_rc=$?;                                         gs_badcfg "settings guard_min_keep nie-liczba" "guard_min_keep='x'"
+printf 'ZFS_GUARD_TARGET=0\n' > "$gs_dir/legacy-bad.conf"
+printf '[capacity]\nguard = on\n' > "$gs_dir/settings-on.ini"
+( unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP; rm -f "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/calls"; echo 99 > "$gs_dir/cap"
+  PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" GS_STEP=1 SETTINGS_FILE="$gs_dir/settings-on.ini" ZFS_ALERT_CONF="$gs_dir/legacy-bad.conf" \
+  ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="$gs_dir/lock" \
+  bash "$gs_dir/guard.sh" ) > "$gs_dir/out" 2>&1; gs_rc=$?;                   gs_badcfg "zfs-alert.conf guard_target=0" "guard_target='0'"
+GS_ENV_KEEP=1 ZFS_GUARD_AT=abc gs_run 99 1 on; gs_rc=$?;                    gs_badcfg "env guard_at nie-liczba (nie wraca do 89)" "guard_at='abc'"
+GS_ENV_KEEP=1 ZFS_GUARD=ON gs_run 99 1 on; gs_rc=$?;                        gs_badcfg "guard='ON' (tylko on/off)" "guard = 'ON'"
+# Zla wartosc z env NIE jest zastepowana poprawna z settings.ini (89).
+GS_ENV_KEEP=1 ZFS_GUARD_AT=0 gs_run 99 1 on; gs_rc=$?;                      gs_badcfg "env 0 przy poprawnym settings 89 -- env wygrywa i odmawia" "guard_at='0'"
+# Granice poprawne: 50/40/1 i 99/98/100 -- przyjete (--plan liczy).
+GS_ENV_KEEP=1 ZFS_GUARD_AT=50 ZFS_GUARD_TARGET=40 ZFS_GUARD_MIN_KEEP=1 gs_run 60 1 on --plan; gs_rc=$?
+gs_lo=$gs_rc; grep -q 'czyści od 50% do 40%, zostaje 1 ' "$gs_dir/out"; gs_lo2=$?
+GS_ENV_KEEP=1 ZFS_GUARD_AT=99 ZFS_GUARD_TARGET=98 ZFS_GUARD_MIN_KEEP=100 gs_run 60 1 on --plan; gs_rc=$?
+if [ "$gs_lo" -eq 0 ] && [ "$gs_lo2" -eq 0 ] && [ "$gs_rc" -eq 0 ] && grep -q 'czyści od 99% do 98%, zostaje 100 ' "$gs_dir/out"; then
+    ok "capacity-guard: granice poprawne (50/40/1 i 99/98/100) przyjete"
+else
+    bad "capacity-guard: granice poprawne" "lo=$gs_lo/$gs_lo2 hi=$gs_rc" "$(head -3 "$gs_dir/out")"
+fi
+
+# ---- REV-20261021-155 F2: nieudany zpool sync / nieczytelna zajetosc = twardy stop ----
+GS_FAIL_SYNC=1 gs_run 99 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ "$(grep -c . "$gs_dir/destroyed")" -eq 1 ] && grep -q 'ZATRZYMANY' "$gs_dir/mail" && grep -q 'zpool sync tank zawiódł' "$gs_dir/mail" \
+   && grep -q "$(cat "$gs_dir/destroyed")" "$gs_dir/mail"; then
+    ok "capacity-guard: zpool sync zawodzi po pierwszym usunieciu -- drugi kandydat nietkniety, rc 1, alert z usunieta"
+else
+    bad "capacity-guard: zpool sync zawodzi" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+GS_BADCAP=1 gs_run 99 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ "$(grep -c . "$gs_dir/destroyed")" -eq 1 ] && grep -q 'nieczytelna' "$gs_dir/mail"; then
+    ok "capacity-guard: zajetosc po usunieciu nieczytelna -- stop po pierwszym, rc 1, alert"
+else
+    bad "capacity-guard: nieczytelna zajetosc" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+gs_run 92 3 on; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && [ "$(grep -c . "$gs_dir/destroyed")" -eq 3 ] && grep -q 'wyczyścił pulę tank (83%)' "$gs_dir/mail"; then
+    ok "capacity-guard: kontrola zdrowa -- sync dziala, stop ponizej celu (3 usuniecia, 83%)"
+else
+    bad "capacity-guard: kontrola zdrowa" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/out" 2>/dev/null)"
+fi
+
 printf '[capacity]\n' > "$gs_dir/settings-empty.ini"
 ( unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP
   PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" SETTINGS_FILE="$gs_dir/settings-empty.ini" ZFS_ALERT_CONF="$gs_dir/legacy-on.conf" \
