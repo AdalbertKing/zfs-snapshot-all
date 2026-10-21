@@ -46,7 +46,12 @@ MODE="backup"; HOST=""; PORT="22"; HOSTNAME_R=""; RECURSION="flat"; NOCOPY=0
 # U25 (właściciel 2026-10-20): kreator to KARTA RELACJI -- wszystkie pola naraz, więc
 # "Krok 4/10" nic nie mówi. Tytuł okna pola = samo pytanie; pierwszy argument (dawny
 # numer kroku) zostaje, żeby wywołania się nie zmieniały.
-title() { printf '%s' "$2"; }
+# U66 (właściciel 2026-10-21, przebudowa): kreator KROK PO KROKU -- tytuł mówi, który to krok
+# z ilu (liczą się tylko kroki tego rodzaju relacji); w podsumowaniu bez licznika.
+title() {
+    if [ -n "${WZ_SN:-}" ]; then printf 'Nowa relacja -- krok %s z %s: %s' "$WZ_SI" "$WZ_SN" "$2"
+    else printf 'Nowa relacja: %s' "$2"; fi
+}
 # Kopia lokalna nie ma drugiego hosta: czytelniki pytamy bez adresu (= ten host).
 hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" || echo "$HOST:$PORT"; }
 
@@ -136,19 +141,33 @@ PYEOF
     case "$C_PKG" in 0|1) ;; *) C_PKG=0 ;; esac
     [ "$C_SSH" -eq 1 ] || [ -n "$C_ERR" ] || C_ERR="$(tail -1 "$TMPD/check.err" 2>/dev/null)"
 }
+# U56 (kampania 2026-10-21): "pve9" rozwiązało się na pve10 przez publiczny DNS
+# (search metropolis.net) na obce adresy w internecie, ssh czekało 10 s i padło bez słowa
+# dlaczego. Okno mówi, NA JAKI ADRES poszła nazwa, i ostrzega przed adresem spoza sieci.
+resolve_note() {   # -> "" dla IP; "nazwa -> adres [ostrzeżenie]" dla nazwy
+    local ip
+    case "$HOST" in *[!0-9.]*) ;; *) return 0 ;; esac
+    ip="$(getent ahostsv4 "$HOST" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+    if [ -z "$ip" ]; then printf '%s' "nazwa $HOST się nie rozwiązuje (DNS ani /etc/hosts)"; return 0; fi
+    case "$ip" in
+        10.*|192.168.*|127.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) printf '%s' "nazwa $HOST -> $ip" ;;
+        *) printf '%s' "nazwa $HOST -> $ip  (ADRES PUBLICZNY, spoza sieci lokalnej! sprawdź DNS / dopisz $HOST do /etc/hosts)" ;;
+    esac
+}
 step_diag() {   # 0 = dalej, 1 = wróć do hosta
-    local facts
+    local facts rn
     [ "$DIAG_OK_FOR" = "$(hostport)" ] && return 0      # już sprawdzony w tym przebiegu
+    rn="$(resolve_note)"
     while :; do
         geom
-        info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root..."
+        info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root...${rn:+\n$rn}\n(do 15 s)"
         probe
         if [ "$C_SSH" -ne 1 ]; then
-            wt --title "$(title 3 "$HOST nie wpuszcza")" --msgbox "SSH jako root@$HOST nie działa:\n\n  $C_ERR\n\nNajczęściej brakuje jednego z dwóch -- z TEGO hosta, jako root:\n\n  ssh-keyscan -p $PORT $HOST >> /root/.ssh/known_hosts\n  ssh-copy-id -p $PORT root@$HOST\n\nPo naprawie wróć tutaj." "$(fit 13)" "$W"
+            wt --title "$(title 3 "$HOST nie wpuszcza")" --msgbox "${rn:+$rn\n\n}SSH jako root@$HOST nie działa:\n\n  $C_ERR\n\nNajczęściej brakuje jednego z dwóch -- z TEGO hosta, jako root:\n\n  ssh-keyscan -p $PORT $HOST >> /root/.ssh/known_hosts\n  ssh-copy-id -p $PORT root@$HOST\n\nPo naprawie wróć tutaj." "$(fit 13)" "$W"
             return 1
         fi
         HOSTNAME_R="$C_NAME"
-        facts="  [+] SSH     root@$HOST odpowiada, to '$C_NAME'\n"
+        facts="${rn:+  [i] $rn\n}  [+] SSH     root@$HOST odpowiada, to '$C_NAME'\n"
         if [ "$C_ZFS" -ne 1 ]; then
             wt --title "$(title 3 'Brak ZFS')" --msgbox "${facts}  [-] ZFS     na $HOST nie ma polecenia zfs\n\nBez ZFS nie ma czego kopiować." 12 "$W"
             return 1
@@ -1041,50 +1060,100 @@ CARD_NAMES_OF() {
     esac
 }
 
-cur=mode; auto=1
-while :; do
-    if [ "$auto" -eq 1 ]; then
-        if run_field "$cur"; then
-            nx="$(next_unvisited)" && { cur="$nx"; continue; }
-            cur=create; auto=0
-        else
-            # Wyjdź w pierwszym oknie (nic jeszcze nie wybrane) = koniec kreatora, jak dotąd.
-            if [ "$cur" = mode ] && [ "$VIS" = " " ]; then
-                clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1
-            fi
-            auto=0
+# ---- PROWADZĄCY (U66, przebudowa 2026-10-21) ------------------------------------------
+# Właściciel: "Wstecz to wstecz", "to okno jest super, ale mylące", "do kompletnej przebudowy".
+# Kroki tego rodzaju relacji po kolei, Dalej = następny, Wstecz = POPRZEDNI (z zapamiętaną
+# odpowiedzią), Wstecz w kroku 1 = pytanie o przerwanie. Po ostatnim kroku PODSUMOWANIE:
+# Enter na pozycji = ten krok jeszcze raz i od razu powrót do podsumowania; konto i dodatki
+# siedzą w "Zaawansowane" (domyślne pasują prawie zawsze); dopiero tam "Utwórz relację".
+wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
+    local f out=""
+    for f in mode host ds target profile srcret name; do field_applies "$f" && out="$out $f"; done
+    echo $out
+}
+wz_abort() {   # 0 = przerwij, 1 = zostań ("Zostań"); Esc w tym pytaniu też kończy
+    local rc=0
+    wt --title "Nowa relacja: przerwać?" --yes-button "Przerwij" --no-button "Zostań" --defaultno \
+       --yesno "Przerwać tworzenie relacji? Nic nie zostało zmienione." 8 "$W" || rc=$?
+    [ "$rc" -ne 1 ]
+}
+wz_walk() {   # <od którego kroku> -> 0 = doszedł do końca, 1 = przerwane
+    local i="$1"; local -a list
+    while :; do
+        read -ra list <<<"$(wz_steps)"
+        [ "$i" -lt "${#list[@]}" ] || return 0
+        WZ_SI=$((i + 1)); WZ_SN=${#list[@]}
+        if run_field "${list[$i]}"; then
+            i=$((i + 1))
+        elif [ "$i" -gt 0 ]; then
+            i=$((i - 1))
+        elif wz_abort; then
+            return 1
         fi
-    fi
-    CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
-    for f in mode host ds target profile srcret silnik name acct extra; do
-        [ "$f" = silnik ] || field_applies "$f" || continue
-        [ "$f" = silnik ] && { [ "$NOCOPY" -eq 0 ] && [ "$MODE" != snaponly ] || continue; }
-        CARD_TAGS+=("$f"); CARD_NAMES+=("$(CARD_NAMES_OF "$f")")
-        if [ "$f" = silnik ]; then CARD_VALUES+=("fabryczne -- zmienisz po założeniu (e na relacji)")
-        else CARD_VALUES+=("$(field_value "$f")"); fi
-        CARD_FIXED+=(0)
     done
+}
+wz_adv() {   # Zaawansowane: konto i dodatki; wraca do podsumowania
+    local pick=acct
+    while :; do
+        WZ_SN=""
+        CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
+        field_applies acct && { CARD_TAGS+=(acct); CARD_NAMES+=("Konto"); CARD_VALUES+=("$(field_value acct)"); CARD_FIXED+=(0); }
+        field_applies extra && { CARD_TAGS+=(extra); CARD_NAMES+=("Dodatkowe"); CARD_VALUES+=("$(field_value extra)"); CARD_FIXED+=(0); }
+        CARD_ACT_TAGS=(); CARD_ACT_LABELS=()
+        card_menu "Nowa relacja: zaawansowane" "Rzeczy, których zwykle się nie zmienia. Enter = zmień. Wstecz = podsumowanie." "$pick" "Wstecz" || return 0
+        pick="$WT_OUT"
+        case "$pick" in acct|extra) run_field "$pick" ;; *) return 0 ;; esac
+    done
+}
+WZ_SN=""
+wz_walk 0 || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
+cur=create
+while :; do
+    WZ_SN=""
+    read -ra WZ_LIST <<<"$(wz_steps)"
+    CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=()
+    for f in "${WZ_LIST[@]}"; do
+        CARD_TAGS+=("$f"); CARD_NAMES+=("$(CARD_NAMES_OF "$f")"); CARD_VALUES+=("$(field_value "$f")"); CARD_FIXED+=(0)
+    done
+    CARD_TAGS+=(adv); CARD_NAMES+=("Zaawansowane")
+    a="konto $(field_value acct)"; [ "$NOCOPY" -eq 0 ] && a="$a; $(field_value extra)"
+    CARD_VALUES+=("$a"); CARD_FIXED+=(0)
     miss="$(missing_fields)"
-    CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("Utwórz relację -- plan, WYKONAJ${miss:+   (brak: $miss)}")
-    card_menu "Relacja (nowa)" "Każde pole otwiera swoje okno i wraca tutaj. Utwórz relację = plan i WYKONAJ." "$cur" "Wyjdź" \
-        || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
+    CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("UTWÓRZ RELACJĘ -- plan, WYKONAJ${miss:+   (brak: $miss)}")
+    card_menu "Nowa relacja -- podsumowanie" "Sprawdź. Enter na pozycji = popraw ten krok i wróć tutaj." "$cur" "Przerwij" \
+        || { wz_abort && { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }; continue; }
     cur="$WT_OUT"
     case "$cur" in
         __sep__) cur=create; continue ;;
-        silnik)  wt --title "Silnik" --msgbox "Ustawienia silnika (historia, kompresja, szyfr SSH, autodobór łącza)\nzmieniasz po założeniu: F3, Enter na relacji, e -- to samo pole na karcie." 9 "$W"; continue ;;
+        adv)     wz_adv; cur=create; continue ;;   # po Zaawansowanych zwykle już tylko Utwórz
         create)
             if [ -n "$miss" ]; then
-                wt --title "Brakuje pól" --msgbox "Do założenia relacji brakuje: $miss." 8 "$W"
-                cur="$(next_unvisited || echo create)"; continue
+                wt --title "Brakuje kroków" --msgbox "Do założenia relacji brakuje: $miss." 8 "$W"
+                continue
+            fi
+            # Konto jest w Zaawansowanych, więc mogło nie być oglądane: niedopasowanie
+            # szablonu do konta sprawdza się też tutaj, zanim plan pójdzie do czasownika.
+            if account_is_flat "$(account_name)" \
+               && [ "$(awk -F'\t' -v n="$PROFILE" '$1==n{print $6}' "$TMPD/prof.tsv" 2>/dev/null)" != flat ]; then
+                wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie $(field_value acct) działają relacje z retencją W SZCZEBLACH, a szablon\n$PROFILE ma drabinę GFS -- czasownik by to odmówił.\n\nZmień szablon albo konto (Zaawansowane)." 10 "$W"
+                cur=profile; continue
             fi
             step_summary
             case $? in
                 0) break ;;
-                2) cur=ds; auto=1 ;;
-                3) cur=profile; auto=1 ;;
-                *) cur=create ;;
-            esac ;;
-        *) auto=1 ;;
+                2) WZ_SN=""; run_field ds ;;
+                3) WZ_SN=""; run_field profile ;;
+            esac
+            cur=create ;;
+        mode)
+            # Inny rodzaj = inne kroki: po zmianie przejście kroków od nowa (odpowiedzi zostają).
+            before="$MODE/$NOCOPY"
+            run_field mode
+            if [ "$before" != "$MODE/$NOCOPY" ]; then
+                wz_walk 1 || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
+                cur=create
+            fi ;;
+        *)  run_field "$cur" ;;
     esac
 done
 exit "$RC_RUN"
