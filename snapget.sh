@@ -430,7 +430,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.75'
+VERSION='v2.76'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1244,7 +1244,9 @@ mirror_target() {
     # every route into the mirror passes it: running or unknown status
     # refuses (guest_disk_is_live says why), a stopped guest and a dataset
     # that names no guest go on as before.
-    if guest_disk_is_live "$tgt"; then
+    # U60: only a target that IS the source's own path can be a guest's disk on this host
+    # (sync); a target nested under a base (a replica on a medium, a backup copy) is not.
+    if [ "$tgt" = "$src" ] && guest_disk_is_live "$tgt"; then
         log 0 "Mirror (-M) on '$tgt': refused -- the live-guest check did not clear this target (its reason is the log line before this one), NOTHING deleted"
         return 1
     fi
@@ -1252,12 +1254,21 @@ mirror_target() {
         log 0 "Mirror (-M) on '$tgt': the source list of '$src' could not be read -- NOTHING deleted"
         return 1
     }
-    [ -n "$src_list" ] || {
-        log 0 "Mirror (-M) on '$tgt': '$src' lists NO snapshots -- an empty answer is not proof of anything; NOTHING deleted"
-        return 1
-    }
     tgt_list=$(get_sorted_snapshots "$tgt") || {
         log 0 "Mirror (-M) on '$tgt': its own snapshot list could not be read -- NOTHING deleted"
+        return 1
+    }
+    # H-4 (live GUI campaign, pve10 2026-10-21): a replica of a whole tree reaches
+    # container datasets that never had a snapshot (hdd/backups, hdd/backups/<host>).
+    # Empty on BOTH sides there is nothing to mirror and nothing to delete -- not a
+    # failure; every run of such a replica ended rc 1. An empty source with snapshots
+    # on the target is still refused: then the empty answer would decide a destroy.
+    [ -n "$src_list" ] || {
+        if [ -z "$tgt_list" ]; then
+            log 2 "Mirror (-M) on '$tgt': no snapshots on '$src' or here -- nothing to mirror"
+            return 0
+        fi
+        log 0 "Mirror (-M) on '$tgt': '$src' lists NO snapshots -- an empty answer is not proof of anything; NOTHING deleted"
         return 1
     }
     base=$(find_common_snapshot "$src" "$tgt" "$ruser" "$rhost") || base=""
@@ -1766,7 +1777,13 @@ process_dataset() {
         # is the source itself, and src == tgt is refused above). Measured on
         # pve10: a local copy of running CT 950 was refused here as "the disk
         # of guest 950" -- every local copy of a running guest would be.
-        if [ -n "$remote_host" ] && guest_disk_is_live "$tgt_dataset"; then
+        # U60 (owner's GUI campaign, pve10 2026-10-21): the same holds for a REMOTE source
+        # whose target is nested under a base (backup: hdd/backups/<host>/<path>): that
+        # target is a copy, never the disk a guest of THIS host runs on. pve10 refused
+        # hdd/backups/192.168.28.99/hdd/lab/subvol-901-disk-0 because CT 901 happens to
+        # exist on pve10 and the delegated account could not ask its state. The guard
+        # stays where it is meant: the target IS the source's own path (sync / lustro).
+        if [ -n "$remote_host" ] && [ "$tgt_dataset" = "$src_dataset" ] && guest_disk_is_live "$tgt_dataset"; then
             abort_held_snapshot "$snapshot" "$tgt_dataset" "$remote_user" "$remote_host"
             return 1
         fi
