@@ -987,15 +987,9 @@ field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
         *)      return 0 ;;
     esac
 }
-src_words() {   # SRCPROF <cel>-src-H24D3 -> "godzinowe 24, dobowe 3"
-    local s="${SRCPROF##*-src-}" out="" l n
+src_words() {   # SRCPROF <cel>-src-H24D3 -> "godzinowe 24, dobowe 3" (retention-lib)
     [ -n "$SRCPROF" ] || { echo "jak tutaj (cel)"; return; }
-    while [ -n "$s" ]; do
-        l="${s:0:1}"; s="${s:1}"; n="${s%%[!0-9]*}"; s="${s#"$n"}"
-        case "$l" in H) l=godzinowe ;; D) l=dobowe ;; W) l=tygodniowe ;; M) l=miesięczne ;; Y) l=roczne ;; *) echo "$SRCPROF"; return ;; esac
-        out="${out:+$out, }$l ${n:-?}"
-    done
-    echo "$out"
+    src_words_of "$SRCPROF"
 }
 field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
     local a
