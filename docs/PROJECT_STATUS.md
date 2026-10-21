@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f0d612040485a8a5 -->
+<!-- status-covers-digest: 658a610c00c70f32 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **U64/U66: okno postępu zamiast czarnego ekranu po WYKONAJ (2026-10-22; `finisz/postep`).** Właściciel:
+  „czarny ekran ponad 15 sekund”. `wt-lib.sh` ma `run_progress` (polecenie w tle, wyjście do dziennika, okno co
+  sekundę: ile trwa i ostatnie linie; stdin z /dev/null, więc pytanie kończy się odmową, a nie zawieszeniem; Ctrl-C
+  przerywa) i `result_box` (GOTOWE krótko albo przyczyna odmowy i koniec dziennika). Używają go: nowa relacja,
+  zmiana relacji, usuwanie relacji, replika (instalacja, od nowa, usuwanie), ustawienia. Odzysk (F11) nadal na
+  terminalu. Test `tui` 372/0 (pve9).
 
 - **REV-166: import relacji na porcie SSH innym niż 22 (2026-10-22; `fix/rev166`).** Od U62 eksport podaje
   `--host=HOST:PORT`, a import sprawdzał roota na źródle pod nazwą „HOST:PORT” na porcie 22 -- relacja na
