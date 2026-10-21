@@ -64,7 +64,7 @@ alert() {   # <temat> <treść>
 
 case "$GUARD" in on|off) ;; *)
     say "guard = '$GUARD' -- dozwolone on albo off; nic nie robię"
-    alert "$HOST: bezpiecznik -- złe ustawienie guard" "guard = '$GUARD' (ZFS_GUARD / [capacity] guard). Dozwolone: on, off. Bezpiecznik nic nie usunął."
+    [ "$PLAN" -eq 1 ] || alert "$HOST: bezpiecznik -- złe ustawienie guard" "guard = '$GUARD' (ZFS_GUARD / [capacity] guard). Dozwolone: on, off. Bezpiecznik nic nie usunął."
     exit 1 ;;
 esac
 if [ "$GUARD" != on ] && [ "$PLAN" -eq 0 ]; then exit 0; fi
