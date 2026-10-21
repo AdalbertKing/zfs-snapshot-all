@@ -338,14 +338,16 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
             { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/rs.txt"; echo
               echo "Komenda:  $(shq "$ZB") replica-restart $NAME --yes"; } >"$TMPD/rs2.txt"
             yesno_text "$TMPD/rs2.txt" "Replika $NAME -- zacznij od nowa" "WYKONAJ" "Wstecz" --defaultno || continue
-            clear 2>/dev/null
-            echo "\$ $ZB replica-restart $NAME --yes"; echo
-            "$ZB" replica-restart "$NAME" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            : >"$TMPD/run.log"
+            RC=0; run_progress "Replika $NAME: zacznij od nowa" "$TMPD/run.log" "$ZB" replica-restart "$NAME" --yes || RC=$?
             [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-            echo
-            if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' zaczęła od nowa (rc=0). Enter = dalej"
-            else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- stara kopia na dysku została; powód wyżej. Enter = dalej"; fi
-            [ -t 0 ] && read -r _
+            if [ "$RC" -eq 0 ]; then
+                echo "GOTOWE: replika '$NAME' zaczęła od nowa (rc=0)." >"$TMPD/result.txt"
+                result_box "Replika $NAME: zacznij od nowa: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+            else
+                echo "Nie udało się -- stara kopia na dysku została." >"$TMPD/result.txt"
+                result_box "Replika $NAME: zacznij od nowa" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+            fi
             exit "$RC" ;;
         esac
     done
@@ -695,32 +697,31 @@ PYEOF
             fi
             step=5; continue
         fi
-        clear 2>/dev/null
-        echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"; echo
-        "${ARGV[@]}" --install --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+        : >"$TMPD/run.log"
+        RC=0; run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "${ARGV[@]}" --install --yes || RC=$?
         if [ "$RC" -eq 0 ] && [ "$TRIG" = yes ]; then
-            echo; echo "\$ $(shq "$ZB") install-media-trigger --install"
-            "$ZB" install-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "$ZB" install-media-trigger --install || RC=$?
         fi
         if [ "$RC" -eq 0 ] && [ "${UNTRIG:-no}" = yes ]; then
-            echo; echo "\$ $(shq "$ZB") remove-media-trigger --install"
-            "$ZB" remove-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "$ZB" remove-media-trigger --install || RC=$?
         fi
         if [ -n "${ZFS_TUI_LOG:-}" ]; then
             { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
         fi
-        echo
         if [ "$RC" -eq 0 ]; then
             # U11 (właściciel 2026-10-19): pełne zdania, bez skrótu "F7 na F6".
             if [ "$SCHED" = on-insert ]; then _first="ruszy po włożeniu dysku"
             elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="ruszy po włożeniu dysku albo o czasie z harmonogramu"
             else _first="ruszy o czasie z harmonogramu"; fi
-            echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
-            echo "    Pierwsza kopia $_first."
-            echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
-            echo "    Enter = powrót do GUI"
-        else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
-        [ -t 0 ] && read -r _
+            { echo "GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
+              echo "    Pierwsza kopia $_first."
+              echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
+            } >"$TMPD/result.txt"
+            result_box "Replika $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+        else
+            echo "Nie udało się -- nic nie zainstalowano." >"$TMPD/result.txt"
+            result_box "Replika $NAME: instaluję" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+        fi
         exit "$RC" ;;
     esac
 done

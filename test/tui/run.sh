@@ -2916,8 +2916,9 @@ chmod +x "$NR/bin/zb-del"
 printf '0\t\n0\t\n' > "$DRD/answers"   # checklist: domyslne; potem yesno "WYKONAJ"
 DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del"
          bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
-if has "$DROUT" "ZATRZYMANE" && has "$DROUT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DROUT" "uruchom to samo jeszcze raz" \
-   && ! has "$DROUT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DROUT" "GOTOWE"; then
+DRWT="$(cat "$DRD/wt.log")"   # od U66 wynik jest w oknie (--textbox), nie na stdout
+if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DRWT" "uruchom to samo jeszcze raz" \
+   && ! has "$DRWT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DRWT" "GOTOWE"; then
     ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
 else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
@@ -2954,7 +2955,7 @@ DRCL="$(grep -F -- '--checklist' "$DRD/wt.log" | head -1)"
 if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z tego hosta' \
    && has "$DRCL" 'cd /root/scripts/zfs-snapshot-all && ./deploy.sh --leave=pve10' \
    && grep -q -- '--check-source' "$DRD/argv" && grep -q -- 'nazwa --keep-source --yes' "$DRD/argv" \
-   && has "$DROUT" 'Na 10.0.0.9 zostało konto relacji'; then
+   && grep -qF 'Na 10.0.0.9 zostało konto relacji' "$DRD/wt.log"; then
     ok "okno usuwania: bez roota do zrodla -- bez pozycji 'Posprzątaj na źródle', z poleceniem do recznego sprzatania, usuniecie z --keep-source i przypomnienie na koncu (U16)"
 else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
@@ -2986,7 +2987,7 @@ SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
 if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && has "$SMENU" 'root  (zfs-alert.conf)' && has "$SMENU" 'Wyślij mail próbny' \
    && ! printf '%s' "$SMENU" | grep -qE ' ~ -[^ ~]* ~ ── ' \
    && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
-   && has "$SOUT" 'GOTOWE'; then
+   && grep -qF 'GOTOWE' "$SD/wt.log"; then
     ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes)"
 else
     bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
@@ -3067,7 +3068,9 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_TREE="$NRTK"); NRRC=$?
-if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NROUT" "deploy.sh --commit-scope=pve10" && ! has "$NROUT" "NIE UDAŁO SIĘ" \
+# U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
+if [ "$NRRC" -eq 1 ] && grep -qF "ZATRZYMANE ZGODNIE Z WYBOREM" "$NR/wt.log" && grep -qF "deploy.sh --commit-scope=pve10" "$NR/wt.log" \
+   && ! grep -qF "NIE UDAŁO SIĘ" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
    && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
     ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
 else
@@ -3305,7 +3308,7 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
    && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także po włożeniu dysku' \
    && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.'; then
+   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.' "$RP/wt.log"; then
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
@@ -3339,7 +3342,7 @@ RPOUT=$(rp_run "0${T}usb3
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
    && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.'; then
+   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.' "$RP/wt.log"; then
     ok "replica: oryginal -> domyslnie wlasne migawki; 'tylko po wlozeniu' nie pyta o B, regula i tak zakladana"
 else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
@@ -4695,6 +4698,29 @@ else
 fi
 rm -rf "$RW"
 
+# ---- U66/U64 (owner 2026-10-21: "czarny ekran ponad 15 sekund"): run_progress / result_box ----
+# The command runs behind an infobox that says how long it has been running and shows the
+# log's last lines; rc comes back; stdin is /dev/null (a prompt fails instead of hanging).
+RP="$(mktemp -d)"; mkdir -p "$RP/bin"
+printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
+chmod +x "$RP/bin/wt"
+cat > "$RP/cmd" <<'EOF'
+#!/bin/bash
+echo "krok 1"; sleep 1.3; echo "!!! zrodlo odmowilo: brak miejsca"; read -r x && echo "STDIN: $x"; echo "FATAL: nic nie zmieniono"; exit 3
+EOF
+chmod +x "$RP/cmd"
+( cd "$RP" && WHIPTAIL="$RP/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; : > "$2/run.log"; rc=0
+    run_progress "Test" "$2/run.log" "$2/cmd" <<<"tak" || rc=$?; echo "RC=$rc"
+    result_box "Wynik" "$rc" "$2/run.log" "" "Nie wyszlo."' x "$REPO" "$RP" ) > "$RP/out" 2>&1
+if grep -qx 'RC=3' "$RP/out" && grep -qF 'krok 1' "$RP/run.log" && grep -qF 'FATAL: nic nie zmieniono' "$RP/run.log" \
+   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '--title ~ Test -- trwa [0-9]* s ~ --infobox ~ ' "$RP/wt.log" && grep -q '^krok 1 ~ ' "$RP/wt.log" \
+   && grep -qF 'Nie wyszlo.  (rc=3)' "$RP/wt.log" && grep -qF 'zrodlo odmowilo: brak miejsca' "$RP/wt.log" \
+   && ! grep -q 'krok 1' "$RP/out"; then
+    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log tail), rc returned, no stdin; result_box shows the reason and the log end"
+else
+    bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
+fi
+rm -rf "$RP"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the
