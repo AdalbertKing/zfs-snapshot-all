@@ -24,7 +24,10 @@
 #   - od NAJDROBNIEJSZEGO szczebla (godzinowe, dobowe, tygodniowe, miesięczne, roczne),
 #     w szczeblu od najstarszej;
 #   - po każdym usunięciu pomiar zajętości (zpool sync); stop poniżej guard_target albo,
-#     gdy nie ma już czego bezpiecznie usunąć -- wtedy alert "nie dało się";
+#     gdy nie ma już czego bezpiecznie usunąć -- wtedy alert "nie dało się". Nieudany
+#     zpool sync albo nieczytelna zajętość = koniec biegu, żadnego kolejnego usunięcia;
+#   - progi spoza zakresu (guard_at 50-99, guard_target 40-98 i poniżej guard_at,
+#     guard_min_keep 1-100) albo guard inny niż on/off = nic, kod 1, alert z nazwą;
 #   - błąd odczytu crontabów, `zfs list` (migawki, zakładki) albo linia transferu, której
 #     nie rozumiemy = pula nietknięta, alert, kod 1. Nie „nic do usunięcia”. Dotyczy puli
 #     powyżej progu: poniżej progu bezpiecznik nic nie czyta (w --plan -- każdej puli).
@@ -44,19 +47,13 @@ case "${1:-}" in --plan) PLAN=1 ;; "") ;; *) echo "użycie: capacity-guard.sh [-
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [ -r "$HERE/alert-env.sh" ] && . "$HERE/alert-env.sh"
 GUARD="${ZFS_GUARD:-off}"
-AT="${ZFS_GUARD_AT:-89}";       case "$AT" in ''|*[!0-9]*) AT=89 ;; esac
-TARGET="${ZFS_GUARD_TARGET:-85}"; case "$TARGET" in ''|*[!0-9]*) TARGET=85 ;; esac
-KEEP="${ZFS_GUARD_MIN_KEEP:-2}"; case "$KEEP" in ''|*[!0-9]*|0) KEEP=2 ;; esac
-[ "$TARGET" -lt "$AT" ] || TARGET=$((AT - 1))
+AT="${ZFS_GUARD_AT:-89}"
+TARGET="${ZFS_GUARD_TARGET:-85}"
+KEEP="${ZFS_GUARD_MIN_KEEP:-2}"
 NOTIFY="${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
 CRONDIR="${ZFS_GUARD_CRONTABS:-/var/spool/cron/crontabs}"
 PEERDIR="${ZFS_GUARD_PEERS:-/etc/zfs-snapshot-all/peers}"
 HOST="$(hostname -s 2>/dev/null || hostname)"
-
-if [ "$GUARD" != on ] && [ "$PLAN" -eq 0 ]; then exit 0; fi
-
-# Jeden bezpiecznik naraz: cron co 15 min, a czyszczenie dużej puli trwa.
-exec 9>"${ZFS_GUARD_LOCK:-/run/lock/zfs-capacity-guard.lock}" 2>/dev/null && flock -n 9 2>/dev/null || { [ "$PLAN" -eq 1 ] || exit 0; }
 
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S') capacity-guard: $*"; }
 alert() {   # <temat> <treść>
@@ -64,6 +61,38 @@ alert() {   # <temat> <treść>
     command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS CAPACITY] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null
     return 0
 }
+
+case "$GUARD" in on|off) ;; *)
+    say "guard = '$GUARD' -- dozwolone on albo off; nic nie robię"
+    alert "$HOST: bezpiecznik -- złe ustawienie guard" "guard = '$GUARD' (ZFS_GUARD / [capacity] guard). Dozwolone: on, off. Bezpiecznik nic nie usunął."
+    exit 1 ;;
+esac
+if [ "$GUARD" != on ] && [ "$PLAN" -eq 0 ]; then exit 0; fi
+
+# PROGI SPRAWDZANE, NIE PODMIENIANE (REV-20261021-155 F1): guard_at=0/guard_target=0
+# przechodziły parsowanie, cel spadał do -1 i pętla usuwała wszystko, co wolno. Zakresy
+# z rejestru F10 (zfs-backup.sh, capacity.*). Zła wartość z dowolnego źródła (env,
+# settings.ini, zfs-alert.conf) = nic nie usuwam, kod 1, alert z nazwą ustawienia --
+# także w --plan (bez alertu). Niższe źródło nie zastępuje złej wartości wyższego.
+bad_setting=""
+in_range() {   # <wartość> <min> <max>
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#1}" -le 3 ] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+in_range "$AT" 50 99         || bad_setting="$bad_setting guard_at='$AT' (50-99)"
+in_range "$TARGET" 40 98     || bad_setting="$bad_setting guard_target='$TARGET' (40-98)"
+in_range "$KEEP" 1 100       || bad_setting="$bad_setting guard_min_keep='$KEEP' (1-100)"
+if [ -z "$bad_setting" ] && [ "$TARGET" -ge "$AT" ]; then
+    bad_setting=" guard_target='$TARGET' nie jest poniżej guard_at='$AT'"
+fi
+if [ -n "$bad_setting" ]; then
+    say "złe ustawienia:$bad_setting -- nic nie usuwam"
+    [ "$PLAN" -eq 1 ] || alert "$HOST: bezpiecznik -- złe ustawienia" "Bezpiecznik nic nie usunął. Złe ustawienia (ZFS_GUARD_* / [capacity] w settings.ini / zfs-alert.conf):$bad_setting"
+    exit 1
+fi
+
+# Jeden bezpiecznik naraz: cron co 15 min, a czyszczenie dużej puli trwa.
+exec 9>"${ZFS_GUARD_LOCK:-/run/lock/zfs-capacity-guard.lock}" 2>/dev/null && flock -n 9 2>/dev/null || { [ "$PLAN" -eq 1 ] || exit 0; }
 cap_of() { zpool list -H -o capacity "$1" 2>/dev/null | tr -d '% '; }
 WORK="$(mktemp -d 2>/dev/null)" || { say "brak katalogu tymczasowego -- nic nie robię"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
@@ -328,9 +357,22 @@ Potrzebna decyzja człowieka."
             say "nie dało się usunąć $s (pomijam)"
             continue
         fi
-        zpool sync "$pool" 2>/dev/null
-        cap="$(cap_of "$pool")"
-        case "$cap" in ''|*[!0-9]*) break ;; esac
+        # TWARDY STOP (REV-20261021-155 F2): bez udanego zpool sync i czytelnej zajętości
+        # nie wiadomo, czy następne nieodwracalne usunięcie jest potrzebne. Koniec biegu
+        # -- żadnego kolejnego zfs destroy, także na innych pulach; to, co już usunięte,
+        # idzie w alercie.
+        stop=""
+        if ! zpool sync "$pool" 2>/dev/null; then stop="zpool sync $pool zawiódł"
+        else
+            cap="$(cap_of "$pool")"
+            case "$cap" in ''|*[!0-9]*) stop="zajętość puli $pool po usunięciu nieczytelna ('$cap')" ;; esac
+        fi
+        if [ -n "$stop" ]; then
+            say "STOP: $stop -- usunięto migawek: $n, dalej nic nie usuwam"
+            alert "$HOST: bezpiecznik ZATRZYMANY na puli $pool" "Bezpiecznik przerwał czyszczenie puli $pool: $stop. Bez pomiaru nie wolno usuwać dalej.
+Usunięte do tej chwili:$gone"
+            exit 1
+        fi
         [ "$cap" -lt "$TARGET" ] && break
     done <<EOF
 $list
