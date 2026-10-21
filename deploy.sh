@@ -4347,8 +4347,20 @@ guided_join_scope() {   # <label>
 # turns a failed read into "no match"). Any failure -- list, allow, unallow -- removes the
 # account just created and stops: a re-run creates it again and checks again, whereas an
 # account left behind would be "already exists, leaving it alone" and skip this check.
-new_account_drop_inherited_grants() {   # <account just created>
+#
+# REV-20261021-165: `useradd -m` creates the home only if it does not exist, and
+# `userdel -r` deletes whatever is there. A home left by a hand `userdel` (no -r) -- the
+# very case U42 is about -- would be deleted by a rollback that had not created it. So
+# the caller checks the home BEFORE useradd and passes the path and what it saw; the
+# rollback removes the home only when this run created it AND the account really got
+# that path. Anything unproven: the account goes, the home stays.
+new_account_drop_inherited_grants() {   # <account just created> <home path checked> <1 = it existed before useradd>
     local account="$1" uid ds found="" list acl
+    NEW_ACCOUNT_HOME="${2:-}"; NEW_ACCOUNT_HOME_OURS=0
+    if [ "${3:-1}" = 0 ] && [ -n "$NEW_ACCOUNT_HOME" ] \
+       && [ "$(getent passwd "$account" 2>/dev/null | cut -d: -f6)" = "$NEW_ACCOUNT_HOME" ]; then
+        NEW_ACCOUNT_HOME_OURS=1
+    fi
     uid="$(id -u "$account" 2>/dev/null)"
     if ! list="$(zfs list -H -o name -t filesystem,volume)"; then
         new_account_abort "$account" "$uid" "could not list the datasets (zfs list failed) to check it for inherited zfs delegations"
@@ -4369,11 +4381,19 @@ new_account_drop_inherited_grants() {   # <account just created>
     done
     log "revoked inherited delegations of $account on:$found"
 }
-new_account_abort() {   # <account> <uid> <reason> -- never returns
-    if userdel -r "$1" >/dev/null 2>&1; then
-        die "new account $1 (uid $2): $3 -- the account was removed again; nothing else was changed. Fix it and re-run."
+new_account_abort() {   # <account> <uid> <reason> -- never returns; reads NEW_ACCOUNT_HOME[_OURS]
+    local home="${NEW_ACCOUNT_HOME:-}" kept="" cmd
+    if [ "${NEW_ACCOUNT_HOME_OURS:-0}" = 1 ]; then
+        cmd="userdel -r $1"
+    else
+        cmd="userdel $1"
+        kept=" Its home ${home:-(unknown)} was NOT created by this run (or that could not be proven), so it is left as it was -- look at it before removing anything."
     fi
-    die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel -r $1' by hand BEFORE re-running (a re-run would take the existing account as already checked). Nothing else was changed."
+    # shellcheck disable=SC2086
+    if $cmd >/dev/null 2>&1; then
+        die "new account $1 (uid $2): $3 -- the account was removed again; nothing else was changed.$kept Fix it and re-run."
+    fi
+    die "new account $1 (uid $2): $3 -- and removing the account failed too: run '$cmd' by hand BEFORE re-running (a re-run would take the existing account as already checked).$kept Nothing else was changed."
 }
 
 # REV-20261021-164: during --leave a dataset is "gone" only on ZFS's own word for it
@@ -6736,10 +6756,11 @@ do_join() {
         if id "$account" >/dev/null 2>&1; then
             log "account $account already exists, leaving it alone"
         else
+            local home_pre=0; [ -e "/home/$account" ] && home_pre=1   # REV-20261021-165: before useradd
             useradd -m -s /bin/bash -c "zfs-snapshot-all peer account for $label" "$account" || die "useradd failed"
             passwd -l "$account" >/dev/null || warn "could not lock password for $account"
             log "created isolated peer account $account"
-            new_account_drop_inherited_grants "$account"
+            new_account_drop_inherited_grants "$account" "/home/$account" "$home_pre"
         fi
         home_dir="/home/$account"
         # REV-20260804-040: the durable principal binding --leave needs to
@@ -7600,11 +7621,12 @@ else
     if id "$USERNAME" >/dev/null 2>&1; then
         log "user $USERNAME already exists, leaving it alone"
     else
+        HOME_PREEXISTED=0; [ -e "$HOMEDIR" ] && HOME_PREEXISTED=1   # REV-20261021-165: before useradd
         useradd -m -s /bin/bash -c "zfs-snapshot-all delegated backup account" "$USERNAME" \
             || die "useradd failed"
         passwd -l "$USERNAME" >/dev/null || warn "could not lock password for $USERNAME"
         log "created user $USERNAME (uid $(id -u "$USERNAME")), password locked (SSH key only)"
-        new_account_drop_inherited_grants "$USERNAME"
+        new_account_drop_inherited_grants "$USERNAME" "$HOMEDIR" "$HOME_PREEXISTED"
     fi
 
     # ------------------------------------------------------------------------------
