@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 342a84a5e888aac8 -->
+<!-- status-covers-digest: 709fa0c4d08d9e82 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,12 +97,12 @@
   hosta już przy parowaniu, więc import nie miał szans. Teraz `--host` = adres aktywny (`ACTIVE_ENDPOINT`, z portem,
   gdy nie 22); import starszego pliku łączy się przez zapisany w nim adres aktywny i mówi o tym. Testy `zfsbackup`
   exportrel +4.
-- **REV-20261021-165: U42 -- wycofanie nowego konta nie kasuje katalogu domowego, którego nie założyło (2026-10-21; `finisz/REV-165`).**
-  `deploy.sh`: oba miejsca zakładania konta sprawdzają katalog domowy PRZED `useradd -m` i przekazują wynik.
-  Przy błędzie odczytu ZFS wycofanie robi `userdel -r` tylko wtedy, gdy katalogu nie było i `getent passwd` podaje
-  dokładnie tę ścieżkę; w każdym innym razie zwykłe `userdel`, katalog zostaje, a komunikat mówi, że nie był nasz.
-  Wcześniej katalog po ręcznym `userdel` (bez `-r`) -- dokładnie przypadek U42 -- zostałby skasowany. Testy
-  `test/draftscope` +7 (prawdziwy katalog z plikiem-strażnikiem).
+- **REV-20261021-165: U42 -- wycofanie nowego konta nigdy nie kasuje katalogu domowego (2026-10-21; `finisz/REV-165`, poprawka `finisz/REV-165b`).**
+  `deploy.sh`: przy błędzie odczytu ZFS wycofanie robi zwykłe `userdel` (bez `-r`), a komunikat podaje katalog
+  domowy, który zostaje, i polecenie do ręcznego usunięcia po obejrzeniu. Pierwsza wersja zgadywała, czy katalog
+  jest „nasz” (sprawdzenie przed `useradd`) -- recenzent pokazał wyścig: katalog założony między sprawdzeniem a
+  `useradd` i tak był kasowany. Własności nie da się udowodnić, więc nie ma kasowania. Testy `test/draftscope`
+  (prawdziwy katalog z plikiem-strażnikiem, przypadek wyścigu).
 
 - **REV-20261021-164: `--leave` -- błąd odczytu ZFS nie znaczy „dataset zniknął” ani „uprawnień już nie ma” (2026-10-21; `finisz/REV-164`, R1 `finisz/REV-164b`).**
   `deploy.sh`, `do_leave`: dataset jest „nieobecny” tylko na słowo ZFS („dataset does not exist”); każdy inny błąd
