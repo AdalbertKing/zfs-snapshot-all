@@ -111,7 +111,35 @@ other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dat
 # odczytać i są poprawne. Zapis oryginału (orig2.<klucz>: dataset, wartość, źródło) powstaje raz -- gdy go nie ma --
 # i znika WYŁĄCZNIE po udanym przywróceniu: nieudane przywrócenie zostawia go (z poleceniem
 # w RESIDUE), a następne przeglądanie nie nadpisze go bieżącym "visible".
+# REV-20261021-161: wejście (sprawdzenie/założenie orig2, znacznik, snapdev=visible) i wyjście
+# (zdjęcie znacznika, czy ktoś jeszcze trzyma, przywrócenie, usunięcie orig2) jednego datasetu
+# idą pod jedną blokadą flock na lock2.<klucz> -- inaczej kończący mógł usunąć zapis, który
+# wchodzący już sprawdził, a jeszcze nie założył znacznika. Bez blokady: nic nie zmieniam.
+# Plik blokady zostaje (usuwanie pliku blokady samo jest wyścigiem).
+SNAPLOCK_FD=""
+snap_lock() {   # <klucz> -> 0 z blokadą na SNAPLOCK_FD; 1 gdy się nie da
+    command -v flock >/dev/null 2>&1 || return 1
+    { exec {SNAPLOCK_FD}>>"$BROOT/lock2.$1"; } 2>/dev/null || { SNAPLOCK_FD=""; return 1; }
+    flock -w "${BROWSE_LOCK_WAIT:-30}" "$SNAPLOCK_FD" && return 0
+    exec {SNAPLOCK_FD}>&-; SNAPLOCK_FD=""; return 1
+}
+snap_unlock() { [ -z "$SNAPLOCK_FD" ] || exec {SNAPLOCK_FD}>&-; SNAPLOCK_FD=""; }
+# Tylko testy: BROWSE_TEST_PAUSE_AT=<punkt> i BROWSE_TEST_PAUSE=<prefiks> zatrzymują sesję
+# w punkcie (pod blokadą), aż pojawi się <prefiks>.go. Bez tych zmiennych -- nic.
+test_pause() {
+    [ -n "${BROWSE_TEST_PAUSE:-}" ] && [ "${BROWSE_TEST_PAUSE_AT:-}" = "$1" ] || return 0
+    local n; : >"$BROWSE_TEST_PAUSE.at"
+    for ((n = 0; n < 600; n++)); do [ -e "$BROWSE_TEST_PAUSE.go" ] && return 0; command -p sleep 0.05; done
+}
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
+    local k rc
+    k="$(hold_key "$1")" && [ "${#k}" -eq 32 ] || { echo "nie da się policzyć klucza dla $1 (sha256sum) -- nic nie zmieniam" >&2; return 1; }
+    mkdir -p "$BROOT" || return 1
+    snap_lock "$k" || { echo "nie mogę zablokować $BROOT/lock2.$k (brak flock albo inne przeglądanie tego dysku trzyma blokadę za długo) -- nic nie zmieniam" >&2; return 1; }
+    expose_snapdev_locked "$1"; rc=$?
+    snap_unlock; return "$rc"
+}
+expose_snapdev_locked() {
     local ds="$1" k v s d f p
     k="$(hold_key "$ds")" && [ "${#k}" -eq 32 ] || { echo "nie da się policzyć klucza dla $ds (sha256sum) -- nic nie zmieniam" >&2; return 1; }
     mkdir -p "$BROOT" || return 1
@@ -144,12 +172,23 @@ expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
         printf '%s\t%s\t%s\n' "$ds" "$v" "$s" >"$BROOT/orig2.$k.$$" && mv -f "$BROOT/orig2.$k.$$" "$BROOT/orig2.$k" \
             || { rm -f "$BROOT/orig2.$k.$$"; echo "nie da się zapisać $BROOT/orig2.$k -- nic nie zmieniam" >&2; return 1; }
     fi
-    : >"$BROOT/hold2.$$.$k"
+    test_pause expose
+    : >"$BROOT/hold2.$$.$k" || { echo "nie da się założyć znacznika $BROOT/hold2.$$.$k -- nic nie zmieniam" >&2; return 1; }
     SNAPDEV_DS="$ds"
     zfs set snapdev=visible "$ds"
 }
 restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RESIDUE, stan zachowany)
     [ -n "$SNAPDEV_DS" ] || return 0
+    local k rc; k="$(hold_key "$SNAPDEV_DS")"
+    if ! snap_lock "$k"; then
+        RESIDUE="$RESIDUE
+  nie mogę zablokować $BROOT/lock2.$k -- snapdev $SNAPDEV_DS zostawiam, znacznik i zapis zostają (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+        return 1
+    fi
+    restore_snapdev_locked; rc=$?
+    snap_unlock; return "$rc"
+}
+restore_snapdev_locked() {
     local k d was src ok=1; k="$(hold_key "$SNAPDEV_DS")"
     rm -f "$BROOT/hold2.$$.$k"
     if other_holders "$SNAPDEV_DS"; then SNAPDEV_DS=""; return 0; fi   # inne przeglądanie trzyma
@@ -163,6 +202,7 @@ restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RE
   zapis $BROOT/orig2.$k należy do '$d', nie do $SNAPDEV_DS -- snapdev $SNAPDEV_DS zostawiam, zapisu nie ruszam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
         return 1
     fi
+    test_pause restore
     case "$src" in
         local)                     zfs set snapdev="$was" "$SNAPDEV_DS" 2>/dev/null || ok=0 ;;
         default|"inherited from "*) zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null || ok=0 ;;
