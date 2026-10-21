@@ -9,6 +9,8 @@
 # dwa przeplecione przegladania przez punkt wejscia (atrapa mount wstrzymuje sesje), oba porzadki.
 # REV-20261021-161: ten sam dataset, dwie sesje, pauza testowa (BROWSE_TEST_PAUSE_AT) pod blokada:
 # wchodzacy po sprawdzeniu orig2, a przed znacznikiem; kończacy przed przywroceniem. Wymaga flock.
+# REV-20261021-162: SIGTERM w pauzie przywracania (pod blokada) -- pulapka EXIT musi przywrocic
+# snapdev bez drugiego flock na wlasnej blokadzie. Pauza jest jednorazowa, sygnal idzie raz.
 #
 # /dev/tty: browse_and_exit uruchamia mc z </dev/tty >/dev/tty i czyta Enter z /dev/tty. Bez
 # terminala sterujacego otwarcie /dev/tty konczy sie bledem, a skrypt idzie dalej (mc i read maja
@@ -370,8 +372,31 @@ run_script
 rc0; [ "$(cat "$D/snapdev_value")" = hidden ] || errs+=("snapdev po wszystkim: $(cat "$D/snapdev_value") (zapis mowil hidden)")
 ls "$D"/run/orig2.* "$D"/run/hold2.* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
 fin
+term_restore(){   # <zrodlo> <nazwa>: A w pauzie przywracania dostaje jeden SIGTERM
+    new_case "$2"
+    touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
+    printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf '%s\n' "$1" >"$D/sds.tank%vol"
+    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+    touch "$D/go.A"; waitf "$D/p.A.at"
+    local t0=$SECONDS
+    kill -TERM "$(cat "$D/p.A.at")"; waitf "$D/rc.A"
+    [ $((SECONDS - t0)) -lt 10 ] || errs+=("sprzatanie po SIGTERM trwalo $((SECONDS - t0)) s (czekalo na wlasna blokade?)")
+    [ "$(cat "$D/rc.A" 2>/dev/null)" != 0 ] || errs+=("rc po SIGTERM = 0, oczekiwano != 0")
+    [ "$(cat "$D/sdv.tank%vol")" = hidden ] || errs+=("snapdev po SIGTERM: $(cat "$D/sdv.tank%vol") (oczekiwano hidden)")
+    ls "$D"/run/orig* "$D"/run/hold* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
+    grep -q "nie mogę zablokować" "$D/out.A" && errs+=("sprzatanie nie wzielo wlasnej blokady")
+    [ -e "$D/p.A.go" ] && errs+=("test zwolnil pauze -- mial tylko wyslac sygnal")
+    return 0
+}
+term_restore local "24 SIGTERM podczas przywracania pod blokada -> EXIT przywraca hidden bez samozakleszczenia"
+[ "$(grep -c '^zfs set snapdev=hidden tank/vol$' "$D/log")" = 1 ] || errs+=("set hidden: $(grep -c '^zfs set snapdev=hidden tank/vol$' "$D/log") (oczekiwano 1)")
+fin
+
+term_restore "inherited from tank" "25 to samo, oryginal odziedziczony -> jedno zfs inherit, bez set hidden"
+[ "$(grep -c '^zfs inherit snapdev tank/vol$' "$D/log")" = 1 ] || errs+=("zfs inherit: $(grep -c '^zfs inherit snapdev tank/vol$' "$D/log") (oczekiwano 1)")
+nolg '^zfs set snapdev=hidden'; fin
 else
-    echo "SKIP 19-23: brak flock (REV-161 wymaga flock; uruchom na hoscie albo w CI)"
+    echo "SKIP 19-25: brak flock (REV-161/162 wymagaja flock; uruchom na hoscie albo w CI)"
 fi
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
