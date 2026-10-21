@@ -6506,14 +6506,30 @@ replica_section_upsert() {   # <file> <name> <source> <dst> <schedule> <prefix> 
 # description of what a replica run is. A medium that is not here skips quietly
 # on its own -- that is the gate's whole contract -- so this can fire on every
 # insertion without knowing which disk arrived.
+# U52 (owner 2026-10-21: "dysk wymienny repliki z włączonym startem po włożeniu ma czekać
+# minimum minutę" -- a disk plugged in and pulled again a moment later, "oj, nie ten
+# kabel", must not catch a pool import half way). Seconds to wait after insertion before
+# anything touches the disk: [replica] insert_wait in F10, never below 60.
+# REPLICA_INSERT_WAIT is the suite's override (root's udev environment does not set it).
+insert_wait() {
+    local w="${REPLICA_INSERT_WAIT:-}"
+    if [ -n "$w" ]; then case "$w" in *[!0-9]*) w=60 ;; esac; printf '%s' "$w"; return 0; fi
+    w="$(settings_get replica.insert_wait 60)"
+    case "$w" in ''|*[!0-9]*) w=60 ;; esac
+    [ "${#w}" -le 5 ] && [ "$w" -ge 60 ] || w=60
+    printf '%s' "$w"
+}
 cmd_run_replicas() {
-    local config="" only="" oninsert=0 inner=0 a
+    local config="" only="" oninsert=0 inner=0 device="" a
     for a in "$@"; do
         case "$a" in
             --config=*) config="${a#*=}" ;;
             # The udev rule (P5, owner 2026-10-09, note 6): only the replicas that
             # want to run on insertion -- the '#on-insert' lines.
             --on-insert) oninsert=1 ;;
+            # U52: the kernel name of the device that fired the rule (udev %k).
+            --device=*) device="${a#*=}"
+                        case "$device" in ''|*[!A-Za-z0-9._-]*) die "run-replicas: --device='$device' -- expected a kernel device name (udev %k)" ;; esac ;;
             # One replica by name (owner note 18, 2026-10-08: F7 on F6 runs the SELECTED one).
             --name=*)   only="${a#*=}" ;;
             # W11: called FROM a replica's cron line that was over cron's limit.
@@ -6530,6 +6546,26 @@ cmd_run_replicas() {
     [ -r "$config" ] || die "run-replicas: no readable config at $config"
 
     [ "$inner" -eq 0 ] || [ -n "$only" ] || die "run-replicas: --inner needs --name"
+    if [ "$oninsert" -eq 1 ]; then
+        # U52: wait first, then make sure the disk that fired the rule is still here
+        # and still a ZFS member. Gone or changed = it was pulled again: nothing to do,
+        # no import, no alert (a quick re-plug fires the rule again anyway).
+        local wsec; wsec="$(insert_wait)"
+        log "run-replicas: dysk włożony${device:+ ($device)} -- czekam ${wsec}s, zanim cokolwiek go dotknie"
+        sleep "$wsec"
+        if [ -n "$device" ]; then
+            local dp="${REPLICA_DEV_DIR:-/dev}/$device" fst
+            if ! [ -e "$dp" ]; then
+                log "run-replicas: $dp zniknął w ciągu ${wsec}s od włożenia -- nic nie robię"
+                return 0
+            fi
+            fst="$(blkid -o value -s TYPE "$dp" 2>/dev/null)"
+            if [ "$fst" != zfs_member ]; then
+                log "run-replicas: $dp nie jest już dyskiem ZFS (TYPE='${fst:-?}') -- nic nie robię"
+                return 0
+            fi
+        fi
+    fi
     local block rc=0 n=0
     # --replica-full: the full commands, never the short `run-replicas --inner`
     # form a long line gets in the crontab (W11) -- that would call itself.
@@ -7410,7 +7446,7 @@ cmd_install_media_trigger() {
 # for a backup would stall every other device on this machine for the length of
 # the transfer.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="zfs_member", \\
-  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --config=$config"
+  RUN+="$(command -v systemd-run) --no-block --unit=zfs-replica-insert-%k --setenv=HOME=/root $SCRIPT_DIR/zfs-backup.sh run-replicas --on-insert --device=%k --config=$config"
 EOF
 )"
     echo ">>> reguła do zapisania w $rules:"
@@ -15085,6 +15121,7 @@ capacity.guard|off|enum:off,on|-|bezpiecznik: powyżej progu kasuje najstarsze m
 capacity.guard_at|89|int:50:99|-|% zajętości puli, od którego bezpiecznik czyści
 capacity.guard_target|85|int:40:98|-|do ilu % bezpiecznik czyści
 capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek rodziny bezpiecznik zawsze zostawia
+replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po włożeniu dysku, zanim go dotknie (wyjęty w tym czasie = nic; mniej niż 60 się nie da)
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji
 update.time|:15|minute|host|minuta godzinnej aktualizacji (git pull)'

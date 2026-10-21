@@ -1377,6 +1377,14 @@
     uruchamia każdą replikę raz. Reguła sprzed P5 (bez `--on-insert`) jest w planie
     kreatora odnawiana, gdy replika ma ruszać po włożeniu; do tego czasu działa jak
     dawniej (uruchamia wszystkie).
+  - **Minuta zwłoki po włożeniu (U52, 2026-10-21):** `run-replicas --on-insert` najpierw
+    czeka `[replica] insert_wait` sekund (F10, domyślnie 60, mniej niż 60 się nie da),
+    potem sprawdza, czy urządzenie, które wywołało regułę (`--device=%k`), nadal jest i
+    nadal jest dyskiem ZFS (`blkid`). Dysk wyjęty w tym czasie („oj, nie ten kabel”) =
+    wpis w dzienniku, bez importu, bez alarmu, rc 0. Reguła sprzed U52 (bez `--device`)
+    też czeka, ale nie sprawdza urządzenia -- odnawia ją `zfs-backup.sh
+    install-media-trigger`. Testy: `zfsbackup` runreplicas (urządzenie zniknęło / nie
+    ZFS / jest, walidacja `--device`, dolna granica zwłoki).
   - **F6:** harmonogram „… + po włożeniu”, w szczegółach wiersz „Dyski” (ile, po ID).
   - **Na żywo (pve9b, dysk usb1 w slocie, kopia programu w /tmp):** obce ID — odmowa
     bez importu (rc 2); właściwe — import i eksport w `detach`; `list-replicas` z obcym
