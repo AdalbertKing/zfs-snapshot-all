@@ -59,7 +59,7 @@ save() {   # plan czasownika, potem WYKONAJ
         geom; wt --title "Ustawienia" --msgbox "Nic nie zmieniono -- nie ma czego zapisać." 8 "$W"; return 1
     fi
     "$ZB" settings set "${args[@]}" >"$TMPD/plan.txt" 2>&1 || {
-        geom; wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //')" 10 "$W"; return 1; }
+        geom; wt --title "Czasownik odmówił -- nic nie zapisano" --msgbox "$(verb_refusal "$TMPD/plan.txt")" 10 "$W"; return 1; }
     { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/plan.txt"; echo
       printf 'Komenda:  %s settings set' "$(shq "$ZB")"; for a in "${args[@]}"; do printf ' %s' "$(shq "$a")"; done; echo " --yes"; } >"$TMPD/plan2.txt"
     yesno_text "$TMPD/plan2.txt" "Ustawienia -- plan" "WYKONAJ" "Wstecz" --defaultno || return 1

@@ -379,7 +379,7 @@ harm_flow() {
         ARGV=("$ZB" set-tiers "$NAME" ${RARGS[@]+"${RARGS[@]}"} ${SARGS[@]+"${SARGS[@]}"})
         info "Zmień relację $NAME" "Liczę plan (cały config przez generator)..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 12 "$W"
+            wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)))" 12 "$W"
             [ -n "$only_src" ] && hs=2 || hs=1; continue
         fi
         { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo
@@ -537,7 +537,7 @@ PYEOF
                 [ "${#ARGV[@]}" -gt 3 ] || { P_TRANSFER=(); return 0; }
                 info "Ustawienia silnika" "Liczę plan..."
                 if ! "${ARGV[@]}" --plan >"$TMPD/stplan.txt" 2>&1; then
-                    out="$(grep -E '^FATAL' "$TMPD/stplan.txt" | tail -1 | sed 's/^FATAL: //')"
+                    out="$(verb_refusal "$TMPD/stplan.txt")"
                     [ -n "$out" ] || out="$(tail -3 "$TMPD/stplan.txt")"
                     wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(printf '%s' "$out" | fold -s -w $((W - 6)))" 12 "$W"
                     continue
@@ -779,11 +779,11 @@ while :; do
                 : >"$TMPD/dswhy.txt"
                 for n in $ADDED; do
                     "$ZB" add-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || printf '%s -- nie dodam:\n  %s\n' "$n" "$(grep -E '^FATAL' "$TMPD/dschk.txt" | tail -1 | sed 's/^FATAL: //')" >>"$TMPD/dswhy.txt"
+                        || printf '%s -- nie dodam:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
                 done
                 for n in $REMOVED; do
                     "$ZB" remove-source "$NAME" "$n" >"$TMPD/dschk.txt" 2>&1 \
-                        || printf '%s -- nie usunę:\n  %s\n' "$n" "$(grep -E '^FATAL' "$TMPD/dschk.txt" | tail -1 | sed 's/^FATAL: //')" >>"$TMPD/dswhy.txt"
+                        || printf '%s -- nie usunę:\n  %s\n' "$n" "$(verb_refusal "$TMPD/dschk.txt")" >>"$TMPD/dswhy.txt"
                 done
                 if [ -s "$TMPD/dswhy.txt" ]; then
                     wt --title "Tej zmiany nie da się zrobić -- nic nie zmieniono" --msgbox "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt")" "$(fit "$(fold -s -w $((W - 6)) "$TMPD/dswhy.txt" | grep -c '')")" "$W"
@@ -881,7 +881,7 @@ while :; do
     ARGV=("$ZB" edit-relation "$NAME" "--profile=$PROFILE" "--source-profile=$SRCPROF" ${SARGS[@]+"${SARGS[@]}"})
     info "Zmień relację $NAME" "Liczę plan (generacja, próba pobrania, prawa na źródle)..."
     if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-        grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
+        verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
         [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
         wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
         step=$back; continue

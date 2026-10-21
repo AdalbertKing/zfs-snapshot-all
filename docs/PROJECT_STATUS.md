@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ca5a153197a98d9d -->
+<!-- status-covers-digest: 6a86efa7eb5fc892 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -89,6 +89,14 @@
   „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
+
+- **FINISZ U67: replika całej puli i okna odmowy z przyczyną (2026-10-21; `finisz/U67`).**
+  Właściciel na pve10: replika z zaznaczoną całą pulą `hdd` padła z „gen-cron.sh could not render the proposed
+  config”, a prawdziwa przyczyna (silnik bierze datasety, nie korzeń puli) ginęła -- okna odmowy pokazywały tylko
+  ostatnią linię FATAL. Teraz zaznaczona pula = datasety bezpośrednio pod nią, każdy z całym drzewem pod sobą
+  (decyzja właściciela); okno to wylicza i mówi, że dataset założony później bezpośrednio pod pulą trzeba dopisać.
+  Wszystkie 8 okien odmowy (replika, zmiana relacji, ustawienia) pokazuje linie przyczyny (`verb_refusal`).
+  Testy `test/tui` 366/0 (+4).
 
 - **FINISZ U62: eksport relacji zapisuje adres, przez który relacja działa (2026-10-21; `finisz/U62`).**
   Właściciel: wyeksportował `ab` (przeniesioną oknem „Adres hosta” na VPN 10.98.0.2), usunął z zachowaniem kopii,
