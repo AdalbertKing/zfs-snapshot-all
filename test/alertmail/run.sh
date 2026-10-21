@@ -2061,7 +2061,8 @@ case "$1 $2" in
 esac
 exit 0
 ST
-printf '#!/bin/bash\nprintf "%%s\n%%s\n" "$1" "$2" >> "$GW_DIR/mail"\n' > "$gw_dir/bin/notify"
+printf '#!/bin/bash\n[ -n "${GW_NOTIFY_FAIL:-}" ] && exit 1\nprintf "%%s\n%%s\n" "$1" "$2" >> "$GW_DIR/mail"\n' > "$gw_dir/bin/notify"
+printf '#!/bin/bash\nexit 1\n' > "$gw_dir/bin/mail"   # zapasowy mail tez zawodzi -- zadnej prawdziwej poczty z testu
 chmod +x "$gw_dir/bin/"* "$gw_dir/guard.sh"
 GW_J='/r/zfs-job.sh "h prune" --log=/l --notify=/n --detail=8 --'
 {
@@ -2228,6 +2229,26 @@ if [ "$gw_rc" -eq 1 ] && grep -q 'tank/d: przyrost 2000 MiB (do tank/d@s6)' "$gw
     ok "growth-guard: dwie nowe migawki, skok w nie-najnowszej parze (s5->s6) -- ALARM za s6, s7 w porzadku"
 else
     bad "growth-guard: skok w nie-najnowszej parze" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+# Powiadomienie zawodzi -> para z alarmem NIE jest zapisana jako oceniona; nastepny bieg
+# (powiadomienie dziala) wysyla alarm.
+gw_data 2000 2000
+GW_NOTIFY_FAIL=1 gw_run on; gw_rc=$?
+gw_first="$(cat "$gw_dir/mail" 2>/dev/null)"
+GW_KEEP_STATE=1 gw_run on; gw_rc2=$?
+if [ "$gw_rc" -eq 1 ] && [ -z "$gw_first" ] && [ "$gw_rc2" -eq 1 ] && grep -q 'tank/d: przyrost 2000 MiB (do tank/d@s5)' "$gw_dir/mail"; then
+    ok "growth-guard: powiadomienie zawodzi -- alarm nie przepada, nastepny bieg go wysyla"
+else
+    bad "growth-guard: ponowienie alarmu" "rc=$gw_rc/$gw_rc2" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+# Crontab, ktorego nie da sie przeczytac (tu katalog zamiast pliku) -- blad, nie ciche pominiecie.
+mkdir -p "$gw_dir/cron/zepsuty"
+gw_run on; gw_rc=$?
+rmdir "$gw_dir/cron/zepsuty"
+if [ "$gw_rc" -eq 1 ] && grep -q 'NIE działa w całości' "$gw_dir/mail" && grep -q 'zepsuty' "$gw_dir/mail"; then
+    ok "growth-guard: crontab nie do przeczytania -- rc 1, alert z nazwa pliku"
+else
+    bad "growth-guard: crontab nie do przeczytania" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
 gw_data 2000 2000
 GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?

@@ -48,8 +48,9 @@ say() { echo "$(date '+%Y-%m-%d %H:%M:%S') growth-guard: $*"; }
 alert() {   # <temat> <treść>
     [ "$PLAN" -eq 1 ] && return 0
     if [ -x "$NOTIFY" ]; then "$NOTIFY" "$1" "$2" 2>/dev/null && return 0; fi
-    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS GROWTH] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null
-    return 0
+    command -v mail >/dev/null 2>&1 && printf '%s\n' "$2" | mail -s "[ZFS GROWTH] $1" "${ZFS_ALERT_EMAIL:-root}" 2>/dev/null && return 0
+    say "NIE DAŁO SIĘ wysłać alertu: $1"
+    return 1     # alarm pary nie jest zapisany jako oceniony -- następny bieg spróbuje znowu
 }
 in_range() {   # <wartość> <min> <max>
     case "$1" in ''|*[!0-9]*) return 1 ;; esac
@@ -93,7 +94,7 @@ esac
 WORK="$(mktemp -d 2>/dev/null)" || start_fail "nie da się utworzyć katalogu tymczasowego (TMPDIR=${TMPDIR:-/tmp})"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$STATE" 2>/dev/null
-touch "$STATE/cache" "$STATE/seen" 2>/dev/null || { [ "$PLAN" -eq 1 ] || { say "nie da się pisać do $STATE"; exit 1; }; }
+touch "$STATE/cache" "$STATE/seen" 2>/dev/null || [ "$PLAN" -eq 1 ] || start_fail "nie da się pisać do katalogu stanu $STATE"
 
 errs=""
 err() { errs="$errs
@@ -103,11 +104,15 @@ $*"; say "BŁĄD: $*"; }
 roots() {
     [ -d "$CRONDIR" ] && [ -r "$CRONDIR" ] && [ -x "$CRONDIR" ] || { echo "nie da się czytać $CRONDIR" >&2; return 1; }
     local f
+    # Najpierw do pliku, POTEM analiza: błąd czytania jednego crontabu nie może zniknąć w
+    # potoku (kod wyjścia potoku to kod ostatniego polecenia).
     for f in "$CRONDIR"/*; do
         [ -e "$f" ] || continue
         [ -r "$f" ] || { echo "nie da się czytać $f" >&2; return 1; }
-        awk '/^# BEGIN zfs-backup-managed/ { on = 1; next } /^# END zfs-backup-managed/ { on = 0; next } on' "$f" || return 1
-    done | awk '
+        awk '/^# BEGIN zfs-backup-managed/ { on = 1; next } /^# END zfs-backup-managed/ { on = 0; next } on' "$f" 2>/dev/null \
+            || { echo "błąd odczytu $f" >&2; return 1; }
+    done > "$WORK/managed" || return 1
+    awk '
         function tok(s,    i, c, t, n) {
             n = 0; i = 1
             while (i <= length(s)) {
@@ -134,7 +139,7 @@ roots() {
             if (skip || i > n) next
             m = split(T[i], a, ",")
             for (k = 1; k <= m; k++) if (a[k] != "" && a[k] !~ /:/) print a[k] "\t" rec
-        }' | sort -u
+        }' "$WORK/managed" | sort -u
 }
 if ! roots > "$WORK/roots" 2> "$WORK/roots.err"; then
     err "odczyt crontabów: $(head -1 "$WORK/roots.err")"
@@ -159,7 +164,7 @@ size_of() {   # <-c albo ""> <a> <ds@b> -> bajty albo kod 1
     printf '%s' "$v"
 }
 
-alarms=""; nds=0
+alarms=""; alarm_guids=""; nds=0
 win=$((DAYS * 86400))
 while IFS=$'\t' read -r ds comp; do
     [ -n "$ds" ] || continue
@@ -217,16 +222,18 @@ while IFS=$'\t' read -r ds comp; do
         ratio="$(awk -v p="$rpct" 'BEGIN { printf "%.2f", p / 100 }')"
         if [ "$med" -gt 0 ]; then times="$(awk -v r="$rate" -v m="$med" 'BEGIN { printf "%.1f", r / m }')"; else times="?"; fi
         hot=0
-        if [ "$L" -ge $((MINMIB * 1048576)) ] && [ "$rpct" -le "$MAXR" ] && { [ "$med" -eq 0 ] && [ "$rate" -gt 0 ] || [ "$rate" -ge $((FACTOR * med)) ]; }; then hot=1; fi
+        if [ "$med" -gt 0 ]; then fast=$(( rate >= FACTOR * med )); else fast=$(( rate > 0 )); fi
+        if [ "$L" -ge $((MINMIB * 1048576)) ] && [ "$rpct" -le "$MAXR" ] && [ "$fast" -eq 1 ]; then hot=1; fi
         line="$ds: przyrost ${mib} MiB (do $bn), tempo ${times}x normy, kompresja przyrostu ${ratio}"
         shown=1
         if [ "$hot" -eq 1 ]; then
+            # Para z alarmem trafia do seen dopiero po wysłanym alercie (niżej).
             if [ "$PLAN" -eq 1 ]; then echo "$line -- ALARM"; else alarms="$alarms
-  $line"; fi
+  $line"; alarm_guids="$alarm_guids $bg"; fi
         else
             [ "$PLAN" -eq 1 ] && echo "$line -- w porządku"
+            [ "$PLAN" -eq 1 ] || printf '%s\n' "$bg" >> "$STATE/seen"
         fi
-        [ "$PLAN" -eq 1 ] || printf '%s\n' "$bg" >> "$STATE/seen"
     done < "$WORK/p"
     [ "$PLAN" -eq 1 ] || [ "$init" -eq 1 ] || printf 'init\t%s\n' "$ds" >> "$STATE/seen"
     [ "$PLAN" -eq 1 ] && [ "$shown" -eq 0 ] && echo "$ds: brak nowych przyrostów od ostatniego sprawdzenia"
@@ -238,8 +245,10 @@ rc=0
 if [ -n "$alarms" ]; then
     rc=1
     say "PODEJRZANY PRZYROST:$alarms"
-    alert "$HOST: PODEJRZANY PRZYROST danych (możliwe szyfrowanie)" "Najnowszy przyrost jest wielokrotnie większy niż zwykle i prawie się nie kompresuje -- tak wygląda szyfrowanie plików (ransomware), ale też np. wgranie dużej ilości już skompresowanych danych.$alarms
-Strażnik niczego nie zatrzymał (tylko alarm). Sprawdź, co się dzieje na tym datasecie, zanim retencja usunie starsze, czyste migawki."
+    if alert "$HOST: PODEJRZANY PRZYROST danych (możliwe szyfrowanie)" "Przyrost między migawkami jest wielokrotnie większy niż zwykle i prawie się nie kompresuje -- tak wygląda szyfrowanie plików (ransomware), ale też np. wgranie dużej ilości już skompresowanych danych.$alarms
+Strażnik niczego nie zatrzymał (tylko alarm). Sprawdź, co się dzieje na tym datasecie, zanim retencja usunie starsze, czyste migawki."; then
+        for g in $alarm_guids; do printf '%s\n' "$g" >> "$STATE/seen"; done
+    fi
 fi
 if [ -n "$errs" ]; then
     rc=1

@@ -46,17 +46,17 @@ instalowany przez deploy.
 |---|---|---|
 | T1 | `alert = off` | nic, bez wywołań `zfs send` |
 | T2 | normalny przyrost (tempo jak norma) | brak alarmu |
-| T3 | skok x10, kompresja 1,00, ponad `min_mib` | ALARM z datasetem, rozmiarem, tempem, współczynnikiem |
-| T4 | skok x10, ale kompresja 2,5 (konwersja baz) | brak alarmu |
-| T5 | skok x10, kompresja 1,00, poniżej `min_mib` | brak alarmu |
-| T6 | za mało historii (2 przyrosty) | brak alarmu, w `--plan` „brak normy” |
+| T3 | skok x20, kompresja 1,00, ponad `min_mib` | ALARM z datasetem, rozmiarem, tempem, współczynnikiem |
+| T4 | skok x20, ale kompresja 2,5 (konwersja baz) | brak alarmu |
+| T5 | skok x9, kompresja 1,00, poniżej `min_mib` | brak alarmu |
+| T6 | za mało historii (3 przyrosty) | brak alarmu, w `--plan` „brak normy” |
 | T7 | `compression=off` | pominięty, w `--plan` powód |
 | T8 | ten sam alarm drugi raz (ta sama migawka) | jeden mail, nie dwa |
 | T9 | dataset bez linii retencji / linia poza blokiem | nie badany |
 | T10 | błąd `zfs list` / `zfs send -nP` / zła liczba | kod 1, alert „strażnik nie działa”, bez fałszywego „OK” |
-| T11 | zła wartość ustawienia (każde z 5) | nic, kod 1, alert z nazwą |
+| T11 | zła wartość ustawienia (każde z 5 i `alert = ON`) | nic, kod 1, alert z nazwą |
 | T12 | kolejność env > settings > conf | jak w U35 |
-| T13 | kontrola negatywna | T3, T10, T11 czerwone bez strażnika (skrypt nie istnieje / stara wersja) |
+| T13 | kontrola negatywna (ręczna, nie w suicie) | ten sam zestaw z atrapą skryptu i ze starszą wersją: przypadki alarmu i błędów czerwone |
 
 ## Na żywo (lab pve10, osobny dataset z lz4)
 
@@ -68,8 +68,8 @@ instalowany przez deploy.
 
 ## Wyniki (2026-10-21)
 
-Suita `test/alertmail`: 22 przypadki strażnika (T1-T12 i start jak w REV-20261021-157: blokada nie do otwarcia,
-nieudane `mktemp`) -- zielone; z atrapą skryptu (nic nie robi) 15 z pierwszych 20 czerwonych, 5 zielonych to
+Suita `test/alertmail`: 27 wierszy `PASS growth-guard` (T1-T12, start jak w REV-20261021-157, pary mieszane,
+ponowienie alarmu po nieudanym powiadomieniu, crontab nie do przeczytania) -- zielone; z atrapą skryptu (nic nie robi) 15 z pierwszych 20 czerwonych, 5 zielonych to
 przypadki „bez alarmu”. Na żywo pve10 (pula z pliku, `lz4`, osobny katalog crontabów, kroki co 8 s):
 L1 -- 300 MiB losowych przy normie kilku MiB: tempo 26,9x, kompresja 1,00 -- ALARM, jeden mail; L2 -- 305 MiB
 danych w stylu bazy: tempo 147,8x, kompresja 7,60 -- bez alarmu. L3 (instalacja przez deploy) -- po scaleniu,
@@ -93,3 +93,14 @@ Nowe testy: godzinowe + dobowe (pary 600 s i 3000 s, niekompresowalne -- rozstrz
 krótkiej parze godzinowa->dobowa -- alarm; dwie nowe migawki, skok w nie-najnowszej -- alarm za nią (stara wersja:
 FAIL). Test na żywo z prawdziwym cronem na pve10 (pula `gwlive`, 2026-10-21/22): sprawdzenie po godzinie, po
 „szyfrowaniu” (12:07 UTC) i po dobie (dobowa 01:40 UTC, „konwersja” 05:07 UTC).
+
+## Poprawki po sprawdzeniu tekstu z kodem (2026-10-21)
+
+- Błąd odczytu pojedynczego crontabu ginął w potoku -- teraz najpierw zapis do pliku, potem analiza; test.
+- Para z alarmem trafiała do „ocenionych” przed wysłaniem alertu; gdy powiadomienie zawiodło, alarm przepadał --
+  teraz zapis dopiero po wysłaniu, następny bieg ponawia; test.
+- Treść maila: „przyrost między migawkami” (nie „najnowszy”), bo alarm może dotyczyć wcześniejszej pary.
+- Warunek tempa bez pułapki `A && B || C` przy normie 0; brak zapisu stanu = alert.
+- Ograniczenia dopisane: ręczna migawka minutę po godzinowej daje krótką parę -- alarm tylko, gdy w tej minucie
+  przybyło >= `min_mib` niekompresowalnych danych (co samo jest podejrzane); długie szyfrowanie przez wiele par
+  podnosi medianę dopiero, gdy zajmie połowę okna (7 dni godzinowych to ok. 168 par).

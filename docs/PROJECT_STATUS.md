@@ -100,8 +100,9 @@
   mediana tempa par sprzed niej z `days` (7) dni (tempo = przyrost / czas między migawkami, więc pary 10 min i 50 min
   liczą się równo), przyrost >= `min_mib` (1024) i kompresja <= `max_ratio_pct` (110 %). Konwersja baz
   (duży, ale kompresowalny przyrost) nie alarmuje. Nic nie kasuje ani nie wstrzymuje; jeden mail na migawkę;
-  `compression=off` i za mało historii -- pominięte z powodem w `--plan`. Błędy odczytu, złe ustawienia, blokada i
-  `mktemp` -- kod 1 i alert, jak w U35 po REV-155/157. Ograniczenia: dysk VM szyfrowany w gościu i dane już
+  `compression=off` i za mało historii -- pominięte z powodem w `--plan`. Błędy odczytu, złe ustawienia, blokada nie
+  do otwarcia i `mktemp` -- kod 1 i alert, jak w U35 po REV-155/157 (blokada zajęta przez inny bieg -- pominięcie,
+  kod 0); alarm, którego nie dało się wysłać, jest ponawiany w następnym biegu. Ograniczenia: dysk VM szyfrowany w gościu i dane już
   skompresowane przez aplikację wyglądają jak szyfrogram (zostaje sam skok przyrostu); wolne szyfrowanie pod
   normą nie da skoku. Plan, testy i pomiar: `docs/project/PLAN-U50-STRAZNIK-PRZYROSTU.md` (na żywo pve10: losowe
   300 MiB -- alarm, kompresowalne 305 MiB -- bez alarmu).
