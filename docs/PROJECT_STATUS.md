@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 40fa0b3aec5f780d -->
+<!-- status-covers-digest: f0d612040485a8a5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -103,6 +103,17 @@
   `--source=HOST:PORT:DATASETY`. Teraz adres jest rozbierany raz (`parse_endpoint_arg`) na host i port; `--host`
   idzie dalej bez zmian, droga jednym poleceniem dostaje `--port=`. Test `exportrel` 68/0 (pve9); atrapa SSH
   sprawdza host, port i polecenie. Na żywo niesprawdzone (lab ma tylko port 22).
+
+- **U66: kreator nowej relacji krok po kroku (2026-10-22; `finisz/kreator`, część 1 -- tworzenie).**
+  Właściciel: „do kompletnej przebudowy, nielogiczne”. Kroki danego rodzaju po kolei, tytuł „krok N z M”; Wstecz
+  zawsze o jeden krok, Wstecz w kroku 1 pyta o przerwanie. Po ostatnim kroku podsumowanie: każda pozycja otwiera
+  swój krok i wraca do podsumowania; konto i dodatki w „Zaawansowane”; kursor na „Utwórz relację”. Zmiana szablonu
+  z podsumowania przechodzi też przez retencję źródła (zależy od szablonu). Niedopasowanie szablonu do konta
+  sprawdza się przy „Utwórz”. U56: sprawdzenie hosta podaje, na jaki adres rozwiązała się nazwa, i ostrzega przed
+  adresem publicznym. „Przeglądaj…” w kroku Dokąd to drzewo jednej pozycji (reszta U68). Home/End z PuTTY
+  (`ESC[1~`/`ESC[4~`) w drzewie i tabeli retencji działały jak Esc -- naprawione. Na żywo (pve10 <- pve9): całe
+  przejście backupu do planu, z cofaniem i zmianami zdania, bez wpadek; WYKONAJ nadal pokazuje wyjście czasownika
+  na czarnym ekranie (~60 s) -- okno postępu to część 2 razem ze zmianą relacji (U64/U65). Test `tui` 371/0 (pve9).
 
 - **U68: jedno drzewo wyboru datasetów -- tryb jednej pozycji; Przeglądaj kopię go używa (2026-10-21; `finisz/drzewo`).**
   Właściciel: „zginęło okno z rozwijającymi się gałęziami; to musi być jednolite w całym pakiecie”. Przeglądaj kopię
