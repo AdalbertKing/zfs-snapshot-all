@@ -16,7 +16,7 @@
 # 4 montaż + mc, odmontowanie.
 #
 # Środowisko (testy): ZFS_BACKUP, WHIPTAIL, ZFS_CONF_DIR, PYTHON, BROWSE_MC (domyślnie mc),
-# BROWSE_ROOT (domyślnie /run/zfs-browse).
+# BROWSE_ROOT (domyślnie /run/zfs-browse), BROWSE_MAPPER_DIR, BROWSE_ZVOL_DIR.
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,19 +27,55 @@ REL="${1:-}"
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 MC="${BROWSE_MC:-mc}"
 BROOT="${BROWSE_ROOT:-/run/zfs-browse}"
+MAPDIR="${BROWSE_MAPPER_DIR:-/dev/mapper}"   # testy: katalog zamiast /dev/mapper
+ZVDIR="${BROWSE_ZVOL_DIR:-/dev/zvol}"        # testy: katalog zamiast /dev/zvol
 TMPD="$(mktemp -d)" || exit 1
-MNT=""; MAPPED=""; SNAPDEV_DS=""
+MNT=""; MAPPED=""; SNAPDEV_DS=""; LAZY=0
+RESIDUE=""   # co zostało po nieudanym sprzątaniu -- z poleceniem do ręcznego dokończenia
 
-unmount_all() {
+# REV-20261021-159 F1: stan (MNT, MAPPED) znika DOPIERO, gdy zasób naprawdę zniknął --
+# inaczej wyjście (trap EXIT) nie ma czego ponowić, a ekran mówi "odmontowane" przy
+# zamontowanej kopii albo otwartym, odszyfrowanym urządzeniu. Kolejność: mapper zamykany
+# dopiero, gdy system plików na nim nie jest już zamontowany; odłączenie leniwe (umount -l)
+# NIE dowodzi, że nikt go nie używa -- wtedy mapper zostaje otwarty i jest to zgłaszane.
+is_mounted() {   # <katalog>
+    # `return $?`, nie samo `return`: w pułapce EXIT gołe `return` oddaje status sprzed
+    # pułapki (dokumentacja basha), więc sprzątanie przy wyjściu brało kopię za odmontowaną.
+    if command -v mountpoint >/dev/null 2>&1; then mountpoint -q "$1" 2>/dev/null; return $?; fi
+    awk -v m="$1" '$2 == m { f = 1 } END { exit !f }' /proc/self/mounts 2>/dev/null
+}
+unmount_all() {   # -> 0 nic nie zostało; 1 coś zostało (opis w RESIDUE, stan zachowany)
+    local left=0
     if [ -n "$MNT" ]; then
-        umount "$MNT" 2>/dev/null || umount -l "$MNT" 2>/dev/null
-        rmdir "$MNT" 2>/dev/null
-        MNT=""
+        if is_mounted "$MNT"; then
+            umount "$MNT" 2>/dev/null || { umount -l "$MNT" 2>/dev/null && LAZY=1; }
+        fi
+        if is_mounted "$MNT"; then
+            RESIDUE="$RESIDUE
+  kopia wciąż zamontowana: $MNT  (ręcznie: umount $MNT)"
+            left=1
+        else
+            rmdir "$MNT" 2>/dev/null
+            MNT=""
+        fi
     fi
     if [ -n "$MAPPED" ]; then
-        cryptsetup close "$MAPPED" 2>/dev/null
-        MAPPED=""
+        if [ "$left" -eq 1 ]; then
+            RESIDUE="$RESIDUE
+  odblokowane urządzenie /dev/mapper/$MAPPED zostaje otwarte -- najpierw odmontowanie (potem: cryptsetup close $MAPPED)"
+        elif [ "$LAZY" -eq 1 ]; then
+            RESIDUE="$RESIDUE
+  system plików był zajęty (odłączony leniwie, umount -l) -- /dev/mapper/$MAPPED zostaje otwarte; gdy nic go nie używa: cryptsetup close $MAPPED"
+            left=1
+        elif cryptsetup close "$MAPPED" 2>/dev/null || ! [ -e "$MAPDIR/$MAPPED" ]; then
+            MAPPED=""
+        else
+            RESIDUE="$RESIDUE
+  nie udało się zamknąć /dev/mapper/$MAPPED (odszyfrowane dane dostępne!)  (ręcznie: cryptsetup close $MAPPED)"
+            left=1
+        fi
     fi
+    return "$left"
 }
 # DWA PRZEGLĄDANIA TEGO SAMEGO DYSKU (pve10, 2026-10-18: pierwsze, które skończyło, przywróciło
 # snapdev i drugiemu zniknęło /dev/zd..p1 w trakcie podawania klucza). Każde przeglądanie zostawia
@@ -57,31 +93,66 @@ other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dat
     done
     return 1
 }
+# REV-20261021-159 F2: snapdev zmieniany TYLKO, gdy wartość i źródło sprzed zmiany dało się
+# odczytać i są poprawne. Zapis oryginału (orig.<dataset>) powstaje raz -- gdy go nie ma --
+# i znika WYŁĄCZNIE po udanym przywróceniu: nieudane przywrócenie zostawia go (z poleceniem
+# w RESIDUE), a następne przeglądanie nie nadpisze go bieżącym "visible".
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
-    local ds="$1" k; k="$(hold_key "$ds")"
+    local ds="$1" k v s; k="$(hold_key "$ds")"
     mkdir -p "$BROOT" || return 1
-    if ! other_holders "$ds" || ! [ -s "$BROOT/orig.$k" ]; then
-        printf '%s\t%s\n' "$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" "$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" >"$BROOT/orig.$k"
+    if ! [ -s "$BROOT/orig.$k" ]; then
+        v="$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać snapdev $ds -- nic nie zmieniam" >&2; return 1; }
+        s="$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać źródła snapdev $ds -- nic nie zmieniam" >&2; return 1; }
+        case "$v" in hidden|visible) ;; *) echo "snapdev $ds = '$v' -- nieznana wartość, nic nie zmieniam" >&2; return 1 ;; esac
+        case "$s" in local|default|received|"inherited from "*) ;; *) echo "źródło snapdev $ds = '$s' -- nieznane, nic nie zmieniam" >&2; return 1 ;; esac
+        printf '%s\t%s\n' "$v" "$s" >"$BROOT/orig.$k.$$" && mv -f "$BROOT/orig.$k.$$" "$BROOT/orig.$k" \
+            || { rm -f "$BROOT/orig.$k.$$"; echo "nie da się zapisać $BROOT/orig.$k -- nic nie zmieniam" >&2; return 1; }
     fi
     : >"$BROOT/hold.$$.$k"
     SNAPDEV_DS="$ds"
     zfs set snapdev=visible "$ds"
 }
-restore_snapdev() {
+restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RESIDUE, stan zachowany)
     [ -n "$SNAPDEV_DS" ] || return 0
-    local k was src; k="$(hold_key "$SNAPDEV_DS")"
+    local k was src ok=1; k="$(hold_key "$SNAPDEV_DS")"
     rm -f "$BROOT/hold.$$.$k"
-    if ! other_holders "$SNAPDEV_DS"; then
-        IFS=$'\t' read -r was src <"$BROOT/orig.$k" 2>/dev/null || { was=""; src=""; }
-        case "$src" in
-            local) zfs set snapdev="$was" "$SNAPDEV_DS" 2>/dev/null ;;
-            *)     zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null ;;
-        esac
-        rm -f "$BROOT/orig.$k"
+    if other_holders "$SNAPDEV_DS"; then SNAPDEV_DS=""; return 0; fi   # inne przeglądanie trzyma
+    if ! IFS=$'\t' read -r was src <"$BROOT/orig.$k" 2>/dev/null; then
+        RESIDUE="$RESIDUE
+  nie ma zapisu snapdev sprzed przeglądania ($BROOT/orig.$k) -- snapdev $SNAPDEV_DS zostawiam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+        return 1
     fi
-    SNAPDEV_DS=""
+    case "$src" in
+        local)                     zfs set snapdev="$was" "$SNAPDEV_DS" 2>/dev/null || ok=0 ;;
+        default|"inherited from "*) zfs inherit snapdev "$SNAPDEV_DS" 2>/dev/null || ok=0 ;;
+        received)                  zfs inherit -S snapdev "$SNAPDEV_DS" 2>/dev/null || ok=0 ;;
+        *)                         ok=0 ;;
+    esac
+    if [ "$ok" -eq 1 ]; then
+        rm -f "$BROOT/orig.$k"; SNAPDEV_DS=""; return 0
+    fi
+    RESIDUE="$RESIDUE
+  snapdev na $SNAPDEV_DS NIE przywrócony (było: $was, $src; zapis w $BROOT/orig.$k)  (ręcznie: $(case "$src" in local) echo "zfs set snapdev=$was $SNAPDEV_DS" ;; *) echo "zfs inherit snapdev $SNAPDEV_DS" ;; esac))"
+    return 1
 }
-cleanup() { unmount_all; restore_snapdev; rm -rf "$TMPD"; }
+# Po kroku, który zmienił snapdev, a się nie udał: przywrócenie i -- gdy nie wyszło -- okno
+# z tym, co zostało (zamiast "nic nie zostało zmienione").
+undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
+    RESIDUE=""
+    unmount_all; restore_snapdev   # obie próby, także gdy pierwsza zawiodła
+    if [ -z "$RESIDUE" ]; then
+        [ -n "$1" ] && wt --title "$TITLE" --msgbox "$1" 9 "$W"
+    else
+        wt --title "$TITLE" --msgbox "Nie wszystko udało się przywrócić:$RESIDUE" 14 "$W"
+    fi
+    return 0
+}
+cleanup() {
+    RESIDUE=""
+    unmount_all; restore_snapdev
+    [ -n "$RESIDUE" ] && printf 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
+    rm -rf "$TMPD"
+}
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
@@ -172,12 +243,18 @@ browse_and_exit() {
         echo "Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje."
         ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
     fi
-    unmount_all
-    restore_snapdev
+    RESIDUE=""
+    unmount_all; restore_snapdev
     echo
-    echo "=== Odmontowane. Enter = powrót do GUI"
+    if [ -z "$RESIDUE" ]; then
+        echo "=== Odmontowane. Enter = powrót do GUI"
+        read -r _ </dev/tty 2>/dev/null || true
+        exit 0
+    fi
+    echo "=== NIE wszystko posprzątane:$RESIDUE"
+    echo "Enter = powrót do GUI (przy wyjściu jeszcze jedna próba)"
     read -r _ </dev/tty 2>/dev/null || true
-    exit 0
+    exit 1
 }
 
 step=1
@@ -207,21 +284,21 @@ while :; do
         SNAP="$(sed -n "$((k + 1))p" "$TMPD/points.tsv" | cut -f2)"
         if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;
     3)  # ---- DYSK VM: urządzenie migawki, partycja, klucz ---------------------------------
-        restore_snapdev
+        undo_or_warn ""
         info "$TITLE" "Wystawiam migawkę dysku jako urządzenie tylko do odczytu..."
         if ! expose_snapdev "$DS" 2>"$TMPD/sd.err"; then
-            restore_snapdev
             wt --title "$TITLE" --msgbox "Nie mogę wystawić migawki $DS@$SNAP jako urządzenia:\n$(head -2 "$TMPD/sd.err")" 10 "$W"
+            undo_or_warn ""
             step=2; continue
         fi
-        DEV="/dev/zvol/$DS@$SNAP"
+        DEV="$ZVDIR/$DS@$SNAP"
         for _w in 1 2 3 4 5 6 7 8 9 10; do
             command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
             [ -e "$DEV" ] && break; sleep 1
         done
         if ! [ -e "$DEV" ]; then
-            wt --title "$TITLE" --msgbox "Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii." 9 "$W"
-            restore_snapdev; step=2; continue
+            undo_or_warn "Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii."
+            step=2; continue
         fi
         sleep 1; command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
         # parts.tsv: urządzenie, system plików, rozmiar, etykieta -- rozdzielone \001, NIE tabulatorem:
@@ -251,15 +328,15 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
         done <"$TMPD/parts.tsv"
         if [ "$i" -eq 0 ]; then
             wt --title "$TITLE" --msgbox "Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie." 10 "$W"
-            restore_snapdev; step=2; continue
+            undo_or_warn ""; step=2; continue
         fi
-        wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; restore_snapdev; step=2; continue; }
+        wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
         k="${WT_OUT#q}"
         PDEV="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f1)"; PFS="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f2)"
         rm -f "$TMPD/pick.tsv"
         case "$PFS" in
             BitLocker|crypto_LUKS)
-                command -v cryptsetup >/dev/null 2>&1 || { wt --title "$TITLE" --msgbox "Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin)." 9 "$W"; restore_snapdev; step=2; continue; }
+                command -v cryptsetup >/dev/null 2>&1 || { wt --title "$TITLE" --msgbox "Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin)." 9 "$W"; undo_or_warn ""; step=2; continue; }
                 _ty=luks; _hint="hasło LUKS"
                 [ "$PFS" = BitLocker ] && { _ty=bitlk; _hint="hasło BitLocker albo 48-cyfrowy klucz odzyskiwania (z myślnikami)"; }
                 _name="zbrowse-$$"
@@ -272,15 +349,15 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
                     wt --title "$TITLE" --msgbox "Nie udało się odblokować:\n$(head -2 "$TMPD/cs.err")\nSpróbuj jeszcze raz albo Anuluj." 11 "$W"
                 done
                 WT_OUT=""
-                [ "$_ok" -eq 1 ] || { restore_snapdev; step=2; continue; }
+                [ "$_ok" -eq 1 ] || { undo_or_warn ""; step=2; continue; }
                 MAPPED="$_name"
-                PDEV="/dev/mapper/$_name"
+                PDEV="$MAPDIR/$_name"
                 PFS="$(blkid -o value -s TYPE "$PDEV" 2>/dev/null)"
                 [ -n "$PFS" ] || PFS=unknown ;;
         esac
         if ! mount_ro "$PDEV" "$PFS"; then
             wt --title "$TITLE" --msgbox "Nie udało się zamontować $PDEV ($PFS) tylko do odczytu:\n$(head -3 "$TMPD/mount.err")" 11 "$W"
-            unmount_all; restore_snapdev; step=2; continue
+            undo_or_warn ""; step=2; continue
         fi
         browse_and_exit "$DS@$SNAP, $PDEV ($PFS)" ;;
     4)  if ! mount_ro "$DS@$SNAP" zfs; then
