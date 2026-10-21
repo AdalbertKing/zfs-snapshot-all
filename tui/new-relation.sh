@@ -316,12 +316,15 @@ for x in d.get("datasets", []):
         TARGET="$t"; return 0
     done
 }
-# "Przegladaj..." (uwaga 1): plaska lista systemow plikow tego hosta, wciecie wg glebokosci.
-# Ukryte sa wnetrza ladowisk innych relacji (<cel>/<peer>/...): wybor tam i tak odrzucilby
-# straznik pokrycia kilka krokow dalej. 0 = TARGET ustawiony, 1 = wstecz do listy.
+# "Przegladaj..." (uwaga 1): systemy plikow tego hosta. U68 (wlasciciel 2026-10-21: "to musi byc
+# jednolite w calym pakiecie"): to samo drzewo co wybor datasetow, w trybie JEDNEJ pozycji
+# (wczesniej plaska lista z wcieciami, nazwy obciete). Ukryte sa wnetrza ladowisk innych relacji
+# (<cel>/<peer>/...): wybor tam i tak odrzucilby straznik pokrycia kilka krokow dalej.
+# 0 = TARGET ustawiony, 1 = wstecz do listy.
 browse_target() {
-    local items=() n t p hid=0 skip d ind _rn _st
+    local n t p hid=0 skip _rn _st
     [ -s "$TMPD/fs.all" ] || { wt --title "Brak listy" --msgbox "Nie udało się odczytać datasetów tego hosta (list-datasets)." 8 "$W"; return 1; }
+    : >"$TMPD/fs.pick"
     while IFS= read -r n; do
         [ -n "$n" ] || continue
         skip=0
@@ -330,16 +333,24 @@ browse_target() {
             case "$n" in "$t/$p"|"$t/$p"/*) skip=1; break ;; esac
         done <"$TMPD/rel.tsv"
         [ "$skip" -eq 1 ] && { hid=$((hid + 1)); continue; }
-        d="${n//[!/]/}"; ind="$(printf '%*s' $((${#d} * 2)) '')"
-        items+=("$n" "$(clip_label "$ind$n" $((W - 10)))")
+        printf '%s\n' "$n" >>"$TMPD/fs.pick"
     done <"$TMPD/fs.all"
-    [ "${#items[@]}" -gt 0 ] || { wt --title "Brak datasetów" --msgbox "Na tym hoście nie ma datasetu, pod którym mogłyby lądować kopie." 8 "$W"; return 1; }
-    local note=""; [ "$hid" -gt 0 ] && note="\nUkryto $hid kopii innych relacji."
-    geom
-    wt --title "$(title 5 'Dokąd -- przeglądaj')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-       --menu "Datasety tego hosta. Kopie trafią pod:  <wybrany>/$HOST/<dataset źródła>$note" \
-       "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 4)" "${items[@]}" || return 1
-    TARGET="$WT_OUT"
+    [ -s "$TMPD/fs.pick" ] || { wt --title "Brak datasetów" --msgbox "Na tym hoście nie ma datasetu, pod którym mogłyby lądować kopie." 8 "$W"; return 1; }
+    local lv="/$HOST"; [ "$MODE" = local ] && lv=""
+    local legend=" Kopie trafią pod:  <wybrany>$lv/<dataset źródła>"
+    [ "$hid" -gt 0 ] && legend="$legend   (ukryto $hid kopii innych relacji)"
+    "$PY" - "$TMPD/fs.pick" "$TMPD/tree-spec.json" "$(title 5 'Dokąd -- przeglądaj')" "$legend" "$TARGET" <<'PYEOF' || return 1
+import sys, json
+names = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+json.dump({"title": sys.argv[3], "single": True, "selectable": names, "legend": sys.argv[4],
+           "roots": [sys.argv[5]] if sys.argv[5] in names else [],
+           "datasets": [{"name": n, "type": "filesystem", "used": None} for n in names]},
+          open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYEOF
+    ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || return 1
+    n="$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")).get("roots") or [""]; print(r[0])' "$TMPD/tree-out.json" | tr -d '\r')"
+    [ -n "$n" ] || return 1
+    TARGET="$n"
     return 0
 }
 in_list() { local x="$1" y; shift; for y in "$@"; do [ "$x" = "$y" ] && return 0; done; return 1; }

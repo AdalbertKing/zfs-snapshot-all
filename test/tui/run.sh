@@ -2248,6 +2248,7 @@ cat > "$NR/bin/tree" <<'EOF'
 #!/bin/bash
 n=$(cat "$NR_DIR/tree.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/tree.n"
 k=$(sed -n "${n}p" "$NR_DIR/treekeys" 2>/dev/null); [ -n "$k" ] || k=esc
+pv=""; for a in "$@"; do [ "$pv" = --spec ] && cp "$a" "$NR_DIR/tree-spec.last"; pv="$a"; done
 "$TREE_PY" "$TREE_REPO/tui/tree.py" --keys "$k" "$@" >> "$NR_DIR/tree.log"
 rc=$?
 echo "RC: $rc" >> "$NR_DIR/tree.log"
@@ -2255,7 +2256,7 @@ exit "$rc"
 EOF
 chmod +x "$NR/bin/whiptail" "$NR/bin/zb" "$NR/bin/tree"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
       # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
@@ -2778,6 +2779,32 @@ if [ -n "$NRLN_X" ] && [ -n "$NRLN_C" ] && [ -n "$NRLN_S" ] && [ "$NRLN_X" -lt "
     ok "new-relation: podsumowanie kreatora z kursorem na create pojawia sie PO 'Ustawienia dodatkowe' (Zaawansowane) i PRZED 'Podsumowanie' (U66)"
 else
     bad "new-relation: karta przed podsumowaniem" "extra=$NRLN_X karta=$NRLN_C podsumowanie=$NRLN_S" "$(printf '%s' "$NRCARD" | cut -c1-300)"
+fi
+
+# U68: "Przegladaj..." w kroku Dokad to DRZEWO w trybie jednej pozycji (wczesniej plaska lista
+# whiptaila z obcietymi nazwami). Wnetrza ladowisk innych relacji ukryte i policzone w legendzie.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}__browse__
+0${T}default
+0${T}pve9b
+0${T}create
+0${T}
+0${T}
+" NR_TREE="$NRTK|goto:hdd,enter")
+if has "$NROUT" " --target=hdd " && ! grep -qF 'Dokąd -- przeglądaj ~ --ok-button' "$NR/wt.log" \
+   && "$PY" - "$NR/tree-spec.last" <<'PYEOF'
+import sys, json
+s = json.load(open(sys.argv[1], encoding="utf-8")); names = [d["name"] for d in s["datasets"]]
+ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
+     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "")
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "new-relation: Przegladaj w kroku Dokad = drzewo jednej pozycji (U68), kopie innych relacji ukryte i policzone, wybor idzie do --target"
+else
+    bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
