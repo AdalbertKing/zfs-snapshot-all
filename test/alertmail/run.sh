@@ -1626,6 +1626,7 @@ gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin" "$gs_dir/cron" "$gs_dir/peers"
 cp "$HS/capacity-guard.sh" "$gs_dir/guard.sh"; cp "$HS/alert-env.sh" "$gs_dir/alert-env.sh"
 cat > "$gs_dir/bin/zpool" <<'ST'
 #!/bin/bash
+echo "zpool $*" >> "$GS_DIR/calls"
 gs_capmode() {   # <tryb> <wartosc dobra>
     case "$1" in
       fail)  echo "95%"; exit 1 ;;     # czesciowe wyjscie i kod bledu
@@ -1688,7 +1689,8 @@ gs_run() {   # <cap> <step> <settings guard> [args] -> rc; destroyed/mail/out in
     ( [ -n "${GS_ENV_KEEP:-}" ] || unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP
       PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" GS_STEP="$step" SETTINGS_FILE="$gs_dir/settings.ini" \
       ZFS_ALERT_CONF="${GS_CONF:-/dev/null}" ZFS_GUARD_CRONTABS="${GS_CRON:-$gs_dir/cron}" ZFS_GUARD_PEERS="$gs_dir/peers" \
-      ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="$gs_dir/lock" bash "$gs_dir/guard.sh" "$@" ) > "$gs_dir/out" 2>&1
+      ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="${GS_LOCK:-$gs_dir/lock}" TMPDIR="${GS_TMP:-${TMPDIR:-/tmp}}" \
+      bash "$gs_dir/guard.sh" "$@" ) > "$gs_dir/out" 2>&1
 }
 gs_none() { [ ! -s "$gs_dir/destroyed" ]; }
 gs_tag() { printf '%s\0%s' "$1" "${2:-}" | md5sum | cut -c1-8; }   # jak bookmark_target_tag silnika
@@ -1945,7 +1947,7 @@ else
     bad "capacity-guard: --plan nieczytelna zajetosc" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
 fi
 GS_TWO=1 gs_run 92 3 on; gs_rc=$?
-if [ "$gs_rc" -eq 1 ] && [ -s "$gs_dir/destroyed" ] && ! grep -qv '^tank/' "$gs_dir/destroyed" && ! grep -q 'zbad' "$gs_dir/calls" \
+if [ "$gs_rc" -eq 1 ] && [ -s "$gs_dir/destroyed" ] && ! grep -qv '^tank/' "$gs_dir/destroyed" && ! grep -q '^zfs .*zbad' "$gs_dir/calls" \
    && grep -q 'nie widzi puli zbad' "$gs_dir/mail" && grep -q 'wyczyścił pulę tank' "$gs_dir/mail"; then
     ok "capacity-guard: dwie pule, druga nieczytelna -- pierwsza czyszczona, w drugiej 0 wywolan zfs, rc 1, alert dla drugiej"
 else
@@ -1974,6 +1976,45 @@ if [ "$gs_rc" -eq 0 ] && ! grep -q '^zfs ' "$gs_dir/calls" 2>/dev/null && [ ! -s
     ok "capacity-guard: pusta lista pul przy kodzie 0 -- host bez pul: rc 0, bez alertu, wpis"
 else
     bad "capacity-guard: pusta lista pul" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
+fi
+
+# ---- REV-20261021-157: start bezpiecznika -- blokada i katalog roboczy ----
+gs_cron; gs_snaps > "$gs_dir/snaps"; : > "$gs_dir/marks"
+GS_LOCK="$gs_dir/nie-ma/guard.lock" gs_run 99 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ ! -s "$gs_dir/calls" ] && grep -q 'NIE działa -- blokada' "$gs_dir/mail" && grep -q "$gs_dir/nie-ma/guard.lock" "$gs_dir/mail"; then
+    ok "capacity-guard: pliku blokady nie da sie otworzyc -- rc 1, zero wywolan zpool/zfs, alert ze sciezka"
+else
+    bad "capacity-guard: blokada nie do otwarcia" "rc=$gs_rc" "$(cat "$gs_dir/calls" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+GS_LOCK="$gs_dir/nie-ma/guard.lock" gs_run 99 1 on --plan; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ ! -s "$gs_dir/mail" ] && grep -q 'nie da się otworzyć pliku blokady' "$gs_dir/out"; then
+    ok "capacity-guard: --plan przy blokadzie nie do otwarcia -- rc 1, wpis, bez alertu"
+else
+    bad "capacity-guard: --plan blokada" "rc=$gs_rc" "$(cat "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+if command -v flock >/dev/null 2>&1; then
+    ( flock "$gs_dir/held.lock" sleep 4 ) & gs_hold=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10; do flock -n "$gs_dir/held.lock" true 2>/dev/null || break; sleep 0.2; done
+    GS_LOCK="$gs_dir/held.lock" gs_run 99 1 on; gs_rc=$?
+    wait "$gs_hold" 2>/dev/null
+    if [ "$gs_rc" -eq 0 ] && [ ! -s "$gs_dir/destroyed" ] && [ ! -s "$gs_dir/mail" ] && grep -q 'trzyma blokadę -- pomijam' "$gs_dir/out" \
+       && ! grep -q '^zpool' "$gs_dir/calls" 2>/dev/null; then
+        ok "capacity-guard: blokade trzyma inny bieg -- pominiecie, rc 0, bez alertu, bez drugiego biegu"
+    else
+        bad "capacity-guard: blokada zajeta" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+    fi
+fi
+GS_TMP="$gs_dir/nie-ma-tmp" gs_run 99 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ ! -s "$gs_dir/calls" ] && grep -q 'NIE działa -- katalog tymczasowy' "$gs_dir/mail" && grep -q 'nie-ma-tmp' "$gs_dir/mail"; then
+    ok "capacity-guard: mktemp -d zawodzi (TMPDIR nie istnieje) -- rc 1, zero wywolan zpool/zfs, alert z TMPDIR"
+else
+    bad "capacity-guard: mktemp zawodzi" "rc=$gs_rc" "$(cat "$gs_dir/calls" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+gs_run 92 3 on; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && [ "$(grep -c . "$gs_dir/destroyed")" -eq 3 ]; then
+    ok "capacity-guard: kontrola zdrowa -- dobra blokada i TMPDIR, zwykly bieg (3 usuniecia)"
+else
+    bad "capacity-guard: kontrola zdrowa REV-157" "rc=$gs_rc" "$(cat "$gs_dir/out" 2>/dev/null)"
 fi
 
 printf '[capacity]\n' > "$gs_dir/settings-empty.ini"
