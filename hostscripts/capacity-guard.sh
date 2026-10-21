@@ -4,11 +4,11 @@
 # Wzór: a-tassa, gdzie cron przy zajętości 89 % kasuje najstarsze migawki. Tutaj tak
 # samo, ale tylko to, co bezpiecznie usunąć -- i każda niepewność oznacza NIC NIE
 # USUWAĆ (GitHub #655, audyt 2026-10-20):
-#   - WŁASNOŚĆ z zarządzanych linii crona, nie z nazwy: migawka jest „nasza” tylko gdy
-#     lokalna linia delsnaps.sh wyrenderowana (jako root, przez gen-cron.sh) z configu
-#     hosta w /etc/zfs-snapshot-all -- należącego do roota, niezapisywalnego dla innych;
-#     crontaby kont NIE są czytane (REV-20261021-158) -- obejmuje jej dataset (wprost albo jako dziecko przy -R) i jej nazwa zaczyna się od
-#     JAWNEGO wzorca tej linii. Linia z pustym wzorcem ("" -- wszystko, co nie chronione przez -P) nie
+#   - WŁASNOŚĆ z linii retencji, nie z nazwy: migawka jest „nasza” tylko gdy lokalna
+#     linia delsnaps.sh obejmuje jej dataset (wprost albo jako dziecko przy -R) i jej nazwa
+#     zaczyna się od JAWNEGO wzorca tej linii. Linie bierze się z configów hosta w
+#     /etc/zfs-snapshot-all, renderowanych jako root przez gen-cron.sh (pliki roota,
+#     niezapisywalne dla innych); crontaby kont NIE są czytane (REV-20261021-158). Linia z pustym wzorcem ("" -- wszystko, co nie chronione przez -P) nie
 #     daje prawa kasowania; linia zdalna (host:dataset), -B (zakładki) i -n też nie;
 #   - nigdy migawka pod hold (np. zfssnapall_inflight -- trwa transfer);
 #   - nigdy NAJNOWSZA migawka datasetu (dowolna nazwa): po stronie celu silnik bierze za
@@ -36,7 +36,7 @@
 #   - config albo gen-cron.sh, którym nie da się ufać (nie roota / zapisywalny dla innych),
 #     błąd renderowania, `zfs list` (migawki, zakładki) albo linia transferu, której
 #     nie rozumiemy = pula nietknięta, alert, kod 1. Nie „nic do usunięcia”. Dotyczy puli
-#     powyżej progu: poniżej progu bezpiecznik nic nie czyta (w --plan -- każdej puli).
+#     powyżej progu: poniżej progu nic nie usuwa i nie alarmuje (configi czyta zawsze).
 #
 # Ustawienia (settings.ini [capacity], F10; alert-env.sh): kolejność ważności
 # środowisko > settings.ini > zfs-alert.conf > domyślne.
@@ -171,6 +171,8 @@ trusted_path() {   # <ścieżka> -> 0, gdy plik i jego katalog należą do roota
 read_managed() {
     [ -d "$CONFDIR" ] && [ -r "$CONFDIR" ] && [ -x "$CONFDIR" ] || { echo "nie da się czytać $CONFDIR"; return 1; }
     trusted_path "$GENCRON" || { echo "nie ufam $GENCRON (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
+    # gen-cron.sh dołącza lib-cron.sh (source) -- jako root, więc ten plik też musi być zaufany.
+    trusted_path "$(dirname "$GENCRON")/lib-cron.sh" || { echo "nie ufam $(dirname "$GENCRON")/lib-cron.sh (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
     local c n=0
     : > "$WORK/managed"
     for c in "$CONFDIR/jobs.$CONFHOST.conf" "$CONFDIR/jobs.$CONFHOST".*.conf; do
@@ -192,14 +194,15 @@ read_managed() {
             if (c == " " || c == "\t") { i++; continue }
             if (c == "\"") {
                 t = ""; i++
-                while (i <= length(s) && substr(s, i, 1) != "\"") { if (substr(s, i, 1) == "\\" || substr(s, i, 1) == "\t") return -1; t = t substr(s, i, 1); i++ }
+                while (i <= length(s) && substr(s, i, 1) != "\"") { if (substr(s, i, 1) == "\\" || substr(s, i, 1) < " ") return -1; t = t substr(s, i, 1); i++ }
                 if (i > length(s)) return -1
                 i++; T[++n] = t; continue
             }
             t = ""
             while (i <= length(s) && substr(s, i, 1) != " " && substr(s, i, 1) != "\t") { t = t substr(s, i, 1); i++ }
             if (t ~ /^(2>|>|;|\||&)/) break
-            if (t ~ /["\\]/) return -1                   # dane, nie powłoka: $ i ^ w -X zostają
+            if (t ~ /["\\]/) return -1
+            for (j = 1; j <= length(t); j++) if (substr(t, j, 1) < " ") return -1   # znaki sterujące -- nie dane                   # dane, nie powłoka: $ i ^ w -X zostają
             T[++n] = t
         }
         return n

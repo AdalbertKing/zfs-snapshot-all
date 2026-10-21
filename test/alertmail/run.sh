@@ -1623,7 +1623,7 @@ rm -rf "$hs_dir"
 # brak wlasnosci) -> 0 usuniec, rc 1, alert; kolejnosc ustawien env > settings > conf.
 # ---------------------------------------------------------------------------
 gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin" "$gs_dir/cron" "$gs_dir/peers" "$gs_dir/conf"
-: > "$gs_dir/conf/jobs.h.conf"
+: > "$gs_dir/conf/jobs.h.conf"; : > "$gs_dir/bin/lib-cron.sh"
 # Atrapa gen-cron (REV-20261021-158): "renderuje" config hosta h -- linie, ktore gs_cron
 # kladzie do cron/root. Nowy skrypt czyta juz tylko to, nie crontaby (stary czytal cron/).
 cat > "$gs_dir/bin/gencron" <<'GC'
@@ -2068,6 +2068,19 @@ gs_failclosed "config zapisywalny dla grupy" "nie ufam $gs_dir/conf/jobs.h.conf"
 chmod o+w "$gs_dir/bin/gencron"
 gs_run 99 1 on; gs_rc=$?; chmod o-w "$gs_dir/bin/gencron"
 gs_failclosed "gen-cron zapisywalny dla innych" "nie ufam $gs_dir/bin/gencron"
+chmod g+w "$gs_dir/bin/lib-cron.sh"
+gs_run 99 1 on; gs_rc=$?; chmod g-w "$gs_dir/bin/lib-cron.sh"
+gs_failclosed "lib-cron.sh (dolaczany przez gen-cron) zapisywalny dla grupy" "nie ufam $gs_dir/bin/lib-cron.sh"
+# Nazwy zakladek z testow == prawdziwa funkcja silnika (lib-zfs-snap.sh bookmark_target_tag).
+gs_eng="$( . "$REPO/lib-zfs-snap.sh" >/dev/null 2>&1
+           for a in "tank/back/tank/a|" "pool/x/tank/a|drugi" "tank/back/tank/a|o'k \$x"; do
+               printf '%s ' "$(bookmark_target_tag "${a%%|*}" "${a#*|}")"; done )"
+gs_mine="$(for a in "tank/back/tank/a|" "pool/x/tank/a|drugi" "tank/back/tank/a|o'k \$x"; do printf '%s ' "$(gs_tag "${a%%|*}" "${a#*|}")"; done)"
+if [ -n "$gs_eng" ] && [ "$gs_eng" = "$gs_mine" ]; then
+    ok "capacity-guard: nazwy zakladek w testach == bookmark_target_tag silnika (cel lokalny, push z -j, -j ze znakami powloki)"
+else
+    bad "capacity-guard: zgodnosc z silnikiem" "silnik=[$gs_eng]" "test=[$gs_mine]"
+fi
 mkdir -p "$gs_dir/conf-pusty"
 GS_CONFDIR="$gs_dir/conf-pusty" gs_run 99 1 on; gs_rc=$?
 gs_failclosed "brak configu hosta" "brak configu"
