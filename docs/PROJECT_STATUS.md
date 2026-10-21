@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e85b1a615596cffb -->
+<!-- status-covers-digest: f0d612040485a8a5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **REV-166: import relacji na porcie SSH innym niż 22 (2026-10-22; `fix/rev166`).** Od U62 eksport podaje
+  `--host=HOST:PORT`, a import sprawdzał roota na źródle pod nazwą „HOST:PORT” na porcie 22 -- relacja na
+  niestandardowym porcie nie dostawała automatycznego joinu (U45), a droga jednym poleceniem budowała
+  `--source=HOST:PORT:DATASETY`. Teraz adres jest rozbierany raz (`parse_endpoint_arg`) na host i port; `--host`
+  idzie dalej bez zmian, droga jednym poleceniem dostaje `--port=`. Test `exportrel` 68/0 (pve9); atrapa SSH
+  sprawdza host, port i polecenie. Na żywo niesprawdzone (lab ma tylko port 22).
 
 - **U66: kreator nowej relacji krok po kroku (2026-10-22; `finisz/kreator`, część 1 -- tworzenie).**
   Właściciel: „do kompletnej przebudowy, nielogiczne”. Kroki danego rodzaju po kolei, tytuł „krok N z M”; Wstecz

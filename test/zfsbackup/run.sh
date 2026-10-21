@@ -10321,7 +10321,7 @@ ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/ksiegowosc.json
 sed -i 's/"argv":\["--host=10.0.0.11"/"argv":["--host=10.0.0.11","--exclude-child=(a|b)[0-9]\\\\,x\\"y"/' "$IM/ksiegowosc.json"
 im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; stdout/err in $WORK/im.*
     ( export CLIENTS_DIR="$IM/clients" SERVER_CONF="$IM/no-server-conf" IM_LOG="$IM/calls.log"
-      : > "$IM_LOG"
+      : > "$IM_LOG"; : > "$IM_LOG.ssh"
       bash -c '
         # $1, not $0: sourced under $0 == its own path the program would take the
         # BASH_SOURCE guard for a direct run and dispatch our argv as a command.
@@ -10331,7 +10331,15 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         cmd_seed()       { printf "seed|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         # U24: no root channel to the source unless IM_ROOT says so (the stub never
         # connects). IM_ROOT=fresh: channel up, no account of this collector there.
-        rux_root_ssh() { [ -n "${IM_ROOT:-}" ] || return 255; case "$*" in *zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 0 ;; esac; }
+        # REV-20261021-166: the stub checks ALL THREE arguments -- a hostname (never HOST:PORT),
+        # a numeric port, a known command -- and, with IM_ROOT_AT="HOST PORT", that root is
+        # reachable only there. Every call is logged to $IM_LOG.ssh.
+        rux_root_ssh() { printf "root-ssh|%s|%s|%s\n" "$1" "$2" "$3" >> "$IM_LOG.ssh"
+                         [ -n "${IM_ROOT:-}" ] || return 255
+                         case "$1" in ""|*:*) return 255 ;; esac
+                         case "$2" in ""|*[!0-9]*) return 255 ;; esac
+                         [ -z "${IM_ROOT_AT:-}" ] || [ "$1 $2" = "$IM_ROOT_AT" ] || return 255
+                         case "$3" in true) return 0 ;; "id "*zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 255 ;; esac; }
         rux_entry()      { printf "rux"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         # The [relation:] restore writes a config -- here only WHEN it is called, to its own log.
         import_restore_relblock() { [ -n "${3:-}" ] && return 0; printf "restore|%s\n" "$1" >> "$IM_LOG.r"; }
@@ -10461,6 +10469,59 @@ if grep -q '^add-client|ksiegowosc|' "$IM/calls.log" && ! grep -q -- '--join-rem
     ok "importrel: no root on the source -> no --join-remotely (manual --join stays the way)"
 else
     bad "importrel: no root -> no --join-remotely" "$(cat "$IM/calls.log")"
+fi
+# REV-20261021-166: since U62 the replayed --host may be HOST:PORT. The root probe must get
+# the host and the port apart (canonical parse_endpoint_arg); the replayed --host stays as in
+# the file. Root reachable ONLY at (source.example, 2222) -> exactly one --join-remotely.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=source.example:2222"/' \
+    -e 's/"value":"10.0.0.11:22"/"value":"source.example:2222"/' "$IM/ksiegowosc.json" > "$IM/port.json"
+IM_ROOT=joined IM_ROOT_AT="source.example 2222" im_run "$IM/port.json" --yes; im_rc=$?
+im_pj="$(grep '^add-client|' "$IM/calls.log")"
+if [ "$im_rc" -eq 0 ] && printf '%s' "$im_pj" | grep -q '^add-client|ksiegowosc|--host=source.example:2222|' \
+   && [ "$(printf '%s' "$im_pj" | grep -o -- '--join-remotely' | wc -l)" -eq 1 ] \
+   && grep -qx 'root-ssh|source.example|2222|true' "$IM/calls.log.ssh" && ! grep -q '^root-ssh|[^|]*:' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: --host=HOST:PORT -> root probe on (HOST, PORT), --host replayed as in the file, one --join-remotely"
+else
+    bad "importrel REV-166: non-default port" "rc=$im_rc" "$im_pj" "$(cat "$IM/calls.log.ssh")"
+fi
+# ...and the port matters: root only on port 22 of the same host is NOT the file's endpoint.
+IM_ROOT=joined IM_ROOT_AT="source.example 22" im_run "$IM/port.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=source.example:2222|' "$IM/calls.log" && ! grep -q -- '--join-remotely' "$IM/calls.log"; then
+    ok "importrel REV-166: root on another port of that host -> no --join-remotely (the manual join stays the way)"
+else
+    bad "importrel REV-166: wrong port must not join" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# Default port, the oracle now strict: (10.0.0.11, 22).
+IM_ROOT=joined IM_ROOT_AT="10.0.0.11 22" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.0.0.11|.*|--join-remotely$' "$IM/calls.log" \
+   && grep -qx 'root-ssh|10.0.0.11|22|true' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: default port -- probe on (10.0.0.11, 22), --join-remotely (positive control under the strict stub)"
+else
+    bad "importrel REV-166: default port positive control" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# An OLDER export (argv = pairing address) whose ACTIVE_ENDPOINT is HOST:PORT: U62 replays the
+# active endpoint, and the probe takes its host and port the same way.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:2222"/' \
+    "$IM/ksiegowosc.json" > "$IM/staryport.json"
+IM_ROOT=joined IM_ROOT_AT="10.98.0.2 2222" im_run "$IM/staryport.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2:2222|.*|--join-remotely$' "$IM/calls.log" \
+   && grep -qx 'root-ssh|10.98.0.2|2222|true' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: older export with ACTIVE_ENDPOINT=HOST:PORT -- same endpoint/port contract, --join-remotely"
+else
+    bad "importrel REV-166: older export, non-default port" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# The one-command path (source no longer knows this collector) on a non-default port:
+# --source takes the HOST only, the port goes as --port=.
+sed -e 's/"--host=10.0.0.11"/"--host=source.example:2222"/' -e 's/"value":"10.0.0.11:22"/"value":"source.example:2222"/' \
+    "$IM/nobw.json" > "$IM/nobwport.json"
+IM_ROOT=fresh IM_ROOT_AT="source.example 2222" im_run "$IM/nobwport.json" --yes; im_rc=$?
+im_rp="$(grep '^rux|' "$IM/calls.log")"
+if [ "$im_rc" -eq 0 ] && printf '%s' "$im_rp" | grep -q '^rux|--source=source.example:[^|:]*|' \
+   && printf '%s' "$im_rp" | grep -q '|--port=2222|' && ! grep -q '^add-client|' "$IM/calls.log"; then
+    ok "importrel REV-166: one-command path on a non-default port -- --source=HOST:DATASETS and --port=2222"
+else
+    bad "importrel REV-166: one-command path, non-default port" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
 fi
 # Campaign 2026-10-19 (pve10): export -> delete -> import came back with the template's
 # numbers. The file's [relation:] block is restored AFTER the relationship is created,
