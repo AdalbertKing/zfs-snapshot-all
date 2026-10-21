@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 64f37b65e1e0f451 -->
+<!-- status-covers-digest: e9526fadc2ad0645 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Katalog kopii relacji zapisany w rekordzie (2026-10-21; `finisz/landing`).**
+  Właściciel: „co będzie, jak zmienię nazwę relacji, a dane mam pod starą?”. Katalog pod celem był wyliczany z
+  adresu, z którym relację sparowano -- import przez VPN założył `hdd/backups/10.98.0.2/…` obok zachowanych
+  `…/192.168.28.98/…`. Teraz `LANDING_LABEL` zapisany raz przy zakładaniu (`add-client --landing=`), eksport go
+  niesie, import starszego pliku bierze etykietę adresu parowania; gdy katalogu nie ma, import szuka pod celem
+  katalogu z wszystkimi datasetami relacji (jeden -- bierze i mówi; kilka -- odmawia z listą). Testy: `zfsbackup`
+  990/0 (exportrel +6), `tui` 366/0, `localbackup` 161/0.
 
 - **KAMPANIA GUI NA ŻYWO -- Claude w prawdziwym GUI na pve10 (2026-10-21; `finisz/kampania-*`).**
   Właściciel po swojej kampanii („prawie każdy krok z problemem”): Claude przechodzi każdy krok sam, w prawdziwym GUI
