@@ -80,7 +80,10 @@ result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
     local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-Nie udało się.}"
     geom
     if [ "$rc" -eq 0 ]; then
-        wt --title "$t" --msgbox "$okt" 9 "$W"
+        local l; l=$(printf '%b
+' "$okt" | fold -s -w $((W - 4)) | grep -c '')
+        l=$((l + 6)); [ "$l" -gt "$H" ] && l=$H
+        wt --title "$t" --msgbox "$okt" "$l" "$W"
         return 0
     fi
     { printf '%s  (rc=%s)\n\n' "$bad" "$rc"
