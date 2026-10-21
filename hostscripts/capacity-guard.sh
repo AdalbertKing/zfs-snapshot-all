@@ -4,10 +4,11 @@
 # Wzór: a-tassa, gdzie cron przy zajętości 89 % kasuje najstarsze migawki. Tutaj tak
 # samo, ale tylko to, co bezpiecznie usunąć -- i każda niepewność oznacza NIC NIE
 # USUWAĆ (GitHub #655, audyt 2026-10-20):
-#   - WŁASNOŚĆ z zarządzanych linii crona, nie z nazwy: migawka jest „nasza” tylko gdy
-#     lokalna linia delsnaps.sh w bloku zfs-backup-managed któregoś crontaba tego hosta
-#     obejmuje jej dataset (wprost albo jako dziecko przy -R) i jej nazwa zaczyna się od
-#     JAWNEGO wzorca tej linii. Linia z pustym wzorcem ("" -- wszystko, co nie chronione przez -P) nie
+#   - WŁASNOŚĆ z linii retencji, nie z nazwy: migawka jest „nasza” tylko gdy lokalna
+#     linia delsnaps.sh obejmuje jej dataset (wprost albo jako dziecko przy -R) i jej nazwa
+#     zaczyna się od JAWNEGO wzorca tej linii. Linie bierze się z configów hosta w
+#     /etc/zfs-snapshot-all, renderowanych jako root przez gen-cron.sh (pliki roota,
+#     niezapisywalne dla innych); crontaby kont NIE są czytane (REV-20261021-158). Linia z pustym wzorcem ("" -- wszystko, co nie chronione przez -P) nie
 #     daje prawa kasowania; linia zdalna (host:dataset), -B (zakładki) i -n też nie;
 #   - nigdy migawka pod hold (np. zfssnapall_inflight -- trwa transfer);
 #   - nigdy NAJNOWSZA migawka datasetu (dowolna nazwa): po stronie celu silnik bierze za
@@ -30,9 +31,12 @@
 #     wykrycia pul (zpool list) = nic, kod 1, alert; pusta lista pul = kod 0 (brak pul);
 #   - progi spoza zakresu (guard_at 50-99, guard_target 40-98 i poniżej guard_at,
 #     guard_min_keep 1-100) albo guard inny niż on/off = nic, kod 1, alert z nazwą;
-#   - błąd odczytu crontabów, `zfs list` (migawki, zakładki) albo linia transferu, której
+#   - rodziny zastrzeżone Proxmoxa (__replicate_, __migration__, vzdump) nigdy, bez względu
+#     na wzorce;
+#   - config albo gen-cron.sh, którym nie da się ufać (nie roota / zapisywalny dla innych),
+#     błąd renderowania, `zfs list` (migawki, zakładki) albo linia transferu, której
 #     nie rozumiemy = pula nietknięta, alert, kod 1. Nie „nic do usunięcia”. Dotyczy puli
-#     powyżej progu: poniżej progu bezpiecznik nic nie czyta (w --plan -- każdej puli).
+#     powyżej progu: poniżej progu nic nie usuwa i nie alarmuje (configi czyta zawsze).
 #
 # Ustawienia (settings.ini [capacity], F10; alert-env.sh): kolejność ważności
 # środowisko > settings.ini > zfs-alert.conf > domyślne.
@@ -53,7 +57,14 @@ AT="${ZFS_GUARD_AT:-89}"
 TARGET="${ZFS_GUARD_TARGET:-85}"
 KEEP="${ZFS_GUARD_MIN_KEEP:-2}"
 NOTIFY="${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
-CRONDIR="${ZFS_GUARD_CRONTABS:-/var/spool/cron/crontabs}"
+CONFDIR="${ZFS_GUARD_CONFDIR:-/etc/zfs-snapshot-all}"
+# gen-cron.sh z checkoutu, który instaluje deploy (dowiązanie /usr/local/bin/zfs-backup);
+# zapas -- zwykła ścieżka. Zaufanie sprawdza trusted_path przy użyciu.
+_zb="$(readlink -f /usr/local/bin/zfs-backup 2>/dev/null)"
+GENCRON="${ZFS_GUARD_GENCRON:-${_zb:+$(dirname "$_zb")/gen-cron.sh}}"
+[ -n "$GENCRON" ] && [ -e "$GENCRON" ] || GENCRON="${ZFS_GUARD_GENCRON:-/root/scripts/zfs-snapshot-all/gen-cron.sh}"
+CONFHOST="${ZFS_GUARD_CONFHOST:-$(hostname -s 2>/dev/null || hostname)}"
+TRUSTUID="${ZFS_GUARD_TRUST_UID:-0}"   # właściciel zaufanych plików; suita ustawia swoje uid
 PEERDIR="${ZFS_GUARD_PEERS:-/etc/zfs-snapshot-all/peers}"
 HOST="$(hostname -s 2>/dev/null || hostname)"
 
@@ -135,20 +146,46 @@ WORK="$(mktemp -d 2>/dev/null)" || {
 }
 trap 'rm -rf "$WORK"' EXIT
 
-# ---- 1. Własność i źródła transferów z zarządzanych bloków crontabów -----------
+# ---- 1. Własność i źródła transferów z configów hosta (renderowanych przez gen-cron) --
 # Wynik (TAB): OWN ds rec wzorzec | SRC ds rec | BAD powód. Tokeny w cudzysłowach
 # czytane wprost (bez eval); polecenie kończy się na przekierowaniu albo ';'.
 # BAD dotyczy tylko linii transferu: niezrozumiana linia retencji tylko NIE daje
 # własności (mniej usuwania), a niezrozumiana linia transferu mogłaby ukryć bazę.
+#
+# ŹRÓDŁO ZAUFANIA (REV-20261021-158 F2): NIE crontaby. Znacznik "# BEGIN zfs-backup-managed"
+# w crontabie dowolnego konta niczego nie dowodzi -- każde konto pisze swój crontab. Linie
+# są renderowane tutaj, jako root, przez gen-cron.sh z configów hosta
+# ($CONFDIR/jobs.<host>.conf i jobs.<host>.<konto>.conf) -- tych samych, z których deploy
+# i zfs-backup instalują cron. Config, jego katalog i gen-cron.sh muszą należeć do roota i
+# nie być zapisywalne dla grupy ani innych; inaczej nic nie usuwam (kod 1, alert).
+trusted_path() {   # <ścieżka> -> 0, gdy plik i jego katalog należą do roota i nie są zapisywalne przez g/o
+    local x st
+    for x in "$1" "$(dirname "$1")"; do
+        st="$(stat -c '%u %a' "$x" 2>/dev/null)" || return 1
+        set -- $st
+        [ "$1" = "$TRUSTUID" ] || return 1
+        [ $(( 8#$2 & 8#022 )) -eq 0 ] || return 1
+    done
+    return 0
+}
 read_managed() {
-    [ -d "$CRONDIR" ] && [ -r "$CRONDIR" ] && [ -x "$CRONDIR" ] || { echo "nie da się czytać $CRONDIR"; return 1; }
-    local f
-    for f in "$CRONDIR"/*; do
-        [ -e "$f" ] || continue
-        [ -r "$f" ] || { echo "nie da się czytać $f"; return 1; }
-        awk '/^# BEGIN zfs-backup-managed/ { on = 1; next } /^# END zfs-backup-managed/ { on = 0; next } on' "$f" \
-            || { echo "błąd odczytu $f"; return 1; }
-    done > "$WORK/managed"
+    [ -d "$CONFDIR" ] && [ -r "$CONFDIR" ] && [ -x "$CONFDIR" ] || { echo "nie da się czytać $CONFDIR"; return 1; }
+    trusted_path "$GENCRON" || { echo "nie ufam $GENCRON (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
+    # gen-cron.sh dołącza lib-cron.sh (source) -- jako root, więc ten plik też musi być zaufany.
+    trusted_path "$(dirname "$GENCRON")/lib-cron.sh" || { echo "nie ufam $(dirname "$GENCRON")/lib-cron.sh (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
+    local c n=0
+    : > "$WORK/managed"
+    for c in "$CONFDIR/jobs.$CONFHOST.conf" "$CONFDIR/jobs.$CONFHOST".*.conf; do
+        [ -e "$c" ] || continue
+        trusted_path "$c" || { echo "nie ufam $c (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
+        if ! bash "$GENCRON" -c "$c" >> "$WORK/managed" 2> "$WORK/gc.err"; then
+            # Config bez żadnej reguły to nie błąd -- po prostu nic z niego nie wynika.
+            grep -q 'no send/prune/monitor rules resolved' "$WORK/gc.err" \
+                || { echo "gen-cron $c: $(head -1 "$WORK/gc.err")"; return 1; }
+        fi
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || { echo "brak configu $CONFDIR/jobs.$CONFHOST.conf ani jobs.$CONFHOST.<konto>.conf"; return 1; }
     awk -F'\n' '
     function tok(s,    i, c, t, out, n) {   # -> T[1..n], zwraca n; -1 = nie umiem
         n = 0; i = 1
@@ -157,14 +194,15 @@ read_managed() {
             if (c == " " || c == "\t") { i++; continue }
             if (c == "\"") {
                 t = ""; i++
-                while (i <= length(s) && substr(s, i, 1) != "\"") { if (substr(s, i, 1) == "\\") return -1; t = t substr(s, i, 1); i++ }
+                while (i <= length(s) && substr(s, i, 1) != "\"") { if (substr(s, i, 1) == "\\" || substr(s, i, 1) < " ") return -1; t = t substr(s, i, 1); i++ }
                 if (i > length(s)) return -1
                 i++; T[++n] = t; continue
             }
             t = ""
             while (i <= length(s) && substr(s, i, 1) != " " && substr(s, i, 1) != "\t") { t = t substr(s, i, 1); i++ }
             if (t ~ /^(2>|>|;|\||&)/) break
-            if (t ~ /["\\]/) return -1                   # dane, nie powłoka: $ i ^ w -X zostają
+            if (t ~ /["\\]/) return -1
+            for (j = 1; j <= length(t); j++) if (substr(t, j, 1) < " ") return -1   # znaki sterujące -- nie dane                   # dane, nie powłoka: $ i ^ w -X zostają
             T[++n] = t
         }
         return n
@@ -237,6 +275,7 @@ read_managed() {
     for sc in "$PEERDIR"/*.scope; do
         [ -e "$sc" ] || continue
         [ -r "$sc" ] || { echo "nie da się czytać $sc"; return 1; }
+        trusted_path "$sc" || { echo "nie ufam $sc (właściciel inny niż root albo zapisywalny dla grupy/innych)"; return 1; }
         awk -v peer="$(basename "$sc" .scope)" '
             /^\[dataset:.*\]$/ { if (ds != "") print "SRC\t" ds "\t" ch "\tpeer:" peer "\t\t0"; ds = $0; sub(/^\[dataset:/, "", ds); sub(/\]$/, "", ds); ch = 0; next }
             /^[ \t]*include_children[ \t]*=[ \t]*yes/ { ch = 1 }
@@ -256,25 +295,37 @@ candidates() {   # <pula>
         || { echo "zfs list migawek puli $pool: $(head -1 "$WORK/snaps.err")"; return 1; }
     $to zfs list -H -p -t bookmark -o name,guid,creation -r "$pool" > "$WORK/marks" 2> "$WORK/marks.err" \
         || { echo "zfs list zakładek puli $pool: $(head -1 "$WORK/marks.err")"; return 1; }
-    awk -F'\t' -v keep="$KEEP" -v facts="$WORK/facts" -v marks="$WORK/marks" '
+    # NAZWY ZAKŁADEK liczone TUTAJ, w bashu (REV-20261021-158 F1): cel i -j z linii crona
+    # idą do md5sum jako BAJTY na wejściu (printf '%s\0%s' z argumentami), nigdy jako
+    # fragment polecenia powłoki -- awk niczego nie uruchamia. Jak lib-zfs-snap.sh
+    # bookmark_target_tag: tgt- + 8 znaków md5(<cel lądowania>\0<-j>). Cel lądowania jak w
+    # silnikach: host:baza -> baza/ds; gołe user@host (lustro) -> ds; lokalny dst -> dst/ds.
+    # Wynik: "ds<TAB>nr linii SRC<TAB>tgt-xxxxxxxx".
+    cut -f1 "$WORK/snaps" | sed 's/@.*//' | sort -u > "$WORK/dslist"
+    : > "$WORK/tags"
+    local k=0 kind root rec dst id at ds L
+    # Separator \037, nie tabulator: `read` skleja kolejne tabulatory (biały znak IFS), więc
+    # puste -j przesuwałoby pola i liczyło md5 z cudzej wartości.
+    while IFS=$'\037' read -r kind root rec dst id at; do
+        [ "$kind" = SRC ] || continue
+        k=$((k + 1))
+        case "$dst" in peer:*) continue ;; esac
+        [ "$at" = 1 ] && continue
+        while IFS= read -r ds; do
+            [ "$ds" = "$root" ] || { [ "$rec" = 1 ] && [ "${ds#"$root"/}" != "$ds" ]; } || continue
+            case "$dst" in
+                *:*) L="${dst#*:}"; [ -n "$L" ] && L="$L/$ds" || L="$ds" ;;
+                *@*) L="$ds" ;;
+                *)   L="$dst/$ds" ;;
+            esac
+            printf '%s\t%s\t%s\n' "$ds" "$k" "tgt-$(printf '%s\0%s' "$L" "$id" | md5sum | cut -c1-8)" >> "$WORK/tags"
+        done < "$WORK/dslist"
+    done < <(tr '\t' '\037' < "$WORK/facts")
+    awk -F'\t' -v keep="$KEEP" -v facts="$WORK/facts" -v marks="$WORK/marks" -v tags="$WORK/tags" '
         function under(ds, root, rec) { return ds == root || (rec && index(ds, root "/") == 1) }
         function rank(p) { return p ~ /hourly/ ? 1 : p ~ /daily/ ? 2 : p ~ /weekly/ ? 3 : p ~ /monthly/ ? 4 : p ~ /yearly|annual/ ? 5 : 9 }
-        # Nazwa zakładki, którą silnik zapisuje po udanym transferze (lib-zfs-snap.sh
-        # bookmark_target_tag): tgt- + 8 znaków md5(<cel lądowania>\0<-j>).
-        function tag(tgt, id,    c, h) {
-            if ((tgt SUBSEP id) in TAGC) return TAGC[tgt, id]
-            c = "printf '\''%s\\0%s'\'' '\''" tgt "'\'' '\''" id "'\'' | md5sum"
-            h = ""; c | getline h; close(c)
-            return TAGC[tgt, id] = "tgt-" substr(h, 1, 8)
-        }
-        # Cel lądowania źródła ds dla danego dst (jak silniki składają ścieżkę):
-        # host:baza -> baza/ds; gołe user@host (lustro) -> ds; lokalny dst -> dst/ds.
-        function landing(ds, dst,    b) {
-            if (dst ~ /:/) { b = dst; sub(/^[^:]*:/, "", b); return (b == "") ? ds : b "/" ds }
-            if (dst ~ /@/) return ds
-            return dst "/" ds
-        }
         BEGIN {
+            while ((getline l < tags) > 0) { split(l, f, "\t"); TG[f[1], f[2]] = f[3] }
             while ((getline l < facts) > 0) {
                 split(l, f, "\t")
                 if (f[1] == "OWN") { no++; ORoot[no] = f[2]; ORec[no] = f[3]; OPat[no] = f[4] }
@@ -302,7 +353,8 @@ candidates() {   # <pula>
                     if (!(ds in MOLD)) { BL[ds] = "udostępniony peerowi " substr(SDst[k], 6) " bez zakładki #tgt- -- baza nieznana"; return SST[ds] = 2 }
                     t = MOLD[ds]
                 } else {
-                    tg = tag(landing(ds, SDst[k]), SId[k])
+                    if (!((ds, k) in TG)) { BL[ds] = "nazwa zakładki dla celu " SDst[k] " nie wyliczona -- baza nieznana"; return SST[ds] = 2 }
+                    tg = TG[ds, k]
                     if (!((ds, tg) in MC)) { BL[ds] = "brak zakładki #" tg " dla celu " SDst[k] " -- baza nieznana"; return SST[ds] = 2 }
                     t = MC[ds, tg]
                 }
@@ -322,6 +374,9 @@ candidates() {   # <pula>
             if (bad) exit 3
             for (x = 1; x <= ns_; x++) {
                 ds = DS[x]; s = N[x]; sub(/^[^@]*@/, "", s)
+                # Rodziny zastrzeżone Proxmoxa (REV-20261021-158 F2.3): nigdy, niezależnie od
+                # tego, jaki wzorzec pozornie je obejmuje -- pvesr, migracja, vzdump.
+                if (s ~ /^(__replicate_|__migration__|vzdump)/) continue
                 best = ""
                 for (k = 1; k <= no; k++)
                     if (under(ds, ORoot[k], ORec[k]) && index(s, OPat[k]) == 1 && length(OPat[k]) > length(best)) best = OPat[k]
@@ -353,7 +408,7 @@ candidates() {   # <pula>
 
 rc=0
 facts_err=""
-facts_err="$(read_managed)" || facts_err="${facts_err:-błąd odczytu crontabów}"
+facts_err="$(read_managed)" || facts_err="${facts_err:-błąd odczytu configów}"
 if [ -z "$facts_err" ] && grep -q '^BAD' "$WORK/facts"; then facts_err="$(grep '^BAD' "$WORK/facts" | head -1 | cut -f2)"; fi
 if [ -z "$facts_err" ] && ! grep -q '^OWN' "$WORK/facts"; then facts_err="brak lokalnych linii retencji z jawnym wzorcem -- nie wiem, które migawki są nasze"; fi
 
