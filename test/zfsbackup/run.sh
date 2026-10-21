@@ -13166,17 +13166,43 @@ EOF
 bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf'" >/dev/null 2>&1
 rr_manual="$(sort "$RR/ran" | tr '\n' ' ')"
 : > "$RR/ran"
-bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf' --on-insert" >/dev/null 2>&1
+REPLICA_INSERT_WAIT=0 bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf' --on-insert" >/dev/null 2>&1
 rr_insert="$(sort "$RR/ran" | tr '\n' ' ')"
 if [ "$rr_manual" = "a-sched b-insert c-sched " ] && [ "$rr_insert" = "a-insert b-insert " ]; then
     ok "runreplicas: manual run = each replica once (scheduled line, not its on-insert copy); --on-insert = only the replicas that want it"
 else
     bad "runreplicas: --on-insert" "manual=[$rr_manual] (want a-sched b-insert c-sched)" "insert=[$rr_insert] (want a-insert b-insert)"
 fi
-if grep -q 'run-replicas --on-insert --config=' "$ZFSBACKUP"; then
-    ok "runreplicas: the udev rule written by install-media-trigger calls run-replicas --on-insert"
+if grep -q 'run-replicas --on-insert --device=%k --config=' "$ZFSBACKUP"; then
+    ok "runreplicas: the udev rule written by install-media-trigger calls run-replicas --on-insert --device=%k"
 else
-    bad "runreplicas: udev rule without --on-insert"
+    bad "runreplicas: udev rule without --on-insert --device=%k"
+fi
+# U52 (owner 2026-10-21, "oj, nie ten kabel"): --on-insert waits first, then runs
+# only if the device that fired the rule is still there and still a ZFS member.
+# The wait is [replica] insert_wait, never below 60 s.
+mkdir -p "$RR/dev"
+rr_dev() {  # $1 = what blkid says ('' = device absent); prints what ran, then rc
+    rm -f "$RR/dev/sdz1"; [ -n "$1" ] && : > "$RR/dev/sdz1"
+    : > "$RR/ran"
+    REPLICA_INSERT_WAIT=0 REPLICA_DEV_DIR="$RR/dev" bash -c "source '$ZFSBACKUP'; blkid() { echo '$1'; }; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RR/c.conf'; }; gencron_as_target() { cat '$RR/block2'; }; cmd_run_replicas --config='$RR/c.conf' --on-insert --device=sdz1" >"$RR/devout" 2>&1
+    local rc=$?
+    printf '%s|%s' "$(sort "$RR/ran" | tr '\n' ' ')" "$rc"
+}
+rr_gone="$(rr_dev '')"; rr_other="$(rr_dev ext4)"; rr_here="$(rr_dev zfs_member)"
+if [ "$rr_gone" = "|0" ] && [ "$rr_other" = "|0" ] && [ "$rr_here" = "a-insert b-insert |0" ]; then
+    ok "runreplicas: --on-insert --device: pulled before the wait ends or no longer ZFS = nothing runs (rc 0); still there = the on-insert replicas run"
+else
+    bad "runreplicas: --on-insert --device" "gone=[$rr_gone] other=[$rr_other] here=[$rr_here]" "$(cat "$RR/devout")"
+fi
+rr_badname="$(REPLICA_INSERT_WAIT=0 bash -c "source '$ZFSBACKUP'; cmd_run_replicas --config='$RR/c.conf' --on-insert --device='../x y'" 2>&1; echo "rc=$?")"
+case "$rr_badname" in *"expected a kernel device name"*rc=[1-9]*) ok "runreplicas: --device with a path or space is refused" ;;
+    *) bad "runreplicas: --device validation" "$rr_badname" ;; esac
+rr_waits="$(for v in 5 59 60 600 abc 999999; do bash -c "source '$ZFSBACKUP'; settings_get() { echo '$v'; }; insert_wait"; echo -n ' '; done)"
+if [ "$rr_waits" = "60 60 60 600 60 60 " ]; then
+    ok "runreplicas: insert_wait never below 60 s (5/59 -> 60, 600 kept, garbage -> 60)"
+else
+    bad "runreplicas: insert_wait clamp" "[$rr_waits] (want 60 60 60 600 60 60)"
 fi
 
 # add-replica --media-guid / --on-insert (P5): media_guids and on_insert in the section,

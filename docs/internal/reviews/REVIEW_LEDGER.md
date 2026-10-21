@@ -99,4 +99,8 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20261020-154 | CLOSED | - | d76ab15496df92ac279fce71b0940192ac1de62c | d76ab15496df92ac279fce71b0940192ac1de62c | responses/REV-20261020-154.md | - |
 | REV-20261021-155 | CLOSED | - | 8bafcc98388e88c8469cf004b560fc00b76e131c | 8bafcc98388e88c8469cf004b560fc00b76e131c | responses/REV-20261021-155.md | - |
 | REV-20261021-156 | CLOSED | - | 1dac369e3acee5e1448fe05462bc00f1be1f695f | 1dac369e3acee5e1448fe05462bc00f1be1f695f | responses/REV-20261021-156.md | - |
-| REV-20261021-157 | IMPLEMENTED | Reviewer | 0c8a4bb47c37cd881f61e7c7f8c7361c647bdfd2 | - | responses/REV-20261021-157.md | verify the submitted implementation |
+| REV-20261021-157 | CLOSED | - | 0c8a4bb47c37cd881f61e7c7f8c7361c647bdfd2 | 0c8a4bb47c37cd881f61e7c7f8c7361c647bdfd2 | responses/REV-20261021-157.md | - |
+| REV-20261021-158 | CLOSED | - | bc97628cecb6997e3fffae0ace581ff0e350b5b4 | bc97628cecb6997e3fffae0ace581ff0e350b5b4 | responses/REV-20261021-158.md | - |
+| REV-20261021-159 | CLOSED | - | 655cd39ee82fbbf7c93c7a8908accb718a6688cf | 655cd39ee82fbbf7c93c7a8908accb718a6688cf | responses/REV-20261021-159.md | - |
+| REV-20261021-160 | CLOSED | - | a84b609710e1d3637c59ab57991b665c0e030175 | a84b609710e1d3637c59ab57991b665c0e030175 | responses/REV-20261021-160.md | - |
+| REV-20261021-161 | CLOSED | - | d89e75a173f39ca878ba2e6fb5b94bd03c328983 | d89e75a173f39ca878ba2e6fb5b94bd03c328983 | responses/REV-20261021-161.md | - |

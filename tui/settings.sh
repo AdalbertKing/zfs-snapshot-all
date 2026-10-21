@@ -30,7 +30,7 @@ while IFS=$'\t' read -r k v s kind help; do
 done <"$TMPD/rows.tsv"
 [ "${#KEYS[@]}" -gt 0 ] || { wt --title "Ustawienia" --msgbox "Czasownik nie zwrócił żadnego klucza." 8 "$W"; exit 1; }
 
-SECT_PL() { case "$1" in gui) echo "GUI" ;; alerts) echo "Alerty" ;; capacity) echo "Pojemność" ;; growth) echo "Przyrost (ransomware)" ;;
+SECT_PL() { case "$1" in gui) echo "GUI" ;; alerts) echo "Alerty" ;; capacity) echo "Pojemność" ;; growth) echo "Przyrost (ransomware)" ;; replica) echo "Replika (dysk wymienny)" ;;
             monitor) echo "Strażnik" ;; new_relation) echo "Nowa relacja" ;; update) echo "Aktualizacja" ;; *) echo "$1" ;; esac; }
 
 edit_key() {   # <key> -> NEW[key] ustawione albo bez zmian

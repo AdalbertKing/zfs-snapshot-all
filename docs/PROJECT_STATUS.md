@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ee6c66505d3a8eab -->
+<!-- status-covers-digest: c071a623b23b6f89 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -114,6 +114,31 @@
   skompresowane przez aplikację wyglądają jak szyfrogram (zostaje sam skok przyrostu); wolne szyfrowanie pod
   normą nie da skoku. Plan, testy i pomiar: `docs/project/PLAN-U50-STRAZNIK-PRZYROSTU.md` (na żywo pve10: losowe
   300 MiB -- alarm, kompresowalne 305 MiB -- bez alarmu).
+- **REV-20261021-161: Przeglądaj kopię -- dwa przeglądania jednego dysku pod blokadą (2026-10-21; `finisz/REV-161`).**
+  Wejście (sprawdzenie/założenie zapisu `orig2`, znacznik, `snapdev=visible`) i wyjście (zdjęcie znacznika, czy
+  ktoś jeszcze trzyma, przywrócenie, usunięcie zapisu) idą pod jednym `flock` na `/run/zfs-browse/lock2.<klucz>`.
+  Wcześniej kończące przeglądanie mogło usunąć zapis, który wchodzące już sprawdziło, a jeszcze nie założyło
+  znacznika -- dysk zostawał `visible` bez zapisu. Bez `flock` albo po 30 s czekania na blokadę: przy wejściu nic
+  się nie zmienia, przy wyjściu znacznik i zapis zostają (pozostałość, kod != 0). Blokada nie jest trzymana w
+  trakcie przeglądania. Testy `test/browse` 23/23 (pauza testowa w obu punktach wyścigu, oba kierunki).
+
+- **REV-20261021-160: Przeglądaj kopię -- zapis snapdev per dokładny dataset (2026-10-21; `finisz/REV-160`).**
+  Klucz zapisów w `/run/zfs-browse` był `tr '/@' '__'` -- `tank/a_b` i `tank/a/b` dzieliły zapis oryginału i
+  znaczniki, więc jedno przeglądanie mogło przywrócić `snapdev` cudzego dysku VM z cudzej wartości. Teraz klucz to
+  32 znaki sha256 pełnej nazwy (`orig2.<klucz>`, `hold2.<pid>.<klucz>`), a zapis niesie dokładną nazwę datasetu:
+  zapis innego datasetu jest odrzucany, nigdy używany ani usuwany. Stary zapis `orig.<sklejona nazwa>` albo żywy
+  stary znacznik -- nic nie zmieniam, plik zostaje, komunikat mówi, co sprawdzić. Testy `test/browse` 18/18
+  (dwa przeplecione przeglądania przez punkt wejścia, oba porządki kończenia).
+
+- **REV-20261021-159: Przeglądaj kopię -- sprzątanie nie udaje sukcesu (2026-10-21; `finisz/REV-159`).**
+  `tui/browse.sh`: stan montażu i odblokowanego urządzenia znika dopiero, gdy zasób naprawdę zniknął (`mountpoint`);
+  mapper zamykany tylko po prawdziwym odmontowaniu (po `umount -l` zostaje otwarty i jest zgłaszany); przy pozostałości
+  „NIE wszystko posprzątane” z poleceniem do ręcznego dokończenia, kod 1, druga próba przy wyjściu. `snapdev` zmieniany
+  tylko po poprawnym odczycie wartości i źródła; zapis oryginału powstaje raz i znika wyłącznie po udanym przywróceniu;
+  „Nic nie zostało zmienione” tylko wtedy, gdy to prawda. Przy okazji: gołe `return` w funkcji wołanej z pułapki EXIT
+  oddaje status sprzed pułapki -- sprzątanie przy wyjściu brało zamontowaną kopię za odmontowaną (złapane testem).
+  Odłączenie leniwe, nieusunięty katalog i pusty/błędny zapis oryginału -- też zgłaszane; przy pozostałości kod
+  wyjścia zawsze != 0, także po powrocie do menu. Nowa suita `test/browse` (14 przypadków przez wysłany punkt wejścia).
 
 - **FINISZ U35: bezpiecznik pojemności (2026-10-20; `finisz/U35-bezpiecznik`, fail-closed po GitHub #655:
   `finisz/U35-fail-closed`).** Wzór a-tassa (przy 89 % cron kasuje najstarsze migawki).
@@ -121,8 +146,13 @@
   **Domyślnie wyłączony** -- włącza admin w F10 (`[capacity] guard = on`); progi `guard_at` 89, `guard_target` 85,
   `guard_min_keep` 2. Kolejność ważności ustawień: środowisko > `settings.ini` (F10) > `zfs-alert.conf` > domyślne
   (wcześniej stary conf z `ZFS_GUARD=on` wygrywał z F10 `off` -- #655 P1-C).
-  **Co wolno usunąć (#655 P1-A, P1-D):** własność wyłącznie z zarządzanych bloków crontabów hosta
-  (`/var/spool/cron/crontabs/*`, blok `zfs-backup-managed`) -- migawka jest nasza, gdy lokalna linia `delsnaps.sh`
+  **Co wolno usunąć (#655 P1-A, P1-D; źródło zaufania REV-20261021-158):** własność wyłącznie z configów hosta
+  (`/etc/zfs-snapshot-all/jobs.<host>[.<konto>].conf`) renderowanych jako root przez `gen-cron.sh` -- config, jego
+  katalog i `gen-cron.sh` muszą należeć do roota i nie być zapisywalne dla grupy/innych, inaczej nic, kod 1, alert;
+  crontaby kont NIE są czytane (znacznik bloku w cudzym crontabie niczego nie dowodzi). Nazwy zakładek `tgt-`
+  liczone w bashu (`printf '%s\0%s' | md5sum`) -- dane z linii nigdy nie stają się poleceniem powłoki (wcześniej
+  `awk ... | getline` z celem i `-j` w poleceniu: wstrzyknięcie jako root, odtworzone w teście). Rodziny Proxmoxa
+  (`__replicate_`, `__migration__`, `vzdump`) nigdy, bez względu na wzorce. Migawka jest nasza, gdy lokalna linia `delsnaps.sh`
   obejmuje jej dataset (wprost albo dziecko przy `-R`) i nazwa zaczyna się od JAWNEGO wzorca tej linii. Nie dają
   własności: wzorzec pusty (`""` -- „wszystko poza `-P`”, np. godzinowe rodziny bez prefiksu na kolektorze), linia
   zdalna (`host:dataset` -- retencja źródła przy pull biegnie z kolektora, więc na samym źródle pull bezpiecznik nic
@@ -338,7 +368,7 @@
   pytanie. BitLocker -- bez testu na żywo (nie da się go utworzyć pod Linuksem). Na pve10 doinstalowane:
   `cryptsetup-bin`, `ntfs-3g`, `parted`, `mc`. Wymagania na hoście: `cryptsetup-bin` (szyfrowane), `ntfs3` albo `ntfs-3g`.
   Poprawki po teście właściciela (U9, U10): menu partycji z `lsblk -J` i separatorem \001 (puste pole przesuwało
-  kolumny, sam dysk trafiał do menu jako „96M”); dwa przeglądania jednego dysku -- znaczniki `hold.<pid>.<dataset>`
+  kolumny, sam dysk trafiał do menu jako „96M”); dwa przeglądania jednego dysku -- znaczniki `hold2.<pid>.<klucz>`
   w `/run/zfs-browse`, `snapdev` wraca dopiero po ostatnim, wartość sprzed zapisuje pierwszy. Test na pve10:
   pierwsze kończy się, gdy drugie czeka na klucz -- na `main` „Device … does not exist”, po poprawce oba OK.
 
@@ -1387,6 +1417,14 @@
     uruchamia każdą replikę raz. Reguła sprzed P5 (bez `--on-insert`) jest w planie
     kreatora odnawiana, gdy replika ma ruszać po włożeniu; do tego czasu działa jak
     dawniej (uruchamia wszystkie).
+  - **Minuta zwłoki po włożeniu (U52, 2026-10-21):** `run-replicas --on-insert` najpierw
+    czeka `[replica] insert_wait` sekund (F10, domyślnie 60, mniej niż 60 się nie da),
+    potem sprawdza, czy urządzenie, które wywołało regułę (`--device=%k`), nadal jest i
+    nadal jest dyskiem ZFS (`blkid`). Dysk wyjęty w tym czasie („oj, nie ten kabel”) =
+    wpis w dzienniku, bez importu, bez alarmu, rc 0. Reguła sprzed U52 (bez `--device`)
+    też czeka, ale nie sprawdza urządzenia -- odnawia ją `zfs-backup.sh
+    install-media-trigger`. Testy: `zfsbackup` runreplicas (urządzenie zniknęło / nie
+    ZFS / jest, walidacja `--device`, dolna granica zwłoki).
   - **F6:** harmonogram „… + po włożeniu”, w szczegółach wiersz „Dyski” (ile, po ID).
   - **Na żywo (pve9b, dysk usb1 w slocie, kopia programu w /tmp):** obce ID — odmowa
     bez importu (rc 2); właściwe — import i eksport w `detach`; `list-replicas` z obcym
@@ -11777,6 +11815,7 @@ REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niez
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `snaponly` | **77/77** | `snapget.sh -s` (REV-20261016-148): migawki na źródle bez przesyłania. PRAWDZIWE CLI z atrapami `ssh`/`zfs`/`zpool`, które zapisują każde wywołanie do śladu; asercje na śladzie: jedna migawka po stronie źródła, zero `zfs`/`zpool` na kolektorze, żadnego send/recv/hold/bookmark/destroy/rollback/mbuffer; `-r` atomowo, `-R` z `-X`/`-S` i jednym sufiksem; nieudany listing, niedostępne źródło i wyłączona bramka -- rc≠0 bez migawki; pauza `-L`; `-n` drukuje `PLAN=SNAPSHOT-ONLY` i nic nie tworzy; 21 flag transferowych i drugi argument odrzucone bez żadnego wywołania; brak mbuffer/zstd/pigz w PATH (kontrola pozytywna: zwykły pull na tym samym PATH odmawia); quiesce czysty / degrade rc 8 / strict rc 1 / lokalne źródło odmowa. Przypadek z `-s` liczy się tylko, gdy silnik przyjął `-s`. Kontrola negatywna wobec v2.74: **2 PASS / 62 FAIL** (dwie kontrole bez `-s`) |
 | `pushhistory` | **7/7** | `snapsend -H` (REV-20261017-151, P0): niezwiązany istniejący cel (bez wspólnego GUID i zakładki) -- zwykły push, push `-H` i pull `-H` odmawiają tym samym tekstem, rc 1, bez send/recv. Kontrole: `-H` na nieistniejący cel wysyła `zfs send ... -R`, `-H` ze wspólną bazą idzie przyrostowo w `recv -F` (D3). Prawdziwe CLI obu silników, atrapy `zfs`/`zpool` ze śladem. Na pushu sprzed poprawki 5/2 |
+| `browse` | **23/23** | `tui/browse.sh` uruchamiany jak wysłany (`--any`) z atrapami whiptail/zfs/mount/umount/mountpoint/cryptsetup/lsblk/mc (REV-20261021-159): stan montażu i mappera znika dopiero, gdy zasób naprawdę zniknął; bez „Odmontowane” przy pozostałości; mapper nie zamykany po odłączeniu leniwym; snapdev zmieniany tylko po poprawnym odczycie; zapis oryginału zostaje przy nieudanym przywróceniu i przy drugim żywym przeglądaniu; REV-20261021-160: `tank/a_b` i `tank/a/b` przeglądane naraz wracają każdy do swojej wartości (oba porządki), stary i cudzy zapis odrzucane bez usuwania; REV-20261021-161: ten sam dysk -- wejście i wyjście pod jednym `flock` (pauza testowa w punktach wyścigu, oba kierunki, blokada zajęta, martwy znacznik) |
 | `mirrorguest` | **9/9** | `snapget.sh -M` (REV-20261017-150, P0): lustro przechodzi bramkę żywego gościa przed jakimkolwiek `zfs destroy`, także gdy najnowsza migawka źródła już jest na celu. Prawdziwe CLI, atrapy `zfs`/`zpool`/`ssh`/`qm` ze śladem, baza migawek w pliku, sztuczny `QUIESCE_PVE_DIR`. Gość działa i stan nieznany: rc 1, `qm status` zapytany, zero `destroy`. Gość zatrzymany: rc 0, usunięte dokładnie `@old`. Dataset bez gościa: rc 0, bez pytania o gościa, usunięte dokładnie `@old`. Na silniku sprzed poprawki 2/7 |
 | `runsuffix` | **15/15** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |
 
