@@ -4557,6 +4557,42 @@ else
 fi
 rm -rf "$RW"
 
+# ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
+U67="$(mktemp -d)"
+# verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the
+# FATAL "could not render" line was shown, the gen-cron reason was lost).
+printf '%s\n' ">>> plan" "!!! gen-cron.sh (as root) refused the proposed config:" \
+    "    gen-cron.sh: error: [replica:usb1]: source='hdd' is a pool name, not a dataset -- name the dataset to copy" \
+    "FATAL: gen-cron.sh could not render the proposed config -- nothing was touched" > "$U67/plan.txt"
+u67_why="$(bash -c '. "$1/tui/wt-lib.sh" 2>/dev/null; verb_refusal "$2"' x "$REPO" "$U67/plan.txt")"
+if printf '%s' "$u67_why" | grep -q "source='hdd' is a pool name" && printf '%s' "$u67_why" | grep -q 'could not render' \
+        && ! printf '%s' "$u67_why" | grep -q '^>>>\|^!!!\|^FATAL'; then
+    ok "U67: the refusal window gets the reason (gen-cron error line), not only the closing FATAL"
+else
+    bad "U67: verb_refusal" "$u67_why"
+fi
+u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
+[ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
+# pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
+eval "$(sed -n '/^pool_roots_to_children() {/,/^}/p' "$REPO/tui/replica.sh")"
+if declare -F pool_roots_to_children >/dev/null; then
+    T_NAME=(hdd hdd/a hdd/a/x hdd/b hdd/c hdd/c/y tank tank/z)
+    B_ROOT=(hdd tank/z); B_EXCL=($'hdd/b\nhdd/c/y' "")
+    pool_roots_to_children; u67_rc=$?
+    u67_got="$(printf '%s;' "${B_ROOT[@]}")|$(printf '%s;' "${B_EXCL[@]}" | tr '\n' ',')"
+    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "tank/z;hdd/a;hdd/c;|;;hdd/c/y;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
+        ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
+    else
+        bad "U67: pool root expansion" "rc=$u67_rc got=$u67_got" "$(printf '%b' "$POOL_NOTE")"
+    fi
+    T_NAME=(empty); B_ROOT=(empty); B_EXCL=("")
+    if ! pool_roots_to_children && [ "$POOL_EMPTY" = empty ]; then ok "U67: a pool with no dataset under it is refused with its name"
+    else bad "U67: empty pool" "POOL_EMPTY=$POOL_EMPTY roots=${B_ROOT[*]}"; fi
+else
+    bad "U67: could not lift pool_roots_to_children from tui/replica.sh"
+fi
+rm -rf "$U67"
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

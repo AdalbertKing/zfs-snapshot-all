@@ -98,6 +98,30 @@ basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to p
         B_ROOT+=("$r"); B_EXCL+=("$ex")
     done
 }
+# U67 (owner 2026-10-21): zaznaczona cała pula = wszystkie datasety pod nią, rekurencyjnie.
+# Silnik (gen-cron) bierze datasety, nie korzeń puli, więc pula staje się listą datasetów
+# leżących bezpośrednio pod nią -- każdy z całym drzewem pod sobą (REC=yes). Dataset
+# pominięty w koszyku w całości odpada; pominięcia głębiej idą za swoim datasetem.
+pool_roots_to_children() {   # B_ROOT/B_EXCL -> to samo bez korzeni puli; 1 + POOL_EMPTY, gdy pula pusta
+    local -a nr=() ne=()
+    local i r c x e n list
+    POOL_NOTE=""; POOL_EMPTY=""
+    for i in "${!B_ROOT[@]}"; do
+        r="${B_ROOT[$i]}"
+        case "$r" in */*) nr+=("$r"); ne+=("${B_EXCL[$i]}"); continue ;; esac
+        n=0; list=""
+        for c in ${T_NAME[@]+"${T_NAME[@]}"}; do
+            case "$c" in "$r"/*/*) continue ;; "$r"/*) ;; *) continue ;; esac
+            printf '%s\n' "${B_EXCL[$i]}" | grep -qxF -- "$c" && continue
+            e=""
+            while IFS= read -r x; do case "$x" in "$c"/*) e="$e${e:+$'\n'}$x" ;; esac; done <<<"${B_EXCL[$i]}"
+            nr+=("$c"); ne+=("$e"); n=$((n + 1)); list="$list  $c\n"
+        done
+        [ "$n" -gt 0 ] || { POOL_EMPTY="$r"; return 1; }
+        POOL_NOTE="${POOL_NOTE}Cała pula $r = $n datasetów bezpośrednio pod nią, każdy razem z tym, co pod nim:\n${list}\nDataset założony później BEZPOŚREDNIO pod pulą $r trzeba dopisać zmianą repliki\n(niżej -- pod tymi datasetami -- dojdzie sam).\n"
+    done
+    B_ROOT=(${nr[@]+"${nr[@]}"}); B_EXCL=(${ne[@]+"${ne[@]}"})
+}
 basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x ma dzieci) -- jak w relacji
     local i x
     XARGS=()
@@ -308,7 +332,7 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
             # i założono od nowa), jedyna droga to pełna kopia. Nowa obok starej, stara znika
             # dopiero po udanej nowej -- plan i WYKONAJ, jak każda zmiana.
             info "Replika $NAME" "Liczę plan..."
-            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/rs.txt" | tail -1 | sed 's/^FATAL: //')" 10 "$W"; continue; }
+            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(verb_refusal "$TMPD/rs.txt")" 10 "$W"; continue; }
             { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/rs.txt"; echo
               echo "Komenda:  $(shq "$ZB") replica-restart $NAME --yes"; } >"$TMPD/rs2.txt"
             yesno_text "$TMPD/rs2.txt" "Replika $NAME -- zacznij od nowa" "WYKONAJ" "Wstecz" --defaultno || continue
@@ -368,6 +392,13 @@ while :; do
             [ "$MENU" -eq 1 ] && { step=0; continue; }
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
             step=1; continue
+        fi
+        if ! pool_roots_to_children; then
+            wt --title "Replika $NAME" --msgbox "Pula $POOL_EMPTY nie ma żadnego datasetu do skopiowania." 8 "$W"
+            continue
+        fi
+        if [ -n "$POOL_NOTE" ]; then
+            wt --title "Replika $NAME -- cała pula" --msgbox "$POOL_NOTE" "$(fit "$(printf '%b' "$POOL_NOTE" | grep -c '')")" "$W"
         fi
         SRCS="$(IFS=,; printf '%s' "${B_ROOT[*]}")"; REC=yes; basket_xargs
         # ZASZYFROWANE ŹRÓDŁO = WYSYŁKA ZASZYFROWANA (właściciel 2026-10-12): kopia relacji
@@ -593,7 +624,7 @@ PYEOF
         [ -n "$MONDAYS" ] && ARGV+=("--monitor-warn=${MONDAYS}d" "--monitor-crit=$(( (MONDAYS * 3 + 1) / 2 ))d")
         info "Replika $NAME" "Liczę plan..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
+            verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
             [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
             wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
             step=2; continue

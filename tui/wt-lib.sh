@@ -45,6 +45,14 @@ info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
 lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
     local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
 }
+# U67 (owner 2026-10-21): an okno odmowy shows WHY, not only the verb's closing FATAL line --
+# the reason a verb prints above it ("!!! gen-cron.sh refused ...", "... error: ...") is
+# what tells the operator what to change. Lines with !!!, 'error:' and FATAL, prefixes
+# stripped, each once, the last six.
+verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
+    grep -E '^!!! |error: |^FATAL: ' "$1" 2>/dev/null \
+        | sed -e 's/^!!! //' -e 's/^[[:space:]]*//' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -6
+}
 clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
     local t="$1" m="$2"
     [ "$m" -lt 8 ] && m=8
