@@ -7,6 +7,8 @@
 # znika wylacznie po udanym przywroceniu; dwa przegladania tego samego dysku).
 # REV-20261021-160: klucz zapisu z pelnej nazwy datasetu -- tank/a_b i tank/a/b to dwa zapisy;
 # dwa przeplecione przegladania przez punkt wejscia (atrapa mount wstrzymuje sesje), oba porzadki.
+# REV-20261021-161: ten sam dataset, dwie sesje, pauza testowa (BROWSE_TEST_PAUSE_AT) pod blokada:
+# wchodzacy po sprawdzeniu orig2, a przed znacznikiem; kończacy przed przywroceniem. Wymaga flock.
 #
 # /dev/tty: browse_and_exit uruchamia mc z </dev/tty >/dev/tty i czyta Enter z /dev/tty. Bez
 # terminala sterujacego otwarcie /dev/tty konczy sie bledem, a skrypt idzie dalej (mc i read maja
@@ -156,10 +158,10 @@ run_script(){   # -> rc w $rc, stdout+stderr w $D/out
     rc=$?
 }
 key(){ printf '%s' "$1" | sha256sum | cut -c1-32; }
-run_bg(){   # <id>: sesja w tle, wstrzymana po montazu; rc w $D/rc.<id>
+run_bg(){   # <id> [pauza]: sesja w tle, wstrzymana po montazu (i w punkcie <pauza>); rc w $D/rc.<id>
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
-    ( PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
+    ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" TESTID="$1" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out.$1" 2>&1
       echo $? >"$D/rc.$1" ) &
@@ -171,6 +173,30 @@ start_ds(){   # <id> <dataset> <value> <source>: sesja na datasecie, czeka zamon
     printf '%s\n' "$3" >"$D/sdv.$k"; printf '%s\n' "$4" >"$D/sds.$k"
     printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
     run_bg "$1"; waitf "$D/inmc.$1"
+}
+enter(){   # <id> [pauza]: kolejna sesja na tank/vol (wartosci juz w sdv/sds), bez czekania
+    printf 'tank/vol volume\n' >"$D/datasets"; printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    run_bg "$1" "${2:-}"
+}
+still_running(){   # <id> <opis>: po 1.5 s sesja nadal stoi (czeka na blokade)
+    sleep 1.5; [ -e "$D/rc.$1" ] && errs+=("$2: sesja $1 skonczyla, zamiast czekac na blokade: $(tail -2 "$D/out.$1")"); return 0
+}
+same_end(){   # wspolne sprawdzenie po wyscigu na tank/vol (oryginal hidden)
+    [ "$(cat "$D/rc.A" 2>/dev/null)" = 0 ] || errs+=("rc A=$(cat "$D/rc.A" 2>/dev/null): $(tail -3 "$D/out.A")")
+    [ "$(cat "$D/rc.B" 2>/dev/null)" = 0 ] || errs+=("rc B=$(cat "$D/rc.B" 2>/dev/null): $(tail -3 "$D/out.B")")
+    [ "$(cat "$D/sdv.tank%vol")" = hidden ] || errs+=("tank/vol po wszystkim: $(cat "$D/sdv.tank%vol") (bylo hidden)")
+    ls "$D"/run/orig* "$D"/run/hold* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
+    grep -q "NIE wszystko" "$D/out.A" "$D/out.B" 2>/dev/null && errs+=("pozostalosc zgloszona")
+    return 0
+}
+race_enter(){   # <zrodlo> <nazwa>: B stoi po sprawdzeniu orig2, A konczy, B rusza
+    new_case "$2"
+    touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
+    start_ds A tank/vol hidden "$1"
+    enter B expose; waitf "$D/p.B.at"
+    touch "$D/go.A"; still_running A "A przy B miedzy sprawdzeniem a znacznikiem"
+    touch "$D/p.B.go"; waitf "$D/inmc.B"; waitf "$D/rc.A"
+    finish B; same_end
 }
 finish(){ touch "$D/go.$1"; waitf "$D/rc.$1"; }
 interleave(){   # <pierwszy konczy> <drugi konczy>
@@ -304,6 +330,49 @@ printf 'tank/inny\thidden\tlocal\n' >"$D/run/orig2.$(key tank/a/b)"; run_script
 nolg '^zfs set snapdev=visible'; has msgs "należy do 'tank/inny'"
 grep -q '^tank/inny' "$D/run/orig2.$(key tank/a/b)" || errs+=("cudzy zapis zmieniony albo usuniety")
 fin
+
+# ---- REV-20261021-161: ten sam dataset, wejscie i wyjscie pod jedna blokada --------------
+if command -v flock >/dev/null 2>&1; then
+race_enter local "19 tank/vol: B sprawdzil orig2, A konczy, B zaklada znacznik -> A czeka, nie przywraca; B przywraca hidden"
+lg '^zfs set snapdev=hidden tank/vol$'; [ "$(grep -c '^zfs set snapdev=hidden' "$D/log")" = 1 ] || errs+=("przywrocen: $(grep -c '^zfs set snapdev=hidden' "$D/log") (oczekiwano 1, przez B)")
+fin
+
+race_enter "inherited from tank" "20 to samo, oryginal odziedziczony -> jedno zfs inherit (przez B), bez set hidden"
+[ "$(grep -c '^zfs inherit snapdev tank/vol$' "$D/log")" = 1 ] || errs+=("zfs inherit: $(grep -c '^zfs inherit snapdev tank/vol$' "$D/log") (oczekiwano 1)")
+nolg '^zfs set snapdev=hidden'; fin
+
+new_case "21 odwrotnie: A stoi przed przywroceniem, B wchodzi -> B czeka; A przywraca i usuwa zapis, B czyta od nowa"
+touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
+printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf 'local\n' >"$D/sds.tank%vol"
+printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+touch "$D/go.A"; waitf "$D/p.A.at"
+enter B; still_running B "B przy A przed przywroceniem"
+[ -e "$D/inmc.B" ] && errs+=("B zamontowal, gdy A trzymal blokade")
+touch "$D/p.A.go"; waitf "$D/rc.A"; waitf "$D/inmc.B"
+finish B; same_end
+[ "$(grep -c '^zfs get -H -o value snapdev tank/vol$' "$D/log")" = 2 ] || errs+=("odczytow snapdev: $(grep -c '^zfs get -H -o value snapdev tank/vol$' "$D/log") (oczekiwano 2: B czyta po A)")
+fin
+
+new_case "22 blokada trzymana przez kogos innego -> nic nie zmieniam (bez snapdev=visible, bez zapisu)"
+vol_case ext4
+( flock 9; : >"$D/locked"; sleep 4 ) 9>>"$D/run/lock2.$(key tank/vol)" &
+lk=$!; waitf "$D/locked"
+export BROWSE_LOCK_WAIT=1; run_script; unset BROWSE_LOCK_WAIT
+nolg '^zfs set snapdev=visible'; has msgs "nie mogę zablokować"
+ls "$D"/run/orig2.* "$D"/run/hold2.* >/dev/null 2>&1 && errs+=("powstal zapis mimo braku blokady: $(ls "$D/run")")
+wait "$lk" 2>/dev/null; fin
+
+new_case "23 martwy znacznik + poprawny zapis -> znacznik sprzatniety, hidden przywrocony z zapisu"
+vol_case ext4; printf 'visible\n' >"$D/snapdev_value"
+bash -c 'exit 0' & dead=$!; wait "$dead"
+touch "$D/run/hold2.$dead.$(key tank/vol)"; printf 'tank/vol\thidden\tlocal\n' >"$D/run/orig2.$(key tank/vol)"
+run_script
+rc0; [ "$(cat "$D/snapdev_value")" = hidden ] || errs+=("snapdev po wszystkim: $(cat "$D/snapdev_value") (zapis mowil hidden)")
+ls "$D"/run/orig2.* "$D"/run/hold2.* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
+fin
+else
+    echo "SKIP 19-23: brak flock (REV-161 wymaga flock; uruchom na hoscie albo w CI)"
+fi
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
