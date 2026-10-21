@@ -88,14 +88,19 @@ unmount_all() {   # -> 0 nic nie zostało; 1 coś zostało (opis w RESIDUE, stan
 }
 # DWA PRZEGLĄDANIA TEGO SAMEGO DYSKU (pve10, 2026-10-18: pierwsze, które skończyło, przywróciło
 # snapdev i drugiemu zniknęło /dev/zd..p1 w trakcie podawania klucza). Każde przeglądanie zostawia
-# znacznik hold.<pid>.<dataset>; snapdev wraca dopiero, gdy nie ma innego ŻYWEGO znacznika tego
-# datasetu, a wartość sprzed przeglądania zapisuje tylko pierwszy (orig.<dataset>).
-hold_key() { printf '%s' "$1" | tr '/@' '__'; }
+# znacznik hold2.<pid>.<klucz>; snapdev wraca dopiero, gdy nie ma innego ŻYWEGO znacznika tego
+# datasetu, a wartość sprzed przeglądania zapisuje tylko pierwszy (orig2.<klucz>).
+# REV-20261021-160: klucz to skrót sha256 PEŁNEJ nazwy datasetu (dawne tr '/@' '__' sklejało
+# tank/a_b z tank/a/b), a zapis orig2 niesie dokładną nazwę -- cudzy zapis (kolizja skrótu)
+# jest odrzucany, nigdy używany ani usuwany. Sam klucz nie ma kropek: hold2.*.<klucz> nie złapie
+# znacznika innego datasetu.
+hold_key() { local h; h="$(printf '%s' "$1" | sha256sum)" || return 1; printf '%s' "${h:0:32}"; }
+legacy_key() { printf '%s' "$1" | tr '/@' '__'; }   # klucz sprzed REV-160 -- tylko do wykrycia starych zapisów
 other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dataset
     local k f p; k="$(hold_key "$1")"
-    for f in "$BROOT"/hold.*."$k"; do
+    for f in "$BROOT"/hold2.*."$k"; do
         [ -e "$f" ] || continue
-        p="${f#"$BROOT"/hold.}"; p="${p%%.*}"
+        p="${f#"$BROOT"/hold2.}"; p="${p%%.*}"
         [ "$p" = "$$" ] && continue
         kill -0 "$p" 2>/dev/null && return 0
         rm -f "$f"
@@ -103,37 +108,59 @@ other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dat
     return 1
 }
 # REV-20261021-159 F2: snapdev zmieniany TYLKO, gdy wartość i źródło sprzed zmiany dało się
-# odczytać i są poprawne. Zapis oryginału (orig.<dataset>) powstaje raz -- gdy go nie ma --
+# odczytać i są poprawne. Zapis oryginału (orig2.<klucz>: dataset, wartość, źródło) powstaje raz -- gdy go nie ma --
 # i znika WYŁĄCZNIE po udanym przywróceniu: nieudane przywrócenie zostawia go (z poleceniem
 # w RESIDUE), a następne przeglądanie nie nadpisze go bieżącym "visible".
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
-    local ds="$1" k v s; k="$(hold_key "$ds")"
+    local ds="$1" k v s d f p
+    k="$(hold_key "$ds")" && [ "${#k}" -eq 32 ] || { echo "nie da się policzyć klucza dla $ds (sha256sum) -- nic nie zmieniam" >&2; return 1; }
     mkdir -p "$BROOT" || return 1
-    if [ -e "$BROOT/orig.$k" ]; then
-        # Istniejący zapis (inne przeglądanie albo nieudane przywrócenie) -- tylko poprawny.
-        IFS=$'\t' read -r v s <"$BROOT/orig.$k" 2>/dev/null || { echo "zapis $BROOT/orig.$k nieczytelny -- nic nie zmieniam" >&2; return 1; }
-        case "$v" in hidden|visible) ;; *) echo "zapis $BROOT/orig.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
-        case "$s" in local|default|received|"inherited from "*) ;; *) echo "zapis $BROOT/orig.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
+    # Zapisy sprzed REV-160 (orig./hold. ze sklejonym kluczem): nie wiadomo, którego z datasetów
+    # o tej samej sklejonej nazwie dotyczą -- nic nie zgaduję i niczego nie usuwam.
+    f="$BROOT/orig.$(legacy_key "$ds")"
+    if [ -e "$f" ]; then
+        echo "stary zapis $f (sprzed poprawki kluczy) -- nie wiadomo, którego datasetu dotyczy; nic nie zmieniam. Sprawdź snapdev datasetów o tej nazwie (zfs get -r snapdev), przywróć ręcznie i usuń ten plik." >&2
+        return 1
+    fi
+    for f in "$BROOT"/hold.*."$(legacy_key "$ds")"; do
+        [ -e "$f" ] || continue
+        p="${f#"$BROOT"/hold.}"; p="${p%%.*}"
+        if kill -0 "$p" 2>/dev/null; then
+            echo "trwa przeglądanie starszą wersją (pid $p, $f) -- nic nie zmieniam, spróbuj po jego zakończeniu" >&2
+            return 1
+        fi
+    done
+    if [ -e "$BROOT/orig2.$k" ]; then
+        # Istniejący zapis (inne przeglądanie albo nieudane przywrócenie) -- tylko poprawny i tylko TEGO datasetu.
+        IFS=$'\t' read -r d v s <"$BROOT/orig2.$k" 2>/dev/null || { echo "zapis $BROOT/orig2.$k nieczytelny -- nic nie zmieniam" >&2; return 1; }
+        [ "$d" = "$ds" ] || { echo "zapis $BROOT/orig2.$k należy do '$d', nie do $ds -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1; }
+        case "$v" in hidden|visible) ;; *) echo "zapis $BROOT/orig2.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
+        case "$s" in local|default|received|"inherited from "*) ;; *) echo "zapis $BROOT/orig2.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
     else
         v="$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać snapdev $ds -- nic nie zmieniam" >&2; return 1; }
         s="$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać źródła snapdev $ds -- nic nie zmieniam" >&2; return 1; }
         case "$v" in hidden|visible) ;; *) echo "snapdev $ds = '$v' -- nieznana wartość, nic nie zmieniam" >&2; return 1 ;; esac
         case "$s" in local|default|received|"inherited from "*) ;; *) echo "źródło snapdev $ds = '$s' -- nieznane, nic nie zmieniam" >&2; return 1 ;; esac
-        printf '%s\t%s\n' "$v" "$s" >"$BROOT/orig.$k.$$" && mv -f "$BROOT/orig.$k.$$" "$BROOT/orig.$k" \
-            || { rm -f "$BROOT/orig.$k.$$"; echo "nie da się zapisać $BROOT/orig.$k -- nic nie zmieniam" >&2; return 1; }
+        printf '%s\t%s\t%s\n' "$ds" "$v" "$s" >"$BROOT/orig2.$k.$$" && mv -f "$BROOT/orig2.$k.$$" "$BROOT/orig2.$k" \
+            || { rm -f "$BROOT/orig2.$k.$$"; echo "nie da się zapisać $BROOT/orig2.$k -- nic nie zmieniam" >&2; return 1; }
     fi
-    : >"$BROOT/hold.$$.$k"
+    : >"$BROOT/hold2.$$.$k"
     SNAPDEV_DS="$ds"
     zfs set snapdev=visible "$ds"
 }
 restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RESIDUE, stan zachowany)
     [ -n "$SNAPDEV_DS" ] || return 0
-    local k was src ok=1; k="$(hold_key "$SNAPDEV_DS")"
-    rm -f "$BROOT/hold.$$.$k"
+    local k d was src ok=1; k="$(hold_key "$SNAPDEV_DS")"
+    rm -f "$BROOT/hold2.$$.$k"
     if other_holders "$SNAPDEV_DS"; then SNAPDEV_DS=""; return 0; fi   # inne przeglądanie trzyma
-    if ! IFS=$'\t' read -r was src <"$BROOT/orig.$k" 2>/dev/null; then
+    if ! IFS=$'\t' read -r d was src <"$BROOT/orig2.$k" 2>/dev/null; then
         RESIDUE="$RESIDUE
-  nie ma zapisu snapdev sprzed przeglądania ($BROOT/orig.$k) -- snapdev $SNAPDEV_DS zostawiam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+  nie ma zapisu snapdev sprzed przeglądania ($BROOT/orig2.$k) -- snapdev $SNAPDEV_DS zostawiam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+        return 1
+    fi
+    if [ "$d" != "$SNAPDEV_DS" ]; then
+        RESIDUE="$RESIDUE
+  zapis $BROOT/orig2.$k należy do '$d', nie do $SNAPDEV_DS -- snapdev $SNAPDEV_DS zostawiam, zapisu nie ruszam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
         return 1
     fi
     case "$src" in
@@ -143,10 +170,10 @@ restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RE
         *)                         ok=0 ;;
     esac
     if [ "$ok" -eq 1 ]; then
-        rm -f "$BROOT/orig.$k"; SNAPDEV_DS=""; return 0
+        rm -f "$BROOT/orig2.$k"; SNAPDEV_DS=""; return 0
     fi
     RESIDUE="$RESIDUE
-  snapdev na $SNAPDEV_DS NIE przywrócony (było: $was, $src; zapis w $BROOT/orig.$k)  (ręcznie: $(case "$src" in local) echo "zfs set snapdev=$was $SNAPDEV_DS" ;; *) echo "zfs inherit snapdev $SNAPDEV_DS" ;; esac))"
+  snapdev na $SNAPDEV_DS NIE przywrócony (było: $was, $src; zapis w $BROOT/orig2.$k)  (ręcznie: $(case "$src" in local) echo "zfs set snapdev=$was $SNAPDEV_DS" ;; *) echo "zfs inherit snapdev $SNAPDEV_DS" ;; esac))"
     return 1
 }
 # Po kroku, który zmienił snapdev, a się nie udał: przywrócenie i -- gdy nie wyszło -- okno
