@@ -90,6 +90,14 @@
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
+- **FINISZ U51: jak włączamy strażników (2026-10-21; `finisz/notatki-2`).** Właściciel: „Jak włączamy strażnika
+  ransomware i przepełniania puli. Globalne ustawienie w silniku dostępne z GUI? proponuj” -> „Ok”. Oba to ustawienia
+  HOSTA, nie silnika i nie relacji: F10 na każdym hoście (kolektor i źródło osobno), dla floty bez GUI
+  `zfs-backup.sh settings set capacity.guard=on growth.alert=on --yes` (ta sama walidacja co F10; osobne `deploy
+  --set` byłoby duplikatem). Górny pasek GUI pokazuje stan na każdym ekranie: „ochrona: bezpiecznik wł./wył. ·
+  przyrost wł./wył.” -- z tego samego źródła co skrypty w cronie (settings.ini, potem stary zfs-alert.conf, domyślnie
+  wył.); na wąskim pasku odpada pierwszy. Zdalnego włączania na źródle z GUI kolektora celowo nie ma.
+
 - **FINISZ U50: strażnik podejrzanego przyrostu (ransomware), tylko alarm (2026-10-21; `finisz/notatki-2`).**
   Właściciel: „Ochrona przed ransomware. Monitoring przyrostu niekompresowalnych danych pomiędzy migawkami”,
   „zrób alarm”. `hostscripts/growth-guard.sh`, instalowany przez deploy do `/root/scripts`, cron co godzinę w bloku
