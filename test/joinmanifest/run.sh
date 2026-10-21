@@ -280,6 +280,17 @@ zfs() {
             for a in "$@"; do [ "$a" = "-r" ] && rec=1; done
             if [ "$rec" -eq 0 ]; then
                 [ "$ZFS_LIST_RC" -eq 0 ] || return "$ZFS_LIST_RC"
+                # REV-164 R1: tank/old, granted last time and narrowed away now.
+                if [ "${*: -1}" = tank/old ]; then
+                    case " $* " in
+                        *" snapshot "*) [ "$ZFS_OLD_MODE" = snapfail ] && { echo "cannot iterate: permission denied" >&2; return 1; }
+                                        echo "tank/old@s1"; return 0 ;;
+                    esac
+                    case "$ZFS_OLD_MODE" in
+                        gone)     echo "cannot open 'tank/old': dataset does not exist" >&2; return 1 ;;
+                        listfail) echo "cannot open 'tank/old': permission denied" >&2; return 1 ;;
+                    esac
+                fi
                 printf '%s\n' "${*: -1}"
                 return 0
             fi
@@ -297,9 +308,14 @@ zfs() {
             printf '%s\n' "$ZFS_GET_USED"
             ;;
         allow|unallow) return 0 ;;
+        holds)
+            [ "$ZFS_OLD_MODE" = holdsfail ] && { echo "permission denied" >&2; return 1; }
+            [ "$ZFS_OLD_MODE" = held ] && printf 'tank/old@s1\t%s\tWed Oct 21 2026\n' "$COMMIT_SCOPE_HOLD_TAG"
+            return 0 ;;
     esac
     return 0
 }
+ZFS_OLD_MODE=""
 zfs_allow_count() { grep -c '^allow ' "$ZFS_LOG" 2>/dev/null || true; }
 zfs_reset() { : > "$ZFS_LOG"; : > "$ZFS_LISTR_COUNT"; ZFS_DRIFT_AFTER=0
               SCOPE_READ_RC=0; ZFS_LIST_RC=0; ZFS_LISTR_RC=0; ZFS_GET_RC=0; }
@@ -477,6 +493,54 @@ if [ "$rc" -ne 0 ] && [ "$(zfs_allow_count)" -eq 0 ]         && printf '%s' "$ou
 else
     bad "consent: a swapped dataset with the same count stops the grant"         "rc=$rc allow=$(zfs_allow_count)" "out=$out"
 fi
+zfs_reset
+
+# ---------------------------------------------------------------------------
+# REV-20261021-164 R1: narrowing (revoke-on-narrow) must not read a failed zfs read as
+# "gone" (dropped from the record) or as "no hold" (revoked mid-transfer). tank/old was
+# granted last time and is not in the new scope. The SHIPPED commit_scope_dataset_held
+# (and zfs_ds_presence) run here; the suite's own stub is put back afterwards.
+# ---------------------------------------------------------------------------
+eval "$(product_fn "$DEPLOY_SRC" commit_scope_dataset_held)"
+grep -q '^zfs_ds_presence() {' "$DEPLOY_SRC" && eval "$(product_fn "$DEPLOY_SRC" zfs_ds_presence)"
+narrow_case() {   # <mode> -> rc in $rc, output in $out
+    join_case_reset
+    ZFS_OLD_MODE="$1"
+    PEER_JOIN_GRANTED_DATASETS="tank/data tank/data/a tank/data/b tank/old"
+    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "$PEER_JOIN_GRANTED_DATASETS" > "$COMMIT_MPATH"
+    out="$(guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
+    ZFS_OLD_MODE=""
+}
+old_unallowed() { grep -q '^unallow .*tank/old' "$ZFS_LOG"; }
+old_recorded()  { grep -q 'tank/old' "$COMMIT_MPATH"; }
+for m in listfail snapfail holdsfail; do
+    narrow_case "$m"
+    if [ "$rc" -ne 0 ] && [ "$(zfs_allow_count)" -eq 0 ] && ! old_unallowed && old_recorded \
+       && printf '%s' "$out" | grep -q "refusing to commit the scope for 'pve1'"; then
+        ok "REV-164 R1 narrowing: $m on a previously granted dataset -> refused before any allow/unallow, record kept"
+    else
+        bad "REV-164 R1 narrowing: $m -> refused, nothing changed" "rc=$rc allow=$(zfs_allow_count) unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+    fi
+done
+narrow_case held
+if [ "$rc" -eq 0 ] && ! old_unallowed && old_recorded; then
+    ok "REV-164 R1 narrowing: held -> left granted and recorded, not revoked"
+else
+    bad "REV-164 R1 narrowing: held" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+narrow_case clean
+if [ "$rc" -eq 0 ] && old_unallowed && ! old_recorded; then
+    ok "REV-164 R1 narrowing: not held -> revoked and dropped from the record"
+else
+    bad "REV-164 R1 narrowing: not held" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+narrow_case gone
+if [ "$rc" -eq 0 ] && ! old_unallowed && ! old_recorded; then
+    ok "REV-164 R1 narrowing: 'dataset does not exist' -> nothing to revoke, dropped from the record"
+else
+    bad "REV-164 R1 narrowing: gone" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+commit_scope_dataset_held() { return 1; }
 zfs_reset
 
 # ---------------------------------------------------------------------------

@@ -3904,8 +3904,9 @@ fi
 COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
 
 # -> 0 held, 1 not held, 2 the snapshots or their holds could not be read (REV-20261021-164:
-# an unreadable hold is not "no hold"). Callers that test it with `if`/`elif` take 2 as held,
-# the conservative reading; --leave tells 2 apart and stops.
+# an unreadable hold is not "no hold"). EVERY caller must tell 2 apart: in `if`/`elif`
+# 2 is simply false, i.e. "not held" -- the reviewer's R1 on this very REV, where
+# do_commit_scope's `elif` put an unreadable dataset on the revoke list.
 commit_scope_dataset_held() {   # <dataset>
     local ds="$1" snap snaps h
     snaps="$(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)" || return 2
@@ -3915,6 +3916,19 @@ commit_scope_dataset_held() {   # <dataset>
         printf '%s\n' "$h" | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
     done <<< "$snaps"
     return 1
+}
+
+# -> 0 exists, 1 does not exist on ZFS's own word ("dataset does not exist", LC_ALL=C),
+# 2 unknown -- the read itself failed (permission, pool not imported, broken zfs).
+# ZFS_READ_ERR holds the first line of the error. REV-20261021-164: an unreadable
+# dataset is never a gone one.
+zfs_ds_presence() {   # <dataset>
+    local out
+    ZFS_READ_ERR=""
+    if out="$(LC_ALL=C zfs list -H -o name -- "$1" 2>&1)"; then return 0; fi
+    ZFS_READ_ERR="${out%%$'\n'*}"
+    case "$out" in *"dataset does not exist"*) return 1 ;; esac
+    return 2
 }
 
 do_commit_scope() {
@@ -3983,17 +3997,25 @@ do_commit_scope() {
     local -a prior=() revoke_clean=() revoke_held=() revoke_gone=()
     # shellcheck disable=SC2206
     [ -n "$prior_datasets" ] && prior=($prior_datasets)
-    local p
+    local p prc hrc
     for p in "${prior[@]:-}"; do
         [ -n "$p" ] || continue
         case " ${granted[*]:-} " in *" $p "*) continue ;; esac
-        if ! zfs list -H -o name -- "$p" >/dev/null 2>&1; then
-            revoke_gone+=("$p")
-        elif commit_scope_dataset_held "$p"; then
-            revoke_held+=("$p")
-        else
-            revoke_clean+=("$p")
-        fi
+        # REV-20261021-164 R1: every status told apart, and an unreadable one stops the
+        # run here -- still inside the plan, before the first zfs allow/unallow and
+        # before the manifest's granted list is rewritten.
+        prc=0; zfs_ds_presence "$p" || prc=$?
+        case "$prc" in
+            0) ;;
+            1) revoke_gone+=("$p"); continue ;;
+            *) die "refusing to commit the scope for '$label': could not tell whether $p (granted last time) still exists (zfs list: $ZFS_READ_ERR) -- an unreadable dataset is not a gone one, and dropping it would forget a live grant. No grant or revoke was made; fix the zfs read and re-run." ;;
+        esac
+        hrc=0; commit_scope_dataset_held "$p" || hrc=$?
+        case "$hrc" in
+            0) revoke_held+=("$p") ;;
+            1) revoke_clean+=("$p") ;;
+            *) die "refusing to commit the scope for '$label': could not read the snapshots or transfer holds of $p (granted last time) -- an unreadable hold is not 'no hold', and revoking now could strand an in-flight transfer. No grant or revoke was made; fix the zfs read and re-run." ;;
+        esac
     done
 
     log "commit-scope plan for '$label' ($account):"
@@ -4359,10 +4381,10 @@ new_account_abort() {   # <account> <uid> <reason> -- never returns
 # imported, a broken zfs -- is unknown, and --leave stops with <what-is-left> instead of
 # skipping that dataset's revoke or verification and going on to userdel.
 leave_ds_exists() {   # <label> <dataset> <what-is-left> -> 0 exists, 1 does not exist; dies otherwise
-    local out
-    if out="$(LC_ALL=C zfs list -H -o name -- "$2" 2>&1)"; then return 0; fi
-    case "$out" in *"dataset does not exist"*) return 1 ;; esac
-    die "refusing --leave='$1': could not tell whether $2 exists (zfs list: ${out%%$'\n'*}) -- an unreadable dataset is not a gone one. $3"
+    local rc=0
+    zfs_ds_presence "$2" || rc=$?
+    case "$rc" in 0) return 0 ;; 1) return 1 ;; esac
+    die "refusing --leave='$1': could not tell whether $2 exists (zfs list: $ZFS_READ_ERR) -- an unreadable dataset is not a gone one. $3"
 }
 
 do_leave() {

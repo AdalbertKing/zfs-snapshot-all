@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 6e39573c68b045b5 -->
+<!-- status-covers-digest: 465ded449e73f38c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -90,12 +90,15 @@
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
-- **REV-20261021-164: `--leave` -- błąd odczytu ZFS nie znaczy „dataset zniknął” ani „uprawnień już nie ma” (2026-10-21; `finisz/REV-164`).**
+- **REV-20261021-164: `--leave` -- błąd odczytu ZFS nie znaczy „dataset zniknął” ani „uprawnień już nie ma” (2026-10-21; `finisz/REV-164`, R1 `finisz/REV-164b`).**
   `deploy.sh`, `do_leave`: dataset jest „nieobecny” tylko na słowo ZFS („dataset does not exist”); każdy inny błąd
   `zfs list` przy sprawdzaniu blokad, odbieraniu uprawnień i weryfikacji zatrzymuje `--leave`. Uprawnienia po odebraniu
   są czytane do zmiennej i błąd odczytu też zatrzymuje -- wcześniej nieudane `zfs allow` dawało „nic nie zostało”,
   szło `userdel -r` (konto z kluczem w katalogu domowym) i usunięcie manifestu i plików zakresu, a uid z resztką uprawnień wracał do puli. Nieczytelna blokada
-  transferu (`commit_scope_dataset_held` kod 2) też zatrzymuje. Testy `test/joinmanifest` +8 (prawdziwe `do_leave`).
+  transferu (`commit_scope_dataset_held` kod 2) też zatrzymuje. R1 (odrzucenie recenzenta): zawężanie zakresu
+  (`do_commit_scope`) rozróżnia 0/1/2 obu odczytów -- wcześniej `elif` brał kod 2 za „bez blokady” i odbierał uprawnienia,
+  a nieczytelne `zfs list` wyrzucało dataset z zapisu bez odebrania; teraz odmowa przed pierwszym `zfs allow`.
+  Testy `test/joinmanifest` +14 (prawdziwe `do_leave` i `do_commit_scope`).
 
 - **REV-20261021-163: U42 -- błąd odczytu uprawnień ZFS nie znaczy „brak uprawnień” (2026-10-21; `finisz/REV-163`).**
   `deploy.sh`, `new_account_drop_inherited_grants` (nowe konto relacji nie dziedziczy delegacji po usuniętym koncie
