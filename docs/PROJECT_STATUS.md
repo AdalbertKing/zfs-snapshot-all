@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 709fa0c4d08d9e82 -->
+<!-- status-covers-digest: ca5a153197a98d9d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -90,6 +90,13 @@
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
 
+- **FINISZ U62: eksport relacji zapisuje adres, przez który relacja działa (2026-10-21; `finisz/U62`).**
+  Właściciel: wyeksportował `ab` (przeniesioną oknem „Adres hosta” na VPN 10.98.0.2), usunął z zachowaniem kopii,
+  import padł -- „skoro zrobiłem eksport, to powinien eksportować aktualny adres IP”. Eksport brał do `--host` adres
+  z parowania (192.168.28.98), a adres aktywny odkładał na „set-endpoint po aktywacji”; `add-client` musi dojść do
+  hosta już przy parowaniu, więc import nie miał szans. Teraz `--host` = adres aktywny (`ACTIVE_ENDPOINT`, z portem,
+  gdy nie 22); import starszego pliku łączy się przez zapisany w nim adres aktywny i mówi o tym. Testy `zfsbackup`
+  exportrel +4.
 - **REV-20261021-165: U42 -- wycofanie nowego konta nigdy nie kasuje katalogu domowego (2026-10-21; `finisz/REV-165`, poprawka `finisz/REV-165b`).**
   `deploy.sh`: przy błędzie odczytu ZFS wycofanie robi zwykłe `userdel` (bez `-r`), a komunikat podaje katalog
   domowy, który zostaje, i polecenie do ręcznego usunięcia po obejrzeniu. Pierwsza wersja zgadywała, czy katalog

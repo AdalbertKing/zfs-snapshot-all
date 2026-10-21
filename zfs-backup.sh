@@ -17366,6 +17366,21 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
 $(json_array_strings "$(json_value_of "$replay" argv)")
 ARGV
     [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    # U62: a file written before the fix carries --host = the pairing address and the
+    # address in use only under not_replayable/ACTIVE_ENDPOINT. Connect where the relation
+    # actually worked: a literal host:port there replaces --host (port 22 left implicit).
+    local file_active i
+    file_active=$(printf '%s' "$doc" | grep -o '"field":"ACTIVE_ENDPOINT","value":"[^"]*"' | head -1 | sed 's/^.*"value":"//; s/"$//')
+    case "$file_active" in
+        *:*) case "$file_active" in *[!A-Za-z0-9._:-]*) die "import-relation: ACTIVE_ENDPOINT '$file_active' in '$file' is not a host:port -- the file is not one export-relation wrote" ;; esac
+             [ "${file_active##*:}" = 22 ] && file_active="${file_active%:*}"
+             for i in "${!argv[@]}"; do
+                 case "${argv[$i]}" in
+                     --host=*) [ "${argv[$i]}" = "--host=$file_active" ] \
+                                   || { echo ">>> import-relation: plik wskazuje adres parowania ${argv[$i]#--host=}, ale relacja działała przez $file_active -- łączę się przez $file_active"; argv[$i]="--host=$file_active"; } ;;
+                 esac
+             done ;;
+    esac
     local -a then_verbs=()
     while IFS= read -r x; do [ -n "$x" ] && then_verbs+=("$x"); done <<THEN
 $(json_array_strings "$(json_value_of "$replay" then)")
@@ -17598,7 +17613,7 @@ SCOPE
             [ -n "$x" ] || continue
             echo "  $x"
         done <<UNREP
-$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
+$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); if (f != "ACTIVE_ENDPOINT") printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
 UNREP
     fi
     if [ "$yes" -ne 1 ]; then
@@ -17666,6 +17681,17 @@ cmd_export_relation() {
     [ -n "${CRON_CONFIG:-}" ] || read_server_conf
     local cfg="${CRON_CONFIG:-}"
 
+    # U62 (owner 2026-10-21: "skoro zrobiłem eksport, to powinien eksportować aktualny
+    # adres IP"): --host replays the address the relation USES now -- ACTIVE_ENDPOINT,
+    # which the "Adres hosta" window / set-endpoint changes -- not PEER_HOST, the address
+    # it was paired on. Measured on pve10: 'ab' moved to the VPN (10.98.0.2) exported
+    # --host=192.168.28.98, unreachable from the collector, and the import died in
+    # ssh-keyscan. Port 22 is left implicit, as add-client writes it.
+    local export_host="${PEER_HOST:-}" eh ep
+    if [ -n "${ACTIVE_ENDPOINT:-}" ] && read -r eh ep <<< "$(active_endpoint_host_port 2>/dev/null)" && [ -n "$eh" ]; then
+        export_host="$eh"; [ "${ep:-22}" = 22 ] || export_host="$eh:$ep"
+    fi
+
     # --- the declarations, and the flags they replay as ---------------------
     local pair fld flag val
     local decl_json="" first=1
@@ -17677,6 +17703,7 @@ cmd_export_relation() {
         [ "$first" -eq 1 ] || decl_json="$decl_json,"
         first=0
         decl_json="$decl_json\"$(json_escape "$fld")\":\"$(json_escape "$val")\""
+        [ "$fld" = PEER_HOST ] && [ -n "$export_host" ] && val="$export_host"
         argv+=("--$flag=$val")
         if [ "$fld" = CLIENT_TARGET ]; then
             # The dataset list rides right after the target, where the wizard
@@ -17736,7 +17763,7 @@ EXF
     # --mode=snaponly, which add-client refuses beside --snaponly, and the dataset
     # list never (it rides after CLIENT_TARGET, and there is none).
     if [ "${RUX_MODE:-}" = snaponly ]; then
-        local -a soargv=("--host=${PEER_HOST:-}" --snaponly "--datasets=${REQUESTED_DATASETS:-}")
+        local -a soargv=("--host=${export_host:-}" --snaponly "--datasets=${REQUESTED_DATASETS:-}")
         for x in ${argv[@]+"${argv[@]}"}; do
             case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--bandwidth=*|--passive|--exclude-*) ;; *) soargv+=("$x") ;; esac
         done

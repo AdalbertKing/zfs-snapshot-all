@@ -10257,6 +10257,24 @@ case "$(cat "$WORK/ex.out")" in
     *) bad "exportrel: no reachable config is reported as such, not as an empty relationship" "$(cat "$WORK/ex.out")" ;;
 esac
 
+# U62 (owner 2026-10-21): a relation moved to another address (the "Adres hosta" window
+# / set-endpoint changed ACTIVE_ENDPOINT, PEER_HOST stays the pairing address) exports
+# the address it USES. Measured on pve10: 'ab' on the VPN exported its LAN address and
+# the import died in ssh-keyscan.
+printf 'CLIENT_NAME=przen\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:22\nENDPOINT_KNOWN=192.168.28.98:22\n' > "$EX/clients/przen.conf"
+ex_run export-relation przen --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2"]'*) ok "exportrel U62: a relation moved to the VPN exports --host = the address in use (10.98.0.2), not the pairing one" ;;
+    *) bad "exportrel U62: moved relation exports the active address" "$(cat "$WORK/ex.out")" ;;
+esac
+printf 'CLIENT_NAME=przenp\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:2222\n' > "$EX/clients/przenp.conf"
+ex_run export-relation przenp --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2:2222"]'*) ok "exportrel U62: a non-22 active port rides with the host (--host=10.98.0.2:2222)" ;;
+    *) bad "exportrel U62: active port" "$(cat "$WORK/ex.out")" ;;
+esac
+rm -f "$EX/clients/przen.conf" "$EX/clients/przenp.conf"
+
 # THE TEXT FORM carries the same command, ready to paste.
 ex_run export-relation ksiegowosc
 if grep -q 'add-client ksiegowosc' "$WORK/ex.out" \
@@ -10303,10 +10321,32 @@ if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im
 else
     bad "importrel: without --yes the two commands are shown, and NOTHING is called" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
 fi
-if grep -q 'ACTIVE_ENDPOINT *= 10.0.0.11:22' "$WORK/im.out"; then
-    ok "importrel: the export's not_replayable fields come back as the manual step, not silently"
+# ENDPOINT_VPN_HOST is still a manual step; ACTIVE_ENDPOINT is not any more -- it is
+# what --host connects through (U62).
+if grep -q 'ENDPOINT_VPN_HOST *= 10.99.0.11' "$WORK/im.out" && ! grep -q 'ACTIVE_ENDPOINT *=' "$WORK/im.out"; then
+    ok "importrel: the export's not_replayable fields come back as the manual step, not silently (ACTIVE_ENDPOINT excepted: it is replayed)"
 else
     bad "importrel: not_replayable fields shown" "$(cat "$WORK/im.out")"
+fi
+# U62: a file written BEFORE the fix -- argv carries the pairing address, the address in
+# use only under not_replayable. The import connects where the relation worked.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:22"/' \
+    "$IM/ksiegowosc.json" > "$IM/stary.json"
+im_run "$IM/stary.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2|' "$IM/calls.log" \
+        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'łączę się przez 10.98.0.2' "$WORK/im.out"; then
+    ok "importrel U62: an older export (argv = pairing address) connects through the ACTIVE_ENDPOINT it carries, and says so"
+else
+    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'adres\|host' "$WORK/im.out" | head -5)"
+fi
+sed -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:22;rm -rf"/' \
+    "$IM/ksiegowosc.json" > "$IM/zly.json"
+im_run "$IM/zly.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel U62: an ACTIVE_ENDPOINT that is not a host:port is refused, nothing called"
+else
+    bad "importrel U62: bad ACTIVE_ENDPOINT refused" "rc=$im_rc" "$(cat "$IM/calls.log")"
 fi
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
 im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
