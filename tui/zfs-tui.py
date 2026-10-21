@@ -3697,9 +3697,9 @@ HELP = [
     u"                 jako konto z crontaba; wynik w oknie. F8 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
-    u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
-    u"                 źródła, konfig, zapis jako szablon, adres hosta po",
-    u"                 przeniesieniu kolektora), Del usuń,",
+    u"                 = Zmień relację: adres hosta, datasety, szablon, retencja",
+    u"                 źródła, silnik; 's' zapisuje ustawienia jako szablon,",
+    u"                 'c' otwiera config do ręcznej edycji), Del usuń,",
     u"                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
     u"                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
     u"                 F9 eksport/import: eksport do pliku (Enter zapisuje, domyślnie",
@@ -3885,9 +3885,12 @@ class UI(object):
             return None
         return path
 
-    def run_dialog(self, argv):
-        """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi."""
+    def run_dialog(self, argv, env=None):
+        """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi.
+        env: zmienne dla dialogu (U65: EDIT_DO otwiera od razu jedna czynnosc)."""
         line = " ".join(shlex.quote(x) for x in argv)
+        if env:
+            line = " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in sorted(env.items())) + " " + line
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
@@ -4948,6 +4951,13 @@ class UI(object):
                 self.confirm(u"Dokończ relację %s" % rel.get("name"), [self.zb()] + finish_argv(rel),
                              note_lines=[u"Stan: %s -- następny krok cyklu relacji (można powtórzyć)." % state_word(rel)])
                 return "stay"
+            elif k in ("s", "c") and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+                # U65 (makieta 2026-10-21): czynnosci nie sa czescia zmiany relacji -- zapis jako
+                # szablon ('s') i reczna edycja konfigu ('c') otwieraja sie wprost z tego okna.
+                n = self.window[1]["name"]
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "edit-relation", n, "--ask"],
+                                       env={"EDIT_DO": "zapisz" if k == "s" else "config"}) or "stay"
             elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
@@ -5342,9 +5352,9 @@ def _ui_render(self, width, height):
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
                 if finish_argv(obj.get("rel") or {}):
-                    foot = u"d dokończ   e zmień   Esc zamyka   strzałki przewijają"
+                    foot = u"d dokończ   e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
@@ -5388,7 +5398,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d", ord("w"): "w",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d", ord("w"): "w", ord("s"): "s", ord("c"): "c",
                ord("?"): "F1", ord("h"): "F1"}
 
 
