@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 21d0cd686ed5fa16adb969328e27344ad6ef36f0 -->
-<!-- frozen: snapget.sh 100755 1774978fdd17f1e926bb4c902faf85609736f680 -->
+<!-- frozen: snapget.sh 100755 064e55419755637553b0e0035c5bdbd544b39da1 -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1127,6 +1127,29 @@ Owner-authorized refreezes:
   -> pve9b, delegated account, pair gate): OK, -R with children, CRITICAL,
   absent dataset -- unchanged.
   twin: none.
+
+- 2026-10-21 (snapget.sh): **U60 + H-4 -- the live-guest guard only for a target
+  that IS the source's path; an empty mirror on both sides is not a failure.**
+  Owner direction in chat, 2026-10-21: "zgoda na odmrożenie", given for exactly
+  these two findings of the GUI campaign. v2.75 -> v2.76.
+  - U60: process_dataset's guard for a REMOTE source and mirror_target's guard
+    now run only when the target dataset equals the source dataset (sync /
+    lustro). A target nested under a base (a backup copy, a replica on a medium)
+    is never the disk a guest of this host runs on. Measured on pve10: the pull
+    of hdd/lab from pve9 refused hdd/backups/192.168.28.99/hdd/lab/subvol-901-disk-0
+    because CT 901 exists on pve10 and the delegated account could not ask its
+    state.
+  - H-4: mirror_target with no snapshots on the source AND none on the target
+    returns 0 ("nothing to mirror"). An empty source with snapshots on the target
+    is refused as before. Measured on pve10: a whole-pool replica ended rc 1 on
+    every run at hdd/backups and its intermediate levels.
+
+  test/mirrorguest: 18/0 (+7); against v2.75 the new cases give 13 PASS / 5 FAIL,
+  and the sync controls pass on both. test/twins re-blessed for process_dataset
+  only.
+  twin: n/a -- snapsend.sh has no live-guest receive guard and no mirror
+  (`grep -n guest_disk_is_live snapsend.sh` and `grep -n mirror_target
+  snapsend.sh` are empty).
 
 ## How it is enforced
 

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 247b406404a2ecd0 -->
+<!-- status-covers-digest: 96864be5794d4107 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -89,6 +89,13 @@
   „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
+
+- **snapget v2.76: U60 + H-4 (2026-10-21; `finisz/snapget-u60-h4`, zgoda właściciela na odmrożenie).**
+  Osłona „dysk działającego gościa” tylko wtedy, gdy cel JEST ścieżką źródła (lustro) -- kopia zagnieżdżona pod
+  bazą (backup, replika na nośniku) nigdy nie jest dyskiem gościa tego hosta. Wcześniej pobranie `hdd/lab` z pve9
+  odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
+  (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
+  rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
 - **KAMPANIA GUI NA ŻYWO -- Claude w prawdziwym GUI na pve10 (2026-10-21; `finisz/kampania-*`).**
   Właściciel po swojej kampanii („prawie każdy krok z problemem”): Claude przechodzi każdy krok sam, w prawdziwym GUI
