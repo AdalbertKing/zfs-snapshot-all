@@ -3319,6 +3319,15 @@ if case "$out" in *"base=[]"*"path=[tank/data/ds1]"*) true ;; *) false ;; esac; 
 else
     bad "sync: local base is empty, local path equals the source path exactly" "$out"
 fi
+# LANDING_LABEL (owner 2026-10-21): the directory fixed on the record wins over the label of
+# whatever address the record now pairs with; absent, the old label rule.
+out=$( ( PEER_SAVED_MODE=backup PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=10.98.0.2 LANDING_LABEL=192.168.28.98
+         echo "path=[$(client_local_path hdd/data)]" ) )
+if [ "$out" = "path=[hdd/backups/192.168.28.98/hdd/data]" ]; then
+    ok "landing: LANDING_LABEL on the record decides the directory, not the label of the current pairing address"
+else
+    bad "landing: LANDING_LABEL decides the directory" "$out"
+fi
 out=$( ( PEER_SAVED_MODE=backup PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=pve2
          echo "base=[$(snapget_local_base)]"
          echo "path=[$(client_local_path tank/data/ds1)]" ) )
@@ -10157,7 +10166,7 @@ ex_argv="${ex_out#*\"argv\":\[}"; ex_argv="${ex_argv%%\]*}"
 # `--datasets=`, NOT `--requested=`: this record has no RUX_MODE, so the list
 # IS the request and add-client refuses --requested without --mode. The first
 # export wrote --requested for every record; the lab's import found it.
-ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
+ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--landing=10.0.0.11","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
 if [ "$ex_argv" = "$ex_want" ]; then
     ok "exportrel: the replay argv is exactly the flags the declarations map to"
 else
@@ -10274,6 +10283,21 @@ case "$(cat "$WORK/ex.out")" in
     *) bad "exportrel U62: active port" "$(cat "$WORK/ex.out")" ;;
 esac
 rm -f "$EX/clients/przen.conf" "$EX/clients/przenp.conf"
+# ...with a target: the copies' directory travels too -- the old pairing label for a record
+# from before LANDING_LABEL, the recorded one otherwise.
+printf 'CLIENT_NAME=przt\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:22\nCLIENT_TARGET=hdd/backups\n' > "$EX/clients/przt.conf"
+ex_run export-relation przt --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2","--target=hdd/backups","--landing=192.168.28.98"]'*) ok "exportrel landing: a record from before LANDING_LABEL exports its pairing label as --landing (where its copies are)" ;;
+    *) bad "exportrel landing: old record" "$(cat "$WORK/ex.out")" ;;
+esac
+printf 'CLIENT_NAME=przl\nSTATE=active\nPEER_HOST=10.98.0.2\nACTIVE_ENDPOINT=10.98.0.2:22\nCLIENT_TARGET=hdd/backups\nLANDING_LABEL=stary-katalog\n' > "$EX/clients/przl.conf"
+ex_run export-relation przl --json
+case "$(cat "$WORK/ex.out")" in
+    *'"--landing=stary-katalog"'*) ok "exportrel landing: the recorded LANDING_LABEL is exported as is" ;;
+    *) bad "exportrel landing: recorded label" "$(cat "$WORK/ex.out")" ;;
+esac
+rm -f "$EX/clients/przt.conf" "$EX/clients/przl.conf"
 
 # THE TEXT FORM carries the same command, ready to paste.
 ex_run export-relation ksiegowosc
@@ -10311,6 +10335,12 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         rux_entry()      { printf "rux"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         # The [relation:] restore writes a config -- here only WHEN it is called, to its own log.
         import_restore_relblock() { [ -n "${3:-}" ] && return 0; printf "restore|%s\n" "$1" >> "$IM_LOG.r"; }
+        # IM_ZFS: datasets that "exist" here, one per line (landing lookup); unset = none.
+        zfs() { local last="${*: -1}"
+                case " $* " in
+                    *" -d 1 "*) awk -v t="$last" '\''$0==t || (index($0, t "/")==1 && index(substr($0, length(t)+2), "/")==0)'\'' "${IM_ZFS:-/dev/null}" ;;
+                    *) grep -qxF -- "$last" "${IM_ZFS:-/dev/null}" ;;
+                esac; }
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 im_run "$IM/ksiegowosc.json"; im_rc=$?
@@ -10339,6 +10369,31 @@ if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2|' "$IM
     ok "importrel U62: an older export (argv = pairing address) connects through the ACTIVE_ENDPOINT it carries, and says so"
 else
     bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'adres\|host' "$WORK/im.out" | head -5)"
+fi
+# LANDING (owner 2026-10-21): an older file has no --landing; the import takes the label of
+# the pairing address from its declarations -- the directory the copies are in.
+sed -e 's/,"--landing=10.0.0.11"//' "$IM/ksiegowosc.json" > "$IM/bezland.json"
+im_run "$IM/bezland.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|.*|--landing=10.0.0.11' "$IM/calls.log" && grep -q 'katalog relacji z pliku' "$WORK/im.out"; then
+    ok "importrel landing: a file without --landing lands under the pairing address's label from its declarations"
+else
+    bad "importrel landing: old file" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i katalog "$WORK/im.out")"
+fi
+# The expected directory is missing, ONE directory under the target holds all the datasets:
+# taken, and said. TWO: refused, both listed, nothing called.
+printf '%s\n' hdd/backups/ksiegowosc hdd/backups/ksiegowosc/przeniesione hdd/backups/ksiegowosc/przeniesione/rpool/data/vm-101 > "$IM/zfs1"
+IM_ZFS="$IM/zfs1" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|.*|--landing=przeniesione' "$IM/calls.log" && grep -q 'ma wszystkie datasety relacji' "$WORK/im.out"; then
+    ok "importrel landing: expected directory missing, one directory holds all the datasets -> the copies go there, said"
+else
+    bad "importrel landing: one candidate" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(tail -3 "$WORK/im.out")"
+fi
+printf '%s\n' hdd/backups/ksiegowosc hdd/backups/ksiegowosc/a hdd/backups/ksiegowosc/a/rpool/data/vm-101 hdd/backups/ksiegowosc/b hdd/backups/ksiegowosc/b/rpool/data/vm-101 > "$IM/zfs2"
+IM_ZFS="$IM/zfs2" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ ! -s "$IM/calls.log" ] && grep -q 'SEVERAL directories' "$WORK/im.err"; then
+    ok "importrel landing: two directories hold the datasets -> refused, both named, nothing called"
+else
+    bad "importrel landing: two candidates" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(tail -2 "$WORK/im.err")"
 fi
 sed -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:22;rm -rf"/' \
     "$IM/ksiegowosc.json" > "$IM/zly.json"
