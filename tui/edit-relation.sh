@@ -627,20 +627,26 @@ save_all() {
     else
         yesno_text "$TMPD/saveplan.txt" "Zmień relację $NAME -- plan wszystkich zmian" "WYKONAJ" "Wstecz" || return 1
     fi
-    clear 2>/dev/null
-    : >"$TMPD/run.log"
-    run1() { echo "\$ $*"; echo; "$@" 2>&1 | tee -a "$TMPD/run.log"; return "${PIPESTATUS[0]}"; }
-    if [ -n "$P_HOST" ]; then run1 "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes || rc=$?; fi
-    if [ "$rc" -eq 0 ]; then for n in $P_ADDED; do run1 "$ZB" add-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
-    if [ "$rc" -eq 0 ]; then for n in $P_REMOVED; do run1 "$ZB" remove-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
-    if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && DONE=1; fi
-    if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
-    if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi
+    # U64 (właściciel 2026-10-21: "czarny ekran ponad 15 sekund"): kroki biegną za oknem
+    # postępu (wt-lib run_progress), wynik w oknie. Kroki idą w podpowłoce, więc to, że
+    # edit-relation przeszło (DONE), wraca znacznikiem w $TMPD.
+    : >"$TMPD/run.log"; rm -f "$TMPD/edit.done"
+    run1() { printf '\n$ %s\n' "$*"; "$@" 2>&1; }
+    apply_steps() {
+        local rc=0 n
+        if [ -n "$P_HOST" ]; then run1 "$ZB" activate "$NAME" "--host=$P_HOST" --skip-final-catchup --yes || rc=$?; fi
+        if [ "$rc" -eq 0 ]; then for n in $P_ADDED; do run1 "$ZB" add-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
+        if [ "$rc" -eq 0 ]; then for n in $P_REMOVED; do run1 "$ZB" remove-source "$NAME" "$n" --yes || { rc=$?; break; }; done; fi
+        if [ "$rc" -eq 0 ] && [ "${#P_EDIT[@]}" -gt 0 ]; then run1 "$ZB" edit-relation "$NAME" "${P_EDIT[@]}" --yes || rc=$?; [ "$rc" -eq 0 ] && : >"$TMPD/edit.done"; fi
+        if [ "$rc" -eq 0 ] && [ "${#P_TIERS[@]}" -gt 0 ]; then run1 "$ZB" set-tiers "$NAME" "${P_TIERS[@]}" --yes || rc=$?; fi
+        if [ "$rc" -eq 0 ] && [ "${#P_TRANSFER[@]}" -gt 0 ]; then run1 "$ZB" set-transfer "$NAME" "${P_TRANSFER[@]}" --yes || rc=$?; fi
+        return "$rc"
+    }
+    run_progress "Zmień relację $NAME: wykonuję" "$TMPD/run.log" apply_steps || rc=$?
+    [ -e "$TMPD/edit.done" ] && DONE=1
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$rc"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    echo
-    if [ "$rc" -eq 0 ]; then echo "=== GOTOWE: relacja '$NAME' zmieniona (rc=0). Enter = dalej"
-    else echo "=== ZATRZYMANE (rc=$rc) -- kroki przed tym, który odmówił, zostały; powód w linii FATAL powyżej. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
+    result_box "Zmień relację $NAME" "$rc" "$TMPD/run.log" "Relacja '$NAME' zmieniona (rc=0).${ZFS_TUI_LOG:+\n\nDziennik: $ZFS_TUI_LOG}" \
+        "ZATRZYMANE -- kroki przed tym, który odmówił, zostały."
     exit "$rc"
 }
 while :; do

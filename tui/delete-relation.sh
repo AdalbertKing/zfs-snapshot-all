@@ -66,27 +66,31 @@ while :; do
         echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/plan2.txt"
     yesno_text "$TMPD/plan2.txt" "Usuń relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
-    clear 2>/dev/null
-    echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"; echo
-    "${ARGV[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    : >"$TMPD/run.log"
+    RC=0; run_progress "Usuń relację $NAME" "$TMPD/run.log" "${ARGV[@]}" --yes || RC=$?
     # Uwaga 5 (właściciel, 2026-09-24): usunięcie zostawia ślad jak import -- GUI podaje
     # ZFS_TUI_LOG z nagłówkiem "$ komenda"; tu dopisujemy przebieg kroków i rc.
     if [ -n "${ZFS_TUI_LOG:-}" ]; then
         { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
     fi
-    echo
     # Dwa różne niepowodzenia, dwa różne komunikaty. Odkąd nieudana połowa ŹRÓDŁA
     # zatrzymuje czasownik przed purge (REV-144), rekord ZOSTAJE -- i wtedy "usunięta
     # z pozostałościami" jest nieprawdą: nazwa nadal jest zajęta, kopie stoją, a ta
     # sama komenda jest do powtórzenia. Rozpoznajemy to po zdaniu, które wypisuje.
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: relacja '$NAME' usunięta (rc=0)."
-        case "$SRC_LINE" in "NO root"*) echo "    Na $PEER zostało konto relacji -- tam, jako root: $LEAVE_CMD" ;; esac
-        echo "    Enter = dalej"
+    if [ "$RC" -eq 0 ]; then
+        { echo "GOTOWE: relacja '$NAME' usunięta (rc=0)."
+          case "$SRC_LINE" in "NO root"*) echo "    Na $PEER zostało konto relacji -- tam, jako root: $LEAVE_CMD" ;; esac
+        } >"$TMPD/result.txt"
+        result_box "Usuń relację $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
     elif grep -q 'STOPPED before 3/4' "$TMPD/run.log" 2>/dev/null; then
-        echo "=== ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono (rc=$RC)."
-        echo "    Rekord relacji '$NAME' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją."
-        echo "    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz. Enter = dalej"
-    else echo "=== USUNIĘTA Z POZOSTAŁOŚCIAMI (rc=$RC) -- linie '!!!' powyżej mówią, co zostało. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
+        { echo "ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono."
+          echo "    Rekord relacji '$NAME' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją."
+          echo "    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz."
+        } >"$TMPD/result.txt"
+        result_box "Usuń relację $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+    else
+        echo "USUNIĘTA Z POZOSTAŁOŚCIAMI -- linie '!!!' w dzienniku mówią, co zostało." >"$TMPD/result.txt"
+        result_box "Usuń relację $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+    fi
     exit "$RC"
 done

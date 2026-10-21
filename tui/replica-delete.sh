@@ -74,17 +74,18 @@ while :; do
         [ "$UNTRIG" = yes ] && echo "  $(shq "$ZB") remove-media-trigger --install"
     } >"$TMPD/plan.txt"
     yesno_text "$TMPD/plan.txt" "Usuń replikę $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
-    clear 2>/dev/null
-    echo "\$ $ZB remove-replica $NAME --install --yes"; echo
-    "$ZB" remove-replica "$NAME" --install --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    : >"$TMPD/run.log"
+    RC=0; run_progress "Usuń replikę $NAME" "$TMPD/run.log" "$ZB" remove-replica "$NAME" --install --yes || RC=$?
     if [ "$RC" -eq 0 ] && [ "$UNTRIG" = yes ]; then
-        echo; echo "\$ $ZB remove-media-trigger --install"
-        "$ZB" remove-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+        run_progress "Usuń replikę $NAME" "$TMPD/run.log" "$ZB" remove-media-trigger --install || RC=$?
     fi
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' usunięta, dane na dyskach zostały (rc=0). Enter = dalej"
-    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód w linii FATAL powyżej. Enter = dalej"; fi
-    [ -t 0 ] && read -r _
+    if [ "$RC" -eq 0 ]; then
+        echo "GOTOWE: replika '$NAME' usunięta, dane na dyskach zostały (rc=0)." >"$TMPD/result.txt"
+        result_box "Usuń replikę $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+    else
+        echo "Replika nie została usunięta." >"$TMPD/result.txt"
+        result_box "Usuń replikę $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+    fi
     exit "$RC"
 done

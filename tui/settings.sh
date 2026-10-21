@@ -63,14 +63,16 @@ save() {   # plan czasownika, potem WYKONAJ
     { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/plan.txt"; echo
       printf 'Komenda:  %s settings set' "$(shq "$ZB")"; for a in "${args[@]}"; do printf ' %s' "$(shq "$a")"; done; echo " --yes"; } >"$TMPD/plan2.txt"
     yesno_text "$TMPD/plan2.txt" "Ustawienia -- plan" "WYKONAJ" "Wstecz" --defaultno || return 1
-    clear 2>/dev/null
-    printf '$ %s settings set' "$ZB"; printf ' %s' "${args[@]}"; echo " --yes"; echo
-    "$ZB" settings set "${args[@]}" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+    : >"$TMPD/run.log"
+    RC=0; run_progress "Ustawienia" "$TMPD/run.log" "$ZB" settings set "${args[@]}" --yes || RC=$?
     [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-    echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE (rc=0). Enter = powrót do GUI"
-    else echo "=== NIE WYSZŁO (rc=$RC) -- komunikat powyżej. Enter = powrót do GUI"; fi
-    read -r _ </dev/tty 2>/dev/null || true
+    if [ "$RC" -eq 0 ]; then
+        echo "Zapisano." >"$TMPD/result.txt"
+        result_box "Ustawienia: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+    else
+        echo "Nie zapisano." >"$TMPD/result.txt"
+        result_box "Ustawienia" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+    fi
     exit "$RC"
 }
 
