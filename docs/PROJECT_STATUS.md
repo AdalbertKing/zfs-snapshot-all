@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 5487e7b6b9f87551 -->
+<!-- status-covers-digest: 4cc4fc475bb35ac4 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -119,8 +119,12 @@
   poniżej `guard_at`, `guard_min_keep` 1-100, `guard` tylko on/off -- zła wartość z env, F10 albo starego conf (także
   nie-liczba) to zero usunięć, kod 1 i alert z nazwą ustawienia, bez cichego zastępowania wartością domyślną;
   nieudany `zpool sync` albo nieczytelna zajętość po usunięciu kończy cały bieg (żadnego kolejnego `zfs destroy`),
-  alert z listą już usuniętych. Testy `test/alertmail` (43 przypadki bezpiecznika; nowe z REV-155 -- 14 czerwonych
-  na kodzie sprzed poprawki).
+  alert z listą już usuniętych. **Widoczność (REV-20261021-156):** zajętość puli czytana z kodem wyjścia samego
+  `zpool list` i musi być liczbą 0-100 -- błąd, `NaN` albo pusty wynik to nie „poniżej progu”: ta pula pominięta
+  (zero `zfs` na niej), kod 1, alert dla tej puli (w `--plan` wpis); inne pule dalej. Błąd wykrycia pul
+  (`zpool list -H -o name`) = nic, kod 1, alert; pusta lista przy kodzie 0 = host bez pul, kod 0, wpis w dzienniku.
+  Testy `test/alertmail` (52 wiersze `PASS capacity-guard` w wyniku; nowe z REV-155 -- 14 czerwonych, z REV-156 -- 7 czerwonych na
+  kodzie sprzed poprawki).
   Na żywo pve10 (pula z pliku, osobny katalog crontabów): usunięte dokładnie migawki z planu; hold, najnowsze, baza
   z prawdziwej zakładki snapget, głowa celu i obce `outsider_automated_*` zostały; następna kopia przyrostowa od
   zachowanej bazy; bez katalogu crontabów -- 0 usunięć, alert z powodem. Nazwa zakładki wyliczona przez bezpiecznik

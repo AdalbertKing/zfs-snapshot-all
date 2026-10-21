@@ -1626,9 +1626,23 @@ gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin" "$gs_dir/cron" "$gs_dir/peers"
 cp "$HS/capacity-guard.sh" "$gs_dir/guard.sh"; cp "$HS/alert-env.sh" "$gs_dir/alert-env.sh"
 cat > "$gs_dir/bin/zpool" <<'ST'
 #!/bin/bash
+gs_capmode() {   # <tryb> <wartosc dobra>
+    case "$1" in
+      fail)  echo "95%"; exit 1 ;;     # czesciowe wyjscie i kod bledu
+      nan)   echo "NaN"; exit 0 ;;
+      empty) echo ""; exit 0 ;;
+      *)     echo "$2" ;;
+    esac
+}
 case "$*" in
-  "list -H -o name") echo tank ;;
-  "list -H -o capacity tank") if [ -n "${GS_BADCAP:-}" ] && [ -s "$GS_DIR/destroyed" ]; then echo "-"; else echo "$(cat "$GS_DIR/cap")%"; fi ;;
+  "list -H -o name")
+      [ -n "${GS_POOLS_FAIL:-}" ] && { echo tank; exit 1; }
+      [ -n "${GS_POOLS_EMPTY:-}" ] && exit 0
+      echo tank; [ -n "${GS_TWO:-}" ] && echo zbad; exit 0 ;;
+  "list -H -o capacity zbad") gs_capmode "${GS_ZBAD_MODE:-fail}" "95%" ;;
+  "list -H -o capacity tank")
+      if [ -n "${GS_TANK_MODE:-}" ]; then gs_capmode "$GS_TANK_MODE" "$(cat "$GS_DIR/cap")%"
+      elif [ -n "${GS_BADCAP:-}" ] && [ -s "$GS_DIR/destroyed" ]; then echo "-"; else echo "$(cat "$GS_DIR/cap")%"; fi ;;
   "sync tank") [ -n "${GS_FAIL_SYNC:-}" ] && exit 1; : ;;
 esac
 ST
@@ -1912,6 +1926,54 @@ if [ "$gs_rc" -eq 0 ] && [ "$(grep -c . "$gs_dir/destroyed")" -eq 3 ] && grep -q
     ok "capacity-guard: kontrola zdrowa -- sync dziala, stop ponizej celu (3 usuniecia, 83%)"
 else
     bad "capacity-guard: kontrola zdrowa" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/out" 2>/dev/null)"
+fi
+
+# ---- REV-20261021-156: odczyt zajetosci i wykrycie pul ----
+gs_cron; gs_snaps > "$gs_dir/snaps"; : > "$gs_dir/marks"
+for gs_m in fail nan empty; do
+    GS_TANK_MODE=$gs_m gs_run 95 1 on; gs_rc=$?
+    if [ "$gs_rc" -eq 1 ] && gs_none && ! grep -q '^zfs ' "$gs_dir/calls" 2>/dev/null && grep -q 'nie widzi puli tank' "$gs_dir/mail"; then
+        ok "capacity-guard: zajetosc puli nieczytelna ($gs_m) -- nie 'ponizej progu': rc 1, 0 wywolan zfs, alert dla tej puli"
+    else
+        bad "capacity-guard: zajetosc nieczytelna ($gs_m)" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/calls" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+    fi
+done
+GS_TANK_MODE=fail gs_run 95 1 off --plan; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && grep -q 'Pula tank: NIE da się odczytać zajętości' "$gs_dir/out" && [ ! -s "$gs_dir/mail" ]; then
+    ok "capacity-guard: --plan przy nieczytelnej zajetosci -- rc 1, wpis, bez alertu"
+else
+    bad "capacity-guard: --plan nieczytelna zajetosc" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
+fi
+GS_TWO=1 gs_run 92 3 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ -s "$gs_dir/destroyed" ] && ! grep -qv '^tank/' "$gs_dir/destroyed" && ! grep -q 'zbad' "$gs_dir/calls" \
+   && grep -q 'nie widzi puli zbad' "$gs_dir/mail" && grep -q 'wyczyścił pulę tank' "$gs_dir/mail"; then
+    ok "capacity-guard: dwie pule, druga nieczytelna -- pierwsza czyszczona, w drugiej 0 wywolan zfs, rc 1, alert dla drugiej"
+else
+    bad "capacity-guard: dwie pule" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/calls" "$gs_dir/mail" 2>/dev/null)"
+fi
+gs_run 80 3 on; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && gs_none && [ ! -s "$gs_dir/mail" ]; then
+    ok "capacity-guard: zajetosc czytelna ponizej guard_at (80 < 89) -- nic, rc 0, bez alertu"
+else
+    bad "capacity-guard: ponizej progu" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" 2>/dev/null)"
+fi
+GS_POOLS_FAIL=1 gs_run 95 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && ! grep -q '^zfs ' "$gs_dir/calls" 2>/dev/null && grep -q 'zpool list zawodzi' "$gs_dir/mail"; then
+    ok "capacity-guard: wykrycie pul zawodzi (czesciowe wyjscie) -- rc 1, 0 wywolan zfs, alert"
+else
+    bad "capacity-guard: wykrycie pul zawodzi" "rc=$gs_rc" "$(cat "$gs_dir/calls" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+GS_POOLS_FAIL=1 gs_run 95 1 off --plan; gs_rc=$?
+if [ "$gs_rc" -eq 1 ] && [ ! -s "$gs_dir/mail" ] && grep -q 'zpool list nie działa' "$gs_dir/out"; then
+    ok "capacity-guard: --plan przy bledzie wykrycia pul -- rc 1, wpis, bez alertu"
+else
+    bad "capacity-guard: --plan wykrycie pul" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
+fi
+GS_POOLS_EMPTY=1 gs_run 95 1 on; gs_rc=$?
+if [ "$gs_rc" -eq 0 ] && ! grep -q '^zfs ' "$gs_dir/calls" 2>/dev/null && [ ! -s "$gs_dir/mail" ] && grep -q 'brak pul ZFS' "$gs_dir/out"; then
+    ok "capacity-guard: pusta lista pul przy kodzie 0 -- host bez pul: rc 0, bez alertu, wpis"
+else
+    bad "capacity-guard: pusta lista pul" "rc=$gs_rc" "$(cat "$gs_dir/out" "$gs_dir/mail" 2>/dev/null)"
 fi
 
 printf '[capacity]\n' > "$gs_dir/settings-empty.ini"

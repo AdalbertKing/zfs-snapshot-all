@@ -26,6 +26,8 @@
 #   - po każdym usunięciu pomiar zajętości (zpool sync); stop poniżej guard_target albo,
 #     gdy nie ma już czego bezpiecznie usunąć -- wtedy alert "nie dało się". Nieudany
 #     zpool sync albo nieczytelna zajętość = koniec biegu, żadnego kolejnego usunięcia;
+#   - nieczytelna zajętość puli przed decyzją = ta pula pominięta, kod 1, alert; błąd
+#     wykrycia pul (zpool list) = nic, kod 1, alert; pusta lista pul = kod 0 (brak pul);
 #   - progi spoza zakresu (guard_at 50-99, guard_target 40-98 i poniżej guard_at,
 #     guard_min_keep 1-100) albo guard inny niż on/off = nic, kod 1, alert z nazwą;
 #   - błąd odczytu crontabów, `zfs list` (migawki, zakładki) albo linia transferu, której
@@ -93,7 +95,17 @@ fi
 
 # Jeden bezpiecznik naraz: cron co 15 min, a czyszczenie dużej puli trwa.
 exec 9>"${ZFS_GUARD_LOCK:-/run/lock/zfs-capacity-guard.lock}" 2>/dev/null && flock -n 9 2>/dev/null || { [ "$PLAN" -eq 1 ] || exit 0; }
-cap_of() { zpool list -H -o capacity "$1" 2>/dev/null | tr -d '% '; }
+# Zajętość puli w %: kod wyjścia samego `zpool list` sprawdzany wprost (nie maskuje go
+# `tr` w potoku -- REV-20261021-156 F1), wynik musi być liczbą 0-100. Kod 1 = nie wiadomo
+# -- nigdy "poniżej progu".
+cap_of() {   # <pula> -> liczba albo kod 1
+    local out
+    out="$(zpool list -H -o capacity "$1" 2>/dev/null)" || return 1
+    out="${out%\%}"; out="${out// /}"
+    case "$out" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#out}" -le 3 ] && [ "$out" -le 100 ] || return 1
+    printf '%s' "$out"
+}
 WORK="$(mktemp -d 2>/dev/null)" || { say "brak katalogu tymczasowego -- nic nie robię"; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
@@ -319,9 +331,29 @@ facts_err="$(read_managed)" || facts_err="${facts_err:-błąd odczytu crontabów
 if [ -z "$facts_err" ] && grep -q '^BAD' "$WORK/facts"; then facts_err="$(grep '^BAD' "$WORK/facts" | head -1 | cut -f2)"; fi
 if [ -z "$facts_err" ] && ! grep -q '^OWN' "$WORK/facts"; then facts_err="brak lokalnych linii retencji z jawnym wzorcem -- nie wiem, które migawki są nasze"; fi
 
-pools="$(zpool list -H -o name 2>/dev/null)" || { say "zpool list nie działa"; exit 1; }
+# Wykrycie pul (REV-20261021-156 F2): błąd `zpool list` = nic nie usuwam, kod 1 i alert
+# (w --plan bez alertu). Pusta lista przy kodzie 0 to host bez pul ZFS -- nie ma czego
+# pilnować: kod 0, wpis w dzienniku, bez alertu.
+if ! pools="$(zpool list -H -o name 2>/dev/null)"; then
+    say "zpool list nie działa -- nie wiem, jakie są pule; nic nie usuwam"
+    [ "$PLAN" -eq 1 ] || alert "$HOST: bezpiecznik NIE działa -- zpool list zawodzi" "Bezpiecznik nie mógł ustalić listy pul (zpool list -H -o name zakończył się błędem). Żadna pula nie jest pilnowana; nic nie zostało usunięte."
+    exit 1
+fi
+if [ -z "$pools" ]; then
+    say "brak pul ZFS na tym hoście -- nie ma czego pilnować"
+    [ "$PLAN" -eq 1 ] && echo "Brak pul ZFS na tym hoście."
+    exit 0
+fi
 for pool in $pools; do
-    cap="$(cap_of "$pool")"; case "$cap" in ''|*[!0-9]*) continue ;; esac
+    # Nieczytelna zajętość (REV-20261021-156 F1): ta pula nie jest oceniana i nic z niej
+    # nie znika; bieg kończy się kodem 1, alert (w --plan tylko wpis). Inne pule dalej.
+    if ! cap="$(cap_of "$pool")"; then
+        rc=1
+        if [ "$PLAN" -eq 1 ]; then echo "Pula $pool: NIE da się odczytać zajętości -- nic nie usunie"; continue; fi
+        say "pula $pool: nie da się odczytać zajętości -- nic w niej nie usuwam"
+        alert "$HOST: bezpiecznik nie widzi puli $pool" "Nie da się odczytać zajętości puli $pool (zpool list -H -o capacity zawiódł albo zwrócił nie-liczbę). Ta pula nie jest pilnowana przez bezpiecznik; nic w niej nie zostało usunięte."
+        continue
+    fi
     if [ "$PLAN" -eq 0 ] && [ "$cap" -lt "$AT" ]; then continue; fi
     [ "$PLAN" -eq 1 ] && echo "Pula $pool: zajętość ${cap}%, bezpiecznik ${GUARD} (czyści od ${AT}% do ${TARGET}%, zostaje ${KEEP} najnowszych w rodzinie)"
     err="$facts_err"
