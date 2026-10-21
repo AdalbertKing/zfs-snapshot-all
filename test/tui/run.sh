@@ -3523,6 +3523,27 @@ for k in sys.argv[2:]:
     o = o[k]
 print(json.dumps(o, separators=(",", ":")))' "$@" 2>/dev/null | tr -d '\r'
 }
+# U68: tryb JEDNEJ pozycji (Przeglądaj kopię i każdy wybór jednego datasetu): Enter wybiera; na
+# gałęzi bez migawek ("selectable" jej nie zawiera) Enter ją rozwija i mówi o tym; kratek nie ma.
+cat > "$TRD/single.json" <<'SJ'
+{"title": "t", "single": true, "selectable": ["hdd/lab/vm-101", "hdd/labbrowse/v-ntfs"],
+ "datasets": [{"name": "hdd", "type": "filesystem"}, {"name": "hdd/lab", "type": "filesystem"},
+              {"name": "hdd/lab/vm-101", "type": "filesystem"}, {"name": "hdd/labbrowse", "type": "filesystem"},
+              {"name": "hdd/labbrowse/v-ntfs", "type": "volume"}]}
+SJ
+TRS=$(trun "$TRD/single.json" 'enter,down,enter,down,enter'); TRSRC=$?
+if [ "$TRSRC" -eq 0 ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd/lab/vm-101"]' ] \
+   && printf '%s' "$TRS" | grep -q 'MSG: hdd: tu nic do wybrania' && ! printf '%s' "$TRS" | grep -q '\[x\]\|\[ \]'; then
+    ok "tree U68: tryb jednej pozycji -- Enter na gałęzi rozwija i mówi, Enter na datasecie wybiera; bez kratek"
+else
+    bad "tree U68: tryb jednej pozycji" "rc=$TRSRC out=$(cat "$TRD/out.json")" "$TRS"
+fi
+TRS=$(trun "$TRD/single.json" 'esc'); TRSRC=$?
+if [ "$TRSRC" -eq 1 ] && [ "$(tjq "$TRD/out.json" action)" = '"back"' ]; then
+    ok "tree U68: tryb jednej pozycji -- Esc = Wstecz, nic nie wybrane"
+else
+    bad "tree U68: Esc w trybie jednej pozycji" "rc=$TRSRC out=$(cat "$TRD/out.json")"
+fi
 mkspec a "$TRD/a.json"; mkspec noexc "$TRD/noexc.json"; mkspec excl "$TRD/excl.json"
 mkspec atomic "$TRD/atomic.json"; mkspec old "$TRD/old.json"; mkspec many "$TRD/many.json"
 # a) w zaznaczonym miejscu Spacja na dziecku = wyjatek, Enter = Dalej; cel kopii (hide) w ogole nie widac
