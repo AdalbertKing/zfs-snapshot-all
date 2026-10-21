@@ -3222,7 +3222,7 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
    && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF -- '--default-item ~ repl ~' \
    && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Wpisz nazwę puli' \
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
-   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \
+   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także po włożeniu dysku' \
    && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
    && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.'; then
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
@@ -4579,7 +4579,9 @@ if declare -F pool_roots_to_children >/dev/null; then
     T_NAME=(hdd hdd/a hdd/a/x hdd/b hdd/c hdd/c/y tank tank/z)
     B_ROOT=(hdd tank/z); B_EXCL=($'hdd/b\nhdd/c/y' "")
     pool_roots_to_children; u67_rc=$?
-    u67_got="$(printf '%s;' "${B_ROOT[@]}")|$(printf '%s;' "${B_EXCL[@]}" | tr '\n' ',')"
+    u67_got="$(printf '%s;' "${SRC_ROOT[@]}")|$(printf '%s;' "${SRC_EXCL[@]}" | tr '\n' ',')"
+    # H-1: the basket itself keeps the pool as chosen (Wstecz shows it ticked, not "[-]")
+    [ "${B_ROOT[0]}" = hdd ] || u67_got="$u67_got (basket changed: ${B_ROOT[*]})"
     if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
         ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
     else
