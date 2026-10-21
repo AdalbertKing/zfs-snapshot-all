@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52fda94b738936dc -->
+<!-- status-covers-digest: 019c4b3c817e093e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -89,6 +89,13 @@
   „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
+
+- **REV-20261021-163: U42 -- błąd odczytu uprawnień ZFS nie znaczy „brak uprawnień” (2026-10-21; `finisz/REV-163`).**
+  `deploy.sh`, `new_account_drop_inherited_grants` (nowe konto relacji nie dziedziczy delegacji po usuniętym koncie
+  z tym samym uid): lista datasetów i każde `zfs allow` są zapisywane i sprawdzane -- wcześniej nieudane `zfs list`
+  znaczyło „brak datasetów”, a nieudane `zfs allow` „brak uprawnień”, i konfiguracja szła dalej. Każdy błąd (list,
+  allow, unallow) usuwa świeżo założone konto i zatrzymuje bieg, więc ponowne uruchomienie zakłada je i sprawdza od
+  nowa (pozostawione konto byłoby „już istnieje” i ominęłoby sprawdzenie). Testy `test/draftscope` +6.
 
 - **REV-20261021-162: Przeglądaj kopię -- SIGTERM w trakcie przywracania (2026-10-21; `finisz/REV-162`).**
   Blokada z REV-161 jest wielokrotnego wejścia w tym samym procesie: SIGTERM pod blokadą kończy skrypt, a
