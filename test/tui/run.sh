@@ -4580,7 +4580,7 @@ if declare -F pool_roots_to_children >/dev/null; then
     B_ROOT=(hdd tank/z); B_EXCL=($'hdd/b\nhdd/c/y' "")
     pool_roots_to_children; u67_rc=$?
     u67_got="$(printf '%s;' "${B_ROOT[@]}")|$(printf '%s;' "${B_EXCL[@]}" | tr '\n' ',')"
-    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "tank/z;hdd/a;hdd/c;|;;hdd/c/y;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
+    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
         ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
     else
         bad "U67: pool root expansion" "rc=$u67_rc got=$u67_got" "$(printf '%b' "$POOL_NOTE")"
