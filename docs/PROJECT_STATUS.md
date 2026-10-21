@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9250a18e65f1a640 -->
+<!-- status-covers-digest: a19b251ab2fe02db -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -101,7 +101,8 @@
   przebudowy” (makieta 2026-10-21). Okno zmiany: rodzaj, nazwa, konto i cel w nagłówku (tego się nie zmienia), na
   liście tylko to, co się zmienia (zmienione z `*` i „[zmiana]”), pod kreską tylko „ZAPISZ ZMIANY (N)”. Kopia teraz
   zniknęła z okna (to F7 na F3); ręczna edycja i zapis jako szablon otwierają się wprost z okna relacji na F3
-  (`c`, `s`). Test `tui` 374/0 (pve9, razem z oknem postępu).
+  (`c`, `s`). Wartości słowami zamiast „jak w configu”: retencja źródła („godzinowe 48” albo „tyle samo co
+  w kopii”), silnik (ustawienia inne niż fabryczne albo „fabryczne”). Test `tui` 374/0 (pve9).
 
 - **U64/U66: okno postępu zamiast czarnego ekranu po WYKONAJ (2026-10-22; `finisz/postep`).** Właściciel:
   „czarny ekran ponad 15 sekund”. `wt-lib.sh` ma `run_progress` (polecenie w tle, wyjście do dziennika, okno co
