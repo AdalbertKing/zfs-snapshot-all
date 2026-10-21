@@ -146,6 +146,49 @@ check "local source, target named after a RUNNING guest: not refused as that gue
     bash -c "! printf '%s' \"\$1\" | grep -q 'is the disk of guest'" _ "$out"
 check "local source: the copy is received" bash -c "grep -q '^LZFS recv\|^LZFS receive' '$TRACE'"
 
+# U60 (owner's GUI campaign, pve10 2026-10-21): a REMOTE source pulled into a target
+# NESTED under a base (backup: <base>/<path>) is a copy, not a guest's disk on this host.
+# pve10 refused hdd/backups/192.168.28.99/hdd/lab/subvol-901-disk-0 because CT 901 exists
+# there. Same fixture as above, target under "back": a RUNNING guest 100 here must not
+# stop the pull, and -M on that nested target must not ask the guest either. The sync
+# cases above (target = the source's own path) keep refusing.
+N=$((N + 1)); mkdir -p "$WORK/lock$N"; : > "$TRACE"
+printf 'R tank/vm-100-disk-0@base 111\nR tank/vm-100-disk-0@new 333\nL back/tank/vm-100-disk-0@old 222\nL back/tank/vm-100-disk-0@base 111\n' > "$SNAPDB"
+out=$(env QM_STATE=running PATH="$B:$PATH" QUIESCE_PVE_DIR="$WORK/pve" STATS_LOG="$WORK/stats" \
+      LOCKDIR="$WORK/lock$N" NOTIFY_SCRIPT=/bin/true HOME="$WORK" RELATIONSHIPS_DIR="$WORK/rel" \
+      bash "$SNAPGET" -N -M -e "root@source:tank/vm-100-disk-0" "back" 2>&1); rc=$?
+check "U60: remote source, NESTED target named after a running guest: not refused as that guest's disk" \
+    bash -c "! printf '%s' \"\$1\" | grep -q 'names guest\|disk of guest\|Mirror (-M) on .*refused'" _ "$out"
+check "U60: ...the guest is not even asked (no qm status)" bash -c "! grep -q '^QM ' '$TRACE'"
+check "U60: ...the incremental is received" bash -c "grep -q '^LZFS recv\|^LZFS receive' '$TRACE'"
+
+# H-4 (live GUI campaign, pve10 2026-10-21): mirror_target on a container dataset with no
+# snapshots on EITHER side has nothing to do -- every run of a whole-pool replica ended rc 1
+# on hdd/backups and its intermediate levels. The SHIPPED function, its reads stubbed.
+MT="$(sed -n '/^mirror_target() {/,/^}/p' "$SNAPGET")"
+mt_run() {   # <src> <tgt> <src snaps> <tgt snaps> <guest live 0|1> -> "rc|guest asked|log"
+    ( eval "$MT"
+      log() { echo "LOG$1 ${*:2}"; }
+      get_sorted_snapshots() { if [ "$1" = "$MT_SRC" ]; then printf '%s' "$MT_SS"; else printf '%s' "$MT_TS"; fi; }
+      guest_disk_is_live() { echo GUEST >&2; [ "$MT_LIVE" = 1 ]; }
+      find_common_snapshot() { echo none; return 1; }
+      MT_SRC="$1" MT_SS="$3" MT_TS="$4" MT_LIVE="$5"
+      mirror_target "$1" "$2" "" "" ) 2>"$WORK/mt.err" >"$WORK/mt.out"; local r=$?
+    printf '%s|%s|%s' "$r" "$(grep -c GUEST "$WORK/mt.err")" "$(cat "$WORK/mt.out")"
+}
+if [ -n "$MT" ]; then
+    r=$(mt_run hdd/backups replab/replica/hdd/backups "" "" 0)
+    case "$r" in "0|0|"*"nothing to mirror"*) ok "H-4: no snapshots on either side -> rc 0, nothing to mirror" ;; *) bad "H-4: empty both sides" "$r" ;; esac
+    r=$(mt_run hdd/x replab/replica/hdd/x "" "replab/replica/hdd/x@old" 0)
+    case "$r" in 1\|*"lists NO snapshots"*) ok "H-4: empty source but snapshots on the target -> still refused (an empty answer must not decide a destroy)" ;; *) bad "H-4: empty source, target has snapshots" "$r" ;; esac
+    r=$(mt_run tank/vm-100-disk-0 back/tank/vm-100-disk-0 "" "" 1)
+    case "$r" in "0|0|"*) ok "U60: mirror on a nested target does not ask the guest (running guest, not refused)" ;; *) bad "U60: nested target asked the guest" "$r" ;; esac
+    r=$(mt_run tank/vm-100-disk-0 tank/vm-100-disk-0 "" "" 1)
+    case "$r" in "1|1|"*"refused"*) ok "U60: control -- target = the source's own path (sync), running guest: asked and refused" ;; *) bad "U60: sync control" "$r" ;; esac
+else
+    bad "could not lift mirror_target from $SNAPGET"
+fi
+
 echo
 echo "mirrorguest: $PASS PASS / $FAIL FAIL"
 [ "$FAIL" -eq 0 ]
