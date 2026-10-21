@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e6bf6858e59fc1b9 -->
+<!-- status-covers-digest: a6f90d8ddecc1632 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -100,7 +100,7 @@
   (`/etc/zfs-snapshot-all/jobs.<host>[.<konto>].conf`) renderowanych jako root przez `gen-cron.sh` -- config, jego
   katalog i `gen-cron.sh` muszą należeć do roota i nie być zapisywalne dla grupy/innych, inaczej nic, kod 1, alert;
   crontaby kont NIE są czytane (znacznik bloku w cudzym crontabie niczego nie dowodzi). Nazwy zakładek `tgt-`
-  liczone w bashu (`printf '%s %s' | md5sum`) -- dane z linii nigdy nie stają się poleceniem powłoki (wcześniej
+  liczone w bashu (`printf '%s\0%s' | md5sum`) -- dane z linii nigdy nie stają się poleceniem powłoki (wcześniej
   `awk ... | getline` z celem i `-j` w poleceniu: wstrzyknięcie jako root, odtworzone w teście). Rodziny Proxmoxa
   (`__replicate_`, `__migration__`, `vzdump`) nigdy, bez względu na wzorce. Migawka jest nasza, gdy lokalna linia `delsnaps.sh`
   obejmuje jej dataset (wprost albo dziecko przy `-R`) i nazwa zaczyna się od JAWNEGO wzorca tej linii. Nie dają
