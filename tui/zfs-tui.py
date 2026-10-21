@@ -4716,7 +4716,11 @@ class UI(object):
         # STARYMI danymi i odświeża w tle (~5 s). F7 w tym czasie uruchomił starą zaznaczoną
         # replikę zamiast nowej. Czynność na wierszu czeka na świeże dane: najpierw je
         # przyjmuje, potem działa na tym, co już jest na ekranie po odświeżeniu.
-        if not self.window and k in self.ACTION_KEYS:
+        # Na żywo (drugie przejście): czekała tylko czynność -- strzałka poszła po STAREJ
+        # liście, a świeże dane wróciły kursor na pierwszy wiersz i F7 znów trafił w starą
+        # replikę. Więc KAŻDY klawisz po oknie czeka na świeże dane (ekran jest od razu,
+        # pierwszy klawisz czeka najwyżej resztę odświeżania).
+        if not self.window:
             bg = getattr(self, "_bg", None)
             if bg is not None and bg[0].is_alive():
                 bg[0].join(30)
