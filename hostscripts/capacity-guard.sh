@@ -94,7 +94,27 @@ if [ -n "$bad_setting" ]; then
 fi
 
 # Jeden bezpiecznik naraz: cron co 15 min, a czyszczenie dużej puli trwa.
-exec 9>"${ZFS_GUARD_LOCK:-/run/lock/zfs-capacity-guard.lock}" 2>/dev/null && flock -n 9 2>/dev/null || { [ "$PLAN" -eq 1 ] || exit 0; }
+# Trzy różne przypadki (REV-20261021-157 F1), nie jeden "exit 0":
+#   - pliku blokady nie da się otworzyć (brak katalogu, prawa, system tylko do odczytu) --
+#     bezpiecznik NIE działa: kod 1, wpis ze ścieżką, alert (w --plan bez alertu);
+#   - blokadę trzyma inny bieg bezpiecznika -- pominięcie, kod 0, bez alertu (tamten bieg
+#     pilnuje puli; --plan, który nic nie usuwa, idzie dalej);
+#   - inny błąd flock -- jak pierwszy przypadek.
+# Bez trzymanej blokady nie ma drogi do zfs destroy.
+LOCKF="${ZFS_GUARD_LOCK:-/run/lock/zfs-capacity-guard.lock}"
+lock_fail() {   # <powód>
+    say "blokada $LOCKF: $1 -- bezpiecznik nie startuje"
+    [ "$PLAN" -eq 1 ] || alert "$HOST: bezpiecznik NIE działa -- blokada" "Bezpiecznik nie wystartował: $1 ($LOCKF). Żadna pula nie jest pilnowana; nic nie zostało usunięte."
+    exit 1
+}
+{ exec 9>"$LOCKF"; } 2>/dev/null || lock_fail "nie da się otworzyć pliku blokady"
+flock -n -E 75 9 2>/dev/null; lrc=$?
+case "$lrc" in
+    0) ;;
+    75) if [ "$PLAN" -eq 0 ]; then say "inny bieg bezpiecznika trzyma blokadę -- pomijam"; exit 0; fi
+        echo "(inny bieg bezpiecznika trwa -- plan liczony bez blokady, nic nie jest usuwane)" ;;
+    *) lock_fail "flock zakończył się błędem ($lrc)" ;;
+esac
 # Zajętość puli w %: kod wyjścia samego `zpool list` sprawdzany wprost (nie maskuje go
 # `tr` w potoku -- REV-20261021-156 F1), wynik musi być liczbą 0-100. Kod 1 = nie wiadomo
 # -- nigdy "poniżej progu".
@@ -106,7 +126,13 @@ cap_of() {   # <pula> -> liczba albo kod 1
     [ "${#out}" -le 3 ] && [ "$out" -le 100 ] || return 1
     printf '%s' "$out"
 }
-WORK="$(mktemp -d 2>/dev/null)" || { say "brak katalogu tymczasowego -- nic nie robię"; exit 1; }
+# REV-20261021-157 F2: bez katalogu roboczego nie ma decyzji -- kod 1 i alert (pełny albo
+# tylko do odczytu TMPDIR to właśnie chwila, w której bezpiecznik jest potrzebny).
+WORK="$(mktemp -d 2>/dev/null)" || {
+    say "nie da się utworzyć katalogu tymczasowego (TMPDIR=${TMPDIR:-/tmp}) -- nic nie robię"
+    [ "$PLAN" -eq 1 ] || alert "$HOST: bezpiecznik NIE działa -- katalog tymczasowy" "Bezpiecznik nie wystartował: mktemp -d zawiódł (TMPDIR=${TMPDIR:-/tmp}, pełny albo tylko do odczytu?). Żadna pula nie jest pilnowana; nic nie zostało usunięte."
+    exit 1
+}
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- 1. Własność i źródła transferów z zarządzanych bloków crontabów -----------

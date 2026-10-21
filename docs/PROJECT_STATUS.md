@@ -123,6 +123,9 @@
   `zpool list` i musi być liczbą 0-100 -- błąd, `NaN` albo pusty wynik to nie „poniżej progu”: ta pula pominięta
   (zero `zfs` na niej), kod 1, alert dla tej puli (w `--plan` wpis); inne pule dalej. Błąd wykrycia pul
   (`zpool list -H -o name`) = nic, kod 1, alert; pusta lista przy kodzie 0 = host bez pul, kod 0, wpis w dzienniku.
+  **Start (REV-20261021-157):** pliku blokady nie da się otworzyć albo `flock` zawodzi = bezpiecznik nie startuje,
+  kod 1, alert ze ścieżką; blokadę trzyma inny bieg = pominięcie, kod 0, bez alertu (`--plan` liczy dalej, bez
+  blokady, nic nie usuwa); nieudane `mktemp -d` = kod 1, alert z `TMPDIR`. Bez trzymanej blokady nie ma `zfs destroy`.
   Testy `test/alertmail` (52 wiersze `PASS capacity-guard` w wyniku; nowe z REV-155 -- 14 czerwonych, z REV-156 -- 7 czerwonych na
   kodzie sprzed poprawki).
   Na żywo pve10 (pula z pliku, osobny katalog crontabów): usunięte dokładnie migawki z planu; hold, najnowsze, baza
