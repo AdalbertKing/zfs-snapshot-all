@@ -3706,6 +3706,17 @@ elif [ "$(tjq "$TRPO" excl hdd/ct)" = '["hdd/ct/subvol-301-disk-0"]' ]; then
 else
     bad "tree: pty (petla curses)" "rc=$TRPTRC" "$TRPT" "$(cat "$TRPO" 2>/dev/null)"
 fi
+# Home/End z PuTTY (ESC [ 1 ~ / ESC [ 4 ~ przy TERM=xterm) przed tymi samymi klawiszami: wynik
+# ten sam. Przed poprawką goły Esc z tego ciągu zamykał drzewo jako Wstecz (kampania 2026-10-22).
+rm -f "$TRPO"
+TRPT="$("$PY" "$REPO/test/tui/pty-keys.py" "$REPO/tui/tree.py" 'end-vt,home-vt,right,down,space,enter' -- --spec "$TRD/a.json" --out "$TRPO" 2>&1)"; TRPTRC=$?
+if [ "$TRPTRC" -eq 2 ]; then
+    echo "SKIP pty drzewo Home/End: brak modulu pty (Windows)"
+elif "$PY" "$REPO/tui/tree.py" --keys 'end,home,right,down,space,enter' --spec "$TRD/a.json" --out "$TRD/out-k.json" >/dev/null 2>&1;      [ "$(tjq "$TRPO" action)" = '"next"' ] && [ "$(cat "$TRPO")" = "$(cat "$TRD/out-k.json")" ]; then
+    ok "tree: pty -- Home/End jako ESC[1~/ESC[4~ (PuTTY) dzialaja jak Home/End (wynik = --keys end,home,...), nie zamykaja drzewa jak Esc"
+else
+    bad "tree: pty Home/End z PuTTY" "rc=$TRPTRC" "$(cat "$TRPO" 2>/dev/null)" "$(cat "$TRD/out-k.json" 2>/dev/null)"
+fi
 rm -rf "$TRD"
 
 # ============================================================================

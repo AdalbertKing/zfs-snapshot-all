@@ -548,7 +548,7 @@ step_profile() {
         [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
     fi
     wt --title "$(title 6 "$q6")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-       --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w ustawieniach dodatkowych).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane po wyborze konta). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
+       --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane przy Utwórz). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     if [ "$WT_OUT" = __manual__ ]; then
         step_manual || { step_profile; return $?; }
@@ -1111,10 +1111,14 @@ wz_adv() {   # Zaawansowane: konto i dodatki; wraca do podsumowania
         field_applies acct && { CARD_TAGS+=(acct); CARD_NAMES+=("Konto"); CARD_VALUES+=("$(field_value acct)"); CARD_FIXED+=(0); }
         field_applies extra && { CARD_TAGS+=(extra); CARD_NAMES+=("Dodatkowe"); CARD_VALUES+=("$(field_value extra)"); CARD_FIXED+=(0); }
         CARD_ACT_TAGS=(); CARD_ACT_LABELS=()
-        card_menu "Nowa relacja: zaawansowane" "Rzeczy, których zwykle się nie zmienia. Enter = zmień. Wstecz = podsumowanie." "$pick" "Wstecz" || return 0
+        card_menu "Nowa relacja: zaawansowane" "Rzeczy, których zwykle się nie zmienia." "$pick" "Wstecz" || return 0
         pick="$WT_OUT"
         case "$pick" in acct|extra) run_field "$pick" ;; *) return 0 ;; esac
     done
+}
+wz_profile() {   # szablon z podsumowania: retencja źródła zależy od szablonu -> od razu też ona
+    run_field profile && field_applies srcret && run_field srcret
+    return 0
 }
 WZ_SN=""
 wz_walk 0 || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
@@ -1131,7 +1135,7 @@ while :; do
     CARD_VALUES+=("$a"); CARD_FIXED+=(0)
     miss="$(missing_fields)"
     CARD_ACT_TAGS=(create); CARD_ACT_LABELS=("UTWÓRZ RELACJĘ -- plan, WYKONAJ${miss:+   (brak: $miss)}")
-    card_menu "Nowa relacja -- podsumowanie" "Sprawdź. Enter na pozycji = popraw ten krok i wróć tutaj." "$cur" "Przerwij" \
+    card_menu "Nowa relacja -- podsumowanie" "Sprawdź. Poprawiony krok wraca tutaj, do podsumowania." "$cur" "Przerwij" \
         || { wz_abort && { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }; continue; }
     cur="$WT_OUT"
     case "$cur" in
@@ -1153,7 +1157,7 @@ while :; do
             case $? in
                 0) break ;;
                 2) WZ_SN=""; run_field ds ;;
-                3) WZ_SN=""; run_field profile ;;
+                3) WZ_SN=""; wz_profile ;;
             esac
             cur=create ;;
         mode)
@@ -1164,6 +1168,7 @@ while :; do
                 wz_walk 1 || { clear 2>/dev/null; echo "new-relation: przerwane, nic nie zmieniono"; exit 1; }
                 cur=create
             fi ;;
+        profile) wz_profile ;;
         *)  run_field "$cur" ;;
     esac
 done
