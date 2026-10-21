@@ -17503,6 +17503,15 @@ Nothing was changed. A relationship is changed by removing it and importing the 
     for x in ${argv[@]+"${argv[@]}"}; do
         case "$x" in --host=*) peer_host="${x#--host=}" ;; --mode=*) peer_mode="${x#--mode=}" ;; esac
     done
+    # REV-20261021-166: since U62 the replayed --host is the ACTIVE endpoint, which may be
+    # HOST:PORT. Every SSH probe below takes host and port parsed once by the canonical
+    # parser; the replayed --host argument itself stays exactly as the file has it.
+    local peer_ep_host="" peer_ep_port=22
+    if [ -n "$peer_host" ]; then
+        read -r peer_ep_host peer_ep_port <<<"$(parse_endpoint_arg "$peer_host")"
+        [ -n "$peer_ep_host" ] && [ -n "$peer_ep_port" ] \
+            || die "import-relation: $file: --host=$peer_host is not HOST[:PORT] (see above). Nothing was changed."
+    fi
     [ "$peer_mode" != snaponly ] || die "import-relation: $file declares a snaponly relationship -- its replay is not supported yet (round 1); create it with add-client --snaponly. Nothing was changed."
     if [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
         for f in "$CLIENTS_DIR"/*.conf; do
@@ -17599,7 +17608,7 @@ SCOPE
     # instead -- the wizard's (--source=HOST:DATASETS --install --grant-remotely):
     # join over that channel and the scope granted EXACTLY as the file's dataset
     # list, then seed and activate. Without the root channel nothing changes.
-    local _ds_list="" _has_mode=0 _rport=22 _rux_ok=1
+    local _ds_list="" _has_mode=0 _rux_ok=1
     for x in "${argv[@]}"; do
         case "$x" in
             --datasets=*) _ds_list="${x#--datasets=}" ;;
@@ -17611,9 +17620,10 @@ SCOPE
         esac
     done
     if [ "$verb" = add-client ] && [ "$_rux_ok" -eq 1 ] && [ -n "$peer_host" ] && [ -n "$_ds_list" ] && [ "$_has_mode" -eq 0 ] \
-       && rux_root_ssh "$peer_host" "$_rport" "true" >/dev/null 2>&1 \
-       && ! rux_root_ssh "$peer_host" "$_rport" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
-        rux_args=(--source="$peer_host:$_ds_list" --name="$name")
+       && rux_root_ssh "$peer_ep_host" "$peer_ep_port" "true" >/dev/null 2>&1 \
+       && ! rux_root_ssh "$peer_ep_host" "$peer_ep_port" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
+        rux_args=(--source="$peer_ep_host:$_ds_list" --name="$name")
+        [ "$peer_ep_port" = 22 ] || rux_args+=(--port="$peer_ep_port")
         for x in "${argv[@]}"; do
             case "$x" in --host=*|--datasets=*) ;; *) rux_args+=("$x") ;; esac
         done
@@ -17648,8 +17658,8 @@ SCOPE
     # With root on the source from here, add-client joins it again itself.
     local -a jr_args=()
     if [ "$verb" = add-client ] && [ -n "$peer_host" ] \
-       && [ ! -r "$(peer_manifest_path "$(peer_label "$peer_host")")" ] \
-       && rux_root_ssh "$peer_host" 22 "true" >/dev/null 2>&1; then
+       && [ ! -r "$(peer_manifest_path "$(peer_label "$peer_ep_host")")" ] \
+       && rux_root_ssh "$peer_ep_host" "$peer_ep_port" "true" >/dev/null 2>&1; then
         jr_args=(--join-remotely)
     fi
     echo "Import relacji '$name' z $file"
