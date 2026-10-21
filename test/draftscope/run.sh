@@ -409,6 +409,46 @@ if declare -F new_account_drop_inherited_grants >/dev/null; then
     else
         check "U42: inherited delegation revoked" "0" "1: $(cat "$G42/unallow") / $_g42"
     fi
+    # REV-20261021-163: a failed read is not "no grant". Each case in a subshell (die exits);
+    # die/userdel/warn/log stubbed; G42_MODE picks the zfs result.
+    g42_run() {   # <mode> -> "rc|unallow calls|userdel calls|output"
+        : > "$G42/unallow"; : > "$G42/userdel"
+        local out rc
+        out=$( (
+            die() { echo "DIE $*"; exit 1; }; warn() { echo "WARN $*"; }; log() { :; }
+            userdel() { echo "$*" >> "$G42/userdel"; return 0; }
+            id() { [ "$1" = -u ] && { echo 1003; return 0; }; command id "$@"; }
+            zfs() {
+                case "$1" in
+                    list)    [ "$G42_MODE" = listfail ] && return 41; printf 'tank\ntank/a\n' ;;
+                    allow)   [ "$G42_MODE" = allowfail ] && [ "$2" = tank/a ] && return 42
+                             case "$G42_MODE:$2" in grant*:tank/a) printf -- '---- Permissions on tank/a ----\nLocal+Descendent permissions:\n\tuser newacct destroy\n' ;; esac ;;
+                    unallow) echo "$*" >> "$G42/unallow"; [ "$G42_MODE" = grantfail ] && return 1; return 0 ;;
+                esac
+            }
+            G42_MODE="$1"; new_account_drop_inherited_grants newacct
+        ) 2>&1 ); rc=$?
+        printf '%s|%s|%s|%s' "$rc" "$(cat "$G42/unallow")" "$(cat "$G42/userdel")" "$out"
+    }
+    _r=$(g42_run listfail)
+    case "$_r" in 1\|\|"-r newacct"\|*"DIE new account newacct"*"zfs list failed"*"removed again"*) check "U42/REV-163: zfs list fails -> stop, the new account removed again, no revoke" "0" "0" ;;
+        *) check "U42/REV-163: zfs list failure" "0" "1: $_r" ;; esac
+    _r=$(g42_run allowfail)
+    case "$_r" in 1\|\|"-r newacct"\|*"DIE new account newacct"*"zfs allow failed"*) check "U42/REV-163: zfs allow fails -> stop, the new account removed again" "0" "0" ;;
+        *) check "U42/REV-163: zfs allow failure" "0" "1: $_r" ;; esac
+    _r=$(g42_run clean)
+    case "$_r" in "0|||") check "U42/REV-163: clean inventory, no grant -> rc 0, nothing revoked, account kept" "0" "0" ;;
+        *) check "U42/REV-163: clean inventory" "0" "1: $_r" ;; esac
+    _r=$(g42_run grant)
+    case "$_r" in "0|unallow -u newacct tank/a||WARN"*) check "U42/REV-163: inherited grant -> revoked, rc 0, account kept" "0" "0" ;;
+        *) check "U42/REV-163: inherited grant revoked" "0" "1: $_r" ;; esac
+    _r=$(g42_run grantfail)
+    case "$_r" in "1|unallow -u newacct tank/a|-r newacct|"*"DIE new account newacct"*"zfs unallow -u 1003 tank/a"*) check "U42/REV-163: revoke fails -> stop, account removed again, the by-hand command names the uid" "0" "0" ;;
+        *) check "U42/REV-163: revoke failure" "0" "1: $_r" ;; esac
+    # Both call sites: the guard runs right after useradd, before the next mutation.
+    _cs=$(grep -n -A1 'log "created isolated peer account\|log "created user \$USERNAME' "$DEPLOY_SRC" | grep -c 'new_account_drop_inherited_grants')
+    if [ "$_cs" = 2 ]; then check "U42/REV-163: both post-useradd call sites call the guard on the next line" "0" "0"
+    else check "U42/REV-163: call sites" "0" "1: $_cs"; fi
 else
     check "U42: could not lift new_account_drop_inherited_grants from deploy.sh -- anchors changed" "0" "1"
 fi

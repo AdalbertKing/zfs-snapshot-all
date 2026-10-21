@@ -4314,20 +4314,39 @@ guided_join_scope() {   # <label>
 # the delegated-account isolation broken without a word. A brand-new account has no
 # legitimate grant anywhere, so whatever `zfs allow` shows for it right after useradd
 # is inherited: listed, revoked, and the run refuses if it cannot revoke.
+#
+# REV-20261021-163: a read that fails is NOT "no grant". The inventory and every ACL are
+# captured and their status checked (no process substitution, no `zfs allow | grep` that
+# turns a failed read into "no match"). Any failure -- list, allow, unallow -- removes the
+# account just created and stops: a re-run creates it again and checks again, whereas an
+# account left behind would be "already exists, leaving it alone" and skip this check.
 new_account_drop_inherited_grants() {   # <account just created>
-    local account="$1" ds found=""
+    local account="$1" uid ds found="" list acl
+    uid="$(id -u "$account" 2>/dev/null)"
+    if ! list="$(zfs list -H -o name -t filesystem,volume)"; then
+        new_account_abort "$account" "$uid" "could not list the datasets (zfs list failed) to check it for inherited zfs delegations"
+    fi
     while IFS= read -r ds; do
         [ -n "$ds" ] || continue
-        zfs allow "$ds" 2>/dev/null | grep -qE "^[[:space:]]+user $account " || continue
+        if ! acl="$(zfs allow "$ds")"; then
+            new_account_abort "$account" "$uid" "could not read the zfs delegations on $ds (zfs allow failed)"
+        fi
+        printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $account " || continue
         found="$found $ds"
-    done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null)
+    done <<< "$list"
     [ -n "$found" ] || return 0
-    warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($(id -u "$account")) on:$found -- revoking them; a new account starts with no rights"
+    warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($uid) on:$found -- revoking them; a new account starts with no rights"
     for ds in $found; do
         zfs unallow -u "$account" "$ds" 2>/dev/null \
-            || die "could not revoke the inherited delegation of $account on $ds -- run 'zfs unallow -u $account $ds' by hand and re-run. The account exists; nothing else was changed."
+            || new_account_abort "$account" "$uid" "could not revoke the inherited delegation of $account on $ds -- revoke it by hand: zfs unallow -u $uid $ds"
     done
     log "revoked inherited delegations of $account on:$found"
+}
+new_account_abort() {   # <account> <uid> <reason> -- never returns
+    if userdel -r "$1" >/dev/null 2>&1; then
+        die "new account $1 (uid $2): $3 -- the account was removed again; nothing else was changed. Fix it and re-run."
+    fi
+    die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel -r $1' by hand BEFORE re-running (a re-run would take the existing account as already checked). Nothing else was changed."
 }
 
 do_leave() {
