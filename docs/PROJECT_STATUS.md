@@ -96,8 +96,13 @@
   **Domyślnie wyłączony** -- włącza admin w F10 (`[capacity] guard = on`); progi `guard_at` 89, `guard_target` 85,
   `guard_min_keep` 2. Kolejność ważności ustawień: środowisko > `settings.ini` (F10) > `zfs-alert.conf` > domyślne
   (wcześniej stary conf z `ZFS_GUARD=on` wygrywał z F10 `off` -- #655 P1-C).
-  **Co wolno usunąć (#655 P1-A, P1-D):** własność wyłącznie z zarządzanych bloków crontabów hosta
-  (`/var/spool/cron/crontabs/*`, blok `zfs-backup-managed`) -- migawka jest nasza, gdy lokalna linia `delsnaps.sh`
+  **Co wolno usunąć (#655 P1-A, P1-D; źródło zaufania REV-20261021-158):** własność wyłącznie z configów hosta
+  (`/etc/zfs-snapshot-all/jobs.<host>[.<konto>].conf`) renderowanych jako root przez `gen-cron.sh` -- config, jego
+  katalog i `gen-cron.sh` muszą należeć do roota i nie być zapisywalne dla grupy/innych, inaczej nic, kod 1, alert;
+  crontaby kont NIE są czytane (znacznik bloku w cudzym crontabie niczego nie dowodzi). Nazwy zakładek `tgt-`
+  liczone w bashu (`printf '%s %s' | md5sum`) -- dane z linii nigdy nie stają się poleceniem powłoki (wcześniej
+  `awk ... | getline` z celem i `-j` w poleceniu: wstrzyknięcie jako root, odtworzone w teście). Rodziny Proxmoxa
+  (`__replicate_`, `__migration__`, `vzdump`) nigdy, bez względu na wzorce. Migawka jest nasza, gdy lokalna linia `delsnaps.sh`
   obejmuje jej dataset (wprost albo dziecko przy `-R`) i nazwa zaczyna się od JAWNEGO wzorca tej linii. Nie dają
   własności: wzorzec pusty (`""` -- „wszystko poza `-P`”, np. godzinowe rodziny bez prefiksu na kolektorze), linia
   zdalna (`host:dataset` -- retencja źródła przy pull biegnie z kolektora, więc na samym źródle pull bezpiecznik nic

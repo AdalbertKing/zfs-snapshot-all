@@ -1622,7 +1622,16 @@ rm -rf "$hs_dir"
 # odczytu (crontaby, zfs list migawek/zakladek, zly wiersz, nieznana linia transferu,
 # brak wlasnosci) -> 0 usuniec, rc 1, alert; kolejnosc ustawien env > settings > conf.
 # ---------------------------------------------------------------------------
-gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin" "$gs_dir/cron" "$gs_dir/peers"
+gs_dir=$(mktemp -d); mkdir -p "$gs_dir/bin" "$gs_dir/cron" "$gs_dir/peers" "$gs_dir/conf"
+: > "$gs_dir/conf/jobs.h.conf"
+# Atrapa gen-cron (REV-20261021-158): "renderuje" config hosta h -- linie, ktore gs_cron
+# kladzie do cron/root. Nowy skrypt czyta juz tylko to, nie crontaby (stary czytal cron/).
+cat > "$gs_dir/bin/gencron" <<'GC'
+#!/bin/bash
+# jak gen-cron -c: tylko blok zarzadzany (linia poza blokiem w cron/root to cudza linia crona)
+[ "$1" = -c ] && [ "${2##*/}" = jobs.h.conf ] || exit 2
+awk '/^# BEGIN zfs-backup-managed/ { on = 1 } on { print } /^# END zfs-backup-managed/ { on = 0 }' "$GS_DIR/cron/root"
+GC
 cp "$HS/capacity-guard.sh" "$gs_dir/guard.sh"; cp "$HS/alert-env.sh" "$gs_dir/alert-env.sh"
 cat > "$gs_dir/bin/zpool" <<'ST'
 #!/bin/bash
@@ -1688,7 +1697,8 @@ gs_run() {   # <cap> <step> <settings guard> [args] -> rc; destroyed/mail/out in
     local cap="$1" step="$2"; shift 3
     ( [ -n "${GS_ENV_KEEP:-}" ] || unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP
       PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" GS_STEP="$step" SETTINGS_FILE="$gs_dir/settings.ini" \
-      ZFS_ALERT_CONF="${GS_CONF:-/dev/null}" ZFS_GUARD_CRONTABS="${GS_CRON:-$gs_dir/cron}" ZFS_GUARD_PEERS="$gs_dir/peers" \
+      ZFS_ALERT_CONF="${GS_CONF:-/dev/null}" ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" \
+      ZFS_GUARD_CONFDIR="${GS_CONFDIR:-$gs_dir/conf}" ZFS_GUARD_CONFHOST=h ZFS_GUARD_GENCRON="$gs_dir/bin/gencron" ZFS_GUARD_TRUST_UID="$(id -u)" \
       ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="${GS_LOCK:-$gs_dir/lock}" TMPDIR="${GS_TMP:-${TMPDIR:-/tmp}}" \
       bash "$gs_dir/guard.sh" "$@" ) > "$gs_dir/out" 2>&1
 }
@@ -1832,7 +1842,7 @@ gs_run 99 1 on; gs_rc=$?;                            gs_failclosed "zly format c
 gs_snaps > "$gs_dir/snaps"; printf 'tank/a@automated_hourly_9\t900\t\t1\n' >> "$gs_dir/snaps"
 gs_run 99 1 on; gs_rc=$?;                            gs_failclosed "brak userrefs" "zły wiersz migawki"
 gs_snaps > "$gs_dir/snaps"
-GS_CRON="$gs_dir/nie-ma" gs_run 99 1 on; gs_rc=$?;   gs_failclosed "brak katalogu crontabow" "nie da się czytać"
+GS_CONFDIR="$gs_dir/nie-ma" gs_run 99 1 on; gs_rc=$?; gs_failclosed "brak katalogu configow" "nie da się czytać"
 gs_cron "31 * * * * $GS_J /r/snapget.sh -Y \"tank/a\" \"tank/back\""
 gs_run 99 1 on; gs_rc=$?;                            gs_failclosed "niezrozumiana linia transferu" "nieznana opcja"
 { echo "# BEGIN zfs-backup-managed"; echo "24 * * * * $GS_J /r/delsnaps.sh -R \"tank/a\" \"\" -H24"; echo "# END zfs-backup-managed"; } > "$gs_dir/cron/root"
@@ -1893,7 +1903,7 @@ printf 'ZFS_GUARD_TARGET=0\n' > "$gs_dir/legacy-bad.conf"
 printf '[capacity]\nguard = on\n' > "$gs_dir/settings-on.ini"
 ( unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP; rm -f "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/calls"; echo 99 > "$gs_dir/cap"
   PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" GS_STEP=1 SETTINGS_FILE="$gs_dir/settings-on.ini" ZFS_ALERT_CONF="$gs_dir/legacy-bad.conf" \
-  ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="$gs_dir/lock" \
+  ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" ZFS_GUARD_CONFDIR="${GS_CONFDIR:-$gs_dir/conf}" ZFS_GUARD_CONFHOST=h ZFS_GUARD_GENCRON="$gs_dir/bin/gencron" ZFS_GUARD_TRUST_UID="$(id -u)" ZFS_NOTIFY_SCRIPT="$gs_dir/bin/notify" ZFS_GUARD_LOCK="$gs_dir/lock" \
   bash "$gs_dir/guard.sh" ) > "$gs_dir/out" 2>&1; gs_rc=$?;                   gs_badcfg "zfs-alert.conf guard_target=0" "guard_target='0'"
 GS_ENV_KEEP=1 ZFS_GUARD_AT=abc gs_run 99 1 on; gs_rc=$?;                    gs_badcfg "env guard_at nie-liczba (nie wraca do 89)" "guard_at='abc'"
 GS_ENV_KEEP=1 ZFS_GUARD=ON gs_run 99 1 on; gs_rc=$?;                        gs_badcfg "guard='ON' (tylko on/off)" "guard = 'ON'"
@@ -2017,10 +2027,67 @@ else
     bad "capacity-guard: kontrola zdrowa REV-157" "rc=$gs_rc" "$(cat "$gs_dir/out" 2>/dev/null)"
 fi
 
+# ---- REV-20261021-158: zaufanie i brak wykonywania danych z linii crona ----
+gs_cron; gs_snaps > "$gs_dir/snaps"; : > "$gs_dir/marks"; rm -f "$gs_dir/PWNED"
+# F1: cel i -j z apostrofem i separatorami powloki -- nigdy nie wykonane (znacznik PWNED).
+gs_cron "31 * * * * $GS_J /r/snapget.sh -m \"automated_hourly_\" -j \"x'; touch $gs_dir/PWNED; echo '\" \"tank/a\" \"tank/back'; touch $gs_dir/PWNED; echo '\""
+gs_run 99 1 off --plan; gs_rc_plan=$?
+gs_run 99 1 on; gs_rc=$?
+if [ ! -e "$gs_dir/PWNED" ] && ! grep -q '^tank/a@' "$gs_dir/destroyed" 2>/dev/null && grep -q 'tank/a: brak zakładki' "$gs_dir/mail"; then
+    ok "capacity-guard: cel/-j z apostrofem i '; touch' (--plan i bieg) -- nic nie wykonane, tank/a zablokowany (zakladki brak)"
+else
+    bad "capacity-guard: wstrzykniecie przez cel/-j" "PWNED=$([ -e "$gs_dir/PWNED" ] && echo TAK || echo nie) rc=$gs_rc_plan/$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" 2>/dev/null)"
+fi
+rm -f "$gs_dir/PWNED"
+# F1.4: dopasowanie bajt w bajt przy znakach powloki w -j (apostrof, spacja, $).
+gs_cron "31 * * * * $GS_J /r/snapget.sh -m \"automated_hourly_\" -j \"o'k \$x\" \"tank/a\" \"tank/back\""
+printf 'tank/a#tgt-%s\t1003\t300\n' "$(gs_tag tank/back/tank/a "o'k \$x")" > "$gs_dir/marks"
+GS_KEEP=1 gs_run 99 1 on; gs_rc=$?
+if grep -q 'tank/a@automated_hourly_2$' "$gs_dir/destroyed" && ! grep -q 'tank/a@automated_hourly_3$' "$gs_dir/destroyed"; then
+    ok "capacity-guard: -j ze znakami powloki -- nazwa zakladki zgodna z silnikiem bajt w bajt, czysci ponizej bazy"
+else
+    bad "capacity-guard: -j ze znakami powloki" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" "$gs_dir/mail" "$gs_dir/out" 2>/dev/null)"
+fi
+: > "$gs_dir/marks"
+# F2: sfalszowany blok w crontabie innego konta (mallory) -- nie daje zadnej wlasnosci.
+gs_cron
+{ echo "# BEGIN zfs-backup-managed (generated by gen-cron.sh -- do not hand-edit, re-run gen-cron.sh instead)"
+  echo "21 * * * * $GS_J /r/delsnaps.sh \"tank/c\" \"automated_hourly\" -H1"
+  echo "# END zfs-backup-managed"; } > "$gs_dir/cron/mallory"
+gs_run 99 1 on; gs_rc=$?
+rm -f "$gs_dir/cron/mallory"
+if ! grep -q '^tank/c@' "$gs_dir/destroyed" 2>/dev/null && grep -q '^tank/a@' "$gs_dir/destroyed"; then
+    ok "capacity-guard: blok-znacznik w crontabie innego konta -- zero usuniec w tank/c, zwykle relacje dalej dzialaja"
+else
+    bad "capacity-guard: sfalszowany crontab" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" 2>/dev/null)"
+fi
+# F2.4: config albo gen-cron zapisywalny dla grupy/innych -- nic, rc 1, alert.
+chmod g+w "$gs_dir/conf/jobs.h.conf"
+gs_run 99 1 on; gs_rc=$?; chmod g-w "$gs_dir/conf/jobs.h.conf"
+gs_failclosed "config zapisywalny dla grupy" "nie ufam $gs_dir/conf/jobs.h.conf"
+chmod o+w "$gs_dir/bin/gencron"
+gs_run 99 1 on; gs_rc=$?; chmod o-w "$gs_dir/bin/gencron"
+gs_failclosed "gen-cron zapisywalny dla innych" "nie ufam $gs_dir/bin/gencron"
+mkdir -p "$gs_dir/conf-pusty"
+GS_CONFDIR="$gs_dir/conf-pusty" gs_run 99 1 on; gs_rc=$?
+gs_failclosed "brak configu hosta" "brak configu"
+# F2.3: rodziny Proxmoxa nawet przy wzorcu, ktory je obejmuje.
+gs_snaps > "$gs_dir/snaps"
+for i in 2 3 4 5; do printf 'tank/a@__replicate_101_0_%s\t%s\t0\t40%s\ntank/a@vzdump_%s\t%s\t0\t41%s\ntank/a@__migration___%s\t%s\t0\t42%s\n' "$i" "$((10 + i))" "$i" "$i" "$((20 + i))" "$i" "$i" "$((30 + i))" "$i" >> "$gs_dir/snaps"; done
+gs_cron "41 * * * * $GS_J /r/delsnaps.sh \"tank/a\" \"__replicate_\" -H1" "42 * * * * $GS_J /r/delsnaps.sh \"tank/a\" \"vzdump\" -H1" \
+        "43 * * * * $GS_J /r/delsnaps.sh \"tank/a\" \"__migration__\" -H1"
+GS_KEEP=1 gs_run 99 1 on; gs_rc=$?
+if ! grep -qE '@(__replicate_|vzdump|__migration__)' "$gs_dir/destroyed" 2>/dev/null && grep -q 'tank/a@automated_hourly' "$gs_dir/destroyed"; then
+    ok "capacity-guard: __replicate_, vzdump, __migration__ nietkniete nawet przy jawnym wzorcu retencji"
+else
+    bad "capacity-guard: rodziny Proxmoxa" "rc=$gs_rc" "$(cat "$gs_dir/destroyed" 2>/dev/null)"
+fi
+gs_cron; gs_snaps > "$gs_dir/snaps"; : > "$gs_dir/marks"
+
 printf '[capacity]\n' > "$gs_dir/settings-empty.ini"
 ( unset ZFS_GUARD ZFS_GUARD_AT ZFS_GUARD_TARGET ZFS_GUARD_MIN_KEEP
   PATH="$gs_dir/bin:$PATH" GS_DIR="$gs_dir" SETTINGS_FILE="$gs_dir/settings-empty.ini" ZFS_ALERT_CONF="$gs_dir/legacy-on.conf" \
-  ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" ZFS_GUARD_LOCK="$gs_dir/lock" bash "$gs_dir/guard.sh" --plan ) > "$gs_dir/out" 2>&1
+  ZFS_GUARD_CRONTABS="$gs_dir/cron" ZFS_GUARD_PEERS="$gs_dir/peers" ZFS_GUARD_CONFDIR="${GS_CONFDIR:-$gs_dir/conf}" ZFS_GUARD_CONFHOST=h ZFS_GUARD_GENCRON="$gs_dir/bin/gencron" ZFS_GUARD_TRUST_UID="$(id -u)" ZFS_GUARD_LOCK="$gs_dir/lock" bash "$gs_dir/guard.sh" --plan ) > "$gs_dir/out" 2>&1
 if grep -q 'bezpiecznik on (czyści od 50% do 40%, zostaje 7 ' "$gs_dir/out"; then
     ok "capacity-guard: bez wartosci w F10 obowiazuje conf (on, 50/40/7) -- conf > domyslne"
 else
