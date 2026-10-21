@@ -395,6 +395,47 @@ class Tree(object):
 
 KEYNAMES = {"\t": "tab", " ": "space", "\n": "enter", "\r": "enter", "\x1b": "esc", "\x7f": "bs", "\x08": "bs"}
 
+# Home/End z PuTTY (i tmuxa) przy TERM=xterm: terminal wysyła ESC [ 1 ~ / ESC [ 4 ~, a opis
+# terminala xterm zna tylko ESC O H / ESC O F -- curses oddaje wtedy GOŁY Esc i resztę jako
+# znaki, więc Home/End działały jak Wstecz (kampania 2026-10-22, drzewo w kreatorze). Po gołym
+# Esc dobieramy resztę ciągu sami, jak zfs-tui.py.
+ESCSEQ = {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "OA": "up", "OB": "down", "OC": "right", "OD": "left",
+          "[H": "home", "OH": "home", "[1~": "home", "[7~": "home", "[F": "end", "OF": "end", "[4~": "end", "[8~": "end",
+          "[5~": "pgup", "[6~": "pgdn", "[3~": "del"}
+
+
+def esc_tail(scr):
+    """Po gołym Esc: '' = prawdziwy Esc, nazwa klawisza, albo None (nieznany ciąg -- pomiń)."""
+    import curses
+    import time
+    seq = ""
+    scr.nodelay(True)
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 0.05 and len(seq) < 6:
+            try:
+                c = scr.get_wch()
+            except curses.error:
+                time.sleep(0.005)
+                continue
+            if not isinstance(c, str):
+                break
+            seq += c
+            if seq in ESCSEQ or seq[0] not in "[O" or seq.endswith("~") or (len(seq) == 2 and seq[1].isalpha()):
+                break
+    finally:
+        scr.nodelay(False)
+    if not seq:
+        return ""
+    if seq[0] not in "[O":          # Esc, a zaraz po nim zwykły znak: oddaj znak, zgłoś Esc
+        for ch in reversed(seq):
+            try:
+                curses.ungetch(ord(ch))
+            except (curses.error, OverflowError):
+                pass
+        return ""
+    return ESCSEQ.get(seq)
+
 
 def run_curses(t):
     import curses
@@ -449,6 +490,9 @@ def run_curses(t):
             ch = scr.get_wch()
             if isinstance(ch, str):
                 k = KEYNAMES.get(ch, ch)
+                if k == "esc":
+                    k = esc_tail(scr)
+                    k = "esc" if k == "" else (k or "")
             else:
                 k = km.get(ch, "")
             if k:

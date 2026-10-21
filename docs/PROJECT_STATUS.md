@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: c551bf9e58d7d684 -->
+<!-- status-covers-digest: e85b1a615596cffb -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,17 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **U66: kreator nowej relacji krok po kroku (2026-10-22; `finisz/kreator`, część 1 -- tworzenie).**
+  Właściciel: „do kompletnej przebudowy, nielogiczne”. Kroki danego rodzaju po kolei, tytuł „krok N z M”; Wstecz
+  zawsze o jeden krok, Wstecz w kroku 1 pyta o przerwanie. Po ostatnim kroku podsumowanie: każda pozycja otwiera
+  swój krok i wraca do podsumowania; konto i dodatki w „Zaawansowane”; kursor na „Utwórz relację”. Zmiana szablonu
+  z podsumowania przechodzi też przez retencję źródła (zależy od szablonu). Niedopasowanie szablonu do konta
+  sprawdza się przy „Utwórz”. U56: sprawdzenie hosta podaje, na jaki adres rozwiązała się nazwa, i ostrzega przed
+  adresem publicznym. „Przeglądaj…” w kroku Dokąd to drzewo jednej pozycji (reszta U68). Home/End z PuTTY
+  (`ESC[1~`/`ESC[4~`) w drzewie i tabeli retencji działały jak Esc -- naprawione. Na żywo (pve10 <- pve9): całe
+  przejście backupu do planu, z cofaniem i zmianami zdania, bez wpadek; WYKONAJ nadal pokazuje wyjście czasownika
+  na czarnym ekranie (~60 s) -- okno postępu to część 2 razem ze zmianą relacji (U64/U65). Test `tui` 371/0 (pve9).
 
 - **U68: jedno drzewo wyboru datasetów -- tryb jednej pozycji; Przeglądaj kopię go używa (2026-10-21; `finisz/drzewo`).**
   Właściciel: „zginęło okno z rozwijającymi się gałęziami; to musi być jednolite w całym pakiecie”. Przeglądaj kopię

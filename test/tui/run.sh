@@ -2248,6 +2248,7 @@ cat > "$NR/bin/tree" <<'EOF'
 #!/bin/bash
 n=$(cat "$NR_DIR/tree.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/tree.n"
 k=$(sed -n "${n}p" "$NR_DIR/treekeys" 2>/dev/null); [ -n "$k" ] || k=esc
+pv=""; for a in "$@"; do [ "$pv" = --spec ] && cp "$a" "$NR_DIR/tree-spec.last"; pv="$a"; done
 "$TREE_PY" "$TREE_REPO/tui/tree.py" --keys "$k" "$@" >> "$NR_DIR/tree.log"
 rc=$?
 echo "RC: $rc" >> "$NR_DIR/tree.log"
@@ -2255,7 +2256,7 @@ exit "$rc"
 EOF
 chmod +x "$NR/bin/whiptail" "$NR/bin/zb" "$NR/bin/tree"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
       # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
@@ -2276,9 +2277,13 @@ T=$'\t'
 NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2305,9 +2310,13 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}$1
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2370,8 +2379,6 @@ SOW="0${T}snaponly
 0${T}
 0${T}d7h24
 0${T}pve9b
-0${T}root
-0${T}grant
 0${T}create
 0${T}
 0${T}
@@ -2387,9 +2394,13 @@ else
 fi
 NRTS="0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2459,20 +2470,19 @@ else
 fi
 # 3. wyjatki otwarte drugi raz pamietaja stan (odznaczone wraca odznaczone)
 # X12: dawne okna wyjatkow zniknely. "Otwarte drugi raz" to teraz ponowne otwarcie pola Datasety:
-# Wstecz z menu "Dokad" (odpowiedz `1`) wraca na KARTE (U25), z karty `ds` otwiera drzewo, ktore
+# U66: Wstecz z menu "Dokad" (odpowiedz `1`) to POPRZEDNI krok -- drzewo, ktore
 # dostaje z koszyka ten sam wybor -- wiec drugi ekran w tree.log ma subvol-302 znow odznaczony,
 # a 301 zaznaczony. Dwa wywolania okna = dwie linie NR_TREE.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 1${T}
-0${T}ds
 ${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
    && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
    && [ "$(grep -cF '[x] subvol-301-disk-0' "$NR/tree.log")" -eq 2 ] && ! has "$NRTL" '[ ] subvol-301-disk-0'; then
-    ok "new-relation: drzewo otwarte drugi raz (Wstecz z pola Cel, karta, ds) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
+    ok "new-relation: drzewo otwarte drugi raz (Wstecz z kroku Dokad, U66) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
 else
     bad "new-relation: stan wyjatkow" "$NROUT" "$NRTL"
 fi
@@ -2505,19 +2515,22 @@ else
 fi
 # 3d. zaznacz i odznacz jedyne miejsce -> Enter odmawia, Esc = Wstecz; Wstecz x3 = wyjscie
 # X12: dawne "Usun pozycje -> znow lista miejsc" to Spacja na zaznaczonym miejscu (znika) i Esc.
-# U25: Wstecz z drzewa wraca na KARTE, nie do pola hosta; zostaje jedna odpowiedz `1`: karta
-# (Wyjdz). Okno drzewa wola sie RAZ.
+# U66: Wstecz z drzewa = poprzedni krok (host, odpowiedz `1` = Wstecz), z rodzaju (`1`) pytanie
+# "przerwac?" (`0` = Przerwij). Okno drzewa wola sie RAZ.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 1${T}
+1${T}
+0${T}
 " NR_TREE='goto:hdd/test-kreator,space,goto:hdd/test-kreator,space,esc'); NRRC=$?
 # Dawne "lista miejsc pojawia sie drugi raz" -- okna listy juz nie ma. Zostaje: kreator konczy sie
 # rc=1, drzewo bylo wolane dokladnie raz (jeden ekran w tree.log) i skonczylo sie Wstecz (rc=1 tree.py).
 if [ "$NRRC" -eq 1 ] && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 1 ] && [ "$(grep -c '^RC: 1$' "$NR/tree.log")" -eq 1 ] \
    && ! grep -q '^RC: 0$' "$NR/tree.log" && has "$(cat "$NR/tree.log")" 'Wybrane miejsca: 0' \
-   && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Relacja (nowa)' "$NR/wt.log"; then
-    ok "new-relation: zdjecie jedynego miejsca i Esc w drzewie = Wstecz (jedno wywolanie okna, rc=1); Wstecz prowadzi na karte, Wyjdz z karty konczy kreator"
+   && has "$NROUT" "przerwane, nic nie zmieniono" && [ "$(grep -c 'Z którego hosta? ~ --ok-button' "$NR/wt.log")" -eq 2 ] \
+   && grep -qF 'Nowa relacja: przerwać?' "$NR/wt.log"; then
+    ok "new-relation: zdjecie jedynego miejsca i Esc w drzewie = Wstecz (jedno wywolanie okna, rc=1); Wstecz = poprzedni krok (host), Wstecz z rodzaju pyta o przerwanie (U66)"
 else
     bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/tree.log" 2>/dev/null)" "$(cat "$NR/wt.log")"
 fi
@@ -2532,20 +2545,23 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}lab-ct201
 0${T}
-1${T}
+0${T}pve9b
 0${T}profile
 0${T}d30
-0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}zfsbackup
+0${T}extra
 0${T}grant|quies
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
 " NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
-    ok "new-relation: pola cel-konto -- zajeta nazwa odmowiona, Wstecz z nazwy na karte i stamtad szablon zmienia wybor (d30), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
+    ok "new-relation: pola cel-konto -- zajeta nazwa odmowiona, z podsumowania szablon zmienia wybor (d30, U66), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
 else
     bad "new-relation: pola cel-konto" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
@@ -2606,9 +2622,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2631,9 +2651,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d7h24-age
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2660,9 +2684,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d30h24
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2680,9 +2708,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2703,9 +2735,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}pasywnie
@@ -2735,14 +2771,40 @@ fi
 # pokazuje menu "Relacja (nowa)" z kursorem na `create`, PO oknie "Ustawienia dodatkowe" i PRZED
 # "Podsumowanie". Numery linii dziennika: kazde okno to jedna linia, wiec kolejnosc = kolejnosc numerow.
 NRLN_X="$(grep -n -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRLN_C="$(grep -n -F 'Relacja (nowa)' "$NR/wt.log" | grep -F -e '--menu' | head -1 | cut -d: -f1)"
 NRLN_S="$(grep -n -F 'Podsumowanie' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRCARD="$(grep -F 'Relacja (nowa)' "$NR/wt.log" | grep -F -e '--menu' | head -1)"
+NRLN_C="$(grep -n -F 'Nowa relacja -- podsumowanie' "$NR/wt.log" | grep -F -e '--menu' | awk -F: -v s="${NRLN_S:-0}" '$1 < s { n = $1 } END { print n }')"
+NRCARD="$(sed -n "${NRLN_C:-1}p" "$NR/wt.log")"
 if [ -n "$NRLN_X" ] && [ -n "$NRLN_C" ] && [ -n "$NRLN_S" ] && [ "$NRLN_X" -lt "$NRLN_C" ] && [ "$NRLN_C" -lt "$NRLN_S" ] \
    && has "$NRCARD" '--default-item ~ create ~'; then
-    ok "new-relation: karta 'Relacja (nowa)' z kursorem na create pojawia sie PO 'Ustawienia dodatkowe' i PRZED 'Podsumowanie' (U25)"
+    ok "new-relation: podsumowanie kreatora z kursorem na create pojawia sie PO 'Ustawienia dodatkowe' (Zaawansowane) i PRZED 'Podsumowanie' (U66)"
 else
     bad "new-relation: karta przed podsumowaniem" "extra=$NRLN_X karta=$NRLN_C podsumowanie=$NRLN_S" "$(printf '%s' "$NRCARD" | cut -c1-300)"
+fi
+
+# U68: "Przegladaj..." w kroku Dokad to DRZEWO w trybie jednej pozycji (wczesniej plaska lista
+# whiptaila z obcietymi nazwami). Wnetrza ladowisk innych relacji ukryte i policzone w legendzie.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}__browse__
+0${T}default
+0${T}pve9b
+0${T}create
+0${T}
+0${T}
+" NR_TREE="$NRTK|goto:hdd,enter")
+if has "$NROUT" " --target=hdd " && ! grep -qF 'Dokąd -- przeglądaj ~ --ok-button' "$NR/wt.log" \
+   && "$PY" - "$NR/tree-spec.last" <<'PYEOF'
+import sys, json
+s = json.load(open(sys.argv[1], encoding="utf-8")); names = [d["name"] for d in s["datasets"]]
+ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
+     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "")
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "new-relation: Przegladaj w kroku Dokad = drzewo jednej pozycji (U68), kopie innych relacji ukryte i policzone, wybor idzie do --target"
+else
+    bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
@@ -2754,8 +2816,12 @@ NROUT=$(nr_run "0${T}local
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2774,13 +2840,12 @@ fi
 
 # 3i. SAME MIGAWKI (X27 S4, wlasciciel 2026-10-14: "A relacja robiaca tylko migawki w
 #     zrodle? Wsad? GUI?"): czwarta pozycja w oknie rodzaju. Kopia lokalna BEZ celu -- bez okna
-#     "Dokad", bez ustawien dodatkowych (konto -> karta -> podsumowanie), komenda = wsad local-backup z --target=
+#     "Dokad", bez ustawien dodatkowych (nazwa -> podsumowanie kreatora -> podsumowanie), komenda = wsad local-backup z --target=
 #     (pustym) i --install BEZ --yes: czasownik pusty cel potwierdza wzrokiem, wiec pyta
 #     sam w terminalu po WYKONAJ, jak przy wsadzie.
 NROUT=$(nr_run "0${T}snap
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
-0${T}root
 0${T}create
 0${T}
 0${T}
@@ -2806,9 +2871,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}192.168.28.99
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2960,11 +3029,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
 0${T}
 0${T}zfsbackup
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2983,9 +3056,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3023,13 +3100,17 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}
 0${T}__del__
 0${T}i:1
 0${T}__add__
 0${T}_tmp
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3625,6 +3706,17 @@ elif [ "$(tjq "$TRPO" excl hdd/ct)" = '["hdd/ct/subvol-301-disk-0"]' ]; then
 else
     bad "tree: pty (petla curses)" "rc=$TRPTRC" "$TRPT" "$(cat "$TRPO" 2>/dev/null)"
 fi
+# Home/End z PuTTY (ESC [ 1 ~ / ESC [ 4 ~ przy TERM=xterm) przed tymi samymi klawiszami: wynik
+# ten sam. Przed poprawką goły Esc z tego ciągu zamykał drzewo jako Wstecz (kampania 2026-10-22).
+rm -f "$TRPO"
+TRPT="$("$PY" "$REPO/test/tui/pty-keys.py" "$REPO/tui/tree.py" 'end-vt,home-vt,right,down,space,enter' -- --spec "$TRD/a.json" --out "$TRPO" 2>&1)"; TRPTRC=$?
+if [ "$TRPTRC" -eq 2 ]; then
+    echo "SKIP pty drzewo Home/End: brak modulu pty (Windows)"
+elif "$PY" "$REPO/tui/tree.py" --keys 'end,home,right,down,space,enter' --spec "$TRD/a.json" --out "$TRD/out-k.json" >/dev/null 2>&1;      [ "$(tjq "$TRPO" action)" = '"next"' ] && [ "$(cat "$TRPO")" = "$(cat "$TRD/out-k.json")" ]; then
+    ok "tree: pty -- Home/End jako ESC[1~/ESC[4~ (PuTTY) dzialaja jak Home/End (wynik = --keys end,home,...), nie zamykaja drzewa jak Esc"
+else
+    bad "tree: pty Home/End z PuTTY" "rc=$TRPTRC" "$(cat "$TRPO" 2>/dev/null)" "$(cat "$TRD/out-k.json" 2>/dev/null)"
+fi
 rm -rf "$TRD"
 
 # ============================================================================
@@ -3789,9 +3881,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3808,9 +3904,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}inna
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
