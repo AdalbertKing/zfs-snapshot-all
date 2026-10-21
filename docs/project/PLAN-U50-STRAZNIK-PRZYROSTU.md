@@ -25,8 +25,10 @@ niekompresowalny -- alarm.
 
 ## Zakres
 
-- Datasety „nasze” jak w bezpieczniku (U35): lokalne linie `delsnaps.sh` w zarządzanych blokach crontabów
-  (z `-R` dzieci). Działa na źródle i na kolektorze (odebrane migawki mają te same bloki).
+- Datasety „nasze” jak w bezpieczniku (U35, po REV-20261021-158): lokalne linie `delsnaps.sh` z configów hosta
+  (`jobs.<host>.conf`, `jobs.<host>.<konto>.conf`) wyrenderowanych przez `gen-cron.sh -c` jako root (z `-R` dzieci);
+  nie crontaby -- blok w crontabie dowolnego konta niczego nie dowodzi. Config, katalog, gen-cron.sh i lib-cron.sh
+  muszą należeć do roota i nie być zapisywalne dla g/o, inaczej kod 1 i alert. Działa na źródle i na kolektorze.
 - Pomijane z nazwą w `--plan`: `compression=off` (każdy przyrost wygląda na niekompresowalny), za mało historii.
 - Dataset z szyfrowaniem w gościu (np. BitLocker na dysku VM) ma zawsze ~1,00 -- alarm zostaje tylko na skok
   przyrostu; opisane jako ograniczenie.
@@ -63,13 +65,13 @@ instalowany przez deploy.
 | # | przypadek | dowód |
 |---|---|---|
 | L1 | 5 migawek z małym przyrostem tekstowym, potem 300 MB losowych | alarm na ostatniej |
-| L2 | to samo, ale 300 MB kompresowalnych (tekst) | brak alarmu |
+| L2 | to samo, ale ok. 300 MB kompresowalnych (dane w stylu bazy) | brak alarmu |
 | L3 | instalacja przez deploy: skrypt w /root/scripts, linia crona w bloku hosta | `--check-only` widzi linię |
 
 ## Wyniki (2026-10-21)
 
 Suita `test/alertmail`: 27 wierszy `PASS growth-guard` (T1-T12, start jak w REV-20261021-157, pary mieszane,
-ponowienie alarmu po nieudanym powiadomieniu, crontab nie do przeczytania) -- zielone; z atrapą skryptu (nic nie robi) 15 z pierwszych 20 czerwonych, 5 zielonych to
+ponowienie alarmu po nieudanym powiadomieniu, wtedy jeszcze: crontab nie do przeczytania) -- zielone; z atrapą skryptu (nic nie robi) 15 z pierwszych 20 czerwonych, 5 zielonych to
 przypadki „bez alarmu”. Na żywo pve10 (pula z pliku, `lz4`, osobny katalog crontabów, kroki co 8 s):
 L1 -- 300 MiB losowych przy normie kilku MiB: tempo 26,9x, kompresja 1,00 -- ALARM, jeden mail; L2 -- 305 MiB
 danych w stylu bazy: tempo 147,8x, kompresja 7,60 -- bez alarmu. L3 (instalacja przez deploy) -- po scaleniu,
@@ -96,11 +98,18 @@ FAIL). Test na żywo z prawdziwym cronem na pve10 (pula `gwlive`, 2026-10-21/22)
 
 ## Poprawki po sprawdzeniu tekstu z kodem (2026-10-21)
 
-- Błąd odczytu pojedynczego crontabu ginął w potoku -- teraz najpierw zapis do pliku, potem analiza; test.
+- Źródło datasetów przeniesione z crontabów na configi hosta przez gen-cron (obietnica z odpowiedzi na
+  REV-20261021-158); testy: blok w crontabie innego konta pominięty, gen-cron zapisywalny dla innych, brak configu,
+  config nie do wyrenderowania. `test/alertmail` 183/0.
+
+- (Gdy strażnik czytał jeszcze crontaby) błąd odczytu jednego crontabu ginął w potoku -- najpierw zapis do pliku,
+  potem analiza; ta sama zasada została przy configach.
 - Para z alarmem trafiała do „ocenionych” przed wysłaniem alertu; gdy powiadomienie zawiodło, alarm przepadał --
   teraz zapis dopiero po wysłaniu, następny bieg ponawia; test.
 - Treść maila: „przyrost między migawkami” (nie „najnowszy”), bo alarm może dotyczyć wcześniejszej pary.
-- Warunek tempa bez pułapki `A && B || C` przy normie 0; brak zapisu stanu = alert.
+- Warunek tempa bez pułapki `A && B || C` przy normie 0; katalog stanu nie do zapisania przy starcie = alert.
+  Późniejszy nieudany zapis (pamięć oszacowań, ocenione pary) nie jest sprawdzany: skutek to ponowne liczenie,
+  ocena tylko najnowszej pary (jak w pierwszym biegu) albo powtórzony alarm -- nie cisza.
 - Ograniczenia dopisane: ręczna migawka minutę po godzinowej daje krótką parę -- alarm tylko, gdy w tej minucie
   przybyło >= `min_mib` niekompresowalnych danych (co samo jest podejrzane); długie szyfrowanie przez wiele par
   podnosi medianę dopiero, gdy zajmie połowę okna (7 dni godzinowych to ok. 168 par).

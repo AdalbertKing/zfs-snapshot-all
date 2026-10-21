@@ -2114,8 +2114,17 @@ rm -rf "$gs_dir"
 # `zfs send -nP` / `-nPc` z tabeli rozmiarow. Norma: 100 MiB/h; najnowszy przyrost zmieniany
 # per przypadek. Tylko alarm -- skrypt nigdy nie wola zfs destroy.
 # ---------------------------------------------------------------------------
-gw_dir=$(mktemp -d); mkdir -p "$gw_dir/bin" "$gw_dir/cron" "$gw_dir/state"
+gw_dir=$(mktemp -d); mkdir -p "$gw_dir/bin" "$gw_dir/cron" "$gw_dir/state" "$gw_dir/conf"
 cp "$HS/growth-guard.sh" "$gw_dir/guard.sh"; cp "$HS/alert-env.sh" "$gw_dir/alert-env.sh"
+: > "$gw_dir/conf/jobs.h.conf"; : > "$gw_dir/bin/lib-cron.sh"
+# Atrapa gen-cron (jak przy capacity-guard): "renderuje" config hosta h = blok z cron/root.
+# Inne pliki w cron/ to crontaby innych kont -- strażnik ich nie czyta (REV-20261021-158 F2).
+cat > "$gw_dir/bin/gencron" <<'GC'
+#!/bin/bash
+[ -n "${GW_GENCRON_FAIL:-}" ] && { echo "config zepsuty" >&2; exit 2; }
+[ "$1" = -c ] && [ "${2##*/}" = jobs.h.conf ] || exit 2
+awk '/^# BEGIN zfs-backup-managed/ { on = 1 } on { print } /^# END zfs-backup-managed/ { on = 0 }' "$GW_DIR/cron/root"
+GC
 cat > "$gw_dir/bin/zfs" <<'ST'
 #!/bin/bash
 echo "zfs $*" >> "$GW_DIR/calls"
@@ -2170,7 +2179,8 @@ gw_run() {   # <settings alert> [args] -> rc; mail/out/calls in $gw_dir
     [ -n "${GW_KEEP_STATE:-}" ] || rm -rf "$gw_dir/state"
     ( [ -n "${GW_ENV_KEEP:-}" ] || unset ZFS_GROWTH_ALERT ZFS_GROWTH_FACTOR ZFS_GROWTH_MIN_MIB ZFS_GROWTH_MAX_RATIO_PCT ZFS_GROWTH_DAYS
       PATH="$gw_dir/bin:$PATH" GW_DIR="$gw_dir" SETTINGS_FILE="$gw_dir/settings.ini" ZFS_ALERT_CONF="${GW_CONF:-/dev/null}" \
-      ZFS_GUARD_CRONTABS="$gw_dir/cron" ZFS_GROWTH_STATE="$gw_dir/state" ZFS_NOTIFY_SCRIPT="$gw_dir/bin/notify" \
+      ZFS_GUARD_CONFDIR="${GW_CONFDIR:-$gw_dir/conf}" ZFS_GUARD_CONFHOST=h ZFS_GUARD_GENCRON="$gw_dir/bin/gencron" ZFS_GUARD_TRUST_UID="$(id -u)" \
+      ZFS_GROWTH_STATE="$gw_dir/state" ZFS_NOTIFY_SCRIPT="$gw_dir/bin/notify" \
       ZFS_GROWTH_LOCK="${GW_LOCK:-$gw_dir/lock}" TMPDIR="${GW_TMP:-${TMPDIR:-/tmp}}" bash "$gw_dir/guard.sh" "$@" ) > "$gw_dir/out" 2>&1
 }
 gw_nosend() { ! grep -q '^zfs send' "$gw_dir/calls" 2>/dev/null; }
@@ -2321,14 +2331,37 @@ if [ "$gw_rc" -eq 1 ] && [ -z "$gw_first" ] && [ "$gw_rc2" -eq 1 ] && grep -q 't
 else
     bad "growth-guard: ponowienie alarmu" "rc=$gw_rc/$gw_rc2" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
-# Crontab, ktorego nie da sie przeczytac (tu katalog zamiast pliku) -- blad, nie ciche pominiecie.
-mkdir -p "$gw_dir/cron/zepsuty"
-gw_run on; gw_rc=$?
-rmdir "$gw_dir/cron/zepsuty"
-if [ "$gw_rc" -eq 1 ] && grep -q 'NIE działa w całości' "$gw_dir/mail" && grep -q 'zepsuty' "$gw_dir/mail"; then
-    ok "growth-guard: crontab nie do przeczytania -- rc 1, alert z nazwa pliku"
+# Config, ktorego gen-cron nie wyrenderuje -- blad, nie ciche pominiecie.
+GW_GENCRON_FAIL=1 gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'NIE działa w całości' "$gw_dir/mail" && grep -q 'jobs.h.conf' "$gw_dir/mail" && gw_nosend; then
+    ok "growth-guard: config nie do wyrenderowania -- rc 1, alert z nazwa configu, zadnych oszacowan"
 else
-    bad "growth-guard: crontab nie do przeczytania" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+    bad "growth-guard: config nie do wyrenderowania" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+# REV-20261021-158 F2 (zrodlo zaufania): blok "zfs-backup-managed" w crontabie innego konta nie
+# czyni datasetu "naszym" -- tank/x jest tylko tam i nie moze byc oceniany.
+gw_data 2000 2000
+{ echo "# BEGIN zfs-backup-managed"; echo "21 * * * * $GW_J /r/delsnaps.sh -L z \"tank/x\" \"automated_hourly\" -H24"; echo "# END zfs-backup-managed"; } > "$gw_dir/cron/intruz"
+gw_run on; gw_rc=$?
+rm -f "$gw_dir/cron/intruz"
+if grep -q 'tank/d: przyrost 2000 MiB' "$gw_dir/mail" && ! grep -q 'tank/x' "$gw_dir/mail" "$gw_dir/out" && ! grep -q 'tank/x@' "$gw_dir/calls"; then
+    ok "growth-guard: datasety tylko z configow hosta -- blok w crontabie innego konta pominiety"
+else
+    bad "growth-guard: zrodlo zaufania" "rc=$gw_rc" "$(cat "$gw_dir/mail" 2>/dev/null)" "$(grep 'tank/x' "$gw_dir/calls" | head -2)"
+fi
+chmod o+w "$gw_dir/bin/gencron"
+gw_run on; gw_rc=$?; chmod o-w "$gw_dir/bin/gencron"
+if [ "$gw_rc" -eq 1 ] && grep -q "nie ufam $gw_dir/bin/gencron" "$gw_dir/mail" && gw_nosend; then
+    ok "growth-guard: gen-cron zapisywalny dla innych -- nie ufam, rc 1, alert, zadnych oszacowan"
+else
+    bad "growth-guard: zaufanie gen-cron" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
+fi
+mkdir -p "$gw_dir/pusty"
+GW_CONFDIR="$gw_dir/pusty" gw_run on; gw_rc=$?
+if [ "$gw_rc" -eq 1 ] && grep -q 'brak configu' "$gw_dir/mail" && gw_nosend; then
+    ok "growth-guard: brak configu hosta -- rc 1, alert, zadnych oszacowan"
+else
+    bad "growth-guard: brak configu" "rc=$gw_rc" "$(cat "$gw_dir/mail" "$gw_dir/out" 2>/dev/null)"
 fi
 gw_data 2000 2000
 GW_LOCK="$gw_dir/nie-ma/g.lock" gw_run on; gw_rc=$?

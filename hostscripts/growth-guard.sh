@@ -13,13 +13,16 @@
 # (co najmniej 3 przyrosty historii -- inaczej brak normy); L >= min_mib; L/C <= max_ratio_pct/100.
 # Konwersja baz (duży, ale kompresowalny przyrost) nie alarmuje; szyfrowanie plików -- tak.
 #
-# „Nasze” datasety: lokalne linie delsnaps.sh w blokach zfs-backup-managed crontabów hosta
-# (z -R także dzieci) -- jak w capacity-guard.sh. Na źródle i na kolektorze. Pomijane z
+# „Nasze” datasety: lokalne linie delsnaps.sh z configów hosta wyrenderowanych przez gen-cron.sh
+# jako root (z -R także dzieci) -- to samo źródło zaufania co capacity-guard.sh
+# (REV-20261021-158 F2): NIE crontaby, bo znacznik bloku w crontabie dowolnego konta niczego
+# nie dowodzi. Config, jego katalog, gen-cron.sh i lib-cron.sh -- własność roota, bez zapisu dla
+# grupy/innych; inaczej nic nie oceniam (kod 1, alert). Na źródle i na kolektorze. Pomijane z
 # powodem w --plan: compression=off (każdy przyrost wygląda na niekompresowalny), za mało
 # historii. Dysk VM szyfrowany w gościu ma zawsze ~1,00 -- tam zostaje sam skok przyrostu.
 # Ocenione pary w $STATE/seen (jeden alarm na parę); pierwszy bieg na datasecie tylko
 # zapamiętuje historię i ocenia najnowszą parę. Oszacowania zapamiętane po GUID-ach pary.
-# Każdy błąd odczytu (crontaby, zfs list, zfs send -nP, zła liczba) = kod 1 i alert
+# Każdy błąd odczytu (configi, zfs list, zfs send -nP, zła liczba) = kod 1 i alert
 # "strażnik nie działa" -- nigdy ciche "w porządku".
 #
 # Ustawienia [growth] w settings.ini (F10), kolejność env > settings.ini > zfs-alert.conf >
@@ -40,7 +43,14 @@ MINMIB="${ZFS_GROWTH_MIN_MIB:-1024}"
 MAXR="${ZFS_GROWTH_MAX_RATIO_PCT:-110}"
 DAYS="${ZFS_GROWTH_DAYS:-7}"
 NOTIFY="${ZFS_NOTIFY_SCRIPT:-/root/scripts/notify-fail.sh}"
-CRONDIR="${ZFS_GUARD_CRONTABS:-/var/spool/cron/crontabs}"
+CONFDIR="${ZFS_GUARD_CONFDIR:-/etc/zfs-snapshot-all}"
+# gen-cron.sh z checkoutu, który instaluje deploy (dowiązanie /usr/local/bin/zfs-backup);
+# zapas -- zwykła ścieżka. Zaufanie sprawdza trusted_path przy użyciu.
+_zb="$(readlink -f /usr/local/bin/zfs-backup 2>/dev/null)"
+GENCRON="${ZFS_GUARD_GENCRON:-${_zb:+$(dirname "$_zb")/gen-cron.sh}}"
+[ -n "$GENCRON" ] && [ -e "$GENCRON" ] || GENCRON="${ZFS_GUARD_GENCRON:-/root/scripts/zfs-snapshot-all/gen-cron.sh}"
+CONFHOST="${ZFS_GUARD_CONFHOST:-$(hostname -s 2>/dev/null || hostname)}"
+TRUSTUID="${ZFS_GUARD_TRUST_UID:-0}"   # właściciel zaufanych plików; suita ustawia swoje uid
 STATE="${ZFS_GROWTH_STATE:-/var/lib/zfs-snapshot-all/growth-guard}"
 HOST="$(hostname -s 2>/dev/null || hostname)"
 
@@ -100,18 +110,36 @@ errs=""
 err() { errs="$errs
 $*"; say "BŁĄD: $*"; }
 
-# ---- datasety z lokalnych linii retencji (zarządzane bloki) -> "ds<TAB>rec" ----------
+# ---- datasety z lokalnych linii retencji (configi hosta przez gen-cron) -> "ds<TAB>rec" ----
+trusted_path() {   # <ścieżka> -> 0, gdy plik i jego katalog należą do roota i nie są zapisywalne przez g/o
+    local x st
+    for x in "$1" "$(dirname "$1")"; do
+        st="$(stat -c '%u %a' "$x" 2>/dev/null)" || return 1
+        set -- $st
+        [ "$1" = "$TRUSTUID" ] || return 1
+        [ $(( 8#$2 & 8#022 )) -eq 0 ] || return 1
+    done
+    return 0
+}
 roots() {
-    [ -d "$CRONDIR" ] && [ -r "$CRONDIR" ] && [ -x "$CRONDIR" ] || { echo "nie da się czytać $CRONDIR" >&2; return 1; }
-    local f
-    # Najpierw do pliku, POTEM analiza: błąd czytania jednego crontabu nie może zniknąć w
-    # potoku (kod wyjścia potoku to kod ostatniego polecenia).
-    for f in "$CRONDIR"/*; do
-        [ -e "$f" ] || continue
-        [ -r "$f" ] || { echo "nie da się czytać $f" >&2; return 1; }
-        awk '/^# BEGIN zfs-backup-managed/ { on = 1; next } /^# END zfs-backup-managed/ { on = 0; next } on' "$f" 2>/dev/null \
-            || { echo "błąd odczytu $f" >&2; return 1; }
-    done > "$WORK/managed" || return 1
+    [ -d "$CONFDIR" ] && [ -r "$CONFDIR" ] && [ -x "$CONFDIR" ] || { echo "nie da się czytać $CONFDIR" >&2; return 1; }
+    trusted_path "$GENCRON" || { echo "nie ufam $GENCRON (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
+    # gen-cron.sh dołącza lib-cron.sh (source) -- jako root, więc ten plik też musi być zaufany.
+    trusted_path "$(dirname "$GENCRON")/lib-cron.sh" || { echo "nie ufam $(dirname "$GENCRON")/lib-cron.sh (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
+    local c n=0
+    # Najpierw do pliku, POTEM analiza: błąd jednego configu nie może zniknąć w potoku.
+    : > "$WORK/managed"
+    for c in "$CONFDIR/jobs.$CONFHOST.conf" "$CONFDIR/jobs.$CONFHOST".*.conf; do
+        [ -e "$c" ] || continue
+        trusted_path "$c" || { echo "nie ufam $c (właściciel inny niż root albo zapisywalny dla grupy/innych)" >&2; return 1; }
+        if ! bash "$GENCRON" -c "$c" >> "$WORK/managed" 2> "$WORK/gc.err"; then
+            # Config bez żadnej reguły to nie błąd -- po prostu nic z niego nie wynika.
+            grep -q 'no send/prune/monitor rules resolved' "$WORK/gc.err" \
+                || { echo "gen-cron $c: $(head -1 "$WORK/gc.err")" >&2; return 1; }
+        fi
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || { echo "brak configu $CONFDIR/jobs.$CONFHOST.conf ani jobs.$CONFHOST.<konto>.conf" >&2; return 1; }
     awk '
         function tok(s,    i, c, t, n) {
             n = 0; i = 1
@@ -142,7 +170,7 @@ roots() {
         }' "$WORK/managed" | sort -u
 }
 if ! roots > "$WORK/roots" 2> "$WORK/roots.err"; then
-    err "odczyt crontabów: $(head -1 "$WORK/roots.err")"
+    err "odczyt configów: $(head -1 "$WORK/roots.err")"
 fi
 
 # ---- rozwinięcie do datasetów z ich kompresją ----------------------------------------
