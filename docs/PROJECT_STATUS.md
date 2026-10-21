@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8028bd57407f24fb -->
+<!-- status-covers-digest: c551bf9e58d7d684 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **U68: jedno drzewo wyboru datasetów -- tryb jednej pozycji; Przeglądaj kopię go używa (2026-10-21; `finisz/drzewo`).**
+  Właściciel: „zginęło okno z rozwijającymi się gałęziami; to musi być jednolite w całym pakiecie”. Przeglądaj kopię
+  wybierała dataset z płaskiej listy (pve10: 66 pozycji, 32 strzałki do `hdd/labbrowse/v-ntfs`). `tree.py` ma tryb
+  jednej pozycji (Enter wybiera, bez kratek; wybrać da się dataset z migawką, gałęzie nad nim są do rozwijania). Na
+  żywo: 14 klawiszy zamiast 33, Wstecz z migawki wraca na drzewo z kursorem na tym samym datasecie. Wybór celu
+  w kreatorze relacji przejdzie na to drzewo razem z przebudową kreatora (U66). Testy: `browse` 26/0, `tui` 369/0.
 
 - **Katalog kopii relacji zapisany w rekordzie (2026-10-21; `finisz/landing`).**
   Właściciel: „co będzie, jak zmienię nazwę relacji, a dane mam pod starą?”. Katalog pod celem był wyliczany z

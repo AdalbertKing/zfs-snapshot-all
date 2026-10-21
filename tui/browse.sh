@@ -360,15 +360,32 @@ browse_and_exit() {
 step=1
 while :; do
     case $step in
-    1)  menu=(); i=0
-        while IFS=$'\t' read -r n t; do
-            lbl="$n"; [ "$t" = volume ] && lbl="$n  (dysk VM)"
-            menu+=("d$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
-        done <"$TMPD/cand.tsv"
-        geom
-        wt --title "$TITLE: który dataset?" --menu "Kopia zostanie zamontowana TYLKO DO ODCZYTU." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || exit 0
-        k="${WT_OUT#d}"
-        DS="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f1)"; TYP="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f2)"
+    1)  # U68 (właściciel 2026-10-21: "zginęło okno z rozwijającymi się gałęziami; to musi być
+        # jednolite w całym pakiecie"): to samo drzewo co przy wyborze datasetów do kopii, w trybie
+        # JEDNEJ pozycji. Wybrać da się dataset z migawką; gałęzie nad nim są do rozwijania.
+        # Wcześniej płaska lista (pve10: 66 pozycji, 32 strzałki do hdd/labbrowse/v-ntfs).
+        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$TITLE: który dataset?" "${DS:-}" <<'PYEOF' || exit 1
+import sys, json
+names, types = [], {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    p = line.rstrip("\n").split("\t")
+    if p and p[0]:
+        names.append(p[0]); types[p[0]] = p[1] if len(p) > 1 else "filesystem"
+allnames = set(names)
+for n in names:                       # gałęzie nad kandydatami: do nawigacji, nie do wyboru
+    parts = n.split("/")
+    for i in range(1, len(parts)):
+        allnames.add("/".join(parts[:i]))
+spec = {"title": sys.argv[3], "single": True, "selectable": names,
+        "legend": " Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija",
+        "roots": [sys.argv[4]] if sys.argv[4] else [],
+        "datasets": [{"name": n, "type": types.get(n, "filesystem"), "used": None} for n in sorted(allnames)]}
+json.dump(spec, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYEOF
+        ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || exit 0
+        DS="$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")).get("roots") or [""]; print(r[0])' "$TMPD/tree-out.json" | tr -d '\r')"
+        TYP="$(awk -F'\t' -v d="$DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
+        [ -n "$DS" ] && [ -n "$TYP" ] || exit 0
         step=2 ;;
     2)  zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "$DS" 2>/dev/null \
             | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"

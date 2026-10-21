@@ -129,6 +129,22 @@ mkfake readlink <<'EOF'
 [ "${1:-}" = -f ] && { echo "$2"; exit 0; }
 exec "$(PATH=/usr/bin:/bin command -v readlink)" "$@"
 EOF
+# U68: wybór datasetu to drzewo (tree.py) w trybie jednej pozycji. Atrapa rozumie te same
+# odpowiedzi co dawne menu: "OK dN" = N-ty wybieralny dataset (kolejność cand.tsv), inna = Esc.
+mkfake tree <<'EOF'
+#!/bin/bash
+spec=""; out=""
+while [ $# -gt 0 ]; do case "$1" in --spec) spec="$2"; shift 2 ;; --out) out="$2"; shift 2 ;; *) shift ;; esac; done
+cp "$spec" "$D/tree-spec.last" 2>/dev/null
+line="$(head -n 1 "$D/answers")"; tail -n +2 "$D/answers" >"$D/answers.new"; mv -f "$D/answers.new" "$D/answers"
+case "$line" in "OK d"*) k="${line#OK d}" ;; *) printf '{"action":"back","roots":[]}' >"$out"; exit 1 ;; esac
+python3 - "$spec" "$out" "$k" <<'P'
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8")); sel = s.get("selectable") or []
+k = int(sys.argv[3])
+json.dump({"action": "next", "roots": [sel[k]] if k < len(sel) else []}, open(sys.argv[2], "w"))
+P
+EOF
 for n in udevadm modinfo clear sleep mc; do
     printf '#!/bin/bash\nexit 0\n' >"$FB/$n"; chmod +x "$FB/$n"
 done
@@ -154,7 +170,7 @@ vol_case(){   # <partfs>: dysk VM, snapdev hidden/local
 run_script(){   # -> rc w $rc, stdout+stderr w $D/out
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
-    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
+    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out" 2>&1
     rc=$?
@@ -163,7 +179,7 @@ key(){ printf '%s' "$1" | sha256sum | cut -c1-32; }
 run_bg(){   # <id> [pauza]: sesja w tle, wstrzymana po montazu (i w punkcie <pauza>); rc w $D/rc.<id>
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
-    ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
+    ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" TESTID="$1" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out.$1" 2>&1
       echo $? >"$D/rc.$1" ) &
@@ -398,6 +414,18 @@ nolg '^zfs set snapdev=hidden'; fin
 else
     echo "SKIP 19-25: brak flock (REV-161/162 wymagaja flock; uruchom na hoscie albo w CI)"
 fi
+
+# ---- U68: wybór datasetu = drzewo w trybie jednej pozycji -------------------------------
+new_case "26 U68: wybór datasetu to drzewo (single), wybieralne = datasety z migawką, gałęzie nad nimi do nawigacji"
+printf 'tank/fs filesystem\n' >"$D/datasets"; printf 'OK d0\nOK p0\n' >"$D/answers"; run_script
+python3 - "$D/tree-spec.last" <<'P' >"$D/spec.chk" 2>&1
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+names = [d["name"] for d in s["datasets"]]
+print("single=%s sel=%s tank=%s fs=%s" % (s.get("single"), s.get("selectable"), "tank" in names, "tank/fs" in names))
+P
+grep -q "single=True sel=\['tank/fs'\] tank=True fs=True" "$D/spec.chk" || errs+=("spec drzewa: $(cat "$D/spec.chk")")
+has out "=== Odmontowane"; fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
