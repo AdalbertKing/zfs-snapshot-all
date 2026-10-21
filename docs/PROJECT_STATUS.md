@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 64f37b65e1e0f451 -->
+<!-- status-covers-digest: e97b5d834f6aec8a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -105,7 +105,10 @@
   włożeniu” -- od U52 minuta), H-3 (po kreatorze F7 działał na starej liście, bo dane odświeżały się w tle --
   po oknie KAŻDY klawisz czeka na świeże dane; drugie przejście na żywo: usunięcie i ponowne założenie `calapula`,
   Enter, strzałka, F7 od razu -> bieg `calapula`), H-6 (pusta nazwa). H-4 (replika drzewa z datasetami-kontenerami bez migawek kończyła
-  bieg rc=1) -- naprawione w snapget v2.76.
+  bieg rc=1) -- naprawione w snapget v2.76. E (zmiana adresu `cb`): adres, pod którym
+  nic nie odpowiada, trafiał na listę zmian, a WYKONAJ zapisywał go w rekordzie (`endpoint_change_pending`) i padał
+  z komunikatem o pliku zakresu -- okno sprawdza teraz najpierw połączenie z host:port (5 s) i mówi wprost, że
+  nikt nie odpowiada; adres zostaje bez zmian (na żywo: 192.168.28.250 odrzucony, `cb` dalej `active`).
 
 - **FINISZ U67: replika całej puli i okna odmowy z przyczyną (2026-10-21; `finisz/U67`).**
   Właściciel na pve10: replika z zaznaczoną całą pulą `hdd` padła z „gen-cron.sh could not render the proposed
