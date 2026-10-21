@@ -3850,6 +3850,7 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
     printf '%b\n' "${2:-enter\nenter}" > "$ER/gridkeys"
     printf '%s\n' "${ER_TREE:-}" | tr '|' '\n' > "$ER/treekeys"
     ( export NR_DIR="$ER" NR_FIX="$P10" WHIPTAIL="$ER/bin/whiptail" ZFS_BACKUP="$ER/bin/zb" PYTHON="$PY"
+      export ADDR_PROBE="${ER_PROBE:-true}"   # E-2: atrapa sprawdzenia, czy pod adresem ktoś odpowiada
       export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
       export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$ER/bin/tree"
       bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
@@ -3978,6 +3979,22 @@ if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Por
     ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# E-2 (kampania na zywo, pve10 2026-10-21): adres, pod ktorym nic nie odpowiada, NIE trafia na
+# liste zmian -- okno mowi o tym od razu, zadnego activate (wczesniej activate zapisywal go w
+# rekordzie jako endpoint_change_pending i padal z komunikatem o pliku zakresu).
+EROUT=$(ER_PROBE=false er_run "0${T}adres
+0${T}192.168.28.250
+0${T}
+1${T}
+1${T}
+0${T}
+"); ERRC=$?
+if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'nic nie odpowiada' "$ER/wt.log" && grep -qF 'NIE został zmieniony' "$ER/wt.log" \
+   && ! grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | grep -qF '192.168.28.250 [zmiana]'; then
+    ok "edit-relation: E-2 -- adres bez odpowiedzi: komunikat od razu, nie ma go na liscie zmian, zadnego activate"
+else
+    bad "edit-relation: E-2 adres bez odpowiedzi" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -F 'odpowiada' "$ER/wt.log" | cut -c1-200)"
 fi
 # Zly znak w adresie: komunikat, zadnego activate.
 EROUT=$(er_run "0${T}adres

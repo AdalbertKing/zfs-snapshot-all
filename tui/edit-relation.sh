@@ -141,7 +141,24 @@ address_flow() {
         # LISTA ZMIAN (właściciel 2026-10-19: "nie można zmienić wiele ustawień i na końcu
         # zaimplementować, tylko po jednym kroku"): adres czeka na liście, WYKONAJ jest jedno,
         # w "Zapisz zmiany". Ten sam adres co zapisany = brak zmiany.
-        if [ "$new" = "$cur" ] || [ "$new" = "${cur%:22}" ]; then P_HOST=""; else P_HOST="$new"; fi
+        if [ "$new" = "$cur" ] || [ "$new" = "${cur%:22}" ]; then P_HOST=""; return 0; fi
+        # E-1/E-2 (kampania na żywo, pve10 2026-10-21): adres, pod którym nic nie odpowiada,
+        # szedł na listę zmian bez słowa, a po WYKONAJ activate zapisał go w rekordzie
+        # (endpoint_change_pending) i padł z komunikatem o pliku zakresu. Tu, zanim cokolwiek
+        # trafi na listę: czy na host:port w ogóle ktoś odpowiada (TCP, 5 s). To NIE jest
+        # sprawdzenie tożsamości -- to robi activate (klucz hosta, wspólna migawka).
+        local ph="${new%%:*}" pp=22
+        case "$new" in *:*) pp="${new##*:}" ;; esac
+        info "Adres hosta: $NAME" "Sprawdzam, czy pod $ph:$pp ktoś odpowiada (do 5 s)..."
+        # ADDR_PROBE: tylko testy (atrapa "odpowiada"/"nie odpowiada"); na hoście nieustawione.
+        if ! { if [ -n "${ADDR_PROBE:-}" ]; then $ADDR_PROBE "$ph" "$pp"; else timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$ph" "$pp"; fi; } 2>/dev/null; then
+            wt --title "Adres hosta: $NAME -- brak odpowiedzi" --msgbox "Pod $ph:$pp nic nie odpowiada (połączenie TCP, 5 s).
+
+Adres NIE został zmieniony. Sprawdź adres i czy host jest
+włączony (z linii poleceń GUI: ping $ph), potem wpisz go jeszcze raz." 12 "$W"
+            continue
+        fi
+        P_HOST="$new"
         return 0
     done
 }
