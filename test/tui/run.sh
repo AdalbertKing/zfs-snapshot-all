@@ -2361,6 +2361,24 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 W17A=$(nr_run "$(w17_ans 'grant|raw')" NR_FIX="$NRE" NR_TREE="$NRTK"); W17L1="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 W17B=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRE" NR_TREE="$NRTK")
 W17C=$(nr_run "$(w17_ans 'grant')" NR_TREE="$NRTK"); W17L3="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
+# W17D (kampania wariantow 2026-10-22): zaszyfrowane zrodlo, admin NIE zaglada do Zaawansowanych
+# -- domyslne --raw ustawialo sie dopiero w oknie Dodatkowe, wiec komenda szla BEZ --raw (kopia
+# odszyfrowana na kolektorze). Teraz domyslne liczy sie po wyborze datasetow.
+W17D=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}hdd/backups
+0${T}default
+0${T}pve9b
+0${T}create
+0${T}
+0${T}
+" NR_FIX="$NRE" NR_TREE="$NRTK")
+if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log"; then
+    ok "new-relation: W17 zaszyfrowane zrodlo bez wchodzenia w Zaawansowane -- komenda i tak z --raw"
+else
+    bad "new-relation: W17 raw bez Zaawansowanych" "$W17D"
+fi
 if has "$W17A" " --raw " && has "$W17L1" ' ~ raw ~ ' && hasE "$W17L1" 'raw ~ [^~]* ~ ON' \
    && ! has "$W17B" " --raw " && has "$W17B" "CMD: " && ! has "$W17L3" ' ~ raw ~ ' && ! has "$W17C" " --raw "; then
     ok "new-relation: W17 zaszyfrowane zrodlo -- 'Wyslij zaszyfrowane' zaznaczone domyslnie, --raw w komendzie; odznaczone = bez --raw; zwykle zrodlo = bez pozycji"

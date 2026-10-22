@@ -222,7 +222,19 @@ step_datasets() {
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err" | tr -d '\r')" 12 "$W"
         return 1
     fi
-    basket_step
+    basket_step || return $?
+    raw_default
+}
+# Kampania wariantów 2026-10-22 (W2): domyślne "wyślij zaszyfrowane" ustawiało się dopiero w
+# oknie Dodatkowe -- kto kliknął Utwórz bez zaglądania tam, dostawał kopię zaszyfrowanego
+# źródła ODSZYFROWANĄ na kolektorze (W17 mówi: domyślnie raw). Liczone zaraz po wyborze
+# datasetów; wybór admina z okna Dodatkowe (RAW_SEEN) zostaje.
+raw_default() {
+    if [ "$MODE" != snaponly ] && [ "${NOCOPY:-0}" != 1 ] && basket_encrypted; then
+        [ "${RAW_SEEN:-0}" = 1 ] || { RAW=1; RAW_SEEN=1; }
+    else
+        RAW=0
+    fi
 }
 
 # --- krok 5: dokąd (tylko backup) ---------------------------------------------
