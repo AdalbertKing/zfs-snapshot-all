@@ -3959,7 +3959,7 @@ case "$1" in
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"24","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
+    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -4186,6 +4186,17 @@ if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z 192.168.28.99   nazwa r1   konto r
     ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne (wartosci slowami, nie jak w configu), pod kreska tylko Zapisz zmiany"
 else
     bad "edit-relation: karta U65" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-700)"
+fi
+# Retencja zrodla na karcie = liczby z CONFIGU (show-tiers), nie nazwa profilu zrodla: na pve10
+# zmiana tabela (set-tiers 168 -> 72) zostawila "tyle samo co w kopii" (2026-10-22).
+EROUT=$(ER_SRC_KEEP=72 er_run "1${T}
+"); ERK1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+EROUT=$(er_run "1${T}
+"); ERK2="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+if hasE "$ERK1" 'Retencja źródła +godzinowe 72, dobowe 7 ~' && hasE "$ERK2" 'Retencja źródła +tyle samo co w kopii ~'; then
+    ok "edit-relation: karta -- retencja zrodla z configu (godzinowe 72, dobowe 7), rowna celowi = 'tyle samo co w kopii'"
+else
+    bad "edit-relation: retencja zrodla na karcie" "$(printf '%s' "$ERK1" | grep -o 'Retencja[^~]*')" "$(printf '%s' "$ERK2" | grep -o 'Retencja[^~]*')"
 fi
 # Zmieniona pozycja ma '*' (i [zmiana]); niezmieniona -- dwie spacje.
 EROUT=$(er_run "0${T}adres
