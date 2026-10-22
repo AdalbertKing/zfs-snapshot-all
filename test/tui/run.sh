@@ -4040,7 +4040,8 @@ case "$1" in
     list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
-    edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
+    edit-relation)  if [ -n "${ER_NEWREL:-}" ]; then echo "FATAL: edit-relation: profile 'd30h24' stamps [x] on hdd/ct, the installed relationship stamps [] -- no family in common. That is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."; exit 1; fi
+                    case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
                         # X6: ER_HAND = config zmieniony recznie (minuta 29), plan wpisze 31.
                         [ -n "${ER_HAND:-}" ] && printf -- '--- proponowany config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
                     esac ;;
@@ -4490,6 +4491,22 @@ if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=r1-szablon --de
     ok "edit-relation: EDIT_DO=zapisz -- zwykly szablon (bez --hidden), widoczny na F5; karta zmian sie nie pokazuje (U65, 's' na F3)"
 else
     bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# Kampania 2026-10-22: szablon z inna rodzina migawek (czasownik: "is a NEW relationship") --
+# po odmowie z powrotem LISTA szablonow, nie ostrzezenie/tabela (petla bez wyjscia).
+EROUT=$(ER_NEWREL=1 er_run "0${T}harmon
+0${T}d30h24
+0${T}
+0${T}
+1${T}
+1${T}
+" "enter"); ERRC=$?
+if grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';' | grep -qF 'odmówił -- nic nie zmieniono ;--title ~ Zmień relację r1 -- użyj szablonu' \
+   && grep -q -- '^edit-relation r1 --profile=d30h24 .*--plan$' "$ER/zb.log" \
+   && ! grep -qE '^edit-relation .*--yes' "$ER/zb.log"; then
+    ok "edit-relation: odmowa 'NOWA relacja' po wyborze szablonu wraca do listy szablonow (nie w kolko ostrzezenie -> tabela)"
+else
+    bad "edit-relation: odmowa NEW relationship" "rc=$ERRC" "$(grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';')"
 fi
 # X6 (wlasciciel 2026-10-12): reczna zmiana configu relacji -- plan mowi to na GORZE,
 # zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
