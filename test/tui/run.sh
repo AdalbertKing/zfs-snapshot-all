@@ -2425,6 +2425,7 @@ SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1
 if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
    && ! has "$SOWO" "--exclude-family" && ! has "$SOWO" " --raw " \
    && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF '[x] z migawkami' "$NR/tree.log" && ! grep -qF 'Co kopiować z' "$NR/tree.log" \
+   && grep -qF 'Bez kopii: migawki na 192.168.28.98' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
    && has "$SOWP" '--default-item ~ d7h24' && ! grep -q 'Dokąd\|Pomijane prefiksy\|W ŹRÓDLE KOPII' "$NR/wt.log" \
    && grep -q 'Jak długo trzymać migawki na źródle' "$NR/wt.log"; then
     ok "new-relation: Migawki zdalnie -- --mode=snaponly bez --target, bez pola Dokąd/prefiksów/retencji źródła kopii, domyślny szablon d7h24, jest okno 'Jak długo trzymać migawki na źródle'"
@@ -2992,6 +2993,31 @@ if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Rekord relacji 'nazwa' ZOSTAŁ" && h
     ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
 else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
+fi
+
+# 3i2 (kampania 2026-10-22): relacja LOKALNA bez kopii -- okno mowilo "Zrodlo (?): bez zmian --
+#      a local relationship ..." i "Kopii domyslnie NIE ruszam." przy relacji, ktora kopii nie ma.
+cat > "$NR/bin/zb-del3" <<'EOF'
+#!/bin/bash
+[ "$1" = delete-relation ] || exit 9
+case " $* " in *" --yes "*) echo "delete-relation: done"; exit 0 ;; esac
+echo "delete-relation '$2' (state=active, peer=):"
+echo "  1. collector : remove-client $2  -- config sections and cron lines of THIS relationship"
+echo "  2. source    : skipped -- a local relationship -- source and copy are on this host"
+echo "  3. record    : clean-relationships.sh --purge=$2  -- frees the NAME (it refuses anything still LIVE)"
+echo "  4. copies    : none -- a snaponly relationship copies nothing here; its snapshots on the source are NOT destroyed"
+echo "plan only. Re-run with --yes to do it. Nothing was changed."
+EOF
+chmod +x "$NR/bin/zb-del3"
+rm -rf "$DRD"; mkdir -p "$DRD"
+printf '1\t\n' > "$DRD/answers"   # checklist: Wstecz -> nic nie zmieniono
+( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del3"
+  bash "$REPO/tui/delete-relation.sh" lok ) >/dev/null 2>&1 </dev/null
+DR3="$(grep -F -e '--checklist' "$DRD/wt.log" | head -1)"
+if [ -n "$DR3" ] && ! has "$DR3" 'Źródło (' && ! has "$DR3" 'local relationship' && ! has "$DR3" 'NIE ruszam' && ! has "$DR3" 'SKASUJ KOPIE'; then
+    ok "okno usuwania: relacja lokalna bez kopii -- bez 'Źródło (?)', bez angielskiego powodu, bez 'Kopii NIE ruszam'"
+else
+    bad "okno usuwania: relacja lokalna bez kopii" "$(printf '%s' "$DR3" | cut -c1-400)"
 fi
 
 # 3j. U16 (wlasciciel 2026-10-19): bez roota do zrodla okno NIE proponuje sprzatania zrodla
@@ -4638,7 +4664,7 @@ case "$*" in
         printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
         exit 0 ;;
     "list -H -p -o name,used,type")      # tryb --from-copy: wszystkie datasety hosta, bez -r
-        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs hdd hdd/data hdd/foo/bar tank/b/hdd/data; do
+        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs usb9/replica/hdd/data/docs usb9/replica/tank/x hdd hdd/data hdd/foo/bar tank/b/hdd/data; do
             printf '%s\t1000\tfilesystem\n' "$d"
         done
         exit 0 ;;
@@ -4854,6 +4880,32 @@ if grep -qF -- ' ~ hdd/data ~ ' "$RW/wt.log"; then      # argv okna jest wielowi
     ok "restore --from-copy: usb9/backups/<host>/hdd/data -> podpowiedz 'hdd/data'"
 else
     bad "restore --from-copy: podpowiedz dla wzorca backups" "$(tail -n 6 "$RW/wt.log" | cut -c1-300)"
+fi
+
+# c3b (kampania 2026-10-22): kopia z NOSNIKA repliki (<nosnik>/replica/<pula>/...) -> podpowiedz
+# <pula>/restore/<czlon>, nie na wyjmowany nosnik; pula spoza hosta (tank) -> jak dotad, na nosnik.
+printf '{"action":"next","roots":["usb9/replica/hdd/data/docs"],"excl":{},"recursion":"flat"}
+' > "$RW/t-cp-rep.json"
+printf '{"action":"next","roots":["usb9/replica/tank/x"],"excl":{},"recursion":"flat"}
+' > "$RW/t-cp-rep2.json"
+printf '0	hdd/restore/docs
+0	p0
+1	
+0	
+' > "$RW/answers"
+rw_copy "$RW/t-cp-rep.json" --from-copy
+R3B="$(grep -F inputbox "$RW/wt.log" | tail -n 1)"
+printf '0	usb9/restore/x
+0	p0
+1	
+0	
+' > "$RW/answers"
+rw_copy "$RW/t-cp-rep2.json" --from-copy
+R3C="$(grep -F inputbox "$RW/wt.log" | tail -n 1)"
+if has "$R3B" ' ~ hdd/restore/docs' && ! has "$R3B" 'usb9/restore' && has "$R3C" ' ~ usb9/restore/x'; then
+    ok "restore --from-copy: usb9/replica/hdd/data/docs -> podpowiedz hdd/restore/docs (pula zrodla, nie nosnik); pula spoza hosta -> usb9/restore/x"
+else
+    bad "restore --from-copy: podpowiedz z nosnika repliki" "rep: $(printf '%s' "$R3B" | cut -c1-300)" "obca: $(printf '%s' "$R3C" | cut -c1-300)"
 fi
 
 # c4. dwa korzenie -> dwa pola 'dokad', obie listy w kolejnosci drzewa

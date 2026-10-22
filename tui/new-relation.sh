@@ -951,6 +951,8 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           build_argv install; cmd_oneline; echo; build_argv
           echo
           if [ "$NOCOPY" -eq 1 ]; then echo "Cel: brak (same migawki).  Szablon: $PROFILE."
+          # Kampania 2026-10-22: migawki zdalne dostawały zdanie lustra ("ta sama ścieżka").
+          elif [ "$MODE" = snaponly ]; then echo "Bez kopii: migawki na $HOST, jego datasety.  Szablon: $PROFILE."
           else echo "Cel: ${TARGET:-(lustro: ta sama ścieżka)}.  Trzyma tutaj: $PROFILE.  U źródła: ${SRCPROF:-jak tutaj}."; fi
           if [ -n "$EXFAM" ]; then echo "Pomijane migawki z prefiksami: ${EXFAM//,/, }."
           else echo "Pomijane migawki: żadne (kopiowane wszystkie)."; fi
