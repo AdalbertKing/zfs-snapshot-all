@@ -5117,11 +5117,10 @@ fi
 
 # Kampania 3 (2026-10-22, na zywo pve10): listwa klawiszy to dolny wiersz, ktory curses
 # konczy kolumne wczesniej -- F4 przy 80 ucinal "Ctrl-R Odświe". Na kazdym ekranie przy 80
-# kolumnach listwa ma najwyzej 79 znakow.
+# kolumnach tresc listwy (bez dopelnienia spacjami) ma najwyzej 79 znakow.
 lw_bad=""
 for lw_s in zadania relacje transfery szablony nosniki odzysk; do
-    lw_n="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen "$lw_s" --width 80 2>&1 | tail -1 | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip("
-")))')"
+    lw_n="$(screen "$lw_s" "" --width 80 | tail -1 | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip()))')"
     [ "${lw_n:-99}" -le 79 ] || lw_bad="$lw_bad $lw_s=$lw_n"
 done
 if [ -z "$lw_bad" ]; then

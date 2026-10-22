@@ -2460,7 +2460,7 @@ def key_bar_parts(active, width, actions=()):
             break
     if room >= len(line) + 16:
         line += u"  Ctrl-R Odśwież"
-    return fit(line, room), marks
+    return fit(fit(line, room), width), marks   # dopelniona do width: kazdy wiersz ma szerokosc ekranu
 
 
 def push_key_bar(scr, active, width, actions=()):
