@@ -3259,6 +3259,15 @@ if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
 else
     bad "new-relation: walidacja adresu" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log" 2>/dev/null)"
 fi
+# Kampania 2026-10-22: krok 1 i okno konta to MENU, nie radiolista -- w radioliscie Enter bral
+# zaznaczona kropke, a nie podswietlona pozycje (strzalka na "Lustro" i Enter = backup).
+NRM1="$(grep -F 'Jaka relacja?' "$NR/wt.log" | head -1)"
+if has "$NRM1" '--menu' && ! has "$NRM1" '--radiolist' && has "$NRM1" '--default-item ~ backup ~' \
+   && ! grep -F 'Na jakim koncie' "$NR/wt.log" | grep -qF -- '--radiolist'; then
+    ok "new-relation: krok 1 (rodzaj) i konto to menu z kursorem na obecnym -- Enter na pozycji ja wybiera"
+else
+    bad "new-relation: krok 1 / konto jako menu" "$(printf '%s' "$NRM1" | cut -c1-300)"
+fi
 # 8. kazde okno z wyborem ma rozmiar liczbowy i szerokosc <= 100 (nie na sztywno ponad ekran)
 if ! grep -E -- '--(checklist|radiolist|inputbox)' "$NR/wt.log" >/dev/null; then
     bad "new-relation: brak okien w dzienniku"
