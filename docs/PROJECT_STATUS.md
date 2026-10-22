@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e4e6251e19d8715b -->
+<!-- status-covers-digest: fd9b61c0ea8c4aa0 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,15 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, blok F: prawa ramka okien na ekranie, pomoc bez sierot (`fix/right-border`).** Zrzut tmux na pve10
+  (80×24 i 120×30): żadne okno nie miało prawej ramki. Pętla curses cięła każdy wiersz do `w - 1`, a układ ma
+  szerokość ekranu -- tak było od września. Teraz wiersze idą w pełnej szerokości; tylko dolny wiersz (listwa
+  klawiszy) kończy się kolumnę wcześniej, bo prawy dolny róg to błąd curses. Pomoc F1 przy 80 kolumnach: każdy
+  ręcznie łamany wiersz zawijał się osobno i zostawiał sieroty („czasy”, „sortowanie” same w wierszu); teraz ogon
+  zawiniętego wiersza łączy się z dalszym ciągiem tego samego opisu. Listwa klawiszy F4 przy 80 kolumnach
+  ucinała „Ctrl-R Odświe…” -- listwa mieści się teraz w 79 kolumnach dolnego wiersza. Test `tui`: trzy nowe
+  przypadki.
 
 - **Kampania 3, blok B: `list-jobs` i panele pokazują harmonogram, który cron naprawdę ma (`fix/listjobs-schedule`).**
   Dla relacji z blokiem `[relation:]` szczebel nazywa się `profile__relacja-<nazwa>__<szczebel>`, a sekcja datasetu
