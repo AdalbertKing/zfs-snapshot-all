@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a19b251ab2fe02db -->
+<!-- status-covers-digest: a9cae0bc7de1141a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -107,7 +107,9 @@
 - **U64/U66: okno postępu zamiast czarnego ekranu po WYKONAJ (2026-10-22; `finisz/postep`).** Właściciel:
   „czarny ekran ponad 15 sekund”. `wt-lib.sh` ma `run_progress` (polecenie w tle, wyjście do dziennika, okno co
   sekundę: ile trwa i ostatnie linie; stdin z /dev/null, więc pytanie kończy się odmową, a nie zawieszeniem; Ctrl-C
-  przerywa) i `result_box` (GOTOWE krótko albo przyczyna odmowy i koniec dziennika). Używają go: nowa relacja,
+  przerywa) i `result_box` (GOTOWE krótko albo przyczyna odmowy i koniec dziennika). Infobox dostaje
+  `TERM=linux`: przy `TERM=xterm` (PuTTY) whiptail rysował go na drugim ekranie i zdejmował w tej samej chwili --
+  okno postępu i każde „Sprawdzam…” były niewidoczne (sprawdzone na żywo w tmux na pve10, E98). Używają go: nowa relacja,
   zmiana relacji, usuwanie relacji, replika (instalacja, od nowa, usuwanie), ustawienia. Odzysk (F11) nadal na
   terminalu. Test `tui` 372/0 (pve9).
 
