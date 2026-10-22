@@ -1100,6 +1100,38 @@ mv "$PEERS/lab1.conf.away" "$PEERS/lab1.conf"
 rm -f "$CLI"/*.conf; rm -rf "$PSTATE"/* "$REVD"
 
 
+# ---------------------------------------------------------------------------
+# LEAVE TAKES THE RESTORE GRANT WITH IT (campaign 2026-10-22, pve9): after
+# --allow-restore the same account holds create/receive/rollback, --leave revoked
+# only the copy grant and its residue check refused -- every delete-relation after
+# a restore stopped half-way on the source. --leave now revokes the restore grant
+# first, by the --deny-restore path. --as=root manifest: no account to remove, so
+# the test touches only this suite's own state directories.
+# ---------------------------------------------------------------------------
+mkdir -p "$REL/lab2"
+printf 'PEER_JOIN_ROLE="pull"\nPEER_JOIN_AS="root"\nPEER_JOIN_ACCOUNT="zfsbackup-pve9"\nPEER_JOIN_GRANTED_DATASETS="hdd/a"\n' > "$PEERS/lab2.conf"
+dr --allow-restore=lab2 >/dev/null
+[ -f "$GRANTS/lab2" ] || bad "leave: setup -- the restore grant for lab2 exists" "$(ls "$GRANTS")"
+: > "$ZFS_TRACE"
+out="$(dr --leave=lab2)"; rc=$?
+if [ "$rc" -eq 0 ] && has "still holds a restore grant on this host -- taking it back first" "$out" && has "TAKEN BACK" "$out" \
+   && [ ! -f "$GRANTS/lab2" ] && grep -q -- '^unallow -u zfsbackup-pve9 .* -- hdd/a$' "$ZFS_TRACE" && has "fully torn down" "$out"; then
+    ok "leave: a restore grant of the leaving collector is taken back first (delegation revoked, record gone), then the leave completes"
+else
+    bad "leave: restore grant taken back by --leave" "rc=$rc" "$out" "$(cat "$ZFS_TRACE")"
+fi
+# Control: no grant -> no deny step, the leave runs as before.
+printf 'PEER_JOIN_ROLE="pull"\nPEER_JOIN_AS="root"\nPEER_JOIN_ACCOUNT="zfsbackup-pve9"\nPEER_JOIN_GRANTED_DATASETS="hdd/a"\n' > "$PEERS/lab2.conf"
+mkdir -p "$REL/lab2"
+out="$(dr --leave=lab2)"; rc=$?
+if [ "$rc" -eq 0 ] && ! has "restore grant" "$out" && has "fully torn down" "$out"; then
+    ok "leave: ...and without a restore grant the leave runs as before"
+else
+    bad "leave: control without a grant" "rc=$rc" "$out"
+fi
+rm -rf "$REL/lab2" "$PEERS/lab2.conf"
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

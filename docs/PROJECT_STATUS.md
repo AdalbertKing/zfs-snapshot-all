@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 9dfcf482777a307f -->
+<!-- status-covers-digest: d28ef3b5627130e7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 2: usunięcie relacji po odzysku (`kamp/leave`).** Na żywo: po odzysku na źródle
+  (zgoda `--allow-restore=pve10` na pve9) usunięcie relacji `pve9` stanęło w połowie -- `deploy.sh --leave` odebrał
+  prawa kopii, ale konto miało jeszcze prawa ze zgody na odzysk i sprawdzenie resztek odmówiło. Każde usunięcie
+  relacji po odzysku kończyło się tak samo. Teraz `--leave` najpierw cofa zgodę na odzysk odchodzącego kolektora
+  (ta sama ścieżka co `--deny-restore`), potem zwykłe sprzątanie. Test `restoregrant` +2 przypadki (nowy pada na
+  kodzie sprzed poprawki; trzy stare porażki przy uruchomieniu jako root są takie same na `main`).
 
 - **Kampania „marudny admin” 2026-10-22, paczka 1 (`kamp/esc`).** Na żywo na pve10 (pve9 jako źródło): założenie
   backupu na koncie delegowanym, F7, zmiana relacji (dodanie i usunięcie datasetu, retencja źródła, porzucenie
