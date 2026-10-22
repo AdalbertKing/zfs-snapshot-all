@@ -5094,6 +5094,23 @@ else
     bad "zfs-tui: zawijanie pomocy F1" "rc=$?"
 fi
 
+# Kampania 3 (2026-10-22, na zywo pve10): paint tnie kazdy wiersz do w - 1, a uklad byl
+# rysowany na w -- prawa ramka okna nigdy nie trafiala na ekran (od wrzesnia). Petla
+# curses rysuje teraz uklad na w - 1. Petli curses nie da sie tu uruchomic; dowodem jest
+# zrzut tmux na pve10, ten przypadek pilnuje tylko, zeby wywolania nie wrocily do w.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^def curses_loop.*?(?=^def )", src, re.S | re.M)
+calls = re.findall(r"ui\.render\(([^)]*)\)", m.group(0)) if m else []
+sys.exit(0 if calls and all(c.replace(" ", "") == "w-1,h" for c in calls) and "line[:w - 1]" in m.group(0) else 1)
+PYEOF
+then
+    ok "zfs-tui: petla curses rysuje uklad na w - 1, wiec prawa ramka miesci sie w kolumnach, ktore paint pisze"
+else
+    bad "zfs-tui: uklad w petli curses na w - 1" "rc=$?"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -5533,6 +5533,8 @@ def curses_loop(ui):
     def paint(stdscr, scr, h, w):
         stdscr.erase()
         for y, line in enumerate(scr.lines[:h]):
+            # paint nie pisze w ostatnia kolumne (tnie do w - 1), wiec uklad
+            # rysujemy na w - 1 -- inaczej prawa ramka okna nigdy nie trafia na ekran.
             line = line[:w - 1]
             base = 0
             if y in scr.bars:
@@ -5671,7 +5673,7 @@ def curses_loop(ui):
                     pass
                 stdscr.refresh()
             else:
-                paint(stdscr, ui.render(w, h), h, w)
+                paint(stdscr, ui.render(w - 1, h), h, w)
             # Na ekranie transferow postep zyje: co 2 s czytamy TYLKO progress
             # (to pliki, nie komenda), i curses maluje roznice, nie ekran.
             if ui.window and ui.window[0] == "output" and ui.window[1].get("proc") is not None and ui.window[1]["proc"].poll() is None:
@@ -5720,7 +5722,7 @@ def curses_loop(ui):
             if res == "quit":
                 return
             if getattr(ui, "pending_refresh", False):
-                paint(stdscr, ui.render(w, h), h, w)
+                paint(stdscr, ui.render(w - 1, h), h, w)
                 ui.run_pending()
             if res == "shell" and ui.pending_shell:
                 line, ui.pending_shell = ui.pending_shell, None
