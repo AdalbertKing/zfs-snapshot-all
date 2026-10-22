@@ -1,7 +1,7 @@
 # Engine freeze
 
 <!-- frozen: snapsend.sh 100755 21d0cd686ed5fa16adb969328e27344ad6ef36f0 -->
-<!-- frozen: snapget.sh 100755 064e55419755637553b0e0035c5bdbd544b39da1 -->
+<!-- frozen: snapget.sh 100755 d00bd091e823fabb0f33138f7e6befa838fa1e8a -->
 <!-- frozen: delsnaps.sh 100755 834b449905a0eb3f14ce1301c4323980f9ed2bc3 -->
 <!-- frozen: check-snap-age.sh 100755 dfd5bdd3e3af9e8659d8e74b290f203e88159983 -->
 <!-- frozen: lib-zfs-snap.sh 100644 f8cbd9fa3874d2262b9b6f370a86b952e0212f72 -->
@@ -1129,8 +1129,9 @@ Owner-authorized refreezes:
   twin: none.
 
 - 2026-10-22 (snapget.sh): **H-4b -- a mirror target that does not exist yet has an empty
-  list, not an unreadable one.** PENDING OWNER DIRECTION: prepared on `kamp/snapget-container`,
-  NOT merged until the owner unfreezes snapget for it. v2.76 -> v2.77.
+  list, not an unreadable one.** Owner direction in chat, 2026-10-22: "Odmrażam silnik pod
+  H-4b: dokończ kamp/snapget-container, testy, PR, scal na zielonym." -- given for exactly
+  this change. v2.76 -> v2.77.
   - Measured on pve10 (live campaign 2026-10-22): the first run of the whole-pool replica
     `calapula` after a new relationship (pve9) ended rc 1 -- mirror_target on the container
     replab/replica/hdd/backups/192.168.28.99 could not read its "own snapshot list" because

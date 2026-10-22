@@ -97,6 +97,13 @@
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
+- **H-4b: pierwsza replika po nowej relacji (`kamp/snapget-container`, snapget v2.77, odmrożenie właściciela
+  2026-10-22).** Replika całej puli (calapula na pve10) w pierwszym biegu po nowej relacji kończyła się rc 1:
+  lustro sięgało kontenera `hdd/backups/<host>`, którego na nośniku jeszcze nie było, i uznawało jego listę migawek
+  za nieczytelną. Teraz cel, który NIE ISTNIEJE, ma pustą listę i decydują dotychczasowe reguły (pusto po obu
+  stronach: nic do lustra; migawki u źródła bez wspólnej bazy: odmowa). Cel istniejący, ale nieczytelny: odmowa jak
+  dotąd. Test `mirrorguest` (+3; przypadek brakującego celu pada na v2.76).
+
 - **Kampania 2026-10-22, paczka 10: co zmienia silnik (`kamp/teksty2`).** Na żywo na pve10 (lustro cb, kompresja
   na „bez”): karta zmiany relacji mówiła „Silnik  fabryczne -> zmiana [zmiana]” -- nie było widać, co się zmienia.
   Teraz słowami z okna silnika, np. „kompresja: nie [zmiana]”, „historia: tylko różnica do najnowszej”.
