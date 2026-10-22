@@ -8324,7 +8324,7 @@ pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of th
       PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
       ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
       load_ssh_opts() { LOAD_SSH_OPTS=(); }
-      emit_client_sections "$wf" pk ) > "$PK/$prof.log" 2>&1 || return 1
+      emit_client_sections "$wf" pk ${PK_NEW:+1} ) > "$PK/$prof.log" 2>&1 || return 1
     cp "$wf" "$PK/last.conf"
     sed -n '/^\[dataset:/,/^$/p' "$wf"
 }
@@ -8345,7 +8345,7 @@ fi
 # ...and a GENUINE passive sync on a two-tier family-stamping profile (d7h24) is a
 # config gen-cron accepts: its tiers pick up (-e) and create nothing, so the
 # "creates automated_... but prunes automated_hourly" lint must not refuse it.
-PK_CREATED="2026-10-22 14:00:00" pk_emit d7h24 >/dev/null; rc=$?
+PK_NEW=1 PK_CREATED="2026-10-22 14:00:00" pk_emit d7h24 >/dev/null; rc=$?
 { printf '[defaults]\n\thost_label = x\n\n'; cat "$PK/last.conf"; } > "$PK/gc.conf"
 gc_out=$(bash "$REPO/gen-cron.sh" -c "$PK/gc.conf" 2>&1); gc_rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'PASSIVE consumption' "$PK/d7h24.log" && [ "$gc_rc" -eq 0 ]; then
