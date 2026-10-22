@@ -194,9 +194,10 @@ fi
 # could destroy automated_ snapshots owned by another/manual policy that this
 # relationship never backs up. The target prune stays recursive over the store.
 # X27: one prune line per tier and side, each on its own family.
-src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -G -L lb .*"rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M12)')"
+# default is FLAT since 2026-10-22 (owner: "z GFS na płaski, m3") -- no -G, monthly 3.
+src_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -L lb .*"rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M3)')"
 src_recursive="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data" "automated_' | grep -c -- ' -R ')"
-tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -R -L lb .*"hdd/backups/rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M12)')"
+tgt_prune="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh -R -L lb .*"hdd/backups/rpool/data" "automated_(hourly" -H24|daily" -D7|weekly" -W4|monthly" -M3)')"
 if [ "$src_prune" -eq 4 ] && [ "$tgt_prune" -eq 4 ]; then
     ok "102/rendered cron prunes source AND target independently, same ladder"
 else
@@ -213,7 +214,7 @@ else
 fi
 # only the tool-owned pattern is matched -> manual/foreign snapshots survive
 # (the source prune's delsnaps pattern is "automated_", never "*").
-if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/data" "automated_hourly"' \
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh .*"rpool/data" "automated_hourly"' \
         && ! printf '%s\n' "$out" | grep -qE 'delsnaps\.sh[^\n]*"rpool/data" "\*"'; then
     ok "102/source prune is bounded to automated_ -- manual snapshots survive"
 else
@@ -221,8 +222,8 @@ else
 fi
 # each root gets its OWN source prune (multi-source), plus one target prune.
 out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/retm.conf")"
-if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/data" "automated_hourly"' \
-        && printf '%s\n' "$out" | grep -qE 'delsnaps\.sh -G .*"rpool/vmstore" "automated_hourly"' \
+if printf '%s\n' "$out" | grep -qE 'delsnaps\.sh .*"rpool/data" "automated_hourly"' \
+        && printf '%s\n' "$out" | grep -qE 'delsnaps\.sh .*"rpool/vmstore" "automated_hourly"' \
         && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups/rpool/data\]' \
         && printf '%s\n' "$out" | grep -q '^\[prune:hdd/backups/rpool/vmstore\]'; then
     ok "102/each root gets its own source prune, and its own landing prune on the target"
@@ -244,9 +245,9 @@ lb_render_retain() {  # <config> <scope> -> the -M value on that scope's monthly
         bash "$GEN" -c "$1" 2>/dev/null | grep -oE "\"$2\" \"automated_monthly\" -M[0-9]+" | grep -oE 'M[0-9]+' | head -1
 }
 GEN="$REPO/gen-cron.sh"
-if grep -qE '^\s*monthly\.retain\s*=\s*-M12$' "$WORK/ind-cand.conf" \
-   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'rpool/data')" = "M12" ] \
-   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'hdd/backups/rpool/data')" = "M12" ]; then
+if grep -qE '^\s*monthly\.retain\s*=\s*-M3$' "$WORK/ind-cand.conf" \
+   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'rpool/data')" = "M3" ] \
+   && [ "$(lb_render_retain "$WORK/ind-cand.conf" 'hdd/backups/rpool/data')" = "M3" ]; then
     ok "104 F1/both sides start from the profile's retention, as one common field"
 else
     bad "104 F1/both sides start from the profile's retention" \
@@ -254,11 +255,11 @@ else
 fi
 lb_side_retain() {  # <side> <value> -> the candidate with monthly split, that side at <value>
     local other; [ "$1" = source ] && other=target || other=source
-    sed -E "s/^(\s*)monthly\.retain(\s*)=.*/\1monthly.$1_retain = $2\n\1monthly.${other}_retain = -M12/" "$WORK/ind-cand.conf"
+    sed -E "s/^(\s*)monthly\.retain(\s*)=.*/\1monthly.$1_retain = $2\n\1monthly.${other}_retain = -M3/" "$WORK/ind-cand.conf"
 }
 lb_side_retain source -M36 > "$WORK/mut-src.conf"
 if [ "$(lb_render_retain "$WORK/mut-src.conf" 'rpool/data')" = "M36" ] \
-        && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups/rpool/data')" = "M12" ]; then
+        && [ "$(lb_render_retain "$WORK/mut-src.conf" 'hdd/backups/rpool/data')" = "M3" ]; then
     ok "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged"
 else
     bad "104 F1/editing only SOURCE retention changes SOURCE, leaves TARGET unchanged" \
@@ -266,14 +267,14 @@ else
 fi
 lb_side_retain target -M60 > "$WORK/mut-tgt.conf"
 if [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups/rpool/data')" = "M60" ] \
-        && [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')" = "M12" ]; then
+        && [ "$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')" = "M3" ]; then
     ok "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged"
 else
     bad "104 F1/editing only TARGET retention changes TARGET, leaves SOURCE unchanged" \
         "tgt=$(lb_render_retain "$WORK/mut-tgt.conf" 'hdd/backups/rpool/data') src=$(lb_render_retain "$WORK/mut-tgt.conf" 'rpool/data')"
 fi
 # negative control: the COMMON field is what couples them -- edit it and both move.
-sed -E 's/^(\s*monthly\.retain\s*=\s*)-M12$/\1-M36/' "$WORK/ind-cand.conf" > "$WORK/shared-mut.conf"
+sed -E 's/^(\s*monthly\.retain\s*=\s*)-M3$/\1-M36/' "$WORK/ind-cand.conf" > "$WORK/shared-mut.conf"
 if [ "$(lb_render_retain "$WORK/shared-mut.conf" 'rpool/data')" = "M36" ] \
         && [ "$(lb_render_retain "$WORK/shared-mut.conf" 'hdd/backups/rpool/data')" = "M36" ]; then
     ok "104 F1/negctl: the common field couples both sides (why the split fields matter)"
@@ -1896,7 +1897,7 @@ done
 out="$( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
         CLIENTS_DIR="$(mktemp -d)" bash "$ZB" --source=rpool/data --target='' --profile=default --recursive=flat --name=lb --config="$WORK/nocopy-rec.conf" 2>&1 )"; rc=$?
 _snapR="$(printf '%s\n' "$out" | grep -cE 'snapsend\.sh .* -R .*"rpool/data"$')"
-_pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh .* -R .*"rpool/data"')"
+_pruneR="$(printf '%s\n' "$out" | grep -cE 'delsnaps\.sh( .*)? -R .*"rpool/data"')"   # flat line starts "delsnaps.sh -R"
 _pruneN="$(printf '%s\n' "$out" | grep -E 'delsnaps\.sh .*"rpool/data"' | grep -cv -- ' -R ')"
 if [ "$rc" -eq 0 ] && [ "$_snapR" -ge 1 ] && [ "$_pruneR" -ge 1 ] && [ "$_pruneN" -eq 0 ]; then
     ok "A': --target='' --recursive=flat snapshots AND prunes the subtree (-R on both, no non-recursive prune left)"

@@ -537,7 +537,10 @@ step_profile() {
     sync_from_chain && chain=1
     while IFS=$'\t' read -r n w c q f sh hd; do
         [ -n "$n" ] || continue
-        [ "${hd:-0}" = 1 ] && continue
+        # Ukryte (od 2026-10-22 także fabryczne spoza piątki) nie idą na listę -- z jednym
+        # wyjątkiem: szablon polecany przy łańcuchu (passive-flat), bez którego zalecenie
+        # wskazywałoby coś, czego nie da się wybrać.
+        [ "${hd:-0}" = 1 ] && ! { [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ]; } && continue
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
         # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
