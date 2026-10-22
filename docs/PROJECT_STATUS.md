@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8da11fc7d0d0acf0 -->
+<!-- status-covers-digest: e4e6251e19d8715b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -103,6 +103,11 @@
   szukał pod pełną nazwą, nie znajdował i brał harmonogram bloku: panel relacji ab mówił „Następny 22:01”, a
   cron wysyła o :15/:16. Teraz po pełnej nazwie szuka też krótkiej. Na żywo pve10: `list-jobs` = 15/15/16 i
   25/25/26, tak samo jak crontab. Test `zfsbackup --section listjobs` 30/0 (na main 29/1).
+
+- **Kampania 3, blok F: pomoc F1 zawijana, nie przycinana (`fix/help-wrap`).** Na 80×24 wiersze pomocy (pisanej pod
+  ~100 kolumn) kończyły się „kop…”, „domyś…” -- treść ginęła. Teraz okno pomocy zawija za długi wiersz na spacji, z
+  kontynuacją wciętą do kolumny opisu. Test `tui` 392/0: na prawdziwym HELP żaden wiersz nie przekracza okna, nic
+  nie jest przycięte, żadne słowo nie ginie (pada na main).
 
 - **Kampania 3, bloki D i F: F7 dwa razy i lista szablonów na 80×24 (`fix/f7-busy-80col`).** (D) Dwa biegi tej
   samej relacji naraz (F7 dwa razy albo F7 w trakcie crona) kończyły się „did NOT finish (rc=75)” i rc 1 -- choć

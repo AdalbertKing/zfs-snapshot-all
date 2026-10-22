@@ -3249,8 +3249,35 @@ def snap_pair_lines(d, width, side, now):
     return out
 
 
-def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc zamyka   strzałki/PgUp/PgDn przewijają"):
-    """Okno na wierzchu ekranu: ramka podwojna, tresc przewijana."""
+def wrap_hanging(lines, avail):
+    """Kampania 3 (2026-10-22, 80x24): pomoc F1 pisana pod ~100 kolumn byla w 80 PRZYCINANA
+    ("kop…", "domyś…") -- tresc ginela. Za dlugi wiersz lamany na spacji; kontynuacja wcieta
+    tam, gdzie zaczyna sie opis ("  F2  Zadania    |co chodzi..."), a gdy kolumny nie ma --
+    tak jak wiersz."""
+    import re
+    out = []
+    for line in lines:
+        if len(line) <= avail:
+            out.append(line)
+            continue
+        m = re.match(r"^(\s*\S.{0,22}?\s{2,})(?=\S)", line)
+        hang = len(m.group(1)) if m and len(m.group(1)) < avail // 2 else len(line) - len(line.lstrip(" "))
+        first, rest = True, line
+        while len(rest) > avail:
+            cut = rest.rfind(" ", hang + 1 if not first else 1, avail + 1)
+            if cut <= (hang if not first else 0):
+                cut = avail
+            out.append(rest[:cut].rstrip())
+            rest = " " * hang + rest[cut:].lstrip()
+            first = False
+        out.append(rest)
+    return out
+
+
+def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc zamyka   strzałki/PgUp/PgDn przewijają", wrap=False):
+    """Okno na wierzchu ekranu: ramka podwojna, tresc przewijana (wrap: zawijana do szerokosci)."""
+    if wrap:
+        lines = wrap_hanging(lines, width - 4)
     scr = Screen()
     # Pod oknem zostaje linia polecen i listwa klawiszy (wlasciciel 2026-10-18).
     keep = base.lines[-2:] if getattr(base, "cmd_y", None) is not None and len(base.lines) >= 3 else []
@@ -5372,7 +5399,7 @@ def _ui_render(self, width, height):
     if self.window:
         kind, obj = self.window
         if kind == "pomoc":
-            scr, self.scroll = render_window(base, "Pomoc", HELP, self.scroll, width, height, self.ch)
+            scr, self.scroll = render_window(base, "Pomoc", HELP, self.scroll, width, height, self.ch, wrap=True)
         elif kind == "prompt":
             lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), ""]
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
