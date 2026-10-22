@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 16850b7359d301ad -->
+<!-- status-covers-digest: 8d07eeabb67afef7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **G-1: lustro na ścieżkę, która już jest na kolektorze (2026-10-22; `fix/mirror-guard`).** Kampania na pve10:
+  lustro pve9 `hdd/archive` -> pve10, który ma WŁASNY `hdd/archive`. Seed słusznie odmówił (brak wspólnej migawki,
+  bez `-f`), ale plan usunięcia tej relacji podawał potem `hdd/archive` pve10 jako „kopię” do skasowania -- jedna
+  kratka w oknie usuwania i znikają cudze dane. Teraz `delete-relation` przy lustrze, którego seed nigdy się nie
+  skończył, tych ścieżek nie proponuje („NOT offered”) i odmawia `--destroy-copies`; po udanym seedzie bez zmian.
+  Kreator ostrzega już w podsumowaniu, że taki dataset jest na tym hoście. Testy: `delrel` 25/0 (nowy przypadek
+  pada na kodzie sprzed poprawki), `tui` 378/0 (pve9); ostrzeżenie kreatora sprawdzone na żywo na pve10.
 
 - **U61: jeden werdykt o relacji (2026-10-22; `finisz/u61`).** Kampania: wiersz relacji „błąd biegu”, panel „Ostatni
   bieg OK” (z historii transferów) i wiersz datasetu „aktualne” (z monitora) mówiły trzy różne rzeczy. Nieudany
