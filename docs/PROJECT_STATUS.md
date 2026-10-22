@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 50961876608b5fa3 -->
+<!-- status-covers-digest: bc84868b250c9806 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,17 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Odzysk z kopii zaszyfrowanej (raw) działa; karta mówi „zaszyfrowane” (`kamp/raw-words`).** Kampania
+  wariantów, pve10 2026-10-22, W1+W2: relacja pve9 (zaszyfrowane `hdd/enc`, raw, zadania na koncie delegowanym
+  `zfsbackup`) -- utworzenie, kopia bez klucza na kolektorze (`keystatus unavailable`), F7: OK. Odzysk „obok” na
+  źródło padał: `zfs-restore.sh` wysyłał kopię zwykłym strumieniem, a ten wymaga klucza („dataset key must be
+  loaded”), i zostawiał na źródle dwa puste nieszyfrowane zbiory („CHANGED AND UNFINISHED”). Teraz kopia, której
+  klucza ten host nie ma, wraca raw (`-w`) -- klucz ma właściciel źródła; kopia z wczytanym kluczem (nośnik
+  otwarty przez odzysk z dysku) idzie jak dotąd. Na żywo: oba zbiory OK, `zfs load-key` kluczem źródła, plik
+  czytelny. Znane: dziecko odtworzone osobnym strumieniem staje się własnym korzeniem szyfrowania (klucz wczytuje
+  się dla każdego). Przy okazji karta kreatora z nieodwiedzonymi Dodatkowymi mówi „zaszyfrowane”, gdy raw jest
+  domyślne. Testy: `tui` 390/0, `restoregrant` (+2); nowe przypadki padają na main.
 
 - **Zaszyfrowane źródło: raw domyślnie także bez wchodzenia w Zaawansowane (`kamp/raw-default`).** Kampania
   wariantów, pve10 2026-10-22, W2: kreator ustawiał „Wyślij zaszyfrowane” (raw) domyślnie dopiero w oknie

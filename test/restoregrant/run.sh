@@ -539,6 +539,22 @@ check "argv: rewind sends without -f -- snapsend finds the base itself" \
 check "argv: replace carries -f, which is what destroys the target" \
       "-f -t -e -m SNAPNAME hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv replace)"
 check "argv: an undefined mode builds no command at all" "REFUSED" "$(argv obliterate)"
+# RAW (variant campaign, pve10 2026-10-22): a copy received raw has no key here, and a
+# plain send died "dataset key must be loaded" after the target levels were created. Its
+# key status decides: unavailable -> -w; a copy whose key is loaded -> unchanged.
+argv_ks() {   # <keystatus> <mode>
+    ( set -u
+      log(){ :; }
+      zfs() { case "$*" in "get -H -o value keystatus "*) printf '%s\n' "$ARGV_KS" ;; *) return 0 ;; esac; }
+      eval "$(lift_r restore_engine_argv)"
+      ARGV_KS="$1"
+      if restore_engine_argv hdd/copy/vm acct@pve1:rpool/data/vm SNAPNAME "$2" >/dev/null 2>&1
+      then printf '%s' "${RESTORE_ENGINE_ARGV[*]}"; else printf 'REFUSED'; fi )
+}
+check "argv: a raw copy (key unavailable here) is sent raw (-w)" \
+      "-t -e -m SNAPNAME -w hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv_ks unavailable create)"
+check "argv: a copy whose key is loaded is sent as before (no -w)" \
+      "-t -e -m SNAPNAME hdd/copy/vm acct@pve1:rpool/data/vm" "$(argv_ks available create)"
 # The two invariants that hold on EVERY form: a restore never creates a snapshot
 # on the copy (-e), and never lets the engine choose the point (-m).
 for m in create rewind replace; do

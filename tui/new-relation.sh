@@ -1058,7 +1058,9 @@ field_value() {   # <pole> -> wartość na karcie ("" = jeszcze nie ustawione)
         name)   echo "$RNAME" ;;
         acct)   a="$(account_name)"; echo "${a:-root}" ;;
         extra)
-            case "$VIS" in *" extra "*) ;; *) [ "$MODE" = local ] && echo "pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy" || echo "prawa stąd, zgoda na zamrażanie, pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy"; return ;; esac
+            # Kampania wariantów 2026-10-22: raw jest domyślne od kroku datasetów (raw_default), a karta
+            # nieodwiedzonych Dodatkowych go nie wymieniała -- nie było widać, że kopia pójdzie zaszyfrowana.
+            case "$VIS" in *" extra "*) ;; *) [ "$MODE" = local ] && echo "pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy" || echo "prawa stąd, zgoda na zamrażanie$([ "$RAW" -eq 1 ] && echo ', zaszyfrowane'), pomijane: $(printf '%s' "$EXFAM" | tr ',' '\n' | grep -c .) prefiksy"; return ;; esac
             a=""
             [ "$MODE" != local ] && [ "$GRANT" -eq 1 ] && a="prawa stąd"
             [ "$GQUIESCE" -eq 1 ] && [ "$GRANT" -eq 1 ] && a="${a:+$a, }zgoda na zamrażanie"

@@ -3823,6 +3823,14 @@ restore_engine_argv() {   # <copy dataset> <account@host:dataset> <exact snapsho
         RESTORE_ENGINE_RECURSED=1
     fi
     RESTORE_ENGINE_ARGV+=(-t -e -m "$point" )
+    # RAW (variant campaign, pve10 2026-10-22): a copy received raw (W17, --raw) has no key
+    # on this host, and a plain send of it dies "dataset key must be loaded" -- after the
+    # target levels were already created, leaving them CHANGED AND UNFINISHED. Such a copy
+    # goes back raw: the source owns the key. A copy whose key IS loaded (a medium opened
+    # by restore_copy_key_ready) is sent as before.
+    if [ "$(zfs get -H -o value keystatus "$copy" 2>/dev/null)" = unavailable ]; then
+        RESTORE_ENGINE_ARGV+=(-w)
+    fi
     # The relationship's own key, in the engine's flag spelling. Word-split
     # deliberately: these are flags and paths, none of which carry a space in
     # this project. Empty for a local restore, which opens no connection.
