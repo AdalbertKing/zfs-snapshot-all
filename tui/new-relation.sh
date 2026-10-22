@@ -219,7 +219,7 @@ step_datasets() {
     [ "$TREE_FOR" = "$(hostport)" ] || info "$(title 4 'Datasety')" "Pobieram listę datasetów z $HOST..."
     # load_tree zapamiętuje drzewo po hostport(); dla kopii lokalnej to "" -- tak samo.
     if ! load_tree; then
-        wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
+        wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err" | tr -d '\r')" 12 "$W"
         return 1
     fi
     basket_step
@@ -845,6 +845,17 @@ summary_text() {
             echo "UWAGA ŁAŃCUCH: źródło ma już migawki naszej rodziny (kopie innej relacji albo resztki starej)."
             echo "  Szablon $PROFILE dołoży tam WŁASNE migawki -- na kopiach innego kolektora to psuje jego kopie."
             echo "  Bez własnych migawek: pole Harmonogram -> $REC_PROFILE."
+        fi
+    fi
+    # G-1 (kampania 2026-10-22, pve10): lustro pisze pod TYMI SAMYMI nazwami co źródło; pve10
+    # miał własny hdd/archive i seed odmówił dopiero po założeniu relacji. Mówimy to tutaj.
+    if [ "$MODE" = sync ]; then
+        local _r _here=""
+        for _r in "${B_ROOT[@]}"; do zfs list -H -o name -- "$_r" >/dev/null 2>&1 && _here="${_here:+$_here, }$_r"; done
+        if [ -n "$_here" ]; then
+            echo "UWAGA: na TYM hoście już jest $_here -- lustro pisze pod tą samą nazwą."
+            echo "  Jeśli to nie jest wcześniejsza kopia tego źródła (wspólna migawka), seed odmówi i relacja"
+            echo "  zostanie w stanie 'seeding' -- niczego nie nadpisze. Inaczej: backup (kopie pod hdd/backups/<host>)."
         fi
     fi
     [ "$RAW" -eq 1 ] && echo "Wysyłka zaszyfrowana (raw): kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza."
