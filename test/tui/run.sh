@@ -2374,7 +2374,8 @@ W17D=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_FIX="$NRE" NR_TREE="$NRTK")
-if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log"; then
+if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
+   && grep -qF 'zgoda na zamrażanie, zaszyfrowane, pomijane' "$NR/wt.log"; then
     ok "new-relation: W17 zaszyfrowane zrodlo bez wchodzenia w Zaawansowane -- komenda i tak z --raw"
 else
     bad "new-relation: W17 raw bez Zaawansowanych" "$W17D"
