@@ -2201,6 +2201,9 @@ printf '%s\n' "$(printf '%s ~ ' "$@")" >> "${NR_DIR:?}/wt.log"
 # --textbox pokazuje PLIK: jego tresc do dziennika, jak tekst --yesno (plan dluzszy niz ekran).
 p=""; for a in "$@"; do [ "$p" = "--textbox" ] && cat "$a" >> "$NR_DIR/wt.log"; p="$a"; done
 for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
+# Okno tekstu (--textbox) nie ma wyboru: prawdziwy whiptail konczy je Dalej (rc 0) -- nie
+# zabiera odpowiedzi (kampania 2026-10-22: dlugi plan = tekst + krotkie pytanie).
+for a in "$@"; do [ "$a" = "--textbox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
 # Koniec odpowiedzi: pytanie kreatora "Przerwać?" dostaje Przerwij (Esc = Zostań i test krążyłby
@@ -2854,6 +2857,24 @@ else
     bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
+# Kampania 2026-10-22: cel kopii lokalnej WEWNATRZ zrodla odrzucony w kroku Dokad (nie dopiero w planie).
+NROUT=$(nr_run "0${T}local
+0${T}__other__
+0${T}hdd/backups/192.168.28.99/hdd/lab/kopie
+0${T}
+0${T}__other__
+0${T}hdd/kopie
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}create
+0${T}
+0${T}
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--target=hdd/kopie' "$NR/zb.log" && ! grep -q -- 'lab/kopie' "$NR/zb.log"; then
+    ok "new-relation: kopia lokalna -- cel wewnatrz zrodla odrzucony od razu w kroku Dokad, drugi cel przechodzi"
+else
+    bad "new-relation: cel wewnatrz zrodla" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
 #     diagnozy, koszyk z datasetow TEGO hosta (list-datasets bez adresu), bez "Sposobu"
 #     (zawsze -R), w ustawieniach bez praw/zamrazania/parowania (U25: tytuly okien bez
@@ -4755,7 +4776,7 @@ fi
 # 5. Wstecz z podsumowania wraca do punktow i NIC nie uruchamia: summary rc 1, punkty znowu, summary rc 0 -> JEDNA linia ran
 printf '0\tobok\n0\thdd/restore\n0\tp0\n1\t\n0\tp0\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep -c 'sprawdź' "$RW/wt.log")" -eq 2 ]; then
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep 'sprawdź' "$RW/wt.log" | grep -c -- '--yesno')" -eq 2 ]; then
     ok "restore: Wstecz z podsumowania nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
 else
     bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "sprawdz: $(grep -c 'sprawdź' "$RW/wt.log")"
@@ -4897,6 +4918,21 @@ rm -rf "$RP"
 # Zadne okno pakietu nie uzywa radiolisty -- wybor jednej pozycji to menu z kursorem na obecnej.
 rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3)"
 [ -z "$rl_left" ] && ok "okna: zadnej radiolisty -- wybor jednej pozycji to menu (Enter = podswietlona)" || bad "okna: radiolista zostala" "$rl_left"
+# Kampania 2026-10-22: dlugi plan -- najpierw okno tekstu (Enter = dalej), potem krotkie pytanie;
+# nigdy --scrolltext, w ktorym Enter nic nie robi. Krotki -- jedno okno yesno, jak dotad.
+YN="$(mktemp -d)"; mkdir -p "$YN/bin"
+printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; exit 0\n' "$YN" > "$YN/bin/wt"; chmod +x "$YN/bin/wt"
+seq 1 200 > "$YN/long.txt"; printf 'krotki plan\n' > "$YN/short.txt"
+( WHIPTAIL="$YN/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; yesno_text "$2/long.txt" "Plan" "WYKONAJ" "Wstecz" --defaultno; echo "rc=$?"; yesno_text "$2/short.txt" "Plan2" "WYKONAJ" "Wstecz"; echo "rc=$?"' x "$REPO" "$YN" ) > "$YN/out" 2>&1
+if [ "$(grep -c 'rc=0' "$YN/out")" -eq 2 ] && ! grep -q -- '--scrolltext' "$YN/wt.log" \
+   && grep -q -- '--title ~ Plan  \[strzałki przewijają, Enter = dalej\] ~ --ok-button ~ Dalej ~ --textbox' "$YN/wt.log" \
+   && grep -q -- '--title ~ Plan ~ --yes-button ~ WYKONAJ ~ --no-button ~ Wstecz ~ --defaultno ~ --yesno' "$YN/wt.log" \
+   && [ "$(grep -c -- '--title ~ Plan2 ' "$YN/wt.log")" -eq 1 ]; then
+    ok "yesno_text: dlugi plan = okno tekstu + krotkie pytanie (bez --scrolltext); krotki = jedno okno"
+else
+    bad "yesno_text: dlugi plan" "$(cat "$YN/out")" "$(cut -c1-160 "$YN/wt.log")"
+fi
+rm -rf "$YN"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the

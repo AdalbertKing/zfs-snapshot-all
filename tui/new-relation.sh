@@ -307,16 +307,29 @@ for x in d.get("datasets", []):
            --menu "Kopie wylądują pod:  <wybrane>$lv/<dataset źródła>\nnp.  ${first:-hdd/backups}$lv/${B_ROOT[0]}" "$(fit $((${#items[@]} / 2 + 4)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || return 1
         if [ "$WT_OUT" = __browse__ ]; then
-            browse_target && return 0
+            browse_target && target_ok && return 0
             continue
         fi
-        if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; return 0; fi
+        if [ "$WT_OUT" != __other__ ]; then TARGET="$WT_OUT"; target_ok && return 0; continue; fi
         wt --title "$(title 5 'Dokąd -- wpisz ścieżkę')" --ok-button "Dalej" --cancel-button "Wstecz" \
            --inputbox "Dataset na TYM hoście, pod którym mają lądować kopie (np. hdd/backups).\nKopie trafią pod:  <to>$lv/<dataset źródła>" 11 "$W" "$TARGET" || continue
         t="${WT_OUT// /}"
         case "$t" in ''|/*|*/|*[!A-Za-z0-9._:/-]*) wt --title "Zła ścieżka" --msgbox "'$WT_OUT' nie wygląda na nazwę datasetu (pula/nazwa, bez / na początku i końcu)." 9 "$W"; continue ;; esac
-        TARGET="$t"; return 0
+        TARGET="$t"; target_ok && return 0
     done
+}
+# Kampania 2026-10-22 (pve10): kopia lokalna hdd/archive -> hdd/archive/kopie przeszła cały
+# kreator i odmówił dopiero plan czasownika ("overlaps source"). Ta sama reguła tutaj: cel
+# równy źródłu albo z nim zagnieżdżony (w którąkolwiek stronę) -- od razu, w tym kroku.
+target_ok() {   # 0 = cel pasuje; 1 = okno z powodem, TARGET bez zmian dla następnej próby
+    local r
+    [ "$MODE" = local ] || return 0
+    for r in "${B_ROOT[@]}"; do
+        case "$TARGET" in "$r"|"$r"/*) ;; *) case "$r" in "$TARGET"/*) ;; *) continue ;; esac ;; esac
+        wt --title "$(title 5 'Cel nakłada się na źródło')" --msgbox "$TARGET i $r: równe albo jedno w drugim.\nKopia nie może lądować w tym, co kopiuje -- wybierz cel poza $r." 9 "$W"
+        return 1
+    done
+    return 0
 }
 # "Przegladaj..." (uwaga 1): systemy plikow tego hosta. U68 (wlasciciel 2026-10-21: "to musi byc
 # jednolite w calym pakiecie"): to samo drzewo co wybor datasetow, w trybie JEDNEJ pozycji

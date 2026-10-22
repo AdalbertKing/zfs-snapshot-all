@@ -106,14 +106,20 @@ clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy 
 yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
     # W oknie z --scrolltext fokus startuje na tekście i Enter nic nie robi, dopóki nie
     # przejdziesz Tabem na przyciski (zmierzone jazdą po pty). Więc: bez przewijania,
-    # kiedy tylko się da, a kiedy nie -- tytuł mówi o Tabie.
+    # kiedy tylko się da, a kiedy nie -- tekst osobno, pytanie osobno (niżej).
     local f="$1" t="$2" y="$3" n="$4" extra="${5:-}" lines
     geom
     lines=$(fold -s -w $((W - 4)) "$f" | grep -c '')      # whiptail zawija; licz wiersze PO zawinięciu
     if [ "$lines" -le $((H - 6)) ]; then
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra --yesno "$(cat "$f")" "$(fit $((lines + 1)))" "$W"
     else
-        wt --title "$t  [strzałki = przewijaj, Tab = przyciski]" --yes-button "$y" --no-button "$n" $extra --scrolltext --yesno "$(cat "$f")" "$H" "$W"
+        # Kampania 2026-10-22 (pve10, plan kopii lokalnej): w oknie z --scrolltext Enter nie
+        # robił nic, admin naciskał go i czekał. Długi tekst idzie najpierw do czytania (okno
+        # pliku: strzałki przewijają, Enter = dalej), potem krótkie pytanie z tymi samymi
+        # przyciskami -- jak plan w zmianie relacji. Esc w oknie tekstu = "nie".
+        wt --title "$t  [strzałki przewijają, Enter = dalej]" --ok-button "Dalej" --textbox "$f" "$H" "$W" || return 1
+        wt --title "$t" --yes-button "$y" --no-button "$n" $extra \
+           --yesno "Plan był w poprzednim oknie ($lines wierszy). $y?" 8 "$W"
     fi
 }
 # EDYTOR LISTY -- jeden wzór okna dla każdego "dodaj / usuń pozycje" (decyzja właściciela
