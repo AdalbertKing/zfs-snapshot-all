@@ -2012,7 +2012,7 @@ if hasE "$A" '^\| lab-ct201 +backup +pve10<192.168.28.99 +dzia(ł|l)a +aktualne 
 else
     bad "wyglad: slowa w ASCII" "$A"
 fi
-HLP="$(screen relacje F1 --height 90)"
+HLP="$(screen relacje F1 --height 90 --width 120)"   # tresc slownika; zawijanie na 80 ma osobny test (kampania 3)
 if has "$HLP" '╔═ Pomoc ═' && has "$HLP" 'bez monitora   NIKT nie pyta' && has "$HLP" 'NAJPIERW komenda bash'; then
     ok "pomoc: F1 otwiera pomoc ze slownikiem kolumny Kopie"
 else
