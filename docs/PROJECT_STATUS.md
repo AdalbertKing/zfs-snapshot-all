@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 85ac736fcaf0f88f -->
+<!-- status-covers-digest: 91236fdef2536ca9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,17 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, blok E: host zaczynający się od `-` odrzucony (`fix/host-dash`).** Kreator przepuszczał adres
+  `-oProxyCommand` (myślnik jest dozwolony), czasownik planował z nim relację, a `deploy.sh` podaje adres do
+  `ssh-keyscan`/`getent` jako osobne słowo -- wzięłyby go za opcję. Dziś chroniło przypadkiem rozwiązywanie nazwy.
+  Teraz jawna odmowa w kreatorze („Zły adres”), w `rux` (`--source=`) i w `deploy.sh --peer`. Testy: `tui` 391/0,
+  `rux` 51/0 (nowe przypadki padają na main). Przy okazji bloku A/C kampanii (pve10): obiegi utwórz↔usuń,
+  dodaj↔zdejmij dataset, pauza↔wznów, silnik↔fabryczne bez śladu poza: rosnącym rekordem relacji (pola dopisywane,
+  ostatnia wartość wygrywa), pustymi liniami w configu, migawką startową relacji lokalnej zostającą na źródle i
+  pustym korzeniem celu, którego relacja nie oznaczyła jako swojego. Zerwana sieć w trakcie add-source: config
+  nietknięty, ponowienie kończy robotę. Zabita replika w trakcie transferu: nośnik wyeksportowany, następny bieg
+  wznawia z tokenu.
 
 - **REV-20261022-168: import przywraca ustawienia relacji dokładnie (`fix/rev-168`).** Recenzent: wartość z
   cudzysłowem (`hourly.notify_word = snap"shot`) wracała po eksport → usuń → import jako `snap\`, rc 0; `--check`
