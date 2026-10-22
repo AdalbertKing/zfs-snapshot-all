@@ -966,7 +966,11 @@ while :; do
         verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
         [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
         wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
-        step=$back; continue
+        # Kampania 2026-10-22: szablon z INNĄ rodziną migawek to nowa relacja -- żadna liczba
+        # w oknie źródła tego nie zmieni, a Wstecz o jeden krok kręcił w kółko ostrzeżenie ->
+        # tabela -> odmowa. Taka odmowa wraca do listy szablonów.
+        if [ "$ACTION" = szablon ] && grep -q 'is a NEW relationship' "$TMPD/plan.txt"; then step=1; else step=$back; fi
+        continue
     fi
     # Plan w skrócie: podsumowanie czasownika + linie crona TEJ relacji (-/+), każda jako
     # "minuta godzina ... | etykieta | retencja". Pełny diff jest w dzienniku.

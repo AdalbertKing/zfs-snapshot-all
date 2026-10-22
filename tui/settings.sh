@@ -40,10 +40,12 @@ edit_key() {   # <key> -> NEW[key] ustawione albo bez zmian
     case "$kind" in
         enum:*)
             for o in $(printf '%s' "${kind#enum:}" | tr ',' ' '); do
-                opts+=("$o" "$o" "$([ "$o" = "$cur" ] && echo ON || echo OFF)")
+                opts+=("$o" "$o")
             done
-            wt --title "$k" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --radiolist "${HELP[$k]}" "$(fit $((${#opts[@]} / 3 + 2)))" "$W" "$(lhfit $((${#opts[@]} / 3)) 2)" "${opts[@]}" || return 0 ;;
+            # Menu, nie radiolista: w radioliście Enter bierze zaznaczoną kropkę, nie podświetloną
+            # pozycję (kampania 2026-10-22) -- jednolicie z kreatorem i odzyskiem.
+            wt --title "$k" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$cur" \
+               --menu "${HELP[$k]}" "$(fit $((${#opts[@]} / 2 + 6)))" "$W" "$(lhfit $((${#opts[@]} / 2)) 2)" "${opts[@]}" || return 0 ;;
         profile)
             # U54 (właściciel, A.4 2026-10-21: "pole wpisywane -- łatwo o błąd; wybór z listy
             # szablonów poproszę"): lista z list-profiles, bez ukrytych i pochodnych (-src-).

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e46928d8755d93d7 -->
+<!-- status-covers-digest: 9dfcf482777a307f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania „marudny admin” 2026-10-22, paczka 1 (`kamp/esc`).** Na żywo na pve10 (pve9 jako źródło): założenie
+  backupu na koncie delegowanym, F7, zmiana relacji (dodanie i usunięcie datasetu, retencja źródła, porzucenie
+  zmian), odzysk obok na źródle. Poprawione: Esc w pytaniu „Przerwać?” kreatora przerywał (teraz = Zostań);
+  odmowa „to NOWA relacja” po wyborze szablonu w zmianie relacji wracała do ostrzeżenia i kręciła w kółko (teraz
+  lista szablonów); WSZYSTKIE radiolisty (punkt i miejsce odzysku, wartości wyliczeniowe F10) to menu -- w
+  radioliście Enter brał zaznaczoną kropkę, nie podświetloną pozycję (trzeci punkt + Enter = najnowszy); etykieta
+  punktu odzysku przy migawce bez rodziny w nazwie pokazuje nazwę, nie „08-18-21”. Test `tui` 383/0 (pve9).
 
 - **Krok 1 kreatora i okno konta jako menu (2026-10-22; `finisz/menu`).** Kampania na pve10: w radioliście whiptaila
   Enter bierze zaznaczoną kropkę, nie podświetloną pozycję -- strzałka na „Lustro” i Enter dawały backup. Rodzaj

@@ -2203,7 +2203,13 @@ p=""; for a in "$@"; do [ "$p" = "--textbox" ] && cat "$a" >> "$NR_DIR/wt.log"; 
 for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
-[ -n "$line" ] || { echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"; exit 255; }
+# Koniec odpowiedzi: pytanie kreatora "Przerwać?" dostaje Przerwij (Esc = Zostań i test krążyłby
+# bez końca); każde inne okno -- 255, jak Esc.
+if [ -z "$line" ]; then
+    echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"
+    for a in "$@"; do [ "$a" = "Nowa relacja: przerwać?" ] && exit 0; done
+    exit 255
+fi
 rc="${line%%	*}"; out="${line#*	}"
 # KONTRAKT PRAWDZIWEGO WHIPTAILA: z listy da sie wybrac TYLKO to, co na niej jest. Bez
 # tego atrapa przyjela 'hdd/backups', gdy kreator oferowal 'hdd/backups<TAB>active'
@@ -2809,6 +2815,19 @@ else
     bad "new-relation: karta przed podsumowaniem" "extra=$NRLN_X karta=$NRLN_C podsumowanie=$NRLN_S" "$(printf '%s' "$NRCARD" | cut -c1-300)"
 fi
 
+# Kampania 2026-10-22 (marudny admin): Esc w pytaniu "Przerwać?" = Zostań, nie przerwanie.
+# Wyjdź z kroku 1, Esc w pytaniu -> znowu krok 1; Wyjdź, Przerwij -> koniec.
+NROUT=$(nr_run "1${T}
+255${T}
+1${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 1 ] && [ "$(grep -c 'Nowa relacja: przerwać?' "$NR/wt.log")" -eq 2 ] && [ "$(grep -c 'Jaka relacja?' "$NR/wt.log")" -eq 2 ] \
+   && has "$NROUT" "przerwane, nic nie zmieniono"; then
+    ok "new-relation: Esc w pytaniu 'Przerwać?' = Zostań (wraca do kroku), przerywa tylko przycisk Przerwij"
+else
+    bad "new-relation: Esc w pytaniu o przerwanie" "rc=$NRRC" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
 # U68: "Przegladaj..." w kroku Dokad to DRZEWO w trybie jednej pozycji (wczesniej plaska lista
 # whiptaila z obcietymi nazwami). Wnetrza ladowisk innych relacji ukryte i policzone w legendzie.
 NROUT=$(nr_run "0${T}backup
@@ -4021,7 +4040,8 @@ case "$1" in
     list-profiles)  cat "${NR_FIX:?}/list-profiles.json" ;;
     save-profile)   echo "save-profile: ok (atrapa)" ;;
     delete-profile) echo "delete-profile: ok (atrapa)" ;;
-    edit-relation)  case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
+    edit-relation)  if [ -n "${ER_NEWREL:-}" ]; then echo "FATAL: edit-relation: profile 'd30h24' stamps [x] on hdd/ct, the installed relationship stamps [] -- no family in common. That is a NEW relationship (delete-relation, then create it again), not an edit. Nothing was changed."; exit 1; fi
+                    case " $* " in *" --yes "*) echo ">>> atrapa: zmieniono" ;; *) echo "Edycja relacji: r1 (atrapa)"; echo
                         # X6: ER_HAND = config zmieniony recznie (minuta 29), plan wpisze 31.
                         [ -n "${ER_HAND:-}" ] && printf -- '--- proponowany config: /etc/x.conf ---\n  [template:profile__relacja-r1__daily]\n  -\tprune_schedule = 29 1 * * *\n  +\tprune_schedule = 31 1 * * *\n\n' || : ;;
                     esac ;;
@@ -4472,6 +4492,22 @@ if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=r1-szablon --de
 else
     bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
 fi
+# Kampania 2026-10-22: szablon z inna rodzina migawek (czasownik: "is a NEW relationship") --
+# po odmowie z powrotem LISTA szablonow, nie ostrzezenie/tabela (petla bez wyjscia).
+EROUT=$(ER_NEWREL=1 er_run "0${T}harmon
+0${T}d30h24
+0${T}
+0${T}
+1${T}
+1${T}
+" "enter"); ERRC=$?
+if grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';' | grep -qF 'odmówił -- nic nie zmieniono ;--title ~ Zmień relację r1 -- użyj szablonu' \
+   && grep -q -- '^edit-relation r1 --profile=d30h24 .*--plan$' "$ER/zb.log" \
+   && ! grep -qE '^edit-relation .*--yes' "$ER/zb.log"; then
+    ok "edit-relation: odmowa 'NOWA relacja' po wyborze szablonu wraca do listy szablonow (nie w kolko ostrzezenie -> tabela)"
+else
+    bad "edit-relation: odmowa NEW relationship" "rc=$ERRC" "$(grep -o -e '--title ~ [^~]*' "$ER/wt.log" | tr '\n' ';')"
+fi
 # X6 (wlasciciel 2026-10-12): reczna zmiana configu relacji -- plan mowi to na GORZE,
 # zanim WYKONAJ ja nadpisze; bez recznych zmian ostrzezenia nie ma (kontrola).
 EROUT=$(ER_HAND=1 er_run "0${T}harmon
@@ -4836,6 +4872,11 @@ else
     bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
 fi
 rm -rf "$RP"
+# Kampania 2026-10-22: w radioliscie whiptaila Enter bierze ZAZNACZONA kropke, nie podswietlona
+# pozycje (strzalka na "Lustro" + Enter = backup; trzeci punkt odzysku + Enter = najnowszy).
+# Zadne okno pakietu nie uzywa radiolisty -- wybor jednej pozycji to menu z kursorem na obecnej.
+rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3)"
+[ -z "$rl_left" ] && ok "okna: zadnej radiolisty -- wybor jednej pozycji to menu (Enter = podswietlona)" || bad "okna: radiolista zostala" "$rl_left"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the
