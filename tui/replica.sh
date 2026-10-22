@@ -331,26 +331,50 @@ one_allows() {   # <krok> -> 0, gdy krok należy do pozycji wybranej z listy
     return 1
 }
 edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
-    local items n _src
+    local n _src np
+    # E-1 (kampania 2026-10-22): ta sama karta co zmiana relacji (U65) -- nazwa w nagłówku,
+    # zmieniona pozycja z '*' i "[zmiana]", pod kreską tylko akcje, licznik przy zapisie,
+    # Wstecz przy zmianach pyta. Stan wyjściowy zapamiętany przy pierwszym wejściu.
+    sig() { case "$1" in
+        zrodla) printf '%s|%s' "$SRCS" "${XARGS[*]-}" ;; dysk) printf '%s|%s' "$PASSIVE" "$KEEP" ;;
+        nosnik) printf '%s|%s|%s' "$DST" "$MEDIA" "$GUIDS" ;; kiedy) printf '%s' "$SCHED" ;;
+        onins) printf '%s' "$ONINS" ;; silnik) printf '%s' "$HIST" ;; esac; }
+    if [ -z "${O_SIG_SET:-}" ]; then
+        for n in zrodla dysk nosnik kiedy onins silnik; do printf -v "O_SIG_$n" '%s' "$(sig "$n")"; done
+        O_SIG_SET=1
+    fi
+    ch() { local o="O_SIG_$1"; [ "$(sig "$1")" != "${!o}" ]; }
+    rp_row() {   # <tag> <nazwa> <wartość>
+        CARD_TAGS+=("$1"); CARD_FIXED+=(0)
+        if ch "$1"; then CARD_NAMES+=("* $2"); CARD_VALUES+=("$3 [zmiana]"); np=$((np + 1))
+        else CARD_NAMES+=("  $2"); CARD_VALUES+=("$3"); fi
+    }
     while :; do
-        geom
         n=$(printf '%s' "$SRCS" | tr ',' '\n' | grep -c .)
         _src="${SRCS%%,*}"; [ "$n" -gt 1 ] && _src="$_src (+$((n - 1)))"
-        items=(zrodla "Źródła:     $_src"
-               dysk   "Na dysku:   $([ "$PASSIVE" = yes ] && echo "cała historia (istniejące migawki)" || { [ -n "$KEEP" ] && echo "własne, $KEEP ostatnich" || echo "własne, odbicie kolektora"; })"
-               nosnik "Nośnik:     $DST ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
-               kiedy  "Kiedy:      $(sched_words "$SCHED")")
+        CARD_TAGS=(); CARD_NAMES=(); CARD_VALUES=(); CARD_FIXED=(); np=0
+        rp_row zrodla "Źródła" "$_src"
+        rp_row dysk "Na dysku" "$([ "$PASSIVE" = yes ] && echo "cała historia (istniejące migawki)" || { [ -n "$KEEP" ] && echo "własne, $KEEP ostatnich" || echo "własne, odbicie kolektora"; })"
+        rp_row nosnik "Nośnik" "$DST ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
+        rp_row kiedy "Kiedy" "$(sched_words "$SCHED")"
         if [ "$MEDIA" = removable ] && [ "$SCHED" != on-insert ]; then
-            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia minutę po włożeniu")
-            else items+=(onins "[ ] Po włożeniu dysku: nic, tylko wg harmonogramu"); fi
-        fi
-        items+=(silnik "Ustawienia silnika…" restart "Zacznij od nowa na tym dysku (pełna kopia)…"
-                zapisz "Zapisz zmiany (plan, WYKONAJ)")
-        wt --title "Zmień replikę $NAME" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "${LAST_ITEM:-zrodla}" \
-           --menu "Co zmienić? Pozycja otwiera tylko swój krok; nic nie jest zapisane przed WYKONAJ." "$(fit $((${#items[@]} / 2 + 1)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" \
-           || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+            rp_row onins "Po włożeniu" "$([ "$ONINS" = yes ] && echo "kopia minutę po włożeniu dysku" || echo "nic, tylko wg harmonogramu")"
+        elif ch onins; then np=$((np + 1)); fi
+        rp_row silnik "Silnik" "historia: $(eng_hist_words "$HIST")"
+        CARD_ACT_TAGS=(zapisz restart)
+        if [ "$np" -gt 0 ]; then CARD_ACT_LABELS=("ZAPISZ ZMIANY ($np) -- najpierw plan do potwierdzenia")
+        else CARD_ACT_LABELS=("Zapisz zmiany (brak zmian)"); fi
+        CARD_ACT_LABELS+=("Zacznij od nowa na tym dysku (pełna kopia)…")
+        card_menu "Zmiana repliki $NAME" "replika $NAME   kolektor $(hostname)\nCo zmienić? Zapis dopiero w \"Zapisz zmiany\"." "${LAST_ITEM:-zrodla}" "Wstecz" || {
+            if [ "$np" -gt 0 ]; then
+                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
+                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
+                [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
+            fi
+            clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         LAST_ITEM="$WT_OUT"
         case "$WT_OUT" in
+            __sep__) LAST_ITEM=zapisz; continue ;;
             zrodla) ONE=zrodla; step=2; return 0 ;;
             dysk)   ONE=dysk; step=25; return 0 ;;
             nosnik) ONE=nosnik; step=3; return 0 ;;

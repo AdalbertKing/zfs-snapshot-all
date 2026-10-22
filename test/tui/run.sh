@@ -3715,14 +3715,17 @@ RPOUT=$(rp_run "0${T}onins
 0${T}zapisz
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb13","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb13)
-RP13="$(grep -F 'Zmień replikę usb13' "$RP/wt.log" | head -1)"
+RP13="$(grep -F 'Zmiana repliki usb13' "$RP/wt.log" | grep -F -e '--menu' | head -1)"
+RP13B="$(grep -F 'Zmiana repliki usb13' "$RP/wt.log" | grep -F -e '--menu' | sed -n 2p)"
 if grep -q '^add-replica usb13 --source=hdd/data --dst=repl/replica .*--media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && has "$RP13" '[ ] Po włożeniu dysku' && has "$RP13" 'Kiedy:      codziennie 22:00' && has "$RP13" 'Nośnik:     repl/replica (wymienny)' \
+   && has "$RP13" 'nic, tylko wg harmonogramu' && has "$RP13" 'codziennie 22:00' && has "$RP13" 'repl/replica (wymienny)' \
+   && has "$RP13" 'replika usb13   kolektor' && has "$RP13" 'Zapisz zmiany (brak zmian)' && ! has "$RP13" '* ' \
+   && has "$RP13B" '* Po włożeniu' && has "$RP13B" 'kopia minutę po włożeniu dysku [zmiana]' && has "$RP13B" 'ZAPISZ ZMIANY (1)' \
    && ! grep -qF '6/6 kiedy' "$RP/wt.log" && ! grep -qF '4/6 rodzaj' "$RP/wt.log"; then
-    ok "replica: U8 -- lista z obecnymi wartościami; '[ ] Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
+    ok "replica: U8/E-1 -- karta jak przy relacji (nagłówek, '*' i [zmiana], licznik przy zapisie); 'Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
 else
-    bad "replica: U8 lista zmiany" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP13" | cut -c1-400)"
+    bad "replica: U8 lista zmiany" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP13" | cut -c1-400)" "$(printf '%s' "$RP13B" | cut -c1-400)"
 fi
 rm -rf "$RP"
 
@@ -4884,25 +4887,15 @@ fi
 
 # c3b (kampania 2026-10-22): kopia z NOSNIKA repliki (<nosnik>/replica/<pula>/...) -> podpowiedz
 # <pula>/restore/<czlon>, nie na wyjmowany nosnik; pula spoza hosta (tank) -> jak dotad, na nosnik.
-printf '{"action":"next","roots":["usb9/replica/hdd/data/docs"],"excl":{},"recursion":"flat"}
-' > "$RW/t-cp-rep.json"
-printf '{"action":"next","roots":["usb9/replica/tank/x"],"excl":{},"recursion":"flat"}
-' > "$RW/t-cp-rep2.json"
-printf '0	hdd/restore/docs
-0	p0
-1	
-0	
-' > "$RW/answers"
+printf '{"action":"next","roots":["usb9/replica/hdd/data/docs"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep.json"
+printf '{"action":"next","roots":["usb9/replica/tank/x"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep2.json"
+printf '0\thdd/restore/docs\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-rep.json" --from-copy
-R3B="$(grep -F inputbox "$RW/wt.log" | tail -n 1)"
-printf '0	usb9/restore/x
-0	p0
-1	
-0	
-' > "$RW/answers"
+R3B="$(cat "$RW/wt.log")"   # domyslna wartosc pola stoi w wierszu PO --inputbox (tekst ma \n)
+printf '0\thdd/restore/x\n0\tp0\n1\t\n0\t\n' > "$RW/answers"   # usb9/... istnieje w atrapie (okno nadpisania) -- odpowiedz inna niz podpowiedz
 rw_copy "$RW/t-cp-rep2.json" --from-copy
-R3C="$(grep -F inputbox "$RW/wt.log" | tail -n 1)"
-if has "$R3B" ' ~ hdd/restore/docs' && ! has "$R3B" 'usb9/restore' && has "$R3C" ' ~ usb9/restore/x'; then
+R3C="$(cat "$RW/wt.log")"
+if [ "$RW_RC" -eq 0 ] && has "$R3B" ' ~ hdd/restore/docs ~' && ! has "$R3B" 'usb9/restore' && has "$R3C" ' ~ usb9/restore/x ~'; then
     ok "restore --from-copy: usb9/replica/hdd/data/docs -> podpowiedz hdd/restore/docs (pula zrodla, nie nosnik); pula spoza hosta -> usb9/restore/x"
 else
     bad "restore --from-copy: podpowiedz z nosnika repliki" "rep: $(printf '%s' "$R3B" | cut -c1-300)" "obca: $(printf '%s' "$R3C" | cut -c1-300)"
