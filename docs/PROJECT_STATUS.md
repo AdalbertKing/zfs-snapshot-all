@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 52638b9c22232232 -->
+<!-- status-covers-digest: cdd9931d630195ea -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,15 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Audyt relacji nie podsuwa już `zfs destroy` na żywe kopie (`kamp/orphan-live`).** Kampania wariantów,
+  pve10 2026-10-22: każde usunięcie relacji (tu: lustro cb) drukowało „DATA WITHOUT A RELATIONSHIP … the
+  relationship that produced it is gone” i 75 linii `zfs destroy -r …`, w tym `hdd/backups` i
+  `hdd/backups/192.168.28.98/hdd/*` -- ŻYWE kopie obecnej relacji ab. Źródło: nagrobek starej ab (usuniętej
+  19.10 i zaimportowanej z powrotem) nadal nazywał te ścieżki. Teraz zbiór z nagrobka, który jest, zawiera
+  albo leży pod danymi relacji nie-ORPHAN (LIVE lub UNKNOWN), nie dostaje rady; audyt mówi tylko, ile takich
+  pominął. Na pve10: 47 pominiętych, zostały wyłącznie rady dla `hdd/lab` (cb w tej chwili usunięta). Test
+  `cleanrel` 93/0 (nowy przypadek pada na kodzie sprzed poprawki).
 
 - **H-4b: pierwsza replika po nowej relacji (`kamp/snapget-container`, snapget v2.77, odmrożenie właściciela
   2026-10-22).** Replika całej puli (calapula na pve10) w pierwszym biegu po nowej relacji kończyła się rc 1:

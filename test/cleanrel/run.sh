@@ -427,6 +427,25 @@ else
     bad "the audit reports tombstoned data that still exists, and only that" "$out"
 fi
 
+# 20b. Live campaign, pve10 2026-10-22: an OLD tombstone of a name that lives again
+#      (ab removed 2026-10-19, imported back) named hdd/backups and the copies under
+#      it -- today's live data. The audit offered "zfs destroy -r hdd/backups". A
+#      recorded dataset that is, contains or sits under a LIVE relationship's data is
+#      not offered; unrelated recorded data still is.
+T="$WORK/t20b"; build_tree "$T"
+mkdir -p "$T/removed" "$T/bin"
+printf 'CLIENT_NAME=ab\nPEER_HOST=10.0.0.98\nRUX_TARGET=hdd/backups/h98/data\nSTATE=active\n' > "$T/clients/ab.conf"
+printf 'REMOVED_NAME=ab\nDATA=hdd/backups\nDATA=hdd/backups/h98/data\nDATA=hdd/backups/h98/data/docs\nDATA=hdd/oldother\n' > "$T/removed/ab.20261019-190919"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/zfs"; chmod +x "$T/bin/zfs"     # everything exists
+out=$(ZFS_BIN="$T/bin/zfs" run_cr "$T" 2>&1)
+if grep -q 'zfs destroy -r hdd/oldother' <<<"$out" \
+   && ! grep -q 'zfs destroy -r hdd/backups' <<<"$out" \
+   && grep -q '3 dataset(s) named by old records are NOT listed' <<<"$out"; then
+    ok "the audit does not offer destroy for recorded data that is, contains or sits under a LIVE relationship's data"
+else
+    bad "the audit does not offer destroy for recorded data of a live relationship" "$out"
+fi
+
 # 21. No zfs on PATH is a skip with a reason, not an error and not silence: the
 #     rest of this tool has to keep working on a host where zfs is broken,
 #     which is a state it is specifically for.
