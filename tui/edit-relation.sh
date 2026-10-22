@@ -445,6 +445,29 @@ eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w W
     wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
        --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
 }
+# Karta (U65, pve10 2026-10-22): ile trzyma źródło -- z CONFIGU (show-tiers), nie z nazwy
+# profilu źródła: zmiana tabelą (set-tiers) zmienia liczby, a nazwa zostaje, i karta mówiła
+# "tyle samo co w kopii" przy źródle trzymającym 72 z 168. Raz na okno.
+srcret_words() {
+    [ -s "$TMPD/tiers.json" ] || "$ZB" show-tiers "$NAME" --json >"$TMPD/tiers.json" 2>/dev/null || { rm -f "$TMPD/tiers.json"; echo "?"; return 0; }
+    "$PY" - "$TMPD/tiers.json" <<'PYEOF' 2>/dev/null | tr -d '\r' || echo "?"
+import json, sys
+W = (("hourly", "godzinowe"), ("daily", "dobowe"), ("weekly", "tygodniowe"), ("monthly", "miesięczne"), ("yearly", "roczne"))
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+tg = {t.get("name"): (t.get("keep") or "", t.get("retain") or "") for t in d.get("target") or []}
+out, same = [], True
+for t in d.get("source") or []:
+    k = (t.get("keep") or "", t.get("retain") or "")
+    if not (k[0] or k[1]):
+        continue
+    if tg.get(t.get("name")) != k:
+        same = False
+    n = t.get("name") or "?"
+    w = next((v for s, v in W if n.endswith(s)), n)
+    out.append("%s %s" % (w, k[0] or k[1]))
+print("tyle samo co w kopii" if same or not out else ", ".join(out))
+PYEOF
+}
 # Karta (U65, pve10 2026-10-22): czekająca zmiana retencji źródła słowami -- karta mówiła
 # "tyle samo co w kopii [zmiana]", czyli starą wartość przy gwiazdce nowej.
 sargs_words() {   # P_SARGS (--src-tier=T --keep=N ...) -> "godzinowe 72, dobowe 3"
@@ -714,7 +737,7 @@ while :; do
     [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
-    if [ -n "$CUR_S" ]; then _sr="$(src_words_of "$CUR_S")"; else _sr="tyle samo co w kopii"; fi
+    _sr="$(srcret_words)"
     [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr -> $(sargs_words) [zmiana]"
     _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$_en -> zmiana [zmiana]"
     # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
