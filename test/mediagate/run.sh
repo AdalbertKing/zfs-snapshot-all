@@ -816,6 +816,22 @@ else
 fi
 rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
 
+# L8c. A CONTAINER SOURCE (campaign 2026-10-22, pve10): a whole-pool replica names hdd/backups,
+#      which has no snapshot of its own. The skip record stays all-or-nothing (not written),
+#      but the copy itself marks the medium current -- F6 said "brak" for ever before.
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a tank/empty"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix - --engine-rc 0)"
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
+    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), but the medium is marked current"
+else
+    bad "L8c: container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
+
 # L8p. A PASSIVE replica (owner note 20, 2026-10-08) has no family of its own:
 #      --prefix - means ANY snapshot. The record and the "current" marker must
 #      advance exactly as with a prefix -- without them F6 says "brak kopii" for

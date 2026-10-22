@@ -798,10 +798,10 @@ detach)
             # medium and the engine succeeded on it, so what it now holds is just as proved.
             if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
                 _now_guid="$(pool_guid)"
-                if [ -n "$_now_guid" ] && record_write "$_now_guid"; then
-                    mark_current
-                else
-                    say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will copy rather than trust a record it does not have."
+                # The copy itself proves the medium current; the skip record is extra.
+                mark_current
+                if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+                    say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will copy rather than skip on a record it does not have."
                 fi
             fi
             say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
@@ -824,12 +824,15 @@ detach)
     # be recorded as current.
     if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
         _now_guid="$(pool_guid)"
-        if [ -n "$_now_guid" ]; then
-            if record_write "$_now_guid"; then
-                mark_current
-            else
-                say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than trusting a record it does not have."
-            fi
+        # CURRENT IS THE COPY, NOT THE SKIP RECORD (campaign 2026-10-22, pve10): a whole-pool
+        # replica names a container with no snapshot of its own (hdd/backups), so the
+        # all-or-nothing skip record cannot be written -- and the "current" marker was tied
+        # to it: F6 "Kopia z: brak" and the age monitor red on a medium every run had just
+        # brought up. The engine's success proves the medium current; the record only lets
+        # a later run SKIP, and stays all-or-nothing for that.
+        mark_current
+        if [ -z "$_now_guid" ] || ! record_write "$_now_guid"; then
+            say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will import it rather than skip on a record it does not have."
         fi
     fi
 
