@@ -10393,14 +10393,15 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
 # hidden helper profile with the block's tiers, and add-client is handed THAT; without
 # a block in the file the import refuses and says what to copy. Measured before on
 # pve10: import of cb with d7h24.conf absent died in add-client.
+IM_TAB=$(printf '\t')
 ihp_fn=$(sed -n '/^json_value_of() {/,/^}/p; /^json_unquote() {/,/^}/p; /^import_helper_profile() {/,/^}/p' "$ZFSBACKUP")
 ihp=$(bash -c "$ihp_fn
 import_helper_profile '{\"tiers\":\"hourly, daily\",\"hourly.target_send_schedule\":\"1 * * * *\",\"hourly.target_prefix\":\"automated_hourly_\",\"hourly.pattern\":\"automated_hourly\",\"hourly.prune_schedule\":\"21 * * * *\",\"hourly.retain\":\"-H24\",\"hourly.target_monitor\":\"90m 150m\",\"daily.target_send_schedule\":\"11 1 * * *\",\"daily.target_prefix\":\"automated_daily_\",\"daily.target_retain\":\"-D30\",\"daily.source_retain\":\"-D5\",\"daily.quiesce\":\"auto,degrade\"}' cb" 2>&1)
-if printf '%s\n' "$ihp" | grep -qx '\thidden      = yes' \
-   && printf '%s\n' "$ihp" | grep -qx '\tuse_template = hourly,daily' \
-   && printf '%s\n' "$ihp" | sed -n '/^\[template:hourly\]/,/^\[/p' | grep -qx '\tmonitor_crit   = 150m' \
-   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qx '\tretain         = -D30' \
-   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qx '\tquiesce        = auto,degrade'; then
+if printf '%s\n' "$ihp" | grep -qxF "${IM_TAB}hidden      = yes" \
+   && printf '%s\n' "$ihp" | grep -qxF "${IM_TAB}use_template = hourly,daily" \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:hourly\]/,/^\[/p' | grep -qxF "${IM_TAB}monitor_crit   = 150m" \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qxF "${IM_TAB}retain         = -D30" \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qxF "${IM_TAB}quiesce        = auto,degrade"; then
     ok "importrel: import_helper_profile builds a hidden profile from the exported block -- tiers, target retention, quiesce, monitor"
 else
     bad "importrel: import_helper_profile" "$ihp"
