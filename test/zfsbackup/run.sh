@@ -130,6 +130,21 @@ done
 for bad_name in "" "pve2/x" "pve2 x" 'pve2;rm' "pve2\`id\`"; do
     if client_name_valid "$bad_name"; then bad "client_name_valid rejects '$bad_name'" "accepted"; else ok "client_name_valid rejects '$bad_name'"; fi
 done
+# Kampania 3 (2026-10-22): a NEW name may not start with '-' or '.' (later verbs take it
+# as an argument; it names a record file). An EXISTING record keeps being accepted.
+for bad_name in "-x" ".x" ".." "-"; do
+    if client_name_new_ok "$bad_name"; then bad "client_name_new_ok rejects '$bad_name'" "accepted"; else ok "client_name_new_ok rejects a new name '$bad_name'"; fi
+done
+if client_name_new_ok "pve2.lab-1" && client_name_valid "-x"; then
+    ok "client_name_new_ok accepts 'pve2.lab-1'; an existing '-x' record still passes client_name_valid"
+else
+    bad "client_name_new_ok / client_name_valid split" "pve2.lab-1 refused or -x no longer valid"
+fi
+nl_out="$( (cmd_local_backup --name=-x --source=hdd/a --target=hdd/b) 2>&1 )"
+case "$nl_out" in
+    *"not starting with a dot or dash"*) ok "local-backup refuses --name=-x before touching anything" ;;
+    *) bad "local-backup refuses --name=-x" "$nl_out" ;;
+esac
 
 # --- 1b. simple two-server public flow ---------------------------------------
 # add-client's ordinary form accepts --host and injects mode=backup itself.

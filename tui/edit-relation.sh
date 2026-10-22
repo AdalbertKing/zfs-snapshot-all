@@ -829,7 +829,7 @@ while :; do
             wt --title "Zapisz jako szablon" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Nazwa nowego szablonu (litery, cyfry, . _ -).\nTrzyma i robi migawki tak jak relacja $NAME teraz: $(cur_words)." 10 "$W" "$NAME-szablon" || continue
             n="${WT_OUT// /}"
-            case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;; esac
+            case "$n" in ''|-*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie; na początku nie minus." 8 "$W"; continue ;; esac
             if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv"; then
                 wt --title "Nazwa zajęta" --msgbox "Szablon '$n' już jest. Podaj inną nazwę." 8 "$W"; continue
             fi

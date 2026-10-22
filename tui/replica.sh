@@ -433,7 +433,7 @@ while :; do
         n="${WT_OUT// /}"
         case "$n" in
             '') wt --title "Brak nazwy" --msgbox "Wpisz nazwę repliki, np. usb1." 8 "$W"; continue ;;
-            *[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;;
+            [-.]*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie; na początku nie kropka ani minus." 8 "$W"; continue ;;
         esac
         if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rep.tsv"; then
             wt --title "Nazwa zajęta" --msgbox "Replika '$n' już jest. Zmienia się ją z F6: Enter na niej, potem 'e'." 8 "$W"; continue
