@@ -4532,7 +4532,13 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         local sync_family_root=automated_
         [ "$PLAN_NEEDS_PROFILE" -eq 1 ] && sync_family_root=$(profile_family_root)
         local _born=""
-        [ -n "${CREATED_AT:-}" ] && _born=$(date -d "$CREATED_AT" +%s 2>/dev/null)
+        # FAMILY_BORN_AT (variant campaign, pve10 2026-10-22): an imported mirror is a
+        # NEW record, so CREATED_AT is today and the family this relationship itself
+        # stamped on the source before export looked older than its birth -- "someone
+        # else's" -- and the import turned the mirror PASSIVE: no new snapshots at the
+        # source, a copy that only ages. The first birth travels in the export.
+        local _born_at="${FAMILY_BORN_AT:-${CREATED_AT:-}}"
+        [ -n "$_born_at" ] && _born=$(date -d "$_born_at" +%s 2>/dev/null)
         for pds in $PEER_SAVED_DATASETS; do
             source_family_exists "$pds" "$sync_family_root" "$_born"; pds_rc=$?
             [ "$pds_rc" -eq "$SOURCE_PROBE_UNKNOWN" ] \
@@ -9131,7 +9137,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing=""
+    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing="" family_born=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -9150,6 +9156,12 @@ cmd_add_client() {
             # copies already are.
             --landing=*)   landing="${a#*=}"
                            case "$landing" in ''|.|..|*[!A-Za-z0-9._-]*) die "add-client: --landing='$landing' -- one directory name (letters, digits, . _ -)" ;; esac ;;
+            # When this relationship was FIRST born (import-relation passes the
+            # exported one): a family on the source older than that is someone
+            # else's; younger is this relationship's own. See FAMILY_BORN_AT.
+            --family-born=*) family_born="${a#*=}"
+                           case "$family_born" in *[!0-9:\ TZ+-]*|'') die "add-client: --family-born='$family_born' -- a date, e.g. '2026-10-19 12:01:57'" ;; esac
+                           date -d "$family_born" +%s >/dev/null 2>&1 || die "add-client: --family-born='$family_born' is not a date" ;;
             --host=*|--lan=*)
                            [ -z "$endpoint_option" ] \
                                || die "add-client: pass exactly one endpoint option (--host is the normal form; --lan is the legacy alias)"
@@ -9691,6 +9703,7 @@ cmd_add_client() {
         # sniffed from snapshot names -- the sync-chain probe taught us where
         # name-sniffing ends.
         write_client_field PASSIVE           "$passive"
+        [ -n "${family_born:-}" ] && write_client_field FAMILY_BORN_AT "$family_born"
         # W17: an encrypted source sent encrypted (-w). A CREATE-time decision:
         # the first copy decides whether the target is raw, and the engines refuse
         # to mix the two afterwards.
@@ -17136,7 +17149,7 @@ cmd_save_profile() {
 
 # <record field>:<create flag>, in the order the wizard asks. A field with no
 # flag is listed in EXPORT_RELATION_UNREPLAYABLE instead, never silently.
-EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target LANDING_LABEL:landing RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
+EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target LANDING_LABEL:landing RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth FAMILY_BORN_AT:family-born"
 # REQUESTED_DATASETS is NOT in the map because its flag depends on another
 # field. add-client records the list under one name whichever way it was
 # given, but replays it two ways: with a mode it is `--requested=` (narrows the
@@ -17657,7 +17670,7 @@ SCOPE
             --mode=*) _has_mode=1 ;;
             # Only flags the one-command form takes; anything else (e.g. --bandwidth)
             # keeps the ordinary replay, which says what to do by hand.
-            --host=*|--target=*|--landing=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*) ;;
+            --host=*|--target=*|--landing=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*|--family-born=*) ;;
             *) _rux_ok=0 ;;
         esac
     done
@@ -17812,6 +17825,9 @@ cmd_export_relation() {
     local pair fld flag val
     local decl_json="" first=1
     local -a argv=()
+    # The first birth: recorded on an imported relationship, otherwise this one's
+    # own CREATED_AT (which itself is never exported -- it is this host's history).
+    local FAMILY_BORN_AT="${FAMILY_BORN_AT:-${CREATED_AT:-}}"
     for pair in $EXPORT_RELATION_MAP; do
         fld="${pair%%:*}"; flag="${pair#*:}"
         val="${!fld:-}"
@@ -17868,7 +17884,7 @@ EXF
     if [ "${RUX_MODE:-}" = local ]; then
         local -a lbargv=("--name=$name" "--source=${REQUESTED_DATASETS:-}" "--target=${CLIENT_TARGET:-}")
         for x in ${argv[@]+"${argv[@]}"}; do
-            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--landing=*|--bandwidth=*) ;; *) lbargv+=("$x") ;; esac
+            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--landing=*|--bandwidth=*|--family-born=*) ;; *) lbargv+=("$x") ;; esac
         done
         argv=("${lbargv[@]}")
         rverb=local-backup rthen=""
@@ -20963,6 +20979,7 @@ rux_remote_install() {
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$source_profile" ] && add_args+=(--source-profile="$source_profile")
         [ -n "${landing:-}" ] && add_args+=(--landing="$landing")
+        [ -n "${family_born:-}" ] && add_args+=(--family-born="$family_born")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
         [ "${rux_raw:-0}" -eq 1 ] && add_args+=(--raw)
@@ -21083,12 +21100,13 @@ rux_entry() {
     # pair/join/commit-scope/add-client/seed/activate sequence by hand -- the
     # one command that exists to spare an operator exactly that could not
     # express it.
-    local source_profile="" landing=""
+    local source_profile="" landing="" family_born=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
             --landing=*) landing="${a#*=}" ;;   # import-relation: the copies' directory, passed to add-client
+            --family-born=*) family_born="${a#*=}" ;;   # import-relation: the first birth, passed to add-client
             --target=*)  target="${a#*=}"; rux_target_given=1 ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
