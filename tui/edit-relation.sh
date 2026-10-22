@@ -677,7 +677,9 @@ save_all() {
         [ -n "$P_HOST" ] && { k=$((k + 1)); echo "$k. Adres źródła: $P_HOST  (activate --host, sprawdzenie, że to ten sam host)"; echo; }
         if [ -n "$P_ADDED$P_REMOVED" ]; then
             k=$((k + 1)); echo "$k. Datasety:"
-            for n in $P_ADDED; do echo "   DOJDĄ:    $n  (pierwsza pełna kopia od razu)"; done
+            # Kampania wariantów 2026-10-22: dataset dodany z powrotem szedł PRZYROSTOWO od kopii, która
+            # tu została -- "pierwsza pełna kopia" wprowadzała w błąd.
+            for n in $P_ADDED; do echo "   DOJDĄ:    $n  (pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest)"; done
             for n in $P_REMOVED; do echo "   ODPADNĄ:  $n  (kopie na tym hoście ZOSTAJĄ)"; done
             echo
         fi
