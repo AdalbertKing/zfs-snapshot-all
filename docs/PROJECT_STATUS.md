@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f396798dfe3396df -->
+<!-- status-covers-digest: a6dd9a41c4211dc5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,11 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, blok F: pomoc F1 zawijana, nie przycinana (`fix/help-wrap`).** Na 80×24 wiersze pomocy (pisanej pod
+  ~100 kolumn) kończyły się „kop…”, „domyś…” -- treść ginęła. Teraz okno pomocy zawija za długi wiersz na spacji, z
+  kontynuacją wciętą do kolumny opisu. Test `tui` 392/0: na prawdziwym HELP żaden wiersz nie przekracza okna, nic
+  nie jest przycięte, żadne słowo nie ginie (pada na main).
 
 - **Kampania 3, bloki D i F: F7 dwa razy i lista szablonów na 80×24 (`fix/f7-busy-80col`).** (D) Dwa biegi tej
   samej relacji naraz (F7 dwa razy albo F7 w trakcie crona) kończyły się „did NOT finish (rc=75)” i rc 1 -- choć
