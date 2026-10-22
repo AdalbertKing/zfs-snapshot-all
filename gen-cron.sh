@@ -2472,6 +2472,15 @@ build_dataset() {
             lint_scope_excludes "$ds" "$scope_raw" "[dataset:$ds_path] tier=$tier"
             scope_excl="$(scope_exclude_values "$ds")"
             flags="$(add_scope_flags "$flags" "$scope_passive" "$scope_exsnap" "$scope_excl")"
+            # An -e pickup STAMPS nothing: it takes the newest existing snapshot,
+            # named upstream; 'prefix' only narrows WHICH family it takes. The
+            # create-vs-prune lint below must not read that prefix as a family this
+            # tier creates. Measured on pve10 2026-10-22: a sync over a source that
+            # already carried automated_* (passive, prefix = automated_ on the
+            # dataset) with the two-tier d7h24 was refused at activate --
+            # "creates 'automated_...' but prunes 'automated_hourly'" -- although
+            # that tier creates nothing at all.
+            case " $flags " in *" -e "*) tier_creates=0 ;; esac
             # LINK FIELDS -- resolved from the [dataset:] section only (see the
             # block above link_flag_letter_present for why no template/defaults
             # layer), and rendered BEFORE -A is considered on purpose: an
