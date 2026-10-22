@@ -4303,7 +4303,7 @@ EROUT=$(er_run "0${T}srcret
 ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)
 if [ "$ERRC" -eq 1 ] && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" \
    && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
-   && hasE "$ERT" 'Retencja źródła +[^~]*\[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
+   && hasE "$ERT" 'Retencja źródła +[^~]*-> godzinowe 12 \[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
     ok "edit-relation: zmiana retencji zrodla czeka na liscie ([zmiana], Zapisz zmiany (1)); Wstecz z planu i Porzuc -- nic nie zainstalowane"
 else
     bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"
@@ -4710,7 +4710,7 @@ rm -rf "$RW"
 # The command runs behind an infobox that says how long it has been running and shows the
 # log's last lines; rc comes back; stdin is /dev/null (a prompt fails instead of hanging).
 RP="$(mktemp -d)"; mkdir -p "$RP/bin"
-printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
+printf '#!/bin/bash\nprintf "%%s\\n" "TERM=$TERM ~ $(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
 chmod +x "$RP/bin/wt"
 cat > "$RP/cmd" <<'EOF'
 #!/bin/bash
@@ -4721,10 +4721,10 @@ chmod +x "$RP/cmd"
     run_progress "Test" "$2/run.log" "$2/cmd" <<<"tak" || rc=$?; echo "RC=$rc"
     result_box "Wynik" "$rc" "$2/run.log" "" "Nie wyszlo."' x "$REPO" "$RP" ) > "$RP/out" 2>&1
 if grep -qx 'RC=3' "$RP/out" && grep -qF 'krok 1' "$RP/run.log" && grep -qF 'FATAL: nic nie zmieniono' "$RP/run.log" \
-   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '--title ~ Test -- trwa [0-9]* s ~ --infobox ~ ' "$RP/wt.log" && grep -q '^krok 1 ~ ' "$RP/wt.log" \
+   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '^TERM=linux ~ .*--title ~ Test -- trwa [0-9]* s ~ --infobox ~ ' "$RP/wt.log" && grep -q '^krok 1 ~ ' "$RP/wt.log" \
    && grep -qF 'Nie wyszlo.  (rc=3)' "$RP/wt.log" && grep -qF 'zrodlo odmowilo: brak miejsca' "$RP/wt.log" \
    && ! grep -q 'krok 1' "$RP/out"; then
-    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log tail), rc returned, no stdin; result_box shows the reason and the log end"
+    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log tail; TERM=linux so it stays on screen), rc returned, no stdin; result_box shows the reason and the log end"
 else
     bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
 fi

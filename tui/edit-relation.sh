@@ -445,6 +445,22 @@ eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w W
     wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
        --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
 }
+# Karta (U65, pve10 2026-10-22): czekająca zmiana retencji źródła słowami -- karta mówiła
+# "tyle samo co w kopii [zmiana]", czyli starą wartość przy gwiazdce nowej.
+sargs_words() {   # P_SARGS (--src-tier=T --keep=N ...) -> "godzinowe 72, dobowe 3"
+    local a t="" w out=""
+    for a in ${P_SARGS[@]+"${P_SARGS[@]}"}; do
+        case "$a" in
+            --src-tier=*) t="${a#*=}" ;;
+            --keep=*|--retain=*)
+                case "$t" in *hourly) w=godzinowe ;; *daily) w=dobowe ;; *weekly) w=tygodniowe ;;
+                             *monthly) w=miesięczne ;; *yearly) w=roczne ;; *) w="$t" ;; esac
+                out="${out:+$out, }$w ${a#*=}" ;;
+            --drop-tier*) out="${out:+$out, }$t: bez" ;;
+        esac
+    done
+    echo "${out:-?}"
+}
 # Karta (U65): obecne ustawienia silnika słowami; show-config raz na okno (pve10: 0,2 s).
 engine_words() {
     [ -s "$TMPD/sc.json" ] || "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>/dev/null || { echo "?"; return 0; }
@@ -699,7 +715,7 @@ while :; do
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
     if [ -n "$CUR_S" ]; then _sr="$(src_words_of "$CUR_S")"; else _sr="tyle samo co w kopii"; fi
-    [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr [zmiana]"
+    [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr -> $(sargs_words) [zmiana]"
     _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$_en -> zmiana [zmiana]"
     # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
     # da się zmienić (rodzaj, nazwa, konto, cel), stoi w NAGŁÓWKU, nie na liście; na liście tylko

@@ -1922,6 +1922,26 @@ exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
 
+### E98 — the fix for the black screen, merged on a stub, was itself invisible (2026-10-22, R12, repeat of E97)
+
+**Genesis.** U64/U66: the owner's "czarny ekran ponad 15 sekund". I added
+`run_progress` (a whiptail infobox refreshed every second) and merged it in
+#721. Its test ran against the whiptail stub, which logs argv and exits. On
+pve10 the window never appeared. With TERM=xterm (PuTTY, tmux), whiptail draws
+on the terminal's alternate screen (`smcup`) and removes it when it exits, so an
+infobox vanishes in the same instant. The same was true of every `info()` call
+("Sprawdzam…", "Czytam…") in every window that uses it. So the black screen the owner
+saw was partly this, and my first fix reproduced it.
+
+**Cause.** E97's rule was applied to the wizard steps, but not to the
+progress window. I treated it as plumbing that a unit test covers. The stub
+cannot show the defect: it has no screen.
+
+**Rule.** R12 again. Anything the operator SEES is checked on a real terminal
+before it ships: a tmux capture on pve10 while it runs, not after it. The fix
+gives the infobox TERM=linux, which has no alternate screen. The test now checks
+that TERM reaches whiptail, and it fails on the code from #721.
+
 ### E97 — GUI flows handed to the owner that only stubs had ever walked (2026-10-21, R12)
 
 **Genesis.** The owner's GUI campaign on pve10 (2026-10-21) hit a problem at almost
