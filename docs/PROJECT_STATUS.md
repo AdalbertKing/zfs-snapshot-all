@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 21db6b3c8796d945 -->
+<!-- status-covers-digest: ce7de07ec00a3b46 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 7: długi plan, cel kopii lokalnej (`kamp/plan`).** Na żywo na pve10: długi plan
+  (kopia lokalna) otwierał się w oknie z przewijaniem, w którym Enter nic nie robi, dopóki nie naciśnie się Tab --
+  admin czekał. Teraz każdy długi plan (`yesno_text`) to okno tekstu (strzałki przewijają, Enter = dalej) i krótkie
+  pytanie WYKONAJ/Wstecz, jak plan w zmianie relacji. Kopia lokalna z celem wewnątrz źródła (hdd/archive ->
+  hdd/archive/kopie) przechodziła cały kreator i odmawiał dopiero plan -- teraz okno w kroku „Dokąd”. Test `tui`
+  385/0 (pve9; atrapa: okno tekstu nie zabiera odpowiedzi, jak prawdziwy whiptail).
 
 - **Kampania 2026-10-22, paczka 6: okna repliki (`kamp/restart2`).** Na żywo na pve10: własny harmonogram „0 22 * *
   *zle” przechodził aż do planu (teraz każde pole crona sprawdzane w oknie); okno „kiedy” mówiło o nośniku
