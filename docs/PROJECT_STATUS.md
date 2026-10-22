@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cdd9931d630195ea -->
+<!-- status-covers-digest: 6c1c2b177aff64a8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -97,6 +97,13 @@
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
+- **Odzysk: Wstecz pamięta wybór; plan dodania datasetu bez „pełnej kopii” (`kamp/restore-back`).** Kampania
+  wariantów, pve10 2026-10-22. (1) W5: Wstecz z „Gdzie odtworzyć?” wracało do drzewa z zaznaczonym WSZYSTKIM --
+  wybór admina (np. jeden `srv-a`) znikał, a nieuważny Enter i „na miejsce” nadpisałby całą relację. Drzewo dostaje
+  teraz ostatni wybór. (2) W4: dataset zdjęty z relacji (kopie zostają) i dodany z powrotem idzie przyrostowo od
+  tamtej kopii (na żywo: `PLAN=INCREMENTAL` dla `hdd/home` w ab), a plan obiecywał „pierwszą pełną kopię”; teraz
+  „pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest”. Test `tui` 389/0 (nowy przypadek pada na main).
+
 - **Audyt relacji nie podsuwa już `zfs destroy` na żywe kopie (`kamp/orphan-live`).** Kampania wariantów,
   pve10 2026-10-22: każde usunięcie relacji (tu: lustro cb) drukowało „DATA WITHOUT A RELATIONSHIP … the
   relationship that produced it is gone” i 75 linii `zfs destroy -r …`, w tym `hdd/backups` i
@@ -105,6 +112,20 @@
   albo leży pod danymi relacji nie-ORPHAN (LIVE lub UNKNOWN), nie dostaje rady; audyt mówi tylko, ile takich
   pominął. Na pve10: 47 pominiętych, zostały wyłącznie rady dla `hdd/lab` (cb w tej chwili usunięta). Test
   `cleanrel` 93/0 (nowy przypadek pada na kodzie sprzed poprawki).
+- **Import lustra nie przechodzi w tryb pasywny (`kamp/family-born`).** Kampania wariantów, pve10 2026-10-22,
+  W6: eksport lustra cb -> usunięcie z kopiami -> import. Import padał przy aktywacji, a gdyby przeszedł, lustro
+  przestałoby robić migawki na źródle. Dwie warstwy:
+  (1) migawki `automated_*`, które cb sama zrobiła na pve11 przed eksportem, były starsze od NOWEGO rekordu
+  (`CREATED_AT` = dzień importu), więc wykrywanie „cudzej rodziny” uznawało je za cudze i ustawiało odbiór
+  pasywny. Teraz rekord ma `FAMILY_BORN_AT` -- pierwsze narodziny relacji; eksport zapisuje je (albo
+  `CREATED_AT`, gdy rekord go nie ma) jako `--family-born=`, import i `add-client` je przenoszą, aktywacja liczy
+  od nich. Stary plik eksportu (bez tego pola) zachowuje się jak dotąd.
+  (2) prawdziwie pasywny sync na szablonie dwuszczeblowym (d7h24) był odrzucany przez gen-cron („creates
+  'automated_...' but prunes 'automated_hourly'”), choć szczebel `-e` niczego nie tworzy. Lint pomija teraz
+  szczeble z `-e`.
+  Na żywo na pve10: import cb z `--family-born` -- bez trybu pasywnego, `-M`, pierwsza kopia, rc 0; ponowny
+  eksport niesie `2026-10-19 19:57:00`. Testy `zfsbackup` exportrel 73/0 i passivepick 14/0 (nowe przypadki padają
+  na main).
 
 - **H-4b: pierwsza replika po nowej relacji (`kamp/snapget-container`, snapget v2.77, odmrożenie właściciela
   2026-10-22).** Replika całej puli (calapula na pve10) w pierwszym biegu po nowej relacji kończyła się rc 1:

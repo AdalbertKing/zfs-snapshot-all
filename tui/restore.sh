@@ -347,8 +347,11 @@ while :; do
     1)  # ---- CO? -------------------------------------------------------------------------
         : >"$TMPD/ds.tsv"
         for c in "${ROWC[@]}"; do zfs list -H -p -o name,used,type -r "$c" 2>/dev/null >>"$TMPD/ds.tsv"; done
-        "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "Przywróć $REL: co?" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
-import sys, json
+        # Kampania wariantów 2026-10-22 (W5): Wstecz z "Gdzie odtworzyć?" wracało do drzewa
+        # z zaznaczonym WSZYSTKIM -- wybór admina znikał, a nieuważny Enter + "na miejsce"
+        # nadpisałby całą relację. Drzewo dostaje z powrotem ostatni wybór.
+        RESTORE_LAST_TREE="$TMPD/tree-last.json" "$PY" - "$TMPD/ds.tsv" "$TMPD/tree-spec.json" "Przywróć $REL: co?" "$TARGET" "${ROWC[@]}" <<'PYEOF' || exit 1
+import sys, json, os
 seen = set(); ds = []
 for ln in open(sys.argv[1], encoding="utf-8"):
     p = ln.rstrip("\r\n").split("\t")
@@ -363,6 +366,14 @@ for ln in open(sys.argv[1], encoding="utf-8"):
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": False, "no_exc": False,
         "legend": u" [x] odtwarzane   [-] część   [ ] nie",
         "recursion": "flat", "hide": [], "datasets": ds, "roots": sys.argv[5:], "excl": {}}
+lp = os.environ.get("RESTORE_LAST_TREE") or ""
+if lp and os.path.exists(lp):
+    try:
+        last = json.load(open(lp, encoding="utf-8"))
+        if last.get("roots"):
+            spec["roots"] = last["roots"]; spec["excl"] = last.get("excl") or {}
+    except Exception:
+        pass
 with open(sys.argv[2], "w", encoding="utf-8") as f:
     json.dump(spec, f, ensure_ascii=False)
 PYEOF
@@ -408,6 +419,7 @@ print(1 if sel and set(sel) == set(names) else 0)
 PYEOF
         ) || abort
         case "$FLAG" in 0|1) ;; *) abort ;; esac      # BACK z drzewa albo błąd odczytu
+        cp "$TMPD/tree-out.json" "$TMPD/tree-last.json" 2>/dev/null || :
         WHOLE="$FLAG"
         SEL=(); ORIG=()
         while IFS=$'\t' read -r d o; do [ -n "$d" ] && { SEL+=("$d"); ORIG+=("$o"); }; done <"$TMPD/sel.tsv"

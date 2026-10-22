@@ -8320,14 +8320,41 @@ pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of th
       CLIENTS_DIR="$PK/clients" PEER_SAVED_MODE="${PK_MODE:-sync}" PEER_SAVED_TARGET="${PK_TARGET:-}"
       LOAD_LABEL=pk LOAD_ACCOUNT=zfsbackup LOAD_HOST=10.4.4.4 LOAD_FLAGS="-K /dev/null"
       PEER_SAVED_DATASETS="rpool/data/vm-101" PROFILE_GFS="${PK_GFS:-1}"
+      CREATED_AT="${PK_CREATED:-}" FAMILY_BORN_AT="${PK_BORN:-}"
       PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
       ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
       load_ssh_opts() { LOAD_SSH_OPTS=(); }
-      emit_client_sections "$wf" pk ) > "$PK/$prof.log" 2>&1 || return 1
+      emit_client_sections "$wf" pk ${PK_NEW:+1} || exit 1
+      [ -n "${PK_NEW:-}" ] && [ -f "${PROFILE_TPL_FILE:-}" ] && cat "$PROFILE_TPL_FILE" >> "$wf"
+      exit 0 ) > "$PK/$prof.log" 2>&1 || return 1
     cp "$wf" "$PK/last.conf"
     sed -n '/^\[dataset:/,/^$/p' "$wf"
 }
 pk_def='vzdump -E __replicate_ -E __migration__'
+
+# FAMILY_BORN_AT (variant campaign, pve10 2026-10-22). The stub's family is from epoch
+# 100. A relationship born TODAY sees it as older -- someone else's -- and goes passive;
+# the same relationship whose FIRST birth (carried by export/import) is epoch 10 sees
+# its own family and keeps stamping. That is the import of a mirror that went passive.
+PK_CREATED="2026-10-22 14:00:00" pk_emit default >/dev/null; rc=$?
+PK_CREATED="2026-10-22 14:00:00" PK_BORN="@10" pk_emit d7h24 >/dev/null; rc2=$?
+if [ "$rc" -eq 0 ] && grep -q 'PASSIVE consumption' "$PK/default.log" \
+   && [ "$rc2" -eq 0 ] && ! grep -q 'PASSIVE consumption' "$PK/d7h24.log"; then
+    ok "passivepick: FAMILY_BORN_AT decides -- born today: the older family is foreign (passive); first birth before it: the family is our own (not passive)"
+else
+    bad "passivepick: FAMILY_BORN_AT decides" "rc=$rc rc2=$rc2" "$(grep -h 'sync:' "$PK/default.log" "$PK/d7h24.log")"
+fi
+# ...and a GENUINE passive sync on a two-tier family-stamping profile (d7h24) is a
+# config gen-cron accepts: its tiers pick up (-e) and create nothing, so the
+# "creates automated_... but prunes automated_hourly" lint must not refuse it.
+PK_NEW=1 PK_CREATED="2026-10-22 14:00:00" pk_emit d7h24 >/dev/null; rc=$?
+{ printf '[defaults]\n\thost_label = x\n\n'; cat "$PK/last.conf"; } > "$PK/gc.conf"
+gc_out=$(bash "$REPO/gen-cron.sh" -c "$PK/gc.conf" 2>&1); gc_rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'PASSIVE consumption' "$PK/d7h24.log" && [ "$gc_rc" -eq 0 ]; then
+    ok "passivepick: a passive sync on d7h24 (two tiers, prefix = automated_) passes gen-cron -- an -e tier creates nothing"
+else
+    bad "passivepick: passive sync on d7h24 refused by gen-cron" "rc=$rc gc_rc=$gc_rc" "$(printf '%s' "$gc_out" | tail -3)"
+fi
 
 sec=$(pk_emit passive-flat); rc=$?
 if [ "$rc" -eq 0 ] && printf '%s\n' "$sec" | grep -q 'PASSIVE consumption\|use_template' \
@@ -10166,12 +10193,22 @@ ex_argv="${ex_out#*\"argv\":\[}"; ex_argv="${ex_argv%%\]*}"
 # `--datasets=`, NOT `--requested=`: this record has no RUX_MODE, so the list
 # IS the request and add-client refuses --requested without --mode. The first
 # export wrote --requested for every record; the lab's import found it.
-ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--landing=10.0.0.11","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
+ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--landing=10.0.0.11","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--family-born=2026-09-01T10:00:00Z","--exclude-child=-swap"'
 if [ "$ex_argv" = "$ex_want" ]; then
     ok "exportrel: the replay argv is exactly the flags the declarations map to"
 else
     bad "exportrel: the replay argv is exactly the flags the declarations map to" "want: $ex_want" "got:  $ex_argv"
 fi
+# FAMILY_BORN_AT (variant campaign, pve10 2026-10-22): an imported relationship
+# carries its FIRST birth, and the next export passes that on, not its own new
+# CREATED_AT -- otherwise a second export/import round makes the mirror passive again.
+sed 's/^CLIENT_NAME=.*/CLIENT_NAME=ksiegborn/; $a FAMILY_BORN_AT=2026-08-01T09:00:00Z' "$EX/clients/ksiegowosc.conf" > "$EX/clients/ksiegborn.conf"
+ex_run export-relation ksiegborn --json; ex_brc=$?
+ex_bout="$(cat "$WORK/ex.out")"
+case "$ex_brc:$ex_bout" in
+    0:*'"--family-born=2026-08-01T09:00:00Z"'*) case "$ex_bout" in *'--family-born=2026-09-01'*) bad "exportrel: FAMILY_BORN_AT wins over CREATED_AT" "$ex_bout" ;; *) ok "exportrel: a recorded FAMILY_BORN_AT is exported, not the record's own CREATED_AT" ;; esac ;;
+    *) bad "exportrel: FAMILY_BORN_AT wins over CREATED_AT" "rc=$ex_brc" "$ex_bout" ;;
+esac
 # WITH A MODE the same list replays as --requested= (it narrows the DRAFT the
 # source writes), and --mode= rides along; without one (above) it is --datasets=.
 # One field, two flags, chosen by the record -- the pair is the discriminator.
