@@ -2566,6 +2566,18 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] [-
                 printf '%s\n' "${SOURCE_PRUNE_PRESERVED[$ds]}" \
                     | sed -E "s|^([[:space:]]*ssh_flags[[:space:]]*=).*|\1 $sflags|"
             } >> "$workfile" || return 1
+        elif [ "${PLAN_CLONE:-0}" -eq 1 ] && [ "${#SOURCE_PRUNE_PRESERVED[@]}" -gt 0 ]; then
+            # A dataset joining an existing relationship: a sibling's installed source
+            # policy, verbatim, under the new scope (relation_sibling above says why).
+            local _psib="" _prec=no
+            for _psib in "${!SOURCE_PRUNE_PRESERVED[@]}"; do break; done
+            is_recursive_root "$ds" && _prec=yes
+            {
+                echo
+                echo "[prune:$scope]"
+                printf '%s\n' "${SOURCE_PRUNE_PRESERVED[$_psib]}" \
+                    | sed -E "s|^([[:space:]]*ssh_flags[[:space:]]*=).*|\1 $sflags|; s|^([[:space:]]*notify[[:space:]]*=).*|\1 ${name}-src-$(basename "$ds")|; s|^([[:space:]]*recursive[[:space:]]*=).*|\1 $_prec|"
+            } >> "$workfile" || return 1
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
             # the policy from the profile.
@@ -4299,6 +4311,7 @@ set_or_remove_section_field() {   # <file> <exact header> <field> <value>
 # rule drifting apart is exactly the failure this project has paid for before,
 # so there is only one.
 declare -a PLAN_REGEN_DS=() PLAN_REGEN_PATHS=() PLAN_KEEP_DS=()
+PLAN_CLONE=0; PLAN_CLONE_SIB=""; PLAN_CLONE_PSIB=""   # set by cmd_activate_client (relation_sibling)
 PLAN_PRUNE_SCOPE=""; PLAN_PRUNE_NEEDS_GEN=0; PLAN_NEEDS_PROFILE=0; PLAN_PRUNE_LEGACY=""
 client_section_plan() {   # <file> <client name> <is_new_relationship>
     local file="$1" name="$2" is_new="$3" ds localpath
@@ -4455,6 +4468,44 @@ Nothing was changed."
         fi
     fi
     return 0
+}
+
+# THE RELATION IS ITS CONFIG (owner 2026-10-22: "Szablon/profil jest tylko pomocnikiem
+# ... Potem jest zbędny dla relacji. Chyba, że znowu chcemy ją nim poczęstować").
+# A dataset joining an EXISTING relationship takes the sections of a sibling of the
+# same relationship -- the block and the installed sections already say everything
+# -- instead of re-rendering the profile file. Measured on pve10 before this:
+# add-source ab hdd/db --yes died "profile 'd30h24': ... is missing" with the file
+# moved aside, although [relation:ab] held every tier. local_source_change has done
+# the same for local copies all along.
+#
+# relation_sibling <file> <name> <dataset|prune> <target|source> -> the path of the
+# first section of that kind owned by <name> on that side ("" and rc 1 when none).
+relation_sibling() {
+    awk -v kind="$3" -v rel="$2" -v side="$4" '
+        function done_sec() { if (h != "" && r && s) { print h; found = 1; exit } }
+        /^\[/ { done_sec(); h = ""; r = 0; s = 0
+                if (index($0, "[" kind ":") == 1) { h = substr($0, length(kind) + 3); sub(/\]$/, "", h) }
+                next }
+        h != "" { t = $0; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+                  if (t ~ /^relation[ \t]*=/) { v = t; sub(/^relation[ \t]*=[ \t]*/, "", v); if (v == rel) r = 1 }
+                  if (t ~ /^side[ \t]*=/)     { v = t; sub(/^side[ \t]*=[ \t]*/, "", v);     if (v == side) s = 1 } }
+        END { if (!found) { done_sec(); if (!found) exit 1 } }' "$1"
+}
+# clone_relation_section <file> <dataset|prune> <from path> <to path> <notify> [src] [recursive]
+#   -> the sibling's section under the new header: notify (and src / recursive when
+#   given) rewritten, the sibling's own child exclusions dropped, everything else --
+#   relation, side, the staggered per-tier minutes, flags -- as installed.
+clone_relation_section() {
+    cron_config_section "$1" "[$2:$3]" | awk -v h="[$2:$4]" -v nb="$5" -v src="${6:-}" -v rec="${7:-}" '
+        NR == 1 { print h; next }
+        { t = $0; sub(/^[ \t]+/, "", t) }
+        t ~ /^notify[ \t]*=/ { print "\tnotify       = " nb; next }
+        src != "" && t ~ /^src[ \t]*=/ { print "\tsrc          = " src; next }
+        rec != "" && t ~ /^recursive[ \t]*=/ { print "\trecursive    = " rec; next }
+        t ~ /^exclude_child_[0-9]+[ \t]*=/ { next }
+        /^[ \t]*$/ { next }
+        { print }'
 }
 
 emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
@@ -4728,6 +4779,11 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
         [ -n "$(sync_mirror_flag "$ds")" ] && MIRRORED_LANDINGS+=("$localpath")
+        if [ "${PLAN_CLONE:-0}" -eq 1 ]; then
+            { echo; clone_relation_section "$workfile" dataset "$PLAN_CLONE_SIB" "$localpath" \
+                  "${name}-$(basename "$ds")" "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"; } >> "$workfile" || return 1
+            continue
+        fi
         {
             echo
             echo "[dataset:$localpath]"
@@ -4880,6 +4936,13 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         fi
         local _plocal
         for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
+            if [ "${PLAN_CLONE:-0}" -eq 1 ]; then
+                [ -n "${PLAN_CLONE_PSIB:-}" ] || continue
+                _plocal=$(client_local_path "$ds")
+                { echo; clone_relation_section "$workfile" prune "$PLAN_CLONE_PSIB" "$_plocal" \
+                      "${name}-$(basename "$ds")"; } >> "$workfile" || return 1
+                continue
+            fi
             # A profile whose tiers prune THEMSELVES (family-per-tier: d30h24,
             # m12w4d7h24-*, prod -- every one that can quiesce) declares no [prune]
             # fragment, and its retention rides the [dataset:] section's templates.
@@ -12238,7 +12301,20 @@ cmd_activate_client() {
     # for ever. The installed sections stay preserved (REV-089); only the ones
     # being generated take the profile, and the plan is computed again because
     # its ladder-or-flat answer reads the profile.
-    if [ "$is_new_relationship" -eq 0 ] && [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && [ -n "${PROFILE:-}" ]; then
+    #
+    # ...UNLESS the relationship already has its block and a sibling dataset: then the
+    # new dataset is a clone of that sibling and the profile file is not read at all
+    # (relation_sibling). The profile is consulted only to CREATE, or when the operator
+    # re-applies one ("Użyj szablonu" = --regenerate).
+    PLAN_CLONE=0; PLAN_CLONE_SIB=""; PLAN_CLONE_PSIB=""
+    if [ "$is_new_relationship" -eq 0 ] && [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && [ "$regen" -ne 1 ] \
+       && [ -z "${PLAN_PRUNE_LEGACY:-}" ] && relblock_has "$workfile" "$name" \
+       && PLAN_CLONE_SIB=$(relation_sibling "$workfile" "$name" dataset target) && [ -n "$PLAN_CLONE_SIB" ]; then
+        PLAN_CLONE=1; PLAN_NEEDS_PROFILE=0; PLAN_PRUNE_NEEDS_GEN=0
+        local _ps; _ps=$(relation_sibling "$workfile" "$name" prune target) || _ps=""
+        [ "$_ps" = "$PLAN_CLONE_SIB" ] && PLAN_CLONE_PSIB="$_ps"
+        log "activate-client: new dataset(s) of '$name' take the sections of '$PLAN_CLONE_SIB' (the relationship's own config) -- no profile file is read"
+    elif [ "$is_new_relationship" -eq 0 ] && [ "${#PLAN_REGEN_DS[@]}" -gt 0 ] && [ -n "${PROFILE:-}" ]; then
         apply_client_profile_choice 1 "$PROFILE"
         PROFILE_LOADED=""
         client_section_plan "$workfile" "$name" "$is_new_relationship"
