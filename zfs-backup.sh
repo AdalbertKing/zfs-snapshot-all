@@ -17658,8 +17658,9 @@ SCOPE
         echo "  wyeksportowana z: ${from:-?}  ${at:-}"
         echo "  $peer_host nie ma konta tego kolektora (relacje usunieto razem ze zrodlem), a ten host"
         echo "  ma do niego dostep roota -- import pojdzie jednym poleceniem: parowanie, zakres (dokladnie"
-        import_relblock_note "$doc"
         echo "  lista datasetow z pliku), seed, aktywacja."
+        # F-2 (kampania 2026-10-21): ta notatka stała W ŚRODKU zdania powyżej.
+        import_relblock_note "$doc"
         echo
         echo "Wykona sie DOKLADNIE to:"
         printf '  zfs-backup.sh'
