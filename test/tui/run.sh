@@ -3001,6 +3001,41 @@ else
     bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
 fi
 
+# U53 + U54 (wlasciciel, A.4 2026-10-21): sekcje oddzielone pusta linia, opis klucza jako trzecia
+# kolumna; szablon nowej relacji (rodzaj "profile") = wybor z LISTY szablonow, bez ukrytych i
+# pochodnych (-src-), kursor na obecnym -- nie pole do wpisania.
+cat > "$NR/bin/zb-set2" <<'EOF'
+#!/bin/bash
+if [ "$1" = list-profiles ]; then
+    echo '{"profiles":[{"name":"d7h24","source":"package","description":"7 dobowych + 24 godzinowe"},{"name":"default","source":"package","description":"fabryczny: 12 miesiecy"},{"name":"relacja-x","source":"user","hidden":true,"description":"ukryty"},{"name":"d7h24-src-H24D3","source":"user","description":"pochodny"},{"name":"moj","source":"user","description":"moj szablon"}]}'
+    exit 0
+fi
+[ "$1" = settings ] || exit 9
+case "$2" in
+    --tsv) printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
+           printf 'new_relation.template\tdefault\tdomyślne\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
+    set) printf '%s\n' "$*" >> "$NR_DIR/argv"
+         case " $* " in *" --yes "*) echo "settings: zapisane."; exit 0 ;; esac
+         echo "plan only. Nothing was changed."; exit 0 ;;
+esac
+exit 9
+EOF
+chmod +x "$NR/bin/zb-set2"
+SD="$NR/sd2"; rm -rf "$SD"; mkdir -p "$SD"
+printf '0\tnew_relation.template\n0\td7h24\n0\tzapisz\n0\t\n' > "$SD/answers"
+SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set2"
+        bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
+SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
+SPROF="$(grep -F -- '--title ~ new_relation.template ~' "$SD/wt.log" | head -1)"
+if has "$SMENU" ' ~ #_new_relation ~   ~ ' && hasE "$SMENU" 'email +root  \(zfs-alert.conf\) +kto dostaje maile' \
+   && has "$SPROF" '--menu' && has "$SPROF" '--default-item ~ default ~' && has "$SPROF" ' ~ d7h24 ~ ' && has "$SPROF" ' ~ moj ~ ' \
+   && ! has "$SPROF" 'relacja-x' && ! has "$SPROF" 'src-H24D3' && ! has "$SPROF" '--inputbox' \
+   && grep -qx 'settings set new_relation.template=d7h24 --yes' "$SD/argv"; then
+    ok "F10 U53/U54: sekcje oddzielone, kolumna opisu; szablon nowej relacji z listy (bez ukrytych i -src-), kursor na obecnym, zapis settings set"
+else
+    bad "F10 U53/U54" "menu: $(printf '%s' "$SMENU" | cut -c1-400)" "prof: $(printf '%s' "$SPROF" | cut -c1-400)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$(cut -c1-200 "$SD/err")"
+fi
+
 # 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.
 #
 # Wlasciciel, 2026-09-20, po zobaczeniu ekranu na zywo: "krok 9/10 nie przechodzi
