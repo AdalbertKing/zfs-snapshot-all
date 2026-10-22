@@ -49,7 +49,8 @@ days: flat `-H24 -D7` kept 6 of 6, `-G -H24 -D7` kept **0 of 6** (`rc=0`, no
 warning, nothing in the mail), `-G -H24 -D30` kept 1. A family whose newest
 member has aged past its ladder's reach is deleted entirely on the first prune
 after the machine comes back. `m31w4d7h24` is the shipped answer to that:
-four families, four flat counters, no `gfs` anywhere.
+four families, four flat counters, no `gfs` anywhere. Since 2026-10-22 `default`
+(24/7/4/3) and `full` (24/7/4/12/5) are flat too.
 
 `Y5M12D31H24` is the first UPPERCASE profile, and it needed no new suffix: the
 case rule above already said "one family, several counters over it". It was
@@ -117,7 +118,9 @@ data where a crash-consistent copy is genuinely worthless. See
 
 | profile | creates | keeps | coherent tiers |
 |---|---|---|---|
-| `default` | one family, hourly | GFS ladder 24/7/4/12 | none — a ladder cannot |
+| `default` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 3, each a flat COUNT over its own prefix (owner 2026-10-22: flat, m3) | daily, weekly, monthly |
+| `full` | five families: hourly, daily, weekly, monthly, yearly | 24 / 7 / 4 / 12 / 5, each a flat COUNT over its own prefix (owner 2026-10-22) | daily, weekly, monthly, yearly |
+| `M12W4D7H24` | ONE family, hourly, `automated_<ts>` | GFS ladder 24/7/4/12 over it, one prune line (owner 2026-10-22) | none — a ladder cannot |
 | `prod` | four families: hourly, daily, weekly, monthly | 24 / 7 / 4 / 6 | daily, weekly, monthly |
 | `d30h24` | two families: hourly, daily | 24 / 30 | daily |
 | `d30h24-gfs` | the same two families | 24 / 30, each a `-G` ladder over its own prefix | daily |

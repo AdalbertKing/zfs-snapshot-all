@@ -2408,6 +2408,10 @@ import sys, json, copy
 p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
 if not any(x.get("name") == "passive-flat" for x in d["profiles"]):
     x = copy.deepcopy(d["profiles"][0]); x["name"] = "passive-flat"; d["profiles"].append(x)
+# od 2026-10-22 passive-flat jest UKRYTY (hidden = yes) -- przy lancuchu i tak ma byc na liscie
+for x in d["profiles"]:
+    if x.get("name") == "passive-flat":
+        x["hidden"] = "yes"
 json.dump(d, open(p, "w", encoding="utf-8"))
 PYEOF
 NRCA=$(nr_run "$(w17_ans 'grant')" NR_FIX="$NRC" NR_TREE="$NRTK"); NRCW="$(cat "$NR/wt.log")"
