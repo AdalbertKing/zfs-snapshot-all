@@ -7964,13 +7964,20 @@ cmd_replica_restart() {
     opts="${opts//\"/}"
     [ -n "$line" ] || die "replica-restart: the replica '$name' renders no line -- nothing to restart"
     local pool="${dst%%/*}" s
+    # Campaign 2026-10-22 (pve10): the full copy went to <target>-restart with -t, and the
+    # engine refuses -t together with -R ("-R expands into many independent datasets") --
+    # every restart of a recursive replica failed at step 1. The copy now lands under a
+    # temporary BASE beside the old copy, mapped exactly as the replica's own run maps it,
+    # and is moved into place after the old copy is gone.
+    local tbase="$dst/restart-tmp"
     echo "replica-restart '$name' -- pelna kopia od nowa NA TYM SAMYM DYSKU ($dst):"
     for s in ${src//,/ }; do
         echo "  $s:"
-        echo "     1. snapget.sh $opts -t \"$s\" \"$dst/$s-restart\"   -- pelna kopia OBOK starej"
+        echo "     1. snapget.sh $opts \"$s\" \"$tbase\"   -- pelna kopia OBOK starej (pod $tbase/$s)"
         echo "     2. zfs destroy -r $dst/$s   -- stara kopia, dopiero po udanym kroku 1"
-        echo "     3. zfs rename $dst/$s-restart $dst/$s"
+        echo "     3. zfs rename -p $tbase/$s $dst/$s"
     done
+    echo "  na koniec: zfs destroy -r $tbase   -- pusta baza tymczasowa"
     [ "$media" = removable ] && echo "  nosnik wymienny: podlaczany bramka (zfs-media-gate.sh attach/detach), jak w biegu z crona"
     echo "  Na dysku musi sie zmiescic chwilowo stara i nowa kopia. Gdy krok 1 sie nie uda, stara zostaje nietknieta."
     if [ "$yes" -ne 1 ]; then
@@ -7982,20 +7989,25 @@ cmd_replica_restart() {
         bash "$gate" attach "$pool" "$name" --dataset "$dst" ${guids:+--guids "$guids"}; a_rc=$?
         [ "$a_rc" -eq 0 ] || die "replica-restart: the medium '$pool' of '$name' could not be attached (gate rc=$a_rc) -- nothing was changed"
     fi
+    # A leftover temporary base (an interrupted earlier restart) holds nothing to keep.
+    zfs list -H "$tbase" >/dev/null 2>&1 && { zfs destroy -r "$tbase" || rc=1; }
     for s in ${src//,/ }; do
-        local tgt="$dst/$s" tmp="$dst/$s-restart"
-        zfs list -H "$tmp" >/dev/null 2>&1 && { zfs destroy -r "$tmp" || { rc=1; break; }; }
+        [ "$rc" -eq 0 ] || break
+        local tgt="$dst/$s" tmp="$tbase/$s"
         # shellcheck disable=SC2086
-        if ! bash "$SCRIPT_DIR/snapget.sh" $opts -t "$s" "$tmp"; then
+        if ! bash "$SCRIPT_DIR/snapget.sh" $opts "$s" "$tbase"; then
             warn "replica-restart: the full copy of $s failed -- the old copy $tgt is untouched"
             zfs destroy -r "$tmp" 2>/dev/null; rc=1; break
         fi
         if zfs list -H "$tgt" >/dev/null 2>&1; then
             zfs destroy -r "$tgt" || { warn "replica-restart: the new copy is at $tmp, but the old $tgt could not be destroyed"; rc=1; break; }
         fi
-        zfs rename "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; break; }
+        zfs rename -p "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; break; }
         log "replica-restart: $tgt -- started again (full copy)"
     done
+    if [ "$rc" -eq 0 ] && zfs list -H "$tbase" >/dev/null 2>&1; then
+        zfs destroy -r "$tbase" || warn "replica-restart: the copies are in place, but the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
+    fi
     if [ "$media" = removable ]; then
         bash "$gate" detach "$pool" "$name" --engine-rc "$rc" || :
     fi
