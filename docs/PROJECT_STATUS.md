@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cdeea8ae65e30500 -->
+<!-- status-covers-digest: 41801314a6454a7a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 4: replika całej puli „aktualna” (`kamp/record`).** Po paczce 3 `usb1` pokazuje
+  „Kopia z”, a `calapula` (cała pula `hdd`) dalej „brak”: znacznik „nośnik aktualny” był uzależniony od pełnego
+  rekordu pomijania („wszystkie źródła albo nic”), a `hdd/backups` -- kontener bez własnych migawek -- tego rekordu
+  nie pozwala zapisać. Teraz aktualność wynika z udanej kopii; rekord pomijania zostaje „wszystko albo nic”, tylko
+  pomijanie przy takim źródle nie zadziała. Test `mediagate` 160/0 (L8c pada na kodzie sprzed poprawki).
 
 - **Kampania 2026-10-22, paczka 3: replika na nośniku zastanym, F-2 (`kamp/mediagate`).** Na żywo na pve10 obie
   repliki pokazywały „Kopia z: brak”, choć kopie się udawały: bramka nośnika zapisywała rekord („nośnik aktualny”)
