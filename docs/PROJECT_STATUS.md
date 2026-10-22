@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d28ef3b5627130e7 -->
+<!-- status-covers-digest: cdeea8ae65e30500 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 3: replika na nośniku zastanym, F-2 (`kamp/mediagate`).** Na żywo na pve10 obie
+  repliki pokazywały „Kopia z: brak”, choć kopie się udawały: bramka nośnika zapisywała rekord („nośnik aktualny”)
+  tylko przy pulach, które sama zaimportowała. Dysk zostawiony podpięty i zaimportowany (i pule-pliki labu) nie
+  dostawał go nigdy -- F6 „brak”, strażnik wieku repliki z czasem alarmuje. Teraz udana kopia zapisuje rekord także
+  na nośniku zastanym; eksport nadal tylko własnego importu. F-2: notatka „Potem: własne ustawienia relacji z pliku”
+  w imporcie nie przecina już zdania. Testy: `mediagate` 159/0, `exportrel` 72/0 (nowe przypadki padają na kodzie
+  sprzed poprawki).
 
 - **Kampania 2026-10-22, paczka 2: usunięcie relacji po odzysku (`kamp/leave`).** Na żywo: po odzysku na źródle
   (zgoda `--allow-restore=pve10` na pve9) usunięcie relacji `pve9` stanęło w połowie -- `deploy.sh --leave` odebrał

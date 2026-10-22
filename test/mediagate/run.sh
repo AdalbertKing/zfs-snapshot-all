@@ -798,6 +798,24 @@ else
 fi
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 
+# L8f. A MEDIUM FOUND IMPORTED (campaign 2026-10-22, pve10): a disk left attached and imported
+#      -- the lab's file pools are the same -- got its copies and the record never advanced
+#      (written only on the export path): F6 "Kopia z: brak", the age monitor warning for ever.
+#      Not ours: still NOT exported, but a verified transfer records it; a failed one does not.
+: > "$EXPORTED_LOG"; rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 1 >/dev/null 2>&1
+[ -f "$SYNCFILE" ] && bad "L8f: a failed transfer on a found medium does not record it" "written" || ok "L8f: a failed transfer on a found medium does not record it"
+out="$(g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 0)"
+if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && [ -f "$STATE/rep.current" ] \
+   && [ ! -s "$EXPORTED_LOG" ] && has "not this run's call" "$out"; then
+    ok "L8f: a verified transfer on a medium found imported records it (guid, current) and still leaves it imported"
+else
+    bad "L8f: found medium recorded" "$(cat "$SYNCFILE" 2>/dev/null)" "exported: $(cat "$EXPORTED_LOG")" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+
 # L8p. A PASSIVE replica (owner note 20, 2026-10-08) has no family of its own:
 #      --prefix - means ANY snapshot. The record and the "current" marker must
 #      advance exactly as with a prefix -- without them F6 says "brak kopii" for
