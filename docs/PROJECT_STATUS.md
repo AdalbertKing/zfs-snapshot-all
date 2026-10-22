@@ -101,9 +101,10 @@
   cudzysłowem (`hourly.notify_word = snap"shot`) wracała po eksport → usuń → import jako `snap\`, rc 0; `--check`
   mówił „różne” dla identycznego bloku. Przyczyna: blok `relation` z pliku czytany wyrażeniem regularnym, które
   kończy napis na pierwszym `\"` i niczego nie dekoduje. Teraz `json_flat_object` czyta go tak, jak reszta importu
-  (dekoduje `\"`, `\`, `\/` dokładnie raz), a czego nie umie odtworzyć dokładnie (inna ucieczka, tabulator, nowa
-  linia, wartość nie-napis) -- odrzuca przed instalacją. Dowód recenzenta 4/0 (było 2/2), `exportrel` 77/0 (nowe:
-  dokładny obieg z `"` i `\`, `--check` równe/różne, odrzucenie uszkodzonego bloku), `test/run.sh` 123/0.
+  (dekoduje `\"`, `\\`, `\/` dokładnie raz). Bloku, którego nie da się odtworzyć dokładnie (inna ucieczka,
+  tabulator, nowa linia, wartość nie-napis), import nie instaluje -- odmawia z poleceniem. Dowód recenzenta 4/0
+  (było 2/2), `exportrel` 77/0 (nowe: dokładny obieg z `"` i `\`, `--check` równe/różne, odrzucenie uszkodzonego
+  bloku także pod `--check`), `test/run.sh` 123/0.
 
 - **Szablon tylko przy tworzeniu (`kamp/no-profile`, decyzja właściciela 2026-10-22).** „Szablon/profil jest
   tylko pomocnikiem… Potem jest zbędny dla relacji. Chyba, że znowu chcemy ją nim poczęstować.” Zmierzone na
@@ -111,8 +112,8 @@
   wszystko. Teraz: (1) nowy dataset istniejącej relacji to klon sekcji jej sąsiada (cel, sprzątanie źródła,
   drabina celu), bez czytania szablonu; (2) import na kolektor bez pliku szablonu buduje relację z bloku
   zapisanego w eksporcie (szablon pomocniczy tylko na ten import, w rekordzie zostaje nazwa pierwotna);
-  (3) zmiana relacji lokalnej i migawek zdalnych czyta szablon tylko przy „Harmonogram → inny szablon” --
-  zgodnie z zasadą. Na żywo z CAŁYM katalogiem `profiles/` odsuniętym: add-source/remove-source, import cb,
+  (3) zmiana relacji lokalnej i migawek zdalnych czyta szablon tylko przy zmianie szablonu w polu Harmonogram
+  („Użyj szablonu”) -- zgodnie z zasadą. Na żywo z CAŁYM katalogiem `profiles/` odsuniętym: add-source/remove-source, import cb,
   show-tiers, show-config, list-jobs, monitor, export, set-transfer, set-tiers, activate -- rc 0; „Użyj
   szablonu” odmawia czytelnie. Testy: `zfsbackup` 1006/0, `tui` 390/0 (pve9); nowe przypadki w `addsource`
   i `exportrel` padają na main. Opis: docs/project/DESIGN-SZABLON-TYLKO-PRZY-TWORZENIU-2026-10-22.md.
