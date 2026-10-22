@@ -11694,6 +11694,19 @@ else
     bad "listjobs: a [prune:] section reports as prune" "$lj_got"
 fi
 
+# Kampania 3 (2026-10-22): a relation block names its tier `profile__<rel>__<tier>`, while
+# the dataset section staggers the schedule under the SHORT name -- and that is what cron
+# runs. The panel read the block's 1 * * * * and showed "Następny 22:01" for a :15 job.
+lj_short="$( declare -A JOB_F=(
+        ["template:profile__relacja-ab__hourly|send_schedule"]="1 * * * *"
+        ["dataset:hdd/data|send_schedule_hourly"]="15 * * * *" )
+    jobs_field dataset hdd/data profile__relacja-ab__hourly send_schedule )"
+if [ "$lj_short" = "15 * * * *" ]; then
+    ok "listjobs: a relation tier's schedule comes from the dataset's staggered send_schedule_<tier>, not the block"
+else
+    bad "listjobs: relation tier schedule from the dataset section" "got '$lj_short'"
+fi
+
 # --- RESOLUTION: THE SECTION BEATS THE TEMPLATE -----------------------------
 # vm-999 uses the daily template (0 4 * * *) and overrides the schedule itself.
 # Reading the template here would show a cadence the host does not run.
