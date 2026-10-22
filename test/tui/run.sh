@@ -4049,7 +4049,7 @@ ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
 ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
    && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
-   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +\[zmiana\]'; then
+   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +[^~]*\[zmiana\]'; then
     ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
 else
     bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
@@ -4182,8 +4182,8 @@ ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head 
 if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z 192.168.28.99   nazwa r1   konto root   cel ' \
    && ! has "$ERC1" ' ~ rodzaj ~ ' && ! has "$ERC1" ' ~ cel ~ ' && ! has "$ERC1" ' ~ nazwa ~ ' && ! has "$ERC1" ' ~ konto ~ ' \
    && ! has "$ERC1" ' ~ teraz ~ ' && ! has "$ERC1" ' ~ config ~ ' && ! has "$ERC1" ' ~ zapisz ~ ' \
-   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'; then
-    ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne, pod kreska tylko Zapisz zmiany"
+   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'    && ! has "$ERC1" 'jak w configu' && hasE "$ERC1" 'Silnik +(fabryczne|historia|kompresja|szyfr|autodobór|raw)'    && hasE "$ERC1" 'Retencja źródła +(tyle samo co w kopii|godzinowe|dobowe|tygodniowe|miesięczne|roczne|[A-Za-z0-9])'; then
+    ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne (wartosci slowami, nie jak w configu), pod kreska tylko Zapisz zmiany"
 else
     bad "edit-relation: karta U65" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-700)"
 fi
@@ -4303,7 +4303,7 @@ EROUT=$(er_run "0${T}srcret
 ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)
 if [ "$ERRC" -eq 1 ] && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" \
    && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
-   && hasE "$ERT" 'Retencja źródła *\[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
+   && hasE "$ERT" 'Retencja źródła +[^~]*\[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
     ok "edit-relation: zmiana retencji zrodla czeka na liscie ([zmiana], Zapisz zmiany (1)); Wstecz z planu i Porzuc -- nic nie zainstalowane"
 else
     bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"

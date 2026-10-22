@@ -177,11 +177,13 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
     local t="$1" x="$2" d="$3" c="$4" i v lb w items=()
     geom
     w=$((W - 10))
+    local pad=17 nm      # kolumna wartości: najdłuższa nazwa + 2 (U65: "* Retencja źródła" się nie mieściła)
+    for nm in "${CARD_NAMES[@]}"; do [ $((${#nm} + 2)) -gt "$pad" ] && pad=$((${#nm} + 2)); done
     for i in "${!CARD_TAGS[@]}"; do
         v="${CARD_VALUES[$i]:-…}"
         # Wyrównanie po ZNAKACH (${#}), nie bajtach: printf %-16s liczy bajty i "Źródło"
         # wypadało z kolumny.
-        lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt 17 ]; do lb="$lb "; done; lb="$lb$v"
+        lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt "$pad" ]; do lb="$lb "; done; lb="$lb$v"
         if [ "${CARD_FIXED[$i]:-0}" = 1 ]; then
             items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" $((w - 10)))  (stałe)")
         else

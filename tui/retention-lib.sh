@@ -130,3 +130,17 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
     SRCPROF="$name"
     return 0
 }
+
+# Retencja źródła słowami z nazwy profilu pochodnego <cel>-src-H24D3 -> "godzinowe 24, dobowe 3";
+# inna nazwa -- ona sama. Kreator (krok "u źródła") i karta zmiany relacji (U65) mówią tak samo.
+src_words_of() {   # <profil>
+    local p="$1" s out="" l n
+    case "$p" in *-src-*) ;; *) echo "$p"; return ;; esac
+    s="${p##*-src-}"
+    while [ -n "$s" ]; do
+        l="${s:0:1}"; s="${s:1}"; n="${s%%[!0-9]*}"; s="${s#"$n"}"
+        case "$l" in H) l=godzinowe ;; D) l=dobowe ;; W) l=tygodniowe ;; M) l=miesięczne ;; Y) l=roczne ;; *) echo "$p"; return ;; esac
+        out="${out:+$out, }$l ${n:-?}"
+    done
+    echo "$out"
+}

@@ -445,6 +445,28 @@ eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w W
     wt --title "$t" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item "$d" \
        --menu "$x" "$(fit $(($# / 2 + 2)))" "$W" "$(lhfit $(($# / 2)) 2)" "$@"
 }
+# Karta (U65): obecne ustawienia silnika słowami; show-config raz na okno (pve10: 0,2 s).
+engine_words() {
+    [ -s "$TMPD/sc.json" ] || "$ZB" show-config "$NAME" --json >"$TMPD/sc.json" 2>/dev/null || { echo "?"; return 0; }
+    "$PY" - "$TMPD/sc.json" "$NAME" <<'PYEOF' 2>/dev/null | tr -d '\r' || echo "?"
+import sys, json
+names = {"history": "historia", "compression": "kompresja", "cipher": "szyfr", "autotune": "autodobór", "raw": "raw"}
+out = []
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    for s in d.get("sections") or []:
+        f = s.get("fields") or {}
+        if s.get("kind") == "dataset" and f.get("pair_label") == sys.argv[2]:
+            for k in ("history", "compression", "cipher", "autotune", "raw"):
+                v = str(f.get(k) if f.get(k) is not None else "").strip()
+                if v and v != "default":
+                    out.append("%s %s" % (names[k], v))
+            break
+except Exception:
+    print("?"); sys.exit(0)
+print(", ".join(out) if out else "fabryczne")
+PYEOF
+}
 engine_settings() {
     local c_h c_c c_x c_a c_r p_h p_c p_x p_a items n d v N out
     info "Ustawienia silnika" "Czytam ustawienia relacji..."
@@ -675,8 +697,10 @@ while :; do
     [ -n "$_pw" ] && _sz="$_sz -- $_pw"
     [ "${#P_EDIT[@]}" -gt 0 ] && _sz="$(cur_words) -> $P_EDIT_WORDS [zmiana]"
     [ "${#P_RARGS[@]}" -gt 0 ] && _sz="$_sz, tabela [zmiana]"
-    _sr="jak w configu"; [ "${#P_SARGS[@]}" -gt 0 ] && _sr="[zmiana]"
-    _en="jak w configu"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="[zmiana]"
+    # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
+    if [ -n "$CUR_S" ]; then _sr="$(src_words_of "$CUR_S")"; else _sr="tyle samo co w kopii"; fi
+    [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr [zmiana]"
+    _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$_en -> zmiana [zmiana]"
     # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
     # da się zmienić (rodzaj, nazwa, konto, cel), stoi w NAGŁÓWKU, nie na liście; na liście tylko
     # to, co się zmienia, a zmieniona pozycja ma '*' i "[zmiana]". Pod kreską tylko zapis.
