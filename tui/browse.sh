@@ -447,7 +447,12 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
             wt --title "$TITLE" --msgbox "Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie." 10 "$W"
             undo_or_warn ""; step=2; continue
         fi
-        wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
+        # I-2 (kampania 2026-10-21): jedna partycja do wyboru = bez okna wyboru (o jeden klawisz mniej).
+        if [ "$i" -eq 1 ]; then
+            WT_OUT=q0
+        else
+            wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
+        fi
         k="${WT_OUT#q}"
         PDEV="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f1)"; PFS="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f2)"
         rm -f "$TMPD/pick.tsv"

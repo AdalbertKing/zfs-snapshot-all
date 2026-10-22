@@ -201,8 +201,10 @@ fi
 # ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
 # tekst pomocy to tez ekran, i tez sie dezaktualizuje.
 H1="$(screen zadania F1 --width 100 --height 120)"
-if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && has "$H1" 'kreator w 10 krokach' && has "$H1" 'whiptail'; then
-    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (10 okien whiptaila), a nie usunietego poprzednika"
+# A-1 (kampania 2026-10-21): po przebudowie (U66) kreator idzie krok po kroku z podsumowaniem.
+if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && ! has "$H1" 'kreator w 10 krokach' \
+   && has "$H1" 'kreator krok po kroku' && has "$H1" 'Wstecz = poprzedni krok' && has "$H1" 'Zaawansowane' && has "$H1" 'whiptail'; then
+    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (krok po kroku, podsumowanie, Zaawansowane), a nie poprzednikow"
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
 fi
