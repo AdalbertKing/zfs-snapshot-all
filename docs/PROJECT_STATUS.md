@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cfa2df1e59486a19 -->
+<!-- status-covers-digest: 16850b7359d301ad -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **U61: jeden werdykt o relacji (2026-10-22; `finisz/u61`).** Kampania: wiersz relacji „błąd biegu”, panel „Ostatni
+  bieg OK” (z historii transferów) i wiersz datasetu „aktualne” (z monitora) mówiły trzy różne rzeczy. Nieudany
+  ostatni bieg zadania wygrywa: panel mówi „Ostatni bieg BŁĄD … rc=N” i „Przyczyna: <dataset>: <tekst błędu>”,
+  a wiersz pary tego zadania to „błąd biegu”. Test `tui` 378/0 (pve9); na żywo niesprawdzone -- w labie nie ma
+  teraz relacji z nieudanym biegiem.
 
 - **D-1, I-2, A-1: drobne z kampanii (2026-10-22; `finisz/drobne`).** D-1: okno pauzy nie obiecuje już „następnego
   okna” -- mówi, że wyłączenie na źródle to czynność z dołu tego okna. I-2: Przeglądaj kopię przy jednej partycji
