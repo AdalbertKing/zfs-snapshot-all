@@ -826,6 +826,13 @@ client_name_valid() {
         *) return 0 ;;
     esac
 }
+# A NEW name also may not start with '-' or '.': later verbs take it as an argument
+# ("-x" reads as an option) and it names a record file ("..conf"). Existing records
+# stay manageable -- only the verbs that create a name use this (kampania 3, 2026-10-22).
+client_name_new_ok() {
+    client_name_valid "$1" || return 1
+    case "$1" in [-.]*) return 1 ;; esac
+}
 client_conf_path() { echo "$CLIENTS_DIR/$1.conf"; }
 
 # ------------------------------------------------------------------------------
@@ -7660,7 +7667,7 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
         esac
     done
     [ -n "$name" ] || die "uzycie: zfs-backup.sh add-replica NAZWA --source=DATASET [--source=DATASET2 ...] --dst=PULA/BAZA [--schedule='10 * * * *'] [--fixed] [--install]"
-    case "$name" in *[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only (it names the medium and becomes the media gate's state file)" ;; esac
+    case "$name" in [-.]*|*[!A-Za-z0-9._-]*) die "add-replica: '$name' -- letters, digits, dot, dash, underscore only, not starting with a dot or dash (it names the medium and becomes the media gate's state file)" ;; esac
     [ "${#sources[@]}" -gt 0 ] || die "add-replica: --source= names the dataset on THIS host to copy (repeat it for more than one)"
     if [ "$passive" -eq 1 ]; then
         [ "$_prefset" -eq 0 ] || die "add-replica: --passive takes no snapshots of its own, so --prefix=$pref names nothing -- say one of them"
@@ -8226,7 +8233,7 @@ cmd_local_backup() {
         case "$a" in
             --source=*)  source_flags+=("${a#*=}") ;;
             --name=*)    lb_name="${a#*=}"
-                         case "$lb_name" in ''|*[!A-Za-z0-9._-]*) die "local-backup: --name='$lb_name' -- letters, digits, dot, dash, underscore only (it becomes -L and a record file name)" ;; esac ;;
+                         case "$lb_name" in ''|[-.]*|*[!A-Za-z0-9._-]*) die "local-backup: --name='$lb_name' -- letters, digits, dot, dash, underscore only, not starting with a dot or dash (it becomes -L and a record file name)" ;; esac ;;
             # The same exclusions as the remote form, written as the same
             # [dataset:] scope fields (exclude_child_<n> -> -X, exclude_family -> -E).
             --exclude-child=*)  lb_excl+=("${a#*=}") ;;
@@ -9190,7 +9197,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
 cmd_add_client() {
     cmd_reset_invocation_state
     local name="${1:-}"; shift || true
-    client_name_valid "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only)"
+    client_name_new_ok "$name" || die "invalid client name '$name' (letters, digits, dot, dash, underscore only, not starting with a dot or dash)"
     local lan="" datasets="" target="" bandwidth="" mode="" join_remotely=0 profile="" endpoint_option=""
     # LAB6 pass 7 F-1: the dataset the caller NAMED for a mode-based
     # relationship. Not --datasets (which would be a second, conflicting answer
@@ -17002,6 +17009,7 @@ cmd_save_profile() {
     [ -n "$as" ]   || die "save-profile: --as=NAME is required -- the copy needs its own name"
     case "$as" in
         */*) die "save-profile: --as must be a NAME, not a path: the copy always lands in $PROFILE_USER_ROOT" ;;
+        -*)  die "save-profile: --as='$as' starts with '-': --profile= refuses such a name, so the copy could never be used. Nothing was written." ;;
     esac
     profile_name_ok "${as%.conf}" || die "save-profile: '$as' is not a usable profile name: ${PROFILE_ERR:-refused}"
     # Owner note 24 (2026-10-09): an own template may not carry a factory name.
@@ -17576,7 +17584,7 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
     case "$verb" in add-client|local-backup) ;; *) die "import-relation: replay verb '$verb' is not one this build reproduces (only add-client and local-backup)" ;; esac
     local name; name=$(json_unquote "$(json_value_of "$replay" name)")
     [ -n "$newname" ] && name="$newname"
-    client_name_valid "$name" || die "import-relation: invalid relationship name '$name'"
+    client_name_new_ok "$name" || die "import-relation: invalid relationship name '$name'"
     local -a argv=()
     local x
     while IFS= read -r x; do
@@ -20524,8 +20532,8 @@ rux_split_source() {
 rux_resolve_name() {
     local host="$1" explicit="$2"
     if [ -n "$explicit" ]; then
-        client_name_valid "$explicit" \
-            || die "rux: --name='$explicit' is not a valid client name (letters, digits, dot, dash, underscore only)"
+        client_name_new_ok "$explicit" \
+            || die "rux: --name='$explicit' is not a valid client name (letters, digits, dot, dash, underscore only, not starting with a dot or dash)"
         # ONE RELATIONSHIP PER PAIR OF HOSTS (D1, 2026-10-06). The wizard and
         # import-relation refuse a second relationship to a host; this path did
         # not, because an explicit --name skipped the host lookup entirely. A
