@@ -2656,6 +2656,10 @@ d_def = desc("default"); d_30 = desc("d30"); d_g = desc("d7h24-gfs")
 ok = d_def is not None and "[zamraża]" not in d_def and "[drabina]" in d_def
 ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_30
 ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
+# kampania 3 (2026-10-22, 80x24): sposob liczenia stoi PRZED opisem retencji, wiec przy
+# przycieciu wiersza nie ginie (full i m12w4d7h24-gfs wygladaly tak samo)
+ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("trzyma")
+ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("trzyma")
 sys.exit(0 if ok else 1)
 PYEOF
 then

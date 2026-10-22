@@ -13887,6 +13887,16 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   did NOT
 else
     bad "run-relation: failure verdict" "rc=$rc" "$out"
 fi
+# Campaign 3 (2026-10-22): 75 = the engine's lock, i.e. ANOTHER run of the same copy is
+# in progress (F7 twice, F7 during cron). Said as busy, not "did NOT finish", and the
+# verb does not fail on it (owner 2026-10-06: a warning).
+rr_run 75 0 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "WARN run-relation:   busy -- another run of this copy holds its lock" \
+   && ! printf '%s' "$out" | grep -q "did NOT finish" && printf '%s' "$out" | grep -q "0 done, 2 busy (another run is copying them), 0 not done"; then
+    ok "run-relation: rc 75 (the lock of another run) is reported as busy, and the verb does not fail on it"
+else
+    bad "run-relation: busy verdict" "rc=$rc" "$out"
+fi
 rr_run 0 1 > "$AS/rr.out"; rc=$rr_rc; out=$(cat "$AS/rr.out")
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DIE run-relation: 'rel' is paused" && [ ! -s "$AS/job.log" ]; then
     ok "run-relation: a paused relationship is refused, nothing run"

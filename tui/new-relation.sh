@@ -525,7 +525,7 @@ step_manual() {
     return 0
 }
 step_profile() {
-    local items=() n w c q f sh hd def label chain=0 lead=""
+    local items=() n w c q f sh hd def label chain=0 lead="" has_ladder=0
     geom
     [ -s "$TMPD/prof.tsv" ] || info "$(title 6 'Szablon')" "Czytam szablony retencji..."
     if ! load_profiles; then
@@ -544,11 +544,15 @@ step_profile() {
         # ZNACZNIKI ZARAZ ZA NAZWĄ, opis retencji na końcu: przy przycięciu
         # wiersza do okna (U5) ginie koniec opisu, nigdy [zamraża]/[drabina]/[polecany]
         # -- to one rozstrzygają wybór (kroki 8 i 9).
-        local marks=""
+        local marks="" mech=""
         [ "$chain" -eq 1 ] && [ "$n" = "$REC_PROFILE" ] && marks="${marks}[polecany] "
         [ "$f" = 1 ] && marks="${marks}[zamraża] "
-        [ "$sh" = ladder ] && marks="${marks}[drabina] "
-        label="$(printf '%-15s %s%s' "$n" "$marks" "$w")"
+        [ "$sh" = ladder ] && { marks="${marks}[drabina] "; has_ladder=1; }
+        # Kampania 3 (2026-10-22, 80x24): sposób liczenia ([N najnowszych]/[GFS]/[wg wieku])
+        # stał na KOŃCU opisu i ginął przy przycięciu -- full i m12w4d7h24-gfs wyglądały
+        # tak samo ("... 12 mies…"). Idzie zaraz za nazwą, jak pozostałe znaczniki.
+        case "$w" in *"  ["*"]") mech="[${w##*  [}"; w="${w%  \[*}" ;; esac
+        label="$(printf '%-15s %s%s%s' "$n" "${mech:+$mech }" "$marks" "$w")"
         # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
         # [zamraża] [drabina] były szersze niż okno i ucinały jej prawy bok.
         items+=("$n" "$(clip_label "$label" $((W - 10)))")
@@ -573,12 +577,12 @@ step_profile() {
         # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
         # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
         q6='Jak długo trzymać migawki na źródle?'
-        lead="${lead}Migawki zdalne: szablon z drabiną GFS na szczeblu (np. default) zostanie\nodrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n"
+        lead="${lead}Migawki zdalne: szablon z drabiną GFS na szczeblu (np. m12w4d7h24-gfs) zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n"
         tl=$((tl + 3))
         [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
     fi
     wt --title "$(title 6 "$q6")" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-       --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami\ndobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).\n[drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie\nz szablonem \"rodzina na szczebel\" (sprawdzane przy Utwórz). Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
+       --menu "${lead}Gotowy szablon albo \"Ręcznie\" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).$([ "$has_ladder" -eq 1 ] && printf '%s' ' [drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie z szablonem "rodzina na szczebel" (sprawdzane przy Utwórz).') Zmienisz później." "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     if [ "$WT_OUT" = __manual__ ]; then
         step_manual || { step_profile; return $?; }
