@@ -17512,15 +17512,27 @@ Nothing was changed. A relationship is changed by removing it and importing the 
         [ -n "$peer_ep_host" ] && [ -n "$peer_ep_port" ] \
             || die "import-relation: $file: --host=$peer_host is not HOST[:PORT] (see above). Nothing was changed."
     fi
+    # REV-20261022-167: the PEER is who the relationship is with -- the durable pairing
+    # (declarations hold only EXPORT_RELATION_MAP fields, PEER_HOST first; none carries a "}")
+    # identity, PEER_HOST in the file's declarations (export writes the record's own value
+    # there; only the replayed --host carries the active endpoint, U62). Verdict 3 compares
+    # that, never the transport endpoint, which may be HOST:PORT or another address of the
+    # same peer.
+    local peer_id=""
+    peer_id=$(printf '%s' "$doc" | tr -d '\n' | grep -o '"declarations"[[:space:]]*:[[:space:]]*{[^}]*}' \
+              | grep -o '"PEER_HOST"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
     [ "$peer_mode" != snaponly ] || die "import-relation: $file declares a snaponly relationship -- its replay is not supported yet (round 1); create it with add-client --snaponly. Nothing was changed."
     if [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
+        # Fail closed: a mode-based file with a peer must name it, or the check cannot be made.
+        [ -n "$peer_id" ] && endpoint_host_valid "$peer_id" \
+            || die "import-relation: $file declares a $peer_mode relationship but no valid PEER_HOST in its declarations -- the one-relationship-per-peer check cannot be made. Nothing was changed."
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -f "$f" ] || continue
-            [ "$(record_get "$f" PEER_HOST)" = "$peer_host" ] || continue
+            [ "$(record_get "$f" PEER_HOST)" = "$peer_id" ] || continue
             [ -n "$(record_get "$f" RUX_MODE)" ] || continue
             [ "$(record_get "$f" STATE)" = removed ] && continue
             other=$(record_get "$f" CLIENT_NAME)
-            die "import-relation: this host already has relationship '$other' with $peer_host (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
+            die "import-relation: this host already has relationship '$other' with $peer_id (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
         done
     fi
 
@@ -17696,11 +17708,11 @@ UNREP
     # 2026-09-23: a live relationship imported under a second name left a record
     # stuck in 'seeding' plus its alias line, and the "resumable" hint below
     # never printed: seed's die ended the whole process, so `|| die` was dead.
-    # `--host=` is the exported PEER_HOST verbatim, so this is the same label
-    # seed looks the manifest up by.
-    local peer="" prepaired=0
-    for x in "${argv[@]}"; do case "$x" in --host=*) peer="${x#--host=}" ;; esac; done
-    [ -n "$peer" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer")")" ] && prepaired=1
+    # The record add-client is about to write takes PEER_HOST from the replayed --host's HOST
+    # (since U62 the active endpoint, maybe HOST:PORT), so seed looks the manifest up by that
+    # host's label -- peer_ep_host, not the raw "HOST:PORT" (REV-167).
+    local prepaired=0
+    [ -n "$peer_ep_host" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer_ep_host")")" ] && prepaired=1
 
     cmd_add_client "$name" "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"} || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do

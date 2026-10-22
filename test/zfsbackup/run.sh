@@ -10578,6 +10578,48 @@ if [ "$im_rc" -ne 0 ] && grep -q "already has relationship 'inna'" "$WORK/im.err
 else
     bad "importrel: second mode-based relationship to same peer refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
 fi
+# REV-20261022-167: verdict 3 compares the file's durable PEER_HOST (declarations), not the
+# replayed transport endpoint. The same peer through HOST:PORT, and through another address
+# with a port (U62: argv carries ACTIVE_ENDPOINT, declarations keep PEER_HOST), are refused
+# before anything is called; a different peer is not.
+im_nocalls() { ! grep -qE '^(add-client|seed|activate|rux)\|' "$IM/calls.log"; }
+# The file's ACTIVE_ENDPOINT carries the same endpoint (as a current export does), so U62's
+# replacement of an older file's --host does not change it back to 10.0.0.11.
+sed -e 's/"--host=10.0.0.11",/"--host=10.0.0.11:2222","--mode=sync",/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:2222"/' "$IM/ksiegowosc.json" > "$IM/samepeer-port.json"
+sed -e 's/"--host=10.0.0.11",/"--host=10.98.0.2:2222","--mode=sync",/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:2222"/' "$IM/ksiegowosc.json" > "$IM/samepeer-u62.json"
+grep -q '"--host=10.0.0.11:2222"' "$IM/samepeer-port.json" && grep -q '"value":"10.98.0.2:2222"' "$IM/samepeer-u62.json" \
+    || echo "fixture: REV-167 endpoints not substituted" >&2
+IM_ROOT=joined im_run "$IM/samepeer-port.json" --name=nowaport --yes; im_rc1=$?; im_e1="$(cat "$WORK/im.err")"; im_nocalls; im_n1=$?
+IM_ROOT=joined im_run "$IM/samepeer-u62.json" --name=nowau62 --yes; im_rc2=$?; im_e2="$(cat "$WORK/im.err")"; im_nocalls; im_n2=$?
+if [ "$im_rc1" -ne 0 ] && printf '%s' "$im_e1" | grep -q "already has relationship 'inna' with 10.0.0.11 " && [ "$im_n1" -eq 0 ] \
+   && [ "$im_rc2" -ne 0 ] && printf '%s' "$im_e2" | grep -q "already has relationship 'inna' with 10.0.0.11" && [ "$im_n2" -eq 0 ] \
+   && [ ! -f "$IM/clients/nowaport.conf" ] && [ ! -f "$IM/clients/nowau62.conf" ]; then
+    ok "importrel REV-167: the same peer through HOST:PORT and through another address:port is refused before any call (identity = the file's PEER_HOST)"
+else
+    bad "importrel REV-167: same peer through HOST:PORT" "rc=$im_rc1 $im_e1" "rc=$im_rc2 $im_e2" "$(cat "$IM/calls.log")"
+fi
+# A genuinely different peer whose record merely shares the transport address text is not a
+# duplicate: inna is now paired as 10.0.0.99, the file's peer is 10.0.0.11.
+printf 'CLIENT_NAME=inna\nPEER_HOST=10.0.0.99\nRUX_MODE=sync\nSTATE=active\n' > "$IM/clients/inna.conf"
+im_run "$IM/samepeer-port.json" --name=nowaport --yes; im_rc=$?
+if ! grep -q "already has relationship" "$WORK/im.err" && grep -q '^add-client|nowaport|--host=10.0.0.11:2222|' "$IM/calls.log"; then
+    ok "importrel REV-167: a different peer (record 10.0.0.99, file 10.0.0.11) reaches add-client with --host=10.0.0.11:2222 unchanged"
+else
+    bad "importrel REV-167: different peer must not be refused" "rc=$im_rc" "$(cat "$WORK/im.err")" "$(cat "$IM/calls.log")"
+fi
+rm -f "$IM/clients/nowaport.conf"
+# Fail closed: a mode-based file whose declarations have no PEER_HOST cannot be checked.
+sed 's/"PEER_HOST":"10.0.0.11",//' "$IM/samepeer-port.json" > "$IM/nopeer.json"
+grep -q '"declarations":{[^}]*"PEER_HOST"' "$IM/nopeer.json" && echo "fixture: PEER_HOST still in declarations" >&2
+im_run "$IM/nopeer.json" --name=bezpeer --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q 'no valid PEER_HOST in its declarations' "$WORK/im.err" && [ ! -s "$IM/calls.log" ] && [ ! -f "$IM/clients/bezpeer.conf" ]; then
+    ok "importrel REV-167: a mode-based file without PEER_HOST in its declarations is refused before anything (fail closed)"
+else
+    bad "importrel REV-167: no PEER_HOST -> refuse" "rc=$im_rc" "$(cat "$WORK/im.err")" "$(cat "$IM/calls.log")"
+fi
+rm -f "$IM/samepeer-port.json" "$IM/samepeer-u62.json" "$IM/nopeer.json"
 rm -f "$IM/clients/inna.conf" "$IM/samepeer.json"
 
 # --- 2026-09-23, pve10: a refused seed's cleanup depends on whether the peer was
