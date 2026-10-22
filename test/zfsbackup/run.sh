@@ -11022,6 +11022,62 @@ else
 fi
 
 
+# REV-20261022-168 F1: the [relation:] restore must be the exact inverse of the export.
+# Real export, then the REAL import_restore_relblock (only record-to-cron resolution and
+# the final install stubbed, as in the reviewer's evidence script), on values carrying a
+# double quote and a backslash. relblock_dump before == after; --check says "same" for
+# the unchanged block and "differs" for a changed one; a document whose relation block
+# is not a flat object of strings is refused BEFORE anything is installed.
+RT="$WORK/rev168"; rm -rf "$RT"; mkdir -p "$RT/clients"
+printf 'CLIENT_NAME=q\nSTATE=active\nRUX_MODE=local\nREQUESTED_DATASETS=tank/data\nCLIENT_TARGET=\nPROFILE=default\n' > "$RT/clients/q.conf"
+sed -e 's/\[relation:L\]/[relation:q]/' -e 's/relation     = L/relation     = q/g' \
+    -e '0,/hourly.notify_word    = snapshot/s//hourly.notify_word    = snap"shot/' \
+    -e '0,/daily.notify_word     = snapshot/s//daily.notify_word     = back\\slash/' \
+    "$REPO/test/fixtures/relation-local.conf" > "$RT/jobs.conf"
+rt_dump() { ( export CLIENTS_DIR="$RT/clients"; bash -c 'source "$1"; relblock_dump "$2" q' x "$ZFSBACKUP" "$1" ); }
+rt_restore() {   # <config to restore into> <doc file> [--check] -> rc
+    ( export CLIENTS_DIR="$RT/clients" CFG="$1" DOCFILE="$2" GEN="$REPO/gen-cron.sh"
+      bash -c '
+        source "$1"; shift
+        cron_context_resolve() { CRON_CTX_FILE="$CFG"; }
+        assert_cron_config_matches_installed() { :; }
+        gencron_as_target() { bash "$GEN" "$@"; }
+        atomic_replace_and_install() { cp "$2" "$1"; }
+        import_restore_relblock q "$(cat "$DOCFILE")" "$@"' x "$ZFSBACKUP" "$@" ) >"$RT/out" 2>&1
+}
+( export CLIENTS_DIR="$RT/clients" SERVER_CONF="$RT/no-server"
+  bash -c 'source "$1"; cmd_export_relation q --json --config="$2"' x "$ZFSBACKUP" "$RT/jobs.conf" ) > "$RT/q.json" 2>"$RT/export.err"
+rt_before="$(rt_dump "$RT/jobs.conf")"
+rt_restore "$RT/jobs.conf" "$RT/q.json" --check; rt_same=$?
+sed 's/"hourly.notify_word":"[^"]*\(\\"[^"]*\)*"/"hourly.notify_word":"zmienione"/' "$RT/q.json" > "$RT/changed.json"
+rt_restore "$RT/jobs.conf" "$RT/changed.json" --check; rt_diff=$?
+printf '[relation:q]\n\thourly.notify_word = PLACEHOLDER\n' > /dev/null
+cp "$RT/jobs.conf" "$RT/wiped.conf"
+sed -i 's/^\(\s*hourly\.notify_word\s*=\).*/\1 snapshot/; s/^\(\s*daily\.notify_word\s*=\).*/\1 snapshot/' "$RT/wiped.conf"
+rt_restore "$RT/wiped.conf" "$RT/q.json"; rt_rc=$?
+rt_after="$(rt_dump "$RT/wiped.conf")"
+if grep -qF '"hourly.notify_word":"snap\"shot"' "$RT/q.json" && grep -qF '"daily.notify_word":"back\\slash"' "$RT/q.json" \
+   && [ "$rt_same" -eq 0 ] && [ "$rt_diff" -eq 1 ] && [ "$rt_rc" -eq 0 ] && [ "$rt_after" = "$rt_before" ] \
+   && printf '%s\n' "$rt_after" | grep -qxF "hourly.notify_word	snap\"shot" && printf '%s\n' "$rt_after" | grep -qxF 'daily.notify_word	back\slash'; then
+    ok "importrel (REV-168): export -> real restore keeps \" and \\ byte for byte; --check: same block = equal, changed value = differs"
+else
+    bad "importrel (REV-168): exact round trip" "same=$rt_same diff=$rt_diff restore=$rt_rc" "before: $rt_before" "after:  $rt_after" "$(tail -3 "$RT/out")"
+fi
+# malformed: an escape json_escape never writes (\n) and a non-string value -- refused,
+# config untouched
+cp "$RT/wiped.conf" "$RT/mal.conf"; rt_mal_before="$(cat "$RT/mal.conf")"
+sed 's/"hourly.notify_word":"/"hourly.notify_word":"a\\nb/' "$RT/q.json" > "$RT/mal1.json"
+sed 's/"tiers":"[^"]*"/"tiers":5/' "$RT/q.json" > "$RT/mal2.json"
+sed -i 's/^\(\s*hourly\.notify_word\s*=\).*/\1 snapshot/' "$RT/mal.conf"; rt_mal_before="$(cat "$RT/mal.conf")"
+rt_restore "$RT/mal.conf" "$RT/mal1.json"; rt_m1=$?; rt_m1o="$(cat "$RT/out")"
+rt_restore "$RT/mal.conf" "$RT/mal2.json"; rt_m2=$?
+if [ "$rt_m1" -ne 0 ] && [ "$rt_m2" -ne 0 ] && [ "$(cat "$RT/mal.conf")" = "$rt_mal_before" ] \
+   && printf '%s' "$rt_m1o" | grep -q 'not a flat object of strings'; then
+    ok "importrel (REV-168): a relation block with an unsupported escape or a non-string value is refused and nothing is installed"
+else
+    bad "importrel (REV-168): malformed relation block" "rc1=$rt_m1 rc2=$rt_m2" "$rt_m1o"
+fi
+
 fi   # --- koniec sekcji exportrel ---
 if want saveprof; then
 # ============================================================================

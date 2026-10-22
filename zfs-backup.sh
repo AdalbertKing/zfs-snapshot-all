@@ -17415,6 +17415,56 @@ import_relation_undo_record() {   # <name>
 # block, and the export carries that block verbatim ("relation"). Written back
 # here, after the relationship is active, through the same gate as set-tiers:
 # working copy, gen-cron validation, atomic replace and install.
+# json_flat_object <json object text> -> one "key<TAB>value" line per member, decoded
+# exactly once; rc 3 for anything that is not a flat object of strings.
+#
+# REV-20261022-168 F1: the [relation:] restore read the exported object with
+# /"[^"]*":"[^"]*"/, which stops at the first escaped quote and never decodes, so
+# hourly.notify_word = snap"shot came back as snap\ -- installed with rc 0. This walks
+# the strings the way json_value_of does. Decoded: \" \\ and \/ (json_escape writes
+# only the first two). Refused, before anything is installed: any other escape (\n,
+# \t, \uXXXX -- nothing an ini value or the key<TAB>value form can carry), a raw tab or
+# newline inside a string, an empty key, a non-string value, trailing text.
+json_flat_object() {
+    printf '%s' "$1" | awk '
+        BEGIN { RS = "\001" }
+        function ws() { while (i <= n && index(" \t\r\n", substr(s, i, 1))) i++ }
+        function str(   out, d, e) {
+            i++; out = ""
+            while (i <= n) {
+                d = substr(s, i, 1)
+                if (d == "\\") {
+                    e = substr(s, i + 1, 1)
+                    if (e == "\"" || e == "\\" || e == "/") { out = out e; i += 2; continue }
+                    err = 1; return ""
+                }
+                if (d == "\"") { i++; return out }
+                if (d == "\t" || d == "\n" || d == "\r") { err = 1; return "" }
+                out = out d; i++
+            }
+            err = 1; return ""
+        }
+        {
+            s = $0; n = length(s); i = 1; err = 0
+            ws(); if (substr(s, i, 1) != "{") exit 3
+            i++; ws()
+            if (substr(s, i, 1) == "}") { i++; ws(); exit (i <= n ? 3 : 0) }
+            while (1) {
+                ws(); if (substr(s, i, 1) != "\"") exit 3
+                k = str(); if (err || k == "") exit 3
+                ws(); if (substr(s, i, 1) != ":") exit 3
+                i++; ws(); if (substr(s, i, 1) != "\"") exit 3
+                v = str(); if (err) exit 3
+                printf "%s\t%s\n", k, v
+                ws(); c = substr(s, i, 1); i++
+                if (c == ",") continue
+                if (c == "}") break
+                exit 3
+            }
+            ws(); if (i <= n) exit 3
+        }'
+}
+
 # import_helper_profile <relation json object> <name> -> a profile built from the
 # relationship's OWN block, on stdout. The template is a helper for creating a
 # relationship and nothing more (owner 2026-10-22), so an import onto a collector that
@@ -17462,11 +17512,9 @@ import_restore_relblock() {   # <name> <export document> [--check: rc 1 = differ
       cronfile="$CRON_CTX_FILE"
       [ -f "$cronfile" ] && relblock_has "$cronfile" "$name" || exit 0
       assert_cron_config_matches_installed "$cronfile"
-      want=$(printf '%s' "$rel" | awk 'BEGIN { RS = "\001" } {
-          s = $0
-          while (match(s, /"[^"]*":"[^"]*"/)) {
-              t = substr(s, RSTART + 1, RLENGTH - 2); k = t; sub(/":".*$/, "", k); v = t; sub(/^[^"]*":"/, "", v)
-              printf "%s\t%s\n", k, v; s = substr(s, RSTART + RLENGTH) } }')
+      # REV-20261022-168: escape-aware, decoded once, malformed refused (json_flat_object).
+      want=$(json_flat_object "$rel") \
+          || die "import-relation: the relation block of '$name' in the file is not a flat object of strings this build can restore exactly (an escape other than \\\" \\\\ \\/, a tab or newline in a value, or a non-string value) -- nothing was installed; set the values with set-tiers / set-transfer"
       [ -n "$want" ] || exit 0
       [ "$(relblock_dump "$cronfile" "$name")" = "$want" ] && { [ -n "$check" ] || log "import-relation: [relation:$name] already as in the file"; exit 0; }
       [ -z "$check" ] || exit 1
