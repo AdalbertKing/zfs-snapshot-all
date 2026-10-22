@@ -5115,6 +5115,21 @@ else
     bad "zfs-tui: sieroty w zawijanej pomocy F1" "rc=$?"
 fi
 
+# Kampania 3 (2026-10-22, na zywo pve10): listwa klawiszy to dolny wiersz, ktory curses
+# konczy kolumne wczesniej -- F4 przy 80 ucinal "Ctrl-R Odświe". Na kazdym ekranie przy 80
+# kolumnach listwa ma najwyzej 79 znakow.
+lw_bad=""
+for lw_s in zadania relacje transfery szablony nosniki odzysk; do
+    lw_n="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $ALL --screen "$lw_s" --width 80 2>&1 | tail -1 | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip("
+")))')"
+    [ "${lw_n:-99}" -le 79 ] || lw_bad="$lw_bad $lw_s=$lw_n"
+done
+if [ -z "$lw_bad" ]; then
+    ok "zfs-tui: listwa klawiszy na kazdym ekranie miesci sie w 79 z 80 kolumn (dolny wiersz bez prawego rogu)"
+else
+    bad "zfs-tui: listwa klawiszy przy 80 kolumnach" "$lw_bad"
+fi
+
 # Kampania 3 (2026-10-22, na zywo pve10): paint tnal kazdy wiersz do w - 1, a uklad ma
 # szerokosc ekranu (MIN_WIDTH 80) -- prawa ramka okna nigdy nie trafiala na ekran (od
 # wrzesnia). Petli curses nie da sie tu uruchomic: dowodem jest zrzut tmux na pve10; ten

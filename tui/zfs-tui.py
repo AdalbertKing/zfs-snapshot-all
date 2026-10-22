@@ -2435,6 +2435,9 @@ def key_bar_parts(active, width, actions=()):
     short = dict((a[0], a[2]) for a in actions if len(a) > 2)
     # Najciasniej (80 kolumn, F3 z trzema akcjami i F11): skroty okien i wyjscia --
     # tylko gdy nic innego sie nie miesci, zeby F12 nigdy nie wypadlo z paska.
+    # Listwa to dolny wiersz ekranu, a curses nie pisze w jego ostatnia kolumne (prawy dolny
+    # rog) -- pasek musi sie zmiescic w width - 1 (kampania 3: F4 ucinal "Ctrl-R Odświe").
+    room = width - 1
     tight = {"F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
                                 (True, u"", "tight")):
@@ -2453,11 +2456,11 @@ def key_bar_parts(active, width, actions=()):
                 marks.append((start, start + len(num), "key"))
             if key == active:
                 marks.append((start, len(line), "active"))
-        if len(line) <= width:
+        if len(line) <= room:
             break
-    if width >= len(line) + 16:
+    if room >= len(line) + 16:
         line += u"  Ctrl-R Odśwież"
-    return fit(line, width), marks
+    return fit(line, room), marks
 
 
 def push_key_bar(scr, active, width, actions=()):
