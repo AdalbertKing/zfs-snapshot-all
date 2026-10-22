@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 45ac52175a038902 -->
+<!-- status-covers-digest: 06141f9461b96828 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **REV-167: blokada „jedna relacja na peera” przy imporcie przez HOST:PORT (2026-10-22; `fix/rev167`).** Import
+  porównywał zapisany `PEER_HOST` z surowym `--host`, który od U62 może mieć port albo inny adres tego samego peera
+  -- druga relacja do tego samego źródła przechodziła do add-client, seed i activate. Teraz porównanie idzie po
+  `PEER_HOST` z deklaracji pliku (trwała tożsamość); plik z peerem bez ważnego `PEER_HOST` jest odrzucany przed
+  czymkolwiek. Test `exportrel` 71/0 (pve9); na kodzie sprzed poprawki dwa nowe przypadki padają.
 
 - **U65: zmiana relacji jak podsumowanie kreatora (2026-10-22; `finisz/zmiana`).** Właściciel: „do kompletnej
   przebudowy” (makieta 2026-10-21). Okno zmiany: rodzaj, nazwa, konto i cel w nagłówku (tego się nie zmienia), na
