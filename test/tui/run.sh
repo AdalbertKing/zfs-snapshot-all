@@ -2373,9 +2373,10 @@ W17D=$(nr_run "0${T}backup
 0${T}create
 0${T}
 0${T}
-" NR_FIX="$NRE" NR_TREE="$NRTK" COLUMNS=104 LINES=40)   # szeroko: wartosc karty nie jest przycieta
+" NR_FIX="$NRE" NR_TREE="$NRTK")
+# Karta przycina wartosc (szerokosc 76); na main po 'zamrażanie,' stoi 'pomijane', tu 'zaszyfrowane'.
 if has "$W17D" "CMD: " && has "$W17D" " --raw " && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
-   && grep -qF 'zamrażanie, zaszyfrowane, pomijane' "$NR/wt.log"; then
+   && grep -qF 'zamrażanie, zas' "$NR/wt.log"; then
     ok "new-relation: W17 zaszyfrowane zrodlo bez wchodzenia w Zaawansowane -- komenda i tak z --raw"
 else
     bad "new-relation: W17 raw bez Zaawansowanych" "$W17D" "$(grep -F "Zaawansowane" "$NR/wt.log" | head -1 | cut -c1-700)"
