@@ -169,7 +169,8 @@ MT="$(sed -n '/^mirror_target() {/,/^}/p' "$SNAPGET")"
 mt_run() {   # <src> <tgt> <src snaps> <tgt snaps> <guest live 0|1> -> "rc|guest asked|log"
     ( eval "$MT"
       log() { echo "LOG$1 ${*:2}"; }
-      get_sorted_snapshots() { if [ "$1" = "$MT_SRC" ]; then printf '%s' "$MT_SS"; else printf '%s' "$MT_TS"; fi; }
+      get_sorted_snapshots() { if [ "$1" = "$MT_SRC" ]; then printf '%s' "$MT_SS"; else [ -n "${MT_TFAIL:-}" ] && return 1; printf '%s' "$MT_TS"; fi; }
+      zfs() { [ -n "${MT_TGONE:-}" ] && return 1; return 0; }
       guest_disk_is_live() { echo GUEST >&2; [ "$MT_LIVE" = 1 ]; }
       find_common_snapshot() { echo none; return 1; }
       MT_SRC="$1" MT_SS="$3" MT_TS="$4" MT_LIVE="$5"
@@ -181,6 +182,14 @@ if [ -n "$MT" ]; then
     case "$r" in "0|0|"*"nothing to mirror"*) ok "H-4: no snapshots on either side -> rc 0, nothing to mirror" ;; *) bad "H-4: empty both sides" "$r" ;; esac
     r=$(mt_run hdd/x replab/replica/hdd/x "" "replab/replica/hdd/x@old" 0)
     case "$r" in 1\|*"lists NO snapshots"*) ok "H-4: empty source but snapshots on the target -> still refused (an empty answer must not decide a destroy)" ;; *) bad "H-4: empty source, target has snapshots" "$r" ;; esac
+    # H-4b (pve10 2026-10-22): the target container does not exist yet -> its list is empty,
+    # not unreadable. Source empty: nothing to mirror. Target exists but unreadable: refused.
+    r=$(MT_TFAIL=1 MT_TGONE=1 mt_run hdd/backups/192.168.28.99 replab/replica/hdd/backups/192.168.28.99 "" "" 0)
+    case "$r" in "0|0|"*"nothing to mirror"*) ok "H-4b: target container not created yet, no source snapshots -> rc 0, nothing to mirror" ;; *) bad "H-4b: missing target" "$r" ;; esac
+    r=$(MT_TFAIL=1 mt_run hdd/x replab/replica/hdd/x "" "" 0)
+    case "$r" in 1\|*"could not be read"*) ok "H-4b: target exists but its list cannot be read -> still refused" ;; *) bad "H-4b: unreadable existing target" "$r" ;; esac
+    r=$(MT_TFAIL=1 MT_TGONE=1 mt_run hdd/y replab/replica/hdd/y "hdd/y@s1" "" 0)
+    case "$r" in 1\|*) ok "H-4b: missing target but snapshots at the source -> not a silent success (rc 1)" ;; *) bad "H-4b: missing target, source has snapshots" "$r" ;; esac
     r=$(mt_run tank/vm-100-disk-0 back/tank/vm-100-disk-0 "" "" 1)
     case "$r" in "0|0|"*) ok "U60: mirror on a nested target does not ask the guest (running guest, not refused)" ;; *) bad "U60: nested target asked the guest" "$r" ;; esac
     r=$(mt_run tank/vm-100-disk-0 tank/vm-100-disk-0 "" "" 1)

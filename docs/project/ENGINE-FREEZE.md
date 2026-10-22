@@ -1128,6 +1128,23 @@ Owner-authorized refreezes:
   absent dataset -- unchanged.
   twin: none.
 
+- 2026-10-22 (snapget.sh): **H-4b -- a mirror target that does not exist yet has an empty
+  list, not an unreadable one.** PENDING OWNER DIRECTION: prepared on `kamp/snapget-container`,
+  NOT merged until the owner unfreezes snapget for it. v2.76 -> v2.77.
+  - Measured on pve10 (live campaign 2026-10-22): the first run of the whole-pool replica
+    `calapula` after a new relationship (pve9) ended rc 1 -- mirror_target on the container
+    replab/replica/hdd/backups/192.168.28.99 could not read its "own snapshot list" because
+    the container did not exist yet on the medium (it lands later, as the parent of the first
+    child). The second run passed. The same happened at 22:00 the night before.
+  - Change: when the target list cannot be read AND the target does not exist, the list is
+    treated as empty; the existing rules decide (empty on both sides: nothing to mirror;
+    snapshots at the source: no common base, refused). A target that exists but cannot be
+    read is refused as before.
+
+  test/mirrorguest: 21/0 (+3); against v2.76 the missing-target case FAILs, the two controls
+  pass on both. test/twins: 94/0, no re-bless needed.
+  twin: n/a -- snapsend.sh has no mirror (`grep -n mirror_target snapsend.sh` is empty).
+
 - 2026-10-21 (snapget.sh): **U60 + H-4 -- the live-guest guard only for a target
   that IS the source's path; an empty mirror on both sides is not a failure.**
   Owner direction in chat, 2026-10-21: "zgoda na odmrożenie", given for exactly

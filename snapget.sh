@@ -430,7 +430,7 @@ set -o pipefail
 ###############################################################################
 #BEGIN 1 [GLOBAL CONFIGURATION]
 ###############################################################################
-VERSION='v2.76'
+VERSION='v2.77'
 MESSAGE=""
 IDENTIFIER=""
 VERBOSE=0
@@ -1255,8 +1255,18 @@ mirror_target() {
         return 1
     }
     tgt_list=$(get_sorted_snapshots "$tgt") || {
-        log 0 "Mirror (-M) on '$tgt': its own snapshot list could not be read -- NOTHING deleted"
-        return 1
+        # H-4b (campaign pve10 2026-10-22): a whole-tree replica reaches a container that
+        # landed under the base only in this run, or not yet (hdd/backups/<host> of a new
+        # relationship, created later with its first child). A target that does not EXIST
+        # has an empty list, not an unreadable one -- the rules below then decide (empty on
+        # both sides: nothing to mirror; snapshots at the source: no common base, refused).
+        # Every first run after a new relationship ended rc 1 here.
+        if ! zfs list -H -o name -- "$tgt" >/dev/null 2>&1; then
+            tgt_list=""
+        else
+            log 0 "Mirror (-M) on '$tgt': its own snapshot list could not be read -- NOTHING deleted"
+            return 1
+        fi
     }
     # H-4 (live GUI campaign, pve10 2026-10-21): a replica of a whole tree reaches
     # container datasets that never had a snapshot (hdd/backups, hdd/backups/<host>).
