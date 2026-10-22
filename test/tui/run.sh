@@ -5094,21 +5094,24 @@ else
     bad "zfs-tui: zawijanie pomocy F1" "rc=$?"
 fi
 
-# Kampania 3 (2026-10-22, na zywo pve10): paint tnie kazdy wiersz do w - 1, a uklad byl
-# rysowany na w -- prawa ramka okna nigdy nie trafiala na ekran (od wrzesnia). Petla
-# curses rysuje teraz uklad na w - 1. Petli curses nie da sie tu uruchomic; dowodem jest
-# zrzut tmux na pve10, ten przypadek pilnuje tylko, zeby wywolania nie wrocily do w.
+# Kampania 3 (2026-10-22, na zywo pve10): paint tnal kazdy wiersz do w - 1, a uklad ma
+# szerokosc ekranu (MIN_WIDTH 80) -- prawa ramka okna nigdy nie trafiala na ekran (od
+# wrzesnia). Petli curses nie da sie tu uruchomic: dowodem jest zrzut tmux na pve10; ten
+# przypadek pilnuje, ze uklad idzie na w, a pelna szerokosc tnie sie tylko w dolnym wierszu.
 if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
 m = re.search(r"^def curses_loop.*?(?=^def )", src, re.S | re.M)
-calls = re.findall(r"ui\.render\(([^)]*)\)", m.group(0)) if m else []
-sys.exit(0 if calls and all(c.replace(" ", "") == "w-1,h" for c in calls) and "line[:w - 1]" in m.group(0) else 1)
+body = m.group(0) if m else ""
+calls = re.findall(r"ui\.render\(([^)]*)\)", body)
+ok = calls and all(c.replace(" ", "") == "w,h" for c in calls)
+ok = ok and "line = line[:w] if y < h - 1 else line[:w - 1]" in body
+sys.exit(0 if ok else 1)
 PYEOF
 then
-    ok "zfs-tui: petla curses rysuje uklad na w - 1, wiec prawa ramka miesci sie w kolumnach, ktore paint pisze"
+    ok "zfs-tui: paint pisze pelna szerokosc (prawa ramka na ekranie), tylko dolny wiersz bez prawego dolnego rogu"
 else
-    bad "zfs-tui: uklad w petli curses na w - 1" "rc=$?"
+    bad "zfs-tui: paint pisze pelna szerokosc ekranu" "rc=$?"
 fi
 
 echo "--------------------------------------------"
