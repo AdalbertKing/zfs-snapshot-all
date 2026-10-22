@@ -9573,9 +9573,9 @@ esac
 _real=$( PROFILE_ROOT="$REPO/profiles"; PROFILE_USER_ROOT="$LP/empty-user"
          list_profiles_record "$REPO/profiles/default.conf" package 2>/dev/null )
 case "$_real" in
-    *'"mechanism":"gfs","shape":"family-per-tier"'*)
-        ok "listprofiles: the shipped default reads as gfs, every tier its own family" ;;
-    *)  bad "listprofiles: the shipped default reads as gfs, every tier its own family" \
+    *'"mechanism":"flat","shape":"family-per-tier"'*)   # flat since 2026-10-22 (owner)
+        ok "listprofiles: the shipped default reads as flat, every tier its own family" ;;
+    *)  bad "listprofiles: the shipped default reads as flat, every tier its own family" \
             "$(printf '%s' "$_real" | cut -c1-400)" ;;
 esac
 for _p in default Y5M12D31H24; do
