@@ -3410,6 +3410,26 @@ if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && 
 else
     bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
 fi
+# Kampania 2026-10-22: wlasny harmonogram sprawdzany W OKNIE -- "0 22 * * *zle" szedl az do planu.
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb2
+0${T}passive
+0${T}removable
+0${T}repl
+0${T}__other__
+0${T}0 22 * * *zle
+0${T}
+0${T}__other__
+0${T}30 21 * * 1-5
+0${T}
+0${T}
+" RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
+if grep -qF 'Zły harmonogram' "$RP/wt.log" && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle' "$RP/zb.log"; then
+    ok "replika: zly wlasny harmonogram odrzucony w oknie (Zły harmonogram), poprawny idzie do planu"
+else
+    bad "replika: walidacja wlasnego harmonogramu" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$RP/wt.log" | tr '\n' ';')"
+fi
+rm -f "$RP/rules"
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
 #          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
@@ -3565,7 +3585,7 @@ RPOUT=$(rp_run "0${T}zrodla
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
-   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
+   && ! grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
     bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
@@ -3598,7 +3618,7 @@ RPOUT=$(rp_run "0${T}nosnik
 0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
-RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+RP9="$(grep -F ': nośnik ~' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb9 .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" && has "$RP9" 'Usuń dysk z repliki'; then
     ok "replica: W12 'Usuń dysk z repliki' -- 777 wypada (--media-guid=4242), dane zostaja"
 else
@@ -3616,7 +3636,7 @@ RPOUT=$(rp_run "0${T}nosnik
 0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
-RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+RP10="$(grep -F ': nośnik ~' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log" && ! has "$RP10" 'Usuń dysk z repliki'; then
     ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
 else
