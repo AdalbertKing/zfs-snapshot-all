@@ -97,6 +97,21 @@
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
+- **Odzysk: Wstecz pamięta wybór; plan dodania datasetu bez „pełnej kopii” (`kamp/restore-back`).** Kampania
+  wariantów, pve10 2026-10-22. (1) W5: Wstecz z „Gdzie odtworzyć?” wracało do drzewa z zaznaczonym WSZYSTKIM --
+  wybór admina (np. jeden `srv-a`) znikał, a nieuważny Enter i „na miejsce” nadpisałby całą relację. Drzewo dostaje
+  teraz ostatni wybór. (2) W4: dataset zdjęty z relacji (kopie zostają) i dodany z powrotem idzie przyrostowo od
+  tamtej kopii (na żywo: `PLAN=INCREMENTAL` dla `hdd/home` w ab), a plan obiecywał „pierwszą pełną kopię”; teraz
+  „pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest”. Test `tui` 389/0 (nowy przypadek pada na main).
+
+- **Audyt relacji nie podsuwa już `zfs destroy` na żywe kopie (`kamp/orphan-live`).** Kampania wariantów,
+  pve10 2026-10-22: każde usunięcie relacji (tu: lustro cb) drukowało „DATA WITHOUT A RELATIONSHIP … the
+  relationship that produced it is gone” i 75 linii `zfs destroy -r …`, w tym `hdd/backups` i
+  `hdd/backups/192.168.28.98/hdd/*` -- ŻYWE kopie obecnej relacji ab. Źródło: nagrobek starej ab (usuniętej
+  19.10 i zaimportowanej z powrotem) nadal nazywał te ścieżki. Teraz zbiór z nagrobka, który jest, zawiera
+  albo leży pod danymi relacji nie-ORPHAN (LIVE lub UNKNOWN), nie dostaje rady; audyt mówi tylko, ile takich
+  pominął. Na pve10: 47 pominiętych, zostały wyłącznie rady dla `hdd/lab` (cb w tej chwili usunięta). Test
+  `cleanrel` 93/0 (nowy przypadek pada na kodzie sprzed poprawki).
 - **Import lustra nie przechodzi w tryb pasywny (`kamp/family-born`).** Kampania wariantów, pve10 2026-10-22,
   W6: eksport lustra cb -> usunięcie z kopiami -> import. Import padał przy aktywacji, a gdyby przeszedł, lustro
   przestałoby robić migawki na źródle. Dwie warstwy:
@@ -117,7 +132,9 @@
   lustro sięgało kontenera `hdd/backups/<host>`, którego na nośniku jeszcze nie było, i uznawało jego listę migawek
   za nieczytelną. Teraz cel, który NIE ISTNIEJE, ma pustą listę i decydują dotychczasowe reguły (pusto po obu
   stronach: nic do lustra; migawki u źródła bez wspólnej bazy: odmowa). Cel istniejący, ale nieczytelny: odmowa jak
-  dotąd. Test `mirrorguest` (+3; przypadek brakującego celu pada na v2.76).
+  dotąd. Test `mirrorguest` (+3; przypadek brakującego celu pada na v2.76). Na żywo na pve10 (26365d43): nowy
+  kontener `hdd/backups/<x>` z dzieckiem z migawką, replika calapula -- v2.77 rc 0, dziecko na nośniku; ten sam
+  scenariusz na v2.76 rc 1 z „its own snapshot list could not be read” (błąd z kampanii). Zbiory testowe usunięte.
 
 - **Kampania 2026-10-22, paczka 10: co zmienia silnik (`kamp/teksty2`).** Na żywo na pve10 (lustro cb, kompresja
   na „bez”): karta zmiany relacji mówiła „Silnik  fabryczne -> zmiana [zmiana]” -- nie było widać, co się zmienia.

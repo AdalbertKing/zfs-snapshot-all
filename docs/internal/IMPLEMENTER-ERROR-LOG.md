@@ -55,7 +55,7 @@ that print an error and exit 0, string replacements that match nothing, helpers
 that do not exist — all of these continue the chain. Verify the intermediate
 state, then mutate.
 
-*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90.*
+*Evidence: E8, E3, E27, E37, E39, E44, E55, E58, E59, E62 (repeated 2026-10-09 and 2026-10-12), E66 (the same rule twice in one day -- read that as the rule not being applied, not as two incidents), E68, E71, E75, E84 (2026-10-15, the E39 shape a third time), E90, E99 (2026-10-22, the E39 shape again, after `--refreeze`).*
 
 ### R5 — Do not modify state something else is reading
 
@@ -1921,6 +1921,24 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E99 — a status entry committed with no `--refresh-status`; CI's graph job went red (2026-10-22, R4, repeat of E27/E39/E84)
+**2026-10-22, H-4b, PR #749 (head a5734f5b when CI failed).**
+
+*Genesis.* After the engine refreeze I wrote the PROJECT_STATUS entry, staged it with
+ENGINE-FREEZE.md and committed. I never ran `--refresh-status` and never ran `--verify` on
+that staged state. CI's "dependency graph matches the tree" check failed with
+`PROJECT_STATUS.md ... STALE`. I fixed it forward in 9ba174c6, with the digest over the same
+content.
+
+*Cause.* R4 again. The `--refreeze` step printed "git add docs/project/ENGINE-FREEZE.md" as its
+last instruction. I treated that as the end of the gate sequence. The status digest is a
+separate gate that `--refreeze` does not run. The same shape as E39 and E84 (and E92 under R6 had the
+same outcome): the rule is known but not applied at commit time.
+
+*Rule.* R4. Every commit that stages PROJECT_STATUS.md or any file declaring `project-status`
+ends with this fixed tail: `--refresh-status; git add docs/PROJECT_STATUS.md; --verify` (rc 0,
+grep STALE/DRIFT). After `--refreeze` as well. No commit goes out without that tail.
 
 ### E98 — the fix for the black screen, merged on a stub, was itself invisible (2026-10-22, R12, repeat of E97)
 

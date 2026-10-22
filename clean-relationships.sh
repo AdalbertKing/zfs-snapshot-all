@@ -870,12 +870,33 @@ report_orphaned_data() {
         log "tombstones exist in $TOMBSTONE_DIR but zfs is not available -- cannot check whether that data is still here. The records are still in $TOMBSTONE_DIR; read them by hand."
         return 0
     fi
+    # Live campaign, pve10 2026-10-22: a tombstone outlives the NAME, not the data's
+    # owner. The old record of 'ab' (removed 2026-10-19, imported again) still named
+    # hdd/backups and hdd/backups/<host>/..., which are the LIVE copies of today's 'ab';
+    # every delete-relation printed "the relationship that produced it is gone ...
+    # zfs destroy -r hdd/backups" -- an instruction that wipes a working backup. A
+    # recorded dataset that IS, CONTAINS or SITS UNDER data of a relationship that is
+    # not ORPHAN now (LIVE or UNKNOWN: the same asymmetry as classify) is not offered.
+    local -a live=(); local id v r fam path l kept=0 hit
+    for id in $(printf '%s\n' "${!SEEN_NAME[@]}" "${!SEEN_LABEL[@]}" | grep -v '^$' | sort -u); do
+        IFS=$'\t' read -r v r <<< "$(classify "$id")"
+        [ "$v" = ORPHAN ] && continue
+        while IFS=$'\t' read -r fam path; do
+            [ "$fam" = data ] && [ -n "$path" ] && live+=("${path%%   *}")
+        done <<< "$(artefacts_for "$id")"
+    done
     for f in "$TOMBSTONE_DIR"/*; do
         [ -f "$f" ] || continue
         name=$(sed -n 's/^REMOVED_NAME=//p' "$f" | head -1)
         while IFS= read -r ds; do
             [ -n "$ds" ] || continue
             "$ZFS_BIN" list -H -o name "$ds" >/dev/null 2>&1 || continue
+            hit=0
+            for l in "${live[@]+"${live[@]}"}"; do
+                case "$ds/" in "$l/"*) hit=1; break ;; esac      # the same, or under it
+                case "$l/" in "$ds/"*) hit=1; break ;; esac      # contains it
+            done
+            [ "$hit" -eq 1 ] && { kept=$((kept + 1)); continue; }
             if [ "$shown" -eq 0 ]; then
                 echo
                 echo "  DATA WITHOUT A RELATIONSHIP"
@@ -892,6 +913,7 @@ report_orphaned_data() {
     # record and cannot be found here. Inferring it from dataset names would be
     # the sweep this tool refuses to do.
     [ "$shown" -eq 1 ] && echo "      (only data a tombstone recorded can appear here -- earlier removals left no record)"
+    [ "$kept" -gt 0 ] && log "  $kept dataset(s) named by old records are NOT listed: they are, contain or sit under data of a relationship that exists now"
     return 0
 }
 

@@ -4710,6 +4710,17 @@ rw_run() {   # <plik drzewa> -- odpowiedzi w $RW/answers; wynik: $RW/ran, $RW/wt
 }
 rw_ran() { cat "$RW/ran" 2>/dev/null; }
 
+# 0b. W5 (kampania wariantow 2026-10-22): Wstecz z "Gdzie odtworzyc?" wraca do drzewa z TYM, co
+#     admin zaznaczyl (docs), nie z cala relacja. Drugie wywolanie drzewa dostaje roots = docs.
+printf '1\t\n0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
+rw_run "$RW/t-docs.json"
+if [ "$RW_RC" -eq 0 ] && grep -qF '"roots": ["tank/b/hdd/data/docs"]' "$RW/last-spec.json" 2>/dev/null \
+   && has "$(rw_ran)" '--source=tank/b/hdd/data/docs '; then
+    ok "restore: Wstecz z 'Gdzie odtworzyc?' -> drzewo z ostatnim wyborem (docs), nie z cala relacja"
+else
+    bad "restore: Wstecz z 'Gdzie' gubi wybor" "rc=$RW_RC" "spec: $(cut -c1-300 "$RW/last-spec.json" 2>/dev/null)" "ran: $(rw_ran)"
+fi
+
 # 1. obok, tylko docs: config = ten, ktory MA wiersze (jobs.h.conf jest pierwszy w kolejnosci i pusty),
 #    onto = baza/basename; bez --at (p0 = najnowszy), bez --yes. Okno podsumowania ma "Wymaga zgody" i --defaultno.
 printf '0\tobok\n0\thdd/restore\n0\tp0\n0\t\n' > "$RW/answers"
