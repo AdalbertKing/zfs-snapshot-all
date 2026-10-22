@@ -107,7 +107,7 @@ step_host() {
         [ -e "$TMPD/rel.done" ] || info "$(title 2 'Z którego hosta?')" "Sprawdzam, czy z $h nie ma już relacji..."
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
-            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się na F3: Enter na niej,\npotem 'e' i „Dodaj dataset ze źródła” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma." 14 "$W"
+            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się na F3: Enter na niej,\npotem 'e' i „Datasety” w karcie zmiany (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma." 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
@@ -222,7 +222,19 @@ step_datasets() {
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets $HOST:\n\n$(tail -3 "$TMPD/ds.err" | tr -d '\r')" 12 "$W"
         return 1
     fi
-    basket_step
+    basket_step || return $?
+    raw_default
+}
+# Kampania wariantów 2026-10-22 (W2): domyślne "wyślij zaszyfrowane" ustawiało się dopiero w
+# oknie Dodatkowe -- kto kliknął Utwórz bez zaglądania tam, dostawał kopię zaszyfrowanego
+# źródła ODSZYFROWANĄ na kolektorze (W17 mówi: domyślnie raw). Liczone zaraz po wyborze
+# datasetów; wybór admina z okna Dodatkowe (RAW_SEEN) zostaje.
+raw_default() {
+    if [ "$MODE" != snaponly ] && [ "${NOCOPY:-0}" != 1 ] && basket_encrypted; then
+        [ "${RAW_SEEN:-0}" = 1 ] || { RAW=1; RAW_SEEN=1; }
+    else
+        RAW=0
+    fi
 }
 
 # --- krok 5: dokąd (tylko backup) ---------------------------------------------

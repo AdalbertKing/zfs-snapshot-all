@@ -363,8 +363,8 @@ class Tree(object):
         body = [self.spec.get("legend") or (u" Enter wybiera. · = sama gałąź (nic do wybrania), → rozwija" if self.single
                                             else u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie")]
         if self.show_mode:
-            body.append(u" Sposób: cała gałąź atomowo (-r)   S zmienia" if self.recursion == "atomic"
-                        else u" Sposób: każdy dataset osobno (-R)   S zmienia")
+            body.append(u" Sposób: cała gałąź atomowo (-r)" if self.recursion == "atomic"
+                        else u" Sposób: każdy dataset osobno (-R)")  # klawisz S tylko na ramce (E88)
         body.append(u" ↑ więcej" if self.top > 0 else u"")
         first = len(body)
         for n in rows[self.top:self.top + lh]:
