@@ -13047,6 +13047,34 @@ if printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host,
 else
     bad "delrel: U9 -- copies after a seed without activation" "$DROUT"
 fi
+# G-1 (pve10 2026-10-22): a MIRROR writes under the source's own names. Its seed refused
+# ('hdd/archive already exists and shares no common snapshot' -- pve10's OWN dataset), and
+# the plan then offered that dataset as a copy to destroy. A mirror whose seed never
+# finished: the derived paths are NOT offered, and --destroy-copies is refused before
+# anything. Positive control: the same mirror after its seed lists them as before.
+dr_mirror() {   # <seed_completed_at or ""> <args...>
+    local sc="$1"; shift
+    { printf 'CLIENT_NAME=m\nSTATE=seeding\nRUX_MODE=sync\nPEER_HOST=10.0.0.8\nACTIVE_ENDPOINT=10.0.0.8:22\n'
+      [ -n "$sc" ] && printf 'SEED_COMPLETED_AT="%s"\n' "$sc"; } > "$DR/clients/m.conf"
+    ( CLIENTS_DIR="$DR/clients"
+      . "$ZFSBACKUP"
+      load_client_and_connection() { PEER_SAVED_MODE=sync PEER_SAVED_TARGET="" LOAD_LABEL=10.0.0.8
+                                     PEER_SAVED_DATASETS="hdd/archive"; }
+      client_local_path() { printf '%s' "$1"; }
+      zfs() { return 0; }
+      cmd_delete_relation m --keep-source "$@" ) 2>&1
+}
+DM1=$(dr_mirror "" --destroy-copies); dm1_rc=$?
+DM2=$(dr_mirror "")
+DM3=$(dr_mirror "2026-10-22 06:00:00" --destroy-copies)
+if printf '%s' "$DM1" | grep -q "is a mirror that never finished its seed: its paths (hdd/archive)" && ! printf '%s' "$DM1" | grep -q 'COPIES    : zfs destroy' \
+   && printf '%s' "$DM2" | grep -q '4\. copies    : NOT offered -- a mirror whose seed never finished: hdd/archive' && ! printf '%s' "$DM2" | grep -q 'KEPT on this host (hdd/archive)' \
+   && printf '%s' "$DM3" | grep -q '4\. COPIES    : zfs destroy -r' && printf '%s' "$DM3" | grep -q '^ *hdd/archive$'; then
+    ok "delrel G-1: a mirror whose seed never finished does not offer its same-name paths as copies; --destroy-copies refused; after a seed it lists them"
+else
+    bad "delrel G-1: mirror without seed" "$DM1" "$DM2" "$DM3"
+fi
+rm -f "$DR/clients/m.conf"
 if ! dr_run zz >/dev/null && grep -q "no relationship 'zz' on this host" "$DR/err" && ! dr_run a --bogus >/dev/null && grep -q "unknown option '--bogus'" "$DR/err"; then
     ok "delrel: an unknown name and an unknown option are refusals, before anything is read or run"
 else

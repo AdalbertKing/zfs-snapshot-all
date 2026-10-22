@@ -14341,7 +14341,7 @@ cmd_delete_relation() {
     # over the pairing's dataset list), in a subshell so nothing it loads leaks
     # into the steps below, and only those that EXIST here are listed. A dataset
     # under another listed one is dropped: `destroy -r` of the root takes it.
-    local copies_from="the record"
+    local copies_from="the record" mirror_unproven=""
     # snaponly: there are no copies on this host, by definition -- and deriving
     # "copies" from the pairing would build collector paths it never had.
     if [ "${RUX_MODE:-}" = snaponly ]; then
@@ -14358,7 +14358,14 @@ cmd_delete_relation() {
                         _lp=$(client_local_path "$_ds")
                         zfs list -H -o name -- "$_lp" >/dev/null 2>&1 && printf '%s\n' "$_lp"
                     done | sort -u | awk '{ for (i = 1; i <= n; i++) if (index($0, k[i] "/") == 1) next; k[++n] = $0; print }' )
-        if [ -n "$_derived" ]; then
+        if [ -n "$_derived" ] && [ "${RUX_MODE:-}" = sync ] && [ -z "${SEED_COMPLETED_AT:-}" ]; then
+            # A MIRROR writes under the SAME names as the source. One whose seed never
+            # finished proves nothing about them: on pve10 (2026-10-22) seed refused
+            # 'hdd/archive already exists and shares no common snapshot' -- the host's
+            # OWN dataset -- and this plan then offered it as a copy to destroy.
+            mirror_unproven=$(printf '%s\n' "$_derived" | tr '\n' ' '); mirror_unproven="${mirror_unproven% }"
+            [ "$destroy" -eq 0 ] || die "delete-relation: '$name' is a mirror that never finished its seed: its paths ($mirror_unproven) carry the same names as on the source and may be this host's own datasets -- not destroying them. Check them and remove by hand if they are copies (zfs destroy -r). Nothing was changed."
+        elif [ -n "$_derived" ]; then
             copies=$(printf '%s\n' "$_derived" | tr '\n' ' '); copies="${copies% }"
             copies_from="the pairing -- seeded, never activated, so the record lists none"
         fi
@@ -14406,6 +14413,8 @@ cmd_delete_relation() {
         echo "  4. COPIES    : zfs destroy -r, on THIS host, of (from $copies_from):"
         local d; for d in $copies; do echo "                   $d"; done
         [ -n "$copies" ] || echo "                   (the record lists none)"
+    elif [ -n "$mirror_unproven" ]; then
+        echo "  4. copies    : NOT offered -- a mirror whose seed never finished: $mirror_unproven may be this host's own datasets (same names as on the source); check and remove by hand if they are copies"
     else
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
