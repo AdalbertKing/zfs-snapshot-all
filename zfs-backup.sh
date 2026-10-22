@@ -17415,12 +17415,47 @@ import_relation_undo_record() {   # <name>
 # block, and the export carries that block verbatim ("relation"). Written back
 # here, after the relationship is active, through the same gate as set-tiers:
 # working copy, gen-cron validation, atomic replace and install.
+# import_helper_profile <relation json object> <name> -> a profile built from the
+# relationship's OWN block, on stdout. The template is a helper for creating a
+# relationship and nothing more (owner 2026-10-22), so an import onto a collector that
+# does not carry the original profile file builds the relationship from what the export
+# already says -- every tier, cadence, prefix, retention, quiesce and monitor -- and
+# import_restore_relblock then puts the exact block back as before. Hidden, so no list
+# shows it; it lives in a temporary directory for this one run.
+import_helper_profile() {
+    local rel="$1" name="$2" tiers t v
+    tiers=$(json_unquote "$(json_value_of "$rel" tiers)")
+    [ -n "$tiers" ] || return 1
+    _ihp() { local k; for k in "$@"; do v=$(json_unquote "$(json_value_of "$rel" "$k")"); [ -n "$v" ] && { printf '%s' "$v"; return 0; }; done; return 1; }
+    printf '[profile]\n\tdescription = import of %s (built from its own block)\n\tversion     = 1\n\thidden      = yes\n' "$name"
+    for t in ${tiers//,/ }; do
+        printf '[template:%s]\n' "$t"
+        v=$(_ihp "$t.target_send_schedule" "$t.send_schedule") && printf '\tsend_schedule  = %s\n' "$v"
+        v=$(_ihp "$t.target_prefix" "$t.prefix")               && printf '\tprefix         = %s\n' "$v"
+        v=$(_ihp "$t.notify_word")                              && printf '\tnotify_word    = %s\n' "$v"
+        v=$(_ihp "$t.target_prune_schedule" "$t.prune_schedule") && printf '\tprune_schedule = %s\n' "$v"
+        v=$(_ihp "$t.target_pattern" "$t.pattern")             && printf '\tpattern        = %s\n' "$v"
+        v=$(_ihp "$t.target_gfs" "$t.gfs")                     && printf '\tgfs            = %s\n' "$v"
+        v=$(_ihp "$t.target_retain" "$t.retain")               && printf '\tretain         = %s\n' "$v"
+        v=$(_ihp "$t.target_quiesce" "$t.quiesce")             && printf '\tquiesce        = %s\n' "$v"
+        v=$(_ihp "$t.target_monitor" "$t.monitor")             && printf '\tmonitor_warn   = %s\n\tmonitor_crit   = %s\n' "${v%% *}" "${v##* }"
+    done
+    printf '[dataset]\n\tuse_template = %s\n' "$(printf '%s' "$tiers" | tr -d ' ')"
+    for t in __replicate_ vzdump __migration__; do printf '[excluded:%s]\n\tkeep = 2\n' "$t"; done
+}
+
 import_restore_relblock() {   # <name> <export document> [--check: rc 1 = differs, nothing written]
     local name="$1" doc="$2" check="${3:-}" rel
     rel=$(json_value_of "$doc" relation)
     case "$rel" in ''|null|'{}') return 0 ;; esac
     local cpath; cpath=$(client_conf_path "$name")
     [ -r "$cpath" ] || return 0
+    # Created through a helper (import_helper_profile): the record names the profile
+    # the relationship was exported with, not the throw-away helper.
+    if [ -z "$check" ] && [ -n "${IMPORT_LABEL_PROFILE:-}" ]; then
+        record_replace_fields "$cpath" PROFILE "$IMPORT_LABEL_PROFILE" ${IMPORT_LABEL_SRCPROFILE:+SOURCE_PROFILE "$IMPORT_LABEL_SRCPROFILE"} \
+            || warn "import-relation: the record of '$name' still names the helper template -- the relationship itself is complete"
+    fi
     ( record_load client "$cpath"
       [ "${STATE:-}" = active ] || exit 0
       cron_context_resolve record "" "" "${CRON_CONFIG:-}" "${LOCAL_USER:-}"
@@ -17498,6 +17533,32 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
 $(json_array_strings "$(json_value_of "$replay" argv)")
 ARGV
     [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    # NO PROFILE FILE HERE? Build from the relationship itself (import_helper_profile).
+    # Measured on pve10, 2026-10-22: with d30h24.conf absent the replay died in
+    # add-client, although the file carried the whole [relation:] block.
+    IMPORT_LABEL_PROFILE=""; IMPORT_LABEL_SRCPROFILE=""
+    local im_p="" im_sp="" im_dir="" im_rel im_hp i
+    for x in "${argv[@]}"; do case "$x" in --profile=*) im_p="${x#*=}" ;; --source-profile=*) im_sp="${x#*=}" ;; esac; done
+    if [ -n "$im_p" ] && ! [ -f "$(profile_file "$(profile_name_of "$im_p").conf")" ]; then
+        im_rel=$(json_value_of "$doc" relation)
+        case "$im_rel" in ''|null|'{}') die "import-relation: profile '$im_p' is not on this host, and '$file' carries no relation block to build '$name' from. Copy the profile here (profiles/ or $PROFILE_USER_ROOT) and re-run." ;; esac
+        im_dir=$(mktemp -d) || die "import-relation: mktemp -d failed"
+        im_hp="import-$name"
+        import_helper_profile "$im_rel" "$name" > "$im_dir/$im_hp.conf" \
+            || die "import-relation: profile '$im_p' is not on this host, and the relation block in '$file' names no tiers -- nothing to build '$name' from"
+        export PROFILE_USER_ROOT="$im_dir"
+        IMPORT_LABEL_PROFILE="$im_p"
+        for i in "${!argv[@]}"; do
+            case "${argv[$i]}" in --profile=*) argv[$i]="--profile=$im_hp" ;; esac
+        done
+        if [ -n "$im_sp" ] && ! [ -f "$(profile_file "$(profile_name_of "$im_sp").conf")" ]; then
+            IMPORT_LABEL_SRCPROFILE="$im_sp"
+            for i in "${!argv[@]}"; do
+                case "${argv[$i]}" in --source-profile=*) argv[$i]="--source-profile=$im_hp" ;; esac
+            done
+        fi
+        echo ">>> import-relation: szablonu '$im_p' nie ma na tym hoscie -- relacja powstaje z wlasnego bloku zapisanego w $file (szablon pomocniczy, tylko na ten import)"
+    fi
     # U62: a file written before the fix carries --host = the pairing address and the
     # address in use only under not_replayable/ACTIVE_ENDPOINT. Connect where the relation
     # actually worked: a literal host:port there replaces --host (port 22 left implicit).
