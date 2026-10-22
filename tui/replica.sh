@@ -367,7 +367,7 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
         CARD_ACT_LABELS+=("Zacznij od nowa na tym dysku (pełna kopia)…")
         card_menu "Zmiana repliki $NAME" "replika $NAME   kolektor $(hostname)\nCo zmienić? Zapis dopiero w \"Zapisz zmiany\"." "${LAST_ITEM:-zrodla}" "Wstecz" || {
             if [ "$np" -gt 0 ]; then
-                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
+                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wstecz" --defaultno \
                    --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
                 [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
             fi
