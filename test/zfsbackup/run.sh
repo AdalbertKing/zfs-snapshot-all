@@ -10388,6 +10388,36 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
                 esac; }
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
+# NO PROFILE FILE ON THIS COLLECTOR (owner 2026-10-22: the template is a helper for
+# creating, nothing after). The relationship is built from its own exported block: a
+# hidden helper profile with the block's tiers, and add-client is handed THAT; without
+# a block in the file the import refuses and says what to copy. Measured before on
+# pve10: import of cb with d7h24.conf absent died in add-client.
+ihp_fn=$(sed -n '/^json_value_of() {/,/^}/p; /^json_unquote() {/,/^}/p; /^import_helper_profile() {/,/^}/p' "$ZFSBACKUP")
+ihp=$(bash -c "$ihp_fn
+import_helper_profile '{\"tiers\":\"hourly, daily\",\"hourly.target_send_schedule\":\"1 * * * *\",\"hourly.target_prefix\":\"automated_hourly_\",\"hourly.pattern\":\"automated_hourly\",\"hourly.prune_schedule\":\"21 * * * *\",\"hourly.retain\":\"-H24\",\"hourly.target_monitor\":\"90m 150m\",\"daily.target_send_schedule\":\"11 1 * * *\",\"daily.target_prefix\":\"automated_daily_\",\"daily.target_retain\":\"-D30\",\"daily.source_retain\":\"-D5\",\"daily.quiesce\":\"auto,degrade\"}' cb" 2>&1)
+if printf '%s\n' "$ihp" | grep -qx '\thidden      = yes' \
+   && printf '%s\n' "$ihp" | grep -qx '\tuse_template = hourly,daily' \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:hourly\]/,/^\[/p' | grep -qx '\tmonitor_crit   = 150m' \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qx '\tretain         = -D30' \
+   && printf '%s\n' "$ihp" | sed -n '/^\[template:daily\]/,/^\[/p' | grep -qx '\tquiesce        = auto,degrade'; then
+    ok "importrel: import_helper_profile builds a hidden profile from the exported block -- tiers, target retention, quiesce, monitor"
+else
+    bad "importrel: import_helper_profile" "$ihp"
+fi
+mkdir -p "$IM/noprof"
+sed 's/"replay":/"relation":{"tiers":"hourly","hourly.target_send_schedule":"1 * * * *","hourly.target_prefix":"automated_hourly_","hourly.retain":"-H24"},"replay":/' "$IM/ksiegowosc.json" > "$IM/withblock.json"
+PROFILE_ROOT="$IM/noprof" PROFILE_USER_ROOT="$IM/noprof" im_run "$IM/withblock.json" --yes; im_rc=$?
+im_np_calls="$(cat "$IM/calls.log")"; im_np_out="$(cat "$WORK/im.out")"
+PROFILE_ROOT="$IM/noprof" PROFILE_USER_ROOT="$IM/noprof" im_run "$IM/ksiegowosc.json" --yes; im_rc2=$?
+if [ "$im_rc" -eq 0 ] && printf '%s' "$im_np_calls" | grep -q '|--profile=import-ksiegowosc' \
+   && ! printf '%s' "$im_np_calls" | grep -q '|--profile=d7h24' \
+   && printf '%s' "$im_np_out" | grep -q "szablonu 'd7h24' nie ma na tym hoscie" \
+   && [ "$im_rc2" -ne 0 ] && grep -q 'carries no relation block' "$WORK/im.err"; then
+    ok "importrel: no profile file here -> add-client gets the helper built from the file's block; no block in the file -> a clear refusal"
+else
+    bad "importrel: import without the profile file" "rc=$im_rc rc2=$im_rc2" "$im_np_calls" "$(tail -3 "$WORK/im.err")"
+fi
 im_run "$IM/ksiegowosc.json"; im_rc=$?
 if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im.out" \
         && grep -q 'zfs-backup.sh seed ksiegowosc --yes' "$WORK/im.out" && grep -q 'zfs-backup.sh activate ksiegowosc --yes' "$WORK/im.out" \
@@ -13665,6 +13695,61 @@ hdd/lab/a/b" ]; then
     ok "addsource: relation_copy_sources lists what THIS relationship's copy jobs pull -- not its prune lines, not another relationship's"
 else
     bad "addsource: relation_copy_sources" "$got"
+fi
+# THE RELATION IS ITS CONFIG (owner 2026-10-22): a dataset joining an existing
+# relationship clones a sibling of the SAME relationship (not another one's) -- new
+# header, src and notify; the sibling's own child exclusions dropped; minutes, flags,
+# relation and side as installed. No profile file is read (measured before on pve10:
+# add-source ab hdd/db died "profile 'd30h24' ... is missing").
+rs_fn=$(sed -n '/^cron_config_section() {/,/^}/p; /^relation_sibling() {/,/^}/p; /^clone_relation_section() {/,/^}/p' "$ZFSBACKUP")
+[ -n "$rs_fn" ] || bad "addsource: could not lift relation_sibling/clone_relation_section -- anchors changed"
+cat > "$AS/rel.conf" <<'CONF'
+[relation:other]
+	tiers = hourly
+[dataset:hdd/b/h/x]
+	relation     = other
+	side         = target
+	src          = u@h:x
+	notify       = other-x
+[relation:r]
+	tiers = hourly, daily
+[dataset:hdd/b/h/data]
+	# managed-by: zfs-backup.sh client=r
+	relation     = r
+	side         = target
+	send_schedule_hourly = 16 * * * *
+	src          = u@h:hdd/data
+	exclude_child_1 = tmp
+	recursive    = flat
+	pair_label   = r
+	notify       = r-data
+[prune:u@h:hdd/data]
+	relation     = r
+	side         = source
+	notify       = r-src-data
+CONF
+got=$(bash -c "$rs_fn
+relation_sibling '$AS/rel.conf' r dataset target; echo \"rc=\$?\"
+relation_sibling '$AS/rel.conf' r prune target; echo \"rc=\$?\"
+relation_sibling '$AS/rel.conf' r prune source
+clone_relation_section '$AS/rel.conf' dataset hdd/b/h/data hdd/b/h/db r-db u@h:hdd/db" 2>&1)
+want="hdd/b/h/data
+rc=0
+rc=1
+u@h:hdd/data
+[dataset:hdd/b/h/db]
+	# managed-by: zfs-backup.sh client=r
+	relation     = r
+	side         = target
+	send_schedule_hourly = 16 * * * *
+	src          = u@h:hdd/db
+	recursive    = flat
+	pair_label   = r
+	notify       = r-db"
+if [ "$got" = "$want" ]; then
+    ok "addsource: a new dataset clones a sibling of the SAME relationship -- new src/notify, the sibling's exclusions dropped, no profile involved"
+else
+    bad "addsource: relation_sibling / clone_relation_section" "got: $got" "want: $want"
 fi
 # zfs-job.sh EXITS 0 WHATEVER THE ENGINE DID; the first copy is judged by the
 # job's END line in its log. A stub job that fails the engine but exits 0 must
