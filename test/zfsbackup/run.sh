@@ -13332,11 +13332,12 @@ RS="$WORK/rsrestart"; rm -rf "$RS"; mkdir -p "$RS"
 printf '[defaults]\n\thost_label = h\n[replica:own]\n\tsource = tank/b/x\n\tdst = disk/rep\n\tschedule = 0 3 1 * *\n\tprefix = replica_\n\tkeep = 2\n[replica:pas]\n\tsource = tank/b\n\tdst = disk2/rep\n\tschedule = 0 4 * * *\n\tpassive = yes\n' > "$RS/c.conf"
 rs_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RS/c.conf'; }; cmd_replica_restart own --config='$RS/c.conf'" 2>&1); rs_rc=$?
 rw_out=$(bash -c "source '$ZFSBACKUP'; default_cron_config() { echo '$RS/c.conf'; }; replica_restart_warning 'tank/b/x/sub tank/b/y'" 2>&1)
-if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i -t "tank/b/x" "disk/rep/tank/b/x-restart"' \
+if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i "tank/b/x" "disk/rep/restart-tmp"' && ! printf '%s' "$rs_out" | grep -qF -- ' -t ' \
+   && printf '%s' "$rs_out" | grep -qF 'zfs rename -p disk/rep/restart-tmp/tank/b/x disk/rep/tank/b/x' \
    && printf '%s' "$rs_out" | grep -qF 'zfs destroy -r disk/rep/tank/b/x   -- stara kopia, dopiero po udanym kroku 1' \
    && printf '%s' "$rs_out" | grep -q '^plan only' \
    && printf '%s' "$rw_out" | grep -qF "replika 'own'" && ! printf '%s' "$rw_out" | grep -qF "replika 'pas'"; then
-    ok "runreplicas: replica-restart plan = the replica's own options + -t onto <target>-restart, old copy destroyed only after; delete-relation warns for a replica with its own snapshots, not a passive one"
+    ok "runreplicas: replica-restart plan = the replica's own options onto a temporary base (no -t: the engine refuses -t with -R), old copy destroyed only after, then rename -p; delete-relation warns for a replica with its own snapshots, not a passive one"
 else
     bad "runreplicas: replica-restart / warning" "rc=$rs_rc" "$rs_out" "$rw_out"
 fi
