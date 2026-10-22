@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 91236fdef2536ca9 -->
+<!-- status-covers-digest: f396798dfe3396df -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,17 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, bloki D i F: F7 dwa razy i lista szablonów na 80×24 (`fix/f7-busy-80col`).** (D) Dwa biegi tej
+  samej relacji naraz (F7 dwa razy albo F7 w trakcie crona) kończyły się „did NOT finish (rc=75)” i rc 1 -- choć
+  75 to blokada silnika: kopię niesie właśnie drugi bieg, nic się nie psuje (ustalenie właściciela 2026-10-06:
+  ostrzeżenie). Teraz `run-relation` mówi „busy -- another run of this copy holds its lock…” i nie przegrywa na
+  tym. Zmiana szczebli w trakcie obu biegów: przeszła, powrót przywrócił config. (F) Na 80×24 krok „Jak długo
+  trzymać”: objaśnienie łamało się w pół zdania (ręczne końce linii), objaśniało `[drabina]`, której na liście nie
+  ma, a `full` i `m12w4d7h24-gfs` wyglądały tak samo -- znacznik sposobu liczenia stał na końcu i ginął. Teraz
+  znacznik (`[N najnowszych]`/`[GFS]`/`[wg wieku]`) idzie zaraz za nazwą, tekst zawija okno, `[drabina]`
+  objaśniana tylko gdy jest; ostrzeżenie migawek zdalnych podaje `m12w4d7h24-gfs` zamiast płaskiego już `default`.
+  Testy: `tui` 391/0, `zfsbackup` addsource 15/0 (nowe przypadki padają na main).
 
 - **Kampania 3, blok E: host zaczynający się od `-` odrzucony (`fix/host-dash`).** Kreator przepuszczał adres
   `-oProxyCommand` (myślnik jest dozwolony), czasownik planował z nim relację, a `deploy.sh` podaje adres do

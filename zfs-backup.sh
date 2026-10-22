@@ -15494,7 +15494,7 @@ cmd_run_relation() {
                  | grep -F -- " -L $name " | grep -E 'snap(get|send)\.sh')
     [ "${#order[@]}" -gt 0 ] \
         || die "run-relation: no copy job of '$name' in the installed cron of '$(cron_target_user)' -- nothing to run"
-    local cmd logf rc done_n=0 fail_n=0
+    local cmd logf rc done_n=0 fail_n=0 busy_n=""
     for key in "${order[@]}"; do
         line="${fine[$key]:-${first[$key]}}"
         cmd=$(printf '%s' "$line" | sed -E 's/^([^ ]+ ){5}//')
@@ -15512,11 +15512,17 @@ cmd_run_relation() {
         fi
         if [ "$rc" = 0 ]; then
             done_n=$((done_n + 1)); log "run-relation:   done"
+        elif [ "$rc" = 75 ]; then
+            # Campaign 3 (2026-10-22): F7 twice, or F7 while cron runs the same copy, read
+            # "did NOT finish (rc=75)" and failed the whole run. 75 is the engine's lock:
+            # another run of THIS copy is in progress and carries it (owner 2026-10-06: a
+            # warning, not a failure). Said as such, and not counted as not done.
+            busy_n=$((busy_n + 1)); warn "run-relation:   busy -- another run of this copy holds its lock and is copying it right now; this one copied nothing and broke nothing"
         else
             fail_n=$((fail_n + 1)); warn "run-relation:   did NOT finish (rc=${rc:-unknown}) -- see ${logf:-the job log}"
         fi
     done
-    log "run-relation '$name': $done_n done, $fail_n not done"
+    log "run-relation '$name': $done_n done${busy_n:+, $busy_n busy (another run is copying them)}, $fail_n not done"
     [ "$fail_n" -eq 0 ]
 }
 
