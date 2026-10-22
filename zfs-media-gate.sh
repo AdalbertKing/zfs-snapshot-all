@@ -790,7 +790,21 @@ detach)
     # exports.
     marker_is_ours; _own=$?
     case "$_own" in
-        1)  say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
+        1)  # A MEDIUM FOUND IMPORTED STILL GETS ITS RECORD (campaign 2026-10-22, pve10):
+            # a disk left attached and imported -- the lab's file pools are the same case --
+            # got every copy, and the record never advanced, because it was written only on
+            # the export path below. F6 said "Kopia z: brak" and the age monitor warned for
+            # ever. Whose import it was decides only whether to EXPORT; attach accepted this
+            # medium and the engine succeeded on it, so what it now holds is just as proved.
+            if [ "$ENGINE_RC" = 0 ] && [ "${#SOURCES[@]}" -gt 0 ] && has_family; then
+                _now_guid="$(pool_guid)"
+                if [ -n "$_now_guid" ] && record_write "$_now_guid"; then
+                    mark_current
+                else
+                    say "note: could not record what '$POOL' now holds ($SYNCED) -- the next run will copy rather than trust a record it does not have."
+                fi
+            fi
+            say "leaving '$POOL' imported: this run did not import it, so putting it away is not this run's call."
             emit left_alone; exit 0 ;;
         2)  say "REFUSING to export '$POOL': this package holds an ownership marker that does not match the pool currently imported under that name (marker guid: $(sed -n 's/^guid=//p' "$OURS" 2>/dev/null | head -1 | sed 's/^$/none/'); pool guid: $(pool_guid | sed 's/^$/unreadable/')). Exporting would hit a disk this run never imported, and clearing the marker would discard the record that an export is still owed elsewhere. A human is needed."
             emit export_refused_ambiguous; exit 2 ;;
