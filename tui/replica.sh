@@ -102,6 +102,29 @@ basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to p
 # Silnik (gen-cron) bierze datasety, nie korzeń puli, więc pula staje się listą datasetów
 # leżących bezpośrednio pod nią -- każdy z całym drzewem pod sobą (REC=yes). Dataset
 # pominięty w koszyku w całości odpada; pominięcia głębiej idą za swoim datasetem.
+# H-7 (kampania 2026-10-21): pula nośnika INNEJ repliki (replab) była na liście źródeł nowej.
+# Nośnik wymienny = cała jego pula; nośnik stały = katalog docelowy z poddrzewem. Z listy
+# datasetów (ds.json) znikają, zanim powstanie z niej drzewo.
+drop_replica_media() {
+    "$PY" - "$TMPD/ds.json" "$TMPD/rep.json" <<'PYEOF' || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    r = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+hide = []
+for x in r.get("replicas") or []:
+    dst = (x.get("dst") or "").strip("/")
+    if not dst:
+        continue
+    hide.append(dst.split("/")[0] if x.get("media") == "removable" else dst)
+if hide:
+    d["datasets"] = [x for x in d.get("datasets") or []
+                     if not any(x.get("name") == h or (x.get("name") or "").startswith(h + "/") for h in hide)]
+    json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
+PYEOF
+}
 pool_roots_to_children() {   # B_ROOT/B_EXCL -> SRC_ROOT/SRC_EXCL bez korzeni puli; 1 + POOL_EMPTY, gdy pula pusta
     # Koszyk (B_ROOT) zostaje taki, jak go zaznaczono: Wstecz do drzewa pokazuje całą pulę
     # zaznaczoną, nie "[-] część" (H-1, kampania na żywo 2026-10-21).
@@ -356,7 +379,7 @@ if [ "$EDIT" -eq 1 ]; then
     MENU=1
     # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
     info "Replika $NAME" "Czytam datasety tego hosta..."
-    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
     fi
@@ -389,7 +412,7 @@ while :; do
     2)  # co kopiować -- TEN SAM koszyk co w kreatorze relacji (uwaga 13, 2026-10-08)
         if [ "${#T_NAME[@]}" -eq 0 ]; then
             info "Replika $NAME" "Czytam datasety tego hosta..."
-            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
                 wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
                 clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
             fi
