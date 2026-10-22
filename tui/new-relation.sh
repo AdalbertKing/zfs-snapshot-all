@@ -58,16 +58,18 @@ hostport() { [ "$MODE" = local ] && return 0; [ "$PORT" = 22 ] && echo "$HOST" |
 # --- krok 1: typ ------------------------------------------------------------
 step_mode() {
     geom
-    local b=OFF s=OFF l=OFF n=OFF r=OFF cur="$MODE"
+    # Kampania 2026-10-22: w RADIOLIŚCIE Enter bierze zaznaczoną kropkę, nie podświetloną pozycję --
+    # strzałka na "Lustro" i Enter dawały backup. Menu: Enter na pozycji = ta pozycja.
+    local cur="$MODE"
     [ "$NOCOPY" -eq 1 ] && cur=snap
-    case "$cur" in sync) s=ON ;; local) l=ON ;; snap) n=ON ;; snaponly) r=ON ;; *) b=ON ;; esac
-    wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags \
-       --radiolist "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
-       backup "Backup    (ten host pobiera ze źródła)" "$b" \
-       sync   "Lustro    (to samo po obu stronach)" "$s" \
-       local  "Kopia lokalna  (na tym hoście)" "$l" \
-       snap   "Migawki lokalne  (na tym hoście, bez kopii)" "$n" \
-       snaponly "Migawki zdalne  (na innym hoście, bez kopii)" "$r" || return 1
+    case "$cur" in sync|local|snap|snaponly) ;; *) cur=backup ;; esac
+    wt --title "$(title 1 'Jaka relacja?')" --ok-button "Dalej" --cancel-button "Wyjdź" --notags --default-item "$cur" \
+       --menu "Backup: ten host POBIERA migawki ze źródła i trzyma je u siebie.\nLustro: te same datasety pod tą samą ścieżką i te same migawki:\nco zniknie u źródła, zniknie też tutaj (bez własnej retencji).\nKopia lokalna: kopia na tym samym hoście, np. rpool/data -> hdd/backup.\nMigawki lokalne: migawki i ich sprzątanie w datasetach tego hosta, bez kopii.\nMigawki zdalne: ten host robi i sprząta migawki NA innym hoście, bez kopii.\n\nStrzałki = ruch, spacja = wybierz, Enter = dalej." "$(fit 10)" "$W" 5 \
+       backup "Backup    (ten host pobiera ze źródła)" \
+       sync   "Lustro    (to samo po obu stronach)" \
+       local  "Kopia lokalna  (na tym hoście)" \
+       snap   "Migawki lokalne  (na tym hoście, bez kopii)" \
+       snaponly "Migawki zdalne  (na innym hoście, bez kopii)" || return 1
     # "Same migawki" = kopia lokalna bez celu: te same kroki co Lokalnie, bez "Dokąd".
     if [ "$WT_OUT" = snap ]; then NOCOPY=1; WT_OUT=local; TARGET=""; else NOCOPY=0; fi
     if [ -n "$WT_OUT" ] && [ "$WT_OUT" != "$MODE" ]; then
@@ -598,17 +600,16 @@ step_name() {
 
 # --- krok 8: konto ------------------------------------------------------------
 step_account() {
-    local r=OFF z=OFF o=OFF a acct_name shape
+    local a acct_name shape cur
     while :; do
-        case "$ACCT" in zfsbackup) z=ON ;; other) o=ON ;; *) r=ON ;; esac
+        case "$ACCT" in zfsbackup|other) cur="$ACCT" ;; *) cur=root ;; esac
         geom
-        wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --radiolist "Konto na TYM hoście, na którym cron będzie uruchamiał zadania tej relacji.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
-           root      "root  -- bez izolacji (tak działa większość floty dziś)" "$r" \
-           zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" "$z" \
-           other     "inne konto…  (podasz nazwę)" "$o" || return 1
+        wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$cur" \
+           --menu "Konto na TYM hoście, na którym cron będzie uruchamiał zadania tej relacji.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
+           root      "root  -- bez izolacji (tak działa większość floty dziś)" \
+           zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" \
+           other     "inne konto…  (podasz nazwę)" || return 1
         [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
-        r=OFF; z=OFF; o=OFF
         if [ "$ACCT" = other ]; then
             while :; do
                 wt --title "$(title 8 'Nazwa konta')" --ok-button "Dalej" --cancel-button "Wstecz" --inputbox "Nazwa konta na tym hoście (zostanie utworzone, jeśli go nie ma)." 9 "$W" "$ACCT_OTHER" || { ACCT=root; return 1; }
