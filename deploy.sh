@@ -736,6 +736,9 @@ USAGE
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
 done
+# Campaign 3 (2026-10-22): a peer address is DATA. One that starts with '-' is handed to
+# ssh-keyscan / getent as a word of its own and would be read as an option -- refused.
+case "${PEER_HOST:-}" in -*) echo "--peer='$PEER_HOST' starts with '-' -- a host name never does, and ssh-keyscan would read it as an option" >&2; exit 2 ;; esac
 case "$ALERT_MODE" in
     daily|immediate) ;;
     *) echo "--alerts must be 'daily' or 'immediate', got '$ALERT_MODE'" >&2; exit 2 ;;

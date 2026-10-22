@@ -3351,6 +3351,19 @@ if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
 else
     bad "new-relation: walidacja adresu" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log" 2>/dev/null)"
 fi
+# 7b. kampania 3 (2026-10-22): adres zaczynajacy sie od '-' przechodzil walidacje (myslnik jest
+#     dozwolony), a ssh-keyscan/getent wzialby go za opcje -- tez okno 'Zly adres'
+NROUT=$(nr_run "0${T}backup
+0${T}-oProxyCommand
+0${T}
+1${T}
+1${T}
+")
+if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'ProxyCommand' "$NR/zb.log"; then
+    ok "new-relation: adres zaczynajacy sie od '-' = okno 'Zly adres', zaden czasownik go nie dostaje"
+else
+    bad "new-relation: adres z '-' na poczatku" "$(cat "$NR/wt.log" | tail -3)" "$(cat "$NR/zb.log" 2>/dev/null)"
+fi
 # Kampania 2026-10-22: krok 1 i okno konta to MENU, nie radiolista -- w radioliscie Enter bral
 # zaznaczona kropke, a nie podswietlona pozycje (strzalka na "Lustro" i Enter = backup).
 NRM1="$(grep -F 'Jaka relacja?' "$NR/wt.log" | head -1)"

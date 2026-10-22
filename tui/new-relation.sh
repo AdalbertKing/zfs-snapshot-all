@@ -100,7 +100,7 @@ step_host() {
         init="$WT_OUT"      # po odmowie pole wraca z tym, co wpisano -- do poprawienia, nie od zera
         h="${WT_OUT// /}"; p=22
         case "$h" in *:*) p="${h##*:}"; h="${h%%:*}" ;; esac
-        case "$h" in ''|*[!A-Za-z0-9._-]*)
+        case "$h" in ''|-*|*[!A-Za-z0-9._-]*)   # '-' na początku: ssh wziąłby to za opcję
             wt --title "Zły adres" --msgbox "'$WT_OUT' nie wygląda na adres hosta.\nDozwolone: litery, cyfry, kropka, myślnik; opcjonalnie :port." 9 "$W"; continue ;; esac
         case "$p" in ''|*[!0-9]*)
             wt --title "Zły port" --msgbox "Port '$p' nie jest liczbą." 8 "$W"; continue ;; esac
