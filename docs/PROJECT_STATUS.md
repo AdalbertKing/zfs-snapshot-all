@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 151357b3501fd108 -->
+<!-- status-covers-digest: 3774f144fc5efd35 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -98,9 +98,9 @@
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
 - **Kampania 3, blok H: słowa w oknach (`fix/words-h`).** Przegląd tekstów okien (`text-checker`): jedno słowo
-  „myślnik” zamiast „minus” w odmowach nazw i adresów; „Wstecz” zamiast „Wróć” w oknie porzucenia zmian; „konto
+  „myślnik” zamiast „minus” w odmowach nazw i adresów; „Wstecz” zamiast „Wróć” w oknach porzucenia zmian (relacja, replika); „konto
   delegowane (utworzone, jeśli go nie ma)” zamiast „(zostanie utworzone)” przy istniejącym koncie; dwa okna
-  bez ścieżki klawiszy w treści (E88): „Ta relacja już istnieje” i „Nazwa zajęta” w replice. Na żywo pve10:
+  bez ścieżki klawiszy w treści (E88): „Ta relacja już istnieje” w kreatorze i „Nazwa zajęta” w oknie nowej repliki. Na żywo pve10:
   okno „Ta relacja już istnieje”. Test `tui` 395/0 (pve9).
 
 - **Kampania 3, blok I: nowa nazwa nie zaczyna się od „-” ani „.” (`fix/name-leading-dash`).** Na żywo pve10:
