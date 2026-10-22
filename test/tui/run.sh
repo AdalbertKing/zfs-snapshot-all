@@ -3297,6 +3297,15 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
       bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
 rm -f "$RP/rules"
+# H-7 (kampania 2026-10-21): nosnik INNEJ repliki nie jest zrodlem nowej -- staly nosnik = jego
+# katalog docelowy z poddrzewem znika z drzewa (wymienny = cala jego pula, ta sama funkcja).
+rp_run "0${T}usb2
+" RP_TREE='esc' 'RP_REPS={"replicas":[{"name":"stala","sources":["hdd/backups"],"dst":"hdd/data","media":"fixed"}]}' >/dev/null
+if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && ! grep -qF ' mail' "$RP/tree.log"; then
+    ok "replika H-7: nosnik innej repliki (staly: hdd/data z poddrzewem) nie jest na liscie zrodel"
+else
+    bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
+fi
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
 #          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
