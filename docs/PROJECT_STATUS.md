@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: cdd9931d630195ea -->
+<!-- status-covers-digest: 81b235a9c7c1ab53 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Odzysk: Wstecz pamięta wybór; plan dodania datasetu bez „pełnej kopii” (`kamp/restore-back`).** Kampania
+  wariantów, pve10 2026-10-22. (1) W5: Wstecz z „Gdzie odtworzyć?” wracało do drzewa z zaznaczonym WSZYSTKIM --
+  wybór admina (np. jeden `srv-a`) znikał, a nieuważny Enter i „na miejsce” nadpisałby całą relację. Drzewo dostaje
+  teraz ostatni wybór. (2) W4: dataset zdjęty z relacji (kopie zostają) i dodany z powrotem idzie przyrostowo od
+  tamtej kopii (na żywo: `PLAN=INCREMENTAL` dla `hdd/home` w ab), a plan obiecywał „pierwszą pełną kopię”; teraz
+  „pierwsza kopia od razu; przyrostowo, gdy kopia już tu jest”. Test `tui` 389/0 (nowy przypadek pada na main).
 
 - **Audyt relacji nie podsuwa już `zfs destroy` na żywe kopie (`kamp/orphan-live`).** Kampania wariantów,
   pve10 2026-10-22: każde usunięcie relacji (tu: lustro cb) drukowało „DATA WITHOUT A RELATIONSHIP … the
