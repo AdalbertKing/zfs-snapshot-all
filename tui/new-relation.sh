@@ -1093,11 +1093,11 @@ wz_steps() {   # -> kroki bieżącego rodzaju, w kolejności
     for f in mode host ds target profile srcret name; do field_applies "$f" && out="$out $f"; done
     echo $out
 }
-wz_abort() {   # 0 = przerwij, 1 = zostań ("Zostań"); Esc w tym pytaniu też kończy
-    local rc=0
+wz_abort() {   # 0 = przerwij; 1 = zostań ("Zostań" albo Esc)
+    # Kampania 2026-10-22: Esc w tym pytaniu przerywał -- jeden Esc za dużo i całe wypełnianie
+    # znikało. Esc to "nie" w pytaniu tak/nie, czyli Zostań; przerwać można tylko przyciskiem.
     wt --title "Nowa relacja: przerwać?" --yes-button "Przerwij" --no-button "Zostań" --defaultno \
-       --yesno "Przerwać tworzenie relacji? Nic nie zostało zmienione." 8 "$W" || rc=$?
-    [ "$rc" -ne 1 ]
+       --yesno "Przerwać tworzenie relacji? Nic nie zostało zmienione." 8 "$W"
 }
 wz_walk() {   # <od którego kroku> -> 0 = doszedł do końca, 1 = przerwane
     local i="$1"; local -a list

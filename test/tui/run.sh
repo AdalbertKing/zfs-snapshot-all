@@ -2203,7 +2203,13 @@ p=""; for a in "$@"; do [ "$p" = "--textbox" ] && cat "$a" >> "$NR_DIR/wt.log"; 
 for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
-[ -n "$line" ] || { echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"; exit 255; }
+# Koniec odpowiedzi: pytanie kreatora "Przerwać?" dostaje Przerwij (Esc = Zostań i test krążyłby
+# bez końca); każde inne okno -- 255, jak Esc.
+if [ -z "$line" ]; then
+    echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"
+    for a in "$@"; do [ "$a" = "Nowa relacja: przerwać?" ] && exit 0; done
+    exit 255
+fi
 rc="${line%%	*}"; out="${line#*	}"
 # KONTRAKT PRAWDZIWEGO WHIPTAILA: z listy da sie wybrac TYLKO to, co na niej jest. Bez
 # tego atrapa przyjela 'hdd/backups', gdy kreator oferowal 'hdd/backups<TAB>active'
@@ -2809,6 +2815,19 @@ else
     bad "new-relation: karta przed podsumowaniem" "extra=$NRLN_X karta=$NRLN_C podsumowanie=$NRLN_S" "$(printf '%s' "$NRCARD" | cut -c1-300)"
 fi
 
+# Kampania 2026-10-22 (marudny admin): Esc w pytaniu "Przerwać?" = Zostań, nie przerwanie.
+# Wyjdź z kroku 1, Esc w pytaniu -> znowu krok 1; Wyjdź, Przerwij -> koniec.
+NROUT=$(nr_run "1${T}
+255${T}
+1${T}
+0${T}
+"); NRRC=$?
+if [ "$NRRC" -eq 1 ] && [ "$(grep -c 'Nowa relacja: przerwać?' "$NR/wt.log")" -eq 2 ] && [ "$(grep -c 'Jaka relacja?' "$NR/wt.log")" -eq 2 ] \
+   && has "$NROUT" "przerwane, nic nie zmieniono"; then
+    ok "new-relation: Esc w pytaniu 'Przerwać?' = Zostań (wraca do kroku), przerywa tylko przycisk Przerwij"
+else
+    bad "new-relation: Esc w pytaniu o przerwanie" "rc=$NRRC" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
 # U68: "Przegladaj..." w kroku Dokad to DRZEWO w trybie jednej pozycji (wczesniej plaska lista
 # whiptaila z obcietymi nazwami). Wnetrza ladowisk innych relacji ukryte i policzone w legendzie.
 NROUT=$(nr_run "0${T}backup
