@@ -11069,12 +11069,15 @@ sed 's/"hourly.notify_word":"/"hourly.notify_word":"a\\nb/' "$RT/q.json" > "$RT/
 sed 's/"tiers":"[^"]*"/"tiers":5/' "$RT/q.json" > "$RT/mal2.json"
 sed -i 's/^\(\s*hourly\.notify_word\s*=\).*/\1 snapshot/' "$RT/mal.conf"; rt_mal_before="$(cat "$RT/mal.conf")"
 rt_restore "$RT/mal.conf" "$RT/mal1.json"; rt_m1=$?; rt_m1o="$(cat "$RT/out")"
-rt_restore "$RT/mal.conf" "$RT/mal2.json"; rt_m2=$?
-if [ "$rt_m1" -ne 0 ] && [ "$rt_m2" -ne 0 ] && [ "$(cat "$RT/mal.conf")" = "$rt_mal_before" ] \
-   && printf '%s' "$rt_m1o" | grep -q 'not a flat object of strings'; then
-    ok "importrel (REV-168): a relation block with an unsupported escape or a non-string value is refused and nothing is installed"
+rt_restore "$RT/mal.conf" "$RT/mal2.json"; rt_m2=$?; rt_m2o="$(cat "$RT/out")"
+rt_restore "$RT/mal.conf" "$RT/mal1.json" --check; rt_m3=$?; rt_m3o="$(cat "$RT/out")"
+if [ "$rt_m1" -ne 0 ] && [ "$rt_m2" -ne 0 ] && [ "$rt_m3" -ne 0 ] && [ "$(cat "$RT/mal.conf")" = "$rt_mal_before" ] \
+   && printf '%s' "$rt_m1o" | grep -q 'not a flat object of strings' \
+   && printf '%s' "$rt_m2o" | grep -q 'not a flat object of strings' \
+   && printf '%s' "$rt_m3o" | grep -q 'not a flat object of strings'; then
+    ok "importrel (REV-168): a relation block with an unsupported escape or a non-string value is refused (also under --check) and nothing is installed"
 else
-    bad "importrel (REV-168): malformed relation block" "rc1=$rt_m1 rc2=$rt_m2" "$rt_m1o"
+    bad "importrel (REV-168): malformed relation block" "rc1=$rt_m1 rc2=$rt_m2 rc3=$rt_m3" "$rt_m1o" "$rt_m2o" "$rt_m3o"
 fi
 
 fi   # --- koniec sekcji exportrel ---
