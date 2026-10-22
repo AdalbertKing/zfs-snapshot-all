@@ -87,8 +87,14 @@ if [ "$REL" = --from-copy ]; then
     # podpowiedź nazwy: kopia z kolektora (<pula>/.../backups/<host>/<ścieżka>) -> <ścieżka>;
     # inaczej <pula>/restore/<ostatni człon>
     SUG_RE='^[^/]+/(.*/)?backups/[^/]+/(.+)$'
+    # Kampania 2026-10-22: z nośnika repliki (<nośnik>/replica/<pula>/...) podpowiedź padała NA
+    # nośnik (gwlive/restore/archive) -- dysk, który się wyjmuje. Taka kopia wraca do swojej
+    # puli: <pula>/restore/<ostatni człon>, gdy ta pula jest na tym hoście.
+    REP_RE='^[^/]+/replica/([^/]+)/.+$'
     sug() {
-        if [[ "$1" =~ $SUG_RE ]]; then printf '%s' "${BASH_REMATCH[2]}"
+        if [[ "$1" =~ $REP_RE ]] && zpool list -H -o name "${BASH_REMATCH[1]}" >/dev/null 2>&1; then
+            printf '%s/restore/%s' "${BASH_REMATCH[1]}" "${1##*/}"
+        elif [[ "$1" =~ $SUG_RE ]]; then printf '%s' "${BASH_REMATCH[2]}"
         else printf '%s/restore/%s' "${1%%/*}" "${1##*/}"; fi
     }
     pool_ok() {   # <nazwa> -> 0 gdy ma postać <pula>/<coś> i ta pula jest na tym hoście

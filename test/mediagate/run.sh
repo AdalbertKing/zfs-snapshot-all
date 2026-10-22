@@ -798,6 +798,40 @@ else
 fi
 rm -f "$SYNCFILE" "$STATE/rep.imported-by-us"
 
+# L8f. A MEDIUM FOUND IMPORTED (campaign 2026-10-22, pve10): a disk left attached and imported
+#      -- the lab's file pools are the same -- got its copies and the record never advanced
+#      (written only on the export path): F6 "Kopia z: brak", the age monitor warning for ever.
+#      Not ours: still NOT exported, but a verified transfer records it; a failed one does not.
+: > "$EXPORTED_LOG"; rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+POOLS="hdd rotpool"; IMPORTABLE=""
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 1 >/dev/null 2>&1
+[ -f "$SYNCFILE" ] && bad "L8f: a failed transfer on a found medium does not record it" "written" || ok "L8f: a failed transfer on a found medium does not record it"
+out="$(g detach rotpool rep --source tank/src --prefix replica_ --engine-rc 0)"
+if [ -f "$SYNCFILE" ] && grep -q '^guid=11111111$' "$SYNCFILE" && [ -f "$STATE/rep.current" ] \
+   && [ ! -s "$EXPORTED_LOG" ] && has "not this run's call" "$out"; then
+    ok "L8f: a verified transfer on a medium found imported records it (guid, current) and still leaves it imported"
+else
+    bad "L8f: found medium recorded" "$(cat "$SYNCFILE" 2>/dev/null)" "exported: $(cat "$EXPORTED_LOG")" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+
+# L8c. A CONTAINER SOURCE (campaign 2026-10-22, pve10): a whole-pool replica names hdd/backups,
+#      which has no snapshot of its own. The skip record stays all-or-nothing (not written),
+#      but the copy itself marks the medium current -- F6 said "brak" for ever before.
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+POOLS="hdd"; IMPORTABLE="rotpool"; DATASETS="hdd rotpool/replica tank/src tank/src/a tank/empty"
+g attach rotpool rep --dataset rotpool/replica >/dev/null 2>&1
+POOLS="hdd rotpool"; IMPORTABLE=""
+out="$(SRC_TREE_tank_empty=tank/empty SRC_SNAP_tank_empty= g detach rotpool rep --source tank/src --source tank/empty --prefix - --engine-rc 0)"
+if [ -e "$STATE/rep.current" ] && [ ! -f "$SYNCFILE" ] && has "could not record" "$out"; then
+    ok "L8c: a source with no snapshot of its own -- no skip record (all-or-nothing), but the medium is marked current"
+else
+    bad "L8c: container source" "current: $(ls "$STATE")" "$(cat "$SYNCFILE" 2>/dev/null)" "$out"
+fi
+rm -f "$SYNCFILE" "$STATE/rep.current" "$STATE/rep.imported-by-us"
+DATASETS="hdd rotpool/replica tank/src tank/src/a"
+
 # L8p. A PASSIVE replica (owner note 20, 2026-10-08) has no family of its own:
 #      --prefix - means ANY snapshot. The record and the "current" marker must
 #      advance exactly as with a prefix -- without them F6 says "brak kopii" for

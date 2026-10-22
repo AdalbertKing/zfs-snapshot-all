@@ -439,6 +439,22 @@ eng_comp_words() {
         *)       echo "$1" ;;
     esac
 }
+ptransfer_words() {   # P_TRANSFER (--history=.. --compression=.. --cipher=.. --autotune=..) -> słowa karty
+    # Kampania 2026-10-22: karta mówiła "fabryczne -> zmiana" -- nie wiadomo, CO się zmienia.
+    local a out=""
+    for a in "${P_TRANSFER[@]}"; do
+        case "$a" in
+            --history=*)     a="historia: $(eng_hist_words "${a#*=}")" ;;
+            --compression=*) a="kompresja: $(eng_comp_words "${a#*=}")" ;;
+            --cipher=default) a="szyfr: domyślny SSH" ;;
+            --cipher=*)      a="szyfr: ${a#*=}"; a="${a%%@*}" ;;
+            --autotune=*)    a="autodobór: $(case "${a#*=}" in no) echo nie ;; default) echo fabryczny ;; *) echo tak ;; esac)" ;;
+            *) continue ;;
+        esac
+        out="${out:+$out, }$a"
+    done
+    printf '%s' "${out:-zmiana}"
+}
 eng_pick() {   # <tytuł> <tekst> <domyślny tag> <tag> <opis> ... -> wybór w WT_OUT; rc 1 = Wstecz
     local t="$1" x="$2" d="$3"; shift 3
     geom
@@ -739,7 +755,7 @@ while :; do
     # U65 (uwaga 3: "Silnik: jak w configu -- nie wiadomo co"): wartości słowami, nie "jak w configu".
     _sr="$(srcret_words)"
     [ "${#P_SARGS[@]}" -gt 0 ] && _sr="$_sr -> $(sargs_words) [zmiana]"
-    _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$_en -> zmiana [zmiana]"
+    _en="$(engine_words)"; [ "${#P_TRANSFER[@]}" -gt 0 ] && _en="$(ptransfer_words) [zmiana]"   # sama nowa wartość: z "stare ->" [zmiana] wypadało za kartę
     # U65 (właściciel 2026-10-21: "do kompletnej przebudowy"; makieta 2026-10-21): to, czego nie
     # da się zmienić (rodzaj, nazwa, konto, cel), stoi w NAGŁÓWKU, nie na liście; na liście tylko
     # to, co się zmienia, a zmieniona pozycja ma '*' i "[zmiana]". Pod kreską tylko zapis.
@@ -768,7 +784,7 @@ while :; do
            if [ "$np" -gt 0 ]; then
                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
-               [ $? -eq 1 ] && continue
+               [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
            clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     fi

@@ -2201,13 +2201,16 @@ printf '%s\n' "$(printf '%s ~ ' "$@")" >> "${NR_DIR:?}/wt.log"
 # --textbox pokazuje PLIK: jego tresc do dziennika, jak tekst --yesno (plan dluzszy niz ekran).
 p=""; for a in "$@"; do [ "$p" = "--textbox" ] && cat "$a" >> "$NR_DIR/wt.log"; p="$a"; done
 for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
+# Okno tekstu (--textbox) nie ma wyboru: prawdziwy whiptail konczy je Dalej (rc 0) -- nie
+# zabiera odpowiedzi (kampania 2026-10-22: dlugi plan = tekst + krotkie pytanie).
+for a in "$@"; do [ "$a" = "--textbox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
-# Koniec odpowiedzi: pytanie kreatora "Przerwać?" dostaje Przerwij (Esc = Zostań i test krążyłby
+# Koniec odpowiedzi: "Przerwać?" kreatora i "Porzucić zmiany?" kart zmiany dostają Przerwij/Porzuć (Esc = Zostań i test krążyłby
 # bez końca); każde inne okno -- 255, jak Esc.
 if [ -z "$line" ]; then
     echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"
-    for a in "$@"; do [ "$a" = "Nowa relacja: przerwać?" ] && exit 0; done
+    for a in "$@"; do case "$a" in "Nowa relacja: przerwać?"|"Porzucić zmiany?") exit 0 ;; esac; done
     exit 255
 fi
 rc="${line%%	*}"; out="${line#*	}"
@@ -2420,6 +2423,9 @@ SOW="0${T}snaponly
 SOWO=$(nr_run "$SOW" NR_TREE="$NRTK")
 SOWP="$(grep -F 'Jak długo trzymać migawki na źródle' "$NR/wt.log" | head -1)"
 if has "$SOWO" "CMD: " && has "$SOWO" " --mode=snaponly " && ! has "$SOWO" "--target=" && has "$SOWO" " --grant-remotely " \
+   && ! has "$SOWO" "--exclude-family" && ! has "$SOWO" " --raw " \
+   && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF '[x] z migawkami' "$NR/tree.log" && ! grep -qF 'Co kopiować z' "$NR/tree.log" \
+   && grep -qF 'Bez kopii: migawki na 192.168.28.98' "$NR/wt.log" && ! grep -qF 'lustro: ta sama' "$NR/wt.log" \
    && has "$SOWP" '--default-item ~ d7h24' && ! grep -q 'Dokąd\|Pomijane prefiksy\|W ŹRÓDLE KOPII' "$NR/wt.log" \
    && grep -q 'Jak długo trzymać migawki na źródle' "$NR/wt.log"; then
     ok "new-relation: Migawki zdalnie -- --mode=snaponly bez --target, bez pola Dokąd/prefiksów/retencji źródła kopii, domyślny szablon d7h24, jest okno 'Jak długo trzymać migawki na źródle'"
@@ -2854,6 +2860,24 @@ else
     bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
+# Kampania 2026-10-22: cel kopii lokalnej WEWNATRZ zrodla odrzucony w kroku Dokad (nie dopiero w planie).
+NROUT=$(nr_run "0${T}local
+0${T}__other__
+0${T}hdd/backups/192.168.28.99/hdd/lab/kopie
+0${T}
+0${T}__other__
+0${T}hdd/kopie
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}create
+0${T}
+0${T}
+" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRRC=$?
+if grep -qF 'Cel nakłada się na źródło' "$NR/wt.log" && grep -q -- '--target=hdd/kopie' "$NR/zb.log" && ! grep -q -- 'lab/kopie' "$NR/zb.log"; then
+    ok "new-relation: kopia lokalna -- cel wewnatrz zrodla odrzucony od razu w kroku Dokad, drugi cel przechodzi"
+else
+    bad "new-relation: cel wewnatrz zrodla" "rc=$NRRC" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | tr '\n' ';')"
+fi
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
 #     diagnozy, koszyk z datasetow TEGO hosta (list-datasets bez adresu), bez "Sposobu"
 #     (zawsze -R), w ustawieniach bez praw/zamrazania/parowania (U25: tytuly okien bez
@@ -2902,7 +2926,7 @@ if [ "$NRRC" -eq 0 ] && [ -n "$NRSI" ] \
    && printf '%s' "$NRSI" | grep -qF -- ' --name=migawki-hdd-backups-192.168.28.99-hdd-lab ' \
    && printf '%s' "$NRSI" | grep -qF -- ' --recursive=flat ' \
    && ! grep -qF 'Dokąd' "$NR/wt.log" && ! grep -qF 'Ustawienia dodatkowe' "$NR/wt.log" \
-   && grep -qF 'Co kopiować z' "$NR/tree.log" && grep -qF 'Jak długo trzymać migawki?' "$NR/wt.log" \
+   && grep -qF 'Gdzie robić migawki na' "$NR/tree.log" && grep -qF 'Jak długo trzymać migawki?' "$NR/wt.log" \
    && grep -qF 'Podsumowanie' "$NR/wt.log" && grep -qF 'MIGAWKI LOKALNE' "$NR/wt.log"; then
     ok "new-relation: migawki lokalne -- bez celu i ustawien dodatkowych, komenda local-backup --target= --no-copy --install --yes (bez drugiego pytania po WYKONAJ, wlasciciel 2026-10-19)"
 else
@@ -2969,6 +2993,31 @@ if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Rekord relacji 'nazwa' ZOSTAŁ" && h
     ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
 else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
+fi
+
+# 3i2 (kampania 2026-10-22): relacja LOKALNA bez kopii -- okno mowilo "Zrodlo (?): bez zmian --
+#      a local relationship ..." i "Kopii domyslnie NIE ruszam." przy relacji, ktora kopii nie ma.
+cat > "$NR/bin/zb-del3" <<'EOF'
+#!/bin/bash
+[ "$1" = delete-relation ] || exit 9
+case " $* " in *" --yes "*) echo "delete-relation: done"; exit 0 ;; esac
+echo "delete-relation '$2' (state=active, peer=):"
+echo "  1. collector : remove-client $2  -- config sections and cron lines of THIS relationship"
+echo "  2. source    : skipped -- a local relationship -- source and copy are on this host"
+echo "  3. record    : clean-relationships.sh --purge=$2  -- frees the NAME (it refuses anything still LIVE)"
+echo "  4. copies    : none -- a snaponly relationship copies nothing here; its snapshots on the source are NOT destroyed"
+echo "plan only. Re-run with --yes to do it. Nothing was changed."
+EOF
+chmod +x "$NR/bin/zb-del3"
+rm -rf "$DRD"; mkdir -p "$DRD"
+printf '1\t\n' > "$DRD/answers"   # checklist: Wstecz -> nic nie zmieniono
+( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del3"
+  bash "$REPO/tui/delete-relation.sh" lok ) >/dev/null 2>&1 </dev/null
+DR3="$(grep -F -e '--checklist' "$DRD/wt.log" | head -1)"
+if [ -n "$DR3" ] && ! has "$DR3" 'Źródło (' && ! has "$DR3" 'local relationship' && ! has "$DR3" 'NIE ruszam' && ! has "$DR3" 'SKASUJ KOPIE'; then
+    ok "okno usuwania: relacja lokalna bez kopii -- bez 'Źródło (?)', bez angielskiego powodu, bez 'Kopii NIE ruszam'"
+else
+    bad "okno usuwania: relacja lokalna bez kopii" "$(printf '%s' "$DR3" | cut -c1-400)"
 fi
 
 # 3j. U16 (wlasciciel 2026-10-19): bez roota do zrodla okno NIE proponuje sprzatania zrodla
@@ -3389,6 +3438,26 @@ if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && 
 else
     bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
 fi
+# Kampania 2026-10-22: wlasny harmonogram sprawdzany W OKNIE -- "0 22 * * *zle" szedl az do planu.
+rm -f "$RP/rules"
+RPOUT=$(rp_run "0${T}usb2
+0${T}passive
+0${T}removable
+0${T}repl
+0${T}__other__
+0${T}0 22 * * *zle
+0${T}
+0${T}__other__
+0${T}30 21 * * 1-5
+0${T}
+0${T}
+" RP_TREE='goto:hdd/backups,space,enter'); RPRC=$?
+if grep -qF 'Zły harmonogram' "$RP/wt.log" && grep -q "^add-replica usb2 .*--schedule=30 21 \* \* 1-5 " "$RP/zb.log" && ! grep -q 'zle' "$RP/zb.log"; then
+    ok "replika: zly wlasny harmonogram odrzucony w oknie (Zły harmonogram), poprawny idzie do planu"
+else
+    bad "replika: walidacja wlasnego harmonogramu" "rc=$RPRC" "$(cat "$RP/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$RP/wt.log" | tr '\n' ';')"
+fi
+rm -f "$RP/rules"
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
 #          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
@@ -3544,7 +3613,7 @@ RPOUT=$(rp_run "0${T}zrodla
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb7","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":["^hdd/data/mail$"],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb7)
 if grep -q '^add-replica usb7 --source=hdd/data .*--exclude-child=^hdd/data/mail\$ .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" \
-   && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
+   && ! grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Sformatuj nowy nośnik' && grep -F ': nośnik ~' "$RP/wt.log" | grep -qF 'Dodaj dysk (włożony zostanie sformatowany)'; then
     ok "replica: zmiana repliki -- koszyk z jej zrodel i wyjatkow; obecny dysk dostaje ID; zamiast 'Sformatuj nowy' jest 'Dodaj kolejny dysk'"
 else
     bad "replica: zmiana -- koszyk i ID" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-250)"
@@ -3577,7 +3646,7 @@ RPOUT=$(rp_run "0${T}nosnik
 0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb9","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242,777","on_insert":"no"}]}' RP_NAME=usb9)
-RP9="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+RP9="$(grep -F ': nośnik ~' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb9 .*--media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log" && has "$RP9" 'Usuń dysk z repliki'; then
     ok "replica: W12 'Usuń dysk z repliki' -- 777 wypada (--media-guid=4242), dane zostaja"
 else
@@ -3595,7 +3664,7 @@ RPOUT=$(rp_run "0${T}nosnik
 0${T}zapisz
 0${T}
 " RP_TREE=enter 'RP_REPS={"replicas":[{"name":"usb10","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"","on_insert":"no"}]}' RP_NAME=usb10)
-RP10="$(grep -F '5/6 nośnik' "$RP/wt.log" | head -1)"
+RP10="$(grep -F ': nośnik ~' "$RP/wt.log" | head -1)"
 if grep -q '^add-replica usb10 .*--media-guid=4242,777 --on-insert=no --install --yes$' "$RP/zb.log" && ! has "$RP10" 'Usuń dysk z repliki'; then
     ok "replica: W11 'Dodaj dysk' w replice bez zapisanych ID -- obecny dysk (4242) dopisany przed nowym (777); przy jednym dysku nie ma 'Usuń dysk'"
 else
@@ -3646,14 +3715,17 @@ RPOUT=$(rp_run "0${T}onins
 0${T}zapisz
 0${T}
 " 'RP_REPS={"replicas":[{"name":"usb13","sources":["hdd/data"],"dst":"repl/replica","schedule":"0 22 * * *","media":"removable","recursive":"yes","prefix":"replica_","exclude_child":[],"media_guids":"4242","on_insert":"no"}]}' RP_NAME=usb13)
-RP13="$(grep -F 'Zmień replikę usb13' "$RP/wt.log" | head -1)"
+RP13="$(grep -F 'Zmiana repliki usb13' "$RP/wt.log" | grep -F -e '--menu' | head -1)"
+RP13B="$(grep -F 'Zmiana repliki usb13' "$RP/wt.log" | grep -F -e '--menu' | sed -n 2p)"
 if grep -q '^add-replica usb13 --source=hdd/data --dst=repl/replica .*--media-guid=4242 --on-insert=yes --install --yes$' "$RP/zb.log" \
    && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && has "$RP13" '[ ] Po włożeniu dysku' && has "$RP13" 'Kiedy:      codziennie 22:00' && has "$RP13" 'Nośnik:     repl/replica (wymienny)' \
+   && has "$RP13" 'nic, tylko wg harmonogramu' && has "$RP13" 'codziennie 22:00' && has "$RP13" 'repl/replica (wymienny)' \
+   && has "$RP13" 'replika usb13   kolektor' && has "$RP13" 'Zapisz zmiany (brak zmian)' && ! has "$RP13" '* ' \
+   && has "$RP13B" '* Po włożeniu' && has "$RP13B" 'kopia minutę po włożeniu dysku [zmiana]' && has "$RP13B" 'ZAPISZ ZMIANY (1)' \
    && ! grep -qF '6/6 kiedy' "$RP/wt.log" && ! grep -qF '4/6 rodzaj' "$RP/wt.log"; then
-    ok "replica: U8 -- lista z obecnymi wartościami; '[ ] Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
+    ok "replica: U8/E-1 -- karta jak przy relacji (nagłówek, '*' i [zmiana], licznik przy zapisie); 'Po włożeniu' przełącza od razu, Zapisz = --on-insert=yes + reguła, bez innych kroków"
 else
-    bad "replica: U8 lista zmiany" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP13" | cut -c1-400)"
+    bad "replica: U8 lista zmiany" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP13" | cut -c1-400)" "$(printf '%s' "$RP13B" | cut -c1-400)"
 fi
 rm -rf "$RP"
 
@@ -4142,7 +4214,7 @@ ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
 ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
    && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
-   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +[^~]*\[zmiana\]'; then
+   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +historia: tylko różnica do najnowszej \[zmiana\]'; then
     ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
 else
     bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
@@ -4595,7 +4667,7 @@ case "$*" in
         printf 'tank/b/hdd/data\t3000\tfilesystem\ntank/b/hdd/data/docs\t1000\tfilesystem\ntank/b/hdd/data/mail\t2000\tfilesystem\n'
         exit 0 ;;
     "list -H -p -o name,used,type")      # tryb --from-copy: wszystkie datasety hosta, bez -r
-        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs hdd hdd/data hdd/foo/bar tank/b/hdd/data; do
+        for d in usb9 usb9/backups usb9/backups/192.168.28.98 usb9/backups/192.168.28.98/hdd/data usb9/backups/192.168.28.98/hdd/data/docs usb9/replica/hdd/data/docs usb9/replica/tank/x hdd hdd/data hdd/foo/bar tank/b/hdd/data; do
             printf '%s\t1000\tfilesystem\n' "$d"
         done
         exit 0 ;;
@@ -4735,7 +4807,7 @@ fi
 # 5. Wstecz z podsumowania wraca do punktow i NIC nie uruchamia: summary rc 1, punkty znowu, summary rc 0 -> JEDNA linia ran
 printf '0\tobok\n0\thdd/restore\n0\tp0\n1\t\n0\tp0\n0\t\n' > "$RW/answers"
 rw_run "$RW/t-docs.json"
-if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep -c 'sprawdź' "$RW/wt.log")" -eq 2 ]; then
+if [ "$RW_RC" -eq 0 ] && [ "$(rw_ran | grep -c '')" -eq 1 ] && [ "$(grep 'sprawdź' "$RW/wt.log" | grep -c -- '--yesno')" -eq 2 ]; then
     ok "restore: Wstecz z podsumowania nic nie uruchamia -- dwa razy okno 'sprawdz', JEDNO wywolanie czasownika"
 else
     bad "restore: Wstecz z podsumowania" "rc=$RW_RC" "ran: $(rw_ran)" "sprawdz: $(grep -c 'sprawdź' "$RW/wt.log")"
@@ -4813,6 +4885,22 @@ else
     bad "restore --from-copy: podpowiedz dla wzorca backups" "$(tail -n 6 "$RW/wt.log" | cut -c1-300)"
 fi
 
+# c3b (kampania 2026-10-22): kopia z NOSNIKA repliki (<nosnik>/replica/<pula>/...) -> podpowiedz
+# <pula>/restore/<czlon>, nie na wyjmowany nosnik; pula spoza hosta (tank) -> jak dotad, na nosnik.
+printf '{"action":"next","roots":["usb9/replica/hdd/data/docs"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep.json"
+printf '{"action":"next","roots":["usb9/replica/tank/x"],"excl":{},"recursion":"flat"}\n' > "$RW/t-cp-rep2.json"
+printf '0\thdd/restore/docs\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
+rw_copy "$RW/t-cp-rep.json" --from-copy
+R3B="$(cat "$RW/wt.log")"   # domyslna wartosc pola stoi w wierszu PO --inputbox (tekst ma \n)
+printf '0\thdd/restore/x\n0\tp0\n1\t\n0\t\n' > "$RW/answers"   # usb9/... istnieje w atrapie (okno nadpisania) -- odpowiedz inna niz podpowiedz
+rw_copy "$RW/t-cp-rep2.json" --from-copy
+R3C="$(cat "$RW/wt.log")"
+if [ "$RW_RC" -eq 0 ] && has "$R3B" ' ~ hdd/restore/docs ~' && ! has "$R3B" 'usb9/restore' && has "$R3C" ' ~ usb9/restore/x ~'; then
+    ok "restore --from-copy: usb9/replica/hdd/data/docs -> podpowiedz hdd/restore/docs (pula zrodla, nie nosnik); pula spoza hosta -> usb9/restore/x"
+else
+    bad "restore --from-copy: podpowiedz z nosnika repliki" "rep: $(printf '%s' "$R3B" | cut -c1-300)" "obca: $(printf '%s' "$R3C" | cut -c1-300)"
+fi
+
 # c4. dwa korzenie -> dwa pola 'dokad', obie listy w kolejnosci drzewa
 printf '0\thdd/restore/data\n0\thdd/restore/bar\n0\tp0\n1\t\n0\t\n' > "$RW/answers"
 rw_copy "$RW/t-cp-two.json" --from-copy
@@ -4877,6 +4965,21 @@ rm -rf "$RP"
 # Zadne okno pakietu nie uzywa radiolisty -- wybor jednej pozycji to menu z kursorem na obecnej.
 rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3)"
 [ -z "$rl_left" ] && ok "okna: zadnej radiolisty -- wybor jednej pozycji to menu (Enter = podswietlona)" || bad "okna: radiolista zostala" "$rl_left"
+# Kampania 2026-10-22: dlugi plan -- najpierw okno tekstu (Enter = dalej), potem krotkie pytanie;
+# nigdy --scrolltext, w ktorym Enter nic nie robi. Krotki -- jedno okno yesno, jak dotad.
+YN="$(mktemp -d)"; mkdir -p "$YN/bin"
+printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; exit 0\n' "$YN" > "$YN/bin/wt"; chmod +x "$YN/bin/wt"
+seq 1 200 > "$YN/long.txt"; printf 'krotki plan\n' > "$YN/short.txt"
+( WHIPTAIL="$YN/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; yesno_text "$2/long.txt" "Plan" "WYKONAJ" "Wstecz" --defaultno; echo "rc=$?"; yesno_text "$2/short.txt" "Plan2" "WYKONAJ" "Wstecz"; echo "rc=$?"' x "$REPO" "$YN" ) > "$YN/out" 2>&1
+if [ "$(grep -c 'rc=0' "$YN/out")" -eq 2 ] && ! grep -q -- '--scrolltext' "$YN/wt.log" \
+   && grep -q -- '--title ~ Plan  \[strzałki przewijają, Enter = dalej\] ~ --ok-button ~ Dalej ~ --textbox' "$YN/wt.log" \
+   && grep -q -- '--title ~ Plan ~ --yes-button ~ WYKONAJ ~ --no-button ~ Wstecz ~ --defaultno ~ --yesno' "$YN/wt.log" \
+   && [ "$(grep -c -- '--title ~ Plan2 ' "$YN/wt.log")" -eq 1 ]; then
+    ok "yesno_text: dlugi plan = okno tekstu + krotkie pytanie (bez --scrolltext); krotki = jedno okno"
+else
+    bad "yesno_text: dlugi plan" "$(cat "$YN/out")" "$(cut -c1-160 "$YN/wt.log")"
+fi
+rm -rf "$YN"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the

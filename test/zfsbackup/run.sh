@@ -10538,6 +10538,18 @@ if grep -q '"relation":{' "$IM/relblk.json" && [ "$im_rc" -eq 0 ] && printf '%s'
 else
     bad "importrel: [relation:] block restored after create" "rc=$im_rc" "preview restore: $im_r0" "rux: $im_r1" "ordinary: $im_r2" "$(grep -c '"relation":{' "$IM/relblk.json")" "$(cat "$WORK/im.err")"
 fi
+# F-2 (campaign 2026-10-21): on the one-command path the [relation:] note was printed in
+# the MIDDLE of the sentence "zakres (dokladnie ... lista datasetow z pliku)". A file with a
+# relation block and no --bandwidth takes that path; the sentence must stay whole.
+sed 's/,"--bandwidth=20M"//' "$IM/relblk.json" > "$IM/relblk1.json"
+IM_ROOT=fresh im_run "$IM/relblk1.json"; im_f2="$(cat "$WORK/im.out")"
+if printf '%s' "$im_f2" | grep -q 'ZRODLO NIE ZNA JUZ TEGO KOLEKTORA' && printf '%s' "$im_f2" | grep -q 'Potem: wlasne ustawienia' \
+   && [ "$(printf '%s\n' "$im_f2" | grep -A1 'zakres (dokladnie$' | tail -1)" = "  lista datasetow z pliku), seed, aktywacja." ]; then
+    ok "importrel F-2: the [relation:] note follows the one-command sentence, not in the middle of it"
+else
+    bad "importrel F-2: interleaved note" "$(printf '%s\n' "$im_f2" | grep -B1 -A3 'zakres (dokladnie')"
+fi
+rm -f "$IM/relblk1.json"
 # a name that exists here refuses BEFORE anything is called. This bare record
 # (CLIENT_NAME + STATE only) exports without dying (rc 0, empty argv, since
 # record_load only checks field names, not completeness) -- so the verdict
@@ -13320,11 +13332,12 @@ RS="$WORK/rsrestart"; rm -rf "$RS"; mkdir -p "$RS"
 printf '[defaults]\n\thost_label = h\n[replica:own]\n\tsource = tank/b/x\n\tdst = disk/rep\n\tschedule = 0 3 1 * *\n\tprefix = replica_\n\tkeep = 2\n[replica:pas]\n\tsource = tank/b\n\tdst = disk2/rep\n\tschedule = 0 4 * * *\n\tpassive = yes\n' > "$RS/c.conf"
 rs_out=$(bash -c "source '$ZFSBACKUP'; cron_target_user() { echo root; }; cron_context_resolve() { CRON_CTX_FILE='$RS/c.conf'; }; cmd_replica_restart own --config='$RS/c.conf'" 2>&1); rs_rc=$?
 rw_out=$(bash -c "source '$ZFSBACKUP'; default_cron_config() { echo '$RS/c.conf'; }; replica_restart_warning 'tank/b/x/sub tank/b/y'" 2>&1)
-if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i -t "tank/b/x" "disk/rep/tank/b/x-restart"' \
+if [ "$rs_rc" -eq 0 ] && printf '%s' "$rs_out" | grep -qF 'snapget.sh -m replica_ -i "tank/b/x" "disk/rep/restart-tmp"' && ! printf '%s' "$rs_out" | grep -qF -- ' -t ' \
+   && printf '%s' "$rs_out" | grep -qF 'zfs rename -p disk/rep/restart-tmp/tank/b/x disk/rep/tank/b/x' \
    && printf '%s' "$rs_out" | grep -qF 'zfs destroy -r disk/rep/tank/b/x   -- stara kopia, dopiero po udanym kroku 1' \
    && printf '%s' "$rs_out" | grep -q '^plan only' \
    && printf '%s' "$rw_out" | grep -qF "replika 'own'" && ! printf '%s' "$rw_out" | grep -qF "replika 'pas'"; then
-    ok "runreplicas: replica-restart plan = the replica's own options + -t onto <target>-restart, old copy destroyed only after; delete-relation warns for a replica with its own snapshots, not a passive one"
+    ok "runreplicas: replica-restart plan = the replica's own options onto a temporary base (no -t: the engine refuses -t with -R), old copy destroyed only after, then rename -p; delete-relation warns for a replica with its own snapshots, not a passive one"
 else
     bad "runreplicas: replica-restart / warning" "rc=$rs_rc" "$rs_out" "$rw_out"
 fi

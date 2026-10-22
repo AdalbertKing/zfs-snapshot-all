@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d28ef3b5627130e7 -->
+<!-- status-covers-digest: 89b581dff6bb8e6c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,63 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 10: co zmienia silnik (`kamp/teksty2`).** Na żywo na pve10 (lustro cb, kompresja
+  na „bez”): karta zmiany relacji mówiła „Silnik  fabryczne -> zmiana [zmiana]” -- nie było widać, co się zmienia.
+  Teraz słowami z okna silnika, np. „kompresja: nie [zmiana]”, „historia: tylko różnica do najnowszej”.
+  Test `tui` na pve9 (przypadek pada na kodzie sprzed poprawki).
+
+- **Kampania 2026-10-22, paczka 9: teksty i podpowiedzi (`kamp/teksty`).** Trzy drobiazgi z przejścia na żywo.
+  (1) Podsumowanie kreatora przy migawkach zdalnych mówiło zdaniem lustra („Cel: (lustro: ta sama ścieżka)”); teraz
+  „Bez kopii: migawki na <host>, jego datasety”. (2) Okno usuwania relacji lokalnej pokazywało „Źródło (?): bez zmian
+  -- a local relationship …”, a przy relacji bez kopii „Kopii domyślnie NIE ruszam.”; obu zdań już nie ma, gdy nie mają
+  treści. (3) Odzysk z nośnika repliki (`<nośnik>/replica/<pula>/…`) podpowiadał cel NA nośniku
+  (`gwlive/restore/…`, dysk, który się wyjmuje); teraz `<pula>/restore/<człon>`, gdy ta pula jest na hoście.
+  (4) E-1: zmiana repliki to teraz ta sama karta co zmiana relacji (U65): nazwa w nagłówku, zmieniona pozycja
+  z „*” i „[zmiana]”, pod kreską „ZAPISZ ZMIANY (n)” i „Zacznij od nowa”, Wstecz przy zmianach pyta „Porzucić
+  zmiany?”. W obu kartach Esc w tym pytaniu znaczy „zostań” (było: porzuć).
+  Test `tui` na pve9; każdy nowy przypadek pada na kodzie sprzed poprawki.
+
+- **Kampania 2026-10-22, paczka 8: migawki zdalne z kreatora (`kamp/snaponly`).** Na żywo na pve10: „Migawki
+  zdalne” z kreatora odrzucał plan czasownika -- kreator dokładał domyślne `--exclude-family` (i ewentualnie
+  `--raw`), a snaponly niczego nie kopiuje i czasownik słusznie odmawia tego, co kształtuje kopię. Teraz bez nich.
+  Drzewo przy migawkach (lokalnych i zdalnych) pyta „Gdzie robić migawki na …?” i mówi „[x] z migawkami” zamiast
+  „Co kopiować / kopiowane”. Test `tui` 386/0 (pve9; przypadek pada na kodzie sprzed poprawki).
+
+- **Kampania 2026-10-22, paczka 7: długi plan, cel kopii lokalnej (`kamp/plan`).** Na żywo na pve10: długi plan
+  (kopia lokalna) otwierał się w oknie z przewijaniem, w którym Enter nic nie robi, dopóki nie naciśnie się Tab --
+  admin czekał. Teraz każdy długi plan (`yesno_text`) to okno tekstu (strzałki przewijają, Enter = dalej) i krótkie
+  pytanie WYKONAJ/Wstecz, jak plan w zmianie relacji. Kopia lokalna z celem wewnątrz źródła (hdd/archive ->
+  hdd/archive/kopie) przechodziła cały kreator i odmawiał dopiero plan -- teraz okno w kroku „Dokąd”. Test `tui`
+  385/0 (pve9; atrapa: okno tekstu nie zabiera odpowiedzi, jak prawdziwy whiptail).
+
+- **Kampania 2026-10-22, paczka 6: okna repliki (`kamp/restart2`).** Na żywo na pve10: własny harmonogram „0 22 * *
+  *zle” przechodził aż do planu (teraz każde pole crona sprawdzane w oknie); okno „kiedy” mówiło o nośniku
+  wymiennym przy wybranym stałym; plan obiecywał „kopia rusza od razu” przy `insert_wait` 60 s; linia strażnika
+  stałego nośnika miała opis „?”; po zmianie istniejącej repliki wynik mówił „zainstalowana… Pierwsza kopia”; okna
+  zmiany repliki miały numery kroków kreatora („6/6 kiedy”). „Zacznij od nowa”: po porażce zostawała pusta baza
+  tymczasowa (teraz usuwana, chyba że trzyma nową kopię). Test `tui` 384/0 (pve9).
+
+- **Kampania 2026-10-22, paczka 5: „Zacznij od nowa” repliki (`kamp/restart`).** Na żywo na pve10 `replica-restart`
+  na `calapula` padł w kroku 1: pełna kopia szła z `-t` na `<cel>-restart`, a silnik odmawia `-t` razem z `-R`
+  („-R expands into many independent datasets”) -- dla repliki rekurencyjnej ta czynność nigdy nie mogła się udać.
+  Teraz kopia ląduje pod tymczasową bazą `<cel>/restart-tmp` (ta sama mapa co zwykły bieg), stara kopia jest
+  kasowana dopiero po udanej nowej, nowa przenoszona `zfs rename -p` na miejsce, baza tymczasowa usuwana. Test
+  `runreplicas` 20/0 (pve9).
+
+- **Kampania 2026-10-22, paczka 4: replika całej puli „aktualna” (`kamp/record`).** Po paczce 3 `usb1` pokazuje
+  „Kopia z”, a `calapula` (cała pula `hdd`) dalej „brak”: znacznik „nośnik aktualny” był uzależniony od pełnego
+  rekordu pomijania („wszystkie źródła albo nic”), a `hdd/backups` -- kontener bez własnych migawek -- tego rekordu
+  nie pozwala zapisać. Teraz aktualność wynika z udanej kopii; rekord pomijania zostaje „wszystko albo nic”, tylko
+  pomijanie przy takim źródle nie zadziała. Test `mediagate` 160/0 (L8c pada na kodzie sprzed poprawki).
+
+- **Kampania 2026-10-22, paczka 3: replika na nośniku zastanym, F-2 (`kamp/mediagate`).** Na żywo na pve10 obie
+  repliki pokazywały „Kopia z: brak”, choć kopie się udawały: bramka nośnika zapisywała rekord („nośnik aktualny”)
+  tylko przy pulach, które sama zaimportowała. Dysk zostawiony podpięty i zaimportowany (i pule-pliki labu) nie
+  dostawał go nigdy -- F6 „brak”, strażnik wieku repliki z czasem alarmuje. Teraz udana kopia zapisuje rekord także
+  na nośniku zastanym; eksport nadal tylko własnego importu. F-2: notatka „Potem: własne ustawienia relacji z pliku”
+  w imporcie nie przecina już zdania. Testy: `mediagate` 159/0, `exportrel` 72/0 (nowe przypadki padają na kodzie
+  sprzed poprawki).
 
 - **Kampania 2026-10-22, paczka 2: usunięcie relacji po odzysku (`kamp/leave`).** Na żywo: po odzysku na źródle
   (zgoda `--allow-restore=pve10` na pve9) usunięcie relacji `pve9` stanęło w połowie -- `deploy.sh --leave` odebrał
