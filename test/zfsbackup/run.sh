@@ -11043,7 +11043,7 @@ rt_restore() {   # <config to restore into> <doc file> [--check] -> rc
         assert_cron_config_matches_installed() { :; }
         gencron_as_target() { bash "$GEN" "$@"; }
         atomic_replace_and_install() { cp "$2" "$1"; }
-        import_restore_relblock q "$(cat "$DOCFILE")" "$@"' x "$ZFSBACKUP" "$@" ) >"$RT/out" 2>&1
+        import_restore_relblock q "$(cat "$DOCFILE")" "${@:3}"' x "$ZFSBACKUP" "$@" ) >"$RT/out" 2>&1
 }
 ( export CLIENTS_DIR="$RT/clients" SERVER_CONF="$RT/no-server"
   bash -c 'source "$1"; cmd_export_relation q --json --config="$2"' x "$ZFSBACKUP" "$RT/jobs.conf" ) > "$RT/q.json" 2>"$RT/export.err"
@@ -11051,7 +11051,6 @@ rt_before="$(rt_dump "$RT/jobs.conf")"
 rt_restore "$RT/jobs.conf" "$RT/q.json" --check; rt_same=$?
 sed 's/"hourly.notify_word":"[^"]*\(\\"[^"]*\)*"/"hourly.notify_word":"zmienione"/' "$RT/q.json" > "$RT/changed.json"
 rt_restore "$RT/jobs.conf" "$RT/changed.json" --check; rt_diff=$?
-printf '[relation:q]\n\thourly.notify_word = PLACEHOLDER\n' > /dev/null
 cp "$RT/jobs.conf" "$RT/wiped.conf"
 sed -i 's/^\(\s*hourly\.notify_word\s*=\).*/\1 snapshot/; s/^\(\s*daily\.notify_word\s*=\).*/\1 snapshot/' "$RT/wiped.conf"
 rt_restore "$RT/wiped.conf" "$RT/q.json"; rt_rc=$?
