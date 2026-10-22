@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d68bf912e041b331 -->
+<!-- status-covers-digest: 21db6b3c8796d945 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 6: okna repliki (`kamp/restart2`).** Na żywo na pve10: własny harmonogram „0 22 * *
+  *zle” przechodził aż do planu (teraz każde pole crona sprawdzane w oknie); okno „kiedy” mówiło o nośniku
+  wymiennym przy wybranym stałym; plan obiecywał „kopia rusza od razu” przy `insert_wait` 60 s; linia strażnika
+  stałego nośnika miała opis „?”; po zmianie istniejącej repliki wynik mówił „zainstalowana… Pierwsza kopia”; okna
+  zmiany repliki miały numery kroków kreatora („6/6 kiedy”). „Zacznij od nowa”: po porażce zostawała pusta baza
+  tymczasowa (teraz usuwana, chyba że trzyma nową kopię). Test `tui` 384/0 (pve9).
 
 - **Kampania 2026-10-22, paczka 5: „Zacznij od nowa” repliki (`kamp/restart`).** Na żywo na pve10 `replica-restart`
   na `calapula` padł w kroku 1: pełna kopia szła z `-t` na `<cel>-restart`, a silnik odmawia `-t` razem z `-R`

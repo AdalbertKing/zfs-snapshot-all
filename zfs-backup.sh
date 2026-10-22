@@ -7969,7 +7969,7 @@ cmd_replica_restart() {
     # every restart of a recursive replica failed at step 1. The copy now lands under a
     # temporary BASE beside the old copy, mapped exactly as the replica's own run maps it,
     # and is moved into place after the old copy is gone.
-    local tbase="$dst/restart-tmp"
+    local tbase="$dst/restart-tmp" kept_new=0
     echo "replica-restart '$name' -- pelna kopia od nowa NA TYM SAMYM DYSKU ($dst):"
     for s in ${src//,/ }; do
         echo "  $s:"
@@ -8000,13 +8000,17 @@ cmd_replica_restart() {
             zfs destroy -r "$tmp" 2>/dev/null; rc=1; break
         fi
         if zfs list -H "$tgt" >/dev/null 2>&1; then
-            zfs destroy -r "$tgt" || { warn "replica-restart: the new copy is at $tmp, but the old $tgt could not be destroyed"; rc=1; break; }
+            zfs destroy -r "$tgt" || { warn "replica-restart: the new copy is at $tmp, but the old $tgt could not be destroyed"; rc=1; kept_new=1; break; }
         fi
-        zfs rename -p "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; break; }
+        zfs rename -p "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; kept_new=1; break; }
         log "replica-restart: $tgt -- started again (full copy)"
     done
-    if [ "$rc" -eq 0 ] && zfs list -H "$tbase" >/dev/null 2>&1; then
-        zfs destroy -r "$tbase" || warn "replica-restart: the copies are in place, but the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
+    # After a failure too: every finished copy was moved out and the failed one destroyed,
+    # so the base holds only the empty parents the engine created (pve10: 48K left behind).
+    # Not when a new copy stayed in it (its old one could not be destroyed, or the move
+    # failed): the warning above has just told the operator where it is.
+    if [ "$kept_new" -eq 0 ] && zfs list -H "$tbase" >/dev/null 2>&1; then
+        zfs destroy -r "$tbase" || warn "replica-restart: the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
     fi
     if [ "$media" = removable ]; then
         bash "$gate" detach "$pool" "$name" --engine-rc "$rc" || :
