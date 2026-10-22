@@ -2435,6 +2435,9 @@ def key_bar_parts(active, width, actions=()):
     short = dict((a[0], a[2]) for a in actions if len(a) > 2)
     # Najciasniej (80 kolumn, F3 z trzema akcjami i F11): skroty okien i wyjscia --
     # tylko gdy nic innego sie nie miesci, zeby F12 nigdy nie wypadlo z paska.
+    # Listwa to dolny wiersz ekranu, a curses nie pisze w jego ostatnia kolumne (prawy dolny
+    # rog) -- pasek musi sie zmiescic w width - 1 (kampania 3: F4 ucinal "Ctrl-R Odświe").
+    room = width - 1
     tight = {"F4": u"Hist", "F5": u"Szabl", "F10": u"Ust", "F12": u"Wyjdź", "F6": u"Repl", "F3": u"Rel"}
     for compact, sep, brief in ((False, u" ", False), (True, u" ", False), (True, u"", False), (True, u"", True),
                                 (True, u"", "tight")):
@@ -2453,11 +2456,11 @@ def key_bar_parts(active, width, actions=()):
                 marks.append((start, start + len(num), "key"))
             if key == active:
                 marks.append((start, len(line), "active"))
-        if len(line) <= width:
+        if len(line) <= room:
             break
-    if width >= len(line) + 16:
+    if room >= len(line) + 16:
         line += u"  Ctrl-R Odśwież"
-    return fit(line, width), marks
+    return fit(fit(line, room), width), marks   # dopelniona do width: kazdy wiersz ma szerokosc ekranu
 
 
 def push_key_bar(scr, active, width, actions=()):
@@ -3253,10 +3256,15 @@ def wrap_hanging(lines, avail):
     """Kampania 3 (2026-10-22, 80x24): pomoc F1 pisana pod ~100 kolumn byla w 80 PRZYCINANA
     ("kop…", "domyś…") -- tresc ginela. Za dlugi wiersz lamany na spacji; kontynuacja wcieta
     tam, gdzie zaczyna sie opis ("  F2  Zadania    |co chodzi..."), a gdy kolumny nie ma --
-    tak jak wiersz."""
+    tak jak wiersz. Ogon zawinietego wiersza laczy sie z nastepnym, gdy ten jest dalszym
+    ciagiem tego samego opisu (to samo wciecie) -- bez tego zostawaly sieroty ("czasy")."""
     import re
     out = []
-    for line in lines:
+    lines = list(lines)
+    i = -1
+    while i + 1 < len(lines):
+        i += 1
+        line = lines[i]
         if len(line) <= avail:
             out.append(line)
             continue
@@ -3270,6 +3278,10 @@ def wrap_hanging(lines, avail):
             out.append(rest[:cut].rstrip())
             rest = " " * hang + rest[cut:].lstrip()
             first = False
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if not first and nxt[:hang].strip() == "" and nxt[hang:hang + 1].strip():
+            lines[i + 1] = rest + " " + nxt.lstrip()
+            continue
         out.append(rest)
     return out
 
@@ -5533,7 +5545,9 @@ def curses_loop(ui):
     def paint(stdscr, scr, h, w):
         stdscr.erase()
         for y, line in enumerate(scr.lines[:h]):
-            line = line[:w - 1]
+            # Pelna szerokosc: inaczej prawa ramka okna nigdy nie trafia na ekran. Tylko
+            # dolny wiersz bez ostatniej kolumny -- prawy dolny rog to blad curses.
+            line = line[:w] if y < h - 1 else line[:w - 1]
             base = 0
             if y in scr.bars:
                 base = curses.color_pair(6) if curses.has_colors() else curses.A_REVERSE

@@ -5094,6 +5094,61 @@ else
     bad "zfs-tui: zawijanie pomocy F1" "rc=$?"
 fi
 
+# Kampania 3 (2026-10-22, na zywo pve10, 80x24): kazdy recznie lamany wiersz pomocy
+# zawijal sie osobno i zostawial sieroty ("czasy", "sortowanie" same w wierszu). Sierota =
+# wiersz z jednym slowem we wcieciu opisu, po ktorym idzie dalszy ciag tego samego opisu.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^def wrap_hanging.*?(?=^def render_window)", src, re.S | re.M)
+h = re.search(r"^HELP = \[(.*?)^\]", src, re.S | re.M)
+ns = {}
+exec(m.group(0), ns)
+out = ns["wrap_hanging"](eval("[" + h.group(1) + "]"), 76)
+ind = lambda l: len(l) - len(l.lstrip(" "))
+orph = [l for l, n in zip(out, out[1:]) if ind(l) > 4 and " " not in l.strip() and ind(n) == ind(l)]
+sys.exit(1 if orph else 0)
+PYEOF
+then
+    ok "zfs-tui: pomoc F1 przy 80 kolumnach bez sierot -- ogon zawinietego wiersza laczy sie z dalszym ciagiem opisu"
+else
+    bad "zfs-tui: sieroty w zawijanej pomocy F1" "rc=$?"
+fi
+
+# Kampania 3 (2026-10-22, na zywo pve10): listwa klawiszy to dolny wiersz, ktory curses
+# konczy kolumne wczesniej -- F4 przy 80 ucinal "Ctrl-R Odświe". Na kazdym ekranie przy 80
+# kolumnach tresc listwy (bez dopelnienia spacjami) ma najwyzej 79 znakow.
+lw_bad=""
+for lw_s in zadania relacje transfery szablony nosniki odzysk; do
+    lw_n="$(screen "$lw_s" "" --width 80 | tail -1 | "$PY" -c 'import sys; print(len(sys.stdin.read().rstrip()))')"
+    [ "${lw_n:-99}" -le 79 ] || lw_bad="$lw_bad $lw_s=$lw_n"
+done
+if [ -z "$lw_bad" ]; then
+    ok "zfs-tui: listwa klawiszy na kazdym ekranie miesci sie w 79 z 80 kolumn (dolny wiersz bez prawego rogu)"
+else
+    bad "zfs-tui: listwa klawiszy przy 80 kolumnach" "$lw_bad"
+fi
+
+# Kampania 3 (2026-10-22, na zywo pve10): paint tnal kazdy wiersz do w - 1, a uklad ma
+# szerokosc ekranu (MIN_WIDTH 80) -- prawa ramka okna nigdy nie trafiala na ekran (od
+# wrzesnia). Petli curses nie da sie tu uruchomic: dowodem jest zrzut tmux na pve10; ten
+# przypadek pilnuje, ze uklad idzie na w, a pelna szerokosc tnie sie tylko w dolnym wierszu.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^def curses_loop.*?(?=^def )", src, re.S | re.M)
+body = m.group(0) if m else ""
+calls = re.findall(r"ui\.render\(([^)]*)\)", body)
+ok = calls and all(c.replace(" ", "") == "w,h" for c in calls)
+ok = ok and "line = line[:w] if y < h - 1 else line[:w - 1]" in body
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "zfs-tui: paint pisze pelna szerokosc (prawa ramka na ekranie), tylko dolny wiersz bez prawego dolnego rogu"
+else
+    bad "zfs-tui: paint pisze pelna szerokosc ekranu" "rc=$?"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
