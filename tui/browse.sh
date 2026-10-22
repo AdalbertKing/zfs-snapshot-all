@@ -116,19 +116,35 @@ other_holders() {   # <dataset> -> 0 gdy inne żywe przeglądanie trzyma ten dat
 # idą pod jedną blokadą flock na lock2.<klucz> -- inaczej kończący mógł usunąć zapis, który
 # wchodzący już sprawdził, a jeszcze nie założył znacznika. Bez blokady: nic nie zmieniam.
 # Plik blokady zostaje (usuwanie pliku blokady samo jest wyścigiem).
-SNAPLOCK_FD=""
+# REV-20261021-162: blokada jest WIELOKROTNEGO WEJŚCIA w tym samym procesie. SIGTERM w trakcie
+# przejścia pod blokadą kończy skrypt (exit 130), a pułapka EXIT woła restore_snapdev jeszcze
+# raz -- druga, niezależna próba flock czekałaby na blokadę trzymaną przez nas samych i po
+# BROWSE_LOCK_WAIT zostawiała dysk "visible". Ten sam proces, ten sam klucz = już ją mamy.
+SNAPLOCK_FD=""; SNAPLOCK_KEY=""; SNAPLOCK_DEPTH=0
 snap_lock() {   # <klucz> -> 0 z blokadą na SNAPLOCK_FD; 1 gdy się nie da
+    if [ -n "$SNAPLOCK_FD" ]; then
+        [ "$SNAPLOCK_KEY" = "$1" ] || return 1     # inna blokada w tym procesie -- nie powinno się zdarzyć
+        SNAPLOCK_DEPTH=$((SNAPLOCK_DEPTH + 1)); return 0
+    fi
     command -v flock >/dev/null 2>&1 || return 1
     { exec {SNAPLOCK_FD}>>"$BROOT/lock2.$1"; } 2>/dev/null || { SNAPLOCK_FD=""; return 1; }
-    flock -w "${BROWSE_LOCK_WAIT:-30}" "$SNAPLOCK_FD" && return 0
+    if flock -w "${BROWSE_LOCK_WAIT:-30}" "$SNAPLOCK_FD"; then SNAPLOCK_KEY="$1"; SNAPLOCK_DEPTH=1; return 0; fi
     exec {SNAPLOCK_FD}>&-; SNAPLOCK_FD=""; return 1
 }
-snap_unlock() { [ -z "$SNAPLOCK_FD" ] || exec {SNAPLOCK_FD}>&-; SNAPLOCK_FD=""; }
+snap_unlock() {
+    [ -n "$SNAPLOCK_FD" ] || return 0
+    SNAPLOCK_DEPTH=$((SNAPLOCK_DEPTH - 1))
+    [ "$SNAPLOCK_DEPTH" -gt 0 ] && return 0
+    exec {SNAPLOCK_FD}>&-; SNAPLOCK_FD=""; SNAPLOCK_KEY=""; SNAPLOCK_DEPTH=0
+}
 # Tylko testy: BROWSE_TEST_PAUSE_AT=<punkt> i BROWSE_TEST_PAUSE=<prefiks> zatrzymują sesję
 # w punkcie (pod blokadą), aż pojawi się <prefiks>.go. Bez tych zmiennych -- nic.
+# Pauza jest jednorazowa (.done), a w .at zapisuje PID -- test może w niej wysłać sygnał, a
+# ponowne wejście z pułapki EXIT już się nie zatrzyma.
 test_pause() {
     [ -n "${BROWSE_TEST_PAUSE:-}" ] && [ "${BROWSE_TEST_PAUSE_AT:-}" = "$1" ] || return 0
-    local n; : >"$BROWSE_TEST_PAUSE.at"
+    [ -e "$BROWSE_TEST_PAUSE.done" ] && return 0
+    local n; : >"$BROWSE_TEST_PAUSE.done"; printf '%s\n' "$$" >"$BROWSE_TEST_PAUSE.at"
     for ((n = 0; n < 600; n++)); do [ -e "$BROWSE_TEST_PAUSE.go" ] && return 0; command -p sleep 0.05; done
 }
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
@@ -344,15 +360,32 @@ browse_and_exit() {
 step=1
 while :; do
     case $step in
-    1)  menu=(); i=0
-        while IFS=$'\t' read -r n t; do
-            lbl="$n"; [ "$t" = volume ] && lbl="$n  (dysk VM)"
-            menu+=("d$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
-        done <"$TMPD/cand.tsv"
-        geom
-        wt --title "$TITLE: który dataset?" --menu "Kopia zostanie zamontowana TYLKO DO ODCZYTU." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || exit 0
-        k="${WT_OUT#d}"
-        DS="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f1)"; TYP="$(sed -n "$((k + 1))p" "$TMPD/cand.tsv" | cut -f2)"
+    1)  # U68 (właściciel 2026-10-21: "zginęło okno z rozwijającymi się gałęziami; to musi być
+        # jednolite w całym pakiecie"): to samo drzewo co przy wyborze datasetów do kopii, w trybie
+        # JEDNEJ pozycji. Wybrać da się dataset z migawką; gałęzie nad nim są do rozwijania.
+        # Wcześniej płaska lista (pve10: 66 pozycji, 32 strzałki do hdd/labbrowse/v-ntfs).
+        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$TITLE: który dataset?" "${DS:-}" <<'PYEOF' || exit 1
+import sys, json
+names, types = [], {}
+for line in open(sys.argv[1], encoding="utf-8"):
+    p = line.rstrip("\n").split("\t")
+    if p and p[0]:
+        names.append(p[0]); types[p[0]] = p[1] if len(p) > 1 else "filesystem"
+allnames = set(names)
+for n in names:                       # gałęzie nad kandydatami: do nawigacji, nie do wyboru
+    parts = n.split("/")
+    for i in range(1, len(parts)):
+        allnames.add("/".join(parts[:i]))
+spec = {"title": sys.argv[3], "single": True, "selectable": names,
+        "legend": " Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija",
+        "roots": [sys.argv[4]] if sys.argv[4] else [],
+        "datasets": [{"name": n, "type": types.get(n, "filesystem"), "used": None} for n in sorted(allnames)]}
+json.dump(spec, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
+PYEOF
+        ${ZFS_TREE:-$PY $HERE/tui/tree.py} --spec "$TMPD/tree-spec.json" --out "$TMPD/tree-out.json" || exit 0
+        DS="$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")).get("roots") or [""]; print(r[0])' "$TMPD/tree-out.json" | tr -d '\r')"
+        TYP="$(awk -F'\t' -v d="$DS" '$1 == d { print $2; exit }' "$TMPD/cand.tsv")"
+        [ -n "$DS" ] && [ -n "$TYP" ] || exit 0
         step=2 ;;
     2)  zfs list -H -p -t snapshot -o name,creation -s creation -d 1 -- "$DS" 2>/dev/null \
             | tr -d '\r' | awk -F'\t' '{ n = $1; sub(/^[^@]*@/, "", n); print $2 "\t" n }' | tac | head -n 50 >"$TMPD/points.tsv"
@@ -414,7 +447,12 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
             wt --title "$TITLE" --msgbox "Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie." 10 "$W"
             undo_or_warn ""; step=2; continue
         fi
-        wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
+        # I-2 (kampania 2026-10-21): jedna partycja do wyboru = bez okna wyboru (o jeden klawisz mniej).
+        if [ "$i" -eq 1 ]; then
+            WT_OUT=q0
+        else
+            wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
+        fi
         k="${WT_OUT#q}"
         PDEV="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f1)"; PFS="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f2)"
         rm -f "$TMPD/pick.tsv"

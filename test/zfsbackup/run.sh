@@ -3319,6 +3319,15 @@ if case "$out" in *"base=[]"*"path=[tank/data/ds1]"*) true ;; *) false ;; esac; 
 else
     bad "sync: local base is empty, local path equals the source path exactly" "$out"
 fi
+# LANDING_LABEL (owner 2026-10-21): the directory fixed on the record wins over the label of
+# whatever address the record now pairs with; absent, the old label rule.
+out=$( ( PEER_SAVED_MODE=backup PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=10.98.0.2 LANDING_LABEL=192.168.28.98
+         echo "path=[$(client_local_path hdd/data)]" ) )
+if [ "$out" = "path=[hdd/backups/192.168.28.98/hdd/data]" ]; then
+    ok "landing: LANDING_LABEL on the record decides the directory, not the label of the current pairing address"
+else
+    bad "landing: LANDING_LABEL decides the directory" "$out"
+fi
 out=$( ( PEER_SAVED_MODE=backup PEER_SAVED_TARGET=hdd/backups LOAD_LABEL=pve2
          echo "base=[$(snapget_local_base)]"
          echo "path=[$(client_local_path tank/data/ds1)]" ) )
@@ -10157,7 +10166,7 @@ ex_argv="${ex_out#*\"argv\":\[}"; ex_argv="${ex_argv%%\]*}"
 # `--datasets=`, NOT `--requested=`: this record has no RUX_MODE, so the list
 # IS the request and add-client refuses --requested without --mode. The first
 # export wrote --requested for every record; the lab's import found it.
-ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
+ex_want='"--host=10.0.0.11","--target=hdd/backups/ksiegowosc","--datasets=rpool/data/vm-101","--landing=10.0.0.11","--recursive=flat","--profile=d7h24","--source-profile=d7h24-lite","--local-user=zfsbackup","--bandwidth=20M","--exclude-child=-swap"'
 if [ "$ex_argv" = "$ex_want" ]; then
     ok "exportrel: the replay argv is exactly the flags the declarations map to"
 else
@@ -10257,6 +10266,39 @@ case "$(cat "$WORK/ex.out")" in
     *) bad "exportrel: no reachable config is reported as such, not as an empty relationship" "$(cat "$WORK/ex.out")" ;;
 esac
 
+# U62 (owner 2026-10-21): a relation moved to another address (the "Adres hosta" window
+# / set-endpoint changed ACTIVE_ENDPOINT, PEER_HOST stays the pairing address) exports
+# the address it USES. Measured on pve10: 'ab' on the VPN exported its LAN address and
+# the import died in ssh-keyscan.
+printf 'CLIENT_NAME=przen\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:22\nENDPOINT_KNOWN=192.168.28.98:22\n' > "$EX/clients/przen.conf"
+ex_run export-relation przen --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2"]'*) ok "exportrel U62: a relation moved to the VPN exports --host = the address in use (10.98.0.2), not the pairing one" ;;
+    *) bad "exportrel U62: moved relation exports the active address" "$(cat "$WORK/ex.out")" ;;
+esac
+printf 'CLIENT_NAME=przenp\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:2222\n' > "$EX/clients/przenp.conf"
+ex_run export-relation przenp --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2:2222"]'*) ok "exportrel U62: a non-22 active port rides with the host (--host=10.98.0.2:2222)" ;;
+    *) bad "exportrel U62: active port" "$(cat "$WORK/ex.out")" ;;
+esac
+rm -f "$EX/clients/przen.conf" "$EX/clients/przenp.conf"
+# ...with a target: the copies' directory travels too -- the old pairing label for a record
+# from before LANDING_LABEL, the recorded one otherwise.
+printf 'CLIENT_NAME=przt\nSTATE=active\nPEER_HOST=192.168.28.98\nACTIVE_ENDPOINT=10.98.0.2:22\nCLIENT_TARGET=hdd/backups\n' > "$EX/clients/przt.conf"
+ex_run export-relation przt --json
+case "$(cat "$WORK/ex.out")" in
+    *'"argv":["--host=10.98.0.2","--target=hdd/backups","--landing=192.168.28.98"]'*) ok "exportrel landing: a record from before LANDING_LABEL exports its pairing label as --landing (where its copies are)" ;;
+    *) bad "exportrel landing: old record" "$(cat "$WORK/ex.out")" ;;
+esac
+printf 'CLIENT_NAME=przl\nSTATE=active\nPEER_HOST=10.98.0.2\nACTIVE_ENDPOINT=10.98.0.2:22\nCLIENT_TARGET=hdd/backups\nLANDING_LABEL=stary-katalog\n' > "$EX/clients/przl.conf"
+ex_run export-relation przl --json
+case "$(cat "$WORK/ex.out")" in
+    *'"--landing=stary-katalog"'*) ok "exportrel landing: the recorded LANDING_LABEL is exported as is" ;;
+    *) bad "exportrel landing: recorded label" "$(cat "$WORK/ex.out")" ;;
+esac
+rm -f "$EX/clients/przt.conf" "$EX/clients/przl.conf"
+
 # THE TEXT FORM carries the same command, ready to paste.
 ex_run export-relation ksiegowosc
 if grep -q 'add-client ksiegowosc' "$WORK/ex.out" \
@@ -10279,7 +10321,7 @@ ex_run export-relation ksiegowosc --json; cp "$WORK/ex.out" "$IM/ksiegowosc.json
 sed -i 's/"argv":\["--host=10.0.0.11"/"argv":["--host=10.0.0.11","--exclude-child=(a|b)[0-9]\\\\,x\\"y"/' "$IM/ksiegowosc.json"
 im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; stdout/err in $WORK/im.*
     ( export CLIENTS_DIR="$IM/clients" SERVER_CONF="$IM/no-server-conf" IM_LOG="$IM/calls.log"
-      : > "$IM_LOG"
+      : > "$IM_LOG"; : > "$IM_LOG.ssh"
       bash -c '
         # $1, not $0: sourced under $0 == its own path the program would take the
         # BASH_SOURCE guard for a direct run and dispatch our argv as a command.
@@ -10289,10 +10331,24 @@ im_run() {   # <args...> with add-client/activate STUBBED to record argv -> rc; 
         cmd_seed()       { printf "seed|%s" "$1"; shift; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         # U24: no root channel to the source unless IM_ROOT says so (the stub never
         # connects). IM_ROOT=fresh: channel up, no account of this collector there.
-        rux_root_ssh() { [ -n "${IM_ROOT:-}" ] || return 255; case "$*" in *zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 0 ;; esac; }
+        # REV-20261021-166: the stub checks ALL THREE arguments -- a hostname (never HOST:PORT),
+        # a numeric port, a known command -- and, with IM_ROOT_AT="HOST PORT", that root is
+        # reachable only there. Every call is logged to $IM_LOG.ssh.
+        rux_root_ssh() { printf "root-ssh|%s|%s|%s\n" "$1" "$2" "$3" >> "$IM_LOG.ssh"
+                         [ -n "${IM_ROOT:-}" ] || return 255
+                         case "$1" in ""|*:*) return 255 ;; esac
+                         case "$2" in ""|*[!0-9]*) return 255 ;; esac
+                         [ -z "${IM_ROOT_AT:-}" ] || [ "$1 $2" = "$IM_ROOT_AT" ] || return 255
+                         case "$3" in true) return 0 ;; "id "*zfsbackup-*) [ "$IM_ROOT" = joined ] ;; *) return 255 ;; esac; }
         rux_entry()      { printf "rux"; for a in "$@"; do printf "|%s" "$a"; done; printf "\n"; } >> "$IM_LOG"
         # The [relation:] restore writes a config -- here only WHEN it is called, to its own log.
         import_restore_relblock() { [ -n "${3:-}" ] && return 0; printf "restore|%s\n" "$1" >> "$IM_LOG.r"; }
+        # IM_ZFS: datasets that "exist" here, one per line (landing lookup); unset = none.
+        zfs() { local last="${*: -1}"
+                case " $* " in
+                    *" -d 1 "*) awk -v t="$last" '\''$0==t || (index($0, t "/")==1 && index(substr($0, length(t)+2), "/")==0)'\'' "${IM_ZFS:-/dev/null}" ;;
+                    *) grep -qxF -- "$last" "${IM_ZFS:-/dev/null}" ;;
+                esac; }
         cmd_import_relation "$@"' im "$ZFSBACKUP" "$@" ) >"$WORK/im.out" 2>"$WORK/im.err"
 }
 im_run "$IM/ksiegowosc.json"; im_rc=$?
@@ -10303,10 +10359,57 @@ if [ "$im_rc" -eq 0 ] && grep -q 'zfs-backup.sh add-client ksiegowosc' "$WORK/im
 else
     bad "importrel: without --yes the two commands are shown, and NOTHING is called" "rc=$im_rc" "$(cat "$WORK/im.out" "$WORK/im.err" "$IM/calls.log")"
 fi
-if grep -q 'ACTIVE_ENDPOINT *= 10.0.0.11:22' "$WORK/im.out"; then
-    ok "importrel: the export's not_replayable fields come back as the manual step, not silently"
+# ENDPOINT_VPN_HOST is still a manual step; ACTIVE_ENDPOINT is not any more -- it is
+# what --host connects through (U62).
+if grep -q 'ENDPOINT_VPN_HOST *= 10.99.0.11' "$WORK/im.out" && ! grep -q 'ACTIVE_ENDPOINT *=' "$WORK/im.out"; then
+    ok "importrel: the export's not_replayable fields come back as the manual step, not silently (ACTIVE_ENDPOINT excepted: it is replayed)"
 else
     bad "importrel: not_replayable fields shown" "$(cat "$WORK/im.out")"
+fi
+# U62: a file written BEFORE the fix -- argv carries the pairing address, the address in
+# use only under not_replayable. The import connects where the relation worked.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:22"/' \
+    "$IM/ksiegowosc.json" > "$IM/stary.json"
+im_run "$IM/stary.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2|' "$IM/calls.log" \
+        && ! grep -q '192.168.28.98' "$IM/calls.log" && grep -q 'łączę się przez 10.98.0.2' "$WORK/im.out"; then
+    ok "importrel U62: an older export (argv = pairing address) connects through the ACTIVE_ENDPOINT it carries, and says so"
+else
+    bad "importrel U62: older export uses the active address" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i 'adres\|host' "$WORK/im.out" | head -5)"
+fi
+# LANDING (owner 2026-10-21): an older file has no --landing; the import takes the label of
+# the pairing address from its declarations -- the directory the copies are in.
+sed -e 's/,"--landing=10.0.0.11"//' "$IM/ksiegowosc.json" > "$IM/bezland.json"
+im_run "$IM/bezland.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|.*|--landing=10.0.0.11' "$IM/calls.log" && grep -q 'katalog relacji z pliku' "$WORK/im.out"; then
+    ok "importrel landing: a file without --landing lands under the pairing address's label from its declarations"
+else
+    bad "importrel landing: old file" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(grep -i katalog "$WORK/im.out")"
+fi
+# The expected directory is missing, ONE directory under the target holds all the datasets:
+# taken, and said. TWO: refused, both listed, nothing called.
+printf '%s\n' hdd/backups/ksiegowosc hdd/backups/ksiegowosc/przeniesione hdd/backups/ksiegowosc/przeniesione/rpool/data/vm-101 > "$IM/zfs1"
+IM_ZFS="$IM/zfs1" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|.*|--landing=przeniesione' "$IM/calls.log" && grep -q 'ma wszystkie datasety relacji' "$WORK/im.out"; then
+    ok "importrel landing: expected directory missing, one directory holds all the datasets -> the copies go there, said"
+else
+    bad "importrel landing: one candidate" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(tail -3 "$WORK/im.out")"
+fi
+printf '%s\n' hdd/backups/ksiegowosc hdd/backups/ksiegowosc/a hdd/backups/ksiegowosc/a/rpool/data/vm-101 hdd/backups/ksiegowosc/b hdd/backups/ksiegowosc/b/rpool/data/vm-101 > "$IM/zfs2"
+IM_ZFS="$IM/zfs2" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ ! -s "$IM/calls.log" ] && grep -q 'SEVERAL directories' "$WORK/im.err"; then
+    ok "importrel landing: two directories hold the datasets -> refused, both named, nothing called"
+else
+    bad "importrel landing: two candidates" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(tail -2 "$WORK/im.err")"
+fi
+sed -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:22;rm -rf"/' \
+    "$IM/ksiegowosc.json" > "$IM/zly.json"
+im_run "$IM/zly.json" --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && [ ! -s "$IM/calls.log" ]; then
+    ok "importrel U62: an ACTIVE_ENDPOINT that is not a host:port is refused, nothing called"
+else
+    bad "importrel U62: bad ACTIVE_ENDPOINT refused" "rc=$im_rc" "$(cat "$IM/calls.log")"
 fi
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
 im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
@@ -10367,6 +10470,59 @@ if grep -q '^add-client|ksiegowosc|' "$IM/calls.log" && ! grep -q -- '--join-rem
 else
     bad "importrel: no root -> no --join-remotely" "$(cat "$IM/calls.log")"
 fi
+# REV-20261021-166: since U62 the replayed --host may be HOST:PORT. The root probe must get
+# the host and the port apart (canonical parse_endpoint_arg); the replayed --host stays as in
+# the file. Root reachable ONLY at (source.example, 2222) -> exactly one --join-remotely.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=source.example:2222"/' \
+    -e 's/"value":"10.0.0.11:22"/"value":"source.example:2222"/' "$IM/ksiegowosc.json" > "$IM/port.json"
+IM_ROOT=joined IM_ROOT_AT="source.example 2222" im_run "$IM/port.json" --yes; im_rc=$?
+im_pj="$(grep '^add-client|' "$IM/calls.log")"
+if [ "$im_rc" -eq 0 ] && printf '%s' "$im_pj" | grep -q '^add-client|ksiegowosc|--host=source.example:2222|' \
+   && [ "$(printf '%s' "$im_pj" | grep -o -- '--join-remotely' | wc -l)" -eq 1 ] \
+   && grep -qx 'root-ssh|source.example|2222|true' "$IM/calls.log.ssh" && ! grep -q '^root-ssh|[^|]*:' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: --host=HOST:PORT -> root probe on (HOST, PORT), --host replayed as in the file, one --join-remotely"
+else
+    bad "importrel REV-166: non-default port" "rc=$im_rc" "$im_pj" "$(cat "$IM/calls.log.ssh")"
+fi
+# ...and the port matters: root only on port 22 of the same host is NOT the file's endpoint.
+IM_ROOT=joined IM_ROOT_AT="source.example 22" im_run "$IM/port.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=source.example:2222|' "$IM/calls.log" && ! grep -q -- '--join-remotely' "$IM/calls.log"; then
+    ok "importrel REV-166: root on another port of that host -> no --join-remotely (the manual join stays the way)"
+else
+    bad "importrel REV-166: wrong port must not join" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# Default port, the oracle now strict: (10.0.0.11, 22).
+IM_ROOT=joined IM_ROOT_AT="10.0.0.11 22" im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.0.0.11|.*|--join-remotely$' "$IM/calls.log" \
+   && grep -qx 'root-ssh|10.0.0.11|22|true' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: default port -- probe on (10.0.0.11, 22), --join-remotely (positive control under the strict stub)"
+else
+    bad "importrel REV-166: default port positive control" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# An OLDER export (argv = pairing address) whose ACTIVE_ENDPOINT is HOST:PORT: U62 replays the
+# active endpoint, and the probe takes its host and port the same way.
+sed -e 's/"argv":\["--host=10.0.0.11"/"argv":["--host=192.168.28.98"/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:2222"/' \
+    "$IM/ksiegowosc.json" > "$IM/staryport.json"
+IM_ROOT=joined IM_ROOT_AT="10.98.0.2 2222" im_run "$IM/staryport.json" --yes; im_rc=$?
+if [ "$im_rc" -eq 0 ] && grep -q '^add-client|ksiegowosc|--host=10.98.0.2:2222|.*|--join-remotely$' "$IM/calls.log" \
+   && grep -qx 'root-ssh|10.98.0.2|2222|true' "$IM/calls.log.ssh"; then
+    ok "importrel REV-166: older export with ACTIVE_ENDPOINT=HOST:PORT -- same endpoint/port contract, --join-remotely"
+else
+    bad "importrel REV-166: older export, non-default port" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
+# The one-command path (source no longer knows this collector) on a non-default port:
+# --source takes the HOST only, the port goes as --port=.
+sed -e 's/"--host=10.0.0.11"/"--host=source.example:2222"/' -e 's/"value":"10.0.0.11:22"/"value":"source.example:2222"/' \
+    "$IM/nobw.json" > "$IM/nobwport.json"
+IM_ROOT=fresh IM_ROOT_AT="source.example 2222" im_run "$IM/nobwport.json" --yes; im_rc=$?
+im_rp="$(grep '^rux|' "$IM/calls.log")"
+if [ "$im_rc" -eq 0 ] && printf '%s' "$im_rp" | grep -q '^rux|--source=source.example:[^|:]*|' \
+   && printf '%s' "$im_rp" | grep -q '|--port=2222|' && ! grep -q '^add-client|' "$IM/calls.log"; then
+    ok "importrel REV-166: one-command path on a non-default port -- --source=HOST:DATASETS and --port=2222"
+else
+    bad "importrel REV-166: one-command path, non-default port" "rc=$im_rc" "$(cat "$IM/calls.log")" "$(cat "$IM/calls.log.ssh")"
+fi
 # Campaign 2026-10-19 (pve10): export -> delete -> import came back with the template's
 # numbers. The file's [relation:] block is restored AFTER the relationship is created,
 # on every create path; the preview says so. Without a block in the file -- no call.
@@ -10422,6 +10578,48 @@ if [ "$im_rc" -ne 0 ] && grep -q "already has relationship 'inna'" "$WORK/im.err
 else
     bad "importrel: second mode-based relationship to same peer refused" "rc=$im_rc" "$(cat "$WORK/im.err" "$IM/calls.log")"
 fi
+# REV-20261022-167: verdict 3 compares the file's durable PEER_HOST (declarations), not the
+# replayed transport endpoint. The same peer through HOST:PORT, and through another address
+# with a port (U62: argv carries ACTIVE_ENDPOINT, declarations keep PEER_HOST), are refused
+# before anything is called; a different peer is not.
+im_nocalls() { ! grep -qE '^(add-client|seed|activate|rux)\|' "$IM/calls.log"; }
+# The file's ACTIVE_ENDPOINT carries the same endpoint (as a current export does), so U62's
+# replacement of an older file's --host does not change it back to 10.0.0.11.
+sed -e 's/"--host=10.0.0.11",/"--host=10.0.0.11:2222","--mode=sync",/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:2222"/' "$IM/ksiegowosc.json" > "$IM/samepeer-port.json"
+sed -e 's/"--host=10.0.0.11",/"--host=10.98.0.2:2222","--mode=sync",/' \
+    -e 's/"field":"ACTIVE_ENDPOINT","value":"10.0.0.11:22"/"field":"ACTIVE_ENDPOINT","value":"10.98.0.2:2222"/' "$IM/ksiegowosc.json" > "$IM/samepeer-u62.json"
+grep -q '"--host=10.0.0.11:2222"' "$IM/samepeer-port.json" && grep -q '"value":"10.98.0.2:2222"' "$IM/samepeer-u62.json" \
+    || echo "fixture: REV-167 endpoints not substituted" >&2
+IM_ROOT=joined im_run "$IM/samepeer-port.json" --name=nowaport --yes; im_rc1=$?; im_e1="$(cat "$WORK/im.err")"; im_nocalls; im_n1=$?
+IM_ROOT=joined im_run "$IM/samepeer-u62.json" --name=nowau62 --yes; im_rc2=$?; im_e2="$(cat "$WORK/im.err")"; im_nocalls; im_n2=$?
+if [ "$im_rc1" -ne 0 ] && printf '%s' "$im_e1" | grep -q "already has relationship 'inna' with 10.0.0.11 " && [ "$im_n1" -eq 0 ] \
+   && [ "$im_rc2" -ne 0 ] && printf '%s' "$im_e2" | grep -q "already has relationship 'inna' with 10.0.0.11" && [ "$im_n2" -eq 0 ] \
+   && [ ! -f "$IM/clients/nowaport.conf" ] && [ ! -f "$IM/clients/nowau62.conf" ]; then
+    ok "importrel REV-167: the same peer through HOST:PORT and through another address:port is refused before any call (identity = the file's PEER_HOST)"
+else
+    bad "importrel REV-167: same peer through HOST:PORT" "rc=$im_rc1 $im_e1" "rc=$im_rc2 $im_e2" "$(cat "$IM/calls.log")"
+fi
+# A genuinely different peer whose record merely shares the transport address text is not a
+# duplicate: inna is now paired as 10.0.0.99, the file's peer is 10.0.0.11.
+printf 'CLIENT_NAME=inna\nPEER_HOST=10.0.0.99\nRUX_MODE=sync\nSTATE=active\n' > "$IM/clients/inna.conf"
+im_run "$IM/samepeer-port.json" --name=nowaport --yes; im_rc=$?
+if ! grep -q "already has relationship" "$WORK/im.err" && grep -q '^add-client|nowaport|--host=10.0.0.11:2222|' "$IM/calls.log"; then
+    ok "importrel REV-167: a different peer (record 10.0.0.99, file 10.0.0.11) reaches add-client with --host=10.0.0.11:2222 unchanged"
+else
+    bad "importrel REV-167: different peer must not be refused" "rc=$im_rc" "$(cat "$WORK/im.err")" "$(cat "$IM/calls.log")"
+fi
+rm -f "$IM/clients/nowaport.conf"
+# Fail closed: a mode-based file whose declarations have no PEER_HOST cannot be checked.
+sed 's/"PEER_HOST":"10.0.0.11",//' "$IM/samepeer-port.json" > "$IM/nopeer.json"
+grep -q '"declarations":{[^}]*"PEER_HOST"' "$IM/nopeer.json" && echo "fixture: PEER_HOST still in declarations" >&2
+im_run "$IM/nopeer.json" --name=bezpeer --yes; im_rc=$?
+if [ "$im_rc" -ne 0 ] && grep -q 'no valid PEER_HOST in its declarations' "$WORK/im.err" && [ ! -s "$IM/calls.log" ] && [ ! -f "$IM/clients/bezpeer.conf" ]; then
+    ok "importrel REV-167: a mode-based file without PEER_HOST in its declarations is refused before anything (fail closed)"
+else
+    bad "importrel REV-167: no PEER_HOST -> refuse" "rc=$im_rc" "$(cat "$WORK/im.err")" "$(cat "$IM/calls.log")"
+fi
+rm -f "$IM/samepeer-port.json" "$IM/samepeer-u62.json" "$IM/nopeer.json"
 rm -f "$IM/clients/inna.conf" "$IM/samepeer.json"
 
 # --- 2026-09-23, pve10: a refused seed's cleanup depends on whether the peer was
@@ -12849,6 +13047,34 @@ if printf '%s' "$DROUT" | grep -q '4\. COPIES    : zfs destroy -r, on THIS host,
 else
     bad "delrel: U9 -- copies after a seed without activation" "$DROUT"
 fi
+# G-1 (pve10 2026-10-22): a MIRROR writes under the source's own names. Its seed refused
+# ('hdd/archive already exists and shares no common snapshot' -- pve10's OWN dataset), and
+# the plan then offered that dataset as a copy to destroy. A mirror whose seed never
+# finished: the derived paths are NOT offered, and --destroy-copies is refused before
+# anything. Positive control: the same mirror after its seed lists them as before.
+dr_mirror() {   # <seed_completed_at or ""> <args...>
+    local sc="$1"; shift
+    { printf 'CLIENT_NAME=m\nSTATE=seeding\nRUX_MODE=sync\nPEER_HOST=10.0.0.8\nACTIVE_ENDPOINT=10.0.0.8:22\n'
+      [ -n "$sc" ] && printf 'SEED_COMPLETED_AT="%s"\n' "$sc"; } > "$DR/clients/m.conf"
+    ( CLIENTS_DIR="$DR/clients"
+      . "$ZFSBACKUP"
+      load_client_and_connection() { PEER_SAVED_MODE=sync PEER_SAVED_TARGET="" LOAD_LABEL=10.0.0.8
+                                     PEER_SAVED_DATASETS="hdd/archive"; }
+      client_local_path() { printf '%s' "$1"; }
+      zfs() { return 0; }
+      cmd_delete_relation m --keep-source "$@" ) 2>&1
+}
+DM1=$(dr_mirror "" --destroy-copies); dm1_rc=$?
+DM2=$(dr_mirror "")
+DM3=$(dr_mirror "2026-10-22 06:00:00" --destroy-copies)
+if printf '%s' "$DM1" | grep -q "is a mirror that never finished its seed: its paths (hdd/archive)" && ! printf '%s' "$DM1" | grep -q 'COPIES    : zfs destroy' \
+   && printf '%s' "$DM2" | grep -q '4\. copies    : NOT offered -- a mirror whose seed never finished: hdd/archive' && ! printf '%s' "$DM2" | grep -q 'KEPT on this host (hdd/archive)' \
+   && printf '%s' "$DM3" | grep -q '4\. COPIES    : zfs destroy -r' && printf '%s' "$DM3" | grep -q '^ *hdd/archive$'; then
+    ok "delrel G-1: a mirror whose seed never finished does not offer its same-name paths as copies; --destroy-copies refused; after a seed it lists them"
+else
+    bad "delrel G-1: mirror without seed" "$DM1" "$DM2" "$DM3"
+fi
+rm -f "$DR/clients/m.conf"
 if ! dr_run zz >/dev/null && grep -q "no relationship 'zz' on this host" "$DR/err" && ! dr_run a --bogus >/dev/null && grep -q "unknown option '--bogus'" "$DR/err"; then
     ok "delrel: an unknown name and an unknown option are refusals, before anything is read or run"
 else

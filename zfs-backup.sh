@@ -5002,7 +5002,12 @@ snapget_local_base() {
     # fabricated "<target>/<label>" built from an empty target.
     snaponly_is && die "internal: snapget_local_base called for snaponly relationship '${CLIENT_NAME:-?}' -- it has no collector path"
     [ "${PEER_SAVED_MODE:-}" = sync ] && { printf ''; return 0; }
-    printf '%s' "$PEER_SAVED_TARGET/$LOAD_LABEL"
+    # LANDING_LABEL (owner 2026-10-21, "co będzie, jak zmienię nazwę relacji, a dane mam
+    # pod starą?"): the directory under the target is fixed ONCE, when the relationship
+    # is created, and written on its record -- never re-derived from an address that can
+    # change. Records from before it fall back to the pairing address's label, which is
+    # what they were created with.
+    printf '%s' "$PEER_SAVED_TARGET/${LANDING_LABEL:-$LOAD_LABEL}"
 }
 client_local_path() {   # <source dataset> -> where it lands locally
     local ds="$1" base; base=$(snapget_local_base)
@@ -9110,7 +9115,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0
+    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -9123,6 +9128,12 @@ cmd_add_client() {
     local local_user="" local_user_given=0
     for a in "$@"; do
         case "$a" in
+            # The directory under --target the copies land in (default: the label of
+            # --host). import-relation passes the one the exported relationship used, so a
+            # relationship re-created through another address (a VPN) lands where its
+            # copies already are.
+            --landing=*)   landing="${a#*=}"
+                           case "$landing" in ''|.|..|*[!A-Za-z0-9._-]*) die "add-client: --landing='$landing' -- one directory name (letters, digits, . _ -)" ;; esac ;;
             --host=*|--lan=*)
                            [ -z "$endpoint_option" ] \
                                || die "add-client: pass exactly one endpoint option (--host is the normal form; --lan is the legacy alias)"
@@ -9646,6 +9657,8 @@ cmd_add_client() {
         # lets this field override the manifest's; empty (sync mode) and
         # absent (older records) keep the manifest value, zero migration.
         write_client_field CLIENT_TARGET     "$target"
+        # Fixed here, once (see snapget_local_base): later address changes do not move it.
+        [ -n "$target" ] && [ "$snaponly" -eq 0 ] && write_client_field LANDING_LABEL "${landing:-$(peer_label "$lan_host")}"
         # The relationship's KIND, explicit (F1): nothing downstream infers
         # snaponly from the empty target above.
         [ "$snaponly" -eq 1 ] && write_client_field RUX_MODE snaponly
@@ -14328,7 +14341,7 @@ cmd_delete_relation() {
     # over the pairing's dataset list), in a subshell so nothing it loads leaks
     # into the steps below, and only those that EXIST here are listed. A dataset
     # under another listed one is dropped: `destroy -r` of the root takes it.
-    local copies_from="the record"
+    local copies_from="the record" mirror_unproven=""
     # snaponly: there are no copies on this host, by definition -- and deriving
     # "copies" from the pairing would build collector paths it never had.
     if [ "${RUX_MODE:-}" = snaponly ]; then
@@ -14345,7 +14358,14 @@ cmd_delete_relation() {
                         _lp=$(client_local_path "$_ds")
                         zfs list -H -o name -- "$_lp" >/dev/null 2>&1 && printf '%s\n' "$_lp"
                     done | sort -u | awk '{ for (i = 1; i <= n; i++) if (index($0, k[i] "/") == 1) next; k[++n] = $0; print }' )
-        if [ -n "$_derived" ]; then
+        if [ -n "$_derived" ] && [ "${RUX_MODE:-}" = sync ] && [ -z "${SEED_COMPLETED_AT:-}" ]; then
+            # A MIRROR writes under the SAME names as the source. One whose seed never
+            # finished proves nothing about them: on pve10 (2026-10-22) seed refused
+            # 'hdd/archive already exists and shares no common snapshot' -- the host's
+            # OWN dataset -- and this plan then offered it as a copy to destroy.
+            mirror_unproven=$(printf '%s\n' "$_derived" | tr '\n' ' '); mirror_unproven="${mirror_unproven% }"
+            [ "$destroy" -eq 0 ] || die "delete-relation: '$name' is a mirror that never finished its seed: its paths ($mirror_unproven) carry the same names as on the source and may be this host's own datasets -- not destroying them. Check them and remove by hand if they are copies (zfs destroy -r). Nothing was changed."
+        elif [ -n "$_derived" ]; then
             copies=$(printf '%s\n' "$_derived" | tr '\n' ' '); copies="${copies% }"
             copies_from="the pairing -- seeded, never activated, so the record lists none"
         fi
@@ -14393,6 +14413,8 @@ cmd_delete_relation() {
         echo "  4. COPIES    : zfs destroy -r, on THIS host, of (from $copies_from):"
         local d; for d in $copies; do echo "                   $d"; done
         [ -n "$copies" ] || echo "                   (the record lists none)"
+    elif [ -n "$mirror_unproven" ]; then
+        echo "  4. copies    : NOT offered -- a mirror whose seed never finished: $mirror_unproven may be this host's own datasets (same names as on the source); check and remove by hand if they are copies"
     else
         echo "  4. copies    : KEPT on this host${copies:+ ($copies)} -- pass --destroy-copies to destroy them too"
     fi
@@ -17098,7 +17120,7 @@ cmd_save_profile() {
 
 # <record field>:<create flag>, in the order the wizard asks. A field with no
 # flag is listed in EXPORT_RELATION_UNREPLAYABLE instead, never silently.
-EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
+EXPORT_RELATION_MAP="PEER_HOST:host CLIENT_TARGET:target LANDING_LABEL:landing RECURSION:recursive RUX_MODE:mode PROFILE:profile SOURCE_PROFILE:source-profile LOCAL_USER:local-user BANDWIDTH:bandwidth"
 # REQUESTED_DATASETS is NOT in the map because its flag depends on another
 # field. add-client records the list under one name whichever way it was
 # given, but replays it two ways: with a mode it is `--requested=` (narrows the
@@ -17371,6 +17393,66 @@ cmd_import_relation() {   # FILE [--name=NEW] [--yes]
 $(json_array_strings "$(json_value_of "$replay" argv)")
 ARGV
     [ "${#argv[@]}" -gt 0 ] || die "import-relation: replay argv is empty -- the export carried no declarations to reproduce"
+    # U62: a file written before the fix carries --host = the pairing address and the
+    # address in use only under not_replayable/ACTIVE_ENDPOINT. Connect where the relation
+    # actually worked: a literal host:port there replaces --host (port 22 left implicit).
+    local file_active i
+    file_active=$(printf '%s' "$doc" | grep -o '"field":"ACTIVE_ENDPOINT","value":"[^"]*"' | head -1 | sed 's/^.*"value":"//; s/"$//')
+    case "$file_active" in
+        *:*) case "$file_active" in *[!A-Za-z0-9._:-]*) die "import-relation: ACTIVE_ENDPOINT '$file_active' in '$file' is not a host:port -- the file is not one export-relation wrote" ;; esac
+             [ "${file_active##*:}" = 22 ] && file_active="${file_active%:*}"
+             for i in "${!argv[@]}"; do
+                 case "${argv[$i]}" in
+                     --host=*) [ "${argv[$i]}" = "--host=$file_active" ] \
+                                   || { echo ">>> import-relation: plik wskazuje adres parowania ${argv[$i]#--host=}, ale relacja działała przez $file_active -- łączę się przez $file_active"; argv[$i]="--host=$file_active"; } ;;
+                 esac
+             done ;;
+    esac
+    # LANDING (owner 2026-10-21): the copies go where the relationship had them, not under
+    # the label of the address the import connects through. A file from before --landing
+    # names the pairing address in its declarations -- its label is the old directory.
+    # When that directory is not on this host (copies moved by hand, another collector),
+    # the datasets are looked for under the target: exactly one directory holding ALL of
+    # them is taken (and said); several -- refuse and list them. Whether they really are
+    # the same data is the seed's to prove (a common snapshot by GUID), as always.
+    if [ "$verb" = add-client ]; then
+        local im_target="" im_landing="" im_list="" im_sync=0 im_fhost
+        for x in "${argv[@]}"; do
+            case "$x" in
+                --target=*) im_target="${x#*=}" ;;
+                --landing=*) im_landing="${x#*=}" ;;
+                --datasets=*|--requested=*) im_list="${x#*=}" ;;
+                --mode=sync|--snaponly) im_sync=1 ;;
+            esac
+        done
+        if [ -n "$im_target" ] && [ "$im_sync" -eq 0 ]; then
+            if [ -z "$im_landing" ]; then
+                im_fhost=$(printf '%s' "$doc" | grep -o '"PEER_HOST":"[^"]*"' | head -1 | sed 's/^.*:"//; s/"$//')
+                if [ -n "$im_fhost" ]; then
+                    im_landing=$(peer_label "$im_fhost"); argv+=("--landing=$im_landing")
+                    echo ">>> import-relation: kopie pod $im_target/$im_landing (katalog relacji z pliku, adres parowania $im_fhost)"
+                fi
+            fi
+            if [ -n "$im_landing" ] && [ -n "$im_list" ] && ! zfs list -H -o name -- "$im_target/$im_landing" >/dev/null 2>&1; then
+                local -a im_cands=(); local im_c im_d im_all
+                while IFS= read -r im_c; do
+                    [ -n "$im_c" ] && [ "$im_c" != "$im_target" ] || continue
+                    im_all=1
+                    for im_d in ${im_list//,/ }; do zfs list -H -o name -- "$im_c/$im_d" >/dev/null 2>&1 || { im_all=0; break; }; done
+                    [ "$im_all" -eq 1 ] && im_cands+=("$im_c")
+                done <<CANDS
+$(zfs list -H -o name -d 1 -- "$im_target" 2>/dev/null)
+CANDS
+                if [ "${#im_cands[@]}" -eq 1 ]; then
+                    local im_new="${im_cands[0]##*/}"
+                    echo ">>> import-relation: $im_target/$im_landing nie istnieje, ale ${im_cands[0]} ma wszystkie datasety relacji ($im_list) -- kopie pójdą tam (seed sprawdzi wspólną migawkę)"
+                    for i in "${!argv[@]}"; do case "${argv[$i]}" in --landing=*) argv[$i]="--landing=$im_new" ;; esac; done
+                elif [ "${#im_cands[@]}" -gt 1 ]; then
+                    die "import-relation: $im_target/$im_landing does not exist, and SEVERAL directories under $im_target hold all of $im_list: ${im_cands[*]} -- not guessing which copy is this relationship's. Point it at one by editing \"--landing=\" in the file's replay argv, then import again."
+                fi
+            fi
+        fi
+    fi
     local -a then_verbs=()
     while IFS= read -r x; do [ -n "$x" ] && then_verbs+=("$x"); done <<THEN
 $(json_array_strings "$(json_value_of "$replay" then)")
@@ -17435,15 +17517,36 @@ Nothing was changed. A relationship is changed by removing it and importing the 
     for x in ${argv[@]+"${argv[@]}"}; do
         case "$x" in --host=*) peer_host="${x#--host=}" ;; --mode=*) peer_mode="${x#--mode=}" ;; esac
     done
+    # REV-20261021-166: since U62 the replayed --host is the ACTIVE endpoint, which may be
+    # HOST:PORT. Every SSH probe below takes host and port parsed once by the canonical
+    # parser; the replayed --host argument itself stays exactly as the file has it.
+    local peer_ep_host="" peer_ep_port=22
+    if [ -n "$peer_host" ]; then
+        read -r peer_ep_host peer_ep_port <<<"$(parse_endpoint_arg "$peer_host")"
+        [ -n "$peer_ep_host" ] && [ -n "$peer_ep_port" ] \
+            || die "import-relation: $file: --host=$peer_host is not HOST[:PORT] (see above). Nothing was changed."
+    fi
+    # REV-20261022-167: the PEER is who the relationship is with -- the durable pairing
+    # (declarations hold only EXPORT_RELATION_MAP fields, PEER_HOST first; none carries a "}")
+    # identity, PEER_HOST in the file's declarations (export writes the record's own value
+    # there; only the replayed --host carries the active endpoint, U62). Verdict 3 compares
+    # that, never the transport endpoint, which may be HOST:PORT or another address of the
+    # same peer.
+    local peer_id=""
+    peer_id=$(printf '%s' "$doc" | tr -d '\n' | grep -o '"declarations"[[:space:]]*:[[:space:]]*{[^}]*}' \
+              | grep -o '"PEER_HOST"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/^[^:]*:[[:space:]]*"//; s/"$//')
     [ "$peer_mode" != snaponly ] || die "import-relation: $file declares a snaponly relationship -- its replay is not supported yet (round 1); create it with add-client --snaponly. Nothing was changed."
     if [ -n "$peer_host" ] && [ -n "$peer_mode" ]; then
+        # Fail closed: a mode-based file with a peer must name it, or the check cannot be made.
+        [ -n "$peer_id" ] && endpoint_host_valid "$peer_id" \
+            || die "import-relation: $file declares a $peer_mode relationship but no valid PEER_HOST in its declarations -- the one-relationship-per-peer check cannot be made. Nothing was changed."
         for f in "$CLIENTS_DIR"/*.conf; do
             [ -f "$f" ] || continue
-            [ "$(record_get "$f" PEER_HOST)" = "$peer_host" ] || continue
+            [ "$(record_get "$f" PEER_HOST)" = "$peer_id" ] || continue
             [ -n "$(record_get "$f" RUX_MODE)" ] || continue
             [ "$(record_get "$f" STATE)" = removed ] && continue
             other=$(record_get "$f" CLIENT_NAME)
-            die "import-relation: this host already has relationship '$other' with $peer_host (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
+            die "import-relation: this host already has relationship '$other' with $peer_id (mode $(record_get "$f" RUX_MODE)). The peer keeps ONE scope per collector, so a second $peer_mode relationship to it would cover the same datasets -- refused before anything was created. Use '$other', import on another collector, or remove '$other' first (zfs-backup.sh delete-relation $other). Nothing was changed."
         done
     fi
 
@@ -17531,21 +17634,22 @@ SCOPE
     # instead -- the wizard's (--source=HOST:DATASETS --install --grant-remotely):
     # join over that channel and the scope granted EXACTLY as the file's dataset
     # list, then seed and activate. Without the root channel nothing changes.
-    local _ds_list="" _has_mode=0 _rport=22 _rux_ok=1
+    local _ds_list="" _has_mode=0 _rux_ok=1
     for x in "${argv[@]}"; do
         case "$x" in
             --datasets=*) _ds_list="${x#--datasets=}" ;;
             --mode=*) _has_mode=1 ;;
             # Only flags the one-command form takes; anything else (e.g. --bandwidth)
             # keeps the ordinary replay, which says what to do by hand.
-            --host=*|--target=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*) ;;
+            --host=*|--target=*|--landing=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*) ;;
             *) _rux_ok=0 ;;
         esac
     done
     if [ "$verb" = add-client ] && [ "$_rux_ok" -eq 1 ] && [ -n "$peer_host" ] && [ -n "$_ds_list" ] && [ "$_has_mode" -eq 0 ] \
-       && rux_root_ssh "$peer_host" "$_rport" "true" >/dev/null 2>&1 \
-       && ! rux_root_ssh "$peer_host" "$_rport" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
-        rux_args=(--source="$peer_host:$_ds_list" --name="$name")
+       && rux_root_ssh "$peer_ep_host" "$peer_ep_port" "true" >/dev/null 2>&1 \
+       && ! rux_root_ssh "$peer_ep_host" "$peer_ep_port" "id 'zfsbackup-$(printf '%s' "$COLLECTOR_LABEL" | tr -c 'A-Za-z0-9._-' '-')'" >/dev/null 2>&1; then
+        rux_args=(--source="$peer_ep_host:$_ds_list" --name="$name")
+        [ "$peer_ep_port" = 22 ] || rux_args+=(--port="$peer_ep_port")
         for x in "${argv[@]}"; do
             case "$x" in --host=*|--datasets=*) ;; *) rux_args+=("$x") ;; esac
         done
@@ -17580,8 +17684,8 @@ SCOPE
     # With root on the source from here, add-client joins it again itself.
     local -a jr_args=()
     if [ "$verb" = add-client ] && [ -n "$peer_host" ] \
-       && [ ! -r "$(peer_manifest_path "$(peer_label "$peer_host")")" ] \
-       && rux_root_ssh "$peer_host" 22 "true" >/dev/null 2>&1; then
+       && [ ! -r "$(peer_manifest_path "$(peer_label "$peer_ep_host")")" ] \
+       && rux_root_ssh "$peer_ep_host" "$peer_ep_port" "true" >/dev/null 2>&1; then
         jr_args=(--join-remotely)
     fi
     echo "Import relacji '$name' z $file"
@@ -17603,7 +17707,7 @@ SCOPE
             [ -n "$x" ] || continue
             echo "  $x"
         done <<UNREP
-$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
+$(printf '%s' "$unrep" | awk 'BEGIN{RS="\001"} { s=$0; while (match(s, /"field":"[^"]*","value":"[^"]*"/)) { t=substr(s, RSTART, RLENGTH); f=t; sub(/^"field":"/, "", f); sub(/","value":.*$/, "", f); v=t; sub(/^.*"value":"/, "", v); sub(/"$/, "", v); if (f != "ACTIVE_ENDPOINT") printf "%-22s = %s   (set-endpoint po aktywacji)\n", f, v; s=substr(s, RSTART+RLENGTH) } }')
 UNREP
     fi
     if [ "$yes" -ne 1 ]; then
@@ -17618,11 +17722,11 @@ UNREP
     # 2026-09-23: a live relationship imported under a second name left a record
     # stuck in 'seeding' plus its alias line, and the "resumable" hint below
     # never printed: seed's die ended the whole process, so `|| die` was dead.
-    # `--host=` is the exported PEER_HOST verbatim, so this is the same label
-    # seed looks the manifest up by.
-    local peer="" prepaired=0
-    for x in "${argv[@]}"; do case "$x" in --host=*) peer="${x#--host=}" ;; esac; done
-    [ -n "$peer" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer")")" ] && prepaired=1
+    # The record add-client is about to write takes PEER_HOST from the replayed --host's HOST
+    # (since U62 the active endpoint, maybe HOST:PORT), so seed looks the manifest up by that
+    # host's label -- peer_ep_host, not the raw "HOST:PORT" (REV-167).
+    local prepaired=0
+    [ -n "$peer_ep_host" ] && [ -r "$(peer_manifest_path "$(peer_label "$peer_ep_host")")" ] && prepaired=1
 
     cmd_add_client "$name" "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"} || die "import-relation: add-client refused -- see above. The record was not created; nothing to undo."
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do
@@ -17670,6 +17774,22 @@ cmd_export_relation() {
     [ -n "$config_arg" ] && CRON_CONFIG="$config_arg"
     [ -n "${CRON_CONFIG:-}" ] || read_server_conf
     local cfg="${CRON_CONFIG:-}"
+    # A record from before LANDING_LABEL lands under the label of its pairing address --
+    # export that, so the import writes where the copies are.
+    if [ -z "${LANDING_LABEL:-}" ] && [ -n "${CLIENT_TARGET:-}" ] && [ -n "${PEER_HOST:-}" ]; then
+        case "${RUX_MODE:-}" in local|sync|snaponly) ;; *) LANDING_LABEL=$(peer_label "$PEER_HOST") ;; esac
+    fi
+
+    # U62 (owner 2026-10-21: "skoro zrobiłem eksport, to powinien eksportować aktualny
+    # adres IP"): --host replays the address the relation USES now -- ACTIVE_ENDPOINT,
+    # which the "Adres hosta" window / set-endpoint changes -- not PEER_HOST, the address
+    # it was paired on. Measured on pve10: 'ab' moved to the VPN (10.98.0.2) exported
+    # --host=192.168.28.98, unreachable from the collector, and the import died in
+    # ssh-keyscan. Port 22 is left implicit, as add-client writes it.
+    local export_host="${PEER_HOST:-}" eh ep
+    if [ -n "${ACTIVE_ENDPOINT:-}" ] && read -r eh ep <<< "$(active_endpoint_host_port 2>/dev/null)" && [ -n "$eh" ]; then
+        export_host="$eh"; [ "${ep:-22}" = 22 ] || export_host="$eh:$ep"
+    fi
 
     # --- the declarations, and the flags they replay as ---------------------
     local pair fld flag val
@@ -17682,6 +17802,7 @@ cmd_export_relation() {
         [ "$first" -eq 1 ] || decl_json="$decl_json,"
         first=0
         decl_json="$decl_json\"$(json_escape "$fld")\":\"$(json_escape "$val")\""
+        [ "$fld" = PEER_HOST ] && [ -n "$export_host" ] && val="$export_host"
         argv+=("--$flag=$val")
         if [ "$fld" = CLIENT_TARGET ]; then
             # The dataset list rides right after the target, where the wizard
@@ -17730,7 +17851,7 @@ EXF
     if [ "${RUX_MODE:-}" = local ]; then
         local -a lbargv=("--name=$name" "--source=${REQUESTED_DATASETS:-}" "--target=${CLIENT_TARGET:-}")
         for x in ${argv[@]+"${argv[@]}"}; do
-            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--bandwidth=*) ;; *) lbargv+=("$x") ;; esac
+            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--landing=*|--bandwidth=*) ;; *) lbargv+=("$x") ;; esac
         done
         argv=("${lbargv[@]}")
         rverb=local-backup rthen=""
@@ -17741,9 +17862,9 @@ EXF
     # --mode=snaponly, which add-client refuses beside --snaponly, and the dataset
     # list never (it rides after CLIENT_TARGET, and there is none).
     if [ "${RUX_MODE:-}" = snaponly ]; then
-        local -a soargv=("--host=${PEER_HOST:-}" --snaponly "--datasets=${REQUESTED_DATASETS:-}")
+        local -a soargv=("--host=${export_host:-}" --snaponly "--datasets=${REQUESTED_DATASETS:-}")
         for x in ${argv[@]+"${argv[@]}"}; do
-            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--bandwidth=*|--passive|--exclude-*) ;; *) soargv+=("$x") ;; esac
+            case "$x" in --mode=*|--target=*|--requested=*|--datasets=*|--host=*|--landing=*|--bandwidth=*|--passive|--exclude-*) ;; *) soargv+=("$x") ;; esac
         done
         argv=("${soargv[@]}")
         rthen='"activate"'
@@ -20824,6 +20945,7 @@ rux_remote_install() {
         fi
         [ -n "$profile" ] && add_args+=(--profile="$profile")
         [ -n "$source_profile" ] && add_args+=(--source-profile="$source_profile")
+        [ -n "${landing:-}" ] && add_args+=(--landing="$landing")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
         [ "${rux_raw:-0}" -eq 1 ] && add_args+=(--raw)
@@ -20944,11 +21066,12 @@ rux_entry() {
     # pair/join/commit-scope/add-client/seed/activate sequence by hand -- the
     # one command that exists to spare an operator exactly that could not
     # express it.
-    local source_profile=""
+    local source_profile="" landing=""
     local -a excludes=()
     for a in "$@"; do
         case "$a" in
             --source=*)  : ;;
+            --landing=*) landing="${a#*=}" ;;   # import-relation: the copies' directory, passed to add-client
             --target=*)  target="${a#*=}"; rux_target_given=1 ;;
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;

@@ -1237,6 +1237,8 @@ fi
 CS="$WORK/commitscope"; rm -rf "$CS"; mkdir -p "$CS"
 awk '/^do_commit_scope\(\) \{/,/^\}/' "$REPO/deploy.sh" > "$CS/fn.sh"
 awk '/^quiesce_update_failed\(\) \{/,/^\}/' "$REPO/deploy.sh" >> "$CS/fn.sh"
+# REV-20261021-164 R1: do_commit_scope reads presence through zfs_ds_presence.
+awk '/^zfs_ds_presence\(\) \{/,/^\}/' "$REPO/deploy.sh" >> "$CS/fn.sh"
 grep -q 'do_commit_scope()' "$CS/fn.sh" && grep -q 'quiesce_update_failed()' "$CS/fn.sh" \
     && ok "commit-scope sandbox: the SHIPPED function is the one under test (extracted from deploy.sh, not retyped)" \
     || bad "commit-scope sandbox: extraction failed" "$(head -3 "$CS/fn.sh")"

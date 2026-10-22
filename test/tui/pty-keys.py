@@ -35,7 +35,9 @@ SEQ = {"F1": "\x1bOP", "F2": "\x1bOQ", "F3": "\x1bOR", "F4": "\x1bOS", "F5": "\x
        # X12 (drzewo z kratkami): strzalki w trybie aplikacyjnym (curses keypad wlacza smkx,
        # wiec xterm wysyla ESC O A..D, nie ESC [ A..D -- to drugie curses czyta jako Esc + znaki)
        "up": "\x1bOA", "down": "\x1bOB", "right": "\x1bOC", "left": "\x1bOD", "space": " ",
-       "pgup": "\x1b[5~", "pgdn": "\x1b[6~"}
+       "pgup": "\x1b[5~", "pgdn": "\x1b[6~",
+       # PuTTY przy TERM=xterm: Home/End jako ESC [ 1 ~ / ESC [ 4 ~ (opis xterm zna ESC O H / O F)
+       "home-vt": "\x1b[1~", "end-vt": "\x1b[4~"}
 ANSI = re.compile(r"\x1b(\[[0-9;?]*[A-Za-z@]|\][^\x07]*\x07|[()][0-9A-B]|[=>78]|O.)")
 
 

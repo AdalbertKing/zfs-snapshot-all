@@ -98,6 +98,55 @@ basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to p
         B_ROOT+=("$r"); B_EXCL+=("$ex")
     done
 }
+# U67 (owner 2026-10-21): zaznaczona cała pula = wszystkie datasety pod nią, rekurencyjnie.
+# Silnik (gen-cron) bierze datasety, nie korzeń puli, więc pula staje się listą datasetów
+# leżących bezpośrednio pod nią -- każdy z całym drzewem pod sobą (REC=yes). Dataset
+# pominięty w koszyku w całości odpada; pominięcia głębiej idą za swoim datasetem.
+# H-7 (kampania 2026-10-21): pula nośnika INNEJ repliki (replab) była na liście źródeł nowej.
+# Nośnik wymienny = cała jego pula; nośnik stały = katalog docelowy z poddrzewem. Z listy
+# datasetów (ds.json) znikają, zanim powstanie z niej drzewo.
+drop_replica_media() {
+    "$PY" - "$TMPD/ds.json" "$TMPD/rep.json" <<'PYEOF' || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    r = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+hide = []
+for x in r.get("replicas") or []:
+    dst = (x.get("dst") or "").strip("/")
+    if not dst:
+        continue
+    hide.append(dst.split("/")[0] if x.get("media") == "removable" else dst)
+if hide:
+    d["datasets"] = [x for x in d.get("datasets") or []
+                     if not any(x.get("name") == h or (x.get("name") or "").startswith(h + "/") for h in hide)]
+    json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
+PYEOF
+}
+pool_roots_to_children() {   # B_ROOT/B_EXCL -> SRC_ROOT/SRC_EXCL bez korzeni puli; 1 + POOL_EMPTY, gdy pula pusta
+    # Koszyk (B_ROOT) zostaje taki, jak go zaznaczono: Wstecz do drzewa pokazuje całą pulę
+    # zaznaczoną, nie "[-] część" (H-1, kampania na żywo 2026-10-21).
+    local -a nr=() ne=()
+    local i r c x e n list
+    POOL_NOTE=""; POOL_EMPTY=""
+    for i in "${!B_ROOT[@]}"; do
+        r="${B_ROOT[$i]}"
+        case "$r" in */*) nr+=("$r"); ne+=("${B_EXCL[$i]}"); continue ;; esac
+        n=0; list=""
+        for c in ${T_NAME[@]+"${T_NAME[@]}"}; do
+            case "$c" in "$r"/*/*) continue ;; "$r"/*) ;; *) continue ;; esac
+            printf '%s\n' "${B_EXCL[$i]}" | grep -qxF -- "$c" && continue
+            e=""
+            while IFS= read -r x; do case "$x" in "$c"/*) e="$e${e:+$'\n'}$x" ;; esac; done <<<"${B_EXCL[$i]}"
+            nr+=("$c"); ne+=("$e"); n=$((n + 1)); list="$list  $c\n"
+        done
+        [ "$n" -gt 0 ] || { POOL_EMPTY="$r"; return 1; }
+        POOL_NOTE="${POOL_NOTE}Cała pula $r = $n datasetów bezpośrednio pod nią, każdy razem z tym, co pod nim:\n${list}\nDataset założony później BEZPOŚREDNIO pod pulą $r trzeba dopisać zmianą repliki\n(niżej -- pod tymi datasetami -- dojdzie sam).\n"
+    done
+    SRC_ROOT=(${nr[@]+"${nr[@]}"}); SRC_EXCL=(${ne[@]+"${ne[@]}"})
+}
 basket_xargs() {          # B_EXCL -> XARGS: --exclude-child=^x$ (i ^x/, gdy x ma dzieci) -- jak w relacji
     local i x
     XARGS=()
@@ -286,7 +335,7 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
                nosnik "Nośnik:     $DST ($([ "$MEDIA" = fixed ] && echo stały || echo wymienny))"
                kiedy  "Kiedy:      $(sched_words "$SCHED")")
         if [ "$MEDIA" = removable ] && [ "$SCHED" != on-insert ]; then
-            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia od razu")
+            if [ "$ONINS" = yes ]; then items+=(onins "[x] Po włożeniu dysku: kopia minutę po włożeniu")
             else items+=(onins "[ ] Po włożeniu dysku: nic, tylko wg harmonogramu"); fi
         fi
         items+=(silnik "Ustawienia silnika…" restart "Zacznij od nowa na tym dysku (pełna kopia)…"
@@ -308,18 +357,20 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
             # i założono od nowa), jedyna droga to pełna kopia. Nowa obok starej, stara znika
             # dopiero po udanej nowej -- plan i WYKONAJ, jak każda zmiana.
             info "Replika $NAME" "Liczę plan..."
-            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(grep -E '^FATAL' "$TMPD/rs.txt" | tail -1 | sed 's/^FATAL: //')" 10 "$W"; continue; }
+            "$ZB" replica-restart "$NAME" >"$TMPD/rs.txt" 2>&1 || { wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(verb_refusal "$TMPD/rs.txt")" 10 "$W"; continue; }
             { echo "PLAN -- nic jeszcze nie zostało zmienione:"; echo; grep -v '^plan only' "$TMPD/rs.txt"; echo
               echo "Komenda:  $(shq "$ZB") replica-restart $NAME --yes"; } >"$TMPD/rs2.txt"
             yesno_text "$TMPD/rs2.txt" "Replika $NAME -- zacznij od nowa" "WYKONAJ" "Wstecz" --defaultno || continue
-            clear 2>/dev/null
-            echo "\$ $ZB replica-restart $NAME --yes"; echo
-            "$ZB" replica-restart "$NAME" --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            : >"$TMPD/run.log"
+            RC=0; run_progress "Replika $NAME: zacznij od nowa" "$TMPD/run.log" "$ZB" replica-restart "$NAME" --yes || RC=$?
             [ -n "${ZFS_TUI_LOG:-}" ] && { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null
-            echo
-            if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: replika '$NAME' zaczęła od nowa (rc=0). Enter = dalej"
-            else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- stara kopia na dysku została; powód wyżej. Enter = dalej"; fi
-            [ -t 0 ] && read -r _
+            if [ "$RC" -eq 0 ]; then
+                echo "GOTOWE: replika '$NAME' zaczęła od nowa (rc=0)." >"$TMPD/result.txt"
+                result_box "Replika $NAME: zacznij od nowa: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+            else
+                echo "Nie udało się -- stara kopia na dysku została." >"$TMPD/result.txt"
+                result_box "Replika $NAME: zacznij od nowa" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+            fi
             exit "$RC" ;;
         esac
     done
@@ -328,7 +379,7 @@ if [ "$EDIT" -eq 1 ]; then
     MENU=1
     # Plan potrzebuje wzorców wyjątków (-X) z drzewa datasetów, jak po koszyku.
     info "Replika $NAME" "Czytam datasety tego hosta..."
-    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+    if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
         clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
     fi
@@ -350,7 +401,10 @@ while :; do
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
            || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
-        case "$n" in ''|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;; esac
+        case "$n" in
+            '') wt --title "Brak nazwy" --msgbox "Wpisz nazwę repliki, np. usb1." 8 "$W"; continue ;;
+            *[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie." 8 "$W"; continue ;;
+        esac
         if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/rep.tsv"; then
             wt --title "Nazwa zajęta" --msgbox "Replika '$n' już jest. Zmienia się ją z F6: Enter na niej, potem 'e'." 8 "$W"; continue
         fi
@@ -358,7 +412,7 @@ while :; do
     2)  # co kopiować -- TEN SAM koszyk co w kreatorze relacji (uwaga 13, 2026-10-08)
         if [ "${#T_NAME[@]}" -eq 0 ]; then
             info "Replika $NAME" "Czytam datasety tego hosta..."
-            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! basket_tree_from_json "$TMPD/ds.json"; then
+            if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
                 wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
                 clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
             fi
@@ -369,7 +423,14 @@ while :; do
             [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
             step=1; continue
         fi
-        SRCS="$(IFS=,; printf '%s' "${B_ROOT[*]}")"; REC=yes; basket_xargs
+        if ! pool_roots_to_children; then
+            wt --title "Replika $NAME" --msgbox "Pula $POOL_EMPTY nie ma żadnego datasetu do skopiowania." 8 "$W"
+            continue
+        fi
+        if [ -n "$POOL_NOTE" ]; then
+            wt --title "Replika $NAME -- cała pula" --msgbox "$POOL_NOTE" "$(fit "$(printf '%b' "$POOL_NOTE" | grep -c '')")" "$W"
+        fi
+        SRCS="$(IFS=,; printf '%s' "${SRC_ROOT[*]}")"; REC=yes; basket_xargs
         # ZASZYFROWANE ŹRÓDŁO = WYSYŁKA ZASZYFROWANA (właściciel 2026-10-12): kopia relacji
         # pobrana "raw" leży na kolektorze BEZ klucza i zwykła kopia jej nie odczyta.
         # Tylko dla NOWEJ repliki -- w istniejącej tryb zostaje (zmiana = nowa kopia od zera).
@@ -572,7 +633,7 @@ PYEOF
             if [ "$SCHED" != on-insert ]; then
                 _dn=""; [ "$ONINS" = yes ] || _dn="--defaultno"
                 if wt --title "Replika $NAME -- także po włożeniu?" --yes-button "Tak" --no-button "Nie" $_dn \
-                   --yesno "Uruchamiać kopię także od razu po włożeniu dysku tej repliki?\n\nTak: włożony dysk -- kopia od razu, potem dalej wg harmonogramu.\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje." 11 "$W"; then ONINS=yes; else ONINS=no; fi
+                   --yesno "Uruchamiać kopię także po włożeniu dysku tej repliki?\n\nTak: włożony dysk -- kopia minutę po włożeniu (czas na wyjęcie złego dysku),\npotem dalej wg harmonogramu.\nNie: tylko wg harmonogramu. Inny dysk -- nic się nie dzieje." 12 "$W"; then ONINS=yes; else ONINS=no; fi
             fi
         fi
         trig_calc
@@ -593,7 +654,7 @@ PYEOF
         [ -n "$MONDAYS" ] && ARGV+=("--monitor-warn=${MONDAYS}d" "--monitor-crit=$(( (MONDAYS * 3 + 1) / 2 ))d")
         info "Replika $NAME" "Liczę plan..."
         if ! "${ARGV[@]}" --plan >"$TMPD/plan.txt" 2>&1; then
-            grep -E '^FATAL' "$TMPD/plan.txt" | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)) >"$TMPD/why.txt"
+            verb_refusal "$TMPD/plan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
             [ -s "$TMPD/why.txt" ] || tail -5 "$TMPD/plan.txt" >"$TMPD/why.txt"
             wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
             step=2; continue
@@ -659,32 +720,31 @@ PYEOF
             fi
             step=5; continue
         fi
-        clear 2>/dev/null
-        echo "\$ $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--install --yes"; echo
-        "${ARGV[@]}" --install --yes 2>&1 | tee "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+        : >"$TMPD/run.log"
+        RC=0; run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "${ARGV[@]}" --install --yes || RC=$?
         if [ "$RC" -eq 0 ] && [ "$TRIG" = yes ]; then
-            echo; echo "\$ $(shq "$ZB") install-media-trigger --install"
-            "$ZB" install-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "$ZB" install-media-trigger --install || RC=$?
         fi
         if [ "$RC" -eq 0 ] && [ "${UNTRIG:-no}" = yes ]; then
-            echo; echo "\$ $(shq "$ZB") remove-media-trigger --install"
-            "$ZB" remove-media-trigger --install 2>&1 | tee -a "$TMPD/run.log"; RC=${PIPESTATUS[0]}
+            run_progress "Replika $NAME: instaluję" "$TMPD/run.log" "$ZB" remove-media-trigger --install || RC=$?
         fi
         if [ -n "${ZFS_TUI_LOG:-}" ]; then
             { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
         fi
-        echo
         if [ "$RC" -eq 0 ]; then
             # U11 (właściciel 2026-10-19): pełne zdania, bez skrótu "F7 na F6".
             if [ "$SCHED" = on-insert ]; then _first="ruszy po włożeniu dysku"
             elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="ruszy po włożeniu dysku albo o czasie z harmonogramu"
             else _first="ruszy o czasie z harmonogramu"; fi
-            echo "=== GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
-            echo "    Pierwsza kopia $_first."
-            echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
-            echo "    Enter = powrót do GUI"
-        else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- nic nie zainstalowano; powód w linii FATAL powyżej. Enter = dalej"; fi
-        [ -t 0 ] && read -r _
+            { echo "GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
+              echo "    Pierwsza kopia $_first."
+              echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
+            } >"$TMPD/result.txt"
+            result_box "Replika $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+        else
+            echo "Nie udało się -- nic nie zainstalowano." >"$TMPD/result.txt"
+            result_box "Replika $NAME: instaluję" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+        fi
         exit "$RC" ;;
     esac
 done

@@ -280,6 +280,17 @@ zfs() {
             for a in "$@"; do [ "$a" = "-r" ] && rec=1; done
             if [ "$rec" -eq 0 ]; then
                 [ "$ZFS_LIST_RC" -eq 0 ] || return "$ZFS_LIST_RC"
+                # REV-164 R1: tank/old, granted last time and narrowed away now.
+                if [ "${*: -1}" = tank/old ]; then
+                    case " $* " in
+                        *" snapshot "*) [ "$ZFS_OLD_MODE" = snapfail ] && { echo "cannot iterate: permission denied" >&2; return 1; }
+                                        echo "tank/old@s1"; return 0 ;;
+                    esac
+                    case "$ZFS_OLD_MODE" in
+                        gone)     echo "cannot open 'tank/old': dataset does not exist" >&2; return 1 ;;
+                        listfail) echo "cannot open 'tank/old': permission denied" >&2; return 1 ;;
+                    esac
+                fi
                 printf '%s\n' "${*: -1}"
                 return 0
             fi
@@ -297,9 +308,14 @@ zfs() {
             printf '%s\n' "$ZFS_GET_USED"
             ;;
         allow|unallow) return 0 ;;
+        holds)
+            [ "$ZFS_OLD_MODE" = holdsfail ] && { echo "permission denied" >&2; return 1; }
+            [ "$ZFS_OLD_MODE" = held ] && printf 'tank/old@s1\t%s\tWed Oct 21 2026\n' "$COMMIT_SCOPE_HOLD_TAG"
+            return 0 ;;
     esac
     return 0
 }
+ZFS_OLD_MODE=""
 zfs_allow_count() { grep -c '^allow ' "$ZFS_LOG" 2>/dev/null || true; }
 zfs_reset() { : > "$ZFS_LOG"; : > "$ZFS_LISTR_COUNT"; ZFS_DRIFT_AFTER=0
               SCOPE_READ_RC=0; ZFS_LIST_RC=0; ZFS_LISTR_RC=0; ZFS_GET_RC=0; }
@@ -477,6 +493,54 @@ if [ "$rc" -ne 0 ] && [ "$(zfs_allow_count)" -eq 0 ]         && printf '%s' "$ou
 else
     bad "consent: a swapped dataset with the same count stops the grant"         "rc=$rc allow=$(zfs_allow_count)" "out=$out"
 fi
+zfs_reset
+
+# ---------------------------------------------------------------------------
+# REV-20261021-164 R1: narrowing (revoke-on-narrow) must not read a failed zfs read as
+# "gone" (dropped from the record) or as "no hold" (revoked mid-transfer). tank/old was
+# granted last time and is not in the new scope. The SHIPPED commit_scope_dataset_held
+# (and zfs_ds_presence) run here; the suite's own stub is put back afterwards.
+# ---------------------------------------------------------------------------
+eval "$(product_fn "$DEPLOY_SRC" commit_scope_dataset_held)"
+grep -q '^zfs_ds_presence() {' "$DEPLOY_SRC" && eval "$(product_fn "$DEPLOY_SRC" zfs_ds_presence)"
+narrow_case() {   # <mode> -> rc in $rc, output in $out
+    join_case_reset
+    ZFS_OLD_MODE="$1"
+    PEER_JOIN_GRANTED_DATASETS="tank/data tank/data/a tank/data/b tank/old"
+    printf 'PEER_JOIN_GRANTED_DATASETS="%s"\n' "$PEER_JOIN_GRANTED_DATASETS" > "$COMMIT_MPATH"
+    out="$(guided_join_scope pve1 <<< '3' 2>&1)"; rc=$?
+    ZFS_OLD_MODE=""
+}
+old_unallowed() { grep -q '^unallow .*tank/old' "$ZFS_LOG"; }
+old_recorded()  { grep -q 'tank/old' "$COMMIT_MPATH"; }
+for m in listfail snapfail holdsfail; do
+    narrow_case "$m"
+    if [ "$rc" -ne 0 ] && [ "$(zfs_allow_count)" -eq 0 ] && ! old_unallowed && old_recorded \
+       && printf '%s' "$out" | grep -q "refusing to commit the scope for 'pve1'"; then
+        ok "REV-164 R1 narrowing: $m on a previously granted dataset -> refused before any allow/unallow, record kept"
+    else
+        bad "REV-164 R1 narrowing: $m -> refused, nothing changed" "rc=$rc allow=$(zfs_allow_count) unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+    fi
+done
+narrow_case held
+if [ "$rc" -eq 0 ] && ! old_unallowed && old_recorded; then
+    ok "REV-164 R1 narrowing: held -> left granted and recorded, not revoked"
+else
+    bad "REV-164 R1 narrowing: held" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+narrow_case clean
+if [ "$rc" -eq 0 ] && old_unallowed && ! old_recorded; then
+    ok "REV-164 R1 narrowing: not held -> revoked and dropped from the record"
+else
+    bad "REV-164 R1 narrowing: not held" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+narrow_case gone
+if [ "$rc" -eq 0 ] && ! old_unallowed && ! old_recorded; then
+    ok "REV-164 R1 narrowing: 'dataset does not exist' -> nothing to revoke, dropped from the record"
+else
+    bad "REV-164 R1 narrowing: gone" "rc=$rc unallow_old=$(old_unallowed && echo yes || echo no) manifest=$(cat "$COMMIT_MPATH")" "out=$(printf '%s' "$out" | tail -3)"
+fi
+commit_scope_dataset_held() { return 1; }
 zfs_reset
 
 # ---------------------------------------------------------------------------
@@ -678,6 +742,69 @@ grep -q 'leave_end_account_processes "$account"' "$REPO/deploy.sh" \
     && ok "K6: --leave calls it before userdel and again before the one retry" \
     || bad "K6: --leave does not call leave_end_account_processes before userdel and its retry"
 rm -rf "$K6"
+
+# ---------------------------------------------------------------------------
+# REV-20261021-164: --leave on a delegated account must not read a failed zfs read as
+# "gone" or "no grant left" and go on to userdel. The SHIPPED do_leave (with
+# commit_scope_dataset_held and leave_ds_exists) runs over stub account/zfs commands.
+# Datasets: tank/a (granted to uid 1003, account acct) and tank/gone ("dataset does not
+# exist" -- the documented absence). LV_MODE picks the failure; listfail_N fails the Nth
+# plain `zfs list` of tank/a (1 = hold check, 2 = revoke, 3 = verification).
+# ---------------------------------------------------------------------------
+eval "$(product_fn "$DEPLOY_SRC" commit_scope_dataset_held)"
+# leave_ds_exists is absent from a deploy.sh older than REV-164 (the negative control).
+grep -q '^leave_ds_exists() {' "$DEPLOY_SRC" && eval "$(product_fn "$DEPLOY_SRC" leave_ds_exists)"
+eval "$(product_fn "$DEPLOY_SRC" do_leave)"
+L4="$TMPD/rev164"
+lv_run() {   # <mode> -> "rc|userdel|manifest|out" ; manifest = kept|removed
+    rm -rf "$L4"; mkdir -p "$L4"; : > "$L4/m.conf"; : > "$L4/grant"; : > "$L4/userdel"; echo 0 > "$L4/n"
+    local out rc
+    out=$( (
+        LV_MODE="$1"
+        die() { echo "DIE $*"; exit 1; }; warn() { echo "WARN $*"; }; log() { :; }
+        peer_manifest_path() { echo "$L4/m.conf"; }
+        record_load() { PEER_JOIN_ROLE=pull; PEER_JOIN_ACCOUNT=acct; PEER_JOIN_ACCOUNT_UID=1003; PEER_JOIN_GRANTED_DATASETS="tank/a tank/gone"; PEER_JOIN_AS=""; }
+        id() { [ "$1" = -u ] && { echo 1003; return 0; }; return 0; }
+        passwd() { :; }; revoke_quiesce_grant() { :; }; leave_end_account_processes() { :; }
+        userdel() { echo "$*" >> "$L4/userdel"; }
+        peer_scope_path() { echo "$L4/scope"; }; peer_scope_granted_hash_path() { echo "$L4/hash"; }
+        PAIR_GATE_STATE_DIR="$L4/gate"; COMMIT_SCOPE_HOLD_TAG=zfs-commit-hold
+        zfs() {
+            local last="${*: -1}" n
+            case "$1" in
+                list)
+                    [ "$last" = tank/gone ] && { echo "cannot open 'tank/gone': dataset does not exist" >&2; return 1; }
+                    case " $* " in
+                        *" snapshot "*) [ "$LV_MODE" = holdfail ] && { echo "cannot iterate: permission denied" >&2; return 1; }
+                                        echo "tank/a@s1"; return 0 ;;
+                    esac
+                    n=$(( $(cat "$L4/n") + 1 )); echo "$n" > "$L4/n"
+                    [ "$LV_MODE" = "listfail_$n" ] && { echo "cannot open 'tank/a': permission denied" >&2; return 1; }
+                    echo "tank/a" ;;
+                holds)   return 0 ;;
+                unallow) case "$LV_MODE" in unallowfail|unallowallowfail) return 1 ;; esac; rm -f "$L4/grant" ;;
+                allow)   case "$LV_MODE" in *allowfail) [ "$LV_MODE" != unallowfail ] && { echo "permission denied" >&2; return 1; } ;; esac
+                         [ -e "$L4/grant" ] && printf -- '---- Permissions on tank/a ----\nLocal+Descendent permissions:\n\tuser acct snapshot,destroy,mount\n'
+                         return 0 ;;
+            esac
+        }
+        do_leave lbl
+    ) 2>&1 ); rc=$?
+    printf '%s|%s|%s|%s' "$rc" "$(cat "$L4/userdel")" "$([ -e "$L4/m.conf" ] && echo kept || echo removed)" "$out"
+}
+lv_check() {   # <mode> <want rc|userdel|manifest prefix> <want text in output> <name>
+    local r; r="$(lv_run "$1")"
+    case "$r" in "$2"*"$3"*) ok "REV-164 --leave: $4" ;; *) bad "REV-164 --leave: $4" "got: $r" ;; esac
+}
+lv_check clean            "0|-r acct|removed|" ""                                "clean: grant revoked and verified gone, account removed, manifest removed (tank/gone = documented absence)"
+lv_check unallowfail      "1||kept|"           "still show a grant for uid 1003"  "revoke fails, grant still read back -> refused, account/manifest kept"
+lv_check listfail_1       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the hold check -> refused, nothing changed"
+lv_check holdfail         "1||kept|"           "could not read the snapshots or holds of tank/a" "snapshot/hold read fails -> refused, not 'no hold'"
+lv_check listfail_2       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the revoke -> refused, not 'gone'"
+lv_check listfail_3       "1||kept|"           "could not tell whether tank/a exists" "zfs list fails at the verification -> refused, no userdel"
+lv_check allowfail        "1||kept|"           "could not read the zfs delegations on tank/a" "zfs allow fails at the verification -> refused, no userdel"
+lv_check unallowallowfail "1||kept|"           "could not read the zfs delegations on tank/a" "revoke fails AND the re-read fails -> refused, no userdel"
+rm -rf "$L4"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

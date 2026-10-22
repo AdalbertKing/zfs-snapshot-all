@@ -39,11 +39,64 @@ fit() {    # <wiersze tekstu+listy> -> wysokość okna, nie większa niż ekran
 wt() {     # whiptail z odpowiedzią w WT_OUT; rc: 0 = OK, inne = wstecz
     WT_OUT=$("$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" "$@" 3>&1 1>&2 2>&3)
 }
+# INFOBOX MUSI ZOSTAĆ NA EKRANIE (kampania 2026-10-22, pve10): przy TERM=xterm (PuTTY, tmux)
+# whiptail rysuje na DRUGIM ekranie terminala (smcup) i przy wyjściu go zdejmuje -- infobox
+# znikał w tej samej chwili, a operator patrzył na czarny ekran. Opis "linux" nie przełącza
+# ekranu, a ma te same kolory; ramki newt w UTF-8 rysuje i tak znakami Unicode.
+INFO_TERM="${WT_INFO_TERM:-linux}"
 info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
-    "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$1" --infobox "$2" 7 "$W"
+    TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$1" --infobox "$2" 7 "$W"
 }
 lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
     local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
+}
+# U67 (owner 2026-10-21): an okno odmowy shows WHY, not only the verb's closing FATAL line --
+# the reason a verb prints above it ("!!! gen-cron.sh refused ...", "... error: ...") is
+# what tells the operator what to change. Lines with !!!, 'error:' and FATAL, prefixes
+# stripped, each once, the last six.
+verb_refusal() {   # <plik z wyjściem czasownika> -> przyczyna odmowy do okna
+    grep -E '^!!! |error: |^FATAL: ' "$1" 2>/dev/null \
+        | sed -e 's/^!!! //' -e 's/^[[:space:]]*//' -e 's/^FATAL: //' | awk '!seen[$0]++' | tail -6
+}
+# OKNO POSTĘPU (U66/U64, właściciel 2026-10-21: "czarny ekran ponad 15 sekund i dopiero powrót"):
+# polecenie biegnie w tle z wyjściem do dziennika, okno co sekundę pokazuje, ile już trwa, i
+# ostatnie linie dziennika. Bez terminala dla polecenia (stdin z /dev/null): pytanie w terminalu
+# kończy się odmową, nie zawieszeniem za oknem. Ctrl-C przerywa polecenie.
+run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dziennik dopisywany
+    local t="$1" log="$2" pid rc=0 s0=$SECONDS n i
+    shift 2
+    case "$1" in */*) { printf '$'; printf ' %s' "$@"; printf '\n\n'; } >>"$log" ;; esac   # nagłówek dla programu, nie dla funkcji
+    "$@" >>"$log" 2>&1 </dev/null &
+    pid=$!
+    trap 'kill "$pid" 2>/dev/null' INT
+    while kill -0 "$pid" 2>/dev/null; do
+        geom
+        n=$((H - 8)); [ "$n" -gt 14 ] && n=14; [ "$n" -lt 3 ] && n=3
+        TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t -- trwa $((SECONDS - s0)) s" \
+              --infobox "$(tail -n "$n" "$log" | cut -c1-$((W - 6)))" $((n + 4)) "$W"
+        for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    done
+    wait "$pid" || rc=$?
+    trap - INT
+    return "$rc"
+}
+# Wynik po run_progress: GOTOWE krótko; odmowa = przyczyna (verb_refusal) i koniec dziennika.
+result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
+    local t="$1" rc="$2" log="$3" okt="$4" bad="${5:-Nie udało się.}"
+    geom
+    if [ "$rc" -eq 0 ]; then
+        local l; l=$(printf '%b
+' "$okt" | fold -s -w $((W - 4)) | grep -c '')
+        l=$((l + 6)); [ "$l" -gt "$H" ] && l=$H
+        wt --title "$t" --msgbox "$okt" "$l" "$W"
+        return 0
+    fi
+    { printf '%s  (rc=%s)\n\n' "$bad" "$rc"
+      if [ -n "$(verb_refusal "$log")" ]; then printf 'Powód:\n'; verb_refusal "$log" | sed 's/^/  /'; printf '\n'; fi
+      printf 'Koniec dziennika:\n'; tail -n 15 "$log" | sed 's/^/  /'
+    } >"$log.view"
+    wt --title "$t" --textbox "$log.view" "$H" "$W"
+    return 0
 }
 clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
     local t="$1" m="$2"
@@ -129,18 +182,20 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
     local t="$1" x="$2" d="$3" c="$4" i v lb w items=()
     geom
     w=$((W - 10))
+    local pad=17 nm      # kolumna wartości: najdłuższa nazwa + 2 (U65: "* Retencja źródła" się nie mieściła)
+    for nm in "${CARD_NAMES[@]}"; do [ $((${#nm} + 2)) -gt "$pad" ] && pad=$((${#nm} + 2)); done
     for i in "${!CARD_TAGS[@]}"; do
         v="${CARD_VALUES[$i]:-…}"
         # Wyrównanie po ZNAKACH (${#}), nie bajtach: printf %-16s liczy bajty i "Źródło"
         # wypadało z kolumny.
-        lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt 17 ]; do lb="$lb "; done; lb="$lb$v"
+        lb="${CARD_NAMES[$i]}"; while [ "${#lb}" -lt "$pad" ]; do lb="$lb "; done; lb="$lb$v"
         if [ "${CARD_FIXED[$i]:-0}" = 1 ]; then
             items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" $((w - 10)))  (stałe)")
         else
             items+=("${CARD_TAGS[$i]}" "$(clip_label "$lb" "$w")")
         fi
     done
-    items+=(__sep__ "──────────────────────────────────────────")
+    [ "${#CARD_ACT_TAGS[@]}" -gt 0 ] && items+=(__sep__ "──────────────────────────────────────────")
     for i in "${!CARD_ACT_TAGS[@]}"; do items+=("${CARD_ACT_TAGS[$i]}" "$(clip_label "${CARD_ACT_LABELS[$i]}" "$w")"); done
     wt --title "$t" --ok-button "Wybierz" --cancel-button "$c" --notags --default-item "$d" \
        --menu "$x" "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$((${#items[@]} / 2))" "${items[@]}"

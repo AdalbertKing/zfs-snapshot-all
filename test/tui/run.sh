@@ -201,8 +201,10 @@ fi
 # ekran F1 nadal opisywal jego siedem krokow i klawisze, ktorych juz nie ma --
 # tekst pomocy to tez ekran, i tez sie dezaktualizuje.
 H1="$(screen zadania F1 --width 100 --height 120)"
-if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && has "$H1" 'kreator w 10 krokach' && has "$H1" 'whiptail'; then
-    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (10 okien whiptaila), a nie usunietego poprzednika"
+# A-1 (kampania 2026-10-21): po przebudowie (U66) kreator idzie krok po kroku z podsumowaniem.
+if ! has "$H1" 'kreator w 7 krokach' && ! has "$H1" 'Enter na źródle/celu' && ! has "$H1" 'kreator w 10 krokach' \
+   && has "$H1" 'kreator krok po kroku' && has "$H1" 'Wstecz = poprzedni krok' && has "$H1" 'Zaawansowane' && has "$H1" 'whiptail'; then
+    ok "pomoc: opisuje kreator, ktory NAPRAWDE sie otwiera (krok po kroku, podsumowanie, Zaawansowane), a nie poprzednikow"
 else
     bad "pomoc: nieaktualny opis kreatora" "$(printf '%s' "$H1" | sed -n '4,14p')"
 fi
@@ -745,6 +747,24 @@ if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-tes
 else
     bad "relacje: błąd biegu na F3" "$(printf '%s\n' "$GER" | grep -E '^║ (sync|backup)-test')"
 fi
+# U61 (kampania 2026-10-21): relacja "błąd biegu", panel "Ostatni bieg OK", wiersz datasetu
+# "aktualne" -- trzy werdykty o tym samym. Teraz panel mowi BŁĄD i przyczyne (ktory dataset,
+# dlaczego), a wiersz pary nieudanego zadania to "błąd biegu"; pary udanych zostaja "aktualne".
+u61_ok=0; u61_dump=""
+for u61k in "" down down,down; do
+    U61="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 --height 60 --keys "$u61k" 2>&1)"
+    has "$U61" 'Przyczyna' || continue
+    u61_dump="$U61"
+    if hasE "$U61" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
+       && ! hasE "$U61" 'Ostatni bieg +OK' && printf '%s\n' "$U61" | grep 'lab/b' | grep -q 'błąd biegu' \
+       && printf '%s\n' "$U61" | grep 'lab/c' | grep -vq 'błąd biegu'; then u61_ok=1; fi
+    break
+done
+if [ "$u61_ok" -eq 1 ]; then
+    ok "relacje U61: jeden werdykt -- panel 'Ostatni bieg BŁĄD ... rc=1' i 'Przyczyna: b: Refusing...', wiersz pary b 'błąd biegu', c bez bledu"
+else
+    bad "relacje U61: sprzeczne werdykty" "$(printf '%s\n' "$u61_dump" | grep -E 'Ostatni bieg|Przyczyna|lab/[abcd]' | head -10)"
+fi
 rm -f "$GEJ" "$GES"
 # Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
 # strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.
@@ -1152,9 +1172,17 @@ if grep -Eq "zfs-backup.sh'? edit-relation lab-ct201 --ask\$" "$XL"; then
 else
     bad "akcje: e -> edit-relation --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
+# U65: 's' i 'c' w oknie relacji -- zapis jako szablon i reczna edycja WPROST (EDIT_DO), bez karty zmian.
+A="$(act down,enter,s)"; XS="$(cat "$XL")"
+A="$(act down,enter,c)"; XC="$(cat "$XL")"
+if printf '%s' "$XS" | grep -Eq "^EDIT_DO=zapisz .*zfs-backup.sh'? edit-relation lab-ct201 --ask\$"    && printf '%s' "$XC" | grep -Eq "^EDIT_DO=config .*zfs-backup.sh'? edit-relation lab-ct201 --ask\$"; then
+    ok "akcje: 's'/'c' w oknie relacji -> edit-relation --ask z EDIT_DO=zapisz/config (U65)"
+else
+    bad "akcje: s/c w oknie relacji" "$XS" "$XC"
+fi
 A="$(act down,enter)"
-# Odzysk przeszedł na F11 (2026-10-18): w stopce tylko 'e zmień'.
-if has "$A" 'e zmień   Esc zamyka'; then
+# Odzysk przeszedł na F11 (2026-10-18); U65: w stopce 'e zmień', 's' i 'c'.
+if has "$A" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka'; then
     ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień'), bez 'p przywróć'"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
@@ -1351,7 +1379,7 @@ if has "$WE" 'Relacje na kolektorze pve10' && ! has "$WE" '╔═ Relacja lab-ct
 else
     bad "okno: Esc" "$WE"
 fi
-if hasE "$(screen relacje down,enter)" 'Esc zamyka   strzałki/PgUp/PgDn przewijają   [0-9]+-[0-9]+ z [0-9]+'; then
+if hasE "$(screen relacje down,enter)" 'Esc zamyka +[0-9]+-[0-9]+ z [0-9]+'; then
     ok "okno: stopka mowi, jak wyjsc i ile jest do przewiniecia"
 else
     bad "okno: stopka" "$W"
@@ -1605,7 +1633,7 @@ else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
 SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
-if has "$SOE" 'e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
+if has "$SOE" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
     ok "relacje: okno relacji snaponly -- 'e zmień' jak w kazdej relacji, bez 'p przywróć' (nie ma kopii)"
 else
     bad "relacje: stopka okna snaponly" "$SOE"
@@ -2248,6 +2276,7 @@ cat > "$NR/bin/tree" <<'EOF'
 #!/bin/bash
 n=$(cat "$NR_DIR/tree.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/tree.n"
 k=$(sed -n "${n}p" "$NR_DIR/treekeys" 2>/dev/null); [ -n "$k" ] || k=esc
+pv=""; for a in "$@"; do [ "$pv" = --spec ] && cp "$a" "$NR_DIR/tree-spec.last"; pv="$a"; done
 "$TREE_PY" "$TREE_REPO/tui/tree.py" --keys "$k" "$@" >> "$NR_DIR/tree.log"
 rc=$?
 echo "RC: $rc" >> "$NR_DIR/tree.log"
@@ -2255,7 +2284,7 @@ exit "$rc"
 EOF
 chmod +x "$NR/bin/whiptail" "$NR/bin/zb" "$NR/bin/tree"
 nr_run() {   # <plik odpowiedzi jako tekst> [ENV=...] -> stdout kreatora; dzienniki w $NR
-    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys"
+    rm -f "$NR/wt.log" "$NR/wt.n" "$NR/zb.log" "$NR/installed" "$NR"/freed-* "$NR"/new-relation-*.cmd "$NR/tree.n" "$NR/tree.log" "$NR/treekeys" "$NR/tree-spec.last"
     printf '%s' "$1" > "$NR/answers"; shift
     ( export HOME="$NR" NR_DIR="$NR" NR_FIX="$P10" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb" PYTHON="$PY" "$@"
       # Drzewo wyboru datasetow (tui/tree.py) bez terminala: klawisze z NR_TREE, jedna linia
@@ -2276,9 +2305,13 @@ T=$'\t'
 NRT="0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2305,9 +2338,13 @@ w17_ans() {   # <odpowiedz checklisty "Ustawienia dodatkowe">
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}$1
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2370,8 +2407,6 @@ SOW="0${T}snaponly
 0${T}
 0${T}d7h24
 0${T}pve9b
-0${T}root
-0${T}grant
 0${T}create
 0${T}
 0${T}
@@ -2387,9 +2422,13 @@ else
 fi
 NRTS="0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2459,20 +2498,19 @@ else
 fi
 # 3. wyjatki otwarte drugi raz pamietaja stan (odznaczone wraca odznaczone)
 # X12: dawne okna wyjatkow zniknely. "Otwarte drugi raz" to teraz ponowne otwarcie pola Datasety:
-# Wstecz z menu "Dokad" (odpowiedz `1`) wraca na KARTE (U25), z karty `ds` otwiera drzewo, ktore
+# U66: Wstecz z menu "Dokad" (odpowiedz `1`) to POPRZEDNI krok -- drzewo, ktore
 # dostaje z koszyka ten sam wybor -- wiec drugi ekran w tree.log ma subvol-302 znow odznaczony,
 # a 301 zaznaczony. Dwa wywolania okna = dwie linie NR_TREE.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 1${T}
-0${T}ds
 ${NRT}" NR_TREE='goto:hdd/ct,space,goto:hdd/ct/subvol-302-disk-0,space,enter|enter')
 NRTL="$(cat "$NR/tree.log" 2>/dev/null)"
 if has "$NROUT" " --exclude-child=^hdd/ct/subvol-302-disk-0\$ " && ! has "$NROUT" "subvol-301-disk-0" \
    && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 2 ] && [ "$(grep -cF '[ ] subvol-302-disk-0' "$NR/tree.log")" -eq 2 ] \
    && [ "$(grep -cF '[x] subvol-301-disk-0' "$NR/tree.log")" -eq 2 ] && ! has "$NRTL" '[ ] subvol-301-disk-0'; then
-    ok "new-relation: drzewo otwarte drugi raz (Wstecz z pola Cel, karta, ds) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
+    ok "new-relation: drzewo otwarte drugi raz (Wstecz z kroku Dokad, U66) pamieta stan -- odznaczone 302 wraca odznaczone, 301 zaznaczone; w komendzie tylko 302"
 else
     bad "new-relation: stan wyjatkow" "$NROUT" "$NRTL"
 fi
@@ -2505,19 +2543,22 @@ else
 fi
 # 3d. zaznacz i odznacz jedyne miejsce -> Enter odmawia, Esc = Wstecz; Wstecz x3 = wyjscie
 # X12: dawne "Usun pozycje -> znow lista miejsc" to Spacja na zaznaczonym miejscu (znika) i Esc.
-# U25: Wstecz z drzewa wraca na KARTE, nie do pola hosta; zostaje jedna odpowiedz `1`: karta
-# (Wyjdz). Okno drzewa wola sie RAZ.
+# U66: Wstecz z drzewa = poprzedni krok (host, odpowiedz `1` = Wstecz), z rodzaju (`1`) pytanie
+# "przerwac?" (`0` = Przerwij). Okno drzewa wola sie RAZ.
 NROUT=$(nr_run "0${T}backup
 0${T}192.168.28.98
 0${T}
 1${T}
+1${T}
+0${T}
 " NR_TREE='goto:hdd/test-kreator,space,goto:hdd/test-kreator,space,esc'); NRRC=$?
 # Dawne "lista miejsc pojawia sie drugi raz" -- okna listy juz nie ma. Zostaje: kreator konczy sie
 # rc=1, drzewo bylo wolane dokladnie raz (jeden ekran w tree.log) i skonczylo sie Wstecz (rc=1 tree.py).
 if [ "$NRRC" -eq 1 ] && [ "$(grep -c '^┌─' "$NR/tree.log")" -eq 1 ] && [ "$(grep -c '^RC: 1$' "$NR/tree.log")" -eq 1 ] \
    && ! grep -q '^RC: 0$' "$NR/tree.log" && has "$(cat "$NR/tree.log")" 'Wybrane miejsca: 0' \
-   && has "$NROUT" "przerwane, nic nie zmieniono" && grep -qF 'Relacja (nowa)' "$NR/wt.log"; then
-    ok "new-relation: zdjecie jedynego miejsca i Esc w drzewie = Wstecz (jedno wywolanie okna, rc=1); Wstecz prowadzi na karte, Wyjdz z karty konczy kreator"
+   && has "$NROUT" "przerwane, nic nie zmieniono" && [ "$(grep -c 'Z którego hosta? ~ --ok-button' "$NR/wt.log")" -eq 2 ] \
+   && grep -qF 'Nowa relacja: przerwać?' "$NR/wt.log"; then
+    ok "new-relation: zdjecie jedynego miejsca i Esc w drzewie = Wstecz (jedno wywolanie okna, rc=1); Wstecz = poprzedni krok (host), Wstecz z rodzaju pyta o przerwanie (U66)"
 else
     bad "new-relation: usuwanie z koszyka" "rc=$NRRC" "$(cat "$NR/tree.log" 2>/dev/null)" "$(cat "$NR/wt.log")"
 fi
@@ -2532,20 +2573,23 @@ NROUT=$(nr_run "0${T}backup
 0${T}default
 0${T}lab-ct201
 0${T}
-1${T}
+0${T}pve9b
 0${T}profile
 0${T}d30
-0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}zfsbackup
+0${T}extra
 0${T}grant|quies
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
 " NR_TREE="$NRTK")
 if has "$NROUT" "CMD: --source=192.168.28.98:hdd/test-kreator --target=hdd/backups --profile=d30 --name=pve9b --exclude-family=__replicate_,vzdump,__migration__ --local-user=zfsbackup --grant-remotely --grant-quiesce --install --yes " \
    && grep -qF 'Nazwa zajęta' "$NR/wt.log" && [ "$(grep -c '^list-profiles' "$NR/zb.log")" -eq 1 ] && [ "$(grep -c '^status' "$NR/zb.log")" -eq 1 ]; then
-    ok "new-relation: pola cel-konto -- zajeta nazwa odmowiona, Wstecz z nazwy na karte i stamtad szablon zmienia wybor (d30), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
+    ok "new-relation: pola cel-konto -- zajeta nazwa odmowiona, z podsumowania szablon zmienia wybor (d30, U66), konto delegowane = --local-user; list-profiles i status czytane RAZ na przebieg (cofanie nie kaze czekac od nowa)"
 else
     bad "new-relation: pola cel-konto" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -F 'Nazwa' "$NR/wt.log" | cut -c1-200)"
 fi
@@ -2606,9 +2650,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2631,9 +2679,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d7h24-age
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2660,9 +2712,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}d30h24
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2680,9 +2736,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2703,9 +2763,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}pasywnie
@@ -2735,14 +2799,40 @@ fi
 # pokazuje menu "Relacja (nowa)" z kursorem na `create`, PO oknie "Ustawienia dodatkowe" i PRZED
 # "Podsumowanie". Numery linii dziennika: kazde okno to jedna linia, wiec kolejnosc = kolejnosc numerow.
 NRLN_X="$(grep -n -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRLN_C="$(grep -n -F 'Relacja (nowa)' "$NR/wt.log" | grep -F -e '--menu' | head -1 | cut -d: -f1)"
 NRLN_S="$(grep -n -F 'Podsumowanie' "$NR/wt.log" | head -1 | cut -d: -f1)"
-NRCARD="$(grep -F 'Relacja (nowa)' "$NR/wt.log" | grep -F -e '--menu' | head -1)"
+NRLN_C="$(grep -n -F 'Nowa relacja -- podsumowanie' "$NR/wt.log" | grep -F -e '--menu' | awk -F: -v s="${NRLN_S:-0}" '$1 < s { n = $1 } END { print n }')"
+NRCARD="$(sed -n "${NRLN_C:-1}p" "$NR/wt.log")"
 if [ -n "$NRLN_X" ] && [ -n "$NRLN_C" ] && [ -n "$NRLN_S" ] && [ "$NRLN_X" -lt "$NRLN_C" ] && [ "$NRLN_C" -lt "$NRLN_S" ] \
    && has "$NRCARD" '--default-item ~ create ~'; then
-    ok "new-relation: karta 'Relacja (nowa)' z kursorem na create pojawia sie PO 'Ustawienia dodatkowe' i PRZED 'Podsumowanie' (U25)"
+    ok "new-relation: podsumowanie kreatora z kursorem na create pojawia sie PO 'Ustawienia dodatkowe' (Zaawansowane) i PRZED 'Podsumowanie' (U66)"
 else
     bad "new-relation: karta przed podsumowaniem" "extra=$NRLN_X karta=$NRLN_C podsumowanie=$NRLN_S" "$(printf '%s' "$NRCARD" | cut -c1-300)"
+fi
+
+# U68: "Przegladaj..." w kroku Dokad to DRZEWO w trybie jednej pozycji (wczesniej plaska lista
+# whiptaila z obcietymi nazwami). Wnetrza ladowisk innych relacji ukryte i policzone w legendzie.
+NROUT=$(nr_run "0${T}backup
+0${T}192.168.28.98
+0${T}
+0${T}__browse__
+0${T}default
+0${T}pve9b
+0${T}create
+0${T}
+0${T}
+" NR_TREE="$NRTK|goto:hdd,enter")
+if has "$NROUT" " --target=hdd " && ! grep -qF 'Dokąd -- przeglądaj ~ --ok-button' "$NR/wt.log" \
+   && "$PY" - "$NR/tree-spec.last" <<'PYEOF'
+import sys, json
+s = json.load(open(sys.argv[1], encoding="utf-8")); names = [d["name"] for d in s["datasets"]]
+ok = s.get("single") is True and "hdd" in names and "hdd/backups" in names \
+     and not any(n.startswith("hdd/backups/192.168.28.99") for n in names) and "ukryto" in s.get("legend", "")
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "new-relation: Przegladaj w kroku Dokad = drzewo jednej pozycji (U68), kopie innych relacji ukryte i policzone, wybor idzie do --target"
+else
+    bad "new-relation: Przegladaj = drzewo" "$NROUT" "$(cat "$NR/tree-spec.last" 2>/dev/null | cut -c1-400)"
 fi
 
 # 3h. KOPIA LOKALNA (wlasciciel 2026-10-09): trzecia pozycja w kroku 1. Bez hosta i
@@ -2754,8 +2844,12 @@ NROUT=$(nr_run "0${T}local
 0${T}hdd/kopie
 0${T}default
 0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2774,13 +2868,12 @@ fi
 
 # 3i. SAME MIGAWKI (X27 S4, wlasciciel 2026-10-14: "A relacja robiaca tylko migawki w
 #     zrodle? Wsad? GUI?"): czwarta pozycja w oknie rodzaju. Kopia lokalna BEZ celu -- bez okna
-#     "Dokad", bez ustawien dodatkowych (konto -> karta -> podsumowanie), komenda = wsad local-backup z --target=
+#     "Dokad", bez ustawien dodatkowych (nazwa -> podsumowanie kreatora -> podsumowanie), komenda = wsad local-backup z --target=
 #     (pustym) i --install BEZ --yes: czasownik pusty cel potwierdza wzrokiem, wiec pyta
 #     sam w terminalu po WYKONAJ, jak przy wsadzie.
 NROUT=$(nr_run "0${T}snap
 0${T}default
 0${T}migawki-hdd-backups-192.168.28.99-hdd-lab
-0${T}root
 0${T}create
 0${T}
 0${T}
@@ -2806,9 +2899,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}192.168.28.99
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2847,8 +2944,9 @@ chmod +x "$NR/bin/zb-del"
 printf '0\t\n0\t\n' > "$DRD/answers"   # checklist: domyslne; potem yesno "WYKONAJ"
 DROUT=$( export NR_DIR="$DRD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-del"
          bash "$REPO/tui/delete-relation.sh" nazwa ) 2>"$DRD/err" </dev/null
-if has "$DROUT" "ZATRZYMANE" && has "$DROUT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DROUT" "uruchom to samo jeszcze raz" \
-   && ! has "$DROUT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DROUT" "GOTOWE"; then
+DRWT="$(cat "$DRD/wt.log")"   # od U66 wynik jest w oknie (--textbox), nie na stdout
+if has "$DRWT" "ZATRZYMANE" && has "$DRWT" "Rekord relacji 'nazwa' ZOSTAŁ" && has "$DRWT" "uruchom to samo jeszcze raz" \
+   && ! has "$DRWT" "USUNIĘTA Z POZOSTAŁOŚCIAMI" && ! has "$DRWT" "GOTOWE"; then
     ok "okno usuwania: gdy polowa zrodla nie wyszla i czasownik ZATRZYMAL sie przed purge (REV-144), okno mowi 'ZATRZYMANE, rekord ZOSTAL, uruchom to samo jeszcze raz' -- a nie 'usunieta z pozostalosciami'"
 else
     bad "okno usuwania: komunikat po zatrzymaniu" "$DROUT" "$(cat "$DRD/err")"
@@ -2885,7 +2983,7 @@ DRCL="$(grep -F -- '--checklist' "$DRD/wt.log" | head -1)"
 if ! has "$DRCL" 'Posprzątaj na źródle' && has "$DRCL" 'brak dostępu roota z tego hosta' \
    && has "$DRCL" 'cd /root/scripts/zfs-snapshot-all && ./deploy.sh --leave=pve10' \
    && grep -q -- '--check-source' "$DRD/argv" && grep -q -- 'nazwa --keep-source --yes' "$DRD/argv" \
-   && has "$DROUT" 'Na 10.0.0.9 zostało konto relacji'; then
+   && grep -qF 'Na 10.0.0.9 zostało konto relacji' "$DRD/wt.log"; then
     ok "okno usuwania: bez roota do zrodla -- bez pozycji 'Posprzątaj na źródle', z poleceniem do recznego sprzatania, usuniecie z --keep-source i przypomnienie na koncu (U16)"
 else
     bad "okno usuwania: brak roota do zrodla" "cl: $(printf '%s' "$DRCL" | cut -c1-300)" "argv: $(cat "$DRD/argv" 2>/dev/null)" "$DROUT"
@@ -2917,10 +3015,45 @@ SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
 if has "$SMENU" '── Alerty ──' && has "$SMENU" '── GUI ──' && has "$SMENU" 'root  (zfs-alert.conf)' && has "$SMENU" 'Wyślij mail próbny' \
    && ! printf '%s' "$SMENU" | grep -qE ' ~ -[^ ~]* ~ ── ' \
    && grep -qx 'settings set alerts.digest_time=06:30' "$SD/argv" && grep -qx 'settings set alerts.digest_time=06:30 --yes' "$SD/argv" \
-   && has "$SOUT" 'GOTOWE'; then
+   && grep -qF 'GOTOWE' "$SD/wt.log"; then
     ok "F10 okno ustawien: sekcje i zrodla wartosci z czasownika, zmiana jednej pozycji, Zapisz = plan i WYKONAJ (settings set K=V --yes)"
 else
     bad "F10 okno ustawien" "menu: $(printf '%s' "$SMENU" | cut -c1-300)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$SOUT" "$(cut -c1-200 "$SD/err")"
+fi
+
+# U53 + U54 (wlasciciel, A.4 2026-10-21): sekcje oddzielone pusta linia, opis klucza jako trzecia
+# kolumna; szablon nowej relacji (rodzaj "profile") = wybor z LISTY szablonow, bez ukrytych i
+# pochodnych (-src-), kursor na obecnym -- nie pole do wpisania.
+cat > "$NR/bin/zb-set2" <<'EOF'
+#!/bin/bash
+if [ "$1" = list-profiles ]; then
+    echo '{"profiles":[{"name":"d7h24","source":"package","description":"7 dobowych + 24 godzinowe"},{"name":"default","source":"package","description":"fabryczny: 12 miesiecy"},{"name":"relacja-x","source":"user","hidden":true,"description":"ukryty"},{"name":"d7h24-src-H24D3","source":"user","description":"pochodny"},{"name":"moj","source":"user","description":"moj szablon"}]}'
+    exit 0
+fi
+[ "$1" = settings ] || exit 9
+case "$2" in
+    --tsv) printf 'alerts.email\troot\tzfs-alert.conf\temail\tkto dostaje maile\n'
+           printf 'new_relation.template\tdefault\tdomyślne\tprofile\tszablon proponowany nowej relacji\n'; exit 0 ;;
+    set) printf '%s\n' "$*" >> "$NR_DIR/argv"
+         case " $* " in *" --yes "*) echo "settings: zapisane."; exit 0 ;; esac
+         echo "plan only. Nothing was changed."; exit 0 ;;
+esac
+exit 9
+EOF
+chmod +x "$NR/bin/zb-set2"
+SD="$NR/sd2"; rm -rf "$SD"; mkdir -p "$SD"
+printf '0\tnew_relation.template\n0\td7h24\n0\tzapisz\n0\t\n' > "$SD/answers"
+SOUT=$( export NR_DIR="$SD" WHIPTAIL="$NR/bin/whiptail" ZFS_BACKUP="$NR/bin/zb-set2"
+        bash "$REPO/tui/settings.sh" ) 2>"$SD/err" </dev/null
+SMENU="$(grep -F -- '--menu' "$SD/wt.log" | head -1)"
+SPROF="$(grep -F -- '--title ~ new_relation.template ~' "$SD/wt.log" | head -1)"
+if has "$SMENU" ' ~ #_new_relation ~   ~ ' && hasE "$SMENU" 'email +root  \(zfs-alert.conf\) +kto dostaje maile' \
+   && has "$SPROF" '--menu' && has "$SPROF" '--default-item ~ default ~' && has "$SPROF" ' ~ d7h24 ~ ' && has "$SPROF" ' ~ moj ~ ' \
+   && ! has "$SPROF" 'relacja-x' && ! has "$SPROF" 'src-H24D3' && ! has "$SPROF" '--inputbox' \
+   && grep -qx 'settings set new_relation.template=d7h24 --yes' "$SD/argv"; then
+    ok "F10 U53/U54: sekcje oddzielone, kolumna opisu; szablon nowej relacji z listy (bez ukrytych i -src-), kursor na obecnym, zapis settings set"
+else
+    bad "F10 U53/U54" "menu: $(printf '%s' "$SMENU" | cut -c1-400)" "prof: $(printf '%s' "$SPROF" | cut -c1-400)" "argv: $(cat "$SD/argv" 2>/dev/null)" "$(cut -c1-200 "$SD/err")"
 fi
 
 # 3i. KROK 9 TO CHECKLISTA, NIE EDYTOR Z WIERSZEM-WYJSCIEM.
@@ -2934,7 +3067,7 @@ fi
 # pseudo-akcja "dalej".
 NRL="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 if has "$NRL" '--checklist' && has "$NRL" -- '--ok-button ~ Dalej ~' && has "$NRL" -- '--cancel-button ~ Wstecz ~' \
-   && ! has "$NRL" 'Bez zmian' && ! has "$NRL" 'DALEJ --' && has "$NRL" 'SPACJA przełącza'; then
+   && ! has "$NRL" 'Bez zmian' && ! has "$NRL" 'DALEJ --' && has "$NRL" 'Ustawienia dodatkowe   [Spacja przełącza] ~' && ! has "$NRL" 'SPACJA' && ! has "$NRL" 'ENTER ='; then
     ok "new-relation: 'Ustawienia dodatkowe' to CHECKLISTA z przyciskami Dalej/Wstecz -- zadna pozycja listy nie udaje przycisku 'dalej' (wlasciciel, 2026-09-20)"
 else
     bad "new-relation: ksztalt kroku 9" "$(printf '%s' "$NRL" | cut -c1-400)"
@@ -2960,11 +3093,15 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
 0${T}
 0${T}zfsbackup
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -2983,14 +3120,20 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
 " NR_TREE="$NRTK"); NRRC=$?
-if [ "$NRRC" -eq 1 ] && has "$NROUT" "ZATRZYMANE ZGODNIE Z WYBOREM" && has "$NROUT" "deploy.sh --commit-scope=pve10" && ! has "$NROUT" "NIE UDAŁO SIĘ" \
+# U66 czesc 2: wynik jest w OKNIE (textbox -> dziennik atrapy), nie na czarnym ekranie.
+if [ "$NRRC" -eq 1 ] && grep -qF "ZATRZYMANE ZGODNIE Z WYBOREM" "$NR/wt.log" && grep -qF "deploy.sh --commit-scope=pve10" "$NR/wt.log" \
+   && ! grep -qF "NIE UDAŁO SIĘ" "$NR/wt.log" && ! has "$NROUT" "ZATRZYMANE" \
    && has "$NROUT" "CMD: " && ! has "$(printf '%s' "$NROUT" | grep '^CMD: ')" "--grant-remotely" && grep -q -- "--install --yes" "$NR/new-relation-pve9b.cmd"; then
     ok "new-relation: 'Zatwierdze sam' -> komenda BEZ --grant-remotely, instalacja staje i kreator mowi 'ZATRZYMANE ZGODNIE Z WYBOREM' z dwoma krokami (nie 'NIE UDALO SIE'); komenda do ponowienia zapisana w pliku"
 else
@@ -3023,13 +3166,17 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}default
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}
 0${T}__del__
 0${T}i:1
 0${T}__add__
 0${T}_tmp
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3111,6 +3258,15 @@ if grep -qF 'Zły adres' "$NR/wt.log" && ! grep -q 'reboot' "$NR/zb.log"; then
     ok "new-relation: adres ze znakami powloki = okno 'Zly adres', zaden czasownik go nie dostaje"
 else
     bad "new-relation: walidacja adresu" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log" 2>/dev/null)"
+fi
+# Kampania 2026-10-22: krok 1 i okno konta to MENU, nie radiolista -- w radioliscie Enter bral
+# zaznaczona kropke, a nie podswietlona pozycje (strzalka na "Lustro" i Enter = backup).
+NRM1="$(grep -F 'Jaka relacja?' "$NR/wt.log" | head -1)"
+if has "$NRM1" '--menu' && ! has "$NRM1" '--radiolist' && has "$NRM1" '--default-item ~ backup ~' \
+   && ! grep -F 'Na jakim koncie' "$NR/wt.log" | grep -qF -- '--radiolist'; then
+    ok "new-relation: krok 1 (rodzaj) i konto to menu z kursorem na obecnym -- Enter na pozycji ja wybiera"
+else
+    bad "new-relation: krok 1 / konto jako menu" "$(printf '%s' "$NRM1" | cut -c1-300)"
 fi
 # 8. kazde okno z wyborem ma rozmiar liczbowy i szerokosc <= 100 (nie na sztywno ponad ekran)
 if ! grep -E -- '--(checklist|radiolist|inputbox)' "$NR/wt.log" >/dev/null; then
@@ -3205,6 +3361,15 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
       bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
 rm -f "$RP/rules"
+# H-7 (kampania 2026-10-21): nosnik INNEJ repliki nie jest zrodlem nowej -- staly nosnik = jego
+# katalog docelowy z poddrzewem znika z drzewa (wymienny = cala jego pula, ta sama funkcja).
+rp_run "0${T}usb2
+" RP_TREE='esc' 'RP_REPS={"replicas":[{"name":"stala","sources":["hdd/backups"],"dst":"hdd/data","media":"fixed"}]}' >/dev/null
+if grep -qF '] backups' "$RP/tree.log" && ! grep -qF '] data' "$RP/tree.log" && ! grep -qF ' mail' "$RP/tree.log"; then
+    ok "replika H-7: nosnik innej repliki (staly: hdd/data z poddrzewem) nie jest na liscie zrodel"
+else
+    bad "replika H-7: nosnik innej repliki na liscie zrodel" "$(head -12 "$RP/tree.log")"
+fi
 # (1)+(2): zrodlo hdd/backups obejmuje kopie relacji pve11b; tydzien; B = Tak; dysk w slocie
 #          ma ID 4242 -> --media-guid=4242, --on-insert=yes, regula jako krok planu.
 RPOUT=$(rp_run "0${T}usb2
@@ -3222,9 +3387,9 @@ if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb2 --source=hdd/backups --dst=re
    && grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF -- '--default-item ~ repl ~' \
    && ! grep -F '5/6 nośnik' "$RP/wt.log" | grep -qF 'Wpisz nazwę puli' \
    && grep -F '6/6 kiedy' "$RP/wt.log" | grep -qF '0 22 * * 5 ~ co tydzień, piątek 22:00' \
-   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także od razu po włożeniu dysku' \
+   && grep -F 'także po włożeniu' "$RP/wt.log" | grep -qF 'Uruchamiać kopię także po włożeniu dysku' \
    && grep -qF 'reguła udev ZOSTANIE ZAŁOŻONA' "$RP/wt.log" && grep -qF 'po ID puli: 4242' "$RP/wt.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.'; then
+   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku albo o czasie z harmonogramu.' "$RP/wt.log"; then
     ok "replica: rodzaj przed nosnikiem, nosnik z listy (bez wpisywania), ID puli -> --media-guid; B Tak -> --on-insert=yes i regula w planie"
 else
     bad "replica: kreator, pasywna + harmonogram + B" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)" "$(cat "$RP/err")"
@@ -3258,7 +3423,7 @@ RPOUT=$(rp_run "0${T}usb3
 if [ "$RPRC" -eq 0 ] && grep -q '^add-replica usb3 --source=hdd/data --dst=repl/replica --schedule=on-insert --removable --recursive=yes --media-guid=4242 --install --yes$' "$RP/zb.log" \
    && grep -F '3/6 migawki' "$RP/wt.log" | grep -qF -- '--default-item ~ own ~' \
    && ! grep -qF 'także po włożeniu' "$RP/wt.log" && grep -q '^install-media-trigger --install$' "$RP/zb.log" \
-   && printf '%s' "$RPOUT" | grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.'; then
+   && grep -qF 'Pierwsza kopia ruszy po włożeniu dysku.' "$RP/wt.log"; then
     ok "replica: oryginal -> domyslnie wlasne migawki; 'tylko po wlozeniu' nie pyta o B, regula i tak zakladana"
 else
     bad "replica: kreator, on-insert" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -5 "$RP/wt.log" | cut -c1-300)"
@@ -3523,6 +3688,27 @@ for k in sys.argv[2:]:
     o = o[k]
 print(json.dumps(o, separators=(",", ":")))' "$@" 2>/dev/null | tr -d '\r'
 }
+# U68: tryb JEDNEJ pozycji (Przeglądaj kopię i każdy wybór jednego datasetu): Enter wybiera; na
+# gałęzi bez migawek ("selectable" jej nie zawiera) Enter ją rozwija i mówi o tym; kratek nie ma.
+cat > "$TRD/single.json" <<'SJ'
+{"title": "t", "single": true, "selectable": ["hdd/lab/vm-101", "hdd/labbrowse/v-ntfs"],
+ "datasets": [{"name": "hdd", "type": "filesystem"}, {"name": "hdd/lab", "type": "filesystem"},
+              {"name": "hdd/lab/vm-101", "type": "filesystem"}, {"name": "hdd/labbrowse", "type": "filesystem"},
+              {"name": "hdd/labbrowse/v-ntfs", "type": "volume"}]}
+SJ
+TRS=$(trun "$TRD/single.json" 'enter,down,enter,down,enter'); TRSRC=$?
+if [ "$TRSRC" -eq 0 ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd/lab/vm-101"]' ] \
+   && printf '%s' "$TRS" | grep -q 'MSG: hdd: tu nic do wybrania' && ! printf '%s' "$TRS" | grep -q '\[x\]\|\[ \]'; then
+    ok "tree U68: tryb jednej pozycji -- Enter na gałęzi rozwija i mówi, Enter na datasecie wybiera; bez kratek"
+else
+    bad "tree U68: tryb jednej pozycji" "rc=$TRSRC out=$(cat "$TRD/out.json")" "$TRS"
+fi
+TRS=$(trun "$TRD/single.json" 'esc'); TRSRC=$?
+if [ "$TRSRC" -eq 1 ] && [ "$(tjq "$TRD/out.json" action)" = '"back"' ]; then
+    ok "tree U68: tryb jednej pozycji -- Esc = Wstecz, nic nie wybrane"
+else
+    bad "tree U68: Esc w trybie jednej pozycji" "rc=$TRSRC out=$(cat "$TRD/out.json")"
+fi
 mkspec a "$TRD/a.json"; mkspec noexc "$TRD/noexc.json"; mkspec excl "$TRD/excl.json"
 mkspec atomic "$TRD/atomic.json"; mkspec old "$TRD/old.json"; mkspec many "$TRD/many.json"
 # a) w zaznaczonym miejscu Spacja na dziecku = wyjatek, Enter = Dalej; cel kopii (hide) w ogole nie widac
@@ -3603,6 +3789,17 @@ elif [ "$(tjq "$TRPO" excl hdd/ct)" = '["hdd/ct/subvol-301-disk-0"]' ]; then
     ok "tree: pty -- strzalki, Spacja i Enter przez prawdziwa petle curses daja ten sam wynik co --keys (excl hdd/ct = [subvol-301])"
 else
     bad "tree: pty (petla curses)" "rc=$TRPTRC" "$TRPT" "$(cat "$TRPO" 2>/dev/null)"
+fi
+# Home/End z PuTTY (ESC [ 1 ~ / ESC [ 4 ~ przy TERM=xterm) przed tymi samymi klawiszami: wynik
+# ten sam. Przed poprawką goły Esc z tego ciągu zamykał drzewo jako Wstecz (kampania 2026-10-22).
+rm -f "$TRPO"
+TRPT="$("$PY" "$REPO/test/tui/pty-keys.py" "$REPO/tui/tree.py" 'end-vt,home-vt,right,down,space,enter' -- --spec "$TRD/a.json" --out "$TRPO" 2>&1)"; TRPTRC=$?
+if [ "$TRPTRC" -eq 2 ]; then
+    echo "SKIP pty drzewo Home/End: brak modulu pty (Windows)"
+elif "$PY" "$REPO/tui/tree.py" --keys 'end,home,right,down,space,enter' --spec "$TRD/a.json" --out "$TRD/out-k.json" >/dev/null 2>&1;      [ "$(tjq "$TRPO" action)" = '"next"' ] && [ "$(cat "$TRPO")" = "$(cat "$TRD/out-k.json")" ]; then
+    ok "tree: pty -- Home/End jako ESC[1~/ESC[4~ (PuTTY) dzialaja jak Home/End (wynik = --keys end,home,...), nie zamykaja drzewa jak Esc"
+else
+    bad "tree: pty Home/End z PuTTY" "rc=$TRPTRC" "$(cat "$TRPO" 2>/dev/null)" "$(cat "$TRD/out-k.json" 2>/dev/null)"
 fi
 rm -rf "$TRD"
 
@@ -3768,9 +3965,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}pve9b
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3787,9 +3988,13 @@ NROUT=$(nr_run "0${T}backup
 0${T}hdd/backups
 0${T}__manual__
 0${T}inna
+0${T}adv
+0${T}acct
 0${T}root
+0${T}extra
 0${T}grant
 0${T}__done__
+1${T}
 0${T}create
 0${T}
 0${T}
@@ -3827,7 +4032,7 @@ case "$1" in
                     echo ">>> atrapa: $1 $2 $3" ;;
     show-config)    echo '{"sections":[{"kind":"dataset","name":"hdd/backups/192.168.28.99/hdd/data","fields":{"pair_label":"r1","compression":"none"'"${ER_RAW:+,\"raw\":\"yes\"}"'}}]}' ;;
     set-transfer)   case " $* " in *" --yes "*) echo ">>> atrapa: set-transfer" ;; *) echo "Relacja 'r1': history=newest (sekcji: 1)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
-    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"24","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
+    show-tiers)     echo '{"name":"r1","mode":"remote","config":"/x.conf","target":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","prefix":"automated_hourly_","keep":"24","retain":"","gfs":"","quiesce":"","send_schedule":"1 * * * *","prune_schedule":"21 * * * *","monitor_warn":"","monitor_crit":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","prefix":"automated_daily_","keep":"7","retain":"","gfs":"","quiesce":"auto,degrade","send_schedule":"11 1 * * *","prune_schedule":"31 1 * * *","monitor_warn":"","monitor_crit":""}],"source":[{"name":"hourly","mechanism":"flat","pattern":"automated_hourly","keep":"'"${ER_SRC_KEEP:-24}"'","retain":""},{"name":"daily","mechanism":"flat","pattern":"automated_daily","keep":"7","retain":""}]}' ;;
     set-tiers)      case " $* " in *" --yes "*) echo ">>> atrapa: set-tiers" ;; *) echo "Relacja 'r1' -- szczeble:"; echo "  hourly: keep=12 (source)"; echo "plan only -- nothing installed (add --yes to install)" ;; esac ;;
     *)            echo "atrapa zb: nieznany czasownik $1" >&2; exit 9 ;;
 esac
@@ -3850,6 +4055,7 @@ er_run() {   # <odpowiedzi> [klawisze tabel, linia na okno] -> stdout; dzienniki
     printf '%b\n' "${2:-enter\nenter}" > "$ER/gridkeys"
     printf '%s\n' "${ER_TREE:-}" | tr '|' '\n' > "$ER/treekeys"
     ( export NR_DIR="$ER" NR_FIX="$P10" WHIPTAIL="$ER/bin/whiptail" ZFS_BACKUP="$ER/bin/zb" PYTHON="$PY"
+      export ADDR_PROBE="${ER_PROBE:-true}"   # E-2: atrapa sprawdzenia, czy pod adresem ktoś odpowiada
       export GRID_PY="$PY" GRID_REPO="$REPO" ZFS_GRID="$ER/bin/grid"
       export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$ER/bin/tree"
       bash "$REPO/tui/edit-relation.sh" r1 ) 2>"$ER/err" </dev/null
@@ -3913,10 +4119,10 @@ EROUT=$(er_run "0${T}adres
 0${T}
 "); ERRC=$?
 ERP=$(sed -n '/plan wszystkich zmian/,$p' "$ER/wt.log")
-ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 3p)
+ERM=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 3p)
 if [ "$ERRC" -eq 0 ] && [ "$(grep -E -e '--yes$' "$ER/zb.log" | tr '\n' '|')" = 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes|set-transfer r1 --history=newest --yes|' ] \
-   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'Zapisz zmiany (2)' \
-   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +\[zmiana\]'; then
+   && has "$ERP" 'Adres źródła: 10.99.0.9' && has "$ERP" 'Ustawienia silnika:' && has "$ERM" 'ZAPISZ ZMIANY (2)' \
+   && hasE "$ERM" 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]' && hasE "$ERM" 'Silnik +[^~]*\[zmiana\]'; then
     ok "edit-relation: lista zmian -- adres i silnik czekaja ([zmiana] w wierszach Źródło i Silnik karty), jeden plan obu, jedno WYKONAJ, activate potem set-transfer"
 else
     bad "edit-relation: lista zmian (adres + silnik)" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(printf '%s' "$ERM" | cut -c1-400)" "$(tail -3 "$ER/err")"
@@ -3952,7 +4158,7 @@ EROUT=$(er_run "0${T}adres
 0${T}
 "); ERRC=$?
 ERA="$(grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | head -1)"
-ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | head -1)"
+ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
 if [ "$ERRC" -eq 0 ] && grep -qx 'activate r1 --host=10.99.0.9 --skip-final-catchup --yes' "$ER/zb.log" \
    && [ "$(grep -c '^activate' "$ER/zb.log")" -eq 1 ] && ! grep -qE '^(final-catchup|set-endpoint|verify-endpoint|activate-client)' "$ER/zb.log" \
    && has "$ERA" 'Zapisany: 192.168.28.99:22' && has "$ERA" '~ 192.168.28.99:22 ~' && has "$ERA" 'po przeniesieniu kolektora' \
@@ -3974,10 +4180,26 @@ EROUT=$(er_run "0${T}adres
 "); ERRC=$?
 if [ "$ERRC" -eq 1 ] && ! grep -q '^activate' "$ER/zb.log" && [ "$(grep -cF 'Porzucić zmiany?' "$ER/wt.log")" -eq 2 ] \
    && grep -F 'Adres hosta: r1' "$ER/wt.log" | grep -F -e '--inputbox' | sed -n 2p | grep -qF '~ 10.99.0.9 ~' \
-   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 2p | grep -qE 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]'; then
+   && grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p | grep -qE 'Źródło +192\.168\.28\.99 -> 10\.99\.0\.9 \[zmiana\]'; then
     ok "edit-relation: Adres hosta -- zmiana czeka na liscie; Wstecz pyta o porzucenie, pole pamieta adres; Porzuc = nic nie uruchomione"
 else
     bad "edit-relation: Adres hosta -- Wstecz" "rc=$ERRC" "$(cat "$ER/zb.log")"
+fi
+# E-2 (kampania na zywo, pve10 2026-10-21): adres, pod ktorym nic nie odpowiada, NIE trafia na
+# liste zmian -- okno mowi o tym od razu, zadnego activate (wczesniej activate zapisywal go w
+# rekordzie jako endpoint_change_pending i padal z komunikatem o pliku zakresu).
+EROUT=$(ER_PROBE=false er_run "0${T}adres
+0${T}192.168.28.250
+0${T}
+1${T}
+1${T}
+0${T}
+"); ERRC=$?
+if ! grep -q '^activate' "$ER/zb.log" && grep -qF 'nic nie odpowiada' "$ER/wt.log" && grep -qF 'NIE został zmieniony' "$ER/wt.log" \
+   && ! grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | grep -qF '192.168.28.250 [zmiana]'; then
+    ok "edit-relation: E-2 -- adres bez odpowiedzi: komunikat od razu, nie ma go na liscie zmian, zadnego activate"
+else
+    bad "edit-relation: E-2 adres bez odpowiedzi" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(grep -F 'odpowiada' "$ER/wt.log" | cut -c1-200)"
 fi
 # Zly znak w adresie: komunikat, zadnego activate.
 EROUT=$(er_run "0${T}adres
@@ -4017,26 +4239,49 @@ fi
 # Relacja lokalna (bez peera): na karcie NIE ma wiersza "Źródło" (tag adres).
 EROUT=$(ER_PEER= er_run "1${T}
 "); ERRC=$?
-if grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Ręczna edycja konfigu' \
+if grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'nazwa r1   konto root' \
    && ! grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF 'Źródło' \
    && ! grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qF ' ~ adres ~ '; then
     ok "edit-relation: relacja lokalna -- karta bez wiersza Źródło (adres)"
 else
     bad "edit-relation: relacja lokalna bez Adres hosta" "$(grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | cut -c1-400)"
 fi
-# U25: wiersze STALE karty (rodzaj, cel, nazwa, konto, dodatkowe) maja dopisek "(stałe)"; Enter na
-# nich otwiera msgbox "<Pole> -- stałe" (nowa relacja), nic nie zmienia i wraca na karte.
-EROUT=$(er_run "0${T}cel
-0${T}
-1${T}
+# U65 (makieta 2026-10-21): to, czego sie nie zmienia (rodzaj, nazwa, konto, cel), stoi w NAGLOWKU
+# karty, nie na liscie; na liscie tylko zmienialne, pod kreska tylko zapis (bez Kopii teraz,
+# recznej edycji i szablonu -- te sa w oknie relacji na F3: F7, 'c', 's').
+EROUT=$(er_run "1${T}
 "); ERRC=$?
-ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | head -1)"
-ERMB="$(grep -F 'Cel -- stałe' "$ER/wt.log" | grep -F -e '--msgbox' | head -1)"
-if [ "$ERRC" -eq 1 ] && hasE "$ERC1" 'Rodzaj +backup +\(stałe\)' && hasE "$ERC1" 'Nazwa +r1 +\(stałe\)' && hasE "$ERC1" 'Konto +root +\(stałe\)' \
-   && has "$ERMB" 'nowa relacja' && ! grep -qE '^(add-source|remove-source|set-tiers|edit-relation|activate|set-transfer|save-profile|delete-profile)' "$ER/zb.log"; then
-    ok "edit-relation: karta -- Rodzaj/Nazwa/Konto z dopiskiem (stałe); Enter na Cel = msgbox 'Cel -- stałe' (nowa relacja), zaden czasownik zmieniajacy nie wolany"
+ERC1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+if [ "$ERRC" -eq 1 ] && has "$ERC1" 'backup z 192.168.28.99   nazwa r1   konto root   cel ' \
+   && ! has "$ERC1" ' ~ rodzaj ~ ' && ! has "$ERC1" ' ~ cel ~ ' && ! has "$ERC1" ' ~ nazwa ~ ' && ! has "$ERC1" ' ~ konto ~ ' \
+   && ! has "$ERC1" ' ~ teraz ~ ' && ! has "$ERC1" ' ~ config ~ ' && ! has "$ERC1" ' ~ zapisz ~ ' \
+   && has "$ERC1" ' ~ wykonaj ~ Zapisz zmiany (brak zmian)' && hasE "$ERC1" ' ~ dane ~   Datasety +'    && ! has "$ERC1" 'jak w configu' && hasE "$ERC1" 'Silnik +(fabryczne|historia|kompresja|szyfr|autodobór|raw)'    && hasE "$ERC1" 'Retencja źródła +(tyle samo co w kopii|godzinowe|dobowe|tygodniowe|miesięczne|roczne|[A-Za-z0-9])'; then
+    ok "edit-relation: karta U65 -- stale fakty w naglowku, na liscie tylko zmienialne (wartosci slowami, nie jak w configu), pod kreska tylko Zapisz zmiany"
 else
-    bad "edit-relation: karta, wiersze stale" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-500)" "$(printf '%s' "$ERMB" | cut -c1-300)" "$(cat "$ER/zb.log")"
+    bad "edit-relation: karta U65" "rc=$ERRC" "$(printf '%s' "$ERC1" | cut -c1-700)"
+fi
+# Retencja zrodla na karcie = liczby z CONFIGU (show-tiers), nie nazwa profilu zrodla: na pve10
+# zmiana tabela (set-tiers 168 -> 72) zostawila "tyle samo co w kopii" (2026-10-22).
+EROUT=$(ER_SRC_KEEP=72 er_run "1${T}
+"); ERK1="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+EROUT=$(er_run "1${T}
+"); ERK2="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | head -1)"
+if hasE "$ERK1" 'Retencja źródła +godzinowe 72, dobowe 7 ~' && hasE "$ERK2" 'Retencja źródła +tyle samo co w kopii ~'; then
+    ok "edit-relation: karta -- retencja zrodla z configu (godzinowe 72, dobowe 7), rowna celowi = 'tyle samo co w kopii'"
+else
+    bad "edit-relation: retencja zrodla na karcie" "$(printf '%s' "$ERK1" | grep -o 'Retencja[^~]*')" "$(printf '%s' "$ERK2" | grep -o 'Retencja[^~]*')"
+fi
+# Zmieniona pozycja ma '*' (i [zmiana]); niezmieniona -- dwie spacje.
+EROUT=$(er_run "0${T}adres
+0${T}10.99.0.9
+1${T}
+0${T}
+"); ERRC=$?
+ERC2="$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)"
+if has "$ERC2" ' ~ adres ~ * Źródło' && has "$ERC2" ' ~ dane ~   Datasety' && has "$ERC2" 'ZAPISZ ZMIANY (1)'; then
+    ok "edit-relation: karta U65 -- zmieniona pozycja z gwiazdka, licznik w ZAPISZ ZMIANY (1)"
+else
+    bad "edit-relation: gwiazdka przy zmianie" "rc=$ERRC" "$(printf '%s' "$ERC2" | cut -c1-600)"
 fi
 # U25: "Harmonogram" (tag harmon) otwiera liste szablonow, a jej PIERWSZA pozycja to __manual__ (Ręcznie…).
 EROUT=$(er_run "0${T}harmon
@@ -4048,24 +4293,12 @@ if hasE "$ERLST" '--menu ~ [^~]* ~ [0-9]+ ~ [0-9]+ ~ [0-9]+ ~ __manual__ ~'; the
 else
     bad "edit-relation: karta, lista szablonow bez __manual__ na gorze" "rc=$ERRC" "$(printf '%s' "$ERLST" | cut -c1-500)"
 fi
-# U36 (wlasciciel 2026-10-20: "to w sumie F7 na calej relacji"): akcja karty "Kopia teraz"
-# = run-relation (jak F7 na F3); z czekajacymi zmianami najpierw odmawia (kopia idzie po
-# zainstalowanym cronie).
-EROUT=$(er_run "0${T}teraz
-"); ERRC=$?
-ERT1="$(cat "$ER/zb.log")"
-EROUT=$(er_run "0${T}adres
-0${T}10.99.0.9
-0${T}teraz
-0${T}
-1${T}
-0${T}
-"); ERT2="$(cat "$ER/zb.log")"; ERW2="$(cat "$ER/wt.log")"
-if printf '%s\n' "$ERT1" | grep -qx 'run-relation r1' && ! printf '%s\n' "$ERT2" | grep -q '^run-relation' \
-   && has "$ERW2" 'Kopia teraz' && has "$ERW2" 'najpierw Zapisz zmiany'; then
-    ok "edit-relation: karta 'Kopia teraz' = run-relation (jak F7); z czekajacymi zmianami najpierw odmawia"
+# U65: 'c' w oknie relacji (EDIT_DO=config) = od razu edit-config, bez karty zmian.
+EROUT=$(EDIT_DO=config er_run ""); ERRC=$?
+if grep -qx 'edit-config r1' "$ER/zb.log" && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then
+    ok "edit-relation: EDIT_DO=config -- od razu edit-config, karta zmian sie nie pokazuje (U65, 'c' na F3)"
 else
-    bad "edit-relation: karta Kopia teraz (U36)" "bez zmian: $ERT1" "ze zmiana: $ERT2"
+    bad "edit-relation: EDIT_DO=config" "rc=$ERRC" "$(cat "$ER/zb.log")" "$(head -2 "$ER/wt.log" | cut -c1-200)"
 fi
 # U38 (wlasciciel 2026-10-20, "cos w stylu mc, z widokiem migawek"): okno migawek pary.
 # Ksztalt danych jak z prawdziwego pair-snapshots na pve10 (ab, hdd/data): wyrownanie po GUID,
@@ -4129,7 +4362,7 @@ if [ "$ERRC" -eq 0 ] && grep -qx 'show-tiers r1 --json' "$ER/zb.log" \
    && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --yes' "$ER/zb.log" \
    && ! grep -qE '^(save-profile|delete-profile|edit-relation)' "$ER/zb.log" \
    && [ "$(cat "$ER/grid.n")" = 1 ] \
-   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qE 'Datasety +1' && grep -qF 'Ręczna edycja konfigu' "$ER/wt.log"; then
+   && grep -F 'Co zmienić?' "$ER/wt.log" | head -1 | grep -qE 'Datasety +1'; then
     ok "edit-relation: Retencja zrodla (srcret) -- szczeble z configu (show-tiers), jedna tabela (zrodlo), jeden set-tiers --plan, WYKONAJ = --yes; bez ukrytego szablonu"
 else
     bad "edit-relation: harmonogram przez set-tiers" "rc=$ERRC" "$(cat "$ER/zb.log")" "grid.n=$(cat "$ER/grid.n" 2>/dev/null)" "$(tail -3 "$ER/err")"
@@ -4174,10 +4407,10 @@ EROUT=$(er_run "0${T}srcret
 1${T}
 0${T}
 " "right,bs,bs,1,2,enter"); ERRC=$?
-ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Relacja r1 ~' | sed -n 2p)
+ERT=$(grep -F -e '--menu' "$ER/wt.log" | grep -F 'Zmiana relacji r1 ~' | sed -n 2p)
 if [ "$ERRC" -eq 1 ] && grep -qx 'set-tiers r1 --src-tier=hourly --keep=12 --plan' "$ER/zb.log" \
    && ! grep -q -- '--yes$' <(grep '^set-tiers' "$ER/zb.log") && ! grep -qE '^(save-profile|delete-profile)' "$ER/zb.log" \
-   && hasE "$ERT" 'Retencja źródła *\[zmiana\]' && has "$ERT" 'Zapisz zmiany (1)'; then
+   && hasE "$ERT" 'Retencja źródła +[^~]*-> godzinowe 12 \[zmiana\]' && has "$ERT" 'ZAPISZ ZMIANY (1)'; then
     ok "edit-relation: zmiana retencji zrodla czeka na liscie ([zmiana], Zapisz zmiany (1)); Wstecz z planu i Porzuc -- nic nie zainstalowane"
 else
     bad "edit-relation: Wstecz z planu (set-tiers)" "rc=$ERRC" "okna: $ERT" "$(cat "$ER/zb.log")"
@@ -4229,13 +4462,13 @@ if has "$ERW" 'Uwaga: szablon nadpisze liczby w źródle' && has "$ERW" 'dobowe 
 else
     bad "edit-relation: X24 ostrzezenie" "rc=$ERRC" "$(grep -F 'nadpisze' "$ER/wt.log" | cut -c1-300)" "$(tail -3 "$ER/err")"
 fi
-EROUT=$(er_run "0${T}zapisz
-0${T}r1-szablon
+# U65: 's' w oknie relacji (EDIT_DO=zapisz) = od razu "Zapisz jako szablon"; po nim koniec, bez karty.
+EROUT=$(EDIT_DO=zapisz er_run "0${T}r1-szablon
 0${T}
-1${T}
 "); ERRC=$?
-if grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia relacji r1$' "$ER/zb.log" && ! grep -q -- '--hidden' "$ER/zb.log"; then
-    ok "edit-relation: Zapisz ustawienia relacji jako szablon -- zwykly szablon (bez --hidden), widoczny na F5"
+if [ "$ERRC" -eq 0 ] && grep -q '^save-profile --from=d7h24 --as=r1-szablon --description=Ustawienia relacji r1$' "$ER/zb.log" && ! grep -q -- '--hidden' "$ER/zb.log" \
+   && ! grep -qF 'Co zmienić?' "$ER/wt.log"; then
+    ok "edit-relation: EDIT_DO=zapisz -- zwykly szablon (bez --hidden), widoczny na F5; karta zmian sie nie pokazuje (U65, 's' na F3)"
 else
     bad "edit-relation: zapisz jako szablon" "rc=$ERRC" "$(cat "$ER/zb.log")"
 fi
@@ -4579,6 +4812,67 @@ else
     bad "restore.sh bez argumentow" "rc=$RWURC" "out: $RWU"
 fi
 rm -rf "$RW"
+
+# ---- U66/U64 (owner 2026-10-21: "czarny ekran ponad 15 sekund"): run_progress / result_box ----
+# The command runs behind an infobox that says how long it has been running and shows the
+# log's last lines; rc comes back; stdin is /dev/null (a prompt fails instead of hanging).
+RP="$(mktemp -d)"; mkdir -p "$RP/bin"
+printf '#!/bin/bash\nprintf "%%s\\n" "TERM=$TERM ~ $(printf "%%s ~ " "$@")" >> "%s/wt.log"; for a; do [ "$p" = --textbox ] && cat "$a" >> "%s/wt.log"; p="$a"; done; exit 0\n' "$RP" "$RP" > "$RP/bin/wt"
+chmod +x "$RP/bin/wt"
+cat > "$RP/cmd" <<'EOF'
+#!/bin/bash
+echo "krok 1"; sleep 1.3; echo "!!! zrodlo odmowilo: brak miejsca"; read -r x && echo "STDIN: $x"; echo "FATAL: nic nie zmieniono"; exit 3
+EOF
+chmod +x "$RP/cmd"
+( cd "$RP" && WHIPTAIL="$RP/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; : > "$2/run.log"; rc=0
+    run_progress "Test" "$2/run.log" "$2/cmd" <<<"tak" || rc=$?; echo "RC=$rc"
+    result_box "Wynik" "$rc" "$2/run.log" "" "Nie wyszlo."' x "$REPO" "$RP" ) > "$RP/out" 2>&1
+if grep -qx 'RC=3' "$RP/out" && grep -qF 'krok 1' "$RP/run.log" && grep -qF 'FATAL: nic nie zmieniono' "$RP/run.log" \
+   && ! grep -qF 'STDIN:' "$RP/run.log" && grep -q -- '^TERM=linux ~ .*--title ~ Test -- trwa [0-9]* s ~ --infobox ~ ' "$RP/wt.log" && grep -q '^krok 1 ~ ' "$RP/wt.log" \
+   && grep -qF 'Nie wyszlo.  (rc=3)' "$RP/wt.log" && grep -qF 'zrodlo odmowilo: brak miejsca' "$RP/wt.log" \
+   && ! grep -q 'krok 1' "$RP/out"; then
+    ok "U66/U64: run_progress -- command behind an infobox (elapsed time, log tail; TERM=linux so it stays on screen), rc returned, no stdin; result_box shows the reason and the log end"
+else
+    bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
+fi
+rm -rf "$RP"
+# ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
+U67="$(mktemp -d)"
+# verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the
+# FATAL "could not render" line was shown, the gen-cron reason was lost).
+printf '%s\n' ">>> plan" "!!! gen-cron.sh (as root) refused the proposed config:" \
+    "    gen-cron.sh: error: [replica:usb1]: source='hdd' is a pool name, not a dataset -- name the dataset to copy" \
+    "FATAL: gen-cron.sh could not render the proposed config -- nothing was touched" > "$U67/plan.txt"
+u67_why="$(bash -c '. "$1/tui/wt-lib.sh" 2>/dev/null; verb_refusal "$2"' x "$REPO" "$U67/plan.txt")"
+if printf '%s' "$u67_why" | grep -q "source='hdd' is a pool name" && printf '%s' "$u67_why" | grep -q 'could not render' \
+        && ! printf '%s' "$u67_why" | grep -q '^>>>\|^!!!\|^FATAL'; then
+    ok "U67: the refusal window gets the reason (gen-cron error line), not only the closing FATAL"
+else
+    bad "U67: verb_refusal" "$u67_why"
+fi
+u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
+[ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
+# pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
+eval "$(sed -n '/^pool_roots_to_children() {/,/^}/p' "$REPO/tui/replica.sh")"
+if declare -F pool_roots_to_children >/dev/null; then
+    T_NAME=(hdd hdd/a hdd/a/x hdd/b hdd/c hdd/c/y tank tank/z)
+    B_ROOT=(hdd tank/z); B_EXCL=($'hdd/b\nhdd/c/y' "")
+    pool_roots_to_children; u67_rc=$?
+    u67_got="$(printf '%s;' "${SRC_ROOT[@]}")|$(printf '%s;' "${SRC_EXCL[@]}" | tr '\n' ',')"
+    # H-1: the basket itself keeps the pool as chosen (Wstecz shows it ticked, not "[-]")
+    [ "${B_ROOT[0]}" = hdd ] || u67_got="$u67_got (basket changed: ${B_ROOT[*]})"
+    if [ "$u67_rc" -eq 0 ] && [ "$u67_got" = "hdd/a;hdd/c;tank/z;|;hdd/c/y;;" ] && printf '%b' "$POOL_NOTE" | grep -q 'Cała pula hdd = 2 datasetów'; then
+        ok "U67: a pool root becomes its direct children (excluded child dropped, deeper exclusion follows its child), and the window says so"
+    else
+        bad "U67: pool root expansion" "rc=$u67_rc got=$u67_got" "$(printf '%b' "$POOL_NOTE")"
+    fi
+    T_NAME=(empty); B_ROOT=(empty); B_EXCL=("")
+    if ! pool_roots_to_children && [ "$POOL_EMPTY" = empty ]; then ok "U67: a pool with no dataset under it is refused with its name"
+    else bad "U67: empty pool" "POOL_EMPTY=$POOL_EMPTY roots=${B_ROOT[*]}"; fi
+else
+    bad "U67: could not lift pool_roots_to_children from tui/replica.sh"
+fi
+rm -rf "$U67"
 
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

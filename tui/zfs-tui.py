@@ -2155,7 +2155,20 @@ def rel_panel_pairs(row, data, now, ch):
         mon += u"   alarm po %s" % (m0.get("crit") or "?")
     pairs.append((u"Migawki" if rel.get("mode") == "snaponly" else u"Kopie", mon))
     last = row["last"]
-    if last:
+    # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
+    # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
+    fails = []
+    if rel.get("state") == "active":
+        for j in row["jobs"]:
+            if j.get("section_kind") in SEND_KINDS:
+                f, _ = job_run_issue(data, j)
+                if f:
+                    fails.append(((j.get("scope") or "?").split(":")[-1], f))
+    if fails:
+        ds, f = fails[0]
+        pairs.append((u"Ostatni bieg", u"BŁĄD   %s   rc=%s%s" % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
+        pairs.append((u"Przyczyna", u"%s: %s" % (ds, f[2] or u"zobacz cron.log")))
+    elif last:
         w, note = transfer_word(last, now)
         st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
         txt = u"%s   %s" % (w, fmt_full(fin if fin else st_))
@@ -2609,6 +2622,13 @@ def rel_pairs(row, data, now, ch):
             elif dst == "-":
                 dst = None
             v, _reason = verdict_for_job(j, monitors)
+            # U61 (kampania 2026-10-21): wiersz relacji mowil "błąd biegu", a wiersz jej
+            # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
+            # dawac ten sam werdykt w obu miejscach.
+            if (row.get("rel") or {}).get("state") == "active":
+                _fail, _ = job_run_issue(data, j)
+                if _fail:
+                    v = worst([v, "BLAD"])
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
                 czas, gb = "?", "?"
@@ -3754,9 +3774,9 @@ HELP = [
     u"                 jako konto z crontaba; wynik w oknie. F8 przełącza sortowanie",
     u"                 (relacje/oś czasu/ostatni bieg) -- nazwa widoku w tytule.",
     u"  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
-    u"                 = Zmień relację: datasety, szablon, tabela szczebli, retencja",
-    u"                 źródła, konfig, zapis jako szablon, adres hosta po",
-    u"                 przeniesieniu kolektora), Del usuń,",
+    u"                 = Zmień relację: adres hosta, datasety, szablon, retencja",
+    u"                 źródła, silnik; 's' zapisuje ustawienia jako szablon,",
+    u"                 'c' otwiera config do ręcznej edycji), Del usuń,",
     u"                 F7 uruchom teraz: kopia każdego datasetu relacji jej",
     u"                 najdrobniejszym zadaniem, bez pytania; F8 pauza/wznów;",
     u"                 F9 eksport/import: eksport do pliku (Enter zapisuje, domyślnie",
@@ -3764,10 +3784,11 @@ HELP = [
     u"                 eksportu z tego katalogu, potem werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
-    u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach (kopia lokalna: 8)",
-    u"                 (typ -> host -> diagnoza; brak pakietu = Zainstaluj ->",
-    u"                 miejsca do kopiowania -> dokąd -> szablon -> nazwa ->",
-    u"                 konto -> ustawienia -> podsumowanie i WYKONAJ), Del to",
+    u"                 z odświeżonymi danymi: Ins to kreator krok po kroku (backup: 7",
+    u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, retencja",
+    u"                 źródła, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
+    u"                 (pozycja = popraw krok; konto i dodatki w Zaawansowane) i",
+    u"                 Utwórz -> plan -> WYKONAJ z oknem postępu. Del to",
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
@@ -3944,9 +3965,12 @@ class UI(object):
             return None
         return path
 
-    def run_dialog(self, argv):
-        """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi."""
+    def run_dialog(self, argv, env=None):
+        """Oddaj terminal dialogowi whiptail i wroc z odswiezonymi danymi.
+        env: zmienne dla dialogu (U65: EDIT_DO otwiera od razu jedna czynnosc)."""
         line = " ".join(shlex.quote(x) for x in argv)
+        if env:
+            line = " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in sorted(env.items())) + " " + line
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
@@ -4048,6 +4072,8 @@ class UI(object):
         self._bg = (t, box)
         if not (self.message or "").endswith(self.BG_NOTE):
             self.message = (self.message or "") + self.BG_NOTE
+
+    ACTION_KEYS = ("F7", "F8", "F9", "enter", "del", "e")
 
     def bg_pending(self):
         bg = getattr(self, "_bg", None)
@@ -4397,8 +4423,10 @@ class UI(object):
                         u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client)."]
                 alt = None
                 if rel.get("peer_host") and rel.get("mode") != "local":
-                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek);",
-                             u"wyjaśnienie pokaże następne okno."]
+                    # D-1 (kampania 2026-10-21): "wyjaśnienie pokaże następne okno" -- następnego
+                    # okna nie było; to okno otwiera się dopiero czynnością z dołu ramki.
+                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):",
+                             u"czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia."]
                     alt = ("w", lambda: self.confirm(u"Wyłącz relację %s" % n, [self.zb(), "disable-client", n,
                                                      "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                                                      disable_note(rel)), u"wyłącz na źródle")
@@ -4769,6 +4797,19 @@ class UI(object):
         """Jeden klawisz -> nowy stan. `k` to nazwa: 'down', 'F2', 'enter', 'q', 'esc'...;
         `raw` to znak (str) dla pola tekstowego."""
         self.message = ""
+        # H-3 (kampania na żywo 2026-10-21): po oknie (kreator repliki) GUI wraca od razu ze
+        # STARYMI danymi i odświeża w tle (~5 s). F7 w tym czasie uruchomił starą zaznaczoną
+        # replikę zamiast nowej. Czynność na wierszu czeka na świeże dane: najpierw je
+        # przyjmuje, potem działa na tym, co już jest na ekranie po odświeżeniu.
+        # Na żywo (drugie przejście): czekała tylko czynność -- strzałka poszła po STAREJ
+        # liście, a świeże dane wróciły kursor na pierwszy wiersz i F7 znów trafił w starą
+        # replikę. Więc KAŻDY klawisz po oknie czeka na świeże dane (ekran jest od razu,
+        # pierwszy klawisz czeka najwyżej resztę odświeżania).
+        if not self.window:
+            bg = getattr(self, "_bg", None)
+            if bg is not None and bg[0].is_alive():
+                bg[0].join(30)
+                self.poll_bg()
         if self.window and self.window[0] == "prompt":
             obj = self.window[1]
             if k == "esc":
@@ -4992,6 +5033,13 @@ class UI(object):
                 self.confirm(u"Dokończ relację %s" % rel.get("name"), [self.zb()] + finish_argv(rel),
                              note_lines=[u"Stan: %s -- następny krok cyklu relacji (można powtórzyć)." % state_word(rel)])
                 return "stay"
+            elif k in ("s", "c") and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
+                # U65 (makieta 2026-10-21): czynnosci nie sa czescia zmiany relacji -- zapis jako
+                # szablon ('s') i reczna edycja konfigu ('c') otwieraja sie wprost z tego okna.
+                n = self.window[1]["name"]
+                self.window, self.scroll = None, 0
+                return self.run_dialog([self.zb(), "edit-relation", n, "--ask"],
+                                       env={"EDIT_DO": "zapisz" if k == "s" else "config"}) or "stay"
             elif k == "e" and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # ZMIANA RELACJI (2026-10-07): okna whiptail edit-relation, jak Del
                 # dla usuwania. Litera dziala tylko w oknie na wierzchu (bez okna
@@ -5386,9 +5434,9 @@ def _ui_render(self, width, height):
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = u"e zmień   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
                 if finish_argv(obj.get("rel") or {}):
-                    foot = u"d dokończ   e zmień   Esc zamyka   strzałki przewijają"
+                    foot = u"d dokończ   e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
@@ -5432,7 +5480,7 @@ UI.render = _ui_render_final
 # Litery i cyfry, ktore petla curses zamienia na klawisz -- ale TYLKO w oknie
 # na wierzchu (potwierdzenie: 't', 'e', 'q'; przewijanie: 'j', 'k'). Bez okna
 # kazdy drukowalny znak jest tekstem linii polecen.
-LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d", ord("w"): "w",
+LETTER_KEYS = {ord("q"): "q", ord("j"): "j", ord("k"): "k", ord("t"): "t", ord("e"): "e", ord("d"): "d", ord("w"): "w", ord("s"): "s", ord("c"): "c",
                ord("?"): "F1", ord("h"): "F1"}
 
 

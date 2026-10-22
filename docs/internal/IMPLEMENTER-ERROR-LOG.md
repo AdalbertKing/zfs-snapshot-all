@@ -30,7 +30,7 @@ should trigger it and watch it trigger.
 Applies to: `if` conditions, loop shapes that decide whether a case is ever
 constructed, assertion helpers, and error paths.
 
-*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63, E93.*
+*Evidence: E1, E2, E3, E9, E30, E46, E47, E49, E56, E63, E93, E96.*
 
 ### R2 — A fact is true on ONE side of a boundary until measured on the other
 
@@ -102,7 +102,7 @@ wrote instead of what comes out of it.** A component with a thorough suite,
 wired into a caller with none, is an untested feature with a reassuring number
 attached.
 
-*Evidence: E13, E22, E57, E67, E72, E78, E79, E80.*
+*Evidence: E13, E22, E57, E67, E72, E78, E79, E80, E97.*
 
 ### R13 — Stage files by name, never by directory
 
@@ -1920,6 +1920,77 @@ passed".
 **Rule.** R4. Before any merge, print and read the conclusion counts for the
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
+
+
+### E98 — the fix for the black screen, merged on a stub, was itself invisible (2026-10-22, R12, repeat of E97)
+
+**Genesis.** U64/U66: the owner's "czarny ekran ponad 15 sekund". I added
+`run_progress` (a whiptail infobox refreshed every second) and merged it in
+#721. Its test ran against the whiptail stub, which logs argv and exits. On
+pve10 the window never appeared. With TERM=xterm (PuTTY, tmux), whiptail draws
+on the terminal's alternate screen (`smcup`) and removes it when it exits, so an
+infobox vanishes in the same instant. The same was true of every `info()` call
+("Sprawdzam…", "Czytam…") in every window that uses it. So the black screen the owner
+saw was partly this, and my first fix reproduced it.
+
+**Cause.** E97's rule was applied to the wizard steps, but not to the
+progress window. I treated it as plumbing that a unit test covers. The stub
+cannot show the defect: it has no screen.
+
+**Rule.** R12 again. Anything the operator SEES is checked on a real terminal
+before it ships: a tmux capture on pve10 while it runs, not after it. The fix
+gives the infobox TERM=linux, which has no alternate screen. The test now checks
+that TERM reaches whiptail, and it fails on the code from #721.
+
+### E97 — GUI flows handed to the owner that only stubs had ever walked (2026-10-21, R12)
+
+**Genesis.** The owner's GUI campaign on pve10 (2026-10-21) hit a problem at almost
+every step. Examples:
+- a black screen for 15 s with no word on what it was doing (U55, U64);
+- a name that resolved to a foreign public address (U56);
+- Wstecz that went forward (U57);
+- an import that used the pairing address instead of the one in use (U62);
+- a replica of a whole pool refused with an error that hid its own reason (U67);
+- a dataset picker that differs between windows (U68).
+
+His verdict: "Zmęczyło mnie to testowanie. Prawie każdy krok z problemem."
+
+**Cause.** The wizards were tested by `test/tui` against stub verbs, with the
+inputs I chose: a dataset, never a pool root; an IP, never a name; forward,
+never back. The live checks drove single verbs from the CLI. Nobody walked the
+operator's path through the real windows before the owner did, so he became
+the first tester of every flow.
+
+**Rule.** R12, and the owner's direction of the same day. Before the owner gets
+a GUI flow, I walk it live in the real GUI: a tmux session on pve10 driven by
+a small key-logging script (lab tool, outside the repo) that records every key
+with the wait and the window title. I
+play an indecisive admin: go in, back out, change an answer, cancel halfway,
+try edge inputs. The report lists the steps walked, what failed and was fixed,
+the keystroke count and the waits.
+
+
+### E96 — a new return code, and a claim about its other caller that was never run (2026-10-21, R1)
+
+**Genesis.** REV-20261021-164 (`--leave` failing open on zfs reads). I made
+`commit_scope_dataset_held` return 2 for an unreadable snapshot list or hold,
+handled 2 in `do_leave`, and wrote into the response and the comment that the
+other caller, `do_commit_scope`, "tests it with `elif` and so reads 2 as held --
+the conservative reading". Merged as #695. The reviewer rejected it: in bash
+`elif cmd` with status 2 is false, so the dataset went to `revoke_clean` and was
+unallowed while its hold could not be read -- the exact fail-open the REV was
+about, introduced one function over.
+
+**Cause.** I changed a function's contract (0/1 to 0/1/2) and reasoned about
+the caller instead of driving it. The test I added covered only the caller I
+edited. The sentence about the other caller was a guess written as a fact, and
+text-checker could not catch it because it reads the tree, not bash semantics.
+
+**Rule.** R1. When a function gains a new status, every caller gets a test that
+feeds it that status -- the guard must be watched firing at each call site, not
+inferred. A claim about how unchanged code reacts is measured before it is
+written. Fixed in R1 of the same REV: both callers handle 0/1/2 explicitly, and
+`test/joinmanifest` drives `do_commit_scope` with the shipped hold check.
 
 
 ### E95 — a full copy of the checkout into /tmp filled pve9b's root disk (2026-10-20, R3)

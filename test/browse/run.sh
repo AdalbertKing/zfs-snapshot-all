@@ -9,6 +9,8 @@
 # dwa przeplecione przegladania przez punkt wejscia (atrapa mount wstrzymuje sesje), oba porzadki.
 # REV-20261021-161: ten sam dataset, dwie sesje, pauza testowa (BROWSE_TEST_PAUSE_AT) pod blokada:
 # wchodzacy po sprawdzeniu orig2, a przed znacznikiem; kończacy przed przywroceniem. Wymaga flock.
+# REV-20261021-162: SIGTERM w pauzie przywracania (pod blokada) -- pulapka EXIT musi przywrocic
+# snapdev bez drugiego flock na wlasnej blokadzie. Pauza jest jednorazowa, sygnal idzie raz.
 #
 # /dev/tty: browse_and_exit uruchamia mc z </dev/tty >/dev/tty i czyta Enter z /dev/tty. Bez
 # terminala sterujacego otwarcie /dev/tty konczy sie bledem, a skrypt idzie dalej (mc i read maja
@@ -34,6 +36,7 @@ exec "$(PATH=/usr/bin:/bin command -v id)" "$@"
 EOF
 mkfake whiptail <<'EOF'
 #!/bin/bash
+for ((i = 1; i <= $#; i++)); do [ "${!i}" = --title ] && { j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/titles"; }; done
 for ((i = 1; i <= $#; i++)); do
     case "${!i}" in
         --msgbox|--infobox|--gauge) j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/msgs"; exit 0 ;;
@@ -127,6 +130,22 @@ mkfake readlink <<'EOF'
 [ "${1:-}" = -f ] && { echo "$2"; exit 0; }
 exec "$(PATH=/usr/bin:/bin command -v readlink)" "$@"
 EOF
+# U68: wybór datasetu to drzewo (tree.py) w trybie jednej pozycji. Atrapa rozumie te same
+# odpowiedzi co dawne menu: "OK dN" = N-ty wybieralny dataset (kolejność cand.tsv), inna = Esc.
+mkfake tree <<'EOF'
+#!/bin/bash
+spec=""; out=""
+while [ $# -gt 0 ]; do case "$1" in --spec) spec="$2"; shift 2 ;; --out) out="$2"; shift 2 ;; *) shift ;; esac; done
+cp "$spec" "$D/tree-spec.last" 2>/dev/null
+line="$(head -n 1 "$D/answers")"; tail -n +2 "$D/answers" >"$D/answers.new"; mv -f "$D/answers.new" "$D/answers"
+case "$line" in "OK d"*) k="${line#OK d}" ;; *) printf '{"action":"back","roots":[]}' >"$out"; exit 1 ;; esac
+python3 - "$spec" "$out" "$k" <<'P'
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8")); sel = s.get("selectable") or []
+k = int(sys.argv[3])
+json.dump({"action": "next", "roots": [sel[k]] if k < len(sel) else []}, open(sys.argv[2], "w"))
+P
+EOF
 for n in udevadm modinfo clear sleep mc; do
     printf '#!/bin/bash\nexit 0\n' >"$FB/$n"; chmod +x "$FB/$n"
 done
@@ -145,14 +164,14 @@ fs_case(){ printf 'tank/fs filesystem\n' >"$D/datasets"; printf 'OK d0\nOK p0\n'
 vol_case(){   # <partfs>: dysk VM, snapdev hidden/local
     printf 'tank/vol volume\n' >"$D/datasets"; printf '%s\n' "$1" >"$D/partfs"
     printf 'hidden\n' >"$D/snapdev_value"; printf 'local\n' >"$D/snapdev_source"
-    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'OK d0\nOK p0\n' >"$D/answers"
     [ "$1" = crypto_LUKS ] && printf 'OK secret\n' >>"$D/answers"
     return 0
 }
 run_script(){   # -> rc w $rc, stdout+stderr w $D/out
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
-    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
+    PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out" 2>&1
     rc=$?
@@ -161,7 +180,7 @@ key(){ printf '%s' "$1" | sha256sum | cut -c1-32; }
 run_bg(){   # <id> [pauza]: sesja w tle, wstrzymana po montazu (i w punkcie <pauza>); rc w $D/rc.<id>
     local runner=()
     command -v setsid >/dev/null 2>&1 && runner=(setsid -w)
-    ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" \
+    ( BROWSE_TEST_PAUSE_AT="${2:-}" BROWSE_TEST_PAUSE="${2:+$D/p.$1}" PATH="$D/bin:$PATH" WHIPTAIL="$D/bin/whiptail" BROWSE_MC="$D/bin/mc" BROWSE_ROOT="$D/run" ZFS_TREE="$D/bin/tree" \
         BROWSE_MAPPER_DIR="$D/mapper" BROWSE_ZVOL_DIR="$D/zvol" ZFS_CONF_DIR="$D/conf" TESTID="$1" \
         "${runner[@]}" bash "$REPO/tui/browse.sh" --any </dev/null >"$D/out.$1" 2>&1
       echo $? >"$D/rc.$1" ) &
@@ -171,11 +190,11 @@ start_ds(){   # <id> <dataset> <value> <source>: sesja na datasecie, czeka zamon
     local k="${2//\//%}"
     printf '%s volume\n' "$2" >"$D/datasets"
     printf '%s\n' "$3" >"$D/sdv.$k"; printf '%s\n' "$4" >"$D/sds.$k"
-    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'OK d0\nOK p0\n' >"$D/answers"
     run_bg "$1"; waitf "$D/inmc.$1"
 }
 enter(){   # <id> [pauza]: kolejna sesja na tank/vol (wartosci juz w sdv/sds), bez czekania
-    printf 'tank/vol volume\n' >"$D/datasets"; printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'tank/vol volume\n' >"$D/datasets"; printf 'OK d0\nOK p0\n' >"$D/answers"
     run_bg "$1" "${2:-}"
 }
 still_running(){   # <id> <opis>: po 1.5 s sesja nadal stoi (czeka na blokade)
@@ -344,7 +363,7 @@ nolg '^zfs set snapdev=hidden'; fin
 new_case "21 odwrotnie: A stoi przed przywroceniem, B wchodzi -> B czeka; A przywraca i usuwa zapis, B czyta od nowa"
 touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
 printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf 'local\n' >"$D/sds.tank%vol"
-printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+printf 'OK d0\nOK p0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
 touch "$D/go.A"; waitf "$D/p.A.at"
 enter B; still_running B "B przy A przed przywroceniem"
 [ -e "$D/inmc.B" ] && errs+=("B zamontowal, gdy A trzymal blokade")
@@ -370,9 +389,50 @@ run_script
 rc0; [ "$(cat "$D/snapdev_value")" = hidden ] || errs+=("snapdev po wszystkim: $(cat "$D/snapdev_value") (zapis mowil hidden)")
 ls "$D"/run/orig2.* "$D"/run/hold2.* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
 fin
+term_restore(){   # <zrodlo> <nazwa>: A w pauzie przywracania dostaje jeden SIGTERM
+    new_case "$2"
+    touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
+    printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf '%s\n' "$1" >"$D/sds.tank%vol"
+    printf 'OK d0\nOK p0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+    touch "$D/go.A"; waitf "$D/p.A.at"
+    local t0=$SECONDS
+    kill -TERM "$(cat "$D/p.A.at")"; waitf "$D/rc.A"
+    [ $((SECONDS - t0)) -lt 10 ] || errs+=("sprzatanie po SIGTERM trwalo $((SECONDS - t0)) s (czekalo na wlasna blokade?)")
+    [ "$(cat "$D/rc.A" 2>/dev/null)" != 0 ] || errs+=("rc po SIGTERM = 0, oczekiwano != 0")
+    [ "$(cat "$D/sdv.tank%vol")" = hidden ] || errs+=("snapdev po SIGTERM: $(cat "$D/sdv.tank%vol") (oczekiwano hidden)")
+    ls "$D"/run/orig* "$D"/run/hold* >/dev/null 2>&1 && errs+=("zostaly zapisy: $(ls "$D/run")")
+    grep -q "nie mogę zablokować" "$D/out.A" && errs+=("sprzatanie nie wzielo wlasnej blokady")
+    [ -e "$D/p.A.go" ] && errs+=("test zwolnil pauze -- mial tylko wyslac sygnal")
+    return 0
+}
+term_restore local "24 SIGTERM podczas przywracania pod blokada -> EXIT przywraca hidden bez samozakleszczenia"
+[ "$(grep -c '^zfs set snapdev=hidden tank/vol$' "$D/log")" = 1 ] || errs+=("set hidden: $(grep -c '^zfs set snapdev=hidden tank/vol$' "$D/log") (oczekiwano 1)")
+fin
+
+term_restore "inherited from tank" "25 to samo, oryginal odziedziczony -> jedno zfs inherit, bez set hidden"
+[ "$(grep -c '^zfs inherit snapdev tank/vol$' "$D/log")" = 1 ] || errs+=("zfs inherit: $(grep -c '^zfs inherit snapdev tank/vol$' "$D/log") (oczekiwano 1)")
+nolg '^zfs set snapdev=hidden'; fin
 else
-    echo "SKIP 19-23: brak flock (REV-161 wymaga flock; uruchom na hoscie albo w CI)"
+    echo "SKIP 19-25: brak flock (REV-161/162 wymagaja flock; uruchom na hoscie albo w CI)"
 fi
+
+# ---- U68: wybór datasetu = drzewo w trybie jednej pozycji -------------------------------
+new_case "26 U68: wybór datasetu to drzewo (single), wybieralne = datasety z migawką, gałęzie nad nimi do nawigacji"
+printf 'tank/fs filesystem\n' >"$D/datasets"; printf 'OK d0\nOK p0\n' >"$D/answers"; run_script
+python3 - "$D/tree-spec.last" <<'P' >"$D/spec.chk" 2>&1
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+names = [d["name"] for d in s["datasets"]]
+print("single=%s sel=%s tank=%s fs=%s" % (s.get("single"), s.get("selectable"), "tank" in names, "tank/fs" in names))
+P
+grep -q "single=True sel=\['tank/fs'\] tank=True fs=True" "$D/spec.chk" || errs+=("spec drzewa: $(cat "$D/spec.chk")")
+has out "=== Odmontowane"; fin
+
+# ---- I-2: jedna partycja = bez okna wyboru partycji ----------------------------------------
+new_case "27 I-2: dysk VM z jedna partycja -- bez okna 'która partycja?', montuje od razu"
+: >"$D/titles"; vol_case ext4; run_script
+grep -q 'która partycja' "$D/titles" && errs+=("okno wyboru partycji przy jednej partycji: $(cat "$D/titles")")
+has out "=== Odmontowane"; fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

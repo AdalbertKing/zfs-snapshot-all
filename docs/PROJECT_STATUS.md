@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 58f2d0f48e461ba8 -->
+<!-- status-covers-digest: e46928d8755d93d7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -89,6 +89,160 @@
   „UWAGA ŁAŃCUCH … dołoży tam WŁASNE migawki”. Lustro: pytanie o szablon „Jak długo trzymać migawki (u źródła;
   lustro trzyma to samo)?”. Silnik dla backupu łańcucha sam nie wykrywa -- nie odróżniłby go od resztek tej samej
   relacji po eksport -> usuń -> import; dla lustra działa jak dotąd (tryb pasywny przy aktywacji).
+
+- **snapget v2.76: U60 + H-4 (2026-10-21; `finisz/snapget-u60-h4`, zgoda właściciela na odmrożenie).**
+  Osłona „dysk działającego gościa” tylko wtedy, gdy cel JEST ścieżką źródła (lustro) -- kopia zagnieżdżona pod
+  bazą (backup, replika na nośniku) nigdy nie jest dyskiem gościa tego hosta. Wcześniej pobranie `hdd/lab` z pve9
+  odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
+  (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
+  rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Krok 1 kreatora i okno konta jako menu (2026-10-22; `finisz/menu`).** Kampania na pve10: w radioliście whiptaila
+  Enter bierze zaznaczoną kropkę, nie podświetloną pozycję -- strzałka na „Lustro” i Enter dawały backup. Rodzaj
+  relacji i konto są teraz menu z kursorem na obecnym wyborze. Na żywo: strzałka + Enter = lustro („krok 2 z 5”);
+  test `tui` 379/0 (pve9).
+
+- **G-1: lustro na ścieżkę, która już jest na kolektorze (2026-10-22; `fix/mirror-guard`).** Kampania na pve10:
+  lustro pve9 `hdd/archive` -> pve10, który ma WŁASNY `hdd/archive`. Seed słusznie odmówił (brak wspólnej migawki,
+  bez `-f`), ale plan usunięcia tej relacji podawał potem `hdd/archive` pve10 jako „kopię” do skasowania -- jedna
+  kratka w oknie usuwania i znikają cudze dane. Teraz `delete-relation` przy lustrze, którego seed nigdy się nie
+  skończył, tych ścieżek nie proponuje („NOT offered”) i odmawia `--destroy-copies`; po udanym seedzie bez zmian.
+  Kreator ostrzega już w podsumowaniu, że taki dataset jest na tym hoście. Testy: `delrel` 25/0 (nowy przypadek
+  pada na kodzie sprzed poprawki), `tui` 378/0 (pve9); ostrzeżenie kreatora sprawdzone na żywo na pve10.
+
+- **U61: jeden werdykt o relacji (2026-10-22; `finisz/u61`).** Kampania: wiersz relacji „błąd biegu”, panel „Ostatni
+  bieg OK” (z historii transferów) i wiersz datasetu „aktualne” (z monitora) mówiły trzy różne rzeczy. Nieudany
+  ostatni bieg zadania wygrywa: panel mówi „Ostatni bieg BŁĄD … rc=N” i „Przyczyna: <dataset>: <tekst błędu>”,
+  a wiersz pary tego zadania to „błąd biegu”. Test `tui` 378/0 (pve9); na żywo niesprawdzone -- w labie nie ma
+  teraz relacji z nieudanym biegiem.
+
+- **D-1, I-2, A-1: drobne z kampanii (2026-10-22; `finisz/drobne`).** D-1: okno pauzy nie obiecuje już „następnego
+  okna” -- mówi, że wyłączenie na źródle to czynność z dołu tego okna. I-2: Przeglądaj kopię przy jednej partycji
+  na dysku VM nie pyta, którą wybrać (o jeden klawisz mniej). A-1: pomoc F1 opisuje kreator krok po kroku
+  z podsumowaniem i Zaawansowanymi. Testy: `tui` 376/0, `browse` 27/0 (pve9).
+
+- **H-7: nośnik innej repliki nie jest źródłem nowej (2026-10-22; `finisz/h7`).** Kampania: w drzewie źródeł nowej
+  repliki była pula `replab` (nośnik repliki `calapula`). Z listy znikają cała pula nośnika wymiennego i katalog
+  docelowy nośnika stałego (z `list-replicas`). Na żywo na pve10: zostaje tylko `hdd`; test `tui` 376/0 (pve9).
+
+- **U53/U54: F10 Ustawienia czytelne, szablon z listy (2026-10-22; `finisz/u54`).** Właściciel (A.4): „słabo
+  czytelne -- bloki oddziel, dodaj kolumnę z opisem”, „szablon proponowany w nowej relacji -- pole wpisywane, łatwo
+  o błąd”. Sekcje oddzielone pustą linią, trzecia kolumna z opisem klucza; `new_relation.template` wybiera się
+  z listy szablonów (fabryczne najpierw, własne oznaczone, bez ukrytych i pochodnych `-src-`). Sprawdzone na żywo
+  na pve10; test `tui` 376/0 (pve9).
+
+- **REV-167: blokada „jedna relacja na peera” przy imporcie przez HOST:PORT (2026-10-22; `fix/rev167`).** Import
+  porównywał zapisany `PEER_HOST` z surowym `--host`, który od U62 może mieć port albo inny adres tego samego peera
+  -- druga relacja do tego samego źródła przechodziła do add-client, seed i activate. Teraz porównanie idzie po
+  `PEER_HOST` z deklaracji pliku (trwała tożsamość); plik z peerem bez ważnego `PEER_HOST` jest odrzucany przed
+  czymkolwiek. Test `exportrel` 71/0 (pve9); na kodzie sprzed poprawki dwa nowe przypadki padają.
+
+- **U65: zmiana relacji jak podsumowanie kreatora (2026-10-22; `finisz/zmiana`).** Właściciel: „do kompletnej
+  przebudowy” (makieta 2026-10-21). Okno zmiany: rodzaj, nazwa, konto i cel w nagłówku (tego się nie zmienia), na
+  liście tylko to, co się zmienia (zmienione z `*` i „[zmiana]”), pod kreską tylko „ZAPISZ ZMIANY (N)”. Kopia teraz
+  zniknęła z okna (to F7 na F3); ręczna edycja i zapis jako szablon otwierają się wprost z okna relacji na F3
+  (`c`, `s`). Wartości słowami zamiast „jak w configu”: retencja źródła („godzinowe 48” albo „tyle samo co
+  w kopii”), silnik (ustawienia inne niż fabryczne albo „fabryczne”). Test `tui` 374/0 (pve9).
+
+- **U64/U66: okno postępu zamiast czarnego ekranu po WYKONAJ (2026-10-22; `finisz/postep`).** Właściciel:
+  „czarny ekran ponad 15 sekund”. `wt-lib.sh` ma `run_progress` (polecenie w tle, wyjście do dziennika, okno co
+  sekundę: ile trwa i ostatnie linie; stdin z /dev/null, więc pytanie kończy się odmową, a nie zawieszeniem; Ctrl-C
+  przerywa) i `result_box` (GOTOWE krótko albo przyczyna odmowy i koniec dziennika). Infobox dostaje
+  `TERM=linux`: przy `TERM=xterm` (PuTTY) whiptail rysował go na drugim ekranie i zdejmował w tej samej chwili --
+  okno postępu i każde „Sprawdzam…” były niewidoczne (sprawdzone na żywo w tmux na pve10, E98). Używają go: nowa relacja,
+  zmiana relacji, usuwanie relacji, replika (instalacja, od nowa, usuwanie), ustawienia. Odzysk (F11) nadal na
+  terminalu. Test `tui` 372/0 (pve9).
+
+- **REV-166: import relacji na porcie SSH innym niż 22 (2026-10-22; `fix/rev166`).** Od U62 eksport podaje
+  `--host=HOST:PORT`, a import sprawdzał roota na źródle pod nazwą „HOST:PORT” na porcie 22 -- relacja na
+  niestandardowym porcie nie dostawała automatycznego joinu (U45), a droga jednym poleceniem budowała
+  `--source=HOST:PORT:DATASETY`. Teraz adres jest rozbierany raz (`parse_endpoint_arg`) na host i port; `--host`
+  idzie dalej bez zmian, droga jednym poleceniem dostaje `--port=`. Test `exportrel` 68/0 (pve9); atrapa SSH
+  sprawdza host, port i polecenie. Na żywo niesprawdzone (lab ma tylko port 22).
+
+- **U66: kreator nowej relacji krok po kroku (2026-10-22; `finisz/kreator`, część 1 -- tworzenie).**
+  Właściciel: „do kompletnej przebudowy, nielogiczne”. Kroki danego rodzaju po kolei, tytuł „krok N z M”; Wstecz
+  zawsze o jeden krok, Wstecz w kroku 1 pyta o przerwanie. Po ostatnim kroku podsumowanie: każda pozycja otwiera
+  swój krok i wraca do podsumowania; konto i dodatki w „Zaawansowane”; kursor na „Utwórz relację”. Zmiana szablonu
+  z podsumowania przechodzi też przez retencję źródła (zależy od szablonu). Niedopasowanie szablonu do konta
+  sprawdza się przy „Utwórz”. U56: sprawdzenie hosta podaje, na jaki adres rozwiązała się nazwa, i ostrzega przed
+  adresem publicznym. „Przeglądaj…” w kroku Dokąd to drzewo jednej pozycji (reszta U68). Home/End z PuTTY
+  (`ESC[1~`/`ESC[4~`) w drzewie i tabeli retencji działały jak Esc -- naprawione. Na żywo (pve10 <- pve9): całe
+  przejście backupu do planu, z cofaniem i zmianami zdania, bez wpadek; WYKONAJ nadal pokazuje wyjście czasownika
+  na czarnym ekranie (~60 s) -- okno postępu to część 2 razem ze zmianą relacji (U64/U65). Test `tui` 371/0 (pve9).
+
+- **U68: jedno drzewo wyboru datasetów -- tryb jednej pozycji; Przeglądaj kopię go używa (2026-10-21; `finisz/drzewo`).**
+  Właściciel: „zginęło okno z rozwijającymi się gałęziami; to musi być jednolite w całym pakiecie”. Przeglądaj kopię
+  wybierała dataset z płaskiej listy (pve10: 66 pozycji, 32 strzałki do `hdd/labbrowse/v-ntfs`). `tree.py` ma tryb
+  jednej pozycji (Enter wybiera, bez kratek; wybrać da się dataset z migawką, gałęzie nad nim są do rozwijania). Na
+  żywo: 14 klawiszy zamiast 33, Wstecz z migawki wraca na drzewo z kursorem na tym samym datasecie. Wybór celu
+  w kreatorze relacji przejdzie na to drzewo razem z przebudową kreatora (U66). Testy: `browse` 26/0, `tui` 369/0.
+
+- **Katalog kopii relacji zapisany w rekordzie (2026-10-21; `finisz/landing`).**
+  Właściciel: „co będzie, jak zmienię nazwę relacji, a dane mam pod starą?”. Katalog pod celem był wyliczany z
+  adresu, z którym relację sparowano -- import przez VPN założył `hdd/backups/10.98.0.2/…` obok zachowanych
+  `…/192.168.28.98/…`. Teraz `LANDING_LABEL` zapisany raz przy zakładaniu (`add-client --landing=`), eksport go
+  niesie, import starszego pliku bierze etykietę adresu parowania; gdy katalogu nie ma, import szuka pod celem
+  katalogu z wszystkimi datasetami relacji (jeden -- bierze i mówi; kilka -- odmawia z listą). Testy: `zfsbackup`
+  990/0 (exportrel +6), `tui` 366/0, `localbackup` 161/0.
+
+- **KAMPANIA GUI NA ŻYWO -- Claude w prawdziwym GUI na pve10 (2026-10-21; `finisz/kampania-*`).**
+  Właściciel po swojej kampanii („prawie każdy krok z problemem”): Claude przechodzi każdy krok sam, w prawdziwym GUI
+  (sesja tmux na pve10, każdy klawisz z czasem i tytułem okna), jak niezdecydowany admin, z sytuacjami brzegowymi,
+  i oddaje tylko to, co przeszło. H (replika, cała pula `hdd` na testowy nośnik `replab`): kopia 165 MB z 5
+  datasetów działa; poprawione H-1 (Wstecz do drzewa pokazywał pulę jako „część”), H-2 („kopia od razu po
+  włożeniu” -- od U52 minuta), H-3 (po kreatorze F7 działał na starej liście, bo dane odświeżały się w tle --
+  po oknie KAŻDY klawisz czeka na świeże dane; drugie przejście na żywo: usunięcie i ponowne założenie `calapula`,
+  Enter, strzałka, F7 od razu -> bieg `calapula`), H-6 (pusta nazwa). H-4 (replika drzewa z datasetami-kontenerami bez migawek kończyła
+  bieg rc=1) -- naprawione w snapget v2.76. E (zmiana adresu `cb`): adres, pod którym
+  nic nie odpowiada, trafiał na listę zmian, a WYKONAJ zapisywał go w rekordzie (`endpoint_change_pending`) i padał
+  z komunikatem o pliku zakresu -- okno sprawdza teraz najpierw połączenie z host:port (5 s) i mówi wprost, że
+  nikt nie odpowiada; adres zostaje bez zmian (na żywo: 192.168.28.250 odrzucony, `cb` dalej `active`).
+
+- **FINISZ U67: replika całej puli i okna odmowy z przyczyną (2026-10-21; `finisz/U67`).**
+  Właściciel na pve10: replika z zaznaczoną całą pulą `hdd` padła z „gen-cron.sh could not render the proposed
+  config”, a prawdziwa przyczyna (silnik bierze datasety, nie korzeń puli) ginęła -- okna odmowy pokazywały tylko
+  ostatnią linię FATAL. Teraz zaznaczona pula = datasety bezpośrednio pod nią, każdy z całym drzewem pod sobą
+  (decyzja właściciela); okno to wylicza i mówi, że dataset założony później bezpośrednio pod pulą trzeba dopisać.
+  Wszystkie 8 okien odmowy (replika, zmiana relacji, ustawienia) pokazuje linie przyczyny (`verb_refusal`).
+  Testy `test/tui` 366/0 (+4).
+
+- **FINISZ U62: eksport relacji zapisuje adres, przez który relacja działa (2026-10-21; `finisz/U62`).**
+  Właściciel: wyeksportował `ab` (przeniesioną oknem „Adres hosta” na VPN 10.98.0.2), usunął z zachowaniem kopii,
+  import padł -- „skoro zrobiłem eksport, to powinien eksportować aktualny adres IP”. Eksport brał do `--host` adres
+  z parowania (192.168.28.98), a adres aktywny odkładał na „set-endpoint po aktywacji”; `add-client` musi dojść do
+  hosta już przy parowaniu, więc import nie miał szans. Teraz `--host` = adres aktywny (`ACTIVE_ENDPOINT`, z portem,
+  gdy nie 22); import starszego pliku łączy się przez zapisany w nim adres aktywny i mówi o tym. Testy `zfsbackup`
+  exportrel +4.
+- **REV-20261021-165: U42 -- wycofanie nowego konta nigdy nie kasuje katalogu domowego (2026-10-21; `finisz/REV-165`, poprawka `finisz/REV-165b`).**
+  `deploy.sh`: przy błędzie odczytu ZFS wycofanie robi zwykłe `userdel` (bez `-r`), a komunikat podaje katalog
+  domowy, który zostaje, i polecenie do ręcznego usunięcia po obejrzeniu. Pierwsza wersja zgadywała, czy katalog
+  jest „nasz” (sprawdzenie przed `useradd`) -- recenzent pokazał wyścig: katalog założony między sprawdzeniem a
+  `useradd` i tak był kasowany. Własności nie da się udowodnić, więc nie ma kasowania. Testy `test/draftscope`
+  (prawdziwy katalog z plikiem-strażnikiem, przypadek wyścigu).
+
+- **REV-20261021-164: `--leave` -- błąd odczytu ZFS nie znaczy „dataset zniknął” ani „uprawnień już nie ma” (2026-10-21; `finisz/REV-164`, R1 `finisz/REV-164b`).**
+  `deploy.sh`, `do_leave`: dataset jest „nieobecny” tylko na słowo ZFS („dataset does not exist”); każdy inny błąd
+  `zfs list` przy sprawdzaniu blokad, odbieraniu uprawnień i weryfikacji zatrzymuje `--leave`. Uprawnienia po odebraniu
+  są czytane do zmiennej i błąd odczytu też zatrzymuje -- wcześniej nieudane `zfs allow` dawało „nic nie zostało”,
+  szło `userdel -r` (konto z kluczem w katalogu domowym) i usunięcie manifestu i plików zakresu, a uid z resztką uprawnień wracał do puli. Nieczytelna blokada
+  transferu (`commit_scope_dataset_held` kod 2) też zatrzymuje. R1 (odrzucenie recenzenta): zawężanie zakresu
+  (`do_commit_scope`) rozróżnia 0/1/2 obu odczytów -- wcześniej `elif` brał kod 2 za „bez blokady” i odbierał uprawnienia,
+  a nieczytelne `zfs list` wyrzucało dataset z zapisu bez odebrania; teraz odmowa przed pierwszym `zfs allow`.
+  Testy `test/joinmanifest` +14 (prawdziwe `do_leave` i `do_commit_scope`).
+
+- **REV-20261021-163: U42 -- błąd odczytu uprawnień ZFS nie znaczy „brak uprawnień” (2026-10-21; `finisz/REV-163`).**
+  `deploy.sh`, `new_account_drop_inherited_grants` (nowe konto relacji nie dziedziczy delegacji po usuniętym koncie
+  z tym samym uid): lista datasetów i każde `zfs allow` są zapisywane i sprawdzane -- wcześniej nieudane `zfs list`
+  znaczyło „brak datasetów”, a nieudane `zfs allow` „brak uprawnień”, i konfiguracja szła dalej. Każdy błąd (list,
+  allow, unallow) usuwa świeżo założone konto i zatrzymuje bieg, więc ponowne uruchomienie zakłada je i sprawdza od
+  nowa (pozostawione konto byłoby „już istnieje” i ominęłoby sprawdzenie). Testy `test/draftscope` +6.
+
+- **REV-20261021-162: Przeglądaj kopię -- SIGTERM w trakcie przywracania (2026-10-21; `finisz/REV-162`).**
+  Blokada z REV-161 jest wielokrotnego wejścia w tym samym procesie: SIGTERM pod blokadą kończy skrypt, a
+  sprzątanie przy wyjściu (pułapka EXIT) dokańcza przywrócenie pod blokadą, którą już trzyma -- wcześniej czekało
+  na samo siebie 30 s i zostawiało dysk `visible`. Inny proces nadal czeka i po czasie nic nie zmienia. Testy
+  `test/browse` 25/25 (jeden SIGTERM w pauzie przywracania, oryginał lokalny i odziedziczony).
 
 - **FINISZ U51: jak włączamy strażników (2026-10-21; `finisz/notatki-2`).** Właściciel: „Jak włączamy strażnika
   ransomware i przepełniania puli. Globalne ustawienie w silniku dostępne z GUI? proponuj” -> „Ok”. Oba to ustawienia
@@ -11817,7 +11971,7 @@ REV-20260810-092 (sekcja 52, +6): recenzent, weryfikując REV-091, znalazł niez
 | `pairpause` | **18/18** | pauza logiczna relacji (REV-20260804-045): bramka `-L` w snapget.sh/snapsend.sh uruchamiana na PRAWDZIWYCH skryptach end-to-end (pozycja bramki jest testowaną własnością — pauza wychodzi z SKIPPED+`skipped_paused` PRZED zamkiem i sprawdzeniami zależności, co czyni ją dowodliwą bez roota/ZFS); etykieta niezapauzowana i brak etykiety płyną dalej (to drugie to UDOKUMENTOWANE ograniczenie, przypięte jako zachowanie); traversal odrzucony zanim jakakolwiek ścieżka jest dotknięta; `-L ''` = brak etykiety. Plus `check-snap-age -L`: pauza = OK z nazwanym powodem (nie cisza, nie strona), zepsuty próg pozostaje głośnym UNKNOWN także podczas pauzy. CLI zapisujące marker: `test/zfsbackup` sekcja 42; emisja `pair_label`: golden `pair-label` + negatyw `pair-label-charset` w suicie gencron |
 | `snaponly` | **77/77** | `snapget.sh -s` (REV-20261016-148): migawki na źródle bez przesyłania. PRAWDZIWE CLI z atrapami `ssh`/`zfs`/`zpool`, które zapisują każde wywołanie do śladu; asercje na śladzie: jedna migawka po stronie źródła, zero `zfs`/`zpool` na kolektorze, żadnego send/recv/hold/bookmark/destroy/rollback/mbuffer; `-r` atomowo, `-R` z `-X`/`-S` i jednym sufiksem; nieudany listing, niedostępne źródło i wyłączona bramka -- rc≠0 bez migawki; pauza `-L`; `-n` drukuje `PLAN=SNAPSHOT-ONLY` i nic nie tworzy; 21 flag transferowych i drugi argument odrzucone bez żadnego wywołania; brak mbuffer/zstd/pigz w PATH (kontrola pozytywna: zwykły pull na tym samym PATH odmawia); quiesce czysty / degrade rc 8 / strict rc 1 / lokalne źródło odmowa. Przypadek z `-s` liczy się tylko, gdy silnik przyjął `-s`. Kontrola negatywna wobec v2.74: **2 PASS / 62 FAIL** (dwie kontrole bez `-s`) |
 | `pushhistory` | **7/7** | `snapsend -H` (REV-20261017-151, P0): niezwiązany istniejący cel (bez wspólnego GUID i zakładki) -- zwykły push, push `-H` i pull `-H` odmawiają tym samym tekstem, rc 1, bez send/recv. Kontrole: `-H` na nieistniejący cel wysyła `zfs send ... -R`, `-H` ze wspólną bazą idzie przyrostowo w `recv -F` (D3). Prawdziwe CLI obu silników, atrapy `zfs`/`zpool` ze śladem. Na pushu sprzed poprawki 5/2 |
-| `browse` | **23/23** | `tui/browse.sh` uruchamiany jak wysłany (`--any`) z atrapami whiptail/zfs/mount/umount/mountpoint/cryptsetup/lsblk/mc (REV-20261021-159): stan montażu i mappera znika dopiero, gdy zasób naprawdę zniknął; bez „Odmontowane” przy pozostałości; mapper nie zamykany po odłączeniu leniwym; snapdev zmieniany tylko po poprawnym odczycie; zapis oryginału zostaje przy nieudanym przywróceniu i przy drugim żywym przeglądaniu; REV-20261021-160: `tank/a_b` i `tank/a/b` przeglądane naraz wracają każdy do swojej wartości (oba porządki), stary i cudzy zapis odrzucane bez usuwania; REV-20261021-161: ten sam dysk -- wejście i wyjście pod jednym `flock` (pauza testowa w punktach wyścigu, oba kierunki, blokada zajęta, martwy znacznik) |
+| `browse` | **25/25** | `tui/browse.sh` uruchamiany jak wysłany (`--any`) z atrapami whiptail/zfs/mount/umount/mountpoint/cryptsetup/lsblk/mc (REV-20261021-159): stan montażu i mappera znika dopiero, gdy zasób naprawdę zniknął; bez „Odmontowane” przy pozostałości; mapper nie zamykany po odłączeniu leniwym; snapdev zmieniany tylko po poprawnym odczycie; zapis oryginału zostaje przy nieudanym przywróceniu i przy drugim żywym przeglądaniu; REV-20261021-160: `tank/a_b` i `tank/a/b` przeglądane naraz wracają każdy do swojej wartości (oba porządki), stary i cudzy zapis odrzucane bez usuwania; REV-20261021-161: ten sam dysk -- wejście i wyjście pod jednym `flock` (pauza testowa w punktach wyścigu, oba kierunki, blokada zajęta, martwy znacznik); REV-20261021-162: SIGTERM w pauzie przywracania -- sprzątanie przy wyjściu przywraca bez czekania na własną blokadę |
 | `mirrorguest` | **9/9** | `snapget.sh -M` (REV-20261017-150, P0): lustro przechodzi bramkę żywego gościa przed jakimkolwiek `zfs destroy`, także gdy najnowsza migawka źródła już jest na celu. Prawdziwe CLI, atrapy `zfs`/`zpool`/`ssh`/`qm` ze śladem, baza migawek w pliku, sztuczny `QUIESCE_PVE_DIR`. Gość działa i stan nieznany: rc 1, `qm status` zapytany, zero `destroy`. Gość zatrzymany: rc 0, usunięte dokładnie `@old`. Dataset bez gościa: rc 0, bez pytania o gościa, usunięte dokładnie `@old`. Na silniku sprzed poprawki 2/7 |
 | `runsuffix` | **15/15** | jeden sufiks nazwy snapshotu na PRZEBIEG, nie na dataset (Etap 2.1). Własność, od której zależy restore: zestawu snapshotów, którego nie da się zidentyfikować jako jednego przebiegu, nie da się odtworzyć jako jednego. `create_snapshot` wyekstrahowane z OBU silników, `date(1)` zaślepione tak, by zwracało INNĄ wartość przy każdym wywołaniu — dokładnie to, co robi prawdziwe poddrzewo przekraczające granicę sekundy. Przypina też KSZTAŁT nazwy, bo zależą od niego wzorce `delsnaps`, prefiksy monitora i każda zainstalowana linia crona. Licznik zaślepki żyje w PLIKU, nie w zmiennej: `$(date ...)` biegnie w podpowłoce, więc licznik na zmiennej zwracałby tę samą wartość i kontrola negatywna przeszłaby na STARYM kodzie, nie dowodząc niczego (pierwsza wersja tego testu robiła dokładnie to). Kontrola negatywna wobec `643238a`: **2 przypadki korelacji padają, 4 nietknięte przechodzą**. Korelacja end-to-end na prawdziwym ZFS-ie należy do `test/scenarios`; ta suita przypina samą decyzję o nazywaniu |
 

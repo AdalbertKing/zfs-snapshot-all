@@ -3903,13 +3903,32 @@ fi
 # Keep this in sync if that tag ever changes.
 COMMIT_SCOPE_HOLD_TAG="zfssnapall_inflight"
 
+# -> 0 held, 1 not held, 2 the snapshots or their holds could not be read (REV-20261021-164:
+# an unreadable hold is not "no hold"). EVERY caller must tell 2 apart: in `if`/`elif`
+# 2 is simply false, i.e. "not held" -- the reviewer's R1 on this very REV, where
+# do_commit_scope's `elif` put an unreadable dataset on the revoke list.
 commit_scope_dataset_held() {   # <dataset>
-    local ds="$1" snap
+    local ds="$1" snap snaps h
+    snaps="$(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)" || return 2
     while IFS= read -r snap; do
         [ -n "$snap" ] || continue
-        zfs holds -H -- "$snap" 2>/dev/null | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
-    done < <(zfs list -H -o name -t snapshot -- "$ds" 2>/dev/null)
+        h="$(zfs holds -H -- "$snap" 2>/dev/null)" || return 2
+        printf '%s\n' "$h" | awk '{print $2}' | grep -qxF "$COMMIT_SCOPE_HOLD_TAG" && return 0
+    done <<< "$snaps"
     return 1
+}
+
+# -> 0 exists, 1 does not exist on ZFS's own word ("dataset does not exist", LC_ALL=C),
+# 2 unknown -- the read itself failed (permission, pool not imported, broken zfs).
+# ZFS_READ_ERR holds the first line of the error. REV-20261021-164: an unreadable
+# dataset is never a gone one.
+zfs_ds_presence() {   # <dataset>
+    local out
+    ZFS_READ_ERR=""
+    if out="$(LC_ALL=C zfs list -H -o name -- "$1" 2>&1)"; then return 0; fi
+    ZFS_READ_ERR="${out%%$'\n'*}"
+    case "$out" in *"dataset does not exist"*) return 1 ;; esac
+    return 2
 }
 
 do_commit_scope() {
@@ -3978,17 +3997,25 @@ do_commit_scope() {
     local -a prior=() revoke_clean=() revoke_held=() revoke_gone=()
     # shellcheck disable=SC2206
     [ -n "$prior_datasets" ] && prior=($prior_datasets)
-    local p
+    local p prc hrc
     for p in "${prior[@]:-}"; do
         [ -n "$p" ] || continue
         case " ${granted[*]:-} " in *" $p "*) continue ;; esac
-        if ! zfs list -H -o name -- "$p" >/dev/null 2>&1; then
-            revoke_gone+=("$p")
-        elif commit_scope_dataset_held "$p"; then
-            revoke_held+=("$p")
-        else
-            revoke_clean+=("$p")
-        fi
+        # REV-20261021-164 R1: every status told apart, and an unreadable one stops the
+        # run here -- still inside the plan, before the first zfs allow/unallow and
+        # before the manifest's granted list is rewritten.
+        prc=0; zfs_ds_presence "$p" || prc=$?
+        case "$prc" in
+            0) ;;
+            1) revoke_gone+=("$p"); continue ;;
+            *) die "refusing to commit the scope for '$label': could not tell whether $p (granted last time) still exists (zfs list: $ZFS_READ_ERR) -- an unreadable dataset is not a gone one, and dropping it would forget a live grant. No grant or revoke was made; fix the zfs read and re-run." ;;
+        esac
+        hrc=0; commit_scope_dataset_held "$p" || hrc=$?
+        case "$hrc" in
+            0) revoke_held+=("$p") ;;
+            1) revoke_clean+=("$p") ;;
+            *) die "refusing to commit the scope for '$label': could not read the snapshots or transfer holds of $p (granted last time) -- an unreadable hold is not 'no hold', and revoking now could strand an in-flight transfer. No grant or revoke was made; fix the zfs read and re-run." ;;
+        esac
     done
 
     log "commit-scope plan for '$label' ($account):"
@@ -4314,20 +4341,59 @@ guided_join_scope() {   # <label>
 # the delegated-account isolation broken without a word. A brand-new account has no
 # legitimate grant anywhere, so whatever `zfs allow` shows for it right after useradd
 # is inherited: listed, revoked, and the run refuses if it cannot revoke.
-new_account_drop_inherited_grants() {   # <account just created>
-    local account="$1" ds found=""
+#
+# REV-20261021-163: a read that fails is NOT "no grant". The inventory and every ACL are
+# captured and their status checked (no process substitution, no `zfs allow | grep` that
+# turns a failed read into "no match"). Any failure -- list, allow, unallow -- removes the
+# account just created and stops: a re-run creates it again and checks again, whereas an
+# account left behind would be "already exists, leaving it alone" and skip this check.
+#
+# REV-20261021-165: the rollback NEVER deletes the home. `useradd -m` creates it only
+# when it is absent and `userdel -r` deletes whatever is there; whether this run created
+# it cannot be proven (a check before useradd races with anything that creates the path
+# in between -- the reviewer's counterexample to the first fix). So the rollback removes
+# the account only, names the home it leaves, and says how to remove it by hand once
+# someone has looked. A re-run's `useradd -m` reuses the directory.
+new_account_drop_inherited_grants() {   # <account just created> <its home path>
+    local account="$1" uid ds found="" list acl
+    NEW_ACCOUNT_HOME="${2:-}"
+    uid="$(id -u "$account" 2>/dev/null)"
+    if ! list="$(zfs list -H -o name -t filesystem,volume)"; then
+        new_account_abort "$account" "$uid" "could not list the datasets (zfs list failed) to check it for inherited zfs delegations"
+    fi
     while IFS= read -r ds; do
         [ -n "$ds" ] || continue
-        zfs allow "$ds" 2>/dev/null | grep -qE "^[[:space:]]+user $account " || continue
+        if ! acl="$(zfs allow "$ds")"; then
+            new_account_abort "$account" "$uid" "could not read the zfs delegations on $ds (zfs allow failed)"
+        fi
+        printf '%s\n' "$acl" | grep -qE "^[[:space:]]+user $account " || continue
         found="$found $ds"
-    done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null)
+    done <<< "$list"
     [ -n "$found" ] || return 0
-    warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($(id -u "$account")) on:$found -- revoking them; a new account starts with no rights"
+    warn "new account $account INHERITED zfs delegations of a removed account with the same uid ($uid) on:$found -- revoking them; a new account starts with no rights"
     for ds in $found; do
         zfs unallow -u "$account" "$ds" 2>/dev/null \
-            || die "could not revoke the inherited delegation of $account on $ds -- run 'zfs unallow -u $account $ds' by hand and re-run. The account exists; nothing else was changed."
+            || new_account_abort "$account" "$uid" "could not revoke the inherited delegation of $account on $ds -- revoke it by hand: zfs unallow -u $uid $ds"
     done
     log "revoked inherited delegations of $account on:$found"
+}
+new_account_abort() {   # <account> <uid> <reason> -- never returns; reads NEW_ACCOUNT_HOME
+    local kept=" Its home ${NEW_ACCOUNT_HOME:-(path unknown)} is left in place -- a rollback never deletes a directory it cannot prove it created. Look at it; if it holds only what useradd copied from /etc/skel, remove it by hand (rm -r ${NEW_ACCOUNT_HOME:-<home>})."
+    if userdel "$1" >/dev/null 2>&1; then
+        die "new account $1 (uid $2): $3 -- the account was removed again.$kept Fix it and re-run."
+    fi
+    die "new account $1 (uid $2): $3 -- and removing the account failed too: run 'userdel $1' by hand BEFORE re-running (a re-run would take the existing account as already checked).$kept"
+}
+
+# REV-20261021-164: during --leave a dataset is "gone" only on ZFS's own word for it
+# ("dataset does not exist"). Any other failure of the read -- permission, a pool not
+# imported, a broken zfs -- is unknown, and --leave stops with <what-is-left> instead of
+# skipping that dataset's revoke or verification and going on to userdel.
+leave_ds_exists() {   # <label> <dataset> <what-is-left> -> 0 exists, 1 does not exist; dies otherwise
+    local rc=0
+    zfs_ds_presence "$2" || rc=$?
+    case "$rc" in 0) return 0 ;; 1) return 1 ;; esac
+    die "refusing --leave='$1': could not tell whether $2 exists (zfs list: $ZFS_READ_ERR) -- an unreadable dataset is not a gone one. $3"
 }
 
 do_leave() {
@@ -4377,12 +4443,18 @@ do_leave() {
 
         local -a datasets=(${PEER_JOIN_GRANTED_DATASETS:-})
         local -a held=()
-        local ds
+        local ds acl hrc
+        local left_none="Nothing has been changed."
+        local left_some="Grants already revoked where that succeeded; the account, its key and the manifest are left in place -- fix the zfs read and re-run --leave='$label'."
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            if zfs list -H -o name -- "$ds" >/dev/null 2>&1 && commit_scope_dataset_held "$ds"; then
-                held+=("$ds")
-            fi
+            leave_ds_exists "$label" "$ds" "$left_none" || continue
+            hrc=0; commit_scope_dataset_held "$ds" || hrc=$?
+            case "$hrc" in
+                0) held+=("$ds") ;;
+                1) ;;
+                *) die "refusing --leave='$label': could not read the snapshots or holds of $ds -- an unreadable hold is not 'no hold'. $left_none" ;;
+            esac
         done
         if [ "${#held[@]}" -gt 0 ]; then
             die "refusing --leave='$label': ${held[*]} has an in-flight transfer hold ($COMMIT_SCOPE_HOLD_TAG) -- revoking access now would strand that resume with no way to release its own hold. Retry once the transfer completes; nothing has been changed."
@@ -4393,7 +4465,7 @@ do_leave() {
         local perms="snapshot,destroy,mount,send,hold,release,bookmark"
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            if ! zfs list -H -o name -- "$ds" >/dev/null 2>&1; then
+            if ! leave_ds_exists "$label" "$ds" "$left_some"; then
                 log "leave: $ds no longer exists on this host -- nothing to revoke"
                 continue
             fi
@@ -4415,8 +4487,12 @@ do_leave() {
         local -a residual=()
         for ds in "${datasets[@]}"; do
             [ -n "$ds" ] || continue
-            zfs list -H -o name -- "$ds" >/dev/null 2>&1 || continue
-            zfs allow "$ds" 2>/dev/null | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
+            leave_ds_exists "$label" "$ds" "$left_some" || continue
+            # REV-20261021-164: the ACL is captured and its read checked -- a failed
+            # `zfs allow` piped into grep read as "no grant left" and opened userdel.
+            acl="$(zfs allow "$ds" 2>&1)" \
+                || die "refusing --leave='$label': could not read the zfs delegations on $ds to verify that uid $uid ($account) has none left (zfs allow: ${acl%%$'\n'*}) -- an unreadable ACL is not an empty one. $left_some"
+            printf '%s\n' "$acl" | grep -Eq "(^|[[:space:]])user (${uid}|\(unknown: ${uid}\)|${account})([[:space:],]|$)" \
                 && residual+=("$ds")
         done
         if [ "${#residual[@]}" -gt 0 ]; then
@@ -6692,7 +6768,7 @@ do_join() {
             useradd -m -s /bin/bash -c "zfs-snapshot-all peer account for $label" "$account" || die "useradd failed"
             passwd -l "$account" >/dev/null || warn "could not lock password for $account"
             log "created isolated peer account $account"
-            new_account_drop_inherited_grants "$account"
+            new_account_drop_inherited_grants "$account" "/home/$account"
         fi
         home_dir="/home/$account"
         # REV-20260804-040: the durable principal binding --leave needs to
@@ -7557,7 +7633,7 @@ else
             || die "useradd failed"
         passwd -l "$USERNAME" >/dev/null || warn "could not lock password for $USERNAME"
         log "created user $USERNAME (uid $(id -u "$USERNAME")), password locked (SSH key only)"
-        new_account_drop_inherited_grants "$USERNAME"
+        new_account_drop_inherited_grants "$USERNAME" "$HOMEDIR"
     fi
 
     # ------------------------------------------------------------------------------

@@ -16,7 +16,10 @@ SPEC: {"title", "host",
        "hide": [nazwy],      -- ukryte razem z tym, co pod nimi (cel kopii); nigdy nie widac, nie da sie zaznaczyc
        "no_exc": bool,       -- true = bez wyjatkow, tylko cale miejsca
        "show_mode": bool, "recursion": "flat"|"atomic",
-       "legend": tekst       -- opcjonalnie: pierwsza linia (domyslnie legenda kopiowania)}
+       "legend": tekst       -- opcjonalnie: pierwsza linia (domyslnie legenda kopiowania)
+       "single": bool        -- U68: wybor JEDNEJ pozycji (bez kratek); Enter wybiera, roots=[wybrany]
+       "selectable": [nazwy] -- przy single: tylko te da sie wybrac (np. majace migawki); reszta
+                                to galezie do rozwijania (brak klucza = kazda)}
 OUT:  {"action":"next"|"back", "roots":[w kolejnosci drzewa], "excl":{korzen:[posortowane wg drzewa]},
        "recursion":"flat"|"atomic"}      -- przy "back" roots/excl/recursion takie jak na starcie
 
@@ -80,7 +83,10 @@ def wrap(text, width):
 class Tree(object):
     def __init__(self, spec):
         self.spec = spec
-        self.show_mode = bool(spec.get("show_mode"))
+        self.single = bool(spec.get("single"))
+        sel = spec.get("selectable")
+        self.selectable = set(sel) if sel is not None else None
+        self.show_mode = bool(spec.get("show_mode")) and not self.single
         self.no_exc = bool(spec.get("no_exc"))
         self.recursion = "atomic" if spec.get("recursion") == "atomic" else "flat"
         hide = list(dict.fromkeys(h for h in (spec.get("hide") or []) if h))
@@ -108,6 +114,9 @@ class Tree(object):
         rows = self.rows()
         first = [r for r in self.roots if r in self.nodes]
         self.cur = first[0] if first else (rows[0] if rows else "")
+        if self.single:
+            # Jedna pozycja: korzenie z SPEC to tylko kursor na starcie, nic nie jest "zaznaczone".
+            self.roots, self.excl = [], {}
 
     # -- drzewo z nazw: rodzic = nazwa bez ostatniego skladnika; brak rodzica na liscie = poziom 0
     def _build(self, datasets):
@@ -163,7 +172,12 @@ class Tree(object):
     def checked_map(self):
         return dict((n, bool(self.covering(n))) for n in self.order)
 
+    def can_pick(self, n):
+        return self.selectable is None or n in self.selectable
+
     def mark(self, n, chk):
+        if self.single:
+            return u"" if self.can_pick(n) else u"·"
         sub = self.nodes[n]["sub"]
         if chk[n]:
             return u"[-]" if any(not chk[s] for s in sub) else u"[x]"
@@ -262,6 +276,16 @@ class Tree(object):
         nd = self.nodes.get(self.cur)
         if k == "esc":
             self.done = "back"
+        elif k in ("enter", "space") and self.single:
+            if not rows:
+                return
+            if self.can_pick(self.cur):
+                self.roots, self.done = [self.cur], "next"
+            elif nd and nd["kids"]:
+                self.expanded.add(self.cur)
+                self.msg = u"%s: tu nic do wybrania -- rozwinięte, wybierz niżej." % self.cur
+            else:
+                self.msg = u"%s: nic do wybrania." % self.cur
         elif k == "enter":
             if self.roots:
                 self.done = "next"
@@ -313,7 +337,8 @@ class Tree(object):
             exp = u"- " if n in self.expanded else u"+ "
         else:
             exp = u"  "
-        prefix = u" " + u"  " * nd["depth"] + exp + self.mark(n, chk) + u" "
+        m = self.mark(n, chk)
+        prefix = u" " + u"  " * nd["depth"] + exp + (m + u" " if m else u"")
         name = n if nd["depth"] == 0 else n.rsplit("/", 1)[1]
         size = used_text(nd["used"])
         right = (u"zvol " + size).strip() if nd["type"] == "volume" else size
@@ -335,7 +360,8 @@ class Tree(object):
         elif idx >= self.top + lh:
             self.top = idx - lh + 1
         # "legend" w SPEC: okno odzysku (tui/restore.sh) nic nie kopiuje -- odtwarza.
-        body = [self.spec.get("legend") or u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"]
+        body = [self.spec.get("legend") or (u" Enter wybiera. · = sama gałąź (nic do wybrania), → rozwija" if self.single
+                                            else u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie")]
         if self.show_mode:
             body.append(u" Sposób: cała gałąź atomowo (-r)   S zmienia" if self.recursion == "atomic"
                         else u" Sposób: każdy dataset osobno (-R)   S zmienia")
@@ -347,14 +373,18 @@ class Tree(object):
         body.append(u" ↓ więcej" if self.top + lh < len(rows) else u"")
         nexc = sum(1 for r in self.roots for e in self.excl.get(r, []) if e not in self.hide)
         auto = any(e in self.hide for r in self.roots for e in self.excl.get(r, []))
-        body.append(u" Wybrane miejsca: %d   pominięte: %d%s" % (
-            len(self.roots), nexc, u"   (cel kopii pominięty automatycznie)" if auto else u""))
+        if self.single:
+            body.append(u" Kursor: %s" % (self.cur or u"-"))
+        else:
+            body.append(u" Wybrane miejsca: %d   pominięte: %d%s" % (
+                len(self.roots), nexc, u"   (cel kopii pominięty automatycznie)" if auto else u""))
         mfirst = len(body)
         body += mlines
         title = u" %s " % (self.spec.get("title") or u"Wybór datasetów")
         if len(title) > w - 4:
             title = title[:max(1, w - 6)] + u"… "
-        hint = u"Spacja zaznacz  →/+ rozwiń  ←/- zwiń  Enter Dalej  Esc Wstecz" + (u"  S sposób" if self.show_mode else u"")
+        hint = (u"Enter wybierz  →/+ rozwiń  ←/- zwiń  Esc Wstecz" if self.single else
+                u"Spacja zaznacz  →/+ rozwiń  ←/- zwiń  Enter Dalej  Esc Wstecz" + (u"  S sposób" if self.show_mode else u""))
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + l[:iw].ljust(iw) + u"│" for l in body] + [bot]
@@ -364,6 +394,47 @@ class Tree(object):
 
 
 KEYNAMES = {"\t": "tab", " ": "space", "\n": "enter", "\r": "enter", "\x1b": "esc", "\x7f": "bs", "\x08": "bs"}
+
+# Home/End z PuTTY (i tmuxa) przy TERM=xterm: terminal wysyła ESC [ 1 ~ / ESC [ 4 ~, a opis
+# terminala xterm zna tylko ESC O H / ESC O F -- curses oddaje wtedy GOŁY Esc i resztę jako
+# znaki, więc Home/End działały jak Wstecz (kampania 2026-10-22, drzewo w kreatorze). Po gołym
+# Esc dobieramy resztę ciągu sami, jak zfs-tui.py.
+ESCSEQ = {"[A": "up", "[B": "down", "[C": "right", "[D": "left", "OA": "up", "OB": "down", "OC": "right", "OD": "left",
+          "[H": "home", "OH": "home", "[1~": "home", "[7~": "home", "[F": "end", "OF": "end", "[4~": "end", "[8~": "end",
+          "[5~": "pgup", "[6~": "pgdn", "[3~": "del"}
+
+
+def esc_tail(scr):
+    """Po gołym Esc: '' = prawdziwy Esc, nazwa klawisza, albo None (nieznany ciąg -- pomiń)."""
+    import curses
+    import time
+    seq = ""
+    scr.nodelay(True)
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 0.05 and len(seq) < 6:
+            try:
+                c = scr.get_wch()
+            except curses.error:
+                time.sleep(0.005)
+                continue
+            if not isinstance(c, str):
+                break
+            seq += c
+            if seq in ESCSEQ or seq[0] not in "[O" or seq.endswith("~") or (len(seq) == 2 and seq[1].isalpha()):
+                break
+    finally:
+        scr.nodelay(False)
+    if not seq:
+        return ""
+    if seq[0] not in "[O":          # Esc, a zaraz po nim zwykły znak: oddaj znak, zgłoś Esc
+        for ch in reversed(seq):
+            try:
+                curses.ungetch(ord(ch))
+            except (curses.error, OverflowError):
+                pass
+        return ""
+    return ESCSEQ.get(seq)
 
 
 def run_curses(t):
@@ -419,6 +490,9 @@ def run_curses(t):
             ch = scr.get_wch()
             if isinstance(ch, str):
                 k = KEYNAMES.get(ch, ch)
+                if k == "esc":
+                    k = esc_tail(scr)
+                    k = "esc" if k == "" else (k or "")
             else:
                 k = km.get(ch, "")
             if k:
