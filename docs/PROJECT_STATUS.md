@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 41801314a6454a7a -->
+<!-- status-covers-digest: d68bf912e041b331 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 5: „Zacznij od nowa” repliki (`kamp/restart`).** Na żywo na pve10 `replica-restart`
+  na `calapula` padł w kroku 1: pełna kopia szła z `-t` na `<cel>-restart`, a silnik odmawia `-t` razem z `-R`
+  („-R expands into many independent datasets”) -- dla repliki rekurencyjnej ta czynność nigdy nie mogła się udać.
+  Teraz kopia ląduje pod tymczasową bazą `<cel>/restart-tmp` (ta sama mapa co zwykły bieg), stara kopia jest
+  kasowana dopiero po udanej nowej, nowa przenoszona `zfs rename -p` na miejsce, baza tymczasowa usuwana. Test
+  `runreplicas` 20/0 (pve9).
 
 - **Kampania 2026-10-22, paczka 4: replika całej puli „aktualna” (`kamp/record`).** Po paczce 3 `usb1` pokazuje
   „Kopia z”, a `calapula` (cała pula `hdd`) dalej „brak”: znacznik „nośnik aktualny” był uzależniony od pełnego
