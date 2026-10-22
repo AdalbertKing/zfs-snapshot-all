@@ -102,7 +102,9 @@
   lustro sięgało kontenera `hdd/backups/<host>`, którego na nośniku jeszcze nie było, i uznawało jego listę migawek
   za nieczytelną. Teraz cel, który NIE ISTNIEJE, ma pustą listę i decydują dotychczasowe reguły (pusto po obu
   stronach: nic do lustra; migawki u źródła bez wspólnej bazy: odmowa). Cel istniejący, ale nieczytelny: odmowa jak
-  dotąd. Test `mirrorguest` (+3; przypadek brakującego celu pada na v2.76).
+  dotąd. Test `mirrorguest` (+3; przypadek brakującego celu pada na v2.76). Na żywo na pve10 (26365d43): nowy
+  kontener `hdd/backups/<x>` z dzieckiem z migawką, replika calapula -- v2.77 rc 0, dziecko na nośniku; ten sam
+  scenariusz na v2.76 rc 1 z „its own snapshot list could not be read” (błąd z kampanii). Zbiory testowe usunięte.
 
 - **Kampania 2026-10-22, paczka 10: co zmienia silnik (`kamp/teksty2`).** Na żywo na pve10 (lustro cb, kompresja
   na „bez”): karta zmiany relacji mówiła „Silnik  fabryczne -> zmiana [zmiana]” -- nie było widać, co się zmienia.
