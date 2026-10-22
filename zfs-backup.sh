@@ -16480,7 +16480,10 @@ jobs_block_lines_for() {   # <account> <scope> [label] -> matching engine lines,
 jobs_field() {   # <kind> <section> <tier> <field> -> value or empty
     local k="$1" s="$2" t="$3" f="$4"
     local v="${JOB_F["$k:$s|${f}_$t"]:-}"; [ -n "$v" ] && { printf '%s' "$v"; return 0; }
-    v="${JOB_F["$k:$s|$f"]:-}";            [ -n "$v" ] && { printf '%s' "$v"; return 0; }
+    # A relation block's tier is `profile__<rel>__<tier>`; its dataset section staggers
+    # the schedule under the short name (`send_schedule_hourly`), and that is what cron runs.
+    case "$t" in *__*) v="${JOB_F["$k:$s|${f}_${t##*__}"]:-}"; [ -n "$v" ] && { printf '%s' "$v"; return 0; } ;; esac
+    v="${JOB_F["$k:$s|$f"]:-}";          [ -n "$v" ] && { printf '%s' "$v"; return 0; }
     v="${JOB_F["template:$t|$f"]:-}";      [ -n "$v" ] && { printf '%s' "$v"; return 0; }
     printf '%s' "${JOB_F["defaults:|$f"]:-}"
 }
