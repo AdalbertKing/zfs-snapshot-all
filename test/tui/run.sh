@@ -5070,6 +5070,30 @@ else
 fi
 rm -rf "$U67"
 
+# Kampania 3 (2026-10-22, 80x24): pomoc F1 byla przycinana ("kop…", "domyś…") -- teraz
+# zawijana. Na prawdziwym HELP z zfs-tui.py: zaden wiersz nie jest szerszy niz okno, nie
+# ma wielokropka przyciecia, i nie ginie ani jedno slowo.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^def wrap_hanging.*?(?=^def render_window)", src, re.S | re.M)
+h = re.search(r"^HELP = \[(.*?)^\]", src, re.S | re.M)
+if not m or not h:
+    sys.exit(2)
+ns = {}
+exec(m.group(0), ns)
+lines = eval("[" + h.group(1) + "]")
+out = ns["wrap_hanging"](lines, 76)
+ok = max(len(l) for l in out) <= 76 and not any(l.endswith(u"\u2026") for l in out)
+ok = ok and " ".join(" ".join(lines).split()) == " ".join(" ".join(out).split())
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "zfs-tui: pomoc F1 zawijana do 80 kolumn -- zaden wiersz za szeroki, nic nie przyciete, zadne slowo nie zginelo"
+else
+    bad "zfs-tui: zawijanie pomocy F1" "rc=$?"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
