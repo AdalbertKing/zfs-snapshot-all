@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a6dd9a41c4211dc5 -->
+<!-- status-covers-digest: e4e6251e19d8715b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, blok B: `list-jobs` i panele pokazują harmonogram, który cron naprawdę ma (`fix/listjobs-schedule`).**
+  Dla relacji z blokiem `[relation:]` szczebel nazywa się `profile__relacja-<nazwa>__<szczebel>`, a sekcja datasetu
+  trzyma rozłożony harmonogram pod krótką nazwą (`send_schedule_hourly`) -- i to jego używa cron. `list-jobs`
+  szukał pod pełną nazwą, nie znajdował i brał harmonogram bloku: panel relacji ab mówił „Następny 22:01”, a
+  cron wysyła o :15/:16. Teraz po pełnej nazwie szuka też krótkiej. Na żywo pve10: `list-jobs` = 15/15/16 i
+  25/25/26, tak samo jak crontab. Test `zfsbackup --section listjobs` 30/0 (na main 29/1).
 
 - **Kampania 3, blok F: pomoc F1 zawijana, nie przycinana (`fix/help-wrap`).** Na 80×24 wiersze pomocy (pisanej pod
   ~100 kolumn) kończyły się „kop…”, „domyś…” -- treść ginęła. Teraz okno pomocy zawija za długi wiersz na spacji, z

@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20, E33, E81, E89, E91 (2026-10-19: the same shortcut the day after E89).*
+*Evidence: E11, E20, E33, E81, E89, E91 (2026-10-19: the same shortcut the day after E89), E100.*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -1921,6 +1921,23 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E100 — a branch switched under a background job still running its gates (2026-10-22, R5, repeat of E89/E91)
+**2026-10-22, campaign 3, `fix/help-wrap` and `fix/listjobs-schedule`.**
+
+*Genesis.* The help-wrap job was running in the background: `--refresh-status`, `--verify`,
+commit, push and PR, all in the shared checkout. While it ran I created
+`fix/listjobs-schedule` from main in that same checkout. Its commit would have landed on the wrong
+branch. I noticed before the commit step. I stopped the job, confirmed that nothing had been
+committed, switched back and started it again.
+
+*Cause.* R5. A running job's checkout is state it is reading. I treated the background job as
+finished because its output had gone quiet.
+
+*Rule.* R5. While a background job works in a checkout, that checkout's branch and index are
+the job's. Parallel work goes into its own `git worktree` in the scratchpad, as done for
+`fix/listjobs-schedule` afterwards. A job that commits also checks the branch name right
+before `git commit` (`[ "$(git branch --show-current)" = <branch> ] || exit 9`).
 
 ### E99 — a status entry committed with no `--refresh-status`; CI's graph job went red (2026-10-22, R4, repeat of E27/E39/E84)
 **2026-10-22, H-4b, PR #749 (head a5734f5b when CI failed).**
