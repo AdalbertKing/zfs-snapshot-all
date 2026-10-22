@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 7e21c3e7efa46b4a -->
+<!-- status-covers-digest: 89b581dff6bb8e6c -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,11 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 10: co zmienia silnik (`kamp/teksty2`).** Na żywo na pve10 (lustro cb, kompresja
+  na „bez”): karta zmiany relacji mówiła „Silnik  fabryczne -> zmiana [zmiana]” -- nie było widać, co się zmienia.
+  Teraz słowami z okna silnika, np. „kompresja: nie [zmiana]”, „historia: tylko różnica do najnowszej”.
+  Test `tui` na pve9 (przypadek pada na kodzie sprzed poprawki).
 
 - **Kampania 2026-10-22, paczka 9: teksty i podpowiedzi (`kamp/teksty`).** Trzy drobiazgi z przejścia na żywo.
   (1) Podsumowanie kreatora przy migawkach zdalnych mówiło zdaniem lustra („Cel: (lustro: ta sama ścieżka)”); teraz
