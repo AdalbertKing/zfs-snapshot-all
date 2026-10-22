@@ -39,8 +39,13 @@ fit() {    # <wiersze tekstu+listy> -> wysokość okna, nie większa niż ekran
 wt() {     # whiptail z odpowiedzią w WT_OUT; rc: 0 = OK, inne = wstecz
     WT_OUT=$("$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" "$@" 3>&1 1>&2 2>&3)
 }
+# INFOBOX MUSI ZOSTAĆ NA EKRANIE (kampania 2026-10-22, pve10): przy TERM=xterm (PuTTY, tmux)
+# whiptail rysuje na DRUGIM ekranie terminala (smcup) i przy wyjściu go zdejmuje -- infobox
+# znikał w tej samej chwili, a operator patrzył na czarny ekran. Opis "linux" nie przełącza
+# ekranu, a ma te same kolory; ramki newt w UTF-8 rysuje i tak znakami Unicode.
+INFO_TERM="${WT_INFO_TERM:-linux}"
 info() {   # <tytuł> <tekst> -- okno bez przycisków na czas czekania
-    "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$1" --infobox "$2" 7 "$W"
+    TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$1" --infobox "$2" 7 "$W"
 }
 lhfit() {  # <pozycji> <wierszy tekstu> -> wysokość listy, która zostawia miejsce na tekst
     local n="$1" max=$((H - 7 - $2)); [ "$max" -lt 3 ] && max=3; [ "$n" -gt "$max" ] && n=$max; echo "$n"
@@ -67,7 +72,7 @@ run_progress() {   # <tytuł> <dziennik> <polecenie...> -> rc polecenia; dzienni
     while kill -0 "$pid" 2>/dev/null; do
         geom
         n=$((H - 8)); [ "$n" -gt 14 ] && n=14; [ "$n" -lt 3 ] && n=3
-        "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t -- trwa $((SECONDS - s0)) s" \
+        TERM="$INFO_TERM" "$WT" --backtitle "${WT_BACKTITLE:-zfs-snapshot-all -- $(hostname)}" --title "$t -- trwa $((SECONDS - s0)) s" \
               --infobox "$(tail -n "$n" "$log" | cut -c1-$((W - 6)))" $((n + 4)) "$W"
         for i in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
     done
