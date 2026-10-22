@@ -140,7 +140,7 @@ address_flow() {
         new="${WT_OUT// /}"
         [ -n "$new" ] || continue
         case "$new" in
-            *[!A-Za-z0-9.:_-]*) wt --title "Zły adres" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie i :port." 8 "$W"; continue ;;
+            *[!A-Za-z0-9.:_-]*) wt --title "Zły adres" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, myślnik, podkreślenie i :port." 8 "$W"; continue ;;
         esac
         # LISTA ZMIAN (właściciel 2026-10-19: "nie można zmienić wiele ustawień i na końcu
         # zaimplementować, tylko po jednym kroku"): adres czeka na liście, WYKONAJ jest jedno,
@@ -784,7 +784,7 @@ while :; do
     else
     card_menu "Zmiana relacji $NAME" "$_hdr\nCo zmienić? Tego wyżej się nie zmienia (inaczej: nowa relacja). Zapis dopiero w \"Zapisz zmiany\"." "${LAST_ACTION:-dane}" "Wstecz" || {
            if [ "$np" -gt 0 ]; then
-               wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
+               wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wstecz" --defaultno \
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
                [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
@@ -829,7 +829,7 @@ while :; do
             wt --title "Zapisz jako szablon" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Nazwa nowego szablonu (litery, cyfry, . _ -).\nTrzyma i robi migawki tak jak relacja $NAME teraz: $(cur_words)." 10 "$W" "$NAME-szablon" || continue
             n="${WT_OUT// /}"
-            case "$n" in ''|-*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, minus, podkreślenie; na początku nie minus." 8 "$W"; continue ;; esac
+            case "$n" in ''|-*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- tylko litery, cyfry, kropka, myślnik, podkreślenie; na początku nie myślnik." 8 "$W"; continue ;; esac
             if awk -F'\t' -v n="$n" '$1==n{f=1} END{exit !f}' "$TMPD/prof.tsv"; then
                 wt --title "Nazwa zajęta" --msgbox "Szablon '$n' już jest. Podaj inną nazwę." 8 "$W"; continue
             fi

@@ -107,7 +107,8 @@ step_host() {
         [ -e "$TMPD/rel.done" ] || info "$(title 2 'Z którego hosta?')" "Sprawdzam, czy z $h nie ma już relacji..."
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
-            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się na F3: Enter na niej,\npotem 'e' i „Datasety” w karcie zmiany (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma." 14 "$W"
+            wt --title "Ta relacja już istnieje" --msgbox "Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się w jej zmianie,
+pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma." 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
@@ -639,7 +640,7 @@ step_account() {
         wt --title "$(title 8 'Na jakim koncie mają chodzić zadania?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$cur" \
            --menu "Konto na TYM hoście, na którym cron będzie uruchamiał zadania tej relacji.\nKonto delegowane nie jest rootem: dostaje tylko prawa zfs do celu." "$(fit 8)" "$W" 3 \
            root      "root  -- bez izolacji (tak działa większość floty dziś)" \
-           zfsbackup "zfsbackup  -- konto delegowane (zostanie utworzone)" \
+           zfsbackup "zfsbackup  -- konto delegowane (utworzone, jeśli go nie ma)" \
            other     "inne konto…  (podasz nazwę)" || return 1
         [ -n "$WT_OUT" ] && ACCT="$WT_OUT"
         if [ "$ACCT" = other ]; then

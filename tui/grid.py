@@ -252,7 +252,7 @@ class Grid(object):
             if f.get("key") == nk:
                 v = f["value"].strip()
                 if not v or not NAME_RE.match(v):
-                    self.msg = u"Zła nazwa: tylko litery, cyfry, kropka, minus, podkreślenie."
+                    self.msg = u"Zła nazwa: tylko litery, cyfry, kropka, myślnik, podkreślenie."
                     return False
                 if v in (self.spec.get("taken") or []):
                     self.msg = u"Szablon '%s' już jest -- podaj inną nazwę." % v
