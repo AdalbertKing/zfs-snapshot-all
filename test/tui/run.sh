@@ -747,6 +747,24 @@ if hasE "$GER" '^║ sync-test .*błąd biegu' && ! hasE "$GER" '^║ backup-tes
 else
     bad "relacje: błąd biegu na F3" "$(printf '%s\n' "$GER" | grep -E '^║ (sync|backup)-test')"
 fi
+# U61 (kampania 2026-10-21): relacja "błąd biegu", panel "Ostatni bieg OK", wiersz datasetu
+# "aktualne" -- trzy werdykty o tym samym. Teraz panel mowi BŁĄD i przyczyne (ktory dataset,
+# dlaczego), a wiersz pary nieudanego zadania to "błąd biegu"; pary udanych zostaja "aktualne".
+u61_ok=0; u61_dump=""
+for u61k in "" down down,down; do
+    U61="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$GS" --jobs "$GEJ" --monitors "$GM" --stats "$GES" --screen relacje --width 200 --height 60 --keys "$u61k" 2>&1)"
+    has "$U61" 'Przyczyna' || continue
+    u61_dump="$U61"
+    if hasE "$U61" 'Ostatni bieg +BŁĄD +2026-09-08 13:48 +rc=1' && hasE "$U61" 'Przyczyna +[^ ]*b: Refusing' \
+       && ! hasE "$U61" 'Ostatni bieg +OK' && printf '%s\n' "$U61" | grep 'lab/b' | grep -q 'błąd biegu' \
+       && printf '%s\n' "$U61" | grep 'lab/c' | grep -vq 'błąd biegu'; then u61_ok=1; fi
+    break
+done
+if [ "$u61_ok" -eq 1 ]; then
+    ok "relacje U61: jeden werdykt -- panel 'Ostatni bieg BŁĄD ... rc=1' i 'Przyczyna: b: Refusing...', wiersz pary b 'błąd biegu', c bez bledu"
+else
+    bad "relacje U61: sprzeczne werdykty" "$(printf '%s\n' "$u61_dump" | grep -E 'Ostatni bieg|Przyczyna|lab/[abcd]' | head -10)"
+fi
 rm -f "$GEJ" "$GES"
 # Wlasciciel 2026-10-08: "zmien synchro na lustro w GUI" -- dane ida w jedna
 # strone, od backupu rozni sie tylko retencja. Panel F3 podaje typ relacji.

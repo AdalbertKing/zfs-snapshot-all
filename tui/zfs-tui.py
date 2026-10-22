@@ -2153,7 +2153,20 @@ def rel_panel_pairs(row, data, now, ch):
         mon += u"   alarm po %s" % (m0.get("crit") or "?")
     pairs.append((u"Migawki" if rel.get("mode") == "snaponly" else u"Kopie", mon))
     last = row["last"]
-    if last:
+    # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
+    # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
+    fails = []
+    if rel.get("state") == "active":
+        for j in row["jobs"]:
+            if j.get("section_kind") in SEND_KINDS:
+                f, _ = job_run_issue(data, j)
+                if f:
+                    fails.append(((j.get("scope") or "?").split(":")[-1], f))
+    if fails:
+        ds, f = fails[0]
+        pairs.append((u"Ostatni bieg", u"BŁĄD   %s   rc=%s%s" % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
+        pairs.append((u"Przyczyna", u"%s: %s" % (ds, f[2] or u"zobacz cron.log")))
+    elif last:
         w, note = transfer_word(last, now)
         st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
         txt = u"%s   %s" % (w, fmt_full(fin if fin else st_))
@@ -2552,6 +2565,13 @@ def rel_pairs(row, data, now, ch):
             elif dst == "-":
                 dst = None
             v, _reason = verdict_for_job(j, monitors)
+            # U61 (kampania 2026-10-21): wiersz relacji mowil "błąd biegu", a wiersz jej
+            # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
+            # dawac ten sam werdykt w obu miejscach.
+            if (row.get("rel") or {}).get("state") == "active":
+                _fail, _ = job_run_issue(data, j)
+                if _fail:
+                    v = worst([v, "BLAD"])
             srow, vol = job_stats_for(data, j, job_cron_label(j))
             if data.failed("stats"):
                 czas, gb = "?", "?"
