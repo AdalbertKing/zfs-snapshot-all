@@ -605,7 +605,7 @@ step_name() {
     while :; do
         geom
         wt --title "$(title 7 'Nazwa relacji')" --ok-button "Dalej" --cancel-button "Wstecz" \
-           --inputbox "Pod tą nazwą relacja będzie widoczna na F3, w cronie i w mailach.\nLitery, cyfry, kropka, myślnik, podkreślenie." 11 "$W" "$RNAME" || return 1
+           --inputbox "Pod tą nazwą relacja będzie widoczna na F3, w cronie i w mailach.\nLitery, cyfry, kropka, myślnik, podkreślenie; na początku nie kropka ani myślnik." 11 "$W" "$RNAME" || return 1
         n="${WT_OUT// /}"
         case "$n" in ''|[-.]*|*[!A-Za-z0-9._-]*) wt --title "Zła nazwa" --msgbox "'$WT_OUT' -- dozwolone: litery, cyfry, kropka, myślnik, podkreślenie; na początku nie kropka ani myślnik." 8 "$W"; continue ;; esac
         [ -s "$TMPD/rel.tsv" ] || status_tsv
