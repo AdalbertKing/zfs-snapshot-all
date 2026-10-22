@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ce7de07ec00a3b46 -->
+<!-- status-covers-digest: 027bafe114900777 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 2026-10-22, paczka 8: migawki zdalne z kreatora (`kamp/snaponly`).** Na żywo na pve10: „Migawki
+  zdalne” z kreatora odrzucał plan czasownika -- kreator dokładał domyślne `--exclude-family` (i ewentualnie
+  `--raw`), a snaponly niczego nie kopiuje i czasownik słusznie odmawia tego, co kształtuje kopię. Teraz bez nich.
+  Drzewo przy migawkach (lokalnych i zdalnych) pyta „Gdzie robić migawki na …?” i mówi „[x] z migawkami” zamiast
+  „Co kopiować / kopiowane”. Test `tui` 386/0 (pve9; przypadek pada na kodzie sprzed poprawki).
 
 - **Kampania 2026-10-22, paczka 7: długi plan, cel kopii lokalnej (`kamp/plan`).** Na żywo na pve10: długi plan
   (kopia lokalna) otwierał się w oknie z przewijaniem, w którym Enter nic nie robi, dopóki nie naciśnie się Tab --

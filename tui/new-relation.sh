@@ -814,8 +814,13 @@ build_argv() {   # [install] -> ARGV[]
             [ "$(kids_count "$x")" -gt 0 ] && ARGV+=("--exclude-child=^$x/")
         done <<<"${B_EXCL[$i]}"
     done
-    [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
-    [ "$RAW" -eq 1 ] && ARGV+=("--raw")
+    # Campaign 2026-10-22 (pve10): snaponly copies nothing, and the verb refuses what shapes a
+    # copy ("--passive/--raw/--exclude-* shape a copy") -- the wizard sent the default family
+    # exclusions and every "Migawki zdalne" was refused at the plan.
+    if [ "$MODE" != snaponly ]; then
+        [ -n "$EXFAM" ] && ARGV+=("--exclude-family=$EXFAM")
+        [ "$RAW" -eq 1 ] && ARGV+=("--raw")
+    fi
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")

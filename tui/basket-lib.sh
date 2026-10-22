@@ -79,15 +79,24 @@ basket_step() {
     local mode=1 noexc=0 k a b
     { [ "${MODE:-}" = local ] || [ "${BASKET_NO_MODE:-0}" = 1 ]; } && mode=0
     [ "${BASKET_NO_EXC:-0}" = 1 ] && noexc=1
-    "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "Co kopiować z $HOST?")" "$HOST" "$mode" "$noexc" \
+    # Kampania 2026-10-22: przy migawkach (lokalnych albo zdalnych) nic się nie kopiuje, a okno
+    # pytało "Co kopiować z ...?" i mówiło "[x] kopiowane". Słowa okna z rodzaju relacji.
+    local q="Co kopiować z $HOST?" lg=""
+    if [ "${NOCOPY:-0}" = 1 ] || [ "${MODE:-}" = snaponly ]; then
+        q="Gdzie robić migawki na $HOST?"
+        lg=" [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] część   [ ] bez"
+    fi
+    BASKET_LEGEND="$lg" "$PY" - "$BASKET_DS_JSON" "$TMPD/tree-spec.json" "$(title 4 "$q")" "$HOST" "$mode" "$noexc" \
         "${RECURSION:-flat}" "${BASKET_HIDE:-}" "${#B_ROOT[@]}" ${B_ROOT[@]+"${B_ROOT[@]}"} ${B_EXCL[@]+"${B_EXCL[@]}"} <<'PYEOF' || return 1
-import sys, json
+import sys, json, os
 ds = json.load(open(sys.argv[1], encoding="utf-8")).get("datasets") or []
 n = int(sys.argv[9]); roots = sys.argv[10:10 + n]; ex = sys.argv[10 + n:10 + 2 * n]
 spec = {"title": sys.argv[3], "host": sys.argv[4], "show_mode": sys.argv[5] == "1", "no_exc": sys.argv[6] == "1",
         "recursion": sys.argv[7], "hide": sys.argv[8].split(),
         "datasets": [{"name": d.get("name", ""), "used": d.get("used"), "type": d.get("type")} for d in ds],
         "roots": roots, "excl": {r: [x for x in e.split("\n") if x] for r, e in zip(roots, ex)}}
+if os.environ.get("BASKET_LEGEND"):
+    spec["legend"] = os.environ["BASKET_LEGEND"]
 with open(sys.argv[2], "w", encoding="utf-8") as f:
     json.dump(spec, f, ensure_ascii=False)
 PYEOF
