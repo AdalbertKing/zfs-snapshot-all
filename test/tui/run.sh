@@ -3012,7 +3012,7 @@ fi
 # pseudo-akcja "dalej".
 NRL="$(grep -F 'Ustawienia dodatkowe' "$NR/wt.log" | head -1)"
 if has "$NRL" '--checklist' && has "$NRL" -- '--ok-button ~ Dalej ~' && has "$NRL" -- '--cancel-button ~ Wstecz ~' \
-   && ! has "$NRL" 'Bez zmian' && ! has "$NRL" 'DALEJ --' && has "$NRL" 'SPACJA przełącza'; then
+   && ! has "$NRL" 'Bez zmian' && ! has "$NRL" 'DALEJ --' && has "$NRL" 'Ustawienia dodatkowe   [Spacja przełącza] ~' && ! has "$NRL" 'SPACJA' && ! has "$NRL" 'ENTER ='; then
     ok "new-relation: 'Ustawienia dodatkowe' to CHECKLISTA z przyciskami Dalej/Wstecz -- zadna pozycja listy nie udaje przycisku 'dalej' (wlasciciel, 2026-09-20)"
 else
     bad "new-relation: ksztalt kroku 9" "$(printf '%s' "$NRL" | cut -c1-400)"
