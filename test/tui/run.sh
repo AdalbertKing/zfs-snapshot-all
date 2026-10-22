@@ -4872,6 +4872,11 @@ else
     bad "U66/U64: run_progress/result_box" "$(cat "$RP/out")" "$(cut -c1-200 "$RP/wt.log" | head -8)" "$(cat "$RP/run.log")"
 fi
 rm -rf "$RP"
+# Kampania 2026-10-22: w radioliscie whiptaila Enter bierze ZAZNACZONA kropke, nie podswietlona
+# pozycje (strzalka na "Lustro" + Enter = backup; trzeci punkt odzysku + Enter = najnowszy).
+# Zadne okno pakietu nie uzywa radiolisty -- wybor jednej pozycji to menu z kursorem na obecnej.
+rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3)"
+[ -z "$rl_left" ] && ok "okna: zadnej radiolisty -- wybor jednej pozycji to menu (Enter = podswietlona)" || bad "okna: radiolista zostala" "$rl_left"
 # ---- U67 (owner 2026-10-21): whole pool in the replica picker; the refusal says WHY ------
 U67="$(mktemp -d)"
 # verb_refusal: the reason lines above FATAL reach the window (measured on pve10: only the

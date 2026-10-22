@@ -55,7 +55,7 @@ run_cmd() {
 }
 
 # points.tsv (czas utworzenia <TAB> nazwa migawki, najnowsza pierwsza) -> PT_TIME + menu
-# (radiolist p0..pN; p0 = najnowszy, domyślnie ON). Wspólne dla obu trybów.
+# (menu p0..pN; p0 = najnowszy, kursor na nim). Wspólne dla obu trybów.
 #
 # PT_AT = granica --at dla punktu: "tuż przed NASTĘPNYM (nowszym) punktem", nie sekunda
 # tego punktu. Jeden bieg robi migawki datasetów po kolei, sekundy po sobie (pve10, 10-15:
@@ -70,9 +70,12 @@ build_points() {
         if [ -n "$prev" ]; then PT_AT+=("$(date -d "@$((prev - 1))" '+%Y-%m-%d %H:%M:%S')"); else PT_AT+=(""); fi
         prev="$cr"
         case "$nm" in *_*) tier="${nm#*_}"; tier="${tier%%_*}" ;; *) tier="$nm" ;; esac
+        # Kampania 2026-10-22: migawka bez rodziny w nazwie (2026-10-22_08-18-21) dawała
+        # etykietę "08-18-21" -- ułomek godziny. Wtedy pełna nazwa migawki.
+        case "$tier" in ''|*[!a-z]*) tier="$nm" ;; esac
         lbl="$tm  $tier"
         [ "${#PT_TIME[@]}" -eq 0 ] && lbl="$lbl  (najnowszy)"
-        menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))" "$([ "${#PT_TIME[@]}" -eq 0 ] && echo ON || echo OFF)")
+        menu+=("p${#PT_TIME[@]}" "$(clip_label "$lbl" $((W - 14)))")
         PT_TIME+=("$tm")
     done <"$TMPD/points.tsv"
 }
@@ -212,7 +215,7 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
                 exit 1
             fi
             wt --title "Przywróć z dysku: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --radiolist "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+               --default-item p0 --menu "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
@@ -411,9 +414,9 @@ PYEOF
     2)  # ---- DOKĄD? ----------------------------------------------------------------------
         geom
         wt --title "Przywróć $REL: dokąd?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --radiolist "Gdzie odtworzyć wybrane datasety?" "$(fit 5)" "$W" "$(lhfit 2 1)" \
-           obok "Obok oryginału na $TARGET -- nic nie nadpisuje" ON \
-           miejsce "Na miejsce na $TARGET -- NADPISUJE obecne dane" OFF || { step=1; continue; }
+           --default-item obok --menu "Gdzie odtworzyć wybrane datasety?" "$(fit 5)" "$W" "$(lhfit 2 1)" \
+           obok "Obok oryginału na $TARGET -- nic nie nadpisuje" \
+           miejsce "Na miejsce na $TARGET -- NADPISUJE obecne dane" || { step=1; continue; }
         DEST="$WT_OUT"
         ONTO=()
         if [ "$DEST" = obok ]; then
@@ -488,7 +491,7 @@ PYEOF
         fi
         geom
         wt --title "Przywróć $REL: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --radiolist "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+           --default-item p0 --menu "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
            "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
