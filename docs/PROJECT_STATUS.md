@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bc84868b250c9806 -->
+<!-- status-covers-digest: b81b60723fb2a4dc -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,18 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Szablony: `default` płaski z m3, nowy `full`, na liście pięć (`kamp/default-flat`, decyzja właściciela
+  2026-10-22).** `default` = h24 d7 w4 m3 liczone PŁASKO (było: każdy szczebel GFS, m12) -- GFS liczy od zegara,
+  więc po długiej przerwie źródła kolektor kasował kopie godzinowe, dobowe i tygodniowe (profiles/README.md:
+  zmierzone 0 z 6 po 30 dniach). Nowy `full` = h24 d7 w4 m12 y5 płasko (roczny o 04:41 1.01, osobna minuta od
+  miesięcznego). Na liście w F5 i kreatorze zostają `default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs`
+  (wersja GFS, osobny prefiks na rodzinę); pozostałe 11 mają `hidden = yes` -- pliki zostają, bo relacje
+  z nich mogą je jeszcze czytać (patrz DESIGN-SZABLON-TYLKO-PRZY-TWORZENIU-2026-10-22.md). `passive-flat` mimo
+  ukrycia pokazuje się, gdy kreator wykryje łańcuch i go poleca. Istniejące relacje bez zmian (config jest
+  prawdą). Wycofany: szablon jednej rodziny z drabiną GFS -- blok relacji przyjmuje jeden licznik GFS na
+  szczebel. Testy: `profiles` 93/0, `tui` 390/0, `zfsbackup` saveprof 45/0 i listprofiles 23/0 (asercje starego
+  `default` przepisane na płaski i M3).
 
 - **Odzysk z kopii zaszyfrowanej (raw) działa; karta mówi „zaszyfrowane” (`kamp/raw-words`).** Kampania
   wariantów, pve10 2026-10-22, W1+W2: relacja pve9 (zaszyfrowane `hdd/enc`, raw, zadania na koncie delegowanym
