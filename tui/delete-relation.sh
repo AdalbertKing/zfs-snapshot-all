@@ -40,6 +40,9 @@ while :; do
     # i tak by nie wyszło (czasownik staje w połowie) -- nie proponujemy go, mówimy,
     # co zrobić ręcznie na źródle; usunięcie idzie z --keep-source.
     case "$SRC_LINE" in
+        # Kampania 2026-10-22: relacja lokalna dawała "Źródło (?): bez zmian -- a local
+        # relationship -- source and copy are on this host" -- bez peera to nie jest uwaga.
+        skipped*"local relationship"*) note_src="" ;;
         skipped*) note_src="Źródło ($PEER): bez zmian -- ${SRC_LINE#skipped -- }" ;;
         "NO root"*) note_src="Źródło ($PEER): brak dostępu roota z tego hosta -- tam zostaje konto relacji. Posprzątaj ręcznie, na $PEER jako root: $LEAVE_CMD" ;;
         *)        note_src=""; items+=(src "Posprzątaj na źródle $PEER (konto i prawa zfs)" "$SRC") ;;
@@ -49,7 +52,7 @@ while :; do
     head="Relacja '$NAME' (stan: ${STATE:-?}) przestanie działać: znikną jej zadania z crona."
     [ "$STATE" = removed ] && head="Relacja '$NAME' jest już usunięta -- zostało po niej to, co niżej."
     wt --title "Usuń relację $NAME -- co jeszcze?   [Spacja zaznacza]" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+Kopie na tym hoście: $COPIES\n}Kopii domyślnie NIE ruszam." "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
+       --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+Kopie na tym hoście: $COPIES\nKopii domyślnie NIE ruszam.}" "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
        "${items[@]}" || { clear 2>/dev/null; echo "delete-relation: przerwane, nic nie zmieniono"; exit 1; }
     SRC=OFF; REC=OFF; DATA=OFF
     while IFS= read -r x; do case "$x" in src) SRC=ON ;; rec) REC=ON ;; data) DATA=ON ;; esac; done <<<"$WT_OUT"

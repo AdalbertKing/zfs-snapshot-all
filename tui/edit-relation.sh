@@ -768,7 +768,7 @@ while :; do
            if [ "$np" -gt 0 ]; then
                wt --title "Porzucić zmiany?" --yes-button "Porzuć" --no-button "Wróć" --defaultno \
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
-               [ $? -eq 1 ] && continue
+               [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
            clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
     fi
