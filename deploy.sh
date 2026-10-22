@@ -4407,6 +4407,18 @@ do_leave() {
     local account="${PEER_JOIN_ACCOUNT:-}"
     [ -n "$account" ] || die "internal: manifest for '$label' has no account recorded"
 
+    # A RESTORE GRANT GOES WITH THE COLLECTOR (campaign 2026-10-22, pve9): after
+    # --allow-restore=<label> the same account also holds create/receive/rollback
+    # there, --leave revoked only the copy grant, and its residue check then refused
+    # -- every delete-relation after a restore stopped half-way on the source. The
+    # collector is leaving, so its restore consent is taken back first, by the very
+    # revocation --deny-restore performs (record, delegation, paused writers).
+    if [ -f "$(restore_grant_path "$label")" ] || [ -f "$(restore_revoke_path "$label")" ]; then
+        log "leave: '$label' still holds a restore grant on this host -- taking it back first (as --deny-restore=$label)"
+        DENY_RESTORE_LABEL="$label"
+        do_deny_restore
+    fi
+
     if [ "${PEER_JOIN_AS:-}" = root ]; then
         log "'$label' joined with --as=root -- no delegated account or grant to remove here; just cleaning up state"
     else
