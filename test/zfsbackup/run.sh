@@ -8346,7 +8346,8 @@ fi
 # config gen-cron accepts: its tiers pick up (-e) and create nothing, so the
 # "creates automated_... but prunes automated_hourly" lint must not refuse it.
 PK_CREATED="2026-10-22 14:00:00" pk_emit d7h24 >/dev/null; rc=$?
-gc_out=$(bash "$REPO/gen-cron.sh" -c "$PK/last.conf" 2>&1); gc_rc=$?
+{ printf '[defaults]\n\thost_label = x\n\n'; cat "$PK/last.conf"; } > "$PK/gc.conf"
+gc_out=$(bash "$REPO/gen-cron.sh" -c "$PK/gc.conf" 2>&1); gc_rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'PASSIVE consumption' "$PK/d7h24.log" && [ "$gc_rc" -eq 0 ]; then
     ok "passivepick: a passive sync on d7h24 (two tiers, prefix = automated_) passes gen-cron -- an -e tier creates nothing"
 else
@@ -10199,11 +10200,11 @@ fi
 # FAMILY_BORN_AT (variant campaign, pve10 2026-10-22): an imported relationship
 # carries its FIRST birth, and the next export passes that on, not its own new
 # CREATED_AT -- otherwise a second export/import round makes the mirror passive again.
-sed 's/^CLIENT_NAME=.*/CLIENT_NAME=ksiegborn/; $a FAMILY_BORN_AT=2026-08-01 09:00:00' "$EX/clients/ksiegowosc.conf" > "$EX/clients/ksiegborn.conf"
+sed 's/^CLIENT_NAME=.*/CLIENT_NAME=ksiegborn/; $a FAMILY_BORN_AT=2026-08-01T09:00:00Z' "$EX/clients/ksiegowosc.conf" > "$EX/clients/ksiegborn.conf"
 ex_run export-relation ksiegborn --json; ex_brc=$?
 ex_bout="$(cat "$WORK/ex.out")"
 case "$ex_brc:$ex_bout" in
-    0:*'"--family-born=2026-08-01 09:00:00"'*) case "$ex_bout" in *'--family-born=2026-09-01'*) bad "exportrel: FAMILY_BORN_AT wins over CREATED_AT" "$ex_bout" ;; *) ok "exportrel: a recorded FAMILY_BORN_AT is exported, not the record's own CREATED_AT" ;; esac ;;
+    0:*'"--family-born=2026-08-01T09:00:00Z"'*) case "$ex_bout" in *'--family-born=2026-09-01'*) bad "exportrel: FAMILY_BORN_AT wins over CREATED_AT" "$ex_bout" ;; *) ok "exportrel: a recorded FAMILY_BORN_AT is exported, not the record's own CREATED_AT" ;; esac ;;
     *) bad "exportrel: FAMILY_BORN_AT wins over CREATED_AT" "rc=$ex_brc" "$ex_bout" ;;
 esac
 # WITH A MODE the same list replays as --requested= (it narrows the DRAFT the
