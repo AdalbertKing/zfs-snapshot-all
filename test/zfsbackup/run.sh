@@ -8324,7 +8324,9 @@ pk_emit() {   # <profile> [EXCLUDE_FAMILY_1] -> the [dataset:] section, rc of th
       PROFILE_ACTIVE="$prof" PROFILE_LOADED=""
       ssh() { printf 'rpool/data/vm-101@automated_hourly_x\t100\n'; }
       load_ssh_opts() { LOAD_SSH_OPTS=(); }
-      emit_client_sections "$wf" pk ${PK_NEW:+1} ) > "$PK/$prof.log" 2>&1 || return 1
+      emit_client_sections "$wf" pk ${PK_NEW:+1} || exit 1
+      [ -n "${PK_NEW:-}" ] && [ -f "${PROFILE_TPL_FILE:-}" ] && cat "$PROFILE_TPL_FILE" >> "$wf"
+      exit 0 ) > "$PK/$prof.log" 2>&1 || return 1
     cp "$wf" "$PK/last.conf"
     sed -n '/^\[dataset:/,/^$/p' "$wf"
 }
