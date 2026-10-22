@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 06141f9461b96828 -->
+<!-- status-covers-digest: f6b8625d55f492ca -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **U53/U54: F10 Ustawienia czytelne, szablon z listy (2026-10-22; `finisz/u54`).** Właściciel (A.4): „słabo
+  czytelne -- bloki oddziel, dodaj kolumnę z opisem”, „szablon proponowany w nowej relacji -- pole wpisywane, łatwo
+  o błąd”. Sekcje oddzielone pustą linią, trzecia kolumna z opisem klucza; `new_relation.template` wybiera się
+  z listy szablonów (fabryczne najpierw, własne oznaczone, bez ukrytych i pochodnych `-src-`). Sprawdzone na żywo
+  na pve10; test `tui` 376/0 (pve9).
 
 - **REV-167: blokada „jedna relacja na peera” przy imporcie przez HOST:PORT (2026-10-22; `fix/rev167`).** Import
   porównywał zapisany `PEER_HOST` z surowym `--host`, który od U62 może mieć port albo inny adres tego samego peera
