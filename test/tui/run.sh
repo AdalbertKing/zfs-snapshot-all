@@ -5094,6 +5094,27 @@ else
     bad "zfs-tui: zawijanie pomocy F1" "rc=$?"
 fi
 
+# Kampania 3 (2026-10-22, na zywo pve10, 80x24): kazdy recznie lamany wiersz pomocy
+# zawijal sie osobno i zostawial sieroty ("czasy", "sortowanie" same w wierszu). Sierota =
+# wiersz z jednym slowem we wcieciu opisu, po ktorym idzie dalszy ciag tego samego opisu.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^def wrap_hanging.*?(?=^def render_window)", src, re.S | re.M)
+h = re.search(r"^HELP = \[(.*?)^\]", src, re.S | re.M)
+ns = {}
+exec(m.group(0), ns)
+out = ns["wrap_hanging"](eval("[" + h.group(1) + "]"), 76)
+ind = lambda l: len(l) - len(l.lstrip(" "))
+orph = [l for l, n in zip(out, out[1:]) if ind(l) > 4 and " " not in l.strip() and ind(n) == ind(l)]
+sys.exit(1 if orph else 0)
+PYEOF
+then
+    ok "zfs-tui: pomoc F1 przy 80 kolumnach bez sierot -- ogon zawinietego wiersza laczy sie z dalszym ciagiem opisu"
+else
+    bad "zfs-tui: sieroty w zawijanej pomocy F1" "rc=$?"
+fi
+
 # Kampania 3 (2026-10-22, na zywo pve10): paint tnal kazdy wiersz do w - 1, a uklad ma
 # szerokosc ekranu (MIN_WIDTH 80) -- prawa ramka okna nigdy nie trafiala na ekran (od
 # wrzesnia). Petli curses nie da sie tu uruchomic: dowodem jest zrzut tmux na pve10; ten

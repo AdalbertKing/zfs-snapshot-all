@@ -3253,10 +3253,15 @@ def wrap_hanging(lines, avail):
     """Kampania 3 (2026-10-22, 80x24): pomoc F1 pisana pod ~100 kolumn byla w 80 PRZYCINANA
     ("kop…", "domyś…") -- tresc ginela. Za dlugi wiersz lamany na spacji; kontynuacja wcieta
     tam, gdzie zaczyna sie opis ("  F2  Zadania    |co chodzi..."), a gdy kolumny nie ma --
-    tak jak wiersz."""
+    tak jak wiersz. Ogon zawinietego wiersza laczy sie z nastepnym, gdy ten jest dalszym
+    ciagiem tego samego opisu (to samo wciecie) -- bez tego zostawaly sieroty ("czasy")."""
     import re
     out = []
-    for line in lines:
+    lines = list(lines)
+    i = -1
+    while i + 1 < len(lines):
+        i += 1
+        line = lines[i]
         if len(line) <= avail:
             out.append(line)
             continue
@@ -3270,6 +3275,10 @@ def wrap_hanging(lines, avail):
             out.append(rest[:cut].rstrip())
             rest = " " * hang + rest[cut:].lstrip()
             first = False
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if not first and nxt[:hang].strip() == "" and nxt[hang:hang + 1].strip():
+            lines[i + 1] = rest + " " + nxt.lstrip()
+            continue
         out.append(rest)
     return out
 
