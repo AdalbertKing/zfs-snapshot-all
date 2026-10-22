@@ -2206,11 +2206,11 @@ for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
 for a in "$@"; do [ "$a" = "--textbox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
-# Koniec odpowiedzi: pytanie kreatora "Przerwać?" dostaje Przerwij (Esc = Zostań i test krążyłby
+# Koniec odpowiedzi: "Przerwać?" kreatora i "Porzucić zmiany?" kart zmiany dostają Przerwij/Porzuć (Esc = Zostań i test krążyłby
 # bez końca); każde inne okno -- 255, jak Esc.
 if [ -z "$line" ]; then
     echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"
-    for a in "$@"; do [ "$a" = "Nowa relacja: przerwać?" ] && exit 0; done
+    for a in "$@"; do case "$a" in "Nowa relacja: przerwać?"|"Porzucić zmiany?") exit 0 ;; esac; done
     exit 255
 fi
 rc="${line%%	*}"; out="${line#*	}"
