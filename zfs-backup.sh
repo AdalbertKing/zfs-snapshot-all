@@ -8005,8 +8005,12 @@ cmd_replica_restart() {
         zfs rename -p "$tmp" "$tgt" || { warn "replica-restart: could not rename $tmp to $tgt"; rc=1; break; }
         log "replica-restart: $tgt -- started again (full copy)"
     done
-    if [ "$rc" -eq 0 ] && zfs list -H "$tbase" >/dev/null 2>&1; then
-        zfs destroy -r "$tbase" || warn "replica-restart: the copies are in place, but the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
+    # After a failure too: every finished copy was moved out and the failed one destroyed,
+    # so the base holds only the empty parents the engine created (pve10: 48K left behind).
+    # Not when a snapshot is still in it: that is a new copy whose old one could not be
+    # destroyed, and the warning above has just told the operator where it is.
+    if zfs list -H "$tbase" >/dev/null 2>&1 && [ -z "$(zfs list -H -t snapshot -o name -r "$tbase" 2>/dev/null | head -1)" ]; then
+        zfs destroy -r "$tbase" || warn "replica-restart: the empty temporary base $tbase could not be removed -- remove it by hand: zfs destroy -r $tbase"
     fi
     if [ "$media" = removable ]; then
         bash "$gate" detach "$pool" "$name" --engine-rc "$rc" || :

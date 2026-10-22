@@ -84,7 +84,13 @@ zpool import 2>/dev/null | awk '$1=="pool:"{print $2}' >"$TMPD/pools.slot"
 # Koszyk (basket-lib.sh) w replice: datasety TEGO hosta, zawsze z dziećmi (-R), bez
 # pozycji "Sposób". title() -- nagłówek okien koszyka jako krok 2/6 repliki.
 HOST="$(hostname -s 2>/dev/null || hostname)"; RECURSION=flat; BASKET_NO_MODE=1
-title() { printf 'Replika %s -- 2/6 %s' "${NAME:-}" "$2"; }
+title() { rtitle 2 "$2"; }
+# Kampania 2026-10-22: "6/6 kiedy" w oknie ZMIANY repliki nic nie mówi -- numer kroku tylko
+# przy zakładaniu; w zmianie sam krok.
+rtitle() {   # <nr kroku> <tekst>
+    if [ "${EDIT:-0}" -eq 1 ]; then printf 'Zmiana repliki %s: %s' "${NAME:-}" "$2"
+    else printf 'Replika %s -- %s/6 %s' "${NAME:-}" "$1" "$2"; fi
+}
 basket_from_replica() {   # SRCS + CURX (wzorce -X) -> B_ROOT/B_EXCL; '^x$' to pominięty x, '^x/' jego dzieci
     local r x
     B_ROOT=(); B_EXCL=()
@@ -461,7 +467,7 @@ PYEOF
         # zakładki), ale na dysku zostaje zawsze JEDNA migawka -- stan z chwili kopii.
         # Właściciel: to też potrzebny tryb ("najmniej miejsca"), więc oba zostają, opisane wprost.
         lead=""; covers_landing && lead="Źródło obejmuje kopie relacji tego kolektora.\n\n"
-        wt --title "Replika $NAME -- 3/6 migawki" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(rtitle 3 'migawki')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "${lead}Jakie migawki ma przenosić replika?" "$(fit 9)" "$W" 2 \
            passive "Cała historia -- migawki, które już są (wrócisz do wczoraj, tydzień temu…); więcej miejsca" \
            own "Tylko stan na chwilę kopii -- jedna migawka replica_ na dysku; najmniej miejsca" || { step=2; continue; }
@@ -471,7 +477,7 @@ PYEOF
     26) # NA DYSKU: odbicie kolektora czy własne N (W18, właściciel 2026-10-11 -- dysk
         # wkładany raz w miesiącu, 12 stanów wstecz). Tylko przy własnych migawkach.
         def=mirror; [ -n "$KEEP" ] && def=keep
-        wt --title "Replika $NAME -- 3/6 na dysku" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(rtitle 3 'na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Co ma zostawać na dysku repliki?" 11 "$W" 2 \
            mirror "Odbicie kolektora -- dysk trzyma to, co kolektor" \
            keep "Trzymaj N ostatnich kopii -- własna historia dysku, niezależna od kolektora" || { step=25; continue; }
@@ -486,7 +492,7 @@ PYEOF
         KEEP="$WT_OUT"
         step=3 ;;
     3)  # rodzaj nośnika -- PRZED wyborem nośnika (P5, uwaga 7): od niego zależy lista
-        wt --title "Replika $NAME -- 4/6 rodzaj nośnika" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$MEDIA" \
+        wt --title "$(rtitle 4 'rodzaj nośnika')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$MEDIA" \
            --menu "Wymienny: każdy bieg importuje pulę i eksportuje ją po kopii (dysk można wyjąć).\nStały: pula jest zawsze w maszynie (np. osobna pula w mirrorze), bez importu/eksportu." 12 "$W" 2 \
            removable "wymienny (USB, dysk do sejfu)" fixed "stały (inna pula w tej maszynie)" || { [ "$PASSIVE" = yes ] && step=25 || step=26; continue; }
         MEDIA="$WT_OUT"; [ "$MEDIA" = fixed ] && GUIDS=""
@@ -538,7 +544,7 @@ PYEOF
             for ((_k = 0; _k < ${#items[@]}; _k += 2)); do case "${items[$_k]}" in __*) ;; *) def="${items[$_k]}"; break ;; esac; done
         fi
         def="${def:-__prep__}"
-        wt --title "Replika $NAME -- 5/6 nośnik" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(rtitle 5 'nośnik')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Nośnik musi być podłączony. Kopia ląduje pod  <pula>/replica/<dataset źródła>.$([ -n "$busy" ] && printf '\nDyski innych replik (nie do wyboru):%s' "$busy")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" \
            "${items[@]}" || { step=3; continue; }
         pool="$WT_OUT"
@@ -603,12 +609,22 @@ PYEOF
         [ "$MEDIA" = removable ] && items+=(on-insert "tylko po włożeniu dysku")
         def="$SCHED"; case "$SCHED" in "0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
         [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def="0 22 * * *"
-        wt --title "Replika $NAME -- 6/6 kiedy kopiować?" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
-           --menu "Nośnik wymienny jest podłączany tylko na czas kopii; gdy go nie ma w maszynie,\nbieg po cichu nic nie robi.$([ "$EDIT" -eq 1 ] && printf '%s' " Teraz: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
+        wt --title "$(rtitle 6 'kiedy kopiować?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+           --menu "$([ "$MEDIA" = removable ] && printf '%s' 'Nośnik wymienny jest podłączany tylko na czas kopii; gdy go nie ma w maszynie,\nbieg po cichu nic nie robi.' || printf '%s' 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " Teraz: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
             wt --title "Replika $NAME -- własny harmonogram" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$([ "$SCHED" = on-insert ] || echo "$SCHED")" || continue
-            SCHED="$(printf '%s' "$WT_OUT" | tr -s ' ')"
+            _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
+            # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
+            if ! printf '%s\n' "$_c" | awk '
+                    { if (NF != 5) exit 1
+                      n = "^(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?(,(\\*|[0-9]+(-[0-9]+)?)(/[0-9]+)?)*$"
+                      w = "^[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?(,[A-Za-z][A-Za-z][A-Za-z](-[A-Za-z][A-Za-z][A-Za-z])?)*$"
+                      for (i = 1; i <= 5; i++) if ($i !~ n && !(i >= 4 && $i ~ w)) exit 1 }'; then
+                wt --title "Zły harmonogram" --msgbox "'$_c' -- potrzeba pięciu pól crona (minuta godzina dzień miesiąc dzień-tygodnia), np. 30 21 * * 1-5." 9 "$W"
+                continue
+            fi
+            SCHED="$_c"
         else
             SCHED="$WT_OUT"
         fi
@@ -687,10 +703,10 @@ PYEOF
             if [ "$MEDIA" = removable ]; then
                 if [ "$SCHED" = on-insert ] || [ "$ONINS" = yes ]; then
                     if [ "$TRIG" = yes ]; then
-                        echo "Po włożeniu: kopia rusza od razu -- krok: reguła udev ZOSTANIE $([ "$RULE_HERE" = old ] && echo ODNOWIONA || echo ZAŁOŻONA)"
+                        echo "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s) -- krok: reguła udev ZOSTANIE $([ "$RULE_HERE" = old ] && echo ODNOWIONA || echo ZAŁOŻONA)"
                         echo "             (install-media-trigger --install; jedna na host)"
                     else
-                        echo "Po włożeniu: kopia rusza od razu (reguła udev jest na hoście)"
+                        echo "Po włożeniu: kopia po odczekaniu (replica.insert_wait, domyślnie 60 s); reguła udev jest na hoście"
                     fi
                 else
                     echo "Po włożeniu: nic -- kopia tylko wg harmonogramu"
@@ -704,7 +720,7 @@ PYEOF
             echo
             echo "Zadanie w cronie:"
             sed -n '/co sie zmieni w crontabie/,$p' "$TMPD/plan.txt" | grep -E "^\s+\+\S" | grep -F "replica" \
-                | sed -E 's/^\s+\+//' | awk '{w=($1=="#on-insert")?"po włożeniu":$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\.sh age/?"monitor: wiek kopii na nośniku":"?"); print "  + " w "   " l}' | head -6
+                | sed -E 's/^\s+\+//' | awk '{w=($1=="#on-insert")?"po włożeniu":$1" "$2" "$3" "$4" "$5; m=match($0,/zfs-job\.sh "[^"]*"/); l=m?substr($0,RSTART+12,RLENGTH-13):(/zfs-media-gate\.sh age|check-snap-age\.sh/?"monitor: wiek kopii na nośniku":"?"); print "  + " w "   " l}' | head -6
             if [ "$EDIT" -eq 1 ]; then
                 echo
                 echo "Źródło usunięte z listy zostawia swoją kopię na nośniku (wyczyścić dysk: Dodaj dysk = formatowanie)."
@@ -736,8 +752,8 @@ PYEOF
             if [ "$SCHED" = on-insert ]; then _first="ruszy po włożeniu dysku"
             elif [ "$MEDIA" = removable ] && [ "$ONINS" = yes ]; then _first="ruszy po włożeniu dysku albo o czasie z harmonogramu"
             else _first="ruszy o czasie z harmonogramu"; fi
-            { echo "GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."
-              echo "    Pierwsza kopia $_first."
+            { if [ "$EDIT" -eq 1 ]; then echo "GOTOWE: replika '$NAME' zmieniona (rc=$RC)."; echo "    Następna kopia $_first."
+              else echo "GOTOWE: replika '$NAME' zainstalowana (rc=$RC)."; echo "    Pierwsza kopia $_first."; fi
               echo "    Żeby zrobić ją od razu: ekran Replika (klawisz F6), zaznacz '$NAME' i naciśnij F7 (Uruchom teraz)."
             } >"$TMPD/result.txt"
             result_box "Replika $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
