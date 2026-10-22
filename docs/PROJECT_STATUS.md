@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: fd9b61c0ea8c4aa0 -->
+<!-- status-covers-digest: 6687a4d30296adfc -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,16 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kampania 3, blok I: nowa nazwa nie zaczyna się od „-” ani „.” (`fix/name-leading-dash`).** Na żywo pve10:
+  `local-backup --name=-x` (także `.x`, `..`) dochodził do planu instalacji -- a nazwa staje się argumentem
+  kolejnych czasowników (`delete-relation -x` czyta to jako opcję) i nazwą pliku rekordu. Teraz odmawiają jej
+  czasowniki, które TWORZĄ nazwę: `add-client`, `local-backup`, `add-replica`, `import-relation`, `rux`, oraz
+  kreator (krok „Nazwa relacji”), okno nowej repliki i „Zapisz jako szablon” (`save-profile --as=-x` też:
+  `--profile=` takiej nazwy i tak nie przyjmie). Istniejące rekordy pozostają obsługiwane (`client_name_valid`
+  bez zmian). Pozostałe odmowy bloku I przeszły na żywo: zajęta nazwa, brak `--name`, nieistniejący dataset i
+  profil, cel w źródle, nakładanie się z `[dataset:hdd/lab]` (rekursywny). Testy: `zfsbackup` 1016/0, `tui`
+  395/0, `rux` 51/0 (pve9).
 
 - **Kampania 3, blok F: prawa ramka okien na ekranie, pomoc bez sierot (`fix/right-border`).** Zrzut tmux na pve10
   (80×24 i 120×30): żadne okno nie miało prawej ramki. Pętla curses cięła każdy wiersz do `w - 1`, a układ ma
