@@ -778,6 +778,7 @@ class Data(object):
         self.checks = {}      # check-source HOST --json, na zadanie (kreator: diagnoza swiezego zrodla)
         self.read_at = 0
         self.host_ip = None   # R3-1: adres IP hosta do paska tytulu; None = nieznany/offline
+        self.guards = None    # stan strażników hosta (U35/U50) do paska tytułu
 
     def failed(self, key):
         return self.errors.get(key)
@@ -842,6 +843,7 @@ def collect(repo, files, only=None):
         else:
             data.errors.pop(key, None)
     data.host_ip = resolve_host_ip(files)
+    data.guards = guard_states()
     data.read_at = int(time.time())
     return data
 
@@ -2308,6 +2310,57 @@ class Screen(object):
         self.marks = {}   # linia -> [(od, do, "active"|"key")]: pasek F (aktywne okno, cyfry)
 
 
+def guard_states(settings_file=None, confs=None):
+    """Stan strażników HOSTA (właściciel 2026-10-21, U35/U50): bezpiecznik pojemności
+    ([capacity] guard) i strażnik przyrostu ([growth] alert) -> (on|off, on|off). To samo
+    źródło, z którego czytają skrypty w cronie (alert-env.sh): settings.ini (F10), a gdy
+    klucza tam nie ma -- stary zfs-alert.conf; domyślnie off. Nieczytelny plik -> "?"."""
+    import os, re
+    sf = settings_file or os.environ.get("SETTINGS_FILE") or "/etc/zfs-snapshot-all/settings.ini"
+    confs = confs if confs is not None else ["/etc/zfs-alert.conf", "/root/scripts/zfs-alert.conf"]
+    want = {("capacity", "guard"): "ZFS_GUARD", ("growth", "alert"): "ZFS_GROWTH_ALERT"}
+    got = {}
+    try:
+        with open(sf, encoding="utf-8") as f:
+            sec = "engine"
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                m = re.match(r"^\[([A-Za-z0-9_]+)\]$", line)
+                if m:
+                    sec = m.group(1); continue
+                if "=" in line:
+                    k, v = [x.strip() for x in line.split("=", 1)]
+                    if (sec, k) in want and v:
+                        got.setdefault((sec, k), v)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return ("?", "?")
+    for c in confs:
+        if all(k in got for k in want):
+            break
+        try:
+            with open(c, encoding="utf-8") as f:
+                for line in f:
+                    m = re.match(r'^\s*(ZFS_GUARD|ZFS_GROWTH_ALERT)=["\']?([A-Za-z]+)', line)
+                    if m:
+                        for k, var in want.items():
+                            if var == m.group(1):
+                                got.setdefault(k, m.group(2))
+            break
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return ("?", "?")
+    return tuple(got.get(k, "off") for k in (("capacity", "guard"), ("growth", "alert")))
+
+
+def guard_label(states):
+    pl = {"on": u"wł.", "off": u"wył."}
+    cap, gro = states
+    return u"ochrona: bezpiecznik %s · przyrost %s" % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+
+
 def top_bar(data, width, now, ascii_only, err_count):
     host = (data.jobs or {}).get("host") or "(host?)"
     ip = getattr(data, "host_ip", None)
@@ -2319,6 +2372,10 @@ def top_bar(data, width, now, ascii_only, err_count):
     mid = "%s%s | konto %s%s" % (host, (" " + ip) if ip else "", acct,
                                   u"   ! bez odpowiedzi: %d" % err_count if err_count else "")
     right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
+    # Stan strażników hosta przed czasem odczytu -- odpada pierwszy, gdy ciasno.
+    guards = guard_label(getattr(data, "guards", None) or guard_states()) + u"   "
+    if width - len(left) - len(mid) - len(right) - len(guards) >= 2:
+        right = guards + right
     gap = width - len(left) - len(mid) - len(right)
     if gap < 2:
         # Ciasno: nazwa programu odpada, fakty (host, konto, blad) zostaja.
@@ -3749,6 +3806,8 @@ HELP = [
     u"                 (adres, tryb, godzina maila, mail 'wszystko OK'), próg pojemności,",
     u"                 strażnik, szablon nowej relacji, aktualizacja, język GUI; mail",
     u"                 próbny. Zapis = plan i WYKONAJ (zfs-backup.sh settings set).",
+    u"                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
+    u"                 pojemności i strażnik przyrostu (włącza się je tutaj, w F10).",
     u"  Kierunek       lewa strona to ZAWSZE ten host: pve10>pve9 wysyłam,",
     u"                 pve10<pve9 pobieram, pve10<>pve9 obie strony, local",
     "",

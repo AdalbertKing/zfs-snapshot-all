@@ -15110,7 +15110,7 @@ relation_copy_sources() {
 # ---------------------------------------------------------------------------
 # settings -- THE HOST SETTINGS FILE (owner 2026-10-19: "nowy plik ustawień z
 # sekcjami", "ustawienia F10"). /etc/zfs-snapshot-all/settings.ini (SETTINGS_FILE)
-# with [gui] [alerts] [capacity] [monitor] [new_relation] [update] [engine].
+# with [gui] [alerts] [capacity] [growth] [monitor] [new_relation] [update] [engine].
 #
 #   settings                     every key: effective value, where it came from
 #   settings --tsv               the same for the GUI window (key, value, source, kind, help)
@@ -15143,6 +15143,11 @@ capacity.guard|off|enum:off,on|-|bezpiecznik: powyżej progu kasuje najstarsze m
 capacity.guard_at|89|int:50:99|-|% zajętości puli, od którego bezpiecznik czyści
 capacity.guard_target|85|int:40:98|-|do ilu % bezpiecznik czyści
 capacity.guard_min_keep|2|int:1:100|-|ile najnowszych migawek rodziny bezpiecznik zawsze zostawia
+growth.alert|off|enum:off,on|-|strażnik przyrostu (ransomware): alarm, gdy najnowszy przyrost jest wielokrotnie ponad normę i się nie kompresuje (tylko alarm, nic nie zatrzymuje)
+growth.factor|5|int:2:100|-|ile razy szybszy niż zwykle przyrost uznać za podejrzany
+growth.min_mib|1024|int:1:10485760|-|od ilu MiB przyrostu strażnik w ogóle reaguje
+growth.max_ratio_pct|110|int:100:200|-|kompresja przyrostu (w %, 100 = żadna) do której przyrost uznać za niekompresowalny
+growth.days|7|int:2:60|-|z ilu dni strażnik liczy normę przyrostu
 replica.insert_wait|60|int:60:3600|-|ile sekund replika czeka po włożeniu dysku, zanim go dotknie (wyjęty w tym czasie = nic; mniej niż 60 się nie da)
 monitor.interval|15m|interval|cron|co ile strażnik sprawdza wiek kopii
 new_relation.template|default|profile|-|szablon proponowany nowej relacji

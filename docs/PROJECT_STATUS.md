@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3e0656f0ed63c851 -->
+<!-- status-covers-digest: e46928d8755d93d7 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -244,6 +244,32 @@
   na samo siebie 30 s i zostawiało dysk `visible`. Inny proces nadal czeka i po czasie nic nie zmienia. Testy
   `test/browse` 25/25 (jeden SIGTERM w pauzie przywracania, oryginał lokalny i odziedziczony).
 
+- **FINISZ U51: jak włączamy strażników (2026-10-21; `finisz/notatki-2`).** Właściciel: „Jak włączamy strażnika
+  ransomware i przepełniania puli. Globalne ustawienie w silniku dostępne z GUI? proponuj” -> „Ok”. Oba to ustawienia
+  HOSTA, nie silnika i nie relacji: F10 na każdym hoście (kolektor i źródło osobno), dla floty bez GUI
+  `zfs-backup.sh settings set capacity.guard=on growth.alert=on --yes` (ta sama walidacja co F10; osobne `deploy
+  --set` byłoby duplikatem). Górny pasek GUI pokazuje stan na każdym ekranie: „ochrona: bezpiecznik wł./wył. ·
+  przyrost wł./wył.” -- z tego samego źródła co skrypty w cronie (settings.ini, potem stary zfs-alert.conf, domyślnie
+  wył.); na wąskim pasku odpada pierwszy. Zdalnego włączania na źródle z GUI kolektora celowo nie ma.
+
+- **FINISZ U50: strażnik podejrzanego przyrostu (ransomware), tylko alarm (2026-10-21; `finisz/notatki-2`).**
+  Właściciel: „Ochrona przed ransomware. Monitoring przyrostu niekompresowalnych danych pomiędzy migawkami”,
+  „zrób alarm”. `hostscripts/growth-guard.sh`, instalowany przez deploy do `/root/scripts`, cron co godzinę w bloku
+  hosta; **domyślnie wyłączony** (F10, sekcja „Przyrost (ransomware)”: `[growth] alert = on`). Dla każdego naszego
+  datasetu (lokalne linie retencji z configów hosta wyrenderowanych przez gen-cron (strażnik biegnie z crona roota) -- to samo źródło
+  zaufania co U35 po REV-20261021-158; crontaby innych kont się nie liczą; config/gen-cron/lib-cron nie roota albo
+  zapisywalne dla g/o -- nic nie ocenia, kod 1, alert) KAŻDY nowy przyrost -- para kolejnych migawek,
+  wszystkie rodziny razem (godzinowa i dobowa w tej samej godzinie, paczka na kolektorze): `zfs send -nP` (logiczny)
+  i `-nPc` (bloki jak na dysku) -- ich iloraz to kompresowalność przyrostu. Alarm, gdy tempo >= `factor` (5) x
+  mediana tempa par sprzed niej z `days` (7) dni (tempo = przyrost / czas między migawkami, więc pary 10 min i 50 min
+  liczą się równo), przyrost >= `min_mib` (1024) i kompresja <= `max_ratio_pct` (110 %). Konwersja baz
+  (duży, ale kompresowalny przyrost) nie alarmuje. Nic nie kasuje ani nie wstrzymuje; jeden mail na migawkę;
+  `compression=off` i za mało historii -- pominięte z powodem w `--plan`. Błędy odczytu, złe ustawienia, blokada nie
+  do otwarcia i `mktemp` -- kod 1 i alert, jak w U35 po REV-155/157 (blokada zajęta przez inny bieg -- pominięcie,
+  kod 0); alarm, którego nie dało się wysłać, jest ponawiany w następnym biegu. Ograniczenia: dysk VM szyfrowany w gościu i dane już
+  skompresowane przez aplikację wyglądają jak szyfrogram (zostaje sam skok przyrostu); wolne szyfrowanie pod
+  normą nie da skoku. Plan, testy i pomiar: `docs/project/PLAN-U50-STRAZNIK-PRZYROSTU.md` (na żywo pve10: losowe
+  300 MiB -- alarm, kompresowalne 305 MiB -- bez alarmu).
 - **REV-20261021-161: Przeglądaj kopię -- dwa przeglądania jednego dysku pod blokadą (2026-10-21; `finisz/REV-161`).**
   Wejście (sprawdzenie/założenie zapisu `orig2`, znacznik, `snapdev=visible`) i wyjście (zdjęcie znacznika, czy
   ktoś jeszcze trzyma, przywrócenie, usunięcie zapisu) idą pod jednym `flock` na `/run/zfs-browse/lock2.<klucz>`.
@@ -11986,7 +12012,7 @@ hdd/rs-src/c@oldcorr_2026-08-08_04-24-11
 - `--recursive=no -r` odrzucone jako dwie deklaracje, `snapget.sh` zachowuje się identycznie.
 
 Sonda z NIEPOPRAWNYM trybem jest tu jedyną obserwacją rozróżniającą: poprawny tryb milczy niezależnie od tego, czy token jest daną, czy opcją. `git log` jako root na hostach 11.x odmawia przez `safe.directory` (repo należy do `zfsbackup`) — to kontrola własności po stronie roota, nie problem wdrożenia; commit odczytany jako konto delegowane.
-| `alertmail` | **87/87** (+8 sekcja host-scripts 2026-09-03; digest i capacity biegną z `hostscripts/`) | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
+| `alertmail` | **183/183** (2026-10-21, pve9: z capacity-guard U35 i growth-guard U50; +8 sekcja host-scripts 2026-09-03; digest i capacity biegną z `hostscripts/`) | audyt dostarczalności alertów `deploy.sh` (REV-20260806-046): kwartet `mta_present`/`mta_name`/`mail_queue_depth`/`alert_delivery_verdict` + aktywna sonda `alert_delivery_probe` na podstawionych `mail`/`postqueue`/`sleep`, z wyjętym z deploy.sh oryginalnym `warn()`. Klasa findingu: FAŁSZYWE ZDROWIE — werdykt nieoparty na zmierzonych dowodach. Przypięte: brak `mail(1)`/MTA i niepusta kolejka pozostają twardymi awariami zasilającymi `PROBLEMS`; kolejka nieczytelna (MTA bez obsługiwanego narzędzia, `postqueue` sam padł, wyjście nienumeryczne) jest UNVERIFIED i niezielona zamiast dawnego `log()`+`return 0`; pusta kolejka bez sondy mówi „prerequisites OK, delivery UNVERIFIED", nigdy „can send" (grep w obie strony — brak pozytywu, obecność UNVERIFIED); sonda sprawdza status `mail(1)` i po opróżnieniu kolejki twierdzi wyłącznie „LEFT THIS MTA, recipient delivery NOT independently verified". Każdy przypadek sprawdza jednocześnie kod powrotu, licznik `PROBLEMS` i brzmienie. Przypadki regresyjne F1/F2 padają na zrecenzowanej bazie `a567328` (`DEPLOY_SRC=`). Prawdziwy postfix i faktyczne dostarczenie: dowód żywy w odpowiedzi REV-046 + obowiązek ręczny `deploy-check-only` |
 | `joinmanifest` | **32/32** | `deploy.sh`'s `verify_join_manifest` (REV-20260804-038, znaleziony przez automatycznego recenzenta na podstawie tego samego incydentu live co plasterek — brakujący `PEER_CONF_MODE` zostawił PUSTY manifest na dysku, a `do_join()` mimo to wypisał "Join zakonczony"). Stary kod pisał manifest bezpośrednio (`cat > "$mpath"; chmod`), bez sprawdzenia i bez atomowości, PO mutacjach konta/klucza. Naprawione: render do pliku tymczasowego w tym samym katalogu, weryfikacja odczytu wszystkich pól PRZED zaufaniem, atomowy `mv`, ponowna weryfikacja PO rename — każda awaria zwraca niezerowo z jawną diagnostyką "PARTIAL ENROLMENT" (konto/klucz mogą już istnieć, bezpiecznie powtórzyć `--join` tym samym pakietem, nigdy nie kasować konta/klucza ręcznie). Przeciw prawdziwym plikom (bez ssh/zfs/useradd): poprawny manifest weryfikuje się dokładnie; kształt incydentu live (plik pusty) jest odrzucany; pojedyncze złe pole (fingerprint, konto) jest odrzucane, co dowodzi porównania KAŻDEGO pola; brakujący plik odrzucony; manifest legacy bez `PEER_JOIN_REMOTE` weryfikuje się poprawnie, gdy nie był oczekiwany. +3 (REV-20260804-040): pole `PEER_JOIN_ACCOUNT_UID` — manifest z zapisanym UID weryfikuje się dokładnie przy zgodności, odmawia przy niezgodności, manifest legacy bez tego pola nadal weryfikuje się gdy UID nie był oczekiwany. Sama sekwencja render/write/chmod/rename w `do_join()` nadal wymaga roota (podobnie jak mutacje konta/klucza przed nią) — ten sam stały brak co zawsze | **Zbuforowany szkic zakresu (2026-08-29)**: szkic jest ponownie uzywany przy kolejnym `--join`, i slusznie — to dokument zgody, ktory admin mogl recznie edytowac, a ciche przebudowanie skasowaloby te edycje. Ale prosba kolektora moze sie miedzy probami ZMIENIC, i wtedy ekran akceptacji pokazywal biezaca prosbe tuz nad liczba i nadaniem policzonymi ze STAREGO szkicu. Zmierzone na pve9 przy budowie labu move-to-client: pierwszy join bez `--datasets` narysowal caly majatek, `add-client` powtorzono z `--datasets=hdd/movelab/src`, a nastepny join wypisal „Kolektor prosil o: hdd/movelab/src" i cztery linie nizej „Przyjecie nada ... na 9 dataset(ach)". Prosba o jeden dataset i nadanie na dziewieciu, jednoczesnie na ekranie. Szkic niesie teraz metryczke z prosba, ktora go zrodzila; DOWIEDZIONA rozbieznosc odmawia, brak metryczki (kazdy host w trakcie joinu w chwili aktualizacji) jest glosno mowiony, nie zamieniany w odmowe na dowodzie, ktorego nikt nie ma.
 
 Wymagają roota, ZFS albo drugiego hosta. **Uruchomione 2026-08-04 na metropolis

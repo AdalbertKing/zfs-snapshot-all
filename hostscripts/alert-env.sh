@@ -34,6 +34,8 @@ fi
 # over settings.ini -- a legacy ZFS_GUARD=on beat an F10 guard = off. Order of
 # weight: environment > settings.ini > zfs-alert.conf > defaults.
 _E_G="${ZFS_GUARD:-}"; _E_GA="${ZFS_GUARD_AT:-}"; _E_GT="${ZFS_GUARD_TARGET:-}"; _E_GK="${ZFS_GUARD_MIN_KEEP:-}"
+_E_WA="${ZFS_GROWTH_ALERT:-}"; _E_WF="${ZFS_GROWTH_FACTOR:-}"; _E_WM="${ZFS_GROWTH_MIN_MIB:-}"
+_E_WR="${ZFS_GROWTH_MAX_RATIO_PCT:-}"; _E_WD="${ZFS_GROWTH_DAYS:-}"
 _E_COOL="${ZFS_ALERT_COOLDOWN:-}"; _E_CAP="${ZFS_CAPACITY_THRESHOLD:-}"
 # shellcheck disable=SC1090
 [ -n "$CONF" ] && . "$CONF"
@@ -64,6 +66,12 @@ _v=$(_zs capacity guard);          [ -n "$_v" ] && ZFS_GUARD="$_v"
 _v=$(_zs capacity guard_at);       [ -n "$_v" ] && ZFS_GUARD_AT="$_v"
 _v=$(_zs capacity guard_target);   [ -n "$_v" ] && ZFS_GUARD_TARGET="$_v"
 _v=$(_zs capacity guard_min_keep); [ -n "$_v" ] && ZFS_GUARD_MIN_KEEP="$_v"
+# U50 strażnik podejrzanego przyrostu (growth-guard.sh)
+_v=$(_zs growth alert);          [ -n "$_v" ] && ZFS_GROWTH_ALERT="$_v"
+_v=$(_zs growth factor);         [ -n "$_v" ] && ZFS_GROWTH_FACTOR="$_v"
+_v=$(_zs growth min_mib);        [ -n "$_v" ] && ZFS_GROWTH_MIN_MIB="$_v"
+_v=$(_zs growth max_ratio_pct);  [ -n "$_v" ] && ZFS_GROWTH_MAX_RATIO_PCT="$_v"
+_v=$(_zs growth days);           [ -n "$_v" ] && ZFS_GROWTH_DAYS="$_v"
 _v=$(_zs alerts repeat_after)
 case "$_v" in
     *[0-9]h) ZFS_ALERT_COOLDOWN=$(( ${_v%h} * 3600 )) ;;
@@ -78,6 +86,11 @@ _restore_env() {
     [ -n "$_E_GA" ]    && ZFS_GUARD_AT="$_E_GA"
     [ -n "$_E_GT" ]    && ZFS_GUARD_TARGET="$_E_GT"
     [ -n "$_E_GK" ]    && ZFS_GUARD_MIN_KEEP="$_E_GK"
+    [ -n "$_E_WA" ]    && ZFS_GROWTH_ALERT="$_E_WA"
+    [ -n "$_E_WF" ]    && ZFS_GROWTH_FACTOR="$_E_WF"
+    [ -n "$_E_WM" ]    && ZFS_GROWTH_MIN_MIB="$_E_WM"
+    [ -n "$_E_WR" ]    && ZFS_GROWTH_MAX_RATIO_PCT="$_E_WR"
+    [ -n "$_E_WD" ]    && ZFS_GROWTH_DAYS="$_E_WD"
     [ -n "$_E_MODE" ]  && ZFS_ALERT_MODE="$_E_MODE"
     [ -n "$_E_WMODE" ] && ZFS_WARN_MODE="$_E_WMODE"
     [ -n "$_E_QUEUE" ] && ZFS_ALERT_QUEUE="$_E_QUEUE"

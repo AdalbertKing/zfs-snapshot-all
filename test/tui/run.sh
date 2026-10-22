@@ -4327,6 +4327,29 @@ if has "$U38" 'MARKS = =>' && has "$U38" 'Baza następnej kopii: hourly_2' && ha
 else
     bad "migawki pary (U38)" "$U38"
 fi
+# Stan strażników hosta na pasku (wlasciciel 2026-10-21): to samo zrodlo co skrypty w cronie --
+# settings.ini (F10), gdy klucza brak -- stary zfs-alert.conf, domyslnie wyl.; ciasno -- odpada.
+GT="$("$PY" - "$TUI" <<'PYEOF'
+import importlib.util, sys, tempfile, os
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+d = tempfile.mkdtemp()
+si = os.path.join(d, "settings.ini"); cf = os.path.join(d, "zfs-alert.conf")
+open(si, "w").write("[capacity]\nguard = on\n"); open(cf, "w").write("ZFS_GROWTH_ALERT=on\nZFS_GUARD=off\n")
+print("A", zt.guard_states(si, [cf]))
+open(si, "w").write("[capacity]\nguard = off\n[growth]\nalert = off\n"); open(cf, "w").write("ZFS_GUARD=on\nZFS_GROWTH_ALERT=on\n")
+print("B", zt.guard_states(si, [cf]))
+print("C", zt.guard_states(os.path.join(d, "brak.ini"), [os.path.join(d, "brak.conf")]))
+class D: pass
+x = D(); x.jobs = {"host": "pve10", "jobs": [{"account": "root"}]}; x.read_at = 0; x.host_ip = None; x.guards = ("on", "off")
+print("WIDE", u"ochrona: bezpiecznik wł. · przyrost wył." in zt.top_bar(x, 140, 0, False, 0))
+print("NARROW", u"ochrona" not in zt.top_bar(x, 70, 0, False, 0), len(zt.top_bar(x, 70, 0, False, 0)) <= 70)
+PYEOF
+)"
+if has "$GT" "A ('on', 'on')" && has "$GT" "B ('off', 'off')" && has "$GT" "C ('off', 'off')" && has "$GT" 'WIDE True' && has "$GT" 'NARROW True True'; then
+    ok "pasek: stan straznikow hosta -- F10 przed starym conf, F10 wyl. wygrywa z conf wl., brak plikow = wyl.; waski pasek pomija"
+else
+    bad "pasek: stan straznikow" "$GT"
+fi
 # CONFIG JAKO JEDYNE ZRODLO (wlasciciel 2026-10-13): "Retencja zrodla" (tag srcret, U25) czyta
 # szczeble z configu (show-tiers) i zapisuje JEDNYM set-tiers -- bez ukrytego szablonu (zadnego
 # save-profile, delete-profile ani edit-relation). Zrodlo hourly 24 -> 12 w oknie zrodla =
