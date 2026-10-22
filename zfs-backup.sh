@@ -21319,6 +21319,9 @@ rux_entry() {
         || die "rux: --grant-quiesce only means something WITH --grant-remotely: it adds --allow-quiesce to the commit-scope this host runs on the source. Without --grant-remotely the source's operator commits the scope, and whether guests may be frozen is their flag there (deploy.sh --commit-scope=$COLLECTOR_LABEL --allow-quiesce)."
     local host dataset
     IFS=$'\t' read -r host dataset < <(rux_split_source "$source")
+    # Campaign 3 (2026-10-22): a host is DATA. One that starts with '-' would be read as an
+    # option wherever it is a word of its own (ssh-keyscan HOST, getent); refused here.
+    case "$host" in -*) die "rux: host '$host' starts with '-' -- a host name never does, and ssh/ssh-keyscan would read it as an option. Nothing was changed." ;; esac
     # Deferred scope: --source=HOST: (no dataset). The source proposes its own
     # datasets at pair time and the operator picks. Backup-mode only -- sync
     # reproduces a NAMED source path, so it must be told which one.

@@ -1167,5 +1167,15 @@ else
 fi
 
 echo "----"
+# Campaign 3 (2026-10-22): a host is DATA -- one starting with '-' is refused before any
+# connection (ssh-keyscan HOST / getent would read it as an option).
+rx_dash=$(bash "$REPO/zfs-backup.sh" --source=-oProxyCommand:hdd/x --target=hdd/b --name=dash 2>&1); rx_rc=$?
+dp_dash=$(bash "$REPO/deploy.sh" --peer=-oProxyCommand 2>&1); dp_rc=$?
+if [ "$rx_rc" -ne 0 ] && printf '%s' "$rx_dash" | grep -q "starts with '-'" \
+   && [ "$dp_rc" -ne 0 ] && printf '%s' "$dp_dash" | grep -q "starts with '-'"; then
+    ok "rux/deploy: a host starting with '-' is refused before anything connects"
+else
+    bad "rux/deploy: host starting with '-'" "rux rc=$rx_rc: $(printf '%s' "$rx_dash" | tail -2)" "deploy rc=$dp_rc: $(printf '%s' "$dp_dash" | tail -2)"
+fi
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
