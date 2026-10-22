@@ -3707,10 +3707,11 @@ HELP = [
     u"                 eksportu z tego katalogu, potem werdykt",
     u"                 (już jest / różni się / plan), t wykonuje plan, Ins nowa",
     u"                 Ins i Del oddają terminal oknom whiptaila i wracają tutaj",
-    u"                 z odświeżonymi danymi: Ins to kreator w 10 krokach (kopia lokalna: 8)",
-    u"                 (typ -> host -> diagnoza; brak pakietu = Zainstaluj ->",
-    u"                 miejsca do kopiowania -> dokąd -> szablon -> nazwa ->",
-    u"                 konto -> ustawienia -> podsumowanie i WYKONAJ), Del to",
+    u"                 z odświeżonymi danymi: Ins to kreator krok po kroku (backup: 7",
+    u"                 kroków -- rodzaj, host, datasety, dokąd, szablon, retencja",
+    u"                 źródła, nazwa; Wstecz = poprzedni krok), potem podsumowanie",
+    u"                 (pozycja = popraw krok; konto i dodatki w Zaawansowane) i",
+    u"                 Utwórz -> plan -> WYKONAJ z oknem postępu. Del to",
     u"                 usunięcie całej relacji (źródło, nazwa, opcjonalnie kopie).",
     u"                 Pozostałe akcje: NAJPIERW komenda bash, potem 't', potem",
     u"                 wyjście na żywo. Esc zamyka okno, a proces biegnie dalej.",
@@ -4343,8 +4344,10 @@ class UI(object):
                         u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client)."]
                 alt = None
                 if rel.get("peer_host") and rel.get("mode") != "local":
-                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek);",
-                             u"wyjaśnienie pokaże następne okno."]
+                    # D-1 (kampania 2026-10-21): "wyjaśnienie pokaże następne okno" -- następnego
+                    # okna nie było; to okno otwiera się dopiero czynnością z dołu ramki.
+                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):",
+                             u"czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia."]
                     alt = ("w", lambda: self.confirm(u"Wyłącz relację %s" % n, [self.zb(), "disable-client", n,
                                                      "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                                                      disable_note(rel)), u"wyłącz na źródle")

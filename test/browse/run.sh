@@ -36,6 +36,7 @@ exec "$(PATH=/usr/bin:/bin command -v id)" "$@"
 EOF
 mkfake whiptail <<'EOF'
 #!/bin/bash
+for ((i = 1; i <= $#; i++)); do [ "${!i}" = --title ] && { j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/titles"; }; done
 for ((i = 1; i <= $#; i++)); do
     case "${!i}" in
         --msgbox|--infobox|--gauge) j=$((i + 1)); printf '%s\n' "${!j}" >>"$D/msgs"; exit 0 ;;
@@ -163,7 +164,7 @@ fs_case(){ printf 'tank/fs filesystem\n' >"$D/datasets"; printf 'OK d0\nOK p0\n'
 vol_case(){   # <partfs>: dysk VM, snapdev hidden/local
     printf 'tank/vol volume\n' >"$D/datasets"; printf '%s\n' "$1" >"$D/partfs"
     printf 'hidden\n' >"$D/snapdev_value"; printf 'local\n' >"$D/snapdev_source"
-    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'OK d0\nOK p0\n' >"$D/answers"
     [ "$1" = crypto_LUKS ] && printf 'OK secret\n' >>"$D/answers"
     return 0
 }
@@ -189,11 +190,11 @@ start_ds(){   # <id> <dataset> <value> <source>: sesja na datasecie, czeka zamon
     local k="${2//\//%}"
     printf '%s volume\n' "$2" >"$D/datasets"
     printf '%s\n' "$3" >"$D/sdv.$k"; printf '%s\n' "$4" >"$D/sds.$k"
-    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'OK d0\nOK p0\n' >"$D/answers"
     run_bg "$1"; waitf "$D/inmc.$1"
 }
 enter(){   # <id> [pauza]: kolejna sesja na tank/vol (wartosci juz w sdv/sds), bez czekania
-    printf 'tank/vol volume\n' >"$D/datasets"; printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"
+    printf 'tank/vol volume\n' >"$D/datasets"; printf 'OK d0\nOK p0\n' >"$D/answers"
     run_bg "$1" "${2:-}"
 }
 still_running(){   # <id> <opis>: po 1.5 s sesja nadal stoi (czeka na blokade)
@@ -362,7 +363,7 @@ nolg '^zfs set snapdev=hidden'; fin
 new_case "21 odwrotnie: A stoi przed przywroceniem, B wchodzi -> B czeka; A przywraca i usuwa zapis, B czyta od nowa"
 touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
 printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf 'local\n' >"$D/sds.tank%vol"
-printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+printf 'OK d0\nOK p0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
 touch "$D/go.A"; waitf "$D/p.A.at"
 enter B; still_running B "B przy A przed przywroceniem"
 [ -e "$D/inmc.B" ] && errs+=("B zamontowal, gdy A trzymal blokade")
@@ -392,7 +393,7 @@ term_restore(){   # <zrodlo> <nazwa>: A w pauzie przywracania dostaje jeden SIGT
     new_case "$2"
     touch "$D/per_ds"; printf 'ext4\n' >"$D/partfs"
     printf 'tank/vol volume\n' >"$D/datasets"; printf 'hidden\n' >"$D/sdv.tank%vol"; printf '%s\n' "$1" >"$D/sds.tank%vol"
-    printf 'OK d0\nOK p0\nOK q0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
+    printf 'OK d0\nOK p0\n' >"$D/answers"; run_bg A restore; waitf "$D/inmc.A"
     touch "$D/go.A"; waitf "$D/p.A.at"
     local t0=$SECONDS
     kill -TERM "$(cat "$D/p.A.at")"; waitf "$D/rc.A"
@@ -425,6 +426,12 @@ names = [d["name"] for d in s["datasets"]]
 print("single=%s sel=%s tank=%s fs=%s" % (s.get("single"), s.get("selectable"), "tank" in names, "tank/fs" in names))
 P
 grep -q "single=True sel=\['tank/fs'\] tank=True fs=True" "$D/spec.chk" || errs+=("spec drzewa: $(cat "$D/spec.chk")")
+has out "=== Odmontowane"; fin
+
+# ---- I-2: jedna partycja = bez okna wyboru partycji ----------------------------------------
+new_case "27 I-2: dysk VM z jedna partycja -- bez okna 'która partycja?', montuje od razu"
+: >"$D/titles"; vol_case ext4; run_script
+grep -q 'która partycja' "$D/titles" && errs+=("okno wyboru partycji przy jednej partycji: $(cat "$D/titles")")
 has out "=== Odmontowane"; fin
 
 echo "browse: PASS=$PASS FAIL=$FAIL"
