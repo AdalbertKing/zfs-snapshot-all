@@ -3091,7 +3091,9 @@ restore_ns_other_owners() {   # <label being withdrawn> <account> <namespace> ->
         [ "$_l" = "$self" ] && continue
         restore_grant_label_ok "$_l" || continue
         _ds="$(sed -n 's/^RESTORE_GRANT_DATASETS="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
-        _a="$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p; s/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
+        # The account recorded at grant time first, by name -- not whichever line comes first.
+        _a="$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
+        [ -n "$_a" ] || _a="$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
         _pm="$(peer_manifest_path "$_l")"
         if { [ -z "$_a" ] || [ -z "$_ds" ]; } && [ -r "$_pm" ]; then
             _mf="$( record_load manifest "$_pm"; printf '%s\n%s\n' "${PEER_JOIN_ACCOUNT:-}" "${PEER_JOIN_GRANTED_DATASETS:-}" )"

@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 19242d434ee42bcf -->
+<!-- status-covers-digest: 30f60f915a2084c5 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -125,7 +125,9 @@
   konto (`RESTORE_GRANT_ACCOUNT`). Po odrzuceniu R1: granty i wycofania idą jeden po drugim pod jedną blokadą
   `flock` (dwa jednoczesne `--deny-restore` zostawiały uprawnienie bez żadnego rekordu); grant o nieznanym koncie lub
   zakresie wstrzymuje wycofanie (rc 1, rekord czeka), zamiast być uznany za obcy. Inne konto i inna pula -- nietknięte. `restoregrant` 205/0 (pve9, tester); z
-  `deploy.sh` sprzed R1 201/4 -- wyścig zostawia uprawnienie (`0|0|0|yes`). R1: `fix/rev170-concurrent-deny`.
+  `deploy.sh` sprzed R1 201/4 -- wyścig zostawia uprawnienie (`0|0|0|yes`). R1: `fix/rev170-concurrent-deny`. R2
+  (`fix/rev170-account-drift`): wycofanie bierze konto zapisane przy wydaniu grantu, nie z bieżącego manifestu (po
+  zmianie konta w manifeście cofało cudze konto, a prawdziwe zostawało); `restoregrant` 210/0, z main 207/3.
 
 - **Nowa replika: Esc w kroku 1 pyta, zanim wyjdzie (`fix/replica-step1-esc`, punkt 7).** Było: Esc/Anuluj przy
   nazwie kończył od razu. Teraz jak w kreatorze relacji: „Przerwać tworzenie repliki? Nic nie zostało zmienione.”,
