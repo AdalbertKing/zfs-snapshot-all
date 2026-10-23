@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8d633f842d5b018d -->
+<!-- status-covers-digest: 8bb883e9123e66b6 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -131,6 +131,13 @@
   numerów PR i historii incydentów; config relacji pokazany jako blok `[relation:]`. Wersje angielskie i README -- w
   paczkach 2 i 3. Przy okazji w kodzie: `status` (`zfs-backup.sh` ~19636) nadal pisze, że pauza nie obejmuje
   retencji, a nagłówek `gen-cron.sh` ~146-149 mówi to samo o sekcji `[prune:]` -- do poprawy poza tą paczką.
+
+- **REV-20261023-173: po nieudanym odświeżeniu przechodzą tylko klawisze niezależne od wierszy
+  (`fix/rev173-failed-refresh-safe-keys`).** Blokada z REV-172 odrzucała listę klawiszy-czynności, a Ins na
+  Szablonach z niej wypadł i kopiował stary zaznaczony szablon. Teraz odwrotnie: na nieaktualnym ekranie działają
+  tylko ruch po liście, Tab/Esc, przełączanie ekranów, F1, F10, Ctrl-R, wyjście i pisanie w linii poleceń; każdy
+  inny klawisz (Ins, Del, Enter, m, F7-F9 -- także z linii poleceń) czeka na udane odświeżenie. Test
+  `test/tui/stale_bg_gate.py` 13/13, na main pada nowy przypadek Ins. `tui` 404/0 (pve9).
 
 - **REV-20261023-172: klawisz po oknie działał na starych wierszach, gdy odświeżanie trwało za długo albo się nie udało
   (`fix/rev172-stale-key-gate`).** Po zamknięciu okna GUI wraca od razu i odświeża dane w tle; klawisz czekał na
