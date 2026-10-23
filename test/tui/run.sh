@@ -805,7 +805,7 @@ else
 fi
 ZE="$(screen zadania enter --height 80)"
 if has "$ZE" '╔═ Zadanie: lab-vm101 ' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
-        && hasE "$ZE" 'Trzyma +-' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
+        && hasE "$ZE" 'Trzyma +24 godz.' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
         && has "$ZE" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$ZE" '[template:profile__default__standard_hourly]' \
         && ! has "$ZE" '[template:profile__default__keep_monthly]'; then
     ok "zadania: Enter = szczegoly + CONFIG (TYLKO sekcja i szablon tego zadania) + CRON z prawdziwa linia (R4-6)"

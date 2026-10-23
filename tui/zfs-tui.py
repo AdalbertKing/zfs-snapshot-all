@@ -2069,7 +2069,10 @@ def job_panel_pairs(row, data, now, ch):
         else:
             pairs += [(u"Źródło", src), (u"Cel", dst)]
     pairs.append((u"Kiedy", cron_words(row.get("schedule") or j.get("schedule", "?"))))
-    keep = row.get("keep") or keep_cell(j.get("retain") or j.get("keep") or "")
+    # Wiersz transferu ma w kolumnie Trzyma "-" (retencja stoi w wierszu porzadkow), ale
+    # panel mowi, ile kopia trzyma -- "-" przy "ab -- pobranie" nic nie mowilo (kampania 3).
+    keep = row.get("keep") if row.get("keep") not in (None, "", "-") else ""
+    keep = keep or keep_cell(j.get("retain") or j.get("keep") or "") or "-"
     pairs.append((u"Trzyma", keep + (u"   drabina GFS" if j.get("gfs") else "")))
     st = data.stats or {}
     win = st.get("window_days")
