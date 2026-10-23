@@ -6101,6 +6101,11 @@ runuser_test_x() {   # <user> <path>
 # "unreachable" would refuse every install it cannot verify -- fail-closed in
 # the wrong direction, on the machines where nothing real is at stake.
 runuser_can() {   # <user> -> 0 this process can act as <user>
+    # Not root: no switch without a password, and su would PROMPT for one on the
+    # terminal (measured on pve9, 2026-10-23: a suite as 'tester' hung 21 minutes
+    # in su, runuser being in /usr/sbin, off that PATH).
+    [ "$(id -un)" = "$1" ] && return 0
+    [ "$(id -u)" -eq 0 ] || return 1
     if command -v runuser >/dev/null 2>&1; then
         runuser --user "$1" -- true 2>/dev/null
     else
