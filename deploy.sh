@@ -3028,6 +3028,9 @@ restore_grant_rekey() {   # <scope datasets> -> log lines; never fails the withd
                            zfs list -H -o name -r -t filesystem,volume -- "$_rk_s" 2>/dev/null; done; } | sort -u ); do
         [ "$(zfs get -H -o value encryptionroot -- "$_rk_ds" 2>/dev/null)" = "$_rk_ds" ] || continue
         [ "$(zfs get -H -o value keystatus -- "$_rk_ds" 2>/dev/null)" = unavailable ] || continue
+        # A raw receive leaves keylocation=prompt. A root with a key file of its own is
+        # somebody's deliberate encryption, not a recovery -- skipped, not reported.
+        [ "$(zfs get -H -o value keylocation -- "$_rk_ds" 2>/dev/null)" = prompt ] || continue
         _rk_done=""
         for _rk_k in $_rk_keys; do
             zfs load-key -L "$_rk_k" -- "$_rk_ds" 2>/dev/null || continue
@@ -3048,7 +3051,7 @@ restore_grant_rekey() {   # <scope datasets> -> log lines; never fails the withd
             _rk_done=1
             break
         done
-        [ -n "$_rk_done" ] || warn "  key:          $_rk_ds came back raw and locked; no key of this grant's scope opens it -- open it by hand: zfs load-key $_rk_ds"
+        [ -n "$_rk_done" ] || warn "  key:          $_rk_ds is locked with keylocation=prompt (a raw recovery) and no key of this grant's scope opens it -- open it by hand: zfs load-key $_rk_ds"
     done
     return 0
 }

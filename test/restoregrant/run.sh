@@ -1248,6 +1248,76 @@ check "REV-170: ...and its retry, the last owner, removes it (REV-147 retry inta
       "$rc|$([ -f "$NS/grants.revoking/two" ] && echo yes || echo no)|$(ns_cap backup-shared tank/restore)"
 
 
+# ---------------------------------------------------------------------------
+# Owner 2026-10-23 (campaign 3, item 6): a copy received raw comes back as its OWN
+# encryption root, locked, keylocation=prompt (measured on pve9). --deny-restore, as root
+# here, opens it with a key file of the scope's encryption root and, under an encrypted
+# open parent, makes it inherit (change-key -i); under an unencrypted parent it keeps the
+# key file as keylocation. A dataset no scope key opens is reported and left; one with a
+# key file of its own is not a recovery and is skipped. Props and keys live in files.
+# ---------------------------------------------------------------------------
+RK="$TMPD/rk"; mkdir -p "$RK/bin" "$RK/rel/rk" "$RK/peers" "$RK/grants" "$RK/clients" "$RK/state" "$RK/p"
+printf 'PEER_JOIN_ACCOUNT="zfsbackup-rk"\nPEER_JOIN_GRANTED_DATASETS="hdd/enc hdd/enc/docs"\n' > "$RK/peers/rk.conf"
+rk_ds() {   # <dataset> <encryption> <encryptionroot> <keystatus> <keylocation> <key it opens with>
+    local d; d="$RK/p/$(printf '%s' "$1" | tr / %)"; mkdir -p "$d"
+    printf '%s' "$2" > "$d/encryption"; printf '%s' "$3" > "$d/encryptionroot"
+    printf '%s' "$4" > "$d/keystatus";  printf '%s' "$5" > "$d/keylocation"; printf '%s' "$6" > "$d/key"
+}
+rk_get() { cat "$RK/p/$(printf '%s' "$1" | tr / %)/$2" 2>/dev/null; }
+rk_ds hdd/enc            aes-256-gcm hdd/enc              available   file:///k1 file:///k1
+rk_ds hdd/enc/docs       aes-256-gcm hdd/enc              available   none       -
+rk_ds hdd/enc/docs2      aes-256-gcm hdd/enc/docs2        unavailable prompt     file:///k1
+rk_ds hdd/restore        off         -                    -           none       -
+rk_ds hdd/restore/back   aes-256-gcm hdd/restore/back     unavailable prompt     file:///k1
+rk_ds hdd/restore/alien  aes-256-gcm hdd/restore/alien    unavailable prompt     file:///k2
+rk_ds hdd/restore/mine   aes-256-gcm hdd/restore/mine     unavailable file:///k2 file:///k2
+cat > "$RK/bin/zfs" <<'RKZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RK/trace"
+for a in "$@"; do last="$a"; done
+pd() { printf '%s/p/%s' "$RK" "$(printf '%s' "$1" | tr / %)"; }
+case "$1" in
+    get)
+        [ "$5" = mounted ] && { echo no; exit 0; }
+        cat "$(pd "$last")/$5" 2>/dev/null || exit 1; echo; exit 0 ;;
+    list)
+        case " $* " in *" -r "*)
+            for d in "$RK"/p/*; do n="$(basename "$d" | tr % /)"
+                case "$n" in "$last"|"$last"/*) echo "$n" ;; esac; done | sort; exit 0 ;; esac
+        exit 0 ;;
+    load-key)
+        [ "$(cat "$(pd "$last")/key")" = "$3" ] || exit 255
+        printf available > "$(pd "$last")/keystatus"; exit 0 ;;
+    change-key)
+        par="${last%/*}"; cp "$(pd "$par")/encryptionroot" "$(pd "$last")/encryptionroot"
+        printf none > "$(pd "$last")/keylocation"; exit 0 ;;
+    set)
+        case "$2" in keylocation=*) printf '%s' "${2#keylocation=}" > "$(pd "$last")/keylocation" ;; esac; exit 0 ;;
+esac
+exit 0
+RKZFS
+chmod +x "$RK/bin/zfs"
+export RK
+rkd() { PATH="$BIN:$RK/bin:$PATH" PAIR_GATE_STATE_DIR="$RK/rel" PEER_STATE_DIR="$RK/peers" RESTORE_GRANT_DIR="$RK/grants" \
+        CLIENTS_DIR="$RK/clients" RELATIONSHIPS_DIR="$RK/state" bash "$DEPLOY" "$@" 2>&1; }
+rkd --allow-restore=rk >/dev/null
+out="$(rkd --deny-restore=rk)"; rc=$?
+check "rekey: deny-restore rc 0; docs2 (raw, under encrypted hdd/enc) opened and inherits hdd/enc" "0|available|hdd/enc" \
+      "$rc|$(rk_get hdd/enc/docs2 keystatus)|$(rk_get hdd/enc/docs2 encryptionroot)"
+check "rekey: ...back (raw, under unencrypted hdd/restore) opened, stays its own root, keylocation = the original's key file" \
+      "available|hdd/restore/back|file:///k1" \
+      "$(rk_get hdd/restore/back keystatus)|$(rk_get hdd/restore/back encryptionroot)|$(rk_get hdd/restore/back keylocation)"
+check "rekey: ...alien (raw, another key) and mine (own key file) untouched" "unavailable|prompt|unavailable|file:///k2" \
+      "$(rk_get hdd/restore/alien keystatus)|$(rk_get hdd/restore/alien keylocation)|$(rk_get hdd/restore/mine keystatus)|$(rk_get hdd/restore/mine keylocation)"
+if has "hdd/restore/alien is locked with keylocation=prompt" "$out" && ! has "hdd/restore/mine" "$out" \
+   && has "hdd/enc/docs2 opened and now inherits the key of hdd/enc" "$out" \
+   && ! grep -q 'change-key.*hdd/restore/back\|load-key.*hdd/restore/mine\|change-key.*hdd/enc/docs$' "$RK/trace"; then
+    ok "rekey: ...the report names what was opened and what could not be; no key call on mine, no change-key on back or on the already inheriting docs"
+else
+    bad "rekey: report and calls" "$out"
+fi
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
