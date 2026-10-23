@@ -4484,12 +4484,12 @@ PYEOF
     "$PY" "$SRF/f.py" "$SRF/t.json" | tr -d '\r'
 }
 sr_eq="$(srf hourly:24,daily:7 hourly:24,daily:7)"; sr_val="$(srf hourly:24,daily:7 hourly:12,daily:7)"
-sr_miss="$(srf hourly:24,daily:7 hourly:24)"; sr_extra="$(srf hourly:24 hourly:24,daily:7)"; sr_empty="$(srf hourly:24,daily:7 '')"
+sr_miss="$(srf hourly:24,daily:7 hourly:24)"; sr_extra="$(srf hourly:24 hourly:24,daily:7)"; sr_empty="$(srf hourly:24,daily:7 '')"; sr_none="$(srf '' '')"
 if [ "$sr_eq" = "tyle samo co w kopii" ] && [ "$sr_val" = "godzinowe 12, dobowe 7" ] && [ "$sr_miss" = "godzinowe 24" ] \
-   && [ "$sr_extra" = "godzinowe 24, dobowe 7" ] && [ "$sr_empty" = "bez retencji (źródło nie przycina migawek)" ]; then
-    ok "edit-relation: karta -- retencja zrodla rowna celowi tylko przy identycznych zbiorach szczebli (REV-171: brak, nadmiar, inna liczba, puste zrodlo)"
+   && [ "$sr_extra" = "godzinowe 24, dobowe 7" ] && [ "$sr_empty" = "bez retencji (źródło nie przycina migawek)" ]    && [ "$sr_none" = "tyle samo co w kopii" ]; then
+    ok "edit-relation: karta -- retencja zrodla rowna celowi tylko przy identycznych zbiorach szczebli (REV-171: brak, nadmiar, inna liczba, puste zrodlo; dwie puste strony = rowne)"
 else
-    bad "edit-relation: karta -- rownosc retencji zrodla (REV-171)" "eq=[$sr_eq] val=[$sr_val] miss=[$sr_miss] extra=[$sr_extra] empty=[$sr_empty]"
+    bad "edit-relation: karta -- rownosc retencji zrodla (REV-171)" "eq=[$sr_eq] val=[$sr_val] miss=[$sr_miss] extra=[$sr_extra] empty=[$sr_empty] none=[$sr_none]"
 fi
 rm -rf "$SRF"
 # Zmieniona pozycja ma '*' (i [zmiana]); niezmieniona -- dwie spacje.
