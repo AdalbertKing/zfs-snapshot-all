@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 05035489c217cf5f -->
+<!-- status-covers-digest: 34c827a9a93a280a -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -117,6 +117,14 @@
   dla obu czasowników -- używają `%q` (jak `write_client_field`); na żywo pve10 eksport `ab` miał
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
+
+- **REV-20261023-171: karta zmiany relacji mówiła „tyle samo co w kopii” przy źródle bez szczebla
+  (`fix/rev171-srcret-equality`).** Pozycja „Retencja źródła” porównywała tylko szczeble źródła z szczeblami
+  celu o tej samej nazwie, więc źródło po `set-tiers --drop-src-tier=daily` (godzinowe 24, bez dobowych) przy
+  celu 24/7 dawało równość. Teraz równość jest tylko przy identycznych zbiorach szczebli z retencją po obu
+  stronach; inaczej karta wypisuje liczby źródła („godzinowe 24”), a źródło bez żadnej retencji przy celu z
+  retencją -- „bez retencji (źródło nie przycina migawek)”. Odczyt z configu (`show-tiers`, U65) bez zmian.
+  Skrypt recenzenta 4/0 (na main 3/1), `tui` 402/0 (pve9); nowy przypadek na main pada.
 
 - **Jedna zasada minut dla całego kolektora (`fix/schedule-own-minutes`, właściciel 2026-10-23: „zrobić” -- pięć
   reguł).** (1) Wolna minuta liczy się ze wszystkich zadań pakietu na hoście (linie `zfs-job.sh` i silników w
