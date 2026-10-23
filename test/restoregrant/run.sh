@@ -1097,7 +1097,18 @@ check "legacy: ...and once the revocation works, the pause is resumed" "0|3||man
 rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD"
 dr --allow-restore=lab1 >/dev/null
 out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"
-check "record: the withdrawal writes the account into the revocation record" "zfsbackup-pve9" \
+# The revocation record carries the account the retry needs: since REV-170 the grant itself
+# records it (RESTORE_GRANT_ACCOUNT), and only a legacy record gets RESTORE_REVOKE_ACCOUNT
+# written at withdrawal -- not both, so a later manifest change cannot override it (R2).
+check "record: the revocation record carries the delegated account (the grant's own, no second copy)" "zfsbackup-pve9|" \
+    "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)|$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)"
+# ...and a LEGACY record (no RESTORE_GRANT_ACCOUNT) still gets the account written at
+# withdrawal from the manifest, so its retry has it too.
+rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD"
+dr --allow-restore=lab1 >/dev/null
+sed -i '/^RESTORE_GRANT_ACCOUNT=/d' "$GRANTS/lab1"
+ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1 >/dev/null
+check "record: ...a legacy record gets the manifest's account written at withdrawal" "zfsbackup-pve9" \
     "$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)"
 mv "$PEERS/lab1.conf" "$PEERS/lab1.conf.away"; : > "$ZFS_TRACE"
 out="$(dr --deny-restore=lab1)"; rc=$?
