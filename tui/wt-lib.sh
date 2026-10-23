@@ -134,7 +134,7 @@ yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijani
         # przyciskami -- jak plan w zmianie relacji. Esc w oknie tekstu = "nie".
         textbox_read "$t" "$f" || return 1
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra \
-           --yesno "Plan był w poprzednim oknie ($lines wierszy). $y?" 8 "$W"
+           --yesno "Plan był w poprzednim oknie (wierszy: $lines). $y?" 8 "$W"
     fi
 }
 # EDYTOR LISTY -- jeden wzór okna dla każdego "dodaj / usuń pozycje" (decyzja właściciela
