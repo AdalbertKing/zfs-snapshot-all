@@ -875,6 +875,35 @@ build_argv() {   # [install] -> ARGV[]
 }
 cmd_lines() { local a; printf '  %s \\\n' "${ARGV[0]}"; for a in "${ARGV[@]:1}"; do printf '      %s\n' "$(shq "$a")"; done; }
 cmd_oneline() { local a; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; }
+# U31 (kampania 2026-10-19): plan kopii lokalnej (local-backup) wkleja CAŁY kandydat configu
+# i CAŁY blok crona hosta -- na pve10 331 linii, w tym relacje ab i cb. W oknie zostają sekcje
+# i linie crona TEJ relacji; reszta (bez zmian) liczona jednym zdaniem. Plan zdalnej relacji
+# pokazuje już różnicę (show_activation_proposal) i przechodzi bez zmian.
+plan_only_this() {   # <nazwa relacji> ; plan na stdin -> stdout
+    awk -v n="$1" '
+        function flush(   i, mine) {
+            if (!nb) return
+            mine = (hdr == "[relation:" n "]")
+            for (i = 1; i <= nb; i++) if (buf[i] ~ "^[ \t]*(relation|pair_label)[ \t]*=[ \t]*" n "[ \t]*$") mine = 1
+            if (mine) { for (i = 1; i <= nb; i++) print buf[i]; kept++ } else skipped++
+            nb = 0
+        }
+        /^--- kandydat CONFIG/ { part = "cfg"; print "--- nowe sekcje configu (tej relacji) ---"; next }
+        /^--- wygenerowany blok crona/ { flush(); part = "cron"; print ""; print "--- nowe linie crona (tej relacji) ---"; next }
+        part == "cfg" {
+            if ($0 ~ /^\[/) { flush(); hdr = $0 }
+            if (hdr != "") buf[++nb] = $0
+            next
+        }
+        part == "cron" && /^To jest wylacznie plan/ { part = "end" }
+        part == "cron" {
+            if ($0 ~ ("relacja-" n "__") || index($0, " -L " n " ")) print; else if ($0 ~ /^[0-9*]/) other++
+            next
+        }
+        { print }
+        END { flush()
+              if (skipped || other) printf "\nBez zmian zostaje reszta: sekcje configu: %d, linie crona: %d.\n", skipped, other }'
+}
 
 # --- krok 10: podsumowanie -> plan -> wykonanie ---------------------------------
 summary_text() {
@@ -999,7 +1028,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
           echo "Konto: $(a="$(account_name)"; echo "${a:-root}")."
           echo
           echo "Plan czasownika -- nic jeszcze nie zostało zmienione (rc=$rc):"
-          grep -v -- '--grant-remotely is noted' "$TMPD/plan.txt"; } >"$TMPD/plan2.txt"
+          grep -v -- '--grant-remotely is noted' "$TMPD/plan.txt" | plan_only_this "$RNAME"; } >"$TMPD/plan2.txt"
         if [ "$rc" -ne 0 ]; then
             wt --title "$(title 10 'Plan ODRZUCONY przez czasownik')" --scrolltext --msgbox "$(cat "$TMPD/plan2.txt")" "$H" "$W"
             continue
