@@ -491,6 +491,67 @@ case "$k3c" in
     *)                ok "K3: control -- without a base nothing is spread (the template's own schedule, as before)" ;;
 esac
 
+# K3 AFTER X27 (owner 2026-10-23, measured on pve10): the source prunes of ab, cb and pve9
+# carried NO schedule -- K3 read [template:] sections, which the [relation:] block had
+# replaced -- so every relationship pruned its source at the block's :21 / 01:31. The real
+# X27 shape here: the source section of a relationship gets prune_schedule_<tier> from the
+# block's source tiers, spread from its first send minute + 40.
+x27_spread() {   # <relation> <send minute> <block hourly prune> -> the [prune:] section after the spread
+    local t wf; t=$(mktemp); wf=$(mktemp)
+    printf '[dataset:hdd/backups/h/hdd/data]
+	relation     = %s
+	side         = target
+	send_schedule_hourly = %s * * * *
+	send_schedule_daily = %s 1 * * *
+
+' "$1" "$2" "$(( ($2 + 10) % 60 ))" > "$wf"
+    printf '[relation:%s]
+	tiers        = hourly,daily
+	hourly.target_send_schedule = 1 * * * *
+	hourly.prune_schedule = %s * * * *
+	daily.prune_schedule = 31 1 * * *
+
+' "$1" "$3" >> "$wf"
+    printf '[prune:zfsbackup-c@10.0.0.2:hdd/data]
+	relation     = %s
+	side         = source
+	recursive    = yes
+
+' "$1" >> "$wf"
+    printf '[prune:zfsbackup-c@10.0.0.2:hdd/other]
+	relation     = innya
+	side         = source
+
+' >> "$wf"
+    { lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes
+      printf 'relblock_spread_source_prunes %q %q
+' "$wf" "$1"; } > "$t"
+    bash "$t" >/dev/null 2>&1
+    cat "$wf"; rm -f "$t" "$wf"
+}
+xa="$(x27_spread ab 15 21)"; xb="$(x27_spread cb 57 21)"
+xa_src="$(printf '%s
+' "$xa" | sed -n '/^\[prune:zfsbackup-c@10.0.0.2:hdd\/data\]/,/^$/p')"
+xb_src="$(printf '%s
+' "$xb" | sed -n '/^\[prune:zfsbackup-c@10.0.0.2:hdd\/data\]/,/^$/p')"
+if printf '%s
+' "$xa_src" | grep -qx '	prune_schedule_hourly = 55 \* \* \* \*'    && printf '%s
+' "$xa_src" | grep -qx '	prune_schedule_daily = 5 2 \* \* \*'    && printf '%s
+' "$xb_src" | grep -qx '	prune_schedule_hourly = 37 \* \* \* \*'    && ! printf '%s
+' "$xa" | sed -n '/hdd\/other\]/,/^$/p' | grep -q prune_schedule; then
+    ok "K3/X27: two relationships from one template prune their sources at their own minutes (ab :55, cb :37), not the block's :21; another relationship's section untouched"
+else
+    bad "K3/X27: source prune spread from the block" "ab: $(printf '%s' "$xa_src" | tr '	
+' ' |')" "cb: $(printf '%s' "$xb_src" | tr '	
+' ' |')"
+fi
+x27_again="$(printf '%s
+' "$xa" > /tmp/x27.$$; t=$(mktemp); { lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes; printf 'relblock_spread_source_prunes %q ab
+' /tmp/x27.$$; } > "$t"; bash "$t" >/dev/null 2>&1; rm -f "$t"; grep -c '^	prune_schedule_hourly' /tmp/x27.$$; rm -f /tmp/x27.$$)"
+check_x27="$x27_again"
+if [ "$check_x27" = 1 ]; then ok "K3/X27: run again, it adds nothing to a section that already has its minutes"
+else bad "K3/X27: idempotent" "prune_schedule_hourly lines: $check_x27"; fi
+
 # K3, the reader beside it: `status` printed the spread source schedules as
 # SOURCES (its src match took any line containing "src" before '='). Only the
 # field named src is a source.
