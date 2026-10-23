@@ -120,6 +120,11 @@ pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z który
 # --- krok 3: diagnoza -------------------------------------------------------
 probe() {   # check-source -> zmienne C_*
     C_SSH=0; C_ERR=""; C_NAME=""; C_ZFS=0; C_POOLS=""; C_PKG=0; C_REV=""; C_DIR=""
+    # U55 (kampania 2026-10-21): 15 s czarnego okna to sufit ConnectTimeout dla crona
+    # (martwy host, nazwa na obcy adres -- U56). Żywy host w sieci odpowiada w 0,2-0,4 s
+    # (pve10 -> pve9, zmierzone 2026-10-23); w oknie konsoli wystarczy 5 s, jak przy
+    # zmianie adresu w edycji relacji. ServerAlive: host, który zamilkł w trakcie, 6 s.
+    SSH_CONNECT_TIMEOUT=5 SSH_SERVER_ALIVE_INTERVAL=3 SSH_SERVER_ALIVE_COUNT=2 \
     "$ZB" check-source "$(hostport)" --json >"$TMPD/check.json" 2>"$TMPD/check.err" || true
     # Wartości ze zdalnego hosta to DANE: python wypisuje je w stałej kolejności,
     # po jednej w linii (bez znaków nowej linii), bash czyta je read -r, nigdy wykonywane.
@@ -163,9 +168,16 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
     rn="$(resolve_note)"
     while :; do
         geom
-        info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root...${rn:+\n$rn}\n(do 15 s)"
+        info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root...${rn:+\n$rn}\n(do 5 s)"
         probe
         if [ "$C_SSH" -ne 1 ]; then
+            # Host, który w ogóle nie odpowiada, to nie brak klucza: rada o keyscan
+            # i copy-id prowadziłaby admina w złą stronę (przejście na żywo 2026-10-23).
+            case "$C_ERR" in
+                *"No route to host"*|*"timed out"*|*"Connection refused"*|*"Could not resolve"*|*"Network is unreachable"*)
+                    wt --title "$(title 3 "$HOST nie odpowiada")" --msgbox "${rn:+$rn\n\n}Pod $HOST (port $PORT) nikt nie odpowiada:\n\n  $C_ERR\n\nSprawdź adres i czy host jest włączony\n(z linii poleceń GUI: ping $HOST), potem wpisz go jeszcze raz." 13 "$W"
+                    return 1 ;;
+            esac
             wt --title "$(title 3 "$HOST nie wpuszcza")" --msgbox "${rn:+$rn\n\n}SSH jako root@$HOST nie działa:\n\n  $C_ERR\n\nNajczęściej brakuje jednego z dwóch -- z TEGO hosta, jako root:\n\n  ssh-keyscan -p $PORT $HOST >> /root/.ssh/known_hosts\n  ssh-copy-id -p $PORT root@$HOST\n\nPo naprawie wróć tutaj." "$(fit 13)" "$W"
             return 1
         fi

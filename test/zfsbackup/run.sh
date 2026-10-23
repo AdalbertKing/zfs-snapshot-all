@@ -1920,6 +1920,21 @@ fi
     && ok "argv: later flags are not merged or re-split" \
     || bad "argv: later flags are not merged or re-split" "$(cat "$AV/argv")"
 
+# runuser_can, not root: an answer without su. su prompts for a password on the
+# terminal; a suite as 'tester' on pve9 (runuser in /usr/sbin, off its PATH) hung
+# 21 minutes there. The su stub records being called.
+if [ "$(id -u)" -ne 0 ]; then
+    RU="$WORK/runuser-can"; mkdir -p "$RU/bin"
+    printf '#!/bin/bash\n: > "%s/su-called"\nexit 0\n' "$RU" > "$RU/bin/su"; chmod +x "$RU/bin/su"
+    ( PATH="$RU/bin:/usr/bin:/bin"; runuser_can "not-$(id -un)" ); ru_rc=$?
+    ( PATH="$RU/bin:/usr/bin:/bin"; runuser_can "$(id -un)" ); ru_self=$?
+    if [ "$ru_rc" -ne 0 ] && [ "$ru_self" -eq 0 ] && [ ! -e "$RU/su-called" ]; then
+        ok "runuser_can: not root -> 'cannot' for another account, 'can' for itself, su never asked"
+    else
+        bad "runuser_can: not root -> 'cannot' for another account, 'can' for itself, su never asked" "other=$ru_rc self=$ru_self su=$([ -e "$RU/su-called" ] && echo called)"
+    fi
+fi
+
 # --- 16. moving to a dedicated account must not duplicate root's jobs -------
 #
 # REV-20260801-018/-019. The first version of this guard compared the

@@ -37,7 +37,7 @@ for r in d.get("replicas", []):
                      r.get("monitor_warn") or "-", r.get("prefix") or "-", " ".join(r.get("exclude_child") or []) or "-",
                      r.get("media_guids") or "-", r.get("on_insert") or "no", r.get("keep") or "-", r.get("raw") or "no", r.get("history") or "all"]))
 PYEOF
-SRCS=""; DST=""; SCHED="0 22 * * *"; MEDIA=removable; REC=yes; TRIG=no; UNTRIG=no; MONDAYS=""; PASSIVE=""
+SRCS=""; DST=""; SCHED="auto"; MEDIA=removable; REC=yes; TRIG=no; UNTRIG=no; MONDAYS=""; PASSIVE=""
 GUIDS=""; ONINS=no; CURGUIDS=""; KEEP=""; RAW=no; HIST=all; ENGINE_ONLY=0
 RULES="${ZFS_REPLICA_RULES:-/etc/udev/rules.d/90-zfs-replica.rules}"
 if [ "$EDIT" -eq 1 ]; then
@@ -296,6 +296,7 @@ trig_calc() {    # TRIG/UNTRIG: czy plan zakłada albo zdejmuje regułę udev "p
 }
 sched_words() {
     case "$1" in
+        auto) echo "codziennie w nocy, o wolnej godzinie" ;;
         "0 22 * * *") echo "codziennie 22:00" ;; "0 22 * * 5") echo "co tydzień, piątek 22:00" ;;
         "0 22 1 * *") echo "co miesiąc, 1. dnia 22:00" ;; on-insert) echo "tylko po włożeniu dysku" ;;
         *) echo "cron: $1" ;;
@@ -404,7 +405,7 @@ while :; do
     case "$step" in
     1)  # nazwa
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
-        wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
+        wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Wyjdź" \
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
            || {
                 # Kampania 3 (2026-10-23): Esc w kroku 1 wychodził bez pytania. Jak w kreatorze
@@ -483,13 +484,13 @@ PYEOF
     26) # NA DYSKU: odbicie kolektora czy własne N (W18, właściciel 2026-10-11 -- dysk
         # wkładany raz w miesiącu, 12 stanów wstecz). Tylko przy własnych migawkach.
         def=mirror; [ -n "$KEEP" ] && def=keep
-        wt --title "$(rtitle 3 'na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(rtitle 3 'migawki: co zostaje na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Co ma zostawać na dysku repliki?" 11 "$W" 2 \
            mirror "Odbicie kolektora -- dysk trzyma to, co kolektor" \
            keep "Trzymaj N ostatnich kopii -- własna historia dysku, niezależna od kolektora" || { step=25; continue; }
         if [ "$WT_OUT" = mirror ]; then KEEP=""; step=3; continue; fi
         while :; do
-            wt --title "Replika $NAME -- ile kopii na dysku" --ok-button "Dalej" --cancel-button "Wstecz" \
+            wt --title "$(rtitle 3 'migawki: ile kopii na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?\nNp. 12 = rok przy dysku wkładanym raz w miesiącu." 10 "$W" "${KEEP:-12}" || { WT_OUT=""; break; }
             case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba całkowita większa od 0." 8 "$W"; continue ;; esac
             break
@@ -609,17 +610,19 @@ PYEOF
     5)  # harmonogram -- okno A "Kiedy kopiować?" i okno B "także po włożeniu?"
         # (właściciel 2026-10-08, zastępuje uwagi 16 i 19). Reguła udev nie ma
         # osobnego pytania: gdy jest potrzebna i jej nie ma, plan wymienia ją jako krok.
-        items=("0 22 * * *" "codziennie o 22:00" "0 22 * * 5" "co tydzień, piątek 22:00" "0 22 1 * *" "co miesiąc, 1. dnia o 22:00"
+        # auto (właściciel 2026-10-23): pierwsza godzina nocy, w której nie startuje żadna
+        # inna replika -- dwie pełne kopie na nośniki nie nachodzą na siebie.
+        items=(auto "codziennie w nocy, o wolnej godzinie (wybierze program)" "0 22 * * *" "codziennie o 22:00" "0 22 * * 5" "co tydzień, piątek 22:00" "0 22 1 * *" "co miesiąc, 1. dnia o 22:00"
                __other__ "własny harmonogram (cron)…")
         # Tylko wymienny: stały dysk nigdy nie jest "wkładany".
         [ "$MEDIA" = removable ] && items+=(on-insert "tylko po włożeniu dysku")
-        def="$SCHED"; case "$SCHED" in "0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
-        [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def="0 22 * * *"
+        def="$SCHED"; case "$SCHED" in auto|"0 22 * * *"|"0 22 * * 5"|"0 22 1 * *"|on-insert) ;; *) def=__other__ ;; esac
+        [ "$MEDIA" = fixed ] && [ "$SCHED" = on-insert ] && def=auto
         wt --title "$(rtitle 6 'kiedy kopiować?')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "$([ "$MEDIA" = removable ] && printf '%s' 'Nośnik wymienny jest podłączany tylko na czas kopii; gdy go nie ma w maszynie,\nbieg po cichu nic nie robi.' || printf '%s' 'Nośnik stały jest stale w maszynie: kopia idzie o tej porze.')$([ "$EDIT" -eq 1 ] && printf '%s' " Teraz: $([ "$SCHED" = on-insert ] && echo 'tylko po włożeniu' || echo "$SCHED")")" "$(fit $((${#items[@]} / 2 + 3)))" "$W" "$((${#items[@]} / 2))" "${items[@]}" || { step=4; continue; }
         if [ "$WT_OUT" = __other__ ]; then
             wt --title "Replika $NAME -- własny harmonogram" --ok-button "Dalej" --cancel-button "Wstecz" \
-               --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$([ "$SCHED" = on-insert ] || echo "$SCHED")" || continue
+               --inputbox "Pięć pól crona (minuta godzina dzień miesiąc dzień-tygodnia):" 9 "$W" "$(case "$SCHED" in on-insert|auto) ;; *) echo "$SCHED" ;; esac)" || continue
             _c="$(printf '%s' "$WT_OUT" | tr -s ' ' | sed 's/^ //; s/ $//')"
             # Kampania 2026-10-22: "0 22 * * *zle" przechodził aż do planu. Pięć pól ze znaków crona.
             if ! printf '%s\n' "$_c" | awk '

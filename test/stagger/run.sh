@@ -65,6 +65,7 @@ pick() {   # <name> <taken minutes, space separated> -> chosen minute
       echo 'log() { :; }'
       printf 'TAKEN=%q\n' "$2"
       echo 'schedule_taken_minutes() { printf "%s\n" $TAKEN; }'
+      lift schedule_take
       lift schedule_pick_minute
       printf 'schedule_pick_minute %q\n' "$1"; } > "$t"
     bash "$t" 2>/dev/null
@@ -107,6 +108,7 @@ collect() {   # <crontab text> -> the minutes the collector reports
     { echo 'set -u'
       printf 'CRONTAB_TEXT=%q\n' "$1"
       echo 'cron_known_accounts() { echo root; }'
+      printf 'SCHEDULE_CONF_GLOB=%q\n' "${COLLECT_CONF:-/nonexistent/none.conf}"
       echo 'cron_read() { printf "%s
 " "$CRONTAB_TEXT" > "$2"; }'
       lift schedule_expand_minutes
@@ -257,6 +259,7 @@ saturated_pick() {   # -> what schedule_pick_minute returns with every minute ta
     { echo 'set -u'
       echo 'log() { echo ">>> $*"; }'      # the REAL log: stdout
       echo 'schedule_taken_minutes() { seq 0 59; }'
+      lift schedule_take
       lift schedule_pick_minute
       echo 'schedule_pick_minute rel1'; } > "$t"
     bash "$t" 2>/dev/null
@@ -523,7 +526,9 @@ x27_spread() {   # <relation> <send minute> <block hourly prune> -> the [prune:]
 	side         = source
 
 ' >> "$wf"
-    { lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes
+    { echo 'log() { :; }'; echo 'schedule_taken_minutes() { for m in ${X27_TAKEN:-} ${SCHEDULE_RESERVED:-}; do echo "$m"; done; }'
+      printf 'X27_TAKEN=%q\n' "${X27_TAKEN:-}"
+      lift schedule_take; lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes
       printf 'relblock_spread_source_prunes %q %q
 ' "$wf" "$1"; } > "$t"
     bash "$t" >/dev/null 2>&1
@@ -545,12 +550,96 @@ else
 ' ' |')" "cb: $(printf '%s' "$xb_src" | tr '	
 ' ' |')"
 fi
-x27_again="$(printf '%s
-' "$xa" > /tmp/x27.$$; t=$(mktemp); { lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes; printf 'relblock_spread_source_prunes %q ab
-' /tmp/x27.$$; } > "$t"; bash "$t" >/dev/null 2>&1; rm -f "$t"; grep -c '^	prune_schedule_hourly' /tmp/x27.$$; rm -f /tmp/x27.$$)"
-check_x27="$x27_again"
-if [ "$check_x27" = 1 ]; then ok "K3/X27: run again, it adds nothing to a section that already has its minutes"
-else bad "K3/X27: idempotent" "prune_schedule_hourly lines: $check_x27"; fi
+x27_wf="$(mktemp)"; printf '%s\n' "$xa" > "$x27_wf"
+x27_t="$(mktemp)"
+{ echo 'log() { :; }'; echo 'schedule_taken_minutes() { :; }'
+  lift schedule_take; lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift relblock_spread_source_prunes
+  printf 'relblock_spread_source_prunes %q ab\n' "$x27_wf"; } > "$x27_t"
+bash "$x27_t" >/dev/null 2>&1
+x27_again="$(grep -c "^$(printf '\t')prune_schedule_hourly" "$x27_wf")"; rm -f "$x27_t" "$x27_wf"
+if [ "$x27_again" = 1 ]; then ok "K3/X27: run again, it adds nothing to a section that already has its minutes"
+else bad "K3/X27: idempotent" "prune_schedule_hourly lines: $x27_again"; fi
+
+# ONE JOB PER MINUTE (owner 2026-10-23). (a) +40 is TAKEN by another job: the source prune
+# moves to the next free minute, it does not pile on.
+xc="$(X27_TAKEN=55 x27_spread ab 15 21)"
+if printf '%s\n' "$xc" | sed -n '/hdd\/data\]/,/^$/p' | grep -qx "$(printf '\t')prune_schedule_hourly = 56 \* \* \* \*"; then
+    ok "one job per minute: the source prune's +40 is taken (:55), so it gets the next free one (:56)"
+else
+    bad "one job per minute: source prune on a taken minute" "$(printf '%s' "$xc" | tr '\t\n' ' |')"
+fi
+
+# (b) the collector counts EVERY managed job, not only transfers: a target prune, a source
+# prune and a replica take their minutes; a 15-minute age monitor and a commented
+# on-insert line do not; and a not-yet-installed config's per-tier fields count too.
+ALLJOBS='35 * * * * /r/zfs-job.sh "h t prune (x)" -- /r/delsnaps.sh -R "a" "automated_hourly" -H24
+21 * * * * /r/zfs-job.sh "h t src prune (x)" -- /r/delsnaps.sh -R -K k "u@h:a" "automated_hourly" -H24
+0 22 * * * /r/zfs-job.sh "h replica copy (usb1)" -- /bin/sh -c "x"
+*/15 * * * * d=$(/r/check-snap-age.sh -R -L ab "a" "automated_hourly" 90m 150m 2>&1)
+#on-insert /r/zfs-job.sh "h replica copy (usb9)" -- /bin/sh -c "y"'
+got_all="$(collect "$ALLJOBS")"
+if [ "$got_all" = "0 21 35" ]; then
+    ok "one job per minute: the collector counts prunes (target and source) and replicas, not monitors or commented lines"
+else
+    bad "one job per minute: what the collector counts" "reported '$got_all', wanted '0 21 35'"
+fi
+COLLECT_CONF="$(mktemp)"
+printf '[dataset:a]\n\tsend_schedule_hourly = 7 * * * *\n\tprune_schedule_daily = 27 1 * * *\n[replica:usb1]\n\tschedule = 30 21 * * *\n' > "$COLLECT_CONF"
+got_conf="$(COLLECT_CONF="$COLLECT_CONF" collect "")"; rm -f "$COLLECT_CONF"
+if [ "$got_conf" = "7 27 30" ]; then
+    ok "one job per minute: a config not installed yet counts its per-tier and replica schedules (the extraction printed nothing before)"
+else
+    bad "one job per minute: config fields counted" "reported '$got_conf', wanted '7 27 30'"
+fi
+
+# (c) a cloned section (a dataset joining a relationship) gets its OWN minutes: its send
+# tiers re-spread from the new send minute, its prune tiers from the new prune minute,
+# offsets kept, the hour carried.
+rs_t="$(mktemp)"; rs_in="$(mktemp)"
+printf '[dataset:b]\n\trelation     = ab\n\tsend_schedule_hourly = 15 * * * *\n\tsend_schedule_daily = 25 1 * * *\n\tprune_schedule_hourly = 35 * * * *\n\tprune_schedule_daily = 45 1 * * *\n\tnotify       = ab-b\n' > "$rs_in"
+{ lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift section_restagger
+  printf 'section_restagger 16 36 < %q\n' "$rs_in"; } > "$rs_t"
+rs_out="$(bash "$rs_t" 2>/dev/null)"; rm -f "$rs_t" "$rs_in"
+rs_want="$(printf '[dataset:b]\n\trelation     = ab\n\tsend_schedule_hourly = 16 * * * *\n\tsend_schedule_daily = 26 1 * * *\n\tprune_schedule_hourly = 36 * * * *\n\tprune_schedule_daily = 46 1 * * *\n\tnotify       = ab-b')"
+if [ "$rs_out" = "$rs_want" ]; then
+    ok "one job per minute: a cloned section takes its own minutes (:16/:26 send, :36/:46 prune), everything else as the sibling"
+else
+    bad "one job per minute: section_restagger" "got: $(printf '%s' "$rs_out" | tr '\t\n' ' |')"
+fi
+
+# (e) ONE REPLICA PER HOUR: a new replica takes the first night hour (22, 23, 0 .. 5) no
+# other replica starts in; the replica being edited does not count against itself;
+# every night hour taken -> 02:30, as before.
+rn_conf="$(mktemp)"
+printf '[replica:usb1]\n\tschedule = 0 22 * * *\n[replica:usb9]\n\tschedule = 0 23 * * *\n[replica:sejf]\n\tschedule = 15 0 * * 5\n' > "$rn_conf"
+rn() {   # <replica name> [conf] -> REPLICA_SLOT
+    local t; t="$(mktemp)"
+    { echo 'log() { :; }'; echo 'schedule_taken_minutes() { for m in ${SCHEDULE_RESERVED:-}; do echo "$m"; done; }'
+      printf 'SCHEDULE_CONF_GLOB=%q\n' "${2:-$rn_conf}"
+      lift schedule_take; lift replica_taken_hours; lift replica_night_slot
+      printf 'replica_night_slot %q; echo "$REPLICA_SLOT"\n' "$1"; } > "$t"
+    bash "$t" 2>/dev/null; rm -f "$t"
+}
+rn_new="$(rn usb10)"; rn_self="$(rn usb9)"
+rn_full="$(mktemp)"; for h in 22 23 0 1 2 3 4 5; do printf '[replica:r%s]\n\tschedule = 0 %s * * *\n' "$h" "$h"; done > "$rn_full"
+rn_sat="$(rn usbX "$rn_full")"; rm -f "$rn_conf" "$rn_full"
+if [ "$rn_new" = "0 1 * * *" ] && [ "$rn_self" = "0 23 * * *" ] && [ "$rn_sat" = "30 2 * * *" ]; then
+    ok "one replica per hour: a new replica gets 01:00 when 22, 23 and 00 are taken; an edited one keeps its own hour free; all night hours taken -> 02:30"
+else
+    bad "one replica per hour: replica_night_slot" "new='$rn_new' self='$rn_self' saturated='$rn_sat'"
+fi
+
+# (d) section_first_minute: what an edit keeps -- the minute the section runs at now.
+sf_wf="$(mktemp)"
+printf '[dataset:x]\n\tsend_schedule_hourly = 13 * * * *\n\tprune_schedule_hourly = 33 * * * *\n[dataset:y]\n\tsend_schedule = */5 * * * *\n' > "$sf_wf"
+sf_t="$(mktemp)"; { lift section_first_minute
+  printf 'echo "$(section_first_minute %q "[dataset:x]" send)|$(section_first_minute %q "[dataset:x]" prune)|$(section_first_minute %q "[dataset:y]" send)|$(section_first_minute %q "[dataset:z]" send)"\n' "$sf_wf" "$sf_wf" "$sf_wf" "$sf_wf"; } > "$sf_t"
+sf_out="$(bash "$sf_t" 2>/dev/null)"; rm -f "$sf_t" "$sf_wf"
+if [ "$sf_out" = "13|33||" ]; then
+    ok "one job per minute: an edit reads the minutes a section runs at (13/33), nothing for a non-number or a missing section"
+else
+    bad "one job per minute: section_first_minute" "got '$sf_out', wanted '13|33||'"
+fi
 
 # K3, the reader beside it: `status` printed the spread source schedules as
 # SOURCES (its src match took any line containing "src" before '='). Only the

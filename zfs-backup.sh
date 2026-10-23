@@ -368,11 +368,14 @@ front end never edits the config file:
                                     The windows for a replica (F6 in the GUI): Ins = new,
                                     Enter + 'e' = change. Ask, show the plan, install.
   zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
-                                    Default schedule is 02:30 nightly, after the
-                                    daily tier: a replica is not an online mirror,
-                                    and every run is a window in which the medium
-                                    is at risk.
-                                    [--schedule='30 2 * * *'|on-insert] [--prefix=replica_|--passive]
+                                    Default schedule (none given, or auto): a free
+                                    night hour on this host (22, 23, 0..5, the
+                                    minute free too), so two replicas do not run
+                                    together; a replica already there keeps its
+                                    own. A replica is not an online mirror, and
+                                    every run is a window in which the medium is
+                                    at risk.
+                                    [--schedule=auto|'30 2 * * *'|on-insert] [--prefix=replica_|--passive]
                                     --passive = no snapshots of its own: it carries
                                     the ones already there (for a replica of a
                                     relationship's copies, whose next pull would
@@ -2582,8 +2585,10 @@ emit_remote_source_prune() {   # <workfile> <name> <marker> [--schedule=EXPR] [-
             {
                 echo
                 echo "[prune:$scope]"
+                # ...but not the sibling's minutes: relblock_spread_source_prunes gives the
+                # newcomer its own, from its own dataset's send minute (owner 2026-10-23).
                 printf '%s\n' "${SOURCE_PRUNE_PRESERVED[$_psib]}" \
-                    | sed -E "s|^([[:space:]]*ssh_flags[[:space:]]*=).*|\1 $sflags|; s|^([[:space:]]*notify[[:space:]]*=).*|\1 ${name}-src-$(basename "$ds")|; s|^([[:space:]]*recursive[[:space:]]*=).*|\1 $_prec|"
+                    | sed -E "s|^([[:space:]]*ssh_flags[[:space:]]*=).*|\1 $sflags|; s|^([[:space:]]*notify[[:space:]]*=).*|\1 ${name}-src-$(basename "$ds")|; s|^([[:space:]]*recursive[[:space:]]*=).*|\1 $_prec|; /^[[:space:]]*prune_schedule(_[A-Za-z0-9_]+)?[[:space:]]*=/d"
             } >> "$workfile" || return 1
         else
             # FIRST CREATE: no installed source prune for this dataset -- generate
@@ -4661,6 +4666,14 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # Remove-then-add for the regenerated set only: that is what makes a re-run
     # after an endpoint switch pick up the new host/port/alias for a dataset
     # that has no installed section yet.
+    # AN EDIT DOES NOT MOVE THE SCHEDULE (owner 2026-10-23): a dataset whose section is
+    # about to be regenerated keeps the minutes it runs at now -- read before it goes.
+    local -A _old_m=() _old_pm=()
+    local _op
+    for _op in ${regen_paths[@]+"${regen_paths[@]}"}; do
+        _old_m[$_op]="$(section_first_minute "$workfile" "[dataset:$_op]" send)"
+        _old_pm[$_op]="$(section_first_minute "$workfile" "[dataset:$_op]" prune)"
+    done
     [ "${#regen_paths[@]}" -gt 0 ] && remove_managed_sections "$workfile" "$name" "${regen_paths[@]}"
 
     for ds in ${keep_ds[@]+"${keep_ds[@]}"}; do
@@ -4734,7 +4747,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # section it creates -- see schedule_pick_minute. Only for sections being
     # CREATED: a preserved section keeps whatever it already carries.
     local stagger_min stagger_prune stagger_send_expr stagger_prune_expr
-    stagger_min=$(schedule_pick_minute "$name")
+    # Reservations are per relationship emission: what this call hands out, on top of what
+    # the host already runs -- not left over from an earlier emission in the same process.
+    SCHEDULE_RESERVED=""; unset SCHEDULE_TAKEN_CACHE
+    schedule_take_for "$name"; stagger_min="$SCHEDULE_PICKED"
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
     stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$stagger_prune")
@@ -4783,14 +4799,45 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
         [ -n "$_tier_sched" ] && log "schedule: spreading this relationship tier by tier (its profile declares several cadences, and one section-level value would have flattened them onto the first)"
     fi
 
+    # ONE MINUTE PER DATASET, AND EVERY JOB IN A FREE ONE (owner 2026-10-23). The datasets of
+    # one relationship read the same source pool over the same link, so they go one after
+    # another: the first at the relationship's minute, each next one at the next free
+    # minute; each target prune at the first free minute from its send + 20. A dataset that
+    # already ran keeps its minutes (an edit does not move the schedule). Unwrapped values
+    # (may exceed 59), so a tier spread still carries the hour.
+    local -A _ds_m=() _ds_pm=()
+    local _d _dlp _m="" _pm _first=1
+    for _d in ${regen_ds[@]+"${regen_ds[@]}"}; do
+        _dlp=$(client_local_path "$_d")
+        if [ -n "${_old_m[$_dlp]:-}" ]; then
+            _m="${_old_m[$_dlp]}"
+        elif [ "$_first" -eq 1 ]; then
+            _m="$stagger_min"
+        else
+            schedule_take $(( _m + 1 )); _m=$(( _m + 1 + (SCHEDULE_PICKED - (_m + 1) % 60 + 60) % 60 ))
+        fi
+        _first=0
+        if [ -n "${_old_pm[$_dlp]:-}" ]; then
+            _pm=$(( _m + (_old_pm[$_dlp] - _m % 60 + 60) % 60 ))
+        else
+            schedule_take $(( _m + 20 )); _pm=$(( _m + 20 + (SCHEDULE_PICKED - (_m + 20) % 60 + 60) % 60 ))
+        fi
+        _ds_m[$_d]="$_m"; _ds_pm[$_d]="$_pm"
+    done
+    # The source prune of each dataset is placed after the block exists
+    # (relblock_spread_source_prunes, from its dataset's minute + 40).
+
     for ds in ${regen_ds[@]+"${regen_ds[@]}"}; do
         localpath=$(client_local_path "$ds")
         [ -n "$(sync_mirror_flag "$ds")" ] && MIRRORED_LANDINGS+=("$localpath")
         if [ "${PLAN_CLONE:-0}" -eq 1 ]; then
+            # The sibling's fields, but this dataset's OWN minutes (section_restagger).
             { echo; clone_relation_section "$workfile" dataset "$PLAN_CLONE_SIB" "$localpath" \
-                  "${name}-$(basename "$ds")" "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}"; } >> "$workfile" || return 1
+                  "${name}-$(basename "$ds")" "${LOAD_ACCOUNT}@${LOAD_HOST}:${ds}" \
+                  | section_restagger "${_ds_m[$ds]}" "${_ds_pm[$ds]}"; } >> "$workfile" || return 1
             continue
         fi
+        schedule_ds_exprs "${_ds_m[$ds]}" "${_ds_pm[$ds]}"
         {
             echo
             echo "[dataset:$localpath]"
@@ -4947,9 +4994,10 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
                 [ -n "${PLAN_CLONE_PSIB:-}" ] || continue
                 _plocal=$(client_local_path "$ds")
                 { echo; clone_relation_section "$workfile" prune "$PLAN_CLONE_PSIB" "$_plocal" \
-                      "${name}-$(basename "$ds")"; } >> "$workfile" || return 1
+                      "${name}-$(basename "$ds")" | section_restagger "${_ds_m[$ds]}" "${_ds_pm[$ds]}"; } >> "$workfile" || return 1
                 continue
             fi
+            schedule_ds_exprs "${_ds_m[$ds]}" "${_ds_pm[$ds]}"
             # A profile whose tiers prune THEMSELVES (family-per-tier: d30h24,
             # m12w4d7h24-*, prod -- every one that can quiesce) declares no [prune]
             # fragment, and its retention rides the [dataset:] section's templates.
@@ -5348,26 +5396,57 @@ schedule_expand_minutes() {   # <cron minute field> -> one minute per line
 ')"
 }
 
-schedule_taken_minutes() {   # -> one minute per line, already-used send minutes
+schedule_taken_minutes() {   # -> one minute per line, every minute a managed job already starts in
     local u tmp f _sched
     while IFS= read -r u; do
         [ -n "$u" ] || continue
         tmp=$(mktemp) || continue
         if cron_read "$u" "$tmp"; then
-            # First field of any line that actually runs a transfer engine.
+            # Owner 2026-10-23: ONE job per minute on the collector, whatever the job --
+            # transfer, prune on either side, replica. Only managed jobs (they run through
+            # zfs-job.sh); the every-15-minutes age monitors are light and would otherwise
+            # take four minutes of every hour.
             while IFS= read -r _sched; do
                 [ -n "$_sched" ] && schedule_expand_minutes "$_sched"
-            done < <(grep -E '(snapget|snapsend)\.sh' "$tmp" 2>/dev/null | awk '{print $1}')
+            done < <(grep -E 'zfs-job\.sh|(snapget|snapsend|delsnaps)\.sh' "$tmp" 2>/dev/null                      | grep -v -e '^[[:space:]]*#' -e 'check-snap-age' | awk '{print $1}')
         fi
         rm -f "$tmp"
     done < <(cron_known_accounts)
-    # Sections that exist but are not installed yet.
-    for f in /etc/zfs-snapshot-all/jobs.*.conf; do
+    # Sections that exist but are not installed yet -- every schedule field, per tier too.
+    # (The extraction printed nothing until 2026-10-23: its replacement was empty.)
+    # SCHEDULE_CONF_GLOB: a suite points this at its fixture instead of the host's /etc.
+    for f in ${SCHEDULE_CONF_GLOB:-/etc/zfs-snapshot-all/jobs.*.conf}; do
         [ -r "$f" ] || continue
         while IFS= read -r _sched; do
             [ -n "$_sched" ] && schedule_expand_minutes "$_sched"
-        done < <(sed -n -E 's/^[[:space:]]*send_schedule[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]].*//p' "$f" 2>/dev/null)
+        done < <(sed -n -E 's/^[[:space:]]*(send_schedule|prune_schedule|schedule)(_[A-Za-z0-9_]+)?[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]].*/\3/p' "$f" 2>/dev/null)
     done
+    # Minutes this run has already handed out (schedule_reserve), not installed yet.
+    for _sched in ${SCHEDULE_RESERVED:-}; do printf '%s\n' "$_sched"; done
+}
+
+# THE FIRST FREE MINUTE from <start>, wrapping the hour, and RESERVED for the rest of
+# this run -- the next dataset, prune or replica of the same command must not get it.
+# Every minute taken: <start> itself, said once (the caller's log carries why).
+# NOT in $(...): the reservation lives in this shell. The answer is in SCHEDULE_PICKED.
+SCHEDULE_RESERVED=""
+SCHEDULE_PICKED=""
+schedule_take() {   # <start minute, may exceed 59> -> SCHEDULE_PICKED (0-59), reserved
+    local start=$(( ${1:-0} % 60 )) taken probe i
+    # The host's crontabs and configs are read ONCE per emission (they do not change in it;
+    # each dataset and prune asking again made a run with many sources slow), then this
+    # run's own reservations on top.
+    [ -n "${SCHEDULE_TAKEN_CACHE+x}" ] || SCHEDULE_TAKEN_CACHE=" $(schedule_taken_minutes | sort -un | tr '\n' ' ') "
+    taken="$SCHEDULE_TAKEN_CACHE ${SCHEDULE_RESERVED:-} "
+    for i in $(seq 0 59); do
+        probe=$(( (start + i) % 60 ))
+        case "$taken" in *" $probe "*) continue ;; esac
+        SCHEDULE_RESERVED="${SCHEDULE_RESERVED:-} $probe"
+        SCHEDULE_PICKED="$probe"; return 0
+    done
+    log "schedule: all 60 minutes on this host already start a job -- sharing minute $start" >&2
+    SCHEDULE_RESERVED="${SCHEDULE_RESERVED:-} $start"
+    SCHEDULE_PICKED="$start"
 }
 
 # Deterministic start point, then the first free minute upwards. cksum, not
@@ -5421,6 +5500,116 @@ schedule_spread_tiers() {   # <send|prune> <minute for the first tier>
     done
     printf '%s' "${out%
 }"
+}
+
+# The hours other replicas start in: [replica:*] schedule fields in this host's configs
+# (all accounts' files, SCHEDULE_CONF_GLOB for a suite), the one being edited excluded.
+replica_taken_hours() {   # <replica name to leave out> -> one hour per line
+    local skip="$1" f
+    for f in ${SCHEDULE_CONF_GLOB:-/etc/zfs-snapshot-all/jobs.*.conf}; do
+        [ -r "$f" ] || continue
+        awk -v skip="[replica:$skip]" '
+            function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+            /^[ \t]*\[/ { inr = (trim($0) ~ /^\[replica:/ && trim($0) != skip); next }
+            inr { t = trim($0); if (t ~ /^schedule[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " ")
+                  if (a[2] ~ /^[0-9]+$/) print a[2] + 0 } }' "$f" 2>/dev/null
+    done
+}
+# The first night hour (22, 23, 0 .. 5) no other replica starts in, at a free minute
+# (schedule_take). Every night hour taken: 02:30, the old default, said so.
+REPLICA_SLOT=""
+replica_night_slot() {   # <replica name> -> REPLICA_SLOT ("M H * * *"), the minute reserved
+    local taken h
+    taken=" $(replica_taken_hours "$1" | sort -un | tr '\n' ' ') "
+    for h in 22 23 0 1 2 3 4 5; do
+        case "$taken" in *" $h "*) continue ;; esac
+        schedule_take 0
+        REPLICA_SLOT="$SCHEDULE_PICKED $h * * *"
+        return 0
+    done
+    log "add-replica: every night hour 22-05 already starts a replica -- '$1' gets 02:30 and shares it" >&2
+    REPLICA_SLOT="30 2 * * *"
+}
+
+# The minute a section already starts at: its first send_schedule[_<tier>] (send) or
+# prune_schedule[_<tier>] (prune). Empty when it carries none or the minute is not a number.
+section_first_minute() {   # <file> <[header]> <send|prune> -> minute or nothing
+    awk -v h="$2" -v f="$3_schedule" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        /^[ \t]*\[/ { ins = (trim($0) == h); next }
+        ins { t = trim($0); k = t; sub(/[ \t]*=.*$/, "", k)
+              if (k == f || index(k, f "_") == 1) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " ")
+                  if (a[1] ~ /^[0-9]+$/) { print a[1] + 0; exit } } }' "$1" 2>/dev/null
+}
+
+# One dataset's schedule fields, from its send minute and its prune minute (both may
+# exceed 59; the hour is carried): sets the caller's stagger_send_expr,
+# stagger_prune_expr and _tier_sched exactly as emit_client_sections used to for the one
+# relationship-wide minute.
+schedule_ds_exprs() {   # <send minute> <prune minute>
+    local m="$1" pm="$2" _ss="" _sp=""
+    stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$(( m % 60 ))")
+    stagger_prune_expr=$(schedule_with_minute "$(schedule_template_expr prune)" "$(( pm % 60 ))")
+    _tier_sched=""
+    if [ -z "$stagger_send_expr" ] || [ -z "$stagger_prune_expr" ]; then
+        [ -z "$stagger_send_expr" ]  && _ss="$(schedule_tier_exprs send  | schedule_spread_tiers send  "$m")"
+        [ -z "$stagger_prune_expr" ] && _sp="$(schedule_tier_exprs prune | schedule_spread_tiers prune "$pm")"
+        _tier_sched="${_ss:+$_ss
+}${_sp:+$_sp
+}"
+    fi
+}
+
+# A LOCAL relationship in the X27 shape: one section's own tier schedules, spread from
+# <first minute> (may exceed 59, the hour is carried), under the SHORT tier key the
+# [relation:] shape reads (send_schedule_hourly; lsrc_/src_ dropped, as
+# relblock_adopt_remote renames a remote one's). Measured on pve10 2026-10-23: a
+# two-source local plan put both copies at the block's :01 and every prune at :21.
+schedule_tier_lines() {   # <send|prune> <first minute> -> "\t<field>_schedule_<tier> = expr" lines
+    schedule_tier_exprs "$1" | schedule_spread_tiers "$1" "$2" | awk '
+        { t = $0; sub(/^[ \t]+/, "", t); if (t == "") next
+          k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
+          if (k ~ /_profile__/) { f = k; sub(/_profile__.*$/, "", f); tr = k; sub(/^.*__/, "", tr); sub(/^(lsrc_|src_)/, "", tr); k = f "_" tr }
+          printf "\t%s = %s\n", k, v }'
+}
+
+# A section's base minute for a stagger that must not wrap: <picked 0-59> below the
+# <wanted> start means the pick went round the hour, so the base carries it.
+schedule_unwrapped() {   # <wanted, may exceed 59> <picked 0-59> -> base minute
+    local w="$1" p="$2"
+    while [ "$p" -lt "$w" ]; do p=$(( p + 60 )); done
+    [ $(( p - w )) -lt 60 ] || p=$(( p - 60 ))
+    echo "$p"
+}
+
+# A CLONED section (a dataset joining an existing relationship) came with its sibling's
+# minutes. Its send_schedule_<tier> lines are re-spread from <send minute>, its
+# prune_schedule_<tier> lines from <prune minute> -- the tier offsets kept, the hour
+# carried -- so the newcomer runs after its siblings, not with them.
+section_restagger() {   # <send minute> <prune minute> ; section on stdin -> stdout
+    local m="$1" pm="$2" line k v sendl="" prunel="" body=() i s p
+    while IFS= read -r line; do
+        body+=("$line")
+        k="${line#"${line%%[![:space:]]*}"}"; k="${k%%=*}"; k="${k%"${k##*[![:space:]]}"}"
+        v="${line#*=}"; v="${v#"${v%%[![:space:]]*}"}"
+        case "$k" in
+            send_schedule_*)  sendl="$sendl${k#send_schedule_}	$v
+" ;;
+            prune_schedule_*) prunel="$prunel${k#prune_schedule_}	$v
+" ;;
+        esac
+    done
+    s=$(printf '%s' "$sendl" | schedule_spread_tiers send "$m")
+    p=$(printf '%s' "$prunel" | schedule_spread_tiers prune "$pm")
+    for i in "${!body[@]}"; do
+        line="${body[$i]}"
+        k="${line#"${line%%[![:space:]]*}"}"; k="${k%%=*}"; k="${k%"${k##*[![:space:]]}"}"
+        case "$k" in
+            send_schedule_*)  [ -n "$s" ] && { printf '%s\n' "$s"; s=""; } ;;
+            prune_schedule_*) [ -n "$p" ] && { printf '%s\n' "$p"; p=""; } ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done
 }
 
 # schedule_with_minute plus the hour carry (see schedule_spread_tiers). Any
@@ -5571,21 +5760,16 @@ schedule_pick_minute() {   # <relationship name> -> minute 0-59
     local name="$1" start taken probe i
     start=$(printf '%s' "$name" | cksum 2>/dev/null | awk '{print $1 % 60}')
     case "$start" in ''|*[!0-9]*) start=0 ;; esac
-    taken=" $(schedule_taken_minutes | sort -un | tr '
-' ' ') "
-    for i in $(seq 0 59); do
-        probe=$(( (start + i) % 60 ))
-        case "$taken" in
-            *" $probe "*) continue ;;
-            *) printf '%s' "$probe"; return 0 ;;
-        esac
-    done
-    # Every minute of the hour is already used. Grouping is unavoidable now,
-    # so say so instead of pretending the spread worked.
-    # >&2 for the same reason as above: the caller captures this function, so
-    # a diagnostic on stdout would be returned as the MINUTE.
-    log "schedule: all 60 minutes on this host already carry a transfer job -- '$name' shares minute $start" >&2
-    printf '%s' "$start"
+    # The first free minute from the name's own. Called in $(...) it cannot reserve --
+    # a caller that hands out more minutes in one run uses schedule_take_for instead.
+    schedule_take "$start"
+    printf '%s' "$SCHEDULE_PICKED"
+}
+schedule_take_for() {   # <relationship name> -> SCHEDULE_PICKED, reserved (not in $(...))
+    local start
+    start=$(printf '%s' "$1" | cksum 2>/dev/null | awk '{print $1 % 60}')
+    case "$start" in ''|*[!0-9]*) start=0 ;; esac
+    schedule_take "$start"
 }
 
 # `crontab -l` for whoever owns the jobs. Root can read another account's
@@ -5942,6 +6126,11 @@ runuser_test_x() {   # <user> <path>
 # "unreachable" would refuse every install it cannot verify -- fail-closed in
 # the wrong direction, on the machines where nothing real is at stake.
 runuser_can() {   # <user> -> 0 this process can act as <user>
+    # Not root: no switch without a password, and su would PROMPT for one on the
+    # terminal (measured on pve9, 2026-10-23: a suite as 'tester' hung 21 minutes
+    # in su, runuser being in /usr/sbin, off that PATH).
+    [ "$(id -un)" = "$1" ] && return 0
+    [ "$(id -u)" -eq 0 ] || return 1
     if command -v runuser >/dev/null 2>&1; then
         runuser --user "$1" -- true 2>/dev/null
     else
@@ -6984,13 +7173,23 @@ relblock_fragment() {   # <rendered fragment> <name> <target|source>
 # gets the block's source prune tiers spread from the relationship's third slot -- its first
 # send minute + 40, the same slot K3 used -- tier offsets kept, hour carried.
 relblock_spread_source_prunes() {   # <workfile> <name>
-    local wf="$1" name="$2" m tiers spread tmp
-    m=$(awk -v want="$name" '
+    local wf="$1" name="$2" m tiers spread tmp sec scope base
+    # The first send minute of every [dataset:] of this relationship, by its src (scope).
+    local -A _srcm=()
+    local _first_m=""
+    while IFS=$'\t' read -r scope m; do
+        [ -n "$scope" ] && [ "$scope" != - ] && _srcm[$scope]="$m"
+        [ -n "$_first_m" ] || _first_m="$m"
+    done < <(awk -v want="$name" '
         function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        /^[ \t]*\[/ { ds = (trim($0) ~ /^\[dataset:/); rel = 0; next }
+        function out() { if (ds && rel && mm != "") printf "%s\t%s\n", (src == "" ? "-" : src), mm }
+        /^[ \t]*\[/ { out(); ds = (trim($0) ~ /^\[dataset:/); rel = 0; src = ""; mm = ""; next }
         ds { t = trim($0)
              if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); rel = (v == want) }
-             if (rel && t ~ /^send_schedule_[A-Za-z0-9_]+[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " "); print a[1]; exit } }' "$wf")
+             if (t ~ /^src[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); src = v }
+             if (mm == "" && t ~ /^send_schedule(_[A-Za-z0-9_]+)?[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " "); if (a[1] ~ /^[0-9]+$/) mm = a[1] + 0 } }
+        END { out() }' "$wf")
+    m="$_first_m"
     case "$m" in ''|*[!0-9]*) return 0 ;; esac
     # The block's source prune schedule per tier, in the block's order: <tier>.source_prune_schedule
     # when the sides differ, <tier>.prune_schedule when they agree (rb_get's rule).
@@ -7002,25 +7201,32 @@ relblock_spread_source_prunes() {   # <workfile> <name>
               else if (k ~ /^[A-Za-z0-9_]+\.prune_schedule$/) { sub(/\..*$/, "", k); com[k] = v; if (!(k in seen)) { seen[k] = 1; ord[++n] = k } } }
         END { for (i = 1; i <= n; i++) { k = ord[i]; v = (k in src) ? src[k] : com[k]; if (v != "") printf "%s\t%s\n", k, v } }' "$wf")
     [ -n "$tiers" ] || return 0
-    spread=$(printf '%s\n' "$tiers" | schedule_spread_tiers prune "$(( 10#$m + 40 ))")
-    [ -n "$spread" ] || return 0
-    tmp=$(mktemp) || return 1
-    awk -v want="$name" -v spread="$spread" '
+    # Every source section of this relationship that has no minutes yet, by its scope.
+    local -a _need=()
+    mapfile -t _need < <(awk -v want="$name" '
         function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        function flush(   i, has) {
-            if (nl == 0) return
-            has = 0; for (i = 1; i <= nl; i++) if (trim(buf[i]) ~ /^prune_schedule_/) has = 1
-            for (i = 1; i <= nl; i++) {
-                print buf[i]
-                if (src && rel && !has && trim(buf[i]) ~ /^side[ \t]*=[ \t]*source$/) print spread
-            }
-            nl = 0
-        }
-        /^[ \t]*\[/ { flush(); src = (trim($0) ~ /^\[prune:[^]]*@[^]]*:/); rel = 0 }
-        { t = trim($0); if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); if (v == want) rel = 1 }
-          buf[++nl] = $0 }
-        END { flush() }' "$wf" > "$tmp" && cat "$tmp" > "$wf"
-    rm -f "$tmp"
+        function out() { if (sc != "" && rel && !has) print sc }
+        /^[ \t]*\[/ { out(); h = trim($0); sc = ""; rel = 0; has = 0
+                      if (h ~ /^\[prune:[^]]*@[^]]*:/) { sc = h; sub(/^\[prune:/, "", sc); sub(/\]$/, "", sc) }; next }
+        { t = trim($0)
+          if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); if (v == want) rel = 1 }
+          if (t ~ /^prune_schedule(_[A-Za-z0-9_]+)?[ \t]*=/) has = 1 }
+        END { out() }' "$wf")
+    for scope in ${_need[@]+"${_need[@]}"}; do
+        # Its own dataset's send minute + 40, in the first FREE minute from there.
+        m="${_srcm[$scope]:-$_first_m}"
+        schedule_take $(( 10#$m + 40 ))
+        base=$(( 10#$m + 40 + (SCHEDULE_PICKED - (10#$m + 40) % 60 + 60) % 60 ))
+        spread=$(printf '%s\n' "$tiers" | schedule_spread_tiers prune "$base")
+        [ -n "$spread" ] || continue
+        tmp=$(mktemp) || return 1
+        awk -v h="[prune:$scope]" -v spread="$spread" '
+            function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+            /^[ \t]*\[/ { ins = (trim($0) == h); done = 0 }
+            { print }
+            ins && !done && trim($0) ~ /^side[ \t]*=[ \t]*source$/ { print spread; done = 1 }' "$wf" > "$tmp" && cat "$tmp" > "$wf"
+        rm -f "$tmp"
+    done
 }
 
 # X27 S2, a REMOTE relationship: the sections emit_client_sections has just written
@@ -7746,7 +7952,24 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     #
     # A replica that wanted to be closer to live would not be a replica; it would
     # be a second backup relationship, and those already exist.
-    [ -n "$sched" ]  || sched="30 2 * * *"
+    # ONE REPLICA PER HOUR (owner 2026-10-23): a replica is a full send to a medium and runs
+    # long -- two in the same hour overlap whatever their minutes. Unset or `auto` (the
+    # GUI's default) takes the first night hour no other replica starts in, at a free
+    # minute (replica_night_slot). A schedule the admin typed is taken as typed.
+    # An existing replica given no --schedule keeps the one it runs at (an edit does not move it).
+    if [ -z "$sched" ]; then
+        local _rf
+        for _rf in ${SCHEDULE_CONF_GLOB:-/etc/zfs-snapshot-all/jobs.*.conf}; do
+            [ -r "$_rf" ] || continue
+            sched=$(awk -v h="[replica:$name]" '
+                function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+                /^[ \t]*\[/ { inr = (trim($0) == h); next }
+                inr && trim($0) ~ /^schedule[ \t]*=/ { v = trim($0); sub(/^[^=]*=[ \t]*/, "", v); print v; exit }' "$_rf")
+            [ -n "$sched" ] && break
+        done
+    fi
+    case "$sched" in ''|auto) replica_night_slot "$name"; sched="$REPLICA_SLOT"
+                              log "add-replica: '$name' runs at '$sched' -- the first night hour no other replica uses" ;; esac
 
     # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
     # Every one of them, checked here: with a list it is the second entry a
@@ -8787,6 +9010,33 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # X27 S2: a NAMED relationship is written as ITS [relation:NAME] block -- the profile's
     # numbers copied in, the sections saying relation + side; no template section.
     local lb_block=0; [ -n "$lb_name" ] && lb_block=1
+    # The same rules as a remote relationship (emit_client_sections): the relationship on
+    # its own free minute, the target prune from +20 and the source prune from +40, each
+    # source's prunes on the next free minute, and a section that is already installed
+    # keeps the minutes it runs at. The COPY stays one line for all sources (X27, test
+    # 101): snapget walks the comma list one dataset after another.
+    local -A LBX_M=() LBX_SP=() LBX_TP=()
+    if [ "$lb_block" -eq 1 ]; then
+        local _xm="" _xo
+        SCHEDULE_RESERVED=""; unset SCHEDULE_TAKEN_CACHE
+        for r in "${roots[@]}"; do
+            _xo="$(section_first_minute "$config" "[dataset:$r]" send)"
+            [ -n "$_xo" ] && { _xm="$_xo"; break; }
+        done
+        if [ -n "$_xm" ]; then SCHEDULE_RESERVED=" $_xm"
+        else schedule_take_for "$lb_name"; _xm="$SCHEDULE_PICKED"; fi
+        for r in "${roots[@]}"; do LBX_M[$r]="$_xm"; done
+        for r in "${roots[@]}"; do
+            _xm="${LBX_M[$r]}"
+            _xo="$(section_first_minute "$config" "[prune:$target/$r]" prune)"
+            if [ -n "$_xo" ]; then LBX_TP[$r]="$(schedule_unwrapped $(( _xm + 20 )) "$_xo")"
+            else schedule_take $(( _xm + 20 )); LBX_TP[$r]="$(schedule_unwrapped $(( _xm + 20 )) "$SCHEDULE_PICKED")"; fi
+            if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then _xo="$(section_first_minute "$config" "[prune:$r]" prune)"
+            else _xo="$(section_first_minute "$config" "[dataset:$r]" prune)"; fi
+            if [ -n "$_xo" ]; then LBX_SP[$r]="$(schedule_unwrapped $(( _xm + 40 )) "$_xo")"
+            else schedule_take $(( _xm + 40 )); LBX_SP[$r]="$(schedule_unwrapped $(( _xm + 40 )) "$SCHEDULE_PICKED")"; fi
+        done
+    fi
     {
         if [ "$lb_block" -eq 1 ]; then
             local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
@@ -8801,12 +9051,15 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
             if [ "$lb_block" -eq 1 ]; then
                 relblock_fragment "$PROFILE_DS_FILE" "$lb_name" source
+                schedule_tier_lines send "${LBX_M[$r]}"
+                # A flat profile prunes the source in this section's tiers.
+                [ -s "${PROFILE_PRUNE_FILE:-}" ] || schedule_tier_lines prune "${LBX_SP[$r]}"
             elif [ "$lb_src_inline" -eq 1 ]; then
                 emit_source_prune_fragment "$PROFILE_DS_FILE"
             else
                 profile_emit "$PROFILE_DS_FILE"
             fi
-            [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
+            [ "$lb_block" -eq 1 ] || [ -z "${LB_SEND[$r]}" ] || echo "	send_schedule = ${LB_SEND[$r]}"
             # No `dst` line at all when nothing is copied. gen-cron reads an
             # absent dst as "create a snapshot and transfer nothing" -- the
             # same shape a hand-written single-host config has always used.
@@ -8881,7 +9134,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # up. REV-104 F1 / REV-106 F1: point use_template at the SOURCE
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
-                if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" source; else emit_source_prune_fragment "$LB_RETFRAG"; fi
+                if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" source; schedule_tier_lines prune "${LBX_SP[$r]}"
+                else emit_source_prune_fragment "$LB_RETFRAG"; fi
                 # --recursive (luka A'): the source prune walks the same subtree
                 # the snapshot does, or every child's family grows unbounded.
                 [ -n "$lb_recursion" ] && echo "	recursive    = yes"
@@ -8890,7 +9144,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # source prunes with identical policy merge into one delsnaps
                 # line and the first one's identity changes underneath the
                 # anti-deletion guard.
-                [ -n "${LB_PRUNE[$r]}" ] && echo "	prune_schedule = ${LB_PRUNE[$r]}"
+                [ "$lb_block" -eq 1 ] || [ -z "${LB_PRUNE[$r]}" ] || echo "	prune_schedule = ${LB_PRUNE[$r]}"
                 echo "	notify       = local-src-$(basename "$r")"
             done
           fi
@@ -8906,7 +9160,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                     echo
                     echo "[prune:$target/$r]"
                     echo "	# managed-by: zfs-backup.sh local-backup target=$target/$r"
-                    if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" target; else profile_emit "$LB_RETFRAG"; fi
+                    if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" target; schedule_tier_lines prune "${LBX_TP[$r]}"
+                    else profile_emit "$LB_RETFRAG"; fi
                     echo "	recursive    = yes"
                     echo "	pair_label   = $lb_name"
                     echo "	notify       = local-$(basename "$r")"

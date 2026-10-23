@@ -163,6 +163,24 @@ else
     bad "101/comma-list: two independent source entries, both in the rendered cron" \
         "rc=$rc $(printf '%s\n' "$out" | grep -E '\[dataset|snap(send|get)' | head)"
 fi
+# Own minutes for a local relationship too (owner 2026-10-23, rules for the whole
+# collector; measured on pve10 the same day: a two-source local plan put the copy on
+# the block's :01 and all four prunes on :21). The copy stays ONE line (above); each
+# source's prunes get their own minute, the target's after the copy, the source's
+# after those, none on the copy's minute. Discriminator: without the fix every prune
+# line of one tier sits on one minute.
+out="$(run --source=rpool/data,rpool/vmstore --target=hdd/backups --config="$WORK/mcm.conf")"; rc=$?
+mcm_copy="$(printf '%s\n' "$out" | grep -E 'snapget.sh -m "automated_hourly_" -L lb ' | awk '{print $1}' | sort -u)"
+mcm_tp="$(printf '%s\n' "$out" | grep -E 'delsnaps' | grep 'automated_hourly' | grep '"hdd/backups/' | awk '{print $1}' | sort -u | tr '\n' ' ')"
+mcm_sp="$(printf '%s\n' "$out" | grep -E 'delsnaps' | grep 'automated_hourly' | grep -E '"rpool/(data|vmstore)"' | awk '{print $1}' | sort -u | tr '\n' ' ')"
+if [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$mcm_copy" | grep -c .)" -eq 1 ] \
+        && [ "$(printf '%s' "$mcm_tp" | wc -w)" -eq 2 ] && [ "$(printf '%s' "$mcm_sp" | wc -w)" -eq 2 ] \
+        && ! printf ' %s %s ' "$mcm_tp" "$mcm_sp" | grep -q " $mcm_copy "; then
+    ok "X27 local: one copy minute, each source's prunes on their own minutes, none on the copy's"
+else
+    bad "X27 local: one copy minute, each source's prunes on their own minutes, none on the copy's" \
+        "rc=$rc copy=[$mcm_copy] target=[$mcm_tp] source=[$mcm_sp] $(printf '%s\n' "$out" | grep -E 'delsnaps|snapget' | cut -c1-120 | head -6)"
+fi
 # The KROK 5 stagger (each local source on its own minute) is gone with X27: it
 # kept one source's line stable when a SECOND, unnamed run added another. Now a
 # source joins a relationship through add-source, which rewrites that

@@ -139,6 +139,13 @@ for x in r.get("replicas") or []:
 if hide:
     d["datasets"] = [x for x in d.get("datasets") or []
                      if not any(x.get("name") == h or (x.get("name") or "").startswith(h + "/") for h in hide)]
+    # Stały nośnik: pula zostaje, bo może trzymać coś jeszcze. Gdy po schowaniu celu
+    # nie ma w niej nic poza nim (pve10 replab -> replab/replica, przejście 2026-10-23),
+    # sama pula też jest tylko nośnikiem i nie jest źródłem do wyboru.
+    names = [x.get("name") or "" for x in d["datasets"]]
+    pools = {h.split("/")[0] for h in hide if "/" in h}
+    empty = {p for p in pools if not any(n.startswith(p + "/") for n in names)}
+    d["datasets"] = [x for x in d["datasets"] if (x.get("name") or "") not in empty]
     json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
 PYEOF
 }

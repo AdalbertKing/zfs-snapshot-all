@@ -1284,6 +1284,37 @@ if has "$WT" 'co: co godzinę (:56)   stempel automated_hourly_   trzyma 24' && 
 else
     bad "okno: rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
 fi
+# X27 (przejscie na zywo, pve10 2026-10-23): pola szczebla pod KROTKA nazwa
+# (send_schedule_hourly), porzadki u celu w samej sekcji datasetu, porzadki u zrodla
+# po szczeblu z szablonow. Okno mowilo "co godzinę (:01)" przy pobraniu o :13, bez
+# porzadkow u celu i z jednym szczeblem porzadkow u zrodla.
+TCFG="$(mktemp)"
+"$PY" - "$P10/show-config.json" "$TCFG" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["templates"] += [
+    {"name": "profile__relacja-m__hourly", "fields": {"send_schedule": "1 * * * *", "prefix": "automated_hourly_", "retain": "-H24", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__relacja-m__daily",  "fields": {"send_schedule": "11 1 * * *", "prefix": "automated_daily_", "retain": "-D7", "prune_schedule": "31 1 * * *"}},
+    {"name": "profile__relacja-m__src_hourly", "fields": {"retain": "-H24", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__relacja-m__src_daily",  "fields": {"retain": "-D7", "prune_schedule": "31 1 * * *"}}]
+d["sections"] = [
+    {"kind": "dataset", "name": "hdd/b/x", "fields": {"use_template": "profile__relacja-m__hourly,profile__relacja-m__daily",
+        "side": "target", "src": "u@h:hdd/x", "pair_label": "lab-ct201",
+        "send_schedule_hourly": "13 * * * *", "send_schedule_daily": "23 1 * * *",
+        "prune_schedule_hourly": "33 * * * *", "prune_schedule_daily": "43 1 * * *"}},
+    {"kind": "prune", "name": "u@h:hdd/x", "fields": {"use_template": "profile__relacja-m__src_hourly,profile__relacja-m__src_daily", "side": "source"}}]
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
+rm -f "$TCFG"
+if has "$WT" 'co: co godzinę (:13)   stempel automated_hourly_' && has "$WT" 'co: co dobę 01:23   stempel automated_daily_' \
+   && hasE "$WT" 'lokalny prune +trzyma 24 godz\.   co: co godzinę \(:33\)' && hasE "$WT" 'lokalny prune +trzyma 7 dni   co: co dobę 01:43' \
+   && hasE "$WT" 'zdalny prune +trzyma 24 godz\.   co: co godzinę \(:21\)' && hasE "$WT" 'zdalny prune +trzyma 7 dni   co: co dobę 01:31' \
+   && ! has "$WT" 'co: co godzinę (:01)'; then
+    ok "okno: X27 -- pola szczebla pod krotka nazwa, porzadki u celu z sekcji datasetu, porzadki u zrodla po szczeblu"
+else
+    bad "okno: X27 rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
+fi
 W="$(screen relacje down,enter --height 80)"
 if has "$W" '╔═ Relacja lab-ct201 ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
@@ -3595,6 +3626,23 @@ if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -
 else
     bad "replica: kreator, B przy istniejacej regule" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
+# Wlasciciel 2026-10-23 (jedna replika na godzine): nowa replika domyslnie "codziennie w nocy,
+# o wolnej godzinie" -- kreator podaje --schedule=auto, godzine wybiera add-replica.
+RPOUT=$(rp_run "0${T}usb5
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}repl
+0${T}auto
+1${T}
+0${T}
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q -- '--schedule=auto' "$RP/zb.log" && grep -qF 'codziennie w nocy, o wolnej godzinie' "$RP/wt.log" \
+   && grep -q -- '--default-item ~ auto' "$RP/wt.log"; then
+    ok "replica: domyslny harmonogram nowej repliki to 'w nocy, o wolnej godzinie' -- --schedule=auto"
+else
+    bad "replica: harmonogram auto" "rc=$RPRC" "$(grep -- '--schedule' "$RP/zb.log" | head -2)" "$(grep -o 'default-item ~ [^~]*' "$RP/wt.log" | head -3)"
+fi
 # (4b): regula sprzed P5 (run-replicas BEZ --on-insert uruchamiala wszystkie) -> przy Tak
 #       plan ja ODNAWIA i install-media-trigger idzie po instalacji.
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --config=y"\n' > "$RP/rules"
@@ -5231,14 +5279,14 @@ fi
 # (gwlive, replab) jako zrodla. drop_replica_media jest teraz w basket-lib.sh i kreator lokalny
 # go wola: nosnik wymienny znika cala pula, staly -- swoim katalogiem z poddrzewem.
 DRM="$(mktemp -d)"
-printf '%s' '{"datasets":[{"name":"gwlive"},{"name":"gwlive/data"},{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/repl"},{"name":"hdd/repl/x"},{"name":"hdd/replika"}]}' > "$DRM/ds.json"
-printf '%s' '{"replicas":[{"name":"usb","dst":"gwlive/replica","media":"removable"},{"name":"st","dst":"hdd/repl","media":"fixed"}]}' > "$DRM/rep.json"
+printf '%s' '{"datasets":[{"name":"gwlive"},{"name":"gwlive/data"},{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/repl"},{"name":"hdd/repl/x"},{"name":"hdd/replika"},{"name":"replab"},{"name":"replab/replica"},{"name":"replab/replica/hdd"}]}' > "$DRM/ds.json"
+printf '%s' '{"replicas":[{"name":"usb","dst":"gwlive/replica","media":"removable"},{"name":"st","dst":"hdd/repl","media":"fixed"},{"name":"cp","dst":"replab/replica","media":"fixed"}]}' > "$DRM/rep.json"
 DRM_STUB="$DRM/whiptail"; printf '#!/bin/sh
 exit 0
 ' > "$DRM_STUB"; chmod +x "$DRM_STUB"
 drm_left="$(WHIPTAIL="$DRM_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && . '$REPO/tui/basket-lib.sh' && drop_replica_media '$DRM/ds.json' '$DRM/rep.json'" 2>&1; "$PY" -c 'import json,sys; print(" ".join(x["name"] for x in json.load(open(sys.argv[1]))["datasets"]))' "$DRM/ds.json")"
 if [ "$drm_left" = "hdd hdd/data hdd/replika" ] && grep -q 'drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"' "$REPO/tui/new-relation.sh"; then
-    ok "kreator lokalny: nosniki replik nie sa zrodlem -- wymienny cala pula, staly katalogiem (hdd/replika zostaje)"
+    ok "kreator lokalny: nosniki replik nie sa zrodlem -- wymienny cala pula, staly katalogiem (hdd/replika zostaje), pula stalego nosnika bez niczego wiecej tez znika (replab)"
 else
     bad "kreator lokalny: nosniki replik na liscie zrodel" "zostalo: $drm_left"
 fi
