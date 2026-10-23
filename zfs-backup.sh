@@ -17805,7 +17805,7 @@ SCOPE
         echo
         echo "Wykona sie DOKLADNIE to (jedno polecenie: parowanie ze zrodlem, zakres, seed, aktywacja):"
         printf '  zfs-backup.sh'
-        for x in "${rux_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        for x in "${rux_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n\n'
         import_relblock_note "$doc"
         echo "Na $peer_host zostanie ZATWIERDZONY dla tego kolektora ten zakres (z pliku, 1:1):"
@@ -17895,7 +17895,7 @@ SCOPE
         echo
         echo "Wykona sie DOKLADNIE to:"
         printf '  zfs-backup.sh'
-        for x in "${rux_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        for x in "${rux_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n'
         if [ "$yes" -ne 1 ]; then
             echo
@@ -17925,7 +17925,7 @@ SCOPE
     echo
     echo "Wykona sie DOKLADNIE to (te argumenty, ta kolejnosc, z pliku):"
     printf '  zfs-backup.sh add-client %s' "$name"
-    for x in "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"}; do printf ' \\\n      %s' "$x"; done
+    for x in "${argv[@]}" ${jr_args[@]+"${jr_args[@]}"}; do printf ' \\\n      %q' "$x"; done
     printf '\n'
     for x in ${then_verbs[@]+"${then_verbs[@]}"}; do printf '  zfs-backup.sh %s %s --yes\n' "$x" "$name"; done
     [ "${#jr_args[@]}" -gt 0 ] && echo "  (--join-remotely: ten host ma roota na $peer_host -- zrodlo dolaczy sie samo, bez paczki do przenoszenia)"
