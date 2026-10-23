@@ -118,6 +118,20 @@
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
+- **Dokumentacja użytkownika po polsku zgodna z kodem (`docs/cleanup-pl-en`, paczka 1 z 3, właściciel 2026-10-23:
+  „czystka i porządki”, potem podział na `docs/pl` i `docs/en`).** Sprawdzenie 11 dokumentów z kodem dało około 40
+  twierdzeń sprzecznych z kodem. Przepisane: `JAK-TO-DZIALA.md`, `docs/WDROZENIE-PROXMOX.md` (retencja `default` płaska
+  24/7/4/3, minuty wybierane per relacja, quiesce opcjonalny, `--host` zamiast `--lan`, etykieta parowania = nazwa
+  kolektora, nie adres źródła; doszły opis lustra (`prune_foreign`) i zmiany relacji, które były tylko w wersji angielskiej),
+  `docs/KOMENDY.md` (bez notatek z labu, poprawne ścieżki dzienników, kilkanaście brakujących czasowników; wewnętrzne
+  `pause-writers`/`resume-writers`, wołane przez `deploy.sh`, celowo pominięte), `docs/ODZYSK-Z-REPLIKI.md`
+  (pula nośnika ma `failmode=continue`), `docs/PAUZA-I-BLOKADA.md` (pauza wstrzymuje też porządki, `-L` na `delsnaps`).
+  `docs/WDROZENIE-DWA-SERWERY-BACKUPU.md` (nieistniejący `setup-server`, konto domyślne w `server.conf`) wszedł do
+  `docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md` jako scenariusz B. Przewodniki opisują stan obecny: bez dat z labu,
+  numerów PR i historii incydentów; config relacji pokazany jako blok `[relation:]`. Wersje angielskie i README -- w
+  paczkach 2 i 3. Przy okazji w kodzie: `status` (`zfs-backup.sh` ~19636) nadal pisze, że pauza nie obejmuje
+  retencji, a nagłówek `gen-cron.sh` ~146-149 mówi to samo o sekcji `[prune:]` -- do poprawy poza tą paczką.
+
 - **REV-20261023-171: karta zmiany relacji mówiła „tyle samo co w kopii” przy źródle bez szczebla
   (`fix/rev171-srcret-equality`).** Pozycja „Retencja źródła” porównywała tylko szczeble źródła z szczeblami
   celu o tej samej nazwie, więc źródło po `set-tiers --drop-src-tier=daily` (godzinowe 24, bez dobowych) przy

@@ -1,23 +1,20 @@
 # Komendy — pełna lista
 
-Stan na 2026-08-28. Ten dokument jest **spisem tego, co pakiet potrafi**, ułożonym
-tak, jak się z niego korzysta, a nie alfabetycznie. Pełny zestaw flag każdego
-programu daje jego własne `-h` — tutaj jest to, **po co** dana komenda istnieje
-i **kiedy** się jej używa.
-
-Gdzie coś jest dowiedzione na żywych maszynach, a gdzie nie, jest napisane
-wprost. To nie jest ozdoba: pakiet pisze na cudze dane.
+Ten dokument jest **spisem tego, co pakiet potrafi**, ułożonym tak, jak się
+z niego korzysta, a nie alfabetycznie. Pełny zestaw flag każdego programu daje
+jego własne `-h` — tutaj jest to, **po co** dana komenda istnieje i **kiedy**
+się jej używa.
 
 ---
 
-## 1. Pięć programów i podział pracy
+## 1. Siedem programów i podział pracy
 
 | program | rola |
 |---|---|
 | `zfs-backup.sh` | **czasowniki operatora** — cykl życia relacji, sterowanie, odtwarzanie. To jest to, czego dotyka człowiek |
 | `deploy.sh` | **maszyna**: zależności, konto delegowane, parowanie, zgody. Uruchamiane na hoście, którego dotyczy |
 | `snapsend.sh` / `snapget.sh` | **silniki transferu** — push i pull. Wołane przez crona (snapsend także przez odzysk na miejsce), nie ręcznie. Relacja push w 1.0 to tryb CLI dla istniejącej floty (GUI jej nie tworzy) -- przepis w README, sekcja snapsend.sh |
-| `delsnaps.sh` | **silnik retencji** — jedyny, który kasuje |
+| `delsnaps.sh` | **silnik retencji** — jedyny, który przycina snapshoty według retencji. Dane mogą jeszcze nadpisać `-f` w silnikach transferu i `restore --overwrite` (odtwarzanie na istniejący dataset, `zfs-restore.sh`) |
 | `check-snap-age.sh` | **monitor** — czy backup nie zestarzał |
 | `gen-cron.sh` | zamienia config na blok w crontabie |
 
@@ -29,7 +26,7 @@ na wyraźne polecenie właściciela, z wpisem w tamtym pliku.
 ## 2. Cykl życia relacji — normalna droga, w kolejności
 
 Relacja to: **kolektor + maszyna chroniona + zestaw datasetów + harmonogram**.
-Ma nazwę (etykietę), rekord na kolektorze i konto delegowane na maszynie
+Ma nazwę (trafia do linii crona jako `-L` i do configu jako `pair_label`), rekord na kolektorze i konto delegowane na maszynie
 chronionej.
 
 ```bash
@@ -84,10 +81,9 @@ zfs-backup.sh remove-client NAZWA
 - **`disable-client`** — **peer odrzuca** komendy tej relacji, także te bez `-L`.
   Egzekwowane po drugiej stronie.
 
-**Co obejmuje pauza (od 2026-08-27):** pull, prune **i** monitor. Wcześniej prune
-biegł mimo pauzy — i na labie skasował punkt odtworzenia w trakcie odzysku.
-Warunek: crontab musi być wygenerowany po tej zmianie, bo `-L` na liniach prune
-bierze się z `pair_label` w configu.
+**Co obejmuje pauza:** pull, prune **i** monitor. Działa tylko tam, gdzie linie
+zadań niosą `-L NAZWA` — a ono bierze się z `pair_label` w configu, więc config
+bez `pair_label` (stary, ręczny) nie jest pauzowalny.
 
 ---
 
@@ -102,7 +98,7 @@ zfs-backup.sh restore --plan --dataset=DATASET
 
 Pokazuje, co da się odtworzyć, skąd, i **kiedy naprawdę** zrobiono każdy
 snapshot — po właściwości ZFS `creation`, nigdy po nazwie. Nazwa i `creation`
-rozjeżdżają się między hostami o strefę czasową; zmierzone na tym majątku.
+mogą się rozjeżdżać o strefę czasową między hostami.
 
 ### Odtworzenie na własną maszynę
 
@@ -122,7 +118,7 @@ zfs-backup.sh restore SKAD DOKAD --yes                   # te same ścieżki
 zfs-backup.sh restore SKAD:ds DOKAD:ds2 --yes            # inna ścieżka
 ```
 
-`DOKAD` to **etykieta relacji, nigdy nazwa hosta** — czyli maszyna, z którą
+`DOKAD` to **etykieta parowania** (nazwa, pod którą kolektor zna sparowaną maszynę), nigdy dowolny host — czyli maszyna, z którą
 kolektor jest już sparowany, ma przypięty klucz i może poprosić o zgodę. Nie da
 się wskazać maszyny, której ten host nigdy nie spotkał. Cel musi być
 **sparowany**, nie aktywowany.
@@ -144,8 +140,9 @@ harmonogram celuje w pustą maszynę.
 ### Trzy warunki, które muszą być spełnione
 
 1. **Zgoda** — maszyna chroniona musi ją opublikować (punkt 5).
-2. **Pauza** — relacja musi mieć zatrzymany harmonogram. Restore **odmawia**,
-   jeśli nie da się jej wziąć.
+2. **Pauza** — restore sam wstrzymuje harmonogram relacji na czas odtwarzania
+   i po zakończeniu go wznawia (pauzę założoną wcześniej przez człowieka
+   zostawia nietkniętą). Jeśli pauzy nie da się założyć, restore **odmawia**.
 3. **Cel odmontowany** przy trybie `replace` — konto delegowane nie odmontuje
    pod Linuksem.
 
@@ -192,11 +189,6 @@ deploy.sh --leave=ETYKIETA             # rozbierz relację po stronie peera
 deploy.sh --unpair                     # zakończ relację po tej stronie
 ```
 
-> **Uwaga (2026-08-28):** `deploy.sh --commit-scope=` **nie działa** — woła
-> funkcję zdefiniowaną 2500 linii niżej, więc bash jej w tym miejscu nie zna.
-> Ścieżka `--join` woła ją później i tam działa. Zakres nadaj przez `--join`
-> albo ręcznie `zfs allow`. Wada jest na `main`, nie z ostatniej rundy.
-
 ---
 
 ## 7. Silniki — wołane przez crona
@@ -225,8 +217,9 @@ Rodziny flag, które warto znać:
 | `-F` | *snapget*: rekoncyliacja przy kolizji nazw pod innym GUID |
 | `-t` | cel jest **dokładną ścieżką**, nie bazą (ścieżka odtwarzania) |
 
-**`-H`/`-D`/`-W`/`-M`/`-Y`** w `delsnaps.sh` to *ile zostawić*; małe litery
-`-h`/`-d`/`-w`/`-m`/`-y` to *ile są starsze niż*. `-G` włącza drabinę GFS.
+**`-H`/`-D`/`-W`/`-M`/`-Y`** w `delsnaps.sh` to *ile sztuk zostawić*; małe litery
+`-h`/`-d`/`-w`/`-m`/`-y` ustawiają próg wieku — kasowane są snapshoty starsze niż
+podana liczba godzin/dni/tygodni/miesięcy/lat. `-G` włącza drabinę GFS.
 
 ---
 
@@ -251,7 +244,7 @@ gdzie leży skrypt, więc root wygeneruje ścieżki roota.
 ```bash
 zfs-backup.sh status                 # stan wszystkich relacji
 zfs-backup.sh progress               # postęp trwających transferów
-zfs-backup.sh test                   # sprawdzenie środowiska
+zfs-backup.sh test NAZWA             # próbny pull (dry-run) każdego datasetu relacji
 zfs-backup.sh --version
 deploy.sh --check-only               # audyt hosta
 deploy.sh --test-mail                # czy alerty wychodzą
@@ -270,33 +263,63 @@ deploy.sh --test-mail                # czy alerty wychodzą
 | `/var/lib/zfs-snapshot-all/relationships/<etykieta>/paused` | znacznik pauzy |
 | `/var/lib/zfs-snapshot-all/restore-grants/<etykieta>` | zgoda na odtwarzanie |
 | `/usr/local/sbin/zfs-pair-gate` | bramka wymuszonej komendy ssh |
-| `~/cron.log`, `~/zfs-snapshot-stats.log` | logi zadań konta |
+| `/root/scripts/cron.log`, `/root/scripts/zfs-snapshot-stats.log` | logi zadań roota |
+| `~/cron.log`, `~/zfs-snapshot-stats.log` | logi zadań konta delegowanego (`~` = jego katalog domowy) |
 
 ---
 
-## 11. Co jest dowiedzione na żywych maszynach
+## 11. Pozostałe czasowniki `zfs-backup.sh`, według tematu
 
-| rzecz | stan |
-|---|---|
-| backup push/pull, retencja, monitor | produkcja, 5 hostów |
-| odtworzenie na własną maszynę — `create`, `rewind`, `replace`, `--at`, `--target` | lab pve9↔pve1, 2026-08-27 |
-| odtworzenie na **inną** maszynę | lab pve9→pve2, 2026-08-28 |
-| `move-to-client` + ciągłość kopii bez ponownego seedu | lab, 2026-08-28: 22 snapshoty jedną linią przez podmianę maszyny |
-| pauza obejmująca prune | lab, 2026-08-28 |
+Pełne flagi: `zfs-backup.sh --help`. Czasowniki bez `--yes` tylko planują.
 
-**Czego nie sprawdzono:** relacji push z kopią zdalną w odtwarzaniu, oraz
-gościa (VM/kontenera), który po odtworzeniu faktycznie wstaje.
+### Relacje
+
+| czasownik | po co | przykład |
+|---|---|---|
+| `edit-relation` | zmień zainstalowaną relację na miejscu (sekcje generowane od nowa z profilu); bez parowania i bez ruchu danych | `zfs-backup.sh edit-relation NAZWA --profile=P --plan` |
+| `delete-relation` | usuń relację w całości: zadania tutaj, konto na źródle (`deploy.sh --leave`, pomijane, gdy z tego hosta korzysta inna relacja) i rekord, co zwalnia nazwę; kopie na dysku zostają, chyba że `--destroy-copies`; bez `--yes` tylko plan | `zfs-backup.sh delete-relation NAZWA --yes` |
+| `add-source` | dołóż jeden dataset do zainstalowanej relacji, po obu stronach | `zfs-backup.sh add-source NAZWA hdd/db --yes` |
+| `remove-source` | wyjmij jeden dataset z relacji, po obu stronach; odebrane kopie zostają | `zfs-backup.sh remove-source NAZWA hdd/db --yes` |
+| `export-relation` | zapisz deklaracje relacji jako dokument (z `--json`) | `zfs-backup.sh export-relation NAZWA --json` |
+| `import-relation` | odtwórz relację z takiego pliku; bez `--yes` tylko wypisuje polecenia | `zfs-backup.sh import-relation plik.json --name=NOWA --yes` |
+| `test NAZWA` | próbny pull (dry-run) każdego datasetu relacji | `zfs-backup.sh test NAZWA` |
+
+### Repliki (kopie na wymiennych dyskach)
+
+| czasownik | po co | przykład |
+|---|---|---|
+| `add-replica` | dodaj lub zmień replikę (upsert); bez `--install` tylko plan; `--ask` = okna GUI | `zfs-backup.sh add-replica usb1 --source=hdd/dane --dst=usbrep1/replica --install` |
+| `list-replicas` | lista replik i stan nośnika: here, available, away, wrong_medium | `zfs-backup.sh list-replicas` |
+| `run-replicas` | uruchom teraz wszystkie repliki; brak nośnika to ciche pominięcie | `zfs-backup.sh run-replicas --name=usb1` |
+| `prepare-media` | przygotuj dysk na nośnik repliki (**kasuje go**); `--list` pokazuje wolne dyski | `zfs-backup.sh prepare-media usbrep1 /dev/sdX --yes` |
+
+### Retencja
+
+| czasownik | po co | przykład |
+|---|---|---|
+| `show-tiers` | szczeble retencji jednej relacji, z jej bloku w configu | `zfs-backup.sh show-tiers NAZWA` |
+| `set-tiers` | zmień szczeble w configu jedną atomową podmianą | `zfs-backup.sh set-tiers NAZWA --tier=SZCZEBEL --keep=N --plan` |
+| `audit-source-retention` | audyt: które źródła pull nie mają ograniczonej retencji; `--apply` dopisuje brakujące | `zfs-backup.sh audit-source-retention` |
+
+### Odzysk
+
+| czasownik | po co | przykład |
+|---|---|---|
+| `restore --plan` | co da się odtworzyć i skąd (tylko odczyt) | `zfs-backup.sh restore --plan` |
+| `restore RELACJA` | odtwórz relację z jej kopii (patrz punkt 4) | `zfs-backup.sh restore NAZWA --yes` |
+| `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w `docs/ODZYSK-Z-REPLIKI.md` | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
+
+### GUI
+
+| czasownik | po co | przykład |
+|---|---|---|
+| `gui` | ekran sterowania (wymaga `python3`; F3 Relacje, F6 Replika) | `zfs-backup.sh gui` |
 
 ---
 
-## 12. Dwie rzeczy, o których warto wiedzieć zawczasu
+## 12. Dobrze wiedzieć zawczasu
 
 **Po odtworzeniu z cofnięciem następny backup odmówi.** To poprawne: kopia trzyma
 snapshoty, których źródło już nie ma, i są jedynym śladem po tym okresie.
 Odmowa wymienia je z nazwy i podaje wyjście — `zfs rollback -r <kopia>@<punkt>`
 robi jedno i drugie naraz, bez roota i bez ponownego wysyłania.
-
-**Pauza logiczna jest na dzisiejszej produkcji bezwładna.** 26 linii zadań na
-trzech hostach i **żadna** nie niesie `-L`, bo produkcja pracuje na starych
-configach v4 bez `pair_label`. Migracja produkcji na model relacji to osobny
-etap.

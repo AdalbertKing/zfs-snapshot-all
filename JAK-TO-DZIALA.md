@@ -10,139 +10,118 @@ i krzyczy, jeśli najnowszy zrobił się za stary.
 
 Wszystko inne to szczegóły tych czterech czynności.
 
-## Cztery skrypty, które wykonują pracę
+## Silniki: cztery skrypty, które dotykają snapshotów
 
 | skrypt | czynność | w jedną stronę |
 |---|---|---|
 | `snapsend.sh` | **wyślij** | robi snapshot TU i wypycha go TAM |
 | `snapget.sh` | **przyciągnij** | robi snapshot TAM i ściąga go TU |
 | `delsnaps.sh` | **skasuj** | usuwa stare snapshoty według reguły |
-| `check-snap-age.sh` | **sprawdź** | ile lat ma najnowszy snapshot; alarmuje, gdy za dużo |
+| `check-snap-age.sh` | **sprawdź** | jak stary jest najnowszy snapshot (progi ostrzeżenia i alarmu, np. 90m / 3h) |
 
-To są jedyne cztery skrypty, które dotykają snapshotów. `snapsend` i `snapget`
-to ten sam program w dwóch kierunkach — dlatego są tak podobne i dlatego celowo
-ich nie scalono (kierunek jest tym, co można pomylić).
+`snapsend` i `snapget` to ten sam program w dwóch kierunkach — dlatego są tak
+podobne i dlatego celowo ich nie scalono (kierunek jest tym, co można pomylić).
 
-Żaden z nich nie wie nic o crontabie, configu ani o innych hostach. Dostają
+Żaden z silników nie wie nic o crontabie, configu ani o innych hostach. Dostają
 argumenty i robią jedną rzecz.
 
-## Piąty skrypt: ten, który pisze crontab
+## Reszta pakietu: kto te silniki woła i stawia
 
-`gen-cron.sh` **nie robi backupów**. Czyta plik konfiguracyjny i zamienia go na
-linie crontaba, które wołają tamte cztery.
+| skrypt | rola |
+|---|---|
+| `zfs-backup.sh` | **główne wejście dla admina**: zakładanie i zmiana relacji między hostami (`add-client`, `activate-client`, `pause-client`, `status` …) oraz `zfs-backup.sh gui` |
+| `gen-cron.sh` | zamienia config na blok crontaba; sam **nie robi backupów** |
+| `deploy.sh` | stawianie hosta od zera: konto, uprawnienia ZFS, alerty, logrotate |
+| `zfs-restore.sh` | odtwarzanie danych ze snapshotu |
+| `zfs-job.sh` | opakowanie każdej linii crona: zapisuje początek i koniec do `cron.log`, woła `notify-fail.sh` przy błędzie |
+| `lib-*.sh` | kod wspólny; `lib-zfs-snap.sh` to serce obu silników transferu |
+| `update-control.sh` | aktualizacja i cofanie aktualizacji |
+| `zfs-pair-gate.sh`, `zfs-quiesce-helper.sh` | wąskie uprawnienia dla konta na drugim hoście |
+
+## GUI
+
+`zfs-backup gui` otwiera ekran w terminalu (whiptail), obsługiwany klawiszami
+funkcyjnymi: F3 Relacje (Ins nowa, Enter okno, `e` zmień), F6 Replika, odzysk,
+ustawienia. To te same operacje co w CLI `zfs-backup.sh`, tylko w oknach —
+GUI woła te same czasowniki, więc config i crontab wychodzą identyczne.
+
+## Skrypt, który pisze crontab
+
+`gen-cron.sh` czyta plik konfiguracyjny i zamienia go na linie crontaba, które
+wołają silniki.
 
 ```
-config  ──gen-cron.sh──>  blok w crontabie  ──cron──>  snapsend/delsnaps/check-snap-age
+config  ──gen-cron.sh──>  blok w crontabie  ──cron──>  zfs-job.sh ──> snapsend/delsnaps/check-snap-age
 ```
 
 Bez `--install` tylko wypisuje blok na ekran. Z `--install` podmienia go
 w crontabie. Zawsze podmienia **cały blok** między znacznikami
-`# BEGIN zfs-backup-managed` i `# END`, nigdy pojedynczą linię.
+`# BEGIN zfs-backup-managed` i `# END zfs-backup-managed`, nigdy pojedynczą linię.
 
 To jest miejsce, w którym siedzi cała „mądrość": sprawdzenia, że config ma sens,
 dobieranie flag, odmowy. Silniki są głupie, generator jest ostrożny.
 
 ## Co się dzieje na hoście przez dobę
 
-Prawdziwy pve2, minuta po minucie:
+Przykład (godziny zależą od configu):
 
 ```
-BLOK ZARZĄDZANY (pisze go gen-cron.sh, konto zfsbackup)
-  :05  co godzinę    snapsend   kopiuje replikę kontenera 107 do hdd/backups
-  :51  co godzinę    delsnaps   przycina hdd/backups drabinką GFS
-  */15               check-snap-age   trzy monitory świeżości
-  0:21 codziennie    snapsend   backup systemu (rpool/ROOT)
-  0:31 w niedzielę   snapsend   backup tygodniowy kontenera 103
-  0:41 codziennie    delsnaps   przycięcie systemu
-  0:43 w niedzielę   delsnaps   przycięcie tygodniowe
-  4:00 codziennie    snapsend   backup dysku VM 106
-  4:30 codziennie    delsnaps   sprzątanie osieroconych zakładek
+BLOK ZARZĄDZANY (pisze go gen-cron.sh)
+  co godzinę         snapsend / snapget   migawka i kopia
+  co godzinę         delsnaps             przycięcie kopii drabinką GFS
+  */15               check-snap-age       monitory świeżości
+  raz na dobę        snapsend / snapget   tier dobowy
+  raz na tydzień     snapsend / snapget   tier tygodniowy
+  po wysyłce         delsnaps             przycięcie danego tieru
 
 POZA BLOKIEM (nie tyka ich gen-cron.sh)
   :15  co godzinę    git pull       host dociąga nową wersję skryptów
   7:00 codziennie    alert-digest   jeden mail z podsumowaniem doby
 ```
 
-Każda linia zapisuje początek i koniec do `cron.log` i woła `notify-fail.sh`,
-jeśli coś zwróciło błąd.
+Każda linia zapisuje początek i koniec do `cron.log` (`ZFS-JOB BEGIN` / `END`)
+i woła `notify-fail.sh`, jeśli coś zwróciło błąd.
 
-**Wdrożenie to `git pull` o :15.** Nigdy nie kopiuje się skryptów na host ręcznie.
+**Wdrożenie to `git pull` o :15.** Pakiet trafia na host przez `git clone`; gdy host
+nie sięga repozytorium, `prepare-source` wysyła przez `scp` paczkę (bundle)
+z bieżącego checkoutu i rozpakowuje ją na hoście.
 
-## Config: pięć pojęć
+## Config: relacja jako jeden blok
 
-Plik `jobs.<host>.conf`. Sekcje w nawiasach kwadratowych.
+Plik `jobs.<host>.conf`, sekcje w nawiasach kwadratowych. Relację założoną z GUI
+albo z `zfs-backup.sh` narzędzie zapisuje samo:
 
-```ini
-[defaults]                  # nazwa hosta w mailach, domyślny cel kopii
-	host_label = pve2
-	dst        = hdd/backups/pve2
-
-[template:hourly]           # POLITYKA: kiedy i ile trzymać
-	send_schedule  = 37 * * * *      # kiedy robić i wysyłać
-	prefix         = automated_hourly_   # jak nazwać
-	prune_schedule = 51 * * * *      # kiedy kasować
-	pattern        = automated_hourly    # co kasować
-	keep           = 24              # ile zostawić
-	monitor_warn   = 90m             # kiedy ostrzec
-	monitor_crit   = 3h              # kiedy alarmować
-
-[dataset:rpool/data/vm-106-disk-0]   # KTÓRY dataset, KTÓRA polityka
-	use_template = hourly,daily,weekly   # jeden dataset, trzy tiery
-	notify       = BIM server
-
-[prune:hdd/backups]         # kasowanie na ścieżce, której NIE tworzymy sami
-	use_template = store_hourly
-	recursive    = yes
-```
-
-To jest **skrót** — pominięte są sekcje `[template:daily]`, `[template:weekly]`
-i `[template:store_hourly]`, do których odwołują się dwie ostatnie sekcje.
-Prawdziwe pliki leżą w `cron-configs/`.
-
-Trzy rzeczy warto zapamiętać:
-
-- **`prefix` to co tworzymy, `pattern` to co kasujemy.** Muszą do siebie pasować
-  — `delsnaps` dopasowuje po początku nazwy.
-- **`[dataset:]` to nasze, `[prune:]` to cudze.** Pierwsze robi snapshoty
-  i kasuje własne; drugie tylko kasuje na magazynie, który zapełnia ktoś inny.
-- **Monitor nie ma własnej sekcji.** Powstaje sam, wszędzie gdzie tier ma
-  `pattern` i progi.
+- blok `[relation:NAZWA]` niesie politykę: tiery, minuty, retencję i progi monitora;
+- `[dataset:…]` wskazuje dataset i relację (`relation`, `side`); `[prune:…]` kasuje na drugiej stronie;
+- `prefix` to co tworzymy, `pattern` to co kasujemy — muszą do siebie pasować;
+- monitor nie ma własnej sekcji, powstaje tam, gdzie tier ma `pattern` i progi;
+- pełny przykład z objaśnieniem: `docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md`, sekcja 6.
 
 ## Gdzie leży stan
 
 ```
 /etc/zfs-snapshot-all/jobs.<host>.conf     config (jedyne źródło prawdy)
 /etc/zfs-snapshot-all/clients/             relacje z innymi hostami
-/var/spool/cron/crontabs/zfsbackup         wygenerowany blok
-/home/zfsbackup/cron.log                   co się działo
-/root/scripts/zfs-snapshot-all             checkout roota
-/home/zfsbackup/zfs-snapshot-all           checkout konta (to on chodzi z crona)
+crontab konta (blok zfs-backup-managed)    wygenerowany blok
+cron.log                                   co się działo (obok skryptów)
 ```
 
-Zadania chodzą jako konto `zfsbackup`, nie jako root. Dlatego są dwa checkouty:
-`/root` ma prawa 0700 i konto nie może tam zajrzeć.
+## Konto, na którym chodzą zadania
 
-## Reszta plików — po co są
-
-Nic z tego nie chodzi z crona co godzinę:
-
-- `zfs-backup.sh` — nakładka do zakładania relacji między dwoma hostami
-  (`add-client`, `activate`, `pause`). Woła `gen-cron.sh` pod spodem.
-- `deploy.sh` — stawianie hosta od zera: konto, uprawnienia ZFS, alerty, logrotate.
-- `lib-*.sh` — kod wspólny. `lib-zfs-snap.sh` to serce obu silników.
-- `cron2conf.sh` — odtwarza config z crontaba, gdy config zginął.
-- `zfs-restore.sh` — odtwarzanie danych ze snapshotu.
-- `update-control.sh` — aktualizacja i cofanie aktualizacji, żyje poza checkoutem.
-- `zfs-pair-gate.sh`, `zfs-quiesce-helper.sh` — wąskie uprawnienia dla konta
-  na drugim hoście.
+Gdy przy zakładaniu relacji nie podasz `--local-user`, zadania chodzą jako
+**root**. Gdy podasz (np. `--local-user=zfsbackup`), chodzą jako to
+delegowane konto z wąskimi uprawnieniami ZFS, a jego crontab dostaje blok.
+Konto delegowane musi móc czytać config i skrypty — dlatego config leży
+w `/etc/zfs-snapshot-all`, a nie pod `/root`.
 
 ## Jeśli coś nie działa — kolejność patrzenia
 
-1. `grep ZFS-JOB /home/zfsbackup/cron.log | tail` — czy zadanie w ogóle wystartowało
+1. `grep ZFS-JOB cron.log | tail` — czy zadanie w ogóle wystartowało
    (`BEGIN` bez `END` = umarło w trakcie).
 2. `gen-cron.sh -c <config>` bez `--install` — czy config się w ogóle generuje.
 3. Porównaj wynik z żywym crontabem, zanim cokolwiek zainstalujesz.
 4. `zfs list -t snapshot <dataset>` — czy snapshoty naprawdę są.
 
-**Przed każdą instalacją crontaba: kopia zapasowa i diff.** To jedyna operacja
-w tym pakiecie, która potrafi po cichu skasować cudzą pracę.
+**Przed każdą instalacją crontaba: kopia zapasowa i diff.** Ryzyko tkwi w ręcznej
+edycji configu albo crontaba poza narzędziem. Instalacja przez `zfs-backup.sh`
+odmawia, gdy config wygenerowałby blok kasujący działające zadania.
