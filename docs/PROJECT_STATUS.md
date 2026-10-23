@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 08afd39a1e41651f -->
+<!-- status-covers-digest: 9b72660e663660fa -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -115,6 +115,17 @@
   dla obu czasowników -- używają `%q` (jak `write_client_field`); na żywo pve10 eksport `ab` miał
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
+
+- **Porządki u źródła każdej relacji we własnej minucie (`fix/source-prune-stagger-x27`, właściciel 2026-10-23: „czy
+  kolejne relacje szyte z tego samego szablonu … nie odpalały się w tej samej minucie”).** Zmierzone na pve10: wysyłki
+  i porządki u celu relacji ab, cb, pve9 są rozrzucone (:15, :57, :13), ale porządki u ŹRÓDŁA wszystkich trzech szły o
+  :21 i 01:31 -- sekcje `[prune:konto@host:…]` nie miały harmonogramu i brały go z bloku `[relation:]` (wspólnego dla
+  szablonu). Poprawka K3 (06.10) czytała sekcje `[template:]`, które X27 zastąpił blokiem. Teraz po zbudowaniu bloku
+  sekcja źródła relacji dostaje `prune_schedule_<szczebel>` z jej trzeciego slotu (pierwsza minuta wysyłki + 40,
+  odstępy szczebli z bloku). Plan na żywo (pve10, `edit-relation ab --plan`): źródło ab :57 i 02:07 zamiast :21 i
+  01:31. Działa przy tworzeniu i przebudowie relacji; istniejące relacje w labie dostaną to przy najbliższej zmianie.
+  Zostaje (zapisane): edycja relacji wybiera minutę od nowa (ab :15 -> :17); dwie repliki startują o 22:00. Test
+  `stagger` 35/0 (pve9); na main nowe przypadki padają.
 
 - **REV-20261023-170: cofnięcie jednego grantu Restore nie odbiera wspólnego `<pula>/restore` drugiemu
   (`fix/rev170-shared-restore-ns`).** Dwie relacje do jednego hosta zwykle mają jedno konto `zfsbackup-<host>`, a ZFS
