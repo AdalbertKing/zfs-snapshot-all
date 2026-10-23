@@ -109,6 +109,14 @@ fi
 # pc_is_dataset/account/label/port live in lib-scope.sh now. They validate the
 # pairing package here and the scope file there, and the rules must be one
 # thing: both are untrusted structured data arriving from another host.
+# A raw recovery's key (lib-rekey.sh): shared with zfs-restore.sh's local recovery.
+if [ -r "$_DEPLOY_DIR/lib-rekey.sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_DEPLOY_DIR/lib-rekey.sh"
+else
+    echo "deploy.sh: cannot read $_DEPLOY_DIR/lib-rekey.sh -- this checkout is incomplete" >&2
+    exit 1
+fi
 if [ -r "$_DEPLOY_DIR/lib-scope.sh" ]; then
     # shellcheck disable=SC1090
     source "$_DEPLOY_DIR/lib-scope.sh"
@@ -3003,56 +3011,26 @@ do_allow_restore() {
     return 0
 }
 
-# A RAW RECOVERY COMES BACK LOCKED (owner, 2026-10-23: "po odzysku raw wykonaj load-key
-# i change-key -i automatycznie"). A copy received raw goes back raw, and ZFS makes every
-# dataset received that way its OWN encryption root, key unavailable, keylocation=prompt
-# (measured on pve9: hdd/restore/docs-raw from hdd/enc/docs). The key lives only here, in
-# the file the original's root points at -- the collector never had it -- so this runs as
-# root on this machine, when the grant is taken back.
-#
-# Only a dataset that is its own root AND locked is touched, and only with a key file of
-# an encryption root in the grant's scope: `load-key` succeeds only with the SAME key, so
-# a dataset deliberately encrypted with another key is left alone. Under an encrypted,
-# open parent it then inherits that parent's key (change-key -i); under an unencrypted
-# parent it keeps its own root and gets the key file as its keylocation, so it opens at
-# boot like the original.
+# A RAW RECOVERY COMES BACK LOCKED (owner, 2026-10-23): what came back raw onto this
+# machine gets its key again when the grant is taken back -- root here holds the key, the
+# collector never did. The rule and its safety are lib-rekey.sh's (shared with a local
+# recovery in zfs-restore.sh); this only says which keys and which datasets.
 restore_grant_rekey() {   # <scope datasets> -> log lines; never fails the withdrawal
-    local scope="$1" _rk_s _rk_root _rk_kl _rk_keys="" _rk_ds _rk_k _rk_par _rk_pe _rk_pk _rk_done
+    local scope="$1" _rk_s _rk_root _rk_kl _rk_keys="" _rk_line
+    # Keys: the key files of the encryption roots in the grant's scope -- what the
+    # recovery came from. The rest is lib-rekey.sh, shared with a local recovery.
     for _rk_s in $scope; do
         _rk_root="$(zfs get -H -o value encryptionroot -- "$_rk_s" 2>/dev/null)"
         case "$_rk_root" in ''|-) continue ;; esac
         _rk_kl="$(zfs get -H -o value keylocation -- "$_rk_root" 2>/dev/null)"
         case "$_rk_kl" in file://*) case " $_rk_keys " in *" $_rk_kl "*) ;; *) _rk_keys="$_rk_keys $_rk_kl" ;; esac ;; esac
     done
-    [ -n "$_rk_keys" ] || return 0
-    for _rk_ds in $( { for _rk_s in $scope $(restore_grant_namespaces "$scope"); do
-                           zfs list -H -o name -r -t filesystem,volume -- "$_rk_s" 2>/dev/null; done; } | sort -u ); do
-        [ "$(zfs get -H -o value encryptionroot -- "$_rk_ds" 2>/dev/null)" = "$_rk_ds" ] || continue
-        [ "$(zfs get -H -o value keystatus -- "$_rk_ds" 2>/dev/null)" = unavailable ] || continue
-        # A raw receive leaves keylocation=prompt. A root with a key file of its own is
-        # somebody's deliberate encryption, not a recovery -- skipped, not reported.
-        [ "$(zfs get -H -o value keylocation -- "$_rk_ds" 2>/dev/null)" = prompt ] || continue
-        _rk_done=""
-        for _rk_k in $_rk_keys; do
-            zfs load-key -L "$_rk_k" -- "$_rk_ds" 2>/dev/null || continue
-            _rk_par="${_rk_ds%/*}"
-            _rk_pe="$(zfs get -H -o value encryption -- "$_rk_par" 2>/dev/null)"
-            _rk_pk="$(zfs get -H -o value keystatus -- "$_rk_par" 2>/dev/null)"
-            if [ "$_rk_par" != "$_rk_ds" ] && [ -n "$_rk_pe" ] && [ "$_rk_pe" != off ] && [ "$_rk_pk" = available ]; then
-                if zfs change-key -i -- "$_rk_ds" 2>/dev/null; then
-                    log "  key:          $_rk_ds opened and now inherits the key of $(zfs get -H -o value encryptionroot -- "$_rk_ds" 2>/dev/null) (it came back raw, as its own root)"
-                else
-                    warn "  key:          $_rk_ds opened with $_rk_k, but 'zfs change-key -i' failed -- it stays its own root; it opens with that key"
-                fi
-            elif zfs set keylocation="$_rk_k" "$_rk_ds" 2>/dev/null; then   # no "--": zfs set takes it for a dataset
-                log "  key:          $_rk_ds opened with $_rk_k and keeps it as its keylocation (its parent is not encrypted, so it stays its own root)"
-            else
-                warn "  key:          $_rk_ds opened with $_rk_k, but its keylocation could not be set -- after a reboot: zfs load-key -L $_rk_k $_rk_ds"
-            fi
-            _rk_done=1
-            break
-        done
-        [ -n "$_rk_done" ] || warn "  key:          $_rk_ds is locked with keylocation=prompt (a raw recovery) and no key of this grant's scope opens it -- open it by hand: zfs load-key $_rk_ds"
+    # shellcheck disable=SC2046  # the namespaces, one word each
+    rekey_raw_recovered "$_rk_keys" $scope $(restore_grant_namespaces "$scope") | while IFS= read -r _rk_line; do
+        case "$_rk_line" in
+            "OK "*)   log  "  key:          ${_rk_line#OK }" ;;
+            "WARN "*) warn "  key:          ${_rk_line#WARN }" ;;
+        esac
     done
     return 0
 }
