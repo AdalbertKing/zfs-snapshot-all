@@ -259,6 +259,7 @@ saturated_pick() {   # -> what schedule_pick_minute returns with every minute ta
     { echo 'set -u'
       echo 'log() { echo ">>> $*"; }'      # the REAL log: stdout
       echo 'schedule_taken_minutes() { seq 0 59; }'
+      lift schedule_take
       lift schedule_pick_minute
       echo 'schedule_pick_minute rel1'; } > "$t"
     bash "$t" 2>/dev/null
@@ -594,10 +595,11 @@ fi
 # (c) a cloned section (a dataset joining a relationship) gets its OWN minutes: its send
 # tiers re-spread from the new send minute, its prune tiers from the new prune minute,
 # offsets kept, the hour carried.
-rs_t="$(mktemp)"
+rs_t="$(mktemp)"; rs_in="$(mktemp)"
+printf '[dataset:b]\n\trelation     = ab\n\tsend_schedule_hourly = 15 * * * *\n\tsend_schedule_daily = 25 1 * * *\n\tprune_schedule_hourly = 35 * * * *\n\tprune_schedule_daily = 45 1 * * *\n\tnotify       = ab-b\n' > "$rs_in"
 { lift schedule_with_minute; lift schedule_shift_expr; lift schedule_spread_tiers; lift section_restagger
-  printf 'printf "%%s\\n" "[dataset:b]" "\\trelation     = ab" "\\tsend_schedule_hourly = 15 * * * *" "\\tsend_schedule_daily = 25 1 * * *" "\\tprune_schedule_hourly = 35 * * * *" "\\tprune_schedule_daily = 45 1 * * *" "\\tnotify       = ab-b" | section_restagger 16 36\n'; } > "$rs_t"
-rs_out="$(bash "$rs_t" 2>/dev/null)"; rm -f "$rs_t"
+  printf 'section_restagger 16 36 < %q\n' "$rs_in"; } > "$rs_t"
+rs_out="$(bash "$rs_t" 2>/dev/null)"; rm -f "$rs_t" "$rs_in"
 rs_want="$(printf '[dataset:b]\n\trelation     = ab\n\tsend_schedule_hourly = 16 * * * *\n\tsend_schedule_daily = 26 1 * * *\n\tprune_schedule_hourly = 36 * * * *\n\tprune_schedule_daily = 46 1 * * *\n\tnotify       = ab-b')"
 if [ "$rs_out" = "$rs_want" ]; then
     ok "one job per minute: a cloned section takes its own minutes (:16/:26 send, :36/:46 prune), everything else as the sibling"
