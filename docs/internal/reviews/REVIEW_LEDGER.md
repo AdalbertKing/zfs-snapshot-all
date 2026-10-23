@@ -114,4 +114,4 @@ with them, which is the failure REVIEW PROTOCOL V2 exists to remove.
 | REV-20261023-169 | CLOSED | - | 0cae26fb49fcd5efd4359d3e3101a529482a42ea | 0cae26fb49fcd5efd4359d3e3101a529482a42ea | responses/REV-20261023-169.md | - |
 | REV-20261023-170 | CLOSED | - | e6b0be67f7060b7d427c952c047929bcaf37a0bc | e6b0be67f7060b7d427c952c047929bcaf37a0bc | responses/REV-20261023-170.md | - |
 | REV-20261023-171 | CLOSED | - | 9f961c00dabbc17a0b0fd99ac0924f23a831b148 | 9f961c00dabbc17a0b0fd99ac0924f23a831b148 | responses/REV-20261023-171.md | - |
-| REV-20261023-172 | APPROVED | Reviewer | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | responses/REV-20261023-172.md | write the closure artifact |
+| REV-20261023-172 | CLOSED | - | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | a18aa09b9e257371c63eb8ad61ae893ca24101c3 | responses/REV-20261023-172.md | - |
