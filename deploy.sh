@@ -2971,6 +2971,9 @@ do_allow_restore() {
         # So the roots travel with the grant, and the restore refuses that one
         # shape before the engine runs.
         printf 'RESTORE_GRANT_DATASETS="%s"\n' "$RESTORE_GRANT_DATASETS"
+        # WHO it was delegated to (REV-20261023-170): another grant's withdrawal reads
+        # this to tell whether the shared <pool>/restore delegation is still needed.
+        printf 'RESTORE_GRANT_ACCOUNT="%s"\n' "$account"
         # Where a restore BESIDE the original may land (restore_grant_namespaces).
         printf 'RESTORE_GRANT_NAMESPACES="%s"\n' "$(restore_grant_namespaces "$RESTORE_GRANT_DATASETS" | tr '\n' ' ' | sed 's/ $//')"
         # What --deny-restore mounts again (restore_grant_mounted_now).
@@ -2996,6 +2999,36 @@ do_allow_restore() {
         log "  replace:      NO -- the collector may write where there is free space, and may not overwrite what is already here. Add --replace only if you mean it."
     fi
     log "  this grant does NOT expire. See it with: $0 --show-restore=$label"
+    return 0
+}
+
+# THE RESTORE NAMESPACE IS SHARED (REV-20261023-170). Every scope on a pool maps to the
+# same <pool>/restore, and ZFS keeps ONE permission set per (dataset, account) -- two
+# relationships to one peer (one zfsbackup-<peer> account, disjoint scopes on one pool)
+# hold the same tuple. Withdrawing one grant must not unallow what the other still
+# needs: this names every OTHER grant, standing or still being revoked, whose account
+# and scope need <namespace>. Its account comes from its record, else from its pairing
+# manifest; a grant whose account cannot be told keeps nothing alive -- another
+# account's tuple is neither retained nor revoked by guesswork.
+restore_ns_other_owners() {   # <label being withdrawn> <account> <namespace> -> labels, one per line
+    local self="$1" acct="$2" ns="$3" _f _l _a _ds _pm _mf
+    for _f in "$RESTORE_GRANT_DIR"/* "$RESTORE_REVOKE_DIR"/*; do
+        [ -f "$_f" ] || continue
+        _l="${_f##*/}"
+        case "$_l" in .*) continue ;; esac
+        [ "$_l" = "$self" ] && continue
+        restore_grant_label_ok "$_l" || continue
+        _ds="$(sed -n 's/^RESTORE_GRANT_DATASETS="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
+        _a="$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p; s/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$_f" 2>/dev/null | head -1)"
+        _pm="$(peer_manifest_path "$_l")"
+        if { [ -z "$_a" ] || [ -z "$_ds" ]; } && [ -r "$_pm" ]; then
+            _mf="$( record_load manifest "$_pm"; printf '%s\n%s\n' "${PEER_JOIN_ACCOUNT:-}" "${PEER_JOIN_GRANTED_DATASETS:-}" )"
+            [ -n "$_a" ]  || _a="$(printf '%s\n' "$_mf" | sed -n 1p)"
+            [ -n "$_ds" ] || _ds="$(printf '%s\n' "$_mf" | sed -n 2p)"
+        fi
+        [ -n "$_a" ] && [ "$_a" = "$acct" ] || continue
+        restore_grant_namespaces "$_ds" | grep -qxF -- "$ns" && printf '%s\n' "$_l"
+    done
     return 0
 }
 
@@ -3079,8 +3112,16 @@ do_deny_restore() {
         [ "$_rd_scope_open" -eq 1 ] || log "  revoked:      $RESTORE_ZFS_PERMS from '$RESTORE_GRANT_ACCOUNT'"
         # The restore namespace goes back with the rest; the namespace itself and
         # whatever was recovered into it stay (restore_grant_namespace_delegate).
+        local _rd_others
         for _rd_ds in $(restore_grant_namespaces "$RESTORE_GRANT_DATASETS"); do
             zfs list -H -o name -- "$_rd_ds" >/dev/null 2>&1 || continue
+            # REV-20261023-170: the last owner takes it back; while another grant of
+            # the same account still needs this namespace, the delegation stays.
+            _rd_others="$(restore_ns_other_owners "$label" "$RESTORE_GRANT_ACCOUNT" "$_rd_ds" | tr '\n' ' ' | sed 's/ $//')"
+            if [ -n "$_rd_others" ]; then
+                log "  kept:         $RESTORE_NS_PERMS for '$RESTORE_GRANT_ACCOUNT' on $_rd_ds -- still needed by grant(s): $_rd_others"
+                continue
+            fi
             if zfs unallow -u "$RESTORE_GRANT_ACCOUNT" "$RESTORE_NS_PERMS" -- "$_rd_ds" 2>/dev/null; then
                 log "  revoked:      $RESTORE_NS_PERMS from '$RESTORE_GRANT_ACCOUNT' on $_rd_ds (its contents stay)"
             else

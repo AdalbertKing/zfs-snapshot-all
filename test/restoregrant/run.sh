@@ -1148,6 +1148,106 @@ fi
 rm -rf "$REL/lab2" "$PEERS/lab2.conf"
 
 
+# ---------------------------------------------------------------------------
+# REV-20261023-170: <pool>/restore is ONE delegation per (account, pool). Two grants of
+# the same account on one pool share it; withdrawing one must keep it for the other, the
+# last owner takes it back, and another account or another pool is never touched.
+# A STATEFUL permission set here (one file per account|perms|dataset), so the effective
+# capability is asserted, not only the calls.
+# ---------------------------------------------------------------------------
+NS="$TMPD/ns"; mkdir -p "$NS/bin" "$NS/rel/one" "$NS/rel/two" "$NS/rel/three" "$NS/rel/four" \
+    "$NS/peers" "$NS/grants" "$NS/clients" "$NS/state" "$NS/caps"
+printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/a"\n' > "$NS/peers/one.conf"
+printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/b"\n' > "$NS/peers/two.conf"
+printf 'PEER_JOIN_ACCOUNT="backup-other"\nPEER_JOIN_GRANTED_DATASETS="tank/c"\n' > "$NS/peers/three.conf"
+printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="pool2/d"\n' > "$NS/peers/four.conf"
+cat > "$NS/bin/zfs" <<'NSZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$NS_TRACE"
+case "$1" in
+    list) exit 0 ;;
+    get) echo no; exit 0 ;;
+    create|mount) exit 0 ;;
+    allow|unallow)
+        key="$(printf '%s|%s|%s' "$3" "$4" "$6" | tr / % )"
+        if [ "$1" = allow ]; then : > "$NS_CAPS/$key"; else rm -f "$NS_CAPS/$key"; fi
+        exit 0 ;;
+esac
+exit 0
+NSZFS
+chmod +x "$NS/bin/zfs"
+export NS_TRACE="$NS/trace" NS_CAPS="$NS/caps"
+nsd() { PATH="$BIN:$NS/bin:$PATH" PAIR_GATE_STATE_DIR="$NS/rel" PEER_STATE_DIR="$NS/peers" RESTORE_GRANT_DIR="$NS/grants" \
+        CLIENTS_DIR="$NS/clients" RELATIONSHIPS_DIR="$NS/state" bash "$DEPLOY" "$@" 2>&1; }
+NSP="receive,rollback,create,canmount,mountpoint,mount"
+ns_cap() { [ -e "$NS_CAPS/$1|$NSP|$(printf '%s' "$2" | tr / %)" ] && echo yes || echo no; }   # <account> <namespace>
+ns_unallows() { grep -c "^unallow -u $1 $NSP -- $2\$" "$NS_TRACE" 2>/dev/null; }             # <account> <namespace>
+ns_paused_by() { grep -rl "^PAUSED_BY_GRANT=\"$1\"" "$NS/state" 2>/dev/null | wc -l | tr -d ' '; }
+# <label> -> "grant|revoking|paused-by" for that label, checked after every boundary
+ns_rec() { printf '%s|%s|%s' "$([ -f "$NS/grants/$1" ] && echo grant || echo -)" \
+                    "$([ -f "$NS/grants.revoking/$1" ] && echo revoking || echo -)" "$(ns_paused_by "$1")"; }
+
+nsd --allow-restore=one >/dev/null; r1=$?
+nsd --allow-restore=two >/dev/null; r2=$?
+nsd --allow-restore=three >/dev/null; r3=$?
+nsd --allow-restore=four >/dev/null; r4=$?
+check "REV-170: four grants issued (two of one account on tank, another account on tank, the same account on pool2)" "0|0|0|0" "$r1|$r2|$r3|$r4"
+check "REV-170: ...the grant file records the account it delegated to" "backup-shared" \
+      "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$NS/grants/one")"
+check "REV-170: ...shared tank/restore, other account's tank/restore, pool2/restore all effective" "yes|yes|yes" \
+      "$(ns_cap backup-shared tank/restore)|$(ns_cap backup-other tank/restore)|$(ns_cap backup-shared pool2/restore)"
+check "REV-170: ...records after allow: four standing grants, nothing pending, nothing paused" "grant|-|0 grant|-|0 grant|-|0 grant|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
+
+out="$(nsd --deny-restore=one)"; rc=$?
+check "REV-170: deny(one) -> rc 0, grant two still on disk, shared tank/restore STILL effective, not unallowed" "0|yes|yes|0" \
+      "$rc|$([ -f "$NS/grants/two" ] && echo yes || echo no)|$(ns_cap backup-shared tank/restore)|$(ns_unallows backup-shared tank/restore)"
+if has "kept:" "$out" && has "still needed by grant(s): two" "$out" && [ ! -f "$NS/grants/one" ] && [ ! -e "$NS/grants.revoking/one" ] \
+   && [ "$(ns_paused_by one)" = 0 ]; then
+    ok "REV-170: ...it says the delegation is kept and for whom; one's record is gone and nothing stays paused by it"
+else
+    bad "REV-170: deny(one) report and records" "$out"
+fi
+check "REV-170: ...the other account on tank and the same account on pool2 untouched" "yes|yes" \
+      "$(ns_cap backup-other tank/restore)|$(ns_cap backup-shared pool2/restore)"
+
+out="$(nsd --deny-restore=two)"; rc=$?
+check "REV-170: deny(two), the last owner on tank -> rc 0, tank/restore unallowed once, no longer effective" "0|1|no" \
+      "$rc|$(ns_unallows backup-shared tank/restore)|$(ns_cap backup-shared tank/restore)"
+check "REV-170: ...and still the other account on tank and pool2 untouched" "yes|yes" \
+      "$(ns_cap backup-other tank/restore)|$(ns_cap backup-shared pool2/restore)"
+check "REV-170: ...records after deny(two): one and two gone, three and four standing, nothing paused" "-|-|0 -|-|0 grant|-|0 grant|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
+
+out="$(nsd --deny-restore=three)"; rc=$?
+check "REV-170: deny(three), another account -> its own tuple goes, the same pool for backup-shared is not touched again" "0|no|1|1" \
+      "$rc|$(ns_cap backup-other tank/restore)|$(ns_unallows backup-other tank/restore)|$(ns_unallows backup-shared tank/restore)"
+out="$(nsd --deny-restore=four)"; rc=$?
+check "REV-170: deny(four), another pool -> pool2/restore goes, nothing on tank" "0|no|1" \
+      "$rc|$(ns_cap backup-shared pool2/restore)|$(ns_unallows backup-shared pool2/restore)"
+check "REV-170: ...records after deny(three) and deny(four): none left, nothing paused" "-|-|0 -|-|0 -|-|0 -|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
+
+# A pending revocation still counts as an owner: two's withdrawal fails (unallow refused)
+# and stays in grants.revoking, so one's later withdrawal keeps the namespace for it.
+rm -rf "$NS/grants" "$NS/grants.revoking" "$NS/caps"/*; : > "$NS_TRACE"
+nsd --allow-restore=one >/dev/null; nsd --allow-restore=two >/dev/null
+cat > "$NS/bin/zfs.fail" <<'NSFAIL'
+#!/bin/sh
+[ "$1" = unallow ] && exit 1
+exec "$NS_REAL" "$@"
+NSFAIL
+chmod +x "$NS/bin/zfs.fail"; cp "$NS/bin/zfs" "$NS/real-zfs"; cp "$NS/bin/zfs.fail" "$NS/bin/zfs"
+NS_REAL="$NS/real-zfs" nsd --deny-restore=two >/dev/null; rcf=$?
+cp "$NS/real-zfs" "$NS/bin/zfs"
+out="$(nsd --deny-restore=one)"; rc=$?
+check "REV-170: a grant still being revoked (two, unallow failed) keeps the shared namespace when one is withdrawn" "1|yes|0|yes" \
+      "$rcf|$([ -f "$NS/grants.revoking/two" ] && echo yes || echo no)|$rc|$(ns_cap backup-shared tank/restore)"
+out="$(nsd --deny-restore=two)"; rc=$?
+check "REV-170: ...and its retry, the last owner, removes it (REV-147 retry intact)" "0|no|no" \
+      "$rc|$([ -f "$NS/grants.revoking/two" ] && echo yes || echo no)|$(ns_cap backup-shared tank/restore)"
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

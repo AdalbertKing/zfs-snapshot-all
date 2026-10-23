@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 50d0638eb5aae727 -->
+<!-- status-covers-digest: f201d103b3f19567 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,15 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **REV-20261023-170: cofnięcie jednego grantu Restore nie odbiera wspólnego `<pula>/restore` drugiemu
+  (`fix/rev170-shared-restore-ns`).** Dwie relacje do jednego hosta zwykle mają jedno konto `zfsbackup-<host>`, a ZFS
+  trzyma jedno uprawnienie na (dataset, konto) -- `--deny-restore=one` robił `zfs unallow` na `tank/restore` i
+  aktywny grant `two` tracił możliwość odzysku obok oryginału, przy rc 0. Teraz przed `unallow` liczą się inne
+  granty (stojące i w trakcie cofania) tego samego konta na tej puli: póki są, uprawnienie zostaje („kept … still
+  needed by grant(s)”); ostatni właściciel zdejmuje je jak dotąd, przed wznowieniem pisarzy. Grant zapisuje
+  konto (`RESTORE_GRANT_ACCOUNT`). Inne konto i inna pula -- nietknięte. `restoregrant` 192/0 (pve9, tester);
+  z `deploy.sh` z main 186/6; skrypt recenzenta przestał odtwarzać błąd.
 
 - **Nowa replika: Esc w kroku 1 pyta, zanim wyjdzie (`fix/replica-step1-esc`, punkt 7).** Było: Esc/Anuluj przy
   nazwie kończył od razu. Teraz jak w kreatorze relacji: „Przerwać tworzenie repliki? Nic nie zostało zmienione.”,
