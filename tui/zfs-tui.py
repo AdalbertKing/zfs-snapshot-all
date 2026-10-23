@@ -2835,8 +2835,14 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             # Okno bralo tylko PIERWSZY szablon i jego rytm: przy relacji
             # m12w4d7h24-gfs mowilo "co: 1 * * * *", a cron pobieral o :56, 02:06,
             # 03:16 i 04:26 (pve10, 2026-10-07).
+            # X27: sekcja nosi pole pod KROTKA nazwa szczebla (send_schedule_hourly,
+            # prune_schedule_src_hourly), a show-config podaje szablon pelna nazwa
+            # (profile__relacja-pve9__hourly). Okno bralo wtedy rytm bloku: pve9 na pve10
+            # "co godzinę (:01)", cron pobieral o :13 (przejscie na zywo 2026-10-23).
             def _tf(field, u):
-                return f.get(field + "_" + u) if u else None
+                if not u:
+                    return None
+                return f.get(field + "_" + u) or f.get(field + "_" + u.rsplit("__", 1)[-1])
             if sec.get("kind") in ("dataset", "snaponly"):
                 _src, _dst = f.get("src") or "", sec.get("name") or ""
                 _w = u"pobranie" if "@" in _src else (u"wysyłka" if "@" in _dst else u"kopia")
@@ -2852,6 +2858,21 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
+                # X27: sekcja celu relacji sama sprząta swoje kopie (cron "hourly prune
+                # (pve9-enc)"); osobnej sekcji [prune:] po tej stronie już nie ma, więc
+                # bez tego wiersza okno nie mówiło o porządkach u celu wcale.
+                if f.get("relation") and f.get("side") == "target" and _w != u"migawki":
+                    for u in used:
+                        t = tmpl.get(u, {})
+                        sched = _tf("prune_schedule", u) or t.get("prune_schedule")
+                        if not sched:
+                            continue
+                        r = t.get("retain") or t.get("keep") or ""
+                        key = (u"lokalny prune", u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", cron_words(sched),
+                                                                         "   drabina GFS" if t.get("gfs") == "yes" else ""))
+                        pol.setdefault(key, []).append(sec.get("name") or "?")
+                        if key not in order:
+                            order.append(key)
             elif any(_tf("prune_schedule", u) for u in used):
                 # Prune rozrzucony szczebel po szczeblu (K3): jedna linia na szczebel.
                 _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"

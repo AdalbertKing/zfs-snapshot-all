@@ -171,6 +171,13 @@ step_diag() {   # 0 = dalej, 1 = wróć do hosta
         info "$(title 3 'Co jest na źródle?')" "Sprawdzam $(hostport) przez SSH jako root...${rn:+\n$rn}\n(do 5 s)"
         probe
         if [ "$C_SSH" -ne 1 ]; then
+            # Host, który w ogóle nie odpowiada, to nie brak klucza: rada o keyscan
+            # i copy-id prowadziłaby admina w złą stronę (przejście na żywo 2026-10-23).
+            case "$C_ERR" in
+                *"No route to host"*|*"timed out"*|*"Connection refused"*|*"Could not resolve"*|*"Network is unreachable"*)
+                    wt --title "$(title 3 "$HOST nie odpowiada")" --msgbox "${rn:+$rn\n\n}Pod $HOST (port $PORT) nikt nie odpowiada:\n\n  $C_ERR\n\nSprawdź adres i czy host jest włączony\n(z linii poleceń GUI: ping $HOST), potem wpisz go jeszcze raz." 13 "$W"
+                    return 1 ;;
+            esac
             wt --title "$(title 3 "$HOST nie wpuszcza")" --msgbox "${rn:+$rn\n\n}SSH jako root@$HOST nie działa:\n\n  $C_ERR\n\nNajczęściej brakuje jednego z dwóch -- z TEGO hosta, jako root:\n\n  ssh-keyscan -p $PORT $HOST >> /root/.ssh/known_hosts\n  ssh-copy-id -p $PORT root@$HOST\n\nPo naprawie wróć tutaj." "$(fit 13)" "$W"
             return 1
         fi
