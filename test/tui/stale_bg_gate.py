@@ -74,6 +74,33 @@ def main():
           "r=%r shell=%r" % (r, shell))
     check("fresh-data-cleared-caches", ui.data.configs == {} and ui.data.profiles is None)
 
+    # A refresh that FAILS leaves the old rows: row actions wait for a successful one.
+    mode = ["stale"]
+
+    def collect2(_repo, _files, only=None):
+        if mode[0] == "fail":
+            raise RuntimeError("reader died")
+        return stale if mode[0] == "stale" else fresh
+
+    m.collect = collect2
+    ui2 = m.UI("/tmp", {}, m.Chars(True), 1700000000, None)
+    ui2.screen = "relacje"
+    mode[0] = "fail"
+    ui2.refresh_bg()
+    ui2._bg[0].join(5)
+    ui2.pending_shell = None
+    r = ui2.key("del")
+    check("failed-refresh-del-schedules-nothing",
+          r == "stay" and not ui2.pending_shell and "NIEAKTUALNY" in (ui2.message or ""),
+          "r=%r shell=%r msg=%r" % (r, ui2.pending_shell, ui2.message))
+    check("failed-refresh-navigation-still-works", ui2.key("down") != "quit" and not ui2.pending_shell)
+    mode[0] = "fresh"
+    ui2.refresh()                      # what Ctrl-R ends in (run_pending)
+    ui2.pending_shell = None
+    ui2.key("del")
+    shell = ui2.pending_shell or ""
+    check("after-successful-refresh-del-targets-fresh-row", "fresh-relation" in shell, "shell=%r" % shell)
+
 
 if __name__ == "__main__":
     main()

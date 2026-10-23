@@ -4205,6 +4205,7 @@ class UI(object):
         data = bg[1].get("data")
         if data is None:
             self.message = (self.message or "") + u"   odświeżenie w tle nie wyszło: %s" % bg[1].get("err", "?")
+            self.bg_failed = True   # REV-172: wiersze zostają stare -- czynności czekają na Ctrl-R
             return True
         self.files["_data"] = data
         self.apply_data(data, full=True)
@@ -4220,6 +4221,7 @@ class UI(object):
     def apply_data(self, data, full=True):
         self.data = data
         if full:
+            self.bg_failed = False
             # PELNE odswiezenie czysci tez dane czytane na zadanie (wlasciciel 2026-10-09,
             # uwaga 1: "powrot do okna powinien zawsze wymuszac odswiez -- wszedzie"):
             # szablony (F5) i config relacji (panel na F3). Data jest wspoldzielona miedzy
@@ -4924,8 +4926,9 @@ class UI(object):
         # wierszach (Del na relacji sprzed zmiany). Teraz limit zamyka: klawisz przepada,
         # ekran zostaje oznaczony jako nieświeży, wyjście (q/F12) zawsze działa.
         # Wątek, który już skończył, a którego dane pętla jeszcze nie odebrała (pyta co 0,3 s),
-        # też się liczy: najpierw przyjęcie danych, potem klawisz (test REV-172 trafił Del w stary
-        # wiersz w tym okienku).
+        # też się liczy: najpierw przyjęcie danych, potem klawisz (test regresji REV-172 trafiał
+        # Del w stary wiersz w tym okienku). Odświeżenie, które się NIE UDAŁO, zostawia stare
+        # wiersze: czynności na wierszu czekają wtedy na udane odświeżenie (Ctrl-R).
         if not self.window:
             bg = getattr(self, "_bg", None)
             if bg is not None:
@@ -4937,6 +4940,10 @@ class UI(object):
                                     u"ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie "
                                     u"„odświeżam w tle”; F12 wychodzi.%s" % (self.BG_KEY_WAIT, self.BG_NOTE))
                     return "stay"
+            if getattr(self, "bg_failed", False) and k in self.ACTION_KEYS:
+                self.message = (u"Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. "
+                                u"Ctrl-R odświeża; po udanym odświeżeniu naciśnij klawisz ponownie.")
+                return "stay"
         if self.window and self.window[0] == "prompt":
             obj = self.window[1]
             if k == "esc":

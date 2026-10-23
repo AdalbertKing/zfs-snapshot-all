@@ -5364,8 +5364,8 @@ rm -rf "$POT"
 sbg_out="$("$PY" "$REPO/test/tui/stale_bg_gate.py" "$TUI" 2>&1 | tr -d '\r')"
 sbg_bad="$(printf '%s\n' "$sbg_out" | grep -c '^bad ')"
 sbg_ok="$(printf '%s\n' "$sbg_out" | grep -c '^ok ')"
-if [ "$sbg_ok" -eq 6 ] && [ "$sbg_bad" -eq 0 ]; then
-    ok "odświeżanie w tle po limicie: Del/F7/strzałka nic nie planują na starych wierszach, po świeżych danych Del celuje w świeży (REV-172)"
+if [ "$sbg_ok" -eq 9 ] && [ "$sbg_bad" -eq 0 ]; then
+    ok "odświeżanie w tle po limicie: Del/F7/strzałka nic nie planują na starych wierszach, nieudane odświeżenie blokuje czynności do udanego, po świeżych danych Del celuje w świeży (REV-172)"
 else
     bad "odświeżanie w tle: klawisz na starych wierszach (REV-172)" "$sbg_out"
 fi
