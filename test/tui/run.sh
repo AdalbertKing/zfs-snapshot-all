@@ -5149,6 +5149,39 @@ else
     bad "zfs-tui: paint pisze pelna szerokosc ekranu" "rc=$?"
 fi
 
+# Kampania 3, wlasciciel 2026-10-23 ("1 popraw to"): po zamknieciu okna linia komunikatu
+# mowila "[rc=1] <cala linia polecenia>" takze po zwyklym Esc -- anulowanie wygladalo jak
+# blad. Teraz okno zostawia swoje ostatnie slowo (wt_end -> ZFS_TUI_STATUS), a GUI pokazuje
+# je, albo "zakonczone" / "zakonczone z kodem N". Prawdziwe UI.window_end_message i wt_end.
+WE="$(mktemp -d)"
+WE_STUB="$WE/whiptail"; printf '#!/bin/sh
+exit 0
+' > "$WE_STUB"; chmod +x "$WE_STUB"
+ZFS_TUI_STATUS="$WE/s1" WHIPTAIL="$WE_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && wt_end 'Usuń relację: przerwane, nic nie zmieniono'" >/dev/null 2>&1
+if "$PY" - "$REPO/tui/zfs-tui.py" "$WE" <<'PYEOF'
+import importlib.util, io, os, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+we = sys.argv[2]
+class U(object): pass
+def msg(rc, status, title=u"Usuń relację", log=None):
+    u = U(); u.pending_title, u.pending_status_path, u.pending_log_path = title, status, log
+    return zt.UI.window_end_message(u, rc)
+m1 = msg(1, os.path.join(we, "s1"), log="/root/.zfs-tui/d.log")
+m2 = msg(0, os.path.join(we, "brak"))
+m3 = msg(2, os.path.join(we, "brak"))
+ok = (m1 == u"Usuń relację: przerwane, nic nie zmieniono   dziennik: /root/.zfs-tui/d.log"
+      and m2 == u"Usuń relację: zakończone" and m3 == u"Usuń relację: zakończone z kodem 2"
+      and not os.path.exists(os.path.join(we, "s1"))
+      and not any(u"[rc=" in m for m in (m1, m2, m3))
+      and zt.WINDOW_TITLES.get("delete-relation") == u"Usuń relację")
+sys.exit(0 if ok else 1)
+PYEOF
+then
+    ok "okno: po zamknieciu linia komunikatu niesie ostatnie slowo okna (wt_end), albo zakonczone/z kodem N -- nigdy [rc=] z linia polecenia"
+else
+    bad "okno: komunikat po zamknieciu okna" "rc=$?"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

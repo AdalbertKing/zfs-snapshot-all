@@ -32,7 +32,7 @@ WT_BACKTITLE="Przywracanie z relacji $REL -- $(hostname)"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
-abort() { clear 2>/dev/null; echo "restore: przerwane, nic nie zmieniono"; exit 1; }
+abort() { clear 2>/dev/null; wt_end "Odzysk: przerwane, nic nie zmieniono"; exit 1; }
 join_by_comma() { local IFS=,; echo "$*"; }
 # P3 (właściciel 10-15): godziny punktów są w strefie HOSTA (lab: UTC), a nie operatora --
 # 20:01 na ekranie to 22:01 w Polsce latem. Strefy operatora przez SSH nie znamy; okno

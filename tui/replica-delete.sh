@@ -59,7 +59,7 @@ while :; do
     geom
     wt --title "Usuń replikę $NAME" --yes-button "Dalej" --no-button "Wstecz" \
        --yesno "Replika przestanie działać: zniknie jej sekcja i zadanie z crona.\n\nDane na dyskach repliki ZOSTAJĄ ($DST).\nŻeby je skasować, sformatuj dysk: zmiana repliki -> Dodaj dysk." 12 "$W" \
-       || { clear 2>/dev/null; echo "replica-delete: przerwane, nic nie zmieniono"; exit 1; }
+       || { clear 2>/dev/null; wt_end "Usuń replikę: przerwane, nic nie zmieniono"; exit 1; }
     {
         echo "PLAN -- nic jeszcze nie zostało zmienione:"
         echo

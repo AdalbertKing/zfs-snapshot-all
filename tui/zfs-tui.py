@@ -3252,6 +3252,14 @@ def snap_pair_lines(d, width, side, now):
     return out
 
 
+# Nazwa okna w linii komunikatu po jego zamknieciu (window_end_message).
+WINDOW_TITLES = {
+    "new-relation": u"Nowa relacja", "edit-relation": u"Zmień relację", "delete-relation": u"Usuń relację",
+    "add-replica": u"Replika", "remove-replica": u"Usuń replikę", "restore": u"Odzysk",
+    "browse": u"Przeglądaj", "settings": u"Ustawienia", "save-profile": u"Szablon",
+}
+
+
 def wrap_hanging(lines, avail):
     """Kampania 3 (2026-10-22, 80x24): pomoc F1 pisana pod ~100 kolumn byla w 80 PRZYCINANA
     ("kop…", "domyś…") -- tresc ginela. Za dlugi wiersz lamany na spacji; kontynuacja wcieta
@@ -4015,13 +4023,54 @@ class UI(object):
                 fh.write(line + "\n")
             self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
             return "stay"
-        log_path = self.start_verb_log(argv[1] if len(argv) > 1 else "cmd", line)
+        line = self.window_env(argv[1] if len(argv) > 1 else "cmd", line)
+        self.pending_shell, self.pending_nowait = line, True
+        return "shell"
+
+    def window_env(self, verb, line):
+        """Dziennik (ZFS_TUI_LOG) i plik statusu (ZFS_TUI_STATUS) dla okna. Okno zapisuje
+        do statusu swoje ostatnie slowo (wt_end w wt-lib.sh, np. "przerwane, nic nie
+        zmieniono"), a GUI pokazuje je po powrocie zamiast "[rc=1] <cala linia polecenia>"
+        (kampania 3, wlasciciel 2026-10-23: Esc wygladal jak blad)."""
+        self.pending_title = WINDOW_TITLES.get(verb, verb)
+        log_path = self.start_verb_log(verb, line)
+        status = (log_path + ".status") if log_path else os.path.join(
+            "/tmp", "zfs-tui-%d-%s.status" % (os.getpid(), time.strftime("%H%M%S")))
+        try:
+            os.unlink(status)
+        except OSError:
+            pass
+        self.pending_status_path = status
+        line = "ZFS_TUI_STATUS=%s %s" % (shlex.quote(status), line)
         if log_path:
             self.pending_log_path = log_path
             line = "ZFS_TUI_LOG=%s %s" % (shlex.quote(log_path), line)
             self.message = u"dziennik: %s" % log_path
-        self.pending_shell, self.pending_nowait = line, True
-        return "shell"
+        return line
+
+    def window_end_message(self, rc):
+        """Linia komunikatu po zamknieciu okna: jego wlasne ostatnie slowo, albo
+        "zakonczone" / "zakonczone z kodem N", plus dziennik."""
+        title, self.pending_title = getattr(self, "pending_title", None) or u"okno", None
+        status, self.pending_status_path = getattr(self, "pending_status_path", None), None
+        said = u""
+        if status:
+            try:
+                with io.open(status, encoding="utf-8", errors="replace") as fh:
+                    said = fh.readline().strip()
+                os.unlink(status)
+            except (IOError, OSError):
+                said = u""
+        if said:
+            msg = said
+        elif rc == 0:
+            msg = u"%s: zakończone" % title
+        else:
+            msg = u"%s: zakończone z kodem %s" % (title, rc)
+        log_path, self.pending_log_path = self.pending_log_path, None
+        if log_path:
+            msg += u"   dziennik: %s" % log_path
+        return msg
 
     def rel_names(self):
         """Nazwy relacji tak, jak lista je teraz pokazuje -- do porownania PRZED i PO."""
@@ -4060,11 +4109,7 @@ class UI(object):
                 fh.write(line + "\n")
             self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
             return "stay"
-        log_path = self.start_verb_log("new-relation", line)
-        if log_path:
-            self.pending_log_path = log_path
-            line = "ZFS_TUI_LOG=%s %s" % (shlex.quote(log_path), line)
-            self.message = u"dziennik: %s" % log_path
+        line = self.window_env("new-relation", line)
         self.pending_shell, self.pending_nowait = line, True
         return "shell"
 
@@ -5768,10 +5813,13 @@ def curses_loop(ui):
                         pass
                 stdscr.clear()
                 stdscr.refresh()
-                ui.message = u"[rc=%s] %s" % (rc, line)
-                log_path, ui.pending_log_path = ui.pending_log_path, None
-                if log_path:
-                    ui.message += u"   dziennik: %s" % log_path
+                if nowait:
+                    ui.message = ui.window_end_message(rc)
+                else:
+                    ui.message = u"[rc=%s] %s" % (rc, line)
+                    log_path, ui.pending_log_path = ui.pending_log_path, None
+                    if log_path:
+                        ui.message += u"   dziennik: %s" % log_path
                 # Kursor na nowej relacji -- dopiero gdy świeże dane wejdą (poll_bg).
                 ui.rel_names_before_bg = getattr(ui, "rel_names_before", None)
                 ui.rel_names_before = None

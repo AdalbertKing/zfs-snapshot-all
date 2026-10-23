@@ -206,3 +206,12 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
     wt --title "$t" --ok-button "Wybierz" --cancel-button "$c" --notags --default-item "$d" \
        --menu "$x" "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$((${#items[@]} / 2))" "${items[@]}"
 }
+
+# Ostatnie slowo okna: na terminal i do pliku statusu, ktory GUI pokazuje po powrocie
+# w linii komunikatu (zamiast "[rc=1] <linia polecenia>" -- kampania 3, 2026-10-23).
+wt_end() {   # <tekst>
+    echo "$1"
+    [ -n "${ZFS_TUI_STATUS:-}" ] && printf '%s
+' "$1" >"$ZFS_TUI_STATUS" 2>/dev/null
+    return 0
+}

@@ -371,7 +371,7 @@ edit_menu() {    # -> step ustawiony na pierwszy krok pozycji (albo exit)
                    --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
                 [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
             fi
-            clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+            clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1; }
         LAST_ITEM="$WT_OUT"
         case "$WT_OUT" in
             __sep__) LAST_ITEM=zapisz; continue ;;
@@ -411,7 +411,7 @@ if [ "$EDIT" -eq 1 ]; then
     info "Replika $NAME" "Czytam datasety tego hosta..."
     if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
         wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
-        clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+        clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1
     fi
     basket_from_replica; basket_xargs
     # Próg ostrzeżenia repliki "po włożeniu" zostaje, gdy "Kiedy" nie jest ruszane.
@@ -429,7 +429,7 @@ while :; do
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
         wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
-           || { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+           || { clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
         case "$n" in
             '') wt --title "Brak nazwy" --msgbox "Wpisz nazwę repliki, np. usb1." 8 "$W"; continue ;;
@@ -444,13 +444,13 @@ while :; do
             info "Replika $NAME" "Czytam datasety tego hosta..."
             if ! "$ZB" list-datasets --json >"$TMPD/ds.json" 2>"$TMPD/ds.err" || ! { drop_replica_media; basket_tree_from_json "$TMPD/ds.json"; }; then
                 wt --title "Nie udało się pobrać listy" --msgbox "list-datasets:\n\n$(tail -3 "$TMPD/ds.err")" 12 "$W"
-                clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+                clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1
             fi
             [ -n "$SRCS" ] && basket_from_replica
         fi
         if ! basket_step; then
             [ "$MENU" -eq 1 ] && { step=0; continue; }
-            [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1; }
+            [ "$EDIT" -eq 1 ] && { clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1; }
             step=1; continue
         fi
         if ! pool_roots_to_children; then
@@ -756,7 +756,7 @@ PYEOF
         if ! yesno_text "$TMPD/plan2.txt" "Replika $NAME -- plan" "WYKONAJ" "Wstecz"; then
             if [ "$ENGINE_ONLY" -eq 1 ]; then
                 replica_engine && continue
-                clear 2>/dev/null; echo "replica: przerwane, nic nie zmieniono"; exit 1
+                clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1
             fi
             step=5; continue
         fi
