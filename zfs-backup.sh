@@ -4744,6 +4744,9 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # section it creates -- see schedule_pick_minute. Only for sections being
     # CREATED: a preserved section keeps whatever it already carries.
     local stagger_min stagger_prune stagger_send_expr stagger_prune_expr
+    # Reservations are per relationship emission: what this call hands out, on top of what
+    # the host already runs -- not left over from an earlier emission in the same process.
+    SCHEDULE_RESERVED=""
     schedule_take_for "$name"; stagger_min="$SCHEDULE_PICKED"
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
