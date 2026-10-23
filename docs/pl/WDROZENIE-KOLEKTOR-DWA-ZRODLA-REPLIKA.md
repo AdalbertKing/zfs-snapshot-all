@@ -1,5 +1,7 @@
 # Wdrożenie: kolektor, dwa źródła, replika na dyskach wymiennych; łańcuch pasywny
 
+Wersja angielska: [DEPLOYMENT-COLLECTOR-TWO-SOURCES-REPLICA.md](../en/DEPLOYMENT-COLLECTOR-TWO-SOURCES-REPLICA.md).
+
 Dwa scenariusze na jednym przepływie instalacji:
 
 - **A. Kolektor z dwoma źródłami i repliką na nośniku wymiennym** (sekcje 3–8).

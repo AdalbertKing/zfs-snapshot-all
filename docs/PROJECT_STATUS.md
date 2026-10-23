@@ -118,6 +118,14 @@
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
+- **Dokumentacja użytkownika w komplecie po polsku i po angielsku (`docs/translate-pl-en`, paczka 3 z 3).** Każdy
+  dokument istnieje w `docs/pl/` i `docs/en/` (esencja, jak to działa, wdrożenie Proxmox, kolektor z dwoma źródłami
+  i repliką, komendy, odzysk z repliki, pauza i blokada, instrukcja techniczna, przykłady configu), z linkiem do
+  wersji w drugim języku; README ma pełną tabelę dokumentów EN | PL (samo GUI jest jeszcze po polsku). Angielski przewodnik Proxmox zastąpiony tłumaczeniem
+  poprawionej wersji polskiej. Słownik: relacja = relation, dysk podłączony = connected; w angielskich tekstach
+  klawisze GUI z polskim napisem z ekranu. Przy okazji: ścieżka kopii to cel + adres źródła (nie etykieta), przykłady
+  pauzy na neutralnych nazwach, etykiety F zgodne z ekranem. Linki i kotwice sprawdzone skryptem sesji (istnienie plików, slugi nagłówków jak na GitHubie).
+
 - **Dokumentacja w dwóch językach i dwóch warstwach (`docs/split-pl-en`, paczka 2 z 3).** Przewodniki użytkownika
   są w `docs/pl/` (`JAK-TO-DZIALA`, `WDROZENIE-PROXMOX`, `WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA`, `KOMENDY`,
   `ODZYSK-Z-REPLIKI`, `PAUZA-I-BLOKADA`) i `docs/en/` (`DEPLOYMENT-PROXMOX`, `CONFIG-EXAMPLES`); nowa

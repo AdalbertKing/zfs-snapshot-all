@@ -1,5 +1,7 @@
 # zfs-snapshot-all — esencja
 
+Wersja angielska: [ESSENTIALS.md](../en/ESSENTIALS.md).
+
 Pakiet robi migawki ZFS, kopiuje je na drugi host (albo na dysk), przycina według retencji i pilnuje, czy
 kopie są świeże. Jeden host — **kolektor** — zarządza całością: zakłada relacje, trzyma kopie, wysyła maile.
 Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe GUI w konsoli serwera.
@@ -55,4 +57,4 @@ Wszystko w bashu, zadania chodzą z crona, a do codziennej pracy jest tekstowe G
 - [ODZYSK-Z-REPLIKI.md](ODZYSK-Z-REPLIKI.md) — odzysk z dysku repliki;
 - [PAUZA-I-BLOKADA.md](PAUZA-I-BLOKADA.md) — pauza i twarda blokada relacji;
 - [KOMENDY.md](KOMENDY.md) — ściąga poleceń;
-- instrukcja techniczna (wszystkie opcje silników, config, alerty): [../en/REFERENCE.md](../en/REFERENCE.md).
+- instrukcja techniczna (wszystkie opcje silników, config, alerty): [REFERENCJA.md](REFERENCJA.md).

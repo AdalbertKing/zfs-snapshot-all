@@ -1,5 +1,7 @@
 # Komendy — pełna lista
 
+Wersja angielska: [COMMANDS.md](../en/COMMANDS.md).
+
 Ten dokument jest **spisem tego, co pakiet potrafi**, ułożonym tak, jak się
 z niego korzysta, a nie alfabetycznie. Pełny zestaw flag każdego programu daje
 jego własne `-h` — tutaj jest to, **po co** dana komenda istnieje i **kiedy**

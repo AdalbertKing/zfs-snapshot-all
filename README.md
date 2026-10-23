@@ -30,17 +30,20 @@ translation is in preparation.
 
 ## Documentation
 
+Each topic exists in both languages: a one-page essentials file to start with, then the full guides and the
+technical reference.
+
 | | English | Polski |
 |---|---|---|
-| essentials (one page) | *in preparation* | [docs/pl/ESENCJA.md](docs/pl/ESENCJA.md) |
+| **essentials (one page)** | [docs/en/ESSENTIALS.md](docs/en/ESSENTIALS.md) | [docs/pl/ESENCJA.md](docs/pl/ESENCJA.md) |
+| how it works | [docs/en/HOW-IT-WORKS.md](docs/en/HOW-IT-WORKS.md) | [docs/pl/JAK-TO-DZIALA.md](docs/pl/JAK-TO-DZIALA.md) |
 | deployment on Proxmox | [docs/en/DEPLOYMENT-PROXMOX.md](docs/en/DEPLOYMENT-PROXMOX.md) | [docs/pl/WDROZENIE-PROXMOX.md](docs/pl/WDROZENIE-PROXMOX.md) |
-| collector, two sources, replica | *in preparation* | [docs/pl/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md](docs/pl/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md) |
-| how it works | *in preparation* | [docs/pl/JAK-TO-DZIALA.md](docs/pl/JAK-TO-DZIALA.md) |
-| command cheat sheet | *in preparation* | [docs/pl/KOMENDY.md](docs/pl/KOMENDY.md) |
-| restore from a replica | *in preparation* | [docs/pl/ODZYSK-Z-REPLIKI.md](docs/pl/ODZYSK-Z-REPLIKI.md) |
-| pause and hard disable | *in preparation* | [docs/pl/PAUZA-I-BLOKADA.md](docs/pl/PAUZA-I-BLOKADA.md) |
-| technical reference (all engine options, config, alerting) | [docs/en/REFERENCE.md](docs/en/REFERENCE.md) | *w przygotowaniu* |
-| config examples | [docs/en/CONFIG-EXAMPLES.md](docs/en/CONFIG-EXAMPLES.md) | *w przygotowaniu* |
+| collector, two sources, replica | [docs/en/DEPLOYMENT-COLLECTOR-TWO-SOURCES-REPLICA.md](docs/en/DEPLOYMENT-COLLECTOR-TWO-SOURCES-REPLICA.md) | [docs/pl/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md](docs/pl/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md) |
+| command cheat sheet | [docs/en/COMMANDS.md](docs/en/COMMANDS.md) | [docs/pl/KOMENDY.md](docs/pl/KOMENDY.md) |
+| restore from a replica | [docs/en/RESTORE-FROM-REPLICA.md](docs/en/RESTORE-FROM-REPLICA.md) | [docs/pl/ODZYSK-Z-REPLIKI.md](docs/pl/ODZYSK-Z-REPLIKI.md) |
+| pause and hard disable | [docs/en/PAUSE-AND-DISABLE.md](docs/en/PAUSE-AND-DISABLE.md) | [docs/pl/PAUZA-I-BLOKADA.md](docs/pl/PAUZA-I-BLOKADA.md) |
+| technical reference (engine options, config, alerting) | [docs/en/REFERENCE.md](docs/en/REFERENCE.md) | [docs/pl/REFERENCJA.md](docs/pl/REFERENCJA.md) |
+| config examples | [docs/en/CONFIG-EXAMPLES.md](docs/en/CONFIG-EXAMPLES.md) | [docs/pl/PRZYKLADY-CONFIGU.md](docs/pl/PRZYKLADY-CONFIGU.md) |
 | shipped retention templates | [profiles/README.md](profiles/README.md) | |
 | tests | [test/README.md](test/README.md) | |
 
