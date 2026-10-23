@@ -1097,7 +1097,18 @@ check "legacy: ...and once the revocation works, the pause is resumed" "0|3||man
 rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD"
 dr --allow-restore=lab1 >/dev/null
 out="$(ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1)"
-check "record: the withdrawal writes the account into the revocation record" "zfsbackup-pve9" \
+# The revocation record carries the account the retry needs: since REV-170 the grant itself
+# records it (RESTORE_GRANT_ACCOUNT), and only a legacy record gets RESTORE_REVOKE_ACCOUNT
+# written at withdrawal -- not both, so a later manifest change cannot override it (R2).
+check "record: the revocation record carries the delegated account (the grant's own, no second copy)" "zfsbackup-pve9|" \
+    "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)|$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)"
+# ...and a LEGACY record (no RESTORE_GRANT_ACCOUNT) still gets the account written at
+# withdrawal from the manifest, so its retry has it too.
+rm -f "$GRANTS"/* 2>/dev/null; rm -rf "$REVD"
+dr --allow-restore=lab1 >/dev/null
+sed -i '/^RESTORE_GRANT_ACCOUNT=/d' "$GRANTS/lab1"
+ZFS_FAIL_UNALLOW=1 dr --deny-restore=lab1 >/dev/null
+check "record: ...a legacy record gets the manifest's account written at withdrawal" "zfsbackup-pve9" \
     "$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$REVD/lab1" 2>/dev/null)"
 mv "$PEERS/lab1.conf" "$PEERS/lab1.conf.away"; : > "$ZFS_TRACE"
 out="$(dr --deny-restore=lab1)"; rc=$?
@@ -1417,6 +1428,52 @@ rm -f "$RC/grants/legacy"
 out="$(rcd --deny-restore=one)"; rc=$?
 check "REV-170 R1: ...once it is gone, the retry revokes, completes and resumes the writer" "0|no|-|-|-" \
       "$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_pz)"
+
+
+# ---------------------------------------------------------------------------
+# REV-20261023-170 R2: ACCOUNT DRIFT. The grant records the account that received the
+# delegation; a later import/rejoin may make the pairing manifest name another account.
+# The withdrawal must undo what was delegated -- the recorded account -- and leave the
+# other account's live grant alone. Stateful fake ZFS: scope and namespace tuples.
+# ---------------------------------------------------------------------------
+DR="$TMPD/drift"; mkdir -p "$DR/bin" "$DR/rel/one" "$DR/rel/two" "$DR/peers" "$DR/grants" "$DR/clients" "$DR/state" "$DR/caps"
+dr_manifest() { printf 'PEER_JOIN_ACCOUNT="%s"\nPEER_JOIN_GRANTED_DATASETS="%s"\n' "$2" "$3" > "$DR/peers/$1.conf"; }
+dr_manifest one backup-one tank/a
+dr_manifest two backup-two tank/b
+printf 'CLIENT_NAME=pa\nSTATE=active\nMANAGED_DATASETS=tank/a\n' > "$DR/clients/pa.conf"
+cat > "$DR/bin/zfs" <<'DRZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DR/trace"
+case "$1" in
+    list) exit 0 ;;
+    get) echo no; exit 0 ;;
+    create|mount) exit 0 ;;
+    allow|unallow)
+        key="$(printf '%s|%s' "$3" "$6" | tr / % )"
+        if [ "$1" = allow ]; then : > "$DR/caps/$key"; else rm -f "$DR/caps/$key"; fi
+        exit 0 ;;
+esac
+exit 0
+DRZFS
+chmod +x "$DR/bin/zfs"
+export DR
+drd() { PATH="$BIN:$DR/bin:$PATH" PAIR_GATE_STATE_DIR="$DR/rel" PEER_STATE_DIR="$DR/peers" RESTORE_GRANT_DIR="$DR/grants" \
+        CLIENTS_DIR="$DR/clients" RELATIONSHIPS_DIR="$DR/state" bash "$DEPLOY" "$@" 2>&1; }
+dr_cap() { [ -e "$DR/caps/$1|$(printf '%s' "$2" | tr / %)" ] && echo yes || echo no; }   # <account> <dataset>
+
+drd --allow-restore=one >/dev/null; drd --allow-restore=two >/dev/null
+check "REV-170 R2: grants under backup-one (tank/a) and backup-two (tank/b); one records backup-one; both tuples live" \
+      "backup-one|yes|yes|yes|yes|pa" \
+      "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$DR/grants/one")|$(dr_cap backup-one tank/a)|$(dr_cap backup-one tank/restore)|$(dr_cap backup-two tank/b)|$(dr_cap backup-two tank/restore)|$([ -e "$DR/state/pa/paused" ] && echo pa || echo -)"
+dr_manifest one backup-two tank/a     # the manifest now names another account
+: > "$DR/trace"
+out="$(drd --deny-restore=one)"; rc=$?
+check "REV-170 R2: deny(one) after the drift revokes backup-one's scope AND namespace, rc 0" "0|no|no" \
+      "$rc|$(dr_cap backup-one tank/a)|$(dr_cap backup-one tank/restore)"
+check "REV-170 R2: ...backup-two's live tuples untouched, no call names backup-two" "yes|yes|0" \
+      "$(dr_cap backup-two tank/b)|$(dr_cap backup-two tank/restore)|$(grep -c 'backup-two' "$DR/trace")"
+check "REV-170 R2: ...one's records gone, two still standing, one's writer resumed" "-|-|grant|-" \
+      "$([ -e "$DR/grants/one" ] && echo grant || echo -)|$([ -e "$DR/grants.revoking/one" ] && echo pending || echo -)|$([ -e "$DR/grants/two" ] && echo grant || echo -)|$([ -e "$DR/state/pa/paused" ] && echo pa || echo -)"
 
 
 echo "--------------------------------------------"
