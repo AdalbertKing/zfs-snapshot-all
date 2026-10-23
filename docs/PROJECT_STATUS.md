@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 2311be0efff9f429 -->
+<!-- status-covers-digest: 05035489c217cf5f -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -118,6 +118,34 @@
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
+- **Jedna zasada minut dla całego kolektora (`fix/schedule-own-minutes`, właściciel 2026-10-23: „zrobić” -- pięć
+  reguł).** (1) Wolna minuta liczy się ze wszystkich zadań pakietu na hoście (linie `zfs-job.sh` i silników w
+  crontabach oraz pola harmonogramów w configach), nie tylko z linii silników. (2) Datasety jednej relacji zdalnej idą jeden po drugim: pierwszy na
+  minucie relacji, każdy następny na następnej wolnej; porządki u celu od +20, u źródła od +40, też po kolei.
+  Relacja lokalna (X27) ma jedną linię kopii (snapget przechodzi listę po kolei) na wolnej minucie relacji, a
+  porządki każdego źródła na kolejnych wolnych -- zmierzone na pve10: plan dwóch źródeł miał kopię na :01 bloku i
+  wszystkie porządki na :21, teraz kopia :29, porządki u celu :49/:50, u źródła :09/:10. (3) Zmiana relacji nie
+  rusza minut już zainstalowanych sekcji (nowy dataset dostaje następną wolną). (4) Repliki: bez `--schedule` -- nowa
+  dostaje wolną godzinę nocną (22, 23, potem 0-5) z wolną minutą, istniejąca zostaje przy swojej;
+  `--schedule=auto` wybiera wolną godzinę także dla istniejącej; w GUI pozycja „codziennie w nocy, o wolnej godzinie”. (5) Porządki u źródła -- wpis niżej.
+  Przy okazji, z przejścia GUI na żywo na pve10 jak admin:
+  - okno relacji (Enter na F3) pokazywało rytm bloku, nie sekcji (pve9 „co godzinę (:01)” przy pobraniu o :13) i
+    nie pokazywało porządków u celu; teraz pola szczebla pod krótką nazwą, wiersze „lokalny prune” z sekcji
+    datasetu (nie dla lustra) i porządki u źródła po szczeblu -- pve9, cb i ab zgodne z cronem;
+  - U55: sprawdzenie źródła w kreatorze ma limit 5 s (był sufit crona 15 s); żywy host: sprawdzenie 0,2-0,4 s, wynik w
+    oknie po 0,7 s; martwy adres 3,3 s i okno „<host> nie odpowiada” z radą: sprawdź adres i ping zamiast rady o `ssh-keyscan`;
+  - U68: drzewo datasetów jest jedno w kreatorze relacji, zmianie relacji i kreatorze repliki (`basket_step`),
+    odzysk i przeglądanie używają tego samego `tree.py`; lista źródeł repliki nie pokazuje już puli stałego
+    nośnika, w której nie ma nic poza kopią (pve10 `replab`);
+  - kreator repliki: krok 1 ma „Wyjdź” jak kreator relacji, dopytania kroku 3 mówią „migawki: …”; usuwanie
+    relacji pisze stan po polsku („działa”, nie „active”);
+  - `runuser_can` bez roota odpowiada od razu „nie”, zamiast pytać `su` o hasło (suita jako `tester` na pve9
+    wisiała na tym 21 minut).
+  Testy (pve9, tester): `stagger` 41/0, `tui` 401/0, `localbackup` 163/1, `zfsbackup` 1018/1, `restoregrant` 210/0;
+  na main nowe przypadki padają (`tui` 398/3, `localbackup` „X27 local”, `stagger` 33/7 -- na gałęzi jest o jeden przypadek więcej). Błąd `localbackup` 102
+  pada też na main. W `zfsbackup` za każdym przebiegiem pada inny test (57, 58, delrel, editrel), choć warunki tego
+  testu w wyniku są spełnione; rozstrzyga CI.
+
 - **Porządki u źródła każdej relacji we własnej minucie (`fix/source-prune-stagger-x27`, właściciel 2026-10-23: „czy
   kolejne relacje szyte z tego samego szablonu … nie odpalały się w tej samej minucie”).** Zmierzone na pve10: wysyłki
   i porządki u celu relacji ab, cb, pve9 są rozrzucone (:15, :57, :13), ale porządki u ŹRÓDŁA wszystkich trzech szły o
@@ -126,8 +154,7 @@
   sekcja źródła relacji dostaje `prune_schedule_<szczebel>` z jej trzeciego slotu (pierwsza minuta wysyłki + 40,
   odstępy szczebli z bloku). Plan na żywo (pve10, `edit-relation ab --plan`): źródło ab :57 i 02:07 zamiast :21 i
   01:31. Działa przy tworzeniu i przebudowie relacji; istniejące relacje w labie dostaną to przy najbliższej zmianie.
-  Zostaje (zapisane): edycja relacji wybiera minutę od nowa (ab :15 -> :17); dwie repliki startują o 22:00. Test
-  `stagger` 35/0 (pve9); na main nowe przypadki padają.
+  Edycja relacji i godziny replik -- wpis wyżej. Test `stagger` 35/0 (pve9, na tamtej gałęzi); na main nowe przypadki padają.
 
 - **REV-20261023-170: cofnięcie jednego grantu Restore nie odbiera wspólnego `<pula>/restore` drugiemu
   (`fix/rev170-shared-restore-ns`).** Dwie relacje do jednego hosta zwykle mają jedno konto `zfsbackup-<host>`, a ZFS
