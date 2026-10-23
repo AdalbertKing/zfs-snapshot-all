@@ -4162,6 +4162,7 @@ class UI(object):
     # RAZU ze starymi danymi i napisem "odświeżam w tle…"; świeże dane wchodzą, gdy dojdą
     # (pętla curses pyta co 0,3 s). Fikstury i testy (offline/pliki) -- dalej od razu.
     BG_NOTE = u"   (odświeżam w tle…)"
+    BG_KEY_WAIT = 30   # s: tyle klawisz po oknie czeka na świeże dane, potem przepada (REV-172)
 
     def refresh_bg(self):
         if self.files.get("offline") or self.exec_log or any(self.files.get(k) for k in ("status", "jobs", "monitors")):
@@ -4919,11 +4920,23 @@ class UI(object):
         # liście, a świeże dane wróciły kursor na pierwszy wiersz i F7 znów trafił w starą
         # replikę. Więc KAŻDY klawisz po oknie czeka na świeże dane (ekran jest od razu,
         # pierwszy klawisz czeka najwyżej resztę odświeżania).
+        # REV-20261023-172: czekanie ma limit, a po limicie klawisz szedł dalej po STARYCH
+        # wierszach (Del na relacji sprzed zmiany). Teraz limit zamyka: klawisz przepada,
+        # ekran zostaje oznaczony jako nieświeży, wyjście (q/F12) zawsze działa.
+        # Wątek, który już skończył, a którego dane pętla jeszcze nie odebrała (pyta co 0,3 s),
+        # też się liczy: najpierw przyjęcie danych, potem klawisz (test REV-172 trafił Del w stary
+        # wiersz w tym okienku).
         if not self.window:
             bg = getattr(self, "_bg", None)
-            if bg is not None and bg[0].is_alive():
-                bg[0].join(30)
+            if bg is not None:
+                if bg[0].is_alive():
+                    bg[0].join(self.BG_KEY_WAIT)
                 self.poll_bg()
+                if getattr(self, "_bg", None) is not None and k not in ("q", "F12"):
+                    self.message = (u"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, "
+                                    u"ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie "
+                                    u"„odświeżam w tle”; F12 wychodzi.%s" % (self.BG_KEY_WAIT, self.BG_NOTE))
+                    return "stay"
         if self.window and self.window[0] == "prompt":
             obj = self.window[1]
             if k == "esc":

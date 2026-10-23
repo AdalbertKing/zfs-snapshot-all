@@ -5357,6 +5357,19 @@ else
 fi
 rm -rf "$POT"
 
+# REV-20261023-172: klawisz po oknie, gdy odświeżanie w tle trwa dłużej niż limit, nie może nic
+# zaplanować na STARYCH wierszach (Del, F7, strzałka); po wejściu świeżych danych ten sam Del
+# celuje w świeży wiersz -- także gdy wątek skończył, a pętla jeszcze nie odebrała danych.
+# Prawdziwe UI.key()/poll_bg z produkcji, podmieniony tylko collect (bez poleceń i hostów).
+sbg_out="$("$PY" "$REPO/test/tui/stale_bg_gate.py" "$TUI" 2>&1 | tr -d '\r')"
+sbg_bad="$(printf '%s\n' "$sbg_out" | grep -c '^bad ')"
+sbg_ok="$(printf '%s\n' "$sbg_out" | grep -c '^ok ')"
+if [ "$sbg_ok" -eq 6 ] && [ "$sbg_bad" -eq 0 ]; then
+    ok "odświeżanie w tle po limicie: Del/F7/strzałka nic nie planują na starych wierszach, po świeżych danych Del celuje w świeży (REV-172)"
+else
+    bad "odświeżanie w tle: klawisz na starych wierszach (REV-172)" "$sbg_out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
