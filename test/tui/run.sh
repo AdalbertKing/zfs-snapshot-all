@@ -805,7 +805,7 @@ else
 fi
 ZE="$(screen zadania enter --height 80)"
 if has "$ZE" '╔═ Zadanie: lab-vm101 ' && has "$ZE" 'zfsbackup-pve10@192.168.28.99:hdd/lab/vm-101' && has "$ZE" 'hdd/backups/192.168.28.99/hdd/lab/vm-101' \
-        && hasE "$ZE" 'Trzyma +24 godz.' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
+        && hasE "$ZE" 'Trzyma +-' && has "$ZE" '── CONFIG ' && has "$ZE" '── CRON ' && has "$ZE" 'snapget.sh' \
         && has "$ZE" '[dataset:hdd/backups/192.168.28.99/hdd/lab/vm-101]' && has "$ZE" '[template:profile__default__standard_hourly]' \
         && ! has "$ZE" '[template:profile__default__keep_monthly]'; then
     ok "zadania: Enter = szczegoly + CONFIG (TYLKO sekcja i szablon tego zadania) + CRON z prawdziwa linia (R4-6)"
@@ -2658,8 +2658,10 @@ ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_3
 ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
 # kampania 3 (2026-10-22, 80x24): sposob liczenia stoi PRZED opisem retencji, wiec przy
 # przycieciu wiersza nie ginie (full i m12w4d7h24-gfs wygladaly tak samo)
-ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("trzyma")
-ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("trzyma")
+ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("30 dni")
+ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("24 godz.")
+# kampania 3 (2026-10-23): pytanie okna mowi "Jak dlugo trzymac" -- na liscie same liczby
+ok = ok and "trzyma" not in d_30 and "trzyma" not in d_g
 sys.exit(0 if ok else 1)
 PYEOF
 then
@@ -5180,6 +5182,30 @@ then
     ok "okno: po zamknieciu linia komunikatu niesie ostatnie slowo okna (wt_end), albo zakonczone/z kodem N -- nigdy [rc=] z linia polecenia"
 else
     bad "okno: komunikat po zamknieciu okna" "rc=$?"
+fi
+
+# Kampania 3 (2026-10-23, na zywo pve10): panel "ab -- pobranie" mowil "Trzyma -", choc zadanie
+# niesie retain -H24 -- wiersz transferu ma w kolumnie "-" (retencja stoi w wierszu porzadkow),
+# a panel bral to "-". Prawdziwe job_panel_pairs na wierszu o ksztalcie z pve10.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+def trzyma(j, keep):
+    row = {"job": j, "keep": keep, "dir": "pull", "task": u"pobranie", "schedule": "15 * * * *"}
+    try:
+        pairs = zt.job_panel_pairs(row, {}, 1788960000, None)
+    except Exception as e:
+        return "EXC %s" % e
+    return dict((k, v) for k, v in pairs if k).get(u"Trzyma")
+j = {"direction": "pull", "scope": "hdd/backups/x/hdd/data", "src": "z@h:hdd/data", "retain": "-H24", "schedule": "15 * * * *"}
+a = trzyma(j, "-")
+b = trzyma(dict(j, retain=""), "-")
+sys.exit(0 if (a == u"24 godz." and b == u"-") else 1)
+PYEOF
+then
+    ok "panel zadania: transfer z retain -H24 mowi 'Trzyma 24 godz.', bez retain -- '-'"
+else
+    bad "panel zadania: Trzyma dla wiersza transferu" "rc=$?"
 fi
 
 echo "--------------------------------------------"
