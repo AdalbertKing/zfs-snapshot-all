@@ -1183,6 +1183,9 @@ NSP="receive,rollback,create,canmount,mountpoint,mount"
 ns_cap() { [ -e "$NS_CAPS/$1|$NSP|$(printf '%s' "$2" | tr / %)" ] && echo yes || echo no; }   # <account> <namespace>
 ns_unallows() { grep -c "^unallow -u $1 $NSP -- $2\$" "$NS_TRACE" 2>/dev/null; }             # <account> <namespace>
 ns_paused_by() { grep -rl "^PAUSED_BY_GRANT=\"$1\"" "$NS/state" 2>/dev/null | wc -l | tr -d ' '; }
+# <label> -> "grant|revoking|paused-by" for that label, checked after every boundary
+ns_rec() { printf '%s|%s|%s' "$([ -f "$NS/grants/$1" ] && echo grant || echo -)" \
+                    "$([ -f "$NS/grants.revoking/$1" ] && echo revoking || echo -)" "$(ns_paused_by "$1")"; }
 
 nsd --allow-restore=one >/dev/null; r1=$?
 nsd --allow-restore=two >/dev/null; r2=$?
@@ -1193,6 +1196,8 @@ check "REV-170: ...the grant file records the account it delegated to" "backup-s
       "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$NS/grants/one")"
 check "REV-170: ...shared tank/restore, other account's tank/restore, pool2/restore all effective" "yes|yes|yes" \
       "$(ns_cap backup-shared tank/restore)|$(ns_cap backup-other tank/restore)|$(ns_cap backup-shared pool2/restore)"
+check "REV-170: ...records after allow: four standing grants, nothing pending, nothing paused" "grant|-|0 grant|-|0 grant|-|0 grant|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
 
 out="$(nsd --deny-restore=one)"; rc=$?
 check "REV-170: deny(one) -> rc 0, grant two still on disk, shared tank/restore STILL effective, not unallowed" "0|yes|yes|0" \
@@ -1211,6 +1216,8 @@ check "REV-170: deny(two), the last owner on tank -> rc 0, tank/restore unallowe
       "$rc|$(ns_unallows backup-shared tank/restore)|$(ns_cap backup-shared tank/restore)"
 check "REV-170: ...and still the other account on tank and pool2 untouched" "yes|yes" \
       "$(ns_cap backup-other tank/restore)|$(ns_cap backup-shared pool2/restore)"
+check "REV-170: ...records after deny(two): one and two gone, three and four standing, nothing paused" "-|-|0 -|-|0 grant|-|0 grant|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
 
 out="$(nsd --deny-restore=three)"; rc=$?
 check "REV-170: deny(three), another account -> its own tuple goes, the same pool for backup-shared is not touched again" "0|no|1|1" \
@@ -1218,6 +1225,8 @@ check "REV-170: deny(three), another account -> its own tuple goes, the same poo
 out="$(nsd --deny-restore=four)"; rc=$?
 check "REV-170: deny(four), another pool -> pool2/restore goes, nothing on tank" "0|no|1" \
       "$rc|$(ns_cap backup-shared pool2/restore)|$(ns_unallows backup-shared pool2/restore)"
+check "REV-170: ...records after deny(three) and deny(four): none left, nothing paused" "-|-|0 -|-|0 -|-|0 -|-|0" \
+      "$(ns_rec one) $(ns_rec two) $(ns_rec three) $(ns_rec four)"
 
 # A pending revocation still counts as an owner: two's withdrawal fails (unallow refused)
 # and stays in grants.revoking, so one's later withdrawal keeps the namespace for it.
