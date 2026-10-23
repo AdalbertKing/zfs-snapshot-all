@@ -5182,6 +5182,22 @@ else
     bad "okno: komunikat po zamknieciu okna" "rc=$?"
 fi
 
+# Kampania 3 (2026-10-23, punkt 3): kreator kopii/migawek lokalnych proponowal nosniki replik
+# (gwlive, replab) jako zrodla. drop_replica_media jest teraz w basket-lib.sh i kreator lokalny
+# go wola: nosnik wymienny znika cala pula, staly -- swoim katalogiem z poddrzewem.
+DRM="$(mktemp -d)"
+printf '%s' '{"datasets":[{"name":"gwlive"},{"name":"gwlive/data"},{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/repl"},{"name":"hdd/repl/x"},{"name":"hdd/replika"}]}' > "$DRM/ds.json"
+printf '%s' '{"replicas":[{"name":"usb","dst":"gwlive/replica","media":"removable"},{"name":"st","dst":"hdd/repl","media":"fixed"}]}' > "$DRM/rep.json"
+DRM_STUB="$DRM/whiptail"; printf '#!/bin/sh
+exit 0
+' > "$DRM_STUB"; chmod +x "$DRM_STUB"
+drm_left="$(WHIPTAIL="$DRM_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && . '$REPO/tui/basket-lib.sh' && drop_replica_media '$DRM/ds.json' '$DRM/rep.json'" 2>&1; "$PY" -c 'import json,sys; print(" ".join(x["name"] for x in json.load(open(sys.argv[1]))["datasets"]))' "$DRM/ds.json")"
+if [ "$drm_left" = "hdd hdd/data hdd/replika" ] && grep -q 'drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"' "$REPO/tui/new-relation.sh"; then
+    ok "kreator lokalny: nosniki replik nie sa zrodlem -- wymienny cala pula, staly katalogiem (hdd/replika zostaje)"
+else
+    bad "kreator lokalny: nosniki replik na liscie zrodel" "zostalo: $drm_left"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
