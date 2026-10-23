@@ -10494,6 +10494,15 @@ if [ "$im_rc" -ne 0 ] && [ ! -s "$IM/calls.log" ]; then
 else
     bad "importrel U62: bad ACTIVE_ENDPOINT refused" "rc=$im_rc" "$(cat "$IM/calls.log")"
 fi
+# Kampania 3 (2026-10-23, punkt 5): plan importu wypisywal argumenty bez cudzyslowow --
+# skopiowana linia z regexem (a|b) i cudzyslowem nie dawala tego samego polecenia. Teraz %q.
+im_run "$IM/ksiegowosc.json"; im_rc=$?
+im_q="$(printf '%q' '--exclude-child=(a|b)[0-9]\,x"y')"
+if grep -qF -- "$im_q" "$WORK/im.out" && ! grep -qF -- '      --exclude-child=(a|b)' "$WORK/im.out"; then
+    ok "importrel: the plan prints each argument shell-quoted (%q), so a copied line is the same command"
+else
+    bad "importrel: plan argv quoted" "want: $im_q" "$(grep -- 'exclude-child' "$WORK/im.out" "$WORK/im.err" 2>/dev/null | head -3)"
+fi
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
 im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
 if [ "$im_rc" -eq 0 ] && grep -qF -- "$im_want" "$IM/calls.log" \
