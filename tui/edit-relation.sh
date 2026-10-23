@@ -470,18 +470,24 @@ srcret_words() {
 import json, sys
 W = (("hourly", "godzinowe"), ("daily", "dobowe"), ("weekly", "tygodniowe"), ("monthly", "miesięczne"), ("yearly", "roczne"))
 d = json.load(open(sys.argv[1], encoding="utf-8"))
+# REV-20261023-171: "tyle samo" only when BOTH sides' retention-bearing tiers match as
+# whole sets -- a tier dropped on the source (set-tiers --drop-src-tier=daily) left the
+# target's daily unchecked, and the card said "tyle samo co w kopii" for hourly only.
+def held(m):   # only the tiers that retain something
+    return {n: k for n, k in m.items() if k[0] or k[1]}
 tg = {t.get("name"): (t.get("keep") or "", t.get("retain") or "") for t in d.get("target") or []}
-out, same = [], True
-for t in d.get("source") or []:
-    k = (t.get("keep") or "", t.get("retain") or "")
-    if not (k[0] or k[1]):
-        continue
-    if tg.get(t.get("name")) != k:
-        same = False
-    n = t.get("name") or "?"
+sr = {t.get("name") or "?": (t.get("keep") or "", t.get("retain") or "") for t in d.get("source") or []}
+tg, sr = held(tg), held(sr)
+out = []
+for n, k in sr.items():
     w = next((v for s, v in W if n.endswith(s)), n)
     out.append("%s %s" % (w, k[0] or k[1]))
-print("tyle samo co w kopii" if same or not out else ", ".join(out))
+if sr == tg:
+    print("tyle samo co w kopii")
+elif not sr:
+    print("bez retencji (źródło nie przycina migawek)")
+else:
+    print(", ".join(out))
 PYEOF
 }
 # Karta (U65, pve10 2026-10-22): czekająca zmiana retencji źródła słowami -- karta mówiła
