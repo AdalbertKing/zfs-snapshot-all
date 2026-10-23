@@ -5431,11 +5431,11 @@ schedule_take() {   # <start minute, may exceed 59> -> SCHEDULE_PICKED (0-59), r
     for i in $(seq 0 59); do
         probe=$(( (start + i) % 60 ))
         case "$taken" in *" $probe "*) continue ;; esac
-        SCHEDULE_RESERVED="$SCHEDULE_RESERVED $probe"
+        SCHEDULE_RESERVED="${SCHEDULE_RESERVED:-} $probe"
         SCHEDULE_PICKED="$probe"; return 0
     done
     log "schedule: all 60 minutes on this host already start a job -- sharing minute $start" >&2
-    SCHEDULE_RESERVED="$SCHEDULE_RESERVED $start"
+    SCHEDULE_RESERVED="${SCHEDULE_RESERVED:-} $start"
     SCHEDULE_PICKED="$start"
 }
 
@@ -7112,11 +7112,11 @@ relblock_spread_source_prunes() {   # <workfile> <name>
     local -A _srcm=()
     local _first_m=""
     while IFS=$'\t' read -r scope m; do
-        [ -n "$scope" ] && _srcm[$scope]="$m"
+        [ -n "$scope" ] && [ "$scope" != - ] && _srcm[$scope]="$m"
         [ -n "$_first_m" ] || _first_m="$m"
     done < <(awk -v want="$name" '
         function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
-        function out() { if (ds && rel && mm != "") printf "%s\t%s\n", src, mm }
+        function out() { if (ds && rel && mm != "") printf "%s\t%s\n", (src == "" ? "-" : src), mm }
         /^[ \t]*\[/ { out(); ds = (trim($0) ~ /^\[dataset:/); rel = 0; src = ""; mm = ""; next }
         ds { t = trim($0)
              if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); rel = (v == want) }
