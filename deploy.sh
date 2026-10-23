@@ -2886,6 +2886,7 @@ do_allow_restore() {
     # live permission is the failure this whole mechanism is about.
     [ -d "$PAIR_GATE_STATE_DIR/$label" ] \
         || die "no relationship '$label' is enrolled on this host ($PAIR_GATE_STATE_DIR/$label does not exist) -- a grant for a relationship that does not exist would be a permission nobody can see. Check the label with: ls $PAIR_GATE_STATE_DIR"
+    restore_grant_lock "--allow-restore=$label"
 
     # WHO and WHAT, from the file that already recorded them: the peer manifest
     # this host wrote when it was joined. Same source as the backup delegation,
@@ -3056,6 +3057,23 @@ restore_grant_rekey() {   # <scope datasets> -> log lines; never fails the withd
     return 0
 }
 
+# ONE GRANT TRANSACTION AT A TIME (REV-20261023-170 R1). Two withdrawals of grants that
+# share <pool>/restore each moved their own record to grants.revoking, each saw the other
+# as a pending owner, both skipped the unallow and both reported success -- leaving the
+# capability delegated with no record at all. Every --allow-restore / --deny-restore takes
+# this lock BEFORE it reads or moves a record and holds it to exit (fd 9; the kernel drops
+# it when the process dies, so a crashed holder blocks nobody -- its pending record stays
+# for the retry). One lock for all labels: the namespace is shared across labels.
+restore_grant_lock() {   # <what, for the message>
+    local lf="${RESTORE_GRANT_DIR}.lock"
+    mkdir -p "${lf%/*}" 2>/dev/null || :
+    command -v flock >/dev/null 2>&1 \
+        || die "$1: flock(1) is missing, so this cannot be serialized with another grant or withdrawal -- nothing was changed. Install util-linux."
+    exec 9>>"$lf" || die "$1: could not open the lock $lf -- nothing was changed"
+    flock -w "${RESTORE_GRANT_LOCK_WAIT:-300}" 9 \
+        || die "$1: another --allow-restore/--deny-restore on this host still holds $lf -- nothing was changed; run it again when that one has finished"
+}
+
 # THE RESTORE NAMESPACE IS SHARED (REV-20261023-170). Every scope on a pool maps to the
 # same <pool>/restore, and ZFS keeps ONE permission set per (dataset, account) -- two
 # relationships to one peer (one zfsbackup-<peer> account, disjoint scopes on one pool)
@@ -3080,8 +3098,13 @@ restore_ns_other_owners() {   # <label being withdrawn> <account> <namespace> ->
             [ -n "$_a" ]  || _a="$(printf '%s\n' "$_mf" | sed -n 1p)"
             [ -n "$_ds" ] || _ds="$(printf '%s\n' "$_mf" | sed -n 2p)"
         fi
-        [ -n "$_a" ] && [ "$_a" = "$acct" ] || continue
-        restore_grant_namespaces "$_ds" | grep -qxF -- "$ns" && printf '%s\n' "$_l"
+        # Known to be another account, or a scope on another pool: not an owner.
+        [ -n "$_a" ] && [ "$_a" != "$acct" ] && continue
+        [ -n "$_ds" ] && ! restore_grant_namespaces "$_ds" | grep -qxF -- "$ns" && continue
+        # Account or scope unknown and it may share this namespace (REV-170 R1, point 4):
+        # not silently "not an owner" -- reported with '?', and the caller holds back.
+        if [ -z "$_a" ] || [ -z "$_ds" ]; then printf '?%s\n' "$_l"; continue; fi
+        printf '%s\n' "$_l"
     done
     return 0
 }
@@ -3091,6 +3114,7 @@ do_deny_restore() {
     [ "$(id -u)" -eq 0 ] || die "--deny-restore must run as root on this machine"
     restore_grant_label_ok "$label" \
         || die "--deny-restore='$label' is not a valid relationship label"
+    restore_grant_lock "--deny-restore=$label"
     local gpath; gpath="$(restore_grant_path "$label")"
     local rpath; rpath="$(restore_revoke_path "$label")"
     if [ -f "$gpath" ]; then
@@ -3172,6 +3196,14 @@ do_deny_restore() {
             # REV-20261023-170: the last owner takes it back; while another grant of
             # the same account still needs this namespace, the delegation stays.
             _rd_others="$(restore_ns_other_owners "$label" "$RESTORE_GRANT_ACCOUNT" "$_rd_ds" | tr '\n' ' ' | sed 's/ $//')"
+            case " $_rd_others " in *" ?"*)
+                # Fail closed on ambiguity: the capability may still be in use, so it is
+                # not removed -- and this withdrawal is NOT reported done; its record stays
+                # pending and its writers stay paused until the unknown grant is resolved.
+                warn "  pending:      $RESTORE_NS_PERMS for '$RESTORE_GRANT_ACCOUNT' on $_rd_ds NOT revoked -- grant(s) $(printf '%s' "$_rd_others" | tr ' ' '\n' | sed -n 's/^?//p' | tr '\n' ' ')record no account or scope, so it cannot be told whether they still need it. Withdraw them, or add RESTORE_GRANT_ACCOUNT/RESTORE_GRANT_DATASETS to their records, then run this again."
+                _rd_open=1
+                continue ;;
+            esac
             if [ -n "$_rd_others" ]; then
                 log "  kept:         $RESTORE_NS_PERMS for '$RESTORE_GRANT_ACCOUNT' on $_rd_ds -- still needed by grant(s): $_rd_others"
                 continue
