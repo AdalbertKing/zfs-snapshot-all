@@ -405,7 +405,7 @@ while :; do
     case "$step" in
     1)  # nazwa
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
-        wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
+        wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Wyjdź" \
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
            || {
                 # Kampania 3 (2026-10-23): Esc w kroku 1 wychodził bez pytania. Jak w kreatorze
