@@ -395,7 +395,7 @@ else
 fi
 # TAB: kursor na pary; Enter na parze otwiera OKNO tej pary (R4-6), nie skok na F2.
 TP="$(screen relacje down,tab)"
-if has "$TP" 'm migawki   Enter pełne okno   ←→ zakładki   Esc wróć   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
+if has "$TP" 'm migawki   Enter pełne okno   ←→ zakładki   Esc wraca   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
     ok "relacje: Tab przenosi kursor na datasety, prawy panel pokazuje zaznaczony dataset (U21); na ramce m migawki (U38)"
 else
     bad "relacje: Tab" "$TP"
@@ -867,7 +867,7 @@ fi
 A="$(act down,F8)"
 B="$(act down,F8,w --height 50)"
 # U7 (właściciel 10-18): klawisz wariantu na RAMCE obok "t wykonaj", nie w treści okna.
-if has "$A" 't wykonaj   w wyłącz na źródle   Tab do linii poleceń' && ! hasE "$A" '║ *[a-z] = ' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
+if has "$A" 't wykonuje   w wyłącz na źródle   Tab do linii poleceń' && ! hasE "$A" '║ *[a-z] = ' && has "$B" 'POTWIERDZENIE: Wyłącz relację lab-ct201' \
    && has "$B" 'disable-client' && has "$B" 'zamek na źródle' && has "$B" 'F8 na tej relacji -> Włącz (enable-client).' && [ ! -s "$XL" ]; then
     ok "akcje: F8 -> 'w' (na ramce, nie w treści) pokazuje Wyłącz (disable-client) z wyjaśnieniem i drogą powrotu, niczego nie uruchamia"
 else
@@ -1182,7 +1182,7 @@ else
 fi
 A="$(act down,enter)"
 # Odzysk przeszedł na F11 (2026-10-18); U65: w stopce 'e zmień', 's' i 'c'.
-if has "$A" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka'; then
+if has "$A" 'e zmienia   s jako szablon   c edycja ręczna   Esc zamyka'; then
     ok "akcje: ...okno relacji mowi o tym w stopce ('e zmień'), bez 'p przywróć'"
 else
     bad "akcje: stopka okna relacji bez 'e'" "$(printf '%s' "$A" | tail -3)"
@@ -1191,7 +1191,7 @@ fi
 # następny krok cyklu jako zwykłe potwierdzenie; 't' go wykonuje. Aktywna -- nic.
 A="$(act enter)"
 B="$(act enter,d)"
-if has "$A" 'd dokończ   e zmień' && has "$B" 'POTWIERDZENIE: Dokończ relację duplikat' && has "$B" 'seed duplikat --yes' && [ ! -s "$XL" ]; then
+if has "$A" 'd dokańcza   e zmienia' && has "$B" 'POTWIERDZENIE: Dokończ relację duplikat' && has "$B" 'seed duplikat --yes' && [ ! -s "$XL" ]; then
     ok "akcje: okno relacji w stanie '1. kopia' -- stopka 'd dokończ', 'd' pokazuje 'seed NAZWA --yes' i niczego nie uruchamia"
 else
     bad "akcje: d dokończ (podgląd)" "$(printf '%s' "$A" | tail -3)" "$B"
@@ -1203,7 +1203,7 @@ else
     bad "akcje: d dokończ + t" "$(cat "$XL")"
 fi
 A="$(act down,enter,d)"
-if [ ! -s "$XL" ] && ! has "$A" 'POTWIERDZENIE' && ! has "$A" 'd dokończ'; then
+if [ ! -s "$XL" ] && ! has "$A" 'POTWIERDZENIE' && ! has "$A" 'd dokańcza'; then
     ok "akcje: na relacji AKTYWNEJ 'd' nic nie robi i stopka o nim nie mówi"
 else
     bad "akcje: d na aktywnej" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
@@ -1633,7 +1633,7 @@ else
     bad "relacje: monitor pary snaponly" "$SO3"
 fi
 SOE="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" $SOA --screen relacje --width 120 --height 34 --keys enter 2>&1)"
-if has "$SOE" 'e zmień   s jako szablon   c edycja ręczna   Esc zamyka' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
+if has "$SOE" 'e zmienia   s jako szablon   c edycja ręczna   Esc zamyka' && ! has "$SOE" 'p przywróć' && ! hasE "$SOE" 'Zmiana +'; then
     ok "relacje: okno relacji snaponly -- 'e zmień' jak w kazdej relacji, bez 'p przywróć' (nie ma kopii)"
 else
     bad "relacje: stopka okna snaponly" "$SOE"
@@ -1809,7 +1809,7 @@ else
     bad "nosniki: e -> add-replica NAZWA --ask" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
 fi
 A="$(nact enter)"
-if has "$A" 'e zmień replikę'; then
+if has "$A" 'e zmienia replikę'; then
     ok "nosniki: ...okno repliki mowi o tym w stopce"
 else
     bad "nosniki: stopka okna repliki" "$(printf '%s' "$A" | tail -3)"
@@ -1914,7 +1914,7 @@ C="$(: > "$XL"; screen relacje "down,F8" --exec-log "$XL")"
 # POD OKNEM WIDAC LINIE POLECEN z komenda zlozona przez okno, i pasek F.
 # (Dluga komenda jest ucieta od poczatku -- widac jej koniec, jak przy pisaniu.)
 if printf '%s\n' "$C" | tail -2 | head -1 | grep -q "pause-client lab-ct201 '--reason=z TUI" \
-   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" '═ t wykonaj   ' && has "$C" 'Tab do linii poleceń   Esc wróć'; then
+   && printf '%s\n' "$C" | tail -1 | grep -q '12Wyj\|F12' && has "$C" '═ t wykonuje   ' && has "$C" 'Tab do linii poleceń   Esc wraca'; then
     ok "linia: pod oknem potwierdzenia zostaje linia polecen z jego komenda i pasek klawiszy; stopka 't wykonaj   Tab do linii poleceń'"
 else
     bad "linia: linia polecen pod oknem" "$(printf '%s\n' "$C" | tail -3)"

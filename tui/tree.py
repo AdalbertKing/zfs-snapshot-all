@@ -360,7 +360,7 @@ class Tree(object):
         elif idx >= self.top + lh:
             self.top = idx - lh + 1
         # "legend" w SPEC: okno odzysku (tui/restore.sh) nic nie kopiuje -- odtwarza.
-        body = [self.spec.get("legend") or (u" Enter wybiera. · = sama gałąź (nic do wybrania), → rozwija" if self.single
+        body = [self.spec.get("legend") or (u" · = sama gałąź (nic do wybrania)" if self.single
                                             else u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie")]
         if self.show_mode:
             body.append(u" Sposób: cała gałąź atomowo (-r)" if self.recursion == "atomic"
@@ -383,8 +383,8 @@ class Tree(object):
         title = u" %s " % (self.spec.get("title") or u"Wybór datasetów")
         if len(title) > w - 4:
             title = title[:max(1, w - 6)] + u"… "
-        hint = (u"Enter wybierz  →/+ rozwiń  ←/- zwiń  Esc Wstecz" if self.single else
-                u"Spacja zaznacz  →/+ rozwiń  ←/- zwiń  Enter Dalej  Esc Wstecz" + (u"  S sposób" if self.show_mode else u""))
+        hint = (u"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca" if self.single else
+                u"Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej  Esc wraca" + (u"  S sposób" if self.show_mode else u""))
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + l[:iw].ljust(iw) + u"│" for l in body] + [bot]
