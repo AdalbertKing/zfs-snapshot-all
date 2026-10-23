@@ -63,7 +63,7 @@ Bash reads a script incrementally while executing it. Editing a suite mid-run
 corrupts it from that offset. The same holds for a config another process is
 sourcing, and for a branch a running job has checked out.
 
-*Evidence: E11, E20, E33, E81, E89, E91 (2026-10-19: the same shortcut the day after E89), E100.*
+*Evidence: E11, E20, E33, E81, E89, E91 (2026-10-19: the same shortcut the day after E89), E100, E101 (the day after E100).*
 
 ### R6 — A green result is evidence only if you know what it should have printed
 
@@ -1921,6 +1921,21 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E101 — the branch switched under a running merge job again, the day after E100 (2026-10-23, R5)
+**2026-10-23, `fix/local-raw-rekey` (#791) and `fix/source-prune-stagger-x27`.**
+
+*Genesis.* The local-raw-rekey job was running in the shared checkout: gates, commit, push, PR,
+wait-merge. While it ran I ran `git switch -c fix/source-prune-stagger-x27` in that same
+checkout. The job had already committed and pushed, and only its read-only wait-merge was
+left, so nothing landed on the wrong branch. That was luck, not method.
+
+*Cause.* R5, and E100's own rule (parallel work goes into its own `git worktree` in the scratchpad) not applied one
+day later. The owner's new question arrived while the job ran, and I reached for the
+checkout I had open.
+
+*Rule.* R5, unchanged, applied at the moment a NEW request arrives: if any background job in
+this session still uses the shared checkout, new work starts in a scratchpad worktree.
 
 ### E100 — a branch switched under a background job still running its gates (2026-10-22, R5, repeat of E89/E91)
 **2026-10-22, campaign 3, `fix/help-wrap` and `fix/listjobs-schedule`.**
