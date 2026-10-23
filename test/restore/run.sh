@@ -2771,6 +2771,60 @@ else
     bad "pause coverage: replica and comment lines counted" "$pc_out"
 fi
 
+# ---- A LOCAL raw recovery gets its key at once (owner 2026-10-23) ---------------
+# "Z punktu widzenia admina... jaka jest różnica czy to zdalnie, czy lokalnie":
+# restore_rekey_local runs lib-rekey.sh on what landed ON THIS MACHINE, with this host's
+# key files; a remote landing (acct@host:ds) is deploy.sh's, at --deny-restore. A
+# file-backed fake zfs keeps properties and keys.
+LR="$WORK/localrekey"; rm -rf "$LR"; mkdir -p "$LR/bin" "$LR/p"
+lr_ds() {   # <dataset> <encryption> <encryptionroot> <keystatus> <keylocation> <key it opens with>
+    local d; d="$LR/p/$(printf '%s' "$1" | tr / %)"; mkdir -p "$d"
+    printf '%s' "$2" > "$d/encryption"; printf '%s' "$3" > "$d/encryptionroot"
+    printf '%s' "$4" > "$d/keystatus";  printf '%s' "$5" > "$d/keylocation"; printf '%s' "$6" > "$d/key"
+}
+lr_get() { cat "$LR/p/$(printf '%s' "$1" | tr / %)/$2" 2>/dev/null; }
+lr_ds hdd/enc       aes-256-gcm hdd/enc       available   file:///k1 file:///k1
+lr_ds hdd/enc/docs2 aes-256-gcm hdd/enc/docs2 unavailable prompt     file:///k1
+cat > "$LR/bin/zfs" <<'LRZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$LR/trace"
+for a in "$@"; do last="$a"; done
+pd() { printf '%s/p/%s' "$LR" "$(printf '%s' "$1" | tr / %)"; }
+case "$1" in
+    get)
+        case " $* " in *" -t filesystem,volume keylocation"*)
+            for d in "$LR"/p/*; do cat "$d/keylocation"; echo; done; exit 0 ;; esac
+        cat "$(pd "$last")/$5" 2>/dev/null || exit 1; echo; exit 0 ;;
+    list)
+        for d in "$LR"/p/*; do n="$(basename "$d" | tr % /)"
+            case "$n" in "$last"|"$last"/*) echo "$n" ;; esac; done | sort; exit 0 ;;
+    load-key)
+        [ "$(cat "$(pd "$last")/key")" = "$3" ] || exit 255
+        printf available > "$(pd "$last")/keystatus"; exit 0 ;;
+    change-key)
+        par="${last%/*}"; cp "$(pd "$par")/encryptionroot" "$(pd "$last")/encryptionroot"; exit 0 ;;
+esac
+exit 0
+LRZFS
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "$LR/bin/id"
+chmod +x "$LR/bin/zfs" "$LR/bin/id"
+lr_out="$(
+    export LR PATH="$LR/bin:$PATH"
+    log() { shift; printf '%s\n' "$*"; }
+    # shellcheck disable=SC1091
+    . "$REPO/lib-rekey.sh"
+    eval "$(awk 'index($0, "restore_rekey_local() {")==1 {f=1} f{print} f&&/^[}]$/{exit}' "$ZB")"
+    RESTORE_LANDED=("hdd/enc/docs2" "zfsbackup-pve10@192.168.28.99:hdd/restore/far")
+    restore_rekey_local
+)"
+if [ "$(lr_get hdd/enc/docs2 keystatus)|$(lr_get hdd/enc/docs2 encryptionroot)" = "available|hdd/enc" ] \
+   && printf '%s' "$lr_out" | grep -q 'restore: key: hdd/enc/docs2 opened and now inherits the key of hdd/enc' \
+   && ! grep -q 'hdd/restore/far' "$LR/trace"; then
+    ok "local raw recovery: the landed dataset is opened with this host's key and inherits hdd/enc at once; a remote landing is left to --deny-restore"
+else
+    bad "local raw recovery: key at once" "$(lr_get hdd/enc/docs2 keystatus)|$(lr_get hdd/enc/docs2 encryptionroot)" "$lr_out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
