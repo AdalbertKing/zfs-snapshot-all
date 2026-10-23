@@ -5193,7 +5193,11 @@ spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib
 def trzyma(j, keep):
     row = {"job": j, "keep": keep, "dir": "pull", "task": u"pobranie", "schedule": "15 * * * *"}
     try:
-        pairs = zt.job_panel_pairs(row, {}, 1788960000, None)
+        class E(dict):           # pusty slownik, a wolany jak metoda -- falsz (data.failed(...))
+            def __call__(self, *a, **k): return False
+        class D(object):
+            def __getattr__(self, n): return E()
+        pairs = zt.job_panel_pairs(row, D(), 1788960000, None)
     except Exception as e:
         return "EXC %s" % e
     return dict((k, v) for k, v in pairs if k).get(u"Trzyma")
