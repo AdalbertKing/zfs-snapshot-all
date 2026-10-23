@@ -77,6 +77,12 @@ LB_DEFAULT_CLIENTS="$CLIENTS_DIR"
 
 # shellcheck disable=SC1090
 source "$ZB"
+# The account candidates come from the host's cron spool too, which root can read and
+# an ordinary user cannot: as root, pve9's real bkp/zfsbackup crontabs became candidates,
+# the crontab stub "claims" claimed.conf for every account, and 29 cases met "already
+# drives bkp's managed crontab block". The spool is a plain array set at source time, so
+# it is pointed at an empty fixture directory here, after sourcing.
+mkdir -p "$LB_HOST/spool"; CRON_SPOOL_DIRS=("$LB_HOST/spool")
 
 # X27 (owner 2026-10-14): every local copy is a named relationship -- a call that names
 # none gets --name=lb here, and its record (if it installs) goes to a fresh directory
@@ -547,11 +553,11 @@ if [ "$iso1r" -eq 0 ] && [ "$iso2r" -eq 0 ] && ! printf '%s' "$iso2" | grep -q "
 else
     bad "REV-169: one-shot record isolation" "rc=$iso1r/$iso2r default=[$(ls -A "$LB_DEFAULT_CLIENTS")] $(printf '%s' "$iso2" | grep -m1 'already exists\|FATAL')"
 fi
-iso_paths="$CLIENTS_DIR $RELATIONSHIPS_DIR $PEER_STATE_DIR $PROFILE_USER_ROOT $MEDIA_KEY_DIR $SETTINGS_FILE $SERVER_CONF $CRON_LOCK_DIR"
+iso_paths="$CLIENTS_DIR $RELATIONSHIPS_DIR $PEER_STATE_DIR $PROFILE_USER_ROOT $MEDIA_KEY_DIR $SETTINGS_FILE $SERVER_CONF $CRON_LOCK_DIR ${CRON_SPOOL_DIRS[*]}"
 iso_out=""
 for iso_p in $iso_paths; do case "$iso_p" in "$WORK"/*) ;; *) iso_out="$iso_out $iso_p" ;; esac; done
 if [ -z "$iso_out" ]; then
-    ok "REV-169: every host path the sourced product uses (clients, relationships, peers, profiles, keys, settings, server.conf, locks) is under the fixture"
+    ok "REV-169: every host path the sourced product uses (clients, relationships, peers, profiles, keys, settings, server.conf, locks, cron spool) is under the fixture"
 else
     bad "REV-169: host paths under the fixture" "outside \$WORK:$iso_out"
 fi
