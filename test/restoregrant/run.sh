@@ -1336,11 +1336,15 @@ case "$1" in
     get) echo no; exit 0 ;;
     create|mount) exit 0 ;;
     allow|unallow)
-        # The barrier: once armed, the first unallow on tank/a stops here until released.
-        if [ "$1" = unallow ] && [ "$6" = tank/a ] && [ -e "$RC/barrier" ]; then
-            rm -f "$RC/barrier"; echo "$$ $PPID" > "$RC/held"
-            i=0; while [ ! -e "$RC/release" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
-        fi
+        # The barrier: once armed, the first scope unallow of EACH grant (tank/a, tank/b)
+        # stops here until released -- after its record moved, before it looks at the others.
+        case "$6" in tank/a|tank/b)
+            h="$RC/held.$(printf '%s' "$6" | tr / %)"
+            if [ "$1" = unallow ] && [ -e "$RC/barrier" ] && [ ! -e "$h" ]; then
+                echo "$$ $PPID" > "$h"
+                i=0; while [ ! -e "$RC/release" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+            fi ;;
+        esac
         key="$(printf '%s|%s|%s' "$3" "$4" "$6" | tr / % )"
         if [ "$1" = allow ]; then : > "$RC/caps/$key"; else rm -f "$RC/caps/$key"; fi
         exit 0 ;;
@@ -1357,11 +1361,13 @@ rc_un()  { grep -c "^unallow -u backup-shared $RCP -- tank/restore\$" "$RC/trace
 rc_wait() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i+1)); done; [ -e "$1" ]; }
 
 rcd --allow-restore=one >/dev/null; rcd --allow-restore=two >/dev/null
-: > "$RC/trace"; rm -f "$RC/release" "$RC/held"; : > "$RC/barrier"
+: > "$RC/trace"; rm -f "$RC/release" "$RC"/held.*; : > "$RC/barrier"
 ( rcd --deny-restore=one > "$RC/A.out"; echo $? > "$RC/A.rc" ) &
-rc_wait "$RC/held"; rc_held=$?
+rc_wait "$RC/held.tank%a"; rc_held=$?
 ( rcd --deny-restore=two > "$RC/B.out"; echo $? > "$RC/B.rc" ) &
-sleep 2
+# Unserialized, B reaches its own barrier too (both records pending, neither has looked):
+# the interleaving of the review. Serialized, B waits on the lock and never gets there.
+i=0; while [ ! -e "$RC/held.tank%b" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i+1)); done
 rc_b_blocked="$([ -f "$RC/grants/two" ] && [ ! -e "$RC/grants.revoking/two" ] && echo yes || echo no)"
 : > "$RC/release"; wait
 check "REV-170 R1: while A withdraws, B waits on the lock -- its grant is not even moved yet" "0|yes" "$rc_held|$rc_b_blocked"
@@ -1372,12 +1378,13 @@ check "REV-170 R1: ...and no grant or pending record is left" "0|0" \
 
 # The lock holder dies mid-withdrawal: the kernel drops the lock, the record stays pending
 # (REV-147), nothing was revoked, and the retry completes it.
-rm -rf "$RC/grants" "$RC/grants.revoking" "$RC/caps"/*; : > "$RC/trace"; rm -f "$RC/release" "$RC/held"
+rm -rf "$RC/grants" "$RC/grants.revoking" "$RC/caps"/*; : > "$RC/trace"; rm -f "$RC/release" "$RC"/held.*
 rcd --allow-restore=one >/dev/null; : > "$RC/barrier"
 ( rcd --deny-restore=one > "$RC/C.out" ) &
-rc_wait "$RC/held"
-read -r rc_stub rc_parent < "$RC/held"; kill -9 "$rc_stub" "$rc_parent" 2>/dev/null; wait 2>/dev/null
+rc_wait "$RC/held.tank%a"
+read -r rc_stub rc_parent < "$RC/held.tank%a"; kill -9 "$rc_stub" "$rc_parent" 2>/dev/null; wait 2>/dev/null
 rc_mid="$([ -f "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_cap)"
+rm -f "$RC/barrier"
 out="$(rcd --deny-restore=one)"; rc=$?
 check "REV-170 R1: a killed holder leaves the record pending and the capability in place; the retry takes the lock and finishes" \
       "pending|yes|0|no|-" "$rc_mid|$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)"
