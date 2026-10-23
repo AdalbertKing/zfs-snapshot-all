@@ -1318,6 +1318,107 @@ else
 fi
 
 
+# ---------------------------------------------------------------------------
+# REV-20261023-170 R1: two CONCURRENT --deny-restore calls on grants sharing
+# (account, <pool>/restore). Without serialization each saw the other as a pending owner,
+# both skipped the unallow, both said 0, and the capability stayed delegated with no
+# record. The real deploy.sh, a stateful fake ZFS, and a barrier: the fake holds A inside
+# its scope unallow until released, B is started meanwhile and must wait on the lock.
+# ---------------------------------------------------------------------------
+RC="$TMPD/race"; mkdir -p "$RC/bin" "$RC/rel/one" "$RC/rel/two" "$RC/peers" "$RC/grants" "$RC/clients" "$RC/state" "$RC/caps"
+printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/a"\n' > "$RC/peers/one.conf"
+printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/b"\n' > "$RC/peers/two.conf"
+# This host's writers into each scope: the grant pauses them, and a withdrawal resumes them
+# only after its revocation is proven -- never early, never while it stays pending.
+printf 'CLIENT_NAME=pa\nSTATE=active\nMANAGED_DATASETS=tank/a\n' > "$RC/clients/pa.conf"
+printf 'CLIENT_NAME=pb\nSTATE=active\nMANAGED_DATASETS=tank/b\n' > "$RC/clients/pb.conf"
+rc_pz() { printf '%s|%s' "$([ -e "$RC/state/pa/paused" ] && echo pa || echo -)" "$([ -e "$RC/state/pb/paused" ] && echo pb || echo -)"; }
+cat > "$RC/bin/zfs" <<'RCZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RC/trace"
+case "$1" in
+    list) exit 0 ;;
+    get) echo no; exit 0 ;;
+    create|mount) exit 0 ;;
+    allow|unallow)
+        # The barrier: once armed, the first scope unallow of EACH grant (tank/a, tank/b)
+        # stops here until released -- after its record moved, before it looks at the others.
+        case "$6" in tank/a|tank/b)
+            h="$RC/held.$(printf '%s' "$6" | tr / %)"
+            if [ "$1" = unallow ] && [ -e "$RC/barrier" ] && [ ! -e "$h" ]; then
+                echo "$$ $PPID" > "$h"
+                i=0; while [ ! -e "$RC/release" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+            fi ;;
+        esac
+        key="$(printf '%s|%s|%s' "$3" "$4" "$6" | tr / % )"
+        if [ "$1" = allow ]; then : > "$RC/caps/$key"; else rm -f "$RC/caps/$key"; fi
+        exit 0 ;;
+esac
+exit 0
+RCZFS
+chmod +x "$RC/bin/zfs"
+export RC
+rcd() { PATH="$BIN:$RC/bin:$PATH" PAIR_GATE_STATE_DIR="$RC/rel" PEER_STATE_DIR="$RC/peers" RESTORE_GRANT_DIR="$RC/grants" \
+        CLIENTS_DIR="$RC/clients" RELATIONSHIPS_DIR="$RC/state" bash "$DEPLOY" "$@" 2>&1; }
+RCP="receive,rollback,create,canmount,mountpoint,mount"
+rc_cap() { [ -e "$RC/caps/backup-shared|$RCP|tank%restore" ] && echo yes || echo no; }
+rc_un()  { grep -c "^unallow -u backup-shared $RCP -- tank/restore\$" "$RC/trace" 2>/dev/null; }
+rc_wait() { local i=0; while [ ! -e "$1" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i+1)); done; [ -e "$1" ]; }
+
+rcd --allow-restore=one >/dev/null; rcd --allow-restore=two >/dev/null
+: > "$RC/trace"; rm -f "$RC/release" "$RC"/held.*; : > "$RC/barrier"
+( rcd --deny-restore=one > "$RC/A.out"; echo $? > "$RC/A.rc" ) &
+rc_wait "$RC/held.tank%a"; rc_held=$?
+( rcd --deny-restore=two > "$RC/B.out"; echo $? > "$RC/B.rc" ) &
+# Unserialized, B reaches its own barrier too (both records pending, neither has looked):
+# the interleaving of the review. Serialized, B waits on the lock and never gets there.
+i=0; while [ ! -e "$RC/held.tank%b" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+rc_b_blocked="$([ -f "$RC/grants/two" ] && [ ! -e "$RC/grants.revoking/two" ] && echo yes || echo no)"
+rc_pz_mid="$(rc_pz)"
+: > "$RC/release"; wait
+check "REV-170 R1: while A is mid-revocation both writers stay paused; after both withdrawals both are resumed" "pa|pb -|-" \
+      "$rc_pz_mid $(rc_pz)"
+check "REV-170 R1: while A withdraws, B waits on the lock -- its grant is not even moved yet" "0|yes" "$rc_held|$rc_b_blocked"
+check "REV-170 R1: both withdrawals rc 0; the shared tank/restore unallowed exactly once, capability gone" "0|0|1|no" \
+      "$(cat "$RC/A.rc")|$(cat "$RC/B.rc")|$(rc_un)|$(rc_cap)"
+check "REV-170 R1: ...and no grant or pending record is left" "0|0" \
+      "$(ls "$RC/grants" 2>/dev/null | grep -vc '^\.')|$(ls "$RC/grants.revoking" 2>/dev/null | grep -c .)"
+
+# The lock holder dies mid-withdrawal: the kernel drops the lock, the record stays pending
+# (REV-147), nothing was revoked, and the retry completes it.
+rm -rf "$RC/grants" "$RC/grants.revoking" "$RC/caps"/*; : > "$RC/trace"; rm -f "$RC/release" "$RC"/held.*
+rcd --allow-restore=one >/dev/null; : > "$RC/barrier"
+( rcd --deny-restore=one > "$RC/C.out" ) &
+rc_wait "$RC/held.tank%a"
+read -r rc_stub rc_parent < "$RC/held.tank%a"; kill -9 "$rc_stub" "$rc_parent" 2>/dev/null; wait 2>/dev/null
+rc_mid="$([ -f "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_cap)"
+rc_pz_crash="$(rc_pz)"
+rm -f "$RC/barrier"
+out="$(rcd --deny-restore=one)"; rc=$?
+check "REV-170 R1: a killed holder leaves the record pending and the capability in place; the retry takes the lock and finishes" \
+      "pending|yes|0|no|-" "$rc_mid|$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)"
+check "REV-170 R1: ...its writer stays paused after the crash (no teardown), and the retry resumes it (REV-147)" "pa|- -|-" "$rc_pz_crash $(rc_pz)"
+
+# Point 4: another grant that records no account (no manifest either) and may share the
+# namespace is not "not an owner": the withdrawal holds the capability, says why, and stays
+# pending (rc 1) instead of reporting success.
+rm -rf "$RC/grants" "$RC/grants.revoking" "$RC/caps"/*; : > "$RC/trace"
+rcd --allow-restore=one >/dev/null
+printf 'RESTORE_GRANT_LABEL="legacy"\nRESTORE_GRANT_MODES="create"\n' > "$RC/grants/legacy"
+out="$(rcd --deny-restore=one)"; rc=$?
+if [ "$rc" -eq 1 ] && [ "$(rc_cap)" = yes ] && [ "$(rc_un)" = 0 ] && [ -f "$RC/grants.revoking/one" ] \
+   && has "legacy" "$out" && has "cannot be told whether they still need it" "$out"; then
+    ok "REV-170 R1: an unknown-account grant that may share the namespace holds it back -- rc 1, record pending, reason named"
+else
+    bad "REV-170 R1: unknown-account grant" "rc=$rc cap=$(rc_cap) un=$(rc_un)" "$out"
+fi
+check "REV-170 R1: ...and its writer stays paused while the withdrawal is pending" "pa|-" "$(rc_pz)"
+rm -f "$RC/grants/legacy"
+out="$(rcd --deny-restore=one)"; rc=$?
+check "REV-170 R1: ...once it is gone, the retry revokes, completes and resumes the writer" "0|no|-|-|-" \
+      "$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_pz)"
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
