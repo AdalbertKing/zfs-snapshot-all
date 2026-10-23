@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: f201d103b3f19567 -->
+<!-- status-covers-digest: a0f882ff7f8472af -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Plan importu relacji wypisuje argumenty w cudzysłowach powłoki (`fix/import-plan-quote`, punkt 5).** Skopiowana
+  linia planu `import-relation` z regexem, cudzysłowem albo backslashem (np. `--exclude-child=(a|b)[0-9]\,x"y`) nie
+  dawała tego samego polecenia -- argumenty szły przez `%s`. Teraz trzy pętle planu używają `%q` (jak
+  `write_client_field`). Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
+  sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 78/0; na main nowy przypadek pada.
 
 - **REV-20261023-170: cofnięcie jednego grantu Restore nie odbiera wspólnego `<pula>/restore` drugiemu
   (`fix/rev170-shared-restore-ns`).** Dwie relacje do jednego hosta zwykle mają jedno konto `zfsbackup-<host>`, a ZFS
