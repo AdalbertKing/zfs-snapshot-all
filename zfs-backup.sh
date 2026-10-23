@@ -6975,6 +6975,54 @@ relblock_fragment() {   # <rendered fragment> <name> <target|source>
     printf '\trelation     = %s\n\tside         = %s\n' "$2" "$3"
 }
 
+# THE SOURCE PRUNE GETS ITS OWN MINUTES (owner 2026-10-23: "czy kolejne relacje szyte z
+# tego samego szablonu ... nie odpalały się w tej samej minucie"). Measured on pve10: the
+# [prune:acct@host:...] sections of ab, cb and pve9 carried no schedule at all, so every
+# relation pruned its source at the block's :21 and 01:31 -- K3's spread (2026-10-06) read
+# [template:] sections, which X27 replaced by the [relation:] block before it could. Here,
+# once the block exists: a source section of this relationship with no prune_schedule_<tier>
+# gets the block's source prune tiers spread from the relationship's third slot -- its first
+# send minute + 40, the same slot K3 used -- tier offsets kept, hour carried.
+relblock_spread_source_prunes() {   # <workfile> <name>
+    local wf="$1" name="$2" m tiers spread tmp
+    m=$(awk -v want="$name" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        /^[ \t]*\[/ { ds = (trim($0) ~ /^\[dataset:/); rel = 0; next }
+        ds { t = trim($0)
+             if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); rel = (v == want) }
+             if (rel && t ~ /^send_schedule_[A-Za-z0-9_]+[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " "); print a[1]; exit } }' "$wf")
+    case "$m" in ''|*[!0-9]*) return 0 ;; esac
+    # The block's source prune schedule per tier, in the block's order: <tier>.source_prune_schedule
+    # when the sides differ, <tier>.prune_schedule when they agree (rb_get's rule).
+    tiers=$(awk -v h="[relation:$name]" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        /^[ \t]*\[/ { inb = (trim($0) == h); next }
+        inb { t = trim($0); k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
+              if (k ~ /^[A-Za-z0-9_]+\.source_prune_schedule$/) { sub(/\..*$/, "", k); src[k] = v; if (!(k in seen)) { seen[k] = 1; ord[++n] = k } }
+              else if (k ~ /^[A-Za-z0-9_]+\.prune_schedule$/) { sub(/\..*$/, "", k); com[k] = v; if (!(k in seen)) { seen[k] = 1; ord[++n] = k } } }
+        END { for (i = 1; i <= n; i++) { k = ord[i]; v = (k in src) ? src[k] : com[k]; if (v != "") printf "%s\t%s\n", k, v } }' "$wf")
+    [ -n "$tiers" ] || return 0
+    spread=$(printf '%s\n' "$tiers" | schedule_spread_tiers prune "$(( 10#$m + 40 ))")
+    [ -n "$spread" ] || return 0
+    tmp=$(mktemp) || return 1
+    awk -v want="$name" -v spread="$spread" '
+        function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+        function flush(   i, has) {
+            if (nl == 0) return
+            has = 0; for (i = 1; i <= nl; i++) if (trim(buf[i]) ~ /^prune_schedule_/) has = 1
+            for (i = 1; i <= nl; i++) {
+                print buf[i]
+                if (src && rel && !has && trim(buf[i]) ~ /^side[ \t]*=[ \t]*source$/) print spread
+            }
+            nl = 0
+        }
+        /^[ \t]*\[/ { flush(); src = (trim($0) ~ /^\[prune:[^]]*@[^]]*:/); rel = 0 }
+        { t = trim($0); if (t ~ /^relation[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); if (v == want) rel = 1 }
+          buf[++nl] = $0 }
+        END { flush() }' "$wf" > "$tmp" && cat "$tmp" > "$wf"
+    rm -f "$tmp"
+}
+
 # X27 S2, a REMOTE relationship: the sections emit_client_sections has just written
 # for it point at the profile's tiers by use_template; here they get relation + side
 # instead -- the side is what THIS emitter wrote: the pull [dataset:] and a local
@@ -12353,6 +12401,7 @@ cmd_activate_client() {
     emit_client_sections "$workfile" "$name" "$is_new_relationship" || { rm -f "$workfile"; die "could not write the sections for '$name' into the working copy"; }
     local _rebuild=0; { [ "$is_new_relationship" -eq 1 ] || [ "$regen" -eq 1 ]; } && _rebuild=1
     relblock_adopt_remote "$workfile" "$name" "$_rebuild" || { rm -f "$workfile"; die "could not write the [relation:$name] block into the working copy"; }
+    relblock_spread_source_prunes "$workfile" "$name" || { rm -f "$workfile"; die "could not spread the source prune schedule of '$name' in the working copy"; }
     # "Uzyj szablonu" + the source numbers (edit-relation's set-tiers words): ONE replace.
     if [ "$regen" -eq 1 ] && [ "${#EDIT_TIER_OPS[@]}" -gt 0 ]; then
         local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
