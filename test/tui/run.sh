@@ -1284,6 +1284,37 @@ if has "$WT" 'co: co godzinę (:56)   stempel automated_hourly_   trzyma 24' && 
 else
     bad "okno: rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
 fi
+# X27 (przejscie na zywo, pve10 2026-10-23): pola szczebla pod KROTKA nazwa
+# (send_schedule_hourly), porzadki u celu w samej sekcji datasetu, porzadki u zrodla
+# po szczeblu z szablonow. Okno mowilo "co godzinę (:01)" przy pobraniu o :13, bez
+# porzadkow u celu i z jednym szczeblem porzadkow u zrodla.
+TCFG="$(mktemp)"
+"$PY" - "$P10/show-config.json" "$TCFG" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["templates"] += [
+    {"name": "profile__relacja-m__hourly", "fields": {"send_schedule": "1 * * * *", "prefix": "automated_hourly_", "retain": "-H24", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__relacja-m__daily",  "fields": {"send_schedule": "11 1 * * *", "prefix": "automated_daily_", "retain": "-D7", "prune_schedule": "31 1 * * *"}},
+    {"name": "profile__relacja-m__src_hourly", "fields": {"retain": "-H24", "prune_schedule": "21 * * * *"}},
+    {"name": "profile__relacja-m__src_daily",  "fields": {"retain": "-D7", "prune_schedule": "31 1 * * *"}}]
+d["sections"] = [
+    {"kind": "dataset", "name": "hdd/b/x", "fields": {"use_template": "profile__relacja-m__hourly,profile__relacja-m__daily",
+        "side": "target", "src": "u@h:hdd/x", "pair_label": "lab-ct201",
+        "send_schedule_hourly": "13 * * * *", "send_schedule_daily": "23 1 * * *",
+        "prune_schedule_hourly": "33 * * * *", "prune_schedule_daily": "43 1 * * *"}},
+    {"kind": "prune", "name": "u@h:hdd/x", "fields": {"use_template": "profile__relacja-m__src_hourly,profile__relacja-m__src_daily", "side": "source"}}]
+json.dump(d, open(sys.argv[2], "w", encoding="utf-8"))
+PYEOF
+WT="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --status "$P10/status.json" --jobs "$P10/list-jobs.json" --monitors "$P10/monitor.json" --config "$TCFG" --screen relacje --keys down,enter --height 80 --width 200 2>&1)"
+rm -f "$TCFG"
+if has "$WT" 'co: co godzinę (:13)   stempel automated_hourly_' && has "$WT" 'co: co dobę 01:23   stempel automated_daily_' \
+   && hasE "$WT" 'lokalny prune +trzyma 24 godz\.   co: co godzinę \(:33\)' && hasE "$WT" 'lokalny prune +trzyma 7 dni   co: co dobę 01:43' \
+   && hasE "$WT" 'zdalny prune +trzyma 24 godz\.   co: co godzinę \(:21\)' && hasE "$WT" 'zdalny prune +trzyma 7 dni   co: co dobę 01:31' \
+   && ! has "$WT" 'co: co godzinę (:01)'; then
+    ok "okno: X27 -- pola szczebla pod krotka nazwa, porzadki u celu z sekcji datasetu, porzadki u zrodla po szczeblu"
+else
+    bad "okno: X27 rytm per szczebel" "$(printf '%s' "$WT" | grep -E 'pobranie|prune|co:' | head -8)"
+fi
 W="$(screen relacje down,enter --height 80)"
 if has "$W" '╔═ Relacja lab-ct201 ═'; then
     ok "okno: Enter na wierszu otwiera okno relacji na wierzchu"
