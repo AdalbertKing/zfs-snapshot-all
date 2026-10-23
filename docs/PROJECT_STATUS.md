@@ -118,6 +118,18 @@
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
+- **Dokumentacja w dwóch językach i dwóch warstwach (`docs/split-pl-en`, paczka 2 z 3).** Przewodniki użytkownika
+  są w `docs/pl/` (`JAK-TO-DZIALA`, `WDROZENIE-PROXMOX`, `WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA`, `KOMENDY`,
+  `ODZYSK-Z-REPLIKI`, `PAUZA-I-BLOKADA`) i `docs/en/` (`DEPLOYMENT-PROXMOX`, `CONFIG-EXAMPLES`); nowa
+  `docs/pl/ESENCJA.md` (jedna strona: pojęcia, pierwsze uruchomienie, codzienna praca). Instrukcja techniczna
+  wyszła z README do `docs/en/REFERENCE.md`, poprawiona według przeglądu (blok `[relation:]` jako to, co pisze
+  narzędzie, polityka degradacji `-q`, brakujące flagi silników, kolejka alertów, bez historii i prawdziwych
+  hostów); opis testów w `test/README.md`. README to krótka strona po angielsku z tabelą dokumentacji EN | PL.
+  Ścieżki w `test/alertmail/run.sh` i komentarzu `test/configexamples/run.sh` poprawione. Tłumaczenia
+  brakujących wersji (en przewodników, pl instrukcji technicznej) -- paczka 3. Przy okazji: `snapsend.sh` i
+  `snapget.sh` (zamrożone) przy nieznanej opcji KRÓTKIEJ drukują polski komunikat („Blad” / „Błąd: Nieznana opcja”), choć
+  CLI ma mówić po angielsku; nieznana opcja długa daje angielskie `Error: unknown option`.
+
 - **Dokumentacja użytkownika po polsku zgodna z kodem (`docs/cleanup-pl-en`, paczka 1 z 3, właściciel 2026-10-23:
   „czystka i porządki”, potem podział na `docs/pl` i `docs/en`).** Sprawdzenie 11 dokumentów z kodem dało około 40
   twierdzeń sprzecznych z kodem. Przepisane: `JAK-TO-DZIALA.md`, `docs/WDROZENIE-PROXMOX.md` (retencja `default` płaska

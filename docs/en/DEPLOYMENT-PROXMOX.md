@@ -4,7 +4,7 @@ Written for an administrator who knows Linux and the basics of ZFS but is
 seeing this toolkit for the first time. No knowledge of its internals is
 assumed — only that you can read `zfs list` and edit a file in `vi`.
 
-Polish version: [WDROZENIE-PROXMOX.md](WDROZENIE-PROXMOX.md).
+Polish version: [WDROZENIE-PROXMOX.md](../pl/WDROZENIE-PROXMOX.md).
 
 ---
 
