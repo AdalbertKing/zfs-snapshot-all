@@ -123,7 +123,7 @@ while :; do
     wt --title "Ustawienia hosta" --ok-button "Wybierz" --cancel-button "Wyjdź" --notags --default-item "$LAST" \
        --menu "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień." \
        "$H" "$W" "$(lhfit $((${#items[@]} / 2)) 2)" "${items[@]}" \
-       || { clear 2>/dev/null; echo "settings: wyjście, nic nie zapisano"; exit 1; }
+       || { clear 2>/dev/null; wt_end "Ustawienia: wyjście, nic nie zapisano"; exit 1; }
     LAST="$WT_OUT"
     case "$WT_OUT" in
         \#*) ;;

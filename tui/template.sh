@@ -242,7 +242,7 @@ while :; do
     clear 2>/dev/null
     # shellcheck disable=SC2086
     if ! $GRID_CMD --spec "$SPEC" --out "$OUTJ"; then
-        clear 2>/dev/null; echo "template: przerwane, nic nie zmieniono"; exit 1
+        clear 2>/dev/null; wt_end "Szablon: przerwane, nic nie zmieniono"; exit 1
     fi
     # Wynik -> argumenty save-profile i linie planu (python, bo to JSON; wartości to dane).
     "$PY" - "$SPEC" "$OUTJ" "$ACTION" "$TMPD" <<'PYEOF'
