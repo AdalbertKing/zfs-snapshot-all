@@ -395,7 +395,7 @@ else
 fi
 # TAB: kursor na pary; Enter na parze otwiera OKNO tej pary (R4-6), nie skok na F2.
 TP="$(screen relacje down,tab)"
-if has "$TP" 'm migawki   Enter pełne okno   ←→ zakładki   Esc wraca   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
+if has "$TP" 'm migawki   Enter okno   ←→ zakładki   Esc wraca   Tab do linii poleceń' && has "$TP" 'lab-ct201 -- dataset'; then
     ok "relacje: Tab przenosi kursor na datasety, prawy panel pokazuje zaznaczony dataset (U21); na ramce m migawki (U38)"
 else
     bad "relacje: Tab" "$TP"
@@ -409,7 +409,7 @@ else
     bad "relacje: Enter na parze" "$TE"
 fi
 TEE="$(screen relacje down,tab,down,enter,esc)"
-if has "$TEE" 'Relacje na kolektorze' && has "$TEE" 'Enter pełne okno   ←→ zakładki' && ! has "$TEE" '╔═ Zadanie:'; then
+if has "$TEE" 'Relacje na kolektorze' && has "$TEE" 'Enter okno   ←→ zakładki' && ! has "$TEE" '╔═ Zadanie:'; then
     ok "relacje: Esc z okna datasetu wraca na dolny panel (kursor zostaje na datasetach)"
 else
     bad "relacje: Esc z okna pary" "$TEE"
@@ -956,7 +956,7 @@ fi
 RD="$(mktemp -d)"; RDP="$RD"; command -v cygpath >/dev/null 2>&1 && RDP="$(cygpath -m "$RD")"
 export ZFS_TUI_RELATIONS_DIR="$RDP"
 A="$(act down,F9,enter)"
-if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'    && has "$A" 'Enter zapisz' && ! has "$A" 'Enter dalej'; then
+if has "$A" '╔═ Eksport relacji lab-ct201 ═' && has "$A" "$RDP" && has "$A" 'lab-ct201.export.json_' && has "$A" 'nadpisany'    && has "$A" 'Enter zapisuje' && ! has "$A" 'Enter dalej'; then
     ok "akcje: F8 podpowiada sciezke w katalogu relacji (<dir>/<relacja>.export.json) i mowi, ze istniejacy plik bedzie nadpisany"
 else
     bad "akcje: F8 podpowiedz" "$A"
