@@ -4746,7 +4746,7 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     local stagger_min stagger_prune stagger_send_expr stagger_prune_expr
     # Reservations are per relationship emission: what this call hands out, on top of what
     # the host already runs -- not left over from an earlier emission in the same process.
-    SCHEDULE_RESERVED=""
+    SCHEDULE_RESERVED=""; unset SCHEDULE_TAKEN_CACHE
     schedule_take_for "$name"; stagger_min="$SCHEDULE_PICKED"
     stagger_prune=$(( (stagger_min + 20) % 60 ))
     stagger_send_expr=$(schedule_with_minute "$(schedule_template_expr send)" "$stagger_min")
@@ -5430,7 +5430,11 @@ SCHEDULE_RESERVED=""
 SCHEDULE_PICKED=""
 schedule_take() {   # <start minute, may exceed 59> -> SCHEDULE_PICKED (0-59), reserved
     local start=$(( ${1:-0} % 60 )) taken probe i
-    taken=" $(schedule_taken_minutes | sort -un | tr '\n' ' ') "
+    # The host's crontabs and configs are read ONCE per emission (they do not change in it;
+    # each dataset and prune asking again made a run with many sources slow), then this
+    # run's own reservations on top.
+    [ -n "${SCHEDULE_TAKEN_CACHE+x}" ] || SCHEDULE_TAKEN_CACHE=" $(schedule_taken_minutes | sort -un | tr '\n' ' ') "
+    taken="$SCHEDULE_TAKEN_CACHE ${SCHEDULE_RESERVED:-} "
     for i in $(seq 0 59); do
         probe=$(( (start + i) % 60 ))
         case "$taken" in *" $probe "*) continue ;; esac
