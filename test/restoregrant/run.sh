@@ -1328,6 +1328,11 @@ fi
 RC="$TMPD/race"; mkdir -p "$RC/bin" "$RC/rel/one" "$RC/rel/two" "$RC/peers" "$RC/grants" "$RC/clients" "$RC/state" "$RC/caps"
 printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/a"\n' > "$RC/peers/one.conf"
 printf 'PEER_JOIN_ACCOUNT="backup-shared"\nPEER_JOIN_GRANTED_DATASETS="tank/b"\n' > "$RC/peers/two.conf"
+# This host's writers into each scope: the grant pauses them, and a withdrawal resumes them
+# only after its revocation is proven -- never early, never while it stays pending.
+printf 'CLIENT_NAME=pa\nSTATE=active\nMANAGED_DATASETS=tank/a\n' > "$RC/clients/pa.conf"
+printf 'CLIENT_NAME=pb\nSTATE=active\nMANAGED_DATASETS=tank/b\n' > "$RC/clients/pb.conf"
+rc_pz() { printf '%s|%s' "$([ -e "$RC/state/pa/paused" ] && echo pa || echo -)" "$([ -e "$RC/state/pb/paused" ] && echo pb || echo -)"; }
 cat > "$RC/bin/zfs" <<'RCZFS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RC/trace"
@@ -1369,7 +1374,10 @@ rc_wait "$RC/held.tank%a"; rc_held=$?
 # the interleaving of the review. Serialized, B waits on the lock and never gets there.
 i=0; while [ ! -e "$RC/held.tank%b" ] && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i+1)); done
 rc_b_blocked="$([ -f "$RC/grants/two" ] && [ ! -e "$RC/grants.revoking/two" ] && echo yes || echo no)"
+rc_pz_mid="$(rc_pz)"
 : > "$RC/release"; wait
+check "REV-170 R1: while A is mid-revocation both writers stay paused; after both withdrawals both are resumed" "pa|pb -|-" \
+      "$rc_pz_mid $(rc_pz)"
 check "REV-170 R1: while A withdraws, B waits on the lock -- its grant is not even moved yet" "0|yes" "$rc_held|$rc_b_blocked"
 check "REV-170 R1: both withdrawals rc 0; the shared tank/restore unallowed exactly once, capability gone" "0|0|1|no" \
       "$(cat "$RC/A.rc")|$(cat "$RC/B.rc")|$(rc_un)|$(rc_cap)"
@@ -1384,10 +1392,12 @@ rcd --allow-restore=one >/dev/null; : > "$RC/barrier"
 rc_wait "$RC/held.tank%a"
 read -r rc_stub rc_parent < "$RC/held.tank%a"; kill -9 "$rc_stub" "$rc_parent" 2>/dev/null; wait 2>/dev/null
 rc_mid="$([ -f "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_cap)"
+rc_pz_crash="$(rc_pz)"
 rm -f "$RC/barrier"
 out="$(rcd --deny-restore=one)"; rc=$?
 check "REV-170 R1: a killed holder leaves the record pending and the capability in place; the retry takes the lock and finishes" \
       "pending|yes|0|no|-" "$rc_mid|$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)"
+check "REV-170 R1: ...its writer stays paused after the crash (no teardown), and the retry resumes it (REV-147)" "pa|- -|-" "$rc_pz_crash $(rc_pz)"
 
 # Point 4: another grant that records no account (no manifest either) and may share the
 # namespace is not "not an owner": the withdrawal holds the capability, says why, and stays
@@ -1402,10 +1412,11 @@ if [ "$rc" -eq 1 ] && [ "$(rc_cap)" = yes ] && [ "$(rc_un)" = 0 ] && [ -f "$RC/g
 else
     bad "REV-170 R1: unknown-account grant" "rc=$rc cap=$(rc_cap) un=$(rc_un)" "$out"
 fi
+check "REV-170 R1: ...and its writer stays paused while the withdrawal is pending" "pa|-" "$(rc_pz)"
 rm -f "$RC/grants/legacy"
 out="$(rcd --deny-restore=one)"; rc=$?
-check "REV-170 R1: ...once it is gone, the retry revokes and completes" "0|no|-" \
-      "$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)"
+check "REV-170 R1: ...once it is gone, the retry revokes, completes and resumes the writer" "0|no|-|-|-" \
+      "$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_pz)"
 
 
 echo "--------------------------------------------"
