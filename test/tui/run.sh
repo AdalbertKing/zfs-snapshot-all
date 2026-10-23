@@ -5314,6 +5314,62 @@ else
     bad "kreator lokalny: nosniki replik na liscie zrodel" "zostalo: $drm_left"
 fi
 
+# U31: okno planu kopii lokalnej pokazuje sekcje i linie crona TEJ relacji, nie caly config i
+# caly crontab hosta (pve10 2026-10-23: 331 linii z relacjami ab i cb). Funkcja z produkcji.
+POT="$(mktemp -d)"
+sed -n '/^plan_only_this()/,/^}/p' "$REPO/tui/new-relation.sh" > "$POT/f.sh"
+cat > "$POT/plan.txt" <<'EOF'
+>>> local-backup: uwaga
+--- kandydat CONFIG v4 (pelny: istniejace + nowy job) ---
+[defaults]
+	quiesce = no
+[relation:ab]
+	tiers = hourly
+[dataset:hdd/backups/x]
+	relation     = ab
+[relation:t5]
+	tiers = hourly
+[dataset:hdd/archive]
+	relation     = t5
+	pair_label   = t5
+[prune:hdd/restore/t5/hdd/archive]
+	pair_label   = t5
+
+--- wygenerowany blok crona (gen-cron.sh -c, pelny) ---
+15 * * * * zfs-job.sh "pve10 profile__relacja-ab__hourly snapshot (ab-x)"
+29 * * * * zfs-job.sh "pve10 profile__relacja-t5__lsrc_hourly snapshot (local-archive)"
+*/15 * * * * d=$(check-snap-age.sh -R -L t5 "hdd/archive")
+*/15 * * * * d=$(check-snap-age.sh -R -L ab "hdd/backups/x")
+
+To jest wylacznie plan -- nic nie zostalo zainstalowane.
+EOF
+pot_out="$(bash -c ". '$POT/f.sh'; plan_only_this t5" < "$POT/plan.txt")"
+if printf '%s\n' "$pot_out" | grep -qxF '[relation:t5]' && printf '%s\n' "$pot_out" | grep -qxF '[dataset:hdd/archive]' \
+   && printf '%s\n' "$pot_out" | grep -qxF '[prune:hdd/restore/t5/hdd/archive]' \
+   && printf '%s\n' "$pot_out" | grep -qF 'relacja-t5__lsrc_hourly' && printf '%s\n' "$pot_out" | grep -qF -- '-L t5 ' \
+   && ! printf '%s\n' "$pot_out" | grep -qE 'relacja-ab|\[relation:ab\]|\[defaults\]|-L ab ' \
+   && printf '%s\n' "$pot_out" | grep -qF 'sekcje configu: 3, linie crona: 2' \
+   && printf '%s\n' "$pot_out" | grep -qF 'To jest wylacznie plan' && printf '%s\n' "$pot_out" | grep -qF '>>> local-backup: uwaga' \
+   && grep -qF 'plan_only_this "$RNAME"' "$REPO/tui/new-relation.sh"; then
+    ok "kreator: plan kopii lokalnej -- tylko sekcje i crona tej relacji, reszta policzona (U31)"
+else
+    bad "kreator: plan kopii lokalnej filtrowany do tej relacji (U31)" "$pot_out"
+fi
+rm -rf "$POT"
+
+# REV-20261023-172: klawisz po oknie, gdy odświeżanie w tle trwa dłużej niż limit, nie może nic
+# zaplanować na STARYCH wierszach (Del, F7, strzałka); po wejściu świeżych danych ten sam Del
+# celuje w świeży wiersz -- także gdy wątek skończył, a pętla jeszcze nie odebrała danych.
+# Prawdziwe UI.key()/poll_bg z produkcji, podmieniony tylko collect (bez poleceń i hostów).
+sbg_out="$("$PY" "$REPO/test/tui/stale_bg_gate.py" "$TUI" 2>&1 | tr -d '\r')"
+sbg_bad="$(printf '%s\n' "$sbg_out" | grep -c '^bad ')"
+sbg_ok="$(printf '%s\n' "$sbg_out" | grep -c '^ok ')"
+if [ "$sbg_ok" -eq 9 ] && [ "$sbg_bad" -eq 0 ]; then
+    ok "odświeżanie w tle po limicie: Del/F7/strzałka nic nie planują na starych wierszach, nieudane odświeżenie blokuje czynności do udanego, po świeżych danych Del celuje w świeży (REV-172)"
+else
+    bad "odświeżanie w tle: klawisz na starych wierszach (REV-172)" "$sbg_out"
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

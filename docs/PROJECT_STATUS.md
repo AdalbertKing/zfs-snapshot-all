@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 34c827a9a93a280a -->
+<!-- status-covers-digest: 8d633f842d5b018d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -131,6 +131,23 @@
   numerów PR i historii incydentów; config relacji pokazany jako blok `[relation:]`. Wersje angielskie i README -- w
   paczkach 2 i 3. Przy okazji w kodzie: `status` (`zfs-backup.sh` ~19636) nadal pisze, że pauza nie obejmuje
   retencji, a nagłówek `gen-cron.sh` ~146-149 mówi to samo o sekcji `[prune:]` -- do poprawy poza tą paczką.
+
+- **REV-20261023-172: klawisz po oknie działał na starych wierszach, gdy odświeżanie trwało za długo albo się nie udało
+  (`fix/rev172-stale-key-gate`).** Po zamknięciu okna GUI wraca od razu i odświeża dane w tle; klawisz czekał na
+  świeże dane najwyżej 30 s, a potem działał na STARYCH wierszach (recenzent: Del planował usunięcie relacji
+  sprzed zmiany). Teraz po limicie klawisz przepada, ekran jest opisany jako nieaktualny, wyjście (q/F12) działa;
+  przy okazji domknięte okienko, w którym odświeżanie już skończyło, a pętla nie odebrała danych (Del też trafiał
+  w stary wiersz), a nieudane odświeżenie blokuje czynności na wierszu do udanego (Ctrl-R). Test
+  `test/tui/stale_bg_gate.py` (Del, F7, strzałka; nieudane odświeżenie; potem Del na świeżym wierszu): 9/9, na main
+  pada 5 z pierwszych 6. `tui` 404/0 (pve9). Zostaje: same czytniki (`run_verb`) nie mają własnego limitu czasu.
+
+- **U31: okno planu kopii lokalnej w kreatorze pokazuje tylko tę relację (`fix/u31-plan-this-relation`).** Plan
+  czasownika `local-backup` wkleja cały kandydat configu i cały blok crona hosta; na pve10 plan kopii `t5` miał 331
+  linii, w tym relacje ab i cb. Okno „Plan” kreatora (`plan_only_this`) zostawia sekcje tej relacji (blok
+  `[relation:NAZWA]` i sekcje z `relation`/`pair_label` = nazwa) i jej linie crona, a resztę liczy jednym zdaniem
+  („Bez zmian zostaje reszta: sekcje configu: 17, linie crona: 32”); na pve10 101 linii. Wyjście CLI bez zmian; plan
+  relacji zdalnej już wcześniej pokazywał różnicę crontaba. Ekran wyniku po założeniu relacji to krótkie okno (U66).
+  `tui` 403/0 (pve9); nowy przypadek na main pada.
 
 - **REV-20261023-171: karta zmiany relacji mówiła „tyle samo co w kopii” przy źródle bez szczebla
   (`fix/rev171-srcret-equality`).** Pozycja „Retencja źródła” porównywała tylko szczeble źródła z szczeblami
