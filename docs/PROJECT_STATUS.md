@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 08afd39a1e41651f -->
+<!-- status-covers-digest: 6631a3b06e7070d8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -106,7 +106,9 @@
   `change-key -i` (dziedziczy), pod niezaszyfrowanym albo zamkniętym -- `keylocation` = plik klucza oryginału. Zbiór, którego żaden
   klucz zakresu nie otwiera -- ostrzeżenie, bez zmian; zbiór z własnym plikiem klucza -- pomijany. Na żywo pve9:
   `docs2` dziedziczy `hdd/enc` i ma dane, `docs-raw` otwarty z `file:///root/enc-w2.key`, zbiór z innym kluczem
-  nietknięty. Nie obejmuje odzysku lokalnego (kolektor na sam siebie, bez grantu). `restoregrant` 196/0 (pve9,
+  nietknięty. Odzysk lokalny (na ten sam host, bez grantu) -- tak samo i od razu po odzysku (`fix/local-raw-rekey`, właściciel:
+  „jaka jest różnica czy to zdalnie, czy lokalnie… Musi być proste”): wspólna reguła w `lib-rekey.sh`, klucze z tego
+  hosta; na żywo pve9: lokalna kopia raw `hdd/enc` -> odzysk do `hdd/enc/enc-back` -> od razu dziedziczy `hdd/enc`. `restoregrant` 196/0 (pve9,
   tester); z `deploy.sh` z main 193/3.
 
 - **Plan importu relacji wypisuje argumenty w cudzysłowach powłoki (`fix/import-plan-quote`, punkt 5).** Skopiowana

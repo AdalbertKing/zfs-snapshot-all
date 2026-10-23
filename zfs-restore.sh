@@ -113,6 +113,10 @@ log() {   # <level> <message...>
 [ -r "$LIBCOMMON" ] || { echo "cannot read $LIBCOMMON -- the checkout is incomplete" >&2; exit 1; }
 # shellcheck disable=SC1090
 source "$LIBCOMMON"
+# A raw recovery's key (restore_rekey_local), shared with deploy.sh --deny-restore.
+[ -r "$SCRIPT_DIR/lib-rekey.sh" ] || { echo "cannot read $SCRIPT_DIR/lib-rekey.sh -- the checkout is incomplete" >&2; exit 1; }
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib-rekey.sh"
 
 # `die` FROM INSIDE A COMMAND SUBSTITUTION HAS TO END THE PROGRAM.
 #
@@ -2895,6 +2899,24 @@ restore_report_backup_cost() {
 # themselves is that the data is there and invisible.
 #
 # ZVOLs are skipped -- they have no mountpoint and nothing to say.
+# A RAW RECOVERY ONTO THIS MACHINE comes back locked, its own encryption root
+# (lib-rekey.sh). Here the key is on this host and this run is root, so it gets the key
+# again at once -- the same thing deploy.sh --deny-restore does for a recovery onto
+# another machine. Owner, 2026-10-23: remote or local, the admin does the same: nothing.
+restore_rekey_local() {
+    [ "${#RESTORE_LANDED[@]}" -gt 0 ] || return 0
+    [ "$(id -u)" -eq 0 ] || return 0
+    local d _rl_local=() _rl_line
+    for d in "${RESTORE_LANDED[@]}"; do
+        case "$d" in *:*) ;; *) _rl_local+=("$d") ;; esac
+    done
+    [ "${#_rl_local[@]}" -gt 0 ] || return 0
+    rekey_raw_recovered "$(rekey_host_keys)" "${_rl_local[@]}" | while IFS= read -r _rl_line; do
+        log 0 "restore: key: ${_rl_line#* }"
+    done
+    return 0
+}
+
 restore_report_mount_state() {
     [ "${#RESTORE_LANDED[@]}" -gt 0 ] || return 0
     local d peer ds line name typ cm mnt said=0 any_peer="" seen=" "
@@ -3689,6 +3711,7 @@ restore_run_scope() {   # uses RESTORE_SCOPE_COPY[] / RESTORE_SCOPE_SRC[]
         log 0 "restore:   ${verdict[$i]}"
     done
 
+    restore_rekey_local
     restore_report_mount_state
     restore_report_handover
     restore_report_backup_cost
