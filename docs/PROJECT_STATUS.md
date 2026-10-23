@@ -97,6 +97,14 @@
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
 
+- **REV-20261023-169: suita `localbackup` nie dotyka stanu hosta (`fix/rev169-localbackup-isolation`).** Uruchomiona
+  jako root zapisywała rekord `lb.conf` do prawdziwego `/etc/zfs-snapshot-all/clients` (wczytanie produktu ustawiało
+  `CLIENTS_DIR`, więc `mktemp` w pomocnikach nigdy nie działał) i czytała spool crona hosta (na pve9 konta `bkp`,
+  `zfsbackup`), stąd 29 FAIL jako root przy zielonym CI. Teraz wszystkie ścieżki hosta produktu (rekordy,
+  relacje, pary, szablony własne, klucze, ustawienia, server.conf, blokady, postęp, spool) leżą w fiksturze, a każdy
+  przypadek jednorazowy dostaje świeży katalog rekordów. pve9: root 163/0, tester 163/0, nic w `/etc`, `/var/lib`
+  ani spoolu nie zmienione; ze starymi pomocnikami 149/14; skrypt recenzenta: main 3/0, gałąź 0/3.
+
 - **Kampania 3, blok H: słowa w oknach (`fix/words-h`).** Przegląd tekstów okien (`text-checker`): jedno słowo
   „myślnik” zamiast „minus” w odmowach nazw i adresów; „Wstecz” zamiast „Wróć” w oknach porzucenia zmian (relacja, replika); „konto
   delegowane (utworzone, jeśli go nie ma)” zamiast „(zostanie utworzone)” przy istniejącym koncie; dwa okna

@@ -63,12 +63,37 @@ exit 0
 EOF
 chmod +x "$WORK/bin/zfs" "$WORK/bin/crontab"
 
+# REV-20261023-169: every product path that defaults to /etc or /var lives under $WORK,
+# set BEFORE the product is sourced. Otherwise sourcing points CLIENTS_DIR at the host's
+# real /etc/zfs-snapshot-all/clients, a root run wrote lb.conf there, and every later
+# one-shot met "relationship 'lb' already exists". Exported, so `bash "$ZB"` children
+# inherit it too.
+LB_HOST="$WORK/host"
+mkdir -p "$LB_HOST/clients" "$LB_HOST/rel" "$LB_HOST/peers" "$LB_HOST/profiles" "$LB_HOST/keys" "$LB_HOST/progress"
+export CLIENTS_DIR="$LB_HOST/clients" RELATIONSHIPS_DIR="$LB_HOST/rel" PEER_STATE_DIR="$LB_HOST/peers"        PROFILE_USER_ROOT="$LB_HOST/profiles" ZFS_MEDIA_KEY_DIR="$LB_HOST/keys"        SETTINGS_FILE="$LB_HOST/settings.ini" SERVER_CONF="$WORK/no-server.conf"        ZFS_PROGRESS_DIR="$LB_HOST/progress"
+# The suite's own default. A helper that finds CLIENTS_DIR still equal to it was given no
+# directory by its caller, and a one-shot gets a FRESH one (lb_clients below).
+LB_DEFAULT_CLIENTS="$CLIENTS_DIR"
+
 # shellcheck disable=SC1090
 source "$ZB"
+# The account candidates come from the host's cron spool too, which root can read and
+# an ordinary user cannot: as root, pve9's real bkp/zfsbackup crontabs became candidates,
+# the crontab stub "claims" claimed.conf for every account, and 29 cases met "already
+# drives bkp's managed crontab block". The spool is a plain array set at source time, so
+# it is pointed at an empty fixture directory here, after sourcing.
+mkdir -p "$LB_HOST/spool"; CRON_SPOOL_DIRS=("$LB_HOST/spool")
 
 # X27 (owner 2026-10-14): every local copy is a named relationship -- a call that names
 # none gets --name=lb here, and its record (if it installs) goes to a fresh directory
 # unless the caller set CLIENTS_DIR, so a rerun is not "the name is taken".
+lb_clients() {   # -> the caller's CLIENTS_DIR, or a fresh directory when it is the suite default
+    if [ "${CLIENTS_DIR:-$LB_DEFAULT_CLIENTS}" = "$LB_DEFAULT_CLIENTS" ]; then
+        mktemp -d "$WORK/clients.XXXXXX"
+    else
+        printf '%s' "$CLIENTS_DIR"
+    fi
+}
 lb_args() {   # args... -> LB_ARGS with --name=lb when none was given
     LB_ARGS=("$@")
     case " $* " in *" --name="*) ;; *) LB_ARGS+=(--name=lb) ;; esac
@@ -76,7 +101,7 @@ lb_args() {   # args... -> LB_ARGS with --name=lb when none was given
 run() {   # cmd_local_backup args... ; stubbed PATH, no server.conf, real profiles
     lb_args "$@"
     ( PATH="$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      CLIENTS_DIR="$(lb_clients)" \
       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
@@ -429,7 +454,7 @@ runi() {   # <snapsend stub> <stdin answer> args...
     local stub="$1" answer="$2"; shift 2
     lb_args "$@"
     ( PATH="$WORK/bin2:$WORK/bin:$PATH" SERVER_CONF="$WORK/no-server.conf" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/$stub" SNAPGET="$WORK/seedbin/$stub" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}" \
+      SNAPSEND="$WORK/seedbin/$stub" SNAPGET="$WORK/seedbin/$stub" CLIENTS_DIR="$(lb_clients)" \
       cmd_local_backup "${LB_ARGS[@]}" ) <<< "$answer" 2>&1
 }
 
@@ -513,6 +538,29 @@ out="$(runi snapsend-ok "t" --install --yes --source=rpool/data,rpool/db --targe
 { [ "$({ grep -c SEED "$WORK/seed-calls" 2>/dev/null; true; } | head -1)" = 2 ] && grep -q INSTALL "$WORK/order" 2>/dev/null; } \
     && ok "slice2: two sources seed twice and install once" \
     || bad "slice2: two sources seed twice and install once" "$(cat "$WORK/seed-calls" 2>/dev/null)"
+
+# ---- REV-20261023-169: two one-shot `lb` installs do not see each other ---------
+# Negative control for the isolation: the first install records `lb`; the second, also
+# given no record directory, must get its own and install too -- not "relationship 'lb'
+# already exists". The suite default directory itself stays empty, and every product
+# path the sourced code resolved is under $WORK, none under /etc or /var.
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+iso1="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --config="$CFG")"; iso1r=$?
+rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+iso2="$(runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --config="$CFG")"; iso2r=$?
+if [ "$iso1r" -eq 0 ] && [ "$iso2r" -eq 0 ] && ! printf '%s' "$iso2" | grep -q "already exists"    && grep -q INSTALL "$WORK/order" 2>/dev/null && [ -z "$(ls -A "$LB_DEFAULT_CLIENTS")" ]; then
+    ok "REV-169: two one-shot --name=lb installs each get their own record directory; the suite default stays empty"
+else
+    bad "REV-169: one-shot record isolation" "rc=$iso1r/$iso2r default=[$(ls -A "$LB_DEFAULT_CLIENTS")] $(printf '%s' "$iso2" | grep -m1 'already exists\|FATAL')"
+fi
+iso_paths="$CLIENTS_DIR $RELATIONSHIPS_DIR $PEER_STATE_DIR $PROFILE_USER_ROOT $MEDIA_KEY_DIR $SETTINGS_FILE $SERVER_CONF $CRON_LOCK_DIR $ZFS_PROGRESS_DIR ${CRON_SPOOL_DIRS[*]}"
+iso_out=""
+for iso_p in $iso_paths; do case "$iso_p" in "$WORK"/*) ;; *) iso_out="$iso_out $iso_p" ;; esac; done
+if [ -z "$iso_out" ]; then
+    ok "REV-169: every host path the sourced product uses (clients, relationships, peers, profiles, keys, settings, server.conf, locks, progress, cron spool) is under the fixture"
+else
+    bad "REV-169: host paths under the fixture" "outside \$WORK:$iso_out"
+fi
 
 # ---- LOCAL RELATIONSHIP: --name (owner, 2026-10-09) --------------------------
 # A copy on this host as a relationship like any other: sections carry
@@ -1455,7 +1503,7 @@ runp() {   # <INVENTORY or -> args... ; inventory stub, no server.conf
     lb_args "$@"
     ( PATH="$WORK/bin3:$PATH" SERVER_CONF="$WORK/no-server.conf" POOLS="rpool hdd" \
       INVENTORY="$inv" PROFILE_ROOT="$REPO/profiles" \
-      SNAPSEND="$WORK/seedbin/snapsend-ok" SNAPGET="$WORK/seedbin/snapsend-ok" CLIENTS_DIR="${CLIENTS_DIR:-$(mktemp -d)}"       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
+      SNAPSEND="$WORK/seedbin/snapsend-ok" SNAPGET="$WORK/seedbin/snapsend-ok" CLIENTS_DIR="$(lb_clients)"       cmd_local_backup "${LB_ARGS[@]}" ) 2>&1
 }
 
 # ---- the proposal happens at all, and reaches the plan ----------------------
@@ -1664,7 +1712,7 @@ out="$(runi snapsend-ok "" --name=lb2 --source=rpool/other --target=hdd/backups 
 # (The "mixed request" cases -- name every source, let the run work out which is
 # new -- went with X27: adding a source to a relationship is add-source.)
 
-unset CLIENTS_DIR   # the cases below are one-shot, each with a fresh record directory
+CLIENTS_DIR="$LB_DEFAULT_CLIENTS"   # the cases below are one-shot, each with a fresh record directory
 
 # ---- F3: flat parent/child, END TO END ------------------------------------
 # Teaching only the PROPOSAL that a flat job covers exactly its own dataset
