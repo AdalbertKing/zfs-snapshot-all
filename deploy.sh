@@ -3128,8 +3128,11 @@ do_deny_restore() {
         # The ACCOUNT the delegation was given to, written into the record now: the grant
         # file names the scope but not the account, and a retry must undo what was
         # delegated even if the pairing manifest is gone or changed by then.
+        # REV-170 R2: only a LEGACY record (issued before RESTORE_GRANT_ACCOUNT) needs it.
+        # A record that names its account keeps that one -- the manifest may since name
+        # another account after an import or rejoin, and that account received nothing.
         local _rv_pm; _rv_pm="$(peer_manifest_path "$label")"
-        if [ -r "$_rv_pm" ]; then
+        if [ -r "$_rv_pm" ] && ! grep -q '^RESTORE_GRANT_ACCOUNT="..*"$' "$rpath" 2>/dev/null; then
             ( record_load manifest "$_rv_pm"
               [ -z "${PEER_JOIN_ACCOUNT:-}" ] || printf 'RESTORE_REVOKE_ACCOUNT="%s"\n' "$PEER_JOIN_ACCOUNT" ) >> "$rpath" \
                 || warn "could not write the account into $rpath -- a retry will rely on the pairing manifest"
@@ -3160,7 +3163,11 @@ do_deny_restore() {
     # time, the account written at withdrawal). The manifest fills only what the record
     # does not carry -- a record from before the account line, or the legacy state.
     if [ -f "$rpath" ]; then
-        RESTORE_GRANT_ACCOUNT="$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
+        # The account recorded when the grant was issued wins (REV-170 R2); the account
+        # written at withdrawal serves only a legacy record that has none.
+        RESTORE_GRANT_ACCOUNT="$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
+        [ -n "$RESTORE_GRANT_ACCOUNT" ] \
+            || RESTORE_GRANT_ACCOUNT="$(sed -n 's/^RESTORE_REVOKE_ACCOUNT="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
         RESTORE_GRANT_DATASETS="$(sed -n 's/^RESTORE_GRANT_DATASETS="\(.*\)"$/\1/p' "$rpath" 2>/dev/null | head -1)"
     fi
     local _pm; _pm="$(peer_manifest_path "$label")"

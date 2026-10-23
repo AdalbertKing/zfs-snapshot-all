@@ -1419,6 +1419,52 @@ check "REV-170 R1: ...once it is gone, the retry revokes, completes and resumes 
       "$rc|$(rc_cap)|$([ -e "$RC/grants.revoking/one" ] && echo pending || echo -)|$(rc_pz)"
 
 
+# ---------------------------------------------------------------------------
+# REV-20261023-170 R2: ACCOUNT DRIFT. The grant records the account that received the
+# delegation; a later import/rejoin may make the pairing manifest name another account.
+# The withdrawal must undo what was delegated -- the recorded account -- and leave the
+# other account's live grant alone. Stateful fake ZFS: scope and namespace tuples.
+# ---------------------------------------------------------------------------
+DR="$TMPD/drift"; mkdir -p "$DR/bin" "$DR/rel/one" "$DR/rel/two" "$DR/peers" "$DR/grants" "$DR/clients" "$DR/state" "$DR/caps"
+dr_manifest() { printf 'PEER_JOIN_ACCOUNT="%s"\nPEER_JOIN_GRANTED_DATASETS="%s"\n' "$2" "$3" > "$DR/peers/$1.conf"; }
+dr_manifest one backup-one tank/a
+dr_manifest two backup-two tank/b
+printf 'CLIENT_NAME=pa\nSTATE=active\nMANAGED_DATASETS=tank/a\n' > "$DR/clients/pa.conf"
+cat > "$DR/bin/zfs" <<'DRZFS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DR/trace"
+case "$1" in
+    list) exit 0 ;;
+    get) echo no; exit 0 ;;
+    create|mount) exit 0 ;;
+    allow|unallow)
+        key="$(printf '%s|%s' "$3" "$6" | tr / % )"
+        if [ "$1" = allow ]; then : > "$DR/caps/$key"; else rm -f "$DR/caps/$key"; fi
+        exit 0 ;;
+esac
+exit 0
+DRZFS
+chmod +x "$DR/bin/zfs"
+export DR
+drd() { PATH="$BIN:$DR/bin:$PATH" PAIR_GATE_STATE_DIR="$DR/rel" PEER_STATE_DIR="$DR/peers" RESTORE_GRANT_DIR="$DR/grants" \
+        CLIENTS_DIR="$DR/clients" RELATIONSHIPS_DIR="$DR/state" bash "$DEPLOY" "$@" 2>&1; }
+dr_cap() { [ -e "$DR/caps/$1|$(printf '%s' "$2" | tr / %)" ] && echo yes || echo no; }   # <account> <dataset>
+
+drd --allow-restore=one >/dev/null; drd --allow-restore=two >/dev/null
+check "REV-170 R2: grants under backup-one (tank/a) and backup-two (tank/b); one records backup-one; both tuples live" \
+      "backup-one|yes|yes|yes|yes|pa" \
+      "$(sed -n 's/^RESTORE_GRANT_ACCOUNT="\(.*\)"$/\1/p' "$DR/grants/one")|$(dr_cap backup-one tank/a)|$(dr_cap backup-one tank/restore)|$(dr_cap backup-two tank/b)|$(dr_cap backup-two tank/restore)|$([ -e "$DR/state/pa/paused" ] && echo pa || echo -)"
+dr_manifest one backup-two tank/a     # the manifest now names another account
+: > "$DR/trace"
+out="$(drd --deny-restore=one)"; rc=$?
+check "REV-170 R2: deny(one) after the drift revokes backup-one's scope AND namespace, rc 0" "0|no|no" \
+      "$rc|$(dr_cap backup-one tank/a)|$(dr_cap backup-one tank/restore)"
+check "REV-170 R2: ...backup-two's live tuples untouched, no call names backup-two" "yes|yes|0" \
+      "$(dr_cap backup-two tank/b)|$(dr_cap backup-two tank/restore)|$(grep -c 'backup-two' "$DR/trace")"
+check "REV-170 R2: ...one's records gone, two still standing, one's writer resumed" "-|-|grant|-" \
+      "$([ -e "$DR/grants/one" ] && echo grant || echo -)|$([ -e "$DR/grants.revoking/one" ] && echo pending || echo -)|$([ -e "$DR/grants/two" ] && echo grant || echo -)|$([ -e "$DR/state/pa/paused" ] && echo pa || echo -)"
+
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
