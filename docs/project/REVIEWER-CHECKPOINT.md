@@ -2,6 +2,40 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
+## Latest final-audit batch — 2026-10-24
+
+**GUI reader timeout, PR #813 — reviewed, no new finding.** The exact integrated
+range was `7c4a57581ad9b50ed1ab9f0c50e3f0fb764181f6..66e702aade8cb96a0e3af8cb45079adc13d47b02`;
+the implementation commit was `749b41b43c5264a1d51475298ee8594da76820c5`,
+the status update was `839de264e9dd7f3a86c8bfbca8d45161113829a6`, and
+the merge commit was `66e702aade8cb96a0e3af8cb45079adc13d47b02`.
+
+The change is confined to read-only GUI verbs. A hanging reader and its child
+process are killed as one process group after the configured deadline; the
+error reaches the existing stale-data gates, while normal JSON remains
+unchanged. Independent evidence:
+
+- focused timeout/child/normal-reader checks: 3/3;
+- stale-row action gates: 13/13;
+- negative control: the base waited 2.00 s and had no timeout diagnostic; the
+  reviewed head returned after 1.00 s with the expected timeout diagnostic;
+- full TUI suite in its expected checkout/whiptail environment: 405/405;
+- `./test/impact.sh 7c4a57581ad9b50ed1ab9f0c50e3f0fb764181f6..66e702aade8cb96a0e3af8cb45079adc13d47b02`
+  selected `test/tui/run.sh`; `./test/impact.sh --verify` passed;
+- upstream CI run 40029976213 passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/40029976213.
+
+No REV was opened. The current ledger and open-thread view contained no live
+review. Source-retention equality and config export/import round-trip were not
+reopened: their acceptance properties are already covered by closed REV-171
+and REV-168 respectively, with no new contradicting code or evidence in this
+batch.
+
+**Next reviewer scope:** reconcile the old `REVIEW-BACKLOG-2026-10-16.md`
+warning for PR #557 / REV-129 against the actually published review, closure,
+current code, and decisive GUID negative control; do not reopen it unless that
+fresh comparison produces new evidence.
+
 ## Mandatory start of every Check / reviewer write
 
 1. fresh READ of `main`;
