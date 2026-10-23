@@ -1,5 +1,7 @@
 # Pauza i blokada relacji — instrukcja operatorska
 
+Wersja angielska: [PAUSE-AND-DISABLE.md](../en/PAUSE-AND-DISABLE.md).
+
 Dwa różne narzędzia do dwóch różnych sytuacji. Projekt: `docs/adr/ADR-0012-pair-pause-architecture.md`
 i `docs/design/pair-pause.md`. Tutaj jest tylko to, co się wpisuje i co się widzi.
 
@@ -12,7 +14,7 @@ i `docs/design/pair-pause.md`. Tutaj jest tylko to, co się wpisuje i co się wi
 | Zatrzymuje ręczne polecenie **z** etykietą `-L` | tak | tak |
 | Zatrzymuje ręczne polecenie **bez** `-L` | **nie** | **tak** |
 | Wymaga kontaktu z peerem | nie | tak — peer musi być osiągalny (zapis, a potem osobny odczyt zwrotny) |
-| Typowe użycie | okno serwisowe, wymiana dysku, głośny sąsiad na łączu | „ta relacja ma stać i nikt ma jej przypadkiem nie ruszyć" |
+| Typowe użycie | okno serwisowe, wymiana dysku, głośny sąsiad na łączu | „ta relacja ma stać i nikt nie może jej przypadkiem ruszyć” |
 
 Obie zostawiają crona, config, klucze i granty ZFS **nietknięte** — nic nie jest przepisywane,
 usuwane ani nadawane na nowo. Pauza obejmuje też retencję: linie `delsnaps` relacji niosą `-L NAZWA`
@@ -28,34 +30,34 @@ nie zatrzyma kogoś, kto ma ten klucz i świadomie go użyje. Każde zdjęcie tr
 ## Pauza miękka
 
 ```bash
-zfs-backup.sh pause-client pve2 --reason='wymiana dysku w szafie'
+zfs-backup.sh pause-client alpha --reason='wymiana dysku w szafie'
 ```
 
 ```text
->>> client 'pve2' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship pve2 is paused' before any snapshot/SSH work.
->>> Covered: retention too. This relationship's delsnaps lines carry '-L pve2' and exit before any listing, SSH or destroy while the pause stands -- on the source as well as the target.
+>>> client 'alpha' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship alpha is paused' before any snapshot/SSH work.
+>>> Covered: retention too. This relationship's delsnaps lines carry '-L alpha' and exit before any listing, SSH or destroy while the pause stands -- on the source as well as the target.
 >>> NOT covered: an engine invoked BY HAND without -L. The pause is a property of the relationship label, so a manual snapsend/snapget/delsnaps that does not name the label is outside it by construction, and deliberately so: the pause exists to stop the schedule, not to take the machine away from the administrator sitting at it.
->>> LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L pve2'
+>>> LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L alpha'
     is not blocked. For enforcement at the peer, including unlabeled manual commands,
-    use: zfs-backup.sh disable-client pve2
+    use: zfs-backup.sh disable-client alpha
 ```
 
 Zdjęcie:
 
 ```bash
-zfs-backup.sh resume-client pve2
+zfs-backup.sh resume-client alpha
 ```
 
 Co widać w logu crona, gdy zadanie trafi na pauzę:
 
 ```text
-<data godzina> - SKIPPED: relationship pve2 is paused (resume: zfs-backup.sh resume-client pve2)
+<data godzina> - SKIPPED: relationship alpha is paused (resume: zfs-backup.sh resume-client alpha)
 ```
 
 Linia `delsnaps` przy pauzie mówi to samo, z dopiskiem, że nic nie skasowano:
 
 ```text
-SKIPPED: relationship pve2 is paused -- no snapshot was destroyed (resume: zfs-backup.sh resume-client pve2)
+SKIPPED: relationship alpha is paused -- no snapshot was destroyed (resume: zfs-backup.sh resume-client alpha)
 ```
 
 i w `zfs-snapshot-stats.log` — **własny status**, nigdy udawany sukces:
@@ -67,7 +69,7 @@ i w `zfs-snapshot-stats.log` — **własny status**, nigdy udawany sukces:
 Monitor w tym czasie nie budzi nikogo, ale też nie milczy:
 
 ```text
-OK -- relationship pve2 is paused (zfs-backup.sh pause-client); staleness is expected until resume-client
+OK -- relationship alpha is paused (zfs-backup.sh pause-client); staleness is expected until resume-client
 ```
 
 ---
@@ -75,15 +77,15 @@ OK -- relationship pve2 is paused (zfs-backup.sh pause-client); staleness is exp
 ## Blokada twarda
 
 ```bash
-zfs-backup.sh disable-client pve2 --reason='postój do odwołania'
+zfs-backup.sh disable-client alpha --reason='postój do odwołania'
 ```
 
 ```text
->>> local pause established for 'pve2'
+>>> local pause established for 'alpha'
 >>> asking the peer to disable this relationship...
->>> client 'pve2' is DISABLED: the peer refuses this relationship's data-plane commands,
+>>> client 'alpha' is DISABLED: the peer refuses this relationship's data-plane commands,
     including manual ones that carry no -L.
->>> LIMIT: the relationship's own key can lift this itself (…enable-client pve2 …)
+>>> LIMIT: the relationship's own key can lift this itself (…enable-client alpha …)
 ```
 
 Kolejność jest stała i celowa: **najpierw pauza lokalna** (żeby żaden job nie wystartował w oknie
@@ -93,7 +95,7 @@ odpowiedź na zapis mówi tylko, co bramka sądziła, że zrobiła.
 Zdjęcie — dokładnie odwrotnie: najpierw peer, weryfikacja, dopiero na końcu pauza lokalna.
 
 ```bash
-zfs-backup.sh enable-client pve2
+zfs-backup.sh enable-client alpha
 ```
 
 Gdy peer jest nieosiągalny, nic nie jest zmyślane:
@@ -110,7 +112,7 @@ Ponowienie jest bezpieczne: verby po stronie peera są idempotentne.
 Co zobaczy ktoś, kto mimo blokady spróbuje ręcznie:
 
 ```text
-PAIR_DISABLED: relationship pve2 is disabled by administrator
+PAIR_DISABLED: relationship alpha is disabled by administrator
 ```
 
 Kody wyjścia bramki — rozróżnialne, bo przez ssh to jedyna informacja, jaka wraca:
@@ -128,20 +130,20 @@ Kody wyjścia bramki — rozróżnialne, bo przez ssh to jedyna informacja, jaka
 
 ```bash
 zfs-backup.sh status              # lista
-zfs-backup.sh status pve2         # szczegóły
+zfs-backup.sh status alpha         # szczegóły
 ```
 
 ```text
-pve2                 state=active             endpoint=10.0.0.1:22  PAUSED_LOCAL
+alpha                 state=active             endpoint=10.0.0.1:22  PAUSED_LOCAL
 ```
 
 ```text
-Klient:            pve2
+Klient:            alpha
 Stan:              active
 Pauza:             PAUSED_LOCAL od <data godzina> (powod: postój do odwołania)
-                   joby i reczne uruchomienia Z etykieta '-L pve2' sa pomijane;
+                   joby i reczne uruchomienia Z etykieta '-L alpha' sa pomijane;
                    reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,
-                   nie granica bezpieczenstwa). Wznowienie: ./zfs-backup.sh resume-client pve2
+                   nie granica bezpieczenstwa). Wznowienie: ./zfs-backup.sh resume-client alpha
 ```
 
 Stan po stronie peera, gdy chcesz spytać wprost:
@@ -152,7 +154,7 @@ ssh -i /root/.ssh/pairing/<peer>_ed25519 zfsbackup-<kolektor>@<peer> 'PAIR-CONTR
 
 ```text
 PAIR_STATE=DISABLED
-PAIR_LABEL=pve1
+PAIR_LABEL=kolektor
 DISABLED_AT=<data godzina>
 DISABLED_REASON=postój do odwołania
 ```
@@ -166,7 +168,7 @@ DISABLED_REASON=postój do odwołania
 `activate-client` dopisuje `pair_label` do każdej sekcji, którą generuje. Ręcznie pisane sekcje
 bez tego pola zachowują się dokładnie tak jak wcześniej — brak etykiety to brak bramkowania.
 Relacja zapisana przez narzędzie wygląda tak (skrót, pełny przykład w
-`docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md`, sekcja 6):
+[WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md](WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md), sekcja 6):
 
 ```ini
 [relation:alpha]
@@ -253,15 +255,15 @@ zdecyduj o kompresji, odłóż to pod `hdd/backups/10.0.0.1` — i odpuść cał
 Nic nie trzeba wpisywać ręcznie: `--join` instaluje bramkę przy zakładaniu relacji.
 
 ```text
->>> pair gate installed at /usr/local/sbin/zfs-pair-gate; relationship state at /var/lib/zfs-snapshot-all/relationships/pve1
->>> installed the gated key line in /home/zfsbackup-pve1/.ssh/authorized_keys
-    (forced command: /usr/local/sbin/zfs-pair-gate pve1); every other line preserved
+>>> pair gate installed at /usr/local/sbin/zfs-pair-gate; relationship state at /var/lib/zfs-snapshot-all/relationships/kolektor
+>>> installed the gated key line in /home/zfsbackup-kolektor/.ssh/authorized_keys
+    (forced command: /usr/local/sbin/zfs-pair-gate kolektor); every other line preserved
 ```
 
 Linia klucza po tej operacji:
 
 ```text
-command="/usr/local/sbin/zfs-pair-gate pve1",restrict ssh-ed25519 AAAAC3Nza… 
+command="/usr/local/sbin/zfs-pair-gate kolektor",restrict ssh-ed25519 AAAAC3Nza… 
 ```
 
 Etykieta w tej linii to **nazwa kolektora**, nie nazwa klienta z kolektora — bramka rozpoznaje

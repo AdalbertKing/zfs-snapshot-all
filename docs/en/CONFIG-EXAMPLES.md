@@ -1,5 +1,7 @@
 # Expert native CONFIG examples
 
+Polish version: [PRZYKLADY-CONFIGU.md](../pl/PRZYKLADY-CONFIGU.md).
+
 `gen-cron.sh` reads one INI config per host (CONFIG format v4) and generates the
 managed crontab block from it. A preset (`add-client --profile=NAME`) is just a
 way to *generate* such a config for a new relationship; after install the config
@@ -8,9 +10,9 @@ first-class path — the documentation, not the CLI, is the escape hatch for
 bespoke policy.
 
 This file collects worked expert examples that the CLI deliberately does not try
-to absorb. Every `.conf` here is a real file under [`examples/`](examples/) and
+to absorb. Every `.conf` here is a real file under [`examples/`](../examples/) and
 generates cleanly; the full field reference lives in the header of
-[`gen-cron.sh`](../gen-cron.sh).
+[`gen-cron.sh`](../../gen-cron.sh).
 
 **Validate/preview any config without touching a crontab** — this renders the
 managed block to stdout and exits non-zero on any error:
@@ -25,7 +27,7 @@ Re-run any example below with its own path to see exactly what it generates.
 
 ## 1. Independent hourly + daily retention, without forcing GFS
 
-[`examples/independent-tiers.conf`](examples/independent-tiers.conf)
+[`examples/independent-tiers.conf`](../examples/independent-tiers.conf)
 
 Two tiers on one dataset, each with its own cadence and its own **count-based**
 retention (`keep = N` → `-<TIER_LETTER><N>`). The counts are independent — 24
@@ -44,7 +46,7 @@ Generates one send line and one prune line per tier:
 
 ## 2. Quiesce only where a guest can tolerate a freeze
 
-[`examples/selective-quiesce.conf`](examples/selective-quiesce.conf)
+[`examples/selective-quiesce.conf`](../examples/selective-quiesce.conf)
 
 `quiesce` is per-dataset and, unlike link auto-tuning (`-A`), is **never
 inferred** — whether a guest can be briefly frozen, and what the write stall
@@ -62,7 +64,7 @@ whose brief stall would cut your own path to the host.
 
 ## 3. Shorter local retention than the store keeps (the "Kancelaria" pattern)
 
-[`examples/short-local-long-store.conf`](examples/short-local-long-store.conf)
+[`examples/short-local-long-store.conf`](../examples/short-local-long-store.conf)
 
 The working pool holds only a short local safety window (48 hourly = two days);
 long history lives in the store, which keeps `-D90`. Every snapshot is still
@@ -73,7 +75,7 @@ so each side owns its own policy and neither infers the other's.
 
 ## 4. Hand-authored prune schedules and patterns
 
-[`examples/manual-prune.conf`](examples/manual-prune.conf)
+[`examples/manual-prune.conf`](../examples/manual-prune.conf)
 
 A pure backup store — it receives pushes and creates nothing, so there is no
 `[dataset:]` section at all. Retention is written directly with standalone
@@ -135,4 +137,4 @@ it under version control. Validate with step 5 after every edit.
 
 For the exhaustive field-by-field reference (every section type, every field,
 merge rules, the recursion model, the reserved-prefix guard) read the header
-comment block at the top of [`gen-cron.sh`](../gen-cron.sh).
+comment block at the top of [`gen-cron.sh`](../../gen-cron.sh).

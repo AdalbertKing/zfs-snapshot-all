@@ -1,5 +1,7 @@
 # Odzysk z repliki (nośnik wymienny)
 
+Wersja angielska: [RESTORE-FROM-REPLICA.md](../en/RESTORE-FROM-REPLICA.md).
+
 Wszystkie komendy jako **root na kolektorze**. Przykłady: pula nośnika `repl`.
 
 Replika to lustro drzewa kopii: `repl/replica/<ścieżka kopii na kolektorze>`.

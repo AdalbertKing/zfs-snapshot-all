@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 562833fc94ada69e -->
+<!-- status-covers-digest: 40aec79ad580622b -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -118,6 +118,26 @@
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
+- **Dokumentacja użytkownika w komplecie po polsku i po angielsku (`docs/translate-pl-en`, paczka 3 z 3).** Każdy
+  dokument istnieje w `docs/pl/` i `docs/en/` (esencja, jak to działa, wdrożenie Proxmox, kolektor z dwoma źródłami
+  i repliką, komendy, odzysk z repliki, pauza i blokada, instrukcja techniczna, przykłady configu), z linkiem do
+  wersji w drugim języku; README ma pełną tabelę dokumentów EN | PL (samo GUI jest jeszcze po polsku). Angielski przewodnik Proxmox zastąpiony tłumaczeniem
+  poprawionej wersji polskiej. Słownik: relacja = relation, dysk podłączony = connected; w angielskich tekstach
+  klawisze GUI z polskim napisem z ekranu. Przy okazji: ścieżka kopii to cel + adres źródła (nie etykieta), przykłady
+  pauzy na neutralnych nazwach, etykiety F zgodne z ekranem. Linki i kotwice sprawdzone skryptem sesji (istnienie plików, slugi nagłówków jak na GitHubie).
+
+- **Dokumentacja w dwóch językach i dwóch warstwach (`docs/split-pl-en`, paczka 2 z 3).** Przewodniki użytkownika
+  są w `docs/pl/` (`JAK-TO-DZIALA`, `WDROZENIE-PROXMOX`, `WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA`, `KOMENDY`,
+  `ODZYSK-Z-REPLIKI`, `PAUZA-I-BLOKADA`) i `docs/en/` (`DEPLOYMENT-PROXMOX`, `CONFIG-EXAMPLES`); nowa
+  `docs/pl/ESENCJA.md` (jedna strona: pojęcia, pierwsze uruchomienie, codzienna praca). Instrukcja techniczna
+  wyszła z README do `docs/en/REFERENCE.md`, poprawiona według przeglądu (blok `[relation:]` jako to, co pisze
+  narzędzie, polityka degradacji `-q`, brakujące flagi silników, kolejka alertów, bez historii i prawdziwych
+  hostów); opis testów w `test/README.md`. README to krótka strona po angielsku z tabelą dokumentacji EN | PL.
+  Ścieżki w `test/alertmail/run.sh` i komentarzu `test/configexamples/run.sh` poprawione. Tłumaczenia
+  brakujących wersji (en przewodników, pl instrukcji technicznej) -- paczka 3. Przy okazji: `snapsend.sh` i
+  `snapget.sh` (zamrożone) przy nieznanej opcji KRÓTKIEJ drukują polski komunikat („Blad” / „Błąd: Nieznana opcja”), choć
+  CLI ma mówić po angielsku; nieznana opcja długa daje angielskie `Error: unknown option`.
+
 - **Dokumentacja użytkownika po polsku zgodna z kodem (`docs/cleanup-pl-en`, paczka 1 z 3, właściciel 2026-10-23:
   „czystka i porządki”, potem podział na `docs/pl` i `docs/en`).** Sprawdzenie 11 dokumentów z kodem dało około 40
   twierdzeń sprzecznych z kodem. Przepisane: `JAK-TO-DZIALA.md`, `docs/WDROZENIE-PROXMOX.md` (retencja `default` płaska
@@ -141,6 +161,14 @@
   dopiero po Tab, zmierzone na pve10). Na żywo: plan przewinięty do końca, Tab+Enter przechodzi do pytania
   WYKONAJ/Wstecz, nic nie zainstalowane. Przy okazji sprawdzone na żywo: okno „kiedy” w zmianie repliki usb9 ma
   pozycję „o wolnej godzinie”, a kursor stoi na jej obecnym harmonogramie. `tui` 404/0 (pve9).
+
+- **Czytniki GUI mają limit czasu (`fix/gui-reader-timeout`).** Ekran GUI zbiera dane czasownikami-czytnikami
+  (`status`, `list-jobs`, `monitor` i inne, `run_verb` w `tui/zfs-tui.py`), które nie miały limitu: zawieszony
+  czytnik (ssh do martwego hosta, zablokowany `zfs`) trzymał ekran jako nieaktualny do Ctrl-R albo restartu
+  (ryzyko zapisane w odpowiedzi na REV-20261023-172). Teraz każdy czytnik ma domyślnie 60 s (`ZFS_TUI_READER_TIMEOUT`);
+  po limicie ginie cała jego grupa procesów, a ekran dostaje zwykły błąd źródła „… nie odpowiedział w 60 s”.
+  Najdłuższy czytnik na pve10 to ~6 s. Test `test/tui/reader_timeout.py` 3/3 (na main atrapa czytnika,
+  która wisi 300 s, trzymała GUI przez całe 300 s), `tui` 405/0 (pve9).
 
 - **REV-20261023-173: po nieudanym odświeżeniu przechodzą tylko klawisze niezależne od wierszy
   (`fix/rev173-failed-refresh-safe-keys`).** Blokada z REV-172 odrzucała listę klawiszy-czynności, a Ins na

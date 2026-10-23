@@ -1,5 +1,7 @@
 # Komendy — pełna lista
 
+Wersja angielska: [COMMANDS.md](../en/COMMANDS.md).
+
 Ten dokument jest **spisem tego, co pakiet potrafi**, ułożonym tak, jak się
 z niego korzysta, a nie alfabetycznie. Pełny zestaw flag każdego programu daje
 jego własne `-h` — tutaj jest to, **po co** dana komenda istnieje i **kiedy**
@@ -307,7 +309,7 @@ Pełne flagi: `zfs-backup.sh --help`. Czasowniki bez `--yes` tylko planują.
 |---|---|---|
 | `restore --plan` | co da się odtworzyć i skąd (tylko odczyt) | `zfs-backup.sh restore --plan` |
 | `restore RELACJA` | odtwórz relację z jej kopii (patrz punkt 4) | `zfs-backup.sh restore NAZWA --yes` |
-| `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w `docs/ODZYSK-Z-REPLIKI.md` | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
+| `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w [ODZYSK-Z-REPLIKI.md](ODZYSK-Z-REPLIKI.md) | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
 
 ### GUI
 

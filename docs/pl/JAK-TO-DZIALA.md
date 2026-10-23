@@ -1,5 +1,7 @@
 # Jak to działa
 
+Wersja angielska: [HOW-IT-WORKS.md](../en/HOW-IT-WORKS.md).
+
 Jedna strona. Bez historii, bez uzasadnień, bez numerów recenzji — te rzeczy są
 w `docs/` i nie są potrzebne, żeby zrozumieć, co się dzieje na hoście.
 
@@ -95,7 +97,7 @@ albo z `zfs-backup.sh` narzędzie zapisuje samo:
 - `[dataset:…]` wskazuje dataset i relację (`relation`, `side`); `[prune:…]` kasuje na drugiej stronie;
 - `prefix` to co tworzymy, `pattern` to co kasujemy — muszą do siebie pasować;
 - monitor nie ma własnej sekcji, powstaje tam, gdzie tier ma `pattern` i progi;
-- pełny przykład z objaśnieniem: `docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md`, sekcja 6.
+- pełny przykład z objaśnieniem: [WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md](WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md), sekcja 6.
 
 ## Gdzie leży stan
 

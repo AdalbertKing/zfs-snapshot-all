@@ -4,7 +4,7 @@ Dla administratora, który zna Linuksa i podstawy ZFS, ale ten pakiet widzi
 pierwszy raz. Nie zakładamy znajomości wewnętrznej architektury — zakładamy, że
 umiesz czytać `zfs list` i edytować plik w `vi`.
 
-Wersja angielska: [DEPLOYMENT-PROXMOX.md](DEPLOYMENT-PROXMOX.md).
+Wersja angielska: [DEPLOYMENT-PROXMOX.md](../en/DEPLOYMENT-PROXMOX.md).
 
 ---
 
@@ -271,7 +271,7 @@ Stan `active` = gotowe.
 
 ## 4. Gdzie wylądują dane (wariant `backup`)
 
-Ścieżka docelowa składa się z: **cel + etykieta relacji + pełna ścieżka
+Ścieżka docelowa składa się z: **cel + adres źródła + pełna ścieżka
 źródłowa**:
 
 ```
@@ -279,7 +279,7 @@ rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0
 rpool/backups/192.168.1.20/rpool/data/vm-101-disk-0
 ```
 
-Wygląda rozwlekle, ale jest jednoznaczne: po etykiecie od razu wiadomo, z
+Wygląda rozwlekle, ale jest jednoznaczne: po adresie od razu wiadomo, z
 której maszyny pochodzi kopia, a oryginalna ścieżka jest zachowana w całości.
 Dzięki temu jeden kolektor może przyjmować `rpool/data/vm-100-disk-0` z
 dziesięciu różnych hostów bez żadnej kolizji nazw.
@@ -303,7 +303,7 @@ minuta w pierwszym polu jest tu **tylko przykładowa** — każda relacja dostaj
 | `-i` | przy nadrabianiu zaległości **przeskocz od razu do najnowszego stanu**, zamiast przechodzić przez wszystkie snapshoty po drodze. Szybciej i mniej danych, ale na kopii nie będzie stanów pośrednich | Twój `flags` |
 | `-K …/192.168.1.20_ed25519` | loguj się na źródło **tym konkretnym kluczem** (tym z parowania). Robi to, co `ssh -i`, ale litera `i` była już zajęta — patrz wyżej | Twój `flags` |
 | `-A` | **zmierz łącze i sam zdecyduj**, czy kompresja się opłaca. Wynik pamiętany tydzień: prędkość łącza per host, podatność danych per dataset | dokłada generator, domyślnie |
-| `-L prod01` | ten transfer należy do **relacji `prod01`**. Dzięki temu `pause-client` i `disable-client` mogą go zatrzymać, zanim cokolwiek zrobi (patrz `docs/PAUZA-I-BLOKADA.md`) | `pair_label` |
+| `-L prod01` | ten transfer należy do **relacji `prod01`**. Dzięki temu `pause-client` i `disable-client` mogą go zatrzymać, zanim cokolwiek zrobi (patrz [PAUZA-I-BLOKADA.md](PAUZA-I-BLOKADA.md)) | `pair_label` |
 | `"zfsbackup-…@192.168.1.20:rpool/data/vm-100-disk-0"` | **skąd bierzemy**: konto na źródle, jego adres i dataset. Ścieżka dosłowna — dokładnie to, co pokazuje tam `zfs list` | `src` |
 | `"rpool/backups/192.168.1.20"` | **katalog bazowy, nie miejsce docelowe** | cel z `--target` + adres źródła |
 

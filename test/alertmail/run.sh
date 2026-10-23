@@ -267,7 +267,7 @@ verdict_doc=${verdict_line/\$(mta_name)/postfix}
 if [ -z "$verdict_line" ]; then
     bad "the healthy verdict line can be located in deploy.sh" "sed pattern no longer matches -- update this check with the wording"
 else
-    for guide in "$REPO/docs/WDROZENIE-PROXMOX.md" "$REPO/docs/DEPLOYMENT-PROXMOX.md"; do
+    for guide in "$REPO/docs/pl/WDROZENIE-PROXMOX.md" "$REPO/docs/en/DEPLOYMENT-PROXMOX.md"; do
         name=$(basename "$guide")
         [ -r "$guide" ] || { echo "SKIP $name not present"; continue; }
         if ! grep -q "alert delivery: postfix present" "$guide"; then
