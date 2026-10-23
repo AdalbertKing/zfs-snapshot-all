@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 0f229e1740739a5d -->
+<!-- status-covers-digest: 50d0638eb5aae727 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Nowa replika: Esc w kroku 1 pyta, zanim wyjdzie (`fix/replica-step1-esc`, punkt 7).** Było: Esc/Anuluj przy
+  nazwie kończył od razu. Teraz jak w kreatorze relacji: „Przerwać tworzenie repliki? Nic nie zostało zmienione.”,
+  Przerwij albo Zostań (domyślnie i na Esc -- Zostań, wraca do nazwy). Atrapa whiptail w teście, gdy kończą się
+  odpowiedzi, odpowiada na to pytanie Przerwij -- bez tego test krążył w kółko (tak się ujawniło). Test `tui`
+  399/0 (pve9); ze starym `replica.sh` nowy przypadek pada.
 
 - **Lista szablonów bez słowa „trzyma”; panel zadania transferu mówi, ile kopia trzyma (`fix/list-and-panel-keep`,
   punkt 2).** Krok „Jak długo trzymać” powtarzał w każdym wierszu „trzyma …” -- przy 100 kolumnach `full` kończył
