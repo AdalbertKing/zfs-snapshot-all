@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: d9a95a68d5b8d4c8 -->
+<!-- status-covers-digest: 4d91c322a8a871b9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,18 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Odzysk raw wraca z kluczem (`fix/raw-restore-inherit-key`, punkt 6, właściciel 2026-10-23: automatycznie).**
+  Kopia odebrana raw wraca raw, a ZFS robi z każdego tak odebranego zbioru WŁASNY korzeń szyfrowania, zamknięty,
+  `keylocation=prompt` (zmierzone na pve9: `hdd/restore/docs-raw`, `hdd/enc/docs2`). Klucz jest tylko u roota na
+  odzyskiwanej maszynie, więc robi to `deploy.sh --deny-restore` (zamknięcie grantu po odzysku, tam gdzie już
+  wracają montowania): zbiór będący własnym korzeniem, zamknięty, z `keylocation=prompt` otwiera kluczem z pliku
+  korzenia zakresu grantu (`load-key` udaje się tylko tym samym kluczem); pod zaszyfrowanym, otwartym rodzicem --
+  `change-key -i` (dziedziczy), pod niezaszyfrowanym albo zamkniętym -- `keylocation` = plik klucza oryginału. Zbiór, którego żaden
+  klucz zakresu nie otwiera -- ostrzeżenie, bez zmian; zbiór z własnym plikiem klucza -- pomijany. Na żywo pve9:
+  `docs2` dziedziczy `hdd/enc` i ma dane, `docs-raw` otwarty z `file:///root/enc-w2.key`, zbiór z innym kluczem
+  nietknięty. Nie obejmuje odzysku lokalnego (kolektor na sam siebie, bez grantu). `restoregrant` 196/0 (pve9,
+  tester); z `deploy.sh` z main 193/3.
 
 - **Plan importu relacji wypisuje argumenty w cudzysłowach powłoki (`fix/import-plan-quote`, punkt 5).** Skopiowana
   linia planu `import-relation` z regexem, cudzysłowem albo backslashem (np. `--exclude-child=(a|b)[0-9]\,x"y`) nie
