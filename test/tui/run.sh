@@ -4469,6 +4469,29 @@ if hasE "$ERK1" 'Retencja źródła +godzinowe 72, dobowe 7 ~' && hasE "$ERK2" '
 else
     bad "edit-relation: retencja zrodla na karcie" "$(printf '%s' "$ERK1" | grep -o 'Retencja[^~]*')" "$(printf '%s' "$ERK2" | grep -o 'Retencja[^~]*')"
 fi
+# REV-20261023-171: rownosc = OBA zbiory szczebli z retencja takie same. Porownanie szlo tylko
+# po szczeblach zrodla, wiec zrodlo bez dobowego (set-tiers --drop-src-tier=daily) mowilo
+# "tyle samo co w kopii". Ten sam formatter co w produkcji (wyciety z edit-relation.sh).
+SRF="$(mktemp -d)"
+sed -n '/^srcret_words()/,/^sargs_words()/p' "$REPO/tui/edit-relation.sh" \
+    | awk '/^import json, sys/{c=1} c && /^PYEOF$/{exit} c{print}' > "$SRF/f.py"
+srf() {   # <target tiers> <source tiers>, each "name:keep,..." -> formatter output
+    "$PY" - "$1" "$2" > "$SRF/t.json" <<'PYEOF'
+import json, sys
+def side(s): return [{"name": p.split(":")[0], "keep": p.split(":")[1], "retain": ""} for p in s.split(",") if p]
+json.dump({"target": side(sys.argv[1]), "source": side(sys.argv[2])}, sys.stdout)
+PYEOF
+    "$PY" "$SRF/f.py" "$SRF/t.json" | tr -d '\r'
+}
+sr_eq="$(srf hourly:24,daily:7 hourly:24,daily:7)"; sr_val="$(srf hourly:24,daily:7 hourly:12,daily:7)"
+sr_miss="$(srf hourly:24,daily:7 hourly:24)"; sr_extra="$(srf hourly:24 hourly:24,daily:7)"; sr_empty="$(srf hourly:24,daily:7 '')"; sr_none="$(srf '' '')"
+if [ "$sr_eq" = "tyle samo co w kopii" ] && [ "$sr_val" = "godzinowe 12, dobowe 7" ] && [ "$sr_miss" = "godzinowe 24" ] \
+   && [ "$sr_extra" = "godzinowe 24, dobowe 7" ] && [ "$sr_empty" = "bez retencji (źródło nie przycina migawek)" ]    && [ "$sr_none" = "tyle samo co w kopii" ]; then
+    ok "edit-relation: karta -- retencja zrodla rowna celowi tylko przy identycznych zbiorach szczebli (REV-171: brak, nadmiar, inna liczba, puste zrodlo; dwie puste strony = rowne)"
+else
+    bad "edit-relation: karta -- rownosc retencji zrodla (REV-171)" "eq=[$sr_eq] val=[$sr_val] miss=[$sr_miss] extra=[$sr_extra] empty=[$sr_empty] none=[$sr_none]"
+fi
+rm -rf "$SRF"
 # Zmieniona pozycja ma '*' (i [zmiana]); niezmieniona -- dwie spacje.
 EROUT=$(er_run "0${T}adres
 0${T}10.99.0.9
