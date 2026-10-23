@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: db84de635f1ee0ca -->
+<!-- status-covers-digest: 0f229e1740739a5d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,13 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Lista szablonów bez słowa „trzyma”; panel zadania transferu mówi, ile kopia trzyma (`fix/list-and-panel-keep`,
+  punkt 2).** Krok „Jak długo trzymać” powtarzał w każdym wierszu „trzyma …” -- przy 100 kolumnach `full` kończył
+  się „5…” zamiast „5 lat”; teraz same liczby i mieści się (przy 80 kolumnach koniec nadal się utnie, znacznik
+  sposobu liczenia zostaje). Przy okazji: panel „ab -- pobranie” mówił „Trzyma -” -- wiersz transferu ma w kolumnie
+  „-” (retencja stoi w wierszu porządków), a panel brał to „-” zamiast `retain` zadania. Na żywo pve10: pobranie
+  godzinowe „24 godz.”, dzienne „30 dni”. Test `tui` 398/0 (pve9); na main nowe przypadki padają.
 
 - **Kreator kopii i migawek lokalnych nie proponuje nośników replik jako źródła (`fix/local-source-no-replica`,
   punkt 3).** Na pve10 drzewo źródeł kopii lokalnej pokazywało pule nośników (gwlive, replab/replica). Filtr
