@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e2aa34359b2e88de -->
+<!-- status-covers-digest: db84de635f1ee0ca -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,12 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Kreator kopii i migawek lokalnych nie proponuje nośników replik jako źródła (`fix/local-source-no-replica`,
+  punkt 3).** Na pve10 drzewo źródeł kopii lokalnej pokazywało pule nośników (gwlive, replab/replica). Filtr
+  `drop_replica_media` (dotąd tylko w oknie repliki) jest teraz w `basket-lib.sh`; kreator lokalny bierze
+  `list-replicas --json` i chowa nośnik wymienny całą pulą, stały -- jego katalogiem z poddrzewem. Na żywo pve10:
+  zniknęły gwlive i replab/replica, pula replab została. Test `tui` 397/0 (pve9).
 
 - **Stopki w jednym trybie, bez ścieżek klawiszy w treści, bez angielskiego (`fix/words-footers`, właściciel
   2026-10-23, punkty 9-11).** Stopki opisowe: „Enter wybiera   Esc wraca” (było też „Esc wróć”, „Enter zapisz”,
