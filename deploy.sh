@@ -3040,7 +3040,7 @@ restore_grant_rekey() {   # <scope datasets> -> log lines; never fails the withd
                 else
                     warn "  key:          $_rk_ds opened with $_rk_k, but 'zfs change-key -i' failed -- it stays its own root; it opens with that key"
                 fi
-            elif zfs set keylocation="$_rk_k" -- "$_rk_ds" 2>/dev/null; then
+            elif zfs set keylocation="$_rk_k" "$_rk_ds" 2>/dev/null; then   # no "--": zfs set takes it for a dataset
                 log "  key:          $_rk_ds opened with $_rk_k and keeps it as its keylocation (its parent is not encrypted, so it stays its own root)"
             else
                 warn "  key:          $_rk_ds opened with $_rk_k, but its keylocation could not be set -- after a reboot: zfs load-key -L $_rk_k $_rk_ds"
