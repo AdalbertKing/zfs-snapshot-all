@@ -17838,7 +17838,7 @@ SCOPE
         echo
         echo "Wykona sie DOKLADNIE to (jedno polecenie: sekcje, cron, rekord):"
         printf '  zfs-backup.sh local-backup'
-        for x in "${lb_args[@]}"; do printf ' \\\n      %s' "$x"; done
+        for x in "${lb_args[@]}"; do printf ' \\\n      %q' "$x"; done
         printf '\n'
         import_relblock_note "$doc"
         case " ${lb_args[*]} " in *" --target= "*)
@@ -18122,11 +18122,11 @@ EXF
         echo "Odtworzenie (te argumenty, ta kolejnosc):"
         if [ "$rverb" = local-backup ]; then
             printf '  zfs-backup.sh local-backup'
-            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
+            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %q' "$x"; done
             printf ' \\\n      --install\n'
         else
             printf '  zfs-backup.sh add-client %s' "$name"
-            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %s' "$x"; done
+            for x in ${argv[@]+"${argv[@]}"}; do printf ' \\\n      %q' "$x"; done
             if [ "${RUX_MODE:-}" = snaponly ]; then
                 printf '\n  zfs-backup.sh activate %s\n' "$name"
             else

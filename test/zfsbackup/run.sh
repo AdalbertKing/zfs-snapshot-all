@@ -10503,6 +10503,14 @@ if grep -qF -- "$im_q" "$WORK/im.out" && ! grep -qF -- '      --exclude-child=(a
 else
     bad "importrel: plan argv quoted" "want: $im_q" "$(grep -- 'exclude-child' "$WORK/im.out" "$WORK/im.err" 2>/dev/null | head -3)"
 fi
+# ...and no plan or export reconstruction loop is left on %s (local-backup import, export
+# text for both verbs): each "      <arg>" continuation line is printed with %q.
+im_left="$(grep -c "      %s' \"\$x\"" "$ZFSBACKUP")"
+if [ "$im_left" = 0 ] && [ "$(grep -c "      %q' \"\$x\"" "$ZFSBACKUP")" -ge 6 ]; then
+    ok "importrel/exportrel: every printed reconstruction line (import plans, export text) quotes its argument with %q"
+else
+    bad "importrel/exportrel: reconstruction loops on %q" "left on %s: $im_left"
+fi
 im_run "$IM/ksiegowosc.json" --yes; im_rc=$?
 im_want='add-client|ksiegowosc|--host=10.0.0.11|--exclude-child=(a|b)[0-9]\,x"y'
 if [ "$im_rc" -eq 0 ] && grep -qF -- "$im_want" "$IM/calls.log" \
