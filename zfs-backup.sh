@@ -5492,6 +5492,35 @@ schedule_spread_tiers() {   # <send|prune> <minute for the first tier>
 }"
 }
 
+# The hours other replicas start in: [replica:*] schedule fields in this host's configs
+# (all accounts' files, SCHEDULE_CONF_GLOB for a suite), the one being edited excluded.
+replica_taken_hours() {   # <replica name to leave out> -> one hour per line
+    local skip="$1" f
+    for f in ${SCHEDULE_CONF_GLOB:-/etc/zfs-snapshot-all/jobs.*.conf}; do
+        [ -r "$f" ] || continue
+        awk -v skip="[replica:$skip]" '
+            function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+            /^[ \t]*\[/ { inr = (trim($0) ~ /^\[replica:/ && trim($0) != skip); next }
+            inr { t = trim($0); if (t ~ /^schedule[ \t]*=/) { v = t; sub(/^[^=]*=[ \t]*/, "", v); split(v, a, " ")
+                  if (a[2] ~ /^[0-9]+$/) print a[2] + 0 } }' "$f" 2>/dev/null
+    done
+}
+# The first night hour (22, 23, 0 .. 5) no other replica starts in, at a free minute
+# (schedule_take). Every night hour taken: 02:30, the old default, said so.
+REPLICA_SLOT=""
+replica_night_slot() {   # <replica name> -> REPLICA_SLOT ("M H * * *"), the minute reserved
+    local taken h
+    taken=" $(replica_taken_hours "$1" | sort -un | tr '\n' ' ') "
+    for h in 22 23 0 1 2 3 4 5; do
+        case "$taken" in *" $h "*) continue ;; esac
+        schedule_take 0
+        REPLICA_SLOT="$SCHEDULE_PICKED $h * * *"
+        return 0
+    done
+    log "add-replica: every night hour 22-05 already starts a replica -- '$1' gets 02:30 and shares it" >&2
+    REPLICA_SLOT="30 2 * * *"
+}
+
 # The minute a section already starts at: its first send_schedule[_<tier>] (send) or
 # prune_schedule[_<tier>] (prune). Empty when it carries none or the minute is not a number.
 section_first_minute() {   # <file> <[header]> <send|prune> -> minute or nothing
@@ -7886,7 +7915,24 @@ cmd_add_replica() {   # <name> --source=DS [--source=DS2 ...] --dst=POOL/BASE [.
     #
     # A replica that wanted to be closer to live would not be a replica; it would
     # be a second backup relationship, and those already exist.
-    [ -n "$sched" ]  || sched="30 2 * * *"
+    # ONE REPLICA PER HOUR (owner 2026-10-23): a replica is a full send to a medium and runs
+    # long -- two in the same hour overlap whatever their minutes. Unset or `auto` (the
+    # GUI's default) takes the first night hour no other replica starts in, at a free
+    # minute (replica_night_slot). A schedule the admin typed is taken as typed.
+    # An existing replica given no --schedule keeps the one it runs at (an edit does not move it).
+    if [ -z "$sched" ]; then
+        local _rf
+        for _rf in ${SCHEDULE_CONF_GLOB:-/etc/zfs-snapshot-all/jobs.*.conf}; do
+            [ -r "$_rf" ] || continue
+            sched=$(awk -v h="[replica:$name]" '
+                function trim(x) { sub(/^[ \t]+/, "", x); sub(/[ \t]+$/, "", x); return x }
+                /^[ \t]*\[/ { inr = (trim($0) == h); next }
+                inr && trim($0) ~ /^schedule[ \t]*=/ { v = trim($0); sub(/^[^=]*=[ \t]*/, "", v); print v; exit }' "$_rf")
+            [ -n "$sched" ] && break
+        done
+    fi
+    case "$sched" in ''|auto) replica_night_slot "$name"; sched="$REPLICA_SLOT"
+                              log "add-replica: '$name' runs at '$sched' -- the first night hour no other replica uses" ;; esac
 
     # THE SOURCE MUST EXIST. A replica of nothing is a job that alerts nightly.
     # Every one of them, checked here: with a list it is the second entry a

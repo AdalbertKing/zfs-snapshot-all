@@ -3595,6 +3595,23 @@ if [ "$RPRC" -eq 0 ] && grep -qF 'także po włożeniu' "$RP/wt.log" && ! grep -
 else
     bad "replica: kreator, B przy istniejacej regule" "rc=$RPRC" "$RPOUT" "$(cat "$RP/zb.log")" "$(tail -4 "$RP/wt.log" | cut -c1-300)"
 fi
+# Wlasciciel 2026-10-23 (jedna replika na godzine): nowa replika domyslnie "codziennie w nocy,
+# o wolnej godzinie" -- kreator podaje --schedule=auto, godzine wybiera add-replica.
+RPOUT=$(rp_run "0${T}usb5
+0${T}own
+0${T}mirror
+0${T}removable
+0${T}repl
+0${T}auto
+1${T}
+0${T}
+" RP_TREE='goto:hdd/data,space,enter'); RPRC=$?
+if [ "$RPRC" -eq 0 ] && grep -q -- '--schedule=auto' "$RP/zb.log" && grep -qF 'codziennie w nocy, o wolnej godzinie' "$RP/wt.log" \
+   && grep -q -- '--default-item ~ auto' "$RP/wt.log"; then
+    ok "replica: domyslny harmonogram nowej repliki to 'w nocy, o wolnej godzinie' -- --schedule=auto"
+else
+    bad "replica: harmonogram auto" "rc=$RPRC" "$(grep -- '--schedule' "$RP/zb.log" | head -2)" "$(grep -o 'default-item ~ [^~]*' "$RP/wt.log" | head -3)"
+fi
 # (4b): regula sprzed P5 (run-replicas BEZ --on-insert uruchamiala wszystkie) -> przy Tak
 #       plan ja ODNAWIA i install-media-trigger idzie po instalacji.
 printf '# Managed by zfs-backup.sh install-media-trigger\nRUN+="x run-replicas --config=y"\n' > "$RP/rules"

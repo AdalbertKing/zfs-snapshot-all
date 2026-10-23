@@ -607,6 +607,28 @@ else
     bad "one job per minute: section_restagger" "got: $(printf '%s' "$rs_out" | tr '\t\n' ' |')"
 fi
 
+# (e) ONE REPLICA PER HOUR: a new replica takes the first night hour (22, 23, 0 .. 5) no
+# other replica starts in; the replica being edited does not count against itself;
+# every night hour taken -> 02:30, as before.
+rn_conf="$(mktemp)"
+printf '[replica:usb1]\n\tschedule = 0 22 * * *\n[replica:usb9]\n\tschedule = 0 23 * * *\n[replica:sejf]\n\tschedule = 15 0 * * 5\n' > "$rn_conf"
+rn() {   # <replica name> [conf] -> REPLICA_SLOT
+    local t; t="$(mktemp)"
+    { echo 'log() { :; }'; echo 'schedule_taken_minutes() { for m in ${SCHEDULE_RESERVED:-}; do echo "$m"; done; }'
+      printf 'SCHEDULE_CONF_GLOB=%q\n' "${2:-$rn_conf}"
+      lift schedule_take; lift replica_taken_hours; lift replica_night_slot
+      printf 'replica_night_slot %q; echo "$REPLICA_SLOT"\n' "$1"; } > "$t"
+    bash "$t" 2>/dev/null; rm -f "$t"
+}
+rn_new="$(rn usb10)"; rn_self="$(rn usb9)"
+rn_full="$(mktemp)"; for h in 22 23 0 1 2 3 4 5; do printf '[replica:r%s]\n\tschedule = 0 %s * * *\n' "$h" "$h"; done > "$rn_full"
+rn_sat="$(rn usbX "$rn_full")"; rm -f "$rn_conf" "$rn_full"
+if [ "$rn_new" = "0 1 * * *" ] && [ "$rn_self" = "0 23 * * *" ] && [ "$rn_sat" = "30 2 * * *" ]; then
+    ok "one replica per hour: a new replica gets 01:00 when 22, 23 and 00 are taken; an edited one keeps its own hour free; all night hours taken -> 02:30"
+else
+    bad "one replica per hour: replica_night_slot" "new='$rn_new' self='$rn_self' saturated='$rn_sat'"
+fi
+
 # (d) section_first_minute: what an edit keeps -- the minute the section runs at now.
 sf_wf="$(mktemp)"
 printf '[dataset:x]\n\tsend_schedule_hourly = 13 * * * *\n\tprune_schedule_hourly = 33 * * * *\n[dataset:y]\n\tsend_schedule = */5 * * * *\n' > "$sf_wf"
