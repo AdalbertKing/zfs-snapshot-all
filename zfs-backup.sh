@@ -368,11 +368,14 @@ front end never edits the config file:
                                     The windows for a replica (F6 in the GUI): Ins = new,
                                     Enter + 'e' = change. Ask, show the plan, install.
   zfs-backup.sh add-replica NAME --source=DATASET --dst=POOL/BASE
-                                    Default schedule is 02:30 nightly, after the
-                                    daily tier: a replica is not an online mirror,
-                                    and every run is a window in which the medium
-                                    is at risk.
-                                    [--schedule='30 2 * * *'|on-insert] [--prefix=replica_|--passive]
+                                    Default schedule (none given, or auto): a free
+                                    night hour on this host (22, 23, 0..5, the
+                                    minute free too), so two replicas do not run
+                                    together; a replica already there keeps its
+                                    own. A replica is not an online mirror, and
+                                    every run is a window in which the medium is
+                                    at risk.
+                                    [--schedule=auto|'30 2 * * *'|on-insert] [--prefix=replica_|--passive]
                                     --passive = no snapshots of its own: it carries
                                     the ones already there (for a replica of a
                                     relationship's copies, whose next pull would

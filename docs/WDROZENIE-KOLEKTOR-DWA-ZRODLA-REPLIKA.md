@@ -126,8 +126,10 @@ Jedno polecenie, dowolna liczba źródeł — `--source` jest powtarzalne:
 ```
 
 `add-replica` jest **upsertem**: to samo polecenie z inną listą źródeł zmienia
-istniejące zadanie. Domyślny harmonogram to `30 2 * * *` — raz na dobę, po
-tierze dziennym. Replika **nie jest lustrem online**: nośnik jest zagrożony
+istniejące zadanie. Domyślny harmonogram (bez `--schedule` albo `--schedule=auto`)
+to wolna godzina nocna na tym hoście — 22, 23, potem 0–5, z wolną minutą — raz na
+dobę, więc dwie repliki nie ruszają razem; istniejąca replika zostaje przy swoim
+harmonogramie. Replika **nie jest lustrem online**: nośnik jest zagrożony
 tylko wtedy, gdy jego pula jest zaimportowana, więc liczba biegów **jest**
 ekspozycją.
 
