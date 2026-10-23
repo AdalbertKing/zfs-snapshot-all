@@ -2206,11 +2206,11 @@ for a in "$@"; do [ "$a" = "--infobox" ] && exit 0; done
 for a in "$@"; do [ "$a" = "--textbox" ] && exit 0; done
 n=$(cat "$NR_DIR/wt.n" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$NR_DIR/wt.n"
 line=$(sed -n "${n}p" "$NR_DIR/answers")
-# Koniec odpowiedzi: "Przerwać?" kreatora i "Porzucić zmiany?" kart zmiany dostają Przerwij/Porzuć (Esc = Zostań i test krążyłby
+# Koniec odpowiedzi: "Przerwać?" kreatora i repliki i "Porzucić zmiany?" kart zmiany dostają Przerwij/Porzuć (Esc = Zostań i test krążyłby
 # bez końca); każde inne okno -- 255, jak Esc.
 if [ -z "$line" ]; then
     echo "ATRAPA: brak odpowiedzi nr $n" >> "$NR_DIR/wt.log"
-    for a in "$@"; do case "$a" in "Nowa relacja: przerwać?"|"Porzucić zmiany?") exit 0 ;; esac; done
+    for a in "$@"; do case "$a" in "Nowa relacja: przerwać?"|"Nowa replika: przerwać?"|"Porzucić zmiany?") exit 0 ;; esac; done
     exit 255
 fi
 rc="${line%%	*}"; out="${line#*	}"
@@ -2658,8 +2658,10 @@ ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_3
 ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
 # kampania 3 (2026-10-22, 80x24): sposob liczenia stoi PRZED opisem retencji, wiec przy
 # przycieciu wiersza nie ginie (full i m12w4d7h24-gfs wygladaly tak samo)
-ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("trzyma")
-ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("trzyma")
+ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("30 dni")
+ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("24 godz.")
+# kampania 3 (2026-10-23): pytanie okna mowi "Jak dlugo trzymac" -- na liscie same liczby
+ok = ok and "trzyma" not in d_30 and "trzyma" not in d_g
 sys.exit(0 if ok else 1)
 PYEOF
 then
@@ -3469,6 +3471,21 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
       export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$RP/bin/tree"
       bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
+# Kampania 3 (2026-10-23): Esc w kroku 1 nowej repliki wychodzil bez pytania. Teraz pyta jak
+# kreator relacji; Przerwij konczy bez zmian, Zostan (tez Esc) wraca do kroku 1.
+RPOUT=$(rp_run "1${T}
+0${T}"); RPRC=$?
+rp_q1=$(grep -c 'Nowa replika: przerwać?' "$RP/wt.log" 2>/dev/null)
+RPOUT2=$(rp_run "1${T}
+1${T}
+1${T}
+0${T}"); RPRC2=$?
+rp_q2=$(grep -c 'Nowa replika: przerwać?' "$RP/wt.log" 2>/dev/null); rp_n2=$(grep -c 'Nowa replika -- 1/6 nazwa' "$RP/wt.log" 2>/dev/null)
+if [ "$RPRC" -eq 1 ] && has "$RPOUT" "przerwane, nic nie zmieniono" && [ "$rp_q1" = 1 ]    && [ "$RPRC2" -eq 1 ] && [ "$rp_q2" = 2 ] && [ "$rp_n2" = 2 ] && grep -q -- '--defaultno' "$RP/wt.log"; then
+    ok "replika: Esc w kroku 1 pyta 'przerwać?' (domyślnie Zostań); Zostań wraca do nazwy, Przerwij kończy bez zmian"
+else
+    bad "replika: Esc w kroku 1" "rc=$RPRC/$RPRC2 pytan=$rp_q1/$rp_q2 krok1=$rp_n2" "$RPOUT"
+fi
 rm -f "$RP/rules"
 # H-7 (kampania 2026-10-21): nosnik INNEJ repliki nie jest zrodlem nowej -- staly nosnik = jego
 # katalog docelowy z poddrzewem znika z drzewa (wymienny = cala jego pula, ta sama funkcja).
@@ -5180,6 +5197,34 @@ then
     ok "okno: po zamknieciu linia komunikatu niesie ostatnie slowo okna (wt_end), albo zakonczone/z kodem N -- nigdy [rc=] z linia polecenia"
 else
     bad "okno: komunikat po zamknieciu okna" "rc=$?"
+fi
+
+# Kampania 3 (2026-10-23, na zywo pve10): panel "ab -- pobranie" mowil "Trzyma -", choc zadanie
+# niesie retain -H24 -- wiersz transferu ma w kolumnie "-" (retencja stoi w wierszu porzadkow),
+# a panel bral to "-". Prawdziwe job_panel_pairs na wierszu o ksztalcie z pve10.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+def trzyma(j, keep):
+    row = {"job": j, "keep": keep, "dir": "pull", "task": u"pobranie", "schedule": "15 * * * *"}
+    try:
+        class E(dict):           # pusty slownik, a wolany jak metoda -- falsz (data.failed(...))
+            def __call__(self, *a, **k): return False
+        class D(object):
+            def __getattr__(self, n): return E()
+        pairs = zt.job_panel_pairs(row, D(), 1788960000, None)
+    except Exception as e:
+        return "EXC %s" % e
+    return dict((k, v) for k, v in pairs if k).get(u"Trzyma")
+j = {"direction": "pull", "scope": "hdd/backups/x/hdd/data", "src": "z@h:hdd/data", "retain": "-H24", "schedule": "15 * * * *"}
+a = trzyma(j, "-")
+b = trzyma(dict(j, retain=""), "-")
+sys.exit(0 if (a == u"24 godz." and b == u"-") else 1)
+PYEOF
+then
+    ok "panel zadania: transfer z retain -H24 mowi 'Trzyma 24 godz.', bez retain -- '-'"
+else
+    bad "panel zadania: Trzyma dla wiersza transferu" "rc=$?"
 fi
 
 # Kampania 3 (2026-10-23, punkt 3): kreator kopii/migawek lokalnych proponowal nosniki replik
