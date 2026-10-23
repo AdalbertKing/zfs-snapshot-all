@@ -4,7 +4,7 @@ Dla administratora, który zna Linuksa i podstawy ZFS, ale ten pakiet widzi
 pierwszy raz. Nie zakładamy znajomości wewnętrznej architektury — zakładamy, że
 umiesz czytać `zfs list` i edytować plik w `vi`.
 
-Wersja angielska: [DEPLOYMENT-PROXMOX.md](DEPLOYMENT-PROXMOX.md).
+Wersja angielska: [DEPLOYMENT-PROXMOX.md](../en/DEPLOYMENT-PROXMOX.md).
 
 ---
 

@@ -166,7 +166,7 @@ DISABLED_REASON=postój do odwołania
 `activate-client` dopisuje `pair_label` do każdej sekcji, którą generuje. Ręcznie pisane sekcje
 bez tego pola zachowują się dokładnie tak jak wcześniej — brak etykiety to brak bramkowania.
 Relacja zapisana przez narzędzie wygląda tak (skrót, pełny przykład w
-`docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md`, sekcja 6):
+[WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md](WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md), sekcja 6):
 
 ```ini
 [relation:alpha]

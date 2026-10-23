@@ -307,7 +307,7 @@ Pełne flagi: `zfs-backup.sh --help`. Czasowniki bez `--yes` tylko planują.
 |---|---|---|
 | `restore --plan` | co da się odtworzyć i skąd (tylko odczyt) | `zfs-backup.sh restore --plan` |
 | `restore RELACJA` | odtwórz relację z jej kopii (patrz punkt 4) | `zfs-backup.sh restore NAZWA --yes` |
-| `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w `docs/ODZYSK-Z-REPLIKI.md` | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
+| `restore --from-copy` | odtwórz z kopii na tej puli, gdy rekordów relacji już nie ma — opis w [ODZYSK-Z-REPLIKI.md](ODZYSK-Z-REPLIKI.md) | `zfs-backup.sh restore --from-copy KOPIA --onto DATASET` |
 
 ### GUI
 

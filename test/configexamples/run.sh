@@ -3,7 +3,7 @@
 #
 #   test/configexamples/run.sh
 #
-# docs/CONFIG-EXAMPLES.md presents docs/examples/*.conf as RUNNABLE artifacts:
+# docs/en/CONFIG-EXAMPLES.md presents docs/examples/*.conf as RUNNABLE artifacts:
 # each is promised to render through the real gen-cron.sh, and operators are told
 # they may copy and re-run them. That is a dependency edge --
 #   gen-cron.sh grammar/rendering -> docs/examples/*.conf -> documented behavior
