@@ -2658,8 +2658,10 @@ ok = ok and d_30 is not None and "[zamraża]" in d_30 and "[drabina]" not in d_3
 ok = ok and d_g is not None and "[drabina]" not in d_g and "[płaski]" not in d_g
 # kampania 3 (2026-10-22, 80x24): sposob liczenia stoi PRZED opisem retencji, wiec przy
 # przycieciu wiersza nie ginie (full i m12w4d7h24-gfs wygladaly tak samo)
-ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("trzyma")
-ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("trzyma")
+ok = ok and "[N najnowszych]" in d_30 and 0 <= d_30.find("[N najnowszych]") < d_30.find("30 dni")
+ok = ok and "[GFS]" in d_g and d_g.find("[GFS]") < d_g.find("24 godz.")
+# kampania 3 (2026-10-23): pytanie okna mowi "Jak dlugo trzymac" -- na liscie same liczby
+ok = ok and "trzyma" not in d_30 and "trzyma" not in d_g
 sys.exit(0 if ok else 1)
 PYEOF
 then
@@ -5195,6 +5197,50 @@ then
     ok "okno: po zamknieciu linia komunikatu niesie ostatnie slowo okna (wt_end), albo zakonczone/z kodem N -- nigdy [rc=] z linia polecenia"
 else
     bad "okno: komunikat po zamknieciu okna" "rc=$?"
+fi
+
+# Kampania 3 (2026-10-23, na zywo pve10): panel "ab -- pobranie" mowil "Trzyma -", choc zadanie
+# niesie retain -H24 -- wiersz transferu ma w kolumnie "-" (retencja stoi w wierszu porzadkow),
+# a panel bral to "-". Prawdziwe job_panel_pairs na wierszu o ksztalcie z pve10.
+if "$PY" - "$REPO/tui/zfs-tui.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("zt", sys.argv[1]); zt = importlib.util.module_from_spec(spec); spec.loader.exec_module(zt)
+def trzyma(j, keep):
+    row = {"job": j, "keep": keep, "dir": "pull", "task": u"pobranie", "schedule": "15 * * * *"}
+    try:
+        class E(dict):           # pusty slownik, a wolany jak metoda -- falsz (data.failed(...))
+            def __call__(self, *a, **k): return False
+        class D(object):
+            def __getattr__(self, n): return E()
+        pairs = zt.job_panel_pairs(row, D(), 1788960000, None)
+    except Exception as e:
+        return "EXC %s" % e
+    return dict((k, v) for k, v in pairs if k).get(u"Trzyma")
+j = {"direction": "pull", "scope": "hdd/backups/x/hdd/data", "src": "z@h:hdd/data", "retain": "-H24", "schedule": "15 * * * *"}
+a = trzyma(j, "-")
+b = trzyma(dict(j, retain=""), "-")
+sys.exit(0 if (a == u"24 godz." and b == u"-") else 1)
+PYEOF
+then
+    ok "panel zadania: transfer z retain -H24 mowi 'Trzyma 24 godz.', bez retain -- '-'"
+else
+    bad "panel zadania: Trzyma dla wiersza transferu" "rc=$?"
+fi
+
+# Kampania 3 (2026-10-23, punkt 3): kreator kopii/migawek lokalnych proponowal nosniki replik
+# (gwlive, replab) jako zrodla. drop_replica_media jest teraz w basket-lib.sh i kreator lokalny
+# go wola: nosnik wymienny znika cala pula, staly -- swoim katalogiem z poddrzewem.
+DRM="$(mktemp -d)"
+printf '%s' '{"datasets":[{"name":"gwlive"},{"name":"gwlive/data"},{"name":"hdd"},{"name":"hdd/data"},{"name":"hdd/repl"},{"name":"hdd/repl/x"},{"name":"hdd/replika"}]}' > "$DRM/ds.json"
+printf '%s' '{"replicas":[{"name":"usb","dst":"gwlive/replica","media":"removable"},{"name":"st","dst":"hdd/repl","media":"fixed"}]}' > "$DRM/rep.json"
+DRM_STUB="$DRM/whiptail"; printf '#!/bin/sh
+exit 0
+' > "$DRM_STUB"; chmod +x "$DRM_STUB"
+drm_left="$(WHIPTAIL="$DRM_STUB" bash -c ". '$REPO/tui/wt-lib.sh' && . '$REPO/tui/basket-lib.sh' && drop_replica_media '$DRM/ds.json' '$DRM/rep.json'" 2>&1; "$PY" -c 'import json,sys; print(" ".join(x["name"] for x in json.load(open(sys.argv[1]))["datasets"]))' "$DRM/ds.json")"
+if [ "$drm_left" = "hdd hdd/data hdd/replika" ] && grep -q 'drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"' "$REPO/tui/new-relation.sh"; then
+    ok "kreator lokalny: nosniki replik nie sa zrodlem -- wymienny cala pula, staly katalogiem (hdd/replika zostaje)"
+else
+    bad "kreator lokalny: nosniki replik na liscie zrodel" "zostalo: $drm_left"
 fi
 
 echo "--------------------------------------------"

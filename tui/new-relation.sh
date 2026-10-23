@@ -211,6 +211,11 @@ load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
     [ "$TREE_FOR" = "$(hostport)" ] && [ "${#T_NAME[@]}" -gt 0 ] && return 0
     local -a _lh=(); [ "$MODE" = local ] || _lh=("$(hostport)")
     "$ZB" list-datasets ${_lh[@]+"${_lh[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
+    # Na tym hoście: nośniki replik (cała pula wymiennego, katalog stałego) nie są źródłem.
+    if [ "$MODE" = local ]; then
+        "$ZB" list-replicas --json >"$TMPD/rep.json" 2>/dev/null || echo '{"replicas":[]}' >"$TMPD/rep.json"
+        drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"
+    fi
     basket_tree_from_json "$TMPD/ds.json"
     [ "${#T_NAME[@]}" -gt 0 ] || { echo "źródło nie ma żadnego datasetu" >"$TMPD/ds.err"; return 1; }
     TREE_FOR="$(hostport)"
@@ -553,6 +558,9 @@ step_profile() {
         # stał na KOŃCU opisu i ginął przy przycięciu -- full i m12w4d7h24-gfs wyglądały
         # tak samo ("... 12 mies…"). Idzie zaraz za nazwą, jak pozostałe znaczniki.
         case "$w" in *"  ["*"]") mech="[${w##*  [}"; w="${w%  \[*}" ;; esac
+        # Pytanie okna mówi już "Jak długo trzymać" -- na liście same liczby (przy 100 kolumnach
+        # `full` kończył się "5…" zamiast "5 lat"; kampania 3, 2026-10-23).
+        w="${w#trzyma }"
         label="$(printf '%-15s %s%s%s' "$n" "${mech:+$mech }" "$marks" "$w")"
         # Ta sama ramka co w kroku 9 (U5): w 80 kolumnach wiersze szablonów z
         # [zamraża] [drabina] były szersze niż okno i ucinały jej prawy bok.
