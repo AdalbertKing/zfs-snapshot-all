@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: ddf3814226e357ca -->
+<!-- status-covers-digest: 8d633f842d5b018d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -117,6 +117,15 @@
   dla obu czasowników -- używają `%q` (jak `write_client_field`); na żywo pve10 eksport `ab` miał
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
+
+- **REV-20261023-172: klawisz po oknie działał na starych wierszach, gdy odświeżanie trwało za długo albo się nie udało
+  (`fix/rev172-stale-key-gate`).** Po zamknięciu okna GUI wraca od razu i odświeża dane w tle; klawisz czekał na
+  świeże dane najwyżej 30 s, a potem działał na STARYCH wierszach (recenzent: Del planował usunięcie relacji
+  sprzed zmiany). Teraz po limicie klawisz przepada, ekran jest opisany jako nieaktualny, wyjście (q/F12) działa;
+  przy okazji domknięte okienko, w którym odświeżanie już skończyło, a pętla nie odebrała danych (Del też trafiał
+  w stary wiersz), a nieudane odświeżenie blokuje czynności na wierszu do udanego (Ctrl-R). Test
+  `test/tui/stale_bg_gate.py` (Del, F7, strzałka; nieudane odświeżenie; potem Del na świeżym wierszu): 9/9, na main
+  pada 5 z pierwszych 6. `tui` 404/0 (pve9). Zostaje: same czytniki (`run_verb`) nie mają własnego limitu czasu.
 
 - **U31: okno planu kopii lokalnej w kreatorze pokazuje tylko tę relację (`fix/u31-plan-this-relation`).** Plan
   czasownika `local-backup` wkleja cały kandydat configu i cały blok crona hosta; na pve10 plan kopii `t5` miał 331
