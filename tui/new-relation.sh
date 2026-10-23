@@ -1060,7 +1060,7 @@ step_summary() {    # 0 = wykonano (RC_RUN), 1 = wstecz, 2 = do datasetów, 3 = 
               echo "2. Potem TUTAJ ponów tę samą komendę (zapisana w $HOME/new-relation-$RNAME.cmd):"
               echo "   $(cmd_oneline)"
             } >"$TMPD/stop.txt"
-            geom; wt --title "Nowa relacja: zatrzymane zgodnie z wyborem" --textbox "$TMPD/stop.txt" "$H" "$W"
+            textbox_read "Nowa relacja: zatrzymane zgodnie z wyborem" "$TMPD/stop.txt" "Zamknij"
         else
             result_box "Nowa relacja: NIE UDAŁO SIĘ" "$RC_RUN" "$TMPD/run.log" "" "Relacja '$RNAME' nie została założona."
         fi

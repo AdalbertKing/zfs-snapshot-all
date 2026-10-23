@@ -95,13 +95,28 @@ result_box() {   # <tytuł> <rc> <dziennik> <tekst przy rc=0> [tekst przy rc!=0]
       if [ -n "$(verb_refusal "$log")" ]; then printf 'Powód:\n'; verb_refusal "$log" | sed 's/^/  /'; printf '\n'; fi
       printf 'Koniec dziennika:\n'; tail -n 15 "$log" | sed 's/^/  /'
     } >"$log.view"
-    wt --title "$t" --textbox "$log.view" "$H" "$W"
+    textbox_read "$t" "$log.view" "Zamknij"
     return 0
 }
 clip_label() {  # <tekst> <max znaków> -> tekst, ucięty z '…' gdy dłuższy (pozycja listy nie rozsadzi ramki)
     local t="$1" m="$2"
     [ "$m" -lt 8 ] && m=8
     if [ "${#t}" -gt "$m" ]; then printf '%s…' "${t:0:$((m - 1))}"; else printf '%s' "$t"; fi
+}
+# OKNO TEKSTU DO CZYTANIA (przejście na żywo pve10, 2026-10-23): whiptail --textbox BEZ
+# --scrolltext nie przewija -- strzałki, PgDn i Tab nic nie robiły, plan dłuższy niż ekran
+# był ucięty na pierwszej stronie. Z --scrolltext strzałki przewijają, ale Enter działa
+# dopiero po Tab na przycisku (Esc = wstecz) -- zmierzone. Krótki tekst: zwykłe okno, Enter
+# zamyka; długi: przewijanie i te klawisze w tytule (na ramce).
+textbox_read() {   # <tytuł> <plik> [przycisk, domyślnie Dalej] -> rc whiptail (Esc = 1/255)
+    local t="$1" f="$2" b="${3:-Dalej}" lines
+    geom
+    lines=$(fold -s -w $((W - 4)) "$f" | grep -c '')
+    if [ "$lines" -le $((H - 7)) ]; then
+        wt --title "$t" --ok-button "$b" --textbox "$f" "$H" "$W"
+    else
+        wt --title "$t  [strzałki przewijają, Tab -> $b, Esc wraca]" --ok-button "$b" --scrolltext --textbox "$f" "$H" "$W"
+    fi
 }
 yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijanie TYLKO gdy się nie mieści
     # W oknie z --scrolltext fokus startuje na tekście i Enter nic nie robi, dopóki nie
@@ -117,7 +132,7 @@ yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijani
         # robił nic, admin naciskał go i czekał. Długi tekst idzie najpierw do czytania (okno
         # pliku: strzałki przewijają, Enter = dalej), potem krótkie pytanie z tymi samymi
         # przyciskami -- jak plan w zmianie relacji. Esc w oknie tekstu = "nie".
-        wt --title "$t  [strzałki przewijają, Enter = dalej]" --ok-button "Dalej" --textbox "$f" "$H" "$W" || return 1
+        textbox_read "$t" "$f" || return 1
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra \
            --yesno "Plan był w poprzednim oknie ($lines wierszy). $y?" 8 "$W"
     fi
