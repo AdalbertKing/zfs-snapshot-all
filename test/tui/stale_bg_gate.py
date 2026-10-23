@@ -101,6 +101,50 @@ def main():
     shell = ui2.pending_shell or ""
     check("after-successful-refresh-del-targets-fresh-row", "fresh-relation" in shell, "shell=%r" % shell)
 
+    # REV-20261023-173: after a failed refresh EVERY row-dependent key is refused, not a
+    # fixed list -- Ins on Templates copied the stale selected profile. Row-free keys
+    # (navigation, screen switch) still work; after a successful refresh Ins uses the
+    # fresh profile.
+    def tsnap(name):
+        d = snapshot(m, "r")
+        d.profiles = [{"name": name}]
+        return d
+    tmode = ["stale"]
+
+    def collect3(_repo, _files, only=None):
+        if tmode[0] == "fail":
+            raise RuntimeError("reader died")
+        return tsnap("stale-template" if tmode[0] == "stale" else "fresh-template")
+
+    m.collect = collect3
+    ui3 = m.UI("/tmp", {}, m.Chars(True), 1700000000, None)
+    ui3.screen = "szablony"
+    tmode[0] = "fail"
+    ui3.refresh_bg()
+    ui3._bg[0].join(5)
+    rec = []
+    ui3.run_template_dialog = lambda argv: rec.append(argv) or "shell"
+    r_del = ui3.key("del")
+    r_ins = ui3.key("ins")
+    check("failed-refresh-templates-del-and-ins-refused",
+          r_del == "stay" and r_ins == "stay" and not rec and "NIEAKTUALNY" in (ui3.message or "")
+          and "Ctrl-R" in (ui3.message or ""),
+          "del=%r ins=%r rec=%r msg=%r" % (r_del, r_ins, rec, ui3.message))
+    ui3.key("down")
+    nav_ok = "NIEAKTUALNY" not in (ui3.message or "")
+    ui3.key("F3")
+    check("failed-refresh-row-free-keys-pass", nav_ok and ui3.screen == "relacje", "screen=%r" % ui3.screen)
+    ui3.key("F5")
+    tmode[0] = "fresh"
+    ui3.ensure_profiles = lambda: setattr(ui3.data, "profiles", ui3.data.profiles or [{"name": "fresh-template"}])
+    ui3.refresh()
+    ui3.cursor["szablony"] = 0
+    rec[:] = []
+    ui3.key("ins")
+    check("after-successful-refresh-ins-uses-fresh-profile",
+          any("--from=fresh-template" in a for argv in rec for a in argv) and not any("stale-template" in a for argv in rec for a in argv),
+          "rec=%r" % rec)
+
 
 if __name__ == "__main__":
     main()
