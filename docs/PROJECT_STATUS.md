@@ -105,6 +105,7 @@
   needed by grant(s)”); ostatni właściciel zdejmuje je jak dotąd, przed wznowieniem pisarzy. Grant zapisuje
   konto (`RESTORE_GRANT_ACCOUNT`). Inne konto i inna pula -- nietknięte. `restoregrant` 192/0 (pve9, tester);
   z `deploy.sh` z main 186/6; skrypt recenzenta przestał odtwarzać błąd.
+
 - **Nowa replika: Esc w kroku 1 pyta, zanim wyjdzie (`fix/replica-step1-esc`, punkt 7).** Było: Esc/Anuluj przy
   nazwie kończył od razu. Teraz jak w kreatorze relacji: „Przerwać tworzenie repliki? Nic nie zostało zmienione.”,
   Przerwij albo Zostań (domyślnie i na Esc -- Zostań, wraca do nazwy). Atrapa whiptail w teście, gdy kończą się
