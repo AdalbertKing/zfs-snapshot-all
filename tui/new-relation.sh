@@ -211,6 +211,11 @@ load_tree() {   # -> T_*[] ; rc!=0 = błąd w $TMPD/ds.err
     [ "$TREE_FOR" = "$(hostport)" ] && [ "${#T_NAME[@]}" -gt 0 ] && return 0
     local -a _lh=(); [ "$MODE" = local ] || _lh=("$(hostport)")
     "$ZB" list-datasets ${_lh[@]+"${_lh[@]}"} --json --own-snapshots >"$TMPD/ds.json" 2>"$TMPD/ds.err" || return 1
+    # Na tym hoście: nośniki replik (cała pula wymiennego, katalog stałego) nie są źródłem.
+    if [ "$MODE" = local ]; then
+        "$ZB" list-replicas --json >"$TMPD/rep.json" 2>/dev/null || echo '{"replicas":[]}' >"$TMPD/rep.json"
+        drop_replica_media "$TMPD/ds.json" "$TMPD/rep.json"
+    fi
     basket_tree_from_json "$TMPD/ds.json"
     [ "${#T_NAME[@]}" -gt 0 ] || { echo "źródło nie ma żadnego datasetu" >"$TMPD/ds.err"; return 1; }
     TREE_FOR="$(hostport)"

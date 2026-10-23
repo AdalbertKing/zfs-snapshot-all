@@ -117,3 +117,28 @@ PYEOF
     done <"$TMPD/tree-out.tsv"
     [ "${#B_ROOT[@]}" -gt 0 ]
 }
+
+# H-7 (kampania 2026-10-21): pula nośnika INNEJ repliki (replab) była na liście źródeł nowej.
+# Kampania 3 (2026-10-23): to samo w kreatorze kopii/migawek lokalnych (gwlive, replab jako źródła).
+# Nośnik wymienny = cała jego pula; nośnik stały = katalog docelowy z poddrzewem. Z listy
+# datasetów (ds.json) znikają, zanim powstanie z niej drzewo.
+drop_replica_media() {   # <ds.json> <rep.json (list-replicas --json)> -- ds.json poprawiony w miejscu
+    "$PY" - "$1" "$2" <<'PYEOF' || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    r = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+hide = []
+for x in r.get("replicas") or []:
+    dst = (x.get("dst") or "").strip("/")
+    if not dst:
+        continue
+    hide.append(dst.split("/")[0] if x.get("media") == "removable" else dst)
+if hide:
+    d["datasets"] = [x for x in d.get("datasets") or []
+                     if not any(x.get("name") == h or (x.get("name") or "").startswith(h + "/") for h in hide)]
+    json.dump(d, open(sys.argv[1], "w", encoding="utf-8"))
+PYEOF
+}
