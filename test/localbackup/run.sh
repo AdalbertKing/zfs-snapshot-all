@@ -69,8 +69,8 @@ chmod +x "$WORK/bin/zfs" "$WORK/bin/crontab"
 # one-shot met "relationship 'lb' already exists". Exported, so `bash "$ZB"` children
 # inherit it too.
 LB_HOST="$WORK/host"
-mkdir -p "$LB_HOST/clients" "$LB_HOST/rel" "$LB_HOST/peers" "$LB_HOST/profiles" "$LB_HOST/keys"
-export CLIENTS_DIR="$LB_HOST/clients" RELATIONSHIPS_DIR="$LB_HOST/rel" PEER_STATE_DIR="$LB_HOST/peers"        PROFILE_USER_ROOT="$LB_HOST/profiles" ZFS_MEDIA_KEY_DIR="$LB_HOST/keys"        SETTINGS_FILE="$LB_HOST/settings.ini" SERVER_CONF="$WORK/no-server.conf"
+mkdir -p "$LB_HOST/clients" "$LB_HOST/rel" "$LB_HOST/peers" "$LB_HOST/profiles" "$LB_HOST/keys" "$LB_HOST/progress"
+export CLIENTS_DIR="$LB_HOST/clients" RELATIONSHIPS_DIR="$LB_HOST/rel" PEER_STATE_DIR="$LB_HOST/peers"        PROFILE_USER_ROOT="$LB_HOST/profiles" ZFS_MEDIA_KEY_DIR="$LB_HOST/keys"        SETTINGS_FILE="$LB_HOST/settings.ini" SERVER_CONF="$WORK/no-server.conf"        ZFS_PROGRESS_DIR="$LB_HOST/progress"
 # The suite's own default. A helper that finds CLIENTS_DIR still equal to it was given no
 # directory by its caller, and a one-shot gets a FRESH one (lb_clients below).
 LB_DEFAULT_CLIENTS="$CLIENTS_DIR"
@@ -553,11 +553,11 @@ if [ "$iso1r" -eq 0 ] && [ "$iso2r" -eq 0 ] && ! printf '%s' "$iso2" | grep -q "
 else
     bad "REV-169: one-shot record isolation" "rc=$iso1r/$iso2r default=[$(ls -A "$LB_DEFAULT_CLIENTS")] $(printf '%s' "$iso2" | grep -m1 'already exists\|FATAL')"
 fi
-iso_paths="$CLIENTS_DIR $RELATIONSHIPS_DIR $PEER_STATE_DIR $PROFILE_USER_ROOT $MEDIA_KEY_DIR $SETTINGS_FILE $SERVER_CONF $CRON_LOCK_DIR ${CRON_SPOOL_DIRS[*]}"
+iso_paths="$CLIENTS_DIR $RELATIONSHIPS_DIR $PEER_STATE_DIR $PROFILE_USER_ROOT $MEDIA_KEY_DIR $SETTINGS_FILE $SERVER_CONF $CRON_LOCK_DIR $ZFS_PROGRESS_DIR ${CRON_SPOOL_DIRS[*]}"
 iso_out=""
 for iso_p in $iso_paths; do case "$iso_p" in "$WORK"/*) ;; *) iso_out="$iso_out $iso_p" ;; esac; done
 if [ -z "$iso_out" ]; then
-    ok "REV-169: every host path the sourced product uses (clients, relationships, peers, profiles, keys, settings, server.conf, locks, cron spool) is under the fixture"
+    ok "REV-169: every host path the sourced product uses (clients, relationships, peers, profiles, keys, settings, server.conf, locks, progress, cron spool) is under the fixture"
 else
     bad "REV-169: host paths under the fixture" "outside \$WORK:$iso_out"
 fi
