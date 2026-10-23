@@ -5153,7 +5153,7 @@ fi
 # mowila "[rc=1] <cala linia polecenia>" takze po zwyklym Esc -- anulowanie wygladalo jak
 # blad. Teraz okno zostawia swoje ostatnie slowo (wt_end -> ZFS_TUI_STATUS), a GUI pokazuje
 # je, albo "zakonczone" / "zakonczone z kodem N". Prawdziwe UI.window_end_message i wt_end.
-WE="$WORK/winend"; rm -rf "$WE"; mkdir -p "$WE"
+WE="$(mktemp -d)"
 WE_STUB="$WE/whiptail"; printf '#!/bin/sh
 exit 0
 ' > "$WE_STUB"; chmod +x "$WE_STUB"
