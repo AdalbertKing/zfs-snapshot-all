@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 34c827a9a93a280a -->
+<!-- status-covers-digest: ddf3814226e357ca -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -117,6 +117,14 @@
   dla obu czasowników -- używają `%q` (jak `write_client_field`); na żywo pve10 eksport `ab` miał
   `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
   sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
+
+- **U31: okno planu kopii lokalnej w kreatorze pokazuje tylko tę relację (`fix/u31-plan-this-relation`).** Plan
+  czasownika `local-backup` wkleja cały kandydat configu i cały blok crona hosta; na pve10 plan kopii `t5` miał 331
+  linii, w tym relacje ab i cb. Okno „Plan” kreatora (`plan_only_this`) zostawia sekcje tej relacji (blok
+  `[relation:NAZWA]` i sekcje z `relation`/`pair_label` = nazwa) i jej linie crona, a resztę liczy jednym zdaniem
+  („Bez zmian zostaje reszta: sekcje configu: 17, linie crona: 32”); na pve10 101 linii. Wyjście CLI bez zmian; plan
+  relacji zdalnej już wcześniej pokazywał różnicę crontaba. Ekran wyniku po założeniu relacji to krótkie okno (U66).
+  `tui` 403/0 (pve9); nowy przypadek na main pada.
 
 - **REV-20261023-171: karta zmiany relacji mówiła „tyle samo co w kopii” przy źródle bez szczebla
   (`fix/rev171-srcret-equality`).** Pozycja „Retencja źródła” porównywała tylko szczeble źródła z szczeblami
