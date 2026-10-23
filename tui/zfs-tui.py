@@ -746,15 +746,42 @@ def run_verb(repo, args):
     Status wyjscia NIE jest bledem sam z siebie: `monitor` zwraca 1/2/3 jako
     WERDYKT (to jego kontrakt), wiec liczy sie to, czy wyjscie da sie sparsowac."""
     cmd = [os.path.join(repo, "zfs-backup.sh")] + args
+    # Limit (REV-20261023-172, ryzyko w odpowiedzi): czytnik bez limitu, który zawisł (ssh do
+    # martwego hosta, zablokowany zfs), trzymał ekran jako nieaktualny do Ctrl-R albo restartu.
+    # Najdłuższy czytnik na pve10 (monitor --json) to ~6 s. Po limicie ginie cała grupa
+    # procesów (czytnik odpala ssh), a odświeżenie dostaje zwykły błąd źródła.
+    limit = READER_TIMEOUT()
     try:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=hasattr(os, "killpg"))
     except OSError as e:
         return None, u"nie udało się uruchomić %s: %s" % (" ".join(args), e)
     try:
-        return json.loads(p.stdout.decode("utf-8", "replace")), None
+        out, errb = p.communicate(timeout=limit)
+    except subprocess.TimeoutExpired:
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(p.pid, signal.SIGKILL)
+            else:
+                p.kill()
+        except OSError:
+            pass
+        p.communicate()
+        return None, u"%s nie odpowiedział w %d s -- przerwany" % (args[0], limit)
+    try:
+        return json.loads(out.decode("utf-8", "replace")), None
     except ValueError:
-        err = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        err = errb.decode("utf-8", "replace").strip().splitlines()
         return None, (err[-1] if err else u"%s nie wydał poprawnego JSON-a" % args[0])
+
+
+def READER_TIMEOUT():
+    """Sekundy na jeden czytnik GUI: ZFS_TUI_READER_TIMEOUT, domyślnie 60."""
+    try:
+        v = int(os.environ.get("ZFS_TUI_READER_TIMEOUT", "60"))
+        return v if v > 0 else 60
+    except ValueError:
+        return 60
 
 
 def load_file(path):

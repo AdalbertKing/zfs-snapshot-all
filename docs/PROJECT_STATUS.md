@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8bb883e9123e66b6 -->
+<!-- status-covers-digest: 70fc1e6f42e7dd48 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -143,6 +143,14 @@
   numerów PR i historii incydentów; config relacji pokazany jako blok `[relation:]`. Wersje angielskie i README -- w
   paczkach 2 i 3. Przy okazji w kodzie: `status` (`zfs-backup.sh` ~19636) nadal pisze, że pauza nie obejmuje
   retencji, a nagłówek `gen-cron.sh` ~146-149 mówi to samo o sekcji `[prune:]` -- do poprawy poza tą paczką.
+
+- **Czytniki GUI mają limit czasu (`fix/gui-reader-timeout`).** Ekran GUI zbiera dane czasownikami-czytnikami
+  (`status`, `list-jobs`, `monitor` i inne, `run_verb` w `tui/zfs-tui.py`), które nie miały limitu: zawieszony
+  czytnik (ssh do martwego hosta, zablokowany `zfs`) trzymał ekran jako nieaktualny do Ctrl-R albo restartu
+  (ryzyko zapisane w odpowiedzi na REV-20261023-172). Teraz każdy czytnik ma domyślnie 60 s (`ZFS_TUI_READER_TIMEOUT`);
+  po limicie ginie cała jego grupa procesów, a ekran dostaje zwykły błąd źródła „… nie odpowiedział w 60 s”.
+  Najdłuższy czytnik na pve10 to ~6 s. Test `test/tui/reader_timeout.py` 3/3 (na main atrapa czytnika,
+  która wisi 300 s, trzymała GUI przez całe 300 s), `tui` 405/0 (pve9).
 
 - **REV-20261023-173: po nieudanym odświeżeniu przechodzą tylko klawisze niezależne od wierszy
   (`fix/rev173-failed-refresh-safe-keys`).** Blokada z REV-172 odrzucała listę klawiszy-czynności, a Ins na
