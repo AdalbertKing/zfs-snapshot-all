@@ -49,7 +49,12 @@ while :; do
     esac
     items+=(rec "Zwolnij nazwę '$NAME' (żeby dało się założyć ją od nowa)" "$REC")
     [ -n "$COPIES" ] && items+=(data "SKASUJ KOPIE na tym hoście (nieodwracalne)" "$DATA")
-    head="Relacja '$NAME' (stan: ${STATE:-?}) przestanie działać: znikną jej zadania z crona."
+    # Stan słowem z F3 (STATE_PL w zfs-tui.py), nie surowym słowem rekordu.
+    case "$STATE" in
+        active) st="działa" ;; pending_enroll) st="zakładana" ;; seeding) st="1. kopia" ;;
+        seed_complete) st="po 1. kopii" ;; endpoint_verified) st="sprawdzona" ;; *) st="${STATE:-?}" ;;
+    esac
+    head="Relacja '$NAME' (stan: $st) przestanie działać: znikną jej zadania z crona."
     [ "$STATE" = removed ] && head="Relacja '$NAME' jest już usunięta -- zostało po niej to, co niżej."
     wt --title "Usuń relację $NAME -- co jeszcze?   [Spacja zaznacza]" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
        --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+Kopie na tym hoście: $COPIES\nKopii domyślnie NIE ruszam.}" "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \

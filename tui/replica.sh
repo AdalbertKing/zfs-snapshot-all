@@ -484,13 +484,13 @@ PYEOF
     26) # NA DYSKU: odbicie kolektora czy własne N (W18, właściciel 2026-10-11 -- dysk
         # wkładany raz w miesiącu, 12 stanów wstecz). Tylko przy własnych migawkach.
         def=mirror; [ -n "$KEEP" ] && def=keep
-        wt --title "$(rtitle 3 'na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
+        wt --title "$(rtitle 3 'migawki: co zostaje na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" --notags --default-item "$def" \
            --menu "Co ma zostawać na dysku repliki?" 11 "$W" 2 \
            mirror "Odbicie kolektora -- dysk trzyma to, co kolektor" \
            keep "Trzymaj N ostatnich kopii -- własna historia dysku, niezależna od kolektora" || { step=25; continue; }
         if [ "$WT_OUT" = mirror ]; then KEEP=""; step=3; continue; fi
         while :; do
-            wt --title "Replika $NAME -- ile kopii na dysku" --ok-button "Dalej" --cancel-button "Wstecz" \
+            wt --title "$(rtitle 3 'migawki: ile kopii na dysku')" --ok-button "Dalej" --cancel-button "Wstecz" \
                --inputbox "Ile ostatnich kopii (migawek replica_) ma zostawać na dysku?\nNp. 12 = rok przy dysku wkładanym raz w miesiącu." 10 "$W" "${KEEP:-12}" || { WT_OUT=""; break; }
             case "$WT_OUT" in ''|*[!0-9]*|0*) wt --title "Zła liczba" --msgbox "'$WT_OUT' -- liczba całkowita większa od 0." 8 "$W"; continue ;; esac
             break
