@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: e847112c5ec8a808 -->
+<!-- status-covers-digest: f201d103b3f19567 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -105,6 +105,11 @@
   needed by grant(s)”); ostatni właściciel zdejmuje je jak dotąd, przed wznowieniem pisarzy. Grant zapisuje
   konto (`RESTORE_GRANT_ACCOUNT`). Inne konto i inna pula -- nietknięte. `restoregrant` 192/0 (pve9, tester);
   z `deploy.sh` z main 186/6; skrypt recenzenta przestał odtwarzać błąd.
+- **Nowa replika: Esc w kroku 1 pyta, zanim wyjdzie (`fix/replica-step1-esc`, punkt 7).** Było: Esc/Anuluj przy
+  nazwie kończył od razu. Teraz jak w kreatorze relacji: „Przerwać tworzenie repliki? Nic nie zostało zmienione.”,
+  Przerwij albo Zostań (domyślnie i na Esc -- Zostań, wraca do nazwy). Atrapa whiptail w teście, gdy kończą się
+  odpowiedzi, odpowiada na to pytanie Przerwij -- bez tego test krążył w kółko (tak się ujawniło). Test `tui`
+  399/0 (pve9); ze starym `replica.sh` nowy przypadek pada.
 
 - **Lista szablonów bez słowa „trzyma”; panel zadania transferu mówi, ile kopia trzyma (`fix/list-and-panel-keep`,
   punkt 2).** Krok „Jak długo trzymać” powtarzał w każdym wierszu „trzyma …” -- przy 100 kolumnach `full` kończył
