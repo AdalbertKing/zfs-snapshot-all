@@ -1,5 +1,7 @@
 # Expert native CONFIG examples
 
+Polish version: [PRZYKLADY-CONFIGU.md](../pl/PRZYKLADY-CONFIGU.md).
+
 `gen-cron.sh` reads one INI config per host (CONFIG format v4) and generates the
 managed crontab block from it. A preset (`add-client --profile=NAME`) is just a
 way to *generate* such a config for a new relationship; after install the config

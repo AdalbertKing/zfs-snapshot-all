@@ -1,11 +1,13 @@
 # zfs-snapshot-all: technical reference
 
+Polish version: [REFERENCJA.md](../pl/REFERENCJA.md).
+
 This is the reference for the individual programs, flags and config sections.
 For the procedure of setting up two hosts, read
 [DEPLOYMENT-PROXMOX.md](DEPLOYMENT-PROXMOX.md) first; for ready-made expert configs,
 [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md). The complete list of `zfs-backup.sh` verbs is in
-[../pl/KOMENDY.md](../pl/KOMENDY.md) (Polish), and how the pieces fit together is in
-[../pl/JAK-TO-DZIALA.md](../pl/JAK-TO-DZIALA.md) (Polish).
+[COMMANDS.md](COMMANDS.md), and how the pieces fit together is in
+[HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 ## Contents
 
@@ -59,7 +61,7 @@ Testing is described in [../../test/README.md](../../test/README.md).
 
 | Program | Role |
 |---|---|
-| [`zfs-backup.sh`](../../zfs-backup.sh) | The front door. Creates, activates, pauses, edits and removes relationships; runs replicas; starts the GUI (`zfs-backup gui`). It orchestrates the programs below and never writes onto a client's production data (that is `zfs-restore.sh`'s job) |
+| [`zfs-backup.sh`](../../zfs-backup.sh) | The front door. Creates, activates, pauses, edits and removes relations; runs replicas; starts the GUI (`zfs-backup gui`). It orchestrates the programs below and never writes onto a client's production data (that is `zfs-restore.sh`'s job) |
 | [`zfs-restore.sh`](../../zfs-restore.sh) | The restore surface (planner, safe restore into a side namespace, destructive replace behind an explicit grant). `zfs-backup.sh restore` forwards to it |
 | [`snapsend.sh`](../../snapsend.sh) | Create and push-replicate a dataset (source always local, target local or remote) |
 | [`snapget.sh`](../../snapget.sh) | Pull-replicate a dataset (target always local, source local or remote); also mirror mode and snapshot-only mode |
@@ -68,9 +70,9 @@ Testing is described in [../../test/README.md](../../test/README.md).
 | [`gen-cron.sh`](../../gen-cron.sh) | Generates (and optionally installs) a crontab block from one INI config |
 | [`zfs-job.sh`](../../zfs-job.sh) | The envelope around every generated cron job (logging, begin/end markers, failure notification). The engine command stays readable in the crontab line |
 | [`deploy.sh`](../../deploy.sh) | Bootstraps a host (dependencies, checkout, alerting, log rotation, smoke test, optional delegated account) and handles pairing (`--pair`, `--join`, `--leave`) |
-| [`clean-relationships.sh`](../../clean-relationships.sh) | Audits one host for relationship traces (records, accounts, keys, grants, holds) and removes the dead ones when told to |
+| [`clean-relationships.sh`](../../clean-relationships.sh) | Audits one host for relation traces (records, accounts, keys, grants, holds) and removes the dead ones when told to |
 | [`update-control.sh`](../../update-control.sh) | Self-update, rollback and update hold, deployed outside the checkout it manages |
-| [`zfs-pair-gate.sh`](../../zfs-pair-gate.sh) | Peer-side gate that refuses the data-plane commands of a disabled relationship |
+| [`zfs-pair-gate.sh`](../../zfs-pair-gate.sh) | Peer-side gate that refuses the data-plane commands of a disabled relation |
 | [`zfs-media-gate.sh`](../../zfs-media-gate.sh) | `zpool import`, sync, `zpool export` bracket around a replica onto removable media |
 | [`zfs-quiesce-helper.sh`](../../zfs-quiesce-helper.sh) | The only privileged action a delegated account may perform on a guest (freeze/thaw), behind a sudo rule |
 | [`tui/`](../../tui) | The text GUI (`zfs-tui.py` plus the whiptail windows it starts) |
@@ -85,9 +87,9 @@ program: `snapsend.sh`, `snapget.sh`, `delsnaps.sh`, `check-snap-age.sh` and `ge
 
 ## The front door and the GUI
 
-Normally you do not call the engines yourself. `zfs-backup.sh` creates a relationship, writes
+Normally you do not call the engines yourself. `zfs-backup.sh` creates a relation, writes
 the config, installs the cron block and keeps the pieces consistent. Run it without arguments to
-print the full usage. A relationship is created in four commands (collector, source, collector,
+print the full usage. A relation is created in four commands (collector, source, collector,
 collector) as shown in [DEPLOYMENT-PROXMOX.md](DEPLOYMENT-PROXMOX.md); each command can be re-run
 after an interruption and resumes from the durable state.
 
@@ -112,13 +114,13 @@ window for it. See [snapsend.sh](#snapsendsh-push-replication).
 |---|---|
 | Create | `--source=HOST:DATASET --target=DATASET [--install]` (remote backup; without `--install` it only plans), `--mode=sync` (mirror), `--source=DATASET --target=DATASET` (local copy), `--target=''` (local snapshots), `new-relation` (wizard), `add-client`, `seed`, `activate` |
 | Change | `edit-relation`, `set-tiers`, `show-tiers`, `set-transfer`, `set-bandwidth`, `add-source`, `remove-source`, `save-profile`, `list-profiles`, `delete-profile`, `edit-config` |
-| State | `pause-client` / `resume-client` (logical pause, `-L` on the job lines), `disable-client` / `enable-client` (the peer refuses the relationship), `move-to-client`, `set-endpoint`, `verify-endpoint`, `final-catchup` |
+| State | `pause-client` / `resume-client` (logical pause, `-L` on the job lines), `disable-client` / `enable-client` (the peer refuses the relation), `move-to-client`, `set-endpoint`, `verify-endpoint`, `final-catchup` |
 | Remove | `remove-client`, `delete-relation` (the whole removal as one command) |
 | Inspect | `status`, `monitor`, `list-jobs`, `job-stats`, `show-config`, `show-scope`, `pair-snapshots`, `export-relation` / `import-relation`, `list-datasets`, `check-source`, `source-pruners`, `prepare-source`, `test` |
 | Replicas (extra copies onto disks that get unplugged) | `add-replica`, `list-replicas`, `run-replicas`, `run-relation`, `prepare-media`, `install-media-trigger`, `remove-media-trigger`, `replica-restart`, `remove-replica` |
 | Restore | `restore --plan`, `restore --dataset=D --snapshot=S` (safe side restore), `browse NAME --ask` (read-only mount of a snapshot, copy files out) |
 
-Verbs that end in `-client` act on the relationship record; bare verbs act on the link or the data.
+Verbs that end in `-client` act on the relation record; bare verbs act on the link or the data.
 Many verbs only plan until you pass `--yes` (or `--install`), and the readers have a `--json`
 form, which is the GUI's data layer.
 
@@ -130,18 +132,18 @@ commands, so everything it does can be done on the command line. The GUI is in P
 
 | Key | Window or action |
 |---|---|
-| F1 | Help |
-| F2 | Jobs |
-| F3 | Relations (Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window) |
-| F4 | History |
-| F5 | Templates |
-| F6 | Replicas |
-| F7 | Run now |
-| F8 | Sort, or pause/resume on a relation |
-| F9 | File (export/import) |
-| F10 | Host settings (`settings.ini`, see [Alerting](#alerting)) |
-| F11 | Restore |
-| F12 | Exit |
+| F1 | Pomoc — Help |
+| F2 | Zadania — Jobs |
+| F3 | Relacje — Relations (Ins = new, Del = delete, Enter = open, `e` = edit inside a relation window) |
+| F4 | Historia — History |
+| F5 | Szablony — Templates |
+| F6 | Replika — Replicas |
+| F7 | Uruchom teraz — Run now |
+| F8 | Sortuj / Pauza — Sort, or pause/resume on a relation |
+| F9 | Plik — File (export/import) |
+| F10 | Ustawienia — Host settings (`settings.ini`, see [Alerting](#alerting)) |
+| F11 | Odzysk — Restore |
+| F12 | Wyjście — Exit |
 
 ## Core concepts
 
@@ -401,7 +403,7 @@ I/O so a large backup does not starve the guests. `-b` also feeds [`-A`](#link-a
 decision is made against `min(measured, -b)`; the cap is applied on the way into the decision and
 is not stored in the cache.
 
-When a pairing is created with `--bandwidth=RATE` the cap belongs to the link (every relationship
+When a pairing is created with `--bandwidth=RATE` the cap belongs to the link (every relation
 with that peer); `zfs-backup.sh set-bandwidth` changes it.
 
 ### Mounting the target
@@ -456,10 +458,10 @@ non-root account.
 {"time":"2026-07-24T10:16:01Z","script":"delsnaps.sh","dataset":"tank/data","pattern":"auto_","status":"success","duration_s":1,"deleted":2,"kept":3}
 ```
 
-`snapsend.sh`/`snapget.sh` records carry `label` (the relationship, from `-L`; empty when the job
+`snapsend.sh`/`snapget.sh` records carry `label` (the relation, from `-L`; empty when the job
 has none), `target` and `resumed` (a real boolean). `delsnaps.sh` records carry
 `pattern`/`deleted`/`kept` instead, since it prunes rather than transfers. `status` is `success`,
-a failure, or a distinct non-success such as `skipped_paused` (the relationship is paused),
+a failure, or a distinct non-success such as `skipped_paused` (the relation is paused),
 `skipped_lock` or `snapshot_only`, so a skipped run can never be read back as a fresh backup.
 Logging is best-effort: an unwritable path is swallowed rather than failing a backup that already
 succeeded.
@@ -480,11 +482,11 @@ GUID match, then bookmark match, then a full send) and transfers it. It is also 
 restore-to-place and of local snapshot-only jobs.
 
 **Remote push is a CLI mode for existing fleets.** The GUI creates pull, mirror, local-copy and
-snapshot-only relationships and has no window for push. To set one up by hand: run
+snapshot-only relations and has no window for push. To set one up by hand: run
 `deploy.sh --pair --role=push --peer=COLLECTOR` on the source and `deploy.sh --join=…` on the
 collector, then add a `[dataset:]` section with `dst = account@COLLECTOR:target` and
 `flags = -K <pairing key> -k <pinned known_hosts>` to the source's config and install it with
-`gen-cron.sh --install`. To move such a relationship to a new collector address, edit `dst` and add
+`gen-cron.sh --install`. To move such a relation to a new collector address, edit `dst` and add
 `-O HostKeyAlias=<old address>` to `flags`, then install again: the host key was pinned under the
 old address, and without the alias ssh refuses the new one. To tear down, run `deploy.sh --unpair`
 on the source and then the three commands it prints on the collector (`zfs unallow`, `userdel -r`,
@@ -529,7 +531,7 @@ Usage: snapsend.sh [options] DATASETS [REMOTE]
 | `-o "<FLAGS>"` | Raw flags appended verbatim to `zfs send` (e.g. `-o "-L -e"`). No validation. Skipped on the resume path, where the token already fixes the stream format |
 | `-x <PROPERTY>` | Exclude PROPERTY on receive (`zfs recv -x`). Repeatable; applied on the normal and the resumed receive |
 | `-F` | Reconcile before sending (recursively under `-r`; a no-op under `-R`): if a **child** dataset has a snapshot named like the incremental base under a *different GUID* (a real collision, not just older orphaned history), upgrade this run to a full resend of the whole subtree, as `-f` does. Narrower than `-n`'s report on purpose: a target-only snapshot that is not a name collision (an archive keeping longer history than the source) is normal and left alone |
-| `-L <LABEL>` | The relationship (`zfs-backup.sh` client) this run belongs to. If it is paused (`pause-client`), the run exits 0 with "SKIPPED: relationship LABEL is paused" before any lock, snapshot or ssh work and logs `skipped_paused`. Written into generated lines by `pair_label`. A run without `-L` is not gated: pause is orchestration, not a security boundary |
+| `-L <LABEL>` | The relation (`zfs-backup.sh` client) this run belongs to. If it is paused (`pause-client`), the run exits 0 with "SKIPPED: relationship LABEL is paused" before any lock, snapshot or ssh work and logs `skipped_paused`. Written into generated lines by `pair_label`. A run without `-L` is not gated: pause is orchestration, not a security boundary |
 | `-V` | Print version and exit |
 
 **Running without `-m` is legal but warned about** (verbosity 0, so it shows up in a default cron
@@ -559,8 +561,8 @@ freeze runs there. Three flags exist only here:
 
 | Flag | Meaning |
 |---|---|
-| `-M` | Mirror (sync relationships): after a successful pull, destroy on the target every snapshot the source no longer has that is OLDER than the common base, so the target holds what the source holds. Never the base or anything newer, never a Proxmox-reserved family, and nothing at all when the source list cannot be read or comes back empty. Decided per dataset, so with `-R` every expanded child mirrors its own source. Not with `-r` |
-| `-s` | Snapshot-only, no transfer: takes the source snapshot(s) where the source lives (over ssh for `[user@]host:dataset`, locally for a bare dataset) and stops: nothing is sent, received, held, bookmarked, mirrored or created here. For datasets that another mechanism already copies (`pvesr` in a Proxmox cluster) and that only need this relationship's own snapshot family. Takes exactly one positional argument (the source list); a target argument and every flag that only shapes a transfer are refused before any ssh or snapshot (`-e -t -M -f -F`, and `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` stay. Needs neither mbuffer nor a compressor. `-n` prints one `PLAN=SNAPSHOT-ONLY src=<dataset>` line per selected dataset. Stats status is `snapshot_only` or `snapshot_only_failed`, never `success` |
+| `-M` | Mirror (sync relations): after a successful pull, destroy on the target every snapshot the source no longer has that is OLDER than the common base, so the target holds what the source holds. Never the base or anything newer, never a Proxmox-reserved family, and nothing at all when the source list cannot be read or comes back empty. Decided per dataset, so with `-R` every expanded child mirrors its own source. Not with `-r` |
+| `-s` | Snapshot-only, no transfer: takes the source snapshot(s) where the source lives (over ssh for `[user@]host:dataset`, locally for a bare dataset) and stops: nothing is sent, received, held, bookmarked, mirrored or created here. For datasets that another mechanism already copies (`pvesr` in a Proxmox cluster) and that only need this relation's own snapshot family. Takes exactly one positional argument (the source list); a target argument and every flag that only shapes a transfer are refused before any ssh or snapshot (`-e -t -M -f -F`, and `-z -Z -g -N -l -A -b -H -i -T -w -o -x -u -U -E`). `-m -j -v -n -r -R -X -S -q -Q -L -p -k -K -O -c` stay. Needs neither mbuffer nor a compressor. `-n` prints one `PLAN=SNAPSHOT-ONLY src=<dataset>` line per selected dataset. Stats status is `snapshot_only` or `snapshot_only_failed`, never `success` |
 | `-Q <SECONDS>` | How long the remote deadman waits before thawing unconditionally (default 120, minimum 10). Only meaningful with `-q` |
 
 ```bash
@@ -579,7 +581,7 @@ depth:
   all at once. All-or-nothing, and a single GUID collision anywhere in the tree (see `-F`) forces
   a full resend of everything, because `zfs send -R -I` decides full-versus-incremental per child
   from the *source's* history, not from what survives on the target. The engines keep no bookmark
-  under `-r`, so a source prune that ages out the last common snapshot ends the relationship until
+  under `-r`, so a source prune that ages out the last common snapshot ends the relation until
   a destructive re-seed.
 - **`-R`**: syncoid/sanoid-compatible. It expands the tree into a flat list first, then runs each
   dataset through the normal single-dataset path independently. A failing or colliding child only
@@ -795,14 +797,14 @@ Usage: check-snap-age.sh [-R] [-v] [-L LABEL] [-x PREFIX]... [-p PORT] [-k KNOWN
 |---|---|
 | `-R`, `--recursive` | Also check every descendant dataset, independently, against the same pattern and thresholds |
 | `-v`, `--verbose` | Print a status line for every dataset, not only the ones that trip |
-| `-L <LABEL>` | The relationship the datasets belong to. While it is paused the check exits OK with wording naming the pause: staleness is the expected state of a deliberately stopped backup |
+| `-L <LABEL>` | The relation the datasets belong to. While it is paused the check exits OK with wording naming the pause: staleness is the expected state of a deliberately stopped backup |
 | `-x <PREFIX>` | Repeatable. Snapshots whose name starts with PREFIX are invisible to the monitor: they neither satisfy freshness nor raise it. For passive relations that watch "whatever the foreign system stamps" |
 | `-p -k -c -K -O` | ssh port, pinned known_hosts file (strict host-key checking; without `-k`, accept-new), cipher, identity file and extra `-o` options. The same five as `delsnaps.sh`, used for remote entries |
 | `-V`, `--version` | Print version and exit |
 
 A dataset entry may be `[user@]host:dataset` and is then read over ssh on that host (read-only:
 `zfs list` and `zfs get` only; the ssh is non-interactive and time-bounded). The monitor runs on
-the host that owns the *schedule*: for a remote-snapshots relationship that is the collector,
+the host that owns the *schedule*: for a remote-snapshots relation that is the collector,
 whose cron takes the snapshots on the source, so the source is where the snapshots are and the
 collector is where they are checked. Thresholds are `<N><unit>` with unit `m`/`h`/`d` (for example
 `90m`, `3h`, `9d`); crit must be at least warn.
@@ -829,7 +831,7 @@ Reads one INI-style config file and emits the crontab block that drives
 `snapsend.sh`/`snapget.sh`/`delsnaps.sh`/`check-snap-age.sh` for that host, with no hand-written cron
 lines. `--install` is idempotent: it replaces its own previously generated block rather than
 appending. On a managed host `zfs-backup.sh` writes the config and calls the generator for you
-(`zfs-backup.sh show-config NAME` prints the config that holds a relationship and
+(`zfs-backup.sh show-config NAME` prints the config that holds a relation and
 `zfs-backup.sh edit-config` edits it with validation); calling `gen-cron.sh` directly is the way for
 a hand-written config. For ready-to-run expert configs see
 [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md).
@@ -857,8 +859,8 @@ type, so a typo cannot generate cleanly and do nothing.
 
 ### Relation blocks: what the tool writes
 
-A relationship is one `[relation:NAME]` block that carries its whole policy: the tiers, their
-retention and the schedules of each side. The relationship's `[dataset:]` and `[prune:]`
+A relation is one `[relation:NAME]` block that carries its whole policy: the tiers, their
+retention and the schedules of each side. The relation's `[dataset:]` and `[prune:]`
 sections point at it with `relation = NAME` and say which side they are on with `side`. This is
 what `zfs-backup.sh` and the GUI write; you normally read these blocks, not write them. A
 collector config for one source with one dataset (example):
@@ -908,11 +910,11 @@ The rules:
   side-specific spelling wins over the plain one. `<tier>.target = no` or `<tier>.source = no`
   switches the tier off on that side.
 - `side` is always stated, never guessed: `side = target` for the copies, `side = source` for the
-  originals. (A local relationship's source retention is a `[prune:<source path>]` with no `@`, and
+  originals. (A local relation's source retention is a `[prune:<source path>]` with no `@`, and
   it is still the source.)
 - A section takes its tiers from one place: `relation` and `use_template` in the same section is
   refused, a block that no section points at is refused, and a section whose `pair_label` names a
-  different relationship is refused. A tier defined in a block cannot also exist as a
+  different relation is refused. A tier defined in a block cannot also exist as a
   `[template:]` section.
 - Each dataset and each relation gets its own free minute on the collector (picked once, at
   creation, from a hash of the name and then the first minute the host does not use yet); target
@@ -927,7 +929,7 @@ A header is always `[type:name]`, split on the first `:`, except `[defaults]`.
 | Section | Purpose |
 |---|---|
 | `[defaults]` | `host_label` (used in notify text), an optional default `dst`, the five paths that end up in every generated line (`repo_dir`, `notify_script`, `warn_script`, `digest_script` (`none` emits no digest line), `cron_log`; all absolute, each overridden by the upper-case environment variable of the same name; set them when the jobs do not run as root), and defaults for the tier fields `send_schedule prune_schedule prefix pattern dst src autotune quiesce monitor_schedule gfs_pattern`. Retention, thresholds and notify wording are per tier and are refused here |
-| `[relation:<name>]` | One relationship's whole policy; see above |
+| `[relation:<name>]` | One relation's whole policy; see above |
 | `[template:<tier>]` | One tier's full cadence and retention policy: `send_schedule`, `prefix`, `prune_schedule`, `pattern`, `keep` or `retain`, `monitor_warn`/`monitor_crit`, `monitor_schedule`, `notify_word`, `tier_label`, `notify_raw`, ... Hand-written configs and profiles use these |
 | `[dataset:<path>]` | A dataset you own end to end. `use_template` or `relation`, plus per-dataset fields. Runs create(+send/pull) and an inline self-prune scoped to its own path (or its subtree with `recursive`). `dst` makes it a push (the section path is the local source), `src = [user@]host:path` makes it a pull (the section path is the local destination and must end with `path` verbatim); both on one section is rejected. Also: `flags` (identity only: `-K -k -O -p`), `flags_<tier>`, `send_schedule_<tier>`, `prune_schedule_<tier>`, `quiesce`, `autotune`, `pair_label`, and the link and scope fields `bandwidth`, `compression`, `cipher`, `history`, `raw`, `passive` (adopt the newest existing snapshot, `-e`), `exclude_family` (`-E`), `exclude_child_<n>` (`-X`, numbered from 1), `media`, `prune_foreign` |
 | `[prune:<scope>]` | Standalone additive prune for scopes you do **not** create locally (a backup store, the source of a pull). `recursive=`/`clear_cut=` opt in to `-R`/`-F`; `prune = no` makes the section a monitor carrier only; `ssh_flags` for a remote (`host:path`) scope; `gfs = yes` plus `gfs_pattern` combine all tiers into one `-G` ladder. A `[prune:]` never sends, so transfer fields are refused |
@@ -1214,7 +1216,7 @@ transfer's exit code: a `DEGRADED` pool with a surviving mirror leg still sends 
 alert to transfer success would either hide a real disk failure behind a "job succeeded" exit code
 or report a working transfer as failed. Because the check runs from whichever side opens the
 connection, one execution reports both ends of a push or pull; the other side needs no pool-health
-cron of its own. A peer whose pair gate refuses the relationship (`disable-client`) is logged as
+cron of its own. A peer whose pair gate refuses the relation (`disable-client`) is logged as
 "could not be checked" and raises no pool alert: an administrative block is not a storage fault.
 
 ### Log rotation

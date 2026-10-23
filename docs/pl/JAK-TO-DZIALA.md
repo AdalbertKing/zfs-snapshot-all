@@ -1,5 +1,7 @@
 # Jak to działa
 
+Wersja angielska: [HOW-IT-WORKS.md](../en/HOW-IT-WORKS.md).
+
 Jedna strona. Bez historii, bez uzasadnień, bez numerów recenzji — te rzeczy są
 w `docs/` i nie są potrzebne, żeby zrozumieć, co się dzieje na hoście.
 
