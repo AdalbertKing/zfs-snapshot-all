@@ -5557,6 +5557,28 @@ schedule_ds_exprs() {   # <send minute> <prune minute>
     fi
 }
 
+# A LOCAL relationship in the X27 shape: one section's own tier schedules, spread from
+# <first minute> (may exceed 59, the hour is carried), under the SHORT tier key the
+# [relation:] shape reads (send_schedule_hourly; lsrc_/src_ dropped, as
+# relblock_adopt_remote renames a remote one's). Measured on pve10 2026-10-23: a
+# two-source local plan put both copies at the block's :01 and every prune at :21.
+schedule_tier_lines() {   # <send|prune> <first minute> -> "\t<field>_schedule_<tier> = expr" lines
+    schedule_tier_exprs "$1" | schedule_spread_tiers "$1" "$2" | awk '
+        { t = $0; sub(/^[ \t]+/, "", t); if (t == "") next
+          k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
+          if (k ~ /_profile__/) { f = k; sub(/_profile__.*$/, "", f); tr = k; sub(/^.*__/, "", tr); sub(/^(lsrc_|src_)/, "", tr); k = f "_" tr }
+          printf "\t%s = %s\n", k, v }'
+}
+
+# A section's base minute for a stagger that must not wrap: <picked 0-59> below the
+# <wanted> start means the pick went round the hour, so the base carries it.
+schedule_unwrapped() {   # <wanted, may exceed 59> <picked 0-59> -> base minute
+    local w="$1" p="$2"
+    while [ "$p" -lt "$w" ]; do p=$(( p + 60 )); done
+    [ $(( p - w )) -lt 60 ] || p=$(( p - 60 ))
+    echo "$p"
+}
+
 # A CLONED section (a dataset joining an existing relationship) came with its sibling's
 # minutes. Its send_schedule_<tier> lines are re-spread from <send minute>, its
 # prune_schedule_<tier> lines from <prune minute> -- the tier offsets kept, the hour
@@ -8985,6 +9007,33 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
     # X27 S2: a NAMED relationship is written as ITS [relation:NAME] block -- the profile's
     # numbers copied in, the sections saying relation + side; no template section.
     local lb_block=0; [ -n "$lb_name" ] && lb_block=1
+    # The same rules as a remote relationship (emit_client_sections): the relationship on
+    # its own free minute, the target prune from +20 and the source prune from +40, each
+    # source's prunes on the next free minute, and a section that is already installed
+    # keeps the minutes it runs at. The COPY stays one line for all sources (X27, test
+    # 101): snapget walks the comma list one dataset after another.
+    local -A LBX_M=() LBX_SP=() LBX_TP=()
+    if [ "$lb_block" -eq 1 ]; then
+        local _xm="" _xo
+        SCHEDULE_RESERVED=""; unset SCHEDULE_TAKEN_CACHE
+        for r in "${roots[@]}"; do
+            _xo="$(section_first_minute "$config" "[dataset:$r]" send)"
+            [ -n "$_xo" ] && { _xm="$_xo"; break; }
+        done
+        if [ -n "$_xm" ]; then SCHEDULE_RESERVED=" $_xm"
+        else schedule_take_for "$lb_name"; _xm="$SCHEDULE_PICKED"; fi
+        for r in "${roots[@]}"; do LBX_M[$r]="$_xm"; done
+        for r in "${roots[@]}"; do
+            _xm="${LBX_M[$r]}"
+            _xo="$(section_first_minute "$config" "[prune:$target/$r]" prune)"
+            if [ -n "$_xo" ]; then LBX_TP[$r]="$(schedule_unwrapped $(( _xm + 20 )) "$_xo")"
+            else schedule_take $(( _xm + 20 )); LBX_TP[$r]="$(schedule_unwrapped $(( _xm + 20 )) "$SCHEDULE_PICKED")"; fi
+            if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then _xo="$(section_first_minute "$config" "[prune:$r]" prune)"
+            else _xo="$(section_first_minute "$config" "[dataset:$r]" prune)"; fi
+            if [ -n "$_xo" ]; then LBX_SP[$r]="$(schedule_unwrapped $(( _xm + 40 )) "$_xo")"
+            else schedule_take $(( _xm + 40 )); LBX_SP[$r]="$(schedule_unwrapped $(( _xm + 40 )) "$SCHEDULE_PICKED")"; fi
+        done
+    fi
     {
         if [ "$lb_block" -eq 1 ]; then
             local -a RB_TIERS=() RB_KEYS=(); local -A RB=()
@@ -8999,12 +9048,15 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             echo "	# managed-by: zfs-backup.sh local-backup source=$r"
             if [ "$lb_block" -eq 1 ]; then
                 relblock_fragment "$PROFILE_DS_FILE" "$lb_name" source
+                schedule_tier_lines send "${LBX_M[$r]}"
+                # A flat profile prunes the source in this section's tiers.
+                [ -s "${PROFILE_PRUNE_FILE:-}" ] || schedule_tier_lines prune "${LBX_SP[$r]}"
             elif [ "$lb_src_inline" -eq 1 ]; then
                 emit_source_prune_fragment "$PROFILE_DS_FILE"
             else
                 profile_emit "$PROFILE_DS_FILE"
             fi
-            [ -n "${LB_SEND[$r]}" ] && echo "	send_schedule = ${LB_SEND[$r]}"
+            [ "$lb_block" -eq 1 ] || [ -z "${LB_SEND[$r]}" ] || echo "	send_schedule = ${LB_SEND[$r]}"
             # No `dst` line at all when nothing is copied. gen-cron reads an
             # absent dst as "create a snapshot and transfer nothing" -- the
             # same shape a hand-written single-host config has always used.
@@ -9079,7 +9131,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # up. REV-104 F1 / REV-106 F1: point use_template at the SOURCE
                 # family (profile-agnostic rewrite) so its retention is independent
                 # of the target's for ANY profile.
-                if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" source; else emit_source_prune_fragment "$LB_RETFRAG"; fi
+                if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" source; schedule_tier_lines prune "${LBX_SP[$r]}"
+                else emit_source_prune_fragment "$LB_RETFRAG"; fi
                 # --recursive (luka A'): the source prune walks the same subtree
                 # the snapshot does, or every child's family grows unbounded.
                 [ -n "$lb_recursion" ] && echo "	recursive    = yes"
@@ -9088,7 +9141,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                 # source prunes with identical policy merge into one delsnaps
                 # line and the first one's identity changes underneath the
                 # anti-deletion guard.
-                [ -n "${LB_PRUNE[$r]}" ] && echo "	prune_schedule = ${LB_PRUNE[$r]}"
+                [ "$lb_block" -eq 1 ] || [ -z "${LB_PRUNE[$r]}" ] || echo "	prune_schedule = ${LB_PRUNE[$r]}"
                 echo "	notify       = local-src-$(basename "$r")"
             done
           fi
@@ -9104,7 +9157,8 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
                     echo
                     echo "[prune:$target/$r]"
                     echo "	# managed-by: zfs-backup.sh local-backup target=$target/$r"
-                    if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" target; else profile_emit "$LB_RETFRAG"; fi
+                    if [ "$lb_block" -eq 1 ]; then relblock_fragment "$LB_RETFRAG" "$lb_name" target; schedule_tier_lines prune "${LBX_TP[$r]}"
+                    else profile_emit "$LB_RETFRAG"; fi
                     echo "	recursive    = yes"
                     echo "	pair_label   = $lb_name"
                     echo "	notify       = local-$(basename "$r")"
