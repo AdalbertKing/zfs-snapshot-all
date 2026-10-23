@@ -285,7 +285,7 @@ class Grid(object):
         w = max(56, min(width - 4, 78))
         inner = w - 4
         lines, spans = [], {}
-        hint = self.spec.get("hint") or u"↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter=Dalej Esc=Wstecz"
+        hint = self.spec.get("hint") or u"↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca"
 
         def add(text, key=None, segs=None):
             lines.append(text)
