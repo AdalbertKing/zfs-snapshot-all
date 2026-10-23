@@ -2937,7 +2937,7 @@ restore_report_mount_state() {
     # P10 (owner 2026-10-15): the machine recovered ONTO remounts, as root, what was
     # mounted when it issued the grant -- when the grant is taken back. The delegated
     # account cannot mount (measured on pve9b: "Insufficient privileges").
-    [ -z "$any_peer" ] || log 0 "restore: on ${any_peer#*@}, what was mounted before the grant is mounted again when the grant is taken back:  deploy.sh --deny-restore=<the name this collector has there, usually $(hostname -s 2>/dev/null || hostname)>"
+    [ -z "$any_peer" ] || log 0 "restore: on ${any_peer#*@}, what was mounted before the grant is mounted again, and what came back raw gets its key again, when the grant is taken back:  deploy.sh --deny-restore=<the name this collector has there, usually $(hostname -s 2>/dev/null || hostname)>"
 }
 
 # THE SCHEDULE KEEPS RUNNING WHILE A RECOVERY IS IN PROGRESS.
