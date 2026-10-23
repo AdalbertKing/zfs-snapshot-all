@@ -83,9 +83,8 @@ cd /root/zfs-snapshot-all
 ```
 
 Co się dzieje: instalują się zależności, powstaje konto delegowane
-`zfsbackup` i wpis crona z automatyczną aktualizacją. Dataset na kopie (np.
+`zfsbackup` i wpis crona z automatyczną aktualizacją. Dataset na kopię (np.
 `rpool/backups`) wybierasz przy zakładaniu relacji (kreator: pole Cel, CLI: `--target=`).
-(`setup-server` usunięty 2026-10-20.)
 
 `--backup-user=zfsbackup` znaczy: **zadania backupu nie będą chodzić z roota.**
 Warto — to ogranicza szkody, gdyby cokolwiek poszło nie tak.
@@ -99,7 +98,7 @@ Sprawdź, że jest czysto:
 ### Krok 2 — zgłoszenie klienta (nadal `pve-backup`)
 
 ```bash
-./zfs-backup.sh add-client prod01 --lan=192.168.1.20 --mode=backup
+./zfs-backup.sh add-client prod01 --host=192.168.1.20 --mode=backup
 ```
 
 - `prod01` — trwała nazwa tej relacji. **Nie zmieni się nigdy**, nawet gdy
@@ -131,18 +130,20 @@ kolektora i — to ważne — **z zerowymi uprawnieniami do ZFS.**
 
 To jest bezpieczny stan pośredni, nie niedoróbka: kolektor może się już
 połączyć i zrobić `zfs list` (listowania `zfs allow` nie ogranicza), ale nie
-może odczytać ani bajta danych, dopóki świadomie tego nie nadasz w kroku 6.
+może odczytać ani bajta danych, dopóki świadomie tego nie nadasz w kroku 7.
 
-Komenda wypisze **LABEL** — etykietę tej relacji, potrzebną w dwóch kolejnych
-krokach. Dla `--lan=192.168.1.20` etykietą będzie `192.168.1.20`.
+Komenda wypisze **LABEL** — etykietę tego parowania, potrzebną w kolejnych
+krokach na źródle. Etykieta to krótka nazwa hosta kolektora (`hostname -s`),
+nie adres źródła. W tej instrukcji kolektor nazywa się `pve-backup`, więc
+etykietą jest `pve-backup`. To co innego niż nazwa relacji (`prod01`), która trafia do crona jako `-L`.
 
 ### Krok 5 — wygenerowanie pliku zakresu (`pve-prod`)
 
 ```bash
-./deploy.sh --draft-scope=192.168.1.20
+./deploy.sh --draft-scope=pve-backup
 ```
 
-Powstaje `/etc/zfs-snapshot-all/peers/192.168.1.20.scope` — wygenerowany z
+Powstaje `/etc/zfs-snapshot-all/peers/pve-backup.scope` — wygenerowany z
 **prawdziwego** inwentarza ZFS tej maszyny, nie zgadnięty. W środku:
 propozycja aktywnych sekcji plus pełna lista datasetów jako komentarz, z której
 możesz dopisywać.
@@ -152,7 +153,7 @@ możesz dopisywać.
 **To jest jedyny krok wymagający myślenia.** Edytujesz plik:
 
 ```bash
-vi /etc/zfs-snapshot-all/peers/192.168.1.20.scope
+vi /etc/zfs-snapshot-all/peers/pve-backup.scope
 ```
 
 Gramatyka ma cztery pola i żadnej magii:
@@ -213,7 +214,7 @@ wdrożenie.
 ### Krok 7 — nadanie uprawnień (`pve-prod`)
 
 ```bash
-./deploy.sh --commit-scope=192.168.1.20
+./deploy.sh --commit-scope=pve-backup
 ```
 
 Dopiero **teraz** konto kolektora dostaje uprawnienia ZFS — i dokładnie do
@@ -288,23 +289,23 @@ dziesięciu różnych hostów bez żadnej kolizji nazw.
 ## 4a. Jak czytać wygenerowaną linię crona
 
 Tych linii nikt nie pisze ręcznie — generuje je `gen-cron.sh` z pliku konfiguracyjnego. Ale
-otwiera się je zwykle raz na pół roku, przy awarii, więc rozbiór jednego przykładu (to jest
-prawdziwe wyjście dla wdrożenia z tej instrukcji, nie przepisane z pamięci):
+otwiera się je zwykle raz na pół roku, przy awarii, więc rozbiór jednego przykładu (skrócony;
+minuta w pierwszym polu jest tu **tylko przykładowa** — każda relacja dostaje własną, patrz rozdział 5):
 
 ```text
-1 * * * * … snapget.sh -m "automated_hourly_" -i -K /root/.ssh/pairing/192.168.1.20_ed25519     -A -L pve-prod "zfsbackup-pve-backup@192.168.1.20:rpool/data/vm-100-disk-0"     "rpool/backups/192.168.1.20" …
+17 * * * * … snapget.sh -m "automated_hourly_" -i -K /root/.ssh/pairing/192.168.1.20_ed25519     -A -L prod01 "zfsbackup-pve-backup@192.168.1.20:rpool/data/vm-100-disk-0"     "rpool/backups/192.168.1.20" …
 ```
 
 | fragment | co znaczy | skąd się wziął |
 |---|---|---|
-| `1 * * * *` | co godzinę o :01 | `send_schedule` z szablonu |
+| `17 * * * *` | co godzinę, w minucie wybranej dla tej relacji (tu :17) | `send_schedule` — kadencja z profilu, minuta dobrana na kolektorze |
 | `-m "automated_hourly_"` | takim prefiksem nazywaj tworzone snapshoty; po nim rozpoznaje je retencja i monitoring | `prefix` |
 | `-i` | przy nadrabianiu zaległości **przeskocz od razu do najnowszego stanu**, zamiast przechodzić przez wszystkie snapshoty po drodze. Szybciej i mniej danych, ale na kopii nie będzie stanów pośrednich | Twój `flags` |
 | `-K …/192.168.1.20_ed25519` | loguj się na źródło **tym konkretnym kluczem** (tym z parowania). Robi to, co `ssh -i`, ale litera `i` była już zajęta — patrz wyżej | Twój `flags` |
 | `-A` | **zmierz łącze i sam zdecyduj**, czy kompresja się opłaca. Wynik pamiętany tydzień: prędkość łącza per host, podatność danych per dataset | dokłada generator, domyślnie |
-| `-L pve-prod` | ten transfer należy do **relacji `pve-prod`**. Dzięki temu `pause-client` i `disable-client` mogą go zatrzymać, zanim cokolwiek zrobi (patrz `docs/PAUZA-I-BLOKADA.md`) | `pair_label` |
+| `-L prod01` | ten transfer należy do **relacji `prod01`**. Dzięki temu `pause-client` i `disable-client` mogą go zatrzymać, zanim cokolwiek zrobi (patrz `docs/PAUZA-I-BLOKADA.md`) | `pair_label` |
 | `"zfsbackup-…@192.168.1.20:rpool/data/vm-100-disk-0"` | **skąd bierzemy**: konto na źródle, jego adres i dataset. Ścieżka dosłowna — dokładnie to, co pokazuje tam `zfs list` | `src` |
-| `"rpool/backups/192.168.1.20"` | **katalog bazowy, nie miejsce docelowe** | cel z `--target` + etykieta |
+| `"rpool/backups/192.168.1.20"` | **katalog bazowy, nie miejsce docelowe** | cel z `--target` + adres źródła |
 
 Ostatni wiersz to najczęstsze nieporozumienie. Dane **nie** wylądują w
 `rpool/backups/192.168.1.20`, tylko o kilka poziomów głębiej — skrypt dokleja pod spodem całą
@@ -314,15 +315,14 @@ oryginalną ścieżkę ze źródła:
 rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0
 ```
 
-czyli dokładnie to, co opisuje rozdział 4. To nie jest drobiazg redakcyjny: wpisanie tu od razu
-pełnej ścieżki docelowej sprawia, że kopia ląduje o poziom za głęboko, **każdy przebieg robi
-pełny transfer od zera**, a monitoring melduje, że wszystko gra — bo zagląda w to samo złe
-miejsce. Ten błąd wystąpił naprawdę i był niewidoczny przez wiele dni.
+czyli dokładnie to, co opisuje rozdział 4. Gdybyś w tym miejscu wpisał(a) ręcznie od razu pełną
+ścieżkę docelową, kopia wylądowałaby o poziom za głęboko, a każdy przebieg robiłby pełny transfer
+od zera.
 
 Linia monitora dla tego samego datasetu wygląda tak:
 
 ```text
-*/15 * * * * … check-snap-age.sh -L pve-prod "rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0"     "automated_hourly" 90m 150m …
+*/15 * * * * … check-snap-age.sh -L prod01 "rpool/backups/192.168.1.20/rpool/data/vm-100-disk-0"     "automated_hourly" 90m 150m …
 ```
 
 — czyli sprawdza **cel**, nie źródło, i zna tę samą etykietę relacji, więc podczas pauzy
@@ -332,20 +332,34 @@ odpowiada „to normalne, ta relacja stoi" zamiast budzić Cię co 15 minut.
 
 ## 5. Co się dzieje po wdrożeniu
 
-Profil domyślny (jedyny zaimplementowany), wartości wprost z kodu:
+Retencję i harmonogram wybiera **profil** (w GUI przy zakładaniu relacji:
+`default`, `full`, `d7h24`, `d30h24`, `m12w4d7h24-gfs`; pliki w `profiles/`,
+opis w `profiles/README.md`). Relacja, której nikt nie przypisał innego profilu,
+dostaje `default`, wartości z `profiles/default.conf`:
 
-| Element | Ustawienie |
-|---|---|
-| Snapshot + transfer | co godzinę, o **:01** |
-| Prefiks snapshotów | `automated_hourly_` |
-| Sprzątanie (GFS) | co godzinę, o **:21** |
-| Retencja | **24** godzinowe, **7** dziennych, **4** tygodniowe, **12** miesięcznych |
-| Alert (ostrzeżenie) | brak świeżej kopii przez **90 min** |
-| Alert (krytyczny) | brak świeżej kopii przez **150 min** |
+| Szczebel | Prefiks snapshotów | Zostaje | Alert: ostrzeżenie / krytyczny |
+|---|---|---|---|
+| godzinowy | `automated_hourly_` | **24** | 90 min / 150 min |
+| dzienny | `automated_daily_` | **7** | 30 h / 48 h |
+| tygodniowy (niedziela) | `automated_weekly_` | **4** | 8 dni / 10 dni |
+| miesięczny | `automated_monthly_` | **3** | 35 dni / 40 dni |
 
-Retencja działa w modelu **GFS (dziadek-ojciec-syn)**: jedna seria godzinowych
-snapshotów jest kubełkowana po czasie powstania. Nie robimy osobnych „dziennych"
-i „miesięcznych" transferów — to byłyby dodatkowe kopie tych samych danych.
+To retencja **płaska**, nie GFS: każdy szczebel to **osobna rodzina
+snapshotów**, robiona własnym zadaniem (własny `send_schedule`) i sprzątana
+własnym zadaniem (własny `prune_schedule`), a licznik trzyma po prostu N
+najnowszych sztuk danej rodziny, niezależnie od ich wieku. Dzięki temu długa
+przerwa w dopływie nowych kopii (np. źródło wyłączone na miesiąc) nic nie
+wypycha z kopii. Dłuższą historię dają inne profile (np. `full` trzyma 12
+miesięcznych).
+
+**Minuty.** Wartości w rodzaju „godzinowy o :01, sprzątanie o :21" to tylko
+wartości wyjściowe szablonu. Kolektor dobiera **każdej relacji własną wolną
+minutę** (liczoną z jej nazwy, z pominięciem minut już zajętych na tym hoście):
+wysyłka idzie w tej minucie, sprzątanie kopii na celu **20 minut później**,
+sprzątanie snapshotów na źródle (przez SSH) **40 minut później**. Profil z kilkoma
+szczeblami zachowuje odstępy między nimi — każdy szczebel jest przesunięty o
+minutę relacji. Dzięki temu relacje nie startują w jednej minucie na tym samym
+łączu i dyskach. Faktyczne godziny zobaczysz w wygenerowanych liniach crona.
 
 Alerty idą mailem. Domyślnie jeden zbiorczy raport dziennie na host; na czas
 wdrażania warto przełączyć na natychmiastowe:
@@ -406,10 +420,25 @@ docierają — to stan do naprawy, nie kosmetyka.
 Zamiast `--mode=backup` w kroku 2:
 
 ```bash
-./zfs-backup.sh add-client prod01 --lan=192.168.1.20 --mode=sync
+./zfs-backup.sh add-client prod01 --host=192.168.1.20 --mode=sync
 ```
 
 Różnica jest jedna, ale zasadnicza: **ścieżki są odtwarzane jeden do jednego.**
+
+Tak samo **migawki**: relacja `sync` jest lustrem. Każde ściągnięcie niesie
+`snapget.sh -M`, więc to, co źródło usunie ze swojej retencji, znika tu przy
+następnym przebiegu, a cel nie ma własnej retencji. Historia dłuższa niż
+retencja źródła to zadanie relacji `backup`, nie `sync`.
+
+Relacja `backup` z kolei sprząta na swoim celu także migawki **obce** tak jak
+własne. Każde ściągnięcie niesie `-I`, więc wszystko, co źródło trzyma
+pomiędzy dwiema naszymi migawkami — ręczną, rodzinę innego narzędzia —
+ląduje na kopii i inaczej zostawałoby tam na stałe. Dlatego `[dataset:]` celu
+(i jego drabina `[prune:]`) ma `prune_foreign = yes`; gen-cron wtedy renderuje
+sprzątanie najdrobniejszego szczebla bez wzorca nazwy i z
+`-P "<rodzina>:all"` dla każdej innej rodziny sprzątanej w tym miejscu. Obca
+migawka liczy się więc razem z godzinowymi i znika, kiedy zniknęłaby godzinowa.
+Rodziny replik trzymają dwie najnowsze.
 
 ```
 źródło:  rpool/data/vm-100-disk-0
@@ -452,8 +481,8 @@ per dataset. Ale znaczy to, że **każda nowa maszyna wymaga dwóch komend na
 źródle**:
 
 ```bash
-./deploy.sh --draft-scope=192.168.1.20   # tylko gdy plik zakresu nie istnieje
-./deploy.sh --commit-scope=192.168.1.20  # po sprawdzeniu/uzupełnieniu pliku
+./deploy.sh --draft-scope=pve-backup   # tylko gdy plik zakresu nie istnieje
+./deploy.sh --commit-scope=pve-backup  # po sprawdzeniu/uzupełnieniu pliku
 ```
 
 a następnie na kolektorze:
@@ -471,10 +500,14 @@ modelu uprawnień — nie ma go dziś.
 
 ### 7.2. Kopie są crash-consistent, nie application-consistent
 
-W trybie pull **nie ma zamrażania systemu plików gościa** (quiesce) — maszyna
-wirtualna żyje na zdalnym hoście. Snapshot odpowiada stanowi „jakby wyciągnięto
-wtyczkę": systemy plików odtworzą się z dziennika, ale baza danych w trakcie
-transakcji może wymagać własnego odzyskiwania.
+W trybie pull **domyślnie nie ma zamrażania systemu plików gościa** (quiesce) —
+maszyna wirtualna żyje na zdalnym hoście, a konto kolektora nie ma prawa jej
+zamrozić. Zamrażanie jest opcją do świadomego włączenia: na źródle
+`deploy.sh --join=… --allow-quiesce` daje kontu parowanej relacji prawo
+zamrażania gości, których dyski leżą pod nadanymi datasetami (decyzja należy do
+źródła — paczka parująca o to nie prosi). Bez tego snapshot odpowiada stanowi
+„jakby wyciągnięto wtyczkę": systemy plików odtworzą się z dziennika, ale baza
+danych w trakcie transakcji może wymagać własnego odzyskiwania.
 
 Dla większości zastosowań to wystarcza. Dla baz z twardym wymogiem spójności
 aplikacyjnej potrzebny jest backup po stronie aplikacji (dump) **obok** tego
@@ -501,12 +534,30 @@ Jeśli VPN zachowuje ten sam `host:port` — nie robisz nawet tego, wystarczy
 Ten sam kolektor obsługuje wiele źródeł. Powtarzasz kroki 2–10 z nową nazwą:
 
 ```bash
-./zfs-backup.sh add-client prod02 --lan=192.168.1.21 --mode=backup
+./zfs-backup.sh add-client prod02 --host=192.168.1.21 --mode=backup
 ```
 
 Każda relacja dostaje **własne konto na źródle, własny klucz i własny zakres
 uprawnień**. Relacje o sobie nawzajem nie wiedzą i nie mogą się nawzajem
 dotknąć — kompromitacja jednego źródła nie otwiera drogi do pozostałych.
+
+### Zmiana relacji, która już działa
+
+Żeby zmienić retencję albo harmonogram, nie kasuj i nie zakładaj relacji od
+nowa:
+
+```bash
+./zfs-backup.sh edit-relation prod01 --profile=full --plan
+./zfs-backup.sh edit-relation prod01 --profile=full --yes
+```
+
+Sekcje relacji są generowane od nowa z profilu, tak jak przy zakładaniu, i
+instalowane tą samą drogą: z podglądem i z tymi samymi bramkami. Żadne dane nie
+są wysyłane ponownie. Bez `--profile` użyty zostaje profil zapisany przy
+relacji, co daje starszej relacji dzisiejsze rozłożenie minut. Rodzina
+snapshotów musi pozostać ta sama: profil bez wspólnej rodziny to nowa relacja
+(`delete-relation`, potem założenie od nowa), nie edycja. Edytować można tylko
+relację zainstalowaną (aktywną). W GUI: Enter na relacji w F3, potem `e`.
 
 ---
 
@@ -524,7 +575,7 @@ w `rpool/backups` — jeśli mają zniknąć, robisz to osobno i świadomie.
 Na źródle (sprząta konto, klucz i uprawnienia ZFS tej relacji):
 
 ```bash
-./deploy.sh --leave=192.168.1.20
+./deploy.sh --leave=pve-backup
 ```
 
 ---
@@ -534,14 +585,14 @@ Na źródle (sprząta konto, klucz i uprawnienia ZFS tej relacji):
 ```bash
 # --- KOLEKTOR pve-backup ---
 ./deploy.sh --backup-user=zfsbackup
-./zfs-backup.sh add-client prod01 --lan=192.168.1.20 --mode=backup
+./zfs-backup.sh add-client prod01 --host=192.168.1.20 --mode=backup
 #   -> przenieś wypisaną paczkę .tgz na pve-prod
 
 # --- ŹRÓDŁO pve-prod ---
 ./deploy.sh --join=/root/prod01-package.tgz
-./deploy.sh --draft-scope=192.168.1.20
-vi /etc/zfs-snapshot-all/peers/192.168.1.20.scope      # wybór + wykluczenia
-./deploy.sh --commit-scope=192.168.1.20
+./deploy.sh --draft-scope=pve-backup
+vi /etc/zfs-snapshot-all/peers/pve-backup.scope      # wybór + wykluczenia
+./deploy.sh --commit-scope=pve-backup
 
 # --- KOLEKTOR pve-backup ---
 ./zfs-backup.sh seed prod01

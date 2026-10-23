@@ -1,7 +1,6 @@
 # Odzysk z repliki (nośnik wymienny)
 
-Przećwiczone na żywo 2026-08-31, pve9 ← nośnik `repl`. Wszystkie komendy jako
-**root na kolektorze**.
+Wszystkie komendy jako **root na kolektorze**. Przykłady: pula nośnika `repl`.
 
 Replika to lustro drzewa kopii: `repl/replica/<ścieżka kopii na kolektorze>`.
 Żadna relacja na nią nie wskazuje — dysk leży w szufladzie i nie ma go w niczyich
@@ -49,12 +48,12 @@ zfs-backup.sh restore \
     --overwrite --config=/etc/zfs-snapshot-all/jobs.<host>.<konto>.conf
 ```
 
-Cel **musi istnieć**. Schodzi delta albo samo cofnięcie — na labie wyszło
-`SAM ROLLBACK, bez transferu`: kopia miała już najnowszy punkt repliki, więc
+Cel **musi istnieć**. Schodzi delta albo samo cofnięcie — komunikat
+`SAM ROLLBACK, bez transferu` znaczy: kopia miała już najnowszy punkt repliki, więc
 zeszły tylko snapshoty nowsze, **zero bajtów na łączu**.
 
 To jest powód, dla którego ten tryb istnieje. Lądowanie w wolne miejsce (4b) przy
-10 TB wymaga drugiego tyle miejsca i przenosi każdy bajt, podczas gdy dataset
+10 TB potrzebuje drugie tyle miejsca i przenosi każdy bajt, podczas gdy dataset
 kopii już stoi i dzieli historię z repliką.
 
 **Bez `--yes`** pokazuje zbiór strat i pyta. Odpowiedz `n`, żeby tylko zobaczyć.
@@ -83,7 +82,7 @@ zfs-media-gate.sh detach repl weekly
 Eksportuje **tylko jeśli sam importował** — pula podniesiona ręcznie nie zostanie
 zabrana spod operatora.
 
-## Co warto wiedzieć, zmierzone a nie założone
+## Co warto wiedzieć
 
 **Config trzeba nazwać**, gdy host ma więcej niż jeden. Każdy należy do innego
 konta i niesie inne relacje; wybór za operatora mógłby wycelować odzysk według
@@ -102,14 +101,16 @@ Niczego nie trzeba zatrzymywać ręcznie.
 
 ## Gdy dysk zostanie wyrwany W TRAKCIE biegu
 
-Zmierzone 2026-08-31 na izolowanej puli plikowej, oba ustawienia `failmode`:
+`prepare-media` zakłada pulę nośnika z `failmode=continue`. Poniżej zachowanie ZFS
+obserwowane w testach, przy utracie dysku w trakcie zapisu (`wait` to domyślne
+ustawienie ZFS, dla puli założonej inaczej niż przez `prepare-media`):
 
 | | zapis **już w locie** | **nowy** zapis po utracie dysku |
 |---|---|---|
-| `wait` (domyślne) | stoi w `D`, przeżywa `kill -9` | też stoi w `D` |
-| `continue` | stoi w `D`, przeżywa `kill -9` | natychmiast `Input/output error` |
+| `continue` (pula z `prepare-media`) | stoi w `D`, przeżywa `kill -9` | natychmiast `Input/output error` |
+| `wait` (domyślne ZFS-a) | stoi w `D`, przeżywa `kill -9` | też stoi w `D` |
 
-**Żadne z nich nie zabija hosta.** Przez cały pomiar `zpool status` odpowiadał, a
+**Żadne z nich nie zabija hosta.** W testach `zpool status` odpowiadał, a
 pozostałe pule były `ONLINE`. Hosta zabija `panic` — wartość, której tu nie
 używamy.
 
@@ -123,8 +124,8 @@ Samo podpięcie dysku z powrotem **nie wystarcza** — pula zostaje `SUSPENDED`,
 proces dalej stoi. Dopiero `zpool clear` ją zwalnia i wtedy zaległy sygnał
 wreszcie dochodzi. Działa tak samo przy obu ustawieniach `failmode`.
 
-**Decyzja właściciela 2026-08-31: `failmode` zostaje bez zmian.** Zmiana kupuje
-mniej, niż wyglądało — procesu złapanego w połowie zapisu i tak nie ratuje, a
+**`failmode` nośnika to `continue`, ustawiane przez `prepare-media`.** Zmiana na
+`wait` kupuje niewiele — procesu złapanego w połowie zapisu i tak nie ratuje, a
 hosta żadne z ustawień nie zagraża. Osłoną jest to, co brama już robi: pula jest
 zaimportowana **wyłącznie w oknie biegu**, a `status` mówi, kiedy wolno wypiąć.
 Ekspozycja istnieje tylko w trakcie biegu, nie między nimi.

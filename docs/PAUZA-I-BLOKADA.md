@@ -15,8 +15,9 @@ i `docs/design/pair-pause.md`. Tutaj jest tylko to, co się wpisuje i co się wi
 | Typowe użycie | okno serwisowe, wymiana dysku, głośny sąsiad na łączu | „ta relacja ma stać i nikt ma jej przypadkiem nie ruszyć" |
 
 Obie zostawiają crona, config, klucze i granty ZFS **nietknięte** — nic nie jest przepisywane,
-usuwane ani nadawane na nowo. Retencja (`delsnaps`) chodzi dalej w obu przypadkach: to, co już
-się skopiowało, ma być dalej poprawnie przycinane.
+usuwane ani nadawane na nowo. Pauza obejmuje też retencję: linie `delsnaps` relacji niosą `-L NAZWA`
+i przy pauzie wychodzą, zanim cokolwiek wylistują lub skasują — po stronie źródła i celu. Powód:
+przycinanie na źródle, które właśnie cofnięto z kopii, potrafi skasować jedyny wspólny snapshot.
 
 **Granica, o której trzeba wiedzieć:** klucz samej relacji może zdjąć swoją blokadę
 (`PAIR-CONTROL enable`). Blokada twarda zatrzymuje automat, pomyłkę i zwykłe ręczne polecenie —
@@ -31,8 +32,9 @@ zfs-backup.sh pause-client pve2 --reason='wymiana dysku w szafie'
 ```
 
 ```text
->>> client 'pve2' paused (PAUSED_LOCAL). Managed jobs and labeled manual runs now exit
-    'SKIPPED: relationship pve2 is paused' before any snapshot/SSH work.
+>>> client 'pve2' paused (PAUSED_LOCAL). TRANSFER and MONITOR jobs, and labeled manual runs, now exit 'SKIPPED: relationship pve2 is paused' before any snapshot/SSH work.
+>>> Covered: retention too. This relationship's delsnaps lines carry '-L pve2' and exit before any listing, SSH or destroy while the pause stands -- on the source as well as the target.
+>>> NOT covered: an engine invoked BY HAND without -L. The pause is a property of the relationship label, so a manual snapsend/snapget/delsnaps that does not name the label is outside it by construction, and deliberately so: the pause exists to stop the schedule, not to take the machine away from the administrator sitting at it.
 >>> LIMITATION: this is logical pause -- a manual snapget.sh/snapsend.sh that OMITS '-L pve2'
     is not blocked. For enforcement at the peer, including unlabeled manual commands,
     use: zfs-backup.sh disable-client pve2
@@ -47,7 +49,13 @@ zfs-backup.sh resume-client pve2
 Co widać w logu crona, gdy zadanie trafi na pauzę:
 
 ```text
-2026-08-06 22:34:20 - SKIPPED: relationship pve2 is paused (resume: zfs-backup.sh resume-client pve2)
+<data godzina> - SKIPPED: relationship pve2 is paused (resume: zfs-backup.sh resume-client pve2)
+```
+
+Linia `delsnaps` przy pauzie mówi to samo, z dopiskiem, że nic nie skasowano:
+
+```text
+SKIPPED: relationship pve2 is paused -- no snapshot was destroyed (resume: zfs-backup.sh resume-client pve2)
 ```
 
 i w `zfs-snapshot-stats.log` — **własny status**, nigdy udawany sukces:
@@ -124,13 +132,13 @@ zfs-backup.sh status pve2         # szczegóły
 ```
 
 ```text
-pve2                 state=active             endpoint=192.168.28.8:22  PAUSED_LOCAL
+pve2                 state=active             endpoint=10.0.0.1:22  PAUSED_LOCAL
 ```
 
 ```text
 Klient:            pve2
 Stan:              active
-Pauza:             PAUSED_LOCAL od 2026-08-06 22:30:44 (powod: postój do odwołania)
+Pauza:             PAUSED_LOCAL od <data godzina> (powod: postój do odwołania)
                    joby i reczne uruchomienia Z etykieta '-L pve2' sa pomijane;
                    reczne uruchomienie BEZ etykiety NIE jest blokowane (pauza logiczna,
                    nie granica bezpieczenstwa). Wznowienie: ./zfs-backup.sh resume-client pve2
@@ -145,8 +153,8 @@ ssh -i /root/.ssh/pairing/<peer>_ed25519 zfsbackup-<kolektor>@<peer> 'PAIR-CONTR
 ```text
 PAIR_STATE=DISABLED
 PAIR_LABEL=pve1
-DISABLED_AT=2026-08-06 22:30:51
-DISABLED_FROM=192.168.28.9
+DISABLED_AT=<data godzina>
+DISABLED_REASON=postój do odwołania
 ```
 
 ---
@@ -157,40 +165,52 @@ DISABLED_FROM=192.168.28.9
 
 `activate-client` dopisuje `pair_label` do każdej sekcji, którą generuje. Ręcznie pisane sekcje
 bez tego pola zachowują się dokładnie tak jak wcześniej — brak etykiety to brak bramkowania.
+Relacja zapisana przez narzędzie wygląda tak (skrót, pełny przykład w
+`docs/WDROZENIE-KOLEKTOR-DWA-ZRODLA-REPLIKA.md`, sekcja 6):
 
 ```ini
-[dataset:hdd/backups/arc/alpha/tank/data]
-	use_template = hourly
+[relation:alpha]
+	tiers = hourly
+	…                                          # polityka: minuty, retencja, progi
+
+[dataset:hdd/backups/10.0.0.1/tank/data]       # kopia u kolektora
+	relation     = alpha
+	side         = target
 	src          = zfsbackup-arc@10.0.0.1:tank/data
-	flags        = -i -K /root/.ssh/pairing/alpha_ed25519
+	flags        = -i -K /root/.ssh/pairing/10.0.0.1_ed25519
 	pair_label   = alpha
-	notify       = alpha-data
+
+[prune:zfsbackup-arc@10.0.0.1:tank/data]       # porządki źródła, po SSH
+	relation     = alpha
+	side         = source
+	pair_label   = alpha
 ```
 
-Pole jest **dziedziczone znikąd** — ani z `[template:]`, ani z `[defaults]`. Etykieta, która
-rozlałaby się po nieswoich sekcjach, oznaczałaby, że jedna pauza zatrzymuje cudzy backup.
+W sekcji z `relation = …` `pair_label` musi być równe nazwie relacji. Pole jest **dziedziczone
+znikąd** — ani z `[template:]`, ani z `[defaults]`. Etykieta, która rozlałaby się po nieswoich sekcjach,
+oznaczałaby, że jedna pauza zatrzymuje cudzy backup.
 
-Na `[prune:]` `pair_label` też jest dozwolone, ale dociera **wyłącznie do monitora** tej sekcji.
-Sam `delsnaps` nigdy nie jest bramkowany.
+Pole dociera do monitora sekcji **oraz** do linii `delsnaps`, więc pauza zatrzymuje także
+kasowanie na magazynie.
 
 ### Cron — jedna flaga
 
 Linia transferu (skrócona):
 
 ```text
-59 * * * * … snapget.sh -m "automated_" -i -K …/alpha_ed25519 -A -L alpha "zfsbackup-arc@10.0.0.1:tank/data" "hdd/backups/arc/alpha" …
+59 * * * * … snapget.sh -m "automated_" -i -K …/10.0.0.1_ed25519 -A -L alpha "zfsbackup-arc@10.0.0.1:tank/data" "hdd/backups/10.0.0.1" …
 ```
 
 Linia monitora:
 
 ```text
-*/15 * * * * d=$(… check-snap-age.sh -L alpha "hdd/backups/arc/alpha/tank/data" "automated_" 90m 3h 2>&1); …
+*/15 * * * * d=$(… check-snap-age.sh -L alpha "hdd/backups/10.0.0.1/tank/data" "automated_" 90m 3h 2>&1); …
 ```
 
-Linia retencji — **celowo bez `-L`**:
+Linia retencji — też z `-L`, więc pauza ją zatrzymuje:
 
 ```text
-30 2 * * * … delsnaps.sh "hdd/backups/arc/alpha/tank/data,…" "automated_" -H24 …
+30 2 * * * … delsnaps.sh -L alpha "hdd/backups/10.0.0.1/tank/data,…" "automated_" -H24 …
 ```
 
 Dwie relacje o identycznych progach nie scalą się w jedną linię monitora: `pair_label` wchodzi
@@ -202,31 +222,28 @@ Kto czyta te linie raz na pół roku, przy awarii, nie ma czasu odtwarzać znacz
 Więc rozbiór tego samego przykładu, kawałek po kawałku:
 
 ```text
--i -K /root/.ssh/pairing/alpha_ed25519 -A -L alpha "zfsbackup-arc@10.0.0.1:tank/data" "hdd/backups/arc/alpha"
+-i -K /root/.ssh/pairing/10.0.0.1_ed25519 -A -L alpha "zfsbackup-arc@10.0.0.1:tank/data" "hdd/backups/10.0.0.1"
 ```
 
 | fragment | co znaczy | skąd się wziął |
 |---|---|---|
 | `-i` | przy nadrabianiu zaległości **przeskocz od razu do najnowszego stanu**, zamiast przechodzić przez wszystkie snapshoty po drodze. Szybciej i mniej danych, ale na kopii nie będzie stanów pośrednich | z Twojego `flags` w configu |
-| `-K …/alpha_ed25519` | loguj się na drugi serwer **tym konkretnym kluczem**. Robi to, co `ssh -i`, ale litera `i` była już zajęta (patrz wyżej), więc klucz dostał `K` | z Twojego `flags` w configu |
+| `-K …/10.0.0.1_ed25519` | loguj się na drugi serwer **tym konkretnym kluczem**. Robi to, co `ssh -i`, ale litera `i` była już zajęta (patrz wyżej), więc klucz dostał `K` | z Twojego `flags` w configu |
 | `-A` | **zmierz łącze i sam zdecyduj**, czy kompresja się opłaca. Wynik pamiętany tydzień: prędkość łącza per host, podatność danych per dataset | dokłada generator, domyślnie |
 | `-L alpha` | ten transfer należy do **relacji `alpha`**. Jedyny powód: gdy relacja jest zapauzowana lub zablokowana, zadanie wycofa się, zanim cokolwiek zrobi | z `pair_label` |
 | `"zfsbackup-arc@10.0.0.1:tank/data"` | **skąd bierzemy**: konto `zfsbackup-arc` na `10.0.0.1`, dataset `tank/data`. Adres dosłowny — dokładnie to, co pokazuje tam `zfs list` | z `src` |
-| `"hdd/backups/arc/alpha"` | **katalog bazowy, nie miejsce docelowe.** Skrypt dokleja pod spodem oryginalną ścieżkę ze źródła | z nagłówka sekcji `[dataset:]` |
+| `"hdd/backups/10.0.0.1"` | **katalog bazowy, nie miejsce docelowe.** Skrypt dokleja pod spodem oryginalną ścieżkę ze źródła | z nagłówka sekcji `[dataset:]` |
 
-Ostatni wiersz to najczęstsze nieporozumienie i realna przyczyna awarii w tym projekcie. Dane
-wylądują **nie** w `hdd/backups/arc/alpha`, tylko:
+Ostatni wiersz to najczęstsze nieporozumienie. Dane wylądują **nie** w `hdd/backups/10.0.0.1`,
+tylko:
 
 ```text
-hdd/backups/arc/alpha/tank/data
+hdd/backups/10.0.0.1/tank/data
 ```
 
-Seed wpisany kiedyś o jeden poziom za głęboko sprawił, że każdy przebieg robił pełną kopię od
-zera — a monitoring twierdził, że wszystko gra, bo zaglądał w to samo złe miejsce.
-
 **Całość jednym zdaniem:** *co godzinę zabierz z `tank/data` na `10.0.0.1` to, czego jeszcze nie
-mam, zaloguj się kluczem alpha, przy zaległościach skocz od razu do najnowszego stanu, sam
-zdecyduj o kompresji, odłóż to pod `hdd/backups/arc/alpha` — i odpuść całkiem, jeśli relacja
+mam, zaloguj się kluczem z parowania, przy zaległościach skocz od razu do najnowszego stanu, sam
+zdecyduj o kompresji, odłóż to pod `hdd/backups/10.0.0.1` — i odpuść całkiem, jeśli relacja
 `alpha` jest zapauzowana.*
 
 ---
@@ -267,7 +284,7 @@ rm -f /var/lib/zfs-snapshot-all/relationships/<etykieta>/disabled
 
 ---
 
-## Pułapki z realnych przebiegów
+## Pułapki
 
 - **`verify-endpoint` przy zablokowanej relacji.** Jego sonda to komenda data-plane, więc peer ją
   odrzuca. Narzędzie mówi to wprost („relationship is DISABLED at the peer … This is not an
@@ -276,4 +293,4 @@ rm -f /var/lib/zfs-snapshot-all/relationships/<etykieta>/disabled
   i to trzeba zrobić ręcznie. Pominięcie zostawia manifest, który przy następnym `--join` pod tą
   samą etykietą słusznie zablokuje enrolment jako kolizję.
 - **Jedna relacja na parę hostów.** Drugi klient na ten sam adres peera splata stan po obu
-  stronach. Do testów bierz osobną maszynę (choćby jednorazowy kontener).
+  stronach.
