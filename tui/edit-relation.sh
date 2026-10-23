@@ -788,7 +788,7 @@ while :; do
                   --yesno "Na liście czeka zmian: $np. Wyjść bez zapisu?" 8 "$W"
                [ $? -ne 0 ] && continue   # Wróć albo Esc = zostań
            fi
-           clear 2>/dev/null; echo "edit-relation: przerwane, nic nie zmieniono"; exit 1; }
+           clear 2>/dev/null; wt_end "Zmień relację: przerwane, nic nie zmieniono"; exit 1; }
     fi
     ACTION="$WT_OUT"; LAST_ACTION="$ACTION"
     case "$ACTION" in

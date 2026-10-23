@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 3774f144fc5efd35 -->
+<!-- status-covers-digest: 457fcc662d44c28e -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Po zamknięciu okna linia komunikatu mówi, co się stało (`fix/window-end-message`, właściciel 2026-10-23).**
+  Było „[rc=1] <cała linia polecenia>” także po zwykłym Esc -- anulowanie wyglądało jak błąd, a słowo okna
+  („przerwane, nic nie zmieniono”) znikało z ekranem. Teraz GUI daje oknu plik statusu (`ZFS_TUI_STATUS`), okno
+  zapisuje do niego swoje ostatnie słowo (`wt_end` w `wt-lib.sh`, po polsku: „Usuń relację: przerwane, nic nie
+  zmieniono”), a gdy nic nie zapisało -- „<okno>: zakończone” albo „zakończone z kodem N”; dziennik jak dotąd.
+  Polecenia wpisane w linii poleceń dalej pokazują „[rc=N] polecenie”. Na żywo pve10: Del na ab + Wstecz, Ins +
+  Przerwij. Test `tui` 396/0 (pve9); ze starym GUI nowy przypadek pada.
 
 - **REV-20261023-169: suita `localbackup` nie dotyka stanu hosta (`fix/rev169-localbackup-isolation`).** Uruchomiona
   jako root zapisywała rekord `lb.conf` do prawdziwego `/etc/zfs-snapshot-all/clients` (wczytanie produktu ustawiało
