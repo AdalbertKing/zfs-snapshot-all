@@ -429,7 +429,12 @@ while :; do
         if [ "$EDIT" -eq 1 ]; then step=2; continue; fi
         wt --title "Nowa replika -- 1/6 nazwa" --ok-button "Dalej" --cancel-button "Anuluj" \
            --inputbox "Nazwa repliki (litery, cyfry, . _ -), np. usb1 albo sejf-a.\nTak będzie widoczna na F6, w mailach i w nazwie puli nowego nośnika." 10 "$W" "$NAME" \
-           || { clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1; }
+           || {
+                # Kampania 3 (2026-10-23): Esc w kroku 1 wychodził bez pytania. Jak w kreatorze
+                # relacji: pytanie, domyślnie i na Esc -- Zostań; przerwać tylko przyciskiem.
+                wt --title "Nowa replika: przerwać?" --yes-button "Przerwij" --no-button "Zostań" --defaultno \
+                   --yesno "Przerwać tworzenie repliki? Nic nie zostało zmienione." 8 "$W" || continue
+                clear 2>/dev/null; wt_end "Replika: przerwane, nic nie zmieniono"; exit 1; }
         n="${WT_OUT// /}"
         case "$n" in
             '') wt --title "Brak nazwy" --msgbox "Wpisz nazwę repliki, np. usb1." 8 "$W"; continue ;;

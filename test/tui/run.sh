@@ -3469,6 +3469,21 @@ rp_run() {   # <odpowiedzi> [ENV=...] -> stdout kreatora; dzienniki w $RP
       export TREE_PY="$PY" TREE_REPO="$REPO" ZFS_TREE="$RP/bin/tree"
       bash "$REPO/tui/replica.sh" ${RP_NAME:+"$RP_NAME"} ) 2>"$RP/err" </dev/null
 }
+# Kampania 3 (2026-10-23): Esc w kroku 1 nowej repliki wychodzil bez pytania. Teraz pyta jak
+# kreator relacji; Przerwij konczy bez zmian, Zostan (tez Esc) wraca do kroku 1.
+RPOUT=$(rp_run "1${T}
+0${T}"); RPRC=$?
+rp_q1=$(grep -c 'Nowa replika: przerwać?' "$RP/wt.log" 2>/dev/null)
+RPOUT2=$(rp_run "1${T}
+1${T}
+1${T}
+0${T}"); RPRC2=$?
+rp_q2=$(grep -c 'Nowa replika: przerwać?' "$RP/wt.log" 2>/dev/null); rp_n2=$(grep -c 'Nowa replika -- 1/6 nazwa' "$RP/wt.log" 2>/dev/null)
+if [ "$RPRC" -eq 1 ] && has "$RPOUT" "przerwane, nic nie zmieniono" && [ "$rp_q1" = 1 ]    && [ "$RPRC2" -eq 1 ] && [ "$rp_q2" = 2 ] && [ "$rp_n2" = 2 ] && grep -q -- '--defaultno' "$RP/wt.log"; then
+    ok "replika: Esc w kroku 1 pyta 'przerwać?' (domyślnie Zostań); Zostań wraca do nazwy, Przerwij kończy bez zmian"
+else
+    bad "replika: Esc w kroku 1" "rc=$RPRC/$RPRC2 pytan=$rp_q1/$rp_q2 krok1=$rp_n2" "$RPOUT"
+fi
 rm -f "$RP/rules"
 # H-7 (kampania 2026-10-21): nosnik INNEJ repliki nie jest zrodlem nowej -- staly nosnik = jego
 # katalog docelowy z poddrzewem znika z drzewa (wymienny = cala jego pula, ta sama funkcja).
