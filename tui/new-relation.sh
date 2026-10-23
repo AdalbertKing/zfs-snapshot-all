@@ -657,7 +657,7 @@ step_account() {
         acct_name="$(account_name)"
         shape="$(awk -F'\t' -v n="$PROFILE" '$1==n{print $6}' "$TMPD/prof.tsv" 2>/dev/null)"
         if account_is_flat "$acct_name" && [ "$shape" != flat ]; then
-            wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie ${acct_name:-root} już działają relacje z retencją W SZCZEBLACH\n(każdy szczebel przycina się sam) -- to jest jego config. Szablonu [drabina]\n(jedna drabina GFS w osobnej sekcji) nie da się do niego dodać, czasownik\nby to odmówił ('This host reads as FLAT').\n\nWybierz inne konto, albo Wstecz do kroku 6 po szablon bez znacznika [drabina]." "$(fit 8)" "$W"
+            wt --title "Szablon nie pasuje do konta" --msgbox "Na koncie ${acct_name:-root} już działają relacje z retencją W SZCZEBLACH\n(każdy szczebel przycina się sam) -- to jest jego config. Szablonu [drabina]\n(jedna drabina GFS w osobnej sekcji) nie da się do niego dodać, czasownik\nby tego odmówił.\n\nWybierz inne konto, albo Wstecz do kroku 6 po szablon bez znacznika [drabina]." "$(fit 8)" "$W"
             continue
         fi
         return 0

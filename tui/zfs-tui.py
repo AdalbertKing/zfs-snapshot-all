@@ -1789,8 +1789,8 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = ((u"m migawki   " if snaps else u"") + u"Enter pełne okno   " + (u"←→ zakładki   " if many else u"")
-                 + u"Esc wróć   Tab do linii poleceń") if in_child else ""
+        cfoot = ((u"m migawki   " if snaps else u"") + u"Enter okno   " + (u"←→ zakładki   " if many else u"")
+                 + u"Esc wraca   Tab do linii poleceń") if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
             scr.cursor_y = len(out) + 1 + pcur
@@ -1960,7 +1960,7 @@ def tpl_children(tab, p, rows, now, ch):
                 continue
             items.append({"cells": [r["name"], side, r.get("dir") or "?"],
                           "pairs": [(u"Relacja", r["name"]), (u"Strona", side), (u"Kierunek", r.get("dir") or "?"),
-                                    (u"Stan", r.get("state") or "?"), (u"Zmiana szablonu", u"F3 Relacje, Enter, e zmień")],
+                                    (u"Stan", r.get("state") or "?"), (u"Zmiana szablonu", u"w zmianie relacji (ekran Relacje)")],
                           "title": u"%s -- relacja %s" % (p.get("name"), r["name"])})
         return {"heads": [u"Relacja", u"Strona", u"Kierunek"], "items": items,
                 "empty": u"żadna relacja na tym hoście nie używa tego szablonu"}
@@ -2006,7 +2006,7 @@ def odz_children(tab, item, rows, data, now, ch):
     """F11: datasety, z ktorych mozna odzyskac (kopie relacji)."""
     if item.get("kind") == "disk":
         return {"heads": [u"Dataset"], "items": [],
-                "empty": u"dysk wybierasz w oknach Przywróć (Enter) -- pule z dysków podłączonych do tego hosta"}
+                "empty": u"dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta"}
     row = next((r for r in rows or [] if r.get("kind") == "relation" and r["name"] == item["name"]), None)
     pairs, _how = rel_pairs(row, data, now, ch) if row else ([], "")
     items = []
@@ -3567,7 +3567,7 @@ def replica_disks_words(r):
         return u"stały nośnik (pula w maszynie)"
     g = [x for x in (r.get("media_guids") or "").split(",") if x]
     if not g:
-        return u"po nazwie puli -- ID nieznane (Enter, 'e': dopisze ID włożonego dysku)"
+        return u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)"
     return u"%d po ID puli: %s" % (len(g), ", ".join(g))
 
 
@@ -4530,7 +4530,7 @@ class UI(object):
         """Eksport relacji: pole sciezki (F9 -> Eksport)."""
         default = os.path.join(relations_dir(), "%s.export.json" % n)
         self.prompt(u"Eksport relacji %s" % n, u"Plik (istniejący zostanie nadpisany):", default,
-                    lambda path: self.export_to(n, path), footer=u"Enter zapisz   Esc wróć")
+                    lambda path: self.export_to(n, path), footer=u"Enter zapisuje   Esc wraca")
 
     def export_to(self, n, path):
         """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
@@ -4755,7 +4755,7 @@ class UI(object):
         if obj.get("perr"):
             out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
         else:
-            out.append(fit(u" szablonów do wyboru: %d (Enter na polu Szablon)" % len(obj.get("profiles") or []), width - 4))
+            out.append(fit(u" szablonów do wyboru: %d (pole Szablon)" % len(obj.get("profiles") or []), width - 4))
         if self.message:
             out += ["", fit(u" ! " + self.message, width - 4)]
         return out
@@ -4833,7 +4833,7 @@ class UI(object):
             else:
                 out.append(fit(u"%s %s" % (mark, it["label"]), w))
         if not obj["nfiles"]:
-            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (eksport: ekran Relacje, F9 Plik -> Eksport; zapisuje je w %s)" % relations_dir(), w)]
+            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)" % relations_dir(), w)]
         return out
 
     def import_ask_file(self, value, error=None):
@@ -5465,13 +5465,13 @@ def _ui_render(self, width, height):
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
                 lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
-                                             footer=obj.get("footer") or u"Enter dalej   Esc wróć")
+                                             footer=obj.get("footer") or u"Enter dalej   Esc wraca")
         elif kind == "confirm":
             # KLAWISZE TYLKO NA RAMCE (właściciel 2026-10-09 uwaga 4, powtórzone 10-18 U7):
             # wariant okna (F8: w = wyłącz) stoi obok "t wykonaj", nie w treści.
             _alt = obj.get("alt")
-            _foot = u"t wykonaj   " + (u"%s %s   " % (_alt[0], _alt[2]) if _alt and len(_alt) > 2 else "") \
-                + u"Tab do linii poleceń   Esc wróć"
+            _foot = u"t wykonuje   " + (u"%s %s   " % (_alt[0], _alt[2]) if _alt and len(_alt) > 2 else "") \
+                + u"Tab do linii poleceń   Esc wraca"
             scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=_foot)
         elif kind == "form":
@@ -5480,11 +5480,11 @@ def _ui_render(self, width, height):
             cy = obj.get("_cur_y", 0)
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
-                                             footer=u"strzałki pole   spacja przełącza   Enter na [ %s ]   Esc wróć" % (u"ZAPISZ" if obj.get("kind") == "profile" else u"PLAN"))
+                                             footer=u"strzałki pole   spacja przełącza   Enter na [ %s ]   Esc wraca" % (u"ZAPISZ" if obj.get("kind") == "profile" else u"PLAN"))
         elif kind == "files":
             top_ = max(0, obj["cur"] - (height - 7))
             scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
-                                             footer=u"Enter wejdź / importuj   Esc wróć   strzałki")
+                                             footer=u"Enter wchodzi / importuje   Esc wraca   strzałki")
         elif kind == "choice":
             lines = [fit("%s %s" % (">" if i == obj["cur"] else " ", label), width - 4) for i, (_t, label) in enumerate(obj["items"])]
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
@@ -5499,7 +5499,7 @@ def _ui_render(self, width, height):
         elif kind == "migawki":
             lines = snap_pair_lines(obj["data"], width, obj.get("side", 0), int(time.time()))
             two = bool(obj.get("dst")) and width - 4 >= 116
-            foot = u"Enter przeglądaj kopię   Esc wraca   strzałki/PgUp/PgDn przewijają"
+            foot = u"Enter przegląda kopię   Esc wraca   strzałki/PgUp/PgDn przewijają"
             if obj.get("dst") and not two:
                 foot = u"Tab źródło/kopia   " + foot
             if not obj.get("dst"):
@@ -5515,15 +5515,15 @@ def _ui_render(self, width, height):
         else:
             foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("replica"):
-                foot = u"e zmień replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmienia replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("template"):
-                foot = u"e zmień szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = u"e zmienia szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
             if obj.get("kind") == "relation":
                 title = u"Relacja %s" % obj["name"]
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = u"e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
+                foot = u"e zmienia   s jako szablon   c edycja ręczna   Esc zamyka"
                 if finish_argv(obj.get("rel") or {}):
-                    foot = u"d dokończ   e zmień   s jako szablon   c edycja ręczna   Esc zamyka"
+                    foot = u"d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka"
             elif obj.get("kind") == "job":
                 title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:

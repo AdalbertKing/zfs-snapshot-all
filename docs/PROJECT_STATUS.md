@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 457fcc662d44c28e -->
+<!-- status-covers-digest: e2aa34359b2e88de -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -96,6 +96,14 @@
   odmówiło `subvol-901-disk-0`, bo na kolektorze akurat jest CT 901 (U60). Lustro bez migawek po obu stronach
   (datasety-kontenery w replice całej puli) to „nic do zrobienia”, nie błąd -- wcześniej każdy bieg kończył się
   rc=1 (H-4). Puste źródło z migawkami na celu -- nadal odmowa. `test/mirrorguest` 18/0 (+7).
+
+- **Stopki w jednym trybie, bez ścieżek klawiszy w treści, bez angielskiego (`fix/words-footers`, właściciel
+  2026-10-23, punkty 9-11).** Stopki opisowe: „Enter wybiera   Esc wraca” (było też „Esc wróć”, „Enter zapisz”,
+  „t wykonaj”, „e zmień”, „d dokończ”); drzewo kreatora: „Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej
+  Esc wraca”. Panele i komunikaty bez dróg klawiszami („F3 Relacje, Enter, e zmień” -> „w zmianie relacji
+  (ekran Relacje)”, „(Enter, 'e': …)”, „(Enter na polu Szablon)”, „F9 Plik -> Eksport”). Okno „Szablon nie
+  pasuje do konta” bez angielskiego cytatu czasownika. Na F3 „Enter okno” zamiast „Enter pełne okno” -- z „wraca”
+  stopka nie mieściła się w 80 kolumnach. Na żywo pve10 80×24; test `tui` 395/0 (pve9).
 
 - **Po zamknięciu okna linia komunikatu mówi, co się stało (`fix/window-end-message`, właściciel 2026-10-23).**
   Było „[rc=1] <cała linia polecenia>” także po zwykłym Esc -- anulowanie wyglądało jak błąd, a słowo okna
