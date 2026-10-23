@@ -4191,15 +4191,24 @@ class UI(object):
     ACTION_KEYS = ("F7", "F8", "F9", "enter", "del", "e")
     # REV-20261023-173: po NIEUDANYM odświeżeniu nie wystarcza lista klawiszy-czynności (Ins na
     # Szablonach z niej wypadł i kopiował stary szablon). Odwrotnie: przechodzą tylko klawisze,
-    # które nie biorą niczego z wierszy -- ruch po liście, przełączenie ekranu, pomoc,
-    # Ctrl-R, wyjście, F10 (ustawienia hosta) i linia poleceń (polecenie wpisuje admin).
+    # które nie biorą niczego z wierszy -- ruch po liście, przełączenie ekranu (F2-F6, F11),
+    # pomoc, Ctrl-R, wyjście, F10 (ustawienia hosta) i to, co linia poleceń bierze jako
+    # pisanie i edycję. Klawisze F z linii poleceń idą dalej do wierszy, więc tam też stoją.
     ROW_FREE_KEYS = frozenset(("up", "down", "j", "k", "pgup", "pgdn", "home", "end", "left", "right",
                                "tab", "esc", "F1", "F10", "ctrl-r", "q", "F12")
-                              + tuple(fk for _s, fk, _l in SCREENS if fk != "F11"))
+                              + tuple(fk for _s, fk, _l in SCREENS))
+    FKEYS_ALL = frozenset(("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "ctrl-r"))
 
     def row_free(self, k):
         """-> True, gdy klawisz nie działa na wierszach (wolno go użyć na nieaktualnym ekranie)."""
-        return k in self.ROW_FREE_KEYS or self.focus == "cmd"
+        if k in self.ROW_FREE_KEYS:
+            return True
+        if k in self.FKEYS_ALL:
+            return False
+        if self.focus == "cmd" or self.cmd:       # linia poleceń: pisanie, edycja, Enter = polecenie admina
+            return True
+        # Litera bez okna i poza panelem dzieci to tekst linii poleceń ('m' w panelu działa na wierszu).
+        return len(k) == 1 and k.isprintable() and self.focus != "pairs"
 
     def bg_pending(self):
         bg = getattr(self, "_bg", None)

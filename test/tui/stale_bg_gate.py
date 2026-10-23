@@ -94,6 +94,16 @@ def main():
           r == "stay" and not ui2.pending_shell and "NIEAKTUALNY" in (ui2.message or ""),
           "r=%r shell=%r msg=%r" % (r, ui2.pending_shell, ui2.message))
     check("failed-refresh-navigation-still-works", ui2.key("down") != "quit" and not ui2.pending_shell)
+    # The command line takes typing, but its F keys fall through to the rows: F7 there is refused.
+    ui2.focus, ui2.cmd = "cmd", ""
+    ui2.key("x")
+    typed = ui2.cmd == "x"
+    ui2.pending_shell = None
+    r7 = ui2.key("F7")
+    check("failed-refresh-cmdline-types-but-F7-refused",
+          typed and r7 == "stay" and not ui2.pending_shell and not ui2.window and "NIEAKTUALNY" in (ui2.message or ""),
+          "typed=%r r=%r shell=%r window=%r" % (ui2.cmd, r7, ui2.pending_shell, ui2.window and ui2.window[0]))
+    ui2.focus, ui2.cmd = "list", ""
     mode[0] = "fresh"
     ui2.refresh()                      # what Ctrl-R ends in (run_pending)
     ui2.pending_shell = None
