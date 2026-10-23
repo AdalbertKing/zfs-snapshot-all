@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: 8bb883e9123e66b6 -->
+<!-- status-covers-digest: a874bb75549e7db9 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -131,6 +131,16 @@
   numerów PR i historii incydentów; config relacji pokazany jako blok `[relation:]`. Wersje angielskie i README -- w
   paczkach 2 i 3. Przy okazji w kodzie: `status` (`zfs-backup.sh` ~19636) nadal pisze, że pauza nie obejmuje
   retencji, a nagłówek `gen-cron.sh` ~146-149 mówi to samo o sekcji `[prune:]` -- do poprawy poza tą paczką.
+
+- **Długie okna tekstu w GUI przewijają się (`fix/textbox-scroll`).** Przejście na żywo po kreatorze kopii lokalnej
+  (pve10): okno planu („Nowa relacja: Plan”) obiecywało w tytule „strzałki przewijają”, ale whiptail `--textbox` bez
+  `--scrolltext` nie przewija wcale -- strzałki, PgDn i Tab nic nie robiły, plan był ucięty na pierwszej stronie
+  (sekcje configu i linie crona nie do zobaczenia). Tak samo plan zmian w edycji relacji, okno błędu wyniku i okno
+  „zatrzymane zgodnie z wyborem”. Teraz jedno okno `textbox_read` (`tui/wt-lib.sh`): krótki tekst -- zwykłe okno,
+  Enter zamyka; długi -- przewijanie, a na ramce „strzałki przewijają, Tab -> Dalej, Esc wraca” (Enter działa
+  dopiero po Tab, zmierzone na pve10). Na żywo: plan przewinięty do końca, Tab+Enter przechodzi do pytania
+  WYKONAJ/Wstecz, nic nie zainstalowane. Przy okazji sprawdzone na żywo: okno „kiedy” w zmianie repliki usb9 ma
+  pozycję „o wolnej godzinie”, a kursor stoi na jej obecnym harmonogramie. `tui` 404/0 (pve9).
 
 - **REV-20261023-173: po nieudanym odświeżeniu przechodzą tylko klawisze niezależne od wierszy
   (`fix/rev173-failed-refresh-safe-keys`).** Blokada z REV-172 odrzucała listę klawiszy-czynności, a Ins na
@@ -433,8 +443,8 @@
 
 - **Kampania 2026-10-22, paczka 7: długi plan, cel kopii lokalnej (`kamp/plan`).** Na żywo na pve10: długi plan
   (kopia lokalna) otwierał się w oknie z przewijaniem, w którym Enter nic nie robi, dopóki nie naciśnie się Tab --
-  admin czekał. Teraz każdy długi plan (`yesno_text`) to okno tekstu (strzałki przewijają, Enter = dalej) i krótkie
-  pytanie WYKONAJ/Wstecz, jak plan w zmianie relacji. Kopia lokalna z celem wewnątrz źródła (hdd/archive ->
+  admin czekał. Teraz każdy długi plan (`yesno_text`) to okno tekstu i krótkie pytanie WYKONAJ/Wstecz, jak plan w
+  zmianie relacji (okno tekstu przewija się od 2026-10-23 -- wpis „Długie okna tekstu” wyżej). Kopia lokalna z celem wewnątrz źródła (hdd/archive ->
   hdd/archive/kopie) przechodziła cały kreator i odmawiał dopiero plan -- teraz okno w kroku „Dokąd”. Test `tui`
   385/0 (pve9; atrapa: okno tekstu nie zabiera odpowiedzi, jak prawdziwy whiptail).
 

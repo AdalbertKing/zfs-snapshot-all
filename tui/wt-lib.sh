@@ -129,9 +129,10 @@ yesno_text() {  # <plik> <tytuł> <tak> <nie> [--defaultno] -> yesno; przewijani
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra --yesno "$(cat "$f")" "$(fit $((lines + 1)))" "$W"
     else
         # Kampania 2026-10-22 (pve10, plan kopii lokalnej): w oknie z --scrolltext Enter nie
-        # robił nic, admin naciskał go i czekał. Długi tekst idzie najpierw do czytania (okno
-        # pliku: strzałki przewijają, Enter = dalej), potem krótkie pytanie z tymi samymi
-        # przyciskami -- jak plan w zmianie relacji. Esc w oknie tekstu = "nie".
+        # robił nic, admin naciskał go i czekał. Długi tekst idzie najpierw do czytania
+        # (textbox_read: przewijanie, Tab -> Dalej na ramce; bez --scrolltext okno nie przewija
+        # wcale -- 2026-10-23), potem krótkie pytanie z tymi samymi przyciskami -- jak plan w
+        # zmianie relacji. Esc w oknie tekstu = "nie".
         textbox_read "$t" "$f" || return 1
         wt --title "$t" --yes-button "$y" --no-button "$n" $extra \
            --yesno "Plan był w poprzednim oknie (wierszy: $lines). $y?" 8 "$W"
