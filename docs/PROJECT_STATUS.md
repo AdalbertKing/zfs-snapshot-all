@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: a0f882ff7f8472af -->
+<!-- status-covers-digest: d9a95a68d5b8d4c8 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -99,9 +99,10 @@
 
 - **Plan importu relacji wypisuje argumenty w cudzysłowach powłoki (`fix/import-plan-quote`, punkt 5).** Skopiowana
   linia planu `import-relation` z regexem, cudzysłowem albo backslashem (np. `--exclude-child=(a|b)[0-9]\,x"y`) nie
-  dawała tego samego polecenia -- argumenty szły przez `%s`. Teraz trzy pętle planu używają `%q` (jak
-  `write_client_field`). Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
-  sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 78/0; na main nowy przypadek pada.
+  dawała tego samego polecenia -- argumenty szły przez `%s`. Teraz wszystkie pętle odtworzenia -- trzy w planie importu, plan importu kopii lokalnej i tekst `export-relation`
+  dla obu czasowników -- używają `%q` (jak `write_client_field`); na żywo pve10 eksport `ab` miał
+  `--family-born=2026-10-21 20:48:47` -- skopiowana linia rozpadała się na dwa argumenty, teraz `2026-10-21\ 20:48:47`. Plany czasowników zostają po angielsku: CLI mówi po angielsku z założenia, tłumaczenie to
+  sprawa publikacji (GUI PL+EN). Test `zfsbackup --section exportrel` 79/0; na main nowe przypadki padają.
 
 - **REV-20261023-170: cofnięcie jednego grantu Restore nie odbiera wspólnego `<pula>/restore` drugiemu
   (`fix/rev170-shared-restore-ns`).** Dwie relacje do jednego hosta zwykle mają jedno konto `zfsbackup-<host>`, a ZFS
