@@ -408,7 +408,7 @@
    "k": "u22",
    "pl_code": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
    "pl": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
-   "en": "Want to keep your values? Go Back and change the numbers in 'Harmonogram i retencja' instead of changing the template.",
+   "en": "Want to keep your values? Go Back and change the numbers in 'Schedule and retention' instead of changing the template.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
@@ -15833,7 +15833,7 @@
    "k": "u1381",
    "pl_code": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
    "pl": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
-   "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Zmień relację -> Szablon', because this template will be gone.",
+   "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Change relation -> Template', because this template will be gone.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [

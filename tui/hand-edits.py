@@ -14,8 +14,18 @@ Dwie postacie planu:
     porownujemy z PLIKIEM sekcja po sekcji.
 Sekcje, ktore pojawiaja sie dopiero w planie (GUI je dopisze), nie sa recznymi zmianami.
 """
+import json
+import os
 import re
 import sys
+
+# Słowa w języku okna: ten sam katalog co GUI (ścieżka z wt-lib.sh), czytany jako dane.
+_C = json.load(open(os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if os.environ.get("ZFS_TUI_CAT") else {}
+
+
+def _(s):
+    return _C.get(s, s)
+
 
 TIERS = {"hourly": u"godzinowe", "daily": u"dobowe", "weekly": u"tygodniowe", "monthly": u"miesięczne", "yearly": u"roczne"}
 KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_schedule": u"godzina sprzątania",
@@ -24,14 +34,14 @@ KEYS = {"exclude_child": u"wyjątek", "send_schedule": u"godzina kopii", "prune_
 
 def label(sec):
     if sec.startswith("dataset:"):
-        return u"dataset " + sec[len("dataset:"):]
+        return _(u"dataset %s") % sec[len("dataset:"):]
     m = re.match(r"template:profile__.*?__(.*)$", sec)
     if m:
         t = m.group(1)
         src = re.match(r"^l?src_", t) is not None
         t = re.sub(r"^l?src_", "", t)
-        t = TIERS.get(t, t)
-        return (u"źródło, " + t) if src else t
+        t = _(TIERS[t]) if t in TIERS else t
+        return (_(u"źródło, %s") % t) if src else t
     return sec
 
 
@@ -97,13 +107,13 @@ def main(argv):
         for sec in sorted(set(old) | set(new)):
             o, n = old.get(sec, {}), new.get(sec, {})
             if o.get("__section__") and not n.get("__section__"):
-                rows.append(u"  %s: sekcja zniknie" % label(sec))
+                rows.append(_(u"  %s: sekcja zniknie") % label(sec))
                 continue
             for k in sorted(set(o) | set(n)):
                 if k == "__section__" or k not in o:
                     continue
                 if o.get(k) != n.get(k) and not (k.startswith("exclude_child") and o.get(k) in dropped):
-                    rows.append(u"  %s, %s:  %s -> %s" % (label(sec), KEYS.get(re.sub(r"_[0-9]+$", "", k), k), o[k], n.get(k, u"(brak)")))
+                    rows.append(u"  %s, %s:  %s -> %s" % (label(sec), _(KEYS[re.sub(r"_[0-9]+$", "", k)]) if re.sub(r"_[0-9]+$", "", k) in KEYS else k, o[k], n.get(k, _(u"(brak)"))))
     else:
         path = None
         for l in lines:
@@ -134,11 +144,11 @@ def main(argv):
             o, n = curr[sec], new[sec]
             for k in sorted(o):
                 if o[k] != n.get(k) and not (k.startswith("exclude_child") and o[k] in dropped):
-                    rows.append(u"  %s, %s:  %s -> %s" % (label(sec), KEYS.get(re.sub(r"_[0-9]+$", "", k), k), o[k], n.get(k, u"(brak)")))
+                    rows.append(u"  %s, %s:  %s -> %s" % (label(sec), _(KEYS[re.sub(r"_[0-9]+$", "", k)]) if re.sub(r"_[0-9]+$", "", k) in KEYS else k, o[k], n.get(k, _(u"(brak)"))))
     if rows:
-        out = [u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu).",
-               u"Szablon zastąpi je swoimi:"] + rows + \
-              [u"Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.", u""]
+        out = [_(u"UWAGA: relacja ma ustawienia inne niż jej szablon (tabela, silnik albo ręcznie w configu)."),
+               _(u"Szablon zastąpi je swoimi:")] + rows + \
+              [_(u"Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon."), u""]
         sys.stdout.write(u"\n".join(out) + u"\n")
     return 0
 

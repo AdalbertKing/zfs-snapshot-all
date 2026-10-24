@@ -594,5 +594,21 @@
 " [x] odtwarzane   [-] część   [ ] nie": " [x] restored   [-] partly   [ ] not",
 "Żeby go umożliwić, na $TARGET jako root:": "To enable it, on $TARGET as root:",
 "(na miejsce, gdy trzeba nadpisać: z --replace)": "(in place, when it must overwrite: with --replace)",
-"Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię).": "Without the source's consent: restore the copy on THIS host as a new dataset, or browse its files (Restore screen, Browse copy)."
+"Bez zgody źródła: odtwórz kopię na TYM hoście jako nowy dataset albo przejrzyj jej pliki (ekran Odzysk, Przeglądaj kopię).": "Without the source's consent: restore the copy on THIS host as a new dataset, or browse its files (Restore screen, Browse copy).",
+"dataset %s": "dataset %s",
+"źródło, %s": "source, %s",
+"  %s: sekcja zniknie": "  %s: section goes away",
+"wyjątek": "exception",
+"godzina kopii": "copy hour",
+"trzyma": "keeps",
+"trzyma (wiek)": "keeps (age)",
+"Szablon zastąpi je swoimi:": "The template will replace them with its own:",
+"%s: ostatni bieg %s rc=%s: %s": "%s: last run %s rc=%s: %s",
+"ostatni bieg %s rc=%s: %s": "last run %s rc=%s: %s",
+"ostatni bieg rc=%s": "last run rc=%s",
+"zobacz cron.log": "see cron.log",
+"%s -- relacja %s": "%s -- relation %s",
+"sort: ostatni bieg": "sort: last run",
+"--reason=wyłączona z TUI %s": "--reason=disabled from the TUI %s",
+"--reason=z TUI %s": "--reason=from the TUI %s"
 }
