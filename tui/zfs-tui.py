@@ -2035,7 +2035,7 @@ def pair_detail_pairs(pr, row, data, now, ch):
         out.append(group(ch, _(u"Szczeble")))
         for jj in jobs:
             _k = keep_cell(jj.get("retain") or jj.get("keep") or "")
-            out.append((family_of(jj) or "?", cron_words(jj.get("schedule", "")) + ((u"   trzyma %s" % _k) if _k != "-" else "")))
+            out.append((family_of(jj) or "?", cron_words(jj.get("schedule", "")) + ((_(u"   trzyma %s") % _k) if _k != "-" else "")))
     out.append(group(ch, _(u"Przebiegi (%s dni)") % ((data.stats or {}).get("window_days") or 7)))
     out.append((_(u"Czas"), pr.get("czas_words") or "-"))
     out.append((_(u"Dane"), pr.get("gb") or "-"))
@@ -2958,7 +2958,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
                     pref = f.get("prefix") or t.get("prefix") or "?"
                     _ret = f.get("retain") or f.get("keep") or t.get("retain") or t.get("keep") or ""
-                    key = (_w, _(u"co: %s   stempel %s%s") % (cron_words(sched), pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
+                    key = (_w, _(u"co: %s   stempel %s%s") % (cron_words(sched), pref, (_(u"   trzyma %s") % keep_cell(_ret)) if _ret else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
@@ -3442,7 +3442,7 @@ def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc za
         body.append("")
     pos = ""
     if len(lines) > inner_h:
-        pos = "%d-%d z %d" % (scroll + 1, min(len(lines), scroll + inner_h), len(lines))
+        pos = _(u"%d-%d z %d") % (scroll + 1, min(len(lines), scroll + inner_h), len(lines))
     bx = box(ch, title, body, width, footer=_(footer) + ("   " + pos if pos else ""))
     scr.lines = [base.lines[0]] + bx + keep
     scr.bars.add(0)
@@ -4288,8 +4288,8 @@ class UI(object):
         t.daemon = True
         t.start()
         self._bg = (t, box)
-        if not (self.message or "").endswith(self.BG_NOTE):
-            self.message = (self.message or "") + self.BG_NOTE
+        if not (self.message or "").endswith(_(self.BG_NOTE)):
+            self.message = (self.message or "") + _(self.BG_NOTE)
 
     ACTION_KEYS = ("F7", "F8", "F9", "enter", "del", "e")
     # REV-20261023-173: po NIEUDANYM odświeżeniu nie wystarcza lista klawiszy-czynności (Ins na
@@ -4323,8 +4323,8 @@ class UI(object):
         if bg is None or bg[0].is_alive():
             return False
         self._bg = None
-        if (self.message or "").endswith(self.BG_NOTE):
-            self.message = self.message[:-len(self.BG_NOTE)]
+        if (self.message or "").endswith(_(self.BG_NOTE)):
+            self.message = self.message[:-len(_(self.BG_NOTE))]
         data = bg[1].get("data")
         if data is None:
             self.message = (self.message or "") + _(u"   odświeżenie w tle nie wyszło: %s") % bg[1].get("err", "?")
@@ -5061,7 +5061,7 @@ class UI(object):
                 if getattr(self, "_bg", None) is not None and k not in ("q", "F12"):
                     self.message = (_(u"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, "
                                       u"ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie "
-                                      u"„odświeżam w tle”; F12 wychodzi.%s") % (self.BG_KEY_WAIT, self.BG_NOTE))
+                                      u"„odświeżam w tle”; F12 wychodzi.%s") % (self.BG_KEY_WAIT, _(self.BG_NOTE)))
                     return "stay"
             if getattr(self, "bg_failed", False) and not self.row_free(k):
                 self.message = (_(u"Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. "
@@ -5568,7 +5568,7 @@ class UI(object):
             return {"kind": "panel", "name": "monitor %s" % (m.get("label") or ""), "pairs": monitor_detail_pairs(m, ch, full=True)}
         if self.screen == "szablony":
             pr = (self.data.profiles or [])[c]
-            return {"kind": "panel", "name": u"szablon %s" % pr.get("name"), "pairs": template_detail_pairs(pr),
+            return {"kind": "panel", "name": _(u"szablon %s") % pr.get("name"), "pairs": template_detail_pairs(pr),
                     "template": pr.get("name")}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
         return {"kind": "panel", "name": _(u"nośnik %s") % rp.get("name"),
