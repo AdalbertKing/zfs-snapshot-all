@@ -2171,6 +2171,83 @@ else
     bad "W17: local-backup --raw" "$(printf '%s\n' "$w17o" | grep -E 'snapsend|raw|FATAL' | head -4)" "$(printf '%s\n' "$w17c" | grep snapsend | head -1)"
 fi
 
+# local-backup --passive (the source already holds our family's snapshots: adopt
+# them, make none). Five properties, each with its control:
+# 1. every [dataset:] carries `passive = yes`; no source [prune:] section, no
+#    source delsnaps line -- the LANDING prune stays, it is the target's;
+# 2. control without --passive: the source prune is there;
+# 3. --passive with --target='' (snapshots only) is a contradiction and dies;
+# 4. an existing [dataset:<root>/child] under a --recursive root is an overlap
+#    (the recursive claim reaches the child); control without --recursive passes;
+# 5. the seed pulls with -e and the FAMILY ROOT prefix (automated_), not the
+#    first tier's (automated_hourly_).
+# default carries the [prune:] fragment (a source section to be absent), d7h24 is
+# a tiered flat profile (inline delsnaps lines to be absent).
+pv_cfg() { sed -n '/^--- kandydat CONFIG/,/^--- wygenerowany/p' <<< "$1" | sed '1d;$d'; }
+pv_o="$(run --source=rpool/data --target=hdd/backups --profile=default --passive --name=pv --config="$WORK/pv.conf")"; pv_rc=$?
+pv_c="$(pv_cfg "$pv_o")"
+pv_ds="$(printf '%s\n' "$pv_c" | awk '/^\[dataset:rpool\/data\]/{f=1;next} /^\[/{f=0} f')"
+pv_k="$(run --source=rpool/data --target=hdd/backups --profile=default --name=pvk --config="$WORK/pvk.conf")"
+pv_kc="$(pv_cfg "$pv_k")"
+if [ "$pv_rc" -eq 0 ] && printf '%s\n' "$pv_ds" | grep -qE '^\s*passive\s*=\s*yes$' \
+   && ! printf '%s\n' "$pv_c" | grep -qxF '[prune:rpool/data]' && printf '%s\n' "$pv_c" | grep -qxF '[prune:hdd/backups/rpool/data]'; then
+    ok "local-backup --passive: [dataset:] carries passive = yes, no source [prune:] section, the landing prune stays"
+else
+    bad "local-backup --passive: passive = yes, no source [prune:]" "rc=$pv_rc" "$pv_c" "$(printf '%s\n' "$pv_o" | grep -E 'FATAL|rror' | head -2)"
+fi
+if printf '%s\n' "$pv_kc" | grep -qxF '[prune:rpool/data]' && ! printf '%s\n' "$pv_kc" | grep -qE '^\s*passive\s*='; then
+    ok "local-backup --passive: control without it keeps the source [prune:] section and has no passive field"
+else
+    bad "local-backup --passive: control without it" "$pv_kc"
+fi
+pv_t="$(run --source=rpool/data --target=hdd/backups --profile=d7h24 --passive --name=pvt --config="$WORK/pvt.conf")"
+pv_tk="$(run --source=rpool/data --target=hdd/backups --profile=d7h24 --name=pvtk --config="$WORK/pvtk.conf")"
+pv_ts="$(printf '%s\n' "$pv_t"  | grep -cE 'delsnaps\.sh .*"rpool/data"')"
+pv_tt="$(printf '%s\n' "$pv_t"  | grep -cE 'delsnaps\.sh .*"hdd/backups/rpool/data"')"
+pv_ks="$(printf '%s\n' "$pv_tk" | grep -cE 'delsnaps\.sh .*"rpool/data"')"
+if [ "$pv_ts" -eq 0 ] && [ "$pv_tt" -ge 1 ] && [ "$pv_ks" -ge 1 ]; then
+    ok "local-backup --passive: a tiered flat profile renders no delsnaps line for the source, one for the landing; control prunes the source"
+else
+    bad "local-backup --passive: no source delsnaps line" "passive: source=$pv_ts landing=$pv_tt; control: source=$pv_ks" "$(printf '%s\n' "$pv_t" | grep -E 'delsnaps' | head -4)"
+fi
+rm -f "$WORK/pvn.conf"
+pv_n="$(run --source=rpool/data --target='' --passive --name=pvn --config="$WORK/pvn.conf")"; pv_nrc=$?
+if [ "$pv_nrc" -ne 0 ] && printf '%s\n' "$pv_n" | grep -qF -- '--passive adopts snapshots' && printf '%s\n' "$pv_n" | grep -qF 'Nothing was touched' \
+   && [ ! -e "$WORK/pvn.conf" ]; then
+    ok "local-backup --passive --target='': refused with the reason, nothing written"
+else
+    bad "local-backup --passive --target='': refused" "rc=$pv_nrc" "$(printf '%s\n' "$pv_n" | tail -3)"
+fi
+# overlap: a hand-written child section under a new --recursive root
+printf '[defaults]\n\thost_label = testhost\n\n[dataset:rpool/a/child]\n\tuse_template = whatever\n\tdst          = hdd/backups\n' > "$WORK/pvo.conf"
+pv_o1="$(run --source=rpool/a --target='' --recursive=flat --name=pvo --config="$WORK/pvo.conf")"; pv_o1rc=$?
+pv_o2="$(run --source=rpool/a --target='' --name=pvo2 --config="$WORK/pvo.conf")"; pv_o2rc=$?
+if [ "$pv_o1rc" -ne 0 ] && printf '%s\n' "$pv_o1" | grep -q 'overlap' && printf '%s\n' "$pv_o1" | grep -qF 'edit-config' \
+   && printf '%s\n' "$pv_o1" | grep -qF 'Taking over older jobs'; then
+    ok "local-backup --recursive=flat: a root over an existing [dataset:<root>/child] is an overlap, and the refusal points at edit-config"
+else
+    bad "local-backup --recursive=flat: overlap with a child section" "rc=$pv_o1rc" "$(printf '%s\n' "$pv_o1" | tail -4)"
+fi
+if [ "$pv_o2rc" -eq 0 ] && ! printf '%s\n' "$pv_o2" | grep -q 'overlap coverage'; then
+    ok "local-backup overlap control: the same root without --recursive (flat claim) passes next to the child section"
+else
+    bad "local-backup overlap control: without --recursive" "rc=$pv_o2rc" "$(printf '%s\n' "$pv_o2" | tail -3)"
+fi
+# seed: -e and the family root prefix. The install needs flock.
+if ! command -v flock >/dev/null 2>&1; then
+    echo "SKIP local-backup --passive seed (no flock on this machine -- the install needs it)"
+else
+    PVC="$WORK/pvclients"; rm -rf "$PVC"
+    rm -f "$WORK/order" "$WORK/seed-calls" "$WORK/crontab-writes" "$WORK/crontab-store"; seed_cfg
+    pv_i="$(CLIENTS_DIR="$PVC" runi snapsend-ok "t" --install --yes --source=rpool/data --target=hdd/backups --profile=d7h24 --passive --name=pvi --config="$CFG")"
+    if grep -qE -- '(^|[ ])-e([ ]|$)' "$WORK/seed-calls" 2>/dev/null && grep -qE -- '-m automated_ ' "$WORK/seed-calls" 2>/dev/null \
+       && ! grep -qE -- '-m automated_hourly_' "$WORK/seed-calls" 2>/dev/null && grep -qx 'PASSIVE=1' "$PVC/pvi.conf" 2>/dev/null; then
+        ok "local-backup --passive: the seed runs snapget -e with the family root -m automated_, and the record says PASSIVE=1"
+    else
+        bad "local-backup --passive: seed / record" "calls=$(cat "$WORK/seed-calls" 2>/dev/null)" "record=$(grep -E 'PASSIVE' "$PVC/pvi.conf" 2>/dev/null)" "$(printf '%s' "$pv_i" | tail -3)"
+    fi
+fi
+
 echo "--------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

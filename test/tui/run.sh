@@ -3031,6 +3031,65 @@ if [ "$NRRC" -eq 0 ] && has "$NROUT" "CMD: --source=hdd/backups/192.168.28.99/hd
 else
     bad "new-relation: kopia lokalna" "rc=$NRRC" "$NROUT" "$(cat "$NR/zb.log")" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
 fi
+# 3h'. KOPIA LOKALNA ze zrodla, na ktorym sa juz migawki NASZEJ rodziny (family_snapshots>0 w
+#      list-datasets, bez hosta -> list-datasets.json): to samo okno "Migawki naszej rodziny
+#      już są na źródle" co przy backupie. chain -> kopia PASYWNA (--passive, bez kroku
+#      "Retencja źródła", passive-flat NIE polecany, podsumowanie PASYWNIE:); own -> bez
+#      --passive, podsumowanie "kopia robi własne". Kontrola: zrodlo bez rodziny (powyzej, 3h)
+#      nie ma okna ani flagi.
+NRL="$(mktemp -d)"; cp "$P10"/*.json "$NRL/"
+"$PY" - "$NRL/list-datasets.json" <<'PYEOF'
+import sys, json, time
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+for x in (d["datasets"] if isinstance(d, dict) else d):
+    fam = x.get("name") == "hdd/backups/192.168.28.99/hdd/lab"
+    x["family_snapshots"] = 5 if fam else 0
+    x["family_newest"] = int(time.time()) - 7200 if fam else 0
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+"$PY" - "$NRL/list-profiles.json" <<'PYEOF'
+import sys, json, copy
+p = sys.argv[1]; d = json.load(open(p, encoding="utf-8"))
+if not any(x.get("name") == "passive-flat" for x in d["profiles"]):
+    x = copy.deepcopy(d["profiles"][0]); x["name"] = "passive-flat"; d["profiles"].append(x)
+for x in d["profiles"]:
+    if x.get("name") == "passive-flat":
+        x["hidden"] = "yes"
+json.dump(d, open(p, "w", encoding="utf-8"))
+PYEOF
+nrl_ans() {   # <chain|own> -> odpowiedzi kreatora kopii lokalnej ze zrodlem z rodzina
+    printf '%s' "0${T}local
+0${T}__other__
+0${T}hdd/kopie
+0${T}$1
+0${T}default
+0${T}lokalna-hdd-backups-192.168.28.99-hdd-lab
+0${T}adv
+0${T}acct
+0${T}root
+0${T}extra
+0${T}__done__
+1${T}
+0${T}create
+0${T}
+0${T}
+"; }
+NRLA=$(nr_run "$(nrl_ans chain)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLW="$(cat "$NR/wt.log")"
+NRLO=$(nr_run "$(nrl_ans own)" NR_FIX="$NRL" NR_TREE='goto:hdd/backups/192.168.28.99/hdd/lab,space,enter'); NRLOW="$(cat "$NR/wt.log")"
+if has "$NRLA" 'CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie ' && has "$NRLA" ' --passive ' \
+   && has "$NRLW" 'Migawki naszej rodziny już są na źródle' && has "$NRLW" ' ~ chain ~ ' && has "$NRLW" ' ~ own ~ ' \
+   && ! has "$NRLW" '--title ~ Retencja źródła ~' && ! has "$NRLW" '[polecany]' && has "$NRLW" 'PASYWNIE:'; then
+    ok "new-relation: kopia lokalna ze zrodla z rodzina, odpowiedz 'chain' -- komenda z --passive, bez okna 'Retencja źródła', passive-flat niepolecany, podsumowanie PASYWNIE:"
+else
+    bad "new-relation: kopia lokalna chain -> --passive" "$NRLA" "$(printf '%s' "$NRLW" | grep -E 'PASYWNIE|polecany|Retencja' | cut -c1-200)" "$(grep -o -e '--title ~ [^~]*' "$NR/wt.log" | head -12 | tr '\n' ';')"
+fi
+if has "$NRLO" 'CMD: --source=hdd/backups/192.168.28.99/hdd/lab --target=hdd/kopie ' && ! has "$NRLO" '--passive' \
+   && has "$NRLOW" 'WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- kopia robi własne,' && ! has "$NRLOW" 'PASYWNIE:'; then
+    ok "new-relation: kopia lokalna ze zrodla z rodzina, odpowiedz 'own' -- bez --passive, podsumowanie WŁASNE MIGAWKI ... kopia robi własne (kontrola 'chain' wyzej)"
+else
+    bad "new-relation: kopia lokalna own -> bez --passive" "$NRLO" "$(printf '%s' "$NRLOW" | grep -E 'WŁASNE|PASYWNIE' | cut -c1-200)"
+fi
+rm -rf "$NRL"
 
 # 3i. SAME MIGAWKI (X27 S4, wlasciciel 2026-10-14: "A relacja robiaca tylko migawki w
 #     zrodle? Wsad? GUI?"): czwarta pozycja w oknie rodzaju. Kopia lokalna BEZ celu -- bez okna
