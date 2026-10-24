@@ -2,7 +2,58 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (PR #463 removable replica -> snapget -M)
+## Latest final-audit batch — 2026-10-24 (PRs #453/#455 engine control and observability)
+
+**The terminal progress-record rewrite and lock-skip rc 75 contract remain
+correct; no new REV was opened.** The exact deliveries are:
+
+- PR #453: base `45d0dc0c54d8f24df776743dbdcafd9ddde8c840`,
+  production commit `e03c2df2372e54191cec9c389b3dfe83dfa0e871`, final head
+  `27072f9bedf39cf9fdb2fffea651eb9ec6f66935`, merge
+  `9de180bf0213e3b3c3ee14eee64181d9f2d5e09e`;
+- PR #455: base `2a5c8201afc67628fa6b79c067984e2c304d8277`,
+  production commit `b11cd9e1420edf62ff52a95f873c79ee1a9080a0`, final head
+  `2d433ca7955f97c2f944c4c77d3a67093ea6eaa0`, merge
+  `2daddf61d3171a2613906df75c70c964da4a4e84`.
+
+`progress_done` now replaces either the running terminal or an already
+finished terminal from the previous transfer and heals an old glued record by
+cutting at the first real top-level `,"state":` field. It writes through a
+temporary file, leaves unknown shapes untouched and remains telemetry-only: no
+transfer decision reads this record. Escaped dataset text cannot impersonate
+the delimiter. For the lock gate, both engine twins still emit the same
+`skipped_lock` statistic and diagnostic, but return EX_TEMPFAIL 75 rather than
+false success. `zfs-job` records the real rc and routes 75 only to the warning
+script; ordinary nonzero status still uses the failure notifier. The repository
+contains no other producer of rc 75, and later run-now handling explicitly
+classifies 75 as busy rather than success or failure.
+
+Independent evidence on current `main`
+`16c9fd9d73b7780d2b1f193a2a2de1a02f8512d4`:
+
+- current `test/twins` is **94/94**, `test/pairpause` is **22/22** and
+  `test/cron` is **232/232**;
+- at exact PR #453 head, the historical twins suite is now **82 PASS / 1
+  unrelated FAIL** because its `process_dataset` porting deadline expired on
+  2026-10-19. Replacing only `lib-zfs-snap.sh` with the exact base adds the
+  intended `progress_done` failure (**81 PASS / 2 FAIL**). Exact-head CI run
+  `37450082594` succeeded before that dated deadline expired;
+- exact PR #455 head is **22/22** in `pairpause` and **146/146** in `cron`.
+  Replacing only both engines and `zfs-job.sh` with the exact base yields
+  **20 PASS / 2 FAIL** (both engines return the old rc) and **145 PASS / 1
+  FAIL** (75 goes to the failure notifier). Exact-head CI run `37452537070`
+  succeeded;
+- both exact-range `diff --check` checks pass. The recorded live evidence on
+  pve10 invoked the same cron line twice for root and the delegated account:
+  the second run returned 75 and queued one WARN rather than an ALERT. The
+  reviewer did not repeat live-host concurrency or ZFS work.
+
+**Next reviewer scope:** PR #465, the destructive `prune_foreign = yes`
+delivery. Verify exact family/protection construction, refusal of remote scope,
+installer-guard exceptions and a negative control proving unrelated protected
+families survive.
+
+## Previous final-audit batch — 2026-10-24 (PR #463 removable replica -> snapget -M)
 
 **No new confirmed defect and no new REV** in the exact PR #463 transition
 `9fb9a7afd2904c8ac58d1a7e989b1ed19e49e428..91954aafa0ca1305d86669ab5c4159ec768f9674`,
