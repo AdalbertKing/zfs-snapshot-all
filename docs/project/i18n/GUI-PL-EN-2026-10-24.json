@@ -3419,7 +3419,7 @@
    "k": "u276",
    "pl_code": "Relacje na kolektorze %s",
    "pl": "Relacje na kolektorze %s",
-   "en": "Relation on collector %s",
+   "en": "Relations on collector %s",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -3430,7 +3430,7 @@
    "k": "u277",
    "pl_code": "Relacje na kolektorze %s (%d)",
    "pl": "Relacje na kolektorze %s (%d)",
-   "en": "Relation on collector %s (%d)",
+   "en": "Relations on collector %s (%d)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -3541,7 +3541,7 @@
    "k": "u287",
    "pl_code": "co obejmuje",
    "pl": "co obejmuje",
-   "en": "What is included",
+   "en": "what is included",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -9494,7 +9494,7 @@
    "k": "u818",
    "pl_code": "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?",
    "pl": "Po ilu zgubionych przebiegach przejść na migawkę różnicową?",
-   "en": "After how many failed runs should you switch to a differential shutter?",
+   "en": "After how many missed intervals switch to the difference only (1-999)?",
    "origin": "owner-edit",
    "unclear": false,
    "where": [

@@ -42,16 +42,19 @@ source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = ws
         u=""; case "${tm[$i]}" in retain:*) u="$(age_unit "${tm[$i]#retain:}")" ;; esac
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$(tier_word "${tn[$i]}")" "${tk[$i]}" "${sk[$i]}" "$u" "${tp[$i]}" >>"$TMPD/srcrows.tsv"
     done
-    "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "${SRC_TITLE:-Jak długo trzymać u źródła ($HOST)?}" <<'PYEOF'
+    "$PY" - "$TMPD/srcrows.tsv" "$TMPD/srcspec.json" "${SRC_TITLE:-$(Tv 'Jak długo trzymać u źródła ($HOST)?' '$HOST' "$HOST")}" <<'PYEOF'
 import json, sys
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 rows = []
 for line in open(sys.argv[1], encoding="utf-8"):
     i, lab, here, src, unit, fam = (line.rstrip("\n").split("\t") + [""] * 6)[:6]
     rows.append({"key": i, "label": lab, "on": src != "0", "value": (here if src == "0" else src), "unit": unit,
                  "ref": ("%s %s" % (here, unit)).strip(), "q": None, "family": fam or None})
-json.dump({"title": sys.argv[3], "head": [u"SZCZEBEL", u"TUTAJ (cel)", u"U ŹRÓDŁA"], "rows": rows,
-           "note": [u"Źródło sprząta te same migawki co cel, tylko trzyma ich inną liczbę.",
-                    u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle."]},
+json.dump({"title": sys.argv[3], "head": [_(u"SZCZEBEL"), _(u"TUTAJ (cel)"), _(u"U ŹRÓDŁA")], "rows": rows,
+           "note": [_(u"Źródło sprząta te same migawki co cel, tylko trzyma ich inną liczbę."),
+                    _(u"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.")]},
           open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
 PYEOF
     clear 2>/dev/null
@@ -124,9 +127,9 @@ for r in json.load(open(sys.argv[1], encoding="utf-8"))["rows"]:
         esac
     done
     [ "$own" -eq 1 ] && name="$PROFILE-src"
-    info "${SRC_TITLE:-Retencja źródła}" "Zapisuję szablon źródła $name..."
-    out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)" 2>&1) \
-        || { wt --title "Szablon źródła odrzucony" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }
+    info "${SRC_TITLE:-$(T 'Retencja źródła')}" "$(Tv 'Zapisuję szablon źródła $name...' '$name' "$name")"
+    out=$("$ZB" save-profile "${args[@]}" --as="$name" --description="$(Tv 'Retencja ŹRÓDŁA na bazie $PROFILE (pochodny, z kreatora)' '$PROFILE' "$PROFILE")" 2>&1) \
+        || { wt --title "$(T 'Szablon źródła odrzucony')" --msgbox "$(printf '%s' "$out" | tail -6)" 14 "$W"; return 1; }
     SRCPROF="$name"
     return 0
 }

@@ -839,7 +839,7 @@ def run_verb(repo, args):
         except OSError:
             pass
         p.communicate()
-        return None, u"%s nie odpowiedział w %d s -- przerwany" % (args[0], limit)
+        return None, _(u"%s nie odpowiedział w %d s -- przerwany") % (args[0], limit)
     try:
         return json.loads(out.decode("utf-8", "replace")), None
     except ValueError:
@@ -1218,7 +1218,7 @@ def verbs_for(rel):
         if rel.get("paused_local"):
             out.insert(0, "zfs-backup.sh resume-client %s" % n)
         else:
-            out.insert(0, "zfs-backup.sh pause-client %s [--reason=TEKST]" % n)
+            out.insert(0, _(u"zfs-backup.sh pause-client %s [--reason=TEKST]") % n)
         if rel.get("peer_host"):
             out.append("zfs-backup.sh set-bandwidth --peer=%s --bandwidth=RATE" % rel["peer_host"])
         if rel.get("endpoint_diverged"):
@@ -2460,7 +2460,7 @@ def guard_states(settings_file=None, confs=None):
 def guard_label(states):
     pl = {"on": _(u"wł."), "off": _(u"wył.")}
     cap, gro = states
-    return u"ochrona: bezpiecznik %s · przyrost %s" % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+    return _(u"ochrona: bezpiecznik %s · przyrost %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
 def top_bar(data, width, now, ascii_only, err_count):
@@ -2878,9 +2878,9 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           (_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         (_("Historia"), "  ".join(x for x in [
-            "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
+            _(u"utworzona %s") % rel["created_at"] if rel.get("created_at") else "",
             _(u"pełna kopia %s") % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
-            "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
+            _(u"aktywowana %s") % rel["activated_at"] if rel.get("activated_at") else "",
             _(u"usunięta %s") % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
@@ -3047,7 +3047,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     else:
         out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), _(u"brak zapisu w historii"))], w))
     out.append("")
-    out.append(u"komendy")
+    out.append(_(u"komendy"))
     for v in verbs_for(rel):
         out.append("  " + v)
     return out
@@ -4917,7 +4917,7 @@ class UI(object):
         out = []
         if obj.get("kind") == "datasets":
             nw = max(20, width - 4 - 2 - 11 - 11 - 11)
-            out.append(fit("  %-*s %-10s %10s %10s" % (nw, _("dataset"), "typ", u"zajęte", "wolne"), width - 4))
+            out.append(fit("  %-*s %-10s %10s %10s" % (nw, _("dataset"), _(u"typ"), _(u"zajęte"), _(u"wolne")), width - 4))
             for i, d in enumerate(obj["items"]):
                 mark = ">" if i == obj["cur"] else " "
                 out.append(fit("%s %s %-10s %10s %10s" % (mark, fit_left(d.get("name", "?"), nw, self.ch), d.get("type", ""),
