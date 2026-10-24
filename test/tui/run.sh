@@ -899,7 +899,7 @@ else
 fi
 rm -rf "$DISD"
 A="$(act down,F8,t)"
-if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[atrapa]'; then
+if grep -q "pause-client lab-ct201 '--reason=z TUI" "$XL" && [ "$(grep -c . "$XL")" -eq 1 ] && has "$A" '╔═ WYJŚCIE: Wstrzymaj relację lab-ct201 ═' && has "$A" '[tryb testowy]'; then
     ok "akcje: 't' wykonuje DOKLADNIE pokazana komende (pause-client NAME --reason=...) i otwiera okno wyjscia"
 else
     bad "akcje: t wykonuje" "$(cat "$XL")" "$A"
@@ -1905,7 +1905,7 @@ else
     bad "linia: edycja" "$C"
 fi
 C="$(: > "$XL"; screen relacje "text:ls -l,enter" --exec-log "$XL")"
-if [ "$(cat "$XL")" = "ls -l" ] && has "$C" '[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ls -l'; then
+if [ "$(cat "$XL")" = "ls -l" ] && has "$C" '[tryb testowy] polecenie nie zostało uruchomione, tylko zapisane do dziennika: ls -l'; then
     ok "linia: Enter wykonuje DOKLADNIE wpisana linie (atrapa: dziennik) i czysci linie"
 else
     bad "linia: Enter" "$(cat "$XL")" "$C"
@@ -2590,7 +2590,7 @@ fi
 # Dawna "lista miejsc" (whiptail) to teraz ekran drzewa w tree.log: tytul kroku, wciecie,
 # rozmiar, zvol i legenda "POWSTANIE". Dawne "druga lista nie oferuje tego, co koszyk juz
 # obejmuje" nie ma odpowiednika -- w drzewie to, co obejmuje miejsce, stoi w tym samym oknie jako [x].
-if has "$NRTL" 'Co kopiować z 192.168.28.98?' && has "$NRTL" 'POWSTANIE' \
+if has "$NRTL" 'Co kopiować z 192.168.28.98?' && has "$NRTL" 'także przyszłymi' \
    && hasE "$NRTL" '- \[-\] data +[0-9.]+[KMG] ' && hasE "$NRTL" 'vm-201-disk-0 +zvol [0-9.]+[KMGB] ' \
    && hasE "$NRTL" '\[x\] docs' && hasE "$NRTL" '\[x\] photos'; then
     ok "new-relation: lista miejsc = drzewo z kratkami (tytul okna, wciecie, rozmiar, zvol) i mowi wprost 'POWSTANIE'; to, co obejmuje miejsce, stoi w tym samym oknie jako [x]"
@@ -2858,7 +2858,7 @@ NROUT=$(nr_run "0${T}backup
 0${T}
 0${T}
 " NR_GRID_KEYS=space,enter NR_TREE="$NRTK")
-if printf '%s' "$NROUT" | grep -qF 'Tego szczebla nie da się wyłączyć' && ! grep -q '^save-profile' "$NR/zb.log"; then
+if printf '%s' "$NROUT" | grep -qF 'Nie można wyłączyć: tylko ten szczebel' && ! grep -q '^save-profile' "$NR/zb.log"; then
     ok "new-relation: szczebla, ktory jako jedyny sprzata rodzine, nie da sie wylaczyc"
 else
     bad "new-relation: T2 odmowa wylaczenia jedynego szczebla" "$(cat "$NR/wt.log")" "$(cat "$NR/zb.log")"
@@ -3958,7 +3958,7 @@ cat > "$TRD/single.json" <<'SJ'
 SJ
 TRS=$(trun "$TRD/single.json" 'enter,down,enter,down,enter'); TRSRC=$?
 if [ "$TRSRC" -eq 0 ] && [ "$(tjq "$TRD/out.json" roots)" = '["hdd/lab/vm-101"]' ] \
-   && printf '%s' "$TRS" | grep -q 'MSG: hdd: tu nic do wybrania' && ! printf '%s' "$TRS" | grep -q '\[x\]\|\[ \]'; then
+   && printf '%s' "$TRS" | grep -q 'MSG: hdd nie można wybrać' && ! printf '%s' "$TRS" | grep -q '\[x\]\|\[ \]'; then
     ok "tree U68: tryb jednej pozycji -- Enter na gałęzi rozwija i mówi, Enter na datasecie wybiera; bez kratek"
 else
     bad "tree U68: tryb jednej pozycji" "rc=$TRSRC out=$(cat "$TRD/out.json")" "$TRS"
@@ -4134,8 +4134,8 @@ else
 fi
 TPOUT=$(tp_grid "down,down,down,space,down,space" new drab ""); TPRC=$?
 GRIDSCR=$(printf '%s' "$TPOUT")
-if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Tego szczebla nie da się' \
-   && printf '%s' "$GRIDSCR" | grep -E '^│ +Tego szczebla' | grep -q '│$' && ! printf '%s' "$GRIDSCR" | grep -qE '^Tego szczebla'; then
+if [ "$TPRC" -ne 0 ] && ! grep -q '^save-profile' "$TP/zb.log" && printf '%s' "$GRIDSCR" | grep -qF 'Nie można wyłączyć' \
+   && printf '%s' "$GRIDSCR" | grep -E '^│ +Nie można wyłączyć' | grep -q '│$' && ! printf '%s' "$GRIDSCR" | grep -qE '^Nie można wyłączyć'; then
     ok "template: drabina -- ostatniego szczebla sprzatajacego rodzine nie da sie wylaczyc; komunikat w ramce, bez kopii pod nia"
 else
     bad "template: drabina, ostatni szczebel" "rc=$TPRC" "$GRIDSCR" "$(cat "$TP/zb.log")"
@@ -5203,6 +5203,8 @@ fi
 u67_left="$(grep -n "grep -E '^FATAL'" "$REPO"/tui/*.sh | head -3)"
 [ -z "$u67_left" ] && ok "U67: no refusal window greps the FATAL line alone any more" || bad "U67: leftover FATAL-only refusal" "$u67_left"
 # pool_roots_to_children: the shipped function from tui/replica.sh on a fake tree.
+# the function speaks through T/Tv (GUI language): take them from wt-lib.sh the same way
+eval "$(sed -n '/^T() {/,/^}/p; /^Tv() {/,/^}/p' "$REPO/tui/wt-lib.sh")"; declare -A TCAT=()
 eval "$(sed -n '/^pool_roots_to_children() {/,/^}/p' "$REPO/tui/replica.sh")"
 if declare -F pool_roots_to_children >/dev/null; then
     T_NAME=(hdd hdd/a hdd/a/x hdd/b hdd/c hdd/c/y tank tank/z)
