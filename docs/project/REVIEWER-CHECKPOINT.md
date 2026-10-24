@@ -2,7 +2,73 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (PR #553 / REV-170 reconciliation)
+## Latest final-audit batch — 2026-10-24 (X27 pre-block compatibility reconciliation)
+
+**The backlog warning mixed two different compatibility contracts.  Current
+`gen-cron.sh` still renders production-shaped pre-X27 config made only from
+`[template:]` plus `use_template`, while commands which edit a named
+relationship deliberately require its `[relation:NAME]` block.  The latter is
+an explicit Owner decision, not an unreviewed migration defect.**
+
+The reviewed delivery is the exact sequence:
+
+- PR #531: `1ff3809c4b4192296568f4f0f8af401e6274743f..e2cf0356513cd41e26c08320f2ccfc34ccddcf88`,
+  merge `a326a0bd099aad2cedf639258abfa8ab11be038a`;
+- PR #533: `a326a0bd099aad2cedf639258abfa8ab11be038a..37c94ddaef74819389794c45c926219716c1cb84`,
+  merge `ba4b80494c9ad2cf36964c70b02295c2518ced49`;
+- PR #534: `ba4b80494c9ad2cf36964c70b02295c2518ced49..cf210ace0e6d06ea30497c4bd882b15a87f8a4f5`,
+  merge `59dd621385ebe83db6b34134212dd2c0edfe35ee`;
+- PR #535: `59dd621385ebe83db6b34134212dd2c0edfe35ee..014066dfd3e9f7ed23e97a9cfd3322c080c53581`,
+  merge `f47c7a79b39c6667e6add93004021d4d5eba936d`;
+- PR #536: `f47c7a79b39c6667e6add93004021d4d5eba936d..133fc90af4b5869fe0063d451956de6a90e286e0`,
+  merge `e3e03763002068ddf15b00731f76b040a7df0c1c`.
+
+Independent evidence on current `main`
+`c8d27f2b4ea372aed7d8d402d9302aa44af227ae`:
+
+- the production-shaped old remote fixture, containing no `[relation:]` block,
+  renders successfully (rc 0), and its generated cron is byte-equivalent to the
+  corresponding X27 block fixture after the documented source-line
+  normalization.  The local pair is equivalent as well;
+- `test/run.sh` is **123/123**, including both equivalence pairs and the
+  fail-closed controls for a missing block, missing/invalid `side`, a mixed
+  `relation` + `use_template`, foreign label, orphan block, tier mismatch and
+  unknown relation field;
+- the relevant `localbackup` X27 assertions pass: `set-tiers` round-trips the
+  block, the old named-relationship shape is refused with the reconstruction
+  command and no write, `edit-relation --profile` replaces one block only, and
+  snapshots-only/local source-side forms remain valid.  The full suite is
+  **148/164** in this root/container checkout: all 16 failures are the known
+  install-fixture cascade where the generated root block points outside the
+  fixture (`[defaults] repo_dir`) and no `crontab-writes` file is created; none
+  is in the reviewed X27 compatibility assertions;
+- `bash -n gen-cron.sh zfs-backup.sh` passes.  The historical combined range's
+  `git diff --check` reports one trailing blank line in `test/deps.conf`; this
+  is historical whitespace, not a current-tree or reviewer-patch failure;
+- exact-head CI passed for every delivery: runs 38596804612 (#531),
+  38602104934 (#533), 38615070362 (#534), 38634304966 (#535) and 38639067192
+  (#536).
+
+The controlling Owner decision is recorded in
+`docs/project/X27-CONFIG-JEDYNYM-ZRODLEM.md` and current project status:
+automatic backward migration was removed because the package was still in the
+lab; lab relationships were converted host by host, while existing production
+managed cron blocks keep running until an explicit rebuild.  A manually written
+config without relationship records remains a supported generator input.  A
+named relationship in the old shape is not silently guessed or rewritten:
+mutating/read-model commands refuse and tell the operator to recreate it from a
+profile.  Restoring `migrate-config` or `cron2conf` would contradict that Owner
+boundary and expand version 1.0 scope.
+
+No new REV was opened.  This batch reconciles the stale backlog warning with
+the actual split contract and the Owner's recorded cut-over decision.  No live
+host, crontab or dataset was touched.
+
+**Next reviewer scope:** audit source-side GFS retention and configuration
+round-trip/export-import against the current `[relation:]` block, beginning
+with the exact diffs which introduced source retention and its later fixes.
+
+## Previous final-audit batch — 2026-10-24 (PR #553 / REV-170 reconciliation)
 
 **The widened `<pool>/restore` delegation was unsafe in PR #553, but that
 exact defect and its continuation are already covered by CLOSED REV-170; the
