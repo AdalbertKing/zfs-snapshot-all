@@ -508,14 +508,16 @@ account_is_flat() {    # <konto: "" = root> -> 0, gdy żywa relacja NA TYM KONCI
 # migawki c na kopiach b zepsułyby b przyjmowanie kopii z a. Silnik tego sam nie rozstrzyga
 # (nie odróżni łańcucha od resztek tej samej relacji po eksport -> usuń -> import), więc
 # kreator mówi to wprost i poleca passive-flat; decyduje admin.
-sync_from_chain() {   # -> 0, gdy lustro/backup i któryś korzeń koszyka ma już migawki naszej rodziny
-    [ "$MODE" = sync ] || [ "$MODE" = backup ] || return 1
+sync_from_chain() {   # -> 0, gdy lustro/backup/kopia lokalna i któryś korzeń koszyka ma już migawki naszej rodziny
+    # Kopia lokalna (2026-10-24, Metropolis pve2): kopiuje z repliki pvesr, której migawki robi
+    # węzeł gościa -- to też łańcuch, tylko po tej samej stronie.
+    [ "$MODE" = sync ] || [ "$MODE" = backup ] || is_local_copy || return 1
     local r n c f e
     for r in ${B_ROOT[@]+"${B_ROOT[@]}"}; do
         while IFS=$'\t' read -r n c f e; do
             [ "$n" = "$r" ] || continue
-            # Backup: tylko NASZA rodzina (automated_*) -- ręczna migawka to nie łańcuch.
-            [ "$MODE" = backup ] && c="${f:-0}"
+            # Backup i kopia lokalna: tylko NASZA rodzina (automated_*) -- ręczna migawka to nie łańcuch.
+            { [ "$MODE" = backup ] || is_local_copy; } && c="${f:-0}"
             case "$c" in ''|*[!0-9]*) c=0 ;; esac
             [ "$c" -gt 0 ] && return 0
         done <"$TMPD/own.tsv" 2>/dev/null
@@ -523,6 +525,7 @@ sync_from_chain() {   # -> 0, gdy lustro/backup i któryś korzeń koszyka ma ju
     return 1
 }
 REC_PROFILE=passive-flat
+is_local_copy() { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; }
 # KTO ROBI TE MIGAWKI? (właściciel 2026-10-24, wariant A). Silnik nie odróżni żywego łańcucha
 # od resztek starej relacji -- zmierzone na pve10<>pve11: lustro założone od nowa na migawkach
 # swojej poprzedniczki wyszło PASYWNE i przestało robić migawki. Pyta więc kreator, a admin
@@ -557,7 +560,7 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
     facts="$(chain_facts)"
     geom
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$HOST" '$facts' "$facts")" "$H" "$W" 2 \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "${HOST:-$(hostname)}" '$facts' "$facts")" "$H" "$W" 2 \
        chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
        own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
@@ -604,7 +607,7 @@ step_profile() {
     fi
     items=(__manual__ "$(clip_label "$(printf '%-15s %s' "$(T 'Ręcznie…')" "$(T 'tabela szczebli: sposób, szczeble, liczby, zamrażanie')")" $((W - 10)))")
     # passive-flat polecany tylko przy odpowiedzi "łańcuch"; przy "resztki" relacja robi własne.
-    sync_from_chain && [ "$(chain_ans)" != own ] && chain=1
+    sync_from_chain && [ "$(chain_ans)" != own ] && ! is_local_copy && chain=1
     while IFS=$'\t' read -r n w c q f sh hd; do
         [ -n "$n" ] || continue
         # Ukryte (od 2026-10-22 także fabryczne spoza piątki) nie idą na listę -- z jednym
@@ -916,6 +919,8 @@ build_argv() {   # [install] -> ARGV[]
     fi
     # "Nikt ich nie robi -- resztki": seed i linia lustra nie robią się pasywne.
     { [ "$MODE" = sync ] || [ "$MODE" = backup ]; } && sync_from_chain && [ "$(chain_ans)" = own ] && ARGV+=("--own-snapshots")
+    # Kopia lokalna z cudzych migawek (replika pvesr): przyjmuje, niczego na źródle nie tworzy ani nie kasuje.
+    is_local_copy && sync_from_chain && [ "$(chain_ans)" = chain ] && ARGV+=("--passive")
     a="$(account_name)"; [ -n "$a" ] && ARGV+=("--local-user=$a")
     [ "$GRANT" -eq 1 ] && ARGV+=("--grant-remotely")
     [ "$GRANT" -eq 1 ] && [ "$FREEZE" -eq 1 ] && [ "$GQUIESCE" -eq 1 ] && ARGV+=("--grant-quiesce")
@@ -983,7 +988,13 @@ summary_text() {
     if sync_from_chain; then
         # Plan mówi to, co wyjdzie (kampania 2026-10-24: obiecywał "WŁASNE migawki", a lustro
         # wychodziło pasywne -- sonda przy generowaniu configu robi je pasywnym mimo szablonu).
-        if [ "$(chain_ans)" = own ]; then
+        if is_local_copy && [ "$(chain_ans)" = chain ]; then
+            echo "$(T 'PASYWNIE: migawki na źródle robi kto inny (np. replika pvesr) -- kopia je tylko przyjmuje,')"
+            echo "$(T '  niczego na źródle nie tworzy ani nie kasuje (--passive); retencja dotyczy samych kopii.')"
+        elif is_local_copy && [ "$(chain_ans)" = own ]; then
+            echo "$(T 'WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- kopia robi własne,')"
+            echo "$(T '  stare wejdą do retencji źródła i z czasem znikną.')"
+        elif [ "$(chain_ans)" = own ]; then
             echo "$(T 'WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- ta relacja robi własne')"
             echo "$(T '  (--own-snapshots); stare wejdą do jej retencji i z czasem znikną.')"
         elif [ "$PROFILE" = "$REC_PROFILE" ]; then
@@ -1147,10 +1158,11 @@ field_applies() {   # <pole> -> 0, gdy pole jest w tej relacji
         host)   [ "$MODE" != local ] ;;
         target) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
         # U32: lustro trzyma to, co źródło -- osobnej retencji "u źródła" nie ma.
-        srcret) [ "$MODE" = backup ] || { [ "$MODE" = local ] && [ "$NOCOPY" -eq 0 ]; } ;;
+        # Pasywna kopia lokalna nie ma retencji źródła -- migawki źródła nie są jej.
+        srcret) [ "$MODE" = backup ] || { is_local_copy && ! { sync_from_chain && [ "$(chain_ans)" = chain ]; }; } ;;
         extra)  [ "$NOCOPY" -eq 0 ] ;;
         # Tylko gdy źródło ma już migawki naszej rodziny (lustro, backup).
-        chain)  { [ "$MODE" = sync ] || [ "$MODE" = backup ]; } && sync_from_chain ;;
+        chain)  { [ "$MODE" = sync ] || [ "$MODE" = backup ] || is_local_copy; } && sync_from_chain ;;
         *)      return 0 ;;
     esac
 }
