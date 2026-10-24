@@ -51,6 +51,16 @@ T() {   # <tekst polski / szablon printf> [argumenty]
     v="${TCAT[$k]-$k}"
     if [ $# -gt 0 ]; then printf -- "$v" "$@"; else printf '%s' "$v"; fi
 }
+# Tv <tekst, jak stoi w kodzie, ze zmiennymi NIEROZWINIĘTYMI> [<znacznik> <wartość>]...
+# Klucz katalogu to tekst z kodu razem z nazwami zmiennych ($HOST, ${NAME}, $(hostport)), więc
+# podaje się go w apostrofach, a wartości osobno: Tv 'Sprawdzam $(hostport) jako root' '$(hostport)' "$(hostport)".
+# Po tłumaczeniu każdy znacznik jest zamieniany na wartość -- zwykła zamiana napisów, bez eval;
+# wartość (dane z hosta) nigdy nie jest interpretowana.
+Tv() {
+    local v="${TCAT[$1]-$1}"; shift
+    while [ $# -ge 2 ]; do v="${v//"$1"/"$2"}"; shift 2; done
+    printf '%s' "$v"
+}
 
 geom() {   # H W LH z bieżącego terminala
     local l c
