@@ -586,9 +586,9 @@
   },
   {
    "k": "u38",
-   "pl_code": " [x] kopiowane, razem z potomnymi również powstałymi w przyszłości   [-] część   [ ] nie",
-   "pl": " [x] kopiowane, razem z potomnymi również powstałymi w przyszłości   [-] część   [ ] nie",
-   "en": " [x] copied, along with their descendants, including those that will be created in the future   [-] part   [ ] no",
+   "pl_code": " [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie",
+   "pl": " [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie",
+   "en": " [x] copied with children, future ones too   [-] part   [ ] no",
    "origin": "owner-edit",
    "unclear": false,
    "where": [

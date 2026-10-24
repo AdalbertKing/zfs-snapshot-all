@@ -416,7 +416,7 @@ else
     bad "relacje: Esc z okna pary" "$TEE"
 fi
 TR="$(screen relacje tab,enter)"
-if has "$TR" 'Relacje na kolektorze' && has "$TR" 'ten dataset jest z rekordu, nie z crona'; then
+if has "$TR" 'Relacje na kolektorze' && has "$TR" 'ten dataset jest tylko w definicji relacji, nie w cronie'; then
     ok "relacje: Enter na datasecie z REKORDU mowi, ze nie ma jego linii ani sekcji"
 else
     bad "relacje: Enter na parze z rekordu" "$TR"
@@ -1819,7 +1819,7 @@ rm -f "$RMK" "$KF"
 # zamiast "nie ma linii w cronie" -- wiersz repliki powstaje z list-replicas, bez linii crona.
 : > "$XL"
 A="$("$PY" "$TUI" --render-once --offline --utf8 --now "$NOW" --jobs "$FIX/empty.json" --monitors "$FIX/empty-mon.json" --replicas "$P10/replicas.json" --exec-log "$XL" --screen zadania --keys F7 --width 160 2>&1)"
-if has "$A" 'Replika sejf-a -- bieg teraz' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
+if has "$A" 'Replika sejf-a -- biegnie teraz' && grep -q "run-replicas --name=sejf-a" "$XL" && ! has "$A" 'nie ma linii w cronie'; then
     ok "zadania: X23 -- F7 na wierszu repliki uruchamia run-replicas --name (jak F6)"
 else
     bad "zadania: X23 F7 na replice" "$(cat "$XL")" "$(printf '%s' "$A" | tail -3)"
@@ -3871,7 +3871,7 @@ RP12="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | head -1)"
 # X10 (2026-10-14): wybor "6 ostatnich" kasuje wczesniejsze "tylko roznica" (sprzeczne) --
 # do add-replica nie idzie --history, wiersz Historia znika, plan mowi, co naprawde idzie.
 RPLAST="$(grep -F 'Ustawienia silnika: replika usb12' "$RP/wt.log" | tail -1)"
-if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich zdjęć replica_' && grep -qF 'Historia:   tylko najnowsze zdjęcie replica_' "$RP/wt.log"; then
+if grep -q '^add-replica usb12 --source=hdd/data --dst=repl/replica --schedule=0 22 \* \* \* --removable --recursive=yes --exclude-child=^hdd/data/mail\$ .*--keep=6 --media-guid=4242 --on-insert=no --install --yes$' "$RP/zb.log"    && ! grep -q -- '--history=' "$RP/zb.log" && has "$RP12" 'Historia' && has "$RP12" '(fabryczne)' && ! has "$RP12" 'Kompresja'    && ! has "$RPLAST" 'Historia ' && has "$RPLAST" '6 ostatnich zdjęć replica_' && grep -qF 'Historia:   tylko najnowsza migawka replica_' "$RP/wt.log"; then
     ok "replica: Ustawienia silnika -- 'na dysku' 6 ostatnich zmienione, reszta bez zmian; X10: przy N ostatnich bez wyboru Historii (sprzeczne), plan mowi co idzie"
 else
     bad "replica: ustawienia silnika" "$RPOUT" "$(cat "$RP/zb.log")" "$(printf '%s' "$RP12" | cut -c1-300)" "$(cat "$RP/err")"
@@ -4003,8 +4003,8 @@ fi
 # d) no_exc (Zmien relacje: add-source bierze cale miejsce): wyjatku nie ma, a miejsce nad celem kopii odmowa
 TRD1=$(trun "$TRD/noexc.json" 'right,down,space')
 TRD2=$(trun "$TRD/noexc.json" 'up,space')
-if has "$TRD1" 'MSG: Tu wybiera się całe miejsca' && has "$TRD2" 'MSG: Pod hdd leży cel kopii (hdd/backups). Zaznacz węższe miejsce.'; then
-    ok "tree: no_exc -- Spacja na dziecku miejsca odmawia ('Tu wybiera się całe miejsca'), miejsce nad celem kopii tez ('Zaznacz węższe miejsce')"
+if has "$TRD1" 'MSG: Tu nie da się pominąć samego' && has "$TRD2" 'MSG: Pod hdd leży cel kopii (hdd/backups). Zaznacz węższe miejsce.'; then
+    ok "tree: no_exc -- Spacja na dziecku miejsca odmawia ('Tu nie da się pominąć samego'), miejsce nad celem kopii tez ('Zaznacz węższe miejsce')"
 else
     bad "tree: no_exc" "$TRD1" "$TRD2"
 fi
@@ -4159,7 +4159,7 @@ fi
 TPOUT=$(tp_run delete moj "0${T}
 "); TPRC=$?
 if [ "$TPRC" -eq 0 ] && grep -qx 'delete-profile moj' "$TP/zb.log" && grep -qx 'delete-profile moj --yes' "$TP/zb.log" \
-   && grep -F 'Usunięcie szablonu moj' "$TP/wt.log" | grep -qF -- '--defaultno' && grep -qF 'nie będzie miało z czego odświeżyć' "$TP/wt.log"; then
+   && grep -F 'Usunięcie szablonu moj' "$TP/wt.log" | grep -qF -- '--defaultno' && grep -qF 'bo tego szablonu już nie będzie' "$TP/wt.log"; then
     ok "template: Del na wlasnym -- plan czasownika (2 relacje: zostaja, ale bez szablonu do odswiezenia), domyslnie Wstecz, potem --yes"
 else
     bad "template: usuwanie" "rc=$TPRC" "$(cat "$TP/zb.log")" "$(tail -3 "$TP/wt.log" | cut -c1-250)"
@@ -4789,7 +4789,7 @@ EROUT=$(er_run "0${T}harmon
 " "enter")
 ERP0=$(cat "$ER/wt.log")
 if has "$ERP" 'UWAGA: relacja ma ustawienia inne niż jej szablon' && has "$ERP" 'dobowe, godzina sprzątania:  29 1 * * * -> 31 1 * * *' \
-   && has "$ERP" 'nie szablonem' && ! has "$ERP0" 'inne niż jej szablon'; then
+   && has "$ERP" 'zamiast zmieniać szablon' && ! has "$ERP0" 'inne niż jej szablon'; then
     ok "edit-relation: X6 -- reczna zmiana configu (29 -> 31) na gorze planu przed WYKONAJ; bez recznych zmian -- bez ostrzezenia"
 else
     bad "edit-relation: X6 ostrzezenie o recznej zmianie" "$(printf '%s' "$ERP" | cut -c1-400)" "$(printf '%s' "$ERP0" | cut -c1-200)"

@@ -166,7 +166,7 @@
 " Wybrane miejsca: %d   pominięte: %d%s": " Selected places: %d   excluded: %d%s",
 " Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.": " Save = save-profile to /etc/zfs-snapshot-all/profiles; nothing already built is touched.",
 " [drabina] = jedna rodzina migawek liczona drabiną GFS (sprawdzane przy Utwórz).": " [ladder] = one snapshot family counted by a GFS ladder (checked at Create).",
-" [x] kopiowane, razem z potomnymi również powstałymi w przyszłości   [-] część   [ ] nie": " [x] copied, along with their descendants, including those that will be created in the future   [-] part   [ ] no",
+" [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie": " [x] copied with children, future ones too   [-] part   [ ] no",
 " [x] z migawkami, razem z tym, co pod nim POWSTANIE   [-] część   [ ] bez": " [x] with snapshots, together with what will APPEAR under it   [-] part   [ ] without",
 " ] && echo '  (teraz w slocie)')": " ] && echo '  (connected now)')",
 " ] && printf '\\nDyski innych replik (nie do wyboru):%s' ": " ] && printf '\\nDisks of other replicas (not selectable):%s' ",

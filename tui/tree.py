@@ -375,7 +375,7 @@ class Tree(object):
         mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else [u""]
         # Legenda zawijana: po angielsku jest dłuższa niż okno (linie ciała są obcinane do iw).
         legend = _(self.spec.get("legend") or u"") or (_(u" · = sama gałąź (nic do wybrania)") if self.single
-                                                       else _(u" [x] kopiowane, razem z potomnymi również powstałymi w przyszłości   [-] część   [ ] nie"))
+                                                       else _(u" [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie"))
         llines = [u" " + l for l in wrap(legend.strip(), iw - 2)] or [u""]
         lh = self.list_height(len(mlines) + len(llines) - 1)
         idx = rows.index(self.cur) if self.cur in rows else 0
