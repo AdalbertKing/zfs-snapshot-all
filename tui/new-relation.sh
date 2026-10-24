@@ -111,7 +111,7 @@ step_host() {
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
             wt --title "$(T 'Ta relacja już istnieje')" --msgbox "$(Tv 'Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
-$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym relacji nie ma.')" 14 "$W"
+$(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
         [ "$h" = "$HOST" ] || { B_ROOT=(); B_EXCL=(); }
@@ -557,8 +557,8 @@ step_chain() {   # 0 = odpowiedź zapisana, 1 = wstecz
     facts="$(chain_facts)"
     geom
     wt --title "$(title 5 "$(T 'Migawki naszej rodziny już są na źródle')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Świeża najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$HOST" '$facts' "$facts")" "$H" "$W" 2 \
-       chain "$(T 'Ktoś je robi (inny kolektor albo stary cron) -- łańcuch, przyjmuję')" \
+       --menu "$(Tv 'Na $HOST są już migawki naszej rodziny:\n$facts\n\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.' '$HOST' "$HOST" '$facts' "$facts")" "$H" "$W" 2 \
+       chain "$(T 'Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję')" \
        own "$(T 'Nikt -- to resztki starej relacji, robię własne')" || return 1
     CHAIN_ANS="$WT_OUT"; CHAIN_FOR="${B_ROOT[*]}"
     # "Resztki" z wybranym wcześniej passive-flat nie robiłyby niczego -- szablon do wyboru od nowa.
@@ -651,12 +651,12 @@ step_profile() {
         # Szablon jest tu RETENCJĄ ŹRÓDŁA (celu nie ma). Drabina GFS na szczeblu
         # (np. default) jest odrzucana przy aktywacji -- polecany szablon liczony.
         q6="$(T 'Jak długo trzymać migawki na źródle?')"
-        lead="${lead}$(T 'Migawki zdalne: szablon z drabiną GFS na szczeblu (np. m12w4d7h24-gfs) zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n')"
+        lead="${lead}$(T 'Migawki zdalne: szablon z drabiną GFS na szczeblu zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\n\n')"
         tl=$((tl + 3))
         [ "$def" = default ] && in_list d7h24 "${items[@]}" && def=d7h24
     fi
     wt --title "$(title 6 "$q6")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --default-item "$def" \
-       --menu "${lead}$(T 'Gotowy szablon albo "Ręcznie" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).')$([ "$has_ladder" -eq 1 ] && printf '%s' "$(T ' [drabina] = jedna rodzina migawek liczona drabiną GFS -- nie łączy się na jednym koncie z szablonem "rodzina na szczebel" (sprawdzane przy Utwórz).')") $(T 'Zmienisz później.')" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
+       --menu "${lead}$(T 'Gotowy szablon albo "Ręcznie" (tabela szczebli). [zamraża] = przed migawkami dobowymi i rzadszymi goście są zamrażani (zgoda w Zaawansowanych podsumowania).')$([ "$has_ladder" -eq 1 ] && printf '%s' "$(T ' [drabina] = jedna rodzina migawek liczona drabiną GFS (sprawdzane przy Utwórz).')") $(T 'Zmienisz później.')" "$H" "$W" "$(lhfit $((${#items[@]} / 2)) "$tl")" \
        "${items[@]}" || return 1
     if [ "$WT_OUT" = __manual__ ]; then
         step_manual || { step_profile; return $?; }
@@ -989,7 +989,7 @@ summary_text() {
         elif [ "$PROFILE" = "$REC_PROFILE" ]; then
             echo "$(Tv 'ŁAŃCUCH: źródło ma już migawki naszej rodziny -- ta relacja kopiuje je BEZ własnych migawek ($PROFILE).' '$PROFILE' "$PROFILE")"
         elif [ "$MODE" = sync ]; then
-            echo "$(T 'ŁAŃCUCH: migawki naszej rodziny na źródle robi ktoś inny -- lustro będzie PASYWNE:')"
+            echo "$(T 'ŁAŃCUCH: migawki o naszych prefiksach na źródle robi inny kolektor lub inna relacja, albo przenosi je inny mechanizm np. cluster synchro -- lustro będzie PASYWNE:')"
             echo "$(Tv '  niczego tam nie utworzy ani nie skasuje, szablon $PROFILE tego nie zmieni.' '$PROFILE' "$PROFILE")"
             echo "$(T '  Jeśli nikt ich już nie robi, kopie staną -- wtedy pole Migawki na źródle -> resztki.')"
         else
@@ -1023,7 +1023,7 @@ summary_text() {
         if [ "$GRANT" -eq 1 ] && [ "$GQUIESCE" -eq 1 ]; then echo "$(T 'Zamrażanie: źródło dostanie zgodę stąd (--grant-quiesce).')"
         else echo "$(T 'Zamrażanie: BEZ zgody źródła migawki wyjdą jako '\''_crash_'\'' (niezamrożone).')"; fi
     fi
-    echo "$(T 'Prawa na źródle:') $( [ "$GRANT" -eq 1 ] && echo "$(T 'nadane stąd, od razu')" || echo "$(T 'zatwierdzisz SAM -- instalacja stanie i poda komendę')" )$( [ "$MANUAL" -eq 1 ] && echo "$(T '; parowanie ręczne')")"
+    echo "$(T 'Prawa na źródle:') $( [ "$GRANT" -eq 1 ] && echo "$(T 'nadane stąd, od razu')" || echo "$(T 'zatwierdzisz SAM -- instalacja zatrzyma się i poda komendę')" )$( [ "$MANUAL" -eq 1 ] && echo "$(T '; parowanie ręczne')")"
     echo
     echo "$(T 'Komenda (to samo wpisałbyś z palca):')"
     cmd_oneline; echo
