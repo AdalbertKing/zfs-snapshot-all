@@ -1527,7 +1527,7 @@ def build_jobs(data, now):
             if disc:
                 discs.append((sc, disc))
         reasons = list(reasons0) + [_(u"ostatni bieg %s rc=%s: %s") % (f[1], f[0], f[2] or _(u"zobacz cron.log"))
-                                    for _, f in fails]
+                                    for _ds, f in fails]
         items.append({
             "kind": "job", "name": j.get("label") or _("(bez rel.)"), "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
