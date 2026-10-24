@@ -58,7 +58,7 @@ rows = [p for p in d.get("profiles") or [] if not p.get("hidden") and "-src-" no
 rows.sort(key=lambda p: (p.get("source") != "package", p.get("name") != "default", p.get("name") or ""))
 for p in rows:
     own = "" if p.get("source") == "package" else _("  [własny]")
-    print("%s\t%s%s" % (p.get("name"), (p.get("description") or "").replace("\t", " "), own))
+    print("%s\t%s%s" % (p.get("name"), _(p.get("description") or "").replace("\t", " "), own))
 ' | tr -d '\r' >"$TMPD/prof.tsv"
             [ -s "$TMPD/prof.tsv" ] || { wt --title "$k" --msgbox "$(T 'Nie mogę odczytać listy szablonów (list-profiles).')" 8 "$W"; return 0; }
             local n d

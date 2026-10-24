@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: b774a8dec0ae9b80 -->
+<!-- status-covers-digest: e897b3905af60a35 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -40,6 +40,22 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **GUI po angielsku -- zmiana i usuwanie relacji, szablony, ustawienia F10 (P3, `tr/p3-windows`).** Teksty
+  `tui/edit-relation.sh`, `tui/delete-relation.sh`, `tui/template.sh`, `tui/retention-lib.sh` i `tui/settings.sh`
+  idą przez `T`/`Tv`. Python wklejony w cztery z nich (bez `delete-relation.sh`) czyta ten sam katalog przez `ZFS_TUI_CAT`, eksportowane przez
+  `wt-lib.sh`. Opisy ustawień F10 przychodzą z rejestru czasownika `settings --tsv` i opisy fabrycznych
+  szablonów z `profiles/*.conf` (F3, F5, wybór szablonu w F10). Jedne i drugie są tłumaczone jako klucze katalogu w miejscu wyświetlenia.
+  Z ekranów głównych doszły napisy bez polskich liter: „ochrona”, „odczyt”, „utworzona/aktywowana”, „komendy”,
+  kolumny wyboru datasetu, „(N szt.)”, „... jeszcze N”. Tytuł F3 brzmi teraz „Relations on collector”.
+  Właściciel rozstrzygnął x207 („chain, take them”) i x206 (wszędzie „leftovers”). Test katalogu
+  (`test/tui/lang_catalog.py`) sprawdza teraz także `_()` w skryptach .sh (kontrola negatywna zrobiona ręcznie: zmieniony klucz daje `bad`).
+  Katalog ma 1731 wpisów, z czego 368 w `en.extra.json`; wpisy dodane w P3 czekają na akceptację właściciela. Na żywo
+  na pve10 przeszły po angielsku F2, F3 ze szczegółami relacji, zmiana relacji (harmonogram, lista szablonów,
+  tabela szczebli, plan zapisu, porzucenie zmian), retencja źródła, F10, F5 i okno usuwania relacji z planem.
+  Ten sam obchód po polsku (`--lang=pl`) objął zmianę relacji i F3, bez zmian w tekstach. Przy tym przejściu relacja labu `pve9` (hdd/enc) została usunięta
+  przez pomyłkę (E102); kopie zostały na dysku. Zostaje po polsku: wyjście czasowników CLI w oknach planu
+  (np. „Relacja 'ab' -- szczeble:”), repliki, odzysk, przeglądanie (P4-P6). `tui` 409/0 (pve9).
 
 - **GUI po angielsku -- kreator nowej relacji (P2, `feat/gui-lang-p2`).** Teksty `tui/new-relation.sh` idą przez
   `T` i nowe `Tv` (`tui/wt-lib.sh`: podstawia nazwane zmienne bez `eval`, więc polski klucz zachowuje `$HOST`
