@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bef5c7863baaf45a -->
+<!-- status-covers-digest: d9fe8ee6b2faefa3 -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -86,6 +86,20 @@
   Testy: `zfsbackup` (rekord, odmowy, seed, sonda lustra, eksport/import, `family_newest`) i `tui` (okno,
   `--own-snapshots`, tekst planu). Dalej: usuwanie relacji sprząta jej migawki na źródle (C) i „przejmij
   migawki” w zmianie relacji (migracja z snapsend.sh).
+
+- **Polecenia CLI mówią po angielsku (`tr/cli-en`, decyzja właściciela: wyjście poleceń po angielsku).**
+  Po polsku zostało około 700 linii komunikatów, część pisana bez polskich liter („Join gotowy”, „PONOW DOKLADNIE”):
+  w `deploy.sh` (parowanie, join, zakres, szkice configu; żargon „wsad” to teraz „bundle”), w `zfs-restore.sh`
+  (plany, strategia, odzysk niszczący, `--plan`, `--from-copy`) i w `zfs-backup.sh` (pomoc, tabele statusu i
+  `show-config`, podglądy importu, `settings`, `edit-config`). Pytania `[t/N]` brzmią teraz `[y/N]` i nadal
+  przyjmują t/tak. Kolumna źródła w `settings` to `file / zfs-alert.conf / default` (było „plik”, „domyślne”).
+  GUI parsowało sześć z tych tekstów (znaczniki planu w `hand-edits.py`, `new-relation.sh`, `edit-relation.sh`,
+  `replica.sh` i znacznik podglądu importu w `zfs-tui.py`): szuka teraz angielskich, a atrapy w `test/tui`
+  drukują angielskie. Po polsku zostają: komentarze, opisy w `SETTINGS_REGISTRY` (klucze katalogu GUI dla F10; `settings` drukuje je też w CLI),
+  zamrożone silniki. Przykłady wyjścia w docs/pl i docs/en poprawione (status pauzy, „Package ready”). Suity na
+  pve9: `zfsbackup` 1026/0, `tui` 411/0, `localbackup` 171/0, `rux` 51/0, `moveclient` 41/0, `join` 102/0,
+  `joinmanifest` 53/0, `joinremote` 12/0, `draftscope` 70/0, `restore` 331/1. Ten jeden błąd w `restore` występuje
+  tak samo na main na pve9 („no config and no server.conf”: pve9 ma zainstalowane configi).
 
 - **GUI po angielsku -- ostatnie resztki (P6, `tr/p6-rest`).** Obchód wszystkich ekranów po angielsku na pve10
   (47 widoków, tylko klawisze bez skutków) i skaner tekstów bez polskich liter wskazały ostatnie polskie napisy.
