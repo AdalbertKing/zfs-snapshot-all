@@ -21815,7 +21815,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         # arguments, so a local --source is still byte-for-byte cmd_local_backup.
         # `local-backup` stays a LOCAL-only internal alias, unchanged.
         --source=*|--target=*) rux_entry "$@" ;;
-        --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"; exit 0 ;;
+        --version) echo "zfs-backup.sh (zfs-snapshot-all) $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)$([ -r "$SCRIPT_DIR/RELEASE-OF" ] && printf ' -- release of %s' "$(head -c 12 "$SCRIPT_DIR/RELEASE-OF")")"; exit 0 ;;
         local-backup)     shift; cmd_local_backup "$@" ;;
         add-replica)      shift; cmd_add_replica "$@" ;;
         list-replicas)    shift; cmd_list_replicas "$@" ;;

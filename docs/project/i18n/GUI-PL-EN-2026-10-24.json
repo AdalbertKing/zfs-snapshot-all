@@ -408,7 +408,7 @@
    "k": "u22",
    "pl_code": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
    "pl": "Chcesz zachować swoje wartości? Wróć (Wstecz) i popraw liczby w 'Harmonogram i retencja' zamiast zmieniać szablon.",
-   "en": "Want to keep your values? Go Back and change the numbers in 'Harmonogram i retencja' instead of changing the template.",
+   "en": "Want to keep your values? Go Back and change the numbers in 'Schedule and retention' instead of changing the template.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [
@@ -14940,7 +14940,7 @@
    "k": "u1300",
    "pl_code": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
    "pl": "Przenieść też wszystkie starsze migawki (z historią)?\\nNie = tylko wybrany punkt.",
-   "en": "move all older snapshots too (with history)?\\nNo = only the selected point.",
+   "en": "Move all older snapshots too (with history)?\\nNo = only the selected point.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -15094,7 +15094,7 @@
    "k": "u1314",
    "pl_code": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
    "pl": "$TARGET nie wydał temu kolektorowi zgody na odzysk.",
-   "en": "$TARGET did not grant that debt collector permission to collect the debt.",
+   "en": "$TARGET has not allowed this collector to restore.",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -15425,7 +15425,7 @@
    "k": "u1344",
    "pl_code": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
    "pl": "($GRANT_LABEL = nazwa tego kolektora na $TARGET; lista: ls /var/lib/zfs-snapshot-all/relationships)",
-   "en": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relations)",
+   "en": "($GRANT_LABEL = this collector's name on $TARGET; list: ls /var/lib/zfs-snapshot-all/relationships)",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -15833,7 +15833,7 @@
    "k": "u1381",
    "pl_code": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
    "pl": "Relacje utworzone z tego szablonu zostaną i będą działać dalej. Później nie odświeżysz ich jednak przez 'Zmień relację -> Szablon', bo tego szablonu już nie będzie.",
-   "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Zmień relację -> Szablon', because this template will be gone.",
+   "en": "Relations built from this template stay and keep running. Later you cannot refresh them through 'Change relation -> Template', because this template will be gone.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [

@@ -1,0 +1,35 @@
+# The public release (github.com/AdalbertKing/zfsbackup): every path the package needs at run
+# time, relative to the dev repo root. A directory takes its tracked files; a line starting with
+# '!' removes a path again. release/publish.sh exports exactly this; test/release checks that
+# nothing the listed scripts source or call is missing, and that no listed file points into test/.
+.gitattributes
+LICENSE
+check-snap-age.sh
+clean-relationships.sh
+delsnaps.sh
+deploy.sh
+gen-cron.sh
+lib-backup-common.sh
+lib-cron.sh
+lib-pairing.sh
+lib-profile.sh
+lib-record.sh
+lib-rekey.sh
+lib-scope.sh
+lib-zfs-snap.sh
+snapget.sh
+snapsend.sh
+update-control.sh
+zfs-backup.sh
+zfs-job.sh
+zfs-media-gate.sh
+zfs-pair-gate.sh
+zfs-quiesce-helper.sh
+zfs-restore.sh
+hostscripts/
+profiles/
+tui/
+!tui/lang/build.py
+!tui/lang/en.extra.json
+docs/pl/
+docs/en/

@@ -23,7 +23,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "browse: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 REL="${1:-}"
-[ -n "$REL" ] || { echo "użycie: browse.sh RELACJA | browse.sh --any" >&2; exit 2; }
+[ -n "$REL" ] || { echo "usage: browse.sh RELATION | browse.sh --any" >&2; exit 2; }
 CONFDIR="${ZFS_CONF_DIR:-/etc/zfs-snapshot-all}"
 MC="${BROWSE_MC:-mc}"
 BROOT="${BROWSE_ROOT:-/run/zfs-browse}"
@@ -52,35 +52,35 @@ unmount_all() {   # -> 0 nic nie zostało; 1 coś zostało (opis w RESIDUE, stan
         fi
         if is_mounted "$MNT"; then
             RESIDUE="$RESIDUE
-  kopia wciąż zamontowana: $MNT  (ręcznie: umount $MNT)"
+  $(Tv 'kopia wciąż zamontowana: $MNT  (ręcznie: umount $MNT)' '$MNT' "$MNT")"
             left=1
         elif rmdir "$MNT" 2>/dev/null || ! [ -d "$MNT" ]; then
             MNT=""
             if [ "$LAZY" -eq 1 ] && [ -z "$MAPPED" ]; then
                 # Odłączenie leniwe: coś jeszcze używało kopii -- zwolni się, gdy ostatni proces skończy.
                 RESIDUE="$RESIDUE
-  kopia była zajęta i została odłączona leniwie (umount -l) -- zwolni się, gdy ostatni proces przestanie jej używać (sprawdź: lsof +D albo fuser -vm)"
+  $(T 'kopia była zajęta i została odłączona leniwie (umount -l) -- zwolni się, gdy ostatni proces przestanie jej używać (sprawdź: lsof +D albo fuser -vm)')"
                 left=1
             fi
         else
             RESIDUE="$RESIDUE
-  pusty katalog po montażu nie dał się usunąć: $MNT  (ręcznie: rmdir $MNT)"
+  $(Tv 'pusty katalog po montażu nie dał się usunąć: $MNT  (ręcznie: rmdir $MNT)' '$MNT' "$MNT")"
             left=1
         fi
     fi
     if [ -n "$MAPPED" ]; then
         if [ "$left" -eq 1 ]; then
             RESIDUE="$RESIDUE
-  odblokowane urządzenie /dev/mapper/$MAPPED zostaje otwarte -- najpierw odmontowanie (potem: cryptsetup close $MAPPED)"
+  $(Tv 'odblokowane urządzenie /dev/mapper/$MAPPED zostaje otwarte -- najpierw odmontowanie (potem: cryptsetup close $MAPPED)' '$MAPPED' "$MAPPED")"
         elif [ "$LAZY" -eq 1 ]; then
             RESIDUE="$RESIDUE
-  system plików był zajęty (odłączony leniwie, umount -l) -- /dev/mapper/$MAPPED zostaje otwarte; gdy nic go nie używa: cryptsetup close $MAPPED"
+  $(Tv 'system plików był zajęty (odłączony leniwie, umount -l) -- /dev/mapper/$MAPPED zostaje otwarte; gdy nic go nie używa: cryptsetup close $MAPPED' '$MAPPED' "$MAPPED")"
             left=1
         elif cryptsetup close "$MAPPED" 2>/dev/null || ! [ -e "$MAPDIR/$MAPPED" ]; then
             MAPPED=""
         else
             RESIDUE="$RESIDUE
-  nie udało się zamknąć /dev/mapper/$MAPPED (odszyfrowane dane dostępne!)  (ręcznie: cryptsetup close $MAPPED)"
+  $(Tv 'nie udało się zamknąć /dev/mapper/$MAPPED (odszyfrowane dane dostępne!)  (ręcznie: cryptsetup close $MAPPED)' '$MAPPED' "$MAPPED")"
             left=1
         fi
     fi
@@ -149,47 +149,47 @@ test_pause() {
 }
 expose_snapdev() {  # <dataset> -> 0 gdy snapdev=visible i znacznik założony
     local k rc
-    k="$(hold_key "$1")" && [ "${#k}" -eq 32 ] || { echo "nie da się policzyć klucza dla $1 (sha256sum) -- nic nie zmieniam" >&2; return 1; }
+    k="$(hold_key "$1")" && [ "${#k}" -eq 32 ] || { echo "$(Tv 'nie da się policzyć klucza dla $1 (sha256sum) -- nic nie zmieniam' '$1' "$1")" >&2; return 1; }
     mkdir -p "$BROOT" || return 1
-    snap_lock "$k" || { echo "nie mogę zablokować $BROOT/lock2.$k (brak flock albo inne przeglądanie tego dysku trzyma blokadę za długo) -- nic nie zmieniam" >&2; return 1; }
+    snap_lock "$k" || { echo "$(Tv 'nie mogę zablokować $BROOT/lock2.$k (brak flock albo inne przeglądanie tego dysku trzyma blokadę za długo) -- nic nie zmieniam' '$BROOT' "$BROOT" '$k' "$k")" >&2; return 1; }
     expose_snapdev_locked "$1"; rc=$?
     snap_unlock; return "$rc"
 }
 expose_snapdev_locked() {
     local ds="$1" k v s d f p
-    k="$(hold_key "$ds")" && [ "${#k}" -eq 32 ] || { echo "nie da się policzyć klucza dla $ds (sha256sum) -- nic nie zmieniam" >&2; return 1; }
+    k="$(hold_key "$ds")" && [ "${#k}" -eq 32 ] || { echo "$(Tv 'nie da się policzyć klucza dla $ds (sha256sum) -- nic nie zmieniam' '$ds' "$ds")" >&2; return 1; }
     mkdir -p "$BROOT" || return 1
     # Zapisy sprzed REV-160 (orig./hold. ze sklejonym kluczem): nie wiadomo, którego z datasetów
     # o tej samej sklejonej nazwie dotyczą -- nic nie zgaduję i niczego nie usuwam.
     f="$BROOT/orig.$(legacy_key "$ds")"
     if [ -e "$f" ]; then
-        echo "stary zapis $f (sprzed poprawki kluczy) -- nie wiadomo, którego datasetu dotyczy; nic nie zmieniam. Sprawdź snapdev datasetów o tej nazwie (zfs get -r snapdev), przywróć ręcznie i usuń ten plik." >&2
+        echo "$(Tv 'stary zapis $f (sprzed poprawki kluczy) -- nie wiadomo, którego datasetu dotyczy; nic nie zmieniam. Sprawdź snapdev datasetów o tej nazwie (zfs get -r snapdev), przywróć ręcznie i usuń ten plik.' '$f' "$f")" >&2
         return 1
     fi
     for f in "$BROOT"/hold.*."$(legacy_key "$ds")"; do
         [ -e "$f" ] || continue
         p="${f#"$BROOT"/hold.}"; p="${p%%.*}"
         if kill -0 "$p" 2>/dev/null; then
-            echo "trwa przeglądanie starszą wersją (pid $p, $f) -- nic nie zmieniam, spróbuj po jego zakończeniu" >&2
+            echo "$(Tv 'trwa przeglądanie starszą wersją (pid $p, $f) -- nic nie zmieniam, spróbuj po jego zakończeniu' '$p' "$p" '$f' "$f")" >&2
             return 1
         fi
     done
     if [ -e "$BROOT/orig2.$k" ]; then
         # Istniejący zapis (inne przeglądanie albo nieudane przywrócenie) -- tylko poprawny i tylko TEGO datasetu.
-        IFS=$'\t' read -r d v s <"$BROOT/orig2.$k" 2>/dev/null || { echo "zapis $BROOT/orig2.$k nieczytelny -- nic nie zmieniam" >&2; return 1; }
-        [ "$d" = "$ds" ] || { echo "zapis $BROOT/orig2.$k należy do '$d', nie do $ds -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1; }
-        case "$v" in hidden|visible) ;; *) echo "zapis $BROOT/orig2.$k: wartość '$v' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
-        case "$s" in local|default|received|"inherited from "*) ;; *) echo "zapis $BROOT/orig2.$k: źródło '$s' -- nic nie zmieniam (sprawdź ręcznie)" >&2; return 1 ;; esac
+        IFS=$'\t' read -r d v s <"$BROOT/orig2.$k" 2>/dev/null || { echo "$(Tv 'zapis $BROOT/orig2.$k nieczytelny -- nic nie zmieniam' '$BROOT' "$BROOT" '$k' "$k")" >&2; return 1; }
+        [ "$d" = "$ds" ] || { echo "$(Tv 'zapis $BROOT/orig2.$k należy do '\''$d'\'', nie do $ds -- nic nie zmieniam (sprawdź ręcznie)' '$BROOT' "$BROOT" '$k' "$k" '$ds' "$ds" '$d' "$d")" >&2; return 1; }
+        case "$v" in hidden|visible) ;; *) echo "$(Tv 'zapis $BROOT/orig2.$k: wartość '\''$v'\'' -- nic nie zmieniam (sprawdź ręcznie)' '$BROOT' "$BROOT" '$k' "$k" '$v' "$v")" >&2; return 1 ;; esac
+        case "$s" in local|default|received|"inherited from "*) ;; *) echo "$(Tv 'zapis $BROOT/orig2.$k: źródło '\''$s'\'' -- nic nie zmieniam (sprawdź ręcznie)' '$BROOT' "$BROOT" '$k' "$k" '$s' "$s")" >&2; return 1 ;; esac
     else
-        v="$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać snapdev $ds -- nic nie zmieniam" >&2; return 1; }
-        s="$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" || { echo "nie da się odczytać źródła snapdev $ds -- nic nie zmieniam" >&2; return 1; }
-        case "$v" in hidden|visible) ;; *) echo "snapdev $ds = '$v' -- nieznana wartość, nic nie zmieniam" >&2; return 1 ;; esac
-        case "$s" in local|default|received|"inherited from "*) ;; *) echo "źródło snapdev $ds = '$s' -- nieznane, nic nie zmieniam" >&2; return 1 ;; esac
+        v="$(zfs get -H -o value snapdev "$ds" 2>/dev/null)" || { echo "$(Tv 'nie da się odczytać snapdev $ds -- nic nie zmieniam' '$ds' "$ds")" >&2; return 1; }
+        s="$(zfs get -H -o source snapdev "$ds" 2>/dev/null)" || { echo "$(Tv 'nie da się odczytać źródła snapdev $ds -- nic nie zmieniam' '$ds' "$ds")" >&2; return 1; }
+        case "$v" in hidden|visible) ;; *) echo "$(Tv 'snapdev $ds = '\''$v'\'' -- nieznana wartość, nic nie zmieniam' '$ds' "$ds" '$v' "$v")" >&2; return 1 ;; esac
+        case "$s" in local|default|received|"inherited from "*) ;; *) echo "$(Tv 'źródło snapdev $ds = '\''$s'\'' -- nieznane, nic nie zmieniam' '$ds' "$ds" '$s' "$s")" >&2; return 1 ;; esac
         printf '%s\t%s\t%s\n' "$ds" "$v" "$s" >"$BROOT/orig2.$k.$$" && mv -f "$BROOT/orig2.$k.$$" "$BROOT/orig2.$k" \
-            || { rm -f "$BROOT/orig2.$k.$$"; echo "nie da się zapisać $BROOT/orig2.$k -- nic nie zmieniam" >&2; return 1; }
+            || { rm -f "$BROOT/orig2.$k.$$"; echo "$(Tv 'nie da się zapisać $BROOT/orig2.$k -- nic nie zmieniam' '$BROOT' "$BROOT" '$k' "$k")" >&2; return 1; }
     fi
     test_pause expose
-    : >"$BROOT/hold2.$$.$k" || { echo "nie da się założyć znacznika $BROOT/hold2.$$.$k -- nic nie zmieniam" >&2; return 1; }
+    : >"$BROOT/hold2.$$.$k" || { echo "$(Tv 'nie da się założyć znacznika $BROOT/hold2.$$.$k -- nic nie zmieniam' '$BROOT' "$BROOT" '$$' "$$" '$k' "$k")" >&2; return 1; }
     SNAPDEV_DS="$ds"
     zfs set snapdev=visible "$ds"
 }
@@ -198,7 +198,7 @@ restore_snapdev() {   # -> 0 przywrócone albo nie było czego; 1 nie (opis w RE
     local k rc; k="$(hold_key "$SNAPDEV_DS")"
     if ! snap_lock "$k"; then
         RESIDUE="$RESIDUE
-  nie mogę zablokować $BROOT/lock2.$k -- snapdev $SNAPDEV_DS zostawiam, znacznik i zapis zostają (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+  $(Tv 'nie mogę zablokować $BROOT/lock2.$k -- snapdev $SNAPDEV_DS zostawiam, znacznik i zapis zostają (sprawdź: zfs get snapdev $SNAPDEV_DS)' '$BROOT' "$BROOT" '$k' "$k" '$SNAPDEV_DS' "$SNAPDEV_DS")"
         return 1
     fi
     restore_snapdev_locked; rc=$?
@@ -210,12 +210,12 @@ restore_snapdev_locked() {
     if other_holders "$SNAPDEV_DS"; then SNAPDEV_DS=""; return 0; fi   # inne przeglądanie trzyma
     if ! IFS=$'\t' read -r d was src <"$BROOT/orig2.$k" 2>/dev/null; then
         RESIDUE="$RESIDUE
-  nie ma zapisu snapdev sprzed przeglądania ($BROOT/orig2.$k) -- snapdev $SNAPDEV_DS zostawiam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+  $(Tv 'nie ma zapisu snapdev sprzed przeglądania ($BROOT/orig2.$k) -- snapdev $SNAPDEV_DS zostawiam (sprawdź: zfs get snapdev $SNAPDEV_DS)' '$BROOT' "$BROOT" '$k' "$k" '$SNAPDEV_DS' "$SNAPDEV_DS")"
         return 1
     fi
     if [ "$d" != "$SNAPDEV_DS" ]; then
         RESIDUE="$RESIDUE
-  zapis $BROOT/orig2.$k należy do '$d', nie do $SNAPDEV_DS -- snapdev $SNAPDEV_DS zostawiam, zapisu nie ruszam (sprawdź: zfs get snapdev $SNAPDEV_DS)"
+  $(Tv 'zapis $BROOT/orig2.$k należy do '\''$d'\'', nie do $SNAPDEV_DS -- snapdev $SNAPDEV_DS zostawiam, zapisu nie ruszam (sprawdź: zfs get snapdev $SNAPDEV_DS)' '$BROOT' "$BROOT" '$k' "$k" '$SNAPDEV_DS' "$SNAPDEV_DS" '$d' "$d")"
         return 1
     fi
     test_pause restore
@@ -229,7 +229,7 @@ restore_snapdev_locked() {
         rm -f "$BROOT/orig2.$k"; SNAPDEV_DS=""; return 0
     fi
     RESIDUE="$RESIDUE
-  snapdev na $SNAPDEV_DS NIE przywrócony (było: $was, $src; zapis w $BROOT/orig2.$k)  (ręcznie: $(case "$src" in local) echo "zfs set snapdev=$was $SNAPDEV_DS" ;; *) echo "zfs inherit snapdev $SNAPDEV_DS" ;; esac))"
+  $(Tv 'snapdev na $SNAPDEV_DS NIE przywrócony (było: $was, $src; zapis w $BROOT/orig2.$k)  (ręcznie: $HOWTO)' '$SNAPDEV_DS' "$SNAPDEV_DS" '$was' "$was" '$src' "$src" '$BROOT' "$BROOT" '$k' "$k" '$HOWTO' "$(case "$src" in local) echo "zfs set snapdev=$was $SNAPDEV_DS" ;; *) echo "zfs inherit snapdev $SNAPDEV_DS" ;; esac)")"
     return 1
 }
 # Po kroku, który zmienił snapdev, a się nie udał: przywrócenie i -- gdy nie wyszło -- okno
@@ -240,7 +240,7 @@ undo_or_warn() {   # <tekst przy sukcesie> -> zawsze 0
     if [ -z "$RESIDUE" ]; then
         [ -n "$1" ] && wt --title "$TITLE" --msgbox "$1" 9 "$W"
     else
-        wt --title "$TITLE" --msgbox "Nie wszystko udało się posprzątać:$RESIDUE" 14 "$W"
+        wt --title "$TITLE" --msgbox "$(Tv 'Nie wszystko udało się posprzątać:$RESIDUE' '$RESIDUE' "$RESIDUE")" 14 "$W"
     fi
     return 0
 }
@@ -249,7 +249,7 @@ cleanup() {
     unmount_all; restore_snapdev
     rm -rf "$TMPD"
     if [ -n "$RESIDUE" ]; then
-        printf 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
+        T 'Przeglądaj kopię -- NIE wszystko posprzątane:%s\n' "$RESIDUE" >&2
         exit 1     # w pułapce EXIT: kod wyjścia całego skryptu -- nigdy 0 przy pozostałości
     fi
 }
@@ -257,16 +257,16 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 if [ "$REL" = --any ]; then
-    WT_BACKTITLE="Przeglądaj kopię na dysku -- $(hostname)"
-    TITLE="Przeglądaj kopię"
+    WT_BACKTITLE="$(Tv 'Przeglądaj kopię na dysku -- $(hostname)' '$(hostname)' "$(hostname)")"
+    TITLE="$(T 'Przeglądaj kopię')"
 else
-    WT_BACKTITLE="Przeglądaj kopię relacji $REL -- $(hostname)"
-    TITLE="Przeglądaj $REL"
+    WT_BACKTITLE="$(Tv 'Przeglądaj kopię relacji $REL -- $(hostname)' '$REL' "$REL" '$(hostname)' "$(hostname)")"
+    TITLE="$(Tv 'Przeglądaj $REL' '$REL' "$REL")"
 fi
 geom
 
 if [ "$(id -u)" -ne 0 ]; then
-    wt --title "$TITLE" --msgbox "Montowanie migawki wymaga roota. Uruchom GUI jako root (zfs-backup gui)." 8 "$W"
+    wt --title "$TITLE" --msgbox "$(T 'Montowanie migawki wymaga roota. Uruchom GUI jako root (zfs-backup gui).')" 8 "$W"
     exit 1
 fi
 
@@ -292,7 +292,9 @@ PYEOF
     done
 fi
 if ! [ -s "$TMPD/roots" ]; then
-    wt --title "$TITLE" --msgbox "Na tym hoście nie ma kopii do przeglądania$([ "$REL" = --any ] || echo " relacji $REL")." 8 "$W"
+    if [ "$REL" = --any ]; then _m="$(T 'Na tym hoście nie ma kopii do przeglądania.')"
+    else _m="$(Tv 'Na tym hoście nie ma kopii do przeglądania relacji $REL.' '$REL' "$REL")"; fi
+    wt --title "$TITLE" --msgbox "$_m" 8 "$W"
     exit 1
 fi
 # każdy korzeń z dziećmi; tylko te, które mają choć jedną migawkę
@@ -304,14 +306,14 @@ done | sort -u | while IFS=$'\t' read -r n t; do
     zfs list -H -t snapshot -o name -d 1 -- "$n" 2>/dev/null | grep -q . && printf '%s\t%s\n' "$n" "$t"
 done >"$TMPD/cand.tsv"
 if ! [ -s "$TMPD/cand.tsv" ]; then
-    wt --title "$TITLE" --msgbox "Kopie nie mają żadnej migawki -- nie ma czego przeglądać." 8 "$W"
+    wt --title "$TITLE" --msgbox "$(T 'Kopie nie mają żadnej migawki -- nie ma czego przeglądać.')" 8 "$W"
     exit 1
 fi
 
 # ---- montaż ro wg systemu plików: <urządzenie> <typ> -> 0, MNT ustawiony ---------------
 mount_ro() {
     local dev="$1" fs="$2" opts="ro"
-    mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/browse.XXXXXX")" || { MNT=""; echo "nie mogę utworzyć katalogu w $BROOT" >"$TMPD/mount.err"; return 1; }
+    mkdir -p "$BROOT" && MNT="$(mktemp -d "$BROOT/browse.XXXXXX")" || { MNT=""; echo "$(Tv 'nie mogę utworzyć katalogu w $BROOT' '$BROOT' "$BROOT")" >"$TMPD/mount.err"; return 1; }
     case "$fs" in
         ntfs)
             if modinfo ntfs3 >/dev/null 2>&1 || grep -qw ntfs3 /proc/filesystems; then
@@ -320,7 +322,7 @@ mount_ro() {
             if command -v ntfs-3g >/dev/null 2>&1; then
                 ntfs-3g -o ro "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0
             fi
-            echo "brak sterownika NTFS (moduł ntfs3 albo pakiet ntfs-3g)" >>"$TMPD/mount.err" ;;
+            echo "$(T 'brak sterownika NTFS (moduł ntfs3 albo pakiet ntfs-3g)')" >>"$TMPD/mount.err" ;;
         ext2|ext3|ext4) mount -t "$fs" -o ro,noload "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
         xfs)            mount -t xfs -o ro,norecovery,nouuid "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
         zfs)            mount -t zfs -o ro "$dev" "$MNT" 2>"$TMPD/mount.err" && return 0 ;;
@@ -334,25 +336,25 @@ mount_ro() {
 browse_and_exit() {
     local what="$1"
     clear 2>/dev/null
-    echo "Zamontowane TYLKO DO ODCZYTU: $what"
-    echo "  w $MNT -- skopiuj pliki w mc (lewy panel = kopia), F10 w mc kończy i odmontowuje."
+    echo "$(Tv 'Zamontowane TYLKO DO ODCZYTU: $what' '$what' "$what")"
+    echo "$(Tv '  w $MNT -- skopiuj pliki w mc (lewy panel = kopia), F10 w mc kończy i odmontowuje.' '$MNT' "$MNT")"
     if command -v "$MC" >/dev/null 2>&1; then
         "$MC" "$MNT" "${HOME:-/root}" </dev/tty >/dev/tty 2>&1
     else
         echo
-        echo "Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje."
+        echo "$(T 'Brak programu mc (apt install mc). Zamiast niego powłoka w katalogu kopii; exit kończy i odmontowuje.')"
         ( cd "$MNT" && "${SHELL:-/bin/bash}" -i ) </dev/tty >/dev/tty 2>&1
     fi
     RESIDUE=""
     unmount_all; restore_snapdev
     echo
     if [ -z "$RESIDUE" ]; then
-        echo "=== Odmontowane. Enter = powrót do GUI"
+        echo "$(T '=== Odmontowane. Enter = powrót do GUI')"
         read -r _ </dev/tty 2>/dev/null || true
         exit 0
     fi
-    echo "=== NIE wszystko posprzątane:$RESIDUE"
-    echo "Enter = powrót do GUI (przy wyjściu jeszcze jedna próba)"
+    echo "$(Tv '=== NIE wszystko posprzątane:$RESIDUE' '$RESIDUE' "$RESIDUE")"
+    echo "$(T 'Enter = powrót do GUI (przy wyjściu jeszcze jedna próba)')"
     read -r _ </dev/tty 2>/dev/null || true
     exit 1
 }
@@ -364,8 +366,11 @@ while :; do
         # jednolite w całym pakiecie"): to samo drzewo co przy wyborze datasetów do kopii, w trybie
         # JEDNEJ pozycji. Wybrać da się dataset z migawką; gałęzie nad nim są do rozwijania.
         # Wcześniej płaska lista (pve10: 66 pozycji, 32 strzałki do hdd/labbrowse/v-ntfs).
-        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$TITLE: który dataset?" "${DS:-}" <<'PYEOF' || exit 1
+        "$PY" - "$TMPD/cand.tsv" "$TMPD/tree-spec.json" "$(Tv '$TITLE: który dataset?' '$TITLE' "$TITLE")" "${DS:-}" <<'PYEOF' || exit 1
 import sys, json
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 names, types = [], {}
 for line in open(sys.argv[1], encoding="utf-8"):
     p = line.rstrip("\n").split("\t")
@@ -377,7 +382,7 @@ for n in names:                       # gałęzie nad kandydatami: do nawigacji,
     for i in range(1, len(parts)):
         allnames.add("/".join(parts[:i]))
 spec = {"title": sys.argv[3], "single": True, "selectable": names,
-        "legend": " Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija",
+        "legend": _(u" Kopia zostanie zamontowana TYLKO DO ODCZYTU.  · = gałąź (bez migawek), → rozwija"),
         "roots": [sys.argv[4]] if sys.argv[4] else [],
         "datasets": [{"name": n, "type": types.get(n, "filesystem"), "used": None} for n in sorted(allnames)]}
 json.dump(spec, open(sys.argv[2], "w", encoding="utf-8"), ensure_ascii=False)
@@ -392,20 +397,20 @@ PYEOF
         menu=(); i=0
         while IFS=$'\t' read -r cr nm; do
             [ -n "$cr" ] || continue
-            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $nm"; [ "$i" -eq 0 ] && lbl="$lbl  (najnowsza)"
+            lbl="$(date -d "@$cr" '+%Y-%m-%d %H:%M')  $nm"; [ "$i" -eq 0 ] && lbl="$lbl  $(T '(najnowsza)')"
             menu+=("p$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
         done <"$TMPD/points.tsv"
         geom
-        wt --title "$TITLE: z kiedy?" --menu "$DS -- migawka do przejrzenia (czas hosta, $(date +%Z))." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { step=1; continue; }
+        wt --title "$(Tv '$TITLE: z kiedy?' '$TITLE' "$TITLE")" --menu "$(Tv '$DS -- migawka do przejrzenia (czas hosta, $(date +%Z)).' '$DS' "$DS" '$(date +%Z)' "$(date +%Z)")" "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { step=1; continue; }
         k="${WT_OUT#p}"
         SNAP="$(sed -n "$((k + 1))p" "$TMPD/points.tsv" | cut -f2)"
         if [ "$TYP" = volume ]; then step=3; else step=4; fi ;;
     3)  # ---- DYSK VM: urządzenie migawki, partycja, klucz ---------------------------------
         undo_or_warn ""
-        info "$TITLE" "Udostępniam dysk VM z migawki tylko do odczytu..."
+        info "$TITLE" "$(T 'Udostępniam dysk VM z migawki tylko do odczytu...')"
         if ! expose_snapdev "$DS" 2>"$TMPD/sd.err"; then
-            wt --title "$TITLE" --msgbox "Nie udało się udostępnić dysku z migawki $DS@$SNAP do odczytu:
-$(head -2 "$TMPD/sd.err")" 10 "$W"
+            wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się udostępnić dysku z migawki $DS@$SNAP do odczytu:
+$ERR' '$DS' "$DS" '$SNAP' "$SNAP" '$ERR' "$(head -2 "$TMPD/sd.err")")" 10 "$W"
             undo_or_warn ""
             step=2; continue
         fi
@@ -415,7 +420,7 @@ $(head -2 "$TMPD/sd.err")" 10 "$W"
             [ -e "$DEV" ] && break; sleep 1
         done
         if ! [ -e "$DEV" ]; then
-            undo_or_warn "Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii."
+            undo_or_warn "$(Tv 'Urządzenie $DEV nie pojawiło się (udev). Nic nie zostało zmienione w kopii.' '$DEV' "$DEV")"
             step=2; continue
         fi
         sleep 1; command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null
@@ -440,36 +445,36 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
             [ -n "$pf" ] || continue
             case "$pf" in swap|LVM2_member|linux_raid_member|zfs_member) continue ;; esac
             lbl="$pd  $pf  $ps${pl:+  $pl}"
-            case "$pf" in BitLocker|crypto_LUKS) lbl="$lbl  (zaszyfrowana -- klucz)" ;; esac
+            case "$pf" in BitLocker|crypto_LUKS) lbl="$lbl  $(T '(zaszyfrowana -- klucz)')" ;; esac
             menu+=("q$i" "$(clip_label "$lbl" $((W - 12)))"); i=$((i + 1))
             printf '%s\t%s\n' "$pd" "$pf" >>"$TMPD/pick.tsv"
         done <"$TMPD/parts.tsv"
         if [ "$i" -eq 0 ]; then
-            wt --title "$TITLE" --msgbox "Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie." 10 "$W"
+            wt --title "$TITLE" --msgbox "$(Tv 'Na dysku $DS@$SNAP nie ma partycji z obsługiwanym systemem plików (NTFS, ext2/3/4, xfs, vfat, exfat, btrfs; BitLocker, LUKS). LVM i RAID -- jeszcze nie.' '$DS' "$DS" '$SNAP' "$SNAP")" 10 "$W"
             undo_or_warn ""; step=2; continue
         fi
         # I-2 (kampania 2026-10-21): jedna partycja do wyboru = bez okna wyboru (o jeden klawisz mniej).
         if [ "$i" -eq 1 ]; then
             WT_OUT=q0
         else
-            wt --title "$TITLE: która partycja?" --menu "$DS@$SNAP -- tylko do odczytu." "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
+            wt --title "$(Tv '$TITLE: która partycja?' '$TITLE' "$TITLE")" --menu "$(Tv '$DS@$SNAP -- tylko do odczytu.' '$DS' "$DS" '$SNAP' "$SNAP")" "$H" "$W" "$(lhfit $i 1)" "${menu[@]}" || { rm -f "$TMPD/pick.tsv"; undo_or_warn ""; step=2; continue; }
         fi
         k="${WT_OUT#q}"
         PDEV="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f1)"; PFS="$(sed -n "$((k + 1))p" "$TMPD/pick.tsv" | cut -f2)"
         rm -f "$TMPD/pick.tsv"
         case "$PFS" in
             BitLocker|crypto_LUKS)
-                command -v cryptsetup >/dev/null 2>&1 || { wt --title "$TITLE" --msgbox "Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin)." 9 "$W"; undo_or_warn ""; step=2; continue; }
-                _ty=luks; _hint="hasło LUKS"
-                [ "$PFS" = BitLocker ] && { _ty=bitlk; _hint="hasło BitLocker albo 48-cyfrowy klucz odzyskiwania (z myślnikami)"; }
+                command -v cryptsetup >/dev/null 2>&1 || { wt --title "$TITLE" --msgbox "$(T 'Partycja jest zaszyfrowana, a na tym hoście nie ma cryptsetup (apt install cryptsetup-bin).')" 9 "$W"; undo_or_warn ""; step=2; continue; }
+                _ty=luks; _hint="$(T 'hasło LUKS')"
+                [ "$PFS" = BitLocker ] && { _ty=bitlk; _hint="$(T 'hasło BitLocker albo 48-cyfrowy klucz odzyskiwania (z myślnikami)')"; }
                 _name="zbrowse-$$"
                 _ok=0
                 while :; do
-                    wt --title "$TITLE: klucz" --passwordbox "$PDEV jest zaszyfrowana ($PFS).\nPodaj $_hint.\nKlucz nie jest nigdzie zapisywany." 12 "$W" || break
+                    wt --title "$(Tv '$TITLE: klucz' '$TITLE' "$TITLE")" --passwordbox "$(Tv '$PDEV jest zaszyfrowana ($PFS).\nPodaj $_hint.\nKlucz nie jest nigdzie zapisywany.' '$PDEV' "$PDEV" '$PFS' "$PFS" '$_hint' "$_hint")" 12 "$W" || break
                     if printf '%s' "$WT_OUT" | cryptsetup open --readonly --type "$_ty" --key-file=- "$PDEV" "$_name" 2>"$TMPD/cs.err"; then
                         _ok=1; break
                     fi
-                    wt --title "$TITLE" --msgbox "Nie udało się odblokować:\n$(head -2 "$TMPD/cs.err")\nSpróbuj jeszcze raz albo Anuluj." 11 "$W"
+                    wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się odblokować:\n$ERR\nSpróbuj jeszcze raz albo Anuluj.' '$ERR' "$(head -2 "$TMPD/cs.err")")" 11 "$W"
                 done
                 WT_OUT=""
                 [ "$_ok" -eq 1 ] || { undo_or_warn ""; step=2; continue; }
@@ -479,12 +484,12 @@ walk(d.get("blockdevices"))' | tr -d '\r' >"$TMPD/parts.tsv"
                 [ -n "$PFS" ] || PFS=unknown ;;
         esac
         if ! mount_ro "$PDEV" "$PFS"; then
-            wt --title "$TITLE" --msgbox "Nie udało się zamontować $PDEV ($PFS) tylko do odczytu:\n$(head -3 "$TMPD/mount.err")" 11 "$W"
+            wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się zamontować $PDEV ($PFS) tylko do odczytu:\n$ERR' '$PDEV' "$PDEV" '$PFS' "$PFS" '$ERR' "$(head -3 "$TMPD/mount.err")")" 11 "$W"
             undo_or_warn ""; step=2; continue
         fi
         browse_and_exit "$DS@$SNAP, $PDEV ($PFS)" ;;
     4)  if ! mount_ro "$DS@$SNAP" zfs; then
-            wt --title "$TITLE" --msgbox "Nie udało się zamontować $DS@$SNAP:\n$(head -3 "$TMPD/mount.err")" 10 "$W"
+            wt --title "$TITLE" --msgbox "$(Tv 'Nie udało się zamontować $DS@$SNAP:\n$ERR' '$DS' "$DS" '$SNAP' "$SNAP" '$ERR' "$(head -3 "$TMPD/mount.err")")" 10 "$W"
             step=2; continue
         fi
         browse_and_exit "$DS@$SNAP" ;;
