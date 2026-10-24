@@ -5105,17 +5105,20 @@ rm -rf "$RP"
 # Zadne okno pakietu nie uzywa radiolisty -- wybor jednej pozycji to menu z kursorem na obecnej.
 rl_left="$(grep -n -- '--radiolist' "$REPO"/tui/*.sh | grep -v '^\s*#' | head -3)"
 [ -z "$rl_left" ] && ok "okna: zadnej radiolisty -- wybor jednej pozycji to menu (Enter = podswietlona)" || bad "okna: radiolista zostala" "$rl_left"
-# Kampania 2026-10-22: dlugi plan -- najpierw okno tekstu (Enter = dalej), potem krotkie pytanie;
-# nigdy --scrolltext, w ktorym Enter nic nie robi. Krotki -- jedno okno yesno, jak dotad.
+# Kampania 2026-10-22: dlugi plan -- najpierw okno tekstu, potem krotkie pytanie. Przejscie na
+# zywo pve10 2026-10-23: okno tekstu BEZ --scrolltext nie przewija (plan uciety na 1. stronie),
+# wiec dlugi tekst ma --scrolltext, a w tytule "Tab -> Dalej" (Enter dziala dopiero po Tab,
+# zmierzone). Krotki tekst -- jedno okno yesno, jak dotad (textbox_read w wt-lib.sh).
 YN="$(mktemp -d)"; mkdir -p "$YN/bin"
 printf '#!/bin/bash\nprintf "%%s\\n" "$(printf "%%s ~ " "$@")" >> "%s/wt.log"; exit 0\n' "$YN" > "$YN/bin/wt"; chmod +x "$YN/bin/wt"
 seq 1 200 > "$YN/long.txt"; printf 'krotki plan\n' > "$YN/short.txt"
 ( WHIPTAIL="$YN/bin/wt" bash -c '. "$1/tui/wt-lib.sh"; yesno_text "$2/long.txt" "Plan" "WYKONAJ" "Wstecz" --defaultno; echo "rc=$?"; yesno_text "$2/short.txt" "Plan2" "WYKONAJ" "Wstecz"; echo "rc=$?"' x "$REPO" "$YN" ) > "$YN/out" 2>&1
-if [ "$(grep -c 'rc=0' "$YN/out")" -eq 2 ] && ! grep -q -- '--scrolltext' "$YN/wt.log" \
-   && grep -q -- '--title ~ Plan  \[strzałki przewijają, Enter = dalej\] ~ --ok-button ~ Dalej ~ --textbox' "$YN/wt.log" \
+if [ "$(grep -c 'rc=0' "$YN/out")" -eq 2 ] \
+   && grep -q -- '--title ~ Plan  \[strzałki przewijają, Tab -> Dalej, Esc wraca\] ~ --ok-button ~ Dalej ~ --scrolltext ~ --textbox' "$YN/wt.log" \
+   && ! grep -- '--title ~ Plan2 ' "$YN/wt.log" | grep -q -- '--scrolltext' \
    && grep -q -- '--title ~ Plan ~ --yes-button ~ WYKONAJ ~ --no-button ~ Wstecz ~ --defaultno ~ --yesno' "$YN/wt.log" \
    && [ "$(grep -c -- '--title ~ Plan2 ' "$YN/wt.log")" -eq 1 ]; then
-    ok "yesno_text: dlugi plan = okno tekstu + krotkie pytanie (bez --scrolltext); krotki = jedno okno"
+    ok "yesno_text: dlugi plan = okno tekstu z przewijaniem (Tab -> Dalej w tytule) + krotkie pytanie; krotki = jedno okno"
 else
     bad "yesno_text: dlugi plan" "$(cat "$YN/out")" "$(cut -c1-160 "$YN/wt.log")"
 fi

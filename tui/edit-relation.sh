@@ -702,11 +702,11 @@ save_all() {
     } >"$TMPD/saveplan.txt"
     # Enter = WYKONAJ, jak w kreatorze (U25: jedno zachowanie). Plan dłuższy niż ekran: okno
     # z przewijaniem trzyma fokus na tekście i Enter nic nie robi (zmierzone na pve10,
-    # 2026-10-19) -- więc najpierw sam plan do przewinięcia (Enter = dalej), potem krótkie pytanie.
+    # 2026-10-19) -- więc najpierw sam plan do przewinięcia (textbox_read: Tab -> Dalej na ramce),
+    # potem krótkie pytanie.
     geom
     if [ "$(fold -s -w $((W - 4)) "$TMPD/saveplan.txt" | grep -c '')" -gt $((H - 6)) ]; then
-        wt --title "Zmień relację $NAME -- plan wszystkich zmian  [strzałki = przewijaj, Enter = dalej]" --ok-button "Dalej" \
-           --textbox "$TMPD/saveplan.txt" "$H" "$W" || return 1
+        textbox_read "Zmień relację $NAME -- plan wszystkich zmian" "$TMPD/saveplan.txt" || return 1
         wt --title "Zmień relację $NAME" --yes-button "WYKONAJ" --no-button "Wstecz" \
            --yesno "Wykonać zmiany z planu ($(pending_count))?\nWstecz = lista zmian, nic nie zmienione." 9 "$W" || return 1
     else
