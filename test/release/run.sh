@@ -49,9 +49,15 @@ done < <(cd "$REL" && git ls-files)
                   || bad "closure: shipped files name scripts the release does not carry" "$missing"
 
 # 3. no shipped code line points into test/
-refs="$(cd "$REL" && git ls-files -- '*.sh' '*.py' | while IFS= read -r f; do
-    grep -nE '(^|[ "/$({])test/[a-z]' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|$f:|"
-done)"
+# Shell: any non-comment line. Python: only a string literal that starts a path with test/ --
+# prose in a docstring is not a reference.
+refs="$( cd "$REL" && {
+    git ls-files -- '*.sh' | while IFS= read -r f; do
+        grep -nE '(^|[ "/$({])test/[a-z]' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|$f:|"
+    done
+    git ls-files -- '*.py' | while IFS= read -r f; do
+        grep -nE "[\"']\.?/?test/[a-z]" "$f" | sed "s|^|$f:|"
+    done; } )"
 [ -z "$refs" ] && ok "no shipped code line points into test/" || bad "shipped code points into test/" "$(printf '%s\n' "$refs" | head -5)"
 
 # 4. the scrub: no lab/customer address or site name survives, and it did not over-reach
@@ -82,7 +88,7 @@ if [ "$n1" = "$n2" ] && printf '%s\n' "$out2" | grep -q 'no commit'; then
 else
     bad "publish: republishing changed the history" "$n1 -> $n2" "$out2"
 fi
-if ! grep -qE -- '--force|push -f' "$REPO/release/publish.sh"; then
+if ! grep -vE '^[[:space:]]*#' "$REPO/release/publish.sh" | grep -qE -- '--force|push -f'; then
     ok "publish.sh never force-pushes"
 else
     bad "publish.sh mentions a force push" "$(grep -nE -- '--force|push -f' "$REPO/release/publish.sh")"
