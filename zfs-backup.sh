@@ -8509,7 +8509,7 @@ cmd_local_backup() {
     # carry pair_label (so the engine lines carry -L and the pause gate reaches
     # them), each source gets its own landing prune, and a client record with
     # RUX_MODE=local is written after the install. Without it: unchanged.
-    local lb_name="" lb_exfam="" lb_replace=0 lb_raw=0 RB_ENGINE_KEEP=""
+    local lb_name="" lb_exfam="" lb_replace=0 lb_raw=0 lb_passive=0 RB_ENGINE_KEEP=""
     local -a lb_excl=()
     local -a source_flags=()
     for a in "$@"; do
@@ -8523,6 +8523,11 @@ cmd_local_backup() {
             --exclude-family=*) lb_exfam="${lb_exfam:+$lb_exfam,}${a#*=}" ;;
             # W17: an encrypted source copied encrypted (-w), first copy included.
             --raw)       lb_raw=1 ;;
+            # --passive (2026-10-24, Metropolis pve2): the copy ADOPTS snapshots somebody
+            # else makes on the source -- a Proxmox pvesr replica, whose snapshots belong
+            # to the guest's own node -- and creates and prunes nothing there (-e).
+            # Target retention is the profile's, as for any copy.
+            --passive)   lb_passive=1 ;;
             # --replace (L2, 2026-10-09): the relationship --name EXISTS and this run
             # describes it anew -- its sections are taken out of the candidate and
             # composed again (new profile, a source more or less). A source whose
@@ -8650,6 +8655,10 @@ cmd_local_backup() {
     local no_copy=0
     [ "$lb_no_copy" -eq 0 ] || { [ "$target_given" -eq 1 ] && [ -z "$target" ]; } \
         || die "local-backup: --no-copy means snapshots only, and '--target=$target' names a copy -- give --target='' with it, or drop --no-copy. Nothing was touched."
+    # A passive SNAPSHOT relationship would do nothing at all: it creates no snapshot
+    # and copies none. Snapshots on a pvesr replica belong to the guest's own node.
+    [ "$lb_passive" -eq 1 ] && [ "$target_given" -eq 1 ] && [ -z "$target" ] \
+        && die "local-backup: --passive adopts snapshots somebody else makes and copies them; with --target='' (snapshots only) there is nothing left for it to do. Give a target, or drop --passive. Nothing was touched."
     if [ "$target_given" -eq 1 ] && [ -z "$target" ]; then
         no_copy=1
         # Same guard the proposed values carry, extended to a third case rather
@@ -8866,6 +8875,18 @@ cmd_local_backup() {
     else
         conflict="$(config_section_overlap "$cand" "$target" ${scan[@]+"${scan[@]}"} "$target")"
     fi
+    # --recursive (flat or atomic) makes each SOURCE a recursive claim too: its snapshot,
+    # prune and monitor walk the children. Checked flat only, an old per-child section
+    # under the new root passed (measured, lab rehearsal of the Metropolis takeover
+    # 2026-10-24: a snapshot relationship on hdd/mt next to the v4 file's
+    # [dataset:hdd/mt/vm-106-disk-0] ... -- every child got two snapshot jobs and two
+    # retentions on the same family).
+    if [ -n "$lb_recursion" ]; then
+        local _rr
+        for _rr in ${scan[@]+"${scan[@]}"}; do
+            conflict="$conflict$(config_section_overlap "$cand" "$_rr" "$_rr")"
+        done
+    fi
     # ...except this tool's own target retention for this very target. It is the
     # same store, written by this same command, and treating it as foreign is
     # exactly what made a second source impossible to add.
@@ -8877,7 +8898,8 @@ cmd_local_backup() {
     if [ -n "$conflict" ]; then
         rm -f "$cand"
         die "local-backup: a job for these sources / target '$target' would overlap coverage already in $config:$conflict
-Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not."
+Nothing has been changed. Two jobs covering the same datasets would send and prune the same snapshots under different policy. If the overlap is intended, express it in native CONFIG v4 by hand; the high-level path deliberately will not.
+Taking over older jobs (a v4 config written by hand): remove their sections first -- zfs-backup.sh edit-config${local_user:+ --account=$local_user} -- then run this again."
     fi
 
     # IDEMPOTENT RERUN. Every requested root is already installed against this
@@ -9064,8 +9086,9 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             if [ "$lb_block" -eq 1 ]; then
                 relblock_fragment "$PROFILE_DS_FILE" "$lb_name" source
                 schedule_tier_lines send "${LBX_M[$r]}"
-                # A flat profile prunes the source in this section's tiers.
-                [ -s "${PROFILE_PRUNE_FILE:-}" ] || schedule_tier_lines prune "${LBX_SP[$r]}"
+                # A flat profile prunes the source in this section's tiers -- unless the
+                # copy is passive: the source's snapshots are not this relationship's.
+                [ -s "${PROFILE_PRUNE_FILE:-}" ] || [ "$lb_passive" -eq 1 ] || schedule_tier_lines prune "${LBX_SP[$r]}"
             elif [ "$lb_src_inline" -eq 1 ]; then
                 emit_source_prune_fragment "$PROFILE_DS_FILE"
             else
@@ -9086,6 +9109,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             fi
             [ -n "$lb_exfam" ] && echo "	exclude_family = $lb_exfam"
             [ "$lb_raw" -eq 1 ] && echo "	raw          = yes"
+            [ "$lb_passive" -eq 1 ] && echo "	passive      = yes"
             echo "	notify       = local-$(basename "$r")"
         done
         # Retention, not shape -- the same F1 correction as the remote path. A
@@ -9125,7 +9149,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         # The question is not the mode; it is only ever "do this profile's tiers
         # already prune the source?", and `-s "$PROFILE_PRUNE_FILE"` is it.
         if [ -n "$LB_RETFRAG" ]; then
-          if [ -s "${PROFILE_PRUNE_FILE:-}" ]; then
+          if [ -s "${PROFILE_PRUNE_FILE:-}" ] && [ "$lb_passive" -eq 0 ]; then
             # REV-20260811-104 F1: SOURCE and TARGET retention must be independently
             # editable after CREATE, not two scopes sharing one template authority.
             # ensure_cron_config already put the target's prune templates in the
@@ -9428,7 +9452,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
         # The copy seeds on snapget.sh, like the cron line it establishes
         # (gen-cron.sh emit_send, 2026-10-20); the snapshot-only seed above stays
         # on snapsend.sh, as its line does.
-        elif bash "$SNAPGET" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
+        elif bash "$SNAPGET" -m "$seed_prefix" -v 3 ${lb_name:+-L "$lb_name"} $([ "$lb_raw" -eq 1 ] && printf -- '-w') $([ "$lb_passive" -eq 1 ] && printf -- '-e') ${seed_rec[@]+"${seed_rec[@]}"} ${seed_x[@]+"${seed_x[@]}"} "$sr" "$target"; then
             log "  OK: $sr -> $target"
         else
             warn "  FAILED: $sr -> $target"
@@ -9486,6 +9510,7 @@ Nothing has been changed. Two jobs covering the same datasets would send and pru
             write_client_field PROFILE            "$profile"
             [ -n "${SRC_PROFILE_NAME:-}" ] && write_client_field SOURCE_PROFILE "$SRC_PROFILE_NAME"
             [ -n "$lb_recursion" ] && write_client_field RECURSION "$lb_recursion"
+            [ "$lb_passive" -eq 1 ] && write_client_field PASSIVE 1
             write_client_field LOCAL_USER         "${local_user:-}"
             write_client_field CRON_CONFIG        "$config"
             write_client_field CREATED_AT         "$_lbcreated"
@@ -20491,11 +20516,12 @@ local_relation_argv() {
                 exclude_child_*) LRA+=(--exclude-child="$v") ;;
                 exclude_family)  LRA+=(--exclude-family="$v") ;;
                 raw)             case "$v" in yes|1|true) LRA+=(--raw) ;; esac ;;
+                passive)         case "$v" in yes|1|true) LRA+=(--passive) ;; esac ;;
             esac
         done < <(awk -v want="[dataset:$first]" '
             $0 == want { f = 1; next } /^\[/ { f = 0 }
             f { t = $0; sub(/^[ \t]+/, "", t); k = t; sub(/[ \t]*=.*$/, "", k); v = t; sub(/^[^=]*=[ \t]*/, "", v)
-                if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family" || k == "raw") print k "\t" v }' "$cfg")
+                if (k ~ /^exclude_child_[0-9]+$/ || k == "exclude_family" || k == "raw" || k == "passive") print k "\t" v }' "$cfg")
     fi
     # X3: an exception left behind by a source removed earlier goes with the next change.
     lra_drop_orphan_excludes
