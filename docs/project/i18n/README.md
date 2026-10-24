@@ -4,7 +4,9 @@
 jednym wierszu na tekst. Pola: `k` (id), `pl_code` (tekst w kodzie dziś), `pl` (tekst polski do użycia -- różny od
 `pl_code` w 32 wierszach, gdzie właściciel poprawił polski), `en` (tłumaczenie), `origin` (`owner-ok` 1111,
 `owner-edit` 76, `auto` 217 -- propozycja przyjęta bez przeglądu, decyzja właściciela 2026-10-24: „zatwierdzam”),
-`unclear` (48 tekstów niezrozumiałych także po polsku; nowe brzmienie ustala się osobno z właścicielem),
+`unclear` -- 48 tekstów niezrozumiałych także po polsku: 45 dostało nowe brzmienie (`origin` = `owner-reworded`,
+właściciel zatwierdził 2026-10-24; `pl` to nowy tekst polski, `en` jego tłumaczenie), 3 zostają (u13, u244 -- kod
+albo tekst testowy; u352 -- ekran nieużywany),
 `where` (plik:linia funkcja). Słownik terminów w polu `glossary` (m.in. relacja = relation, dysk podłączony =
 connected).
 
