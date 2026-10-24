@@ -221,7 +221,7 @@ Pule tutaj: $(zpool list -H -o name 2>/dev/null | tr '\n' ' ')" 11 "$W"
                 exit 1
             fi
             wt --title "Przywróć z dysku: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-               --default-item p0 --menu "Punkt odzysku (czas utworzenia migawki na dysku, strefa tego hosta: $TZN). Pozostałe źródła dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+               --default-item p0 --menu "Wybierz migawkę do odzyskania." \
                "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
             idx="${WT_OUT#p}"
             if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi
@@ -509,7 +509,7 @@ PYEOF
         fi
         geom
         wt --title "Przywróć $REL: z kiedy?" --ok-button "Dalej" --cancel-button "Wstecz" --notags \
-           --default-item p0 --menu "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety pod spodem dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
+           --default-item p0 --menu "Punkt odzysku (czas utworzenia kopii, strefa tego hosta: $TZN). Datasety potomne dostają swój najbliższy punkt z tej chwili lub wcześniejszy." \
            "$(fit $((${#PT_TIME[@]} + 3)))" "$W" "$(lhfit ${#PT_TIME[@]} 3)" "${menu[@]}" || { step=2; continue; }
         idx="${WT_OUT#p}"
         if [ "$idx" = 0 ]; then AT=""; PT=""; else AT="${PT_AT[$idx]}"; PT="${PT_TIME[$idx]}"; fi

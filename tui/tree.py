@@ -225,7 +225,7 @@ class Tree(object):
                 return
             r = cov[0]
             if self.no_exc:
-                self.msg = _(u"Tu wybiera się całe miejsca -- żeby nie kopiować %s, odznacz całe %s.") % (n, r)
+                self.msg = _(u"Tu nie da się pominąć samego %s -- możesz tylko odznaczyć całe %s.") % (n, r)
                 return
             if self.recursion == "atomic":
                 self.msg = (_(u"Przy kopiowaniu atomowym (-r) nie da się pominąć części gałęzi. ") +
@@ -271,7 +271,7 @@ class Tree(object):
         if any(e not in self.hide for e in exc):
             self.msg = _(u"Kopiowanie atomowe (-r) nie pozwala pomijać. Zdejmij najpierw pominięte (odznaczone) datasety.")
         elif exc:
-            self.msg = _(u"Kopiowanie atomowe (-r) nie pozwala pominąć celu kopii (%s). Zaznacz węższe miejsca.") % exc[0]
+            self.msg = _(u"Tryb „całość naraz” (-r) skopiowałby też miejsce docelowe kopii (%s). Zaznacz mniejsze miejsca, które go nie zawierają.") % exc[0]
         else:
             self.recursion = "atomic"
 
@@ -304,7 +304,7 @@ class Tree(object):
                 self.roots, self.done = [self.cur], "next"
             elif nd and nd["kids"]:
                 self.expanded.add(self.cur)
-                self.msg = _(u"%s: tu nic do wybrania -- rozwinięte, wybierz niżej.") % self.cur
+                self.msg = _(u"%s nie można wybrać -- rozwinąłem gałąź, wybierz coś poniżej.") % self.cur
             else:
                 self.msg = _(u"%s: nic do wybrania.") % self.cur
         elif k == "enter":
@@ -375,7 +375,7 @@ class Tree(object):
         mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else [u""]
         # Legenda zawijana: po angielsku jest dłuższa niż okno (linie ciała są obcinane do iw).
         legend = _(self.spec.get("legend") or u"") or (_(u" · = sama gałąź (nic do wybrania)") if self.single
-                                                       else _(u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"))
+                                                       else _(u" [x] kopiowane z potomnymi, także przyszłymi   [-] część   [ ] nie"))
         llines = [u" " + l for l in wrap(legend.strip(), iw - 2)] or [u""]
         lh = self.list_height(len(mlines) + len(llines) - 1)
         idx = rows.index(self.cur) if self.cur in rows else 0
@@ -408,7 +408,7 @@ class Tree(object):
         if len(title) > w - 4:
             title = title[:max(1, w - 6)] + u"… "
         hint = (_(u"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca") if self.single else
-                _(u"Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej  Esc wraca") + (_(u"  S sposób") if self.show_mode else u""))
+                _(u"Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej  Esc wraca") + (_(u"  S tryb") if self.show_mode else u""))
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + l[:iw].ljust(iw) + u"│" for l in body] + [bot]

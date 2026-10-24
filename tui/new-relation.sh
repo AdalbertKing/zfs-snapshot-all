@@ -110,7 +110,10 @@ step_host() {
         [ -e "$TMPD/rel.done" ] || info "$(title 2 "$(T 'Z którego hosta?')")" "$(Tv 'Sprawdzam, czy z $h nie ma już relacji...' '$h' "$h")"
         rel="$(existing_relation "$h")"
         if [ -n "$rel" ]; then
-            wt --title "$(T 'Ta relacja już istnieje')" --msgbox "$(Tv 'Z hostem $h jest już relacja: $rel.\n\nRelacja to PARA HOSTÓW -- jedna na parę, z wieloma datasetami.\nDataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
+            wt --title "$(T 'Ta relacja już istnieje')" --msgbox "$(Tv 'Z hostem $h relacja już istnieje: $rel.
+
+Z jednym hostem jest tylko jedna relacja, za to z dowolną liczbą datasetów.
+Dataset do istniejącej relacji dodaje się w jej zmianie,' '$h' "$h" '$rel' "$rel")
 $(T 'pozycja „Datasety” (zfs-backup.sh add-source).\n\nTutaj podaj host, z którym nie ma jeszcze relacji.')" 14 "$W"
             continue
         fi
@@ -804,7 +807,7 @@ step_extra() {
         if [ "${#items[@]}" -gt 0 ]; then
             local _i
             for ((_i=1; _i<${#items[@]}; _i+=3)); do items[_i]="$(clip_label "${items[_i]}" $((W - 14)))"; done
-            local _xh="$(T 'Domyślne są dobre dla zwykłej relacji.\n\nPrawa stąd: bez nich instalacja stanie i poda polecenie dla źródła.\nZamrażanie: bez zgody migawki dobowe i rzadsze wyjdą jako '\''_crash_'\''.\nParowanie ręczne: gdy ten host nie ma wstępu po SSH do źródła.')"
+            local _xh="$(T 'Domyślne wystarczą w zwykłej relacji.\n\nNadaj prawa stąd: bez tego instalacja się zatrzyma i poda polecenie do wpisania na źródle.\nZamrażanie: bez zgody migawki dobowe i rzadsze zostaną oznaczone '\''_crash_'\'' (bez zamrożenia gości).\nParowanie ręczne: gdy ten host nie może się połączyć ze źródłem przez SSH.')"
             [ "$enc" -eq 1 ] && _xh="$_xh\n$(T 'Zaszyfrowane: kopia leży w celu zaszyfrowana, ten host nie potrzebuje klucza.\n  Zmiana po pierwszej kopii = nowa kopia od zera.')"
             wt --title "$(title 9 "$(T 'Ustawienia dodatkowe   [Spacja przełącza]')")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --separate-output \
                --checklist "$_xh" "$(fit $((${#items[@]} / 3 + 11)))" "$W" "$((${#items[@]} / 3))" \

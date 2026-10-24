@@ -615,7 +615,7 @@ PYEOF
                         N=3; case "$p_h" in auto:*) N="${p_h#auto:}" ;; esac
                         while :; do
                             wt --title "$(T 'Historia: auto')" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" \
-                               --inputbox "$(T 'Po ilu odstępach zaległości przejść na samą różnicę (1-999)?')" 9 "$W" "$N" || continue 2
+                               --inputbox "$(T 'Po ilu zgubionych przebiegach przejść na migawkę różnicową?')" 9 "$W" "$N" || continue 2
                             v="${WT_OUT// /}"
                             case "$v" in ''|*[!0-9]*) ;; *) [ "${#v}" -le 3 ] && [ "$((10#$v))" -ge 1 ] && { p_h="auto:$((10#$v))"; break; } ;; esac
                             wt --title "$(T 'Zła liczba')" --msgbox "$(Tv ''\''$WT_OUT'\'' -- podaj liczbę całkowitą od 1 do 999.' '$WT_OUT' "$WT_OUT")" 8 "$W"
