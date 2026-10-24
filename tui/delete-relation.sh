@@ -14,15 +14,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "delete-relation: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
 NAME="${1:-}"
-[ -n "$NAME" ] || { echo "użycie: delete-relation.sh NAZWA" >&2; exit 2; }
-WT_BACKTITLE="Usuwanie relacji $NAME -- kolektor $(hostname)"
+[ -n "$NAME" ] || { echo "usage: delete-relation.sh NAME" >&2; exit 2; }
+WT_BACKTITLE="$(Tv 'Usuwanie relacji $NAME -- kolektor $(hostname)' '$NAME' "$NAME" '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
 geom
-info "Usuń relację $NAME" "Sprawdzam, co jest do usunięcia..."
+info "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$(T 'Sprawdzam, co jest do usunięcia...')"
 if ! "$ZB" delete-relation "$NAME" --check-source >"$TMPD/plan0.txt" 2>&1; then
-    wt --title "Nie da się usunąć '$NAME'" --msgbox "$(tail -5 "$TMPD/plan0.txt")" 12 "$W"
+    wt --title "$(Tv 'Nie da się usunąć '\''$NAME'\''' '$NAME' "$NAME")" --msgbox "$(tail -5 "$TMPD/plan0.txt")" 12 "$W"
     exit 1
 fi
 # Co czasownik zrobi SAM z siebie, a co pominie na dowodzie -- z jego własnego planu.
@@ -43,22 +43,22 @@ while :; do
         # Kampania 2026-10-22: relacja lokalna dawała "Źródło (?): bez zmian -- a local
         # relationship -- source and copy are on this host" -- bez peera to nie jest uwaga.
         skipped*"local relationship"*) note_src="" ;;
-        skipped*) note_src="Źródło ($PEER): bez zmian -- ${SRC_LINE#skipped -- }" ;;
-        "NO root"*) note_src="Źródło ($PEER): brak dostępu roota z tego hosta -- tam zostaje konto relacji. Posprzątaj ręcznie, na $PEER jako root: $LEAVE_CMD" ;;
-        *)        note_src=""; items+=(src "Posprzątaj na źródle $PEER (konto i prawa zfs)" "$SRC") ;;
+        skipped*) note_src="$(Tv 'Źródło ($PEER): bez zmian -- ${SRC_LINE#skipped -- }' '$PEER' "$PEER" '${SRC_LINE#skipped -- }' "${SRC_LINE#skipped -- }")" ;;
+        "NO root"*) note_src="$(Tv 'Źródło ($PEER): brak dostępu roota z tego hosta -- tam zostaje konto relacji. Posprzątaj ręcznie, na $PEER jako root: $LEAVE_CMD' '$PEER' "$PEER" '$LEAVE_CMD' "$LEAVE_CMD")" ;;
+        *)        note_src=""; items+=(src "$(Tv 'Posprzątaj na źródle $PEER (konto i prawa zfs)' '$PEER' "$PEER")" "$SRC") ;;
     esac
-    items+=(rec "Zwolnij nazwę '$NAME' (żeby dało się założyć ją od nowa)" "$REC")
-    [ -n "$COPIES" ] && items+=(data "SKASUJ KOPIE na tym hoście (nieodwracalne)" "$DATA")
+    items+=(rec "$(Tv 'Zwolnij nazwę '\''$NAME'\'' (żeby dało się założyć ją od nowa)' '$NAME' "$NAME")" "$REC")
+    [ -n "$COPIES" ] && items+=(data "$(T 'SKASUJ KOPIE na tym hoście (nieodwracalne)')" "$DATA")
     # Stan słowem z F3 (STATE_PL w zfs-tui.py), nie surowym słowem rekordu.
     case "$STATE" in
-        active) st="działa" ;; pending_enroll) st="zakładana" ;; seeding) st="1. kopia" ;;
-        seed_complete) st="po 1. kopii" ;; endpoint_verified) st="sprawdzona" ;; *) st="${STATE:-?}" ;;
+        active) st="$(T działa)" ;; pending_enroll) st="$(T zakładana)" ;; seeding) st="$(T '1. kopia')" ;;
+        seed_complete) st="$(T 'po 1. kopii')" ;; endpoint_verified) st="$(T sprawdzona)" ;; *) st="${STATE:-?}" ;;
     esac
-    head="Relacja '$NAME' (stan: $st) przestanie działać: znikną jej zadania z crona."
-    [ "$STATE" = removed ] && head="Relacja '$NAME' jest już usunięta -- zostało po niej to, co niżej."
-    wt --title "Usuń relację $NAME -- co jeszcze?   [Spacja zaznacza]" --ok-button "Dalej" --cancel-button "Wstecz" --notags --separate-output \
-       --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+Kopie na tym hoście: $COPIES\nKopii domyślnie NIE ruszam.}" "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
-       "${items[@]}" || { clear 2>/dev/null; wt_end "Usuń relację: przerwane, nic nie zmieniono"; exit 1; }
+    head="$(Tv 'Relacja '\''$NAME'\'' (stan: $st) przestanie działać: znikną jej zadania z crona.' '$NAME' "$NAME" '$st' "$st")"
+    [ "$STATE" = removed ] && head="$(Tv 'Relacja '\''$NAME'\'' jest już usunięta -- zostało po niej to, co niżej.' '$NAME' "$NAME")"
+    wt --title "$(Tv 'Usuń relację $NAME -- co jeszcze?   [Spacja zaznacza]' '$NAME' "$NAME")" --ok-button "$(T Dalej)" --cancel-button "$(T Wstecz)" --notags --separate-output \
+       --checklist "$head\n${note_src:+$note_src\n}\n${COPIES:+$(Tv 'Kopie na tym hoście: $COPIES\nKopii domyślnie NIE ruszam.' '$COPIES' "$COPIES")}" "$(fit $((${#items[@]} / 3 + 6)))" "$W" "$((${#items[@]} / 3))" \
+       "${items[@]}" || { clear 2>/dev/null; wt_end "$(T 'Usuń relację: przerwane, nic nie zmieniono')"; exit 1; }
     SRC=OFF; REC=OFF; DATA=OFF
     while IFS= read -r x; do case "$x" in src) SRC=ON ;; rec) REC=ON ;; data) DATA=ON ;; esac; done <<<"$WT_OUT"
     ARGV=("$ZB" delete-relation "$NAME")
@@ -67,15 +67,15 @@ while :; do
     [ "$DATA" = ON ] && ARGV+=(--destroy-copies)
     "${ARGV[@]}" >"$TMPD/plan.txt" 2>&1
     {
-        echo "PLAN -- nic jeszcze nie zostało zmienione:"
+        T 'PLAN -- nic jeszcze nie zostało zmienione:'; echo
         echo
         grep -v '^plan only' "$TMPD/plan.txt"
         echo
-        echo "Komenda:  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
+        echo "$(T 'Komenda:')  $(for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done)--yes"
     } >"$TMPD/plan2.txt"
-    yesno_text "$TMPD/plan2.txt" "Usuń relację $NAME -- plan" "WYKONAJ" "Wstecz" --defaultno || continue
+    yesno_text "$TMPD/plan2.txt" "$(Tv 'Usuń relację $NAME -- plan' '$NAME' "$NAME")" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno || continue
     : >"$TMPD/run.log"
-    RC=0; run_progress "Usuń relację $NAME" "$TMPD/run.log" "${ARGV[@]}" --yes || RC=$?
+    RC=0; run_progress "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$TMPD/run.log" "${ARGV[@]}" --yes || RC=$?
     # Uwaga 5 (właściciel, 2026-09-24): usunięcie zostawia ślad jak import -- GUI podaje
     # ZFS_TUI_LOG z nagłówkiem "$ komenda"; tu dopisujemy przebieg kroków i rc.
     if [ -n "${ZFS_TUI_LOG:-}" ]; then
@@ -86,19 +86,19 @@ while :; do
     # z pozostałościami" jest nieprawdą: nazwa nadal jest zajęta, kopie stoją, a ta
     # sama komenda jest do powtórzenia. Rozpoznajemy to po zdaniu, które wypisuje.
     if [ "$RC" -eq 0 ]; then
-        { echo "GOTOWE: relacja '$NAME' usunięta (rc=0)."
-          case "$SRC_LINE" in "NO root"*) echo "    Na $PEER zostało konto relacji -- tam, jako root: $LEAVE_CMD" ;; esac
+        { Tv 'GOTOWE: relacja '\''$NAME'\'' usunięta (rc=0).' '$NAME' "$NAME"; echo
+          case "$SRC_LINE" in "NO root"*) Tv '    Na $PEER zostało konto relacji -- tam, jako root: $LEAVE_CMD' '$PEER' "$PEER" '$LEAVE_CMD' "$LEAVE_CMD"; echo ;; esac
         } >"$TMPD/result.txt"
-        result_box "Usuń relację $NAME: GOTOWE" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
+        result_box "$(Tv 'Usuń relację $NAME: GOTOWE' '$NAME' "$NAME")" 0 "$TMPD/run.log" "$(cat "$TMPD/result.txt")"
     elif grep -q 'STOPPED before 3/4' "$TMPD/run.log" 2>/dev/null; then
-        { echo "ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono."
-          echo "    Rekord relacji '$NAME' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją."
-          echo "    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz."
+        { T 'ZATRZYMANE: połowa na źródle nie wyszła, więc NIC dalej nie ruszono.'; echo
+          Tv '    Rekord relacji '\''$NAME'\'' ZOSTAŁ -- nazwa jest nadal zajęta, kopie stoją.' '$NAME' "$NAME"; echo
+          T '    Gdy źródło będzie dostępne, uruchom to samo jeszcze raz.'; echo
         } >"$TMPD/result.txt"
-        result_box "Usuń relację $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+        result_box "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
     else
-        echo "USUNIĘTA Z POZOSTAŁOŚCIAMI -- linie '!!!' w dzienniku mówią, co zostało." >"$TMPD/result.txt"
-        result_box "Usuń relację $NAME" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
+        { T 'USUNIĘTA Z POZOSTAŁOŚCIAMI -- linie '\''!!!'\'' w dzienniku mówią, co zostało.'; echo; } >"$TMPD/result.txt"
+        result_box "$(Tv 'Usuń relację $NAME' '$NAME' "$NAME")" "$RC" "$TMPD/run.log" "" "$(cat "$TMPD/result.txt")"
     fi
     exit "$RC"
 done

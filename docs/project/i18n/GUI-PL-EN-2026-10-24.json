@@ -3419,7 +3419,7 @@
    "k": "u276",
    "pl_code": "Relacje na kolektorze %s",
    "pl": "Relacje na kolektorze %s",
-   "en": "Relation on collector %s",
+   "en": "Relations on collector %s",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -3430,7 +3430,7 @@
    "k": "u277",
    "pl_code": "Relacje na kolektorze %s (%d)",
    "pl": "Relacje na kolektorze %s (%d)",
-   "en": "Relation on collector %s (%d)",
+   "en": "Relations on collector %s (%d)",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -3541,7 +3541,7 @@
    "k": "u287",
    "pl_code": "co obejmuje",
    "pl": "co obejmuje",
-   "en": "What is included",
+   "en": "what is included",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -9494,7 +9494,7 @@
    "k": "u818",
    "pl_code": "Po ilu odstępach zaległości przejść na samą różnicę (1-999)?",
    "pl": "Po ilu zgubionych przebiegach przejść na migawkę różnicową?",
-   "en": "After how many failed runs should you switch to a differential shutter?",
+   "en": "After how many missed intervals switch to the difference only (1-999)?",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -15586,7 +15586,7 @@
    "k": "u1368",
    "pl_code": "Pozycja zmienia jedną wartość; nic nie jest zapisane przed WYKONAJ. W nawiasie: skąd jest wartość, gdy nie z pliku ustawień.",
    "pl": "Wybierz pozycję, aby zmienić jej wartość. Nic nie zostanie zapisane, dopóki nie wybierzesz „Zapisz zmiany” i WYKONAJ. Nawias przy wartości mówi, skąd ona pochodzi, jeśli nie ma jej w pliku ustawień.",
-   "en": "Choose an item to change its value. Nothing is saved until you choose \"Zapisz zmiany\" (save changes) and EXECUTE. The note in brackets says where a value comes from when it is not in the settings file.",
+   "en": "Each item changes one value; nothing is saved before EXECUTE. In brackets: where a value comes from when not from the settings file.",
    "origin": "owner-reworded",
    "unclear": false,
    "where": [

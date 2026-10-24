@@ -132,16 +132,18 @@ probe() {   # check-source -> zmienne C_*
     # Wartości ze zdalnego hosta to DANE: python wypisuje je w stałej kolejności,
     # po jednej w linii (bez znaków nowej linii), bash czyta je read -r, nigdy wykonywane.
     "$PY" - "$TMPD/check.json" <<'PYEOF' | tr -d '\r' >"$TMPD/check.vals"
-import sys, json
+import sys, json, os
+_C = json.load(open(os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 def one(x): return str(x or "").replace("\r", " ").replace("\n", " ")
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
-    d = {"ssh": {"ok": False, "error": "check-source nie zwrócił JSON-a"}}
+    d = {"ssh": {"ok": False, "error": _(u"check-source nie zwrócił JSON-a")}}
 ssh = d.get("ssh") or {}; z = d.get("zfs") or {}; p = d.get("package") or {}
 for v in (1 if ssh.get("ok") else 0, one(ssh.get("error")), one(d.get("hostname")),
           1 if z.get("ok") else 0,
-          one(", ".join("%s (%s, wolne %s)" % (x.get("name"), x.get("size"), x.get("free")) for x in z.get("pools") or [])),
+          one(", ".join(_(u"%s (%s, wolne %s)") % (x.get("name"), x.get("size"), x.get("free")) for x in z.get("pools") or [])),
           1 if p.get("ok") else 0, one(p.get("rev")), one(p.get("path") or d.get("repo_dir"))):
     print(v)
 PYEOF

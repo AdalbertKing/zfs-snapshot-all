@@ -112,6 +112,16 @@ commit: `git status --short`, then `git add <each intended file>`, then
 
 *Evidence: E82, E87.*
 
+### R14 — In a live window, read where the focus is before pressing Enter
+
+Keys sent to a real GUI (tmux `send-keys`) are blind: nothing tells the sender which
+button holds the focus. On a window that has a destructive button (EXECUTE, Delete,
+Discard), leave with Esc, never with Tab+Enter, and before any Enter capture the pane
+with its highlight (`tmux capture-pane -e`) and read it. A guess about the focus is a
+guess about what runs.
+
+*Evidence: E102.*
+
 ### R9, R10, R11 — on running suites
 
 Stated with their measurements in section 2b, because the case for them is the
@@ -1921,6 +1931,26 @@ passed".
 exact head SHA (`success: N of total_count`) in the same command that decides
 the merge, or the merge does not run.
 
+
+### E102 — Tab+Enter on a plan window ran delete-relation on the lab (2026-10-24, R14)
+**2026-10-24, live walk of the English GUI (P3) on pve10.**
+
+*Genesis.* To check the delete-relation window in English I opened Del on relation
+`pve9`, pressed Next to see the plan, and sent `Tab Enter` to go Back. The plan window
+(`yesno_text ... --defaultno`) already had the focus on Back; Tab moved it to EXECUTE,
+and Enter ran `delete-relation pve9 --yes`. The relation's record, cron jobs, pairing
+keys and the source account `zfsbackup-pve10` on pve9 were removed. The copies stayed
+(`hdd/backups/192.168.28.99/hdd/enc`, tombstone in `/var/lib/zfs-snapshot-all/removed/`).
+The relation was on the lab-leftovers list for cleanup with the owner, so nothing of
+value was lost, but it was removed without the owner's decision.
+
+*Cause.* I assumed whiptail starts on the first button and drove the window by a
+memorised key sequence instead of reading the screen. Two windows earlier the same
+`Tab Enter` had landed on Back by the same assumption, which made it look like a habit
+that works.
+
+*Rule.* R14 (new): on a window with a destructive button, Esc to leave; before any
+Enter, capture the pane with its highlight and read which button is focused.
 
 ### E101 — the branch switched under a running merge job again, the day after E100 (2026-10-23, R5)
 **2026-10-23, `fix/local-raw-rekey` (#791) and `fix/source-prune-stagger-x27`.**

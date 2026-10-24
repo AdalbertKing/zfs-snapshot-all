@@ -17,19 +17,19 @@
 set -u
 
 ACTION="${1:-}"; NAME="${2:-}"; ROUT="${3:-}"; RTITLE="${4:-}"
-case "$ACTION" in new|edit|delete) ;; relation) [ -n "$ROUT" ] || { echo "użycie: template.sh relation BAZA PLIK [TYTUŁ]" >&2; exit 2; } ;;
-    *) echo "użycie: template.sh <new|edit|delete> NAZWA" >&2; exit 2 ;; esac
-[ -n "$NAME" ] || { echo "użycie: template.sh <new|edit|delete> NAZWA" >&2; exit 2; }
+case "$ACTION" in new|edit|delete) ;; relation) [ -n "$ROUT" ] || { echo "usage: template.sh relation BASE FILE [TITLE]" >&2; exit 2; } ;;
+    *) echo "usage: template.sh <new|edit|delete> NAME" >&2; exit 2 ;; esac
+[ -n "$NAME" ] || { echo "usage: template.sh <new|edit|delete> NAME" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZB="${ZFS_BACKUP:-$HERE/zfs-backup.sh}"
 . "$HERE/tui/wt-lib.sh" || { echo "template: brak $HERE/tui/wt-lib.sh -- checkout jest niekompletny" >&2; exit 1; }
-WT_BACKTITLE="Szablony -- kolektor $(hostname)"
+WT_BACKTITLE="$(Tv 'Szablony -- kolektor $(hostname)' '$(hostname)' "$(hostname)")"
 TMPD="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TMPD"' EXIT
 
 geom
-info "Szablony" "Czytam szablony..."
+info "$(T Szablony)" "$(T 'Czytam szablony...')"
 # TEMPLATE_JSON (relacja, właściciel 2026-10-13): szczeble relacji z jej CONFIGU (show-tiers),
 # podane przez wołającego w kształcie list-profiles -- bez ukrytego szablonu po drodze.
 if [ -n "${TEMPLATE_JSON:-}" ] && [ -r "$TEMPLATE_JSON" ]; then cp "$TEMPLATE_JSON" "$TMPD/p.json"
@@ -64,12 +64,12 @@ if [ -s "$TMPD/me.tsv" ]; then
     IFS=$'\t' read -r SRC USED BDESC <"$TMPD/me.tsv"
     SRC="${SRC#\#}"; USED="${USED#\#}"; BDESC="${BDESC#\#}"
 else
-    wt --title "Szablony" --msgbox "Nie ma szablonu '$NAME'." 8 "$W"
+    wt --title "$(T Szablony)" --msgbox "$(Tv 'Nie ma szablonu '\''$NAME'\''.' '$NAME' "$NAME")" 8 "$W"
     exit 1
 fi
 case "$USED" in ''|*[!0-9]*) USED=0 ;; esac
 
-SHADOW_MSG="Plik szablonu '$NAME' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku."
+SHADOW_MSG="$(Tv 'Plik szablonu '\''$NAME'\'' w /etc/zfs-snapshot-all/profiles ma nazwę fabrycznego i pakiet go pomija. Zmień nazwę pliku.' '$NAME' "$NAME")"
 
 # Wspólny ogon wykonania: <komunikat sukcesu> <polecenie...>
 run_cmd() {
@@ -83,8 +83,8 @@ run_cmd() {
         { cat "$TMPD/run.log"; echo "rc=$RC"; } >>"$ZFS_TUI_LOG" 2>/dev/null || :
     fi
     echo
-    if [ "$RC" -eq 0 ]; then echo "=== GOTOWE: $okmsg (rc=$RC). Enter = dalej"
-    else echo "=== NIE UDAŁO SIĘ (rc=$RC) -- powód powyżej. Enter = dalej"; fi
+    if [ "$RC" -eq 0 ]; then Tv '=== GOTOWE: $okmsg (rc=$RC). Enter = dalej' '$okmsg' "$okmsg" '$RC' "$RC"; echo
+    else Tv '=== NIE UDAŁO SIĘ (rc=$RC) -- powód powyżej. Enter = dalej' '$RC' "$RC"; echo; fi
     [ -t 0 ] && read -r _
     exit "$RC"
 }
@@ -92,40 +92,40 @@ run_cmd() {
 # ---------------------------------------------------------------- usuwanie
 if [ "$ACTION" = delete ]; then
     case "$SRC" in
-        package) wt --title "Szablon fabryczny" --msgbox "Fabrycznego szablonu nie usuniesz." 8 "$W"; exit 0 ;;
-        shadow)  wt --title "Szablon fabryczny" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(T 'Fabrycznego szablonu nie usuniesz.')" 8 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     "$ZB" delete-profile "$NAME" >"$TMPD/dplan.txt" 2>&1
     if [ $? -ne 0 ]; then
         tail -5 "$TMPD/dplan.txt" | fold -s -w $((W - 6)) >"$TMPD/why.txt"
-        wt --title "Czasownik odmówił -- nic nie zmieniono" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
+        wt --title "$(T 'Czasownik odmówił -- nic nie zmieniono')" --msgbox "$(cat "$TMPD/why.txt")" "$(fit "$(grep -c '' "$TMPD/why.txt")")" "$W"
         exit 1
     fi
     {
         cat "$TMPD/dplan.txt"
         if [ "$USED" -gt 0 ]; then
             echo
-            echo "Relacje zbudowane z tego szablonu zostają; ich późniejsze 'Zmień relację -> Szablon' nie będzie miało z czego odświeżyć."
+            T 'Relacje zbudowane z tego szablonu zostają; ich późniejsze '\''Zmień relację -> Szablon'\'' nie będzie miało z czego odświeżyć.'; echo
         fi
     } >"$TMPD/dtext.txt"
-    yesno_text "$TMPD/dtext.txt" "Usunięcie szablonu $NAME" "Usuń" "Wstecz" --defaultno || exit 1
-    run_cmd "szablon '$NAME' usunięty" "$ZB" delete-profile "$NAME" --yes
+    yesno_text "$TMPD/dtext.txt" "$(Tv 'Usunięcie szablonu $NAME' '$NAME' "$NAME")" "$(T Usuń)" "$(T Wstecz)" --defaultno || exit 1
+    run_cmd "$(Tv 'szablon '\''$NAME'\'' usunięty' '$NAME' "$NAME")" "$ZB" delete-profile "$NAME" --yes
 fi
 
 # ---------------------------------------------------------------- new / edit
 if [ "$ACTION" = relation ]; then
-    NEW="${RTITLE:-Harmonogram i retencja kopii w celu i źródle}"
+    NEW="${RTITLE:-$(T 'Harmonogram i retencja kopii w celu i źródle')}"
     TITLE="$NEW"
 elif [ "$ACTION" = edit ]; then
     case "$SRC" in
-        package) wt --title "Szablon fabryczny" --msgbox "Fabrycznego szablonu '$NAME' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić." 9 "$W"; exit 0 ;;
-        shadow)  wt --title "Szablon fabryczny" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
+        package) wt --title "$(T 'Szablon fabryczny')" --msgbox "$(Tv 'Fabrycznego szablonu '\''$NAME'\'' nie zmienisz -- Ins na nim tworzy kopię, którą można zmienić.' '$NAME' "$NAME")" 9 "$W"; exit 0 ;;
+        shadow)  wt --title "$(T 'Szablon fabryczny')" --msgbox "$SHADOW_MSG" 10 "$W"; exit 0 ;;
     esac
     NEW="$NAME"
-    TITLE="Zmiana szablonu $NAME"
+    TITLE="$(Tv 'Zmiana szablonu $NAME' '$NAME' "$NAME")"
 else
     NEW="$NAME-moj"
-    TITLE="Nowy szablon na podstawie $NAME"
+    TITLE="$(Tv 'Nowy szablon na podstawie $NAME' '$NAME' "$NAME")"
 fi
 
 # JEDNO OKNO-TABELA (właściciel 2026-10-09: "Uprośćmy tworzenie szablonów" -- jak w
@@ -136,10 +136,13 @@ GRID_CMD="${ZFS_GRID:-$PY $HERE/tui/grid.py}"
 SPEC="$TMPD/spec.json"; OUTJ="$TMPD/grid.json"
 "$PY" - "$TMPD/tiers.tsv" "$TMPD/names.txt" "$ACTION" "$NAME" "$NEW" "$BDESC" "$SPEC" <<'PYEOF'
 import json, sys
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 tiers, names, action, name, new, bdesc, spec = sys.argv[1:8]
-WORD = [("hourly", u"godzinowe", u"godzinowych"), ("daily", u"dobowe", u"dobowych"), ("weekly", u"tygodniowe", u"tygodniowych"),
-        ("monthly", u"miesięczne", u"miesięcznych"), ("yearly", u"roczne", u"rocznych"), ("annual", u"roczne", u"rocznych")]
-UNIT = {"h": u"godz.", "d": u"dni", "w": u"tyg.", "m": u"mies.", "y": u"lat"}
+WORD = [("hourly", _(u"godzinowe"), _(u"godzinowych")), ("daily", _(u"dobowe"), _(u"dobowych")), ("weekly", _(u"tygodniowe"), _(u"tygodniowych")),
+        ("monthly", _(u"miesięczne"), _(u"miesięcznych")), ("yearly", _(u"roczne"), _(u"rocznych")), ("annual", _(u"roczne"), _(u"rocznych"))]
+UNIT = {"h": _(u"godz."), "d": _(u"dni"), "w": _(u"tyg."), "m": _(u"mies."), "y": _(u"lat")}
 def words(t):
     for suf, a, b in WORD:
         if t.endswith(suf):
@@ -211,27 +214,27 @@ for r in rows:
         r["letter"] = r.get("letter") or next((l for suf, l in LETTER.items() if r["key"].endswith(suf)), "")
         r["units"] = {"age": UNIT.get(r["letter"].lower(), "")}
 base_m = "gfs" if ladder else (next((r.get("mech") for r in count if r.get("mech")), None) or ("age" if age else "flat"))
-choice = {"key": "method", "label": u"Sposób", "value": base_m, "base": base_m,
+choice = {"key": "method", "label": _(u"Sposób"), "value": base_m, "base": base_m,
           "options": [{"key": "gfs", "label": u"GFS",
-                       "help": [u"Jedna migawka na okres (godzinę, dobę, tydzień...), N okresów wstecz.",
-                                u"Seria migawek w jednej godzinie zostawia z niej jedną."]},
-                      {"key": "age", "label": u"WIEK (age)",
-                       "help": [u"Kasuje migawki starsze niż N okresów (dobowe 7 = 7 dni).",
-                                u"Po przestoju zostaje mniej: stare migawki dalej się starzeją."]},
-                      {"key": "flat", "label": u"PŁASKI (flat)",
-                       "help": [u"Trzyma N najnowszych migawek szczebla, bez względu na ich wiek.",
-                                u"Seria migawek w krótkim czasie wypycha starsze."]}],
-          "locked": (u"Drabina na jednej rodzinie migawek liczy tylko GFS." if ladder else None)}
-title = (u"Zmiana szablonu %s" % name) if action == "edit" else (u"Nowy szablon na podstawie %s" % name)
+                       "help": [_(u"Jedna migawka na okres (godzinę, dobę, tydzień...), N okresów wstecz."),
+                                _(u"Seria migawek w jednej godzinie zostawia z niej jedną.")]},
+                      {"key": "age", "label": _(u"WIEK (age)"),
+                       "help": [_(u"Kasuje migawki starsze niż N okresów (dobowe 7 = 7 dni)."),
+                                _(u"Po przestoju zostaje mniej: stare migawki dalej się starzeją.")]},
+                      {"key": "flat", "label": _(u"PŁASKI (flat)"),
+                       "help": [_(u"Trzyma N najnowszych migawek szczebla, bez względu na ich wiek."),
+                                _(u"Seria migawek w krótkim czasie wypycha starsze.")]}],
+          "locked": (_(u"Drabina na jednej rodzinie migawek liczy tylko GFS.") if ladder else None)}
+title = (_(u"Zmiana szablonu %s") % name) if action == "edit" else (_(u"Nowy szablon na podstawie %s") % name)
 if action == "relation":
     title = new
-s = {"title": title, "head": [u"SZCZEBEL", u"TRZYMA", u"KOHERENTNE (zamrażanie)"],
-     "fields": ([] if action in ("edit", "relation") else [{"key": "name", "label": u"Nazwa", "value": new}]),
-     "after": ([] if action == "relation" else [{"key": "desc", "label": u"Opis", "value": bdesc if action == "edit" else ""}]),
+s = {"title": title, "head": [_(u"SZCZEBEL"), _(u"TRZYMA"), _(u"KOHERENTNE (zamrażanie)")],
+     "fields": ([] if action in ("edit", "relation") else [{"key": "name", "label": _(u"Nazwa"), "value": new}]),
+     "after": ([] if action == "relation" else [{"key": "desc", "label": _(u"Opis"), "value": bdesc if action == "edit" else ""}]),
      # X19: w relacji szczeble sa z jej CONFIGU, nie z "bazowego" szablonu.
-     "note": [(u"Liczby i sposób są z configu tej relacji; godziny zostają, jak są." if action == "relation"
-               else u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego."),
-              u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny."],
+     "note": [(_(u"Liczby i sposób są z configu tej relacji; godziny zostają, jak są.") if action == "relation"
+               else _(u"Harmonogram i sposób (płaski / wiek / GFS) są z bazowego.")),
+              _(u"Szczebel wyłączysz tylko, gdy jego migawki sprząta inny.")],
      "rows": rows, "taken": [x.strip() for x in open(names, encoding="utf-8") if x.strip()],
      "name_key": ("" if action in ("edit", "relation") else "name"), "auto_desc": ("" if action in ("edit", "relation") else "desc"),
      "choice": choice}
@@ -242,11 +245,14 @@ while :; do
     clear 2>/dev/null
     # shellcheck disable=SC2086
     if ! $GRID_CMD --spec "$SPEC" --out "$OUTJ"; then
-        clear 2>/dev/null; wt_end "Szablon: przerwane, nic nie zmieniono"; exit 1
+        clear 2>/dev/null; wt_end "$(T 'Szablon: przerwane, nic nie zmieniono')"; exit 1
     fi
     # Wynik -> argumenty save-profile i linie planu (python, bo to JSON; wartości to dane).
     "$PY" - "$SPEC" "$OUTJ" "$ACTION" "$TMPD" <<'PYEOF'
 import json, sys
+import os as _os
+_C = json.load(open(_os.environ["ZFS_TUI_CAT"], encoding="utf-8")) if _os.environ.get("ZFS_TUI_CAT") else {}
+def _(s): return _C.get(s, s)
 spec, out, action, tmpd = sys.argv[1:5]
 s = json.load(open(spec, encoding="utf-8")); o = json.load(open(out, encoding="utf-8"))
 by = {r["key"]: r for r in o["rows"]}
@@ -255,7 +261,7 @@ meth = o["fields"].get("method") or s["choice"]["base"]
 MNAME = {o_["key"]: o_["label"] for o_ in s["choice"]["options"]}
 if meth != s["choice"]["base"]:
     args.append("--method=%s" % meth)
-    plan.append(u"  sposób: %s -> %s (liczby zostają)" % (MNAME[s["choice"]["base"]], MNAME[meth]))
+    plan.append(_(u"  sposób: %s -> %s (liczby zostają)") % (MNAME[s["choice"]["base"]], MNAME[meth]))
 def unit(r):
     return (r.get("units") or {}).get(meth, "")
 def field(r, v):
@@ -274,11 +280,11 @@ for r in s["rows"]:
         q = r.get("q") is not None and bool(g.get("q"))
         if r.get("q") is not None and q != r["base_q"]:
             args.append("--quiesce=%s" % ("auto,degrade" if q else ""))
-        plan.append(u"  %s: dodany, %s%s" % (lab, (u"%s %s" % (v, unit(r))).strip(),
-                    (u", zamrażany" if q else u", bez zamrażania") if r.get("q") is not None else ""))
+        plan.append(_(u"  %s: dodany, %s%s") % (lab, (u"%s %s" % (v, unit(r))).strip(),
+                    (_(u", zamrażany") if q else _(u", bez zamrażania")) if r.get("q") is not None else ""))
         continue
     if r.get("can_off", True) and not g.get("on", True):
-        args.append("--drop-tier=%s" % r["key"]); plan.append(u"  %s: wyłączony (było %s)" % (lab, r.get("base", "-")))
+        args.append("--drop-tier=%s" % r["key"]); plan.append(_(u"  %s: wyłączony (było %s)") % (lab, r.get("base", "-")))
         continue
     if r.get("mode") in ("keep", "retain"):
         v = g.get("value") or r["base"]
@@ -286,10 +292,10 @@ for r in s["rows"]:
             args += ["--tier=%s" % r["key"], field(r, v)]
             plan.append(u"  %s: %s -> %s %s" % (lab, r["base"], v, unit(r)))
         else:
-            plan.append(u"  %s: %s %s (bez zmian)" % (lab, v, unit(r)))
+            plan.append(_(u"  %s: %s %s (bez zmian)") % (lab, v, unit(r)))
     if r.get("q") is not None and bool(g.get("q")) != r["base_q"]:
         args += ["--tier=%s" % r["key"], "--quiesce=%s" % ("auto,degrade" if g.get("q") else "")]
-        plan.append(u"  zamrażanie %s: %s -> %s" % (lab, "tak" if r["base_q"] else "nie", "tak" if g.get("q") else "nie"))
+        plan.append(_(u"  zamrażanie %s: %s -> %s") % (lab, _("tak") if r["base_q"] else _("nie"), _("tak") if g.get("q") else _("nie")))
 # Wstecz z planu wraca do tabeli z tym, co wybrano (nie od nowa).
 for r in s["rows"]:
     g = by.get(r["key"], {})
@@ -316,7 +322,7 @@ PYEOF
     if [ "$ACTION" = edit ]; then
         [ "$DESC" = "$BDESC" ] && DARGS=()
         if [ "${#TARGS[@]}" -eq 0 ] && [ "${#DARGS[@]}" -eq 0 ]; then
-            wt --title "Zmiana szablonu $NAME" --msgbox "Nic nie zmieniono." 7 "$W"
+            wt --title "$(Tv 'Zmiana szablonu $NAME' '$NAME' "$NAME")" --msgbox "$(T 'Nic nie zmieniono.')" 7 "$W"
             exit 0
         fi
         ARGV=("$ZB" save-profile "--from=$NAME" "--as=$NAME" --force)
@@ -325,18 +331,18 @@ PYEOF
     fi
     ARGV+=(${TARGS[@]+"${TARGS[@]}"} ${DARGS[@]+"${DARGS[@]}"})
     {
-        echo "PLAN -- nic jeszcze nie zostało zapisane:"
+        T 'PLAN -- nic jeszcze nie zostało zapisane:'; echo
         echo
-        if [ "$ACTION" = edit ]; then echo "Zmiana szablonu: $NAME"; else echo "Nowy szablon: $NEW (na podstawie $NAME)"; fi
+        if [ "$ACTION" = edit ]; then Tv 'Zmiana szablonu: $NAME' '$NAME' "$NAME"; echo; else Tv 'Nowy szablon: $NEW (na podstawie $NAME)' '$NEW' "$NEW" '$NAME' "$NAME"; echo; fi
         cat "$TMPD/plan.lines"
-        echo "Opis: ${DESC:-(brak)}"
-        if [ "$ACTION" = edit ]; then echo "Zbudowano z niego relacji: $USED -- one zostają, jak są."; fi
+        T 'Opis: %s' "${DESC:-$(T '(brak)')}"; echo
+        if [ "$ACTION" = edit ]; then Tv 'Zbudowano z niego relacji: $USED -- one zostają, jak są.' '$USED' "$USED"; echo; fi
         echo
-        echo "Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla 'Zmień relację -> Szablon')."
+        T 'Zbudowane relacje się nie zmieniają; szablon jest dla nowych relacji (i dla '\''Zmień relację -> Szablon'\'').'; echo
         echo
-        printf 'Komenda:  '; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; echo
+        printf '%s  ' "$(T 'Komenda:')"; for a in "${ARGV[@]}"; do printf '%s ' "$(shq "$a")"; done; echo
     } >"$TMPD/plan.txt"
-    if yesno_text "$TMPD/plan.txt" "$TITLE -- plan" "WYKONAJ" "Wstecz" --defaultno; then
-        run_cmd "szablon '$NEW' zapisany" "${ARGV[@]}"
+    if yesno_text "$TMPD/plan.txt" "$TITLE -- $(T plan)" "$(T WYKONAJ)" "$(T Wstecz)" --defaultno; then
+        run_cmd "$(Tv 'szablon '\''$NEW'\'' zapisany' '$NEW' "$NEW")" "${ARGV[@]}"
     fi
 done

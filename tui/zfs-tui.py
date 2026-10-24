@@ -839,7 +839,7 @@ def run_verb(repo, args):
         except OSError:
             pass
         p.communicate()
-        return None, u"%s nie odpowiedział w %d s -- przerwany" % (args[0], limit)
+        return None, _(u"%s nie odpowiedział w %d s -- przerwany") % (args[0], limit)
     try:
         return json.loads(out.decode("utf-8", "replace")), None
     except ValueError:
@@ -1218,7 +1218,7 @@ def verbs_for(rel):
         if rel.get("paused_local"):
             out.insert(0, "zfs-backup.sh resume-client %s" % n)
         else:
-            out.insert(0, "zfs-backup.sh pause-client %s [--reason=TEKST]" % n)
+            out.insert(0, _(u"zfs-backup.sh pause-client %s [--reason=TEKST]") % n)
         if rel.get("peer_host"):
             out.append("zfs-backup.sh set-bandwidth --peer=%s --bandwidth=RATE" % rel["peer_host"])
         if rel.get("endpoint_diverged"):
@@ -1845,7 +1845,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
     if not cells:
         body += list(empty_lines)
     if len(lines) > first + list_h and list_h > 1:
-        body[-1] = fit(u"... jeszcze %d" % (len(lines) - first - list_h + 1), inner)
+        body[-1] = fit(_(u"... jeszcze %d") % (len(lines) - first - list_h + 1), inner)
     while len(body) < list_h + 2:
         body.append("")
     body = body[:list_h + 2]
@@ -1880,7 +1880,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
                     pcur = len(cbody)
                 cbody.append(clines[i])
             if len(clines) > cfirst + room and room > 1:
-                cbody[-1] = fit(u"... jeszcze %d" % (len(clines) - cfirst - room + 1), binner)
+                cbody[-1] = fit(_(u"... jeszcze %d") % (len(clines) - cfirst - room + 1), binner)
         else:
             cbody = wrap(child.get("empty") or _(u"brak"), binner)
         cbody = cbody[:ch_h]
@@ -2460,7 +2460,7 @@ def guard_states(settings_file=None, confs=None):
 def guard_label(states):
     pl = {"on": _(u"wł."), "off": _(u"wył.")}
     cap, gro = states
-    return u"ochrona: bezpiecznik %s · przyrost %s" % (pl.get(cap, u"?"), pl.get(gro, u"?"))
+    return _(u"ochrona: bezpiecznik %s · przyrost %s") % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
 
 def top_bar(data, width, now, ascii_only, err_count):
@@ -2473,7 +2473,7 @@ def top_bar(data, width, now, ascii_only, err_count):
     left = " zfs-snapshot-all"
     mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
                                   _(u"   ! bez odpowiedzi: %d") % err_count if err_count else "")
-    right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
+    right = _(u"odczyt %s ") % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
     # Stan strażników hosta przed czasem odczytu -- odpada pierwszy, gdy ciasno.
     guards = guard_label(getattr(data, "guards", None) or guard_states()) + u"   "
     if width - len(left) - len(mid) - len(right) - len(guards) >= 2:
@@ -2878,9 +2878,9 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
                                           (_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
         (_("Historia"), "  ".join(x for x in [
-            "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
+            _(u"utworzona %s") % rel["created_at"] if rel.get("created_at") else "",
             _(u"pełna kopia %s") % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
-            "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
+            _(u"aktywowana %s") % rel["activated_at"] if rel.get("activated_at") else "",
             _(u"usunięta %s") % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
@@ -3012,7 +3012,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         for key in order:
             names = pol[key]
             what = compact_paths(names) if len(names) > 1 else names[0]
-            label = _(key[0]) + (u" (%d szt.)" % len(names) if len(names) > 1 else "")
+            label = _(key[0]) + (_(u" (%d szt.)") % len(names) if len(names) > 1 else "")
             out.extend(detail_kv(ch, [(label, u"%s   %s" % (key[1], what))], w))
     out.append("")
     out.append(_(u"czy działa"))
@@ -3047,7 +3047,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     else:
         out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), _(u"brak zapisu w historii"))], w))
     out.append("")
-    out.append(u"komendy")
+    out.append(_(u"komendy"))
     for v in verbs_for(rel):
         out.append("  " + v)
     return out
@@ -3836,7 +3836,7 @@ def template_detail_pairs(p):
     pairs = []
     if p.get("source") == "shadow":
         pairs.append((_(u"Uwaga"), _(u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku")))
-    pairs += [(_(u"Opis"), p.get("description") or "-"),
+    pairs += [(_(u"Opis"), _(p.get("description") or "-")),
               (_(u"Jak liczy"), u"%s, %s" % (w["mech"], w["shape"]))]
     if p.get("error"):
         pairs.append((_(u"Błąd"), p["error"]))
@@ -4917,7 +4917,7 @@ class UI(object):
         out = []
         if obj.get("kind") == "datasets":
             nw = max(20, width - 4 - 2 - 11 - 11 - 11)
-            out.append(fit("  %-*s %-10s %10s %10s" % (nw, _("dataset"), "typ", u"zajęte", "wolne"), width - 4))
+            out.append(fit("  %-*s %-10s %10s %10s" % (nw, _("dataset"), _(u"typ"), _(u"zajęte"), _(u"wolne")), width - 4))
             for i, d in enumerate(obj["items"]):
                 mark = ">" if i == obj["cur"] else " "
                 out.append(fit("%s %s %-10s %10s %10s" % (mark, fit_left(d.get("name", "?"), nw, self.ch), d.get("type", ""),
@@ -4929,7 +4929,7 @@ class UI(object):
             w = profile_words(pr)
             out.append(fit(u"%s %-16s %s · %s · %s" % (mark, pr.get("name", "?"), w["cadence"], w["retention"], w["mech"]), width - 4))
             if i == obj["cur"]:
-                out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], pr.get("description", "") or ""), width - 4))
+                out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], _(pr.get("description", "") or "")), width - 4))
         if not obj["items"]:
             out.append(_(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu"))
         elif obj.get("allow_new"):
