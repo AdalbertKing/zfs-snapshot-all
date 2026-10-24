@@ -1845,7 +1845,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
     if not cells:
         body += list(empty_lines)
     if len(lines) > first + list_h and list_h > 1:
-        body[-1] = fit(u"... jeszcze %d" % (len(lines) - first - list_h + 1), inner)
+        body[-1] = fit(_(u"... jeszcze %d") % (len(lines) - first - list_h + 1), inner)
     while len(body) < list_h + 2:
         body.append("")
     body = body[:list_h + 2]
@@ -1880,7 +1880,7 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
                     pcur = len(cbody)
                 cbody.append(clines[i])
             if len(clines) > cfirst + room and room > 1:
-                cbody[-1] = fit(u"... jeszcze %d" % (len(clines) - cfirst - room + 1), binner)
+                cbody[-1] = fit(_(u"... jeszcze %d") % (len(clines) - cfirst - room + 1), binner)
         else:
             cbody = wrap(child.get("empty") or _(u"brak"), binner)
         cbody = cbody[:ch_h]
@@ -2473,7 +2473,7 @@ def top_bar(data, width, now, ascii_only, err_count):
     left = " zfs-snapshot-all"
     mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
                                   _(u"   ! bez odpowiedzi: %d") % err_count if err_count else "")
-    right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
+    right = _(u"odczyt %s ") % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
     # Stan strażników hosta przed czasem odczytu -- odpada pierwszy, gdy ciasno.
     guards = guard_label(getattr(data, "guards", None) or guard_states()) + u"   "
     if width - len(left) - len(mid) - len(right) - len(guards) >= 2:
@@ -3012,7 +3012,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         for key in order:
             names = pol[key]
             what = compact_paths(names) if len(names) > 1 else names[0]
-            label = _(key[0]) + (u" (%d szt.)" % len(names) if len(names) > 1 else "")
+            label = _(key[0]) + (_(u" (%d szt.)") % len(names) if len(names) > 1 else "")
             out.extend(detail_kv(ch, [(label, u"%s   %s" % (key[1], what))], w))
     out.append("")
     out.append(_(u"czy działa"))

@@ -64,6 +64,7 @@ load_lists() {
 import sys, json, re, importlib.util
 spec = importlib.util.spec_from_file_location("zfs_tui", sys.argv[3])
 tui = importlib.util.module_from_spec(spec); spec.loader.exec_module(tui)
+tui.load_lang(tui.ui_lang())     # słowa w języku okna (ZFS_TUI_LANG z wt-lib.sh)
 tmpd, hname = sys.argv[4], sys.argv[5]
 try:
     st = json.load(open(sys.argv[1], encoding="utf-8"))

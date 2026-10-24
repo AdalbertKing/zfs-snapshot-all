@@ -213,7 +213,7 @@
 " [drabina] = jedna rodzina migawek liczona drabiną GFS (sprawdzane przy Utwórz).": " [ladder] = one snapshot family counted by a GFS ladder (checked at Create).",
 "zatwierdzisz SAM -- instalacja zatrzyma się i poda komendę": "you approve it YOURSELF -- the install will stop and give the command",
 "Migawki zdalne: szablon z drabiną GFS na szczeblu zostanie odrzucony przy aktywacji -- wybierz szablon liczony, np. d7h24.\\n\\n": "Remote snapshots: a template with a GFS ladder per tier is refused at activation -- choose a counted template, e.g. d7h24.\\n\\n",
-"Źródło sprząta te same migawki co cel, tylko trzyma ich inną liczbę.": "The source deletes the same snapshots as the target, but it keeps a different number of them.",
+"Źródło sprząta te same migawki co cel, tylko trzyma ich inną liczbę.": "The source prunes the same snapshots as the target, keeping another count.",
 "Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "There are already snapshots of our family on $HOST:\\n$facts\\n\\nWho’s taking them today? The most recent one (from an hour or two ago) usually means someone is.\\nChain: this relation RECEIVES them and neither creates nor deletes anything there itself.\\nLeftovers: this relation creates its OWN; old ones will go into its retention and disappear over time.",
 "Tworzy je inny kolektor, lub inna relacja albo stary cron -- łańcuch, przyjmuję": "They're made by another collector, another relation or an old cron job -- chain, take them",
 "ŁAŃCUCH: migawki o naszych prefiksach na źródle robi inny kolektor lub inna relacja, albo przenosi je inny mechanizm np. cluster synchro -- lustro będzie PASYWNE:": "CHAIN: Snapshots of our prefixes on the source are taken by another collector or another relationship, or are transferred by another mechanism, such as a sync cluster—the mirror will be PASSIVE:",
@@ -347,5 +347,8 @@
 "co ile strażnik sprawdza wiek kopii": "how often the monitor checks the age of copies",
 "szablon proponowany nowej relacji": "template offered for a new relation",
 "minuta godzinnej aktualizacji (git pull)": "minute of the hourly update (git pull)",
-"%s -- trwa %d s": "%s -- running %d s"
+"%s -- trwa %d s": "%s -- running %d s",
+"odczyt %s ": "read %s ",
+"... jeszcze %d": "... %d more",
+" (%d szt.)": " (%d datasets)"
 }
