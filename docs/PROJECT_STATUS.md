@@ -21,6 +21,18 @@
      F1). Skrot tresci jest dowodliwy przed commitem i niezmieniony przez
      commit, wiec jeden przebieg dowodzi wlasnosci po obu stronach granicy. -->
 
+- **Narzędzia wydania 1.0 (`feat/release-tooling`, projekt `docs/project/DESIGN-REPO-WYDAN-2026-10-24.md`,
+  repo wydań `AdalbertKing/zfsbackup`).** `release/MANIFEST` wymienia pliki pakietu (skrypty w korzeniu,
+  `lib-*.sh`, `hostscripts/`, `profiles/`, `tui/` bez narzędzi budowy katalogu, `docs/pl`, `docs/en`,
+  LICENSE). `release/publish.sh <rewizja> <klon repo wydań> [--push]` eksportuje te pliki z tej
+  rewizji (`git archive`, nie working tree), czyści je mapą `release/scrub.sed` (adresy labu i firm
+  na adresy dokumentacyjne RFC 5737, nazwa firmy na „site-a”; wzorce zakresów prywatnych w kodzie
+  zostają), wkłada `release/README.md` jako README, zapisuje `RELEASE-OF` (pełny SHA dev) i commituje
+  tylko przy zmianach; `push` zwykły, nigdy `--force`. `zfs-backup.sh --version` i `deploy.sh
+  --version` pokazują rewizję dev z `RELEASE-OF`. Suita `release` (10 sprawdzeń, w tym kontrola, że
+  czyszczenie nie rusza `192.168.*` w kodzie). Próbna publikacja do lokalnego repo: 85 plików.
+  Przepięcie hostów na repo wydań (`switch-origin`) -- osobno, po 1.0.
+
 - **Migawki naszej rodziny już na źródle: admin mówi, kto je robi (`feat/own-snapshots-declared`, decyzja
   właściciela 2026-10-24, wariant A+D).** Gdy źródło ma już migawki `automated_*`, seed (a przy lustrze także
   linia crona) robi relację pasywną: przyjmuje cudze, nic nie tworzy i nie sprząta źródła. Sonda nie odróżnia
