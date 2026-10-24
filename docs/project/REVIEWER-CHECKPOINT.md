@@ -2,7 +2,52 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (REV-129 reconciliation)
+## Latest final-audit batch — 2026-10-24 (REV-084 / PR #551 reconciliation)
+
+**PR #551 restored the reachable fail-closed diagnostic; REV-20260809-084
+remains CLOSED.** The exact PR range is
+`b9b1e5c58f2f6e854f10e18abe6b99399f676b18..75709842186c3fb73319587bbdfcb14d487e7a9f`,
+the corrective commit is
+`bb2ec7dc02e954e3122117f8a3738a2a3ed7dd72`, and the merge is
+`8f0746a427e89e752afc8ba7360afb15b5e76687`.
+
+The old backlog warning was accurate. REV-084's original implementation made
+`coverage_conflicts()` propagate unreadable/unparseable records, but the later
+`die_arm_fatal` change meant that `record_load` could terminate the parent from
+inside the per-record subshell before that status was translated into the
+named refusal. PR #551 added `die_confine_to_subshell` at that exact boundary.
+
+Independent evidence on current `main`
+`6fe95b0be79bc4d532ead887ac8d97e73fa3a31d`:
+
+- direct negative control on PR #551's base
+  `b9b1e5c58f2f6e854f10e18abe6b99399f676b18`: a record with a disallowed field
+  returned rc 1 with empty output; the higher-level refusal was not reached;
+- the same probe on current `main`: rc 1 with the fail-closed
+  `could not check ... refusing rather than guessing` diagnostic and the exact
+  bad record path;
+- the current restore-grant suite's two relevant assertions pass: the grant is
+  not written when a relationship record cannot be read, and the reason is
+  named. The full suite in this root-only reviewer container was 207/210; its
+  three failures are the known non-root precondition/derived ordering checks,
+  not the reviewed refusal path;
+- `./test/impact.sh
+  b9b1e5c58f2f6e854f10e18abe6b99399f676b18..75709842186c3fb73319587bbdfcb14d487e7a9f`
+  selects the expected deploy/record/restore-grant/zfsbackup coverage;
+  `./test/impact.sh --verify` passes;
+- exact-head CI run 38759223428 passed:
+  https://github.com/AdalbertKing/zfs-snapshot-all/actions/runs/38759223428.
+
+No new REV was opened. The original REV-084 acceptance property is currently
+implemented and now demonstrably reachable; PR #551 is later corrective code,
+not grounds to rewrite the historical closure.
+
+**Next reviewer scope:** reconcile PR #547 / the old F23 lab finding (multi-
+dataset scope rejected by the pair gate, disabling the collector-side replace
+guard) against the exact shipped fix, current gate parser, destructive-path
+negative control and published review/closure history.
+
+## Previous final-audit batch — 2026-10-24 (REV-129 reconciliation)
 
 **PR #557 / REV-20260831-129 — historical evidence gap reconciled; REV remains
 CLOSED.** The reviewed integrated range is
