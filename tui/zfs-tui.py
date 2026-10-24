@@ -3836,7 +3836,7 @@ def template_detail_pairs(p):
     pairs = []
     if p.get("source") == "shadow":
         pairs.append((_(u"Uwaga"), _(u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku")))
-    pairs += [(_(u"Opis"), p.get("description") or "-"),
+    pairs += [(_(u"Opis"), _(p.get("description") or "-")),
               (_(u"Jak liczy"), u"%s, %s" % (w["mech"], w["shape"]))]
     if p.get("error"):
         pairs.append((_(u"Błąd"), p["error"]))
@@ -4929,7 +4929,7 @@ class UI(object):
             w = profile_words(pr)
             out.append(fit(u"%s %-16s %s · %s · %s" % (mark, pr.get("name", "?"), w["cadence"], w["retention"], w["mech"]), width - 4))
             if i == obj["cur"]:
-                out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], pr.get("description", "") or ""), width - 4))
+                out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], _(pr.get("description", "") or "")), width - 4))
         if not obj["items"]:
             out.append(_(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu"))
         elif obj.get("allow_new"):

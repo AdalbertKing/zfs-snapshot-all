@@ -351,5 +351,21 @@
 "odczyt %s ": "read %s ",
 "... jeszcze %d": "... %d more",
 " (%d szt.)": " (%d datasets)",
-"Ustawienia hosta -- %s": "Host settings -- %s"
+"Ustawienia hosta -- %s": "Host settings -- %s",
+"30 dobowych, bez godzinowych, koherentne": "30 daily, no hourly, consistent",
+"30 dobowych + 24 godzinowe WIEKU, dwie rodziny": "30 daily + 24 hourly by AGE, two families",
+"30 dobowych + 24 godzinowe, dwie rodziny, kazda na wlasnej drabinie": "30 daily + 24 hourly, two families, each on its own ladder",
+"30 dobowych + 24 godzinowe, dwie rodziny, dobowe koherentne": "30 daily + 24 hourly, two families, daily consistent",
+"7 dobowych + 24 godzinowe WIEKU, dwie rodziny": "7 daily + 24 hourly by AGE, two families",
+"7 dobowych + 24 godzinowe, dwie rodziny, kazda na wlasnej drabinie": "7 daily + 24 hourly, two families, each on its own ladder",
+"7 dobowych + 24 godzinowe, dwie rodziny, dobowe koherentne": "7 daily + 24 hourly, two families, daily consistent",
+"fabryczny: 3 miesiace + 4 tygodnie + 7 dni + 24 godziny, kazdy szczebel swoja rodzina, liczenie plaskie": "factory: 3 months + 4 weeks + 7 days + 24 hours, each tier its own family, flat counting",
+"pelny: 5 lat + 12 miesiecy + 4 tygodnie + 7 dni + 24 godziny, kazdy szczebel swoja rodzina, liczenie plaskie": "full: 5 years + 12 months + 4 weeks + 7 days + 24 hours, each tier its own family, flat counting",
+"12 miesiecy + 4 tygodnie + 7 dni + 24 godziny WIEKU, cztery rodziny": "12 months + 4 weeks + 7 days + 24 hours by AGE, four families",
+"12 miesiecy + 4 tygodnie + 7 dni + 24 godziny, cztery rodziny, kazda na wlasnej drabinie": "12 months + 4 weeks + 7 days + 24 hours, four families, each on its own ladder",
+"31 miesiecy + 4 tygodnie + 7 dni + 24 godziny, cztery rodziny, licznik sztuk (przestoj nie kasuje)": "31 months + 4 weeks + 7 days + 24 hours, four families, count of snapshots (downtime deletes nothing)",
+"pasywne przejmowanie cudzej rodziny, bezprefiksowo, na kolektorze PLASKIM (jeden szczebel, licznik sztuk)": "passive takeover of another family, without prefix, FLAT on the collector (one tier, count of snapshots)",
+"odwzorowanie produkcji metropolis: cztery rodziny, kazda z wlasna retencja": "copy of the metropolis production: four families, each with its own retention",
+"5 lat + 12 miesiecy + 31 dni + 24 godziny WIEKU, cztery rodziny, wszystkie poza godzinowa koherentne": "5 years + 12 months + 31 days + 24 hours by AGE, four families, all but hourly consistent",
+"5 rocznych + 12 miesiecznych + 31 dobowych + 24 godzinowe, cztery rodziny, wszystkie poza godzinowa koherentne": "5 yearly + 12 monthly + 31 daily + 24 hourly, four families, all but hourly consistent"
 }
