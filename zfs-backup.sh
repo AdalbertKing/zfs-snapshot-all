@@ -342,6 +342,11 @@ Usage:
                                     REMOTE sync: reproduce HOST:DATASET at the SAME path on
                                     this host (no --target -- the mapping is the identity).
                                     Same lifecycle and resumability as remote backup above.
+                                    [--own-snapshots] (backup or sync): the source already
+                                    carries automated_* snapshots and NOBODY makes them any
+                                    more (leftovers of an old relation): stamp and prune
+                                    our own. Without it such a source makes the seed (and a
+                                    mirror's cron line) PASSIVE -- correct for a live chain.
   zfs-backup.sh browse NAME --ask | browse --any --ask
                                     "Przegladaj kopie" (lean restore, GUI F11 F7): a copy's
                                     snapshot mounted READ-ONLY in a temporary directory,
@@ -4585,7 +4590,14 @@ emit_client_sections() {   # <workfile> <client name> [is_new_relationship=0]
     # same relationship after export -> delete -> import, and an automatic passive there
     # would refuse the owner's own import. The wizard says it instead and recommends
     # passive-flat (tui/new-relation.sh, sync_from_chain); the admin decides.
-    if [ "$sync_mode" -eq 1 ]; then
+    # OWN_SNAPSHOTS=1 (add-client --own-snapshots, 2026-10-24): the admin answered that
+    # nobody makes the family on the source any more -- leftovers of an old relation.
+    # The probe below cannot tell that from a live chain (measured, pve10<>pve11
+    # 2026-10-24: a re-created mirror over its own predecessor's snapshots came out
+    # passive and stopped taking snapshots), so the declaration skips it.
+    if [ "$sync_mode" -eq 1 ] && [ "${OWN_SNAPSHOTS:-0}" = 1 ]; then
+        log "sync: OWN snapshots declared (--own-snapshots) -- the family already on the source is taken as leftovers; this relationship stamps and prunes its own"
+    elif [ "$sync_mode" -eq 1 ]; then
         local pds pds_rc
         # Ask about THIS profile's family, not the literal automated_ root.
         # Only when the plan is going to render from the profile anyway
@@ -9510,7 +9522,7 @@ cmd_add_client() {
     local requested=""
     # See the note in the one-command form: 'atomic' was unreachable, which made
     # the engines' -r a mode the product could describe but never install.
-    local recursion="" passive=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing="" family_born=""
+    local recursion="" passive=0 own_snaps=0 exclude_family="" raw_send=0 snaponly=0 target_given=0 landing="" family_born=""
     # Same disease, same cure. -X lived only in a hand-edited `flags`, and the
     # anti-deletion guard then refused every future activation of that client:
     # the regenerated job has no -X, so the installed one reads as a job about
@@ -9544,6 +9556,7 @@ cmd_add_client() {
             --requested=*) requested="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
+            --own-snapshots) own_snaps=1 ;;
             --raw)         raw_send=1 ;;
             --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;
@@ -9564,6 +9577,13 @@ cmd_add_client() {
     # relationship elsewhere, and an unset variable expands to it), a --mode
     # (backup/sync are copy kinds), passive adoption, raw sends, a bandwidth cap,
     # exclusions (not carried by the snaponly lines yet).
+    # --own-snapshots (2026-10-24): the admin's answer to "the source already has
+    # snapshots of our family -- who makes them?": nobody, they are leftovers, so this
+    # relationship stamps and prunes its OWN. The opposite of --passive, never both.
+    [ "$passive" -eq 1 ] && [ "$own_snaps" -eq 1 ] \
+        && die "add-client: --passive and --own-snapshots are opposite answers (adopt what is there / make our own) -- pick one. Nothing was changed."
+    [ "$snaponly" -eq 1 ] && [ "$own_snaps" -eq 1 ] \
+        && die "add-client --snaponly: --own-snapshots is a copy relationship's answer; snaponly families are always this collector's own. Nothing was changed."
     if [ "$snaponly" -eq 1 ]; then
         [ "$target_given" -eq 0 ] || die "add-client --snaponly copies nothing, so it takes no --target (not even an empty one). Nothing was changed."
         [ -z "$mode" ] || die "add-client --snaponly and --mode=$mode are different relationship kinds -- pick one. Nothing was changed."
@@ -10076,6 +10096,10 @@ cmd_add_client() {
         # sniffed from snapshot names -- the sync-chain probe taught us where
         # name-sniffing ends.
         write_client_field PASSIVE           "$passive"
+        # DECLARED own snapshots: the family already on the source is leftovers, so
+        # neither the seed nor the sync emit probe turns this relationship into a
+        # consumer. Written only when given: an old record has no field and means "ask".
+        [ "$own_snaps" -eq 1 ] && write_client_field OWN_SNAPSHOTS 1
         [ -n "${family_born:-}" ] && write_client_field FAMILY_BORN_AT "$family_born"
         # W17: an encrypted source sent encrypted (-w). A CREATE-time decision:
         # the first copy decides whether the target is raw, and the engines refuse
@@ -11060,6 +11084,10 @@ cmd_seed() {
             # fields, same flags, same meaning as the installed line:
             # client_passive_flags is the one place that renders them.
             read -r -a seed_flags <<< "$(client_passive_flags)"
+        elif [ "${OWN_SNAPSHOTS:-0}" = 1 ]; then
+            # DECLARED own (--own-snapshots): the family on the source is leftovers,
+            # so the seed stamps its own base like a fresh source -- no probe.
+            log "seed: '$ds' -- OWN snapshots declared (--own-snapshots): stamping this relationship's own base, the existing family is taken as leftovers"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
@@ -11233,6 +11261,10 @@ cmd_final_catchup() {
             # fields, same flags, same meaning as the installed line:
             # client_passive_flags is the one place that renders them.
             read -r -a seed_flags <<< "$(client_passive_flags)"
+        elif [ "${OWN_SNAPSHOTS:-0}" = 1 ]; then
+            # DECLARED own (--own-snapshots): the family on the source is leftovers,
+            # so the seed stamps its own base like a fresh source -- no probe.
+            log "seed: '$ds' -- OWN snapshots declared (--own-snapshots): stamping this relationship's own base, the existing family is taken as leftovers"
         else
         local fam_rc; source_family_exists "$ds" "$seed_root"; fam_rc=$?
         [ "$fam_rc" -eq "$SOURCE_PROBE_UNKNOWN" ]             && die_probe_unknown "$ds" "whether this seed adopts that family or creates one"
@@ -14391,27 +14423,35 @@ cmd_list_datasets() {
     # in a chain, and the pickup that takes every family (passive-flat) is what
     # it should be offered first. Opt-in, so the plain listing stays exactly
     # what it was and costs no second zfs call.
-    local -A own_n=() own_f=()
+    # family_newest (2026-10-24): creation epoch of the newest automated_* snapshot.
+    # The wizard asks "who makes these -- another collector, or nobody (leftovers)?"
+    # and shows its age as the one fact the admin decides on. A listing without the
+    # creation column (old peer output) counts as before and reports 0.
+    local -A own_n=() own_f=() own_e=()
     if [ "$own" -eq 1 ]; then
-        local snaps _s _d
+        local snaps _s _d _c
         rc=0
         if [ -z "$host" ]; then
-            snaps=$(zfs list -H -o name -t snapshot 2>"$errf") || rc=$?
+            snaps=$(zfs list -H -p -o name,creation -t snapshot 2>"$errf") || rc=$?
         else
-            snaps=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -o name -t snapshot" 2>"$errf") || rc=$?
+            snaps=$(rux_root_ssh "$host" "${port:-22}" "zfs list -H -p -o name,creation -t snapshot" 2>"$errf") || rc=$?
         fi
         if [ "$rc" -ne 0 ]; then
             tail -3 "$errf" >&2; rm -f "$errf"
             die "list-datasets: ${host:+$host: }zfs list -t snapshot failed (rc=$rc)"
         fi
-        while IFS= read -r _s; do
+        while IFS=$'\t' read -r _s _c; do
             case "$_s" in *@*) ;; *) continue ;; esac
             _d="${_s%%@*}"
             case "${_s#*@}" in vzdump*|__replicate_*|__migration__*) continue ;; esac
             own_n[$_d]=$(( ${own_n[$_d]:-0} + 1 ))
             # Our FAMILY alone (the wizard's chain check for a backup, owner 2026-10-20):
             # a manual snapshot is not a chain, an automated_* one made elsewhere is.
-            [[ "${_s#*@}" =~ ^([A-Za-z0-9.-]+_)?automated_ ]] && own_f[$_d]=$(( ${own_f[$_d]:-0} + 1 ))
+            if [[ "${_s#*@}" =~ ^([A-Za-z0-9.-]+_)?automated_ ]]; then
+                own_f[$_d]=$(( ${own_f[$_d]:-0} + 1 ))
+                case "$_c" in ''|*[!0-9]*) _c=0 ;; esac
+                [ "$_c" -gt "${own_e[$_d]:-0}" ] && own_e[$_d]=$_c
+            fi
         done <<SN
 $snaps
 SN
@@ -14425,7 +14465,7 @@ SN
         [ "$first" -eq 1 ] || printf ','
         first=0
         printf '{"name":"%s","type":"%s","used":%s,"avail":%s' "$(json_escape "$_n")" "$(json_escape "$_t")" "${_u:-0}" "${_av:-0}"
-        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}"
+        [ "$own" -eq 1 ] && printf ',"own_snapshots":%s,"family_snapshots":%s,"family_newest":%s' "${own_n[$_n]:-0}" "${own_f[$_n]:-0}" "${own_e[$_n]:-0}"
         # W17: an encrypted source is offered the raw send (-w) by the wizard.
         printf ',"encryption":"%s"' "$(json_escape "${_enc:--}")"
         printf '}'
@@ -17560,6 +17600,7 @@ EXPORT_RELATION_LIST_FIELD="REQUESTED_DATASETS"
 # Declarations that are true and have no create flag. PASSIVE is here for a
 # different reason than the endpoints: it HAS a flag (--passive) but it is a
 # bare switch, so it is emitted by the composer below rather than as key=value.
+# OWN_SNAPSHOTS (--own-snapshots) is the same kind of switch and rides the same way.
 EXPORT_RELATION_UNREPLAYABLE="ENDPOINT_LAN_HOST ENDPOINT_LAN_PORT ENDPOINT_VPN_HOST ENDPOINT_VPN_PORT ENDPOINT_KNOWN ACTIVE_ENDPOINT"
 # Derived, historical or host-local. Never exported: carrying them would carry
 # claims that stop being true the moment the file moves.
@@ -18176,7 +18217,7 @@ SCOPE
             --mode=*) _has_mode=1 ;;
             # Only flags the one-command form takes; anything else (e.g. --bandwidth)
             # keeps the ordinary replay, which says what to do by hand.
-            --host=*|--target=*|--landing=*|--recursive=*|--passive|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*|--family-born=*) ;;
+            --host=*|--target=*|--landing=*|--recursive=*|--passive|--own-snapshots|--raw|--exclude-family=*|--exclude-child=*|--profile=*|--source-profile=*|--local-user=*|--family-born=*) ;;
             *) _rux_ok=0 ;;
         esac
     done
@@ -18365,6 +18406,13 @@ cmd_export_relation() {
         first=0
         decl_json="$decl_json\"PASSIVE\":\"$(json_escape "$PASSIVE")\""
         argv+=(--passive)
+    fi
+    # OWN_SNAPSHOTS: the same bare switch, the same "only 1 is true" rule.
+    if [ "${OWN_SNAPSHOTS:-0}" = "1" ]; then
+        [ "$first" -eq 1 ] || decl_json="$decl_json,"
+        first=0
+        decl_json="$decl_json\"OWN_SNAPSHOTS\":\"1\""
+        argv+=(--own-snapshots)
     fi
     local x
     while IFS= read -r x; do
@@ -21488,6 +21536,7 @@ rux_remote_install() {
         [ -n "${family_born:-}" ] && add_args+=(--family-born="$family_born")
         [ -n "$recursion" ] && add_args+=(--recursive="$recursion")
         [ "$passive" -eq 1 ] && add_args+=(--passive)
+        [ "${rux_own:-0}" -eq 1 ] && add_args+=(--own-snapshots)
         [ "${rux_raw:-0}" -eq 1 ] && add_args+=(--raw)
         [ -n "$exclude_family" ] && add_args+=(--exclude-family="$exclude_family")
         for _x in ${excludes[@]+"${excludes[@]}"}; do add_args+=(--exclude-child="$_x"); done
@@ -21594,7 +21643,7 @@ rux_entry() {
     # config grammar but no command could produce it -- reaching it meant hand
     # editing a generated config, and the first re-activation wrote the edit
     # back out. A mode the product cannot install is a mode nobody can operate.
-    local recursion="" passive=0 exclude_family="" rux_raw=0
+    local recursion="" passive=0 rux_own=0 exclude_family="" rux_raw=0
     # THE SOURCE PRESET REACHES THIS ENTRY POINT TOO, and it is a pure
     # passthrough: cmd_add_client already parses, validates and records it
     # (--profile's own treatment here is the same shape). Its absence was not a
@@ -21617,6 +21666,7 @@ rux_entry() {
             --mode=*)    mode="${a#*=}" ;;
             --recursive=*) recursion="${a#*=}" ;;
             --passive)     passive=1 ;;
+            --own-snapshots) rux_own=1 ;;   # passed to add-client: the family on the source is leftovers
             --raw)         rux_raw=1 ;;
             --exclude-family=*) exclude_family="${exclude_family:+$exclude_family,}${a#*=}" ;;
             --exclude-child=*) excludes+=("${a#*=}") ;;

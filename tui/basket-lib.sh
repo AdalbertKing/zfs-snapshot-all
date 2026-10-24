@@ -27,7 +27,9 @@ names = [d.get("name", "") for d in ds]
 # Migawki spoza rodzin Proxmoksa, na dataset (U8: krok 6 przy synchro).
 with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as of:
     for d in ds:
-        of.write("%s\t%d\t%d\n" % (d.get("name", ""), int(d.get("own_snapshots") or 0), int(d.get("family_snapshots") or 0)))
+        # 4. kolumna: epoch najnowszej migawki rodziny (pytanie "kto je robi?", 2026-10-24)
+        of.write("%s\t%d\t%d\t%d\n" % (d.get("name", ""), int(d.get("own_snapshots") or 0), int(d.get("family_snapshots") or 0),
+                                     int(d.get("family_newest") or 0)))
 def human(n):
     n = float(n or 0)
     for u in ("B", "K", "M", "G", "T", "P"):

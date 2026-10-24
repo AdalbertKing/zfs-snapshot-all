@@ -201,5 +201,20 @@
 "TUTAJ (cel)": "HERE (target)",
 "U ŹRÓDŁA": "AT SOURCE",
 "Źródło sprząta te same migawki co cel, tylko trzyma ich mniej albo więcej.": "Source prunes the same snapshots as the target, keeping more or fewer.",
-"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.": "Unchanged = source as target. Box = the tier exists at the source."
+"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.": "Unchanged = source as target. Box = the tier exists at the source.",
+"  $n: $f migawek automated_*, najnowsza $when ($ago temu)": "  $n: $f automated_* snapshots, newest $when ($ago ago)",
+"  $n: $f migawek automated_*": "  $n: $f automated_* snapshots",
+"Migawki naszej rodziny już są na źródle": "Snapshots of our family are already on the source",
+"Na $HOST są już migawki naszej rodziny:\\n$facts\\n\\nKto je dziś robi? Świeża najnowsza (sprzed godziny-dwóch) zwykle znaczy, że ktoś.\\nŁańcuch: ta relacja je PRZYJMUJE i sama niczego tam nie tworzy ani nie kasuje.\\nResztki: ta relacja robi WŁASNE; stare wejdą do jej retencji i z czasem znikną.": "$HOST already has snapshots of our family:\\n$facts\\n\\nWho makes them today? A fresh newest one (an hour or two old) usually means someone does.\\nChain: this relation TAKES them and creates or deletes nothing there.\\nLeftovers: this relation makes its OWN; the old ones join its retention and age out.",
+"Ktoś je robi (inny kolektor albo stary cron) -- łańcuch, przyjmuję": "Someone makes them (another collector or an old cron) -- chain, take them",
+"Nikt -- to resztki starej relacji, robię własne": "Nobody -- leftovers of an old relation, make our own",
+"WŁASNE MIGAWKI: stare migawki naszej rodziny na źródle to resztki -- ta relacja robi własne": "OWN SNAPSHOTS: the old snapshots of our family on the source are leftovers -- this relation makes its own",
+"  (--own-snapshots); stare wejdą do jej retencji i z czasem znikną.": "  (--own-snapshots); the old ones join its retention and age out.",
+"ŁAŃCUCH: migawki naszej rodziny na źródle robi ktoś inny -- lustro będzie PASYWNE:": "CHAIN: someone else makes our family's snapshots on the source -- the mirror will be PASSIVE:",
+"  niczego tam nie utworzy ani nie skasuje, szablon $PROFILE tego nie zmieni.": "  it creates and deletes nothing there; template $PROFILE does not change that.",
+"  Jeśli nikt ich już nie robi, kopie staną -- wtedy pole Migawki na źródle -> resztki.": "  If nobody makes them any more, copies stop -- then set Snapshots at source -> leftovers.",
+"przyjmowane -- robi je ktoś inny (łańcuch)": "taken -- someone else makes them (chain)",
+"własne -- stare to resztki": "own -- the old ones are leftovers",
+"migawki na źródle": "snapshots at source",
+"Migawki na źródle": "Snapshots at source"
 }
