@@ -13,3 +13,10 @@ connected).
 Do wdrożenia: mechanizm z planu P0 (plik tekstów na język, funkcja tłumacząca w `wt-lib.sh` i Pythonie,
 przełącznik w F10 i `zfs-backup gui --lang=en`); teksty w kodzie zostają polskim kluczem. Wiersze, które są
 fragmentem kodu (wzorce sed/awk, rozwinięcia zmiennych), nie idą do tłumaczenia.
+
+## Stan 2026-10-24 (dograne)
+
+Wszystkie decyzje właściciela ze strony przeglądu naniesione: `owner-ok` 1261, `owner-edit` 92, `owner-reworded` 47,
+`auto` 4. Ujednolicone według reguł właściciela: po angielsku „relation” (nie „relationship”), dysk po polsku
+„podłączony / odłączony / po podłączeniu” (nie „włożony”, „w slocie”), po angielsku „connected / disconnected”.
+

@@ -4,7 +4,7 @@ Polish version: [PRZYKLADY-CONFIGU.md](../pl/PRZYKLADY-CONFIGU.md).
 
 `gen-cron.sh` reads one INI config per host (CONFIG format v4) and generates the
 managed crontab block from it. A preset (`add-client --profile=NAME`) is just a
-way to *generate* such a config for a new relationship; after install the config
+way to *generate* such a config for a new relation; after install the config
 is the execution truth, and hand-writing or hand-editing one is a supported,
 first-class path — the documentation, not the CLI, is the escape hatch for
 bespoke policy.
@@ -123,7 +123,7 @@ operations preserve your edits:
   topology-owned fields (`src`, transport `flags`) in place; it does not
   regenerate policy from the profile. A hand-tuned `keep`, an added tier, a
   custom `prune_schedule` survives an endpoint switch unchanged.
-- **an additive CREATE** of a second, non-overlapping relationship appends its
+- **an additive CREATE** of a second, non-overlapping relation appends its
   own sections and leaves every existing section byte-for-byte, refusing if the
   new scope would overlap one already present.
 - re-deriving policy from a profile happens only where you explicitly ask for
