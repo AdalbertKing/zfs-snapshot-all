@@ -191,5 +191,15 @@
 "WYKONAJ": "EXECUTE",
 " Kursor: %s": " Cursor: %s",
 "Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca": "Enter selects  →/+ expands  ←/- collapses  Esc back",
-"trzyma %s": "keeps %s"
+"trzyma %s": "keeps %s",
+"godzinowe": "hourly",
+"dobowe": "daily",
+"tygodniowe": "weekly",
+"roczne": "yearly",
+"SZCZEBEL": "TIER",
+"TRZYMA": "KEEPS",
+"TUTAJ (cel)": "HERE (target)",
+"U ŹRÓDŁA": "AT SOURCE",
+"Źródło sprząta te same migawki co cel, tylko trzyma ich mniej albo więcej.": "The source prunes the same snapshots as the target, it just keeps fewer or more of them.",
+"Bez zmian = źródło jak cel. Kratka = szczebel u źródła w ogóle.": "Unchanged = source same as target. Checkbox = whether the tier exists at the source at all."
 }

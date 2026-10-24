@@ -256,7 +256,7 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
     done
     [ "${#CARD_ACT_TAGS[@]}" -gt 0 ] && items+=(__sep__ "──────────────────────────────────────────")
     for i in "${!CARD_ACT_TAGS[@]}"; do items+=("${CARD_ACT_TAGS[$i]}" "$(clip_label "${CARD_ACT_LABELS[$i]}" "$w")"); done
-    wt --title "$t" --ok-button "Wybierz" --cancel-button "$c" --notags --default-item "$d" \
+    wt --title "$t" --ok-button "$(T Wybierz)" --cancel-button "$c" --notags --default-item "$d" \
        --menu "$x" "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$((${#items[@]} / 2))" "${items[@]}"
 }
 
