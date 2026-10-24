@@ -148,8 +148,8 @@ def media_state_line(r, st):
     czy kopia na nim jest aktualna -- "w slocie" samo nie mowilo nic o kopii."""
     if r.get("present") in ("available", "here"):
         lc = r.get("last_current") or ""
-        return u"%s -- %s" % (st[0], (u"kopia aktualna z %s" % lc) if lc else u"brak kopii")
-    return u"%s -- %s" % (st[0], st[2])
+        return u"%s -- %s" % (_(st[0]), (_(u"kopia aktualna z %s") % lc) if lc else _(u"brak kopii"))
+    return u"%s -- %s" % (_(st[0]), _(st[2]))
 
 
 # Slowa, ktore curses koloruje, gdziekolwiek stoja w linii. Sa wybrane tak,
@@ -160,6 +160,20 @@ COLOR_WORDS = [
     (u"BŁĄD", 1), ("w toku", 3), ("PAUZA", 3), ("NIEwdro", 1), ("nieczytelny", 1),
     (u"błąd źródła", 1), (" OK ", 2), (" OK", 2),
 ]
+
+def color_words():
+    """COLOR_WORDS plus ich tłumaczenia (w polskim: dokładnie COLOR_WORDS). Liczone przy
+    rysowaniu, bo katalog języka wchodzi dopiero po imporcie; odstępy z brzegów słowa
+    zostają (" stare" -> " stale")."""
+    out = list(COLOR_WORDS)
+    if LANG_CAT:
+        for w, pair in COLOR_WORDS:
+            core = w.strip()
+            t = _(core)
+            if core and t != core:
+                out.append((w.replace(core, t), pair))
+    return out
+
 
 ARROWS_UTF = {"local": u"→ tutaj", "push": u"→ {peer}", "pull": u"← {peer}",
               "snapshot": "(migawka)", "prune": u"prune"}
@@ -733,7 +747,7 @@ DOW = [u"nd", u"pn", u"wt", u"śr", u"cz", u"pt", u"so"]
 def tier_unit(name, table=TIER_WORDS):
     for suf, w in table:
         if name.endswith(suf):
-            return w
+            return _(w)
     return name
 
 
@@ -745,22 +759,22 @@ def cron_words(spec):
         return spec or "?"
     mi, ho, dom, mon, dow = f
     if mi.startswith("*/") and mi[2:].isdigit() and ho == "*" and dom == "*" and mon == "*" and dow == "*":
-        return u"co %s min" % mi[2:]
+        return _(u"co %s min") % mi[2:]
     if not mi.isdigit():
         return spec
     if ho == "*" and dom == "*" and mon == "*" and dow == "*":
-        return u"co godzinę (:%02d)" % int(mi)
+        return _(u"co godzinę (:%02d)") % int(mi)
     if not ho.isdigit():
         return spec
     hm = "%02d:%02d" % (int(ho), int(mi))
     if dom == "*" and mon == "*" and dow == "*":
-        return u"co dobę %s" % hm
+        return _(u"co dobę %s") % hm
     if dom == "*" and mon == "*" and dow.isdigit():
-        return u"co tydzień %s %s" % (DOW[int(dow) % 7], hm)
+        return _(u"co tydzień %s %s") % (DOW[int(dow) % 7], hm)
     if dom.isdigit() and mon == "*" and dow == "*":
-        return u"co miesiąc %s. dnia %s" % (dom, hm)
+        return _(u"co miesiąc %s. dnia %s") % (dom, hm)
     if dom.isdigit() and mon.isdigit():
-        return u"co rok %s.%s %s" % (dom, mon, hm)
+        return _(u"co rok %s.%s %s") % (dom, mon, hm)
     return spec
 
 
@@ -777,17 +791,17 @@ def profile_words(p):
             r = t["retain"].lstrip("-")
             n = r[1:] if r[:1].isalpha() else r
             ret.append(u"%s %s" % (n, tier_unit(t.get("name", ""))))
-    mech = {"flat": u"N najnowszych", "gfs": u"drabina GFS", "age": u"wg wieku"}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
-    shape = {"one-family": u"jedna rodzina", "family-per-tier": u"rodzina na szczebel"}.get(p.get("shape", ""), p.get("shape") or "?")
+    mech = {"flat": _(u"N najnowszych"), "gfs": _(u"drabina GFS"), "age": _(u"wg wieku")}.get(p.get("mechanism", ""), p.get("mechanism") or "?")
+    shape = {"one-family": _(u"jedna rodzina"), "family-per-tier": _(u"rodzina na szczebel")}.get(p.get("shape", ""), p.get("shape") or "?")
     q = [tier_unit(t.get("name", ""), TIER_ADJ) for t in tiers if t.get("quiesce")]
-    quiesce = (u"zamraża: %s" % ", ".join(q)) if q else u"bez zamrażania"
+    quiesce = (_(u"zamraża: %s") % ", ".join(q)) if q else _(u"bez zamrażania")
     mon = ""
     for t in tiers:
         if t.get("monitor_warn") or t.get("monitor_crit"):
             mon = u"monitor %s / %s" % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")
             break
     return {"cadence": cad, "retention": u"trzyma " + (", ".join(ret) if ret else "?"), "mech": mech,
-            "shape": shape, "quiesce": quiesce, "monitor": mon or u"bez progów"}
+            "shape": shape, "quiesce": quiesce, "monitor": mon or _(u"bez progów")}
 
 
 def run_verb(repo, args):
@@ -805,7 +819,7 @@ def run_verb(repo, args):
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              start_new_session=hasattr(os, "killpg"))
     except OSError as e:
-        return None, u"nie udało się uruchomić %s: %s" % (" ".join(args), e)
+        return None, _(u"nie udało się uruchomić %s: %s") % (" ".join(args), e)
     try:
         out, errb = p.communicate(timeout=limit)
     except subprocess.TimeoutExpired:
@@ -822,7 +836,7 @@ def run_verb(repo, args):
         return json.loads(out.decode("utf-8", "replace")), None
     except ValueError:
         err = errb.decode("utf-8", "replace").strip().splitlines()
-        return None, (err[-1] if err else u"%s nie wydał poprawnego JSON-a" % args[0])
+        return None, (err[-1] if err else _(u"%s nie wydał poprawnego JSON-a") % args[0])
 
 
 def READER_TIMEOUT():
@@ -957,7 +971,7 @@ def load_datasets(repo, files, data, host="", port=""):
     if fx:
         doc, err = load_file(fx)
     elif files.get("offline"):
-        doc, err = None, u"tryb offline: list-datasets nie uruchomiono"
+        doc, err = None, _(u"tryb offline: list-datasets nie uruchomiono")
     else:
         args = ["list-datasets"] + ([host] if host else []) + (["--port=%s" % port] if port else []) + ["--json"]
         doc, err = run_verb(repo, args)
@@ -974,7 +988,7 @@ def load_check(repo, files, data, host, port=""):
     if files.get("check_source"):
         doc, err = load_file(files["check_source"])
     elif files.get("offline"):
-        doc, err = None, u"tryb offline: check-source nie uruchomiono"
+        doc, err = None, _(u"tryb offline: check-source nie uruchomiono")
     else:
         doc, err = run_verb(repo, ["check-source", host] + (["--port=%s" % port] if port else []) + ["--json"])
     data.checks[key] = (doc, err)
@@ -1098,9 +1112,9 @@ def transfer_word(t, now):
     if st == "running":
         upd = int(t.get("updated_epoch") or 0)
         if now - upd > 60:
-            return "w toku", u"bez aktualizacji od %s" % fmt_dur(now - upd)
-        return "w toku", ""
-    return TRANSFER_STATES.get(st, (st or "?", 0))[0], ""
+            return _("w toku"), _(u"bez aktualizacji od %s") % fmt_dur(now - upd)
+        return _("w toku"), ""
+    return _(TRANSFER_STATES.get(st, (st or "?", 0))[0]), ""
 
 
 STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"zakładana", "seeding": u"1. kopia",
@@ -1110,10 +1124,10 @@ STATE_PL = {"active": u"działa", "removed": u"usunięta", "pending_enroll": u"z
 def pl_relacje(n):
     """1 relacja, 2-4 relacje, 5+ relacji (12-14 relacji)."""
     if n == 1:
-        return u"1 relacja"
+        return _(u"1 relacja")
     if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
-        return u"%d relacje" % n
-    return u"%d relacji" % n
+        return _(u"%d relacje") % n
+    return _(u"%d relacji") % n
 
 
 def profile_word(name, rel_name=None):
@@ -1124,17 +1138,17 @@ def profile_word(name, rel_name=None):
     # X19 (wlasciciel 2026-10-14): szczeble zyja w CONFIGU relacji; nazwa szablonu mowi
     # tylko, z czego relacja POWSTALA -- ukryty szablon relacji to "wlasne ustawienia".
     if rel_name and name.startswith("relacja-%s" % rel_name):
-        return u"własne ustawienia relacji"
+        return _(u"własne ustawienia relacji")
     return name
 
 
 def state_word(rel):
     s = rel.get("state", "?")
-    s = STATE_PL.get(s, s)
+    s = _(STATE_PL.get(s, s))
     if rel.get("disabled"):
-        s += u" WYŁĄCZONA"
+        s += _(u" WYŁĄCZONA")
     elif rel.get("paused_local"):
-        s += " PAUZA"
+        s += _(" PAUZA")
     return s
 
 
@@ -1152,19 +1166,19 @@ def next_step(rel):
 # jakie kroki admin musi zrobić, żeby włączyć z powrotem").
 def disable_note(rel):
     peer = rel.get("peer_host") or "?"
-    return [u"WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:" % peer,
-            u"  źródło odmawia kluczowi tego kolektora, także ręcznym komendom.",
-            u"  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach",
-            u"  ZOSTAJĄ.",
-            u"Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do",
-            u"  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t).",
+    return [_(u"WYŁĄCZENIE = pauza tutaj ORAZ zamek na źródle %s:") % peer,
+            _(u"  źródło odmawia kluczowi tego kolektora, także ręcznym komendom."),
+            _(u"  Kopie nie powstają, monitor mówi z pauzy; dane po obu stronach"),
+            _(u"  ZOSTAJĄ."),
+            _(u"Kiedy: kolektor może być przejęty albo źródło ma mu nie ufać do"),
+            _(u"  świadomego włączenia. Na zwykłą przerwę wystarcza Pauza (t)."),
             "",
-            u"Włączenie z powrotem: F8 na tej relacji -> Włącz (enable-client).",
-            u"  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie",
-            u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny bieg",
+            _(u"Włączenie z powrotem: F8 na tej relacji -> Włącz (enable-client)."),
+            _(u"  Źródło musi być osiągalne; gdy nie jest, polecenie mówi, gdzie"),
+            _(u"  stanęło, i można je bezpiecznie powtórzyć. Potem następny bieg"),
             u"  dogania przyrostowo.",
-            u"Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)",
-            u"  -- to zamek na przypadek i zapomniany klucz, nie na intruza."]
+            _(u"Granica: kluczem tej relacji da się zamek zdjąć (źródło to loguje)"),
+            _(u"  -- to zamek na przypadek i zapomniany klucz, nie na intruza.")]
 
 
 ENABLE_NOTE = [u"Relacja jest WYŁĄCZONA: pauza tutaj i zamek na źródle.",
@@ -1202,7 +1216,7 @@ def verbs_for(rel):
         if rel.get("endpoint_diverged"):
             out.insert(0, "zfs-backup.sh verify-endpoint %s ; activate-client %s" % (n, n))
     elif s in ("pending_enroll", "seeding", "seed_complete", "endpoint_verified"):
-        out.insert(0, "zfs-backup.sh activate %s   (wznawialne; dokończy cykl)" % n)
+        out.insert(0, _("zfs-backup.sh activate %s   (wznawialne; dokończy cykl)") % n)
     if s != "removed":
         out.append("zfs-backup.sh remove-client %s" % n)
     return out
@@ -1211,7 +1225,7 @@ def verbs_for(rel):
 def ch_arrow(job):
     """Kierunek zadania bez rekordu, w UTF-8; tryb ASCII odogonkowuje strzalki
     razem z reszta ekranu (deaccent)."""
-    return ARROWS_UTF.get(job.get("direction", ""), "?").format(peer=job.get("peer") or "?")
+    return _(ARROWS_UTF.get(job.get("direction", ""), "?")).format(peer=job.get("peer") or "?")
 
 
 def rel_type(peer, dirs, mode=None, target=None):
@@ -1233,17 +1247,17 @@ def rel_type(peer, dirs, mode=None, target=None):
         # NAZWY (wlasciciel 2026-10-18): typ mowi CO, kierunek GDZIE. "Same migawki"
         # to relacja lokalna bez celu, wiec "lokalna" nie odroznialo jej od kopii.
         if mode == "local":
-            return u"kopia lokalna" if target else u"migawki lokalne"
-        return {"sync": "lustro", "snaponly": u"migawki zdalne"}.get(mode, mode)
+            return _(u"kopia lokalna") if target else _(u"migawki lokalne")
+        return {"sync": _("lustro"), "snaponly": _(u"migawki zdalne")}.get(mode, mode)
     dirs = set(dirs)
     if "pull" in dirs and "push" in dirs:
-        return "lustro"
+        return _("lustro")
     if "pull" in dirs or "push" in dirs:
         return "backup"
     if "local" in dirs:
-        return u"kopia lokalna"
+        return _(u"kopia lokalna")
     if "snaponly" in dirs:
-        return u"migawki zdalne"
+        return _(u"migawki zdalne")
     return "backup" if peer and not dirs else "other"
 
 
@@ -1290,7 +1304,7 @@ def build_relations(data, now):
         if rel.get("state") != "active" and not mons:
             vword = "--"
         else:
-            vword = VERDICTS.get(verdict, (verdict, 0))[0]
+            vword = _(VERDICTS.get(verdict, (verdict, 0))[0])
         reasons = [m.get("reason", "") for m in mons if m.get("reason")]
         trs = transfers_for(data.progress, name)
         last = trs[0] if trs else None
@@ -1303,7 +1317,7 @@ def build_relations(data, now):
             else:
                 last_txt = "%s %s %s" % (w, fmt_when(fin, now), fmt_dur(fin - st) if fin and st else "")
         else:
-            last_txt = "brak zapisu"
+            last_txt = _("brak zapisu")
         my_jobs = [j for j in jobs if j.get("label", "") == name]
         sends = [j for j in my_jobs if j.get("section_kind") in SEND_KINDS]
         nxt_epoch = None
@@ -1312,13 +1326,13 @@ def build_relations(data, now):
             if e and (nxt_epoch is None or e < nxt_epoch):
                 nxt_epoch = e
         if rel.get("paused_local"):
-            nxt = "-- pauza --"
+            nxt = _("-- pauza --")
         elif rel.get("state") != "active":
             nxt = next_step(rel).replace("NAME", name) or "?"
         elif nxt_epoch:
             nxt = fmt_when(nxt_epoch, now)
         elif not my_jobs:
-            nxt = "brak linii w cronie"
+            nxt = _("brak linii w cronie")
         else:
             nxt = "?"
         host = (data.jobs or {}).get("host") or "?"
@@ -1328,10 +1342,10 @@ def build_relations(data, now):
         # "aktualne" (2026-10-08) -- ten sam fakt, co wiersz "błąd biegu" na F2.
         if rel.get("state") == "active":
             for j in sends:
-                fail, _ = job_run_issue(data, j)
+                fail, _disc = job_run_issue(data, j)
                 if fail:
                     verdict = worst([verdict, "BLAD"])
-                    vword = VERDICTS[verdict][0]
+                    vword = _(VERDICTS[verdict][0])
                     reasons.append(u"%s: ostatni bieg %s rc=%s: %s" % (
                         (j.get("scope") or "?").split(":")[-1], fail[1], fail[0], fail[2] or u"zobacz cron.log"))
         rows.append({
@@ -1363,8 +1377,8 @@ def build_relations(data, now):
             "dir": direction_of((data.jobs or {}).get("host") or "?", j.get("peer") or "", [j.get("direction", "")]),
             "typ": rel_type(j.get("peer"), [j.get("direction", "")]), "stats": st,
             "gb": "?" if data.failed("stats") else (hbytes_short(st["vol"]) if st["vol"] is not None else "-"),
-            "state": "bez rekordu %s" % ch_arrow(j),
-            "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0], "reasons": [reason] if reason else [],
+            "state": _("bez rekordu %s") % ch_arrow(j),
+            "verdict": v, "vword": _(VERDICTS.get(v, (v, 0))[0]), "reasons": [reason] if reason else [],
             "monitors": [], "last": None, "last_txt": "--",
             "transfers": [], "jobs": [x for x in jobs if x.get("scope") == j.get("scope")],
             "next_epoch": nxt_epoch, "next": fmt_when(nxt_epoch, now) if nxt_epoch else "?",
@@ -1374,11 +1388,11 @@ def build_relations(data, now):
     # CHODZA; ukrycie ich to ta sama pusta ramka, przed ktora powstal list-jobs.
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
-            "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None, "dir": "?",
+            "kind": "unreadable", "name": _("konto %s") % u.get("account", "?"), "rel": None, "dir": "?",
             "typ": "?", "gb": "?", "stats": None,
-            "state": "nieczytelny", "verdict": "UNKNOWN", "vword": "nie odpowiada",
+            "state": "nieczytelny", "verdict": "UNKNOWN", "vword": _("nie odpowiada"),
             "reasons": [u.get("error", "")], "monitors": [], "last": None,
-            "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"), "transfers": [],
+            "last_txt": _("%s linii w cronie") % u.get("lines_in_block", "?"), "transfers": [],
             "jobs": [], "next_epoch": None, "next": "?", "u": u,
         })
     # Usuniete rekordy na koncu: sa faktem, ale nie robota.
@@ -1399,7 +1413,7 @@ def job_src_dst(j):
     if d == "prune":
         return "-", scope
     if d == "snaponly":
-        return scope, u"bez kopii"
+        return scope, _(u"bez kopii")
     return scope, other or "-"
 
 
@@ -1428,7 +1442,7 @@ def keep_cell(ret):
         t = t.lstrip("-")
         m = re.match(r"^([HDWMY])(\d+)$", t)
         if m:
-            out.append(u"%s %s" % (m.group(2), KEEP_UNITS[m.group(1)]))
+            out.append(u"%s %s" % (m.group(2), _(KEEP_UNITS[m.group(1)])))
         elif t:
             out.append(t)
     return " ".join(out) or "-"
@@ -1469,7 +1483,7 @@ def build_jobs(data, now):
         if kind == "prune":
             # Sekcja [prune:] ze zdalnym zakresem (konto@host:dataset) sprzata migawki
             # U ZRODLA ("zdalny prune"); z lokalnym -- tutaj ("lokalny prune").
-            task = u"zdalny prune" if "@" in (j.get("scope") or "") else u"lokalny prune"
+            task = _(u"zdalny prune") if "@" in (j.get("scope") or "") else _(u"lokalny prune")
             keep = keep_cell(ret)
         else:
             # SLOWO ZGODNE Z KIERUNKIEM. Kazde zadanie transferu nazywalo sie
@@ -1478,9 +1492,9 @@ def build_jobs(data, now):
             # ("wysylka" = cos stad wychodzi). Kierunek jest w linii crona,
             # wiec nie trzeba go zgadywac (pve10, 2026-09-21).
             _d = j.get("direction", "")
-            task = {"pull": u"pobranie", "push": u"wysyłka", "local": u"kopia", "snaponly": u"migawka"}.get(_d, u"transfer")
+            task = {"pull": _(u"pobranie"), "push": _(u"wysyłka"), "local": _(u"kopia"), "snaponly": _(u"migawka")}.get(_d, _(u"transfer"))
             if _d == "pull" and job_is_mirror(j):
-                keep = u"lustro"
+                keep = _(u"lustro")
         mode = (rels_by_name.get(j.get("label") or "") or {}).get("mode")
         nxt = cron_next(j.get("schedule", ""), now)
         clabel = job_cron_label(j)
@@ -1507,11 +1521,11 @@ def build_jobs(data, now):
         reasons = list(reasons0) + [u"ostatni bieg %s rc=%s: %s" % (f[1], f[0], f[2] or u"zobacz cron.log")
                                     for _, f in fails]
         items.append({
-            "kind": "job", "name": j.get("label") or "(bez rel.)", "rel": None,
+            "kind": "job", "name": j.get("label") or _("(bez rel.)"), "rel": None,
             "clabel": clabel, "srow": srow, "vol": vol, "czas": czas, "gb": gb,
             "dir": direction_of(host, j.get("peer") or "", [j.get("direction", "")], mode),
             "mode": mode, "task": task, "pref": pref, "keep": keep, "cnt": 1, "tier": tier, "scope": j.get("scope", ""),
-            "schedule": j.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
+            "schedule": j.get("schedule", ""), "verdict": v, "vword": _(VERDICTS.get(v, (v, 0))[0]),
             "reasons": reasons, "fails": fails, "discards": discs, "srows": [srow] if srow else [], "next_epoch": nxt,
             "next": fmt_when(nxt, now) if nxt else "?", "job": j, "jobs": [j],
             "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
@@ -1543,10 +1557,10 @@ def build_jobs(data, now):
                     break
                 pnxt = cron_next(psched, now)
                 pit = dict(items[-1])
-                pit.update({"task": u"lokalny prune", "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-",
+                pit.update({"task": _(u"lokalny prune"), "keep": keep_cell(ret), "schedule": psched, "czas": "-", "gb": "-",
                             "vol": None, "srow": None, "next_epoch": pnxt,
                             "next": fmt_when(pnxt, now) if pnxt else "?", "jobs": [j],
-                            "verdict": v0, "vword": VERDICTS.get(v0, (v0, 0))[0],
+                            "verdict": v0, "vword": _(VERDICTS.get(v0, (v0, 0))[0]),
                             "reasons": list(reasons0), "fails": [], "discards": [], "srows": []})
                 items.append(pit)
                 break
@@ -1585,13 +1599,13 @@ def build_jobs(data, now):
             "kind": "replica", "name": rname, "rel": None, "replica": rp,
             "clabel": u"replica copy (%s)" % rname, "srow": srow, "vol": None, "czas": czas, "gb": "-",
             "dir": u"%s → %s" % (host, (rp.get("dst") or "?").split("/")[0]),
-            "mode": None, "task": u"replika", "pref": rp.get("prefix") or "-", "keep": "-",
+            "mode": None, "task": _(u"replika"), "pref": rp.get("prefix") or "-", "keep": "-",
             "cnt": len(rp.get("sources") or []) or 1, "tier": "", "scope": rp.get("source") or "",
             # "po włożeniu" stoi w kolumnie Następny; w Harmonogramie poszerzałoby
             # kolumnę i przy 80 znakach wypychało Trzyma z ekranu WSZYSTKIM wierszom.
             "schedule": "-" if on_ins else sched, "verdict": rver,
-            "vword": VERDICTS.get(rver, (rver, 0))[0], "reasons": reasons, "next_epoch": rnxt,
-            "next": (u"po włożeniu" if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
+            "vword": _(VERDICTS.get(rver, (rver, 0))[0]), "reasons": reasons, "next_epoch": rnxt,
+            "next": (_(u"po włożeniu") if on_ins else (fmt_when(rnxt, now) if rnxt else "?")),
             "job": {}, "jobs": [], "state": "", "last_txt": "", "monitors": [], "transfers": [], "last": None,
         })
     # GRUPOWANIE: relacja synchro (albo kazda inna z kilkoma datasetami pod tym
@@ -1634,19 +1648,19 @@ def build_jobs(data, now):
     for key in order:
         g = grouped[key]
         g["verdict"] = worst(g["_verdicts"])
-        g["vword"] = VERDICTS.get(g["verdict"], (g["verdict"], 0))[0]
+        g["vword"] = _(VERDICTS.get(g["verdict"], (g["verdict"], 0))[0])
         g["cnt"] = g["_count"]
         del g["_verdicts"]
         del g["_count"]
         rows.append(g)
     for u in (data.jobs or {}).get("unreadable", []):
         rows.append({
-            "kind": "unreadable", "name": "konto %s" % u.get("account", "?"), "rel": None, "dir": "?",
+            "kind": "unreadable", "name": _("konto %s") % u.get("account", "?"), "rel": None, "dir": "?",
             "task": "nieczytelny blok", "pref": "-", "keep": "-", "cnt": "",
-            "scope": u.get("config") or "(bez Source)", "schedule": "",
-            "verdict": "UNKNOWN", "vword": "nie odpowiada", "reasons": [u.get("error", "")],
+            "scope": u.get("config") or _("(bez Source)"), "schedule": "",
+            "verdict": "UNKNOWN", "vword": _("nie odpowiada"), "reasons": [u.get("error", "")],
             "next_epoch": None, "next": "?", "job": None, "jobs": [], "u": u,
-            "state": "nieczytelny", "last_txt": "%s linii w cronie" % u.get("lines_in_block", "?"),
+            "state": "nieczytelny", "last_txt": _("%s linii w cronie") % u.get("lines_in_block", "?"),
             "monitors": [], "transfers": [], "last": None,
         })
     # STRAZNIK BEZ ZADANIA (F5 zniesiony, wariant b, uwaga 3): linia monitora,
@@ -1668,11 +1682,11 @@ def build_jobs(data, now):
         v = m.get("verdict", "UNKNOWN")
         rel = rels_by_name.get(m.get("label") or "")
         rows.append({
-            "kind": "monitor", "name": m.get("label") or "(bez etykiety)", "rel": None,
+            "kind": "monitor", "name": m.get("label") or _("(bez etykiety)"), "rel": None,
             "dir": direction_of(host, rel_addr(rel), [], rel.get("mode")) if rel else "?",
-            "task": u"strażnik bez zadania", "pref": "-", "keep": "-", "cnt": len(m.get("datasets", [])) or "",
+            "task": _(u"strażnik bez zadania"), "pref": "-", "keep": "-", "cnt": len(m.get("datasets", [])) or "",
             "scope": ",".join(m.get("datasets", [])) or "?",
-            "schedule": m.get("schedule", ""), "verdict": v, "vword": VERDICTS.get(v, (v, 0))[0],
+            "schedule": m.get("schedule", ""), "verdict": v, "vword": _(VERDICTS.get(v, (v, 0))[0]),
             "reasons": [m.get("reason", "")] if m.get("reason") else [],
             "next_epoch": None, "next": "?", "job": None, "jobs": [], "m": m,
             "state": "", "last_txt": "", "monitors": [m], "transfers": [], "last": None,
@@ -1741,11 +1755,11 @@ def times_words(last, avg, mx):
     """ostatni / sredni / maks. slowami -- panel ma miejsce, lista nie."""
     if all(hsecs(x) == "-" for x in (last, avg, mx)):
         return "-"
-    return u"ostatni %s / średni %s / maks. %s" % (hsecs(last), hsecs(avg), hsecs(mx))
+    return _(u"ostatni %s / średni %s / maks. %s") % (hsecs(last), hsecs(avg), hsecs(mx))
 
 
 def tab_title(name, tabs, ti):
-    parts = [(u"[%s]" % label) if i == ti else label for i, (_k, label) in enumerate(tabs)]
+    parts = [(u"[%s]" % _(label)) if i == ti else _(label) for i, (_k, label) in enumerate(tabs)]
     return (u"%s: " % name if name else u"") + u"  ".join(parts)
 
 
@@ -1860,14 +1874,14 @@ def render_tabbed(data, width, height, now, ch, screen, title, heads, cells, cur
             if len(clines) > cfirst + room and room > 1:
                 cbody[-1] = fit(u"... jeszcze %d" % (len(clines) - cfirst - room + 1), binner)
         else:
-            cbody = wrap(child.get("empty") or u"brak", binner)
+            cbody = wrap(child.get("empty") or _(u"brak"), binner)
         cbody = cbody[:ch_h]
         while len(cbody) < ch_h:
             cbody.append("")
         many = len(child["tabs"]) > 1
         snaps = any(it.get("relname") and it.get("pair") is not None for it in child.get("items") or [])
-        cfoot = ((u"m migawki   " if snaps else u"") + u"Enter okno   " + (u"←→ zakładki   " if many else u"")
-                 + u"Esc wraca   Tab do linii poleceń") if in_child else ""
+        cfoot = ((_(u"m migawki   ") if snaps else u"") + u"Enter okno   " + (_(u"←→ zakładki   ") if many else u"")
+                 + _(u"Esc wraca   Tab do linii poleceń")) if in_child else ""
         bottom = box(ch, tab_title(child.get("name"), child["tabs"], child.get("ti", 0)), cbody, width, footer=cfoot)
         if pcur is not None:
             scr.cursor_y = len(out) + 1 + pcur
@@ -1898,14 +1912,14 @@ def transfer_label(t, data):
     for r in (data.replicas or {}).get("replicas", []):
         d = r.get("dst") or "\0"
         if tgt == d or tgt.startswith(d + "/"):
-            return u"replika %s" % r.get("name")
-    return u"(bez relacji)"
+            return _(u"replika %s") % r.get("name")
+    return _(u"(bez relacji)")
 
 
 def transfer_item(t, data, now, ch):
     wd, _note = transfer_word(t, now)
     st, fin = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0)
-    when = (u"biegnie od %s" % time.strftime("%H:%M", time.localtime(st))) if t.get("state") == "running" and st \
+    when = (_(u"biegnie od %s") % time.strftime("%H:%M", time.localtime(st))) if t.get("state") == "running" and st \
         else fmt_when_short(fin or st, now)
     return {"cells": [when, wd, ds_of(t.get("dataset")), fmt_dur(fin - st) if fin and st else "-", transfer_data_cell(t)],
             "pairs": transfer_detail_pairs(t, now, ch, data),
@@ -1962,9 +1976,9 @@ def rel_children(tab, row, data, jobrows, now, ch):
                                     jr.get("vword") or "-"],
                           "pairs": job_panel_pairs(jr, data, now, ch),
                           "title": u"%s -- %s %s" % (jr["name"], jr.get("task") or "", jr.get("pref") or ""), "jobrow": jr})
-        return {"heads": [u"Zadanie", u"Prefiks migawek", u"Kiedy", u"Trzyma", u"Następny", u"Kopie"], "items": items,
+        return {"heads": [_(u"Zadanie"), _(u"Prefiks migawek"), _(u"Kiedy"), _(u"Trzyma"), _(u"Następny"), _(u"Kopie")], "items": items,
                 "prio": [0, 5, 4, 2, 3, 1],
-                "empty": u"brak zadań tej relacji w cronie"}
+                "empty": _(u"brak zadań tej relacji w cronie")}
     pairs, how = rel_pairs(row, data, now, ch)
     snaps_only = bool(pairs) and all(p_.get("dst") is None for p_ in pairs)
     items = []
@@ -1973,19 +1987,19 @@ def rel_children(tab, row, data, jobrows, now, ch):
                       "pairs": pair_detail_pairs(pr, row, data, now, ch),
                       "title": u"%s -- dataset %s" % (row["name"], (pr.get("dst") or pr["src"]).split()[0]), "pair": pr,
                       "relname": row.get("name")})
-    empty = u"brak datasetów: rekord nie nazywa żadnego źródła, a w cronie nie ma linii kopii tej relacji"
-    return {"how": how, "heads": [u"Dataset" if snaps_only else u"Źródło %s cel" % ch.right, u"Migawki" if snaps_only else u"Kopie",
-                      u"Szczeble", u"Dane 7 dni"], "items": items, "prio": [0, 1, 3, 2], "empty": empty}
+    empty = _(u"brak datasetów: rekord nie nazywa żadnego źródła, a w cronie nie ma linii kopii tej relacji")
+    return {"how": how, "heads": [_(u"Dataset") if snaps_only else _(u"Źródło %s cel") % ch.right, _(u"Migawki") if snaps_only else _(u"Kopie"),
+                      _(u"Szczeble"), _(u"Dane 7 dni")], "items": items, "prio": [0, 1, 3, 2], "empty": empty}
 
 
 def pair_detail_pairs(pr, row, data, now, ch):
     """Prawy panel datasetu relacji (F3, zakladka Datasety)."""
-    out = [group(ch, u"Co")]
+    out = [group(ch, _(u"Co"))]
     if pr.get("dst") is None:
-        out.append((u"Dataset", pr["src"]))
+        out.append((_(u"Dataset"), pr["src"]))
     else:
-        out += [(u"Źródło", pr["src"]), (u"Cel", pr["dst"])]
-    out.append(group(ch, u"Teraz"))
+        out += [(_(u"Źródło"), pr["src"]), (_(u"Cel"), pr["dst"])]
+    out.append(group(ch, _(u"Teraz")))
     v = pr.get("vword") or "-"
     j = pr.get("job")
     if j is not None:
@@ -1993,7 +2007,7 @@ def pair_detail_pairs(pr, row, data, now, ch):
         age = re.search(r"age=(\S+)", reason or "")
         if age:
             v += u"   najnowsza sprzed %s" % age.group(1)
-    out.append((u"Migawki" if pr.get("dst") is None else u"Kopie", v))
+    out.append((_(u"Migawki") if pr.get("dst") is None else _(u"Kopie"), v))
     last = None
     want = (pr.get("dst") or "").split()[0] if pr.get("dst") else pr["src"].split()[0].rsplit(":", 1)[-1]
     src_ds = pr["src"].split()[0].rsplit(":", 1)[-1]
@@ -2006,17 +2020,17 @@ def pair_detail_pairs(pr, row, data, now, ch):
     if last:
         wd, _n = transfer_word(last, now)
         st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
-        out.append((u"Ostatni transfer", u"%s   %s%s" % (wd, fmt_full(fin or st_), (u"   " + fmt_dur(fin - st_)) if fin and st_ else "")))
-        out.append((u"Najnowsza", (last.get("dataset") or "?").split("@", 1)[-1]))
+        out.append((_(u"Ostatni transfer"), u"%s   %s%s" % (wd, fmt_full(fin or st_), (u"   " + fmt_dur(fin - st_)) if fin and st_ else "")))
+        out.append((_(u"Najnowsza"), (last.get("dataset") or "?").split("@", 1)[-1]))
     jobs = pr.get("jobs") or ([j] if j is not None else [])
     if jobs:
-        out.append(group(ch, u"Szczeble"))
+        out.append(group(ch, _(u"Szczeble")))
         for jj in jobs:
             _k = keep_cell(jj.get("retain") or jj.get("keep") or "")
             out.append((family_of(jj) or "?", cron_words(jj.get("schedule", "")) + ((u"   trzyma %s" % _k) if _k != "-" else "")))
-    out.append(group(ch, u"Przebiegi (%s dni)" % ((data.stats or {}).get("window_days") or 7)))
-    out.append((u"Czas", pr.get("czas_words") or "-"))
-    out.append((u"Dane", pr.get("gb") or "-"))
+    out.append(group(ch, _(u"Przebiegi (%s dni)") % ((data.stats or {}).get("window_days") or 7)))
+    out.append((_(u"Czas"), pr.get("czas_words") or "-"))
+    out.append((_(u"Dane"), pr.get("gb") or "-"))
     return out
 
 
@@ -2030,30 +2044,30 @@ def tpl_children(tab, p, rows, now, ch):
                 continue
             side = None
             if rel.get("profile") == p.get("name"):
-                side = u"ten host"
+                side = _(u"ten host")
             elif rel.get("source_profile") == p.get("name"):
-                side = u"źródło"
+                side = _(u"źródło")
             if side is None:
                 continue
             items.append({"cells": [r["name"], side, r.get("dir") or "?"],
-                          "pairs": [(u"Relacja", r["name"]), (u"Strona", side), (u"Kierunek", r.get("dir") or "?"),
-                                    (u"Stan", r.get("state") or "?"), (u"Zmiana szablonu", u"w zmianie relacji (ekran Relacje)")],
+                          "pairs": [(_(u"Relacja"), r["name"]), (_(u"Strona"), side), (_(u"Kierunek"), r.get("dir") or "?"),
+                                    (_(u"Stan"), r.get("state") or "?"), (u"Zmiana szablonu", _(u"w zmianie relacji (ekran Relacje)"))],
                           "title": u"%s -- relacja %s" % (p.get("name"), r["name"])})
-        return {"heads": [u"Relacja", u"Strona", u"Kierunek"], "items": items,
-                "empty": u"żadna relacja na tym hoście nie używa tego szablonu"}
+        return {"heads": [_(u"Relacja"), _(u"Strona"), _(u"Kierunek")], "items": items,
+                "empty": _(u"żadna relacja na tym hoście nie używa tego szablonu")}
     items = []
     for t in p.get("tiers", []):
-        keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or u"wg drabiny"
+        keep = t.get("keep") or (t.get("retain") or "").lstrip("-") or _(u"wg drabiny")
         when = cron_words(t["send_schedule"]) if t.get("send_schedule") else \
-            (u"porządki %s" % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else u"bez własnych migawek")
+            (_(u"porządki %s") % cron_words(t["prune_schedule"]) if t.get("prune_schedule") else _(u"bez własnych migawek"))
         fam = (t.get("prefix") or t.get("pattern") or "-").rstrip("_")
-        pairs = [(u"Szczebel", tier_unit(t.get("name", ""))), (u"Kiedy", when), (u"Trzyma", keep),
-                 (u"Prefiks migawek", fam), (u"Zamraża", u"tak" if t.get("quiesce") else u"nie")]
+        pairs = [(_(u"Szczebel"), tier_unit(t.get("name", ""))), (_(u"Kiedy"), when), (_(u"Trzyma"), keep),
+                 (_(u"Prefiks migawek"), fam), (_(u"Zamraża"), _(u"tak") if t.get("quiesce") else _(u"nie"))]
         if t.get("monitor_warn") or t.get("monitor_crit"):
-            pairs.append((u"Strażnik", u"ostrzeżenie po %s, alarm po %s" % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
+            pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s") % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")))
         items.append({"cells": [tier_unit(t.get("name", "")), when, keep, fam], "pairs": pairs,
-                      "title": u"%s -- szczebel %s" % (p.get("name"), tier_unit(t.get("name", "")))})
-    return {"heads": [u"Szczebel", u"Kiedy", u"Trzyma", u"Prefiks migawek"], "items": items, "empty": u"szablon bez szczebli"}
+                      "title": _(u"%s -- szczebel %s") % (p.get("name"), tier_unit(t.get("name", "")))})
+    return {"heads": [_(u"Szczebel"), _(u"Kiedy"), _(u"Trzyma"), _(u"Prefiks migawek")], "items": items, "empty": _(u"szablon bez szczebli")}
 
 
 def rep_children(tab, r, data, now, ch):
@@ -2064,26 +2078,26 @@ def rep_children(tab, r, data, now, ch):
               if (t.get("target") or "") == d or (t.get("target") or "").startswith(d + "/")]
         ts.sort(key=lambda t: int(t.get("finished_epoch") or t.get("started_epoch") or 0), reverse=True)
         items = [transfer_item(t, data, now, ch) for t in ts[:20]]
-        return {"heads": [u"Kiedy", u"Wynik", u"Dataset", u"Czas", u"Dane"], "items": items, "prio": [0, 1, 2, 4, 3],
-                "empty": u"brak przebiegów w historii transferów (replika jeszcze nie biegła albo dysku nie było)"}
+        return {"heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Dataset"), _(u"Czas"), _(u"Dane")], "items": items, "prio": [0, 1, 2, 4, 3],
+                "empty": _(u"brak przebiegów w historii transferów (replika jeszcze nie biegła albo dysku nie było)")}
     items = []
     srcs = r.get("sources") or ([r["source"]] if r.get("source") else [])
-    rec = u"tak" if r.get("recursive") == "yes" else u"nie"
+    rec = _(u"tak") if r.get("recursive") == "yes" else _(u"nie")
     for s in srcs:
         dst = r.get("dst") or "?"
         items.append({"cells": [u"%s %s %s" % (s, ch.right, dst), rec],
-                      "pairs": [(u"Źródło", s), (u"Cel", u"%s   (pula %s)" % (dst, dst.split("/")[0])),
-                                (u"Z dziećmi", rec),
-                                (u"Historia", u"wszystkie migawki" if (r.get("history") or "all") == "all" else r.get("history"))],
+                      "pairs": [(_(u"Źródło"), s), (_(u"Cel"), _(u"%s   (pula %s)") % (dst, dst.split("/")[0])),
+                                (_(u"Z dziećmi"), rec),
+                                (_(u"Historia"), _(u"wszystkie migawki") if (r.get("history") or "all") == "all" else r.get("history"))],
                       "title": u"%s -- dataset %s" % (r.get("name"), s)})
-    return {"heads": [u"Źródło %s cel" % ch.right, u"Z dziećmi"], "items": items, "empty": u"replika bez źródeł"}
+    return {"heads": [_(u"Źródło %s cel") % ch.right, _(u"Z dziećmi")], "items": items, "empty": _(u"replika bez źródeł")}
 
 
 def odz_children(tab, item, rows, data, now, ch):
     """F11: datasety, z ktorych mozna odzyskac (kopie relacji)."""
     if item.get("kind") == "disk":
-        return {"heads": [u"Dataset"], "items": [],
-                "empty": u"dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta"}
+        return {"heads": [_(u"Dataset")], "items": [],
+                "empty": _(u"dysk wybierasz w oknie przywracania -- pule z dysków podłączonych do tego hosta")}
     row = next((r for r in rows or [] if r.get("kind") == "relation" and r["name"] == item["name"]), None)
     pairs, _how = rel_pairs(row, data, now, ch) if row else ([], "")
     items = []
@@ -2091,13 +2105,13 @@ def odz_children(tab, item, rows, data, now, ch):
         copy = pr.get("dst") or pr["src"]
         last = newest_transfer(data, item["name"], copy, pr["src"])
         nw = fmt_when_short(int(last.get("finished_epoch") or last.get("started_epoch") or 0), now) if last else "-"
-        dpairs = [(u"Kopia", copy), (u"Oryginał", pr["src"]), (u"Kopie", pr.get("vword") or "-")]
+        dpairs = [(_(u"Kopia"), copy), (_(u"Oryginał"), pr["src"]), (_(u"Kopie"), pr.get("vword") or "-")]
         if last:
-            dpairs.append((u"Najnowsza", (last.get("dataset") or "?").split("@", 1)[-1]))
-        dpairs.append((u"Najstarsza", u"w oknach Przywróć (lista migawek)"))
+            dpairs.append((_(u"Najnowsza"), (last.get("dataset") or "?").split("@", 1)[-1]))
+        dpairs.append((_(u"Najstarsza"), _(u"w oknach Przywróć (lista migawek)")))
         items.append({"cells": [copy, nw], "pairs": dpairs, "title": u"%s -- dataset %s" % (item["name"], copy),
                       "dataset": copy})
-    return {"heads": [u"Kopia", u"Najnowsza"], "items": items, "empty": u"brak datasetów z kopią"}
+    return {"heads": [_(u"Kopia"), _(u"Najnowsza")], "items": items, "empty": _(u"brak datasetów z kopią")}
 
 
 def newest_transfer(data, label, copy, src):
@@ -2119,7 +2133,7 @@ def job_panel_pairs(row, data, now, ch):
     j = row["job"]
     jobs_here = row.get("jobs") or [j]
     _dir = row.get("dir") or "?"
-    pairs = [group(ch, u"Co"), (u"Kierunek", u"lokalnie, na tym hoście" if _dir == "local" else _dir)]
+    pairs = [group(ch, _(u"Co")), (_(u"Kierunek"), _(u"lokalnie, na tym hoście") if _dir == "local" else _dir)]
     if len(jobs_here) > 1:
         # wspolny przedrostek RAZ, potem krotkie nazwy (R3-5)
         scopes = [(jj.get("scope", "") or "?").split(":")[-1] for jj in jobs_here]
@@ -2133,48 +2147,48 @@ def job_panel_pairs(row, data, now, ch):
             common = common[:-1]
         base = "/".join(common)
         short = ["/".join(x[len(common):]) or "/".join(x) for x in parts]
-        pairs.append((u"Zakres", u"%d datasetów%s: %s" % (len(jobs_here), (u" w " + base) if base else "", ", ".join(short))))
+        pairs.append((_(u"Zakres"), _(u"%d datasetów%s: %s") % (len(jobs_here), (u" w " + base) if base else "", ", ".join(short))))
     else:
         src, dst = job_src_dst(j)
         d = j.get("direction", "")
         if d == "snaponly":
-            pairs.append((u"Cel", src))
+            pairs.append((_(u"Cel"), src))
         elif d == "prune" or u"prune" in (row.get("task") or ""):
             # Porzadki szczebla plaskiego siedza w zadaniu pobrania (uwaga 4) --
             # przycinaja jego CEL; harmonogram jest wiersza, nie zadania.
-            pairs.append((u"Cel", dst))
+            pairs.append((_(u"Cel"), dst))
         else:
-            pairs += [(u"Źródło", src), (u"Cel", dst)]
-    pairs.append((u"Kiedy", cron_words(row.get("schedule") or j.get("schedule", "?"))))
+            pairs += [(_(u"Źródło"), src), (_(u"Cel"), dst)]
+    pairs.append((_(u"Kiedy"), cron_words(row.get("schedule") or j.get("schedule", "?"))))
     # Wiersz transferu ma w kolumnie Trzyma "-" (retencja stoi w wierszu porzadkow), ale
     # panel mowi, ile kopia trzyma -- "-" przy "ab -- pobranie" nic nie mowilo (kampania 3).
     keep = row.get("keep") if row.get("keep") not in (None, "", "-") else ""
     keep = keep or keep_cell(j.get("retain") or j.get("keep") or "") or "-"
-    pairs.append((u"Trzyma", keep + (u"   drabina GFS" if j.get("gfs") else "")))
+    pairs.append((_(u"Trzyma"), keep + (u"   drabina GFS" if j.get("gfs") else "")))
     st = data.stats or {}
     win = st.get("window_days")
-    pairs.append(group(ch, (u"Przebiegi (%s dni)" % win) if win else u"Przebiegi"))
+    pairs.append(group(ch, (_(u"Przebiegi (%s dni)") % win) if win else _(u"Przebiegi")))
     srow, srows = row.get("srow"), row.get("srows") or []
     if data.failed("stats"):
-        pairs.append((u"Czas", u"? -- job-stats nie odpowiedział"))
+        pairs.append((_(u"Czas"), _(u"? -- job-stats nie odpowiedział")))
     elif srow:
-        pairs.append((u"Czas", times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
+        pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
     else:
-        pairs.append((u"Czas", u"brak biegów w dzienniku z tego okna%s" % ("" if row.get("clabel") else u" -- zadania nie ma w cronie")))
+        pairs.append((_(u"Czas"), _(u"brak biegów w dzienniku z tego okna%s") % ("" if row.get("clabel") else _(u" -- zadania nie ma w cronie"))))
     if len(srows) > 1 and not data.failed("stats"):
         newest = max(srows, key=lambda x: x.get("last_at") or "")
-        pairs.append((u"Wywołania", u"%d, błędów %d   w %d zadaniach" % (
+        pairs.append((_(u"Wywołania"), _(u"%d, błędów %d   w %d zadaniach") % (
             sum(int(x.get("runs") or 0) for x in srows), sum(int(x.get("failures") or 0) for x in srows), len(srows))))
-        pairs.append((u"Ostatni", u"%s   %s" % (newest.get("last_at", "?"), u"OK" if str(newest.get("last_rc")) == "0" else u"BŁĄD (rc=%s)" % newest.get("last_rc"))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (newest.get("last_at", "?"), u"OK" if str(newest.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % newest.get("last_rc"))))
     elif srow and not data.failed("stats"):
-        pairs.append((u"Wywołania", u"%s, błędów %s" % (srow.get("runs", "?"), srow.get("failures", 0))))
-        pairs.append((u"Ostatni", u"%s   %s" % (srow.get("last_at", "?"), u"OK" if str(srow.get("last_rc")) == "0" else u"BŁĄD (rc=%s)" % srow.get("last_rc"))))
+        pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs", "?"), srow.get("failures", 0))))
+        pairs.append((_(u"Ostatni"), u"%s   %s" % (srow.get("last_at", "?"), u"OK" if str(srow.get("last_rc")) == "0" else _(u"BŁĄD (rc=%s)") % srow.get("last_rc"))))
     for sc, (rc, at, txt) in row.get("fails") or []:
-        pairs.append((u"Błąd", u"%s  %s  rc=%s  %s" % (at, sc, rc, txt or u"(szczegóły w cron.log)")))
+        pairs.append((_(u"Błąd"), u"%s  %s  rc=%s  %s" % (at, sc, rc, txt or _(u"(szczegóły w cron.log)"))))
     for sc, (at, txt) in sorted(row.get("discards") or [], key=lambda d: d[1][0], reverse=True)[:6]:
-        pairs.append((u"Wyrzucono", u"%s  %s" % (at, txt)))
+        pairs.append((_(u"Wyrzucono"), u"%s  %s" % (at, txt)))
     if row.get("vol") is not None and not data.failed("stats"):
-        pairs.append((u"Dane", hbytes_short(row["vol"])))
+        pairs.append((_(u"Dane"), hbytes_short(row["vol"])))
     mons, seen_mon = [], set()
     for jj in jobs_here:
         for m in monitors_for_job(jj, (data.monitors or {}).get("monitors", [])):
@@ -2184,11 +2198,11 @@ def job_panel_pairs(row, data, now, ch):
                 mons.append(m)
     if mons:
         m0 = mons[0]
-        pairs.append((u"Strażnik", u"ostrzeżenie po %s, alarm po %s   sprawdza %s" % (
+        pairs.append((_(u"Strażnik"), _(u"ostrzeżenie po %s, alarm po %s   sprawdza %s") % (
             m0.get("warn") or "?", m0.get("crit") or "?", cron_words(m0.get("schedule") or "?"))))
-    pairs.append(group(ch, u"Uprawnienia"))
-    pairs.append((u"Konto", j.get("account", "?")))
-    pairs.append((u"Config", j.get("config", "?")))
+    pairs.append(group(ch, _(u"Uprawnienia")))
+    pairs.append((_(u"Konto"), j.get("account", "?")))
+    pairs.append((_(u"Config"), j.get("config", "?")))
     return pairs
 
 
@@ -2202,26 +2216,26 @@ def rel_panel_pairs(row, data, now, ch):
     pairs = []
     warns = []
     if rel.get("endpoint_diverged"):
-        warns.append(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)"
+        warns.append(_(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)")
                      % (rel.get("installed_endpoint") or "?", rel.get("active_endpoint") or "?"))
     if rel.get("paused_local"):
-        warns.append(u"relacja wstrzymana (pause-client); starzenie się kopii jest tu oczekiwane")
+        warns.append(_(u"relacja wstrzymana (pause-client); starzenie się kopii jest tu oczekiwane"))
     if rel.get("state") != "active" and rel.get("state") != "removed":
-        warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
+        warns.append(_(u"relacja nie jest aktywna: stan %s, następny krok: %s") % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
-        warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % (rel.get("removed_at") or "?"))
     if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None):
-        warns.append(u"para po drugiej stronie: %s" % rel["peer_pair_state"])
+        warns.append(_(u"para po drugiej stronie: %s") % rel["peer_pair_state"])
     _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            w = _(u"cron woła inny plik silnika (%s) niż ten, który tu policzono") % m.get("engine_in_cron")
             if w not in _seen:
                 _seen.add(w)
                 warns.append(w)
     for w_ in warns:
-        pairs.append((u"Uwaga", w_))
-    pairs.append(group(ch, u"Teraz"))
+        pairs.append((_(u"Uwaga"), w_))
+    pairs.append(group(ch, _(u"Teraz")))
     mon = row["vword"]
     if row["reasons"]:
         # Tylko wiek najnowszej -- surowy tekst monitora (po angielsku) jest w oknie (Enter).
@@ -2229,11 +2243,11 @@ def rel_panel_pairs(row, data, now, ch):
         if age:
             mon += u"   najnowsza sprzed %s" % age.group(1)
     elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
-        mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
+        mon += _(u"   nikt nie sprawdza, czy kopia dalej się robi")
     if row["monitors"]:
         m0 = row["monitors"][0]
-        mon += u"   alarm po %s" % (m0.get("crit") or "?")
-    pairs.append((u"Migawki" if rel.get("mode") == "snaponly" else u"Kopie", mon))
+        mon += _(u"   alarm po %s") % (m0.get("crit") or "?")
+    pairs.append((_(u"Migawki") if rel.get("mode") == "snaponly" else _(u"Kopie"), mon))
     last = row["last"]
     # U61: "Ostatni bieg OK" (historia transferow) stal obok "błąd biegu" (job-stats).
     # Nieudany ostatni bieg ktoregos zadania wygrywa i panel mowi, KTORY dataset i dlaczego.
@@ -2241,64 +2255,64 @@ def rel_panel_pairs(row, data, now, ch):
     if rel.get("state") == "active":
         for j in row["jobs"]:
             if j.get("section_kind") in SEND_KINDS:
-                f, _ = job_run_issue(data, j)
+                f, _disc = job_run_issue(data, j)
                 if f:
                     fails.append(((j.get("scope") or "?").split(":")[-1], f))
     if fails:
         ds, f = fails[0]
-        pairs.append((u"Ostatni bieg", u"BŁĄD   %s   rc=%s%s" % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
-        pairs.append((u"Przyczyna", u"%s: %s" % (ds, f[2] or u"zobacz cron.log")))
+        pairs.append((_(u"Ostatni bieg"), _(u"BŁĄD   %s   rc=%s%s") % (f[1], f[0], (u"   (+%d)" % (len(fails) - 1)) if len(fails) > 1 else u"")))
+        pairs.append((_(u"Przyczyna"), u"%s: %s" % (ds, f[2] or u"zobacz cron.log")))
     elif last:
         w, note = transfer_word(last, now)
         st_, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
         txt = u"%s   %s" % (w, fmt_full(fin if fin else st_))
         if note:
             txt += u"   " + note
-        pairs.append((u"Ostatni bieg", txt))
+        pairs.append((_(u"Ostatni bieg"), txt))
     else:
-        pairs.append((u"Ostatni bieg", u"brak wpisu w historii transferów"))
-    pairs.append((u"Następny", fmt_full(row["next_epoch"]) if row["next_epoch"] and not rel.get("paused_local") else row["next"]))
+        pairs.append((_(u"Ostatni bieg"), _(u"brak wpisu w historii transferów")))
+    pairs.append((_(u"Następny"), fmt_full(row["next_epoch"]) if row["next_epoch"] and not rel.get("paused_local") else row["next"]))
     sends = [j for j in row["jobs"] if j.get("section_kind") in SEND_KINDS]
     stt = row.get("stats") or {}
     days = (data.stats or {}).get("window_days") or 7
-    pairs.append(group(ch, u"Przebiegi (%d dni)" % days))
+    pairs.append(group(ch, _(u"Przebiegi (%d dni)") % days))
     if data.failed("stats"):
-        pairs.append((u"Wywołania", u"? -- job-stats nie odpowiedział"))
+        pairs.append((_(u"Wywołania"), _(u"? -- job-stats nie odpowiedział")))
     elif sends and stt.get("runs"):
-        pairs.append((u"Wywołania", u"%d, błędów %d" % (stt["runs"], stt.get("fails") or 0)))
-        pairs.append((u"Czas", times_words(stt["last"], stt["avg"], stt["max"])))
-        pairs.append((u"Dane", row.get("gb") or "-"))
+        pairs.append((_(u"Wywołania"), _(u"%d, błędów %d") % (stt["runs"], stt.get("fails") or 0)))
+        pairs.append((_(u"Czas"), times_words(stt["last"], stt["avg"], stt["max"])))
+        pairs.append((_(u"Dane"), row.get("gb") or "-"))
     else:
-        pairs.append((u"Wywołania", u"brak w dziennikach z tego okna"))
-    pairs.append(group(ch, u"Ustawienia"))
+        pairs.append((_(u"Wywołania"), _(u"brak w dziennikach z tego okna")))
+    pairs.append(group(ch, _(u"Ustawienia")))
     if rel.get("mode") == "local":
-        pairs.append((u"Źródło", ", ".join(rel.get("sources") or []) or "?"))
-        pairs.append((u"Cel", rel.get("client_target") or SNAP_TARGET))
+        pairs.append((_(u"Źródło"), ", ".join(rel.get("sources") or []) or "?"))
+        pairs.append((_(u"Cel"), rel.get("client_target") or _(SNAP_TARGET)))
     else:
         ep = rel.get("active_endpoint") or rel.get("peer_host") or "?"
         if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint"):
-            ep += u"   w cronie: %s" % rel["installed_endpoint"]
-        pairs.append((u"Drugi host", ep))
+            ep += _(u"   w cronie: %s") % rel["installed_endpoint"]
+        pairs.append((_(u"Drugi host"), ep))
         if rel.get("mode") == "snaponly":
-            pairs.append((u"Kopia", u"brak -- migawki i ich retencja zostają na źródle"))
+            pairs.append((_(u"Kopia"), _(u"brak -- migawki i ich retencja zostają na źródle")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
-    pairs.append((u"Konto", rel.get("local_user") or ", ".join(accts) or "?"))
+    pairs.append((_(u"Konto"), rel.get("local_user") or ", ".join(accts) or "?"))
     prof = profile_word(rel.get("profile"), rel.get("name"))
     if rel.get("source_profile"):
-        prof += u"   źródło: %s" % rel["source_profile"]
-    pairs.append((u"Szablon", prof))
+        prof += _(u"   źródło: %s") % rel["source_profile"]
+    pairs.append((_(u"Szablon"), prof))
     if rel.get("recursion"):
-        pairs.append((u"Sposób", {"flat": u"każdy dataset osobno", "atomic": u"cała gałąź atomowo"}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"cała gałąź atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
-        pairs.append((u"Tryb", u"pasywny"))
+        pairs.append((_(u"Tryb"), _(u"pasywny")))
     if rel.get("bandwidth"):
-        pairs.append((u"Łącze", rel["bandwidth"]))
+        pairs.append((_(u"Łącze"), rel["bandwidth"]))
     prunes = [j for j in row["jobs"] if j.get("section_kind") == "prune"]
     if sends or prunes:
-        pairs.append((u"Zadania", u"%d: kopie lub migawki %d, porządki %d" % (len(sends) + len(prunes), len(sends), len(prunes))))
+        pairs.append((_(u"Zadania"), _(u"%d: kopie lub migawki %d, porządki %d") % (len(sends) + len(prunes), len(sends), len(prunes))))
     if rel.get("created_at"):
-        pairs.append((u"Powstała", rel["created_at"]))
-    for key, fld in ((u"Pełna kopia", "seed_completed_at"), (u"Aktywna od", "activated_at"), (u"Usunięta", "removed_at")):
+        pairs.append((_(u"Powstała"), rel["created_at"]))
+    for key, fld in ((_(u"Pełna kopia"), "seed_completed_at"), (_(u"Aktywna od"), "activated_at"), (_(u"Usunięta"), "removed_at")):
         if rel.get(fld):
             pairs.append((key, rel[fld]))
     return pairs
@@ -2308,7 +2322,7 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
     host = (data.jobs or {}).get("host") or "?"
     if data.failed("jobs"):
         scr = Screen()
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, u"Zadania na %s" % host, source_error_body(ch, "jobs", data, "list-jobs"), width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _(u"Zadania na %s") % host, source_error_body(ch, "jobs", data, "list-jobs"), width)
         scr.bars.add(0)
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
@@ -2322,9 +2336,9 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
     # harmonogram, retencja, czasy i GB sa w panelu (wlasciciel: "nie dublowac").
     cells = [[r["name"], r["task"], r.get("pref") or "-", r.get("next_disp") or "-", r["vword"] or "-"] for r in rows]
     n_rel = len({r["name"] for r in rows if r["kind"] == "job"})
-    title = u"Zadania na %s (%s, %s) -- %s" % (
-        host, plural(len([r for r in rows if r["kind"] == "job"]), "zadanie", "zadania", u"zadań"),
-        plural(n_rel, "relacja", "relacje", "relacji"), ZAD_SORT_LABELS[sort_mode])
+    title = _(u"Zadania na %s (%s, %s) -- %s") % (
+        host, plural(len([r for r in rows if r["kind"] == "job"]), _("zadanie"), _("zadania"), _(u"zadań")),
+        plural(n_rel, _("relacja"), _("relacje"), _("relacji")), _(ZAD_SORT_LABELS[sort_mode]))
     det_title, det, child = u"", [], None
     if rows and 0 <= cursor < len(rows):
         r = rows[cursor]
@@ -2332,22 +2346,22 @@ def render_zadania(data, rows, cursor, width, height, now, ch, message="", sort_
         if r["kind"] == "replica":
             det = replica_detail_pairs(r["replica"], ch, r["srow"], data.failed("stats"))
             child = {"name": r["name"], "tabs": TABS["zadania"], "ti": 0, "items": [],
-                     "heads": [u"Kiedy"], "empty": u"przebiegi repliki: ekran Replika, zakładka Przebiegi"}
+                     "heads": [_(u"Kiedy")], "empty": _(u"przebiegi repliki: ekran Replika, zakładka Przebiegi")}
         elif r["kind"] == "job":
             det = job_panel_pairs(r, data, now, ch)
             runs = job_runs(r, data, now, ch)
             child = {"name": det_title, "tabs": TABS["zadania"], "ti": 0, "items": runs,
-                     "heads": [u"Kiedy", u"Wynik", u"Dataset", u"Czas", u"Dane"], "prio": [0, 1, 2, 4, 3],
-                     "empty": (u"porządki (prune) nie zapisują przebiegów w historii transferów -- czasy i błędy są w panelu obok"
+                     "heads": [_(u"Kiedy"), _(u"Wynik"), _(u"Dataset"), _(u"Czas"), _(u"Dane")], "prio": [0, 1, 2, 4, 3],
+                     "empty": (_(u"porządki (prune) nie zapisują przebiegów w historii transferów -- czasy i błędy są w panelu obok")
                                if all(j.get("section_kind") == "prune" for j in (r.get("jobs") or [r["job"]]))
-                               else u"brak przebiegów tego zadania w historii transferów")}
+                               else _(u"brak przebiegów tego zadania w historii transferów"))}
         else:
             det = rel_detail_pairs(r, data, now, ch)
-    empty = [u"Brak zadań zfs-backup na tym hoście (nie ma relacji albo jej config jest nieczytelny).",
-             u"Nową relację zakładasz na F3 Relacje: Ins."]
-    foot = (u"Enter pełne okno zadania   Tab do przebiegów") if rows else ""
+    empty = [_(u"Brak zadań zfs-backup na tym hoście (nie ma relacji albo jej config jest nieczytelny)."),
+             _(u"Nową relację zakładasz na F3 Relacje: Ins.")]
+    foot = (_(u"Enter pełne okno zadania   Tab do przebiegów")) if rows else ""
     return render_tabbed(data, width, height, now, ch, "zadania", title,
-                         [u"Relacja", u"Zadanie", u"Prefiks migawek", u"Następny", u"Kopie"], cells, cursor, foot,
+                         [_(u"Relacja"), _(u"Zadanie"), _(u"Prefiks migawek"), _(u"Następny"), _(u"Kopie")], cells, cursor, foot,
                          det_title, det, child, focus, pair_cursor, screen_actions("zadania"), empty, prio=[0, 1, 4, 3, 2], flex=2)
 
 
@@ -2355,14 +2369,14 @@ def summarize(rows):
     """Jedno zdanie o calym hoscie."""
     live = [r for r in rows if r["kind"] != "relation" or r["rel"].get("state") != "removed"]
     if not live:
-        return "brak relacji"
+        return _("brak relacji")
     counts = {}
     for r in live:
         counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
-    n = plural(len(live), "relacja", "relacje", "relacji")
+    n = plural(len(live), _("relacja"), _("relacje"), _("relacji"))
     if list(counts) == ["OK"]:
-        return "%s, wszystkie kopie aktualne" % n
-    parts = ["%d %s" % (counts[v], VERDICTS[v][0]) for v in VERDICT_ORDER if counts.get(v)]
+        return _("%s, wszystkie kopie aktualne") % n
+    parts = ["%d %s" % (counts[v], _(VERDICTS[v][0])) for v in VERDICT_ORDER if counts.get(v)]
     return "%s: %s" % (n, ", ".join(parts))
 
 
@@ -2436,7 +2450,7 @@ def guard_states(settings_file=None, confs=None):
 
 
 def guard_label(states):
-    pl = {"on": u"wł.", "off": u"wył."}
+    pl = {"on": _(u"wł."), "off": _(u"wył.")}
     cap, gro = states
     return u"ochrona: bezpiecznik %s · przyrost %s" % (pl.get(cap, u"?"), pl.get(gro, u"?"))
 
@@ -2447,10 +2461,10 @@ def top_bar(data, width, now, ascii_only, err_count):
     jobs = (data.jobs or {}).get("jobs", [])
     accounts = sorted({j.get("account", "") for j in jobs} |
                       {u.get("account", "") for u in (data.jobs or {}).get("unreadable", [])})
-    acct = ", ".join(a for a in accounts if a) or "(brak bloku)"
+    acct = ", ".join(a for a in accounts if a) or _("(brak bloku)")
     left = " zfs-snapshot-all"
-    mid = "%s%s | konto %s%s" % (host, (" " + ip) if ip else "", acct,
-                                  u"   ! bez odpowiedzi: %d" % err_count if err_count else "")
+    mid = _("%s%s | konto %s%s") % (host, (" " + ip) if ip else "", acct,
+                                  _(u"   ! bez odpowiedzi: %d") % err_count if err_count else "")
     right = u"odczyt %s " % time.strftime("%H:%M:%S", time.localtime(data.read_at or now))
     # Stan strażników hosta przed czasem odczytu -- odpada pierwszy, gdy ciasno.
     guards = guard_label(getattr(data, "guards", None) or guard_states()) + u"   "
@@ -2562,9 +2576,9 @@ def key_bar(active, width, extra=""):
 
 def source_error_body(ch, key, data, verb):
     """Zepsute zrodlo to komunikat, nie pusta tabela (kontrola ujemna etapu B)."""
-    return [u"błąd źródła: %s --json nie odpowiedział poprawnym JSON-em." % verb,
+    return [_(u"błąd źródła: %s --json nie odpowiedział poprawnym JSON-em.") % verb,
             "", fit(u"  %s" % data.errors[key], 200),
-            "", u"Ten ekran nie ma z czego rysować. Zobacz pełny błąd komendą:",
+            "", _(u"Ten ekran nie ma z czego rysować. Zobacz pełny błąd komendą:"),
             # NAZWIJ KOMENDE, nie kategorie. "Uruchom czasownik recznie" kazalo
             # operatorowi zgadnac, ktory to czasownik i z jaka flaga -- a ekran
             # zna jedno i drugie. Ten sam idiom, co w odmowach CLI w tym projekcie.
@@ -2610,7 +2624,7 @@ def rel_detail_pairs(row, data, now, ch):
     rel = row.get("rel")
     if row["kind"] == "unreadable":
         return [("blok", "%s -- config nieczytelny, %s" % (row["name"], row["last_txt"])),
-                (u"powód", row["reasons"][0] if row["reasons"] else "?")]
+                (_(u"powód"), row["reasons"][0] if row["reasons"] else "?")]
     if row["kind"] == "monitor":
         # STRAZNIK BEZ ZADANIA (uwaga 4b, F5 zniesiony): linia monitora, ktora
         # nie dopasowala sie do zadnego zadania na F2 -- reszta jej szczegolow
@@ -2619,22 +2633,22 @@ def rel_detail_pairs(row, data, now, ch):
     if row["kind"] == "job":
         return job_panel_pairs(row, data, now, ch)
     srcs = rel.get("sources", [])
-    pairs = [(u"Źródła (%d)" % len(srcs), ",  ".join(srcs) or "?")]
+    pairs = [(_(u"Źródła (%d)") % len(srcs), ",  ".join(srcs) or "?")]
     tgt = rel.get("client_target", "?")
     md = rel.get("managed_datasets", [])
-    pairs.append(("Cel", tgt + ("   -> %s" % ", ".join(md) if md else "")))
+    pairs.append((_("Cel"), tgt + ("   -> %s" % ", ".join(md) if md else "")))
     prof = rel.get("profile") or "?"
     if rel.get("source_profile"):
-        prof += u"   źródło: %s" % rel["source_profile"]
+        prof += _(u"   źródło: %s") % rel["source_profile"]
     rec = rel.get("recursion") or ""
-    pairs.append(("Polityka", prof + ("   rekursja %s" % rec if rec else "")
+    pairs.append((_("Polityka"), prof + ("   rekursja %s" % rec if rec else "")
                   + ("   pasywna" if rel.get("passive") == "1" else "")
-                  + (u"   łącze %s" % rel["bandwidth"] if rel.get("bandwidth") else "")))
+                  + (_(u"   łącze %s") % rel["bandwidth"] if rel.get("bandwidth") else "")))
     last = row["last"]
     if last:
         w, note = transfer_word(last, now)
         st, fin = int(last.get("started_epoch") or 0), int(last.get("finished_epoch") or 0)
-        mode = {"incremental": "przyrostowy", "full": u"pełny"}.get(last.get("mode", ""), last.get("mode", ""))
+        mode = {"incremental": "przyrostowy", "full": _(u"pełny")}.get(last.get("mode", ""), last.get("mode", ""))
         base = last.get("base", "")
         txt = "%s  %s" % (w, fmt_full(fin if fin else st))
         if fin and st:
@@ -2642,14 +2656,14 @@ def rel_detail_pairs(row, data, now, ch):
         txt += "  %s" % mode
         if note:
             txt += "  " + note
-        pairs.append(("Ostatni bieg", txt))
+        pairs.append((_("Ostatni bieg"), txt))
     else:
-        pairs.append(("Ostatni bieg", u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'"))
+        pairs.append((_("Ostatni bieg"), _(u"brak zapisu w historii -- to NIE znaczy 'bez awarii', tylko 'nie wiadomo'")))
     if row["next_epoch"]:
-        pairs.append((u"Następny", "%s  (wg crontaba, %s)" % (
+        pairs.append((_(u"Następny"), "%s  (wg crontaba, %s)" % (
             fmt_full(row["next_epoch"]), ", ".join(sorted({j.get("schedule", "") for j in row["jobs"] if j.get("section_kind") in SEND_KINDS})))))
     else:
-        pairs.append((u"Następny", row["next"]))
+        pairs.append((_(u"Następny"), row["next"]))
     mon = row["vword"]
     if row["monitors"]:
         m0 = row["monitors"][0]
@@ -2658,30 +2672,30 @@ def rel_detail_pairs(row, data, now, ch):
         # Jedna linia w panelu; pelny tekst monitora jest w oknie (Enter).
         mon += "   " + row["reasons"][0].splitlines()[0]
     elif row["verdict"] == "BEZ MONITORA" and rel.get("state") == "active":
-        mon += u"   nikt nie sprawdza, czy kopia dalej się robi"
+        mon += _(u"   nikt nie sprawdza, czy kopia dalej się robi")
     warns = []
     if rel.get("endpoint_diverged"):
-        warns.append(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)"
+        warns.append(_(u"cron idzie przez %s, zapisany %s -- NIEwdrożony (verify-endpoint, activate-client)")
                      % (rel.get("installed_endpoint") or "?", rel.get("active_endpoint") or "?"))
     if rel.get("paused_local"):
-        warns.append(u"relacja wstrzymana (pause-client); starzenie się kopii jest tu oczekiwane")
+        warns.append(_(u"relacja wstrzymana (pause-client); starzenie się kopii jest tu oczekiwane"))
     if rel.get("state") != "active" and rel.get("state") != "removed":
-        warns.append(u"relacja nie jest aktywna: stan %s, następny krok: %s" % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
+        warns.append(_(u"relacja nie jest aktywna: stan %s, następny krok: %s") % (rel.get("state"), next_step(rel).replace("NAME", row["name"])))
     if rel.get("state") == "removed":
-        warns.append(u"rekord usunięty %s; kopie na dysku nie zostały ruszone" % (rel.get("removed_at") or "?"))
+        warns.append(_(u"rekord usunięty %s; kopie na dysku nie zostały ruszone") % (rel.get("removed_at") or "?"))
     # JEDNO OSTRZEZENIE NA FAKT, nie na monitor. Relacja ma monitor na kazdy
     # szczebel, wiec ta sama uwaga o innym pliku silnika wchodzila do panelu
     # cztery razy i wypychala z niego Stan, Typ i Kierunek (pve10, 2026-09-21).
     _seen = set()
     for m in row["monitors"]:
         if m.get("engine_path_differs"):
-            w = u"cron woła inny plik silnika (%s) niż ten, który tu policzono" % m.get("engine_in_cron")
+            w = _(u"cron woła inny plik silnika (%s) niż ten, który tu policzono") % m.get("engine_in_cron")
             if w not in _seen:
                 _seen.add(w)
                 warns.append(w)
     if warns:
-        pairs.append(("Uwaga", "  |  ".join(warns)))
-    pairs.append((u"Migawki" if row.get("mode") == "snaponly" else "Kopie", mon))
+        pairs.append((_("Uwaga"), "  |  ".join(warns)))
+    pairs.append((_(u"Migawki") if row.get("mode") == "snaponly" else _("Kopie"), mon))
     return pairs
 
 
@@ -2704,7 +2718,7 @@ def rel_pairs(row, data, now, ch):
             if j.get("direction") == "snaponly":
                 _sc = j.get("scope", "") or "?"
                 _h = _sc.rsplit(":", 1)[0].split("@", 1)[-1] if ":" in _sc else ""
-                src = _sc.rsplit(":", 1)[-1] + ((u"   na %s" % _h) if _h else "")
+                src = _sc.rsplit(":", 1)[-1] + ((_(u"   na %s") % _h) if _h else "")
                 dst = None
             elif dst == "-":
                 dst = None
@@ -2713,7 +2727,7 @@ def rel_pairs(row, data, now, ch):
             # datasetu "aktualne" -- ten sam fakt (nieudany ostatni bieg TEGO zadania) ma
             # dawac ten sam werdykt w obu miejscach.
             if (row.get("rel") or {}).get("state") == "active":
-                _fail, _ = job_run_issue(data, j)
+                _fail, _disc = job_run_issue(data, j)
                 if _fail:
                     v = worst([v, "BLAD"])
             srow, vol = job_stats_for(data, j, job_cron_label(j))
@@ -2722,7 +2736,7 @@ def rel_pairs(row, data, now, ch):
             else:
                 czas = times_cell(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-"
                 gb = hbytes_short(vol) if vol is not None else "-"
-            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": VERDICTS.get(v, (v, 0))[0],
+            out.append({"src": src, "dst": dst, "job": j, "v": v, "vword": _(VERDICTS.get(v, (v, 0))[0]),
                          "czas": czas, "gb": gb, "vol": vol, "tiers": 1, "jobs": [j],
                          "czas_words": "?" if data.failed("stats") else (times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s")) if srow else "-")})
         # JEDEN WIERSZ = JEDEN DATASET, nie jedna linia crona (2026-09-21).
@@ -2748,7 +2762,7 @@ def rel_pairs(row, data, now, ch):
             # ta jest numerem KOLORU (OK=2, CRITICAL=1), wiec porownanie jej dalo
             # by "najgorszy = najjasniejszy". Zlapane przy czytaniu wlasnego diffu.
             g["v"] = worst([g["v"], r["v"]])
-            g["vword"] = VERDICTS.get(g["v"], (g["v"], 0))[0]
+            g["vword"] = _(VERDICTS.get(g["v"], (g["v"], 0))[0])
             if g.get("vol") is not None and r.get("vol") is not None:
                 g["vol"] = g["vol"] + r["vol"]
                 g["gb"] = hbytes_short(g["vol"])
@@ -2763,12 +2777,12 @@ def rel_pairs(row, data, now, ch):
     for src in rel.get("sources", []):
         bare = src.split(":", 1)[1] if ":" in src else src
         if rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
-            out.append({"src": bare + ((u"   na %s" % peer) if rel.get("mode") == "snaponly" else ""), "dst": None,
+            out.append({"src": bare + ((_(u"   na %s") % peer) if rel.get("mode") == "snaponly" else ""), "dst": None,
                         "job": None, "vword": "--", "czas": "-", "gb": "-"})
             continue
         out.append({"src": src if ":" in src else "%s:%s" % (peer, src), "dst": "%s/%s/%s" % (tgt, peer, bare),
                     "job": None, "vword": "--", "czas": "-", "gb": "-"})
-    return out, "wg rekordu, nie crona"
+    return out, _("wg rekordu, nie crona")
 
 
 # Cel relacji BEZ KOPII (wlasciciel 2026-10-18: "celem migawek jest ten sam dataset");
@@ -2793,7 +2807,7 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
     if data.failed("status"):
         scr = Screen()
         body = source_error_body(ch, "status", data, "status")
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, "Relacje na kolektorze %s" % host, body, width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _("Relacje na kolektorze %s") % host, body, width)
         scr.bars.add(0)
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
@@ -2801,12 +2815,12 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         push_key_bar(scr, "relacje", width, _acts)
         return scr
     live = [r for r in rows if not (r["kind"] == "relation" and r["rel"].get("state") == "removed")]
-    title = "Relacje na kolektorze %s (%d)" % (host, len(live))
+    title = _("Relacje na kolektorze %s (%d)") % (host, len(live))
     cells = [[r["name"], r.get("typ") or "?", r.get("dir") or "?", r.get("state") or "", r.get("vword") or "-"] for r in rows]
     det_title, det, child = "", [], None
     if rows and 0 <= cursor < len(rows):
         r = rows[cursor]
-        det_title = u"%s -- relacja" % r["name"]
+        det_title = _(u"%s -- relacja") % r["name"]
         det = rel_panel_pairs(r, data, now, ch)
         tabs = TABS["relacje"]
         ti = ti % len(tabs)
@@ -2814,12 +2828,12 @@ def render_relacje(data, rows, cursor, width, height, now, ch, message="", focus
         # Dataset policzony z REKORDU (relacja bez crona) -- tytul to mowi.
         child.update({"name": r["name"] + ((u" (%s)" % child["how"]) if child.get("how") not in (None, u"wg crona") else ""),
                       "tabs": tabs, "ti": ti})
-    empty = [u"Brak relacji zfs-backup na tym hoście.",
-             u"Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane.",
-             u"Ins = nowa relacja (kreator)."]
-    foot = (u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów") if rows else u"Ins nowa relacja"
+    empty = [_(u"Brak relacji zfs-backup na tym hoście."),
+             _(u"Inne kopie (np. replikacja Proxmoxa) nie są tu pokazywane."),
+             _(u"Ins = nowa relacja (kreator).")]
+    foot = (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if rows else _(u"Ins nowa relacja")
     return render_tabbed(data, width, height, now, ch, "relacje", title,
-                         [u"Relacja", u"Typ", u"Kierunek", u"Stan", u"Kopie"], cells, cursor, foot,
+                         [_(u"Relacja"), _(u"Typ"), _(u"Kierunek"), _(u"Stan"), _(u"Kopie")], cells, cursor, foot,
                          det_title, det, child, focus, pair_cursor, _acts, empty, prio=[0, 4, 3, 2, 1], flex=2)
 
 
@@ -2849,52 +2863,52 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     rel = row["rel"]
     out = []
     out.extend(detail_kv(ch, [
-        ("Stan", state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
-        ("Kierunek", row.get("dir") or "?"),
-        (u"Źródło", u"%s   cel %s" % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or SNAP_TARGET))
+        (_("Stan"), state_word(rel) + ("   (peer: %s)" % rel["peer_pair_state"] if rel.get("peer_pair_state") not in ("", "NOT_ASKED", None) else "")),
+        (_("Kierunek"), row.get("dir") or "?"),
+        (_(u"Źródło"), _(u"%s   cel %s") % (", ".join(rel.get("sources") or []) or "?", rel.get("client_target") or _(SNAP_TARGET)))
         if rel.get("mode") == "local" else
         ("Peer", "%s   endpoint %s%s" % (rel.get("peer_host") or "?", rel.get("active_endpoint") or "?",
-                                          ("   w cronie: %s" % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
-        ("Historia", "  ".join(x for x in [
+                                          (_("   w cronie: %s") % rel.get("installed_endpoint")) if rel.get("installed_endpoint") and rel.get("installed_endpoint") != rel.get("active_endpoint") else "")),
+        (_("Historia"), "  ".join(x for x in [
             "utworzona %s" % rel["created_at"] if rel.get("created_at") else "",
-            u"pełna kopia %s" % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
+            _(u"pełna kopia %s") % rel["seed_completed_at"] if rel.get("seed_completed_at") else "",
             "aktywowana %s" % rel["activated_at"] if rel.get("activated_at") else "",
-            u"usunięta %s" % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
+            _(u"usunięta %s") % rel["removed_at"] if rel.get("removed_at") else ""]) or "?"),
     ], w))
     out.append("")
     # "co obejmuje" (wlasciciel 2026-10-18): to samo slowo dla kopii i dla migawek.
-    out.append(u"co obejmuje")
-    pairs = [(u"Źródła (%d)" % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
+    out.append(_(u"co obejmuje"))
+    pairs = [(_(u"Źródła (%d)") % len(rel.get("sources", [])), compact_paths(rel.get("sources", [])) or "?")]
     # R5-3 (wlasciciel 2026-09-25): jedno slowo "Cel" zamiast "Ladowiska" plus
     # osobnego "Cel" -- JEDEN wiersz "Cele (N)" z lista datasetow docelowych;
     # przy synchro dopisek w tej samej linii.
-    _sync = u"   (ta sama ścieżka -- lustro)" if rel.get("mode") == "sync" else ""
+    _sync = _(u"   (ta sama ścieżka -- lustro)") if rel.get("mode") == "sync" else ""
     if rel.get("managed_datasets"):
-        pairs.append((u"Cele (%d)" % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
+        pairs.append((_(u"Cele (%d)") % len(rel["managed_datasets"]), compact_paths(rel["managed_datasets"]) + _sync))
     elif rel.get("mode") == "snaponly" or (rel.get("mode") == "local" and not rel.get("client_target")):
-        pairs.append(("Cel", SNAP_TARGET))
+        pairs.append((_("Cel"), _(SNAP_TARGET)))
     else:
-        pairs.append(("Cel", (rel.get("client_target") or "") + _sync or "?"))
+        pairs.append((_("Cel"), (rel.get("client_target") or "") + _sync or "?"))
     if rel.get("managed_prune_scope"):
-        pairs.append((u"Prune", ",  ".join(rel["managed_prune_scope"])))
+        pairs.append((_(u"Prune"), ",  ".join(rel["managed_prune_scope"])))
     if rel.get("local_user"):
-        pairs.append(("Konto", rel["local_user"]))
+        pairs.append((_("Konto"), rel["local_user"]))
     out.extend(detail_kv(ch, pairs, w))
     out.append("")
-    out.append(u"jak długo trzyma")
+    out.append(_(u"jak długo trzyma"))
     # X19: liczby i godziny są niżej (wiersze kopii i sprzątania, z configu); szablon to
     # tylko informacja, z czego relacja powstała.
-    pairs = [(u"Powstała z", profile_word(rel.get("profile"), rel.get("name")))]
+    pairs = [(_(u"Powstała z"), profile_word(rel.get("profile"), rel.get("name")))]
     if not rel.get("source_profile") and (rel.get("passive") == "1" or rel.get("mode") == "sync"):
-        pairs.append((u"Źródło", u"bez sprzątania (źródło nie kasuje)"))
+        pairs.append((_(u"Źródło"), _(u"bez sprzątania (źródło nie kasuje)")))
     if any(job_is_mirror(j) for j in row.get("jobs") or []):
-        pairs.append((u"Cel", u"lustro źródła: trzyma to, co źródło (bez własnej retencji)"))
+        pairs.append((_(u"Cel"), _(u"lustro źródła: trzyma to, co źródło (bez własnej retencji)")))
     if rel.get("recursion"):
-        pairs.append((u"Sposób", {"flat": u"każdy dataset osobno", "atomic": u"cała gałąź atomowo"}.get(rel["recursion"], rel["recursion"])))
+        pairs.append((_(u"Sposób"), {"flat": _(u"każdy dataset osobno"), "atomic": _(u"cała gałąź atomowo")}.get(rel["recursion"], rel["recursion"])))
     if rel.get("passive") == "1":
-        pairs.append(("Tryb", "pasywny"))
+        pairs.append((_("Tryb"), _("pasywny")))
     if rel.get("bandwidth"):
-        pairs.append((u"Łącze", rel["bandwidth"]))
+        pairs.append((_(u"Łącze"), rel["bandwidth"]))
     out.extend(detail_kv(ch, pairs, w))
     # CO I KIEDY -- slowami, z configu (to byla sekcja POLITYKA; zakladka Config
     # pokazuje te same sekcje doslownie). Bez tego "jak dlugo trzyma" mowilo tylko
@@ -2903,7 +2917,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
     if data is not None and repo is not None and files is not None:
         cfg, cerr = load_config(repo, files, data, row["name"])
         if cerr:
-            out.append(u"  show-config: błąd źródła: %s" % cerr)
+            out.append(_(u"  show-config: błąd źródła: %s") % cerr)
     if cfg:
         tmpl = {t.get("name"): t.get("fields", {}) for t in cfg.get("templates", [])}
         pol, order = {}, []       # (slowo, opis bez nazwy) -> [nazwy]; kolejnosc pierwszego wystapienia
@@ -2936,7 +2950,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     sched = _tf("send_schedule", u) or f.get("send_schedule") or t.get("send_schedule") or "?"
                     pref = f.get("prefix") or t.get("prefix") or "?"
                     _ret = f.get("retain") or f.get("keep") or t.get("retain") or t.get("keep") or ""
-                    key = (_w, u"co: %s   stempel %s%s" % (cron_words(sched), pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
+                    key = (_w, _(u"co: %s   stempel %s%s") % (cron_words(sched), pref, (u"   trzyma %s" % keep_cell(_ret)) if _ret else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
                         order.append(key)
@@ -2951,7 +2965,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                         if not sched:
                             continue
                         r = t.get("retain") or t.get("keep") or ""
-                        key = (u"lokalny prune", u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", cron_words(sched),
+                        key = (u"lokalny prune", _(u"trzyma %s   co: %s%s") % (keep_cell(r) if r else "?", cron_words(sched),
                                                                          "   drabina GFS" if t.get("gfs") == "yes" else ""))
                         pol.setdefault(key, []).append(sec.get("name") or "?")
                         if key not in order:
@@ -2967,7 +2981,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     t = tmpl.get(u, {})
                     r = t.get("retain") or t.get("keep") or ""
                     sched = _tf("prune_schedule", u) or f.get("prune_schedule") or t.get("prune_schedule") or "?"
-                    key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(r) if r else "?", cron_words(sched),
+                    key = (_pw, _(u"trzyma %s   co: %s%s") % (keep_cell(r) if r else "?", cron_words(sched),
                                                            "   drabina GFS" if (t.get("gfs") or f.get("gfs")) == "yes" else ""))
                     pol.setdefault(key, []).append(sec.get("name") or "?")
                     if key not in order:
@@ -2982,7 +2996,7 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                     ret.append(f["retain"])
                 sched = f.get("prune_schedule") or (tmpl.get(used[0], {}).get("prune_schedule") if used else "") or "?"
                 _pw = u"zdalny prune" if "@" in (sec.get("name") or "") else u"lokalny prune"
-                key = (_pw, u"trzyma %s   co: %s%s" % (keep_cell(" ".join(ret)) if ret else "?", cron_words(sched),
+                key = (_pw, _(u"trzyma %s   co: %s%s") % (keep_cell(" ".join(ret)) if ret else "?", cron_words(sched),
                                                        "   drabina GFS" if f.get("gfs") == "yes" else ""))
                 pol.setdefault(key, []).append(sec.get("name") or "?")
                 if key not in order:
@@ -2990,14 +3004,14 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
         for key in order:
             names = pol[key]
             what = compact_paths(names) if len(names) > 1 else names[0]
-            label = key[0] + (u" (%d szt.)" % len(names) if len(names) > 1 else "")
+            label = _(key[0]) + (u" (%d szt.)" % len(names) if len(names) > 1 else "")
             out.extend(detail_kv(ch, [(label, u"%s   %s" % (key[1], what))], w))
     out.append("")
-    out.append(u"czy działa")
+    out.append(_(u"czy działa"))
     if row["monitors"]:
         for m in row["monitors"]:
-            vw = VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0]
-            out.extend(detail_kv(ch, [(vw, "%s   rodzina %s   progi %s / %s   co %s" % (
+            vw = _(VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0])
+            out.extend(detail_kv(ch, [(vw, _("%s   rodzina %s   progi %s / %s   co %s") % (
                 compact_paths(m.get("datasets", [])), m.get("pattern") or "?", m.get("warn") or "?",
                 m.get("crit") or "?", m.get("schedule") or "?"))], w))
             if m.get("reason"):
@@ -3007,11 +3021,11 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
                 for ln in rl[:1]:
                     out.extend(wrap("    " + ln, w))
                 if len(rl) > 1:
-                    out.append(u"    (i %d podobnych dla pozostałych datasetów)" % (len(rl) - 1))
+                    out.append(_(u"    (i %d podobnych dla pozostałych datasetów)") % (len(rl) - 1))
             if m.get("paused_local"):
-                out.append(u"    linia wstrzymana (pauza)")
+                out.append(_(u"    linia wstrzymana (pauza)"))
     else:
-        out.append(u"  bez monitora -- nikt nie sprawdza, czy kopia dalej się robi")
+        out.append(_(u"  bez monitora -- nikt nie sprawdza, czy kopia dalej się robi"))
     last = row["last"]
     if last:
         wd, note = transfer_word(last, now)
@@ -3021,9 +3035,9 @@ def _relation_opis_lines(row, data, now, ch, w, repo=None, files=None):
             txt += "  %s" % fmt_dur(fin - st_)
         if note:
             txt += "  " + note
-        out.extend(detail_kv(ch, [(u"Ostatni transfer", txt)], w))
+        out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), txt)], w))
     else:
-        out.extend(detail_kv(ch, [(u"Ostatni transfer", u"brak zapisu w historii")], w))
+        out.extend(detail_kv(ch, [(_(u"Ostatni transfer"), _(u"brak zapisu w historii"))], w))
     out.append("")
     out.append(u"komendy")
     for v in verbs_for(rel):
@@ -3039,11 +3053,11 @@ def _relation_cron_lines(row, ch, w):
     if row["jobs"]:
         out.extend(cron_lines_of(row["jobs"], w, ch))
     else:
-        out.append(u"  brak linii w cronie dla tej etykiety" + ("" if rel.get("state") == "active" else u" (relacja nie jest aktywna)"))
+        out.append(_(u"  brak linii w cronie dla tej etykiety") + ("" if rel.get("state") == "active" else _(u" (relacja nie jest aktywna)")))
     accts = sorted({j.get("account", "") for j in row["jobs"] if j.get("account")})
     if accts:
         out.append("")
-        out.append(u"konto: %s" % ", ".join(accts))
+        out.append(_(u"konto: %s") % ", ".join(accts))
     return out
 
 
@@ -3075,8 +3089,8 @@ def config_sections_lines(cfg, w, keep_section=None, keep_template=None):
     """Sekcje configu WERBATIM (klucz=wartosc), tak jak je oddaje show-config
     --json -- read-only. `keep_section(sec)` / `keep_template(name)` zawezaja do
     jednego zadania albo pary (R4-6); bez nich -- cala relacja."""
-    out = [u"plik: %s" % (cfg.get("config") or "?"),
-           u"(odtworzone z show-config -- klucz=wartość, nie surowy tekst pliku)"]
+    out = [_(u"plik: %s") % (cfg.get("config") or "?"),
+           _(u"(odtworzone z show-config -- klucz=wartość, nie surowy tekst pliku)")]
     used = set()
     for sec in cfg.get("sections", []):
         if keep_section is not None and not keep_section(sec):
@@ -3106,18 +3120,18 @@ def _relation_config_lines(row, data, ch, w, repo, files):
     pary (R4-6) -- tylko sekcja tego zakresu i szablon tego szczebla."""
     n = row["name"]
     if data is None or repo is None or files is None:
-        return [u"configu nie da się odczytać w tym trybie"]
+        return [_(u"configu nie da się odczytać w tym trybie")]
     jobs = row.get("jobs") or []
     if row["kind"] != "relation" and not (row.get("kind") == "job" and jobs and jobs[0].get("label")):
         cf = sorted({j.get("config") for j in jobs if j.get("config")})
-        return [u"zadanie bez relacji -- show-config pokazuje tylko relacje",
-                u"plik: %s" % (", ".join(cf) or "?")]
+        return [_(u"zadanie bez relacji -- show-config pokazuje tylko relacje"),
+                _(u"plik: %s") % (", ".join(cf) or "?")]
     cfg, cerr = load_config(repo, files, data, n)
     if cerr:
-        return [u"błąd źródła: %s" % cerr, u"  zfs-backup.sh show-config %s --json" % n]
+        return [_(u"błąd źródła: %s") % cerr, u"  zfs-backup.sh show-config %s --json" % n]
     if not cfg or not cfg.get("sections"):
-        return [u"configu jeszcze nie ma -- powstanie przy aktywacji", "",
-                u"podgląd: zfs-backup.sh activate %s" % n]
+        return [_(u"configu jeszcze nie ma -- powstanie przy aktywacji"), "",
+                _(u"podgląd: zfs-backup.sh activate %s") % n]
     if row["kind"] == "relation":
         return config_sections_lines(cfg, w)
     # Zadanie/para: sekcja o tym samym rodzaju i nazwie (= zakres z list-jobs)
@@ -3127,7 +3141,7 @@ def _relation_config_lines(row, data, ch, w, repo, files):
     out = config_sections_lines(cfg, w, keep_section=lambda sec: (sec.get("kind"), sec.get("name")) in want,
                                 keep_template=lambda name: name in tiers)
     if len(out) == 2:
-        out.append(u"(nie znaleziono sekcji tego zadania w configu relacji)")
+        out.append(_(u"(nie znaleziono sekcji tego zadania w configu relacji)"))
     return out
 
 
@@ -3241,7 +3255,7 @@ def cron_lines_of(jobs, w, ch):
 
     for gi, g in enumerate(groups):
         j = g[0]
-        arrow = ch.arrows.get(j.get("direction", ""), "?").format(peer=j.get("peer") or "?")
+        arrow = _(ch.arrows.get(j.get("direction", ""), "?")).format(peer=j.get("peer") or "?")
         tiers = []
         for x in g:
             t = x.get("tier", "")
@@ -3256,11 +3270,11 @@ def cron_lines_of(jobs, w, ch):
     if shared:
         n_ = max([k for _l, k in shared] + [0])
         out.append("")
-        out.append(u"  wspólne (%s)" % (u"strażnik i linie obejmujące %d zakresów" % n_ if n_ > 1 else u"linie bez jednego właściciela"))
+        out.append(_(u"  wspólne (%s)") % (_(u"strażnik i linie obejmujące %d zakresów") % n_ if n_ > 1 else _(u"linie bez jednego właściciela")))
         for ln, _k in shared:
             _emit(ln)
     if jobs and not any(j.get("cron_lines") for j in jobs):
-        out.append(u"  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)")
+        out.append(_(u"  (linie crona: list-jobs bez pola cron_lines -- starszy czytelnik)"))
     return out
 
 
@@ -3308,15 +3322,15 @@ def snap_pair_summary(d, rows):
     has_tgt = bool((d.get("target") or {}).get("dataset"))
     nsrc = sum(1 for r in rows if r[1]); ntgt = sum(1 for r in rows if r[2])
     if not has_tgt:
-        return u"Migawki na źródle: %d (ta relacja nie robi kopii)" % nsrc
+        return _(u"Migawki na źródle: %d (ta relacja nie robi kopii)") % nsrc
     if both:
-        base = u"Baza następnej kopii: %s" % snap_short(both[-1][1]["snap"])
+        base = _(u"Baza następnej kopii: %s") % snap_short(both[-1][1]["snap"])
     else:
         tg = [r[2] for r in rows if r[2]]
         bm = [b for b in (d.get("source") or {}).get("bookmarks") or [] if tg and b.get("guid") == tg[-1].get("guid")]
-        base = (u"Baza: zakładka %s (wspólnej migawki brak)" % bm[0]["name"]) if bm else u"Baza: BRAK -- następna kopia od zera"
+        base = (_(u"Baza: zakładka %s (wspólnej migawki brak)") % bm[0]["name"]) if bm else _(u"Baza: BRAK -- następna kopia od zera")
     only_src = sum(1 for r in rows if r[0] == ">")
-    return u"%s   Źródło %d / kopia %d   do skopiowania: %d" % (base, nsrc, ntgt, only_src)
+    return _(u"%s   Źródło %d / kopia %d   do skopiowania: %d") % (base, nsrc, ntgt, only_src)
 
 
 def snap_cell(s, w, now):
@@ -3337,29 +3351,29 @@ def snap_pair_lines(d, width, side, now):
     rows = list(reversed(chrono))
     s_ds = (d.get("source") or {}).get("dataset", "?")
     t_ds = (d.get("target") or {}).get("dataset") or ""
-    host = (d.get("source") or {}).get("host") or u"ten host"
+    host = (d.get("source") or {}).get("host") or _(u"ten host")
     out = [fit(snap_pair_summary(d, chrono), width - 4), ""]
     for side_name in ("source", "target"):
         e = (d.get(side_name) or {}).get("error")
         if e:
-            out.append(fit(u"BŁĄD %s: %s" % (u"źródła" if side_name == "source" else u"kopii", e), width - 4))
+            out.append(fit(_(u"BŁĄD %s: %s") % (_(u"źródła") if side_name == "source" else _(u"kopii"), e), width - 4))
     inner = width - 4
     two = bool(t_ds) and inner >= 116
     if two:
         w = (inner - 7) // 2
-        out.append(fit(u"  %-*s │   %s" % (w, fit(u"ŹRÓDŁO %s  %s" % (host, s_ds), w), u"KOPIA %s" % t_ds), inner))
+        out.append(fit(u"  %-*s │   %s" % (w, fit(_(u"ŹRÓDŁO %s  %s") % (host, s_ds), w), _(u"KOPIA %s") % t_ds), inner))
         for m, s, t in rows:
             out.append(u"%s %s │ %s %s" % (m, snap_cell(s, w, now), m if t else " ", snap_cell(t, w, now)))
     else:
         show_t = bool(t_ds) and side == 1
         w = inner - 3
-        out.append(fit(u"  %s" % ((u"KOPIA %s" % t_ds) if show_t else (u"ŹRÓDŁO %s  %s" % (host, s_ds))), inner))
+        out.append(fit(u"  %s" % ((_(u"KOPIA %s") % t_ds) if show_t else (_(u"ŹRÓDŁO %s  %s") % (host, s_ds))), inner))
         for m, s, t in rows:
             x = t if show_t else s
             if x:
                 out.append(u"%s %s" % (m, snap_cell(x, w, now)))
     if not rows:
-        out.append(u"  (brak migawek)")
+        out.append(_(u"  (brak migawek)"))
     return out
 
 
@@ -3421,7 +3435,7 @@ def render_window(base, title, lines, scroll, width, height, ch, footer=u"Esc za
     pos = ""
     if len(lines) > inner_h:
         pos = "%d-%d z %d" % (scroll + 1, min(len(lines), scroll + inner_h), len(lines))
-    bx = box(ch, title, body, width, footer=footer + ("   " + pos if pos else ""))
+    bx = box(ch, title, body, width, footer=_(footer) + ("   " + pos if pos else ""))
     scr.lines = [base.lines[0]] + bx + keep
     scr.bars.add(0)
     if keep:
@@ -3459,8 +3473,8 @@ def transfer_detail_pairs(t, now, ch, data=None):
     liscie); "Poprzednia" zamiast "od @" (wlasciciel 2026-10-19)."""
     wd, note = transfer_word(t, now)
     snap = t.get("dataset", "?")
-    pairs = [(u"Migawka", snap.split("@", 1)[-1] if "@" in snap else snap),
-             (u"Poprzednia", t["base"].split("@", 1)[-1] if t.get("base") else u"brak -- pełna kopia")]
+    pairs = [(_(u"Migawka"), snap.split("@", 1)[-1] if "@" in snap else snap),
+             (_(u"Poprzednia"), t["base"].split("@", 1)[-1] if t.get("base") else _(u"brak -- pełna kopia"))]
     src = ds_of(snap)
     tgt = t.get("target", "?")
     peer = t.get("peer") or ""
@@ -3470,24 +3484,24 @@ def transfer_detail_pairs(t, now, ch, data=None):
         src = u"%s:%s" % (peer, src)
     elif t.get("direction") == "push" and peer:
         tgt = u"%s:%s" % (peer, tgt)
-    pairs += [(u"Źródło", src), (u"Cel", tgt)]
+    pairs += [(_(u"Źródło"), src), (_(u"Cel"), tgt)]
     tot, dn, wire = int(t.get("total_bytes") or 0), int(t.get("done_bytes") or 0), int(t.get("wire_bytes") or -1)
     if t.get("state") == "running":
         rate, eta = int(t.get("rate_bps") or 0), int(t.get("eta_seconds") or -1)
-        prog = u"%s z %s" % (human_bytes(dn), human_bytes(tot) if tot > 0 else u"nieznanej wielkości")
+        prog = u"%s z %s" % (human_bytes(dn), human_bytes(tot) if tot > 0 else _(u"nieznanej wielkości"))
         if tot > 0:
             prog += u" (%d%%)" % (dn * 100 // tot)
-        prog += u", %s/s, zostało %s" % (human_bytes(rate), fmt_dur(eta) if eta >= 0 else "?")
-        pairs.append((u"Postęp", prog))
+        prog += _(u", %s/s, zostało %s") % (human_bytes(rate), fmt_dur(eta) if eta >= 0 else "?")
+        pairs.append((_(u"Postęp"), prog))
     else:
-        pairs.append((u"Dane", human_bytes(tot) if tot > 0 else (human_bytes(dn) if dn > 0 else u"0 B -- nic się nie zmieniło")))
+        pairs.append((_(u"Dane"), human_bytes(tot) if tot > 0 else (human_bytes(dn) if dn > 0 else _(u"0 B -- nic się nie zmieniło"))))
     if wire >= 0:
-        pairs.append((u"Na łączu", human_bytes(wire)))
+        pairs.append((_(u"Na łączu"), human_bytes(wire)))
     st, fin, upd = int(t.get("started_epoch") or 0), int(t.get("finished_epoch") or 0), int(t.get("updated_epoch") or 0)
-    pairs.append((u"Start / koniec", u"%s / %s" % (fmt_full(st), fmt_full(fin) if fin else (u"trwa, aktualizacja %s" % fmt_ago(upd, now)))))
+    pairs.append((_(u"Start / koniec"), u"%s / %s" % (fmt_full(st), fmt_full(fin) if fin else (u"trwa, aktualizacja %s" % fmt_ago(upd, now)))))
     if note:
-        pairs.append((u"Uwaga", note))
-    pairs.append((u"Proces", u"pid %s" % t.get("pid", "?")))
+        pairs.append((_(u"Uwaga"), note))
+    pairs.append((_(u"Proces"), u"pid %s" % t.get("pid", "?")))
     return pairs
 
 
@@ -3500,7 +3514,7 @@ def transfer_rows(data, now, hide_gone=False):
 def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone=False):
     if data.failed("progress"):
         scr = Screen()
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, u"Historia", source_error_body(ch, "progress", data, "progress"), width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _(u"Historia"), source_error_body(ch, "progress", data, "progress"), width)
         scr.bars.add(0)
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
@@ -3512,21 +3526,21 @@ def render_transfery(data, cursor, width, height, now, ch, message="", hide_gone
     cells = []
     for t in allrows:
         it = transfer_item(t, data, now, ch)
-        mode = {"incremental": u"przyrost.", "full": u"pełny"}.get(t.get("mode", ""), t.get("mode", "?"))
+        mode = {"incremental": u"przyrost.", "full": _(u"pełny")}.get(t.get("mode", ""), t.get("mode", "?"))
         when, wd, ds, dur, dane = it["cells"]
         cells.append([when, transfer_label(t, data), ds, mode, wd, dur, dane])
     host = (data.jobs or {}).get("host") or ""
-    title = (u"Historia transferów%s (%d)" % ((u" na " + host) if host else "", len(allrows))) \
-        + (u" -- bez usuniętych relacji" if hide_gone else "") + u"   biegnie teraz: %d" % len(running)
+    title = (_(u"Historia transferów%s (%d)") % ((_(u" na ") + host) if host else "", len(allrows))) \
+        + (_(u" -- bez usuniętych relacji") if hide_gone else "") + _(u"   biegnie teraz: %d") % len(running)
     det_title, det = u"", []
     if allrows and 0 <= cursor < len(allrows):
         t = allrows[cursor]
         det_title = u"%s -- %s" % (transfer_label(t, data), ds_of(t.get("dataset")))
         det = transfer_detail_pairs(t, now, ch, data)
     return render_tabbed(data, width, height, now, ch, "transfery", title,
-                         [u"Kiedy", u"Relacja", u"Dataset", u"Tryb", u"Wynik", u"Czas", u"Dane"], cells, cursor,
-                         u"Enter pełne okno transferu" if allrows else "", det_title, det, None, "list", 0,
-                         screen_actions("transfery", hide_gone), [u"brak zapisów w historii transferów"], prio=[0, 1, 4, 2, 6, 5, 3], flex=2)
+                         [_(u"Kiedy"), _(u"Relacja"), _(u"Dataset"), _(u"Tryb"), _(u"Wynik"), _(u"Czas"), _(u"Dane")], cells, cursor,
+                         _(u"Enter pełne okno transferu") if allrows else "", det_title, det, None, "list", 0,
+                         screen_actions("transfery", hide_gone), [_(u"brak zapisów w historii transferów")], prio=[0, 1, 4, 2, 6, 5, 3], flex=2)
 
 
 # --- Monitor ---------------------------------------------------------------
@@ -3538,12 +3552,12 @@ def monitor_rows(data):
 
 
 def monitor_detail_pairs(m, ch, full=False):
-    vw = VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0]
-    pairs = [("Relacja", m.get("label") or "(bez etykiety)"),
-             ("Datasety (%d)" % len(m.get("datasets", [])), ",  ".join(m.get("datasets", [])) or "?"),
+    vw = _(VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0])
+    pairs = [(_("Relacja"), m.get("label") or _("(bez etykiety)")),
+             (_("Datasety (%d)") % len(m.get("datasets", [])), ",  ".join(m.get("datasets", [])) or "?"),
              ("Rodzina", "%s   progi %s / %s   %s" % (m.get("pattern") or "?", m.get("warn") or "?", m.get("crit") or "?",
                                                       "rekursywnie" if m.get("recursive") else "")),
-             ("Sprawdza", "%s   konto %s" % (m.get("schedule") or "?", m.get("account") or "?"))]
+             ("Sprawdza", _("%s   konto %s") % (m.get("schedule") or "?", m.get("account") or "?"))]
     if m.get("exclude"):
         pairs.append(("Wyklucza", ", ".join(m["exclude"])))
     verdict = vw
@@ -3552,16 +3566,16 @@ def monitor_detail_pairs(m, ch, full=False):
         # W panelu jedna linia (pelny tekst w oknie po Enter); w oknie wszystkie.
         verdict += "   " + (lines[0] if not full else "  |  ".join(lines))
     elif m.get("verdict") == "OK":
-        verdict += u"   najnowsza migawka mieści się w progu"
+        verdict += _(u"   najnowsza migawka mieści się w progu")
     notes = []
     if m.get("paused_local"):
-        notes.append(u"relacja wstrzymana -- OK z pauzy to nie dowód pokrycia")
+        notes.append(_(u"relacja wstrzymana -- OK z pauzy to nie dowód pokrycia"))
     if m.get("engine_path_differs"):
-        notes.append(u"cron woła %s, a tu policzono %s -- inny plik silnika" % (m.get("engine_in_cron"), m.get("engine_run")))
+        notes.append(_(u"cron woła %s, a tu policzono %s -- inny plik silnika") % (m.get("engine_in_cron"), m.get("engine_run")))
     if not m.get("parsed", True):
-        notes.append(u"linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia")
+        notes.append(_(u"linii monitora nie dało się sparsować; werdykt pochodzi z kodu wyjścia"))
     if notes:
-        pairs.append(("Uwaga", "  |  ".join(notes)))
+        pairs.append((_("Uwaga"), "  |  ".join(notes)))
     pairs.append(("Werdykt", verdict))
     return pairs
 
@@ -3578,7 +3592,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         beside = width >= 150
         lbw = max(MIN_WIDTH, int(width * 0.6)) if beside else width
         inner = lbw - 4
-        nw = max(8, min(20, max([len(m.get("label") or "(bez rel.)") for m in mons] + [8])))
+        nw = max(8, min(20, max([len(m.get("label") or _("(bez rel.)")) for m in mons] + [8])))
         # RODZINA NIE UCINA SIE O JEDEN ZNAK. Kolumna miala na sztywno 16, a
         # `automated_monthly` ma 17 -- ekran pokazywal `automated_month…` przy
         # kazdej szerokosci (zmierzone na pve10, 2026-09-21). Bierze tyle, ile
@@ -3591,7 +3605,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         while dw < 20 and fw > 16:
             fw -= 1
             dw = inner - (nw + fw + pw + vw + 4)
-        hdr = "%s %s %s %s %s" % (fit("Relacja", nw), fit("Dataset", dw), fit("Rodzina", fw), fit("Progi", pw), fit("Kopie", vw))
+        hdr = "%s %s %s %s %s" % (fit(_("Relacja"), nw), fit(_("Dataset"), dw), fit("Rodzina", fw), fit("Progi", pw), fit(_("Kopie"), vw))
         panel_h = 0 if beside else 9
         list_h = max(3, height - 2 - 2 - panel_h - 2)
         first = 0
@@ -3602,25 +3616,25 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
         for i, m in enumerate(mons[first:first + list_h], start=first):
             ds = m.get("datasets", [])
             dtxt = (ds[0] if ds else "?") + ("  +%d" % (len(ds) - 1) if len(ds) > 1 else "")
-            vword = VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0]
+            vword = _(VERDICTS.get(m.get("verdict", ""), (m.get("verdict", "?"), 0))[0])
             if m.get("paused_local"):
-                vword += " PAUZA"
+                vword += _(" PAUZA")
             if i == cursor:
                 cur_y = len(body)
-            body.append("%s %s %s %s %s" % (fit(m.get("label") or "(bez rel.)", nw, ch), fit_left(dtxt, dw, ch),
+            body.append("%s %s %s %s %s" % (fit(m.get("label") or _("(bez rel.)"), nw, ch), fit_left(dtxt, dw, ch),
                                             fit(m.get("pattern") or "?", fw, ch),
                                             fit("%s/%s" % (m.get("warn") or "?", m.get("crit") or "?"), pw, ch), fit(vword, vw, ch)))
         if not mons:
-            body += [u"Zero linii monitora w blokach zfs-backup-managed.",
-                     u"Kopie mogą się robić, ale NIKT nie sprawdza, czy dalej się robią."]
+            body += [_(u"Zero linii monitora w blokach zfs-backup-managed."),
+                     _(u"Kopie mogą się robić, ale NIKT nie sprawdza, czy dalej się robią.")]
         if len(mons) > first + list_h:
             body.append(u"... jeszcze %d" % (len(mons) - first - list_h))
         while len(body) < list_h + 2:
             body.append("")
         wv = (data.monitors or {}).get("worst", "?")
         title = "Monitor -- %s, najgorzej: %s" % (plural(len(mons), "linia", "linie", "linii"),
-                                                 VERDICTS.get(wv, (wv, 0))[0] if mons else "--")
-        lb = box(ch, title, body, lbw, footer=u"Enter szczegóły" if mons else "")
+                                                 _(VERDICTS.get(wv, (wv, 0))[0]) if mons else "--")
+        lb = box(ch, title, body, lbw, footer=_(u"Enter szczegóły") if mons else "")
         if cur_y is not None:
             scr.cursor_y = 2 + cur_y
         panel = []
@@ -3631,7 +3645,7 @@ def render_monitor(data, cursor, width, height, now, ch, message=""):
             pl = pl[:lim]
             while len(pl) < lim:
                 pl.append("")
-            panel = box(ch, u"%s -- szczegóły" % (mons[cursor].get("label") or "linia"), pl, pw_, double=False)
+            panel = box(ch, _(u"%s -- szczegóły") % (mons[cursor].get("label") or "linia"), pl, pw_, double=False)
         if beside and panel:
             scr.lines = [top] + side_by_side(lb, panel, width, ch)
         else:
@@ -3665,18 +3679,18 @@ def replica_when(r, long=False):
     dysku (on_insert, P5 2026-10-09)."""
     s = r.get("schedule") or "?"
     if s == "on-insert":
-        return u"po włożeniu nośnika" if long else u"po włożeniu"
-    return s + (u" + po włożeniu" if r.get("on_insert") == "yes" else "")
+        return _(u"po włożeniu nośnika") if long else _(u"po włożeniu")
+    return s + (_(u" + po włożeniu") if r.get("on_insert") == "yes" else "")
 
 
 def replica_disks_words(r):
     """Dyski repliki po ID puli (P5): ile, albo że rozpoznawane tylko po nazwie."""
     if r.get("media") != "removable":
-        return u"stały nośnik (pula w maszynie)"
+        return _(u"stały nośnik (pula w maszynie)")
     g = [x for x in (r.get("media_guids") or "").split(",") if x]
     if not g:
-        return u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)"
-    return u"%d po ID puli: %s" % (len(g), ", ".join(g))
+        return _(u"po nazwie puli -- ID nieznane (zmiana repliki dopisze ID włożonego dysku)")
+    return _(u"%d po ID puli: %s") % (len(g), ", ".join(g))
 
 
 def replica_keep_n(r):
@@ -3692,37 +3706,37 @@ def replica_kind(r, ascii_=False):
     """X11 (wlasciciel 2026-10-12): kluczowe rozroznienie repliki = CO TRAFIA NA DYSK.
     (krotko do kolumny, pelnymi slowami do panelu)"""
     if r.get("prefix") == "-":
-        return u"historia", u"historia kolektora -- dysk dostaje migawki, które już tam są"
+        return _(u"historia"), _(u"historia kolektora -- dysk dostaje migawki, które już tam są")
     n = replica_keep_n(r)
-    return (u"zdjęcia %s%d" % ("x" if ascii_ else u"×", n),
-            u"własne zdjęcia -- replika przy każdym biegu robi zdjęcie %s" % (r.get("prefix") or "replica_"))
+    return (_(u"zdjęcia %s%d") % ("x" if ascii_ else u"×", n),
+            _(u"własne zdjęcia -- replika przy każdym biegu robi zdjęcie %s") % (r.get("prefix") or "replica_"))
 
 
 def replica_disk_words(r):
     """X11: co jest na dysku, na przykladzie (ile czasu wstecz)."""
     if r.get("prefix") == "-":
         if r.get("history") and r["history"] not in ("all",):
-            return u"tylko najnowsza migawka kolektora (historia: tylko różnica -- pośrednie nie trafiają)"
-        return u"to samo co kolektor: wszystkie jego migawki, z pośrednimi"
+            return _(u"tylko najnowsza migawka kolektora (historia: tylko różnica -- pośrednie nie trafiają)")
+        return _(u"to samo co kolektor: wszystkie jego migawki, z pośrednimi")
     n = replica_keep_n(r)
     f = (r.get("schedule") or "").split()
     span = u""
     if r.get("schedule") == "on-insert":
-        span = u" -- tyle włożeń dysku wstecz"
+        span = _(u" -- tyle włożeń dysku wstecz")
     elif len(f) == 5:
         if f[2] != "*":
-            span = u" = ok. %d mies. wstecz" % n
+            span = _(u" = ok. %d mies. wstecz") % n
         elif f[4] != "*":
-            span = u" = ok. %d tyg. wstecz" % n
+            span = _(u" = ok. %d tyg. wstecz") % n
         elif f[1] != "*" and "/" not in f[1] and "," not in f[1]:
-            span = u" = ok. %d dni wstecz" % n
+            span = _(u" = ok. %d dni wstecz") % n
     if n == 1:
-        words = u"ostatnie zdjęcie"
+        words = _(u"ostatnie zdjęcie")
     elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
-        words = u"ostatnie zdjęcia"
+        words = _(u"ostatnie zdjęcia")
     else:
-        words = u"ostatnich zdjęć"
-    return u"%d %s%s%s" % (n, words, span, u" (jak kolektor)" if not str(r.get("keep") or "").strip() else u"")
+        words = _(u"ostatnich zdjęć")
+    return u"%d %s%s%s" % (n, words, span, _(u" (jak kolektor)") if not str(r.get("keep") or "").strip() else u"")
 
 
 def replica_crypt_words(r):
@@ -3730,45 +3744,45 @@ def replica_crypt_words(r):
     raw = str(r.get("raw") or "").lower() in ("yes", "1", "true")
     words = []
     if r.get("media_key"):
-        words.append(u"nośnik zaszyfrowany (klucz: F8)")
+        words.append(_(u"nośnik zaszyfrowany (klucz: F8)"))
     if raw:
-        words.append(u"kopie idą zaszyfrowane (raw), klucz zostaje u źródła")
-    return u"; ".join(words) if words else u"nie"
+        words.append(_(u"kopie idą zaszyfrowane (raw), klucz zostaje u źródła"))
+    return u"; ".join(words) if words else _(u"nie")
 
 
 def replica_detail_pairs(r, ch, srow=None, stats_failed=False):
     """Panel repliki (F6), U21: grupy Co / Kiedy / Zdrowie, harmonogram slowami,
     JEDEN "Ostatni bieg" (bylo "Ostatnio" i "Ost. bieg" z roznymi godzinami)."""
     s = r.get("schedule") or "?"
-    when = u"zaraz po włożeniu dysku" if s == "on-insert" else \
-        cron_words(s) + (u" i zaraz po włożeniu dysku" if r.get("on_insert") == "yes" else "")
-    pairs = [group(ch, u"Co"),
-             (u"Rodzaj", replica_kind(r)[1]),
-             (u"Na dysku", replica_disk_words(r)),
-             (u"Szyfrowane", replica_crypt_words(r)),
-             (u"Cel", u"%s   (pula %s)" % (r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
-             group(ch, u"Kiedy"),
-             (u"Nośnik", media_state_line(r, MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"]))),
-             (u"Kiedy", when),
-             (u"Dyski", replica_disks_words(r)),
-             (u"Dysk widziany", r.get("last_seen") or u"nigdy (brak pliku last-seen bramy)"),
-             group(ch, u"Zdrowie")]
+    when = _(u"zaraz po włożeniu dysku") if s == "on-insert" else \
+        cron_words(s) + (_(u" i zaraz po włożeniu dysku") if r.get("on_insert") == "yes" else "")
+    pairs = [group(ch, _(u"Co")),
+             (_(u"Rodzaj"), replica_kind(r)[1]),
+             (_(u"Na dysku"), replica_disk_words(r)),
+             (_(u"Szyfrowane"), replica_crypt_words(r)),
+             (_(u"Cel"), _(u"%s   (pula %s)") % (r.get("dst", "?"), (r.get("dst") or "?").split("/")[0])),
+             group(ch, _(u"Kiedy")),
+             (_(u"Nośnik"), media_state_line(r, MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"]))),
+             (_(u"Kiedy"), when),
+             (_(u"Dyski"), replica_disks_words(r)),
+             (_(u"Dysk widziany"), r.get("last_seen") or _(u"nigdy (brak pliku last-seen bramy)")),
+             group(ch, _(u"Zdrowie"))]
     if stats_failed:
-        pairs.append((u"Ostatni bieg", u"? (job-stats nie odpowiedział)"))
+        pairs.append((_(u"Ostatni bieg"), _(u"? (job-stats nie odpowiedział)")))
     elif srow:
         _rc = srow.get("last_rc")
-        pairs.append((u"Ostatni bieg", u"%s   %s" % (srow.get("last_at") or "?", u"OK" if str(_rc) == "0" else u"BŁĄD (rc=%s)" % _rc)))
-        pairs.append((u"Czas", times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
-        pairs.append((u"Wywołania", u"%s, błędów %s" % (srow.get("runs"), srow.get("failures"))))
+        pairs.append((_(u"Ostatni bieg"), u"%s   %s" % (srow.get("last_at") or "?", u"OK" if str(_rc) == "0" else _(u"BŁĄD (rc=%s)") % _rc)))
+        pairs.append((_(u"Czas"), times_words(srow.get("last_s"), srow.get("avg_s"), srow.get("max_s"))))
+        pairs.append((_(u"Wywołania"), _(u"%s, błędów %s") % (srow.get("runs"), srow.get("failures"))))
     else:
-        pairs.append((u"Ostatni bieg", u"brak w oknie statystyk (zadanie nie biegło albo dysku nie było)"))
+        pairs.append((_(u"Ostatni bieg"), _(u"brak w oknie statystyk (zadanie nie biegło albo dysku nie było)")))
     return pairs
 
 
 def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0):
     if data.failed("replicas"):
         scr = Screen()
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, u"Replika", source_error_body(ch, "replicas", data, "list-replicas"), width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _(u"Replika"), source_error_body(ch, "replicas", data, "list-replicas"), width)
         scr.bars.add(0)
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
@@ -3780,26 +3794,26 @@ def render_nosniki(data, cursor, width, height, now, ch, message="", focus="list
     for r in reps:
         st = MEDIA_STATES.get(r.get("present", "unknown"), MEDIA_STATES["unknown"])
         s = r.get("schedule") or "?"
-        cells.append([r.get("name") or "?", st[0], (r.get("last_current") or u"brak")[:16],
-                      u"po włożeniu" if s == "on-insert" else cron_words(s) + (u" + po włożeniu" if r.get("on_insert") == "yes" else "")])
+        cells.append([r.get("name") or "?", _(st[0]), (r.get("last_current") or _(u"brak"))[:16],
+                      _(u"po włożeniu") if s == "on-insert" else cron_words(s) + (_(u" + po włożeniu") if r.get("on_insert") == "yes" else "")])
     det_title, det, child = u"", [], None
     if reps and 0 <= cursor < len(reps):
         r = reps[cursor]
-        det_title = u"%s -- replika" % r.get("name")
+        det_title = _(u"%s -- replika") % r.get("name")
         det = replica_detail_pairs(r, ch, replica_stats_row(data, r.get("name")), data.failed("stats"))
         tabs = TABS["nosniki"]
         ti = ti % len(tabs)
         child = rep_children(tabs[ti][0], r, data, now, ch)
         child.update({"name": r.get("name"), "tabs": tabs, "ti": ti})
-    empty = [u"Brak sekcji [replica:] w configu tego kolektora.",
-             u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji.",
-             u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA"]
+    empty = [_(u"Brak sekcji [replica:] w configu tego kolektora."),
+             _(u"Ten host nie replikuje na nośniki wymienne; to nie jest błąd, tylko brak konfiguracji."),
+             _(u"Ins dodaje ją w oknach; z linii: zfs-backup.sh add-replica NAZWA --source=DS --dst=PULA/BAZA")]
     if not reps:
-        det_title = u"stany nośnika"
-        det = [(MEDIA_STATES[k][0], MEDIA_STATES[k][2]) for k in ("here", "available", "away", "wrong_medium")]
+        det_title = _(u"stany nośnika")
+        det = [(_(MEDIA_STATES[k][0]), _(MEDIA_STATES[k][2])) for k in ("here", "available", "away", "wrong_medium")]
     return render_tabbed(data, width, height, now, ch, "nosniki", u"Repliki backupu kolektora (%d)" % len(reps),
-                         [u"Replika", u"Nośnik", u"Kopia z", u"Kiedy"], cells, cursor,
-                         (u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów") if reps else u"Ins nowa replika",
+                         [_(u"Replika"), _(u"Nośnik"), _(u"Kopia z"), _(u"Kiedy")], cells, cursor,
+                         (_(u"Enter szczegóły   Ins nowa   Del usuń   Tab do datasetów")) if reps else _(u"Ins nowa replika"),
                          det_title, det, child, focus, pair_cursor, screen_actions("nosniki"), empty, prio=[0, 1, 2, 3])
 
 
@@ -3813,12 +3827,12 @@ def template_detail_pairs(p):
     w = profile_words(p)
     pairs = []
     if p.get("source") == "shadow":
-        pairs.append((u"Uwaga", u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku"))
-    pairs += [(u"Opis", p.get("description") or "-"),
-              (u"Jak liczy", u"%s, %s" % (w["mech"], w["shape"]))]
+        pairs.append((_(u"Uwaga"), _(u"ma nazwę fabrycznego, pakiet go pomija; zmień nazwę pliku")))
+    pairs += [(_(u"Opis"), p.get("description") or "-"),
+              (_(u"Jak liczy"), u"%s, %s" % (w["mech"], w["shape"]))]
     if p.get("error"):
-        pairs.append((u"Błąd", p["error"]))
-    pairs.append((u"Plik", p.get("file") or "?"))
+        pairs.append((_(u"Błąd"), p["error"]))
+    pairs.append((_(u"Plik"), p.get("file") or "?"))
     return pairs
 
 
@@ -3826,7 +3840,7 @@ def render_szablony(data, cursor, width, height, now, ch, message="", rows=None,
     profs = list(data.profiles or [])
     if data.failed("profiles") and not profs:
         scr = Screen()
-        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, "Szablony", source_error_body(ch, "profiles", data, "list-profiles"), width)
+        scr.lines = [top_bar(data, width, now, ch.ascii, len(data.errors))] + box(ch, _("Szablony"), source_error_body(ch, "profiles", data, "list-profiles"), width)
         scr.bars.add(0)
         while len(scr.lines) < height - 1:
             scr.lines.append(fit("", width))
@@ -3836,22 +3850,22 @@ def render_szablony(data, cursor, width, height, now, ch, message="", rows=None,
     cells = []
     for x in profs:
         w = profile_words(x)
-        cells.append([x.get("name") or "?", TEMPLATE_KIND.get(x.get("source"), x.get("source") or "?"), w["mech"],
+        cells.append([x.get("name") or "?", _(TEMPLATE_KIND.get(x.get("source"), x.get("source") or "?")), w["mech"],
                       w["retention"].replace(u"trzyma ", ""), str(int(x.get("used_by") or 0))])
     det_title, det, child = u"", [], None
     if profs and 0 <= cursor < len(profs):
         p = profs[cursor]
-        det_title = u"%s -- szablon" % p.get("name")
+        det_title = _(u"%s -- szablon") % p.get("name")
         det = template_detail_pairs(p)
         tabs = TABS["szablony"]
         ti = ti % len(tabs)
         child = tpl_children(tabs[ti][0], p, rows, now, ch)
         child.update({"name": p.get("name"), "tabs": tabs, "ti": ti})
-    return render_tabbed(data, width, height, now, ch, "szablony", u"Szablony retencji (%d)" % len(profs),
-                         [u"Nazwa", u"Rodzaj", u"Sposób", u"Trzyma", u"Użyty"], cells, cursor,
-                         u"Enter szczegóły   Ins nowy z zaznaczonego   Del usuń własny   Tab niżej",
+    return render_tabbed(data, width, height, now, ch, "szablony", _(u"Szablony retencji (%d)") % len(profs),
+                         [_(u"Nazwa"), _(u"Rodzaj"), _(u"Sposób"), _(u"Trzyma"), _(u"Użyty")], cells, cursor,
+                         _(u"Enter szczegóły   Ins nowy z zaznaczonego   Del usuń własny   Tab niżej"),
                          det_title, det, child, focus, pair_cursor, screen_actions("szablony"),
-                         [u"Brak szablonów (list-profiles)."], prio=[0, 3, 2, 4, 1], flex=3)
+                         [_(u"Brak szablonów (list-profiles).")], prio=[0, 3, 2, 4, 1], flex=3)
 
 
 # --- Odzysk (F11) ----------------------------------------------------------
@@ -3878,27 +3892,27 @@ def odzysk_rows(rows, data=None, now=None):
                 newest = e if newest is None or e > newest else newest
         out.append({"kind": "relation", "name": r["name"], "typ": r.get("typ") or "?", "dir": r.get("dir") or "?",
                     "stan": state_word(rel), "rel": rel, "newest": newest})
-    out.append({"kind": "disk", "name": u"z innego dysku", "typ": u"nośnik", "dir": u"dysk podłączony do tego hosta", "stan": "",
+    out.append({"kind": "disk", "name": _(u"z innego dysku"), "typ": _(u"nośnik"), "dir": _(u"dysk podłączony do tego hosta"), "stan": "",
                 "newest": None})
     return out
 
 
 def odzysk_detail(row, copies=()):
     if row.get("kind") == "disk":
-        return [(u"Skąd", u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii"),
-                (u"Kiedy", u"także bez relacji i bez replik, np. czysty serwer po ransomware"),
-                group(None, u"Zgody"),
-                (u"Na bok", u"tak -- do nowego datasetu, nic nie nadpisuje"),
-                (u"Przeglądanie", u"tak: migawka tylko do odczytu, mc")]
+        return [(_(u"Skąd"), _(u"kopia na dysku podłączonym do tego hosta -- nośnik repliki albo dysk przyniesiony po awarii")),
+                (_(u"Kiedy"), _(u"także bez relacji i bez replik, np. czysty serwer po ransomware")),
+                group(None, _(u"Zgody")),
+                (_(u"Na bok"), _(u"tak -- do nowego datasetu, nic nie nadpisuje")),
+                (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc"))]
     path = compact_paths(list(copies)) if copies else "?"
-    return [group(None, u"Kopie"),
-            (u"Ścieżka", path),
-            (u"Kierunek", row.get("dir") or "?"),
-            group(None, u"Zgody"),
-            (u"Na źródło", u"sprawdza okno Przywróć -- źródło musi wydać zgodę (deploy.sh --allow-restore)"),
-            (u"Na bok", u"tak -- do nowego datasetu obok, oryginał nietknięty"),
-            (u"Przeglądanie", u"tak: migawka tylko do odczytu, mc, potem odmontowanie"),
-            (u"Uwaga", u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ")]
+    return [group(None, _(u"Kopie")),
+            (_(u"Ścieżka"), path),
+            (_(u"Kierunek"), row.get("dir") or "?"),
+            group(None, _(u"Zgody")),
+            (_(u"Na źródło"), _(u"sprawdza okno Przywróć -- źródło musi wydać zgodę (deploy.sh --allow-restore)")),
+            (_(u"Na bok"), _(u"tak -- do nowego datasetu obok, oryginał nietknięty")),
+            (_(u"Przeglądanie"), _(u"tak: migawka tylko do odczytu, mc, potem odmontowanie")),
+            (_(u"Uwaga"), _(u"odzysk nadpisuje albo dokłada dane -- nic się nie dzieje przed WYKONAJ"))]
 
 
 def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus="list", pair_cursor=0, ti=0):
@@ -3907,13 +3921,13 @@ def render_odzysk(data, rows, cursor, width, height, now, ch, message="", focus=
     det_title, det, child = u"", [], None
     if items and 0 <= cursor < len(items):
         x = items[cursor]
-        det_title = u"%s -- odzysk" % x["name"]
+        det_title = _(u"%s -- odzysk") % x["name"]
         child = odz_children("ds", x, rows, data, now, ch)
         det = odzysk_detail(x, [it.get("dataset") for it in child.get("items") or [] if it.get("dataset")])
         child.update({"name": x["name"], "tabs": TABS["odzysk"], "ti": 0})
     host = (data.jobs or {}).get("host") or ""
-    return render_tabbed(data, width, height, now, ch, "odzysk", (u"Odzysk danych na %s" % host).strip(),
-                         [u"Skąd", u"Rodzaj", u"Najnowsza kopia"], cells, cursor, u"Enter odzyskaj   Tab do datasetów",
+    return render_tabbed(data, width, height, now, ch, "odzysk", (_(u"Odzysk danych na %s") % host).strip(),
+                         [_(u"Skąd"), _(u"Rodzaj"), _(u"Najnowsza kopia")], cells, cursor, _(u"Enter odzyskaj   Tab do datasetów"),
                          det_title, det, child, focus, pair_cursor, screen_actions("odzysk"))
 
 
@@ -4096,7 +4110,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
             return "stay"
         self.pending_shell = line
         return "shell"
@@ -4132,7 +4146,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
             return "stay"
         line = self.window_env(argv[1] if len(argv) > 1 else "cmd", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4143,7 +4157,7 @@ class UI(object):
         do statusu swoje ostatnie slowo (wt_end w wt-lib.sh, np. "przerwane, nic nie
         zmieniono"), a GUI pokazuje je po powrocie zamiast "[rc=1] <cala linia polecenia>"
         (kampania 3, wlasciciel 2026-10-23: Esc wygladal jak blad)."""
-        self.pending_title = WINDOW_TITLES.get(verb, verb)
+        self.pending_title = _(WINDOW_TITLES.get(verb, verb))
         log_path = self.start_verb_log(verb, line)
         status = (log_path + ".status") if log_path else os.path.join(
             "/tmp", "zfs-tui-%d-%s.status" % (os.getpid(), time.strftime("%H%M%S")))
@@ -4156,7 +4170,7 @@ class UI(object):
         if log_path:
             self.pending_log_path = log_path
             line = "ZFS_TUI_LOG=%s %s" % (shlex.quote(log_path), line)
-            self.message = u"dziennik: %s" % log_path
+            self.message = _(u"dziennik: %s") % log_path
         return line
 
     def window_end_message(self, rc):
@@ -4175,12 +4189,12 @@ class UI(object):
         if said:
             msg = said
         elif rc == 0:
-            msg = u"%s: zakończone" % title
+            msg = _(u"%s: zakończone") % title
         else:
-            msg = u"%s: zakończone z kodem %s" % (title, rc)
+            msg = _(u"%s: zakończone z kodem %s") % (title, rc)
         log_path, self.pending_log_path = self.pending_log_path, None
         if log_path:
-            msg += u"   dziennik: %s" % log_path
+            msg += _(u"   dziennik: %s") % log_path
         return msg
 
     def rel_names(self):
@@ -4218,7 +4232,7 @@ class UI(object):
         if self.exec_log:
             with io.open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
-            self.message = u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: " + line
+            self.message = _(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu: ") + line
             return "stay"
         line = self.window_env("new-relation", line)
         self.pending_shell, self.pending_nowait = line, True
@@ -4229,13 +4243,13 @@ class UI(object):
         sekund (pve10: ~5,6 s). Klawisz tylko ZAMAWIA odswiezenie i wypisuje
         'odswiezam...'; petla najpierw to rysuje, potem wola run_pending()."""
         self.pending_refresh = True
-        self.message = u"odświeżam… (czasowniki: status, list-jobs, monitor, job-stats -- kilka sekund)"
+        self.message = _(u"odświeżam… (czasowniki: status, list-jobs, monitor, job-stats -- kilka sekund)")
 
     def run_pending(self):
         if getattr(self, "pending_refresh", False):
             self.pending_refresh = False
             self.refresh()
-            self.message = u"odświeżono %s" % time.strftime("%H:%M:%S", time.localtime(self.now()))
+            self.message = _(u"odświeżono %s") % time.strftime("%H:%M:%S", time.localtime(self.now()))
 
     # ODŚWIEŻANIE W TLE (U12/U13, właściciel 2026-10-19: "powrót do GUI trwa wszędzie
     # długo", "Esc po F7 długo wraca"). Źródła idą równolegle od P2, ale razem trwają tyle,
@@ -4305,7 +4319,7 @@ class UI(object):
             self.message = self.message[:-len(self.BG_NOTE)]
         data = bg[1].get("data")
         if data is None:
-            self.message = (self.message or "") + u"   odświeżenie w tle nie wyszło: %s" % bg[1].get("err", "?")
+            self.message = (self.message or "") + _(u"   odświeżenie w tle nie wyszło: %s") % bg[1].get("err", "?")
             self.bg_failed = True   # REV-172: wiersze zostają stare -- czynności czekają na Ctrl-R
             return True
         self.files["_data"] = data
@@ -4313,7 +4327,7 @@ class UI(object):
         before = getattr(self, "rel_names_before_bg", None)
         self.rel_names_before_bg = None
         if before is not None and self.cursor_to_new(before):
-            self.message = (self.message or "") + u"  --  kursor na nowej relacji"
+            self.message = (self.message or "") + _(u"  --  kursor na nowej relacji")
         return True
 
     def refresh(self, only=None):
@@ -4371,19 +4385,19 @@ class UI(object):
     def current_relation(self, allow_removed=False):
         """Relacja pod kursorem na F3, albo powod, dla ktorego akcji nie ma."""
         if self.screen != "relacje":
-            return None, u"akcje na relacjach są na ekranie F3 Relacje"
+            return None, _(u"akcje na relacjach są na ekranie F3 Relacje")
         if not self.rows:
-            return None, u"brak relacji"
+            return None, _(u"brak relacji")
         r = self.rows[self.cursor["relacje"]]
         if r["kind"] != "relation":
-            return None, u"to nie jest relacja (%s) -- akcje dotyczą rekordów relacji" % ("zadanie bez rekordu" if r["kind"] == "job" else "nieczytelny blok")
+            return None, _(u"to nie jest relacja (%s) -- akcje dotyczą rekordów relacji") % (_("zadanie bez rekordu") if r["kind"] == "job" else "nieczytelny blok")
         if r["rel"].get("state") == "removed" and not allow_removed:
-            return None, u"relacja '%s' jest już usunięta (removed_at %s)" % (r["name"], r["rel"].get("removed_at") or "?")
+            return None, _(u"relacja '%s' jest już usunięta (removed_at %s)") % (r["name"], r["rel"].get("removed_at") or "?")
         return r, ""
 
     def confirm(self, title, argv, note_lines=None, redirect=None, on_yes=None, alt=None):
         line = self.shell_line(argv, redirect)
-        lines = [u"Wykona się DOKŁADNIE to:", ""] + wrap("  " + line, 72) + [""]
+        lines = [_(u"Wykona się DOKŁADNIE to:"), ""] + wrap("  " + line, 72) + [""]
         if note_lines:
             lines += note_lines + [""]
         self.window = ("confirm", {"title": title, "lines": lines, "argv": argv, "redirect": redirect,
@@ -4402,7 +4416,7 @@ class UI(object):
             with open(self.exec_log, "a", encoding="utf-8") as fh:
                 fh.write(shell + "\n")
             self.window = ("output", {"title": title, "path": None, "proc": None, "shell": shell,
-                                      "lines": [u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu:", "  " + shell], "rc": 0})
+                                      "lines": [_(u"[atrapa] nie uruchomiono, komenda zapisana do dziennika testu:"), "  " + shell], "rc": 0})
             self.scroll = 0
             return
         logdir = os.path.join(home_dir(), ".zfs-tui")
@@ -4434,7 +4448,7 @@ class UI(object):
                                     cwd=self.repo, start_new_session=True)
         except OSError as e:
             self.window = ("output", {"title": title, "path": path, "proc": None, "shell": shell,
-                                      "lines": [u"nie udało się uruchomić: %s" % e], "rc": 127})
+                                      "lines": [_(u"nie udało się uruchomić: %s") % e], "rc": 127})
             self.scroll = 0
             return
         self.window = ("output", {"title": title, "path": path, "proc": proc, "shell": shell, "lines": None,
@@ -4452,7 +4466,7 @@ class UI(object):
                 with open(obj["path"], "rb") as fh:
                     body = fh.read().decode("utf-8", "replace").splitlines()[1:]
             except OSError:
-                body = [u"(brak pliku wyjścia: %s)" % obj["path"]]
+                body = [_(u"(brak pliku wyjścia: %s)") % obj["path"]]
         for ln in body:
             out.extend(wrap(ln.rstrip("\r"), width - 4) or [""])
         proc = obj.get("proc")
@@ -4462,11 +4476,11 @@ class UI(object):
             obj["rc"] = rc
         out.append("")
         if rc is None and proc is not None:
-            out.append(u"--- trwa (pid %d). Esc zamyka okno, proces biegnie dalej; wyjście w %s" % (proc.pid, obj["path"]))
+            out.append(_(u"--- trwa (pid %d). Esc zamyka okno, proces biegnie dalej; wyjście w %s") % (proc.pid, obj["path"]))
         elif rc == 0:
-            out.append(u"--- zakończone, rc=0" + (u"   zapisano: %s" % obj["redirect"] if obj.get("redirect") else "") + (u"   (dziennik: %s)" % obj["path"] if obj.get("path") else ""))
+            out.append(_(u"--- zakończone, rc=0") + (u"   zapisano: %s" % obj["redirect"] if obj.get("redirect") else "") + (_(u"   (dziennik: %s)") % obj["path"] if obj.get("path") else ""))
         else:
-            out.append(u"--- zakończone, rc=%s -- czasownik ODMÓWIŁ albo padł; przeczytaj powyżej" % rc + (u"   (dziennik: %s)" % obj["path"] if obj.get("path") else ""))
+            out.append(_(u"--- zakończone, rc=%s -- czasownik ODMÓWIŁ albo padł; przeczytaj powyżej") % rc + (_(u"   (dziennik: %s)") % obj["path"] if obj.get("path") else ""))
         return out
 
     def ensure_profiles(self):
@@ -4486,7 +4500,7 @@ class UI(object):
         profs = self.data.profiles or []
         c = self.cursor["szablony"]
         if not profs or not (0 <= c < len(profs)):
-            self.message = u"brak szablonów (list-profiles nie odpowiedział?)"
+            self.message = _(u"brak szablonów (list-profiles nie odpowiedział?)")
             return
         n = profs[c].get("name")
         if k == "ins":
@@ -4502,20 +4516,20 @@ class UI(object):
         rows = self.jobrows or []
         c = self.cursor["zadania"]
         if not rows or not (0 <= c < len(rows)):
-            self.message = u"brak zadań -- nie ma czego uruchomić"
+            self.message = _(u"brak zadań -- nie ma czego uruchomić")
             return
         r = rows[c]
         # X23 (wlasciciel 2026-10-14): wiersz REPLIKI nie niesie linii crona (powstaje z
         # list-replicas, list-jobs replik nie zwraca) -- F7 robi to samo co F7 na F6.
         if r.get("kind") == "replica":
             n = (r.get("replica") or {}).get("name") or r.get("name")
-            self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- bieg teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         j = r.get("job") or {}
         sched = (r.get("schedule") or "").split()
         lines = [l for l in (j.get("cron_lines") or []) if sched and l.split()[:5] == sched]
         if not lines:
-            self.message = u"ten wiersz nie ma linii w cronie (strażnik albo replika, bez harmonogramu, lub osierocony wpis) -- nie ma czego uruchomić"
+            self.message = _(u"ten wiersz nie ma linii w cronie (strażnik albo replika, bez harmonogramu, lub osierocony wpis) -- nie ma czego uruchomić")
             return
         acct = j.get("account") or "root"
         # ZFS_JOB_PROPAGATE_RC: okno wyniku pokazuje prawdziwy kod zadania (zfs-job dla
@@ -4533,11 +4547,11 @@ class UI(object):
         elif me == "root":
             argv = ["runuser", "-u", acct, "--", "/bin/sh", "-c", script]
         else:
-            self.message = u"zadanie konta %s -- uruchomić je może root albo samo konto" % acct
+            self.message = _(u"zadanie konta %s -- uruchomić je może root albo samo konto") % acct
             return
         # X9 (wlasciciel 2026-10-12): bez okna potwierdzenia, jak F7 na replice -- bieg
         # robi dokladnie to, co nocny cron (prune tez: kasuje tylko wg retencji).
-        self.run_detached(u"Zadanie %s -- bieg teraz (konto %s)" % (r.get("name") or "", acct), argv, logname="zadanie")
+        self.run_detached(_(u"Zadanie %s -- bieg teraz (konto %s)") % (r.get("name") or "", acct), argv, logname="zadanie")
 
     def restore_action(self, row):
         """F11 ODZYSK DANYCH (właściciel 2026-10-18: odzysk nie siedzi w zmianie
@@ -4564,17 +4578,17 @@ class UI(object):
             return self.run_dialog([self.zb(), "add-replica", "--ask"])
         reps = (self.data.replicas or {}).get("replicas", [])
         if k == "F9":
-            self.message = u"przywracanie z dysku jest teraz na F11 Odzysk"
+            self.message = _(u"przywracanie z dysku jest teraz na F11 Odzysk")
             return
         c = self.cursor["nosniki"]
         if not reps or not (0 <= c < len(reps)):
-            self.message = u"brak replik -- nie ma czego uruchomić (Ins dodaje)" if k == "F7" else u"brak replik"
+            self.message = _(u"brak replik -- nie ma czego uruchomić (Ins dodaje)") if k == "F7" else _(u"brak replik")
             return
         n = reps[c].get("name")
         if k == "F7":
             # ZAZNACZONA replika, od razu, bez pytania (uwaga 18, 2026-10-08): kopia niczego
             # nie niszczy, a "t" niczego nie chronilo. Wynik w oknie, jak kazdy bieg w tle.
-            self.run_detached(u"Replika %s -- bieg teraz" % n, [self.zb(), "run-replicas", "--name=%s" % n])
+            self.run_detached(_(u"Replika %s -- bieg teraz") % n, [self.zb(), "run-replicas", "--name=%s" % n])
             return
         if k == "del":
             # Okna whiptail (remove-replica --ask): plan, potem WYKONAJ; dane na
@@ -4585,18 +4599,18 @@ class UI(object):
             # znowu -- to jedyna kopia, ktora moze opuscic ten serwer.
             kf = reps[c].get("media_key") or ""
             if not kf:
-                self.message = u"replika %s nie ma zaszyfrowanego nośnika -- nie ma klucza do pokazania" % n
+                self.message = _(u"replika %s nie ma zaszyfrowanego nośnika -- nie ma klucza do pokazania") % n
                 return
             try:
                 with open(kf, encoding="utf-8") as fh:
                     key = fh.read().strip()
             except OSError as e:
-                self.message = u"nie da się przeczytać klucza %s: %s" % (kf, e)
+                self.message = _(u"nie da się przeczytać klucza %s: %s") % (kf, e)
                 return
-            self.window = ("output", {"title": u"Klucz nośnika repliki %s" % n, "path": None, "proc": None, "shell": "",
+            self.window = ("output", {"title": _(u"Klucz nośnika repliki %s") % n, "path": None, "proc": None, "shell": "",
                                       "lines": [u"Klucz (64 znaki hex):", u"", u"  " + key, u"",
-                                                u"Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera",
-                                                u"kopii z dysku nie odczytasz.", u"Plik: " + kf], "rc": 0})
+                                                _(u"Zapisz go POZA tym serwerem. Bez klucza i bez tego serwera"),
+                                                _(u"kopii z dysku nie odczytasz."), _(u"Plik: ") + kf], "rc": 0})
             self.scroll = 0
             return
 
@@ -4615,9 +4629,9 @@ class UI(object):
             if r is None:
                 d = relations_dir()
                 return self.import_files(d if os.path.isdir(d) else home_dir())
-            self.window = ("choice", {"title": u"Relacja %s -- eksport / import" % r["name"], "cur": 0, "rel": r["name"],
-                                      "items": [("eksport", u"Eksport relacji %s do pliku" % r["name"]),
-                                                ("import", u"Import relacji z pliku")]})
+            self.window = ("choice", {"title": _(u"Relacja %s -- eksport / import") % r["name"], "cur": 0, "rel": r["name"],
+                                      "items": [("eksport", _(u"Eksport relacji %s do pliku") % r["name"]),
+                                                ("import", _(u"Import relacji z pliku"))]})
             self.scroll = 0
             return
         if r is None:
@@ -4629,26 +4643,26 @@ class UI(object):
             # UROCHOM TERAZ, jak F7 na F2 i F6: bez okna potwierdzenia (kopia niczego nie
             # niszczy), wynik w oknie wyjscia. Czasownik bierze z zainstalowanego crona
             # najdrobniejsze zadanie kazdego datasetu relacji; wstrzymanej odmawia.
-            self.run_detached(u"Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)" % n, [self.zb(), "run-relation", n], logname="relacja")
+            self.run_detached(_(u"Relacja %s -- kopia teraz: wszystkie datasety poza harmonogramem (np. przed przeniesieniem kolektora)") % n, [self.zb(), "run-relation", n], logname="relacja")
         elif k == "F8":
             if rel.get("disabled"):
-                self.confirm(u"Włącz relację %s" % n, [self.zb(), "enable-client", n], ENABLE_NOTE)
+                self.confirm(_(u"Włącz relację %s") % n, [self.zb(), "enable-client", n], [_(x) for x in ENABLE_NOTE])
             elif rel.get("paused_local"):
-                self.confirm(u"Wznów relację %s" % n, [self.zb(), "resume-client", n],
-                             [u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo."])
+                self.confirm(_(u"Wznów relację %s") % n, [self.zb(), "resume-client", n],
+                             [_(u"Zdejmuje pauzę: następny bieg z crona rusza normalnie i dogania przyrostowo.")])
             else:
-                note = [u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;",
-                        u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client)."]
+                note = [_(u"Pauza LOGICZNA: linie w cronie zostają, ale nic nie wysyła i nie kasuje;"),
+                        _(u"monitor mówi OK z pauzy. Odwrotność: F8 jeszcze raz (resume-client).")]
                 alt = None
                 if rel.get("peer_host") and rel.get("mode") != "local":
                     # D-1 (kampania 2026-10-21): "wyjaśnienie pokaże następne okno" -- następnego
                     # okna nie było; to okno otwiera się dopiero czynnością z dołu ramki.
-                    note += ["", u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):",
-                             u"czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia."]
-                    alt = ("w", lambda: self.confirm(u"Wyłącz relację %s" % n, [self.zb(), "disable-client", n,
+                    note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (zamek):"),
+                             _(u"czynność „wyłącz na źródle” na dole tego okna; tamto okno powie, co zmienia.")]
+                    alt = ("w", lambda: self.confirm(_(u"Wyłącz relację %s") % n, [self.zb(), "disable-client", n,
                                                      "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
-                                                     disable_note(rel)), u"wyłącz na źródle")
-                self.confirm(u"Wstrzymaj relację %s" % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                                                     disable_note(rel)), _(u"wyłącz na źródle"))
+                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
                              note, alt=alt)
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:
@@ -4660,8 +4674,8 @@ class UI(object):
     def export_prompt(self, n):
         """Eksport relacji: pole sciezki (F9 -> Eksport)."""
         default = os.path.join(relations_dir(), "%s.export.json" % n)
-        self.prompt(u"Eksport relacji %s" % n, u"Plik (istniejący zostanie nadpisany):", default,
-                    lambda path: self.export_to(n, path), footer=u"Enter zapisuje   Esc wraca")
+        self.prompt(_(u"Eksport relacji %s") % n, _(u"Plik (istniejący zostanie nadpisany):"), default,
+                    lambda path: self.export_to(n, path), footer=_(u"Enter zapisuje   Esc wraca"))
 
     def export_to(self, n, path):
         """R4-8: Enter w polu sciezki ZAPISUJE -- drugie potwierdzenie 't' bylo
@@ -4673,10 +4687,10 @@ class UI(object):
             try:
                 os.makedirs(d, exist_ok=True)
             except OSError as e:
-                self.prompt(u"Eksport relacji %s" % n, u"Plik:", path, lambda p: self.export_to(n, p),
-                            u"nie da się utworzyć katalogu %s: %s" % (d, e.strerror or e))
+                self.prompt(_(u"Eksport relacji %s") % n, _(u"Plik:"), path, lambda p: self.export_to(n, p),
+                            _(u"nie da się utworzyć katalogu %s: %s") % (d, e.strerror or e))
                 return
-        self.run_detached(u"Eksport relacji %s" % n, [self.zb(), "export-relation", n, "--json"], redirect=path)
+        self.run_detached(_(u"Eksport relacji %s") % n, [self.zb(), "export-relation", n, "--json"], redirect=path)
 
     # ------------------------------------------------------------------
     # KREATOR NOWEJ RELACJI (etap E). Odwzorowuje forme jednokomendowa
@@ -4693,30 +4707,30 @@ class UI(object):
     # jego dwiema bramkami (walidator i prawdziwy render). Mechanizm i ksztalt
     # sa z bazy: save-profile zmienia pola szczebli, nie sklada profilu z niczego.
     def profile_form_fields(self, base):
-        fields = [("name", u"Nazwa nowego szablonu", "text", u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- czasownik sprawdzi"),
-                  ("desc", u"Opis", "text", u"jedno zdanie, co ten szablon robi (pole description)"),
-                  ("base", u"Na bazie", "pick", u"wybór z listy szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz")]
+        fields = [("name", u"Nazwa nowego szablonu", "text", _(u"litery, cyfry, . _ - ; plik NAZWA.conf w /etc/zfs-snapshot-all/profiles. Nazwa w stylu d7h48 obiecuje retencję -- czasownik sprawdzi")),
+                  ("desc", u"Opis", "text", _(u"jedno zdanie, co ten szablon robi (pole description)")),
+                  ("base", _(u"Na bazie"), "pick", _(u"wybór z listy szablonów; z bazy idą mechanizm, kształt i wszystko, czego nie zmienisz"))]
         for t in base.get("tiers", []):
             tn = t.get("name", "")
             adj = tier_unit(tn, TIER_ADJ)
-            fields.append((u"h|%s" % tn, u"szczebel %s (%s)" % (tn, adj), "head", ""))
+            fields.append((u"h|%s" % tn, _(u"szczebel %s (%s)") % (tn, adj), "head", ""))
             if t.get("send_schedule"):
-                fields.append(("t|%s|send_schedule" % tn, u"  migawka co (cron)", "cron", u"5 pól crona; obok słowa, jak to czyta człowiek"))
+                fields.append(("t|%s|send_schedule" % tn, _(u"  migawka co (cron)"), "cron", _(u"5 pól crona; obok słowa, jak to czyta człowiek")))
             if t.get("keep"):
-                fields.append(("t|%s|keep" % tn, u"  trzymaj %s" % tier_unit(tn), "num", u"licznik: ile %s zostaje (0 = nic z tego szczebla)" % tier_unit(tn)))
+                fields.append(("t|%s|keep" % tn, u"  trzymaj %s" % tier_unit(tn), "num", _(u"licznik: ile %s zostaje (0 = nic z tego szczebla)") % tier_unit(tn)))
             elif t.get("retain"):
-                fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", u"flaga silnika, np. -h24 = młodsze niż 24 godziny"))
+                fields.append(("t|%s|retain" % tn, u"  trzymaj wg wieku", "text", _(u"flaga silnika, np. -h24 = młodsze niż 24 godziny")))
             if t.get("prune_schedule"):
-                fields.append(("t|%s|prune_schedule" % tn, u"  porządki co (cron)", "cron", u"kiedy kasować nadmiar"))
+                fields.append(("t|%s|prune_schedule" % tn, _(u"  porządki co (cron)"), "cron", _(u"kiedy kasować nadmiar")))
             if t.get("send_schedule"):
-                qh = u"tak = auto,degrade (spójna migawka; gdy nie da się zamrozić, robi zwykłą)"
+                qh = _(u"tak = auto,degrade (spójna migawka; gdy nie da się zamrozić, robi zwykłą)")
                 if base.get("shape") == "one-family":
-                    qh = u"UWAGA: jedna rodzina -- zamrażanie dotyczy KAŻDEJ migawki tego szczebla (np. 24 razy na dobę)"
-                fields.append(("t|%s|quiesce" % tn, u"  zamrażaj system plików", "toggle", qh))
+                    qh = _(u"UWAGA: jedna rodzina -- zamrażanie dotyczy KAŻDEJ migawki tego szczebla (np. 24 razy na dobę)")
+                fields.append(("t|%s|quiesce" % tn, _(u"  zamrażaj system plików"), "toggle", qh))
             if t.get("monitor_warn") or t.get("monitor_crit"):
-                fields.append(("t|%s|monitor_warn" % tn, u"  monitor: ostrzeż po", "text", u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie"))
-                fields.append(("t|%s|monitor_crit" % tn, u"  monitor: alarm po", "text", u"np. 150m, 48h, 10d -- starsza niż to = alarm"))
-        fields.append(("go", u"[ ZAPISZ ]", "go", u"pokazuje komendy save-profile do potwierdzenia (nic nie jest zapisane wcześniej)"))
+                fields.append(("t|%s|monitor_warn" % tn, _(u"  monitor: ostrzeż po"), "text", _(u"np. 90m, 30h, 8d -- kopia starsza niż to = ostrzeżenie")))
+                fields.append(("t|%s|monitor_crit" % tn, _(u"  monitor: alarm po"), "text", _(u"np. 150m, 48h, 10d -- starsza niż to = alarm")))
+        fields.append(("go", _(u"[ ZAPISZ ]"), "go", _(u"pokazuje komendy save-profile do potwierdzenia (nic nie jest zapisane wcześniej)")))
         return fields
 
     def profile_form_vals(self, base, keep=None):
@@ -4729,7 +4743,7 @@ class UI(object):
         return vals
 
     def profile_form_open(self, base, back):
-        self.window = ("form", {"kind": "profile", "title": u"Nowy szablon na bazie: %s" % base.get("name", "?"),
+        self.window = ("form", {"kind": "profile", "title": _(u"Nowy szablon na bazie: %s") % base.get("name", "?"),
                                 "fields": self.profile_form_fields(base), "vals": self.profile_form_vals(base),
                                 "base": base, "cur": 0, "back": back, "profiles": back[1].get("profiles") if back else None})
         self.scroll = 0
@@ -4742,13 +4756,13 @@ class UI(object):
             if pr.get("name") == name:
                 base = pr
         if base is None:
-            self.message = u"nie ma szablonu '%s' na liście" % name
+            self.message = _(u"nie ma szablonu '%s' na liście") % name
             obj["vals"]["base"] = obj["base"].get("name", "")
             return
         keep = dict(obj["vals"])
         if (keep.get("desc") or "") == (obj["base"].get("description") or ""):
             keep["desc"] = ""   # opis nieedytowany idzie za nowa baza
-        obj["base"], obj["title"] = base, u"Nowy szablon na bazie: %s" % name
+        obj["base"], obj["title"] = base, _(u"Nowy szablon na bazie: %s") % name
         obj["fields"], obj["vals"] = self.profile_form_fields(base), self.profile_form_vals(base, keep)
         obj["cur"] = min(obj["cur"], len(obj["fields"]) - 1)
 
@@ -4788,17 +4802,17 @@ class UI(object):
         vals, base = obj["vals"], obj["base"]
         name = vals["name"].strip()
         if not name:
-            self.message = u"nazwa nowego szablonu jest wymagana"
+            self.message = _(u"nazwa nowego szablonu jest wymagana")
             return
         if any(not (c.isalnum() or c in "._-") for c in name) or name.startswith("."):
-            self.message = u"nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik"
+            self.message = _(u"nazwa: tylko litery, cyfry, kropka, podkreślnik, myślnik")
             return
         if name == base.get("name"):
-            self.message = u"nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)"
+            self.message = _(u"nazwa musi być inna niż baza (pakietowego szablonu nie nadpiszemy)")
             return
         for key, _l, kind, _h in obj["fields"]:
             if kind == "cron" and len((vals.get(key) or "").split()) != 5:
-                self.message = u"harmonogram '%s' to nie 5 pól crona" % (vals.get(key) or "")
+                self.message = _(u"harmonogram '%s' to nie 5 pól crona") % (vals.get(key) or "")
                 return
         argvs, changes = self.profile_argvs(obj)
         # Slowa o tym, co powstanie: baza z naniesionymi zmianami.
@@ -4814,23 +4828,23 @@ class UI(object):
         w = profile_words(synth)
         note = wrap(u"Szablon %s: %s · %s · %s · %s · %s · %s" % (name, w["cadence"], w["retention"], w["mech"], w["shape"], w["quiesce"], w["monitor"]), 72) + [""]
         if len(argvs) > 1:
-            note += wrap(u"Zmienione szczeble: %s -- %d wywołania save-profile po kolei (jeden --tier na raz):" % (", ".join(tn for tn, _ in changes), len(argvs)), 72)
+            note += wrap(_(u"Zmienione szczeble: %s -- %d wywołania save-profile po kolei (jeden --tier na raz):") % (", ".join(tn for tn, _ in changes), len(argvs)), 72)
             for a in argvs[1:]:
                 note += wrap("  " + self.shell_line(a), 72)
             note.append("")
-        note += wrap(u"Zapis idzie do /etc/zfs-snapshot-all/profiles/%s.conf. Dwie bramki czasownika: walidator i prawdziwy render." % name, 72)
+        note += wrap(_(u"Zapis idzie do /etc/zfs-snapshot-all/profiles/%s.conf. Dwie bramki czasownika: walidator i prawdziwy render.") % name, 72)
         back_form = obj.get("back")
         argv = argvs[0] if len(argvs) == 1 else ["bash", "-c", " && ".join(self.shell_line(a) for a in argvs)]
 
         def on_yes():
-            self.run_detached(u"Nowy szablon %s" % name, argv, logname="save-profile")
+            self.run_detached(_(u"Nowy szablon %s") % name, argv, logname="save-profile")
             self.data.profiles = None
             if back_form and back_form[0] == "form":
                 back_form[1]["vals"]["profile"] = name
                 back_form[1]["profiles"] = None
                 back_form[1]["cur"] = 0
                 self.window[1]["back_to"] = back_form
-        self.confirm(u"Nowy szablon %s (na bazie %s)" % (name, base.get("name", "?")), argv, note, on_yes=on_yes)
+        self.confirm(_(u"Nowy szablon %s (na bazie %s)") % (name, base.get("name", "?")), argv, note, on_yes=on_yes)
 
     def open_profile_pick(self, obj, key, label):
         if obj.get("profiles") is None:
@@ -4840,7 +4854,7 @@ class UI(object):
         for i, pr in enumerate(items):
             if pr.get("name") == obj["vals"][key]:
                 cur = i
-        self.window = ("pick", {"title": u"Szablon dla pola: %s" % label.strip(), "items": items, "cur": cur, "field": key, "back": self.window,
+        self.window = ("pick", {"title": _(u"Szablon dla pola: %s") % label.strip(), "items": items, "cur": cur, "field": key, "back": self.window,
                                 "allow_new": obj.get("kind") != "profile"})
         self.scroll = 0
 
@@ -4860,7 +4874,7 @@ class UI(object):
         for i, (key, label, kind, hint) in enumerate(FIELDS):
             mark = ">" if i == obj["cur"] else " "
             if kind == "toggle":
-                shown = "[x] tak" if vals[key] else "[ ] nie"
+                shown = _("[x] tak") if vals[key] else _("[ ] nie")
             elif kind == "go":
                 shown = ""
             elif kind == "head":
@@ -4878,15 +4892,15 @@ class UI(object):
                 out.append(fit("      " + hint, width - 4))
         out.append("")
         if obj.get("kind") == "profile":
-            out.append(fit(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza).", width - 4))
-            out.append(fit(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza.", width - 4))
+            out.append(fit(_(u" Nowy szablon powstaje z bazy: mechanizm i kształt są z bazy (inny = inna baza)."), width - 4))
+            out.append(fit(_(u" Zapis = save-profile do /etc/zfs-snapshot-all/profiles; nic zbudowanego nie rusza."), width - 4))
             if self.message:
                 out += ["", fit(u" ! " + self.message, width - 4)]
             return out
         if obj.get("perr"):
-            out.append(fit(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)" % obj["perr"][:40], width - 4))
+            out.append(fit(_(u" list-profiles: błąd źródła -- wpisz nazwę szablonu ręcznie (%s)") % obj["perr"][:40], width - 4))
         else:
-            out.append(fit(u" szablonów do wyboru: %d (pole Szablon)" % len(obj.get("profiles") or []), width - 4))
+            out.append(fit(_(u" szablonów do wyboru: %d (pole Szablon)") % len(obj.get("profiles") or []), width - 4))
         if self.message:
             out += ["", fit(u" ! " + self.message, width - 4)]
         return out
@@ -4895,7 +4909,7 @@ class UI(object):
         out = []
         if obj.get("kind") == "datasets":
             nw = max(20, width - 4 - 2 - 11 - 11 - 11)
-            out.append(fit("  %-*s %-10s %10s %10s" % (nw, "dataset", "typ", u"zajęte", "wolne"), width - 4))
+            out.append(fit("  %-*s %-10s %10s %10s" % (nw, _("dataset"), "typ", u"zajęte", "wolne"), width - 4))
             for i, d in enumerate(obj["items"]):
                 mark = ">" if i == obj["cur"] else " "
                 out.append(fit("%s %s %-10s %10s %10s" % (mark, fit_left(d.get("name", "?"), nw, self.ch), d.get("type", ""),
@@ -4909,9 +4923,9 @@ class UI(object):
             if i == obj["cur"]:
                 out.append(fit(u"      %s · %s · %s · %s" % (w["shape"], w["quiesce"], w["monitor"], pr.get("description", "") or ""), width - 4))
         if not obj["items"]:
-            out.append(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu")
+            out.append(_(u" brak szablonów (list-profiles nic nie zwrócił) -- wpisz nazwę ręcznie w polu"))
         elif obj.get("allow_new"):
-            out += ["", fit(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)", width - 4)]
+            out += ["", fit(_(u" Ins = nowy szablon na bazie podświetlonego (liczniki, harmonogramy, zamrażanie, progi)"), width - 4)]
         return out
 
     def import_files(self, d):
@@ -4928,7 +4942,7 @@ class UI(object):
             names = sorted(os.listdir(d))
         except OSError as e:
             names = []
-            self.message = u"nie da się odczytać katalogu %s: %s" % (d, e.strerror or e)
+            self.message = _(u"nie da się odczytać katalogu %s: %s") % (d, e.strerror or e)
         dirs, files = [], []
         for nm in names:
             fp = os.path.join(d, nm)
@@ -4942,9 +4956,9 @@ class UI(object):
                     files.append({"kind": "file", "path": fp, "label": nm, "rel": info[0], "mtime": info[1]})
         files.sort(key=lambda x: -x["mtime"])
         items += dirs + files
-        items.append({"kind": "manual", "path": d, "label": u"[ wpisz ścieżkę ręcznie ]"})
+        items.append({"kind": "manual", "path": d, "label": _(u"[ wpisz ścieżkę ręcznie ]")})
         cur = next((i for i, it in enumerate(items) if it["kind"] == "file"), len(items) - 1)
-        self.window = ("files", {"title": u"Import relacji z pliku -- %s" % d, "dir": d, "items": items, "cur": cur,
+        self.window = ("files", {"title": _(u"Import relacji z pliku -- %s") % d, "dir": d, "items": items, "cur": cur,
                                  "nfiles": len(files)})
         self.scroll = 0
 
@@ -4960,16 +4974,16 @@ class UI(object):
             mark = ">" if i == obj["cur"] else " "
             if it["kind"] == "file":
                 when = time.strftime("%Y-%m-%d %H:%M", time.localtime(it["mtime"])) if it["mtime"] else "?"
-                out.append(fit(u"%s %-*s %s  relacja %s" % (mark, lw, fit_left(it["label"], lw, self.ch), when, it["rel"]), w))
+                out.append(fit(_(u"%s %-*s %s  relacja %s") % (mark, lw, fit_left(it["label"], lw, self.ch), when, it["rel"]), w))
             else:
                 out.append(fit(u"%s %s" % (mark, it["label"]), w))
         if not obj["nfiles"]:
-            out += ["", fit(u" w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)" % relations_dir(), w)]
+            out += ["", fit(_(u" w tym katalogu nie ma plików eksportu relacji (eksport relacji z ekranu Relacje, menu Plik, zapisuje je w %s)") % relations_dir(), w)]
         return out
 
     def import_ask_file(self, value, error=None):
         """Krok -1 importu: sciezka do pliku eksportu."""
-        self.prompt(u"Import relacji z pliku", u"Plik eksportu:", value, self.import_name, error)
+        self.prompt(_(u"Import relacji z pliku"), _(u"Plik eksportu:"), value, self.import_name, error)
 
     def import_name(self, path):
         """Krok 1 importu: plik istnieje? Pole jest podpowiedziane z "/root/", a
@@ -4977,7 +4991,7 @@ class UI(object):
         czasownika i tam dostawala "cannot read" (pve10, 2026-09-23) -- zla
         sciezka zostaje w polu pliku."""
         if not os.path.isfile(path):
-            self.import_ask_file(path, u"nie ma takiego pliku: %s -- popraw ścieżkę" % path)
+            self.import_ask_file(path, _(u"nie ma takiego pliku: %s -- popraw ścieżkę") % path)
             return
         self.import_preview(path)
 
@@ -4994,22 +5008,22 @@ class UI(object):
         zostaje w CLI (import na innym kolektorze pod inna nazwa)."""
         argv = [self.zb(), "import-relation", path]
         if self.exec_log:
-            preview, rc = [u"[atrapa] podgląd: " + self.shell_line(argv), self.IMPORT_PLAN_MARK], 0
+            preview, rc = [_(u"[atrapa] podgląd: ") + self.shell_line(argv), self.IMPORT_PLAN_MARK], 0
         else:
             try:
                 p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=self.repo)
             except OSError as e:
-                self.message = u"nie udało się uruchomić podglądu: %s" % e
+                self.message = _(u"nie udało się uruchomić podglądu: %s") % e
                 return
             preview, rc = p.stdout.decode("utf-8", "replace").splitlines(), p.returncode
         if rc != 0 or not any(self.IMPORT_PLAN_MARK in x for x in preview):
-            self.window = ("output", {"title": u"Import: odmowa" if rc else u"Import: nic do zrobienia",
+            self.window = ("output", {"title": _(u"Import: odmowa") if rc else _(u"Import: nic do zrobienia"),
                                       "path": None, "proc": None, "shell": self.shell_line(argv),
                                       "lines": preview, "rc": rc})
             self.scroll = 0
             return
-        self.confirm(u"Import relacji z %s" % os.path.basename(path), argv + ["--yes"],
-                     [u"Plan (to samo, co czasownik pokazał bez --yes):", ""] + sum((wrap("  " + x, 72) for x in preview), []))
+        self.confirm(_(u"Import relacji z %s") % os.path.basename(path), argv + ["--yes"],
+                     [_(u"Plan (to samo, co czasownik pokazał bez --yes):"), ""] + sum((wrap("  " + x, 72) for x in preview), []))
 
     def key(self, k, height=24, raw=None):
         """Jeden klawisz -> nowy stan. `k` to nazwa: 'down', 'F2', 'enter', 'q', 'esc'...;
@@ -5037,18 +5051,18 @@ class UI(object):
                     bg[0].join(self.BG_KEY_WAIT)
                 self.poll_bg()
                 if getattr(self, "_bg", None) is not None and k not in ("q", "F12"):
-                    self.message = (u"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, "
-                                    u"ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie "
-                                    u"„odświeżam w tle”; F12 wychodzi.%s" % (self.BG_KEY_WAIT, self.BG_NOTE))
+                    self.message = (_(u"Dane wciąż się odświeżają (ponad %d s) -- klawisz pominięty, "
+                                      u"ekran jest NIEAKTUALNY. Naciśnij klawisz ponownie, gdy zniknie "
+                                      u"„odświeżam w tle”; F12 wychodzi.%s") % (self.BG_KEY_WAIT, self.BG_NOTE))
                     return "stay"
             if getattr(self, "bg_failed", False) and not self.row_free(k):
-                self.message = (u"Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. "
-                                u"Ctrl-R odświeża; po udanym odświeżeniu naciśnij klawisz ponownie.")
+                self.message = (_(u"Odświeżenie danych nie wyszło -- ekran jest NIEAKTUALNY, czynność pominięta. "
+                                  u"Ctrl-R odświeża; po udanym odświeżeniu naciśnij klawisz ponownie."))
                 return "stay"
         if self.window and self.window[0] == "prompt":
             obj = self.window[1]
             if k == "esc":
-                self.window, self.message = None, u"anulowano"
+                self.window, self.message = None, _(u"anulowano")
             elif k == "enter":
                 self.window = None
                 obj["on_enter"](obj["value"])
@@ -5064,7 +5078,7 @@ class UI(object):
             obj = self.window[1]
             n = len(obj["items"])
             if k in ("esc", "q"):
-                self.window, self.message = None, u"anulowano"
+                self.window, self.message = None, _(u"anulowano")
             elif k in ("down", "j"):
                 obj["cur"] = min(obj["cur"] + 1, n - 1)
             elif k in ("up", "k"):
@@ -5091,7 +5105,7 @@ class UI(object):
             # Okienko wyboru (F9 na F3: Eksport / Import): strzalki, Enter, Esc.
             obj = self.window[1]
             if k in ("esc", "q"):
-                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+                self.window, self.message = None, _(u"anulowano -- nic nie wykonano")
             elif k in ("down", "j"):
                 obj["cur"] = min(obj["cur"] + 1, len(obj["items"]) - 1)
             elif k in ("up", "k"):
@@ -5140,7 +5154,7 @@ class UI(object):
                 if False:   # (kreator curses usuniety 2026-09-21; ta galaz byla jego powrotem)
                     self.window = obj["back"]   # formularz szablonu wraca do kreatora
                 else:
-                    self.window, self.message = None, u"anulowano -- nic nie wykonano"
+                    self.window, self.message = None, _(u"anulowano -- nic nie wykonano")
             elif k in ("down", "up"):
                 # Naglowki szczebli nie sa polami: kursor je przeskakuje.
                 step = 1 if k == "down" else -1
@@ -5192,7 +5206,7 @@ class UI(object):
                 # na pierwszym planie. Nic nie rusza samo. Tab jak do kolejnego
                 # obiektu na ekranie (wlasciciel 2026-10-18), nie litera 'e'.
                 self.window, self.cmd, self.hist_pos, self.focus = None, obj["shell"], None, "cmd"
-                self.message = u"komenda w linii poleceń -- popraw i Enter wykona (Esc czyści)"
+                self.message = _(u"komenda w linii poleceń -- popraw i Enter wykona (Esc czyści)")
             elif k in ("down", "j"):
                 self.scroll += 1
             elif k in ("up", "k"):
@@ -5202,7 +5216,7 @@ class UI(object):
             elif k == "pgup":
                 self.scroll = max(0, self.scroll - max(1, height - 4))
             else:
-                self.window, self.message = None, u"anulowano -- nic nie wykonano"
+                self.window, self.message = None, _(u"anulowano -- nic nie wykonano")
             return "stay"
         if self.window and self.window[0] == "migawki":
             obj = self.window[1]
@@ -5232,7 +5246,7 @@ class UI(object):
                     return "stay"
                 self.window, self.scroll = None, 0
                 if obj.get("proc") is not None and obj["proc"].poll() is None:
-                    self.message = u"proces biegnie dalej (pid %d); wyjście: %s" % (obj["proc"].pid, obj["path"])
+                    self.message = _(u"proces biegnie dalej (pid %d); wyjście: %s") % (obj["proc"].pid, obj["path"])
                 self.refresh_bg()
             elif k in ("down", "j"):
                 self.scroll += 1
@@ -5265,8 +5279,8 @@ class UI(object):
                 # zamiast komendy do przepisania z panelu. Kroki wznawialne, jak w CLI.
                 rel = self.window[1]["rel"]
                 self.window, self.scroll = None, 0
-                self.confirm(u"Dokończ relację %s" % rel.get("name"), [self.zb()] + finish_argv(rel),
-                             note_lines=[u"Stan: %s -- następny krok cyklu relacji (można powtórzyć)." % state_word(rel)])
+                self.confirm(_(u"Dokończ relację %s") % rel.get("name"), [self.zb()] + finish_argv(rel),
+                             note_lines=[_(u"Stan: %s -- następny krok cyklu relacji (można powtórzyć).") % state_word(rel)])
                 return "stay"
             elif k in ("s", "c") and self.window[0] == "relacja" and self.window[1].get("kind") == "relation":
                 # U65 (makieta 2026-10-21): czynnosci nie sa czescia zmiany relacji -- zapis jako
@@ -5462,7 +5476,7 @@ class UI(object):
                 # Wiersz repliki: ten sam panel co na F6 (z 'e' = zmiana repliki).
                 jr = self.jobrows[c]
                 self.window, self.scroll = ("panel", {
-                    "kind": "panel", "name": u"replika %s" % jr["name"], "replica": jr["name"],
+                    "kind": "panel", "name": _(u"replika %s") % jr["name"], "replica": jr["name"],
                     "pairs": replica_detail_pairs(jr["replica"], self.ch, jr["srow"], self.data.failed("stats"))}), 0
             elif self.screen == "zadania":
                 self.window, self.scroll = ("relacja", self.jobrows[c]), 0
@@ -5506,7 +5520,7 @@ class UI(object):
         src = pair_source_dataset(it["pair"])
         d, err = run_verb(self.repo, ["pair-snapshots", it["relname"], src, "--json"])
         if not isinstance(d, dict):
-            self.message = u"migawki pary nie do odczytania: %s" % (err or u"brak odpowiedzi")
+            self.message = _(u"migawki pary nie do odczytania: %s") % (err or _(u"brak odpowiedzi"))
             return
         self.window, self.scroll = ("migawki", {"name": it["relname"], "src": src, "data": d, "side": 0,
                                                 "dst": (d.get("target") or {}).get("dataset") or ""}), 0
@@ -5517,7 +5531,7 @@ class UI(object):
         if it.get("pair") is not None:
             j = it["pair"].get("job")
             if j is None:
-                self.message = u"ten dataset jest z rekordu, nie z crona -- nie ma jego linii ani sekcji do pokazania"
+                self.message = _(u"ten dataset jest z rekordu, nie z crona -- nie ma jego linii ani sekcji do pokazania")
                 return None
             for jr in self.jobrows:
                 if any(x is j for x in jr.get("jobs") or []):
@@ -5549,7 +5563,7 @@ class UI(object):
             return {"kind": "panel", "name": u"szablon %s" % pr.get("name"), "pairs": template_detail_pairs(pr),
                     "template": pr.get("name")}
         rp = (self.data.replicas or {}).get("replicas", [])[c]
-        return {"kind": "panel", "name": u"nośnik %s" % rp.get("name"),
+        return {"kind": "panel", "name": _(u"nośnik %s") % rp.get("name"),
                 "pairs": replica_detail_pairs(rp, ch, replica_stats_row(self.data, rp.get("name")), self.data.failed("stats")),
                 "replica": rp.get("name")}
 
@@ -5607,20 +5621,20 @@ def _ui_render(self, width, height):
     if self.window:
         kind, obj = self.window
         if kind == "pomoc":
-            scr, self.scroll = render_window(base, "Pomoc", HELP, self.scroll, width, height, self.ch, wrap=True)
+            scr, self.scroll = render_window(base, _("Pomoc"), [_(h) for h in HELP], self.scroll, width, height, self.ch, wrap=True)
         elif kind == "prompt":
             lines = ["", " " + obj["label"], "", fit("  > " + obj["value"] + "_", width - 4), ""]
             if obj.get("error"):   # w OKNIE: linia komunikatu pod oknem jest zaslonieta przez stopke okna
                 lines += [fit(u" ! " + x, width - 4) for x in wrap(obj["error"], width - 8)] + [""]
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
-                                             footer=obj.get("footer") or u"Enter dalej   Esc wraca")
+                                             footer=obj.get("footer") or _(u"Enter dalej   Esc wraca"))
         elif kind == "confirm":
             # KLAWISZE TYLKO NA RAMCE (właściciel 2026-10-09 uwaga 4, powtórzone 10-18 U7):
             # wariant okna (F8: w = wyłącz) stoi obok "t wykonaj", nie w treści.
             _alt = obj.get("alt")
-            _foot = u"t wykonuje   " + (u"%s %s   " % (_alt[0], _alt[2]) if _alt and len(_alt) > 2 else "") \
-                + u"Tab do linii poleceń   Esc wraca"
-            scr, self.scroll = render_window(base, u"POTWIERDZENIE: " + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
+            _foot = _(u"t wykonuje   ") + (u"%s %s   " % (_alt[0], _alt[2]) if _alt and len(_alt) > 2 else "") \
+                + _(u"Tab do linii poleceń   Esc wraca")
+            scr, self.scroll = render_window(base, _(u"POTWIERDZENIE: ") + obj["title"], obj["lines"], self.scroll, width, height, self.ch,
                                              footer=_foot)
         elif kind == "form":
             lines = self.form_lines(obj, width)
@@ -5628,52 +5642,52 @@ def _ui_render(self, width, height):
             cy = obj.get("_cur_y", 0)
             fscroll = 0 if cy + 2 < height - 3 else cy + 2 - (height - 3) + 1
             scr, self.scroll = render_window(base, obj["title"], lines, fscroll, width, height, self.ch,
-                                             footer=u"strzałki pole   spacja przełącza   Enter na [ %s ]   Esc wraca" % (u"ZAPISZ" if obj.get("kind") == "profile" else u"PLAN"))
+                                             footer=_(u"strzałki pole   spacja przełącza   Enter na [ %s ]   Esc wraca") % (u"ZAPISZ" if obj.get("kind") == "profile" else u"PLAN"))
         elif kind == "files":
             top_ = max(0, obj["cur"] - (height - 7))
             scr, self.scroll = render_window(base, obj["title"], self.files_lines(obj, width), top_, width, height, self.ch,
-                                             footer=u"Enter wchodzi / importuje   Esc wraca   strzałki")
+                                             footer=_(u"Enter wchodzi / importuje   Esc wraca   strzałki"))
         elif kind == "choice":
             lines = [fit("%s %s" % (">" if i == obj["cur"] else " ", label), width - 4) for i, (_t, label) in enumerate(obj["items"])]
             scr, self.scroll = render_window(base, obj["title"], lines, 0, width, height, self.ch,
-                                             footer=u"Enter wybiera   Esc wraca   strzałki")
+                                             footer=_(u"Enter wybiera   Esc wraca   strzałki"))
         elif kind == "pick":
             scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), self.scroll, width, height, self.ch,
-                                             footer=u"Enter wybiera   Esc wraca bez zmiany")
+                                             footer=_(u"Enter wybiera   Esc wraca bez zmiany"))
             per = 1 if obj.get("kind") == "datasets" else 2
             if obj["cur"] * per >= height - 4:
                 scr, self.scroll = render_window(base, obj["title"], self.picker_lines(obj, width), obj["cur"] * per - (height - 6), width, height, self.ch,
-                                                 footer=u"Enter wybiera   Esc wraca bez zmiany")
+                                                 footer=_(u"Enter wybiera   Esc wraca bez zmiany"))
         elif kind == "migawki":
             lines = snap_pair_lines(obj["data"], width, obj.get("side", 0), int(time.time()))
             two = bool(obj.get("dst")) and width - 4 >= 116
-            foot = u"Enter przegląda kopię   Esc wraca   strzałki/PgUp/PgDn przewijają"
+            foot = _(u"Enter przegląda kopię   Esc wraca   strzałki/PgUp/PgDn przewijają")
             if obj.get("dst") and not two:
-                foot = u"Tab źródło/kopia   " + foot
+                foot = _(u"Tab źródło/kopia   ") + foot
             if not obj.get("dst"):
-                foot = u"Esc wraca   strzałki/PgUp/PgDn przewijają"
-            scr, self.scroll = render_window(base, u"Migawki: relacja %s, %s" % (obj["name"], obj["src"]), lines,
+                foot = _(u"Esc wraca   strzałki/PgUp/PgDn przewijają")
+            scr, self.scroll = render_window(base, _(u"Migawki: relacja %s, %s") % (obj["name"], obj["src"]), lines,
                                              self.scroll, width, height, self.ch, footer=foot)
         elif kind == "output":
             lines = self.output_lines(obj, width)
             if self.scroll == 0 and obj.get("proc") is not None and obj["proc"].poll() is None:
                 self.scroll = 10 ** 6   # ogon: pokazuj koniec, jak tail -f
-            scr, self.scroll = render_window(base, u"WYJŚCIE: " + obj["title"], lines, self.scroll, width, height, self.ch,
-                                             footer=u"Esc zamyka okno (proces zostaje)   strzałki przewijają")
+            scr, self.scroll = render_window(base, _(u"WYJŚCIE: ") + obj["title"], lines, self.scroll, width, height, self.ch,
+                                             footer=_(u"Esc zamyka okno (proces zostaje)   strzałki przewijają"))
         else:
-            foot = u"Esc zamyka   strzałki/PgUp/PgDn przewijają"
+            foot = _(u"Esc zamyka   strzałki/PgUp/PgDn przewijają")
             if obj.get("replica"):
-                foot = u"e zmienia replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = _(u"e zmienia replikę   Esc zamyka   strzałki/PgUp/PgDn przewijają")
             if obj.get("template"):
-                foot = u"e zmienia szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają"
+                foot = _(u"e zmienia szablon   Esc zamyka   strzałki/PgUp/PgDn przewijają")
             if obj.get("kind") == "relation":
-                title = u"Relacja %s" % obj["name"]
+                title = _(u"Relacja %s") % obj["name"]
                 # Odzysk przeszedł na F11 (właściciel 2026-10-18) -- tu tylko zmiana.
-                foot = u"e zmienia   s jako szablon   c edycja ręczna   Esc zamyka"
+                foot = _(u"e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
                 if finish_argv(obj.get("rel") or {}):
-                    foot = u"d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka"
+                    foot = _(u"d dokańcza   e zmienia   s jako szablon   c edycja ręczna   Esc zamyka")
             elif obj.get("kind") == "job":
-                title = u"Zadanie: %s  %s  %s" % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
+                title = _(u"Zadanie: %s  %s  %s") % (obj["name"], obj.get("task") or "", obj.get("pref") or "")
             else:
                 title = obj["name"]
             lines = relation_window_lines_dispatch(self, obj, width)
@@ -5740,6 +5754,7 @@ def curses_loop(ui):
 
     def paint(stdscr, scr, h, w):
         stdscr.erase()
+        cwords = color_words()
         for y, line in enumerate(scr.lines[:h]):
             # Pelna szerokosc: inaczej prawa ramka okna nigdy nie trafia na ekran. Tylko
             # dolny wiersz bez ostatniej kolumny -- prawy dolny rog to blad curses.
@@ -5767,7 +5782,7 @@ def curses_loop(ui):
                     pass
             if y in scr.bars or y == scr.cursor_y or not curses.has_colors():
                 continue
-            for word, pair in COLOR_WORDS:
+            for word, pair in cwords:
                 start = 0
                 while True:
                     i = line.find(word, start)
@@ -5876,7 +5891,7 @@ def curses_loop(ui):
             if h < 10 or w < 40:
                 stdscr.erase()
                 try:
-                    stdscr.addstr(0, 0, "za maly terminal (%dx%d); minimum 40x10" % (w, h))
+                    stdscr.addstr(0, 0, _("za maly terminal (%dx%d); minimum 40x10") % (w, h))
                 except curses.error:
                     pass
                 stdscr.refresh()
@@ -5956,7 +5971,7 @@ def curses_loop(ui):
                 if rc == 130:
                     rc = u"130, przerwane (Ctrl+C)"
                 if not nowait:
-                    sys.stdout.write("[rc=%s]  Enter wraca do okien\n" % rc)
+                    sys.stdout.write(_("[rc=%s]  Enter wraca do okien\n") % rc)
                     sys.stdout.flush()
                     try:
                         sys.stdin.readline()
@@ -5970,7 +5985,7 @@ def curses_loop(ui):
                     ui.message = u"[rc=%s] %s" % (rc, line)
                     log_path, ui.pending_log_path = ui.pending_log_path, None
                     if log_path:
-                        ui.message += u"   dziennik: %s" % log_path
+                        ui.message += _(u"   dziennik: %s") % log_path
                 # Kursor na nowej relacji -- dopiero gdy świeże dane wejdą (poll_bg).
                 ui.rel_names_before_bg = getattr(ui, "rel_names_before", None)
                 ui.rel_names_before = None
@@ -6039,7 +6054,7 @@ def main(argv):
         print("\n".join(ui.render(a.width, a.height).lines))
         return 0
     if not sys.stdout.isatty():
-        sys.stderr.write("gui: to nie jest terminal -- uzyj --render-once, zeby zobaczyc ekran\n")
+        sys.stderr.write(_("gui: to nie jest terminal -- uzyj --render-once, zeby zobaczyc ekran\n"))
         return 2
     curses_loop(ui)
     return 0
