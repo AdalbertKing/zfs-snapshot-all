@@ -4671,9 +4671,9 @@ class UI(object):
                     note += ["", _(u"Zamiast pauzy można WYŁĄCZYĆ relację także na źródle (lock):"),
                              _(u"przycisk „wyłącz na źródle” na dole; następne okno wyjaśni, co to zmienia.")]
                     alt = ("w", lambda: self.confirm(_(u"Wyłącz relację %s") % n, [self.zb(), "disable-client", n,
-                                                     "--reason=wyłączona z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                                                     _(u"--reason=wyłączona z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
                                                      disable_note(rel)), _(u"wyłącz na źródle"))
-                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, "--reason=z TUI %s" % time.strftime("%Y-%m-%d %H:%M")],
+                self.confirm(_(u"Wstrzymaj relację %s") % n, [self.zb(), "pause-client", n, _(u"--reason=z TUI %s") % time.strftime("%Y-%m-%d %H:%M")],
                              note, alt=alt)
         elif k == "del":
             # CALE usuniecie (kolektor + zrodlo + zwolnienie nazwy), w oknach whiptail:

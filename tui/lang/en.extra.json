@@ -608,5 +608,7 @@
 "ostatni bieg rc=%s": "last run rc=%s",
 "zobacz cron.log": "see cron.log",
 "%s -- relacja %s": "%s -- relation %s",
-"sort: ostatni bieg": "sort: last run"
+"sort: ostatni bieg": "sort: last run",
+"--reason=wyłączona z TUI %s": "--reason=disabled from the TUI %s",
+"--reason=z TUI %s": "--reason=from the TUI %s"
 }
