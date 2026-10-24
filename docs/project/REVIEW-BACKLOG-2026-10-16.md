@@ -185,6 +185,21 @@ osobnego zapisu zamknięcia. Relacja jest teraz blokiem `[relation:NAZWA]` w con
 Ryzyko: każdy kolektor na produkcji przeszedł na nowy odczyt configu. Proszę sprawdzić zgodność wstecz dla configów
 sprzed X27 (`jobs.<host>.conf` bez bloków `[relation:]` -- flota produkcyjna nie ma rekordów relacji).
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — X27 / PR #531, #533–#536.**
+Ostrzeżenie łączyło dwa różne kontrakty. Ręczny config sprzed X27, z
+`[template:]` i `use_template`, nadal jest prawidłowym wejściem generatora:
+produkcyjny fixture bez `[relation:]` renderuje się na bieżącym main (rc 0), a
+pary stary/nowy dla relacji lokalnej i zdalnej dają ten sam cron. `test/run.sh`
+ma 123/123, w tym negatywne kontrole niepełnych i mieszanych bloków. Natomiast
+czasowniki modyfikujące nazwaną relację świadomie wymagają `[relation:NAZWA]` i
+odmawiają staremu kształtowi bez zapisu, podając odtworzenie z profilu. To nie
+jest brak migracji: właściciel 2026-10-14 zdecydował „bez zgodności wstecz” dla
+automatycznej konwersji, po migracji labu host po hoście, i kazał usunąć
+`migrate-config` oraz `cron2conf`; istniejący produkcyjny blok crona działa do
+jawnej przebudowy. Przywrócenie tych narzędzi rozszerzałoby ustalony zakres 1.0.
+Dokładne heady #531/#533/#534/#535/#536 (`e2cf0356…`, `37c94dd…`,
+`cf210ace…`, `014066df…`, `133fc90a…`) mają zielone CI. Nie otwarto REV.
+
 ## 5. Nowe funkcje wsadu (poza GUI)
 
 - **Lustro synchro**: #460, #461, #462 (silnik w §1), #481.
