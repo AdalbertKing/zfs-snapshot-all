@@ -594,7 +594,7 @@ step_manual() {
     ZFS_BACKUP="$ZB" bash "$HERE/tui/template.sh" relation "$base" "$TMPD/margs" "$(title 6 "$(T 'Retencja: W CELU KOPII –') $(hostname -s 2>/dev/null || hostname)")" || return 1
     local -a margs=(); mapfile -t margs <"$TMPD/margs"
     info "$(title 6 "$(T 'Ręcznie')")" "$(T 'Zapisuję ustawienia relacji...')"
-    out=$("$ZB" save-profile "--from=$base" "--as=$hn" --hidden --force ${margs[@]+"${margs[@]}"} "--description=Własne ustawienia relacji (kreator)" 2>&1) \
+    out=$("$ZB" save-profile "--from=$base" "--as=$hn" --hidden --force ${margs[@]+"${margs[@]}"} "--description=$(T 'Własne ustawienia relacji (kreator)')" 2>&1) \
         || { wt --title "$(T 'Czasownik odmówił -- nic nie zapisano')" --msgbox "$(printf '%s' "$out" | grep -E 'FATAL' | tail -1 | sed 's/^FATAL: //' | fold -s -w $((W - 6)))" 14 "$W"; return 1; }
     [ -n "$MANUAL_P" ] && [ "$MANUAL_P" != "$hn" ] && "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
     MANUAL_P="$hn"; PROFILE="$hn"
@@ -701,7 +701,7 @@ step_name() {
         RNAME="$n"
         # Szkic "Ręcznie" nazywa się jak relacja: relacja-<NAZWA>.
         if [ -n "$MANUAL_P" ] && [ "$MANUAL_P" != "relacja-$RNAME" ]; then
-            if "$ZB" save-profile "--from=$MANUAL_P" "--as=relacja-$RNAME" --hidden --force "--description=Własne ustawienia relacji $RNAME" >/dev/null 2>"$TMPD/mv.err"; then
+            if "$ZB" save-profile "--from=$MANUAL_P" "--as=relacja-$RNAME" --hidden --force "--description=$(Tv 'Własne ustawienia relacji $RNAME' '$RNAME' "$RNAME")" >/dev/null 2>"$TMPD/mv.err"; then
                 "$ZB" delete-profile "$MANUAL_P" --yes >/dev/null 2>&1
                 MANUAL_P="relacja-$RNAME"; PROFILE="$MANUAL_P"; rm -f "$TMPD/prof.tsv"; load_profiles
             else
