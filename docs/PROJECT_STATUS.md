@@ -7,7 +7,7 @@
 > nie drobiazg. Obowiązek jest zapisany w `CLAUDE.md` i przypomina o nim
 > `./test/impact.sh` jako obowiązek ręczny `project-status`.
 
-<!-- status-covers-digest: bef5c7863baaf45a -->
+<!-- status-covers-digest: 7dd23540c53ead6d -->
 <!-- Znacznik maszynowy: skrot TRESCI wszystkich plikow, ktore deklaruja
      obowiazek project-status. Zapisywany przez ./test/impact.sh
      --refresh-status, sprawdzany przez --verify. Nie usuwac i nie zmieniac
@@ -28,7 +28,7 @@
   Teraz każda ochrona `-P` z linii zainstalowanej musi zostać bez zmian, a nowe mogą mieć tylko kształt,
   jaki generuje gen-cron (`:all`, `:2`), i nie mogą dotyczyć prefiksu już chronionego; inaczej zwykły
   strażnik odmawia. Pełnego zestawu z gen-cron strażnik nie odtwarza (dodatkowa ochrona tylko zmniejsza
-  liczbę usunięć) -- opisane w odpowiedzi jako ryzyko do oceny recenzenta. Reproducer recenzenta:
+  liczbę usunięć) -- w rundzie 2 (werdykt recenzenta) dodane tokeny muszą należeć do dokładnego zestawu, który gen-cron zgłasza przez `GEN_CRON_FOREIGN_REPORT`; bez raportu odmowa. Reproducer recenzenta:
   na main „REPRODUCED”, po poprawce „NOT REPRODUCED”. `zfsbackup --section mirrorguard` 12/0 (4 nowe
   przypadki, w tym kontrola pozytywna); na kodzie z main nowe przypadki odmowy padają.
 
