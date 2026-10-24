@@ -122,6 +122,19 @@ krzyżowej zmiany `-P`. REV-20261024-174 zawiera bezpieczny reproducer na
 produkcyjnej funkcji strażnika. Następny niezależny zakres: PR #469 — rozrzut
 harmonogramu źródłowego prune; odpowiedź na REV-174 ma zawsze pierwszeństwo.
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — PR #845, lokalna kopia pasywna.**
+Zakres `d16c1ea5a2acde06ef2a5b60e22a6229f703bfd8..994b404bdc9e2c538aee6cca0697a4dc903ec0af`
+(merge `bb00fca9c1a85373f45c3251ef2f8a3cf51c290d`) przejrzany bez nowego
+ustalenia. `--passive` renderuje `snapget -e`, nie tworzy ani nie przycina
+migawek źródła, zachowuje retencję lądowania i monitor, używa rodzinnego
+prefiksu przy seedzie oraz odmawia trybu bez kopii. Rekursywny nowy korzeń
+odmawia obok istniejącej sekcji dziecka; nierekursywny przypadek kontrolny
+przechodzi. Cron 235/235, deadcode 7/7, nowe przypadki localbackup/TUI przeszły,
+CI 40131058505 i `impact --verify` są zielone. Pełne lokalne suite mają znane,
+niezwiązane odmowy fixture `repo_dir` i terminala; nie są dowodem przeciw temu
+zakresowi. Nie powtarzać PR #845 bez nowego kodu lub dowodu. Następny zakres
+pozostaje PR #469, po każdej odpowiedzi implementacyjnej do REV-174.
+
 Uwaga do terminologii: wpis 2026-10-06 w `ENGINE-FREEZE.md` (~819) nazywa zmianę „PRE-AUTHORISED by the owner”, choć
 dokument (~1016–1035) mówi, że autoryzacja zamrożonego pliku należy do recenzenta. Żaden z wpisów 2026-10-06/-08/-12
 nie ma znacznika `authorizes-frozen`.

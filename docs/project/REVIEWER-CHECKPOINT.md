@@ -2,6 +2,36 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
+## Latest final-audit batch — 2026-10-24 (PR #845 local passive copy)
+
+**No new finding was confirmed.** The exact implementation range is
+`d16c1ea5a2acde06ef2a5b60e22a6229f703bfd8..994b404bdc9e2c538aee6cca0697a4dc903ec0af`,
+merged as `bb00fca9c1a85373f45c3251ef2f8a3cf51c290d`. It adds local
+`local-backup --passive` pickup for an existing snapshot family, the recursive
+source-overlap refusal, and the non-interactive `edit-config` stop after a
+rejected candidate.
+
+The passive candidate writes `passive = yes` on every source section, renders
+`snapget -e`, omits source `delsnaps` while retaining landing retention and
+monitoring, seeds against the whole family root, and refuses the meaningless
+no-copy combination. A recursive source now conflicts with an already-installed
+child section; the same flat source remains the negative control. The installer
+continues to reject source/target nesting before composition. No cron, ZFS or
+live host was changed by the review.
+
+Exact-head evidence: cron 235/235, deadcode 7/7, and every new passive/overlap
+assertion in localbackup and TUI passed. The whole localbackup run was 154 pass /
+17 fail and TUI 403 pass / 8 fail: the former failures are the pre-existing
+container fixture pinning `[defaults] repo_dir` to a non-runnable root path; the
+TUI failures are unrelated command-line/terminal fixture cases. The passive seed
+trace still proved `snapget -m automated_ ... -e`; only the subsequent record
+assertion was blocked by that same install-fixture refusal. Exact-head CI run
+40131058505 and `impact --verify` pass.
+
+**Next reviewer action:** pick up any `IMPLEMENTED | Reviewer` response to
+REV-20261024-174 first. Otherwise continue with PR #469, source-side prune
+schedule spreading. Do not repeat PR #845 without new code or evidence.
+
 ## Latest final-audit batch — 2026-10-24 (PR #465 / REV-174)
 
 **A new P1 finding was opened in the destructive `prune_foreign` installer
