@@ -30,8 +30,30 @@ Okno samo nie zapisuje niczego poza OUT -- zapis robi czasownik w kreatorze.
 """
 import argparse
 import json
+import os
 import re
 import sys
+
+
+def _load_cat():
+    """Katalog jezyka okna: ZFS_TUI_LANG dziedziczony z GUI (wt-lib.sh go eksportuje); pl = pusty."""
+    lang = os.environ.get("ZFS_TUI_LANG") or "en"
+    if lang == "pl":
+        return {}
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang", lang + ".json"),
+                  encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+LANG_CAT = _load_cat()
+
+
+def _(s):
+    """Tekst okna w biezacym jezyku; bez wpisu w katalogu -- polski (teksty ze SPEC tez tu przechodza)."""
+    return LANG_CAT.get(s, s)
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -108,8 +130,8 @@ class Grid(object):
                 parts.append(u"%s %s" % (r["value"], r["glabel"]))
             if r.get("on") and r.get("q"):
                 qs.append(r.get("glabel") or r.get("label"))
-        txt = u"%s; %s" % (u" + ".join(parts) or u"bez szczebli",
-                           (u"zamraża: " + u", ".join(qs)) if qs else u"bez zamrażania")
+        txt = u"%s; %s" % (u" + ".join(parts) or _(u"bez szczebli"),
+                           (_(u"zamraża: %s") % u", ".join(qs)) if qs else _(u"bez zamrażania"))
         for f in self.after + self.fields:
             if f.get("key") == self.desc_key:
                 f["value"] = txt
@@ -234,7 +256,7 @@ class Grid(object):
             fam = r.get("family")
             others = [x for j, x in enumerate(self.rows) if j != i and x.get("on") and fam and x.get("family") == fam]
             if fam and not others:
-                self.msg = u"Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny." % fam
+                self.msg = _(u"Tego szczebla nie da się wyłączyć: jego migawek (%s) nie sprząta żaden inny.") % fam
                 return
             r["on"] = False
             if r.get("q") is not None:
@@ -252,21 +274,21 @@ class Grid(object):
             if f.get("key") == nk:
                 v = f["value"].strip()
                 if not v or not NAME_RE.match(v):
-                    self.msg = u"Zła nazwa: tylko litery, cyfry, kropka, myślnik, podkreślenie."
+                    self.msg = _(u"Zła nazwa: tylko litery, cyfry, kropka, myślnik, podkreślenie.")
                     return False
                 if v in (self.spec.get("taken") or []):
-                    self.msg = u"Szablon '%s' już jest -- podaj inną nazwę." % v
+                    self.msg = _(u"Szablon '%s' już jest -- podaj inną nazwę.") % v
                     return False
                 f["value"] = v
         countable = [r for r in self.rows if r.get("can_off", True)]
         if countable and not any(r.get("on") for r in countable):
-            self.msg = u"Zostaw włączony choć jeden szczebel."
+            self.msg = _(u"Zostaw włączony choć jeden szczebel.")
             return False
         for r in self.rows:
             if r.get("on") and r.get("value") not in ("-",) and r.get("editable", True):
                 v = r["value"]
                 if not v.isdigit() or int(v) < 1:
-                    self.msg = u"%s: podaj liczbę większą od zera (albo wyłącz szczebel)." % r["label"]
+                    self.msg = _(u"%s: podaj liczbę większą od zera (albo wyłącz szczebel).") % r["label"]
                     return False
         return True
 
@@ -285,7 +307,7 @@ class Grid(object):
         w = max(56, min(width - 4, 78))
         inner = w - 4
         lines, spans = [], {}
-        hint = self.spec.get("hint") or u"↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca"
+        hint = _(self.spec.get("hint") or u"↑↓ wiersz ←→ pole spacja kratka cyfry liczba Enter dalej  Esc wraca")
 
         def add(text, key=None, segs=None):
             lines.append(text)
@@ -295,7 +317,7 @@ class Grid(object):
 
         add(u"")
         for i, f in enumerate(self.fields):
-            lab = u" %-7s " % (f["label"] + ":")
+            lab = u" %-7s " % (_(f["label"]) + ":")
             val = f["value"]
             add(lab + (val + u"_" * max(0, 30 - len(val))) if f.get("edit", True) else lab + val,
                 segs=[(("field", i), len(lab), len(lab) + max(30, len(val)))] if f.get("edit", True) else None)
@@ -303,20 +325,20 @@ class Grid(object):
             add(u"")
         if self.choice:
             ch = self.choice
-            lab = u" %-7s " % (ch["label"] + ":")
+            lab = u" %-7s " % (_(ch["label"]) + ":")
             text, segs = lab, []
             for j, o in enumerate(ch["options"]):
                 mark = u"(*)" if o["key"] == ch["value"] else u"( )"
                 segs.append((("opt", j), len(text), len(text) + 3))
-                text += u"%s %s   " % (mark, o["label"])
+                text += u"%s %s   " % (mark, _(o["label"]))
             add(text.rstrip(), segs=segs)
             sel = [o for o in ch["options"] if o["key"] == ch["value"]]
             for hl in (sel[0].get("help") or []) if sel else []:
-                add(u"   " + hl)
+                add(u"   " + _(hl))
             if ch.get("locked"):
-                add(u"   " + ch["locked"])
+                add(u"   " + _(ch["locked"]))
             add(u"")
-        head = self.spec.get("head") or [u"SZCZEBEL", u"TRZYMA", u""]
+        head = [_(x) for x in (self.spec.get("head") or [u"SZCZEBEL", u"TRZYMA", u""])]
         add(u"      %-16s %-14s %s" % tuple((head + [u"", u"", u""])[:3]))
         for i, r in enumerate(self.rows):
             on = u"[X]" if r.get("on") else u"[ ]"
@@ -326,12 +348,12 @@ class Grid(object):
             if r.get("ref") is not None:
                 mid = u"%-14s" % r["ref"]
                 vtxt = (u"%s %s" % (val, r.get("unit") or "")).strip() if r.get("on") else u"—"
-                text = u"  %s %-16s %s %s" % (on, r["label"], mid, vtxt)
+                text = u"  %s %-16s %s %s" % (on, _(r["label"]), mid, vtxt)
                 vpos = 2 + 3 + 1 + 16 + 1 + 14 + 1
                 qtxt = None
             else:
                 vtxt = (u"%s %s" % (val, r.get("unit") or "")).strip() if (val not in ("", "-") and r.get("on")) else u"—"
-                text = u"  %s %-16s %-13s" % (on, r["label"], vtxt)
+                text = u"  %s %-16s %-13s" % (on, _(r["label"]), vtxt)
                 vpos = 2 + 3 + 1 + 16 + 1
                 qtxt = (u"[X]" if r.get("q") else u"[ ]") if r.get("q") is not None else (u" — " if r.get("ref") is None else None)
                 if qtxt is not None:
@@ -341,15 +363,15 @@ class Grid(object):
             add(text, segs=segs)
         add(u"")
         for i, f in enumerate(self.after):
-            lab = u" %-7s " % (f["label"] + ":")
+            lab = u" %-7s " % (_(f["label"]) + ":")
             val = f["value"]
             add(lab + val + (u"_" if f.get("edit", True) else u""),
                 segs=[(("after", i), len(lab), len(lab) + max(1, len(val)))])
         for n in self.spec.get("note") or []:
-            add(u" " + n)
+            add(u" " + _(n))
         add(u"")
         bl = u" " * max(1, (inner - 26) // 2)
-        nxt, back = u"< Dalej >", u"< Wstecz >"
+        nxt, back = u"< %s >" % _(u"Dalej"), u"< %s >" % _(u"Wstecz")
         add(bl + nxt + u"      " + back,
             segs=[(("btn", "next"), len(bl), len(bl) + len(nxt)),
                   (("btn", "back"), len(bl) + len(nxt) + 6, len(bl) + len(nxt) + 6 + len(back))])
@@ -364,13 +386,13 @@ class Grid(object):
             add(u" " + cur_l); msg_rows.append(len(lines) - 1)
         else:
             add(u"")
-        title = u" %s " % (self.spec.get("title") or u"Szczeble")
+        title = u" %s " % _(self.spec.get("title") or u"Szczeble")
         if len(title) > w - 4:      # W6: dlugi tytul wychodzil poza ramke -- ucinamy z '…'
             title = title[:max(1, w - 6)] + u"… "
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + (l[:w - 2]).ljust(w - 2) + u"│" for l in lines] + [bot]
-        kind, idx, _ = self.items[self.cur]
+        kind, idx, _seg = self.items[self.cur]
         sp = spans.get((kind, idx))
         focus = (sp[0] + 1, sp[1] + 1, sp[2] + 1) if sp else None
         self.caret = None

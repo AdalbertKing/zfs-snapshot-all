@@ -42,7 +42,29 @@ Okno samo nie zapisuje niczego poza OUT -- zapis robi czasownik w kreatorze.
 """
 import argparse
 import json
+import os
 import sys
+
+
+def _load_cat():
+    """Katalog jezyka okna: ZFS_TUI_LANG dziedziczony z GUI (wt-lib.sh go eksportuje); pl = pusty."""
+    lang = os.environ.get("ZFS_TUI_LANG") or "en"
+    if lang == "pl":
+        return {}
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang", lang + ".json"),
+                  encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+LANG_CAT = _load_cat()
+
+
+def _(s):
+    """Tekst okna w biezacym jezyku; bez wpisu w katalogu -- polski."""
+    return LANG_CAT.get(s, s)
 
 
 def under(n, r):
@@ -189,10 +211,9 @@ class Tree(object):
         if not hs:
             return u"", []
         if self.no_exc:
-            return u"Pod %s leży cel kopii (%s). Zaznacz węższe miejsce." % (n, hs[0]), hs
+            return _(u"Pod %s leży cel kopii (%s). Zaznacz węższe miejsce.") % (n, hs[0]), hs
         if self.recursion == "atomic":
-            return (u"Pod %s leży cel kopii (%s); przy kopiowaniu atomowym nie da się go pominąć. "
-                    u"Zaznacz węższe miejsce." % (n, hs[0])), hs
+            return _(u"Pod %s leży cel kopii (%s); przy kopiowaniu atomowym nie da się go pominąć. Zaznacz węższe miejsce.") % (n, hs[0]), hs
         return u"", hs
 
     def space(self, n):
@@ -204,12 +225,12 @@ class Tree(object):
                 return
             r = cov[0]
             if self.no_exc:
-                self.msg = u"Tu wybiera się całe miejsca -- żeby nie kopiować %s, odznacz całe %s." % (n, r)
+                self.msg = _(u"Tu wybiera się całe miejsca -- żeby nie kopiować %s, odznacz całe %s.") % (n, r)
                 return
             if self.recursion == "atomic":
-                self.msg = (u"Przy kopiowaniu atomowym (-r) nie da się pominąć części gałęzi. " +
-                            (u"Zmień sposób klawiszem S albo odznacz całe %s." % r if self.show_mode
-                             else u"Odznacz całe %s." % r))
+                self.msg = (_(u"Przy kopiowaniu atomowym (-r) nie da się pominąć części gałęzi. ") +
+                            (_(u"Zmień sposób klawiszem S albo odznacz całe %s.") % r if self.show_mode
+                             else _(u"Odznacz całe %s.") % r))
                 return
             for r in cov:
                 self.excl[r] = [e for e in self.excl.get(r, []) if not under(e, n)] + [n]
@@ -218,7 +239,7 @@ class Tree(object):
         if cands:
             e = min(cands, key=len)
             if e != n:
-                self.msg = u"%s jest pomijany razem z %s. Zaznacz najpierw %s." % (n, e, e)
+                self.msg = _(u"%s jest pomijany razem z %s. Zaznacz najpierw %s.") % (n, e, e)
                 return
             err, hs = self.need_skip(e)       # zdjecie wyjatku nie moze odslonic celu kopii
             if err:
@@ -228,7 +249,7 @@ class Tree(object):
                 if e in self.excl.get(r, []):
                     self.excl[r] = [x for x in self.excl[r] if x != e and x not in hs] + hs
             if hs:
-                self.msg = u"Cel kopii %s pominięty automatycznie." % u", ".join(hs)
+                self.msg = _(u"Cel kopii %s pominięty automatycznie.") % u", ".join(hs)
             return
         err, hs = self.need_skip(n)           # n poza korzeniami -> staje sie korzeniem
         if err:
@@ -240,7 +261,7 @@ class Tree(object):
         self.roots.append(n)
         self.excl[n] = list(hs)
         if hs:
-            self.msg = u"Cel kopii %s pominięty automatycznie." % u", ".join(hs)
+            self.msg = _(u"Cel kopii %s pominięty automatycznie.") % u", ".join(hs)
 
     def toggle_mode(self):
         if self.recursion == "atomic":
@@ -248,9 +269,9 @@ class Tree(object):
             return
         exc = [e for r in self.roots for e in self.excl.get(r, [])]
         if any(e not in self.hide for e in exc):
-            self.msg = u"Kopiowanie atomowe (-r) nie pozwala pomijać. Zdejmij najpierw pominięte (odznaczone) datasety."
+            self.msg = _(u"Kopiowanie atomowe (-r) nie pozwala pomijać. Zdejmij najpierw pominięte (odznaczone) datasety.")
         elif exc:
-            self.msg = u"Kopiowanie atomowe (-r) nie pozwala pominąć celu kopii (%s). Zaznacz węższe miejsca." % exc[0]
+            self.msg = _(u"Kopiowanie atomowe (-r) nie pozwala pominąć celu kopii (%s). Zaznacz węższe miejsca.") % exc[0]
         else:
             self.recursion = "atomic"
 
@@ -283,14 +304,14 @@ class Tree(object):
                 self.roots, self.done = [self.cur], "next"
             elif nd and nd["kids"]:
                 self.expanded.add(self.cur)
-                self.msg = u"%s: tu nic do wybrania -- rozwinięte, wybierz niżej." % self.cur
+                self.msg = _(u"%s: tu nic do wybrania -- rozwinięte, wybierz niżej.") % self.cur
             else:
-                self.msg = u"%s: nic do wybrania." % self.cur
+                self.msg = _(u"%s: nic do wybrania.") % self.cur
         elif k == "enter":
             if self.roots:
                 self.done = "next"
             else:
-                self.msg = u"Zaznacz co najmniej jedno miejsce (Spacja)."
+                self.msg = _(u"Zaznacz co najmniej jedno miejsce (Spacja).")
         elif k in ("s", "S") and self.show_mode:
             self.toggle_mode()
         elif not rows:
@@ -352,7 +373,11 @@ class Tree(object):
         w, iw = self.w, self.w - 2
         rows, chk = self.rows(), self.checked_map()
         mlines = [u" " + l for l in wrap(self.msg, iw - 2)] if self.msg else [u""]
-        lh = self.list_height(len(mlines))
+        # Legenda zawijana: po angielsku jest dłuższa niż okno (linie ciała są obcinane do iw).
+        legend = _(self.spec.get("legend") or u"") or (_(u" · = sama gałąź (nic do wybrania)") if self.single
+                                                       else _(u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie"))
+        llines = [u" " + l for l in wrap(legend.strip(), iw - 2)] or [u""]
+        lh = self.list_height(len(mlines) + len(llines) - 1)
         idx = rows.index(self.cur) if self.cur in rows else 0
         self.top = max(0, min(self.top, len(rows) - lh))
         if idx < self.top:
@@ -360,31 +385,30 @@ class Tree(object):
         elif idx >= self.top + lh:
             self.top = idx - lh + 1
         # "legend" w SPEC: okno odzysku (tui/restore.sh) nic nie kopiuje -- odtwarza.
-        body = [self.spec.get("legend") or (u" · = sama gałąź (nic do wybrania)" if self.single
-                                            else u" [x] kopiowane, razem z tym, co pod nim POWSTANIE   [-] część   [ ] nie")]
+        body = list(llines)
         if self.show_mode:
-            body.append(u" Sposób: cała gałąź atomowo (-r)" if self.recursion == "atomic"
-                        else u" Sposób: każdy dataset osobno (-R)")  # klawisz S tylko na ramce (E88)
-        body.append(u" ↑ więcej" if self.top > 0 else u"")
+            body.append(_(u" Sposób: cała gałąź atomowo (-r)") if self.recursion == "atomic"
+                        else _(u" Sposób: każdy dataset osobno (-R)"))  # klawisz S tylko na ramce (E88)
+        body.append(_(u" ↑ więcej") if self.top > 0 else u"")
         first = len(body)
         for n in rows[self.top:self.top + lh]:
             body.append(self.row_text(n, chk, iw))
         body += [u""] * (first + lh - len(body))
-        body.append(u" ↓ więcej" if self.top + lh < len(rows) else u"")
+        body.append(_(u" ↓ więcej") if self.top + lh < len(rows) else u"")
         nexc = sum(1 for r in self.roots for e in self.excl.get(r, []) if e not in self.hide)
         auto = any(e in self.hide for r in self.roots for e in self.excl.get(r, []))
         if self.single:
-            body.append(u" Kursor: %s" % (self.cur or u"-"))
+            body.append(_(u" Kursor: %s") % (self.cur or u"-"))
         else:
-            body.append(u" Wybrane miejsca: %d   pominięte: %d%s" % (
-                len(self.roots), nexc, u"   (cel kopii pominięty automatycznie)" if auto else u""))
+            body.append(_(u" Wybrane miejsca: %d   pominięte: %d%s") % (
+                len(self.roots), nexc, _(u"   (cel kopii pominięty automatycznie)") if auto else u""))
         mfirst = len(body)
         body += mlines
-        title = u" %s " % (self.spec.get("title") or u"Wybór datasetów")
+        title = u" %s " % (self.spec.get("title") or _(u"Wybór datasetów"))
         if len(title) > w - 4:
             title = title[:max(1, w - 6)] + u"… "
-        hint = (u"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca" if self.single else
-                u"Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej  Esc wraca" + (u"  S sposób" if self.show_mode else u""))
+        hint = (_(u"Enter wybiera  →/+ rozwija  ←/- zwija  Esc wraca") if self.single else
+                _(u"Spacja zaznacza  →/+ rozwija  ←/- zwija  Enter dalej  Esc wraca") + (_(u"  S sposób") if self.show_mode else u""))
         top = u"┌─" + title + u"─" * max(0, w - 3 - len(title)) + u"┐"
         bot = u"└─ " + hint[:w - 6] + u" " + u"─" * max(0, w - 5 - len(hint[:w - 6])) + u"┘"
         out = [top] + [u"│" + l[:iw].ljust(iw) + u"│" for l in body] + [bot]

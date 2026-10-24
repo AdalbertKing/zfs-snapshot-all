@@ -11,13 +11,13 @@
 
 tier_word() {   # <nazwa szczebla> -> słowo
     case "$1" in
-        *hourly) echo "godzinowe" ;; *daily) echo "dobowe" ;; *weekly) echo "tygodniowe" ;;
-        *monthly) echo "miesięczne" ;; *yearly|*annual) echo "roczne" ;; *) echo "$1" ;;
+        *hourly) T godzinowe ;; *daily) T dobowe ;; *weekly) T tygodniowe ;;
+        *monthly) T miesięczne ;; *yearly|*annual) T roczne ;; *) printf '%s' "$1" ;;
     esac
 }
 tier_letter() { case "$1" in *hourly) echo H ;; *daily) echo D ;; *weekly) echo W ;; *monthly) echo M ;; *yearly|*annual) echo Y ;; *) echo X ;; esac; }
 age_unit() {   # <litera jednostki retain> -> słowo
-    case "$1" in h) echo "godz." ;; d) echo "dni" ;; w) echo "tyg." ;; m) echo "mies." ;; y) echo "lat" ;; *) echo "$1" ;; esac
+    case "$1" in h) T 'godz.' ;; d) T dni ;; w) T 'tyg.' ;; m) T 'mies.' ;; y) T lat ;; *) printf '%s' "$1" ;; esac
 }
 source_retention_editor() {   # 0 = dalej (SRCPROF ustawiony albo pusty), 1 = wstecz
     # UWAGA 2 (właściciel, 2026-10-09): bez menu szczebli z pozycją "Gotowe" (OK robiło
@@ -139,7 +139,7 @@ src_words_of() {   # <profil>
     s="${p##*-src-}"
     while [ -n "$s" ]; do
         l="${s:0:1}"; s="${s:1}"; n="${s%%[!0-9]*}"; s="${s#"$n"}"
-        case "$l" in H) l=godzinowe ;; D) l=dobowe ;; W) l=tygodniowe ;; M) l=miesięczne ;; Y) l=roczne ;; *) echo "$p"; return ;; esac
+        case "$l" in H) l="$(T godzinowe)" ;; D) l="$(T dobowe)" ;; W) l="$(T tygodniowe)" ;; M) l="$(T miesięczne)" ;; Y) l="$(T roczne)" ;; *) echo "$p"; return ;; esac
         out="${out:+$out, }$l ${n:-?}"
     done
     echo "$out"

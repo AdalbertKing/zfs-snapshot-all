@@ -3205,8 +3205,9 @@ fi
 # ...i to samo dla KAZDEGO okna z lista w kreatorze: przycisk zatwierdzenia nazywa
 # sie "Dalej" (albo nazywa AKCJE, jak "Usun zaznaczone"), nigdy "Wybierz" -- bo
 # lista JEST odpowiedzia i Enter na pozycji ma isc dalej.
-if [ "$(grep -c -- '--ok-button "Wybierz"' "$REPO/tui/new-relation.sh")" -eq 0 ] \
-   && [ "$(grep -c -- '--ok-button "Dalej"' "$REPO/tui/new-relation.sh")" -ge 6 ]; then
+# (Od P2 tłumaczenia przycisk to "$(T Dalej)" -- obie formy liczą się tak samo.)
+if [ "$(grep -cE -- '--ok-button "(Wybierz|\$\(T Wybierz\))"' "$REPO/tui/new-relation.sh")" -eq 0 ] \
+   && [ "$(grep -cE -- '--ok-button "(Dalej|\$\(T Dalej\))"' "$REPO/tui/new-relation.sh")" -ge 6 ]; then
     ok "new-relation: w zadnym oknie przycisk zatwierdzenia nie nazywa sie juz 'Wybierz' -- lista jest odpowiedzia, wiec przycisk to 'Dalej'"
 else
     bad "new-relation: przyciski list" "$(grep -n -- '--ok-button' "$REPO/tui/new-relation.sh" | cut -c1-120)"

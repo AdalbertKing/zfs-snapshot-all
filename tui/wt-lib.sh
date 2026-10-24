@@ -51,6 +51,16 @@ T() {   # <tekst polski / szablon printf> [argumenty]
     v="${TCAT[$k]-$k}"
     if [ $# -gt 0 ]; then printf -- "$v" "$@"; else printf '%s' "$v"; fi
 }
+# Tv <tekst, jak stoi w kodzie, ze zmiennymi NIEROZWINIĘTYMI> [<znacznik> <wartość>]...
+# Klucz katalogu to tekst z kodu razem z nazwami zmiennych ($HOST, ${NAME}, $(hostport)), więc
+# podaje się go w apostrofach, a wartości osobno: Tv 'Sprawdzam $(hostport) jako root' '$(hostport)' "$(hostport)".
+# Po tłumaczeniu każdy znacznik jest zamieniany na wartość -- zwykła zamiana napisów, bez eval;
+# wartość (dane z hosta) nigdy nie jest interpretowana.
+Tv() {
+    local v="${TCAT[$1]-$1}"; shift
+    while [ $# -ge 2 ]; do v="${v//"$1"/"$2"}"; shift 2; done
+    printf '%s' "$v"
+}
 
 geom() {   # H W LH z bieżącego terminala
     local l c
@@ -188,8 +198,8 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
         fi
         menu=(__add__ "+ $(clip_label "$addl" $((W - 14)))")
         [ "$n" -gt 0 ] && menu+=(__del__ "− $(clip_label "$dell" $((W - 14)))")
-        menu+=(__done__ "Gotowe")
-        wt --title "$ttl" --ok-button "Wybierz" --cancel-button "Wstecz" --notags --default-item __done__ \
+        menu+=(__done__ "$(T Gotowe)")
+        wt --title "$ttl" --ok-button "$(T Wybierz)" --cancel-button "$(T Wstecz)" --notags --default-item __done__ \
            --menu "$text" "$(fit $((il + ${#menu[@]} / 2 + 1)))" "$W" "$(lhfit $((${#menu[@]} / 2)) "$il")" \
            "${menu[@]}" || { LE_ITEMS=(${saved[@]+"${saved[@]}"}); return 1; }
         choice="$WT_OUT"
@@ -206,8 +216,8 @@ list_editor() {  # <tytuł> <wstęp> <tekst gdy pusto> <etykieta dodaj> <etykiet
                 geom
                 menu=()
                 for i in "${!LE_ITEMS[@]}"; do menu+=("i:$i" "$(clip_label "${LE_ITEMS[i]}" $((W - 14)))"); done
-                wt --title "$ttl" --ok-button "Usuń" --cancel-button "Wstecz" --notags \
-                   --menu "Który usunąć?" "$(fit $((${#menu[@]} / 2 + 3)))" "$W" "$(lhfit $((${#menu[@]} / 2)) 3)" \
+                wt --title "$ttl" --ok-button "$(T Usuń)" --cancel-button "$(T Wstecz)" --notags \
+                   --menu "$(T 'Który usunąć?')" "$(fit $((${#menu[@]} / 2 + 3)))" "$W" "$(lhfit $((${#menu[@]} / 2)) 3)" \
                    "${menu[@]}" || continue
                 choice="${WT_OUT#i:}"
                 keep=()
@@ -246,7 +256,7 @@ card_menu() {   # <tytuł> <tekst> <domyślny tag> <przycisk Wstecz/Wyjdź>; rc 
     done
     [ "${#CARD_ACT_TAGS[@]}" -gt 0 ] && items+=(__sep__ "──────────────────────────────────────────")
     for i in "${!CARD_ACT_TAGS[@]}"; do items+=("${CARD_ACT_TAGS[$i]}" "$(clip_label "${CARD_ACT_LABELS[$i]}" "$w")"); done
-    wt --title "$t" --ok-button "Wybierz" --cancel-button "$c" --notags --default-item "$d" \
+    wt --title "$t" --ok-button "$(T Wybierz)" --cancel-button "$c" --notags --default-item "$d" \
        --menu "$x" "$(fit $((${#items[@]} / 2 + 5)))" "$W" "$((${#items[@]} / 2))" "${items[@]}"
 }
 

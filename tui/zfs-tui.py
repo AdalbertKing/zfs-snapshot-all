@@ -808,7 +808,7 @@ def profile_words(p):
         if t.get("monitor_warn") or t.get("monitor_crit"):
             mon = u"monitor %s / %s" % (t.get("monitor_warn") or "?", t.get("monitor_crit") or "?")
             break
-    return {"cadence": cad, "retention": u"trzyma " + (", ".join(ret) if ret else "?"), "mech": mech,
+    return {"cadence": cad, "retention": _(u"trzyma %s") % (", ".join(ret) if ret else "?"), "mech": mech,
             "shape": shape, "quiesce": quiesce, "monitor": mon or _(u"bez progów")}
 
 
@@ -3859,7 +3859,7 @@ def render_szablony(data, cursor, width, height, now, ch, message="", rows=None,
     for x in profs:
         w = profile_words(x)
         cells.append([x.get("name") or "?", _(TEMPLATE_KIND.get(x.get("source"), x.get("source") or "?")), w["mech"],
-                      w["retention"].replace(u"trzyma ", ""), str(int(x.get("used_by") or 0))])
+                      w["retention"].replace(_(u"trzyma %s") % u"", u""), str(int(x.get("used_by") or 0))])
     det_title, det, child = u"", [], None
     if profs and 0 <= cursor < len(profs):
         p = profs[cursor]
