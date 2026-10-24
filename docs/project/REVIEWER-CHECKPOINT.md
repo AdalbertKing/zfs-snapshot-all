@@ -2,7 +2,57 @@
 
 Purpose: compact bootstrap for ChatGPT reviewer. This file is a convenience index, **not** the canonical source of volatile review state. If anything here disagrees with `main`, `docs/project/OPEN-THREADS.md`, `docs/internal/reviews/REVIEW_LEDGER.md`, exact review/response/closure artifacts, or `docs/project/ACTIVE-WORK-PLAN.md`, the fresher canonical artifact wins.
 
-## Latest final-audit batch — 2026-10-24 (X27 pre-block compatibility reconciliation)
+## Latest final-audit batch — 2026-10-24 (source-side GFS and relation export/import reconciliation)
+
+**The scope named after the X27 batch was already independently reviewed, but
+that completion was buried in REV-152's historical audit note and the later
+REV-168 lifecycle.  Fresh current-tree checks found no new contradicting code
+or evidence, so neither closed REV is reopened.**
+
+The source-side GFS delivery is PR #610: base
+`3a99ff48ceeb71e8f9b2b66ad107343b183272aa`, first implementation
+`6a1344d4477fb388519a9adf60eb521c17780769`, final head
+`b97e0be8e665be18e94ff5dfa6e58a7dddecb321`, merge
+`03888a6ce0bcd00f2750ec4e5b03e99f9813f17f`.  The adjacent relation
+export/import delivery is PR #629: base
+`998d1b2b2879dc635a35cb3ebcb701c87a249035`, head
+`8c9e435fe3fbed05d0451ab16c6b35b47e7580db`, merge
+`6799af50ed5e845616b2a97e7259aa6e1ea755dd`.  Its escape-handling defect was
+published as REV-20261022-168 and fixed by
+`6413f161b9fd3f1f3830664a94275c2253e14418`; the canonical approval and
+closure remain consistent.
+
+Independent evidence on current `main`
+`5b502ed2a3a74470e7265c1c6eeed7453a831bef`:
+
+- the exact pre-PR #610 base renders the source hourly tier as a flat
+  `delsnaps` count (no `-G`), reproducing the historical defect.  Current
+  `[relation:]` expansion with `gfs = yes` renders two source-side `-G` lines
+  and zero target-landing `-G` lines; target retention remains flat as required
+  by the post-downtime safety decision;
+- `bash test/run.sh` is **123/123**, including the `prune-tier-gfs` golden,
+  old/new relation equivalence and fail-closed relation-shape controls;
+- `bash test/zfsbackup/run.sh --section exportrel` is **79/79**.  It executes
+  real relation export and block restore, proves unchanged/changed `--check`,
+  preserves a literal quote and backslash byte-for-byte, and refuses an
+  unsupported escape or non-string value without installing anything;
+- the published REV-168 reproducer is **4/4** on current main; the recorded
+  pre-fix result remains **2 PASS / 2 FAIL** on the same equality and restored
+  value criteria;
+- `bash -n gen-cron.sh zfs-backup.sh`, both exact-range `git diff --check`
+  checks and `./test/impact.sh --verify` pass.  PR-head CI runs recorded by the
+  original audit/closure are 39162123391 (#610), 39313874955 (#629) and
+  39847065498 (REV-168 implementation), all successful.
+
+No new REV was opened.  This batch makes the already-published result visible
+in the continuation artifact and removes the stale instruction to repeat the
+same campaign.  No live host, crontab, account or ZFS dataset was touched.
+
+**Next reviewer scope:** audit PR #644 / U49, the switch of local copies to
+`snapget` and local quiesce, starting from its exact base/head diff and the
+negative controls that prove the source is thawed on every failure path.
+
+## Previous final-audit batch — 2026-10-24 (X27 pre-block compatibility reconciliation)
 
 **The backlog warning mixed two different compatibility contracts.  Current
 `gen-cron.sh` still renders production-shaped pre-X27 config made only from
@@ -64,9 +114,8 @@ No new REV was opened.  This batch reconciles the stale backlog warning with
 the actual split contract and the Owner's recorded cut-over decision.  No live
 host, crontab or dataset was touched.
 
-**Next reviewer scope:** audit source-side GFS retention and configuration
-round-trip/export-import against the current `[relation:]` block, beginning
-with the exact diffs which introduced source retention and its later fixes.
+This batch's former next-scope pointer was completed by the reconciliation
+above; do not repeat the GFS/export-import campaign without new code or evidence.
 
 ## Previous final-audit batch — 2026-10-24 (PR #553 / REV-170 reconciliation)
 

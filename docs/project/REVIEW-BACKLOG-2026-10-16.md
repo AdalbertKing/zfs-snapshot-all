@@ -214,6 +214,18 @@ Dokładne heady #531/#533/#534/#535/#536 (`e2cf0356…`, `37c94dd…`,
 - Parowanie: #459 (jedna relacja na parę hostów; `--grant-remotely`), #468. (#451 = implementacja REV-146, §8 pkt 1.)
 - Odzysk do GUI: #552 (`restore --plan --json`, `copy_exists`).
 
+**Rozstrzygnięcie recenzenta 2026-10-24 — retencja źródłowa GFS i round-trip
+`[relation:]`.** PR #610 (`3a99ff48…` → `b97e0be8…`, merge `03888a6c…`)
+naprawił dziedziczenie `gfs=yes` po stronie źródła; kontrola na bazie odtwarza
+brak `-G`, a bieżący blok relacji emituje `-G` tylko dla źródła i pozostawia
+lądowisko celu płaskie. To było już niezależnie zapisane w nocie audytowej
+REV-152. PR #629 (`998d1b2b…` → `8c9e435f…`) ujawnił w tej samej kampanii
+błąd odtwarzania znaków ucieczki; właściwy REV-168 został naprawiony przez
+`6413f161b9fd3f1f3830664a94275c2253e14418`, zatwierdzony i zamknięty.
+Świeże kontrole: generator 123/123, export/import 79/79, reproducer REV-168
+4/4, `impact --verify` zielone. Brak nowego kodu lub dowodu uzasadniającego
+ponowne otwarcie; nie otwarto nowego REV.
+
 ## 6. GUI (najmniejsze ryzyko dla danych)
 
 Okna whiptail / curses. Logika jest w czasownikach z §3–5, GUI składa polecenia.
