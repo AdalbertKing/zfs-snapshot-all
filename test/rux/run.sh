@@ -1074,7 +1074,7 @@ fi
 out="$( ( CLIENTS_DIR="$WORK/30/clients"
     rux_entry --source=pve2:rpool/data --mode=sync --profile=passive --name=p30
 ) 2>&1 )"
-if printf '%s' "$out" | grep -q 'BEZPREFIKSOWO' \
+if printf '%s' "$out" | grep -q 'WITHOUT A PREFIX' \
    && printf '%s' "$out" | grep -q 'baze replikacji' \
    && printf '%s' "$out" | grep -q 'to fakt, nie zakaz'; then
     ok "30. a prefixless profile's plan states that the ladder covers the replication base"
@@ -1091,7 +1091,7 @@ for _p30 in default prod d7h24-gfs; do
     out="$( ( CLIENTS_DIR="$WORK/30/clients"
         rux_entry --source=pve2:rpool/data --mode=sync --profile="$_p30" --name=p30b
     ) 2>&1 )"
-    if printf '%s' "$out" | grep -q 'BEZPREFIKSOWO'; then
+    if printf '%s' "$out" | grep -q 'WITHOUT A PREFIX'; then
         bad "30b. '$_p30' prunes a named family, so the prefixless warning must NOT appear" "$out"
     else
         ok "30b. '$_p30' prunes a named family, so the prefixless warning must NOT appear"

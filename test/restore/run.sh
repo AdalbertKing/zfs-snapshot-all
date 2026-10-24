@@ -267,7 +267,7 @@ out="$(run "$tcfg" --plan)"
   && printf '%s' "$out" | grep -q 'guid=111' && printf '%s' "$out" | grep -q 'guid=222'; } \
     && ok "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
     || bad "planner: identical snapshot NAMES across datasets do not promote a flat set to atomic" \
-           "$(printf '%s' "$out"|grep -iE 'spojnosc|guid=')"
+           "$(printf '%s' "$out"|grep -iE 'coherence|guid=')"
 
 # and the same pair under an ATOMIC config must report atomic -- so the verdict is
 # demonstrably keyed on CONFIG, not on the snapshots, which are identical here.

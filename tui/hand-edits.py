@@ -9,8 +9,8 @@ w oknie); kazda roznica w configu takiego planu to reczna zmiana. Ten skrypt czy
 i drukuje ostrzezenie (albo nic, gdy recznych zmian nie ma).
 
 Dwie postacie planu:
-  * relacja zdalna: "--- proponowany config: PLIK ---" i diff -u obecny -> proponowany;
-  * relacja lokalna: "Config docelowy: PLIK" i pelny "--- kandydat CONFIG ...", ktory
+  * relacja zdalna: "--- proposed config: PLIK ---" i diff -u obecny -> proponowany;
+  * relacja lokalna: "Target config: PLIK" i pelny "--- candidate CONFIG ...", ktory
     porownujemy z PLIKIEM sekcja po sekcji.
 Sekcje, ktore pojawiaja sie dopiero w planie (GUI je dopisze), nie sa recznymi zmianami.
 """
@@ -95,7 +95,7 @@ def main(argv):
     rows = []
     blk = None
     for i, l in enumerate(lines):
-        if l.startswith("--- proponowany config:"):
+        if l.startswith("--- proposed config:"):
             blk = []
             for x in lines[i + 1:]:
                 if x.startswith("--- "):
@@ -117,14 +117,14 @@ def main(argv):
     else:
         path = None
         for l in lines:
-            m = re.match(r"^\s*Config docelowy:\s+(\S+)", l)
+            m = re.match(r"^\s*Target config:\s+(\S+)", l)
             if m:
                 path = m.group(1)
                 break
         cand = []
         on = False
         for l in lines:
-            if l.startswith("--- kandydat CONFIG"):
+            if l.startswith("--- candidate CONFIG"):
                 on = True
                 continue
             if on and l.startswith("--- "):

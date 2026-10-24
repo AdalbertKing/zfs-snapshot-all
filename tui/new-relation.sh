@@ -953,8 +953,8 @@ plan_only_this() {   # <nazwa relacji> ; plan na stdin -> stdout
             if (mine) { for (i = 1; i <= nb; i++) print buf[i]; kept++ } else skipped++
             nb = 0
         }
-        /^--- kandydat CONFIG/ { part = "cfg"; print "--- nowe sekcje configu (tej relacji) ---"; next }
-        /^--- wygenerowany blok crona/ { flush(); part = "cron"; print ""; print "--- nowe linie crona (tej relacji) ---"; next }
+        /^--- candidate CONFIG/ { part = "cfg"; print "--- nowe sekcje configu (tej relacji) ---"; next }
+        /^--- generated cron block/ { flush(); part = "cron"; print ""; print "--- nowe linie crona (tej relacji) ---"; next }
         part == "cfg" {
             if ($0 ~ /^\[/) { flush(); hdr = $0 }
             if (hdr != "") buf[++nb] = $0
