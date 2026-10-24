@@ -5192,8 +5192,8 @@ fi
 
 # c5. bez argumentow: uzycie, exit 2
 RWU="$( export NR_DIR="$RW" WHIPTAIL="$RW/bin/whiptail" PYTHON="$PY" PATH="$RW/bin:$PATH"; bash "$REPO/tui/restore.sh" </dev/null 2>&1 )"; RWURC=$?
-if [ "$RWURC" -eq 2 ] && has "$RWU" 'użycie' && has "$RWU" '--from-copy'; then
-    ok "restore.sh bez argumentow -> 'użycie: ... --from-copy', exit 2"
+if [ "$RWURC" -eq 2 ] && has "$RWU" 'usage' && has "$RWU" '--from-copy'; then
+    ok "restore.sh bez argumentow -> 'usage: ... --from-copy', exit 2"
 else
     bad "restore.sh bez argumentow" "rc=$RWURC" "out: $RWU"
 fi
