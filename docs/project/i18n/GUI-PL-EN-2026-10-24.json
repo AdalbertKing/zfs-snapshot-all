@@ -5069,7 +5069,7 @@
    "k": "u421",
    "pl_code": "                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
    "pl": "                 Panel obok: kierunek, źródło i cel, kiedy, ile trzyma, czasy",
-   "en": "                 Side panel: direction, source and target, when, how much it keeps, durations",
+   "en": "                 Side panel: direction, source and target, when, what it keeps,",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -5092,7 +5092,7 @@
    "k": "u423",
    "pl_code": "                 w mailu; na dole przebiegi zadania z historii transferów.",
    "pl": "                 w mailu; na dole przebiegi zadania z historii transferów.",
-   "en": "                 in the mail; at the bottom the job's runs from transfer history.",
+   "en": "                 mode; at the bottom the job's runs from the transfer history.",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5148,7 +5148,7 @@
    "k": "u428",
    "pl_code": "  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
    "pl": "  F3  Relacje    zarządzanie: Enter szczegóły (opis, CONFIG i CRON; tam 'e'",
-   "en": "  F3  Relations  management: Enter details (description, CONFIG and CRON; there 'e'",
+   "en": "  F3  Relations  management: Enter details (description, CONFIG, CRON; there",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5159,7 +5159,7 @@
    "k": "u429",
    "pl_code": "                 = Zmień relację: adres hosta, datasety, szablon, retencja",
    "pl": "                 = Zmień relację: adres hosta, datasety, szablon, retencja",
-   "en": "                 = Change relation: host address, datasets, template, source",
+   "en": "                 'e' = Change relation: host address, datasets, template, what",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5262,7 +5262,7 @@
    "k": "u438",
    "pl_code": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
    "pl": "                 Ins i Del przełączają terminal do whiptaila i wracają tu",
-   "en": "                 Ins and Del hand the terminal to whiptail windows and return here",
+   "en": "                 Ins and Del hand the terminal to whiptail and come back here",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -5365,7 +5365,7 @@
    "k": "u447",
    "pl_code": "  F4  Historia   transfery: co leci teraz (na górze) i co się skończyło;",
    "pl": "  F4  Historia   transfery: co leci teraz (na górze) i co się skończyło;",
-   "en": "  F4  History    transfers: what is in progress (at the top) and what has finished;",
+   "en": "  F4  History    transfers: what runs now (at the top) and what finished;",
    "origin": "owner-edit",
    "unclear": false,
    "where": [
@@ -5398,7 +5398,7 @@
    "k": "u450",
    "pl_code": "                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
    "pl": "                 Enter szczegóły ('e' zmienia własny), Del usuwa własny",
-   "en": "                 Enter details ('e' changes a custom one), Del deletes a custom one",
+   "en": "                 Enter details ('e' changes a custom one), Del deletes one",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5523,7 +5523,7 @@
    "k": "u461",
    "pl_code": "                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
    "pl": "                 Pasek u góry: „ochrona” -- czy na tym hoście działa bezpiecznik",
-   "en": "                 Top bar: \"protection\" -- whether the capacity fuse",
+   "en": "                 Top bar: \"protection\" -- whether this host runs the capacity",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5557,7 +5557,7 @@
    "k": "u464",
    "pl_code": "  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
    "pl": "  PANELE (każdy ekran): lista = wybór i stan; panel obok = fakty o",
-   "en": "  PANELS (every screen): list = choice and state; side panel = facts about the",
+   "en": "  PANELS (every screen): list = choice and state; side panel = facts",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
@@ -5625,7 +5625,7 @@
    "k": "u470",
    "pl_code": "                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
    "pl": "                 wraca do listy, kolejny Tab do linii poleceń. Datasety relacji",
-   "en": "                 returns to the list, the next Tab to the command line. Datasets of a relation",
+   "en": "                 returns to the list, the next Tab to the command line. Datasets",
    "origin": "owner-ok",
    "unclear": false,
    "where": [
